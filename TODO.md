@@ -45,28 +45,21 @@ Differences without errors, still to check:
 ### Kernel correctness (independent review 4, 7.45/10 at `b589424`)
 
 - [ ] Fillets and blends:
-  - occt_blend: 89 known failures (most "area differs" ones pick another edge than the script's
-    explode order, and five expect the reference kernel's own failure);
   - SMLib fillets: 43/100 pass (the sheet inputs' results compared as sheets, on their area);
     group A, the tangent-chain cases whose face pair changes at a vertex (10 cases: 116, 226,
     231, 234, 237, 401, 410, 411, 412, 421), each stops on another limit past the junction (a
     fillet larger than the round it runs over, a rail running off a face, a crease of 1° taken as
     tangent); groups E, G and C are still open;
-  - no occt_blend case falls back to the tool-and-boolean blend any more; fillets take about
-    1.1× OCCT's time on occt_blend and 1.2× on smlib_fillets.
-- [ ] Booleans: 59 occt_boolean known failures (section lengths, sub-shape counts, open shells, areas).
-  A boolean now checks that its result's faces don't cross and flags a result that does
+  - fillets take about 1.2× OCCT's time on smlib_fillets.
+- [ ] Booleans: a boolean now checks that its result's faces don't cross and flags a result that does
   (`take_invalid_results`; `CADRS_BOOL_STRICT=1` makes it an error). Three booleans still
   return a flagged result: volumemaker_f5, shape_type_a_a1 and nightlight's Boolean 7.
-- [ ] Offsets: 133 occt_offset known failures; smlib_offset has 4 (offset_04, 05, 07, 08).
-- [ ] Remaining known failures: about 486 in all (`tools/occt_known_failures.txt`,
-  `tools/smlib_known_failures/`); besides the above they are in feat (47), pipe (27), sewing
-  (20), heal (12), thrusection (10), the SMLib ssi suites and a few others.
-- [ ] `explode` in the test harness should list degenerated edges in the scripts' order. That
-  would turn 13 blend topology mismatches into real comparisons.
+- [ ] Offsets: smlib_offset has 4 known failures (offset_04, 05, 07, 08).
+- [ ] Remaining known failures: `tools/smlib_known_failures/` (the SMLib ssi suites and a few
+  others).
 - [ ] The BRep-text reader: 5 dataset files the reference reads; CFI_5_b12fgg.rle edge count.
 - [ ] STEP/IGES: 52 of the 389 dataset files don't read clean (`tests/exchange_corpus.rs`).
-- [ ] Fillet speed: 1.11× the reference on occt_blend and 1.17× on smlib_fillet (CPU times, each
+- [ ] Fillet speed: 1.17× the reference on smlib_fillet (CPU times, each
   case run by both in turn: the shared machine's load moves either side alone by tens of
   percent); the goal is at or below it. The result's check is about 40% of a local fillet's time.
 

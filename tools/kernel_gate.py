@@ -10,21 +10,19 @@ usage: tools/kernel_gate.py --tree DIR --out DIR [--commit SHA] [--only a,b] [--
 Builds the tree's tests (`cargo test --profile kernel -p cadrs_kernel --no-run`, only the --only
 binaries when given; the target dir is $CARGO_TARGET_DIR), lists each binary's tests (libtest JSON, `-Z unstable-options`), and runs
 them $RUST_TEST_THREADS at a time (3 by default): the ones that aren't ignored, and the ignored
-ones of every kind but three, which are listed, not run:
-  - the OCCT suites' cases waiting for a command (`needs …`, Tcl, nothing measured): their body
-    is the DRAW script as comments, so they would pass without testing anything;
+ones of every kind but two, which are listed, not run:
   - debugging tools (a bare `#[ignore]`) and tests that need an input from the environment
     (`replays …`, `needs a usd-brep checkout`, `needs the data file …`, and smlib_oracle's
     without $CADRS_SMLIB_ORACLE): they return early without it.
 --known-only runs only the ignored known failures (`#[ignore = "known failure…"]`).
---sample occt_boolean=8 runs every 8th of that binary's cases (by name, the same ones each run;
+--sample smlib_booleans=8 runs every 8th of that binary's cases (by name, the same ones each run;
 the others are "ignored", "not in the sample"): CI's per-push subset.
 
 A test that runs longer than --hang seconds is killed as a hang, and the binary goes on with the
 tests it hadn't finished; a binary that dies (a stack overflow, an abort) has the tests it was
 running retried one at a time to find the one that crashes. Each case is classified:
   pass        a case that passes
-  known       a known failure (tools/occt_known_failures.txt, tools/smlib_known_failures/) that
+  known       a known failure (tools/smlib_known_failures/) that
               still fails
   STALE       a known failure that now passes: take it off the list and regenerate the suite
   PANIC       a known failure that panicked (an index out of bounds, an unwrap) instead of
@@ -154,12 +152,6 @@ def build(tree, profile, only=()):
 def known_lists(tree):
     """{binary: {test names}} of the known-failure lists in the tree."""
     known = {}
-    p = os.path.join(tree, "tools/occt_known_failures.txt")
-    if os.path.exists(p):
-        for line in open(p):
-            w = line.split()
-            if len(w) >= 2 and not w[0].startswith("#"):
-                known.setdefault("occt_" + w[0], set()).add(w[1])
     d = os.path.join(tree, "tools/smlib_known_failures")
     if os.path.isdir(d):
         for f in sorted(os.listdir(d)):
@@ -298,7 +290,7 @@ def ignored_kind(binary, why, known_only):
     see the module docs)."""
     if why.startswith("known failure"):
         return "known"
-    if known_only or binary.startswith("occt_") or not why or why.startswith(INPUT_IGNORES):
+    if known_only or not why or why.startswith(INPUT_IGNORES):
         return None
     if binary in NEEDS_ENV and not os.path.isfile(os.environ.get(NEEDS_ENV[binary], "")):
         return None

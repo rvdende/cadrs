@@ -20,7 +20,7 @@ crates/cadrs_kernel/
   src/native/          # the B-rep kernel (see "The native kernel" below)
   src/backend/mod.rs   # `backend::native::NativeKernel` (also `cadrs_kernel::DefaultKernel`)
   tests/conformance.rs # the conformance suite, 84 cases
-  tests/occt_*.rs, smlib_*.rs # generated gate suites (see "Tests")
+  tests/smlib_*.rs     # generated gate suites (see "Tests")
   tests/metamorphic_booleans.rs, stress_booleans.rs, fingerprint.rs # gates that need no reference kernel
   tests/fuzz_readers.rs # property tests: no input panics a reader or a B-spline constructor
   tests/exchange_corpus.rs # a public dataset's STEP and IGES files read and checked (needs the dataset)
@@ -105,8 +105,8 @@ tests turn on through their dev-dependency) makes every module `pub` again and a
 `cadrs_kernel::testkit`, which re-exports the modules the tests use (`draw`, `oracle`, `smb`,
 `brep_occt`, `step`, `iges`, `ssi`, `classify`, `mass`, `tess`, `unify`, `features`, `evolved`,
 `surfacing`, ...). The tests still name them as `native::<module>`, which keeps working under
-`testkit`; they move to `testkit::` one file at a time (the generators, `tools/occt_to_rust.py`
-and the SMLib ones, switch their `use` lines in the same change), after which the `native::`
+`testkit`; they move to `testkit::` one file at a time (the SMLib generators switch their `use`
+lines in the same change), after which the `native::`
 paths can be sealed. Without `testkit`, what only the DRAW harness reaches (the BRep-text and
 SMLib readers, 2D offsets, wire tails, faces from loose edges, area splits) is unused code.
 `cargo check -p cadrs_kernel` (no features) and `cargo check -p cadrs_core` are the gate.
@@ -299,8 +299,9 @@ otherwise):
 - `CADRS_OCCT_REBUILD=1` (`brep_occt.rs`): a text BRep file's faces are always rebuilt from
   their edges instead of being read directly.
 
-Test harness (tests only): `CADRS_OCCT_DATA` (the dataset of the generated suites,
-default `../occt-dataset/opencascade-dataset-7.8.0` beside the checkout), `CADRS_SMLIB_ORACLE`
+Test harness (tests only): `CADRS_OCCT_DATA` (OCCT's public dataset, whose STEP files a few
+tests read when it is there; default `../occt-dataset/opencascade-dataset-7.8.0` beside the
+checkout), `CADRS_SMLIB_ORACLE`
 (the SMLib oracle binary), `CADRS_USD_BREP` (a usd-brep checkout, for the ignored
 `smb::every_ssi_part_reads`, which skips without it),
 `CADRS_EXCHANGE_FILES` and `CADRS_EXPORT_DIR` (the ignored corpus tests in `exchange.rs`),
@@ -310,24 +311,22 @@ inputs of `tests/native_debug.rs`'s replays.
 **Status.** All 84 conformance cases pass (`cargo test -r -p cadrs_kernel --test conformance`,
 about 3 s). The measured state of every suite is the gate's: `tools/kernel_gate.sh` (below). At
 the last full gate (2026-10-23) about 6550 cases passed and about 486 were known failures
-(each listed with its reason). No occt_blend case falls back to the tool-and-boolean blend (`blend`) any more.
+(each listed with its reason), most of them in the OCCT DRAW suites since removed (2026-11-09:
+they held the kernel to OCCT's own approximations, such as its polylines in 2D offsets, rather
+than to the exact result).
 `python3 -I tools/kernel_scoreboard.py` shows its last results per test binary (cases run,
 passing, known failures, stale ones, regressions, hangs, and why the rest don't run yet); with no
 results, or with `--static`, it falls back to reading the suites' source, which runs nothing.
 
 **Tests.**
 - Unit tests in the modules (`cargo test -r -p cadrs_kernel --lib`), the conformance suite, and
-  the suites generated from SMLib's tests (`tests/smlib_*.rs`) and from OpenCASCADE's public test
-  scripts (`tests/occt_*.rs`, `tools/occt_to_rust.py`), which serve as a reference test corpus. A generated case listed in
-  `tools/occt_known_failures.txt` or `tools/smlib_known_failures*` asserts that it still fails, and that it fails by returning
-  its error: a panic (an index out of bounds in the test code, an unwrap) fails the test, and
-  the gate calls it a PANIC. When it passes, remove the line and regenerate the file. Every line
-  of `tools/occt_known_failures.txt` gives its reason, inline (`group case  # why`) or in the
-  comment just above its group of lines (a blank line ends a group); the generator refuses a
-  line without one, copies the reason above the generated case, and warns about lines that
-  aren't a converted case. A reason holding `[panic: text]` lets the case panic with that text.
-  The DRAW harness reports a script's sub-shape past the end of an `explode` as a "topology
-  mismatch" failure (`draw::sub`): the shape exploded has other topology than the script expects.
+  the suites generated from SMLib's tests (`tests/smlib_*.rs`), which serve as a reference test
+  corpus. A generated case listed in `tools/smlib_known_failures*` asserts that it still fails,
+  and that it fails by returning its error: a panic (an index out of bounds in the test code, an
+  unwrap) fails the test, and the gate calls it a PANIC. When it passes, remove the line and
+  regenerate the file. The DRAW harness reports a script's sub-shape past the end of an
+  `explode` as a "topology mismatch" failure (`draw::sub`): the shape exploded has other
+  topology than the script expects.
 - Gates that need no reference kernel: `tests/metamorphic_booleans.rs` (on random boxes,
   cylinders and spheres, some rotated: vol(A ∪ B) + vol(A ∩ B) = vol(A) + vol(B), tool-order
   invariance, A − A = ∅, A ∪ A = A, a STEP round trip of the union, and random extrude sequences
@@ -350,15 +349,13 @@ results, or with `--static`, it falls back to reading the suites' source, which 
 - The full `cargo test -r -p cadrs_kernel` takes about 12 minutes; run the suites a change
   touches and the conformance suite.
 - The gate, `tools/kernel_gate.sh`, makes "HEAD is green" a measured fact. It exports a clean
-  tree (`git archive HEAD`, or `--rev`; `--tree DIR` tests a tree as it is) and regenerates the
-  gitignored generated suites there (`OCCT_TESTS`: the test scripts' `tests/` directory; `CADRS_OCCT_DATA`). It
+  tree (`git archive HEAD`, or `--rev`; `--tree DIR` tests a tree as it is). It
   checks that the library builds without features (`cargo check -p cadrs_kernel`: every test
   turns `testkit` on), that `cargo check -p cadrs_core`, the kernel's consumer, passes, and that
   `tools/kernel_clippy.sh` is clean. Then
   it builds with `--profile kernel` and runs every test binary, `RUST_TEST_THREADS` (3) at a
   time, with every kind of ignored test that can run: the known failures, `slow`, and the ones
-  ignored with a reason (not the generated suites' cases waiting for a command, whose bodies are
-  comments, nor debugging tools and tests that need a file, a checkout or the SMLib oracle they
+  ignored with a reason (not debugging tools and tests that need a file, a checkout or the SMLib oracle they
   aren't given). Each case is a pass, a known failure still failing, STALE (a listed known
   failure that passes: take it off the list), STALE-IGNORE (an ignored test that passes:
   un-ignore it), a PANIC (a listed known failure that panicked instead of returning its

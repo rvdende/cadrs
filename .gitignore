@@ -10,8 +10,6 @@
 # Python bytecode
 __pycache__/
 
-# Generated from OCCT's LGPL test scripts by tools/occt_to_rust.py (kept local).
-/crates/cadrs_kernel/tests/occt_*.rs
 /target-*/
 
 # Research papers: the PDFs stay local; their Markdown (docling) and text (pdftotext) conversions are committed.
