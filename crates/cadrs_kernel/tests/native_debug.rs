@@ -3272,3 +3272,83 @@ fn debug_creased_bar() {
         Err(e) => eprintln!("cut_swept failed: {e}"),
     }
 }
+
+/// brep-bench's tools carried along a spline (`CADRS_CARRIED=key|ring|nose`): the groove's cut.
+#[test]
+fn debug_carried() {
+    let Some(which) = std::env::var_os("CADRS_CARRIED") else {
+        return;
+    };
+    let mut k = NativeKernel::new();
+    let boxed = |k: &mut NativeKernel, a: Point3<f64>, b: Point3<f64>| {
+        let pts = [p(a.x, a.y), p(b.x, a.y), p(b.x, b.y), p(a.x, b.y)];
+        let curves = (0..4)
+            .map(|i| Curve2::Line {
+                a: pts[i],
+                b: pts[(i + 1) % 4],
+                source: None,
+            })
+            .collect();
+        let top = Plane {
+            origin: Point3::new(0.0, 0.0, a.z),
+            x_dir: Vector3::x_axis(),
+            normal: Vector3::z_axis(),
+        };
+        k.extrude(
+            &Profile::new(top, vec![reg(Loop { curves })]),
+            Extent::Blind(b.z - a.z),
+        )
+        .unwrap()
+        .bodies[0]
+    };
+    let block = boxed(
+        &mut k,
+        Point3::new(-6.0, -6.0, -8.0),
+        Point3::new(36.0, 26.0, 0.0),
+    );
+    let tool = match which.to_str().unwrap() {
+        "key" => boxed(
+            &mut k,
+            Point3::new(-1.5, -0.8, -1.5),
+            Point3::new(1.5, 0.8, 2.5),
+        ),
+        _ => {
+            k.primitive(&Primitive::Torus {
+                center: Point3::new(0.0, 0.0, 0.5),
+                axis: Vector3::y_axis(),
+                major: 1.5,
+                minor: 0.5,
+            })
+            .unwrap()
+            .bodies[0]
+        }
+    };
+    let path = vec![PathCurve::Bezier3 {
+        poles: vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(10.0, 0.0, 0.0),
+            Point3::new(20.0, 20.0, 0.0),
+            Point3::new(30.0, 20.0, 0.0),
+        ],
+        weights: vec![],
+    }];
+    let motion = SolidMotion::Path {
+        path,
+        up: Vector3::z_axis(),
+    };
+    let t0 = std::time::Instant::now();
+    match k.cut_swept(block, tool, &motion) {
+        Ok(r) => {
+            let b = k.get(r.bodies[0]).unwrap();
+            let m = k.mass_properties(r.bodies[0]).unwrap();
+            eprintln!(
+                "cut: volume {} area {} faces {} in {:?}",
+                m.volume,
+                m.surface_area,
+                b.faces.len(),
+                t0.elapsed()
+            );
+        }
+        Err(e) => eprintln!("cut failed: {e}"),
+    }
+}

@@ -1387,3 +1387,59 @@ fn a_key_carried_round_an_arc() {
     let v = k.mass_properties(cut).unwrap().volume;
     assert!((v - want).abs() < 1e-8 * groove, "{v} against {want}");
 }
+
+/// A bar threaded through a rod at a growing lead (swept/square-thread-at-a-growing-lead): the
+/// part within 5.5 of the axis of the box 4 ≤ x ≤ 12, |y| ≤ 8, |z| ≤ 1 climbing about the z axis
+/// from −90° to 1260°, rising 6s + 0.3s² (s = θ/360°), cut from the rod of radius 5 from z = 0
+/// to 20. In the rod the bar is the disc's segment x ≥ 4, 2 high: at radius r it holds the turns
+/// within β = acos(4/r) of its own, so the groove at the unwrapped angle ψ spans the heights
+/// h(ψ − β) − 1 to h(ψ + β) + 1 (h the rise, clipped to the rod); integrated, the rod keeps
+/// 1324.4782712227 (r = 4 + u² against the root at 4).
+#[test]
+fn a_square_thread_at_a_growing_lead() {
+    use std::f64::consts::PI;
+    let mut k = NativeKernel::new();
+    let bar = block(&mut k, p3(4.0, -8.0, -1.0), p3(12.0, 8.0, 1.0));
+    let z = Unit::new_normalize(V3::z());
+    let near = k
+        .primitive(&Primitive::Cylinder {
+            base: p3(0.0, 0.0, -2.0),
+            axis: z,
+            radius: 5.5,
+            height: 4.0,
+        })
+        .unwrap()
+        .bodies[0];
+    let bar = k.boolean(BoolOp::Intersect, bar, &[near]).unwrap().bodies[0];
+    let rod = k
+        .primitive(&Primitive::Cylinder {
+            base: p3(0.0, 0.0, 0.0),
+            axis: z,
+            radius: 5.0,
+            height: 20.0,
+        })
+        .unwrap()
+        .bodies[0];
+    let cut = k
+        .cut_swept(
+            rod,
+            bar,
+            &SolidMotion::Climb {
+                axis: Axis {
+                    origin: p3(0.0, 0.0, 0.0),
+                    dir: z,
+                },
+                from: (-90f64).to_radians(),
+                to: 1260f64.to_radians(),
+                rise: vec![0.0, 6.0 / (2.0 * PI), 0.3 / (4.0 * PI * PI)],
+            },
+        )
+        .unwrap()
+        .bodies[0];
+    let body = k.get(cut).unwrap();
+    assert!(body.check().is_empty());
+    assert!(body.faces.len() < 60, "{} faces: meshed", body.faces.len());
+    let v = k.mass_properties(cut).unwrap().volume;
+    let want = 1324.478_271_222_674;
+    assert!((v - want).abs() < 1e-8 * want, "{v} against {want}");
+}

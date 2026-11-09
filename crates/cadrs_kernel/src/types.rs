@@ -861,6 +861,22 @@ pub enum SolidMotion {
         /// The steps, the first applied first.
         steps: Vec<RigidStep>,
     },
+    /// Turned about the axis from the turn `from` to `to` (radians, right-handed about its
+    /// direction) while rising along it: at the turn θ the body (as given, at θ = 0) is turned by
+    /// θ and moved `rise[0] + rise[1]·θ + rise[2]·θ² + …` along the axis (a screw whose lead
+    /// changes as it climbs, as a variable-pitch thread is cut). Exactly where each face's
+    /// contact stays put as the lead changes (faces square to the axis or along it): half a turn
+    /// at a time, each the solid where it starts and its leading faces' sweeps.
+    Climb {
+        /// The axis.
+        axis: Axis,
+        /// The turn at the motion's start.
+        from: f64,
+        /// The turn at its end.
+        to: f64,
+        /// The rise's coefficients, constant first.
+        rise: Vec<f64>,
+    },
     /// Carried along a path by a frame riding it: at each point the frame's origin is the path's
     /// point, its z axis `up` and its x axis the path's tangent made square to `up` (its y axis to
     /// the left), the body drawn in the frame where the path starts and carried rigidly by it

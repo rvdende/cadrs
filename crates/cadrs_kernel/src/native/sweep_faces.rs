@@ -770,6 +770,20 @@ fn uv_box(b: &Body, fi: usize) -> Option<(f64, f64, f64, f64)> {
 
 /// The solid split along its faces' contacts with the motion, and its leading faces swept.
 fn prepared(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Result<Prepared> {
+    prepared_rising(k, b, steps, None)
+}
+
+/// A screw's rise as the turn goes (radians from the motion's start ↦ the rise from there), where
+/// its lead changes.
+pub type Rise = std::sync::Arc<dyn Fn(f64) -> f64 + Send + Sync>;
+
+/// [`prepared`], a screw rising by `profile` (where given) rather than at its steps' one rate.
+fn prepared_rising(
+    k: &mut NativeKernel,
+    b: &Body,
+    steps: &[RigidStep],
+    profile: Option<Rise>,
+) -> Result<Prepared> {
     let clock = web_time::Instant::now();
     let lap = |what: &str| {
         if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
@@ -1087,10 +1101,14 @@ fn prepared(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Result<Prepa
                 })
                 .fold(0.0, f64::max);
             let s1 = angle.abs();
-            Some(super::sweep::Screw::new(
+            let sign = angle.signum();
+            Some(super::sweep::Screw::rising(
                 o,
                 zs,
-                rise * angle.signum() / s1,
+                rise * sign / s1,
+                profile
+                    .clone()
+                    .map(|f| -> Rise { std::sync::Arc::new(move |s: f64| f(s * sign) * sign) }),
                 s1,
                 reach,
                 SCREW_TOL * size.max(1.0),
@@ -1098,6 +1116,31 @@ fn prepared(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Result<Prepa
         }
         _ => None,
     };
+    // A lead that changes: each face must stand as it does at the least and the greatest lead
+    // (else its contact moves as the lead does, which this sweep doesn't follow).
+    if let (Some(f), Move::Screw { o, z, angle, .. }) = (&profile, mv) {
+        let n = 256;
+        let slopes: Vec<f64> = (0..n)
+            .map(|i| {
+                let (a, b) = (
+                    angle * i as f64 / n as f64,
+                    angle * (i + 1) as f64 / n as f64,
+                );
+                (f(b) - f(a)) / (b - a) * angle
+            })
+            .collect();
+        let lo = slopes.iter().copied().fold(f64::INFINITY, f64::min);
+        let hi = slopes.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        for fi in 0..body.faces.len() {
+            let pts = face_points(&body, fi, size);
+            let at = |rise: f64| stand(&pts, &Move::Screw { o, z, angle, rise });
+            if at(lo) != at(hi) {
+                return Err(KernelError::Unsupported(
+                    "screwing a solid at a changing lead that moves its faces' contacts",
+                ));
+            }
+        }
+    }
     let mut pieces: Vec<Body> = Vec::new();
     for fi in 0..body.faces.len() {
         let st = stand(&face_points(&body, fi, size), &mv);
@@ -1178,6 +1221,38 @@ struct Prepared {
 /// in turn, which needs no union.
 pub fn face_sweeps(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Result<Vec<Body>> {
     let p = prepared(k, b, steps)?;
+    let mut all = vec![p.body];
+    all.extend(p.pieces);
+    Ok(all)
+}
+
+/// The pieces of a screw about the axis through `o` along the unit `z` by `angle` (radians from
+/// where `b` is) rising `rise(θ)` at the turn θ (0 at 0): [`face_sweeps`] of a screw whose lead
+/// changes, where every face's contact stays put as it does (a face square to the axis, or along
+/// it).
+pub fn rising_screw_sweeps(
+    k: &mut NativeKernel,
+    b: &Body,
+    o: P3,
+    z: V3,
+    angle: f64,
+    rise: Rise,
+) -> Result<Vec<Body>> {
+    let steps = [
+        RigidStep::Turn {
+            axis: Axis {
+                origin: o,
+                dir: nalgebra::Unit::new_normalize(z),
+            },
+            from: 0.0,
+            to: angle,
+        },
+        RigidStep::Slide {
+            from: V3::zeros(),
+            to: z.normalize() * rise(angle),
+        },
+    ];
+    let p = prepared_rising(k, b, &steps, Some(rise))?;
     let mut all = vec![p.body];
     all.extend(p.pieces);
     Ok(all)

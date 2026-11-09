@@ -72,7 +72,10 @@ impl BodyMove<'_> {
 pub struct Screw {
     pub o: P3,
     pub z: V3,
+    /// The rise a radian (the mean, where `rise` gives it).
     pub lift: f64,
+    /// The rise at s where it isn't `lift`·s (a lead that changes, s ↦ its rise, 0 at 0).
+    pub rise: Option<std::sync::Arc<dyn Fn(f64) -> f64 + Send + Sync>>,
     v: Vec<f64>,
     deg: usize,
 }
@@ -80,6 +83,19 @@ pub struct Screw {
 impl Screw {
     /// The screw from s = 0 to `s1` (above 0), for a body reaching `reach` from the axis.
     pub fn new(o: P3, z: V3, lift: f64, s1: f64, reach: f64, tol: f64) -> Screw {
+        Self::rising(o, z, lift, None, s1, reach, tol)
+    }
+
+    /// [`Screw::new`] rising `rise(s)` at s (where given) instead of `lift`·s.
+    pub fn rising(
+        o: P3,
+        z: V3,
+        lift: f64,
+        rise: Option<std::sync::Arc<dyn Fn(f64) -> f64 + Send + Sync>>,
+        s1: f64,
+        reach: f64,
+        tol: f64,
+    ) -> Screw {
         let deg = 5;
         let z = z.normalize();
         let mut n = ((s1 / 0.3).ceil() as usize).max(2 * deg);
@@ -88,6 +104,7 @@ impl Screw {
                 o,
                 z,
                 lift,
+                rise: rise.clone(),
                 v: (0..=n).map(|i| s1 * i as f64 / n as f64).collect(),
                 deg,
             };
@@ -112,7 +129,15 @@ impl Screw {
         let m = *r.matrix();
         Affine {
             m,
-            t: self.o.coords - m * self.o.coords + self.z * (self.lift * s),
+            t: self.o.coords - m * self.o.coords + self.z * self.rise_at(s),
+        }
+    }
+
+    /// The rise at s.
+    pub fn rise_at(&self, s: f64) -> f64 {
+        match &self.rise {
+            Some(f) => f(s),
+            None => self.lift * s,
         }
     }
 
@@ -134,7 +159,7 @@ impl Screw {
     fn rail(&self, p: &P3) -> Option<Curve> {
         let w = p - self.o;
         let off = (w - self.z * w.dot(&self.z)).norm();
-        if off <= tol::POINT * 1e-3 && self.lift.abs() <= tol::TINY {
+        if off <= tol::POINT * 1e-3 && self.lift.abs() <= tol::TINY && self.rise.is_none() {
             return None;
         }
         Some(Curve::Nurbs(std::sync::Arc::new(self.rail_nurbs(p))))
@@ -145,6 +170,7 @@ impl Screw {
         // the line's start, v the height along z from it).
         if let Curve::Line { o: lo, d } = c3
             && d.cross(&self.z).norm() <= tol::REL_FINE * d.norm()
+            && self.rise.is_none()
         {
             let w = lo - self.o;
             let h0 = w.dot(&self.z);

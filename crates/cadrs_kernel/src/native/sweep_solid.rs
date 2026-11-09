@@ -560,6 +560,19 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
             None => meshed_body(k, &b, &place).map_err(|e| exact.unwrap_or(e)),
         };
     }
+    if let SolidMotion::Climb {
+        axis,
+        from,
+        to,
+        rise,
+    } = motion
+    {
+        let place = |t: f64| climb_at(axis, *from, *to, rise, t);
+        return match revolved(&b) {
+            Some(rev) => meshed(k, &b, &|p| rev.distance(p), &place),
+            None => meshed_body(k, &b, &place),
+        };
+    }
     if let SolidMotion::Path { path, up } = motion {
         if let Some(r) = path_sweep_exact(k, body, &b, path, up.into_inner()) {
             return Ok(r);
@@ -575,7 +588,10 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
         "sweeping solids other than a torus or a convex section revolved",
     ))?;
     let (axis, kk, span) = match *motion {
-        SolidMotion::Planar { .. } | SolidMotion::Rigid { .. } | SolidMotion::Path { .. } => {
+        SolidMotion::Planar { .. }
+        | SolidMotion::Rigid { .. }
+        | SolidMotion::Path { .. }
+        | SolidMotion::Climb { .. } => {
             unreachable!()
         }
         SolidMotion::Turn { axis } => (axis, 0.0, None),
@@ -889,6 +905,27 @@ impl Revolved {
 }
 
 /// A rigid motion's place at t: the rotation and translation taking the body's points there.
+/// The rise of [`SolidMotion::Climb`] at the turn θ (its polynomial's coefficients, constant
+/// first).
+fn climb_rise(rise: &[f64], a: f64) -> f64 {
+    rise.iter().rev().fold(0.0, |acc, c| acc * a + c)
+}
+
+/// The place of [`SolidMotion::Climb`] at t in [0, 1]: turned by θ about the axis and risen
+/// along it, θ from `from` to `to`.
+fn climb_at(
+    axis: &Axis,
+    from: f64,
+    to: f64,
+    rise: &[f64],
+    t: f64,
+) -> (nalgebra::Rotation3<f64>, V3) {
+    let a = from + (to - from) * t;
+    let r = nalgebra::Rotation3::from_axis_angle(&axis.dir, a);
+    let o = axis.origin.coords;
+    (r, o - r * o + axis.dir.into_inner() * climb_rise(rise, a))
+}
+
 fn rigid_at(steps: &[RigidStep], t: f64) -> (nalgebra::Rotation3<f64>, V3) {
     let (mut r, mut d) = (nalgebra::Rotation3::identity(), V3::zeros());
     for s in steps {
@@ -1586,6 +1623,43 @@ pub fn cut_swept(
         return Ok(r);
     }
     // Exactly: the sweep, where it is made without meshing, cut from the target.
+    // A climb (a screw whose lead changes): half a turn at a time.
+    if let SolidMotion::Climb {
+        axis,
+        from,
+        to,
+        rise,
+    } = motion
+    {
+        let (r, d) = climb_at(axis, *from, *to, rise, 0.0);
+        let start = b.transformed(&Affine {
+            m: *r.matrix(),
+            t: d,
+        });
+        let (coef, a0) = (rise.clone(), *from);
+        let base = climb_rise(&coef, a0);
+        let rel: super::sweep_faces::Rise =
+            std::sync::Arc::new(move |s: f64| climb_rise(&coef, a0 + s) - base);
+        if let Some(r) = cut_rising_screw(
+            k,
+            target,
+            &start,
+            axis.origin,
+            axis.dir.into_inner(),
+            to - from,
+            rel,
+        ) {
+            return Ok(r);
+        }
+    }
+    // Carried along a helix (about a fixed axis along `up`, its lead changing or not): a screw.
+    if let SolidMotion::Path { path, up } = motion
+        && let Ok(frames) = PathFrames::new(k, path, up.into_inner())
+        && let Some((o, angle, rise)) = path_screw(&frames, b.bbox().diagonal().max(frames.total))
+        && let Some(r) = cut_rising_screw(k, target, &b, o, frames.up, angle, rise)
+    {
+        return Ok(r);
+    }
     let mut pieces: Vec<Body> = Vec::new();
     let exact = match motion {
         SolidMotion::Rigid { steps } if (1..=2).contains(&steps.len()) => {
@@ -1661,6 +1735,18 @@ pub fn cut_swept(
             let frames = PathFrames::new(k, path, up.into_inner())?;
             meshed_within(k, &b, dist, &|t| frames.place(t), within)
         }
+        SolidMotion::Climb {
+            axis,
+            from,
+            to,
+            rise,
+        } => meshed_within(
+            k,
+            &b,
+            dist,
+            &|t| climb_at(axis, *from, *to, rise, t),
+            within,
+        ),
         _ => Err(KernelError::Unsupported(
             "cutting by a swept solid meshed for a motion other than a rigid one or a path",
         )),
@@ -1901,6 +1987,128 @@ fn upright_revolution_along(
     let body = result?;
     (body.is_solid() && body.check().is_empty()).then(|| OpResult {
         bodies: vec![k.insert(body)],
+        history: History::default(),
+    })
+}
+
+/// A path's frames turning about one fixed axis along `up` as they rise (a helix, its lead
+/// changing or not): a point on the axis, the turn from the path's start to its end (radians),
+/// and the rise as the turn goes (a function of the turn from the start, 0 there). None when the
+/// frames turn about an axis that moves (more than a millionth of the size).
+fn path_screw(frames: &PathFrames, size: f64) -> Option<(P3, f64, super::sweep_faces::Rise)> {
+    let up = frames.up;
+    let (ex, ey) = {
+        let x = any_perpendicular(&up).normalize();
+        (x, up.cross(&x))
+    };
+    let n = 4096;
+    let mut turns: Vec<f64> = Vec::with_capacity(n + 1);
+    let mut moves: Vec<V3> = Vec::with_capacity(n + 1);
+    for i in 0..=n {
+        let (r, d) = frames.place(i as f64 / n as f64);
+        let x = r * ex;
+        let a = x.dot(&ey).atan2(x.dot(&ex));
+        let a = match turns.last() {
+            Some(&p) => p + (a - p - TAU * ((a - p) / TAU).round()),
+            None => a,
+        };
+        turns.push(a);
+        moves.push(d);
+    }
+    let total = turns[n] - turns[0];
+    // Turning one way all along.
+    if total.abs() < 1e-6
+        || turns
+            .windows(2)
+            .any(|w| (w[1] - w[0]) * total.signum() <= 0.0)
+    {
+        return None;
+    }
+    // The axis: the point o (in the plane square to up) each place's shift (I − R)o is, by least
+    // squares.
+    let (mut a11, mut a12, mut a22, mut b1, mut b2) = (0.0, 0.0, 0.0, 0.0, 0.0);
+    for i in 0..=n {
+        let (c, s_) = (turns[i].cos(), turns[i].sin());
+        // I − R in the plane: [[1 − c, s], [−s, 1 − c]].
+        let (m11, m12, m21, m22) = (1.0 - c, s_, -s_, 1.0 - c);
+        let (dx, dy) = (moves[i].dot(&ex), moves[i].dot(&ey));
+        a11 += m11 * m11 + m21 * m21;
+        a12 += m11 * m12 + m21 * m22;
+        a22 += m12 * m12 + m22 * m22;
+        b1 += m11 * dx + m21 * dy;
+        b2 += m12 * dx + m22 * dy;
+    }
+    let det = a11 * a22 - a12 * a12;
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    let (ox, oy) = ((a22 * b1 - a12 * b2) / det, (a11 * b2 - a12 * b1) / det);
+    for i in 0..=n {
+        let (c, s_) = (turns[i].cos(), turns[i].sin());
+        let (dx, dy) = (moves[i].dot(&ex), moves[i].dot(&ey));
+        let off = ((1.0 - c) * ox + s_ * oy - dx).hypot(-s_ * ox + (1.0 - c) * oy - dy);
+        if off > 1e-6 * size {
+            if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+                eprintln!("path screw: the axis moves ({off:.2e} at {i} of {n})");
+            }
+            return None;
+        }
+    }
+    let o = P3::from(ex * ox + ey * oy);
+    // The rise against the turn, interpolated (a cubic through every place).
+    let pts: Vec<P3> = (0..=n)
+        .map(|i| P3::new(0.0, moves[i].dot(&up) - moves[0].dot(&up), 0.0))
+        .collect();
+    let params: Vec<f64> = turns.iter().map(|a| a - turns[0]).collect();
+    let curve = super::nurbs::NurbsCurve::interpolate(&pts, &params, 3, None, None);
+    let rise: super::sweep_faces::Rise = std::sync::Arc::new(move |a: f64| curve.point(a).y);
+    Some((o, total, rise))
+}
+
+/// `target` less what `b` passes through screwed about the axis through `o` along `up` by
+/// `angle`, rising `rise(θ)` at the turn θ: half a turn at a time, each the target less the
+/// solid where it starts and each of its leading faces' sweeps. None when that fails.
+fn cut_rising_screw(
+    k: &mut NativeKernel,
+    target: BodyId,
+    b: &Body,
+    o: P3,
+    up: V3,
+    angle: f64,
+    rise: super::sweep_faces::Rise,
+) -> Option<OpResult> {
+    let n = (angle.abs() / PI).ceil().max(1.0) as usize;
+    // Every half turn's pieces, then the target less them (glued where they only touch: the
+    // half turns meet along the solid where one ends and the next starts).
+    let mut all: Vec<Body> = Vec::new();
+    for i in 0..n {
+        let (a0, a1) = (
+            angle * i as f64 / n as f64,
+            angle * (i + 1) as f64 / n as f64,
+        );
+        let r = nalgebra::Rotation3::from_axis_angle(&nalgebra::Unit::new_normalize(up), a0);
+        let m = *r.matrix();
+        let place = Affine {
+            m,
+            t: o.coords - m * o.coords + up * rise(a0),
+        };
+        let here = b.transformed(&place);
+        let (f, base) = (rise.clone(), rise(a0));
+        let part: super::sweep_faces::Rise = std::sync::Arc::new(move |s: f64| f(a0 + s) - base);
+        match super::sweep_faces::rising_screw_sweeps(k, &here, o, up, a1 - a0, part) {
+            // (After the first, the solid where a half turn starts is inside the one before.)
+            Ok(p) => all.extend(p.into_iter().skip(usize::from(i > 0))),
+            Err(e) => {
+                if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+                    eprintln!("path screw: part {i} of {n}: {e}");
+                }
+                return None;
+            }
+        }
+    }
+    let bodies = cut_by_pieces(k, &[target], all)?;
+    Some(OpResult {
+        bodies,
         history: History::default(),
     })
 }
