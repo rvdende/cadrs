@@ -1292,6 +1292,56 @@ impl NurbsSurface {
         Ok(())
     }
 
+    /// The patch over u × v (each clamped to the surface's range): each row's curve cut there in
+    /// v, then each column's in u, the parameters kept (a point at (u, v) on it is the surface's
+    /// at (u, v)).
+    pub fn restricted(&self, u: (f64, f64), v: (f64, f64)) -> Self {
+        let mut kv = self.kv.clone();
+        let rows: Vec<Vec<H>> = self
+            .cps
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let c = NurbsCurve {
+                    degree: self.dv,
+                    knots: self.kv.clone(),
+                    cps: r.clone(),
+                }
+                .restricted(v.0, v.1);
+                if i == 0 {
+                    kv = c.knots;
+                }
+                c.cps
+            })
+            .collect();
+        let nv = rows[0].len();
+        let mut ku = self.ku.clone();
+        let cols: Vec<Vec<H>> = (0..nv)
+            .map(|j| {
+                let c = NurbsCurve {
+                    degree: self.du,
+                    knots: self.ku.clone(),
+                    cps: rows.iter().map(|r| r[j]).collect(),
+                }
+                .restricted(u.0, u.1);
+                if j == 0 {
+                    ku = c.knots;
+                }
+                c.cps
+            })
+            .collect();
+        let nu = cols[0].len();
+        Self {
+            du: self.du,
+            dv: self.dv,
+            ku,
+            kv,
+            cps: (0..nu)
+                .map(|i| (0..nv).map(|j| cols[j][i]).collect())
+                .collect(),
+        }
+    }
+
     /// The control net of the patch over u × v (each row's and then each column's curve cut
     /// there): its points' hull holds that part of the surface.
     pub fn sub_net(&self, u: (f64, f64), v: (f64, f64)) -> Vec<Vec<H>> {

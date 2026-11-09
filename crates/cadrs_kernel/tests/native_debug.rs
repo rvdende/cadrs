@@ -2996,7 +2996,10 @@ fn debug_describe_body() {
     }
     for (ei, e) in b.edges.iter().enumerate() {
         let (p, q) = (b.verts[e.v[0]].p, b.verts[e.v[1]].p);
-        let kind: String = format!("{:?}", e.curve).chars().take(30).collect();
+        let kind: String = match &e.curve {
+            Curve::Nurbs(n) => format!("Nurbs degree {}, {} poles", n.degree, n.cps.len()),
+            c => format!("{c:?}").chars().take(30).collect(),
+        };
         eprintln!(
             "edge {ei}: {kind}… from [{:.4}, {:.4}, {:.4}] to [{:.4}, {:.4}, {:.4}]",
             p.x, p.y, p.z, q.x, q.y, q.z

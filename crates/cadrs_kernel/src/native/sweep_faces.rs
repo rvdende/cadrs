@@ -113,6 +113,26 @@ fn quarter_turns(b: &mut Body, s1: f64) {
             let _ = split_face_iso(b, fi, Dir::V, &inside);
         }
     }
+    // Each piece on its own part of the surface: the faces cut from one share it, so each would
+    // carry the whole winding surface (into every boolean, mass and file written).
+    for fi in 0..b.faces.len() {
+        let super::surface::Surface::Nurbs(n) = &b.faces[fi].surf else {
+            continue;
+        };
+        let Some(((u0, u1), (v0, v1))) = face_uv_box(b, fi) else {
+            continue;
+        };
+        let ((a0, a1), (c0, c1)) = n.range();
+        let pad = |lo: f64, hi: f64, a: f64, z: f64| {
+            let m = 1e-3 * (z - a);
+            ((lo - m).max(a), (hi + m).min(z))
+        };
+        let ((u0, u1), (v0, v1)) = (pad(u0, u1, a0, a1), pad(v0, v1, c0, c1));
+        if u1 - u0 < 0.9 * (a1 - a0) || v1 - v0 < 0.9 * (c1 - c0) {
+            let part = n.restricted((u0, u1), (v0, v1));
+            b.faces[fi].surf = super::surface::Surface::Nurbs(std::sync::Arc::new(part));
+        }
+    }
 }
 
 /// How long (seconds) a sweep by faces may split and unite before it gives up.
