@@ -561,7 +561,7 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
         };
     }
     if let SolidMotion::Path { path, up } = motion {
-        if let Some(r) = upright_revolution_along(k, body, &b, path, up.into_inner()) {
+        if let Some(r) = path_sweep_exact(k, body, &b, path, up.into_inner()) {
             return Ok(r);
         }
         let frames = PathFrames::new(k, path, up.into_inner())?;
@@ -1397,7 +1397,8 @@ fn cut_in_pieces(
     };
     let mut acc = vec![target];
     for i in 0..n {
-        let swept = super::sweep_faces::by_faces(k, b, &part(i)).ok();
+        let mut pieces: Vec<Body> = Vec::new();
+        let swept = super::sweep_faces::by_faces_or_pieces(k, b, &part(i), Some(&mut pieces)).ok();
         let cut = match swept.as_ref().map(|r| r.bodies.as_slice()) {
             Some([s]) if acc.len() == 1 => {
                 let cut = k.boolean(crate::BoolOp::Subtract, acc[0], &[*s]);
@@ -1412,7 +1413,13 @@ fn cut_in_pieces(
             _ => None,
         };
         // Else the part's pieces cut one at a time (no union of them needed).
-        let cut = cut.or_else(|| cut_by_face_sweeps(k, &acc, b, &part(i)));
+        let cut = cut.or_else(|| {
+            if pieces.is_empty() {
+                cut_by_face_sweeps(k, &acc, b, &part(i))
+            } else {
+                cut_by_pieces(k, &acc, pieces)
+            }
+        });
         let Some(c) = cut else {
             release_unless(k, &acc, target);
             return None;
@@ -1446,6 +1453,21 @@ fn cut_by_face_sweeps(
     steps: &[RigidStep],
 ) -> Option<Vec<BodyId>> {
     let pieces = super::sweep_faces::face_sweeps(k, b, steps).ok()?;
+    cut_by_pieces(k, targets, pieces)
+}
+
+/// The bodies `targets` less each of `pieces` in turn; None when a cut fails or leaves a body
+/// that isn't sound.
+fn cut_by_pieces(
+    k: &mut NativeKernel,
+    targets: &[BodyId],
+    pieces: Vec<Body>,
+) -> Option<Vec<BodyId>> {
+    // (Pieces that only touch glued first: one cut each group, none along a tangency.)
+    let pieces = super::sweep_faces::glued_groups(k, pieces);
+    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+        eprintln!("swept cut: {} groups of pieces", pieces.len());
+    }
     let keep: Vec<BodyId> = targets.to_vec();
     let mut acc: Vec<BodyId> = targets.to_vec();
     for piece in pieces {
@@ -1475,7 +1497,19 @@ fn cut_by_face_sweeps(
                 {
                     next.extend(c.bodies);
                 }
-                _ => {
+                r => {
+                    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+                        match &r {
+                            Ok(c) => eprintln!(
+                                "swept cut: a piece's cut isn't sound: {:?}",
+                                c.bodies
+                                    .iter()
+                                    .filter_map(|&id| k.get(id).ok()?.check().into_iter().next())
+                                    .next()
+                            ),
+                            Err(e) => eprintln!("swept cut: a piece's cut failed: {e}"),
+                        }
+                    }
                     ok = false;
                     break;
                 }
@@ -1552,16 +1586,15 @@ pub fn cut_swept(
         return Ok(r);
     }
     // Exactly: the sweep, where it is made without meshing, cut from the target.
+    let mut pieces: Vec<Body> = Vec::new();
     let exact = match motion {
         SolidMotion::Rigid { steps } if (1..=2).contains(&steps.len()) => {
-            super::sweep_faces::by_faces(k, &b, steps).ok()
+            super::sweep_faces::by_faces_or_pieces(k, &b, steps, Some(&mut pieces)).ok()
         }
         SolidMotion::Planar { .. } | SolidMotion::Turn { .. } | SolidMotion::Screw { .. } => {
             sweep_solid(k, tool, motion).ok()
         }
-        SolidMotion::Path { path, up } => {
-            upright_revolution_along(k, tool, &b, path, up.into_inner())
-        }
+        SolidMotion::Path { path, up } => path_sweep_exact(k, tool, &b, path, up.into_inner()),
         _ => None,
     };
     if let Some(r) = exact
@@ -1581,7 +1614,11 @@ pub fn cut_swept(
     if long.is_none()
         && let SolidMotion::Rigid { steps } = motion
         && (1..=2).contains(&steps.len())
-        && let Some(bodies) = cut_by_face_sweeps(k, &[target], &b, steps)
+        && let Some(bodies) = if pieces.is_empty() {
+            cut_by_face_sweeps(k, &[target], &b, steps)
+        } else {
+            cut_by_pieces(k, &[target], std::mem::take(&mut pieces))
+        }
     {
         return Ok(OpResult {
             bodies,
@@ -1866,6 +1903,41 @@ fn upright_revolution_along(
         bodies: vec![k.insert(body)],
         history: History::default(),
     })
+}
+
+/// A solid carried along a path, exactly where it can be: an upright solid of revolution along a
+/// planar path ([`upright_revolution_along`]); a prism along `up` carried along a path in a plane
+/// square to `up`, whose frames then only turn about `up` (a planar motion: the prism's
+/// polygon's swept region extruded, [`super::sweep_planar::sweep_planar_by`]).
+fn path_sweep_exact(
+    k: &mut NativeKernel,
+    tool: BodyId,
+    b: &Body,
+    path: &[crate::PathCurve],
+    up: V3,
+) -> Option<OpResult> {
+    if let Some(r) = upright_revolution_along(k, tool, b, path, up) {
+        return Some(r);
+    }
+    let frames = PathFrames::new(k, path, up).ok()?;
+    let up = up.normalize();
+    let o0 = frames.frame(0.0).ok()?.1;
+    let size = b.bbox().diagonal().max(frames.total);
+    let planar = (0..=256).all(|i| {
+        frames
+            .frame(i as f64 / 256.0)
+            .is_ok_and(|(_, o)| (o - o0).dot(&up).abs() <= 1e-9 * size)
+    });
+    if !planar {
+        return None;
+    }
+    let r = super::sweep_planar::sweep_planar_by(k, b, up, &|t| frames.place(t));
+    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some()
+        && let Err(e) = &r
+    {
+        eprintln!("path sweep: the planar sweep failed: {e}");
+    }
+    r.ok()
 }
 
 /// The frames riding a path ([`SolidMotion::Path`]): by its length, t from 0 to 1, the path's

@@ -1345,3 +1345,45 @@ fn a_bar_end_turned_through_a_ring_sector() {
     let want = 53.564_557;
     assert!((v - want).abs() < 2e-7 * want, "{v} against {want}");
 }
+
+/// A square key 3 long and 1.6 wide (a = 1.5, b = 0.8) carried a quarter turn round a circle of
+/// radius ρ = 5 by the frame riding it (swept/key-carried-along-a-spline, on an arc): a planar
+/// motion, the key's rectangle's swept region extruded. Each circle about the arc's centre of
+/// radius r meets the rectangle within the angles ±β(r) and the swept region in Φ + 2β(r), so
+/// the region's area is Φ (R² − (ρ − b)²)/2, from the inner side's middle (ρ − b) out to the
+/// outer corners (R² = (ρ + b)² + a²), plus the area within ±β(r): the rectangle and, past its
+/// outer side (where the circles meet it in two arcs), the circle of radius R's segment between
+/// the outer corners, R² atan(a/(ρ + b)) − (ρ + b) a; 1.5 deep in the block. The two outer
+/// corners run on that one circle, their traces overlapping.
+#[test]
+fn a_key_carried_round_an_arc() {
+    use std::f64::consts::PI;
+    let mut k = NativeKernel::new();
+    let target = block(&mut k, p3(-6.0, -6.0, -8.0), p3(12.0, 12.0, 0.0));
+    let key = block(&mut k, p3(-1.5, -0.8, -1.5), p3(1.5, 0.8, 2.5));
+    let (a, b, rho) = (1.5, 0.8, 5.0);
+    let path = vec![PathCurve::Sketch {
+        plane: xy(0.0),
+        curve: arc((0.0, rho), rho, -90.0, 90.0),
+    }];
+    let cut = k
+        .cut_swept(
+            target,
+            key,
+            &SolidMotion::Path {
+                path,
+                up: Unit::new_normalize(V3::z()),
+            },
+        )
+        .unwrap()
+        .bodies[0];
+    let body = k.get(cut).unwrap();
+    assert!(body.check().is_empty());
+    assert!(body.faces.len() < 20, "{} faces: meshed", body.faces.len());
+    let r2 = (rho + b) * (rho + b) + a * a;
+    let segment = r2 * (a / (rho + b)).atan() - (rho + b) * a;
+    let groove = 1.5 * (PI / 2.0 * (r2 - (rho - b) * (rho - b)) / 2.0 + 4.0 * a * b + segment);
+    let want = 18.0 * 18.0 * 8.0 - groove;
+    let v = k.mass_properties(cut).unwrap().volume;
+    assert!((v - want).abs() < 1e-8 * groove, "{v} against {want}");
+}

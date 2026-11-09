@@ -26,8 +26,10 @@ type W = Vector2<f64>;
 
 /// A planar motion: at each instant t in [0, 1] the rotation angle and the translation that
 /// take the polygon's points from where they start (x ↦ R(θ) x + d).
-struct Motion2 {
+struct Motion2<'a> {
     steps: Vec<Step2>,
+    /// Else the motion as a function of t (a path's frames), its angle running on without jumps.
+    by: Option<Box<dyn Fn(f64) -> (f64, W) + Send + Sync + 'a>>,
 }
 
 enum Step2 {
@@ -35,8 +37,11 @@ enum Step2 {
     Slide { v0: W, v1: W },
 }
 
-impl Motion2 {
+impl Motion2<'_> {
     fn at(&self, t: f64) -> (f64, W) {
+        if let Some(f) = &self.by {
+            return f(t);
+        }
         let (mut th, mut d) = (0.0, W::zeros());
         for s in &self.steps {
             match s {
@@ -224,6 +229,13 @@ fn crossing(ca: &Candidate, a: f64, cb: &Candidate, b: f64) -> Option<(Q, f64, f
     ((pa - pb).norm() < 1e-9 * (1.0 + pa.coords.norm())).then_some((pa, a, b))
 }
 
+/// A planar motion as given: turns and slides one after another, or the rotation about n and
+/// the translation taking the solid from where it starts to its place at each t in [0, 1].
+enum Planar<'a> {
+    Steps(&'a [PlanarStep]),
+    Place(&'a (dyn Fn(f64) -> (nalgebra::Rotation3<f64>, V3) + Sync)),
+}
+
 /// [`crate::Kernel::sweep_solid`] for a planar motion.
 pub fn sweep_planar(
     k: &mut NativeKernel,
@@ -231,6 +243,22 @@ pub fn sweep_planar(
     n: V3,
     steps: &[PlanarStep],
 ) -> Result<OpResult> {
+    planar(k, b, n, Planar::Steps(steps))
+}
+
+/// [`sweep_planar`] for any planar motion: `place(t)` the rotation about n and the translation
+/// taking the prism from where it starts to its place at t in [0, 1] (a path's frames riding a
+/// path in a plane square to n, with n up).
+pub fn sweep_planar_by(
+    k: &mut NativeKernel,
+    b: &Body,
+    n: V3,
+    place: &(dyn Fn(f64) -> (nalgebra::Rotation3<f64>, V3) + Sync),
+) -> Result<OpResult> {
+    planar(k, b, n, Planar::Place(place))
+}
+
+fn planar(k: &mut NativeKernel, b: &Body, n: V3, motion: Planar) -> Result<OpResult> {
     let unsupported =
         || KernelError::Unsupported("sweeping solids other than prisms in their planes");
     let n = n.normalize();
@@ -275,21 +303,52 @@ pub fn sweep_planar(
         poly.reverse();
     }
     // The motion in the plane's coordinates.
-    let m = Motion2 {
-        steps: steps
-            .iter()
-            .map(|s| match *s {
-                PlanarStep::Turn { about, from, to } => Step2::Turn {
-                    c: to2(&about).coords,
-                    a0: from,
-                    a1: to,
-                },
-                PlanarStep::Slide { from, to } => Step2::Slide {
-                    v0: W::new(from.dot(&ex), from.dot(&ey)),
-                    v1: W::new(to.dot(&ex), to.dot(&ey)),
-                },
-            })
-            .collect(),
+    let m = match motion {
+        Planar::Steps(steps) => Motion2 {
+            steps: steps
+                .iter()
+                .map(|s| match *s {
+                    PlanarStep::Turn { about, from, to } => Step2::Turn {
+                        c: to2(&about).coords,
+                        a0: from,
+                        a1: to,
+                    },
+                    PlanarStep::Slide { from, to } => Step2::Slide {
+                        v0: W::new(from.dot(&ex), from.dot(&ey)),
+                        v1: W::new(to.dot(&ex), to.dot(&ey)),
+                    },
+                })
+                .collect(),
+            by: None,
+        },
+        Planar::Place(place) => {
+            // The angle where the rotation takes the plane's x axis, run on from a table of
+            // instants so that it doesn't jump by whole turns.
+            let raw = move |t: f64| {
+                let (r, d) = place(t);
+                let x = r * ex;
+                (x.dot(&ey).atan2(x.dot(&ex)), W::new(d.dot(&ex), d.dot(&ey)))
+            };
+            let wrap = |a: f64| a - (2.0 * PI) * (a / (2.0 * PI)).round();
+            let nt = 4096;
+            let mut table: Vec<f64> = Vec::with_capacity(nt + 1);
+            for i in 0..=nt {
+                let a = raw(i as f64 / nt as f64).0;
+                let a = match table.last() {
+                    Some(&p) => p + wrap(a - p),
+                    None => a,
+                };
+                table.push(a);
+            }
+            Motion2 {
+                steps: vec![],
+                by: Some(Box::new(move |t: f64| {
+                    let (a, d) = raw(t);
+                    let base = table[((t.clamp(0.0, 1.0) * nt as f64).round() as usize).min(nt)];
+                    (base + wrap(a - base), d)
+                })),
+            }
+        }
     };
     let (t0, t1) = (m.at(0.0), m.at(1.0));
     let size = poly
@@ -549,6 +608,18 @@ pub fn sweep_planar(
         }
     };
     let gap_most = 0.05 * size;
+    if std::env::var_os("CADRS_SWEEP_SOLID_DEBUG").is_some() {
+        for (i, p) in pieces.iter().enumerate() {
+            eprintln!(
+                "planar sweep: piece {i} cand {} straight {} {} pts {:?} -> {:?}",
+                p.cand,
+                p.straight,
+                p.pts.len(),
+                p.pts[0],
+                p.pts.last().unwrap()
+            );
+        }
+    }
     for s0 in 0..pieces.len() {
         if used[s0] {
             continue;
@@ -581,6 +652,67 @@ pub fn sweep_planar(
                 }
             }
             let back = (start - end).norm();
+            // Two traces along one curve (two corners as far from a centre of rotation that
+            // stays put): the next piece, or the loop's own first, starts on this one's way,
+            // which stops there.
+            let near = tol_join * 100.0;
+            if best.is_none_or(|b| b.2 > near) && back > near {
+                let run: Vec<Q> = if crev {
+                    pieces[cur].pts.iter().rev().copied().collect()
+                } else {
+                    pieces[cur].pts.clone()
+                };
+                // (Each start, None for the loop's own first piece.)
+                let mut starts: Vec<(Option<(usize, bool)>, Q, Q)> = Vec::new();
+                let p0 = &pieces[s0].pts;
+                starts.push((None, p0[0], p0[1]));
+                for j2 in 0..pieces.len() {
+                    if used[j2] {
+                        continue;
+                    }
+                    for rev2 in [false, true] {
+                        let p2 = &pieces[j2].pts;
+                        let (q, next) = if rev2 {
+                            (p2[p2.len() - 1], p2[p2.len() - 2])
+                        } else {
+                            (p2[0], p2[1])
+                        };
+                        starts.push((Some((j2, rev2)), q, next));
+                    }
+                }
+                let mut on: Option<(usize, usize)> = None;
+                for (k, (_, q, next)) in starts.iter().enumerate() {
+                    for (si, w) in run.windows(2).enumerate().skip(1) {
+                        let ab = w[1] - w[0];
+                        let f = ((q - w[0]).dot(&ab) / ab.norm_squared().max(f64::MIN_POSITIVE))
+                            .clamp(0.0, 1.0);
+                        // (Running on the same way: the other's start heads along this one.)
+                        if (w[0] + ab * f - q).norm() <= near
+                            && (next - q).dot(&ab) > 0.0
+                            && on.is_none_or(|o| si < o.1)
+                        {
+                            on = Some((k, si));
+                        }
+                    }
+                }
+                if let Some((kk, si)) = on {
+                    let (which, q, _) = starts[kk];
+                    let mut cut: Vec<Q> = run[..=si].to_vec();
+                    cut.push(q);
+                    if crev {
+                        cut.reverse();
+                    }
+                    pieces[cur].pts = cut;
+                    match which {
+                        None => break,
+                        Some((j2, rev2)) => {
+                            used[j2] = true;
+                            lp.push((j2, rev2));
+                            continue;
+                        }
+                    }
+                }
+            }
             if best.is_none_or(|b| back < b.2) && back <= gap_most {
                 // Closing: carried on to the first piece's start if they stop short.
                 if back > tol_join * 100.0 {
