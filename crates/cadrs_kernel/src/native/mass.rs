@@ -1214,6 +1214,10 @@ pub(crate) fn rough_volume(body: &Body) -> Option<f64> {
 /// A body's volume where only its sign or its rough size is wanted: [`rough_volume`] where
 /// that settles it, else integrated.
 pub(crate) fn volume_for_sign(body: &Body) -> f64 {
+    // (Faces that integrate in closed form or nearly are quicker integrated than sampled.)
+    if !body.faces.iter().any(costly) {
+        return faces_volume(body);
+    }
     rough_volume(body).unwrap_or_else(|| faces_volume(body))
 }
 
