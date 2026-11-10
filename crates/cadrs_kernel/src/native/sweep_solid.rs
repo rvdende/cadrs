@@ -1439,6 +1439,23 @@ fn turns_may_overlap(b: &Body, steps: &[RigidStep]) -> bool {
     reach >= 0.9 * lead
 }
 
+/// The turn's axis, its angle and what it slides by, of steps that are a turn alone or a screw
+/// (a turn and a slide along its axis): a motion that carries what it has swept so far along
+/// itself.
+fn screw_of(steps: &[RigidStep]) -> Option<(crate::Axis, f64, V3)> {
+    let (mut turn, mut slide) = (None, V3::zeros());
+    for s in steps {
+        match *s {
+            RigidStep::Turn { axis, from, to } if turn.is_none() => turn = Some((axis, to - from)),
+            RigidStep::Turn { .. } => return None,
+            RigidStep::Slide { from, to } => slide += to - from,
+        }
+    }
+    let (axis, angle) = turn?;
+    (slide.cross(&axis.dir).norm() <= tol::ANGULAR * slide.norm().max(1.0))
+        .then_some((axis, angle, slide))
+}
+
 /// `target` less the tool `b` swept by `steps` (turning more than half a turn) in pieces of at
 /// most half a turn, cut one after another: None where a piece isn't swept or cut soundly.
 fn cut_in_pieces(
@@ -1472,20 +1489,64 @@ fn cut_in_pieces(
             })
             .collect()
     };
+    // A turn alone, or a screw (its slide along its axis): the motion carries each piece onto
+    // the next, so the first is swept and the others are it, moved.
+    let onward = screw_of(steps).map(|(axis, angle, rise)| {
+        move |i: usize| -> Affine {
+            let part = i as f64 / n as f64;
+            let q = nalgebra::Rotation3::from_axis_angle(&axis.dir, angle * part);
+            let c = axis.origin.coords;
+            Affine {
+                m: *q.matrix(),
+                t: c - q * c + rise * part,
+            }
+        }
+    });
+    let mut first: Option<(Option<Body>, Vec<Body>)> = None;
     let mut acc = vec![target];
     for i in 0..n {
         let mut pieces: Vec<Body> = Vec::new();
-        let swept = super::sweep_faces::by_faces_or_pieces(k, b, &part(i), Some(&mut pieces)).ok();
-        let cut = match swept.as_ref().map(|r| r.bodies.as_slice()) {
+        let swept: Option<Vec<BodyId>> = match (&first, &onward) {
+            (Some((whole, parts)), Some(onward)) => {
+                let by = onward(i);
+                pieces = parts.iter().map(|p| p.transformed(&by)).collect();
+                whole.as_ref().map(|w| vec![k.insert(w.transformed(&by))])
+            }
+            _ => {
+                let r = super::sweep_faces::by_faces_or_pieces(k, b, &part(i), Some(&mut pieces))
+                    .ok()
+                    .map(|r| r.bodies);
+                if onward.is_some() {
+                    let whole = match r.as_deref() {
+                        Some([s]) => k.get(*s).ok().map(|b| (**b).clone()),
+                        _ => None,
+                    };
+                    first = Some((whole, pieces.clone()));
+                }
+                r
+            }
+        };
+        let t_swept = web_time::Instant::now();
+        let cut = match swept.as_deref() {
             Some([s]) if acc.len() == 1 => {
                 let cut = k.boolean(crate::BoolOp::Subtract, acc[0], &[*s]);
                 k.release(*s);
-                cut.ok()
+                let t_cut = web_time::Instant::now();
+                let r = cut
+                    .ok()
                     .filter(|c| {
                         c.bodies.len() == 1
                             && k.get(c.bodies[0]).is_ok_and(|b| b.check().is_empty())
                     })
-                    .map(|c| c.bodies)
+                    .map(|c| c.bodies);
+                if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+                    eprintln!(
+                        "cut in pieces: piece {i}: cut {:.1} ms, checked {:.1} ms",
+                        (t_cut - t_swept).as_secs_f64() * 1e3,
+                        t_cut.elapsed().as_secs_f64() * 1e3
+                    );
+                }
+                r
             }
             _ => None,
         };

@@ -3577,6 +3577,113 @@ fn debug_step_measure() {
     }
 }
 
+/// `CADRS_SCREW=thread|tunnel[,…]`: brep-bench's slowest screws, built as its adapter builds
+/// them, with the time each takes (`CADRS_SWEEP_DEBUG`, `CADRS_PROFILE` say where it goes).
+#[test]
+fn debug_screws() {
+    let Ok(which) = std::env::var("CADRS_SCREW") else {
+        return;
+    };
+    let top = |z: f64| Plane {
+        origin: Point3::new(0.0, 0.0, z),
+        ..Plane::top()
+    };
+    let block = |k: &mut NativeKernel, lo: Point3<f64>, hi: Point3<f64>| {
+        k.extrude(
+            &Profile::new(top(lo.z), vec![reg(rect(lo.x, lo.y, hi.x, hi.y))]),
+            Extent::Blind(hi.z - lo.z),
+        )
+        .unwrap()
+        .bodies[0]
+    };
+    let cylinder = |k: &mut NativeKernel, z: f64, radius: f64, length: f64| {
+        let round = Loop {
+            curves: vec![Curve2::Circle {
+                center: p(0.0, 0.0),
+                radius,
+                source: None,
+            }],
+        };
+        k.extrude(
+            &Profile::new(top(z), vec![reg(round)]),
+            Extent::Blind(length),
+        )
+        .unwrap()
+        .bodies[0]
+    };
+    let screw = |lead: f64, from: f64, to: f64| SolidMotion::Rigid {
+        steps: vec![
+            RigidStep::Turn {
+                axis: Axis {
+                    origin: Point3::origin(),
+                    dir: Vector3::z_axis(),
+                },
+                from: from.to_radians(),
+                to: to.to_radians(),
+            },
+            RigidStep::Slide {
+                from: Vector3::z() * (lead * from / 360.0),
+                to: Vector3::z() * (lead * to / 360.0),
+            },
+        ],
+    };
+    let report = |k: &NativeKernel, id: BodyId, name: &str, t0: std::time::Instant| {
+        let took = t0.elapsed();
+        let m = k.mass_properties(id).unwrap();
+        let faults = k.get(id).unwrap().check();
+        eprintln!(
+            "{name}: {} faces, volume {:.9}, area {:.9}, {} faults, built in {took:.2?}",
+            k.faces(id).unwrap().len(),
+            m.volume,
+            m.surface_area,
+            faults.len()
+        );
+    };
+    for name in which.split(',') {
+        let mut k = NativeKernel::new();
+        let t0 = std::time::Instant::now();
+        match name {
+            // swept/fine-thread-with-sharp-crests.
+            "thread" => {
+                let bar = block(
+                    &mut k,
+                    Point3::new(4.5, -8.0, -0.45),
+                    Point3::new(12.0, 8.0, 0.45),
+                );
+                let within = cylinder(&mut k, -1.45, 5.5, 2.9);
+                let bar = k.boolean(BoolOp::Intersect, bar, &[within]).unwrap().bodies[0];
+                let rod = cylinder(&mut k, 0.0, 5.0, 20.0);
+                match k.cut_swept(rod, bar, &screw(1.0, -180.0, 7380.0)) {
+                    Ok(r) => report(&k, r.bodies[0], name, t0),
+                    Err(e) => eprintln!("FAIL {name}: {e} (in {:.2?})", t0.elapsed()),
+                }
+            }
+            // swept/box-screwed-inside-a-rod.
+            "tunnel" => {
+                let tool = block(
+                    &mut k,
+                    Point3::new(2.5, -0.5, 2.0),
+                    Point3::new(3.5, 0.5, 3.0),
+                );
+                let swept = match k.sweep_solid(tool, &screw(4.0, 0.0, 720.0)) {
+                    Ok(r) => r.bodies[0],
+                    Err(e) => {
+                        eprintln!("FAIL {name}: {e} (in {:.2?})", t0.elapsed());
+                        continue;
+                    }
+                };
+                eprintln!("{name}: swept by {:.2?}", t0.elapsed());
+                let rod = cylinder(&mut k, 0.0, 5.0, 20.0);
+                match k.boolean(BoolOp::Subtract, rod, &[swept]) {
+                    Ok(r) => report(&k, r.bodies[0], name, t0),
+                    Err(e) => eprintln!("FAIL {name}: {e} (in {:.2?})", t0.elapsed()),
+                }
+            }
+            _ => eprintln!("no screw case {name}"),
+        }
+    }
+}
+
 /// `CADRS_TORUS=<case>[,<case>…]` (or `all`): brep-bench's tumbling tori built by the kernel's
 /// sweep of a solid and graded as the board grades them (a solid, no mesh, its triangles
 /// closed in single precision), with the time each takes. `CADRS_TORUS_OP=union|common|cut`
