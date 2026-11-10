@@ -612,7 +612,8 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
         if let Some(r) = path_sweep_exact(k, body, &b, path, up.into_inner()) {
             return Ok(r);
         }
-        // A torus riding one curve: exactly, its sweep trimmed by what it covers of itself.
+        // A torus or a bull-nose mill riding one curve: exactly, its envelope trimmed by what
+        // it covers of itself.
         if let Some(Ok(r)) = torus_along(k, &b, path, up.into_inner()) {
             return Ok(r);
         }
@@ -1950,8 +1951,9 @@ fn end_mill_along(
     })
 }
 
-/// A whole torus carried along a path of one curve ([`SolidMotion::Path`]): what it passes
-/// through, exactly ([`super::sweep_tube::torus`]). The frame rides the curve by the curve's own
+/// A whole torus, or a bull-nose mill, carried along a path of one curve
+/// ([`SolidMotion::Path`]): what it passes through, exactly ([`super::sweep_tube::torus`],
+/// [`super::sweep_mill::mill`]). The frame rides the curve by the curve's own
 /// parameter, which is smooth (by its length, as [`PathFrames`] has it, the same places come in
 /// another order of time, which is all the same to what is swept). None for another body or a
 /// path of several curves.
@@ -1961,10 +1963,8 @@ fn torus_along(
     path: &[crate::PathCurve],
     up: V3,
 ) -> Option<Result<OpResult>> {
-    let [f] = b.faces.as_slice() else {
-        return None;
-    };
-    if !matches!(f.surf, super::surface::Surface::Torus { .. }) {
+    let torus = matches!(b.faces.as_slice(), [f] if matches!(f.surf, super::surface::Surface::Torus { .. }));
+    if !torus && !super::sweep_mill::is_mill(b) {
         return None;
     }
     let segs = super::sweep::path::path_segments(k, path).ok()?;
@@ -1989,7 +1989,12 @@ fn torus_along(
         let r = m * m0.transpose();
         (r, o.coords - r * o0.coords)
     };
-    super::sweep_tube::torus(k, b, &super::sweep_tube::Motion::Place(&place))
+    let motion = super::sweep_tube::Motion::Place(&place);
+    if torus {
+        super::sweep_tube::torus(k, b, &motion)
+    } else {
+        super::sweep_mill::mill(k, b, &motion)
+    }
 }
 
 /// [`meshed`] with the body's distance from its own mesh (closed, within a thousandth of its

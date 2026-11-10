@@ -40,9 +40,9 @@ type M3 = Matrix3<f64>;
 /// The motion at t with its first two derivatives in t: x ↦ r[0] x + d[0], r[k] and d[k] the
 /// k-th derivatives.
 #[derive(Clone, Copy)]
-struct Jet {
-    r: [M3; 3],
-    d: [V3; 3],
+pub(super) struct Jet {
+    pub(super) r: [M3; 3],
+    pub(super) d: [V3; 3],
 }
 
 /// The steps' motion at t (as [`super::sweep_solid`] places a rigid motion: each turn or slide
@@ -109,7 +109,7 @@ pub(crate) enum Motion<'a> {
 }
 
 impl Motion<'_> {
-    fn place(&self, t: f64) -> (M3, V3) {
+    pub(super) fn place(&self, t: f64) -> (M3, V3) {
         match self {
             Motion::Steps(steps) => place(steps, t),
             Motion::Place(at) => at(t),
@@ -118,7 +118,7 @@ impl Motion<'_> {
 
     /// The place at t with its first derivative (and, of turns and slides, its second: nothing
     /// here reads another motion's).
-    fn jet(&self, t: f64) -> Jet {
+    pub(super) fn jet(&self, t: f64) -> Jet {
         match self {
             Motion::Steps(steps) => jet(steps, t),
             Motion::Place(at) => {

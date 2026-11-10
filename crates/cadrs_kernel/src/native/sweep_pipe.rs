@@ -365,7 +365,7 @@ impl Slid<'_> {
 
 /// The surface through `at` over a box, within `tol`: a quintic B-spline through its points at
 /// sites halved wherever it misses midway.
-fn fit_patch(
+pub(super) fn fit_patch(
     at: &(dyn Fn(f64, f64) -> P3 + Sync),
     ((u0, u1), (v0, v1)): ((f64, f64), (f64, f64)),
     (nu, nv): (usize, usize),

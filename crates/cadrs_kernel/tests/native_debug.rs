@@ -3730,6 +3730,17 @@ fn debug_tumbling_tori() {
                 },
             )
             .unwrap();
+        if let Ok(dir) = std::env::var("CADRS_TORUS_OBJ") {
+            // (The mesh as an OBJ, in full precision, to look at or measure elsewhere.)
+            let mut out = String::new();
+            for p in &mesh.positions {
+                out += &format!("v {:?} {:?} {:?}\n", p.x, p.y, p.z);
+            }
+            for t in &mesh.indices {
+                out += &format!("f {} {} {}\n", t[0] + 1, t[1] + 1, t[2] + 1);
+            }
+            std::fs::write(format!("{dir}/{}.obj", name.replace(' ', "_")), out).unwrap();
+        }
         let key = |i: u32| {
             let p = mesh.positions[i as usize];
             [p.x as f32, p.y as f32, p.z as f32].map(f32::to_bits)
@@ -3933,6 +3944,94 @@ fn debug_tumbling_tori() {
                     }
                 }
                 Err(e) => eprintln!("FAIL spring: {e} (in {:.2?})", t0.elapsed()),
+            }
+            continue;
+        }
+        if name == "mill" {
+            // brep-bench's bull-nose carried along a spline: a mill leaning 30 degrees toward
+            // its way, its end's corner rounded, riding a planar Bézier (cut from a block with
+            // CADRS_MILL_CUT).
+            let mut k = NativeKernel::new();
+            let t0 = std::time::Instant::now();
+            let lean = 30f64.to_radians();
+            let a = Vector3::new(lean.sin(), 0.0, lean.cos());
+            let c = Point3::new(0.0, 0.0, -1.0);
+            let radial = (Vector3::x() - a * a.x).normalize();
+            let on = Plane {
+                origin: c,
+                x_dir: nalgebra::Unit::new_normalize(radial),
+                normal: nalgebra::Unit::new_normalize(radial.cross(&a)),
+            };
+            let l = |a: (f64, f64), b: (f64, f64)| Curve2::Line {
+                a: p(a.0, a.1),
+                b: p(b.0, b.1),
+                source: None,
+            };
+            let section = Loop {
+                curves: vec![
+                    l((0.0, 0.0), (1.5, 0.0)),
+                    Curve2::Spline {
+                        degree: 2,
+                        knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                        poles: vec![p(1.5, 0.0), p(2.0, 0.0), p(2.0, 0.5)],
+                        weights: vec![1.0, 2f64.sqrt() / 2.0, 1.0],
+                        source: None,
+                    },
+                    l((2.0, 0.5), (2.0, 3.0)),
+                    l((2.0, 3.0), (0.0, 3.0)),
+                    l((0.0, 3.0), (0.0, 0.0)),
+                ],
+            };
+            let axis = Axis {
+                origin: c,
+                dir: nalgebra::Unit::new_normalize(a),
+            };
+            let mill = k
+                .revolve_with(
+                    &Profile::new(on, vec![reg(section)]),
+                    &RevolveSpec::solid(axis, None),
+                )
+                .unwrap()
+                .bodies[0];
+            if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+                for f in k.faces(mill).unwrap() {
+                    eprintln!("mill face: {:?}", f.kind);
+                }
+            }
+            let motion = SolidMotion::Path {
+                path: vec![cadrs_kernel::PathCurve::Bezier3 {
+                    poles: [(0.0, 0.0), (10.0, 0.0), (20.0, 20.0), (30.0, 20.0)]
+                        .iter()
+                        .map(|&(x, y)| Point3::new(x, y, 0.0))
+                        .collect(),
+                    weights: vec![],
+                }],
+                up: Vector3::z_axis(),
+            };
+            match k.sweep_solid(mill, &motion) {
+                Ok(r) => {
+                    grade(&k, r.bodies[0], "mill", t0.elapsed());
+                    if std::env::var_os("CADRS_MILL_CUT").is_some() {
+                        let block = k
+                            .extrude(
+                                &Profile::new(
+                                    Plane {
+                                        origin: Point3::new(0.0, 0.0, -8.0),
+                                        ..Plane::top()
+                                    },
+                                    vec![reg(rect(-6.0, -6.0, 36.0, 26.0))],
+                                ),
+                                Extent::Blind(8.0),
+                            )
+                            .unwrap()
+                            .bodies[0];
+                        match k.boolean(BoolOp::Subtract, block, &[r.bodies[0]]) {
+                            Ok(r) => grade(&k, r.bodies[0], "mill cut", t0.elapsed()),
+                            Err(e) => eprintln!("FAIL mill cut: {e} (in {:.2?})", t0.elapsed()),
+                        }
+                    }
+                }
+                Err(e) => eprintln!("FAIL mill: {e} (in {:.2?})", t0.elapsed()),
             }
             continue;
         }
