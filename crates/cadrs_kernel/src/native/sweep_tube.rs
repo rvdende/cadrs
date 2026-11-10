@@ -235,6 +235,12 @@ struct KPt {
 /// where the circle's travel could bring a point near.
 const STRIDE: usize = 8;
 
+/// How near a line of pinches a sheet's membership is read ([`Tube::inward`]), in ψ (and a
+/// pipe's by its sides, in half turns round it): the sheet's stretch from beyond the fold lies
+/// under this one by the cube of the way from the line (a hundred-millionth of the size a
+/// hundredth of a radian off), and at the line itself by nothing that can be told.
+const LINE_BY: f64 = 0.02;
+
 /// A torus and its motion, with the samples of the motion its inside test uses.
 pub(crate) struct Tube<'a> {
     motion: &'a Motion<'a>,
@@ -253,6 +259,13 @@ pub(crate) struct Tube<'a> {
     spans: Vec<f64>,
     pinches: Vec<Pinch>,
     bands: Vec<Band>,
+    /// The lines of pinches: each ψ at which the core circle's point moves along the circle
+    /// the whole motion through (a wheel's top and bottom, carried along a level path). The
+    /// core circle's sweep folds along each, and the sheets with it; the tube's whole section
+    /// there sweeps a pipe. In order round the circle, an even number of them: the sheets'
+    /// normal, which would turn about at each, is taken one way on every other stretch
+    /// between them and the other way on the rest, and so runs on smoothly across them.
+    lines: Vec<f64>,
 }
 
 /// A local least of the distance over the motion, less r: (instant, value).
@@ -332,6 +345,7 @@ impl<'a> Tube<'a> {
             spans,
             pinches: Vec::new(),
             bands: Vec::new(),
+            lines: Vec::new(),
         }
     }
 
@@ -349,28 +363,189 @@ impl<'a> Tube<'a> {
     }
 
     fn sheet_pt(&self, j: &Jet, psi: f64) -> SheetPt {
-        let k = self.k(psi);
-        let kd = self.e1d(psi) * self.big;
-        let kdd = -self.e1(psi) * self.big;
-        let s = [
-            j.r[0] * k + j.d[0],
-            j.r[1] * k + j.d[1],
-            j.r[0] * kd,
-            j.r[2] * k + j.d[2],
-            j.r[1] * kd,
-            j.r[0] * kdd,
-        ];
-        let m = s[1].cross(&s[2]);
+        // (The sweep's point and its derivatives, and the cross product of its two tangents
+        // with that's derivative in ψ.)
+        let at = |psi: f64| {
+            let k = self.k(psi);
+            let kd = self.e1d(psi) * self.big;
+            let kdd = -self.e1(psi) * self.big;
+            let s = [
+                j.r[0] * k + j.d[0],
+                j.r[1] * k + j.d[1],
+                j.r[0] * kd,
+                j.r[2] * k + j.d[2],
+                j.r[1] * kd,
+                j.r[0] * kdd,
+            ];
+            let m = s[1].cross(&s[2]);
+            let mp = s[4].cross(&s[2]) + s[1].cross(&s[5]);
+            (s, m, mp)
+        };
+        let (s, m, mp) = at(psi);
         let len = m.norm();
-        let n = m / len;
-        let mp = s[4].cross(&s[2]) + s[1].cross(&s[5]);
-        let npsi = (mp - n * n.dot(&mp)) / len;
-        SheetPt {
-            s,
-            n,
-            npsi,
-            sin: len / (s[1].norm() * s[2].norm()),
+        let sin = len / (s[1].norm() * s[2].norm());
+        // Hard by a line of pinches the cross product is nothing but its own slope across
+        // the line, to rounding: the normal from that slope there and its change, one way
+        // right across the line.
+        if let Some((line, off)) = self.line_by(psi, 1e-5) {
+            let h = 1e-4;
+            let (_, _, m1) = at(line);
+            let m2 = (at(line + h).2 - at(line - h).2) / (2.0 * h);
+            let v = m1 + m2 * (0.5 * off);
+            let side = self.side(line + 1e-3);
+            let n = v.normalize() * side;
+            let npsi = (m2 - n * n.dot(&m2)) * (0.5 * side / v.norm());
+            return SheetPt { s, n, npsi, sin };
         }
+        let side = self.side(psi);
+        let n = m * (side / len);
+        let npsi = (mp * side - n * n.dot(&mp) * side) / len;
+        SheetPt { s, n, npsi, sin }
+    }
+
+    /// [`Self::sheet_cover`] of a place of a patch: by a line of pinches, what the tori at
+    /// the motion's ends hold of it read where it is (they are no part of the fold's own
+    /// doubt, and their hold runs right into the fold's corner), the rest read beside it
+    /// ([`Self::inward`]).
+    fn cover_in(&self, patch: &Patch, w: P2) -> (bool, f64) {
+        let to = self.inward(patch, w);
+        if to != w
+            && let Some(e) = self.end_cover(patch.0, w)
+        {
+            return (true, e);
+        }
+        self.sheet_cover(patch.0, to)
+    }
+
+    /// [`Self::sheet_cover_near`] of a place of a patch, as [`Self::cover_in`] reads it.
+    fn cover_near_in(&self, patch: &Patch, w: P2, tc: f64) -> (bool, f64) {
+        let to = self.inward(patch, w);
+        if to != w
+            && let Some(e) = self.end_cover(patch.0, w)
+        {
+            return (true, e);
+        }
+        self.sheet_cover_near(patch.0, to, tc)
+    }
+
+    /// [`Self::margin`] of a place of a patch, as [`Self::cover_in`] reads it: from an end's
+    /// torus where it is, from any other instant beside it.
+    fn margin_in(&self, patch: &Patch, w: P2, tau: f64) -> (f64, f64) {
+        if (0.0..=1e-9).contains(&tau) || (1.0 - 1e-9..=1.0).contains(&tau) {
+            self.margin(patch.0, w, tau)
+        } else {
+            self.margin(patch.0, self.inward(patch, w), tau)
+        }
+    }
+
+    /// A place of a sheet's patch as its membership is read: no nearer a side of the patch
+    /// that is a line of pinches than LINE_BY. The sheet folds along the line, its stretch
+    /// from the far side of the fold coming to lie on this one, the two a hair apart hard by
+    /// it: which of them is the outer is read a little way in, where they stand clear.
+    fn inward(&self, patch: &Patch, w: P2) -> P2 {
+        if self.lines.is_empty() {
+            return w;
+        }
+        // (A pipe's halves end at the sheets' joins, where they touch them as the sheets
+        // touch one another.)
+        if self.pipe(patch.0).is_some() {
+            return P2::new(w.x, w.y.clamp(0.5 * LINE_BY, 1.0 - 0.5 * LINE_BY));
+        }
+        if patch.0 >= PINCH {
+            return w;
+        }
+        // (Along the fold, not straight across to it: by the line the sheet's point moves
+        // along the fold as ψ changes, as it does with the instant, so that the place the
+        // membership is read at is the one beside this on the fold, and a curve that runs
+        // into the fold's zone runs on in it to the fold as it would.)
+        let mut to = w;
+        for (side, inside) in [(patch.3, 1.0), (patch.4, -1.0)] {
+            if self.line_by(side, 1e-9).is_none() || (w.y - side) * inside >= LINE_BY {
+                continue;
+            }
+            let at = |a: f64, psi: f64| {
+                self.eval(&Pos {
+                    chart: patch.0,
+                    a,
+                    psi,
+                })
+                .p
+            };
+            let h = 1e-6;
+            let along = (at((w.x + h).min(1.0), side) - at((w.x - h).max(0.0), side))
+                / ((w.x + h).min(1.0) - (w.x - h).max(0.0));
+            let across = (at(w.x, side + h) - at(w.x, side - h)) / (2.0 * h);
+            let slide = across.dot(&along) / along.norm_squared();
+            let y = side + inside * LINE_BY;
+            to = P2::new((w.x + slide * (w.y - y)).clamp(0.0, 1.0), y);
+        }
+        to
+    }
+
+    /// The line of pinches within `near` of ψ, with how far past it ψ is.
+    fn line_by(&self, psi: f64, near: f64) -> Option<(f64, f64)> {
+        self.lines.iter().find_map(|&l| {
+            let off = wrap(psi - l, -PI, TAU);
+            (off.abs() <= near).then_some((l, off))
+        })
+    }
+
+    /// Which way the sheets' normal is taken at ψ: one way from the first line of pinches to
+    /// the second, the other way to the third, and so on round (one way everywhere without
+    /// lines).
+    fn side(&self, psi: f64) -> f64 {
+        let Some(&first) = self.lines.first() else {
+            return 1.0;
+        };
+        let at = wrap(psi - first, 0.0, TAU);
+        let past = self
+            .lines
+            .iter()
+            .filter(|&&l| wrap(l - first, 0.0, TAU) <= at)
+            .count();
+        if past % 2 == 1 { 1.0 } else { -1.0 }
+    }
+
+    /// The lines of pinches: each ψ at which [`Self::across`] is nothing at every instant.
+    fn find_lines(&self) -> Vec<f64> {
+        let n = 1440;
+        let size = |t: f64, psi: f64| self.across(t, psi).norm();
+        let scale = (0..n)
+            .map(|k| size(0.37, TAU * k as f64 / n as f64))
+            .fold(0.0, f64::max);
+        let mut out: Vec<f64> = Vec::new();
+        for k in 0..n {
+            let at = |k: usize| size(0.37, TAU * (k % n) as f64 / n as f64);
+            if !(at(k) <= at(k + 1) && at(k) <= at(k + n - 1)) {
+                continue;
+            }
+            // (The least there, by golden section.)
+            let g = 0.5 * (5f64.sqrt() - 1.0);
+            let (mut lo, mut hi) = (
+                TAU * (k as f64 - 1.0) / n as f64,
+                TAU * (k as f64 + 1.0) / n as f64,
+            );
+            for _ in 0..80 {
+                let (c, d) = (hi - g * (hi - lo), lo + g * (hi - lo));
+                if size(0.37, c) < size(0.37, d) {
+                    hi = d;
+                } else {
+                    lo = c;
+                }
+            }
+            let psi = wrap(0.5 * (lo + hi), 0.0, TAU);
+            let through = (0..=64).all(|i| size(i as f64 / 64.0, psi) <= 1e-9 * scale);
+            if through && !out.iter().any(|o| wrap(o - psi, -PI, TAU).abs() < 1e-6) {
+                out.push(psi);
+            }
+        }
+        for l in &mut out {
+            if (*l - TAU).abs() < 1e-9 {
+                *l = 0.0;
+            }
+        }
+        out.sort_by(f64::total_cmp);
+        out
     }
 
     /// The angle θ (in the tube's (e1, z) plane at ψ, body frame) of N at (t, ψ), and its
@@ -408,6 +583,19 @@ impl<'a> Tube<'a> {
                 KPt {
                     p: P3::from(sp.s[0] + sp.n * (s * self.r)),
                     own: t,
+                }
+            }
+            c if self.pipe(c).is_some() => {
+                // (A line's pipe: the tube's section there at the instant a, half round it
+                // from the one sheet's join to the other's, or on round from that.)
+                let (k, half) = self.pipe(c).unwrap();
+                let line = self.lines[k];
+                let j = self.motion.jet(pos.a);
+                let sp = self.sheet_pt(&j, line);
+                let th = self.theta_n(&j, &sp, line).0 + PI * (half as f64 + psi);
+                KPt {
+                    p: self.torus_pt(&j, line, th).0,
+                    own: pos.a,
                 }
             }
             c if self.band(c).is_some() => {
@@ -785,7 +973,7 @@ impl<'a> Tube<'a> {
         const NEAR: f64 = Tube::NEAR;
         // (A pinch's chart is nowhere near a join: the ends hold its points as any instant
         // does.)
-        if chart >= PINCH {
+        if chart >= PINCH && self.pipe(chart).is_none() {
             return None;
         }
         let n = self.places.len() - 1;
@@ -798,7 +986,8 @@ impl<'a> Tube<'a> {
         let low = w.x < 0.5;
         let x = if low { w.x } else { 1.0 - w.x };
         let at = |x: f64| if low { x } else { 1.0 - x };
-        let near = if (chart == LEAD) == low { 0.0 } else { 1.0 };
+        // (A pipe's a runs with the motion, as the leading sheet's does.)
+        let near = if (chart != TRAIL) == low { 0.0 } else { 1.0 };
         // (Held by as much as any instant must hold a point; within a hundredth of the motion
         // of the join, by that less in the measure of the square of the distance from it.)
         const WIDE: f64 = 1e-2;
@@ -1051,7 +1240,9 @@ impl<'a> Tube<'a> {
 
     /// The ψ of the core circle's point under a sheet's or a pinch chart's place.
     fn psi_of(&self, chart: usize, w: P2) -> f64 {
-        if let Some((j, _)) = self.band(chart) {
+        if let Some((k, _)) = self.pipe(chart) {
+            self.lines[k]
+        } else if let Some((j, _)) = self.band(chart) {
             self.band_at(j, w.x, w.y).y
         } else if chart >= PINCH {
             self.pinch_at(chart - PINCH, w.x, w.y).y
@@ -1074,6 +1265,30 @@ impl<'a> Tube<'a> {
                 .map(|k| -1.0 - k as f64)
                 .or_else(|| self.in_band(own, w.y).map(band_mark))
         }
+    }
+
+    /// The line and the half of its pipe a chart is of, if it is a pipe's (the charts after
+    /// the bands': two to a line).
+    fn pipe(&self, chart: usize) -> Option<(usize, usize)> {
+        let i = chart.checked_sub(PINCH + self.pinches.len() + 2 * self.bands.len())?;
+        (i / 2 < self.lines.len()).then_some((i / 2, i % 2))
+    }
+
+    /// The chart of line `k`'s pipe's half.
+    fn pipe_chart(&self, k: usize, half: usize) -> usize {
+        PINCH + self.pinches.len() + 2 * self.bands.len() + 2 * k + half
+    }
+
+    /// How far round line `k`'s pipe a point the torus touches at `t` is, from the first
+    /// sheet's join there: in half turns, from nothing to two.
+    fn pipe_turn(&self, k: usize, t: f64, p: &P3) -> f64 {
+        let line = self.lines[k];
+        let j = self.motion.jet(t);
+        let q = j.r[0].tr_mul(&(p.coords - j.d[0])) - self.c.coords;
+        let h = q.dot(&self.z);
+        let th = h.atan2((q - self.z * h).dot(&self.e1(line)) - self.big);
+        let sp = self.sheet_pt(&j, line);
+        wrap(th - self.theta_n(&j, &sp, line).0, 0.0, TAU) / PI
     }
 
     /// The band and the sheet a chart is of, if it is a band's.
@@ -1247,8 +1462,28 @@ fn prepare<'a>(b: &Body, motion: &'a Motion<'a>) -> Option<Result<Prep<'a>>> {
             least = least.min(tube.sheet_pt(&j, TAU * k as f64 / 128.0).sin);
         }
     }
-    let pinches = tube.find_pinches();
-    let near_pinches = tube.find_near_pinches(&pinches);
+    tube.lines = tube.find_lines();
+    if debug && !tube.lines.is_empty() {
+        eprintln!("tube sweep: lines of pinches at ψ {:?}", tube.lines);
+    }
+    // (Each a side of the sheets' quarters, and an even number: the normal taken alternate
+    // ways between them.)
+    if tube.lines.len() % 2 == 1
+        || tube.lines.iter().any(|l| {
+            let q = l / (0.5 * PI);
+            (q - q.round()).abs() > 1e-9
+        })
+    {
+        return refused(format!(
+            "its core circle's sweep pinches along lines its patches don't end at ({:?})",
+            tube.lines
+        ));
+    }
+    let on_line = |c: &P2| tube.line_by(c.y, 1e-3).is_some();
+    let mut pinches = tube.find_pinches();
+    pinches.retain(|c| !on_line(c));
+    let mut near_pinches = tube.find_near_pinches(&pinches);
+    near_pinches.retain(|c| !on_line(&c.0));
     if std::env::var_os("CADRS_TUBE_NEAR").is_some() {
         for &(c, least) in &near_pinches {
             let d = tube.across_d(c.x, c.y).svd(true, true);
@@ -1268,7 +1503,7 @@ fn prepare<'a>(b: &Body, motion: &'a Motion<'a>) -> Option<Result<Prep<'a>>> {
             "tube sweep: the core circle's sweep least regular {least:.5}; pinches {pinches:?}"
         );
     }
-    if least < 1e-3 && pinches.is_empty() {
+    if least < 1e-3 && pinches.is_empty() && tube.lines.is_empty() {
         return refused(format!("its core circle's sweep folds ({least:.4})"));
     }
     if let Some(c) = pinches.iter().find(|c| !(0.02..=0.98).contains(&c.x)) {
@@ -1506,6 +1741,11 @@ fn prepare<'a>(b: &Body, motion: &'a Motion<'a>) -> Option<Result<Prep<'a>>> {
             ));
         }
     }
+    for k in 0..tube.lines.len() {
+        for half in 0..2 {
+            patches.push((tube.pipe_chart(k, half), 0.0, 1.0, 0.0, 1.0));
+        }
+    }
     for chart in [LEAD, TRAIL] {
         for q in 0..npsi {
             patches.push((
@@ -1520,7 +1760,7 @@ fn prepare<'a>(b: &Body, motion: &'a Motion<'a>) -> Option<Result<Prep<'a>>> {
     // (How finely each patch is read by membership: a sheet's in sixteenths of a quarter
     // radian of turn by thirty-seconds of a quarter of ψ, a pinch's chart 32 by 32.)
     let grid_of = |p: Patch| -> (usize, usize) {
-        if p.0 >= PINCH {
+        if p.0 >= PINCH && tube.pipe(p.0).is_none() {
             (32, 32)
         } else {
             (16 * sheet_chunks, 32)
@@ -2132,7 +2372,7 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
     let member = |i: usize, uv: P2| -> bool {
         let p = kept_patches[i];
         if i < n_sheets {
-            tube.sheet_cover(p.0, uv).0
+            tube.cover_in(&p, uv).0
         } else {
             let x = tori[usize::from(p.0 == END)].eval(uv.x, uv.y);
             tube.least(&x).1 < -delta
@@ -2378,7 +2618,7 @@ pub(crate) fn boolean(
         };
         let p = own.patches[i];
         let x = if i < own.sheets.len() {
-            if own.tube.sheet_cover(p.0, uv).0 {
+            if own.tube.cover_in(&p, uv).0 {
                 return true;
             }
             own.tube
@@ -2849,12 +3089,14 @@ fn trace(
                 }
                 _ => c,
             };
-            let cover = |w: P2| beside(tube.sheet_cover(chart, w), w);
+            let cover = |w: P2| {
+                beside(tube.cover_in(&sh.patch, w), w)
+            };
             let near = |w: P2, tc: f64| match other {
                 Some(o) if tc > OTHER - 0.5 => {
                     dropped(o.prep.tube.least_near(&point(w), tc - OTHER), o)
                 }
-                _ => tube.sheet_cover_near(chart, w, tc),
+                _ => tube.cover_near_in(&sh.patch, w, tc),
             };
             let fd = Field {
                 cover: &cover,
@@ -2997,7 +3239,7 @@ fn trace(
                     let d = o.prep.tube.delta();
                     ((l.1 + d) / d, OTHER + l.0)
                 }
-                _ => tube.margin(chart, w, tau),
+                _ => tube.margin_in(&sh.patch, w, tau),
             };
             let onto = |w: P2, d: V2, tau: f64, full: bool| {
                 if full {
@@ -3160,14 +3402,14 @@ type Dom = ((f64, f64), (f64, f64));
 impl Sheet {
     fn read(tube: &Tube, patch: Patch, grid: (usize, usize)) -> Sheet {
         use rayon::prelude::*;
-        let (chart, a0, a1, p0, p1) = patch;
+        let (_, a0, a1, p0, p1) = patch;
         let (mu, mv) = grid;
         let nodes = (0..(mu + 1) * (mv + 1))
             .into_par_iter()
             .map(|k| {
                 let (i, j) = (k / (mv + 1), k % (mv + 1));
-                tube.sheet_cover(
-                    chart,
+                tube.cover_in(
+                    &patch,
                     P2::new(
                         a0 + (a1 - a0) * i as f64 / mu as f64,
                         p0 + (p1 - p0) * j as f64 / mv as f64,
@@ -3190,7 +3432,7 @@ impl Sheet {
     /// Whether the sheet is kept at (u, v), where its fit must hold: by its cell's corners
     /// where they agree, read exactly where they don't.
     fn live(&self, tube: &Tube, u: f64, v: f64) -> bool {
-        let (chart, a0, a1, p0, p1) = self.patch;
+        let (_, a0, a1, p0, p1) = self.patch;
         let (mu, mv) = self.grid;
         let i = ((((u - a0) / (a1 - a0)) * mu as f64) as usize).min(mu - 1);
         let j = ((((v - p0) / (p1 - p0)) * mv as f64) as usize).min(mv - 1);
@@ -3201,7 +3443,7 @@ impl Sheet {
         match covered {
             4 => false,
             0 => true,
-            _ => !tube.sheet_cover(chart, P2::new(u, v)).0,
+            _ => !tube.cover_in(&self.patch, P2::new(u, v)).0,
         }
     }
 }
@@ -3331,8 +3573,11 @@ fn fit_tensor(
                 split_v[j] = true;
             }
         }
-        for (x, w) in pts {
-            if (surf.point(w.x, w.y) - x).norm() > tol {
+        // (At its curves' places, to the chart there: a curve's point may stand a hair off
+        // its place, where the place is ill found (faces touching), which its edge's
+        // tolerance takes up.)
+        for (_, w) in pts {
+            if (surf.point(w.x, w.y) - at(w.x, w.y)).norm() > tol {
                 let i = us.partition_point(|&u| u <= w.x).clamp(1, nu) - 1;
                 let j = vs.partition_point(|&v| v <= w.y).clamp(1, nv) - 1;
                 if !(split_u[i] || split_v[j]) {
@@ -3479,8 +3724,18 @@ impl Faces<'_> {
         } else {
             let t = self.tube.foot(tau, x);
             let mut pos = self.tube.sheet_pos(t, x);
-            // (Inside a pinch, on its chart: the sheets are left off there.)
-            if let Some(k) = self.tube.in_pinch(t, pos.psi) {
+            // (On a line of pinches' own section of the tube: on its pipe.)
+            if let Some(k) = (0..self.tube.lines.len())
+                .find(|&k| wrap(pos.psi - self.tube.lines[k], -PI, TAU).abs() <= 1e-6)
+            {
+                let turn = self.tube.pipe_turn(k, t, x);
+                let half = usize::from(turn >= 1.0);
+                pos = Pos {
+                    chart: self.tube.pipe_chart(k, half),
+                    a: t,
+                    psi: turn - half as f64,
+                };
+            } else if let Some(k) = self.tube.in_pinch(t, pos.psi) {
                 let uv = self.tube.pinch_uv(k, t, x);
                 pos = Pos {
                     chart: PINCH + k,
@@ -3569,7 +3824,12 @@ impl Faces<'_> {
     /// point found on its boundary.
     fn clamped(&self, i: usize, x: &P3, tau: f64) -> P2 {
         let p = self.patches[i];
-        let uv = if let Some((j, _)) = self.tube.band(p.0).filter(|_| i < self.sheets) {
+        let uv = if let Some((k, half)) = self.tube.pipe(p.0).filter(|_| i < self.sheets) {
+            let t = self.tube.foot(tau, x);
+            // (The turn nearest this half's own stretch of it.)
+            let turn = self.tube.pipe_turn(k, t, x) - half as f64;
+            P2::new(t, wrap(turn, -0.5, 2.0))
+        } else if let Some((j, _)) = self.tube.band(p.0).filter(|_| i < self.sheets) {
             let t = self.tube.foot(tau, x);
             self.tube.band_uv(j, t, self.tube.sheet_pos(t, x).psi)
         } else if i < self.sheets && p.0 >= PINCH {
