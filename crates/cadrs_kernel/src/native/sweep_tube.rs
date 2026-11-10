@@ -181,6 +181,9 @@ impl Pinch {
     }
 }
 
+/// The grid the pinches of a core circle's sweep are sought on: instants by places round it.
+const PINCH_GRID: (usize, usize) = (400, 256);
+
 /// A pinch's chart reaches this much past its seam, the band beyond being cut off along it.
 const PINCH_REACH: f64 = 1.25;
 
@@ -495,7 +498,15 @@ impl<'a> Tube<'a> {
     /// The lines of pinches: each ψ at which [`Self::across`] is nothing at every instant.
     fn find_lines(&self) -> Vec<f64> {
         let n = 1440;
-        let size = |t: f64, psi: f64| self.across(t, psi).norm();
+        // (At one instant all round: by its one jet.)
+        let j37 = self.motion.jet(0.37);
+        let size = |t: f64, psi: f64| {
+            if t == 0.37 {
+                self.across_with(&j37, psi).norm()
+            } else {
+                self.across(t, psi).norm()
+            }
+        };
         let scale = (0..n)
             .map(|k| size(0.37, TAU * k as f64 / n as f64))
             .fold(0.0, f64::max);
@@ -1056,9 +1067,28 @@ impl<'a> Tube<'a> {
     /// torus touches what it sweeps where its normal is square to this; where it is nothing
     /// (the point moving along the circle), all round the tube there.
     fn across(&self, t: f64, psi: f64) -> V2 {
-        let j = self.motion.jet(t);
+        self.across_with(&self.motion.jet(t), psi)
+    }
+
+    /// [`Self::across`] by the motion's jet at the instant (the same all round the circle).
+    fn across_with(&self, j: &Jet, psi: f64) -> V2 {
         let v = j.r[0].tr_mul(&(j.r[1] * self.k(psi) + j.d[1]));
         V2::new(v.dot(&self.e1(psi)), v.dot(&self.z))
+    }
+
+    /// The size of [`Self::across`] over the grid the pinches are sought on: [`PINCH_GRID`]'s
+    /// instants by its places round the circle, row by row (the rows side by side, each by
+    /// its instant's one jet).
+    fn across_grid(&self) -> Vec<f64> {
+        use rayon::prelude::*;
+        let (nt, np) = PINCH_GRID;
+        (0..=nt)
+            .into_par_iter()
+            .flat_map_iter(|i| {
+                let j = self.motion.jet(i as f64 / nt as f64);
+                (0..np).map(move |k| self.across_with(&j, TAU * k as f64 / np as f64).norm())
+            })
+            .collect()
     }
 
     /// The derivative of [`Self::across`] in (t, ψ).
@@ -1072,20 +1102,8 @@ impl<'a> Tube<'a> {
 
     /// The pinches of the core circle's sweep: the (t, ψ) inside the motion where
     /// [`Self::across`] is nothing, found from its least sizes over a grid.
-    fn find_pinches(&self) -> Vec<P2> {
-        let (nt, np) = (400, 256);
-        let size = |i: usize, k: usize| {
-            self.across(i as f64 / nt as f64, TAU * (k % np) as f64 / np as f64)
-                .norm()
-        };
-        // (The grid's rows side by side: a hundred thousand readings, each a jet of the motion.)
-        let grid: Vec<f64> = {
-            use rayon::prelude::*;
-            (0..(nt + 1) * np)
-                .into_par_iter()
-                .map(|n| size(n / np, n % np))
-                .collect()
-        };
+    fn find_pinches(&self, grid: &[f64]) -> Vec<P2> {
+        let (nt, np) = PINCH_GRID;
         let at = |i: usize, k: usize| grid[i * np + k % np];
         let mut out: Vec<P2> = Vec::new();
         for i in 0..=nt {
@@ -1093,7 +1111,9 @@ impl<'a> Tube<'a> {
                 let v = at(i, k);
                 let least = (i.saturating_sub(1)..=(i + 1).min(nt))
                     .all(|a| [k + np - 1, k, k + 1].iter().all(|&b| at(a, b) >= v));
-                if !least {
+                // (Not along a line of pinches: every place of one is a least, and none of them
+                // a pinch of its own.)
+                if !least || self.line_by(TAU * k as f64 / np as f64, 1e-3).is_some() {
                     continue;
                 }
                 let mut x = P2::new(i as f64 / nt as f64, TAU * k as f64 / np as f64);
@@ -1133,21 +1153,8 @@ impl<'a> Tube<'a> {
     /// [`Self::across`] is least without being nothing (there its derivative is singular: the
     /// velocity across the circle folds over, a line of it passing by nothing), with its size
     /// there. Found from its least sizes over a grid, each refined on finer ones.
-    fn find_near_pinches(&self, pinches: &[P2]) -> Vec<(P2, f64)> {
-        let (nt, np) = (400, 256);
-        let grid: Vec<f64> = {
-            use rayon::prelude::*;
-            (0..(nt + 1) * np)
-                .into_par_iter()
-                .map(|n| {
-                    self.across(
-                        (n / np) as f64 / nt as f64,
-                        TAU * (n % np) as f64 / np as f64,
-                    )
-                    .norm()
-                })
-                .collect()
-        };
+    fn find_near_pinches(&self, pinches: &[P2], grid: &[f64]) -> Vec<(P2, f64)> {
+        let (nt, np) = PINCH_GRID;
         let at = |i: usize, k: usize| grid[i * np + k % np];
         let mut out: Vec<(P2, f64)> = Vec::new();
         for i in 1..nt {
@@ -1155,7 +1162,7 @@ impl<'a> Tube<'a> {
                 let v = at(i, k);
                 let least =
                     (i - 1..=i + 1).all(|a| [k + np - 1, k, k + 1].iter().all(|&b| at(a, b) >= v));
-                if !least {
+                if !least || self.line_by(TAU * k as f64 / np as f64, 1e-3).is_some() {
                     continue;
                 }
                 let mut c = P2::new(i as f64 / nt as f64, TAU * k as f64 / np as f64);
@@ -1478,9 +1485,10 @@ fn prepare<'a>(b: &Body, motion: &'a Motion<'a>) -> Option<Result<Prep<'a>>> {
         ));
     }
     let on_line = |c: &P2| tube.line_by(c.y, 1e-3).is_some();
-    let mut pinches = tube.find_pinches();
+    let grid = tube.across_grid();
+    let mut pinches = tube.find_pinches(&grid);
     pinches.retain(|c| !on_line(c));
-    let mut near_pinches = tube.find_near_pinches(&pinches);
+    let mut near_pinches = tube.find_near_pinches(&pinches, &grid);
     near_pinches.retain(|c| !on_line(&c.0));
     if std::env::var_os("CADRS_TUBE_NEAR").is_some() {
         for &(c, least) in &near_pinches {
