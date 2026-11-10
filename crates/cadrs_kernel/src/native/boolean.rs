@@ -1796,9 +1796,40 @@ fn glue_touching_caps(b: &Body, tol: f64) -> Option<(Body, Vec<usize>)> {
     (out.solids.len() == 1 && out.shells.iter().all(|s| s.closed)).then_some((out, keep))
 }
 
-/// Each span's box of a spline edge of more than two spans (grown by the larger of `tol` and
-/// the edge's tolerance), else none.
-fn span_boxes_of(ed: &WEdge, tol: f64) -> Option<Vec<Bbox>> {
+/// The boxes of a B-spline surface's spans (each its own control points' hull, which holds
+/// the span), as a tree: None for another surface, or one of a single span.
+fn patch_tree_of(s: &Surface) -> Option<super::bvh::Bvh> {
+    let Surface::Nurbs(n) = s else {
+        return None;
+    };
+    if n.cps.iter().flatten().any(|h| h.w <= 0.0) {
+        return None;
+    }
+    let (nu, nv) = (n.cps.len(), n.cps.first()?.len());
+    let mut boxes = Vec::new();
+    for i in n.du..nu {
+        if n.ku[i] >= n.ku[i + 1] {
+            continue;
+        }
+        for j in n.dv..nv {
+            if n.kv[j] >= n.kv[j + 1] {
+                continue;
+            }
+            let mut bb = Bbox::empty();
+            for row in &n.cps[i - n.du..=i] {
+                for h in &row[j - n.dv..=j] {
+                    bb.add(&super::nurbs::dehom(h));
+                }
+            }
+            boxes.push(bb);
+        }
+    }
+    (boxes.len() > 1).then(|| super::bvh::Bvh::new(boxes))
+}
+
+/// Each span of a spline edge of more than two spans: the spans' ends along it, and each
+/// one's box (grown by the larger of `tol` and the edge's tolerance); else none.
+fn span_boxes_of(ed: &WEdge, tol: f64) -> Option<(Vec<f64>, Vec<Bbox>)> {
     if ed.degenerate || !matches!(ed.curve, Curve::Nurbs(_)) {
         return None;
     }
@@ -1815,25 +1846,25 @@ fn span_boxes_of(ed: &WEdge, tol: f64) -> Option<Vec<Bbox>> {
     let segs = n.bezier_segments();
     let grow = tol.max(ed.tol);
     let mut k = 0;
-    Some(
-        ps.windows(2)
-            .map(|w| {
-                while k + 1 < segs.len() && segs[k].1 <= w[0] {
-                    k += 1;
+    let boxes = ps
+        .windows(2)
+        .map(|w| {
+            while k + 1 < segs.len() && segs[k].1 <= w[0] {
+                k += 1;
+            }
+            let (a, b, cps) = &segs[k];
+            if *a == w[0] && *b == w[1] && cps.iter().all(|h| h.w > 0.0) {
+                let mut bb = Bbox::empty();
+                for h in cps {
+                    bb.add(&super::nurbs::dehom(h));
                 }
-                let (a, b, cps) = &segs[k];
-                if *a == w[0] && *b == w[1] && cps.iter().all(|h| h.w > 0.0) {
-                    let mut bb = Bbox::empty();
-                    for h in cps {
-                        bb.add(&super::nurbs::dehom(h));
-                    }
-                    bb.grow(grow)
-                } else {
-                    curve_bbox(&ed.curve, w[0], w[1]).grow(grow)
-                }
-            })
-            .collect(),
-    )
+                bb.grow(grow)
+            } else {
+                curve_bbox(&ed.curve, w[0], w[1]).grow(grow)
+            }
+        })
+        .collect();
+    Some((ps, boxes))
 }
 
 /// Faces of `b` on a periodic surface whose seam edge runs across one of their holes (an
@@ -2689,8 +2720,13 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         faces.iter().map(|f| SurfaceBound::of(&f.surf)).collect();
     // Per spline edge of many spans, each span's box (grown by the run's tolerance): made when
     // first wanted, the edge's own box over a face's.
-    let span_boxes: Vec<std::sync::OnceLock<Option<Vec<Bbox>>>> =
+    let span_boxes: Vec<std::sync::OnceLock<Option<(Vec<f64>, Vec<Bbox>)>>> =
         (0..ne).map(|_| std::sync::OnceLock::new()).collect();
+    // Per B-spline face, its surface's spans' boxes: made when a spline edge of many spans
+    // first comes near it.
+    let patch_trees: Vec<std::sync::OnceLock<Option<super::bvh::Bvh>>> = (0..faces.len())
+        .map(|_| std::sync::OnceLock::new())
+        .collect();
     // Each edge against each face of the other body near it: whether it lies on the face, else
     // where it crosses the face, each a function of the two alone, so found in parallel (on the
     // threads when the pairs are many or one is numeric: see `par`) and used below in the pairs'
@@ -2722,19 +2758,41 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         }
         // A spline edge whose spans' boxes (their control points' hulls) all keep off the
         // face's box meets it nowhere: no search along it (each a few hundred projections).
-        if let Some(boxes) = span_boxes[e].get_or_init(|| span_boxes_of(ed, run_tol))
+        let spans = span_boxes[e].get_or_init(|| span_boxes_of(ed, run_tol));
+        if let Some((_, boxes)) = spans
             && !boxes.iter().any(|b| b.overlaps(&faces[fi].bbox))
         {
             return Meet::At(Vec::new());
         }
         let et = ed.tol.max(faces[fi].tol);
+        let on_face = |t: &f64| {
+            point_in_face(&faces[fi], &ed.curve.point(*t), run_tol.max(et)) != InFace::Outside
+        };
+        // On a B-spline surface, only the edge's stretches whose spans come near a span of
+        // the surface (their boxes meet): elsewhere it is off the surface by more than the
+        // tolerance, and every sample there would be a projection onto a surface it is
+        // nowhere near (a helix two turns long past a helicoid it never touches).
+        if let Some((ends, boxes)) = spans
+            && let Some(tree) = patch_trees[fi].get_or_init(|| patch_tree_of(surf))
+        {
+            let mut ts: Vec<f64> = Vec::new();
+            let mut run: Option<(f64, f64)> = None;
+            for (i, b) in boxes.iter().enumerate() {
+                if b.overlaps(&faces[fi].bbox) && !tree.query(b).is_empty() {
+                    run = Some((run.map_or(ends[i], |r| r.0), ends[i + 1]));
+                } else if let Some((a, z)) = run.take() {
+                    ts.extend(ssi::curve_surface(&ed.curve, a, z, surf));
+                }
+            }
+            if let Some((a, z)) = run {
+                ts.extend(ssi::curve_surface(&ed.curve, a, z, surf));
+            }
+            return Meet::At(ts.into_iter().filter(on_face).collect());
+        }
         Meet::At(
             ssi::curve_surface(&ed.curve, ed.t[0], ed.t[1], surf)
                 .into_iter()
-                .filter(|&t| {
-                    point_in_face(&faces[fi], &ed.curve.point(t), run_tol.max(et))
-                        != InFace::Outside
-                })
+                .filter(on_face)
                 .collect(),
         )
     };
@@ -2745,11 +2803,50 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 Surface::Nurbs(_) | Surface::Extrusion { .. } | Surface::Revolution { .. }
             )
     });
-    let meets: Vec<Meet> = if super::par::threads_for(near_pairs.len(), numeric) {
-        near_pairs.par_iter().map(meet).collect()
-    } else {
-        near_pairs.iter().map(meet).collect()
+    let t_meets = web_time::Instant::now();
+    let timed = std::env::var_os("CADRS_EF_DEBUG").is_some();
+    let meet_timed = |pr: &(usize, usize)| -> (Meet, f64) {
+        let t = web_time::Instant::now();
+        let m = meet(pr);
+        (m, t.elapsed().as_secs_f64())
     };
+    let meets: Vec<(Meet, f64)> = if super::par::threads_for(near_pairs.len(), numeric) {
+        near_pairs.par_iter().map(meet_timed).collect()
+    } else {
+        near_pairs.iter().map(meet_timed).collect()
+    };
+    if timed {
+        let mut order: Vec<usize> = (0..meets.len()).collect();
+        order.sort_by(|&a, &b| meets[b].1.total_cmp(&meets[a].1));
+        eprintln!(
+            "edge-face: {} pairs in {:.1} ms wall, {:.1} ms summed",
+            meets.len(),
+            t_meets.elapsed().as_secs_f64() * 1e3,
+            meets.iter().map(|m| m.1).sum::<f64>() * 1e3
+        );
+        for &i in order.iter().take(6) {
+            let (e, fi) = near_pairs[i];
+            let ed = &pool.edges[e];
+            eprintln!(
+                "  {:.1} ms: edge {e} {} t {:.3}..{:.3} x face {fi} {:?}: {}",
+                meets[i].1 * 1e3,
+                match &ed.curve {
+                    Curve::Nurbs(c) => format!("spline of {} poles", c.cps.len()),
+                    Curve::Line { .. } => "line".to_string(),
+                    _ => "analytic".to_string(),
+                },
+                ed.t[0],
+                ed.t[1],
+                faces[fi].surf.kind(),
+                match &meets[i].0 {
+                    Meet::On => "on it".to_string(),
+                    Meet::At(ts) => format!("{} crossings", ts.len()),
+                }
+            );
+        }
+    }
+    let t_after = web_time::Instant::now();
+    let meets: Vec<Meet> = meets.into_iter().map(|m| m.0).collect();
     for (&(e, fi), m) in near_pairs.iter().zip(meets) {
         {
             let ts = match m {
@@ -2820,6 +2917,12 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         }
         vs
     };
+    if timed {
+        eprintln!(
+            "edge-face: its crossings placed in {:.1} ms",
+            t_after.elapsed().as_secs_f64() * 1e3
+        );
+    }
     prof.mark("edge-face");
     // 3. Face–face.
     let mut cuts: Vec<Vec<usize>> = vec![Vec::new(); faces.len()];

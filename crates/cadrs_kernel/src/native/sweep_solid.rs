@@ -1503,72 +1503,94 @@ fn cut_in_pieces(
         }
     });
     let mut first: Option<(Option<Body>, Vec<Body>)> = None;
-    let mut acc = vec![target];
-    for i in 0..n {
-        let mut pieces: Vec<Body> = Vec::new();
-        let swept: Option<Vec<BodyId>> = match (&first, &onward) {
-            (Some((whole, parts)), Some(onward)) => {
-                let by = onward(i);
-                pieces = parts.iter().map(|p| p.transformed(&by)).collect();
-                whole.as_ref().map(|w| vec![k.insert(w.transformed(&by))])
-            }
-            _ => {
-                let r = super::sweep_faces::by_faces_or_pieces(k, b, &part(i), Some(&mut pieces))
-                    .ok()
-                    .map(|r| r.bodies);
-                if onward.is_some() {
-                    let whole = match r.as_deref() {
-                        Some([s]) => k.get(*s).ok().map(|b| (**b).clone()),
-                        _ => None,
-                    };
-                    first = Some((whole, pieces.clone()));
+    // The cuts one after another, the body checked once they are all made; if it isn't sound
+    // then, again with a check after each (a cut that goes wrong is then made piece by piece).
+    for checked in [false, true] {
+        let mut acc = vec![target];
+        let mut made = true;
+        for i in 0..n {
+            let mut pieces: Vec<Body> = Vec::new();
+            let swept: Option<Vec<BodyId>> = match (&first, &onward) {
+                (Some((whole, parts)), Some(onward)) => {
+                    let by = onward(i);
+                    pieces = parts.iter().map(|p| p.transformed(&by)).collect();
+                    whole.as_ref().map(|w| vec![k.insert(w.transformed(&by))])
                 }
-                r
-            }
-        };
-        let t_swept = web_time::Instant::now();
-        let cut = match swept.as_deref() {
-            Some([s]) if acc.len() == 1 => {
-                let cut = k.boolean(crate::BoolOp::Subtract, acc[0], &[*s]);
-                k.release(*s);
-                let t_cut = web_time::Instant::now();
-                let r = cut
-                    .ok()
-                    .filter(|c| {
-                        c.bodies.len() == 1
-                            && k.get(c.bodies[0]).is_ok_and(|b| b.check().is_empty())
-                    })
-                    .map(|c| c.bodies);
-                if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
-                    eprintln!(
-                        "cut in pieces: piece {i}: cut {:.1} ms, checked {:.1} ms",
-                        (t_cut - t_swept).as_secs_f64() * 1e3,
-                        t_cut.elapsed().as_secs_f64() * 1e3
-                    );
+                _ => {
+                    let r =
+                        super::sweep_faces::by_faces_or_pieces(k, b, &part(i), Some(&mut pieces))
+                            .ok()
+                            .map(|r| r.bodies);
+                    if onward.is_some() {
+                        let whole = match r.as_deref() {
+                            Some([s]) => k.get(*s).ok().map(|b| (**b).clone()),
+                            _ => None,
+                        };
+                        first = Some((whole, pieces.clone()));
+                    }
+                    r
                 }
-                r
-            }
-            _ => None,
-        };
-        // Else the part's pieces cut one at a time (no union of them needed).
-        let cut = cut.or_else(|| {
-            if pieces.is_empty() {
-                cut_by_face_sweeps(k, &acc, b, &part(i))
-            } else {
-                cut_by_pieces(k, &acc, pieces)
-            }
-        });
-        let Some(c) = cut else {
+            };
+            let t_swept = web_time::Instant::now();
+            let cut = match swept.as_deref() {
+                Some([s]) if acc.len() == 1 => {
+                    let cut = k.boolean(crate::BoolOp::Subtract, acc[0], &[*s]);
+                    k.release(*s);
+                    let t_cut = web_time::Instant::now();
+                    let r = cut
+                        .ok()
+                        .filter(|c| {
+                            c.bodies.len() == 1
+                                && (!checked
+                                    || k.get(c.bodies[0]).is_ok_and(|b| b.check().is_empty()))
+                        })
+                        .map(|c| c.bodies);
+                    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+                        eprintln!(
+                            "cut in pieces: piece {i}: cut {:.1} ms, checked {:.1} ms",
+                            (t_cut - t_swept).as_secs_f64() * 1e3,
+                            t_cut.elapsed().as_secs_f64() * 1e3
+                        );
+                    }
+                    r
+                }
+                _ => None,
+            };
+            // Else the part's pieces cut one at a time (no union of them needed).
+            let cut = cut.or_else(|| {
+                if pieces.is_empty() {
+                    cut_by_face_sweeps(k, &acc, b, &part(i))
+                } else {
+                    cut_by_pieces(k, &acc, pieces)
+                }
+            });
+            let Some(c) = cut else {
+                release_unless(k, &acc, target);
+                if checked {
+                    return None;
+                }
+                made = false;
+                break;
+            };
             release_unless(k, &acc, target);
-            return None;
-        };
+            acc = c;
+        }
+        if !made {
+            continue;
+        }
+        if checked
+            || acc
+                .iter()
+                .all(|&id| k.get(id).is_ok_and(|b| b.check().is_empty()))
+        {
+            return Some(OpResult {
+                bodies: acc,
+                history: History::default(),
+            });
+        }
         release_unless(k, &acc, target);
-        acc = c;
     }
-    Some(OpResult {
-        bodies: acc,
-        history: History::default(),
-    })
+    None
 }
 
 /// Releases `ids` but `keep`.

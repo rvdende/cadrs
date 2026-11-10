@@ -1458,8 +1458,22 @@ pub fn sdist_hint(s: &Surface, p: &P3, hint: &mut Option<(f64, f64)>) -> f64 {
     // A hinted Newton may stall on the wrong side of a fold or on the domain's edge: when the
     // foot isn't square to the surface, check against a projection from a coarse grid.
     let r = p - q;
-    let tang = (r.dot(&su) / su.norm().max(tol::TINY)).abs()
-        + (r.dot(&sv) / sv.norm().max(tol::TINY)).abs();
+    // (Along a direction the foot is at the end of, with the point farther out that way, the
+    // foot is the surface's nearest there: nothing to be square to. Not where the surface
+    // closes on itself (its other end the same point), which a foot at its seam may only be
+    // stuck at.)
+    let ((u0, u1), (v0, v1)) = s.param_box();
+    let along = |x: f64, (lo, hi): (f64, f64), d: &V3, across: &dyn Fn(f64) -> P3| -> f64 {
+        let pull = r.dot(d) / d.norm().max(tol::TINY);
+        let at = 1e-12 * (hi - lo).abs();
+        let (low, high) = (x <= lo + at && pull <= 0.0, x >= hi - at && pull >= 0.0);
+        let open = (low || high)
+            && (across(if low { hi } else { lo }) - q).norm()
+                > tol::CONFUSION * (1.0 + q.coords.norm());
+        if open { 0.0 } else { pull.abs() }
+    };
+    let tang =
+        along(u, (u0, u1), &su, &|x| s.eval(x, v)) + along(v, (v0, v1), &sv, &|x| s.eval(u, x));
     if hint.is_some() && tang > 1e-7 * (1.0 + r.norm()) {
         let (u2, v2) = s.project_coarse(p, 8);
         let (q2, su2, sv2) = s.d1(u2, v2);
@@ -2250,7 +2264,13 @@ pub fn curve_surface(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Vec<f64> {
         Curve::Circle { .. } | Curve::Ellipse { .. } => {
             (((t1 - t0) / (PI / 32.0)).ceil() as usize).max(8)
         }
-        Curve::Nurbs(nc) => (nc.cps.len() * 8).clamp(16, 2000),
+        // (Eight a pole of the stretch asked about, not of the whole curve: an edge is often a
+        // short piece of a long one.)
+        Curve::Nurbs(nc) => {
+            let whole = nc.knots[nc.knots.len() - 1 - nc.degree] - nc.knots[nc.degree];
+            let part = ((t1 - t0).abs() / whole.max(tol::TINY)).min(1.0);
+            ((nc.cps.len() as f64 * 8.0 * part).ceil() as usize).clamp(16, 2000)
+        }
     };
     // The signed distance, its projection hinted (on B-spline and other non-implicit surfaces
     // a fresh projection is a global search): along the samples from the previous one, inside
