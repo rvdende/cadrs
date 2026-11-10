@@ -2679,11 +2679,15 @@ fn moved_coedge(
     }
 }
 
+/// Whether faces on a surface may be made one where they lie side by side on it (pieces a
+/// surface was cut into only to be trimmed).
+pub(crate) type Whole<'a> = dyn Fn(&Surface) -> bool + 'a;
+
 /// The kept faces (each a body of one face, facing out) joined into a body: vertices within
 /// `tol` one, an edge with another's vertex lying on it (within `near`) split there, and the
 /// two edges between the same vertices that lie on each other (within `near`) one, each face
 /// keeping its own p-curve.
-fn assemble(faces: &[Body], near: f64, tol: f64) -> Result<Body> {
+fn assemble(faces: &[Body], near: f64, tol: f64, whole: Option<(&Whole, f64)>) -> Result<Body> {
     // (An edge lies on another, or a vertex on an edge, within the faces' own looseness.)
     let near = near.max(tol);
     let mut b = Body::default();
@@ -2855,6 +2859,35 @@ fn assemble(faces: &[Body], near: f64, tol: f64) -> Result<Body> {
                 q.y,
                 q.z
             );
+        }
+    }
+    // Faces cut apart only to be trimmed made whole again, if the body is as sound for it
+    // (before its shells are made out, which is the dear part, and needn't be done twice).
+    if let Some((whole, searched)) = whole {
+        let mut merged = b.clone();
+        let from: Vec<Vec<(usize, usize)>> =
+            (0..merged.faces.len()).map(|i| vec![(0, i)]).collect();
+        let can: Vec<bool> = merged.faces.iter().map(|f| whole(&f.surf)).collect();
+        super::unify::unify_faces(&mut merged, from, &|f, g| can[f] && can[g]);
+        let before = super::mass::faces_volume(&b);
+        let sound = merged.faces.len() < b.faces.len()
+            && (super::mass::faces_volume(&merged) - before).abs() <= 1e-7 * before.abs()
+            && super::boolean::assemble_shells(&mut merged).is_ok()
+            && {
+                // (Its edges' tolerances fitted as the caller will fit them.)
+                merged.fit_tolerances_searched(searched);
+                merged.check().is_empty()
+            };
+        if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+            eprintln!(
+                "moving sweep: {} faces, {} with the pieces of one surface made whole ({})",
+                b.faces.len(),
+                merged.faces.len(),
+                if sound { "kept" } else { "left" }
+            );
+        }
+        if sound {
+            return Ok(merged);
         }
     }
     super::boolean::assemble_shells(&mut b)?;
@@ -3627,10 +3660,13 @@ pub(crate) fn boundary_of(
     member: Option<&Member>,
     loose: f64,
 ) -> Result<Body> {
-    boundary_of_some(faces, oracle, size, least, most, given, member, loose, true)
+    boundary_of_some(
+        faces, oracle, size, least, most, given, member, loose, true, None,
+    )
 }
 
-/// [`boundary_of`], of what may be several solids (`one` false: a boolean's result).
+/// [`boundary_of`], of what may be several solids (`one` false: a boolean's result), with the
+/// faces of a surface `whole` picks out made one where they lie side by side.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn boundary_of_some(
     faces: Vec<Body>,
@@ -3642,6 +3678,7 @@ pub(crate) fn boundary_of_some(
     member: Option<&Member>,
     loose: f64,
     one: bool,
+    whole: Option<&Whole>,
 ) -> Result<Body> {
     use rayon::prelude::*;
     let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
@@ -3948,6 +3985,7 @@ pub(crate) fn boundary_of_some(
         } else {
             3e-7 * size
         },
+        whole.map(|w| (w, 1e-5 * size)),
     )?;
     let t_tol = web_time::Instant::now();
     solid.fit_tolerances_searched(1e-5 * size);

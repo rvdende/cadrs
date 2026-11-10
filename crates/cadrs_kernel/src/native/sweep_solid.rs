@@ -548,11 +548,14 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
     // where its faces meet the motion); else meshed.
     if let SolidMotion::Rigid { steps } = motion {
         let mut exact = None;
-        if std::env::var_os("CADRS_TUBE_FIRST").is_some()
-            && let Some(Ok(r)) =
-                super::sweep_tube::torus(k, &b, &super::sweep_tube::Motion::Steps(steps))
-        {
-            return Ok(r);
+        // (A torus by two steps or more first as a torus: its faces' own sweeps, which make
+        // one step's exactly in closed form, seldom join for two, and are slow to find so.)
+        let mut as_torus = None;
+        if steps.len() >= 2 || std::env::var_os("CADRS_TUBE_FIRST").is_some() {
+            as_torus = super::sweep_tube::torus(k, &b, &super::sweep_tube::Motion::Steps(steps));
+            if let Some(Ok(r)) = as_torus {
+                return Ok(r);
+            }
         }
         if (1..=2).contains(&steps.len()) {
             match super::sweep_faces::by_faces(k, &b, steps) {
@@ -569,7 +572,9 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
             None => {}
         }
         // A torus: exactly, from the offsets of its core circle's sweep.
-        match super::sweep_tube::torus(k, &b, &super::sweep_tube::Motion::Steps(steps)) {
+        match as_torus
+            .or_else(|| super::sweep_tube::torus(k, &b, &super::sweep_tube::Motion::Steps(steps)))
+        {
             Some(Ok(r)) => return Ok(r),
             Some(Err(e)) => exact = exact.or(Some(e)),
             None => {}

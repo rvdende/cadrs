@@ -1100,6 +1100,12 @@ pub fn body_volume(body: &Body) -> f64 {
     if !body.is_solid() {
         return 0.0;
     }
+    faces_volume(body)
+}
+
+/// The volume a body's faces bound, whether or not they are made up into shells and solids
+/// yet (closed and facing out taken on trust).
+pub(crate) fn faces_volume(body: &Body) -> f64 {
     let bb = body.bbox();
     let shift = if bb.is_empty() {
         V3::zeros()

@@ -231,6 +231,10 @@ struct KPt {
     own: f64,
 }
 
+/// A tube's inside test reads every so many of its samples first, and those between only
+/// where the circle's travel could bring a point near.
+const STRIDE: usize = 8;
+
 /// A torus and its motion, with the samples of the motion its inside test uses.
 pub(crate) struct Tube<'a> {
     motion: &'a Motion<'a>,
@@ -245,6 +249,8 @@ pub(crate) struct Tube<'a> {
     size: f64,
     ts: Vec<f64>,
     places: Vec<(M3, V3)>,
+    /// How far the core circle's points move at most over each STRIDE samples.
+    spans: Vec<f64>,
     pinches: Vec<Pinch>,
     bands: Vec<Band>,
 }
@@ -263,9 +269,26 @@ impl<'a> Tube<'a> {
             turn += nalgebra::Rotation3::from_matrix_unchecked(prev.transpose() * ri).angle();
             prev = ri;
         }
-        let n = ((turn / 0.003).ceil() as usize).clamp(1024, 8192);
+        let n = ((turn / 0.003).ceil() as usize)
+            .clamp(1024, 8192)
+            .next_multiple_of(STRIDE);
         let ts: Vec<f64> = (0..=n).map(|i| i as f64 / n as f64).collect();
-        let places = ts.iter().map(|&t| motion.place(t)).collect();
+        let places: Vec<(M3, V3)> = ts.iter().map(|&t| motion.place(t)).collect();
+        // (How far the core circle's points move at most over each stretch of STRIDE samples:
+        // by no more does a point's distance from it change.)
+        let spans: Vec<f64> = places
+            .chunks(STRIDE)
+            .zip(places[1..].chunks(STRIDE))
+            .map(|(a, b)| {
+                a.iter()
+                    .zip(b)
+                    .map(|(p, q)| {
+                        let dr = q.0 - p.0;
+                        (dr * fr.o.coords + (q.1 - p.1)).norm() + big * dr.norm()
+                    })
+                    .sum::<f64>()
+            })
+            .collect();
         // ψ measured from a direction the motion itself picks out, so that the faces' seams
         // (at quarters of ψ) fall evenly on what is swept where the motion is even: the way the
         // core circle's speed leans round the circle midway through the motion (its first
@@ -306,6 +329,7 @@ impl<'a> Tube<'a> {
             size,
             ts,
             places,
+            spans,
             pinches: Vec::new(),
             bands: Vec::new(),
         }
@@ -473,7 +497,7 @@ impl<'a> Tube<'a> {
     /// The least of f over the whole motion for `p` (how deep inside the swept solid it lies,
     /// negative inside), with its instant: the samples' local leasts near the tube refined.
     fn least(&self, p: &P3) -> Least {
-        let vals: Vec<f64> = self.places.iter().map(|pl| self.f_at(pl, p)).collect();
+        let vals = self.samples(p);
         let n = vals.len();
         let bound = 0.5 * self.r;
         let mut best: Least = (0.0, f64::INFINITY);
@@ -491,9 +515,32 @@ impl<'a> Tube<'a> {
         best
     }
 
+    /// f for `p` at each sampled instant that may be a least of it near the tube (within half
+    /// its radius), and infinity at the rest: read at every STRIDE-th first, then between two
+    /// of those wherever the circle's travel between them ([`Self::spans`]) could bring it
+    /// that near.
+    fn samples(&self, p: &P3) -> Vec<f64> {
+        let n = self.places.len();
+        let bound = 0.5 * self.r;
+        let mut vals = vec![f64::INFINITY; n];
+        for i in (0..n).step_by(STRIDE) {
+            vals[i] = self.f_at(&self.places[i], p);
+        }
+        for (k, span) in self.spans.iter().enumerate() {
+            let (a, b) = (k * STRIDE, (k + 1) * STRIDE);
+            if 0.5 * (vals[a] + vals[b] - span) > bound {
+                continue;
+            }
+            for i in a + 1..b {
+                vals[i] = self.f_at(&self.places[i], p);
+            }
+        }
+        vals
+    }
+
     /// Every local least of f over the motion for `p` near the tube, refined, the least first.
     fn leasts(&self, p: &P3) -> Vec<Least> {
-        let vals: Vec<f64> = self.places.iter().map(|pl| self.f_at(pl, p)).collect();
+        let vals = self.samples(p);
         let n = vals.len();
         let bound = 0.5 * self.r;
         let mut out: Vec<Least> = (0..n)
@@ -2074,6 +2121,7 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
         }
         (fits, given, on_sheet)
     };
+    let kept_fits = matches!(motion, Motion::Steps(_)).then(|| fits.clone());
     let faces = match sheet_faces(&prep, fits, &on_sheet) {
         Ok(f) => f,
         Err(e) => return Some(Err(e)),
@@ -2091,7 +2139,9 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
         }
     };
     let least = 2.0 * PI * PI * big * r * r;
-    let solid = match super::sweep_moving::boundary_of(
+    // (The tori's pieces, cut in quarters to be trimmed, made whole again in the joining.)
+    let on_torus = |s: &super::surface::Surface| matches!(s, super::surface::Surface::Torus { .. });
+    let solid = match super::sweep_moving::boundary_of_some(
         faces,
         &oracle,
         size,
@@ -2100,6 +2150,8 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
         given,
         Some(&member),
         fit_tol,
+        true,
+        Some(&on_torus),
     ) {
         Ok(s) => s,
         Err(e) => {
@@ -2109,17 +2161,17 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
             return Some(Err(e));
         }
     };
-    let solid = unify_tori(solid, debug);
     if let Some(path) = std::env::var_os("CADRS_TUBE_OUT") {
         let _ = std::fs::write(path, super::bodyio::write(&solid));
     }
     let id = k.insert(solid);
-    if let Motion::Steps(steps) = motion {
+    if let (Motion::Steps(steps), Some(fits)) = (motion, kept_fits) {
         k.swept_tori.insert(
             id.0,
             std::sync::Arc::new(SweptTorus {
                 torus: b.clone(),
                 steps: steps.to_vec(),
+                fits,
             }),
         );
     }
@@ -2133,6 +2185,8 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
 pub(crate) struct SweptTorus {
     torus: Body,
     steps: Vec<RigidStep>,
+    /// Its sheets' fits, in their patches' order: a boolean keeps parts of the same sheets.
+    fits: Vec<(super::nurbs::NurbsSurface, Dom)>,
 }
 
 /// A boolean of two swept tori, by what each motion holds: every face of either is traced in
@@ -2284,10 +2338,16 @@ pub(crate) fn boolean(
         }
     }
     let mut faces = Vec::with_capacity(na + pb.patches.len());
-    for (prep, base) in [(&pa, 0), (&pb, na)] {
-        let (fits, on_sheet) = match fit_sheets(prep, base, &given) {
-            Ok(f) => f,
-            Err(why) => return refused(why),
+    for (prep, base, swept) in [(&pa, 0, a), (&pb, na, b)] {
+        // (Each sheet's fit as its own sweep made it: what a boolean keeps of a sheet is
+        // part of what that kept, where the fit holds.)
+        let (fits, on_sheet) = if swept.fits.len() == prep.sheets.len() {
+            (swept.fits.clone(), vec![Vec::new(); prep.sheets.len()])
+        } else {
+            match fit_sheets(prep, base, &given) {
+                Ok(f) => f,
+                Err(why) => return refused(why),
+            }
         };
         let mut fs = match sheet_faces(prep, fits, &on_sheet) {
             Ok(f) => f,
@@ -2351,6 +2411,7 @@ pub(crate) fn boolean(
         &place_r,
         64,
     );
+    let on_torus = |s: &super::surface::Surface| matches!(s, super::surface::Surface::Torus { .. });
     let solid = match super::sweep_moving::boundary_of_some(
         faces,
         &oracle,
@@ -2361,6 +2422,7 @@ pub(crate) fn boolean(
         Some(&member),
         fit_tol,
         false,
+        Some(&on_torus),
     ) {
         Ok(s) => s,
         Err(e) => {
@@ -2370,7 +2432,6 @@ pub(crate) fn boolean(
             return Some(Err(e));
         }
     };
-    let solid = unify_tori(solid, debug);
     if debug {
         eprintln!(
             "tube boolean: {} faces, {} solids by {:.0} ms",
@@ -2665,42 +2726,6 @@ fn sheet_faces(
     }
     faces.extend(prep.pieces.iter().cloned());
     Ok(faces)
-}
-
-/// The tori's pieces (cut in quarters to be trimmed) made whole again where they lie side by
-/// side on the one torus, if the solid is as sound for it.
-fn unify_tori(solid: Body, debug: bool) -> Body {
-    let mut merged = solid.clone();
-    let from: Vec<Vec<(usize, usize)>> = (0..merged.faces.len()).map(|i| vec![(0, i)]).collect();
-    let torus: Vec<bool> = merged
-        .faces
-        .iter()
-        .map(|f| matches!(f.surf, super::surface::Surface::Torus { .. }))
-        .collect();
-    super::unify::unify_faces(&mut merged, from, &|f, g| torus[f] && torus[g]);
-    let shelled = super::boolean::assemble_shells(&mut merged).is_ok();
-    let before = super::mass::body_volume(&solid);
-    let sound = shelled
-        && merged.solids.len() == solid.solids.len()
-        && merged.check().is_empty()
-        && (super::mass::body_volume(&merged) - before).abs() <= 1e-7 * before.abs();
-    if debug {
-        eprintln!(
-            "tube sweep: {} faces, {} with the tori's pieces merged ({})",
-            solid.faces.len(),
-            merged.faces.len(),
-            if sound { "kept" } else { "not sound: left" }
-        );
-        if !sound {
-            eprintln!(
-                "  merged: {} solids, volume {} against {before}, first problem {:?}",
-                merged.solids.len(),
-                super::mass::body_volume(&merged),
-                merged.check().first()
-            );
-        }
-    }
-    if sound { merged } else { solid }
 }
 
 /// The instants (one of each motion) at which two tubes' tori lie one on the other: their
