@@ -23,13 +23,18 @@ use std::f64::consts::PI;
 
 type Q = Point2<f64>;
 type W = Vector2<f64>;
+/// A motion as a function of t: the angle and the translation.
+type MotionFn<'a> = Box<dyn Fn(f64) -> (f64, W) + Send + Sync + 'a>;
+/// Where a piece starts: the piece and whether it runs reversed (None for a loop's own first),
+/// its first point and its next.
+type Start = (Option<(usize, bool)>, Q, Q);
 
 /// A planar motion: at each instant t in [0, 1] the rotation angle and the translation that
 /// take the polygon's points from where they start (x ↦ R(θ) x + d).
 struct Motion2<'a> {
     steps: Vec<Step2>,
     /// Else the motion as a function of t (a path's frames), its angle running on without jumps.
-    by: Option<Box<dyn Fn(f64) -> (f64, W) + Send + Sync + 'a>>,
+    by: Option<MotionFn<'a>>,
 }
 
 enum Step2 {
@@ -663,7 +668,7 @@ fn planar(k: &mut NativeKernel, b: &Body, n: V3, motion: Planar) -> Result<OpRes
                     pieces[cur].pts.clone()
                 };
                 // (Each start, None for the loop's own first piece.)
-                let mut starts: Vec<(Option<(usize, bool)>, Q, Q)> = Vec::new();
+                let mut starts: Vec<Start> = Vec::new();
                 let p0 = &pieces[s0].pts;
                 starts.push((None, p0[0], p0[1]));
                 for j2 in 0..pieces.len() {
