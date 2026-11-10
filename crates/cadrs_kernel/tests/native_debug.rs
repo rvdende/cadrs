@@ -3577,6 +3577,48 @@ fn debug_step_measure() {
     }
 }
 
+/// `CADRS_BODY=<file> CADRS_POINT=x,y,z`: the edges of the body nearest the point, with their
+/// faces, lengths, and how their curves bend there.
+#[test]
+fn debug_edges_near() {
+    let (Ok(path), Ok(pt)) = (std::env::var("CADRS_BODY"), std::env::var("CADRS_POINT")) else {
+        return;
+    };
+    let b = cadrs_kernel::native::bodyio::read(&std::fs::read(path).unwrap()).unwrap();
+    let c: Vec<f64> = pt.split(',').map(|v| v.trim().parse().unwrap()).collect();
+    let p = Point3::new(c[0], c[1], c[2]);
+    let ef = b.edge_faces();
+    let mut near: Vec<(f64, usize, f64)> = b
+        .edges
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| !e.degenerate)
+        .map(|(i, e)| {
+            let t = e.curve.closest(&p, e.t[0], e.t[1]);
+            ((e.curve.point(t) - p).norm(), i, t)
+        })
+        .collect();
+    near.sort_by(|a, b| a.0.total_cmp(&b.0));
+    for (d, i, t) in near.into_iter().take(6) {
+        let e = &b.edges[i];
+        let (_, d1, d2) = e.curve.d2(t);
+        let knots = match &e.curve {
+            cadrs_kernel::native::curve::Curve::Nurbs(n) => n.knots.len(),
+            _ => 0,
+        };
+        eprintln!(
+            "edge {i} of faces {:?}: {d:.3e} away at t {t:.6} of {:?} (tol {:.1e}, {knots} knots); speed {:.3e}, bend {:.3e}; ends {:?} {:?}",
+            ef[i],
+            e.t,
+            e.tol,
+            d1.norm(),
+            d2.norm() / d1.norm_squared().max(1e-300),
+            b.verts[e.v[0]].p,
+            b.verts[e.v[1]].p
+        );
+    }
+}
+
 #[test]
 fn debug_body_faces() {
     let Ok(path) = std::env::var("CADRS_BODY") else {

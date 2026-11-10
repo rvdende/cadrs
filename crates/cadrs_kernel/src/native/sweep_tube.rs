@@ -1102,7 +1102,7 @@ pub fn torus(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Resu
                     let ps = kept_patches[sf];
                     let pt = kept_patches[tf];
                     let surf = &tori[usize::from(t_end > 0.5)];
-                    // (On the join, within a thousandth of the size of a vertex of the sheet's
+                    // (On the join, within a hundred-thousandth of the size of a vertex of the sheet's
                     // face there (a fold's end: the curve meets the join where the fold does,
                     // and the two are found apart by the tolerance each is found to): that
                     // vertex.)
@@ -1111,7 +1111,7 @@ pub fn torus(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Resu
                         let face = &faces[sf];
                         for v in &face.verts {
                             let d = (v.p - x).norm();
-                            if d <= 1e-3 * size && best.is_none_or(|(bd, ..)| d < bd) {
+                            if d <= 1e-5 * size && best.is_none_or(|(bd, ..)| d < bd) {
                                 let (u, vv) = face.faces[0].surf.project(&v.p, None);
                                 let a_v = if (u - w.x).abs() < 0.5 { u } else { w.x };
                                 if (a_v - w.x).abs() < 1e-6 {
@@ -1165,7 +1165,15 @@ pub fn torus(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Resu
                             if near_join(&run[0]) {
                                 match run.iter().position(|p| !near_join(p)) {
                                     Some(i) if i > 0 => {
-                                        let psi = run[i].1.y;
+                                        // (From the join where the run is last within a
+                                        // hundredth of that of it: a shallow start, not a
+                                        // step square to the join.)
+                                        let off = |p: &(P3, P2, P2)| (p.0 - join_pt(p.1.y)).norm();
+                                        let i0 = (0..i)
+                                            .rev()
+                                            .find(|&j| off(&run[j]) <= 0.01 * delta)
+                                            .unwrap_or(0);
+                                        let psi = run[i0].1.y;
                                         let x = join_pt(psi);
                                         let start = clamped(P2::new(a_join, psi), &x, pair);
                                         run.drain(0..i);
@@ -1423,6 +1431,9 @@ pub fn torus(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Resu
                 return Some(Err(e));
             }
         };
+    if let Some(path) = std::env::var_os("CADRS_TUBE_OUT") {
+        let _ = std::fs::write(path, super::bodyio::write(&solid));
+    }
     let id = k.insert(solid);
     Some(Ok(OpResult {
         bodies: vec![id],

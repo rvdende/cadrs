@@ -2367,6 +2367,25 @@ fn network(tr: &Tracer, mixed: &[usize], m: usize, given: Vec<Given>) -> Network
             }
         }
     }
+    // (Where the faces graze, a point added slides along the curve onto its neighbour: points
+    // within a millionth of the size of the one before thinned, the ends kept.)
+    let least = 1e-6 * size;
+    for st in &mut net.stretches {
+        let n = st.pts.len();
+        let len: f64 = st.pts.windows(2).map(|w| (w[1].0 - w[0].0).norm()).sum();
+        if n <= 2 || len < 100.0 * least {
+            continue;
+        }
+        let last = st.pts[n - 1];
+        let mut kept = vec![st.pts[0]];
+        for p in &st.pts[1..n - 1] {
+            if (p.0 - kept[kept.len() - 1].0).norm() >= least && (p.0 - last.0).norm() >= least {
+                kept.push(*p);
+            }
+        }
+        kept.push(last);
+        st.pts = kept;
+    }
     net
 }
 
@@ -3326,19 +3345,25 @@ pub(crate) fn boundary_of(
                 continue;
             }
             let (p, q) = (st.pts[0].0, st.pts[st.pts.len() - 1].0);
-            eprintln!(
-                "  stretch {si} ({}, {}) {} points: [{:.5}, {:.5}, {:.5}] -> [{:.5}, {:.5}, {:.5}] vertices {:?}",
-                st.a,
-                st.b,
-                st.pts.len(),
-                p.x,
-                p.y,
-                p.z,
-                q.x,
-                q.y,
-                q.z,
-                st.v
-            );
+            {
+                let n = st.pts.len();
+                let gaps = |r: std::ops::Range<usize>| -> Vec<String> {
+                    r.map(|i| format!("{:.2e}", (st.pts[i + 1].0 - st.pts[i].0).norm()))
+                        .collect()
+                };
+                eprintln!(
+                    "  stretch {si} ({}, {}) {n} points: {p:?} -> {q:?} vertices {:?}; first gaps {:?}, last gaps {:?}; last (u, v) {:?} {:?} | {:?} {:?}",
+                    st.a,
+                    st.b,
+                    st.v,
+                    gaps(0..4.min(n - 1)),
+                    gaps(n.saturating_sub(5)..n - 1),
+                    st.pts[n - 2].1,
+                    st.pts[n - 1].1,
+                    st.pts[n - 2].2,
+                    st.pts[n - 1].2
+                );
+            }
         }
     }
     if debug {
