@@ -826,7 +826,25 @@ impl Cand {
     fn project(&self, x: &P3) -> P2 {
         let Surface::Nurbs(ns) = self.surf() else {
             let (u, v) = self.surf().project(x, None);
-            return P2::new(u, v);
+            // (Into the face's own box, by whole turns: a surface's own angles may run
+            // over another range than the face's.)
+            let (lo, hi) = grid_box(self);
+            let into = |w: f64, lo: f64, hi: f64| -> f64 {
+                if w < lo - 1e-12 || w > hi + 1e-12 {
+                    let up = w + TAU * ((lo - w) / TAU).ceil().max(0.0);
+                    let down = w - TAU * ((w - hi) / TAU).ceil().max(0.0);
+                    if (lo..=hi).contains(&up) {
+                        up
+                    } else if (lo..=hi).contains(&down) {
+                        down
+                    } else {
+                        w
+                    }
+                } else {
+                    w
+                }
+            };
+            return P2::new(into(u, lo.x, hi.x), into(v, lo.y, hi.y));
         };
         if ns.dv != 1 || ns.kv.len() != 4 {
             // A B-spline patch: the nearest of a grid, then Gauss-Newton steps (kept in range).
@@ -1636,6 +1654,13 @@ impl Network {
             let n = sg.pts.len();
             let v1 = self.vertex(sg.pts[n - 1].0, tol);
             sg.pts[n - 1].0 = self.verts[v1];
+            // (A stretch no longer than the vertices' tolerance, back where it started: nothing.)
+            if v0 == v1 {
+                let len: f64 = sg.pts.windows(2).map(|w| (w[1].0 - w[0].0).norm()).sum();
+                if len < 4.0 * tol {
+                    continue;
+                }
+            }
             self.stretches.push(Stretch {
                 a: sg.a,
                 b: sg.b,
@@ -2421,10 +2446,16 @@ fn moved_coedge(
             },
         };
     }
+    // (Near the old p-curve: in the same turn of a closed surface's parameters.)
+    let near = {
+        let m = 0.5 * (from.t[0] + from.t[1]);
+        let w = c.pc.point(m);
+        Some(P2::new(w.x, w.y))
+    };
     Coedge {
         edge: c.edge,
         fwd,
-        pc: super::pcurve::pcurve(surf, &to.curve, to.t[0], to.t[1], None),
+        pc: super::pcurve::pcurve(surf, &to.curve, to.t[0], to.t[1], near),
     }
 }
 
@@ -2905,6 +2936,25 @@ pub(crate) fn cut_face(
         boundary.extend(pieces);
     }
     let r = super::split::split_face(&f.surf, !f.sense, std::slice::from_ref(&boundary), &arcs);
+    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() && !arcs.is_empty() && r.faces.len() <= 1 {
+        let desc = |a: &Arc| {
+            let (p, q) = (a.uv_at(0.0), a.uv_at(1.0));
+            format!(
+                "edge {} v {:?} ({:.5}, {:.5})->({:.5}, {:.5}) t {:?}",
+                a.edge, a.v, p.x, p.y, q.x, q.y, a.t
+            )
+        };
+        eprintln!(
+            "    face {fi} not split ({} faces of {:?} loops): boundary {:?}; cuts {:?}; aliases {alias:?}; splits {splits:?}",
+            r.faces.len(),
+            r.faces
+                .iter()
+                .map(|l| l.iter().map(|a| a.len()).collect::<Vec<_>>())
+                .collect::<Vec<_>>(),
+            boundary.iter().map(desc).collect::<Vec<_>>(),
+            arcs.iter().map(desc).collect::<Vec<_>>()
+        );
+    }
 
     let mut out = Vec::new();
     for loops in r.faces {
@@ -3006,6 +3056,23 @@ fn face_samples(b: &Body, fi: usize, m: usize) -> Vec<(P3, V3)> {
         lo = P2::new(lo.x.min(q.x), lo.y.min(q.y));
         hi = P2::new(hi.x.max(q.x), hi.y.max(q.y));
     }
+    // (Samples clear of the boundary by a fiftieth of the box: the loops are polygons of the
+    // p-curves, whose chords stray from them, and a sample nearer than that may be across a cut.)
+    let margin = 0.02 * ((hi.x - lo.x).powi(2) + (hi.y - lo.y).powi(2)).sqrt();
+    let near_boundary = |uv: P2| {
+        polys.iter().any(|poly| {
+            poly.iter().enumerate().any(|(k, a)| {
+                let b = poly[(k + 1) % poly.len()];
+                let d = b - a;
+                let t = if d.norm_squared() > 0.0 {
+                    ((uv - a).dot(&d) / d.norm_squared()).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                (a + d * t - uv).norm() < margin
+            })
+        })
+    };
     let mut uvs = Vec::new();
     for i in 0..m {
         for j in 0..m {
@@ -3014,6 +3081,7 @@ fn face_samples(b: &Body, fi: usize, m: usize) -> Vec<(P3, V3)> {
                 lo.y + (hi.y - lo.y) * (j as f64 + 0.5) / m as f64,
             );
             if super::classify::in_face(&polys, &f.surf, uv, 0.0) == super::classify::InFace::Inside
+                && !near_boundary(uv)
             {
                 uvs.push(uv);
             }
@@ -3200,7 +3268,9 @@ pub(crate) fn boundary_of(
         for (p, n) in face_samples(c, 0, m) {
             let d = oracle.depth(&(p + n * eps)).0;
             deepest = deepest.min(d);
-            if d >= 0.0 {
+            // (A sample moved `eps` out stands that far outside when nothing else covers it:
+            // less, and another instant reaches it, if only to touch.)
+            if d >= 0.5 * eps {
                 out += 1;
             } else if d < -shallow {
                 inn += 1;
@@ -3208,8 +3278,8 @@ pub(crate) fn boundary_of(
                 band += 1;
             }
         }
-        // (Samples inside by less than `shallow` count with the rest: outside when nothing is
-        // clearly inside.)
+        // (Samples within the band count with the rest: outside when nothing is clearly
+        // inside.)
         if inn == 0 || deepest > -20.0 * shallow {
             (out + inn + band, 0)
         } else if out == 0 {
@@ -3219,6 +3289,16 @@ pub(crate) fn boundary_of(
         }
     };
     let classes: Vec<(usize, usize)> = faces.par_iter().map(|c| judge(&c.body, 9)).collect();
+    if debug && let Ok(from) = std::env::var("CADRS_SWEEP_CLASSES") {
+        let from: usize = from.parse().unwrap_or(0);
+        for (i, c) in classes.iter().enumerate().skip(from) {
+            let (lo, hi) = grid_box(&faces[i]);
+            eprintln!(
+                "  face {i} (u {:.4}..{:.4}, v {:.4}..{:.4}): {} out {} in",
+                lo.x, hi.x, lo.y, hi.y, c.0, c.1
+            );
+        }
+    }
     let mixed: Vec<usize> = (0..faces.len())
         .filter(|&i| classes[i].0 > 0 && classes[i].1 > 0)
         .collect();
@@ -3236,6 +3316,70 @@ pub(crate) fn boundary_of(
     };
     let net = network(&tracer, &mixed, 9, given);
     let t_net = web_time::Instant::now();
+    if debug && let Ok(which) = std::env::var("CADRS_SWEEP_STRETCHES") {
+        let wanted: Vec<usize> = which
+            .split(',')
+            .filter_map(|w| w.trim().parse().ok())
+            .collect();
+        for (si, st) in net.stretches.iter().enumerate() {
+            if !wanted.is_empty() && !wanted.contains(&st.a) && !wanted.contains(&st.b) {
+                continue;
+            }
+            let (p, q) = (st.pts[0].0, st.pts[st.pts.len() - 1].0);
+            eprintln!(
+                "  stretch {si} ({}, {}) {} points: [{:.5}, {:.5}, {:.5}] -> [{:.5}, {:.5}, {:.5}] vertices {:?}",
+                st.a,
+                st.b,
+                st.pts.len(),
+                p.x,
+                p.y,
+                p.z,
+                q.x,
+                q.y,
+                q.z,
+                st.v
+            );
+        }
+    }
+    if debug {
+        // Stretches whose (u, v) run outside their faces' boxes.
+        for (si, st) in net.stretches.iter().enumerate() {
+            for (k, f) in [st.a, st.b].into_iter().enumerate() {
+                let (lo, hi) = grid_box(&faces[f]);
+                let uvs = st.pts.iter().map(|p| if k == 0 { p.1 } else { p.2 });
+                let (mut l, mut h) = (
+                    P2::new(f64::INFINITY, f64::INFINITY),
+                    P2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
+                );
+                for uv in uvs {
+                    l = P2::new(l.x.min(uv.x), l.y.min(uv.y));
+                    h = P2::new(h.x.max(uv.x), h.y.max(uv.y));
+                }
+                let slack = 1e-6 * (hi - lo).norm();
+                if l.x < lo.x - slack
+                    || l.y < lo.y - slack
+                    || h.x > hi.x + slack
+                    || h.y > hi.y + slack
+                {
+                    eprintln!(
+                        "  stretch {si} ({}, {}) on face {f}: (u, v) over ({:.4}, {:.4})..({:.4}, {:.4}), the face's box ({:.4}, {:.4})..({:.4}, {:.4}); {} points, vertices {:?}",
+                        st.a,
+                        st.b,
+                        l.x,
+                        l.y,
+                        h.x,
+                        h.y,
+                        lo.x,
+                        lo.y,
+                        hi.x,
+                        hi.y,
+                        st.pts.len(),
+                        st.v
+                    );
+                }
+            }
+        }
+    }
     let curves: Vec<StretchCurves> = net.stretches.iter().map(stretch_curves).collect();
     let mut on_net = vec![false; faces.len()];
     for st in &net.stretches {
@@ -3251,9 +3395,25 @@ pub(crate) fn boundary_of(
                 return match classes[i] {
                     (_, 0) => Ok(vec![faces[i].body.clone()]),
                     (0, _) => Ok(Vec::new()),
-                    _ => Err(format!(
-                        "face {i} goes inside, but no curve was found on it"
-                    )),
+                    _ => {
+                        if debug {
+                            let (lo, hi) = grid_box(&faces[i]);
+                            let ds: Vec<String> = face_samples(&faces[i].body, 0, 5)
+                                .iter()
+                                .map(|(p, n)| {
+                                    let uv = faces[i].project(p);
+                                    format!("({:.4}, {:.4}) {:.2e}", uv.x, uv.y, oracle.depth(&(p + n * eps)).0)
+                                })
+                                .collect();
+                            eprintln!(
+                                "  face {i} (u {:.4}..{:.4}, v {:.4}..{:.4}) mixed without a curve: {ds:?}",
+                                lo.x, hi.x, lo.y, hi.y
+                            );
+                        }
+                        Err(format!(
+                            "face {i} goes inside, but no curve was found on it"
+                        ))
+                    }
                 };
             }
             let mut kept = Vec::new();
@@ -3274,7 +3434,7 @@ pub(crate) fn boundary_of(
                     lo.x, hi.x, lo.y, hi.y,
                     pieces.len()
                 );
-                if pieces.is_empty() {
+                if pieces.len() <= 1 && net.stretches.iter().any(|st| st.a == i || st.b == i) {
                     for st in net.stretches.iter().filter(|st| st.a == i || st.b == i) {
                         for k in 0..2 {
                             if [st.a, st.b][k] != i {
@@ -3291,8 +3451,8 @@ pub(crate) fn boundary_of(
             }
             for (g, piece) in pieces.into_iter().enumerate() {
                 match judge(&piece, 5) {
-                    (out, inn) if out >= 4 * inn && out > 0 => kept.push(piece),
-                    (out, inn) if inn >= 4 * out && inn > 0 => {}
+                    (out, inn) if out > 2 * inn && out > 0 => kept.push(piece),
+                    (out, inn) if inn > 2 * out && inn > 0 => {}
                     (out, inn) => {
                         if debug {
                             let (lo, hi) = grid_box(&faces[i]);
@@ -3346,7 +3506,9 @@ pub(crate) fn boundary_of(
     let t_cut = web_time::Instant::now();
     // The kept faces joined, their edges' tolerances covering the gaps their curves leave
     // (wider only where faces meet nearly touching, and the curve between them is ill-defined).
-    let mut solid = assemble(&keep, 1e-7 * size)?;
+    // (Vertices merged within three times the cutter's tolerance for an end on an edge: two
+    // faces place a shared vertex each at its own edge's point.)
+    let mut solid = assemble(&keep, 3e-7 * size)?;
     let t_tol = web_time::Instant::now();
     solid.fit_tolerances_searched(1e-5 * size);
     if debug {
@@ -3410,22 +3572,78 @@ pub(crate) fn boundary_of(
         );
     }
     let mut problems = solid.check();
+    if debug && let Some(first) = problems.first() {
+        // The face named first, its loops' p-curve ends.
+        let msg = format!("{first:?}");
+        if let Some(fi) = msg
+            .split("face ")
+            .nth(1)
+            .and_then(|r| r.split_whitespace().next())
+            .and_then(|n| n.parse::<usize>().ok())
+            && let Some(f) = solid.faces.get(fi)
+        {
+            for (li, l) in f.loops.iter().enumerate() {
+                let ends: Vec<String> = l
+                    .iter()
+                    .map(|co| {
+                        let e = &solid.edges[co.edge];
+                        let (t0, t1) = super::topo::co_range(e, co.fwd);
+                        let (a, b) = (co.pc.point(t0), co.pc.point(t1));
+                        format!(
+                            "edge {} (tol {:.1e}): ({:.4}, {:.4}) -> ({:.4}, {:.4})",
+                            co.edge, e.tol, a.x, a.y, b.x, b.y
+                        )
+                    })
+                    .collect();
+                eprintln!("moving sweep: face {fi} loop {li}: {ends:?}");
+            }
+        }
+    }
     if problems.is_empty() {
         // (Faces crossing: a face kept whole that went inside, its curve missed.)
         problems = super::check_faces::face_crossings(&solid);
     }
     if debug && solid.solids.len() != 1 {
         let ef = solid.edge_faces();
-        for (e, fs) in ef.iter().enumerate() {
+        let odd: Vec<usize> = (0..solid.edges.len())
+            .filter(|&e| !solid.edges[e].degenerate && ef[e].len() != 2)
+            .collect();
+        eprintln!(
+            "moving sweep: {} pieces kept, {} faces joined",
+            keep.len(),
+            solid.faces.len()
+        );
+        for &e in &odd {
             let ed = &solid.edges[e];
-            if !ed.degenerate && fs.len() != 2 {
-                eprintln!(
-                    "moving sweep: edge {e} of {} faces: {:?} -> {:?}",
-                    fs.len(),
-                    solid.verts[ed.v[0]].p,
-                    solid.verts[ed.v[1]].p
-                );
+            let m = ed.curve.point(0.5 * (ed.t[0] + ed.t[1]));
+            // The nearest other edge midway: how far, and whose.
+            let mut nearest: Option<(f64, usize)> = None;
+            for (o, od) in solid.edges.iter().enumerate() {
+                if o == e || od.degenerate {
+                    continue;
+                }
+                let s = od.curve.closest(&m, od.t[0], od.t[1]);
+                let d = (od.curve.point(s) - m).norm();
+                if nearest.is_none_or(|(nd, _)| d < nd) {
+                    nearest = Some((d, o));
+                }
             }
+            let near = nearest.map(|(d, o)| {
+                let od = &solid.edges[o];
+                format!(
+                    "edge {o} of faces {:?} is {d:.2e} off midway (its ends {:.2e}, {:.2e} from this one's)",
+                    ef[o],
+                    (solid.verts[od.v[0]].p - solid.verts[ed.v[0]].p).norm().min((solid.verts[od.v[1]].p - solid.verts[ed.v[0]].p).norm()),
+                    (solid.verts[od.v[0]].p - solid.verts[ed.v[1]].p).norm().min((solid.verts[od.v[1]].p - solid.verts[ed.v[1]].p).norm()),
+                )
+            });
+            eprintln!(
+                "moving sweep: edge {e} of {} faces {:?}: {:?} -> {:?}; nearest {near:?}",
+                ef[e].len(),
+                ef[e],
+                solid.verts[ed.v[0]].p,
+                solid.verts[ed.v[1]].p
+            );
         }
     }
     if solid.solids.len() != 1 || !problems.is_empty() {
