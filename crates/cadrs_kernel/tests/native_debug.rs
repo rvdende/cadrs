@@ -3755,12 +3755,33 @@ fn debug_tumbling_tori() {
                     continue;
                 }
                 let (p, q) = (a.map(f32::from_bits), z.map(f32::from_bits));
-                if seen
-                    .iter()
-                    .all(|s| (0..3).any(|k| (s[k] - p[k]).abs() > 1e-3 * size as f32))
+                if std::env::var("CADRS_TORUS_OPEN").is_ok_and(|v| v == "all")
+                    || seen
+                        .iter()
+                        .all(|s| (0..3).any(|k| (s[k] - p[k]).abs() > 1e-3 * size as f32))
                 {
                     seen.push(p);
                     eprintln!("  unmatched mesh edge {p:?} -> {q:?} ({n} times)");
+                }
+            }
+        }
+        if std::env::var("CADRS_TORUS_OPEN").is_ok_and(|v| v == "all") {
+            // The triangles with a side unmatched, and their faces.
+            for (t, f) in mesh.indices.iter().zip(&mesh.triangle_faces) {
+                let open = [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])]
+                    .iter()
+                    .any(|&(a, z)| {
+                        let (a, z) = (key(a), key(z));
+                        a != z && edges.get(&(a, z)) != edges.get(&(z, a))
+                    });
+                if open {
+                    eprintln!(
+                        "  triangle of face {f:?}: {:?}",
+                        t.map(|i| {
+                            let p = mesh.positions[i as usize];
+                            [p.x as f32, p.y as f32, p.z as f32]
+                        })
+                    );
                 }
             }
         }

@@ -2491,10 +2491,7 @@ fn network(tr: &Tracer, mixed: &[usize], m: usize, given: Vec<Given>, complete: 
         }
         for _ in 0..12 {
             let curves = stretch_curves(st);
-            let mut params = vec![0.0];
-            for w in st.pts.windows(2) {
-                params.push(params.last().unwrap() + (w[1].0 - w[0].0).norm());
-            }
+            let params = stretch_params(st);
             let (sa, sb) = (tr.cands[st.a].surf(), tr.cands[st.b].surf());
             let mut add: Vec<(usize, (P3, P2, P2))> = Vec::new();
             for i in 0..st.pts.len() - 1 {
@@ -2832,10 +2829,7 @@ struct StretchCurves {
 }
 
 fn stretch_curves(s: &Stretch) -> StretchCurves {
-    let mut params = vec![0.0];
-    for w in s.pts.windows(2) {
-        params.push(params.last().unwrap() + (w[1].0 - w[0].0).norm());
-    }
+    let params = stretch_params(s);
     let pts: Vec<P3> = s.pts.iter().map(|p| p.0).collect();
     let fit = |pts: &[P3]| {
         let deg = if pts.len() >= 4 { 3 } else { 1 };
@@ -2867,6 +2861,44 @@ pub(crate) struct FaceCut {
     pub c: Curve,
     pub pts: Vec<(P3, P2)>,
     pub v: [usize; 2],
+    /// The curve's parameter at each point, where it is not the chord lengths summed.
+    pub params: Option<Vec<f64>>,
+}
+
+/// The chord lengths of a polyline, summed from nothing.
+fn chord_params<T>(pts: &[T], at: impl Fn(&T) -> P3) -> Vec<f64> {
+    let mut params = vec![0.0];
+    for w in pts.windows(2) {
+        params.push(params.last().unwrap() + (at(&w[1]) - at(&w[0])).norm());
+    }
+    params
+}
+
+/// The parameter of each point of a stretch's curves: the chord lengths summed, and for a
+/// face's crossing of itself its run on the face at each of its two places as well (each in
+/// the measure of its length in space). Such a curve may end at the tip of a fold, where its
+/// two places come together: there it stands still in space while its places still move, and
+/// curves through their points over chord length alone swing wide of them.
+fn stretch_params(s: &Stretch) -> Vec<f64> {
+    let chords = chord_params(&s.pts, |p| p.0);
+    if s.a != s.b {
+        return chords;
+    }
+    let run = |k: usize| -> Vec<f64> {
+        chord_params(&s.pts, |p| {
+            let w = if k == 0 { p.1 } else { p.2 };
+            P3::new(w.x, w.y, 0.0)
+        })
+    };
+    let (r0, r1) = (run(0), run(1));
+    let len = *chords.last().unwrap();
+    let part = |r: &[f64], i: usize| {
+        let whole = *r.last().unwrap();
+        if whole > 0.0 { len * r[i] / whole } else { 0.0 }
+    };
+    (0..chords.len())
+        .map(|i| chords[i] + part(&r0, i) + part(&r1, i))
+        .collect()
 }
 
 /// Candidate face `fi` split along the network's stretches on it: its pieces, each a body of
@@ -2935,6 +2967,7 @@ fn split_by(
                     .map(|p| (p.0, if k == 0 { p.1 } else { p.2 }))
                     .collect(),
                 v,
+                params: Some(stretch_params(st)),
             });
         }
     }
@@ -2980,6 +3013,14 @@ pub(crate) fn cut_face(
         let mid = cuts[ci].pts.len() / 2;
         let second: Vec<(P3, P2)> = cuts[ci].pts[mid..].to_vec();
         cuts[ci].pts.truncate(mid + 1);
+        // (Each half over the whole's parameters, the second's from nothing.)
+        let halves = cuts[ci].params.take().map(|p| {
+            let at = p[mid];
+            (
+                p[..=mid].to_vec(),
+                p[mid..].iter().map(|t| t - at).collect::<Vec<f64>>(),
+            )
+        });
         let v = next_id;
         next_id += 1;
         pos.insert(v, second[0].0);
@@ -2987,23 +3028,28 @@ pub(crate) fn cut_face(
         cuts[ci].v[1] = v;
         // (Each half's curve through its own points, over their chord lengths from zero, as
         // the arcs below take it.)
-        let fit = |pts: &[(P3, P2)]| -> Curve {
-            let mut params = vec![0.0];
-            for w in pts.windows(2) {
-                params.push(params.last().unwrap() + (w[1].0 - w[0].0).norm());
-            }
+        let fit = |pts: &[(P3, P2)], params: Option<&Vec<f64>>| -> Curve {
+            let params = params
+                .cloned()
+                .unwrap_or_else(|| chord_params(pts, |p| p.0));
             let p3: Vec<P3> = pts.iter().map(|p| p.0).collect();
             let deg = if p3.len() >= 4 { 3 } else { 1 };
             Curve::Nurbs(std::sync::Arc::new(NurbsCurve::interpolate(
                 &p3, &params, deg, None, None,
             )))
         };
-        cuts[ci].c = fit(&cuts[ci].pts);
-        let c = fit(&second);
+        let (first_params, second_params) = match halves {
+            Some((a, b)) => (Some(a), Some(b)),
+            None => (None, None),
+        };
+        cuts[ci].c = fit(&cuts[ci].pts, first_params.as_ref());
+        cuts[ci].params = first_params;
+        let c = fit(&second, second_params.as_ref());
         cuts.push(FaceCut {
             c,
             pts: second,
             v: [v, end],
+            params: second_params,
         });
     }
     let cuts = cuts;
@@ -3142,10 +3188,10 @@ pub(crate) fn cut_face(
         let id = 1_000_000 + ci;
         curve_of.insert(id, ci);
         let v = cut.v.map(|x| alias.get(&x).copied().unwrap_or(x));
-        let mut params = vec![0.0];
-        for w in cut.pts.windows(2) {
-            params.push(params.last().unwrap() + (w[1].0 - w[0].0).norm());
-        }
+        let params = cut
+            .params
+            .clone()
+            .unwrap_or_else(|| chord_params(&cut.pts, |p| p.0));
         let len = *params.last().unwrap();
         let mut uvs: Vec<P2> = cut.pts.iter().map(|p| p.1).collect();
         let n = uvs.len();

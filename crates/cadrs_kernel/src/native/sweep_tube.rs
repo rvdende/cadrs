@@ -1015,14 +1015,6 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
     if least < 1e-3 && pinches.is_empty() {
         return refused(format!("its core circle's sweep folds ({least:.4})"));
     }
-    // (A pinch's chart joins up but for slivers beside its seam: until those are right, a
-    // pinched sweep is refused, unless asked for.)
-    if !pinches.is_empty() && std::env::var_os("CADRS_TUBE_PINCH").is_none() {
-        return refused(format!(
-            "its core circle's sweep pinches (at {:.4}, {:.4})",
-            pinches[0].x, pinches[0].y
-        ));
-    }
     if let Some(c) = pinches.iter().find(|c| !(0.02..=0.98).contains(&c.x)) {
         return refused(format!(
             "its core circle's sweep pinches at the motion's end ({:.4})",
@@ -1061,7 +1053,11 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
         let Some(inv) = tube.across_d(c.x, c.y).try_inverse() else {
             return refused("its core circle's sweep pinches along a curve".into());
         };
-        let reach = V2::new(0.1 / sheet_chunks as f64, 0.1 * TAU / npsi as f64);
+        let wide = std::env::var("CADRS_TUBE_REACH")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.1);
+        let reach = V2::new(wide / sheet_chunks as f64, wide * TAU / npsi as f64);
         let shape = nalgebra::Matrix2::new(1.0 / reach.x, 0.0, 0.0, 1.0 / reach.y) * inv;
         tube.pinches.push(Pinch {
             c,
@@ -1071,6 +1067,36 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
         });
     }
     let tube = tube;
+    if std::env::var_os("CADRS_TUBE_SEAM").is_some() {
+        // (Each pinch's seam in (t, ψ), and how far the chart's place read back is off.)
+        for (k, pn) in tube.pinches.iter().enumerate() {
+            eprintln!(
+                "  pinch {k} at ({:.6}, {:.6}), reach ({:.4}, {:.4}), {sheet_chunks} chunks",
+                pn.c.x, pn.c.y, pn.reach.x, pn.reach.y
+            );
+            for i in 0..64 {
+                let th = TAU * i as f64 / 64.0;
+                let w = tube.pinch_at(k, 1.0, th);
+                let x = tube
+                    .eval(&Pos {
+                        chart: PINCH + k,
+                        a: 1.0,
+                        psi: th,
+                    })
+                    .p;
+                let back = tube.pinch_uv(k, w.x, &x);
+                eprintln!(
+                    "    θ {th:.4}: rho {:.4e}, (t, ψ) ({:.6}, {:.6}), least regular there {:.3e}, read back ({:.6}, {:.6})",
+                    pn.rho(th),
+                    w.x,
+                    w.y,
+                    tube.across(w.x, w.y).norm(),
+                    back.x,
+                    back.y
+                );
+            }
+        }
+    }
     let mut patches: Vec<Patch> = Vec::new();
     for k in 0..tube.pinches.len() {
         for q in 0..4 {
@@ -1355,6 +1381,7 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
                                         c,
                                         pts: std::mem::take(run),
                                         v,
+                                        params: None,
                                     });
                                 }
                                 run.clear();
@@ -1640,27 +1667,91 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
             .collect();
         let mut given: Vec<super::sweep_moving::Given> = traced.into_iter().flatten().collect();
         // (Two patches' crossing is read from each, and a patch's crossing of itself from each of
-        // its two places: one reading of the two kept, the lower patch's or the first. A reading
-        // without its twin stays: a stretch too short for the other's grid to have found.)
+        // its two places: one reading of the two kept. Where one runs along the other and stops
+        // short (a face's own reading of a curve gives out where its parameters are stretched
+        // thin, beside a pinch's seam, and its neighbour's doesn't), the longer; of two alike,
+        // the lower patch's or the first. A reading without its twin stays.)
         {
-            let same = 1e-6 * size;
-            let ends = |g: &super::sweep_moving::Given| (g.pts[0].0, g.pts[g.pts.len() - 1].0);
+            let near = 1e-5 * size;
+            let length = |g: &super::sweep_moving::Given| -> f64 {
+                g.pts.windows(2).map(|w| (w[1].0 - w[0].0).norm()).sum()
+            };
+            // (Whether every point of g lies on h's polyline.)
+            let along = |g: &super::sweep_moving::Given, h: &super::sweep_moving::Given| -> bool {
+                g.pts.iter().all(|p| {
+                    h.pts.windows(2).any(|w| {
+                        let (a, b) = (w[0].0, w[1].0);
+                        let d = b - a;
+                        let t = if d.norm_squared() > 0.0 {
+                            ((p.0 - a).dot(&d) / d.norm_squared()).clamp(0.0, 1.0)
+                        } else {
+                            0.0
+                        };
+                        // (A chord lies off its curve by its sag, which the tracing holds
+                        // to this.)
+                        let sag = (0.5 * fit_tol * d.norm_squared()).cbrt();
+                        (a + d * t - p.0).norm() <= near + 2.0 * sag
+                    })
+                })
+            };
+            if std::env::var_os("CADRS_TUBE_TWINS").is_some() {
+                // (How far each reading's points are off its twins' polylines, at worst.)
+                for (i, g) in given.iter().enumerate() {
+                    for (j, h) in given.iter().enumerate() {
+                        if i == j || (h.a, h.b) != (g.b, g.a) || g.b >= n_sheets {
+                            continue;
+                        }
+                        let off = |p: &P3| {
+                            h.pts
+                                .windows(2)
+                                .map(|w| {
+                                    let (a, b) = (w[0].0, w[1].0);
+                                    let d = b - a;
+                                    let t = ((p - a).dot(&d) / d.norm_squared().max(1e-300))
+                                        .clamp(0.0, 1.0);
+                                    (a + d * t - p).norm()
+                                })
+                                .fold(f64::INFINITY, f64::min)
+                        };
+                        let worst = g
+                            .pts
+                            .iter()
+                            .enumerate()
+                            .map(|(k, p)| (off(&p.0), k))
+                            .max_by(|x, y| x.0.total_cmp(&y.0))
+                            .unwrap();
+                        eprintln!(
+                            "  reading {i} ({}, {}) of {} points, {:.6} long, against {j} of {} points, {:.6} long: furthest off {:.3e} at point {}; along {}",
+                            g.a,
+                            g.b,
+                            g.pts.len(),
+                            length(g),
+                            h.pts.len(),
+                            length(h),
+                            worst.0,
+                            worst.1,
+                            along(g, h)
+                        );
+                    }
+                }
+            }
             let mut keep = vec![true; given.len()];
             for i in 0..given.len() {
                 let g = &given[i];
                 if g.b >= n_sheets {
                     continue;
                 }
-                let (g0, g1) = ends(g);
+                let lg = length(g);
                 let twin = (0..given.len()).any(|j| {
                     let h = &given[j];
-                    let (h0, h1) = ends(h);
-                    j != i
-                        && keep[j]
-                        && (h.a, h.b) == (g.b, g.a)
-                        && (g.a > g.b || j < i)
-                        && (((g0 - h0).norm() <= same && (g1 - h1).norm() <= same)
-                            || ((g0 - h1).norm() <= same && (g1 - h0).norm() <= same))
+                    if j == i || !keep[j] || (h.a, h.b) != (g.b, g.a) {
+                        return false;
+                    }
+                    let lh = length(h);
+                    // (The shorter goes; of two as long, the higher patch's or the later.)
+                    let shorter =
+                        lg < lh - near || ((lg - lh).abs() <= near && (g.a > g.b || j < i));
+                    shorter && along(g, h)
                 });
                 if twin {
                     keep[i] = false;
@@ -1838,6 +1929,32 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
                         q.2.x,
                         q.2.y
                     );
+                    // (A step much longer than its neighbours: a stretch the tracing left
+                    // unfilled.)
+                    let steps: Vec<f64> =
+                        g.pts.windows(2).map(|w| (w[1].0 - w[0].0).norm()).collect();
+                    for i in 0..steps.len() {
+                        let about = steps[i.saturating_sub(3)..(i + 4).min(steps.len())]
+                            .iter()
+                            .filter(|&&s| s < steps[i])
+                            .fold(0.0, |a: f64, &s| a.max(s));
+                        if about > 0.0 && steps[i] > 8.0 * about {
+                            let (p, q) = (g.pts[i], g.pts[i + 1]);
+                            eprintln!(
+                                "    a gap of {:.2e} (steps about it {:.2e}) after point {i}: on the first ({:.6}, {:.6}) -> ({:.6}, {:.6}), on the second ({:.6}, {:.6}) -> ({:.6}, {:.6})",
+                                steps[i],
+                                about,
+                                p.1.x,
+                                p.1.y,
+                                q.1.x,
+                                q.1.y,
+                                p.2.x,
+                                p.2.y,
+                                q.2.x,
+                                q.2.y
+                            );
+                        }
+                    }
                     if std::env::var("CADRS_TUBE_CURVES")
                         .is_ok_and(|v| v == format!("{},{}", g.a, g.b))
                     {
@@ -1887,6 +2004,45 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
                     .map(|f| (f.0.cps.len(), f.0.cps[0].len()))
                     .collect::<Vec<_>>()
             );
+        }
+        if std::env::var_os("CADRS_TUBE_FITS").is_some() {
+            // (How far each fitted sheet is off its chart midway between its curves' points.)
+            for g in &given {
+                for (f, second) in [(g.a, false), (g.b, true)] {
+                    if f >= n_sheets {
+                        continue;
+                    }
+                    let chart = sheets[f].patch.0;
+                    let worst = g
+                        .pts
+                        .windows(2)
+                        .map(|w| {
+                            let (a, b) = if second {
+                                (w[0].2, w[1].2)
+                            } else {
+                                (w[0].1, w[1].1)
+                            };
+                            let m = P2::from(0.5 * (a.coords + b.coords));
+                            let x = tube
+                                .eval(&Pos {
+                                    chart,
+                                    a: m.x,
+                                    psi: m.y,
+                                })
+                                .p;
+                            ((fits[f].0.point(m.x, m.y) - x).norm(), m, (b - a).norm())
+                        })
+                        .max_by(|a, b| a.0.total_cmp(&b.0));
+                    if let Some(w) = worst
+                        && w.0 > fit_tol
+                    {
+                        eprintln!(
+                            "  curve of faces ({}, {}): face {f}'s fit off its chart by {:.2e} at ({:.6}, {:.6}), midway of a step of {:.2e}",
+                            g.a, g.b, w.0, w.1.x, w.1.y, w.2
+                        );
+                    }
+                }
+            }
         }
         (sheets, fits, kept_patches, given, on_sheet)
     };
@@ -2811,8 +2967,30 @@ fn chain_runs(
         let first = pts[0];
         pts.push(first);
     }
+    if let Ok(v) = std::env::var("CADRS_TUBE_CHAIN") {
+        // u, v, radius: the chain's points (place, covering instant, faces) within that of there.
+        let v: Vec<f64> = v.split(',').filter_map(|w| w.trim().parse().ok()).collect();
+        if let [u, w, r] = v[..] {
+            for (i, (p, t)) in pts.iter().enumerate() {
+                if (p - P2::new(u, w)).norm() < r {
+                    eprintln!(
+                        "  chain point {i}: ({:.9}, {:.9}) covered at {t:.9}: {:?}",
+                        p.x,
+                        p.y,
+                        pair(*p, *t, None).map(|h| (h.0, h.1.2))
+                    );
+                }
+            }
+        }
+    }
     // (A run's points with their places on the chain and covering instants.)
     type RunPt = (CurvePt, P2, f64);
+    // (Whether a place found from between two of a chain's lies between them along it.)
+    let between = |m: P2, w0: P2, w1: P2| -> bool {
+        let d = w1 - w0;
+        let s = (m - w0).dot(&d);
+        s > 0.0 && s < d.norm_squared()
+    };
     let mut flush = |run: &mut Vec<RunPt>, faces: Option<(usize, usize)>| {
         run.dedup_by(|q, p| (q.0.0 - p.0.0).norm() <= 1e-12 * (1.0 + p.0.0.coords.norm()));
         if let Some((a, b)) = faces
@@ -2835,13 +3013,49 @@ fn chain_runs(
                             if full { t0 } else { 0.5 * (t0 + t1) },
                             full,
                         )
-                        && (m - w0).norm() < d.norm()
-                        && (m - w1).norm() < d.norm()
+                        && between(m, w0, w1)
                     {
                         run.insert(k + 1, (place(m, t, (a, b)), m, t));
                         k += 1;
                     }
                     k += 1;
+                }
+            }
+            if a == b {
+                // (Where its two places change sides the curve has passed its tip: found
+                // between the two points either side, until they are as good as one.)
+                let apart = |p: &CurvePt| p.1 - p.2;
+                if let Some(k) =
+                    (0..run.len() - 1).find(|&k| apart(&run[k].0).dot(&apart(&run[k + 1].0)) < 0.0)
+                {
+                    let most = run.iter().map(|r| apart(&r.0).norm()).fold(0.0, f64::max);
+                    let (mut lo, mut hi) = (run[k], run[k + 1]);
+                    for _ in 0..48 {
+                        if apart(&lo.0).norm().max(apart(&hi.0).norm()) <= 1e-6 * most {
+                            break;
+                        }
+                        let d = hi.1 - lo.1;
+                        let Some((m, t)) = onto(
+                            P2::from(0.5 * (lo.1.coords + hi.1.coords)),
+                            d,
+                            0.5 * (lo.2 + hi.2),
+                            false,
+                        )
+                        .filter(|(m, _)| between(*m, lo.1, hi.1)) else {
+                            break;
+                        };
+                        let c = (place(m, t, (a, b)), m, t);
+                        if apart(&c.0).dot(&apart(&lo.0)) > 0.0 {
+                            lo = c;
+                        } else {
+                            hi = c;
+                        }
+                    }
+                    // (The curve out to its tip, its two places one there; the points found
+                    // on the way left out, crowded as they are against it.)
+                    run.truncate(k + 1);
+                    lo.0.2 = lo.0.1;
+                    run.push(lo);
                 }
             }
             let mut pts: Vec<CurvePt> = run.drain(..).map(|r| r.0).collect();
@@ -2867,15 +3081,36 @@ fn chain_runs(
         }
         run.clear();
     };
+    // (The few points of a stretch next a corner at `wc`, before it and after, put in their
+    // order from it.)
+    let before = |run: &mut Vec<RunPt>, wc: P2| {
+        let n = run.len();
+        run[n.saturating_sub(4)..].sort_by(|x, y| (y.1 - wc).norm().total_cmp(&(x.1 - wc).norm()));
+    };
+    let after = |pts: &mut [(P2, f64)], i: usize, wc: P2, faces: Option<(usize, usize)>| {
+        let mut j = i;
+        while j + 1 < pts.len()
+            && j < i + 3
+            && (pts[j + 1].1 - pts[j].1).abs() <= jump
+            && pair(pts[j + 1].0, pts[j + 1].1, faces).map(|h| h.0) == faces
+        {
+            j += 1;
+        }
+        pts[i..=j].sort_by(|x, y| (x.0 - wc).norm().total_cmp(&(y.0 - wc).norm()));
+    };
     let mut run: Vec<RunPt> = Vec::new();
     let mut cur: Option<(usize, usize)> = None;
     for i in 0..pts.len() {
         let (w, tau) = pts[i];
         let here = pair(w, tau, cur);
         let faces = here.map(|h| h.0);
+        let mut last = (w, tau, here);
+        // (A turn from what an instant covers onto a seam, or off one, is a corner too, though
+        // the face across it be the same: the stretches either side are two curves.)
+        let turned = i > 0 && faces.is_some() && (tau < -0.5) != (pts[i - 1].1 < -0.5);
         if i == 0 {
             cur = faces;
-        } else if faces != cur {
+        } else if faces != cur || turned {
             // Where the faces change between the last point and this: once, or through others
             // between (a corner of a third face the curve cuts across).
             let (p0, t0) = pts[i - 1];
@@ -2899,7 +3134,9 @@ fn chain_runs(
                 // a boundary's margin is read only where what covers beyond it still has a
                 // least of its own, which it may not have far off the boundary.)
                 let ends = (p0, w);
-                let reach = 3.0 * d.norm() + 1e-9;
+                // (Where the two meet in a thin spike the grid cut the tip off, the corner is
+                // many times as far off as the cut is wide.)
+                let reach = 12.0 * d.norm() + 1e-9;
                 let tries = [
                     ends.0,
                     ends.1,
@@ -2957,6 +3194,13 @@ fn chain_runs(
                 })
             })();
             if let Some((wc, ta, tb, c, f)) = corner {
+                // (Where the two stretches meet in a spike too thin for the grid they were
+                // read on, the chain cuts its tip off, and a point put between the two ends
+                // of the cut may lie past its neighbour from the corner: the few points next
+                // the corner, either side, put in their order from it.)
+                before(&mut run, wc);
+                after(&mut pts, i, wc, faces);
+                last = (pts[i].0, pts[i].1, pair(pts[i].0, pts[i].1, faces));
                 run.push((place(wc, ta, c), wc, ta));
                 flush(&mut run, cur);
                 run.push((place(wc, tb, f), wc, tb));
@@ -2979,6 +3223,7 @@ fn chain_runs(
                 if let Some(c) = cur
                     && let Some((m, t)) = on(lo)
                 {
+                    before(&mut run, m);
                     run.push((place(m, t, c), m, t));
                 }
                 flush(&mut run, cur);
@@ -2999,9 +3244,14 @@ fn chain_runs(
             if cur != faces {
                 flush(&mut run, cur);
                 cur = faces;
+            } else if let Some(&(_, wc, _)) = run.last()
+                && corner.is_none()
+            {
+                after(&mut pts, i, wc, faces);
+                last = (pts[i].0, pts[i].1, pair(pts[i].0, pts[i].1, faces));
             }
         }
-        if let Some((_, pt)) = here {
+        if let (w, tau, Some((_, pt))) = last {
             run.push((pt, w, tau));
         }
     }
