@@ -194,11 +194,40 @@ impl<'a> Tube<'a> {
         let n = ((turn / 0.003).ceil() as usize).clamp(1024, 8192);
         let ts: Vec<f64> = (0..=n).map(|i| i as f64 / n as f64).collect();
         let places = ts.iter().map(|&t| place(steps, t)).collect();
+        // ψ measured from a direction the motion itself picks out, so that the faces' seams
+        // (at quarters of ψ) fall evenly on what is swept where the motion is even: the way the
+        // core circle's speed leans round the circle midway through the motion (its first
+        // harmonic there, or its second where it leans no way), which a motion that mirrors
+        // itself about its middle has on its mirror.
+        let (x, y) = {
+            let j = jet(steps, 0.5);
+            let n = 360;
+            let (mut h1, mut h2, mut mean) = (V2::zeros(), V2::zeros(), 0.0);
+            for i in 0..n {
+                let psi = TAU * i as f64 / n as f64;
+                let k = fr.o.coords + (fr.x * psi.cos() + fr.y * psi.sin()) * big;
+                let s = (j.r[1] * k + j.d[1]).norm_squared();
+                h1 += V2::new(psi.cos(), psi.sin()) * s;
+                h2 += V2::new((2.0 * psi).cos(), (2.0 * psi).sin()) * s;
+                mean += s;
+            }
+            let psi0 = if h1.norm() > 1e-6 * mean {
+                h1.y.atan2(h1.x)
+            } else if h2.norm() > 1e-6 * mean {
+                0.5 * h2.y.atan2(h2.x)
+            } else {
+                0.0
+            };
+            (
+                fr.x * psi0.cos() + fr.y * psi0.sin(),
+                fr.y * psi0.cos() - fr.x * psi0.sin(),
+            )
+        };
         Tube {
             steps,
             c: fr.o,
-            x: fr.x,
-            y: fr.y,
+            x,
+            y,
             z: fr.z,
             big,
             r,
@@ -1888,6 +1917,42 @@ pub fn torus(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Resu
             }
             return Some(Err(e));
         }
+    };
+    // The tori's pieces (cut in quarters to be trimmed) made whole again where they lie side by
+    // side on the one torus, if the solid is as sound for it.
+    let solid = {
+        let mut merged = solid.clone();
+        let from: Vec<Vec<(usize, usize)>> =
+            (0..merged.faces.len()).map(|i| vec![(0, i)]).collect();
+        let torus: Vec<bool> = merged
+            .faces
+            .iter()
+            .map(|f| matches!(f.surf, super::surface::Surface::Torus { .. }))
+            .collect();
+        super::unify::unify_faces(&mut merged, from, &|f, g| torus[f] && torus[g]);
+        let shelled = super::boolean::assemble_shells(&mut merged).is_ok();
+        let before = super::mass::body_volume(&solid);
+        let sound = shelled
+            && merged.solids.len() == 1
+            && merged.check().is_empty()
+            && (super::mass::body_volume(&merged) - before).abs() <= 1e-7 * before.abs();
+        if debug {
+            eprintln!(
+                "tube sweep: {} faces, {} with the tori's pieces merged ({})",
+                solid.faces.len(),
+                merged.faces.len(),
+                if sound { "kept" } else { "not sound: left" }
+            );
+            if !sound {
+                eprintln!(
+                    "  merged: {} solids, volume {} against {before}, first problem {:?}",
+                    merged.solids.len(),
+                    super::mass::body_volume(&merged),
+                    merged.check().first()
+                );
+            }
+        }
+        if sound { merged } else { solid }
     };
     if let Some(path) = std::env::var_os("CADRS_TUBE_OUT") {
         let _ = std::fs::write(path, super::bodyio::write(&solid));
