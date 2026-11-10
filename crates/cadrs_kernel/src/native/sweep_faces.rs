@@ -1696,8 +1696,6 @@ pub(super) fn glued_with(
         // mesh, as a ray through the long helical B-spline faces a screw sweeps can miss a
         // crossing. Each kept face on its own: the faces are many and the rays dear.)
         let boxes: Vec<Bbox> = all.iter().map(|b| b.bbox()).collect();
-        let meshes: Vec<std::sync::OnceLock<Vec<super::tess::FaceMesh>>> =
-            all.iter().map(|_| std::sync::OnceLock::new()).collect();
         let eps = 1e-3 * size.max(1.0);
         let kept: Vec<(usize, usize)> = faces
             .iter()
@@ -1705,29 +1703,37 @@ pub(super) fn glued_with(
             .filter(|(_, d)| !**d)
             .map(|(f, _)| (f.0, f.1))
             .collect();
-        let overlap = kept.par_iter().find_map_first(|&(bi, fi)| {
-            let f = &all[bi].faces[fi];
-            let sign = if f.sense { 1.0 } else { -1.0 };
-            super::boolean::interior_points_of_polys(&polys[bi][fi])
-                .into_iter()
-                .take(4)
-                .find_map(|q| {
+        // (The rays side by side, a kept face each; the meshes after, one thread's work: a
+        // mesh is made across the threads itself, and may not be waited for from one of them.)
+        let suspects: Vec<(usize, usize, usize, P3)> = kept
+            .par_iter()
+            .flat_map_iter(|&(bi, fi)| {
+                let f = &all[bi].faces[fi];
+                let sign = if f.sense { 1.0 } else { -1.0 };
+                let mut found = Vec::new();
+                for q in super::boolean::interior_points_of_polys(&polys[bi][fi])
+                    .into_iter()
+                    .take(4)
+                {
                     let out = f.surf.eval(q.x, q.y) + f.surf.normal(q.x, q.y) * (sign * eps);
-                    (0..all.len())
-                        .position(|bj| {
-                            if bj == bi
-                                || !boxes[bj].contains(&out)
-                                || !super::classify::parity_inside(&all[bj], &polys[bj], &out)
-                            {
-                                return false;
-                            }
-                            let m = meshes[bj].get_or_init(|| {
-                                super::tess::mesh_body(&all[bj], 1e-4 * size.max(1.0), 0.3).0
-                            });
-                            winding(m, &out) > 0.5
-                        })
-                        .map(|bj| (bi, fi, bj, out))
-                })
+                    for bj in 0..all.len() {
+                        if bj != bi
+                            && boxes[bj].contains(&out)
+                            && super::classify::parity_inside(&all[bj], &polys[bj], &out)
+                        {
+                            found.push((bi, fi, bj, out));
+                        }
+                    }
+                }
+                found
+            })
+            .collect();
+        let mut meshes: Vec<Option<Vec<super::tess::FaceMesh>>> = vec![None; all.len()];
+        let overlap = suspects.into_iter().find(|&(_, _, bj, out)| {
+            let m = meshes[bj].get_or_insert_with(|| {
+                super::tess::mesh_body(&all[bj], 1e-4 * size.max(1.0), 0.3).0
+            });
+            winding(m, &out) > 0.5
         });
         if let Some((bi, fi, bj, out)) = overlap {
             if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
