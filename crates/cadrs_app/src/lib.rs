@@ -171,8 +171,10 @@ impl AppState {
 #[derive(Resource, Debug, Clone)]
 pub struct StartState(pub String);
 
-/// A native document (`.cadrs`) to open at start (`cadrs <path>`, `cadrs --open <path>`): it is
-/// imported into the store as a new document, as a drop on the documents page imports one.
+/// A file to open at start (`cadrs <path>`, `cadrs --open <path>`, a file manager's *Open
+/// with*): a native document (`.cadrs`, or a bare `document.ron`) is imported into the store as
+/// a new document; any other file goes where a drop on the documents page would put it
+/// ([`drop_import`]), so a model (STEP, IGES, BREP, STL, GLB) becomes a new document.
 #[derive(Resource, Debug, Clone)]
 pub struct OpenAtStart(pub std::path::PathBuf);
 
@@ -1144,7 +1146,12 @@ fn flush_deleted(store: Res<DocumentStore>) {
 
 fn open_at_start(world: &mut World) {
     if let Some(OpenAtStart(path)) = world.remove_resource::<OpenAtStart>() {
-        native_document::import(world, &path);
+        // Anything that isn't a model, drawing or picture is taken for a native document (a
+        // `.cadrs` export, or a store's bare `document.ron`), as it always was.
+        match drop_import::DropKind::of_path(&path) {
+            Some(drop_import::DropKind::Native) | None => native_document::import(world, &path),
+            Some(_) => drop_import::dropped(world, vec![path]),
+        }
     }
 }
 

@@ -1,7 +1,7 @@
 //! cadrs: an Onshape-style CAD app.
 //!
 //! `cadrs [--headless] [--scenario <name>] [--window-size WxH] [--out <dir>] [--data-dir <dir>]
-//! [[--open] <file.cadrs>]`
+//! [[--open] <file>]`
 //!
 //! `cadrs --quick-start` opens the document modified last (or a new Untitled document) instead of
 //! the documents page.
@@ -69,9 +69,9 @@ Usage:
   cadrs --quick-start [--data-dir <dir>]
       Runs the app straight into the document modified last, or a new Untitled document when
       there is none, instead of the documents page.
-  cadrs [--data-dir <dir>] [--open] <file.cadrs>
-      Runs the app with a native document (an export, or a document.ron) imported into the
-      library and open.
+  cadrs [--data-dir <dir>] [--open] <file>
+      Runs the app with a file: a native document (an export, or a document.ron) imported into
+      the library and open, or a model (STEP, IGES, BREP, STL, GLB) imported into a new document.
   cadrs --list-documents [--data-dir <dir>] [--trash]
       Lists the stored documents, newest first: id, last modified (UTC), name.
   cadrs --document <name or id> --check [--data-dir <dir>] [--part-studio <name>] [--sketch <name>]

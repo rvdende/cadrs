@@ -14,6 +14,7 @@
 //!   ("Insert <file>"); while sketching, on the sketch's plane, added to the sketch (one step,
 //!   kept with the sketch's others). Several dropped together lie side by side.
 //! - Whatever can't go where it was dropped says so in a note (`drop-toast`).
+//! - A model the app is started with ([`crate::OpenAtStart`]) is dropped on the documents page.
 
 use std::path::{Path, PathBuf};
 
