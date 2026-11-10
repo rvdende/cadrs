@@ -125,23 +125,33 @@ fn quarter_turns(b: &mut Body, s1: f64) {
     }
     lap("skinned faces split");
     // Each piece on its own part of the surface: the faces cut from one share it, so each would
-    // carry the whole winding surface (into every boolean, mass and file written).
-    for fi in 0..b.faces.len() {
-        let super::surface::Surface::Nurbs(n) = &b.faces[fi].surf else {
-            continue;
-        };
-        let Some(((u0, u1), (v0, v1))) = face_uv_box(b, fi) else {
-            continue;
-        };
-        let ((a0, a1), (c0, c1)) = n.range();
-        let pad = |lo: f64, hi: f64, a: f64, z: f64| {
-            let m = 1e-3 * (z - a);
-            ((lo - m).max(a), (hi + m).min(z))
-        };
-        let ((u0, u1), (v0, v1)) = (pad(u0, u1, a0, a1), pad(v0, v1, c0, c1));
-        if u1 - u0 < 0.9 * (a1 - a0) || v1 - v0 < 0.9 * (c1 - c0) {
-            let part = n.restricted((u0, u1), (v0, v1));
-            b.faces[fi].surf = super::surface::Surface::Nurbs(std::sync::Arc::new(part));
+    // carry the whole winding surface (into every boolean, mass and file written). (The parts
+    // cut out side by side: each is a knot insertion over the whole surface.)
+    let parts: Vec<Option<super::nurbs::NurbsSurface>> = {
+        use rayon::prelude::*;
+        let boxes: Vec<_> = (0..b.faces.len()).map(|fi| face_uv_box(b, fi)).collect();
+        b.faces
+            .par_iter()
+            .zip(boxes)
+            .map(|(f, uv)| {
+                let super::surface::Surface::Nurbs(n) = &f.surf else {
+                    return None;
+                };
+                let ((u0, u1), (v0, v1)) = uv?;
+                let ((a0, a1), (c0, c1)) = n.range();
+                let pad = |lo: f64, hi: f64, a: f64, z: f64| {
+                    let m = 1e-3 * (z - a);
+                    ((lo - m).max(a), (hi + m).min(z))
+                };
+                let ((u0, u1), (v0, v1)) = (pad(u0, u1, a0, a1), pad(v0, v1, c0, c1));
+                (u1 - u0 < 0.9 * (a1 - a0) || v1 - v0 < 0.9 * (c1 - c0))
+                    .then(|| n.restricted((u0, u1), (v0, v1)))
+            })
+            .collect()
+    };
+    for (f, part) in b.faces.iter_mut().zip(parts) {
+        if let Some(part) = part {
+            f.surf = super::surface::Surface::Nurbs(std::sync::Arc::new(part));
         }
     }
     lap("each on its own part");
@@ -1530,16 +1540,72 @@ pub fn glued_groups(k: &mut NativeKernel, pieces: Vec<Body>) -> Vec<Body> {
     groups
 }
 
+/// A face's boundary by its length and its middle (∫ p ds over its loops' edges, by the
+/// length): what two faces with one boundary have alike, read off their edges alone (a face's
+/// area and centroid tell as much, but take the whole surface: on a screw's long sides, most
+/// of a sweep's time).
+fn boundary_measure(b: &Body, fi: usize) -> (f64, P3) {
+    // (Gauss–Legendre, five points, on short steps of each smooth piece.)
+    const X: [f64; 5] = [
+        -0.906_179_845_938_664,
+        -0.538_469_310_105_683_1,
+        0.0,
+        0.538_469_310_105_683_1,
+        0.906_179_845_938_664,
+    ];
+    const W: [f64; 5] = [
+        0.236_926_885_056_189_08,
+        0.478_628_670_499_366_47,
+        0.568_888_888_888_888_9,
+        0.478_628_670_499_366_47,
+        0.236_926_885_056_189_08,
+    ];
+    let (mut length, mut moment) = (0.0, V3::zeros());
+    for c in b.faces[fi].loops.iter().flatten() {
+        let e = &b.edges[c.edge];
+        if e.degenerate {
+            continue;
+        }
+        let (lo, hi) = (e.t[0].min(e.t[1]), e.t[0].max(e.t[1]));
+        let steps = match e.curve {
+            Curve::Line { .. } => 1,
+            Curve::Nurbs(_) => 4,
+            _ => (((hi - lo) / 0.1).ceil() as usize).max(1),
+        };
+        for w in e.curve.pieces(lo, hi).windows(2) {
+            for k in 0..steps {
+                let (a, z) = (
+                    w[0] + (w[1] - w[0]) * k as f64 / steps as f64,
+                    w[0] + (w[1] - w[0]) * (k + 1) as f64 / steps as f64,
+                );
+                let (m, r) = (0.5 * (a + z), 0.5 * (z - a));
+                for (x, gw) in X.iter().zip(W) {
+                    let t = m + r * x;
+                    let ds = gw * r * e.curve.tangent(t).norm();
+                    length += ds;
+                    moment += e.curve.point(t).coords * ds;
+                }
+            }
+        }
+    }
+    if length > tol::TINY {
+        (length, P3::from(moment / length))
+    } else {
+        (0.0, b.face_bbox(fi).center())
+    }
+}
+
 /// The solid the closed bodies `all` make together where they only touch along whole faces: each
-/// pair of faces from two of them on one surface with the same boundary (centroid and area) and
-/// opposite outward normals dropped, the rest sewn into one closed solid. None when that fails.
+/// pair of faces from two of them on one surface with the same boundary (its length and its
+/// middle) and opposite outward normals dropped, the rest sewn into one closed solid. None when
+/// that fails.
 fn glued(k: &mut NativeKernel, all: &[Body], size: f64) -> Option<OpResult> {
     let close = 1e-7 * size.max(1.0);
-    // Each face's centroid, area and outward normal there.
+    // Each face's boundary's middle and length, and its outward normal near there.
     let mut faces: Vec<(usize, usize, P3, f64, V3)> = Vec::new();
     for (bi, b) in all.iter().enumerate() {
         for fi in 0..b.faces.len() {
-            let (a, c) = super::mass::face_area(b, fi);
+            let (a, c) = boundary_measure(b, fi);
             let f = &b.faces[fi];
             let (u, v) = f.surf.project(&c, None);
             let n = f.surf.normal(u, v) * if f.sense { 1.0 } else { -1.0 };
@@ -1570,7 +1636,7 @@ fn glued(k: &mut NativeKernel, all: &[Body], size: f64) -> Option<OpResult> {
     if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
         for (i, f) in faces.iter().enumerate() {
             eprintln!(
-                "  glue: body {} face {} {:?} centroid {:.4?} area {:.6} normal {:.3?}{}",
+                "  glue: body {} face {} {:?} boundary's middle {:.4?} length {:.6} normal {:.3?}{}",
                 f.0,
                 f.1,
                 all[f.0].faces[f.1].surf.kind(),

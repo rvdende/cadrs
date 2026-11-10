@@ -1154,6 +1154,69 @@ pub fn body_volume(body: &Body) -> f64 {
     faces_volume(body)
 }
 
+/// The volume a body's faces bound, roughly, for telling its sign (which way a closed shell
+/// faces) or one shell's size from another's without integrating its surfaces: the midpoint
+/// rule over a grid of each face's parameters, twice over (a coarse grid and one twice as
+/// fine). None unless the two agree within a fifth, which a volume far from nothing among its
+/// faces' terms does; the caller then integrates.
+pub(crate) fn rough_volume(body: &Body) -> Option<f64> {
+    use super::classify::{InFace, face_polygons, in_face};
+    let bb = body.bbox();
+    if bb.is_empty() {
+        return None;
+    }
+    let shift = bb.center().coords;
+    let one = |f: &Face| -> Option<[f64; 2]> {
+        let polys = face_polygons(body, f);
+        let (mut lo, mut hi) = (
+            P2::new(f64::INFINITY, f64::INFINITY),
+            P2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
+        );
+        for q in polys.iter().flatten() {
+            lo = P2::new(lo.x.min(q.x), lo.y.min(q.y));
+            hi = P2::new(hi.x.max(q.x), hi.y.max(q.y));
+        }
+        if !(hi.x > lo.x && hi.y > lo.y) {
+            return None;
+        }
+        let sign = if f.sense { 1.0 } else { -1.0 };
+        let at = |n: usize| -> f64 {
+            let (du, dv) = ((hi.x - lo.x) / n as f64, (hi.y - lo.y) / n as f64);
+            let mut v = 0.0;
+            for i in 0..n {
+                for j in 0..n {
+                    let uv = P2::new(lo.x + (i as f64 + 0.5) * du, lo.y + (j as f64 + 0.5) * dv);
+                    if in_face(&polys, &f.surf, uv, 0.0) != InFace::Inside {
+                        continue;
+                    }
+                    let (p, su, sv) = f.surf.d1(uv.x, uv.y);
+                    v += (p.coords - shift).dot(&su.cross(&sv));
+                }
+            }
+            sign * v * du * dv / 3.0
+        };
+        Some([at(12), at(24)])
+    };
+    let terms: Vec<Option<[f64; 2]>> = if super::par::threads_for(body.faces.len(), true) {
+        body.faces.par_iter().map(one).collect()
+    } else {
+        body.faces.iter().map(one).collect()
+    };
+    let (mut coarse, mut fine) = (0.0, 0.0);
+    for t in terms {
+        let [c, f] = t?;
+        coarse += c;
+        fine += f;
+    }
+    (fine.is_finite() && (fine - coarse).abs() <= 0.2 * fine.abs()).then_some(fine)
+}
+
+/// A body's volume where only its sign or its rough size is wanted: [`rough_volume`] where
+/// that settles it, else integrated.
+pub(crate) fn volume_for_sign(body: &Body) -> f64 {
+    rough_volume(body).unwrap_or_else(|| faces_volume(body))
+}
+
 /// The volume a body's faces bound, whether or not they are made up into shells and solids
 /// yet (closed and facing out taken on trust).
 pub(crate) fn faces_volume(body: &Body) -> f64 {

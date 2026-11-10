@@ -679,7 +679,9 @@ pub fn sewn_solid(b: Body, tol: f64) -> Result<Body> {
     if b.solids.is_empty() {
         return Err(invalid("The surfaces don't close"));
     }
-    let mut v = super::mass::body_volume(&b);
+    // (Which way it faces and whether it encloses anything: its volume's sign, roughly where
+    // that is plain.)
+    let mut v = super::mass::volume_for_sign(&b);
     if v < 0.0 {
         for f in &mut b.faces {
             Body::reverse_face(f);

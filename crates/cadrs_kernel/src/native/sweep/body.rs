@@ -474,7 +474,7 @@ pub fn sweep_body(b: &Body, mv: &BodyMove, s1: f64, whole: bool, source: u64) ->
     }
     // Built facing the way the sheet faces at the start: turn it out.
     let whole_body = crate::native::kernel::subset(o, &faces, true);
-    if crate::native::mass::body_volume(&whole_body) < 0.0 {
+    if crate::native::mass::volume_for_sign(&whole_body) < 0.0 {
         for f in &mut o.faces {
             Body::reverse_face(f);
         }
@@ -492,7 +492,7 @@ fn assemble_solids(o: &mut Body, faces: &[usize]) -> Result<()> {
     let pieces = o.face_components(faces);
     let vols: Vec<f64> = pieces
         .iter()
-        .map(|p| crate::native::mass::body_volume(&crate::native::kernel::subset(o, p, true)))
+        .map(|p| crate::native::mass::volume_for_sign(&crate::native::kernel::subset(o, p, true)))
         .collect();
     let mut outers: Vec<usize> = (0..pieces.len()).filter(|&k| vols[k] > 0.0).collect();
     outers.sort_by(|&a, &b| vols[a].total_cmp(&vols[b]));
