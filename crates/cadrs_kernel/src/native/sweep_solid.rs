@@ -548,6 +548,12 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
     // where its faces meet the motion); else meshed.
     if let SolidMotion::Rigid { steps } = motion {
         let mut exact = None;
+        if std::env::var_os("CADRS_TUBE_FIRST").is_some()
+            && let Some(Ok(r)) =
+                super::sweep_tube::torus(k, &b, &super::sweep_tube::Motion::Steps(steps))
+        {
+            return Ok(r);
+        }
         if (1..=2).contains(&steps.len()) {
             match super::sweep_faces::by_faces(k, &b, steps) {
                 Ok(r) => return Ok(r),
@@ -563,7 +569,7 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
             None => {}
         }
         // A torus: exactly, from the offsets of its core circle's sweep.
-        match super::sweep_tube::torus(k, &b, steps) {
+        match super::sweep_tube::torus(k, &b, &super::sweep_tube::Motion::Steps(steps)) {
             Some(Ok(r)) => return Ok(r),
             Some(Err(e)) => exact = exact.or(Some(e)),
             None => {}
@@ -588,6 +594,10 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
     }
     if let SolidMotion::Path { path, up } = motion {
         if let Some(r) = path_sweep_exact(k, body, &b, path, up.into_inner()) {
+            return Ok(r);
+        }
+        // A torus riding one curve: exactly, its sweep trimmed by what it covers of itself.
+        if let Some(Ok(r)) = torus_along(k, &b, path, up.into_inner()) {
             return Ok(r);
         }
         let frames = PathFrames::new(k, path, up.into_inner())?;
@@ -1718,6 +1728,26 @@ pub fn cut_swept(
     {
         return Ok(r);
     }
+    // A torus: its sweep trimmed whole by what it covers of itself (where its leading faces
+    // fold, their sweeps can't be cut one at a time), cut from the target.
+    if let SolidMotion::Rigid { steps } = motion
+        && let Some(Ok(r)) =
+            super::sweep_tube::torus(k, &b, &super::sweep_tube::Motion::Steps(steps))
+        && let [s] = r.bodies.as_slice()
+    {
+        let cut = k.boolean(crate::BoolOp::Subtract, target, &[*s]);
+        k.release(*s);
+        if let Ok(c) = cut
+            && c.bodies
+                .iter()
+                .all(|&id| k.get(id).is_ok_and(|b| b.check().is_empty()))
+        {
+            return Ok(c);
+        }
+        if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+            eprintln!("swept cut: the torus's whole sweep wouldn't cut from the target");
+        }
+    }
     // Else meshed: inside the target, in none of the tool's places.
     let t = (**k.get(target)?).clone();
     let tdist =
@@ -1764,6 +1794,48 @@ pub fn cut_swept(
             "cutting by a swept solid meshed for a motion other than a rigid one or a path",
         )),
     }
+}
+
+/// A whole torus carried along a path of one curve ([`SolidMotion::Path`]): what it passes
+/// through, exactly ([`super::sweep_tube::torus`]). The frame rides the curve by the curve's own
+/// parameter, which is smooth (by its length, as [`PathFrames`] has it, the same places come in
+/// another order of time, which is all the same to what is swept). None for another body or a
+/// path of several curves.
+fn torus_along(
+    k: &mut NativeKernel,
+    b: &Body,
+    path: &[crate::PathCurve],
+    up: V3,
+) -> Option<Result<OpResult>> {
+    let [f] = b.faces.as_slice() else {
+        return None;
+    };
+    if !matches!(f.surf, super::surface::Surface::Torus { .. }) {
+        return None;
+    }
+    let segs = super::sweep::path::path_segments(k, path).ok()?;
+    let [s] = segs.as_slice() else {
+        return None;
+    };
+    let up = up.normalize();
+    let (ta, tb) = if s.rev { (s.t1, s.t0) } else { (s.t0, s.t1) };
+    let frame = |t: f64| -> Option<(nalgebra::Matrix3<f64>, P3)> {
+        let (p, d1, _) = s.c.d2(ta + (tb - ta) * t);
+        let d1 = d1 * (tb - ta).signum();
+        let x = (d1 - up * d1.dot(&up)).try_normalize(1e-12)?;
+        Some((nalgebra::Matrix3::from_columns(&[x, up.cross(&x), up]), p))
+    };
+    // (Every frame along it, and a little past its ends, must stand.)
+    if (0..=64).any(|i| frame(-0.01 + 1.02 * i as f64 / 64.0).is_none()) {
+        return None;
+    }
+    let (m0, o0) = frame(0.0)?;
+    let place = |t: f64| {
+        let (m, o) = frame(t).unwrap_or((m0, o0));
+        let r = m * m0.transpose();
+        (r, o.coords - r * o0.coords)
+    };
+    super::sweep_tube::torus(k, b, &super::sweep_tube::Motion::Place(&place))
 }
 
 /// [`meshed`] with the body's distance from its own mesh (closed, within a thousandth of its

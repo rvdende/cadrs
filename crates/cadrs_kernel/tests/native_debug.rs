@@ -3808,6 +3808,62 @@ fn debug_tumbling_tori() {
             }
             continue;
         }
+        if name == "carried" {
+            // brep-bench's ring carried along a spline: an upright ring riding a planar Bézier.
+            let mut k = NativeKernel::new();
+            let t0 = std::time::Instant::now();
+            let ring = k
+                .primitive(&Primitive::Torus {
+                    center: Point3::new(0.0, 0.0, 0.5),
+                    axis: Vector3::y_axis(),
+                    major: 1.5,
+                    minor: 0.5,
+                })
+                .unwrap()
+                .bodies[0];
+            let motion = SolidMotion::Path {
+                path: vec![cadrs_kernel::PathCurve::Bezier3 {
+                    poles: [(0.0, 0.0), (10.0, 0.0), (20.0, 20.0), (30.0, 20.0)]
+                        .iter()
+                        .map(|&(x, y)| Point3::new(x, y, 0.0))
+                        .collect(),
+                    weights: vec![],
+                }],
+                up: Vector3::z_axis(),
+            };
+            match k.sweep_solid(ring, &motion) {
+                Ok(r) => grade(&k, r.bodies[0], "carried", t0.elapsed()),
+                Err(e) => eprintln!("FAIL carried: {e} (in {:.2?})", t0.elapsed()),
+            }
+            continue;
+        }
+        if name == "pushed" {
+            // brep-bench's ring pushed in past its fold: a leaning ring slid down its own height
+            // and more.
+            let mut k = NativeKernel::new();
+            let t0 = std::time::Instant::now();
+            let lean = 65f64.to_radians();
+            let ring = k
+                .primitive(&Primitive::Torus {
+                    center: Point3::new(0.0, 0.0, 4.0),
+                    axis: nalgebra::Unit::new_normalize(Vector3::new(lean.sin(), 0.0, lean.cos())),
+                    major: 3.0,
+                    minor: 1.0,
+                })
+                .unwrap()
+                .bodies[0];
+            let motion = SolidMotion::Rigid {
+                steps: vec![RigidStep::Slide {
+                    from: Vector3::zeros(),
+                    to: Vector3::new(0.0, 0.0, -8.0),
+                }],
+            };
+            match k.sweep_solid(ring, &motion) {
+                Ok(r) => grade(&k, r.bodies[0], "pushed", t0.elapsed()),
+                Err(e) => eprintln!("FAIL pushed: {e} (in {:.2?})", t0.elapsed()),
+            }
+            continue;
+        }
         for c in cases.iter().filter(|c| name == "all" || c.0 == name) {
             let mut k = NativeKernel::new();
             let t0 = std::time::Instant::now();

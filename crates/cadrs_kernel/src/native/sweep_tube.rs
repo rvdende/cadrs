@@ -99,6 +99,44 @@ fn place(steps: &[RigidStep], t: f64) -> (M3, V3) {
     (r, d)
 }
 
+/// A rigid motion over t from 0 to 1: where it places a body at t.
+pub(crate) enum Motion<'a> {
+    /// Turns and slides, each after the ones before, their derivatives known.
+    Steps(&'a [RigidStep]),
+    /// Any other, by its place alone (smooth in t, and given a little past either end): its
+    /// derivative by differences.
+    Place(&'a (dyn Fn(f64) -> (M3, V3) + Sync)),
+}
+
+impl Motion<'_> {
+    fn place(&self, t: f64) -> (M3, V3) {
+        match self {
+            Motion::Steps(steps) => place(steps, t),
+            Motion::Place(at) => at(t),
+        }
+    }
+
+    /// The place at t with its first derivative (and, of turns and slides, its second: nothing
+    /// here reads another motion's).
+    fn jet(&self, t: f64) -> Jet {
+        match self {
+            Motion::Steps(steps) => jet(steps, t),
+            Motion::Place(at) => {
+                // (A five-point difference: good to twelve places of a smooth motion.)
+                let h = 1e-3;
+                let (p2, p1, m1, m2) = (at(t + 2.0 * h), at(t + h), at(t - h), at(t - 2.0 * h));
+                let (r0, d0) = at(t);
+                let r1 = (m2.0 - p2.0 + (p1.0 - m1.0) * 8.0) / (12.0 * h);
+                let d1 = (m2.1 - p2.1 + (p1.1 - m1.1) * 8.0) / (12.0 * h);
+                Jet {
+                    r: [r0, r1, M3::zeros()],
+                    d: [d0, d1, V3::zeros()],
+                }
+            }
+        }
+    }
+}
+
 /// The core circle's sweep at a point (t, ψ): Σ and its derivatives, the unit normal
 /// N = Σ_t × Σ_ψ / |…| and N's derivatives.
 struct SheetPt {
@@ -162,7 +200,7 @@ struct KPt {
 
 /// A torus and its motion, with the samples of the motion its inside test uses.
 pub(crate) struct Tube<'a> {
-    steps: &'a [RigidStep],
+    motion: &'a Motion<'a>,
     /// The core circle in the body's frame: its centre, axes (z square to it) and radius.
     c: P3,
     x: V3,
@@ -181,26 +219,26 @@ pub(crate) struct Tube<'a> {
 type Least = (f64, f64);
 
 impl<'a> Tube<'a> {
-    fn new(steps: &'a [RigidStep], fr: &Frame, big: f64, r: f64, size: f64) -> Tube<'a> {
+    fn new(motion: &'a Motion<'a>, fr: &Frame, big: f64, r: f64, size: f64) -> Tube<'a> {
         // Samples a few thousandths of a turn apart.
-        let (r0, _) = place(steps, 0.0);
+        let (r0, _) = motion.place(0.0);
         let mut turn = 0.0;
         let mut prev = r0;
         for i in 1..=256 {
-            let (ri, _) = place(steps, i as f64 / 256.0);
+            let (ri, _) = motion.place(i as f64 / 256.0);
             turn += nalgebra::Rotation3::from_matrix_unchecked(prev.transpose() * ri).angle();
             prev = ri;
         }
         let n = ((turn / 0.003).ceil() as usize).clamp(1024, 8192);
         let ts: Vec<f64> = (0..=n).map(|i| i as f64 / n as f64).collect();
-        let places = ts.iter().map(|&t| place(steps, t)).collect();
+        let places = ts.iter().map(|&t| motion.place(t)).collect();
         // ψ measured from a direction the motion itself picks out, so that the faces' seams
         // (at quarters of ψ) fall evenly on what is swept where the motion is even: the way the
         // core circle's speed leans round the circle midway through the motion (its first
         // harmonic there, or its second where it leans no way), which a motion that mirrors
         // itself about its middle has on its mirror.
         let (x, y) = {
-            let j = jet(steps, 0.5);
+            let j = motion.jet(0.5);
             let n = 360;
             let (mut h1, mut h2, mut mean) = (V2::zeros(), V2::zeros(), 0.0);
             for i in 0..n {
@@ -224,7 +262,7 @@ impl<'a> Tube<'a> {
             )
         };
         Tube {
-            steps,
+            motion,
             c: fr.o,
             x,
             y,
@@ -306,7 +344,7 @@ impl<'a> Tube<'a> {
                 } else {
                     (1.0 - pos.a, -1.0)
                 };
-                let j = jet(self.steps, t);
+                let j = self.motion.jet(t);
                 let sp = self.sheet_pt(&j, psi);
                 KPt {
                     p: P3::from(sp.s[0] + sp.n * (s * self.r)),
@@ -315,7 +353,7 @@ impl<'a> Tube<'a> {
             }
             c if c >= PINCH => {
                 let tp = self.pinch_at(c - PINCH, pos.a, psi);
-                let j = jet(self.steps, tp.x);
+                let j = self.motion.jet(tp.x);
                 let (p, _, _) = self.torus_pt(&j, tp.y, psi);
                 KPt { p, own: tp.x }
             }
@@ -323,7 +361,7 @@ impl<'a> Tube<'a> {
                 // The leading half at the end runs from θ(N) down by π; the trailing half at the
                 // start from θ(−N) down by π.
                 let t = if pos.chart == END { 1.0 } else { 0.0 };
-                let j = jet(self.steps, t);
+                let j = self.motion.jet(t);
                 let sp = self.sheet_pt(&j, psi);
                 let (th0, _) = self.theta_n(&j, &sp, psi);
                 let th0 = if pos.chart == END { th0 } else { th0 + PI };
@@ -343,7 +381,7 @@ impl<'a> Tube<'a> {
     }
 
     fn f(&self, t: f64, p: &P3) -> f64 {
-        self.f_at(&place(self.steps, t), p)
+        self.f_at(&self.motion.place(t), p)
     }
 
     /// The least of f over [a, b] by golden-section search (an end where f only rises from it).
@@ -702,7 +740,7 @@ impl<'a> Tube<'a> {
     /// Where on the sheets a point `p` lies at the instant `t` inside the motion (a local least
     /// of its distance, at r): the chart and coordinates.
     fn sheet_pos(&self, t: f64, p: &P3) -> Pos {
-        let j = jet(self.steps, t);
+        let j = self.motion.jet(t);
         let q = j.r[0].tr_mul(&(p.coords - j.d[0])) - self.c.coords;
         let h = q.dot(&self.z);
         let w = q - self.z * h;
@@ -728,7 +766,7 @@ impl<'a> Tube<'a> {
     /// torus touches what it sweeps where its normal is square to this; where it is nothing
     /// (the point moving along the circle), all round the tube there.
     fn across(&self, t: f64, psi: f64) -> V2 {
-        let j = jet(self.steps, t);
+        let j = self.motion.jet(t);
         let v = j.r[0].tr_mul(&(j.r[1] * self.k(psi) + j.d[1]));
         V2::new(v.dot(&self.e1(psi)), v.dot(&self.z))
     }
@@ -831,7 +869,7 @@ impl<'a> Tube<'a> {
 
     /// The place on pinch `k`'s chart of `x`, touched by the torus at the instant `t`.
     fn pinch_uv(&self, k: usize, t: f64, x: &P3) -> P2 {
-        let j = jet(self.steps, t);
+        let j = self.motion.jet(t);
         let q = j.r[0].tr_mul(&(x.coords - j.d[0])) - self.c.coords;
         let h = q.dot(&self.z);
         let flat = q - self.z * h;
@@ -866,7 +904,7 @@ impl<'a> Tube<'a> {
 
     /// The rate at which the distance of `p` from the core circle changes at the instant `t`.
     fn rate(&self, t: f64, p: &P3) -> f64 {
-        let j = jet(self.steps, t);
+        let j = self.motion.jet(t);
         let w = p.coords - j.d[0];
         let q = j.r[0].tr_mul(&w) - self.c.coords;
         let h = q.dot(&self.z);
@@ -936,7 +974,7 @@ impl<'a> Tube<'a> {
 
 /// [`crate::Kernel::sweep_solid`] of a whole torus by the rigid motion `steps`: None when `b`
 /// isn't one; an error when its boundary isn't made out exactly.
-pub fn torus(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Result<OpResult>> {
+pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<Result<OpResult>> {
     use rayon::prelude::*;
     let [f] = b.faces.as_slice() else {
         return None;
@@ -959,11 +997,11 @@ pub fn torus(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Resu
         }))
     };
     let size = b.bbox().diagonal().max(super::tol::POINT);
-    let mut tube = Tube::new(steps, fr, *rmaj, *rmin, size);
+    let mut tube = Tube::new(motion, fr, *rmaj, *rmin, size);
     // Σ regular (its tangents apart everywhere): its normal, and so the sheets, defined.
     let mut least = f64::INFINITY;
     for i in 0..=200 {
-        let j = jet(steps, i as f64 / 200.0);
+        let j = motion.jet(i as f64 / 200.0);
         for k in 0..128 {
             least = least.min(tube.sheet_pt(&j, TAU * k as f64 / 128.0).sin);
         }
@@ -992,7 +1030,7 @@ pub fn torus(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Resu
         ));
     }
     let place_r = |t: f64| {
-        let (m, d) = place(steps, t);
+        let (m, d) = motion.place(t);
         (nalgebra::Rotation3::from_matrix_unchecked(m), d)
     };
     let (c, z, big, r) = (tube.c, tube.z, tube.big, tube.r);
@@ -1010,9 +1048,9 @@ pub fn torus(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Resu
     // where the fit misses.
     // (The turn along the motion, summed: a whole turn and back comes to nothing net.)
     let mut turn = 0.0;
-    let mut prev = place(steps, 0.0).0;
+    let mut prev = motion.place(0.0).0;
     for i in 1..=512 {
-        let ri = place(steps, i as f64 / 512.0).0;
+        let ri = motion.place(i as f64 / 512.0).0;
         turn += nalgebra::Rotation3::from_matrix_unchecked(prev.transpose() * ri).angle();
         prev = ri;
     }
@@ -1149,7 +1187,7 @@ pub fn torus(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Resu
     // (the circles k ± rN there, where the sheets meet it, tangent), so that the sheets' edges
     // are its pieces' edges; the pieces the motion covers are judged so.
     let torus_at = |t: f64| -> super::surface::Surface {
-        let (rm, dm) = place(steps, t);
+        let (rm, dm) = motion.place(t);
         super::surface::Surface::Torus {
             f: Frame {
                 o: P3::from(rm * tube.c.coords + dm),
@@ -1165,10 +1203,28 @@ pub fn torus(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Resu
     // θ of the lead join (N's angle in the tube's section) at instant t and ψ; the trail join
     // is half a turn on.
     let theta_join = |t: f64, psi: f64| -> f64 {
-        let j = jet(steps, t);
+        let j = motion.jet(t);
         let sp = tube.sheet_pt(&j, psi);
         tube.theta_n(&j, &sp, psi).0
     };
+    // (The halves round the tube begun where the joins keep clearest of the quarters' corners:
+    // a join through a corner is a cut of no length there.)
+    let v_off = (0..64)
+        .map(|j| PI * j as f64 / 64.0)
+        .max_by(|a, b| {
+            let clear = |c: f64| {
+                [0.0, 1.0]
+                    .iter()
+                    .flat_map(|&t| (0..4).map(move |q| (t, TAU * q as f64 / 4.0)))
+                    .map(|(t, psi)| {
+                        let d = wrap(theta_join(t, psi) - c, 0.0, PI);
+                        d.min(PI - d)
+                    })
+                    .fold(f64::INFINITY, f64::min)
+            };
+            clear(*a).total_cmp(&clear(*b))
+        })
+        .unwrap_or(0.0);
     // (Each quarter's cuts on its own: they share nothing.)
     let quarters: Vec<(usize, f64, usize, usize)> = [(START, 0.0), (END, 1.0)]
         .into_iter()
@@ -1183,7 +1239,7 @@ pub fn torus(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Resu
             let mut out: Vec<(Body, Patch, bool)> = Vec::new();
             {
                 let (u0, u1) = (TAU * q as f64 / 4.0, TAU * (q + 1) as f64 / 4.0);
-                let (v0, v1) = (PI * h as f64, PI * (h + 1) as f64);
+                let (v0, v1) = (v_off + PI * h as f64, v_off + PI * (h + 1) as f64);
                 let quarter =
                     match super::face_build::face_from_surface(surf, Some(((u0, u1), (v0, v1)))) {
                         Ok(b) => b,
@@ -1215,7 +1271,7 @@ pub fn torus(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Resu
                         let v = theta_join(t_end, psi) + half;
                         v + ((th[i] - v) / TAU).round() * TAU + k * TAU
                     };
-                    for k in [-1.0, 0.0, 1.0] {
+                    for k in [-2.0, -1.0, 0.0, 1.0, 2.0] {
                         // Where θ_J + k·2π runs within [v0, v1]: stretches between crossings
                         // of the sides, found by bisection on it.
                         let inside = |v: f64| (v0..=v1).contains(&v);
@@ -1373,7 +1429,7 @@ pub fn torus(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Resu
                             let th = theta_join(t_end, psi);
                             // (v · n on the torus there, which the join should make zero, and
                             // a little either side of it.)
-                            let j = jet(steps, t_end);
+                            let j = motion.jet(t_end);
                             let vn = |th: f64| {
                                 let (_, _, tt) = tube.torus_pt(&j, psi, th);
                                 let (p, _, _) = tube.torus_pt(&j, psi, th);
@@ -1875,7 +1931,7 @@ pub fn torus(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Resu
             a: w.x,
             psi: w.y,
         });
-        let (rm, dm) = place(steps, kp.own);
+        let (rm, dm) = motion.place(kp.own);
         let core = rm * tube.k(tube.psi_of(chart, w)) + dm;
         let face = &mut sheet.faces[0];
         let (_, su, sv) = face.surf.d1(w.x, w.y);
@@ -2275,6 +2331,28 @@ impl Faces<'_> {
                     }
                     first.get_or_insert((i, uv));
                 }
+            }
+            if first.is_none() && std::env::var_os("CADRS_TUBE_AT").is_some() {
+                let rows: Vec<String> = (self.sheets..self.patches.len())
+                    .filter(|&i| self.patches[i].0 == chart)
+                    .map(|i| {
+                        let p = self.patches[i];
+                        let uv = self.torus_uv(i, x);
+                        let boxed = uv.x >= p.1 - 1e-9
+                            && uv.x <= p.2 + 1e-9
+                            && uv.y >= p.3 - 1e-9
+                            && uv.y <= p.4 + 1e-9;
+                        format!(
+                            "{i}: box {} bare {} (the point {}) holds {}",
+                            boxed,
+                            self.bare[i - self.sheets],
+                            self.tube.bare(p.0, x),
+                            (self.holds[i - self.sheets])(uv)
+                        )
+                    })
+                    .filter(|r| r.contains("box true"))
+                    .collect();
+                eprintln!("  no piece of torus {chart} holds {x:?} (instant {tau}): {rows:?}");
             }
         } else {
             let t = self.tube.foot(tau, x);
