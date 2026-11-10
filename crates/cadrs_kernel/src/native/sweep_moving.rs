@@ -2687,9 +2687,23 @@ pub(crate) type Whole<'a> = dyn Fn(&Surface) -> bool + 'a;
 /// `tol` one, an edge with another's vertex lying on it (within `near`) split there, and the
 /// two edges between the same vertices that lie on each other (within `near`) one, each face
 /// keeping its own p-curve.
-fn assemble(faces: &[Body], near: f64, tol: f64, whole: Option<(&Whole, f64)>) -> Result<Body> {
+fn assemble(
+    faces: &[Body],
+    near: f64,
+    tol: f64,
+    whole: Option<(&Whole, f64)>,
+) -> Result<(Body, Option<f64>)> {
     // (An edge lies on another, or a vertex on an edge, within the faces' own looseness.)
     let near = near.max(tol);
+    let clock = web_time::Instant::now();
+    let lap = |what: &str| {
+        if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+            eprintln!(
+                "  joining: {what} by {:.0} ms",
+                clock.elapsed().as_secs_f64() * 1e3
+            );
+        }
+    };
     let mut b = Body::default();
     for f in faces {
         b.append(f);
@@ -2766,6 +2780,7 @@ fn assemble(faces: &[Body], near: f64, tol: f64, whole: Option<(&Whole, f64)>) -
             split_edge(&mut b, e, t, w);
         }
     }
+    lap("vertices and T-junctions");
     // Edges.
     let ef = b.edge_faces();
     let mut by_ends: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
@@ -2861,6 +2876,7 @@ fn assemble(faces: &[Body], near: f64, tol: f64, whole: Option<(&Whole, f64)>) -
             );
         }
     }
+    lap("edges");
     // Faces cut apart only to be trimmed made whole again, if the body is as sound for it
     // (before its shells are made out, which is the dear part, and needn't be done twice).
     if let Some((whole, searched)) = whole {
@@ -2868,16 +2884,38 @@ fn assemble(faces: &[Body], near: f64, tol: f64, whole: Option<(&Whole, f64)>) -
         let from: Vec<Vec<(usize, usize)>> =
             (0..merged.faces.len()).map(|i| vec![(0, i)]).collect();
         let can: Vec<bool> = merged.faces.iter().map(|f| whole(&f.surf)).collect();
-        super::unify::unify_faces(&mut merged, from, &|f, g| can[f] && can[g]);
-        let before = super::mass::faces_volume(&b);
+        let from = super::unify::unify_faces(&mut merged, from, &|f, g| can[f] && can[g]);
+        lap("pieces made whole");
+        // (What each face adds to the volume, integrated once: a face left as it was adds
+        // what it did.)
+        let shift = b.bbox().center().coords;
+        let terms = super::mass::faces_volume_terms(&b, &shift);
+        let before: f64 = terms.iter().sum();
+        lap("volume before");
+        let after: Vec<f64> = merged
+            .faces
+            .iter()
+            .zip(&from)
+            .map(|(f, origin)| match origin.as_slice() {
+                [(_, i)] => terms[*i],
+                _ => super::mass::face_integrals_of::<false>(&merged, f, &shift)[4],
+            })
+            .collect();
+        let volume: f64 = after.iter().sum();
         let sound = merged.faces.len() < b.faces.len()
-            && (super::mass::faces_volume(&merged) - before).abs() <= 1e-7 * before.abs()
-            && super::boolean::assemble_shells(&mut merged).is_ok()
+            && (volume - before).abs() <= 1e-7 * before.abs()
             && {
+                lap("volume after");
+                super::boolean::assemble_shells_with(&mut merged, Some(&after)).is_ok()
+            }
+            && {
+                lap("shells");
                 // (Its edges' tolerances fitted as the caller will fit them.)
                 merged.fit_tolerances_searched(searched);
+                lap("tolerances");
                 merged.check().is_empty()
             };
+        lap("checked");
         if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
             eprintln!(
                 "moving sweep: {} faces, {} with the pieces of one surface made whole ({})",
@@ -2887,11 +2925,13 @@ fn assemble(faces: &[Body], near: f64, tol: f64, whole: Option<(&Whole, f64)>) -
             );
         }
         if sound {
-            return Ok(merged);
+            return Ok((merged, Some(volume)));
         }
+        super::boolean::assemble_shells_with(&mut b, Some(&terms))?;
+        return Ok((b, Some(before)));
     }
     super::boolean::assemble_shells(&mut b)?;
-    Ok(b)
+    Ok((b, None))
 }
 
 /// A stretch's curves: in space, and on each of its two faces (z = 0), over [0, its length].
@@ -3975,7 +4015,7 @@ pub(crate) fn boundary_of_some(
     // (wider only where faces meet nearly touching, and the curve between them is ill-defined).
     // (Vertices merged within three times the cutter's tolerance for an end on an edge: two
     // faces place a shared vertex each at its own edge's point.)
-    let mut solid = assemble(
+    let (mut solid, known) = assemble(
         &keep,
         // (Curves given whole put their ends, and so the pieces' corners, where they are to
         // far within what makes two of them one vertex.)
@@ -3995,7 +4035,10 @@ pub(crate) fn boundary_of_some(
             t_tol.elapsed().as_secs_f64() * 1e3
         );
     }
-    let volume = super::mass::body_volume(&solid);
+    let volume = match known {
+        Some(v) if solid.is_solid() => v,
+        _ => super::mass::body_volume(&solid),
+    };
     if debug && !volume.is_finite() {
         for (vi, v) in solid.verts.iter().enumerate() {
             if !v.p.coords.iter().all(|c| c.is_finite()) {

@@ -4742,6 +4742,13 @@ pub fn split_nonmanifold(b: &mut Body) {
 
 /// Groups faces into shells by shared edges and shells into solids (outer shells and voids).
 pub fn assemble_shells(b: &mut Body) -> Result<()> {
+    assemble_shells_with(b, None)
+}
+
+/// [`assemble_shells`], with what each face adds to the volume where the caller has it already
+/// ([`super::mass::faces_volume_terms`]): a shell's volume, which tells an outer shell from a
+/// void, is then their sum and not integrated again.
+pub(crate) fn assemble_shells_with(b: &mut Body, terms: Option<&[f64]>) -> Result<()> {
     split_nonmanifold(b);
     let ef = b.edge_faces();
     let nf = b.faces.len();
@@ -4828,6 +4835,9 @@ pub fn assemble_shells(b: &mut Body) -> Result<()> {
                     }
                 }
                 let by_volume = || {
+                    if let Some(terms) = terms {
+                        return fs.iter().map(|&f| terms[f]).sum::<f64>() >= 0.0;
+                    }
                     let shift = b.bbox().center().coords;
                     fs.iter()
                         .map(|&f| super::mass::face_integrals(b, &b.faces[f], &shift)[4])

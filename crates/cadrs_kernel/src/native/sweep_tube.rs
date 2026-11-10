@@ -2699,6 +2699,7 @@ fn tori_cross(
     let fd = Field {
         cover: &far,
         near: &near,
+        margin: None,
     };
     for q in 0..4 {
         for h in 0..2 {
@@ -3084,9 +3085,25 @@ fn trace(
                 }
                 _ => tube.cover_near_in(&sh.patch, w, tc),
             };
+            // (No margin past the patch's own sides: its chart runs on there, beyond the
+            // motion's ends or into the next patch, and a corner sought there is none of
+            // this patch's.)
+            let within = |w: P2| {
+                (a0 - 1e-9..=a1 + 1e-9).contains(&w.x) && (p0 - 1e-9..=p1 + 1e-9).contains(&w.y)
+            };
+            let margin = |w: P2, tau: f64| match other {
+                _ if !within(w) => (f64::NAN, tau),
+                Some(o) if tau > OTHER - 0.5 => {
+                    let l = o.prep.tube.least_from(&point(w), tau - OTHER);
+                    let d = o.prep.tube.delta();
+                    ((l.1 + d) / d, OTHER + l.0)
+                }
+                _ => tube.margin_in(&sh.patch, w, tau),
+            };
             let fd = Field {
                 cover: &cover,
                 near: &near,
+                margin: Some(&margin),
             };
             // (The curves' nodes on this patch: each with its place here, and the other
             // solid's instant there.)
@@ -3102,12 +3119,14 @@ fn trace(
             // (The patch's nodes as its own solid read them, and the other's hold of those it
             // keeps.)
             let (mu, mv) = sh.grid;
+            let t_nodes = web_time::Instant::now();
             let nodes: Option<Vec<(bool, f64)>> = other.map(|_| {
                 (0..(mu + 1) * (mv + 1))
                     .into_par_iter()
                     .map(|n| beside(sh.nodes[n], sh.at(n / (mv + 1), n % (mv + 1))))
                     .collect()
             });
+            let t_curves = web_time::Instant::now();
             let chains = cover_curves(
                 &fd,
                 bx,
@@ -3120,6 +3139,16 @@ fn trace(
                 &through,
             )
             .unwrap_or_default();
+            if std::env::var_os("CADRS_TUBE_TIMES").is_some() {
+                eprintln!(
+                    "  trace: sheet {i} grid {mu}x{mv}: nodes {:.0} ms, curves {:.0} ms ({} chains, {} points)",
+                    (t_curves - t_nodes).as_secs_f64() * 1e3,
+                    t_curves.elapsed().as_secs_f64() * 1e3,
+                    chains.len(),
+                    chains.iter().map(|c| c.pts.len()).sum::<usize>()
+                );
+            }
+            let t_runs = web_time::Instant::now();
             // A curve that runs into a fold where the fold meets an end of the motion ends at
             // that corner: the sheet, the fold's pipe and the end's torus all touch there, a
             // millionth of a millionth apart for a good way round, and what the curve does in
@@ -3260,26 +3289,12 @@ fn trace(
                 };
                 (kp.p, w, uvb)
             };
-            // (No margin past the patch's own sides: its chart runs on there, beyond the
-            // motion's ends or into the next patch, and a corner sought there is none of
-            // this patch's.)
-            let within = |w: P2| {
-                (a0 - 1e-9..=a1 + 1e-9).contains(&w.x) && (p0 - 1e-9..=p1 + 1e-9).contains(&w.y)
-            };
-            let margin = |w: P2, tau: f64| match other {
-                _ if !within(w) => (f64::NAN, tau),
-                Some(o) if tau > OTHER - 0.5 => {
-                    let l = o.prep.tube.least_from(&point(w), tau - OTHER);
-                    let d = o.prep.tube.delta();
-                    ((l.1 + d) / d, OTHER + l.0)
-                }
-                _ => tube.margin_in(&sh.patch, w, tau),
-            };
             let onto = |w: P2, d: V2, tau: f64, full: bool| {
                 if full {
                     onto_boundary(&|w, _| cover(w), w, d, tau, bx)
                 } else {
-                    onto_boundary(&near, w, d, tau, bx)
+                    onto_by_margin(&margin, &near, w, d, tau, bx)
+                        .or_else(|| onto_boundary(&near, w, d, tau, bx))
                 }
             };
             let mut out = Vec::new();
@@ -3302,9 +3317,26 @@ fn trace(
                     &chain, &pair, &place, &onto, &margin, jump, &places, &mut out,
                 );
             }
+            if std::env::var_os("CADRS_TUBE_TIMES").is_some() {
+                eprintln!(
+                    "  trace: sheet {i}: runs {:.0} ms ({} curves)",
+                    t_runs.elapsed().as_secs_f64() * 1e3,
+                    out.len()
+                );
+            }
             out
         })
         .collect();
+    if std::env::var_os("CADRS_TUBE_TIMES").is_some() {
+        let n: Vec<usize> = BY_MARGIN
+            .iter()
+            .map(|c| c.swap(0, std::sync::atomic::Ordering::Relaxed))
+            .collect();
+        eprintln!(
+            "  trace: by the margin, {} of {} crossings and {} of {} places onto the curve",
+            n[1], n[0], n[3], n[2]
+        );
+    }
     traced.into_iter().flatten().collect()
 }
 
@@ -3900,6 +3932,10 @@ impl Faces<'_> {
 pub(super) struct Field<'a> {
     pub(super) cover: &'a (dyn Fn(P2) -> (bool, f64) + Sync),
     pub(super) near: &'a (dyn Fn(P2, f64) -> (bool, f64) + Sync),
+    /// How far a place is from changing membership about an instant, signed (and that instant
+    /// as it moves), where the caller has it: nothing where membership changes, of one sign
+    /// either side, smooth between. With it a change is closed in on by its slope, not halved.
+    pub(super) margin: Option<&'a (dyn Fn(P2, f64) -> (f64, f64) + Sync)>,
 }
 
 /// A curve between kept and covered: its points in the face's parameters, each with the
@@ -3920,7 +3956,73 @@ fn crossing(fd: &Field, kept: P2, cov: P2, mut tau: f64) -> (P2, f64) {
     for round in 0..ROUNDS {
         // (The last round in full throughout: whatever it finds stands.)
         let last = round + 1 == ROUNDS;
-        for it in 0..48 {
+        let mut halvings = 0..48;
+        // By the margin, once the first reads in full have closed in on the instant: false
+        // position between the two sides (Illinois), then the place it comes to checked a hair
+        // either side by the membership itself. Anything amiss, and the halving goes on as
+        // it would have.
+        if let (Some(margin), false) = (fd.margin, last) {
+            BY_MARGIN[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            for it in halvings.by_ref().take(6) {
+                let _ = it;
+                let mid = 0.5 * (lo + hi);
+                let (c, t) = (fd.cover)(at(mid));
+                if c {
+                    hi = mid;
+                    tau = t;
+                } else {
+                    lo = mid;
+                }
+            }
+            let (mut a, mut b) = (lo, hi);
+            let (mut fa, mut fb) = (margin(at(a), tau).0, margin(at(b), tau).0);
+            let mut found = None;
+            if fa.is_finite() && fb.is_finite() && fa * fb < 0.0 {
+                // (Which end the last step kept: kept twice, it counts half.)
+                let mut kept_end = 0;
+                for _ in 0..40 {
+                    if b - a < 1e-13 {
+                        found = Some(0.5 * (a + b));
+                        break;
+                    }
+                    let x = (a * fb - b * fa) / (fb - fa);
+                    let x = if x > a && x < b { x } else { 0.5 * (a + b) };
+                    let fx = margin(at(x), tau).0;
+                    if !fx.is_finite() {
+                        break;
+                    }
+                    if fx == 0.0 {
+                        found = Some(x);
+                        break;
+                    }
+                    if fx * fa > 0.0 {
+                        (a, fa) = (x, fx);
+                        if kept_end == 2 {
+                            fb *= 0.5;
+                        }
+                        kept_end = 2;
+                    } else {
+                        (b, fb) = (x, fx);
+                        if kept_end == 1 {
+                            fa *= 0.5;
+                        }
+                        kept_end = 1;
+                    }
+                }
+            }
+            if let Some(x) = found {
+                let e = 2e-13;
+                let (lo2, hi2) = ((x - e).max(lo), (x + e).min(hi));
+                let (c_lo, _) = (fd.near)(at(lo2), tau);
+                let (c_hi, t_hi) = (fd.near)(at(hi2), tau);
+                if !c_lo && c_hi {
+                    (lo, hi, tau) = (lo2, hi2, t_hi);
+                    halvings = 0..0;
+                    BY_MARGIN[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+        }
+        for it in halvings {
             let mid = 0.5 * (lo + hi);
             let (c, t) = if it < 6 || last {
                 (fd.cover)(at(mid))
@@ -3949,6 +4051,72 @@ fn crossing(fd: &Field, kept: P2, cov: P2, mut tau: f64) -> (P2, f64) {
         tau = t;
     }
     (at(0.5 * (lo + hi)), tau)
+}
+
+/// How often a change of membership was closed in on by its margin, and how often that stood
+/// (`CADRS_TUBE_TIMES` prints them).
+static BY_MARGIN: [std::sync::atomic::AtomicUsize; 4] = [
+    std::sync::atomic::AtomicUsize::new(0),
+    std::sync::atomic::AtomicUsize::new(0),
+    std::sync::atomic::AtomicUsize::new(0),
+    std::sync::atomic::AtomicUsize::new(0),
+];
+
+/// [`onto_boundary`] by the margin: the secant of it along the normal from `w`, and the place
+/// it comes to checked a hair either side by `test` (membership changes between them). None
+/// where the margin isn't to be had, the secant doesn't settle within the reach, or the check
+/// fails: the caller then searches as it would have.
+pub(super) fn onto_by_margin(
+    margin: &(dyn Fn(P2, f64) -> (f64, f64) + Sync),
+    test: &(dyn Fn(P2, f64) -> (bool, f64) + Sync),
+    w: P2,
+    d: V2,
+    tau: f64,
+    ((u0, u1), (v0, v1)): ((f64, f64), (f64, f64)),
+) -> Option<(P2, f64)> {
+    use std::sync::atomic::Ordering::Relaxed;
+    BY_MARGIN[2].fetch_add(1, Relaxed);
+    let n = V2::new(-d.y, d.x).try_normalize(1e-300)?;
+    let at = |s: f64| P2::new((w.x + n.x * s).clamp(u0, u1), (w.y + n.y * s).clamp(v0, v1));
+    let (c0, t0) = test(w, tau);
+    let tc = if c0 { t0 } else { tau };
+    let reach = d.norm().max(0.05);
+    let f = |s: f64| margin(at(s), tc).0;
+    let (mut a, mut fa) = (0.0, f(0.0));
+    if !fa.is_finite() {
+        return None;
+    }
+    let mut b = (1e-3 * d.norm()).clamp(1e-9, reach);
+    let mut fb = f(b);
+    let mut settled = fa == 0.0;
+    for _ in 0..16 {
+        if settled {
+            break;
+        }
+        if !fb.is_finite() || fb == fa {
+            return None;
+        }
+        let x = b - fb * (b - a) / (fb - fa);
+        if !x.is_finite() || x.abs() > reach {
+            return None;
+        }
+        (a, fa) = (b, fb);
+        b = x;
+        fb = f(b);
+        settled = (b - a).abs() < 1e-13 || fb == 0.0;
+    }
+    if !settled {
+        return None;
+    }
+    let s = if fa == 0.0 { a } else { b };
+    let e = 4e-13;
+    let (c_lo, t_lo) = test(at(s - e), tc);
+    let (c_hi, t_hi) = test(at(s + e), tc);
+    if c_lo == c_hi {
+        return None;
+    }
+    BY_MARGIN[3].fetch_add(1, Relaxed);
+    Some((at(s), if c_lo { t_lo } else { t_hi }))
 }
 
 /// The place where membership changes nearest `w` along the normal to the direction `d` (in
@@ -4221,7 +4389,10 @@ pub(super) fn cover_curves(
                     let (r, t) = if (tp - tq).abs() > jump {
                         onto_boundary(&full, mid, d, tp, bx)
                     } else {
-                        onto_boundary(fd.near, mid, d, 0.5 * (tp + tq), bx)
+                        let tm = 0.5 * (tp + tq);
+                        fd.margin
+                            .and_then(|m| onto_by_margin(m, fd.near, mid, d, tm, bx))
+                            .or_else(|| onto_boundary(fd.near, mid, d, tm, bx))
                     }?;
                     if (r - mid).norm() >= d.norm() {
                         return None;

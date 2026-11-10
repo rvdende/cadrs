@@ -1112,19 +1112,21 @@ pub(crate) fn faces_volume(body: &Body) -> f64 {
     } else {
         bb.center().coords
     };
+    faces_volume_terms(body, &shift).iter().sum()
+}
+
+/// What each face of a body adds to the volume its faces bound, about `shift` (their sum is
+/// the volume, for closed faces facing out; a closed shell's own faces' sum is its own, whatever
+/// the shift).
+pub(crate) fn faces_volume_terms(body: &Body, shift: &V3) -> Vec<f64> {
     let faces: Vec<usize> = (0..body.faces.len()).collect();
-    let one = |&i: &usize| face_integrals_of::<false>(body, &body.faces[i], &shift)[4];
+    let one = |&i: &usize| face_integrals_of::<false>(body, &body.faces[i], shift)[4];
     let heavy = body.faces.iter().any(costly);
-    let qs: Vec<f64> = if super::par::threads_for(faces.len(), heavy) {
+    if super::par::threads_for(faces.len(), heavy) {
         faces.par_iter().map(one).collect()
     } else {
         faces.iter().map(one).collect()
-    };
-    let mut v = 0.0;
-    for q in qs {
-        v += q;
     }
-    v
 }
 
 /// Mass properties of a body (solids; a body without solids is a sheet: area only).
