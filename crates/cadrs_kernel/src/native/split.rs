@@ -425,10 +425,8 @@ pub fn split_face(surf: &Surface, flip: bool, boundary: &[Vec<Arc>], cuts: &[Arc
         }
     }
     // Directions closer than this (radians) are told apart further along (the arcs tangent,
-    // their first steps within the p-curves' own error of each other; a curve leaving another
-    // tangent to it parts from it as the square of the distance, so its first step tells
-    // little).
-    const TANGENT: f64 = 5e-3;
+    // their first steps within the p-curves' own error of each other).
+    const TANGENT: f64 = 1e-4;
     let next = |k: usize| -> Option<usize> {
         let n = ends[k][1];
         let din = arr[k];
@@ -439,11 +437,9 @@ pub fn split_face(surf: &Surface, flip: bool, boundary: &[Vec<Arc>], cuts: &[Arc
             let mut ang = cross2(&din, &d).atan2(din.dot(&d));
             let d2 = dep2[c];
             let ang2 = cross2(&din, &d2).atan2(din.dot(&d2));
-            // Leaving back along the way in (a cut tangent to the arc it meets, their first
-            // steps apart only by how they curve): the side it turns to is the one further
-            // along.
-            const HAIRPIN: f64 = 2e-2;
-            if ang.abs() > PI - HAIRPIN {
+            // Leaving back along the way in (a cut tangent to the arc it meets): the side it
+            // turns to is the one further along.
+            if ang.abs() > PI - TANGENT {
                 ang = PI.copysign(ang2);
             }
             let is_twin = arcs[c].edge == arcs[k].edge

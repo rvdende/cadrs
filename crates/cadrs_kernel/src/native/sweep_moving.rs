@@ -285,12 +285,6 @@ impl<'a> Oracle<'a> {
         }
     }
 
-    /// The oracle, knowing which candidate face holds a point at an instant.
-    pub fn with_locate(mut self, locate: Locate<'a>) -> Oracle<'a> {
-        self.locate = Some(locate);
-        self
-    }
-
     fn at(&self, (r, d): &(nalgebra::Rotation3<f64>, V3), x: &P3) -> f64 {
         (self.measure)(&(r.transpose() * (x.coords - d)))
     }
@@ -1609,6 +1603,9 @@ fn triple_point(s: [&Surface; 3], start: [P2; 3], tol: f64) -> Option<[P2; 3]> {
     None
 }
 
+/// How near two ends of curves given whole are one vertex, in the measure of the size.
+const GIVEN_VERTEX: f64 = 1e-7;
+
 /// A stretch of the network: where faces `a` and `b` meet between two of its vertices, the
 /// points traced along it (with their (u, v) on each face).
 struct Stretch {
@@ -1708,12 +1705,18 @@ impl Network {
 /// between a sample of a face outside and one inside, onto the face that covers it there, each
 /// curve followed across the faces; where one goes inside (a third face covering it), the two
 /// curves that meet it there followed from that point.
-fn network(tr: &Tracer, mixed: &[usize], m: usize, given: Vec<Given>) -> Network {
+fn network(tr: &Tracer, mixed: &[usize], m: usize, given: Vec<Given>, complete: bool) -> Network {
     let size = tr.size;
     // (Curves' ends within this of each other are one vertex: walks from different seeds end
     // at one place only to about the step they were bisected in, and a curve's end where it
     // goes inside is placed by the depth, which changes slowly where it grazes the third face.)
-    let vtol = 1e-5 * size;
+    // (Curves given whole end where their makers put them, each end found as finely as the
+    // curve: only ends that are one point come within a ten-millionth of the size.)
+    let vtol = if complete {
+        GIVEN_VERTEX * size
+    } else {
+        1e-5 * size
+    };
     let mut net = Network::default();
     // The curves known by construction first: seeds on them are passed over, and no curve of
     // two faces given one is traced (the given one is the whole of it).
@@ -1721,10 +1724,83 @@ fn network(tr: &Tracer, mixed: &[usize], m: usize, given: Vec<Given>) -> Network
     // (Each given curve cut where it goes inside the solid, under a third face: the parts
     // inside left out, and each end there a triple point, as a traced curve's is.)
     let mut given_ends: Vec<(usize, usize)> = Vec::new();
-    for g in given {
-        if g.pts.len() < 2 {
-            continue;
+    let mut given = given;
+    given.retain(|g| g.pts.len() >= 2);
+    if complete {
+        // The whole boundary's curves, each the part of it on the boundary: as they are. Two
+        // ends are one vertex where they are one place on a face they share (each end is
+        // placed exactly on its two faces; where a face folds, places far apart on it are a
+        // hair apart in space, and are not one).
+        let extent: Vec<f64> = tr
+            .cands
+            .iter()
+            .map(|c| {
+                let (lo, hi) = grid_box(c);
+                (hi - lo).norm()
+            })
+            .collect();
+        let end = |g: &Given, e: usize| {
+            if e == 0 {
+                g.pts[0]
+            } else {
+                g.pts[g.pts.len() - 1]
+            }
+        };
+        let mut root: Vec<usize> = (0..2 * given.len()).collect();
+        fn find(root: &mut [usize], mut i: usize) -> usize {
+            while root[i] != i {
+                root[i] = root[root[i]];
+                i = root[i];
+            }
+            i
         }
+        // (An end's places: (end, face, (u, v), point).)
+        let mut places: Vec<(usize, usize, P2, P3)> = Vec::new();
+        for (gi, g) in given.iter().enumerate() {
+            for e in 0..2 {
+                let p = end(g, e);
+                places.push((2 * gi + e, g.a, p.1, p.0));
+                places.push((2 * gi + e, g.b, p.2, p.0));
+            }
+        }
+        places.sort_by_key(|p| p.1);
+        for (i, p) in places.iter().enumerate() {
+            for q in places[i + 1..].iter().take_while(|q| q.1 == p.1) {
+                if (p.2 - q.2).norm() <= 1e-7 * extent[p.1] && (p.3 - q.3).norm() <= 1e-4 * size {
+                    let (a, b) = (find(&mut root, p.0), find(&mut root, q.0));
+                    root[a.max(b)] = a.min(b);
+                }
+            }
+        }
+        let mut vertex_of: HashMap<usize, usize> = HashMap::new();
+        for (gi, g) in std::mem::take(&mut given).into_iter().enumerate() {
+            let mut v = [0; 2];
+            for (e, slot) in v.iter_mut().enumerate() {
+                let r = find(&mut root, 2 * gi + e);
+                *slot = *vertex_of.entry(r).or_insert_with(|| {
+                    net.verts.push(end(&g, e).0);
+                    net.verts.len() - 1
+                });
+            }
+            let mut pts = g.pts;
+            let n = pts.len();
+            pts[0].0 = net.verts[v[0]];
+            pts[n - 1].0 = net.verts[v[1]];
+            // (Back where it started over no length: nothing.)
+            let len: f64 = pts.windows(2).map(|w| (w[1].0 - w[0].0).norm()).sum();
+            if v[0] == v[1] && len < 1e-9 * size {
+                continue;
+            }
+            net.stretches.push(Stretch {
+                a: g.a,
+                b: g.b,
+                pts,
+                v,
+                given: true,
+            });
+        }
+    }
+    for g in given {
         let on: Vec<bool> = g
             .pts
             .iter()
@@ -1989,7 +2065,7 @@ fn network(tr: &Tracer, mixed: &[usize], m: usize, given: Vec<Given>) -> Network
         end_inside(&mut net, &mut queue, si, k);
     }
     drain!();
-    for &i in mixed {
+    for &i in mixed.iter().filter(|_| !complete) {
         let c = &tr.cands[i];
         let samples = face_grid(c, m);
         let out_at = |uv: P2| {
@@ -2230,8 +2306,8 @@ fn network(tr: &Tracer, mixed: &[usize], m: usize, given: Vec<Given>) -> Network
         }
     }
     // A curve ending on another (at a triple point on a given curve, say) splits it there,
-    // so that the two meet at a vertex.
-    let mut vi = 0;
+    // so that the two meet at a vertex. (Curves given whole end where they meet.)
+    let mut vi = if complete { net.verts.len() } else { 0 };
     while vi < net.verts.len() {
         let p = net.verts[vi];
         let mut split: Option<(usize, usize)> = None;
@@ -2239,11 +2315,10 @@ fn network(tr: &Tracer, mixed: &[usize], m: usize, given: Vec<Given>) -> Network
             if st.v.contains(&vi) || st.pts.len() < 3 {
                 continue;
             }
-            for w in 1..st.pts.len() - 1 {
-                if (st.pts[w].0 - p).norm() <= vtol {
-                    split = Some((si, w));
-                    break 'find;
-                }
+            let n = st.pts.len();
+            if let Some(w) = (1..n - 1).find(|&w| (st.pts[w].0 - p).norm() <= vtol) {
+                split = Some((si, w));
+                break 'find;
             }
             for w in 0..st.pts.len() - 1 {
                 let (a, b) = (st.pts[w].0, st.pts[w + 1].0);
@@ -2310,7 +2385,7 @@ fn network(tr: &Tracer, mixed: &[usize], m: usize, given: Vec<Given>) -> Network
     // faces graze): the later copy dropped.
     let same_tol = 1e-5 * size;
     let mut drop = vec![false; net.stretches.len()];
-    for i in 0..net.stretches.len() {
+    for i in (0..net.stretches.len()).filter(|_| !complete) {
         for j in 0..i {
             if drop[j] {
                 continue;
@@ -2363,7 +2438,7 @@ fn network(tr: &Tracer, mixed: &[usize], m: usize, given: Vec<Given>) -> Network
     // A curve's end a hair from a corner of one of its faces (where an event brings corners
     // together) put on the corner, so that every face meeting there ends it at one vertex.
     let snap = 1e-6 * size;
-    for vi in 0..net.verts.len() {
+    for vi in (0..net.verts.len()).filter(|_| !complete) {
         let p = net.verts[vi];
         let mut best: Option<(f64, P3)> = None;
         for st in net.stretches.iter().filter(|st| st.v.contains(&vi)) {
@@ -2797,6 +2872,8 @@ fn split_by(
     net: &Network,
     curves: &[StretchCurves],
     size: f64,
+    on: f64,
+    exact: Option<f64>,
 ) -> std::result::Result<Vec<Body>, String> {
     let nb = c.body.verts.len();
     // Vertex ids: the body's, then the network's (offset by nb), then further ids for the
@@ -2820,10 +2897,16 @@ fn split_by(
                     st.pts[st.pts.len() - 1]
                 };
                 let uv = if k == 0 { pt.1 } else { pt.2 };
-                let id = match places
-                    .iter()
-                    .find(|(w, wuv, _)| *w == gv && metric(c, *wuv, uv) <= 1e-5 * size)
-                {
+                let id = match places.iter().find(|(w, wuv, _)| {
+                    *w == gv
+                        && match exact {
+                            Some(part) => {
+                                let (lo, hi) = grid_box(c);
+                                (*wuv - uv).norm() <= part * (hi - lo).norm()
+                            }
+                            None => metric(c, *wuv, uv) <= 1e-5 * size,
+                        }
+                }) {
                     Some(&(_, _, id)) => id,
                     None => {
                         let id = if places.iter().any(|(w, ..)| *w == gv) {
@@ -2850,19 +2933,25 @@ fn split_by(
             });
         }
     }
-    cut_face(&c.body, fi, cuts, &pos, size)
+    cut_face(&c.body, fi, cuts, &pos, size, on, exact)
 }
 
 /// Face `fi` (the one face of `b`) split along `cuts` (whose end ids, at least the body's vertex
 /// count, are placed by `pos`): its pieces, each a body of one face. A cut's end on the face's
 /// boundary (in space and in (u, v) both: where the face crosses itself, a point of its edge is
-/// also inside it) is the boundary's vertex there, or splits its edge.
+/// also inside it) is the boundary's vertex there, or splits its edge; `on`: how near the
+/// boundary in space is on it. With `exact`, the cuts' ends are placed on the face exactly, and
+/// one is on the boundary where its (u, v) is, within that fraction of the face's extent (where
+/// the face folds, points a hair apart in space are far apart on it); any of the ends at a
+/// vertex being there puts the vertex there.
 pub(crate) fn cut_face(
     b: &Body,
     fi: usize,
     cuts: Vec<FaceCut>,
     pos: &HashMap<usize, P3>,
     size: f64,
+    on: f64,
+    exact: Option<f64>,
 ) -> std::result::Result<Vec<Body>, String> {
     use super::split::Arc;
     use super::topo::{Coedge, Face};
@@ -2925,8 +3014,9 @@ pub(crate) fn cut_face(
         ends.push((cut.v[1], last.0, last.1));
     }
     ends.sort_by_key(|e| e.0);
-    ends.dedup_by_key(|e| e.0);
-    let on = 1e-7 * size;
+    if exact.is_none() {
+        ends.dedup_by_key(|e| e.0);
+    }
     let near_uv = 1e-5 * size;
     let uv_of_vertex = |v: usize| -> Option<P2> {
         f.loops[0].iter().find_map(|co| {
@@ -2948,12 +3038,37 @@ pub(crate) fn cut_face(
             Some(P2::new(w.x, w.y))
         })
     };
+    // (How near in (u, v) is on the boundary: by the surface's stretch there, or, the ends
+    // being exact, by the face's extent.)
+    let extent = {
+        let (mut lo, mut hi) = (
+            P2::new(f64::INFINITY, f64::INFINITY),
+            P2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
+        );
+        for co in &f.loops[0] {
+            let e = &b.edges[co.edge];
+            for t in [e.t[0], e.t[1]] {
+                let w = co.pc.point(t);
+                lo = P2::new(lo.x.min(w.x), lo.y.min(w.y));
+                hi = P2::new(hi.x.max(w.x), hi.y.max(w.y));
+            }
+        }
+        (hi - lo).norm()
+    };
+    let there = |uv: P2, w: P2| -> bool {
+        match exact {
+            Some(part) => (uv - w).norm() <= part * extent,
+            None => metric(uv, w) <= near_uv,
+        }
+    };
     let mut alias: HashMap<usize, usize> = HashMap::new();
     let mut splits: HashMap<usize, Vec<(f64, usize)>> = HashMap::new();
     for &(v, p, uv) in &ends {
+        if alias.contains_key(&v) || splits.values().any(|l| l.iter().any(|(_, w)| *w == v)) {
+            continue;
+        }
         if let Some(bv) = (0..nb).find(|&i| {
-            (b.verts[i].p - p).norm() <= on
-                && uv_of_vertex(i).is_some_and(|w| metric(uv, w) <= near_uv)
+            (b.verts[i].p - p).norm() <= on && uv_of_vertex(i).is_some_and(|w| there(uv, w))
         }) {
             alias.insert(v, bv);
             continue;
@@ -2964,13 +3079,15 @@ pub(crate) fn cut_face(
             if e.degenerate {
                 continue;
             }
-            let t = e.curve.closest(&p, e.t[0], e.t[1]);
+            // (The ends exact: the place on the edge nearest in the face's own (u, v).)
+            let t = if exact.is_some() {
+                co.pc.closest(&P3::new(uv.x, uv.y, 0.0), e.t[0], e.t[1])
+            } else {
+                e.curve.closest(&p, e.t[0], e.t[1])
+            };
             let d = (e.curve.point(t) - p).norm();
             let w = co.pc.point(t);
-            if d <= on
-                && metric(uv, P2::new(w.x, w.y)) <= near_uv
-                && best.is_none_or(|(bd, ..)| d < bd)
-            {
+            if d <= on && there(uv, P2::new(w.x, w.y)) && best.is_none_or(|(bd, ..)| d < bd) {
                 best = Some((d, co.edge, t));
             }
         }
@@ -2991,11 +3108,15 @@ pub(crate) fn cut_face(
                         let e = &b.edges[co.edge];
                         let t = e.curve.closest(&p, e.t[0], e.t[1]);
                         let w = co.pc.point(t);
-                        ((e.curve.point(t) - p).norm(), metric(uv, P2::new(w.x, w.y)))
+                        (
+                            (e.curve.point(t) - p).norm(),
+                            metric(uv, P2::new(w.x, w.y)),
+                            (uv - P2::new(w.x, w.y)).norm() / extent,
+                        )
                     })
                     .min_by(|x, y| x.0.total_cmp(&y.0));
                 eprintln!(
-                    "    face {fi}: a cut ends inside it at {uv:?} (nearest edge {nearest:?} in space and (u, v))"
+                    "    face {fi}: a cut ends inside it at {uv:?} (nearest edge {nearest:?} in space, in (u, v) by the surface's stretch, and by the face's extent)"
                 );
             }
         }
@@ -3193,6 +3314,16 @@ fn face_grid(c: &Cand, m: usize) -> Vec<Option<P2>> {
 /// those inside it (or a few interior points where none are).
 fn face_samples(b: &Body, fi: usize, m: usize) -> Vec<(P3, V3)> {
     let f = &b.faces[fi];
+    let sign = if f.sense { 1.0 } else { -1.0 };
+    face_sample_uvs(b, fi, m)
+        .into_iter()
+        .map(|uv| (f.surf.eval(uv.x, uv.y), f.surf.normal(uv.x, uv.y) * sign))
+        .collect()
+}
+
+/// [`face_samples`]' places in the face's (u, v).
+fn face_sample_uvs(b: &Body, fi: usize, m: usize) -> Vec<P2> {
+    let f = &b.faces[fi];
     let polys = super::classify::face_polygons(b, f);
     let (mut lo, mut hi) = (
         P2::new(f64::INFINITY, f64::INFINITY),
@@ -3236,10 +3367,7 @@ fn face_samples(b: &Body, fi: usize, m: usize) -> Vec<(P3, V3)> {
     if uvs.is_empty() {
         uvs = super::boolean::interior_points_of_polys(&polys);
     }
-    let sign = if f.sense { 1.0 } else { -1.0 };
-    uvs.into_iter()
-        .map(|uv| (f.surf.eval(uv.x, uv.y), f.surf.normal(uv.x, uv.y) * sign))
-        .collect()
+    uvs
 }
 
 /// [`crate::Kernel::sweep_solid`] of a convex polyhedron by the motion `place` (see the module
@@ -3380,7 +3508,7 @@ fn swept(sw: &Sweep, size: f64) -> Result<Body> {
             (web_time::Instant::now() - t0).as_secs_f64() * 1e3
         );
     }
-    boundary_of(faces, &oracle, size, least, most, Vec::new())
+    boundary_of(faces, &oracle, size, least, most, Vec::new(), None)
 }
 
 /// The boundary of what a motion fills, from `faces` (sheets of one face each) that close a
@@ -3389,8 +3517,13 @@ fn swept(sw: &Sweep, size: f64) -> Result<Body> {
 /// swept or not), kept whole when it is wholly on the boundary and dropped when wholly inside,
 /// the others cut along the curves the boundary crosses them by and their pieces judged again,
 /// the kept faces joined edge to edge (`given`: curves known by construction, taken before any
-/// are traced). Refused unless that makes one sound solid whose volume is between `least` and
+/// are traced; with `member` they are all of them, each on the boundary all along: none is
+/// traced, and the faces and their pieces are judged by it, at places over them). Refused unless that makes one sound solid whose volume is between `least` and
 /// `most`.
+/// Whether a candidate face's place (the face's index, its (u, v)) is inside the swept solid:
+/// read exactly, where the faces' maker can (a face fitted to a surface it knows).
+pub(crate) type Member<'a> = dyn Fn(usize, P2) -> bool + Sync + 'a;
+
 pub(crate) fn boundary_of(
     faces: Vec<Body>,
     oracle: &Oracle,
@@ -3398,6 +3531,7 @@ pub(crate) fn boundary_of(
     least: f64,
     most: f64,
     given: Vec<Given>,
+    member: Option<&Member>,
 ) -> Result<Body> {
     use rayon::prelude::*;
     let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
@@ -3412,7 +3546,14 @@ pub(crate) fn boundary_of(
     // (A pocket shallower than a millionth of the size is left as it lies: faces dipping
     // inside by less are boundary.)
     let pocket = 1e-6 * size;
-    let judge = |c: &Body, m: usize| -> (usize, usize) {
+    let judge = |i: usize, c: &Body, m: usize| -> (usize, usize) {
+        if let Some(member) = member {
+            let inn = face_sample_uvs(c, 0, m)
+                .into_iter()
+                .filter(|uv| member(i, *uv))
+                .count();
+            return (face_sample_uvs(c, 0, m).len() - inn, inn);
+        }
         let (mut out, mut inn, mut band, mut deepest) = (0, 0, 0, 0.0f64);
         for (p, n) in face_samples(c, 0, m) {
             let d = oracle.depth(&(p + n * eps)).0;
@@ -3437,7 +3578,11 @@ pub(crate) fn boundary_of(
             (out, inn)
         }
     };
-    let classes: Vec<(usize, usize)> = faces.par_iter().map(|c| judge(&c.body, 9)).collect();
+    let classes: Vec<(usize, usize)> = faces
+        .par_iter()
+        .enumerate()
+        .map(|(i, c)| judge(i, &c.body, 9))
+        .collect();
     if debug && let Ok(from) = std::env::var("CADRS_SWEEP_CLASSES") {
         let from: usize = from.parse().unwrap_or(0);
         for (i, c) in classes.iter().enumerate().skip(from) {
@@ -3474,7 +3619,7 @@ pub(crate) fn boundary_of(
         shallow,
         given: &given_pairs,
     };
-    let net = network(&tracer, &mixed, 9, given);
+    let net = network(&tracer, &mixed, 9, given, member.is_some());
     let t_net = web_time::Instant::now();
     if debug && let Ok(which) = std::env::var("CADRS_SWEEP_STRETCHES") {
         let wanted: Vec<usize> = which
@@ -3583,13 +3728,22 @@ pub(crate) fn boundary_of(
                 };
             }
             let mut kept = Vec::new();
-            let pieces = split_by(&faces[i], i, &net, &curves, size)?;
+            // (Curves given whole end on a face's boundary exactly, in its own (u, v).)
+            let (on, exact) = if member.is_some() {
+                (1e-6 * size, Some(1e-7))
+            } else {
+                (1e-7 * size, None)
+            };
+            let pieces = split_by(&faces[i], i, &net, &curves, size, on, exact)?;
+            if pieces.is_empty() {
+                return Err(format!("face {i} came to nothing when cut along its curves"));
+            }
             if debug {
                 let (lo, hi) = grid_box(&faces[i]);
                 let js: Vec<String> = pieces
                     .iter()
                     .map(|p| {
-                        let (o, n) = judge(p, 5);
+                        let (o, n) = judge(i, p, 5);
                         let polys = super::classify::face_polygons(p, &p.faces[0]);
                         let inner = super::boolean::interior_points_of_polys(&polys);
                         format!("{o} out {n} in at {:?}", inner.first())
@@ -3616,7 +3770,7 @@ pub(crate) fn boundary_of(
                 }
             }
             for (g, piece) in pieces.into_iter().enumerate() {
-                match judge(&piece, 5) {
+                match judge(i, &piece, 5) {
                     (out, inn) if out > 2 * inn && out > 0 => kept.push(piece),
                     (out, inn) if inn > 2 * out && inn > 0 => {}
                     (out, inn) => {
@@ -3674,7 +3828,16 @@ pub(crate) fn boundary_of(
     // (wider only where faces meet nearly touching, and the curve between them is ill-defined).
     // (Vertices merged within three times the cutter's tolerance for an end on an edge: two
     // faces place a shared vertex each at its own edge's point.)
-    let mut solid = assemble(&keep, 3e-7 * size)?;
+    let mut solid = assemble(
+        &keep,
+        // (Curves given whole put their ends, and so the pieces' corners, where they are to
+        // far within what makes two of them one vertex.)
+        if member.is_some() {
+            0.05 * GIVEN_VERTEX * size
+        } else {
+            3e-7 * size
+        },
+    )?;
     let t_tol = web_time::Instant::now();
     solid.fit_tolerances_searched(1e-5 * size);
     if debug {

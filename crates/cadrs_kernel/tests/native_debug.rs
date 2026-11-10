@@ -3577,6 +3577,248 @@ fn debug_step_measure() {
     }
 }
 
+/// `CADRS_TORUS=<case>[,<case>…]` (or `all`): brep-bench's tumbling tori built by the kernel's
+/// sweep of a solid and graded as the board grades them (a solid, no mesh, its triangles
+/// closed in single precision), with the time each takes. `CADRS_TORUS_OP=union|common|cut`
+/// with the case `crossed` combines the crossed pair.
+// (The cases' own figures, to the digits brep-bench gives them.)
+#[allow(clippy::approx_constant)]
+#[test]
+fn debug_tumbling_tori() {
+    let Ok(which) = std::env::var("CADRS_TORUS") else {
+        return;
+    };
+    // (name, centre, tube, (lean, tilt, h), rate, sign, rolls in degrees)
+    type Case = (
+        &'static str,
+        [f64; 3],
+        f64,
+        (f64, f64, f64),
+        f64,
+        f64,
+        (f64, f64),
+    );
+    let h = 0.5f64.sqrt();
+    let cases: [Case; 8] = [
+        (
+            "base",
+            [3.0, 0.0, 2.0],
+            0.5,
+            (45.0, 0.0, h),
+            0.25,
+            -1.0,
+            (-75.0, 75.0),
+        ),
+        (
+            "thin",
+            [3.0, 0.0, 2.0],
+            0.015,
+            (45.0, 0.0, h),
+            0.25,
+            -1.0,
+            (-75.0, 75.0),
+        ),
+        (
+            "half",
+            [3.0, 0.0, 2.0],
+            0.16,
+            (30.0, 20.0, 0.7071),
+            0.375,
+            -1.0,
+            (-90.0, 90.0),
+        ),
+        (
+            "full",
+            [3.0, 0.0, 2.0],
+            0.16,
+            (30.0, 20.0, 0.7071),
+            0.375,
+            -1.0,
+            (-180.0, 180.0),
+        ),
+        (
+            "ortho",
+            [2.02, 0.0, 1.0],
+            0.08,
+            (1.0, 89.0, 0.0),
+            1.01,
+            -1.0,
+            (-180.0, 180.0),
+        ),
+        (
+            "thick",
+            [2.02, 0.0, 1.0],
+            0.16,
+            (1.0, 89.0, 0.0),
+            1.01,
+            -1.0,
+            (-180.0, 180.0),
+        ),
+        (
+            "forward",
+            [3.0, 0.0, 2.0],
+            0.22,
+            (45.0, 20.0, 0.7071),
+            0.7,
+            -1.0,
+            (-100.0, 100.0),
+        ),
+        (
+            "reverse",
+            [3.0, 0.0, 2.0],
+            0.22,
+            (45.0, 20.0, 0.7071),
+            0.7,
+            1.0,
+            (-100.0, 100.0),
+        ),
+    ];
+    let build = |k: &mut NativeKernel, c: &Case| -> std::result::Result<BodyId, KernelError> {
+        let &(_, centre, tube, (lean, tilt, hh), rate, sign, rolls) = c;
+        let t = k
+            .primitive(&Primitive::Torus {
+                center: Point3::new(centre[0], centre[1], centre[2]),
+                axis: Vector3::z_axis(),
+                major: 1.0,
+                minor: tube,
+            })?
+            .bodies[0];
+        let (l, a) = (lean.to_radians(), tilt.to_radians());
+        let q = Point3::new(0.0, hh * l.cos(), hh * l.sin());
+        let u = Vector3::new(a.cos(), a.sin() * l.cos(), a.sin() * l.sin());
+        let (t0, t1) = (rolls.0.to_radians(), rolls.1.to_radians());
+        let motion = SolidMotion::Rigid {
+            steps: vec![
+                RigidStep::Turn {
+                    axis: Axis {
+                        origin: Point3::new(2.0, 0.0, 0.0),
+                        dir: Vector3::z_axis(),
+                    },
+                    from: rate * t0,
+                    to: rate * t1,
+                },
+                RigidStep::Turn {
+                    axis: Axis {
+                        origin: q,
+                        dir: nalgebra::Unit::new_normalize(u),
+                    },
+                    from: sign * t0,
+                    to: sign * t1,
+                },
+            ],
+        };
+        Ok(k.sweep_solid(t, &motion)?.bodies[0])
+    };
+    let grade = |k: &NativeKernel, id: BodyId, name: &str, took: std::time::Duration| {
+        let t0 = std::time::Instant::now();
+        let m = k.mass_properties(id).unwrap();
+        let body = k.get(id).unwrap();
+        let flat = body
+            .faces
+            .iter()
+            .filter(|f| matches!(f.surf, cadrs_kernel::native::surface::Surface::Plane { .. }))
+            .count();
+        let size = k.bounding_box(id).unwrap().diagonal();
+        let thickness = m.volume / m.surface_area;
+        let deflection = (1e-3 * size).min(5e-2 * thickness).max(1e-10);
+        let mesh = k
+            .tessellate(
+                id,
+                Tessellation {
+                    deflection,
+                    angle: 15f64.to_radians(),
+                },
+            )
+            .unwrap();
+        let key = |i: u32| {
+            let p = mesh.positions[i as usize];
+            [p.x as f32, p.y as f32, p.z as f32].map(f32::to_bits)
+        };
+        let mut edges: std::collections::HashMap<([u32; 3], [u32; 3]), i64> = Default::default();
+        for t in &mesh.indices {
+            for (a, z) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                let (a, z) = (key(a), key(z));
+                if a != z {
+                    *edges.entry((a, z)).or_default() += 1;
+                }
+            }
+        }
+        let unmatched = edges
+            .iter()
+            .filter(|((a, z), n)| edges.get(&(*z, *a)).copied().unwrap_or(0) != **n)
+            .count();
+        if std::env::var_os("CADRS_TORUS_OPEN").is_some() {
+            // Where the unmatched edges are: one of each cluster a thousandth of the size wide.
+            let mut seen: Vec<[f32; 3]> = Vec::new();
+            for ((a, z), n) in &edges {
+                if edges.get(&(*z, *a)).copied().unwrap_or(0) == *n {
+                    continue;
+                }
+                let (p, q) = (a.map(f32::from_bits), z.map(f32::from_bits));
+                if seen
+                    .iter()
+                    .all(|s| (0..3).any(|k| (s[k] - p[k]).abs() > 1e-3 * size as f32))
+                {
+                    seen.push(p);
+                    eprintln!("  unmatched mesh edge {p:?} -> {q:?} ({n} times)");
+                }
+            }
+        }
+        let meshed = body.faces.len() >= 50 && 2 * flat >= body.faces.len();
+        let ok = !meshed && unmatched == 0 && matches!(k.body_class(id), Ok(BodyClass::Solid));
+        eprintln!(
+            "{} {name}: {} faces ({flat} flat), volume {:.9}, area {:.9}, {unmatched} mesh edges unmatched, built in {:.2?}, graded in {:.2?}",
+            if ok { "PASS" } else { "FAIL" },
+            body.faces.len(),
+            m.volume,
+            m.surface_area,
+            took,
+            t0.elapsed()
+        );
+    };
+    for name in which.split(',') {
+        if name == "crossed" {
+            let mut k = NativeKernel::new();
+            let t0 = std::time::Instant::now();
+            let (a, b) = match (build(&mut k, &cases[6]), build(&mut k, &cases[7])) {
+                (Ok(a), Ok(b)) => (a, b),
+                (a, b) => {
+                    eprintln!("FAIL crossed: {:?} {:?}", a.err(), b.err());
+                    continue;
+                }
+            };
+            for (op, what) in [
+                (BoolOp::Union, "union"),
+                (BoolOp::Intersect, "common"),
+                (BoolOp::Subtract, "cut"),
+            ] {
+                if std::env::var("CADRS_TORUS_OP").is_ok_and(|w| w != what) {
+                    continue;
+                }
+                let t1 = std::time::Instant::now();
+                match k.boolean(op, a, &[b]) {
+                    Ok(r) => grade(
+                        &k,
+                        r.bodies[0],
+                        what,
+                        t0.elapsed().min(t1.elapsed() + t0.elapsed()),
+                    ),
+                    Err(e) => eprintln!("FAIL crossed {what}: {e} (in {:.2?})", t1.elapsed()),
+                }
+            }
+            continue;
+        }
+        for c in cases.iter().filter(|c| name == "all" || c.0 == name) {
+            let mut k = NativeKernel::new();
+            let t0 = std::time::Instant::now();
+            match build(&mut k, c) {
+                Ok(id) => grade(&k, id, c.0, t0.elapsed()),
+                Err(e) => eprintln!("FAIL {}: {e} (in {:.2?})", c.0, t0.elapsed()),
+            }
+        }
+    }
+}
+
 /// `CADRS_BODY=<file> CADRS_POINT=x,y,z`: the edges of the body nearest the point, with their
 /// faces, lengths, and how their curves bend there.
 #[test]
