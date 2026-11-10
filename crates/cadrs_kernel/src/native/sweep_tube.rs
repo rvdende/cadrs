@@ -879,8 +879,8 @@ pub fn torus(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Resu
                 .enumerate()
                 .filter(|(_, p)| p.0 == chart)
                 .filter_map(|(i, p)| {
-                    let uu = wrap(u, p.1, TAU);
-                    let vv = wrap(v, p.3, TAU);
+                    let uu = wrap(u, p.1 - 1e-9, TAU);
+                    let vv = wrap(v, p.3 - 1e-9, TAU);
                     let on_u = (p.1 - 1e-9..=p.2 + 1e-9).contains(&uu);
                     let on_v = (p.3 - 1e-9..=p.4 + 1e-9).contains(&vv);
                     let uv = P2::new(uu.clamp(p.1, p.2), vv.clamp(p.3, p.4));
@@ -903,11 +903,12 @@ pub fn torus(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Resu
         };
         let mut out: Vec<(usize, P2)> = Vec::new();
         let sheet_at = |chart: usize, a: f64, psi: f64, out: &mut Vec<(usize, P2)>| {
+            // (On a patch's side within a ten-millionth: on both patches.)
             let near = |p: &Patch| {
-                let psi = wrap(psi, p.3, TAU);
+                let psi = wrap(psi, p.3 - 1e-7, TAU);
                 p.0 == chart
-                    && (p.1 - 1e-9..=p.2 + 1e-9).contains(&a)
-                    && (p.3 - 1e-9..=p.4 + 1e-9).contains(&psi)
+                    && (p.1 - 1e-7..=p.2 + 1e-7).contains(&a)
+                    && (p.3 - 1e-7..=p.4 + 1e-7).contains(&psi)
             };
             out.extend(
                 located
@@ -917,7 +918,10 @@ pub fn torus(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Resu
                     .map(|(i, p)| {
                         (
                             i,
-                            P2::new(a.clamp(p.1, p.2), wrap(psi, p.3, TAU).clamp(p.3, p.4)),
+                            P2::new(
+                                a.clamp(p.1, p.2),
+                                wrap(psi, p.3 - 1e-7, TAU).clamp(p.3, p.4),
+                            ),
                         )
                     })
                     .filter(|(i, uv)| holds_located[*i](*uv)),
@@ -980,10 +984,13 @@ pub fn torus(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Resu
             };
             let sheet_face = |a: f64, psi: f64| -> Option<(usize, P2)> {
                 kept_patches.iter().enumerate().find_map(|(i, p)| {
-                    let uv = P2::new(a.clamp(p.1, p.2), wrap(psi, p.3, TAU).clamp(p.3, p.4));
+                    let uv = P2::new(
+                        a.clamp(p.1, p.2),
+                        wrap(psi, p.3 - 1e-9, TAU).clamp(p.3, p.4),
+                    );
                     (p.0 == chart
                         && (p.1 - 1e-9..=p.2 + 1e-9).contains(&a)
-                        && (p.3 - 1e-9..=p.4 + 1e-9).contains(&wrap(psi, p.3, TAU))
+                        && (p.3 - 1e-9..=p.4 + 1e-9).contains(&wrap(psi, p.3 - 1e-9, TAU))
                         && holds[i](uv))
                     .then_some((i, uv))
                 })
@@ -1131,11 +1138,11 @@ pub fn torus(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Resu
                         x,
                         P2::new(
                             w.x.clamp(ps.1, ps.2),
-                            wrap(w.y, ps.3, TAU).clamp(ps.3, ps.4),
+                            wrap(w.y, ps.3 - 1e-9, TAU).clamp(ps.3, ps.4),
                         ),
                         P2::new(
-                            wrap(u, pt.1, TAU).clamp(pt.1, pt.2),
-                            wrap(v, pt.3, TAU).clamp(pt.3, pt.4),
+                            wrap(u, pt.1 - 1e-9, TAU).clamp(pt.1, pt.2),
+                            wrap(v, pt.3 - 1e-9, TAU).clamp(pt.3, pt.4),
                         ),
                     )
                 };
