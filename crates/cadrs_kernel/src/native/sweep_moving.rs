@@ -2692,7 +2692,7 @@ fn assemble(
     near: f64,
     tol: f64,
     whole: Option<(&Whole, f64)>,
-) -> Result<(Body, Option<f64>)> {
+) -> Result<(Body, Option<f64>, bool)> {
     // (An edge lies on another, or a vertex on an edge, within the faces' own looseness.)
     let near = near.max(tol);
     let clock = web_time::Instant::now();
@@ -2925,13 +2925,14 @@ fn assemble(
             );
         }
         if sound {
-            return Ok((merged, Some(volume)));
+            // (Checked, with its tolerances fitted as the caller fits them: not again.)
+            return Ok((merged, Some(volume), true));
         }
         super::boolean::assemble_shells_with(&mut b, Some(&terms))?;
-        return Ok((b, Some(before)));
+        return Ok((b, Some(before), false));
     }
     super::boolean::assemble_shells(&mut b)?;
-    Ok((b, None))
+    Ok((b, None, false))
 }
 
 /// A stretch's curves: in space, and on each of its two faces (z = 0), over [0, its length].
@@ -4015,7 +4016,7 @@ pub(crate) fn boundary_of_some(
     // (wider only where faces meet nearly touching, and the curve between them is ill-defined).
     // (Vertices merged within three times the cutter's tolerance for an end on an edge: two
     // faces place a shared vertex each at its own edge's point.)
-    let (mut solid, known) = assemble(
+    let (mut solid, known, checked) = assemble(
         &keep,
         // (Curves given whole put their ends, and so the pieces' corners, where they are to
         // far within what makes two of them one vertex.)
@@ -4092,7 +4093,7 @@ pub(crate) fn boundary_of_some(
             solid.faces.len(),
         );
     }
-    let mut problems = solid.check();
+    let mut problems = if checked { Vec::new() } else { solid.check() };
     if debug && let Some(first) = problems.first() {
         // The face named first, its loops' p-curve ends.
         let msg = format!("{first:?}");
