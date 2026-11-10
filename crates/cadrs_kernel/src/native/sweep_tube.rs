@@ -974,7 +974,7 @@ pub fn torus(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Resu
                 let kp = tube.eval(&Pos { chart, a, psi });
                 tube.f(t_end, &kp.p) / (d * d)
             };
-            let Some(chains) = zero_curves(&field, (0.0, 1.0), (0.0, TAU), (ma, 256), true, 1e-4)
+            let Some(chains) = zero_curves(&field, (0.0, 1.0), (0.0, TAU), (ma, 256), true, 1e-6)
             else {
                 continue;
             };
@@ -1156,7 +1156,7 @@ pub fn torus(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Resu
                     if let Some(pair) = pr
                         && run.len() >= 2
                     {
-                        let delta = 1e-5 * size;
+                        let delta = 1e-4 * size;
                         let near_join = |p: &(P3, P2, P2)| (p.0 - join_pt(p.1.y)).norm() <= delta;
                         for end in 0..2 {
                             if end == 1 {

@@ -1589,6 +1589,8 @@ struct Stretch {
     b: usize,
     pts: Vec<(P3, P2, P2)>,
     v: [usize; 2],
+    /// Given by construction, its points as dense as it needs: taken as it is.
+    given: bool,
 }
 
 /// The curves along which the candidate faces meet on the swept solid's boundary: stretches
@@ -1666,6 +1668,7 @@ impl Network {
                 b: sg.b,
                 pts: sg.pts,
                 v: [v0, v1],
+                given: false,
             });
             prev = Some(v1);
             last = Some(v1);
@@ -1716,6 +1719,7 @@ fn network(tr: &Tracer, mixed: &[usize], m: usize, given: Vec<Given>) -> Network
                 );
                 if net.stretches.len() > n0 {
                     let si = net.stretches.len() - 1;
+                    net.stretches[si].given = true;
                     for (k, inside) in ends.iter().enumerate() {
                         if *inside {
                             given_ends.push((si, k));
@@ -2209,12 +2213,13 @@ fn network(tr: &Tracer, mixed: &[usize], m: usize, given: Vec<Given>) -> Network
             }
             let v1 = st.v[1];
             st.v[1] = vi;
-            let (a, b) = (st.a, st.b);
+            let (a, b, given) = (st.a, st.b, st.given);
             net.stretches.push(Stretch {
                 a,
                 b,
                 pts: tail,
                 v: [vi, v1],
+                given,
             });
         }
         vi += 1;
@@ -2324,6 +2329,9 @@ fn network(tr: &Tracer, mixed: &[usize], m: usize, given: Vec<Given>) -> Network
     // p-curves) stay on both faces: a point added between two where the fit strays.
     let ftol = 1e-9 * size;
     for st in &mut net.stretches {
+        if st.given {
+            continue;
+        }
         for _ in 0..12 {
             let curves = stretch_curves(st);
             let mut params = vec![0.0];
