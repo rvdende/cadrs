@@ -97,6 +97,10 @@ pub struct NativeKernel {
     /// much as the first (6 s each by pi7zoll-gehäuse's foot). The oldest past
     /// [`JOINED_KEPT`] is released.
     joined: Vec<(BodyId, BodyId, OpResult)>,
+    /// The swept tori this session built exactly, by their bodies: the torus and its motion,
+    /// which a boolean of two of them is made from again ([`super::sweep_tube::boolean`]: by
+    /// what each motion holds, where their surfaces' crossing in space wanders).
+    pub(crate) swept_tori: HashMap<u64, Arc<super::sweep_tube::SweptTorus>>,
 }
 
 /// How many of [`Kernel::joins`]'s unions a session keeps for the union that may follow.
@@ -233,6 +237,7 @@ impl NativeKernel {
             // (Not the unions kept for a union to come: a boolean takes its result out of them,
             // and two sessions mustn't hand out the same body.)
             joined: Vec::new(),
+            swept_tori: self.swept_tori.clone(),
         }
     }
 
@@ -247,6 +252,9 @@ impl NativeKernel {
             }
             if let Some(c) = fork.colors.get(&id) {
                 self.colors.insert(id, c.clone());
+            }
+            if let Some(t) = fork.swept_tori.get(&id) {
+                self.swept_tori.insert(id, t.clone());
             }
             self.bodies.insert(id, e);
             self.next = self.next.max(id + 1);
@@ -1124,6 +1132,16 @@ impl Kernel for NativeKernel {
                 .position(|(a, b, _)| *a == target && b == tool)
         {
             return Ok(self.joined.remove(i).2);
+        }
+        // Two swept tori: by what each motion holds.
+        if let [tool] = tools
+            && let (Some(a), Some(b)) = (
+                self.swept_tori.get(&target.0).cloned(),
+                self.swept_tori.get(&tool.0).cloned(),
+            )
+            && let Some(Ok(r)) = super::sweep_tube::boolean(self, op, &a, &b)
+        {
+            return self.colored(Ok(r));
         }
         let r = super::boolean::boolean(self, op, target, tools);
         // With CADRS_DUMP_DIR set, a failed boolean leaves its inputs there.

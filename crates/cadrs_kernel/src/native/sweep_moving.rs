@@ -3627,6 +3627,22 @@ pub(crate) fn boundary_of(
     member: Option<&Member>,
     loose: f64,
 ) -> Result<Body> {
+    boundary_of_some(faces, oracle, size, least, most, given, member, loose, true)
+}
+
+/// [`boundary_of`], of what may be several solids (`one` false: a boolean's result).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn boundary_of_some(
+    faces: Vec<Body>,
+    oracle: &Oracle,
+    size: f64,
+    least: f64,
+    most: f64,
+    given: Vec<Given>,
+    member: Option<&Member>,
+    loose: f64,
+    one: bool,
+) -> Result<Body> {
     use rayon::prelude::*;
     let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
     let t0 = web_time::Instant::now();
@@ -4077,7 +4093,7 @@ pub(crate) fn boundary_of(
             );
         }
     }
-    if solid.solids.len() != 1 || !problems.is_empty() {
+    if solid.solids.is_empty() || (one && solid.solids.len() != 1) || !problems.is_empty() {
         return Err(refused(format!(
             "its faces don't join into one sound solid ({} solids; {:?})",
             solid.solids.len(),

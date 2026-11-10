@@ -491,6 +491,23 @@ impl<'a> Tube<'a> {
         best
     }
 
+    /// Every local least of f over the motion for `p` near the tube, refined, the least first.
+    fn leasts(&self, p: &P3) -> Vec<Least> {
+        let vals: Vec<f64> = self.places.iter().map(|pl| self.f_at(pl, p)).collect();
+        let n = vals.len();
+        let bound = 0.5 * self.r;
+        let mut out: Vec<Least> = (0..n)
+            .filter(|&i| {
+                let left = i == 0 || vals[i] <= vals[i - 1];
+                let right = i + 1 == n || vals[i] <= vals[i + 1];
+                left && right && vals[i] <= bound
+            })
+            .map(|i| self.golden(p, self.ts[i.saturating_sub(1)], self.ts[(i + 1).min(n - 1)]))
+            .collect();
+        out.sort_by(|a, b| a.1.total_cmp(&b.1));
+        out
+    }
+
     /// The step between the instants [`Self::least`] samples.
     fn step(&self) -> f64 {
         self.ts[1] - self.ts[0]
@@ -1898,7 +1915,6 @@ fn prepare<'a>(b: &Body, motion: &'a Motion<'a>) -> Option<Result<Prep<'a>>> {
 /// [`crate::Kernel::sweep_solid`] of a whole torus by a rigid motion: None when `b` isn't one;
 /// an error when its boundary isn't made out exactly.
 pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<Result<OpResult>> {
-    use rayon::prelude::*;
     let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
     let t_start = web_time::Instant::now();
     let refused = |why: String| -> Option<Result<OpResult>> {
@@ -1930,119 +1946,14 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
         2048,
     );
     let (sheets, kept_patches, tori) = (&prep.sheets, &prep.patches, &prep.tori);
-    let mut faces = prep.pieces.clone();
     let n_sheets = sheets.len();
     let delta = tube.delta();
-    let jump = 4.0 * tube.step();
     let (fits, given, on_sheet) = {
         let t_fitted = web_time::Instant::now();
-        let fc = prep.faces();
-        let mut given = trace(&prep, 0, None);
+        let mut given = trace(&prep, 0, None, &[]);
         drop_twins(&mut given, &|i| i < n_sheets, size, fit_tol);
         let n_sheet_curves = given.len();
-        // Where the torus at the start crosses the torus at the end (a motion that comes back near
-        // where it began): the zero set of the one's distance over the other's (ψ, θ), kept where
-        // no other instant covers it.
-        {
-            let start = &tori[0];
-            let far = |w: P2| {
-                let x = start.eval(w.x, w.y);
-                (tube.f(1.0, &x) < -delta, 1.0)
-            };
-            let near = |w: P2, _: f64| far(w);
-            let fd = Field {
-                cover: &far,
-                near: &near,
-            };
-            for q in 0..4 {
-                for h in 0..2 {
-                    let bx = (
-                        (TAU * q as f64 / 4.0, TAU * (q + 1) as f64 / 4.0),
-                        (PI * h as f64, PI * (h + 1) as f64),
-                    );
-                    let chains = cover_curves(
-                        &fd,
-                        bx,
-                        (24, 24),
-                        None,
-                        1e-6,
-                        jump,
-                        &|w: P2| start.eval(w.x, w.y),
-                        fit_tol,
-                    )
-                    .unwrap_or_default();
-                    let pair = |w: P2, _: f64, prefer: Option<(usize, usize)>| {
-                        let x = start.eval(w.x, w.y);
-                        // (On the half of each torus the motion leaves bare: past its join, the
-                        // sheet from there is the boundary; and under no instant between.)
-                        if !tube.bare(START, &x)
-                            || !tube.bare(END, &x)
-                            || tube.least(&x).1 < -100.0 * delta
-                        {
-                            return None;
-                        }
-                        let (fa, uva) = fc.at(&x, 0.0, prefer.map(|p| p.0))?;
-                        let (fb, uvb) = fc.at(&x, 1.0, prefer.map(|p| p.1))?;
-                        Some(((fa, fb), (x, uva, uvb)))
-                    };
-                    let place = |w: P2, _: f64, (fa, fb): (usize, usize)| {
-                        let x = start.eval(w.x, w.y);
-                        (x, fc.clamped(fa, &x, 0.0), fc.clamped(fb, &x, 1.0))
-                    };
-                    let onto =
-                        |w: P2, d: V2, tau: f64, _: bool| onto_boundary(&near, w, d, tau, bx);
-                    // (Which side of each torus's join a place is: the half the motion leaves bare.)
-                    let bare = |w: P2| {
-                        let x = start.eval(w.x, w.y);
-                        [tube.bare(START, &x), tube.bare(END, &x)]
-                    };
-                    for mut chain in chains {
-                        // Where the curve crosses both joins between two of its points (tori nearly
-                        // one on the other, their joins a hair apart), a point between the
-                        // crossings: the stretch there is on both bare halves, and would be missed.
-                        let mut k = 0;
-                        while k + 1 < chain.pts.len() {
-                            let ((p, tp), (q, _)) = (chain.pts[k], chain.pts[k + 1]);
-                            let d = q - p;
-                            let on = |s: f64| {
-                                let m = P2::from(p.coords + d * s);
-                                onto_boundary(&near, m, d, tp, bx).map_or(m, |r| r.0)
-                            };
-                            let (bp, bq) = (bare(p), bare(q));
-                            let flips: Vec<f64> = (0..2)
-                                .filter(|&e| bp[e] != bq[e])
-                                .map(|e| {
-                                    let (mut lo, mut hi) = (0.0, 1.0);
-                                    for _ in 0..40 {
-                                        let m = 0.5 * (lo + hi);
-                                        if bare(on(m))[e] == bp[e] {
-                                            lo = m;
-                                        } else {
-                                            hi = m;
-                                        }
-                                    }
-                                    0.5 * (lo + hi)
-                                })
-                                .collect();
-                            if let [s0, s1] = flips[..] {
-                                chain.pts.insert(k + 1, (on(0.5 * (s0 + s1)), tp));
-                                k += 1;
-                            }
-                            k += 1;
-                        }
-                        chain_runs(
-                            &chain,
-                            &pair,
-                            &place,
-                            &onto,
-                            &|_, t| (f64::NAN, t),
-                            jump,
-                            &mut given,
-                        );
-                    }
-                }
-            }
-        }
+        tori_cross((&prep, 0, START), (&prep, 0, END), &mut given);
         let t_traced = web_time::Instant::now();
         if debug {
             let ms = |a: web_time::Instant, b: web_time::Instant| (b - a).as_secs_f64() * 1e3;
@@ -2144,30 +2055,10 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
                 }
             }
         }
-        // Each sheet's patch fitted over the part of it kept, held to its curves' points too.
-        let mut on_sheet: Vec<Vec<(P3, P2)>> = vec![Vec::new(); n_sheets];
-        for g in &given {
-            for p in &g.pts {
-                if g.a < n_sheets {
-                    on_sheet[g.a].push((p.0, p.1));
-                }
-                if g.b < n_sheets {
-                    on_sheet[g.b].push((p.0, p.2));
-                }
-            }
-        }
-        let fitted: Vec<std::result::Result<(super::nurbs::NurbsSurface, Dom), String>> = sheets
-            .par_iter()
-            .zip(&on_sheet)
-            .map(|(sh, pts)| fit_tensor(&tube, sh, pts, fit_tol))
-            .collect();
-        let mut fits = Vec::with_capacity(n_sheets);
-        for f in fitted {
-            match f {
-                Ok(f) => fits.push(f),
-                Err(why) => return refused(why),
-            }
-        }
+        let (fits, on_sheet) = match fit_sheets(&prep, 0, &given) {
+            Ok(f) => f,
+            Err(why) => return refused(why),
+        };
         if debug {
             eprintln!(
                 "tube sweep: {} sheets fitted by {:.0} ms, {} poles in all: {:?}",
@@ -2181,99 +2072,12 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
                     .collect::<Vec<_>>()
             );
         }
-        if std::env::var_os("CADRS_TUBE_FITS").is_some() {
-            // (How far each fitted sheet is off its chart midway between its curves' points.)
-            for g in &given {
-                for (f, second) in [(g.a, false), (g.b, true)] {
-                    if f >= n_sheets {
-                        continue;
-                    }
-                    let chart = sheets[f].patch.0;
-                    let worst = g
-                        .pts
-                        .windows(2)
-                        .map(|w| {
-                            let (a, b) = if second {
-                                (w[0].2, w[1].2)
-                            } else {
-                                (w[0].1, w[1].1)
-                            };
-                            let m = P2::from(0.5 * (a.coords + b.coords));
-                            let x = tube
-                                .eval(&Pos {
-                                    chart,
-                                    a: m.x,
-                                    psi: m.y,
-                                })
-                                .p;
-                            ((fits[f].0.point(m.x, m.y) - x).norm(), m, (b - a).norm())
-                        })
-                        .max_by(|a, b| a.0.total_cmp(&b.0));
-                    if let Some(w) = worst
-                        && w.0 > fit_tol
-                    {
-                        eprintln!(
-                            "  curve of faces ({}, {}): face {f}'s fit off its chart by {:.2e} at ({:.6}, {:.6}), midway of a step of {:.2e}",
-                            g.a, g.b, w.0, w.1.x, w.1.y, w.2
-                        );
-                    }
-                }
-            }
-        }
         (fits, given, on_sheet)
     };
-    // The sheets' faces, each turned to face away from the core circle placed at its points'
-    // own instant: read at a kept point (past a fold the sheet faces the other way, and lies
-    // inside), the kept node with the most kept round it, or, a patch covered at every node, a
-    // place on a curve of it, which the part of it kept runs up to.
-    let mut sheet_faces: Vec<Body> = Vec::with_capacity(n_sheets + faces.len());
-    for ((sh, pts), (fit, dom)) in sheets.iter().zip(&on_sheet).zip(fits) {
-        let (chart, a0, a1, p0, p1) = sh.patch;
-        let surf = super::surface::Surface::Nurbs(std::sync::Arc::new(fit));
-        let mut sheet = match super::face_build::face_from_surface(&surf, Some(dom)) {
-            Ok(b) => b,
-            Err(e) => return Some(Err(e)),
-        };
-        let (mu, mv) = (sh.grid.0 as isize, sh.grid.1 as isize);
-        let kept = |i: isize, j: isize| {
-            (0..=mu).contains(&i)
-                && (0..=mv).contains(&j)
-                && !sh.nodes[(i * (mv + 1) + j) as usize].0
-        };
-        let w = (0..=mu)
-            .flat_map(|i| (0..=mv).map(move |j| (i, j)))
-            .filter(|&(i, j)| kept(i, j))
-            .max_by_key(|&(i, j)| {
-                (-1..=1)
-                    .flat_map(|di| (-1..=1).map(move |dj| (di, dj)))
-                    .filter(|&(di, dj)| kept(i + di, j + dj))
-                    .count()
-            })
-            .map(|(i, j)| {
-                P2::new(
-                    a0 + (a1 - a0) * i as f64 / mu as f64,
-                    p0 + (p1 - p0) * j as f64 / mv as f64,
-                )
-            })
-            .or_else(|| pts.get(pts.len() / 2).map(|p| p.1))
-            .unwrap_or(P2::new(0.5 * (a0 + a1), 0.5 * (p0 + p1)));
-        let kp = tube.eval(&Pos {
-            chart,
-            a: w.x,
-            psi: w.y,
-        });
-        let (rm, dm) = motion.place(kp.own);
-        let core = rm * tube.k(tube.psi_of(chart, w)) + dm;
-        let face = &mut sheet.faces[0];
-        let (_, su, sv) = face.surf.d1(w.x, w.y);
-        let natural = su.cross(&sv) * if face.sense { 1.0 } else { -1.0 };
-        if natural.dot(&(kp.p.coords - core)) < 0.0 {
-            Body::reverse_face(face);
-        }
-        sheet_faces.push(sheet);
-    }
-    sheet_faces.append(&mut faces);
-    let faces = sheet_faces;
+    let faces = match sheet_faces(&prep, fits, &on_sheet) {
+        Ok(f) => f,
+        Err(e) => return Some(Err(e)),
+    };
     // Whether a face's place is inside the swept solid: a sheet's by its exact point there (not
     // the fitted one, a fit's miss off it), a torus's by its point, which no other instant may
     // hold.
@@ -2305,50 +2109,659 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
             return Some(Err(e));
         }
     };
-    // The tori's pieces (cut in quarters to be trimmed) made whole again where they lie side by
-    // side on the one torus, if the solid is as sound for it.
-    let solid = {
-        let mut merged = solid.clone();
-        let from: Vec<Vec<(usize, usize)>> =
-            (0..merged.faces.len()).map(|i| vec![(0, i)]).collect();
-        let torus: Vec<bool> = merged
-            .faces
-            .iter()
-            .map(|f| matches!(f.surf, super::surface::Surface::Torus { .. }))
-            .collect();
-        super::unify::unify_faces(&mut merged, from, &|f, g| torus[f] && torus[g]);
-        let shelled = super::boolean::assemble_shells(&mut merged).is_ok();
-        let before = super::mass::body_volume(&solid);
-        let sound = shelled
-            && merged.solids.len() == 1
-            && merged.check().is_empty()
-            && (super::mass::body_volume(&merged) - before).abs() <= 1e-7 * before.abs();
-        if debug {
-            eprintln!(
-                "tube sweep: {} faces, {} with the tori's pieces merged ({})",
-                solid.faces.len(),
-                merged.faces.len(),
-                if sound { "kept" } else { "not sound: left" }
-            );
-            if !sound {
-                eprintln!(
-                    "  merged: {} solids, volume {} against {before}, first problem {:?}",
-                    merged.solids.len(),
-                    super::mass::body_volume(&merged),
-                    merged.check().first()
-                );
-            }
-        }
-        if sound { merged } else { solid }
-    };
+    let solid = unify_tori(solid, debug);
     if let Some(path) = std::env::var_os("CADRS_TUBE_OUT") {
         let _ = std::fs::write(path, super::bodyio::write(&solid));
+    }
+    let id = k.insert(solid);
+    if let Motion::Steps(steps) = motion {
+        k.swept_tori.insert(
+            id.0,
+            std::sync::Arc::new(SweptTorus {
+                torus: b.clone(),
+                steps: steps.to_vec(),
+            }),
+        );
+    }
+    Some(Ok(OpResult {
+        bodies: vec![id],
+        history: History::default(),
+    }))
+}
+
+/// A swept torus as it was asked for: the torus and its motion.
+pub(crate) struct SweptTorus {
+    torus: Body,
+    steps: Vec<RigidStep>,
+}
+
+/// A boolean of two swept tori, by what each motion holds: every face of either is traced in
+/// its own parameters where the other's motion comes to hold its points (as it is where its
+/// own does), and its pieces kept by the operation: outside the other for a union, inside it
+/// for an intersection, the first's outside and the second's inside (turned about) for a
+/// difference. None or an error when it isn't made out so (the caller's boolean of the two
+/// bodies then stands).
+pub(crate) fn boolean(
+    k: &mut NativeKernel,
+    op: crate::BoolOp,
+    a: &SweptTorus,
+    b: &SweptTorus,
+) -> Option<Result<OpResult>> {
+    let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+    let t_start = web_time::Instant::now();
+    let refused = |why: String| -> Option<Result<OpResult>> {
+        if debug {
+            eprintln!("tube boolean: refused: {why}");
+        }
+        Some(Err(KernelError::InvalidResult {
+            op: "boolean",
+            why: format!("the swept tori: {why}"),
+        }))
+    };
+    let (ma, mb) = (Motion::Steps(&a.steps), Motion::Steps(&b.steps));
+    let pa = match prepare(&a.torus, &ma)? {
+        Ok(p) => p,
+        Err(e) => return Some(Err(e)),
+    };
+    let pb = match prepare(&b.torus, &mb)? {
+        Ok(p) => p,
+        Err(e) => return Some(Err(e)),
+    };
+    let (na, nsa, nsb) = (pa.patches.len(), pa.sheets.len(), pb.sheets.len());
+    // (Whether each solid's faces are kept inside the other.)
+    let (in_a, in_b) = match op {
+        crate::BoolOp::Union => (false, false),
+        crate::BoolOp::Intersect => (true, true),
+        crate::BoolOp::Subtract => (false, true),
+    };
+    let beside_a = Other {
+        prep: &pb,
+        base: na,
+        inside: in_a,
+    };
+    let beside_b = Other {
+        prep: &pa,
+        base: 0,
+        inside: in_b,
+    };
+    let size = pa.size.max(pb.size);
+    let fit_tol = pa.fit_tol.max(pb.fit_tol);
+    // The nodes of the two boundaries' crossing: where the motions place the torus alike, the
+    // points of it neither moves across itself. Both solids' sheets touch it there, and each
+    // other.
+    let poses = shared_poses(&pa.tube, &pb.tube);
+    if poses.len() > 4 {
+        return refused("the two motions run together".into());
+    }
+    let mut nodes_a: Vec<(P3, f64, f64)> = Vec::new();
+    for &(ta, tb) in &poses {
+        for chart in [LEAD, TRAIL] {
+            let at = |psi: f64| {
+                pa.tube
+                    .eval(&Pos {
+                        chart,
+                        a: if chart == LEAD { ta } else { 1.0 - ta },
+                        psi,
+                    })
+                    .p
+            };
+            let rate = |psi: f64| pb.tube.rate(tb, &at(psi));
+            let n = 720;
+            for k in 0..n {
+                let (mut lo, mut hi) = (TAU * k as f64 / n as f64, TAU * (k + 1) as f64 / n as f64);
+                let (rl, rh) = (rate(lo), rate(hi));
+                if rl == 0.0 || rl * rh < 0.0 {
+                    for _ in 0..60 {
+                        let m = 0.5 * (lo + hi);
+                        if rate(m) * rl > 0.0 {
+                            lo = m;
+                        } else {
+                            hi = m;
+                        }
+                    }
+                    nodes_a.push((at(0.5 * (lo + hi)), ta, tb));
+                }
+            }
+        }
+    }
+    let nodes_b: Vec<(P3, f64, f64)> = nodes_a.iter().map(|&(x, ta, tb)| (x, tb, ta)).collect();
+    if debug {
+        eprintln!(
+            "tube boolean: the motions place the torus alike at {poses:?}; nodes {:?}",
+            nodes_a.iter().map(|n| n.0).collect::<Vec<_>>()
+        );
+    }
+    let mut given = trace(&pa, 0, Some(&beside_a), &nodes_a);
+    given.extend(trace(&pb, na, Some(&beside_b), &nodes_b));
+    let is_sheet = |i: usize| i < nsa || (na..na + nsb).contains(&i);
+    drop_twins(&mut given, &is_sheet, size, fit_tol);
+    let n_sheet_curves = given.len();
+    // The end tori's crossings: each solid's own two, and each of the one's with each of the
+    // other's.
+    tori_cross((&pa, 0, START), (&pa, 0, END), &mut given);
+    tori_cross((&pb, na, START), (&pb, na, END), &mut given);
+    for ca in [START, END] {
+        for cb in [START, END] {
+            tori_cross((&pa, 0, ca), (&pb, na, cb), &mut given);
+        }
+    }
+    if debug {
+        eprintln!(
+            "tube boolean: {} curves on the sheets and {} between the tori by {:.0} ms",
+            n_sheet_curves,
+            given.len() - n_sheet_curves,
+            t_start.elapsed().as_secs_f64() * 1e3
+        );
+        if std::env::var_os("CADRS_TUBE_CURVES").is_some() {
+            for g in &given {
+                let (p, q) = (g.pts[0], g.pts[g.pts.len() - 1]);
+                eprintln!(
+                    "  curve of faces ({}, {}): {} points, {:?} -> {:?}; on the first ({:.5}, {:.5}) -> ({:.5}, {:.5}), on the second ({:.5}, {:.5}) -> ({:.5}, {:.5})",
+                    g.a,
+                    g.b,
+                    g.pts.len(),
+                    p.0,
+                    q.0,
+                    p.1.x,
+                    p.1.y,
+                    q.1.x,
+                    q.1.y,
+                    p.2.x,
+                    p.2.y,
+                    q.2.x,
+                    q.2.y
+                );
+                if std::env::var("CADRS_TUBE_CURVES").is_ok_and(|v| v == format!("{},{}", g.a, g.b))
+                {
+                    for p in &g.pts {
+                        eprintln!(
+                            "    ({:.9}, {:.9}) | ({:.9}, {:.9}) at {:?}",
+                            p.1.x, p.1.y, p.2.x, p.2.y, p.0
+                        );
+                    }
+                }
+            }
+        }
+    }
+    let mut faces = Vec::with_capacity(na + pb.patches.len());
+    for (prep, base) in [(&pa, 0), (&pb, na)] {
+        let (fits, on_sheet) = match fit_sheets(prep, base, &given) {
+            Ok(f) => f,
+            Err(why) => return refused(why),
+        };
+        let mut fs = match sheet_faces(prep, fits, &on_sheet) {
+            Ok(f) => f,
+            Err(e) => return Some(Err(e)),
+        };
+        // (A difference's second solid bounds it from within: its faces turned about.)
+        if base > 0 && op == crate::BoolOp::Subtract {
+            for f in &mut fs {
+                Body::reverse_face(&mut f.faces[0]);
+            }
+        }
+        faces.extend(fs);
+    }
+    if debug {
+        eprintln!(
+            "tube boolean: {} faces fitted by {:.0} ms",
+            faces.len(),
+            t_start.elapsed().as_secs_f64() * 1e3
+        );
+    }
+    // Whether a face's place is dropped: inside its own solid (as a sweep's is), or on the
+    // side of the other the operation doesn't keep.
+    let member = |i: usize, uv: P2| -> bool {
+        let (own, o, i) = if i < na {
+            (&pa, &beside_a, i)
+        } else {
+            (&pb, &beside_b, i - na)
+        };
+        let p = own.patches[i];
+        let x = if i < own.sheets.len() {
+            if own.tube.sheet_cover(p.0, uv).0 {
+                return true;
+            }
+            own.tube
+                .eval(&Pos {
+                    chart: p.0,
+                    a: uv.x,
+                    psi: uv.y,
+                })
+                .p
+        } else {
+            let x = own.tori[usize::from(p.0 == END)].eval(uv.x, uv.y);
+            if own.tube.least(&x).1 < -own.tube.delta() {
+                return true;
+            }
+            x
+        };
+        (o.prep.tube.least(&x).1 < -o.prep.tube.delta()) != o.inside
+    };
+    let place_r = |t: f64| {
+        let (m, d) = ma.place(t);
+        (nalgebra::Rotation3::from_matrix_unchecked(m), d)
+    };
+    let (c, z, big, r) = (pa.tube.c, pa.tube.z, pa.tube.big, pa.tube.r);
+    let oracle = super::sweep_moving::Oracle::with_measure(
+        Box::new(move |q: &V3| {
+            let w = q - c.coords;
+            let h = w.dot(&z);
+            ((w - z * h).norm() - big).hypot(h) - r
+        }),
+        &place_r,
+        64,
+    );
+    let solid = match super::sweep_moving::boundary_of_some(
+        faces,
+        &oracle,
+        size,
+        0.0,
+        f64::INFINITY,
+        given,
+        Some(&member),
+        fit_tol,
+        false,
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            if debug {
+                eprintln!("tube boolean: refused: {e}");
+            }
+            return Some(Err(e));
+        }
+    };
+    let solid = unify_tori(solid, debug);
+    if debug {
+        eprintln!(
+            "tube boolean: {} faces, {} solids by {:.0} ms",
+            solid.faces.len(),
+            solid.solids.len(),
+            t_start.elapsed().as_secs_f64() * 1e3
+        );
     }
     let id = k.insert(solid);
     Some(Ok(OpResult {
         bodies: vec![id],
         history: History::default(),
     }))
+}
+
+/// Where one end torus crosses another (a motion that comes back near where it began, or two
+/// swept tori's ends): the zero set of the one's distance over the other's (ψ, θ), kept where
+/// both are bare there and no instant of either motion covers it. Each is given by its solid,
+/// its faces' first index and its chart (START or END).
+fn tori_cross(
+    (pa, base_a, chart_a): (&Prep, usize, usize),
+    (pb, base_b, chart_b): (&Prep, usize, usize),
+    given: &mut Vec<super::sweep_moving::Given>,
+) {
+    let (ta, tb) = (
+        f64::from(u8::from(chart_a == END)),
+        f64::from(u8::from(chart_b == END)),
+    );
+    let first = &pa.tori[usize::from(chart_a == END)];
+    let (fa, fb) = (pa.faces(), pb.faces());
+    let (da, db) = (pa.tube.delta(), pb.tube.delta());
+    let jump = 4.0 * pa.tube.step();
+    let same = std::ptr::eq(pa, pb);
+    let far = |w: P2| {
+        let x = first.eval(w.x, w.y);
+        (pb.tube.f(tb, &x) < -db, tb)
+    };
+    let near = |w: P2, _: f64| far(w);
+    let fd = Field {
+        cover: &far,
+        near: &near,
+    };
+    for q in 0..4 {
+        for h in 0..2 {
+            let bx = (
+                (TAU * q as f64 / 4.0, TAU * (q + 1) as f64 / 4.0),
+                (PI * h as f64, PI * (h + 1) as f64),
+            );
+            let chains = cover_curves(
+                &fd,
+                bx,
+                (24, 24),
+                None,
+                1e-6,
+                jump,
+                &|w: P2| first.eval(w.x, w.y),
+                pa.fit_tol,
+                &[],
+            )
+            .unwrap_or_default();
+            let pair = |w: P2, _: f64, prefer: Option<(usize, usize)>| {
+                let x = first.eval(w.x, w.y);
+                // (On the half of each torus the motion leaves bare: past its join, the
+                // sheet from there is the boundary; and under no instant between.)
+                if !pa.tube.bare(chart_a, &x)
+                    || !pb.tube.bare(chart_b, &x)
+                    || pa.tube.least(&x).1 < -100.0 * da
+                    || (!same && pb.tube.least(&x).1 < -100.0 * db)
+                {
+                    return None;
+                }
+                let (f0, uva) = fa.at(&x, ta, prefer.and_then(|p| p.0.checked_sub(base_a)))?;
+                let (f1, uvb) = fb.at(&x, tb, prefer.and_then(|p| p.1.checked_sub(base_b)))?;
+                Some(((base_a + f0, base_b + f1), (x, uva, uvb)))
+            };
+            let place = |w: P2, _: f64, (f0, f1): (usize, usize)| {
+                let x = first.eval(w.x, w.y);
+                (
+                    x,
+                    fa.clamped(f0 - base_a, &x, ta),
+                    fb.clamped(f1 - base_b, &x, tb),
+                )
+            };
+            let onto = |w: P2, d: V2, tau: f64, _: bool| onto_boundary(&near, w, d, tau, bx);
+            // (Which side of each torus's join a place is: the half the motion leaves bare.)
+            let bare = |w: P2| {
+                let x = first.eval(w.x, w.y);
+                [pa.tube.bare(chart_a, &x), pb.tube.bare(chart_b, &x)]
+            };
+            for mut chain in chains {
+                // Where the curve crosses both joins between two of its points (tori nearly
+                // one on the other, their joins a hair apart), a point between the
+                // crossings: the stretch there is on both bare halves, and would be missed.
+                let mut k = 0;
+                while k + 1 < chain.pts.len() {
+                    let ((p, tp), (q, _)) = (chain.pts[k], chain.pts[k + 1]);
+                    let d = q - p;
+                    let on = |s: f64| {
+                        let m = P2::from(p.coords + d * s);
+                        onto_boundary(&near, m, d, tp, bx).map_or(m, |r| r.0)
+                    };
+                    let (bp, bq) = (bare(p), bare(q));
+                    let flips: Vec<f64> = (0..2)
+                        .filter(|&e| bp[e] != bq[e])
+                        .map(|e| {
+                            let (mut lo, mut hi) = (0.0, 1.0);
+                            for _ in 0..40 {
+                                let m = 0.5 * (lo + hi);
+                                if bare(on(m))[e] == bp[e] {
+                                    lo = m;
+                                } else {
+                                    hi = m;
+                                }
+                            }
+                            0.5 * (lo + hi)
+                        })
+                        .collect();
+                    if let [s0, s1] = flips[..] {
+                        chain.pts.insert(k + 1, (on(0.5 * (s0 + s1)), tp));
+                        k += 1;
+                    }
+                    k += 1;
+                }
+                chain_runs(
+                    &chain,
+                    &pair,
+                    &place,
+                    &onto,
+                    &|_, t| (f64::NAN, t),
+                    jump,
+                    &[],
+                    given,
+                );
+            }
+        }
+    }
+}
+
+/// Each sheet's patch fitted over the part of it kept, held to its curves' points too (the
+/// solid's faces numbered from `base`): the fits, and each sheet's curves' points.
+#[allow(clippy::type_complexity)]
+fn fit_sheets(
+    prep: &Prep,
+    base: usize,
+    given: &[super::sweep_moving::Given],
+) -> std::result::Result<(Vec<(super::nurbs::NurbsSurface, Dom)>, Vec<Vec<(P3, P2)>>), String> {
+    use rayon::prelude::*;
+    let ns = prep.sheets.len();
+    let sheet = |f: usize| f.checked_sub(base).filter(|&i| i < ns);
+    let mut on_sheet: Vec<Vec<(P3, P2)>> = vec![Vec::new(); ns];
+    let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+    for g in given {
+        for (k, p) in g.pts.iter().enumerate() {
+            for (i, w) in [(sheet(g.a), p.1), (sheet(g.b), p.2)] {
+                let Some(i) = i else {
+                    continue;
+                };
+                on_sheet[i].push((p.0, w));
+                if debug {
+                    // (A curve's point not where its place on the sheet is.)
+                    let x = prep
+                        .tube
+                        .eval(&Pos {
+                            chart: prep.sheets[i].patch.0,
+                            a: w.x,
+                            psi: w.y,
+                        })
+                        .p;
+                    if (x - p.0).norm() > 1e-6 * prep.size {
+                        eprintln!(
+                            "  curve of faces ({}, {}): point {k} of {} at {:?} is {:.2e} from its place ({:.6}, {:.6}) on sheet {}",
+                            g.a,
+                            g.b,
+                            g.pts.len(),
+                            p.0,
+                            (x - p.0).norm(),
+                            w.x,
+                            w.y,
+                            base + i
+                        );
+                    }
+                }
+            }
+        }
+    }
+    let fitted: Vec<std::result::Result<(super::nurbs::NurbsSurface, Dom), String>> = prep
+        .sheets
+        .par_iter()
+        .zip(&on_sheet)
+        .map(|(sh, pts)| fit_tensor(&prep.tube, sh, pts, prep.fit_tol))
+        .collect();
+    let mut fits = Vec::with_capacity(ns);
+    for f in fitted {
+        fits.push(f?);
+    }
+    if std::env::var_os("CADRS_TUBE_FITS").is_some() {
+        // (How far each fitted sheet is off its chart midway between its curves' points.)
+        for g in given {
+            for (f, second) in [(sheet(g.a), false), (sheet(g.b), true)] {
+                let Some(f) = f else {
+                    continue;
+                };
+                let chart = prep.sheets[f].patch.0;
+                let worst = g
+                    .pts
+                    .windows(2)
+                    .map(|w| {
+                        let (a, b) = if second {
+                            (w[0].2, w[1].2)
+                        } else {
+                            (w[0].1, w[1].1)
+                        };
+                        let m = P2::from(0.5 * (a.coords + b.coords));
+                        let x = prep
+                            .tube
+                            .eval(&Pos {
+                                chart,
+                                a: m.x,
+                                psi: m.y,
+                            })
+                            .p;
+                        ((fits[f].0.point(m.x, m.y) - x).norm(), m, (b - a).norm())
+                    })
+                    .max_by(|a, b| a.0.total_cmp(&b.0));
+                if let Some(w) = worst
+                    && w.0 > prep.fit_tol
+                {
+                    eprintln!(
+                        "  curve of faces ({}, {}): sheet {f}'s fit off its chart by {:.2e} at ({:.6}, {:.6}), midway of a step of {:.2e}",
+                        g.a, g.b, w.0, w.1.x, w.1.y, w.2
+                    );
+                }
+            }
+        }
+    }
+    Ok((fits, on_sheet))
+}
+
+/// A swept torus's candidate faces: the sheets' (their fits), each turned to face away from
+/// the core circle placed at its points' own instant, then the tori's pieces. A sheet is read
+/// at a kept point (past a fold it faces the other way, and lies inside): the kept node with
+/// the most kept round it, or, a patch covered at every node, a place on a curve of it, which
+/// the part of it kept runs up to.
+fn sheet_faces(
+    prep: &Prep,
+    fits: Vec<(super::nurbs::NurbsSurface, Dom)>,
+    on_sheet: &[Vec<(P3, P2)>],
+) -> Result<Vec<Body>> {
+    let tube = &prep.tube;
+    let mut faces: Vec<Body> = Vec::with_capacity(prep.patches.len());
+    for ((sh, pts), (fit, dom)) in prep.sheets.iter().zip(on_sheet).zip(fits) {
+        let (chart, a0, a1, p0, p1) = sh.patch;
+        let surf = super::surface::Surface::Nurbs(std::sync::Arc::new(fit));
+        let mut sheet = super::face_build::face_from_surface(&surf, Some(dom))?;
+        let (mu, mv) = (sh.grid.0 as isize, sh.grid.1 as isize);
+        let kept = |i: isize, j: isize| {
+            (0..=mu).contains(&i)
+                && (0..=mv).contains(&j)
+                && !sh.nodes[(i * (mv + 1) + j) as usize].0
+        };
+        let w = (0..=mu)
+            .flat_map(|i| (0..=mv).map(move |j| (i, j)))
+            .filter(|&(i, j)| kept(i, j))
+            .max_by_key(|&(i, j)| {
+                (-1..=1)
+                    .flat_map(|di| (-1..=1).map(move |dj| (di, dj)))
+                    .filter(|&(di, dj)| kept(i + di, j + dj))
+                    .count()
+            })
+            .map(|(i, j)| {
+                P2::new(
+                    a0 + (a1 - a0) * i as f64 / mu as f64,
+                    p0 + (p1 - p0) * j as f64 / mv as f64,
+                )
+            })
+            .or_else(|| pts.get(pts.len() / 2).map(|p| p.1))
+            .unwrap_or(P2::new(0.5 * (a0 + a1), 0.5 * (p0 + p1)));
+        let kp = tube.eval(&Pos {
+            chart,
+            a: w.x,
+            psi: w.y,
+        });
+        let (rm, dm) = tube.motion.place(kp.own);
+        let core = rm * tube.k(tube.psi_of(chart, w)) + dm;
+        let face = &mut sheet.faces[0];
+        let (_, su, sv) = face.surf.d1(w.x, w.y);
+        let natural = su.cross(&sv) * if face.sense { 1.0 } else { -1.0 };
+        if natural.dot(&(kp.p.coords - core)) < 0.0 {
+            Body::reverse_face(face);
+        }
+        faces.push(sheet);
+    }
+    faces.extend(prep.pieces.iter().cloned());
+    Ok(faces)
+}
+
+/// The tori's pieces (cut in quarters to be trimmed) made whole again where they lie side by
+/// side on the one torus, if the solid is as sound for it.
+fn unify_tori(solid: Body, debug: bool) -> Body {
+    let mut merged = solid.clone();
+    let from: Vec<Vec<(usize, usize)>> = (0..merged.faces.len()).map(|i| vec![(0, i)]).collect();
+    let torus: Vec<bool> = merged
+        .faces
+        .iter()
+        .map(|f| matches!(f.surf, super::surface::Surface::Torus { .. }))
+        .collect();
+    super::unify::unify_faces(&mut merged, from, &|f, g| torus[f] && torus[g]);
+    let shelled = super::boolean::assemble_shells(&mut merged).is_ok();
+    let before = super::mass::body_volume(&solid);
+    let sound = shelled
+        && merged.solids.len() == solid.solids.len()
+        && merged.check().is_empty()
+        && (super::mass::body_volume(&merged) - before).abs() <= 1e-7 * before.abs();
+    if debug {
+        eprintln!(
+            "tube sweep: {} faces, {} with the tori's pieces merged ({})",
+            solid.faces.len(),
+            merged.faces.len(),
+            if sound { "kept" } else { "not sound: left" }
+        );
+        if !sound {
+            eprintln!(
+                "  merged: {} solids, volume {} against {before}, first problem {:?}",
+                merged.solids.len(),
+                super::mass::body_volume(&merged),
+                merged.check().first()
+            );
+        }
+    }
+    if sound { merged } else { solid }
+}
+
+/// The instants (one of each motion) at which two tubes' tori lie one on the other: their
+/// core circles the same circle.
+fn shared_poses(a: &Tube, b: &Tube) -> Vec<(f64, f64)> {
+    if (a.big - b.big).abs() > 1e-12 * a.size || (a.r - b.r).abs() > 1e-12 * a.size {
+        return Vec::new();
+    }
+    let circle = |t: &Tube, at: f64| {
+        let (rm, dm) = t.motion.place(at);
+        (rm * t.c.coords + dm, rm * t.z)
+    };
+    let apart = |ta: f64, tb: f64| {
+        let ((ca, za), (cb, zb)) = (circle(a, ta), circle(b, tb));
+        (ca - cb).norm() + a.big * za.cross(&zb).norm()
+    };
+    let n = 64;
+    let grid: Vec<f64> = (0..=n)
+        .flat_map(|i| (0..=n).map(move |j| (i, j)))
+        .map(|(i, j)| apart(i as f64 / n as f64, j as f64 / n as f64))
+        .collect();
+    let at = |i: usize, j: usize| grid[i * (n + 1) + j];
+    let mut out: Vec<(f64, f64)> = Vec::new();
+    for i in 0..=n {
+        for j in 0..=n {
+            let v = at(i, j);
+            let least = (i.saturating_sub(1)..=(i + 1).min(n))
+                .all(|x| (j.saturating_sub(1)..=(j + 1).min(n)).all(|y| at(x, y) >= v));
+            if !least || v > 0.2 * a.size {
+                continue;
+            }
+            let (mut c, mut h, mut best) = (
+                (i as f64 / n as f64, j as f64 / n as f64),
+                1.0 / n as f64,
+                v,
+            );
+            for _ in 0..60 {
+                for x in -2i32..=2 {
+                    for y in -2i32..=2 {
+                        let w = (
+                            (c.0 + h * x as f64 / 2.0).clamp(0.0, 1.0),
+                            (c.1 + h * y as f64 / 2.0).clamp(0.0, 1.0),
+                        );
+                        let d = apart(w.0, w.1);
+                        if d < best {
+                            (best, c) = (d, w);
+                        }
+                    }
+                }
+                h *= 0.6;
+            }
+            if best <= 1e-10 * a.size
+                && !out
+                    .iter()
+                    .any(|o| (o.0 - c.0).abs() < 1e-6 && (o.1 - c.1).abs() < 1e-6)
+            {
+                out.push(c);
+            }
+        }
+    }
+    out
 }
 
 /// Another swept torus beside the one being traced, for a boolean of the two.
@@ -2373,7 +2786,12 @@ const OTHER: f64 = 10.0;
 /// joins and beside a fold, such a search wanders). With another swept torus beside this
 /// one, where that one holds a point (or doesn't) as well, at an instant of its own. The
 /// faces are numbered from `base`.
-fn trace(this: &Prep, base: usize, other: Option<&Other>) -> Vec<super::sweep_moving::Given> {
+fn trace(
+    this: &Prep,
+    base: usize,
+    other: Option<&Other>,
+    nodes: &[(P3, f64, f64)],
+) -> Vec<super::sweep_moving::Given> {
     use rayon::prelude::*;
     let tube = &this.tube;
     let fc = this.faces();
@@ -2417,6 +2835,17 @@ fn trace(this: &Prep, base: usize, other: Option<&Other>) -> Vec<super::sweep_mo
                 cover: &cover,
                 near: &near,
             };
+            // (The curves' nodes on this patch: each with its place here, and the other
+            // solid's instant there.)
+            let through: Vec<(P2, f64)> = nodes
+                .iter()
+                .filter_map(|&(x, own, others)| {
+                    fc.at(&x, own, Some(i))
+                        .filter(|h| h.0 == i)
+                        .map(|h| (h.1, OTHER + others))
+                })
+                .collect();
+            let places: Vec<P2> = through.iter().map(|t| t.0).collect();
             // (The patch's nodes as its own solid read them, and the other's hold of those it
             // keeps.)
             let (mu, mv) = sh.grid;
@@ -2435,6 +2864,7 @@ fn trace(this: &Prep, base: usize, other: Option<&Other>) -> Vec<super::sweep_mo
                 jump,
                 &point,
                 fit_tol,
+                &through,
             )
             .unwrap_or_default();
             // (A place covered across a seam, by the other chart there: found by the place's
@@ -2446,10 +2876,20 @@ fn trace(this: &Prep, base: usize, other: Option<&Other>) -> Vec<super::sweep_mo
                     psi: w.y,
                 });
                 let x = kp.p;
+                // (The face found must hold the point where it is said to: an instant that
+                // covers the far side without touching here (two boundaries a hair apart, by
+                // a corner) finds a place the point isn't at.)
+                let held = |f: &Faces, face: usize, uv: P2| {
+                    (f.point(face, uv) - x).norm() <= 1e-6 * this.size
+                };
                 let (fb, uvb) = match other {
                     Some(o) if tau > OTHER - 0.5 => {
                         let prefer = prefer.and_then(|p| p.1.checked_sub(o.base));
-                        let (f, uv) = o.prep.faces().at(&x, tau - OTHER, prefer)?;
+                        let of = o.prep.faces();
+                        let (f, uv) = of.at(&x, tau - OTHER, prefer)?;
+                        if !held(&of, f, uv) {
+                            return None;
+                        }
                         (o.base + f, uv)
                     }
                     _ => {
@@ -2469,6 +2909,9 @@ fn trace(this: &Prep, base: usize, other: Option<&Other>) -> Vec<super::sweep_mo
                         } else {
                             fc.at(&x, tau, prefer)?
                         };
+                        if !held(&fc, f, uv) {
+                            return None;
+                        }
                         (base + f, uv)
                     }
                 };
@@ -2480,20 +2923,50 @@ fn trace(this: &Prep, base: usize, other: Option<&Other>) -> Vec<super::sweep_mo
                     a: w.x,
                     psi: w.y,
                 });
+                // (By the face asked for, whichever solid's the instant: where the two kinds
+                // of stretch meet, a point of the one is asked with the other's instant.)
+                // (The instant a solid's face holds the point at, where the one given is the
+                // other solid's: the least of its own, nearest touching, that puts the point
+                // on that face.)
+                let touching = |t: &Tube, f: &Faces, face: usize| -> f64 {
+                    let ls = t.leasts(&kp.p);
+                    ls.iter()
+                        .filter(|l| f.at(&kp.p, l.0, Some(face)).is_some_and(|h| h.0 == face))
+                        .min_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
+                        .or(ls.first())
+                        .map_or(0.0, |l| l.0)
+                };
                 let uvb = match other {
-                    Some(o) if tau > OTHER - 0.5 => {
-                        o.prep
-                            .faces()
-                            .clamped(fb - o.base, &kp.p, tau - OTHER)
+                    Some(o) if (o.base..o.base + o.prep.patches.len()).contains(&fb) => {
+                        let (f, face) = (o.prep.faces(), fb - o.base);
+                        let tau = if tau > OTHER - 0.5 {
+                            tau - OTHER
+                        } else {
+                            touching(&o.prep.tube, &f, face)
+                        };
+                        f.clamped(face, &kp.p, tau)
                     }
                     _ => {
-                        let tau = if tau < -0.5 { kp.own } else { tau };
+                        let tau = if tau < -0.5 {
+                            kp.own
+                        } else if tau > OTHER - 0.5 {
+                            touching(tube, &fc, fb - base)
+                        } else {
+                            tau
+                        };
                         fc.clamped(fb - base, &kp.p, tau)
                     }
                 };
                 (kp.p, w, uvb)
             };
+            // (No margin past the patch's own sides: its chart runs on there, beyond the
+            // motion's ends or into the next patch, and a corner sought there is none of
+            // this patch's.)
+            let within = |w: P2| {
+                (a0 - 1e-9..=a1 + 1e-9).contains(&w.x) && (p0 - 1e-9..=p1 + 1e-9).contains(&w.y)
+            };
             let margin = |w: P2, tau: f64| match other {
+                _ if !within(w) => (f64::NAN, tau),
                 Some(o) if tau > OTHER - 0.5 => {
                     let l = o.prep.tube.least_from(&point(w), tau - OTHER);
                     let d = o.prep.tube.delta();
@@ -2524,7 +2997,9 @@ fn trace(this: &Prep, base: usize, other: Option<&Other>) -> Vec<super::sweep_mo
                         );
                     }
                 }
-                chain_runs(&chain, &pair, &place, &onto, &margin, jump, &mut out);
+                chain_runs(
+                    &chain, &pair, &place, &onto, &margin, jump, &places, &mut out,
+                );
             }
             out
         })
@@ -2610,13 +3085,14 @@ fn drop_twins(
     let mut keep = vec![true; given.len()];
     for i in 0..given.len() {
         let g = &given[i];
-        if !is_sheet(g.b) {
-            continue;
-        }
         let lg = length(g);
         let twin = (0..given.len()).any(|j| {
             let h = &given[j];
-            if j == i || !keep[j] || (h.a, h.b) != (g.b, g.a) {
+            // (Its twin, read from the other face; or the same curve read again from this
+            // one: an island the grid made of a spike's tip, which the stretch round the
+            // spike reaches too once its corner is found.)
+            let (twin, again) = ((h.a, h.b) == (g.b, g.a), (h.a, h.b) == (g.a, g.b));
+            if j == i || !keep[j] || !(twin || again) {
                 return false;
             }
             if !along(g, h) {
@@ -2628,7 +3104,7 @@ fn drop_twins(
             let lh = length(h);
             !along(h, g)
                 || lg > lh + near
-                || ((lg - lh).abs() <= near && (g.a > g.b || (g.a == g.b && j < i)))
+                || ((lg - lh).abs() <= near && if again { j < i } else { g.a > g.b })
         });
         if twin {
             keep[i] = false;
@@ -3048,6 +3524,22 @@ impl Faces<'_> {
         self.sheet_at(&pos, prefer)
     }
 
+    /// The point of face `i` at a place of it, exactly (a sheet's by its chart, not its fit).
+    fn point(&self, i: usize, uv: P2) -> P3 {
+        let p = self.patches[i];
+        if i < self.sheets {
+            self.tube
+                .eval(&Pos {
+                    chart: p.0,
+                    a: uv.x,
+                    psi: uv.y,
+                })
+                .p
+        } else {
+            self.tori[usize::from(p.0 == END)].eval(uv.x, uv.y)
+        }
+    }
+
     /// The place of `x` (touched at the instant `tau`) on face `i`, brought into its box: a
     /// point found on its boundary.
     fn clamped(&self, i: usize, x: &P3, tau: f64) -> P2 {
@@ -3208,6 +3700,7 @@ fn cover_curves(
     jump: f64,
     point: &(dyn Fn(P2) -> P3 + Sync),
     fit: f64,
+    through: &[(P2, f64)],
 ) -> Option<Vec<Chain>> {
     let ((u0, u1), (v0, v1)) = bx;
     let at = |i: usize, j: usize| {
@@ -3347,6 +3840,43 @@ fn cover_curves(
             chains.push(Chain { pts, closed });
         }
     }
+    // A node of the curves (`through`: its place, and the instant that covers there: two
+    // curves crossing where the faces touch) is a point of each of the chains' passes by it,
+    // which the grid, coarser than the passes are apart there, has cut across. Along a pass
+    // the covering instant runs through the node's: the node goes between the two points of
+    // it either side of that, on up to two passes within a few cells of it.
+    for &(wn, tn) in through {
+        let off = |p: P2| {
+            ((p.x - wn.x) * mu as f64 / (u1 - u0)).hypot((p.y - wn.y) * mv as f64 / (v1 - v0))
+        };
+        let mut passes: Vec<(f64, usize, usize)> = Vec::new();
+        for (c, chain) in chains.iter().enumerate() {
+            for k in 0..chain.pts.len() - 1 {
+                let ((p, tp), (q, tq)) = (chain.pts[k], chain.pts[k + 1]);
+                // (Covered by the node's kind of instant either side, the one before it and
+                // the other after.)
+                if (tp - tn).abs() < 2.0 && (tq - tn).abs() < 2.0 && (tp - tn) * (tq - tn) <= 0.0 {
+                    passes.push((off(p).min(off(q)), c, k));
+                }
+            }
+        }
+        passes.retain(|p| p.0 < 6.0);
+        passes.sort_by(|a, b| a.0.total_cmp(&b.0));
+        passes.truncate(2);
+        // (The later of two on one chain first: the other's place in it stands.)
+        passes.sort_by_key(|p| std::cmp::Reverse((p.1, p.2)));
+        for (_, c, k) in passes {
+            if std::env::var_os("CADRS_TUBE_NODES").is_some() {
+                let pts = &chains[c].pts;
+                eprintln!(
+                    "  node {wn:?} ({tn:.9}) into chain {c} of {} points after {k}: {:?}",
+                    pts.len(),
+                    &pts[k.saturating_sub(2)..(k + 4).min(pts.len())]
+                );
+            }
+            chains[c].pts.insert(k + 1, (wn, tn));
+        }
+    }
     // Each chain made dense: a point put on the curve between two where the chord strays
     // (each pass, between the points the last one put in: the rest are settled).
     use rayon::prelude::*;
@@ -3373,6 +3903,24 @@ fn cover_curves(
                     if (r - mid).norm() >= d.norm() {
                         return None;
                     }
+                    // (By a node two curves run close, the covering instant before the node's
+                    // along the one and after it along the other: a point found between two
+                    // of the one is of the one.)
+                    let strayed = through.iter().any(|&(wn, tn)| {
+                        let cells = |w: P2| {
+                            ((w.x - wn.x) * mu as f64 / (u1 - u0))
+                                .hypot((w.y - wn.y) * mv as f64 / (v1 - v0))
+                        };
+                        let (sp, sq, sr) = (tp - tn, tq - tn, t - tn);
+                        sp.abs() < 2.0
+                            && sq.abs() < 2.0
+                            && cells(p).min(cells(q)) < 8.0
+                            && sp * sq >= 0.0
+                            && sr * (sp + sq) < 0.0
+                    });
+                    if strayed {
+                        return None;
+                    }
                     // (In space too: a curve straight in the face's parameters may wind round
                     // a thin tube. A cubic through points a chord h apart, the curve s off the
                     // chord midway, misses it by about s³ / h².)
@@ -3390,6 +3938,17 @@ fn cover_curves(
             for (k, (i, r)) in add.into_iter().enumerate() {
                 chain.pts.insert(i + k, r);
                 fresh.insert(i + k, true);
+            }
+        }
+        if std::env::var_os("CADRS_TUBE_NODES").is_some() {
+            for &(wn, _) in through {
+                for (k, _) in chain.pts.iter().enumerate().filter(|(_, p)| p.0 == wn) {
+                    eprintln!(
+                        "  node {wn:?} in its chain made dense, at {k} of {}: {:?}",
+                        chain.pts.len(),
+                        &chain.pts[k.saturating_sub(5)..(k + 6).min(chain.pts.len())]
+                    );
+                }
             }
         }
     }
@@ -3420,10 +3979,12 @@ fn chain_runs(
     onto: &dyn Fn(P2, V2, f64, bool) -> Option<(P2, f64)>,
     margin: &dyn Fn(P2, f64) -> (f64, f64),
     jump: f64,
+    through: &[P2],
     out: &mut Vec<super::sweep_moving::Given>,
 ) {
     let first = out.len();
     let mut pts: Vec<(P2, f64)> = chain.pts.clone();
+    let node = |w: &P2| through.iter().any(|n| n == w);
     if chain.closed && pts.len() > 2 {
         // Started where the faces change, if anywhere (the first point repeated at the end).
         pts.pop();
@@ -3485,8 +4046,12 @@ fn chain_runs(
                             full,
                         )
                         && between(m, w0, w1)
+                        // (Of this stretch: beside a corner the nearest boundary may be the
+                        // next stretch's.)
+                        && let Some((f, pt)) = pair(m, t, Some((a, b)))
+                        && f == (a, b)
                     {
-                        run.insert(k + 1, (place(m, t, (a, b)), m, t));
+                        run.insert(k + 1, (pt, m, t));
                         k += 1;
                     }
                     k += 1;
@@ -3554,20 +4119,41 @@ fn chain_runs(
     };
     // (The few points of a stretch next a corner at `wc`, before it and after, put in their
     // order from it.)
+    // (As many as are out of their order: a point put between the two ends of a cut across
+    // a thin spike may lie many points back along either side of it.)
     let before = |run: &mut Vec<RunPt>, wc: P2| {
+        let far = |r: &RunPt| (r.1 - wc).norm();
         let n = run.len();
-        run[n.saturating_sub(4)..].sort_by(|x, y| (y.1 - wc).norm().total_cmp(&(x.1 - wc).norm()));
+        let mut k = n.saturating_sub(4);
+        let mut most = run[k..].iter().map(far).fold(0.0, f64::max);
+        while k > 0 && n - k < 48 && far(&run[k - 1]) < most {
+            k -= 1;
+            most = most.max(far(&run[k]));
+        }
+        run[k..].sort_by(|x, y| far(y).total_cmp(&far(x)));
     };
     let after = |pts: &mut [(P2, f64)], i: usize, wc: P2, faces: Option<(usize, usize)>| {
+        let far = |p: &(P2, f64)| (p.0 - wc).norm();
         let mut j = i;
+        let mut most = far(&pts[i]);
         while j + 1 < pts.len()
-            && j < i + 3
+            && j < i + 48
+            && (j < i + 3 || far(&pts[j + 1]) < most)
             && (pts[j + 1].1 - pts[j].1).abs() <= jump
             && pair(pts[j + 1].0, pts[j + 1].1, faces).map(|h| h.0) == faces
         {
             j += 1;
+            most = most.max(far(&pts[j]));
         }
+        let was: Vec<P2> = pts[i..=j].iter().map(|p| p.0).collect();
         pts[i..=j].sort_by(|x, y| (x.0 - wc).norm().total_cmp(&(y.0 - wc).norm()));
+        if std::env::var_os("CADRS_TUBE_NODES").is_some()
+            && was != pts[i..=j].iter().map(|p| p.0).collect::<Vec<_>>()
+        {
+            eprintln!(
+                "  points {i}..={j} put in their order from {wc:?} (faces {faces:?}): they were {was:?}"
+            );
+        }
     };
     let mut run: Vec<RunPt> = Vec::new();
     let mut cur: Option<(usize, usize)> = None;
@@ -3577,8 +4163,18 @@ fn chain_runs(
         let faces = here.map(|h| h.0);
         let mut last = (w, tau, here);
         // (A turn from what an instant covers onto a seam, or off one, is a corner too, though
-        // the face across it be the same: the stretches either side are two curves.)
-        let turned = i > 0 && faces.is_some() && (tau < -0.5) != (pts[i - 1].1 < -0.5);
+        // the face across it be the same: the stretches either side are two curves. So may a
+        // leap of the covering instant be, the face across being the same face at another
+        // place of it (where this one cuts through that one's crossing of itself): a corner
+        // if one is found there.)
+        let marked = i > 0 && faces.is_some() && (tau < -0.5) != (pts[i - 1].1 < -0.5);
+        let leapt = i > 0
+            && faces.is_some()
+            && faces == cur
+            && tau > -0.5
+            && pts[i - 1].1 > -0.5
+            && (tau - pts[i - 1].1).abs() > jump;
+        let turned = marked || leapt;
         if i == 0 {
             cur = faces;
         } else if faces != cur || turned {
@@ -3623,7 +4219,7 @@ fn chain_runs(
                             "  corner of {c:?} and {f:?} from {start:?} (instants {ta:.9}, {tb:.9}; reach {reach:.2e})"
                         );
                     }
-                    for _ in 0..24 {
+                    for _ in 0..64 {
                         let (ma, na) = margin(w, ta);
                         let (mb, nb) = margin(w, tb);
                         if trace {
@@ -3643,9 +4239,16 @@ fn chain_runs(
                             col(V2::new(h, 0.0)),
                             col(V2::new(0.0, h)),
                         ]);
-                        let step = jac.try_inverse()? * V2::new(ma, mb);
-                        if !step.norm().is_finite() || step.norm() > reach {
+                        let mut step = jac.try_inverse()? * V2::new(ma, mb);
+                        if !step.norm().is_finite() {
                             return None;
+                        }
+                        // (No further at a time than a few times the cut across: the margins
+                        // are no straight lines, and a long step lands by another corner of
+                        // the same two boundaries.)
+                        let most = 4.0 * d.norm() + 1e-9;
+                        if step.norm() > most {
+                            step *= most / step.norm();
                         }
                         w -= step;
                         if (w - start).norm() > reach {
@@ -3655,10 +4258,18 @@ fn chain_runs(
                             // (A corner indeed: both margins nothing there, and the faces across
                             // them the two stretches'.)
                             let (ma, mb) = (margin(w, ta).0, margin(w, tb).0);
+                            let (pa, pb) = (pair(w, ta, cur), pair(w, tb, faces));
                             let ok = ma.abs() < 0.1
                                 && mb.abs() < 0.1
-                                && pair(w, ta, cur).map(|h| h.0) == cur
-                                && pair(w, tb, faces).map(|h| h.0) == faces;
+                                && pa.map(|h| h.0) == cur
+                                && pb.map(|h| h.0) == faces
+                                // (Where only the instant leapt: two places of the face
+                                // across indeed, at two instants.)
+                                && (!leapt
+                                    || ((ta - tb).abs() > 0.25 * jump
+                                        && pa.zip(pb).is_some_and(|(x, y)| {
+                                            (x.1.2 - y.1.2).norm() > 1e-6
+                                        })));
                             return ok.then_some((w, ta, tb, c, f));
                         }
                     }
@@ -3692,8 +4303,11 @@ fn chain_runs(
                         hi = s;
                     }
                 }
+                // (The stretch's last point, if it is one of it: where the change is at the
+                // very point before, what is read there may be the next stretch's.)
                 if let Some(c) = cur
                     && let Some((m, t)) = on(lo)
+                    && pair(m, t, cur).is_some_and(|h| h.0 == c)
                 {
                     before(&mut run, m);
                     run.push((place(m, t, c), m, t));
@@ -3707,6 +4321,7 @@ fn chain_runs(
                 };
                 if let Some(c) = next
                     && let Some((m, t)) = past
+                    && pair(m, t, next).is_some_and(|h| h.0 == c)
                 {
                     run.push((place(m, t, c), m, t));
                 }
@@ -3718,12 +4333,35 @@ fn chain_runs(
                 cur = faces;
             } else if let Some(&(_, wc, _)) = run.last()
                 && corner.is_none()
+                && !leapt
             {
                 after(&mut pts, i, wc, faces);
                 last = (pts[i].0, pts[i].1, pair(pts[i].0, pts[i].1, faces));
             }
         }
         if let (w, tau, Some((_, pt))) = last {
+            // (A node ends one stretch and begins the next: the faces touch there, and two
+            // curves cross.)
+            if node(&w) && !run.is_empty() {
+                if std::env::var_os("CADRS_TUBE_NODES").is_some() {
+                    eprintln!(
+                        "  node at {w:?} (point {i} of {}): the stretch before it ends {:?}; after it {:?}",
+                        pts.len(),
+                        run.iter().rev().take(5).map(|r| r.1).collect::<Vec<_>>(),
+                        pts.iter()
+                            .skip(i + 1)
+                            .take(4)
+                            .map(|p| p.0)
+                            .collect::<Vec<_>>()
+                    );
+                }
+                before(&mut run, w);
+                run.push((pt, w, tau));
+                flush(&mut run, cur);
+                if i + 1 < pts.len() {
+                    after(&mut pts, i + 1, w, cur);
+                }
+            }
             run.push((pt, w, tau));
         }
     }
@@ -3735,6 +4373,7 @@ fn chain_runs(
         let (p, q) = (&out[k - 1], &out[k]);
         let (n, m) = (p.pts.len(), q.pts.len());
         let on = (p.a, p.b) == (q.a, q.b)
+            && !node(&q.pts[0].1)
             && n >= 2
             && m >= 2
             && (p.pts[n - 1].0 - q.pts[0].0).norm() <= 1e-12 * (1.0 + q.pts[0].0.coords.norm())
@@ -3756,6 +4395,7 @@ fn chain_runs(
         let (p, q) = (&out[out.len() - 1], &out[first]);
         let (n, m) = (p.pts.len(), q.pts.len());
         let on = (p.a, p.b) == (q.a, q.b)
+            && !node(&q.pts[0].1)
             && n >= 2
             && m >= 2
             && (p.pts[n - 1].0 - q.pts[0].0).norm() <= 1e-12 * (1.0 + q.pts[0].0.coords.norm())
