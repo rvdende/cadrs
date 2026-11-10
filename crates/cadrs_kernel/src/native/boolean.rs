@@ -1827,9 +1827,12 @@ fn patch_tree_of(s: &Surface) -> Option<super::bvh::Bvh> {
     (boxes.len() > 1).then(|| super::bvh::Bvh::new(boxes))
 }
 
+/// A spline edge's spans: their ends along it, and each one's box.
+type Spans = (Vec<f64>, Vec<Bbox>);
+
 /// Each span of a spline edge of more than two spans: the spans' ends along it, and each
 /// one's box (grown by the larger of `tol` and the edge's tolerance); else none.
-fn span_boxes_of(ed: &WEdge, tol: f64) -> Option<(Vec<f64>, Vec<Bbox>)> {
+fn span_boxes_of(ed: &WEdge, tol: f64) -> Option<Spans> {
     if ed.degenerate || !matches!(ed.curve, Curve::Nurbs(_)) {
         return None;
     }
@@ -2720,7 +2723,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         faces.iter().map(|f| SurfaceBound::of(&f.surf)).collect();
     // Per spline edge of many spans, each span's box (grown by the run's tolerance): made when
     // first wanted, the edge's own box over a face's.
-    let span_boxes: Vec<std::sync::OnceLock<Option<(Vec<f64>, Vec<Bbox>)>>> =
+    let span_boxes: Vec<std::sync::OnceLock<Option<Spans>>> =
         (0..ne).map(|_| std::sync::OnceLock::new()).collect();
     // Per B-spline face, its surface's spans' boxes: made when a spline edge of many spans
     // first comes near it.
