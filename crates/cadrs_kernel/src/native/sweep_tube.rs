@@ -1115,7 +1115,43 @@ impl<'a> Tube<'a> {
 
 /// [`crate::Kernel::sweep_solid`] of a whole torus by the rigid motion `steps`: None when `b`
 /// isn't one; an error when its boundary isn't made out exactly.
-pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<Result<OpResult>> {
+/// A torus's sweep made ready to trace: its tube (with its pinches' and near pinches' charts),
+/// its sheets' patches read by membership, and the tori where the motion starts and stops cut
+/// along the joins.
+struct Prep<'a> {
+    tube: Tube<'a>,
+    size: f64,
+    /// How near its sheets the fitted surfaces keep.
+    fit_tol: f64,
+    /// Each face's patch: the sheets' first, then the tori's pieces.
+    patches: Vec<Patch>,
+    sheets: Vec<Sheet>,
+    /// The torus where the motion starts and where it stops.
+    tori: [super::surface::Surface; 2],
+    /// The tori's pieces, each a body of one face.
+    pieces: Vec<Body>,
+    /// Whether a torus's piece holds a (ψ, θ), loosely.
+    holds: Vec<Box<dyn Fn(P2) -> bool + Send + Sync>>,
+    /// Whether a torus's piece is on the half of it the motion leaves bare.
+    bare: Vec<bool>,
+}
+
+impl Prep<'_> {
+    fn faces(&self) -> Faces<'_> {
+        Faces {
+            tube: &self.tube,
+            patches: &self.patches,
+            sheets: self.sheets.len(),
+            holds: &self.holds,
+            bare: &self.bare,
+            tori: &self.tori,
+        }
+    }
+}
+
+/// [`torus`]'s first part: None when `b` isn't a torus; an error when its sweep isn't one the
+/// charts cover.
+fn prepare<'a>(b: &Body, motion: &'a Motion<'a>) -> Option<Result<Prep<'a>>> {
     use rayon::prelude::*;
     let [f] = b.faces.as_slice() else {
         return None;
@@ -1128,7 +1164,7 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
     }
     let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
     let t_start = web_time::Instant::now();
-    let refused = |why: String| -> Option<Result<OpResult>> {
+    let refused = |why: String| -> Option<Result<Prep<'a>>> {
         if debug {
             eprintln!("tube sweep: refused: {why}");
         }
@@ -1177,20 +1213,6 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
             c.x
         ));
     }
-    let place_r = |t: f64| {
-        let (m, d) = motion.place(t);
-        (nalgebra::Rotation3::from_matrix_unchecked(m), d)
-    };
-    let (c, z, big, r) = (tube.c, tube.z, tube.big, tube.r);
-    let oracle = super::sweep_moving::Oracle::with_measure(
-        Box::new(move |q: &V3| {
-            let w = q - c.coords;
-            let h = w.dot(&z);
-            ((w - z * h).norm() - big).hypot(h) - r
-        }),
-        &place_r,
-        2048,
-    );
     // The sheets' patches: chunks of at most a quarter radian of turn by quarters of ψ, each
     // read by membership on a coarse grid, fitted where any of it is kept, and cut in four
     // where the fit misses.
@@ -1843,242 +1865,80 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
             }) as Box<dyn Fn(P2) -> bool + Send + Sync>
         })
         .collect();
-    let delta = tube.delta();
-    let jump = 4.0 * tube.step();
-    // The sheets read by membership, their curves traced, and each then fitted over the part of
-    // it kept (which only the curves and the reading tell).
+    let sheets: Vec<Sheet> = patches
+        .iter()
+        .map(|&p| Sheet::read(&tube, p, grid_of(p)))
+        .collect();
+    let kept_patches: Vec<Patch> = sheets
+        .iter()
+        .map(|sh| sh.patch)
+        .chain(torus_patches.iter().copied())
+        .collect();
     if debug {
         eprintln!(
-            "tube sweep: the tori's {} pieces cut along the joins by {:.0} ms",
+            "tube sweep: the tori's {} pieces cut along the joins and {} sheet patches read by {:.0} ms",
             faces.len(),
+            sheets.len(),
             t_start.elapsed().as_secs_f64() * 1e3
         );
     }
-    let (sheets, fits, kept_patches, given, on_sheet) = {
-        let sheets: Vec<Sheet> = patches
-            .iter()
-            .map(|&p| Sheet::read(&tube, p, grid_of(p)))
-            .collect();
-        let t_fitted = web_time::Instant::now();
-        let kept_patches: Vec<Patch> = sheets
-            .iter()
-            .map(|sh| sh.patch)
-            .chain(torus_patches.iter().copied())
-            .collect();
-        let n_sheets = sheets.len();
-        let fc = Faces {
-            tube: &tube,
-            patches: &kept_patches,
-            sheets: n_sheets,
-            holds: &holds,
-            bare: &torus_bare,
-            tori: &tori,
-        };
-        // The curves the boundary crosses each sheet's patch along, read in the patch's own (a, ψ)
-        // by membership: where its points pass from kept to covered. Each point of one is touched
-        // by the torus at the instant that covers the far side, on the face the torus's surface
-        // passes through it on then (another sheet's patch, this one's elsewhere, or the torus
-        // where the motion starts or stops): the curve is those two faces' meeting, known whole
-        // with its place on each, with no search for it in space (where the faces graze, at the
-        // joins and beside a fold, such a search wanders).
-        let traced: Vec<Vec<super::sweep_moving::Given>> = sheets
-            .par_iter()
-            .enumerate()
-            .map(|(i, sh)| {
-                let (chart, a0, a1, p0, p1) = sh.patch;
-                let cover = |w: P2| tube.sheet_cover(chart, w);
-                let near = |w: P2, tc: f64| tube.sheet_cover_near(chart, w, tc);
-                let fd = Field {
-                    cover: &cover,
-                    near: &near,
-                };
-                let bx = ((a0, a1), (p0, p1));
-                let point = |w: P2| {
-                    tube.eval(&Pos {
-                        chart,
-                        a: w.x,
-                        psi: w.y,
-                    })
-                    .p
-                };
-                let chains = cover_curves(
-                    &fd,
-                    bx,
-                    sh.grid,
-                    Some(&sh.nodes),
-                    1e-6,
-                    jump,
-                    &point,
-                    fit_tol,
-                )
-                .unwrap_or_default();
-                // (A place covered across a seam, by the other chart there: found by the place's
-                // own instant.)
-                let pair = |w: P2, tau: f64, prefer: Option<(usize, usize)>| {
-                    let kp = tube.eval(&Pos {
-                        chart,
-                        a: w.x,
-                        psi: w.y,
-                    });
-                    let x = kp.p;
-                    if std::env::var("CADRS_TUBE_PAIR").is_ok_and(|v| v == i.to_string()) {
-                        eprintln!(
-                            "  pair on {i} at {w:?} tau {tau:.12}: at end {:?}, rates {:.3e} {:.3e}, exact {:.12} -> {:?} (prefer {prefer:?})",
-                            tube.at_end(tau, &x),
-                            tube.rate(0.0, &x),
-                            tube.rate(1.0, &x),
-                            tube.foot(tau.clamp(0.0, 1.0), &x),
-                            fc.at(&x, tau, prefer.map(|p| p.1))
-                        );
-                    }
-                    let (fb, uvb) = if tau < -0.5 {
-                        fc.across_seam(chart, &x, kp.own, tau, prefer.map(|p| p.1))?
-                    } else {
-                        fc.at(&x, tau, prefer.map(|p| p.1))?
-                    };
-                    Some(((i, fb), (x, w, uvb)))
-                };
-                let place = |w: P2, tau: f64, (_, fb): (usize, usize)| {
-                    let kp = tube.eval(&Pos {
-                        chart,
-                        a: w.x,
-                        psi: w.y,
-                    });
-                    let tau = if tau < -0.5 { kp.own } else { tau };
-                    (kp.p, w, fc.clamped(fb, &kp.p, tau))
-                };
-                let margin = |w: P2, tau: f64| tube.margin(chart, w, tau);
-                let onto = |w: P2, d: V2, tau: f64, full: bool| {
-                    if full {
-                        onto_boundary(&|w, _| cover(w), w, d, tau, bx)
-                    } else {
-                        onto_boundary(&near, w, d, tau, bx)
-                    }
-                };
-                let mut out = Vec::new();
-                for chain in chains {
-                    if let Ok(want) = std::env::var("CADRS_TUBE_CROSS") {
-                        let v: Vec<f64> = want.split(',').filter_map(|w| w.parse().ok()).collect();
-                        if v.len() == 2
-                            && chain
-                                .pts
-                                .iter()
-                                .any(|p| (p.0 - P2::new(v[0], v[1])).norm() < 1e-6)
-                        {
-                            eprintln!(
-                                "  chain on face {i} (chart {chart}, box {bx:?}), closed {}: {:?}",
-                                chain.closed, chain.pts
-                            );
-                        }
-                    }
-                    chain_runs(&chain, &pair, &place, &onto, &margin, jump, &mut out);
-                }
-                out
-            })
-            .collect();
-        let mut given: Vec<super::sweep_moving::Given> = traced.into_iter().flatten().collect();
-        // (Two patches' crossing is read from each, and a patch's crossing of itself from each of
-        // its two places: one reading of the two kept. Where one is a part of the other (a
-        // face's own reading of a curve gives out where its parameters are stretched thin,
-        // beside a pinch's seam, and its neighbour's doesn't), the whole one; of two alike, the
-        // lower patch's or the first. A reading without its twin stays.)
-        {
-            let near = 1e-5 * size;
-            let length = |g: &super::sweep_moving::Given| -> f64 {
-                g.pts.windows(2).map(|w| (w[1].0 - w[0].0).norm()).sum()
-            };
-            // (Whether every point of g lies on h's polyline.)
-            let along = |g: &super::sweep_moving::Given, h: &super::sweep_moving::Given| -> bool {
-                g.pts.iter().all(|p| {
-                    h.pts.windows(2).any(|w| {
-                        let (a, b) = (w[0].0, w[1].0);
-                        let d = b - a;
-                        let t = if d.norm_squared() > 0.0 {
-                            ((p.0 - a).dot(&d) / d.norm_squared()).clamp(0.0, 1.0)
-                        } else {
-                            0.0
-                        };
-                        // (A chord lies off its curve by its sag, which the tracing holds
-                        // to this.)
-                        let sag = (0.5 * fit_tol * d.norm_squared()).cbrt();
-                        (a + d * t - p.0).norm() <= near + 2.0 * sag
-                    })
-                })
-            };
-            if std::env::var_os("CADRS_TUBE_TWINS").is_some() {
-                // (How far each reading's points are off its twins' polylines, at worst.)
-                for (i, g) in given.iter().enumerate() {
-                    for (j, h) in given.iter().enumerate() {
-                        if i == j || (h.a, h.b) != (g.b, g.a) || g.b >= n_sheets {
-                            continue;
-                        }
-                        let off = |p: &P3| {
-                            h.pts
-                                .windows(2)
-                                .map(|w| {
-                                    let (a, b) = (w[0].0, w[1].0);
-                                    let d = b - a;
-                                    let t = ((p - a).dot(&d) / d.norm_squared().max(1e-300))
-                                        .clamp(0.0, 1.0);
-                                    (a + d * t - p).norm()
-                                })
-                                .fold(f64::INFINITY, f64::min)
-                        };
-                        let worst = g
-                            .pts
-                            .iter()
-                            .enumerate()
-                            .map(|(k, p)| (off(&p.0), k))
-                            .max_by(|x, y| x.0.total_cmp(&y.0))
-                            .unwrap();
-                        eprintln!(
-                            "  reading {i} ({}, {}) of {} points, {:.6} long, against {j} of {} points, {:.6} long: furthest off {:.3e} at point {}; along {}",
-                            g.a,
-                            g.b,
-                            g.pts.len(),
-                            length(g),
-                            h.pts.len(),
-                            length(h),
-                            worst.0,
-                            worst.1,
-                            along(g, h)
-                        );
-                    }
-                }
-            }
-            let mut keep = vec![true; given.len()];
-            for i in 0..given.len() {
-                let g = &given[i];
-                if g.b >= n_sheets {
-                    continue;
-                }
-                let lg = length(g);
-                let twin = (0..given.len()).any(|j| {
-                    let h = &given[j];
-                    if j == i || !keep[j] || (h.a, h.b) != (g.b, g.a) {
-                        return false;
-                    }
-                    if !along(g, h) {
-                        return false;
-                    }
-                    // (A part of the other goes. Each along the other, they are one curve read
-                    // twice: the one that winds back on itself, longer for it, goes; of two
-                    // alike, the higher patch's or the later.)
-                    let lh = length(h);
-                    !along(h, g)
-                        || lg > lh + near
-                        || ((lg - lh).abs() <= near && (g.a > g.b || (g.a == g.b && j < i)))
-                });
-                if twin {
-                    keep[i] = false;
-                }
-            }
-            let mut k = 0;
-            given.retain(|_| {
-                k += 1;
-                keep[k - 1]
-            });
+    Some(Ok(Prep {
+        tube,
+        size,
+        fit_tol,
+        patches: kept_patches,
+        sheets,
+        tori,
+        pieces: faces,
+        holds,
+        bare: torus_bare,
+    }))
+}
+
+/// [`crate::Kernel::sweep_solid`] of a whole torus by a rigid motion: None when `b` isn't one;
+/// an error when its boundary isn't made out exactly.
+pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<Result<OpResult>> {
+    use rayon::prelude::*;
+    let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+    let t_start = web_time::Instant::now();
+    let refused = |why: String| -> Option<Result<OpResult>> {
+        if debug {
+            eprintln!("tube sweep: refused: {why}");
         }
+        Some(Err(KernelError::InvalidResult {
+            op: "solid sweep",
+            why: format!("the swept torus: {why}"),
+        }))
+    };
+    let prep = match prepare(b, motion)? {
+        Ok(p) => p,
+        Err(e) => return Some(Err(e)),
+    };
+    let (tube, size, fit_tol) = (&prep.tube, prep.size, prep.fit_tol);
+    let place_r = |t: f64| {
+        let (m, d) = motion.place(t);
+        (nalgebra::Rotation3::from_matrix_unchecked(m), d)
+    };
+    let (c, z, big, r) = (tube.c, tube.z, tube.big, tube.r);
+    let oracle = super::sweep_moving::Oracle::with_measure(
+        Box::new(move |q: &V3| {
+            let w = q - c.coords;
+            let h = w.dot(&z);
+            ((w - z * h).norm() - big).hypot(h) - r
+        }),
+        &place_r,
+        2048,
+    );
+    let (sheets, kept_patches, tori) = (&prep.sheets, &prep.patches, &prep.tori);
+    let mut faces = prep.pieces.clone();
+    let n_sheets = sheets.len();
+    let delta = tube.delta();
+    let jump = 4.0 * tube.step();
+    let (fits, given, on_sheet) = {
+        let t_fitted = web_time::Instant::now();
+        let fc = prep.faces();
+        let mut given = trace(&prep, 0, None);
+        drop_twins(&mut given, &|i| i < n_sheets, size, fit_tol);
         let n_sheet_curves = given.len();
         // Where the torus at the start crosses the torus at the end (a motion that comes back near
         // where it began): the zero set of the one's distance over the other's (ψ, θ), kept where
@@ -2189,9 +2049,9 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
             eprintln!(
                 "tube sweep: {} sheet patches of {} tried ({:.0} ms), {} faces with the tori's; {} curves on the sheets and {} between the tori ({:.0} ms)",
                 n_sheets,
-                patches.len(),
+                n_sheets,
                 ms(t_start, t_fitted),
-                faces.len(),
+                kept_patches.len(),
                 n_sheet_curves,
                 given.len() - n_sheet_curves,
                 ms(t_fitted, t_traced),
@@ -2360,9 +2220,8 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
                 }
             }
         }
-        (sheets, fits, kept_patches, given, on_sheet)
+        (fits, given, on_sheet)
     };
-    let n_sheets = sheets.len();
     // The sheets' faces, each turned to face away from the core circle placed at its points'
     // own instant: read at a kept point (past a fold the sheet faces the other way, and lies
     // inside), the kept node with the most kept round it, or, a patch covered at every node, a
@@ -2490,6 +2349,296 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
         bodies: vec![id],
         history: History::default(),
     }))
+}
+
+/// Another swept torus beside the one being traced, for a boolean of the two.
+struct Other<'a, 'b> {
+    prep: &'a Prep<'b>,
+    /// Its faces' first index among both solids'.
+    base: usize,
+    /// Whether the traced solid's faces are kept where this one holds them (an intersection's,
+    /// and the cutter's in a difference) or where it doesn't.
+    inside: bool,
+}
+
+/// Another swept torus's instants are told from a tube's own by this much added.
+const OTHER: f64 = 10.0;
+
+/// The curves the boundary crosses each sheet's patch along, read in the patch's own (a, ψ)
+/// by membership: where its points pass from kept to covered. Each point of one is touched
+/// by the torus at the instant that covers the far side, on the face the torus's surface
+/// passes through it on then (another sheet's patch, this one's elsewhere, or the torus
+/// where the motion starts or stops): the curve is those two faces' meeting, known whole
+/// with its place on each, with no search for it in space (where the faces graze, at the
+/// joins and beside a fold, such a search wanders). With another swept torus beside this
+/// one, where that one holds a point (or doesn't) as well, at an instant of its own. The
+/// faces are numbered from `base`.
+fn trace(this: &Prep, base: usize, other: Option<&Other>) -> Vec<super::sweep_moving::Given> {
+    use rayon::prelude::*;
+    let tube = &this.tube;
+    let fc = this.faces();
+    let jump = 4.0 * tube.step();
+    let fit_tol = this.fit_tol;
+    let traced: Vec<Vec<super::sweep_moving::Given>> = this
+        .sheets
+        .par_iter()
+        .enumerate()
+        .map(|(i, sh)| {
+            let (chart, a0, a1, p0, p1) = sh.patch;
+            let bx = ((a0, a1), (p0, p1));
+            let point = |w: P2| {
+                tube.eval(&Pos {
+                    chart,
+                    a: w.x,
+                    psi: w.y,
+                })
+                .p
+            };
+            // (Whether the other solid's hold of a point drops it, with the instant it holds
+            // it deepest, or comes nearest.)
+            let dropped = |l: Least, o: &Other| {
+                ((l.1 < -o.prep.tube.delta()) != o.inside, OTHER + l.0)
+            };
+            let beside = |c: (bool, f64), w: P2| match other {
+                Some(o) if !c.0 => {
+                    let d = dropped(o.prep.tube.least(&point(w)), o);
+                    if d.0 { d } else { c }
+                }
+                _ => c,
+            };
+            let cover = |w: P2| beside(tube.sheet_cover(chart, w), w);
+            let near = |w: P2, tc: f64| match other {
+                Some(o) if tc > OTHER - 0.5 => {
+                    dropped(o.prep.tube.least_near(&point(w), tc - OTHER), o)
+                }
+                _ => tube.sheet_cover_near(chart, w, tc),
+            };
+            let fd = Field {
+                cover: &cover,
+                near: &near,
+            };
+            // (The patch's nodes as its own solid read them, and the other's hold of those it
+            // keeps.)
+            let (mu, mv) = sh.grid;
+            let nodes: Option<Vec<(bool, f64)>> = other.map(|_| {
+                (0..(mu + 1) * (mv + 1))
+                    .into_par_iter()
+                    .map(|n| beside(sh.nodes[n], sh.at(n / (mv + 1), n % (mv + 1))))
+                    .collect()
+            });
+            let chains = cover_curves(
+                &fd,
+                bx,
+                sh.grid,
+                Some(nodes.as_deref().unwrap_or(&sh.nodes)),
+                1e-6,
+                jump,
+                &point,
+                fit_tol,
+            )
+            .unwrap_or_default();
+            // (A place covered across a seam, by the other chart there: found by the place's
+            // own instant.)
+            let pair = |w: P2, tau: f64, prefer: Option<(usize, usize)>| {
+                let kp = tube.eval(&Pos {
+                    chart,
+                    a: w.x,
+                    psi: w.y,
+                });
+                let x = kp.p;
+                let (fb, uvb) = match other {
+                    Some(o) if tau > OTHER - 0.5 => {
+                        let prefer = prefer.and_then(|p| p.1.checked_sub(o.base));
+                        let (f, uv) = o.prep.faces().at(&x, tau - OTHER, prefer)?;
+                        (o.base + f, uv)
+                    }
+                    _ => {
+                        let prefer = prefer.and_then(|p| p.1.checked_sub(base));
+                        if std::env::var("CADRS_TUBE_PAIR").is_ok_and(|v| v == i.to_string()) {
+                            eprintln!(
+                                "  pair on {i} at {w:?} tau {tau:.12}: at end {:?}, rates {:.3e} {:.3e}, exact {:.12} -> {:?} (prefer {prefer:?})",
+                                tube.at_end(tau, &x),
+                                tube.rate(0.0, &x),
+                                tube.rate(1.0, &x),
+                                tube.foot(tau.clamp(0.0, 1.0), &x),
+                                fc.at(&x, tau, prefer)
+                            );
+                        }
+                        let (f, uv) = if tau < -0.5 {
+                            fc.across_seam(chart, &x, kp.own, tau, prefer)?
+                        } else {
+                            fc.at(&x, tau, prefer)?
+                        };
+                        (base + f, uv)
+                    }
+                };
+                Some(((base + i, fb), (x, w, uvb)))
+            };
+            let place = |w: P2, tau: f64, (_, fb): (usize, usize)| {
+                let kp = tube.eval(&Pos {
+                    chart,
+                    a: w.x,
+                    psi: w.y,
+                });
+                let uvb = match other {
+                    Some(o) if tau > OTHER - 0.5 => {
+                        o.prep
+                            .faces()
+                            .clamped(fb - o.base, &kp.p, tau - OTHER)
+                    }
+                    _ => {
+                        let tau = if tau < -0.5 { kp.own } else { tau };
+                        fc.clamped(fb - base, &kp.p, tau)
+                    }
+                };
+                (kp.p, w, uvb)
+            };
+            let margin = |w: P2, tau: f64| match other {
+                Some(o) if tau > OTHER - 0.5 => {
+                    let l = o.prep.tube.least_from(&point(w), tau - OTHER);
+                    let d = o.prep.tube.delta();
+                    ((l.1 + d) / d, OTHER + l.0)
+                }
+                _ => tube.margin(chart, w, tau),
+            };
+            let onto = |w: P2, d: V2, tau: f64, full: bool| {
+                if full {
+                    onto_boundary(&|w, _| cover(w), w, d, tau, bx)
+                } else {
+                    onto_boundary(&near, w, d, tau, bx)
+                }
+            };
+            let mut out = Vec::new();
+            for chain in chains {
+                if let Ok(want) = std::env::var("CADRS_TUBE_CROSS") {
+                    let v: Vec<f64> = want.split(',').filter_map(|w| w.parse().ok()).collect();
+                    if v.len() == 2
+                        && chain
+                            .pts
+                            .iter()
+                            .any(|p| (p.0 - P2::new(v[0], v[1])).norm() < 1e-6)
+                    {
+                        eprintln!(
+                            "  chain on face {i} (chart {chart}, box {bx:?}), closed {}: {:?}",
+                            chain.closed, chain.pts
+                        );
+                    }
+                }
+                chain_runs(&chain, &pair, &place, &onto, &margin, jump, &mut out);
+            }
+            out
+        })
+        .collect();
+    traced.into_iter().flatten().collect()
+}
+
+/// Two patches' crossing is read from each, and a patch's crossing of itself from each of its
+/// two places: one reading of the two kept. Where one is a part of the other (a face's own
+/// reading of a curve gives out where its parameters are stretched thin, beside a pinch's
+/// seam, and its neighbour's doesn't), the whole one; of two alike, the lower patch's or the
+/// first. A reading without its twin stays. `is_sheet`: whether a face is a sheet's patch
+/// (the tori's pieces read nothing).
+fn drop_twins(
+    given: &mut Vec<super::sweep_moving::Given>,
+    is_sheet: &dyn Fn(usize) -> bool,
+    size: f64,
+    fit_tol: f64,
+) {
+    let near = 1e-5 * size;
+    let length = |g: &super::sweep_moving::Given| -> f64 {
+        g.pts.windows(2).map(|w| (w[1].0 - w[0].0).norm()).sum()
+    };
+    // (Whether every point of g lies on h's polyline.)
+    let along = |g: &super::sweep_moving::Given, h: &super::sweep_moving::Given| -> bool {
+        g.pts.iter().all(|p| {
+            h.pts.windows(2).any(|w| {
+                let (a, b) = (w[0].0, w[1].0);
+                let d = b - a;
+                let t = if d.norm_squared() > 0.0 {
+                    ((p.0 - a).dot(&d) / d.norm_squared()).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                // (A chord lies off its curve by its sag, which the tracing holds
+                // to this.)
+                let sag = (0.5 * fit_tol * d.norm_squared()).cbrt();
+                (a + d * t - p.0).norm() <= near + 2.0 * sag
+            })
+        })
+    };
+    if std::env::var_os("CADRS_TUBE_TWINS").is_some() {
+        // (How far each reading's points are off its twins' polylines, at worst.)
+        for (i, g) in given.iter().enumerate() {
+            for (j, h) in given.iter().enumerate() {
+                if i == j || (h.a, h.b) != (g.b, g.a) || !is_sheet(g.b) {
+                    continue;
+                }
+                let off = |p: &P3| {
+                    h.pts
+                        .windows(2)
+                        .map(|w| {
+                            let (a, b) = (w[0].0, w[1].0);
+                            let d = b - a;
+                            let t =
+                                ((p - a).dot(&d) / d.norm_squared().max(1e-300)).clamp(0.0, 1.0);
+                            (a + d * t - p).norm()
+                        })
+                        .fold(f64::INFINITY, f64::min)
+                };
+                let worst = g
+                    .pts
+                    .iter()
+                    .enumerate()
+                    .map(|(k, p)| (off(&p.0), k))
+                    .max_by(|x, y| x.0.total_cmp(&y.0))
+                    .unwrap();
+                eprintln!(
+                    "  reading {i} ({}, {}) of {} points, {:.6} long, against {j} of {} points, {:.6} long: furthest off {:.3e} at point {}; along {}",
+                    g.a,
+                    g.b,
+                    g.pts.len(),
+                    length(g),
+                    h.pts.len(),
+                    length(h),
+                    worst.0,
+                    worst.1,
+                    along(g, h)
+                );
+            }
+        }
+    }
+    let mut keep = vec![true; given.len()];
+    for i in 0..given.len() {
+        let g = &given[i];
+        if !is_sheet(g.b) {
+            continue;
+        }
+        let lg = length(g);
+        let twin = (0..given.len()).any(|j| {
+            let h = &given[j];
+            if j == i || !keep[j] || (h.a, h.b) != (g.b, g.a) {
+                return false;
+            }
+            if !along(g, h) {
+                return false;
+            }
+            // (A part of the other goes. Each along the other, they are one curve read
+            // twice: the one that winds back on itself, longer for it, goes; of two
+            // alike, the higher patch's or the later.)
+            let lh = length(h);
+            !along(h, g)
+                || lg > lh + near
+                || ((lg - lh).abs() <= near && (g.a > g.b || (g.a == g.b && j < i)))
+        });
+        if twin {
+            keep[i] = false;
+        }
+    }
+    let mut k = 0;
+    given.retain(|_| {
+        k += 1;
+        keep[k - 1]
+    });
 }
 
 /// A patch of a chart: its chart, a from `.1` to `.2`, ψ from `.3` to `.4` (a torus's piece:
