@@ -101,6 +101,10 @@ pub struct NativeKernel {
     /// which a boolean of two of them is made from again ([`super::sweep_tube::boolean`]: by
     /// what each motion holds, where their surfaces' crossing in space wanders).
     pub(crate) swept_tori: HashMap<u64, Arc<super::sweep_tube::SweptTorus>>,
+    /// The pipes this session made (a round section swept along a path from its centre, and
+    /// what it comes to with a ball of its radius united at an end), by their bodies: slid, a
+    /// pipe is swept as one ([`super::sweep_pipe::slide`]).
+    pub(crate) pipes: HashMap<u64, Arc<super::sweep_pipe::Pipe>>,
 }
 
 /// How many of [`Kernel::joins`]'s unions a session keeps for the union that may follow.
@@ -238,6 +242,7 @@ impl NativeKernel {
             // and two sessions mustn't hand out the same body.)
             joined: Vec::new(),
             swept_tori: self.swept_tori.clone(),
+            pipes: self.pipes.clone(),
         }
     }
 
@@ -255,6 +260,9 @@ impl NativeKernel {
             }
             if let Some(t) = fork.swept_tori.get(&id) {
                 self.swept_tori.insert(id, t.clone());
+            }
+            if let Some(t) = fork.pipes.get(&id) {
+                self.pipes.insert(id, t.clone());
             }
             self.bodies.insert(id, e);
             self.next = self.next.max(id + 1);
@@ -898,7 +906,50 @@ impl Kernel for NativeKernel {
     }
 
     fn sweep_with(&mut self, profile: &Profile, spec: &SweepSpec) -> Result<OpResult> {
-        super::sweep::path::sweep_with(self, profile, spec)
+        let r = super::sweep::path::sweep_with(self, profile, spec)?;
+        // A round section swept along a path from its centre, square to it: a pipe.
+        if let ([body], [region]) = (r.bodies.as_slice(), profile.regions.as_slice())
+            && let [Curve2::Circle { center, radius, .. }] = region.outer.curves.as_slice()
+            && region.holes.is_empty()
+            && matches!(spec.body, BodyKind::Solid)
+            && matches!(spec.control, SweepControl::None)
+            && spec.faces.is_empty()
+            && let Ok(segs) = super::sweep::path::path_segments(self, &spec.path)
+            && let Ok((segs, false)) = super::sweep::path::chain(segs)
+            && let Some(first) = segs.first()
+        {
+            let pl = &profile.plane;
+            let y = pl.normal.cross(&pl.x_dir);
+            let c = pl.origin + pl.x_dir.into_inner() * center.x + y * center.y;
+            let rad = radius.abs();
+            if (c - first.start()).norm() <= 1e-9 * (1.0 + rad) && {
+                let (_, d1, _) = first.c.d2(if first.rev { first.t1 } else { first.t0 });
+                // (Square to within two thousandths of a radian, which leaves the
+                // pipe round to two millionths of its radius: a helix drawn in conic
+                // pieces sets out that far off the helix's own tangent.)
+                d1.normalize().cross(&pl.normal).norm() <= 2e-3
+            } {
+                let segs = segs
+                    .iter()
+                    .map(|g| {
+                        if g.rev {
+                            (g.c.clone(), g.t1, g.t0)
+                        } else {
+                            (g.c.clone(), g.t0, g.t1)
+                        }
+                    })
+                    .collect();
+                self.pipes.insert(
+                    body.0,
+                    Arc::new(super::sweep_pipe::Pipe {
+                        segs,
+                        r: rad,
+                        balls: [false; 2],
+                    }),
+                );
+            }
+        }
+        Ok(r)
     }
 
     fn sweep_solid(&mut self, body: BodyId, motion: &SolidMotion) -> Result<OpResult> {
@@ -1144,6 +1195,39 @@ impl Kernel for NativeKernel {
             return self.colored(Ok(r));
         }
         let r = super::boolean::boolean(self, op, target, tools);
+        // A pipe united with a ball of its radius about an end of its spine: a pipe closed
+        // there.
+        if let (BoolOp::Union, [tool], Ok(res)) = (op, tools, &r)
+            && let [made] = res.bodies.as_slice()
+        {
+            for (pipe, ball) in [(target, *tool), (*tool, target)] {
+                let Some(pipe) = self.pipes.get(&pipe.0).cloned() else {
+                    continue;
+                };
+                let Ok(b) = self.get(ball) else {
+                    continue;
+                };
+                let [f] = b.faces.as_slice() else {
+                    continue;
+                };
+                let super::surface::Surface::Sphere { f: fr, r: rs } = &f.surf else {
+                    continue;
+                };
+                let (centre, rs) = (fr.o, *rs);
+                if (rs - pipe.r).abs() > 1e-9 * pipe.r {
+                    continue;
+                }
+                let (first, last) = (&pipe.segs[0], &pipe.segs[pipe.segs.len() - 1]);
+                let ends = [first.0.point(first.1), last.0.point(last.2)];
+                for (e, end) in ends.iter().enumerate() {
+                    if (centre - end).norm() <= 1e-9 * (1.0 + pipe.r) {
+                        let mut closed = (*pipe).clone();
+                        closed.balls[e] = true;
+                        self.pipes.insert(made.0, Arc::new(closed));
+                    }
+                }
+            }
+        }
         // With CADRS_DUMP_DIR set, a failed boolean leaves its inputs there.
         if r.is_err() && std::env::var("CADRS_DUMP_DIR").is_ok() {
             dump("boolean-target", self.get(target)?, &format!("{op:?}"));

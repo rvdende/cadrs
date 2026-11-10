@@ -331,6 +331,7 @@ pub(crate) mod sweep_faces;
 pub mod sweep_moving;
 #[cfg(not(feature = "testkit"))]
 pub(crate) mod sweep_moving;
+pub(crate) mod sweep_pipe;
 #[cfg(feature = "testkit")]
 pub mod sweep_planar;
 #[cfg(not(feature = "testkit"))]

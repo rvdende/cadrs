@@ -3829,6 +3829,113 @@ fn debug_tumbling_tori() {
             }
             continue;
         }
+        if name == "spring" {
+            // brep-bench's coil spring pushed aslant: a round section swept along three turns
+            // of a helix (sixteen conic pieces a turn), a ball at each end, slid.
+            use cadrs_kernel::{
+                BodyKind, Curve2, Loop, PathCurve, Plane, Profile, Region, SweepSpec,
+            };
+            let mut k = NativeKernel::new();
+            let t0 = std::time::Instant::now();
+            let o = Point3::new(0.0, 0.0, -12.0);
+            let (radius, pitch, turns, r) = (2.0, 1.5, 3.0, 0.4);
+            let n = 48;
+            let at = |t: f64, rad: f64, z: f64| o + Vector3::new(rad * t.cos(), rad * t.sin(), z);
+            let tau = std::f64::consts::TAU;
+            let path: Vec<PathCurve> = (0..n)
+                .map(|i| {
+                    let (s0, s1) = (i as f64 / n as f64, (i + 1) as f64 / n as f64);
+                    let (a0, a1) = (tau * turns * s0, tau * turns * s1);
+                    let half = (a1 - a0) / 2.0;
+                    let (z0, z1) = (pitch * turns * s0, pitch * turns * s1);
+                    PathCurve::Bezier3 {
+                        poles: vec![
+                            at(a0, radius, z0),
+                            at(a0 + half, radius / half.cos(), (z0 + z1) / 2.0),
+                            at(a1, radius, z1),
+                        ],
+                        weights: vec![1.0, half.cos(), 1.0],
+                    }
+                })
+                .collect();
+            let start = Point3::new(2.0, 0.0, -12.0);
+            let normal = nalgebra::Unit::new_normalize(Vector3::new(0.0, radius, pitch / tau));
+            let x = Vector3::x();
+            let plane = Plane {
+                origin: start,
+                x_dir: nalgebra::Unit::new_normalize(x - normal.into_inner() * x.dot(&normal)),
+                normal,
+            };
+            let profile = Profile::new(
+                plane,
+                vec![Region {
+                    outer: Loop {
+                        curves: vec![Curve2::Circle {
+                            center: nalgebra::Point2::new(0.0, 0.0),
+                            radius: r,
+                            source: None,
+                        }],
+                    },
+                    holes: vec![],
+                    source: None,
+                }],
+            );
+            let spec = SweepSpec {
+                body: BodyKind::Solid,
+                path,
+                control: Default::default(),
+                corners: Default::default(),
+                faces: vec![],
+            };
+            let built = (|| -> Result<BodyId> {
+                let mut spring = k.sweep_with(&profile, &spec)?.bodies[0];
+                for c in [start, Point3::new(2.0, 0.0, -7.5)] {
+                    let ball = k
+                        .primitive(&Primitive::Sphere {
+                            center: c,
+                            radius: r,
+                            axis: Vector3::z_axis(),
+                            seam: Vector3::x_axis(),
+                        })?
+                        .bodies[0];
+                    spring = k.boolean(BoolOp::Union, spring, &[ball])?.bodies[0];
+                }
+                eprintln!("spring made in {:.2?}", t0.elapsed());
+                let swept = k
+                    .sweep_solid(
+                        spring,
+                        &SolidMotion::Rigid {
+                            steps: vec![RigidStep::Slide {
+                                from: Vector3::zeros(),
+                                to: Vector3::new(3.0, 1.0, 18.0),
+                            }],
+                        },
+                    )?
+                    .bodies[0];
+                Ok(swept)
+            })();
+            match built {
+                Ok(id) => {
+                    grade(&k, id, "spring", t0.elapsed());
+                    if std::env::var_os("CADRS_SPRING_CUT").is_some() {
+                        let plate = k
+                            .primitive(&Primitive::Box {
+                                min: Point3::new(-15.0, -15.0, 0.0),
+                                max: Point3::new(15.0, 15.0, 4.0),
+                            })
+                            .unwrap()
+                            .bodies[0];
+                        let t1 = std::time::Instant::now();
+                        match k.boolean(BoolOp::Subtract, plate, &[id]) {
+                            Ok(r) => grade(&k, r.bodies[0], "spring cut", t1.elapsed()),
+                            Err(e) => eprintln!("FAIL spring cut: {e} (in {:.2?})", t1.elapsed()),
+                        }
+                    }
+                }
+                Err(e) => eprintln!("FAIL spring: {e} (in {:.2?})", t0.elapsed()),
+            }
+            continue;
+        }
         if name == "carried" {
             // brep-bench's ring carried along a spline: an upright ring riding a planar Bézier.
             let mut k = NativeKernel::new();

@@ -548,6 +548,17 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
     // where its faces meet the motion); else meshed.
     if let SolidMotion::Rigid { steps } = motion {
         let mut exact = None;
+        // A pipe slid: exactly, as everything within its radius of the strip its spine sweeps.
+        if let [RigidStep::Slide { from, to }] = steps.as_slice()
+            && from.norm() == 0.0
+            && let Some(pipe) = k.pipes.get(&body.0).cloned()
+        {
+            match super::sweep_pipe::slide(k, &pipe, *to) {
+                Some(Ok(r)) => return Ok(r),
+                Some(Err(e)) => exact = Some(e),
+                None => {}
+            }
+        }
         // (A torus by two steps or more first as a torus: its faces' own sweeps, which make
         // one step's exactly in closed form, seldom join for two, and are slow to find so.)
         let mut as_torus = None;

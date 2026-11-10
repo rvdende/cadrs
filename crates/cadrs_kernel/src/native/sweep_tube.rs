@@ -3314,7 +3314,7 @@ fn trace(
 /// seam, and its neighbour's doesn't), the whole one; of two alike, the lower patch's or the
 /// first. A reading without its twin stays. `is_sheet`: whether a face is a sheet's patch
 /// (the tori's pieces read nothing).
-fn drop_twins(
+pub(super) fn drop_twins(
     given: &mut Vec<super::sweep_moving::Given>,
     is_sheet: &dyn Fn(usize) -> bool,
     size: f64,
@@ -3489,7 +3489,11 @@ const SHEET_FIT: f64 = 1e-7;
 const PATCH_DEGREE: usize = 5;
 
 /// The B-spline (of `PATCH_DEGREE`) through a chart's points at the sites `us` by `vs`.
-fn tensor(at: &dyn Fn(f64, f64) -> P3, us: &[f64], vs: &[f64]) -> super::nurbs::NurbsSurface {
+pub(super) fn tensor(
+    at: &dyn Fn(f64, f64) -> P3,
+    us: &[f64],
+    vs: &[f64],
+) -> super::nurbs::NurbsSurface {
     use super::nurbs::{H, NurbsCurve, NurbsSurface, hom};
     // Along u at each v, then the poles' columns along v.
     let rows: Vec<NurbsCurve> = vs
@@ -3893,16 +3897,16 @@ impl Faces<'_> {
 /// Membership over a face's own parameters: whether a place is covered (inside the swept
 /// solid) with the instant that covers it, read in full (`cover`) or only about an instant
 /// (`near`: cheaper, and enough beside a place already read).
-struct Field<'a> {
-    cover: &'a (dyn Fn(P2) -> (bool, f64) + Sync),
-    near: &'a (dyn Fn(P2, f64) -> (bool, f64) + Sync),
+pub(super) struct Field<'a> {
+    pub(super) cover: &'a (dyn Fn(P2) -> (bool, f64) + Sync),
+    pub(super) near: &'a (dyn Fn(P2, f64) -> (bool, f64) + Sync),
 }
 
 /// A curve between kept and covered: its points in the face's parameters, each with the
 /// instant that covers the far side there; a closed one repeats its first point.
-struct Chain {
-    pts: Vec<(P2, f64)>,
-    closed: bool,
+pub(super) struct Chain {
+    pub(super) pts: Vec<(P2, f64)>,
+    pub(super) closed: bool,
 }
 
 /// Where membership changes between a kept place and a covered one (covered at `tau`), along
@@ -3951,7 +3955,7 @@ fn crossing(fd: &Field, kept: P2, cov: P2, mut tau: f64) -> (P2, f64) {
 /// the face's parameters, within the box `bx`), by `test` about the instant `tau`: found by
 /// doubling steps either way and bisected; None when there is none within a twentieth of a
 /// unit, or the length of `d` if that is more.
-fn onto_boundary(
+pub(super) fn onto_boundary(
     test: &(dyn Fn(P2, f64) -> (bool, f64) + Sync),
     w: P2,
     d: V2,
@@ -4010,7 +4014,7 @@ fn onto_boundary(
 /// curve between them still be read about them (further, another instant takes over between
 /// them, and it is read in full).
 #[allow(clippy::too_many_arguments)]
-fn cover_curves(
+pub(super) fn cover_curves(
     fd: &Field,
     bx: ((f64, f64), (f64, f64)),
     (mu, mv): (usize, usize),
@@ -4275,11 +4279,12 @@ fn cover_curves(
 }
 
 /// A curve's point: where it is, and its place on each of its two faces.
-type CurvePt = (P3, P2, P2);
+pub(super) type CurvePt = (P3, P2, P2);
 
 /// What a chain's point is between: its place, its covering instant and the faces preferred
 /// (those of the stretch so far), to the two faces and the point on them.
-type PairAt<'a> = dyn Fn(P2, f64, Option<(usize, usize)>) -> Option<((usize, usize), CurvePt)> + 'a;
+pub(super) type PairAt<'a> =
+    dyn Fn(P2, f64, Option<(usize, usize)>) -> Option<((usize, usize), CurvePt)> + 'a;
 
 /// A chain's stretches, each between two faces: `pair` reads a chain point (its place and
 /// covering instant; the faces of the stretch so far preferred where it lies on an edge) as
@@ -4291,7 +4296,7 @@ type PairAt<'a> = dyn Fn(P2, f64, Option<(usize, usize)>) -> Option<((usize, usi
 /// beside a fold) holds the curve twice, out to the fold's tip and back: its first half is
 /// kept, the other being its far side.
 #[allow(clippy::too_many_arguments)]
-fn chain_runs(
+pub(super) fn chain_runs(
     chain: &Chain,
     pair: &PairAt,
     place: &dyn Fn(P2, f64, (usize, usize)) -> CurvePt,
