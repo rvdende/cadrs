@@ -1681,8 +1681,9 @@ pub(super) fn glued_with(
     // outside every body.
     let t_check = web_time::Instant::now();
     if !apart {
+        use rayon::prelude::*;
         let polys: Vec<Vec<Vec<Vec<P2>>>> = all
-            .iter()
+            .par_iter()
             .map(|b| {
                 b.faces
                     .iter()
@@ -1693,45 +1694,51 @@ pub(super) fn glued_with(
         // (Judged by ray parity, the majority of a few rays: no mesh, which a face folded along an
         // edge can make huge; an overlap it finds confirmed by the body's winding number over its
         // mesh, as a ray through the long helical B-spline faces a screw sweeps can miss a
-        // crossing.)
+        // crossing. Each kept face on its own: the faces are many and the rays dear.)
         let boxes: Vec<Bbox> = all.iter().map(|b| b.bbox()).collect();
-        let mut meshes: Vec<Option<Vec<super::tess::FaceMesh>>> = vec![None; all.len()];
+        let meshes: Vec<std::sync::OnceLock<Vec<super::tess::FaceMesh>>> =
+            all.iter().map(|_| std::sync::OnceLock::new()).collect();
         let eps = 1e-3 * size.max(1.0);
-        for (i, &(bi, fi, ..)) in faces.iter().enumerate() {
-            if dropped[i] {
-                continue;
-            }
+        let kept: Vec<(usize, usize)> = faces
+            .iter()
+            .zip(&dropped)
+            .filter(|(_, d)| !**d)
+            .map(|(f, _)| (f.0, f.1))
+            .collect();
+        let overlap = kept.par_iter().find_map_first(|&(bi, fi)| {
             let f = &all[bi].faces[fi];
             let sign = if f.sense { 1.0 } else { -1.0 };
-            for q in super::boolean::interior_points_of_polys(&polys[bi][fi])
+            super::boolean::interior_points_of_polys(&polys[bi][fi])
                 .into_iter()
                 .take(4)
-            {
-                let out = f.surf.eval(q.x, q.y) + f.surf.normal(q.x, q.y) * (sign * eps);
-                let inside = (0..all.len()).position(|bj| {
-                    if bj == bi
-                        || !boxes[bj].contains(&out)
-                        || !super::classify::parity_inside(&all[bj], &polys[bj], &out)
-                    {
-                        return false;
-                    }
-                    let m = meshes[bj].get_or_insert_with(|| {
-                        super::tess::mesh_body(&all[bj], 1e-4 * size.max(1.0), 0.3).0
-                    });
-                    winding(m, &out) > 0.5
-                });
-                if let Some(bj) = inside {
-                    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
-                        eprintln!(
-                            "sweep by faces: the bodies overlap (face {fi} of body {bi}, {:?} {:.4?}, inside body {bj}; volumes {:.4?})",
-                            f.surf.kind(),
-                            out,
-                            all.iter().map(super::mass::body_volume).collect::<Vec<_>>()
-                        );
-                    }
-                    return None;
-                }
+                .find_map(|q| {
+                    let out = f.surf.eval(q.x, q.y) + f.surf.normal(q.x, q.y) * (sign * eps);
+                    (0..all.len())
+                        .position(|bj| {
+                            if bj == bi
+                                || !boxes[bj].contains(&out)
+                                || !super::classify::parity_inside(&all[bj], &polys[bj], &out)
+                            {
+                                return false;
+                            }
+                            let m = meshes[bj].get_or_init(|| {
+                                super::tess::mesh_body(&all[bj], 1e-4 * size.max(1.0), 0.3).0
+                            });
+                            winding(m, &out) > 0.5
+                        })
+                        .map(|bj| (bi, fi, bj, out))
+                })
+        });
+        if let Some((bi, fi, bj, out)) = overlap {
+            if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+                eprintln!(
+                    "sweep by faces: the bodies overlap (face {fi} of body {bi}, {:?} {:.4?}, inside body {bj}; volumes {:.4?})",
+                    all[bi].faces[fi].surf.kind(),
+                    out,
+                    all.iter().map(super::mass::body_volume).collect::<Vec<_>>()
+                );
             }
+            return None;
         }
     }
     let ids: Vec<BodyId> = faces
