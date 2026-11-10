@@ -243,6 +243,93 @@ fn extruded_offset(
     Ok((**kk.get(id)?).clone())
 }
 
+/// Everything within `d` of the open wire `wire` (in the plane z = 0, chained in order): its
+/// offset to both sides with round ends ([`offset_wire`]: exact, and trimmed where the wire
+/// curves more tightly than `d` or runs back over itself), extruded from z0 to z1 along n, in
+/// the frame (x, n × x, n) at o. A wire looping round ground it doesn't reach leaves a hole.
+pub(crate) fn wire_slot(
+    wire: &[(Curve, f64, f64)],
+    d: f64,
+    o: P3,
+    x: V3,
+    n: V3,
+    z0: f64,
+    z1: f64,
+) -> Result<Body> {
+    let loops = offset_wire(wire, d)?;
+    // Each loop's way round: counter-clockwise bounds a piece, clockwise a hole in it.
+    let area = |lp: &[Piece2]| -> f64 {
+        let mut a = 0.0;
+        for p in lp {
+            for k in 0..16 {
+                let (u, v) = (
+                    p.c.point(p.t0 + (p.t1 - p.t0) * k as f64 / 16.0),
+                    p.c.point(p.t0 + (p.t1 - p.t0) * (k + 1) as f64 / 16.0),
+                );
+                a += u.x * v.y - v.x * u.y;
+            }
+        }
+        a
+    };
+    let as_loop = |lp: &[Piece2]| -> Result<Loop> {
+        let whole = lp.len() == 1;
+        Ok(Loop {
+            curves: lp
+                .iter()
+                .map(|p| curve2(p, whole))
+                .collect::<Option<Vec<_>>>()
+                .ok_or(KernelError::Unsupported("this offset profile's curves"))?,
+        })
+    };
+    // (The loop round the most ground is the outline; the rest are holes in it, whichever way
+    // they run.)
+    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+        eprintln!(
+            "slot: {} loops, areas {:?}",
+            loops.len(),
+            loops.iter().map(|lp| 0.5 * area(lp)).collect::<Vec<_>>()
+        );
+    }
+    let big =
+        (0..loops.len()).max_by(|&a, &b| area(&loops[a]).abs().total_cmp(&area(&loops[b]).abs()));
+    let Some(big) = big else {
+        return Err(KernelError::Unsupported("a slot with no outline"));
+    };
+    let outer = &loops[big];
+    let holes: Vec<&Vec<Piece2>> = loops
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != big)
+        .map(|(_, lp)| lp)
+        .collect();
+    let region = Region {
+        outer: as_loop(outer)?,
+        holes: holes
+            .iter()
+            .map(|h| as_loop(h))
+            .collect::<Result<Vec<_>>>()?,
+        source: None,
+    };
+    let plane = Plane {
+        origin: o + n * z0,
+        x_dir: nalgebra::Unit::new_normalize(x),
+        normal: nalgebra::Unit::new_normalize(n),
+    };
+    let mut kk = NativeKernel::new();
+    let r = crate::Kernel::extrude(
+        &mut kk,
+        &Profile::new(plane, vec![region]),
+        Extent::Blind(z1 - z0),
+    )?;
+    let [id] = r.bodies[..] else {
+        return Err(KernelError::InvalidResult {
+            op: "sweep",
+            why: "the slot isn't one body".into(),
+        });
+    };
+    Ok((**kk.get(id)?).clone())
+}
+
 /// A piece of the offset (in the plane z = 0, run from t0 to t1) as a profile curve; `whole`
 /// when it is the loop's only piece (a whole circle).
 fn curve2(p: &Piece2, whole: bool) -> Option<Curve2> {

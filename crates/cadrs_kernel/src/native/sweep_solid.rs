@@ -1796,6 +1796,144 @@ pub fn cut_swept(
     }
 }
 
+/// An end mill standing upright (a cylinder about the line through the path's start along `up`,
+/// between two flat ends square to it, the bottom edge sharp or rounded: a flat or a bull-nose
+/// cutter) carried along a path in a plane square to `up`: what it passes through is everything
+/// within its radius of the path, between its ends ([`super::offset::prism::wire_slot`]: the
+/// path's offset, exact and trimmed where the path bends tighter than the radius or loops),
+/// its bottom edge rounded as the cutter's is. None for another body or path.
+fn end_mill_along(
+    k: &mut NativeKernel,
+    b: &Body,
+    path: &[crate::PathCurve],
+    up: V3,
+) -> Option<OpResult> {
+    let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+    let up = up.try_normalize(tol::TINY)?;
+    let segs = super::sweep::path::path_segments(k, path).ok()?;
+    let p0 = segs.first()?.start();
+    let size = b.bbox().diagonal().max(1.0);
+    let near = tol::REL_POINT * size.max((segs.last()?.end() - p0).norm());
+    for s in &segs {
+        for i in 0..=16 {
+            let t = s.t0 + (s.t1 - s.t0) * i as f64 / 16.0;
+            if (s.c.point(t) - p0).dot(&up).abs() > near {
+                return None;
+            }
+        }
+    }
+    let height = |p: &P3| (p - p0).dot(&up);
+    let off_axis = |p: &P3| {
+        let d = p - p0;
+        (d - up * d.dot(&up)).norm()
+    };
+    let parallel = |v: &V3| v.normalize().cross(&up).norm() < 1e-9;
+    // Its faces: two flat ends, the cylinder, and at most the corner's torus.
+    let (mut flats, mut radius, mut corner) = (Vec::new(), None, None);
+    for f in &b.faces {
+        match &f.surf {
+            Surface::Plane { f } if parallel(&f.x.cross(&f.y)) => flats.push(height(&f.o)),
+            Surface::Cylinder { f, r } if parallel(&f.z) && off_axis(&f.o) <= near => {
+                if radius.replace(*r).is_some() {
+                    return None;
+                }
+            }
+            Surface::Torus { f, rmaj, rmin } if parallel(&f.z) && off_axis(&f.o) <= near => {
+                if corner.replace((height(&f.o), *rmaj, *rmin)).is_some() {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    let radius = radius?;
+    let [h0, h1] = flats[..] else {
+        return None;
+    };
+    let (bottom, top) = (h0.min(h1), h0.max(h1));
+    if let Some((h, a, c)) = corner
+        && ((a + c - radius).abs() > near || (h - c - bottom).abs() > near)
+    {
+        return None;
+    }
+    // The path in the frame it lies flat in.
+    let x = {
+        let d = segs.first()?.dir(0.0);
+        (d - up * d.dot(&up)).try_normalize(1e-12)?
+    };
+    let y = up.cross(&x);
+    let to_flat = Affine {
+        m: nalgebra::Matrix3::from_rows(&[x.transpose(), y.transpose(), up.transpose()]),
+        t: -nalgebra::Matrix3::from_rows(&[x.transpose(), y.transpose(), up.transpose()])
+            * p0.coords,
+    };
+    let wire: Vec<(Curve, f64, f64)> = segs
+        .iter()
+        .map(|s| {
+            let c = s.c.transformed(&to_flat);
+            if s.rev {
+                let (c, t0, t1) = c.reversed(s.t0, s.t1);
+                (c, t0, t1)
+            } else {
+                (c, s.t0, s.t1)
+            }
+        })
+        .collect();
+    let slot = match super::offset::prism::wire_slot(&wire, radius, p0, x, up, bottom, top) {
+        Ok(s) => s,
+        Err(e) => {
+            if debug {
+                eprintln!("end mill: no slot: {e}");
+            }
+            return None;
+        }
+    };
+    let body = match corner {
+        None => slot,
+        Some((_, _, c)) => {
+            // Its bottom edges (all in the bottom plane), rounded.
+            let mut kk = NativeKernel::new();
+            let edges: Vec<crate::EdgeId> = slot
+                .edges
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| {
+                    !e.degenerate
+                        && (0..=4).all(|i| {
+                            let t = e.t[0] + (e.t[1] - e.t[0]) * i as f64 / 4.0;
+                            (height(&e.curve.point(t)) - bottom).abs() <= near
+                        })
+                })
+                .map(|(i, _)| crate::EdgeId(i as u64))
+                .collect();
+            let id = kk.insert(slot);
+            match crate::Kernel::fillet(&mut kk, id, &edges, c) {
+                Ok(r) => (**kk.get(*r.bodies.first()?).ok()?).clone(),
+                Err(e) => {
+                    if debug {
+                        eprintln!(
+                            "end mill: the slot's bottom edges ({}) wouldn't round: {e}",
+                            edges.len()
+                        );
+                    }
+                    return None;
+                }
+            }
+        }
+    };
+    if !body.check().is_empty() || body.solids.len() != 1 {
+        if debug {
+            eprintln!("end mill: the slot isn't sound: {:?}", body.check().first());
+        }
+        return None;
+    }
+    let id = k.insert(body);
+    Some(OpResult {
+        bodies: vec![id],
+        history: History::default(),
+    })
+}
+
 /// A whole torus carried along a path of one curve ([`SolidMotion::Path`]): what it passes
 /// through, exactly ([`super::sweep_tube::torus`]). The frame rides the curve by the curve's own
 /// parameter, which is smooth (by its length, as [`PathFrames`] has it, the same places come in
@@ -2210,6 +2348,9 @@ fn path_sweep_exact(
     up: V3,
 ) -> Option<OpResult> {
     if let Some(r) = upright_revolution_along(k, tool, b, path, up) {
+        return Some(r);
+    }
+    if let Some(r) = end_mill_along(k, b, path, up) {
         return Some(r);
     }
     let frames = PathFrames::new(k, path, up).ok()?;
