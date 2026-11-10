@@ -403,31 +403,15 @@ impl<'a> Tube<'a> {
         SheetPt { s, n, npsi, sin }
     }
 
-    /// [`Self::sheet_cover`] of a place of a patch: by a line of pinches, what the tori at
-    /// the motion's ends hold of it read where it is (they are no part of the fold's own
-    /// doubt, and their hold runs right into the fold's corner), the rest read beside it
-    /// ([`Self::inward`]).
+    /// [`Self::sheet_cover`] of a place of a patch, read beside a line of pinches where it is
+    /// hard by one ([`Self::inward`]).
     fn cover_in(&self, patch: &Patch, w: P2) -> (bool, f64) {
-        let to = self.inward(patch, w);
-        if to != w
-            && self.pipe(patch.0).is_none()
-            && let Some(e) = self.end_cover(patch.0, w)
-        {
-            return (true, e);
-        }
-        self.sheet_cover(patch.0, to)
+        self.sheet_cover(patch.0, self.inward(patch, w))
     }
 
     /// [`Self::sheet_cover_near`] of a place of a patch, as [`Self::cover_in`] reads it.
     fn cover_near_in(&self, patch: &Patch, w: P2, tc: f64) -> (bool, f64) {
-        let to = self.inward(patch, w);
-        if to != w
-            && self.pipe(patch.0).is_none()
-            && let Some(e) = self.end_cover(patch.0, w)
-        {
-            return (true, e);
-        }
-        self.sheet_cover_near(patch.0, to, tc)
+        self.sheet_cover_near(patch.0, self.inward(patch, w), tc)
     }
 
     /// [`Self::margin`] of a place of a patch, as [`Self::cover_in`] reads it: from an end's
@@ -3136,6 +3120,54 @@ fn trace(
                 &through,
             )
             .unwrap_or_default();
+            // A curve that runs into a fold where the fold meets an end of the motion ends at
+            // that corner: the sheet, the fold's pipe and the end's torus all touch there, a
+            // millionth of a millionth apart for a good way round, and what the curve does in
+            // the last of it can't be read; it is the end torus's from the fold's zone in.
+            let mut chains = chains;
+            if (chart == LEAD || chart == TRAIL) && !tube.lines.is_empty() {
+                const CORNER: f64 = 5e-3;
+                for chain in &mut chains {
+                    if chain.closed {
+                        continue;
+                    }
+                    for last in [false, true] {
+                        let n = chain.pts.len();
+                        let w = chain.pts[if last { n - 1 } else { 0 }].0;
+                        let Some(side) = [p0, p1]
+                            .into_iter()
+                            .find(|&s| (w.y - s).abs() < 1e-6 && tube.line_by(s, 1e-9).is_some())
+                        else {
+                            continue;
+                        };
+                        let end = if w.x < CORNER {
+                            0.0
+                        } else if w.x > 1.0 - CORNER {
+                            1.0
+                        } else {
+                            continue;
+                        };
+                        let near = |p: &(P2, f64)| {
+                            (p.0.x - end).abs() < CORNER && (p.0.y - side).abs() < LINE_BY
+                        };
+                        let own = if chart == LEAD { end } else { 1.0 - end };
+                        if last {
+                            while chain.pts.len() > 1 && near(&chain.pts[chain.pts.len() - 1]) {
+                                chain.pts.pop();
+                            }
+                            chain.pts.push((P2::new(end, side), own));
+                        } else {
+                            // (Its corner last: the face of the end's torus that the curve
+                            // has run along is the one it ends on, of those that meet there.)
+                            let k = chain.pts.iter().take_while(|p| near(p)).count();
+                            chain.pts.drain(..k.min(chain.pts.len() - 1));
+                            chain.pts.reverse();
+                            chain.pts.push((P2::new(end, side), own));
+                            break;
+                        }
+                    }
+                }
+            }
             // (A place covered across a seam, by the other chart there: found by the place's
             // own instant.)
             let pair = |w: P2, tau: f64, prefer: Option<(usize, usize)>| {
