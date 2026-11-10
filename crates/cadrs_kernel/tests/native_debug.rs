@@ -3647,6 +3647,37 @@ fn debug_screws() {
                 }
             }
         }
+        if std::env::var_os("CADRS_SCREW_MESH").is_some() {
+            // (The solid measured from its meshes as they are refined: their volumes run
+            // straight in the chord's error, to the solid's own.)
+            let size = k.bounding_box(id).unwrap().diagonal();
+            let mut last: Option<(f64, f64)> = None;
+            for d in [4e-4, 1e-4, 2.5e-5] {
+                let mesh = k
+                    .tessellate(
+                        id,
+                        Tessellation {
+                            deflection: d * size,
+                            angle: 15f64.to_radians(),
+                        },
+                    )
+                    .unwrap();
+                let v: f64 = mesh
+                    .indices
+                    .iter()
+                    .map(|t| {
+                        let [a, b, c] = t.map(|i| mesh.positions[i as usize].coords);
+                        a.dot(&b.cross(&c)) / 6.0
+                    })
+                    .sum();
+                let to = last.map(|(d0, v0)| v + (v - v0) * d / (d0 - d));
+                eprintln!(
+                    "{name}: mesh at {d:.1e} of the size: {} triangles, volume {v:.9}; run on to none: {to:.9?}",
+                    mesh.indices.len()
+                );
+                last = Some((d, v));
+            }
+        }
         let t_mass = std::time::Instant::now();
         let m = k.mass_properties(id).unwrap();
         eprintln!("{name}: mass properties in {:.2?}", t_mass.elapsed());
@@ -3689,6 +3720,22 @@ fn debug_screws() {
                 let bar = k.boolean(BoolOp::Intersect, bar, &[within]).unwrap().bodies[0];
                 let rod = cylinder(&mut k, 0.0, 5.0, 7.3);
                 match k.cut_swept(rod, bar, &screw(0.93, -360.0, 3600.0)) {
+                    Ok(r) => report(&k, r.bodies[0], name, t0),
+                    Err(e) => eprintln!("FAIL {name}: {e} (in {:.2?})", t0.elapsed()),
+                }
+            }
+            // swept/ball-screwed-round-a-tight-helix.
+            "ball" => {
+                let ball = k
+                    .primitive(&Primitive::Sphere {
+                        center: Point3::new(1.5, 0.0, 0.0),
+                        radius: 2.0,
+                        axis: Vector3::z_axis(),
+                        seam: Vector3::x_axis(),
+                    })
+                    .unwrap()
+                    .bodies[0];
+                match k.sweep_solid(ball, &screw(3.0, 0.0, 720.0)) {
                     Ok(r) => report(&k, r.bodies[0], name, t0),
                     Err(e) => eprintln!("FAIL {name}: {e} (in {:.2?})", t0.elapsed()),
                 }

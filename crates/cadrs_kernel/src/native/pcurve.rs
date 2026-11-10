@@ -104,13 +104,18 @@ pub fn project_along(
     // A curve within a tolerance of the surface (a fitted intersection) is off it by more
     // than `near_enough` everywhere: the hinted foot stands where it is the true foot (the
     // miss square to the surface there) and near, not only where it reaches the point.
+    // (Square within a millionth of the miss, or within a billionth of the point's size where
+    // the miss is so small that a projection can't be told squarer: a foot a tenth of a
+    // micron off was else never square enough, and every point of a fitted sweep's edge was
+    // sought again over the whole surface.)
     let foot = |q: P2| -> bool {
         let (x, su, sv) = s.d1(q.x, q.y);
         let d = p - x;
         let n = d.norm();
+        let square = (tol::REL_POINT * n).max(1e-9 * (1.0 + p.coords.norm()));
         n <= 1e-4 * (1.0 + p.coords.norm())
-            && d.dot(&su).abs() <= tol::REL_POINT * n * su.norm()
-            && d.dot(&sv).abs() <= tol::REL_POINT * n * sv.norm()
+            && d.dot(&su).abs() <= square * su.norm()
+            && d.dot(&sv).abs() <= square * sv.norm()
     };
     if hint.is_some() && (s.eval(q.x, q.y) - p).norm() > near_enough && !foot(q) {
         let (u2, v2) = s.project(p, None);
