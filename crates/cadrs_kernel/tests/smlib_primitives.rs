@@ -171,6 +171,7 @@ fn curve_sweep(p: Profile, path: &[[[f64; 3]; 4]], w: &Want) -> Result<(), Strin
             })
             .collect(),
         control: SweepControl::None,
+        corners: Default::default(),
         faces: vec![],
     };
     let b = one(k.sweep_with(&p, &spec).map_err(kerr)?)?;

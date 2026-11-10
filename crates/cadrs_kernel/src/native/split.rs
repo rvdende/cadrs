@@ -449,6 +449,13 @@ pub fn split_face(surf: &Surface, flip: bool, boundary: &[Vec<Arc>], cuts: &[Arc
                 ang = -10.0; // only if nothing else
             }
             let key = (ang, ang2);
+            if super::env_flag!("CADRS_SPLIT_DEBUG") && out_at[n].len() > 1 {
+                let at = arcs[k].uv_at(1.0);
+                eprintln!(
+                    "split: at ({:.5}, {:.5}) from arc {k} (edge {}, in {:?}): arc {c} (edge {}) dep {:?} turns {ang:.4} ({ang2:.4})",
+                    at.x, at.y, arcs[k].edge, din, arcs[c].edge, d
+                );
+            }
             if best.is_none_or(|(a, b, _)| {
                 key.0 > a + TANGENT || ((key.0 - a).abs() <= TANGENT && key.1 > b)
             }) {
@@ -469,6 +476,12 @@ pub fn split_face(surf: &Surface, flip: bool, boundary: &[Vec<Arc>], cuts: &[Arc
         let mut ok = true;
         loop {
             let Some(nx) = next(cur) else {
+                if super::env_flag!("CADRS_SPLIT_DEBUG") {
+                    eprintln!(
+                        "split: a loop from arc {s} stops at arc {cur} (edge {}, end node {}): nothing to go on along",
+                        arcs[cur].edge, ends[cur][1]
+                    );
+                }
                 ok = false;
                 break;
             };
@@ -476,6 +489,12 @@ pub fn split_face(surf: &Surface, flip: bool, boundary: &[Vec<Arc>], cuts: &[Arc
                 break;
             }
             if used[nx] {
+                if super::env_flag!("CADRS_SPLIT_DEBUG") {
+                    eprintln!(
+                        "split: a loop from arc {s} runs into arc {nx} (edge {}), used already, after {:?}",
+                        arcs[nx].edge, lp
+                    );
+                }
                 ok = false;
                 break;
             }

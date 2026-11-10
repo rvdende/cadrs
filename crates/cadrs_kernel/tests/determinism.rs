@@ -253,6 +253,7 @@ fn run() -> Run {
         body: BodyKind::Solid,
         path,
         control: SweepControl::None,
+        corners: Default::default(),
         faces: vec![],
     };
     cases.push((

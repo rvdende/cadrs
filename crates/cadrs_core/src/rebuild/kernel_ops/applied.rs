@@ -567,6 +567,7 @@ impl Rebuilder {
                 measurement,
                 flip,
                 flipped: flipped[i].clone(),
+                corners: Default::default(),
             };
             k.chamfer_with(body, &edges[i], &opts)
         })

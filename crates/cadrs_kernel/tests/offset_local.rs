@@ -1351,10 +1351,10 @@ fn sharp_offset_drops_a_slope_its_neighbours_cross_over() {
     close(volume(&k, off), 2460.0, 1e-9);
 }
 
-/// Move face refuses moves that would change the body's topology (main's `check_face_moves`
-/// guarded OCCT's offset, which crashed on them): a hole's wall moved onto or past its axis,
-/// a hole grown through the block's side, a side moved into the hole. Moves that keep the
-/// topology still work, to closed forms.
+/// Move face refuses moves that would wreck the body (main's `check_face_moves` guarded OCCT's
+/// offset, which crashed on them): a hole's wall moved onto or past its axis, a hole grown out
+/// through the block's sides (leaving it in pieces). A side moved into the hole opens it, as the
+/// body less the slab the side sweeps. Moves that keep the topology still work, to closed forms.
 #[test]
 fn move_face_refuses_topology_changes() {
     let mut k = NativeKernel::new();
@@ -1391,7 +1391,13 @@ fn move_face_refuses_topology_changes() {
         let out = one(moved(&mut k, f, d).unwrap());
         close(volume(&k, out), want, 1e-9);
     }
-    for (f, d) in [(wall, 3.0), (wall, 4.0), (wall, -8.0), (side, -8.0)] {
+    // The side in by 8 runs into the hole and opens it (the side square to its neighbours, the
+    // body less the slab it sweeps): the half plate x ≤ 2 less the hole's part there.
+    let opened = one(moved(&mut k, side, -8.0).unwrap());
+    let seg = 9.0 * (2.0f64 / 3.0).acos() - 2.0 * 5f64.sqrt();
+    close(volume(&k, opened), 2400.0 - 10.0 * (9.0 * PI - seg), 1e-9);
+    // The hole's radius to 0 or past it, or out past the plate's sides (the plate in four).
+    for (f, d) in [(wall, 3.0), (wall, 4.0), (wall, -8.0)] {
         let r = moved(&mut k, f, d);
         assert!(
             matches!(r, Err(KernelError::InvalidParameter(_))),
@@ -1706,4 +1712,62 @@ fn outward_shell_removes_a_round_with_its_flat() {
         grown(20.0, 10.0) - grown(20.0, 5.0) - PI / 4.0 * 75.0 * 20.0,
         1e-6,
     );
+}
+
+/// The elliptic cylinder x²/25 + y²/9 ≤ 1, 0 ≤ z ≤ 10, shrunk by d: its outline's inward offset
+/// extruded between z = d and 10 − d. By 1 (less than the least radius of curvature b²/a = 1.8)
+/// the offset is smooth, area and length by Steiner's formulas; by 2.5 and 2.9 it folds in
+/// swallowtails about the ends of the long axis and is trimmed to meet itself there in an edge,
+/// its area and length integrated over the kept part (t between asin √(((ad/b)² − b²)/(a² − b²))
+/// and π less that, where it crosses the long axis). Rounded and sharp alike: no reflex corner.
+#[test]
+fn elliptic_cylinder_shrunk_past_its_curvature() {
+    let (a, b, h) = (5.0, 3.0, 10.0);
+    // p = 4aE(1 − b²/a²), the ellipse's perimeter.
+    let p = 25.526_998_863_398_127;
+    for (d, volume, area) in [
+        (
+            1.0,
+            (PI * a * b - p + PI) * (h - 2.0),
+            2.0 * (PI * a * b - p + PI) + (p - 2.0 * PI) * (h - 2.0),
+        ),
+        (2.5, 15.313_384_732_037_418, 51.932_013_180_920_92),
+        (2.9, 1.155_321_205_251_106_2, 17.866_244_267_901_9),
+    ] {
+        for sharp in [false, true] {
+            let mut k = NativeKernel::new();
+            let c = prism(
+                &mut k,
+                Loop {
+                    curves: vec![Curve2::Ellipse {
+                        center: Point2::origin(),
+                        major_radius: a,
+                        minor_radius: b,
+                        rotation: 0.0,
+                        source: None,
+                    }],
+                },
+                vec![],
+                h,
+            );
+            let r = one(k
+                .offset(
+                    c,
+                    &OffsetSpec {
+                        distance: -d,
+                        faces: vec![],
+                        sharp,
+                    },
+                )
+                .unwrap_or_else(|e| panic!("shrunk by {d}: {e}")));
+            let m = k.mass_properties(r).unwrap();
+            close(m.volume, volume, 1e-10);
+            close(m.surface_area, area, 1e-10);
+            let body = k.get(r).unwrap();
+            assert!(
+                body.check_with(cadrs_kernel::native::topo::CheckLevel::Full)
+                    .is_empty()
+            );
+        }
+    }
 }

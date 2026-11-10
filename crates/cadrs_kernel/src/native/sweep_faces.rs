@@ -113,10 +113,38 @@ fn quarter_turns(b: &mut Body, s1: f64) {
             let _ = split_face_iso(b, fi, Dir::V, &inside);
         }
     }
+    // Each piece on its own part of the surface: the faces cut from one share it, so each would
+    // carry the whole winding surface (into every boolean, mass and file written).
+    for fi in 0..b.faces.len() {
+        let super::surface::Surface::Nurbs(n) = &b.faces[fi].surf else {
+            continue;
+        };
+        let Some(((u0, u1), (v0, v1))) = face_uv_box(b, fi) else {
+            continue;
+        };
+        let ((a0, a1), (c0, c1)) = n.range();
+        let pad = |lo: f64, hi: f64, a: f64, z: f64| {
+            let m = 1e-3 * (z - a);
+            ((lo - m).max(a), (hi + m).min(z))
+        };
+        let ((u0, u1), (v0, v1)) = (pad(u0, u1, a0, a1), pad(v0, v1, c0, c1));
+        if u1 - u0 < 0.9 * (a1 - a0) || v1 - v0 < 0.9 * (c1 - c0) {
+            let part = n.restricted((u0, u1), (v0, v1));
+            b.faces[fi].surf = super::surface::Surface::Nurbs(std::sync::Arc::new(part));
+        }
+    }
 }
 
 /// How long (seconds) a sweep by faces may split and unite before it gives up.
 const EFFORT_SECONDS: f64 = 4.0;
+
+/// [`EFFORT_SECONDS`], or `CADRS_SWEEP_EFFORT` seconds (for debugging).
+fn effort() -> f64 {
+    std::env::var("CADRS_SWEEP_EFFORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(EFFORT_SECONDS)
+}
 
 /// A screw's turn (radians, above 0).
 fn mv_angle(mv: &Move) -> f64 {
@@ -513,33 +541,62 @@ fn contact_curves(b: &Body, fi: usize, mv: &Move) -> Vec<Curve> {
             );
         }
     }
+    // (Interpolated through the grid's crossings, then through the contact halfway between two
+    // points wherever the curve strays from it there by more than `fit`: as few poles as that
+    // takes, since the sweep's sides carry a row of them for each.)
+    let fit = CONTACT_FIT * b.bbox().diagonal().max(1.0);
     for chain in chains {
-        let mut uv: Vec<(f64, f64)> = Vec::new();
-        for w in chain.windows(2) {
-            for k in 0..16 {
-                let t = k as f64 / 16.0;
-                let q = (
-                    w[0].0 + (w[1].0 - w[0].0) * t,
-                    w[0].1 + (w[1].1 - w[0].1) * t,
-                );
-                uv.push(if k == 0 { q } else { onto(q) });
+        let mut uv = chain;
+        let mut curve = None;
+        for round in 0..=CONTACT_ROUNDS {
+            let pts: Vec<P3> = uv.iter().map(|q| s.eval(q.0, q.1)).collect();
+            let mut params = vec![0.0];
+            for w in pts.windows(2) {
+                params.push(params.last().unwrap() + (w[1] - w[0]).norm());
             }
+            if *params.last().unwrap() <= tol::POINT {
+                break;
+            }
+            let c = Curve::Nurbs(std::sync::Arc::new(super::nurbs::NurbsCurve::interpolate(
+                &pts, &params, 3, None, None,
+            )));
+            let halves: Vec<Option<(f64, f64)>> = if round == CONTACT_ROUNDS {
+                Vec::new()
+            } else {
+                (0..uv.len() - 1)
+                    .map(|i| {
+                        let q =
+                            onto((0.5 * (uv[i].0 + uv[i + 1].0), 0.5 * (uv[i].1 + uv[i + 1].1)));
+                        let p = s.eval(q.0, q.1);
+                        let t = c.closest(&p, params[i], params[i + 1]);
+                        ((c.point(t) - p).norm() > fit).then_some(q)
+                    })
+                    .collect()
+            };
+            curve = Some(c);
+            if halves.iter().all(Option::is_none) {
+                break;
+            }
+            let mut more = Vec::with_capacity(2 * uv.len());
+            for (i, q) in uv.iter().enumerate() {
+                more.push(*q);
+                if let Some(Some(h)) = halves.get(i) {
+                    more.push(*h);
+                }
+            }
+            uv = more;
         }
-        uv.push(*chain.last().unwrap());
-        let pts: Vec<P3> = uv.iter().map(|q| s.eval(q.0, q.1)).collect();
-        let mut params = vec![0.0];
-        for w in pts.windows(2) {
-            params.push(params.last().unwrap() + (w[1] - w[0]).norm());
-        }
-        if *params.last().unwrap() <= tol::POINT {
-            continue;
-        }
-        out.push(Curve::Nurbs(std::sync::Arc::new(
-            super::nurbs::NurbsCurve::interpolate(&pts, &params, 3, None, None),
-        )));
+        out.extend(curve);
     }
     out
 }
+
+/// How far (per unit of the body's size) a contact curve may stray from the contact.
+const CONTACT_FIT: f64 = 1e-9;
+
+/// The most times a contact curve's points are doubled where it strays (sixteen to a grid step,
+/// as many as it ever needs).
+const CONTACT_ROUNDS: usize = 4;
 
 /// The iso-parameter lines of face `fi` the contact runs along (a torus's meridians and its top
 /// and bottom circles slid across its axis, a revolved face's): (u values, v values), each a
@@ -638,6 +695,66 @@ fn contact_isolines(b: &Body, fi: usize, mv: &Move) -> (Vec<f64>, Vec<f64>) {
     (lines(u0, u1, v0, v1, true), lines(v0, v1, u0, u1, false))
 }
 
+/// Splits `b`'s edges where they cross the axis through `o` along the unit `z` (not at their
+/// ends): where an edge's distance from the axis falls to nothing.
+fn split_at_axis(b: &mut Body, o: P3, z: V3, size: f64) {
+    let off = |p: P3| {
+        let w = p - o;
+        (w - z * w.dot(&z)).norm()
+    };
+    let near = 1e-9 * size;
+    let n = b.edges.len();
+    for e in 0..n {
+        if b.edges[e].degenerate {
+            continue;
+        }
+        let (t0, t1) = (b.edges[e].t[0], b.edges[e].t[1]);
+        let span = t1 - t0;
+        let m = 64;
+        let d: Vec<f64> = (0..=m)
+            .map(|i| off(b.edges[e].point(t0 + span * i as f64 / m as f64)))
+            .collect();
+        let mut at: Vec<f64> = Vec::new();
+        for i in 1..m {
+            if d[i] > d[i - 1] || d[i] > d[i + 1] {
+                continue;
+            }
+            // The least distance about sample i, by golden section.
+            let f = |t: f64| off(b.edges[e].point(t));
+            let (mut lo, mut hi) = (
+                t0 + span * (i - 1) as f64 / m as f64,
+                t0 + span * (i + 1) as f64 / m as f64,
+            );
+            let g = 0.5 * (5f64.sqrt() - 1.0);
+            for _ in 0..200 {
+                if hi - lo <= 1e-15 * (1.0 + lo.abs()) {
+                    break;
+                }
+                let (a, c) = (hi - g * (hi - lo), lo + g * (hi - lo));
+                if f(a) < f(c) {
+                    hi = c;
+                } else {
+                    lo = a;
+                }
+            }
+            let t = 0.5 * (lo + hi);
+            let end = 1e-6 * span.abs();
+            if f(t) <= near && (t - t0).abs() > end && (t1 - t).abs() > end {
+                at.push(t);
+            }
+        }
+        // In the edge's own direction: each cut splits off the rest of the edge, which the next
+        // cut splits again.
+        at.sort_by(|a, b| ((a - t0) * span).total_cmp(&((b - t0) * span)));
+        at.dedup_by(|a, b| (*a - *b).abs() <= 1e-9 * span.abs());
+        let mut cur = e;
+        for &t in &at {
+            super::unify::split_edge(b, cur, t);
+            cur = b.edges.len() - 1;
+        }
+    }
+}
+
 /// Face `fi`'s parameter box, from its p-curves.
 fn uv_box(b: &Body, fi: usize) -> Option<(f64, f64, f64, f64)> {
     let (mut u0, mut u1, mut v0, mut v1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
@@ -651,8 +768,22 @@ fn uv_box(b: &Body, fi: usize) -> Option<(f64, f64, f64, f64)> {
     (u1 > u0 && v1 > v0).then_some((u0, u1, v0, v1))
 }
 
-/// [`crate::Kernel::sweep_solid`] for one slide or one turn of any solid (see the module docs).
-pub(crate) fn by_faces(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Result<OpResult> {
+/// The solid split along its faces' contacts with the motion, and its leading faces swept.
+fn prepared(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Result<Prepared> {
+    prepared_rising(k, b, steps, None)
+}
+
+/// A screw's rise as the turn goes (radians from the motion's start ↦ the rise from there), where
+/// its lead changes.
+pub type Rise = std::sync::Arc<dyn Fn(f64) -> f64 + Send + Sync>;
+
+/// [`prepared`], a screw rising by `profile` (where given) rather than at its steps' one rate.
+fn prepared_rising(
+    k: &mut NativeKernel,
+    b: &Body,
+    steps: &[RigidStep],
+    profile: Option<Rise>,
+) -> Result<Prepared> {
     let clock = web_time::Instant::now();
     let lap = |what: &str| {
         if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
@@ -739,18 +870,51 @@ pub(crate) fn by_faces(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> R
     let mut body = start.clone();
     let mut iso_splits = 0;
     // (Work past a few seconds is a split that isn't converging: given up, for a meshed sweep.)
-    let over = || clock.elapsed().as_secs_f64() > EFFORT_SECONDS;
+    let over = || clock.elapsed().as_secs_f64() > effort();
+    // The contact curves of every face that both leads and trails, traced side by side up front
+    // (most of the work where many faces need them: a coil's). A curve split keeps the other
+    // faces' numbers, so they stay good until a split of another kind renumbers the faces.
+    let mut traced: Vec<Option<Vec<Curve>>> = {
+        use rayon::prelude::*;
+        super::par::start();
+        let both: Vec<bool> = (0..body.faces.len())
+            .map(|fi| stand(&face_points(&body, fi, size), &mv) == Stand::Both)
+            .collect();
+        if both.iter().filter(|b| **b).count() > 1 {
+            let b = &body;
+            (0..b.faces.len())
+                .into_par_iter()
+                .map(|fi| both[fi].then(|| contact_curves(b, fi, &mv)))
+                .collect()
+        } else {
+            Vec::new()
+        }
+    };
+    let mut stands: Vec<Stand> = Vec::new();
     for _ in 0..4 * start.faces.len() + 12 {
         if over() {
             return Err(KernelError::Unsupported(
                 "sweeping a solid whose faces' contacts take too long to split along",
             ));
         }
-        let both = (0..body.faces.len())
-            .find(|&fi| stand(&face_points(&body, fi, size), &mv) == Stand::Both);
+        let tick = web_time::Instant::now();
+        // Each face's stand, kept from one split to the next for the faces it left alone.
+        if stands.len() != body.faces.len() {
+            use rayon::prelude::*;
+            let b = &body;
+            let have = stands.len();
+            let more: Vec<Stand> = (have..b.faces.len())
+                .into_par_iter()
+                .map(|fi| stand(&face_points(b, fi, size), &mv))
+                .collect();
+            stands.extend(more);
+        }
+        let both = (0..body.faces.len()).find(|&fi| stands[fi] == Stand::Both);
         let Some(fi) = both else { break };
+        let t_stand = tick.elapsed();
         // Along iso-parameter lines: split there, exactly.
         let (us, vs) = contact_isolines(&body, fi, &mv);
+        let t_iso = tick.elapsed();
         if !us.is_empty() || !vs.is_empty() {
             use super::heal_split::{Dir, split_face_iso};
             let mut nb = body.clone();
@@ -777,10 +941,13 @@ pub(crate) fn by_faces(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> R
             }
             if nb.faces.len() > body.faces.len() {
                 body = nb;
+                traced.clear();
+                stands.clear();
                 continue;
             }
         }
         let plane = contact_plane(&body, fi, &mv, size);
+        let t_plane = tick.elapsed();
         if debug {
             eprintln!(
                 "sweep by faces: face {fi} {:?} leads and trails; contact plane {:?}",
@@ -790,6 +957,7 @@ pub(crate) fn by_faces(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> R
         }
         // Split along the plane; else along the contact curves traced on the face.
         let mut next: Option<Body> = None;
+        let mut by_curve = false;
         if let Some(plane) = plane {
             let id = k.insert(body.clone());
             let split = k.split_faces(id, &[FaceId(fi as u64)], &SplitTool::Plane(plane));
@@ -809,7 +977,10 @@ pub(crate) fn by_faces(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> R
             }
         }
         if next.is_none() {
-            let curves = contact_curves(&body, fi, &mv);
+            let curves = match traced.get_mut(fi).and_then(Option::take) {
+                Some(c) => c,
+                None => contact_curves(&body, fi, &mv),
+            };
             if debug {
                 eprintln!("sweep by faces: {} contact curves traced", curves.len());
             }
@@ -846,6 +1017,7 @@ pub(crate) fn by_faces(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> R
                 if super::curve_split::split_face_curve(&mut nb, fi, c, t0, t1).is_some() {
                     nb.fit_tolerances(1e-3);
                     next = Some(nb);
+                    by_curve = true;
                     break;
                 }
             }
@@ -869,12 +1041,36 @@ pub(crate) fn by_faces(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> R
                 }
             }
         }
+        if debug {
+            eprintln!(
+                "sweep by faces: split of face {fi}: stand {:?} iso {:?} plane {:?} all {:?}",
+                t_stand,
+                t_iso - t_stand,
+                t_plane - t_iso,
+                tick.elapsed()
+            );
+        }
         let nb = next.ok_or(KernelError::Unsupported(
             "sweeping a solid whose face meets the motion along a curve it can't be split along",
         ))?;
         body = nb;
+        if by_curve {
+            // (The split face measured again, and the faces appended at the end.)
+            if fi < stands.len() {
+                stands[fi] = stand(&face_points(&body, fi, size), &mv);
+            }
+        } else {
+            traced.clear();
+            stands.clear();
+        }
     }
     lap("split");
+    // A turn's edges cut where they cross its axis: on either side a point turns the other way
+    // round, so each piece of an edge sweeps a face of its own (a ball's meridian through the
+    // axis sweeps the apple's cap one side of it and, the other, a sheet inside the ball).
+    if let Move::Turn { o, z, .. } = mv {
+        split_at_axis(&mut body, o, z, size);
+    }
     // Each leading face swept, the pieces united with the start.
     let sweep = match mv {
         Move::Slide(v) => Some(BodySweep::Translate(v)),
@@ -905,10 +1101,14 @@ pub(crate) fn by_faces(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> R
                 })
                 .fold(0.0, f64::max);
             let s1 = angle.abs();
-            Some(super::sweep::Screw::new(
+            let sign = angle.signum();
+            Some(super::sweep::Screw::rising(
                 o,
                 zs,
-                rise * angle.signum() / s1,
+                rise * sign / s1,
+                profile
+                    .clone()
+                    .map(|f| -> Rise { std::sync::Arc::new(move |s: f64| f(s * sign) * sign) }),
                 s1,
                 reach,
                 SCREW_TOL * size.max(1.0),
@@ -916,6 +1116,31 @@ pub(crate) fn by_faces(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> R
         }
         _ => None,
     };
+    // A lead that changes: each face must stand as it does at the least and the greatest lead
+    // (else its contact moves as the lead does, which this sweep doesn't follow).
+    if let (Some(f), Move::Screw { o, z, angle, .. }) = (&profile, mv) {
+        let n = 256;
+        let slopes: Vec<f64> = (0..n)
+            .map(|i| {
+                let (a, b) = (
+                    angle * i as f64 / n as f64,
+                    angle * (i + 1) as f64 / n as f64,
+                );
+                (f(b) - f(a)) / (b - a) * angle
+            })
+            .collect();
+        let lo = slopes.iter().copied().fold(f64::INFINITY, f64::min);
+        let hi = slopes.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        for fi in 0..body.faces.len() {
+            let pts = face_points(&body, fi, size);
+            let at = |rise: f64| stand(&pts, &Move::Screw { o, z, angle, rise });
+            if at(lo) != at(hi) {
+                return Err(KernelError::Unsupported(
+                    "screwing a solid at a changing lead that moves its faces' contacts",
+                ));
+            }
+        }
+    }
     let mut pieces: Vec<Body> = Vec::new();
     for fi in 0..body.faces.len() {
         let st = stand(&face_points(&body, fi, size), &mv);
@@ -969,6 +1194,102 @@ pub(crate) fn by_faces(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> R
             Stand::Trails | Stand::Along => {}
         }
     }
+    Ok(Prepared {
+        start,
+        body,
+        pieces,
+        mv,
+        size,
+        clock,
+    })
+}
+
+/// What [`by_faces`] unites: the solid where it starts (its faces split along their contacts)
+/// and each of its leading faces' sweeps, with the motion and the solid's size.
+struct Prepared {
+    start: Body,
+    body: Body,
+    pieces: Vec<Body>,
+    mv: Move,
+    size: f64,
+    clock: web_time::Instant,
+}
+
+/// The solids whose union is the sweep of `b` by one slide, turn or screw ([`by_faces`]): the
+/// solid where it starts and each of its leading faces' sweeps. They overlap where a point
+/// enters the moving solid twice; what the sweep cuts from a body is the body less each of them
+/// in turn, which needs no union.
+pub fn face_sweeps(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Result<Vec<Body>> {
+    let p = prepared(k, b, steps)?;
+    let mut all = vec![p.body];
+    all.extend(p.pieces);
+    Ok(all)
+}
+
+/// The pieces of a screw about the axis through `o` along the unit `z` by `angle` (radians from
+/// where `b` is) rising `rise(θ)` at the turn θ (0 at 0): [`face_sweeps`] of a screw whose lead
+/// changes, where every face's contact stays put as it does (a face square to the axis, or along
+/// it).
+pub fn rising_screw_sweeps(
+    k: &mut NativeKernel,
+    b: &Body,
+    o: P3,
+    z: V3,
+    angle: f64,
+    rise: Rise,
+) -> Result<Vec<Body>> {
+    let steps = [
+        RigidStep::Turn {
+            axis: Axis {
+                origin: o,
+                dir: nalgebra::Unit::new_normalize(z),
+            },
+            from: 0.0,
+            to: angle,
+        },
+        RigidStep::Slide {
+            from: V3::zeros(),
+            to: z.normalize() * rise(angle),
+        },
+    ];
+    let p = prepared_rising(k, b, &steps, Some(rise))?;
+    let mut all = vec![p.body];
+    all.extend(p.pieces);
+    Ok(all)
+}
+
+/// [`crate::Kernel::sweep_solid`] for one slide or one turn of any solid (see the module docs).
+pub fn by_faces(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Result<OpResult> {
+    by_faces_or_pieces(k, b, steps, None)
+}
+
+/// [`by_faces`], but where its pieces overlap (they would be united), with `pieces` given: the
+/// solid where it starts and the leading faces' sweeps put there, unmade, and an error returned
+/// (what a cut needs: the target less each in turn, no union).
+pub fn by_faces_or_pieces(
+    k: &mut NativeKernel,
+    b: &Body,
+    steps: &[RigidStep],
+    pieces_out: Option<&mut Vec<Body>>,
+) -> Result<OpResult> {
+    let Prepared {
+        start,
+        body,
+        pieces,
+        mv,
+        size,
+        clock,
+    } = prepared(k, b, steps)?;
+    let lap = |what: &str| {
+        if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+            eprintln!(
+                "sweep by faces: {what} at {:.0} ms",
+                clock.elapsed().as_secs_f64() * 1e3
+            );
+        }
+    };
+    let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+    let over = || clock.elapsed().as_secs_f64() > effort();
     if pieces.is_empty() {
         let first = k.insert(start);
         return Ok(OpResult {
@@ -1009,6 +1330,13 @@ pub(crate) fn by_faces(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> R
             }
         }
         return Ok(r);
+    }
+    if let Some(out) = pieces_out {
+        out.push(body);
+        out.extend(pieces);
+        return Err(KernelError::Unsupported(
+            "sweeping a solid whose faces' sweeps overlap, as pieces",
+        ));
     }
     if debug {
         eprintln!("sweep by faces: gluing failed; uniting");
@@ -1143,6 +1471,51 @@ fn coincide(a: &Body, fa: usize, b: &Body, fb: usize, close: f64) -> bool {
             let (u, v) = sb.project(&p, None);
             (sb.eval(u, v) - p).norm() <= close
         })
+}
+
+/// `pieces` (closed bodies, a sweep's: [`face_sweeps`]) glued into as few bodies as gluing
+/// makes ([`glued`]): each piece into the first group it makes one sound solid with, else a group
+/// of its own. Pieces that only touch (neighbouring faces' sweeps, sharing the face their
+/// common edge sweeps) become one, so that cutting the groups one after another meets no
+/// surfaces that touch along a curve.
+pub fn glued_groups(k: &mut NativeKernel, pieces: Vec<Body>) -> Vec<Body> {
+    let size = pieces
+        .iter()
+        .map(|p| p.bbox().diagonal())
+        .fold(0.0, f64::max)
+        .max(tol::POINT);
+    let mut groups: Vec<Body> = Vec::new();
+    'piece: for p in pieces {
+        for g in groups.iter_mut().rev() {
+            // (Only bodies whose boxes meet can share a face.)
+            let (gb, pb) = (g.bbox(), p.bbox());
+            let apart = (0..3).any(|i| {
+                gb.min[i] > pb.max[i] + 1e-9 * size || pb.min[i] > gb.max[i] + 1e-9 * size
+            });
+            if apart {
+                continue;
+            }
+            if let Some(r) = glued(k, &[g.clone(), p.clone()], size) {
+                let one = match r.bodies.as_slice() {
+                    [id] => k
+                        .get(*id)
+                        .ok()
+                        .filter(|b| b.solids.len() == 1)
+                        .map(|b| (**b).clone()),
+                    _ => None,
+                };
+                for id in r.bodies {
+                    k.release(id);
+                }
+                if let Some(b) = one {
+                    *g = b;
+                    continue 'piece;
+                }
+            }
+        }
+        groups.push(p);
+    }
+    groups
 }
 
 /// The solid the closed bodies `all` make together where they only touch along whole faces: each
@@ -1330,8 +1703,22 @@ fn glued(k: &mut NativeKernel, all: &[Body], size: f64) -> Option<OpResult> {
     }
 }
 
-/// The sewn solid `id` of [`glued`], checked and simplified.
+/// The sewn solid `id` of [`glued`], checked and simplified: first its degenerate edges' p-curves
+/// bridged (a cone's apex, where the contact curves the faces were split along arrive at their
+/// own u).
 fn glued_checked(k: &mut NativeKernel, id: BodyId, debug: bool) -> Option<OpResult> {
+    let id = match k.get(id) {
+        Ok(b) if b.edges.iter().any(|e| e.degenerate) => {
+            let mut b = (**b).clone();
+            if super::heal::bridge_degenerate(&mut b) > 0 {
+                k.release(id);
+                k.insert(b)
+            } else {
+                id
+            }
+        }
+        _ => id,
+    };
     if debug && let Ok(b) = k.get(id) {
         eprintln!(
             "sweep by faces: sewn solid {}, check {:?}, volume {}",

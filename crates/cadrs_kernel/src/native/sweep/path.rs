@@ -693,7 +693,11 @@ pub fn sweep_with_law(
         )?;
         return Ok(Tagged::from_built(b).into_result(k));
     }
-    Ok(sweep_spines(&faces, &chains, plane, sp, spec.control, Join::Mitre, solid)?.into_result(k))
+    let join = match spec.corners {
+        SweepCorners::Mitre => Join::Mitre,
+        SweepCorners::Round => Join::Round,
+    };
+    Ok(sweep_spines(&faces, &chains, plane, sp, spec.control, join, solid)?.into_result(k))
 }
 
 /// Sweeps the profile (`faces` and `chains` in `plane` coordinates) along each spine (with

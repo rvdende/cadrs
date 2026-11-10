@@ -54,8 +54,8 @@ pub struct HarnessOptions {
     pub data_dir: Option<PathBuf>,
     /// `--no-cursor`: never draw the software cursor into screenshots.
     pub no_cursor: bool,
-    /// A native document to open at start (`--open <path>`, or the path alone, as an editor
-    /// takes one).
+    /// A file to open at start: a native document or a model (`--open <path>`, or the path
+    /// alone, as an editor takes one).
     pub open: Option<PathBuf>,
 }
 
@@ -75,7 +75,7 @@ impl Default for HarnessOptions {
 }
 
 pub const USAGE: &str = "usage: cadrs [--headless] [--scenario <name>] [--window-size WxH] \
-                         [--out <dir>] [--data-dir <dir>] [--no-cursor] [[--open] <file.cadrs>]";
+                         [--out <dir>] [--data-dir <dir>] [--no-cursor] [[--open] <file>]";
 
 impl HarnessOptions {
     pub fn from_args(args: impl IntoIterator<Item = String>) -> Result<Self, String> {

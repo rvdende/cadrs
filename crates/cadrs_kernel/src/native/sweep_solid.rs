@@ -477,6 +477,7 @@ fn outline(sl: &Slicer, lo: Extreme, hi: Extreme, n: usize) -> Option<Outline> {
         out.push(b);
         Some(out)
     };
+    super::par::start();
     let (far, near) = rayon::join(
         || side(true, lo_far, hi_far),
         || side(false, lo_near, hi_near),
@@ -547,6 +548,26 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
     // where its faces meet the motion); else meshed.
     if let SolidMotion::Rigid { steps } = motion {
         let mut exact = None;
+        // A pipe slid: exactly, as everything within its radius of the strip its spine sweeps.
+        if let [RigidStep::Slide { from, to }] = steps.as_slice()
+            && from.norm() == 0.0
+            && let Some(pipe) = k.pipes.get(&body.0).cloned()
+        {
+            match super::sweep_pipe::slide(k, &pipe, *to) {
+                Some(Ok(r)) => return Ok(r),
+                Some(Err(e)) => exact = Some(e),
+                None => {}
+            }
+        }
+        // (A torus by two steps or more first as a torus: its faces' own sweeps, which make
+        // one step's exactly in closed form, seldom join for two, and are slow to find so.)
+        let mut as_torus = None;
+        if steps.len() >= 2 || std::env::var_os("CADRS_TUBE_FIRST").is_some() {
+            as_torus = super::sweep_tube::torus(k, &b, &super::sweep_tube::Motion::Steps(steps));
+            if let Some(Ok(r)) = as_torus {
+                return Ok(r);
+            }
+        }
         if (1..=2).contains(&steps.len()) {
             match super::sweep_faces::by_faces(k, &b, steps) {
                 Ok(r) => return Ok(r),
@@ -554,12 +575,48 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
             }
         }
         let place = |t: f64| rigid_at(steps, t);
+        // A convex polyhedron whose contacts move over its faces: exactly, from its leading
+        // polygons' sweeps.
+        match super::sweep_moving::polyhedron(k, &b, &place) {
+            Some(Ok(r)) => return Ok(r),
+            Some(Err(e)) => exact = exact.or(Some(e)),
+            None => {}
+        }
+        // A torus: exactly, from the offsets of its core circle's sweep.
+        match as_torus
+            .or_else(|| super::sweep_tube::torus(k, &b, &super::sweep_tube::Motion::Steps(steps)))
+        {
+            Some(Ok(r)) => return Ok(r),
+            Some(Err(e)) => exact = exact.or(Some(e)),
+            None => {}
+        }
         return match revolved(&b) {
             Some(rev) => meshed(k, &b, &|p| rev.distance(p), &place),
             None => meshed_body(k, &b, &place).map_err(|e| exact.unwrap_or(e)),
         };
     }
+    if let SolidMotion::Climb {
+        axis,
+        from,
+        to,
+        rise,
+    } = motion
+    {
+        let place = |t: f64| climb_at(axis, *from, *to, rise, t);
+        return match revolved(&b) {
+            Some(rev) => meshed(k, &b, &|p| rev.distance(p), &place),
+            None => meshed_body(k, &b, &place),
+        };
+    }
     if let SolidMotion::Path { path, up } = motion {
+        if let Some(r) = path_sweep_exact(k, body, &b, path, up.into_inner()) {
+            return Ok(r);
+        }
+        // A torus or a bull-nose mill riding one curve: exactly, its envelope trimmed by what
+        // it covers of itself.
+        if let Some(Ok(r)) = torus_along(k, &b, path, up.into_inner()) {
+            return Ok(r);
+        }
         let frames = PathFrames::new(k, path, up.into_inner())?;
         let place = |t: f64| frames.place(t);
         return match revolved(&b) {
@@ -571,7 +628,10 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
         "sweeping solids other than a torus or a convex section revolved",
     ))?;
     let (axis, kk, span) = match *motion {
-        SolidMotion::Planar { .. } | SolidMotion::Rigid { .. } | SolidMotion::Path { .. } => {
+        SolidMotion::Planar { .. }
+        | SolidMotion::Rigid { .. }
+        | SolidMotion::Path { .. }
+        | SolidMotion::Climb { .. } => {
             unreachable!()
         }
         SolidMotion::Turn { axis } => (axis, 0.0, None),
@@ -885,6 +945,27 @@ impl Revolved {
 }
 
 /// A rigid motion's place at t: the rotation and translation taking the body's points there.
+/// The rise of [`SolidMotion::Climb`] at the turn θ (its polynomial's coefficients, constant
+/// first).
+fn climb_rise(rise: &[f64], a: f64) -> f64 {
+    rise.iter().rev().fold(0.0, |acc, c| acc * a + c)
+}
+
+/// The place of [`SolidMotion::Climb`] at t in [0, 1]: turned by θ about the axis and risen
+/// along it, θ from `from` to `to`.
+fn climb_at(
+    axis: &Axis,
+    from: f64,
+    to: f64,
+    rise: &[f64],
+    t: f64,
+) -> (nalgebra::Rotation3<f64>, V3) {
+    let a = from + (to - from) * t;
+    let r = nalgebra::Rotation3::from_axis_angle(&axis.dir, a);
+    let o = axis.origin.coords;
+    (r, o - r * o + axis.dir.into_inner() * climb_rise(rise, a))
+}
+
 fn rigid_at(steps: &[RigidStep], t: f64) -> (nalgebra::Rotation3<f64>, V3) {
     let (mut r, mut d) = (nalgebra::Rotation3::identity(), V3::zeros());
     for s in steps {
@@ -928,6 +1009,7 @@ fn contour(
     // from it (the depth changes no faster than the distance), so the depth is found only near
     // the boundary, and every grid edge it crosses has its ends' found.
     let mut field = vec![f64::NAN; n[0] * n[1] * n[2]];
+    super::par::start();
     for k in (0..=3).rev() {
         let s = 1usize << k;
         let mut pts: Vec<usize> = Vec::new();
@@ -1164,6 +1246,432 @@ pub fn offset_meshed(k: &mut NativeKernel, body: BodyId, distance: f64) -> Resul
     )
 }
 
+/// The endless motion that cuts `target` as the rigid `motion` cuts it, where its ends keep clear
+/// of the target: a turn whose missing part (from its end round to its start) never carries the
+/// tool's points at the target's distances from the axis and heights along it into the target's
+/// angles about the axis, as a whole turn; a screw (a turn and a slide along its axis, the slide
+/// through 0 at a turn of 0) that starts with the tool wholly past the target's one end along the
+/// axis and ends wholly past the other, as the screw without end between planes just past the
+/// target's ends. Measured on the bodies' meshes, with margins past their deflection.
+fn endless_within(target: &Body, tool: &Body, motion: &SolidMotion) -> Option<SolidMotion> {
+    let SolidMotion::Rigid { steps } = motion else {
+        return None;
+    };
+    let (mut turn, mut slide) = (None, None);
+    for st in steps {
+        match *st {
+            RigidStep::Turn { axis, from, to } if turn.is_none() => turn = Some((axis, from, to)),
+            RigidStep::Slide { from, to } if slide.is_none() => slide = Some((from, to)),
+            _ => return None,
+        }
+    }
+    let (axis, a, z_end) = turn?;
+    if (z_end - a).abs() <= tol::ANGULAR {
+        return None;
+    }
+    let z = axis.dir.into_inner().normalize();
+    let o = axis.origin;
+    let size = target
+        .bbox()
+        .diagonal()
+        .max(tool.bbox().diagonal())
+        .max(tol::POINT);
+    let defl = 1e-3 * size;
+    let points = |b: &Body| -> Vec<P3> {
+        let (meshes, _) = super::tess::mesh_body(b, defl, 0.3);
+        meshes
+            .iter()
+            .flat_map(|m| m.positions.iter().copied())
+            .chain(b.verts.iter().map(|v| v.p))
+            .collect()
+    };
+    let pad = 4.0 * defl + tol::POINT;
+    let height = |p: &P3| (p - o).dot(&z);
+    let x = any_perpendicular(&z);
+    let y = z.cross(&x);
+    let polar = |p: &P3| {
+        let d = p - o;
+        (d.dot(&x).hypot(d.dot(&y)), d.dot(&y).atan2(d.dot(&x)))
+    };
+    // A body's reach along the axis, within its box's (no farther, so clearance by it is sure).
+    let reach = |b: &Body| {
+        let bb = b.bbox();
+        (0..8)
+            .map(|i| {
+                height(&P3::new(
+                    if i & 1 == 0 { bb.min.x } else { bb.max.x },
+                    if i & 2 == 0 { bb.min.y } else { bb.max.y },
+                    if i & 4 == 0 { bb.min.z } else { bb.max.z },
+                ))
+            })
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), v| {
+                (l.min(v), h.max(v))
+            })
+    };
+    match slide {
+        Some((s0, s1)) => {
+            // A screw: the slide along the axis, through 0 at a turn of 0.
+            let d = s1 - s0;
+            if d.cross(&z).norm() > tol::ANGULAR * d.norm().max(1.0) || d.norm() <= tol::POINT {
+                return None;
+            }
+            let per = d.dot(&z) / (z_end - a);
+            if (s0.dot(&z) - per * a).abs() > tol::POINT || s0.cross(&z).norm() > tol::POINT {
+                return None;
+            }
+            let (h0, h1) = reach(target);
+            let (w0, w1) = reach(tool);
+            // (Turning leaves heights along the axis as they are: the tool's range only rises.)
+            let (ra, rb) = (s0.dot(&z), s1.dot(&z));
+            let (lo, hi) = if rb > ra { (ra, rb) } else { (rb, ra) };
+            let clear = w1 + lo < h0 - pad && w0 + hi > h1 + pad;
+            clear.then_some(SolidMotion::Screw {
+                axis,
+                rise: per * TAU,
+                from: h0 - 2.0 * pad,
+                to: h1 + 2.0 * pad,
+            })
+        }
+        None => {
+            let tp = points(target);
+            let (h0, h1) = tp
+                .iter()
+                .map(height)
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), v| {
+                    (l.min(v), h.max(v))
+                });
+            // A turn: angles about the axis of the target and of the tool's points at the
+            // target's distances and heights (a turn keeps both).
+            let (r0, r1) = tp
+                .iter()
+                .map(|p| polar(p).0)
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), v| {
+                    (l.min(v), h.max(v))
+                });
+            if r0 <= pad {
+                return None;
+            }
+            let wp: Vec<(f64, f64)> = points(tool)
+                .iter()
+                .filter(|p| {
+                    let (r, _) = polar(p);
+                    let h = height(p);
+                    r >= r0 - pad && r <= r1 + pad && h >= h0 - pad && h <= h1 + pad
+                })
+                .map(polar)
+                .collect();
+            if wp.is_empty() {
+                return Some(SolidMotion::Turn { axis });
+            }
+            // An arc of angles holding all of them (the complement of the widest gap between
+            // neighbours), widened by what a mesh can miss at the least distance: (start, length).
+            let arc = |angles: &mut Vec<f64>, rmin: f64| -> Option<(f64, f64)> {
+                angles.sort_by(f64::total_cmp);
+                let n = angles.len();
+                let (mut gap, mut at) = (angles[0] + TAU - angles[n - 1], 0);
+                for k in 1..n {
+                    let g = angles[k] - angles[k - 1];
+                    if g > gap {
+                        gap = g;
+                        at = k;
+                    }
+                }
+                let widen = 4.0 * defl / rmin.max(tol::POINT) + 1e-3;
+                let len = TAU - gap + 2.0 * widen;
+                (len < TAU).then_some((angles[at] - widen, len))
+            };
+            let rmin = wp.iter().map(|q| q.0).fold(f64::INFINITY, f64::min).min(r0);
+            let mut ta: Vec<f64> = tp.iter().map(|p| polar(p).1).collect();
+            let mut wa: Vec<f64> = wp.iter().map(|q| q.1).collect();
+            let (ts, tl) = arc(&mut ta, r0)?;
+            let (ws, wl) = arc(&mut wa, rmin)?;
+            // The turn's missing part: from its end on round to its start (right-handed).
+            let (lo, hi) = if z_end > a { (a, z_end) } else { (z_end, a) };
+            let missing = TAU - (hi - lo);
+            if missing <= 0.0 {
+                return Some(SolidMotion::Turn { axis });
+            }
+            // The tool's arc over the missing turns: from ws + hi, ws + wl + hi + missing long.
+            let (ms, ml) = (ws + hi, wl + missing);
+            if ml + tl >= TAU {
+                return None;
+            }
+            // Disjoint on the circle: the target's arc starts past the swept arc's end and ends
+            // before it starts again.
+            let off = (ts - ms).rem_euclid(TAU);
+            (off > ml && off + tl < TAU).then_some(SolidMotion::Turn { axis })
+        }
+    }
+}
+
+/// Whether a screw's tool may meet its own sweep a turn on (a thread whose groove is wider than
+/// its lead): unless the motion is a turn and a slide along its axis, rising farther a turn than
+/// the tool's box reaches along the axis.
+fn turns_may_overlap(b: &Body, steps: &[RigidStep]) -> bool {
+    let (mut turn, mut slide) = (None, None);
+    for s in steps {
+        match *s {
+            RigidStep::Turn { axis, from, to } => turn = Some((axis, to - from)),
+            RigidStep::Slide { from, to } => slide = Some(to - from),
+        }
+    }
+    let (Some((axis, angle)), Some(d)) = (turn, slide) else {
+        return true;
+    };
+    let z = axis.dir.into_inner();
+    if d.cross(&z).norm() > tol::ANGULAR * d.norm().max(1.0) || angle.abs() <= tol::ANGULAR {
+        return true;
+    }
+    let lead = d.dot(&z).abs() / angle.abs() * TAU;
+    let bb = b.bbox();
+    let along: Vec<f64> = (0..8)
+        .map(|i| {
+            let c = V3::new(
+                if i & 1 == 0 { bb.min.x } else { bb.max.x },
+                if i & 2 == 0 { bb.min.y } else { bb.max.y },
+                if i & 4 == 0 { bb.min.z } else { bb.max.z },
+            );
+            c.dot(&z)
+        })
+        .collect();
+    let reach = along.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+        - along.iter().copied().fold(f64::INFINITY, f64::min);
+    reach >= 0.9 * lead
+}
+
+/// The turn's axis, its angle and what it slides by, of steps that are a turn alone or a screw
+/// (a turn and a slide along its axis): a motion that carries what it has swept so far along
+/// itself.
+fn screw_of(steps: &[RigidStep]) -> Option<(crate::Axis, f64, V3)> {
+    let (mut turn, mut slide) = (None, V3::zeros());
+    for s in steps {
+        match *s {
+            RigidStep::Turn { axis, from, to } if turn.is_none() => turn = Some((axis, to - from)),
+            RigidStep::Turn { .. } => return None,
+            RigidStep::Slide { from, to } => slide += to - from,
+        }
+    }
+    let (axis, angle) = turn?;
+    (slide.cross(&axis.dir).norm() <= tol::ANGULAR * slide.norm().max(1.0))
+        .then_some((axis, angle, slide))
+}
+
+/// `target` less the tool `b` swept by `steps` (turning more than half a turn) in pieces of at
+/// most half a turn, cut one after another: None where a piece isn't swept or cut soundly.
+fn cut_in_pieces(
+    k: &mut NativeKernel,
+    target: BodyId,
+    b: &Body,
+    steps: &[RigidStep],
+) -> Option<OpResult> {
+    let turn = steps
+        .iter()
+        .map(|s| match *s {
+            RigidStep::Turn { from, to, .. } => (to - from).abs(),
+            RigidStep::Slide { .. } => 0.0,
+        })
+        .fold(0.0, f64::max);
+    let n = (turn / PI).ceil() as usize;
+    let part = |i: usize| -> Vec<RigidStep> {
+        let (a, z) = (i as f64 / n as f64, (i + 1) as f64 / n as f64);
+        steps
+            .iter()
+            .map(|s| match *s {
+                RigidStep::Turn { axis, from, to } => RigidStep::Turn {
+                    axis,
+                    from: from + (to - from) * a,
+                    to: from + (to - from) * z,
+                },
+                RigidStep::Slide { from, to } => RigidStep::Slide {
+                    from: from + (to - from) * a,
+                    to: from + (to - from) * z,
+                },
+            })
+            .collect()
+    };
+    // A turn alone, or a screw (its slide along its axis): the motion carries each piece onto
+    // the next, so the first is swept and the others are it, moved.
+    let onward = screw_of(steps).map(|(axis, angle, rise)| {
+        move |i: usize| -> Affine {
+            let part = i as f64 / n as f64;
+            let q = nalgebra::Rotation3::from_axis_angle(&axis.dir, angle * part);
+            let c = axis.origin.coords;
+            Affine {
+                m: *q.matrix(),
+                t: c - q * c + rise * part,
+            }
+        }
+    });
+    let mut first: Option<(Option<Body>, Vec<Body>)> = None;
+    let mut acc = vec![target];
+    for i in 0..n {
+        let mut pieces: Vec<Body> = Vec::new();
+        let swept: Option<Vec<BodyId>> = match (&first, &onward) {
+            (Some((whole, parts)), Some(onward)) => {
+                let by = onward(i);
+                pieces = parts.iter().map(|p| p.transformed(&by)).collect();
+                whole.as_ref().map(|w| vec![k.insert(w.transformed(&by))])
+            }
+            _ => {
+                let r = super::sweep_faces::by_faces_or_pieces(k, b, &part(i), Some(&mut pieces))
+                    .ok()
+                    .map(|r| r.bodies);
+                if onward.is_some() {
+                    let whole = match r.as_deref() {
+                        Some([s]) => k.get(*s).ok().map(|b| (**b).clone()),
+                        _ => None,
+                    };
+                    first = Some((whole, pieces.clone()));
+                }
+                r
+            }
+        };
+        let t_swept = web_time::Instant::now();
+        let cut = match swept.as_deref() {
+            Some([s]) if acc.len() == 1 => {
+                let cut = k.boolean(crate::BoolOp::Subtract, acc[0], &[*s]);
+                k.release(*s);
+                let t_cut = web_time::Instant::now();
+                let r = cut
+                    .ok()
+                    .filter(|c| {
+                        c.bodies.len() == 1
+                            && k.get(c.bodies[0]).is_ok_and(|b| b.check().is_empty())
+                    })
+                    .map(|c| c.bodies);
+                if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+                    eprintln!(
+                        "cut in pieces: piece {i}: cut {:.1} ms, checked {:.1} ms",
+                        (t_cut - t_swept).as_secs_f64() * 1e3,
+                        t_cut.elapsed().as_secs_f64() * 1e3
+                    );
+                }
+                r
+            }
+            _ => None,
+        };
+        // Else the part's pieces cut one at a time (no union of them needed).
+        let cut = cut.or_else(|| {
+            if pieces.is_empty() {
+                cut_by_face_sweeps(k, &acc, b, &part(i))
+            } else {
+                cut_by_pieces(k, &acc, pieces)
+            }
+        });
+        let Some(c) = cut else {
+            release_unless(k, &acc, target);
+            return None;
+        };
+        release_unless(k, &acc, target);
+        acc = c;
+    }
+    Some(OpResult {
+        bodies: acc,
+        history: History::default(),
+    })
+}
+
+/// Releases `ids` but `keep`.
+fn release_unless(k: &mut NativeKernel, ids: &[BodyId], keep: BodyId) {
+    for &id in ids {
+        if id != keep {
+            k.release(id);
+        }
+    }
+}
+
+/// The bodies `targets` less the sweep of `b` by one slide, turn or screw: less the solid where
+/// it starts and each of its leading faces' sweeps in turn ([`super::sweep_faces::face_sweeps`]:
+/// their union is the sweep, but where they overlap that union is a harder boolean than these
+/// cuts). None when a cut fails or leaves a body that isn't sound.
+fn cut_by_face_sweeps(
+    k: &mut NativeKernel,
+    targets: &[BodyId],
+    b: &Body,
+    steps: &[RigidStep],
+) -> Option<Vec<BodyId>> {
+    let pieces = super::sweep_faces::face_sweeps(k, b, steps).ok()?;
+    cut_by_pieces(k, targets, pieces)
+}
+
+/// The bodies `targets` less each of `pieces` in turn; None when a cut fails or leaves a body
+/// that isn't sound.
+fn cut_by_pieces(
+    k: &mut NativeKernel,
+    targets: &[BodyId],
+    pieces: Vec<Body>,
+) -> Option<Vec<BodyId>> {
+    // (Pieces that only touch glued first: one cut each group, none along a tangency.)
+    let pieces = super::sweep_faces::glued_groups(k, pieces);
+    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+        eprintln!("swept cut: {} groups of pieces", pieces.len());
+    }
+    let keep: Vec<BodyId> = targets.to_vec();
+    let mut acc: Vec<BodyId> = targets.to_vec();
+    for piece in pieces {
+        let pb = piece.bbox();
+        let tool = k.insert(piece);
+        let mut next = Vec::new();
+        let mut ok = true;
+        for &a in &acc {
+            let overlaps = k.get(a).is_ok_and(|t| {
+                let tb = t.bbox();
+                tb.min.x <= pb.max.x
+                    && pb.min.x <= tb.max.x
+                    && tb.min.y <= pb.max.y
+                    && pb.min.y <= tb.max.y
+                    && tb.min.z <= pb.max.z
+                    && pb.min.z <= tb.max.z
+            });
+            if !overlaps {
+                next.push(a);
+                continue;
+            }
+            match k.boolean(crate::BoolOp::Subtract, a, &[tool]) {
+                Ok(c)
+                    if c.bodies
+                        .iter()
+                        .all(|&id| k.get(id).is_ok_and(|b| b.check().is_empty())) =>
+                {
+                    next.extend(c.bodies);
+                }
+                r => {
+                    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+                        match &r {
+                            Ok(c) => eprintln!(
+                                "swept cut: a piece's cut isn't sound: {:?}",
+                                c.bodies
+                                    .iter()
+                                    .filter_map(|&id| k.get(id).ok()?.check().into_iter().next())
+                                    .next()
+                            ),
+                            Err(e) => eprintln!("swept cut: a piece's cut failed: {e}"),
+                        }
+                    }
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        k.release(tool);
+        for &a in &acc {
+            if !next.contains(&a) && !keep.contains(&a) {
+                k.release(a);
+            }
+        }
+        if !ok {
+            for &a in &next {
+                if !keep.contains(&a) {
+                    k.release(a);
+                }
+            }
+            return None;
+        }
+        acc = next;
+    }
+    Some(acc)
+}
+
 /// [`crate::Kernel::cut_swept`].
 pub fn cut_swept(
     k: &mut NativeKernel,
@@ -1172,86 +1680,96 @@ pub fn cut_swept(
     motion: &SolidMotion,
 ) -> Result<OpResult> {
     let b = (**k.get(tool)?).clone();
-    // A rigid motion turning more than half a turn: exactly, in pieces of at most half a turn
-    // cut one after another (a tool's sweep over a whole turn can overlap itself, a thread whose
-    // groove is wider than its lead; the pieces don't), else on to the whole and the mesh.
-    if let SolidMotion::Rigid { steps } = motion
-        && (1..=2).contains(&steps.len())
-    {
-        let turn = steps
-            .iter()
-            .map(|s| match *s {
-                RigidStep::Turn { from, to, .. } => (to - from).abs(),
-                RigidStep::Slide { .. } => 0.0,
-            })
-            .fold(0.0, f64::max);
-        if turn > PI + tol::ANGULAR {
-            let n = (turn / PI).ceil() as usize;
-            let part = |i: usize| -> Vec<RigidStep> {
-                let (a, z) = (i as f64 / n as f64, (i + 1) as f64 / n as f64);
-                steps
+    // A motion whose ends keep clear of the target: within it the endless motion (a whole turn,
+    // a screw without end) fills what this one does, and is made exactly as a whole (the solid
+    // of revolution, the screw's helical sweep).
+    if let Some(endless) = endless_within(&**k.get(target)?, &b, motion) {
+        let swept = sweep_solid(k, tool, &endless).ok();
+        if let Some(r) = swept
+            && let [s] = r.bodies.as_slice()
+        {
+            let cut = k.boolean(crate::BoolOp::Subtract, target, &[*s]);
+            k.release(*s);
+            if let Ok(c) = cut
+                && c.bodies
                     .iter()
-                    .map(|s| match *s {
-                        RigidStep::Turn { axis, from, to } => RigidStep::Turn {
-                            axis,
-                            from: from + (to - from) * a,
-                            to: from + (to - from) * z,
-                        },
-                        RigidStep::Slide { from, to } => RigidStep::Slide {
-                            from: from + (to - from) * a,
-                            to: from + (to - from) * z,
-                        },
-                    })
-                    .collect()
-            };
-            let mut acc = target;
-            let mut ok = true;
-            for i in 0..n {
-                let Ok(r) = super::sweep_faces::by_faces(k, &b, &part(i)) else {
-                    ok = false;
-                    break;
-                };
-                let [s] = r.bodies.as_slice() else {
-                    ok = false;
-                    break;
-                };
-                let cut = k.boolean(crate::BoolOp::Subtract, acc, &[*s]);
-                k.release(*s);
-                match cut {
-                    Ok(c)
-                        if c.bodies.len() == 1
-                            && k.get(c.bodies[0]).is_ok_and(|b| b.check().is_empty()) =>
-                    {
-                        if acc != target {
-                            k.release(acc);
-                        }
-                        acc = c.bodies[0];
-                    }
-                    _ => {
-                        ok = false;
-                        break;
-                    }
-                }
-            }
-            if ok {
-                return Ok(OpResult {
-                    bodies: vec![acc],
-                    history: History::default(),
-                });
-            }
-            if acc != target {
-                k.release(acc);
+                    .all(|&id| k.get(id).is_ok_and(|b| b.check().is_empty()))
+            {
+                return Ok(c);
             }
         }
     }
+    // A rigid motion turning more than half a turn: exactly, in pieces of at most half a turn
+    // cut one after another (a tool's sweep over a whole turn can overlap itself, a thread whose
+    // groove is wider than its lead; the pieces don't), and whole. The pieces first where the
+    // tool's turns may overlap; else the whole first (one sweep and one cut), the pieces after.
+    let long = match motion {
+        SolidMotion::Rigid { steps } if (1..=2).contains(&steps.len()) => {
+            let turn = steps
+                .iter()
+                .map(|s| match *s {
+                    RigidStep::Turn { from, to, .. } => (to - from).abs(),
+                    RigidStep::Slide { .. } => 0.0,
+                })
+                .fold(0.0, f64::max);
+            (turn > PI + tol::ANGULAR).then_some(steps.as_slice())
+        }
+        _ => None,
+    };
+    let overlapping = long.is_some_and(|steps| turns_may_overlap(&b, steps));
+    if let Some(steps) = long
+        && overlapping
+        && let Some(r) = cut_in_pieces(k, target, &b, steps)
+    {
+        return Ok(r);
+    }
     // Exactly: the sweep, where it is made without meshing, cut from the target.
+    // A climb (a screw whose lead changes): half a turn at a time.
+    if let SolidMotion::Climb {
+        axis,
+        from,
+        to,
+        rise,
+    } = motion
+    {
+        let (r, d) = climb_at(axis, *from, *to, rise, 0.0);
+        let start = b.transformed(&Affine {
+            m: *r.matrix(),
+            t: d,
+        });
+        let (coef, a0) = (rise.clone(), *from);
+        let base = climb_rise(&coef, a0);
+        let rel: super::sweep_faces::Rise =
+            std::sync::Arc::new(move |s: f64| climb_rise(&coef, a0 + s) - base);
+        if let Some(r) = cut_rising_screw(
+            k,
+            target,
+            &start,
+            axis.origin,
+            axis.dir.into_inner(),
+            to - from,
+            rel,
+        ) {
+            return Ok(r);
+        }
+    }
+    // Carried along a helix (about a fixed axis along `up`, its lead changing or not): a screw.
+    if let SolidMotion::Path { path, up } = motion
+        && let Ok(frames) = PathFrames::new(k, path, up.into_inner())
+        && let Some((o, angle, rise)) = path_screw(&frames, b.bbox().diagonal().max(frames.total))
+        && let Some(r) = cut_rising_screw(k, target, &b, o, frames.up, angle, rise)
+    {
+        return Ok(r);
+    }
+    let mut pieces: Vec<Body> = Vec::new();
     let exact = match motion {
         SolidMotion::Rigid { steps } if (1..=2).contains(&steps.len()) => {
-            super::sweep_faces::by_faces(k, &b, steps).ok()
+            super::sweep_faces::by_faces_or_pieces(k, &b, steps, Some(&mut pieces)).ok()
         }
         SolidMotion::Planar { .. } | SolidMotion::Turn { .. } | SolidMotion::Screw { .. } => {
             sweep_solid(k, tool, motion).ok()
         }
+        SolidMotion::Path { path, up } => path_sweep_exact(k, tool, &b, path, up.into_inner()),
         _ => None,
     };
     if let Some(r) = exact
@@ -1265,6 +1783,47 @@ pub fn cut_swept(
                 .all(|&id| k.get(id).is_ok_and(|b| b.check().is_empty()))
         {
             return Ok(c);
+        }
+    }
+    // Else, for a motion of at most half a turn, the sweep's pieces cut one at a time.
+    if long.is_none()
+        && let SolidMotion::Rigid { steps } = motion
+        && (1..=2).contains(&steps.len())
+        && let Some(bodies) = if pieces.is_empty() {
+            cut_by_face_sweeps(k, &[target], &b, steps)
+        } else {
+            cut_by_pieces(k, &[target], std::mem::take(&mut pieces))
+        }
+    {
+        return Ok(OpResult {
+            bodies,
+            history: History::default(),
+        });
+    }
+    if let Some(steps) = long
+        && !overlapping
+        && let Some(r) = cut_in_pieces(k, target, &b, steps)
+    {
+        return Ok(r);
+    }
+    // A torus: its sweep trimmed whole by what it covers of itself (where its leading faces
+    // fold, their sweeps can't be cut one at a time), cut from the target.
+    if let SolidMotion::Rigid { steps } = motion
+        && let Some(Ok(r)) =
+            super::sweep_tube::torus(k, &b, &super::sweep_tube::Motion::Steps(steps))
+        && let [s] = r.bodies.as_slice()
+    {
+        let cut = k.boolean(crate::BoolOp::Subtract, target, &[*s]);
+        k.release(*s);
+        if let Ok(c) = cut
+            && c.bodies
+                .iter()
+                .all(|&id| k.get(id).is_ok_and(|b| b.check().is_empty()))
+        {
+            return Ok(c);
+        }
+        if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+            eprintln!("swept cut: the torus's whole sweep wouldn't cut from the target");
         }
     }
     // Else meshed: inside the target, in none of the tool's places.
@@ -1297,9 +1856,205 @@ pub fn cut_swept(
             let frames = PathFrames::new(k, path, up.into_inner())?;
             meshed_within(k, &b, dist, &|t| frames.place(t), within)
         }
+        SolidMotion::Climb {
+            axis,
+            from,
+            to,
+            rise,
+        } => meshed_within(
+            k,
+            &b,
+            dist,
+            &|t| climb_at(axis, *from, *to, rise, t),
+            within,
+        ),
         _ => Err(KernelError::Unsupported(
             "cutting by a swept solid meshed for a motion other than a rigid one or a path",
         )),
+    }
+}
+
+/// An end mill standing upright (a cylinder about the line through the path's start along `up`,
+/// between two flat ends square to it, the bottom edge sharp or rounded: a flat or a bull-nose
+/// cutter) carried along a path in a plane square to `up`: what it passes through is everything
+/// within its radius of the path, between its ends ([`super::offset::prism::wire_slot`]: the
+/// path's offset, exact and trimmed where the path bends tighter than the radius or loops),
+/// its bottom edge rounded as the cutter's is. None for another body or path.
+fn end_mill_along(
+    k: &mut NativeKernel,
+    b: &Body,
+    path: &[crate::PathCurve],
+    up: V3,
+) -> Option<OpResult> {
+    let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+    let up = up.try_normalize(tol::TINY)?;
+    let segs = super::sweep::path::path_segments(k, path).ok()?;
+    let p0 = segs.first()?.start();
+    let size = b.bbox().diagonal().max(1.0);
+    let near = tol::REL_POINT * size.max((segs.last()?.end() - p0).norm());
+    for s in &segs {
+        for i in 0..=16 {
+            let t = s.t0 + (s.t1 - s.t0) * i as f64 / 16.0;
+            if (s.c.point(t) - p0).dot(&up).abs() > near {
+                return None;
+            }
+        }
+    }
+    let height = |p: &P3| (p - p0).dot(&up);
+    let off_axis = |p: &P3| {
+        let d = p - p0;
+        (d - up * d.dot(&up)).norm()
+    };
+    let parallel = |v: &V3| v.normalize().cross(&up).norm() < 1e-9;
+    // Its faces: two flat ends, the cylinder, and at most the corner's torus.
+    let (mut flats, mut radius, mut corner) = (Vec::new(), None, None);
+    for f in &b.faces {
+        match &f.surf {
+            Surface::Plane { f } if parallel(&f.x.cross(&f.y)) => flats.push(height(&f.o)),
+            Surface::Cylinder { f, r } if parallel(&f.z) && off_axis(&f.o) <= near => {
+                if radius.replace(*r).is_some() {
+                    return None;
+                }
+            }
+            Surface::Torus { f, rmaj, rmin } if parallel(&f.z) && off_axis(&f.o) <= near => {
+                if corner.replace((height(&f.o), *rmaj, *rmin)).is_some() {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    let radius = radius?;
+    let [h0, h1] = flats[..] else {
+        return None;
+    };
+    let (bottom, top) = (h0.min(h1), h0.max(h1));
+    if let Some((h, a, c)) = corner
+        && ((a + c - radius).abs() > near || (h - c - bottom).abs() > near)
+    {
+        return None;
+    }
+    // The path in the frame it lies flat in.
+    let x = {
+        let d = segs.first()?.dir(0.0);
+        (d - up * d.dot(&up)).try_normalize(1e-12)?
+    };
+    let y = up.cross(&x);
+    let to_flat = Affine {
+        m: nalgebra::Matrix3::from_rows(&[x.transpose(), y.transpose(), up.transpose()]),
+        t: -nalgebra::Matrix3::from_rows(&[x.transpose(), y.transpose(), up.transpose()])
+            * p0.coords,
+    };
+    let wire: Vec<(Curve, f64, f64)> = segs
+        .iter()
+        .map(|s| {
+            let c = s.c.transformed(&to_flat);
+            if s.rev {
+                let (c, t0, t1) = c.reversed(s.t0, s.t1);
+                (c, t0, t1)
+            } else {
+                (c, s.t0, s.t1)
+            }
+        })
+        .collect();
+    let slot = match super::offset::prism::wire_slot(&wire, radius, p0, x, up, bottom, top) {
+        Ok(s) => s,
+        Err(e) => {
+            if debug {
+                eprintln!("end mill: no slot: {e}");
+            }
+            return None;
+        }
+    };
+    let body = match corner {
+        None => slot,
+        Some((_, _, c)) => {
+            // Its bottom edges (all in the bottom plane), rounded.
+            let mut kk = NativeKernel::new();
+            let edges: Vec<crate::EdgeId> = slot
+                .edges
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| {
+                    !e.degenerate
+                        && (0..=4).all(|i| {
+                            let t = e.t[0] + (e.t[1] - e.t[0]) * i as f64 / 4.0;
+                            (height(&e.curve.point(t)) - bottom).abs() <= near
+                        })
+                })
+                .map(|(i, _)| crate::EdgeId(i as u64))
+                .collect();
+            let id = kk.insert(slot);
+            match crate::Kernel::fillet(&mut kk, id, &edges, c) {
+                Ok(r) => (**kk.get(*r.bodies.first()?).ok()?).clone(),
+                Err(e) => {
+                    if debug {
+                        eprintln!(
+                            "end mill: the slot's bottom edges ({}) wouldn't round: {e}",
+                            edges.len()
+                        );
+                    }
+                    return None;
+                }
+            }
+        }
+    };
+    if !body.check().is_empty() || body.solids.len() != 1 {
+        if debug {
+            eprintln!("end mill: the slot isn't sound: {:?}", body.check().first());
+        }
+        return None;
+    }
+    let id = k.insert(body);
+    Some(OpResult {
+        bodies: vec![id],
+        history: History::default(),
+    })
+}
+
+/// A whole torus, or a bull-nose mill, carried along a path of one curve
+/// ([`SolidMotion::Path`]): what it passes through, exactly ([`super::sweep_tube::torus`],
+/// [`super::sweep_mill::mill`]). The frame rides the curve by the curve's own
+/// parameter, which is smooth (by its length, as [`PathFrames`] has it, the same places come in
+/// another order of time, which is all the same to what is swept). None for another body or a
+/// path of several curves.
+fn torus_along(
+    k: &mut NativeKernel,
+    b: &Body,
+    path: &[crate::PathCurve],
+    up: V3,
+) -> Option<Result<OpResult>> {
+    let torus = matches!(b.faces.as_slice(), [f] if matches!(f.surf, super::surface::Surface::Torus { .. }));
+    if !torus && !super::sweep_mill::is_mill(b) {
+        return None;
+    }
+    let segs = super::sweep::path::path_segments(k, path).ok()?;
+    let [s] = segs.as_slice() else {
+        return None;
+    };
+    let up = up.normalize();
+    let (ta, tb) = if s.rev { (s.t1, s.t0) } else { (s.t0, s.t1) };
+    let frame = |t: f64| -> Option<(nalgebra::Matrix3<f64>, P3)> {
+        let (p, d1, _) = s.c.d2(ta + (tb - ta) * t);
+        let d1 = d1 * (tb - ta).signum();
+        let x = (d1 - up * d1.dot(&up)).try_normalize(1e-12)?;
+        Some((nalgebra::Matrix3::from_columns(&[x, up.cross(&x), up]), p))
+    };
+    // (Every frame along it, and a little past its ends, must stand.)
+    if (0..=64).any(|i| frame(-0.01 + 1.02 * i as f64 / 64.0).is_none()) {
+        return None;
+    }
+    let (m0, o0) = frame(0.0)?;
+    let place = |t: f64| {
+        let (m, o) = frame(t).unwrap_or((m0, o0));
+        let r = m * m0.transpose();
+        (r, o.coords - r * o0.coords)
+    };
+    let motion = super::sweep_tube::Motion::Place(&place);
+    if torus {
+        super::sweep_tube::torus(k, b, &motion)
+    } else {
+        super::sweep_mill::mill(k, b, &motion)
     }
 }
 
@@ -1311,6 +2066,394 @@ fn meshed_body(k: &mut NativeKernel, b: &Body, place: &Place) -> Result<OpResult
             "sweeping a solid whose mesh doesn't close (for its distance)",
         ))?;
     meshed(k, b, &|p| md.distance(p), place)
+}
+
+/// A body of revolution about the line through the path's start along `up` (every face a plane
+/// square to it, or a cylinder, cone, torus, sphere or revolution about it; every edge a circle
+/// about it or in a plane through it), carried along a path lying in a plane square to `up`
+/// ([`SolidMotion::Path`], its frame upright): each place is the body moved so its axis stands on
+/// the path (its turn about its own axis changes nothing), so what it passes through is its section
+/// through the axis swept along the path, square to it, with the body where it starts and where
+/// it ends. A single Bézier path is swept in quarters (a path looping over itself sweeps no
+/// quarter through itself), all united. None where that isn't
+/// so, or the sweep fails.
+#[allow(clippy::too_many_lines)]
+fn upright_revolution_along(
+    k: &mut NativeKernel,
+    tool: BodyId,
+    b: &Body,
+    path: &[crate::PathCurve],
+    up: V3,
+) -> Option<OpResult> {
+    use crate::PathCurve;
+    let up = up.try_normalize(tol::TINY)?;
+    let segs = super::sweep::path::path_segments(k, path).ok()?;
+    let (first, last) = (segs.first()?, segs.last()?);
+    let p0 = first.start();
+    let size = b.bbox().diagonal().max(1.0);
+    let near = tol::REL_POINT * size.max((last.end() - p0).norm());
+    // The path in the plane square to `up` through its start.
+    for s in &segs {
+        for i in 0..=16 {
+            let t = s.t0 + (s.t1 - s.t0) * i as f64 / 16.0;
+            if (s.c.point(t) - p0).dot(&up).abs() > near {
+                return None;
+            }
+        }
+    }
+    // Symmetric about the line L through p0 along `up`.
+    let off_axis = |p: &P3| {
+        let d = p - p0;
+        (d - up * d.dot(&up)).norm()
+    };
+    let parallel = |v: &V3| v.normalize().cross(&up).norm() < 1e-9;
+    let about = |f: &Frame| parallel(&f.z) && off_axis(&f.o) <= near;
+    for f in &b.faces {
+        let ok = match &f.surf {
+            Surface::Plane { f } => parallel(&f.x.cross(&f.y)),
+            Surface::Cylinder { f, .. } | Surface::Cone { f, .. } | Surface::Torus { f, .. } => {
+                about(f)
+            }
+            Surface::Sphere { f, .. } => off_axis(&f.o) <= near,
+            Surface::Revolution { f, .. } => about(f),
+            _ => false,
+        };
+        if !ok {
+            return None;
+        }
+    }
+    for e in &b.edges {
+        if e.degenerate {
+            continue;
+        }
+        let pts: Vec<P3> = (0..=8)
+            .map(|i| e.curve.point(e.t[0] + (e.t[1] - e.t[0]) * i as f64 / 8.0))
+            .collect();
+        // A circle about L (one height, one distance), or in one plane through L.
+        let h0 = (pts[0] - p0).dot(&up);
+        let r0 = off_axis(&pts[0]);
+        let circle = pts
+            .iter()
+            .all(|p| ((p - p0).dot(&up) - h0).abs() <= near && (off_axis(p) - r0).abs() <= near);
+        let horiz = |p: &P3| {
+            let d = p - p0;
+            d - up * d.dot(&up)
+        };
+        let meridian = match pts.iter().map(horiz).find(|h| h.norm() > near) {
+            None => true,
+            Some(h) => {
+                let n = h.cross(&up).normalize();
+                pts.iter().all(|p| (p - p0).dot(&n).abs() <= near)
+            }
+        };
+        if !circle && !meridian {
+            return None;
+        }
+    }
+    // The pieces of the path: a single Bézier curve in quarters.
+    let pieces: Vec<Vec<PathCurve>> = match path {
+        [PathCurve::Bezier3 { poles, weights }] if poles.len() >= 2 => {
+            let w: Vec<f64> = if weights.is_empty() {
+                vec![1.0; poles.len()]
+            } else {
+                weights.clone()
+            };
+            let hom: Vec<nalgebra::Vector4<f64>> = poles
+                .iter()
+                .zip(&w)
+                .map(|(p, w)| nalgebra::Vector4::new(p.x * w, p.y * w, p.z * w, *w))
+                .collect();
+            // De Casteljau: the poles of the part from s0 to s1.
+            let part = |s0: f64, s1: f64| -> Vec<nalgebra::Vector4<f64>> {
+                let split = |q: &[nalgebra::Vector4<f64>], t: f64| {
+                    let mut left = vec![q[0]];
+                    let mut right = vec![q[q.len() - 1]];
+                    let mut row = q.to_vec();
+                    while row.len() > 1 {
+                        row = row.windows(2).map(|w| w[0] + (w[1] - w[0]) * t).collect();
+                        left.push(row[0]);
+                        right.push(row[row.len() - 1]);
+                    }
+                    right.reverse();
+                    (left, right)
+                };
+                let (_, r) = split(&hom, s0);
+                let (l, _) = split(&r, ((s1 - s0) / (1.0 - s0)).clamp(0.0, 1.0));
+                l
+            };
+            [0.0, 0.25, 0.5, 0.75]
+                .iter()
+                .map(|&s0| {
+                    let q = part(s0, s0 + 0.25);
+                    vec![PathCurve::Bezier3 {
+                        poles: q
+                            .iter()
+                            .map(|h| P3::new(h.x / h.w, h.y / h.w, h.z / h.w))
+                            .collect(),
+                        weights: if weights.is_empty() {
+                            Vec::new()
+                        } else {
+                            q.iter().map(|h| h.w).collect()
+                        },
+                    }]
+                })
+                .collect()
+        }
+        _ => vec![path.to_vec()],
+    };
+    // The body's place where a piece starts or ends: turned about `up` from the path's start
+    // tangent to the tangent there, moved to the point there.
+    let flat = |v: V3| (v - up * v.dot(&up)).try_normalize(tol::TINY);
+    let t0 = flat(first.dir(0.0))?;
+    let place = |q: P3, t: V3| -> Option<(nalgebra::Matrix3<f64>, V3)> {
+        let t = flat(t)?;
+        let ang = t0.cross(&t).dot(&up).atan2(t0.dot(&t));
+        let r =
+            *nalgebra::Rotation3::from_axis_angle(&nalgebra::Unit::new_normalize(up), ang).matrix();
+        Some((r, q.coords - r * p0.coords))
+    };
+    // The section: the body split by the plane through p0 square to the path there; the cut face.
+    let plane = Plane {
+        origin: p0,
+        x_dir: nalgebra::Unit::new_normalize(up.cross(&t0)),
+        normal: nalgebra::Unit::new_normalize(t0),
+    };
+    let halves = super::ops::split(k, tool, &crate::SplitTool::Plane(plane), 0).ok()?;
+    let half = *halves.bodies.first()?;
+    let hb = k.get(half).ok()?.as_ref().clone();
+    let face = (0..hb.faces.len()).find(|&fi| match &hb.faces[fi].surf {
+        Surface::Plane { f } => {
+            f.x.cross(&f.y).normalize().cross(&t0).norm() < 1e-9
+                && (f.o - p0).dot(&t0).abs() <= near
+        }
+        _ => false,
+    })?;
+    let mut made: Vec<BodyId> = halves.bodies.clone();
+    let result = (|| -> Option<Body> {
+        let mut all: Option<Body> = None;
+        let add = |all: &mut Option<Body>, x: Body| -> Option<()> {
+            *all = Some(match all.take() {
+                None => x,
+                Some(a) => {
+                    super::boolean::boolean_bodies(&a, &x, crate::BoolOp::Union)
+                        .ok()?
+                        .body
+                }
+            });
+            Some(())
+        };
+        let tb = k.get(tool).ok()?.as_ref().clone();
+        add(&mut all, tb)?;
+        let mut end = None;
+        for piece in &pieces {
+            // The piece's start place: the section moved there, then swept along the piece.
+            let psegs = super::sweep::path::path_segments(k, piece).ok()?;
+            let (ps, pe) = (psegs.first()?, psegs.last()?);
+            let (m, d) = place(ps.start(), ps.dir(0.0))?;
+            let moved = k.transform_affine(half, m, d).ok()?;
+            let mh = *moved.bodies.first()?;
+            made.push(mh);
+            let profile_plane = Plane {
+                origin: P3::from(m * plane.origin.coords + d),
+                x_dir: nalgebra::Unit::new_normalize(m * plane.x_dir.into_inner()),
+                normal: nalgebra::Unit::new_normalize(m * plane.normal.into_inner()),
+            };
+            let spec = crate::SweepSpec {
+                body: crate::BodyKind::Solid,
+                path: piece.clone(),
+                control: crate::SweepControl::None,
+                corners: crate::SweepCorners::Mitre,
+                faces: vec![crate::FaceInput {
+                    body: mh,
+                    face: crate::FaceId(face as u64),
+                    source: 0,
+                }],
+            };
+            let swept =
+                crate::Kernel::sweep_with(k, &Profile::new(profile_plane, vec![]), &spec).ok()?;
+            let sid = *swept.bodies.first()?;
+            made.push(sid);
+            add(&mut all, k.get(sid).ok()?.as_ref().clone())?;
+            end = Some((pe.end(), pe.dir(1.0)));
+        }
+        // The body where the path ends (at the joints between pieces their sweeps meet in the
+        // section, and cover it).
+        let (q, t) = end?;
+        let (m, d) = place(q, t)?;
+        let at = k.transform_affine(tool, m, d).ok()?;
+        let aid = *at.bodies.first()?;
+        made.push(aid);
+        add(&mut all, k.get(aid).ok()?.as_ref().clone())?;
+        all
+    })();
+    for id in made {
+        k.release(id);
+    }
+    let body = result?;
+    (body.is_solid() && body.check().is_empty()).then(|| OpResult {
+        bodies: vec![k.insert(body)],
+        history: History::default(),
+    })
+}
+
+/// A path's frames turning about one fixed axis along `up` as they rise (a helix, its lead
+/// changing or not): a point on the axis, the turn from the path's start to its end (radians),
+/// and the rise as the turn goes (a function of the turn from the start, 0 there). None when the
+/// frames turn about an axis that moves (more than a millionth of the size).
+fn path_screw(frames: &PathFrames, size: f64) -> Option<(P3, f64, super::sweep_faces::Rise)> {
+    let up = frames.up;
+    let (ex, ey) = {
+        let x = any_perpendicular(&up).normalize();
+        (x, up.cross(&x))
+    };
+    let n = 4096;
+    let mut turns: Vec<f64> = Vec::with_capacity(n + 1);
+    let mut moves: Vec<V3> = Vec::with_capacity(n + 1);
+    for i in 0..=n {
+        let (r, d) = frames.place(i as f64 / n as f64);
+        let x = r * ex;
+        let a = x.dot(&ey).atan2(x.dot(&ex));
+        let a = match turns.last() {
+            Some(&p) => p + (a - p - TAU * ((a - p) / TAU).round()),
+            None => a,
+        };
+        turns.push(a);
+        moves.push(d);
+    }
+    let total = turns[n] - turns[0];
+    // Turning one way all along.
+    if total.abs() < 1e-6
+        || turns
+            .windows(2)
+            .any(|w| (w[1] - w[0]) * total.signum() <= 0.0)
+    {
+        return None;
+    }
+    // The axis: the point o (in the plane square to up) each place's shift (I − R)o is, by least
+    // squares.
+    let (mut a11, mut a12, mut a22, mut b1, mut b2) = (0.0, 0.0, 0.0, 0.0, 0.0);
+    for i in 0..=n {
+        let (c, s_) = (turns[i].cos(), turns[i].sin());
+        // I − R in the plane: [[1 − c, s], [−s, 1 − c]].
+        let (m11, m12, m21, m22) = (1.0 - c, s_, -s_, 1.0 - c);
+        let (dx, dy) = (moves[i].dot(&ex), moves[i].dot(&ey));
+        a11 += m11 * m11 + m21 * m21;
+        a12 += m11 * m12 + m21 * m22;
+        a22 += m12 * m12 + m22 * m22;
+        b1 += m11 * dx + m21 * dy;
+        b2 += m12 * dx + m22 * dy;
+    }
+    let det = a11 * a22 - a12 * a12;
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    let (ox, oy) = ((a22 * b1 - a12 * b2) / det, (a11 * b2 - a12 * b1) / det);
+    for i in 0..=n {
+        let (c, s_) = (turns[i].cos(), turns[i].sin());
+        let (dx, dy) = (moves[i].dot(&ex), moves[i].dot(&ey));
+        let off = ((1.0 - c) * ox + s_ * oy - dx).hypot(-s_ * ox + (1.0 - c) * oy - dy);
+        if off > 1e-6 * size {
+            if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+                eprintln!("path screw: the axis moves ({off:.2e} at {i} of {n})");
+            }
+            return None;
+        }
+    }
+    let o = P3::from(ex * ox + ey * oy);
+    // The rise against the turn, interpolated (a cubic through every place).
+    let pts: Vec<P3> = (0..=n)
+        .map(|i| P3::new(0.0, moves[i].dot(&up) - moves[0].dot(&up), 0.0))
+        .collect();
+    let params: Vec<f64> = turns.iter().map(|a| a - turns[0]).collect();
+    let curve = super::nurbs::NurbsCurve::interpolate(&pts, &params, 3, None, None);
+    let rise: super::sweep_faces::Rise = std::sync::Arc::new(move |a: f64| curve.point(a).y);
+    Some((o, total, rise))
+}
+
+/// `target` less what `b` passes through screwed about the axis through `o` along `up` by
+/// `angle`, rising `rise(θ)` at the turn θ: half a turn at a time, each the target less the
+/// solid where it starts and each of its leading faces' sweeps. None when that fails.
+fn cut_rising_screw(
+    k: &mut NativeKernel,
+    target: BodyId,
+    b: &Body,
+    o: P3,
+    up: V3,
+    angle: f64,
+    rise: super::sweep_faces::Rise,
+) -> Option<OpResult> {
+    let n = (angle.abs() / PI).ceil().max(1.0) as usize;
+    // Every half turn's pieces, then the target less them (glued where they only touch: the
+    // half turns meet along the solid where one ends and the next starts).
+    let mut all: Vec<Body> = Vec::new();
+    for i in 0..n {
+        let (a0, a1) = (
+            angle * i as f64 / n as f64,
+            angle * (i + 1) as f64 / n as f64,
+        );
+        let r = nalgebra::Rotation3::from_axis_angle(&nalgebra::Unit::new_normalize(up), a0);
+        let m = *r.matrix();
+        let place = Affine {
+            m,
+            t: o.coords - m * o.coords + up * rise(a0),
+        };
+        let here = b.transformed(&place);
+        let (f, base) = (rise.clone(), rise(a0));
+        let part: super::sweep_faces::Rise = std::sync::Arc::new(move |s: f64| f(a0 + s) - base);
+        match super::sweep_faces::rising_screw_sweeps(k, &here, o, up, a1 - a0, part) {
+            // (After the first, the solid where a half turn starts is inside the one before.)
+            Ok(p) => all.extend(p.into_iter().skip(usize::from(i > 0))),
+            Err(e) => {
+                if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+                    eprintln!("path screw: part {i} of {n}: {e}");
+                }
+                return None;
+            }
+        }
+    }
+    let bodies = cut_by_pieces(k, &[target], all)?;
+    Some(OpResult {
+        bodies,
+        history: History::default(),
+    })
+}
+
+/// A solid carried along a path, exactly where it can be: an upright solid of revolution along a
+/// planar path ([`upright_revolution_along`]); a prism along `up` carried along a path in a plane
+/// square to `up`, whose frames then only turn about `up` (a planar motion: the prism's
+/// polygon's swept region extruded, [`super::sweep_planar::sweep_planar_by`]).
+fn path_sweep_exact(
+    k: &mut NativeKernel,
+    tool: BodyId,
+    b: &Body,
+    path: &[crate::PathCurve],
+    up: V3,
+) -> Option<OpResult> {
+    if let Some(r) = upright_revolution_along(k, tool, b, path, up) {
+        return Some(r);
+    }
+    if let Some(r) = end_mill_along(k, b, path, up) {
+        return Some(r);
+    }
+    let frames = PathFrames::new(k, path, up).ok()?;
+    let up = up.normalize();
+    let o0 = frames.frame(0.0).ok()?.1;
+    let size = b.bbox().diagonal().max(frames.total);
+    let planar = (0..=256).all(|i| {
+        frames
+            .frame(i as f64 / 256.0)
+            .is_ok_and(|(_, o)| (o - o0).dot(&up).abs() <= 1e-9 * size)
+    });
+    if !planar {
+        return None;
+    }
+    let r = super::sweep_planar::sweep_planar_by(k, b, up, &|t| frames.place(t));
+    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some()
+        && let Err(e) = &r
+    {
+        eprintln!("path sweep: the planar sweep failed: {e}");
+    }
+    r.ok()
 }
 
 /// The frames riding a path ([`SolidMotion::Path`]): by its length, t from 0 to 1, the path's

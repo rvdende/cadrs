@@ -120,7 +120,14 @@ pub fn thicken(k: &mut NativeKernel, spec: &ThickenSpec) -> Result<OpResult> {
             });
         }
     }
-    let body = acc.ok_or_else(|| invalid("The thickness must be greater than zero"))?;
+    let mut body = acc.ok_or_else(|| invalid("The thickness must be greater than zero"))?;
+    // The gaps the faces' slabs leave where the sheet bends away from the side they go to,
+    // filled: rounded, or mitred.
+    if sheets.len() > 1 {
+        for fill in crease_fills(k, &sheets, spec)? {
+            body = super::boolean::boolean_bodies(&body, &fill, BoolOp::Union)?.body;
+        }
+    }
     let n = body.faces.len();
     let t = Tagged {
         body,
@@ -134,6 +141,128 @@ pub fn thicken(k: &mut NativeKernel, spec: &ThickenSpec) -> Result<OpResult> {
             .collect(),
     };
     Ok(t.into_result(k))
+}
+
+/// The solids filling the gaps between the slabs of a sheet's faces (each swept along its normal
+/// by `spec.along`, and against it by `spec.against`) where two flat faces meet along a straight
+/// crease and the sheet bends away from the side the slabs go to: the wedge between the slabs'
+/// sides there, out to the cylinder of the thickness about the crease (rounded: the points that
+/// near the crease), or to where the moved faces meet (`spec.sharp`: a mitre). Where the sheet
+/// bends toward that side the slabs overlap, and their union trims them.
+fn crease_fills(k: &mut NativeKernel, sheets: &[Body], spec: &ThickenSpec) -> Result<Vec<Body>> {
+    let mut all = Body::default();
+    let mut normals: Vec<V3> = Vec::new();
+    for s in sheets {
+        all.append(s);
+        let Some((_, n)) = face_normal(s, 0) else {
+            return Ok(Vec::new());
+        };
+        normals.push(n);
+    }
+    let Ok(sewn) = sew_faces(all, tol::POINT) else {
+        return Ok(Vec::new());
+    };
+    // Faces whose normals don't agree on a side of the sheet (a box's walls facing in and its
+    // lid out) each go their own way, their slabs not joined.
+    if sewn.faces.len() != sheets.len() {
+        return Ok(Vec::new());
+    }
+    let agree = (0..sewn.faces.len())
+        .filter(|&f| face_normal(&sewn, f).is_some_and(|(_, n)| n.dot(&normals[f]) > 0.0))
+        .count();
+    if agree != 0 && agree != sewn.faces.len() {
+        return Ok(Vec::new());
+    }
+    let ef = sewn.edge_faces();
+    let bb = sewn.bbox();
+    let mut out = Vec::new();
+    for (e, faces) in ef.iter().enumerate() {
+        let &[f1, f2] = faces.as_slice() else {
+            continue;
+        };
+        let edge = &sewn.edges[e];
+        if f1 == f2 || edge.degenerate || !matches!(edge.curve, Curve::Line { .. }) {
+            continue;
+        }
+        let planar = |f: usize| matches!(sewn.faces[f].surf, Surface::Plane { .. });
+        if !planar(f1) || !planar(f2) {
+            continue;
+        }
+        // (Each face's own normal, which its slab follows; the sewn sheet's points.)
+        let (Some((c1, _)), Some((c2, _))) = (face_normal(&sewn, f1), face_normal(&sewn, f2))
+        else {
+            continue;
+        };
+        let (n1, n2) = (normals[f1], normals[f2]);
+        let (a, b) = (edge.curve.point(edge.t[0]), edge.curve.point(edge.t[1]));
+        let len = (b - a).norm();
+        if len <= tol::POINT {
+            continue;
+        }
+        let dir = (b - a) / len;
+        let (n1, n2) = (n1.normalize(), n2.normalize());
+        // Into each face, square to the crease.
+        let into = |c: P3, n: V3| {
+            let t = dir.cross(&n);
+            if t.dot(&(c - a)) < 0.0 { -t } else { t }
+        };
+        let (t1, t2) = (into(c1, n1), into(c2, n2));
+        for (d, sign) in [(spec.along, 1.0), (spec.against, -1.0)] {
+            if d < tol::ROUNDOFF {
+                continue;
+            }
+            let (m1, m2) = (n1 * sign, n2 * sign);
+            // Bends away: each face lies behind the other's moving side.
+            if m1.dot(&t2) >= -tol::ANGULAR || m2.dot(&t1) >= -tol::ANGULAR {
+                continue;
+            }
+            let fill = if spec.sharp {
+                // The kite a, a + d·m1, the mitre corner, a + d·m2, along the crease.
+                let corner = a + (m1 + m2) * (d / (1.0 + m1.dot(&m2)));
+                let x = m1;
+                let y = dir.cross(&x);
+                let at = |p: P3| nalgebra::Point2::new((p - a).dot(&x), (p - a).dot(&y));
+                let pts = [a, a + m1 * d, corner, a + m2 * d];
+                let l = |p: P3, q: P3| Curve2::Line {
+                    a: at(p),
+                    b: at(q),
+                    source: None,
+                };
+                let plane = Plane {
+                    origin: a,
+                    x_dir: nalgebra::Unit::new_normalize(x),
+                    normal: nalgebra::Unit::new_normalize(dir),
+                };
+                let region = Region {
+                    outer: Loop {
+                        curves: (0..4).map(|i| l(pts[i], pts[(i + 1) % 4])).collect(),
+                    },
+                    holes: vec![],
+                    source: None,
+                };
+                let id = k.extrude(&Profile::new(plane, vec![region]), Extent::Blind(len))?;
+                let body = k.get(id.bodies[0])?.as_ref().clone();
+                k.release(id.bodies[0]);
+                body
+            } else {
+                let id = k.primitive(&Primitive::Cylinder {
+                    base: a,
+                    axis: nalgebra::Unit::new_normalize(dir),
+                    radius: d,
+                    height: len,
+                })?;
+                let mut body = k.get(id.bodies[0])?.as_ref().clone();
+                k.release(id.bodies[0]);
+                for m in [m1, m2] {
+                    let half = super::ops::half_space_box(a, m, &bb)?;
+                    body = super::boolean::boolean_bodies(&body, &half, BoolOp::Intersect)?.body;
+                }
+                body
+            };
+            out.push(fill);
+        }
+    }
+    Ok(out)
 }
 
 /// A face's normal at an interior point (oriented by its sense), with that point.
@@ -233,7 +362,7 @@ fn thicken_sheet(k: &mut NativeKernel, sheets: &[Body], spec: &ThickenSpec) -> O
                 thickness: d,
                 outward: out,
                 hollow: false,
-                sharp: false,
+                sharp: spec.sharp,
             },
         )
         .ok()?;
@@ -524,6 +653,25 @@ pub fn sew(k: &mut NativeKernel, bodies: &[BodyId], tol: f64) -> Result<OpResult
     for id in bodies {
         b.append(k.get(*id)?);
     }
+    let b = sewn_solid(b, tol)?;
+    let n = b.faces.len();
+    let t = Tagged {
+        body: b,
+        tags: (0..n)
+            .map(|i| {
+                vec![Origin::ProfileCurve {
+                    region: u64::MAX,
+                    curve: i as u64,
+                }]
+            })
+            .collect(),
+    };
+    Ok(t.into_result(k))
+}
+
+/// The faces of `b` sewn along their coincident edges (within `tol`) into solids, kept in their
+/// order and turned to face out: [`sew`]'s body. Errors when they don't close or enclose nothing.
+pub fn sewn_solid(b: Body, tol: f64) -> Result<Body> {
     let mut b = sew_faces(b, tol)?;
     b.shells.clear();
     b.solids.clear();
@@ -541,19 +689,7 @@ pub fn sew(k: &mut NativeKernel, bodies: &[BodyId], tol: f64) -> Result<OpResult
     if v < tol::ROUNDOFF {
         return Err(invalid("The surfaces don't enclose a volume"));
     }
-    let n = b.faces.len();
-    let t = Tagged {
-        body: b,
-        tags: (0..n)
-            .map(|i| {
-                vec![Origin::ProfileCurve {
-                    region: u64::MAX,
-                    curve: i as u64,
-                }]
-            })
-            .collect(),
-    };
-    Ok(t.into_result(k))
+    Ok(b)
 }
 
 /// Sheets joined along their coincident edges into one (Onshape's Add of surfaces): each face

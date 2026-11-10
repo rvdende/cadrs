@@ -276,6 +276,7 @@ fn edge_tube(b: &Body, e: usize, r: f64) -> Result<Body> {
                     edge: EdgeId(e as u64),
                 }],
                 control: SweepControl::None,
+                corners: Default::default(),
                 faces: vec![],
             };
             let out = k.sweep_with(&prof, &spec)?;
@@ -1353,6 +1354,10 @@ pub fn inset_rounded(b: &Body, dist: &[f64]) -> Result<Body> {
     }
     let concave = (0..b.edges.len()).any(|e| !b.edges[e].degenerate && convex(b, e) == Some(false));
     if !concave && let Ok(c) = super::sharp::offset_sharp(b, dist) {
+        return Ok(c);
+    }
+    // A prism with a curved side: its outline's offset (rounded about reflex corners) extruded.
+    if let Some(Ok(c)) = super::prism::curved_prism_inset(b, dist, true, false) {
         return Ok(c);
     }
     let still: Vec<usize> = (0..b.faces.len()).filter(|&f| dist[f] == 0.0).collect();

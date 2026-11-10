@@ -465,7 +465,7 @@ pub trait Kernel {
     /// let profile = Profile::new(across, vec![Region { outer: Loop { curves: vec![disc] }, holes: vec![], source: None }]);
     /// let line = Curve2::Line { a: Point2::new(0.0, 0.0), b: Point2::new(10.0, 0.0), source: None };
     /// let path = vec![PathCurve::Sketch { plane: Plane::top(), curve: line }];
-    /// let spec = SweepSpec { body: BodyKind::Solid, path, control: SweepControl::None, faces: vec![] };
+    /// let spec = SweepSpec { body: BodyKind::Solid, path, control: SweepControl::None, corners: Default::default(), faces: vec![] };
     /// let rod = k.sweep_with(&profile, &spec)?.bodies[0];
     /// assert!((k.mass_properties(rod)?.volume - 10.0 * std::f64::consts::PI).abs() < 1e-6);
     /// # Ok::<(), cadrs_kernel::KernelError>(())
@@ -547,6 +547,15 @@ pub trait Kernel {
     /// # Ok::<(), cadrs_kernel::KernelError>(())
     /// ```
     fn loft_with(&mut self, spec: &LoftSpec) -> Result<OpResult>;
+
+    /// A loft along guide curves (Onshape's Loft with guides): `spec`'s two sections (a sketch
+    /// region of one loop, or a point at either end) joined by walls that follow `guides`, each
+    /// guide running from a corner of the first section's loop to a corner of the last's (or to
+    /// its point). Each wall, between two neighbouring guides, is the loft through curves of the
+    /// sections' stretches between them along those two guides ([`Kernel::loft_curves`]); a solid
+    /// is capped by its sections' faces. Its faces are made from the first section's curves
+    /// (walls) and its caps. No guides: [`Kernel::loft_with`].
+    fn loft_guided(&mut self, spec: &LoftSpec, guides: &[Vec<PathCurve>]) -> Result<OpResult>;
 
     /// A loft through curves (Onshape's loft of wire profiles, with guides): a sheet of one face,
     /// `ProfileCurve { region: spec.source, curve }` for the `source` of each sketch curve of its
@@ -1385,6 +1394,17 @@ pub trait Kernel {
         &mut self,
         body: BodyId,
         face: FaceId,
+        domain: Option<UvRect>,
+    ) -> Result<OpResult>;
+
+    /// A sheet body of one face on a B-spline surface given by its net (one made or read
+    /// elsewhere): over its range, or `domain`, bounded as [`Kernel::face_from_surface`] bounds
+    /// a face's surface (iso-curves, poles as degenerate edges, a seam where it closes round).
+    /// A surface that closes on itself (a ball's) gives a closed sheet, which
+    /// [`Kernel::sew_solid`] makes a solid. `InvalidInput` for a net that isn't a B-spline.
+    fn bspline_face(
+        &mut self,
+        surface: &BsplineSurface,
         domain: Option<UvRect>,
     ) -> Result<OpResult>;
 

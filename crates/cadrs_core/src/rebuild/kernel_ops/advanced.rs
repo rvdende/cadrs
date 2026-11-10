@@ -499,6 +499,7 @@ impl Rebuilder {
                 body: body_kind,
                 path: path.clone(),
                 control,
+                corners: Default::default(),
                 faces: inputs.clone(),
             };
             match self

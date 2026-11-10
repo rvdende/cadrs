@@ -1006,7 +1006,7 @@ impl Body {
                     Vec::new()
                 }
             };
-            let domain: Vec<Vec<String>> = if super::fillet::parallel(self.faces.len()) {
+            let domain: Vec<Vec<String>> = if super::par::threads_for(self.faces.len(), false) {
                 (0..self.faces.len()).into_par_iter().map(one).collect()
             } else {
                 (0..self.faces.len()).map(one).collect()

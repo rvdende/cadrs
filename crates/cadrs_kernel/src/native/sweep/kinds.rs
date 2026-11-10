@@ -156,9 +156,31 @@ impl SweepKind for Revolve {
         let f = self.f;
         match c3 {
             Curve::Line { o, d } => {
-                let (r0, h0) = self.rh(o);
-                let dl = f.local(&(o + d)) - f.local(o);
-                let (dr, dh) = (dl.x, dl.z); // the line lies in the xz plane: dl.y = 0
+                // The line lies in the frame's xz plane (dl.y = 0), its x signed: a body the axis
+                // runs through has lines across it. The frame is turned half a turn where the
+                // piece lies across the axis (at −x), so the piece is at +x.
+                let (xa, xb) = {
+                    let (lo, dl) = (f.local(o), f.local(&(o + d)) - f.local(o));
+                    (lo.x + dl.x * piece.t0, lo.x + dl.x * piece.t1)
+                };
+                let f = if xa + xb < 0.0 {
+                    Frame {
+                        o: f.o,
+                        x: -f.x,
+                        y: -f.y,
+                        z: f.z,
+                    }
+                } else {
+                    f
+                };
+                let lo = f.local(o);
+                let (r0, h0) = if lo.x >= 0.0 {
+                    self.rh(o)
+                } else {
+                    (lo.x, lo.z)
+                };
+                let dl = f.local(&(o + d)) - lo;
+                let (dr, dh) = (dl.x, dl.z);
                 let len = d.norm();
                 let (dr, dh) = (dr / len, dh / len);
                 // Lies on the axis: sweeps nothing.
@@ -202,18 +224,27 @@ impl SweepKind for Revolve {
                         }),
                     })
                 } else {
-                    // Cone through C(0): r = r0, sin a = dr, cos a = dh, v = len·t.
+                    // Cone through C(ta): r = r0 + dr·len·ta, sin a = dr, cos a = dh, v =
+                    // len·(t − ta); ta = 0 unless C(0) lies across the axis (a line through the
+                    // apex of a cone the axis runs through), then the piece's start.
                     let a = dr.atan2(dh);
+                    let ta = if r0 < 0.0 { piece.t0 } else { 0.0 };
                     let fr = Frame {
-                        o: f.o + f.z * h0,
+                        o: f.o + f.z * (h0 + dh * len * ta),
                         x: f.x,
                         y: f.y,
                         z: f.z,
                     };
                     Some(SideGeo {
-                        surf: Surface::Cone { f: fr, r: r0, a },
-                        along: Box::new(move |s| line2(P2::new(s, 0.0), V2::new(0.0, len))),
-                        across: Box::new(move |t| line2(P2::new(0.0, len * t), V2::new(1.0, 0.0))),
+                        surf: Surface::Cone {
+                            f: fr,
+                            r: r0 + dr * len * ta,
+                            a,
+                        },
+                        along: Box::new(move |s| line2(P2::new(s, -len * ta), V2::new(0.0, len))),
+                        across: Box::new(move |t| {
+                            line2(P2::new(0.0, len * (t - ta)), V2::new(1.0, 0.0))
+                        }),
                     })
                 }
             }

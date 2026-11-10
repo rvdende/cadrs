@@ -133,6 +133,7 @@ pub(crate) fn face_crossings_in(
     }
     let polys: &[Option<Vec<Vec<P2>>>] = polys;
     // Their boxes, for the many points tested against each ([`in_face_boxed`]).
+    super::par::start();
     let pboxes: Vec<PolyBoxes> = (0..n)
         .into_par_iter()
         .map(|fi| match polys.get(fi).and_then(|p| p.as_deref()) {

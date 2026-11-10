@@ -422,6 +422,7 @@ pub fn interior_boundary(
             f,
         )
     };
+    super::par::start();
     let nodes: Vec<Vec<(u8, (f64, f64))>> = (0..=N)
         .into_par_iter()
         .map(|i| {

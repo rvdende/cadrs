@@ -8,10 +8,6 @@
    (release, `$CARGO_TARGET_DIR`), and `tools/occt_bench` against the static OCCT
    (`$OCCT`, see tools/occt_bench/build.sh).
 2. Writes the cases (`<out>/cases.txt`):
-   - OCCT's DRAW cases (boolean, blend, offset, pipe, draft) that pass on the native kernel,
-     read back from the generated suites (`tests/occt_<group>.rs`, whose statements map one to
-     one onto the bench's commands), sampled (`--stride-<group>`, default every case for the
-     small groups) plus the slow outliers the reviews name;
    - SMLib's fillet, boolean and offset cases that pass (`tests/smlib_<suite>.rs`);
    - tessellation and mass properties of the largest SMLib models;
    - STEP import and export of a range of files of OCCT's dataset;
@@ -52,20 +48,6 @@ SMLIB = os.path.join(TESTS, "data", "smlib")
 DATA = os.environ.get("CADRS_OCCT_DATA", os.path.join(REPO, "..", "occt-dataset", "opencascade-dataset-7.8.0"))
 OCCT_CONF = os.path.join(REPO, "..", "bench", "occt_conformance_times.txt")
 
-# The operations a DRAW case times; everything else sets it up.
-TIMED = {"bcut", "bfuse", "bcommon", "bsection", "blend", "mkoffset", "offsetperform", "pipe", "buildsweep", "depouille"}
-# Generated-suite method -> bench command.
-CMDS = {
-    "restore": "restore", "box_": "box", "box_at": "boxat", "pcylinder": "pcylinder", "pcone": "pcone", "psphere": "psphere",
-    "ptorus": "ptorus", "ttranslate": "ttranslate", "trotate": "trotate", "tscale": "tscale", "explode_edges": "explode_e",
-    "nexplode_edges": "nexplode_e", "explode_faces": "explode_f", "nexplode_faces": "nexplode_f", "bcut": "bcut", "bfuse": "bfuse",
-    "bcommon": "bcommon", "bsection": "bsection", "blend": "blend", "lprops": "lprops", "mkoffset": "mkoffset", "mkplane": "mkplane",
-    "offsetperform": "offsetperform", "pipe": "pipe", "buildsweep": "buildsweep", "depouille": "depouille", "wire": "wire",
-    "polyline": "polyline", "prism": "prism", "revol": "revol",
-}
-GROUPS = ["boolean", "blend", "offset", "pipe", "draft"]
-# Cases the reviews single out as slow: always in the sample when they pass.
-OUTLIERS = {"bcut_complex_o5", "bcut_complex_q1", "bcommon_complex_c7", "bsection_j3"}
 # STEP files of OCCT's dataset, 50 kB to 3.5 MB.
 STEP_FILES = [
     "trj6_pm4-ec-203.stp", "r0901_ec.stp", "nist_ftc_08_asme1_ap242-2.stp", "ec_soapbox-A.stp", "ec_turbine-A.stp",
@@ -73,137 +55,6 @@ STEP_FILES = [
     "bug24595_281390.stp", "trj3_s1-ct-214.stp",
 ]
 TESS_MODELS = 10
-
-
-def num_tok(s):
-    s = s.replace(" ", "")
-    if re.fullmatch(r"-?[0-9.]+(e-?[0-9]+)?", s) or re.fullmatch(r"\w+\*-?[0-9.]+(e-?[0-9]+)?", s):
-        return s
-    return None
-
-
-def split_args(s):
-    out, depth, cur, q = [], 0, "", None
-    for ch in s:
-        if q:
-            cur += ch
-            if ch == q:
-                q = None
-            continue
-        if ch in "\"'":
-            q = ch
-        elif ch in "([":
-            depth += 1
-        elif ch in ")]":
-            depth -= 1
-        elif ch == "," and depth == 0:
-            out.append(cur.strip())
-            cur = ""
-            continue
-        cur += ch
-    if cur.strip():
-        out.append(cur.strip())
-    return out
-
-
-def flatten(arg):
-    """An argument of a generated call as bench tokens, or None."""
-    arg = arg.strip()
-    m = re.fullmatch(r'&data\("([^"]+)"\)', arg)
-    if m:
-        return [os.path.join(DATA, m.group(1))]
-    if arg.startswith("&"):
-        arg = arg[1:].strip()
-    # `draw::sub(&list, n, "of", "kind")?`: the list's nth (1-based) shape.
-    m = re.fullmatch(r'draw::sub\(&(\w+),\s*(\d+),[^)]*\)\??', arg)
-    if m:
-        return [f"{m.group(1)}.{int(m.group(2)) - 1}"]
-    if arg[:1] in "[(":
-        toks = []
-        for a in split_args(arg[1:-1]):
-            f = flatten(a)
-            if f is None:
-                return None
-            toks += f
-        return toks
-    if arg in ("true", "false"):
-        return ["1" if arg == "true" else "0"]
-    m = re.fullmatch(r'"(\w+)"|\'(\w)\'', arg)
-    if m:
-        return [m.group(1) or m.group(2)]
-    m = re.fullmatch(r"(\w+)\[(\d+)\]", arg)
-    if m:
-        return [f"{m.group(1)}.{m.group(2)}"]
-    if re.fullmatch(r"[A-Za-z_]\w*", arg):
-        return [arg]
-    n = num_tok(arg)
-    return [n] if n else None
-
-
-def convert_body(body):
-    """A generated test's statements as bench lines, or None when one has no bench command."""
-    lines = []
-    # One statement a line whether or not rustfmt spread it over several.
-    flat = re.sub(r",\s*([)\]}])", r"\1", re.sub(r"([(\[{])\s+", r"\1", re.sub(r"\s*\n\s*", " ", body)))
-    for st in (x.strip() + ";" for x in flat.split(";") if x.strip()):
-        if st.startswith(("k.check", "draw::check", "#[allow", "let mut k", "Ok(", "eprintln")):
-            continue
-        m = re.fullmatch(r"let (?:mut )?(\w+) = k\.(\w+)\((.*)\)\??;", st)
-        if not m or m.group(2) not in CMDS:
-            return None
-        var, meth, args = m.groups()
-        toks = []
-        for a in split_args(args):
-            f = flatten(a)
-            if f is None:
-                return None
-            toks += f
-        if meth == "buildsweep":
-            # spine, sections…, mode, dx dy dz, transition, solid -> spine mode dx dy dz transition solid sections…
-            toks = [toks[0]] + toks[-6:] + toks[1:-6]
-        elif meth == "offsetperform":
-            toks = toks[:2] + [toks[-1]] + toks[2:-1]
-        star = "*" if meth in TIMED else ""
-        lines.append(f"{star}{var} = {CMDS[meth]} {' '.join(toks)}")
-    return lines if any(l.startswith("*") for l in lines) else None
-
-
-def known_failures():
-    kf = set()
-    with open(os.path.join(REPO, "tools", "occt_known_failures.txt")) as f:
-        for l in f:
-            l = l.strip()
-            if l and not l.startswith("#"):
-                kf.add(" ".join(l.split()[:2]))
-    return kf
-
-
-def occt_cases(strides, with_known=False):
-    kf = known_failures()
-    out = []
-    for g in GROUPS:
-        src = open(os.path.join(TESTS, f"occt_{g}.rs")).read()
-        conv = {False: [], True: []}
-        for t in re.split(r"\n/// OCCT ", src)[1:]:
-            head, _, rest = t.partition("fn ")
-            name = re.match(r"(\w+)\(", rest).group(1)
-            known = f"{g} {name}" in kf or "known failure" in rest
-            # Ignored for another reason than being a known failure (e.g. waiting for a command).
-            if ("#[ignore" in head and not known) or (known and not with_known):
-                continue
-            # A known failure's statements sit in a closure, up to its `Ok(())`.
-            body = rest.split("let mut k = NativeKernel::new();", 1)[-1].split("Ok(())", 1)[0]
-            lines = convert_body(body)
-            if lines:
-                conv[known].append((name, lines))
-        stride = strides.get(g, 1)
-        for known, cases in conv.items():
-            picked = [c for i, c in enumerate(cases) if i % stride == 0 or c[0] in OUTLIERS]
-            what = "known failures" if known else "passing cases"
-            print(f"occt {g}: {len(cases)} {what} convert, {len(picked)} sampled", file=sys.stderr)
-            cat = f"known_occt_{g}" if known else f"occt_{g}"
-            out += [(f"{g}/{n}", cat, l) for n, l in picked]
-    return out
 
 
 def smlib_cases(with_known=False):
@@ -372,9 +223,6 @@ FLOOR_MS = 0.05
 # What each category times, and what to keep in mind reading it.
 NOTES = [
     "**The categories.**",
-    "- `occt_<group>`: OCCT's own DRAW cases (`tests/<group>`) that pass on the native kernel, as the",
-    "  generated suites run them; the operation timed (`bcut`, `blend`, `mkoffset`, `offsetperform`,",
-    "  `pipe`/`buildsweep`, `depouille`). Booleans and 2D offsets are sampled (every 12th, every 4th).",
     "- `smlib_<suite>`: SMLib's fillet, boolean and offset cases that pass. OCCT reads the models as STEP",
     "  the native kernel wrote, the fillet's edges picked by their middle points; OCCT's own failures",
     "  are listed below.",
@@ -557,9 +405,6 @@ def main():
     ap.add_argument("--reps", type=int, default=5)
     ap.add_argument("--timeout", type=int, default=180)
     ap.add_argument("--only", help="categories to (re)run, comma-separated; others keep their results")
-    ap.add_argument("--stride-boolean", type=int, default=12)
-    ap.add_argument("--stride-blend", type=int, default=2)
-    ap.add_argument("--stride-offset", type=int, default=4)
     ap.add_argument("--report-only", action="store_true")
     ap.add_argument("--doc", default=os.path.join(KERNEL, "PERF.md"))
     ap.add_argument("--known", action="store_true", help="also time the known failures (reported apart)")
@@ -576,8 +421,7 @@ def main():
         occt_bin = a.occt_bench or os.path.join(a.out, "occt_bench")
         if not a.occt_bench and not a.cases_only:
             subprocess.run([os.path.join(REPO, "tools", "occt_bench", "build.sh"), occt_bin], check=True)
-        strides = {"boolean": a.stride_boolean, "blend": a.stride_blend, "offset": a.stride_offset}
-        cases = occt_cases(strides, a.known) + smlib_cases(a.known) + model_cases() + step_cases(a.out)
+        cases = smlib_cases(a.known) + model_cases() + step_cases(a.out)
         only = set(a.only.split(",")) if a.only else None
         if only:
             cases = [c for c in cases if c[1] in only or (c[1].startswith("known_") and c[1][6:] in only)]

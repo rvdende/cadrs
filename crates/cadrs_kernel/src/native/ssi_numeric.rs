@@ -1504,6 +1504,7 @@ pub fn intersect_stats(
         })
         .collect();
     let clock = web_time::Instant::now();
+    super::par::start();
     let found: Vec<Found> = pairs
         .into_par_iter()
         .map(|(ca, cb)| search(&ctx, ca, cb))

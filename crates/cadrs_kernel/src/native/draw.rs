@@ -1,7 +1,6 @@
 //! A DRAW-style API on the native kernel: OCCT's test commands (`line`, `mkedge`, `wire`,
 //! `box`, `pcylinder`, `bfuse`, `blend`, `fillet2d`, `checkprops`, …) as methods of
-//! [`NativeKernel`], so OCCT's test cases read almost line for line as Rust tests
-//! (`tests/occt_*.rs`).
+//! [`NativeKernel`], so test scripts in DRAW's terms read almost line for line as Rust tests.
 //!
 //! Arguments follow DRAW's order (points and directions as separate numbers, angles in degrees
 //! where DRAW takes degrees). Shapes are [`Shape`] values: vertices, edges, wires and planar
@@ -386,7 +385,7 @@ pub fn sub<'a>(subs: &'a [Shape], n: usize, of: &str, kind: &str) -> Result<&'a 
 /// The marker of [`known_failure`]'s panic for a known failure that panicked.
 pub const KNOWN_FAILURE_PANICKED: &str = "a known failure panicked";
 
-/// Ends a generated known failure (`tools/occt_known_failures.txt`): `r` is the case's run
+/// Ends a generated known failure (`tools/smlib_known_failures/`): `r` is the case's run
 /// under `catch_unwind`. A known failure must still fail, and fail by returning its error:
 /// this panics (failing the test) when the case passes ("a known failure now passes", the
 /// gate's STALE) or when it panicked, unless the panic's message contains `expected_panic`
@@ -394,7 +393,7 @@ pub const KNOWN_FAILURE_PANICKED: &str = "a known failure panicked";
 pub fn known_failure(case: &str, r: std::thread::Result<Result<()>>, expected_panic: Option<&str>) {
     match r {
         Ok(Ok(())) => {
-            panic!("a known failure now passes: remove `{case}` from tools/occt_known_failures.txt")
+            panic!("a known failure now passes: remove `{case}` from its known-failure list")
         }
         Ok(Err(e)) => eprintln!("known failure {case}: {e:?}"),
         Err(payload) => {
@@ -2034,6 +2033,7 @@ impl NativeKernel {
                 profiles: vec![],
                 along: d.max(0.0),
                 against: (-d).max(0.0),
+                sharp: false,
                 source: 0,
             },
             _ => ThickenSpec {
@@ -2042,6 +2042,7 @@ impl NativeKernel {
                 profiles: vec![],
                 along: d.max(0.0),
                 against: (-d).max(0.0),
+                sharp: false,
                 source: 0,
             },
         };

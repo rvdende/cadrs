@@ -2904,6 +2904,132 @@ pub fn chamfer(
     chamfer_tool(k, body, edges, opts)
 }
 
+/// The chamfer `r` of `edges` of `body` with its corners cut flat ([`ChamferCorners::Flat`]): at
+/// each vertex of `body` whose edges (three or more) are all chamfered, with an equal distance
+/// `d`, and whose faces are flat, the plane through the points where the chamfers' lines on each
+/// face meet (each `d` from both of its edges at the vertex, on the angle's bisector), when those
+/// points lie in one plane, cuts away what lies beyond it toward the vertex: a disc on that plane
+/// round the points, carried out past the vertex, subtracted; its face is the corner's face
+/// ([`Origin::FromVertex`]). Other corners are left mitred.
+pub fn flat_corners(
+    k: &mut NativeKernel,
+    body: BodyId,
+    edges: &[EdgeId],
+    opts: &ChamferOpts,
+    r: OpResult,
+) -> Result<OpResult> {
+    let ChamferSpec::EqualDistance(d) = opts.spec else {
+        return Ok(r);
+    };
+    let [out] = r.bodies.as_slice() else {
+        return Ok(r);
+    };
+    let b = (**k.get(body)?).clone();
+    let chamfered: std::collections::HashSet<usize> = real_edges(&b, edges)?
+        .iter()
+        .map(|e| e.0 as usize)
+        .collect();
+    let size = b.bbox().diagonal().max(1.0);
+    let near = tol::REL_POINT * size;
+    let mut tools: Vec<(Body, usize)> = Vec::new();
+    for v in 0..b.verts.len() {
+        let at: Vec<usize> = (0..b.edges.len())
+            .filter(|&e| !b.edges[e].degenerate && b.edges[e].v.contains(&v))
+            .collect();
+        if at.len() < 3 || !at.iter().all(|e| chamfered.contains(e)) {
+            continue;
+        }
+        let p = b.verts[v].p;
+        // Each face at the vertex: its two edges there, their directions away from it.
+        let mut pts: Vec<P3> = Vec::new();
+        let mut ok = true;
+        for (fi, f) in b.faces.iter().enumerate() {
+            let _ = fi;
+            let mut dirs: Vec<V3> = Vec::new();
+            for c in f.loops.iter().flatten() {
+                let e = &b.edges[c.edge];
+                if e.degenerate || !e.v.contains(&v) {
+                    continue;
+                }
+                let t = if e.v[0] == v { e.t[0] } else { e.t[1] };
+                let tan = e.curve.tangent(t);
+                let away = if e.v[0] == v { tan } else { -tan };
+                if let Some(u) = away.try_normalize(tol::TINY)
+                    && !dirs.iter().any(|w| (w - u).norm() < 1e-9)
+                {
+                    dirs.push(u);
+                }
+            }
+            if dirs.is_empty() {
+                continue;
+            }
+            if dirs.len() != 2 || !matches!(f.surf, Surface::Plane { .. }) {
+                ok = false;
+                break;
+            }
+            let theta = dirs[0].dot(&dirs[1]).clamp(-1.0, 1.0).acos();
+            let Some(bis) = (dirs[0] + dirs[1]).try_normalize(tol::TINY) else {
+                ok = false;
+                break;
+            };
+            pts.push(p + bis * (d / (0.5 * theta).sin()));
+        }
+        if !ok || pts.len() < 3 {
+            continue;
+        }
+        let c = P3::from(pts.iter().fold(V3::zeros(), |a, q| a + q.coords) / pts.len() as f64);
+        let mut n = (pts[1] - pts[0]).cross(&(pts[2] - pts[0]));
+        if n.norm() < tol::DEGENERATE {
+            continue;
+        }
+        n = n.normalize();
+        if (p - c).dot(&n) < 0.0 {
+            n = -n;
+        }
+        let beyond = (p - c).dot(&n);
+        if beyond <= near || pts.iter().any(|q| (q - c).dot(&n).abs() > near) {
+            continue;
+        }
+        let reach = pts.iter().map(|q| (q - c).norm()).fold(0.0, f64::max);
+        let id = k.primitive(&Primitive::Cylinder {
+            base: c,
+            axis: nalgebra::Unit::new_normalize(n),
+            radius: 1.5 * reach,
+            height: 1.5 * beyond + d,
+        })?;
+        let tool = (**k.get(id.bodies[0])?).clone();
+        k.release(id.bodies[0]);
+        tools.push((tool, v));
+    }
+    if tools.is_empty() {
+        return Ok(r);
+    }
+    // The chamfer's faces with what they came from, then each corner cut.
+    let ob = (**k.get(*out)?).clone();
+    let mut src: Vec<Vec<FaceSrc>> = vec![Vec::new(); ob.faces.len()];
+    for (f, i) in &r.history.modified {
+        if let Some(s) = src.get_mut(f.0 as usize) {
+            s.push(FaceSrc::Input(i.face.0 as usize));
+        }
+    }
+    for (f, o) in &r.history.generated {
+        if let Some(s) = src.get_mut(f.0 as usize) {
+            s.push(FaceSrc::New(*o));
+        }
+    }
+    let mut cur = Tracked { body: ob, src };
+    for (tool, v) in tools {
+        let mark = FaceSrc::New(Origin::FromVertex {
+            body,
+            vertex: VertexId(vertex_index(&b, v) as u64),
+        });
+        let tool_src = vec![vec![mark]; tool.faces.len()];
+        cur = cur.apply(&tool, &tool_src, BoolOp::Subtract)?;
+    }
+    k.release(*out);
+    Ok(cur.into_result(k, body))
+}
+
 /// `opts` with the first distance's side ([`ChamferSpec::TwoDistances`]) made explicit: the
 /// face whose loop runs along the edge, for the first edge of each tangent chain (in the order
 /// given: the picks first); along the chain, each edge's sides as the edge before it has them

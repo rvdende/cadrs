@@ -9,7 +9,9 @@
 //! - **Linux**: `~/.local/opt/cadrs/` (the executable stripped: the debug symbols are a third of
 //!   it), `~/.local/bin/cadrs` linked to it, and `~/.local/share/applications/cadrs.desktop` with
 //!   the icon. The window's Wayland app id is `cadrs` (see `cadrs_harness::default_plugins`),
-//!   which ties the window to this entry.
+//!   which ties the window to this entry. The entry names the files cadrs opens (its
+//!   `MimeType`), so a file manager offers cadrs for them; `~/.local/share/mime/packages/cadrs.xml`
+//!   gives the system the types it may lack (a STEP file is otherwise plain text to it).
 //! - **macOS**: an app bundle, `~/Applications/cadrs.app` (`Contents/MacOS/` the executable,
 //!   `Contents/Resources/` `libraries/` and `cadrs.icns`, `Contents/Info.plist`), so Launchpad and
 //!   Spotlight find it. `libraries/` isn't in `Contents/MacOS/`, which is for code: `codesign`
@@ -30,6 +32,9 @@ use std::path::{Path, PathBuf};
 const ICON: &[u8] = include_bytes!("../../../assets/icons/cadrs.png");
 #[cfg(target_os = "linux")]
 const DESKTOP: &str = include_str!("../../../tools/linux/cadrs.desktop");
+/// The types of the files cadrs opens that the system may not know (STEP, BREP, `.cadrs`).
+#[cfg(target_os = "linux")]
+const MIME: &str = include_str!("../../../tools/linux/cadrs-mime.xml");
 
 fn err(what: &str, p: &Path, e: std::io::Error) -> String {
     format!("cannot {what} {}: {e}", p.display())
@@ -138,7 +143,9 @@ fn launcher(installed: &Path) -> Result<(), String> {
     let bin = home.join(".local/bin");
     let apps = home.join(".local/share/applications");
     let icons = home.join(".local/share/icons/hicolor/256x256/apps");
-    for d in [&bin, &apps, &icons] {
+    let mime = home.join(".local/share/mime");
+    let types = mime.join("packages");
+    for d in [&bin, &apps, &icons, &types] {
         std::fs::create_dir_all(d).map_err(|e| err("create", d, e))?;
     }
     let link = bin.join("cadrs");
@@ -153,10 +160,19 @@ fn launcher(installed: &Path) -> Result<(), String> {
         .replace("@ICON@", &icon.to_string_lossy());
     let entry = apps.join("cadrs.desktop");
     std::fs::write(&entry, desktop).map_err(|e| err("write", &entry, e))?;
-    let _ = std::process::Command::new("update-desktop-database")
-        .arg(&apps)
-        .stderr(std::process::Stdio::null())
-        .status();
+    // The file types before the entry that names them. Without these tools (a minimal system)
+    // the launcher still works; only "Open with" doesn't offer cadrs.
+    let package = types.join("cadrs.xml");
+    std::fs::write(&package, MIME).map_err(|e| err("write", &package, e))?;
+    for (tool, dir) in [
+        ("update-mime-database", &mime),
+        ("update-desktop-database", &apps),
+    ] {
+        let _ = std::process::Command::new(tool)
+            .arg(dir)
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
     Ok(())
 }
 

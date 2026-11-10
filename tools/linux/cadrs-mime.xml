@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The files cadrs opens that the system's MIME database (shared-mime-info) has no type for;
+     IGES, STL and GLB it knows. Installing cadrs (crates/cadrs/src/install.rs) puts this in
+     ~/.local/share/mime/packages, so a file manager offers cadrs for them (cadrs.desktop's
+     MimeType). A STEP or BREP file is also text, and a cadrs document a ZIP: whatever opens
+     those still offers to. -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-cadrs">
+    <comment>cadrs document</comment>
+    <sub-class-of type="application/zip"/>
+    <glob pattern="*.cadrs"/>
+  </mime-type>
+  <mime-type type="model/step">
+    <comment>STEP model</comment>
+    <sub-class-of type="text/plain"/>
+    <magic priority="50">
+      <match type="string" offset="0" value="ISO-10303-21;"/>
+    </magic>
+    <glob pattern="*.step"/>
+    <glob pattern="*.stp"/>
+    <glob pattern="*.p21"/>
+  </mime-type>
+  <mime-type type="model/x-brep">
+    <comment>BREP model</comment>
+    <sub-class-of type="text/plain"/>
+    <glob pattern="*.brep"/>
+    <glob pattern="*.brp"/>
+  </mime-type>
+</mime-info>

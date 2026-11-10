@@ -154,9 +154,14 @@ impl Surface {
         }
     }
 
-    /// Whether v closes with period 2π (a torus).
+    /// Whether v closes with period 2π: a torus, a revolution of a whole circle or ellipse (a
+    /// ring or ball swung about an axis off its own: its meridian's angle).
     pub fn v_periodic(&self) -> bool {
-        matches!(self, Surface::Torus { .. })
+        match self {
+            Surface::Torus { .. } => true,
+            Surface::Revolution { m, .. } => m.is_periodic(),
+            _ => false,
+        }
     }
 
     /// The point at (u, v).

@@ -1993,6 +1993,11 @@ fn fit_curve(
         !closed && pts.first().is_some_and(is_fixed),
         !closed && pts.last().is_some_and(is_fixed),
     ];
+    // As few of the traced points as the fit needs (the tracer steps as finely as following the
+    // curve takes; each point kept is a pole on every face the curve bounds and every sweep of
+    // it): each one left out within `tol` of the fit.
+    let mut pts = thinned(pts, tol, fixed_ends);
+    super::par::start();
     for _round in 0..6 {
         let (c, t) = fit(&pts);
         let last = pts.len() - 2;
@@ -2041,6 +2046,64 @@ fn fit_curve(
         t1: n.1,
         closed,
         pcs,
+    }
+}
+
+/// The traced points `pts` (exact points of the intersection) a cubic through which keeps within
+/// `tol` of every one of them: every eighth to start with (and the ends, and the second and
+/// second-last where `fixed` keeps the first and last spans), then, in each span a left-out point
+/// strays from by more than `tol`, the one straying most, until none does.
+fn thinned(
+    pts: Vec<super::ssi_numeric::Pt>,
+    tol: f64,
+    fixed: [bool; 2],
+) -> Vec<super::ssi_numeric::Pt> {
+    let n = pts.len();
+    if n <= 16 {
+        return pts;
+    }
+    let mut keep = vec![false; n];
+    for i in (0..n).step_by(8) {
+        keep[i] = true;
+    }
+    keep[n - 1] = true;
+    if fixed[0] {
+        keep[1] = true;
+    }
+    if fixed[1] {
+        keep[n - 2] = true;
+    }
+    loop {
+        let idx: Vec<usize> = (0..n).filter(|&i| keep[i]).collect();
+        let xs: Vec<P3> = idx.iter().map(|&i| pts[i].p).collect();
+        let t = chord(&xs);
+        let c = Curve::Nurbs(Arc::new(NurbsCurve::interpolate(
+            &xs,
+            &t,
+            3.min(xs.len() - 1),
+            None,
+            None,
+        )));
+        let add: Vec<usize> = (0..idx.len() - 1)
+            .into_par_iter()
+            .filter_map(|w| {
+                let (i, j) = (idx[w], idx[w + 1]);
+                (i + 1..j)
+                    .map(|k| {
+                        let s = c.closest(&pts[k].p, t[w], t[w + 1]);
+                        ((c.point(s) - pts[k].p).norm(), k)
+                    })
+                    .filter(|&(d, _)| d > tol)
+                    .max_by(|x, y| x.0.total_cmp(&y.0))
+                    .map(|(_, k)| k)
+            })
+            .collect();
+        if add.is_empty() {
+            return idx.into_iter().map(|i| pts[i]).collect();
+        }
+        for k in add {
+            keep[k] = true;
+        }
     }
 }
 

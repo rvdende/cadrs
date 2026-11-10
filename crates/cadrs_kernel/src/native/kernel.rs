@@ -97,6 +97,14 @@ pub struct NativeKernel {
     /// much as the first (6 s each by pi7zoll-gehäuse's foot). The oldest past
     /// [`JOINED_KEPT`] is released.
     joined: Vec<(BodyId, BodyId, OpResult)>,
+    /// The swept tori this session built exactly, by their bodies: the torus and its motion,
+    /// which a boolean of two of them is made from again ([`super::sweep_tube::boolean`]: by
+    /// what each motion holds, where their surfaces' crossing in space wanders).
+    pub(crate) swept_tori: HashMap<u64, Arc<super::sweep_tube::SweptTorus>>,
+    /// The pipes this session made (a round section swept along a path from its centre, and
+    /// what it comes to with a ball of its radius united at an end), by their bodies: slid, a
+    /// pipe is swept as one ([`super::sweep_pipe::slide`]).
+    pub(crate) pipes: HashMap<u64, Arc<super::sweep_pipe::Pipe>>,
 }
 
 /// How many of [`Kernel::joins`]'s unions a session keeps for the union that may follow.
@@ -233,6 +241,8 @@ impl NativeKernel {
             // (Not the unions kept for a union to come: a boolean takes its result out of them,
             // and two sessions mustn't hand out the same body.)
             joined: Vec::new(),
+            swept_tori: self.swept_tori.clone(),
+            pipes: self.pipes.clone(),
         }
     }
 
@@ -247,6 +257,12 @@ impl NativeKernel {
             }
             if let Some(c) = fork.colors.get(&id) {
                 self.colors.insert(id, c.clone());
+            }
+            if let Some(t) = fork.swept_tori.get(&id) {
+                self.swept_tori.insert(id, t.clone());
+            }
+            if let Some(t) = fork.pipes.get(&id) {
+                self.pipes.insert(id, t.clone());
             }
             self.bodies.insert(id, e);
             self.next = self.next.max(id + 1);
@@ -554,6 +570,7 @@ fn edge_infos_with(b: &Body, detail: Detail) -> Vec<EdgeInfo> {
     let ef = b.edge_faces();
     // (Side by side: each edge's smoothness projects onto its faces, a part's display a
     // tenth of a second of a rebuild's own thread.)
+    super::par::start();
     b.edges
         .par_iter()
         .enumerate()
@@ -843,6 +860,11 @@ impl Kernel for NativeKernel {
         super::loft_build::loft_with(self, spec)
     }
 
+    fn loft_guided(&mut self, spec: &LoftSpec, guides: &[Vec<PathCurve>]) -> Result<OpResult> {
+        let r = super::loft_build::loft_guided(self, spec, guides);
+        self.colored(r)
+    }
+
     fn loft_curves(&mut self, spec: &CurveLoftSpec) -> Result<OpResult> {
         super::curve_loft::loft_curves(self, spec)
     }
@@ -884,7 +906,50 @@ impl Kernel for NativeKernel {
     }
 
     fn sweep_with(&mut self, profile: &Profile, spec: &SweepSpec) -> Result<OpResult> {
-        super::sweep::path::sweep_with(self, profile, spec)
+        let r = super::sweep::path::sweep_with(self, profile, spec)?;
+        // A round section swept along a path from its centre, square to it: a pipe.
+        if let ([body], [region]) = (r.bodies.as_slice(), profile.regions.as_slice())
+            && let [Curve2::Circle { center, radius, .. }] = region.outer.curves.as_slice()
+            && region.holes.is_empty()
+            && matches!(spec.body, BodyKind::Solid)
+            && matches!(spec.control, SweepControl::None)
+            && spec.faces.is_empty()
+            && let Ok(segs) = super::sweep::path::path_segments(self, &spec.path)
+            && let Ok((segs, false)) = super::sweep::path::chain(segs)
+            && let Some(first) = segs.first()
+        {
+            let pl = &profile.plane;
+            let y = pl.normal.cross(&pl.x_dir);
+            let c = pl.origin + pl.x_dir.into_inner() * center.x + y * center.y;
+            let rad = radius.abs();
+            if (c - first.start()).norm() <= 1e-9 * (1.0 + rad) && {
+                let (_, d1, _) = first.c.d2(if first.rev { first.t1 } else { first.t0 });
+                // (Square to within two thousandths of a radian, which leaves the
+                // pipe round to two millionths of its radius: a helix drawn in conic
+                // pieces sets out that far off the helix's own tangent.)
+                d1.normalize().cross(&pl.normal).norm() <= 2e-3
+            } {
+                let segs = segs
+                    .iter()
+                    .map(|g| {
+                        if g.rev {
+                            (g.c.clone(), g.t1, g.t0)
+                        } else {
+                            (g.c.clone(), g.t0, g.t1)
+                        }
+                    })
+                    .collect();
+                self.pipes.insert(
+                    body.0,
+                    Arc::new(super::sweep_pipe::Pipe {
+                        segs,
+                        r: rad,
+                        balls: [false; 2],
+                    }),
+                );
+            }
+        }
+        Ok(r)
     }
 
     fn sweep_solid(&mut self, body: BodyId, motion: &SolidMotion) -> Result<OpResult> {
@@ -1048,17 +1113,40 @@ impl Kernel for NativeKernel {
                 major,
                 minor,
             } => {
-                if !(minor > 0.0 && major > minor) {
+                if !(minor > 0.0 && major >= 0.0) {
                     return Err(KernelError::InvalidParameter(
-                        "The torus's tube must be thinner than its ring is wide".into(),
+                        "The torus needs a tube and a ring that is no less than none".into(),
                     ));
                 }
                 let plane = through(center, axis.into_inner());
-                let tube = vec![Curve2::Circle {
-                    center: Point2::new(major, 0.0),
-                    radius: minor,
-                    source: None,
-                }];
+                // A ring torus's tube turned whole; a horn torus's (the tube as wide as the ring)
+                // touches the axis at the centre. A spindle torus's tube crosses the axis: the
+                // solid is what the tube fills counted once, the turn of the tube's part beyond
+                // the axis, bounded by its outer arc from (0, −h) to (0, h) and the axis.
+                let tube = if minor <= major * (1.0 + tol::REL) {
+                    vec![Curve2::Circle {
+                        center: Point2::new(major, 0.0),
+                        radius: minor,
+                        source: None,
+                    }]
+                } else {
+                    let end = PI - (major / minor).acos();
+                    let h = (minor * minor - major * major).sqrt();
+                    vec![
+                        Curve2::Arc {
+                            center: Point2::new(major, 0.0),
+                            radius: minor,
+                            start_angle: -end,
+                            sweep: 2.0 * end,
+                            source: None,
+                        },
+                        Curve2::Line {
+                            a: Point2::new(0.0, h),
+                            b: Point2::new(0.0, -h),
+                            source: None,
+                        },
+                    ]
+                };
                 turned(self, plane, tube, center, axis.into_inner())
             }
         }
@@ -1096,7 +1184,50 @@ impl Kernel for NativeKernel {
         {
             return Ok(self.joined.remove(i).2);
         }
+        // Two swept tori: by what each motion holds.
+        if let [tool] = tools
+            && let (Some(a), Some(b)) = (
+                self.swept_tori.get(&target.0).cloned(),
+                self.swept_tori.get(&tool.0).cloned(),
+            )
+            && let Some(Ok(r)) = super::sweep_tube::boolean(self, op, &a, &b)
+        {
+            return self.colored(Ok(r));
+        }
         let r = super::boolean::boolean(self, op, target, tools);
+        // A pipe united with a ball of its radius about an end of its spine: a pipe closed
+        // there.
+        if let (BoolOp::Union, [tool], Ok(res)) = (op, tools, &r)
+            && let [made] = res.bodies.as_slice()
+        {
+            for (pipe, ball) in [(target, *tool), (*tool, target)] {
+                let Some(pipe) = self.pipes.get(&pipe.0).cloned() else {
+                    continue;
+                };
+                let Ok(b) = self.get(ball) else {
+                    continue;
+                };
+                let [f] = b.faces.as_slice() else {
+                    continue;
+                };
+                let super::surface::Surface::Sphere { f: fr, r: rs } = &f.surf else {
+                    continue;
+                };
+                let (centre, rs) = (fr.o, *rs);
+                if (rs - pipe.r).abs() > 1e-9 * pipe.r {
+                    continue;
+                }
+                let (first, last) = (&pipe.segs[0], &pipe.segs[pipe.segs.len() - 1]);
+                let ends = [first.0.point(first.1), last.0.point(last.2)];
+                for (e, end) in ends.iter().enumerate() {
+                    if (centre - end).norm() <= 1e-9 * (1.0 + pipe.r) {
+                        let mut closed = (*pipe).clone();
+                        closed.balls[e] = true;
+                        self.pipes.insert(made.0, Arc::new(closed));
+                    }
+                }
+            }
+        }
         // With CADRS_DUMP_DIR set, a failed boolean leaves its inputs there.
         if r.is_err() && std::env::var("CADRS_DUMP_DIR").is_ok() {
             dump("boolean-target", self.get(target)?, &format!("{op:?}"));
@@ -1298,6 +1429,12 @@ impl Kernel for NativeKernel {
             &format!("edges {edges:?} {opts:?}"),
         );
         let r = super::blend::chamfer(self, body, edges, opts);
+        let r = match r {
+            Ok(r) if opts.corners == ChamferCorners::Flat => {
+                super::blend::flat_corners(self, body, edges, opts, r)
+            }
+            r => r,
+        };
         let r = self.dumped(&r);
         self.colored(r)
     }
@@ -1618,11 +1755,26 @@ impl Kernel for NativeKernel {
                 )?
             }
         };
+        let mut built = built;
         if let Some(why) = built.body.check().into_iter().next() {
-            return Err(KernelError::InvalidResult {
-                op: "sweep",
-                why: format!("the sweep made an invalid body: {why}"),
-            });
+            // P-curves a hair off their edges (a turned spline's, fitted to its points), fitted
+            // again from the edges: the faces and edges stay as they are. An edge still off its
+            // face (a fitted curve swept) has its tolerance grown to cover the gap, up to
+            // LOOP_GAP, as OCCT grows its edges'.
+            let mut b = built.body.clone();
+            super::heal::refit_pcurves(&mut b, super::tol::POINT);
+            if !b.check().is_empty() {
+                b.fit_tolerances_searched(super::tol::LOOP_GAP);
+            }
+            if !b.check().is_empty() {
+                // With CADRS_DUMP_DIR set, the body the sweep made is left there.
+                dump("sweep-invalid", &built.body, &why);
+                return Err(KernelError::InvalidResult {
+                    op: "sweep",
+                    why: format!("the sweep made an invalid body: {why}"),
+                });
+            }
+            built.body = b;
         }
         Ok(self.insert_result(built))
     }
@@ -1695,10 +1847,15 @@ impl Kernel for NativeKernel {
         use rayon::prelude::*;
         Ok(e.faces
             .get_or_init(|| {
-                (0..e.body.faces.len())
-                    .into_par_iter()
-                    .map(|i| face_info(&e.body, i))
-                    .collect()
+                let n = e.body.faces.len();
+                if super::par::threads_for(n, false) {
+                    (0..n)
+                        .into_par_iter()
+                        .map(|i| face_info(&e.body, i))
+                        .collect()
+                } else {
+                    (0..n).map(|i| face_info(&e.body, i)).collect()
+                }
             })
             .clone())
     }
@@ -1868,6 +2025,7 @@ impl Kernel for NativeKernel {
             // thread. A box's few edges aren't worth the threads.)
             let along = |d: V3| extent_along(&e.body, &o, &d);
             let ((x0, x1), ((y0, y1), (z0, z1))) = if e.body.edges.len() > 64 {
+                super::par::start();
                 rayon::join(
                     || along(V3::x()),
                     || rayon::join(|| along(V3::y()), || along(V3::z())),
@@ -1926,6 +2084,21 @@ impl Kernel for NativeKernel {
         domain: Option<UvRect>,
     ) -> Result<OpResult> {
         super::face_build::kernel_face_from_surface(self, body, face, domain)
+    }
+
+    fn bspline_face(
+        &mut self,
+        surface: &BsplineSurface,
+        domain: Option<UvRect>,
+    ) -> Result<OpResult> {
+        let n = super::nurbs::NurbsSurface::from_bspline(surface)?;
+        let s = super::surface::Surface::Nurbs(std::sync::Arc::new(n));
+        let id = self
+            .face_from_bare_surface(&s, domain.map(|d| ((d[0][0], d[0][1]), (d[1][0], d[1][1]))))?;
+        Ok(OpResult {
+            bodies: vec![id],
+            history: History::default(),
+        })
     }
 
     fn ray_hits(

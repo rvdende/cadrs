@@ -133,19 +133,55 @@ fn build(k: &NativeKernel, spec: &CurveLoftSpec) -> Result<(Body, Vec<Vec<u64>>)
     if !secs.iter().any(|s| matches!(s, Sec::Curve(_))) {
         return Err(invalid("Select a curve to loft"));
     }
-    // The profiles run the same way: each as its predecessor, ends nearest.
-    let mut prev: Option<NurbsCurve> = None;
-    for (s, at) in secs.iter_mut().zip(joints.iter_mut()) {
-        let Sec::Curve(c) = s else { continue };
-        if let Some(p) = &prev {
-            let (a0, a1) = (p.point(0.0), p.point(1.0));
-            let (b0, b1) = (c.point(0.0), c.point(1.0));
-            if (b1 - a0).norm() + (b0 - a1).norm() < (b0 - a0).norm() + (b1 - a1).norm() {
+    // The profiles run the same way: with guides, each so that the guides meet it in the order
+    // they meet the first (a profile turned half a turn runs the other way round); without, each
+    // as its predecessor, ends nearest.
+    if spec.guides.is_empty() {
+        let mut prev: Option<NurbsCurve> = None;
+        for (s, at) in secs.iter_mut().zip(joints.iter_mut()) {
+            let Sec::Curve(c) = s else { continue };
+            if let Some(p) = &prev {
+                let (a0, a1) = (p.point(0.0), p.point(1.0));
+                let (b0, b1) = (c.point(0.0), c.point(1.0));
+                if (b1 - a0).norm() + (b0 - a1).norm() < (b0 - a0).norm() + (b1 - a1).norm() {
+                    *c = c.reversed();
+                    *at = at.iter().rev().map(|j| 1.0 - j).collect();
+                }
+            }
+            prev = Some(c.clone());
+        }
+    } else {
+        let gs: Vec<NurbsCurve> = spec
+            .guides
+            .iter()
+            .map(|g| chain_curve(k, g).map(|(c, _)| c))
+            .collect::<Result<_>>()?;
+        let mut first: Option<Vec<f64>> = None;
+        for (s, at) in secs.iter_mut().zip(joints.iter_mut()) {
+            let Sec::Curve(c) = s else { continue };
+            let us: Vec<f64> = gs.iter().map(|g| meet(g, c).1).collect();
+            let Some(f) = &first else {
+                first = Some(us);
+                continue;
+            };
+            let (mut same, mut other) = (0, 0);
+            for i in 0..us.len() {
+                for j in i + 1..us.len() {
+                    let (a, b) = (f[j] - f[i], us[j] - us[i]);
+                    if a.abs() > 1e-9 && b.abs() > 1e-9 {
+                        if (a > 0.0) == (b > 0.0) {
+                            same += 1;
+                        } else {
+                            other += 1;
+                        }
+                    }
+                }
+            }
+            if other > same {
                 *c = c.reversed();
                 *at = at.iter().rev().map(|j| 1.0 - j).collect();
             }
         }
-        prev = Some(c.clone());
     }
     // How far the profiles reach from the origin: the scale of the tolerances.
     let size = secs

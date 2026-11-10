@@ -329,14 +329,25 @@ pub fn offset_sharp(b: &Body, dist: &[f64]) -> Result<Body> {
     if let Some(r) = prism_offset(b, dist) {
         return r;
     }
+    // A prism with a curved side shrunk past its curvature: its sides' offsets fold over
+    // themselves, and its outline's trimmed offset extruded is the inset.
+    if let Some(r) = super::prism::curved_prism_inset(b, dist, false, true) {
+        return r;
+    }
     let out = match replace_surfaces(b, &surfs) {
         Ok(out) => out,
         // Faces or corners the moves swallow (a pyramid shrunk past its apex, which becomes a
-        // ridge): of a convex polyhedron, the solid its moved planes bound.
+        // ridge): of a convex polyhedron, the solid its moved planes bound; of a prism with a
+        // curved side, its outline's offset extruded.
         Err(e) => {
             return match crate::native::local::planes_bound(b, &surfs) {
                 Some(Ok((out, _))) => Ok(out),
-                Some(Err(_)) | None => Err(e),
+                Some(Err(_)) | None => {
+                    match super::prism::curved_prism_inset(b, dist, false, false) {
+                        Some(Ok(out)) => Ok(out),
+                        _ => Err(e),
+                    }
+                }
             };
         }
     };

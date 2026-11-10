@@ -807,7 +807,7 @@ pub fn face_integrals(body: &Body, f: &Face, shift: &V3) -> Q {
 
 /// [`face_integrals`] with [`NE`]'s moments, or with `ALL` false only the volume's (`[4]`; the
 /// others zero).
-fn face_integrals_of<const ALL: bool>(body: &Body, f: &Face, shift: &V3) -> QE {
+pub(crate) fn face_integrals_of<const ALL: bool>(body: &Body, f: &Face, shift: &V3) -> QE {
     if ruled_in_v(&f.surf) && !matches!(f.surf, Surface::Plane { .. }) {
         return face_integrals_v::<ALL>(body, f, shift);
     }
@@ -1069,6 +1069,7 @@ fn run_jobs<const ALL: bool>(
     // they are shared out.)
     const CHUNK: usize = 32;
     if jobs.len() >= 2 * CHUNK {
+        super::par::start();
         let parts: Vec<QE> = jobs
             .par_chunks(CHUNK)
             .map(|c| {
@@ -1099,6 +1100,12 @@ pub fn body_volume(body: &Body) -> f64 {
     if !body.is_solid() {
         return 0.0;
     }
+    faces_volume(body)
+}
+
+/// The volume a body's faces bound, whether or not they are made up into shells and solids
+/// yet (closed and facing out taken on trust).
+pub(crate) fn faces_volume(body: &Body) -> f64 {
     let bb = body.bbox();
     let shift = if bb.is_empty() {
         V3::zeros()
@@ -1106,10 +1113,13 @@ pub fn body_volume(body: &Body) -> f64 {
         bb.center().coords
     };
     let faces: Vec<usize> = (0..body.faces.len()).collect();
-    let qs: Vec<f64> = faces
-        .par_iter()
-        .map(|&i| face_integrals_of::<false>(body, &body.faces[i], &shift)[4])
-        .collect();
+    let one = |&i: &usize| face_integrals_of::<false>(body, &body.faces[i], &shift)[4];
+    let heavy = body.faces.iter().any(costly);
+    let qs: Vec<f64> = if super::par::threads_for(faces.len(), heavy) {
+        faces.par_iter().map(one).collect()
+    } else {
+        faces.iter().map(one).collect()
+    };
     let mut v = 0.0;
     for q in qs {
         v += q;
@@ -1126,17 +1136,20 @@ pub fn body_mass(body: &Body) -> crate::MassProperties {
         bb.center().coords
     };
     let faces: Vec<usize> = (0..body.faces.len()).collect();
-    let qs: Vec<Q> = faces
-        .par_iter()
-        .map(|&i| {
-            let f = &body.faces[i];
-            if gpu_active() || !costly(f) {
-                return face_integrals(body, f, &shift);
-            }
-            let (center, q) = face_integrals_about_center(body, i);
-            shifted(&q, &center, &shift)
-        })
-        .collect();
+    let one = |&i: &usize| {
+        let f = &body.faces[i];
+        if gpu_active() || !costly(f) {
+            return face_integrals(body, f, &shift);
+        }
+        let (center, q) = face_integrals_about_center(body, i);
+        shifted(&q, &center, &shift)
+    };
+    let heavy = body.faces.iter().any(costly);
+    let qs: Vec<Q> = if super::par::threads_for(faces.len(), heavy) {
+        faces.par_iter().map(one).collect()
+    } else {
+        faces.iter().map(one).collect()
+    };
     let mut q = [0.0; NQ];
     for f in &qs {
         for k in 0..NQ {

@@ -1,0 +1,13 @@
+// The app started with a STEP file (tests/startup.rs gives it on the command line, as a file
+// manager's "Open with" does): the kernel reads it and the Import dialog asks how to bring it in.
+Scenario(
+    start: Some("landing"),
+    steps: [
+        WaitFor("import-dialog"),
+        Screenshot("01-import-dialog"),
+        Click(ui("import-ok")),
+        WaitFor("tab-colored-assembly"),
+        Wait(20),
+        Screenshot("02-imported"),
+    ],
+)

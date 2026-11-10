@@ -1270,6 +1270,40 @@ impl NurbsSurface {
         Ok(s)
     }
 
+    /// The surface of a [`crate::BsplineSurface`] (its poles weighted), checked.
+    ///
+    /// # Errors
+    /// `InvalidInput` when its net isn't rectangular, or its knots, degrees and poles don't make
+    /// a B-spline.
+    pub fn from_bspline(b: &crate::BsplineSurface) -> crate::Result<Self> {
+        let cps = b
+            .poles
+            .iter()
+            .enumerate()
+            .map(|(i, row)| {
+                row.iter()
+                    .enumerate()
+                    .map(|(j, p)| {
+                        let w = b
+                            .weights
+                            .get(i)
+                            .and_then(|r| r.get(j))
+                            .copied()
+                            .unwrap_or(1.0);
+                        hom(p, w)
+                    })
+                    .collect()
+            })
+            .collect();
+        Self::new(
+            b.degree_u,
+            b.degree_v,
+            b.knots_u.clone(),
+            b.knots_v.clone(),
+            cps,
+        )
+    }
+
     /// Checks that the net is rectangular and each direction's knots, degree and control points
     /// make a B-spline (as [`NurbsCurve::validate`]).
     pub fn validate(&self) -> crate::Result<()> {
@@ -1290,6 +1324,56 @@ impl NurbsSurface {
             }
         }
         Ok(())
+    }
+
+    /// The patch over u × v (each clamped to the surface's range): each row's curve cut there in
+    /// v, then each column's in u, the parameters kept (a point at (u, v) on it is the surface's
+    /// at (u, v)).
+    pub fn restricted(&self, u: (f64, f64), v: (f64, f64)) -> Self {
+        let mut kv = self.kv.clone();
+        let rows: Vec<Vec<H>> = self
+            .cps
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let c = NurbsCurve {
+                    degree: self.dv,
+                    knots: self.kv.clone(),
+                    cps: r.clone(),
+                }
+                .restricted(v.0, v.1);
+                if i == 0 {
+                    kv = c.knots;
+                }
+                c.cps
+            })
+            .collect();
+        let nv = rows[0].len();
+        let mut ku = self.ku.clone();
+        let cols: Vec<Vec<H>> = (0..nv)
+            .map(|j| {
+                let c = NurbsCurve {
+                    degree: self.du,
+                    knots: self.ku.clone(),
+                    cps: rows.iter().map(|r| r[j]).collect(),
+                }
+                .restricted(u.0, u.1);
+                if j == 0 {
+                    ku = c.knots;
+                }
+                c.cps
+            })
+            .collect();
+        let nu = cols[0].len();
+        Self {
+            du: self.du,
+            dv: self.dv,
+            ku,
+            kv,
+            cps: (0..nu)
+                .map(|i| (0..nv).map(|j| cols[j][i]).collect())
+                .collect(),
+        }
     }
 
     /// The control net of the patch over u × v (each row's and then each column's curve cut

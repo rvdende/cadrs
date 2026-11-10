@@ -114,11 +114,11 @@ impl Budget {
     }
 }
 
-/// Whether `n` independent pieces of work go to rayon's threads: only with more than one piece
-/// and more than one thread (on one, the hand-over to its worker and back costs more than it
-/// saves on small fillets).
+/// Whether `n` independent pieces of fillet work (heavy each) go to rayon's threads: only with
+/// more than one piece and more than one thread (on one, the hand-over to its worker and back
+/// costs more than it saves on small fillets). See [`super::par`].
 pub(crate) fn parallel(n: usize) -> bool {
-    n > 1 && rayon::current_num_threads() > 1
+    super::par::threads_for(n, true) && rayon::current_num_threads() > 1
 }
 
 fn unsupported(why: &'static str) -> KernelError {
@@ -13697,6 +13697,7 @@ fn assemble(
     // Each cut face split on its own (in parallel: the faces are independent), taken in order.
     let splits: Vec<Option<Vec<Face>>> = {
         let nb = &nb;
+        super::par::start();
         (0..nb.faces.len())
             .into_par_iter()
             .map(|fi| {

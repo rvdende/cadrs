@@ -246,6 +246,7 @@ pub mod ops;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod ops;
+pub(crate) mod par;
 #[cfg(feature = "testkit")]
 pub mod pcurve;
 #[cfg(not(feature = "testkit"))]
@@ -326,6 +327,12 @@ pub mod sweep_faces;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod sweep_faces;
+pub(crate) mod sweep_mill;
+#[cfg(feature = "testkit")]
+pub mod sweep_moving;
+#[cfg(not(feature = "testkit"))]
+pub(crate) mod sweep_moving;
+pub(crate) mod sweep_pipe;
 #[cfg(feature = "testkit")]
 pub mod sweep_planar;
 #[cfg(not(feature = "testkit"))]
@@ -336,6 +343,10 @@ pub mod sweep_solid;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod sweep_solid;
+#[cfg(feature = "testkit")]
+pub mod sweep_tube;
+#[cfg(not(feature = "testkit"))]
+pub(crate) mod sweep_tube;
 #[cfg(feature = "testkit")]
 pub mod tails;
 #[cfg(not(feature = "testkit"))]

@@ -59,6 +59,7 @@ impl Rebuilder {
             profiles: Vec::new(),
             along,
             against,
+            sharp: false,
             source: id.0.as_u128() as u64,
         };
         let mut missing = 0;

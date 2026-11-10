@@ -3204,6 +3204,7 @@ pub fn sweep_along_paths(k: &mut dyn Kernel) {
         body: BodyKind::Solid,
         path: l_path(),
         control: SweepControl::None,
+        corners: Default::default(),
         faces: vec![],
     };
     let s = one(k
@@ -3340,6 +3341,7 @@ pub fn sweep_around_a_circle(k: &mut dyn Kernel) {
             body: BodyKind::Solid,
             path,
             control: SweepControl::None,
+            corners: Default::default(),
             faces: vec![],
         };
         let torus = one(k.sweep_with(&profile, &spec).unwrap());

@@ -830,6 +830,7 @@ fn debug_sweep() {
             body: BodyKind::Solid,
             path,
             control: SweepControl::None,
+            corners: Default::default(),
             faces: vec![],
         };
         match k.sweep_with(&prof, &spec) {
@@ -1256,6 +1257,7 @@ fn debug_sweep_bezier() {
             body: BodyKind::Solid,
             path: path.clone(),
             control,
+            corners: Default::default(),
             faces: vec![],
         };
         let t = std::time::Instant::now();
@@ -1618,6 +1620,7 @@ fn debug_thread_sweep_mass() {
                 body: BodyKind::Solid,
                 path,
                 control: SweepControl::None,
+                corners: Default::default(),
                 faces: vec![],
             },
         )
@@ -1789,6 +1792,7 @@ fn debug_thread_union() {
                 body: BodyKind::Solid,
                 path,
                 control: SweepControl::None,
+                corners: Default::default(),
                 faces: vec![],
             },
         )
@@ -1898,6 +1902,7 @@ fn debug_helix_tube() {
                 body: BodyKind::Solid,
                 path,
                 control: SweepControl::None,
+                corners: Default::default(),
                 faces: vec![],
             },
         )
@@ -2954,4 +2959,1404 @@ fn debug_smb_fillet() {
             );
         }
     }
+}
+
+/// What a dumped body is made of (CADRS_REPRO=<file.body>): each face's surface, box, B-spline
+/// size and loops, and each edge's curve and ends.
+#[test]
+fn debug_describe_body() {
+    let Ok(path) = std::env::var("CADRS_REPRO") else {
+        return;
+    };
+    let b = cadrs_kernel::native::bodyio::read(&std::fs::read(path).unwrap()).unwrap();
+    eprintln!(
+        "{} faces, {} edges, {} vertices, {} solids; check {:?}",
+        b.faces.len(),
+        b.edges.len(),
+        b.verts.len(),
+        b.solids.len(),
+        b.check().into_iter().take(3).collect::<Vec<_>>()
+    );
+    for (fi, f) in b.faces.iter().enumerate() {
+        let bb = b.face_bbox(fi);
+        let kind = match &f.surf {
+            Surface::Nurbs(n) => format!(
+                "Nurbs {}x{} degrees, {}x{} poles",
+                n.du,
+                n.dv,
+                n.cps.len(),
+                n.cps.first().map_or(0, |r| r.len())
+            ),
+            s => format!("{s:?}").chars().take(60).collect(),
+        };
+        let loops: Vec<Vec<usize>> = f
+            .loops
+            .iter()
+            .map(|l| l.iter().map(|c| c.edge).collect())
+            .collect();
+        eprintln!(
+            "face {fi}: {kind}; box [{:.3}, {:.3}, {:.3}]..[{:.3}, {:.3}, {:.3}]; sense {}; edges {loops:?}",
+            bb.min.x, bb.min.y, bb.min.z, bb.max.x, bb.max.y, bb.max.z, f.sense
+        );
+    }
+    for (ei, e) in b.edges.iter().enumerate() {
+        let (p, q) = (b.verts[e.v[0]].p, b.verts[e.v[1]].p);
+        let kind: String = match &e.curve {
+            Curve::Nurbs(n) => format!("Nurbs degree {}, {} poles", n.degree, n.cps.len()),
+            c => format!("{c:?}").chars().take(30).collect(),
+        };
+        eprintln!(
+            "edge {ei}: {kind}… from [{:.4}, {:.4}, {:.4}] to [{:.4}, {:.4}, {:.4}]",
+            p.x, p.y, p.z, q.x, q.y, q.z
+        );
+    }
+}
+
+/// The swung cases of brep-bench (`CADRS_SWUNG=ball|cone`): the exact sweep's error, if any.
+#[test]
+fn debug_swung() {
+    let Some(which) = std::env::var_os("CADRS_SWUNG") else {
+        return;
+    };
+    let mut k = NativeKernel::new();
+    let z = Axis {
+        origin: Point3::origin(),
+        dir: nalgebra::Unit::new_normalize(Vector3::z()),
+    };
+    let (tool, deg) = match which.to_str().unwrap() {
+        "ball" => (
+            k.primitive(&Primitive::Sphere {
+                center: Point3::new(1.0, 0.0, 0.0),
+                radius: 2.0,
+                axis: nalgebra::Unit::new_normalize(Vector3::z()),
+                seam: nalgebra::Unit::new_normalize(Vector3::x()),
+            })
+            .unwrap()
+            .bodies[0],
+            120.0f64,
+        ),
+        _ => {
+            let w = Vector3::new(30f64.to_radians().cos(), 0.0, 30f64.to_radians().sin());
+            (
+                k.primitive(&Primitive::Cone {
+                    base: Point3::from(w * -2.0),
+                    axis: nalgebra::Unit::new_normalize(w),
+                    base_radius: 0.0,
+                    top_radius: 7.0 * 25f64.to_radians().tan(),
+                    height: 7.0,
+                })
+                .unwrap()
+                .bodies[0],
+                150.0,
+            )
+        }
+    };
+    let b = (**k.get(tool).unwrap()).clone();
+    let steps = vec![RigidStep::Turn {
+        axis: z,
+        from: 0.0,
+        to: deg.to_radians(),
+    }];
+    let t = std::time::Instant::now();
+    match cadrs_kernel::native::sweep_faces::by_faces(&mut k, &b, &steps) {
+        Ok(r) => {
+            let m = k.mass_properties(r.bodies[0]).unwrap();
+            eprintln!(
+                "exact: volume {} area {} faces {} in {:?}",
+                m.volume,
+                m.surface_area,
+                k.get(r.bodies[0]).unwrap().faces.len(),
+                t.elapsed()
+            );
+        }
+        Err(e) => eprintln!("exact failed: {e} in {:?}", t.elapsed()),
+    }
+}
+
+/// brep-bench's bar end turned into a floor (`CADRS_BAR_END=1`): the cut's faces and volume.
+#[test]
+fn debug_bar_end() {
+    if std::env::var_os("CADRS_BAR_END").is_none() {
+        return;
+    }
+    let mut k = NativeKernel::new();
+    let block = k
+        .cylindrical_box(&CylindricalBox {
+            frame: Plane {
+                origin: Point3::new(0.0, 0.0, -1.0),
+                x_dir: Vector3::x_axis(),
+                normal: Vector3::z_axis(),
+            },
+            length: 2.0,
+            inner_radius: 8.0,
+            outer_radius: 12.0,
+            start_angle: 0.0,
+            end_angle: 60f64.to_radians(),
+        })
+        .unwrap()
+        .bodies[0];
+    let t = 20f64.to_radians();
+    let (u, n) = (
+        Vector3::new(t.cos(), 0.0, -t.sin()),
+        Vector3::new(t.sin(), 0.0, t.cos()),
+    );
+    let on = Plane {
+        origin: Point3::new(10.0, 0.0, 0.0),
+        x_dir: nalgebra::Unit::new_normalize(u),
+        normal: nalgebra::Unit::new_normalize(n),
+    };
+    let f = 5f64.to_radians();
+    let c = |a: f64, b: f64| p(a * f.cos() - b * f.sin(), a * f.sin() + b * f.cos());
+    let pts = [c(0.0, -2.0), c(3.0, -2.0), c(3.0, 2.0), c(0.0, 2.0)];
+    let curves = (0..4)
+        .map(|i| Curve2::Line {
+            a: pts[i],
+            b: pts[(i + 1) % 4],
+            source: None,
+        })
+        .collect();
+    let bar = k
+        .extrude(
+            &Profile::new(on, vec![reg(Loop { curves })]),
+            Extent::Blind(3.0),
+        )
+        .unwrap()
+        .bodies[0];
+    let motion = SolidMotion::Rigid {
+        steps: vec![RigidStep::Turn {
+            axis: Axis {
+                origin: Point3::origin(),
+                dir: Vector3::z_axis(),
+            },
+            from: (-140f64).to_radians(),
+            to: 140f64.to_radians(),
+        }],
+    };
+    // The ends keep clear of the block: the whole turn's solid of revolution cuts the same.
+    let rev = k.sweep_solid(
+        bar,
+        &SolidMotion::Turn {
+            axis: Axis {
+                origin: Point3::origin(),
+                dir: Vector3::z_axis(),
+            },
+        },
+    );
+    if let Err(e) = &rev {
+        eprintln!("revolved failed: {e}");
+    }
+    if let Ok(rev) = rev {
+        match k.boolean(BoolOp::Subtract, block, &[rev.bodies[0]]) {
+            Ok(c) => {
+                let m = k.mass_properties(c.bodies[0]).unwrap();
+                eprintln!("revolved: volume {} area {}", m.volume, m.surface_area);
+            }
+            Err(e) => eprintln!("revolved cut failed: {e}"),
+        }
+    }
+    let t0 = std::time::Instant::now();
+    match k.cut_swept(block, bar, &motion) {
+        Ok(r) => {
+            let b = k.get(r.bodies[0]).unwrap();
+            let m = k.mass_properties(r.bodies[0]).unwrap();
+            eprintln!(
+                "cut: volume {} area {} faces {} in {:?}",
+                m.volume,
+                m.surface_area,
+                b.faces.len(),
+                t0.elapsed()
+            );
+        }
+        Err(e) => eprintln!("cut failed: {e}"),
+    }
+}
+
+/// brep-bench's creased bar turned through a ring sector (`CADRS_CREASED=1`): the swept solid
+/// cut from the block, and the same by `cut_swept`.
+#[test]
+fn debug_creased_bar() {
+    if std::env::var_os("CADRS_CREASED").is_none() {
+        return;
+    }
+    let mut k = NativeKernel::new();
+    let block = k
+        .cylindrical_box(&CylindricalBox {
+            frame: Plane {
+                origin: Point3::new(0.0, 0.0, -1.0),
+                x_dir: Vector3::x_axis(),
+                normal: Vector3::z_axis(),
+            },
+            length: 2.0,
+            inner_radius: 8.0,
+            outer_radius: 12.0,
+            start_angle: 0.0,
+            end_angle: 60f64.to_radians(),
+        })
+        .unwrap()
+        .bodies[0];
+    let t = 20f64.to_radians();
+    let (u, n) = (Vector3::x(), Vector3::new(0.0, t.sin(), t.cos()));
+    let at = |h: f64| Plane {
+        origin: Point3::from(n * h),
+        x_dir: nalgebra::Unit::new_normalize(u),
+        normal: nalgebra::Unit::new_normalize(n),
+    };
+    let d = 4.0 * 2f64.to_radians().tan();
+    let rect = |x0: f64, y0: f64, x1: f64, y1: f64| {
+        let pts = [p(x0, y0), p(x1, y0), p(x1, y1), p(x0, y1)];
+        Loop {
+            curves: (0..4)
+                .map(|i| Curve2::Line {
+                    a: pts[i],
+                    b: pts[(i + 1) % 4],
+                    source: None,
+                })
+                .collect(),
+        }
+    };
+    let section = |h: f64, d: f64| {
+        LoftSection::Profile(Profile::new(
+            at(h),
+            vec![reg(rect(10.0 + d, -2.0 + d, 13.0 - d, 2.0 - d))],
+        ))
+    };
+    let loft = |k: &mut NativeKernel, a: LoftSection, b: LoftSection| {
+        k.loft_with(&LoftSpec {
+            body: BodyKind::Solid,
+            sections: vec![a, b],
+            start: LoftEnd::default(),
+            end: LoftEnd::default(),
+            source: 1,
+        })
+        .unwrap()
+        .bodies[0]
+    };
+    let up = loft(&mut k, section(0.0, 0.0), section(4.0, d));
+    let down = loft(&mut k, section(-4.0, d), section(0.0, 0.0));
+    let bar = k.boolean(BoolOp::Union, up, &[down]).unwrap().bodies[0];
+    let motion = SolidMotion::Rigid {
+        steps: vec![RigidStep::Turn {
+            axis: Axis {
+                origin: Point3::origin(),
+                dir: Vector3::z_axis(),
+            },
+            from: (-140f64).to_radians(),
+            to: 140f64.to_radians(),
+        }],
+    };
+    let report = |k: &NativeKernel, what: &str, id: BodyId, t0: std::time::Instant| {
+        let b = k.get(id).unwrap();
+        let m = k.mass_properties(id).unwrap();
+        eprintln!(
+            "{what}: volume {} area {} faces {} in {:?}",
+            m.volume,
+            m.surface_area,
+            b.faces.len(),
+            t0.elapsed()
+        );
+    };
+    let t0 = std::time::Instant::now();
+    match k.sweep_solid(bar, &motion) {
+        Ok(s) => {
+            report(&k, "swept", s.bodies[0], t0);
+            match k.boolean(BoolOp::Subtract, block, &[s.bodies[0]]) {
+                Ok(c) => report(&k, "swept, cut", c.bodies[0], t0),
+                Err(e) => eprintln!("swept, cut failed: {e}"),
+            }
+        }
+        Err(e) => eprintln!("swept failed: {e}"),
+    }
+    let t0 = std::time::Instant::now();
+    match k.cut_swept(block, bar, &motion) {
+        Ok(r) => report(&k, "cut_swept", r.bodies[0], t0),
+        Err(e) => eprintln!("cut_swept failed: {e}"),
+    }
+}
+
+/// brep-bench's tools carried along a spline (`CADRS_CARRIED=key|ring|nose`): the groove's cut.
+#[test]
+fn debug_carried() {
+    let Some(which) = std::env::var_os("CADRS_CARRIED") else {
+        return;
+    };
+    let mut k = NativeKernel::new();
+    let boxed = |k: &mut NativeKernel, a: Point3<f64>, b: Point3<f64>| {
+        let pts = [p(a.x, a.y), p(b.x, a.y), p(b.x, b.y), p(a.x, b.y)];
+        let curves = (0..4)
+            .map(|i| Curve2::Line {
+                a: pts[i],
+                b: pts[(i + 1) % 4],
+                source: None,
+            })
+            .collect();
+        let top = Plane {
+            origin: Point3::new(0.0, 0.0, a.z),
+            x_dir: Vector3::x_axis(),
+            normal: Vector3::z_axis(),
+        };
+        k.extrude(
+            &Profile::new(top, vec![reg(Loop { curves })]),
+            Extent::Blind(b.z - a.z),
+        )
+        .unwrap()
+        .bodies[0]
+    };
+    let block = boxed(
+        &mut k,
+        Point3::new(-6.0, -6.0, -8.0),
+        Point3::new(36.0, 26.0, 0.0),
+    );
+    let tool = match which.to_str().unwrap() {
+        "key" => boxed(
+            &mut k,
+            Point3::new(-1.5, -0.8, -1.5),
+            Point3::new(1.5, 0.8, 2.5),
+        ),
+        _ => {
+            k.primitive(&Primitive::Torus {
+                center: Point3::new(0.0, 0.0, 0.5),
+                axis: Vector3::y_axis(),
+                major: 1.5,
+                minor: 0.5,
+            })
+            .unwrap()
+            .bodies[0]
+        }
+    };
+    let path = vec![PathCurve::Bezier3 {
+        poles: vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(10.0, 0.0, 0.0),
+            Point3::new(20.0, 20.0, 0.0),
+            Point3::new(30.0, 20.0, 0.0),
+        ],
+        weights: vec![],
+    }];
+    let motion = SolidMotion::Path {
+        path,
+        up: Vector3::z_axis(),
+    };
+    let t0 = std::time::Instant::now();
+    match k.cut_swept(block, tool, &motion) {
+        Ok(r) => {
+            let b = k.get(r.bodies[0]).unwrap();
+            let m = k.mass_properties(r.bodies[0]).unwrap();
+            eprintln!(
+                "cut: volume {} area {} faces {} in {:?}",
+                m.volume,
+                m.surface_area,
+                b.faces.len(),
+                t0.elapsed()
+            );
+        }
+        Err(e) => eprintln!("cut failed: {e}"),
+    }
+}
+
+/// brep-bench's tumbling cube (`CADRS_TUMBLE=1`): the moving-contact sweep's result, checked in
+/// full (of the cube in `CADRS_TUMBLE_BODY` when given, a dump; left in `CADRS_TUMBLE_OUT`), then
+/// the kernel's sweep (unless `CADRS_TUMBLE_ONLY`).
+#[test]
+fn debug_tumbling_cube() {
+    if std::env::var_os("CADRS_TUMBLE").is_none() {
+        return;
+    }
+    let mut k = NativeKernel::new();
+    let pts = [p(2.4, -0.6), p(3.6, -0.6), p(3.6, 0.6), p(2.4, 0.6)];
+    let curves = (0..4)
+        .map(|i| Curve2::Line {
+            a: pts[i],
+            b: pts[(i + 1) % 4],
+            source: None,
+        })
+        .collect();
+    let plane = Plane {
+        origin: Point3::new(0.0, 0.0, 1.4),
+        x_dir: Vector3::x_axis(),
+        normal: Vector3::z_axis(),
+    };
+    let cube = k
+        .extrude(
+            &Profile::new(plane, vec![reg(Loop { curves })]),
+            Extent::Blind(1.2),
+        )
+        .unwrap()
+        .bodies[0];
+    let t = std::env::var("CADRS_TUMBLE_DEG")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(75.0)
+        .to_radians();
+    let steps = vec![
+        RigidStep::Turn {
+            axis: Axis {
+                origin: Point3::new(2.0, 0.0, 0.0),
+                dir: Vector3::z_axis(),
+            },
+            from: -t / 4.0,
+            to: t / 4.0,
+        },
+        RigidStep::Turn {
+            axis: Axis {
+                origin: Point3::new(0.0, 0.5, 0.5),
+                dir: Vector3::x_axis(),
+            },
+            from: t,
+            to: -t,
+        },
+    ];
+    let t0 = std::time::Instant::now();
+    let body = match std::env::var("CADRS_TUMBLE_BODY") {
+        Ok(path) => cadrs_kernel::native::bodyio::read(&std::fs::read(path).unwrap()).unwrap(),
+        Err(_) => (**k.get(cube).unwrap()).clone(),
+    };
+    let place = |t: f64| {
+        let (mut r, mut d) = (nalgebra::Rotation3::identity(), Vector3::zeros());
+        for s in &steps {
+            if let RigidStep::Turn { axis, from, to } = *s {
+                let a = from + (to - from) * t;
+                let rr = nalgebra::Rotation3::from_axis_angle(&axis.dir, a);
+                let o = axis.origin.coords;
+                d = rr * d + o - rr * o;
+                r = rr * r;
+            }
+        }
+        (r, d)
+    };
+    let direct = cadrs_kernel::native::sweep_moving::polyhedron(&mut k, &body, &place);
+    eprintln!(
+        "direct: {:?} in {:?}",
+        direct
+            .as_ref()
+            .map(|r| r.as_ref().map(|_| "ok").map_err(|e| e.to_string())),
+        t0.elapsed()
+    );
+    if let Some(Ok(r)) = &direct {
+        let id = r.bodies[0];
+        let b = k.get(id).unwrap();
+        let m = k.mass_properties(id).unwrap();
+        let t1 = std::time::Instant::now();
+        let full = b.check_with(cadrs_kernel::native::topo::CheckLevel::Full);
+        eprintln!(
+            "direct: volume {} area {} faces {} class {:?}; full check ({:?}): {:?}",
+            m.volume,
+            m.surface_area,
+            b.faces.len(),
+            k.body_class(id),
+            t1.elapsed(),
+            full
+        );
+        // Points at random in its box, in or out by the kernel's classification and exactly
+        // (some instant puts them in the cube), compared.
+        if let Some(n) = std::env::var("CADRS_TUMBLE_MC")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+        {
+            let cb = &body;
+            let planes: Vec<(Vector3<f64>, f64)> = cb
+                .faces
+                .iter()
+                .map(|f| {
+                    let cadrs_kernel::native::surface::Surface::Plane { f: fr } = &f.surf else {
+                        unreachable!()
+                    };
+                    let nn = fr.z * if f.sense { 1.0 } else { -1.0 };
+                    (nn, nn.dot(&fr.o.coords))
+                })
+                .collect();
+            let oracle = cadrs_kernel::native::sweep_moving::Oracle::new(planes, &place, 4096);
+            let polys: Vec<Vec<Vec<Point2<f64>>>> = b
+                .faces
+                .iter()
+                .map(|f| cadrs_kernel::native::classify::face_polygons(b, f))
+                .collect();
+            let classifier = cadrs_kernel::native::classify::Classifier::new(b, &polys);
+            let bb = b.bbox();
+            let mut seed: u64 = 0x9e3779b97f4a7c15;
+            let mut rnd = || {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                (seed >> 11) as f64 / (1u64 << 53) as f64
+            };
+            let (mut inside, mut differ, mut near) = (0usize, 0usize, 0usize);
+            let span = bb.max - bb.min;
+            for _ in 0..n {
+                let x = Point3::new(
+                    bb.min.x + span.x * rnd(),
+                    bb.min.y + span.y * rnd(),
+                    bb.min.z + span.z * rnd(),
+                );
+                let d = oracle.depth(&x).0;
+                if d.abs() < 1e-6 {
+                    near += 1;
+                    continue;
+                }
+                let exact = d < 0.0;
+                let kernel = classifier.parity_inside(&x);
+                inside += usize::from(exact);
+                if exact != kernel {
+                    differ += 1;
+                    if differ <= 10 {
+                        eprintln!("differ at {x:?}: depth {d:e}, kernel says inside {kernel}");
+                    }
+                }
+            }
+            let bv = span.x * span.y * span.z;
+            eprintln!(
+                "{n} points: {differ} classified differently, {near} too near to tell; exact \
+                 volume estimate {} ± {}",
+                inside as f64 / n as f64 * bv,
+                bv * ((inside as f64 / n as f64) * (1.0 - inside as f64 / n as f64) / n as f64)
+                    .sqrt()
+            );
+        }
+        if let Ok(dir) = std::env::var("CADRS_TUMBLE_OUT") {
+            std::fs::write(
+                std::path::Path::new(&dir).join("result.body"),
+                cadrs_kernel::native::bodyio::write(b),
+            )
+            .unwrap();
+        }
+    }
+    if std::env::var_os("CADRS_TUMBLE_ONLY").is_some() {
+        return;
+    }
+    let t0 = std::time::Instant::now();
+    match k.sweep_solid(cube, &SolidMotion::Rigid { steps }) {
+        Ok(r) => {
+            let b = k.get(r.bodies[0]).unwrap();
+            let m = k.mass_properties(r.bodies[0]).unwrap();
+            eprintln!(
+                "swept: volume {} area {} faces {} in {:?}",
+                m.volume,
+                m.surface_area,
+                b.faces.len(),
+                t0.elapsed()
+            );
+        }
+        Err(e) => eprintln!("failed: {e}"),
+    }
+}
+
+/// Each face of the body in `CADRS_BODY` (a native body file): its surface, area, centroid,
+/// outward normal there and edges.
+/// `CADRS_STEP=<file>`: the solid in a STEP file imported and measured (volume, area, faces by
+/// surface kind, soundness), to compare another kernel's result with ours.
+#[test]
+fn debug_step_measure() {
+    let Ok(path) = std::env::var("CADRS_STEP") else {
+        return;
+    };
+    let mut k = NativeKernel::new();
+    let t0 = std::time::Instant::now();
+    let ids = k.import_step(&std::fs::read(path).unwrap()).unwrap();
+    eprintln!("imported {} bodies in {:?}", ids.len(), t0.elapsed());
+    for id in ids {
+        let m = k.mass_properties(id).unwrap();
+        let b = k.get(id).unwrap();
+        let mut kinds: std::collections::BTreeMap<&str, usize> = Default::default();
+        for f in &b.faces {
+            let kind = match &f.surf {
+                cadrs_kernel::native::surface::Surface::Plane { .. } => "plane",
+                cadrs_kernel::native::surface::Surface::Torus { .. } => "torus",
+                cadrs_kernel::native::surface::Surface::Nurbs(_) => "bspline",
+                _ => "other",
+            };
+            *kinds.entry(kind).or_default() += 1;
+        }
+        eprintln!(
+            "volume {} area {} faces {:?} edges {} class {:?} problems {:?}",
+            m.volume,
+            m.surface_area,
+            kinds,
+            b.edges.len(),
+            k.body_class(id),
+            b.check().first()
+        );
+    }
+}
+
+/// `CADRS_SCREW=thread|tunnel[,…]`: brep-bench's slowest screws, built as its adapter builds
+/// them, with the time each takes (`CADRS_SWEEP_DEBUG`, `CADRS_PROFILE` say where it goes).
+#[test]
+fn debug_screws() {
+    let Ok(which) = std::env::var("CADRS_SCREW") else {
+        return;
+    };
+    let top = |z: f64| Plane {
+        origin: Point3::new(0.0, 0.0, z),
+        ..Plane::top()
+    };
+    let block = |k: &mut NativeKernel, lo: Point3<f64>, hi: Point3<f64>| {
+        k.extrude(
+            &Profile::new(top(lo.z), vec![reg(rect(lo.x, lo.y, hi.x, hi.y))]),
+            Extent::Blind(hi.z - lo.z),
+        )
+        .unwrap()
+        .bodies[0]
+    };
+    let cylinder = |k: &mut NativeKernel, z: f64, radius: f64, length: f64| {
+        let round = Loop {
+            curves: vec![Curve2::Circle {
+                center: p(0.0, 0.0),
+                radius,
+                source: None,
+            }],
+        };
+        k.extrude(
+            &Profile::new(top(z), vec![reg(round)]),
+            Extent::Blind(length),
+        )
+        .unwrap()
+        .bodies[0]
+    };
+    let screw = |lead: f64, from: f64, to: f64| SolidMotion::Rigid {
+        steps: vec![
+            RigidStep::Turn {
+                axis: Axis {
+                    origin: Point3::origin(),
+                    dir: Vector3::z_axis(),
+                },
+                from: from.to_radians(),
+                to: to.to_radians(),
+            },
+            RigidStep::Slide {
+                from: Vector3::z() * (lead * from / 360.0),
+                to: Vector3::z() * (lead * to / 360.0),
+            },
+        ],
+    };
+    let report = |k: &NativeKernel, id: BodyId, name: &str, t0: std::time::Instant| {
+        let took = t0.elapsed();
+        let m = k.mass_properties(id).unwrap();
+        let faults = k.get(id).unwrap().check();
+        eprintln!(
+            "{name}: {} faces, volume {:.9}, area {:.9}, {} faults, built in {took:.2?}",
+            k.faces(id).unwrap().len(),
+            m.volume,
+            m.surface_area,
+            faults.len()
+        );
+    };
+    for name in which.split(',') {
+        let mut k = NativeKernel::new();
+        let t0 = std::time::Instant::now();
+        match name {
+            // swept/fine-thread-with-sharp-crests.
+            "thread" => {
+                let bar = block(
+                    &mut k,
+                    Point3::new(4.5, -8.0, -0.45),
+                    Point3::new(12.0, 8.0, 0.45),
+                );
+                let within = cylinder(&mut k, -1.45, 5.5, 2.9);
+                let bar = k.boolean(BoolOp::Intersect, bar, &[within]).unwrap().bodies[0];
+                let rod = cylinder(&mut k, 0.0, 5.0, 20.0);
+                match k.cut_swept(rod, bar, &screw(1.0, -180.0, 7380.0)) {
+                    Ok(r) => report(&k, r.bodies[0], name, t0),
+                    Err(e) => eprintln!("FAIL {name}: {e} (in {:.2?})", t0.elapsed()),
+                }
+            }
+            // swept/box-screwed-inside-a-rod.
+            "tunnel" => {
+                let tool = block(
+                    &mut k,
+                    Point3::new(2.5, -0.5, 2.0),
+                    Point3::new(3.5, 0.5, 3.0),
+                );
+                let swept = match k.sweep_solid(tool, &screw(4.0, 0.0, 720.0)) {
+                    Ok(r) => r.bodies[0],
+                    Err(e) => {
+                        eprintln!("FAIL {name}: {e} (in {:.2?})", t0.elapsed());
+                        continue;
+                    }
+                };
+                eprintln!("{name}: swept by {:.2?}", t0.elapsed());
+                let rod = cylinder(&mut k, 0.0, 5.0, 20.0);
+                match k.boolean(BoolOp::Subtract, rod, &[swept]) {
+                    Ok(r) => report(&k, r.bodies[0], name, t0),
+                    Err(e) => eprintln!("FAIL {name}: {e} (in {:.2?})", t0.elapsed()),
+                }
+            }
+            _ => eprintln!("no screw case {name}"),
+        }
+    }
+}
+
+/// `CADRS_TORUS=<case>[,<case>…]` (or `all`): brep-bench's tumbling tori built by the kernel's
+/// sweep of a solid and graded as the board grades them (a solid, no mesh, its triangles
+/// closed in single precision), with the time each takes. `CADRS_TORUS_OP=union|common|cut`
+/// with the case `crossed` combines the crossed pair.
+// (The cases' own figures, to the digits brep-bench gives them.)
+#[allow(clippy::approx_constant)]
+#[test]
+fn debug_tumbling_tori() {
+    let Ok(which) = std::env::var("CADRS_TORUS") else {
+        return;
+    };
+    // (name, centre, tube, (lean, tilt, h), rate, sign, rolls in degrees)
+    type Case = (
+        &'static str,
+        [f64; 3],
+        f64,
+        (f64, f64, f64),
+        f64,
+        f64,
+        (f64, f64),
+    );
+    let h = 0.5f64.sqrt();
+    let cases: [Case; 8] = [
+        (
+            "base",
+            [3.0, 0.0, 2.0],
+            0.5,
+            (45.0, 0.0, h),
+            0.25,
+            -1.0,
+            (-75.0, 75.0),
+        ),
+        (
+            "thin",
+            [3.0, 0.0, 2.0],
+            0.015,
+            (45.0, 0.0, h),
+            0.25,
+            -1.0,
+            (-75.0, 75.0),
+        ),
+        (
+            "half",
+            [3.0, 0.0, 2.0],
+            0.16,
+            (30.0, 20.0, 0.7071),
+            0.375,
+            -1.0,
+            (-90.0, 90.0),
+        ),
+        (
+            "full",
+            [3.0, 0.0, 2.0],
+            0.16,
+            (30.0, 20.0, 0.7071),
+            0.375,
+            -1.0,
+            (-180.0, 180.0),
+        ),
+        (
+            "ortho",
+            [2.02, 0.0, 1.0],
+            0.08,
+            (1.0, 89.0, 0.0),
+            1.01,
+            -1.0,
+            (-180.0, 180.0),
+        ),
+        (
+            "thick",
+            [2.02, 0.0, 1.0],
+            0.16,
+            (1.0, 89.0, 0.0),
+            1.01,
+            -1.0,
+            (-180.0, 180.0),
+        ),
+        (
+            "forward",
+            [3.0, 0.0, 2.0],
+            0.22,
+            (45.0, 20.0, 0.7071),
+            0.7,
+            -1.0,
+            (-100.0, 100.0),
+        ),
+        (
+            "reverse",
+            [3.0, 0.0, 2.0],
+            0.22,
+            (45.0, 20.0, 0.7071),
+            0.7,
+            1.0,
+            (-100.0, 100.0),
+        ),
+    ];
+    let build = |k: &mut NativeKernel, c: &Case| -> std::result::Result<BodyId, KernelError> {
+        let &(_, centre, tube, (lean, tilt, hh), rate, sign, rolls) = c;
+        let t = k
+            .primitive(&Primitive::Torus {
+                center: Point3::new(centre[0], centre[1], centre[2]),
+                axis: Vector3::z_axis(),
+                major: 1.0,
+                minor: tube,
+            })?
+            .bodies[0];
+        let (l, a) = (lean.to_radians(), tilt.to_radians());
+        let q = Point3::new(0.0, hh * l.cos(), hh * l.sin());
+        let u = Vector3::new(a.cos(), a.sin() * l.cos(), a.sin() * l.sin());
+        let (t0, t1) = (rolls.0.to_radians(), rolls.1.to_radians());
+        let motion = SolidMotion::Rigid {
+            steps: vec![
+                RigidStep::Turn {
+                    axis: Axis {
+                        origin: Point3::new(2.0, 0.0, 0.0),
+                        dir: Vector3::z_axis(),
+                    },
+                    from: rate * t0,
+                    to: rate * t1,
+                },
+                RigidStep::Turn {
+                    axis: Axis {
+                        origin: q,
+                        dir: nalgebra::Unit::new_normalize(u),
+                    },
+                    from: sign * t0,
+                    to: sign * t1,
+                },
+            ],
+        };
+        Ok(k.sweep_solid(t, &motion)?.bodies[0])
+    };
+    let grade = |k: &NativeKernel, id: BodyId, name: &str, took: std::time::Duration| {
+        let t0 = std::time::Instant::now();
+        let m = k.mass_properties(id).unwrap();
+        let body = k.get(id).unwrap();
+        let flat = body
+            .faces
+            .iter()
+            .filter(|f| matches!(f.surf, cadrs_kernel::native::surface::Surface::Plane { .. }))
+            .count();
+        let size = k.bounding_box(id).unwrap().diagonal();
+        let thickness = m.volume / m.surface_area;
+        let deflection = (1e-3 * size).min(5e-2 * thickness).max(1e-10);
+        let mesh = k
+            .tessellate(
+                id,
+                Tessellation {
+                    deflection,
+                    angle: 15f64.to_radians(),
+                },
+            )
+            .unwrap();
+        if let Ok(dir) = std::env::var("CADRS_TORUS_OBJ") {
+            // (The mesh as an OBJ, in full precision, to look at or measure elsewhere.)
+            let mut out = String::new();
+            for p in &mesh.positions {
+                out += &format!("v {:?} {:?} {:?}\n", p.x, p.y, p.z);
+            }
+            for t in &mesh.indices {
+                out += &format!("f {} {} {}\n", t[0] + 1, t[1] + 1, t[2] + 1);
+            }
+            std::fs::write(format!("{dir}/{}.obj", name.replace(' ', "_")), out).unwrap();
+        }
+        let key = |i: u32| {
+            let p = mesh.positions[i as usize];
+            [p.x as f32, p.y as f32, p.z as f32].map(f32::to_bits)
+        };
+        let mut edges: std::collections::HashMap<([u32; 3], [u32; 3]), i64> = Default::default();
+        for t in &mesh.indices {
+            for (a, z) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                let (a, z) = (key(a), key(z));
+                if a != z {
+                    *edges.entry((a, z)).or_default() += 1;
+                }
+            }
+        }
+        let unmatched = edges
+            .iter()
+            .filter(|((a, z), n)| edges.get(&(*z, *a)).copied().unwrap_or(0) != **n)
+            .count();
+        if std::env::var_os("CADRS_TORUS_OPEN").is_some() {
+            // Where the unmatched edges are: one of each cluster a thousandth of the size wide.
+            let mut seen: Vec<[f32; 3]> = Vec::new();
+            for ((a, z), n) in &edges {
+                if edges.get(&(*z, *a)).copied().unwrap_or(0) == *n {
+                    continue;
+                }
+                let (p, q) = (a.map(f32::from_bits), z.map(f32::from_bits));
+                if std::env::var("CADRS_TORUS_OPEN").is_ok_and(|v| v == "all")
+                    || seen
+                        .iter()
+                        .all(|s| (0..3).any(|k| (s[k] - p[k]).abs() > 1e-3 * size as f32))
+                {
+                    seen.push(p);
+                    eprintln!("  unmatched mesh edge {p:?} -> {q:?} ({n} times)");
+                }
+            }
+        }
+        if std::env::var("CADRS_TORUS_OPEN").is_ok_and(|v| v == "all") {
+            // The triangles with a side unmatched, and their faces.
+            for (t, f) in mesh.indices.iter().zip(&mesh.triangle_faces) {
+                let open = [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])]
+                    .iter()
+                    .any(|&(a, z)| {
+                        let (a, z) = (key(a), key(z));
+                        a != z && edges.get(&(a, z)) != edges.get(&(z, a))
+                    });
+                if open {
+                    eprintln!(
+                        "  triangle of face {f:?}: {:?}",
+                        t.map(|i| {
+                            let p = mesh.positions[i as usize];
+                            [p.x as f32, p.y as f32, p.z as f32]
+                        })
+                    );
+                }
+            }
+        }
+        let meshed = body.faces.len() >= 50 && 2 * flat >= body.faces.len();
+        let ok = !meshed && unmatched == 0 && matches!(k.body_class(id), Ok(BodyClass::Solid));
+        eprintln!(
+            "{} {name}: {} faces ({flat} flat), volume {:.9}, area {:.9}, {unmatched} mesh edges unmatched, built in {:.2?}, graded in {:.2?}",
+            if ok { "PASS" } else { "FAIL" },
+            body.faces.len(),
+            m.volume,
+            m.surface_area,
+            took,
+            t0.elapsed()
+        );
+    };
+    for name in which.split(',') {
+        if name == "crossed" {
+            let mut k = NativeKernel::new();
+            let t0 = std::time::Instant::now();
+            let (a, b) = match (build(&mut k, &cases[6]), build(&mut k, &cases[7])) {
+                (Ok(a), Ok(b)) => (a, b),
+                (a, b) => {
+                    eprintln!("FAIL crossed: {:?} {:?}", a.err(), b.err());
+                    continue;
+                }
+            };
+            for (op, what) in [
+                (BoolOp::Union, "union"),
+                (BoolOp::Intersect, "common"),
+                (BoolOp::Subtract, "cut"),
+            ] {
+                if std::env::var("CADRS_TORUS_OP").is_ok_and(|w| w != what) {
+                    continue;
+                }
+                let t1 = std::time::Instant::now();
+                match k.boolean(op, a, &[b]) {
+                    Ok(r) => grade(
+                        &k,
+                        r.bodies[0],
+                        what,
+                        t0.elapsed().min(t1.elapsed() + t0.elapsed()),
+                    ),
+                    Err(e) => eprintln!("FAIL crossed {what}: {e} (in {:.2?})", t1.elapsed()),
+                }
+            }
+            continue;
+        }
+        if name == "spring" {
+            // brep-bench's coil spring pushed aslant: a round section swept along three turns
+            // of a helix (sixteen conic pieces a turn), a ball at each end, slid.
+            use cadrs_kernel::{
+                BodyKind, Curve2, Loop, PathCurve, Plane, Profile, Region, SweepSpec,
+            };
+            let mut k = NativeKernel::new();
+            let t0 = std::time::Instant::now();
+            let o = Point3::new(0.0, 0.0, -12.0);
+            let (radius, pitch, turns, r) = (2.0, 1.5, 3.0, 0.4);
+            let n = 48;
+            let at = |t: f64, rad: f64, z: f64| o + Vector3::new(rad * t.cos(), rad * t.sin(), z);
+            let tau = std::f64::consts::TAU;
+            let path: Vec<PathCurve> = (0..n)
+                .map(|i| {
+                    let (s0, s1) = (i as f64 / n as f64, (i + 1) as f64 / n as f64);
+                    let (a0, a1) = (tau * turns * s0, tau * turns * s1);
+                    let half = (a1 - a0) / 2.0;
+                    let (z0, z1) = (pitch * turns * s0, pitch * turns * s1);
+                    PathCurve::Bezier3 {
+                        poles: vec![
+                            at(a0, radius, z0),
+                            at(a0 + half, radius / half.cos(), (z0 + z1) / 2.0),
+                            at(a1, radius, z1),
+                        ],
+                        weights: vec![1.0, half.cos(), 1.0],
+                    }
+                })
+                .collect();
+            let start = Point3::new(2.0, 0.0, -12.0);
+            let normal = nalgebra::Unit::new_normalize(Vector3::new(0.0, radius, pitch / tau));
+            let x = Vector3::x();
+            let plane = Plane {
+                origin: start,
+                x_dir: nalgebra::Unit::new_normalize(x - normal.into_inner() * x.dot(&normal)),
+                normal,
+            };
+            let profile = Profile::new(
+                plane,
+                vec![Region {
+                    outer: Loop {
+                        curves: vec![Curve2::Circle {
+                            center: nalgebra::Point2::new(0.0, 0.0),
+                            radius: r,
+                            source: None,
+                        }],
+                    },
+                    holes: vec![],
+                    source: None,
+                }],
+            );
+            let spec = SweepSpec {
+                body: BodyKind::Solid,
+                path,
+                control: Default::default(),
+                corners: Default::default(),
+                faces: vec![],
+            };
+            let built = (|| -> Result<BodyId> {
+                let mut spring = k.sweep_with(&profile, &spec)?.bodies[0];
+                for c in [start, Point3::new(2.0, 0.0, -7.5)] {
+                    let ball = k
+                        .primitive(&Primitive::Sphere {
+                            center: c,
+                            radius: r,
+                            axis: Vector3::z_axis(),
+                            seam: Vector3::x_axis(),
+                        })?
+                        .bodies[0];
+                    spring = k.boolean(BoolOp::Union, spring, &[ball])?.bodies[0];
+                }
+                eprintln!("spring made in {:.2?}", t0.elapsed());
+                let swept = k
+                    .sweep_solid(
+                        spring,
+                        &SolidMotion::Rigid {
+                            steps: vec![RigidStep::Slide {
+                                from: Vector3::zeros(),
+                                to: Vector3::new(3.0, 1.0, 18.0),
+                            }],
+                        },
+                    )?
+                    .bodies[0];
+                Ok(swept)
+            })();
+            match built {
+                Ok(id) => {
+                    grade(&k, id, "spring", t0.elapsed());
+                    if std::env::var_os("CADRS_SPRING_CUT").is_some() {
+                        let plate = k
+                            .primitive(&Primitive::Box {
+                                min: Point3::new(-15.0, -15.0, 0.0),
+                                max: Point3::new(15.0, 15.0, 4.0),
+                            })
+                            .unwrap()
+                            .bodies[0];
+                        let t1 = std::time::Instant::now();
+                        match k.boolean(BoolOp::Subtract, plate, &[id]) {
+                            Ok(r) => grade(&k, r.bodies[0], "spring cut", t1.elapsed()),
+                            Err(e) => eprintln!("FAIL spring cut: {e} (in {:.2?})", t1.elapsed()),
+                        }
+                    }
+                }
+                Err(e) => eprintln!("FAIL spring: {e} (in {:.2?})", t0.elapsed()),
+            }
+            continue;
+        }
+        if name == "mill" {
+            // brep-bench's bull-nose carried along a spline: a mill leaning 30 degrees toward
+            // its way, its end's corner rounded, riding a planar Bézier (cut from a block with
+            // CADRS_MILL_CUT).
+            let mut k = NativeKernel::new();
+            let t0 = std::time::Instant::now();
+            let lean = 30f64.to_radians();
+            let a = Vector3::new(lean.sin(), 0.0, lean.cos());
+            let c = Point3::new(0.0, 0.0, -1.0);
+            let radial = (Vector3::x() - a * a.x).normalize();
+            let on = Plane {
+                origin: c,
+                x_dir: nalgebra::Unit::new_normalize(radial),
+                normal: nalgebra::Unit::new_normalize(radial.cross(&a)),
+            };
+            let l = |a: (f64, f64), b: (f64, f64)| Curve2::Line {
+                a: p(a.0, a.1),
+                b: p(b.0, b.1),
+                source: None,
+            };
+            let section = Loop {
+                curves: vec![
+                    l((0.0, 0.0), (1.5, 0.0)),
+                    Curve2::Spline {
+                        degree: 2,
+                        knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                        poles: vec![p(1.5, 0.0), p(2.0, 0.0), p(2.0, 0.5)],
+                        weights: vec![1.0, 2f64.sqrt() / 2.0, 1.0],
+                        source: None,
+                    },
+                    l((2.0, 0.5), (2.0, 3.0)),
+                    l((2.0, 3.0), (0.0, 3.0)),
+                    l((0.0, 3.0), (0.0, 0.0)),
+                ],
+            };
+            let axis = Axis {
+                origin: c,
+                dir: nalgebra::Unit::new_normalize(a),
+            };
+            let mill = k
+                .revolve_with(
+                    &Profile::new(on, vec![reg(section)]),
+                    &RevolveSpec::solid(axis, None),
+                )
+                .unwrap()
+                .bodies[0];
+            if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+                for f in k.faces(mill).unwrap() {
+                    eprintln!("mill face: {:?}", f.kind);
+                }
+            }
+            let motion = SolidMotion::Path {
+                path: vec![cadrs_kernel::PathCurve::Bezier3 {
+                    poles: [(0.0, 0.0), (10.0, 0.0), (20.0, 20.0), (30.0, 20.0)]
+                        .iter()
+                        .map(|&(x, y)| Point3::new(x, y, 0.0))
+                        .collect(),
+                    weights: vec![],
+                }],
+                up: Vector3::z_axis(),
+            };
+            match k.sweep_solid(mill, &motion) {
+                Ok(r) => {
+                    grade(&k, r.bodies[0], "mill", t0.elapsed());
+                    if std::env::var_os("CADRS_MILL_CUT").is_some() {
+                        let block = k
+                            .extrude(
+                                &Profile::new(
+                                    Plane {
+                                        origin: Point3::new(0.0, 0.0, -8.0),
+                                        ..Plane::top()
+                                    },
+                                    vec![reg(rect(-6.0, -6.0, 36.0, 26.0))],
+                                ),
+                                Extent::Blind(8.0),
+                            )
+                            .unwrap()
+                            .bodies[0];
+                        match k.boolean(BoolOp::Subtract, block, &[r.bodies[0]]) {
+                            Ok(r) => grade(&k, r.bodies[0], "mill cut", t0.elapsed()),
+                            Err(e) => eprintln!("FAIL mill cut: {e} (in {:.2?})", t0.elapsed()),
+                        }
+                    }
+                }
+                Err(e) => eprintln!("FAIL mill: {e} (in {:.2?})", t0.elapsed()),
+            }
+            continue;
+        }
+        if name == "carried" {
+            // brep-bench's ring carried along a spline: an upright ring riding a planar Bézier.
+            let mut k = NativeKernel::new();
+            let t0 = std::time::Instant::now();
+            let ring = k
+                .primitive(&Primitive::Torus {
+                    center: Point3::new(0.0, 0.0, 0.5),
+                    axis: Vector3::y_axis(),
+                    major: 1.5,
+                    minor: 0.5,
+                })
+                .unwrap()
+                .bodies[0];
+            let motion = SolidMotion::Path {
+                path: vec![cadrs_kernel::PathCurve::Bezier3 {
+                    poles: [(0.0, 0.0), (10.0, 0.0), (20.0, 20.0), (30.0, 20.0)]
+                        .iter()
+                        .map(|&(x, y)| Point3::new(x, y, 0.0))
+                        .collect(),
+                    weights: vec![],
+                }],
+                up: Vector3::z_axis(),
+            };
+            match k.sweep_solid(ring, &motion) {
+                Ok(r) => grade(&k, r.bodies[0], "carried", t0.elapsed()),
+                Err(e) => eprintln!("FAIL carried: {e} (in {:.2?})", t0.elapsed()),
+            }
+            continue;
+        }
+        if name == "pushed" {
+            // brep-bench's ring pushed in past its fold: a leaning ring slid down its own height
+            // and more.
+            let mut k = NativeKernel::new();
+            let t0 = std::time::Instant::now();
+            let lean = 65f64.to_radians();
+            let ring = k
+                .primitive(&Primitive::Torus {
+                    center: Point3::new(0.0, 0.0, 4.0),
+                    axis: nalgebra::Unit::new_normalize(Vector3::new(lean.sin(), 0.0, lean.cos())),
+                    major: 3.0,
+                    minor: 1.0,
+                })
+                .unwrap()
+                .bodies[0];
+            let motion = SolidMotion::Rigid {
+                steps: vec![RigidStep::Slide {
+                    from: Vector3::zeros(),
+                    to: Vector3::new(0.0, 0.0, -8.0),
+                }],
+            };
+            match k.sweep_solid(ring, &motion) {
+                Ok(r) => grade(&k, r.bodies[0], "pushed", t0.elapsed()),
+                Err(e) => eprintln!("FAIL pushed: {e} (in {:.2?})", t0.elapsed()),
+            }
+            continue;
+        }
+        for c in cases.iter().filter(|c| name == "all" || c.0 == name) {
+            let mut k = NativeKernel::new();
+            let t0 = std::time::Instant::now();
+            match build(&mut k, c) {
+                Ok(id) => grade(&k, id, c.0, t0.elapsed()),
+                Err(e) => eprintln!("FAIL {}: {e} (in {:.2?})", c.0, t0.elapsed()),
+            }
+        }
+    }
+}
+
+/// `CADRS_BODY=<file> CADRS_POINT=x,y,z`: the edges of the body nearest the point, with their
+/// faces, lengths, and how their curves bend there.
+#[test]
+fn debug_edges_near() {
+    let (Ok(path), Ok(pt)) = (std::env::var("CADRS_BODY"), std::env::var("CADRS_POINT")) else {
+        return;
+    };
+    let b = cadrs_kernel::native::bodyio::read(&std::fs::read(path).unwrap()).unwrap();
+    let c: Vec<f64> = pt.split(',').map(|v| v.trim().parse().unwrap()).collect();
+    let p = Point3::new(c[0], c[1], c[2]);
+    let ef = b.edge_faces();
+    let mut near: Vec<(f64, usize, f64)> = b
+        .edges
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| !e.degenerate)
+        .map(|(i, e)| {
+            let t = e.curve.closest(&p, e.t[0], e.t[1]);
+            ((e.curve.point(t) - p).norm(), i, t)
+        })
+        .collect();
+    near.sort_by(|a, b| a.0.total_cmp(&b.0));
+    for (d, i, t) in near.into_iter().take(6) {
+        let e = &b.edges[i];
+        let (_, d1, d2) = e.curve.d2(t);
+        let knots = match &e.curve {
+            cadrs_kernel::native::curve::Curve::Nurbs(n) => n.knots.len(),
+            _ => 0,
+        };
+        eprintln!(
+            "edge {i} of faces {:?}: {d:.3e} away at t {t:.6} of {:?} (tol {:.1e}, {knots} knots); speed {:.3e}, bend {:.3e}; ends {:?} {:?}",
+            ef[i],
+            e.t,
+            e.tol,
+            d1.norm(),
+            d2.norm() / d1.norm_squared().max(1e-300),
+            b.verts[e.v[0]].p,
+            b.verts[e.v[1]].p
+        );
+    }
+}
+
+#[test]
+fn debug_body_faces() {
+    let Ok(path) = std::env::var("CADRS_BODY") else {
+        return;
+    };
+    let b = cadrs_kernel::native::bodyio::read(&std::fs::read(path).unwrap()).unwrap();
+    eprintln!(
+        "volume {} faces {} edges {} solids {} shells {:?}",
+        cadrs_kernel::native::mass::body_volume(&b),
+        b.faces.len(),
+        b.edges.len(),
+        b.solids.len(),
+        b.shells.iter().map(|s| s.faces.len()).collect::<Vec<_>>()
+    );
+    for fi in 0..b.faces.len() {
+        let (a, c) = cadrs_kernel::native::mass::face_area(&b, fi);
+        let f = &b.faces[fi];
+        let (u, v) = f.surf.project(&c, None);
+        let n = f.surf.normal(u, v) * if f.sense { 1.0 } else { -1.0 };
+        let es: Vec<(usize, bool)> = f.loops.iter().flatten().map(|c| (c.edge, c.fwd)).collect();
+        eprintln!(
+            "face {fi} {:?} area {a:.6} centroid {:.5?} normal {:.4?} edges {es:?}",
+            f.surf.kind(),
+            c,
+            n
+        );
+    }
+    if std::env::var_os("CADRS_BODY_EDGES").is_some() {
+        for (ei, e) in b.edges.iter().enumerate() {
+            eprintln!(
+                "edge {ei} {} {:.6?} -> {:.6?} tol {:e}",
+                if matches!(e.curve, cadrs_kernel::native::curve::Curve::Line { .. }) {
+                    "line"
+                } else {
+                    "curve"
+                },
+                b.verts[e.v[0]].p,
+                b.verts[e.v[1]].p,
+                e.tol
+            );
+        }
+    }
+}
+
+/// The body in `CADRS_BODY` meshed as brep-bench's runner meshes it: the triangles' edges not
+/// matched by one the other way (points rounded to single precision).
+#[test]
+fn debug_mesh_closed() {
+    let Ok(path) = std::env::var("CADRS_BODY") else {
+        return;
+    };
+    let mut k = NativeKernel::new();
+    let b = k.insert(cadrs_kernel::native::bodyio::read(&std::fs::read(path).unwrap()).unwrap());
+    let t0 = std::time::Instant::now();
+    let m = k.mass_properties(b).unwrap();
+    eprintln!("mass properties in {:?}: {m:?}", t0.elapsed());
+    let t0 = std::time::Instant::now();
+    let class = k.body_class(b);
+    eprintln!("class {class:?} in {:?}", t0.elapsed());
+    let size = k.bounding_box(b).unwrap().diagonal();
+    let thickness = m.volume / m.surface_area;
+    let deflection = (1e-3 * size).min(5e-2 * thickness).max(1e-10);
+    let t0 = std::time::Instant::now();
+    let mesh = k
+        .tessellate(
+            b,
+            Tessellation {
+                deflection,
+                angle: 15f64.to_radians(),
+            },
+        )
+        .unwrap();
+    eprintln!("{} triangles in {:?}", mesh.indices.len(), t0.elapsed());
+    let key = |i: u32| {
+        let p = mesh.positions[i as usize];
+        [p.x as f32, p.y as f32, p.z as f32].map(f32::to_bits)
+    };
+    let mut edges: std::collections::HashMap<([u32; 3], [u32; 3]), i64> = Default::default();
+    let mut degenerate = 0;
+    for t in &mesh.indices {
+        for (a, z) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+            let (a, z) = (key(a), key(z));
+            if a == z {
+                degenerate += 1;
+                continue;
+            }
+            *edges.entry((a, z)).or_default() += 1;
+        }
+    }
+    let f = |k: [u32; 3]| k.map(f32::from_bits);
+    for ((a, z), n) in &edges {
+        if edges.get(&(*z, *a)).copied().unwrap_or(0) != *n {
+            eprintln!("unmatched {:?} -> {:?} ({n})", f(*a), f(*z));
+            for (ti, t) in mesh.indices.iter().enumerate() {
+                let ks: Vec<[u32; 3]> = t.iter().map(|&i| key(i)).collect();
+                if ks.contains(a) && ks.contains(z) {
+                    eprintln!(
+                        "  triangle of face {:?}: {:?}",
+                        mesh.triangle_faces[ti],
+                        t.iter()
+                            .map(|&i| mesh.positions[i as usize])
+                            .collect::<Vec<_>>()
+                    );
+                }
+            }
+        }
+    }
+    eprintln!("{degenerate} triangle edges of no length (in single precision)");
 }

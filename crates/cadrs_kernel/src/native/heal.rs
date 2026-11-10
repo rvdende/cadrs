@@ -505,6 +505,52 @@ pub fn fix_gaps_2d(b: &mut Body) {
     }
 }
 
+/// Closes the (u, v) gaps at degenerate edges (a cone's apex, a sphere's pole): there the
+/// surface's whole iso-line is one point, so the edges meeting it may arrive at any u, and the
+/// degenerate edge's p-curve, a line along it, is set to run from where the coedge before ends
+/// to where the one after starts. Only a p-curve whose ends move by less than half a radian of
+/// the surface's parameter (a run across the apex kept, not turned round it the other way).
+/// Returns how many it set.
+pub fn bridge_degenerate(b: &mut Body) -> usize {
+    let mut set = 0;
+    for fi in 0..b.faces.len() {
+        for li in 0..b.faces[fi].loops.len() {
+            let n = b.faces[fi].loops[li].len();
+            if n < 3 {
+                continue;
+            }
+            for k in 0..n {
+                let l = &b.faces[fi].loops[li];
+                let c = &l[k];
+                let e = &b.edges[c.edge];
+                if !e.degenerate {
+                    continue;
+                }
+                let (prev, next) = (&l[(k + n - 1) % n], &l[(k + 1) % n]);
+                let (pe, ne) = (&b.edges[prev.edge], &b.edges[next.edge]);
+                if pe.degenerate || ne.degenerate {
+                    continue;
+                }
+                let a = prev.pc.point(co_range(pe, prev.fwd).1);
+                let z = next.pc.point(co_range(ne, next.fwd).0);
+                let (t0, t1) = co_range(e, c.fwd);
+                if (t1 - t0).abs() <= tol::ROUNDOFF {
+                    continue;
+                }
+                let (s, w) = (c.pc.point(t0), c.pc.point(t1));
+                let moved = (a - s).norm().max((z - w).norm());
+                if moved <= tol::ROUNDOFF_FINE || moved >= 0.5 {
+                    continue;
+                }
+                let d = (z - a) / (t1 - t0);
+                b.faces[fi].loops[li][k].pc = Curve::Line { o: a - d * t0, d };
+                set += 1;
+            }
+        }
+    }
+    set
+}
+
 /// Adds the seam a face on a surface closed in u is missing (OCCT's
 /// `ShapeFix_Face::FixMissingSeam`): a face bounded by two loops that each go once round the
 /// surface (each closes in (u, v) only a period apart, as two rims of a cylinder do) becomes

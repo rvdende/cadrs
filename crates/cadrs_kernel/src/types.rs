@@ -652,6 +652,23 @@ pub struct Bspline3 {
     pub weights: Vec<f64>,
 }
 
+/// A clamped (rational) B-spline surface: `poles[i][j]`, i along u and j along v.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BsplineSurface {
+    /// Its degree along u.
+    pub degree_u: usize,
+    /// Its degree along v.
+    pub degree_v: usize,
+    /// Clamped knots along u: as many as the rows of poles plus the degree plus one.
+    pub knots_u: Vec<f64>,
+    /// Clamped knots along v: as many as each row's poles plus the degree plus one.
+    pub knots_v: Vec<f64>,
+    /// The control net, row by row along u.
+    pub poles: Vec<Vec<Point3<f64>>>,
+    /// One weight per pole, row by row, or empty for a polynomial surface.
+    pub weights: Vec<Vec<f64>>,
+}
+
 /// A sweep of curves along a path (Onshape's surface Sweep of edges or curves): a sheet. See
 /// [`Kernel::sweep_curves`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -739,6 +756,20 @@ pub struct SweepSpec {
     /// Planar faces swept with the profile's regions.
     #[serde(default)]
     pub faces: Vec<FaceInput>,
+    /// How a solid sweep goes round a sharp corner of its path.
+    #[serde(default)]
+    pub corners: SweepCorners,
+}
+
+/// How a solid sweep goes round a sharp corner of its path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum SweepCorners {
+    /// Each piece run on to the plane bisecting the corner and cut there.
+    #[default]
+    Mitre,
+    /// The pieces end square to the path at the corner, its outside filled by the profile turned
+    /// about the corner (a pipe's elbow round as a ball).
+    Round,
 }
 
 /// One step of a planar motion ([`SolidMotion::Planar`]), its amount running linearly with the
@@ -830,6 +861,22 @@ pub enum SolidMotion {
         /// The steps, the first applied first.
         steps: Vec<RigidStep>,
     },
+    /// Turned about the axis from the turn `from` to `to` (radians, right-handed about its
+    /// direction) while rising along it: at the turn θ the body (as given, at θ = 0) is turned by
+    /// θ and moved `rise[0] + rise[1]·θ + rise[2]·θ² + …` along the axis (a screw whose lead
+    /// changes as it climbs, as a variable-pitch thread is cut). Exactly where each face's
+    /// contact stays put as the lead changes (faces square to the axis or along it): half a turn
+    /// at a time, each the solid where it starts and its leading faces' sweeps.
+    Climb {
+        /// The axis.
+        axis: Axis,
+        /// The turn at the motion's start.
+        from: f64,
+        /// The turn at its end.
+        to: f64,
+        /// The rise's coefficients, constant first.
+        rise: Vec<f64>,
+    },
     /// Carried along a path by a frame riding it: at each point the frame's origin is the path's
     /// point, its z axis `up` and its x axis the path's tangent made square to `up` (its y axis to
     /// the left), the body drawn in the frame where the path starts and carried rigidly by it
@@ -896,7 +943,9 @@ pub enum Primitive {
         axis: Unit<Vector3<f64>>,
         /// The radius of the circle through its tube's centres.
         major: f64,
-        /// Its tube's radius (less than `major`).
+        /// Its tube's radius: less than `major` (a ring torus), equal to it (a horn torus, its
+        /// hole closed to the centre) or more (a spindle torus: the solid the tube fills, counted
+        /// once, its hole closed between the points where the tube crosses the axis).
         minor: f64,
     },
 }
@@ -1295,18 +1344,34 @@ pub struct ChamferOpts {
     pub flip: bool,
     /// Edges flipped on their own (Onshape's "Direction overrides"), on top of `flip`.
     pub flipped: Vec<EdgeId>,
+    /// How a corner where three or more chamfered edges meet is closed.
+    #[serde(default)]
+    pub corners: ChamferCorners,
 }
 
 impl ChamferOpts {
-    /// `spec` measured along the faces, nothing flipped.
+    /// `spec` measured along the faces, nothing flipped, the corners mitred.
     pub fn new(spec: ChamferSpec) -> Self {
         Self {
             spec,
             measurement: ChamferMeasure::Offset,
             flip: false,
             flipped: Vec::new(),
+            corners: ChamferCorners::Miter,
         }
     }
+}
+
+/// How a chamfer closes a corner where three or more of its edges meet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ChamferCorners {
+    /// The chamfers run on until they meet (in a point where three meet).
+    #[default]
+    Miter,
+    /// The corner cut flat by the plane through the points where the chamfers' lines on each of
+    /// its faces meet (a triangle where three chamfers meet): where the corner's faces are flat,
+    /// its chamfers equal, and those points lie in one plane.
+    Flat,
 }
 
 /// A shell (P3.6, PS16).
@@ -1800,6 +1865,10 @@ pub struct ThickenSpec {
     pub along: f64,
     /// Thickness against the faces' normals (mm).
     pub against: f64,
+    /// Where the sheet bends, the moved faces extended until they meet (a mitre), not joined
+    /// by rounds (a cylinder about each crease, a ball at each corner).
+    #[serde(default)]
+    pub sharp: bool,
     /// The caller's id for the new faces.
     pub source: u64,
 }
