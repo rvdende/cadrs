@@ -1078,10 +1078,14 @@ impl<'a> Tube<'a> {
             self.across(i as f64 / nt as f64, TAU * (k % np) as f64 / np as f64)
                 .norm()
         };
-        let grid: Vec<f64> = (0..=nt)
-            .flat_map(|i| (0..np).map(move |k| (i, k)))
-            .map(|(i, k)| size(i, k))
-            .collect();
+        // (The grid's rows side by side: a hundred thousand readings, each a jet of the motion.)
+        let grid: Vec<f64> = {
+            use rayon::prelude::*;
+            (0..(nt + 1) * np)
+                .into_par_iter()
+                .map(|n| size(n / np, n % np))
+                .collect()
+        };
         let at = |i: usize, k: usize| grid[i * np + k % np];
         let mut out: Vec<P2> = Vec::new();
         for i in 0..=nt {
@@ -1131,13 +1135,19 @@ impl<'a> Tube<'a> {
     /// there. Found from its least sizes over a grid, each refined on finer ones.
     fn find_near_pinches(&self, pinches: &[P2]) -> Vec<(P2, f64)> {
         let (nt, np) = (400, 256);
-        let grid: Vec<f64> = (0..=nt)
-            .flat_map(|i| (0..np).map(move |k| (i, k)))
-            .map(|(i, k)| {
-                self.across(i as f64 / nt as f64, TAU * k as f64 / np as f64)
+        let grid: Vec<f64> = {
+            use rayon::prelude::*;
+            (0..(nt + 1) * np)
+                .into_par_iter()
+                .map(|n| {
+                    self.across(
+                        (n / np) as f64 / nt as f64,
+                        TAU * (n % np) as f64 / np as f64,
+                    )
                     .norm()
-            })
-            .collect();
+                })
+                .collect()
+        };
         let at = |i: usize, k: usize| grid[i * np + k % np];
         let mut out: Vec<(P2, f64)> = Vec::new();
         for i in 1..nt {
@@ -1441,13 +1451,15 @@ fn prepare<'a>(b: &Body, motion: &'a Motion<'a>) -> Option<Result<Prep<'a>>> {
     let size = b.bbox().diagonal().max(super::tol::POINT);
     let mut tube = Tube::new(motion, fr, *rmaj, *rmin, size);
     // Σ regular (its tangents apart everywhere): its normal, and so the sheets, defined.
-    let mut least = f64::INFINITY;
-    for i in 0..=200 {
-        let j = motion.jet(i as f64 / 200.0);
-        for k in 0..128 {
-            least = least.min(tube.sheet_pt(&j, TAU * k as f64 / 128.0).sin);
-        }
-    }
+    let least = (0..=200usize)
+        .into_par_iter()
+        .map(|i| {
+            let j = motion.jet(i as f64 / 200.0);
+            (0..128)
+                .map(|k| tube.sheet_pt(&j, TAU * k as f64 / 128.0).sin)
+                .fold(f64::INFINITY, f64::min)
+        })
+        .reduce(|| f64::INFINITY, f64::min);
     tube.lines = tube.find_lines();
     if debug && !tube.lines.is_empty() {
         eprintln!("tube sweep: lines of pinches at ψ {:?}", tube.lines);
