@@ -2540,6 +2540,43 @@ pub fn curve_curve(
     super::ssi_cci::curve_curve(a, a0, a1, b, b0, b1, tol)
 }
 
+/// Two curved edges that are one curve over the whole of either (an exact curve and a fit of it,
+/// which weaves across it a hundred times within a tolerance or two): the overlap's ends, as
+/// [`curve_curve`] gives an overlap. None unless every one of a run of points along one lies
+/// within `loose` of the other.
+pub fn coincident_ends(
+    a: &Curve,
+    ra: (f64, f64),
+    b: &Curve,
+    rb: (f64, f64),
+    loose: f64,
+) -> Option<Vec<(f64, f64)>> {
+    if matches!(a, Curve::Line { .. }) || matches!(b, Curve::Line { .. }) {
+        return None;
+    }
+    let (ra, rb) = (
+        (ra.0.min(ra.1), ra.0.max(ra.1)),
+        (rb.0.min(rb.1), rb.0.max(rb.1)),
+    );
+    // (From the middle out: curves that only cross part at once.)
+    let lies = |c: &Curve, rc: (f64, f64), o: &Curve, ro: (f64, f64)| {
+        const N: usize = 32;
+        (0..=N)
+            .map(|i| {
+                if i % 2 == 0 {
+                    N / 2 + i / 2
+                } else {
+                    N / 2 - i.div_ceil(2)
+                }
+            })
+            .all(|i| {
+                let p = c.point(rc.0 + (rc.1 - rc.0) * i as f64 / N as f64);
+                (o.point(o.closest(&p, ro.0, ro.1)) - p).norm() <= loose
+            })
+    };
+    (lies(a, ra, b, rb) || lies(b, rb, a, ra)).then(|| overlap_ends(a, ra, b, rb, loose))
+}
+
 /// Where two segments come within `tol` at an end: each one's ends lying on the other, one point to
 /// each place, along `a`.
 fn overlap_ends(a: &Curve, ra: (f64, f64), b: &Curve, rb: (f64, f64), tol: f64) -> Vec<(f64, f64)> {

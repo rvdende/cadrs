@@ -2693,15 +2693,58 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             }
             let (ca, cb) = (pool.edges[ea].clone(), pool.edges[eb].clone());
             let et = ca.tol.max(cb.tol);
-            for (ta, tb) in ssi::curve_curve(
+            let t_pair = web_time::Instant::now();
+            // (One curve twice over, an exact one and its fit: an overlap, not the hundred
+            // crossings the fit makes weaving across it.)
+            let within = run_tol.max(et) * 0.5;
+            let meets = ssi::coincident_ends(
                 &ca.curve,
-                ca.t[0],
-                ca.t[1],
+                (ca.t[0], ca.t[1]),
                 &cb.curve,
-                cb.t[0],
-                cb.t[1],
-                run_tol.max(et) * 0.5,
-            ) {
+                (cb.t[0], cb.t[1]),
+                4.0 * within,
+            )
+            .unwrap_or_else(|| {
+                ssi::curve_curve(
+                    &ca.curve, ca.t[0], ca.t[1], &cb.curve, cb.t[0], cb.t[1], within,
+                )
+            });
+            if t_pair.elapsed().as_secs_f64() > 0.01 && std::env::var_os("CADRS_EF_DEBUG").is_some()
+            {
+                let kind = |c: &Curve| match c {
+                    Curve::Nurbs(n) => {
+                        format!("spline of degree {}, {} poles", n.degree, n.cps.len())
+                    }
+                    Curve::Line { .. } => "line".to_string(),
+                    Curve::Circle { .. } => "circle".to_string(),
+                    Curve::Ellipse { .. } => "ellipse".to_string(),
+                };
+                let (lo, hi) = (cb.t[0].min(cb.t[1]), cb.t[0].max(cb.t[1]));
+                let apart = (0..=64)
+                    .map(|i| {
+                        let p = ca
+                            .curve
+                            .point(ca.t[0] + (ca.t[1] - ca.t[0]) * i as f64 / 64.0);
+                        (cb.curve.point(cb.curve.closest(&p, lo, hi)) - p).norm()
+                    })
+                    .fold(0.0, f64::max);
+                eprintln!(
+                    "edge-edge: tolerance {:.2e}, the curves at most {apart:.2e} apart",
+                    run_tol.max(et) * 0.5
+                );
+                eprintln!(
+                    "edge-edge: {:.1} ms: {} t {:.3}..{:.3} x {} t {:.3}..{:.3}: {} meets",
+                    t_pair.elapsed().as_secs_f64() * 1e3,
+                    kind(&ca.curve),
+                    ca.t[0],
+                    ca.t[1],
+                    kind(&cb.curve),
+                    cb.t[0],
+                    cb.t[1],
+                    meets.len()
+                );
+            }
+            for (ta, tb) in meets {
                 let p = ca.curve.point(ta);
                 let v = pool.vertex_tol(p, et);
                 // The parameters of the (possibly merged) vertex itself.
