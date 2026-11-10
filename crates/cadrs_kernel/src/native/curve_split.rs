@@ -347,7 +347,6 @@ fn split_in(b: &mut Body, fi: usize, c: &Curve, t0: f64, t1: f64) -> Option<Vec<
     let size = b.face_bbox(fi).diagonal().max(1.0);
     // (A curve fitted to points on the face, as a blend's rail, strays a little between them.)
     let on = 1e-4 * size;
-    let area0 = super::mass::face_area(b, fi).0;
     // 1. Which samples of the curve lie on the face.
     let at = |i: usize| t0 + (t1 - t0) * i as f64 / CUT_SAMPLES as f64;
     let mut hint: Option<(f64, f64)> = None;
@@ -476,5 +475,5 @@ fn split_in(b: &mut Body, fi: usize, c: &Curve, t0: f64, t1: f64) -> Option<Vec<
         cut: true,
         deg: false,
     };
-    super::heal_split::trace_pieces(b, fi, vec![cut], area0)
+    super::heal_split::trace_pieces(b, fi, vec![cut])
 }

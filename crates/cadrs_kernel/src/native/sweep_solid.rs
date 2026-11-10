@@ -538,6 +538,50 @@ fn key_range(sl: &Slicer, near: f64) -> (Extreme, Extreme) {
     (out[0], out[1])
 }
 
+/// Whether `b` is a whole torus and `steps` one slide of it aslant: neither along its axis nor
+/// square to it (either of which its leading faces sweep in closed form, and soundly).
+fn slid_torus(b: &Body, steps: &[RigidStep]) -> bool {
+    let ([RigidStep::Slide { from, to }], [f]) = (steps, b.faces.as_slice()) else {
+        return false;
+    };
+    let super::surface::Surface::Torus { f, .. } = &f.surf else {
+        return false;
+    };
+    let Some(d) = (to - from).try_normalize(tol::POINT) else {
+        return false;
+    };
+    let along = d.dot(&f.z).abs();
+    along > tol::ANGULAR && along < 1.0 - tol::ANGULAR
+}
+
+/// `target` less the whole sweep of the torus `b` by `steps` ([`super::sweep_tube::torus`]: its
+/// envelope trimmed by what it covers of itself); None where `b` isn't one, or the sweep or
+/// the cut isn't made soundly.
+fn cut_torus_whole(
+    k: &mut NativeKernel,
+    target: BodyId,
+    b: &Body,
+    steps: &[RigidStep],
+) -> Option<OpResult> {
+    let r = super::sweep_tube::torus(k, b, &super::sweep_tube::Motion::Steps(steps))?.ok()?;
+    let [s] = r.bodies.as_slice() else {
+        return None;
+    };
+    let cut = k.boolean(crate::BoolOp::Subtract, target, &[*s]);
+    k.release(*s);
+    if let Ok(c) = cut
+        && c.bodies
+            .iter()
+            .all(|&id| k.get(id).is_ok_and(|b| b.check().is_empty()))
+    {
+        return Some(c);
+    }
+    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+        eprintln!("swept cut: the torus's whole sweep wouldn't cut from the target");
+    }
+    None
+}
+
 /// [`crate::Kernel::sweep_solid`].
 pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> Result<OpResult> {
     let b = (**k.get(body)?).clone();
@@ -561,8 +605,13 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
         }
         // (A torus by two steps or more first as a torus: its faces' own sweeps, which make
         // one step's exactly in closed form, seldom join for two, and are slow to find so.)
+        // (And a torus slid: where it leans far enough that its outline folds, its leading
+        // faces' sweeps cross one another and still sew into a solid, one too large.)
         let mut as_torus = None;
-        if steps.len() >= 2 || std::env::var_os("CADRS_TUBE_FIRST").is_some() {
+        if steps.len() >= 2
+            || slid_torus(&b, steps)
+            || std::env::var_os("CADRS_TUBE_FIRST").is_some()
+        {
             as_torus = super::sweep_tube::torus(k, &b, &super::sweep_tube::Motion::Steps(steps));
             if let Some(Ok(r)) = as_torus {
                 return Ok(r);
@@ -1783,6 +1832,15 @@ pub fn cut_swept(
     {
         return Ok(r);
     }
+    // A torus slid: by its envelope first (its leading faces' sweeps cross one another where
+    // its outline folds).
+    let torus_first = matches!(motion, SolidMotion::Rigid { steps } if slid_torus(&b, steps));
+    if let SolidMotion::Rigid { steps } = motion
+        && torus_first
+        && let Some(r) = cut_torus_whole(k, target, &b, steps)
+    {
+        return Ok(r);
+    }
     let mut pieces: Vec<Body> = Vec::new();
     let exact = match motion {
         SolidMotion::Rigid { steps } if (1..=2).contains(&steps.len()) => {
@@ -1831,22 +1889,10 @@ pub fn cut_swept(
     // A torus: its sweep trimmed whole by what it covers of itself (where its leading faces
     // fold, their sweeps can't be cut one at a time), cut from the target.
     if let SolidMotion::Rigid { steps } = motion
-        && let Some(Ok(r)) =
-            super::sweep_tube::torus(k, &b, &super::sweep_tube::Motion::Steps(steps))
-        && let [s] = r.bodies.as_slice()
+        && !torus_first
+        && let Some(r) = cut_torus_whole(k, target, &b, steps)
     {
-        let cut = k.boolean(crate::BoolOp::Subtract, target, &[*s]);
-        k.release(*s);
-        if let Ok(c) = cut
-            && c.bodies
-                .iter()
-                .all(|&id| k.get(id).is_ok_and(|b| b.check().is_empty()))
-        {
-            return Ok(c);
-        }
-        if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
-            eprintln!("swept cut: the torus's whole sweep wouldn't cut from the target");
-        }
+        return Ok(r);
     }
     // Else meshed: inside the target, in none of the tool's places.
     let t = (**k.get(target)?).clone();

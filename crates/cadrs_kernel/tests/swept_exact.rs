@@ -84,3 +84,34 @@ fn a_leaning_bull_nose_carried_along_a_spline_is_exact() {
     let volume = k.mass_properties(swept).unwrap().volume;
     assert!((volume - 619.91255).abs() < 1e-3, "volume {volume}");
 }
+
+/// brep-bench's ring pushed in past its fold: a torus leaning 65 degrees from upright, slid
+/// straight down more than its own height. Seen along the slide its outline folds, so the
+/// sweeps of its leading faces cross one another; sewn together they made a solid 0.68 too
+/// large (282.67). Its envelope, trimmed by what the torus covers of itself, is the solid.
+#[test]
+fn a_leaning_ring_slid_past_its_fold_is_not_overfilled() {
+    let mut k = NativeKernel::new();
+    let lean = 65f64.to_radians();
+    let ring = k
+        .primitive(&Primitive::Torus {
+            center: Point3::new(0.0, 0.0, 4.0),
+            axis: nalgebra::Unit::new_normalize(Vector3::new(lean.sin(), 0.0, lean.cos())),
+            major: 3.0,
+            minor: 1.0,
+        })
+        .unwrap()
+        .bodies[0];
+    let motion = SolidMotion::Rigid {
+        steps: vec![RigidStep::Slide {
+            from: Vector3::zeros(),
+            to: Vector3::new(0.0, 0.0, -8.0),
+        }],
+    };
+    let swept = k.sweep_solid(ring, &motion).unwrap().bodies[0];
+    let faults = k.get(swept).unwrap().check();
+    assert!(faults.is_empty(), "{faults:?}");
+    // (Integrated numerically, column by column along the slide: 282.00 to the hundredth.)
+    let volume = k.mass_properties(swept).unwrap().volume;
+    assert!((volume - 282.0).abs() < 0.03, "volume {volume}");
+}

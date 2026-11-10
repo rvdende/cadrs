@@ -91,7 +91,17 @@ fn quarter_turns(b: &mut Body, s1: f64) {
     if s1 <= quarter {
         return;
     }
+    let clock = web_time::Instant::now();
+    let lap = |what: &str| {
+        if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+            eprintln!(
+                "  quarter turns: {what} by {:.0} ms",
+                clock.elapsed().as_secs_f64() * 1e3
+            );
+        }
+    };
     let _ = split_angle(b, quarter);
+    lap("turned faces split");
     let cuts: Vec<f64> = (1..)
         .map(|k| k as f64 * quarter)
         .take_while(|&v| v < s1 - 1e-9)
@@ -113,6 +123,7 @@ fn quarter_turns(b: &mut Body, s1: f64) {
             let _ = split_face_iso(b, fi, Dir::V, &inside);
         }
     }
+    lap("skinned faces split");
     // Each piece on its own part of the surface: the faces cut from one share it, so each would
     // carry the whole winding surface (into every boolean, mass and file written).
     for fi in 0..b.faces.len() {
@@ -133,6 +144,7 @@ fn quarter_turns(b: &mut Body, s1: f64) {
             b.faces[fi].surf = super::surface::Surface::Nurbs(std::sync::Arc::new(part));
         }
     }
+    lap("each on its own part");
 }
 
 /// How long (seconds) a sweep by faces may split and unite before it gives up.

@@ -3629,8 +3629,27 @@ fn debug_screws() {
     };
     let report = |k: &NativeKernel, id: BodyId, name: &str, t0: std::time::Instant| {
         let took = t0.elapsed();
-        let m = k.mass_properties(id).unwrap();
         let faults = k.get(id).unwrap().check();
+        if std::env::var_os("CADRS_SCREW_FACES").is_some() {
+            for (i, f) in k.get(id).unwrap().faces.iter().enumerate() {
+                if let cadrs_kernel::native::surface::Surface::Nurbs(n) = &f.surf {
+                    let w0 = n.cps[0][0].w;
+                    let rational = n.cps.iter().flatten().any(|h| (h.w - w0).abs() > 1e-12);
+                    eprintln!(
+                        "  face {i}: degree {} by {}, {} by {} poles, rational {rational}, {} loops of {:?} edges",
+                        n.du,
+                        n.dv,
+                        n.cps.len(),
+                        n.cps[0].len(),
+                        f.loops.len(),
+                        f.loops.iter().map(|l| l.len()).collect::<Vec<_>>()
+                    );
+                }
+            }
+        }
+        let t_mass = std::time::Instant::now();
+        let m = k.mass_properties(id).unwrap();
+        eprintln!("{name}: mass properties in {:.2?}", t_mass.elapsed());
         eprintln!(
             "{name}: {} faces, volume {:.9}, area {:.9}, {} faults, built in {took:.2?}",
             k.faces(id).unwrap().len(),
@@ -3675,6 +3694,64 @@ fn debug_screws() {
                 eprintln!("{name}: swept by {:.2?}", t0.elapsed());
                 let rod = cylinder(&mut k, 0.0, 5.0, 20.0);
                 match k.boolean(BoolOp::Subtract, rod, &[swept]) {
+                    Ok(r) => report(&k, r.bodies[0], name, t0),
+                    Err(e) => eprintln!("FAIL {name}: {e} (in {:.2?})", t0.elapsed()),
+                }
+            }
+            // swept/spline-bar-screwed-through-rod.
+            "bar" => {
+                let on = Plane {
+                    origin: Point3::new(0.0, 8.0, 0.0),
+                    x_dir: Vector3::x_axis(),
+                    normal: -Vector3::y_axis(),
+                };
+                let mut poles: Vec<Point2<f64>> = [
+                    (12.0, -1.0),
+                    (12.0, 1.0),
+                    (8.0, 1.5),
+                    (4.5, 1.5),
+                    (3.5, 0.0),
+                    (4.5, -1.5),
+                    (8.0, -1.5),
+                ]
+                .iter()
+                .map(|&(x, y)| p(x, y))
+                .collect();
+                poles.extend_from_within(..3);
+                let section = Loop {
+                    curves: vec![Curve2::Spline {
+                        degree: 3,
+                        knots: (0..poles.len() + 4).map(|i| i as f64).collect(),
+                        poles,
+                        weights: vec![],
+                        source: None,
+                    }],
+                };
+                let bar = k
+                    .extrude(&Profile::new(on, vec![reg(section)]), Extent::Blind(16.0))
+                    .unwrap()
+                    .bodies[0];
+                let bb = k.bounding_box(bar).unwrap();
+                let within = cylinder(&mut k, bb.min.z - 1.0, 5.5, bb.max.z - bb.min.z + 2.0);
+                let bar = k.boolean(BoolOp::Intersect, bar, &[within]).unwrap().bodies[0];
+                if std::env::var_os("CADRS_SCREW_FACES").is_some() {
+                    let b = k.get(bar).unwrap();
+                    for (i, e) in b.edges.iter().enumerate() {
+                        let what = match &e.curve {
+                            cadrs_kernel::native::curve::Curve::Nurbs(c) => {
+                                format!("spline of degree {}, {} poles", c.degree, c.cps.len())
+                            }
+                            cadrs_kernel::native::curve::Curve::Line { .. } => "line".to_string(),
+                            _ => "conic".to_string(),
+                        };
+                        eprintln!("  tool edge {i}: {what}, t {:.3}..{:.3}", e.t[0], e.t[1]);
+                    }
+                    for (i, f) in b.faces.iter().enumerate() {
+                        eprintln!("  tool face {i}: {:?}", f.surf.kind());
+                    }
+                }
+                let rod = cylinder(&mut k, 0.0, 5.0, 20.0);
+                match k.cut_swept(rod, bar, &screw(6.0, -90.0, 1350.0)) {
                     Ok(r) => report(&k, r.bodies[0], name, t0),
                     Err(e) => eprintln!("FAIL {name}: {e} (in {:.2?})", t0.elapsed()),
                 }
@@ -3828,6 +3905,12 @@ fn debug_tumbling_tori() {
         let size = k.bounding_box(id).unwrap().diagonal();
         let thickness = m.volume / m.surface_area;
         let deflection = (1e-3 * size).min(5e-2 * thickness).max(1e-10);
+        // (`CADRS_TORUS_DEFLECTION`: the mesh's chord error as a part of the size, to measure
+        // a solid from its mesh as it is refined.)
+        let deflection = std::env::var("CADRS_TORUS_DEFLECTION")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .map_or(deflection, |d| d * size);
         let mesh = k
             .tessellate(
                 id,

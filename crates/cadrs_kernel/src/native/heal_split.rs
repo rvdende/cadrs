@@ -296,7 +296,6 @@ fn split_in(b: &mut Body, fi: usize, dir: Dir, values: &[f64]) -> Option<Vec<usi
         return None;
     }
     let size = b.face_bbox(fi).diagonal().max(tol::ROUNDOFF);
-    let area0 = super::mass::face_area(b, fi).0;
     // 1. Where the loops cross each iso-line.
     let mut hits: Vec<Vec<Hit>> = values.iter().map(|_| Vec::new()).collect();
     for c in b.faces[fi].loops.iter().flatten() {
@@ -446,18 +445,67 @@ fn split_in(b: &mut Body, fi: usize, dir: Dir, values: &[f64]) -> Option<Vec<usi
     if cuts.is_empty() {
         return None;
     }
-    trace_pieces(b, fi, cuts, area0)
+    trace_pieces(b, fi, cuts)
+}
+
+/// A face's area in its surface's own parameters: ∮ u dv round its loops, by their p-curves.
+/// The pieces a face is cut into add up to it whatever the surface (each cut is gone along
+/// once each way), and it costs no point of the surface.
+fn uv_area(b: &Body, fi: usize) -> f64 {
+    // (Gauss–Legendre, five points: exact for u·v' of a quintic p-curve's span.)
+    const X: [f64; 5] = [
+        -0.906_179_845_938_664,
+        -0.538_469_310_105_683_1,
+        0.0,
+        0.538_469_310_105_683_1,
+        0.906_179_845_938_664,
+    ];
+    const W: [f64; 5] = [
+        0.236_926_885_056_189_08,
+        0.478_628_670_499_366_47,
+        0.568_888_888_888_888_9,
+        0.478_628_670_499_366_47,
+        0.236_926_885_056_189_08,
+    ];
+    let mut area = 0.0;
+    for c in b.faces[fi].loops.iter().flatten() {
+        let e = &b.edges[c.edge];
+        let (t0, t1) = super::topo::co_range(e, c.fwd);
+        let (lo, hi) = (t0.min(t1), t0.max(t1));
+        // (A line whole; anything else in short steps of each of its spans, so that an edge
+        // cut in two adds up to itself far within the measure the pieces are held to.)
+        let steps = |a: f64, z: f64| match c.pc {
+            Curve::Line { .. } => 1,
+            Curve::Nurbs(_) => 4,
+            _ => (((z - a) / 0.05).ceil() as usize).max(1),
+        };
+        let mut along = 0.0;
+        for w in c.pc.pieces(lo, hi).windows(2) {
+            let n = steps(w[0], w[1]);
+            for k in 0..n {
+                let (a, z) = (
+                    w[0] + (w[1] - w[0]) * k as f64 / n as f64,
+                    w[0] + (w[1] - w[0]) * (k + 1) as f64 / n as f64,
+                );
+                let (m, r) = (0.5 * (a + z), 0.5 * (z - a));
+                for (x, gw) in X.iter().zip(W) {
+                    let (uv, duv, _) = c.pc.d2(m + r * x);
+                    along += gw * r * uv.x * duv.y;
+                }
+            }
+        }
+        area += if t0 <= t1 { along } else { -along };
+    }
+    area
 }
 
 /// Face `fi` of `b` traced into pieces along `cuts` (new edges already in `b`, ending at
 /// vertices of its loops): the pieces replace it (`fi` first, the rest added to its shell).
-/// `None` when a piece's loop doesn't close or the pieces' areas don't add up to `area0`.
-pub(crate) fn trace_pieces(
-    b: &mut Body,
-    fi: usize,
-    cuts: Vec<SArc>,
-    area0: f64,
-) -> Option<Vec<usize>> {
+/// `None` when a piece's loop doesn't close or the pieces' areas (in the surface's parameters)
+/// don't add up to the face's.
+pub(crate) fn trace_pieces(b: &mut Body, fi: usize, cuts: Vec<SArc>) -> Option<Vec<usize>> {
+    // (What the pieces must add up to: the face's area in its surface's parameters.)
+    let area0 = uv_area(b, fi);
     // 4. The face traced into pieces.
     let f = b.faces[fi].clone();
     let boundary: Vec<Vec<SArc>> = f
@@ -542,7 +590,7 @@ pub(crate) fn trace_pieces(
             }
         }
     }
-    let area: f64 = out.iter().map(|&g| super::mass::face_area(b, g).0).sum();
+    let area: f64 = out.iter().map(|&g| uv_area(b, g)).sum();
     if !((area - area0).abs() <= tol::REL_POINT * area0.abs().max(tol::DEGENERATE)) {
         return None;
     }
