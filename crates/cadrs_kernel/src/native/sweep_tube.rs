@@ -184,6 +184,39 @@ impl Pinch {
 /// A pinch's chart reaches this much past its seam, the band beyond being cut off along it.
 const PINCH_REACH: f64 = 1.25;
 
+/// A near pinch of the core circle's sweep: a (t, ψ) where the circle's point all but moves
+/// along the circle ([`Tube::across`] least there, and its derivative singular: a line of what
+/// it takes passing by nothing). Across that line the sheets' normal turns half round the
+/// tube within a hair of (t, ψ): surfaces still, but ones no patch laid out in (t, ψ) follows.
+/// Each sheet has its own chart of the band about it instead, the first band's leading sheet's
+/// being the chart after the pinches', its trailing sheet's the next: ψ = η, how far along
+/// the line, a = τ, with w sinh τ how far across it (so that the turn, as wide as w, is
+/// spread over τ). The sheets are left off inside its seam, an ellipse in (τ, η).
+struct Band {
+    c: P2,
+    /// Across the line and along it, in (t, ψ).
+    ex: V2,
+    ey: V2,
+    w: f64,
+    /// The seam's reach in τ and in η.
+    reach: V2,
+    /// How far across the line bends by η along it: a polynomial's coefficients, the constant
+    /// first.
+    bend: [f64; 5],
+}
+
+impl Band {
+    /// How far across the line lies at η along it.
+    fn mid(&self, eta: f64) -> f64 {
+        self.bend.iter().rev().fold(0.0, |a, c| a * eta + c)
+    }
+
+    /// How far out a place (τ, η) of the band's charts is, as a part of the way to the seam.
+    fn out(&self, w: P2) -> f64 {
+        (w.x / self.reach.x).hypot(w.y / self.reach.y)
+    }
+}
+
 /// A place on K: its chart, the coordinate a ∈ [0, 1] across it (σ less the chart), and ψ.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Pos {
@@ -213,6 +246,7 @@ pub(crate) struct Tube<'a> {
     ts: Vec<f64>,
     places: Vec<(M3, V3)>,
     pinches: Vec<Pinch>,
+    bands: Vec<Band>,
 }
 
 /// A local least of the distance over the motion, less r: (instant, value).
@@ -273,6 +307,7 @@ impl<'a> Tube<'a> {
             ts,
             places,
             pinches: Vec::new(),
+            bands: Vec::new(),
         }
     }
 
@@ -350,6 +385,15 @@ impl<'a> Tube<'a> {
                     p: P3::from(sp.s[0] + sp.n * (s * self.r)),
                     own: t,
                 }
+            }
+            c if self.band(c).is_some() => {
+                let (j, sheet) = self.band(c).unwrap();
+                let w = self.band_at(j, pos.a, psi);
+                self.eval(&Pos {
+                    chart: sheet,
+                    a: if sheet == LEAD { w.x } else { 1.0 - w.x },
+                    psi: w.y,
+                })
             }
             c if c >= PINCH => {
                 let tp = self.pinch_at(c - PINCH, pos.a, psi);
@@ -606,17 +650,24 @@ impl<'a> Tube<'a> {
             psi: w.y,
         });
         if tau < -0.5 {
-            let v = if chart >= PINCH {
+            // (The seam's mark says whose it is: a pinch's, or past those a band's.)
+            let mark = (-1.0 - tau).round() as usize;
+            let v = if let Some(band) = mark
+                .checked_sub(self.pinches.len())
+                .and_then(|j| self.bands.get(j).map(|b| (j, b)))
+            {
+                let (j, b) = band;
+                if self.band(chart).is_some() {
+                    1.0 - b.out(w)
+                } else {
+                    b.out(self.band_uv(j, kp.own, w.y)) - 1.0
+                }
+            } else if chart >= PINCH {
                 1.0 - w.x.abs()
             } else {
-                let psi = w.y;
-                let across = self.across(kp.own, psi);
+                let across = self.across(kp.own, w.y);
                 self.pinches
-                    .iter()
-                    .min_by(|a, b| {
-                        let d = |pn: &Pinch| (kp.own - pn.c.x).hypot(wrap(psi - pn.c.y, -PI, TAU));
-                        d(a).total_cmp(&d(b))
-                    })
+                    .get(mark)
                     .map_or(f64::NAN, |pn| (pn.shape * across).norm() - 1.0)
             };
             return (v, tau);
@@ -835,6 +886,58 @@ impl<'a> Tube<'a> {
         out
     }
 
+    /// The near pinches of the core circle's sweep: the (t, ψ) inside the motion where
+    /// [`Self::across`] is least without being nothing (there its derivative is singular: the
+    /// velocity across the circle folds over, a line of it passing by nothing), with its size
+    /// there. Found from its least sizes over a grid, each refined on finer ones.
+    fn find_near_pinches(&self, pinches: &[P2]) -> Vec<(P2, f64)> {
+        let (nt, np) = (400, 256);
+        let grid: Vec<f64> = (0..=nt)
+            .flat_map(|i| (0..np).map(move |k| (i, k)))
+            .map(|(i, k)| {
+                self.across(i as f64 / nt as f64, TAU * k as f64 / np as f64)
+                    .norm()
+            })
+            .collect();
+        let at = |i: usize, k: usize| grid[i * np + k % np];
+        let mut out: Vec<(P2, f64)> = Vec::new();
+        for i in 1..nt {
+            for k in 0..np {
+                let v = at(i, k);
+                let least =
+                    (i - 1..=i + 1).all(|a| [k + np - 1, k, k + 1].iter().all(|&b| at(a, b) >= v));
+                if !least {
+                    continue;
+                }
+                let mut c = P2::new(i as f64 / nt as f64, TAU * k as f64 / np as f64);
+                let mut r = V2::new(1.0 / nt as f64, TAU / np as f64);
+                let mut best = v;
+                for _ in 0..24 {
+                    for a in -4i32..=4 {
+                        for b in -4i32..=4 {
+                            let w = P2::new(
+                                (c.x + r.x * a as f64 / 4.0).clamp(0.0, 1.0),
+                                c.y + r.y * b as f64 / 4.0,
+                            );
+                            let s = self.across(w.x, w.y).norm();
+                            if s < best {
+                                (best, c) = (s, w);
+                            }
+                        }
+                    }
+                    r *= 0.5;
+                }
+                let c = P2::new(c.x, wrap(c.y, 0.0, TAU));
+                let near =
+                    |o: &P2| (o.x - c.x).abs() < 1e-3 && wrap(o.y - c.y, -PI, TAU).abs() < 1e-3;
+                if !pinches.iter().any(near) && !out.iter().any(|o| near(&o.0)) {
+                    out.push((c, best));
+                }
+            }
+        }
+        out
+    }
+
     /// The (t, ψ) of pinch `k`'s chart at (u, θ): where [`Self::across`] is square to the
     /// tube's normal at θ, u of the way to the seam.
     fn pinch_at(&self, k: usize, u: f64, th: f64) -> P2 {
@@ -884,7 +987,9 @@ impl<'a> Tube<'a> {
 
     /// The ψ of the core circle's point under a sheet's or a pinch chart's place.
     fn psi_of(&self, chart: usize, w: P2) -> f64 {
-        if chart >= PINCH {
+        if let Some((j, _)) = self.band(chart) {
+            self.band_at(j, w.x, w.y).y
+        } else if chart >= PINCH {
             self.pinch_at(chart - PINCH, w.x, w.y).y
         } else {
             w.y
@@ -895,11 +1000,47 @@ impl<'a> Tube<'a> {
     /// pinch's chart), a pinch chart's past its `rho` (left to the sheets). As an instant no
     /// motion has, −1 less the pinch's index: what covers the place is the other chart.
     fn seam(&self, chart: usize, w: P2, own: f64) -> Option<f64> {
-        if chart >= PINCH {
+        let band_mark = |j: usize| -1.0 - (self.pinches.len() + j) as f64;
+        if let Some((j, _)) = self.band(chart) {
+            (self.bands[j].out(w) > 1.0).then_some(band_mark(j))
+        } else if chart >= PINCH {
             (w.x.abs() > 1.0).then_some(-1.0 - (chart - PINCH) as f64)
         } else {
-            self.in_pinch(own, w.y).map(|k| -1.0 - k as f64)
+            self.in_pinch(own, w.y)
+                .map(|k| -1.0 - k as f64)
+                .or_else(|| self.in_band(own, w.y).map(band_mark))
         }
+    }
+
+    /// The band and the sheet a chart is of, if it is a band's.
+    fn band(&self, chart: usize) -> Option<(usize, usize)> {
+        let i = chart.checked_sub(PINCH + self.pinches.len())?;
+        (i / 2 < self.bands.len()).then_some((i / 2, if i % 2 == 0 { LEAD } else { TRAIL }))
+    }
+
+    /// The chart of band `j` for a sheet.
+    fn band_chart(&self, j: usize, sheet: usize) -> usize {
+        PINCH + self.pinches.len() + 2 * j + usize::from(sheet == TRAIL)
+    }
+
+    /// The (t, ψ) of band `j`'s charts at (τ, η).
+    fn band_at(&self, j: usize, tau: f64, eta: f64) -> P2 {
+        let b = &self.bands[j];
+        let x = b.c + b.ex * (b.mid(eta) + b.w * tau.sinh()) + b.ey * eta;
+        P2::new(x.x.clamp(0.0, 1.0), x.y)
+    }
+
+    /// The place on band `j`'s charts of a (t, ψ).
+    fn band_uv(&self, j: usize, t: f64, psi: f64) -> P2 {
+        let b = &self.bands[j];
+        let d = V2::new(t - b.c.x, wrap(psi - b.c.y, -PI, TAU));
+        let eta = d.dot(&b.ey);
+        P2::new(((d.dot(&b.ex) - b.mid(eta)) / b.w).asinh(), eta)
+    }
+
+    /// The band whose charts cover the sheets' (t, ψ): where they are left off.
+    fn in_band(&self, t: f64, psi: f64) -> Option<usize> {
+        (0..self.bands.len()).find(|&j| self.bands[j].out(self.band_uv(j, t, psi)) < 1.0)
     }
 
     /// The rate at which the distance of `p` from the core circle changes at the instant `t`.
@@ -1007,6 +1148,21 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
         }
     }
     let pinches = tube.find_pinches();
+    let near_pinches = tube.find_near_pinches(&pinches);
+    if std::env::var_os("CADRS_TUBE_NEAR").is_some() {
+        for &(c, least) in &near_pinches {
+            let d = tube.across_d(c.x, c.y).svd(true, true);
+            eprintln!(
+                "  near pinch at ({:.6}, {:.6}): across {least:.4e}; its derivative's singular values {:.4e}, {:.4e}; across it {:?}, along it {:?}",
+                c.x,
+                c.y,
+                d.singular_values[0],
+                d.singular_values[1],
+                d.v_t.as_ref().map(|v| v.row(0).transpose()),
+                d.v_t.as_ref().map(|v| v.row(1).transpose())
+            );
+        }
+    }
     if debug {
         eprintln!(
             "tube sweep: the core circle's sweep least regular {least:.5}; pinches {pinches:?}"
@@ -1066,7 +1222,151 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
             shape,
         });
     }
+    // Each near pinch's bands, where the sheets turn within less of (t, ψ) than their own
+    // patches follow (a tenth of a patch along the motion, as a pinch's seam stands off): out
+    // across the line to where the turn is that wide, and along it to where it is at its
+    // sharpest.
+    let follows = 0.1 / sheet_chunks as f64;
+    for (c, least) in near_pinches {
+        let svd = tube.across_d(c.x, c.y).svd(false, true);
+        let (Some(vt), sigma) = (svd.v_t, svd.singular_values[0]) else {
+            continue;
+        };
+        let w = least / sigma;
+        if w >= follows {
+            continue;
+        }
+        let (ex, ey) = (
+            V2::new(vt[(0, 0)], vt[(0, 1)]),
+            V2::new(vt[(1, 0)], vt[(1, 1)]),
+        );
+        // (The line itself, η along it: where across it the velocity across the circle is
+        // least, followed out from the near pinch each way, with how wide the turn is there.)
+        let least_at = |eta: f64, about: f64| -> (f64, f64) {
+            let size = |xi: f64| {
+                let x = c + ex * xi + ey * eta;
+                tube.across(x.x.clamp(0.0, 1.0), x.y).norm()
+            };
+            let (mut at, mut h) = (about, follows);
+            let mut best = size(at);
+            for _ in 0..30 {
+                for xi in [at - h, at + h] {
+                    let v = size(xi);
+                    if v < best {
+                        (best, at) = (v, xi);
+                    }
+                }
+                h *= 0.6;
+            }
+            (at, best / sigma)
+        };
+        let step = 0.01;
+        let mut line: Vec<(f64, f64)> = vec![(0.0, 0.0)];
+        let mut far: f64 = 0.0;
+        for side in [1.0, -1.0] {
+            let (mut eta, mut at) = (0.0, 0.0);
+            // (Out to where the turn is wide enough, and a quarter as far again for the chart.)
+            let mut end = f64::INFINITY;
+            while eta < end {
+                eta += step;
+                let (xi, wide) = least_at(side * eta, at);
+                at = xi;
+                line.push((side * eta, xi));
+                if wide >= follows && end.is_infinite() {
+                    far = far.max(eta);
+                    end = 1.3 * eta + step;
+                }
+                if eta > 1.5 {
+                    return refused(format!(
+                        "its core circle's sweep all but pinches along a curve (from {:.4}, {:.4})",
+                        c.x, c.y
+                    ));
+                }
+            }
+        }
+        // (A polynomial through the line's points, by least squares.)
+        let bend = {
+            let mut a = nalgebra::SMatrix::<f64, 5, 5>::zeros();
+            let mut b = nalgebra::SVector::<f64, 5>::zeros();
+            for &(eta, xi) in &line {
+                let row = nalgebra::SVector::<f64, 5>::from_fn(|i, _| eta.powi(i as i32));
+                a += row * row.transpose();
+                b += row * xi;
+            }
+            let Some(x) = a.lu().solve(&b) else {
+                return refused("a near pinch's line isn't made out".into());
+            };
+            [x[0], x[1], x[2], x[3], x[4]]
+        };
+        let band = Band {
+            c,
+            ex,
+            ey,
+            w,
+            reach: V2::new((follows / w).asinh(), 1.2 * far),
+            bend,
+        };
+        // (The chart's whole box inside the motion.)
+        let inside = [-1.0, 1.0].iter().all(|&a| {
+            [-1.0, 0.0, 1.0].iter().all(|&b| {
+                let x = c
+                    + ex * (band.mid(PINCH_REACH * band.reach.y * b)
+                        + w * (PINCH_REACH * band.reach.x * a).sinh())
+                    + ey * (PINCH_REACH * band.reach.y * b);
+                (0.02..=0.98).contains(&x.x)
+            })
+        });
+        if !inside {
+            return refused(format!(
+                "its core circle's sweep all but pinches at the motion's end ({:.4})",
+                c.x
+            ));
+        }
+        if debug {
+            eprintln!(
+                "tube sweep: a near pinch at ({:.6}, {:.6}), the turn {w:.3e} wide there: its bands reach {:.3} in τ, {:.3} along (the line's bend {:?})",
+                c.x, c.y, band.reach.x, band.reach.y, band.bend
+            );
+        }
+        tube.bands.push(band);
+    }
     let tube = tube;
+    if let Ok(v) = std::env::var("CADRS_TUBE_ACROSS") {
+        // t, ψ, r: the least size of the velocity across the circle within r of there (r of ψ
+        // in units of a turn), on a grid and then refined on finer ones.
+        let v: Vec<f64> = v.split(',').filter_map(|w| w.trim().parse().ok()).collect();
+        if let [t, psi, r] = v[..] {
+            let (mut c, mut r) = (P2::new(t, psi), r);
+            for _ in 0..8 {
+                let mut best = (f64::INFINITY, c);
+                for i in 0..=200 {
+                    for k in 0..=200 {
+                        let w = P2::new(
+                            (c.x + r * (i as f64 / 100.0 - 1.0)).clamp(0.0, 1.0),
+                            c.y + TAU * r * (k as f64 / 100.0 - 1.0),
+                        );
+                        let a = tube.across(w.x, w.y).norm();
+                        if a < best.0 {
+                            best = (a, w);
+                        }
+                    }
+                }
+                let d = tube.across_d(best.1.x, best.1.y);
+                eprintln!(
+                    "  across least {:.6e} at ({:.9}, {:.9}) within {r:.2e}: there {:?}, its derivative's determinant {:.4e} (columns {:?}, {:?})",
+                    best.0,
+                    best.1.x,
+                    best.1.y,
+                    tube.across(best.1.x, best.1.y),
+                    d.determinant(),
+                    d.column(0).transpose(),
+                    d.column(1).transpose()
+                );
+                c = best.1;
+                r *= 0.1;
+            }
+        }
+    }
     if std::env::var_os("CADRS_TUBE_SEAM").is_some() {
         // (Each pinch's seam in (t, ψ), and how far the chart's place read back is off.)
         for (k, pn) in tube.pinches.iter().enumerate() {
@@ -1106,6 +1406,17 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
                 PINCH_REACH,
                 TAU * q as f64 / 4.0,
                 TAU * (q + 1) as f64 / 4.0,
+            ));
+        }
+    }
+    for (j, b) in tube.bands.iter().enumerate() {
+        for sheet in [LEAD, TRAIL] {
+            patches.push((
+                tube.band_chart(j, sheet),
+                -PINCH_REACH * b.reach.x,
+                PINCH_REACH * b.reach.x,
+                -PINCH_REACH * b.reach.y,
+                PINCH_REACH * b.reach.y,
             ));
         }
     }
@@ -1621,7 +1932,7 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
                         );
                     }
                     let (fb, uvb) = if tau < -0.5 {
-                        fc.across_seam(chart, &x, kp.own, prefer.map(|p| p.1))?
+                        fc.across_seam(chart, &x, kp.own, tau, prefer.map(|p| p.1))?
                     } else {
                         fc.at(&x, tau, prefer.map(|p| p.1))?
                     };
@@ -1667,10 +1978,10 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
             .collect();
         let mut given: Vec<super::sweep_moving::Given> = traced.into_iter().flatten().collect();
         // (Two patches' crossing is read from each, and a patch's crossing of itself from each of
-        // its two places: one reading of the two kept. Where one runs along the other and stops
-        // short (a face's own reading of a curve gives out where its parameters are stretched
-        // thin, beside a pinch's seam, and its neighbour's doesn't), the longer; of two alike,
-        // the lower patch's or the first. A reading without its twin stays.)
+        // its two places: one reading of the two kept. Where one is a part of the other (a
+        // face's own reading of a curve gives out where its parameters are stretched thin,
+        // beside a pinch's seam, and its neighbour's doesn't), the whole one; of two alike, the
+        // lower patch's or the first. A reading without its twin stays.)
         {
             let near = 1e-5 * size;
             let length = |g: &super::sweep_moving::Given| -> f64 {
@@ -1747,11 +2058,16 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
                     if j == i || !keep[j] || (h.a, h.b) != (g.b, g.a) {
                         return false;
                     }
+                    if !along(g, h) {
+                        return false;
+                    }
+                    // (A part of the other goes. Each along the other, they are one curve read
+                    // twice: the one that winds back on itself, longer for it, goes; of two
+                    // alike, the higher patch's or the later.)
                     let lh = length(h);
-                    // (The shorter goes; of two as long, the higher patch's or the later.)
-                    let shorter =
-                        lg < lh - near || ((lg - lh).abs() <= near && (g.a > g.b || j < i));
-                    shorter && along(g, h)
+                    !along(h, g)
+                        || lg > lh + near
+                        || ((lg - lh).abs() <= near && (g.a > g.b || (g.a == g.b && j < i)))
                 });
                 if twin {
                     keep[i] = false;
@@ -2521,6 +2837,13 @@ impl Faces<'_> {
                     a: uv.x,
                     psi: uv.y,
                 };
+            } else if let Some(j) = self.tube.in_band(t, pos.psi) {
+                let uv = self.tube.band_uv(j, t, pos.psi);
+                pos = Pos {
+                    chart: self.tube.band_chart(j, pos.chart),
+                    a: uv.x,
+                    psi: uv.y,
+                };
             }
             first = self.sheet_at(&pos, prefer);
         }
@@ -2544,35 +2867,31 @@ impl Faces<'_> {
         first
     }
 
-    /// The face across a seam from a place of `chart` at `x` (its own instant `own`): the
-    /// pinch's chart's from a sheet, the sheet's from a pinch's chart.
+    /// The face across a seam (marked `mark`) from a place of `chart` at `x` (its own instant
+    /// `own`): the pinch's chart's or the band's from a sheet, the sheet's from either.
     fn across_seam(
         &self,
         chart: usize,
         x: &P3,
         own: f64,
+        mark: f64,
         prefer: Option<usize>,
     ) -> Option<(usize, P2)> {
+        let sheet = self.tube.sheet_pos(own, x);
+        let mark = (-1.0 - mark).round() as usize;
         let pos = if chart >= PINCH {
-            self.tube.sheet_pos(own, x)
-        } else {
-            let k = self
-                .tube
-                .in_pinch(own, self.tube.sheet_pos(own, x).psi)
-                .or_else(|| {
-                    // (On the seam itself, to rounding: the nearest pinch.)
-                    let psi = self.tube.sheet_pos(own, x).psi;
-                    (0..self.tube.pinches.len()).min_by(|&a, &b| {
-                        let d = |k: usize| {
-                            let c = self.tube.pinches[k].c;
-                            (own - c.x).hypot(wrap(psi - c.y, -PI, TAU))
-                        };
-                        d(a).total_cmp(&d(b))
-                    })
-                })?;
-            let uv = self.tube.pinch_uv(k, own, x);
+            sheet
+        } else if let Some(j) = mark.checked_sub(self.tube.pinches.len()) {
+            let uv = self.tube.band_uv(j, own, sheet.psi);
             Pos {
-                chart: PINCH + k,
+                chart: self.tube.band_chart(j, sheet.chart),
+                a: uv.x,
+                psi: uv.y,
+            }
+        } else {
+            let uv = self.tube.pinch_uv(mark, own, x);
+            Pos {
+                chart: PINCH + mark,
                 a: uv.x,
                 psi: uv.y,
             }
@@ -2584,7 +2903,10 @@ impl Faces<'_> {
     /// point found on its boundary.
     fn clamped(&self, i: usize, x: &P3, tau: f64) -> P2 {
         let p = self.patches[i];
-        let uv = if i < self.sheets && p.0 >= PINCH {
+        let uv = if let Some((j, _)) = self.tube.band(p.0).filter(|_| i < self.sheets) {
+            let t = self.tube.foot(tau, x);
+            self.tube.band_uv(j, t, self.tube.sheet_pos(t, x).psi)
+        } else if i < self.sheets && p.0 >= PINCH {
             let uv = self.tube.pinch_uv(p.0 - PINCH, self.tube.foot(tau, x), x);
             P2::new(uv.x, wrap(uv.y, 0.5 * (p.3 + p.4) - PI, TAU))
         } else if i < self.sheets {
@@ -3135,8 +3457,9 @@ fn chain_runs(
                 // least of its own, which it may not have far off the boundary.)
                 let ends = (p0, w);
                 // (Where the two meet in a thin spike the grid cut the tip off, the corner is
-                // many times as far off as the cut is wide.)
-                let reach = 12.0 * d.norm() + 1e-9;
+                // as many times as far off as the cut is wide as the spike is sharp: down to a
+                // degree of angle here.)
+                let reach = 60.0 * d.norm() + 1e-9;
                 let tries = [
                     ends.0,
                     ends.1,

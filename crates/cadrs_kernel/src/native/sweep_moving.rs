@@ -2818,6 +2818,45 @@ fn assemble(faces: &[Body], near: f64, tol: f64) -> Result<Body> {
         }
     }
     super::unify::compact(&mut b);
+    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+        // (The edges left with one face: where the faces don't close.)
+        let ef = b.edge_faces();
+        for (e, ed) in b.edges.iter().enumerate() {
+            if ed.degenerate || ef[e].len() == 2 {
+                continue;
+            }
+            let (p, q) = (ed.point(ed.t[0]), ed.point(ed.t[1]));
+            let places: Vec<String> = b
+                .faces
+                .iter()
+                .enumerate()
+                .flat_map(|(fi, f)| {
+                    f.loops
+                        .iter()
+                        .flatten()
+                        .filter(|c| c.edge == e)
+                        .map(move |c| {
+                            let (a, z) = (c.pc.point(ed.t[0]), c.pc.point(ed.t[1]));
+                            format!(
+                                "face {fi} ({:.5}, {:.5}) -> ({:.5}, {:.5})",
+                                a.x, a.y, z.x, z.y
+                            )
+                        })
+                })
+                .collect();
+            eprintln!(
+                "  edge {e} has {} faces: {:.3e} long, [{:.6}, {:.6}, {:.6}] -> [{:.6}, {:.6}, {:.6}]; {places:?}",
+                ef[e].len(),
+                (q - p).norm(),
+                p.x,
+                p.y,
+                p.z,
+                q.x,
+                q.y,
+                q.z
+            );
+        }
+    }
     super::boolean::assemble_shells(&mut b)?;
     Ok(b)
 }
