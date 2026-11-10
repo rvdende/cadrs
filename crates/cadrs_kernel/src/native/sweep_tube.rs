@@ -3297,8 +3297,9 @@ fn trace(
                         .or_else(|| onto_boundary(&near, w, d, tau, bx))
                 }
             };
-            let mut out = Vec::new();
-            for chain in chains {
+            // (Each chain's runs on its own, and put together in the chains' order.)
+            let run_of = |chain: &Chain| {
+                let mut out = Vec::new();
                 if let Ok(want) = std::env::var("CADRS_TUBE_CROSS") {
                     let v: Vec<f64> = want.split(',').filter_map(|w| w.parse().ok()).collect();
                     if v.len() == 2
@@ -3314,9 +3315,12 @@ fn trace(
                     }
                 }
                 chain_runs(
-                    &chain, &pair, &place, &onto, &margin, jump, &places, &mut out,
+                    chain, &pair, &place, &onto, &margin, jump, &places, &mut out,
                 );
-            }
+                out
+            };
+            let out: Vec<super::sweep_moving::Given> =
+                chains.par_iter().map(run_of).flatten_iter().collect();
             if std::env::var_os("CADRS_TUBE_TIMES").is_some() {
                 eprintln!(
                     "  trace: sheet {i}: runs {:.0} ms ({} curves)",
@@ -3522,36 +3526,42 @@ const PATCH_DEGREE: usize = 5;
 
 /// The B-spline (of `PATCH_DEGREE`) through a chart's points at the sites `us` by `vs`.
 pub(super) fn tensor(
-    at: &dyn Fn(f64, f64) -> P3,
+    at: &(dyn Fn(f64, f64) -> P3 + Sync),
     us: &[f64],
     vs: &[f64],
 ) -> super::nurbs::NurbsSurface {
     use super::nurbs::{H, NurbsCurve, NurbsSurface, hom};
-    // Along u at each v, then the poles' columns along v.
+    use rayon::prelude::*;
+    // Along u at each v, then the poles' columns along v (each row and each column on its
+    // own: a sheet of many sites is most of a sweep's fitting).
     let rows: Vec<NurbsCurve> = vs
-        .iter()
+        .par_iter()
         .map(|&v| {
             let pts: Vec<P3> = us.iter().map(|&u| at(u, v)).collect();
             NurbsCurve::interpolate(&pts, us, PATCH_DEGREE, None, None)
         })
         .collect();
     let nu = rows[0].cps.len();
-    let mut cps: Vec<Vec<H>> = Vec::with_capacity(nu);
-    let mut kv = Vec::new();
-    for i in 0..nu {
-        let col: Vec<P3> = rows
-            .iter()
-            .map(|c| super::nurbs::dehom(&c.cps[i]))
-            .collect();
-        let c = NurbsCurve::interpolate(&col, vs, PATCH_DEGREE, None, None);
-        kv = c.knots.clone();
-        cps.push(
+    let cols: Vec<NurbsCurve> = (0..nu)
+        .into_par_iter()
+        .map(|i| {
+            let col: Vec<P3> = rows
+                .iter()
+                .map(|c| super::nurbs::dehom(&c.cps[i]))
+                .collect();
+            NurbsCurve::interpolate(&col, vs, PATCH_DEGREE, None, None)
+        })
+        .collect();
+    let kv = cols.last().map(|c| c.knots.clone()).unwrap_or_default();
+    let cps: Vec<Vec<H>> = cols
+        .iter()
+        .map(|c| {
             c.cps
                 .iter()
                 .map(|h| hom(&super::nurbs::dehom(h), 1.0))
-                .collect(),
-        );
-    }
+                .collect()
+        })
+        .collect();
     NurbsSurface {
         du: rows[0].degree,
         dv: PATCH_DEGREE.min(vs.len() - 1),
@@ -3572,6 +3582,7 @@ fn fit_tensor(
     pts: &[(P3, P2)],
     tol: f64,
 ) -> std::result::Result<(super::nurbs::NurbsSurface, Dom), String> {
+    use rayon::prelude::*;
     let (chart, a0, a1, p0, p1) = sh.patch;
     let (mu, mv) = sh.grid;
     let (mut lo, mut hi) = (
@@ -3630,15 +3641,25 @@ fn fit_tensor(
         // (Along a site's line the surface is the curve through that line's points: a miss
         // midway along it is that direction's.)
         let mut split_u: Vec<bool> = (0..nu)
+            .into_par_iter()
             .map(|i| vs.iter().any(|&v| bad(mid(&us, i), v)))
             .collect();
         let mut split_v: Vec<bool> = (0..nv)
+            .into_par_iter()
             .map(|j| us.iter().any(|&u| bad(u, mid(&vs, j))))
             .collect();
-        let centres: Vec<(usize, usize)> =
-            (0..nu).flat_map(|i| (0..nv).map(move |j| (i, j))).collect();
-        for (i, j) in centres {
-            if !(split_u[i] || split_v[j]) && bad(mid(&us, i), mid(&vs, j)) {
+        // (The cells' centres where neither way is split yet: read together, then taken in
+        // order, a centre whose row or column an earlier one has split left be as before.)
+        let centres: Vec<(usize, usize)> = (0..nu)
+            .flat_map(|i| (0..nv).map(move |j| (i, j)))
+            .filter(|&(i, j)| !(split_u[i] || split_v[j]))
+            .collect();
+        let off: Vec<bool> = centres
+            .par_iter()
+            .map(|&(i, j)| bad(mid(&us, i), mid(&vs, j)))
+            .collect();
+        for (&(i, j), off) in centres.iter().zip(off) {
+            if off && !(split_u[i] || split_v[j]) {
                 split_u[i] = true;
                 split_v[j] = true;
             }
@@ -4217,7 +4238,9 @@ pub(super) fn cover_curves(
     }
     // The crossing on each grid edge whose ends differ: keyed by (i, j, along u?).
     type Key = (usize, usize, bool);
-    let mut cross: HashMap<Key, (P2, f64)> = HashMap::new();
+    // (Each grid edge membership changes along: the changes found side by side, none of
+    // them the others' business.)
+    let mut edges: Vec<(Key, P2, P2, f64)> = Vec::new();
     for i in 0..=mu {
         for j in 0..=mv {
             let a = node(i, j);
@@ -4229,27 +4252,33 @@ pub(super) fn cover_curves(
                 if a.0 == b.0 {
                     continue;
                 }
-                let c = if a.0 {
-                    crossing(fd, at(ni, nj), at(i, j), a.1)
+                edges.push(if a.0 {
+                    ((i, j, along), at(ni, nj), at(i, j), a.1)
                 } else {
-                    crossing(fd, at(i, j), at(ni, nj), b.1)
-                };
-                if let Ok(want) = std::env::var("CADRS_TUBE_CROSS") {
-                    let v: Vec<f64> = want.split(',').filter_map(|w| w.parse().ok()).collect();
-                    if v.len() == 2 && (c.0 - P2::new(v[0], v[1])).norm() < 1e-4 {
-                        eprintln!(
-                            "  crossing {:?} between nodes {:?} ({:?}) and {:?} ({:?}) of box {bx:?}, grid {mu} x {mv}; read there now {:?} and {:?}",
-                            c,
-                            at(i, j),
-                            a,
-                            at(ni, nj),
-                            b,
-                            (fd.cover)(at(i, j)),
-                            (fd.cover)(at(ni, nj))
-                        );
-                    }
-                }
-                cross.insert((i, j, along), c);
+                    ((i, j, along), at(i, j), at(ni, nj), b.1)
+                });
+            }
+        }
+    }
+    let cross: HashMap<Key, (P2, f64)> = {
+        use rayon::prelude::*;
+        edges
+            .par_iter()
+            .map(|&(key, kept, cov, tau)| (key, crossing(fd, kept, cov, tau)))
+            .collect()
+    };
+    if let Ok(want) = std::env::var("CADRS_TUBE_CROSS") {
+        let v: Vec<f64> = want.split(',').filter_map(|w| w.parse().ok()).collect();
+        for (&(i, j, along), c) in &cross {
+            if v.len() == 2 && (c.0 - P2::new(v[0], v[1])).norm() < 1e-4 {
+                let (ni, nj) = if along { (i + 1, j) } else { (i, j + 1) };
+                eprintln!(
+                    "  crossing {c:?} between nodes {:?} ({:?}) and {:?} ({:?}) of box {bx:?}, grid {mu} x {mv}",
+                    at(i, j),
+                    node(i, j),
+                    at(ni, nj),
+                    node(ni, nj)
+                );
             }
         }
     }
