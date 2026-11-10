@@ -115,3 +115,86 @@ fn a_leaning_ring_slid_past_its_fold_is_not_overfilled() {
     let volume = k.mass_properties(swept).unwrap().volume;
     assert!((volume - 282.0).abs() < 0.03, "volume {volume}");
 }
+
+/// A thread cut a lead at a time: a rod (a prism along the screw's axis) less a bar screwed
+/// from short of it to past it. One lead's slab is cut and its copies glued, the last cut
+/// short where the rod is no whole number of leads long; the solid is the one every half turn
+/// cut in turn makes (464.45743, by that way).
+#[test]
+fn a_thread_cut_a_lead_at_a_time_is_the_thread() {
+    let mut k = NativeKernel::new();
+    let line = |a: (f64, f64), b: (f64, f64)| Curve2::Line {
+        a: nalgebra::Point2::new(a.0, a.1),
+        b: nalgebra::Point2::new(b.0, b.1),
+        source: None,
+    };
+    let on = |z: f64| Plane {
+        origin: Point3::new(0.0, 0.0, z),
+        ..Plane::top()
+    };
+    let region = |outer: Loop| Region {
+        outer,
+        holes: vec![],
+        source: None,
+    };
+    let round = |radius: f64| Loop {
+        curves: vec![Curve2::Circle {
+            center: nalgebra::Point2::new(0.0, 0.0),
+            radius,
+            source: None,
+        }],
+    };
+    let bar = Loop {
+        curves: vec![
+            line((4.5, -8.0), (12.0, -8.0)),
+            line((12.0, -8.0), (12.0, 8.0)),
+            line((12.0, 8.0), (4.5, 8.0)),
+            line((4.5, 8.0), (4.5, -8.0)),
+        ],
+    };
+    let bar = k
+        .extrude(
+            &Profile::new(on(-0.45), vec![region(bar)]),
+            Extent::Blind(0.9),
+        )
+        .unwrap()
+        .bodies[0];
+    let within = k
+        .extrude(
+            &Profile::new(on(-1.45), vec![region(round(5.5))]),
+            Extent::Blind(2.9),
+        )
+        .unwrap()
+        .bodies[0];
+    let bar = k.boolean(BoolOp::Intersect, bar, &[within]).unwrap().bodies[0];
+    let rod = k
+        .extrude(
+            &Profile::new(on(0.0), vec![region(round(5.0))]),
+            Extent::Blind(7.3),
+        )
+        .unwrap()
+        .bodies[0];
+    let (lead, from, to) = (0.93, -std::f64::consts::TAU, 10.0 * std::f64::consts::TAU);
+    let rise = |turn: f64| Vector3::z() * (lead * turn / std::f64::consts::TAU);
+    let screw = SolidMotion::Rigid {
+        steps: vec![
+            RigidStep::Turn {
+                axis: Axis {
+                    origin: Point3::origin(),
+                    dir: Vector3::z_axis(),
+                },
+                from,
+                to,
+            },
+            RigidStep::Slide {
+                from: rise(from),
+                to: rise(to),
+            },
+        ],
+    };
+    let threaded = k.cut_swept(rod, bar, &screw).unwrap().bodies[0];
+    let faults = k.get(threaded).unwrap().check();
+    assert!(faults.is_empty(), "{faults:?}");
+    let volume = k.mass_properties(threaded).unwrap().volume;
+    assert!((volume - 464.457_43).abs() < 1e-5, "volume {volume}");
+}

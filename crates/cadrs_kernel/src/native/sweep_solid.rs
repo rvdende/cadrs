@@ -1513,6 +1513,17 @@ fn cut_in_pieces(
     b: &Body,
     steps: &[RigidStep],
 ) -> Option<OpResult> {
+    cut_in_pieces_where(k, target, b, steps, None)
+}
+
+/// [`cut_in_pieces`], by the pieces `only` picks alone (by their number, the first 0).
+fn cut_in_pieces_where(
+    k: &mut NativeKernel,
+    target: BodyId,
+    b: &Body,
+    steps: &[RigidStep],
+    only: Option<&dyn Fn(usize) -> bool>,
+) -> Option<OpResult> {
     let turn = steps
         .iter()
         .map(|s| match *s {
@@ -1552,12 +1563,30 @@ fn cut_in_pieces(
         }
     });
     let mut first: Option<(Option<Body>, Vec<Body>)> = None;
+    // (With only some pieces wanted, the first is swept all the same: the others are it.)
+    if only.is_some() && onward.is_some() {
+        let mut pieces: Vec<Body> = Vec::new();
+        let r = super::sweep_faces::by_faces_or_pieces(k, b, &part(0), Some(&mut pieces))
+            .ok()
+            .map(|r| r.bodies);
+        let whole = match r.as_deref() {
+            Some([s]) => k.get(*s).ok().map(|b| (**b).clone()),
+            _ => None,
+        };
+        for id in r.into_iter().flatten() {
+            k.release(id);
+        }
+        first = Some((whole, pieces));
+    }
     // The cuts one after another, the body checked once they are all made; if it isn't sound
     // then, again with a check after each (a cut that goes wrong is then made piece by piece).
     for checked in [false, true] {
         let mut acc = vec![target];
         let mut made = true;
         for i in 0..n {
+            if only.is_some_and(|wanted| !wanted(i)) {
+                continue;
+            }
             let mut pieces: Vec<Body> = Vec::new();
             let swept: Option<Vec<BodyId>> = match (&first, &onward) {
                 (Some((whole, parts)), Some(onward)) => {
@@ -1640,6 +1669,201 @@ fn cut_in_pieces(
         release_unless(k, &acc, target);
     }
     None
+}
+
+/// `target` less a screw's sweep, a lead at a time. Where the target is a prism along the
+/// screw's axis (every face a plane across it, or a plane, a cylinder or an extrusion along it)
+/// and the screw starts short of it and ends past it, what the screw cuts is the same in every
+/// lead of the target's length: one lead's slab is cut, by the few half turns that reach it,
+/// then copied along the axis and the copies glued face to face (a thread of twenty turns is
+/// otherwise forty cuts, each from a body the ones before have grown). None where that isn't
+/// so, or a step of it fails.
+fn cut_by_leads(
+    k: &mut NativeKernel,
+    target: BodyId,
+    b: &Body,
+    steps: &[RigidStep],
+) -> Option<OpResult> {
+    use super::surface::Surface;
+    let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+    // (`CADRS_SWEEP_LEADS=0`: every half turn cut in turn, as without this, to compare.)
+    if std::env::var("CADRS_SWEEP_LEADS").is_ok_and(|v| v == "0") {
+        return None;
+    }
+    let clock = web_time::Instant::now();
+    let (axis, angle, rise) = screw_of(steps)?;
+    let travel = rise.norm();
+    if travel <= tol::POINT || angle.abs() < 2.0 * TAU {
+        return None;
+    }
+    // (Along the axis the way the screw advances.)
+    let z = rise / travel;
+    let lead = travel * TAU / angle.abs();
+    let o = axis.origin;
+    let height = |p: &P3| (p - o).dot(&z);
+    let t = (**k.get(target).ok()?).clone();
+    let size = t.bbox().diagonal().max(tol::POINT);
+    let near = 1e-9 * size;
+    if t.solids.len() != 1 || t.verts.is_empty() {
+        return None;
+    }
+    let (t0, t1) = t
+        .verts
+        .iter()
+        .map(|v| height(&v.p))
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, z), h| {
+            (a.min(h), z.max(h))
+        });
+    let level = |h: f64| (h - t0).abs() <= near || (h - t1).abs() <= near;
+    if !t.verts.iter().all(|v| level(height(&v.p))) {
+        return None;
+    }
+    let along = |d: &V3| d.cross(&z).norm() <= 1e-9 * d.norm();
+    let across = |d: &V3| d.dot(&z).abs() <= 1e-9 * d.norm();
+    let prism = t.faces.iter().all(|f| match &f.surf {
+        Surface::Plane { f } => {
+            let n = f.x.cross(&f.y);
+            along(&n) || across(&n)
+        }
+        Surface::Cylinder { f, .. } => along(&f.z),
+        Surface::Extrusion { d, .. } => along(d),
+        _ => false,
+    });
+    if !prism {
+        return None;
+    }
+    // The screw's ends clear of the target: the tool wholly short of it where it starts and
+    // past it where it stops (by its box, which holds it at any turn about the axis).
+    let (d0, d1) = steps.iter().find_map(|s| match s {
+        RigidStep::Slide { from, to } => Some((from.dot(&z), to.dot(&z))),
+        RigidStep::Turn { .. } => None,
+    })?;
+    let bb = b.bbox();
+    let (hb0, hb1) = (0..8)
+        .map(|i| {
+            height(&P3::new(
+                if i & 1 == 0 { bb.min.x } else { bb.max.x },
+                if i & 2 == 0 { bb.min.y } else { bb.max.y },
+                if i & 4 == 0 { bb.min.z } else { bb.max.z },
+            ))
+        })
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, z), h| {
+            (a.min(h), z.max(h))
+        });
+    if !(hb1 + d0 < t0 - near && hb0 + d1 > t1 + near) {
+        return None;
+    }
+    let whole = ((t1 - t0) / lead + 1e-9).floor() as usize;
+    if whole < 2 {
+        return None;
+    }
+    let rest = (t1 - t0) - whole as f64 * lead;
+    // Everything past a height along the axis, as a block to cut away.
+    let reach = t.verts.iter().map(|v| (v.p - o).norm()).fold(0.0, f64::max) + size;
+    let past = |k: &mut NativeKernel, h: f64, depth: f64| -> Option<BodyId> {
+        let other = if z.x.abs() < 0.9 { V3::x() } else { V3::y() };
+        let x = (other - z * other.dot(&z)).normalize();
+        let plane = crate::Plane {
+            origin: o + z * h,
+            x_dir: nalgebra::Unit::new_normalize(x),
+            normal: nalgebra::Unit::new_normalize(z),
+        };
+        let corners = [
+            (-reach, -reach),
+            (reach, -reach),
+            (reach, reach),
+            (-reach, reach),
+        ];
+        let outer = crate::Loop {
+            curves: (0..4)
+                .map(|i| {
+                    let (a, b) = (corners[i], corners[(i + 1) % 4]);
+                    crate::Curve2::Line {
+                        a: nalgebra::Point2::new(a.0, a.1),
+                        b: nalgebra::Point2::new(b.0, b.1),
+                        source: None,
+                    }
+                })
+                .collect(),
+        };
+        let region = crate::Region {
+            outer,
+            holes: Vec::new(),
+            source: None,
+        };
+        let spec = crate::ExtrudeSpec::blind(nalgebra::Unit::new_normalize(z), depth);
+        k.extrude_with(&crate::Profile::new(plane, vec![region]), &spec)
+            .ok()?
+            .bodies
+            .first()
+            .copied()
+    };
+    let less = |k: &mut NativeKernel, body: BodyId, h: f64, depth: f64| -> Option<Body> {
+        let block = past(k, h, depth)?;
+        let cut = k.boolean(crate::BoolOp::Subtract, body, &[block]);
+        k.release(block);
+        let cut = cut.ok()?;
+        let one = match cut.bodies.as_slice() {
+            [one] => k.get(*one).ok().map(|b| (**b).clone()),
+            _ => None,
+        };
+        for id in cut.bodies {
+            k.release(id);
+        }
+        one
+    };
+    // One lead's slab of the target, and the half turns that reach it.
+    let slab = less(k, target, t0 + lead, (t1 - t0 - lead) + size)?;
+    let slab = k.insert(slab);
+    let n = (angle.abs() / PI).ceil() as usize;
+    let reaches = |i: usize| {
+        let (a, e) = (i as f64 / n as f64, (i + 1) as f64 / n as f64);
+        let (lo, hi) = (hb0 + d0 + (d1 - d0) * a, hb1 + d0 + (d1 - d0) * e);
+        hi > t0 - near && lo < t0 + lead + near
+    };
+    let cut = cut_in_pieces_where(k, slab, b, steps, Some(&reaches));
+    let unit = match cut.as_ref().map(|c| c.bodies.as_slice()) {
+        Some([one]) => k.get(*one).ok().map(|b| (**b).clone()),
+        _ => None,
+    };
+    for id in cut.into_iter().flat_map(|c| c.bodies) {
+        if id != slab {
+            k.release(id);
+        }
+    }
+    k.release(slab);
+    let unit = unit?;
+    if debug {
+        eprintln!(
+            "cut by leads: one lead of {whole} (and {rest:.3e} over) cut by {} half turns in {:.0} ms: {} faces",
+            (0..n).filter(|&i| reaches(i)).count(),
+            clock.elapsed().as_secs_f64() * 1e3,
+            unit.faces.len()
+        );
+    }
+    let moved = |j: usize| {
+        unit.transformed(&Affine {
+            m: nalgebra::Matrix3::identity(),
+            t: z * (lead * j as f64),
+        })
+    };
+    let mut all: Vec<Body> = (0..whole).map(moved).collect();
+    if rest > 1e-7 * size {
+        let copy = k.insert(moved(whole));
+        let last = less(k, copy, t1, lead + size);
+        k.release(copy);
+        all.push(last?);
+    }
+    let r = super::sweep_faces::glued_with(k, &all, size, true);
+    if debug {
+        eprintln!(
+            "cut by leads: {} slabs glued by {:.0} ms: {:?}",
+            all.len(),
+            clock.elapsed().as_secs_f64() * 1e3,
+            r.as_ref().map(|r| r.bodies.len())
+        );
+    }
+    r
 }
 
 /// Releases `ids` but `keep`.
@@ -1788,6 +2012,12 @@ pub fn cut_swept(
         _ => None,
     };
     let overlapping = long.is_some_and(|steps| turns_may_overlap(&b, steps));
+    if let Some(steps) = long
+        && overlapping
+        && let Some(r) = cut_by_leads(k, target, &b, steps)
+    {
+        return Ok(r);
+    }
     if let Some(steps) = long
         && overlapping
         && let Some(r) = cut_in_pieces(k, target, &b, steps)

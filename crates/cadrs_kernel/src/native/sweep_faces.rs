@@ -1599,7 +1599,18 @@ fn boundary_measure(b: &Body, fi: usize) -> (f64, P3) {
 /// pair of faces from two of them on one surface with the same boundary (the same measure and
 /// middle) and opposite outward normals dropped, the rest sewn into one closed solid. None when
 /// that fails.
-fn glued(k: &mut NativeKernel, all: &[Body], size: f64) -> Option<OpResult> {
+pub(super) fn glued(k: &mut NativeKernel, all: &[Body], size: f64) -> Option<OpResult> {
+    glued_with(k, all, size, false)
+}
+
+/// [`glued`]; with `apart`, of bodies known not to overlap (a body's own copies set side by
+/// side), which then needn't be shown.
+pub(super) fn glued_with(
+    k: &mut NativeKernel,
+    all: &[Body],
+    size: f64,
+    apart: bool,
+) -> Option<OpResult> {
     let close = 1e-7 * size.max(1.0);
     // Each face's measure and middle, and its outward normal near there: its area and
     // centroid, or on a surface that must be walked over to have them (a B-spline, a swept or
@@ -1669,55 +1680,57 @@ fn glued(k: &mut NativeKernel, all: &[Body], size: f64) -> Option<OpResult> {
     // turned tool can): every kept face then bounds the whole, so points just outside it lie
     // outside every body.
     let t_check = web_time::Instant::now();
-    let polys: Vec<Vec<Vec<Vec<P2>>>> = all
-        .iter()
-        .map(|b| {
-            b.faces
-                .iter()
-                .map(|f| super::classify::face_polygons(b, f))
-                .collect()
-        })
-        .collect();
-    // (Judged by ray parity, the majority of a few rays: no mesh, which a face folded along an
-    // edge can make huge; an overlap it finds confirmed by the body's winding number over its
-    // mesh, as a ray through the long helical B-spline faces a screw sweeps can miss a
-    // crossing.)
-    let boxes: Vec<Bbox> = all.iter().map(|b| b.bbox()).collect();
-    let mut meshes: Vec<Option<Vec<super::tess::FaceMesh>>> = vec![None; all.len()];
-    let eps = 1e-3 * size.max(1.0);
-    for (i, &(bi, fi, ..)) in faces.iter().enumerate() {
-        if dropped[i] {
-            continue;
-        }
-        let f = &all[bi].faces[fi];
-        let sign = if f.sense { 1.0 } else { -1.0 };
-        for q in super::boolean::interior_points_of_polys(&polys[bi][fi])
-            .into_iter()
-            .take(4)
-        {
-            let out = f.surf.eval(q.x, q.y) + f.surf.normal(q.x, q.y) * (sign * eps);
-            let inside = (0..all.len()).position(|bj| {
-                if bj == bi
-                    || !boxes[bj].contains(&out)
-                    || !super::classify::parity_inside(&all[bj], &polys[bj], &out)
-                {
-                    return false;
-                }
-                let m = meshes[bj].get_or_insert_with(|| {
-                    super::tess::mesh_body(&all[bj], 1e-4 * size.max(1.0), 0.3).0
+    if !apart {
+        let polys: Vec<Vec<Vec<Vec<P2>>>> = all
+            .iter()
+            .map(|b| {
+                b.faces
+                    .iter()
+                    .map(|f| super::classify::face_polygons(b, f))
+                    .collect()
+            })
+            .collect();
+        // (Judged by ray parity, the majority of a few rays: no mesh, which a face folded along an
+        // edge can make huge; an overlap it finds confirmed by the body's winding number over its
+        // mesh, as a ray through the long helical B-spline faces a screw sweeps can miss a
+        // crossing.)
+        let boxes: Vec<Bbox> = all.iter().map(|b| b.bbox()).collect();
+        let mut meshes: Vec<Option<Vec<super::tess::FaceMesh>>> = vec![None; all.len()];
+        let eps = 1e-3 * size.max(1.0);
+        for (i, &(bi, fi, ..)) in faces.iter().enumerate() {
+            if dropped[i] {
+                continue;
+            }
+            let f = &all[bi].faces[fi];
+            let sign = if f.sense { 1.0 } else { -1.0 };
+            for q in super::boolean::interior_points_of_polys(&polys[bi][fi])
+                .into_iter()
+                .take(4)
+            {
+                let out = f.surf.eval(q.x, q.y) + f.surf.normal(q.x, q.y) * (sign * eps);
+                let inside = (0..all.len()).position(|bj| {
+                    if bj == bi
+                        || !boxes[bj].contains(&out)
+                        || !super::classify::parity_inside(&all[bj], &polys[bj], &out)
+                    {
+                        return false;
+                    }
+                    let m = meshes[bj].get_or_insert_with(|| {
+                        super::tess::mesh_body(&all[bj], 1e-4 * size.max(1.0), 0.3).0
+                    });
+                    winding(m, &out) > 0.5
                 });
-                winding(m, &out) > 0.5
-            });
-            if let Some(bj) = inside {
-                if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
-                    eprintln!(
-                        "sweep by faces: the bodies overlap (face {fi} of body {bi}, {:?} {:.4?}, inside body {bj}; volumes {:.4?})",
-                        f.surf.kind(),
-                        out,
-                        all.iter().map(super::mass::body_volume).collect::<Vec<_>>()
-                    );
+                if let Some(bj) = inside {
+                    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+                        eprintln!(
+                            "sweep by faces: the bodies overlap (face {fi} of body {bi}, {:?} {:.4?}, inside body {bj}; volumes {:.4?})",
+                            f.surf.kind(),
+                            out,
+                            all.iter().map(super::mass::body_volume).collect::<Vec<_>>()
+                        );
+                    }
+                    return None;
                 }
-                return None;
             }
         }
     }

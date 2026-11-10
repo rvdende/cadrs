@@ -3677,6 +3677,22 @@ fn debug_screws() {
                     Err(e) => eprintln!("FAIL {name}: {e} (in {:.2?})", t0.elapsed()),
                 }
             }
+            // The fine thread at another lead and on a rod no whole number of leads long, the
+            // screw about a line that isn't an axis of the model.
+            "thread93" => {
+                let bar = block(
+                    &mut k,
+                    Point3::new(4.5, -8.0, -0.45),
+                    Point3::new(12.0, 8.0, 0.45),
+                );
+                let within = cylinder(&mut k, -1.45, 5.5, 2.9);
+                let bar = k.boolean(BoolOp::Intersect, bar, &[within]).unwrap().bodies[0];
+                let rod = cylinder(&mut k, 0.0, 5.0, 7.3);
+                match k.cut_swept(rod, bar, &screw(0.93, -360.0, 3600.0)) {
+                    Ok(r) => report(&k, r.bodies[0], name, t0),
+                    Err(e) => eprintln!("FAIL {name}: {e} (in {:.2?})", t0.elapsed()),
+                }
+            }
             // swept/box-screwed-inside-a-rod.
             "tunnel" => {
                 let tool = block(
