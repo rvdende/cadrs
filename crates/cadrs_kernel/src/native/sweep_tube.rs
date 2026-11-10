@@ -410,6 +410,7 @@ impl<'a> Tube<'a> {
     fn cover_in(&self, patch: &Patch, w: P2) -> (bool, f64) {
         let to = self.inward(patch, w);
         if to != w
+            && self.pipe(patch.0).is_none()
             && let Some(e) = self.end_cover(patch.0, w)
         {
             return (true, e);
@@ -421,6 +422,7 @@ impl<'a> Tube<'a> {
     fn cover_near_in(&self, patch: &Patch, w: P2, tc: f64) -> (bool, f64) {
         let to = self.inward(patch, w);
         if to != w
+            && self.pipe(patch.0).is_none()
             && let Some(e) = self.end_cover(patch.0, w)
         {
             return (true, e);
