@@ -1596,16 +1596,31 @@ fn boundary_measure(b: &Body, fi: usize) -> (f64, P3) {
 }
 
 /// The solid the closed bodies `all` make together where they only touch along whole faces: each
-/// pair of faces from two of them on one surface with the same boundary (its length and its
+/// pair of faces from two of them on one surface with the same boundary (the same measure and
 /// middle) and opposite outward normals dropped, the rest sewn into one closed solid. None when
 /// that fails.
 fn glued(k: &mut NativeKernel, all: &[Body], size: f64) -> Option<OpResult> {
     let close = 1e-7 * size.max(1.0);
-    // Each face's boundary's middle and length, and its outward normal near there.
+    // Each face's measure and middle, and its outward normal near there: its area and
+    // centroid, or on a surface that must be walked over to have them (a B-spline, a swept or
+    // a revolved one) its boundary's length and middle. (A face closed on itself by a seam has
+    // no outline to go by; the surfaces that have such integrate along their edges alone.)
+    let walked = |s: &super::surface::Surface| {
+        matches!(
+            s,
+            super::surface::Surface::Nurbs(_)
+                | super::surface::Surface::Extrusion { .. }
+                | super::surface::Surface::Revolution { .. }
+        )
+    };
     let mut faces: Vec<(usize, usize, P3, f64, V3)> = Vec::new();
     for (bi, b) in all.iter().enumerate() {
         for fi in 0..b.faces.len() {
-            let (a, c) = boundary_measure(b, fi);
+            let (a, c) = if walked(&b.faces[fi].surf) {
+                boundary_measure(b, fi)
+            } else {
+                super::mass::face_area(b, fi)
+            };
             let f = &b.faces[fi];
             let (u, v) = f.surf.project(&c, None);
             let n = f.surf.normal(u, v) * if f.sense { 1.0 } else { -1.0 };
@@ -1636,7 +1651,7 @@ fn glued(k: &mut NativeKernel, all: &[Body], size: f64) -> Option<OpResult> {
     if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
         for (i, f) in faces.iter().enumerate() {
             eprintln!(
-                "  glue: body {} face {} {:?} boundary's middle {:.4?} length {:.6} normal {:.3?}{}",
+                "  glue: body {} face {} {:?} middle {:.4?} measure {:.6} normal {:.3?}{}",
                 f.0,
                 f.1,
                 all[f.0].faces[f.1].surf.kind(),
