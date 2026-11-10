@@ -2593,12 +2593,14 @@ fn split_edge(b: &mut Body, e: usize, t: f64, w: usize) {
 
 /// Coedge `c` (on surface `surf`, along edge `from`) moved onto edge `to`, which runs along the
 /// same points: its p-curve put in `to`'s parameter (exactly where both are lines, else
-/// projected again), its direction turned where `to` runs the other way.
+/// projected again), its direction turned where `to` runs the other way. `near`: how far the
+/// surface may be off `to` (a fitted surface's fit).
 fn moved_coedge(
     c: &super::topo::Coedge,
     from: &super::topo::Edge,
     to: &super::topo::Edge,
     surf: &Surface,
+    near: f64,
 ) -> super::topo::Coedge {
     use super::topo::Coedge;
     let reversed = from.v[0] != to.v[0] || (from.v[0] == from.v[1]);
@@ -2654,7 +2656,7 @@ fn moved_coedge(
                     (surf.eval(uv.x, uv.y) - to.curve.point(t)).norm()
                 })
                 .fold(0.0, f64::max);
-            if worst <= 1e-9 * scale {
+            if worst <= (1e-9 * scale).max(near) {
                 return Coedge {
                     edge: c.edge,
                     fwd,
@@ -2681,9 +2683,12 @@ fn moved_coedge(
 }
 
 /// The kept faces (each a body of one face, facing out) joined into a body: vertices within
-/// `tol` one, an edge with another's vertex lying on it split there, and the two edges between
-/// the same vertices that lie on each other one, each face keeping its own p-curve.
-fn assemble(faces: &[Body], tol: f64) -> Result<Body> {
+/// `tol` one, an edge with another's vertex lying on it (within `near`) split there, and the
+/// two edges between the same vertices that lie on each other (within `near`) one, each face
+/// keeping its own p-curve.
+fn assemble(faces: &[Body], near: f64, tol: f64) -> Result<Body> {
+    // (An edge lies on another, or a vertex on an edge, within the faces' own looseness.)
+    let near = near.max(tol);
     let mut b = Body::default();
     for f in faces {
         b.append(f);
@@ -2731,7 +2736,7 @@ fn assemble(faces: &[Body], tol: f64) -> Result<Body> {
         let mut hits: Vec<(usize, f64, usize)> = Vec::new();
         for &e in &free {
             let ed = &b.edges[e];
-            let bb = super::boolean::curve_bbox(&ed.curve, ed.t[0], ed.t[1]).grow(tol);
+            let bb = super::boolean::curve_bbox(&ed.curve, ed.t[0], ed.t[1]).grow(near);
             let mut best: Option<(f64, f64, usize)> = None;
             for &w in &ends {
                 if ed.v.contains(&w) || !bb.contains(&b.verts[w].p) {
@@ -2741,9 +2746,9 @@ fn assemble(faces: &[Body], tol: f64) -> Result<Body> {
                 let t = ed.curve.closest(&p, ed.t[0], ed.t[1]);
                 let q = ed.curve.point(t);
                 let d = (q - p).norm();
-                if d <= tol
-                    && (q - ed.point(ed.t[0])).norm() > tol
-                    && (q - ed.point(ed.t[1])).norm() > tol
+                if d <= near
+                    && (q - ed.point(ed.t[0])).norm() > near
+                    && (q - ed.point(ed.t[1])).norm() > near
                     && best.is_none_or(|(bd, ..)| d < bd)
                 {
                     best = Some((d, t, w));
@@ -2791,7 +2796,7 @@ fn assemble(faces: &[Body], tol: f64) -> Result<Body> {
                 let close = [0.25, 0.5, 0.75].iter().all(|f| {
                     let m = ey.curve.point(ey.t[0] + (ey.t[1] - ey.t[0]) * f);
                     let t = ex.curve.closest(&m, ex.t[0], ex.t[1]);
-                    (ex.curve.point(t) - m).norm() <= tol
+                    (ex.curve.point(t) - m).norm() <= near
                 });
                 if close {
                     taken[x] = true;
@@ -2808,7 +2813,7 @@ fn assemble(faces: &[Body], tol: f64) -> Result<Body> {
             for ci in 0..b.faces[fi].loops[li].len() {
                 let c = b.faces[fi].loops[li][ci].clone();
                 if let Some(&x) = onto.get(&c.edge) {
-                    let mut nc = moved_coedge(&c, &b.edges[c.edge], &b.edges[x], &surf);
+                    let mut nc = moved_coedge(&c, &b.edges[c.edge], &b.edges[x], &surf, near);
                     nc.edge = x;
                     b.faces[fi].loops[li][ci] = nc;
                 }
@@ -3508,7 +3513,7 @@ fn swept(sw: &Sweep, size: f64) -> Result<Body> {
             (web_time::Instant::now() - t0).as_secs_f64() * 1e3
         );
     }
-    boundary_of(faces, &oracle, size, least, most, Vec::new(), None)
+    boundary_of(faces, &oracle, size, least, most, Vec::new(), None, 0.0)
 }
 
 /// The boundary of what a motion fills, from `faces` (sheets of one face each) that close a
@@ -3518,12 +3523,15 @@ fn swept(sw: &Sweep, size: f64) -> Result<Body> {
 /// the others cut along the curves the boundary crosses them by and their pieces judged again,
 /// the kept faces joined edge to edge (`given`: curves known by construction, taken before any
 /// are traced; with `member` they are all of them, each on the boundary all along: none is
-/// traced, and the faces and their pieces are judged by it, at places over them). Refused unless that makes one sound solid whose volume is between `least` and
+/// traced, and the faces and their pieces are judged by it, at places over them; `loose`: how
+/// far a face's surface may be off the curves and edges it is cut and joined along, a fitted
+/// face's fit). Refused unless that makes one sound solid whose volume is between `least` and
 /// `most`.
 /// Whether a candidate face's place (the face's index, its (u, v)) is inside the swept solid:
 /// read exactly, where the faces' maker can (a face fitted to a surface it knows).
 pub(crate) type Member<'a> = dyn Fn(usize, P2) -> bool + Sync + 'a;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn boundary_of(
     faces: Vec<Body>,
     oracle: &Oracle,
@@ -3532,6 +3540,7 @@ pub(crate) fn boundary_of(
     most: f64,
     given: Vec<Given>,
     member: Option<&Member>,
+    loose: f64,
 ) -> Result<Body> {
     use rayon::prelude::*;
     let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
@@ -3730,7 +3739,7 @@ pub(crate) fn boundary_of(
             let mut kept = Vec::new();
             // (Curves given whole end on a face's boundary exactly, in its own (u, v).)
             let (on, exact) = if member.is_some() {
-                (1e-6 * size, Some(1e-7))
+                ((1e-6 * size).max(8.0 * loose), Some(1e-7))
             } else {
                 (1e-7 * size, None)
             };
@@ -3832,6 +3841,7 @@ pub(crate) fn boundary_of(
         &keep,
         // (Curves given whole put their ends, and so the pieces' corners, where they are to
         // far within what makes two of them one vertex.)
+        (8.0 * loose).max(1e-9 * size),
         if member.is_some() {
             0.05 * GIVEN_VERTEX * size
         } else {
