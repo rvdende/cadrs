@@ -1506,6 +1506,26 @@ pub fn glued_groups(k: &mut NativeKernel, pieces: Vec<Body>) -> Vec<Body> {
         .map(|p| p.bbox().diagonal())
         .fold(0.0, f64::max)
         .max(tol::POINT);
+    // All of them at once, where they make one solid so (sewn and simplified the once: one at
+    // a time, each joins a group the ones before have grown).
+    if pieces.len() > 2
+        && let Some(r) = glued(k, &pieces, size)
+    {
+        let one = match r.bodies.as_slice() {
+            [id] => k
+                .get(*id)
+                .ok()
+                .filter(|b| b.solids.len() == 1)
+                .map(|b| (**b).clone()),
+            _ => None,
+        };
+        for id in r.bodies {
+            k.release(id);
+        }
+        if let Some(b) = one {
+            return vec![b];
+        }
+    }
     let mut groups: Vec<Body> = Vec::new();
     'piece: for p in pieces {
         for g in groups.iter_mut().rev() {
