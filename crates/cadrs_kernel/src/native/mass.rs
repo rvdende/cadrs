@@ -799,6 +799,51 @@ fn rect_integrals<const ALL: bool>(s: &Surface, ns: &NurbsSurface, r: [f64; 4], 
     acc
 }
 
+/// A B-spline face as the same face of its surface with u and v swapped (its p-curves with
+/// them, and its sense, as the natural normal turns over), where the surface has four times
+/// as many spans along u as along v, or more (a screw's long faces); else None.
+fn transposed(f: &Face) -> Option<Face> {
+    let Surface::Nurbs(ns) = &f.surf else {
+        return None;
+    };
+    let spans = |k: &[f64]| k.windows(2).filter(|w| w[1] > w[0]).count();
+    let (su, sv) = (spans(&ns.ku), spans(&ns.kv));
+    if su < 8 || su < 4 * sv {
+        return None;
+    }
+    let (nu, nv) = (ns.cps.len(), ns.cps.first()?.len());
+    let swapped = super::nurbs::NurbsSurface {
+        du: ns.dv,
+        dv: ns.du,
+        ku: ns.kv.clone(),
+        kv: ns.ku.clone(),
+        cps: (0..nv)
+            .map(|j| (0..nu).map(|i| ns.cps[i][j]).collect())
+            .collect(),
+    };
+    let swap = Affine {
+        m: nalgebra::Matrix3::new(0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0),
+        t: V3::zeros(),
+    };
+    Some(Face {
+        surf: Surface::Nurbs(std::sync::Arc::new(swapped)),
+        sense: !f.sense,
+        loops: f
+            .loops
+            .iter()
+            .map(|l| {
+                l.iter()
+                    .map(|c| super::topo::Coedge {
+                        edge: c.edge,
+                        fwd: c.fwd,
+                        pc: c.pc.transformed(&swap),
+                    })
+                    .collect()
+            })
+            .collect(),
+    })
+}
+
 /// The 14 face integrals of a face, relative to `shift`, oriented by its sense.
 pub fn face_integrals(body: &Body, f: &Face, shift: &V3) -> Q {
     let q = face_integrals_of::<true>(body, f, shift);
@@ -826,6 +871,12 @@ pub(crate) fn face_integrals_of<const ALL: bool>(body: &Body, f: &Face, shift: &
             }
         }
         return acc;
+    }
+    // A B-spline with four times as many spans along u as along v: its parameters swapped,
+    // so that the inner integral (taken along u, across every span from the reference to each
+    // point of the boundary) crosses the few.
+    if let Some(t) = transposed(f) {
+        return face_integrals_of::<ALL>(body, &t, shift);
     }
     // A surface of revolution whose face is a rectangle of its parameters (a revolved
     // section's side): its exact NURBS over the rectangle, by the tensor rule (each point along a
