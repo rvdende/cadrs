@@ -201,37 +201,64 @@ pub(crate) fn face_points(b: &Body, fi: usize, _size: f64) -> Vec<(P3, V3)> {
     // chord's way off the face's own edge, and beside a contact a point across it reads the
     // other way.)
     let (su, sv) = ((u1 - u0).max(1e-300), (v1 - v0).max(1e-300));
-    let near_outline = |q: P2| {
-        polys.iter().any(|poly| {
-            (0..poly.len()).any(|k| {
+    // (The outline's pieces in that measure, each with its box grown by the fiftieth: a point
+    // outside the box is further than that from the piece.)
+    const NEAR: f64 = 0.02;
+    let pieces: Vec<[f64; 4]> = polys
+        .iter()
+        .flat_map(|poly| {
+            (0..poly.len()).map(move |k| {
                 let (a, b2) = (poly[k], poly[(k + 1) % poly.len()]);
-                let (ax, ay, bx, by, qx, qy) =
-                    (a.x / su, a.y / sv, b2.x / su, b2.y / sv, q.x / su, q.y / sv);
-                let (dx, dy) = (bx - ax, by - ay);
-                let l2 = dx * dx + dy * dy;
-                let t = if l2 > 0.0 {
-                    (((qx - ax) * dx + (qy - ay) * dy) / l2).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
-                (ax + dx * t - qx).hypot(ay + dy * t - qy) < 0.02
+                [a.x / su, a.y / sv, b2.x / su, b2.y / sv]
             })
         })
-    };
-    let mut uvs: Vec<P2> = Vec::new();
-    for i in 0..=n {
-        for j in 0..=n {
-            let q = P2::new(
-                u0 + (u1 - u0) * (i as f64 + 0.5) / (n + 1) as f64,
-                v0 + (v1 - v0) * (j as f64 + 0.5) / (n + 1) as f64,
-            );
-            if super::classify::in_face(&polys, &f.surf, q, tol) == super::classify::InFace::Inside
-                && !near_outline(q)
+        .collect();
+    let near_outline = |q: P2| {
+        let (qx, qy) = (q.x / su, q.y / sv);
+        pieces.iter().any(|&[ax, ay, bx, by]| {
+            if qx < ax.min(bx) - NEAR
+                || qx > ax.max(bx) + NEAR
+                || qy < ay.min(by) - NEAR
+                || qy > ay.max(by) + NEAR
             {
-                uvs.push(q);
+                return false;
             }
-        }
-    }
+            let (dx, dy) = (bx - ax, by - ay);
+            let l2 = dx * dx + dy * dy;
+            let t = if l2 > 0.0 {
+                (((qx - ax) * dx + (qy - ay) * dy) / l2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            (ax + dx * t - qx).hypot(ay + dy * t - qy) < NEAR
+        })
+    };
+    // (Row by row, side by side where the outline is long: each point is weighed against
+    // every piece of it.)
+    let row = |i: usize| -> Vec<P2> {
+        (0..=n)
+            .map(|j| {
+                P2::new(
+                    u0 + (u1 - u0) * (i as f64 + 0.5) / (n + 1) as f64,
+                    v0 + (v1 - v0) * (j as f64 + 0.5) / (n + 1) as f64,
+                )
+            })
+            .filter(|&q| {
+                super::classify::in_face(&polys, &f.surf, q, tol) == super::classify::InFace::Inside
+                    && !near_outline(q)
+            })
+            .collect()
+    };
+    let mut uvs: Vec<P2> = if super::par::threads_for(n + 1, pieces.len() >= 64) {
+        use rayon::prelude::*;
+        (0..=n)
+            .into_par_iter()
+            .map(row)
+            .collect::<Vec<_>>()
+            .concat()
+    } else {
+        (0..=n).flat_map(row).collect()
+    };
     // A sliver with no point clear of its outline: the outline's own points.
     if uvs.is_empty() {
         uvs = polys.iter().flatten().copied().collect();
@@ -1332,7 +1359,9 @@ pub fn by_faces_or_pieces(
         {
             let mut cut = (**k.get(*id)?).clone();
             quarter_turns(&mut cut, mv_angle(&mv));
-            if cut.is_solid() && cut.check().is_empty() {
+            // (Its make-up alone: faces of a sound solid cut along their own lines still
+            // face out.)
+            if cut.is_solid() && cut.check_structure().is_empty() {
                 if debug {
                     eprintln!(
                         "sweep by faces: cut into {} faces of a quarter turn",
@@ -1341,7 +1370,7 @@ pub fn by_faces_or_pieces(
                 }
                 k.release(*id);
                 return Ok(OpResult {
-                    bodies: vec![k.insert(cut)],
+                    bodies: vec![k.insert_sound(cut)],
                     history: History::default(),
                 });
             } else if debug {
@@ -1866,21 +1895,20 @@ fn glued_checked(k: &mut NativeKernel, id: BodyId, debug: bool) -> Option<OpResu
             super::mass::body_volume(b)
         );
     }
-    let ok = k
-        .get(id)
-        .ok()
-        .is_some_and(|b| b.is_solid() && b.check().is_empty());
-    if !ok {
+    if !(k.get(id).is_ok_and(|b| b.is_solid()) && k.sound(id)) {
         return None;
     }
     // The pieces' faces on one surface (a start face and the sweep of its edge, say) merged.
+    // (The merged body's make-up alone is checked: a sound solid's faces made one still face
+    // out.)
     let id = match super::surfacing::simplify(k, id) {
         Ok(s)
             if s.bodies.len() == 1
                 && k.get(s.bodies[0])
-                    .is_ok_and(|b| b.is_solid() && b.check().is_empty()) =>
+                    .is_ok_and(|b| b.is_solid() && b.check_structure().is_empty()) =>
         {
             k.release(id);
+            k.mark_sound(s.bodies[0]);
             s.bodies[0]
         }
         _ => id,

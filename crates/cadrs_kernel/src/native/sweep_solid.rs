@@ -570,9 +570,7 @@ fn cut_torus_whole(
     let cut = k.boolean(crate::BoolOp::Subtract, target, &[*s]);
     k.release(*s);
     if let Ok(c) = cut
-        && c.bodies
-            .iter()
-            .all(|&id| k.get(id).is_ok_and(|b| b.check().is_empty()))
+        && c.bodies.iter().all(|&id| k.sound(id))
     {
         return Some(c);
     }
@@ -1617,11 +1615,7 @@ fn cut_in_pieces_where(
                     let t_cut = web_time::Instant::now();
                     let r = cut
                         .ok()
-                        .filter(|c| {
-                            c.bodies.len() == 1
-                                && (!checked
-                                    || k.get(c.bodies[0]).is_ok_and(|b| b.check().is_empty()))
-                        })
+                        .filter(|c| c.bodies.len() == 1 && (!checked || k.sound(c.bodies[0])))
                         .map(|c| c.bodies);
                     if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
                         eprintln!(
@@ -1656,11 +1650,7 @@ fn cut_in_pieces_where(
         if !made {
             continue;
         }
-        if checked
-            || acc
-                .iter()
-                .all(|&id| k.get(id).is_ok_and(|b| b.check().is_empty()))
-        {
+        if checked || acc.iter().all(|&id| k.sound(id)) {
             return Some(OpResult {
                 bodies: acc,
                 history: History::default(),
@@ -1923,11 +1913,7 @@ fn cut_by_pieces(
                 continue;
             }
             match k.boolean(crate::BoolOp::Subtract, a, &[tool]) {
-                Ok(c)
-                    if c.bodies
-                        .iter()
-                        .all(|&id| k.get(id).is_ok_and(|b| b.check().is_empty())) =>
-                {
+                Ok(c) if c.bodies.iter().all(|&id| k.sound(id)) => {
                     next.extend(c.bodies);
                 }
                 r => {
@@ -1986,9 +1972,7 @@ pub fn cut_swept(
             let cut = k.boolean(crate::BoolOp::Subtract, target, &[*s]);
             k.release(*s);
             if let Ok(c) = cut
-                && c.bodies
-                    .iter()
-                    .all(|&id| k.get(id).is_ok_and(|b| b.check().is_empty()))
+                && c.bodies.iter().all(|&id| k.sound(id))
             {
                 return Ok(c);
             }
@@ -2088,9 +2072,7 @@ pub fn cut_swept(
         let cut = k.boolean(crate::BoolOp::Subtract, target, &[*s]);
         k.release(*s);
         if let Ok(c) = cut
-            && c.bodies
-                .iter()
-                .all(|&id| k.get(id).is_ok_and(|b| b.check().is_empty()))
+            && c.bodies.iter().all(|&id| k.sound(id))
         {
             return Ok(c);
         }

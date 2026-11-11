@@ -3,15 +3,18 @@
      IGES, STL and GLB it knows. Installing cadrs (crates/cadrs/src/install.rs) puts this in
      ~/.local/share/mime/packages, so a file manager offers cadrs for them (cadrs.desktop's
      MimeType). A STEP or BREP file is also text, and a cadrs document a ZIP: whatever opens
-     those still offers to. -->
+     those still offers to. Each names a generic icon that icon themes have: the default one,
+     `model-x-generic`, none has, and GNOME Files then draws its own fallback at full size. -->
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
   <mime-type type="application/x-cadrs">
     <comment>cadrs document</comment>
+    <generic-icon name="x-office-document"/>
     <sub-class-of type="application/zip"/>
     <glob pattern="*.cadrs"/>
   </mime-type>
   <mime-type type="model/step">
     <comment>STEP model</comment>
+    <generic-icon name="x-office-document"/>
     <sub-class-of type="text/plain"/>
     <magic priority="50">
       <match type="string" offset="0" value="ISO-10303-21;"/>
@@ -22,6 +25,7 @@
   </mime-type>
   <mime-type type="model/x-brep">
     <comment>BREP model</comment>
+    <generic-icon name="x-office-document"/>
     <sub-class-of type="text/plain"/>
     <glob pattern="*.brep"/>
     <glob pattern="*.brp"/>

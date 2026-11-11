@@ -3819,6 +3819,30 @@ fn debug_screws() {
                     Err(e) => eprintln!("FAIL {name}: {e} (in {:.2?})", t0.elapsed()),
                 }
             }
+            // swept/cone-point-screwed-through-rod.
+            "cone" => {
+                let tool = k
+                    .primitive(&Primitive::cone(
+                        Point3::new(12.0, 0.0, 0.0),
+                        -Vector3::x(),
+                        8.0 * 30f64.to_radians().tan(),
+                        0.0,
+                        8.0,
+                    ))
+                    .unwrap()
+                    .bodies[0];
+                let bb = k.bounding_box(tool).unwrap();
+                let within = cylinder(&mut k, bb.min.z - 1.0, 5.5, bb.max.z - bb.min.z + 2.0);
+                let tool = k
+                    .boolean(BoolOp::Intersect, tool, &[within])
+                    .unwrap()
+                    .bodies[0];
+                let rod = cylinder(&mut k, 0.0, 5.0, 20.0);
+                match k.cut_swept(rod, tool, &screw(6.0, -90.0, 1350.0)) {
+                    Ok(r) => report(&k, r.bodies[0], name, t0),
+                    Err(e) => eprintln!("FAIL {name}: {e} (in {:.2?})", t0.elapsed()),
+                }
+            }
             _ => eprintln!("no screw case {name}"),
         }
     }

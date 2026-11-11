@@ -33,6 +33,8 @@ pub struct Entry {
     aabb: OnceLock<Aabb>,
     /// Each face's box, grown by the body's largest tolerance ([`NativeKernel::surely_apart`]).
     face_boxes: OnceLock<Vec<Bbox>>,
+    /// Whether [`Body::check`] finds nothing ([`NativeKernel::sound`]).
+    sound: OnceLock<bool>,
 }
 
 impl Entry {
@@ -46,6 +48,7 @@ impl Entry {
             edges_shown: OnceLock::new(),
             aabb: OnceLock::new(),
             face_boxes: OnceLock::new(),
+            sound: OnceLock::new(),
         }
     }
     /// Each face's box, grown by the largest of the body's edge and vertex tolerances and
@@ -154,6 +157,29 @@ impl NativeKernel {
         self.next += 1;
         self.bodies.insert(id, Arc::new(Entry::new(body)));
         BodyId(id)
+    }
+
+    /// [`Self::insert`] for a body its maker has just checked ([`Body::check`] found nothing,
+    /// or it was cut from one such in a way that leaves it so): [`Self::sound`] needn't again.
+    pub(crate) fn insert_sound(&mut self, body: Body) -> BodyId {
+        let id = self.insert(body);
+        self.mark_sound(id);
+        id
+    }
+
+    /// Notes that a body of the session is sound ([`Self::insert_sound`], of one in it already).
+    pub(crate) fn mark_sound(&self, id: BodyId) {
+        if let Ok(e) = self.entry(id) {
+            let _ = e.sound.set(true);
+        }
+    }
+
+    /// Whether [`Body::check`] finds nothing wrong with a body of the session (false for no
+    /// such body). Checked once: a body never changes, and a sweep's steps each ask of the
+    /// body the step before handed on.
+    pub(crate) fn sound(&self, id: BodyId) -> bool {
+        self.entry(id)
+            .is_ok_and(|e| *e.sound.get_or_init(|| e.body.check().is_empty()))
     }
 
     /// Whether two solid bodies are sure to be apart, no boolean needed: no face of one comes
