@@ -1250,3 +1250,164 @@ fn chamfers_either_side_of_a_thin_rib_dont_overlap() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Shells of a cone frustum whose cavity never reaches the opening
+
+/// The frustum on the z axis from the disk of radius `r0` at z = 0 to the disk of radius `r1`
+/// at z = `h`.
+fn frustum(k: &mut NativeKernel, r0: f64, r1: f64, h: f64) -> BodyId {
+    k.primitive(&Primitive::cone(
+        Point3::origin(),
+        nalgebra::Vector3::z(),
+        r0,
+        r1,
+        h,
+    ))
+    .unwrap()
+    .first()
+    .unwrap()
+}
+
+/// `body` shelled inward to walls `t` thick, open at the faces through `openings`.
+fn shelled(k: &mut NativeKernel, body: BodyId, openings: &[[f64; 3]], t: f64) -> BodyId {
+    let remove = openings
+        .iter()
+        .map(|p| k.face_at(body, Point3::new(p[0], p[1], p[2])).unwrap())
+        .collect();
+    k.shell_with(body, &ShellSpec::inward(remove, t))
+        .unwrap()
+        .first()
+        .unwrap()
+}
+
+#[test]
+fn a_frustum_shelled_to_a_cavity_sealed_below_its_opening() {
+    // R = 6, r = 3, H = 4: its side 5 long, sin α = 3/5. The side moved 2.7 in is the cone whose
+    // apex is 2.7 / sin α = 4.5 lower, at z = 3.5, below the top: the cavity is the cone from
+    // the disk of radius 0.6 at z = 2.7 to that apex, its side 1 long, a void; the top stays.
+    // V = π H (R² + R r + r²) / 3 − π 0.6² 0.8 / 3, S = π (R² + r²) + π (R + r) 5 + π 0.6² + π 0.6.
+    let mut k = NativeKernel::new();
+    let f = frustum(&mut k, 6.0, 3.0, 4.0);
+    let b = shelled(&mut k, f, &[[1.0, 1.0, 4.0]], 2.7);
+    check(
+        &k,
+        b,
+        Want {
+            volume: 84.0 * PI - 0.096 * PI,
+            area: 90.0 * PI + 0.96 * PI,
+            faces: 5,
+            min: [-6.0, -6.0, 0.0],
+            max: [6.0, 6.0, 4.0],
+            centroid: None,
+        },
+    );
+}
+
+#[test]
+fn a_frustum_shelled_too_thick_to_hollow_is_itself() {
+    // The side moved 3.5 in has its apex at z = 13/6, below the base moved up to z = 3.5: no
+    // point of the frustum is farther than 3.5 from both, and nothing is hollowed.
+    let mut k = NativeKernel::new();
+    let f = frustum(&mut k, 6.0, 3.0, 4.0);
+    let b = shelled(&mut k, f, &[[1.0, 1.0, 4.0]], 3.5);
+    check(
+        &k,
+        b,
+        Want {
+            volume: 84.0 * PI,
+            area: 90.0 * PI,
+            faces: 3,
+            min: [-6.0, -6.0, 0.0],
+            max: [6.0, 6.0, 4.0],
+            centroid: None,
+        },
+    );
+}
+
+#[test]
+fn a_frustum_open_at_both_ends_closes_below_its_top() {
+    // Open at its base and its top, 2.7 thick: the moved side meets the base's plane in the
+    // circle of radius 0.75 · 3.5 = 2.625 and closes at z = 3.5, never reaching the top. The
+    // cavity is that cone, 3.5 deep, its side 4.375 long, open at the base only.
+    // V = 84 π − π 2.625² 3.5 / 3, S = π (R + r) 5 + π (R² − 2.625²) + π r² + π 2.625 · 4.375.
+    let mut k = NativeKernel::new();
+    let f = frustum(&mut k, 6.0, 3.0, 4.0);
+    let b = shelled(&mut k, f, &[[1.0, 1.0, 0.0], [1.0, 1.0, 4.0]], 2.7);
+    let a = 2.625;
+    check(
+        &k,
+        b,
+        Want {
+            volume: 84.0 * PI - PI * a * a * 3.5 / 3.0,
+            area: 45.0 * PI + PI * (36.0 - a * a) + 9.0 * PI + PI * a * 4.375,
+            faces: 4,
+            min: [-6.0, -6.0, 0.0],
+            max: [6.0, 6.0, 4.0],
+            centroid: None,
+        },
+    );
+}
+
+#[test]
+fn a_bored_frustum_shelled_to_a_ring_sealed_below_its_opening() {
+    // Bored through by a hole of radius 1 and shelled 1 thick, open at its top: the side moved
+    // in is ρ = 4.75 − 3z/4, the base moved up z = 1, the bore moved out ρ = 2. They close on
+    // one another in the triangle (2, 1), (4, 1), (2, 11/3) of (ρ, z), 1/3 below the top: a ring,
+    // its section's area 8/3 and centroid at ρ = 8/3, its sides 2, 8/3 and 10/3.
+    // V = 84 π − 4 π − 2 π (8/3)(8/3), S = π 9 · 5 + π (36 − 1) + π (9 − 1) + 2 π 4
+    //   + π (16 − 4) + 2 π 2 (8/3) + π (4 + 2)(10/3).
+    let mut k = NativeKernel::new();
+    let f = frustum(&mut k, 6.0, 3.0, 4.0);
+    let drill = k
+        .primitive(&Primitive::cylinder(
+            Point3::new(0.0, 0.0, -1.0),
+            nalgebra::Vector3::z(),
+            1.0,
+            6.0,
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let bored = k
+        .boolean(BoolOp::Subtract, f, &[drill])
+        .unwrap()
+        .first()
+        .unwrap();
+    let b = shelled(&mut k, bored, &[[0.0, 2.0, 4.0]], 1.0);
+    check(
+        &k,
+        b,
+        Want {
+            volume: 592.0 * PI / 9.0,
+            area: 416.0 * PI / 3.0,
+            faces: 7,
+            min: [-6.0, -6.0, 0.0],
+            max: [6.0, 6.0, 4.0],
+            centroid: None,
+        },
+    );
+}
+
+#[test]
+fn a_tall_frustum_shelled_to_a_cone_sealed_well_below_its_narrow_top() {
+    // R = 7, r = 1, H = 8, the side 10 long; 2 thick. The top is narrower than the wall is
+    // thick: the moved side closes at z = 6, and the cavity is the cone from the disk of radius
+    // 3 at z = 2 to that point, its side 5 long.
+    // V = π 8 (49 + 7 + 1) / 3 − π 9 · 4 / 3, S = π (49 + 1) + π 8 · 10 + π 9 + π 3 · 5.
+    let mut k = NativeKernel::new();
+    let f = frustum(&mut k, 7.0, 1.0, 8.0);
+    let b = shelled(&mut k, f, &[[0.3, 0.3, 8.0]], 2.0);
+    check(
+        &k,
+        b,
+        Want {
+            volume: 140.0 * PI,
+            area: 154.0 * PI,
+            faces: 5,
+            min: [-7.0, -7.0, 0.0],
+            max: [7.0, 7.0, 8.0],
+            centroid: None,
+        },
+    );
+}

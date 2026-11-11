@@ -1191,6 +1191,17 @@ enum Support {
     Cylinder(P3, V3, f64, bool),
     /// Inside (true) or outside the sphere about c of radius r.
     Sphere(P3, f64, bool),
+    /// Inside (true) or outside the cone about the axis (o, z): of radius `r` at o, its radius
+    /// growing by `tan` a unit of height along z, `cos` the cosine of its half-angle (a moved
+    /// cone's radius at a height differs by the distance over that).
+    Cone {
+        o: P3,
+        z: V3,
+        r: f64,
+        tan: f64,
+        cos: f64,
+        inside: bool,
+    },
 }
 
 impl Support {
@@ -1207,13 +1218,29 @@ impl Support {
                 let rho = (p - c).norm();
                 if *inside { rho - r } else { r - rho }
             }
+            // (Past the apex the cone's radius is less than nothing: no point there is inside
+            // it, every one outside.)
+            Support::Cone {
+                o,
+                z,
+                r,
+                tan,
+                cos,
+                inside,
+            } => {
+                let w = p - o;
+                let h = w.dot(z);
+                let rho = (w - z * h).norm();
+                let off = (rho - (r + h * tan)) * cos;
+                if *inside { off } else { -off }
+            }
         }
     }
 }
 
 /// The cavity of an inward shell `t` thick open at the `remove` faces, when the surface of every
 /// wall (each face kept) bounds the whole body (the body on one side of the whole plane,
-/// cylinder or sphere): the walls moved in by t are then those surfaces moved in, extended or
+/// cylinder, sphere or cone): the walls moved in by t are then those surfaces moved in, extended or
 /// trimmed where they meet and run on to the openings, and the cavity is the body's points inside
 /// all of them. None when some wall's surface doesn't bound the body this way (an L-shaped
 /// block's inner walls cut across its other leg); Ok(None) when the cavity is empty, every point
@@ -1257,6 +1284,18 @@ fn cavity_of_supports(b: &Body, remove: &[usize], t: f64) -> Option<Result<Optio
                 Support::Cylinder(fr.o, z, *r, radial.dot(&n) > 0.0)
             }
             Surface::Sphere { f: fr, r } => Support::Sphere(fr.o, *r, (q - fr.o).dot(&n) > 0.0),
+            Surface::Cone { f: fr, r, a } if a.tan().abs() > tol::ANGULAR && a.cos() > 0.0 => {
+                let z = fr.z.normalize();
+                let radial = (q - fr.o) - z * (q - fr.o).dot(&z);
+                Support::Cone {
+                    o: fr.o,
+                    z,
+                    r: *r,
+                    tan: a.tan(),
+                    cos: a.cos(),
+                    inside: radial.dot(&n) > 0.0,
+                }
+            }
             _ => return None,
         };
         if pts.iter().any(|p| w.outside(p) > close) {
@@ -1294,12 +1333,66 @@ fn cavity_of_supports(b: &Body, remove: &[usize], t: f64) -> Option<Result<Optio
         let kind = crate::native::sweep::Prism { plane, dir: z };
         Ok(crate::native::sweep::sweep(&plane, &mf, &kind, 0.0, 2.0 * reach, false)?.body)
     };
+    // The solid inside the cone about (o, z) of radius `r` at o, growing by `tan` a unit of
+    // height: its part over the body's heights (and a margin), from its apex on where that
+    // lies among them. None where it has none there.
+    let cone = |o: P3, z: V3, r: f64, tan: f64| -> Result<Option<Body>> {
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        for p in &pts {
+            let h = (p - o).dot(&z);
+            (lo, hi) = (lo.min(h), hi.max(h));
+        }
+        let (mut lo, mut hi) = (lo - reach, hi + reach);
+        let apex = -r / tan;
+        if tan > 0.0 {
+            lo = lo.max(apex);
+        } else {
+            hi = hi.min(apex);
+        }
+        if hi - lo <= close {
+            return Ok(None);
+        }
+        let at = |h: f64| (r + h * tan).max(0.0);
+        let mut k = NativeKernel::new();
+        let made = k.primitive(&Primitive::Cone {
+            base: o + z * lo,
+            axis: nalgebra::Unit::new_normalize(z),
+            base_radius: at(lo),
+            top_radius: at(hi),
+            height: hi - lo,
+        })?;
+        Ok(Some((**k.get(made.first()?)?).clone()))
+    };
     Some((|| {
         let mut cavity = b.clone();
         // The walls moved in: the regions the cavity is within, then those it is outside.
         let mut keep: Vec<(Body, BoolOp)> = Vec::new();
         for w in &walls {
             keep.push(match *w {
+                // (A cone moved by t square to itself: at each height its radius t over the
+                // cosine of its half-angle less, or more.)
+                Support::Cone {
+                    o,
+                    z,
+                    r,
+                    tan,
+                    cos,
+                    inside: true,
+                } => match cone(o, z, r - t / cos, tan)? {
+                    Some(c) => (c, BoolOp::Intersect),
+                    None => return Ok(None),
+                },
+                Support::Cone {
+                    o,
+                    z,
+                    r,
+                    tan,
+                    cos,
+                    inside: false,
+                } => match cone(o, z, r + t / cos, tan)? {
+                    Some(c) => (c, BoolOp::Subtract),
+                    None => continue,
+                },
                 Support::Plane(o, n) => (
                     crate::native::ops::half_space_box(o - n * t, -n, &grown)?,
                     BoolOp::Intersect,
