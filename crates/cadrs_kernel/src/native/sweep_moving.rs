@@ -247,7 +247,22 @@ pub struct Oracle<'a> {
     /// Which candidate face (by its index among those given to [`boundary_of`]) holds a point
     /// the body's surface touches at an instant, with the point's (u, v) on it, when known.
     locate: Option<Locate<'a>>,
+    /// How far a point moves in the body's frame from the first sample to each: its turn's
+    /// part (to be multiplied by the point's distance from the origin) and its shift's, summed
+    /// along the samples. With a measure that changes no faster than the point moves (a
+    /// distance), they bound how far it can dip between two samples read.
+    travel: Option<Travel>,
 }
+
+/// [`Oracle::travel`]: the sums up to each sample, and the most between two neighbours.
+struct Travel {
+    turn: Vec<f64>,
+    shift: Vec<f64>,
+    step: (f64, f64),
+}
+
+/// Every how many samples the measure is read before the rest are, where they may matter.
+const STRIDE: usize = 8;
 
 /// (instant, point) ↦ the candidate faces the body's surface passes through the point on then
 /// (several where they share an edge there), each with the (u, v) there.
@@ -256,6 +271,17 @@ pub type Locate<'a> = Box<dyn Fn(f64, &P3) -> Vec<(usize, P2)> + Send + Sync + '
 impl<'a> Oracle<'a> {
     /// The test of a convex polyhedron, from its faces' planes (n · p = d, n outward).
     pub fn new(planes: Vec<(V3, f64)>, place: Place<'a>, samples: usize) -> Oracle<'a> {
+        // (By unit normals the measure is a distance from the planes: it changes no faster
+        // than the point moves.)
+        let unit = planes.iter().all(|(n, _)| (n.norm() - 1.0).abs() <= 1e-9);
+        let mut oracle = Self::planes_measure(planes, place, samples);
+        if unit {
+            oracle.travel = Some(oracle.travelled());
+        }
+        oracle
+    }
+
+    fn planes_measure(planes: Vec<(V3, f64)>, place: Place<'a>, samples: usize) -> Oracle<'a> {
         Self::with_measure(
             Box::new(move |q: &V3| {
                 planes
@@ -282,7 +308,75 @@ impl<'a> Oracle<'a> {
             places,
             place,
             locate: None,
+            travel: None,
         }
+    }
+
+    /// [`Oracle::travel`] of the samples as they are.
+    fn travelled(&self) -> Travel {
+        let n = self.places.len();
+        let (mut turn, mut shift) = (vec![0.0; n], vec![0.0; n]);
+        let mut step = (0.0f64, 0.0f64);
+        for k in 0..n.saturating_sub(1) {
+            let ((ra, da), (rb, db)) = (&self.places[k], &self.places[k + 1]);
+            let (qa, qb) = (ra.transpose(), rb.transpose());
+            // (A turn's change of a rotation moves a point by its largest singular value
+            // times the point's distance: the Frobenius norm over √2, for two rotations.)
+            let rho = (qb.matrix() - qa.matrix()).norm() / 2f64.sqrt() * (1.0 + 1e-9);
+            let tau = (qb * db - qa * da).norm();
+            turn[k + 1] = turn[k] + rho;
+            shift[k + 1] = shift[k] + tau;
+            step = (step.0.max(rho), step.1.max(tau));
+        }
+        Travel { turn, shift, step }
+    }
+
+    /// The measure at the samples for `x`, read only where a local least no higher than
+    /// `limit` (None: than the lowest of all, by a sample's travel) may lie; infinity at the
+    /// rest. Every [`STRIDE`]-th first, then the stretches between whose ends leave room for
+    /// one, the lowest bound first.
+    /// With them, how high a sample beside ones unread may be and still be a least (those
+    /// between it and the next read are bounded above it): infinity where all were read.
+    fn sampled(&self, x: &P3, limit: Option<f64>) -> (Vec<f64>, f64) {
+        let n = self.places.len();
+        let travel = match &self.travel {
+            Some(t) if n > 4 * STRIDE && (n - 1) % STRIDE == 0 => t,
+            _ => {
+                return (
+                    self.places.iter().map(|pl| self.at(pl, x)).collect(),
+                    f64::INFINITY,
+                );
+            }
+        };
+        let far = x.coords.norm();
+        let mut vals = vec![f64::INFINITY; n];
+        let mut best = f64::INFINITY;
+        for i in (0..n).step_by(STRIDE) {
+            vals[i] = self.at(&self.places[i], x);
+            best = best.min(vals[i]);
+        }
+        // (Between two samples read, no sample dips below half their sum less the travel.)
+        let stretches = (n - 1) / STRIDE;
+        let bound = |k: usize| {
+            let (i, j) = (k * STRIDE, (k + 1) * STRIDE);
+            let moved =
+                (travel.turn[j] - travel.turn[i]) * far + (travel.shift[j] - travel.shift[i]);
+            0.5 * (vals[i] + vals[j] - moved)
+        };
+        let mut order: Vec<(f64, usize)> = (0..stretches).map(|k| (bound(k), k)).collect();
+        order.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // (A least refined between its neighbours comes no lower than a sample's travel.)
+        let slack = travel.step.0 * far + travel.step.1;
+        for (low, k) in order {
+            if low > limit.unwrap_or(best) + slack {
+                break;
+            }
+            for i in k * STRIDE + 1..(k + 1) * STRIDE {
+                vals[i] = self.at(&self.places[i], x);
+                best = best.min(vals[i]);
+            }
+        }
+        (vals, limit.unwrap_or(best) + slack)
     }
 
     fn at(&self, (r, d): &(nalgebra::Rotation3<f64>, V3), x: &P3) -> f64 {
@@ -298,7 +392,7 @@ impl<'a> Oracle<'a> {
     /// planes), with the instant: the samples' local least values refined by golden-section
     /// search.
     pub fn depth(&self, x: &P3) -> (f64, f64) {
-        self.leasts(x)
+        self.leasts_of(x, self.sampled(x, None))
             .into_iter()
             .min_by(|a, b| a.0.total_cmp(&b.0))
             .unwrap_or((f64::INFINITY, 0.0))
@@ -307,11 +401,33 @@ impl<'a> Oracle<'a> {
     /// The local leasts over the motion (the four lowest of the samples', refined) of how far
     /// `x` lies outside the placed body, each with its instant.
     pub fn leasts(&self, x: &P3) -> Vec<(f64, f64)> {
-        let vals: Vec<f64> = self.places.iter().map(|pl| self.at(pl, x)).collect();
+        let vals = self.places.iter().map(|pl| self.at(pl, x)).collect();
+        self.leasts_of(x, (vals, f64::INFINITY))
+    }
+
+    /// [`Self::leasts`], those no higher than `limit` alone (and others, perhaps, that are).
+    pub fn leasts_within(&self, x: &P3, limit: f64) -> Vec<(f64, f64)> {
+        self.leasts_of(x, self.sampled(x, Some(limit)))
+    }
+
+    /// The local leasts of the samples' values for `x` ([`Self::sampled`]'s), the four lowest,
+    /// refined.
+    fn leasts_of(&self, x: &P3, (vals, unread): (Vec<f64>, f64)) -> Vec<(f64, f64)> {
         let n = vals.len();
+        // (Beside a sample left unread, a sample is a least where it is low enough that what
+        // was left unread is bounded above it; higher, it is none that matters.)
+        let below = |i: usize, o: usize| {
+            if vals[o].is_finite() {
+                vals[i] <= vals[o]
+            } else {
+                vals[i] <= unread
+            }
+        };
         let mut mins: Vec<usize> = (0..n)
             .filter(|&i| {
-                (i == 0 || vals[i] <= vals[i - 1]) && (i + 1 == n || vals[i] <= vals[i + 1])
+                vals[i].is_finite()
+                    && (i == 0 || below(i, i - 1))
+                    && (i + 1 == n || below(i, i + 1))
             })
             .collect();
         mins.sort_by(|&a, &b| vals[a].total_cmp(&vals[b]));
@@ -323,7 +439,9 @@ impl<'a> Oracle<'a> {
             let g = 0.5 * (5f64.sqrt() - 1.0);
             let (mut c, mut d) = (b - g * (b - a), a + g * (b - a));
             let (mut fc, mut fd) = (f(c), f(d));
-            for _ in 0..60 {
+            // (Forty halvings by the golden ratio: the instant to a billionth of the samples'
+            // spacing, where the least is flat to its square.)
+            for _ in 0..40 {
                 if fc < fd {
                     b = d;
                     d = c;
@@ -2106,11 +2224,8 @@ fn network(tr: &Tracer, mixed: &[usize], m: usize, given: Vec<Given>, complete: 
                 // `shallow` can be far along the face from where it begins).
                 let x_in = c.surf().eval(ui.x, ui.y);
                 let at = |uv: P2| c.surf().eval(uv.x, uv.y);
-                if let Some(&(_, t2)) = tr
-                    .oracle
-                    .leasts(&(x_in + c.normal(ui) * tr.eps))
-                    .iter()
-                    .min_by(|a, b| a.0.total_cmp(&b.0))
+                if let Some((_, t2)) = Some(tr.oracle.depth(&(x_in + c.normal(ui) * tr.eps)))
+                    .filter(|d| d.0.is_finite())
                     && tr.oracle.at_instant(t2, &at(uo0)) > 0.0
                     && tr.oracle.at_instant(t2, &at(ui0)) < 0.0
                 {
@@ -2208,7 +2323,7 @@ fn network(tr: &Tracer, mixed: &[usize], m: usize, given: Vec<Given>, complete: 
                     }
                 };
                 if let Some(locate) = &tr.oracle.locate {
-                    for (v, t) in tr.oracle.leasts(&x) {
+                    for (v, t) in tr.oracle.leasts_within(&x, 1e-5 * size) {
                         if v.abs() > 1e-5 * size {
                             continue;
                         }
