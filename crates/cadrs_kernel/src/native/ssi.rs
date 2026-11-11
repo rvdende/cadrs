@@ -1458,8 +1458,22 @@ pub fn sdist_hint(s: &Surface, p: &P3, hint: &mut Option<(f64, f64)>) -> f64 {
     // A hinted Newton may stall on the wrong side of a fold or on the domain's edge: when the
     // foot isn't square to the surface, check against a projection from a coarse grid.
     let r = p - q;
-    let tang = (r.dot(&su) / su.norm().max(tol::TINY)).abs()
-        + (r.dot(&sv) / sv.norm().max(tol::TINY)).abs();
+    // (Along a direction the foot is at the end of, with the point farther out that way, the
+    // foot is the surface's nearest there: nothing to be square to. Not where the surface
+    // closes on itself (its other end the same point), which a foot at its seam may only be
+    // stuck at.)
+    let ((u0, u1), (v0, v1)) = s.param_box();
+    let along = |x: f64, (lo, hi): (f64, f64), d: &V3, across: &dyn Fn(f64) -> P3| -> f64 {
+        let pull = r.dot(d) / d.norm().max(tol::TINY);
+        let at = 1e-12 * (hi - lo).abs();
+        let (low, high) = (x <= lo + at && pull <= 0.0, x >= hi - at && pull >= 0.0);
+        let open = (low || high)
+            && (across(if low { hi } else { lo }) - q).norm()
+                > tol::CONFUSION * (1.0 + q.coords.norm());
+        if open { 0.0 } else { pull.abs() }
+    };
+    let tang =
+        along(u, (u0, u1), &su, &|x| s.eval(x, v)) + along(v, (v0, v1), &sv, &|x| s.eval(u, x));
     if hint.is_some() && tang > 1e-7 * (1.0 + r.norm()) {
         let (u2, v2) = s.project_coarse(p, 8);
         let (q2, su2, sv2) = s.d1(u2, v2);
@@ -2250,7 +2264,13 @@ pub fn curve_surface(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Vec<f64> {
         Curve::Circle { .. } | Curve::Ellipse { .. } => {
             (((t1 - t0) / (PI / 32.0)).ceil() as usize).max(8)
         }
-        Curve::Nurbs(nc) => (nc.cps.len() * 8).clamp(16, 2000),
+        // (Eight a pole of the stretch asked about, not of the whole curve: an edge is often a
+        // short piece of a long one.)
+        Curve::Nurbs(nc) => {
+            let whole = nc.knots[nc.knots.len() - 1 - nc.degree] - nc.knots[nc.degree];
+            let part = ((t1 - t0).abs() / whole.max(tol::TINY)).min(1.0);
+            ((nc.cps.len() as f64 * 8.0 * part).ceil() as usize).clamp(16, 2000)
+        }
     };
     // The signed distance, its projection hinted (on B-spline and other non-implicit surfaces
     // a fresh projection is a global search): along the samples from the previous one, inside
@@ -2518,6 +2538,43 @@ pub fn curve_curve(
         }
     }
     super::ssi_cci::curve_curve(a, a0, a1, b, b0, b1, tol)
+}
+
+/// Two curved edges that are one curve over the whole of either (an exact curve and a fit of it,
+/// which weaves across it a hundred times within a tolerance or two): the overlap's ends, as
+/// [`curve_curve`] gives an overlap. None unless every one of a run of points along one lies
+/// within `loose` of the other.
+pub fn coincident_ends(
+    a: &Curve,
+    ra: (f64, f64),
+    b: &Curve,
+    rb: (f64, f64),
+    loose: f64,
+) -> Option<Vec<(f64, f64)>> {
+    if matches!(a, Curve::Line { .. }) || matches!(b, Curve::Line { .. }) {
+        return None;
+    }
+    let (ra, rb) = (
+        (ra.0.min(ra.1), ra.0.max(ra.1)),
+        (rb.0.min(rb.1), rb.0.max(rb.1)),
+    );
+    // (From the middle out: curves that only cross part at once.)
+    let lies = |c: &Curve, rc: (f64, f64), o: &Curve, ro: (f64, f64)| {
+        const N: usize = 32;
+        (0..=N)
+            .map(|i| {
+                if i % 2 == 0 {
+                    N / 2 + i / 2
+                } else {
+                    N / 2 - i.div_ceil(2)
+                }
+            })
+            .all(|i| {
+                let p = c.point(rc.0 + (rc.1 - rc.0) * i as f64 / N as f64);
+                (o.point(o.closest(&p, ro.0, ro.1)) - p).norm() <= loose
+            })
+    };
+    (lies(a, ra, b, rb) || lies(b, rb, a, ra)).then(|| overlap_ends(a, ra, b, rb, loose))
 }
 
 /// Where two segments come within `tol` at an end: each one's ends lying on the other, one point to

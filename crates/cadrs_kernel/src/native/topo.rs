@@ -1051,7 +1051,7 @@ impl Body {
                 if parity_orientation_with(&sub, sp) == Some(true) {
                     continue;
                 }
-                let v = super::mass::body_volume(&sub);
+                let v = super::mass::volume_for_sign(&sub);
                 if !(v > 0.0) {
                     errs.push(format!(
                         "solid {si} encloses a volume of {v:.3e} (its faces point in)"

@@ -120,7 +120,9 @@ impl Screw {
             if err <= tol || n >= 1 << 15 {
                 return me;
             }
-            n *= 2;
+            // (A quarter more sections a try: the rail's miss falls as their sixth power, and
+            // every side the screw sweeps carries a row of poles for each.)
+            n = (5 * n).div_ceil(4);
         }
     }
 
@@ -147,13 +149,26 @@ impl Screw {
 
     fn rail_nurbs(&self, p: &P3) -> crate::native::nurbs::NurbsCurve {
         let pts: Vec<P3> = self.v.iter().map(|&s| self.place(s).point(p)).collect();
+        // (Through its ends by the way the point is going there, where the lead is steady and
+        // that is known: a rail held only at its points strays most beside its ends, and took
+        // twice the sections.)
+        let (d0, d1) = match (self.steady(), pts.first(), pts.last()) {
+            (true, Some(a), Some(b)) => (Some(self.velocity(a)), Some(self.velocity(b))),
+            _ => (None, None),
+        };
         crate::native::nurbs::NurbsCurve::interpolate(
             &pts,
             &self.v,
             self.deg.min(pts.len() - 1),
-            None,
-            None,
+            d0,
+            d1,
         )
+    }
+
+    /// Whether the screw rises by its `lift` all the way (no lead that changes): a point's
+    /// velocity is then [`Self::velocity`]'s wherever it is.
+    fn steady(&self) -> bool {
+        self.rise.is_none()
     }
 
     fn rail(&self, p: &P3) -> Option<Curve> {
@@ -205,22 +220,59 @@ impl Screw {
             .map(|&s| n0.transformed(&self.place(s)))
             .collect();
         let q = self.deg.min(curves.len() - 1);
+        let paths: Vec<Vec<P3>> = (0..n0.cps.len())
+            .map(|i| {
+                curves
+                    .iter()
+                    .map(|c| P3::new(c.cps[i].x, c.cps[i].y, c.cps[i].z))
+                    .collect()
+            })
+            .collect();
         let mut cols: Vec<Vec<H>> = Vec::with_capacity(n0.cps.len());
         let mut kv = Vec::new();
-        for i in 0..n0.cps.len() {
-            let xyz: Vec<P3> = curves
+        // (The poles' paths through the same sections: one system for them all, where that
+        // is what each by itself would solve.)
+        // (Each path's ends by the way its pole is going there, as the rails': a weighted
+        // pole's velocity is its point's by its weight.)
+        let going = |c: &NurbsCurve| -> Vec<V3> {
+            c.cps
                 .iter()
-                .map(|c| P3::new(c.cps[i].x, c.cps[i].y, c.cps[i].z))
-                .collect();
-            let a = NurbsCurve::interpolate(&xyz, &self.v, q, None, None);
-            let w = n0.cps[i].w;
-            kv = a.knots.clone();
-            cols.push(
-                a.cps
-                    .iter()
-                    .map(|p| H::new(p.x, p.y, p.z, p.w * w))
-                    .collect(),
-            );
+                .map(|h| {
+                    let x = V3::new(h.x, h.y, h.z);
+                    self.z.cross(&(x - self.o.coords * h.w)) + self.z * (self.lift * h.w)
+                })
+                .collect()
+        };
+        let ends = match (self.steady(), curves.first(), curves.last()) {
+            (true, Some(a), Some(b)) => Some((going(a), going(b))),
+            _ => None,
+        };
+        let all = NurbsCurve::interpolate_all(
+            &paths,
+            &self.v,
+            q,
+            ends.as_ref().map(|(a, b)| (a.as_slice(), b.as_slice())),
+        );
+        if let Some((knots, poles)) = all {
+            kv = knots;
+            for (path, h) in poles.iter().zip(&n0.cps) {
+                cols.push(path.iter().map(|p| H::new(p.x, p.y, p.z, h.w)).collect());
+            }
+        } else {
+            for (i, (xyz, h)) in paths.iter().zip(&n0.cps).enumerate() {
+                let (d0, d1) = match &ends {
+                    Some((a, b)) => (Some(a[i]), Some(b[i])),
+                    None => (None, None),
+                };
+                let a = NurbsCurve::interpolate(xyz, &self.v, q, d0, d1);
+                kv = a.knots.clone();
+                cols.push(
+                    a.cps
+                        .iter()
+                        .map(|p| H::new(p.x, p.y, p.z, p.w * h.w))
+                        .collect(),
+                );
+            }
         }
         let sk = NurbsSurface {
             du: n0.degree,
@@ -474,7 +526,7 @@ pub fn sweep_body(b: &Body, mv: &BodyMove, s1: f64, whole: bool, source: u64) ->
     }
     // Built facing the way the sheet faces at the start: turn it out.
     let whole_body = crate::native::kernel::subset(o, &faces, true);
-    if crate::native::mass::body_volume(&whole_body) < 0.0 {
+    if crate::native::mass::volume_for_sign(&whole_body) < 0.0 {
         for f in &mut o.faces {
             Body::reverse_face(f);
         }
@@ -492,7 +544,7 @@ fn assemble_solids(o: &mut Body, faces: &[usize]) -> Result<()> {
     let pieces = o.face_components(faces);
     let vols: Vec<f64> = pieces
         .iter()
-        .map(|p| crate::native::mass::body_volume(&crate::native::kernel::subset(o, p, true)))
+        .map(|p| crate::native::mass::volume_for_sign(&crate::native::kernel::subset(o, p, true)))
         .collect();
     let mut outers: Vec<usize> = (0..pieces.len()).filter(|&k| vols[k] > 0.0).collect();
     outers.sort_by(|&a, &b| vols[a].total_cmp(&vols[b]));

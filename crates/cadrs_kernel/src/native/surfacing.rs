@@ -679,7 +679,9 @@ pub fn sewn_solid(b: Body, tol: f64) -> Result<Body> {
     if b.solids.is_empty() {
         return Err(invalid("The surfaces don't close"));
     }
-    let mut v = super::mass::body_volume(&b);
+    // (Which way it faces and whether it encloses anything: its volume's sign, roughly where
+    // that is plain.)
+    let mut v = super::mass::volume_for_sign(&b);
     if v < 0.0 {
         for f in &mut b.faces {
             Body::reverse_face(f);
@@ -856,7 +858,23 @@ pub fn sew_faces(mut b: Body, tol: f64) -> Result<Body> {
                 let old = b.edges[c.edge].clone();
                 let (ot0, _) = super::topo::co_range(&old, c.fwd);
                 let sp = c.pc.point(ot0);
-                let mut pc = super::pcurve::pcurve(&surf, &ed.curve, ed.t[0], ed.t[1], None);
+                // The face's own p-curve stands where the edge it gives way to is the same
+                // curve at the same parameters (two pieces' copies of one swept edge): no
+                // projection of the edge onto the face again, a point at a time.
+                let alike = same
+                    && !std::env::var("CADRS_SEW_REUSE").is_ok_and(|v| v == "0")
+                    && (old.t[0] - ed.t[0]).abs() <= 1e-12 * (1.0 + ed.t[0].abs())
+                    && (old.t[1] - ed.t[1]).abs() <= 1e-12 * (1.0 + ed.t[1].abs())
+                    && (0..=16).all(|i| {
+                        let t = ed.t[0] + (ed.t[1] - ed.t[0]) * i as f64 / 16.0;
+                        (old.curve.point(t) - ed.curve.point(t)).norm()
+                            <= 1e-10 * (1.0 + ed.curve.point(t).coords.norm())
+                    });
+                let mut pc = if alike {
+                    c.pc.clone()
+                } else {
+                    super::pcurve::pcurve(&surf, &ed.curve, ed.t[0], ed.t[1], None)
+                };
                 let (nt0, _) = super::topo::co_range(&ed, fwd);
                 let q = pc.point(nt0);
                 let du = if surf.u_periodic() {

@@ -247,7 +247,22 @@ pub struct Oracle<'a> {
     /// Which candidate face (by its index among those given to [`boundary_of`]) holds a point
     /// the body's surface touches at an instant, with the point's (u, v) on it, when known.
     locate: Option<Locate<'a>>,
+    /// How far a point moves in the body's frame from the first sample to each: its turn's
+    /// part (to be multiplied by the point's distance from the origin) and its shift's, summed
+    /// along the samples. With a measure that changes no faster than the point moves (a
+    /// distance), they bound how far it can dip between two samples read.
+    travel: Option<Travel>,
 }
+
+/// [`Oracle::travel`]: the sums up to each sample, and the most between two neighbours.
+struct Travel {
+    turn: Vec<f64>,
+    shift: Vec<f64>,
+    step: (f64, f64),
+}
+
+/// Every how many samples the measure is read before the rest are, where they may matter.
+const STRIDE: usize = 8;
 
 /// (instant, point) ↦ the candidate faces the body's surface passes through the point on then
 /// (several where they share an edge there), each with the (u, v) there.
@@ -256,6 +271,17 @@ pub type Locate<'a> = Box<dyn Fn(f64, &P3) -> Vec<(usize, P2)> + Send + Sync + '
 impl<'a> Oracle<'a> {
     /// The test of a convex polyhedron, from its faces' planes (n · p = d, n outward).
     pub fn new(planes: Vec<(V3, f64)>, place: Place<'a>, samples: usize) -> Oracle<'a> {
+        // (By unit normals the measure is a distance from the planes: it changes no faster
+        // than the point moves.)
+        let unit = planes.iter().all(|(n, _)| (n.norm() - 1.0).abs() <= 1e-9);
+        let mut oracle = Self::planes_measure(planes, place, samples);
+        if unit {
+            oracle.travel = Some(oracle.travelled());
+        }
+        oracle
+    }
+
+    fn planes_measure(planes: Vec<(V3, f64)>, place: Place<'a>, samples: usize) -> Oracle<'a> {
         Self::with_measure(
             Box::new(move |q: &V3| {
                 planes
@@ -282,7 +308,75 @@ impl<'a> Oracle<'a> {
             places,
             place,
             locate: None,
+            travel: None,
         }
+    }
+
+    /// [`Oracle::travel`] of the samples as they are.
+    fn travelled(&self) -> Travel {
+        let n = self.places.len();
+        let (mut turn, mut shift) = (vec![0.0; n], vec![0.0; n]);
+        let mut step = (0.0f64, 0.0f64);
+        for k in 0..n.saturating_sub(1) {
+            let ((ra, da), (rb, db)) = (&self.places[k], &self.places[k + 1]);
+            let (qa, qb) = (ra.transpose(), rb.transpose());
+            // (A turn's change of a rotation moves a point by its largest singular value
+            // times the point's distance: the Frobenius norm over √2, for two rotations.)
+            let rho = (qb.matrix() - qa.matrix()).norm() / 2f64.sqrt() * (1.0 + 1e-9);
+            let tau = (qb * db - qa * da).norm();
+            turn[k + 1] = turn[k] + rho;
+            shift[k + 1] = shift[k] + tau;
+            step = (step.0.max(rho), step.1.max(tau));
+        }
+        Travel { turn, shift, step }
+    }
+
+    /// The measure at the samples for `x`, read only where a local least no higher than
+    /// `limit` (None: than the lowest of all, by a sample's travel) may lie; infinity at the
+    /// rest. Every [`STRIDE`]-th first, then the stretches between whose ends leave room for
+    /// one, the lowest bound first.
+    /// With them, how high a sample beside ones unread may be and still be a least (those
+    /// between it and the next read are bounded above it): infinity where all were read.
+    fn sampled(&self, x: &P3, limit: Option<f64>) -> (Vec<f64>, f64) {
+        let n = self.places.len();
+        let travel = match &self.travel {
+            Some(t) if n > 4 * STRIDE && (n - 1).is_multiple_of(STRIDE) => t,
+            _ => {
+                return (
+                    self.places.iter().map(|pl| self.at(pl, x)).collect(),
+                    f64::INFINITY,
+                );
+            }
+        };
+        let far = x.coords.norm();
+        let mut vals = vec![f64::INFINITY; n];
+        let mut best = f64::INFINITY;
+        for i in (0..n).step_by(STRIDE) {
+            vals[i] = self.at(&self.places[i], x);
+            best = best.min(vals[i]);
+        }
+        // (Between two samples read, no sample dips below half their sum less the travel.)
+        let stretches = (n - 1) / STRIDE;
+        let bound = |k: usize| {
+            let (i, j) = (k * STRIDE, (k + 1) * STRIDE);
+            let moved =
+                (travel.turn[j] - travel.turn[i]) * far + (travel.shift[j] - travel.shift[i]);
+            0.5 * (vals[i] + vals[j] - moved)
+        };
+        let mut order: Vec<(f64, usize)> = (0..stretches).map(|k| (bound(k), k)).collect();
+        order.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // (A least refined between its neighbours comes no lower than a sample's travel.)
+        let slack = travel.step.0 * far + travel.step.1;
+        for (low, k) in order {
+            if low > limit.unwrap_or(best) + slack {
+                break;
+            }
+            for i in k * STRIDE + 1..(k + 1) * STRIDE {
+                vals[i] = self.at(&self.places[i], x);
+                best = best.min(vals[i]);
+            }
+        }
+        (vals, limit.unwrap_or(best) + slack)
     }
 
     fn at(&self, (r, d): &(nalgebra::Rotation3<f64>, V3), x: &P3) -> f64 {
@@ -298,7 +392,7 @@ impl<'a> Oracle<'a> {
     /// planes), with the instant: the samples' local least values refined by golden-section
     /// search.
     pub fn depth(&self, x: &P3) -> (f64, f64) {
-        self.leasts(x)
+        self.leasts_of(x, self.sampled(x, None))
             .into_iter()
             .min_by(|a, b| a.0.total_cmp(&b.0))
             .unwrap_or((f64::INFINITY, 0.0))
@@ -307,11 +401,33 @@ impl<'a> Oracle<'a> {
     /// The local leasts over the motion (the four lowest of the samples', refined) of how far
     /// `x` lies outside the placed body, each with its instant.
     pub fn leasts(&self, x: &P3) -> Vec<(f64, f64)> {
-        let vals: Vec<f64> = self.places.iter().map(|pl| self.at(pl, x)).collect();
+        let vals = self.places.iter().map(|pl| self.at(pl, x)).collect();
+        self.leasts_of(x, (vals, f64::INFINITY))
+    }
+
+    /// [`Self::leasts`], those no higher than `limit` alone (and others, perhaps, that are).
+    pub fn leasts_within(&self, x: &P3, limit: f64) -> Vec<(f64, f64)> {
+        self.leasts_of(x, self.sampled(x, Some(limit)))
+    }
+
+    /// The local leasts of the samples' values for `x` ([`Self::sampled`]'s), the four lowest,
+    /// refined.
+    fn leasts_of(&self, x: &P3, (vals, unread): (Vec<f64>, f64)) -> Vec<(f64, f64)> {
         let n = vals.len();
+        // (Beside a sample left unread, a sample is a least where it is low enough that what
+        // was left unread is bounded above it; higher, it is none that matters.)
+        let below = |i: usize, o: usize| {
+            if vals[o].is_finite() {
+                vals[i] <= vals[o]
+            } else {
+                vals[i] <= unread
+            }
+        };
         let mut mins: Vec<usize> = (0..n)
             .filter(|&i| {
-                (i == 0 || vals[i] <= vals[i - 1]) && (i + 1 == n || vals[i] <= vals[i + 1])
+                vals[i].is_finite()
+                    && (i == 0 || below(i, i - 1))
+                    && (i + 1 == n || below(i, i + 1))
             })
             .collect();
         mins.sort_by(|&a, &b| vals[a].total_cmp(&vals[b]));
@@ -323,7 +439,9 @@ impl<'a> Oracle<'a> {
             let g = 0.5 * (5f64.sqrt() - 1.0);
             let (mut c, mut d) = (b - g * (b - a), a + g * (b - a));
             let (mut fc, mut fd) = (f(c), f(d));
-            for _ in 0..60 {
+            // (Forty halvings by the golden ratio: the instant to a billionth of the samples'
+            // spacing, where the least is flat to its square.)
+            for _ in 0..40 {
                 if fc < fd {
                     b = d;
                     d = c;
@@ -2106,11 +2224,8 @@ fn network(tr: &Tracer, mixed: &[usize], m: usize, given: Vec<Given>, complete: 
                 // `shallow` can be far along the face from where it begins).
                 let x_in = c.surf().eval(ui.x, ui.y);
                 let at = |uv: P2| c.surf().eval(uv.x, uv.y);
-                if let Some(&(_, t2)) = tr
-                    .oracle
-                    .leasts(&(x_in + c.normal(ui) * tr.eps))
-                    .iter()
-                    .min_by(|a, b| a.0.total_cmp(&b.0))
+                if let Some((_, t2)) = Some(tr.oracle.depth(&(x_in + c.normal(ui) * tr.eps)))
+                    .filter(|d| d.0.is_finite())
                     && tr.oracle.at_instant(t2, &at(uo0)) > 0.0
                     && tr.oracle.at_instant(t2, &at(ui0)) < 0.0
                 {
@@ -2208,7 +2323,7 @@ fn network(tr: &Tracer, mixed: &[usize], m: usize, given: Vec<Given>, complete: 
                     }
                 };
                 if let Some(locate) = &tr.oracle.locate {
-                    for (v, t) in tr.oracle.leasts(&x) {
+                    for (v, t) in tr.oracle.leasts_within(&x, 1e-5 * size) {
                         if v.abs() > 1e-5 * size {
                             continue;
                         }
@@ -2687,9 +2802,23 @@ pub(crate) type Whole<'a> = dyn Fn(&Surface) -> bool + 'a;
 /// `tol` one, an edge with another's vertex lying on it (within `near`) split there, and the
 /// two edges between the same vertices that lie on each other (within `near`) one, each face
 /// keeping its own p-curve.
-fn assemble(faces: &[Body], near: f64, tol: f64, whole: Option<(&Whole, f64)>) -> Result<Body> {
+fn assemble(
+    faces: &[Body],
+    near: f64,
+    tol: f64,
+    whole: Option<(&Whole, f64)>,
+) -> Result<(Body, Option<f64>, bool)> {
     // (An edge lies on another, or a vertex on an edge, within the faces' own looseness.)
     let near = near.max(tol);
+    let clock = web_time::Instant::now();
+    let lap = |what: &str| {
+        if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+            eprintln!(
+                "  joining: {what} by {:.0} ms",
+                clock.elapsed().as_secs_f64() * 1e3
+            );
+        }
+    };
     let mut b = Body::default();
     for f in faces {
         b.append(f);
@@ -2766,6 +2895,7 @@ fn assemble(faces: &[Body], near: f64, tol: f64, whole: Option<(&Whole, f64)>) -
             split_edge(&mut b, e, t, w);
         }
     }
+    lap("vertices and T-junctions");
     // Edges.
     let ef = b.edge_faces();
     let mut by_ends: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
@@ -2861,6 +2991,7 @@ fn assemble(faces: &[Body], near: f64, tol: f64, whole: Option<(&Whole, f64)>) -
             );
         }
     }
+    lap("edges");
     // Faces cut apart only to be trimmed made whole again, if the body is as sound for it
     // (before its shells are made out, which is the dear part, and needn't be done twice).
     if let Some((whole, searched)) = whole {
@@ -2868,16 +2999,38 @@ fn assemble(faces: &[Body], near: f64, tol: f64, whole: Option<(&Whole, f64)>) -
         let from: Vec<Vec<(usize, usize)>> =
             (0..merged.faces.len()).map(|i| vec![(0, i)]).collect();
         let can: Vec<bool> = merged.faces.iter().map(|f| whole(&f.surf)).collect();
-        super::unify::unify_faces(&mut merged, from, &|f, g| can[f] && can[g]);
-        let before = super::mass::faces_volume(&b);
+        let from = super::unify::unify_faces(&mut merged, from, &|f, g| can[f] && can[g]);
+        lap("pieces made whole");
+        // (What each face adds to the volume, integrated once: a face left as it was adds
+        // what it did.)
+        let shift = b.bbox().center().coords;
+        let terms = super::mass::faces_volume_terms(&b, &shift);
+        let before: f64 = terms.iter().sum();
+        lap("volume before");
+        let after: Vec<f64> = merged
+            .faces
+            .iter()
+            .zip(&from)
+            .map(|(f, origin)| match origin.as_slice() {
+                [(_, i)] => terms[*i],
+                _ => super::mass::face_integrals_of::<false>(&merged, f, &shift)[4],
+            })
+            .collect();
+        let volume: f64 = after.iter().sum();
         let sound = merged.faces.len() < b.faces.len()
-            && (super::mass::faces_volume(&merged) - before).abs() <= 1e-7 * before.abs()
-            && super::boolean::assemble_shells(&mut merged).is_ok()
+            && (volume - before).abs() <= 1e-7 * before.abs()
             && {
+                lap("volume after");
+                super::boolean::assemble_shells_with(&mut merged, Some(&after)).is_ok()
+            }
+            && {
+                lap("shells");
                 // (Its edges' tolerances fitted as the caller will fit them.)
                 merged.fit_tolerances_searched(searched);
+                lap("tolerances");
                 merged.check().is_empty()
             };
+        lap("checked");
         if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
             eprintln!(
                 "moving sweep: {} faces, {} with the pieces of one surface made whole ({})",
@@ -2887,11 +3040,14 @@ fn assemble(faces: &[Body], near: f64, tol: f64, whole: Option<(&Whole, f64)>) -
             );
         }
         if sound {
-            return Ok(merged);
+            // (Checked, with its tolerances fitted as the caller fits them: not again.)
+            return Ok((merged, Some(volume), true));
         }
+        super::boolean::assemble_shells_with(&mut b, Some(&terms))?;
+        return Ok((b, Some(before), false));
     }
     super::boolean::assemble_shells(&mut b)?;
-    Ok(b)
+    Ok((b, None, false))
 }
 
 /// A stretch's curves: in space, and on each of its two faces (z = 0), over [0, its length].
@@ -3975,7 +4131,7 @@ pub(crate) fn boundary_of_some(
     // (wider only where faces meet nearly touching, and the curve between them is ill-defined).
     // (Vertices merged within three times the cutter's tolerance for an end on an edge: two
     // faces place a shared vertex each at its own edge's point.)
-    let mut solid = assemble(
+    let (mut solid, known, checked) = assemble(
         &keep,
         // (Curves given whole put their ends, and so the pieces' corners, where they are to
         // far within what makes two of them one vertex.)
@@ -3995,7 +4151,10 @@ pub(crate) fn boundary_of_some(
             t_tol.elapsed().as_secs_f64() * 1e3
         );
     }
-    let volume = super::mass::body_volume(&solid);
+    let volume = match known {
+        Some(v) if solid.is_solid() => v,
+        _ => super::mass::body_volume(&solid),
+    };
     if debug && !volume.is_finite() {
         for (vi, v) in solid.verts.iter().enumerate() {
             if !v.p.coords.iter().all(|c| c.is_finite()) {
@@ -4049,7 +4208,7 @@ pub(crate) fn boundary_of_some(
             solid.faces.len(),
         );
     }
-    let mut problems = solid.check();
+    let mut problems = if checked { Vec::new() } else { solid.check() };
     if debug && let Some(first) = problems.first() {
         // The face named first, its loops' p-curve ends.
         let msg = format!("{first:?}");

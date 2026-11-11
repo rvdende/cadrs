@@ -3629,8 +3629,58 @@ fn debug_screws() {
     };
     let report = |k: &NativeKernel, id: BodyId, name: &str, t0: std::time::Instant| {
         let took = t0.elapsed();
-        let m = k.mass_properties(id).unwrap();
         let faults = k.get(id).unwrap().check();
+        if std::env::var_os("CADRS_SCREW_FACES").is_some() {
+            for (i, f) in k.get(id).unwrap().faces.iter().enumerate() {
+                if let cadrs_kernel::native::surface::Surface::Nurbs(n) = &f.surf {
+                    let w0 = n.cps[0][0].w;
+                    let rational = n.cps.iter().flatten().any(|h| (h.w - w0).abs() > 1e-12);
+                    eprintln!(
+                        "  face {i}: degree {} by {}, {} by {} poles, rational {rational}, {} loops of {:?} edges",
+                        n.du,
+                        n.dv,
+                        n.cps.len(),
+                        n.cps[0].len(),
+                        f.loops.len(),
+                        f.loops.iter().map(|l| l.len()).collect::<Vec<_>>()
+                    );
+                }
+            }
+        }
+        if std::env::var_os("CADRS_SCREW_MESH").is_some() {
+            // (The solid measured from its meshes as they are refined: their volumes run
+            // straight in the chord's error, to the solid's own.)
+            let size = k.bounding_box(id).unwrap().diagonal();
+            let mut last: Option<(f64, f64)> = None;
+            for d in [4e-4, 1e-4, 2.5e-5] {
+                let mesh = k
+                    .tessellate(
+                        id,
+                        Tessellation {
+                            deflection: d * size,
+                            angle: 15f64.to_radians(),
+                        },
+                    )
+                    .unwrap();
+                let v: f64 = mesh
+                    .indices
+                    .iter()
+                    .map(|t| {
+                        let [a, b, c] = t.map(|i| mesh.positions[i as usize].coords);
+                        a.dot(&b.cross(&c)) / 6.0
+                    })
+                    .sum();
+                let to = last.map(|(d0, v0)| v + (v - v0) * d / (d0 - d));
+                eprintln!(
+                    "{name}: mesh at {d:.1e} of the size: {} triangles, volume {v:.9}; run on to none: {to:.9?}",
+                    mesh.indices.len()
+                );
+                last = Some((d, v));
+            }
+        }
+        let t_mass = std::time::Instant::now();
+        let m = k.mass_properties(id).unwrap();
+        eprintln!("{name}: mass properties in {:.2?}", t_mass.elapsed());
         eprintln!(
             "{name}: {} faces, volume {:.9}, area {:.9}, {} faults, built in {took:.2?}",
             k.faces(id).unwrap().len(),
@@ -3658,6 +3708,38 @@ fn debug_screws() {
                     Err(e) => eprintln!("FAIL {name}: {e} (in {:.2?})", t0.elapsed()),
                 }
             }
+            // The fine thread at another lead and on a rod no whole number of leads long, the
+            // screw about a line that isn't an axis of the model.
+            "thread93" => {
+                let bar = block(
+                    &mut k,
+                    Point3::new(4.5, -8.0, -0.45),
+                    Point3::new(12.0, 8.0, 0.45),
+                );
+                let within = cylinder(&mut k, -1.45, 5.5, 2.9);
+                let bar = k.boolean(BoolOp::Intersect, bar, &[within]).unwrap().bodies[0];
+                let rod = cylinder(&mut k, 0.0, 5.0, 7.3);
+                match k.cut_swept(rod, bar, &screw(0.93, -360.0, 3600.0)) {
+                    Ok(r) => report(&k, r.bodies[0], name, t0),
+                    Err(e) => eprintln!("FAIL {name}: {e} (in {:.2?})", t0.elapsed()),
+                }
+            }
+            // swept/ball-screwed-round-a-tight-helix.
+            "ball" => {
+                let ball = k
+                    .primitive(&Primitive::Sphere {
+                        center: Point3::new(1.5, 0.0, 0.0),
+                        radius: 2.0,
+                        axis: Vector3::z_axis(),
+                        seam: Vector3::x_axis(),
+                    })
+                    .unwrap()
+                    .bodies[0];
+                match k.sweep_solid(ball, &screw(3.0, 0.0, 720.0)) {
+                    Ok(r) => report(&k, r.bodies[0], name, t0),
+                    Err(e) => eprintln!("FAIL {name}: {e} (in {:.2?})", t0.elapsed()),
+                }
+            }
             // swept/box-screwed-inside-a-rod.
             "tunnel" => {
                 let tool = block(
@@ -3675,6 +3757,88 @@ fn debug_screws() {
                 eprintln!("{name}: swept by {:.2?}", t0.elapsed());
                 let rod = cylinder(&mut k, 0.0, 5.0, 20.0);
                 match k.boolean(BoolOp::Subtract, rod, &[swept]) {
+                    Ok(r) => report(&k, r.bodies[0], name, t0),
+                    Err(e) => eprintln!("FAIL {name}: {e} (in {:.2?})", t0.elapsed()),
+                }
+            }
+            // swept/spline-bar-screwed-through-rod.
+            "bar" => {
+                let on = Plane {
+                    origin: Point3::new(0.0, 8.0, 0.0),
+                    x_dir: Vector3::x_axis(),
+                    normal: -Vector3::y_axis(),
+                };
+                let mut poles: Vec<Point2<f64>> = [
+                    (12.0, -1.0),
+                    (12.0, 1.0),
+                    (8.0, 1.5),
+                    (4.5, 1.5),
+                    (3.5, 0.0),
+                    (4.5, -1.5),
+                    (8.0, -1.5),
+                ]
+                .iter()
+                .map(|&(x, y)| p(x, y))
+                .collect();
+                poles.extend_from_within(..3);
+                let section = Loop {
+                    curves: vec![Curve2::Spline {
+                        degree: 3,
+                        knots: (0..poles.len() + 4).map(|i| i as f64).collect(),
+                        poles,
+                        weights: vec![],
+                        source: None,
+                    }],
+                };
+                let bar = k
+                    .extrude(&Profile::new(on, vec![reg(section)]), Extent::Blind(16.0))
+                    .unwrap()
+                    .bodies[0];
+                let bb = k.bounding_box(bar).unwrap();
+                let within = cylinder(&mut k, bb.min.z - 1.0, 5.5, bb.max.z - bb.min.z + 2.0);
+                let bar = k.boolean(BoolOp::Intersect, bar, &[within]).unwrap().bodies[0];
+                if std::env::var_os("CADRS_SCREW_FACES").is_some() {
+                    let b = k.get(bar).unwrap();
+                    for (i, e) in b.edges.iter().enumerate() {
+                        let what = match &e.curve {
+                            cadrs_kernel::native::curve::Curve::Nurbs(c) => {
+                                format!("spline of degree {}, {} poles", c.degree, c.cps.len())
+                            }
+                            cadrs_kernel::native::curve::Curve::Line { .. } => "line".to_string(),
+                            _ => "conic".to_string(),
+                        };
+                        eprintln!("  tool edge {i}: {what}, t {:.3}..{:.3}", e.t[0], e.t[1]);
+                    }
+                    for (i, f) in b.faces.iter().enumerate() {
+                        eprintln!("  tool face {i}: {:?}", f.surf.kind());
+                    }
+                }
+                let rod = cylinder(&mut k, 0.0, 5.0, 20.0);
+                match k.cut_swept(rod, bar, &screw(6.0, -90.0, 1350.0)) {
+                    Ok(r) => report(&k, r.bodies[0], name, t0),
+                    Err(e) => eprintln!("FAIL {name}: {e} (in {:.2?})", t0.elapsed()),
+                }
+            }
+            // swept/cone-point-screwed-through-rod.
+            "cone" => {
+                let tool = k
+                    .primitive(&Primitive::cone(
+                        Point3::new(12.0, 0.0, 0.0),
+                        -Vector3::x(),
+                        8.0 * 30f64.to_radians().tan(),
+                        0.0,
+                        8.0,
+                    ))
+                    .unwrap()
+                    .bodies[0];
+                let bb = k.bounding_box(tool).unwrap();
+                let within = cylinder(&mut k, bb.min.z - 1.0, 5.5, bb.max.z - bb.min.z + 2.0);
+                let tool = k
+                    .boolean(BoolOp::Intersect, tool, &[within])
+                    .unwrap()
+                    .bodies[0];
+                let rod = cylinder(&mut k, 0.0, 5.0, 20.0);
+                match k.cut_swept(rod, tool, &screw(6.0, -90.0, 1350.0)) {
                     Ok(r) => report(&k, r.bodies[0], name, t0),
                     Err(e) => eprintln!("FAIL {name}: {e} (in {:.2?})", t0.elapsed()),
                 }
@@ -3828,6 +3992,12 @@ fn debug_tumbling_tori() {
         let size = k.bounding_box(id).unwrap().diagonal();
         let thickness = m.volume / m.surface_area;
         let deflection = (1e-3 * size).min(5e-2 * thickness).max(1e-10);
+        // (`CADRS_TORUS_DEFLECTION`: the mesh's chord error as a part of the size, to measure
+        // a solid from its mesh as it is refined.)
+        let deflection = std::env::var("CADRS_TORUS_DEFLECTION")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .map_or(deflection, |d| d * size);
         let mesh = k
             .tessellate(
                 id,
@@ -3901,6 +4071,122 @@ fn debug_tumbling_tori() {
                         })
                     );
                 }
+            }
+        }
+        if std::env::var_os("CADRS_TORUS_PARTS").is_some() {
+            // (How much of each B-spline surface its faces use: the poles a file would carry
+            // were each surface written over the box of its faces' parameters alone.)
+            use cadrs_kernel::native::surface::Surface;
+            let mut by: std::collections::HashMap<usize, (usize, [f64; 4], [f64; 4])> =
+                Default::default();
+            for f in &body.faces {
+                let Surface::Nurbs(n) = &f.surf else { continue };
+                let ((u0, u1), (v0, v1)) = n.range();
+                let key = std::sync::Arc::as_ptr(n) as usize;
+                let e = by.entry(key).or_insert((
+                    n.cps.len() * n.cps[0].len(),
+                    [u0, u1, v0, v1],
+                    [
+                        f64::INFINITY,
+                        f64::NEG_INFINITY,
+                        f64::INFINITY,
+                        f64::NEG_INFINITY,
+                    ],
+                ));
+                for c in f.loops.iter().flatten() {
+                    let ed = &body.edges[c.edge];
+                    for i in 0..=16 {
+                        let q = c.pc.point(ed.t[0] + (ed.t[1] - ed.t[0]) * i as f64 / 16.0);
+                        e.2 = [
+                            e.2[0].min(q.x),
+                            e.2[1].max(q.x),
+                            e.2[2].min(q.y),
+                            e.2[3].max(q.y),
+                        ];
+                    }
+                }
+            }
+            let (mut all, mut used) = (0usize, 0.0f64);
+            for (poles, r, b) in by.values() {
+                let part = ((b[1] - b[0]) / (r[1] - r[0])).clamp(0.0, 1.0)
+                    * ((b[3] - b[2]) / (r[3] - r[2])).clamp(0.0, 1.0);
+                all += poles;
+                used += *poles as f64 * part;
+            }
+            eprintln!(
+                "  {name}: {} B-spline surfaces of {all} poles; over their faces' boxes alone about {used:.0}",
+                by.len()
+            );
+        }
+        if std::env::var_os("CADRS_TORUS_CREASES").is_some() {
+            // (Triangles whose own normal is far from their surface's at their corners: thin
+            // ones on a smooth face, or a face that wrinkles; and corners of one triangle
+            // whose surface normals are far apart, which only a wrinkle or a crease makes.)
+            let mut by_face: std::collections::HashMap<FaceId, [usize; 4]> = Default::default();
+            let mut worst: std::collections::HashMap<FaceId, (f64, Point3<f64>)> =
+                Default::default();
+            for (t, f) in mesh.indices.iter().zip(&mesh.triangle_faces) {
+                let [a, b, c] = t.map(|i| mesh.positions[i as usize]);
+                let [na, nb, nc] = t.map(|i| mesh.normals[i as usize]);
+                let n = (b - a).cross(&(c - a));
+                let e = by_face.entry(*f).or_default();
+                e[0] += 1;
+                let spread = na.dot(&nb).min(nb.dot(&nc)).min(nc.dot(&na));
+                if spread < 20f64.to_radians().cos() {
+                    e[2] += 1;
+                    let w = worst.entry(*f).or_insert((1.0, a));
+                    if spread < w.0 {
+                        *w = (spread, a);
+                    }
+                }
+                let Some(n) = n.try_normalize(1e-300) else {
+                    e[3] += 1;
+                    continue;
+                };
+                if n.dot(&(na + nb + nc).normalize()) < 30f64.to_radians().cos() {
+                    e[1] += 1;
+                }
+            }
+            for (i, f) in k.faces(id).unwrap().iter().enumerate() {
+                let Some(e) = by_face.get(&f.id) else {
+                    continue;
+                };
+                eprintln!(
+                    "  face {i} {:?}: {} triangles, {} lying over 30° off their surface, {} whose corners' surface normals are over 20° apart (worst {:?}), {} of no area",
+                    f.kind,
+                    e[0],
+                    e[1],
+                    e[2],
+                    worst.get(&f.id).map(|w| (w.0.acos().to_degrees(), w.1)),
+                    e[3]
+                );
+            }
+        }
+        if std::env::var_os("CADRS_TORUS_AREAS").is_some() {
+            // (Each face's area as integrated and as its triangles', to find a face the
+            // integral is off on.)
+            let mut by_face: std::collections::HashMap<FaceId, f64> = Default::default();
+            for (t, f) in mesh.indices.iter().zip(&mesh.triangle_faces) {
+                let [a, b, c] = t.map(|i| mesh.positions[i as usize]);
+                *by_face.entry(*f).or_default() += 0.5 * (b - a).cross(&(c - a)).norm();
+            }
+            for (i, f) in k.faces(id).unwrap().iter().enumerate() {
+                let meshed = by_face.get(&f.id).copied().unwrap_or(0.0);
+                let poles = match &body.faces[i].surf {
+                    cadrs_kernel::native::surface::Surface::Nurbs(n) => {
+                        format!("{} by {} poles", n.cps.len(), n.cps[0].len())
+                    }
+                    _ => String::new(),
+                };
+                eprintln!(
+                    "  face {i} {:?} {poles} ({} loops of {:?} edges): area {:.12}, its triangles' {:.9} ({:+.2e})",
+                    f.kind,
+                    body.faces[i].loops.len(),
+                    body.faces[i].loops.iter().map(Vec::len).collect::<Vec<_>>(),
+                    f.area,
+                    meshed,
+                    f.area - meshed
+                );
             }
         }
         let meshed = body.faces.len() >= 50 && 2 * flat >= body.faces.len();
@@ -4359,4 +4645,41 @@ fn debug_mesh_closed() {
         }
     }
     eprintln!("{degenerate} triangle edges of no length (in single precision)");
+}
+
+/// A STEP file read back and measured, face by face: CADRS_STEP=<file.step>.
+#[test]
+fn debug_step_mass() {
+    let Ok(path) = std::env::var("CADRS_STEP") else {
+        return;
+    };
+    let mut k = NativeKernel::new();
+    let ids = k.import_step(&std::fs::read(path).unwrap()).unwrap();
+    for id in ids {
+        let m = k.mass_properties(id).unwrap();
+        eprintln!("body: volume {:.10}, area {:.10}", m.volume, m.surface_area);
+        let b = k.get(id).unwrap().clone();
+        for (fi, f) in b.faces.iter().enumerate() {
+            let q = native::mass::face_integrals(&b, f, &Vector3::zeros());
+            let surf = match &f.surf {
+                native::surface::Surface::Nurbs(n) => format!(
+                    "NURBS {}x{} deg {}x{}{}",
+                    n.cps.len(),
+                    n.cps[0].len(),
+                    n.du,
+                    n.dv,
+                    if n.cps.iter().flatten().any(|h| (h.w - 1.0).abs() > 1e-12) {
+                        " rational"
+                    } else {
+                        ""
+                    }
+                ),
+                s => format!("{:?}", s.kind()),
+            };
+            eprintln!(
+                "  face {fi} {surf} sense {}: area {:.9}, volume part {:.9}",
+                f.sense, q[0], q[4]
+            );
+        }
+    }
 }

@@ -103,6 +103,8 @@ fn the_launcher_entry_names_the_files_the_app_opens() {
         defined,
         ["application/x-cadrs", "model/step", "model/x-brep"]
     );
+    // (Without one a `model/…` type's icon is `model-x-generic`, which no icon theme has.)
+    assert_eq!(MIME.matches("<generic-icon name=").count(), defined.len());
     // (shared-mime-info has these.)
     for t in defined
         .iter()

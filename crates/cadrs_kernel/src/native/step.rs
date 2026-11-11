@@ -2929,6 +2929,9 @@ struct Writer {
     next: u64,
     /// The `ADVANCED_FACE` written for each face of the last body ([`Self::body`]).
     faces: Vec<Option<u64>>,
+    /// The B-spline surfaces written so far, by where they are held: faces that lie on one
+    /// surface (a sheet cut into pieces) share its record, and its control points with it.
+    splines: std::collections::HashMap<usize, (u64, Surface)>,
 }
 
 impl Writer {
@@ -3026,6 +3029,13 @@ impl Writer {
 
     /// Writes a surface (in its [`canonical`] form); returns its record and that form.
     fn surface(&mut self, s: &Surface) -> (u64, Surface) {
+        let held = match s {
+            Surface::Nurbs(n) => Some(std::sync::Arc::as_ptr(n) as usize),
+            _ => None,
+        };
+        if let Some(written) = held.and_then(|h| self.splines.get(&h)) {
+            return written.clone();
+        }
         let c = canonical(s);
         let id = match &c {
             Surface::Plane { f } => {
@@ -3070,6 +3080,9 @@ impl Writer {
             }
             Surface::Nurbs(n) => self.bspline_surface(n),
         };
+        if let Some(h) = held {
+            self.splines.insert(h, (id, c.clone()));
+        }
         (id, c)
     }
 
@@ -3357,6 +3370,7 @@ pub fn write_colored(
         out: String::new(),
         next: 1,
         faces: Vec::new(),
+        splines: Default::default(),
     };
     let mut s = String::new();
     s.push_str("ISO-10303-21;\nHEADER;\n");

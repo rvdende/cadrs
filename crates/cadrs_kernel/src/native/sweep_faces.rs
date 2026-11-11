@@ -91,7 +91,17 @@ fn quarter_turns(b: &mut Body, s1: f64) {
     if s1 <= quarter {
         return;
     }
+    let clock = web_time::Instant::now();
+    let lap = |what: &str| {
+        if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+            eprintln!(
+                "  quarter turns: {what} by {:.0} ms",
+                clock.elapsed().as_secs_f64() * 1e3
+            );
+        }
+    };
     let _ = split_angle(b, quarter);
+    lap("turned faces split");
     let cuts: Vec<f64> = (1..)
         .map(|k| k as f64 * quarter)
         .take_while(|&v| v < s1 - 1e-9)
@@ -113,26 +123,38 @@ fn quarter_turns(b: &mut Body, s1: f64) {
             let _ = split_face_iso(b, fi, Dir::V, &inside);
         }
     }
+    lap("skinned faces split");
     // Each piece on its own part of the surface: the faces cut from one share it, so each would
-    // carry the whole winding surface (into every boolean, mass and file written).
-    for fi in 0..b.faces.len() {
-        let super::surface::Surface::Nurbs(n) = &b.faces[fi].surf else {
-            continue;
-        };
-        let Some(((u0, u1), (v0, v1))) = face_uv_box(b, fi) else {
-            continue;
-        };
-        let ((a0, a1), (c0, c1)) = n.range();
-        let pad = |lo: f64, hi: f64, a: f64, z: f64| {
-            let m = 1e-3 * (z - a);
-            ((lo - m).max(a), (hi + m).min(z))
-        };
-        let ((u0, u1), (v0, v1)) = (pad(u0, u1, a0, a1), pad(v0, v1, c0, c1));
-        if u1 - u0 < 0.9 * (a1 - a0) || v1 - v0 < 0.9 * (c1 - c0) {
-            let part = n.restricted((u0, u1), (v0, v1));
-            b.faces[fi].surf = super::surface::Surface::Nurbs(std::sync::Arc::new(part));
+    // carry the whole winding surface (into every boolean, mass and file written). (The parts
+    // cut out side by side: each is a knot insertion over the whole surface.)
+    let parts: Vec<Option<super::nurbs::NurbsSurface>> = {
+        use rayon::prelude::*;
+        let boxes: Vec<_> = (0..b.faces.len()).map(|fi| face_uv_box(b, fi)).collect();
+        b.faces
+            .par_iter()
+            .zip(boxes)
+            .map(|(f, uv)| {
+                let super::surface::Surface::Nurbs(n) = &f.surf else {
+                    return None;
+                };
+                let ((u0, u1), (v0, v1)) = uv?;
+                let ((a0, a1), (c0, c1)) = n.range();
+                let pad = |lo: f64, hi: f64, a: f64, z: f64| {
+                    let m = 1e-3 * (z - a);
+                    ((lo - m).max(a), (hi + m).min(z))
+                };
+                let ((u0, u1), (v0, v1)) = (pad(u0, u1, a0, a1), pad(v0, v1, c0, c1));
+                (u1 - u0 < 0.9 * (a1 - a0) || v1 - v0 < 0.9 * (c1 - c0))
+                    .then(|| n.restricted((u0, u1), (v0, v1)))
+            })
+            .collect()
+    };
+    for (f, part) in b.faces.iter_mut().zip(parts) {
+        if let Some(part) = part {
+            f.surf = super::surface::Surface::Nurbs(std::sync::Arc::new(part));
         }
     }
+    lap("each on its own part");
 }
 
 /// How long (seconds) a sweep by faces may split and unite before it gives up.
@@ -179,37 +201,64 @@ pub(crate) fn face_points(b: &Body, fi: usize, _size: f64) -> Vec<(P3, V3)> {
     // chord's way off the face's own edge, and beside a contact a point across it reads the
     // other way.)
     let (su, sv) = ((u1 - u0).max(1e-300), (v1 - v0).max(1e-300));
-    let near_outline = |q: P2| {
-        polys.iter().any(|poly| {
-            (0..poly.len()).any(|k| {
+    // (The outline's pieces in that measure, each with its box grown by the fiftieth: a point
+    // outside the box is further than that from the piece.)
+    const NEAR: f64 = 0.02;
+    let pieces: Vec<[f64; 4]> = polys
+        .iter()
+        .flat_map(|poly| {
+            (0..poly.len()).map(move |k| {
                 let (a, b2) = (poly[k], poly[(k + 1) % poly.len()]);
-                let (ax, ay, bx, by, qx, qy) =
-                    (a.x / su, a.y / sv, b2.x / su, b2.y / sv, q.x / su, q.y / sv);
-                let (dx, dy) = (bx - ax, by - ay);
-                let l2 = dx * dx + dy * dy;
-                let t = if l2 > 0.0 {
-                    (((qx - ax) * dx + (qy - ay) * dy) / l2).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
-                (ax + dx * t - qx).hypot(ay + dy * t - qy) < 0.02
+                [a.x / su, a.y / sv, b2.x / su, b2.y / sv]
             })
         })
-    };
-    let mut uvs: Vec<P2> = Vec::new();
-    for i in 0..=n {
-        for j in 0..=n {
-            let q = P2::new(
-                u0 + (u1 - u0) * (i as f64 + 0.5) / (n + 1) as f64,
-                v0 + (v1 - v0) * (j as f64 + 0.5) / (n + 1) as f64,
-            );
-            if super::classify::in_face(&polys, &f.surf, q, tol) == super::classify::InFace::Inside
-                && !near_outline(q)
+        .collect();
+    let near_outline = |q: P2| {
+        let (qx, qy) = (q.x / su, q.y / sv);
+        pieces.iter().any(|&[ax, ay, bx, by]| {
+            if qx < ax.min(bx) - NEAR
+                || qx > ax.max(bx) + NEAR
+                || qy < ay.min(by) - NEAR
+                || qy > ay.max(by) + NEAR
             {
-                uvs.push(q);
+                return false;
             }
-        }
-    }
+            let (dx, dy) = (bx - ax, by - ay);
+            let l2 = dx * dx + dy * dy;
+            let t = if l2 > 0.0 {
+                (((qx - ax) * dx + (qy - ay) * dy) / l2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            (ax + dx * t - qx).hypot(ay + dy * t - qy) < NEAR
+        })
+    };
+    // (Row by row, side by side where the outline is long: each point is weighed against
+    // every piece of it.)
+    let row = |i: usize| -> Vec<P2> {
+        (0..=n)
+            .map(|j| {
+                P2::new(
+                    u0 + (u1 - u0) * (i as f64 + 0.5) / (n + 1) as f64,
+                    v0 + (v1 - v0) * (j as f64 + 0.5) / (n + 1) as f64,
+                )
+            })
+            .filter(|&q| {
+                super::classify::in_face(&polys, &f.surf, q, tol) == super::classify::InFace::Inside
+                    && !near_outline(q)
+            })
+            .collect()
+    };
+    let mut uvs: Vec<P2> = if super::par::threads_for(n + 1, pieces.len() >= 64) {
+        use rayon::prelude::*;
+        (0..=n)
+            .into_par_iter()
+            .map(row)
+            .collect::<Vec<_>>()
+            .concat()
+    } else {
+        (0..=n).flat_map(row).collect()
+    };
     // A sliver with no point clear of its outline: the outline's own points.
     if uvs.is_empty() {
         uvs = polys.iter().flatten().copied().collect();
@@ -1310,7 +1359,9 @@ pub fn by_faces_or_pieces(
         {
             let mut cut = (**k.get(*id)?).clone();
             quarter_turns(&mut cut, mv_angle(&mv));
-            if cut.is_solid() && cut.check().is_empty() {
+            // (Its make-up alone: faces of a sound solid cut along their own lines still
+            // face out.)
+            if cut.is_solid() && cut.check_structure().is_empty() {
                 if debug {
                     eprintln!(
                         "sweep by faces: cut into {} faces of a quarter turn",
@@ -1319,7 +1370,7 @@ pub fn by_faces_or_pieces(
                 }
                 k.release(*id);
                 return Ok(OpResult {
-                    bodies: vec![k.insert(cut)],
+                    bodies: vec![k.insert_sound(cut)],
                     history: History::default(),
                 });
             } else if debug {
@@ -1484,6 +1535,26 @@ pub fn glued_groups(k: &mut NativeKernel, pieces: Vec<Body>) -> Vec<Body> {
         .map(|p| p.bbox().diagonal())
         .fold(0.0, f64::max)
         .max(tol::POINT);
+    // All of them at once, where they make one solid so (sewn and simplified the once: one at
+    // a time, each joins a group the ones before have grown).
+    if pieces.len() > 2
+        && let Some(r) = glued(k, &pieces, size)
+    {
+        let one = match r.bodies.as_slice() {
+            [id] => k
+                .get(*id)
+                .ok()
+                .filter(|b| b.solids.len() == 1)
+                .map(|b| (**b).clone()),
+            _ => None,
+        };
+        for id in r.bodies {
+            k.release(id);
+        }
+        if let Some(b) = one {
+            return vec![b];
+        }
+    }
     let mut groups: Vec<Body> = Vec::new();
     'piece: for p in pieces {
         for g in groups.iter_mut().rev() {
@@ -1518,16 +1589,98 @@ pub fn glued_groups(k: &mut NativeKernel, pieces: Vec<Body>) -> Vec<Body> {
     groups
 }
 
+/// A face's boundary by its length and its middle (∫ p ds over its loops' edges, by the
+/// length): what two faces with one boundary have alike, read off their edges alone (a face's
+/// area and centroid tell as much, but take the whole surface: on a screw's long sides, most
+/// of a sweep's time).
+fn boundary_measure(b: &Body, fi: usize) -> (f64, P3) {
+    // (Gauss–Legendre, five points, on short steps of each smooth piece.)
+    const X: [f64; 5] = [
+        -0.906_179_845_938_664,
+        -0.538_469_310_105_683_1,
+        0.0,
+        0.538_469_310_105_683_1,
+        0.906_179_845_938_664,
+    ];
+    const W: [f64; 5] = [
+        0.236_926_885_056_189_08,
+        0.478_628_670_499_366_47,
+        0.568_888_888_888_888_9,
+        0.478_628_670_499_366_47,
+        0.236_926_885_056_189_08,
+    ];
+    let (mut length, mut moment) = (0.0, V3::zeros());
+    for c in b.faces[fi].loops.iter().flatten() {
+        let e = &b.edges[c.edge];
+        if e.degenerate {
+            continue;
+        }
+        let (lo, hi) = (e.t[0].min(e.t[1]), e.t[0].max(e.t[1]));
+        let steps = match e.curve {
+            Curve::Line { .. } => 1,
+            Curve::Nurbs(_) => 4,
+            _ => (((hi - lo) / 0.1).ceil() as usize).max(1),
+        };
+        for w in e.curve.pieces(lo, hi).windows(2) {
+            for k in 0..steps {
+                let (a, z) = (
+                    w[0] + (w[1] - w[0]) * k as f64 / steps as f64,
+                    w[0] + (w[1] - w[0]) * (k + 1) as f64 / steps as f64,
+                );
+                let (m, r) = (0.5 * (a + z), 0.5 * (z - a));
+                for (x, gw) in X.iter().zip(W) {
+                    let t = m + r * x;
+                    let ds = gw * r * e.curve.tangent(t).norm();
+                    length += ds;
+                    moment += e.curve.point(t).coords * ds;
+                }
+            }
+        }
+    }
+    if length > tol::TINY {
+        (length, P3::from(moment / length))
+    } else {
+        (0.0, b.face_bbox(fi).center())
+    }
+}
+
 /// The solid the closed bodies `all` make together where they only touch along whole faces: each
-/// pair of faces from two of them on one surface with the same boundary (centroid and area) and
-/// opposite outward normals dropped, the rest sewn into one closed solid. None when that fails.
-fn glued(k: &mut NativeKernel, all: &[Body], size: f64) -> Option<OpResult> {
+/// pair of faces from two of them on one surface with the same boundary (the same measure and
+/// middle) and opposite outward normals dropped, the rest sewn into one closed solid. None when
+/// that fails.
+pub(super) fn glued(k: &mut NativeKernel, all: &[Body], size: f64) -> Option<OpResult> {
+    glued_with(k, all, size, false)
+}
+
+/// [`glued`]; with `apart`, of bodies known not to overlap (a body's own copies set side by
+/// side), which then needn't be shown.
+pub(super) fn glued_with(
+    k: &mut NativeKernel,
+    all: &[Body],
+    size: f64,
+    apart: bool,
+) -> Option<OpResult> {
     let close = 1e-7 * size.max(1.0);
-    // Each face's centroid, area and outward normal there.
+    // Each face's measure and middle, and its outward normal near there: its area and
+    // centroid, or on a surface that must be walked over to have them (a B-spline, a swept or
+    // a revolved one) its boundary's length and middle. (A face closed on itself by a seam has
+    // no outline to go by; the surfaces that have such integrate along their edges alone.)
+    let walked = |s: &super::surface::Surface| {
+        matches!(
+            s,
+            super::surface::Surface::Nurbs(_)
+                | super::surface::Surface::Extrusion { .. }
+                | super::surface::Surface::Revolution { .. }
+        )
+    };
     let mut faces: Vec<(usize, usize, P3, f64, V3)> = Vec::new();
     for (bi, b) in all.iter().enumerate() {
         for fi in 0..b.faces.len() {
-            let (a, c) = super::mass::face_area(b, fi);
+            let (a, c) = if walked(&b.faces[fi].surf) {
+                boundary_measure(b, fi)
+            } else {
+                super::mass::face_area(b, fi)
+            };
             let f = &b.faces[fi];
             let (u, v) = f.surf.project(&c, None);
             let n = f.surf.normal(u, v) * if f.sense { 1.0 } else { -1.0 };
@@ -1558,7 +1711,7 @@ fn glued(k: &mut NativeKernel, all: &[Body], size: f64) -> Option<OpResult> {
     if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
         for (i, f) in faces.iter().enumerate() {
             eprintln!(
-                "  glue: body {} face {} {:?} centroid {:.4?} area {:.6} normal {:.3?}{}",
+                "  glue: body {} face {} {:?} middle {:.4?} measure {:.6} normal {:.3?}{}",
                 f.0,
                 f.1,
                 all[f.0].faces[f.1].surf.kind(),
@@ -1576,56 +1729,71 @@ fn glued(k: &mut NativeKernel, all: &[Body], size: f64) -> Option<OpResult> {
     // turned tool can): every kept face then bounds the whole, so points just outside it lie
     // outside every body.
     let t_check = web_time::Instant::now();
-    let polys: Vec<Vec<Vec<Vec<P2>>>> = all
-        .iter()
-        .map(|b| {
-            b.faces
-                .iter()
-                .map(|f| super::classify::face_polygons(b, f))
-                .collect()
-        })
-        .collect();
-    // (Judged by ray parity, the majority of a few rays: no mesh, which a face folded along an
-    // edge can make huge; an overlap it finds confirmed by the body's winding number over its
-    // mesh, as a ray through the long helical B-spline faces a screw sweeps can miss a
-    // crossing.)
-    let boxes: Vec<Bbox> = all.iter().map(|b| b.bbox()).collect();
-    let mut meshes: Vec<Option<Vec<super::tess::FaceMesh>>> = vec![None; all.len()];
-    let eps = 1e-3 * size.max(1.0);
-    for (i, &(bi, fi, ..)) in faces.iter().enumerate() {
-        if dropped[i] {
-            continue;
-        }
-        let f = &all[bi].faces[fi];
-        let sign = if f.sense { 1.0 } else { -1.0 };
-        for q in super::boolean::interior_points_of_polys(&polys[bi][fi])
-            .into_iter()
-            .take(4)
-        {
-            let out = f.surf.eval(q.x, q.y) + f.surf.normal(q.x, q.y) * (sign * eps);
-            let inside = (0..all.len()).position(|bj| {
-                if bj == bi
-                    || !boxes[bj].contains(&out)
-                    || !super::classify::parity_inside(&all[bj], &polys[bj], &out)
+    if !apart {
+        use rayon::prelude::*;
+        let polys: Vec<Vec<Vec<Vec<P2>>>> = all
+            .par_iter()
+            .map(|b| {
+                b.faces
+                    .iter()
+                    .map(|f| super::classify::face_polygons(b, f))
+                    .collect()
+            })
+            .collect();
+        // (Judged by ray parity, the majority of a few rays: no mesh, which a face folded along an
+        // edge can make huge; an overlap it finds confirmed by the body's winding number over its
+        // mesh, as a ray through the long helical B-spline faces a screw sweeps can miss a
+        // crossing. Each kept face on its own: the faces are many and the rays dear.)
+        let boxes: Vec<Bbox> = all.iter().map(|b| b.bbox()).collect();
+        let eps = 1e-3 * size.max(1.0);
+        let kept: Vec<(usize, usize)> = faces
+            .iter()
+            .zip(&dropped)
+            .filter(|(_, d)| !**d)
+            .map(|(f, _)| (f.0, f.1))
+            .collect();
+        // (The rays side by side, a kept face each; the meshes after, one thread's work: a
+        // mesh is made across the threads itself, and may not be waited for from one of them.)
+        let suspects: Vec<(usize, usize, usize, P3)> = kept
+            .par_iter()
+            .flat_map_iter(|&(bi, fi)| {
+                let f = &all[bi].faces[fi];
+                let sign = if f.sense { 1.0 } else { -1.0 };
+                let mut found = Vec::new();
+                for q in super::boolean::interior_points_of_polys(&polys[bi][fi])
+                    .into_iter()
+                    .take(4)
                 {
-                    return false;
+                    let out = f.surf.eval(q.x, q.y) + f.surf.normal(q.x, q.y) * (sign * eps);
+                    for bj in 0..all.len() {
+                        if bj != bi
+                            && boxes[bj].contains(&out)
+                            && super::classify::parity_inside(&all[bj], &polys[bj], &out)
+                        {
+                            found.push((bi, fi, bj, out));
+                        }
+                    }
                 }
-                let m = meshes[bj].get_or_insert_with(|| {
-                    super::tess::mesh_body(&all[bj], 1e-4 * size.max(1.0), 0.3).0
-                });
-                winding(m, &out) > 0.5
+                found
+            })
+            .collect();
+        let mut meshes: Vec<Option<Vec<super::tess::FaceMesh>>> = vec![None; all.len()];
+        let overlap = suspects.into_iter().find(|&(_, _, bj, out)| {
+            let m = meshes[bj].get_or_insert_with(|| {
+                super::tess::mesh_body(&all[bj], 1e-4 * size.max(1.0), 0.3).0
             });
-            if let Some(bj) = inside {
-                if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
-                    eprintln!(
-                        "sweep by faces: the bodies overlap (face {fi} of body {bi}, {:?} {:.4?}, inside body {bj}; volumes {:.4?})",
-                        f.surf.kind(),
-                        out,
-                        all.iter().map(super::mass::body_volume).collect::<Vec<_>>()
-                    );
-                }
-                return None;
+            winding(m, &out) > 0.5
+        });
+        if let Some((bi, fi, bj, out)) = overlap {
+            if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+                eprintln!(
+                    "sweep by faces: the bodies overlap (face {fi} of body {bi}, {:?} {:.4?}, inside body {bj}; volumes {:.4?})",
+                    all[bi].faces[fi].surf.kind(),
+                    out,
+                    all.iter().map(super::mass::body_volume).collect::<Vec<_>>()
+                );
             }
+            return None;
         }
     }
     let ids: Vec<BodyId> = faces
@@ -1727,21 +1895,20 @@ fn glued_checked(k: &mut NativeKernel, id: BodyId, debug: bool) -> Option<OpResu
             super::mass::body_volume(b)
         );
     }
-    let ok = k
-        .get(id)
-        .ok()
-        .is_some_and(|b| b.is_solid() && b.check().is_empty());
-    if !ok {
+    if !(k.get(id).is_ok_and(|b| b.is_solid()) && k.sound(id)) {
         return None;
     }
     // The pieces' faces on one surface (a start face and the sweep of its edge, say) merged.
+    // (The merged body's make-up alone is checked: a sound solid's faces made one still face
+    // out.)
     let id = match super::surfacing::simplify(k, id) {
         Ok(s)
             if s.bodies.len() == 1
                 && k.get(s.bodies[0])
-                    .is_ok_and(|b| b.is_solid() && b.check().is_empty()) =>
+                    .is_ok_and(|b| b.is_solid() && b.check_structure().is_empty()) =>
         {
             k.release(id);
+            k.mark_sound(s.bodies[0]);
             s.bodies[0]
         }
         _ => id,

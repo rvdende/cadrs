@@ -594,6 +594,7 @@ pub(crate) fn slide(k: &mut NativeKernel, pipe: &Pipe, d: V3) -> Option<Result<O
             let fd = Field {
                 cover: &cover,
                 near: &near,
+                margin: None,
             };
             let ((u0, u1), (v0, v1)) = c.bx;
             // (Its nodes read all at once: the walls' are most of the work.)
