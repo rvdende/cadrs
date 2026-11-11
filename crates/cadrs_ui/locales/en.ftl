@@ -922,6 +922,8 @@ shell-doc-import-ellipsis = Import…
 shell-doc-paste-tab = Paste { $name }
 # A tab copied in this or another running cadrs: { $name } is the tab, { $document } the document it came from.
 shell-doc-paste-tab-from = Paste { $name } from { $document }
+# Several features copied from a Part Studio's feature list, as the { $name } of the line above.
+shell-doc-features-count = { $count } features
 # Toolbar tools (their tooltips; keep a shortcut in parentheses, as "(Shift+E)", as it is: the tooltip shows it as keys).
 shell-tool-sketch = Sketch (Shift+S)
 shell-tool-extrude = Extrude (Shift+E)

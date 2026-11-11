@@ -150,6 +150,8 @@ fn on_folder_menu(
         .item(MenuItem::new("folder-rename", tr("common-rename")))
         .item(MenuItem::new("folder-toggle", tr("view-folder-toggle")))
         .item(MenuItem::new("folder-unpack", tr("view-folder-unpack")))
+        // The folder with its features to the clipboard (`crate::tab_clipboard`).
+        .item(MenuItem::new("folder-copy", tr("common-copy")))
         .separator()
         .item(MenuItem::new(
             "folder-delete",
@@ -172,6 +174,10 @@ fn on_folder_menu_action(
     commands.queue(move |world: &mut World| {
         if item == "folder-rename" {
             rename_folder(world, folder);
+            return;
+        }
+        if item == "folder-copy" {
+            crate::tab_clipboard::copy_folder(world, folder);
             return;
         }
         let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else {

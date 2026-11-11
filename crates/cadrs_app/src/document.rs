@@ -914,6 +914,7 @@ fn tab_bar(root: &mut ChildSpawnerCommands, t: &Theme) {
                  mut commands: Commands| {
                     let paste = tabs
                         .peek(clipboard.as_deref_mut())
+                        .filter(|t| !t.is_features())
                         .map(|t| crate::tab_clipboard::paste_label(&t));
                     open_menu(&mut commands, a.entity, insert_menu(paste).build(&theme));
                 },
@@ -3047,7 +3048,10 @@ fn on_tab_bar_context_menu(
     let Ok((node, at)) = q.get(ev.entity) else {
         return;
     };
-    let item = match tabs.peek(clipboard.as_deref_mut()) {
+    let on_clipboard = tabs
+        .peek(clipboard.as_deref_mut())
+        .filter(|t| !t.is_features());
+    let item = match on_clipboard {
         Some(tab) => MenuItem::new("paste-tab", crate::tab_clipboard::paste_label(&tab)),
         None => MenuItem::new("paste-tab", tr("common-paste")).disabled(true),
     };
@@ -4788,12 +4792,21 @@ fn on_feature_context_menu(
         Res<crate::feature_menu::ShownDimensions>,
         Res<crate::history_panel::DocLog>,
     ),
+    (mut tabs, mut clipboard): (
+        ResMut<crate::tab_clipboard::TabClipboard>,
+        Option<ResMut<bevy::clipboard::Clipboard>>,
+    ),
     theme: Res<Theme>,
     mut commands: Commands,
 ) {
     let Ok(row) = q.get(ev.entity) else {
         return;
     };
+    // Features on the clipboard (`crate::tab_clipboard`): "Paste <features> from <document>".
+    let paste = tabs
+        .peek(clipboard.as_deref_mut())
+        .filter(|t| t.is_features())
+        .map(|t| crate::tab_clipboard::paste_label(&t));
     let editing = session.as_ref().is_some_and(|s| s.feature == row.0)
         || extrude.as_ref().is_some_and(|s| s.feature == row.0);
     // Appearances (P3.5): a sketch's own, a part feature's for the faces it made.
@@ -5107,6 +5120,17 @@ fn on_feature_context_menu(
     if let Some(item) = appearance {
         menu = menu.separator().item(item);
     }
+    // The selected features (or this one) to the clipboard, for another Part Studio.
+    menu = menu
+        .separator()
+        .item(MenuItem::new("feature-copy", tr("common-copy")).icon("copy"));
+    if let Some(label) = paste {
+        menu = menu.item(
+            MenuItem::new("feature-paste", label)
+                .icon("copy")
+                .disabled(editing || in_dialog),
+        );
+    }
     menu = menu.separator().item(
         MenuItem::new("feature-delete", tr("common-delete"))
             .icon("remove-circle")
@@ -5249,6 +5273,11 @@ fn on_feature_menu_action(
         }
         "feature-unsuppress" => commands
             .queue(move |world: &mut World| crate::feature_list::set_suppressed(world, id, false)),
+        "feature-copy" => commands.queue(move |world: &mut World| {
+            let targets = crate::feature_list::menu_targets(world, id);
+            crate::tab_clipboard::copy_features(world, &targets);
+        }),
+        "feature-paste" => commands.queue(crate::tab_clipboard::paste),
         "feature-add-to-folder" => commands.queue(move |world: &mut World| {
             crate::feature_folders::add_selection_to_folder(world, id)
         }),
