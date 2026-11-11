@@ -4086,13 +4086,23 @@ fn debug_tumbling_tori() {
                 let e = by.entry(key).or_insert((
                     n.cps.len() * n.cps[0].len(),
                     [u0, u1, v0, v1],
-                    [f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY],
+                    [
+                        f64::INFINITY,
+                        f64::NEG_INFINITY,
+                        f64::INFINITY,
+                        f64::NEG_INFINITY,
+                    ],
                 ));
                 for c in f.loops.iter().flatten() {
                     let ed = &body.edges[c.edge];
                     for i in 0..=16 {
                         let q = c.pc.point(ed.t[0] + (ed.t[1] - ed.t[0]) * i as f64 / 16.0);
-                        e.2 = [e.2[0].min(q.x), e.2[1].max(q.x), e.2[2].min(q.y), e.2[3].max(q.y)];
+                        e.2 = [
+                            e.2[0].min(q.x),
+                            e.2[1].max(q.x),
+                            e.2[2].min(q.y),
+                            e.2[3].max(q.y),
+                        ];
                     }
                 }
             }

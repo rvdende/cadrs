@@ -1431,9 +1431,30 @@ impl Prep<'_> {
     }
 }
 
+/// How far a pinch's own chart reaches before the sheets take over.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Seam {
+    /// As far as it can: a circle about the pinch in the measure of [`Tube::across`] (the
+    /// chart's own, where the surface it covers is as smooth one way as another), out to the
+    /// old seam's longest reach, short of the motion's ends and of the other pinches. The
+    /// sheets beside a pinch are all but singular in their own parameters; the further off
+    /// they start, the fewer poles they take and the larger the one smooth face about the
+    /// pinch.
+    Wide,
+    /// A tenth of a patch each way in (t, ψ): an ellipse many times longer one way than the
+    /// other in the chart's measure. What every sweep was built with before, and is still
+    /// where the wide seam's doesn't come out.
+    Narrow,
+}
+
 /// [`torus`]'s first part: None when `b` isn't a torus; an error when its sweep isn't one the
 /// charts cover.
-fn prepare<'a>(b: &Body, motion: &'a Motion<'a>) -> Option<Result<Prep<'a>>> {
+fn prepare<'a>(
+    b: &Body,
+    motion: &'a Motion<'a>,
+    seam: Seam,
+    widened: &std::cell::Cell<bool>,
+) -> Option<Result<Prep<'a>>> {
     use rayon::prelude::*;
     let [f] = b.faces.as_slice() else {
         return None;
@@ -1532,6 +1553,11 @@ fn prepare<'a>(b: &Body, motion: &'a Motion<'a>) -> Option<Result<Prep<'a>>> {
     let sheet_chunks = ((turn / 0.25).ceil() as usize).max(2);
     let npsi = 4;
     // Each pinch's chart, out to a tenth of a patch from it each way.
+    let singular: Vec<P2> = pinches
+        .iter()
+        .copied()
+        .chain(near_pinches.iter().map(|n| n.0))
+        .collect();
     for c in pinches {
         let Some(inv) = tube.across_d(c.x, c.y).try_inverse() else {
             return refused("its core circle's sweep pinches along a curve".into());
@@ -1540,8 +1566,39 @@ fn prepare<'a>(b: &Body, motion: &'a Motion<'a>) -> Option<Result<Prep<'a>>> {
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
             .unwrap_or(0.1);
-        let reach = V2::new(wide / sheet_chunks as f64, wide * TAU / npsi as f64);
-        let shape = nalgebra::Matrix2::new(1.0 / reach.x, 0.0, 0.0, 1.0 / reach.y) * inv;
+        let mut reach = V2::new(wide / sheet_chunks as f64, wide * TAU / npsi as f64);
+        let mut shape = nalgebra::Matrix2::new(1.0 / reach.x, 0.0, 0.0, 1.0 / reach.y) * inv;
+        if seam == Seam::Wide {
+            // (How far in t and in ψ a unit of the chart's measure reaches, to the first
+            // order; and the narrow seam's shortest and longest reach in that measure.)
+            let per = V2::new(inv.row(0).norm(), inv.row(1).norm());
+            let sv = (tube.across_d(c.x, c.y) * nalgebra::Matrix2::new(reach.x, 0.0, 0.0, reach.y))
+                .singular_values();
+            let (shortest, longest) = (sv[0].min(sv[1]), sv[0].max(sv[1]));
+            let mut rho = longest;
+            // Its chart's box inside the motion, with room to spare.
+            rho = rho.min(0.9 * (c.x.min(1.0 - c.x) - 0.02) / (PINCH_REACH * per.x));
+            // No wider round the circle than a fifth of a quarter of it.
+            rho = rho.min(0.2 * TAU / npsi as f64 / per.y);
+            // And clear of every other pinch and near pinch, by half as much again.
+            for o in &singular {
+                let d = V2::new(o.x - c.x, wrap(o.y - c.y, -PI, TAU));
+                if d.norm() > 1e-9 {
+                    rho = rho.min((d.x.abs() / per.x).max(d.y.abs() / per.y) / (1.5 * PINCH_REACH));
+                }
+            }
+            if rho > shortest {
+                widened.set(true);
+                shape = nalgebra::Matrix2::identity() / rho;
+                reach = per * rho;
+                if debug {
+                    eprintln!(
+                        "tube sweep: pinch at ({:.4}, {:.4}): a round seam of {rho:.4} across (the narrow one's {shortest:.4} to {longest:.4}), reaching ({:.4}, {:.4})",
+                        c.x, c.y, reach.x, reach.y
+                    );
+                }
+            }
+        }
         tube.pinches.push(Pinch {
             c,
             inv,
@@ -1726,6 +1783,49 @@ fn prepare<'a>(b: &Body, motion: &'a Motion<'a>) -> Option<Result<Prep<'a>>> {
     }
     let mut patches: Vec<Patch> = Vec::new();
     for k in 0..tube.pinches.len() {
+        // A pinch's chart goes round the tube. Where the solid covers a stretch of the
+        // pinch's own section (the inner side of a ring), a wide chart is one patch from the
+        // middle of that stretch right round: what is kept of it is then one face, not the
+        // parts of it four quarters hold. Else in quarters, as a closed band is.
+        let cut = (seam == Seam::Wide)
+            .then(|| {
+                const AROUND: usize = 64;
+                let covered: Vec<bool> = (0..AROUND)
+                    .map(|i| {
+                        tube.sheet_cover(PINCH + k, P2::new(0.0, TAU * i as f64 / AROUND as f64))
+                            .0
+                    })
+                    .collect();
+                // (The longest run of covered places, round the turn.)
+                let mut best: Option<(usize, usize)> = None;
+                for start in 0..AROUND {
+                    if !covered[start] || covered[(start + AROUND - 1) % AROUND] {
+                        continue;
+                    }
+                    let len = (0..AROUND)
+                        .take_while(|i| covered[(start + i) % AROUND])
+                        .count();
+                    if best.is_none_or(|(_, l)| len > l) {
+                        best = Some((start, len));
+                    }
+                }
+                best.filter(|(_, len)| *len >= AROUND / 8)
+                    .map(|(start, len)| {
+                        wrap(
+                            TAU * (start as f64 + 0.5 * (len as f64 - 1.0)) / AROUND as f64,
+                            0.0,
+                            TAU,
+                        )
+                    })
+            })
+            .flatten();
+        if let Some(cut) = cut {
+            if debug {
+                eprintln!("tube sweep: pinch {k}'s chart one patch round the tube from θ {cut:.4}");
+            }
+            patches.push((PINCH + k, -PINCH_REACH, PINCH_REACH, cut, cut + TAU));
+            continue;
+        }
         for q in 0..4 {
             patches.push((
                 PINCH + k,
@@ -2206,8 +2306,30 @@ fn prepare<'a>(b: &Body, motion: &'a Motion<'a>) -> Option<Result<Prep<'a>>> {
 }
 
 /// [`crate::Kernel::sweep_solid`] of a whole torus by a rigid motion: None when `b` isn't one;
-/// an error when its boundary isn't made out exactly.
+/// an error when its boundary isn't made out exactly. With its pinches' charts reaching wide
+/// ([`Seam::Wide`]); where a pinch took a wide seam and the sweep didn't come out, again with
+/// the narrow ones.
 pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<Result<OpResult>> {
+    let widened = std::cell::Cell::new(false);
+    match torus_seamed(k, b, motion, Seam::Wide, &widened)? {
+        Err(e) if widened.get() => {
+            if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+                eprintln!("tube sweep: with wide seams: {e}; again with narrow ones");
+            }
+            torus_seamed(k, b, motion, Seam::Narrow, &widened)
+        }
+        r => Some(r),
+    }
+}
+
+/// [`torus`] with its pinches' seams of one kind.
+fn torus_seamed(
+    k: &mut NativeKernel,
+    b: &Body,
+    motion: &Motion,
+    seam: Seam,
+    widened: &std::cell::Cell<bool>,
+) -> Option<Result<OpResult>> {
     let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
     let t_start = web_time::Instant::now();
     let refused = |why: String| -> Option<Result<OpResult>> {
@@ -2219,7 +2341,7 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
             why: format!("the swept torus: {why}"),
         }))
     };
-    let prep = match prepare(b, motion)? {
+    let prep = match prepare(b, motion, seam, widened)? {
         Ok(p) => p,
         Err(e) => return Some(Err(e)),
     };
@@ -2454,6 +2576,7 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
                 torus: b.clone(),
                 steps: steps.to_vec(),
                 fits,
+                seam,
             }),
         );
     }
@@ -2469,6 +2592,8 @@ pub(crate) struct SweptTorus {
     steps: Vec<RigidStep>,
     /// Its sheets' fits, in their patches' order: a boolean keeps parts of the same sheets.
     fits: Vec<(super::nurbs::NurbsSurface, Dom)>,
+    /// The kind of seam its pinches' charts were built with (the fits are those charts').
+    seam: Seam,
 }
 
 /// A boolean of two swept tori, by what each motion holds: every face of either is traced in
@@ -2483,6 +2608,27 @@ pub(crate) fn boolean(
     a: &SweptTorus,
     b: &SweptTorus,
 ) -> Option<Result<OpResult>> {
+    // (With each one's own seams, as its sheets were fitted; where a wide seam is among them
+    // and the boolean doesn't come out, with narrow ones for both, their sheets fitted anew.)
+    match boolean_seamed(k, op, a, b, [a.seam, b.seam])? {
+        Err(e) if a.seam == Seam::Wide || b.seam == Seam::Wide => {
+            if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+                eprintln!("tube boolean: with wide seams: {e}; again with narrow ones");
+            }
+            boolean_seamed(k, op, a, b, [Seam::Narrow; 2])
+        }
+        r => Some(r),
+    }
+}
+
+/// [`boolean`] with each operand's pinches' seams of the kind given.
+fn boolean_seamed(
+    k: &mut NativeKernel,
+    op: crate::BoolOp,
+    a: &SweptTorus,
+    b: &SweptTorus,
+    seams: [Seam; 2],
+) -> Option<Result<OpResult>> {
     let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
     let t_start = web_time::Instant::now();
     let refused = |why: String| -> Option<Result<OpResult>> {
@@ -2495,11 +2641,12 @@ pub(crate) fn boolean(
         }))
     };
     let (ma, mb) = (Motion::Steps(&a.steps), Motion::Steps(&b.steps));
-    let pa = match prepare(&a.torus, &ma)? {
+    let widened = std::cell::Cell::new(false);
+    let pa = match prepare(&a.torus, &ma, seams[0], &widened)? {
         Ok(p) => p,
         Err(e) => return Some(Err(e)),
     };
-    let pb = match prepare(&b.torus, &mb)? {
+    let pb = match prepare(&b.torus, &mb, seams[1], &widened)? {
         Ok(p) => p,
         Err(e) => return Some(Err(e)),
     };
@@ -2620,10 +2767,10 @@ pub(crate) fn boolean(
         }
     }
     let mut faces = Vec::with_capacity(na + pb.patches.len());
-    for (prep, base, swept) in [(&pa, 0, a), (&pb, na, b)] {
+    for (prep, base, swept, seam) in [(&pa, 0, a, seams[0]), (&pb, na, b, seams[1])] {
         // (Each sheet's fit as its own sweep made it: what a boolean keeps of a sheet is
         // part of what that kept, where the fit holds.)
-        let (fits, on_sheet) = if swept.fits.len() == prep.sheets.len() {
+        let (fits, on_sheet) = if swept.seam == seam && swept.fits.len() == prep.sheets.len() {
             (swept.fits.clone(), vec![Vec::new(); prep.sheets.len()])
         } else {
             match fit_sheets(prep, base, &given) {
