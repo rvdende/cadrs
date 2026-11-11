@@ -740,6 +740,11 @@ pub enum SweepControl {
     KeepOrientation,
     /// The profile's plane keeps containing this direction.
     LockDirection(Unit<Vector3<f64>>),
+    /// The path is this helix (or spiral on a cone), and the profile is carried by its screw:
+    /// turned about the helix's axis as the path turns, and moved along the axis and out from
+    /// it as the path is. A section drawn in a plane through the axis stays in one: a thread's,
+    /// straight or tapered.
+    Helix(crate::Helix),
 }
 
 /// A sweep (P3.7, PS19): a profile's regions (or, for surfaces and thin walls, its curves)

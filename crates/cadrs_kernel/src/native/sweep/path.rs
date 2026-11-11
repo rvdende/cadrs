@@ -377,6 +377,10 @@ fn sweep_spine(
             i = j;
         }
     }
+    // (A path given as a helix: that one for every segment.)
+    if let SweepControl::Helix(h) = control {
+        chain_helix = vec![Some(super::frames::Helix::of(&h)); spine.len()];
+    }
     let mut run_helix: Option<super::frames::Helix> = None;
     let flush = |run: &mut Vec<Seg>,
                  place: &mut Plane,
@@ -427,6 +431,7 @@ fn sweep_spine(
                 Curve::Line { .. },
                 SweepControl::None | SweepControl::KeepOrientation | SweepControl::LockDirection(_),
             ) => true,
+            (_, SweepControl::Helix(_)) => false,
             (Curve::Circle { c, x, y, .. }, SweepControl::None) => {
                 let axis = x.cross(y).normalize();
                 // The axis must lie in the profile's plane (where it will be when the run ends:

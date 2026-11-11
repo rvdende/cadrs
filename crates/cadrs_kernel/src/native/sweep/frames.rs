@@ -58,6 +58,10 @@ pub struct PathSweep {
     helix: Option<Helix>,
     /// The helix's angle at the fine steps (unwrapped along the path).
     angles: Vec<f64>,
+    /// A helix swept as its screw motion alone (no law): the helix's angles where the run
+    /// starts and ends, s running evenly between them, and the sections' points given with
+    /// their exact derivatives ([`hermite_quintic`]).
+    screw: Option<(f64, f64)>,
     /// How the profile twists and scales along the path (in proportion to s).
     law: SweepLaw,
 }
@@ -124,6 +128,10 @@ pub struct Helix {
     r: f64,
     c: f64,
     th0: f64,
+    /// A spiral on a cone: how much its radius grows per radian, `r` its radius at the angle
+    /// `tr` (a helix: nothing, and `r` everywhere).
+    k: f64,
+    tr: f64,
 }
 
 impl Helix {
@@ -139,14 +147,47 @@ impl Helix {
             r,
             c,
             th0,
+            k: 0.0,
+            tr: 0.0,
         }
     }
 
+    /// The helix or spiral `h` describes.
+    pub fn of(h: &crate::Helix) -> Self {
+        let a = h.axis.dir.into_inner();
+        let e1 = (h.x.into_inner() - a * h.x.dot(&a)).normalize();
+        let turn = TAU * h.turns;
+        let c = h.height / turn;
+        Helix {
+            // (Its height is nothing at the angle it starts at.)
+            o: h.axis.origin - a * (c * h.start_angle),
+            a,
+            e1,
+            e2: a.cross(&e1),
+            r: h.r0,
+            c,
+            th0: h.start_angle,
+            k: (h.r1 - h.r0) / turn,
+            tr: h.start_angle,
+        }
+    }
+
+    /// The unit direction out from the axis at the angle `th`.
+    fn out(&self, th: f64) -> V3 {
+        self.e1 * th.cos() + self.e2 * th.sin()
+    }
+    /// The radius at the angle `th`.
+    fn radius(&self, th: f64) -> f64 {
+        self.r + self.k * (th - self.tr)
+    }
     fn point(&self, th: f64) -> P3 {
-        self.o + (self.e1 * th.cos() + self.e2 * th.sin()) * self.r + self.a * (self.c * th)
+        self.o + self.out(th) * self.radius(th) + self.a * (self.c * th)
     }
     fn tangent(&self, th: f64) -> V3 {
-        ((-self.e1 * th.sin() + self.e2 * th.cos()) * self.r + self.a * self.c).normalize()
+        ((-self.e1 * th.sin() + self.e2 * th.cos()) * self.radius(th)
+            + self.out(th) * self.k
+            + self.a * self.c)
+            .normalize()
     }
     /// The angle of a point near the helix, unwrapped next to `near`.
     fn angle(&self, p: &P3, near: f64) -> f64 {
@@ -165,13 +206,16 @@ impl Helix {
         };
         a + ((guess - a) / TAU).round() * TAU
     }
-    /// The screw motion that turns the helix by `phi` along itself.
+    /// The screw motion that turns the helix by `phi` along itself from the angle `th0` (a
+    /// spiral's also moving out from the axis as its radius grows).
     fn screw(&self, phi: f64) -> Affine {
         let m = nalgebra::Rotation3::from_axis_angle(&nalgebra::Unit::new_normalize(self.a), phi)
             .into_inner();
         Affine {
             m,
-            t: self.o.coords - m * self.o.coords + self.a * (self.c * phi),
+            t: self.o.coords - m * self.o.coords
+                + self.a * (self.c * phi)
+                + self.out(self.th0 + phi) * (self.k * phi),
         }
     }
 }
@@ -305,6 +349,8 @@ fn fit_helix(pts: &[P3], tans: &[V3], nodes: Option<&[usize]>, tol: f64) -> Opti
         e1: fr.x,
         e2: fr.y,
         r,
+        k: 0.0,
+        tr: 0.0,
         c: 0.0,
         th0: 0.0,
     };
@@ -345,6 +391,8 @@ fn fit_helix(pts: &[P3], tans: &[V3], nodes: Option<&[usize]>, tol: f64) -> Opti
         e1: fr.x,
         e2: fr.y,
         r,
+        k: 0.0,
+        tr: 0.0,
         c,
         th0: ths[0],
     };
@@ -410,6 +458,7 @@ impl PathSweep {
             reach,
             helix: None,
             angles: vec![],
+            screw: None,
             law,
         };
         let pts: Vec<P3> = (0..=fine).map(|i| me.at(i as f64 / fine as f64)).collect();
@@ -422,7 +471,12 @@ impl PathSweep {
         let mut frames: Vec<nalgebra::Rotation3<f64>> = Vec::with_capacity(fine + 1);
         // A helix (within its Bézier approximation): the exact screw motion, of the helix the
         // caller fitted to the whole chain (so neighbouring pieces share it), else this run's.
-        if control == SweepControl::None {
+        // (A path given as a helix: that one, whatever a fit of the path would say.)
+        let helix = match control {
+            SweepControl::Helix(h) => Some(Helix::of(&h)),
+            _ => helix,
+        };
+        if matches!(control, SweepControl::None | SweepControl::Helix(_)) {
             me.helix = match helix {
                 Some(h) => {
                     let th0 = h.angle_of(&pts[0], h.th0);
@@ -452,6 +506,12 @@ impl PathSweep {
                 })
                 .collect();
         }
+        if me.helix.is_some()
+            && me.law.is_identity()
+            && std::env::var_os("CADRS_SWEEP_SCREW").is_none_or(|v| v != "0")
+        {
+            me.screw = Some((me.angles[0], me.angles[fine]));
+        }
         let (pts, tans) = match me.helix {
             Some(_) => {
                 let p: Vec<P3> = (0..=fine).map(|i| me.at(i as f64 / fine as f64)).collect();
@@ -461,7 +521,12 @@ impl PathSweep {
             None => (pts, tans),
         };
         match (control, me.helix) {
-            (SweepControl::None, Some(h)) => {
+            (SweepControl::Helix(_), None) => {
+                return Err(KernelError::InvalidParameter(
+                    "The sweep's helix has no turn".into(),
+                ));
+            }
+            (SweepControl::None | SweepControl::Helix(_), Some(h)) => {
                 let mut prev = h.th0;
                 for p in &pts {
                     prev = h.angle(p, prev);
@@ -544,6 +609,19 @@ impl PathSweep {
                 .map(|f| nalgebra::UnitQuaternion::from_rotation_matrix(&(f * f0)))
                 .collect()
         };
+        // A screw: sections evenly along it, as far apart as a quintic through each two's
+        // points and first and second derivatives strays less than `SCREW_TOL` between them
+        // (the rail of a point r from the axis strays r·h⁶/46080 over a turn of h).
+        if let (Some((a, z)), Some(h)) = (me.screw, me.helix) {
+            let far = h.radius(a).abs().max(h.radius(z).abs()) + me.profile_reach();
+            let most = (46080.0 * SCREW_TOL * (1.0 + me.profile_reach()) / far.max(tol::TINY))
+                .powf(1.0 / 6.0);
+            let n = (((z - a).abs() / most).ceil() as usize).clamp(1, MAX_SECTIONS);
+            me.v = (0..=n).map(|i| i as f64 / n as f64).collect();
+            me.pts = pts;
+            me.rots = rots;
+            return Ok(me);
+        }
         // Sections spaced by the local bend (research/algorithms/offsets_sweeps_import.md card 1):
         // cubic interpolation of a rail of curvature κ (the path's, grown by the profile's reach)
         // through sections h apart strays about h⁴κ³/384 from it, so a stretch of the path needs
@@ -734,8 +812,11 @@ impl PathSweep {
     }
     /// The helix's angle at s (from the path's point there).
     fn helix_angle(&self, h: &Helix, s: f64) -> f64 {
-        // Unwrapped next to the angle at the fine step before s.
         let s = s.clamp(0.0, 1.0);
+        if let Some((a, z)) = self.screw {
+            return a + (z - a) * s;
+        }
+        // Unwrapped next to the angle at the fine step before s.
         let fine = self.angles.len().saturating_sub(1);
         if fine == 0 {
             return h.angle(&self.path_at(s), h.th0);
@@ -823,12 +904,45 @@ impl PathSweep {
         }
     }
 
+    /// A screw's sections of a pole (homogeneous: its point times its weight, and the weight),
+    /// each with its first and second derivatives in s.
+    fn screw_jets(&self, at: &[H]) -> Option<Vec<[H; 3]>> {
+        let ((a, z), h) = (self.screw?, self.helix?);
+        let turn = z - a;
+        Some(
+            at.iter()
+                .zip(&self.v)
+                .map(|(y, s)| {
+                    // (A spiral's radius grows as it turns: out from the axis at its angle.)
+                    let out = h.out(a + turn * s) * (h.k * y.w);
+                    let x = V3::new(y.x, y.y, y.z) - h.o.coords * y.w;
+                    let d1 = (h.a.cross(&x) + h.a * (h.c * y.w) + out) * turn;
+                    let d2 = (h.a.cross(&h.a.cross(&x)) + h.a.cross(&out) * 2.0) * (turn * turn);
+                    [
+                        *y,
+                        H::new(d1.x, d1.y, d1.z, 0.0),
+                        H::new(d2.x, d2.y, d2.z, 0.0),
+                    ]
+                })
+                .collect(),
+        )
+    }
+
     fn rail_nurbs(&self, q: P2) -> NurbsCurve {
         let pts: Vec<P3> = self
             .v
             .iter()
             .map(|&s| self.place(s).point(&P3::new(q.x, q.y, 0.0)))
             .collect();
+        let hom: Vec<H> = pts.iter().map(|p| H::new(p.x, p.y, p.z, 1.0)).collect();
+        if let Some(jets) = self.screw_jets(&hom) {
+            let (knots, cps) = hermite_quintic(&self.v, &jets);
+            return NurbsCurve {
+                degree: 5,
+                knots,
+                cps,
+            };
+        }
         NurbsCurve::interpolate(&pts, &self.v, self.deg.min(pts.len() - 1), None, None)
     }
 
@@ -840,8 +954,26 @@ impl PathSweep {
             .iter()
             .map(|&s| n0.transformed(&self.place(s)))
             .collect();
-        let q = self.deg.min(curves.len() - 1);
         let ncp = n0.cps.len();
+        if self.screw.is_some() {
+            let mut cols: Vec<Vec<H>> = Vec::with_capacity(ncp);
+            let mut kv = Vec::new();
+            for i in 0..ncp {
+                let at: Vec<H> = curves.iter().map(|c| c.cps[i]).collect();
+                let jets = self.screw_jets(&at).expect("a screw has its jets");
+                let (knots, cps) = hermite_quintic(&self.v, &jets);
+                kv = knots;
+                cols.push(cps);
+            }
+            return NurbsSurface {
+                du: n0.degree,
+                dv: 5,
+                ku: n0.knots.clone(),
+                kv,
+                cps: cols,
+            };
+        }
+        let q = self.deg.min(curves.len() - 1);
         let mut cols: Vec<Vec<H>> = Vec::with_capacity(ncp);
         let mut kv = Vec::new();
         for i in 0..ncp {
@@ -868,6 +1000,53 @@ impl PathSweep {
         }
     }
 }
+
+/// The quintic B-spline through points at `sites` with their first and second derivatives
+/// there (`jets`: point, first, second), twice differentiable at each site: (its knots, its
+/// poles). Each span is the quintic its two ends' jets fix, so two such curves that end and
+/// start at one point with one jet run on from each other as smoothly.
+fn hermite_quintic(sites: &[f64], jets: &[[H; 3]]) -> (Vec<f64>, Vec<H>) {
+    let m = sites.len() - 1;
+    // A span's six Bézier points.
+    let bezier = |i: usize| -> [H; 6] {
+        let h = sites[i + 1] - sites[i];
+        let ([a, a1, a2], [b, b1, b2]) = (jets[i], jets[i + 1]);
+        [
+            a,
+            a + a1 * (h / 5.0),
+            a + a1 * (2.0 * h / 5.0) + a2 * (h * h / 20.0),
+            b - b1 * (2.0 * h / 5.0) + b2 * (h * h / 20.0),
+            b - b1 * (h / 5.0),
+            b,
+        ]
+    };
+    let mut knots = vec![sites[0]; 6];
+    for &t in &sites[1..m] {
+        knots.extend([t; 3]);
+    }
+    knots.extend([sites[m]; 6]);
+    let first = bezier(0);
+    let mut cps = vec![first[0], first[1], first[2]];
+    for i in 0..m {
+        let b = bezier(i);
+        cps.push(b[3]);
+        if i + 1 < m {
+            // The pole between two spans: the first span's polynomial read past its end (its
+            // blossom at the site three times and the sites either side).
+            let k = (sites[i + 2] - sites[i]) / (sites[i + 1] - sites[i]);
+            cps.push(b[3] * (1.0 - k) + b[4] * k);
+            cps.push(bezier(i + 1)[2]);
+        } else {
+            cps.push(b[4]);
+            cps.push(b[5]);
+        }
+    }
+    (knots, cps)
+}
+
+/// How far (mm, per mm of the profile's reach from the path, plus one) a screw's sides and
+/// rails may stray from the true helicoids and helices between their sections.
+const SCREW_TOL: f64 = 1e-9;
 
 /// Splits section intervals in halves until each is at most twice as long as its neighbours (or
 /// there are [`MAX_SECTIONS`]).

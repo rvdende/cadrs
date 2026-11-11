@@ -1013,7 +1013,7 @@ fn climb_at(
     (r, o - r * o + axis.dir.into_inner() * climb_rise(rise, a))
 }
 
-fn rigid_at(steps: &[RigidStep], t: f64) -> (nalgebra::Rotation3<f64>, V3) {
+pub(super) fn rigid_at(steps: &[RigidStep], t: f64) -> (nalgebra::Rotation3<f64>, V3) {
     let (mut r, mut d) = (nalgebra::Rotation3::identity(), V3::zeros());
     for s in steps {
         match *s {
@@ -1977,6 +1977,12 @@ pub fn cut_swept(
                 return Ok(c);
             }
         }
+    }
+    // Two turns about different lines (a gear cut by its mate): by the contacts' sheets.
+    if let SolidMotion::Rigid { steps } = motion
+        && let Some(Ok(r)) = super::sweep_generate::cut(k, target, &b, steps)
+    {
+        return Ok(r);
     }
     // A rigid motion turning more than half a turn: exactly, in pieces of at most half a turn
     // cut one after another (a tool's sweep over a whole turn can overlap itself, a thread whose

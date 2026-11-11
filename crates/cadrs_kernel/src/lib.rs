@@ -496,10 +496,14 @@ pub trait Kernel {
 
     /// `target` less everything `tool` passes through as it moves (a cutter's path through
     /// stock): [`Kernel::sweep_solid`]'s exact sweep (one slide, turn or screw by its leading
-    /// faces, a planar motion, a turn or screw without end) cut from the target; else, where
-    /// that can't be made or cut, meshed: the region inside the target and in none of the tool's
-    /// places (both distances' field contoured on a grid of a hundredth of the target's reach
-    /// and made solid), as a meshed sweep is.
+    /// faces, a planar motion, a turn or screw without end) cut from the target. Under two
+    /// turns about lines that aren't parallel (a gear's tooth space cut by its mate, a wheel
+    /// hobbed by its worm) the cut is generated: its faces are the sheets the tool's faces
+    /// envelop and its sharp edges trace, each one B-spline, and a motion of whole turns cuts
+    /// every tooth space alike. Else, where none of these can be made or cut, meshed: the
+    /// region inside the target and in none of the tool's places (both distances' field
+    /// contoured on a grid of a hundredth of the target's reach and made solid), as a meshed
+    /// sweep is.
     fn cut_swept(
         &mut self,
         target: BodyId,
