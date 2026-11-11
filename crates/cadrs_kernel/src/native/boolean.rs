@@ -2873,6 +2873,18 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         for &i in order.iter().take(6) {
             let (e, fi) = near_pairs[i];
             let ed = &pool.edges[e];
+            let (lo, hi) = (0..=32)
+                .map(|k| {
+                    let p = ed
+                        .curve
+                        .point(ed.t[0] + (ed.t[1] - ed.t[0]) * k as f64 / 32.0);
+                    faces[fi].surf.distance(&p)
+                })
+                .fold((f64::INFINITY, 0.0f64), |(a, z), d| (a.min(d), z.max(d)));
+            eprintln!(
+                "  (edge {e} from face {fi}'s surface: {lo:.2e} to {hi:.2e}; tolerances {:.1e}, {:.1e}, {run_tol:.1e})",
+                ed.tol, faces[fi].tol
+            );
             eprintln!(
                 "  {:.1} ms: edge {e} {} t {:.3}..{:.3} x face {fi} {:?}: {}",
                 meets[i].1 * 1e3,
