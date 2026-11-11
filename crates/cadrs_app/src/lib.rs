@@ -66,6 +66,7 @@ pub mod material_dialog;
 pub mod mcp;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mcp_board;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod mcp_config;
 pub mod measure;
 pub mod move_document;
