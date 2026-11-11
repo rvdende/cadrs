@@ -340,7 +340,7 @@ impl<'a> Oracle<'a> {
     fn sampled(&self, x: &P3, limit: Option<f64>) -> (Vec<f64>, f64) {
         let n = self.places.len();
         let travel = match &self.travel {
-            Some(t) if n > 4 * STRIDE && (n - 1) % STRIDE == 0 => t,
+            Some(t) if n > 4 * STRIDE && (n - 1).is_multiple_of(STRIDE) => t,
             _ => {
                 return (
                     self.places.iter().map(|pl| self.at(pl, x)).collect(),
