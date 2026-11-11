@@ -4073,6 +4073,41 @@ fn debug_tumbling_tori() {
                 }
             }
         }
+        if std::env::var_os("CADRS_TORUS_PARTS").is_some() {
+            // (How much of each B-spline surface its faces use: the poles a file would carry
+            // were each surface written over the box of its faces' parameters alone.)
+            use cadrs_kernel::native::surface::Surface;
+            let mut by: std::collections::HashMap<usize, (usize, [f64; 4], [f64; 4])> =
+                Default::default();
+            for f in &body.faces {
+                let Surface::Nurbs(n) = &f.surf else { continue };
+                let ((u0, u1), (v0, v1)) = n.range();
+                let key = std::sync::Arc::as_ptr(n) as usize;
+                let e = by.entry(key).or_insert((
+                    n.cps.len() * n.cps[0].len(),
+                    [u0, u1, v0, v1],
+                    [f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY],
+                ));
+                for c in f.loops.iter().flatten() {
+                    let ed = &body.edges[c.edge];
+                    for i in 0..=16 {
+                        let q = c.pc.point(ed.t[0] + (ed.t[1] - ed.t[0]) * i as f64 / 16.0);
+                        e.2 = [e.2[0].min(q.x), e.2[1].max(q.x), e.2[2].min(q.y), e.2[3].max(q.y)];
+                    }
+                }
+            }
+            let (mut all, mut used) = (0usize, 0.0f64);
+            for (poles, r, b) in by.values() {
+                let part = ((b[1] - b[0]) / (r[1] - r[0])).clamp(0.0, 1.0)
+                    * ((b[3] - b[2]) / (r[3] - r[2])).clamp(0.0, 1.0);
+                all += poles;
+                used += *poles as f64 * part;
+            }
+            eprintln!(
+                "  {name}: {} B-spline surfaces of {all} poles; over their faces' boxes alone about {used:.0}",
+                by.len()
+            );
+        }
         if std::env::var_os("CADRS_TORUS_CREASES").is_some() {
             // (Triangles whose own normal is far from their surface's at their corners: thin
             // ones on a smooth face, or a face that wrinkles; and corners of one triangle
