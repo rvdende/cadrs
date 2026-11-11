@@ -203,6 +203,10 @@ struct Band {
     w: f64,
     /// The seam's reach in τ and in η.
     reach: V2,
+    /// How far the charts themselves reach, past the seam, in τ and in η.
+    room: V2,
+    /// The seam's shape in (τ, η): 2 an ellipse, more a box with its corners rounded.
+    round: f64,
     /// How far across the line bends by η along it: a polynomial's coefficients, the constant
     /// first.
     bend: [f64; 5],
@@ -216,7 +220,12 @@ impl Band {
 
     /// How far out a place (τ, η) of the band's charts is, as a part of the way to the seam.
     fn out(&self, w: P2) -> f64 {
-        (w.x / self.reach.x).hypot(w.y / self.reach.y)
+        let (x, y) = ((w.x / self.reach.x).abs(), (w.y / self.reach.y).abs());
+        if self.round == 2.0 {
+            x.hypot(y)
+        } else {
+            (x.powf(self.round) + y.powf(self.round)).powf(1.0 / self.round)
+        }
     }
 }
 
@@ -1447,6 +1456,136 @@ pub(crate) enum Seam {
     Narrow,
 }
 
+/// How many times wider than its sheets' own patches follow a near pinch's turn is where a
+/// wide band's seam leaves it: along its line, and as far across at the near pinch itself.
+const BAND_WIDE: f64 = 5.0;
+
+/// A wide band's seam stands this many times further off across, at the near pinch itself,
+/// than the turn is wide where the seam leaves its line: twice measured fewer poles than once
+/// (the sheets beside it 150 by 86 against 171 by 114) and as sound.
+const BAND_ACROSS: f64 = 2.0;
+
+/// A wide band's charts reach this much of τ past its seam (which is far out along a sinh: a
+/// part of the seam's own reach more would be many times as far across).
+const BAND_ROOM: f64 = 0.5;
+
+/// A near pinch's band reaching as far as it can ([`Seam::Wide`]): `narrow` is the band to
+/// where the turn is as wide as the sheets' own patches follow (`follows`); the sheets just
+/// beyond are still all but singular there, their fits' sites crowding to thousandths of a
+/// patch about the band, sites the tensor grid then carries right across. This one follows
+/// the line (`line_of`: at η along it, from about a place across, where it lies across and how
+/// wide the turn is) out each way to where the turn is [`BAND_WIDE`] times that wide, short of
+/// the motion's ends and of the other pinches and near pinches (`singular`), reaches as far
+/// across, and has a seam nearer a box than an ellipse in its charts (an ellipse in (τ, η)
+/// is a spindle in (t, ψ), τ being far out along a sinh). None where that is not half as far
+/// again along as the narrow band.
+fn wide_band(
+    tube: &Tube,
+    narrow: &Band,
+    line_of: &dyn Fn(f64, f64) -> (f64, f64),
+    follows: f64,
+    singular: &[P2],
+) -> Option<Band> {
+    let (c, ex, ey, w) = (narrow.c, narrow.ex, narrow.ey, narrow.w);
+    let target = BAND_WIDE * follows;
+    let across = BAND_ACROSS * target;
+    // Clear of the motion's ends, of every pinch's own chart by a fifth more than it reaches,
+    // and of the other near pinches by twice as far across as this band reaches.
+    let clear = |x: P2| -> bool {
+        (0.03..=0.97).contains(&x.x)
+            && singular.iter().all(|o| {
+                if (o - c).norm() < 1e-9 {
+                    return true;
+                }
+                let d = V2::new(o.x - x.x, wrap(o.y - x.y, -PI, TAU));
+                let keep = tube
+                    .pinches
+                    .iter()
+                    .find(|pn| (pn.c - o).norm() < 1e-9)
+                    .map_or(V2::new(2.0 * target, 0.2), |pn| {
+                        pn.reach * (1.2 * PINCH_REACH)
+                    });
+                d.x.abs() > keep.x || d.y.abs() > keep.y
+            })
+    };
+    let step = 0.01;
+    let mut line: Vec<(f64, f64, f64)> = vec![(0.0, 0.0, w)];
+    let mut far = f64::INFINITY;
+    for side in [1.0, -1.0] {
+        let (mut eta, mut at) = (0.0, 0.0);
+        // (Out to where the turn is wide enough, and on for the charts' room; or to where
+        // the way is no longer clear, the charts' room ending short of there.)
+        let mut end = f64::INFINITY;
+        let mut reached = None;
+        while eta < end && eta < 1.5 {
+            let (xi, wide) = line_of(side * (eta + step), at);
+            if !clear(c + ex * xi + ey * (side * (eta + step))) {
+                break;
+            }
+            eta += step;
+            at = xi;
+            line.push((side * eta, xi, wide));
+            if wide >= target && reached.is_none() {
+                reached = Some(eta);
+                end = 1.2 * PINCH_REACH * eta + step;
+            }
+        }
+        far = far.min(reached.unwrap_or(eta).min(eta / (1.2 * PINCH_REACH)));
+    }
+    // As far along as its charts' whole box stays clear, a tenth less at a time.
+    for _ in 0..8 {
+        if !(1.2 * far > 1.5 * narrow.reach.y) {
+            return None;
+        }
+        // (A polynomial through the line's points as far as the charts go, by least squares,
+        // each point's miss counted by how wide the turn is there: the charts spread the turn
+        // out from the polynomial, and one a few of the turn's widths off its line squeezes
+        // it into a small part of what it is spread over.)
+        let room_y = 1.2 * PINCH_REACH * far;
+        let mut a = nalgebra::SMatrix::<f64, 5, 5>::zeros();
+        let mut b = nalgebra::SVector::<f64, 5>::zeros();
+        for &(eta, xi, wide) in line.iter().filter(|l| l.0.abs() <= room_y + step) {
+            let row = nalgebra::SVector::<f64, 5>::from_fn(|i, _| eta.powi(i as i32));
+            let weight = 1.0 / (wide * wide);
+            a += row * row.transpose() * weight;
+            b += row * (xi * weight);
+        }
+        let x = a.lu().solve(&b)?;
+        let band = Band {
+            c,
+            ex,
+            ey,
+            w,
+            reach: V2::new((across / w).asinh(), 1.2 * far),
+            room: V2::new((across / w).asinh() + BAND_ROOM, room_y),
+            round: 4.0,
+            bend: [x[0], x[1], x[2], x[3], x[4]],
+        };
+        if std::env::var_os("CADRS_TUBE_NEAR").is_some() {
+            let worst = line
+                .iter()
+                .filter(|l| l.0.abs() <= room_y + step)
+                .map(|l| (band.mid(l.0) - l.1).abs() / l.2)
+                .fold(0.0, f64::max);
+            eprintln!(
+                "  a wide band {:.3} along: its line's polynomial at most {worst:.3} of the turn's width off it",
+                band.reach.y
+            );
+        }
+        let boxed = (-8..=8).all(|i| {
+            (-8..=8).all(|k| {
+                let (tau, eta) = (band.room.x * i as f64 / 8.0, band.room.y * k as f64 / 8.0);
+                clear(c + ex * (band.mid(eta) + w * tau.sinh()) + ey * eta)
+            })
+        });
+        if boxed {
+            return Some(band);
+        }
+        far *= 0.9;
+    }
+    None
+}
+
 /// [`torus`]'s first part: None when `b` isn't a torus; an error when its sweep isn't one the
 /// charts cover.
 fn prepare<'a>(
@@ -1678,6 +1817,7 @@ fn prepare<'a>(
             }
             (at, best / sigma)
         };
+        let line_of: &dyn Fn(f64, f64) -> (f64, f64) = &least_at;
         let step = 0.01;
         let mut line: Vec<(f64, f64)> = vec![(0.0, 0.0)];
         let mut far: f64 = 0.0;
@@ -1716,21 +1856,29 @@ fn prepare<'a>(
             };
             [x[0], x[1], x[2], x[3], x[4]]
         };
-        let band = Band {
+        let reach = V2::new((follows / w).asinh(), 1.2 * far);
+        let mut band = Band {
             c,
             ex,
             ey,
             w,
-            reach: V2::new((follows / w).asinh(), 1.2 * far),
+            reach,
+            room: reach * PINCH_REACH,
+            round: 2.0,
             bend,
         };
+        if seam == Seam::Wide
+            && let Some(wide) = wide_band(&tube, &band, &line_of, follows, &singular)
+        {
+            widened.set(true);
+            band = wide;
+        }
         // (The chart's whole box inside the motion.)
         let inside = [-1.0, 1.0].iter().all(|&a| {
             [-1.0, 0.0, 1.0].iter().all(|&b| {
                 let x = c
-                    + ex * (band.mid(PINCH_REACH * band.reach.y * b)
-                        + w * (PINCH_REACH * band.reach.x * a).sinh())
-                    + ey * (PINCH_REACH * band.reach.y * b);
+                    + ex * (band.mid(band.room.y * b) + w * (band.room.x * a).sinh())
+                    + ey * (band.room.y * b);
                 (0.02..=0.98).contains(&x.x)
             })
         });
@@ -1742,8 +1890,14 @@ fn prepare<'a>(
         }
         if debug {
             eprintln!(
-                "tube sweep: a near pinch at ({:.6}, {:.6}), the turn {w:.3e} wide there: its bands reach {:.3} in τ, {:.3} along (the line's bend {:?})",
-                c.x, c.y, band.reach.x, band.reach.y, band.bend
+                "tube sweep: a near pinch at ({:.6}, {:.6}), the turn {w:.3e} wide there: its bands reach {:.3} in τ ({:.4} across), {:.3} along, their seam of roundness {} (the line's bend {:?})",
+                c.x,
+                c.y,
+                band.reach.x,
+                w * band.reach.x.sinh(),
+                band.reach.y,
+                band.round,
+                band.bend
             );
         }
         tube.bands.push(band);
@@ -1874,10 +2028,10 @@ fn prepare<'a>(
         for sheet in [LEAD, TRAIL] {
             patches.push((
                 tube.band_chart(j, sheet),
-                -PINCH_REACH * b.reach.x,
-                PINCH_REACH * b.reach.x,
-                -PINCH_REACH * b.reach.y,
-                PINCH_REACH * b.reach.y,
+                -b.room.x,
+                b.room.x,
+                -b.room.y,
+                b.room.y,
             ));
         }
     }
@@ -3769,13 +3923,14 @@ pub(super) fn tensor(
 ) -> super::nurbs::NurbsSurface {
     use super::nurbs::{H, NurbsCurve, NurbsSurface, hom};
     use rayon::prelude::*;
+    let deg = PATCH_DEGREE;
     // Along u at each v, then the poles' columns along v (each row and each column on its
     // own: a sheet of many sites is most of a sweep's fitting).
     let rows: Vec<NurbsCurve> = vs
         .par_iter()
         .map(|&v| {
             let pts: Vec<P3> = us.iter().map(|&u| at(u, v)).collect();
-            NurbsCurve::interpolate(&pts, us, PATCH_DEGREE, None, None)
+            NurbsCurve::interpolate(&pts, us, deg, None, None)
         })
         .collect();
     let nu = rows[0].cps.len();
@@ -3786,7 +3941,7 @@ pub(super) fn tensor(
                 .iter()
                 .map(|c| super::nurbs::dehom(&c.cps[i]))
                 .collect();
-            NurbsCurve::interpolate(&col, vs, PATCH_DEGREE, None, None)
+            NurbsCurve::interpolate(&col, vs, deg, None, None)
         })
         .collect();
     let kv = cols.last().map(|c| c.knots.clone()).unwrap_or_default();
@@ -3801,11 +3956,40 @@ pub(super) fn tensor(
         .collect();
     NurbsSurface {
         du: rows[0].degree,
-        dv: PATCH_DEGREE.min(vs.len() - 1),
+        dv: deg.min(vs.len() - 1),
         ku: rows[0].knots.clone(),
         kv,
         cps,
     }
+}
+
+/// A fit's sites `x` spaced out: each span as much longer as its miss (`miss`, midway along
+/// it, within `tol`) leaves room for, the fit's miss going by the sixth power of a span's
+/// length; no more than half as long again, a span's miss midway being only a sample of it,
+/// and no shorter. The ends stay; the sites between are laid evenly by that measure.
+fn spaced(x: &[f64], miss: &[f64], tol: f64) -> Vec<f64> {
+    // (How many of the new spans each old one comes to, summed along.)
+    let mut along = vec![0.0];
+    for m in miss {
+        let grow =
+            (0.8 * (tol / m.max(1e-300)).powf(1.0 / (PATCH_DEGREE + 1) as f64)).clamp(1.0, 1.5);
+        along.push(along.last().unwrap() + 1.0 / grow);
+    }
+    let total = *along.last().unwrap();
+    let n = (total.ceil() as usize).max(8);
+    let mut out = Vec::with_capacity(n + 1);
+    out.push(x[0]);
+    let mut i = 0;
+    for k in 1..n {
+        let want = total * k as f64 / n as f64;
+        while i + 1 < miss.len() && along[i + 1] < want {
+            i += 1;
+        }
+        let f = (want - along[i]) / (along[i + 1] - along[i]);
+        out.push(x[i] + (x[i + 1] - x[i]) * f);
+    }
+    out.push(x[x.len() - 1]);
+    out
 }
 
 /// A sheet's patch fitted within `tol` over the box of what is kept of it (its kept nodes, a
@@ -3866,56 +4050,118 @@ fn fit_tensor(
         (0..=8).map(|i| lo + (hi - lo) * i as f64 / 8.0).collect()
     };
     let (mut us, mut vs) = (sites(lo.x, hi.x), sites(lo.y, hi.y));
-    for _ in 0..16 {
+    // The sites once every miss is within the tolerance, and whether they have been spaced
+    // out since ([`spaced`]): halving leaves each span up to twice as short as it need be.
+    let mut done: Option<(super::nurbs::NurbsSurface, usize)> = None;
+    let respace = std::env::var_os("CADRS_TUBE_NO_RESPACE").is_none();
+    for _ in 0..24 {
         let surf = tensor(&at, &us, &vs);
         if nothing {
             return Ok((surf, dom));
         }
-        let bad =
-            |u: f64, v: f64| (surf.point(u, v) - at(u, v)).norm() > tol && sh.live(tube, u, v);
+        // (How far the fit is off the chart at a place the sheet is kept at: nothing where
+        // it isn't.)
+        let miss = |u: f64, v: f64| -> f64 {
+            let d = (surf.point(u, v) - at(u, v)).norm();
+            if d > 0.0 && sh.live(tube, u, v) {
+                d
+            } else {
+                0.0
+            }
+        };
         let (nu, nv) = (us.len() - 1, vs.len() - 1);
         let mid = |x: &[f64], i: usize| 0.5 * (x[i] + x[i + 1]);
         // (Along a site's line the surface is the curve through that line's points: a miss
         // midway along it is that direction's.)
-        let mut split_u: Vec<bool> = (0..nu)
+        let mut miss_u: Vec<f64> = (0..nu)
             .into_par_iter()
-            .map(|i| vs.iter().any(|&v| bad(mid(&us, i), v)))
+            .map(|i| vs.iter().map(|&v| miss(mid(&us, i), v)).fold(0.0, f64::max))
             .collect();
-        let mut split_v: Vec<bool> = (0..nv)
+        let mut miss_v: Vec<f64> = (0..nv)
             .into_par_iter()
-            .map(|j| us.iter().any(|&u| bad(u, mid(&vs, j))))
+            .map(|j| us.iter().map(|&u| miss(u, mid(&vs, j))).fold(0.0, f64::max))
             .collect();
+        let mut split_u: Vec<bool> = miss_u.iter().map(|&m| m > tol).collect();
+        let mut split_v: Vec<bool> = miss_v.iter().map(|&m| m > tol).collect();
+        if std::env::var("CADRS_TUBE_MISSES").is_ok_and(|c| c.parse() == Ok(chart)) {
+            // (Where the worst misses along a are, round by round: the span, the ψ of its
+            // worst, the miss in tolerances.)
+            let mut worst: Vec<(f64, f64, f64, f64)> = (0..nu)
+                .filter(|&i| miss_u[i] > tol)
+                .map(|i| {
+                    let u = mid(&us, i);
+                    let v = vs
+                        .iter()
+                        .copied()
+                        .max_by(|a, b| miss(u, *a).total_cmp(&miss(u, *b)))
+                        .unwrap();
+                    (u, v, miss_u[i] / tol, us[i + 1] - us[i])
+                })
+                .collect();
+            worst.sort_by(|a, b| a.3.total_cmp(&b.3));
+            eprintln!(
+                "  fit of chart {chart} ψ {p0:.3}..{p1:.3}: {} by {} sites, {} spans of a miss; the shortest: {:?}",
+                us.len(),
+                vs.len(),
+                worst.len(),
+                worst
+                    .iter()
+                    .take(12)
+                    .map(|w| format!("a {:.4} ψ {:.4} x{:.1} span {:.1e}", w.0, w.1, w.2, w.3))
+                    .collect::<Vec<_>>()
+            );
+        }
         // (The cells' centres where neither way is split yet: read together, then taken in
         // order, a centre whose row or column an earlier one has split left be as before.)
         let centres: Vec<(usize, usize)> = (0..nu)
             .flat_map(|i| (0..nv).map(move |j| (i, j)))
             .filter(|&(i, j)| !(split_u[i] || split_v[j]))
             .collect();
-        let off: Vec<bool> = centres
+        let off: Vec<f64> = centres
             .par_iter()
-            .map(|&(i, j)| bad(mid(&us, i), mid(&vs, j)))
+            .map(|&(i, j)| miss(mid(&us, i), mid(&vs, j)))
             .collect();
         for (&(i, j), off) in centres.iter().zip(off) {
-            if off && !(split_u[i] || split_v[j]) {
+            if off > tol && !(split_u[i] || split_v[j]) {
                 split_u[i] = true;
                 split_v[j] = true;
             }
+            miss_u[i] = miss_u[i].max(off);
+            miss_v[j] = miss_v[j].max(off);
         }
         // (At its curves' places, to the chart there: a curve's point may stand a hair off
         // its place, where the place is ill found (faces touching), which its edge's
         // tolerance takes up.)
         for (_, w) in pts {
-            if (surf.point(w.x, w.y) - at(w.x, w.y)).norm() > tol {
-                let i = us.partition_point(|&u| u <= w.x).clamp(1, nu) - 1;
-                let j = vs.partition_point(|&v| v <= w.y).clamp(1, nv) - 1;
-                if !(split_u[i] || split_v[j]) {
-                    split_u[i] = true;
-                    split_v[j] = true;
-                }
+            let d = (surf.point(w.x, w.y) - at(w.x, w.y)).norm();
+            let i = us.partition_point(|&u| u <= w.x).clamp(1, nu) - 1;
+            let j = vs.partition_point(|&v| v <= w.y).clamp(1, nv) - 1;
+            if d > tol && !(split_u[i] || split_v[j]) {
+                split_u[i] = true;
+                split_v[j] = true;
             }
+            miss_u[i] = miss_u[i].max(d);
+            miss_v[j] = miss_v[j].max(d);
         }
         if !split_u.iter().chain(&split_v).any(|s| *s) {
-            return Ok((surf, dom));
+            // Within the tolerance everywhere. Once, the sites are spaced out by how far
+            // inside it each span is, and the fit made again; if that comes to no fewer
+            // poles, the fit as it was.
+            let poles = surf.cps.len() * surf.cps[0].len();
+            match done.take() {
+                Some((before, n)) if n <= poles => return Ok((before, dom)),
+                Some(_) => return Ok((surf, dom)),
+                None if !respace => return Ok((surf, dom)),
+                None => {
+                    let (wu, wv) = (spaced(&us, &miss_u, tol), spaced(&vs, &miss_v, tol));
+                    if wu.len() * wv.len() >= us.len() * vs.len() {
+                        return Ok((surf, dom));
+                    }
+                    done = Some((surf, poles));
+                    (us, vs) = (wu, wv);
+                    continue;
+                }
+            }
         }
         if us.len() > 600 || vs.len() > 300 {
             break;
@@ -3933,6 +4179,9 @@ fn fit_tensor(
         };
         us = halve(&us, &split_u);
         vs = halve(&vs, &split_v);
+    }
+    if let Some((before, _)) = done {
+        return Ok((before, dom));
     }
     if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
         let surf = tensor(&at, &us, &vs);
