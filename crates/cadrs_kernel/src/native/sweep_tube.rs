@@ -2373,6 +2373,31 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
                         f.0.cps.len(),
                         f.0.cps[0].len()
                     );
+                    // (Where its sites crowd: by how many times halved, how many spans and
+                    // from where to where, as parts of the way across.)
+                    for (name, k, (lo, hi)) in [("a", &f.0.ku, f.1.0), ("ψ", &f.0.kv, f.1.1)] {
+                        let mut levels: Vec<(usize, f64, f64)> = Vec::new();
+                        for w in k.windows(2).filter(|w| w[1] > w[0]) {
+                            let l =
+                                ((hi - lo) / 8.0 / (w[1] - w[0])).log2().round().max(0.0) as usize;
+                            if levels.len() <= l {
+                                levels.resize(l + 1, (0, f64::INFINITY, f64::NEG_INFINITY));
+                            }
+                            let e = &mut levels[l];
+                            *e = (
+                                e.0 + 1,
+                                e.1.min((w[0] - lo) / (hi - lo)),
+                                e.2.max((w[1] - lo) / (hi - lo)),
+                            );
+                        }
+                        let all: Vec<String> = levels
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, e)| e.0 > 0)
+                            .map(|(l, e)| format!("/{}: {} ({:.3}..{:.3})", 1 << l, e.0, e.1, e.2))
+                            .collect();
+                        eprintln!("    along {name}: {}", all.join(", "));
+                    }
                 }
             }
         }

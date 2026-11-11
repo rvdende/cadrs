@@ -163,3 +163,50 @@ fn a_thread_cut_a_lead_at_a_time_is_the_thread() {
     let volume = k.mass_properties(threaded).unwrap().volume;
     assert!((volume - 464.457_43).abs() < 1e-5, "volume {volume}");
 }
+
+/// brep-bench's tumbling torus crossed the other way: a torus turned about two axes at once,
+/// whose core circle's sweep all but pinches once, so that one of its sheets has a hole cut out
+/// (a band's own patch fills it). Its area is its faces' own: the sheet's fit inside that hole
+/// follows nothing, and an integral carried across it came to 66.7837; the solid's triangles
+/// come to 66.7483 as they are refined.
+#[test]
+fn a_sheet_with_a_hole_is_measured_inside_its_face() {
+    let mut k = NativeKernel::new();
+    let torus = k
+        .primitive(&Primitive::torus(
+            Point3::new(3.0, 0.0, 2.0),
+            Vector3::z(),
+            1.0,
+            0.22,
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let (lean, tilt) = (45f64.to_radians(), 20f64.to_radians());
+    let (from, to) = ((-100f64).to_radians(), 100f64.to_radians());
+    // (The case's own figure, four places of a root of a half.)
+    let off = 7071.0 / 1e4;
+    let motion = SolidMotion::rigid(vec![
+        RigidStep::turn(
+            Axis::new(Point3::new(2.0, 0.0, 0.0), Vector3::z()),
+            0.7 * from,
+            0.7 * to,
+        ),
+        RigidStep::turn(
+            Axis::new(
+                Point3::new(0.0, off * lean.cos(), off * lean.sin()),
+                Vector3::new(tilt.cos(), tilt.sin() * lean.cos(), tilt.sin() * lean.sin()),
+            ),
+            from,
+            to,
+        ),
+    ]);
+    let swept = k.sweep_solid(torus, &motion).unwrap().first().unwrap();
+    let m = k.mass_properties(swept).unwrap();
+    assert!((m.volume - 13.789847).abs() < 1e-5, "volume {}", m.volume);
+    assert!(
+        (m.surface_area - 66.74839).abs() < 1e-4,
+        "area {}",
+        m.surface_area
+    );
+}

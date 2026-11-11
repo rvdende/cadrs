@@ -833,6 +833,259 @@ fn rect_integrals<const ALL: bool>(s: &Surface, ns: &NurbsSurface, r: [f64; 4], 
     acc
 }
 
+/// Whether a B-spline surface is a smooth fit of something else: quintic or more both ways
+/// (four times differentiable across its knots) and of many spans (256). Its faces are
+/// integrated strictly inside them ([`scan_integrals`]).
+fn smooth_fit(ns: &NurbsSurface) -> bool {
+    let spans = |k: &[f64]| k.windows(2).filter(|w| w[1] > w[0]).count();
+    ns.du >= 5 && ns.dv >= 5 && spans(&ns.ku) * spans(&ns.kv) >= 256
+}
+
+/// A stretch of a face's boundary in (u, v) along which v only rises or only falls.
+struct Arc<'a> {
+    pc: &'a Curve,
+    /// Its ends' parameters, the lower in v first, and their v.
+    t: [f64; 2],
+    v: [f64; 2],
+    /// Whether the boundary runs up it (v rising the way the loop goes).
+    up: bool,
+}
+
+impl Arc<'_> {
+    /// The parameter where the arc is at height `v` (between its ends'), and the u there: by
+    /// bisection helped by Newton's steps, from `from` (where the last height asked for was
+    /// found, or NaN).
+    fn at(&self, v: f64, from: f64) -> (f64, f64) {
+        // (v rises from `lo` to `hi`, whichever way the parameter runs.)
+        let (mut lo, mut hi) = (self.t[0], self.t[1]);
+        let mut t = if from.is_finite() {
+            from
+        } else {
+            lo + (hi - lo) * (v - self.v[0]) / (self.v[1] - self.v[0])
+        };
+        for _ in 0..80 {
+            let (p, d, _) = self.pc.d2(t);
+            let miss = p.y - v;
+            if miss.abs() <= 1e-15 * (1.0 + v.abs()) {
+                return (t, p.x);
+            }
+            if miss > 0.0 {
+                hi = t;
+            } else {
+                lo = t;
+            }
+            let next = t - miss / d.y;
+            t = if d.y != 0.0 && (next - lo) * (next - hi) < 0.0 {
+                next
+            } else {
+                0.5 * (lo + hi)
+            };
+            if (hi - lo).abs() <= 1e-15 * (1.0 + lo.abs().max(hi.abs())) {
+                break;
+            }
+        }
+        (t, self.pc.point(t).x)
+    }
+}
+
+/// The face integrals of a trimmed face of a smooth fit ([`smooth_fit`]) taken strictly inside
+/// it: along each of a rule's lines of constant v, over the stretches of u the face holds
+/// there. (Green's theorem as [`face_integrals_of`] uses it carries every inner integral from
+/// one reference u to the boundary, across whatever of the surface lies between: on a fit that
+/// holds only where its face is, a swept sheet's about a hole cut out of it, that was a wrong
+/// area. And a line for each point of the boundary's rule is many more lines than a face of
+/// hundreds of spans needs.) The lines are laid in strips of v between the boundary's corners,
+/// its turning points in v and the surface's knots in v: within one the face's stretches
+/// change smoothly with v, but for the square root they close or open by at a turning point,
+/// which the rule there is laid out to take (v by the square of its own measure). (A fitted
+/// p-curve's own knots are not strip ends: what its fit wavers by between them, a
+/// hundred-millionth of such a face's area, the rule smooths over.) None where the boundary
+/// isn't made out so (the caller's way then).
+fn scan_integrals<const ALL: bool>(
+    body: &Body,
+    f: &Face,
+    ns: &NurbsSurface,
+    shift: &V3,
+) -> Option<QE> {
+    let mut arcs: Vec<Arc> = Vec::new();
+    let (_, bv) = ns.breaks();
+    let (v_lo, v_hi) = (bv[0], bv[bv.len() - 1]);
+    let mut events: Vec<f64> = bv;
+    let mut turns: Vec<f64> = Vec::new();
+    for l in &f.loops {
+        for c in l {
+            let e = &body.edges[c.edge];
+            let (t0, t1) = co_range(e, c.fwd);
+            let (lo, hi) = (t0.min(t1), t0.max(t1));
+            // The parameters where v turns: within each smooth piece, where its rate in v
+            // changes sign between samples.
+            let mut cuts = vec![lo];
+            for w in c.pc.pieces(lo, hi).windows(2) {
+                const SAMPLES: usize = 4;
+                let rate = |t: f64| c.pc.d2(t).1.y;
+                let mut prev = (w[0], rate(w[0]));
+                for i in 1..=SAMPLES {
+                    let t = w[0] + (w[1] - w[0]) * i as f64 / SAMPLES as f64;
+                    let r = rate(t);
+                    if r * prev.1 < 0.0 {
+                        let (mut a, mut b) = (prev.0, t);
+                        for _ in 0..60 {
+                            let m = 0.5 * (a + b);
+                            if rate(m) * prev.1 > 0.0 {
+                                a = m;
+                            } else {
+                                b = m;
+                            }
+                        }
+                        let t = 0.5 * (a + b);
+                        turns.push(c.pc.point(t).y);
+                        cuts.push(t);
+                    }
+                    if r != 0.0 {
+                        prev = (t, r);
+                    }
+                }
+            }
+            cuts.push(hi);
+            for w in cuts.windows(2) {
+                let (va, vb) = (c.pc.point(w[0]).y, c.pc.point(w[1]).y);
+                if !(va.is_finite() && vb.is_finite()) {
+                    return None;
+                }
+                events.push(va);
+                events.push(vb);
+                if va == vb {
+                    continue;
+                }
+                // (An end the boundary comes to all but level, a corner at a turning point:
+                // taken as one.)
+                for (t, v) in [(w[0], va), (w[1], vb)] {
+                    let d = c.pc.d2(t).1;
+                    if d.y.abs() <= 0.5 * d.x.abs() {
+                        turns.push(v);
+                    }
+                }
+                let rising = vb > va;
+                arcs.push(Arc {
+                    pc: &c.pc,
+                    t: if rising { [w[0], w[1]] } else { [w[1], w[0]] },
+                    v: [va.min(vb), va.max(vb)],
+                    up: rising == (t1 > t0),
+                });
+            }
+        }
+    }
+    if arcs.is_empty() {
+        return None;
+    }
+    events.sort_by(f64::total_cmp);
+    events.dedup();
+    let (b_lo, b_hi) = arcs
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, z), arc| {
+            (a.min(arc.v[0]), z.max(arc.v[1]))
+        });
+    // (A boundary past the surface's own range in v, a closed surface's face over its seam:
+    // not laid out here.)
+    let slack = 1e-9 * (v_hi - v_lo);
+    if b_lo < v_lo - slack || b_hi > v_hi + slack {
+        return None;
+    }
+    // The strips, each with whether the boundary turns at its bottom and at its top; one it
+    // turns at both ends of in two halves.
+    let turn_at = |v: f64| turns.contains(&v);
+    let mut strips: Vec<(f64, f64, bool, bool)> = Vec::new();
+    for w in events.windows(2) {
+        let (va, vb) = (w[0], w[1]);
+        if va < b_lo || vb > b_hi || vb - va <= 1e-12 * (1.0 + va.abs().max(vb.abs())) {
+            continue;
+        }
+        match (turn_at(va), turn_at(vb)) {
+            (true, true) => {
+                let m = 0.5 * (va + vb);
+                strips.push((va, m, true, false));
+                strips.push((m, vb, false, true));
+            }
+            (a, b) => strips.push((va, vb, a, b)),
+        }
+    }
+    // (As over a rectangle of the surface's parameters: sixteen points a strip, eight across
+    // many short ones.)
+    let g = gauss(if strips.len() > 16 { 8 } else { 16 });
+    let mut jobs: Vec<[f64; 4]> = Vec::new();
+    // (Strips where the boundary's pieces don't quite meet, a stretch short: how much of the
+    // height they leave out.)
+    let mut left_out = 0.0;
+    let mut from: Vec<f64> = vec![f64::NAN; arcs.len()];
+    let mut crossings: Vec<(f64, bool)> = Vec::new();
+    for &(va, vb, turn_a, turn_b) in &strips {
+        let mid = 0.5 * (va + vb);
+        let active: Vec<usize> = (0..arcs.len())
+            .filter(|&i| arcs[i].v[0] < mid && arcs[i].v[1] > mid)
+            .collect();
+        let whole = active
+            .iter()
+            .all(|&i| arcs[i].v[0] <= va && arcs[i].v[1] >= vb);
+        if !whole || active.len() % 2 == 1 {
+            left_out += vb - va;
+            continue;
+        }
+        for &i in &active {
+            from[i] = f64::NAN;
+        }
+        let h = vb - va;
+        for (x, gw) in g.x.iter().zip(g.w) {
+            // (s from 0 to 1 up the strip; where the boundary turns at an end, v by the
+            // square of how far s is from it.)
+            let s = 0.5 * (1.0 + x);
+            let (v, w) = if turn_a {
+                (va + h * s * s, gw * h * s)
+            } else if turn_b {
+                (vb - h * (1.0 - s) * (1.0 - s), gw * h * (1.0 - s))
+            } else {
+                (va + h * s, 0.5 * gw * h)
+            };
+            crossings.clear();
+            for &i in &active {
+                let (t, u) = arcs[i].at(v, from[i]);
+                from[i] = t;
+                crossings.push((u, arcs[i].up));
+            }
+            crossings.sort_by(|a, b| a.0.total_cmp(&b.0));
+            for pair in crossings.chunks(2) {
+                // (The face lies between a stretch of boundary going one way and one going
+                // the other; its side says which way round the loops run, as Green's sum
+                // would.)
+                if pair[0].1 == pair[1].1 {
+                    return None;
+                }
+                let sign = if pair[1].1 { 1.0 } else { -1.0 };
+                jobs.push([pair[0].0, pair[1].0, v, sign * w]);
+            }
+        }
+    }
+    if left_out > 1e-7 * (b_hi - b_lo) {
+        return None;
+    }
+    let mut acc = [0.0; NE];
+    let mut scratch = Vec::with_capacity(64);
+    let surf = &f.surf;
+    run_jobs::<ALL>(
+        surf,
+        &Inner::of::<ALL>(surf),
+        &jobs,
+        shift,
+        &mut acc,
+        &mut scratch,
+    );
+    if !f.sense {
+        for q in acc.iter_mut().take(4) {
+            *q = -*q;
+        }
+    }
+    Some(acc)
+}
+
 /// A B-spline face as the same face of its surface with u and v swapped (its p-curves with
 /// them, and its sense, as the natural normal turns over), where the surface has four times
 /// as many spans along u as along v, or more (a screw's long faces); else None.
@@ -904,6 +1157,13 @@ pub(crate) fn face_integrals_of<const ALL: bool>(body: &Body, f: &Face, shift: &
                 *q = -*q;
             }
         }
+        return acc;
+    }
+    // A smooth fit, which holds only where its face is: taken strictly inside the face.
+    if let Surface::Nurbs(ns) = &f.surf
+        && smooth_fit(ns)
+        && let Some(acc) = scan_integrals::<ALL>(body, f, ns, shift)
+    {
         return acc;
     }
     // A B-spline with four times as many spans along u as along v: its parameters swapped,

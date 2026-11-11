@@ -4049,6 +4049,33 @@ fn debug_tumbling_tori() {
                 }
             }
         }
+        if std::env::var_os("CADRS_TORUS_AREAS").is_some() {
+            // (Each face's area as integrated and as its triangles', to find a face the
+            // integral is off on.)
+            let mut by_face: std::collections::HashMap<FaceId, f64> = Default::default();
+            for (t, f) in mesh.indices.iter().zip(&mesh.triangle_faces) {
+                let [a, b, c] = t.map(|i| mesh.positions[i as usize]);
+                *by_face.entry(*f).or_default() += 0.5 * (b - a).cross(&(c - a)).norm();
+            }
+            for (i, f) in k.faces(id).unwrap().iter().enumerate() {
+                let meshed = by_face.get(&f.id).copied().unwrap_or(0.0);
+                let poles = match &body.faces[i].surf {
+                    cadrs_kernel::native::surface::Surface::Nurbs(n) => {
+                        format!("{} by {} poles", n.cps.len(), n.cps[0].len())
+                    }
+                    _ => String::new(),
+                };
+                eprintln!(
+                    "  face {i} {:?} {poles} ({} loops of {:?} edges): area {:.12}, its triangles' {:.9} ({:+.2e})",
+                    f.kind,
+                    body.faces[i].loops.len(),
+                    body.faces[i].loops.iter().map(Vec::len).collect::<Vec<_>>(),
+                    f.area,
+                    meshed,
+                    f.area - meshed
+                );
+            }
+        }
         let meshed = body.faces.len() >= 50 && 2 * flat >= body.faces.len();
         let ok = !meshed && unmatched == 0 && matches!(k.body_class(id), Ok(BodyClass::Solid));
         eprintln!(
