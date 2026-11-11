@@ -773,39 +773,67 @@ impl NurbsCurve {
         }
     }
 
-    /// [`Self::interpolate`] (no end derivatives) of several rows of points at the same
-    /// parameters, as one system solved for all of them: the curves' common knots and each
-    /// row's poles, the same to the bit as each interpolated by itself (a surface skinned
-    /// through sections is a row for each pole of its section). None where a row by itself
-    /// would go another way: parameters that repeat, too few points for the banded system, or
-    /// one that can't be solved.
+    /// [`Self::interpolate`] of several rows of points at the same parameters, as one system
+    /// solved for all of them: the curves' common knots and each row's poles, the same to the
+    /// bit as each interpolated by itself (a surface skinned through sections is a row for each
+    /// pole of its section). With `ends`, each row's derivatives at its first and its last
+    /// point too. None where a row by itself would go another way: parameters that repeat, too
+    /// few points for the banded system, or one that can't be solved.
     pub fn interpolate_all(
         rows: &[Vec<P3>],
         params: &[f64],
         p: usize,
+        ends: Option<(&[V3], &[V3])>,
     ) -> Option<(Vec<f64>, Vec<Vec<P3>>)> {
-        let n = params.len();
+        let n_pts = params.len();
         let rising = params
             .windows(2)
             .all(|w| w[1] > w[0] + 1e-14 * (1.0 + w[0].abs()));
-        if n <= 24 || !rising || rows.is_empty() || rows.iter().any(|r| r.len() != n) {
+        if n_pts <= 24 || !rising || rows.is_empty() || rows.iter().any(|r| r.len() != n_pts) {
             return None;
         }
+        if ends.is_some_and(|(a, b)| a.len() != rows.len() || b.len() != rows.len()) {
+            return None;
+        }
+        let extra = if ends.is_some() { 2 } else { 0 };
+        // (Poles, degree and knots as [`Self::try_interpolate`]'s: knots by averaging, the
+        // end parameters once more each for the derivatives there.)
+        let n = n_pts + extra;
         let p = p.min(n - 1);
-        // (Knots by averaging, as [`Self::try_interpolate`]'s.)
+        let mut ext: Vec<f64> = Vec::with_capacity(n);
+        if ends.is_some() {
+            ext.push(params[0]);
+        }
+        ext.extend_from_slice(params);
+        if ends.is_some() {
+            ext.push(params[n_pts - 1]);
+        }
         let mut knots = vec![params[0]; p + 1];
         for j in 1..n - p {
-            let s: f64 = (j..j + p).map(|i| params[i.min(n - 1)]).sum();
+            let s: f64 = (j..j + p).map(|i| ext[i.min(ext.len() - 1)]).sum();
             knots.push(s / p as f64);
         }
-        knots.extend(vec![params[n - 1]; p + 1]);
+        knots.extend(vec![params[n_pts - 1]; p + 1]);
         let mut band = Band::new(n, p + 2);
         let mut outside = false;
-        for (row, &u) in params.iter().enumerate() {
+        let mut put = |row: usize, u: f64, d: usize| {
             let span = find_span(n - 1, p, u, &knots);
-            let nd = basis_ders(span, u, p, 0, &knots);
-            for (j, b) in nd[0].iter().enumerate().take(p + 1) {
+            let nd = basis_ders(span, u, p, d, &knots);
+            for (j, b) in nd[d].iter().enumerate().take(p + 1) {
                 outside |= !band.set(row, span - p + j, *b);
+            }
+        };
+        // (The rows in that order too: a point, the first one's derivative after it, the last
+        // one's after it.)
+        let mut at: Vec<usize> = Vec::with_capacity(n_pts);
+        let mut row = 0;
+        for (i, &u) in params.iter().enumerate() {
+            put(row, u, 0);
+            at.push(row);
+            row += 1;
+            if ends.is_some() && (i == 0 || i == n_pts - 1) {
+                put(row, u, 1);
+                row += 1;
             }
         }
         if outside {
@@ -814,9 +842,16 @@ impl NurbsCurve {
         let mut rhs = DMatrix::<f64>::zeros(n, 3 * rows.len());
         for (k, r) in rows.iter().enumerate() {
             for (i, q) in r.iter().enumerate() {
-                rhs[(i, 3 * k)] = q.x;
-                rhs[(i, 3 * k + 1)] = q.y;
-                rhs[(i, 3 * k + 2)] = q.z;
+                rhs[(at[i], 3 * k)] = q.x;
+                rhs[(at[i], 3 * k + 1)] = q.y;
+                rhs[(at[i], 3 * k + 2)] = q.z;
+            }
+            if let Some((d0, d1)) = ends {
+                for (i, d) in [(at[0] + 1, d0[k]), (at[n_pts - 1] + 1, d1[k])] {
+                    rhs[(i, 3 * k)] = d.x;
+                    rhs[(i, 3 * k + 1)] = d.y;
+                    rhs[(i, 3 * k + 2)] = d.z;
+                }
             }
         }
         let sol = band.solve(rhs)?;

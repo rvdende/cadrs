@@ -120,7 +120,9 @@ impl Screw {
             if err <= tol || n >= 1 << 15 {
                 return me;
             }
-            n *= 2;
+            // (A quarter more sections a try: the rail's miss falls as their sixth power, and
+            // every side the screw sweeps carries a row of poles for each.)
+            n = (5 * n).div_ceil(4);
         }
     }
 
@@ -147,13 +149,26 @@ impl Screw {
 
     fn rail_nurbs(&self, p: &P3) -> crate::native::nurbs::NurbsCurve {
         let pts: Vec<P3> = self.v.iter().map(|&s| self.place(s).point(p)).collect();
+        // (Through its ends by the way the point is going there, where the lead is steady and
+        // that is known: a rail held only at its points strays most beside its ends, and took
+        // twice the sections.)
+        let (d0, d1) = match (self.steady(), pts.first(), pts.last()) {
+            (true, Some(a), Some(b)) => (Some(self.velocity(a)), Some(self.velocity(b))),
+            _ => (None, None),
+        };
         crate::native::nurbs::NurbsCurve::interpolate(
             &pts,
             &self.v,
             self.deg.min(pts.len() - 1),
-            None,
-            None,
+            d0,
+            d1,
         )
+    }
+
+    /// Whether the screw rises by its `lift` all the way (no lead that changes): a point's
+    /// velocity is then [`Self::velocity`]'s wherever it is.
+    fn steady(&self) -> bool {
+        self.rise.is_none()
     }
 
     fn rail(&self, p: &P3) -> Option<Curve> {
@@ -217,14 +232,39 @@ impl Screw {
         let mut kv = Vec::new();
         // (The poles' paths through the same sections: one system for them all, where that
         // is what each by itself would solve.)
-        if let Some((knots, poles)) = NurbsCurve::interpolate_all(&paths, &self.v, q) {
+        // (Each path's ends by the way its pole is going there, as the rails': a weighted
+        // pole's velocity is its point's by its weight.)
+        let going = |c: &NurbsCurve| -> Vec<V3> {
+            c.cps
+                .iter()
+                .map(|h| {
+                    let x = V3::new(h.x, h.y, h.z);
+                    self.z.cross(&(x - self.o.coords * h.w)) + self.z * (self.lift * h.w)
+                })
+                .collect()
+        };
+        let ends = match (self.steady(), curves.first(), curves.last()) {
+            (true, Some(a), Some(b)) => Some((going(a), going(b))),
+            _ => None,
+        };
+        let all = NurbsCurve::interpolate_all(
+            &paths,
+            &self.v,
+            q,
+            ends.as_ref().map(|(a, b)| (a.as_slice(), b.as_slice())),
+        );
+        if let Some((knots, poles)) = all {
             kv = knots;
             for (path, h) in poles.iter().zip(&n0.cps) {
                 cols.push(path.iter().map(|p| H::new(p.x, p.y, p.z, h.w)).collect());
             }
         } else {
-            for (xyz, h) in paths.iter().zip(&n0.cps) {
-                let a = NurbsCurve::interpolate(xyz, &self.v, q, None, None);
+            for (i, (xyz, h)) in paths.iter().zip(&n0.cps).enumerate() {
+                let (d0, d1) = match &ends {
+                    Some((a, b)) => (Some(a[i]), Some(b[i])),
+                    None => (None, None),
+                };
+                let a = NurbsCurve::interpolate(xyz, &self.v, q, d0, d1);
                 kv = a.knots.clone();
                 cols.push(
                     a.cps
