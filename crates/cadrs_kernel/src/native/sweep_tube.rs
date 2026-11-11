@@ -267,6 +267,10 @@ pub(crate) struct Tube<'a> {
     size: f64,
     ts: Vec<f64>,
     places: Vec<(M3, V3)>,
+    /// The core circle as each sample places it: its centre and its axis. What the inside
+    /// test's first reading goes by: a point's distance from the circle is then a few
+    /// products, with no turning of the point into the body's frame.
+    rings: Vec<(V3, V3)>,
     /// How far the core circle's points move at most over each STRIDE samples.
     spans: Vec<f64>,
     pinches: Vec<Pinch>,
@@ -353,6 +357,10 @@ impl<'a> Tube<'a> {
             r,
             size,
             ts,
+            rings: places
+                .iter()
+                .map(|(m, d)| (m * fr.o.coords + d, m * fr.z))
+                .collect(),
             places,
             spans,
             pinches: Vec::new(),
@@ -646,33 +654,82 @@ impl<'a> Tube<'a> {
         self.f_at(&self.motion.place(t), p)
     }
 
-    /// The least of f over [a, b] by golden-section search (an end where f only rises from it).
-    fn golden(&self, p: &P3, mut a: f64, mut b: f64) -> Least {
-        let g = 0.5 * (5f64.sqrt() - 1.0);
-        let (mut c, mut d) = (b - g * (b - a), a + g * (b - a));
-        let (mut fc, mut fd) = (self.f(c, p), self.f(d, p));
+    /// The least of f over [a, b] (an end where f only rises from it): by Brent's search, a
+    /// parabola through the three best places tried wherever it lands inside them and gains
+    /// on the last steps, else a golden section. A third of the places a golden-section
+    /// search alone takes, and each is the motion placed anew.
+    fn golden(&self, p: &P3, a: f64, b: f64) -> Least {
+        // (To a hundred-millionth of the motion: the least itself is then good to rounding,
+        // being flat there; an instant wanted exactly is made so by [`Self::foot`].)
+        let tol = 0.5e-8;
+        let g = 0.5 * (3.0 - 5f64.sqrt());
+        let (mut lo, mut hi) = (a, b);
+        let mut x = lo + g * (hi - lo);
+        let (mut w, mut v) = (x, x);
+        let mut fx = self.f(x, p);
+        let (mut fw, mut fv) = (fx, fx);
+        let (mut d, mut e): (f64, f64) = (0.0, 0.0);
         for _ in 0..64 {
-            // (To a hundred-millionth of the motion: the least itself is then good to
-            // rounding, being flat there; an instant wanted exactly is made so by
-            // [`Self::foot`].)
-            if b - a <= 1e-8 {
+            let mid = 0.5 * (lo + hi);
+            if (x - mid).abs() <= 2.0 * tol - 0.5 * (hi - lo) {
                 break;
             }
-            if fc < fd {
-                b = d;
-                d = c;
-                fd = fc;
-                c = b - g * (b - a);
-                fc = self.f(c, p);
+            let mut parabola = false;
+            if e.abs() > tol {
+                let r = (x - w) * (fx - fv);
+                let mut q = (x - v) * (fx - fw);
+                let mut s = (x - v) * q - (x - w) * r;
+                q = 2.0 * (q - r);
+                if q > 0.0 {
+                    s = -s;
+                }
+                q = q.abs();
+                if s.abs() < (0.5 * q * e).abs() && s > q * (lo - x) && s < q * (hi - x) {
+                    e = d;
+                    d = s / q;
+                    let u = x + d;
+                    if u - lo < 2.0 * tol || hi - u < 2.0 * tol {
+                        d = if x < mid { tol } else { -tol };
+                    }
+                    parabola = true;
+                }
+            }
+            if !parabola {
+                e = if x < mid { hi - x } else { lo - x };
+                d = g * e;
+            }
+            let u = if d.abs() >= tol {
+                x + d
+            } else if d > 0.0 {
+                x + tol
             } else {
-                a = c;
-                c = d;
-                fc = fd;
-                d = a + g * (b - a);
-                fd = self.f(d, p);
+                x - tol
+            };
+            let fu = self.f(u, p);
+            if fu <= fx {
+                if u < x {
+                    hi = x;
+                } else {
+                    lo = x;
+                }
+                (v, fv) = (w, fw);
+                (w, fw) = (x, fx);
+                (x, fx) = (u, fu);
+            } else {
+                if u < x {
+                    lo = u;
+                } else {
+                    hi = u;
+                }
+                if fu <= fw || w == x {
+                    (v, fv) = (w, fw);
+                    (w, fw) = (u, fu);
+                } else if fu <= fv || v == x || v == w {
+                    (v, fv) = (u, fu);
+                }
             }
         }
-        let mut best = if fc < fd { (c, fc) } else { (d, fd) };
+        let mut best = (x, fx);
         for e in [a, b] {
             let fe = self.f(e, p);
             if fe < best.1 {
@@ -694,15 +751,29 @@ impl<'a> Tube<'a> {
         let vals = self.samples(p);
         let n = vals.len();
         let bound = 0.5 * self.r;
+        // The samples that are leasts among their neighbours, the lowest first: each is made
+        // exact between its neighbours unless it can't come under the best so far, f falling
+        // from a sample by no more than the circle's travel to the next.
+        let mut low: Vec<usize> = (0..n)
+            .filter(|&i| {
+                let left = i == 0 || vals[i] <= vals[i - 1];
+                let right = i + 1 == n || vals[i] <= vals[i + 1];
+                left && right && vals[i] <= bound
+            })
+            .collect();
+        low.sort_by(|&i, &j| vals[i].total_cmp(&vals[j]));
+        let travel = |i: usize| {
+            let k = (i / STRIDE).min(self.spans.len() - 1);
+            self.spans[k].max(self.spans[k.saturating_sub(1)])
+        };
         let mut best: Least = (0.0, f64::INFINITY);
-        for i in 0..n {
-            let left = i == 0 || vals[i] <= vals[i - 1];
-            let right = i + 1 == n || vals[i] <= vals[i + 1];
-            if !(left && right) || vals[i] > bound {
+        for i in low {
+            if vals[i] - travel(i) > best.1 {
                 continue;
             }
             let m = self.golden(p, self.ts[i.saturating_sub(1)], self.ts[(i + 1).min(n - 1)]);
-            if m.1 < best.1 {
+            // (Of two alike, the earlier, as they were taken in order before.)
+            if m.1 < best.1 || (m.1 == best.1 && m.0 < best.0) {
                 best = m;
             }
         }
@@ -717,16 +788,39 @@ impl<'a> Tube<'a> {
         let n = self.places.len();
         let bound = 0.5 * self.r;
         let mut vals = vec![f64::INFINITY; n];
-        for i in (0..n).step_by(STRIDE) {
-            vals[i] = self.f_at(&self.places[i], p);
-        }
-        for (k, span) in self.spans.iter().enumerate() {
-            let (a, b) = (k * STRIDE, (k + 1) * STRIDE);
-            if 0.5 * (vals[a] + vals[b] - span) > bound {
+        // (f by the placed circle: the same to rounding as by the place, and these only say
+        // where a least is to be sought.)
+        let (big, r) = (self.big, self.r);
+        let ring = |i: usize| {
+            let (c, z) = &self.rings[i];
+            let w = p.coords - c;
+            let h = w.dot(z);
+            ((w.norm_squared() - h * h).max(0.0).sqrt() - big).hypot(h) - r
+        };
+        // (Eight stretches at a time first, by their travel summed: a stretch of them none
+        // of which can come near is left unread, its values infinite as the places between
+        // the samples read are. No least near the tube is among them.)
+        for (kk, spans) in self.spans.chunks(STRIDE).enumerate() {
+            let (ka, kb) = (kk * STRIDE, kk * STRIDE + spans.len());
+            let (a, b) = (ka * STRIDE, kb * STRIDE);
+            if vals[a].is_infinite() {
+                vals[a] = ring(a);
+            }
+            vals[b] = ring(b);
+            if 0.5 * (vals[a] + vals[b] - spans.iter().sum::<f64>()) > bound {
                 continue;
             }
-            for i in a + 1..b {
-                vals[i] = self.f_at(&self.places[i], p);
+            for k in ka + 1..kb {
+                vals[k * STRIDE] = ring(k * STRIDE);
+            }
+            for (k, span) in (ka..kb).zip(spans) {
+                let (a, b) = (k * STRIDE, (k + 1) * STRIDE);
+                if 0.5 * (vals[a] + vals[b] - span) > bound {
+                    continue;
+                }
+                for (i, v) in vals.iter_mut().enumerate().take(b).skip(a + 1) {
+                    *v = ring(i);
+                }
             }
         }
         vals
@@ -2829,15 +2923,25 @@ fn boolean_seamed(
         }))
     };
     let (ma, mb) = (Motion::Steps(&a.steps), Motion::Steps(&b.steps));
-    let widened = std::cell::Cell::new(false);
-    let pa = match prepare(&a.torus, &ma, seams[0], &widened)? {
+    // (The two made ready side by side: neither reads the other.)
+    let (pa, pb) = rayon::join(
+        || prepare(&a.torus, &ma, seams[0], &std::cell::Cell::new(false)),
+        || prepare(&b.torus, &mb, seams[1], &std::cell::Cell::new(false)),
+    );
+    let pa = match pa? {
         Ok(p) => p,
         Err(e) => return Some(Err(e)),
     };
-    let pb = match prepare(&b.torus, &mb, seams[1], &widened)? {
+    let pb = match pb? {
         Ok(p) => p,
         Err(e) => return Some(Err(e)),
     };
+    if debug {
+        eprintln!(
+            "tube boolean: both made ready by {:.0} ms",
+            t_start.elapsed().as_secs_f64() * 1e3
+        );
+    }
     let (na, nsa, nsb) = (pa.patches.len(), pa.sheets.len(), pb.sheets.len());
     // (Whether each solid's faces are kept inside the other.)
     let (in_a, in_b) = match op {
@@ -2902,19 +3006,51 @@ fn boolean_seamed(
             nodes_a.iter().map(|n| n.0).collect::<Vec<_>>()
         );
     }
-    let mut given = trace(&pa, 0, Some(&beside_a), &nodes_a);
-    given.extend(trace(&pb, na, Some(&beside_b), &nodes_b));
+    // (Each solid's sheets traced beside the other's: they share nothing but what they read.)
+    let (mut given, more) = rayon::join(
+        || trace(&pa, 0, Some(&beside_a), &nodes_a),
+        || trace(&pb, na, Some(&beside_b), &nodes_b),
+    );
+    given.extend(more);
+    if debug {
+        eprintln!(
+            "tube boolean: sheets traced by {:.0} ms",
+            t_start.elapsed().as_secs_f64() * 1e3
+        );
+    }
     let is_sheet = |i: usize| i < nsa || (na..na + nsb).contains(&i);
     drop_twins(&mut given, &is_sheet, size, fit_tol);
     let n_sheet_curves = given.len();
+    if debug {
+        eprintln!(
+            "tube boolean: twins dropped by {:.0} ms",
+            t_start.elapsed().as_secs_f64() * 1e3
+        );
+    }
     // The end tori's crossings: each solid's own two, and each of the one's with each of the
     // other's.
-    tori_cross((&pa, 0, START), (&pa, 0, END), &mut given);
-    tori_cross((&pb, na, START), (&pb, na, END), &mut given);
-    for ca in [START, END] {
-        for cb in [START, END] {
-            tori_cross((&pa, 0, ca), (&pb, na, cb), &mut given);
+    {
+        use rayon::prelude::*;
+        type End<'p, 'm> = (&'p Prep<'m>, usize, usize);
+        let mut pairs: Vec<(End, End)> = vec![
+            ((&pa, 0, START), (&pa, 0, END)),
+            ((&pb, na, START), (&pb, na, END)),
+        ];
+        for ca in [START, END] {
+            for cb in [START, END] {
+                pairs.push(((&pa, 0, ca), (&pb, na, cb)));
+            }
         }
+        // (Each pair on its own, taken in the order they were.)
+        let crossed: Vec<Vec<super::sweep_moving::Given>> = pairs
+            .par_iter()
+            .map(|&(x, y)| {
+                let mut out = Vec::new();
+                tori_cross(x, y, &mut out);
+                out
+            })
+            .collect();
+        given.extend(crossed.into_iter().flatten());
     }
     if debug {
         eprintln!(
@@ -3440,6 +3576,60 @@ fn trace(
     let fc = this.faces();
     let jump = 4.0 * tube.step();
     let fit_tol = this.fit_tol;
+    let t_trace = web_time::Instant::now();
+    // The other solid's hold of every node its own solid keeps, of all the sheets at once
+    // before any is traced: read sheet by sheet inside the tracing, a sheet waiting for its
+    // nodes would take up another's whole tracing meanwhile and wait that out as well.
+    let beside_all: Vec<Option<Vec<(bool, f64)>>> = match other {
+        None => vec![None; this.sheets.len()],
+        Some(o) => {
+            let jobs: Vec<(usize, usize)> = this
+                .sheets
+                .iter()
+                .enumerate()
+                .flat_map(|(i, sh)| (0..(sh.grid.0 + 1) * (sh.grid.1 + 1)).map(move |n| (i, n)))
+                .collect();
+            let read: Vec<(bool, f64)> = jobs
+                .par_iter()
+                .map(|&(i, n)| {
+                    let sh = &this.sheets[i];
+                    let c = sh.nodes[n];
+                    if c.0 {
+                        return c;
+                    }
+                    let w = sh.at(n / (sh.grid.1 + 1), n % (sh.grid.1 + 1));
+                    let x = tube
+                        .eval(&Pos {
+                            chart: sh.patch.0,
+                            a: w.x,
+                            psi: w.y,
+                        })
+                        .p;
+                    let l = o.prep.tube.least(&x);
+                    if (l.1 < -o.prep.tube.delta()) != o.inside {
+                        (true, OTHER + l.0)
+                    } else {
+                        c
+                    }
+                })
+                .collect();
+            let mut at = 0;
+            this.sheets
+                .iter()
+                .map(|sh| {
+                    let n = (sh.grid.0 + 1) * (sh.grid.1 + 1);
+                    at += n;
+                    Some(read[at - n..at].to_vec())
+                })
+                .collect()
+        }
+    };
+    if std::env::var_os("CADRS_TUBE_TIMES").is_some() {
+        eprintln!(
+            "  trace: from face {base}: the other's hold of the nodes read by {:.0} ms",
+            t_trace.elapsed().as_secs_f64() * 1e3
+        );
+    }
     let traced: Vec<Vec<super::sweep_moving::Given>> = this
         .sheets
         .par_iter()
@@ -3511,18 +3701,13 @@ fn trace(
             // keeps.)
             let (mu, mv) = sh.grid;
             let t_nodes = web_time::Instant::now();
-            let nodes: Option<Vec<(bool, f64)>> = other.map(|_| {
-                (0..(mu + 1) * (mv + 1))
-                    .into_par_iter()
-                    .map(|n| beside(sh.nodes[n], sh.at(n / (mv + 1), n % (mv + 1))))
-                    .collect()
-            });
+            let nodes: Option<&Vec<(bool, f64)>> = beside_all[i].as_ref();
             let t_curves = web_time::Instant::now();
             let chains = cover_curves(
                 &fd,
                 bx,
                 sh.grid,
-                Some(nodes.as_deref().unwrap_or(&sh.nodes)),
+                Some(nodes.map_or(&sh.nodes[..], |n| &n[..])),
                 1e-6,
                 jump,
                 &point,
@@ -4664,7 +4849,13 @@ pub(super) fn onto_boundary(
         tc = t1;
     }
     let (mut lo, mut hi) = (0.0, s1);
+    // (No further than the places can be told apart: a step found a billionth off is down to
+    // rounding in twenty halvings, and each one more is the whole motion read again.)
+    let least = 2.0 * f64::EPSILON * (1.0 + w.coords.amax());
     for _ in 0..40 {
+        if (hi - lo).abs() <= least {
+            break;
+        }
         let mid = 0.5 * (lo + hi);
         let (c, t) = test(at(mid), tc);
         if c {
@@ -4902,7 +5093,24 @@ pub(super) fn cover_curves(
                     }
                     let mid = P2::new(0.5 * (p.x + q.x), 0.5 * (p.y + q.y));
                     let (r, t) = if (tp - tq).abs() > jump {
-                        onto_boundary(&full, mid, d, tp, bx)
+                        // (Another instant takes over between the two. Read about the two
+                        // instants first, covered where either covers: a small part of the
+                        // motion each, where in full is the whole of it at every halving.
+                        // That stands where it reads the middle as in full it is, and
+                        // membership in full does change across what it finds; else in full.)
+                        let either = |w: P2, _: f64| {
+                            let a = (fd.near)(w, tp);
+                            if a.0 { a } else { (fd.near)(w, tq) }
+                        };
+                        let across = V2::new(-d.y, d.x).normalize() * 1e-8;
+                        (either(mid, tp).0 == (fd.cover)(mid).0)
+                            .then(|| onto_boundary(&either, mid, d, tp, bx))
+                            .flatten()
+                            .filter(|(r, _)| {
+                                (r - mid).norm() < d.norm()
+                                    && (fd.cover)(r + across).0 != (fd.cover)(r - across).0
+                            })
+                            .or_else(|| onto_boundary(&full, mid, d, tp, bx))
                     } else {
                         let tm = 0.5 * (tp + tq);
                         fd.margin
