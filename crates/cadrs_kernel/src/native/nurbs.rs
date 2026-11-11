@@ -1818,6 +1818,55 @@ pub fn solve(a: DMatrix<f64>, b: DVector<f64>) -> Option<DVector<f64>> {
     a.lu().solve(&b)
 }
 
+/// A B-spline surface's basis along u at a rule's points on each of a run of its spans
+/// ([`NurbsSurface::span_rule`]): integrals along u at many a v cross the same spans at the
+/// same points, where [`IsoV::d1_on`] then costs a point its sums alone.
+pub struct SpanRule {
+    /// The spans' ends, ascending: span `i` runs from `breaks[i]` to `breaks[i + 1]`.
+    breaks: Vec<f64>,
+    /// Each span's knot span.
+    spans: Vec<usize>,
+    /// The bases, `n` a span.
+    at: Vec<B1>,
+    n: usize,
+}
+
+impl SpanRule {
+    /// The span that runs from `lo` to `hi` exactly, if one does.
+    pub fn span(&self, lo: f64, hi: f64) -> Option<usize> {
+        let i = self.breaks.binary_search_by(|b| b.total_cmp(&lo)).ok()?;
+        (self.breaks.get(i + 1) == Some(&hi)).then_some(i)
+    }
+}
+
+impl NurbsSurface {
+    /// The u basis at the points `m + r·x` (m a span's middle, r half its length, `x` a
+    /// rule's points on [−1, 1]) of each span between `breaks` (distinct knots in a row,
+    /// ascending). None for a degree the short arrays don't hold, or fewer than two breaks.
+    pub fn span_rule(&self, breaks: &[f64], x: &[f64]) -> Option<SpanRule> {
+        if self.du > MAXP || breaks.len() < 2 {
+            return None;
+        }
+        let nu = self.cps.len() - 1;
+        let mut spans = Vec::with_capacity(breaks.len() - 1);
+        let mut at = Vec::with_capacity((breaks.len() - 1) * x.len());
+        for w in breaks.windows(2) {
+            let (m, r) = ((w[0] + w[1]) * 0.5, (w[1] - w[0]) * 0.5);
+            let su = find_span(nu, self.du, m, &self.ku);
+            spans.push(su);
+            for x in x {
+                at.push(basis1(su, m + r * x, self.du, true, &self.ku));
+            }
+        }
+        Some(SpanRule {
+            breaks: breaks.to_vec(),
+            spans,
+            at,
+            n: x.len(),
+        })
+    }
+}
+
 /// A B-spline surface along u at one v ([`NurbsSurface::iso_v`]).
 pub struct IsoV<'a> {
     s: &'a NurbsSurface,
@@ -1844,6 +1893,17 @@ impl IsoV<'_> {
         } else {
             self.d1_with(su, &Basis::new(su, u, s.du, 1, &s.ku))
         }
+    }
+
+    /// [`Self::d1`] at point `k` of span `span` of `rule`, from the basis it holds there: the
+    /// same sums, so the same values to the bit. None where the span is outside the u range
+    /// this was made for.
+    pub fn d1_on(&self, rule: &SpanRule, span: usize, k: usize) -> Option<(P3, V3, V3)> {
+        let su = rule.spans[span];
+        if su - self.s.du < self.lo || su >= self.lo + self.q.len() {
+            return None;
+        }
+        Some(self.d1_with(su, &rule.at[span * rule.n + k]))
     }
 
     fn d1_with(&self, su: usize, bu: &impl BasisAt) -> (P3, V3, V3) {

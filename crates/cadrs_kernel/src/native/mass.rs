@@ -221,6 +221,8 @@ struct Inner {
     step: f64,
     /// Points per piece.
     n: usize,
+    /// A B-spline surface's distinct knots in u, its ends too (for [`Inner::table`]).
+    breaks: Vec<f64>,
 }
 
 impl Inner {
@@ -237,6 +239,7 @@ impl Inner {
                         cut: 1,
                         step: f64::INFINITY,
                         n: n.clamp(1, MAX_GAUSS),
+                        breaks: bu,
                     };
                 }
                 // The area's |N| is only smooth (a polynomial's square root, near zero by a
@@ -255,6 +258,7 @@ impl Inner {
                     cut: 4,
                     step: f64::INFINITY,
                     n: n.min(MAX_GAUSS),
+                    breaks: bu,
                 }
             }
             // Linear in u and v with a constant normal: polynomials of degree 3 at most.
@@ -263,6 +267,7 @@ impl Inner {
                 cut: 1,
                 step: f64::INFINITY,
                 n: if ALL { 2 } else { 1 },
+                breaks: Vec::new(),
             },
             // Round the axis (spheres, tori, surfaces of revolution).
             _ => Self {
@@ -270,8 +275,31 @@ impl Inner {
                 cut: 1,
                 step: ANGLE_STEP,
                 n: ANGLE_POINTS,
+                breaks: Vec::new(),
             },
         }
+    }
+
+    /// The basis of B-spline surface `ns` at this plan's points on each whole span of u that
+    /// `jobs` (`[u0, u, v, w]`) reach: most of an inner integral's points on a surface of many
+    /// spans stand on those, at the same places whatever the job. None where the jobs are too
+    /// few or reach too few spans to earn it.
+    fn table(&self, ns: &NurbsSurface, jobs: &[[f64; 4]]) -> Option<super::nurbs::SpanRule> {
+        if jobs.len() < 4 {
+            return None;
+        }
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        for j in jobs {
+            lo = lo.min(j[0]).min(j[1]);
+            hi = hi.max(j[0]).max(j[1]);
+        }
+        let i0 = self.breaks.partition_point(|b| *b < lo);
+        let i1 = self.breaks.partition_point(|b| *b <= hi);
+        // (Two spans or more: one or two are cut further, at places of the job's own.)
+        if i1 < i0 + 3 {
+            return None;
+        }
+        ns.span_rule(&self.breaks[i0..i1], gauss(self.n).x)
     }
 
     /// The pieces between `a` and `b` (either way round), into `out`.
@@ -324,6 +352,7 @@ fn inner<const ALL: bool>(
     w: f64,
     acc: &mut QE,
     scratch: &mut Vec<f64>,
+    table: Option<&super::nurbs::SpanRule>,
 ) {
     if (u - u0).abs() < tol::TINY {
         return;
@@ -351,8 +380,13 @@ fn inner<const ALL: bool>(
     for k in 0..scratch.len() - 1 {
         let (lo, hi) = (scratch[k], scratch[k + 1]);
         let (m, r) = ((lo + hi) * 0.5, (hi - lo) * 0.5);
-        for (x, gw) in g.x.iter().zip(g.w) {
-            let (p, su, sv) = eval(m + r * x);
+        // (A whole span the table holds: its points' bases from there, the same to the bit.)
+        let held = table.and_then(|t| Some((t, t.span(lo, hi)?)));
+        for (i, (x, gw)) in g.x.iter().zip(g.w).enumerate() {
+            let (p, su, sv) = held
+                .zip(iso.as_ref())
+                .and_then(|((t, span), iso)| iso.d1_on(t, span, i))
+                .unwrap_or_else(|| eval(m + r * x));
             accumulate::<ALL>(&p, &su, &sv, shift, acc, w * gw * r);
         }
     }
@@ -966,6 +1000,7 @@ pub(crate) fn face_integrals_of<const ALL: bool>(body: &Body, f: &Face, shift: &
                             gw * r * dv,
                             &mut acc,
                             &mut scratch,
+                            None,
                         );
                     }
                 }
@@ -1118,6 +1153,11 @@ fn run_jobs<const ALL: bool>(
     }
     // (Many in chunks across the cores, the chunks' sums added in order: the same sum however
     // they are shared out.)
+    let table = match s {
+        Surface::Nurbs(ns) => plan.table(ns, jobs),
+        _ => None,
+    };
+    let table = table.as_ref();
     const CHUNK: usize = 32;
     if jobs.len() >= 2 * CHUNK {
         super::par::start();
@@ -1127,7 +1167,9 @@ fn run_jobs<const ALL: bool>(
                 let mut a = [0.0; NE];
                 let mut sc = Vec::with_capacity(64);
                 for j in c {
-                    inner::<ALL>(s, plan, j[0], j[1], j[2], shift, j[3], &mut a, &mut sc);
+                    inner::<ALL>(
+                        s, plan, j[0], j[1], j[2], shift, j[3], &mut a, &mut sc, table,
+                    );
                 }
                 a
             })
@@ -1140,7 +1182,7 @@ fn run_jobs<const ALL: bool>(
         return;
     }
     for j in jobs {
-        inner::<ALL>(s, plan, j[0], j[1], j[2], shift, j[3], acc, scratch);
+        inner::<ALL>(s, plan, j[0], j[1], j[2], shift, j[3], acc, scratch, table);
     }
 }
 
