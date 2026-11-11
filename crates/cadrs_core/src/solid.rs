@@ -505,7 +505,9 @@ pub struct SolidImage {
     pub v: Vec3,
     /// Shown only from this side (the outward normal of the face it is printed on: a board's
     /// skin, which must not show through the board); `None`: from both sides.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // (Always written: a mesh crosses from the kernel process and is kept in session snapshots
+    // as bincode, which can't read a field that was left out.)
+    #[serde(default)]
     pub facing: Option<Vec3>,
 }
 

@@ -158,6 +158,9 @@ enum Request {
         name: String,
         input: Vec<u8>,
     },
+    /// The app couldn't read a reply's meshes: none of the meshes sent so far counts as sent
+    /// ([`SentSolids::forget`]), so the next reply has them whole again.
+    Forget,
 }
 
 /// The kernel process to the app: what it is doing, then the reply.
@@ -249,6 +252,11 @@ struct SentSolids {
 }
 
 impl SentSolids {
+    /// Nothing counts as sent any more (the ids go on, so an old one is never used again).
+    fn forget(&mut self) {
+        self.by_ptr.clear();
+    }
+
     /// `b` without its meshes, and the meshes in [`each_solid`]'s order: the ones sent before
     /// (within the window) as ids.
     fn strip(&mut self, b: &Build) -> (Build, SentMeshes) {
@@ -428,6 +436,9 @@ struct Conn {
     config: u64,
     /// The meshes it sent.
     solids: ReceivedSolids,
+    /// A reply's meshes couldn't be read, so it counts meshes as sent that never arrived: it
+    /// is told to forget them ([`Request::Forget`]) before the next request.
+    forget: bool,
 }
 
 impl Conn {
@@ -484,6 +495,7 @@ impl Conn {
             blobs: HashSet::new(),
             config: u64::MAX,
             solids: ReceivedSolids::default(),
+            forget: false,
         };
         if !poisoned.is_empty() {
             write_msg(&mut conn.writer, &Request::Poison(poisoned.to_vec()))?;
@@ -624,6 +636,9 @@ impl Remote {
         let mut watch = None;
         let result = (|| -> io::Result<Event> {
             conn.sync()?;
+            if std::mem::take(&mut conn.forget) {
+                write_msg(&mut conn.writer, &Request::Forget)?;
+            }
             write_msg(&mut conn.writer, request)?;
             // While the reply is awaited: a Stop once the request's stop is set (by a thread of
             // its own, joined before the next request, so a late one can't stop that).
@@ -655,12 +670,9 @@ impl Remote {
                     Event::Computing(k) => computing = k,
                     Event::Partial(b, solids) => {
                         let mut b = Arc::unwrap_or_clone(b);
-                        if conn
-                            .solids
-                            .restore(&mut b, solids, &mut self.recent)
-                            .is_ok()
-                        {
-                            super::keep_partial(b.parts);
+                        match conn.solids.restore(&mut b, solids, &mut self.recent) {
+                            Ok(()) => super::keep_partial(b.parts),
+                            Err(_) => conn.forget = true,
                         }
                     }
                     Event::Blob(hash, bytes) => {
@@ -698,15 +710,27 @@ impl Remote {
         else {
             unreachable!()
         };
-        for _ in 0..MAX_CRASHES {
+        // A reply whose meshes can't be read is asked for once more, the kernel process told
+        // to send every mesh whole: one lost mesh must not fail every rebuild after it.
+        let mut asked_again = false;
+        let mut crashes = 0;
+        while crashes < MAX_CRASHES {
             match self.call(&request) {
                 Ok(Event::Rebuilt(b, solids)) => {
                     let mut b = Arc::unwrap_or_clone(b);
                     let restored = match self.conn.as_mut() {
-                        Some(c) => c.solids.restore(&mut b, solids, &mut self.recent),
+                        Some(c) => {
+                            let r = c.solids.restore(&mut b, solids, &mut self.recent);
+                            c.forget |= r.is_err();
+                            r
+                        }
                         None => Err("the geometry kernel stopped".into()),
                     };
                     if let Err(e) = restored {
+                        if !asked_again && self.conn.is_some() {
+                            asked_again = true;
+                            continue;
+                        }
                         return Build::failed(features, &e);
                     }
                     self.recent.settle(&mut b);
@@ -720,6 +744,7 @@ impl Remote {
                     computing: Some(key),
                     ..
                 }) => {
+                    crashes += 1;
                     if !self.poisoned.contains(&key) {
                         self.poisoned.push(key);
                     }
@@ -1103,6 +1128,12 @@ pub fn main(args: &[String]) -> i32 {
             }
             // (Read by the request reader as it comes.)
             Request::Stop => continue,
+            Request::Forget => {
+                if let Ok(mut sent) = sent.lock() {
+                    sent.forget();
+                }
+                continue;
+            }
             Request::Rebuild { features, persist } => {
                 let (reply, rx) = mpsc::channel();
                 let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -1284,5 +1315,51 @@ mod tests {
             .restore(&mut back, meshes, &mut Recent::default())
             .unwrap();
         assert!(back == build, "the copy changed on the way");
+    }
+
+    /// An Image feature's picture (shown from both sides: no `facing`) crosses with its part.
+    #[test]
+    fn a_part_with_a_picture_crosses() {
+        let mut build = Rebuilder::new().rebuild(&crate::samples::bracket_pair::bracket());
+        let mut solid = (*build.parts[0].solid).clone();
+        solid.images = vec![crate::solid::SolidImage {
+            blob: "picture".into(),
+            corner: [0.0; 3],
+            u: [10.0, 0.0, 0.0],
+            v: [0.0, 5.0, 0.0],
+            facing: None,
+        }];
+        build.parts[0].solid = Arc::new(solid);
+        let (stripped, meshes) = SentSolids::default().strip(&build);
+        let mut back: Build = decode(&encode(&stripped).unwrap()).unwrap();
+        let meshes: SentMeshes = decode(&encode(&meshes).unwrap()).unwrap();
+        ReceivedSolids::default()
+            .restore(&mut back, meshes, &mut Recent::default())
+            .unwrap();
+        assert!(back == build, "the picture changed on the way");
+    }
+
+    /// A reply whose meshes the app couldn't read: once the kernel process forgets what it
+    /// sent, the next reply has every mesh whole and is read.
+    #[test]
+    fn a_lost_reply_is_sent_whole_after_forget() {
+        let build = Rebuilder::new().rebuild(&crate::samples::bracket_pair::bracket());
+        let mut sent = SentSolids::default();
+        let mut received = ReceivedSolids::default();
+        // The first reply never arrives.
+        let _ = sent.strip(&build);
+        let (stripped, meshes) = sent.strip(&build);
+        assert!(meshes.iter().all(|(_, m)| matches!(m, SentMesh::Before)));
+        let mut back = stripped.clone();
+        let lost = received.restore(&mut back, meshes, &mut Recent::default());
+        assert!(lost.unwrap_err().contains("unknown mesh"));
+        sent.forget();
+        let (stripped, meshes) = sent.strip(&build);
+        assert!(meshes.iter().all(|(_, m)| !matches!(m, SentMesh::Before)));
+        let mut back = stripped;
+        received
+            .restore(&mut back, meshes, &mut Recent::default())
+            .unwrap();
+        assert!(back == build);
     }
 }
