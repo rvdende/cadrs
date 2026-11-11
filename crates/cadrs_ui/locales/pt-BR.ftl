@@ -619,6 +619,7 @@ shell-doc-create-drawing = Criar desenho…
 shell-doc-create-folder = Criar pasta
 shell-doc-import-ellipsis = Importar…
 shell-doc-paste-tab = Colar { $name }
+shell-doc-paste-tab-from = Colar { $name } de { $document }
 shell-tool-sketch = Esboço (Shift+S)
 shell-tool-extrude = Extrusão (Shift+E)
 shell-tool-revolve = Revolução (Shift+W)

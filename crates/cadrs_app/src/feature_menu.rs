@@ -34,7 +34,12 @@ impl Plugin for FeatureMenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ShownDimensions>()
             .init_resource::<SketchClipboard>()
-            .add_systems(Update, paste_shortcut.run_if(in_state(AppState::Document)));
+            .add_systems(
+                Update,
+                paste_shortcut
+                    .after(crate::tab_clipboard::TabPaste)
+                    .run_if(in_state(AppState::Document)),
+            );
     }
 }
 
@@ -55,6 +60,9 @@ pub fn copy_sketch(world: &mut World, id: FeatureId) {
     });
     let Some((name, sketch)) = found else { return };
     world.resource_mut::<SketchClipboard>().0 = Some((name.clone(), sketch));
+    if let Some(mut tabs) = world.get_resource_mut::<crate::tab_clipboard::TabClipboard>() {
+        tabs.local_copy = true;
+    }
     let theme = world.resource::<Theme>().clone();
     let mut commands = world.commands();
     show_notification(
@@ -77,8 +85,14 @@ fn paste_shortcut(
     q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     session: Option<Res<SketchSession>>,
     clipboard: Res<SketchClipboard>,
+    tabs: Option<Res<crate::tab_clipboard::TabClipboard>>,
     mut commands: Commands,
 ) {
+    // A tab on the clipboard, copied last: this Ctrl+V pasted it.
+    if tabs.is_some_and(|t| t.claimed) {
+        keys_in.clear();
+        return;
+    }
     let ctrl = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     let typing = focus.get().is_some_and(|e| q_fields.contains(e));
     for k in keys_in.read() {

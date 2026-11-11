@@ -198,7 +198,7 @@ pub fn register(app: &mut App) {
             strip,
             on_strip,
             on_click,
-            on_keys,
+            on_keys.after(crate::tab_clipboard::TabPaste),
             follow_pointer,
             preview_box,
             mark_pins,
@@ -662,9 +662,19 @@ fn handle_keys(world: &mut World, keys: Vec<KeyboardInput>) {
                         set_tool(world, Tool::Paste(Box::new(clip)));
                     } else {
                         world.resource_mut::<SchState>().clipboard = Some(clip);
+                        if let Some(mut tabs) =
+                            world.get_resource_mut::<crate::tab_clipboard::TabClipboard>()
+                        {
+                            tabs.local_copy = true;
+                        }
                     }
                 }
-                KeyCode::KeyV => {
+                // (Not when this Ctrl+V pasted a tab from the clipboard.)
+                KeyCode::KeyV
+                    if !world
+                        .get_resource::<crate::tab_clipboard::TabClipboard>()
+                        .is_some_and(|t| t.claimed) =>
+                {
                     if let Some(clip) = world.resource::<SchState>().clipboard.clone() {
                         set_tool(world, Tool::Paste(Box::new(clip)));
                     }

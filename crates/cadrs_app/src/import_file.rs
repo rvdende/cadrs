@@ -5,7 +5,8 @@
 //! which the Part Studio's Import dialog ([`crate::import_dialog`]) edits like any other.
 //!
 //! Native `.cadrs` files on the documents page bypass geometry conversion and create an
-//! editable library copy through [`crate::native_document`].
+//! editable library copy through [`crate::native_document`]; in a document their tabs come in
+//! as new tabs with their features ([`crate::tab_clipboard::import_file`]).
 //!
 //! 1. The in-app file picker (`cadrs_ui::file_picker`) lists `.step`, `.stp`, `.iges` and
 //!    `.igs` files, starting in `$CADRS_IMPORT_DIR`, else the Downloads folder.
@@ -120,8 +121,9 @@ pub fn start(world: &mut World, target: ImportTarget) {
     if matches!(target, ImportTarget::NewDocument) {
         exts.push("stl");
         exts.push("glb");
-        exts.push("cadrs");
     }
+    // A cadrs file: a new document there, new tabs with their features here.
+    exts.push("cadrs");
     cadrs_ui::file_picker::open_file_picker(
         &mut commands,
         &theme,
@@ -145,13 +147,15 @@ fn on_file_picked(
             "import-here" => ImportTarget::ActiveDocument,
             _ => continue,
         };
-        if matches!(target, ImportTarget::NewDocument)
-            && m.path
-                .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("cadrs"))
+        if m.path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("cadrs"))
         {
             let path = m.path.clone();
-            commands.queue(move |w: &mut World| crate::native_document::import(w, &path));
+            commands.queue(move |w: &mut World| match target {
+                ImportTarget::NewDocument => crate::native_document::import(w, &path),
+                ImportTarget::ActiveDocument => crate::tab_clipboard::import_file(w, &path),
+            });
             continue;
         }
         // An STL or GLB mesh as a new document: the documents page's undoable import (P3E.1).

@@ -2861,6 +2861,9 @@ fn copy_flat(world: &mut World) {
     world
         .resource_mut::<crate::feature_menu::SketchClipboard>()
         .0 = Some((name.clone(), sketch));
+    if let Some(mut tabs) = world.get_resource_mut::<crate::tab_clipboard::TabClipboard>() {
+        tabs.local_copy = true;
+    }
     let theme = world.resource::<Theme>().clone();
     let mut commands = world.commands();
     cadrs_ui::show_notification(
