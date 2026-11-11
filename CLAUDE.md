@@ -65,6 +65,11 @@ Onshape-style CAD in Rust + Bevy 0.20.1. Local notes in `docs/` (git-ignored: `P
 - Crates in `crates/*`; shared versions in root `[workspace.dependencies]`.
 - `vendor/`: patched copies of dependencies (`[patch.crates-io]`), each with a `CADRS.md` saying
   what changed and why: gpu-allocator stages wgpu's uploads in system memory.
+- Bevy comes from our fork, https://github.com/rvdende/bevy, branch `cadrs-0.20.1` (the release
+  plus the fixes we need before Bevy ships them; the root `Cargo.toml`'s `[patch.crates-io]`
+  names every Bevy crate, so one copy of each is built). A fix goes on that branch and, off
+  Bevy's main, on a branch of its own for a pull request upstream; `cargo update -w` then moves
+  `Cargo.lock` to the branch's head.
 - `cadrs_core` and `cadrs_sketch` don't depend on bevy.
 - Library parts are data, never code: `libraries/<Library>/<name>.symbol.ron|.footprint.ron`,
   read at runtime. `cargo run -r -p cadrs_libgen -- libraries` rewrites the built-in ones from
