@@ -4073,6 +4073,50 @@ fn debug_tumbling_tori() {
                 }
             }
         }
+        if std::env::var_os("CADRS_TORUS_CREASES").is_some() {
+            // (Triangles whose own normal is far from their surface's at their corners: thin
+            // ones on a smooth face, or a face that wrinkles; and corners of one triangle
+            // whose surface normals are far apart, which only a wrinkle or a crease makes.)
+            let mut by_face: std::collections::HashMap<FaceId, [usize; 4]> = Default::default();
+            let mut worst: std::collections::HashMap<FaceId, (f64, Point3<f64>)> =
+                Default::default();
+            for (t, f) in mesh.indices.iter().zip(&mesh.triangle_faces) {
+                let [a, b, c] = t.map(|i| mesh.positions[i as usize]);
+                let [na, nb, nc] = t.map(|i| mesh.normals[i as usize]);
+                let n = (b - a).cross(&(c - a));
+                let e = by_face.entry(*f).or_default();
+                e[0] += 1;
+                let spread = na.dot(&nb).min(nb.dot(&nc)).min(nc.dot(&na));
+                if spread < 20f64.to_radians().cos() {
+                    e[2] += 1;
+                    let w = worst.entry(*f).or_insert((1.0, a));
+                    if spread < w.0 {
+                        *w = (spread, a);
+                    }
+                }
+                let Some(n) = n.try_normalize(1e-300) else {
+                    e[3] += 1;
+                    continue;
+                };
+                if n.dot(&(na + nb + nc).normalize()) < 30f64.to_radians().cos() {
+                    e[1] += 1;
+                }
+            }
+            for (i, f) in k.faces(id).unwrap().iter().enumerate() {
+                let Some(e) = by_face.get(&f.id) else {
+                    continue;
+                };
+                eprintln!(
+                    "  face {i} {:?}: {} triangles, {} lying over 30° off their surface, {} whose corners' surface normals are over 20° apart (worst {:?}), {} of no area",
+                    f.kind,
+                    e[0],
+                    e[1],
+                    e[2],
+                    worst.get(&f.id).map(|w| (w.0.acos().to_degrees(), w.1)),
+                    e[3]
+                );
+            }
+        }
         if std::env::var_os("CADRS_TORUS_AREAS").is_some() {
             // (Each face's area as integrated and as its triangles', to find a face the
             // integral is off on.)
