@@ -4646,3 +4646,40 @@ fn debug_mesh_closed() {
     }
     eprintln!("{degenerate} triangle edges of no length (in single precision)");
 }
+
+/// A STEP file read back and measured, face by face: CADRS_STEP=<file.step>.
+#[test]
+fn debug_step_mass() {
+    let Ok(path) = std::env::var("CADRS_STEP") else {
+        return;
+    };
+    let mut k = NativeKernel::new();
+    let ids = k.import_step(&std::fs::read(path).unwrap()).unwrap();
+    for id in ids {
+        let m = k.mass_properties(id).unwrap();
+        eprintln!("body: volume {:.10}, area {:.10}", m.volume, m.surface_area);
+        let b = k.get(id).unwrap().clone();
+        for (fi, f) in b.faces.iter().enumerate() {
+            let q = native::mass::face_integrals(&b, f, &Vector3::zeros());
+            let surf = match &f.surf {
+                native::surface::Surface::Nurbs(n) => format!(
+                    "NURBS {}x{} deg {}x{}{}",
+                    n.cps.len(),
+                    n.cps[0].len(),
+                    n.du,
+                    n.dv,
+                    if n.cps.iter().flatten().any(|h| (h.w - 1.0).abs() > 1e-12) {
+                        " rational"
+                    } else {
+                        ""
+                    }
+                ),
+                s => format!("{:?}", s.kind()),
+            };
+            eprintln!(
+                "  face {fi} {surf} sense {}: area {:.9}, volume part {:.9}",
+                f.sense, q[0], q[4]
+            );
+        }
+    }
+}

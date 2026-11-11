@@ -1411,3 +1411,43 @@ fn a_tall_frustum_shelled_to_a_cone_sealed_well_below_its_narrow_top() {
         },
     );
 }
+
+#[test]
+fn a_cylinder_healed_to_a_b_spline_has_its_rim_rounded_by_a_torus() {
+    // R = 5, h = 10, the side one rational B-spline; the top rim rounded to r = 1. The round is
+    // the outer quarter of the tube of the torus about the circle of radius 4 at z = 9, whatever
+    // the side is written as. What it takes off is the corner's section (1 − π/4, its centroid
+    // d = (10 − 3π) / (12 − 3π) in from the wall) turned about the axis:
+    // V = π 25 · 10 − 2π (5 − d) (1 − π/4),
+    // S = 150π − 9π (the top's rim) − 10π (the side's) + 2π (4 + 2/π) π/2 (the quarter tube).
+    let mut k = NativeKernel::new();
+    let c = k
+        .primitive(&Primitive::cylinder(
+            Point3::origin(),
+            nalgebra::Vector3::z(),
+            5.0,
+            10.0,
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let spline = Kernel::heal(&mut k, c, &[HealOp::ToBSpline])
+        .unwrap()
+        .first()
+        .unwrap();
+    let rim = k.edge_at(spline, Point3::new(0.0, 5.0, 10.0)).unwrap();
+    let b = k.fillet(spline, &[rim], 1.0).unwrap().first().unwrap();
+    let d = (10.0 - 3.0 * PI) / (12.0 - 3.0 * PI);
+    check(
+        &k,
+        b,
+        Want {
+            volume: 250.0 * PI - 2.0 * PI * (5.0 - d) * (1.0 - PI / 4.0),
+            area: 131.0 * PI + 2.0 * PI * (4.0 + 2.0 / PI) * PI / 2.0,
+            faces: 4,
+            min: [-5.0, -5.0, 0.0],
+            max: [5.0, 5.0, 10.0],
+            centroid: None,
+        },
+    );
+}

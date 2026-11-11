@@ -1523,6 +1523,40 @@ fn prepare<'a>(
                 d.v_t.as_ref().map(|v| v.row(0).transpose()),
                 d.v_t.as_ref().map(|v| v.row(1).transpose())
             );
+            // (The line through it, each way: where it runs and how wide the turn is there.)
+            if let Some(vt) = &d.v_t {
+                let (ex, ey) = (
+                    V2::new(vt[(0, 0)], vt[(0, 1)]),
+                    V2::new(vt[(1, 0)], vt[(1, 1)]),
+                );
+                for side in [1.0, -1.0] {
+                    let mut at = 0.0;
+                    for i in 1..=30 {
+                        let eta = side * 0.05 * i as f64;
+                        let size = |xi: f64| {
+                            let x = c + ex * xi + ey * eta;
+                            tube.across(x.x.clamp(0.0, 1.0), x.y).norm()
+                        };
+                        let (mut h, mut best) = (0.02, size(at));
+                        for _ in 0..40 {
+                            for xi in [at - h, at + h] {
+                                let v = size(xi);
+                                if v < best {
+                                    (best, at) = (v, xi);
+                                }
+                            }
+                            h *= 0.6;
+                        }
+                        let x = c + ex * at + ey * eta;
+                        eprintln!(
+                            "    η {eta:+.2}: ξ {at:+.5}, (t, ψ) ({:.4}, {:.4}), the turn {:.3e} wide",
+                            x.x,
+                            x.y,
+                            best / d.singular_values[0]
+                        );
+                    }
+                }
+            }
         }
     }
     if debug {

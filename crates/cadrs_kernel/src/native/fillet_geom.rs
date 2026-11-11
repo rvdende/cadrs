@@ -717,6 +717,15 @@ pub enum Exact {
 
 /// Whether a fillet between `f` along `spine` has a closed form.
 pub fn exact_kind(f: [&Face; 2], spine: &Spine) -> Option<Exact> {
+    // (A B-spline face that is a plane, a cylinder, a cone, a sphere, a torus or an extrusion
+    // counts as that surface: a cylinder healed to its B-spline, or read as one, is rounded by
+    // the same torus. The balls are solved on the faces as they are either way.)
+    let seen = |s: &Surface| match s {
+        Surface::Nurbs(n) => super::recognize::surface(n),
+        _ => None,
+    };
+    let seen = [seen(&f[0].surf), seen(&f[1].surf)];
+    let surf = |i: usize| seen[i].as_ref().unwrap_or(&f[i].surf);
     match &spine.curve {
         Curve::Line { d, .. } => {
             let d = d.normalize();
@@ -726,7 +735,7 @@ pub fn exact_kind(f: [&Face; 2], spine: &Spine) -> Option<Exact> {
                 Surface::Extrusion { d: e, .. } => e.normalize().cross(&d).norm() < 1e-10,
                 _ => false,
             };
-            (along(&f[0].surf) && along(&f[1].surf)).then_some(Exact::Cylinder)
+            (along(surf(0)) && along(surf(1))).then_some(Exact::Cylinder)
         }
         Curve::Circle { c, x, y, .. } => {
             let z = x.cross(y).normalize();
@@ -736,7 +745,7 @@ pub fn exact_kind(f: [&Face; 2], spine: &Spine) -> Option<Exact> {
                     a.cross(&z).norm() < tol::ANGULAR && (o - c).cross(&z).norm() < 1e-7
                 }),
             };
-            (coaxial(&f[0].surf) && coaxial(&f[1].surf)).then_some(Exact::Torus)
+            (coaxial(surf(0)) && coaxial(surf(1))).then_some(Exact::Torus)
         }
         _ => None,
     }
