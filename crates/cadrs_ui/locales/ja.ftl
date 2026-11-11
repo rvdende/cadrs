@@ -619,6 +619,7 @@ shell-doc-create-drawing = 図面を作成…
 shell-doc-create-folder = フォルダーを作成
 shell-doc-import-ellipsis = インポート…
 shell-doc-paste-tab = { $name }を貼り付け
+shell-doc-paste-tab-from = { $document }の{ $name }を貼り付け
 shell-tool-sketch = スケッチ (Shift+S)
 shell-tool-extrude = 押し出し (Shift+E)
 shell-tool-revolve = 回転 (Shift+W)

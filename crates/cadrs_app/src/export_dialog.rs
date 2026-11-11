@@ -10,7 +10,9 @@
 //! - **Format**: for 3D models **STEP** (AP214, exact B-rep with product names), **IGES**
 //!   (5.3, solids), experimental OpenCASCADE **BREP** (geometry only), **STL**, **OBJ** and
 //!   **GLB** (meshes; GLB keeps each part's colour, in metres with +Y up as glTF says); for a
-//!   sketch or a face **DXF** and **DWG**.
+//!   sketch or a face **DXF** and **DWG**. A whole tab (the tab menu's Export…) also has
+//!   **CADRS**: the tab as it is, with its features, for **+ ▸ Import…** of another document
+//!   (`crate::tab_clipboard`).
 //!   Parasolid is not offered (a proprietary format). DWG goes through the drawings' external
 //!   converter and is disabled, saying what to install, without one.
 //! - **STL**: Binary or Text. **STL and OBJ**: the **Units** (Millimeter … Foot). **STL, OBJ and
@@ -98,6 +100,8 @@ pub enum Fmt {
     Glb,
     Dxf,
     Dwg,
+    /// The whole tab with its features, as a cadrs file (`crate::tab_clipboard`).
+    Cadrs,
 }
 
 impl Fmt {
@@ -121,6 +125,7 @@ impl Fmt {
             Fmt::Glb => "GLB",
             Fmt::Dxf => "DXF",
             Fmt::Dwg => "DWG",
+            Fmt::Cadrs => "CADRS",
         }
     }
 
@@ -134,6 +139,7 @@ impl Fmt {
             Fmt::Glb => "glb",
             Fmt::Dxf => "dxf",
             Fmt::Dwg => "dwg",
+            Fmt::Cadrs => "cadrs",
         }
     }
 
@@ -372,11 +378,17 @@ pub fn open(world: &mut World, source: ExportSource) {
     let converter = cadrs_drawing::dwg::find_converter().filter(|c| c.can_write());
     let theme = world.resource::<Theme>().clone();
     let (tb, tf) = (theme.clone(), theme.clone());
-    let formats: Vec<Fmt> = if flat {
+    let mut formats: Vec<Fmt> = if flat {
         Fmt::FLAT.to_vec()
     } else {
         Fmt::MODELS.to_vec()
     };
+    // The whole tab (the tab menu's Export…) also goes out as it is, features and all.
+    if matches!(&source, ExportSource::Parts(p) | ExportSource::Assembly(p) if p.is_empty()) {
+        formats.push(Fmt::Cadrs);
+    }
+    // (Seven buttons still fit the dialog's width.)
+    let format_width = if formats.len() > 6 { 66.0 } else { 70.0 };
     let mut commands = world.commands();
     commands.spawn((
         Dialog::new("export-dialog")
@@ -453,6 +465,7 @@ pub fn open(world: &mut World, source: ExportSource) {
                                     }
                                     None => tr("io-export-tip-dwg-none"),
                                 },
+                                Fmt::Cadrs => tr("io-export-tip-cadrs"),
                             };
                             r.spawn((
                                 Button::new(format!("export-format-{}", f.slug()))
@@ -461,7 +474,7 @@ pub fn open(world: &mut World, source: ExportSource) {
                                     .selected(f == format)
                                     .disabled(disabled)
                                     .tooltip(tip)
-                                    .width(Val::Px(70.0))
+                                    .width(Val::Px(format_width))
                                     .build(t),
                                 FormatButton(f),
                                 observe(move |_: On<Activate>, mut q: Query<&mut ExportDialog>| {
@@ -803,7 +816,7 @@ fn sync_rows(
             "export-units-column" => d.format != Fmt::Glb,
             "export-tolerance-row" => d.format.is_mesh() && custom,
             "export-dxf-row" => d.source.is_flat(),
-            "export-options-row" => !d.source.is_flat(),
+            "export-options-row" => !d.source.is_flat() && d.format != Fmt::Cadrs,
             _ => continue,
         };
         let want = if show { Display::Flex } else { Display::None };
@@ -1100,6 +1113,26 @@ fn start_export(world: &mut World) {
     }
     let dir = PathBuf::from(&folder);
     match (&spec.source, spec.format) {
+        // The tab itself: its features, the tabs it references and the files it uses.
+        (_, Fmt::Cadrs) => {
+            let result = world
+                .get_resource::<ActiveDocument>()
+                .and_then(|d| d.active)
+                .ok_or_else(|| tr("io-export-source-gone"))
+                .and_then(|tab| crate::tab_clipboard::export_file(world, tab, &dir, &base));
+            let note = match result {
+                Ok(path) => {
+                    info!("exported {}", path.display());
+                    Notification::info(tr_with(
+                        "io-exported-path",
+                        &[("path", &path.display().to_string())],
+                    ))
+                    .seconds(8.0)
+                }
+                Err(why) => Notification::warning(tr_with("io-export-failed", &[("error", &why)])),
+            };
+            toast(world, note);
+        }
         (ExportSource::Sketch(_) | ExportSource::Face(..), f) => {
             let page = match &spec.source {
                 ExportSource::Sketch(s) => world.get_resource::<ActiveDocument>().and_then(|d| {

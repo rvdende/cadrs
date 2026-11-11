@@ -2459,6 +2459,7 @@ dependencies = [
 name = "cadrs_core"
 version = "0.2.7"
 dependencies = [
+ "base64 0.22.1",
  "bincode",
  "blake3",
  "cadrs_cam",

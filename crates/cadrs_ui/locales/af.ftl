@@ -619,6 +619,7 @@ shell-doc-create-drawing = Skep tekening…
 shell-doc-create-folder = Skep vouer
 shell-doc-import-ellipsis = Voer in…
 shell-doc-paste-tab = Plak { $name }
+shell-doc-paste-tab-from = Plak { $name } van { $document }
 shell-tool-sketch = Skets (Shift+S)
 shell-tool-extrude = Ekstrudeer (Shift+E)
 shell-tool-revolve = Wentel (Shift+W)

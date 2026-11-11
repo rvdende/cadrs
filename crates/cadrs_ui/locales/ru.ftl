@@ -619,6 +619,7 @@ shell-doc-create-drawing = Создать чертеж…
 shell-doc-create-folder = Создать папку
 shell-doc-import-ellipsis = Импорт…
 shell-doc-paste-tab = Вставить { $name }
+shell-doc-paste-tab-from = Вставить { $name } из { $document }
 shell-tool-sketch = Эскиз (Shift+S)
 shell-tool-extrude = Выдавливание (Shift+E)
 shell-tool-revolve = Вращение (Shift+W)

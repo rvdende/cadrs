@@ -619,6 +619,7 @@ shell-doc-create-drawing = 도면 만들기…
 shell-doc-create-folder = 폴더 만들기
 shell-doc-import-ellipsis = 가져오기…
 shell-doc-paste-tab = { $name } 붙여넣기
+shell-doc-paste-tab-from = { $document }의 { $name } 붙여넣기
 shell-tool-sketch = 스케치 (Shift+S)
 shell-tool-extrude = 돌출 (Shift+E)
 shell-tool-revolve = 회전 (Shift+W)

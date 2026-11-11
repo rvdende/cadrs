@@ -29,6 +29,7 @@ cadrs_sheetmetal.workspace = true
 nalgebra.workspace = true
 serde.workspace = true
 uuid.workspace = true
+base64.workspace = true
 ron.workspace = true
 blake3.workspace = true
 bincode.workspace = true

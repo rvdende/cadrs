@@ -43,7 +43,7 @@ use cadrs_ui::menu::ContextMenuAnchor;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     DialogClose, InlineEdit, InlineEditLabel, InlineEditOptions, StateColors, ToggleDockPanel,
-    TreeToggle, Visuals, begin_inline_edit, show_toast, tree_guide,
+    TreeToggle, Visuals, begin_inline_edit, tree_guide,
 };
 
 use crate::sketch::{PartStudioMode, SketchSession};
@@ -85,6 +85,8 @@ impl Plugin for DocumentPlugin {
             .add_observer(on_tab_activate)
             .add_observer(on_tab_double_click)
             .add_observer(on_tab_context_menu)
+            .add_observer(on_tab_bar_context_menu)
+            .add_observer(on_tab_bar_menu_action)
             .add_observer(on_tab_menu_action)
             .add_observer(on_rename_tab_popup)
             .add_observer(on_insert_menu_action)
@@ -116,6 +118,14 @@ pub struct TabButton(pub ElementId);
 /// The row the tabs are spawned into.
 #[derive(Component)]
 pub(crate) struct TabStrip;
+
+/// The tab bar: a right-click on it (not on a tab) offers Paste.
+#[derive(Component)]
+struct TabBar;
+
+/// The anchor of the tab bar's own menu.
+#[derive(Component)]
+struct TabBarMenu;
 
 /// The "+" (insert new tab) button; its menu's actions bubble to it.
 #[derive(Component)]
@@ -864,6 +874,9 @@ pub(crate) fn view_tool_node(t: &Theme) -> Node {
 fn tab_bar(root: &mut ChildSpawnerCommands, t: &Theme) {
     root.spawn((
         Name::new("tab-bar"),
+        // A right-click on the bar itself: Paste (`on_tab_bar_context_menu`).
+        TabBar,
+        ContextMenuTarget,
         Node {
             height: Val::Px(TAB_BAR_HEIGHT),
             flex_shrink: 0.0,
@@ -896,9 +909,12 @@ fn tab_bar(root: &mut ChildSpawnerCommands, t: &Theme) {
             observe(
                 |a: On<Activate>,
                  theme: Res<Theme>,
-                 clip: Res<crate::drawing::ElementClipboard>,
+                 mut tabs: ResMut<crate::tab_clipboard::TabClipboard>,
+                 mut clipboard: Option<ResMut<bevy::clipboard::Clipboard>>,
                  mut commands: Commands| {
-                    let paste = clip.0.as_ref().map(|e| e.name.clone());
+                    let paste = tabs
+                        .peek(clipboard.as_deref_mut())
+                        .map(|t| crate::tab_clipboard::paste_label(&t));
                     open_menu(&mut commands, a.entity, insert_menu(paste).build(&theme));
                 },
             ),
@@ -1050,7 +1066,8 @@ pub(crate) fn full_rebuild(world: &mut World) {
     }
 }
 
-/// `paste`: the name of a tab copied with "Copy to clipboard", offered as "Paste …".
+/// `paste`: "Paste <tab> from <document>", when a tab is on the clipboard
+/// ([`crate::tab_clipboard`]).
 fn insert_menu(paste: Option<String>) -> Menu {
     // (Its anchor, "+", is inset 4 px in the bar: clear of the bar as the folder lists are.)
     let menu = Menu::new("insert-tab-menu")
@@ -1120,13 +1137,9 @@ fn insert_menu(paste: Option<String>) -> Menu {
             MenuItem::new("import-files", tr("shell-doc-import-ellipsis")).icon("file-import"),
         );
     match paste {
-        Some(name) => menu.separator().item(
-            MenuItem::new(
-                "paste-tab",
-                tr_with("shell-doc-paste-tab", &[("name", name.as_str())]),
-            )
-            .icon("copy"),
-        ),
+        Some(label) => menu
+            .separator()
+            .item(MenuItem::new("paste-tab", label).icon("copy")),
         None => menu,
     }
 }
@@ -2904,7 +2917,7 @@ fn on_tab_context_menu(
     let menu = menu
         .separator()
         .item(MenuItem::new("tab-duplicate", tr("shell-doc-duplicate")).icon("plus"))
-        .item(MenuItem::new("tab-copy", tr("shell-share-copy-link")).icon("copy"))
+        .item(MenuItem::new("tab-copy", tr("common-copy")).icon("copy"))
         .item(
             MenuItem::new(
                 "tab-create-drawing",
@@ -3021,6 +3034,48 @@ fn on_tab_context_menu(
         .insert((TabMenuFor(tab.0), DespawnOnExit(AppState::Document)));
 }
 
+/// A right-click on the tab bar, beside the tabs: "Paste <tab> from <document>" (greyed out
+/// "Paste" with no tab on the clipboard).
+fn on_tab_bar_context_menu(
+    ev: On<ContextMenuRequested>,
+    q: Query<(&ComputedNode, &bevy::ui::UiGlobalTransform), With<TabBar>>,
+    mut tabs: ResMut<crate::tab_clipboard::TabClipboard>,
+    mut clipboard: Option<ResMut<bevy::clipboard::Clipboard>>,
+    theme: Res<Theme>,
+    mut commands: Commands,
+) {
+    let Ok((node, at)) = q.get(ev.entity) else {
+        return;
+    };
+    let item = match tabs.peek(clipboard.as_deref_mut()) {
+        Some(tab) => MenuItem::new("paste-tab", crate::tab_clipboard::paste_label(&tab)),
+        None => MenuItem::new("paste-tab", tr("common-paste")).disabled(true),
+    };
+    let menu = Menu::new("tab-bar-menu")
+        .side(PopoverSide::Top)
+        .min_width(160.0)
+        .item_height(25.0)
+        .item(item.icon("copy"));
+    // Opens above the bar, at the cursor's x (as a tab's menu does).
+    let s = node.inverse_scale_factor();
+    let bar_top = at.translation.y * s - node.size().y * s / 2.0;
+    let pos = Vec2::new(ev.position.x, bar_top - crate::tab_folders::ABOVE_BAR);
+    let anchor = open_context_menu(&mut commands, pos, menu.build(&theme));
+    commands
+        .entity(anchor)
+        .insert((TabBarMenu, DespawnOnExit(AppState::Document)));
+}
+
+fn on_tab_bar_menu_action(
+    ev: On<MenuAction>,
+    q: Query<(), With<TabBarMenu>>,
+    mut commands: Commands,
+) {
+    if q.contains(ev.entity) && ev.item == "paste-tab" {
+        commands.queue(crate::tab_clipboard::paste);
+    }
+}
+
 /// The name popup renaming a tab that isn't in the bar.
 #[derive(Component)]
 struct RenameTabPopup(ElementId);
@@ -3112,11 +3167,7 @@ fn on_tab_menu_action(
             commands.queue(deleted_toast);
         }
         "tab-properties" => open_properties_dialog(&mut commands, &theme, id, &el),
-        "tab-copy" => {
-            let text = tr_with("shell-doc-tab-copied", &[("name", el.name.as_str())]);
-            commands.insert_resource(crate::drawing::ElementClipboard(Some(el)));
-            show_toast(&mut commands, &theme, text);
-        }
+        "tab-copy" => commands.queue(move |w: &mut World| crate::tab_clipboard::copy(w, id)),
         "tab-export" if matches!(el.kind, cadrs_core::ElementKind::Drawing(_)) => {
             commands.queue(move |w: &mut World| {
                 crate::drawing::export_dialog::open_drawing_export(w, id)
@@ -3301,7 +3352,6 @@ fn on_insert_menu_action(
     ev: On<MenuAction>,
     q: Query<(), With<InsertTabButton>>,
     doc: Option<ResMut<ActiveDocument>>,
-    clip: Res<crate::drawing::ElementClipboard>,
     mut commands: Commands,
 ) {
     if !q.contains(ev.entity) {
@@ -3336,29 +3386,7 @@ fn on_insert_menu_action(
             return;
         }
         "paste-tab" => {
-            if let Some(el) = clip.0.clone() {
-                // A copy with a fresh id and the next free "(n)" name.
-                let mut copy = el;
-                copy.id = ElementId::new();
-                let mut n = 1;
-                let base = copy.name.clone();
-                while doc.doc.elements.iter().any(|e| e.name == copy.name) {
-                    copy.name = format!("{base} ({n})");
-                    n += 1;
-                }
-                let id = copy.id;
-                let after = doc.active;
-                if doc
-                    .execute(&cadrs_core::commands::InsertElement {
-                        element: copy,
-                        after,
-                        label: "Paste tab".into(),
-                    })
-                    .is_ok()
-                {
-                    doc.set_active(id);
-                }
-            }
+            commands.queue(crate::tab_clipboard::paste);
             return;
         }
         _ => return,

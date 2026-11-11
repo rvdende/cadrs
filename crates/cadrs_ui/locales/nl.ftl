@@ -619,6 +619,7 @@ shell-doc-create-drawing = Tekening maken…
 shell-doc-create-folder = Map maken
 shell-doc-import-ellipsis = Importeren…
 shell-doc-paste-tab = { $name } plakken
+shell-doc-paste-tab-from = { $name } uit { $document } plakken
 shell-tool-sketch = Schets (Shift+S)
 shell-tool-extrude = Extruderen (Shift+E)
 shell-tool-revolve = Omwentelen (Shift+W)

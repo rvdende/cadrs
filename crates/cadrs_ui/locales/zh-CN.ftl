@@ -619,6 +619,7 @@ shell-doc-create-drawing = 创建工程图…
 shell-doc-create-folder = 创建文件夹
 shell-doc-import-ellipsis = 导入…
 shell-doc-paste-tab = 粘贴 { $name }
+shell-doc-paste-tab-from = 粘贴 { $document } 中的 { $name }
 shell-tool-sketch = 草图 (Shift+S)
 shell-tool-extrude = 拉伸 (Shift+E)
 shell-tool-revolve = 旋转 (Shift+W)

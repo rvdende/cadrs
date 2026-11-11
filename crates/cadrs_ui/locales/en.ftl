@@ -920,6 +920,8 @@ shell-doc-create-folder = Create folder
 shell-doc-import-ellipsis = Import…
 # { $name } is the name of the tab copied to paste.
 shell-doc-paste-tab = Paste { $name }
+# A tab copied in this or another running cadrs: { $name } is the tab, { $document } the document it came from.
+shell-doc-paste-tab-from = Paste { $name } from { $document }
 # Toolbar tools (their tooltips; keep a shortcut in parentheses, as "(Shift+E)", as it is: the tooltip shows it as keys).
 shell-tool-sketch = Sketch (Shift+S)
 shell-tool-extrude = Extrude (Shift+E)
@@ -5470,6 +5472,7 @@ io-export-tip-step = STEP AP214: exact solids with part names
 io-export-tip-iges = IGES 5.3: exact solids
 # OpenCASCADE is a CAD kernel.
 io-export-tip-brep = OpenCASCADE BREP (experimental): exact geometry only
+io-export-tip-cadrs = cadrs: the tab with its features, to import into another document
 io-export-tip-stl = STL mesh, for 3D printing
 io-export-tip-obj = Wavefront OBJ mesh
 io-export-tip-glb = glTF binary mesh with colours, for Blender, games and the web

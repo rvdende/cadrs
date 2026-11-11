@@ -101,7 +101,6 @@ impl Plugin for DrawingPlugin {
         app.init_resource::<DrawingUi>()
             .init_resource::<SheetScreen>()
             .init_resource::<SheetScene>()
-            .init_resource::<ElementClipboard>()
             .init_resource::<create_dialog::TemplateLibrary>()
             .gizmo_group::<SheetThin>()
             .gizmo_group::<SheetMedium>()
@@ -263,10 +262,6 @@ struct DragState {
     secondary_down: Option<Vec2>,
     moved: f32,
 }
-
-/// A tab copied with "Copy to clipboard" (D2.10), pasted with the "+" menu.
-#[derive(Resource, Debug, Default, Clone)]
-pub struct ElementClipboard(pub Option<cadrs_core::Element>);
 
 /// The active tab's drawing, if it is a Drawing tab.
 pub fn active_drawing(doc: &ActiveDocument) -> Option<(ElementId, &Drawing)> {

@@ -105,6 +105,7 @@ impl Plugin for AssemblyPlugin {
                 Update,
                 (assembly_keys, apply_pending_selection)
                     .after(crate::viewport::apply_view_to_camera)
+                    .after(crate::tab_clipboard::TabPaste)
                     .run_if(in_state(AppState::Document)),
             )
             .add_systems(
@@ -229,6 +230,9 @@ pub fn copy_instances(world: &mut World, instances: &[InstanceId]) {
     }
     first.more = items;
     world.resource_mut::<InstanceClipboard>().0 = Some(first);
+    if let Some(mut tabs) = world.get_resource_mut::<crate::tab_clipboard::TabClipboard>() {
+        tabs.local_copy = true;
+    }
 }
 
 /// **Paste <instance>** (A15.13): new instances of the copied parts (the next numbers), the first
@@ -1005,6 +1009,13 @@ fn assembly_keys(
                 }
                 KeyCode::KeyV => {
                     commands.queue(|world: &mut World| {
+                        // A tab on the clipboard, copied last: this Ctrl+V pasted it.
+                        if world
+                            .get_resource::<crate::tab_clipboard::TabClipboard>()
+                            .is_some_and(|t| t.claimed)
+                        {
+                            return;
+                        }
                         let hover = world.resource::<bevy::picking::hover::HoverMap>();
                         let over = hover
                             .get(&bevy::picking::pointer::PointerId::Mouse)

@@ -120,6 +120,7 @@ pub mod sketch_tools;
 pub mod spacemouse;
 pub mod suppress_variable;
 pub mod surfacing_ui;
+pub mod tab_clipboard;
 pub mod tab_folders;
 pub mod tab_preview;
 pub mod thread_ui;
@@ -1036,6 +1037,7 @@ impl Plugin for CadrsAppPlugin {
                 cam::CamUiPlugin,
             ))
             .add_plugins(native_document::NativeDocumentPlugin)
+            .add_plugins(tab_clipboard::TabClipboardPlugin)
             .add_plugins((
                 import_dialog::ImportDialogPlugin,
                 import_file::ImportFilePlugin,
