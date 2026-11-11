@@ -205,22 +205,34 @@ impl Screw {
             .map(|&s| n0.transformed(&self.place(s)))
             .collect();
         let q = self.deg.min(curves.len() - 1);
+        let paths: Vec<Vec<P3>> = (0..n0.cps.len())
+            .map(|i| {
+                curves
+                    .iter()
+                    .map(|c| P3::new(c.cps[i].x, c.cps[i].y, c.cps[i].z))
+                    .collect()
+            })
+            .collect();
         let mut cols: Vec<Vec<H>> = Vec::with_capacity(n0.cps.len());
         let mut kv = Vec::new();
-        for i in 0..n0.cps.len() {
-            let xyz: Vec<P3> = curves
-                .iter()
-                .map(|c| P3::new(c.cps[i].x, c.cps[i].y, c.cps[i].z))
-                .collect();
-            let a = NurbsCurve::interpolate(&xyz, &self.v, q, None, None);
-            let w = n0.cps[i].w;
-            kv = a.knots.clone();
-            cols.push(
-                a.cps
-                    .iter()
-                    .map(|p| H::new(p.x, p.y, p.z, p.w * w))
-                    .collect(),
-            );
+        // (The poles' paths through the same sections: one system for them all, where that
+        // is what each by itself would solve.)
+        if let Some((knots, poles)) = NurbsCurve::interpolate_all(&paths, &self.v, q) {
+            kv = knots;
+            for (path, h) in poles.iter().zip(&n0.cps) {
+                cols.push(path.iter().map(|p| H::new(p.x, p.y, p.z, h.w)).collect());
+            }
+        } else {
+            for (xyz, h) in paths.iter().zip(&n0.cps) {
+                let a = NurbsCurve::interpolate(xyz, &self.v, q, None, None);
+                kv = a.knots.clone();
+                cols.push(
+                    a.cps
+                        .iter()
+                        .map(|p| H::new(p.x, p.y, p.z, p.w * h.w))
+                        .collect(),
+                );
+            }
         }
         let sk = NurbsSurface {
             du: n0.degree,

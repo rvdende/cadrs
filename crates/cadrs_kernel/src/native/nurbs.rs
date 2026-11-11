@@ -773,6 +773,66 @@ impl NurbsCurve {
         }
     }
 
+    /// [`Self::interpolate`] (no end derivatives) of several rows of points at the same
+    /// parameters, as one system solved for all of them: the curves' common knots and each
+    /// row's poles, the same to the bit as each interpolated by itself (a surface skinned
+    /// through sections is a row for each pole of its section). None where a row by itself
+    /// would go another way: parameters that repeat, too few points for the banded system, or
+    /// one that can't be solved.
+    pub fn interpolate_all(
+        rows: &[Vec<P3>],
+        params: &[f64],
+        p: usize,
+    ) -> Option<(Vec<f64>, Vec<Vec<P3>>)> {
+        let n = params.len();
+        let rising = params
+            .windows(2)
+            .all(|w| w[1] > w[0] + 1e-14 * (1.0 + w[0].abs()));
+        if n <= 24 || !rising || rows.is_empty() || rows.iter().any(|r| r.len() != n) {
+            return None;
+        }
+        let p = p.min(n - 1);
+        // (Knots by averaging, as [`Self::try_interpolate`]'s.)
+        let mut knots = vec![params[0]; p + 1];
+        for j in 1..n - p {
+            let s: f64 = (j..j + p).map(|i| params[i.min(n - 1)]).sum();
+            knots.push(s / p as f64);
+        }
+        knots.extend(vec![params[n - 1]; p + 1]);
+        let mut band = Band::new(n, p + 2);
+        let mut outside = false;
+        for (row, &u) in params.iter().enumerate() {
+            let span = find_span(n - 1, p, u, &knots);
+            let nd = basis_ders(span, u, p, 0, &knots);
+            for (j, b) in nd[0].iter().enumerate().take(p + 1) {
+                outside |= !band.set(row, span - p + j, *b);
+            }
+        }
+        if outside {
+            return None;
+        }
+        let mut rhs = DMatrix::<f64>::zeros(n, 3 * rows.len());
+        for (k, r) in rows.iter().enumerate() {
+            for (i, q) in r.iter().enumerate() {
+                rhs[(i, 3 * k)] = q.x;
+                rhs[(i, 3 * k + 1)] = q.y;
+                rhs[(i, 3 * k + 2)] = q.z;
+            }
+        }
+        let sol = band.solve(rhs)?;
+        if sol.iter().any(|x| !x.is_finite()) {
+            return None;
+        }
+        let poles = (0..rows.len())
+            .map(|k| {
+                (0..n)
+                    .map(|i| P3::new(sol[(i, 3 * k)], sol[(i, 3 * k + 1)], sol[(i, 3 * k + 2)]))
+                    .collect()
+            })
+            .collect();
+        Some((knots, poles))
+    }
+
     fn try_interpolate(
         pts: &[P3],
         params: &[f64],
@@ -1330,16 +1390,38 @@ impl NurbsSurface {
     /// v, then each column's in u, the parameters kept (a point at (u, v) on it is the surface's
     /// at (u, v)).
     pub fn restricted(&self, u: (f64, f64), v: (f64, f64)) -> Self {
-        let mut kv = self.kv.clone();
-        let rows: Vec<Vec<H>> = self
-            .cps
+        let (ku, kv, cps) = self.cut_net(u, v);
+        Self {
+            du: self.du,
+            dv: self.dv,
+            ku,
+            kv,
+            cps,
+        }
+    }
+
+    /// The control net of the patch over u × v (each row's and then each column's curve cut
+    /// there): its points' hull holds that part of the surface.
+    pub fn sub_net(&self, u: (f64, f64), v: (f64, f64)) -> Vec<Vec<H>> {
+        self.cut_net(u, v).2
+    }
+
+    /// [`Self::restricted`]'s knots and net. Only the poles the patch hangs on are cut (the
+    /// rows and columns whose basis reaches it, and a span more each way so that a cut falls
+    /// inside them as it does inside the whole): the same sums as cutting every row and column
+    /// whole, for the patch's share of the work.
+    fn cut_net(&self, u: (f64, f64), v: (f64, f64)) -> (Vec<f64>, Vec<f64>, Vec<Vec<H>>) {
+        let (i0, i1) = window(&self.ku, self.du, self.cps.len(), u);
+        let (j0, j1) = window(&self.kv, self.dv, self.cps[0].len(), v);
+        let mut kv = Vec::new();
+        let rows: Vec<Vec<H>> = self.cps[i0..=i1]
             .iter()
             .enumerate()
             .map(|(i, r)| {
                 let c = NurbsCurve {
                     degree: self.dv,
-                    knots: self.kv.clone(),
-                    cps: r.clone(),
+                    knots: self.kv[j0..=j1 + self.dv + 1].to_vec(),
+                    cps: r[j0..=j1].to_vec(),
                 }
                 .restricted(v.0, v.1);
                 if i == 0 {
@@ -1349,12 +1431,12 @@ impl NurbsSurface {
             })
             .collect();
         let nv = rows[0].len();
-        let mut ku = self.ku.clone();
+        let mut ku = Vec::new();
         let cols: Vec<Vec<H>> = (0..nv)
             .map(|j| {
                 let c = NurbsCurve {
                     degree: self.du,
-                    knots: self.ku.clone(),
+                    knots: self.ku[i0..=i1 + self.du + 1].to_vec(),
                     cps: rows.iter().map(|r| r[j]).collect(),
                 }
                 .restricted(u.0, u.1);
@@ -1365,46 +1447,10 @@ impl NurbsSurface {
             })
             .collect();
         let nu = cols[0].len();
-        Self {
-            du: self.du,
-            dv: self.dv,
-            ku,
-            kv,
-            cps: (0..nu)
-                .map(|i| (0..nv).map(|j| cols[j][i]).collect())
-                .collect(),
-        }
-    }
-
-    /// The control net of the patch over u × v (each row's and then each column's curve cut
-    /// there): its points' hull holds that part of the surface.
-    pub fn sub_net(&self, u: (f64, f64), v: (f64, f64)) -> Vec<Vec<H>> {
-        let rows: Vec<Vec<H>> = self
-            .cps
-            .iter()
-            .map(|r| {
-                NurbsCurve {
-                    degree: self.dv,
-                    knots: self.kv.clone(),
-                    cps: r.clone(),
-                }
-                .restricted(v.0, v.1)
-                .cps
-            })
+        let cps = (0..nu)
+            .map(|i| (0..nv).map(|j| cols[j][i]).collect())
             .collect();
-        let nv = rows[0].len();
-        let cols: Vec<Vec<H>> = (0..nv)
-            .map(|j| {
-                NurbsCurve {
-                    degree: self.du,
-                    knots: self.ku.clone(),
-                    cps: rows.iter().map(|r| r[j]).collect(),
-                }
-                .restricted(u.0, u.1)
-                .cps
-            })
-            .collect();
-        cols
+        (ku, kv, cps)
     }
 
     /// The parameter ranges in u and in v.
@@ -1818,6 +1864,24 @@ pub fn solve(a: DMatrix<f64>, b: DVector<f64>) -> Option<DVector<f64>> {
     a.lu().solve(&b)
 }
 
+/// The poles (first and last) of a B-spline of `n` poles and degree `p` on `knots` that the part
+/// over `range` hangs on, and those of a span more each way where there are more: the curve
+/// they make by themselves is the whole one there, and a cut at either end of the range falls
+/// strictly inside it unless that end is the whole curve's own.
+fn window(knots: &[f64], p: usize, n: usize, range: (f64, f64)) -> (usize, usize) {
+    let (lo, hi) = (knots[p], knots[n]);
+    let (a, b) = (range.0.max(lo), range.1.min(hi));
+    let mut i0 = find_span(n - 1, p, a, knots) - p;
+    while i0 > 0 && knots[i0 + p] >= a {
+        i0 -= 1;
+    }
+    let mut i1 = find_span(n - 1, p, b.max(a), knots);
+    while i1 < n - 1 && knots[i1 + 1] <= b {
+        i1 += 1;
+    }
+    (i0, i1)
+}
+
 /// A B-spline surface's basis along u at a rule's points on each of a run of its spans
 /// ([`NurbsSurface::span_rule`]): integrals along u at many a v cross the same spans at the
 /// same points, where [`IsoV::d1_on`] then costs a point its sums alone.
@@ -1925,6 +1989,107 @@ impl IsoV<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A patch cut from the poles it hangs on is the patch cut from every row and column whole,
+    /// to the bit: ranges inside spans, on knots (single and double) and at the surface's ends.
+    #[test]
+    fn a_patch_cut_from_its_own_poles_is_the_one_cut_whole() {
+        let knots = |inner: &[f64], p: usize, end: f64| -> Vec<f64> {
+            vec![0.0; p + 1]
+                .into_iter()
+                .chain(inner.iter().copied())
+                .chain(vec![end; p + 1])
+                .collect()
+        };
+        let (du, dv) = (3, 5);
+        let ku = knots(&[0.5, 1.1, 1.1, 1.9, 2.6, 3.3, 4.0, 4.4], du, 5.0);
+        let kv = knots(&[0.3, 0.9, 1.4, 2.2, 2.2, 2.9, 3.1], dv, 4.0);
+        let (nu, nv) = (ku.len() - du - 1, kv.len() - dv - 1);
+        let cps: Vec<Vec<H>> = (0..nu)
+            .map(|i| {
+                (0..nv)
+                    .map(|j| {
+                        let (x, y) = (i as f64, j as f64);
+                        let w = 1.0 + 0.2 * ((x * 1.3 + y * 0.7).sin()).abs();
+                        H::new(x * w, y * w, (x * 0.8).sin() * (y * 0.6).cos() * w, w)
+                    })
+                    .collect()
+            })
+            .collect();
+        let s = NurbsSurface {
+            du,
+            dv,
+            ku,
+            kv,
+            cps,
+        };
+        // Every row cut whole in v, then every column whole in u.
+        let whole = |u: (f64, f64), v: (f64, f64)| {
+            let mut kv = Vec::new();
+            let rows: Vec<Vec<H>> = s
+                .cps
+                .iter()
+                .map(|r| {
+                    let c = NurbsCurve {
+                        degree: s.dv,
+                        knots: s.kv.clone(),
+                        cps: r.clone(),
+                    }
+                    .restricted(v.0, v.1);
+                    kv = c.knots;
+                    c.cps
+                })
+                .collect();
+            let mut ku = Vec::new();
+            let cols: Vec<Vec<H>> = (0..rows[0].len())
+                .map(|j| {
+                    let c = NurbsCurve {
+                        degree: s.du,
+                        knots: s.ku.clone(),
+                        cps: rows.iter().map(|r| r[j]).collect(),
+                    }
+                    .restricted(u.0, u.1);
+                    ku = c.knots;
+                    c.cps
+                })
+                .collect();
+            let cps: Vec<Vec<H>> = (0..cols[0].len())
+                .map(|i| cols.iter().map(|c| c[i]).collect())
+                .collect();
+            (ku, kv, cps)
+        };
+        let us = [
+            (0.0, 5.0),
+            (0.7, 0.9),
+            (0.5, 1.1),
+            (1.1, 1.9),
+            (0.2, 4.7),
+            (2.6, 5.0),
+            (0.0, 0.5),
+            (3.0, 3.1),
+            (-1.0, 2.0),
+        ];
+        let vs = [
+            (0.0, 4.0),
+            (1.0, 1.2),
+            (0.9, 2.2),
+            (2.2, 2.9),
+            (0.1, 3.9),
+            (3.1, 4.0),
+            (0.0, 0.3),
+            (2.0, 6.0),
+        ];
+        for &u in &us {
+            for &v in &vs {
+                let (ku, kv, cps) = whole(u, v);
+                let cut = s.restricted(u, v);
+                assert_eq!(cut.ku, ku, "u {u:?} v {v:?}");
+                assert_eq!(cut.kv, kv, "u {u:?} v {v:?}");
+                assert_eq!(cut.cps, cps, "u {u:?} v {v:?}");
+                assert_eq!(s.sub_net(u, v), cps);
+            }
+        }
+    }
 
     /// Each span's Bézier segment from one pass (A5.6) is the span split off the curve: a
     /// rational quartic of interior knots single and double, its ends and control points.
