@@ -2,7 +2,7 @@
 
 use cadrs_kernel::native::*;
 use cadrs_kernel::*;
-use nalgebra::{Point2, Point3, Vector3};
+use nalgebra::{Point3, Vector3};
 
 /// brep-bench's bull-nose carried along a spline: a mill leaning 30 degrees toward its way, its
 /// end's corner rounded, riding a planar Bézier. Its envelope is four fitted sheets (its
@@ -12,64 +12,29 @@ use nalgebra::{Point2, Point3, Vector3};
 fn a_leaning_bull_nose_carried_along_a_spline_is_exact() {
     let mut k = NativeKernel::new();
     let lean = 30f64.to_radians();
-    let a = Vector3::new(lean.sin(), 0.0, lean.cos());
-    let c = Point3::new(0.0, 0.0, -1.0);
-    let radial = (Vector3::x() - a * a.x).normalize();
-    let on = Plane {
-        origin: c,
-        x_dir: nalgebra::Unit::new_normalize(radial),
-        normal: nalgebra::Unit::new_normalize(radial.cross(&a)),
-    };
-    let l = |a: (f64, f64), b: (f64, f64)| Curve2::Line {
-        a: Point2::new(a.0, a.1),
-        b: Point2::new(b.0, b.1),
-        source: None,
-    };
-    let section = Loop {
-        curves: vec![
-            l((0.0, 0.0), (1.5, 0.0)),
-            Curve2::Spline {
-                degree: 2,
-                knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
-                poles: vec![
-                    Point2::new(1.5, 0.0),
-                    Point2::new(2.0, 0.0),
-                    Point2::new(2.0, 0.5),
-                ],
-                weights: vec![1.0, 2f64.sqrt() / 2.0, 1.0],
-                source: None,
-            },
-            l((2.0, 0.5), (2.0, 3.0)),
-            l((2.0, 3.0), (0.0, 3.0)),
-            l((0.0, 3.0), (0.0, 0.0)),
-        ],
-    };
-    let axis = Axis {
-        origin: c,
-        dir: nalgebra::Unit::new_normalize(a),
-    };
-    let region = Region {
-        outer: section,
-        holes: vec![],
-        source: None,
-    };
+    let axis = Axis::new(
+        Point3::new(0.0, 0.0, -1.0),
+        Vector3::new(lean.sin(), 0.0, lean.cos()),
+    );
+    let section = Loop::from_point([0.0, 0.0])
+        .line_to([1.5, 0.0])
+        .conic_to([2.0, 0.0], 2f64.sqrt() / 2.0, [2.0, 0.5])
+        .line_to([2.0, 3.0])
+        .line_to([0.0, 3.0])
+        .close();
+    let sketch = Profile::of(Plane::through_axis(&axis), vec![section]);
     let mill = k
-        .revolve_with(
-            &Profile::new(on, vec![region]),
-            &RevolveSpec::solid(axis, None),
-        )
+        .revolve_with(&sketch, &RevolveSpec::solid(axis, None))
         .unwrap()
-        .bodies[0];
-    let motion = SolidMotion::Path {
-        path: vec![PathCurve::Bezier3 {
-            poles: [(0.0, 0.0), (10.0, 0.0), (20.0, 20.0), (30.0, 20.0)]
-                .iter()
-                .map(|&(x, y)| Point3::new(x, y, 0.0))
-                .collect(),
-            weights: vec![],
-        }],
-        up: Vector3::z_axis(),
-    };
+        .first()
+        .unwrap();
+    let path = PathCurve::bezier(&[
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(10.0, 0.0, 0.0),
+        Point3::new(20.0, 20.0, 0.0),
+        Point3::new(30.0, 20.0, 0.0),
+    ]);
+    let motion = SolidMotion::along(vec![path], Vector3::z());
     let swept = k.sweep_solid(mill, &motion).unwrap().bodies[0];
     let faces = k.faces(swept).unwrap();
     assert_eq!(

@@ -37,6 +37,7 @@
 
 /// Kernel backends by name (`backend::native::NativeKernel`, the only one).
 pub mod backend;
+mod construct;
 pub mod exchange;
 pub mod loft;
 pub mod naming;
@@ -45,6 +46,7 @@ pub mod naming;
 // With `testkit`, every internal module is public too, and not all of their items are documented.
 #[cfg_attr(feature = "testkit", allow(missing_docs))]
 pub mod native;
+mod pick;
 pub mod projection;
 pub mod query;
 pub mod thin;
@@ -63,7 +65,9 @@ pub mod testkit {
     };
 }
 
+pub use construct::{Helix, Outline, bezier_knots};
 pub use naming::{BodyNames, EdgeName, FaceName, FaceOrigin, OpId, VertexName};
+pub use pick::Pick;
 pub use projection::{
     ProjClass, ProjCurve, ProjEdge, ProjSource, ProjVisibility, ProjectOptions, Projection,
     ViewFrame,
