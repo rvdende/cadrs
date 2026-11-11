@@ -2364,6 +2364,17 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
                     .map(|f| (f.0.cps.len(), f.0.cps[0].len()))
                     .collect::<Vec<_>>()
             );
+            if std::env::var_os("CADRS_TUBE_FITS").is_some() {
+                for (sh, f) in prep.sheets.iter().zip(&fits) {
+                    let (chart, a0, a1, p0, p1) = sh.patch;
+                    let ((u0, u1), (v0, v1)) = f.1;
+                    eprintln!(
+                        "  sheet of chart {chart} (a {a0:.4}..{a1:.4}, ψ {p0:.4}..{p1:.4}): {} by {} poles over a {u0:.4}..{u1:.4}, ψ {v0:.4}..{v1:.4}",
+                        f.0.cps.len(),
+                        f.0.cps[0].len()
+                    );
+                }
+            }
         }
         (fits, given, on_sheet)
     };
