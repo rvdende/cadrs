@@ -633,6 +633,7 @@ shell-tool-rib = 리브
 shell-tool-shell = 쉘
 shell-tool-hole = 구멍
 shell-tool-thread = 나사산
+shell-tool-gear = 기어
 shell-tool-direct-edit = 면 이동, 면 삭제, 단순화
 shell-tool-linear-pattern = 선형 패턴
 shell-tool-circular-pattern = 원형 패턴
@@ -1721,6 +1722,37 @@ model-fill-merge-scope = 병합 범위 (만나는 서피스)
 model-continuity-position = 위치 (G0)
 model-continuity-tangency = 접선 (G1)
 model-continuity-curvature = 곡률 (G2)
+
+## crates/cadrs_app/src/gear_ui.rs
+model-gear-face = 원통, 원뿔 또는 평면 (선택 사항)
+model-gear-face-module = 모듈 { $module }, { $face }
+model-gear-spur = 스퍼 기어
+model-gear-ring = 링 기어
+model-gear-bevel = 베벨 기어
+model-gear-rack = 랙
+model-gear-teeth = 잇수
+model-gear-module = 모듈
+model-gear-pressure-angle = 압력각
+model-gear-tooth-line = 잇줄
+model-gear-straight = 직선
+model-gear-helical = 헬리컬
+model-gear-herringbone = 헤링본
+model-gear-helix-angle = 비틀림각
+model-gear-face-width = 치폭
+model-gear-bore = 보어 지름
+model-gear-rim = 림 두께
+model-gear-pitch-angle = 피치 원뿔각
+model-gear-body = 본체 두께
+model-gear-backlash = 백래시
+model-gear-axis = 축
+model-gear-across = 면을 가로지르는 이
+model-gear-spiral = 스파이럴
+model-gear-face-milled = 페이스 밀링 (글리슨)
+model-gear-equiangular = 등각
+model-gear-member = 절삭 방식
+model-gear-member-gear = 기어
+model-gear-member-pinion = 피니언 (짝 기어에 맞춤)
+model-gear-cutter-radius = 커터 반지름 (0: 자동)
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = 오른나사

@@ -633,6 +633,7 @@ shell-tool-rib = Ribbe
 shell-tool-shell = Uithol
 shell-tool-hole = Gat
 shell-tool-thread = Skroefdraad
+shell-tool-gear = Rat
 shell-tool-direct-edit = Skuif vlak, Skrap vlak, Vereenvoudig
 shell-tool-linear-pattern = Lineêre patroon
 shell-tool-circular-pattern = Sirkelpatroon
@@ -1721,6 +1722,37 @@ model-fill-merge-scope = Saamsmeltbereik (oppervlakke wat dit raak)
 model-continuity-position = Posisie (G0)
 model-continuity-tangency = Raking (G1)
 model-continuity-curvature = Kromming (G2)
+
+## crates/cadrs_app/src/gear_ui.rs
+model-gear-face = Silinder, keël of plat vlak (opsioneel)
+model-gear-face-module = Module { $module }, { $face }
+model-gear-spur = Reguittandrat
+model-gear-ring = Ringrat
+model-gear-bevel = Keëlrat
+model-gear-rack = Tandstang
+model-gear-teeth = Tande
+model-gear-module = Module
+model-gear-pressure-angle = Drukhoek
+model-gear-tooth-line = Tandlyn
+model-gear-straight = Reguit
+model-gear-helical = Skuins
+model-gear-herringbone = Visgraat
+model-gear-helix-angle = Helikshoek
+model-gear-face-width = Tandwydte
+model-gear-bore = Boorgatmiddellyn
+model-gear-rim = Kransdikte
+model-gear-pitch-angle = Steekkeëlhoek
+model-gear-body = Liggaamdikte
+model-gear-backlash = Speling
+model-gear-axis = As
+model-gear-across = Tande dwars oor die vlak
+model-gear-spiral = Spiraal
+model-gear-face-milled = Kopgefrees (Gleason)
+model-gear-equiangular = Gelykhoekig
+model-gear-member = Sny as
+model-gear-member-gear = Rat
+model-gear-member-pinion = Rondsel (pas by sy rat)
+model-gear-cutter-radius = Freesradius (0: outo)
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Regsdraaiend

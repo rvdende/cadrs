@@ -633,6 +633,7 @@ shell-tool-rib = Nervure
 shell-tool-shell = Coque
 shell-tool-hole = Trou
 shell-tool-thread = Filetage
+shell-tool-gear = Engrenage
 shell-tool-direct-edit = Déplacer la face, Supprimer la face, Simplifier
 shell-tool-linear-pattern = Répétition linéaire
 shell-tool-circular-pattern = Répétition circulaire
@@ -1721,6 +1722,37 @@ model-fill-merge-scope = Portée de fusion (surfaces adjacentes)
 model-continuity-position = Position (G0)
 model-continuity-tangency = Tangence (G1)
 model-continuity-curvature = Courbure (G2)
+
+## crates/cadrs_app/src/gear_ui.rs
+model-gear-face = Cylindre, cône ou face plane (facultatif)
+model-gear-face-module = Module { $module }, { $face }
+model-gear-spur = Engrenage droit
+model-gear-ring = Couronne
+model-gear-bevel = Engrenage conique
+model-gear-rack = Crémaillère
+model-gear-teeth = Dents
+model-gear-module = Module
+model-gear-pressure-angle = Angle de pression
+model-gear-tooth-line = Denture
+model-gear-straight = Droite
+model-gear-helical = Hélicoïdale
+model-gear-herringbone = À chevrons
+model-gear-helix-angle = Angle d'hélice
+model-gear-face-width = Largeur de denture
+model-gear-bore = Diamètre d'alésage
+model-gear-rim = Épaisseur de jante
+model-gear-pitch-angle = Angle primitif
+model-gear-body = Épaisseur du corps
+model-gear-backlash = Jeu
+model-gear-axis = Axe
+model-gear-across = Dents en travers de la face
+model-gear-spiral = Spirale
+model-gear-face-milled = Taillée à la fraise (Gleason)
+model-gear-equiangular = Équiangle
+model-gear-member = Tailler comme
+model-gear-member-gear = Roue
+model-gear-member-pinion = Pignon (assorti à sa roue)
+model-gear-cutter-radius = Rayon de fraise (0 : auto)
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = À droite

@@ -633,6 +633,7 @@ shell-tool-rib = リブ
 shell-tool-shell = シェル
 shell-tool-hole = 穴
 shell-tool-thread = ねじ
+shell-tool-gear = ギア
 shell-tool-direct-edit = 面を移動、面を削除、単純化
 shell-tool-linear-pattern = 直線パターン
 shell-tool-circular-pattern = 円形パターン
@@ -1721,6 +1722,37 @@ model-fill-merge-scope = マージ範囲（接するサーフェス）
 model-continuity-position = 位置 (G0)
 model-continuity-tangency = 接線 (G1)
 model-continuity-curvature = 曲率 (G2)
+
+## crates/cadrs_app/src/gear_ui.rs
+model-gear-face = 円柱、円錐または平面（任意）
+model-gear-face-module = モジュール { $module }、{ $face }
+model-gear-spur = 平歯車
+model-gear-ring = 内歯車
+model-gear-bevel = かさ歯車
+model-gear-rack = ラック
+model-gear-teeth = 歯数
+model-gear-module = モジュール
+model-gear-pressure-angle = 圧力角
+model-gear-tooth-line = 歯すじ
+model-gear-straight = すぐば
+model-gear-helical = はすば
+model-gear-herringbone = やまば
+model-gear-helix-angle = ねじれ角
+model-gear-face-width = 歯幅
+model-gear-bore = 穴径
+model-gear-rim = リム厚
+model-gear-pitch-angle = ピッチ円すい角
+model-gear-body = 本体の厚さ
+model-gear-backlash = バックラッシ
+model-gear-axis = 軸
+model-gear-across = 面を横切る歯
+model-gear-spiral = スパイラル
+model-gear-face-milled = 正面フライス（グリーソン）
+model-gear-equiangular = 等角
+model-gear-member = 歯切り
+model-gear-member-gear = 大歯車
+model-gear-member-pinion = ピニオン（相手の歯車に合わせる）
+model-gear-cutter-radius = カッタ半径（0：自動）
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = 右ねじ
