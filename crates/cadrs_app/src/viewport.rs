@@ -1817,7 +1817,8 @@ pub fn pick_in(view: &ViewState, offset: Vec2, planes: bool) -> Option<Pick> {
 
 /// Keyboard view commands (`reference/onshape/shortcuts.md`, 3D view): Shift+1…7 standard
 /// views, N normal to (the sketch plane, a selected plane or a selected sketch's plane), F zoom
-/// to fit, Z / Shift+Z zoom out / in, Ctrl+Shift+arrows pan, P shows or hides the default
+/// to fit (to the selected part of a sketch, if part of one is selected), Z / Shift+Z zoom out /
+/// in, Ctrl+Shift+arrows pan, P shows or hides the default
 /// planes, Space clears the selection. (The arrows held turn the view: `arrow_keys_held`.) And
 /// Blender's numpad ([`numpad_key`]).
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -1836,12 +1837,13 @@ fn view_shortcuts(
     mut planes: ResMut<PlanesVisible>,
     inset: Res<DialogInset>,
     mut commands: Commands,
-    (cache, asm_parts, pcb_scene, eda2d, layout): (
+    (cache, asm_parts, pcb_scene, eda2d, layout, in_sketch): (
         Res<crate::parts::PartCache>,
         Res<crate::assembly::AssemblyParts>,
         Option<Res<crate::pcb::view::PcbScene>>,
         Res<crate::eda::Eda2d>,
         Res<crate::eda::layout_tools::LayoutState>,
+        Option<Res<crate::sketch_tools::SketchSelection>>,
     ),
 ) {
     if kind.is_flat() || eda2d.flat() {
@@ -1994,6 +1996,18 @@ fn view_shortcuts(
                         .selection
                         .iter()
                         .any(|i| matches!(i, cadrs_eda::board_edit::BoardItem::Footprint(_))) => {}
+            // Part of a sketch selected (its curves or points, in the sketch being edited or
+            // in the view): F frames that alone, as Zoom to selection does.
+            KeyCode::KeyF
+                if !shift
+                    && crate::view_options::sketch_is_selected(
+                        session.is_some(),
+                        in_sketch.as_deref(),
+                        &selection,
+                    ) =>
+            {
+                commands.queue(crate::view_options::zoom_to_selection);
+            }
             KeyCode::KeyF if !shift => {
                 let mut pts = scene_points(doc.as_deref(), *kind, planes.0, Some(&cache));
                 // In an assembly with a mate dialog's or a drag's preview, the instances as drawn
@@ -2123,6 +2137,95 @@ pub fn normal_to_sketch(world: &mut World) {
         let to = view.target().normal_to(plane_normal(p));
         view.animate_to(to);
     }
+}
+
+/// Turns the view square to sketch `feature`'s plane and fits the sketch in it: its curves, its
+/// points and its dimensions as they will be drawn (to the size of a default plane about its
+/// origin if it is empty). A sketch opened by a double-click in the feature list. A perspective
+/// view becomes orthographic: a sketch is drawn flat.
+pub fn frame_sketch(world: &mut World, feature: FeatureId) {
+    let Some((plane, g)) = world
+        .get_resource::<ActiveDocument>()
+        .and_then(|d| d.active_element())
+        .and_then(|el| el.feature(feature))
+        .and_then(|f| f.sketch())
+        .and_then(|s| Some((s.plane?, s.geometry.clone())))
+    else {
+        return;
+    };
+    if world.resource::<ViewportView>().view.perspective {
+        crate::view_options::set_perspective(world, false);
+    }
+    let frame = plane.frame();
+    let kind = *world.resource::<ActiveKind>();
+    let size = world.resource::<ViewportRect>().0.size();
+    let inset = world.resource::<DialogInset>().0;
+    let mut view = world.resource_mut::<ViewportView>();
+    let square = view.target().normal_to(plane_normal(plane));
+    let mut pts = sketch_points(&g, &frame);
+    // The dimensions stand off the curves by so many pixels: where they are at the zoom the
+    // curves alone would get, near enough.
+    let alone = square.fitted_beside(&pts, size, fit_fill(kind), inset);
+    pts.extend(dimension_points(&g, &frame, 1.0 / alone.scale as f64));
+    let to = square.fitted_beside(&pts, size, fit_fill(kind), inset);
+    view.drop_framed_pivot();
+    view.animate_to(to);
+}
+
+/// Where a sketch's dimensions are drawn at `ppm` pixels a millimetre, in the model: their
+/// lines' ends and the corners of their labels.
+fn dimension_points(
+    g: &cadrs_sketch::Sketch,
+    frame: &cadrs_sketch::PlaneFrame,
+    ppm: f64,
+) -> Vec<Vec3> {
+    use cadrs_sketch::dimension::{LayoutStyle, layout};
+    // (Half a label of a few digits and its unit, px.)
+    let half = (30.0, 8.0);
+    let world = |p: cadrs_sketch::Vec2| {
+        let q = frame.to_world(p);
+        Vec3::new(q[0] as f32, q[1] as f32, q[2] as f32)
+    };
+    let mut pts = Vec::new();
+    for d in g.dimensions.values() {
+        let Some(l) = layout(g, d, LayoutStyle::new(ppm, half)) else {
+            continue;
+        };
+        for (a, b) in &l.lines {
+            pts.extend([world(*a), world(*b)]);
+        }
+        for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+            pts.push(world(cadrs_sketch::Vec2::new(
+                l.label.x + sx * half.0 / ppm,
+                l.label.y + sy * half.1 / ppm,
+            )));
+        }
+    }
+    pts
+}
+
+/// What a view of a sketch frames: its curves along their lengths and its points, in the
+/// model; a square the size of a default plane about its origin if it is empty.
+pub fn sketch_points(g: &cadrs_sketch::Sketch, frame: &cadrs_sketch::PlaneFrame) -> Vec<Vec3> {
+    let world = |p: cadrs_sketch::Vec2| {
+        let q = frame.to_world(p);
+        Vec3::new(q[0] as f32, q[1] as f32, q[2] as f32)
+    };
+    let mut pts: Vec<Vec3> = g
+        .curves
+        .keys()
+        .flat_map(|c| cadrs_sketch::hit::curve_polyline(g, c))
+        .chain(g.points.keys().map(|p| g.pos(p)))
+        .map(world)
+        .collect();
+    if pts.is_empty() {
+        let h = PLANE_HALF as f64;
+        pts = [(-h, -h), (h, -h), (h, h), (-h, h)]
+            .into_iter()
+            .map(|(x, y)| world(cadrs_sketch::Vec2::new(x, y)))
+            .collect();
+    }
+    pts
 }
 
 /// A sketch plane's normal (the side it faces).
