@@ -67,4 +67,4 @@ Thank you to:
 
 [Sponsor cadrs on GitHub](https://github.com/sponsors/rvdende). 
 
-<!-- sponsors --><a href="https://github.com/thomasfla"><img src="https:&#x2F;&#x2F;github.com&#x2F;thomasfla.png" width="60px" alt="User avatar: Thomas Flayols" /></a><!-- sponsors -->
+<!-- sponsors --><a href="https://github.com/thomasfla"><img src="https:&#x2F;&#x2F;github.com&#x2F;thomasfla.png" width="60px" alt="User avatar: Thomas Flayols" /></a><a href="https://github.com/corsinone"><img src="https:&#x2F;&#x2F;github.com&#x2F;corsinone.png" width="60px" alt="User avatar: Gianluca Corsini" /></a><!-- sponsors -->
