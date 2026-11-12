@@ -314,10 +314,11 @@ fn hobbing(at: Point3<f64>) -> SolidMotion {
 /// envelope (the pinion's tip undercuts the flank it generates) that envelope. Its volume
 /// agrees with the tooth's places sampled one by one (11804.1 ± 0.4); taking the tip's paths
 /// alone for the space's sides left 27 too much.
-#[test]
-fn a_bevel_gear_cut_by_its_pinion_has_the_flanks_its_tooth_generates() {
+/// brep-bench's bevel gear's blank and its pinion's tooth: the blank a quadrilateral turned
+/// about the z axis; the tooth the pyramid with its apex at the origin over a rack's trapezoid,
+/// between two planes square to its length.
+fn bevel_blank_and_tooth(k: &mut NativeKernel) -> (BodyId, BodyId) {
     use std::f64::consts::FRAC_PI_2;
-    let mut k = NativeKernel::new();
     let s5 = 5f64.sqrt();
     let (g, d) = (
         Vector3::new(2.0 / s5, 0.0, 1.0 / s5),
@@ -386,6 +387,14 @@ fn a_bevel_gear_cut_by_its_pinion_has_the_flanks_its_tooth_generates() {
         .unwrap()
         .first()
         .unwrap();
+    (blank, tooth)
+}
+
+#[test]
+fn a_bevel_gear_cut_by_its_pinion_has_the_flanks_its_tooth_generates() {
+    let mut k = NativeKernel::new();
+    let (blank, tooth) = bevel_blank_and_tooth(&mut k);
+    let z_axis = Axis::new(Point3::origin(), Vector3::z());
     let roll = 60f64.to_radians();
     let motion = SolidMotion::rigid(vec![
         RigidStep::turn(Axis::new(Point3::origin(), Vector3::x()), -roll, roll),
@@ -398,6 +407,43 @@ fn a_bevel_gear_cut_by_its_pinion_has_the_flanks_its_tooth_generates() {
     assert_eq!(kinds.get("plane"), None, "{kinds:?}");
     assert!(faults.is_empty(), "{faults:?}");
     assert!((volume - 11803.8045).abs() < 1e-3, "volume {volume}");
+}
+
+/// brep-bench's hypoid gear cut by its pinion: the bevel gear's blank, and its tooth turned
+/// about the gear's axis to lie along the pitch cone where a pinion on a shaft 12 from the
+/// gear's can carry it. The tooth's two end faces and its corners come into the cut at both
+/// ends of the tooth space, so the space's outline changes along it within the blank, a dozen
+/// times: it is made in as many stretches under a roof, their links that come and go each a
+/// three-sided face. Its volume agrees with the tooth's places sampled one by one
+/// (11791.7 ± 0.7); the tooth swept as a mesh of flat facets gave 11717.3.
+#[test]
+#[ignore = "slow: about 3 s"]
+fn a_hypoid_gear_cut_by_its_pinion_has_a_space_whose_outline_changes_along_it() {
+    let mut k = NativeKernel::new();
+    let (blank, tooth) = bevel_blank_and_tooth(&mut k);
+    let z_axis = Axis::new(Point3::origin(), Vector3::z());
+    let phi = (24.0 / (75.0 - 5.0 * 5f64.sqrt())).asin();
+    let tooth = k
+        .transform_motion(tooth, &Motion::rotation(&z_axis, phi))
+        .unwrap()
+        .first()
+        .unwrap();
+    let roll = 70f64.to_radians();
+    let motion = SolidMotion::rigid(vec![
+        RigidStep::turn(
+            Axis::new(Point3::new(0.0, 12.0, 0.0), Vector3::x()),
+            -roll,
+            roll,
+        ),
+        RigidStep::turn(z_axis, -7.0 / 15.0 * roll, 7.0 / 15.0 * roll),
+    ]);
+    let cut = k.cut_swept(blank, tooth, &motion).unwrap().first().unwrap();
+    let (kinds, volume, faults) = kinds(&k, cut);
+    assert_eq!(kinds.get("cone"), Some(&4), "{kinds:?}");
+    assert_eq!(kinds.get("plane"), None, "{kinds:?}");
+    assert!(kinds.get("bspline").is_some_and(|n| *n >= 60), "{kinds:?}");
+    assert!(faults.is_empty(), "{faults:?}");
+    assert!((volume - 11792.2465).abs() < 1e-2, "volume {volume}");
 }
 
 /// brep-bench's worm wheel hobbed by its worm: thirty tooth spaces, each two flanks the
