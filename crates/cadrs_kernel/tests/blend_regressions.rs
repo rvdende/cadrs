@@ -2682,3 +2682,103 @@ fn chamfer_whose_contact_sits_on_a_rounds_edge_is_answered() {
         .expect("the chamfer is answered within a minute");
     assert!(r.is_err() || r == Ok(true), "{r:?}");
 }
+
+/// A hemisphere's rim chamfered with two distances measured along the faces' tangent planes
+/// (ChamferMeasure::Tangent): on the ball, of radius R, a tangent distance d lands at the angle
+/// atan(d/R) round it from the rim, so the tangent distance R·tan(2·asin(c/2R)) lands at the
+/// end of the chord c. brep-bench's `chamfer/hemisphere-rim-two-distances`: 2 on the flat face
+/// and a chord of 1 on the ball of radius 5, the chamfer the cone between the circle of radius
+/// 3 and the circle of radius 4.9 at the height 3√11/10. (The chamfer's section is a straight
+/// line between points told along the two tangents: told as the tangent distances themselves
+/// it met the ball short of there, at the height 0.9555.)
+#[test]
+fn a_tangent_distance_on_a_ball_lands_at_its_angle_round_it() {
+    use nalgebra::Point3;
+    use std::f64::consts::PI;
+    let mut k = NativeKernel::new();
+    let ball = k
+        .primitive(&Primitive::ball(Point3::origin(), 5.0))
+        .unwrap()
+        .first()
+        .unwrap();
+    let above = Profile::of(
+        Plane::xy(0.0),
+        vec![Loop::rectangle(-20.0, -20.0, 20.0, 20.0)],
+    );
+    let above = k
+        .extrude_with(&above, &ExtrudeSpec::normal_to(&above, 20.0))
+        .unwrap()
+        .first()
+        .unwrap();
+    let half = k
+        .boolean(BoolOp::Intersect, ball, &[above])
+        .unwrap()
+        .first()
+        .unwrap();
+    let rim = k.edge_at(half, Point3::new(0.0, -5.0, 0.0)).unwrap();
+    let on_ball = 5.0 * (2.0 * (1.0f64 / 10.0).asin()).tan();
+    let h = 3.0 * 11f64.sqrt() / 10.0;
+    let want_volume = PI * (250.0 / 3.0 - (25.0 * h - h.powi(3) / 3.0))
+        + PI * h * (9.0 + 3.0 * 4.9 + 4.9 * 4.9) / 3.0;
+    let want_area = 9.0 * PI + 10.0 * PI * (5.0 - h) + 7.9 * PI * (1.9f64 * 1.9 + h * h).sqrt();
+    // (Whichever of the rim's two faces the first distance falls on.)
+    let hit = [(on_ball, 2.0), (2.0, on_ball)].into_iter().any(|(a, c)| {
+        let mut opts = ChamferOpts::new(ChamferSpec::TwoDistances(a, c));
+        opts.measurement = ChamferMeasure::Tangent;
+        let out = k.chamfer_with(half, &[rim], &opts).unwrap().bodies[0];
+        let m = k.mass_properties(out).unwrap();
+        let body = k.get(out).unwrap();
+        assert_eq!(
+            body.check_with(topo::CheckLevel::Full),
+            Vec::<String>::new()
+        );
+        (m.volume - want_volume).abs() < 1e-9 * want_volume
+            && (m.surface_area - want_area).abs() < 1e-9 * want_area
+    });
+    assert!(hit, "neither order of the two distances gives the chamfer");
+}
+
+/// A ball on a post, the concave edge between them chamfered with two distances by the tangent
+/// measure: brep-bench's `chamfer/ball-on-post-two-distances`, 2 down the post and a chord of 1
+/// on the ball. A concave chamfer fills the groove up to its line, and the ball bulges into the
+/// groove: the tool's side on the ball is the chord to where the line meets it, not the ball's
+/// tangent at the edge, which stops short of there (the fill ended 0.16 below the line's end
+/// on the ball, the volume 0.19 short).
+#[test]
+fn a_chamfer_fills_a_concave_edge_beside_a_ball_up_to_its_line() {
+    use nalgebra::Point3;
+    use std::f64::consts::PI;
+    let mut k = NativeKernel::new();
+    let post = Profile::of(Plane::xy(0.0), vec![Loop::circle([0.0, 0.0], 3.0)]);
+    let post = k
+        .extrude_with(&post, &ExtrudeSpec::normal_to(&post, 10.0))
+        .unwrap()
+        .first()
+        .unwrap();
+    let ball = k
+        .primitive(&Primitive::ball(Point3::new(0.0, 0.0, 10.0), 5.0))
+        .unwrap()
+        .first()
+        .unwrap();
+    let joined = k
+        .boolean(BoolOp::Union, post, &[ball])
+        .unwrap()
+        .first()
+        .unwrap();
+    let edge = k.edge_at(joined, Point3::new(0.0, -3.0, 6.0)).unwrap();
+    let on_ball = 5.0 * (2.0 * (1.0f64 / 10.0).asin()).tan();
+    let want = PI * (1620386.0 + 10431.0 * 11f64.sqrt()) / 7500.0;
+    let hit = [(on_ball, 2.0), (2.0, on_ball)].into_iter().any(|(a, c)| {
+        let mut opts = ChamferOpts::new(ChamferSpec::TwoDistances(a, c));
+        opts.measurement = ChamferMeasure::Tangent;
+        let out = k.chamfer_with(joined, &[edge], &opts).unwrap().bodies[0];
+        let volume = k.mass_properties(out).unwrap().volume;
+        let body = k.get(out).unwrap();
+        assert_eq!(
+            body.check_with(topo::CheckLevel::Full),
+            Vec::<String>::new()
+        );
+        (volume - want).abs() < 1e-9 * want
+    });
+    assert!(hit, "neither order of the two distances fills the groove");
+}
