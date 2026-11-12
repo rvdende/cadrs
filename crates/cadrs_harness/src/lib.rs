@@ -283,6 +283,9 @@ pub fn default_plugins(opts: &HarnessOptions) -> PluginGroupBuilder {
                 resolution,
                 ..default()
             }),
+            // The app closes its window itself, once the open document's thumbnail is saved
+            // (`cadrs_app::thumbnail`).
+            close_when_requested: false,
             ..default()
         })
     }
