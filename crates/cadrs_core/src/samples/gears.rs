@@ -160,6 +160,7 @@ pub fn gears() -> Vec<(FeatureId, GearFeature)> {
     pinion.pitch_angle = 90.0 - pitch_angle;
     pinion.pitch_angle_expr = deg(90.0 - pitch_angle);
     pinion.left_hand = true;
+    pinion.member = crate::gear::BevelMember::Pinion;
     pinion.axis = GearAxis::X;
     let reach = pinion.apex_height().unwrap_or(0.0);
     pinion.position = [p - reach, p, apex];

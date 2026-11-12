@@ -2435,6 +2435,12 @@ model-gear-spiral = Spiral
 model-gear-face-milled = Face-milled (Gleason)
 # A spiral: at the same angle to the cone's lines everywhere.
 model-gear-equiangular = Equiangular
+# Which of a pair of face-milled spiral bevel gears this one is.
+model-gear-member = Cut as
+# The gear of a pair: the cutter cuts both sides of a tooth space at once.
+model-gear-member-gear = Gear
+# The pinion of a pair: cut to match its gear.
+model-gear-member-pinion = Pinion (matches its gear)
 # The radius of the face-mill cutter that makes a spiral bevel gear's teeth; 0 picks one.
 model-gear-cutter-radius = Cutter radius (0: auto)
 

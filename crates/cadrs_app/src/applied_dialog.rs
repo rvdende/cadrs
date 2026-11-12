@@ -321,6 +321,7 @@ pub(crate) enum Role {
     GearRotation,
     GearSpiral,
     GearCutter,
+    GearMember,
     // The direct edits (`crate::direct_edit_ui`).
     DirectEditFaces,
     DirectEditDistance,
@@ -2092,6 +2093,7 @@ fn on_select(ev: On<SelectChange>, q: Query<&Role>, mut commands: Commands) {
         Role::GearHand => "Direction",
         Role::GearAxis => "Axis",
         Role::GearSpiral => "Spiral",
+        Role::GearMember => "Cut as",
         _ => return,
     };
     change(&mut commands, label, move |k| match (k, role) {

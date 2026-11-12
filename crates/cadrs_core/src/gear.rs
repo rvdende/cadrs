@@ -116,6 +116,28 @@ impl SpiralKind {
     }
 }
 
+/// Which of a face-milled pair a bevel gear is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum BevelMember {
+    /// Cut by the cutter itself, both sides of a tooth space at once.
+    #[default]
+    Gear,
+    /// Cut to match a gear: its teeth are what that gear's cutter, rolling with it too, would
+    /// leave, so the two are conjugate.
+    Pinion,
+}
+
+impl BevelMember {
+    pub const ALL: [BevelMember; 2] = [BevelMember::Gear, BevelMember::Pinion];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            BevelMember::Gear => "Gear",
+            BevelMember::Pinion => "Pinion",
+        }
+    }
+}
+
 /// The axis of a gear made whole.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum GearAxis {
@@ -231,6 +253,9 @@ pub struct GearFeature {
     pub cutter_radius: f64,
     #[serde(default)]
     pub cutter_radius_expr: String,
+    /// Which of a face-milled pair it is.
+    #[serde(default)]
+    pub member: BevelMember,
 }
 
 impl Default for GearFeature {
@@ -273,6 +298,7 @@ impl Default for GearFeature {
             spiral: SpiralKind::FaceMilled,
             cutter_radius: 0.0,
             cutter_radius_expr: mm(0.0),
+            member: BevelMember::Gear,
         }
     }
 }
@@ -1696,8 +1722,11 @@ struct FaceMill {
     dedendum: f64,
     /// Where the middle of the slot is on the cutter's circle (radians from u).
     tau_mid: f64,
-    /// The root cone's half angle.
-    root: f64,
+    /// The pitch angle.
+    delta: f64,
+    /// +1 for the gear the cutter cuts (under the pitch plane), −1 for its mate, on the other
+    /// side of it.
+    under: f64,
 }
 
 /// `p` turned by `a` about the unit axis `k`.
@@ -1710,9 +1739,12 @@ fn rot(p: Vec3, k: Vec3, a: f64) -> Vec3 {
 }
 
 impl FaceMill {
-    /// `delta` the pitch angle, `dedendum` the dedendum angle, `mean` the cone distance at the
-    /// middle of the face, `beta` the spiral angle there (its sign the hand), `radius` the
-    /// cutter's, `slot` the slot's width at the pitch line's middle point.
+    /// `delta` the pitch angle of the gear to make, `dedendum` the dedendum angle of the gear
+    /// the cutter cuts, `mean` the cone distance at the middle of the face, `beta` that gear's
+    /// spiral angle there (its sign the hand), `radius` the cutter's, `slot` the slot's width
+    /// at the pitch line's middle point. `mate`: the gear to make is the mate of the one the
+    /// cutter cuts, rolling on the same crown gear from the other side of the pitch plane.
+    #[allow(clippy::too_many_arguments)]
     fn new(
         delta: f64,
         dedendum: f64,
@@ -1721,6 +1753,7 @@ impl FaceMill {
         radius: f64,
         slot: f64,
         alpha: f64,
+        mate: bool,
     ) -> Self {
         let (sf, cf) = dedendum.sin_cos();
         let (u, v, c) = ([cf, 0.0, -sf], [0.0, 1.0, 0.0], [sf, 0.0, cf]);
@@ -1732,12 +1765,13 @@ impl FaceMill {
         let b = beta.abs();
         let m = [mean * cf, 0.0];
         let cc = [m[0] - radius * b.sin(), hand * radius * b.cos()];
+        let under = if mate { -1.0 } else { 1.0 };
         Self {
-            g: [delta.cos(), 0.0, -delta.sin()],
+            g: [delta.cos(), 0.0, -under * delta.sin()],
             c,
             u,
             v,
-            x_g: [delta.sin(), 0.0, delta.cos()],
+            x_g: [delta.sin(), 0.0, under * delta.cos()],
             centre: add(scale(u, cc[0]), scale(v, cc[1])),
             radius,
             slot,
@@ -1746,7 +1780,8 @@ impl FaceMill {
             ratio: cf / delta.sin(),
             dedendum,
             tau_mid: (-hand * b.cos()).atan2(b.sin()),
-            root: delta - dedendum,
+            delta,
+            under,
         }
     }
 
@@ -1771,11 +1806,15 @@ impl FaceMill {
         let (p1, p2) = (wrap(base + off), wrap(base - off));
         let phi = if p1.abs() <= p2.abs() { p1 } else { p2 };
         // On the cradle at that turn, then as the gear holds it: the gear has turned the other
-        // way by the ratio.
-        let p = rot(rot(r0, self.c, phi), self.g, self.ratio * phi);
+        // way by the ratio (its mate, over the pitch plane, the way the cradle turns).
+        let p = rot(rot(r0, self.c, phi), self.g, self.under * self.ratio * phi);
         let zd = dot(p, self.g);
         let out = sub(p, scale(self.g, zd));
-        [zd, norm(out), dot(p, self.v).atan2(dot(p, self.x_g))]
+        [
+            zd,
+            norm(out),
+            (self.under * dot(p, self.v)).atan2(dot(p, self.x_g)),
+        ]
     }
 
     /// The edge's point (`tau`, `w`) whose flank point is `h` from the apex along the axis and
@@ -1787,7 +1826,7 @@ impl FaceMill {
             None => {
                 // Over the tips' plane by its angle over the root cone; round the cutter where
                 // its circle is that far from the apex, on the side of the slot's middle.
-                let over = rho.atan2(h) - self.root;
+                let over = self.dedendum + self.under * (rho.atan2(h) - self.delta);
                 let (w, d) = (s * over.sin(), s * over.cos());
                 let r = self.radius + side * (self.slot / 2.0 + (w - self.level) * self.tan_alpha);
                 let (cu, cv) = (dot(self.centre, self.u), dot(self.centre, self.v));
@@ -1851,49 +1890,100 @@ impl FaceMill {
         None
     }
 
-    /// The flank the blade `side` makes where the plane `h` from the apex crosses it: from
-    /// where the blade's tip leaves it (the flank's foot: below it the tip cuts the fillet) up
-    /// to the radius `top`, a curve through its points, turned by `turn` about the axis. Also
-    /// its unit tangent at its foot (up the flank).
-    fn flank(&self, side: f64, h: f64, pitch: f64, top: f64, turn: f64) -> Option<(Seg, [f64; 2])> {
+    /// The flank the blade `side` makes where the plane `h` from the apex crosses it, a curve
+    /// through its points turned by `turn` about the axis, and its unit tangent at its foot
+    /// (up the flank). From its foot: where the blade's tip leaves it (`foot` None: below it
+    /// the tip cuts the fillet), or the radius `foot`, else as near it as the flank comes (a
+    /// mate's flank ends where its gear's cutter would undercut it). Up to the radius `tip`,
+    /// and straight on along its line to `top`.
+    #[allow(clippy::too_many_arguments)]
+    fn flank(
+        &self,
+        side: f64,
+        h: f64,
+        pitch: f64,
+        foot: Option<f64>,
+        tip: f64,
+        top: f64,
+        turn: f64,
+    ) -> Option<(Seg, [f64; 2])> {
         const N: usize = 12;
-        // From the pitch cone, where the flank is surely the envelope: down the blade to its
-        // tip, and up to the top.
+        // From the pitch cone, where the flank is surely the envelope. A step to a radius
+        // near the last: the same sheet of the envelope if the edge's point has moved little.
         let at_pitch = self.solve(side, h, pitch, None)?;
-        let at_top = self.solve(side, h, top, Some(at_pitch))?;
-        let mut tau = at_pitch[0];
-        const DOWN: usize = 6;
-        for k in 1..=DOWN {
-            let w = at_pitch[1] * (1.0 - k as f64 / DOWN as f64);
-            tau = self.tau_at(side, h, w, tau)?;
+        let step_to = |from: [f64; 2], was: f64, rho: f64| {
+            let x = self.solve(side, h, rho, Some(from))?;
+            let near = (x[1] - from[1]).abs() < 4.0 * (rho - was).abs() + 0.15 * self.slot
+                && (x[0] - from[0]).abs() < 0.3;
+            near.then_some(x)
+        };
+        let mut x = at_pitch;
+        let mut rho = pitch;
+        match foot {
+            None => {
+                // Down the blade to its tip.
+                const DOWN: usize = 6;
+                let mut tau = at_pitch[0];
+                for k in 1..=DOWN {
+                    let w = at_pitch[1] * (1.0 - k as f64 / DOWN as f64);
+                    tau = self.tau_at(side, h, w, tau)?;
+                }
+                x = [tau, 0.0];
+                rho = self.point(side, tau, 0.0)[1];
+            }
+            Some(wanted) => {
+                const DOWN: usize = 8;
+                for k in 1..=DOWN {
+                    let next = pitch + (wanted - pitch) * k as f64 / DOWN as f64;
+                    match step_to(x, rho, next) {
+                        Some(y) => (x, rho) = (y, next),
+                        None => break,
+                    }
+                }
+            }
         }
-        let place = |tau: f64, w: f64| {
-            let p = self.point(side, tau, w);
+        let place = |x: [f64; 2]| {
+            let p = self.point(side, x[0], x[1]);
             let a = p[2] + turn;
             [p[1] * a.cos(), p[1] * a.sin()]
         };
-        let step = at_top[1] / N as f64;
-        let mut pts = Vec::with_capacity(N + 1);
-        let foot = tau;
-        for k in 0..N {
-            tau = self.tau_at(side, h, step * k as f64, tau)?;
-            pts.push(place(tau, step * k as f64));
-        }
-        pts.push(place(at_top[0], at_top[1]));
-        // The ends' tangents, from points just inside them.
-        let near = 1e-4 * step;
-        let b = place(self.tau_at(side, h, near, foot)?, near);
-        let a = place(
-            self.tau_at(side, h, at_top[1] - near, at_top[0])?,
-            at_top[1] - near,
-        );
         let dir = |p: [f64; 2], q: [f64; 2]| {
             let d = [q[0] - p[0], q[1] - p[1]];
             let l = d[0].hypot(d[1]);
             [d[0] / l, d[1] / l]
         };
-        let up = dir(pts[0], b);
-        Some((interpolate(&pts, up, dir(a, pts[N])), up))
+        let (foot_x, foot_rho) = (x, rho);
+        let mut pts = vec![place(x)];
+        for k in 1..=N {
+            let next = foot_rho + (tip - foot_rho) * k as f64 / N as f64;
+            match step_to(x, rho, next) {
+                Some(y) => (x, rho) = (y, next),
+                None => break,
+            }
+            pts.push(place(x));
+        }
+        if pts.len() < 4 {
+            return None;
+        }
+        // The tangents at the foot and at the last point, from points just inside them.
+        let near = 1e-4 * (tip - foot_rho).abs().max(1e-9);
+        let up = dir(pts[0], place(step_to(foot_x, foot_rho, foot_rho + near)?));
+        let last = pts[pts.len() - 1];
+        let along = dir(place(step_to(x, rho, rho - near)?), last);
+        // Straight on to the radius `top`.
+        let reach = last[0].hypot(last[1]);
+        if top > reach + 1e-9 {
+            let b = last[0] * along[0] + last[1] * along[1];
+            let t = -b + (b * b + top * top - reach * reach).sqrt();
+            pts.push([last[0] + t * along[0], last[1] + t * along[1]]);
+        }
+        Some((interpolate(&pts, up, along), up))
+    }
+
+    /// The flank's angle about the axis where it crosses the pitch cone, in the plane `h`.
+    fn angle_at_pitch(&self, side: f64, h: f64, pitch: f64) -> Option<f64> {
+        let x = self.solve(side, h, pitch, None)?;
+        Some(self.point(side, x[0], x[1])[2])
     }
 }
 
@@ -1932,11 +2022,21 @@ fn face_milled_spaces(
     if radius < 0.55 * (cone - d.kappa * cone) / beta.abs().cos().max(0.2) {
         return Err("The cutter is too small to cross the gear's face");
     }
-    let slot = PI * m * (mean / cone) * beta.cos() / 2.0 + t.backlash;
-    let mill = FaceMill::new(delta, dedendum, mean, beta, radius, slot, t.alpha);
-    // The slot's middle is on the gear's x at the middle of the face: turned half a pitch, a
-    // tooth is there, and by the rotation.
-    let turn = x.rotation.to_radians() + PI / z;
+    // A pinion is cut to match its gear: by that gear's cutter (the other hand, the same
+    // dedendum angle: the two have one module and one cone distance), whose slot is the
+    // pinion's tooth, thinner by its backlash.
+    let mate = x.member == BevelMember::Pinion;
+    let half_pitch = PI * m * (mean / cone) * beta.cos() / 2.0;
+    let mill = if mate {
+        let slot = half_pitch - t.backlash;
+        FaceMill::new(delta, dedendum, mean, -beta, radius, slot, t.alpha, true)
+    } else {
+        let slot = half_pitch + t.backlash;
+        FaceMill::new(delta, dedendum, mean, beta, radius, slot, t.alpha, false)
+    };
+    // At the middle of the face a tooth is on the gear's x, turned by the rotation. The
+    // cutter's slot is there: the gear's space (so turned half a pitch), the pinion's tooth.
+    let turn = x.rotation.to_radians() + if mate { 0.0 } else { PI / z };
     let outer = (face + 0.25 * (m / cone).atan()).tan();
     const SECTIONS: usize = 7;
     let mut first: Vec<(Frame, Region2)> = Vec::with_capacity(SECTIONS);
@@ -1944,14 +2044,35 @@ fn face_milled_spaces(
     for k in 0..SECTIONS {
         let h = h1 + (h2 - h1) * k as f64 / (SECTIONS - 1) as f64;
         let (lo, hi) = (h * root.tan(), h * outer);
-        // Up the outside blades' flank, round outside the tips, down the inside blades', and
-        // the bottom: a curve from one flank's foot to the other's that leaves them along
-        // their lines and touches the root cone between (the fillet the blades' tips cut, near
-        // enough).
-        let (up, t_up) = mill.flank(1.0, h, h * delta.tan(), hi, turn).ok_or(unfit)?;
-        let (mut down, t_down) = mill
-            .flank(-1.0, h, h * delta.tan(), hi, turn)
-            .ok_or(unfit)?;
+        // Up one flank, round outside the tips, down the other, and the bottom: a curve from
+        // one flank's foot to the other's that leaves them along their lines and touches the
+        // root cone between (the fillet the blades' tips cut, near enough).
+        let pitch = h * delta.tan();
+        let ((up, t_up), (mut down, t_down)) = if mate {
+            // A pinion's space lies between two of the cutter's slots: after the flank of one
+            // that is further round, before the other flank a pitch on. Its flanks run from
+            // near its root cone to its face cone.
+            let (foot, tip) = (h * (root + 0.15 * dedendum).tan(), h * face.tan());
+            let a_out = mill.angle_at_pitch(1.0, h, pitch).ok_or(unfit)?;
+            let a_in = mill.angle_at_pitch(-1.0, h, pitch).ok_or(unfit)?;
+            let (first, second) = if a_out > a_in {
+                (1.0, -1.0)
+            } else {
+                (-1.0, 1.0)
+            };
+            (
+                mill.flank(first, h, pitch, Some(foot), tip, hi, turn)
+                    .ok_or(unfit)?,
+                mill.flank(second, h, pitch, Some(foot), tip, hi, turn + 2.0 * PI / z)
+                    .ok_or(unfit)?,
+            )
+        } else {
+            (
+                mill.flank(1.0, h, pitch, None, hi, hi, turn).ok_or(unfit)?,
+                mill.flank(-1.0, h, pitch, None, hi, hi, turn)
+                    .ok_or(unfit)?,
+            )
+        };
         reverse(&mut down);
         let angle = |p: [f64; 2]| p[1].atan2(p[0]);
         let wrap = |a: f64| (a + PI).rem_euclid(2.0 * PI) - PI;
@@ -2436,7 +2557,16 @@ mod tests {
         // 40 teeth of module 2 at 68.2°, 35° spiral, the cutter's radius the mean cone distance.
         let (delta, cone) = (68.2f64.to_radians(), 43.08);
         let (dedendum, mean) = ((2.5f64 / cone).atan(), cone - 6.0);
-        let mill = FaceMill::new(delta, dedendum, mean, 35f64.to_radians(), mean, 2.2, 0.349);
+        let mill = FaceMill::new(
+            delta,
+            dedendum,
+            mean,
+            35f64.to_radians(),
+            mean,
+            2.2,
+            0.349,
+            false,
+        );
         // The middle of the slot at the pitch line's middle point: either blade's flank is half
         // the slot from it there, a point on the gear's pitch cone near its x.
         for side in [1.0, -1.0] {

@@ -57,6 +57,7 @@
                                 spiral: FaceMilled,
                                 cutter_radius: 0.0,
                                 cutter_radius_expr: "0 mm",
+                                member: Gear,
                             )),
                         ),
                         (
@@ -98,6 +99,7 @@
                                 spiral: FaceMilled,
                                 cutter_radius: 0.0,
                                 cutter_radius_expr: "0 mm",
+                                member: Gear,
                             )),
                         ),
                         (
@@ -139,6 +141,7 @@
                                 spiral: FaceMilled,
                                 cutter_radius: 0.0,
                                 cutter_radius_expr: "0 mm",
+                                member: Gear,
                             )),
                         ),
                         (
@@ -180,6 +183,7 @@
                                 spiral: FaceMilled,
                                 cutter_radius: 0.0,
                                 cutter_radius_expr: "0 mm",
+                                member: Gear,
                             )),
                         ),
                         (
@@ -221,6 +225,7 @@
                                 spiral: FaceMilled,
                                 cutter_radius: 0.0,
                                 cutter_radius_expr: "0 mm",
+                                member: Gear,
                             )),
                         ),
                         (
@@ -262,6 +267,7 @@
                                 spiral: FaceMilled,
                                 cutter_radius: 0.0,
                                 cutter_radius_expr: "0 mm",
+                                member: Gear,
                             )),
                         ),
                         (
@@ -303,6 +309,7 @@
                                 spiral: FaceMilled,
                                 cutter_radius: 0.0,
                                 cutter_radius_expr: "0 mm",
+                                member: Gear,
                             )),
                         ),
                         (
@@ -344,6 +351,7 @@
                                 spiral: FaceMilled,
                                 cutter_radius: 0.0,
                                 cutter_radius_expr: "0 mm",
+                                member: Gear,
                             )),
                         ),
                         (
@@ -385,6 +393,7 @@
                                 spiral: FaceMilled,
                                 cutter_radius: 0.0,
                                 cutter_radius_expr: "0 mm",
+                                member: Gear,
                             )),
                         ),
                         (
@@ -426,6 +435,7 @@
                                 spiral: FaceMilled,
                                 cutter_radius: 0.0,
                                 cutter_radius_expr: "0 mm",
+                                member: Gear,
                             )),
                         ),
                         (
@@ -467,6 +477,7 @@
                                 spiral: FaceMilled,
                                 cutter_radius: 0.0,
                                 cutter_radius_expr: "0 mm",
+                                member: Gear,
                             )),
                         ),
                         (
@@ -508,6 +519,7 @@
                                 spiral: FaceMilled,
                                 cutter_radius: 0.0,
                                 cutter_radius_expr: "0 mm",
+                                member: Gear,
                             )),
                         ),
                         (
@@ -549,6 +561,7 @@
                                 spiral: FaceMilled,
                                 cutter_radius: 0.0,
                                 cutter_radius_expr: "0 mm",
+                                member: Gear,
                             )),
                         ),
                         (
@@ -590,6 +603,7 @@
                                 spiral: FaceMilled,
                                 cutter_radius: 0.0,
                                 cutter_radius_expr: "0 mm",
+                                member: Pinion,
                             )),
                         ),
                         (

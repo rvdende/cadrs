@@ -7,8 +7,9 @@
 //!   shows the module the gear has there.
 //! - **Type**, **Teeth**, **Module** (a gear made whole, or a rack), **Pressure angle**.
 //! - **Tooth line** Straight, Helical or Herringbone, with its *Helix angle* and hand. A bevel's
-//!   helical teeth: **Spiral** Face-milled (Gleason) with its *Cutter radius* (0: the cone
-//!   distance at the middle of the face), or Equiangular.
+//!   helical teeth: **Spiral** Face-milled (Gleason), **Cut as** the Gear of a pair or as the
+//!   Pinion that matches it, with its *Cutter radius* (0: the cone distance at the middle of
+//!   the face); or Equiangular.
 //! - A gear made whole: its *Face width*, *Bore diameter*, *Rim thickness* (ring), *Pitch angle*
 //!   (bevel), *Length* (rack), *Body thickness* (bevel, rack), then where it is: **X**, **Y**,
 //!   **Z** and its **Axis**.
@@ -18,7 +19,9 @@
 
 use bevy::prelude::*;
 use cadrs_core::document::FaceRef;
-use cadrs_core::gear::{GearAxis, GearFeature, GearType, SpiralKind, Target, ToothStyle};
+use cadrs_core::gear::{
+    BevelMember, GearAxis, GearFeature, GearType, SpiralKind, Target, ToothStyle,
+};
 use cadrs_core::{Feature, FeatureKind};
 use cadrs_ui::OptionRow;
 use cadrs_ui::i18n::{tr, tr_with};
@@ -117,13 +120,14 @@ pub(crate) fn name(kind: &FeatureKind) -> Option<&'static str> {
 pub(crate) fn layout(kind: &FeatureKind) -> Option<String> {
     match kind {
         FeatureKind::Gear(x) => Some(format!(
-            "gear {:?} {:?} {} {} {} {:?}",
+            "gear {:?} {:?} {} {} {} {:?} {:?}",
             x.gear_type,
             x.style,
             x.face.is_some(),
             x.left_hand,
             x.flip,
-            x.spiral
+            x.spiral,
+            x.member
         )),
         k => crate::surfacing_ui::layout(k),
     }
@@ -321,6 +325,27 @@ pub(crate) fn body(
                     None,
                 );
                 if x.spiral == SpiralKind::FaceMilled {
+                    // The gear of a pair is cut by the cutter itself; its pinion to match it.
+                    let members = opts(
+                        &BevelMember::ALL,
+                        |k| {
+                            tr(match k {
+                                BevelMember::Gear => "model-gear-member-gear",
+                                BevelMember::Pinion => "model-gear-member-pinion",
+                            })
+                        },
+                        |_| true,
+                    );
+                    select_row(
+                        b,
+                        t,
+                        "gear-member",
+                        &tr("model-gear-member"),
+                        Role::GearMember,
+                        &members,
+                        index_of(&BevelMember::ALL, &x.member),
+                        None,
+                    );
                     number(
                         b,
                         t,
@@ -466,6 +491,7 @@ pub(crate) fn select_index(kind: &FeatureKind, role: Role) -> Option<usize> {
         Role::GearHand => usize::from(x.left_hand),
         Role::GearAxis => index_of(&GearAxis::ALL, &x.axis),
         Role::GearSpiral => index_of(&SpiralKind::ALL, &x.spiral),
+        Role::GearMember => index_of(&BevelMember::ALL, &x.member),
         _ => return None,
     })
 }
@@ -486,6 +512,7 @@ pub(crate) fn select(k: &mut FeatureKind, role: Role, i: usize) {
         Role::GearHand => x.left_hand = i == 1,
         Role::GearAxis => x.axis = GearAxis::ALL[i.min(GearAxis::ALL.len() - 1)],
         Role::GearSpiral => x.spiral = SpiralKind::ALL[i.min(SpiralKind::ALL.len() - 1)],
+        Role::GearMember => x.member = BevelMember::ALL[i.min(BevelMember::ALL.len() - 1)],
         _ => {}
     }
 }
