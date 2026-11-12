@@ -18,7 +18,10 @@
 //! a contact comes to its run and the two are tangent (flank, corner, land, corner, flank: a
 //! worm wheel's space); and a *crossing*, where one link's curve runs into what another has
 //! swept and the outline turns a corner (a flank undercut by the tooth's own tip: the tip's
-//! path is the space's side near the root, the flank's envelope farther out). The chain is
+//! path is the space's side near the root, the flank's envelope farther out). A third kind is
+//! followed and carried too, a *corner*: where a vertex of the tool passes through the slice,
+//! the path of one edge that ends at it ends there and another's goes on (the end of a pinion's
+//! tooth). The chain is
 //! found in the target's middle slice: the nodes there by a search over each run and the time,
 //! the links by following them from joint to joint while they are near the target, each
 //! watched for the curves that cross it. It is carried to the other slices, each joint by
@@ -53,7 +56,8 @@
 //!
 //! Declined (None, so that the other ways are tried) where the chain can't be followed or
 //! carried: a contact that splits or ends within a face, a link born or lost within the target
-//! between two slices (a tooth's end corner coming into the cut: a hypoid pinion's tooth), a
+//! between two slices (a hypoid pinion's tooth, whose end faces and corners come into the cut
+//! at both ends of the tooth space: its chain's links change seven times along it), a
 //! chain whose end stays inside the target, a filler, a lid or a cap that meets the target,
 //! sheets the check refuses.
 
@@ -281,6 +285,8 @@ struct Tool<'a> {
     runs: Vec<Run>,
     /// Each edge's run and its part of it.
     run_of: Vec<Option<(usize, usize)>>,
+    /// Each vertex's runs that end at it, with the run's σ there.
+    ends: Vec<Vec<(usize, f64)>>,
     polys: Vec<Vec<Vec<P2>>>,
     size: f64,
 }
@@ -493,6 +499,15 @@ impl<'a> Tool<'a> {
             .iter()
             .map(|f| super::classify::face_polygons(b, f))
             .collect();
+        let mut ends: Vec<Vec<(usize, f64)>> = vec![Vec::new(); b.verts.len()];
+        for (r, run) in runs.iter().enumerate() {
+            if run.closed {
+                continue;
+            }
+            let (first, last) = (run.parts[0], run.parts[run.parts.len() - 1]);
+            ends[b.edges[first.0].v[usize::from(!first.1)]].push((r, 0.0));
+            ends[b.edges[last.0].v[usize::from(last.1)]].push((r, run.span()));
+        }
         Tool {
             b,
             kind,
@@ -500,6 +515,7 @@ impl<'a> Tool<'a> {
             smooth,
             runs,
             run_of,
+            ends,
             polys,
             size: b.bbox().diagonal().max(super::tol::POINT),
         }
@@ -590,6 +606,18 @@ struct Node {
     p: P3,
 }
 
+/// A corner: where a vertex of the tool passes through a slice, at the instant `t`. The path of
+/// one run that ends at the vertex ends there and another's goes on (each run with its σ at
+/// the vertex): the outline turns from the one edge's path to the other's.
+#[derive(Clone, Copy, Debug)]
+struct Corner {
+    v: usize,
+    t: f64,
+    p: P3,
+    before: (usize, f64),
+    after: (usize, f64),
+}
+
 /// What a chain is made of between two joints: a run's stretch, or a face group's contact.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Link {
@@ -619,6 +647,8 @@ enum Joint {
         after: (Place, f64),
         p: P3,
     },
+    /// Where a run's stretch ends at a vertex of the tool and another's goes on.
+    Corner(Corner),
     /// Between a link and a filler ([`Link::Fill`]), or two fillers: no joint of the tool's.
     Free,
 }
@@ -637,6 +667,7 @@ impl Joint {
                     before.1
                 }
             }
+            Joint::Corner(k) => k.t,
             Joint::Free => f64::NAN,
         }
     }
@@ -650,7 +681,32 @@ impl Joint {
                 after: before,
                 p,
             },
+            Joint::Corner(k) => Joint::Corner(Corner {
+                before: k.after,
+                after: k.before,
+                ..k
+            }),
             Joint::Free => Joint::Free,
+        }
+    }
+
+    /// Where the joint is, seen from the target.
+    fn point(&self) -> Option<P3> {
+        match self {
+            Joint::Node(n) => Some(n.p),
+            Joint::Cross { p, .. } => Some(*p),
+            Joint::Corner(k) => Some(k.p),
+            Joint::Free => None,
+        }
+    }
+
+    /// The joint's instants, for the log.
+    fn told(&self) -> String {
+        match self {
+            Joint::Node(n) => format!("{:.4}", n.t),
+            Joint::Cross { before, after, .. } => format!("{:.4}x{:.4}", before.1, after.1),
+            Joint::Corner(k) => format!("{:.4}v{}", k.t, k.v),
+            Joint::Free => "free".to_string(),
         }
     }
 }
@@ -683,6 +739,9 @@ impl Chain {
 struct Reach {
     pts: Vec<(f64, P3, Place)>,
     node: Option<Node>,
+    /// Or the vertex of the tool its run ends at: (the vertex, the instant, the point, the
+    /// run's σ there).
+    corner: Option<(usize, f64, P3, f64)>,
 }
 
 /// A link's curve in a slice, as something another link may cross: its points, and theirs in
@@ -869,6 +928,54 @@ impl Gen<'_> {
         None
     }
 
+    /// The instant near `guess` at which the tool's vertex `v` is in slice `c`, and where.
+    fn corner(&self, v: usize, c: f64, guess: f64) -> Option<(f64, P3)> {
+        let q = self.tool.b.verts[v].p;
+        let miss = |t: f64| self.chart.c(&self.world(t, &q)) - c;
+        let h = 1e-3 * self.dt;
+        let mut t = guess;
+        for _ in 0..40 {
+            let m = miss(t);
+            if m.abs() <= 1e-13 * self.tool.size.max(c.abs()) {
+                return Some((t, self.world(t, &q)));
+            }
+            let slope = (miss(t + h) - miss(t - h)) / (2.0 * h);
+            if slope.abs() < 1e-300 || !slope.is_finite() {
+                return None;
+            }
+            t -= (m / slope).clamp(-4.0 * self.dt, 4.0 * self.dt);
+            if (t - guess).abs() > 32.0 * self.dt {
+                return None;
+            }
+        }
+        None
+    }
+
+    /// The run that goes on from the tool's vertex `v` in slice `c` at the instant `t`, where
+    /// run `from` ends: one whose two faces' g are of opposite signs there (it sweeps boundary),
+    /// with its σ at the vertex and the way in time it is within the slice.
+    fn turn(&self, c: f64, v: usize, t: f64, from: usize) -> Option<(usize, f64, f64)> {
+        let tw = self.motion.twist(t);
+        self.tool.ends[v].iter().find_map(|&(r, sigma)| {
+            if r == from || self.tool.runs[r].kind != EdgeKind::Convex {
+                return None;
+            }
+            let (ga, gb) = (self.g_run(r, 0, sigma, &tw)?, self.g_run(r, 1, sigma, &tw)?);
+            if ga * gb >= 0.0 {
+                return None;
+            }
+            let probe = |dir: f64| {
+                self.run_in_slice(r, t + dir * 0.25 * self.dt, c, sigma)
+                    .is_some()
+            };
+            match (probe(1.0), probe(-1.0)) {
+                (true, false) => Some((r, sigma, 1.0)),
+                (false, true) => Some((r, sigma, -1.0)),
+                _ => None,
+            }
+        })
+    }
+
     fn in_span(&self, t: f64) -> bool {
         self.span.is_none_or(|(a, b)| t >= a && t <= b)
     }
@@ -1027,7 +1134,11 @@ impl Gen<'_> {
     ) -> Reach {
         let start = self.at_place(link, t0, from);
         let mut pts: Vec<(f64, P3, Place)> = start.map(|p| (t0, p, from)).into_iter().collect();
-        let none = |pts: Vec<(f64, P3, Place)>| Reach { pts, node: None };
+        let none = |pts: Vec<(f64, P3, Place)>| Reach {
+            pts,
+            node: None,
+            corner: None,
+        };
         if pts.is_empty() {
             return none(pts);
         }
@@ -1062,7 +1173,49 @@ impl Gen<'_> {
                         Some((sn, [self.g_run(r, 0, sn, &tw)?, self.g_run(r, 1, sn, &tw)?]))
                     })();
                     let Some((sn, g)) = at else {
-                        return none(pts);
+                        // Off the run's end: at the vertex there, if the run's stretch goes
+                        // on to it (else at the node before it).
+                        let run = &self.tool.runs[r];
+                        let end = if sigma < 0.5 * run.span() {
+                            0.0
+                        } else {
+                            run.span()
+                        };
+                        let found = self.tool.ends.iter().position(|e| e.contains(&(r, end)));
+                        let Some((v, (tv, p))) = found
+                            .filter(|_| !run.closed && self.in_span(tn))
+                            .and_then(|v| Some((v, self.corner(v, c, 0.5 * (t + tn))?)))
+                        else {
+                            return none(pts);
+                        };
+                        if (tv - t) * dir < -1e-9 * self.dt || (tn - tv) * dir < -1e-9 * self.dt {
+                            return none(pts);
+                        }
+                        let tw = self.motion.twist(tv);
+                        let (Some(ga), Some(gb)) =
+                            (self.g_run(r, 0, end, &tw), self.g_run(r, 1, end, &tw))
+                        else {
+                            return none(pts);
+                        };
+                        if let Some(side) =
+                            [0, 1].into_iter().find(|&s| [ga, gb][s] * signs[s] <= 0.0)
+                        {
+                            let node = self.node(r, side, c, (0.5 * (sigma + end), 0.5 * (t + tv)));
+                            if let Some(n) = &node {
+                                pts.push((n.t, n.p, Place::Run(n.sigma)));
+                            }
+                            return Reach {
+                                pts,
+                                node,
+                                corner: None,
+                            };
+                        }
+                        pts.push((tv, p, Place::Run(end)));
+                        return Reach {
+                            pts,
+                            node: None,
+                            corner: Some((v, tv, p, end)),
+                        };
                     };
                     // (The other side's first: at a node's first step its own is next to
                     // nothing either way.)
@@ -1078,7 +1231,11 @@ impl Gen<'_> {
                         if let Some(n) = &node {
                             pts.push((n.t, n.p, Place::Run(n.sigma)));
                         }
-                        return Reach { pts, node };
+                        return Reach {
+                            pts,
+                            node,
+                            corner: None,
+                        };
                     }
                     let Some(x) = self.at_place(link, tn, Place::Run(sn)) else {
                         return none(pts);
@@ -1154,7 +1311,11 @@ impl Gen<'_> {
                     {
                         pts.push((n.t, n.p, place));
                     }
-                    return Reach { pts, node };
+                    return Reach {
+                        pts,
+                        node,
+                        corner: None,
+                    };
                 }
                 none(pts)
             }
@@ -1275,7 +1436,10 @@ impl Gen<'_> {
                     "(run {} {:?}, side {}, σ {:.5}, t {:.6})",
                     n.r, self.tool.runs[n.r].kind, n.side, n.sigma, n.t
                 ),
-                None => "no node".to_string(),
+                None => match reach.corner {
+                    Some((v, t, ..)) => format!("vertex {v} at t {t:.6}"),
+                    None => "no node".to_string(),
+                },
             }
         )
     }
@@ -1359,6 +1523,27 @@ impl Gen<'_> {
                 ]
                 .into_iter()
                 .filter_map(|link| Some((link, self.follow(c, n, link)?)))
+                .flat_map(|(link, reach)| {
+                    // (And the runs that go on from the vertex a run's path ends at.)
+                    let mut on: Vec<(Link, Reach)> = Vec::new();
+                    if let (Link::Edge(mut r), Some(mut k)) = (link, reach.corner) {
+                        for _ in 0..6 {
+                            let Some((next, sigma, dir)) = self.turn(c, k.0, k.1, r) else {
+                                break;
+                            };
+                            let link = Link::Edge(next);
+                            let far = self.march(c, link, Place::Run(sigma), k.1, dir, None);
+                            let corner = far.corner;
+                            on.push((link, far));
+                            match corner {
+                                Some(at) => (k, r) = (at, next),
+                                None => break,
+                            }
+                        }
+                    }
+                    on.insert(0, (link, reach));
+                    on
+                })
                 .collect::<Vec<_>>()
             })
             .filter(|(_, r)| r.pts.len() >= 2)
@@ -1596,6 +1781,7 @@ impl Gen<'_> {
         enum At {
             Node(Node, Option<Link>),
             Cross(Link, Place, f64, f64, P3),
+            Corner(Corner, f64),
         }
         // The link on from there, as far as its next joint: its points, the link, and the
         // joint with where the walk stands after it.
@@ -1609,6 +1795,19 @@ impl Gen<'_> {
                         eprintln!("  from a crossing at t {t:.6} on: {}", self.told(*link, &r));
                     }
                     (r, *link)
+                }
+                At::Corner(k, dir) => {
+                    let link = Link::Edge(k.after.0);
+                    let r = self.march(c, link, Place::Run(k.after.1), k.t, *dir, None);
+                    if self.trace {
+                        eprintln!(
+                            "  from vertex {} at t {:.6} on: {}",
+                            k.v,
+                            k.t,
+                            self.told(link, &r)
+                        );
+                    }
+                    (r, link)
                 }
             };
             if reach.pts.len() < 2 {
@@ -1628,6 +1827,7 @@ impl Gen<'_> {
                     reach.pts.truncate(x.at + 1);
                     reach.pts.push((x.before.1, x.p, x.before.0));
                     reach.node = None;
+                    reach.corner = None;
                     Some((
                         Joint::Cross {
                             before: x.before,
@@ -1637,9 +1837,22 @@ impl Gen<'_> {
                         At::Cross(x.link, x.after.0, x.after.1, x.dir, x.p),
                     ))
                 }
-                None => reach
-                    .node
-                    .map(|n| (Joint::Node(n), At::Node(n, Some(link)))),
+                None => match (reach.node, reach.corner, link) {
+                    (Some(n), ..) => Some((Joint::Node(n), At::Node(n, Some(link)))),
+                    (None, Some((v, t, p, sigma)), Link::Edge(r)) => {
+                        self.turn(c, v, t, r).map(|(next, at, dir)| {
+                            let k = Corner {
+                                v,
+                                t,
+                                p,
+                                before: (r, sigma),
+                                after: (next, at),
+                            };
+                            (Joint::Corner(k), At::Corner(k, dir))
+                        })
+                    }
+                    _ => None,
+                },
             };
             Some((reach, link, far))
         };
@@ -1650,6 +1863,7 @@ impl Gen<'_> {
                 At::Node(n, Some(Link::Face(_))) => Link::Edge(n.r),
                 At::Node(n, _) => Link::Face(self.tool.runs[n.r].groups[n.side]),
                 At::Cross(link, ..) => *link,
+                At::Corner(k, _) => Link::Edge(k.after.0),
             }
         };
         // One way from the seed: (the joints after it, the links, the last link's way in time,
@@ -1671,6 +1885,7 @@ impl Gen<'_> {
                     let here = match &at {
                         At::Node(n, _) => n.p,
                         At::Cross(.., p) => *p,
+                        At::Corner(k, _) => k.p,
                     };
                     if joints.is_empty() || !self.clear_of_target(&here) {
                         return None;
@@ -1766,6 +1981,7 @@ fn same_chain(a: &Chain, b: &Chain, period: Option<f64>, dt: f64) -> bool {
             (Joint::Cross { .. }, Joint::Cross { .. }) => {
                 near(x.t(false), y.t(false)) && near(x.t(true), y.t(true))
             }
+            (Joint::Corner(m), Joint::Corner(n)) => m.v == n.v && near(m.t, n.t),
             _ => false,
         })
     };
@@ -1873,6 +2089,10 @@ impl Gen<'_> {
                 (chain.links[j + 1], after.0, after.1),
                 chain.about,
             ),
+            Joint::Corner(k) => {
+                let (t, p) = self.corner(k.v, c, k.t)?;
+                Some(Joint::Corner(Corner { t, p, ..*k }))
+            }
             Joint::Free => Some(Joint::Free),
         }
     }
@@ -1884,6 +2104,10 @@ impl Gen<'_> {
             Joint::Cross {
                 before, after: a, ..
             } => Some(if after { *a } else { *before }),
+            Joint::Corner(k) => {
+                let (_, sigma) = if after { k.after } else { k.before };
+                Some((Place::Run(sigma), k.t))
+            }
             Joint::Free => None,
         }
     }
@@ -2156,6 +2380,12 @@ impl Gen<'_> {
                             .max(speed_of(chain.links[j + 1], *after)?);
                         Some((before.1, after.1, speed))
                     }
+                    Joint::Corner(k) => {
+                        let eta = 1e-2 * self.dt;
+                        let q = self.tool.b.verts[k.v].p;
+                        let speed = (self.world(k.t + eta, &q) - k.p).norm() / eta;
+                        Some((k.t, k.t, speed))
+                    }
                     Joint::Free => None,
                 })
                 .collect()
@@ -2319,7 +2549,9 @@ impl Gen<'_> {
                 let (place, t0) = self.joint_on(&joint, link, end == 1)?;
                 let reach = match &joint {
                     Joint::Node(m) => self.follow(c, m, link)?,
-                    Joint::Cross { .. } => self.march(c, link, place, t0, dir, None),
+                    Joint::Cross { .. } | Joint::Corner(_) => {
+                        self.march(c, link, place, t0, dir, None)
+                    }
                     Joint::Free => return None,
                 };
                 let last = reach.pts.last()?.0;
@@ -3342,6 +3574,10 @@ impl Gen<'_> {
                             (found.links[j + 1], after.0, after.1 - later),
                             like.about,
                         ),
+                        Joint::Corner(k) => {
+                            let (t, p) = self.corner(k.v, c, k.t - later)?;
+                            Some(Joint::Corner(Corner { t, p, ..*k }))
+                        }
                         Joint::Free => Some(Joint::Free),
                     })
                     .collect();
@@ -3375,11 +3611,7 @@ impl Gen<'_> {
             &here.rows[0]
         };
         let limit = by.0;
-        let point = |j: &Joint| match j {
-            Joint::Node(n) => Some(n.p),
-            Joint::Cross { p, .. } => Some(*p),
-            Joint::Free => None,
-        };
+        let point = |j: &Joint| j.point();
         // How far from the target the nearest of `here`'s joints before `a` and from `z` on
         // is, in a row of it.
         let off = |row: &[Joint], a: usize, z: usize| -> f64 {
@@ -3428,6 +3660,10 @@ impl Gen<'_> {
                             (ch.links[j + 1], after.0, after.1 - later),
                             ch.about,
                         ),
+                        Joint::Corner(k) => {
+                            let (t, p) = self.corner(k.v, beyond, k.t - later)?;
+                            Some(Joint::Corner(Corner { t, p, ..*k }))
+                        }
                         Joint::Free => None,
                     })
                     .collect();
@@ -3980,15 +4216,7 @@ pub(super) fn cut(
                     "generated cut: a chain of {} links: {:?}, joints at t {:?}",
                     c.links.len(),
                     c.links,
-                    c.joints
-                        .iter()
-                        .map(|j| match j {
-                            Joint::Node(n) => format!("{:.4}", n.t),
-                            Joint::Cross { before, after, .. } =>
-                                format!("{:.4}x{:.4}", before.1, after.1),
-                            Joint::Free => "free".to_string(),
-                        })
-                        .collect::<Vec<_>>()
+                    c.joints.iter().map(Joint::told).collect::<Vec<_>>()
                 );
             }
         }
@@ -4035,11 +4263,7 @@ pub(super) fn cut(
                             row.1
                                 .iter()
                                 .map(|j| {
-                                    let p = match j {
-                                        Joint::Node(n) => n.p,
-                                        Joint::Cross { p, .. } => *p,
-                                        Joint::Free => P3::origin(),
-                                    };
+                                    let p = j.point().unwrap_or_else(P3::origin);
                                     format!("{:.4}", dist.distance(&p))
                                 })
                                 .collect()
@@ -4050,16 +4274,12 @@ pub(super) fn cut(
                                 row.0,
                                 row.1
                                     .iter()
-                                    .map(|j| match j {
-                                        Joint::Node(n) =>
-                                            format!("{:.5} ({:.3})", n.t, dist.distance(&n.p)),
-                                        Joint::Cross { before, after, p } => format!(
-                                            "{:.5}x{:.5} ({:.3})",
-                                            before.1,
-                                            after.1,
-                                            dist.distance(p)
-                                        ),
-                                        Joint::Free => "free".to_string(),
+                                    .map(|j| {
+                                        format!(
+                                            "{} ({:.3})",
+                                            j.told(),
+                                            j.point().map_or(f64::NAN, |p| dist.distance(&p))
+                                        )
                                     })
                                     .collect::<Vec<_>>()
                             );
@@ -4077,15 +4297,7 @@ pub(super) fn cut(
                         Some(ch) => format!(
                             "{:?} {:?}",
                             ch.links,
-                            ch.joints
-                                .iter()
-                                .map(|j| match j {
-                                    Joint::Node(n) => format!("{:.4}", n.t),
-                                    Joint::Cross { before, after, .. } =>
-                                        format!("{:.4}x{:.4}", before.1, after.1),
-                                    Joint::Free => "free".to_string(),
-                                })
-                                .collect::<Vec<_>>()
+                            ch.joints.iter().map(Joint::told).collect::<Vec<_>>()
                         ),
                         None => format!(
                             "none from run {} side {} t {:.4}",
