@@ -322,6 +322,12 @@ fn golden_sketch_edit_existing() {
 
 #[test]
 #[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_sketch_view_fit() {
+    run_scenario("sketch_view_fit");
+}
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
 fn golden_sketch_line_chain() {
     run_scenario("sketch_line_chain");
 }
