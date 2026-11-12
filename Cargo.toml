@@ -53,7 +53,7 @@ bytemuck = "1"
 slotmap = { version = "1", features = ["serde"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
 resvg = "0.45"
-icon-rs = "0.5"
+icon-rs = "0.5.1"
 directories = "6"
 # The system's file dialogs (cadrs_ui::file_picker, issue #136): on Linux through the desktop
 # portal (zenity when there is none), pure Rust.

@@ -1656,6 +1656,7 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
             ("shell", "shell", false, "shell-tool-shell"),
             ("hole", "hole", false, "shell-tool-hole"),
             ("thread", "thread", false, "shell-tool-thread"),
+            ("gear", "gear", false, "shell-tool-gear"),
             ("move-face", "offset", true, "shell-tool-direct-edit"),
         ],
         &[
@@ -3686,6 +3687,7 @@ enum RowKind {
     Thicken,
     Helix,
     Thread,
+    Gear,
     Fill,
     /// Move face, Delete face, Simplify (their icon).
     DirectEdit(&'static str),
@@ -3734,6 +3736,7 @@ impl RowKind {
             // icon-rs has no helix or fill icon yet (recorded in PROGRESS.md).
             RowKind::Helix => "thread",
             RowKind::Thread => "thread",
+            RowKind::Gear => "gear",
             RowKind::Fill => "surface",
             RowKind::Variable => "variables",
             RowKind::SheetMetalModel => "sheet-metal-model",
@@ -3897,6 +3900,7 @@ fn rebuild_feature_rows(
                     | cadrs_core::FeatureKind::ProjectCurve(_) => RowKind::Helix,
                     cadrs_core::FeatureKind::FaceBlend(_) => RowKind::Fillet,
                     cadrs_core::FeatureKind::Thread(_) => RowKind::Thread,
+                    cadrs_core::FeatureKind::Gear(_) => RowKind::Gear,
                     cadrs_core::FeatureKind::Fill(_) => RowKind::Fill,
                     cadrs_core::FeatureKind::Variable(_) => RowKind::Variable,
                     cadrs_core::FeatureKind::SheetMetalModel(_) => RowKind::SheetMetalModel,

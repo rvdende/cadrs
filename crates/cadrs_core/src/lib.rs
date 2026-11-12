@@ -70,6 +70,7 @@ pub mod sheetmetal_loft;
 pub mod sheetmetal_tools;
 pub mod simulation;
 // Starts programs: not in a browser.
+pub mod gear;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod slicer;
 pub mod solid;

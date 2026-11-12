@@ -580,6 +580,16 @@ pub fn sweep_with_law(
     spec: &SweepSpec,
     law: &SweepLaw,
 ) -> Result<OpResult> {
+    Ok(sweep_law_tagged(k, profile, spec, law)?.into_result(k))
+}
+
+/// [`sweep_with_law`]'s body with its faces' origins, not yet the kernel's.
+pub(crate) fn sweep_law_tagged(
+    k: &mut NativeKernel,
+    profile: &Profile,
+    spec: &SweepSpec,
+    law: &SweepLaw,
+) -> Result<Tagged> {
     if !(law.scale > 0.0 && law.scale.is_finite() && law.twist.is_finite()) {
         return Err(KernelError::InvalidParameter(
             "The sweep's scale must be positive".into(),
@@ -691,13 +701,13 @@ pub fn sweep_with_law(
             solid,
             *law,
         )?;
-        return Ok(Tagged::from_built(b).into_result(k));
+        return Ok(Tagged::from_built(b));
     }
     let join = match spec.corners {
         SweepCorners::Mitre => Join::Mitre,
         SweepCorners::Round => Join::Round,
     };
-    Ok(sweep_spines(&faces, &chains, plane, sp, spec.control, join, solid)?.into_result(k))
+    sweep_spines(&faces, &chains, plane, sp, spec.control, join, solid)
 }
 
 /// Sweeps the profile (`faces` and `chains` in `plane` coordinates) along each spine (with

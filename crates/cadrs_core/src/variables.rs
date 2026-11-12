@@ -353,6 +353,40 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
             s("Thickness 1", &mut x.thickness1_expr, &mut x.thickness1, L);
             s("Thickness 2", &mut x.thickness2_expr, &mut x.thickness2, L);
         }
+        FeatureKind::Gear(x) => {
+            count("Teeth", &mut x.teeth_expr, &mut x.teeth, &mut s);
+            s("Module", &mut x.module_expr, &mut x.module, L);
+            s(
+                "Pressure angle",
+                &mut x.pressure_angle_expr,
+                &mut x.pressure_angle,
+                A,
+            );
+            s(
+                "Helix angle",
+                &mut x.helix_angle_expr,
+                &mut x.helix_angle,
+                A,
+            );
+            s("Face width", &mut x.width_expr, &mut x.width, L);
+            s("Bore", &mut x.bore_expr, &mut x.bore, L);
+            s("Rim thickness", &mut x.rim_expr, &mut x.rim, L);
+            s(
+                "Pitch angle",
+                &mut x.pitch_angle_expr,
+                &mut x.pitch_angle,
+                A,
+            );
+            s("Length", &mut x.length_expr, &mut x.length, L);
+            s("Body thickness", &mut x.height_expr, &mut x.height, L);
+            s("Backlash", &mut x.backlash_expr, &mut x.backlash, L);
+            let [px, py, pz] = &mut x.position;
+            let [ex, ey, ez] = &mut x.position_expr;
+            s("X", ex, px, L);
+            s("Y", ey, py, L);
+            s("Z", ez, pz, L);
+            s("Rotation", &mut x.rotation_expr, &mut x.rotation, A);
+        }
         FeatureKind::Thread(x) => {
             s("Length", &mut x.length_expr, &mut x.length, L);
             if x.custom {

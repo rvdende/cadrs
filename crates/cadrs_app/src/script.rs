@@ -20,6 +20,8 @@
 //!   (P3.8), in the plane's
 //!   coordinates
 //!   (mm). For scenarios whose subject is what comes after the sketch (P3.3).
+//! - `gears`: builds the Gears sample (`cadrs_core::samples::gears`, issue #179) in the active
+//!   Part Studio: the Gear feature's kinds, three by three.
 //! - `gear-cover`: opens the Jackhammer Gear Cover stand-in (P3.6, PS17,
 //!   [`cadrs_core::samples::gear_cover`], the document `fixtures/gear_cover_standin.cadrs`) in the
 //!   active document: named "Jackhammer (stand-in)", its Part Studio "Gear Cover", mm and kg, the
@@ -547,6 +549,9 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
             (Some("gear-cover"), None) => {
                 commands.queue(gear_cover);
             }
+            (Some("gears"), None) => {
+                commands.queue(gears);
+            }
             (Some("drawing-bracket"), None) => {
                 commands.queue(drawing_bracket);
             }
@@ -857,6 +862,19 @@ impl cadrs_core::samples::gear_cover::Studio for ActiveDocument {
     }
     fn document(&self) -> &cadrs_core::Document {
         &self.doc
+    }
+}
+
+/// Builds the Gears sample (`cadrs_core::samples::gears`, issue #179) in the active Part Studio.
+fn gears(world: &mut World) {
+    let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else {
+        return;
+    };
+    let Some(element) = doc.active_element().map(|e| e.id) else {
+        return;
+    };
+    if let Err(e) = cadrs_core::samples::gears::build_in(&mut *doc, element) {
+        warn!("gears: {e}");
     }
 }
 
