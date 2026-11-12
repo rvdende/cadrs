@@ -2636,4 +2636,119 @@ mod tests {
         let n = p.sweeps[0].regions.len();
         assert!((9..=11).contains(&n), "{n}");
     }
+
+    /// The face mill cuts the gear NASA CR-4259 (Litvin & Lee, 1989) generates: the report's
+    /// 10/41 example gear (inches), its cutter (tip radius 2.96 convex, 3.04 concave; blade
+    /// angles 20° and 160°) on its machine (radial setting 2.87797954270, cradle angle
+    /// 58.6364876662°). The reference points are that gear's tooth surface from the report's
+    /// equation of meshing (2.43), computed with a port of its Appendix C (gear-theory's
+    /// `Generator::tooth_point`), as (distance along the axis, radius, angle about it), in
+    /// this file's frame. A change of 0.1 % in the ratio of roll moves them by 8e-4 in.
+    #[test]
+    fn the_face_mill_cuts_the_gear_of_nasa_cr_4259() {
+        // The pitch angle of 41 teeth against 10 at 90°, and the root angle 72°25′.
+        let mu = 4.1_f64.atan();
+        let ded = mu - (72.0 + 25.0 / 60.0_f64).to_radians();
+        let centre = [
+            1.494_463_573_836_007_7,
+            2.457_456_132_863_643,
+            -0.101_263_170_639_066_19,
+        ];
+        let (sf, cf) = ded.sin_cos();
+        let mill = |radius: f64, psi_deg: f64| {
+            let (u, v, c) = ([cf, 0.0, -sf], [0.0, 1.0, 0.0], [sf, 0.0, cf]);
+            FaceMill {
+                g: [mu.cos(), 0.0, -mu.sin()],
+                c,
+                u,
+                v,
+                x_g: [mu.sin(), 0.0, mu.cos()],
+                centre,
+                radius,
+                slot: 0.0,
+                level: 0.0,
+                tan_alpha: -psi_deg.to_radians().tan(),
+                ratio: cf / mu.sin(),
+                dedendum: ded,
+                tau_mid: (-dot(centre, v)).atan2(-dot(centre, u)),
+                delta: mu,
+                under: 1.0,
+            }
+        };
+        let convex = [
+            [
+                1.049_050_938_783_592,
+                3.238_670_734_968_055_7,
+                5.600_637_723_465_104_5e-2,
+            ],
+            [
+                8.853_874_462_129_416e-1,
+                3.251_020_542_329_233_5,
+                6.774_994_709_763_789e-2,
+            ],
+            [
+                7.397_936_294_219_477e-1,
+                3.265_046_801_800_030_3,
+                8.048_540_716_587_266e-2,
+            ],
+            [
+                8.347_740_347_947_79e-1,
+                3.162_666_942_558_729,
+                4.870_746_907_838_201e-2,
+            ],
+            [
+                9.281_091_083_748_909e-1,
+                3.059_666_739_493_805_3,
+                1.759_557_405_420_608_3e-2,
+            ],
+            [
+                6.548_373_149_346_938e-1,
+                3.087_943_673_411_604_4,
+                4.291_976_174_867_534_5e-2,
+            ],
+        ];
+        let concave = [
+            [
+                6.465_772_303_864_559e-1,
+                3.313_684_667_591_283_4,
+                -3.927_305_771_750_198e-2,
+            ],
+            [
+                8.187_576_247_971_677e-1,
+                3.215_410_197_661_846_8,
+                -2.114_581_523_550_473e-2,
+            ],
+            [
+                9.509_367_731_424_85e-1,
+                3.137_688_080_097_609,
+                -9.006_322_612_700_061e-3,
+            ],
+            [
+                8.191_349_403_985_406e-1,
+                3.102_370_554_026_734_3,
+                -4.122_012_217_174_053_6e-2,
+            ],
+            [
+                6.734_712_443_267_132e-1,
+                3.070_577_503_078_208_5,
+                -7.721_700_846_153_581e-2,
+            ],
+            [
+                9.267_303_793_941_68e-1,
+                2.925_979_273_610_332_5,
+                -5.107_659_735_782_324_5e-2,
+            ],
+        ];
+        for (m, refs) in [(mill(2.96, 20.0), convex), (mill(3.04, 160.0), concave)] {
+            for [h, rho, angle] in refs {
+                let x = m.solve(1.0, h, rho, None).expect("a point on the flank");
+                let p = m.point(1.0, x[0], x[1]);
+                assert!(
+                    (p[2] - angle).abs() * rho < 1e-9,
+                    "at h {h}, radius {rho}: angle {} against the report's {angle}",
+                    p[2]
+                );
+            }
+        }
+    }
 }
