@@ -26,6 +26,18 @@
 //! (the joint a node from there on), the tooth space is made in *stretches*, each with its own
 //! chain, handed over at that slice.
 //!
+//! A chain may have a link at an end in some slices only: a flank's envelope that comes out
+//! from under the tip's path partway along the tooth (a spiroid's second flank, a sliver that
+//! runs back along the path and crosses it at the least of angles, which is told by the two
+//! curves' own directions there). In the slices before, the chain found ends with the link that
+//! leaves the target, short of where that envelope crosses it outside. So where the middle
+//! slice's chain makes no plug, the chains of the target's two end slices are looked at, and one
+//! with more links is followed from its own slice: as far as its joints can be carried, outside
+//! the target by then. The stretch beyond has the chain without those links, and is closed in
+//! their place by *fillers*: each the missing link's outline in the slice where the two
+//! stretches meet, carried along on the end of the stretch's own last link (cut clear of the
+//! target, and where the two stretches meet at the other's joint).
+//!
 //! Each link then makes one four-sided sheet over (slice, share of the way between its
 //! joints), fitted by a B-spline through its exact points. The sheets are closed into a solid,
 //! the *plug*: a lid from the chain's one end to the other (straight in the slices' own
@@ -40,10 +52,10 @@
 //! passes over, and a point just inside one it does.
 //!
 //! Declined (None, so that the other ways are tried) where the chain can't be followed or
-//! carried: a contact that splits or ends within a face, a link born or lost between two
-//! slices (a tooth's end corner coming into the cut, a flank's envelope coming out from under
-//! the tip's path partway along), a chain whose end stays inside the target, a lid or a cap
-//! that meets the target, sheets the check refuses.
+//! carried: a contact that splits or ends within a face, a link born or lost within the target
+//! between two slices (a tooth's end corner coming into the cut: a hypoid pinion's tooth), a
+//! chain whose end stays inside the target, a filler, a lid or a cap that meets the target,
+//! sheets the check refuses.
 
 use super::kernel::NativeKernel;
 use super::math::*;
@@ -583,6 +595,9 @@ struct Node {
 enum Link {
     Edge(usize),
     Face(usize),
+    /// No part of the tool: a sheet that only closes the plug, outside the target, where a
+    /// stretch of the tooth space lacks a link the next stretch has (see [`Span::skip`]).
+    Fill,
 }
 
 /// Where a link's point is on the tool: on its run, or on a face of its group.
@@ -604,6 +619,8 @@ enum Joint {
         after: (Place, f64),
         p: P3,
     },
+    /// Between a link and a filler ([`Link::Fill`]), or two fillers: no joint of the tool's.
+    Free,
 }
 
 impl Joint {
@@ -620,6 +637,7 @@ impl Joint {
                     before.1
                 }
             }
+            Joint::Free => f64::NAN,
         }
     }
 
@@ -632,6 +650,7 @@ impl Joint {
                 after: before,
                 p,
             },
+            Joint::Free => Joint::Free,
         }
     }
 }
@@ -645,6 +664,18 @@ struct Chain {
     links: Vec<Link>,
     out: [f64; 2],
     about: f64,
+}
+
+impl Chain {
+    /// The chain walked the other way.
+    fn turned(&self) -> Chain {
+        Chain {
+            joints: self.joints.iter().rev().map(Joint::turned).collect(),
+            links: self.links.iter().rev().copied().collect(),
+            out: [self.out[1], self.out[0]],
+            about: self.about,
+        }
+    }
 }
 
 /// What following a link reaches: its points, each with its instant and its place on the tool,
@@ -977,6 +1008,7 @@ impl Gen<'_> {
                 let f = faces[node.side];
                 Some(Place::Face(f, self.tool.uv_at_edge(f, e, s, &p)))
             }
+            Link::Fill => None,
         }
     }
 
@@ -1185,6 +1217,7 @@ impl Gen<'_> {
         match link {
             Link::Edge(_) => self.along_edge(c, node),
             Link::Face(_) => self.across_face(c, node),
+            Link::Fill => None,
         }
     }
 
@@ -1202,6 +1235,7 @@ impl Gen<'_> {
             None => Link::Edge(node.r),
             Some(Link::Face(_)) => Link::Edge(node.r),
             Some(Link::Edge(_)) => Link::Face(self.tool.runs[node.r].groups[node.side]),
+            Some(Link::Fill) => return None,
         };
         let r = self.follow(c, node, link);
         if self.trace {
@@ -1261,6 +1295,24 @@ impl Gen<'_> {
             v.dot(&ea) / ea.norm().max(1e-300),
             v.dot(&eb) / eb.norm().max(1e-300),
         )
+    }
+
+    /// Which way a link's point moves within slice `c` as t grows, at a place and an instant
+    /// of it (in the slice's own coordinates, as lengths; from points a little to each side, or
+    /// to the one side the link is on).
+    fn heading(
+        &self,
+        c: f64,
+        link: Link,
+        (place, t): (Place, f64),
+        about: f64,
+    ) -> Option<(f64, f64)> {
+        let eta = 0.05 * self.dt;
+        let at = |t: f64| self.at_place(link, t, self.place(link, t, c, place)?);
+        let here = at(t)?;
+        let (a, b) = (at(t - eta).unwrap_or(here), at(t + eta).unwrap_or(here));
+        let v = self.within(&here, &(b - a), about);
+        (v.0.hypot(v.1) > 0.0).then_some(v)
     }
 
     /// Where two links cross in slice `c`, from places and instants near it: each link's place
@@ -1418,10 +1470,10 @@ impl Gen<'_> {
                     continue;
                 }
                 // (A curve that goes through the joint this link starts or ends at is tangent
-                // to it there: by the joint they don't cross, however their points fall.)
-                if (i < 8 && at_start[ci]) || (i + 9 >= ab.len() && at_end[ci]) {
-                    continue;
-                }
+                // to it there, and may run back along this one, to cross it at the least of
+                // angles: its crossings are told by the two curves' own directions where they
+                // meet, not their points', and are none at the joint itself.)
+                let through = at_start[ci] || at_end[ci];
                 for j in 0..cand.ab.len() - 1 {
                     let (b0, b1) = (cand.ab[j], cand.ab[j + 1]);
                     if b0.0.max(b1.0) < lo.0
@@ -1434,7 +1486,7 @@ impl Gen<'_> {
                     let db = sub(b1, b0);
                     let det = cross(da, db);
                     let size = (da.0.hypot(da.1)) * (db.0.hypot(db.1));
-                    if det.abs() <= 1e-3 * size {
+                    if det.abs() <= if through { 1e-12 } else { 1e-3 } * size {
                         continue;
                     }
                     let w = sub(b0, a0);
@@ -1464,7 +1516,7 @@ impl Gen<'_> {
                     let mb = self.within(&pb.1, &into_b, about);
                     let step_a = self.within(&pa.1, &(reach.pts[i + 1].1 - pa.1), about);
                     let step_b = self.within(&pb.1, &(cand.pts[j + 1].1 - pb.1), about);
-                    if cross(step_b, step_a) * cross(step_b, mb) <= 0.0 {
+                    if !through && cross(step_b, step_a) * cross(step_b, mb) <= 0.0 {
                         continue;
                     }
                     if found.as_ref().is_some_and(|f| f.0 <= al) {
@@ -1481,7 +1533,32 @@ impl Gen<'_> {
                     };
                     let ma = self.within(&pa.1, &into_a, about);
                     let along = (cand.pts[j + 1].0 - pb.0).signum();
-                    let dir = if cross(step_a, step_b) * cross(step_a, ma) < 0.0 {
+                    let dir = if through {
+                        // Not at the joint the two share; and by the curves' directions at
+                        // the crossing itself.
+                        let apart = |t: f64, joint: f64| (t - joint).abs() > 2.0 * self.dt;
+                        if (at_start[ci] && !apart(before.1, first.0))
+                            || (at_end[ci] && !apart(before.1, last.0))
+                        {
+                            continue;
+                        }
+                        let (Some(da), Some(db)) = (
+                            self.heading(c, link, before, about),
+                            self.heading(c, cand.link, after, about),
+                        ) else {
+                            continue;
+                        };
+                        let way = (reach.pts[i + 1].0 - pa.0).signum();
+                        let da = (da.0 * way, da.1 * way);
+                        if cross(db, da) * cross(db, mb) <= 0.0 {
+                            continue;
+                        }
+                        if cross(da, db) * cross(da, ma) < 0.0 {
+                            1.0
+                        } else {
+                            -1.0
+                        }
+                    } else if cross(step_a, step_b) * cross(step_a, ma) < 0.0 {
                         along
                     } else {
                         -along
@@ -1509,7 +1586,11 @@ impl Gen<'_> {
     /// The chain through `seed` in slice `c`: followed each way, link by link (on to the
     /// next at a node; over to another's curve where it runs into what that has swept), to the
     /// link that leaves the target for good. None where an end stays within the target.
-    fn chain(&self, c: f64, seed: &Node, cands: &[Cand], about: f64) -> Option<Chain> {
+    /// `full`: not 0, each way is followed on past that link while more go on from it (to
+    /// `full` links at most), ending with the last one that ends clear of the target: the
+    /// links a chain has in another slice, where they come within the target, are found here
+    /// too, outside it.
+    fn chain(&self, c: f64, seed: &Node, cands: &[Cand], about: f64, full: usize) -> Option<Chain> {
         // Where the walk stands: at a node, reached by a link; or on a link it crossed over to.
         #[derive(Clone, Copy)]
         enum At {
@@ -1578,8 +1659,13 @@ impl Gen<'_> {
             let mut at = At::Node(*seed, None);
             let mut out = 0.0;
             let mut met = false;
+            // (A full walk's chain so far: to the last link that ended clear.)
+            let mut kept: Option<(Vec<Joint>, Vec<Link>, f64, bool)> = None;
             loop {
                 let Some((reach, link, far)) = advance(&at, face_first) else {
+                    if kept.is_some() {
+                        return kept;
+                    }
                     // Nothing goes on from this joint: the link that reached it is the last,
                     // if the joint is clear of the target.
                     let here = match &at {
@@ -1597,7 +1683,11 @@ impl Gen<'_> {
                 out = (reach.pts[reach.pts.len() - 1].0 - reach.pts[0].0).signum();
                 let ends_clear = self.clear_of_target(&reach.pts[reach.pts.len() - 1].1);
                 let Some((joint, then)) = far else {
-                    return ends_clear.then_some((joints, links, out, met));
+                    return if ends_clear {
+                        Some((joints, links, out, met))
+                    } else {
+                        kept
+                    };
                 };
                 if ends_clear {
                     // Clear at its far joint: the last link, unless what goes on from there
@@ -1624,13 +1714,16 @@ impl Gen<'_> {
                         && !links.contains(&link_of(&then))
                         && on.as_ref().is_some_and(|(r, ..)| r.pts.len() >= 12);
                     if !back && !short {
-                        return Some((joints, links, out, met));
+                        if full == 0 || next_space || on.is_none() || links.len() >= full {
+                            return Some((joints, links, out, met));
+                        }
+                        kept = Some((joints.clone(), links.clone(), out, met));
                     }
                 }
                 joints.push(joint);
                 at = then;
                 if joints.len() > 64 {
-                    return None;
+                    return kept;
                 }
             }
         };
@@ -1707,6 +1800,9 @@ struct Carried {
     /// Where the two end links are cut: a time before or after the first and the last joint,
     /// as a polynomial of the slice's place between `c.0` and `c.1`, signed.
     ends: [Vec<f64>; 2],
+    /// For a stretch with fillers ([`Link::Fill`]): the stretch next to it that has the links
+    /// in their place, and the slice the two meet in.
+    fill: Option<(usize, f64)>,
 }
 
 impl Carried {
@@ -1777,6 +1873,7 @@ impl Gen<'_> {
                 (chain.links[j + 1], after.0, after.1),
                 chain.about,
             ),
+            Joint::Free => Some(Joint::Free),
         }
     }
 
@@ -1787,6 +1884,7 @@ impl Gen<'_> {
             Joint::Cross {
                 before, after: a, ..
             } => Some(if after { *a } else { *before }),
+            Joint::Free => None,
         }
     }
 
@@ -1808,6 +1906,32 @@ impl Gen<'_> {
             .map(|(j, m)| self.joint_at(c, chain, j, m))
             .collect();
         row.filter(|r| self.in_order(chain, r))
+    }
+
+    /// A chain's joints in slice `c`, from themselves in the slice `c0`: at once, or by way of
+    /// slices between (a joint may move far along its links for a little of the slice: a
+    /// crossing of two curves that run nearly along one another).
+    fn row_from(&self, chain: &Chain, c: f64, (c0, from): (f64, &[Joint])) -> Option<Vec<Joint>> {
+        if let Some(row) = self.row_at(chain, c, from) {
+            return Some(row);
+        }
+        for steps in [2, 4, 8, 16, 32] {
+            let mut row = from.to_vec();
+            let all = (1..=steps).all(|i| {
+                let ci = c0 + (c - c0) * i as f64 / steps as f64;
+                match self.row_at(chain, ci, &row) {
+                    Some(r) => {
+                        row = r;
+                        true
+                    }
+                    None => false,
+                }
+            });
+            if all {
+                return Some(row);
+            }
+        }
+        None
     }
 
     /// The chain found in slice `from`, carried to the slices from `lo` to `hi` or as far each
@@ -1875,7 +1999,7 @@ impl Gen<'_> {
         let chain = &span.chain;
         let rows = &span.rows;
         let n = chain.joints.len();
-        let at = |c: f64, from: &[Joint]| self.row_at(chain, c, from);
+        let at = |c: f64, from: (f64, &[Joint])| self.row_from(chain, c, from);
         if rows.len() < 6 {
             return None;
         }
@@ -2032,13 +2156,27 @@ impl Gen<'_> {
                             .max(speed_of(chain.links[j + 1], *after)?);
                         Some((before.1, after.1, speed))
                     }
+                    Joint::Free => None,
                 })
                 .collect()
         };
-        let mut bounds: Vec<(f64, Vec<Joint>, Bounds)> = rows
+        let bounds: Option<Vec<(f64, Vec<Joint>, Bounds)>> = rows
             .par_iter()
             .map(|(c, row)| bounds_at(*c, row).map(|b| (*c, row.clone(), b)))
-            .collect::<Option<Vec<_>>>()?;
+            .collect();
+        if bounds.is_none() && self.trace {
+            for (c, row) in rows {
+                if bounds_at(*c, row).is_none() {
+                    eprintln!(
+                        "  no bounds in slice {c:.5}: joints at t {:?}",
+                        row.iter()
+                            .map(|m| (m.t(false), m.t(true)))
+                            .collect::<Vec<_>>()
+                    );
+                }
+            }
+        }
+        let mut bounds = bounds?;
         // (A bound's instant as closely as moves its link's point a small share of a sheet's
         // fit.)
         let fine: Vec<f64> = (0..n)
@@ -2060,11 +2198,34 @@ impl Gen<'_> {
                 .par_windows(2)
                 .map(|w| {
                     let cm = 0.5 * (w[0].0 + w[1].0);
-                    let row = at(cm, &w[0].1)?;
+                    let row = at(cm, (w[0].0, &w[0].1))?;
                     let b = bounds_at(cm, &row)?;
                     Some((cm, row, b))
                 })
                 .collect();
+            if self.trace {
+                for (w, m) in bounds.windows(2).zip(&mids) {
+                    if m.is_none() {
+                        let cm = 0.5 * (w[0].0 + w[1].0);
+                        let row = at(cm, (w[0].0, &w[0].1));
+                        eprintln!(
+                            "  no bounds midway in slice {cm:.5}: {}; each joint from the slice before: {:?}",
+                            if row.is_some() {
+                                "its joints found"
+                            } else {
+                                "its joints not found"
+                            },
+                            w[0].1
+                                .iter()
+                                .enumerate()
+                                .map(|(j, m)| self
+                                    .joint_at(cm, chain, j, m)
+                                    .map(|j| (j.t(false), j.t(true))))
+                                .collect::<Vec<_>>()
+                        );
+                    }
+                }
+            }
             let mids: Vec<(f64, Vec<Joint>, Bounds)> = mids.into_iter().collect::<Option<_>>()?;
             // (How far off, in shares of what is fine.)
             let off = |m: &(f64, Vec<Joint>, Bounds)| -> f64 {
@@ -2112,36 +2273,54 @@ impl Gen<'_> {
     /// the target's own slices, `inner`, for a slice beyond them, where it is clear from the
     /// start) and before it ends.
     fn cuts(&self, spans: &[Span], past: f64, inner: (f64, f64)) -> Option<[Vec<f64>; 2]> {
-        use rayon::prelude::*;
-        let (c0, c1) = (spans[0].c.0, spans[spans.len() - 1].c.1);
-        let n = spans[0].chain.joints.len();
-        let k = spans[0].chain.links.len();
-        let of = |c: f64| -> &Span {
-            spans
-                .iter()
-                .find(|s| c <= s.c.1)
-                .unwrap_or(&spans[spans.len() - 1])
+        let whole = (spans[0].c.0, spans[spans.len() - 1].c.1);
+        // (The stretches that have this end's link: one without it is closed there by a
+        // filler.)
+        let of = |end: usize| {
+            let real: Vec<&Span> = spans.iter().filter(|s| s.skip[end] == 0).collect();
+            self.cut_of(&real, end, whole, past, inner)
         };
+        Some([of(0)?, of(1)?])
+    }
+
+    /// Where the stretches `real` (which go on from one another) cut the link at their chains'
+    /// end `end`: see [`Gen::cuts`]. `(c0, c1)`: all the tooth space's slices.
+    fn cut_of(
+        &self,
+        real: &[&Span],
+        end: usize,
+        (c0, c1): (f64, f64),
+        past: f64,
+        inner: (f64, f64),
+    ) -> Option<Vec<f64>> {
+        use rayon::prelude::*;
         let samples = 96;
-        let mut ends: [Vec<f64>; 2] = [Vec::new(), Vec::new()];
-        for end in 0..2 {
-            let (ji, link) = if end == 0 {
-                (0, spans[0].chain.links[0])
-            } else {
-                (n - 1, spans[0].chain.links[k - 1])
+        {
+            let (r0, r1) = (real.first()?.c.0, real.last()?.c.1);
+            let of = |c: f64| -> &Span {
+                real.iter()
+                    .find(|s| c <= s.c.1)
+                    .unwrap_or(&real[real.len() - 1])
             };
-            let dir = spans[0].chain.out[end];
+            let dir = real[0].chain.out[end];
             // The link followed in slice `c`: its points' instants past the joint and how far
             // each is from the target.
             let followed = |c: f64| -> Option<Vec<(f64, f64)>> {
                 let span = of(c);
                 let (chain, rows) = (&span.chain, &span.rows);
+                // (This end's joint and link, as this stretch counts them.)
+                let (ji, link) = if end == 0 {
+                    (0, chain.links[0])
+                } else {
+                    (chain.joints.len() - 1, chain.links[chain.links.len() - 1])
+                };
                 let i = rows.partition_point(|r| r.0 <= c).clamp(1, rows.len()) - 1;
-                let joint = self.joint_at(c, chain, ji, &rows[i].1[ji])?;
+                let joint = self.row_from(chain, c, (rows[i].0, &rows[i].1))?[ji];
                 let (place, t0) = self.joint_on(&joint, link, end == 1)?;
                 let reach = match &joint {
                     Joint::Node(m) => self.follow(c, m, link)?,
                     Joint::Cross { .. } => self.march(c, link, place, t0, dir, None),
+                    Joint::Free => return None,
                 };
                 let last = reach.pts.last()?.0;
                 if reach.pts.len() < 2 || (last - t0).signum() != dir {
@@ -2162,10 +2341,15 @@ impl Gen<'_> {
             let spans_at: Vec<Option<(f64, f64)>> = (0..=samples)
                 .into_par_iter()
                 .map(|s| {
-                    let c = c0 + (c1 - c0) * s as f64 / samples as f64;
+                    let c = r0 + (r1 - r0) * s as f64 / samples as f64;
                     let here = followed(c)?;
                     let most = here[here.len() - 1].0;
-                    let near = c.clamp(inner.0, inner.1);
+                    let within = (inner.0.max(r0), inner.1.min(r1));
+                    let near = if within.0 <= within.1 {
+                        c.clamp(within.0, within.1)
+                    } else {
+                        c
+                    };
                     let there = if near == c { None } else { Some(followed(near)?) };
                     let judged = there.as_ref().unwrap_or(&here);
                     let within = judged.iter().rposition(|p| p.1 < past).unwrap_or(0);
@@ -2196,7 +2380,7 @@ impl Gen<'_> {
                 for (j, s) in spans_at.iter().enumerate().step_by(4) {
                     eprintln!(
                         "  end {end} slice {:.4}: clear after {:.1} steps, goes on {:.1}",
-                        c0 + (c1 - c0) * j as f64 / samples as f64,
+                        r0 + (r1 - r0) * j as f64 / samples as f64,
                         s.0 / self.dt,
                         s.1 / self.dt
                     );
@@ -2213,7 +2397,10 @@ impl Gen<'_> {
             // A curve of the slice a few steps past where the link is clear, as near it as a
             // polynomial follows (a plug that goes no farther out than it must keeps clear of
             // the next tooth space's), and before the link ends.
-            let xs: Vec<f64> = (0..=samples).map(|j| j as f64 / samples as f64).collect();
+            // (The polynomial's variable: the slice's place across all the stretches.)
+            let xs: Vec<f64> = (0..=samples)
+                .map(|j| (r0 + (r1 - r0) * j as f64 / samples as f64 - c0) / (c1 - c0))
+                .collect();
             // (Three steps past, or a third of the way to its end where that is nearer.)
             let wanted: Vec<f64> = spans_at
                 .iter()
@@ -2239,6 +2426,29 @@ impl Gen<'_> {
                 co[0] += short;
                 fits(&co).then_some(co)
             });
+            // Or, where the link ends soon after it is clear (too soon for a curve that keeps
+            // by where it clears, which may turn sharply where the link's joint comes into the
+            // target): a curve a little before its end, lowered until it is before it all
+            // along.
+            let fit = fit.or_else(|| {
+                let latest: Vec<f64> = spans_at
+                    .iter()
+                    .map(|s| {
+                        let room = s.1 - s.0;
+                        s.1 - (2.0 * self.dt).min(0.2 * room) - (0.5 * self.dt).min(0.1 * room)
+                    })
+                    .collect();
+                (0..=6).find_map(|deg| {
+                    let mut co = poly_fit(&xs, &latest, deg)?;
+                    let over = xs
+                        .iter()
+                        .zip(&latest)
+                        .map(|(x, w)| co.iter().rev().fold(0.0, |acc, k| acc * x + k) - w)
+                        .fold(0.0, f64::max);
+                    co[0] -= over;
+                    fits(&co).then_some(co)
+                })
+            });
             let Some(co) = fit else {
                 if self.debug {
                     eprintln!(
@@ -2247,9 +2457,8 @@ impl Gen<'_> {
                 }
                 return None;
             };
-            ends[end] = co.into_iter().map(|k| k * dir).collect();
+            Some(co.into_iter().map(|k| k * dir).collect())
         }
-        Some(ends)
     }
 }
 
@@ -2260,6 +2469,11 @@ struct Span {
     chain: Chain,
     rows: Vec<(f64, Vec<Joint>)>,
     c: (f64, f64),
+    /// How many links the tooth space's chain has before this stretch's first and after its
+    /// last, in the stretches where it has the most: links that are outside the target all
+    /// along this stretch (the chain found here ends before them), where the plug is closed by
+    /// fillers in their place.
+    skip: [usize; 2],
 }
 
 /// A link's sheet: its points over (slice, share of the way from its first bound to its
@@ -2288,7 +2502,11 @@ impl<'a> Sheet<'a> {
         let k = chain.links.len();
         // The joint the grid's rows start from: the link's first, or for the chain's first link
         // (which starts at a cut) its second.
-        let (ji, backward) = if i == 0 { (0, true) } else { (i - 1, false) };
+        let (ji, backward) = if i == 0 || matches!(chain.joints[i - 1], Joint::Free) {
+            (i, true)
+        } else {
+            (i - 1, false)
+        };
         let mid = 0.5 * (carried.c.0 + carried.c.1);
         let long = (carried.bound(i, true, mid) - carried.bound(i, false, mid)).abs();
         // (Shares close enough that each point starts the next: a few steps apart.)
@@ -2300,13 +2518,34 @@ impl<'a> Sheet<'a> {
                 let (ta, tb) = (carried.bound(i, false, c), carried.bound(i, true, c));
                 let (from, to) = if backward { (tb, ta) } else { (ta, tb) };
                 // (The joint itself in this slice, for the place to start from.)
-                let joint = g.joint_at(c, chain, ji, carried.near(ji, c))?;
+                let why = |what: &str| {
+                    if g.trace {
+                        eprintln!(
+                            "  sheet {i} {link:?} in slice {c:.5} (t {from:.6} to {to:.6}): {what}"
+                        );
+                    }
+                };
+                let joint = g
+                    .joint_at(c, chain, ji, carried.near(ji, c))
+                    .or_else(|| g.joint_from(carried, ji, c));
+                let Some(joint) = joint else {
+                    why("its joint isn't found");
+                    return None;
+                };
                 let (start, _) = g.joint_on(&joint, link, !backward)?;
-                let mut on = g.place(link, from, c, start)?;
+                let Some(mut on) = g.place(link, from, c, start) else {
+                    why("no place where it starts");
+                    return None;
+                };
                 let mut row = vec![on];
+                let mut last = from;
                 for li in 1..=shares {
                     let t = from + (to - from) * li as f64 / shares as f64;
-                    on = g.place(link, t, c, on)?;
+                    let Some(next) = g.place_on(link, (last, t), c, on) else {
+                        why(&format!("no place at t {t:.6}"));
+                        return None;
+                    };
+                    (on, last) = (next, t);
                     row.push(on);
                 }
                 // An end link's cut must fall on the link itself (a contact still within its
@@ -2315,6 +2554,21 @@ impl<'a> Sheet<'a> {
                     && let Place::Face(f, uv) = on
                     && g.group_in_slice(to, c, (f, uv)).is_none()
                 {
+                    why("its cut is past where it ends");
+                    if g.trace {
+                        let reach = g.march(c, link, start, from, (to - from).signum(), None);
+                        eprintln!(
+                            "    followed from its joint: {}; its last instants {:?}",
+                            g.told(link, &reach),
+                            reach
+                                .pts
+                                .iter()
+                                .rev()
+                                .take(3)
+                                .map(|p| p.0)
+                                .collect::<Vec<_>>()
+                        );
+                    }
                     return None;
                 }
                 if backward {
@@ -2407,6 +2661,38 @@ impl<'a> Sheet<'a> {
 }
 
 impl Gen<'_> {
+    /// Joint `j` of a carried chain in slice `c`, by way of slices between its nearest row's
+    /// and that one.
+    fn joint_from(&self, carried: &Carried, j: usize, c: f64) -> Option<Joint> {
+        let k = carried
+            .rows
+            .partition_point(|r| r.0 <= c)
+            .clamp(1, carried.rows.len() - 1);
+        let (a, z) = (&carried.rows[k - 1], &carried.rows[k]);
+        let from = if (c - a.0).abs() <= (z.0 - c).abs() {
+            a
+        } else {
+            z
+        };
+        for steps in [4, 16, 64] {
+            let mut joint = from.1[j];
+            let all = (1..=steps).all(|i| {
+                let ci = from.0 + (c - from.0) * i as f64 / steps as f64;
+                match self.joint_at(ci, &carried.chain, j, &joint) {
+                    Some(next) => {
+                        joint = next;
+                        true
+                    }
+                    None => false,
+                }
+            });
+            if all {
+                return Some(joint);
+            }
+        }
+        None
+    }
+
     /// A link's place in slice `c` at t, from one near it.
     fn place(&self, link: Link, t: f64, c: f64, near: Place) -> Option<Place> {
         match (link, near) {
@@ -2423,6 +2709,38 @@ impl Gen<'_> {
             }
             _ => None,
         }
+    }
+
+    /// A link's place in slice `c` at `t.1`, from its place `near` at `t.0`: at once, or (where
+    /// a contact's point found so is off its faces: it may move far over them in a little
+    /// time) by way of the instants between.
+    fn place_on(&self, link: Link, t: (f64, f64), c: f64, near: Place) -> Option<Place> {
+        let within = |p: &Place| match p {
+            Place::Face(f, uv) => self.tool.inside(*f, *uv),
+            Place::Run(_) => true,
+        };
+        let direct = self.place(link, t.1, c, near);
+        if direct.as_ref().is_some_and(within) {
+            return direct;
+        }
+        for steps in [4, 16] {
+            let mut on = near;
+            let all = (1..=steps).all(|i| {
+                let ti = t.0 + (t.1 - t.0) * i as f64 / steps as f64;
+                match self.place(link, ti, c, on) {
+                    Some(p) => {
+                        on = p;
+                        true
+                    }
+                    None => false,
+                }
+            });
+            if all && within(&on) {
+                return Some(on);
+            }
+        }
+        // (A hair past the link's end, as [`Gen::place`] takes it.)
+        direct
     }
 
     /// Whether the tool passes over `x` (a point of the target's frame) at some instant: by
@@ -2592,12 +2910,19 @@ impl Gen<'_> {
         let near = stretches[0].chain.about;
         let (c0, c1) = stretches[0].whole;
         let fit = SHEET_FIT * self.tool.size;
-        // Every stretch's every link's sheet: (the stretch, the sheet).
-        let sheets: Option<Vec<(usize, Sheet)>> = stretches
+        // Every stretch's every link's sheet, stretch s's link i's at s·k + i: (the stretch, the
+        // sheet; none for a filler, which is made from the sheets beside it).
+        let slots: Vec<(usize, usize)> = (0..stretches.len())
+            .flat_map(|s| (0..k).map(move |i| (s, i)))
+            .collect();
+        let sheets: Option<Vec<(usize, Option<Sheet>)>> = slots
             .iter()
-            .enumerate()
-            .flat_map(|(s, carried)| (0..k).map(move |i| (s, carried, i)))
-            .map(|(s, carried, i)| Some((s, Sheet::new(self, carried, i)?)))
+            .map(|&(s, i)| {
+                if stretches[s].chain.links[i] == Link::Fill {
+                    return Some((s, None));
+                }
+                Some((s, Some(Sheet::new(self, &stretches[s], i)?)))
+            })
             .collect();
         let Some(sheets) = sheets else {
             declined(debug, "a link can't be followed across its sheet");
@@ -2605,6 +2930,9 @@ impl Gen<'_> {
         };
         if self.trace {
             for (s, sh) in &sheets {
+                let Some(sh) = sh else {
+                    continue;
+                };
                 let (a, z) = stretches[*s].c;
                 let cm = 0.5 * (a + z);
                 eprintln!(
@@ -2623,6 +2951,7 @@ impl Gen<'_> {
         {
             let probe = 2e-3 * self.tool.size;
             let spots: Vec<(usize, f64, f64)> = (0..sheets.len())
+                .filter(|&i| sheets[i].1.is_some())
                 .flat_map(|i| {
                     [0.15, 0.5, 0.85]
                         .into_iter()
@@ -2631,6 +2960,7 @@ impl Gen<'_> {
                 .collect();
             let wrong = spots.par_iter().find_map_any(|&(i, x, share)| {
                 let (s, sh) = &sheets[i];
+                let sh = sh.as_ref()?;
                 let (a, z) = stretches[*s].c;
                 let (t, on) = sh.on(a + (z - a) * x, share);
                 let p = self.at_place(sh.link, t, on)?;
@@ -2665,12 +2995,16 @@ impl Gen<'_> {
         let surfaces: Vec<Option<super::nurbs::NurbsSurface>> = sheets
             .par_iter()
             .map(|(s, sh)| {
+                let sh = sh.as_ref()?;
                 let at = |c: f64, share: f64| sh.point(c, share);
                 fit_sheet(&at, (stretches[*s].c, (0.0, 1.0)), (8, 4), fit, false)
             })
             .collect();
         if self.trace {
             for ((s, sh), fitted) in sheets.iter().zip(&surfaces) {
+                let Some(sh) = sh else {
+                    continue;
+                };
                 eprintln!(
                     "  stretch {s} sheet {} {:?}: {}; {} points missed",
                     sh.i,
@@ -2685,18 +3019,91 @@ impl Gen<'_> {
         }
         if sheets
             .iter()
-            .any(|(_, s)| s.missed.load(Ordering::Relaxed) > 0)
+            .filter_map(|(_, s)| s.as_ref())
+            .any(|s| s.missed.load(Ordering::Relaxed) > 0)
         {
             declined(debug, "a sheet's point can't be found");
             return None;
         }
+        if sheets
+            .iter()
+            .zip(&surfaces)
+            .any(|((_, sh), fitted)| sh.is_some() && fitted.is_none())
+        {
+            declined(debug, "a sheet won't fit");
+            return None;
+        }
+        let mut clear: Vec<P3> = Vec::new();
+        // The fillers: where a stretch lacks a link the stretch next to it has, that link's
+        // outline in the slice the two meet in, carried along this stretch on the end of its
+        // own nearest link (in each slice the same shape, in the slice's own coordinates). It
+        // meets the other stretch's sheet edge to edge, and is outside the target all along.
+        let mut surfaces = surfaces;
+        for (at, &(s, i)) in slots.iter().enumerate() {
+            if surfaces[at].is_some() {
+                continue;
+            }
+            let stretch = &stretches[s];
+            let links = &stretch.chain.links;
+            let Some((nb, seam)) = stretch.fill else {
+                declined(debug, "a filler with no stretch beside it");
+                return None;
+            };
+            let before = links.iter().take_while(|l| **l == Link::Fill).count();
+            let after = links.iter().rev().take_while(|l| **l == Link::Fill).count();
+            // (The stretch's own link the fillers hang on, and the end of it they hang on.)
+            let (on, end) = if i < before {
+                (before, 0.0)
+            } else {
+                (k - 1 - after, 1.0)
+            };
+            let (Some(own), Some(theirs), Some(shape)) = (
+                surfaces[s * k + on].as_ref(),
+                surfaces[nb * k + on].as_ref(),
+                surfaces[nb * k + i].as_ref(),
+            ) else {
+                declined(debug, "a filler with no sheet to follow");
+                return None;
+            };
+            let anchor = self.chart.inner(&theirs.point(seam, end), near);
+            let filler = |c: f64, share: f64| -> P3 {
+                let base = self.chart.inner(&own.point(c, end), near);
+                let at = self.chart.inner(&shape.point(seam, share), near);
+                self.chart
+                    .point(c, (base.0 + at.0 - anchor.0, base.1 + at.1 - anchor.1))
+            };
+            let Some(piece) = fit_sheet(&filler, (stretch.c, (0.0, 1.0)), (8, 4), fit, false)
+            else {
+                declined(debug, "a filler won't fit");
+                return None;
+            };
+            let (a, z) = stretch.c;
+            for x in 0..=16 {
+                for y in 0..=8 {
+                    clear.push(filler(a + (z - a) * x as f64 / 16.0, y as f64 / 8.0));
+                }
+                if self.trace {
+                    let c = a + (z - a) * x as f64 / 16.0;
+                    eprintln!(
+                        "  filler {i} of stretch {s} in slice {c:.4}: from the target {:?}",
+                        (0..=8)
+                            .map(|y| {
+                                let d = self.target.distance(&filler(c, y as f64 / 8.0));
+                                (d * 1e3).round() / 1e3
+                            })
+                            .collect::<Vec<_>>()
+                    );
+                }
+            }
+            surfaces[at] = Some(piece);
+        }
         let mut patches: Vec<(super::nurbs::NurbsSurface, UvBox)> = Vec::new();
-        for ((s, _), fitted) in sheets.iter().zip(surfaces) {
+        for (&(s, _), fitted) in slots.iter().zip(surfaces) {
             let Some(fitted) = fitted else {
                 declined(debug, "a sheet won't fit");
                 return None;
             };
-            patches.push((fitted, (stretches[*s].c, (0.0, 1.0))));
+            patches.push((fitted, (stretches[s].c, (0.0, 1.0))));
         }
         // (Stretch s's link i's sheet is patch s·k + i.)
         let fitted: Vec<super::nurbs::NurbsSurface> = patches.iter().map(|p| p.0.clone()).collect();
@@ -2718,7 +3125,6 @@ impl Gen<'_> {
         // The lid, a piece for each stretch and link (so that every edge of it is one sheet's
         // or one cap's too), and the caps: in the first and the last slice, each link's outline
         // joined to its piece of the lid's edge, straight in the slice's coordinates.
-        let mut clear: Vec<P3> = Vec::new();
         for (s, stretch) in stretches.iter().enumerate() {
             let (a, z) = stretch.c;
             let lid = |c: f64, m: f64| -> P3 {
@@ -2766,6 +3172,29 @@ impl Gen<'_> {
                 patches.push((piece, ((0.0, 1.0), (0.0, 1.0))));
             }
         }
+        if self.trace {
+            // (Which of them: the fillers' points first, then each stretch's lid's, then the
+            // caps'.)
+            let near: Vec<(usize, f64)> = clear
+                .iter()
+                .enumerate()
+                .map(|(i, p)| (i, self.target.distance(p)))
+                .filter(|(_, d)| *d <= 0.5 * self.clear)
+                .collect();
+            if let (Some(first), Some(last)) = (near.first(), near.last()) {
+                let worst = near.iter().map(|n| n.1).fold(f64::INFINITY, f64::min);
+                eprintln!(
+                    "  {} of the {} points of fillers, lids and caps are within {:.4} of the target (the nearest {worst:.4}): points {} to {}; a filler has {}, a lid piece or a cap {}",
+                    near.len(),
+                    clear.len(),
+                    0.5 * self.clear,
+                    first.0,
+                    last.0,
+                    17 * 9,
+                    9 * 5
+                );
+            }
+        }
         if clear
             .par_iter()
             .any(|p| self.target.distance(p) <= 0.5 * self.clear)
@@ -2799,59 +3228,250 @@ impl Gen<'_> {
         }
     }
 
+    /// The chains of slice `c`, one through each of its nodes within the target (each chain
+    /// once). None where one of those nodes has no chain.
+    fn chains_at(&self, c: f64, nodes: &[Node], cands: &[Cand], about: f64) -> Option<Vec<Chain>> {
+        let period = self.repeat.map(|r| r.0);
+        let mut chains: Vec<Chain> = Vec::new();
+        for seed in nodes.iter().filter(|n| !self.clear_of_target(&n.p)) {
+            if chains.iter().any(|c| {
+                c.joints.iter().any(|j| {
+                    let Joint::Node(m) = j else {
+                        return false;
+                    };
+                    m.r == seed.r
+                        && m.side == seed.side
+                        && match period {
+                            Some(p) => {
+                                let turns = (seed.t - m.t) / p;
+                                (turns - turns.round()).abs() * p < 0.5 * self.dt
+                            }
+                            None => (seed.t - m.t).abs() < 0.5 * self.dt,
+                        }
+                })
+            }) {
+                continue;
+            }
+            let Some(chain) = self.chain(c, seed, cands, about, 0) else {
+                if self.debug {
+                    eprintln!(
+                        "generated cut: no chain from the node of run {} (side {}) at t {:.5} in slice {c:.4}",
+                        seed.r, seed.side, seed.t
+                    );
+                }
+                return None;
+            };
+            if !chains
+                .iter()
+                .any(|c| same_chain(c, &chain, period, self.dt))
+            {
+                chains.push(chain);
+            }
+        }
+        Some(chains)
+    }
+
     /// A chain like `like` (the same links in the same order) in slice `c`, found afresh
     /// there; for a motion that repeats, the one of its turns whose first joint is nearest
     /// `like`'s in the row `by`.
     fn chain_like(&self, like: &Chain, c: f64, by: &[Joint]) -> Option<Chain> {
         let nodes = self.nodes(c, self.window, self.reach);
         let cands = self.cands(c, &nodes, like.about);
-        let turned = |ch: &Chain| Chain {
-            joints: ch.joints.iter().rev().map(Joint::turned).collect(),
-            links: ch.links.iter().rev().copied().collect(),
-            out: [ch.out[1], ch.out[0]],
-            about: ch.about,
-        };
-        for seed in nodes.iter().filter(|n| !self.clear_of_target(&n.p)) {
-            let Some(found) = self.chain(c, seed, &cands, like.about) else {
-                continue;
-            };
-            if self.trace {
-                eprintln!("  in slice {c:.5} a chain of links {:?}", found.links);
+        let k = like.links.len();
+        // The part of a chain that has `like`'s links, in order.
+        let part = |ch: Chain| -> Option<Chain> {
+            let n = ch.links.len();
+            let w = (0..=n.checked_sub(k)?).find(|&w| ch.links[w..w + k] == like.links[..])?;
+            if w == 0 && n == k {
+                return Some(ch);
             }
-            let found = if found.links == like.links {
-                found
-            } else if turned(&found).links == like.links {
-                turned(&found)
+            // (Each end link's way in time from its joint: toward the joint left out, or the
+            // chain's own end.)
+            let first = if w > 0 {
+                (ch.joints[w - 1].t(true) - ch.joints[w].t(false)).signum()
             } else {
-                continue;
+                ch.out[0]
             };
-            // The turn of the tool it is found in, brought to `like`'s.
-            let later = match self.repeat {
-                Some((period, ..)) => {
-                    ((found.joints[0].t(false) - by[0].t(false)) / period).round() * period
+            let last = if w + k < n {
+                (ch.joints[w + k - 1].t(false) - ch.joints[w + k - 2].t(true)).signum()
+            } else {
+                ch.out[1]
+            };
+            Some(Chain {
+                joints: ch.joints[w..w + k - 1].to_vec(),
+                links: ch.links[w..w + k].to_vec(),
+                out: [first, last],
+                about: ch.about,
+            })
+        };
+        let either = |ch: Chain| -> Option<Chain> {
+            let other = ch.turned();
+            part(ch).or_else(|| part(other))
+        };
+        // (As a chain is found, then followed on past the links that leave the target: `like`
+        // may have links that are outside it in this slice.)
+        for full in [0, k] {
+            for seed in nodes.iter().filter(|n| !self.clear_of_target(&n.p)) {
+                let Some(found) = self.chain(c, seed, &cands, like.about, full) else {
+                    continue;
+                };
+                if self.trace {
+                    eprintln!("  in slice {c:.5} a chain of links {:?}", found.links);
                 }
-                None => 0.0,
-            };
-            let joints: Option<Vec<Joint>> = found
-                .joints
+                let Some(found) = either(found) else {
+                    continue;
+                };
+                // The turn of the tool it is found in, brought to `like`'s.
+                let later = match self.repeat {
+                    Some((period, ..)) => {
+                        ((found.joints[0].t(false) - by[0].t(false)) / period).round() * period
+                    }
+                    None => 0.0,
+                };
+                let joints: Option<Vec<Joint>> = found
+                    .joints
+                    .iter()
+                    .enumerate()
+                    .map(|(j, joint)| match joint {
+                        Joint::Node(m) => self
+                            .node(m.r, m.side, c, (m.sigma, m.t - later))
+                            .map(Joint::Node),
+                        Joint::Cross { before, after, .. } => self.cross_at(
+                            c,
+                            (found.links[j], before.0, before.1 - later),
+                            (found.links[j + 1], after.0, after.1 - later),
+                            like.about,
+                        ),
+                        Joint::Free => Some(Joint::Free),
+                    })
+                    .collect();
+                return Some(Chain {
+                    joints: joints?,
+                    ..found
+                });
+            }
+        }
+        None
+    }
+
+    /// A stretch to go on from `here` the way `dir`, where this one's chain can be carried no
+    /// farther: the chain found in slice `beyond`, which has `here`'s links but for some at its
+    /// ends, those being outside the target where `here` stops. With the slices `here` keeps
+    /// and those the other takes: handed over between where `here` stops and where the links
+    /// the other lacks come within the target. None where there is no such chain, or it can't
+    /// be carried to the end of the slices.
+    #[allow(clippy::type_complexity)]
+    fn shorter(
+        &self,
+        here: &Span,
+        dir: f64,
+        beyond: f64,
+        (lo, hi): (f64, f64),
+    ) -> Option<(((f64, f64), (f64, f64)), Span)> {
+        let k = here.chain.links.len();
+        let by = if dir > 0.0 {
+            &here.rows[here.rows.len() - 1]
+        } else {
+            &here.rows[0]
+        };
+        let limit = by.0;
+        let point = |j: &Joint| match j {
+            Joint::Node(n) => Some(n.p),
+            Joint::Cross { p, .. } => Some(*p),
+            Joint::Free => None,
+        };
+        // How far from the target the nearest of `here`'s joints before `a` and from `z` on
+        // is, in a row of it.
+        let off = |row: &[Joint], a: usize, z: usize| -> f64 {
+            row[..a]
                 .iter()
-                .enumerate()
-                .map(|(j, joint)| match joint {
-                    Joint::Node(m) => self
-                        .node(m.r, m.side, c, (m.sigma, m.t - later))
-                        .map(Joint::Node),
-                    Joint::Cross { before, after, .. } => self.cross_at(
-                        c,
-                        (found.links[j], before.0, before.1 - later),
-                        (found.links[j + 1], after.0, after.1 - later),
-                        like.about,
-                    ),
-                })
-                .collect();
-            return Some(Chain {
-                joints: joints?,
-                ..found
-            });
+                .chain(&row[z..])
+                .filter_map(point)
+                .map(|p| self.target.distance(&p))
+                .fold(f64::INFINITY, f64::min)
+        };
+        let nodes = self.nodes(beyond, self.window, self.reach);
+        let cands = self.cands(beyond, &nodes, here.chain.about);
+        for found in self.chains_at(beyond, &nodes, &cands, here.chain.about)? {
+            for ch in [found.turned(), found] {
+                let m = ch.links.len();
+                if m < 2 || m >= k {
+                    continue;
+                }
+                let Some(a) = (0..=k - m).find(|&a| here.chain.links[a..a + m] == ch.links[..])
+                else {
+                    continue;
+                };
+                // (Its joints are `here`'s from `a` to `a + m − 1`.)
+                let z = a + m - 1;
+                if off(&by.1, a, z) <= 4.0 * self.clear {
+                    continue;
+                }
+                // The turn of the tool it is found in, brought to `here`'s.
+                let later = match self.repeat {
+                    Some((period, ..)) => {
+                        ((ch.joints[0].t(false) - by.1[a].t(false)) / period).round() * period
+                    }
+                    None => 0.0,
+                };
+                let joints: Option<Vec<Joint>> = ch
+                    .joints
+                    .iter()
+                    .enumerate()
+                    .map(|(j, joint)| match joint {
+                        Joint::Node(n) => self
+                            .node(n.r, n.side, beyond, (n.sigma, n.t - later))
+                            .map(Joint::Node),
+                        Joint::Cross { before, after, .. } => self.cross_at(
+                            beyond,
+                            (ch.links[j], before.0, before.1 - later),
+                            (ch.links[j + 1], after.0, after.1 - later),
+                            ch.about,
+                        ),
+                        Joint::Free => None,
+                    })
+                    .collect();
+                let chain = Chain {
+                    joints: joints?,
+                    ..ch
+                };
+                let rows = self.rows(&chain, beyond, (lo, hi));
+                let (o0, o1) = (rows[0].0, rows[rows.len() - 1].0);
+                // Handed over most of the way from where `here` stops to where the links the
+                // other lacks come near the target.
+                let near = here
+                    .rows
+                    .iter()
+                    .filter(|r| off(&r.1, a, z) <= 8.0 * self.clear)
+                    .map(|r| r.0)
+                    .fold(if dir > 0.0 { here.c.0 } else { here.c.1 }, |m, c| {
+                        if dir > 0.0 { m.max(c) } else { m.min(c) }
+                    });
+                let hand = limit + 0.75 * (near - limit);
+                let (mine, theirs) = if dir > 0.0 {
+                    ((here.c.0, hand), (hand, o1))
+                } else {
+                    ((hand, here.c.1), (o0, hand))
+                };
+                let reaches = if dir > 0.0 {
+                    (hi - o1) <= 1e-9 * (hi - lo)
+                } else {
+                    (o0 - lo) <= 1e-9 * (hi - lo)
+                };
+                if !(reaches && mine.0 < mine.1 && theirs.0 < theirs.1 && hand >= o0 && hand <= o1)
+                {
+                    continue;
+                }
+                return Some((
+                    (mine, theirs),
+                    Span {
+                        chain,
+                        rows,
+                        c: (o0, o1),
+                        skip: [a, k - 1 - z],
+                    },
+                ));
+            }
         }
         None
     }
@@ -2876,6 +3496,7 @@ impl Gen<'_> {
             chain: chain.clone(),
             c: ends(&rows),
             rows,
+            skip: [0, 0],
         }];
         // A stretch's rows from `a` to `z`, with a row at each of the two.
         let clip = |span: &Span, (a, z): (f64, f64)| -> Option<Span> {
@@ -2893,6 +3514,7 @@ impl Gen<'_> {
                 chain: span.chain.clone(),
                 rows,
                 c: (a, z),
+                skip: span.skip,
             })
         };
         for dir in [1.0, -1.0] {
@@ -2929,6 +3551,29 @@ impl Gen<'_> {
                     &here.rows[0].1
                 };
                 let Some(other) = self.chain_like(&here.chain, beyond, by) else {
+                    // The chain there may lack this one's end links, which are outside the
+                    // target by then: it is carried on from before they come out.
+                    if here.skip == [0, 0]
+                        && let Some((cs, theirs)) = self.shorter(here, dir, beyond, (lo, hi))
+                        && let (Some(mine), Some(theirs)) = (clip(here, cs.0), clip(&theirs, cs.1))
+                    {
+                        if self.debug {
+                            eprintln!(
+                                "generated cut: past slice {:.5} the chain has fewer links ({} and {} of them outside the target): {:?}",
+                                if dir > 0.0 { mine.c.1 } else { mine.c.0 },
+                                theirs.skip[0],
+                                theirs.skip[1],
+                                theirs.chain.links
+                            );
+                        }
+                        spans[at] = mine;
+                        if dir > 0.0 {
+                            spans.push(theirs);
+                        } else {
+                            spans.insert(0, theirs);
+                        }
+                        break;
+                    }
                     if self.debug {
                         eprintln!("generated cut: no chain like it is found past slice {limit:.5}");
                     }
@@ -2940,6 +3585,7 @@ impl Gen<'_> {
                     chain: other,
                     rows,
                     c: (o0, o1),
+                    skip: [0, 0],
                 };
                 // The joints that differ: handed over where the one with crossings there stops.
                 let differ: Vec<usize> = (0..n)
@@ -2998,6 +3644,133 @@ impl Gen<'_> {
 }
 
 type UvBox = ((f64, f64), (f64, f64));
+
+/// The stretches bound for their sheets. One that lacks links at its ends ([`Span::skip`]) is
+/// given fillers in their place, and its own nearest link is cut where the stretch beside it
+/// has that link's joint: as long after its other joint here as there, in the slice the two
+/// stretches meet in.
+#[allow(clippy::type_complexity)]
+fn carried(
+    spans: &[Span],
+    bound: &[(Vec<(f64, Vec<Joint>)>, Vec<NurbsCurve>, Vec<NurbsCurve>)],
+    whole: (f64, f64),
+    ends: &[Vec<f64>; 2],
+    own: &[[Option<Vec<f64>>; 2]],
+    blend: f64,
+) -> Option<Vec<Carried>> {
+    // A stretch's own cut of its end link (a time past its joint, a polynomial of the slice's
+    // place across them all), brought over the last `blend` of the stretch to `long` where it
+    // meets the stretch beside it.
+    fn cut_to<'a>(
+        own: &'a [f64],
+        whole: (f64, f64),
+        (a, z): (f64, f64),
+        seam: f64,
+        long: f64,
+        blend: f64,
+    ) -> impl Fn(f64) -> f64 + 'a {
+        let poly = move |c: f64| {
+            let x = (c - whole.0) / (whole.1 - whole.0);
+            own.iter().rev().fold(0.0, |acc, k| acc * x + k)
+        };
+        let off = long - poly(seam);
+        let far = if seam == z { a } else { z };
+        move |c: f64| {
+            let u = (1.0 - (seam - c) / ((seam - far) * blend)).clamp(0.0, 1.0);
+            poly(c) + off * u * u * u * (10.0 - 15.0 * u + 6.0 * u * u)
+        }
+    }
+    let cut = |own, c, seam, long| cut_to(own, whole, c, seam, long, blend);
+    let mut out = Vec::new();
+    for (i, (s, (rows, before, after))) in spans.iter().zip(bound).enumerate() {
+        let [a, b] = s.skip;
+        if a == 0 && b == 0 {
+            out.push(Carried {
+                chain: s.chain.clone(),
+                c: s.c,
+                whole,
+                rows: rows.clone(),
+                before: before.clone(),
+                after: after.clone(),
+                ends: ends.clone(),
+                fill: None,
+            });
+            continue;
+        }
+        let m = s.chain.links.len();
+        let nb = [i.wrapping_sub(1), i + 1]
+            .into_iter()
+            .find(|&j| j < spans.len() && spans[j].skip == [0, 0])?;
+        let seam = if nb > i { s.c.1 } else { s.c.0 };
+        let (_, theirs_before, theirs_after) = &bound[nb];
+        let cs: Vec<f64> = rows.iter().map(|r| r.0).collect();
+        let none = || through(&[s.c.0, s.c.1], &[0.0, 0.0]);
+        // (This stretch's first link is the other's link `a`, from its joint a − 1 to its
+        // joint a; its last the other's link a + m − 1.)
+        let first = match (a > 0, &own[i][0]) {
+            (true, Some(co)) => {
+                let long = theirs_after[a - 1].point(seam).x - theirs_before[a].point(seam).x;
+                let cut = cut(co, s.c, seam, long);
+                Some(through(
+                    &cs,
+                    &cs.iter()
+                        .map(|&c| before[0].point(c).x + cut(c))
+                        .collect::<Vec<_>>(),
+                ))
+            }
+            (true, None) => return None,
+            _ => None,
+        };
+        let last = match (b > 0, &own[i][1]) {
+            (true, Some(co)) => {
+                let long =
+                    theirs_before[a + m - 1].point(seam).x - theirs_after[a + m - 2].point(seam).x;
+                let cut = cut(co, s.c, seam, long);
+                Some(through(
+                    &cs,
+                    &cs.iter()
+                        .map(|&c| after[m - 2].point(c).x + cut(c))
+                        .collect::<Vec<_>>(),
+                ))
+            }
+            (true, None) => return None,
+            _ => None,
+        };
+        let padded = |row: &[Joint]| -> Vec<Joint> {
+            let mut all = vec![Joint::Free; a];
+            all.extend(row.iter().copied());
+            all.extend(vec![Joint::Free; b]);
+            all
+        };
+        let mut links = vec![Link::Fill; a];
+        links.extend(s.chain.links.iter().copied());
+        links.extend(vec![Link::Fill; b]);
+        let mut all_before: Vec<NurbsCurve> = (0..a).map(|_| none()).collect();
+        all_before.extend(before.iter().cloned());
+        all_before.extend(last);
+        all_before.extend((1..b).map(|_| none()));
+        let mut all_after: Vec<NurbsCurve> = (1..a).map(|_| none()).collect();
+        all_after.extend(first);
+        all_after.extend(after.iter().cloned());
+        all_after.extend((0..b).map(|_| none()));
+        out.push(Carried {
+            chain: Chain {
+                joints: padded(&s.chain.joints),
+                links,
+                out: s.chain.out,
+                about: s.chain.about,
+            },
+            c: s.c,
+            whole,
+            rows: rows.iter().map(|(c, row)| (*c, padded(row))).collect(),
+            before: all_before,
+            after: all_after,
+            ends: ends.clone(),
+            fill: Some((nb, seam)),
+        });
+    }
+    Some(out)
+}
 
 /// The two turns of a motion that is the first about one line and the second about another,
 /// not parallel: (the tool's axis, the target's axis).
@@ -3197,40 +3970,7 @@ pub(super) fn cut(
                 (web_time::Instant::now() - t_start).as_secs_f64() * 1e3
             );
         }
-        let mut chains: Vec<Chain> = Vec::new();
-        for seed in seeds {
-            if chains.iter().any(|c| {
-                c.joints.iter().any(|j| {
-                    let Joint::Node(m) = j else {
-                        return false;
-                    };
-                    m.r == seed.r
-                        && m.side == seed.side
-                        && match period {
-                            Some(p) => {
-                                let turns = (seed.t - m.t) / p;
-                                (turns - turns.round()).abs() * p < 0.5 * dt
-                            }
-                            None => (seed.t - m.t).abs() < 0.5 * dt,
-                        }
-                })
-            }) {
-                continue;
-            }
-            let Some(chain) = g.chain(mid, seed, &cands, about) else {
-                if debug {
-                    eprintln!(
-                        "generated cut: no chain from the node of run {} (side {}) at t {:.5}",
-                        seed.r, seed.side, seed.t
-                    );
-                }
-                chains.clear();
-                break;
-            };
-            if !chains.iter().any(|c| same_chain(c, &chain, period, dt)) {
-                chains.push(chain);
-            }
-        }
+        let chains = g.chains_at(mid, &nodes, &cands, about).unwrap_or_default();
         if chains.is_empty() {
             continue;
         }
@@ -3246,13 +3986,124 @@ pub(super) fn cut(
                             Joint::Node(n) => format!("{:.4}", n.t),
                             Joint::Cross { before, after, .. } =>
                                 format!("{:.4}x{:.4}", before.1, after.1),
+                            Joint::Free => "free".to_string(),
                         })
                         .collect::<Vec<_>>()
                 );
             }
         }
-        let mut plugs: Vec<Body> = Vec::new();
-        for chain in &chains {
+        if let Ok(spec) = std::env::var("CADRS_GEN_DUMP") {
+            // `<file>:<slice>,<slice>,…`: every curve of those slices, as lines of
+            // "slice link t a b distance-from-the-target".
+            let (file, at) = spec.split_once(':').unwrap_or((&spec, ""));
+            let mut out = String::new();
+            for c in at.split(',').filter_map(|x| x.parse::<f64>().ok()) {
+                let nodes = g.nodes(c, g.window, g.reach);
+                for (i, cand) in g.cands(c, &nodes, about).iter().enumerate() {
+                    for (p, ab) in cand.pts.iter().zip(&cand.ab) {
+                        out.push_str(&format!(
+                            "{kind:?} {c} {i} {:?} {} {} {} {}\n",
+                            cand.link,
+                            p.0,
+                            ab.0,
+                            ab.1,
+                            dist.distance(&p.1)
+                        ));
+                    }
+                }
+            }
+            let _ = std::fs::write(format!("{file}.{kind:?}.txt"), out);
+        }
+        if std::env::var_os("CADRS_GEN_SURVEY").is_some() {
+            // Every chain found afresh in each of some slices.
+            let mut surveyed: Vec<Vec<Link>> = Vec::new();
+            for ci in 0..=32 {
+                let c = lo - pad + (hi - lo + 2.0 * pad) * ci as f64 / 32.0;
+                let nodes = g.nodes(c, g.window, g.reach);
+                let cands = g.cands(c, &nodes, about);
+                let mut told: Vec<String> = Vec::new();
+                for seed in nodes.iter().filter(|n| !g.clear_of_target(&n.p)) {
+                    let found = g.chain(c, seed, &cands, about, 0);
+                    if let Some(ch) = &found
+                        && !surveyed.contains(&ch.links)
+                    {
+                        // How far this chain can be carried, and how far from the target its
+                        // joints are where it stops.
+                        surveyed.push(ch.links.clone());
+                        let rows = g.rows(ch, c, (lo - pad, hi + pad));
+                        let far = |row: &(f64, Vec<Joint>)| -> Vec<String> {
+                            row.1
+                                .iter()
+                                .map(|j| {
+                                    let p = match j {
+                                        Joint::Node(n) => n.p,
+                                        Joint::Cross { p, .. } => *p,
+                                        Joint::Free => P3::origin(),
+                                    };
+                                    format!("{:.4}", dist.distance(&p))
+                                })
+                                .collect()
+                        };
+                        for row in rows.iter().step_by((rows.len() / 14).max(1)) {
+                            eprintln!(
+                                "survey:   slice {:.4}: {:?}",
+                                row.0,
+                                row.1
+                                    .iter()
+                                    .map(|j| match j {
+                                        Joint::Node(n) =>
+                                            format!("{:.5} ({:.3})", n.t, dist.distance(&n.p)),
+                                        Joint::Cross { before, after, p } => format!(
+                                            "{:.5}x{:.5} ({:.3})",
+                                            before.1,
+                                            after.1,
+                                            dist.distance(p)
+                                        ),
+                                        Joint::Free => "free".to_string(),
+                                    })
+                                    .collect::<Vec<_>>()
+                            );
+                        }
+                        eprintln!(
+                            "survey: {:?} found at {c:.4} carries over {:.5}..{:.5}; its joints from the target there: {:?} and {:?}",
+                            ch.links,
+                            rows[0].0,
+                            rows[rows.len() - 1].0,
+                            far(&rows[0]),
+                            far(&rows[rows.len() - 1])
+                        );
+                    }
+                    let line = match found {
+                        Some(ch) => format!(
+                            "{:?} {:?}",
+                            ch.links,
+                            ch.joints
+                                .iter()
+                                .map(|j| match j {
+                                    Joint::Node(n) => format!("{:.4}", n.t),
+                                    Joint::Cross { before, after, .. } =>
+                                        format!("{:.4}x{:.4}", before.1, after.1),
+                                    Joint::Free => "free".to_string(),
+                                })
+                                .collect::<Vec<_>>()
+                        ),
+                        None => format!(
+                            "none from run {} side {} t {:.4}",
+                            seed.r, seed.side, seed.t
+                        ),
+                    };
+                    if !told.contains(&line) {
+                        told.push(line);
+                    }
+                }
+                eprintln!(
+                    "survey {kind:?} slice {c:.4}: {} nodes; {told:?}",
+                    nodes.len()
+                );
+            }
+        }
+        // The plug of the tooth space whose chain is `chain` in slice `from`.
+        let build = |chain: &Chain, from: f64| -> Option<Body> {
             // How far clear of the target each end link gets in the middle slice: the cuts are
             // tried at shares of the lesser.
             let n = chain.joints.len();
@@ -3263,10 +4114,10 @@ pub(super) fn cut(
             .iter()
             .filter_map(|&(j, link, after)| {
                 let reach = match &chain.joints[j] {
-                    Joint::Node(m) => g.follow(mid, m, link)?,
+                    Joint::Node(m) => g.follow(from, m, link)?,
                     joint => {
                         let (place, t) = g.joint_on(joint, link, after)?;
-                        g.march(mid, link, place, t, chain.out[usize::from(after)], None)
+                        g.march(from, link, place, t, chain.out[usize::from(after)], None)
                     }
                 };
                 Some(
@@ -3278,10 +4129,7 @@ pub(super) fn cut(
                 )
             })
             .fold(f64::INFINITY, f64::min);
-            let Some(spans) = g.spans(chain, mid, (lo - pad, hi + pad), (lo, hi)) else {
-                plugs.clear();
-                break;
-            };
+            let spans = g.spans(chain, from, (lo - pad, hi + pad), (lo, hi))?;
             let whole = (spans[0].c.0, spans[spans.len() - 1].c.1);
             let bound: Option<Vec<_>> = spans.iter().map(|s| g.bind(s)).collect();
             let Some(bound) = bound else {
@@ -3290,9 +4138,17 @@ pub(super) fn cut(
                         "generated cut: declined: a stretch's joints can't be bound for its sheets"
                     );
                 }
-                plugs.clear();
-                break;
+                return None;
             };
+            // (Each stretch's rows from here on: the many its joints were bound in.)
+            let spans: Vec<Span> = spans
+                .into_iter()
+                .zip(&bound)
+                .map(|(s, (rows, ..))| Span {
+                    rows: rows.clone(),
+                    ..s
+                })
+                .collect();
             if debug {
                 eprintln!(
                     "generated cut: carried over {:.4}..{:.4} in {} stretch(es) ({:.0} ms)",
@@ -3317,30 +4173,80 @@ pub(super) fn cut(
                 let Some(ends) = g.cuts(&spans, past, (lo, hi)) else {
                     continue;
                 };
-                let stretches: Vec<Carried> = spans
+                // (A stretch closed by fillers cuts its own end link there, as clear of the
+                // target.)
+                let own: Vec<[Option<Vec<f64>>; 2]> = spans
                     .iter()
-                    .zip(&bound)
-                    .map(|(s, (rows, before, after))| Carried {
-                        chain: s.chain.clone(),
-                        c: s.c,
-                        whole,
-                        rows: rows.clone(),
-                        before: before.clone(),
-                        after: after.clone(),
-                        ends: ends.clone(),
+                    .map(|s| {
+                        [0, 1].map(|end| {
+                            (s.skip[end] > 0)
+                                .then(|| g.cut_of(&[s], end, whole, past, (lo, hi)))
+                                .flatten()
+                        })
                     })
                     .collect();
-                plug = g.plug(&stretches);
+                let blends: &[f64] = if spans.iter().any(|s| s.skip != [0, 0]) {
+                    &[0.25, 0.5, 1.0]
+                } else {
+                    &[1.0]
+                };
+                for &blend in blends {
+                    let Some(stretches) = carried(&spans, &bound, whole, &ends, &own, blend) else {
+                        continue;
+                    };
+                    plug = g.plug(&stretches);
+                    if plug.is_some() {
+                        break;
+                    }
+                }
                 if plug.is_some() {
                     break;
                 }
             }
-            let Some(plug) = plug else {
-                plugs.clear();
-                break;
+            plug
+        };
+        let all = |chains: &[(Chain, f64)]| -> Option<Vec<Body>> {
+            chains
+                .iter()
+                .map(|(chain, from)| build(chain, *from))
+                .collect()
+        };
+        let mut masters: Vec<(Chain, f64)> = chains.iter().map(|c| (c.clone(), mid)).collect();
+        let mut plugs = all(&masters);
+        if plugs.is_none() {
+            // A chain may have more links in another slice: one that leaves the target here,
+            // and is the chain's last, is crossed there within it by the next. The chains of
+            // the target's two end slices: one that has all of the middle slice's links and
+            // more is followed from its own slice instead.
+            let window = |big: &[Link], small: &[Link]| {
+                let turned: Vec<Link> = small.iter().rev().copied().collect();
+                big.windows(small.len())
+                    .any(|w| w == small || w == turned.as_slice())
             };
-            plugs.push(plug);
+            let mut grown = false;
+            for c in [lo + pad, hi - pad] {
+                let nodes = g.nodes(c, g.window, g.reach);
+                let cands = g.cands(c, &nodes, about);
+                for there in g.chains_at(c, &nodes, &cands, about).unwrap_or_default() {
+                    for m in masters.iter_mut() {
+                        if there.links.len() > m.0.links.len() && window(&there.links, &m.0.links) {
+                            if debug {
+                                eprintln!(
+                                    "generated cut: in slice {c:.4} the chain has more links: {:?}",
+                                    there.links
+                                );
+                            }
+                            *m = (there.clone(), c);
+                            grown = true;
+                        }
+                    }
+                }
+            }
+            if grown {
+                plugs = all(&masters);
+            }
         }
+        let plugs = plugs.unwrap_or_default();
         if !plugs.is_empty() {
             made = Some((plugs, kind));
             break;

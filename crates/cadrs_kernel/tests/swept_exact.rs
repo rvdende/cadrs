@@ -463,6 +463,104 @@ fn a_face_gear_hobbed_by_its_worm_has_thirty_spaces_of_four_faces() {
     assert!((volume - 18610.424).abs() < 2e-2, "volume {volume}");
 }
 
+/// The spiroid's tapered worm thread about the line through `at` along x, from x = `from` to
+/// `to`: lead 2π, its pitch radius 6 + x tan 5° at x, its section in the half plane through
+/// the axis a trapezoid between the cones 2.5 inside and outside the pitch cone, carried along
+/// the spiral on the pitch cone by its screw ([`SweepControl::Helix`]).
+fn tapered_thread(k: &mut NativeKernel, at: Point3<f64>, from: f64, to: f64) -> BodyId {
+    use std::f64::consts::{FRAC_PI_2, TAU};
+    let (tan5, tan20) = (5f64.to_radians().tan(), 20f64.to_radians().tan());
+    let pitch = |z: f64| 6.0 + z * tan5;
+    let w = |u: f64| FRAC_PI_2 - u * tan20;
+    let start = -TAU * ((-from / TAU).ceil() + 1.0);
+    let mid = start - FRAC_PI_2;
+    let corner = |u: f64, side: f64| {
+        let z = mid + side * w(u);
+        [pitch(z) + u, z]
+    };
+    let section = [
+        corner(-2.5, -1.0),
+        corner(2.5, -1.0),
+        corner(2.5, 1.0),
+        corner(-2.5, 1.0),
+    ];
+    let profile = Profile::of(Plane::xz(0.0), vec![Loop::polygon(&section)]);
+    let turns = ((to - start) / TAU).ceil() + 1.0;
+    let spiral = Helix::conical(
+        Axis::new(Point3::new(0.0, 0.0, mid), Vector3::z()),
+        pitch(mid),
+        pitch(mid + TAU * turns),
+        TAU * turns,
+        0.0,
+        turns,
+    );
+    let mut spec = SweepSpec::solid(spiral.path());
+    spec.control = SweepControl::Helix(spiral);
+    let thread = k.sweep_with(&profile, &spec).unwrap().first().unwrap();
+    let ends = Profile::of(
+        Plane::square_to(Point3::new(0.0, 0.0, from), Vector3::z()),
+        vec![Loop::circle([0.0, 0.0], 20.0)],
+    );
+    let ends = k
+        .extrude_with(&ends, &ExtrudeSpec::normal_to(&ends, to - from))
+        .unwrap()
+        .first()
+        .unwrap();
+    let thread = k
+        .boolean(BoolOp::Intersect, thread, &[ends])
+        .unwrap()
+        .first()
+        .unwrap();
+    let thread = k
+        .transform_motion(
+            thread,
+            &Motion::rotation(&Axis::new(Point3::origin(), Vector3::y()), FRAC_PI_2),
+        )
+        .unwrap()
+        .first()
+        .unwrap();
+    k.transform(thread, &Transform::translation(at.x, at.y, at.z))
+        .unwrap()
+        .first()
+        .unwrap()
+}
+
+/// brep-bench's spiroid face gear hobbed by its worm: a tapered worm over a ring whose face is
+/// a cone. Toward the ring's inside a tooth space is as the face gear's (a flank's envelope,
+/// the root and the path of the crest's other edge: four faces); toward its outside the other
+/// flank's envelope comes out from under that edge's path, a fifth face. The chain of the
+/// space's outline has that link only where it is within the ring, so the space is made in two
+/// stretches: nine faces a space.
+#[test]
+#[ignore = "slow: about 3 s"]
+fn a_spiroid_face_gear_hobbed_by_its_worm_has_thirty_spaces_of_nine_faces() {
+    let mut k = NativeKernel::new();
+    let quad = [[40.0, -9.0], [52.0, -9.0], [52.0, -1.7], [40.0, -0.3]];
+    let quad = Profile::of(Plane::xz(0.0), vec![Loop::polygon(&quad)]);
+    let ring = k
+        .revolve_with(
+            &quad,
+            &RevolveSpec::solid(Axis::new(Point3::origin(), Vector3::z()), None),
+        )
+        .unwrap()
+        .first()
+        .unwrap();
+    let at = Point3::new(0.0, 30.0, 6.0);
+    let thread = tapered_thread(&mut k, at, 0.0, 52.0);
+    let cut = k
+        .cut_swept(ring, thread, &hobbing(at))
+        .unwrap()
+        .first()
+        .unwrap();
+    let (kinds, volume, faults) = kinds(&k, cut);
+    assert_eq!(kinds.get("bspline"), Some(&270), "{kinds:?}");
+    assert_eq!(kinds.get("cone"), Some(&30), "{kinds:?}");
+    assert_eq!(kinds.get("cylinder"), Some(&2), "{kinds:?}");
+    assert_eq!(kinds.get("plane"), Some(&1), "{kinds:?}");
+    assert!(faults.is_empty(), "{faults:?}");
+    assert!((volume - 19123.8203).abs() < 2e-2, "volume {volume}");
+}
+
 /// A thread swept along its helix is made in pieces, each a quintic through sections given
 /// with their exact first and second derivatives: the pieces lie on the thread's own helicoids
 /// to a hundred-millionth, and where two meet their faces' normals agree (the cubic skins they
