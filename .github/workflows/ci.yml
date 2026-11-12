@@ -145,9 +145,11 @@ jobs:
         with:
           key: web
 
-      # With tools/web/build.sh's features.
+      # With tools/web/build.sh's features: the WebGPU build, then the WebGL2 one.
       - name: Check
-        run: cargo check --locked --target wasm32-unknown-unknown -p cadrs --no-default-features -F gpu
+        run: |
+          cargo check --locked --target wasm32-unknown-unknown -p cadrs --no-default-features -F gpu,webgpu
+          cargo check --locked --target wasm32-unknown-unknown -p cadrs --no-default-features
 
   macos:
     name: Build and test (macOS)
