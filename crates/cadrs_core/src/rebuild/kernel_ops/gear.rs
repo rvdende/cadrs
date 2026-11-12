@@ -5,8 +5,8 @@
 use super::*;
 use cadrs_kernel::naming::{self, BodyNames};
 use cadrs_kernel::{
-    Axis, BodyKind, Curve2, Extent, Kernel, Loop, OpResult, PathCurve, Plane, Profile, Region,
-    SweepControl, SweepLaw, SweepSpec,
+    Axis, BodyKind, Curve2, Extent, Kernel, LoftEnd, LoftSection, LoftSpec, Loop, OpResult,
+    PathCurve, Plane, Profile, Region, SweepControl, SweepLaw, SweepSpec,
 };
 use nalgebra::{Point2, Point3, Unit, Vector3};
 
@@ -132,6 +132,7 @@ fn sweep_parts(s: &Sweep, next: &mut u64) -> (Profile, SweepSpec, SweepLaw, Opti
     let law = SweepLaw {
         twist: s.twist,
         scale: s.scale,
+        spiral: s.spiral,
     };
     let from = Point3::from(s.frame.origin);
     let spec = SweepSpec {
@@ -241,7 +242,70 @@ impl Rebuilder {
                 }
             }
         }
-        let teeth = self.fuse_made(op, "Gear", made)?;
+        let mut teeth = if made.is_empty() {
+            None
+        } else {
+            Some(self.fuse_made(op, "Gear", made)?)
+        };
+        // Tooth spaces lofted through their sections (a face-milled bevel's), gathered into one
+        // body of solids apart.
+        if !plan.lofts.is_empty() {
+            let mut spaces: Vec<(BodyId, BodyNames)> = Vec::with_capacity(plan.lofts.len());
+            let mut failed = None;
+            for l in &plan.lofts {
+                let sections = l
+                    .sections
+                    .iter()
+                    .map(|(f, r)| {
+                        LoftSection::Profile(Profile::new(
+                            plane(f),
+                            kernel_regions(std::slice::from_ref(r), &mut next),
+                        ))
+                    })
+                    .collect();
+                next += 1;
+                let spec = LoftSpec {
+                    body: BodyKind::Solid,
+                    sections,
+                    start: LoftEnd::default(),
+                    end: LoftEnd::default(),
+                    source: next,
+                };
+                match self
+                    .kernel
+                    .loft_with(&spec)
+                    .and_then(|r| self.name_new(state, op, &r))
+                {
+                    Ok(b) => spaces.push(b),
+                    Err(err) => {
+                        failed = Some(format!("Gear failed: {err}"));
+                        break;
+                    }
+                }
+            }
+            let ids: Vec<BodyId> = spaces.iter().map(|(b, _)| *b).collect();
+            let gathered = match failed {
+                Some(err) => Err(err),
+                None => self
+                    .kernel
+                    .compound(&ids)
+                    .and_then(|r| {
+                        let body = r.bodies[0];
+                        let inputs: Vec<(BodyId, &BodyNames)> =
+                            spaces.iter().map(|(b, n)| (*b, n)).collect();
+                        Ok((
+                            body,
+                            naming::name_body(&self.kernel, body, op, &r.history, &inputs)?,
+                        ))
+                    })
+                    .map_err(|err| format!("Gear failed: {err}")),
+            };
+            for b in ids {
+                self.kernel.release(b);
+            }
+            teeth = Some(gathered?);
+        }
+        let teeth = teeth.ok_or("The gear has no teeth")?;
         let geoms = state.geoms.clone();
         // The gear knows the part it cuts, and a gear made whole is a part of its own: neither
         // asks what the new body touches, nor previews what it adds or removes (each a boolean

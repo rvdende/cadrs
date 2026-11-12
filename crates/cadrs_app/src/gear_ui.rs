@@ -6,7 +6,9 @@
 //!   Rack) and the number of teeth that brings the module nearest the one set; the field then
 //!   shows the module the gear has there.
 //! - **Type**, **Teeth**, **Module** (a gear made whole, or a rack), **Pressure angle**.
-//! - **Tooth line** Straight, Helical or Herringbone, with its *Helix angle* and hand.
+//! - **Tooth line** Straight, Helical or Herringbone, with its *Helix angle* and hand. A bevel's
+//!   helical teeth: **Spiral** Face-milled (Gleason) with its *Cutter radius* (0: the cone
+//!   distance at the middle of the face), or Equiangular.
 //! - A gear made whole: its *Face width*, *Bore diameter*, *Rim thickness* (ring), *Pitch angle*
 //!   (bevel), *Length* (rack), *Body thickness* (bevel, rack), then where it is: **X**, **Y**,
 //!   **Z** and its **Axis**.
@@ -16,7 +18,7 @@
 
 use bevy::prelude::*;
 use cadrs_core::document::FaceRef;
-use cadrs_core::gear::{GearAxis, GearFeature, GearType, Target, ToothStyle};
+use cadrs_core::gear::{GearAxis, GearFeature, GearType, SpiralKind, Target, ToothStyle};
 use cadrs_core::{Feature, FeatureKind};
 use cadrs_ui::OptionRow;
 use cadrs_ui::i18n::{tr, tr_with};
@@ -115,12 +117,13 @@ pub(crate) fn name(kind: &FeatureKind) -> Option<&'static str> {
 pub(crate) fn layout(kind: &FeatureKind) -> Option<String> {
     match kind {
         FeatureKind::Gear(x) => Some(format!(
-            "gear {:?} {:?} {} {} {}",
+            "gear {:?} {:?} {} {} {} {:?}",
             x.gear_type,
             x.style,
             x.face.is_some(),
             x.left_hand,
-            x.flip
+            x.flip,
+            x.spiral
         )),
         k => crate::surfacing_ui::layout(k),
     }
@@ -295,6 +298,40 @@ pub(crate) fn body(
                 usize::from(x.left_hand),
                 None,
             );
+            // A bevel's helical teeth: as a face-mill cutter leaves them, or equiangular.
+            if x.gear_type == GearType::Bevel {
+                let spirals = opts(
+                    &SpiralKind::ALL,
+                    |k| {
+                        tr(match k {
+                            SpiralKind::FaceMilled => "model-gear-face-milled",
+                            SpiralKind::Equiangular => "model-gear-equiangular",
+                        })
+                    },
+                    |_| true,
+                );
+                select_row(
+                    b,
+                    t,
+                    "gear-spiral",
+                    &tr("model-gear-spiral"),
+                    Role::GearSpiral,
+                    &spirals,
+                    index_of(&SpiralKind::ALL, &x.spiral),
+                    None,
+                );
+                if x.spiral == SpiralKind::FaceMilled {
+                    number(
+                        b,
+                        t,
+                        "gear-cutter",
+                        &tr("model-gear-cutter-radius"),
+                        Role::GearCutter,
+                        &x.cutter_radius_expr,
+                        None,
+                    );
+                }
+            }
         }
         let mut num = |name: &str, key: &str, role: Role, text: &str| {
             number(b, t, name, &tr(key), role, text, None);
@@ -412,6 +449,7 @@ pub(crate) fn number_text(kind: &FeatureKind, role: Role) -> Option<String> {
             Role::GearY => &x.position_expr[1],
             Role::GearZ => &x.position_expr[2],
             Role::GearRotation => &x.rotation_expr,
+            Role::GearCutter => &x.cutter_radius_expr,
             _ => return None,
         }
         .clone(),
@@ -427,6 +465,7 @@ pub(crate) fn select_index(kind: &FeatureKind, role: Role) -> Option<usize> {
         Role::GearStyle => index_of(&ToothStyle::ALL, &x.style),
         Role::GearHand => usize::from(x.left_hand),
         Role::GearAxis => index_of(&GearAxis::ALL, &x.axis),
+        Role::GearSpiral => index_of(&SpiralKind::ALL, &x.spiral),
         _ => return None,
     })
 }
@@ -446,6 +485,7 @@ pub(crate) fn select(k: &mut FeatureKind, role: Role, i: usize) {
         Role::GearStyle => x.style = ToothStyle::ALL[i.min(ToothStyle::ALL.len() - 1)],
         Role::GearHand => x.left_hand = i == 1,
         Role::GearAxis => x.axis = GearAxis::ALL[i.min(GearAxis::ALL.len() - 1)],
+        Role::GearSpiral => x.spiral = SpiralKind::ALL[i.min(SpiralKind::ALL.len() - 1)],
         _ => {}
     }
 }
@@ -479,6 +519,7 @@ pub(crate) fn is_signed(role: Role) -> bool {
             | Role::GearY
             | Role::GearZ
             | Role::GearRotation
+            | Role::GearCutter
     ) || crate::surfacing_ui::is_signed(role)
 }
 
@@ -510,6 +551,7 @@ pub(crate) fn number_label(role: Role) -> Option<&'static str> {
         Role::GearY => "Y",
         Role::GearZ => "Z",
         Role::GearRotation => "Rotation",
+        Role::GearCutter => "Cutter radius",
         r => return crate::surfacing_ui::number_label(r),
     })
 }
@@ -539,6 +581,7 @@ pub(crate) fn set_number(k: &mut FeatureKind, role: Role, v: f64, expr: String) 
         Role::GearY => (&mut x.position[1], &mut x.position_expr[1]),
         Role::GearZ => (&mut x.position[2], &mut x.position_expr[2]),
         Role::GearRotation => (&mut x.rotation, &mut x.rotation_expr),
+        Role::GearCutter => (&mut x.cutter_radius, &mut x.cutter_radius_expr),
         _ => return,
     };
     *value = v;

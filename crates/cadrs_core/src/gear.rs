@@ -93,6 +93,29 @@ impl ToothStyle {
     }
 }
 
+/// How a bevel gear's helical teeth run along its face.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum SpiralKind {
+    /// As a face-mill cutter leaves them (Gleason's spiral bevel): each tooth space the
+    /// envelope of the cutter's two cones as the gear rolls on the cutter's crown gear, its
+    /// length a circular arc of the cutter's radius.
+    #[default]
+    FaceMilled,
+    /// At the same angle to the pitch cone's lines everywhere (a logarithmic spiral).
+    Equiangular,
+}
+
+impl SpiralKind {
+    pub const ALL: [SpiralKind; 2] = [SpiralKind::FaceMilled, SpiralKind::Equiangular];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SpiralKind::FaceMilled => "Face-milled (Gleason)",
+            SpiralKind::Equiangular => "Equiangular",
+        }
+    }
+}
+
 /// The axis of a gear made whole.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum GearAxis {
@@ -147,7 +170,7 @@ pub struct GearFeature {
     pub pressure_angle_expr: String,
     #[serde(default)]
     pub style: ToothStyle,
-    /// Degrees, at the pitch circle (a bevel's spiral angle at the middle of its face).
+    /// Degrees, at the pitch circle (a bevel's spiral angle, the same all along its teeth).
     pub helix_angle: f64,
     #[serde(default)]
     pub helix_angle_expr: String,
@@ -199,6 +222,15 @@ pub struct GearFeature {
     /// one.
     #[serde(default)]
     pub flip: bool,
+    /// How a bevel gear's helical teeth run.
+    #[serde(default)]
+    pub spiral: SpiralKind,
+    /// A face-milled bevel gear's cutter radius (mm): 0 for the cone distance at the middle of
+    /// its face.
+    #[serde(default)]
+    pub cutter_radius: f64,
+    #[serde(default)]
+    pub cutter_radius_expr: String,
 }
 
 impl Default for GearFeature {
@@ -238,6 +270,9 @@ impl Default for GearFeature {
             rotation: 0.0,
             rotation_expr: deg(0.0),
             flip: false,
+            spiral: SpiralKind::FaceMilled,
+            cutter_radius: 0.0,
+            cutter_radius_expr: mm(0.0),
         }
     }
 }
@@ -644,8 +679,16 @@ enum Flank {
     /// An involute of the circle of radius `base`; `half` is its angle at the base circle.
     Involute { base: f64, half: f64 },
     /// A spherical involute seen from the apex on the plane `h` from it: the base cone's half
-    /// angle `base` (radians), `half` its angle at the base cone.
-    Spherical { h: f64, base: f64, half: f64 },
+    /// angle `base` (radians), `half` its angle at the base cone. `lead`: a spiral tooth's
+    /// turn about the axis, `lead × ln(distance from the apex / cone)`: the same for every
+    /// point of the tooth at one distance from the apex, none at the heel's pitch circle.
+    Spherical {
+        h: f64,
+        base: f64,
+        half: f64,
+        lead: f64,
+        cone: f64,
+    },
 }
 
 fn inv(a: f64) -> f64 {
@@ -681,14 +724,24 @@ impl Flank {
                     half - inv((base / rho).acos())
                 }
             }
-            Flank::Spherical { h, base, half } => half - sph_inv((rho / h).atan(), base),
+            Flank::Spherical { h, base, half, .. } => half - sph_inv((rho / h).atan(), base),
+        }
+    }
+
+    /// How far the tooth is turned about the axis at the radius `rho` (a spiral bevel's).
+    fn lead(&self, rho: f64) -> f64 {
+        match *self {
+            Flank::Spherical { h, lead, cone, .. } if lead != 0.0 => {
+                lead * ((h * h + rho * rho).sqrt() / cone).ln()
+            }
+            _ => 0.0,
         }
     }
 
     /// The flank's point at `rho` of the tooth centred at `centre`, on its side `side` (−1 the
     /// side before the centre going counter-clockwise, +1 the side after).
     fn point(&self, rho: f64, centre: f64, side: f64) -> [f64; 2] {
-        let a = centre + side * self.psi(rho);
+        let a = centre + side * self.psi(rho) + self.lead(rho);
         [rho * a.cos(), rho * a.sin()]
     }
 
@@ -873,7 +926,13 @@ impl Section {
     }
 
     fn foot(&self) -> Foot {
-        let start = self.root.max(self.flank.base());
+        // (A spiral tooth's flank under the base cone is no straight line: the flank's curve
+        // runs from the root.)
+        let start = if self.flank.lead(self.root) != 0.0 || self.flank.lead(self.tip) != 0.0 {
+            self.root
+        } else {
+            self.root.max(self.flank.base())
+        };
         let psi_start = self.flank.psi(start);
         let none = Foot {
             start,
@@ -952,7 +1011,7 @@ impl Section {
                 out.push(Seg::Arc {
                     center: [0.0, 0.0],
                     radius: self.root,
-                    start: c - self.pitch() + foot.psi_root,
+                    start: c - self.pitch() + foot.psi_root + self.flank.lead(self.root),
                     sweep: gap,
                 });
             }
@@ -960,7 +1019,7 @@ impl Section {
             out.push(Seg::Arc {
                 center: [0.0, 0.0],
                 radius: tip,
-                start: c - psi_tip,
+                start: c - psi_tip + self.flank.lead(tip),
                 sweep: 2.0 * psi_tip,
             });
             out.extend(self.flank(&foot, tip, c, 1.0, false));
@@ -1002,7 +1061,7 @@ impl Section {
                         out.push(Seg::Arc {
                             center: [0.0, 0.0],
                             radius: self.root,
-                            start: c + foot.psi_root,
+                            start: c + foot.psi_root + self.flank.lead(self.root),
                             sweep: gap,
                         });
                     }
@@ -1012,7 +1071,7 @@ impl Section {
                 wall.push(Seg::Arc {
                     center: [0.0, 0.0],
                     radius: outer,
-                    start: next - psi_out,
+                    start: next - psi_out + self.flank.lead(outer),
                     sweep: -(self.pitch() - 2.0 * psi_out),
                 });
                 Region2 {
@@ -1084,7 +1143,7 @@ impl Section {
         if a1 - a0 > 1e-9 {
             const N: usize = 6;
             for k in 1..N {
-                let a = a0 + (a1 - a0) * k as f64 / N as f64;
+                let a = a0 + (a1 - a0) * k as f64 / N as f64 + self.flank.lead(self.root);
                 pts.push([self.root * a.cos(), self.root * a.sin()]);
             }
             pts.extend(up);
@@ -1172,6 +1231,9 @@ pub struct Sweep {
     pub twist: f64,
     /// The section's size at the end over its size at the start.
     pub scale: f64,
+    /// The twist runs in proportion to the logarithm of the size (a spiral bevel's teeth), not
+    /// to the distance travelled.
+    pub spiral: bool,
 }
 
 /// A solid the teeth are cut from.
@@ -1198,8 +1260,17 @@ pub struct Plan {
     /// With a blank, or a face picked: the tooth spaces to cut. Else the gear itself, in pieces
     /// that join end to end.
     pub sweeps: Vec<Sweep>,
+    /// More tooth spaces to cut, each lofted through its sections (a face-milled bevel's).
+    pub lofts: Vec<Loft>,
     /// The module the gear came out with (mm).
     pub module: f64,
+}
+
+/// A solid through sections: each a region on its plane, the regions' curves matching one for
+/// one from section to section.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Loft {
+    pub sections: Vec<(Frame, Region2)>,
 }
 
 /// The plan of `x`: on `target` (the face its teeth are cut into), or made whole.
@@ -1283,6 +1354,7 @@ fn cylindrical(
         travel: scale(frame.normal, length),
         twist,
         scale: 1.0,
+        spiral: false,
     };
     if x.style != ToothStyle::Herringbone {
         return vec![piece(frame, regions, width, twist)];
@@ -1393,6 +1465,7 @@ fn spur(x: &GearFeature) -> Result<Plan, &'static str> {
             x.width,
             m * x.teeth as f64 / 2.0,
         ),
+        lofts: Vec::new(),
         module: m,
     })
 }
@@ -1409,6 +1482,7 @@ fn ring(x: &GearFeature) -> Result<Plan, &'static str> {
     Ok(Plan {
         blank: None,
         sweeps: cylindrical(x, own_frame(x), vec![region], x.width, r),
+        lofts: Vec::new(),
         module: m,
     })
 }
@@ -1464,6 +1538,7 @@ fn on_cylinder(x: &GearFeature, t: &Target) -> Result<Plan, &'static str> {
     Ok(Plan {
         blank: None,
         sweeps: cylindrical(x, frame, regions, height, r),
+        lofts: Vec::new(),
         module: m,
     })
 }
@@ -1530,11 +1605,20 @@ fn bevel_spaces(x: &GearFeature, d: &BevelDims, apex: Frame) -> Result<Sweep, &'
     if h2 >= h1 {
         return Err("The gear's face is too narrow");
     }
+    // A spiral tooth turns about the axis as it runs to the apex, by an amount that depends on
+    // the distance from the apex alone: `lead × ln(distance / cone)`, an equiangular spiral,
+    // which crosses the pitch cone's lines at the helix angle everywhere and is none at the
+    // heel's pitch circle (where the rotation sets two gears in mesh). The section holds the
+    // turn each of its points has where it is drawn; the sweep adds the rest, in proportion to
+    // the logarithm of its scale.
+    let lead = -x.beta().tan() / delta.sin();
     let section = Section {
         flank: Flank::Spherical {
             h: h1,
             base,
             half: PI / (2.0 * z) - t.backlash / (m * z) + sph_inv(delta, base),
+            lead,
+            cone,
         },
         teeth: x.teeth,
         root: h1 * root.tan(),
@@ -1542,19 +1626,10 @@ fn bevel_spaces(x: &GearFeature, d: &BevelDims, apex: Frame) -> Result<Sweep, &'
         // No root fillet: swept to the apex it is a face the blank's cones are slow to cut (a
         // third of the gear's time), where the root's own cone and the flanks' planes are not.
         fillet: 0.0,
-        phase: 0.0,
+        phase: x.rotation.to_radians(),
     };
     // A quarter of the addendum past the tips.
     let outer = h1 * (face + 0.25 * (m / cone).atan()).tan();
-    // The spiral: the teeth lean by the helix angle at the middle of the face.
-    let mid = cone * (1.0 + d.kappa) / 2.0;
-    let rate = x.beta().tan() / (mid * delta.sin() * delta.cos());
-    // The rotation is the teeth's at the heel's pitch circle, where two gears are set in mesh:
-    // the section, drawn behind it, is turned back by the twist from there to the heel.
-    let section = Section {
-        phase: x.rotation.to_radians() - (h1 - cone * delta.cos()) * rate,
-        ..section
-    };
     let frame = apex.raised(-h1);
     Ok(Sweep {
         frame,
@@ -1563,9 +1638,352 @@ fn bevel_spaces(x: &GearFeature, d: &BevelDims, apex: Frame) -> Result<Sweep, &'
         // and the root a cone.)
         regions: section.spaces(outer, false),
         travel: scale(frame.normal, h1 - h2),
-        twist: (h1 - h2) * rate,
+        twist: lead * (h2 / h1).ln(),
         scale: h2 / h1,
+        spiral: lead != 0.0,
     })
+}
+
+/// A bevel gear's tooth spaces: swept, or (face-milled spiral teeth) lofted.
+fn bevel_teeth(
+    x: &GearFeature,
+    d: &BevelDims,
+    apex: Frame,
+) -> Result<(Vec<Sweep>, Vec<Loft>), &'static str> {
+    if x.style == ToothStyle::Helical && x.spiral == SpiralKind::FaceMilled {
+        Ok((Vec::new(), face_milled_spaces(x, d, apex)?))
+    } else {
+        Ok((vec![bevel_spaces(x, d, apex)?], Vec::new()))
+    }
+}
+
+/// A face-mill cutter generating a spiral bevel gear's tooth space (Gleason's method, as
+/// Litvin describes it: NASA CR-4259, 1989), without the changes to the pinion's machine
+/// settings that localise a pair's bearing contact.
+///
+/// The cutter's blades turn about its axis, their edges sweeping two cones: the outside
+/// blades' and the inside blades', the pressure angle from the axis. The cutter sits on the
+/// cradle, whose axis is square to the plane the blades' tips sweep; that plane lies along the
+/// gear's root cone. The cradle turns as the gear turns on its own axis, at the ratio that
+/// makes the gear's pitch cone roll on the cradle's (its crown gear). The gear's flanks are the
+/// envelopes of the two cones: at each instant a cone touches its flank along the line where
+/// its normals pass through the pitch line the two roll about.
+///
+/// Fixed axes: x along that pitch line from the apex, z up from the gear's side of the pitch
+/// plane. Lengths in mm, angles in radians.
+struct FaceMill {
+    /// The gear's axis, from the apex toward the gear's back.
+    g: Vec3,
+    /// The cradle's axis, and the plane square to it the blades' tips sweep: `u` along the
+    /// root cone's line under the pitch line, `v` across (u × v = c).
+    c: Vec3,
+    u: Vec3,
+    v: Vec3,
+    /// The gear's own x (at 0 turn): from its axis to the pitch line.
+    x_g: Vec3,
+    /// The cutter's centre, in the tips' plane.
+    centre: Vec3,
+    /// The cutter's radius: to the middle of the slot, at the height of the pitch line's
+    /// middle point over the tips' plane (`level`).
+    radius: f64,
+    /// The slot's width there.
+    slot: f64,
+    level: f64,
+    tan_alpha: f64,
+    /// The gear's turn over the cradle's.
+    ratio: f64,
+    /// The dedendum angle: between the pitch line and the tips' plane.
+    dedendum: f64,
+    /// Where the middle of the slot is on the cutter's circle (radians from u).
+    tau_mid: f64,
+    /// The root cone's half angle.
+    root: f64,
+}
+
+/// `p` turned by `a` about the unit axis `k`.
+fn rot(p: Vec3, k: Vec3, a: f64) -> Vec3 {
+    let (s, c) = a.sin_cos();
+    add(
+        add(scale(p, c), scale(cross(k, p), s)),
+        scale(k, dot(k, p) * (1.0 - c)),
+    )
+}
+
+impl FaceMill {
+    /// `delta` the pitch angle, `dedendum` the dedendum angle, `mean` the cone distance at the
+    /// middle of the face, `beta` the spiral angle there (its sign the hand), `radius` the
+    /// cutter's, `slot` the slot's width at the pitch line's middle point.
+    fn new(
+        delta: f64,
+        dedendum: f64,
+        mean: f64,
+        beta: f64,
+        radius: f64,
+        slot: f64,
+        alpha: f64,
+    ) -> Self {
+        let (sf, cf) = dedendum.sin_cos();
+        let (u, v, c) = ([cf, 0.0, -sf], [0.0, 1.0, 0.0], [sf, 0.0, cf]);
+        // The middle point M of the pitch line, seen in the tips' plane, and the cutter's
+        // centre: the slot's middle circle passes through M at the spiral angle to u.
+        // (The side the cutter's centre is on is the hand: a right-hand tooth turns toward the
+        // toe as the equiangular spiral's does.)
+        let hand = if beta < 0.0 { 1.0 } else { -1.0 };
+        let b = beta.abs();
+        let m = [mean * cf, 0.0];
+        let cc = [m[0] - radius * b.sin(), hand * radius * b.cos()];
+        Self {
+            g: [delta.cos(), 0.0, -delta.sin()],
+            c,
+            u,
+            v,
+            x_g: [delta.sin(), 0.0, delta.cos()],
+            centre: add(scale(u, cc[0]), scale(v, cc[1])),
+            radius,
+            slot,
+            level: mean * sf,
+            tan_alpha: alpha.tan(),
+            ratio: cf / delta.sin(),
+            dedendum,
+            tau_mid: (-hand * b.cos()).atan2(b.sin()),
+            root: delta - dedendum,
+        }
+    }
+
+    /// The flank's point the blade `side` (+1 the outside blades', −1 the inside blades') makes
+    /// with its edge's point at `tau` round the cutter and `w` over the tips' plane: its
+    /// distance from the apex along the gear's axis, its distance from the axis and its angle
+    /// about it from the gear's x.
+    fn point(&self, side: f64, tau: f64, w: f64) -> [f64; 3] {
+        let (st, ct) = tau.sin_cos();
+        let radial = add(scale(self.u, ct), scale(self.v, st));
+        let rho = self.radius + side * (self.slot / 2.0 + (w - self.level) * self.tan_alpha);
+        let r0 = add(add(self.centre, scale(radial, rho)), scale(self.c, w));
+        let n0 = sub(radial, scale(self.c, side * self.tan_alpha));
+        // The cradle's turn at which the cone touches the flank there: the normal through the
+        // point meets the pitch line, (r × n) · x = 0 with both turned about the cradle's axis.
+        let q0 = cross(r0, n0);
+        let cf = self.dedendum.cos();
+        let (a, b) = (cf * dot(q0, self.u), -cf * dot(q0, self.v));
+        let d = -dot(q0, self.c) * self.dedendum.sin();
+        let (base, off) = (b.atan2(a), (d / a.hypot(b)).clamp(-1.0, 1.0).acos());
+        let wrap = |x: f64| (x + PI).rem_euclid(2.0 * PI) - PI;
+        let (p1, p2) = (wrap(base + off), wrap(base - off));
+        let phi = if p1.abs() <= p2.abs() { p1 } else { p2 };
+        // On the cradle at that turn, then as the gear holds it: the gear has turned the other
+        // way by the ratio.
+        let p = rot(rot(r0, self.c, phi), self.g, self.ratio * phi);
+        let zd = dot(p, self.g);
+        let out = sub(p, scale(self.g, zd));
+        [zd, norm(out), dot(p, self.v).atan2(dot(p, self.x_g))]
+    }
+
+    /// The edge's point (`tau`, `w`) whose flank point is `h` from the apex along the axis and
+    /// `rho` from the axis, from `guess` (else from where the cutter's circle crosses there).
+    fn solve(&self, side: f64, h: f64, rho: f64, guess: Option<[f64; 2]>) -> Option<[f64; 2]> {
+        let s = h.hypot(rho);
+        let mut x = match guess {
+            Some(g) => g,
+            None => {
+                // Over the tips' plane by its angle over the root cone; round the cutter where
+                // its circle is that far from the apex, on the side of the slot's middle.
+                let over = rho.atan2(h) - self.root;
+                let (w, d) = (s * over.sin(), s * over.cos());
+                let r = self.radius + side * (self.slot / 2.0 + (w - self.level) * self.tan_alpha);
+                let (cu, cv) = (dot(self.centre, self.u), dot(self.centre, self.v));
+                let far = cu.hypot(cv);
+                let cos = (far * far + r * r - d * d) / (2.0 * far * r);
+                if cos.abs() > 1.0 {
+                    return None;
+                }
+                let toward = cv.atan2(cu) + PI;
+                let wrap = |x: f64| (x + PI).rem_euclid(2.0 * PI) - PI;
+                let (t1, t2) = (toward + cos.acos(), toward - cos.acos());
+                let tau = if wrap(t1 - self.tau_mid).abs() <= wrap(t2 - self.tau_mid).abs() {
+                    t1
+                } else {
+                    t2
+                };
+                [tau, w]
+            }
+        };
+        let miss = |x: [f64; 2]| {
+            let p = self.point(side, x[0], x[1]);
+            [p[0] - h, p[1] - rho]
+        };
+        for _ in 0..40 {
+            let f = miss(x);
+            if f[0].hypot(f[1]) < 1e-11 * s {
+                return Some(x);
+            }
+            let (dt, dw) = (1e-7, 1e-7 * s);
+            let (ft, fw) = (miss([x[0] + dt, x[1]]), miss([x[0], x[1] + dw]));
+            let j = [
+                [(ft[0] - f[0]) / dt, (fw[0] - f[0]) / dw],
+                [(ft[1] - f[1]) / dt, (fw[1] - f[1]) / dw],
+            ];
+            let det = j[0][0] * j[1][1] - j[0][1] * j[1][0];
+            if det.abs() < 1e-300 {
+                return None;
+            }
+            x[0] -= (f[0] * j[1][1] - f[1] * j[0][1]) / det;
+            x[1] -= (f[1] * j[0][0] - f[0] * j[1][0]) / det;
+        }
+        None
+    }
+
+    /// Where round the cutter the edge's point `w` over the tips' plane makes a flank point `h`
+    /// from the apex along the axis, from `guess`.
+    fn tau_at(&self, side: f64, h: f64, w: f64, guess: f64) -> Option<f64> {
+        let mut tau = guess;
+        for _ in 0..40 {
+            let f = self.point(side, tau, w)[0] - h;
+            if f.abs() < 1e-11 * h {
+                return Some(tau);
+            }
+            let dt = 1e-7;
+            let slope = (self.point(side, tau + dt, w)[0] - h - f) / dt;
+            if slope.abs() < 1e-300 {
+                return None;
+            }
+            tau -= f / slope;
+        }
+        None
+    }
+
+    /// The flank the blade `side` makes where the plane `h` from the apex crosses it: from
+    /// where the blade's tip leaves it (the flank's foot: below it the tip cuts the fillet) up
+    /// to the radius `top`, a curve through its points, turned by `turn` about the axis. Also
+    /// its unit tangent at its foot (up the flank).
+    fn flank(&self, side: f64, h: f64, pitch: f64, top: f64, turn: f64) -> Option<(Seg, [f64; 2])> {
+        const N: usize = 12;
+        // From the pitch cone, where the flank is surely the envelope: down the blade to its
+        // tip, and up to the top.
+        let at_pitch = self.solve(side, h, pitch, None)?;
+        let at_top = self.solve(side, h, top, Some(at_pitch))?;
+        let mut tau = at_pitch[0];
+        const DOWN: usize = 6;
+        for k in 1..=DOWN {
+            let w = at_pitch[1] * (1.0 - k as f64 / DOWN as f64);
+            tau = self.tau_at(side, h, w, tau)?;
+        }
+        let place = |tau: f64, w: f64| {
+            let p = self.point(side, tau, w);
+            let a = p[2] + turn;
+            [p[1] * a.cos(), p[1] * a.sin()]
+        };
+        let step = at_top[1] / N as f64;
+        let mut pts = Vec::with_capacity(N + 1);
+        let foot = tau;
+        for k in 0..N {
+            tau = self.tau_at(side, h, step * k as f64, tau)?;
+            pts.push(place(tau, step * k as f64));
+        }
+        pts.push(place(at_top[0], at_top[1]));
+        // The ends' tangents, from points just inside them.
+        let near = 1e-4 * step;
+        let b = place(self.tau_at(side, h, near, foot)?, near);
+        let a = place(
+            self.tau_at(side, h, at_top[1] - near, at_top[0])?,
+            at_top[1] - near,
+        );
+        let dir = |p: [f64; 2], q: [f64; 2]| {
+            let d = [q[0] - p[0], q[1] - p[1]];
+            let l = d[0].hypot(d[1]);
+            [d[0] / l, d[1] / l]
+        };
+        let up = dir(pts[0], b);
+        Some((interpolate(&pts, up, dir(a, pts[N])), up))
+    }
+}
+
+/// A face-milled bevel gear's tooth spaces, each a loft through its sections on planes square
+/// to the axis. `apex` as [`bevel_spaces`] takes it.
+fn face_milled_spaces(
+    x: &GearFeature,
+    d: &BevelDims,
+    apex: Frame,
+) -> Result<Vec<Loft>, &'static str> {
+    let (z, t) = (x.teeth as f64, x.tooth());
+    let (m, delta, cone) = (d.m, d.delta, d.cone);
+    let dedendum = (1.25 * m / cone).atan();
+    let face = delta + (m / cone).atan();
+    let root = delta - dedendum;
+    if face > 84f64.to_radians() {
+        return Err("The gear's face cone is too flat: lower the pitch angle or add teeth");
+    }
+    if root <= 0.5f64.to_radians() {
+        return Err("The gear has too few teeth for its pitch angle");
+    }
+    let h1 = cone * delta.cos() + 1.25 * m * delta.sin() + 0.5 * m;
+    let h2 = (d.kappa * (cone * delta.cos() - m * delta.sin()) - 0.5 * m).max(0.08 * h1);
+    if h2 >= h1 {
+        return Err("The gear's face is too narrow");
+    }
+    // The cutter: its radius the cone distance at the middle of the face unless one is given;
+    // its slot half the normal pitch there.
+    let mean = cone * (1.0 + d.kappa) / 2.0;
+    let beta = x.beta();
+    let radius = if x.cutter_radius > 0.0 {
+        x.cutter_radius
+    } else {
+        mean
+    };
+    if radius < 0.55 * (cone - d.kappa * cone) / beta.abs().cos().max(0.2) {
+        return Err("The cutter is too small to cross the gear's face");
+    }
+    let slot = PI * m * (mean / cone) * beta.cos() / 2.0 + t.backlash;
+    let mill = FaceMill::new(delta, dedendum, mean, beta, radius, slot, t.alpha);
+    // The slot's middle is on the gear's x at the middle of the face: turned half a pitch, a
+    // tooth is there, and by the rotation.
+    let turn = x.rotation.to_radians() + PI / z;
+    let outer = (face + 0.25 * (m / cone).atan()).tan();
+    const SECTIONS: usize = 7;
+    let mut first: Vec<(Frame, Region2)> = Vec::with_capacity(SECTIONS);
+    let unfit = "The cutter doesn't reach across the gear's face: change its radius";
+    for k in 0..SECTIONS {
+        let h = h1 + (h2 - h1) * k as f64 / (SECTIONS - 1) as f64;
+        let (lo, hi) = (h * root.tan(), h * outer);
+        // Up the outside blades' flank, round outside the tips, down the inside blades', and
+        // the bottom: a curve from one flank's foot to the other's that leaves them along
+        // their lines and touches the root cone between (the fillet the blades' tips cut, near
+        // enough).
+        let (up, t_up) = mill.flank(1.0, h, h * delta.tan(), hi, turn).ok_or(unfit)?;
+        let (mut down, t_down) = mill
+            .flank(-1.0, h, h * delta.tan(), hi, turn)
+            .ok_or(unfit)?;
+        reverse(&mut down);
+        let angle = |p: [f64; 2]| p[1].atan2(p[0]);
+        let wrap = |a: f64| (a + PI).rem_euclid(2.0 * PI) - PI;
+        let ((a0, a1), (b0, b1)) = (up.ends(), down.ends());
+        let across = Seg::Arc {
+            center: [0.0, 0.0],
+            radius: hi,
+            start: angle(a1),
+            sweep: wrap(angle(b0) - angle(a1)),
+        };
+        let mid = angle(b1) + wrap(angle(a0) - angle(b1)) / 2.0;
+        let floor = interpolate(
+            &[b1, [lo * mid.cos(), lo * mid.sin()], a0],
+            [-t_down[0], -t_down[1]],
+            t_up,
+        );
+        first.push((
+            apex.raised(-h),
+            Region2 {
+                outer: vec![up, across, down, floor],
+                holes: Vec::new(),
+            },
+        ));
+    }
+    Ok((0..x.teeth)
+        .map(|i| Loft {
+            sections: first
+                .iter()
+                .map(|(f, r)| (*f, rotate_region(r, i as f64 * 2.0 * PI / z)))
+                .collect(),
+        })
+        .collect())
 }
 
 fn bevel(x: &GearFeature) -> Result<Plan, &'static str> {
@@ -1605,12 +2023,14 @@ fn bevel(x: &GearFeature) -> Result<Plan, &'static str> {
         normal: scale(own.y(), -1.0),
     };
     let apex = own.raised(d.back);
+    let (sweeps, lofts) = bevel_teeth(x, &d, apex)?;
     Ok(Plan {
         blank: Some(Blank::Revolve {
             frame: revolve,
             polygon,
         }),
-        sweeps: vec![bevel_spaces(x, &d, apex)?],
+        sweeps,
+        lofts,
         module: m,
     })
 }
@@ -1642,9 +2062,11 @@ fn on_cone(x: &GearFeature, t: &Target) -> Result<Plan, &'static str> {
     };
     // Its normal from the gear toward the apex and on.
     let frame = frame_about(apex, scale(dir, -1.0));
+    let (sweeps, lofts) = bevel_teeth(x, &d, frame)?;
     Ok(Plan {
         blank: None,
-        sweeps: vec![bevel_spaces(x, &d, frame)?],
+        sweeps,
+        lofts,
         module: m,
     })
 }
@@ -1703,6 +2125,7 @@ fn rack_sweeps(
             travel: add(scale(f.normal, across), scale(f.x, across * lean)),
             twist: 0.0,
             scale: 1.0,
+            spiral: false,
         }
     };
     if x.style != ToothStyle::Herringbone {
@@ -1724,6 +2147,7 @@ fn rack(x: &GearFeature) -> Result<Plan, &'static str> {
         }),
         // Drawn past the tips, so the cut leaves none of the bar's top between the teeth.
         sweeps: rack_sweeps(x, own, -l, l, x.width, top + 0.25 * m),
+        lofts: Vec::new(),
         module: m,
     })
 }
@@ -1761,6 +2185,7 @@ fn on_plane(x: &GearFeature, t: &Target) -> Result<Plan, &'static str> {
     Ok(Plan {
         blank: None,
         sweeps: rack_sweeps(x, frame, 0.0, length, width, 1.25 * m),
+        lofts: Vec::new(),
         module: m,
     })
 }
@@ -2004,6 +2429,70 @@ mod tests {
         let d = pitch_angle_of_face(45f64.to_radians(), 20.0).unwrap();
         assert!((d + (2.0 * d.sin() / 20.0).atan() - 45f64.to_radians()).abs() < 1e-12);
         assert!(d < 45f64.to_radians());
+    }
+
+    #[test]
+    fn a_face_mills_flank_touches_its_cone_on_the_pitch_line() {
+        // 40 teeth of module 2 at 68.2°, 35° spiral, the cutter's radius the mean cone distance.
+        let (delta, cone) = (68.2f64.to_radians(), 43.08);
+        let (dedendum, mean) = ((2.5f64 / cone).atan(), cone - 6.0);
+        let mill = FaceMill::new(delta, dedendum, mean, 35f64.to_radians(), mean, 2.2, 0.349);
+        // The middle of the slot at the pitch line's middle point: either blade's flank is half
+        // the slot from it there, a point on the gear's pitch cone near its x.
+        for side in [1.0, -1.0] {
+            let p = mill.point(side, mill.tau_mid, mill.level);
+            let (s, polar) = (p[0].hypot(p[1]), p[1].atan2(p[0]));
+            assert!((s - mean).abs() < 0.4 * 2.2, "{s} vs {mean}");
+            assert!((polar - delta).abs() < 2e-2, "{polar} vs {delta}");
+            assert!(
+                (p[2] * p[1]).abs() < 0.75 * 2.2,
+                "{} off the gear's x",
+                p[2] * p[1]
+            );
+        }
+        // A point of the flank found again from where it is.
+        let p = mill.point(1.0, mill.tau_mid + 0.05, mill.level + 0.7);
+        let x = mill
+            .solve(1.0, p[0], p[1], None)
+            .expect("the point is found");
+        let q = mill.point(1.0, x[0], x[1]);
+        assert!((q[0] - p[0]).abs() < 1e-8 && (q[1] - p[1]).abs() < 1e-8);
+        assert!((q[2] - p[2]).abs() < 1e-8, "{} vs {}", q[2], p[2]);
+    }
+
+    #[test]
+    fn a_face_milled_bevel_has_a_loft_a_space() {
+        let x = GearFeature {
+            gear_type: GearType::Bevel,
+            style: ToothStyle::Helical,
+            helix_angle: 35.0,
+            ..Default::default()
+        };
+        let p = plan(&x, None).unwrap();
+        assert!(p.sweeps.is_empty());
+        assert_eq!(p.lofts.len(), 20);
+        for (_, r) in &p.lofts[0].sections {
+            closed(&r.outer);
+            assert_eq!(r.outer.len(), 4);
+        }
+        // Both spirals lean the same way for the same hand: toward the toe the slot has
+        // turned the way the equiangular spiral has.
+        let slot = |s: &(Frame, Region2)| {
+            let (a, b) = (s.1.outer[0].ends().0, s.1.outer[2].ends().1);
+            ((a[1] + b[1]) / 2.0).atan2((a[0] + b[0]) / 2.0)
+        };
+        let l = &p.lofts[0].sections;
+        let leaned = slot(&l[l.len() - 1]) - slot(&l[0]);
+        let y = GearFeature {
+            spiral: SpiralKind::Equiangular,
+            ..x
+        };
+        let q = plan(&y, None).unwrap();
+        assert!(
+            q.sweeps[0].twist * leaned > 0.0,
+            "{} {leaned}",
+            q.sweeps[0].twist
+        );
     }
 
     #[test]

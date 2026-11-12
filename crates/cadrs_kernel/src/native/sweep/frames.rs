@@ -778,9 +778,15 @@ impl PathSweep {
         let p = a.point(&self.pts[0]);
         let s = s.clamp(0.0, 1.0);
         let k = 1.0 + (self.law.scale - 1.0) * s;
+        // (A spiral law's twist: in proportion to the logarithm of the size.)
+        let turned = if self.law.spiral && self.law.scale != 1.0 {
+            k.ln() / self.law.scale.ln()
+        } else {
+            s
+        };
         let turn = nalgebra::Rotation3::from_axis_angle(
             &nalgebra::Unit::new_normalize(self.dir(s)),
-            self.law.twist * s,
+            self.law.twist * turned,
         )
         .into_inner();
         let kr = turn * k;

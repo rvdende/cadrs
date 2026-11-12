@@ -1,7 +1,8 @@
 //! Gears (issue #179): a Part Studio of the Gear feature's kinds, laid out three by three.
 //!
 //! - Back row: a straight bevel gear, a spiral bevel gear, and a spiral bevel gear and pinion
-//!   in mesh on shafts at right angles (40 and 16 teeth, their apexes at one point).
+//!   in mesh on shafts at right angles (40 and 16 teeth, their apexes at one point). The
+//!   spiral ones are face-milled (Gleason's).
 //! - Middle row: a helical gear with a hub and lightening holes (the Gear, then ordinary
 //!   sketches and extrudes), a planetary set (a 60-tooth ring, an 18-tooth sun and three
 //!   21-tooth planets, in mesh), and a herringbone ring gear.
@@ -163,6 +164,11 @@ pub fn gears() -> Vec<(FeatureId, GearFeature)> {
     let reach = pinion.apex_height().unwrap_or(0.0);
     pinion.position = [p - reach, p, apex];
     pinion.position_expr = pinion.position.map(mm);
+    // Face-milled teeth (the default spiral), at Gleason's usual 35°.
+    for g in [&mut big, &mut pinion] {
+        g.helix_angle = 35.0;
+        g.helix_angle_expr = deg(35.0);
+    }
     out.push((id(0x52), big));
     out.push((id(0x53), pinion));
     out

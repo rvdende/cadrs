@@ -386,6 +386,12 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
             s("Y", ey, py, L);
             s("Z", ez, pz, L);
             s("Rotation", &mut x.rotation_expr, &mut x.rotation, A);
+            s(
+                "Cutter radius",
+                &mut x.cutter_radius_expr,
+                &mut x.cutter_radius,
+                L,
+            );
         }
         FeatureKind::Thread(x) => {
             s("Length", &mut x.length_expr, &mut x.length, L);

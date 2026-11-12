@@ -2429,6 +2429,14 @@ model-gear-backlash = Backlash
 model-gear-axis = Axis
 # A checkbox: a rack's teeth are spaced along the face's short side.
 model-gear-across = Teeth across the face
+# How a bevel gear's spiral teeth run along its face.
+model-gear-spiral = Spiral
+# A spiral: as a face-mill cutter leaves the teeth (Gleason's spiral bevel gears).
+model-gear-face-milled = Face-milled (Gleason)
+# A spiral: at the same angle to the cone's lines everywhere.
+model-gear-equiangular = Equiangular
+# The radius of the face-mill cutter that makes a spiral bevel gear's teeth; 0 picks one.
+model-gear-cutter-radius = Cutter radius (0: auto)
 
 ## crates/cadrs_app/src/thread_ui.rs
 # A thread's handedness.

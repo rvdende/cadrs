@@ -359,12 +359,18 @@ fn teeth_cut_into_a_hole_make_a_ring_gear() {
 
 #[test]
 fn a_bevel_gear_has_its_teeth() {
-    for style in [ToothStyle::Straight, ToothStyle::Helical] {
+    use cadrs_core::gear::SpiralKind;
+    for (style, spiral) in [
+        (ToothStyle::Straight, SpiralKind::Equiangular),
+        (ToothStyle::Helical, SpiralKind::Equiangular),
+        (ToothStyle::Helical, SpiralKind::FaceMilled),
+    ] {
         let mut st = Studio::new();
         let x = GearFeature {
             gear_type: GearType::Bevel,
             style,
-            helix_angle: 30.0,
+            spiral,
+            helix_angle: 35.0,
             ..Default::default()
         };
         let apex = x.apex_height().unwrap();
