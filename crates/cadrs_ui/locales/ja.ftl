@@ -1751,7 +1751,8 @@ model-gear-face-milled = 正面フライス（グリーソン）
 model-gear-equiangular = 等角
 model-gear-member = 歯切り
 model-gear-member-gear = 大歯車
-model-gear-member-pinion = ピニオン（相手の歯車に合わせる）
+model-gear-member-pinion = ピニオン（局部接触）
+model-gear-member-conjugate = ピニオン（共役）
 model-gear-cutter-radius = カッタ半径（0：自動）
 
 ## crates/cadrs_app/src/thread_ui.rs

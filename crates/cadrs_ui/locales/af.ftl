@@ -1751,7 +1751,8 @@ model-gear-face-milled = Kopgefrees (Gleason)
 model-gear-equiangular = Gelykhoekig
 model-gear-member = Sny as
 model-gear-member-gear = Rat
-model-gear-member-pinion = Rondsel (pas by sy rat)
+model-gear-member-pinion = Rondsel (gelokaliseerde kontak)
+model-gear-member-conjugate = Rondsel (gekonjugeer)
 model-gear-cutter-radius = Freesradius (0: outo)
 
 ## crates/cadrs_app/src/thread_ui.rs

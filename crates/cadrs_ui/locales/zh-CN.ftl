@@ -1751,7 +1751,8 @@ model-gear-face-milled = 端面铣削（格里森）
 model-gear-equiangular = 等角
 model-gear-member = 切制为
 model-gear-member-gear = 大齿轮
-model-gear-member-pinion = 小齿轮（与其大齿轮相配）
+model-gear-member-pinion = 小齿轮（局部接触）
+model-gear-member-conjugate = 小齿轮（共轭）
 model-gear-cutter-radius = 刀盘半径（0：自动）
 
 ## crates/cadrs_app/src/thread_ui.rs

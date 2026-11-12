@@ -1751,7 +1751,8 @@ model-gear-face-milled = Messerkopfgefräst (Gleason)
 model-gear-equiangular = Gleichwinklig
 model-gear-member = Schneiden als
 model-gear-member-gear = Rad
-model-gear-member-pinion = Ritzel (passend zu seinem Rad)
+model-gear-member-pinion = Ritzel (lokalisiertes Tragbild)
+model-gear-member-conjugate = Ritzel (konjugiert)
 model-gear-cutter-radius = Messerkopfradius (0: automatisch)
 
 ## crates/cadrs_app/src/thread_ui.rs

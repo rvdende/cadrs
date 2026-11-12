@@ -803,3 +803,33 @@ fn the_bevel_pair_meshes_without_cutting_into_itself() {
         );
     }
 }
+
+/// The gears sample's pinion alone, cut with localised contact (its own machines) and as the
+/// conjugate of its gear: one solid each, nearly the same (the localised one's teeth are
+/// eased off toward their ends by a tenth of a millimetre or two).
+#[test]
+fn a_face_milled_pinion_builds_with_localised_or_conjugate_contact() {
+    use cadrs_core::gear::BevelMember;
+    let sample = cadrs_core::samples::gears::gears()
+        .into_iter()
+        .map(|(_, g)| g)
+        .find(|g| g.member == BevelMember::Pinion)
+        .unwrap();
+    let volumes: Vec<f64> = [BevelMember::Pinion, BevelMember::ConjugatePinion]
+        .into_iter()
+        .map(|member| {
+            let mut st = Studio::new();
+            let b = gear(
+                &mut st,
+                GearFeature {
+                    member,
+                    ..sample.clone()
+                },
+            );
+            assert_eq!(b.parts.len(), 1, "{member:?}");
+            volume(&b.parts[0])
+        })
+        .collect();
+    assert!(volumes[0] < volumes[1], "{volumes:?}");
+    assert!(close(volumes[0], volumes[1], 0.01), "{volumes:?}");
+}

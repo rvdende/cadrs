@@ -2439,8 +2439,12 @@ model-gear-equiangular = Equiangular
 model-gear-member = Cut as
 # The gear of a pair: the cutter cuts both sides of a tooth space at once.
 model-gear-member-gear = Gear
-# The pinion of a pair: cut to match its gear.
-model-gear-member-pinion = Pinion (matches its gear)
+# The pinion of a pair, cut to run with its gear with localised bearing contact: its
+# teeth eased off toward their ends so the pair meets in a patch that crosses the tooth
+# (machine settings by Litvin's synthesis).
+model-gear-member-pinion = Pinion (localised contact)
+# The pinion of a pair, cut to match its gear exactly: the two meet along whole lines.
+model-gear-member-conjugate = Pinion (conjugate)
 # The radius of the face-mill cutter that makes a spiral bevel gear's teeth; 0 picks one.
 model-gear-cutter-radius = Cutter radius (0: auto)
 

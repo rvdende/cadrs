@@ -1751,7 +1751,8 @@ model-gear-face-milled = Торцовая фреза (Глисон)
 model-gear-equiangular = Равноугольная
 model-gear-member = Нарезать как
 model-gear-member-gear = Колесо
-model-gear-member-pinion = Шестерня (под своё колесо)
+model-gear-member-pinion = Шестерня (локализованный контакт)
+model-gear-member-conjugate = Шестерня (сопряжённая)
 model-gear-cutter-radius = Радиус фрезы (0: авто)
 
 ## crates/cadrs_app/src/thread_ui.rs

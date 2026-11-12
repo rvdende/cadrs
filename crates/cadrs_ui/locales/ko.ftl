@@ -1751,7 +1751,8 @@ model-gear-face-milled = 페이스 밀링 (글리슨)
 model-gear-equiangular = 등각
 model-gear-member = 절삭 방식
 model-gear-member-gear = 기어
-model-gear-member-pinion = 피니언 (짝 기어에 맞춤)
+model-gear-member-pinion = 피니언 (국부 접촉)
+model-gear-member-conjugate = 피니언 (공액)
 model-gear-cutter-radius = 커터 반지름 (0: 자동)
 
 ## crates/cadrs_app/src/thread_ui.rs

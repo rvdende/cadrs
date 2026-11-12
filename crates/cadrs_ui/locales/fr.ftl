@@ -1751,7 +1751,8 @@ model-gear-face-milled = Taillée à la fraise (Gleason)
 model-gear-equiangular = Équiangle
 model-gear-member = Tailler comme
 model-gear-member-gear = Roue
-model-gear-member-pinion = Pignon (assorti à sa roue)
+model-gear-member-pinion = Pignon (portée localisée)
+model-gear-member-conjugate = Pignon (conjugué)
 model-gear-cutter-radius = Rayon de fraise (0 : auto)
 
 ## crates/cadrs_app/src/thread_ui.rs

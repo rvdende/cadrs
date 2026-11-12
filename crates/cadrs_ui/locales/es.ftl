@@ -1751,7 +1751,8 @@ model-gear-face-milled = Fresado frontal (Gleason)
 model-gear-equiangular = Equiangular
 model-gear-member = Tallar como
 model-gear-member-gear = Rueda
-model-gear-member-pinion = Piñón (a juego con su rueda)
+model-gear-member-pinion = Piñón (contacto localizado)
+model-gear-member-conjugate = Piñón (conjugado)
 model-gear-cutter-radius = Radio de la fresa (0: auto)
 
 ## crates/cadrs_app/src/thread_ui.rs

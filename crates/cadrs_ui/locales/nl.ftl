@@ -1751,7 +1751,8 @@ model-gear-face-milled = Kopgefreesd (Gleason)
 model-gear-equiangular = Gelijkhoekig
 model-gear-member = Snijden als
 model-gear-member-gear = Wiel
-model-gear-member-pinion = Rondsel (past bij zijn wiel)
+model-gear-member-pinion = Rondsel (gelokaliseerd contact)
+model-gear-member-conjugate = Rondsel (geconjugeerd)
 model-gear-cutter-radius = Freesradius (0: auto)
 
 ## crates/cadrs_app/src/thread_ui.rs

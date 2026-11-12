@@ -26,6 +26,11 @@
 //!   apex. Its tooth spaces are drawn where they cross a plane square to the axis (the sphere's
 //!   points seen from the apex) and swept toward the apex, shrinking to it; spiral teeth twist
 //!   as they go. They are cut from the blank.
+//! - A face-milled spiral bevel gear's tooth spaces are what Gleason's face-mill cutter
+//!   leaves on its generating machine ([`FaceMill`], checked against NASA CR-4259's equations
+//!   of meshing), lofted through sections square to the axis. The pinion of a pair is cut on
+//!   machines of its own that localise the pair's bearing contact ([`litvin`]: Litvin's
+//!   synthesis), or as the gear's exact conjugate.
 //! - A rack's tooth spaces are trapezoids, extruded across it (at the helix angle).
 
 use serde::{Deserialize, Serialize};
@@ -35,6 +40,8 @@ use crate::document::FaceRef;
 use crate::ids::FeatureId;
 use crate::solid::Solid;
 use cadrs_sketch::Vec3;
+
+mod litvin;
 
 /// What the teeth are on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -122,18 +129,29 @@ pub enum BevelMember {
     /// Cut by the cutter itself, both sides of a tooth space at once.
     #[default]
     Gear,
-    /// Cut to match a gear: its teeth are what that gear's cutter, rolling with it too, would
-    /// leave, so the two are conjugate.
+    /// Cut to run with a gear, with localised bearing contact: each side of its teeth on a
+    /// machine of its own (Litvin's synthesis, NASA CR-4259), so the pair meets in a contact
+    /// ellipse that crosses the tooth, with a parabolic transmission error that absorbs
+    /// misalignment. A shaft angle of 90° (the gear's pitch angle is 90° less the pinion's).
     Pinion,
+    /// Cut to match a gear exactly: its teeth are what that gear's cutter, rolling with it
+    /// too, would leave, so the two are conjugate and meet along lines (any misalignment
+    /// takes the contact to an edge).
+    ConjugatePinion,
 }
 
 impl BevelMember {
-    pub const ALL: [BevelMember; 2] = [BevelMember::Gear, BevelMember::Pinion];
+    pub const ALL: [BevelMember; 3] = [
+        BevelMember::Gear,
+        BevelMember::Pinion,
+        BevelMember::ConjugatePinion,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             BevelMember::Gear => "Gear",
             BevelMember::Pinion => "Pinion",
+            BevelMember::ConjugatePinion => "Conjugate pinion",
         }
     }
 }
@@ -1684,20 +1702,30 @@ fn bevel_teeth(
 }
 
 /// A face-mill cutter generating a spiral bevel gear's tooth space (Gleason's method, as
-/// Litvin describes it: NASA CR-4259, 1989), without the changes to the pinion's machine
-/// settings that localise a pair's bearing contact.
+/// Litvin describes it: NASA CR-4259, 1989).
 ///
 /// The cutter's blades turn about its axis, their edges sweeping two cones: the outside
 /// blades' and the inside blades', the pressure angle from the axis. The cutter sits on the
 /// cradle, whose axis is square to the plane the blades' tips sweep; that plane lies along the
-/// gear's root cone. The cradle turns as the gear turns on its own axis, at the ratio that
-/// makes the gear's pitch cone roll on the cradle's (its crown gear). The gear's flanks are the
-/// envelopes of the two cones: at each instant a cone touches its flank along the line where
-/// its normals pass through the pitch line the two roll about.
+/// gear's root cone. The cradle turns as the gear turns on its own axis, at the ratio of roll.
+/// The gear's flanks are the envelopes of the two cones.
+///
+/// [`FaceMill::new`] is the gear's machine (and its conjugate mate's): the cradle's axis
+/// through the apex, and the ratio the one that makes the gear's pitch cone roll on the
+/// cradle's (its crown gear), so at each instant a cone touches its flank along the line where
+/// its normals pass through the pitch line the two roll about. [`FaceMill::machine`] is any
+/// machine of the report's (its section 2.3): the cradle's axis offset from the apex (the
+/// machining offset and the sliding base) and any ratio of roll, as a pinion is cut whose
+/// bearing contact is localised ([`litvin`]).
 ///
 /// Fixed axes: x along that pitch line from the apex, z up from the gear's side of the pitch
 /// plane. Lengths in mm, angles in radians.
 struct FaceMill {
+    /// Where the cradle's axis crosses the tips' plane (the machine's centre): the apex,
+    /// unless the machine is offset.
+    hub: Vec3,
+    /// The width the flank's points are traced over (the slot's, or a pitch's half).
+    room: f64,
     /// The gear's axis, from the apex toward the gear's back.
     g: Vec3,
     /// The cradle's axis, and the plane square to it the blades' tips sweep: `u` along the
@@ -1767,6 +1795,8 @@ impl FaceMill {
         let cc = [m[0] - radius * b.sin(), hand * radius * b.cos()];
         let under = if mate { -1.0 } else { 1.0 };
         Self {
+            hub: [0.0; 3],
+            room: slot,
             g: [delta.cos(), 0.0, -under * delta.sin()],
             c,
             u,
@@ -1785,6 +1815,60 @@ impl FaceMill {
         }
     }
 
+    /// The machine of the report's section 2.3 (its (2.21)–(2.26)), for one side of a member
+    /// whose pitch angle is `mu` and dedendum angle `dedendum`: the radial setting `radial`
+    /// and cradle angle `q` place the cutter, `offset` (E_m) and `base` (L_m) the cradle's
+    /// axis, `roll` is the cradle's turn over the work's (m_CW), `hand` +1 for a left-hand
+    /// member (the report's upper signs), −1 a right-hand one. The cutter's blade, of tip
+    /// radius `tip` and angle `psi` from its axis (acute an inside blade, obtuse an outside
+    /// one), is side +1. `room`: the width the flank's points are traced over.
+    #[allow(clippy::too_many_arguments)]
+    fn machine(
+        mu: f64,
+        dedendum: f64,
+        radial: f64,
+        q: f64,
+        offset: f64,
+        base: f64,
+        roll: f64,
+        hand: f64,
+        tip: f64,
+        psi: f64,
+        room: f64,
+    ) -> Self {
+        let (sf, cf) = dedendum.sin_cos();
+        let (u, v, c) = ([cf, 0.0, -sf], [0.0, 1.0, 0.0], [sf, 0.0, cf]);
+        // The report's frames S_p (Z_p the pitch line, X_p square to the pitch plane, away
+        // from the work) are these (x, −y, z) as (Z_p, Y_p, X_p); S_m's Y_m is −v and Z_m u.
+        let hub = [base * cf, -hand * offset, -base * sf];
+        let centre = add(
+            hub,
+            add(
+                scale(u, radial * q.cos()),
+                scale(v, hand * radial * q.sin()),
+            ),
+        );
+        Self {
+            hub,
+            room,
+            g: [mu.cos(), 0.0, -mu.sin()],
+            c,
+            u,
+            v,
+            x_g: [mu.sin(), 0.0, mu.cos()],
+            centre,
+            radius: tip,
+            slot: 0.0,
+            level: 0.0,
+            tan_alpha: -psi.tan(),
+            ratio: 1.0 / roll,
+            dedendum,
+            tau_mid: (-dot(centre, v)).atan2(-dot(centre, u)),
+            delta: mu,
+            under: 1.0,
+        }
+    }
+
     /// The flank's point the blade `side` (+1 the outside blades', −1 the inside blades') makes
     /// with its edge's point at `tau` round the cutter and `w` over the tips' plane: its
     /// distance from the apex along the gear's axis, its distance from the axis and its angle
@@ -1795,19 +1879,32 @@ impl FaceMill {
         let rho = self.radius + side * (self.slot / 2.0 + (w - self.level) * self.tan_alpha);
         let r0 = add(add(self.centre, scale(radial, rho)), scale(self.c, w));
         let n0 = sub(radial, scale(self.c, side * self.tan_alpha));
-        // The cradle's turn at which the cone touches the flank there: the normal through the
-        // point meets the pitch line, (r × n) · x = 0 with both turned about the cradle's axis.
-        let q0 = cross(r0, n0);
-        let cf = self.dedendum.cos();
-        let (a, b) = (cf * dot(q0, self.u), -cf * dot(q0, self.v));
-        let d = -dot(q0, self.c) * self.dedendum.sin();
+        // The cradle's turn φ at which the cone touches the flank there (the equation of
+        // meshing, the report's (2.27)): with the point r and its normal n turned by φ about
+        // the cradle's axis (through the hub), and the gear turned by k φ about its own
+        // (through the apex), the point moves along the flank, n · (k g × r + c × (r − hub))
+        // = 0. Each term is a cos φ + b sin φ + c, so φ has a closed form. (With the hub at
+        // the apex and the crown gear's ratio, k g + c lies along the pitch line: the normal
+        // through the point meets it.)
+        let k = self.under * self.ratio;
+        let arm = sub(r0, self.hub);
+        let q0 = cross(arm, n0);
+        // e · R(φ) w = (e·c)(c·w) + cos φ (e·w − (e·c)(c·w)) + sin φ e·(c × w).
+        let terms = |e: Vec3, w: Vec3| {
+            let along = dot(e, self.c) * dot(self.c, w);
+            [along, dot(e, w) - along, dot(e, cross(self.c, w))]
+        };
+        // g · (r × n) = (g × hub) · R n0 + g · R (arm × n0); c · (R arm × R n0) = c · q0.
+        let (t1, t2) = (terms(cross(self.g, self.hub), n0), terms(self.g, q0));
+        let d = -(k * (t1[0] + t2[0]) + dot(self.c, q0));
+        let (a, b) = (k * (t1[1] + t2[1]), k * (t1[2] + t2[2]));
         let (base, off) = (b.atan2(a), (d / a.hypot(b)).clamp(-1.0, 1.0).acos());
         let wrap = |x: f64| (x + PI).rem_euclid(2.0 * PI) - PI;
         let (p1, p2) = (wrap(base + off), wrap(base - off));
         let phi = if p1.abs() <= p2.abs() { p1 } else { p2 };
         // On the cradle at that turn, then as the gear holds it: the gear has turned the other
         // way by the ratio (its mate, over the pitch plane, the way the cradle turns).
-        let p = rot(rot(r0, self.c, phi), self.g, self.under * self.ratio * phi);
+        let p = rot(add(self.hub, rot(arm, self.c, phi)), self.g, k * phi);
         let zd = dot(p, self.g);
         let out = sub(p, scale(self.g, zd));
         [
@@ -1818,34 +1915,61 @@ impl FaceMill {
     }
 
     /// The edge's point (`tau`, `w`) whose flank point is `h` from the apex along the axis and
-    /// `rho` from the axis, from `guess` (else from where the cutter's circle crosses there).
+    /// `rho` from the axis, from `guess` (else from where the cutter's circle crosses there,
+    /// else from the pitch cone in steps).
     fn solve(&self, side: f64, h: f64, rho: f64, guess: Option<[f64; 2]>) -> Option<[f64; 2]> {
+        if let Some(g) = guess {
+            return self.newton(side, h, rho, g);
+        }
+        if let Some(x) = self.circle_start(side, h, rho) {
+            return Some(x);
+        }
+        // (The guess is a crown gear's: off for a machine set off the apex, near the roots.)
+        let pitch = h * self.delta.tan();
+        let mut x = self.circle_start(side, h, pitch)?;
+        const STEPS: usize = 8;
+        for k in 1..=STEPS {
+            let r = pitch + (rho - pitch) * k as f64 / STEPS as f64;
+            x = self.newton(side, h, r, x)?;
+        }
+        Some(x)
+    }
+
+    /// [`FaceMill::solve`] from where the cutter's circle crosses there.
+    fn circle_start(&self, side: f64, h: f64, rho: f64) -> Option<[f64; 2]> {
         let s = h.hypot(rho);
-        let mut x = match guess {
-            Some(g) => g,
-            None => {
-                // Over the tips' plane by its angle over the root cone; round the cutter where
-                // its circle is that far from the apex, on the side of the slot's middle.
-                let over = self.dedendum + self.under * (rho.atan2(h) - self.delta);
-                let (w, d) = (s * over.sin(), s * over.cos());
-                let r = self.radius + side * (self.slot / 2.0 + (w - self.level) * self.tan_alpha);
-                let (cu, cv) = (dot(self.centre, self.u), dot(self.centre, self.v));
-                let far = cu.hypot(cv);
-                let cos = (far * far + r * r - d * d) / (2.0 * far * r);
-                if cos.abs() > 1.0 {
-                    return None;
-                }
-                let toward = cv.atan2(cu) + PI;
-                let wrap = |x: f64| (x + PI).rem_euclid(2.0 * PI) - PI;
-                let (t1, t2) = (toward + cos.acos(), toward - cos.acos());
-                let tau = if wrap(t1 - self.tau_mid).abs() <= wrap(t2 - self.tau_mid).abs() {
-                    t1
-                } else {
-                    t2
-                };
-                [tau, w]
-            }
-        };
+        // Over the tips' plane by its angle over the root cone; round the cutter where its
+        // circle is that far from the apex, on the side of the slot's middle first. A point
+        // on the blade before one on its cone carried on below its tip.
+        let over = self.dedendum + self.under * (rho.atan2(h) - self.delta);
+        let (w, d) = (s * over.sin(), s * over.cos());
+        let r = self.radius + side * (self.slot / 2.0 + (w - self.level) * self.tan_alpha);
+        let (cu, cv) = (dot(self.centre, self.u), dot(self.centre, self.v));
+        let far = cu.hypot(cv);
+        let cos = (far * far + r * r - d * d) / (2.0 * far * r);
+        if cos.abs() > 1.0 {
+            return None;
+        }
+        let toward = cv.atan2(cu) + PI;
+        let wrap = |x: f64| (x + PI).rem_euclid(2.0 * PI) - PI;
+        let (mut t1, mut t2) = (toward + cos.acos(), toward - cos.acos());
+        if wrap(t1 - self.tau_mid).abs() > wrap(t2 - self.tau_mid).abs() {
+            std::mem::swap(&mut t1, &mut t2);
+        }
+        let found: Vec<[f64; 2]> = [t1, t2]
+            .into_iter()
+            .filter_map(|tau| self.newton(side, h, rho, [tau, w]))
+            .collect();
+        found
+            .iter()
+            .find(|x| x[1] >= -1e-9 * s)
+            .or(found.first())
+            .copied()
+    }
+
+    /// [`FaceMill::solve`] from `x`.
+    fn newton(&self, side: f64, h: f64, rho: f64, mut x: [f64; 2]) -> Option<[f64; 2]> {
+        let s = h.hypot(rho);
         let miss = |x: [f64; 2]| {
             let p = self.point(side, x[0], x[1]);
             [p[0] - h, p[1] - rho]
@@ -1913,7 +2037,7 @@ impl FaceMill {
         let at_pitch = self.solve(side, h, pitch, None)?;
         let step_to = |from: [f64; 2], was: f64, rho: f64| {
             let x = self.solve(side, h, rho, Some(from))?;
-            let near = (x[1] - from[1]).abs() < 4.0 * (rho - was).abs() + 0.15 * self.slot
+            let near = (x[1] - from[1]).abs() < 4.0 * (rho - was).abs() + 0.15 * self.room
                 && (x[0] - from[0]).abs() < 0.3;
             near.then_some(x)
         };
@@ -1932,11 +2056,20 @@ impl FaceMill {
                 rho = self.point(side, tau, 0.0)[1];
             }
             Some(wanted) => {
+                // Toward the radius asked for, as far as the flank goes: to where it folds
+                // back (below, the blades cut it away: the tooth is undercut), or where the
+                // blades' tips leave it (below, they cut the fillet).
                 const DOWN: usize = 8;
                 for k in 1..=DOWN {
                     let next = pitch + (wanted - pitch) * k as f64 / DOWN as f64;
                     match step_to(x, rho, next) {
-                        Some(y) => (x, rho) = (y, next),
+                        Some(y) if y[1] >= 0.0 => (x, rho) = (y, next),
+                        Some(_) => {
+                            if let Some(tau) = self.tau_at(side, h, 0.0, x[0]) {
+                                (x, rho) = ([tau, 0.0], self.point(side, tau, 0.0)[1]);
+                            }
+                            break;
+                        }
                         None => break,
                     }
                 }
@@ -1987,6 +2120,85 @@ impl FaceMill {
     }
 }
 
+/// The machines that cut a pinion with localised bearing contact, one for each side of its
+/// teeth: [the side the conjugate `conj`'s inside blades (side −1) would cut, the outside
+/// blades' (+1)], each with the turn that sets its flank where the conjugate's is at the
+/// mean contact point (the two flanks touch the gear there; the conjugate's carries the
+/// backlash).
+///
+/// The design is Litvin's ([`litvin`]) on the gear the pinion runs with: the same module,
+/// cone distance and dedendum angle, the pitch angle 90° less the pinion's, the cutter the
+/// pinion's own dialog gives. The contact asked for is the report's, in proportion: the path
+/// of contact square to the gear's root on its convex side and at 75° on its concave side,
+/// the contact ellipse's half-length 0.150 and 0.159 of the face width under Gleason's
+/// elastic approach of 0.00635 mm (0.00025 in), and the transmission error where the teeth
+/// change over the report's (about 9″ of the gear's turn), whatever the number of teeth.
+#[allow(clippy::too_many_arguments)]
+fn localised_pinion(
+    x: &GearFeature,
+    d: &BevelDims,
+    conj: &FaceMill,
+    mean: f64,
+    radius: f64,
+    half_pitch: f64,
+    dedendum: f64,
+) -> Result<[(FaceMill, f64); 2], &'static str> {
+    let (z, t, delta) = (x.teeth as f64, x.tooth(), d.delta);
+    let ratio = delta.tan();
+    // The level of the transmission error grows as m₂₁ m′₂₁ (π / z)² (the report's (1.4)).
+    let level = (10.0 / 41.0) * (PI / 10.0).powi(2) / (ratio * (PI / z).powi(2));
+    let face = d.cone * (1.0 - d.kappa);
+    let design = litvin::Design {
+        ratio,
+        shaft: PI / 2.0,
+        root: [delta - dedendum, PI / 2.0 - delta - dedendum],
+        beta: x.beta().abs(),
+        cutter: 2.0 * radius,
+        point: half_pitch - 2.0 * mean * dedendum.sin() * t.alpha.tan(),
+        alpha: t.alpha,
+        mean,
+        centre: Some(mean),
+        path: [90f64.to_radians(), 75f64.to_radians()],
+        m21_prime: [-3.5e-3 * level, 5.2e-3 * level],
+        ellipse: [0.150 * face, 0.159 * face],
+        approach: 0.00025 * 25.4,
+    };
+    let pair = litvin::synthesise(&design)?;
+    // The synthesis is for a left-hand gear, whose pinion is right hand: a right-hand pinion
+    // here (its spiral angle positive, as its gear's is negative). Else its mirror image.
+    let hand = if x.beta() > 0.0 { -1.0 } else { 1.0 };
+    let unfit = "The localised pinion's flank misses its mean contact point";
+    let cut = |side: &litvin::Side, along: f64| -> Result<(FaceMill, f64), &'static str> {
+        let p = side.pinion;
+        let mill = FaceMill::machine(
+            pair.pitch[0],
+            pair.dedendum[0],
+            p.radial,
+            p.q,
+            p.offset,
+            p.base,
+            p.roll,
+            hand,
+            p.tip,
+            p.psi,
+            half_pitch,
+        );
+        // M on the pinion: the gear's pitch frame S_f is the pinion's turned half a turn
+        // about the pitch line (the report's (3.98)), then this file's (z, −y, x).
+        let c = side.contact;
+        let at = [c[2], c[1], -c[0]];
+        let g = [delta.cos(), 0.0, -delta.sin()];
+        let h = dot(at, g);
+        let rho = norm(sub(at, scale(g, h)));
+        let want = conj.angle_at_pitch(along, h, rho).ok_or(unfit)?;
+        let got = mill.angle_at_pitch(1.0, h, rho).ok_or(unfit)?;
+        Ok((mill, want - got))
+    };
+    // The gear's convex side is cut by the inside blades; the pinion's side that meets it by
+    // the conjugate's inside blades too.
+    Ok([cut(&pair.sides[0], -1.0)?, cut(&pair.sides[1], 1.0)?])
+}
+
 /// A face-milled bevel gear's tooth spaces, each a loft through its sections on planes square
 /// to the axis. `apex` as [`bevel_spaces`] takes it.
 fn face_milled_spaces(
@@ -2022,10 +2234,11 @@ fn face_milled_spaces(
     if radius < 0.55 * (cone - d.kappa * cone) / beta.abs().cos().max(0.2) {
         return Err("The cutter is too small to cross the gear's face");
     }
-    // A pinion is cut to match its gear: by that gear's cutter (the other hand, the same
-    // dedendum angle: the two have one module and one cone distance), whose slot is the
-    // pinion's tooth, thinner by its backlash.
-    let mate = x.member == BevelMember::Pinion;
+    // A conjugate pinion is cut to match its gear: by that gear's cutter (the other hand, the
+    // same dedendum angle: the two have one module and one cone distance), whose slot is the
+    // pinion's tooth, thinner by its backlash. A pinion with localised contact is cut on its
+    // own machines, set where that one touches the gear.
+    let mate = x.member != BevelMember::Gear;
     let half_pitch = PI * m * (mean / cone) * beta.cos() / 2.0;
     let mill = if mate {
         let slot = half_pitch - t.backlash;
@@ -2033,6 +2246,22 @@ fn face_milled_spaces(
     } else {
         let slot = half_pitch + t.backlash;
         FaceMill::new(delta, dedendum, mean, beta, radius, slot, t.alpha, false)
+    };
+    let localised = if x.member == BevelMember::Pinion {
+        Some(localised_pinion(
+            x, d, &mill, mean, radius, half_pitch, dedendum,
+        )?)
+    } else {
+        None
+    };
+    // The flank of the conjugate's side `side`, or the localised pinion's in its place, cut
+    // by its own blades.
+    let pinion_flank = |side: f64, h, pitch, foot, tip, hi, turn: f64| match &localised {
+        None => mill.flank(side, h, pitch, foot, tip, hi, turn),
+        Some(sides) => {
+            let (cut, offset) = &sides[usize::from(side > 0.0)];
+            cut.flank(1.0, h, pitch, foot, tip, hi, turn + offset)
+        }
     };
     // At the middle of the face a tooth is on the gear's x, turned by the rotation. The
     // cutter's slot is there: the gear's space (so turned half a pitch), the pinion's tooth.
@@ -2061,9 +2290,8 @@ fn face_milled_spaces(
                 (-1.0, 1.0)
             };
             (
-                mill.flank(first, h, pitch, Some(foot), tip, hi, turn)
-                    .ok_or(unfit)?,
-                mill.flank(second, h, pitch, Some(foot), tip, hi, turn + 2.0 * PI / z)
+                pinion_flank(first, h, pitch, Some(foot), tip, hi, turn).ok_or(unfit)?,
+                pinion_flank(second, h, pitch, Some(foot), tip, hi, turn + 2.0 * PI / z)
                     .ok_or(unfit)?,
             )
         } else {
@@ -2637,6 +2865,187 @@ mod tests {
         assert!((9..=11).contains(&n), "{n}");
     }
 
+    /// The gears sample's pinion, cut with localised contact, for either hand: each flank
+    /// touches the conjugate's (which runs with the gear along whole lines) at the middle of
+    /// the face, tangent to it there, and is eased off into the tooth toward the toe and the
+    /// heel, as the contact ellipse's length asks (the bearing is 0.3 of the face long).
+    /// (Across the conjugate's lines of contact it may stand a little proud of it: what has
+    /// to be eased off is the pinion against the gear, which the synthesis sees to, and the
+    /// conjugate's relative curvature across its lines is more than the localised's.)
+    #[test]
+    fn a_localised_pinion_is_eased_off_toward_toe_and_heel() {
+        let sample = crate::samples::gears::gears()
+            .into_iter()
+            .map(|(_, g)| g)
+            .find(|g| g.member == BevelMember::Pinion)
+            .unwrap();
+        for left_hand in [false, true] {
+            let x = GearFeature {
+                left_hand,
+                ..sample.clone()
+            };
+            let d = bevel_dims(&x).unwrap();
+            let (m, delta, cone) = (d.m, d.delta, d.cone);
+            let dedendum = (1.25 * m / cone).atan();
+            let mean = cone * (1.0 + d.kappa) / 2.0;
+            let beta = x.beta();
+            let half_pitch = PI * m * (mean / cone) * beta.cos() / 2.0;
+            let t = x.tooth();
+            let conj = FaceMill::new(
+                delta, dedendum, mean, -beta, mean, half_pitch, t.alpha, true,
+            );
+            let sides = localised_pinion(&x, &d, &conj, mean, mean, half_pitch, dedendum).unwrap();
+            let root = delta - dedendum;
+            let tip = delta + (m / cone).atan();
+            // The flank's distance from the conjugate's, round the axis (mm), at the face's
+            // fraction `f` from the toe and the depth's `g` from the root.
+            let at = |f: f64, g: f64| {
+                let h = cone * (d.kappa + (1.0 - d.kappa) * f) * delta.cos();
+                (h, h * (root + (tip - root) * g).tan())
+            };
+            for (i, s) in [-1.0, 1.0].into_iter().enumerate() {
+                let (mill, offset) = &sides[i];
+                let off = |(h, rho): (f64, f64)| {
+                    let a = mill.angle_at_pitch(1.0, h, rho).unwrap() + offset;
+                    (a - conj.angle_at_pitch(s, h, rho).unwrap()) * rho
+                };
+                // Into the tooth: toward its middle, on the gear's x.
+                let (h, rho) = at(0.5, 0.5);
+                let into = -conj.angle_at_pitch(s, h, rho).unwrap().signum();
+                // Tangent at the middle: under a micrometre a millimetre away.
+                let mid = at(0.5, 0.45);
+                assert!(off(mid).abs() < 0.001, "{left_hand} {s}: {}", off(mid));
+                // (From 0.4 of the depth up: this pinion's flank meeting the gear's convex side
+                // folds back 1.2 mm over its root, as the conjugate's does: equal addenda leave
+                // 16 teeth at 35° undercut there.)
+                for f in [0.0, 1.0] {
+                    for g in [0.4, 0.75] {
+                        let e = into * off(at(f, g));
+                        assert!(
+                            (0.05..0.4).contains(&e),
+                            "{left_hand} {s}: ease-off {e} mm at {f}, {g}"
+                        );
+                    }
+                }
+                for f in (0..=8).map(|k| k as f64 / 8.0) {
+                    for g in (0..=6).map(|k| 0.4 + 0.1 * k as f64) {
+                        let e = into * off(at(f, g));
+                        assert!(e > -0.005 && e < 0.4, "{left_hand} {s}: {e} mm at {f}, {g}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The face mill on any machine cuts the pinion NASA CR-4259 generates: the report's 10/41
+    /// example pinion (right hand), each side on its own machine (Table 6: its machining
+    /// offset, sliding base and modified roll), against reference points of that pinion's tooth
+    /// surface from the report's equation of meshing as the gear's test has them.
+    #[test]
+    fn the_face_mill_cuts_the_pinion_of_nasa_cr_4259() {
+        let mu = (10.0 / 41.0_f64).atan();
+        let ded = mu - (12.0 + 1.0 / 60.0_f64).to_radians();
+        // (blade angle °, tip radius, radial, cradle angle °, ratio of roll, E_m, L_m)
+        let sides = [
+            (
+                163.443_912_459_f64,
+                2.964_692_434_56,
+                2.993_309_116_44,
+                63.186_945_134_4_f64,
+                0.228_996_215_031,
+                0.174_043_780_772,
+                0.021_230_832_121_3,
+                [
+                    [
+                        3.098_107_953_367_616,
+                        0.889_280_518_710_083_1,
+                        -9.421_796_507_877_034e-2,
+                    ],
+                    [
+                        3.124_129_572_254_93,
+                        0.761_178_940_751_522_3,
+                        -0.180_313_124_927_961_3,
+                    ],
+                    [
+                        3.158_916_100_907_25,
+                        0.848_857_435_631_545_8,
+                        -0.182_412_112_480_460_1,
+                    ],
+                    [
+                        3.186_581_133_567_966,
+                        0.965_856_710_379_241_5,
+                        -0.149_230_040_313_277_2,
+                    ],
+                    [
+                        3.217_186_290_385_748,
+                        0.814_552_345_468_277_6,
+                        -0.259_052_694_234_537,
+                    ],
+                ],
+            ),
+            (
+                22.990_666_967_7_f64,
+                3.070_373_500_74,
+                2.697_834_107_55,
+                54.191_028_320_3_f64,
+                0.253_472_686_553,
+                -0.244_586_918_835,
+                0.052_131_774_190_9,
+                [
+                    [
+                        3.079_975_580_983_087,
+                        0.775_609_771_881_942_8,
+                        0.220_762_483_068_743_7,
+                    ],
+                    [
+                        3.006_982_028_787_875,
+                        0.898_994_204_976_368_8,
+                        0.135_545_140_994_056_5,
+                    ],
+                    [
+                        3.099_735_310_635_647,
+                        0.829_051_330_716_907_1,
+                        0.154_822_805_874_024_4,
+                    ],
+                    [
+                        3.189_928_248_757_573,
+                        0.770_538_278_133_813_8,
+                        0.145_720_076_879_730_5,
+                    ],
+                    [
+                        3.116_940_389_899_113,
+                        0.888_660_876_478_071_1,
+                        7.958_088_033_649_657e-2,
+                    ],
+                ],
+            ),
+        ];
+        for (psi, tip, radial, q, roll, offset, base, refs) in sides {
+            let mill = FaceMill::machine(
+                mu,
+                ded,
+                radial,
+                q.to_radians(),
+                offset,
+                base,
+                roll,
+                -1.0,
+                tip,
+                psi.to_radians(),
+                0.08,
+            );
+            for [h, rho, angle] in refs {
+                let x = mill.solve(1.0, h, rho, None).expect("a point on the flank");
+                let p = mill.point(1.0, x[0], x[1]);
+                assert!(
+                    (p[2] - angle).abs() * rho < 1e-9,
+                    "at h {h}, radius {rho}: angle {} against the report's {angle}",
+                    p[2]
+                );
+            }
+        }
+    }
+
     /// The face mill cuts the gear NASA CR-4259 (Litvin & Lee, 1989) generates: the report's
     /// 10/41 example gear (inches), its cutter (tip radius 2.96 convex, 3.04 concave; blade
     /// angles 20° and 160°) on its machine (radial setting 2.87797954270, cradle angle
@@ -2649,31 +3058,20 @@ mod tests {
         // The pitch angle of 41 teeth against 10 at 90°, and the root angle 72°25′.
         let mu = 4.1_f64.atan();
         let ded = mu - (72.0 + 25.0 / 60.0_f64).to_radians();
-        let centre = [
-            1.494_463_573_836_007_7,
-            2.457_456_132_863_643,
-            -0.101_263_170_639_066_19,
-        ];
-        let (sf, cf) = ded.sin_cos();
         let mill = |radius: f64, psi_deg: f64| {
-            let (u, v, c) = ([cf, 0.0, -sf], [0.0, 1.0, 0.0], [sf, 0.0, cf]);
-            FaceMill {
-                g: [mu.cos(), 0.0, -mu.sin()],
-                c,
-                u,
-                v,
-                x_g: [mu.sin(), 0.0, mu.cos()],
-                centre,
+            FaceMill::machine(
+                mu,
+                ded,
+                2.877_979_542_7,
+                58.636_487_666_2_f64.to_radians(),
+                0.0,
+                0.0,
+                mu.sin() / ded.cos(),
+                1.0,
                 radius,
-                slot: 0.0,
-                level: 0.0,
-                tan_alpha: -psi_deg.to_radians().tan(),
-                ratio: cf / mu.sin(),
-                dedendum: ded,
-                tau_mid: (-dot(centre, v)).atan2(-dot(centre, u)),
-                delta: mu,
-                under: 1.0,
-            }
+                psi_deg.to_radians(),
+                0.08,
+            )
         };
         let convex = [
             [

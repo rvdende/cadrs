@@ -325,13 +325,15 @@ pub(crate) fn body(
                     None,
                 );
                 if x.spiral == SpiralKind::FaceMilled {
-                    // The gear of a pair is cut by the cutter itself; its pinion to match it.
+                    // The gear of a pair is cut by the cutter itself; its pinion to run with it, with
+                    // localised contact or as its exact conjugate.
                     let members = opts(
                         &BevelMember::ALL,
                         |k| {
                             tr(match k {
                                 BevelMember::Gear => "model-gear-member-gear",
                                 BevelMember::Pinion => "model-gear-member-pinion",
+                                BevelMember::ConjugatePinion => "model-gear-member-conjugate",
                             })
                         },
                         |_| true,
