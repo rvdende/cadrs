@@ -168,8 +168,21 @@ fn export(world: &mut World) {
     } else {
         base
     };
+    let (base, folder) = (base.to_string(), folder.trim().to_string());
+    if world.get_resource::<ActiveDocument>().is_none() {
+        return;
+    }
+    // The package carries the document's thumbnail: drawn first if the saved one is not of the
+    // document as it is now (issue #232: a document exported before it was ever closed had the
+    // placeholder).
+    close(world);
+    crate::thumbnail::then(world, move |world| write_package(world, &base, &folder));
+}
+
+/// Writes the open document's package into `folder` as `<base>.cadrs`, and says so.
+fn write_package(world: &mut World, base: &str, folder: &str) {
     let path = cadrs_core::export::unique_path_ext(
-        Path::new(folder.trim()),
+        Path::new(folder),
         &cadrs_core::export::sanitize(base),
         "cadrs",
     );
@@ -186,7 +199,6 @@ fn export(world: &mut World) {
         cadrs_core::native::export(&path, &doc.doc, &meta, &world.resource::<DocumentStore>().0);
     match result {
         Ok(()) => {
-            close(world);
             notify(
                 world,
                 Notification::info(tr_with(
