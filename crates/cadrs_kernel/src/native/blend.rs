@@ -2128,7 +2128,7 @@ struct RoundFace {
 }
 
 /// Whether point `p` (on face `f`'s surface) lies on the face.
-fn on_face(b: &Body, f: usize, p: &P3) -> bool {
+pub(super) fn on_face(b: &Body, f: usize, p: &P3) -> bool {
     let face = &b.faces[f];
     let polys = super::classify::face_polygons(b, face);
     let (u, v) = face.surf.project(p, None);
