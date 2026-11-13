@@ -728,6 +728,134 @@ fn a_cube_shelled_open_at_the_top() {
     );
 }
 
+/// The L of issue #237: [0, 20] × [0, 5] and [15, 20] × [5, 20] in plan, 20 tall.
+fn ell(k: &mut NativeKernel) -> BodyId {
+    let c = [
+        (0.0, 0.0),
+        (20.0, 0.0),
+        (20.0, 20.0),
+        (15.0, 20.0),
+        (15.0, 5.0),
+        (0.0, 5.0),
+    ]
+    .map(|(x, y)| Point2::new(x, y));
+    let outer = Loop {
+        curves: (0..c.len())
+            .map(|i| Curve2::Line {
+                a: c[i],
+                b: c[(i + 1) % c.len()],
+                source: None,
+            })
+            .collect(),
+    };
+    extrude(k, outer, vec![], 20.0)
+}
+
+#[test]
+fn an_ell_shelled_sharp_open_at_its_low_side_keeps_the_wall_that_rises_past_it() {
+    // Issue #237. Inward 1, sharp, the face y = 5 of the short leg removed: the cavity is the
+    // plan [1, 19] × [1, 5] ∪ [16, 19] × [5, 19] (18 · 4 + 3 · 14 = 114) from z = 1 to 19. The
+    // wall x = 15 rising from the opening stays whole: under it, the cavity's face y = 5 over
+    // x in [15, 16]. V = 3500 − 114 · 18. S: outside 100 + 400 + 400 + 100 + 300 + 2 · 175,
+    // the rim 300 − 14 · 18, inside 4 · 18 + 18 · 18 + 18 · 18 + 3 · 18 + 14 · 18 + 2 · 114
+    // + 1 · 18.
+    let mut k = NativeKernel::new();
+    let l = ell(&mut k);
+    let opening = face(&k, l, [7.5, 5.0, 10.0]);
+    let b = k
+        .shell_with(
+            l,
+            &ShellSpec {
+                sharp: true,
+                ..ShellSpec::inward(vec![opening], 1.0)
+            },
+        )
+        .unwrap()
+        .bodies[0];
+    check(
+        &k,
+        b,
+        Want {
+            volume: 3500.0 - 114.0 * 18.0,
+            area: 1650.0 + 48.0 + 1272.0,
+            faces: 16,
+            min: [0.0; 3],
+            max: [20.0; 3],
+            centroid: None,
+        },
+    );
+}
+
+#[test]
+fn an_ell_shelled_outward_open_at_its_low_side_keeps_the_walls_of_the_leg_past_it() {
+    // Issue #237, outward. Below the opening's plane y = 5 the walls are the box A = [0, 20] ×
+    // [0, 5] × [0, 20] grown by a ball of 1, cut flush at y = 5: (A ⊕ B) less its top slab and
+    // the rounds of its top's edges and corners (they lie wholly beyond y = 5), less A:
+    // 800 + 25π + 2π/3. Beyond it, the tall leg's [15, 20] × [5, 20] × [0, 20] grown the same,
+    // cut flush at y = 5 the other way, less the leg: 850 + 27.5π + 2π/3 (the wall over the
+    // riser x = 15 standing on the opening's edge). S: inside, the L's faces but the opening
+    // (1650) and the riser's wall's foot on it (20); outside, below 800 + 52π (rounds 90π + 4π
+    // less 40π + 2π), beyond 850 + 57π (80π + 4π less 25π + 2π); the rim of the walls below
+    // not under the walls beyond, 50. Faces: the L's 7 kept and the foot inside; outside 7
+    // planes, 14 cylinders and 8 spheres (the leg's and the low part's sides, top and bottom
+    // each one face); the rim.
+    let mut k = NativeKernel::new();
+    let l = ell(&mut k);
+    let opening = face(&k, l, [7.5, 5.0, 10.0]);
+    let b = k
+        .shell_with(l, &ShellSpec::outward(vec![opening], 1.0))
+        .unwrap()
+        .bodies[0];
+    check(
+        &k,
+        b,
+        Want {
+            volume: 1650.0 + 52.5 * PI + 4.0 * PI / 3.0,
+            area: 3370.0 + 109.0 * PI,
+            faces: 38,
+            min: [-1.0; 3],
+            max: [21.0; 3],
+            centroid: None,
+        },
+    );
+}
+
+#[test]
+fn an_ell_shelled_outward_sharp_open_at_its_low_side_keeps_the_walls_of_the_leg_past_it() {
+    // Issue #237, outward with sharp corners (as Onshape makes it): the L's faces but the
+    // opening moved out 1, less the L. In plan (-1, -1), (21, -1), (21, 21), (14, 21), (14, 5),
+    // (-1, 5): 22 · 6 + 7 · 16 = 244, from z = -1 to 21. V = 244 · 22 − 3500. S: inside, the
+    // L's faces but the opening (1650) and the riser's wall's foot on it (1 · 20); outside the
+    // caps 2 · 244 and the sides (22 + 22 + 7 + 16 + 6) · 22; the rim round the opening,
+    // 1 · 22 + 2 · 14 · 1: 3814, as Onshape measures it. Faces: 7 + 1 inside, 7 outside, the
+    // rim.
+    let mut k = NativeKernel::new();
+    let l = ell(&mut k);
+    let opening = face(&k, l, [7.5, 5.0, 10.0]);
+    let b = k
+        .shell_with(
+            l,
+            &ShellSpec {
+                sharp: true,
+                ..ShellSpec::outward(vec![opening], 1.0)
+            },
+        )
+        .unwrap()
+        .bodies[0];
+    check(
+        &k,
+        b,
+        Want {
+            volume: 244.0 * 22.0 - 3500.0,
+            area: 3814.0,
+            faces: 16,
+            min: [-1.0; 3],
+            max: [21.0; 3],
+            centroid: None,
+        },
+    );
+}
+
 #[test]
 fn a_cube_hollowed_inward() {
     // A closed void (A − 2t)³ in the middle: V = A³ − (A − 2t)³, S = 6A² + 6(A − 2t)².

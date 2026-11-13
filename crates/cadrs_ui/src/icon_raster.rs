@@ -1,14 +1,14 @@
-//! How an icon-rs icon becomes pixels. Shared by `build.rs`, which embeds the common sizes, and
+//! How a cadrs_icons icon becomes pixels. Shared by `build.rs`, which embeds the common sizes, and
 //! the runtime, which renders other sizes on demand (a UI scale or a high-DPI screen draws a
 //! 16 px icon at 24 or 32 physical pixels, which an upscaled 16 px raster would blur).
 //!
 //! How an icon is rasterized depends on its kind:
-//! - Glyph and line icons ([`icon_rs::Kind::is_tintable`]) are ink plus a small accent detail.
+//! - Glyph and line icons ([`cadrs_icons::Kind::is_tintable`]) are ink plus a small accent detail.
 //!   The ink is rendered in white so the runtime can tint it through `ImageNode::color`; the
 //!   accent detail is a second, separate white layer that the runtime tints with the accent.
 //! - Solid and sketch icons keep their full colours; the runtime only fades them.
 
-use icon_rs::{Icon, Palette};
+use cadrs_icons::{Icon, Palette};
 use resvg::{tiny_skia, usvg};
 
 /// Heavier copies of tintable icons, as (name, icon, stroke scale): the dialog's ✓ and ✕, the
@@ -24,11 +24,11 @@ pub const WEIGHTS: &[(&str, &str, f32)] = &[
     ("theme-light-medium", "theme-light", 1.35),
 ];
 
-/// The icon `name` is drawn from, and its stroke weight (1 for icon-rs's own names).
+/// The icon `name` is drawn from, and its stroke weight (1 for cadrs_icons's own names).
 pub fn source(name: &str) -> Option<(Icon, f32)> {
     match WEIGHTS.iter().find(|(n, ..)| *n == name) {
-        Some(&(_, base, weight)) => icon_rs::get(base).map(|i| (i, weight)),
-        None => icon_rs::get(name).map(|i| (i, 1.0)),
+        Some(&(_, base, weight)) => cadrs_icons::get(base).map(|i| (i, weight)),
+        None => cadrs_icons::get(name).map(|i| (i, 1.0)),
     }
 }
 
@@ -50,7 +50,7 @@ fn stroke_scale(weight: f32, size: u32) -> f32 {
     weight * if size == 20 { 1.1 } else { 1.0 }
 }
 
-/// Scales the root `stroke-width` (icon-rs draws tintable icons with the root width only).
+/// Scales the root `stroke-width` (cadrs_icons draws tintable icons with the root width only).
 fn with_stroke(svg: &str, scale: f32) -> String {
     if scale == 1.0 {
         return svg.to_owned();

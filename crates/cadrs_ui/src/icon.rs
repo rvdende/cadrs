@@ -1,4 +1,4 @@
-//! Icons keyed by name, from the [icon-rs](https://crates.io/crates/icon-rs) crate, rasterized by
+//! Icons keyed by name, from the [cadrs_icons](https://crates.io/crates/cadrs_icons) crate, rasterized by
 //! `build.rs`.
 //!
 //! Glyph and line icons are rasterized in white and tinted at runtime through
@@ -43,13 +43,13 @@ impl Plugin for IconPlugin {
     }
 }
 
-/// Whether the icon-rs build has an icon by this name (for icons newer than the release a build
+/// Whether the cadrs_icons build has an icon by this name (for icons newer than the release a build
 /// uses, with a stand-in until then).
 pub fn has_icon(name: &str) -> bool {
     data::ICON_DATA.iter().any(|(n, ..)| *n == name)
 }
 
-/// The accent colour of icon-rs icons' details (their blue, the app icon's).
+/// The accent colour of cadrs_icons icons' details (their blue, the app icon's).
 pub fn accent_color() -> Color {
     let [r, g, b] = data::ACCENT;
     Color::srgb_u8(r, g, b)
@@ -96,7 +96,7 @@ impl IconAtlas {
     /// The icon's base (or `accent`) layer for `size` logical px drawn at `scale` physical px
     /// each: the built-in raster 100 % would use, or that raster's size times `scale` rendered
     /// (once) so the icon looks the same at every scale, only sharper. With `dark`, a
-    /// full-colour icon is drawn from icon-rs's artwork for dark backgrounds.
+    /// full-colour icon is drawn from cadrs_icons's artwork for dark backgrounds.
     fn scaled(
         &mut self,
         name: &str,
@@ -172,23 +172,31 @@ fn render(name: &str, size: u32, px: u32, accent: bool, dark: bool) -> Option<Ve
     }
     // A solid tool icon in its family's colour. On light, its accent (what the tool makes)
     // takes the colour; on dark the two swap, so the outlines and arrows are coloured (lighter,
-    // as icon-rs's own dark accent is) and what the tool makes is drawn in the line colour,
+    // as cadrs_icons's own dark accent is) and what the tool makes is drawn in the line colour,
     // since white outlines around a coloured shape read as noise.
     if let Some([r, g, b]) = family_accent(name)
         && !accent
         && !icon.kind.is_tintable()
     {
-        let family = icon_rs::Rgb(r, g, b);
+        let family = cadrs_icons::Rgb(r, g, b);
         let svg = if dark {
-            let (ink, accent) = (icon_rs::Palette::DARK.ink, icon_rs::Palette::DARK.accent);
+            let (ink, accent) = (
+                cadrs_icons::Palette::DARK.ink,
+                cadrs_icons::Palette::DARK.accent,
+            );
             // Through a placeholder, so the accent turned ink isn't coloured again.
             icon.svg
                 .replace(&accent.to_hex(), "#\0")
-                .replace(&ink.to_hex(), &family.mix(icon_rs::Rgb::WHITE, 30).to_hex())
+                .replace(
+                    &ink.to_hex(),
+                    &family.mix(cadrs_icons::Rgb::WHITE, 30).to_hex(),
+                )
                 .replace("#\0", &ink.to_hex())
         } else {
-            icon.svg
-                .replace(&icon_rs::Palette::LIGHT.accent.to_hex(), &family.to_hex())
+            icon.svg.replace(
+                &cadrs_icons::Palette::LIGHT.accent.to_hex(),
+                &family.to_hex(),
+            )
         };
         return crate::icon_raster::rasterize(&svg, px)
             .inspect_err(|e| warn!("cannot render icon {name:?} at {px} px: {e}"))
@@ -297,7 +305,7 @@ pub struct SolidTint;
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct IconAccent;
 
-/// An icon bundle: `name` (an icon-rs icon name such as `"plus"`) at `size` logical px, tinted
+/// An icon bundle: `name` (a cadrs_icons icon name such as `"plus"`) at `size` logical px, tinted
 /// `color`.
 pub fn icon(name: impl Into<Cow<'static, str>>, size: f32, color: Color) -> impl Bundle {
     (

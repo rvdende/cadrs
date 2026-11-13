@@ -7,7 +7,7 @@
 //! on in a browser; the button's menu and the Preferences dialog both set it). **Disconnect** goes offline
 //! again: the open shared document's session ends and every room is left.
 //!
-//! The button (`network`) shows the state with icon-rs's network icons: struck through while
+//! The button (`network`) shows the state with cadrs_icons's network icons: struck through while
 //! offline, plain arrows while online, the up arrow lit while sending and the down arrow while
 //! receiving (from the once-a-second sample of the wire), an exclamation mark in red when going
 //! online failed. Its menu is `network-menu`. It is only shown in runs that can go online (not
@@ -76,7 +76,7 @@ impl NetState {
         }
     }
 
-    /// The icon-rs icon that shows it.
+    /// The cadrs_icons icon that shows it.
     pub fn icon(self) -> &'static str {
         match self {
             NetState::Unavailable | NetState::Offline => "network-disconnected",
@@ -481,8 +481,8 @@ mod tests {
         assert_eq!(icons.len(), states.len());
         for icon in icons {
             assert!(
-                icon_rs::get(icon).is_some(),
-                "{icon} is not an icon-rs icon"
+                cadrs_icons::get(icon).is_some(),
+                "{icon} is not a cadrs_icons icon"
             );
         }
     }

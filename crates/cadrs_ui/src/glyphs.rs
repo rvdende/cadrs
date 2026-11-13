@@ -194,7 +194,7 @@ pub fn glyph(p: &mut ChildSpawnerCommands, theme: &Theme, g: Glyph, color: Color
     });
 }
 
-/// A bold thumbtack (a pinned reference, ER5.1; icon-rs has none yet), drawn with UI nodes in a
+/// A bold thumbtack (a pinned reference, ER5.1; cadrs_icons has none yet), drawn with UI nodes in a
 /// `size` × `size` box: the cap, the body and the collar, and the needle, tilted 40° with the
 /// needle to the lower left. Spawn it as a child: `p.spawn(thumbtack(14.0, color))`.
 pub fn thumbtack(size: f32, color: Color) -> impl Bundle {
@@ -246,7 +246,7 @@ pub fn thumbtack(size: f32, color: Color) -> impl Bundle {
 }
 
 /// A bold down arrow (a stem and a filled head) in a `size` × `size` box: the "update further
-/// down the chain" badge (ER4.2), which icon-rs's thin `arrow-down` doesn't carry at badge size.
+/// down the chain" badge (ER4.2), which cadrs_icons's thin `arrow-down` doesn't carry at badge size.
 pub fn down_arrow(size: f32, color: Color) -> impl Bundle {
     let k = size / 10.0;
     (

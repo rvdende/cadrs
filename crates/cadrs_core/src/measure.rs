@@ -332,6 +332,11 @@ impl Entity {
                 _ => {}
             }
         }
+        // (A rounded face's radius, where the face isn't a cylinder or sphere: a fillet read
+        // from a file as a B-spline, a torus's tube.)
+        if e.radius.is_none() {
+            e.radius = face.fillet_radius;
+        }
         e
     }
 

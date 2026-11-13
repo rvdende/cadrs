@@ -1900,7 +1900,13 @@ fn paint(f: &StepFile, id: u64, depth: usize, out: &mut Paint) {
             refs(2)
         }
         "SURFACE_STYLE_TRANSPARENT" => {
-            out.transparency = ps.first().and_then(Param::as_f64).filter(|t| t.is_finite());
+            // (A surface wholly transparent is read as one that says nothing: no writer means a
+            // solid's faces to be unseen, but some write 1 for none, as the FreeCAD-made 3DBenchy
+            // does on all but its hull's sides.)
+            out.transparency = ps
+                .first()
+                .and_then(Param::as_f64)
+                .filter(|t| t.is_finite() && *t < 1.0);
             Vec::new()
         }
         _ => Vec::new(),
@@ -3592,6 +3598,50 @@ pub fn write_colored(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A face styled wholly transparent reads as opaque in its colour; one half transparent keeps
+    /// its alpha.
+    #[test]
+    fn a_wholly_transparent_face_reads_as_opaque() {
+        let mut k = crate::native::NativeKernel::new();
+        let crate::native::draw::Shape::Body(id) =
+            k.box_at(0.0, 0.0, 0.0, 10.0, 10.0, 10.0).unwrap()
+        else {
+            unreachable!()
+        };
+        let cube = k.get(id).unwrap().as_ref().clone();
+        let colors: Vec<Option<Rgba>> = (0..cube.faces.len())
+            .map(|i| {
+                Some(if i == 0 {
+                    [200, 10, 10, 128]
+                } else {
+                    [10, 200, 10, 1]
+                })
+            })
+            .collect();
+        let text =
+            String::from_utf8(write_colored("cube", &[(&cube, "cube")], &[&colors], &[])).unwrap();
+        // Our writer writes 1 - 1/255 for an alpha of 1: a file that says 1 outright.
+        let text = text.replace(
+            &format!("SURFACE_STYLE_TRANSPARENT({})", real(1.0 - 1.0 / 255.0)),
+            "SURFACE_STYLE_TRANSPARENT(1.)",
+        );
+        assert!(text.contains("SURFACE_STYLE_TRANSPARENT(1.)"));
+        let m = read(text.as_bytes()).unwrap();
+        let got = &m.parts[0].colors;
+        assert_eq!(
+            got.iter()
+                .filter(|c| **c == Some([200, 10, 10, 128]))
+                .count(),
+            1
+        );
+        assert_eq!(
+            got.iter()
+                .filter(|c| **c == Some([10, 200, 10, 255]))
+                .count(),
+            5
+        );
+    }
 
     #[test]
     fn parses_complex_records_comments_and_strings() {

@@ -382,7 +382,7 @@ mod number_tests {
 mod icon_tests {
     use cadrs_core::cam::cadrs_cam::{MachineKind, Pattern, ToolKind};
 
-    /// Every pattern, tool and machine names an icon icon-rs has.
+    /// Every pattern, tool and machine names an icon cadrs_icons has.
     #[test]
     fn cam_icons_exist() {
         let names = Pattern::ALL

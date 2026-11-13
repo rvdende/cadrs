@@ -209,6 +209,6 @@ mod tests {
 
     #[test]
     fn the_button_has_its_icon() {
-        assert!(icon_rs::get("github").is_some());
+        assert!(cadrs_icons::get("github").is_some());
     }
 }

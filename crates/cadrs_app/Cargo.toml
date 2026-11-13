@@ -64,7 +64,7 @@ cadrs_mobile.workspace = true
 cadrs_social_net.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 # The network button's icons exist (`network`).
-icon-rs.workspace = true
+cadrs_icons.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 wayland-client.workspace = true

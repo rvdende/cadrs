@@ -540,7 +540,7 @@ pub fn type_icon(ty: ItemType) -> &'static str {
         ItemType::Curvature => "constraint-curvature",
         ItemType::Pattern => "sketch-pattern",
         ItemType::Distance => "dimension",
-        // Closest icon-rs icons: there are no angular, radial or diametral dimension icons.
+        // Closest cadrs_icons icons: there are no angular, radial or diametral dimension icons.
         ItemType::Angle => "three-point-arc",
         ItemType::Radius => "center-arc",
         ItemType::Diameter => "center-circle",
@@ -752,7 +752,7 @@ fn manager_body(
             ..default()
         })
         .with_children(|g| {
-            // Closest icon-rs icons (no dedicated internal / external / in-context glyphs).
+            // Closest cadrs_icons icons (no dedicated internal / external / in-context glyphs).
             for (m, name, ic, tip) in [
                 (
                     Mode::Internal,

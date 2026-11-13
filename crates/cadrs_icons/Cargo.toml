@@ -1,0 +1,10 @@
+[package]
+name = "cadrs_icons"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "SVG icons for cadrs: isometric features and mates, sketch tools, constraint glyphs and UI icons (drawn by cadrs_icons_gen)"
+
+[dev-dependencies]
+resvg.workspace = true

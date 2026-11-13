@@ -18,7 +18,7 @@
 //!   "Create version from Main" dialog (Name, Description, **Create**, **Create version and edit
 //!   properties**, **Cancel**); the top bar's versions counter is live.
 //!
-//! Stand-in icons (icon-rs has no version-link glyphs yet, see `docs/icon-migration.md`): the
+//! Stand-in icons (cadrs_icons has no version-link glyphs yet, see `docs/icon-migration.md`): the
 //! linked instance icon is `link`, Create version `versions`, Version graph `branches`.
 
 use std::collections::HashMap;
@@ -232,7 +232,7 @@ pub fn spawn_link_icon(
             cadrs_ui::icon::icon_in("link", 14.0, Color::srgb_u8(0xc6, 0x28, 0x28), node),
             cadrs_ui::icon::SolidTint,
         )),
-        // P3G.3: a bold dark thumbtack (`lesson-pinning-references.png`), drawn (icon-rs has none).
+        // P3G.3: a bold dark thumbtack (`lesson-pinning-references.png`), drawn (cadrs_icons has none).
         LinkIcon::Pinned => {
             let mut e = p.spawn((Name::new(name), node));
             e.with_child(cadrs_ui::glyphs::thumbtack(

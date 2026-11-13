@@ -6442,6 +6442,15 @@ fn vertex_on_boundary(b: &mut Body, fi: usize, p: &P3, tol: f64) -> Option<usize
             return Some(v);
         }
     }
+    // (A vertex of the face's boundary already there, though the nearest edge found is not one
+    // of its own: a point split onto the boundary before, its two halves both near.)
+    for c in b.faces[fi].loops.iter().flatten() {
+        for v in b.edges[c.edge].v {
+            if (b.verts[v].p - p).norm() < tol.max(b.verts[v].tol) {
+                return Some(v);
+            }
+        }
+    }
     Some(split_edge(b, e, t))
 }
 

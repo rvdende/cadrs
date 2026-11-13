@@ -567,6 +567,11 @@ pub struct ShellFeature {
     /// The opposite direction: the walls grow outward (PS16.2).
     #[serde(default)]
     pub outward: bool,
+    /// Rounded walls: round the body's convex edges (an inward cavity's corners, an outward
+    /// wall's outside) as a ball rolled along them would. Off: sharp, the walls' faces extended
+    /// until they meet, as Onshape shells (issues #105, #237).
+    #[serde(default)]
+    pub rounded: bool,
 }
 
 impl Default for ShellFeature {
@@ -578,6 +583,7 @@ impl Default for ShellFeature {
             thickness: 2.0,
             thickness_expr: "2 mm".into(),
             outward: false,
+            rounded: false,
         }
     }
 }

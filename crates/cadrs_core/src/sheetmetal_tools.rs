@@ -552,7 +552,7 @@ impl SheetMetalTool {
         }
     }
 
-    /// Its icon (icon-rs) and toolbar name.
+    /// Its icon (cadrs_icons) and toolbar name.
     pub fn icon(&self) -> &'static str {
         match self {
             SheetMetalTool::Finish(_) => "sheet-metal-finish",
