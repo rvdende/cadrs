@@ -1141,7 +1141,7 @@ fn sharp_edges(b: &Body, edges: &[EdgeId]) -> Result<Vec<EdgeId>> {
 
 /// The picked edges less degenerate ones (a pole's, an apex's): OCCT's blends pass over them
 /// (`BRepFilletAPI` adds no contour for one), and there's nothing to round there.
-fn real_edges(b: &Body, edges: &[EdgeId]) -> Result<Vec<EdgeId>> {
+pub(crate) fn real_edges(b: &Body, edges: &[EdgeId]) -> Result<Vec<EdgeId>> {
     let kept: Vec<EdgeId> = edges
         .iter()
         .copied()
@@ -2128,7 +2128,7 @@ struct RoundFace {
 }
 
 /// Whether point `p` (on face `f`'s surface) lies on the face.
-fn on_face(b: &Body, f: usize, p: &P3) -> bool {
+pub(super) fn on_face(b: &Body, f: usize, p: &P3) -> bool {
     let face = &b.faces[f];
     let polys = super::classify::face_polygons(b, face);
     let (u, v) = face.surf.project(p, None);

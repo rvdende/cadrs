@@ -17,6 +17,11 @@ pub trait Pick: Kernel {
             if best.is_none_or(|(b, _)| d.distance < b) {
                 best = Some((d.distance, f.id));
             }
+            // On the face (to a nanometre): no other face is nearer, so none need be measured
+            // (on an edge, where two faces tie, either was the pick).
+            if d.distance <= 1e-9 {
+                break;
+            }
         }
         best.map(|(_, f)| f)
             .ok_or_else(|| KernelError::OperationFailed("the body has no faces".into()))

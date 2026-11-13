@@ -841,7 +841,81 @@ fn in_domain(s: &Surface, dom: &UvBox, p: &P3) -> bool {
 /// [`replace_surfaces`], with the part of each face's new surface the face lies on (by face;
 /// missing or None: anywhere). Where a new surface meets a neighbour more than once, each edge
 /// is the crossing inside it.
+/// The B-spline surfaces' corners that lie on every one of `fs` (within 1e-9 of the size), the
+/// one nearest `old`: where a moved patch's corner is the corner of the solid (a patch laid on a
+/// block, its edges on the block's sides) no intersection need be searched for.
+fn patch_corner(fs: &[&Surface], old: P3) -> Option<P3> {
+    let mut best: Option<(f64, P3)> = None;
+    for (i, s) in fs.iter().enumerate() {
+        let Surface::Nurbs(n) = s else { continue };
+        let ((u0, u1), (v0, v1)) = n.range();
+        for (u, v) in [(u0, v0), (u1, v0), (u0, v1), (u1, v1)] {
+            let p = n.point(u, v);
+            let size = 1.0 + p.coords.norm();
+            let on = fs.iter().enumerate().all(|(j, o)| {
+                j == i || matches!(o, Surface::Plane { .. }) && o.distance(&p) < 1e-9 * size
+            });
+            let d = (p - old).norm();
+            if on && best.as_ref().is_none_or(|(bd, _)| d < *bd) {
+                best = Some((d, p));
+            }
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
+/// The boundary curve of a B-spline surface between `p0` and `p1` whose poles all lie in a
+/// plane, where the edge is between the two: their exact intersection along it, with no
+/// tracing (a patch whose edges were drawn in a block's sides).
+fn patch_boundary_in_plane(a: &Surface, b: &Surface, p0: &P3, p1: &P3) -> Option<Curve> {
+    let (n, plane) = match (a, b) {
+        (Surface::Nurbs(n), Surface::Plane { f }) | (Surface::Plane { f }, Surface::Nurbs(n)) => {
+            (n, f)
+        }
+        _ => return None,
+    };
+    let ((u0, u1), (v0, v1)) = n.range();
+    let size = 1.0 + p0.coords.norm() + p1.coords.norm();
+    let near = |p: &P3, q: &P3| (p - q).norm() < tol::POINT;
+    for (t, along_v) in [(u0, true), (u1, true), (v0, false), (v1, false)] {
+        let iso = nurbs_iso(n, t, along_v);
+        let flat = iso.cps.iter().all(|h| {
+            h.w > 0.0 && (super::nurbs::dehom(h) - plane.o).dot(&plane.z).abs() < 1e-9 * size
+        });
+        if !flat {
+            continue;
+        }
+        let (c0, c1) = iso.range();
+        let curve = Curve::Nurbs(std::sync::Arc::new(iso));
+        let (e0, e1) = (curve.point(c0), curve.point(c1));
+        let ends = (near(&e0, p0) || near(&e0, p1)) && (near(&e1, p0) || near(&e1, p1));
+        let inner = || {
+            [p0, p1].iter().all(|p| {
+                let t = curve.closest(p, c0, c1);
+                near(&curve.point(t), p)
+            })
+        };
+        if ends || inner() {
+            return Some(curve);
+        }
+    }
+    None
+}
+
 pub fn replace_surfaces_in(b: &Body, surfs: &[Surface], domains: &[Option<UvBox>]) -> Result<Body> {
+    replace_surfaces_checked(b, surfs, domains, true)
+}
+
+/// [`replace_surfaces_in`], its result checked with the solids' orientation (`volumes`) or
+/// without: a caller that settles the new faces' senses itself and checks the volume after
+/// (the orientation test casts rays at every face, which on a heavy spline costs more than the
+/// rest of the operation).
+fn replace_surfaces_checked(
+    b: &Body,
+    surfs: &[Surface],
+    domains: &[Option<UvBox>],
+    volumes: bool,
+) -> Result<Body> {
     let dom = |f: usize| domains.get(f).copied().flatten();
     let mut prof = super::boolean::Prof::new();
     let mut out = b.clone();
@@ -923,6 +997,7 @@ pub fn replace_surfaces_in(b: &Body, surfs: &[Surface], domains: &[Option<UvBox>
         let p = on_pole()
             .or(on_line)
             .or_else(on_seam)
+            .or_else(|| patch_corner(&fs, b.verts[v].p))
             .or_else(on_kept)
             .or_else(|| meet(&fs, b.verts[v].p))
             .ok_or_else(|| KernelError::InvalidGeometry {
@@ -978,6 +1053,11 @@ pub fn replace_surfaces_in(b: &Body, surfs: &[Surface], domains: &[Option<UvBox>
         let curve = if let Some((_, c)) = tangent.iter().find(|(x, _)| *x == e) {
             c.clone()
         } else if let Some(c) = swept_line(surfs, fs, &ed.curve, &p0, &p1) {
+            c
+        } else if let Some(c) = (fs.len() == 2)
+            .then(|| patch_boundary_in_plane(&surfs[fs[0]], &surfs[fs[1]], &p0, &p1))
+            .flatten()
+        {
             c
         } else if fs.len() == 2 && fs[0] == fs[1] {
             // A seam: the new surface's iso-u line through the vertex (on a closed B-spline,
@@ -1505,7 +1585,11 @@ pub fn replace_surfaces_in(b: &Body, surfs: &[Surface], domains: &[Option<UvBox>
         super::unify::compact(&mut out);
     }
     prof.mark("tolerances");
-    let errs = out.check();
+    let errs = if volumes {
+        out.check()
+    } else {
+        out.check_structure()
+    };
     prof.mark("check");
     prof.report(&format!("replace surfaces ({} faces)", out.faces.len()));
     if !errs.is_empty() {
@@ -1628,29 +1712,61 @@ pub fn replace_faces(
         surfs[fi] = r.surface.clone();
         domains[fi] = r.domain;
     }
-    let mut out = replace_surfaces_in(&b, &surfs, &domains)?;
+    let mut prof = super::boolean::Prof::new();
+    // (Its faces' senses are settled below, and the volume checked after.)
+    let mut out = replace_surfaces_checked(&b, &surfs, &domains, false)?;
+    prof.mark("surfaces");
     // The outward normal at the middle of each new face agrees with the old face's at its own.
     let outward = |body: &Body, fi: usize, p: &P3| {
         let f = &body.faces[fi];
         let (u, v) = f.surf.project(p, None);
         f.surf.normal(u, v) * if f.sense { 1.0 } else { -1.0 }
     };
+    let mut flipped = false;
     for r in faces {
         let fi = r.face.0 as usize;
         let middle = |body: &Body| {
-            super::smb::face_centroids(&super::kernel::subset(body, &[fi], false))
+            // (A point well inside the face is all the normal is wanted at: a coarse mesh.)
+            super::smb::face_centroids_within(&super::kernel::subset(body, &[fi], false), 0.05)
                 .first()
                 .copied()
         };
-        let (Some(was), Some(now)) = (middle(&b), middle(&out)) else {
+        let Some(was) = middle(&b) else {
+            continue;
+        };
+        // The new face's point beside the old one's middle: the replacement lies where the old
+        // face was, and meshing a heavy new surface only to find a point on it costs more than
+        // the rest of the operation (else its own middle, as the old face's).
+        let near = {
+            let s = &out.faces[fi].surf;
+            let (u, v) = s.project(&was, None);
+            let p = s.eval(u, v);
+            let size = 1.0 + b.bbox().diagonal();
+            (super::blend::on_face(&out, fi, &p) && (p - was).norm() < 0.25 * size).then_some(p)
+        };
+        let Some(now) = near.or_else(|| middle(&out)) else {
             continue;
         };
         let before = outward(&b, fi, &was);
         if outward(&out, fi, &now).dot(&before) < 0.0 {
             out.faces[fi].sense = !out.faces[fi].sense;
+            flipped = true;
         }
     }
-    let errs = out.check();
+    prof.mark("senses");
+    // (The body as made is checked but for its solids' orientation: only a face turned since
+    // needs another look, and one solid's is its volume's sign, measured below.)
+    let errs = if flipped {
+        out.check_structure()
+    } else {
+        Vec::new()
+    };
+    let errs = if errs.is_empty() && out.solids.len() > 1 {
+        out.check()
+    } else {
+        errs
+    };
+    prof.mark("check");
     if let Some(e) = errs.first() {
         return Err(KernelError::InvalidResult {
             op: "replace faces",
@@ -1663,6 +1779,8 @@ pub fn replace_faces(
             why: "the replaced faces turn the body inside out".into(),
         });
     }
+    prof.mark("volume");
+    prof.report("replace faces");
     let nf = out.faces.len();
     let id = k.insert(out);
     let history = History {
@@ -1729,7 +1847,8 @@ pub fn move_faces(
     }
     let too_far =
         |why: &str| KernelError::InvalidParameter(format!("The faces can't move that far: {why}"));
-    let mut out = replace_surfaces_in(&b, &surfs, &[]).map_err(|e| match e {
+    // (The full check below covers the solids' orientation, once the senses are settled.)
+    let mut out = replace_surfaces_checked(&b, &surfs, &[], false).map_err(|e| match e {
         KernelError::InvalidGeometry { .. } | KernelError::InvalidResult { .. } => {
             too_far("the faces round them no longer meet them")
         }
@@ -1739,11 +1858,25 @@ pub fn move_faces(
     for f in faces {
         let fi = f.0 as usize;
         let middle = |body: &Body| {
-            super::smb::face_centroids(&super::kernel::subset(body, &[fi], false))
+            // (A point well inside the face is all the normal is wanted at: a coarse mesh.)
+            super::smb::face_centroids_within(&super::kernel::subset(body, &[fi], false), 0.05)
                 .first()
                 .copied()
         };
-        let (Some(was), Some(now)) = (middle(&b), middle(&out)) else {
+        let Some(was) = middle(&b) else {
+            continue;
+        };
+        // The new face's point beside the old one's middle: the replacement lies where the old
+        // face was, and meshing a heavy new surface only to find a point on it costs more than
+        // the rest of the operation (else its own middle, as the old face's).
+        let near = {
+            let s = &out.faces[fi].surf;
+            let (u, v) = s.project(&was, None);
+            let p = s.eval(u, v);
+            let size = 1.0 + b.bbox().diagonal();
+            (super::blend::on_face(&out, fi, &p) && (p - was).norm() < 0.25 * size).then_some(p)
+        };
+        let Some(now) = near.or_else(|| middle(&out)) else {
             continue;
         };
         let outward = |body: &Body, p: &P3| {
@@ -1991,20 +2124,31 @@ fn param_range(c: &Curve, p0: &P3, p1: &P3, closed: bool, quarter: &P3, dir0: &V
 /// The parameters where a B-spline passes through `p` (more than one where it runs back near
 /// itself).
 fn nurbs_passes(c: &Curve, p: &P3) -> Vec<f64> {
+    nurbs_samples(c).map_or_else(Vec::new, |sm| nurbs_passes_in(c, &sm, p))
+}
+
+/// A B-spline's points at evenly spaced parameters, for [`nurbs_passes_in`] (the same for
+/// every point it is asked about).
+fn nurbs_samples(c: &Curve) -> Option<(Vec<f64>, Vec<P3>)> {
     const N: usize = 400;
-    let Some((a, b)) = c.nurbs_range() else {
-        return vec![];
-    };
+    let (a, b) = c.nurbs_range()?;
     let ts: Vec<f64> = (0..=N).map(|i| a + (b - a) * i as f64 / N as f64).collect();
     let pts: Vec<P3> = ts.iter().map(|&t| c.point(t)).collect();
+    Some((ts, pts))
+}
+
+/// [`nurbs_passes`] with the curve sampled already ([`nurbs_samples`]).
+fn nurbs_passes_in(c: &Curve, (ts, pts): &(Vec<f64>, Vec<P3>), p: &P3) -> Vec<f64> {
+    let n = ts.len() - 1;
+    let (a, b) = (ts[0], ts[n]);
     let scale = 1.0 + pts.iter().map(|q| q.coords.norm()).fold(0.0, f64::max);
     let d: Vec<f64> = pts.iter().map(|q| (q - p).norm()).collect();
     let mut out: Vec<f64> = Vec::new();
-    for i in 0..=N {
+    for i in 0..=n {
         let left = if i == 0 { f64::MAX } else { d[i - 1] };
-        let right = if i == N { f64::MAX } else { d[i + 1] };
+        let right = if i == n { f64::MAX } else { d[i + 1] };
         if d[i] <= left && d[i] <= right {
-            let t = c.closest(p, ts[i.saturating_sub(1)], ts[(i + 1).min(N)]);
+            let t = c.closest(p, ts[i.saturating_sub(1)], ts[(i + 1).min(n)]);
             if (c.point(t) - p).norm() < tol::REL_POINT * scale
                 && !out.iter().any(|x| (x - t).abs() < (b - a) * tol::REL_POINT)
             {
@@ -2018,7 +2162,8 @@ fn nurbs_passes(c: &Curve, p: &P3) -> Vec<f64> {
 /// On a B-spline, the arc from `p0` to `p1` leaving `p0` along `dir0`: of the parameters where
 /// the curve passes each end, the shortest pair running that way.
 fn nurbs_arc(c: &Curve, p0: &P3, p1: &P3, dir0: &V3) -> Option<(f64, f64)> {
-    let (s0, s1) = (nurbs_passes(c, p0), nurbs_passes(c, p1));
+    let sm = nurbs_samples(c)?;
+    let (s0, s1) = (nurbs_passes_in(c, &sm, p0), nurbs_passes_in(c, &sm, p1));
     let mut best: Option<(f64, (f64, f64))> = None;
     for &t0 in &s0 {
         for &t1 in &s1 {

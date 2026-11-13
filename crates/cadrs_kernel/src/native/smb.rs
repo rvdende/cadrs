@@ -1070,15 +1070,21 @@ fn build(t: Topo, curves: Vec<NurbsCurve>, surfs: Vec<SurfRec>) -> R<Brep> {
 /// body's size; exact integration of spline faces costs seconds each). What SMLib's tests'
 /// face indices are matched by: [`Brep::face_centroids`] are these of the read body.
 pub fn face_centroids(body: &Body) -> Vec<P3> {
+    face_centroids_within(body, 1e-3)
+}
+
+/// [`face_centroids`] from a tessellation `rel` of the body's size off the surfaces: a coarse
+/// one where only a point well inside each face is wanted.
+pub fn face_centroids_within(body: &Body, rel: f64) -> Vec<P3> {
     // The faces' boxes (surface-aware: a torus's vertices alone can be one point).
     let mut bb = body.bbox();
     for fi in 0..body.faces.len() {
         bb.union(&body.face_bbox(fi));
     }
     let defl = if bb.is_empty() {
-        1e-3
+        rel
     } else {
-        (bb.diagonal() * 1e-3).max(tol::POINT)
+        (bb.diagonal() * rel).max(tol::POINT)
     };
     let es = super::tess::edge_samples(body, defl, 0.3);
     body.faces
