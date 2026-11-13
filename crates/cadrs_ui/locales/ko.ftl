@@ -1757,6 +1757,14 @@ model-gear-cutter-radius = 커터 반지름 (0: 자동)
 model-gear-shaft-angle = 축각
 model-gear-at-apex = 꼭짓점 기준 위치
 model-gear-tilt = 기울기
+model-gear-hypoid = 하이포이드 기어 쌍
+model-gear-mate-teeth = 상대 기어 잇수
+model-gear-spiral-angle = 스파이럴각
+model-gear-member-hypoid-pinion = 피니언
+model-gear-offset = 오프셋
+model-gear-pressure-shift = 압력각 시프트
+model-gear-end-relief = 끝단 릴리프
+model-gear-pitch-plane-normal = 피치 평면의 법선
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = 오른나사

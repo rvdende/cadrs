@@ -1757,6 +1757,14 @@ model-gear-cutter-radius = Rayon de fraise (0 : auto)
 model-gear-shaft-angle = Angle des axes
 model-gear-at-apex = Position au sommet
 model-gear-tilt = Inclinaison
+model-gear-hypoid = Couple hypoïde
+model-gear-mate-teeth = Dents du conjugué
+model-gear-spiral-angle = Angle de spirale
+model-gear-member-hypoid-pinion = Pignon
+model-gear-offset = Déport
+model-gear-pressure-shift = Décalage d'angle de pression
+model-gear-end-relief = Dépouille d'extrémité
+model-gear-pitch-plane-normal = Normale du plan primitif
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = À droite

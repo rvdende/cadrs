@@ -399,6 +399,20 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
                 A,
             );
             s("Tilt", &mut x.tilt_expr, &mut x.tilt, A);
+            count(
+                "Mate's teeth",
+                &mut x.mate_teeth_expr,
+                &mut x.mate_teeth,
+                &mut s,
+            );
+            s("Offset", &mut x.offset_expr, &mut x.offset, L);
+            s(
+                "Pressure shift",
+                &mut x.pressure_shift_expr,
+                &mut x.pressure_shift,
+                A,
+            );
+            s("End relief", &mut x.end_relief_expr, &mut x.end_relief, L);
         }
         FeatureKind::Thread(x) => {
             s("Length", &mut x.length_expr, &mut x.length, L);

@@ -5809,6 +5809,7 @@ pub(super) fn cut(
     target: BodyId,
     tool: &Body,
     steps: &[RigidStep],
+    index: Option<usize>,
 ) -> Option<Result<OpResult>> {
     let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
     let t_start = web_time::Instant::now();
@@ -6350,10 +6351,13 @@ pub(super) fn cut(
             }
         }
     }
-    // Every copy of each plug, subtracted.
-    let copies = repeats.map_or(1, |(n, _)| n);
+    // Every copy of each plug, subtracted: a motion's that repeats, or the index's (each
+    // tooth space of a gear cut by a motion that doesn't, a face mill's roll: the plug turned
+    // a tooth at a time about the target's axis).
+    let copied = repeats.or(index.filter(|n| *n > 1).map(|n| (n, TAU / n as f64)));
+    let copies = copied.map_or(1, |(n, _)| n);
     let about = |i: usize| -> Affine {
-        let angle = repeats.map_or(0.0, |(_, a)| a) * i as f64;
+        let angle = copied.map_or(0.0, |(_, a)| a) * i as f64;
         let r = Rotation3::from_axis_angle(&target_axis.dir, angle);
         let c = target_axis.origin.coords;
         Affine {

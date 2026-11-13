@@ -6,12 +6,12 @@ use super::*;
 use cadrs_kernel::naming::{self, BodyNames};
 use cadrs_kernel::{
     Axis, BodyKind, Curve2, Extent, Kernel, LoftEnd, LoftSection, LoftSpec, Loop, OpResult,
-    PathCurve, Plane, Profile, Region, SweepControl, SweepLaw, SweepSpec,
+    PathCurve, Plane, Profile, Region, RigidStep, SolidMotion, SweepControl, SweepLaw, SweepSpec,
 };
 use nalgebra::{Point2, Point3, Unit, Vector3};
 
 use crate::document::FaceRef;
-use crate::gear::{self, Blank, Frame, GearFeature, Region2, Seg, Sweep};
+use crate::gear::{self, Blank, Frame, GearFeature, Generated, Region2, Revolved, Seg, Sweep};
 
 fn v(a: Vec3) -> Vector3<f64> {
     Vector3::new(a[0], a[1], a[2])
@@ -186,6 +186,114 @@ impl Rebuilder {
         }
     }
 
+    /// A solid of revolution of a generated gear's plan, named as the feature's.
+    fn gear_revolved(
+        &mut self,
+        r: &Revolved,
+        state: &State,
+        op: cadrs_kernel::OpId,
+        next: &mut u64,
+    ) -> cadrs_kernel::Result<(BodyId, BodyNames)> {
+        let profile = Profile::new(
+            plane(&r.frame),
+            kernel_regions(std::slice::from_ref(&r.region), next),
+        );
+        let axis = Axis {
+            origin: Point3::from(r.frame.origin),
+            dir: Unit::new_normalize(v(r.frame.y())),
+        };
+        let made = self.kernel.revolve(&profile, axis, std::f64::consts::TAU)?;
+        let mut body = self.name_new(state, op, &made)?;
+        if let Some((o, a, angle)) = r.turn {
+            let about = Axis {
+                origin: Point3::from(o),
+                dir: Unit::new_normalize(v(a)),
+            };
+            let turned = self
+                .kernel
+                .transform_motion(body.0, &cadrs_kernel::Motion::rotation(&about, angle))?;
+            self.kernel.release(body.0);
+            body = self.name_new(state, op, &turned)?;
+        }
+        Ok(body)
+    }
+
+    /// A generated gear (a hypoid pair's member): its blank less its tool rolled through it at
+    /// every tooth.
+    fn gear_generated(
+        &mut self,
+        g: &Generated,
+        state: &State,
+        op: cadrs_kernel::OpId,
+        next: &mut u64,
+    ) -> cadrs_kernel::Result<(BodyId, BodyNames)> {
+        let blank = self.gear_revolved(&g.blank, state, op, next)?;
+        let mut pieces: Vec<(BodyId, BodyNames)> = Vec::new();
+        for r in &g.tool {
+            match self.gear_revolved(r, state, op, next) {
+                Ok(b) => pieces.push(b),
+                Err(e) => {
+                    for (b, _) in pieces.into_iter().chain([blank]) {
+                        self.kernel.release(b);
+                    }
+                    return Err(e);
+                }
+            }
+        }
+        let mut tool = pieces.remove(0);
+        if !pieces.is_empty() {
+            let others: Vec<BodyId> = pieces.iter().map(|(b, _)| *b).collect();
+            let common = self
+                .kernel
+                .boolean(cadrs_kernel::BoolOp::Intersect, tool.0, &others);
+            let named = common.and_then(|r| {
+                let body = r.bodies[0];
+                let mut inputs = vec![(tool.0, &tool.1)];
+                inputs.extend(pieces.iter().map(|(b, n)| (*b, n)));
+                Ok((
+                    body,
+                    naming::name_body(&self.kernel, body, op, &r.history, &inputs)?,
+                ))
+            });
+            for &b in &others {
+                self.kernel.release(b);
+            }
+            self.kernel.release(tool.0);
+            match named {
+                Ok(t) => tool = t,
+                Err(e) => {
+                    self.kernel.release(blank.0);
+                    return Err(e);
+                }
+            }
+        }
+        let step = |(o, a, from, to): (Vec3, Vec3, f64, f64)| {
+            RigidStep::turn(
+                Axis {
+                    origin: Point3::from(o),
+                    dir: Unit::new_normalize(v(a)),
+                },
+                from,
+                to,
+            )
+        };
+        let motion = SolidMotion::rigid(vec![step(g.turns[0]), step(g.turns[1])]);
+        let cut = self
+            .kernel
+            .cut_swept_indexed(blank.0, tool.0, &motion, g.copies)
+            .and_then(|r| {
+                let body = r.bodies[0];
+                let inputs = [(blank.0, &blank.1), (tool.0, &tool.1)];
+                Ok((
+                    body,
+                    naming::name_body(&self.kernel, body, op, &r.history, &inputs)?,
+                ))
+            });
+        self.kernel.release(blank.0);
+        self.kernel.release(tool.0);
+        cut
+    }
+
     pub(in crate::rebuild) fn gear(
         &mut self,
         id: FeatureId,
@@ -207,6 +315,20 @@ impl Rebuilder {
         };
         let plan = gear::plan(x, target.as_ref().map(|t| &t.1))?;
         let mut next = 0u64;
+        if let Some(g) = &plan.generated {
+            let body = self
+                .gear_generated(g, state, op, &mut next)
+                .map_err(|err| format!("Gear failed: {err}"))?;
+            let merge = Merge {
+                op: BooleanOp::New,
+                merge_all: false,
+                scope: &[],
+                scope_set: false,
+                surface: false,
+            };
+            let geoms = state.geoms.clone();
+            return self.apply_extrude_op(id, &merge, body, state, &Contacts::default(), geoms);
+        }
         let mut made: Vec<(BodyId, BodyNames)> = Vec::new();
         // A gear's halves that twist (herringbone teeth): each starts on the section the one
         // before ends on, so the kernel joins them there as it sweeps them, with no boolean.

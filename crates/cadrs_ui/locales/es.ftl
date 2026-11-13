@@ -1757,6 +1757,14 @@ model-gear-cutter-radius = Radio de la fresa (0: auto)
 model-gear-shaft-angle = Ángulo entre ejes
 model-gear-at-apex = Posición en el vértice
 model-gear-tilt = Inclinación
+model-gear-hypoid = Par hipoide
+model-gear-mate-teeth = Dientes del conjugado
+model-gear-spiral-angle = Ángulo de espiral
+model-gear-member-hypoid-pinion = Piñón
+model-gear-offset = Desplazamiento
+model-gear-pressure-shift = Desplazamiento del ángulo de presión
+model-gear-end-relief = Alivio de extremos
+model-gear-pitch-plane-normal = Normal del plano primitivo
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = A derechas

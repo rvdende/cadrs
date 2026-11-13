@@ -1282,7 +1282,7 @@ pub(crate) fn is_checkbox(name: &str) -> bool {
 pub(crate) fn is_count(role: Role) -> bool {
     matches!(
         role,
-        Role::PatternCount | Role::PatternCount2 | Role::GearTeeth
+        Role::PatternCount | Role::PatternCount2 | Role::GearTeeth | Role::GearMateTeeth
     )
 }
 

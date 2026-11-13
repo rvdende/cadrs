@@ -1757,6 +1757,14 @@ model-gear-cutter-radius = Радиус фрезы (0: авто)
 model-gear-shaft-angle = Межосевой угол
 model-gear-at-apex = Положение по вершине
 model-gear-tilt = Наклон
+model-gear-hypoid = Гипоидная пара
+model-gear-mate-teeth = Зубья сопряжённого колеса
+model-gear-spiral-angle = Угол спирали
+model-gear-member-hypoid-pinion = Шестерня
+model-gear-offset = Смещение осей
+model-gear-pressure-shift = Сдвиг угла профиля
+model-gear-end-relief = Фланкирование торцов
+model-gear-pitch-plane-normal = Нормаль делительной плоскости
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Правая

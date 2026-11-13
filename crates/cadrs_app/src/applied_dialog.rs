@@ -323,6 +323,10 @@ pub(crate) enum Role {
     GearCutter,
     GearShaftAngle,
     GearTilt,
+    GearMateTeeth,
+    GearOffset,
+    GearPressureShift,
+    GearEndRelief,
     GearMember,
     // The direct edits (`crate::direct_edit_ui`).
     DirectEditFaces,

@@ -1757,6 +1757,14 @@ model-gear-cutter-radius = カッタ半径（0：自動）
 model-gear-shaft-angle = 軸角
 model-gear-at-apex = 頂点で位置決め
 model-gear-tilt = 傾き
+model-gear-hypoid = ハイポイドギヤ対
+model-gear-mate-teeth = 相手歯車の歯数
+model-gear-spiral-angle = ねじれ角
+model-gear-member-hypoid-pinion = ピニオン
+model-gear-offset = オフセット
+model-gear-pressure-shift = 圧力角シフト
+model-gear-end-relief = 端部逃げ
+model-gear-pitch-plane-normal = ピッチ平面の法線
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = 右ねじ

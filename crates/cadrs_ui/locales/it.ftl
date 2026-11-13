@@ -1757,6 +1757,14 @@ model-gear-cutter-radius = Raggio della fresa (0: auto)
 model-gear-shaft-angle = Angolo tra gli assi
 model-gear-at-apex = Posizione al vertice
 model-gear-tilt = Inclinazione
+model-gear-hypoid = Coppia ipoide
+model-gear-mate-teeth = Denti del coniugato
+model-gear-spiral-angle = Angolo di spirale
+model-gear-member-hypoid-pinion = Pignone
+model-gear-offset = Disassamento
+model-gear-pressure-shift = Spostamento dell'angolo di pressione
+model-gear-end-relief = Scarico d'estremità
+model-gear-pitch-plane-normal = Normale del piano primitivo
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Destrorsa

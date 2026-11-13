@@ -514,6 +514,20 @@ pub trait Kernel {
         Err(KernelError::Unsupported("cuts by swept solids"))
     }
 
+    /// [`Kernel::cut_swept`] at each of `copies` places of the tool a whole turn apart about the
+    /// axis of the motion's second turn (the target's): every tooth space of a gear cut by a
+    /// motion that doesn't repeat, a face mill's roll.
+    fn cut_swept_indexed(
+        &mut self,
+        target: BodyId,
+        tool: BodyId,
+        motion: &SolidMotion,
+        copies: usize,
+    ) -> Result<OpResult> {
+        let _ = (target, tool, motion, copies);
+        Err(KernelError::Unsupported("indexed cuts by swept solids"))
+    }
+
     /// [`Kernel::sweep_with`], the profile twisting about the path and scaling about the path's
     /// point as it goes (`law`, in proportion to the length travelled). The path must run on
     /// from the profile without a corner.

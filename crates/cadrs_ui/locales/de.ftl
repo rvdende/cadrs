@@ -1757,6 +1757,14 @@ model-gear-cutter-radius = Messerkopfradius (0: automatisch)
 model-gear-shaft-angle = Achswinkel
 model-gear-at-apex = Position an der Kegelspitze
 model-gear-tilt = Neigung
+model-gear-hypoid = Hypoidradsatz
+model-gear-mate-teeth = Zähne des Gegenrads
+model-gear-spiral-angle = Spiralwinkel
+model-gear-member-hypoid-pinion = Ritzel
+model-gear-offset = Achsversatz
+model-gear-pressure-shift = Eingriffswinkelverschiebung
+model-gear-end-relief = Endrücknahme
+model-gear-pitch-plane-normal = Normale der Teilebene
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Rechtsgängig

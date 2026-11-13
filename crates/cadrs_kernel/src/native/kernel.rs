@@ -1055,6 +1055,16 @@ impl Kernel for NativeKernel {
         super::sweep_solid::cut_swept(self, target, tool, motion)
     }
 
+    fn cut_swept_indexed(
+        &mut self,
+        target: BodyId,
+        tool: BodyId,
+        motion: &SolidMotion,
+        copies: usize,
+    ) -> Result<OpResult> {
+        super::sweep_solid::cut_swept_indexed(self, target, tool, motion, copies)
+    }
+
     fn primitive(&mut self, p: &Primitive) -> Result<OpResult> {
         use nalgebra::{Point2, Unit};
         let bad = |what: &str| {

@@ -1757,6 +1757,14 @@ model-gear-cutter-radius = 刀盘半径（0：自动）
 model-gear-shaft-angle = 轴交角
 model-gear-at-apex = 按锥顶定位
 model-gear-tilt = 倾角
+model-gear-hypoid = 准双曲面齿轮副
+model-gear-mate-teeth = 配对齿轮齿数
+model-gear-spiral-angle = 螺旋角
+model-gear-member-hypoid-pinion = 小轮
+model-gear-offset = 偏置距
+model-gear-pressure-shift = 压力角偏移
+model-gear-end-relief = 端部修缘
+model-gear-pitch-plane-normal = 节平面法线
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = 右旋

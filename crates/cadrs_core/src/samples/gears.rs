@@ -285,6 +285,44 @@ pub fn shaft_pair(shaft: f64) -> [GearFeature; 2] {
     [big, pinion]
 }
 
+/// The hypoid pair of `hypoid.sv`: 24 and 48 teeth, 2 mm at the mean point, shafts square and
+/// 25 mm apart, a 25° spiral, a face mill of 75.6122 mm with its pressure shift found by
+/// balancing the flanks nearest undercut (8.8549°), 0.05 mm of backlash and 0.2 mm of end
+/// relief: [gear, pinion], both laid out about the origin, the pitch plane the x–y plane.
+pub fn hypoid_pair() -> [GearFeature; 2] {
+    let common = |teeth: u32, mate: u32, member, left_hand| GearFeature {
+        gear_type: GearType::Hypoid,
+        teeth,
+        teeth_expr: teeth.to_string(),
+        mate_teeth: mate,
+        mate_teeth_expr: mate.to_string(),
+        module: 2.0,
+        module_expr: mm(2.0),
+        style: ToothStyle::Helical,
+        helix_angle: 25.0,
+        helix_angle_expr: deg(25.0),
+        left_hand,
+        shaft_angle: 90.0,
+        shaft_angle_expr: deg(90.0),
+        offset: 25.0,
+        offset_expr: mm(25.0),
+        cutter_radius: 75.6122,
+        cutter_radius_expr: mm(75.6122),
+        pressure_shift: 8.854_877_139_886_24,
+        pressure_shift_expr: deg(8.854_877_139_886_24),
+        backlash: 0.05,
+        backlash_expr: mm(0.05),
+        end_relief: 0.2,
+        end_relief_expr: mm(0.2),
+        member,
+        ..Default::default()
+    };
+    [
+        common(48, 24, crate::gear::BevelMember::Gear, true),
+        common(24, 48, crate::gear::BevelMember::Pinion, false),
+    ]
+}
+
 /// Adds the gears, and the hub and holes of the helical one, to the Part Studio `el` of `doc`.
 pub fn build(doc: &mut Document, h: &mut History, el: ElementId) -> Result<(), CommandError> {
     build_in(&mut DocHistory(doc, h), el)
@@ -359,8 +397,24 @@ pub fn build_in(s: &mut dyn Studio, el: ElementId) -> Result<(), CommandError> {
     Ok(())
 }
 
-/// A new document holding the sample: "Gears" with its Part Studio "Gears", as
-/// `fixtures/gears.cadrs` stores it.
+/// The hypoid pair's features.
+pub const HYPOID_PAIR: [FeatureId; 2] = [id(0x70), id(0x71)];
+
+/// Adds `hypoid.sv`'s pair ([`hypoid_pair`]) to the Part Studio `el`.
+pub fn build_hypoid_in(s: &mut dyn Studio, el: ElementId) -> Result<(), CommandError> {
+    for (feature, g) in HYPOID_PAIR.into_iter().zip(hypoid_pair()) {
+        s.run(&AddFeature {
+            element: el,
+            feature,
+            base_name: "Gear".into(),
+            kind: FeatureKind::Gear(g),
+        })?;
+    }
+    Ok(())
+}
+
+/// A new document holding the sample: "Gears" with its Part Studios "Gears" and "Hypoid" (the
+/// pair of `hypoid.sv`), as `fixtures/gears.cadrs` stores it.
 pub fn document() -> Result<Document, CommandError> {
     let mut doc = Document::empty("Gears");
     doc.id = crate::ids::DocumentId::from_u128(0x6ea5_0179_0000_0000_0000_0000_0000_0100);
@@ -368,8 +422,13 @@ pub fn document() -> Result<Document, CommandError> {
     el.id = ElementId::from_u128(0x6ea5_0179_0000_0000_0000_0000_0000_0101);
     let id = el.id;
     doc.elements.push(el);
+    let mut hypoid = crate::document::Element::part_studio("Hypoid");
+    hypoid.id = ElementId::from_u128(0x6ea5_0179_0000_0000_0000_0000_0000_0102);
+    let hypoid_id = hypoid.id;
+    doc.elements.push(hypoid);
     let mut h = History::default();
     build(&mut doc, &mut h, id)?;
+    build_hypoid_in(&mut DocHistory(&mut doc, &mut h), hypoid_id)?;
     Ok(doc)
 }
 

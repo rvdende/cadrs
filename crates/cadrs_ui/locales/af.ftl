@@ -1757,6 +1757,14 @@ model-gear-cutter-radius = Freesradius (0: outo)
 model-gear-shaft-angle = Ashoek
 model-gear-at-apex = Posisie by die toppunt
 model-gear-tilt = Kanteling
+model-gear-hypoid = Hipoïedpaar
+model-gear-mate-teeth = Paarrat se tande
+model-gear-spiral-angle = Spiraalhoek
+model-gear-member-hypoid-pinion = Kleinrat
+model-gear-offset = Afset
+model-gear-pressure-shift = Drukhoekverskuiwing
+model-gear-end-relief = Endverligting
+model-gear-pitch-plane-normal = Steekvlak se normaal
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Regsdraaiend

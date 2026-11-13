@@ -1954,6 +1954,57 @@ fn cut_by_pieces(
 }
 
 /// [`crate::Kernel::cut_swept`].
+/// [`cut_swept`] at each of `copies` places of the tool a whole turn apart about the target's
+/// axis (the second turn's): a gear's every tooth space, cut by a motion that doesn't repeat
+/// (a face mill's roll). Generated, one plug is made and its copies subtracted together; else
+/// one cut after another.
+pub fn cut_swept_indexed(
+    k: &mut NativeKernel,
+    target: BodyId,
+    tool: BodyId,
+    motion: &SolidMotion,
+    copies: usize,
+) -> Result<OpResult> {
+    if copies <= 1 {
+        return cut_swept(k, target, tool, motion);
+    }
+    let SolidMotion::Rigid { steps } = motion else {
+        return Err(KernelError::Unsupported(
+            "an indexed cut by a motion of two turns",
+        ));
+    };
+    let Some(RigidStep::Turn { axis, .. }) = steps.get(1).copied() else {
+        return Err(KernelError::Unsupported(
+            "an indexed cut by a motion of two turns",
+        ));
+    };
+    let b = (**k.get(tool)?).clone();
+    if let Some(Ok(r)) = super::sweep_generate::cut(k, target, &b, steps, Some(copies)) {
+        return Ok(r);
+    }
+    let mut at = target;
+    let mut last = Err(KernelError::Unsupported("a cut with nothing to cut"));
+    for i in 0..copies {
+        let turned = if i == 0 {
+            tool
+        } else {
+            let angle = std::f64::consts::TAU * i as f64 / copies as f64;
+            k.transform_motion(tool, &crate::Motion::rotation(&axis, angle))?
+                .first()?
+        };
+        let r = cut_swept(k, at, turned, motion)?;
+        if turned != tool {
+            k.release(turned);
+        }
+        let [next] = r.bodies.as_slice() else {
+            return Ok(r);
+        };
+        at = *next;
+        last = Ok(r);
+    }
+    last
+}
+
 pub fn cut_swept(
     k: &mut NativeKernel,
     target: BodyId,
@@ -1980,7 +2031,7 @@ pub fn cut_swept(
     }
     // Two turns about different lines (a gear cut by its mate): by the contacts' sheets.
     if let SolidMotion::Rigid { steps } = motion
-        && let Some(Ok(r)) = super::sweep_generate::cut(k, target, &b, steps)
+        && let Some(Ok(r)) = super::sweep_generate::cut(k, target, &b, steps, None)
     {
         return Ok(r);
     }
