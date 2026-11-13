@@ -238,6 +238,22 @@ pub fn perpendicular(l: &Layout) -> Vec3 {
     sub(add(w, scale(p, t)), gear_foot(l))
 }
 
+/// A member's cone distance at the mean point and its pitch angle.
+fn cone_of(gear: bool, l: &Layout) -> f64 {
+    if gear { l.mean_cone } else { l.pinion_cone }
+}
+
+fn pitch_of(gear: bool, l: &Layout) -> f64 {
+    if gear { l.gear_pitch } else { l.pinion_pitch }
+}
+
+/// How far a member's blank reaches under its pitch cone: four modules, short of its axis on a
+/// small pinion (a third of its pitch radius at the toe at most).
+pub(super) fn back_of(gear: bool, l: &Layout) -> f64 {
+    let toe = cone_of(gear, l) - 0.1 * l.mean_cone;
+    (4.0 * l.normal_module).min(0.33 * toe * pitch_of(gear, l).sin())
+}
+
 /// The crown's roll each way while it cuts a member (radians): past where its tooth or space
 /// leaves the blank at either end of the face.
 const ROLL: f64 = 45.0 * PI / 180.0;
@@ -272,7 +288,9 @@ fn member_with(
     use super::{Frame, Generated, Piece, Region2, Revolved, Seg};
     let r = l.mean_cone;
     let width = 0.2 * r;
-    let back = 4.0 * l.normal_module;
+    // (Four modules under the pitch cone, short of the axis on a small pinion: a third of its
+    // pitch radius at the toe at most.)
+    let back = back_of(gear, l);
     let (apex, axis, pitch, cone, teeth) = if gear {
         ([0.0; 3], l.gear_axis, l.gear_pitch, r, d.gear_teeth)
     } else {

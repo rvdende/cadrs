@@ -1333,7 +1333,9 @@ pub(crate) fn effective_features(features: &[Feature], o: &PartOverride) -> Vec<
             if let cadrs_core::FeatureKind::Gear(g) = &mut f.kind
                 && matches!(
                     g.gear_type,
-                    cadrs_core::gear::GearType::Hypoid | cadrs_core::gear::GearType::Worm
+                    cadrs_core::gear::GearType::Hypoid
+                        | cadrs_core::gear::GearType::Worm
+                        | cadrs_core::gear::GearType::Pair
                 )
             {
                 g.fast_preview = true;

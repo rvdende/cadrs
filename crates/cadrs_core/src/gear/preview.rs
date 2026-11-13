@@ -83,7 +83,8 @@ impl Mesh {
     ) -> bool {
         let base = self.positions.len() as u32;
         let coords: Vec<f64> = flat.iter().flat_map(|f| [f[0], f[1]]).collect();
-        let Ok(tris) = earcutr::earcut(&coords, &[outer.len()], 2) else {
+        let holes: &[usize] = if hole.is_empty() { &[] } else { &[outer.len()] };
+        let Ok(tris) = earcutr::earcut(&coords, holes, 2) else {
             return false;
         };
         self.positions.extend_from_slice(outer);
@@ -208,8 +209,7 @@ pub(super) fn hypoid_member(d: &Design, l: &Layout, gear: bool, grow: f64) -> Op
     // The blank in a sphere `s` about the apex: the angles from the axis of its back cone, its
     // root cone, its face cone (the pitch cone moved off along its normal).
     let off = |s: f64, by: f64| pitch + by.atan2((s * s - by * by).max(0.0).sqrt());
-    let mn = l.normal_module;
-    let (add_, ded, back) = (l.addendum, l.dedendum, 4.0 * mn);
+    let (add_, ded, back) = (l.addendum, l.dedendum, super::hypoid::back_of(gear, l));
     let width = 0.2 * l.mean_cone;
     const SLICES: usize = 8;
     const FLANK: usize = 8;
@@ -602,7 +602,9 @@ pub(super) fn worm_member(d: &super::worm::Design, wheel: bool, rotation: f64) -
         let r2 = z2 * m / 2.0;
         let b = d.width;
         // A space under the worm's thread where it faces the wheel (φ 0, at the wheel's +y).
-        let at = (-from).rem_euclid(pitch);
+        // (The threads' middles where they face the wheel are at x ≡ `from` along the worm, a
+        // pitch apart; the wheel's point at x on its pitch circle is at π/2 − x / r₂.)
+        let at = from.rem_euclid(pitch);
         let space = PI / 2.0 - at / r2;
         let section = super::Section {
             flank: super::Flank::Involute {

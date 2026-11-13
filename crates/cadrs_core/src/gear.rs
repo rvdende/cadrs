@@ -63,16 +63,21 @@ pub enum GearType {
     Hypoid,
     /// A worm drive's worm or its wheel, hobbed by the worm ([`worm`]).
     Worm,
+    /// Both gears of a pair on two shafts, from their ratio: a hypoid pair (a spiral bevel pair
+    /// where the shafts meet), or a worm drive where they are square and far enough apart for a
+    /// worm, the tooth counts chosen to suit ([`pair_members`]).
+    Pair,
 }
 
 impl GearType {
-    pub const ALL: [GearType; 6] = [
+    pub const ALL: [GearType; 7] = [
         GearType::Spur,
         GearType::Ring,
         GearType::Bevel,
         GearType::Rack,
         GearType::Hypoid,
         GearType::Worm,
+        GearType::Pair,
     ];
 
     pub fn label(self) -> &'static str {
@@ -83,6 +88,7 @@ impl GearType {
             GearType::Rack => "Rack",
             GearType::Hypoid => "Hypoid pair",
             GearType::Worm => "Worm drive",
+            GearType::Pair => "Gear pair",
         }
     }
 }
@@ -342,6 +348,27 @@ pub struct GearFeature {
     /// once: to move its shafts and see the pair's overall shape, its teeth cut once it's off.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub fast_preview: bool,
+    /// A gear pair's ratio: the gear's teeth over the pinion's (or the worm's starts).
+    #[serde(default = "two")]
+    pub ratio: f64,
+    #[serde(default = "two_expr")]
+    pub ratio_expr: String,
+    /// A gear pair's tooth counts chosen to suit its ratio (else the Teeth and Mate's teeth
+    /// typed: the gear's and the pinion's).
+    #[serde(default = "yes")]
+    pub auto_teeth: bool,
+}
+
+fn two() -> f64 {
+    2.0
+}
+
+fn two_expr() -> String {
+    "2".into()
+}
+
+fn yes() -> bool {
+    true
 }
 
 fn worm_quotient() -> f64 {
@@ -435,6 +462,9 @@ impl Default for GearFeature {
             worm_quotient: 10.0,
             worm_quotient_expr: "10".into(),
             fast_preview: false,
+            ratio: 2.0,
+            ratio_expr: "2".into(),
+            auto_teeth: true,
         }
     }
 }
@@ -458,6 +488,18 @@ impl GearFeature {
     pub fn problem(&self) -> Option<&'static str> {
         if self.gear_type == GearType::Worm {
             return self.worm_problem();
+        }
+        if self.gear_type == GearType::Pair {
+            if self.face.is_some() {
+                return Some("A gear pair is made whole, not cut into a face");
+            }
+            if !(self.ratio >= 1.0 && self.ratio <= 200.0) {
+                return Some("The ratio must be between 1 and 200");
+            }
+            if !positive(self.module) {
+                return Some("The module must be greater than zero");
+            }
+            return None;
         }
         if !(MIN_TEETH..=MAX_TEETH).contains(&self.teeth) {
             return Some("The number of teeth must be between 6 and 400");
@@ -1547,6 +1589,8 @@ pub struct Plan {
     /// Its Fast preview's mesh (a generated gear's teeth straight from their equations), where
     /// it has one.
     pub preview: Option<preview::Mesh>,
+    /// A gear pair's other member, made with it as a part of its own.
+    pub second: Option<Box<Plan>>,
     /// The module the gear came out with (mm).
     pub module: f64,
 }
@@ -1617,6 +1661,10 @@ pub type Shafts = [Shaft; 2];
 
 /// [`plan`] of a hypoid pair's member placed on its own shaft and its mate's (resolved).
 pub fn plan_on_shafts(x: &GearFeature, shafts: &Shafts) -> Result<Plan, &'static str> {
+    if x.gear_type == GearType::Pair {
+        let (sigma, e) = shafts_apart(&shafts[0], &shafts[1])?;
+        return pair_plan(x, sigma, e, Some(shafts));
+    }
     if x.gear_type != GearType::Hypoid {
         return plan(x, None);
     }
@@ -1679,6 +1727,165 @@ pub fn plan_on_shafts(x: &GearFeature, shafts: &Shafts) -> Result<Plan, &'static
     hypoid_placed(&placed, Some((crossing, signed < 0.0)))
 }
 
+/// Which kind a gear pair is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairFamily {
+    /// A hypoid pair (a spiral bevel pair where the shafts meet).
+    Hypoid,
+    /// A worm drive.
+    Worm,
+}
+
+/// A gear pair's family and its two members (the gear's, then the pinion's or the worm's),
+/// for shafts at `shaft_angle` (degrees) and `offset` (mm) apart. A worm drive where the shafts
+/// are square, the ratio is a worm's (5 or more) and they are far enough apart for a worm of
+/// the module between the wheel's teeth and them (its diameter quotient 2e/m − z₂ from 4 to
+/// 30); else a hypoid pair. The tooth counts, unless typed: a hypoid pinion of 48 over the
+/// ratio teeth (8 to 24), a worm of 40 over it starts (1 to 4), and the gear the ratio times.
+pub fn pair_members(
+    x: &GearFeature,
+    shaft_angle: f64,
+    offset: f64,
+) -> (PairFamily, [GearFeature; 2]) {
+    let m = x.module;
+    let ratio = x.ratio;
+    let worm_starts = if x.auto_teeth {
+        (40.0 / ratio).round().clamp(1.0, 4.0) as u32
+    } else {
+        x.mate_teeth.max(1)
+    };
+    let worm_teeth = if x.auto_teeth {
+        ((worm_starts as f64 * ratio).round() as u32).max(MIN_TEETH)
+    } else {
+        x.teeth
+    };
+    let quotient = 2.0 * offset / m - worm_teeth as f64;
+    let worm = (shaft_angle - 90.0).abs() < 0.5
+        && ratio >= 5.0
+        && (4.0..=30.0).contains(&quotient)
+        && worm_starts <= 4;
+    let counts = |z: u32| (z, z.to_string());
+    if worm {
+        let r2 = worm_teeth as f64 * m / 2.0;
+        let r1 = quotient * m / 2.0;
+        // The wheel half the worm's tip diameter wide, 6 modules at most (the generated cut's
+        // reach), the worm long enough to carry the wheel's rim.
+        let width = (r1 + m).clamp(2.0 * m, 6.0 * m);
+        let length = 2.0 * ((r2 + m).powi(2) - (r2 - 1.25 * m).powi(2)).max(0.0).sqrt() + 4.0 * m;
+        let member = |member: BevelMember, teeth: u32, mate: u32| GearFeature {
+            gear_type: GearType::Worm,
+            teeth: counts(teeth).0,
+            teeth_expr: counts(teeth).1,
+            mate_teeth: counts(mate).0,
+            mate_teeth_expr: counts(mate).1,
+            worm_quotient: quotient,
+            worm_quotient_expr: format!("{quotient}"),
+            width,
+            width_expr: format!("{width} mm"),
+            length,
+            length_expr: format!("{length} mm"),
+            bore: 0.0,
+            bore_expr: "0 mm".into(),
+            member,
+            ..x.clone()
+        };
+        return (
+            PairFamily::Worm,
+            [
+                member(BevelMember::Gear, worm_teeth, worm_starts),
+                member(BevelMember::Pinion, worm_starts, worm_teeth),
+            ],
+        );
+    }
+    let pinion = if x.auto_teeth {
+        (48.0 / ratio).round().clamp(8.0, 24.0) as u32
+    } else {
+        x.mate_teeth
+    };
+    let gear = if x.auto_teeth {
+        ((pinion as f64 * ratio).round() as u32).max(MIN_TEETH)
+    } else {
+        x.teeth
+    };
+    let member = |member: BevelMember, teeth: u32, mate: u32, left_hand: bool| GearFeature {
+        gear_type: GearType::Hypoid,
+        teeth: counts(teeth).0,
+        teeth_expr: counts(teeth).1,
+        mate_teeth: counts(mate).0,
+        mate_teeth_expr: counts(mate).1,
+        style: ToothStyle::Helical,
+        shaft_angle,
+        shaft_angle_expr: format!("{shaft_angle} deg"),
+        offset,
+        offset_expr: format!("{offset} mm"),
+        left_hand,
+        member,
+        ..x.clone()
+    };
+    (
+        PairFamily::Hypoid,
+        [
+            member(BevelMember::Gear, gear, pinion, x.left_hand),
+            member(BevelMember::Pinion, pinion, gear, !x.left_hand),
+        ],
+    )
+}
+
+/// Two shafts' angle (degrees) and the distance between them.
+fn shafts_apart(a: &Shaft, b: &Shaft) -> Result<(f64, f64), &'static str> {
+    let (ad, bd) = (unit(a.1), unit(b.1));
+    let across = cross(bd, ad);
+    let sine = norm(across);
+    if sine.is_nan() || sine <= 1e-6 {
+        return Err("The two shafts are parallel: a gear pair's shafts cross or meet");
+    }
+    let apart = dot(sub(b.0, a.0), scale(across, 1.0 / sine)).abs();
+    Ok((dot(ad, bd).clamp(-1.0, 1.0).acos().to_degrees(), apart))
+}
+
+/// A gear pair's plan: its gear's, with its pinion's (or worm's) as the second.
+fn pair_plan(
+    x: &GearFeature,
+    shaft_angle: f64,
+    offset: f64,
+    shafts: Option<&Shafts>,
+) -> Result<Plan, &'static str> {
+    let (family, [gear, pinion]) = pair_members(x, shaft_angle, offset);
+    if let Some(p) = gear.problem().or(pinion.problem()) {
+        return Err(p);
+    }
+    let (mut first, second) = match (family, shafts) {
+        (PairFamily::Hypoid, Some(s)) => (
+            plan_on_shafts(&gear, s)?,
+            plan_on_shafts(&pinion, &[s[1], s[0]])?,
+        ),
+        (PairFamily::Worm, Some(s)) => (worm_on_shafts(&gear, s)?, worm_on_shafts(&pinion, s)?),
+        (PairFamily::Hypoid, None) => (hypoid_member(&gear)?, hypoid_member(&pinion)?),
+        (PairFamily::Worm, None) => (worm_member(&gear)?, worm_member(&pinion)?),
+    };
+    first.second = Some(Box::new(second));
+    Ok(first)
+}
+
+/// A worm drive's member on its shafts (`shafts`: the wheel's, then the worm's): the drive's
+/// frame at the foot on the wheel's axis of their common perpendicular, its z the wheel's
+/// axis, its y toward the worm's.
+fn worm_on_shafts(x: &GearFeature, shafts: &Shafts) -> Result<Plan, &'static str> {
+    let d = x.worm_design();
+    let (w, k) = (shafts[0], shafts[1]);
+    let (wd, kd) = (unit(w.1), unit(k.1));
+    let wv = sub(k.0, w.0);
+    let b = dot(wd, kd);
+    let den = (1.0 - b * b).max(1e-12);
+    let tw = (dot(wd, wv) - b * dot(kd, wv)) / den;
+    let tk = (b * dot(wd, wv) - dot(kd, wv)) / den;
+    let (wf, kf) = (add(w.0, scale(wd, tw)), add(k.0, scale(kd, tk)));
+    let y = unit(sub(kf, wf));
+    let xax = cross(y, wd);
+    let dir = |v: Vec3| add(add(scale(xax, v[0]), scale(y, v[1])), scale(wd, v[2]));
+    worm_placed(x, &d, &|p| add(wf, dir(p)), &dir)
+}
+
 pub fn plan(x: &GearFeature, target: Option<&Target>) -> Result<Plan, &'static str> {
     if let Some(p) = x.problem() {
         return Err(p);
@@ -1705,6 +1912,8 @@ pub fn plan(x: &GearFeature, target: Option<&Target>) -> Result<Plan, &'static s
         (Some(_), GearType::Rack) => Err("A rack's teeth go on a flat face"),
         (None, GearType::Hypoid) => hypoid_member(x),
         (None, GearType::Worm) => worm_member(x),
+        (None, GearType::Pair) => pair_plan(x, x.shaft_angle, x.offset, None),
+        (Some(_), GearType::Pair) => Err("A gear pair is made whole, not cut into a face"),
         (Some(_), GearType::Worm) => Err("A worm or its wheel is made whole, not cut into a face"),
         (Some(_), GearType::Hypoid) => {
             Err("A hypoid pair's member is made whole, not cut into a face")
@@ -1880,6 +2089,7 @@ fn spur(x: &GearFeature) -> Result<Plan, &'static str> {
         generated: None,
         made: None,
         preview: None,
+        second: None,
         module: m,
     })
 }
@@ -1900,6 +2110,7 @@ fn ring(x: &GearFeature) -> Result<Plan, &'static str> {
         generated: None,
         made: None,
         preview: None,
+        second: None,
         module: m,
     })
 }
@@ -1959,6 +2170,7 @@ fn on_cylinder(x: &GearFeature, t: &Target) -> Result<Plan, &'static str> {
         generated: None,
         made: None,
         preview: None,
+        second: None,
         module: m,
     })
 }
@@ -2816,6 +3028,7 @@ fn worm_placed(
         generated,
         made,
         preview: preview_mesh,
+        second: None,
         module: x.module,
     })
 }
@@ -2824,18 +3037,16 @@ fn worm_placed(
 /// the pinion's foot; None where the axes meet), and the pinion's direction.
 type Crossing = (Vec3, Vec3, Option<Vec3>, Vec3);
 
-/// A hypoid pair's member, in the feature's frame, or (`on`) laid on the shafts' crossing:
-/// the layout turned and moved so its axes are the shafts, mirrored where the offset is on its
-/// other side (the hand following from it).
-fn hypoid_placed(x: &GearFeature, on: Option<(Crossing, bool)>) -> Result<Plan, &'static str> {
-    let (d, gear) = x.hypoid_design();
-    let l = hypoid::layout(&d)?;
-    let g = hypoid::member(&d, &l, gear, x.backlash / 4.0, x.end_relief);
-    let preview_mesh = if x.fast_preview {
-        preview::hypoid_member(&d, &l, gear, x.backlash / 4.0)
-    } else {
-        None
-    };
+/// Where a hypoid pair's layout goes: its points' and its directions' places (in the feature's
+/// frame, or on the shafts' crossing), and +1 or −1 as it is mirrored (the turns' sense).
+#[allow(clippy::type_complexity)]
+fn hypoid_map(
+    x: &GearFeature,
+    d: &hypoid::Design,
+    l: &hypoid::Layout,
+    gear: bool,
+    on: Option<(Crossing, bool)>,
+) -> (Box<dyn Fn(Vec3) -> Vec3>, Box<dyn Fn(Vec3) -> Vec3>, f64) {
     let own = own_frame(x);
     let mirror = match on {
         Some((_, other_side)) if d.offset > 1e-9 => other_side,
@@ -2848,7 +3059,7 @@ fn hypoid_placed(x: &GearFeature, on: Option<(Crossing, bool)>) -> Result<Plan, 
         }
     };
     let side = if mirror { -1.0 } else { 1.0 };
-    let mirrored = |v: Vec3| [v[0], side * v[1], v[2]];
+    let mirrored = move |v: Vec3| [v[0], side * v[1], v[2]];
     // The layout's own frame at its gear axis's foot (the gear's axis, the perpendicular to
     // the pinion's, and their cross), and the shafts' (or the feature's frame).
     let frame3 = |gd: Vec3, across: Vec3| {
@@ -2892,8 +3103,29 @@ fn hypoid_placed(x: &GearFeature, on: Option<(Crossing, bool)>) -> Result<Plan, 
         Some(((gf, ..), _)) => gf,
         None => own.origin,
     };
-    let dir = |v: Vec3| place(mirrored(v));
-    let pt = |p: Vec3| add(origin, place(sub(mirrored(p), foot)));
+    let place = std::rc::Rc::new(place);
+    let p2 = place.clone();
+    (
+        Box::new(move |p: Vec3| add(origin, place(sub(mirrored(p), foot)))),
+        Box::new(move |v: Vec3| p2(mirrored(v))),
+        side,
+    )
+}
+
+/// A hypoid pair's member, in the feature's frame, or (`on`) laid on the shafts' crossing:
+/// the layout turned and moved so its axes are the shafts, mirrored where the offset is on its
+/// other side (the hand following from it).
+fn hypoid_placed(x: &GearFeature, on: Option<(Crossing, bool)>) -> Result<Plan, &'static str> {
+    let (d, gear) = x.hypoid_design();
+    let l = hypoid::layout(&d)?;
+    let g = hypoid::member(&d, &l, gear, x.backlash / 4.0, x.end_relief);
+    let preview_mesh = if x.fast_preview {
+        preview::hypoid_member(&d, &l, gear, x.backlash / 4.0)
+    } else {
+        None
+    };
+    let (pt, dir, side) = hypoid_map(x, &d, &l, gear, on);
+    let (pt, dir) = (|p: Vec3| pt(p), |v: Vec3| dir(v));
     // A frame keeps its axis (its y) and its x; its normal follows from them.
     let place = |f: Frame| {
         let (fx, fy) = (dir(f.x), dir(f.y()));
@@ -2941,6 +3173,7 @@ fn hypoid_placed(x: &GearFeature, on: Option<(Crossing, bool)>) -> Result<Plan, 
             normals: m.normals.into_iter().map(dir).collect(),
             indices: m.indices,
         }),
+        second: None,
         module: x.module,
     })
 }
@@ -3011,6 +3244,7 @@ fn bevel(x: &GearFeature) -> Result<Plan, &'static str> {
         generated: None,
         made: None,
         preview: None,
+        second: None,
         module: m,
     })
 }
@@ -3050,6 +3284,7 @@ fn on_cone(x: &GearFeature, t: &Target) -> Result<Plan, &'static str> {
         generated: None,
         made: None,
         preview: None,
+        second: None,
         module: m,
     })
 }
@@ -3134,6 +3369,7 @@ fn rack(x: &GearFeature) -> Result<Plan, &'static str> {
         generated: None,
         made: None,
         preview: None,
+        second: None,
         module: m,
     })
 }
@@ -3175,6 +3411,7 @@ fn on_plane(x: &GearFeature, t: &Target) -> Result<Plan, &'static str> {
         generated: None,
         made: None,
         preview: None,
+        second: None,
         module: m,
     })
 }

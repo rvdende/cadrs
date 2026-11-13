@@ -157,7 +157,7 @@ fn sweep_parts(s: &Sweep, next: &mut u64) -> (Profile, SweepSpec, SweepLaw, Opti
 }
 
 /// A Fast preview's mesh as a new part with no kernel body.
-fn preview_part(id: FeatureId, m: &gear::preview::Mesh, state: &Arc<State>) -> Output {
+fn preview_part(id: FeatureId, m: &gear::preview::Mesh, index: u32, state: &Arc<State>) -> Output {
     use crate::solid::{FaceName, FaceOrigin, Solid, SolidFace};
     let mut solid = Solid {
         positions: m.positions.clone(),
@@ -188,7 +188,7 @@ fn preview_part(id: FeatureId, m: &gear::preview::Mesh, state: &Arc<State>) -> O
     next.next_part += 1;
     next.parts.push(PartState {
         part: Arc::new(Part {
-            id: PartId::new(id, 0),
+            id: PartId::new(id, index),
             feature: id,
             name: format!("Part {}", next.next_part),
             kind: PartKind::Solid,
@@ -552,7 +552,9 @@ impl Rebuilder {
         };
         // A hypoid pair's member on its shafts, where both are picked.
         let plan = match (&x.shaft, &x.mate_shaft) {
-            (Some(a), Some(b)) if x.gear_type == gear::GearType::Hypoid => {
+            (Some(a), Some(b))
+                if matches!(x.gear_type, gear::GearType::Hypoid | gear::GearType::Pair) =>
+            {
                 let line =
                     |this: &Self, r: &crate::document::AxisRef| -> Result<gear::Shaft, String> {
                         let a = this
@@ -577,18 +579,62 @@ impl Rebuilder {
         let mut next = 0u64;
         // Fast preview: the gear's teeth straight from their equations, a part of mesh alone
         // (no kernel body), at once.
-        if x.fast_preview
-            && let Some(m) = &plan.preview
-        {
-            return Ok(preview_part(id, m, state));
+        // (A gear pair's members each with its preview: a part each.)
+        let members: Vec<&gear::Plan> = std::iter::once(&plan)
+            .chain(plan.second.as_deref())
+            .collect();
+        if x.fast_preview && members.iter().all(|p| p.preview.is_some()) {
+            let mut out = preview_part(id, plan.preview.as_ref().unwrap(), 0, state);
+            if let Some(second) = &plan.second {
+                out = preview_part(id, second.preview.as_ref().unwrap(), 1, &out.state);
+            }
+            return Ok(out);
         }
-        let made = match (&plan.generated, &plan.made) {
-            (Some(g), _) => Some(self.gear_generated(g, state, op, &mut next, x.fast_preview)),
-            (None, Some(lists)) => Some(
-                self.gear_made(lists, state, op, &mut next)
-                    .map(|b| (b, None)),
-            ),
-            _ => None,
+        let mut bodies: Vec<((BodyId, BodyNames), Option<String>)> = Vec::new();
+        for member in &members {
+            let made = match (&member.generated, &member.made) {
+                (Some(g), _) => Some(self.gear_generated(g, state, op, &mut next, x.fast_preview)),
+                (None, Some(lists)) => Some(
+                    self.gear_made(lists, state, op, &mut next)
+                        .map(|b| (b, None)),
+                ),
+                _ => None,
+            };
+            match made {
+                Some(Ok(b)) => bodies.push(b),
+                Some(Err(err)) => {
+                    for ((b, _), _) in bodies {
+                        self.kernel.release(b);
+                    }
+                    return Err(format!("Gear failed: {err}"));
+                }
+                None => {}
+            }
+        }
+        let made = match bodies.len() {
+            0 => None,
+            1 => bodies.pop().map(Ok),
+            // A pair's members, one body of two solids (the New makes a part of each).
+            _ => {
+                let ids: Vec<BodyId> = bodies.iter().map(|((b, _), _)| *b).collect();
+                let warning = bodies
+                    .iter()
+                    .filter_map(|(_, w)| w.clone())
+                    .reduce(|a, b| format!("{a}; {b}"));
+                let both = self.kernel.compound(&ids).and_then(|r| {
+                    let body = r.bodies[0];
+                    let inputs: Vec<(BodyId, &BodyNames)> =
+                        bodies.iter().map(|((b, n), _)| (*b, n)).collect();
+                    Ok((
+                        body,
+                        naming::name_body(&self.kernel, body, op, &r.history, &inputs)?,
+                    ))
+                });
+                for b in ids {
+                    self.kernel.release(b);
+                }
+                Some(both.map(|b| (b, warning)))
+            }
         };
         if let Some(body) = made {
             let (body, warning) = body.map_err(|err| format!("Gear failed: {err}"))?;

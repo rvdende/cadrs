@@ -26,7 +26,8 @@ use std::time::{Duration, Instant};
 struct Case {
     family: &'static str,
     what: String,
-    pair: [GearFeature; 2],
+    /// Its features: a pair's two members, or one Gear pair making both.
+    pair: Vec<GearFeature>,
 }
 
 /// What a case came to.
@@ -151,7 +152,7 @@ fn run(case: &Case, exact: bool) -> Outcome {
 fn cases() -> Vec<Case> {
     use cadrs_core::samples::gears::{hypoid_pair, shaft_pair, worm_drive};
     let want: Vec<String> = std::env::var("GEARS")
-        .unwrap_or_else(|_| "hypoid,worm,bevel".into())
+        .unwrap_or_else(|_| "hypoid,worm,bevel,pair".into())
         .split(',')
         .map(str::to_string)
         .collect();
@@ -173,7 +174,7 @@ fn cases() -> Vec<Case> {
                 out.push(Case {
                     family: "hypoid",
                     what: format!("24/48 shaft {shaft:>5}° offset {offset:>4} mm"),
-                    pair,
+                    pair: pair.to_vec(),
                 });
             }
         }
@@ -198,7 +199,7 @@ fn cases() -> Vec<Case> {
                     out.push(Case {
                         family: "worm",
                         what: format!("{starts} start(s) to {teeth} teeth, q {q}"),
-                        pair,
+                        pair: pair.to_vec(),
                     });
                 }
             }
@@ -219,8 +220,42 @@ fn cases() -> Vec<Case> {
             out.push(Case {
                 family: "bevel",
                 what: format!("24/18 localised, shaft {shaft:>5}°"),
-                pair,
+                pair: pair.to_vec(),
             });
+        }
+    }
+    if want.iter().any(|w| w == "pair") {
+        // One Gear pair (module 2) at 90°, its offset drawn out from none (a spiral bevel pair)
+        // through a hypoid's to a worm's, at a hypoid's ratio and a worm's.
+        for ratio in [2.0, 10.0, 30.0] {
+            for offset in [0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 80.0] {
+                let g = GearFeature {
+                    gear_type: cadrs_core::gear::GearType::Pair,
+                    module: 2.0,
+                    module_expr: "2 mm".into(),
+                    ratio,
+                    ratio_expr: format!("{ratio}"),
+                    helix_angle: 25.0,
+                    helix_angle_expr: "25 deg".into(),
+                    style: cadrs_core::gear::ToothStyle::Helical,
+                    shaft_angle: 90.0,
+                    shaft_angle_expr: "90 deg".into(),
+                    offset,
+                    offset_expr: format!("{offset} mm"),
+                    backlash: 0.05,
+                    backlash_expr: "0.05 mm".into(),
+                    ..Default::default()
+                };
+                let (family, members) = cadrs_core::gear::pair_members(&g, 90.0, offset);
+                out.push(Case {
+                    family: "pair",
+                    what: format!(
+                        "ratio {ratio:>4} offset {offset:>4} mm: {family:?} {}/{}",
+                        members[1].teeth, members[0].teeth
+                    ),
+                    pair: vec![g],
+                });
+            }
         }
     }
     out

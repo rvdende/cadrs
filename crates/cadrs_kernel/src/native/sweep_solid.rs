@@ -1965,9 +1965,6 @@ pub fn cut_swept_indexed(
     motion: &SolidMotion,
     copies: usize,
 ) -> Result<OpResult> {
-    if copies <= 1 {
-        return cut_swept(k, target, tool, motion);
-    }
     let SolidMotion::Rigid { steps } = motion else {
         return Err(KernelError::Unsupported(
             "an indexed cut by a motion of two turns",
@@ -1980,7 +1977,7 @@ pub fn cut_swept_indexed(
     };
     let b = (**k.get(tool)?).clone();
     let _ = axis;
-    match super::sweep_generate::cut(k, target, &b, steps, Some(copies)) {
+    match super::sweep_generate::cut(k, target, &b, steps, (copies > 1).then_some(copies)) {
         Some(r) => r,
         // (Not cut a tooth at a time by the meshed sweep: seconds a tooth, its faces a mesh's,
         // and it may not close. The caller is told at once.)
