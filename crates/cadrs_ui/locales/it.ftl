@@ -1765,6 +1765,8 @@ model-gear-offset = Disassamento
 model-gear-pressure-shift = Spostamento dell'angolo di pressione
 model-gear-end-relief = Scarico d'estremità
 model-gear-pitch-plane-normal = Normale del piano primitivo
+model-gear-shaft = Asse
+model-gear-mate-shaft = Asse del coniugato
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Destrorsa

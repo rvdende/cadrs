@@ -179,6 +179,24 @@ pub fn pick(world: &mut World, kind: &mut FeatureKind, field: AppliedField, pick
     true
 }
 
+/// What an axis reference is in the view (to show it selected).
+pub(crate) fn axis_pick(cache: &PartCache, a: &AxisRef) -> Option<Pick> {
+    match a {
+        AxisRef::SketchCurve { sketch, curve } => Some(Pick::SketchCurve(*sketch, *curve)),
+        AxisRef::Edge(e) => cache
+            .parts
+            .iter()
+            .find(|p| p.solid.edge(&e.edge).is_some())
+            .map(|p| Pick::Edge(p.id, e.edge)),
+        AxisRef::Face(f) => cache
+            .parts
+            .iter()
+            .find(|p| p.solid.face(&f.face).is_some())
+            .map(|p| Pick::Face(p.id, f.face)),
+        AxisRef::Connector(c) => crate::pattern::connector_pick(c),
+    }
+}
+
 /// What the Transform's fields refer to, shown selected in the view while its dialog is open.
 pub fn references(kind: &FeatureKind, cache: &PartCache) -> Vec<Pick> {
     let FeatureKind::Transform(x) = kind else {

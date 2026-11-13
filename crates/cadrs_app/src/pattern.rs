@@ -639,6 +639,7 @@ pub fn takes_connectors(kind: &FeatureKind, field: AppliedField) -> bool {
             AppliedField::ConnectorOrigin | AppliedField::ConnectorBetween,
         ) => true,
         (FeatureKind::Hole(_), AppliedField::HoleConnectors) => true,
+        (FeatureKind::Gear(_), AppliedField::GearShaft | AppliedField::GearMateShaft) => true,
         (k, f) => crate::transform_ui::takes_connectors(k, f),
     }
 }

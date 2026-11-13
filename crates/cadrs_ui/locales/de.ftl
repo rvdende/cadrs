@@ -1765,6 +1765,8 @@ model-gear-offset = Achsversatz
 model-gear-pressure-shift = Eingriffswinkelverschiebung
 model-gear-end-relief = Endrücknahme
 model-gear-pitch-plane-normal = Normale der Teilebene
+model-gear-shaft = Achse
+model-gear-mate-shaft = Achse des Gegenrads
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Rechtsgängig

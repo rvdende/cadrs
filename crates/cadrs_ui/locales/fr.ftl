@@ -1765,6 +1765,8 @@ model-gear-offset = Déport
 model-gear-pressure-shift = Décalage d'angle de pression
 model-gear-end-relief = Dépouille d'extrémité
 model-gear-pitch-plane-normal = Normale du plan primitif
+model-gear-shaft = Axe
+model-gear-mate-shaft = Axe du conjugué
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = À droite

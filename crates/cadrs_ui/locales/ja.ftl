@@ -1765,6 +1765,8 @@ model-gear-offset = オフセット
 model-gear-pressure-shift = 圧力角シフト
 model-gear-end-relief = 端部逃げ
 model-gear-pitch-plane-normal = ピッチ平面の法線
+model-gear-shaft = 軸
+model-gear-mate-shaft = 相手歯車の軸
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = 右ねじ

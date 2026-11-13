@@ -252,6 +252,9 @@ pub enum AppliedField {
     ThreadEdge,
     /// The Gear's cylinder, hole, cone or flat face.
     GearFace,
+    /// A hypoid pair's member's own shaft and its mate's.
+    GearShaft,
+    GearMateShaft,
     /// P3I.2: the Sheet metal model's fields: Convert's parts, faces to exclude and edges or
     /// cylinders to bend (Thicken's too); Extrude's curves, arcs to extrude as bends and the Up
     /// to entities of its two ends; Thicken's faces and regions.
@@ -577,6 +580,14 @@ impl AppliedSession {
             },
             AppliedField::GearFace => PickFilter {
                 faces: true,
+                ..none
+            },
+            AppliedField::GearShaft | AppliedField::GearMateShaft => PickFilter {
+                origin: true,
+                faces: true,
+                edges: true,
+                sketch_curves: true,
+                connectors: true,
                 ..none
             },
             AppliedField::Sm9(f) => crate::sheetmetal_p3i9_ui::pick_filter(f, none),

@@ -296,6 +296,7 @@ impl Rebuilder {
 
     pub(in crate::rebuild) fn gear(
         &mut self,
+        before: &[Feature],
         id: FeatureId,
         x: &GearFeature,
         state: &Arc<State>,
@@ -313,7 +314,22 @@ impl Rebuilder {
             }
             None => None,
         };
-        let plan = gear::plan(x, target.as_ref().map(|t| &t.1))?;
+        // A hypoid pair's member on its shafts, where both are picked.
+        let plan = match (&x.shaft, &x.mate_shaft) {
+            (Some(a), Some(b)) if x.gear_type == gear::GearType::Hypoid => {
+                let line = |this: &Self, r| -> Result<gear::Vec3Pair, String> {
+                    let a = this
+                        .axis(before, state, r)
+                        .map_err(|e| e.replace("revolve axis", "shaft"))?;
+                    Ok((
+                        [a.origin.x, a.origin.y, a.origin.z],
+                        [a.dir.x, a.dir.y, a.dir.z],
+                    ))
+                };
+                gear::plan_on_shafts(x, &[line(self, a)?, line(self, b)?])?
+            }
+            _ => gear::plan(x, target.as_ref().map(|t| &t.1))?,
+        };
         let mut next = 0u64;
         if let Some(g) = &plan.generated {
             let body = self

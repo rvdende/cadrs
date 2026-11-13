@@ -1765,6 +1765,8 @@ model-gear-offset = 오프셋
 model-gear-pressure-shift = 압력각 시프트
 model-gear-end-relief = 끝단 릴리프
 model-gear-pitch-plane-normal = 피치 평면의 법선
+model-gear-shaft = 축
+model-gear-mate-shaft = 상대 기어의 축
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = 오른나사

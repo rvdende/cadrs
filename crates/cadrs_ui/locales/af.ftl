@@ -1765,6 +1765,8 @@ model-gear-offset = Afset
 model-gear-pressure-shift = Drukhoekverskuiwing
 model-gear-end-relief = Endverligting
 model-gear-pitch-plane-normal = Steekvlak se normaal
+model-gear-shaft = As
+model-gear-mate-shaft = Paarrat se as
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Regsdraaiend

@@ -1765,6 +1765,8 @@ model-gear-offset = Deslocamento
 model-gear-pressure-shift = Deslocamento do ângulo de pressão
 model-gear-end-relief = Alívio das extremidades
 model-gear-pitch-plane-normal = Normal do plano primitivo
+model-gear-shaft = Eixo
+model-gear-mate-shaft = Eixo do conjugado
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Direita

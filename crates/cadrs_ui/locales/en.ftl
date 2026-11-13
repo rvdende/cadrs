@@ -2471,6 +2471,10 @@ model-gear-pressure-shift = Pressure shift
 model-gear-end-relief = End relief
 # The axis square to a hypoid pair's pitch plane (X, Y or Z).
 model-gear-pitch-plane-normal = Pitch plane's normal
+# A hypoid pair's member's own shaft (a line, an edge, a face of revolution or a mate connector).
+model-gear-shaft = Axis
+# The other member's shaft: with both picked, the pair is laid out on them.
+model-gear-mate-shaft = Mate's axis
 
 ## crates/cadrs_app/src/thread_ui.rs
 # A thread's handedness.

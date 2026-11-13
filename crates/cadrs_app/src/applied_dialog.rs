@@ -300,6 +300,8 @@ pub(crate) enum Role {
     ThreadHand,
     // The Gear (`crate::gear_ui`).
     GearFace,
+    GearShaft,
+    GearMateShaft,
     GearType,
     GearTeeth,
     GearModule,
@@ -861,6 +863,12 @@ fn dialog(
         Role::SmSecondUpTo,
         Role::FlatRegions,
         Role::DirectEditFaces,
+        Role::HelixEntity,
+        Role::FillEdges,
+        Role::ThreadEdge,
+        Role::GearFace,
+        Role::GearShaft,
+        Role::GearMateShaft,
     ]
     .into_iter()
     .chain(crate::sheetmetal_features_ui::LIST_ROLES)

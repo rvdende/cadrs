@@ -1765,6 +1765,8 @@ model-gear-offset = Asverzet
 model-gear-pressure-shift = Drukhoekverschuiving
 model-gear-end-relief = Eindontlasting
 model-gear-pitch-plane-normal = Normaal van het steekvlak
+model-gear-shaft = As
+model-gear-mate-shaft = As van het tegenwiel
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Rechtsdraaiend

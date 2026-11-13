@@ -1765,6 +1765,8 @@ model-gear-offset = Смещение осей
 model-gear-pressure-shift = Сдвиг угла профиля
 model-gear-end-relief = Фланкирование торцов
 model-gear-pitch-plane-normal = Нормаль делительной плоскости
+model-gear-shaft = Ось
+model-gear-mate-shaft = Ось сопряжённого колеса
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Правая

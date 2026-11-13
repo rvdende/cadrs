@@ -1010,7 +1010,17 @@ impl Feature {
             FeatureKind::FaceBlend(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::Fill(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::Thread(x) => x.parents().into_iter().for_each(&mut add),
-            FeatureKind::Gear(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::Gear(x) => {
+                x.parents().into_iter().for_each(&mut add);
+                for a in [&x.shaft, &x.mate_shaft].into_iter().flatten() {
+                    match a {
+                        AxisRef::SketchCurve { sketch, .. } => add(*sketch),
+                        AxisRef::Edge(e) => edge(e).into_iter().for_each(&mut add),
+                        AxisRef::Face(f) => add(face(f)),
+                        AxisRef::Connector(c) => c.parent().into_iter().for_each(&mut add),
+                    }
+                }
+            }
             FeatureKind::SheetMetalModel(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::ModifyJoint(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::SheetMetalLoft(x) => x.parents().into_iter().for_each(&mut add),

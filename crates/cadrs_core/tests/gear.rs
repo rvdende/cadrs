@@ -799,7 +799,12 @@ fn reach(pair: [(cadrs_core::FeatureId, GearFeature); 2]) -> (f64, usize) {
     for (_, g) in pair {
         st.add("Gear", FeatureKind::Gear(g));
     }
-    let parts = st.parts();
+    reach_of(&st.parts())
+}
+
+/// How far each of two parts' display meshes reaches into the other (the deepest, and how many
+/// vertices).
+fn reach_of(parts: &[Part]) -> (f64, usize) {
     assert_eq!(parts.len(), 2);
     // Only where the two gears' boxes overlap.
     let bounds = |p: &Part| {
@@ -950,5 +955,80 @@ fn the_hypoid_pair_meshes_without_cutting_into_itself() {
         eprintln!(
             "backlash {backlash}: {count} vertices inside the other member, the deepest {deep} mm"
         );
+    }
+}
+
+/// `hypoid.sv`'s pair placed by its shafts alone: the gear's axis a line down the Front plane,
+/// the pinion's a line along the Top plane 25 mm to the side, square to it. The shaft angle and
+/// the offset are the lines' (the typed ones are ignored), the members are the pair placed in
+/// its own frame turned and moved onto them (the same volumes), and they mesh where they stand:
+/// clear of each other with their backlash, touching without it. Then the gear's shaft tilted
+/// 10° and the pinion's 15 mm away on the other side (100°, the pair mirrored): both follow.
+#[test]
+#[ignore = "slow (over 5 s): run with cargo test -r -- --ignored"]
+fn a_hypoid_pair_is_placed_by_its_shafts() {
+    use cadrs_core::document::AxisRef;
+    use cadrs_core::samples::gears::hypoid_pair;
+    let line = |st: &mut Studio, plane, a: Vec2, b: Vec2| {
+        let sk = st.sketch(
+            plane,
+            vec![SketchOp::AddPolyline {
+                points: vec![a, b],
+                closed: false,
+                construction: false,
+                label: "Add line",
+            }],
+        );
+        let curve = st.g(sk).curves.keys().next().unwrap();
+        AxisRef::SketchCurve { sketch: sk, curve }
+    };
+    let tilt = 10f64.to_radians();
+    // (The gear's shaft's far end on the Front plane, the pinion's line's side on the Top.)
+    for (gear_end, side) in [
+        (Vec2::new(0.0, -30.0), 25.0),
+        (Vec2::new(30.0 * tilt.sin(), -30.0 * tilt.cos()), -15.0),
+    ] {
+        for backlash in [0.05, 0.0] {
+            let mut st = Studio::new();
+            // The gear's apex toward +z, its back down; the pinion's back toward −x.
+            let gear_shaft = line(&mut st, PlaneRef::Front, Vec2::new(0.0, 0.0), gear_end);
+            let pinion_shaft = line(
+                &mut st,
+                PlaneRef::Top,
+                Vec2::new(0.0, side),
+                Vec2::new(-30.0, side),
+            );
+            let [mut g, mut p] = hypoid_pair();
+            for x in [&mut g, &mut p] {
+                // (Typed numbers the shafts override.)
+                x.offset = 3.0;
+                x.shaft_angle = 70.0;
+                x.backlash = backlash;
+                x.backlash_expr = format!("{backlash} mm");
+            }
+            g.shaft = Some(gear_shaft);
+            g.mate_shaft = Some(pinion_shaft);
+            p.shaft = Some(pinion_shaft);
+            p.mate_shaft = Some(gear_shaft);
+            st.add("Gear", FeatureKind::Gear(g));
+            st.add("Gear", FeatureKind::Gear(p));
+            let parts = st.parts();
+            assert_eq!(parts.len(), 2);
+            let volumes: Vec<f64> = parts.iter().map(volume).collect();
+            let (deep, count) = reach_of(&parts);
+            eprintln!(
+                "offset {side}, backlash {backlash}: volumes {volumes:?}; {count} vertices inside the other member, the deepest {deep} mm"
+            );
+            // (To the fit of the generated spaces' sheets, which depends a little on where they
+            // stand.)
+            if side == 25.0 && backlash > 0.0 {
+                assert!((volumes[0] - 22223.4994).abs() < 5e-2, "{volumes:?}");
+                assert!((volumes[1] - 14634.0136).abs() < 5e-2, "{volumes:?}");
+            }
+            assert!(deep < 0.02, "{deep} mm into the other member");
+            if backlash == 0.0 {
+                assert!(count > 0, "the members don't touch: not in mesh");
+            }
+        }
     }
 }

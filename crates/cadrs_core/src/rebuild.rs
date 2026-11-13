@@ -2633,7 +2633,7 @@ impl Rebuilder {
             #[cfg(feature = "brep")]
             FeatureKind::Thread(x) => self.thread(f.id, x, state).unwrap_or_else(fail),
             #[cfg(feature = "brep")]
-            FeatureKind::Gear(x) => self.gear(f.id, x, state).unwrap_or_else(fail),
+            FeatureKind::Gear(x) => self.gear(before, f.id, x, state).unwrap_or_else(fail),
             #[cfg(feature = "brep")]
             FeatureKind::SheetMetalModel(x) => self
                 .sheet_metal_model(before, f.id, &f.name, x, state)

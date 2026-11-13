@@ -212,6 +212,25 @@ pub fn layout(d: &Design) -> Result<Layout, &'static str> {
     })
 }
 
+/// Where the gear's axis comes nearest the pinion's: the foot on the gear's axis of their
+/// common perpendicular.
+pub fn gear_foot(l: &Layout) -> Vec3 {
+    let (g, p) = (l.gear_axis, l.pinion_axis);
+    let w = l.pinion_apex;
+    let b = dot(g, p);
+    let t = (dot(g, w) - b * dot(p, w)) / (1.0 - b * b);
+    scale(g, t)
+}
+
+/// The common perpendicular from the gear's axis to the pinion's (its length the offset).
+pub fn perpendicular(l: &Layout) -> Vec3 {
+    let (g, p) = (l.gear_axis, l.pinion_axis);
+    let w = l.pinion_apex;
+    let b = dot(g, p);
+    let t = (b * dot(g, w) - dot(p, w)) / (1.0 - b * b);
+    sub(add(w, scale(p, t)), gear_foot(l))
+}
+
 /// The crown's roll each way while it cuts a member (radians): past where its tooth or space
 /// leaves the blank at either end of the face.
 const ROLL: f64 = 45.0 * PI / 180.0;

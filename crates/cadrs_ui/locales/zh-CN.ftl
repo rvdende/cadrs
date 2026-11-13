@@ -1765,6 +1765,8 @@ model-gear-offset = 偏置距
 model-gear-pressure-shift = 压力角偏移
 model-gear-end-relief = 端部修缘
 model-gear-pitch-plane-normal = 节平面法线
+model-gear-shaft = 轴线
+model-gear-mate-shaft = 配对齿轮轴线
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = 右旋

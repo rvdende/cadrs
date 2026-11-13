@@ -14,6 +14,11 @@
 //!   (bevel), *Length* (rack), *Body thickness* (bevel, rack), then where it is: **X**, **Y**,
 //!   **Z** and its **Axis**.
 //! - *Rotation* about its axis; *Backlash*. A rack on a face: **Teeth across the face**.
+//! - A **Hypoid pair**'s member (`cadrs_core::gear::hypoid`): its *Axis* and its *Mate's axis*
+//!   (optional; with both, the shaft angle, the offset and the hand are theirs), its teeth and
+//!   its mate's, the module at the mean point, the spiral angle, **Cut as** its Gear or Pinion,
+//!   the *Shaft angle* and *Offset* (without shafts), the face mill's *Cutter radius* and
+//!   *Pressure shift*, *Backlash*, *End relief*, and (without shafts) where its pitch plane is.
 //!
 //! The toolbar's Gear button starts it with the selected face.
 
@@ -73,8 +78,39 @@ pub fn initial(
     Some(("Gear", FeatureKind::Gear(x), AppliedField::GearFace))
 }
 
-/// A pick into the gear's face field. Returns false if it doesn't fit.
+/// A pick into the gear's face field, or a hypoid member's shaft fields. Returns false if it
+/// doesn't fit.
 pub fn pick(world: &mut World, kind: &mut FeatureKind, field: AppliedField, pick: Pick) -> bool {
+    if let (FeatureKind::Gear(x), AppliedField::GearShaft | AppliedField::GearMateShaft) =
+        (&mut *kind, field)
+    {
+        let Some(features) = world
+            .get_resource::<crate::ActiveDocument>()
+            .and_then(|d| d.active_element())
+            .map(|e| e.features().to_vec())
+        else {
+            return false;
+        };
+        let cache = world.resource::<PartCache>();
+        let Some(a) = crate::pattern::axis_of(&features, cache, pick) else {
+            return false;
+        };
+        let slot = if field == AppliedField::GearShaft {
+            &mut x.shaft
+        } else {
+            &mut x.mate_shaft
+        };
+        *slot = if *slot == Some(a) { None } else { Some(a) };
+        // Then the mate's.
+        if field == AppliedField::GearShaft
+            && x.shaft.is_some()
+            && x.mate_shaft.is_none()
+            && let Some(mut s) = world.get_resource_mut::<crate::applied::AppliedSession>()
+        {
+            s.field = AppliedField::GearMateShaft;
+        }
+        return true;
+    }
     let (FeatureKind::Gear(x), AppliedField::GearFace) = (kind, field) else {
         return false;
     };
@@ -90,12 +126,14 @@ pub fn pick(world: &mut World, kind: &mut FeatureKind, field: AppliedField, pick
     true
 }
 
-/// The face, shown selected in the view while the dialog is open.
+/// The face (or a hypoid member's shafts), shown selected in the view while the dialog is
+/// open.
 pub fn references(kind: &FeatureKind, cache: &PartCache) -> Vec<Pick> {
     let FeatureKind::Gear(x) = kind else {
         return Vec::new();
     };
-    x.face
+    let mut out: Vec<Pick> = x
+        .face
         .iter()
         .map(|f| {
             cache
@@ -104,7 +142,14 @@ pub fn references(kind: &FeatureKind, cache: &PartCache) -> Vec<Pick> {
                 .find(|p| p.solid.faces.iter().any(|g| g.name == f.face))
                 .map_or(Pick::Face(f.part, f.face), |p| Pick::Face(p.id, f.face))
         })
-        .collect()
+        .collect();
+    out.extend(
+        [&x.shaft, &x.mate_shaft]
+            .into_iter()
+            .flatten()
+            .filter_map(|a| crate::transform_ui::axis_pick(cache, a)),
+    );
+    out
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -120,14 +165,15 @@ pub(crate) fn name(kind: &FeatureKind) -> Option<&'static str> {
 pub(crate) fn layout(kind: &FeatureKind) -> Option<String> {
     match kind {
         FeatureKind::Gear(x) => Some(format!(
-            "gear {:?} {:?} {} {} {} {:?} {:?}",
+            "gear {:?} {:?} {} {} {} {:?} {:?} {}",
             x.gear_type,
             x.style,
             x.face.is_some(),
             x.left_hand,
             x.flip,
             x.spiral,
-            x.member
+            x.member,
+            x.shaft.is_some() && x.mate_shaft.is_some()
         )),
         k => crate::surfacing_ui::layout(k),
     }
@@ -174,6 +220,18 @@ pub(crate) fn items(
                 })
                 .collect(),
         ),
+        (FeatureKind::Gear(x), Role::GearShaft) => Some(
+            x.shaft
+                .iter()
+                .map(|a| crate::revolve::axis_label(features, a))
+                .collect(),
+        ),
+        (FeatureKind::Gear(x), Role::GearMateShaft) => Some(
+            x.mate_shaft
+                .iter()
+                .map(|a| crate::revolve::axis_label(features, a))
+                .collect(),
+        ),
         (k, r) => crate::surfacing_ui::items(features, cache, k, r),
     }
 }
@@ -181,6 +239,8 @@ pub(crate) fn items(
 pub(crate) fn list_field(role: Role) -> Option<AppliedField> {
     match role {
         Role::GearFace => Some(AppliedField::GearFace),
+        Role::GearShaft => Some(AppliedField::GearShaft),
+        Role::GearMateShaft => Some(AppliedField::GearMateShaft),
         r => crate::surfacing_ui::list_field(r),
     }
 }
@@ -217,15 +277,18 @@ pub(crate) fn body(
     let on_face = x.face.is_some();
     let rack = x.gear_type == GearType::Rack;
     body_column(b, |b| {
-        list(
-            b,
-            t,
-            "gear-face-field",
-            &tr("model-gear-face"),
-            Role::GearFace,
-            items_of(Role::GearFace),
-            field == AppliedField::GearFace,
-        );
+        // (A hypoid pair's member is made whole: it takes no face.)
+        if x.gear_type != GearType::Hypoid {
+            list(
+                b,
+                t,
+                "gear-face-field",
+                &tr("model-gear-face"),
+                Role::GearFace,
+                items_of(Role::GearFace),
+                field == AppliedField::GearFace,
+            );
+        }
         // On a face the type is the face's.
         let types = opts(
             &GearType::ALL,
@@ -243,7 +306,7 @@ pub(crate) fn body(
             None,
         );
         if x.gear_type == GearType::Hypoid {
-            hypoid_body(b, t, x);
+            hypoid_body(b, t, x, field, items_of);
             return;
         }
         let mut num = |name: &str, key: &str, role: Role, text: &str| {
@@ -486,10 +549,36 @@ pub(crate) fn body(
 /// A hypoid pair's member: the pair as a designer states it (both members' teeth, the module
 /// at the mean point, the shafts' angle and offset, the spiral, the face mill), which member
 /// this is, and where the pair's pitch plane is.
-fn hypoid_body(b: &mut ChildSpawner, t: &Theme, x: &cadrs_core::gear::GearFeature) {
+fn hypoid_body(
+    b: &mut ChildSpawner,
+    t: &Theme,
+    x: &cadrs_core::gear::GearFeature,
+    field: AppliedField,
+    items_of: &dyn Fn(Role) -> Vec<String>,
+) {
     let num = |b: &mut ChildSpawner, name: &str, key: &str, role: Role, text: &str| {
         number(b, t, name, &tr(key), role, text, None);
     };
+    // Its shaft and its mate's (optional): with both, the pair is laid on them.
+    list(
+        b,
+        t,
+        "gear-shaft-field",
+        &tr("model-gear-shaft"),
+        Role::GearShaft,
+        items_of(Role::GearShaft),
+        field == AppliedField::GearShaft,
+    );
+    list(
+        b,
+        t,
+        "gear-mate-shaft-field",
+        &tr("model-gear-mate-shaft"),
+        Role::GearMateShaft,
+        items_of(Role::GearMateShaft),
+        field == AppliedField::GearMateShaft,
+    );
+    let on_shafts = x.shaft.is_some() && x.mate_shaft.is_some();
     num(
         b,
         "gear-teeth",
@@ -525,17 +614,20 @@ fn hypoid_body(b: &mut ChildSpawner, t: &Theme, x: &cadrs_core::gear::GearFeatur
         Role::GearHelixAngle,
         &x.helix_angle_expr,
     );
-    let hands: Vec<(String, bool)> = HANDS.iter().map(|h| (tr(h), true)).collect();
-    select_row(
-        b,
-        t,
-        "gear-hand",
-        &tr("common-direction"),
-        Role::GearHand,
-        &hands,
-        usize::from(x.left_hand),
-        None,
-    );
+    // (On its shafts, the side of the offset sets the hand.)
+    if !on_shafts {
+        let hands: Vec<(String, bool)> = HANDS.iter().map(|h| (tr(h), true)).collect();
+        select_row(
+            b,
+            t,
+            "gear-hand",
+            &tr("common-direction"),
+            Role::GearHand,
+            &hands,
+            usize::from(x.left_hand),
+            None,
+        );
+    }
     // The gear or the pinion (a hypoid pinion is generated, never cut as a conjugate).
     let members = opts(
         &BevelMember::ALL,
@@ -557,20 +649,22 @@ fn hypoid_body(b: &mut ChildSpawner, t: &Theme, x: &cadrs_core::gear::GearFeatur
         index_of(&BevelMember::ALL, &x.member),
         None,
     );
-    num(
-        b,
-        "gear-shaft-angle",
-        "model-gear-shaft-angle",
-        Role::GearShaftAngle,
-        &x.shaft_angle_expr,
-    );
-    num(
-        b,
-        "gear-offset",
-        "model-gear-offset",
-        Role::GearOffset,
-        &x.offset_expr,
-    );
+    if !on_shafts {
+        num(
+            b,
+            "gear-shaft-angle",
+            "model-gear-shaft-angle",
+            Role::GearShaftAngle,
+            &x.shaft_angle_expr,
+        );
+        num(
+            b,
+            "gear-offset",
+            "model-gear-offset",
+            Role::GearOffset,
+            &x.offset_expr,
+        );
+    }
     num(
         b,
         "gear-cutter",
@@ -599,6 +693,9 @@ fn hypoid_body(b: &mut ChildSpawner, t: &Theme, x: &cadrs_core::gear::GearFeatur
         Role::GearEndRelief,
         &x.end_relief_expr,
     );
+    if on_shafts {
+        return;
+    }
     for (i, (name, label, role)) in [
         ("gear-x", "X", Role::GearX),
         ("gear-y", "Y", Role::GearY),
@@ -843,6 +940,8 @@ pub(crate) fn flip(k: &mut FeatureKind, role: Role) {
 pub(crate) fn remove(k: &mut FeatureKind, role: Role, i: usize) {
     match (k, role) {
         (FeatureKind::Gear(x), Role::GearFace) => x.face = None,
+        (FeatureKind::Gear(x), Role::GearShaft) => x.shaft = None,
+        (FeatureKind::Gear(x), Role::GearMateShaft) => x.mate_shaft = None,
         (k, r) => crate::surfacing_ui::remove(k, r, i),
     }
 }
