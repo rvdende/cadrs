@@ -1306,6 +1306,25 @@ fn stage_feature(features: &[Feature], o: &PartOverride) -> Option<FeatureId> {
 }
 
 /// The features the parts are made from: the document's, with the override applied.
+/// `features` with their generated gears (hypoid members, worm drives, gear pairs) in Fast
+/// preview (the same list where none is built exactly).
+pub(crate) fn fast_gears(features: &[Feature]) -> Vec<Feature> {
+    let mut out = features.to_vec();
+    for f in &mut out {
+        if let cadrs_core::FeatureKind::Gear(g) = &mut f.kind
+            && matches!(
+                g.gear_type,
+                cadrs_core::gear::GearType::Hypoid
+                    | cadrs_core::gear::GearType::Worm
+                    | cadrs_core::gear::GearType::Pair
+            )
+        {
+            g.fast_preview = true;
+        }
+    }
+    out
+}
+
 pub(crate) fn effective_features(features: &[Feature], o: &PartOverride) -> Vec<Feature> {
     let mut out = features.to_vec();
     if let Some((id, e)) = &o.extrude
@@ -1324,6 +1343,12 @@ pub(crate) fn effective_features(features: &[Feature], o: &PartOverride) -> Vec<
         && let Some(f) = out.iter_mut().find(|f| f.id == *id)
     {
         f.kind = k.clone();
+    }
+    // While something is dragged (a manipulator's live value), generated gears show their Fast
+    // preview (their teeth straight from their equations, at once): the pair follows the drag,
+    // and its exact members are built when it ends.
+    if o.extrude.is_some() || o.revolve.is_some() || o.applied.is_some() {
+        out = fast_gears(&out);
     }
     if let Some(id) = o.rolled_back {
         // A Sheet metal model taking picks on its input still builds its model, table and flat
@@ -1638,9 +1663,28 @@ fn update_part_cache(
     // (One copy of the list, for the rebuild and the keys of its rows.)
     let shared: std::sync::Arc<[Feature]> = effective.as_slice().into();
     let requested = web_time::Instant::now();
-    let mut rebuild = cadrs_core::rebuild::request_persisted_shared(shared.clone());
     // A live drag doesn't hold the frame for its rebuild: the preview follows when it's done.
     let dragging = over.extrude.is_some() || over.revolve.is_some() || over.applied.is_some();
+    // Generated gears built exactly (seconds): their Fast preview built first (milliseconds,
+    // the kernel thread taking the jobs in turn) and shown while the exact members are made.
+    // (Both stay cached: an edit elsewhere costs neither again.)
+    if !dragging {
+        let fast = fast_gears(&effective);
+        if fast != effective {
+            if let Some(old) = cache.superseded.take() {
+                old.rebuild.stop();
+            }
+            let fast_shared: std::sync::Arc<[Feature]> = fast.as_slice().into();
+            cache.superseded = Some(PendingRebuild {
+                element: el.id,
+                rebuild: cadrs_core::rebuild::request(fast.clone()),
+                order: fast.iter().map(|f| (f.id, f.is_part_feature())).collect(),
+                keys: rebuild_keys(fast_shared),
+                requested,
+            });
+        }
+    }
+    let mut rebuild = cadrs_core::rebuild::request_persisted_shared(shared.clone());
     let wait = if dragging {
         budget.0.map(|_| std::time::Duration::ZERO)
     } else {

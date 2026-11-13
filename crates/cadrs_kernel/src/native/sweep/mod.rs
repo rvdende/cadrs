@@ -44,6 +44,7 @@ use super::topo::*;
 use crate::{KernelError, Origin, Result};
 
 mod body;
+pub mod chain;
 mod corner;
 pub mod frames;
 mod kinds;

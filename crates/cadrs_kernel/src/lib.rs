@@ -496,10 +496,14 @@ pub trait Kernel {
 
     /// `target` less everything `tool` passes through as it moves (a cutter's path through
     /// stock): [`Kernel::sweep_solid`]'s exact sweep (one slide, turn or screw by its leading
-    /// faces, a planar motion, a turn or screw without end) cut from the target; else, where
-    /// that can't be made or cut, meshed: the region inside the target and in none of the tool's
-    /// places (both distances' field contoured on a grid of a hundredth of the target's reach
-    /// and made solid), as a meshed sweep is.
+    /// faces, a planar motion, a turn or screw without end) cut from the target. Under two
+    /// turns about lines that aren't parallel (a gear's tooth space cut by its mate, a wheel
+    /// hobbed by its worm) the cut is generated: its faces are the sheets the tool's faces
+    /// envelop and its sharp edges trace, each one B-spline, and a motion of whole turns cuts
+    /// every tooth space alike. Else, where none of these can be made or cut, meshed: the
+    /// region inside the target and in none of the tool's places (both distances' field
+    /// contoured on a grid of a hundredth of the target's reach and made solid), as a meshed
+    /// sweep is.
     fn cut_swept(
         &mut self,
         target: BodyId,
@@ -508,6 +512,20 @@ pub trait Kernel {
     ) -> Result<OpResult> {
         let _ = (target, tool, motion);
         Err(KernelError::Unsupported("cuts by swept solids"))
+    }
+
+    /// [`Kernel::cut_swept`] at each of `copies` places of the tool a whole turn apart about the
+    /// axis of the motion's second turn (the target's): every tooth space of a gear cut by a
+    /// motion that doesn't repeat, a face mill's roll.
+    fn cut_swept_indexed(
+        &mut self,
+        target: BodyId,
+        tool: BodyId,
+        motion: &SolidMotion,
+        copies: usize,
+    ) -> Result<OpResult> {
+        let _ = (target, tool, motion, copies);
+        Err(KernelError::Unsupported("indexed cuts by swept solids"))
     }
 
     /// [`Kernel::sweep_with`], the profile twisting about the path and scaling about the path's
@@ -524,6 +542,16 @@ pub trait Kernel {
         } else {
             Err(KernelError::Unsupported("sweeps that twist or scale"))
         }
+    }
+
+    /// Sweeps made one after another, each by its law ([`Kernel::sweep_with_law`]), and joined
+    /// end to end into one body: a piece that starts on the section the one before ends on (its
+    /// profile that section, as the law left it) is glued there, the two caps gone and their
+    /// edges one, with no boolean (a herringbone gear's halves, each twisting its own way).
+    /// Pieces that meet any other way are united. Faces as each sweep's.
+    fn sweep_chain(&mut self, pieces: &[(Profile, SweepSpec, SweepLaw)]) -> Result<OpResult> {
+        let _ = pieces;
+        Err(KernelError::Unsupported("sweeps joined end to end"))
     }
 
     /// A loft through sections (P3.7, PS20), with start and end conditions. Faces: the side of

@@ -2839,6 +2839,84 @@ pub fn read(bytes: &[u8]) -> Result<ReadModel, String> {
 // ---------------------------------------------------------------------------------------------
 // Writing
 
+/// A curve of more poles than this is tried as a lighter one ([`lighter_curve`]).
+const LIGHT_FROM: usize = 10;
+/// How near its curve a lighter one stays, as a share of the curve's extent.
+const LIGHT_WITHIN: f64 = 1e-8;
+
+/// A curve of many poles (two surfaces' intersection, traced and fitted by a cubic) as a quintic
+/// through fewer: the same curve at the same parameters to [`LIGHT_WITHIN`] of its extent, its
+/// sites halved wherever it misses in between, and its two ends the curve's own. A file of
+/// thousands of such edges is up to a quarter smaller for it. Its other poles are written to a
+/// hundredth of that closeness, not to the last digit a number holds. None where the curve is
+/// rational, short already or not a smooth cubic, or the quintic would have nearly as many poles.
+fn lighter_curve(n: &NurbsCurve) -> Option<NurbsCurve> {
+    if n.is_rational() || n.cps.len() <= LIGHT_FROM {
+        return None;
+    }
+    // (A smooth cubic only: one with a knot repeated has a corner or a kink there, which a
+    // quintic through its points would round.)
+    let inner = &n.knots[n.degree + 1..n.knots.len() - n.degree - 1];
+    if n.degree != 3 || inner.windows(2).any(|w| w[1] <= w[0]) {
+        return None;
+    }
+    let (a, z) = n.range();
+    let at = |t: f64| n.point(t);
+    let extent = (0..=16)
+        .map(|i| (at(a + (z - a) * i as f64 / 16.0) - at(a)).norm())
+        .fold(0.0, f64::max);
+    if !(extent > 0.0 && z > a) {
+        return None;
+    }
+    let tol = LIGHT_WITHIN * extent;
+    let most = n.cps.len() * 3 / 4;
+    let mut sites: Vec<f64> = (0..=8).map(|i| a + (z - a) * i as f64 / 8.0).collect();
+    loop {
+        let pts: Vec<P3> = sites.iter().map(|&t| at(t)).collect();
+        let fit = NurbsCurve::interpolate(&pts, &sites, 5.min(sites.len() - 1), None, None);
+        // Each span's miss, at eleven places within it.
+        let split: Vec<bool> = sites
+            .windows(2)
+            .map(|w| {
+                (1..12).any(|i| {
+                    let t = w[0] + (w[1] - w[0]) * i as f64 / 12.0;
+                    (fit.point(t) - at(t)).norm() > tol
+                })
+            })
+            .collect();
+        if !split.iter().any(|s| *s) {
+            if fit.cps.len() > most {
+                return None;
+            }
+            // (Each coordinate to a whole number of steps a hundredth of the closeness: the
+            // nearest power of ten below it, so that it is written in few digits.)
+            let scale = 10f64.powf(-(tol / 100.0).log10().floor());
+            // (But its two ends, which are the edge's vertices' own points.)
+            let mut fit = fit;
+            let last = fit.cps.len() - 1;
+            for h in &mut fit.cps[1..last] {
+                for d in 0..3 {
+                    h[d] = (h[d] * scale).round() / scale;
+                }
+            }
+            (fit.cps[0], fit.cps[last]) = (n.cps[0], n.cps[n.cps.len() - 1]);
+            return Some(fit);
+        }
+        let mut finer = Vec::with_capacity(2 * sites.len());
+        for (i, w) in sites.windows(2).enumerate() {
+            finer.push(w[0]);
+            if split[i] {
+                finer.push(0.5 * (w[0] + w[1]));
+            }
+        }
+        finer.push(z);
+        if finer.len() + 4 > most {
+            return None;
+        }
+        sites = finer;
+    }
+}
+
 /// A real in the file's notation: always with a decimal point, shortest round-trip digits. A
 /// non-finite value (which no file can hold; the exporters refuse such bodies) is written as 0.
 pub fn real(x: f64) -> String {
@@ -2988,6 +3066,8 @@ impl Writer {
     }
 
     fn bspline_curve(&mut self, n: &NurbsCurve) -> u64 {
+        let lighter = lighter_curve(n);
+        let n = lighter.as_ref().unwrap_or(n);
         let pts: Vec<u64> = n
             .cps
             .iter()
@@ -3005,6 +3085,21 @@ impl Writer {
         } else {
             self.add(&format!("B_SPLINE_CURVE_WITH_KNOTS('',{deg},({cp}),.UNSPECIFIED.,.F.,.F.,({ms}),({ks}),.UNSPECIFIED.)"))
         }
+    }
+
+    /// Writes an edge's curve: a B-spline only the part the edge runs along, so that the file
+    /// holds no more of it than the solid has, and the curve's ends are the edge's vertices
+    /// (which a lighter curve through its points would otherwise only pass near).
+    fn edge_curve(&mut self, c: &Curve, t: [f64; 2]) -> u64 {
+        if let Curve::Nurbs(n) = c {
+            let (a, z) = n.range();
+            let (lo, hi) = (t[0].min(t[1]), t[0].max(t[1]));
+            let hair = 1e-9 * (z - a);
+            if lo >= a && hi <= z && hi - lo > hair && (lo - a > hair || z - hi > hair) {
+                return self.bspline_curve(&n.restricted(lo, hi));
+            }
+        }
+        self.curve(c, t[0])
     }
 
     fn curve(&mut self, c: &Curve, t0: f64) -> u64 {
@@ -3208,7 +3303,7 @@ impl Writer {
             if e.degenerate || in_wire.contains(&i) {
                 continue;
             }
-            let c = self.curve(&e.curve, e.t[0]);
+            let c = self.edge_curve(&e.curve, e.t);
             eid[i] = self.add(&format!(
                 "EDGE_CURVE('',#{},#{},#{c},.T.)",
                 vid[e.v[0]], vid[e.v[1]]
@@ -3598,6 +3693,51 @@ pub fn write_colored(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A smooth cubic of many poles is written as a quintic of fewer that keeps its ends to the
+    /// bit and stays within [`LIGHT_WITHIN`] of it at the same parameters; a cubic with a corner
+    /// (a knot three times) and a short one are written as they are.
+    #[test]
+    fn a_long_smooth_cubic_is_written_lighter() {
+        let at = |t: f64| {
+            P3::new(
+                30.0 * t.cos(),
+                30.0 * t.sin(),
+                4.0 * (3.0 * t).sin() + 2.0 * t,
+            )
+        };
+        let ts: Vec<f64> = (0..=120).map(|i| 0.5 + 2.0 * i as f64 / 120.0).collect();
+        let pts: Vec<P3> = ts.iter().map(|&t| at(t)).collect();
+        let c = NurbsCurve::interpolate(&pts, &ts, 3, None, None);
+        let l = lighter_curve(&c).expect("a lighter curve");
+        assert!(
+            l.cps.len() <= c.cps.len() * 3 / 4,
+            "{} poles of {}",
+            l.cps.len(),
+            c.cps.len()
+        );
+        assert_eq!(l.range(), c.range());
+        assert_eq!(
+            (l.cps[0], l.cps[l.cps.len() - 1]),
+            (c.cps[0], c.cps[c.cps.len() - 1])
+        );
+        let extent = (at(2.5) - at(0.5)).norm();
+        let miss = (0..=1000)
+            .map(|i| 0.5 + 2.0 * i as f64 / 1000.0)
+            .map(|t| (l.point(t) - c.point(t)).norm())
+            .fold(0.0, f64::max);
+        assert!(miss < 2.0 * LIGHT_WITHIN * extent, "off by {miss:e}");
+
+        let (left, right) = c.split(1.3).unwrap();
+        assert!(
+            lighter_curve(&left.joined(&right)).is_none(),
+            "a knot repeated"
+        );
+        assert!(
+            lighter_curve(&c.restricted(0.5, 0.56)).is_none(),
+            "a short curve"
+        );
+    }
 
     /// A face styled wholly transparent reads as opaque in its colour; one half transparent keeps
     /// its alpha.

@@ -875,6 +875,71 @@ pub fn sew_faces(mut b: Body, tol: f64) -> Result<Body> {
                 } else {
                     super::pcurve::pcurve(&surf, &ed.curve, ed.t[0], ed.t[1], None)
                 };
+                // Where the edge's projection onto the face ends far, in the face's own (u, v),
+                // from where the face's own p-curve did (a face that comes to a point there, a
+                // pole any v of which is that point; or one that folds over itself, the
+                // projection landing on the wrong leaf), the face's own p-curve stands, told by
+                // the new edge's parameter: each of the edge's points at the old edge's nearest
+                // point's (u, v).
+                if !alike && !surf.u_periodic() && !surf.v_periodic() {
+                    let (ot0, ot1) = super::topo::co_range(&old, c.fwd);
+                    let (nt0, nt1) = super::topo::co_range(&ed, fwd);
+                    let (mu, mv) = surf.metric();
+                    let off = |p: P3, q: P3| ((p.x - q.x) * mu).abs().max(((p.y - q.y) * mv).abs());
+                    // (Or strays from the edge between its ends.)
+                    let apart = (1..8)
+                        .map(|k| {
+                            let t = ed.t[0] + (ed.t[1] - ed.t[0]) * k as f64 / 8.0;
+                            let q = pc.point(t);
+                            (surf.eval(q.x, q.y) - ed.curve.point(t)).norm()
+                        })
+                        .fold(0.0, f64::max);
+                    let strays = off(c.pc.point(ot0), pc.point(nt0))
+                        .max(off(c.pc.point(ot1), pc.point(nt1)))
+                        .max(apart);
+                    if strays > 10.0 * tol {
+                        let (lo, hi) = (old.t[0].min(old.t[1]), old.t[0].max(old.t[1]));
+                        let (a, z) = (ed.t[0].min(ed.t[1]), ed.t[0].max(ed.t[1]));
+                        let n = 48;
+                        let params: Vec<f64> =
+                            (0..=n).map(|k| a + (z - a) * k as f64 / n as f64).collect();
+                        // (Its ends the old p-curve's own.)
+                        let ends = if (a - nt0).abs() <= (a - nt1).abs() {
+                            (ot0, ot1)
+                        } else {
+                            (ot1, ot0)
+                        };
+                        let pts: Vec<P3> = params
+                            .iter()
+                            .enumerate()
+                            .map(|(k, &t)| {
+                                if k == 0 {
+                                    c.pc.point(ends.0)
+                                } else if k == n {
+                                    c.pc.point(ends.1)
+                                } else {
+                                    c.pc.point(old.curve.closest(&ed.curve.point(t), lo, hi))
+                                }
+                            })
+                            .collect();
+                        pc = Curve::Nurbs(std::sync::Arc::new(
+                            super::nurbs::NurbsCurve::interpolate(&pts, &params, 3, None, None),
+                        ));
+                        if std::env::var_os("CADRS_SEW_TRACE").is_some() {
+                            let after = (0..=64)
+                                .map(|k| {
+                                    let t = ed.t[0] + (ed.t[1] - ed.t[0]) * k as f64 / 64.0;
+                                    let q = pc.point(t);
+                                    (surf.eval(q.x, q.y) - ed.curve.point(t)).norm()
+                                })
+                                .fold(0.0, f64::max);
+                            eprintln!(
+                                "sew: face {fi}'s p-curve of edge {} (for its own edge {}) strayed {strays:.3e}; kept as its own, now {after:.3e} from the edge",
+                                x, c.edge
+                            );
+                        }
+                    }
+                }
                 let (nt0, _) = super::topo::co_range(&ed, fwd);
                 let q = pc.point(nt0);
                 let du = if surf.u_periodic() {

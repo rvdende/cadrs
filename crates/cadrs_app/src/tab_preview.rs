@@ -132,7 +132,10 @@ impl TabThumbs {
 const THUMB_FEATURE_LIMIT: usize = 60;
 const THUMB_SIZE: u32 = 160;
 
-/// Draws the wanted tab's thumbnail, unless it is up to date.
+/// Draws the wanted tab's thumbnail, unless it is up to date. Its studios' rebuilds run on the
+/// kernel thread, never waited for here: until they are done the card shows the tab's icon,
+/// and the thumbnail is drawn in the frame they finish (a studio that takes seconds to rebuild
+/// mustn't freeze the window when its tab is hovered).
 fn fill_thumbs(world: &mut World) {
     let Some(id) = world.resource::<TabThumbs>().wanted else {
         return;
@@ -171,9 +174,13 @@ fn fill_thumbs(world: &mut World) {
     let Some(el) = doc.element(id).cloned() else {
         return;
     };
+    // (None: a rebuild it needs is still running; Some(None): nothing to draw.)
+    let now = Some(std::time::Duration::ZERO);
     let img = world.resource_scope(
-        |world, mut parts: Mut<crate::assembly::AssemblyParts>| -> Option<image::RgbaImage> {
-            match &el.kind {
+        |world,
+         mut parts: Mut<crate::assembly::AssemblyParts>|
+         -> Option<Option<image::RgbaImage>> {
+            Some(match &el.kind {
                 ElementKind::PartStudio { .. } if big => {
                     let cache = world.resource::<crate::parts::PartCache>();
                     let list: Vec<(&cadrs_core::Solid, [u8; 3])> = cache
@@ -190,7 +197,13 @@ fn fill_thumbs(world: &mut World) {
                         .then(|| cadrs_core::assembly::thumb::render(&list, THUMB_SIZE))
                 }
                 ElementKind::PartStudio { .. } => {
-                    let build = parts.build(&doc, el.id)?;
+                    let (build, done) = parts.build_within(&doc, el.id, now);
+                    if !done {
+                        return None;
+                    }
+                    let Some(build) = build else {
+                        return Some(None);
+                    };
                     let list: Vec<(&cadrs_core::Solid, [u8; 3])> = build
                         .parts
                         .iter()
@@ -205,9 +218,18 @@ fn fill_thumbs(world: &mut World) {
                         .then(|| cadrs_core::assembly::thumb::render(&list, THUMB_SIZE))
                 }
                 ElementKind::Assembly => {
-                    let asm = el.assembly_model()?;
-                    let (ps, props) =
-                        cadrs_core::assembly::instance_parts(&doc, asm, |e| parts.build(&doc, e));
+                    let Some(asm) = el.assembly_model() else {
+                        return Some(None);
+                    };
+                    let mut waiting = false;
+                    let (ps, props) = cadrs_core::assembly::instance_parts(&doc, asm, |e| {
+                        let (b, done) = parts.build_within(&doc, e, now);
+                        waiting |= !done;
+                        b
+                    });
+                    if waiting {
+                        return None;
+                    }
                     let list: Vec<(&cadrs_core::Solid, [u8; 3])> = ps
                         .iter()
                         .map(|p| {
@@ -221,9 +243,13 @@ fn fill_thumbs(world: &mut World) {
                         .then(|| cadrs_core::assembly::thumb::render(&list, THUMB_SIZE))
                 }
                 _ => None,
-            }
+            })
         },
     );
+    // Its rebuilds still running: again next frame.
+    let Some(img) = img else {
+        return;
+    };
     let handle = img.map(|img| {
         let (w, h) = img.dimensions();
         world.resource_mut::<Assets<Image>>().add(Image::new(

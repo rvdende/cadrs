@@ -774,6 +774,7 @@ impl Feature {
             FeatureKind::FaceBlend(x) => x.problem().is_none(),
             FeatureKind::Fill(x) => x.problem().is_none(),
             FeatureKind::Thread(x) => x.problem().is_none(),
+            FeatureKind::Gear(x) => x.problem().is_none(),
             FeatureKind::Variable(x) => x.problem().is_none(),
             FeatureKind::SheetMetalModel(x) => x.problem().is_none(),
             FeatureKind::ModifyJoint(x) => x.problem().is_none(),
@@ -818,6 +819,7 @@ impl Feature {
             FeatureKind::FaceBlend(x) => x.problem(),
             FeatureKind::Fill(x) => x.problem(),
             FeatureKind::Thread(x) => x.problem(),
+            FeatureKind::Gear(x) => x.problem(),
             FeatureKind::Variable(x) => x.problem(),
             FeatureKind::SheetMetalModel(x) => x.problem(),
             FeatureKind::ModifyJoint(x) => x.problem(),
@@ -1008,6 +1010,17 @@ impl Feature {
             FeatureKind::FaceBlend(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::Fill(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::Thread(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::Gear(x) => {
+                x.parents().into_iter().for_each(&mut add);
+                for a in [&x.shaft, &x.mate_shaft].into_iter().flatten() {
+                    match a {
+                        AxisRef::SketchCurve { sketch, .. } => add(*sketch),
+                        AxisRef::Edge(e) => edge(e).into_iter().for_each(&mut add),
+                        AxisRef::Face(f) => add(face(f)),
+                        AxisRef::Connector(c) => c.parent().into_iter().for_each(&mut add),
+                    }
+                }
+            }
             FeatureKind::SheetMetalModel(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::ModifyJoint(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::SheetMetalLoft(x) => x.parents().into_iter().for_each(&mut add),
@@ -1178,6 +1191,8 @@ pub enum FeatureKind {
     Fill(crate::surfacing::FillFeature),
     /// A modelled screw thread on a cylinder or in a hole ([`crate::thread`]).
     Thread(crate::thread::ThreadFeature),
+    /// Gear teeth, as a new part or cut into a face of one ([`crate::gear`]).
+    Gear(crate::gear::GearFeature),
     /// A variable, `#name = expression` (P3F.4, P5.2; [`crate::variables`]).
     Variable(crate::variables::VariableFeature),
     /// A sheet metal model: Convert, Extrude or Thicken (P3I.2, SM2; [`crate::sheetmetal`]).

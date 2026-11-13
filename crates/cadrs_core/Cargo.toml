@@ -15,6 +15,7 @@ brep = []
 gpu = ["cadrs_kernel/gpu"]
 
 [dependencies]
+earcutr.workspace = true
 cadrs_fs.workspace = true
 cadrs_sketch.workspace = true
 cadrs_vars.workspace = true

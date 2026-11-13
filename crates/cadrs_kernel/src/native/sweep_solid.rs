@@ -1013,7 +1013,7 @@ fn climb_at(
     (r, o - r * o + axis.dir.into_inner() * climb_rise(rise, a))
 }
 
-fn rigid_at(steps: &[RigidStep], t: f64) -> (nalgebra::Rotation3<f64>, V3) {
+pub(super) fn rigid_at(steps: &[RigidStep], t: f64) -> (nalgebra::Rotation3<f64>, V3) {
     let (mut r, mut d) = (nalgebra::Rotation3::identity(), V3::zeros());
     for s in steps {
         match *s {
@@ -1954,6 +1954,39 @@ fn cut_by_pieces(
 }
 
 /// [`crate::Kernel::cut_swept`].
+/// [`cut_swept`] at each of `copies` places of the tool a whole turn apart about the target's
+/// axis (the second turn's): a gear's every tooth space, cut by a motion that doesn't repeat
+/// (a face mill's roll). Generated exactly, one plug made and its copies subtracted together,
+/// or an error at once where its contacts can't be followed.
+pub fn cut_swept_indexed(
+    k: &mut NativeKernel,
+    target: BodyId,
+    tool: BodyId,
+    motion: &SolidMotion,
+    copies: usize,
+) -> Result<OpResult> {
+    let SolidMotion::Rigid { steps } = motion else {
+        return Err(KernelError::Unsupported(
+            "an indexed cut by a motion of two turns",
+        ));
+    };
+    let Some(RigidStep::Turn { axis, .. }) = steps.get(1).copied() else {
+        return Err(KernelError::Unsupported(
+            "an indexed cut by a motion of two turns",
+        ));
+    };
+    let b = (**k.get(tool)?).clone();
+    let _ = axis;
+    match super::sweep_generate::cut(k, target, &b, steps, (copies > 1).then_some(copies)) {
+        Some(r) => r,
+        // (Not cut a tooth at a time by the meshed sweep: seconds a tooth, its faces a mesh's,
+        // and it may not close. The caller is told at once.)
+        None => Err(KernelError::Unsupported(
+            "a generated cut the tool's contacts can't be followed for exactly",
+        )),
+    }
+}
+
 pub fn cut_swept(
     k: &mut NativeKernel,
     target: BodyId,
@@ -1977,6 +2010,12 @@ pub fn cut_swept(
                 return Ok(c);
             }
         }
+    }
+    // Two turns about different lines (a gear cut by its mate): by the contacts' sheets.
+    if let SolidMotion::Rigid { steps } = motion
+        && let Some(Ok(r)) = super::sweep_generate::cut(k, target, &b, steps, None)
+    {
+        return Ok(r);
     }
     // A rigid motion turning more than half a turn: exactly, in pieces of at most half a turn
     // cut one after another (a tool's sweep over a whole turn can overlap itself, a thread whose

@@ -569,6 +569,62 @@ pub fn edge_tool_range(
                     let p2 = |x: &P3| P2::new((x - q).dot(&radial), (x - q).dot(&y));
                     arc_section_loop(&corner, p2(&centre), p2(&k1), p2(&k2), r, src)?
                 }
+                // A chamfer that fills a concave edge beside a sphere: the region to add lies
+                // between the faces and the chamfer's line, and the ball bulges into it, so the
+                // wedge between the faces' tangents and the line stops short of where the line
+                // meets the ball (and leaves a groove there). The tool's side on the ball is
+                // the chord from the edge to that point instead: all of the gap is within it,
+                // and the rest of it within the ball.
+                SectionKind::Chamfer { d1, d2 }
+                    if !convex
+                        && (matches!(f1, Surface::Sphere { .. })
+                            || matches!(f2, Surface::Sphere { .. })) =>
+                {
+                    let ends = [corner.u1 * d1, corner.u2 * d2];
+                    let chord = |s: &Surface, k: usize| -> Option<V2> {
+                        let Surface::Sphere { f, r } = s else {
+                            return None;
+                        };
+                        // Where the line through the two ends meets the ball's circle in this
+                        // plane, nearest this side's end.
+                        let centre = to2(&(f.o - q));
+                        let along = ends[1 - k] - ends[k];
+                        let from = ends[k] - centre;
+                        let (qa, qb, qc) = (
+                            along.norm_squared(),
+                            2.0 * from.dot(&along),
+                            from.norm_squared() - r * r,
+                        );
+                        let disc = qb * qb - 4.0 * qa * qc;
+                        if qa <= 0.0 || disc < 0.0 {
+                            return None;
+                        }
+                        let roots = [
+                            (-qb - disc.sqrt()) / (2.0 * qa),
+                            (-qb + disc.sqrt()) / (2.0 * qa),
+                        ];
+                        let s = if roots[0].abs() <= roots[1].abs() {
+                            roots[0]
+                        } else {
+                            roots[1]
+                        };
+                        Some(ends[k] + along * s)
+                    };
+                    let to = [
+                        chord(f1, 0).unwrap_or(ends[0]),
+                        chord(f2, 1).unwrap_or(ends[1]),
+                    ];
+                    let leaning = Corner2 {
+                        u1: to[0].normalize(),
+                        u2: to[1].normalize(),
+                        convex,
+                    };
+                    let kind = SectionKind::Chamfer {
+                        d1: to[0].norm(),
+                        d2: to[1].norm(),
+                    };
+                    section_loop(&leaning, kind, src)?.0
+                }
                 _ => section_loop(&corner, section, src)?.0,
             };
             let mf = MergedFace {
@@ -3147,9 +3203,64 @@ pub fn chamfer_tool(
             }
         };
         let (s0, s1) = if flip { (1usize, 0usize) } else { (0, 1) };
+        // Tangent measurement on a sphere: the chamfer's section is a straight line drawn
+        // between points told along the faces' tangents at the edge, so for it to meet the
+        // sphere where the tangent distance d lands, at the angle atan(d/R) round it, the
+        // line through the two faces' own points there is told by where it crosses each
+        // tangent.
+        let on_sphere = |tangent: [f64; 2]| -> Option<[f64; 2]> {
+            if opts.measurement != ChamferMeasure::Tangent {
+                return None;
+            }
+            let sides = edge_sides(&b, ei).ok()?;
+            let ball = |k: usize| match &b.faces[sides[k].0].surf {
+                Surface::Sphere { f, r } => Some((f.o, *r)),
+                _ => None,
+            };
+            if ball(0).is_none() && ball(1).is_none() {
+                return None;
+            }
+            let ed = &b.edges[ei];
+            let tm = ed.mid_t();
+            let p = ed.point(tm);
+            let w = [0, 1].map(|k| face_dirs(&b, sides[k].0, ei, sides[k].1, tm).1);
+            // Each face's point, from the edge's.
+            let q = [0, 1].map(|k| match ball(k) {
+                Some((o, r)) => {
+                    let a = (tangent[k] / r).atan();
+                    (o - p) * (1.0 - a.cos()) + w[k] * (r * a.sin())
+                }
+                None => w[k] * tangent[k],
+            });
+            // In the section's own (slanted) coordinates along the two tangents.
+            let g = w[0].dot(&w[1]);
+            let det = 1.0 - g * g;
+            let along = |v: &V3| {
+                let (x, y) = (v.dot(&w[0]), v.dot(&w[1]));
+                ((x - g * y) / det, (y - g * x) / det)
+            };
+            let ((x0, y0), (x1, y1)) = (along(&q[0]), along(&q[1]));
+            let crossing = [
+                x0 - y0 * (x1 - x0) / (y1 - y0),
+                y1 - x1 * (y1 - y0) / (x1 - x0),
+            ];
+            crossing
+                .iter()
+                .all(|c| c.is_finite() && *c > 0.0)
+                .then_some(crossing)
+        };
+        let told = |a: f64, c: f64| -> (f64, f64) {
+            let mut tangent = [0.0; 2];
+            tangent[s0] = a;
+            tangent[s1] = c;
+            match on_sphere(tangent) {
+                Some(x) => (x[s0], x[s1]),
+                None => (chord(s0, a), chord(s1, c)),
+            }
+        };
         let (d1, d2) = match spec {
-            ChamferSpec::EqualDistance(d) => (chord(s0, d), chord(s1, d)),
-            ChamferSpec::TwoDistances(a, c) => (chord(s0, a), chord(s1, c)),
+            ChamferSpec::EqualDistance(d) => told(d, d),
+            ChamferSpec::TwoDistances(a, c) => told(a, c),
             ChamferSpec::DistanceAngle { distance, angle } => (distance, f64::NAN + angle),
         };
         let kind: Box<dyn Fn(f64) -> SectionKind> = match spec {

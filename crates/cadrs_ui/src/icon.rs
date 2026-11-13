@@ -10,6 +10,10 @@
 //! The rasters are picked by physical pixels: at a UI scale or on a high-DPI screen, an icon
 //! whose size isn't built in is rendered at that size (once, with `build.rs`'s code), so it stays
 //! sharp instead of being upscaled.
+//!
+//! A new tool, feature or command gets an icon of its own: draw it in `crates/cadrs_icons_gen`
+//! (see `crates/cadrs_icons/HOWTO.md`) and use it by name. Don't stand in another tool's icon
+//! for it, and don't draw icons in this crate.
 
 use std::borrow::Cow;
 use std::sync::Mutex;
@@ -214,7 +218,7 @@ fn render(name: &str, size: u32, px: u32, accent: bool, dark: bool) -> Option<Ve
 /// cuts red, patterns magenta, combining amber, construction teal.
 pub fn family_accent(name: &str) -> Option<[u8; 3]> {
     Some(match name {
-        "extrude" | "thicken" | "rib" | "enclose" => [0x25, 0x63, 0xeb],
+        "extrude" | "thicken" | "rib" | "enclose" | "gear" => [0x25, 0x63, 0xeb],
         "revolve" => [0xee, 0x7d, 0x1c],
         "sweep" | "loft" => [0x93, 0x52, 0xe0],
         "fillet" | "chamfer" | "draft" => [0x1f, 0xa8, 0x5e],

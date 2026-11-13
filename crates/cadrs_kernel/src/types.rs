@@ -740,6 +740,11 @@ pub enum SweepControl {
     KeepOrientation,
     /// The profile's plane keeps containing this direction.
     LockDirection(Unit<Vector3<f64>>),
+    /// The path is this helix (or spiral on a cone), and the profile is carried by its screw:
+    /// turned about the helix's axis as the path turns, and moved along the axis and out from
+    /// it as the path is. A section drawn in a plane through the axis stays in one: a thread's,
+    /// straight or tapered.
+    Helix(crate::Helix),
 }
 
 /// A sweep (P3.7, PS19): a profile's regions (or, for surfaces and thin walls, its curves)
@@ -960,6 +965,12 @@ pub struct SweepLaw {
     pub twist: f64,
     /// The profile's size at the path's end over its size at the start (greater than zero).
     pub scale: f64,
+    /// The twist runs in proportion to the logarithm of the size, not to the length travelled
+    /// (only with a scale other than 1): the profile then moves by a spiral similarity, and
+    /// shrinking toward a point every point of it turns by an amount that depends on its
+    /// distance from that point alone (an equiangular spiral, as a spiral bevel gear's teeth).
+    #[serde(default)]
+    pub spiral: bool,
 }
 
 impl Default for SweepLaw {
@@ -967,6 +978,7 @@ impl Default for SweepLaw {
         Self {
             twist: 0.0,
             scale: 1.0,
+            spiral: false,
         }
     }
 }

@@ -87,7 +87,8 @@ Onshape-style CAD in Rust + Bevy 0.20.1. Local notes in `docs/` (git-ignored: `P
 - Every document or sketch change goes through the command/undo layer. Give UI elements a `Name`.
 - Icons: `cadrs_icons` (vendored from icon-rs, which cadrs no longer uses). Add missing ones as
   drawing functions in `crates/cadrs_icons_gen` and run `cargo run -r -p cadrs_icons_gen`
-  (`crates/cadrs_icons/HOWTO.md`); commit the generated SVGs and `src/generated.rs`. Inter font.
+  (`crates/cadrs_icons/HOWTO.md`); commit the generated SVGs and `src/generated.rs`. Every new
+  tool or feature gets its own icon: don't reuse another tool's. Inter font.
   Never copy Onshape's logo, name or icons.
 - Units are mm.
 - End commit messages with `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`.

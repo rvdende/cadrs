@@ -738,6 +738,7 @@ pub(crate) fn body(
             | FeatureKind::Helix(_)
             | FeatureKind::Fill(_)
             | FeatureKind::Thread(_)
+            | FeatureKind::Gear(_)
             | FeatureKind::FlatExtrude(_)
             | FeatureKind::DirectEdit(_)
     ) {
@@ -1279,7 +1280,10 @@ pub(crate) fn is_checkbox(name: &str) -> bool {
 
 /// Plain numbers (the instance counts: whole numbers of at least 1).
 pub(crate) fn is_count(role: Role) -> bool {
-    matches!(role, Role::PatternCount | Role::PatternCount2)
+    matches!(
+        role,
+        Role::PatternCount | Role::PatternCount2 | Role::GearTeeth | Role::GearMateTeeth
+    )
 }
 
 /// Numbers that may be zero or negative (a connector's move).
