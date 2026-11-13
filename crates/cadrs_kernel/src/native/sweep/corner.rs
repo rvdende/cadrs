@@ -128,7 +128,9 @@ pub(crate) fn join(
                 )?,
                 BoolOp::Subtract,
             )?;
-            crate::native::features::tagged_union(&a, &b)
+            // Both cut by the one mitre plane: their cut faces coincide, glued there where
+            // their edges match (else united).
+            glue(&a, &b).map_or_else(|| crate::native::features::tagged_union(&a, &b), Ok)
         }
         Join::Round => {
             let axis =
