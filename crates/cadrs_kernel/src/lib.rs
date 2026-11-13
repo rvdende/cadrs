@@ -530,6 +530,16 @@ pub trait Kernel {
         }
     }
 
+    /// Sweeps made one after another, each by its law ([`Kernel::sweep_with_law`]), and joined
+    /// end to end into one body: a piece that starts on the section the one before ends on (its
+    /// profile that section, as the law left it) is glued there, the two caps gone and their
+    /// edges one, with no boolean (a herringbone gear's halves, each twisting its own way).
+    /// Pieces that meet any other way are united. Faces as each sweep's.
+    fn sweep_chain(&mut self, pieces: &[(Profile, SweepSpec, SweepLaw)]) -> Result<OpResult> {
+        let _ = pieces;
+        Err(KernelError::Unsupported("sweeps joined end to end"))
+    }
+
     /// A loft through sections (P3.7, PS20), with start and end conditions. Faces: the side of
     /// each curve of the first profile section (`ProfileCurve { region: spec.source, .. }`), and
     /// the start and end caps (`StartCap`/`EndCap { region: spec.source }`).

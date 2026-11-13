@@ -1187,6 +1187,10 @@ impl Kernel for NativeKernel {
         super::sweep::path::sweep_with_law(self, profile, spec, law)
     }
 
+    fn sweep_chain(&mut self, pieces: &[(Profile, SweepSpec, SweepLaw)]) -> Result<OpResult> {
+        super::sweep::chain::sweep_chain(self, pieces)
+    }
+
     fn cells(&mut self, bodies: &[BodyId], select: &[(usize, bool)]) -> Result<Vec<BodyId>> {
         for &b in bodies {
             self.get(b)?;

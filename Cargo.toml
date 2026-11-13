@@ -53,7 +53,7 @@ bytemuck = "1"
 slotmap = { version = "1", features = ["serde"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
 resvg = "0.45"
-icon-rs = "0.5"
+icon-rs = "0.5.1"
 directories = "6"
 # The system's file dialogs (cadrs_ui::file_picker, issue #136): on Linux through the desktop
 # portal (zenity when there is none), pure Rust.
@@ -175,3 +175,77 @@ codegen-units = 64
 [patch.crates-io]
 # wgpu's upload staging in system memory, not the PCIe BAR (vendor/gpu-allocator/CADRS.md).
 gpu-allocator = { path = "vendor/gpu-allocator" }
+
+# Bevy from our fork (https://github.com/rvdende/bevy, branch `cadrs-0.20.1`): the 0.20.1 release
+# with the fixes cadrs needs before a Bevy release carries them. Every Bevy crate in the lock is
+# named, so that one copy of each is built. So far: Safari's WebGPU refuses a texture or sampler
+# in a `let` (bevyengine/bevy#26378, cadrs#218), which bevy_pbr's shaders did.
+bevy = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_a11y = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_android = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_animation = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_animation_macros = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_anti_alias = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_app = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_asset = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_asset_macros = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_audio = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_camera = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_clipboard = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_color = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_core_pipeline = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_curve = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_derive = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_dev_tools = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_diagnostic = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_dylib = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_ecs = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_ecs_macro_logic = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_ecs_macros = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_encase_derive = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_extract = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_extract_macros = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_feathers = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_gilrs = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_gizmos = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_gizmos_macros = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_gizmos_render = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_gltf = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_image = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_input = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_input_focus = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_internal = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_light = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_log = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_macro_utils = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_material = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_material_macros = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_math = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_mesh = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_picking = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_platform = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_post_process = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_ptr = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_reflect = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_reflect_derive = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_render = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_render_macros = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_scene = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_scene_macros = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_shader = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_shape = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_sprite = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_sprite_render = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_state = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_state_macros = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_tasks = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_text = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_time = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_transform = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_ui = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_ui_render = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_ui_widgets = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_utils = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_window = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_winit = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }
+bevy_world_serialization = { git = "https://github.com/rvdende/bevy", branch = "cadrs-0.20.1" }

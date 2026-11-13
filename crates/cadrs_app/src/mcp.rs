@@ -1668,6 +1668,7 @@ fn template(kind: &str) -> Option<FeatureKind> {
             "thicken" => FeatureKind::Thicken(surfacing::ThickenFeature::default()),
             "helix" => FeatureKind::Helix(surfacing::HelixFeature::default()),
             "thread" => FeatureKind::Thread(cadrs_core::thread::ThreadFeature::default()),
+            "gear" => FeatureKind::Gear(cadrs_core::gear::GearFeature::default()),
             "deleteface" => {
                 FeatureKind::DirectEdit(cadrs_core::direct_edit::DirectEditFeature::default())
             }

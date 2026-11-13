@@ -939,6 +939,7 @@ shell-tool-rib = Rib
 shell-tool-shell = Shell
 shell-tool-hole = Hole
 shell-tool-thread = Thread
+shell-tool-gear = Gear
 # The direct edit tools' button.
 shell-tool-direct-edit = Move face, Delete face, Simplify
 shell-tool-linear-pattern = Linear pattern
@@ -2387,6 +2388,71 @@ model-continuity-position = Position (G0)
 model-continuity-tangency = Tangency (G1)
 # A continuity: the surfaces meet with the same curvature (G2).
 model-continuity-curvature = Curvature (G2)
+
+## crates/cadrs_app/src/gear_ui.rs
+# The Gear dialog's selection field: the face the teeth are cut into, if any.
+model-gear-face = Cylinder, cone or flat face (optional)
+# The face field's entry: { $face } is the face ("Face of Extrude 1"), { $module } the module the gear has on it ("2 mm").
+model-gear-face-module = Module { $module }, { $face }
+# A gear type: external teeth on a cylinder.
+model-gear-spur = Spur gear
+# A gear type: internal teeth in a ring.
+model-gear-ring = Ring gear
+# A gear type: teeth on a cone.
+model-gear-bevel = Bevel gear
+# A gear type: teeth on a straight bar.
+model-gear-rack = Rack
+# A gear's number of teeth.
+model-gear-teeth = Teeth
+# A gear's module: its pitch diameter over its number of teeth.
+model-gear-module = Module
+model-gear-pressure-angle = Pressure angle
+# How a gear's teeth run across its face (straight, helical, herringbone).
+model-gear-tooth-line = Tooth line
+model-gear-straight = Straight
+model-gear-helical = Helical
+model-gear-herringbone = Herringbone
+model-gear-helix-angle = Helix angle
+# A gear's width along its teeth.
+model-gear-face-width = Face width
+# The diameter of the hole through a gear's middle.
+model-gear-bore = Bore diameter
+# A ring gear's wall outside its teeth.
+model-gear-rim = Rim thickness
+# A bevel gear's pitch angle: between its axis and its pitch cone.
+model-gear-pitch-angle = Pitch angle
+# The body under a rack's or a bevel gear's teeth.
+model-gear-body = Body thickness
+# How much thinner the teeth are made so that two gears run freely.
+model-gear-backlash = Backlash
+# The axis a gear turns about (X, Y or Z).
+model-gear-axis = Axis
+# A checkbox: a rack's teeth are spaced along the face's short side.
+model-gear-across = Teeth across the face
+# How a bevel gear's spiral teeth run along its face.
+model-gear-spiral = Spiral
+# A spiral: as a face-mill cutter leaves the teeth (Gleason's spiral bevel gears).
+model-gear-face-milled = Face-milled (Gleason)
+# A spiral: at the same angle to the cone's lines everywhere.
+model-gear-equiangular = Equiangular
+# Which of a pair of face-milled spiral bevel gears this one is.
+model-gear-member = Cut as
+# The gear of a pair: the cutter cuts both sides of a tooth space at once.
+model-gear-member-gear = Gear
+# The pinion of a pair, cut to run with its gear with localised bearing contact: its
+# teeth eased off toward their ends so the pair meets in a patch that crosses the tooth
+# (machine settings by Litvin's synthesis).
+model-gear-member-pinion = Pinion (localised contact)
+# The pinion of a pair, cut to match its gear exactly: the two meet along whole lines.
+model-gear-member-conjugate = Pinion (conjugate)
+# The radius of the face-mill cutter that makes a spiral bevel gear's teeth; 0 picks one.
+model-gear-cutter-radius = Cutter radius (0: auto)
+# A bevel gear's shaft angle: between its axis and its mate's (90° for shafts at right angles).
+model-gear-shaft-angle = Shaft angle
+# A checkbox: a bevel gear made whole is placed by its apex (the point of its pitch cone), not its back face.
+model-gear-at-apex = Position at the apex
+# A bevel gear made whole: its axis turned about a line through its apex.
+model-gear-tilt = Tilt
 
 ## crates/cadrs_app/src/thread_ui.rs
 # A thread's handedness.

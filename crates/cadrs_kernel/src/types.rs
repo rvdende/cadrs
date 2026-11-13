@@ -965,6 +965,12 @@ pub struct SweepLaw {
     pub twist: f64,
     /// The profile's size at the path's end over its size at the start (greater than zero).
     pub scale: f64,
+    /// The twist runs in proportion to the logarithm of the size, not to the length travelled
+    /// (only with a scale other than 1): the profile then moves by a spiral similarity, and
+    /// shrinking toward a point every point of it turns by an amount that depends on its
+    /// distance from that point alone (an equiangular spiral, as a spiral bevel gear's teeth).
+    #[serde(default)]
+    pub spiral: bool,
 }
 
 impl Default for SweepLaw {
@@ -972,6 +978,7 @@ impl Default for SweepLaw {
         Self {
             twist: 0.0,
             scale: 1.0,
+            spiral: false,
         }
     }
 }

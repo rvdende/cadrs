@@ -406,7 +406,7 @@ impl Rebuilder {
     }
 
     /// Fuses the bodies a feature made into one (releasing them).
-    fn fuse_made(
+    pub(super) fn fuse_made(
         &mut self,
         op: cadrs_kernel::OpId,
         what: &str,

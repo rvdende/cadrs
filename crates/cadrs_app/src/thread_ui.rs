@@ -1,5 +1,5 @@
 //! The Thread feature's dialog (`cadrs_core::thread`), in the applied-feature dialogs' chain
-//! between [`crate::transform_ui`] and [`crate::surfacing_ui`]:
+//! between [`crate::transform_ui`] and [`crate::gear_ui`]:
 //!
 //! - *Cylinder or hole edge*: the circular edge the thread starts from. Picking one fits the
 //!   size to it (an external thread's major diameter, an internal thread's tap drill).
@@ -155,7 +155,7 @@ pub fn references(kind: &FeatureKind, cache: &PartCache) -> Vec<Pick> {
 pub(crate) fn name(kind: &FeatureKind) -> Option<&'static str> {
     match kind {
         FeatureKind::Thread(_) => Some("thread"),
-        k => crate::surfacing_ui::name(k),
+        k => crate::gear_ui::name(k),
     }
 }
 
@@ -165,7 +165,7 @@ pub(crate) fn layout(kind: &FeatureKind) -> Option<String> {
             "thread {:?} {} {} {:?} {}",
             x.standard, x.size, x.custom, x.end, x.clockwise
         )),
-        k => crate::surfacing_ui::layout(k),
+        k => crate::gear_ui::layout(k),
     }
 }
 
@@ -197,14 +197,14 @@ pub(crate) fn items(
                 })
                 .collect(),
         ),
-        (k, r) => crate::surfacing_ui::items(features, cache, k, r),
+        (k, r) => crate::gear_ui::items(features, cache, k, r),
     }
 }
 
 pub(crate) fn list_field(role: Role) -> Option<AppliedField> {
     match role {
         Role::ThreadEdge => Some(AppliedField::ThreadEdge),
-        r => crate::surfacing_ui::list_field(r),
+        r => crate::gear_ui::list_field(r),
     }
 }
 
@@ -219,7 +219,7 @@ pub(crate) fn body(
     items_of: &dyn Fn(Role) -> Vec<String>,
 ) {
     let FeatureKind::Thread(x) = kind else {
-        crate::surfacing_ui::body(b, t, kind, field, items_of);
+        crate::gear_ui::body(b, t, kind, field, items_of);
         return;
     };
     body_column(b, |b| {
@@ -362,13 +362,13 @@ pub(crate) fn number_text(kind: &FeatureKind, role: Role) -> Option<String> {
         (FeatureKind::Thread(x), Role::ThreadLength) => Some(x.length_expr.clone()),
         (FeatureKind::Thread(x), Role::ThreadDiameter) => Some(x.diameter_expr.clone()),
         (FeatureKind::Thread(x), Role::ThreadCustomPitch) => Some(x.custom_pitch_expr.clone()),
-        (k, r) => crate::surfacing_ui::number_text(k, r),
+        (k, r) => crate::gear_ui::number_text(k, r),
     }
 }
 
 pub(crate) fn select_index(kind: &FeatureKind, role: Role) -> Option<usize> {
     let FeatureKind::Thread(x) = kind else {
-        return crate::surfacing_ui::select_index(kind, role);
+        return crate::gear_ui::select_index(kind, role);
     };
     Some(match role {
         Role::ThreadStandard => usize::from(x.standard == HoleStandard::Ansi),
@@ -382,7 +382,7 @@ pub(crate) fn select_index(kind: &FeatureKind, role: Role) -> Option<usize> {
 
 pub(crate) fn select(k: &mut FeatureKind, role: Role, i: usize) {
     let FeatureKind::Thread(x) = k else {
-        crate::surfacing_ui::select(k, role, i);
+        crate::gear_ui::select(k, role, i);
         return;
     };
     match role {
@@ -407,27 +407,27 @@ pub(crate) fn select(k: &mut FeatureKind, role: Role, i: usize) {
 }
 
 pub(crate) fn tab(k: &mut FeatureKind, role: Role, i: usize) {
-    crate::surfacing_ui::tab(k, role, i)
+    crate::gear_ui::tab(k, role, i)
 }
 
 pub(crate) fn is_checkbox(name: &str) -> bool {
-    crate::surfacing_ui::is_checkbox(name)
+    crate::gear_ui::is_checkbox(name)
 }
 
 pub(crate) fn checkbox(k: &mut FeatureKind, name: &str, on: bool) -> Option<&'static str> {
-    crate::surfacing_ui::checkbox(k, name, on)
+    crate::gear_ui::checkbox(k, name, on)
 }
 
 pub(crate) fn is_signed(role: Role) -> bool {
-    crate::surfacing_ui::is_signed(role)
+    crate::gear_ui::is_signed(role)
 }
 
 pub(crate) fn is_plain(role: Role) -> bool {
-    crate::surfacing_ui::is_plain(role)
+    crate::gear_ui::is_plain(role)
 }
 
 pub(crate) fn is_angle(role: Role) -> bool {
-    crate::surfacing_ui::is_angle(role)
+    crate::gear_ui::is_angle(role)
 }
 
 pub(crate) fn number_label(role: Role) -> Option<&'static str> {
@@ -435,7 +435,7 @@ pub(crate) fn number_label(role: Role) -> Option<&'static str> {
         Role::ThreadLength => Some("Length"),
         Role::ThreadDiameter => Some("Major diameter"),
         Role::ThreadCustomPitch => Some("Pitch"),
-        r => crate::surfacing_ui::number_label(r),
+        r => crate::gear_ui::number_label(r),
     }
 }
 
@@ -453,18 +453,18 @@ pub(crate) fn set_number(k: &mut FeatureKind, role: Role, v: f64, expr: String) 
             x.custom_pitch = v;
             x.custom_pitch_expr = expr;
         }
-        (k, r) => crate::surfacing_ui::set_number(k, r, v, expr),
+        (k, r) => crate::gear_ui::set_number(k, r, v, expr),
     }
 }
 
 pub(crate) fn flip(k: &mut FeatureKind, role: Role) {
-    crate::surfacing_ui::flip(k, role)
+    crate::gear_ui::flip(k, role)
 }
 
 /// The edge's ✕.
 pub(crate) fn remove(k: &mut FeatureKind, role: Role, i: usize) {
     match (k, role) {
         (FeatureKind::Thread(x), Role::ThreadEdge) => x.edge = None,
-        (k, r) => crate::surfacing_ui::remove(k, r, i),
+        (k, r) => crate::gear_ui::remove(k, r, i),
     }
 }
