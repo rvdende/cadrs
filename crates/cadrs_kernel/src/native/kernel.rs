@@ -569,7 +569,71 @@ pub fn face_info(b: &Body, fi: usize) -> FaceInfo {
         center,
         axis,
         radius,
+        fillet_radius: fillet_radius(b, fi),
     }
+}
+
+/// The radius of a face rounded like a constant-radius fillet ([`FaceInfo::fillet_radius`]): a
+/// torus's tube, or a face whose sections one way across its extent in (u, v) are all arcs (each
+/// in a plane, turning at least 2°) of one radius, to a hundred-thousandth of it.
+pub fn fillet_radius(b: &Body, fi: usize) -> Option<f64> {
+    let f = &b.faces[fi];
+    match &f.surf {
+        Surface::Torus { rmin, .. } => return Some(*rmin),
+        Surface::Plane { .. }
+        | Surface::Cylinder { .. }
+        | Surface::Sphere { .. }
+        | Surface::Cone { .. } => {
+            return None;
+        }
+        _ => {}
+    }
+    let ((u0, u1), (v0, v1)) = super::heal_split::face_uv_box(b, fi)?;
+    if !(u1 > u0 && v1 > v0) {
+        return None;
+    }
+    // The circle through each section's first, middle and last points, and how far its other
+    // points lie off it.
+    let section = |across: bool, s: f64| -> Option<f64> {
+        let at = |t: f64| {
+            if across {
+                f.surf.eval(u0 + (u1 - u0) * s, v0 + (v1 - v0) * t)
+            } else {
+                f.surf.eval(u0 + (u1 - u0) * t, v0 + (v1 - v0) * s)
+            }
+        };
+        let pts: Vec<P3> = (0..=8).map(|i| at(i as f64 / 8.0)).collect();
+        let (a, m, c) = (pts[0], pts[4], pts[8]);
+        let (ab, ac) = (m - a, c - a);
+        let n = ab.cross(&ac);
+        if n.norm() <= 1e-12 * ab.norm() * ac.norm() {
+            return None;
+        }
+        let centre = a
+            + (ac.cross(&n) * ab.norm_squared() + n.cross(&ab) * ac.norm_squared())
+                / (2.0 * n.norm_squared());
+        let r = (a - centre).norm();
+        let normal = n.normalize();
+        let off = pts.iter().map(|p| {
+            ((p - centre).norm() - r)
+                .abs()
+                .max((p - a).dot(&normal).abs())
+        });
+        let turn = ((a - centre).normalize().dot(&(c - centre).normalize()))
+            .clamp(-1.0, 1.0)
+            .acos();
+        (off.fold(0.0, f64::max) <= 1e-5 * r && turn >= 2f64.to_radians()).then_some(r)
+    };
+    for across in [true, false] {
+        let rs: Option<Vec<f64>> = (0..=6).map(|i| section(across, i as f64 / 6.0)).collect();
+        if let Some(rs) = rs {
+            let r = rs.iter().sum::<f64>() / rs.len() as f64;
+            if rs.iter().all(|x| (x - r).abs() <= 1e-5 * r) {
+                return Some(r);
+            }
+        }
+    }
+    None
 }
 
 pub fn edge_infos(b: &Body) -> Vec<EdgeInfo> {

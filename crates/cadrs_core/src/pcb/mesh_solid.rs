@@ -516,6 +516,7 @@ pub fn mesh_solid(meshes: &[Mesh], op: OpId, opacity: f64) -> Solid {
                 area: Some(area),
                 kind,
                 radius,
+                fillet_radius: None,
             });
             s.looks.push((
                 name,
