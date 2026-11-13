@@ -1435,12 +1435,14 @@ fn pair_now(
 /// follows), and its label's place.
 #[derive(Resource, Debug, Default)]
 pub struct PairKnob {
-    /// The knob on screen (window px).
-    pub at: Option<Vec2>,
+    /// The knobs on screen (window px): the gear's (its size), the pinion's (the ratio).
+    pub at: [Option<Vec2>; 2],
+    /// Whether the pointer is over either (or one is dragged), and which.
     pub hovered: bool,
+    which: Option<usize>,
     pub drag: Option<KnobDrag>,
-    /// The gear's pitch circle (centre, axis, radius) as last drawn.
-    circle: Option<([f64; 3], [f64; 3], f64)>,
+    /// The members' pitch circles (centre, axis, radius) as last drawn.
+    circles: [Option<([f64; 3], [f64; 3], f64)>; 2],
     /// The gear's teeth.
     teeth: u32,
 }
@@ -1448,6 +1450,9 @@ pub struct PairKnob {
 #[derive(Debug, Clone)]
 pub struct KnobDrag {
     pub kind: FeatureKind,
+    /// Which knob (0 the gear's, 1 the pinion's), and the gear's pitch radius as it began.
+    which: usize,
+    gear_radius: f64,
 }
 
 const KNOB_GRAB: f32 = 9.0;
@@ -1481,25 +1486,21 @@ pub(crate) fn draw_pair(
 ) {
     let found = pair_now(session.as_deref(), doc.as_deref(), &cache, &knob);
     let Some((_, x, info)) = found else {
-        knob.at = None;
-        knob.circle = None;
+        knob.at = [None; 2];
+        knob.circles = [None; 2];
         for (e, ..) in &q_label {
             commands.entity(e).try_despawn();
         }
         return;
     };
-    let hot = knob.hovered || knob.drag.is_some();
+    let hot = |i: usize| knob.drag.as_ref().map(|d| d.which).or(knob.which) == Some(i);
     let blue = Color::srgb_u8(0x4a, 0x8c, 0xf0);
     let orange = Color::srgb_u8(0xff, 0xb4, 0x5a);
     // Each member's pitch circle.
     for (i, (c, a, r)) in info.circles.iter().enumerate() {
         let (c, a) = (v3(*c), v3(*a).normalize_or_zero());
         let iso = Isometry3d::new(c, Quat::from_rotation_arc(Vec3::Z, a));
-        let col = if i == 0 && hot {
-            orange
-        } else {
-            blue.with_alpha(0.7)
-        };
+        let col = if hot(i) { orange } else { blue.with_alpha(0.7) };
         g.circle(iso, *r as f32, col).resolution(96);
     }
     // The knob on the gear's circle, on the side toward the pinion's.
@@ -1508,11 +1509,28 @@ pub(crate) fn draw_pair(
     let toward = v3(info.circles[1].0) - cv;
     let out = (toward - av * toward.dot(av)).normalize_or(av.any_orthonormal_vector());
     let knob_p = cv + out * r as f32;
-    let col = if hot { orange } else { blue };
     let k = 6.0 * view.view.scale;
-    g.sphere(Isometry3d::from_translation(knob_p), k, col);
-    knob.at = Some(rect.to_screen(view.view.project(knob_p)));
-    knob.circle = Some((c, a, r));
+    g.sphere(
+        Isometry3d::from_translation(knob_p),
+        k,
+        if hot(0) { orange } else { blue },
+    );
+    // The pinion's (the ratio's) on its circle, on the side away from the gear's middle.
+    let (pc, pa, pr) = info.circles[1];
+    let (pcv, pav) = (v3(pc), v3(pa).normalize_or_zero());
+    let away = pcv - cv;
+    let pout = (away - pav * away.dot(pav)).normalize_or(pav.any_orthonormal_vector());
+    let ratio_p = pcv + pout * pr as f32;
+    g.sphere(
+        Isometry3d::from_translation(ratio_p),
+        k,
+        if hot(1) { orange } else { blue },
+    );
+    knob.at = [
+        Some(rect.to_screen(view.view.project(knob_p))),
+        Some(rect.to_screen(view.view.project(ratio_p))),
+    ];
+    knob.circles = [Some((c, a, r)), Some((pc, pa, pr))];
     knob.teeth = info.teeth[0];
     // The label, over the gear's circle (the side away from the pinion).
     let label_at = rect.to_screen(view.view.project(cv - out * r as f32)) - rect.0.min;
@@ -1690,9 +1708,18 @@ pub(crate) fn pair_knob_pointer(
 ) {
     use bevy::picking::pointer::{PointerAction, PointerButton, PointerId};
     let at = knob.at;
-    let near = |p: Vec2| at.is_some_and(|k| k.distance(p) <= KNOB_GRAB);
-    knob.hovered = knob.drag.is_some() || near(drag.pointer());
-    let (Some(s), Some((c, a, _))) = (session.as_ref(), knob.circle) else {
+    // (The nearer knob under the pointer.)
+    let near = |p: Vec2| {
+        (0..2)
+            .filter_map(|i| Some((i, at[i]?.distance(p))))
+            .filter(|(_, d)| *d <= KNOB_GRAB)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i)
+    };
+    knob.which = near(drag.pointer());
+    knob.hovered = knob.drag.is_some() || knob.which.is_some();
+    let (Some(s), [Some(gear_circle), Some(pinion_circle)]) = (session.as_ref(), knob.circles)
+    else {
         inputs.clear();
         return;
     };
@@ -1706,10 +1733,14 @@ pub(crate) fn pair_knob_pointer(
         let pos = input.location.position;
         match input.action {
             PointerAction::Press(PointerButton::Primary) => {
-                if near(pos)
+                if let Some(which) = near(pos)
                     && let Some(k @ FeatureKind::Gear(_)) = current.as_ref()
                 {
-                    knob.drag = Some(KnobDrag { kind: k.clone() });
+                    knob.drag = Some(KnobDrag {
+                        kind: k.clone(),
+                        which,
+                        gear_radius: gear_circle.2,
+                    });
                     grab.0 = true;
                 }
             }
@@ -1717,6 +1748,12 @@ pub(crate) fn pair_knob_pointer(
                 let teeth = knob.teeth.max(1) as f64;
                 let Some(d) = knob.drag.as_mut() else {
                     continue;
+                };
+                // Where the pointer's ray meets the dragged circle's plane: its radius there.
+                let (c, a, _) = if d.which == 0 {
+                    gear_circle
+                } else {
+                    pinion_circle
                 };
                 let (o, dir) = view.view.ray(rect.offset(pos));
                 let (cv, av) = (v3(c), v3(a).normalize_or_zero());
@@ -1726,13 +1763,26 @@ pub(crate) fn pair_knob_pointer(
                 }
                 let t = (cv - o).dot(av) / den;
                 let r = (o + dir * t - cv).length() as f64;
-                let m = ((2.0 * r / teeth) * 100.0).round() / 100.0;
-                if let FeatureKind::Gear(x) = &mut d.kind
-                    && m > 0.0
-                    && (x.module - m).abs() > 1e-9
-                {
-                    x.module = m;
-                    x.module_expr = format!("{} mm", cadrs_core::hole::fmt(m));
+                let FeatureKind::Gear(x) = &mut d.kind else {
+                    continue;
+                };
+                if d.which == 0 {
+                    // The gear's size: the module follows (a hundredth of a millimetre).
+                    let m = ((2.0 * r / teeth) * 100.0).round() / 100.0;
+                    if m > 0.0 && (x.module - m).abs() > 1e-9 {
+                        x.module = m;
+                        x.module_expr = format!("{} mm", cadrs_core::hole::fmt(m));
+                    }
+                } else if r > 1e-3 {
+                    // The pinion's size against the gear's as it was: the ratio (a tenth, a
+                    // half from 10), 1 to 100.
+                    let raw = (d.gear_radius / r).clamp(1.0, 100.0);
+                    let step = if raw < 10.0 { 0.1 } else { 0.5 };
+                    let ratio = (raw / step).round() * step;
+                    if (x.ratio - ratio).abs() > 1e-9 {
+                        x.ratio = ratio;
+                        x.ratio_expr = cadrs_core::hole::fmt(ratio);
+                    }
                 }
                 let want = Some((s.feature, d.kind.clone()));
                 if over.applied != want {
@@ -1746,7 +1796,12 @@ pub(crate) fn pair_knob_pointer(
                         return;
                     };
                     if crate::applied::current(world).is_some_and(|f| f.kind != d.kind) {
-                        crate::applied::set(world, d.kind, "Drag size");
+                        let label = if d.which == 0 {
+                            "Drag size"
+                        } else {
+                            "Drag ratio"
+                        };
+                        crate::applied::set(world, d.kind, label);
                     }
                 });
             }

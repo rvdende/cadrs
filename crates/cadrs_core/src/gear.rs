@@ -1980,9 +1980,15 @@ fn pair_plan(
     offset: f64,
     shafts: Option<&Shafts>,
 ) -> Result<Plan, &'static str> {
-    let (family, [gear, pinion]) = pair_members(x, shaft_angle, offset);
+    let (family, [mut gear, mut pinion]) = pair_members(x, shaft_angle, offset);
     if let Some(p) = gear.problem().or(pinion.problem()) {
         return Err(p);
+    }
+    // (A hypoid pair's previews always: their teeth checked against each other. The build
+    // uses them only with Fast preview on.)
+    if family == PairFamily::Hypoid {
+        gear.fast_preview = true;
+        pinion.fast_preview = true;
     }
     let (mut first, second) = match (family, shafts) {
         (PairFamily::Hypoid, Some(s)) => (
@@ -1993,6 +1999,17 @@ fn pair_plan(
         (PairFamily::Hypoid, None) => (hypoid_member(&gear)?, hypoid_member(&pinion)?),
         (PairFamily::Worm, None) => (worm_member(&gear)?, worm_member(&pinion)?),
     };
+    // Teeth that reach into their mate's (past the previews' few hundredths): said.
+    if family == PairFamily::Hypoid
+        && let (Some(a), Some(b)) = (&first.preview, &second.preview)
+        && preview::interfere(a, b, 0.1)
+    {
+        let w = "The teeth interfere here: change the offset, the ratio or the teeth".to_string();
+        first.warning = Some(match first.warning.take() {
+            Some(o) => format!("{o}; {w}"),
+            None => w,
+        });
+    }
     first.second = Some(Box::new(second));
     Ok(first)
 }

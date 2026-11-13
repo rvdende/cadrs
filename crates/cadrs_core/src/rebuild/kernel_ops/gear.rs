@@ -615,8 +615,10 @@ impl Rebuilder {
         .into_iter()
         .flatten()
         {
-            if !design.contains(w) {
-                design.push(w.clone());
+            for part in w.split("; ") {
+                if !design.iter().any(|d| d == part) {
+                    design.push(part.to_string());
+                }
             }
         }
         let with_design = |mut o: Output| {

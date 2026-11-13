@@ -551,6 +551,121 @@ pub(super) fn hypoid_member(d: &Design, l: &Layout, gear: bool, grow: f64) -> Op
     Some(mesh)
 }
 
+/// Whether two closed meshes reach into each other by more than `depth` anywhere: a vertex of
+/// either inside the other, further than that from its every triangle near it.
+pub fn interfere(a: &Mesh, b: &Mesh, depth: f64) -> bool {
+    inside_any(a, b, depth) || inside_any(b, a, depth)
+}
+
+/// How far `p` is from the triangle `t`.
+fn to_triangle(p: Vec3, [a, b, c]: [Vec3; 3]) -> f64 {
+    let n = cross(sub(b, a), sub(c, a));
+    let nn = dot(n, n);
+    if nn > 0.0 {
+        // (Over the triangle: to its plane.)
+        let d = dot(sub(p, a), n) / nn;
+        let q = sub(p, scale(n, d));
+        let inside = [(a, b), (b, c), (c, a)]
+            .iter()
+            .all(|&(u, v)| dot(cross(sub(v, u), sub(q, u)), n) >= 0.0);
+        if inside {
+            return d.abs() * nn.sqrt();
+        }
+    }
+    // Else to its nearest edge.
+    [(a, b), (b, c), (c, a)]
+        .iter()
+        .map(|&(u, v)| {
+            let e = sub(v, u);
+            let ee = dot(e, e);
+            let t = if ee > 0.0 {
+                (dot(sub(p, u), e) / ee).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            norm(sub(p, add(u, scale(e, t))))
+        })
+        .fold(f64::MAX, f64::min)
+}
+
+/// Whether a vertex of `b` is inside `a` further than `depth` from its surface.
+fn inside_any(a: &Mesh, b: &Mesh, depth: f64) -> bool {
+    if a.indices.is_empty() || b.positions.is_empty() {
+        return false;
+    }
+    let bounds = |m: &Mesh| {
+        m.positions
+            .iter()
+            .fold(([f64::MAX; 3], [f64::MIN; 3]), |(lo, hi), p| {
+                (
+                    [0, 1, 2].map(|k| lo[k].min(p[k])),
+                    [0, 1, 2].map(|k| hi[k].max(p[k])),
+                )
+            })
+    };
+    let (lo, hi) = bounds(a);
+    // The triangles over a grid in x–y (a ray up from a point meets those of its cell).
+    const N: usize = 64;
+    let cell = |x: f64, k: usize| {
+        (((x - lo[k]) / (hi[k] - lo[k]).max(1e-9) * N as f64) as isize).clamp(0, N as isize - 1)
+            as usize
+    };
+    let tri = |t: u32| {
+        let i = 3 * t as usize;
+        [0, 1, 2].map(|k| a.positions[a.indices[i + k] as usize])
+    };
+    let mut grid: Vec<Vec<u32>> = vec![Vec::new(); N * N];
+    for t in 0..(a.indices.len() / 3) as u32 {
+        let ps = tri(t);
+        let span = |k: usize| {
+            let (l, h) = ps
+                .iter()
+                .fold((f64::MAX, f64::MIN), |(l, h), p| (l.min(p[k]), h.max(p[k])));
+            cell(l, k)..=cell(h, k)
+        };
+        for i in span(0) {
+            for j in span(1) {
+                grid[i * N + j].push(t);
+            }
+        }
+    }
+    let inside = |p: Vec3| {
+        let mut n = 0;
+        for &t in &grid[cell(p[0], 0) * N + cell(p[1], 1)] {
+            let [u, v, w] = tri(t);
+            let d =
+                |s: Vec3, e: Vec3| (s[0] - p[0]) * (e[1] - p[1]) - (s[1] - p[1]) * (e[0] - p[0]);
+            let (x, y, z) = (d(u, v), d(v, w), d(w, u));
+            if !((x > 0.0 && y > 0.0 && z > 0.0) || (x < 0.0 && y < 0.0 && z < 0.0)) {
+                continue;
+            }
+            let h = (y * u[2] + z * v[2] + x * w[2]) / (x + y + z);
+            if h > p[2] {
+                n += 1;
+            }
+        }
+        n % 2 == 1
+    };
+    // (How deep: to the nearest triangle over the cells round it.)
+    let deep = |p: Vec3| {
+        let (x, y) = (cell(p[0], 0), cell(p[1], 1));
+        let mut best = f64::MAX;
+        for cx in x.saturating_sub(2)..=(x + 2).min(N - 1) {
+            for cy in y.saturating_sub(2)..=(y + 2).min(N - 1) {
+                for &t in &grid[cx * N + cy] {
+                    best = best.min(to_triangle(p, tri(t)));
+                }
+            }
+        }
+        best
+    };
+    b.positions.iter().any(|p| {
+        // (A hair off, so the ray meets no edge of the other by chance.)
+        let q = [p[0] + 1.3e-7, p[1] + 2.1e-7, p[2]];
+        (0..3).all(|k| q[k] >= lo[k] && q[k] <= hi[k]) && inside(q) && deep(q) > depth
+    })
+}
+
 /// Points along a section's segment (its start and `n` more).
 fn sample(seg: &super::Seg, n: usize) -> Vec<[f64; 2]> {
     use super::Seg;
