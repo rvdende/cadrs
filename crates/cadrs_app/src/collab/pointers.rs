@@ -45,7 +45,7 @@ const RESEND_EVERY: f64 = 2.0;
 const FORGET_AFTER: f64 = 15.0;
 /// How quickly a shown pointer catches up with the last one heard (per second).
 const FOLLOW_RATE: f32 = 18.0;
-/// The arrow's size (px) and where its tip is on it (icon-rs's `cursor`: 5, 2.5 of 24).
+/// The arrow's size (px) and where its tip is on it (cadrs_icons's `cursor`: 5, 2.5 of 24).
 const ARROW: f32 = 18.0;
 const ARROW_TIP: Vec2 = Vec2::new(5.0 / 24.0 * ARROW, 2.5 / 24.0 * ARROW);
 /// A pointer that has not moved for this long is put away (it is back when it moves).

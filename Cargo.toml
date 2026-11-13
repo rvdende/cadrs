@@ -17,6 +17,7 @@ default-members = [
     "crates/cadrs_easyeda",
     "crates/cadrs_fea",
     "crates/cadrs_fs",
+    "crates/cadrs_icons",
     "crates/cadrs_idf",
     "crates/cadrs_kicad",
     "crates/cadrs_kernel",
@@ -53,7 +54,6 @@ bytemuck = "1"
 slotmap = { version = "1", features = ["serde"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
 resvg = "0.45"
-icon-rs = "0.5"
 directories = "6"
 # The system's file dialogs (cadrs_ui::file_picker, issue #136): on Linux through the desktop
 # portal (zenity when there is none), pure Rust.
@@ -128,6 +128,7 @@ n0-future = "0.3"
 
 cadrs_core = { path = "crates/cadrs_core" }
 cadrs_fs = { path = "crates/cadrs_fs" }
+cadrs_icons = { path = "crates/cadrs_icons" }
 cadrs_cam = { path = "crates/cadrs_cam" }
 cadrs_sketch = { path = "crates/cadrs_sketch" }
 cadrs_vars = { path = "crates/cadrs_vars" }

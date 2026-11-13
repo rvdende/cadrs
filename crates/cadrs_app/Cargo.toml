@@ -57,7 +57,7 @@ tar.workspace = true
 
 [dev-dependencies]
 # The network button's icons exist (`network`).
-icon-rs.workspace = true
+cadrs_icons.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 wayland-client.workspace = true

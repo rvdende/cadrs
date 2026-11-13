@@ -1,0 +1,11 @@
+[package]
+name = "cadrs_icons_gen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Generates cadrs_icons' SVGs and src/generated.rs from the drawing functions in src/icons/"
+
+[dependencies]
+resvg.workspace = true
