@@ -1,0 +1,32 @@
+// A sketch opened by a double-click in the feature list is looked at square on, all of it in
+// view, and orthographic: two circles on the Top plane (Ø20 at the origin, Ø12 at 120, 40), the
+// view isometric and in perspective; a double-click on Sketch 1 turns the view to the Top plane,
+// fits both circles beside the sketch dialog and leaves perspective. Then F with part of the
+// sketch selected frames that part alone: the small circle picked, F; the large one picked, the
+// numpad's point.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Custom("sketch top circle 0 0 10 circle 120 40 6"),
+        Key("Shift+7"),
+        Key("Numpad5"),
+        MoveTo(1420, 900),
+        Wait(30),
+        Screenshot("01-isometric-in-perspective"),
+        DoubleClick(ui("feature-sketch-1")),
+        MoveTo(1420, 900),
+        Wait(40),
+        Screenshot("02-square-on-fitted-orthographic"),
+        Click(xyz(126, 40, 0)),
+        Key("F"),
+        MoveTo(1420, 900),
+        Wait(40),
+        Screenshot("03-f-frames-the-selected-circle"),
+        Key("Shift+7"),
+        Key("F"),
+        MoveTo(1420, 900),
+        Wait(40),
+        Screenshot("04-f-with-it-still-selected"),
+    ],
+)

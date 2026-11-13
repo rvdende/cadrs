@@ -18,9 +18,7 @@ cadrs_ui.workspace = true
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 cadrs_app = { workspace = true, features = ["easyeda"] }
 
-# The browser build (`tools/web`) draws with WebGPU (Bevy then leaves WebGL2 out).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-bevy = { workspace = true, features = ["webgpu"] }
 cadrs_fs.workspace = true
 # The page's address (`?quick-start`).
 js-sys.workspace = true
@@ -30,6 +28,10 @@ default = ["gpu", "profiler"]
 # The kernel's GPU compute (see cadrs_kernel's `gpu` feature): off unless `CADRS_GPU=1` (it lost
 # to the CPU's cores on a real Part Studio's rebuild).
 gpu = ["cadrs_core/gpu"]
+# The browser build (`tools/web`) drawn with WebGPU. Bevy picks the page's graphics as it is
+# built: with this, WebGPU alone; without, WebGL2 (in Bevy's default features), which every
+# browser has. `tools/web/build.sh` builds both and the page loads the one its browser can run.
+webgpu = ["bevy/webgpu"]
 # A span for every system and schedule run, so the frame panel and `get_frame_stats` show
 # where a frame's CPU time goes (`cadrs_app::frame_profile`); `debug` keeps the systems' names.
 profiler = ["bevy/trace", "bevy/debug"]

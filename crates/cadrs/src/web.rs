@@ -1,5 +1,5 @@
 //! cadrs in a browser (`tools/web`): the app on the page's `<canvas id="cadrs">`, drawn with
-//! WebGPU.
+//! WebGPU (the `webgpu` feature) or, built without it, WebGL2.
 //!
 //! A page has one thread and no processes, so the kernel's jobs run on it as they are sent
 //! (`cadrs_core::rebuild`), and there is no MCP server and no update check (the page is

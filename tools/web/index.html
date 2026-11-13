@@ -38,7 +38,6 @@
   <div class="note" id="note">The whole app runs in this tab. Your documents stay in this browser.</div>
 </div>
 <script type="module">
-  import init from "./cadrs.js";
   import { openFiles } from "./files.js";
 
   const status = document.getElementById("status");
@@ -46,7 +45,22 @@
   const note = document.getElementById("note");
   const fill = document.getElementById("fill");
 
-  // Without WebGPU: the downloads, this system's first.
+  // The app is built twice, as Bevy picks its graphics when it is built (`build.sh`): which of
+  // them this browser can run. WebGPU where there is an adapter for it, else WebGL2 (Chrome on
+  // Linux, older Safari and Firefox), else neither. `?webgl2` asks for WebGL2 anyway.
+  async function graphics() {
+    const webgl2 = () => {
+      // A canvas of its own: the app's would keep the kind of context it was first asked for.
+      try { return document.createElement("canvas").getContext("webgl2") ? "webgl2" : null; }
+      catch { return null; }
+    };
+    if (new URLSearchParams(location.search).has("webgl2")) return webgl2();
+    try { if (navigator.gpu && (await navigator.gpu.requestAdapter())) return "webgpu"; }
+    catch { /* WebGPU that can't be asked is no WebGPU */ }
+    return webgl2();
+  }
+
+  // With neither: the downloads, this system's first.
   function downloads() {
     const latest = "https://github.com/rvdende/cadrs/releases/latest/download/";
     const all = [
@@ -58,8 +72,8 @@
     const mine = /Android|iPhone|iPad/.test(ua) ? -1 : all.findIndex(([, , re]) => re.test(ua));
     if (mine > 0) all.unshift(all.splice(mine, 1)[0]);
     message.innerHTML = "<h1>cadrs</h1>Parametric CAD, written in Rust";
-    note.innerHTML = "cadrs draws with WebGPU, which this browser doesn't have: try a recent Chrome, " +
-      "Edge, Firefox or Safari. Or download it for your computer:" +
+    note.innerHTML = "cadrs draws with WebGPU or WebGL2, and this browser has neither: try a recent " +
+      "Chrome, Edge, Firefox or Safari. Or download it for your computer:" +
       '<div class="downloads">' +
       all.map(([name, file], i) =>
         `<a class="${i === 0 && mine >= 0 ? "mine" : ""}" href="${latest}${file}">${name}</a>`).join("") +
@@ -93,10 +107,12 @@
   }
 
   async function start() {
-    if (!navigator.gpu || !(await navigator.gpu.requestAdapter())) {
+    const kind = await graphics();
+    if (!kind) {
       downloads();
       return;
     }
+    const name = kind === "webgpu" ? "cadrs" : "cadrs_gl";
     // A panic traps the module, in whatever frame it happens: say so instead of a frozen page.
     const stopped = (e) => {
       const text = String(e?.reason ?? e?.error ?? e?.message ?? e);
@@ -105,8 +121,9 @@
       fail("cadrs stopped", `${text.replace(/</g, "&lt;")}<br>The browser's console has the details. Reload the page to start again.`);
     };
     try {
-      const [module, files] = await Promise.all([
-        fetchModule(new URL("cadrs_bg.wasm.gz", import.meta.url)),
+      const [{ default: init }, module, files] = await Promise.all([
+        import(`./${name}.js`),
+        fetchModule(new URL(`${name}_bg.wasm.gz`, import.meta.url)),
         openFiles(),
       ]);
       // `cadrs_fs` takes the files from here when the app first reads one.

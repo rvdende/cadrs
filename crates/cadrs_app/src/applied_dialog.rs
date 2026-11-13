@@ -1130,6 +1130,11 @@ fn dialog(
                             &x.thickness_expr,
                             Some(x.outward),
                         );
+                        b.spawn(
+                            OptionRow::new("shell-rounded", tr("model-shell-rounded"))
+                                .checked(x.rounded)
+                                .build(t),
+                        );
                     }),
                     FeatureKind::Hole(x) => {
                         let s = &x.spec;
@@ -2264,6 +2269,11 @@ fn on_checkbox(ev: On<CheckboxChange>, q: Query<&Name>, mut commands: Commands) 
         "shell-hollow-checkbox" => change(&mut commands, "Hollow", move |k| {
             if let FeatureKind::Shell(x) = k {
                 x.hollow = on;
+            }
+        }),
+        "shell-rounded-checkbox" => change(&mut commands, "Rounded", move |k| {
+            if let FeatureKind::Shell(x) = k {
+                x.rounded = on;
             }
         }),
         n if crate::advanced_dialog::is_checkbox(n) => {

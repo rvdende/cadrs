@@ -167,8 +167,8 @@ jobs:
           path: dist/*.dmg
           if-no-files-found: error
 
-  # The browser build (tools/web/build.sh): the app as WebAssembly, drawn with WebGPU, attached
-  # to the release. (The site is main's: .github/workflows/pages.yml.)
+  # The browser build (tools/web/build.sh): the app as WebAssembly, drawn with WebGPU or WebGL2,
+  # attached to the release. (The site is main's: .github/workflows/pages.yml.)
   web:
     name: Build (browser)
     runs-on: ubuntu-24.04

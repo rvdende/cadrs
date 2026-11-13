@@ -4631,7 +4631,16 @@ fn on_feature_double_click(
 ) {
     if let Ok(row) = q.get(ev.entity) {
         let id = row.0;
-        commands.queue(move |world: &mut World| edit_feature(world, id));
+        commands.queue(move |world: &mut World| {
+            edit_feature(world, id);
+            // A sketch opened this way is looked at square on, all of it in view.
+            if world
+                .get_resource::<crate::sketch::SketchSession>()
+                .is_some_and(|s| s.feature == id && !s.waiting_for_plane)
+            {
+                crate::viewport::frame_sketch(world, id);
+            }
+        });
     }
 }
 

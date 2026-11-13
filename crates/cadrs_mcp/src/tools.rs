@@ -556,7 +556,8 @@ pub struct InsertInstance {
 /// Imports a file into the open document as a new Part Studio tab holding an Import feature.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ImportFile {
-    /// The file's path on this computer: STEP, IGES, BREP, STL or GLB.
+    /// The file's path on this computer: STEP, IGES, BREP, STL or GLB, or a cadrs document
+    /// package (.cadrs), which is copied into the library and opened instead.
     pub path: String,
     /// The new Part Studio tab's name; omitted: the file's name without its extension.
     #[serde(default)]

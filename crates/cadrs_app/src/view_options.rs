@@ -15,7 +15,10 @@
 //! - **Previous view**: the camera before the last change of view (a stack, per tab).
 //! - **Zoom to window**: drag a box in the view; it fills the view. Esc cancels.
 //! - **Zoom to selection** ([`zoom_to_selection`]): the view fitted to whatever is selected
-//!   (faces, edges, vertices, parts, sketches, planes).
+//!   (faces, edges, vertices, parts, sketches, planes). A sketch's curve, point or region
+//!   picked in the view is framed alone, not its whole sketch; in a sketch being edited, its
+//!   selected points and curves are. With part of a sketch selected either way, plain F does
+//!   this too.
 //! - **Named views…**: a panel listing the tab's saved cameras; "Add view" saves the current one
 //!   under the typed name (a document edit, undone like any other,
 //!   [`cadrs_core::named_views`]), a click on a row restores it, ✕ deletes it.
@@ -549,6 +552,54 @@ fn pick_points(world: &World, pick: Pick) -> Vec<Vec3> {
                 .map(|(a, b)| (k.u() * a + k.v() * b) * h)
                 .collect()
         }
+        // A sketch's curve, point or region: that alone (the whole sketch if it isn't among
+        // the sketches shown, below).
+        Pick::SketchCurve(f, c)
+            if cache
+                .sketch_curves
+                .iter()
+                .any(|s| s.sketch == f && s.curves.iter().any(|(id, _)| *id == c)) =>
+        {
+            cache
+                .sketch_curves
+                .iter()
+                .filter(|s| s.sketch == f)
+                .flat_map(|s| s.curves.iter().filter(|(id, _)| *id == c))
+                .flat_map(|(_, pts)| pts.iter().map(|q| v3(*q)))
+                .collect()
+        }
+        Pick::SketchPoint(f, p)
+            if cache
+                .sketch_curves
+                .iter()
+                .any(|s| s.sketch == f && s.points.iter().any(|(id, _)| *id == p)) =>
+        {
+            cache
+                .sketch_curves
+                .iter()
+                .filter(|s| s.sketch == f)
+                .flat_map(|s| s.points.iter().filter(|(id, _)| *id == p))
+                .map(|(_, q)| v3(*q))
+                .collect()
+        }
+        Pick::Region(f, i)
+            if cache
+                .regions
+                .iter()
+                .any(|r| r.sketch == f && (i as usize) < r.regions.len()) =>
+        {
+            cache
+                .regions
+                .iter()
+                .filter(|r| r.sketch == f)
+                .flat_map(|r| {
+                    r.regions[i as usize]
+                        .outer
+                        .iter()
+                        .map(|q| v3(r.frame.to_world(*q)))
+                })
+                .collect()
+        }
         Pick::Feature(f)
         | Pick::Region(f, _)
         | Pick::SketchCurve(f, _)
@@ -587,11 +638,79 @@ fn pick_points(world: &World, pick: Pick) -> Vec<Vec3> {
     }
 }
 
-/// Zoom to selection (Alt+F, the numpad's point, the right-click menu): the view fitted to
-/// everything selected, orbiting about it (Zoom to fit with nothing selected).
+/// The points of sketch entities, in the model: a point, a curve along its length, the origin
+/// (a dimension, a constraint and the rest have none of their own).
+pub fn sketch_entity_points(
+    g: &cadrs_sketch::Sketch,
+    frame: &cadrs_sketch::PlaneFrame,
+    entities: &[cadrs_sketch::SketchEntity],
+) -> Vec<Vec3> {
+    use cadrs_sketch::SketchEntity as E;
+    let world = |p: cadrs_sketch::Vec2| {
+        let q = frame.to_world(p);
+        Vec3::new(q[0] as f32, q[1] as f32, q[2] as f32)
+    };
+    let mut pts = Vec::new();
+    for e in entities {
+        match *e {
+            E::Point(p) if g.points.contains_key(p) => pts.push(world(g.pos(p))),
+            E::Curve(c) => pts.extend(
+                cadrs_sketch::hit::curve_polyline(g, c)
+                    .into_iter()
+                    .map(world),
+            ),
+            E::Origin => pts.push(world(cadrs_sketch::Vec2::new(0.0, 0.0))),
+            _ => {}
+        }
+    }
+    pts
+}
+
+/// The points of what is selected in the sketch being edited (none outside a sketch).
+fn sketch_selection_points(world: &World) -> Vec<Vec3> {
+    let session = world.get_resource::<crate::sketch::SketchSession>();
+    let doc = world.get_resource::<ActiveDocument>();
+    let (Some(selected), Some(g), Some(plane)) = (
+        world.get_resource::<crate::sketch_tools::SketchSelection>(),
+        crate::sketch_tools::session_sketch(session, doc),
+        crate::sketch_tools::session_plane(session, doc),
+    ) else {
+        return Vec::new();
+    };
+    sketch_entity_points(g, &plane.frame(), &selected.0)
+}
+
+/// Whether part of a sketch is selected: entities of the sketch being edited, or a sketch's
+/// curves, points or regions in the view. F then frames them, as Zoom to selection does.
+pub fn sketch_is_selected(
+    session: bool,
+    in_sketch: Option<&crate::sketch_tools::SketchSelection>,
+    selection: &Selection,
+) -> bool {
+    use cadrs_sketch::SketchEntity as E;
+    let editing = session
+        && in_sketch.is_some_and(|s| {
+            s.0.iter()
+                .any(|e| matches!(e, E::Point(_) | E::Curve(_) | E::Origin))
+        });
+    editing
+        || selection.0.iter().any(|p| {
+            matches!(
+                p,
+                Pick::SketchCurve(..) | Pick::SketchPoint(..) | Pick::Region(..)
+            )
+        })
+}
+
+/// Zoom to selection (Alt+F, the numpad's point, the right-click menu; F too with part of a
+/// sketch selected): the view fitted to everything selected, orbiting about it (Zoom to fit
+/// with nothing selected). In a sketch being edited: to its selected points and curves.
 pub fn zoom_to_selection(world: &mut World) {
     let picks = world.resource::<Selection>().0.clone();
-    let pts: Vec<Vec3> = picks.iter().flat_map(|p| pick_points(world, *p)).collect();
+    let mut pts = sketch_selection_points(world);
+    if pts.is_empty() {
+        pts = picks.iter().flat_map(|p| pick_points(world, *p)).collect();
+    }
     if pts.is_empty() {
         crate::viewport::zoom_to_fit(world);
         return;
@@ -968,6 +1087,113 @@ mod tests {
         view.pivot = Some(Vec3::X);
         view.drop_framed_pivot();
         assert_eq!(view.pivot, Some(Vec3::X));
+    }
+
+    /// Two circles on the Top plane: Ø20 at the origin and Ø12 at (120, 40).
+    fn two_circles() -> cadrs_sketch::Sketch {
+        let mut g = cadrs_sketch::Sketch::default();
+        for (x, y, r) in [(0.0, 0.0, 10.0), (120.0, 40.0, 6.0)] {
+            cadrs_sketch::SketchOp::AddCircle {
+                center: cadrs_sketch::Vec2::new(x, y),
+                radius: r,
+                construction: false,
+            }
+            .apply(&mut g)
+            .unwrap();
+        }
+        g
+    }
+
+    fn bounds(pts: &[Vec3]) -> (Vec3, Vec3) {
+        pts.iter()
+            .fold((Vec3::MAX, Vec3::MIN), |(a, b), p| (a.min(*p), b.max(*p)))
+    }
+
+    /// A selected curve of the sketch being edited is framed by its own points alone; a
+    /// dimension or a constraint has none.
+    #[test]
+    fn a_sketchs_selected_curve_gives_its_own_points() {
+        use cadrs_sketch::SketchEntity as E;
+        let g = two_circles();
+        let frame = cadrs_sketch::PlaneRef::Top.frame();
+        let small = g.curves.keys().nth(1).unwrap();
+        let (lo, hi) = bounds(&sketch_entity_points(&g, &frame, &[E::Curve(small)]));
+        assert!((lo - Vec3::new(114.0, 34.0, 0.0)).length() < 1e-3, "{lo}");
+        assert!((hi - Vec3::new(126.0, 46.0, 0.0)).length() < 1e-3, "{hi}");
+        // The origin is a point; nothing selected is none.
+        assert_eq!(sketch_entity_points(&g, &frame, &[E::Origin]), [Vec3::ZERO]);
+        assert!(sketch_entity_points(&g, &frame, &[]).is_empty());
+    }
+
+    /// F frames part of a sketch when part of one is selected: in the sketch being edited (a
+    /// point or a curve of it), or a sketch's curve picked in the view.
+    #[test]
+    fn f_frames_the_selected_part_of_a_sketch() {
+        use crate::sketch_tools::SketchSelection;
+        use cadrs_sketch::SketchEntity as E;
+        let g = two_circles();
+        let curve = g.curves.keys().next().unwrap();
+        let none = Selection(Vec::new());
+        let in_sketch = SketchSelection(vec![E::Curve(curve)]);
+        assert!(sketch_is_selected(true, Some(&in_sketch), &none));
+        // Left over from a sketch no longer open: not a selection.
+        assert!(!sketch_is_selected(false, Some(&in_sketch), &none));
+        assert!(!sketch_is_selected(
+            true,
+            Some(&SketchSelection(Vec::new())),
+            &none
+        ));
+        let f = cadrs_core::FeatureId::new();
+        let picked = Selection(vec![Pick::SketchCurve(f, curve)]);
+        assert!(sketch_is_selected(false, None, &picked));
+        // A plane or a part selected: F stays Zoom to fit.
+        let plane = Selection(vec![Pick::Plane(crate::viewport::PlaneKind::Front)]);
+        assert!(!sketch_is_selected(false, None, &plane));
+    }
+
+    /// Zoom to selection with one curve of a sketch picked in the view frames that curve, not
+    /// the whole sketch.
+    #[test]
+    fn zoom_to_selection_frames_the_picked_curve_alone() {
+        let g = two_circles();
+        let frame = cadrs_sketch::PlaneRef::Top.frame();
+        let f = cadrs_core::FeatureId::new();
+        let curves: Vec<(cadrs_sketch::CurveId, Vec<[f64; 3]>)> = g
+            .curves
+            .keys()
+            .map(|c| {
+                let pts = cadrs_sketch::hit::curve_polyline(&g, c)
+                    .into_iter()
+                    .map(|p| frame.to_world(p))
+                    .collect();
+                (c, pts)
+            })
+            .collect();
+        let small = curves[1].0;
+        let mut world = World::new();
+        world.insert_resource(ActiveKind::PartStudio);
+        world.insert_resource(Selection(vec![Pick::SketchCurve(f, small)]));
+        let mut cache = crate::parts::PartCache::default();
+        cache.sketch_curves = vec![crate::parts::SketchCurves {
+            sketch: f,
+            curves,
+            points: Vec::new(),
+        }];
+        world.insert_resource(cache);
+        world.insert_resource(ViewportRect(Rect::new(0.0, 0.0, 1000.0, 800.0)));
+        world.insert_resource(crate::viewport::DialogInset(0.0));
+        world.init_resource::<ViewportView>();
+        zoom_to_selection(&mut world);
+        let view = world.resource::<ViewportView>();
+        let pivot = view.pivot.expect("a pivot");
+        assert!(
+            (pivot - Vec3::new(120.0, 40.0, 0.0)).length() < 1e-3,
+            "the small circle's centre: {pivot}"
+        );
+        // The Ø12 circle fills the view; the Ø20 one, 126 away, is far outside it.
+        let to = view.target();
+        assert!(to.project(Vec3::new(126.0, 40.0, 0.0)).length() < 400.0);
+        assert!(to.project(Vec3::ZERO).length() > 2000.0);
     }
 
     /// Zoom to selection: the selection's points fill the fit fraction of the view beside a

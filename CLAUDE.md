@@ -23,8 +23,9 @@ Onshape-style CAD in Rust + Bevy 0.20.1. Local notes in `docs/` (git-ignored: `P
   debugging. Kernel work besides rebuilds is a named `rebuild::task::Task`, not a closure.
 - Windowed run from a shell with no display: prefix `WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000`.
 - Windows exe: `cargo build -r --target x86_64-pc-windows-gnu` (MinGW is installed).
-- Browser build: `tools/web/build.sh` → `target/web/` (WebAssembly, drawn with WebGPU; serve the
-  folder over HTTP). Needs wasm-bindgen-cli at Cargo.lock's version. Releases attach it as
+- Browser build: `tools/web/build.sh` → `target/web/` (WebAssembly, built twice: drawn with
+  WebGPU, and with WebGL2 for browsers without it, `CADRS_WEB_ONLY=webgpu|webgl2` for one; serve
+  the folder over HTTP). Needs wasm-bindgen-cli at Cargo.lock's version. Releases attach it as
   `cadrs-v<version>-web.tar.gz`; main's is the whole site, https://cadrs.net (see "Project
   site" below). A page has one
   thread and no `std::fs` or `std` clock, so code it runs (everything but `cadrs_mcp`, the
@@ -58,8 +59,8 @@ Onshape-style CAD in Rust + Bevy 0.20.1. Local notes in `docs/` (git-ignored: `P
 - Cold builds take 4+ minutes. Never run two cargo builds at once.
 - Project site: https://cadrs.net is the app itself, full screen: `.github/workflows/pages.yml`
   builds the browser build of every push to main and deploys it to GitHub Pages (also by hand),
-  so the site is always main's head, about 20 minutes after the push. In a browser without
-  WebGPU the page offers the downloads instead; the app menu links to GitHub.
+  so the site is always main's head, about 20 minutes after the push. In a browser with
+  neither WebGPU nor WebGL2 the page offers the downloads instead; the app menu links to GitHub.
 
 ## Layout
 - Crates in `crates/*`; shared versions in root `[workspace.dependencies]`.

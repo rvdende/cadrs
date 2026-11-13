@@ -2,9 +2,9 @@ name: Pages
 
 # https://cadrs.net is the app itself, full screen: the browser build (tools/web/build.sh) of
 # main's head at the site's root, built and deployed on every push to main (and by hand), so
-# the site is always the latest main. In a browser without WebGPU the page offers the downloads
-# instead (tools/web/index.html). /app/, where the app used to be, and any path there is no
-# page for go to it.
+# the site is always the latest main. It draws with WebGPU, or WebGL2 where the browser has no
+# WebGPU; with neither the page offers the downloads instead (tools/web/index.html). /app/,
+# where the app used to be, and any path there is no page for go to it.
 on:
   push:
     branches: [main]

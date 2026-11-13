@@ -1473,6 +1473,11 @@ pub struct FaceInfo {
     /// (P3.6).
     #[serde(default)]
     pub radius: Option<f64>,
+    /// The radius of a rounded face: one whose sections one way are arcs of a single circle
+    /// size, as a constant-radius fillet's (a torus's tube, a B-spline or swept fillet read
+    /// from a file). `None` for other faces.
+    #[serde(default)]
+    pub fillet_radius: Option<f64>,
 }
 
 /// The kind of curve an edge lies on.

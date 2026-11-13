@@ -1042,6 +1042,7 @@ mod tests {
             center: Point3::from(center),
             axis: None,
             radius: None,
+            fillet_radius: None,
         }
     }
 

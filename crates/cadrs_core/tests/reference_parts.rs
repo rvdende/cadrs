@@ -3024,6 +3024,8 @@ cases! {
     case_83_boundary_loop_thicken
     issue_156_face_chamfer_fillet
     issue_156_wall_as_thick_as_chamfer
+    issue_237_shell_keeps_a_wall_rising_past_its_opening
+    issue_237_shell_outward_keeps_the_walls_past_its_opening
     issue_slanted_cut_cylinder_foot
 }
 

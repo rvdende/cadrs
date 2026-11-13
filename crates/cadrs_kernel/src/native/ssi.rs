@@ -500,7 +500,9 @@ fn plane_extrusion(
     let pad = (u1 - u0).abs() * tol::REL_POINT;
     let (u0, u1) = (u0 - pad, u1 + pad);
     let dn = n.dot(d);
-    if dn.abs() < tol::REL_FINE * d.norm() {
+    // (Containing the direction to within a point over the patches' extent: projecting along
+    // it would throw the curve out by the inverse of that sliver of an angle.)
+    if dn.abs() < tol::REL_FINE * d.norm() || dn.abs() * bb.diagonal() < tol::POINT * d.norm() {
         // Rulings through the points where the base curve meets the plane.
         let pl = Surface::Plane { f: *f };
         let bbig = bb.grow(bb.diagonal() * 0.01 + tol::POINT);

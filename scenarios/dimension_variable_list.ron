@@ -37,7 +37,7 @@ Scenario(
         WaitFor("sketch-dialog"),
         Key("D"),
         Click(world(30, 0)),
-        Click(world(30, -12)),
+        Click(world(30, -5)),
         Key("Ctrl+A"),
         Type("#"),
         Wait(3),

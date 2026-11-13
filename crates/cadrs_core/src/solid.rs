@@ -49,6 +49,10 @@ pub struct SolidFace {
     /// The radius of a cylindrical or spherical face (a cone's reference radius), from the
     /// kernel (the Measure tool). `None` for other faces and for prism meshes.
     pub radius: Option<f64>,
+    /// The radius of a face rounded like a constant-radius fillet (a torus's tube, a B-spline
+    /// fillet read from a file), from the kernel (the Measure tool).
+    #[serde(default)]
+    pub fillet_radius: Option<f64>,
 }
 
 /// An edge of a [`Solid`]: a polyline (one or more kernel edges that continue each other
@@ -1273,6 +1277,7 @@ pub fn extrude(
                 area: None,
                 kind: None,
                 radius: None,
+                fillet_radius: None,
             });
         }
 
@@ -1457,6 +1462,7 @@ fn side_faces(
             area: None,
             kind: None,
             radius: None,
+            fillet_radius: None,
         });
         for end in [false, true] {
             let shift = if end { offset } else { [0.0; 3] };
