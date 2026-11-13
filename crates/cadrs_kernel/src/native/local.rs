@@ -1704,6 +1704,7 @@ pub fn replace_faces(
         let (u, v) = f.surf.project(p, None);
         f.surf.normal(u, v) * if f.sense { 1.0 } else { -1.0 }
     };
+    let mut flipped = false;
     for r in faces {
         let fi = r.face.0 as usize;
         let middle = |body: &Body| {
@@ -1731,10 +1732,12 @@ pub fn replace_faces(
         let before = outward(&b, fi, &was);
         if outward(&out, fi, &now).dot(&before) < 0.0 {
             out.faces[fi].sense = !out.faces[fi].sense;
+            flipped = true;
         }
     }
     prof.mark("senses");
-    let errs = out.check();
+    // (replace_surfaces_in checked the body as made: only a face turned since needs another.)
+    let errs = if flipped { out.check() } else { Vec::new() };
     prof.mark("check");
     if let Some(e) = errs.first() {
         return Err(KernelError::InvalidResult {
