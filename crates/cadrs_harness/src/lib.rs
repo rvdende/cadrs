@@ -281,13 +281,14 @@ pub fn default_plugins(opts: &HarnessOptions) -> PluginGroupBuilder {
         // world simulates N + 1) adds one, and a surface queue of two (wgpu's default) another:
         // about 50 ms at 60 Hz, 10 to 20 px at a brisk drag. So: no pipelining and one queued
         // frame. `CADRS_PIPELINED=1` and `CADRS_FRAME_LATENCY=<n>` put them back, to compare.
-        let pipelined = std::env::var_os("CADRS_PIPELINED").is_some_and(|v| v != "0");
         let latency = std::env::var("CADRS_FRAME_LATENCY")
             .ok()
             .and_then(|v| v.parse::<u32>().ok())
             .and_then(std::num::NonZeroU32::new)
             .unwrap_or(std::num::NonZeroU32::MIN);
-        let plugins = if pipelined {
+        // (A page has one thread and no pipelined rendering to turn off.)
+        #[cfg(not(target_arch = "wasm32"))]
+        let plugins = if std::env::var_os("CADRS_PIPELINED").is_some_and(|v| v != "0") {
             plugins
         } else {
             plugins.disable::<bevy::render::pipelined_rendering::PipelinedRenderingPlugin>()
