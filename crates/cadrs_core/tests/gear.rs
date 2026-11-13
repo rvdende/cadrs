@@ -545,7 +545,7 @@ fn teeth_cut_into_a_flat_face_make_a_rack() {
 
 #[test]
 #[ignore = "slow (over 5 s): run with cargo test -r -- --ignored"]
-fn the_gears_sample_builds_its_fourteen_parts() {
+fn the_gears_sample_builds_its_sixteen_parts() {
     let mut st = Studio::new();
     cadrs_core::samples::gears::build(&mut st.d, &mut st.h, st.el).unwrap();
     let t = std::time::Instant::now();
@@ -553,12 +553,79 @@ fn the_gears_sample_builds_its_fourteen_parts() {
     eprintln!("the gears sample built in {:?}", t.elapsed());
     assert!(b.warnings.is_empty(), "{:?}", b.warnings);
     // Three bevels and a pinion, the gear with a hub, a ring with a sun and three planets,
-    // a ring, and three more.
-    assert_eq!(b.parts.len(), 14);
-    // The pair's apexes are one point: the pinion's teeth reach to the gear's, not into them
-    // by more than the tooth depth nor short of them.
+    // a ring, three more, and the bevel pair at the shaft angle `#shaft`.
+    assert_eq!(b.parts.len(), 16);
     let gears = cadrs_core::samples::gears::gears();
-    assert_eq!(gears.len(), 14);
+    assert_eq!(gears.len(), 16);
+}
+
+/// The sample's bevel pair whose shaft angle is a variable: changing `#shaft` changes the pitch
+/// angles, the pinion's tilt and the shaft angle its localised contact is cut for, as the
+/// sample's own numbers for that shaft angle have them.
+#[test]
+fn the_shaft_angle_variable_drives_the_bevel_pair() {
+    use cadrs_core::samples::gears::{SHAFT_PAIR, shaft_pair, shaft_variables};
+    let mut st = Studio::new();
+    cadrs_core::samples::gears::build(&mut st.d, &mut st.h, st.el).unwrap();
+    let shaft = shaft_variables(0.0)[0].0;
+    let kind = |st: &Studio, id| st.features().into_iter().find(|f| f.id == id).unwrap().kind;
+    for angle in [30.0, 45.0, 60.0, 90.0, 120.0] {
+        let FeatureKind::Variable(mut v) = kind(&st, shaft) else {
+            panic!("#shaft is a variable");
+        };
+        v.expr = format!("{angle} deg");
+        st.h.execute(
+            &mut st.d,
+            &cadrs_core::commands::SetFeature {
+                element: st.el,
+                feature: shaft,
+                kind: FeatureKind::Variable(v),
+                label: "Variable".into(),
+            },
+        )
+        .unwrap();
+        let want = shaft_pair(angle);
+        for (id, want) in SHAFT_PAIR.into_iter().zip(want) {
+            let FeatureKind::Gear(got) = kind(&st, id) else {
+                panic!("a gear");
+            };
+            for (a, b) in [
+                (got.pitch_angle, want.pitch_angle),
+                (got.tilt, want.tilt),
+                (got.shaft_angle, want.shaft_angle),
+                (got.rotation, want.rotation),
+            ] {
+                assert!((a - b).abs() < 1e-9, "{angle}°: {a} vs {b}");
+            }
+            assert_eq!(got.teeth, want.teeth);
+        }
+    }
+}
+
+/// The shaft-angle pair in mesh from 30° to 115°, flank on flank as the bevel pair at right
+/// angles is (`the_bevel_pair_meshes_without_cutting_into_itself`).
+#[test]
+#[ignore = "slow (over 5 s): run with cargo test -r -- --ignored"]
+fn the_bevel_pair_meshes_at_any_shaft_angle() {
+    use cadrs_core::samples::gears::{SHAFT_PAIR, shaft_pair};
+    let mut worst = Vec::new();
+    // (At 120° the gear's pitch angle is 74°, its face cone nearly flat, and the boolean that
+    // cuts its spaces fails.)
+    for shaft in [30.0, 45.0, 60.0, 75.0, 90.0, 105.0, 115.0] {
+        // (Their numbers alone: the variables aren't in this studio.)
+        let [g, p] = shaft_pair(shaft).map(|mut g| {
+            g.teeth_expr = g.teeth.to_string();
+            g.pitch_angle_expr = format!("{} deg", g.pitch_angle);
+            g.rotation_expr = format!("{} deg", g.rotation);
+            g.shaft_angle_expr = format!("{} deg", g.shaft_angle);
+            g.tilt_expr = format!("{} deg", g.tilt);
+            g
+        });
+        let (deep, count) = reach([(SHAFT_PAIR[0], g), (SHAFT_PAIR[1], p)]);
+        eprintln!("{shaft}°: {count} vertices inside the other gear, the deepest {deep} mm");
+        worst.push((shaft, deep));
+    }
+    assert!(worst.iter().all(|w| w.1 < 0.1), "{worst:?}");
 }
 
 #[test]
@@ -782,8 +849,9 @@ fn the_bevel_pair_meshes_without_cutting_into_itself() {
         // As the sample sets them, flank on flank: the display meshes, a few hundredths of a
         // millimetre off their surfaces, may reach that far into each other, no further.
         let pair = |backlash: f64| {
-            let mut gears = cadrs_core::samples::gears::gears();
-            let (mut pinion, mut big) = (gears.pop().unwrap(), gears.pop().unwrap());
+            use cadrs_core::samples::gears::{PAIR, gears};
+            let of = |id| gears().into_iter().find(|g| g.0 == id).unwrap();
+            let (mut big, mut pinion) = (of(PAIR[0]), of(PAIR[1]));
             for g in [&mut big.1, &mut pinion.1] {
                 g.spiral = spiral;
                 g.backlash = backlash;

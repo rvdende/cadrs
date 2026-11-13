@@ -347,7 +347,9 @@ pub(super) fn synthesise(d: &Design) -> Result<Pair, &'static str> {
         let z1 = -by + em - up * spp * stp;
         let z2 = bx * sn1 + bz * cs1 - lm - up * spp * ctp;
         let sp = z1.hypot(z2);
-        let qp = (z1 / z2).atan();
+        // (The program's ATAN(Z1/Z2), in its quadrant: the cradle angle passes 90° as the
+        // pinion's pitch angle gets small, at a shaft angle near 40° for 24 and 18 teeth.)
+        let qp = z1.atan2(z2);
         let side = Side {
             gear: Machine {
                 psi: psig,

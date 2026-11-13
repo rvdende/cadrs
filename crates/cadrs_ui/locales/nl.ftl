@@ -1754,6 +1754,9 @@ model-gear-member-gear = Wiel
 model-gear-member-pinion = Rondsel (gelokaliseerd contact)
 model-gear-member-conjugate = Rondsel (geconjugeerd)
 model-gear-cutter-radius = Freesradius (0: auto)
+model-gear-shaft-angle = Ashoek
+model-gear-at-apex = Positie bij de top
+model-gear-tilt = Kanteling
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Rechtsdraaiend

@@ -7,6 +7,11 @@
 //!   sketches and extrudes), a planetary set (a 60-tooth ring, an 18-tooth sun and three
 //!   21-tooth planets, in mesh), and a herringbone ring gear.
 //! - Front row: a spur gear, a helical gear and a herringbone gear.
+//! - Behind the back row: a face-milled spiral bevel gear and pinion (24 and 18 teeth) whose
+//!   shaft angle is the variable `#shaft` (60°). Their pitch angles follow from it and their
+//!   teeth, both are placed by their apex at one point, and the pinion's axis is tilted by
+//!   `#shaft − 90°` about it, so any shaft angle from about 30° to 120° keeps them in mesh;
+//!   the pinion is cut with localised contact for that shaft angle.
 //!
 //! Every id is fixed, so the document is the same each time it is built.
 
@@ -18,6 +23,7 @@ use crate::document::{BooleanOp, Document, ExtrudeFeature, FeatureKind};
 use crate::gear::{GearAxis, GearFeature, GearType, ToothStyle};
 use crate::ids::{ElementId, FeatureId, PartId};
 use crate::studio::{DocHistory, Studio};
+use crate::variables::{VariableFeature, VariableType};
 
 const fn id(n: u128) -> FeatureId {
     FeatureId::from_u128(0x6ea5_0179_0000_0000_0000_0000_0000_0000 + n)
@@ -27,6 +33,16 @@ const fn id(n: u128) -> FeatureId {
 pub const PITCH: f64 = 120.0;
 /// The helical gear that gets a hub and holes.
 pub const SPOKED: FeatureId = id(0x40);
+/// The spiral bevel pair at right angles: [gear, pinion].
+pub const PAIR: [FeatureId; 2] = [id(0x52), id(0x53)];
+/// The spiral bevel pair whose shaft angle is `#shaft`: [gear, pinion].
+pub const SHAFT_PAIR: [FeatureId; 2] = [id(0x60), id(0x61)];
+/// `#shaft`'s value in the sample (degrees).
+pub const SHAFT: f64 = 60.0;
+/// The shaft-angle pair's teeth: [gear, pinion].
+pub const SHAFT_TEETH: [u32; 2] = [24, 18];
+/// Where the shaft-angle pair's apexes are.
+pub const SHAFT_APEX: [f64; 3] = [0.0, 2.0 * PITCH, 30.0];
 
 fn mm(v: f64) -> String {
     format!("{} mm", crate::hole::fmt(v))
@@ -170,9 +186,103 @@ pub fn gears() -> Vec<(FeatureId, GearFeature)> {
         g.helix_angle = 35.0;
         g.helix_angle_expr = deg(35.0);
     }
-    out.push((id(0x52), big));
-    out.push((id(0x53), pinion));
+    out.push((PAIR[0], big));
+    out.push((PAIR[1], pinion));
+    let [g, p] = shaft_pair(SHAFT);
+    out.push((SHAFT_PAIR[0], g));
+    out.push((SHAFT_PAIR[1], p));
     out
+}
+
+/// The variables the shaft-angle pair is drawn with, `#shaft` at `shaft` degrees: the shaft
+/// angle, the two numbers of teeth, and the gear's pitch angle that follows from them
+/// (`tan δ₂ = sin Σ / (z₁/z₂ + cos Σ)`; the pinion's is Σ − δ₂).
+pub fn shaft_variables(shaft: f64) -> Vec<(FeatureId, VariableFeature)> {
+    let [zg, zp] = SHAFT_TEETH;
+    let var = |t, name: &str, expr: String, description: &str| VariableFeature {
+        description: description.into(),
+        ..VariableFeature::typed(t, name, &expr)
+    };
+    let mut pitch = var(
+        VariableType::Angle,
+        "gear_pitch",
+        "atan2(sin(#shaft), #pinion_teeth / #gear_teeth + cos(#shaft))".into(),
+        "The bevel gear's pitch angle (the pinion's is #shaft less it)",
+    );
+    pitch.value = gear_pitch(shaft);
+    vec![
+        (
+            id(0x01),
+            var(
+                VariableType::Angle,
+                "shaft",
+                deg(shaft),
+                "The angle between the bevel pair's shafts",
+            ),
+        ),
+        (
+            id(0x02),
+            var(
+                VariableType::Number,
+                "gear_teeth",
+                zg.to_string(),
+                "The bevel gear's teeth",
+            ),
+        ),
+        (
+            id(0x03),
+            var(
+                VariableType::Number,
+                "pinion_teeth",
+                zp.to_string(),
+                "The bevel pinion's teeth",
+            ),
+        ),
+        (id(0x04), pitch),
+    ]
+}
+
+/// The shaft-angle pair's gear pitch angle at a shaft angle of `shaft` (degrees).
+fn gear_pitch(shaft: f64) -> f64 {
+    let [zg, zp] = SHAFT_TEETH;
+    let s = shaft.to_radians();
+    s.sin().atan2(zp as f64 / zg as f64 + s.cos()).to_degrees()
+}
+
+/// The face-milled spiral bevel gear and pinion on shafts at `shaft` degrees, as the sample's
+/// variables make them at that value: [gear, pinion]. Both are placed by their apex, at
+/// [`SHAFT_APEX`]; the gear's axis is Z, the pinion's X tilted by `shaft − 90°` about the
+/// apex (so its axis makes the shaft angle with the gear's), and it meets the gear under its
+/// own axis, a space of it over a tooth.
+pub fn shaft_pair(shaft: f64) -> [GearFeature; 2] {
+    use GearType::Bevel;
+    use ToothStyle::Helical;
+    let [zg, zp] = SHAFT_TEETH;
+    let delta = gear_pitch(shaft);
+    let mut big = gear(Bevel, Helical, zg, 2.5, 10.0, 16.0, SHAFT_APEX, 0.0);
+    big.teeth_expr = "#gear_teeth".into();
+    big.pitch_angle = delta;
+    big.pitch_angle_expr = "#gear_pitch".into();
+    // A space of the pinion under its axis (its frame's y is Z), where the gear's tooth is.
+    let turn = 270.0 - 180.0 / zp as f64;
+    let mut pinion = gear(Bevel, Helical, zp, 2.5, 10.0, 10.0, SHAFT_APEX, turn);
+    pinion.teeth_expr = "#pinion_teeth".into();
+    pinion.rotation_expr = "270 deg - 180 deg / #pinion_teeth".into();
+    pinion.pitch_angle = shaft - delta;
+    pinion.pitch_angle_expr = "#shaft - #gear_pitch".into();
+    pinion.left_hand = true;
+    pinion.member = crate::gear::BevelMember::Pinion;
+    pinion.axis = GearAxis::X;
+    pinion.shaft_angle = shaft;
+    pinion.shaft_angle_expr = "#shaft".into();
+    pinion.tilt = shaft - 90.0;
+    pinion.tilt_expr = "#shaft - 90 deg".into();
+    for g in [&mut big, &mut pinion] {
+        g.at_apex = true;
+        g.helix_angle = 35.0;
+        g.helix_angle_expr = deg(35.0);
+    }
+    [big, pinion]
 }
 
 /// Adds the gears, and the hub and holes of the helical one, to the Part Studio `el` of `doc`.
@@ -182,6 +292,9 @@ pub fn build(doc: &mut Document, h: &mut History, el: ElementId) -> Result<(), C
 
 /// [`build`] through any [`Studio`].
 pub fn build_in(s: &mut dyn Studio, el: ElementId) -> Result<(), CommandError> {
+    for (feature, v) in shaft_variables(SHAFT) {
+        s.run(&AddFeature::variable(el, feature, v))?;
+    }
     for (feature, g) in gears() {
         s.run(&AddFeature {
             element: el,

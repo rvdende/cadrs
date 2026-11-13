@@ -1754,6 +1754,9 @@ model-gear-member-gear = Rat
 model-gear-member-pinion = Rondsel (gelokaliseerde kontak)
 model-gear-member-conjugate = Rondsel (gekonjugeer)
 model-gear-cutter-radius = Freesradius (0: outo)
+model-gear-shaft-angle = Ashoek
+model-gear-at-apex = Posisie by die toppunt
+model-gear-tilt = Kanteling
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Regsdraaiend

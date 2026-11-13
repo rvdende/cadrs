@@ -1754,6 +1754,9 @@ model-gear-member-gear = Колесо
 model-gear-member-pinion = Шестерня (локализованный контакт)
 model-gear-member-conjugate = Шестерня (сопряжённая)
 model-gear-cutter-radius = Радиус фрезы (0: авто)
+model-gear-shaft-angle = Межосевой угол
+model-gear-at-apex = Положение по вершине
+model-gear-tilt = Наклон
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Правая

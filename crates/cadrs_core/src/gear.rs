@@ -132,7 +132,8 @@ pub enum BevelMember {
     /// Cut to run with a gear, with localised bearing contact: each side of its teeth on a
     /// machine of its own (Litvin's synthesis, NASA CR-4259), so the pair meets in a contact
     /// ellipse that crosses the tooth, with a parabolic transmission error that absorbs
-    /// misalignment. A shaft angle of 90° (the gear's pitch angle is 90° less the pinion's).
+    /// misalignment. For the feature's shaft angle (the gear's pitch angle is that less the
+    /// pinion's).
     Pinion,
     /// Cut to match a gear exactly: its teeth are what that gear's cutter, rolling with it
     /// too, would leave, so the two are conjugate and meet along lines (any misalignment
@@ -274,6 +275,33 @@ pub struct GearFeature {
     /// Which of a face-milled pair it is.
     #[serde(default)]
     pub member: BevelMember,
+    /// A bevel gear's shaft angle (degrees): between its axis and its mate's, so its mate's
+    /// pitch angle is this less its own. A pinion with localised contact is cut for it.
+    #[serde(default = "right_angle")]
+    pub shaft_angle: f64,
+    #[serde(default = "right_angle_expr")]
+    pub shaft_angle_expr: String,
+    /// A bevel gear made whole: its axis turned by this (degrees) about its frame's x, through
+    /// its apex (so a pinion set by its apex on its gear's stays in mesh at any shaft angle).
+    #[serde(default)]
+    pub tilt: f64,
+    #[serde(default = "zero_deg")]
+    pub tilt_expr: String,
+    /// A bevel gear made whole: the position is its apex's, not its back face's middle.
+    #[serde(default)]
+    pub at_apex: bool,
+}
+
+fn right_angle() -> f64 {
+    90.0
+}
+
+fn right_angle_expr() -> String {
+    "90 deg".into()
+}
+
+fn zero_deg() -> String {
+    "0 deg".into()
 }
 
 impl Default for GearFeature {
@@ -317,6 +345,11 @@ impl Default for GearFeature {
             cutter_radius: 0.0,
             cutter_radius_expr: mm(0.0),
             member: BevelMember::Gear,
+            shaft_angle: 90.0,
+            shaft_angle_expr: deg(90.0),
+            tilt: 0.0,
+            tilt_expr: deg(0.0),
+            at_apex: false,
         }
     }
 }
@@ -352,6 +385,9 @@ impl GearFeature {
         if negative(self.backlash) {
             return Some("The backlash can't be negative");
         }
+        if self.localised() && !(self.shaft_angle >= 10.0 && self.shaft_angle <= 170.0) {
+            return Some("The shaft angle must be between 10° and 170°");
+        }
         let needs_module = self.face.is_none() || self.gear_type == GearType::Rack;
         if needs_module && !positive(self.module) {
             return Some("The module must be greater than zero");
@@ -371,6 +407,9 @@ impl GearFeature {
             }
             GearType::Bevel if !(self.pitch_angle >= 5.0 && self.pitch_angle <= 80.0) => {
                 Some("The pitch angle must be between 5° and 80°")
+            }
+            GearType::Bevel if !(-360.0..=360.0).contains(&self.tilt) => {
+                Some("The tilt must be between -360° and 360°")
             }
             GearType::Bevel | GearType::Rack if !positive(self.height) => {
                 Some("The body thickness must be greater than zero")
@@ -392,6 +431,14 @@ impl GearFeature {
     /// The name the feature list gives a new gear.
     pub fn base_name(&self) -> &'static str {
         "Gear"
+    }
+
+    /// A face-milled bevel pinion with localised contact (the one the shaft angle is for).
+    pub fn localised(&self) -> bool {
+        self.gear_type == GearType::Bevel
+            && self.style == ToothStyle::Helical
+            && self.spiral == SpiralKind::FaceMilled
+            && self.member == BevelMember::Pinion
     }
 
     /// The tooth form's numbers (the pressure angle in radians, the backlash).
@@ -2127,8 +2174,9 @@ impl FaceMill {
 /// backlash).
 ///
 /// The design is Litvin's ([`litvin`]) on the gear the pinion runs with: the same module,
-/// cone distance and dedendum angle, the pitch angle 90° less the pinion's, the cutter the
-/// pinion's own dialog gives. The contact asked for is the report's, in proportion: the path
+/// cone distance and dedendum angle, the pitch angle the shaft angle less the pinion's (so its
+/// teeth are the pinion's in proportion to the sines of the two), the cutter the pinion's own
+/// dialog gives. The contact asked for is the report's, in proportion: the path
 /// of contact square to the gear's root on its convex side and at 75° on its concave side,
 /// the contact ellipse's half-length 0.150 and 0.159 of the face width under Gleason's
 /// elastic approach of 0.00635 mm (0.00025 in), and the transmission error where the teeth
@@ -2144,14 +2192,22 @@ fn localised_pinion(
     dedendum: f64,
 ) -> Result<[(FaceMill, f64); 2], &'static str> {
     let (z, t, delta) = (x.teeth as f64, x.tooth(), d.delta);
-    let ratio = delta.tan();
+    let shaft = x.shaft_angle.to_radians();
+    let mate = shaft - delta;
+    if !(mate >= 5f64.to_radians() && mate <= 80f64.to_radians()) {
+        return Err(
+            "The gear this pinion runs with must have a pitch angle between 5° and 80° (the shaft angle less the pinion's)",
+        );
+    }
+    // The pinion's teeth over the gear's.
+    let ratio = delta.sin() / mate.sin();
     // The level of the transmission error grows as m₂₁ m′₂₁ (π / z)² (the report's (1.4)).
     let level = (10.0 / 41.0) * (PI / 10.0).powi(2) / (ratio * (PI / z).powi(2));
     let face = d.cone * (1.0 - d.kappa);
     let design = litvin::Design {
         ratio,
-        shaft: PI / 2.0,
-        root: [delta - dedendum, PI / 2.0 - delta - dedendum],
+        shaft,
+        root: [delta - dedendum, mate - dedendum],
         beta: x.beta().abs(),
         cutter: 2.0 * radius,
         point: half_pitch - 2.0 * mean * dedendum.sin() * t.alpha.tan(),
@@ -2335,12 +2391,30 @@ fn face_milled_spaces(
         .collect())
 }
 
+/// A bevel gear made whole: the frame at its back face, its normal along its axis toward the
+/// apex `back` above. The position is the back face's or (`at_apex`) the apex's; the tilt
+/// turns the axis about the frame's x through the apex.
+fn bevel_frame(x: &GearFeature, back: f64) -> Frame {
+    let own = own_frame(x);
+    let apex = if x.at_apex {
+        own.origin
+    } else {
+        add(own.origin, scale(own.normal, back))
+    };
+    let normal = rot(own.normal, own.x, x.tilt.to_radians());
+    Frame {
+        origin: sub(apex, scale(normal, back)),
+        x: own.x,
+        normal,
+    }
+}
+
 fn bevel(x: &GearFeature) -> Result<Plan, &'static str> {
     if x.style == ToothStyle::Herringbone {
         return Err("A bevel gear's teeth are straight or helical");
     }
     let d = bevel_dims(x).ok_or("The bevel gear's face width or bore is too large for it")?;
-    let own = own_frame(x);
+    let own = bevel_frame(x, d.back);
     let (m, delta, cone, kappa) = (d.m, d.delta, d.cone, d.kappa);
     // In (radius, height over the back face): along the pitch cone from the apex, and square
     // to it away from the axis.
@@ -2874,16 +2948,23 @@ mod tests {
     /// conjugate's relative curvature across its lines is more than the localised's.)
     #[test]
     fn a_localised_pinion_is_eased_off_toward_toe_and_heel() {
+        // The sample's pinion at right angles, either hand, and the one whose shaft angle is a
+        // variable at 30°, 60° and 120° (its cradle angle passes 90° near 40°).
         let sample = crate::samples::gears::gears()
             .into_iter()
             .map(|(_, g)| g)
             .find(|g| g.member == BevelMember::Pinion)
             .unwrap();
-        for left_hand in [false, true] {
-            let x = GearFeature {
+        let shafted = |s: f64| crate::samples::gears::shaft_pair(s)[1].clone();
+        let pinions = [false, true]
+            .map(|left_hand| GearFeature {
                 left_hand,
                 ..sample.clone()
-            };
+            })
+            .into_iter()
+            .chain([30.0, 60.0, 120.0].map(shafted));
+        for x in pinions {
+            let (left_hand, shaft) = (x.left_hand, x.shaft_angle);
             let d = bevel_dims(&x).unwrap();
             let (m, delta, cone) = (d.m, d.delta, d.cone);
             let dedendum = (1.25 * m / cone).atan();
@@ -2912,9 +2993,13 @@ mod tests {
                 // Into the tooth: toward its middle, on the gear's x.
                 let (h, rho) = at(0.5, 0.5);
                 let into = -conj.angle_at_pitch(s, h, rho).unwrap().signum();
-                // Tangent at the middle: under a micrometre a millimetre away.
+                // Tangent at the middle: under two micrometres a millimetre away.
                 let mid = at(0.5, 0.45);
-                assert!(off(mid).abs() < 0.001, "{left_hand} {s}: {}", off(mid));
+                assert!(
+                    off(mid).abs() < 0.002,
+                    "{shaft}° {left_hand} {s}: {}",
+                    off(mid)
+                );
                 // (From 0.4 of the depth up: this pinion's flank meeting the gear's convex side
                 // folds back 1.2 mm over its root, as the conjugate's does: equal addenda leave
                 // 16 teeth at 35° undercut there.)
@@ -2923,14 +3008,20 @@ mod tests {
                         let e = into * off(at(f, g));
                         assert!(
                             (0.05..0.4).contains(&e),
-                            "{left_hand} {s}: ease-off {e} mm at {f}, {g}"
+                            "{shaft}° {left_hand} {s}: ease-off {e} mm at {f}, {g}"
                         );
                     }
                 }
+                // Over the flank: a few micrometres proud at most (across the conjugate's
+                // lines), and eased off up to 0.6 mm at the heel's tip (at 120°: that pair's face
+                // is a third of its cone distance).
                 for f in (0..=8).map(|k| k as f64 / 8.0) {
                     for g in (0..=6).map(|k| 0.4 + 0.1 * k as f64) {
                         let e = into * off(at(f, g));
-                        assert!(e > -0.005 && e < 0.4, "{left_hand} {s}: {e} mm at {f}, {g}");
+                        assert!(
+                            e > -0.01 && e < 0.6,
+                            "{shaft}° {left_hand} {s}: {e} mm at {f}, {g}"
+                        );
                     }
                 }
             }

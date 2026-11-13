@@ -1754,6 +1754,9 @@ model-gear-member-gear = 기어
 model-gear-member-pinion = 피니언 (국부 접촉)
 model-gear-member-conjugate = 피니언 (공액)
 model-gear-cutter-radius = 커터 반지름 (0: 자동)
+model-gear-shaft-angle = 축각
+model-gear-at-apex = 꼭짓점 기준 위치
+model-gear-tilt = 기울기
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = 오른나사

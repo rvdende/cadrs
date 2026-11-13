@@ -1754,6 +1754,9 @@ model-gear-member-gear = Rueda
 model-gear-member-pinion = Piñón (contacto localizado)
 model-gear-member-conjugate = Piñón (conjugado)
 model-gear-cutter-radius = Radio de la fresa (0: auto)
+model-gear-shaft-angle = Ángulo entre ejes
+model-gear-at-apex = Posición en el vértice
+model-gear-tilt = Inclinación
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = A derechas

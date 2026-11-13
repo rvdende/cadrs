@@ -1754,6 +1754,9 @@ model-gear-member-gear = 大歯車
 model-gear-member-pinion = ピニオン（局部接触）
 model-gear-member-conjugate = ピニオン（共役）
 model-gear-cutter-radius = カッタ半径（0：自動）
+model-gear-shaft-angle = 軸角
+model-gear-at-apex = 頂点で位置決め
+model-gear-tilt = 傾き
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = 右ねじ

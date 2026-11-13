@@ -2447,6 +2447,12 @@ model-gear-member-pinion = Pinion (localised contact)
 model-gear-member-conjugate = Pinion (conjugate)
 # The radius of the face-mill cutter that makes a spiral bevel gear's teeth; 0 picks one.
 model-gear-cutter-radius = Cutter radius (0: auto)
+# A bevel gear's shaft angle: between its axis and its mate's (90° for shafts at right angles).
+model-gear-shaft-angle = Shaft angle
+# A checkbox: a bevel gear made whole is placed by its apex (the point of its pitch cone), not its back face.
+model-gear-at-apex = Position at the apex
+# A bevel gear made whole: its axis turned about a line through its apex.
+model-gear-tilt = Tilt
 
 ## crates/cadrs_app/src/thread_ui.rs
 # A thread's handedness.

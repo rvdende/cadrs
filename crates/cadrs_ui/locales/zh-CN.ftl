@@ -1754,6 +1754,9 @@ model-gear-member-gear = 大齿轮
 model-gear-member-pinion = 小齿轮（局部接触）
 model-gear-member-conjugate = 小齿轮（共轭）
 model-gear-cutter-radius = 刀盘半径（0：自动）
+model-gear-shaft-angle = 轴交角
+model-gear-at-apex = 按锥顶定位
+model-gear-tilt = 倾角
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = 右旋

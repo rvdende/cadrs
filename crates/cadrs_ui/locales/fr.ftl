@@ -1754,6 +1754,9 @@ model-gear-member-gear = Roue
 model-gear-member-pinion = Pignon (portée localisée)
 model-gear-member-conjugate = Pignon (conjugué)
 model-gear-cutter-radius = Rayon de fraise (0 : auto)
+model-gear-shaft-angle = Angle des axes
+model-gear-at-apex = Position au sommet
+model-gear-tilt = Inclinaison
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = À droite

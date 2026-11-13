@@ -357,6 +357,17 @@ pub(crate) fn body(
                         &x.cutter_radius_expr,
                         None,
                     );
+                    if x.member == BevelMember::Pinion {
+                        number(
+                            b,
+                            t,
+                            "gear-shaft-angle",
+                            &tr("model-gear-shaft-angle"),
+                            Role::GearShaftAngle,
+                            &x.shaft_angle_expr,
+                            None,
+                        );
+                    }
                 }
             }
         }
@@ -445,6 +456,24 @@ pub(crate) fn body(
                 index_of(&GearAxis::ALL, &x.axis),
                 None,
             );
+            // A bevel gear: placed by its apex or its back face, its axis tilted about the apex
+            // (a pair at any shaft angle).
+            if x.gear_type == GearType::Bevel {
+                b.spawn(
+                    OptionRow::new("gear-at-apex", tr("model-gear-at-apex"))
+                        .checked(x.at_apex)
+                        .build(t),
+                );
+                number(
+                    b,
+                    t,
+                    "gear-tilt",
+                    &tr("model-gear-tilt"),
+                    Role::GearTilt,
+                    &x.tilt_expr,
+                    None,
+                );
+            }
         }
     });
 }
@@ -477,6 +506,8 @@ pub(crate) fn number_text(kind: &FeatureKind, role: Role) -> Option<String> {
             Role::GearZ => &x.position_expr[2],
             Role::GearRotation => &x.rotation_expr,
             Role::GearCutter => &x.cutter_radius_expr,
+            Role::GearShaftAngle => &x.shaft_angle_expr,
+            Role::GearTilt => &x.tilt_expr,
             _ => return None,
         }
         .clone(),
@@ -524,7 +555,9 @@ pub(crate) fn tab(k: &mut FeatureKind, role: Role, i: usize) {
 }
 
 pub(crate) fn is_checkbox(name: &str) -> bool {
-    name == "gear-across-checkbox" || crate::surfacing_ui::is_checkbox(name)
+    name == "gear-across-checkbox"
+        || name == "gear-at-apex-checkbox"
+        || crate::surfacing_ui::is_checkbox(name)
 }
 
 pub(crate) fn checkbox(k: &mut FeatureKind, name: &str, on: bool) -> Option<&'static str> {
@@ -532,6 +565,10 @@ pub(crate) fn checkbox(k: &mut FeatureKind, name: &str, on: bool) -> Option<&'st
         (FeatureKind::Gear(x), "gear-across-checkbox") => {
             x.flip = on;
             Some("Teeth across the face")
+        }
+        (FeatureKind::Gear(x), "gear-at-apex-checkbox") => {
+            x.at_apex = on;
+            Some("Position at the apex")
         }
         (k, n) => crate::surfacing_ui::checkbox(k, n, on),
     }
@@ -549,6 +586,7 @@ pub(crate) fn is_signed(role: Role) -> bool {
             | Role::GearZ
             | Role::GearRotation
             | Role::GearCutter
+            | Role::GearTilt
     ) || crate::surfacing_ui::is_signed(role)
 }
 
@@ -559,7 +597,12 @@ pub(crate) fn is_plain(role: Role) -> bool {
 pub(crate) fn is_angle(role: Role) -> bool {
     matches!(
         role,
-        Role::GearPressureAngle | Role::GearHelixAngle | Role::GearPitchAngle | Role::GearRotation
+        Role::GearPressureAngle
+            | Role::GearHelixAngle
+            | Role::GearPitchAngle
+            | Role::GearRotation
+            | Role::GearShaftAngle
+            | Role::GearTilt
     ) || crate::surfacing_ui::is_angle(role)
 }
 
@@ -581,6 +624,8 @@ pub(crate) fn number_label(role: Role) -> Option<&'static str> {
         Role::GearZ => "Z",
         Role::GearRotation => "Rotation",
         Role::GearCutter => "Cutter radius",
+        Role::GearShaftAngle => "Shaft angle",
+        Role::GearTilt => "Tilt",
         r => return crate::surfacing_ui::number_label(r),
     })
 }
@@ -611,6 +656,8 @@ pub(crate) fn set_number(k: &mut FeatureKind, role: Role, v: f64, expr: String) 
         Role::GearZ => (&mut x.position[2], &mut x.position_expr[2]),
         Role::GearRotation => (&mut x.rotation, &mut x.rotation_expr),
         Role::GearCutter => (&mut x.cutter_radius, &mut x.cutter_radius_expr),
+        Role::GearShaftAngle => (&mut x.shaft_angle, &mut x.shaft_angle_expr),
+        Role::GearTilt => (&mut x.tilt, &mut x.tilt_expr),
         _ => return,
     };
     *value = v;

@@ -1754,6 +1754,9 @@ model-gear-member-gear = Rad
 model-gear-member-pinion = Ritzel (lokalisiertes Tragbild)
 model-gear-member-conjugate = Ritzel (konjugiert)
 model-gear-cutter-radius = Messerkopfradius (0: automatisch)
+model-gear-shaft-angle = Achswinkel
+model-gear-at-apex = Position an der Kegelspitze
+model-gear-tilt = Neigung
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Rechtsgängig
