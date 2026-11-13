@@ -1341,6 +1341,7 @@ sketch-normal-plane-parallel = Normale: il piano è parallelo allo schizzo
 sketch-glyph-select-geometry = Seleziona geometria
 sketch-glyph-hide = Nascondi vincoli
 sketch-glyph-escape = Esci dal vincolo
+sketch-point-delete-coincident = Elimina vincolo di coincidenza
 sketch-unsolved = Impossibile risolvere lo schizzo.
 sketch-conflict = Alcuni vincoli non sono applicabili alla geometria corrente e non sono stati risolti.
 

@@ -56,7 +56,8 @@ impl Plugin for SketchConstrainPlugin {
                     .before(crate::sketch_draw::SketchDrawSet)
                     .run_if(in_state(AppState::Document)),
             )
-            .add_observer(on_glyph_menu);
+            .add_observer(on_glyph_menu)
+            .add_observer(on_point_menu);
     }
 }
 
@@ -864,6 +865,116 @@ fn on_glyph_menu(
                     constraints: vec![id],
                 },
             });
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Point menu
+
+/// The anchor of a sketch point's context menu.
+#[derive(Component)]
+struct PointMenuFor(PointId);
+
+/// Right-click on a sketch point: selects it, with Delete coincident constraint (for a point
+/// coincident with anything, drawn as a square) and Delete.
+pub fn open_point_menu(world: &mut World, point: PointId, at: Vec2) {
+    let theme = world.resource::<Theme>().clone();
+    let Some(sketch) = session_sketch(
+        world.get_resource::<SketchSession>(),
+        world.get_resource::<ActiveDocument>(),
+    ) else {
+        return;
+    };
+    let coincident = crate::sketch_glyphs::coincident_points(sketch).contains(&point);
+    let sketch_name = world
+        .get_resource::<SketchSession>()
+        .and_then(|s| {
+            let doc = world.get_resource::<ActiveDocument>()?;
+            Some(doc.doc.element(s.element)?.feature(s.feature)?.name.clone())
+        })
+        .unwrap_or_else(|| tr("sketch-fallback-name"));
+    world.resource_mut::<SketchSelection>().0 = vec![SketchEntity::Point(point)];
+    let mut menu = Menu::new("sketch-point-menu")
+        .min_width(200.0)
+        .item_height(23.0);
+    if coincident {
+        menu = menu.item(
+            MenuItem::new(
+                "sketch-point-delete-coincident",
+                tr("sketch-point-delete-coincident"),
+            )
+            .icon("delete"),
+        );
+    }
+    let menu = menu
+        .item(MenuItem::new("sketch-point-delete", tr("common-delete")).icon("delete"))
+        .separator()
+        .item(MenuItem::new(
+            "sketch-point-confirm",
+            tr_with("sketch-menu-confirm-named", &[("name", &sketch_name)]),
+        ))
+        .separator()
+        .item(MenuItem::new(
+            "sketch-point-zoom-to-fit",
+            tr("common-zoom-to-fit"),
+        ))
+        .item(MenuItem::new(
+            "sketch-point-normal-to",
+            tr("sketch-menu-normal-to-plane"),
+        ));
+    let mut commands = world.commands();
+    let anchor = cadrs_ui::open_context_menu(&mut commands, at, menu.build(&theme));
+    commands
+        .entity(anchor)
+        .insert((PointMenuFor(point), DespawnOnExit(AppState::Document)));
+    world.flush();
+}
+
+fn on_point_menu(
+    ev: On<MenuAction>,
+    q: Query<&PointMenuFor>,
+    session: Option<Res<SketchSession>>,
+    mut selection: ResMut<SketchSelection>,
+    mut commands: Commands,
+) {
+    let (Ok(anchor), Some(s)) = (q.get(ev.entity), session) else {
+        return;
+    };
+    let (element, feature, point) = (s.element, s.feature, anchor.0);
+    let op = match ev.item.as_str() {
+        "sketch-point-delete-coincident" => SketchOp::SplitPoint { point },
+        "sketch-point-delete" => SketchOp::Delete {
+            curves: vec![],
+            points: vec![point],
+            dimensions: vec![],
+            constraints: vec![],
+        },
+        "sketch-point-confirm" => {
+            selection.0.clear();
+            commands.queue(crate::sketch::accept_sketch);
+            return;
+        }
+        "sketch-point-zoom-to-fit" => {
+            commands.queue(crate::viewport::zoom_to_fit);
+            return;
+        }
+        "sketch-point-normal-to" => {
+            commands.queue(crate::viewport::normal_to_sketch);
+            return;
+        }
+        _ => return,
+    };
+    selection.0.clear();
+    commands.queue(move |world: &mut World| {
+        if let Some(mut doc) = world.get_resource_mut::<ActiveDocument>()
+            && let Err(e) = doc.execute(&EditSketch {
+                element,
+                feature,
+                op,
+            })
+        {
+            warn!("cannot edit the point: {e}");
         }
     });
 }

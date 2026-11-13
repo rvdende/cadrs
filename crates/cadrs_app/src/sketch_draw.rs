@@ -211,6 +211,32 @@ pub fn extend_band() -> Color {
 fn extend_core() -> Color {
     Color::srgb_u8(0xc6, 0xd0, 0x9a)
 }
+/// What the solver adds to the sketch: perpendicular corners' marks and the dashed extensions
+/// of lines and arcs. Green; in the dark scheme the schematic's net green.
+fn corner_mark() -> Color {
+    by_scheme(
+        Color::srgb_u8(0x2f, 0x9e, 0x44),
+        Color::srgb_u8(0x73, 0xbc, 0x74),
+    )
+}
+/// A constraint glyph drawn on the sketch: green like the corner marks; references to the
+/// origin, axes or outside geometry blue; hovered, selected and conflicting as elsewhere.
+fn glyph_color(style: GlyphStyle) -> Color {
+    match style {
+        GlyphStyle::Constraint | GlyphStyle::Inference => corner_mark(),
+        GlyphStyle::External => by_scheme(
+            Color::srgb_u8(0x2f, 0x7f, 0xc1),
+            Color::srgb_u8(0x7f, 0xb6, 0xe8),
+        ),
+        GlyphStyle::Link => by_scheme(
+            Color::srgb_u8(0x1c, 0x8f, 0xbf),
+            Color::srgb_u8(0x92, 0xd4, 0xee),
+        ),
+        GlyphStyle::Hover => hover_core(),
+        GlyphStyle::Selected => selected(),
+        GlyphStyle::Conflict => conflict(),
+    }
+}
 fn selected() -> Color {
     Color::srgb_u8(0xf6, 0xbc, 0x1a)
 }
@@ -559,6 +585,27 @@ fn dot<C: GizmoConfigGroup>(
     let rot = Quat::from_rotation_arc(Vec3::Z, Vec3::new(n[0] as f32, n[1] as f32, n[2] as f32));
     g.circle(Isometry3d::new(world(frame, p), rot), px / px_per_mm, color)
         .resolution(10);
+}
+
+/// A coincident point: a filled square `px` + 1.5 px from its middle to its sides (as wide as a
+/// [`dot`] of the same `px`), drawn as rows of the 3 px dot line.
+fn square_dot<C: GizmoConfigGroup>(
+    g: &mut Gizmos<C>,
+    frame: &PlaneFrame,
+    p: SVec2,
+    px: f32,
+    px_per_mm: f32,
+    color: Color,
+) {
+    let half = ((px + 1.5) / px_per_mm) as f64;
+    let row = (px / px_per_mm) as f64;
+    for y in [-row, 0.0, row] {
+        g.line(
+            world(frame, p + SVec2::new(-half, y)),
+            world(frame, p + SVec2::new(half, y)),
+            color,
+        );
+    }
 }
 
 /// A label drawn this frame.
@@ -1169,6 +1216,8 @@ fn draw_sketches(
         let hidden_touch = cadrs_sketch::entity::hidden_touch_points(sketch);
         // Hollow rings (worked out once, not per point: 500-entity sketches).
         let rings_at = ring_points(sketch);
+        // Points coincident with something are solid squares (they have no glyph).
+        let squares = crate::sketch_glyphs::coincident_points(sketch);
         for (id, p) in &sketch.points {
             if any_ellipse && sketch.hidden_point(id) || hidden_touch.contains(&id) {
                 continue;
@@ -1217,7 +1266,11 @@ fn draw_sketches(
                     .resolution(16);
                 continue;
             }
-            dot(&mut dots, &frame, p.pos, r, map.px_per_mm(), color);
+            if squares.contains(&id) {
+                square_dot(&mut dots, &frame, p.pos, r, map.px_per_mm(), color);
+            } else {
+                dot(&mut dots, &frame, p.pos, r, map.px_per_mm(), color);
+            }
         }
         if draw.snapped_origin() && draw.over_viewport {
             snap_disc(&mut dots, &frame, SVec2::ZERO, map.px_per_mm());
@@ -1341,15 +1394,79 @@ fn draw_sketches(
             .copied()
             .filter(|e| matches!(e, SketchEntity::Constraint(_)))
             .collect();
-        let layout = layout_glyphs(sketch, &map, obstacles, &glyph_offsets, |h| {
+        let show = |h: Host| {
             (settings.show_constraints && !dense)
                 || glyphs_shown_for(sketch, h, hovered)
                 || glyphs_shown_for(sketch, h, kept)
                 || selected_glyphs
                     .iter()
                     .any(|e| glyphs_shown_for(sketch, h, Some(*e)))
-        });
+        };
+        let layout = layout_glyphs(sketch, &map, obstacles, &glyph_offsets, show);
         glyph_memory.0 = layout.placed;
+        // Where the solver holds a line or arc on past its end (a tangent touching its
+        // extension, a point on it): dashed on to there, green like the corner marks (not
+        // geometry the user drew), so the two never look detached.
+        {
+            let ppm = map.px_per_mm() as f64;
+            for (id, _, e) in cadrs_sketch::extension::extensions(sketch) {
+                let color = if selection.contains(SketchEntity::Constraint(id)) {
+                    selected()
+                } else if hover.0 == Some(SketchEntity::Constraint(id)) {
+                    hover_band()
+                } else {
+                    corner_mark()
+                };
+                for d in dashes(&e.polyline(), 6.0 / ppm, 4.0 / ppm) {
+                    lines.linestrip(d.into_iter().map(|p| world(&frame, p)), color);
+                }
+            }
+        }
+        // Perpendicular corners: a right-angle mark inside the corner, shown with its lines'
+        // glyphs.
+        for m in crate::sketch_glyphs::corner_marks(sketch) {
+            if !m.lines.iter().any(|l| show(Host::Curve(*l))) {
+                continue;
+            }
+            let id = m.constraint;
+            let corner = map.to_screen(m.corner);
+            let far = m.far.map(|p| map.to_screen(p) - corner);
+            let size =
+                crate::sketch_glyphs::CORNER_MARK.min(0.35 * far[0].length().min(far[1].length()));
+            if size < 3.0 || !rect.0.contains(corner) {
+                continue;
+            }
+            let spec = crate::sketch_glyphs::CornerSpec {
+                constraint: id,
+                corner,
+                dirs: far.map(|d| d.normalize_or_zero()),
+                size,
+            };
+            let color = if selection.contains(SketchEntity::Constraint(id)) {
+                selected()
+            } else if hover.0 == Some(SketchEntity::Constraint(id)) {
+                hover_band()
+            } else if analysis.conflicting.contains(&id)
+                || sketch.broken.contains(&id)
+                || analysis
+                    .conflict_set
+                    .contains(&cadrs_sketch::solve::Source::Constraint(id))
+            {
+                conflict()
+            } else {
+                corner_mark()
+            };
+            let [_, a, b, c] = spec.quad();
+            let pts: Vec<Vec3> = [a, b, c]
+                .into_iter()
+                .filter_map(|q| map.to_sketch(q))
+                .map(|q| world(&frame, q))
+                .collect();
+            if pts.len() == 3 {
+                lines.linestrip(pts, color);
+            }
+            new_overlay.corners.push(spec);
+        }
         for (a, b) in &layout.leaders {
             if let (Some(a), Some(b)) = (map.to_sketch(*a), map.to_sketch(*b)) {
                 thin.line(world(&frame, a), world(&frame, b), leader_color());
@@ -1371,6 +1488,29 @@ fn draw_sketches(
                 || analysis.conflict_set.contains(&cadrs_sketch::solve::Source::Constraint(id))
             {
                 g.style = GlyphStyle::Conflict;
+            }
+        }
+        // Constraint glyphs: strokes on the sketch, no box (the boxes are kept, hidden, for
+        // picking).
+        {
+            let ppm = map.px_per_mm() as f64;
+            let h = crate::sketch_glyphs::GLYPH_HALF as f64 / ppm;
+            for g in &glyphs {
+                let Some(at) = map.to_sketch(g.center) else {
+                    continue;
+                };
+                if !rect.0.contains(g.center) {
+                    continue;
+                }
+                let color = glyph_color(g.style);
+                for stroke in g.icon.strokes() {
+                    lines.linestrip(
+                        stroke.iter().map(|q| {
+                            world(&frame, at + SVec2::new(q[0] as f64 * h, q[1] as f64 * h))
+                        }),
+                        color,
+                    );
+                }
             }
         }
         // Constraint glyphs go under the inference glyphs.
@@ -1632,6 +1772,12 @@ pub fn glyphs_shown_for(sketch: &Sketch, h: Host, e: Option<SketchEntity>) -> bo
             .constraints
             .get(k)
             .is_some_and(|x| x.curves().contains(&CurveRef::Curve(c))),
+        // A touch point's glyph shows with either curve, and while it is hovered.
+        (Host::Touch(k), Some(SketchEntity::Curve(d))) => sketch
+            .constraints
+            .get(k)
+            .is_some_and(|x| x.curves().contains(&CurveRef::Curve(d))),
+        (Host::Touch(k), Some(SketchEntity::Constraint(j))) => k == j,
         _ => false,
     }
 }

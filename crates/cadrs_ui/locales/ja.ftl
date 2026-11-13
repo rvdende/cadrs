@@ -1341,6 +1341,7 @@ sketch-normal-plane-parallel = 法線：平面がスケッチと平行です
 sketch-glyph-select-geometry = ジオメトリを選択
 sketch-glyph-hide = 拘束を非表示
 sketch-glyph-escape = 拘束を終了
+sketch-point-delete-coincident = 一致拘束を削除
 sketch-unsolved = スケッチを解決できませんでした。
 sketch-conflict = 一部の拘束は現在のジオメトリに適用できないため、解決されていません。
 

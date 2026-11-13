@@ -1341,6 +1341,7 @@ sketch-normal-plane-parallel = 법선: 평면이 스케치와 평행합니다
 sketch-glyph-select-geometry = 형상 선택
 sketch-glyph-hide = 구속조건 숨기기
 sketch-glyph-escape = 구속조건 종료
+sketch-point-delete-coincident = 일치 구속 삭제
 sketch-unsolved = 스케치를 풀 수 없습니다.
 sketch-conflict = 일부 구속조건을 현재 형상에 적용할 수 없어 풀지 못했습니다.
 

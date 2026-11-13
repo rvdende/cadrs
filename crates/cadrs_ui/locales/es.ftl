@@ -1341,6 +1341,7 @@ sketch-normal-plane-parallel = Normal: el plano es paralelo al croquis
 sketch-glyph-select-geometry = Seleccionar geometría
 sketch-glyph-hide = Ocultar restricciones
 sketch-glyph-escape = Salir de la restricción
+sketch-point-delete-coincident = Eliminar restricción de coincidencia
 sketch-unsolved = No se pudo resolver el croquis.
 sketch-conflict = Algunas restricciones no se pueden aplicar a la geometría actual y no se han resuelto.
 
