@@ -1141,7 +1141,7 @@ fn sharp_edges(b: &Body, edges: &[EdgeId]) -> Result<Vec<EdgeId>> {
 
 /// The picked edges less degenerate ones (a pole's, an apex's): OCCT's blends pass over them
 /// (`BRepFilletAPI` adds no contour for one), and there's nothing to round there.
-fn real_edges(b: &Body, edges: &[EdgeId]) -> Result<Vec<EdgeId>> {
+pub(crate) fn real_edges(b: &Body, edges: &[EdgeId]) -> Result<Vec<EdgeId>> {
     let kept: Vec<EdgeId> = edges
         .iter()
         .copied()
