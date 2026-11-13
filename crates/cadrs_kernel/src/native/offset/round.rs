@@ -951,7 +951,12 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
         };
         let regions = || cavity_by_regions(&b, &remove, t);
         let ways: Vec<Box<dyn Fn() -> Result<Body>>> = if (concave || crossing) && !spec.sharp {
-            vec![Box::new(regions)]
+            // A prism opened at a cap, or hollowed: its outline's inset, rounded about the
+            // reflex corners, extruded from the kept caps' insets to past the removed ones.
+            match super::prism::curved_prism_inset(&b, &dist, true, false) {
+                Some(Ok(c)) => vec![Box::new(move || Ok(c.clone())), Box::new(regions)],
+                _ => vec![Box::new(regions)],
+            }
         } else {
             vec![
                 Box::new(|| sharp(&dist)),
@@ -2237,4 +2242,45 @@ mod tests {
         }
     }
 
+    /// An L-shaped prism (arms 20 × 5 and 5 × 15, 8 tall) shrunk by 1 and shelled 1 thick open
+    /// at its top, by its outline's inset: the inset outline is the arms' 18 × 3 and 3 × 10
+    /// rectangles, joined past their corner by the square of side 1 less the quarter disc about
+    /// the reflex corner, area 85 − π/4; the inset 6 tall, the cavity 7.
+    #[test]
+    fn an_l_prism_shrunk_and_shelled_measures_right() {
+        use crate::native::surface::Surface;
+        let outline = Loop::polygon(&[
+            [0.0, 0.0],
+            [20.0, 0.0],
+            [20.0, 5.0],
+            [5.0, 5.0],
+            [5.0, 15.0],
+            [0.0, 15.0],
+        ]);
+        let inset_area = 85.0 - PI / 4.0;
+        let mut k = NativeKernel::new();
+        let id = k
+            .extrude(
+                &Profile::of(Plane::xy(0.0), vec![outline]),
+                Extent::Blind(8.0),
+            )
+            .unwrap()
+            .bodies[0];
+        let b = (**k.get(id).unwrap()).clone();
+        let shrunk = super::inset_rounded(&b, &vec![-1.0; b.faces.len()]).unwrap();
+        let s = k.insert(shrunk);
+        let v = k.mass_properties(s).unwrap().volume;
+        assert!((v - 6.0 * inset_area).abs() < 1e-9 * v, "{v}");
+        let top = (0..b.faces.len())
+            .find(|&f| match &b.faces[f].surf {
+                Surface::Plane { f: fr } => (fr.o.z - 8.0).abs() < 1e-9,
+                _ => false,
+            })
+            .unwrap();
+        let spec = ShellSpec::inward(vec![FaceId(top as u64)], 1.0);
+        let shelled = k.shell_with(id, &spec).unwrap().bodies[0];
+        let v = k.mass_properties(shelled).unwrap().volume;
+        let want = 150.0 * 8.0 - 7.0 * inset_area;
+        assert!((v - want).abs() < 1e-9 * want, "{v} {want}");
+    }
 }
