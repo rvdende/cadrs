@@ -44,7 +44,7 @@ impl MachineKind {
         }
     }
 
-    /// The machine-kind icon (icon-rs).
+    /// The machine-kind icon (cadrs_icons).
     pub fn icon(self) -> &'static str {
         match self {
             MachineKind::Mill => "cam-machine",

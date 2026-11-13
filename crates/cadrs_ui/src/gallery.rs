@@ -415,20 +415,24 @@ pub fn spawn_gallery(commands: &mut Commands, theme: &Theme, atlas: &IconAtlas) 
                         );
                     });
                 });
-                c.spawn(section(&t, "Icons (icon-rs)")).with_children(|s| {
-                    s.spawn(Node {
-                        flex_wrap: FlexWrap::Wrap,
-                        column_gap: Val::Px(t.space[5]),
-                        row_gap: Val::Px(t.space[5]),
-                        width: Val::Px(370.0),
-                        ..default()
-                    })
-                    .with_children(|g| {
-                        for name in atlas.names() {
-                            g.spawn((icon(name, 16.0, t.foreground), crate::Tooltip::new(name)));
-                        }
+                c.spawn(section(&t, "Icons (cadrs_icons)"))
+                    .with_children(|s| {
+                        s.spawn(Node {
+                            flex_wrap: FlexWrap::Wrap,
+                            column_gap: Val::Px(t.space[5]),
+                            row_gap: Val::Px(t.space[5]),
+                            width: Val::Px(370.0),
+                            ..default()
+                        })
+                        .with_children(|g| {
+                            for name in atlas.names() {
+                                g.spawn((
+                                    icon(name, 16.0, t.foreground),
+                                    crate::Tooltip::new(name),
+                                ));
+                            }
+                        });
                     });
-                });
             });
         });
 

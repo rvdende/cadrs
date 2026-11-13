@@ -2334,6 +2334,7 @@ dependencies = [
  "cadrs_eda",
  "cadrs_fea",
  "cadrs_fs",
+ "cadrs_icons",
  "cadrs_idf",
  "cadrs_kernel",
  "cadrs_kicad",
@@ -2350,7 +2351,6 @@ dependencies = [
  "directories",
  "flate2",
  "hidapi",
- "icon-rs",
  "image",
  "js-sys",
  "nalgebra",
@@ -2515,6 +2515,20 @@ dependencies = [
  "ron",
  "serde",
  "web-time",
+]
+
+[[package]]
+name = "cadrs_icons"
+version = "0.2.7"
+dependencies = [
+ "resvg",
+]
+
+[[package]]
+name = "cadrs_icons_gen"
+version = "0.2.7"
+dependencies = [
+ "resvg",
 ]
 
 [[package]]
@@ -2688,8 +2702,8 @@ version = "0.2.7"
 dependencies = [
  "bevy",
  "cadrs_fs",
+ "cadrs_icons",
  "directories",
- "icon-rs",
  "raw-window-handle",
  "resvg",
  "rfd",
@@ -4915,12 +4929,6 @@ checksum = "f31827a206f56af32e590ba56d5d2d085f558508192593743f16b2306495269f"
 dependencies = [
  "cc",
 ]
-
-[[package]]
-name = "icon-rs"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e7c81b49e75efb080c2c29d242db54a35642741f02cd76a5717ae02b87df8e0"
 
 [[package]]
 name = "icu_collections"

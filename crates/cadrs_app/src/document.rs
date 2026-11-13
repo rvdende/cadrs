@@ -828,7 +828,7 @@ fn view_tools(bar: &mut ChildSpawnerCommands, t: &Theme) {
         for (name, icon_name, tip) in [
             ("view-section", "section-view", "shell-doc-section-view"),
             ("view-measure", "measure", "shell-doc-measure"),
-            // P3E.3b: the Analysis tools (icon-rs has no analysis icon: the curvature glyph
+            // P3E.3b: the Analysis tools (cadrs_icons has no analysis icon: the curvature glyph
             // stands in).
             (
                 "view-analysis",
@@ -836,7 +836,7 @@ fn view_tools(bar: &mut ChildSpawnerCommands, t: &Theme) {
                 "shell-doc-analysis-tools",
             ),
             ("view-mass", "mass-properties", "shell-doc-mass-properties"),
-            // P3F.5: the Simulation panel (`crate::simulation_ui`; icon-rs has no simulation
+            // P3F.5: the Simulation panel (`crate::simulation_ui`; cadrs_icons has no simulation
             // icon: Thicken's deformed sheet stands in).
             ("panel-simulation", "thicken", "shell-doc-simulation"),
             // P3I.3: shown once a sheet metal model exists (`crate::sheetmetal_table`).
@@ -1998,7 +1998,7 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
     search_tools(tb, t);
 }
 
-/// The Thicken button's menu: Thicken, Fill and Helix (icon-rs has no fill or helix icon yet).
+/// The Thicken button's menu: Thicken, Fill and Helix (cadrs_icons has no fill or helix icon yet).
 fn surfacing_menu() -> Menu {
     Menu::new("surfacing-menu")
         .min_width(160.0)
@@ -2007,7 +2007,7 @@ fn surfacing_menu() -> Menu {
         .item(MenuItem::new("surfacing-menu-helix", tr("shell-tool-helix")).icon("thread"))
 }
 
-/// The Move face button's menu: the direct edits (icon-rs has no move face, delete face or
+/// The Move face button's menu: the direct edits (cadrs_icons has no move face, delete face or
 /// simplify icon yet: offset, delete and surface stand in).
 fn direct_edit_menu() -> Menu {
     Menu::new("direct-edit-menu")
@@ -3733,7 +3733,7 @@ impl RowKind {
             RowKind::Import => "file-import",
             RowKind::Image => "image",
             RowKind::Thicken => "thicken",
-            // icon-rs has no helix or fill icon yet (recorded in PROGRESS.md).
+            // cadrs_icons has no helix or fill icon yet (recorded in PROGRESS.md).
             RowKind::Helix => "thread",
             RowKind::Thread => "thread",
             RowKind::Gear => "gear",

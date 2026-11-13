@@ -1,4 +1,4 @@
-//! Rasterizes the [icon-rs](https://crates.io/crates/icon-rs) icons at build time.
+//! Rasterizes the [cadrs_icons](https://crates.io/crates/cadrs_icons) icons at build time.
 //!
 //! Each icon is rendered at several pixel sizes (so small icons stay crisp instead of being
 //! downscaled at runtime) and stored as raw straight-alpha RGBA8 in `OUT_DIR`. The generated
@@ -9,7 +9,7 @@
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-use icon_rs::{Icon, Palette};
+use cadrs_icons::{Icon, Palette};
 
 // `source` is for the runtime only.
 #[allow(dead_code)]
@@ -27,10 +27,10 @@ fn main() {
     std::fs::create_dir_all(&icon_out).unwrap();
 
     let mut entries: Vec<(&str, Icon, f32)> =
-        icon_rs::ALL.iter().map(|i| (i.name, *i, 1.0)).collect();
+        cadrs_icons::ALL.iter().map(|i| (i.name, *i, 1.0)).collect();
     for &(name, base, scale) in icon_raster::WEIGHTS {
-        let icon =
-            icon_rs::get(base).unwrap_or_else(|| panic!("icon-rs has no {base:?} for {name:?}"));
+        let icon = cadrs_icons::get(base)
+            .unwrap_or_else(|| panic!("cadrs_icons has no {base:?} for {name:?}"));
         entries.push((name, icon, scale));
     }
 
@@ -64,7 +64,7 @@ fn main() {
          pub static ACCENT_DATA: &[(&str, u32, &[u8])] = &[\n{accents}];\n\
          /// Icons drawn in their own colours, which are faded but never tinted.\n\
          pub static FULL_COLOUR: &[&str] = &[\n{full_colour}];\n\
-         /// icon-rs's accent colour, for the accent layers.\n\
+         /// cadrs_icons's accent colour, for the accent layers.\n\
          pub const ACCENT: [u8; 3] = [{}, {}, {}];\n",
         a.0, a.1, a.2
     );

@@ -116,6 +116,10 @@ jobs:
       - name: Build
         run: cargo build --workspace
 
+      # The committed icons (crates/cadrs_icons) match their drawing functions in cadrs_icons_gen.
+      - name: Icons up to date
+        run: cargo run -q -p cadrs_icons_gen -- --check
+
       # Unit tests only: each integration test (`crates/*/tests`) links Bevy and OpenCASCADE into
       # its own large binary, too much for a hosted runner's disk. Run them locally with
       # `cargo test --workspace`.

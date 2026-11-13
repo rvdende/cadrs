@@ -145,7 +145,7 @@ impl Pattern {
         }
     }
 
-    /// The icon for the tree (icon-rs).
+    /// The icon for the tree (cadrs_icons).
     pub fn icon(self) -> &'static str {
         match self {
             Pattern::Face => "cam-face",

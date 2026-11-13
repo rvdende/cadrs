@@ -112,7 +112,7 @@ pub struct InstanceDofs {
     key: Option<(ElementId, Assembly)>,
 }
 
-/// The icon-rs icon of a mate type.
+/// The cadrs_icons icon of a mate type.
 pub fn type_icon(t: Option<MateType>) -> &'static str {
     match t {
         Some(MateType::Fastened) => "mate-fastened",
