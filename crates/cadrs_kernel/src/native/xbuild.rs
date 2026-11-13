@@ -2473,24 +2473,39 @@ pub fn orient_shells(b: &mut Body, always: bool) -> usize {
             for &fi in &faces {
                 bb.union(&b.face_bbox(fi));
             }
-            // The sign of the enclosed volume from a coarse tessellation (exact integration of
-            // spline faces would cost far more).
+            // The sign of the enclosed volume: integrated exactly where no face is a B-spline
+            // of many spans (analytic faces integrate along their boundaries, quicker than
+            // they mesh); else from a coarse tessellation (exact integration of such spline
+            // faces would cost far more).
+            let long = |fi: &usize| {
+                let Surface::Nurbs(n) = &b.faces[*fi].surf else {
+                    return false;
+                };
+                let spans = |k: &[f64]| k.windows(2).filter(|w| w[1] > w[0]).count();
+                spans(&n.ku) * spans(&n.kv) >= 256
+            };
+            let exact = (!faces.iter().any(long))
+                .then(|| super::mass::faces_volume(&super::kernel::subset(b, &faces, false)))
+                .filter(|v| v.is_finite() && *v != 0.0);
             let shift = bb.center().coords;
             let defl = (bb.diagonal() * 1e-2).max(tol::POINT);
-            let es = super::tess::edge_samples(b, defl, 0.5);
-            let vol: f64 = faces
-                .iter()
-                .map(|&fi| {
-                    let m = super::tess::mesh_face(b, &b.faces[fi], &es, defl, 0.5);
-                    m.indices
-                        .iter()
-                        .map(|t| {
-                            let [p, q, r] = t.map(|i| m.positions[i as usize].coords - shift);
-                            p.dot(&q.cross(&r)) / 6.0
-                        })
-                        .sum::<f64>()
-                })
-                .sum();
+            let es = || super::tess::edge_samples(b, defl, 0.5);
+            let vol: f64 = exact.unwrap_or_else(|| {
+                let es = es();
+                faces
+                    .iter()
+                    .map(|&fi| {
+                        let m = super::tess::mesh_face(b, &b.faces[fi], &es, defl, 0.5);
+                        m.indices
+                            .iter()
+                            .map(|t| {
+                                let [p, q, r] = t.map(|i| m.positions[i as usize].coords - shift);
+                                p.dot(&q.cross(&r)) / 6.0
+                            })
+                            .sum::<f64>()
+                    })
+                    .sum()
+            });
             if (vol < 0.0) != void.contains(&si) {
                 for &fi in &faces {
                     Body::reverse_face(&mut b.faces[fi]);
