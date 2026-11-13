@@ -338,6 +338,19 @@ impl<'a> FacePolys<'a> {
 /// Parameters t where the line o + t·d meets the surface (all of them, any sign), with the
 /// (u, v) there.
 pub fn ray_surface(s: &Surface, o: &P3, d: &V3, tmin: f64, tmax: f64) -> Vec<(f64, f64, f64)> {
+    ray_surface_with(s, o, d, tmin, tmax, None)
+}
+
+/// [`ray_surface`], with a parametric surface's grid of points ([`RayGrid`]) kept in `grid`
+/// for the next ray at the same surface, where given.
+fn ray_surface_with(
+    s: &Surface,
+    o: &P3,
+    d: &V3,
+    tmin: f64,
+    tmax: f64,
+    grid: Option<&std::sync::OnceLock<RayGrid>>,
+) -> Vec<(f64, f64, f64)> {
     let mut ts: Vec<f64> = Vec::new();
     match s {
         Surface::Plane { f } => {
@@ -410,7 +423,10 @@ pub fn ray_surface(s: &Surface, o: &P3, d: &V3, tmin: f64, tmax: f64) -> Vec<(f6
             {
                 return hits;
             }
-            return ray_parametric(s, o, d);
+            return match grid {
+                Some(g) => ray_parametric(s, g.get_or_init(|| RayGrid::new(s)), o, d),
+                None => ray_parametric(s, &RayGrid::new(s), o, d),
+            };
         }
         _ => {
             // Implicit along the ray where available, else sampled distance with projection.
@@ -509,21 +525,47 @@ fn ray_revolved_line(f: &Frame, lo: &P3, ld: &V3, o: &P3, d: &V3) -> Option<Vec<
     Some(out)
 }
 
-/// Line–surface hits on a parametric surface: the ray against a triangulated grid of the
-/// surface's parameter box, each hit refined by Newton on S(u, v) = o + t·d.
-fn ray_parametric(s: &Surface, o: &P3, d: &V3) -> Vec<(f64, f64, f64)> {
-    let ((u0, u1), (v0, v1)) = match s {
-        Surface::Revolution { m, .. } => ((0.0, TAU), m.nurbs_range().unwrap_or((-1e3, 1e3))),
-        _ => s.param_box(),
-    };
-    let n = 32;
-    let at = |i: usize, j: usize| {
+/// A parametric surface's points over a grid of its parameter box, for rays against it
+/// ([`ray_parametric`]): the same for every ray, so made once for the many a classifier casts.
+struct RayGrid {
+    u: (f64, f64),
+    v: (f64, f64),
+    n: usize,
+    pts: Vec<P3>,
+}
+
+impl RayGrid {
+    fn new(s: &Surface) -> Self {
+        let (u, v) = match s {
+            Surface::Revolution { m, .. } => ((0.0, TAU), m.nurbs_range().unwrap_or((-1e3, 1e3))),
+            _ => s.param_box(),
+        };
+        let mut g = RayGrid {
+            u,
+            v,
+            n: 32,
+            pts: Vec::new(),
+        };
+        let pts = surface_grid(s, g.n, |i, j| g.at(i, j));
+        g.pts = pts;
+        g
+    }
+
+    /// The (u, v) of the grid's point (i, j).
+    fn at(&self, i: usize, j: usize) -> (f64, f64) {
+        let ((u0, u1), (v0, v1), n) = (self.u, self.v, self.n);
         (
             u0 + (u1 - u0) * i as f64 / n as f64,
             v0 + (v1 - v0) * j as f64 / n as f64,
         )
-    };
-    let grid = surface_grid(s, n, at);
+    }
+}
+
+/// Line–surface hits on a parametric surface: the ray against a triangulated grid of the
+/// surface's parameter box (`g`, of `s`), each hit refined by Newton on S(u, v) = o + t·d.
+fn ray_parametric(s: &Surface, g: &RayGrid, o: &P3, d: &V3) -> Vec<(f64, f64, f64)> {
+    let (n, grid) = (g.n, &g.pts);
+    let at = |i: usize, j: usize| g.at(i, j);
     // The grid seen along the ray: each point's place in the plane square to it, about the ray.
     // A triangle the ray goes through (within the margin below) has the ray's point in its
     // shadow there, so only cells whose shadow's box (grown for the margin) holds it are tried.
@@ -857,6 +899,8 @@ pub struct Classifier<'a> {
     boxes: Vec<Bbox>,
     bbox: Bbox,
     starts: Vec<Option<(f64, f64)>>,
+    /// Each parametric face's grid for rays, made at the first ray that reaches the face.
+    grids: Vec<std::sync::OnceLock<RayGrid>>,
 }
 
 impl<'a> Classifier<'a> {
@@ -907,6 +951,7 @@ impl<'a> Classifier<'a> {
             boxes,
             bbox,
             starts,
+            grids: (0..body.faces.len()).map(|_| Default::default()).collect(),
         }
     }
 
@@ -984,7 +1029,8 @@ impl<'a> Classifier<'a> {
                 if !ray_meets_box(p, &d, &self.boxes[fi].grow(tol::REL * (1.0 + span))) {
                     continue;
                 }
-                for (t, u, v) in ray_surface(&f.surf, p, &d, -span, span) {
+                let grid = Some(&self.grids[fi]);
+                for (t, u, v) in ray_surface_with(&f.surf, p, &d, -span, span, grid) {
                     if t <= tol::ROUNDOFF_FINE {
                         continue;
                     }
@@ -1262,7 +1308,7 @@ mod boxed_tests {
                     assert!((0.0..TAU).contains(&u));
                     assert!((s.eval(u, v) - (o + d * t)).norm() < 1e-9, "{t} {u} {v}");
                 }
-                for (t, ..) in ray_parametric(&s, &o, &d) {
+                for (t, ..) in ray_parametric(&s, &RayGrid::new(&s), &o, &d) {
                     found += 1;
                     assert!(
                         exact.iter().any(|(x, ..)| (x - t).abs() < 1e-7),

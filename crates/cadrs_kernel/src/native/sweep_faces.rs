@@ -233,6 +233,9 @@ pub(crate) fn face_points(b: &Body, fi: usize, _size: f64) -> Vec<(P3, V3)> {
             (ax + dx * t - qx).hypot(ay + dy * t - qy) < NEAR
         })
     };
+    // (The outline's polygons boxed, and long ones in rows: a point is weighed against the
+    // sides near it only.)
+    let boxed = super::classify::FacePolys::new(&polys, &f.surf);
     // (Row by row, side by side where the outline is long: each point is weighed against
     // every piece of it.)
     let row = |i: usize| -> Vec<P2> {
@@ -244,7 +247,7 @@ pub(crate) fn face_points(b: &Body, fi: usize, _size: f64) -> Vec<(P3, V3)> {
                 )
             })
             .filter(|&q| {
-                super::classify::in_face(&polys, &f.surf, q, tol) == super::classify::InFace::Inside
+                boxed.in_face(&f.surf, q, tol) == super::classify::InFace::Inside
                     && !near_outline(q)
             })
             .collect()
