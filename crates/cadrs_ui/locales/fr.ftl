@@ -1767,6 +1767,13 @@ model-gear-end-relief = Dépouille d'extrémité
 model-gear-pitch-plane-normal = Normale du plan primitif
 model-gear-shaft = Axe
 model-gear-mate-shaft = Axe du conjugué
+model-gear-worm = Engrenage à vis sans fin
+model-gear-member-wheel = Roue à vis
+model-gear-member-worm = Vis sans fin
+model-gear-starts = Filets
+model-gear-worm-starts = Filets de la vis
+model-gear-worm-quotient = Quotient diamétral
+model-gear-wheel-axis = Axe de la roue
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = À droite

@@ -397,6 +397,37 @@ pub fn build_in(s: &mut dyn Studio, el: ElementId) -> Result<(), CommandError> {
     Ok(())
 }
 
+/// A worm drive: a single-start worm of module 2, diameter quotient 10, 50 long, and its
+/// 30-tooth wheel 12 wide, the wheel's axis Z through `at` and the worm's along X, 40 mm to its
+/// side (the centre distance): [wheel, worm].
+pub fn worm_drive(at: [f64; 3]) -> [GearFeature; 2] {
+    let common = |teeth: u32, mate: u32, member, bore: f64| GearFeature {
+        gear_type: GearType::Worm,
+        teeth,
+        teeth_expr: teeth.to_string(),
+        mate_teeth: mate,
+        mate_teeth_expr: mate.to_string(),
+        module: 2.0,
+        module_expr: mm(2.0),
+        width: 12.0,
+        width_expr: mm(12.0),
+        length: 50.0,
+        length_expr: mm(50.0),
+        bore,
+        bore_expr: mm(bore),
+        backlash: 0.05,
+        backlash_expr: mm(0.05),
+        position: at,
+        position_expr: at.map(mm),
+        member,
+        ..Default::default()
+    };
+    [
+        common(30, 1, crate::gear::BevelMember::Gear, 12.0),
+        common(1, 30, crate::gear::BevelMember::Pinion, 8.0),
+    ]
+}
+
 /// The hypoid pair's features.
 pub const HYPOID_PAIR: [FeatureId; 2] = [id(0x70), id(0x71)];
 
@@ -413,8 +444,24 @@ pub fn build_hypoid_in(s: &mut dyn Studio, el: ElementId) -> Result<(), CommandE
     Ok(())
 }
 
-/// A new document holding the sample: "Gears" with its Part Studios "Gears" and "Hypoid" (the
-/// pair of `hypoid.sv`), as `fixtures/gears.cadrs` stores it.
+/// The worm drive's features: [wheel, worm].
+pub const WORM_DRIVE: [FeatureId; 2] = [id(0x80), id(0x81)];
+
+/// Adds the worm drive ([`worm_drive`], about the origin) to the Part Studio `el`.
+pub fn build_worm_in(s: &mut dyn Studio, el: ElementId) -> Result<(), CommandError> {
+    for (feature, g) in WORM_DRIVE.into_iter().zip(worm_drive([0.0; 3])) {
+        s.run(&AddFeature {
+            element: el,
+            feature,
+            base_name: "Gear".into(),
+            kind: FeatureKind::Gear(g),
+        })?;
+    }
+    Ok(())
+}
+
+/// A new document holding the sample: "Gears" with its Part Studios "Gears", "Hypoid" (the
+/// pair of `hypoid.sv`) and "Worm drive", as `fixtures/gears.cadrs` stores it.
 pub fn document() -> Result<Document, CommandError> {
     let mut doc = Document::empty("Gears");
     doc.id = crate::ids::DocumentId::from_u128(0x6ea5_0179_0000_0000_0000_0000_0000_0100);
@@ -426,9 +473,14 @@ pub fn document() -> Result<Document, CommandError> {
     hypoid.id = ElementId::from_u128(0x6ea5_0179_0000_0000_0000_0000_0000_0102);
     let hypoid_id = hypoid.id;
     doc.elements.push(hypoid);
+    let mut worm = crate::document::Element::part_studio("Worm drive");
+    worm.id = ElementId::from_u128(0x6ea5_0179_0000_0000_0000_0000_0000_0103);
+    let worm_id = worm.id;
+    doc.elements.push(worm);
     let mut h = History::default();
     build(&mut doc, &mut h, id)?;
     build_hypoid_in(&mut DocHistory(&mut doc, &mut h), hypoid_id)?;
+    build_worm_in(&mut DocHistory(&mut doc, &mut h), worm_id)?;
     Ok(doc)
 }
 

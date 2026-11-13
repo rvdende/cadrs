@@ -1767,6 +1767,13 @@ model-gear-end-relief = Eindontlasting
 model-gear-pitch-plane-normal = Normaal van het steekvlak
 model-gear-shaft = As
 model-gear-mate-shaft = As van het tegenwiel
+model-gear-worm = Wormwielaandrijving
+model-gear-member-wheel = Wormwiel
+model-gear-member-worm = Worm
+model-gear-starts = Gangen
+model-gear-worm-starts = Gangen van de worm
+model-gear-worm-quotient = Diameterquotiënt
+model-gear-wheel-axis = As van het wiel
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Rechtsdraaiend

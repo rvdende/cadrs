@@ -1767,6 +1767,13 @@ model-gear-end-relief = 端部修缘
 model-gear-pitch-plane-normal = 节平面法线
 model-gear-shaft = 轴线
 model-gear-mate-shaft = 配对齿轮轴线
+model-gear-worm = 蜗杆传动
+model-gear-member-wheel = 蜗轮
+model-gear-member-worm = 蜗杆
+model-gear-starts = 头数
+model-gear-worm-starts = 蜗杆头数
+model-gear-worm-quotient = 直径系数
+model-gear-wheel-axis = 蜗轮轴线
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = 右旋

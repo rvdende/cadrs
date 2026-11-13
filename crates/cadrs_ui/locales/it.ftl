@@ -1767,6 +1767,13 @@ model-gear-end-relief = Scarico d'estremità
 model-gear-pitch-plane-normal = Normale del piano primitivo
 model-gear-shaft = Asse
 model-gear-mate-shaft = Asse del coniugato
+model-gear-worm = Vite senza fine
+model-gear-member-wheel = Ruota elicoidale
+model-gear-member-worm = Vite
+model-gear-starts = Principi
+model-gear-worm-starts = Principi della vite
+model-gear-worm-quotient = Quoziente diametrale
+model-gear-wheel-axis = Asse della ruota
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Destrorsa

@@ -1767,6 +1767,13 @@ model-gear-end-relief = Endrücknahme
 model-gear-pitch-plane-normal = Normale der Teilebene
 model-gear-shaft = Achse
 model-gear-mate-shaft = Achse des Gegenrads
+model-gear-worm = Schneckengetriebe
+model-gear-member-wheel = Schneckenrad
+model-gear-member-worm = Schnecke
+model-gear-starts = Gangzahl
+model-gear-worm-starts = Gangzahl der Schnecke
+model-gear-worm-quotient = Formzahl
+model-gear-wheel-axis = Achse des Schneckenrads
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Rechtsgängig

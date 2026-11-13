@@ -413,6 +413,12 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
                 A,
             );
             s("End relief", &mut x.end_relief_expr, &mut x.end_relief, L);
+            s(
+                "Diameter quotient",
+                &mut x.worm_quotient_expr,
+                &mut x.worm_quotient,
+                C,
+            );
         }
         FeatureKind::Thread(x) => {
             s("Length", &mut x.length_expr, &mut x.length, L);

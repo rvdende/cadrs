@@ -1767,6 +1767,13 @@ model-gear-end-relief = 端部逃げ
 model-gear-pitch-plane-normal = ピッチ平面の法線
 model-gear-shaft = 軸
 model-gear-mate-shaft = 相手歯車の軸
+model-gear-worm = ウォームギヤ
+model-gear-member-wheel = ウォームホイール
+model-gear-member-worm = ウォーム
+model-gear-starts = 条数
+model-gear-worm-starts = ウォームの条数
+model-gear-worm-quotient = 直径係数
+model-gear-wheel-axis = ホイールの軸
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = 右ねじ

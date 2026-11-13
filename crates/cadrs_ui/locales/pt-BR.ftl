@@ -1767,6 +1767,13 @@ model-gear-end-relief = Alívio das extremidades
 model-gear-pitch-plane-normal = Normal do plano primitivo
 model-gear-shaft = Eixo
 model-gear-mate-shaft = Eixo do conjugado
+model-gear-worm = Coroa e sem-fim
+model-gear-member-wheel = Coroa
+model-gear-member-worm = Sem-fim
+model-gear-starts = Entradas
+model-gear-worm-starts = Entradas do sem-fim
+model-gear-worm-quotient = Quociente diametral
+model-gear-wheel-axis = Eixo da coroa
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Direita

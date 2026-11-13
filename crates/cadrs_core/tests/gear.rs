@@ -1032,3 +1032,44 @@ fn a_hypoid_pair_is_placed_by_its_shafts() {
         }
     }
 }
+
+/// A worm drive: its worm (a lathe-cut thread on a core) and its wheel hobbed by it, exact (a
+/// few faces a tooth space, not the meshed cut's thousands), in mesh where they stand: clear of
+/// each other with their backlash, touching without it. Single-start and two-start.
+#[test]
+#[ignore = "slow (over 5 s): run with cargo test -r -- --ignored"]
+fn a_worm_drive_meshes_where_it_stands() {
+    use cadrs_core::samples::gears::worm_drive;
+    for starts in [1u32, 2] {
+        for backlash in [0.05, 0.0] {
+            let [mut wheel, mut worm] = worm_drive([0.0; 3]);
+            for x in [&mut wheel, &mut worm] {
+                x.backlash = backlash;
+                x.backlash_expr = format!("{backlash} mm");
+            }
+            wheel.mate_teeth = starts;
+            worm.teeth = starts;
+            let mut st = Studio::new();
+            let t = std::time::Instant::now();
+            st.add("Gear", FeatureKind::Gear(wheel));
+            st.add("Gear", FeatureKind::Gear(worm));
+            let parts = st.parts();
+            eprintln!(
+                "{starts} start(s), backlash {backlash}: built in {:?}",
+                t.elapsed()
+            );
+            assert_eq!(parts.len(), 2);
+            let faces: Vec<usize> = parts.iter().map(|p| p.solid.faces.len()).collect();
+            let volumes: Vec<f64> = parts.iter().map(volume).collect();
+            let (deep, count) = reach_of(&parts);
+            eprintln!(
+                "  faces {faces:?}, volumes {volumes:?}; {count} vertices inside the other, the deepest {deep} mm"
+            );
+            assert!(faces[0] <= 12 * 30, "the wheel's faces: {faces:?}");
+            assert!(deep < 0.02, "{deep} mm into the other member");
+            if backlash == 0.0 {
+                assert!(count > 0, "the worm and its wheel don't touch: not in mesh");
+            }
+        }
+    }
+}

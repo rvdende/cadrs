@@ -2475,6 +2475,20 @@ model-gear-pitch-plane-normal = Pitch plane's normal
 model-gear-shaft = Axis
 # The other member's shaft: with both picked, the pair is laid out on them.
 model-gear-mate-shaft = Mate's axis
+# A gear type: a worm drive's worm, or its wheel (hobbed by the worm).
+model-gear-worm = Worm drive
+# The wheel of a worm drive.
+model-gear-member-wheel = Worm wheel
+# The worm of a worm drive.
+model-gear-member-worm = Worm
+# A worm's number of starts (threads).
+model-gear-starts = Starts
+# The number of starts of the worm the wheel runs with.
+model-gear-worm-starts = Worm's starts
+# A worm's pitch diameter over its module.
+model-gear-worm-quotient = Diameter quotient
+# The axis a worm wheel turns about (X, Y or Z); the worm's runs along the frame's x.
+model-gear-wheel-axis = Wheel's axis
 
 ## crates/cadrs_app/src/thread_ui.rs
 # A thread's handedness.

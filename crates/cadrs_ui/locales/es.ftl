@@ -1767,6 +1767,13 @@ model-gear-end-relief = Alivio de extremos
 model-gear-pitch-plane-normal = Normal del plano primitivo
 model-gear-shaft = Eje
 model-gear-mate-shaft = Eje del conjugado
+model-gear-worm = Tornillo sin fin y corona
+model-gear-member-wheel = Corona
+model-gear-member-worm = Tornillo sin fin
+model-gear-starts = Entradas
+model-gear-worm-starts = Entradas del tornillo
+model-gear-worm-quotient = Cociente diametral
+model-gear-wheel-axis = Eje de la corona
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = A derechas

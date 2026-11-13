@@ -1767,6 +1767,13 @@ model-gear-end-relief = 끝단 릴리프
 model-gear-pitch-plane-normal = 피치 평면의 법선
 model-gear-shaft = 축
 model-gear-mate-shaft = 상대 기어의 축
+model-gear-worm = 웜 기어
+model-gear-member-wheel = 웜 휠
+model-gear-member-worm = 웜
+model-gear-starts = 줄 수
+model-gear-worm-starts = 웜의 줄 수
+model-gear-worm-quotient = 직경 계수
+model-gear-wheel-axis = 휠의 축
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = 오른나사

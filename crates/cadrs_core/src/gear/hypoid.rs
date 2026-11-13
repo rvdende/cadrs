@@ -247,7 +247,7 @@ pub(super) fn member(
     grow: f64,
     relief: f64,
 ) -> super::Generated {
-    use super::{Frame, Generated, Region2, Revolved, Seg};
+    use super::{Frame, Generated, Piece, Region2, Revolved, Seg};
     let r = l.mean_cone;
     let width = 0.2 * r;
     let back = 4.0 * l.normal_module;
@@ -345,7 +345,7 @@ pub(super) fn member(
         // pitch round, from a dedendum under P to the tooth's base over it.
         let reach = norm(l.cutter) + 1.1 * r + d.module;
         vec![
-            Revolved {
+            Piece::Revolved(Revolved {
                 frame: about_cutter,
                 region: polygon(&[
                     [ro + ded * to - go, -ded],
@@ -354,8 +354,8 @@ pub(super) fn member(
                     [ro - base * to - go, base],
                 ]),
                 turn: None,
-            },
-            Revolved {
+            }),
+            Piece::Revolved(Revolved {
                 frame: about_cutter,
                 region: polygon(&[
                     [0.0, -ded],
@@ -364,12 +364,12 @@ pub(super) fn member(
                     [0.0, base],
                 ]),
                 turn: Some(([0.0; 3], z, -2.0 * PI / l.crown_teeth)),
-            },
+            }),
         ]
     } else {
         // The tooth: outside the inner blades' cone and inside the outer blades', from its
         // base under P to its tip a dedendum over it.
-        vec![Revolved {
+        vec![Piece::Revolved(Revolved {
             frame: about_cutter,
             region: polygon(&[
                 [ri - base * ti - gi, -base],
@@ -378,7 +378,7 @@ pub(super) fn member(
                 [ri + ded * ti - gi, ded],
             ]),
             turn: None,
-        }]
+        })]
     };
     // The crown turns about its axis; seen from the member, the member turns back at the
     // crown's teeth over its own (the gear the other way about its axis, which points away
@@ -393,6 +393,7 @@ pub(super) fn member(
             (apex, axis, -member_turn, member_turn),
         ],
         copies: teeth.round() as usize,
+        starts: 1,
     }
 }
 

@@ -11,7 +11,9 @@ use cadrs_kernel::{
 use nalgebra::{Point2, Point3, Unit, Vector3};
 
 use crate::document::FaceRef;
-use crate::gear::{self, Blank, Frame, GearFeature, Generated, Region2, Revolved, Seg, Sweep};
+use crate::gear::{
+    self, Blank, Frame, GearFeature, Generated, Piece, Region2, Revolved, Seg, Sweep, Thread,
+};
 
 fn v(a: Vec3) -> Vector3<f64> {
     Vector3::new(a[0], a[1], a[2])
@@ -218,6 +220,146 @@ impl Rebuilder {
         Ok(body)
     }
 
+    /// A thread of a generated gear's plan: its section carried along its helix.
+    fn gear_thread(
+        &mut self,
+        t: &Thread,
+        state: &State,
+        op: cadrs_kernel::OpId,
+        next: &mut u64,
+    ) -> cadrs_kernel::Result<(BodyId, BodyNames)> {
+        let (o, d, x) = (Point3::from(t.origin), v(t.dir), v(t.x));
+        let plane = Plane::new(o, x, x.cross(&d));
+        let section = Region2 {
+            outer: (0..t.section.len())
+                .map(|i| Seg::Line {
+                    a: t.section[i],
+                    b: t.section[(i + 1) % t.section.len()],
+                })
+                .collect(),
+            holes: Vec::new(),
+        };
+        let profile = Profile::new(plane, kernel_regions(&[section], next));
+        let helix = cadrs_kernel::Helix {
+            axis: Axis {
+                origin: o,
+                dir: Unit::new_normalize(d),
+            },
+            x: Unit::new_normalize(x),
+            r0: t.radius,
+            r1: t.radius,
+            height: t.lead * t.turns.abs(),
+            turns: t.turns,
+            start_angle: 0.0,
+        };
+        let made = self
+            .kernel
+            .sweep_with(&profile, &SweepSpec::solid(helix.path()))?;
+        self.name_new(state, op, &made)
+    }
+
+    /// One piece of a generated gear's plan.
+    fn gear_piece(
+        &mut self,
+        p: &Piece,
+        state: &State,
+        op: cadrs_kernel::OpId,
+        next: &mut u64,
+    ) -> cadrs_kernel::Result<(BodyId, BodyNames)> {
+        match p {
+            Piece::Revolved(r) => self.gear_revolved(r, state, op, next),
+            Piece::Thread(t) => self.gear_thread(t, state, op, next),
+        }
+    }
+
+    /// The common part of some pieces.
+    fn gear_common(
+        &mut self,
+        pieces: &[Piece],
+        state: &State,
+        op: cadrs_kernel::OpId,
+        next: &mut u64,
+    ) -> cadrs_kernel::Result<(BodyId, BodyNames)> {
+        let mut made: Vec<(BodyId, BodyNames)> = Vec::new();
+        for p in pieces {
+            match self.gear_piece(p, state, op, next) {
+                Ok(b) => made.push(b),
+                Err(e) => {
+                    for (b, _) in made {
+                        self.kernel.release(b);
+                    }
+                    return Err(e);
+                }
+            }
+        }
+        let first = made.remove(0);
+        if made.is_empty() {
+            return Ok(first);
+        }
+        let others: Vec<BodyId> = made.iter().map(|(b, _)| *b).collect();
+        let common = self
+            .kernel
+            .boolean(cadrs_kernel::BoolOp::Intersect, first.0, &others);
+        let named = common.and_then(|r| {
+            let body = r.bodies[0];
+            let mut inputs = vec![(first.0, &first.1)];
+            inputs.extend(made.iter().map(|(b, n)| (*b, n)));
+            Ok((
+                body,
+                naming::name_body(&self.kernel, body, op, &r.history, &inputs)?,
+            ))
+        });
+        for b in others.into_iter().chain([first.0]) {
+            self.kernel.release(b);
+        }
+        named
+    }
+
+    /// A gear made of solids (a worm): the union of each list's common part, one at a time in
+    /// order (a worm's threads, then its core: cut by them all at once, its cylinder splits
+    /// cleanly into the bands between them; joined to them one by one it doesn't).
+    fn gear_made(
+        &mut self,
+        lists: &[Vec<Piece>],
+        state: &State,
+        op: cadrs_kernel::OpId,
+        next: &mut u64,
+    ) -> cadrs_kernel::Result<(BodyId, BodyNames)> {
+        let mut at: Option<(BodyId, BodyNames)> = None;
+        for l in lists {
+            let piece = match self.gear_common(l, state, op, next) {
+                Ok(b) => b,
+                Err(e) => {
+                    if let Some((b, _)) = at {
+                        self.kernel.release(b);
+                    }
+                    return Err(e);
+                }
+            };
+            let Some(so_far) = at.take() else {
+                at = Some(piece);
+                continue;
+            };
+            let united = self
+                .kernel
+                .boolean(cadrs_kernel::BoolOp::Union, so_far.0, &[piece.0])
+                .and_then(|r| {
+                    let body = r.bodies[0];
+                    let inputs = [(so_far.0, &so_far.1), (piece.0, &piece.1)];
+                    Ok((
+                        body,
+                        naming::name_body(&self.kernel, body, op, &r.history, &inputs)?,
+                    ))
+                });
+            self.kernel.release(so_far.0);
+            self.kernel.release(piece.0);
+            at = Some(united?);
+        }
+        at.ok_or(cadrs_kernel::KernelError::Unsupported(
+            "a gear of no solids",
+        ))
+    }
+
     /// A generated gear (a hypoid pair's member): its blank less its tool rolled through it at
     /// every tooth.
     fn gear_generated(
@@ -227,46 +369,14 @@ impl Rebuilder {
         op: cadrs_kernel::OpId,
         next: &mut u64,
     ) -> cadrs_kernel::Result<(BodyId, BodyNames)> {
-        let blank = self.gear_revolved(&g.blank, state, op, next)?;
-        let mut pieces: Vec<(BodyId, BodyNames)> = Vec::new();
-        for r in &g.tool {
-            match self.gear_revolved(r, state, op, next) {
-                Ok(b) => pieces.push(b),
-                Err(e) => {
-                    for (b, _) in pieces.into_iter().chain([blank]) {
-                        self.kernel.release(b);
-                    }
-                    return Err(e);
-                }
+        let mut at = self.gear_revolved(&g.blank, state, op, next)?;
+        let tool = match self.gear_common(&g.tool, state, op, next) {
+            Ok(t) => t,
+            Err(e) => {
+                self.kernel.release(at.0);
+                return Err(e);
             }
-        }
-        let mut tool = pieces.remove(0);
-        if !pieces.is_empty() {
-            let others: Vec<BodyId> = pieces.iter().map(|(b, _)| *b).collect();
-            let common = self
-                .kernel
-                .boolean(cadrs_kernel::BoolOp::Intersect, tool.0, &others);
-            let named = common.and_then(|r| {
-                let body = r.bodies[0];
-                let mut inputs = vec![(tool.0, &tool.1)];
-                inputs.extend(pieces.iter().map(|(b, n)| (*b, n)));
-                Ok((
-                    body,
-                    naming::name_body(&self.kernel, body, op, &r.history, &inputs)?,
-                ))
-            });
-            for &b in &others {
-                self.kernel.release(b);
-            }
-            self.kernel.release(tool.0);
-            match named {
-                Ok(t) => tool = t,
-                Err(e) => {
-                    self.kernel.release(blank.0);
-                    return Err(e);
-                }
-            }
-        }
+        };
         let step = |(o, a, from, to): (Vec3, Vec3, f64, f64)| {
             RigidStep::turn(
                 Axis {
@@ -278,20 +388,45 @@ impl Rebuilder {
             )
         };
         let motion = SolidMotion::rigid(vec![step(g.turns[0]), step(g.turns[1])]);
-        let cut = self
-            .kernel
-            .cut_swept_indexed(blank.0, tool.0, &motion, g.copies)
-            .and_then(|r| {
+        let (o, a, ..) = g.turns[0];
+        let tool_axis = Axis {
+            origin: Point3::from(o),
+            dir: Unit::new_normalize(v(a)),
+        };
+        // Each start of the tool (a hob's), a whole turn over the starts apart about its axis.
+        for k in 0..g.starts.max(1) {
+            let turned = if k == 0 {
+                Ok(tool.0)
+            } else {
+                let angle = std::f64::consts::TAU * k as f64 / g.starts as f64;
+                self.kernel
+                    .transform_motion(tool.0, &cadrs_kernel::Motion::rotation(&tool_axis, angle))
+                    .and_then(|r| r.first())
+            };
+            let cut = turned.and_then(|t| {
+                let r = self.kernel.cut_swept_indexed(at.0, t, &motion, g.copies);
+                if t != tool.0 {
+                    self.kernel.release(t);
+                }
+                let r = r?;
                 let body = r.bodies[0];
-                let inputs = [(blank.0, &blank.1), (tool.0, &tool.1)];
+                let inputs = [(at.0, &at.1), (tool.0, &tool.1)];
                 Ok((
                     body,
                     naming::name_body(&self.kernel, body, op, &r.history, &inputs)?,
                 ))
             });
-        self.kernel.release(blank.0);
+            self.kernel.release(at.0);
+            match cut {
+                Ok(c) => at = c,
+                Err(e) => {
+                    self.kernel.release(tool.0);
+                    return Err(e);
+                }
+            }
+        }
         self.kernel.release(tool.0);
-        cut
+        Ok(at)
     }
 
     pub(in crate::rebuild) fn gear(
@@ -331,10 +466,13 @@ impl Rebuilder {
             _ => gear::plan(x, target.as_ref().map(|t| &t.1))?,
         };
         let mut next = 0u64;
-        if let Some(g) = &plan.generated {
-            let body = self
-                .gear_generated(g, state, op, &mut next)
-                .map_err(|err| format!("Gear failed: {err}"))?;
+        let made = match (&plan.generated, &plan.made) {
+            (Some(g), _) => Some(self.gear_generated(g, state, op, &mut next)),
+            (None, Some(lists)) => Some(self.gear_made(lists, state, op, &mut next)),
+            _ => None,
+        };
+        if let Some(body) = made {
+            let body = body.map_err(|err| format!("Gear failed: {err}"))?;
             let merge = Merge {
                 op: BooleanOp::New,
                 merge_all: false,

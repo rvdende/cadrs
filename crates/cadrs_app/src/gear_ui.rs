@@ -19,6 +19,10 @@
 //!   its mate's, the module at the mean point, the spiral angle, **Cut as** its Gear or Pinion,
 //!   the *Shaft angle* and *Offset* (without shafts), the face mill's *Cutter radius* and
 //!   *Pressure shift*, *Backlash*, *End relief*, and (without shafts) where its pitch plane is.
+//! - A **Worm drive**'s member (`cadrs_core::gear::worm`): **Cut as** its Wheel or its Worm (the
+//!   two counts change places), the worm's *Starts* and the wheel's *Teeth*, the module, the
+//!   worm's *Diameter quotient* and hand, the worm's *Length* or the wheel's *Face width*, the
+//!   *Bore*, *Backlash* (taken off the worm), and where the drive is (the wheel's axis).
 //!
 //! The toolbar's Gear button starts it with the selected face.
 
@@ -252,6 +256,7 @@ fn type_key(t: GearType) -> &'static str {
         GearType::Bevel => "model-gear-bevel",
         GearType::Rack => "model-gear-rack",
         GearType::Hypoid => "model-gear-hypoid",
+        GearType::Worm => "model-gear-worm",
     }
 }
 
@@ -278,7 +283,7 @@ pub(crate) fn body(
     let rack = x.gear_type == GearType::Rack;
     body_column(b, |b| {
         // (A hypoid pair's member is made whole: it takes no face.)
-        if x.gear_type != GearType::Hypoid {
+        if !matches!(x.gear_type, GearType::Hypoid | GearType::Worm) {
             list(
                 b,
                 t,
@@ -307,6 +312,10 @@ pub(crate) fn body(
         );
         if x.gear_type == GearType::Hypoid {
             hypoid_body(b, t, x, field, items_of);
+            return;
+        }
+        if x.gear_type == GearType::Worm {
+            worm_body(b, t, x);
             return;
         }
         let mut num = |name: &str, key: &str, role: Role, text: &str| {
@@ -470,7 +479,7 @@ pub(crate) fn body(
                     num("gear-bore", "model-gear-bore", Role::GearBore, &x.bore_expr)
                 }
                 GearType::Ring => num("gear-rim", "model-gear-rim", Role::GearRim, &x.rim_expr),
-                GearType::Rack | GearType::Hypoid => {}
+                GearType::Rack | GearType::Hypoid | GearType::Worm => {}
             }
             if matches!(x.gear_type, GearType::Bevel | GearType::Rack) {
                 num(
@@ -719,6 +728,133 @@ fn hypoid_body(
     );
 }
 
+/// A worm drive's member: the worm's starts and the wheel's teeth, the module, the worm's
+/// diameter quotient, its hand, which member this is, its length or face width, its bore, and
+/// where the drive is (the wheel's axis its axis, the worm's along its x).
+fn worm_body(b: &mut ChildSpawner, t: &Theme, x: &cadrs_core::gear::GearFeature) {
+    let num = |b: &mut ChildSpawner, name: &str, key: &str, role: Role, text: &str| {
+        number(b, t, name, &tr(key), role, text, None);
+    };
+    let members = opts(
+        &BevelMember::ALL,
+        |k| {
+            tr(match k {
+                BevelMember::Gear => "model-gear-member-wheel",
+                _ => "model-gear-member-worm",
+            })
+        },
+        |k| k != BevelMember::ConjugatePinion,
+    );
+    select_row(
+        b,
+        t,
+        "gear-member",
+        &tr("model-gear-member"),
+        Role::GearMember,
+        &members,
+        index_of(&BevelMember::ALL, &x.member),
+        None,
+    );
+    let worm = x.member != BevelMember::Gear;
+    let (own, mate) = if worm {
+        ("model-gear-starts", "model-gear-mate-teeth")
+    } else {
+        ("model-gear-teeth", "model-gear-worm-starts")
+    };
+    num(b, "gear-teeth", own, Role::GearTeeth, &x.teeth_expr);
+    num(
+        b,
+        "gear-mate-teeth",
+        mate,
+        Role::GearMateTeeth,
+        &x.mate_teeth_expr,
+    );
+    num(
+        b,
+        "gear-module",
+        "model-gear-module",
+        Role::GearModule,
+        &x.module_expr,
+    );
+    num(
+        b,
+        "gear-pressure-angle",
+        "model-gear-pressure-angle",
+        Role::GearPressureAngle,
+        &x.pressure_angle_expr,
+    );
+    num(
+        b,
+        "gear-quotient",
+        "model-gear-worm-quotient",
+        Role::GearQuotient,
+        &x.worm_quotient_expr,
+    );
+    let hands: Vec<(String, bool)> = HANDS.iter().map(|h| (tr(h), true)).collect();
+    select_row(
+        b,
+        t,
+        "gear-hand",
+        &tr("common-direction"),
+        Role::GearHand,
+        &hands,
+        usize::from(x.left_hand),
+        None,
+    );
+    if worm {
+        num(
+            b,
+            "gear-length",
+            "model-length",
+            Role::GearLength,
+            &x.length_expr,
+        );
+    } else {
+        num(
+            b,
+            "gear-width",
+            "model-gear-face-width",
+            Role::GearWidth,
+            &x.width_expr,
+        );
+    }
+    num(
+        b,
+        "gear-bore",
+        "model-gear-bore",
+        Role::GearBore,
+        &x.bore_expr,
+    );
+    num(
+        b,
+        "gear-backlash",
+        "model-gear-backlash",
+        Role::GearBacklash,
+        &x.backlash_expr,
+    );
+    for (i, (name, label, role)) in [
+        ("gear-x", "X", Role::GearX),
+        ("gear-y", "Y", Role::GearY),
+        ("gear-z", "Z", Role::GearZ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        number(b, t, name, label, role, &x.position_expr[i], None);
+    }
+    let axes = opts(&GearAxis::ALL, |a| a.label(), |_| true);
+    select_row(
+        b,
+        t,
+        "gear-axis",
+        &tr("model-gear-wheel-axis"),
+        Role::GearAxis,
+        &axes,
+        index_of(&GearAxis::ALL, &x.axis),
+        None,
+    );
+}
+
 /// The handedness options' catalog keys (a thread's).
 const HANDS: [&str; 2] = ["model-thread-right-hand", "model-thread-left-hand"];
 
@@ -753,6 +889,7 @@ pub(crate) fn number_text(kind: &FeatureKind, role: Role) -> Option<String> {
             Role::GearOffset => &x.offset_expr,
             Role::GearPressureShift => &x.pressure_shift_expr,
             Role::GearEndRelief => &x.end_relief_expr,
+            Role::GearQuotient => &x.worm_quotient_expr,
             _ => return None,
         }
         .clone(),
@@ -782,6 +919,22 @@ pub(crate) fn select(k: &mut FeatureKind, role: Role, i: usize) {
     match role {
         Role::GearType => {
             x.gear_type = GearType::ALL[i.min(GearType::ALL.len() - 1)];
+            // A worm drive: its wheel to a single-start worm.
+            if x.gear_type == GearType::Worm {
+                if x.member == BevelMember::ConjugatePinion {
+                    x.member = BevelMember::Pinion;
+                }
+                let starts = if x.member == BevelMember::Gear {
+                    &mut x.mate_teeth
+                } else {
+                    &mut x.teeth
+                };
+                if *starts > 8 {
+                    *starts = 1;
+                }
+                x.teeth_expr = x.teeth.to_string();
+                x.mate_teeth_expr = x.mate_teeth.to_string();
+            }
             // A hypoid pair's teeth are spiral, its pinion generated.
             if x.gear_type == GearType::Hypoid {
                 x.style = ToothStyle::Helical;
@@ -797,7 +950,18 @@ pub(crate) fn select(k: &mut FeatureKind, role: Role, i: usize) {
         Role::GearHand => x.left_hand = i == 1,
         Role::GearAxis => x.axis = GearAxis::ALL[i.min(GearAxis::ALL.len() - 1)],
         Role::GearSpiral => x.spiral = SpiralKind::ALL[i.min(SpiralKind::ALL.len() - 1)],
-        Role::GearMember => x.member = BevelMember::ALL[i.min(BevelMember::ALL.len() - 1)],
+        Role::GearMember => {
+            let was_gear = x.member == BevelMember::Gear;
+            x.member = BevelMember::ALL[i.min(BevelMember::ALL.len() - 1)];
+            // A pair's other member: its teeth and its mate's change places, so the numbers
+            // are still the pair's.
+            if matches!(x.gear_type, GearType::Hypoid | GearType::Worm)
+                && was_gear != (x.member == BevelMember::Gear)
+            {
+                std::mem::swap(&mut x.teeth, &mut x.mate_teeth);
+                std::mem::swap(&mut x.teeth_expr, &mut x.mate_teeth_expr);
+            }
+        }
         _ => {}
     }
 }
@@ -886,6 +1050,7 @@ pub(crate) fn number_label(role: Role) -> Option<&'static str> {
         Role::GearOffset => "Offset",
         Role::GearPressureShift => "Pressure shift",
         Role::GearEndRelief => "End relief",
+        Role::GearQuotient => "Diameter quotient",
         r => return crate::surfacing_ui::number_label(r),
     })
 }
@@ -926,6 +1091,7 @@ pub(crate) fn set_number(k: &mut FeatureKind, role: Role, v: f64, expr: String) 
         Role::GearOffset => (&mut x.offset, &mut x.offset_expr),
         Role::GearPressureShift => (&mut x.pressure_shift, &mut x.pressure_shift_expr),
         Role::GearEndRelief => (&mut x.end_relief, &mut x.end_relief_expr),
+        Role::GearQuotient => (&mut x.worm_quotient, &mut x.worm_quotient_expr),
         _ => return,
     };
     *value = v;

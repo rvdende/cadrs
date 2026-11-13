@@ -1767,6 +1767,13 @@ model-gear-end-relief = Endverligting
 model-gear-pitch-plane-normal = Steekvlak se normaal
 model-gear-shaft = As
 model-gear-mate-shaft = Paarrat se as
+model-gear-worm = Wurmaandrywing
+model-gear-member-wheel = Wurmwiel
+model-gear-member-worm = Wurm
+model-gear-starts = Gange
+model-gear-worm-starts = Wurm se gange
+model-gear-worm-quotient = Deursnee-kwosiënt
+model-gear-wheel-axis = Wiel se as
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Regsdraaiend

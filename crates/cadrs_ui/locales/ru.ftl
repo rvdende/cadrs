@@ -1767,6 +1767,13 @@ model-gear-end-relief = Фланкирование торцов
 model-gear-pitch-plane-normal = Нормаль делительной плоскости
 model-gear-shaft = Ось
 model-gear-mate-shaft = Ось сопряжённого колеса
+model-gear-worm = Червячная передача
+model-gear-member-wheel = Червячное колесо
+model-gear-member-worm = Червяк
+model-gear-starts = Заходы
+model-gear-worm-starts = Заходы червяка
+model-gear-worm-quotient = Коэффициент диаметра
+model-gear-wheel-axis = Ось колеса
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Правая
