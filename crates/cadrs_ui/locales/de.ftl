@@ -1774,6 +1774,7 @@ model-gear-starts = Gangzahl
 model-gear-worm-starts = Gangzahl der Schnecke
 model-gear-worm-quotient = Formzahl
 model-gear-wheel-axis = Achse des Schneckenrads
+model-gear-fast-preview = Schnellvorschau (nur Rohling)
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Rechtsgängig
@@ -4388,6 +4389,9 @@ shell-public-view-banner = „{ $name }“ von { $owner }, Revision { $revision 
 shell-public-view-label = „{ $name }“ von { $owner } (öffentlich)
 shell-public-opening = „{ $name }“ wird geöffnet…
 shell-public-forking = „{ $name }“ wird geforkt…
+shell-public-downloading = „{ $name }“ wird heruntergeladen
+shell-public-download-amount = { $got } von { $size } ({ $percent } %)
+shell-public-unpacking-detail = Dateien werden entpackt …
 shell-public-cannot-open = „{ $name }“ kann nicht geöffnet werden: { $why }
 shell-public-gone = Dieses Dokument ist nicht mehr öffentlich
 shell-public-only-owner = Nur { $owner } kann dieses Dokument öffentlich machen

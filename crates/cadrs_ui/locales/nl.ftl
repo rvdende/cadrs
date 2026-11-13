@@ -1774,6 +1774,7 @@ model-gear-starts = Gangen
 model-gear-worm-starts = Gangen van de worm
 model-gear-worm-quotient = Diameterquotiënt
 model-gear-wheel-axis = As van het wiel
+model-gear-fast-preview = Snelle voorvertoning (alleen het ruwe stuk)
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Rechtsdraaiend
@@ -4388,6 +4389,9 @@ shell-public-view-banner = ‘{ $name }’ van { $owner }, revisie { $revision }
 shell-public-view-label = ‘{ $name }’ van { $owner } (openbaar)
 shell-public-opening = ‘{ $name }’ openen…
 shell-public-forking = ‘{ $name }’ forken…
+shell-public-downloading = “{ $name }” downloaden
+shell-public-download-amount = { $got } van { $size } ({ $percent }%)
+shell-public-unpacking-detail = Bestanden uitpakken…
 shell-public-cannot-open = Kan ‘{ $name }’ niet openen: { $why }
 shell-public-gone = Dat document is niet meer openbaar
 shell-public-only-owner = Alleen { $owner } kan dit document openbaar maken

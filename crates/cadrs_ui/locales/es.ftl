@@ -1774,6 +1774,7 @@ model-gear-starts = Entradas
 model-gear-worm-starts = Entradas del tornillo
 model-gear-worm-quotient = Cociente diametral
 model-gear-wheel-axis = Eje de la corona
+model-gear-fast-preview = Vista previa rápida (solo el bruto)
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = A derechas
@@ -4388,6 +4389,9 @@ shell-public-view-banner = «{ $name }» de { $owner }, revisión { $revision }:
 shell-public-view-label = «{ $name }» de { $owner } (público)
 shell-public-opening = Abriendo «{ $name }»…
 shell-public-forking = Bifurcando «{ $name }»…
+shell-public-downloading = Descargando «{ $name }»
+shell-public-download-amount = { $got } de { $size } ({ $percent } %)
+shell-public-unpacking-detail = Desempaquetando sus archivos…
 shell-public-cannot-open = No se puede abrir «{ $name }»: { $why }
 shell-public-gone = Ese documento ya no es público
 shell-public-only-owner = Solo { $owner } puede hacer público este documento

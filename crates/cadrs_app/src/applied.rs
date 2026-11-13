@@ -17,6 +17,7 @@
 //! - The fillet's radius (or width) has an arrow manipulator on the first edge: dragging it
 //!   changes the value live (PS14.5).
 
+use crate::GizmoGroups;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
@@ -34,12 +35,24 @@ use crate::{ActiveDocument, AppState};
 
 pub struct AppliedPlugin;
 
+/// The Rotate ring's gizmos: over the model, as the arrows are.
+fn configure_ring_gizmos(mut store: ResMut<GizmoConfigStore>) {
+    let (config, _) = store.config_mut::<crate::transform_ui::RotateRingGizmos>();
+    config.line.width = 2.4;
+    config.line.joints = GizmoLineJoint::Round(4);
+    config.render_layers =
+        bevy::camera::visibility::RenderLayers::layer(crate::viewport::OVERLAY_LAYER);
+}
+
 impl Plugin for AppliedPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<BeforeParts>()
             .init_resource::<RadiusArrow>()
             .init_resource::<crate::sheetmetal_ui::SmFlipArrow>()
             .init_resource::<crate::transform_ui::XyzArrows>()
+            .init_resource::<crate::transform_ui::RotateRing>()
+            .gizmo_group::<crate::transform_ui::RotateRingGizmos>()
+            .add_systems(Startup, configure_ring_gizmos)
             .add_systems(
                 Update,
                 (
@@ -48,6 +61,7 @@ impl Plugin for AppliedPlugin {
                     applied_keys,
                     radius_arrow_pointer,
                     crate::transform_ui::xyz_arrow_pointer,
+                    crate::transform_ui::rotate_ring_pointer,
                     crate::applied_dialog::sync_applied_dialog,
                     crate::draft_ui::sync_fillet_entries,
                     crate::sheetmetal_ui::sync_numbers,
@@ -67,6 +81,7 @@ impl Plugin for AppliedPlugin {
                     default_hole_scope,
                     show_references,
                     draw_references,
+                    crate::transform_ui::draw_rotate_ring,
                     draw_sketch_point_picks,
                 )
                     .chain()

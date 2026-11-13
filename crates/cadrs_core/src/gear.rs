@@ -43,6 +43,7 @@ use cadrs_sketch::Vec3;
 
 pub mod hypoid;
 mod litvin;
+pub mod preview;
 pub mod worm;
 
 /// What the teeth are on.
@@ -337,6 +338,10 @@ pub struct GearFeature {
     pub worm_quotient: f64,
     #[serde(default = "worm_quotient_expr")]
     pub worm_quotient_expr: String,
+    /// A generated gear (a hypoid pair's member, a worm wheel) shown as its blank alone, at
+    /// once: to move its shafts and see the pair's overall shape, its teeth cut once it's off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fast_preview: bool,
 }
 
 fn worm_quotient() -> f64 {
@@ -429,6 +434,7 @@ impl Default for GearFeature {
             mate_shaft: None,
             worm_quotient: 10.0,
             worm_quotient_expr: "10".into(),
+            fast_preview: false,
         }
     }
 }
@@ -1538,6 +1544,9 @@ pub struct Plan {
     pub generated: Option<Generated>,
     /// A gear made of solids instead (a worm): the union of the common part of each list's.
     pub made: Option<Vec<Vec<Piece>>>,
+    /// Its Fast preview's mesh (a generated gear's teeth straight from their equations), where
+    /// it has one.
+    pub preview: Option<preview::Mesh>,
     /// The module the gear came out with (mm).
     pub module: f64,
 }
@@ -1593,6 +1602,9 @@ pub struct Generated {
     pub turns: [(Vec3, Vec3, f64, f64); 2],
     pub copies: usize,
     pub starts: usize,
+    /// A simpler tool to cut by where this one's cut can't be made exactly (a hypoid crown's
+    /// sharp tips for its rounded ones).
+    pub fallback: Option<Vec<Piece>>,
 }
 
 /// The plan of `x`: on `target` (the face its teeth are cut into), or made whole.
@@ -1867,6 +1879,7 @@ fn spur(x: &GearFeature) -> Result<Plan, &'static str> {
         lofts: Vec::new(),
         generated: None,
         made: None,
+        preview: None,
         module: m,
     })
 }
@@ -1886,6 +1899,7 @@ fn ring(x: &GearFeature) -> Result<Plan, &'static str> {
         lofts: Vec::new(),
         generated: None,
         made: None,
+        preview: None,
         module: m,
     })
 }
@@ -1944,6 +1958,7 @@ fn on_cylinder(x: &GearFeature, t: &Target) -> Result<Plan, &'static str> {
         lofts: Vec::new(),
         generated: None,
         made: None,
+        preview: None,
         module: m,
     })
 }
@@ -2770,6 +2785,7 @@ fn worm_placed(
                 turns: [turn(g.turns[0]), turn(g.turns[1])],
                 copies: g.copies,
                 starts: g.starts,
+                fallback: None,
             }),
             None,
         )
@@ -2790,6 +2806,7 @@ fn worm_placed(
         lofts: Vec::new(),
         generated,
         made,
+        preview: None,
         module: x.module,
     })
 }
@@ -2805,6 +2822,11 @@ fn hypoid_placed(x: &GearFeature, on: Option<(Crossing, bool)>) -> Result<Plan, 
     let (d, gear) = x.hypoid_design();
     let l = hypoid::layout(&d)?;
     let g = hypoid::member(&d, &l, gear, x.backlash / 4.0, x.end_relief);
+    let preview_mesh = if x.fast_preview {
+        preview::hypoid_member(&d, &l, gear, x.backlash / 4.0)
+    } else {
+        None
+    };
     let own = own_frame(x);
     let mirror = match on {
         Some((_, other_side)) if d.offset > 1e-9 => other_side,
@@ -2895,8 +2917,21 @@ fn hypoid_placed(x: &GearFeature, on: Option<(Crossing, bool)>) -> Result<Plan, 
             turns: [turn(g.turns[0]), turn(g.turns[1])],
             copies: g.copies,
             starts: g.starts,
+            fallback: g.fallback.map(|t| {
+                t.into_iter()
+                    .map(|p| match p {
+                        Piece::Revolved(r) => Piece::Revolved(revolved(r)),
+                        t => t,
+                    })
+                    .collect()
+            }),
         }),
         made: None,
+        preview: preview_mesh.map(|m| preview::Mesh {
+            positions: m.positions.into_iter().map(pt).collect(),
+            normals: m.normals.into_iter().map(dir).collect(),
+            indices: m.indices,
+        }),
         module: x.module,
     })
 }
@@ -2966,6 +3001,7 @@ fn bevel(x: &GearFeature) -> Result<Plan, &'static str> {
         lofts,
         generated: None,
         made: None,
+        preview: None,
         module: m,
     })
 }
@@ -3004,6 +3040,7 @@ fn on_cone(x: &GearFeature, t: &Target) -> Result<Plan, &'static str> {
         lofts,
         generated: None,
         made: None,
+        preview: None,
         module: m,
     })
 }
@@ -3087,6 +3124,7 @@ fn rack(x: &GearFeature) -> Result<Plan, &'static str> {
         lofts: Vec::new(),
         generated: None,
         made: None,
+        preview: None,
         module: m,
     })
 }
@@ -3127,6 +3165,7 @@ fn on_plane(x: &GearFeature, t: &Target) -> Result<Plan, &'static str> {
         lofts: Vec::new(),
         generated: None,
         made: None,
+        preview: None,
         module: m,
     })
 }

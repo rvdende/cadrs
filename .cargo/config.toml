@@ -10,3 +10,6 @@ rustflags = ["-C", "link-arg=-fuse-ld=mold", "-Zshare-generics=y", "-Zthreads=8"
 # Builds in release and installs it for the current user, with a launcher entry (Linux; see
 # crates/cadrs/src/install.rs).
 install-local = "run -r -p cadrs -- --install"
+# The gears tester (crates/cadrs_core/tests/gears_tester.rs): every generated gear family over a
+# grid of inputs, as a table. GEARS=hypoid,worm,bevel picks families, JOBS=n the threads.
+gears-tester = "test -r -p cadrs_core --test gears_tester -- --ignored --nocapture"

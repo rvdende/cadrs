@@ -1774,6 +1774,7 @@ model-gear-starts = 줄 수
 model-gear-worm-starts = 웜의 줄 수
 model-gear-worm-quotient = 직경 계수
 model-gear-wheel-axis = 휠의 축
+model-gear-fast-preview = 빠른 미리보기 (소재만)
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = 오른나사
@@ -4388,6 +4389,9 @@ shell-public-view-banner = { $owner }의 “{ $name }”, 리비전 { $revision 
 shell-public-view-label = { $owner }의 “{ $name }” (공개)
 shell-public-opening = “{ $name }” 여는 중…
 shell-public-forking = “{ $name }” 포크하는 중…
+shell-public-downloading = “{ $name }” 다운로드 중
+shell-public-download-amount = { $got } / { $size } ({ $percent }%)
+shell-public-unpacking-detail = 파일 압축을 푸는 중…
 shell-public-cannot-open = “{ $name }”을(를) 열 수 없습니다: { $why }
 shell-public-gone = 그 문서는 더 이상 공개되어 있지 않습니다
 shell-public-only-owner = { $owner }만 이 문서를 공개할 수 있습니다

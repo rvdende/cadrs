@@ -1774,6 +1774,7 @@ model-gear-starts = Заходы
 model-gear-worm-starts = Заходы червяка
 model-gear-worm-quotient = Коэффициент диаметра
 model-gear-wheel-axis = Ось колеса
+model-gear-fast-preview = Быстрый просмотр (только заготовка)
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Правая
@@ -4388,6 +4389,9 @@ shell-public-view-banner = «{ $name }», владелец { $owner }, реви�
 shell-public-view-label = «{ $name }», владелец { $owner } (публичный)
 shell-public-opening = Открытие «{ $name }»…
 shell-public-forking = Форк «{ $name }»…
+shell-public-downloading = Загрузка «{ $name }»
+shell-public-download-amount = { $got } из { $size } ({ $percent } %)
+shell-public-unpacking-detail = Распаковка файлов…
 shell-public-cannot-open = Не удаётся открыть «{ $name }»: { $why }
 shell-public-gone = Этот документ больше не публичный
 shell-public-only-owner = Только { $owner } может сделать этот документ публичным

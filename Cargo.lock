@@ -2404,6 +2404,7 @@ dependencies = [
  "cadrs_sketch",
  "cadrs_vars",
  "directories",
+ "earcutr",
  "flate2",
  "gltf",
  "image",

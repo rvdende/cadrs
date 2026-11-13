@@ -5,11 +5,11 @@
 //!
 //! The layout is `hypoid.sv`'s:
 //!
-//! - **The gear's cone.** Its apex O on P, M on P's x axis; the right triangle O–M–F square to
-//!   P on O → M, F (the foot of M on the gear's axis) below P, its legs the two members' pitch
-//!   radii at M in proportion to their teeth (`z₁ m / 2`, `z₂ m / 2`), so the mean cone distance
-//!   is R = m √(z₁² + z₂²) / 2 and the gear's pitch angle `asin(z₂ / √(z₁² + z₂²))`. The crown's
-//!   axis stands up from O, square to P; it has √(z₁² + z₂²) teeth.
+//! - **The gear's cone.** Its apex O on P, M on P's x axis; its pitch angle a bevel pair's at the
+//!   shaft angle, tan δ₂ = sin Σ / (z₁/z₂ + cos Σ), its pitch radius at M `z₂ m / 2`, so its
+//!   mean cone distance R = z₂ m / (2 sin δ₂); the crown's axis stands up from O, square to P,
+//!   and it has 2R / m teeth. At 90° this is `hypoid.sv`'s right triangle O–M–F, its legs the
+//!   two members' pitch radii at M (R = m √(z₁² + z₂²) / 2).
 //! - **The tooth trace.** The circle about the cutter's centre C through M, its normal C → M at
 //!   90° less the spiral angle to O → M. The normal module is the module seen square to it,
 //!   `m cos β`.
@@ -18,7 +18,7 @@
 //!   across A → M, rising from A, at the shaft angle to the gear's and the offset from it. The
 //!   pinion's pitch radius at M is that of a virtual bevel pinion whose apex V is where A → M
 //!   crosses the line from O along the trace's normal, at the bevel pinion's pitch angle
-//!   (90° less the gear's): `|MA| sin γ = |MV| cos δ₂`. With the cutter's centre on the offset's
+//!   (the shaft angle less the gear's): `|MA| sin γ = |MV| sin(Σ − δ₂)`. With the cutter's centre on the offset's
 //!   side, `|MV| cos(β + ε) = R cos β` (ε the angle between O → M and A → M): the pinion's spiral
 //!   angle is the gear's and ε. No offset is a bevel pair (A and V are O).
 //! - **The face mill.** The crown's tooth is a quarter crown pitch either side of M on the mean
@@ -96,10 +96,17 @@ impl Layout {
 /// The layout, or why there is none.
 pub fn layout(d: &Design) -> Result<Layout, &'static str> {
     let (z1, z2, m) = (d.pinion_teeth, d.gear_teeth, d.module);
-    let crown = z1.hypot(z2);
-    let r = m * crown / 2.0;
-    let gear_pitch = (z2 / crown).asin();
-    let bevel_pinion = PI / 2.0 - gear_pitch;
+    // The gear's cone as a bevel pair's at the shaft angle (at 90°, `hypoid.sv`'s triangle:
+    // its legs the two pitch radii, √(z₁² + z₂²) crown teeth): tan δ₂ = sin Σ / (z₁/z₂ + cos Σ),
+    // its pitch radius at M z₂ m / 2; the virtual bevel pinion's pitch angle Σ − δ₂.
+    let sigma = d.shaft_angle;
+    let gear_pitch = sigma.sin().atan2(z1 / z2 + sigma.cos());
+    if !(gear_pitch > 0.0 && gear_pitch < PI / 2.0) {
+        return Err("The gear's pitch cone can't be laid out: change the shaft angle");
+    }
+    let r = m * z2 / (2.0 * gear_pitch.sin());
+    let crown = 2.0 * r / m;
+    let bevel_pinion = sigma - gear_pitch;
     let g = [gear_pitch.cos(), 0.0, -gear_pitch.sin()];
     let mp = [r, 0.0, 0.0];
     // The trace's normal C → M, the cutter's centre on the offset's side.
@@ -247,6 +254,21 @@ pub(super) fn member(
     grow: f64,
     relief: f64,
 ) -> super::Generated {
+    let mut g = member_with(d, l, gear, grow, relief, true);
+    // (Where the rounded crown's cut can't be made exactly, the sharp one's.)
+    g.fallback = Some(member_with(d, l, gear, grow, relief, false).tool);
+    g
+}
+
+/// [`member`] by a crown whose tips are rounded (`round`) or sharp.
+fn member_with(
+    d: &Design,
+    l: &Layout,
+    gear: bool,
+    grow: f64,
+    relief: f64,
+    round: bool,
+) -> super::Generated {
     use super::{Frame, Generated, Piece, Region2, Revolved, Seg};
     let r = l.mean_cone;
     let width = 0.2 * r;
@@ -330,7 +352,7 @@ pub(super) fn member(
     };
     // The crown's tool about the cutter's axis, in (radius, height over P): its tip's edges
     // rounded, 0.3 of the normal module (the members' root fillets).
-    let rounding = 0.3 * l.normal_module;
+    let rounding = if round { 0.3 * l.normal_module } else { 0.0 };
     let polygon = |pts: &[[f64; 2]], round: &[usize]| Region2 {
         outer: rounded(pts, round, rounding),
         holes: Vec::new(),
@@ -403,6 +425,7 @@ pub(super) fn member(
         ],
         copies: teeth.round() as usize,
         starts: 1,
+        fallback: None,
     }
 }
 
@@ -419,7 +442,7 @@ fn rounded(pts: &[[f64; 2]], round: &[usize], r: f64) -> Vec<super::Seg> {
     let corners: Vec<([f64; 2], [f64; 2], Option<Seg>)> = (0..n)
         .map(|i| {
             let p = pts[i];
-            if !round.contains(&i) {
+            if !(r > 0.0 && round.contains(&i)) {
                 return (p, p, None);
             }
             let to = |q: [f64; 2]| unit2([q[0] - p[0], q[1] - p[1]]);

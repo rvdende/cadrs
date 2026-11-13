@@ -1774,6 +1774,7 @@ model-gear-starts = 条数
 model-gear-worm-starts = ウォームの条数
 model-gear-worm-quotient = 直径係数
 model-gear-wheel-axis = ホイールの軸
+model-gear-fast-preview = 高速プレビュー（素材のみ）
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = 右ねじ
@@ -4388,6 +4389,9 @@ shell-public-view-banner = 「{ $name }」({ $owner })、リビジョン { $revi
 shell-public-view-label = 「{ $name }」({ $owner }、公開)
 shell-public-opening = 「{ $name }」を開いています…
 shell-public-forking = 「{ $name }」をフォークしています…
+shell-public-downloading = 「{ $name }」をダウンロード中
+shell-public-download-amount = { $got } / { $size }（{ $percent }%）
+shell-public-unpacking-detail = ファイルを展開しています…
 shell-public-cannot-open = 「{ $name }」を開けません: { $why }
 shell-public-gone = そのドキュメントはもう公開されていません
 shell-public-only-owner = このドキュメントを公開できるのは { $owner } だけです

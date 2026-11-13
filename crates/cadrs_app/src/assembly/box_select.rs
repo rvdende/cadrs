@@ -120,9 +120,11 @@ pub(super) fn box_select(
         Option<Res<crate::applied::AppliedSession>>,
         Commands,
     ),
-    (mode, q_dialogs): (
+    (mode, q_dialogs, xyz, ring): (
         Option<Res<State<crate::sketch::PartStudioMode>>>,
         Query<(), With<cadrs_ui::FeatureDialogState>>,
+        Res<crate::transform_ui::XyzArrows>,
+        Res<crate::transform_ui::RotateRing>,
     ),
 ) {
     let in_assembly = doc
@@ -164,6 +166,11 @@ pub(super) fn box_select(
             PointerAction::Press(PointerButton::Primary) => {
                 *state = AssemblyBox::default();
                 if !over || blocked || triad.dragging() || triad.hover.is_some() {
+                    continue;
+                }
+                // A press on a Transform's manipulator (its arrows, its ring) is theirs: not
+                // the start of a box that would add the parts it sweeps.
+                if xyz.hovered.is_some() || xyz.drag.is_some() || ring.active() {
                     continue;
                 }
                 // Only a press on empty space starts a box (a press on an instance drags it).

@@ -612,6 +612,12 @@ shell-public-view-banner = “{ $name }” by { $owner }, revision { $revision }
 shell-public-view-label = “{ $name }” by { $owner } (public)
 shell-public-opening = Opening “{ $name }”…
 shell-public-forking = Forking “{ $name }”…
+# The card at the top of the window while a public document downloads; { $name } is its name.
+shell-public-downloading = Downloading “{ $name }”
+# How much of it has come: { $got } and { $size } like “1.2 MB”, { $percent } a whole number.
+shell-public-download-amount = { $got } of { $size } ({ $percent }%)
+# Under the card's title once it has come, while its files are unpacked.
+shell-public-unpacking-detail = Unpacking its files…
 # { $why } is the reason, as cadrs gives it.
 shell-public-cannot-open = Cannot open “{ $name }”: { $why }
 shell-public-gone = That document is not public any more
@@ -2489,6 +2495,8 @@ model-gear-worm-starts = Worm's starts
 model-gear-worm-quotient = Diameter quotient
 # The axis a worm wheel turns about (X, Y or Z); the worm's runs along the frame's x.
 model-gear-wheel-axis = Wheel's axis
+# A checkbox: a generated gear (hypoid, worm wheel) shown as its blank alone, at once, while its shafts are moved; its teeth are cut once it's off.
+model-gear-fast-preview = Fast preview (blank only)
 
 ## crates/cadrs_app/src/thread_ui.rs
 # A thread's handedness.

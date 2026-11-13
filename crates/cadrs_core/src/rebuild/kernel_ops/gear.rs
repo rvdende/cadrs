@@ -156,6 +156,66 @@ fn sweep_parts(s: &Sweep, next: &mut u64) -> (Profile, SweepSpec, SweepLaw, Opti
     (profile, spec, law, extrude)
 }
 
+/// A Fast preview's mesh as a new part with no kernel body.
+fn preview_part(id: FeatureId, m: &gear::preview::Mesh, state: &Arc<State>) -> Output {
+    use crate::solid::{FaceName, FaceOrigin, Solid, SolidFace};
+    let mut solid = Solid {
+        positions: m.positions.clone(),
+        normals: m.normals.clone(),
+        indices: m.indices.clone(),
+        ..Default::default()
+    };
+    solid.faces.push(SolidFace {
+        name: FaceName::new(
+            id.0,
+            FaceOrigin::Side {
+                region: 0,
+                curve: 0,
+            },
+        ),
+        plane: None,
+        first_triangle: 0,
+        triangle_count: m.indices.len() / 3,
+        loops: Vec::new(),
+        center: None,
+        axis: None,
+        area: None,
+        kind: None,
+        radius: None,
+        fillet_radius: None,
+    });
+    let mut next = (**state).clone();
+    next.next_part += 1;
+    next.parts.push(PartState {
+        part: Arc::new(Part {
+            id: PartId::new(id, 0),
+            feature: id,
+            name: format!("Part {}", next.next_part),
+            kind: PartKind::Solid,
+            palette: next.next_part + next.next_surface - 1,
+            solid: Arc::new(solid),
+            mass: None,
+            features: vec![id],
+            source: None,
+            derived: None,
+        }),
+        body: None,
+        names: Arc::default(),
+    });
+    Output {
+        state: Arc::new(next),
+        error: None,
+        warning: None,
+        contacts: None,
+        owned: Vec::new(),
+        stage: None,
+        axis: None,
+        arrows: Vec::new(),
+        dots: None,
+        uses: Vec::new(),
+    }
+}
+
 impl Rebuilder {
     /// One sweep of a gear's plan.
     fn gear_sweep(&mut self, s: &Sweep, next: &mut u64) -> cadrs_kernel::Result<OpResult> {
@@ -362,15 +422,56 @@ impl Rebuilder {
 
     /// A generated gear (a hypoid pair's member): its blank less its tool rolled through it at
     /// every tooth.
+    /// A generated gear, as well as it can be made: its blank less its tool rolled through it
+    /// at every tooth, else (where that cut can't be made exactly) its fallback tool's, else
+    /// its blank alone; with why where it isn't the first (a warning, not a failure). With
+    /// `preview` its blank alone, at once.
     fn gear_generated(
         &mut self,
         g: &Generated,
         state: &State,
         op: cadrs_kernel::OpId,
         next: &mut u64,
+        preview: bool,
+    ) -> cadrs_kernel::Result<((BodyId, BodyNames), Option<String>)> {
+        if preview {
+            return Ok((self.gear_revolved(&g.blank, state, op, next)?, None));
+        }
+        let first = self.gear_cut(g, &g.tool, state, op, next);
+        let first_err = match first {
+            Ok(b) => return Ok((b, None)),
+            Err(e) => e,
+        };
+        if let Some(tool) = &g.fallback
+            && let Ok(b) = self.gear_cut(g, tool, state, op, next)
+        {
+            return Ok((
+                b,
+                Some(
+                    "The teeth's root fillets are left sharp here: the rounded cutter's cut couldn't be made exactly"
+                        .into(),
+                ),
+            ));
+        }
+        Ok((
+            self.gear_revolved(&g.blank, state, op, next)?,
+            Some(format!(
+                "Only the blank is shown: the teeth couldn't be cut exactly here ({first_err})"
+            )),
+        ))
+    }
+
+    /// A generated gear's blank less `tool` rolled through it at every tooth.
+    fn gear_cut(
+        &mut self,
+        g: &Generated,
+        tool_pieces: &[Piece],
+        state: &State,
+        op: cadrs_kernel::OpId,
+        next: &mut u64,
     ) -> cadrs_kernel::Result<(BodyId, BodyNames)> {
         let mut at = self.gear_revolved(&g.blank, state, op, next)?;
-        let tool = match self.gear_common(&g.tool, state, op, next) {
+        let tool = match self.gear_common(tool_pieces, state, op, next) {
             Ok(t) => t,
             Err(e) => {
                 self.kernel.release(at.0);
@@ -474,13 +575,23 @@ impl Rebuilder {
             _ => gear::plan(x, target.as_ref().map(|t| &t.1))?,
         };
         let mut next = 0u64;
+        // Fast preview: the gear's teeth straight from their equations, a part of mesh alone
+        // (no kernel body), at once.
+        if x.fast_preview
+            && let Some(m) = &plan.preview
+        {
+            return Ok(preview_part(id, m, state));
+        }
         let made = match (&plan.generated, &plan.made) {
-            (Some(g), _) => Some(self.gear_generated(g, state, op, &mut next)),
-            (None, Some(lists)) => Some(self.gear_made(lists, state, op, &mut next)),
+            (Some(g), _) => Some(self.gear_generated(g, state, op, &mut next, x.fast_preview)),
+            (None, Some(lists)) => Some(
+                self.gear_made(lists, state, op, &mut next)
+                    .map(|b| (b, None)),
+            ),
             _ => None,
         };
         if let Some(body) = made {
-            let body = body.map_err(|err| format!("Gear failed: {err}"))?;
+            let (body, warning) = body.map_err(|err| format!("Gear failed: {err}"))?;
             let merge = Merge {
                 op: BooleanOp::New,
                 merge_all: false,
@@ -489,7 +600,12 @@ impl Rebuilder {
                 surface: false,
             };
             let geoms = state.geoms.clone();
-            return self.apply_extrude_op(id, &merge, body, state, &Contacts::default(), geoms);
+            return self
+                .apply_extrude_op(id, &merge, body, state, &Contacts::default(), geoms)
+                .map(|mut o| {
+                    o.warning = o.warning.or(warning);
+                    o
+                });
         }
         let mut made: Vec<(BodyId, BodyNames)> = Vec::new();
         // A gear's halves that twist (herringbone teeth): each starts on the section the one

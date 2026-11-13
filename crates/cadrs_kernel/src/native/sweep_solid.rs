@@ -1956,8 +1956,8 @@ fn cut_by_pieces(
 /// [`crate::Kernel::cut_swept`].
 /// [`cut_swept`] at each of `copies` places of the tool a whole turn apart about the target's
 /// axis (the second turn's): a gear's every tooth space, cut by a motion that doesn't repeat
-/// (a face mill's roll). Generated, one plug is made and its copies subtracted together; else
-/// one cut after another.
+/// (a face mill's roll). Generated exactly, one plug made and its copies subtracted together,
+/// or an error at once where its contacts can't be followed.
 pub fn cut_swept_indexed(
     k: &mut NativeKernel,
     target: BodyId,
@@ -1979,30 +1979,15 @@ pub fn cut_swept_indexed(
         ));
     };
     let b = (**k.get(tool)?).clone();
-    if let Some(Ok(r)) = super::sweep_generate::cut(k, target, &b, steps, Some(copies)) {
-        return Ok(r);
+    let _ = axis;
+    match super::sweep_generate::cut(k, target, &b, steps, Some(copies)) {
+        Some(r) => r,
+        // (Not cut a tooth at a time by the meshed sweep: seconds a tooth, its faces a mesh's,
+        // and it may not close. The caller is told at once.)
+        None => Err(KernelError::Unsupported(
+            "a generated cut the tool's contacts can't be followed for exactly",
+        )),
     }
-    let mut at = target;
-    let mut last = Err(KernelError::Unsupported("a cut with nothing to cut"));
-    for i in 0..copies {
-        let turned = if i == 0 {
-            tool
-        } else {
-            let angle = std::f64::consts::TAU * i as f64 / copies as f64;
-            k.transform_motion(tool, &crate::Motion::rotation(&axis, angle))?
-                .first()?
-        };
-        let r = cut_swept(k, at, turned, motion)?;
-        if turned != tool {
-            k.release(turned);
-        }
-        let [next] = r.bodies.as_slice() else {
-            return Ok(r);
-        };
-        at = *next;
-        last = Ok(r);
-    }
-    last
 }
 
 pub fn cut_swept(

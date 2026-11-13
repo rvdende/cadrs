@@ -169,7 +169,7 @@ pub(crate) fn name(kind: &FeatureKind) -> Option<&'static str> {
 pub(crate) fn layout(kind: &FeatureKind) -> Option<String> {
     match kind {
         FeatureKind::Gear(x) => Some(format!(
-            "gear {:?} {:?} {} {} {} {:?} {:?} {}",
+            "gear {:?} {:?} {} {} {} {:?} {:?} {} {}",
             x.gear_type,
             x.style,
             x.face.is_some(),
@@ -177,7 +177,8 @@ pub(crate) fn layout(kind: &FeatureKind) -> Option<String> {
             x.flip,
             x.spiral,
             x.member,
-            x.shaft.is_some() && x.mate_shaft.is_some()
+            x.shaft.is_some() && x.mate_shaft.is_some(),
+            x.fast_preview
         )),
         k => crate::surfacing_ui::layout(k),
     }
@@ -588,6 +589,7 @@ fn hypoid_body(
         field == AppliedField::GearMateShaft,
     );
     let on_shafts = x.shaft.is_some() && x.mate_shaft.is_some();
+    fast_preview_row(b, t, x);
     num(
         b,
         "gear-teeth",
@@ -756,6 +758,9 @@ fn worm_body(b: &mut ChildSpawner, t: &Theme, x: &cadrs_core::gear::GearFeature)
         None,
     );
     let worm = x.member != BevelMember::Gear;
+    if !worm {
+        fast_preview_row(b, t, x);
+    }
     let (own, mate) = if worm {
         ("model-gear-starts", "model-gear-mate-teeth")
     } else {
@@ -852,6 +857,16 @@ fn worm_body(b: &mut ChildSpawner, t: &Theme, x: &cadrs_core::gear::GearFeature)
         &axes,
         index_of(&GearAxis::ALL, &x.axis),
         None,
+    );
+}
+
+/// **Fast preview**: a generated gear shown as its blank alone, at once (to move its shafts
+/// and see the pair), its teeth cut once it's off.
+fn fast_preview_row(b: &mut ChildSpawner, t: &Theme, x: &cadrs_core::gear::GearFeature) {
+    b.spawn(
+        OptionRow::new("gear-fast-preview", tr("model-gear-fast-preview"))
+            .checked(x.fast_preview)
+            .build(t),
     );
 }
 
@@ -973,6 +988,7 @@ pub(crate) fn tab(k: &mut FeatureKind, role: Role, i: usize) {
 pub(crate) fn is_checkbox(name: &str) -> bool {
     name == "gear-across-checkbox"
         || name == "gear-at-apex-checkbox"
+        || name == "gear-fast-preview-checkbox"
         || crate::surfacing_ui::is_checkbox(name)
 }
 
@@ -981,6 +997,10 @@ pub(crate) fn checkbox(k: &mut FeatureKind, name: &str, on: bool) -> Option<&'st
         (FeatureKind::Gear(x), "gear-across-checkbox") => {
             x.flip = on;
             Some("Teeth across the face")
+        }
+        (FeatureKind::Gear(x), "gear-fast-preview-checkbox") => {
+            x.fast_preview = on;
+            Some("Fast preview")
         }
         (FeatureKind::Gear(x), "gear-at-apex-checkbox") => {
             x.at_apex = on;

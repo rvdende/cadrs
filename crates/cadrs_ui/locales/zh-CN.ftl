@@ -1774,6 +1774,7 @@ model-gear-starts = 头数
 model-gear-worm-starts = 蜗杆头数
 model-gear-worm-quotient = 直径系数
 model-gear-wheel-axis = 蜗轮轴线
+model-gear-fast-preview = 快速预览（仅毛坯）
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = 右旋
@@ -4388,6 +4389,9 @@ shell-public-view-banner = { $owner } 的“{ $name }”,修订 { $revision }:�
 shell-public-view-label = { $owner } 的“{ $name }”(公开)
 shell-public-opening = 正在打开“{ $name }”…
 shell-public-forking = 正在派生“{ $name }”…
+shell-public-downloading = 正在下载“{ $name }”
+shell-public-download-amount = { $got } / { $size }（{ $percent }%）
+shell-public-unpacking-detail = 正在解压文件…
 shell-public-cannot-open = 无法打开“{ $name }”:{ $why }
 shell-public-gone = 该文档已不再公开
 shell-public-only-owner = 只有 { $owner } 可以公开此文档
