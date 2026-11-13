@@ -1382,6 +1382,328 @@
                 kind: PartStudio(
                     features: [
                         (
+                            id: ("6ea50179-0000-0000-0000-000000000072"),
+                            name: "Sketch 1",
+                            kind: Sketch((
+                                plane: Some(Top),
+                                disable_imprinting: false,
+                                geometry: (
+                                    points: [
+                                        (
+                                            value: None,
+                                            version: 0,
+                                        ),
+                                        (
+                                            value: Some((
+                                                pos: (
+                                                    x: 0.0,
+                                                    y: 0.0,
+                                                ),
+                                            )),
+                                            version: 1,
+                                        ),
+                                    ],
+                                    curves: [
+                                        (
+                                            value: None,
+                                            version: 0,
+                                        ),
+                                        (
+                                            value: Some((
+                                                kind: Circle(
+                                                    center: (
+                                                        idx: 1,
+                                                        version: 1,
+                                                    ),
+                                                    radius: 6.0,
+                                                ),
+                                                construction: false,
+                                            )),
+                                            version: 1,
+                                        ),
+                                    ],
+                                    dimensions: [
+                                        (
+                                            value: None,
+                                            version: 0,
+                                        ),
+                                    ],
+                                    constraints: [
+                                        (
+                                            value: None,
+                                            version: 0,
+                                        ),
+                                    ],
+                                ),
+                            )),
+                        ),
+                        (
+                            id: ("6ea50179-0000-0000-0000-000000000073"),
+                            name: "Gear shaft",
+                            kind: Extrude((
+                                regions: [],
+                                sketches: [
+                                    ("6ea50179-0000-0000-0000-000000000072"),
+                                ],
+                                faces: [],
+                                body: Solid,
+                                thin: (
+                                    thickness1: 5.0,
+                                    thickness1_expr: "5 mm",
+                                    thickness2: 0.0,
+                                    thickness2_expr: "0 mm",
+                                    flip_wall: false,
+                                    mid_plane: false,
+                                ),
+                                op: New,
+                                merge_all: false,
+                                merge_scope: [],
+                                end: Blind,
+                                depth: 60.0,
+                                depth_expr: "60 mm",
+                                up_to: None,
+                                offset: None,
+                                flip: true,
+                                symmetric: false,
+                                start_offset: None,
+                                direction: None,
+                                second: None,
+                            )),
+                        ),
+                        (
+                            id: ("6ea50179-0000-0000-0000-000000000074"),
+                            name: "Sketch 2",
+                            kind: Sketch((
+                                plane: Some(Right),
+                                disable_imprinting: false,
+                                geometry: (
+                                    points: [
+                                        (
+                                            value: None,
+                                            version: 0,
+                                        ),
+                                        (
+                                            value: Some((
+                                                pos: (
+                                                    x: 25.0,
+                                                    y: 0.0,
+                                                ),
+                                            )),
+                                            version: 1,
+                                        ),
+                                    ],
+                                    curves: [
+                                        (
+                                            value: None,
+                                            version: 0,
+                                        ),
+                                        (
+                                            value: Some((
+                                                kind: Circle(
+                                                    center: (
+                                                        idx: 1,
+                                                        version: 1,
+                                                    ),
+                                                    radius: 5.0,
+                                                ),
+                                                construction: false,
+                                            )),
+                                            version: 1,
+                                        ),
+                                    ],
+                                    dimensions: [
+                                        (
+                                            value: None,
+                                            version: 0,
+                                        ),
+                                    ],
+                                    constraints: [
+                                        (
+                                            value: None,
+                                            version: 0,
+                                        ),
+                                    ],
+                                ),
+                            )),
+                        ),
+                        (
+                            id: ("6ea50179-0000-0000-0000-000000000075"),
+                            name: "Pinion shaft",
+                            kind: Extrude((
+                                regions: [],
+                                sketches: [
+                                    ("6ea50179-0000-0000-0000-000000000074"),
+                                ],
+                                faces: [],
+                                body: Solid,
+                                thin: (
+                                    thickness1: 5.0,
+                                    thickness1_expr: "5 mm",
+                                    thickness2: 0.0,
+                                    thickness2_expr: "0 mm",
+                                    flip_wall: false,
+                                    mid_plane: false,
+                                ),
+                                op: New,
+                                merge_all: false,
+                                merge_scope: [],
+                                end: Blind,
+                                depth: 120.0,
+                                depth_expr: "120 mm",
+                                up_to: None,
+                                offset: None,
+                                flip: true,
+                                symmetric: false,
+                                start_offset: None,
+                                direction: None,
+                                second: None,
+                            )),
+                        ),
+                        (
+                            id: ("6ea50179-0000-0000-0000-000000000076"),
+                            name: "Pivot",
+                            kind: Sketch((
+                                plane: Some(Top),
+                                disable_imprinting: false,
+                                geometry: (
+                                    points: [
+                                        (
+                                            value: None,
+                                            version: 0,
+                                        ),
+                                        (
+                                            value: Some((
+                                                pos: (
+                                                    x: 0.0,
+                                                    y: 0.0,
+                                                ),
+                                            )),
+                                            version: 1,
+                                        ),
+                                        (
+                                            value: Some((
+                                                pos: (
+                                                    x: 0.0,
+                                                    y: 40.0,
+                                                ),
+                                            )),
+                                            version: 1,
+                                        ),
+                                    ],
+                                    curves: [
+                                        (
+                                            value: None,
+                                            version: 0,
+                                        ),
+                                        (
+                                            value: Some((
+                                                kind: Line(
+                                                    a: (
+                                                        idx: 1,
+                                                        version: 1,
+                                                    ),
+                                                    b: (
+                                                        idx: 2,
+                                                        version: 1,
+                                                    ),
+                                                ),
+                                                construction: false,
+                                            )),
+                                            version: 1,
+                                        ),
+                                    ],
+                                    dimensions: [
+                                        (
+                                            value: None,
+                                            version: 0,
+                                        ),
+                                    ],
+                                    constraints: [
+                                        (
+                                            value: None,
+                                            version: 0,
+                                        ),
+                                    ],
+                                ),
+                            )),
+                        ),
+                        (
+                            id: ("6ea50179-0000-0000-0000-000000000077"),
+                            name: "Shaft angle (from 90°)",
+                            kind: Transform((
+                                transform_type: Rotate,
+                                parts: [
+                                    (
+                                        feature: ("6ea50179-0000-0000-0000-000000000075"),
+                                        index: 0,
+                                    ),
+                                ],
+                                copy: false,
+                                line: None,
+                                direction: None,
+                                distance: 25.0,
+                                distance_expr: "25 mm",
+                                flip: false,
+                                dx: 0.0,
+                                dx_expr: "0 mm",
+                                dy: 0.0,
+                                dy_expr: "0 mm",
+                                dz: 0.0,
+                                dz_expr: "0 mm",
+                                from: None,
+                                to: None,
+                                flip_primary: false,
+                                secondary: PlusX,
+                                axis: Some(SketchCurve(
+                                    sketch: ("6ea50179-0000-0000-0000-000000000076"),
+                                    curve: (
+                                        idx: 1,
+                                        version: 1,
+                                    ),
+                                )),
+                                angle: 0.0,
+                                angle_expr: "0 deg",
+                                scale_point: None,
+                                scale: 1.0,
+                                scale_expr: "1",
+                            )),
+                        ),
+                        (
+                            id: ("6ea50179-0000-0000-0000-000000000078"),
+                            name: "Offset (along y)",
+                            kind: Transform((
+                                transform_type: TranslateXyz,
+                                parts: [
+                                    (
+                                        feature: ("6ea50179-0000-0000-0000-000000000075"),
+                                        index: 0,
+                                    ),
+                                ],
+                                copy: false,
+                                line: None,
+                                direction: None,
+                                distance: 25.0,
+                                distance_expr: "25 mm",
+                                flip: false,
+                                dx: 0.0,
+                                dx_expr: "0 mm",
+                                dy: 0.0,
+                                dy_expr: "0 mm",
+                                dz: 0.0,
+                                dz_expr: "0 mm",
+                                from: None,
+                                to: None,
+                                flip_primary: false,
+                                secondary: PlusX,
+                                axis: None,
+                                angle: 0.0,
+                                angle_expr: "0 deg",
+                                scale_point: None,
+                                scale: 1.0,
+                                scale_expr: "1",
+                            )),
+                        ),
+                        (
                             id: ("6ea50179-0000-0000-0000-000000000070"),
                             name: "Gear 1",
                             kind: Gear((
@@ -1434,6 +1756,36 @@
                                 pressure_shift_expr: "8.8549 deg",
                                 end_relief: 0.2,
                                 end_relief_expr: "0.2 mm",
+                                shaft: Some(Face((
+                                    part: (
+                                        feature: ("6ea50179-0000-0000-0000-000000000073"),
+                                        index: 0,
+                                    ),
+                                    face: (
+                                        op: "6ea50179-0000-0000-0000-000000000073",
+                                        origin: Side(
+                                            region: 5682301931417208436,
+                                            curve: 4294967297,
+                                        ),
+                                        split: 0,
+                                    ),
+                                    seed: (-0.0000000000000004020849375084741, 0.0000000000000001546699041043467, -30.000000000000004),
+                                ))),
+                                mate_shaft: Some(Face((
+                                    part: (
+                                        feature: ("6ea50179-0000-0000-0000-000000000075"),
+                                        index: 0,
+                                    ),
+                                    face: (
+                                        op: "6ea50179-0000-0000-0000-000000000075",
+                                        origin: Side(
+                                            region: 2884252942086281806,
+                                            curve: 4294967297,
+                                        ),
+                                        split: 0,
+                                    ),
+                                    seed: (-60.0, 25.0, -0.00000000000000034543971578780704),
+                                ))),
                                 worm_quotient: 10.0,
                                 worm_quotient_expr: "10",
                             )),
@@ -1491,6 +1843,36 @@
                                 pressure_shift_expr: "8.8549 deg",
                                 end_relief: 0.2,
                                 end_relief_expr: "0.2 mm",
+                                shaft: Some(Face((
+                                    part: (
+                                        feature: ("6ea50179-0000-0000-0000-000000000075"),
+                                        index: 0,
+                                    ),
+                                    face: (
+                                        op: "6ea50179-0000-0000-0000-000000000075",
+                                        origin: Side(
+                                            region: 2884252942086281806,
+                                            curve: 4294967297,
+                                        ),
+                                        split: 0,
+                                    ),
+                                    seed: (-60.0, 25.0, -0.00000000000000034543971578780704),
+                                ))),
+                                mate_shaft: Some(Face((
+                                    part: (
+                                        feature: ("6ea50179-0000-0000-0000-000000000073"),
+                                        index: 0,
+                                    ),
+                                    face: (
+                                        op: "6ea50179-0000-0000-0000-000000000073",
+                                        origin: Side(
+                                            region: 5682301931417208436,
+                                            curve: 4294967297,
+                                        ),
+                                        split: 0,
+                                    ),
+                                    seed: (-0.0000000000000004020849375084741, 0.0000000000000001546699041043467, -30.000000000000004),
+                                ))),
                                 worm_quotient: 10.0,
                                 worm_quotient_expr: "10",
                             )),

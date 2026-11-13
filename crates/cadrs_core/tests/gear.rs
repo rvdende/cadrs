@@ -916,7 +916,7 @@ fn a_hypoid_pairs_members_are_generated_by_their_crown() {
     for ((g, teeth), want) in hypoid_pair()
         .into_iter()
         .zip([48usize, 24])
-        .zip([22223.4994, 14634.0136])
+        .zip([22270.4550, 14669.5768])
     {
         let mut st = Studio::new();
         let t = std::time::Instant::now();
@@ -926,9 +926,10 @@ fn a_hypoid_pairs_members_are_generated_by_their_crown() {
         let p = &b.parts[0];
         let faces = p.solid.faces.len();
         eprintln!("volume {}, {faces} faces", volume(p));
-        // A few faces a space (its two flanks, the paths of the crown's tip edges, its root, the
-        // end reliefs between): exact, not the meshed cut's thousands.
-        assert!(faces <= 10 * teeth, "{:?}: {faces} faces", g.member);
+        // A dozen or so faces a space (its two flanks, its root fillets, its root, the end
+        // reliefs between; the gear's in two stretches, its fillets meeting toward its toe):
+        // exact, not the meshed cut's thousands.
+        assert!(faces <= 16 * teeth, "{:?}: {faces} faces", g.member);
         assert!(
             (volume(p) - want).abs() < 1e-2,
             "{:?}: {}",
@@ -1022,8 +1023,8 @@ fn a_hypoid_pair_is_placed_by_its_shafts() {
             // (To the fit of the generated spaces' sheets, which depends a little on where they
             // stand.)
             if side == 25.0 && backlash > 0.0 {
-                assert!((volumes[0] - 22223.4994).abs() < 5e-2, "{volumes:?}");
-                assert!((volumes[1] - 14634.0136).abs() < 5e-2, "{volumes:?}");
+                assert!((volumes[0] - 22270.4550).abs() < 5e-2, "{volumes:?}");
+                assert!((volumes[1] - 14669.5768).abs() < 5e-2, "{volumes:?}");
             }
             assert!(deep < 0.02, "{deep} mm into the other member");
             if backlash == 0.0 {
@@ -1072,4 +1073,65 @@ fn a_worm_drive_meshes_where_it_stands() {
             }
         }
     }
+}
+
+/// The gears fixture's Hypoid tab: two shafts, the pinion's moved by two Transforms, and the
+/// pair picking the shafts' cylinders. As it stands the two gears mesh; rotating the pinion's
+/// shaft 10° about the pivot and moving it 5 mm (a shaft angle of 100°, an offset of 20 mm)
+/// regenerates both, still in mesh.
+#[test]
+#[ignore = "slow (over 5 s): run with cargo test -r -- --ignored"]
+fn the_hypoid_tab_follows_its_shafts_transforms() {
+    use cadrs_core::samples::gears::{HYPOID_MOVES, HYPOID_PAIR, document};
+    let doc = document().unwrap();
+    let el = doc.elements.iter().find(|e| e.name == "Hypoid").unwrap().id;
+    let mut st = Studio {
+        d: doc,
+        h: History::default(),
+        el,
+    };
+    let gears = |st: &Studio| -> Vec<Part> {
+        let b = st.build();
+        assert!(b.warnings.is_empty(), "{:?}", b.warnings);
+        assert_eq!(b.parts.len(), 4, "two shafts and two gears");
+        HYPOID_PAIR
+            .iter()
+            .map(|f| b.parts.iter().find(|p| p.id.feature == *f).unwrap().clone())
+            .collect()
+    };
+    let (deep, count) = reach_of(&gears(&st));
+    eprintln!("as it stands: {count} vertices inside the other gear, the deepest {deep} mm");
+    assert!(deep < 0.02);
+    let kind = |st: &Studio, f| st.features().into_iter().find(|x| x.id == f).unwrap().kind;
+    let set = |st: &mut Studio, f, k| {
+        st.h.execute(
+            &mut st.d,
+            &cadrs_core::commands::SetFeature {
+                element: st.el,
+                feature: f,
+                kind: k,
+                label: "Transform".into(),
+            },
+        )
+        .unwrap();
+    };
+    let FeatureKind::Transform(mut rotate) = kind(&st, HYPOID_MOVES[0]) else {
+        panic!("a transform");
+    };
+    rotate.angle = 10.0;
+    rotate.angle_expr = "10 deg".into();
+    set(&mut st, HYPOID_MOVES[0], FeatureKind::Transform(rotate));
+    let FeatureKind::Transform(mut slide) = kind(&st, HYPOID_MOVES[1]) else {
+        panic!("a transform");
+    };
+    slide.dy = -5.0;
+    slide.dy_expr = "-5 mm".into();
+    set(&mut st, HYPOID_MOVES[1], FeatureKind::Transform(slide));
+    let moved = gears(&st);
+    let (deep, count) = reach_of(&moved);
+    eprintln!(
+        "moved: volumes {:?}; {count} vertices inside the other gear, the deepest {deep} mm",
+        moved.iter().map(volume).collect::<Vec<_>>()
+    );
+    assert!(deep < 0.02);
 }

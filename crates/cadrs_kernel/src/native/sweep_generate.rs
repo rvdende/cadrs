@@ -348,6 +348,21 @@ impl<'a> Tool<'a> {
             });
             sides.push(two);
         }
+        // A smooth edge between surfaces of different kinds (a flank's cone and the torus that
+        // rounds it into a tip's plane): a run of its own, the contact passing over it from
+        // one face's to the other's at a node, so each face's envelope is a sheet of its own
+        // and a tooth space whose tool is smooth across its tip still has joints in the
+        // target. Pieces of one surface's kind joined smoothly (a thread's flank, made in
+        // pieces along its helix) stay one group.
+        let split: Vec<bool> = (0..ne)
+            .map(|e| {
+                kind[e] == EdgeKind::Smooth
+                    && sides[e].is_some_and(|[fa, fb]| {
+                        std::mem::discriminant(&b.faces[fa].surf)
+                            != std::mem::discriminant(&b.faces[fb].surf)
+                    })
+            })
+            .collect();
         // The faces' groups: joined over smooth edges.
         let nf = b.faces.len();
         let mut group: Vec<usize> = (0..nf).collect();
@@ -361,6 +376,7 @@ impl<'a> Tool<'a> {
         let mut smooth: Vec<Vec<usize>> = vec![Vec::new(); nf];
         for e in 0..ne {
             if kind[e] == EdgeKind::Smooth
+                && !split[e]
                 && let Some([fa, fb]) = sides[e]
             {
                 let (ra, rb) = (root(&mut group, fa), root(&mut group, fb));
@@ -376,7 +392,7 @@ impl<'a> Tool<'a> {
         }
         // The sharp edges' runs: two of them go on from one another at a vertex where they are
         // the only two between their groups and their directions agree.
-        let sharp = |e: usize| matches!(kind[e], EdgeKind::Convex | EdgeKind::Concave);
+        let sharp = |e: usize| matches!(kind[e], EdgeKind::Convex | EdgeKind::Concave) || split[e];
         let pair = |e: usize| -> Option<[usize; 2]> {
             let [fa, fb] = sides[e]?;
             let (ga, gb) = (group[fa], group[fb]);
@@ -1158,9 +1174,9 @@ impl Gen<'_> {
     fn place_at(&self, node: &Node, link: Link) -> Option<Place> {
         match link {
             Link::Edge(_) => Some(Place::Run(node.sigma)),
-            Link::Face(_) => {
+            Link::Face(g) => {
                 let (e, s, p, _, faces) = self.tool.on_run(node.r, node.sigma)?;
-                let f = faces[node.side];
+                let f = faces[self.side_of(node, g)];
                 Some(Place::Face(f, self.tool.uv_at_edge(f, e, s, &p)))
             }
             Link::Fill => None,
@@ -1447,8 +1463,7 @@ impl Gen<'_> {
 
     /// From a node across its face group, along the group's contact in the slice. None where
     /// the contact doesn't run into the group from the node.
-    fn across_face(&self, c: f64, from: &Node) -> Option<Reach> {
-        let link = Link::Face(self.tool.runs[from.r].groups[from.side]);
+    fn across_face(&self, c: f64, from: &Node, link: Link) -> Option<Reach> {
         let Place::Face(f0, uv0) = self.place_at(from, link)? else {
             return None;
         };
@@ -1466,8 +1481,38 @@ impl Gen<'_> {
     fn follow(&self, c: f64, node: &Node, link: Link) -> Option<Reach> {
         match link {
             Link::Edge(_) => self.along_edge(c, node),
-            Link::Face(_) => self.across_face(c, node),
+            Link::Face(_) => self.across_face(c, node, link),
             Link::Fill => None,
+        }
+    }
+
+    /// The two links that meet at a node: its side's face group's contact, and its run's path,
+    /// or (a smooth run's) the other side's face group's contact.
+    fn links_at(&self, n: &Node) -> [Link; 2] {
+        let run = &self.tool.runs[n.r];
+        let face = Link::Face(run.groups[n.side]);
+        if run.kind == EdgeKind::Smooth {
+            [face, Link::Face(run.groups[1 - n.side])]
+        } else {
+            [face, Link::Edge(n.r)]
+        }
+    }
+
+    /// The link that goes on from a node past `by`.
+    fn other_link(&self, n: &Node, by: Link) -> Link {
+        let [a, b] = self.links_at(n);
+        if by == a { b } else { a }
+    }
+
+    /// The side of a node's run whose group is `g`.
+    fn side_of(&self, n: &Node, g: usize) -> usize {
+        let groups = self.tool.runs[n.r].groups;
+        if groups[n.side] == g {
+            n.side
+        } else if groups[1 - n.side] == g {
+            1 - n.side
+        } else {
+            n.side
         }
     }
 
@@ -1480,12 +1525,12 @@ impl Gen<'_> {
         by: Option<Link>,
         face_first: bool,
     ) -> Option<(Reach, Link)> {
+        let [face, other] = self.links_at(node);
         let link = match by {
-            None if face_first => Link::Face(self.tool.runs[node.r].groups[node.side]),
-            None => Link::Edge(node.r),
-            Some(Link::Face(_)) => Link::Edge(node.r),
-            Some(Link::Edge(_)) => Link::Face(self.tool.runs[node.r].groups[node.side]),
+            None if face_first => face,
+            None => other,
             Some(Link::Fill) => return None,
+            Some(l) => self.other_link(node, l),
         };
         let r = self.follow(c, node, link);
         if self.trace {
@@ -1614,34 +1659,31 @@ impl Gen<'_> {
         let reaches: Vec<(Link, Reach)> = nodes
             .par_iter()
             .flat_map_iter(|n| {
-                [
-                    Link::Face(self.tool.runs[n.r].groups[n.side]),
-                    Link::Edge(n.r),
-                ]
-                .into_iter()
-                .filter_map(|link| Some((link, self.follow(c, n, link)?)))
-                .flat_map(|(link, reach)| {
-                    // (And the runs that go on from the vertex a run's path ends at.)
-                    let mut on: Vec<(Link, Reach)> = Vec::new();
-                    if let (Link::Edge(mut r), Some(mut k)) = (link, reach.corner) {
-                        for _ in 0..6 {
-                            let Some((next, sigma, dir)) = self.turn(c, k.0, k.1, r) else {
-                                break;
-                            };
-                            let link = Link::Edge(next);
-                            let far = self.march(c, link, Place::Run(sigma), k.1, dir, None);
-                            let corner = far.corner;
-                            on.push((link, far));
-                            match corner {
-                                Some(at) => (k, r) = (at, next),
-                                None => break,
+                self.links_at(n)
+                    .into_iter()
+                    .filter_map(|link| Some((link, self.follow(c, n, link)?)))
+                    .flat_map(|(link, reach)| {
+                        // (And the runs that go on from the vertex a run's path ends at.)
+                        let mut on: Vec<(Link, Reach)> = Vec::new();
+                        if let (Link::Edge(mut r), Some(mut k)) = (link, reach.corner) {
+                            for _ in 0..6 {
+                                let Some((next, sigma, dir)) = self.turn(c, k.0, k.1, r) else {
+                                    break;
+                                };
+                                let link = Link::Edge(next);
+                                let far = self.march(c, link, Place::Run(sigma), k.1, dir, None);
+                                let corner = far.corner;
+                                on.push((link, far));
+                                match corner {
+                                    Some(at) => (k, r) = (at, next),
+                                    None => break,
+                                }
                             }
                         }
-                    }
-                    on.insert(0, (link, reach));
-                    on
-                })
-                .collect::<Vec<_>>()
+                        on.insert(0, (link, reach));
+                        on
+                    })
+                    .collect::<Vec<_>>()
             })
             .filter(|(_, r)| r.pts.len() >= 2)
             .collect();
@@ -1958,8 +2000,8 @@ impl Gen<'_> {
         // The link the walk takes on from where it stands.
         let link_of = |at: &At| -> Link {
             match at {
-                At::Node(n, Some(Link::Face(_))) => Link::Edge(n.r),
-                At::Node(n, _) => Link::Face(self.tool.runs[n.r].groups[n.side]),
+                At::Node(n, Some(l)) => self.other_link(n, *l),
+                At::Node(n, None) => self.links_at(n)[0],
                 At::Cross(link, ..) => *link,
                 At::Corner(k, _) => Link::Edge(k.after.0),
             }
@@ -2010,11 +2052,7 @@ impl Gen<'_> {
                     // (What comes back to the target as a link the chain has already, the
                     // seed's two among them, is this tooth space come round to its other
                     // side, or the next one, a turn of the tool on.)
-                    let seen = |l: &Link| {
-                        links.contains(l)
-                            || *l == Link::Edge(seed.r)
-                            || *l == Link::Face(self.tool.runs[seed.r].groups[seed.side])
-                    };
+                    let seen = |l: &Link| links.contains(l) || self.links_at(seed).contains(l);
                     let next_space = on.as_ref().is_some_and(|(_, l, _)| seen(l));
                     let back = !next_space && on.as_ref().is_some_and(|(r, ..)| touches(r));
                     let clear_for = reach
@@ -2356,10 +2394,15 @@ impl Gen<'_> {
         // opposite ways where the stretch starts as the contact leaves.)
         let mut run_way = vec![0.0; n];
         let mut contact_way = vec![0.0; n];
+        // (A smooth run's node joins two contacts at one instant: bound there, as a corner is.)
+        let smooth_node = |j: usize| matches!(&chain.joints[j], Joint::Node(m) if self.tool.runs[m.r].kind == EdgeKind::Smooth);
         for j in 0..n {
             let Joint::Node(m) = &chain.joints[j] else {
                 continue;
             };
+            if smooth_node(j) {
+                continue;
+            }
             let face_before = matches!(chain.links[j], Link::Face(_));
             if face_before == matches!(chain.links[j + 1], Link::Face(_)) {
                 return None;
@@ -2389,6 +2432,9 @@ impl Gen<'_> {
                 let Joint::Node(_) = &chain.joints[j] else {
                     return None;
                 };
+                if smooth_node(j) {
+                    return None;
+                }
                 let ts: Vec<f64> = rows.iter().map(|r| r.1[j].t(false)).collect();
                 let through_some = |stride: usize| -> (NurbsCurve, f64) {
                     let mut pick: Vec<usize> = (0..rows.len()).step_by(stride).collect();
@@ -2444,6 +2490,18 @@ impl Gen<'_> {
         type Bounds = Vec<(f64, f64, f64)>;
         let bound_of = |c: f64, row: &[Joint], j: usize| -> Option<(f64, f64, f64)> {
             Some(j).and_then(|j| match &row[j] {
+                    Joint::Node(m) if smooth_node(j) => {
+                        // Its two contacts' speed through it.
+                        let link = Link::Face(self.tool.runs[m.r].groups[m.side]);
+                        let start = self.place_at(m, link)?;
+                        let eta = 1e-2 * self.dt;
+                        let at = |t: f64| self.at_place(link, t, self.place(link, t, c, start)?);
+                        let speed = match (at(m.t), at(m.t + eta).or_else(|| at(m.t - eta))) {
+                            (Some(a), Some(b)) => (b - a).norm() / eta,
+                            _ => self.speed,
+                        };
+                        Some((m.t, m.t, speed))
+                    }
                     Joint::Node(m) => {
                         let te = edge_side[j].as_ref()?.point(c).x;
                         let why = |what: &str, t: f64| {
@@ -2584,7 +2642,7 @@ impl Gen<'_> {
             let at = if end == 0 { 0 } else { bounds.len() - 1 };
             for &l in links {
                 let (a, z) = (bounds[at].2[l - 1].1, bounds[at].2[l].0);
-                let exact = |j: usize| !matches!(chain.joints[j], Joint::Node(_));
+                let exact = |j: usize| !matches!(chain.joints[j], Joint::Node(_)) || smooth_node(j);
                 let t = match (exact(l - 1), exact(l)) {
                     (true, false) => a,
                     (false, true) => z,
@@ -3767,8 +3825,9 @@ impl Gen<'_> {
                     let Joint::Node(m) = j else {
                         return false;
                     };
+                    // (A smooth run's node is found from either side.)
                     m.r == seed.r
-                        && m.side == seed.side
+                        && (m.side == seed.side || self.tool.runs[seed.r].kind == EdgeKind::Smooth)
                         && match period {
                             Some(p) => {
                                 let turns = (seed.t - m.t) / p;
@@ -3789,10 +3848,10 @@ impl Gen<'_> {
                 }
                 return None;
             };
-            if !chains
-                .iter()
-                .any(|c| same_chain(c, &chain, period, self.dt))
-            {
+            if !chains.iter().any(|c| {
+                same_chain(c, &chain, period, self.dt)
+                    || same_chain(c, &chain.turned(), period, self.dt)
+            }) {
                 chains.push(chain);
             }
         }

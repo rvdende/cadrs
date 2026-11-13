@@ -430,10 +430,169 @@ pub fn worm_drive(at: [f64; 3]) -> [GearFeature; 2] {
 
 /// The hypoid pair's features.
 pub const HYPOID_PAIR: [FeatureId; 2] = [id(0x70), id(0x71)];
+/// The hypoid pair's shafts: [the gear's extrude, the pinion's extrude].
+pub const HYPOID_SHAFTS: [FeatureId; 2] = [id(0x73), id(0x75)];
+/// The Transforms that move the pinion's shaft: [Rotate about the pivot (the shaft angle less
+/// 90°), Translate by XYZ (the offset more or less, along y)].
+pub const HYPOID_MOVES: [FeatureId; 2] = [id(0x77), id(0x78)];
 
-/// Adds `hypoid.sv`'s pair ([`hypoid_pair`]) to the Part Studio `el`.
+/// Adds `hypoid.sv`'s pair to the Part Studio `el`, placed by its shafts: the gear's shaft a
+/// cylinder down from the origin, the pinion's one along −x 25 mm to the side (each running
+/// back from where they mesh), a pivot line along y through the origin, and two Transforms of
+/// the pinion's shaft (a Rotate about the pivot and a Translate by XYZ) to move it by; then the
+/// gear and the pinion ([`hypoid_pair`]), each with its own shaft's cylinder and its mate's
+/// picked. Change a Transform and both members follow: the shaft angle and the offset are the
+/// shafts'.
 pub fn build_hypoid_in(s: &mut dyn Studio, el: ElementId) -> Result<(), CommandError> {
-    for (feature, g) in HYPOID_PAIR.into_iter().zip(hypoid_pair()) {
+    use crate::commands::RenameFeature;
+    use crate::document::AxisRef;
+    use crate::transform::{TransformFeature, TransformType};
+    let rename = |s: &mut dyn Studio, feature: FeatureId, name: &str| {
+        s.run(&RenameFeature {
+            element: el,
+            feature,
+            name: name.into(),
+        })
+    };
+    let sketch = |s: &mut dyn Studio, feature: FeatureId, plane: PlaneRef, ops: Vec<SketchOp>| {
+        s.run(&AddSketch {
+            element: el,
+            feature,
+            plane: Some(plane),
+        })?;
+        for op in ops {
+            s.run(&EditSketch {
+                element: el,
+                feature,
+                op,
+            })?;
+        }
+        Ok::<(), CommandError>(())
+    };
+    // The shafts: each a circle extruded back from where the pair meshes.
+    for ((sk, ex), (plane, center, radius, depth, name)) in
+        [(id(0x72), id(0x73)), (id(0x74), id(0x75))]
+            .into_iter()
+            .zip([
+                (PlaneRef::Top, Vec2::new(0.0, 0.0), 6.0, 60.0, "Gear shaft"),
+                (
+                    PlaneRef::Right,
+                    Vec2::new(25.0, 0.0),
+                    5.0,
+                    120.0,
+                    "Pinion shaft",
+                ),
+            ])
+    {
+        sketch(
+            s,
+            sk,
+            plane,
+            vec![SketchOp::AddCircle {
+                center,
+                radius,
+                construction: false,
+            }],
+        )?;
+        s.run(&AddExtrude {
+            element: el,
+            feature: ex,
+            extrude: ExtrudeFeature::default(),
+        })?;
+        s.run(&SetExtrude {
+            element: el,
+            feature: ex,
+            extrude: ExtrudeFeature {
+                sketches: vec![sk],
+                op: BooleanOp::New,
+                depth,
+                depth_expr: mm(depth),
+                flip: true,
+                ..Default::default()
+            },
+            label: "Extrude".into(),
+        })?;
+        rename(s, ex, name)?;
+    }
+    // The pivot: a line along y through the origin, square to both shafts.
+    let pivot = id(0x76);
+    sketch(
+        s,
+        pivot,
+        PlaneRef::Top,
+        vec![SketchOp::AddPolyline {
+            points: vec![Vec2::new(0.0, 0.0), Vec2::new(0.0, 40.0)],
+            closed: false,
+            construction: false,
+            label: "Add line",
+        }],
+    )?;
+    rename(s, pivot, "Pivot")?;
+    let doc = s.document();
+    let pivot_line = doc
+        .element(el)
+        .and_then(|e| e.feature(pivot))
+        .and_then(|f| f.sketch())
+        .and_then(|k| k.geometry.curves.keys().next())
+        .ok_or_else(|| CommandError::Invalid("the pivot has no line".into()))?;
+    let pinion_shaft = PartId::new(HYPOID_SHAFTS[1], 0);
+    let [rotate, translate] = HYPOID_MOVES;
+    s.run(&AddFeature::transform(
+        el,
+        rotate,
+        TransformFeature {
+            transform_type: TransformType::Rotate,
+            parts: vec![pinion_shaft],
+            axis: Some(AxisRef::SketchCurve {
+                sketch: pivot,
+                curve: pivot_line,
+            }),
+            angle: 0.0,
+            angle_expr: deg(0.0),
+            ..Default::default()
+        },
+    ))?;
+    rename(s, rotate, "Shaft angle (from 90°)")?;
+    s.run(&AddFeature::transform(
+        el,
+        translate,
+        TransformFeature {
+            transform_type: TransformType::TranslateXyz,
+            parts: vec![pinion_shaft],
+            ..Default::default()
+        },
+    ))?;
+    rename(s, translate, "Offset (along y)")?;
+    // Each shaft's cylinder, as the parts stand now.
+    let features = s
+        .document()
+        .element(el)
+        .map(|e| e.features().to_vec())
+        .unwrap_or_default();
+    let build = crate::rebuild::build(&features);
+    let cylinder = |shaft: FeatureId| -> Result<AxisRef, CommandError> {
+        let part = build
+            .part(PartId::new(shaft, 0))
+            .ok_or_else(|| CommandError::Invalid("a shaft didn't build".into()))?;
+        let face = part
+            .solid
+            .faces
+            .iter()
+            .find(|f| f.axis.is_some())
+            .ok_or_else(|| CommandError::Invalid("a shaft has no cylinder".into()))?;
+        Ok(AxisRef::Face(crate::document::FaceRef {
+            part: part.id,
+            face: face.name,
+            seed: face.center.unwrap_or([0.0; 3]),
+        }))
+    };
+    let (gear_shaft, pinion_shaft) = (cylinder(HYPOID_SHAFTS[0])?, cylinder(HYPOID_SHAFTS[1])?);
+    let [mut gear, mut pinion] = hypoid_pair();
+    gear.shaft = Some(gear_shaft);
+    gear.mate_shaft = Some(pinion_shaft);
+    pinion.shaft = Some(pinion_shaft);
+    pinion.mate_shaft = Some(gear_shaft);
+    for (feature, g) in HYPOID_PAIR.into_iter().zip([gear, pinion]) {
         s.run(&AddFeature {
             element: el,
             feature,

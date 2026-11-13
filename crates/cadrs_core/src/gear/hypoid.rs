@@ -328,11 +328,11 @@ pub(super) fn member(
         },
         turn: None,
     };
-    // The crown's tool about the cutter's axis, in (radius, height over P).
-    let polygon = |pts: &[[f64; 2]]| Region2 {
-        outer: (0..pts.len())
-            .map(|i| line(pts[i], pts[(i + 1) % pts.len()]))
-            .collect(),
+    // The crown's tool about the cutter's axis, in (radius, height over P): its tip's edges
+    // rounded, 0.3 of the normal module (the members' root fillets).
+    let rounding = 0.3 * l.normal_module;
+    let polygon = |pts: &[[f64; 2]], round: &[usize]| Region2 {
+        outer: rounded(pts, round, rounding),
         holes: Vec::new(),
     };
     let z = [0.0, 0.0, 1.0];
@@ -347,22 +347,28 @@ pub(super) fn member(
         vec![
             Piece::Revolved(Revolved {
                 frame: about_cutter,
-                region: polygon(&[
-                    [ro + ded * to - go, -ded],
-                    [reach, -ded],
-                    [reach, base],
-                    [ro - base * to - go, base],
-                ]),
+                region: polygon(
+                    &[
+                        [ro + ded * to - go, -ded],
+                        [reach, -ded],
+                        [reach, base],
+                        [ro - base * to - go, base],
+                    ],
+                    &[0],
+                ),
                 turn: None,
             }),
             Piece::Revolved(Revolved {
                 frame: about_cutter,
-                region: polygon(&[
-                    [0.0, -ded],
-                    [ri - ded * ti + gi, -ded],
-                    [ri + base * ti + gi, base],
-                    [0.0, base],
-                ]),
+                region: polygon(
+                    &[
+                        [0.0, -ded],
+                        [ri - ded * ti + gi, -ded],
+                        [ri + base * ti + gi, base],
+                        [0.0, base],
+                    ],
+                    &[1],
+                ),
                 turn: Some(([0.0; 3], z, -2.0 * PI / l.crown_teeth)),
             }),
         ]
@@ -371,12 +377,15 @@ pub(super) fn member(
         // base under P to its tip a dedendum over it.
         vec![Piece::Revolved(Revolved {
             frame: about_cutter,
-            region: polygon(&[
-                [ri - base * ti - gi, -base],
-                [ro + base * to + go, -base],
-                [ro - ded * to + go, ded],
-                [ri + ded * ti - gi, ded],
-            ]),
+            region: polygon(
+                &[
+                    [ri - base * ti - gi, -base],
+                    [ro + base * to + go, -base],
+                    [ro - ded * to + go, ded],
+                    [ri + ded * ti - gi, ded],
+                ],
+                &[2, 3],
+            ),
             turn: None,
         })]
     };
@@ -395,6 +404,57 @@ pub(super) fn member(
         copies: teeth.round() as usize,
         starts: 1,
     }
+}
+
+/// The closed polygon `pts` as segments, its corners `round` rounded by arcs of radius `r`
+/// tangent to both sides.
+fn rounded(pts: &[[f64; 2]], round: &[usize], r: f64) -> Vec<super::Seg> {
+    use super::Seg;
+    let n = pts.len();
+    let unit2 = |v: [f64; 2]| {
+        let l = v[0].hypot(v[1]);
+        [v[0] / l, v[1] / l]
+    };
+    // Each corner's two ends (where the sides leave it) and its arc.
+    let corners: Vec<([f64; 2], [f64; 2], Option<Seg>)> = (0..n)
+        .map(|i| {
+            let p = pts[i];
+            if !round.contains(&i) {
+                return (p, p, None);
+            }
+            let to = |q: [f64; 2]| unit2([q[0] - p[0], q[1] - p[1]]);
+            let (a, b) = (to(pts[(i + n - 1) % n]), to(pts[(i + 1) % n]));
+            let half = (a[0] * b[0] + a[1] * b[1]).clamp(-1.0, 1.0).acos() / 2.0;
+            let (along, out) = (r / half.tan(), r / half.sin());
+            let bis = unit2([a[0] + b[0], a[1] + b[1]]);
+            let c = [p[0] + bis[0] * out, p[1] + bis[1] * out];
+            let pa = [p[0] + a[0] * along, p[1] + a[1] * along];
+            let pb = [p[0] + b[0] * along, p[1] + b[1] * along];
+            let ang = |q: [f64; 2]| (q[1] - c[1]).atan2(q[0] - c[0]);
+            let sweep = (ang(pb) - ang(pa) + PI).rem_euclid(2.0 * PI) - PI;
+            (
+                pa,
+                pb,
+                Some(Seg::Arc {
+                    center: c,
+                    radius: r,
+                    start: ang(pa),
+                    sweep,
+                }),
+            )
+        })
+        .collect();
+    let mut out = Vec::new();
+    for i in 0..n {
+        if let Some(arc) = &corners[i].2 {
+            out.push(arc.clone());
+        }
+        out.push(Seg::Line {
+            a: corners[i].1,
+            b: corners[(i + 1) % n].0,
+        });
+    }
+    out
 }
 
 /// `a x = b` by Cramer's rule.

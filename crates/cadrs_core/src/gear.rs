@@ -326,7 +326,8 @@ pub struct GearFeature {
     /// A hypoid pair's member placed by its shafts: its own axis and its mate's (a sketch line,
     /// a straight or circular edge, a face of revolution or a mate connector). With both, the
     /// shaft angle, the offset and its side (so the hand) are the two lines', and the pair is
-    /// laid out on them: each axis pointing from its member's apex toward its back.
+    /// laid out on them: each axis pointing from its member's apex toward its back (a line's or
+    /// an edge's its own way; a cylinder's from where the two axes cross toward its middle).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shaft: Option<crate::document::AxisRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1595,11 +1596,12 @@ pub struct Generated {
 }
 
 /// The plan of `x`: on `target` (the face its teeth are cut into), or made whole.
-/// A line: a point on it and its direction.
-pub type Vec3Pair = (Vec3, Vec3);
+/// A shaft: a point on its axis, its direction, and (for a shaft whose axis has no way of its
+/// own: a cylinder) a point its member's back is toward from where the two axes cross.
+pub type Shaft = (Vec3, Vec3, Option<Vec3>);
 
-/// Two lines, [this member's axis, its mate's].
-pub type Shafts = [Vec3Pair; 2];
+/// Two shafts, [this member's, its mate's].
+pub type Shafts = [Shaft; 2];
 
 /// [`plan`] of a hypoid pair's member placed on its own shaft and its mate's (resolved).
 pub fn plan_on_shafts(x: &GearFeature, shafts: &Shafts) -> Result<Plan, &'static str> {
@@ -1612,7 +1614,28 @@ pub fn plan_on_shafts(x: &GearFeature, shafts: &Shafts) -> Result<Plan, &'static
     } else {
         (shafts[1], shafts[0])
     };
-    let (gd, pd) = (unit(g.1), unit(p.1));
+    let (mut gd, mut pd) = (unit(g.1), unit(p.1));
+    // A shaft with a point to point toward: from its foot on the common perpendicular (which
+    // doesn't depend on the axes' ways) toward it.
+    {
+        let w = sub(p.0, g.0);
+        let b = dot(gd, pd);
+        if (1.0 - b * b).abs() > 1e-12 {
+            let tg = (dot(gd, w) - b * dot(pd, w)) / (1.0 - b * b);
+            let tp = (b * dot(gd, w) - dot(pd, w)) / (1.0 - b * b);
+            let (gf, pf) = (add(g.0, scale(gd, tg)), add(p.0, scale(pd, tp)));
+            if let Some(q) = g.2
+                && dot(sub(q, gf), gd) < 0.0
+            {
+                gd = scale(gd, -1.0);
+            }
+            if let Some(q) = p.2
+                && dot(sub(q, pf), pd) < 0.0
+            {
+                pd = scale(pd, -1.0);
+            }
+        }
+    }
     let across = cross(pd, gd);
     let sine = norm(across);
     if sine.is_nan() || sine <= 1e-6 {

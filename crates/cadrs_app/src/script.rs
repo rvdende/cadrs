@@ -20,6 +20,8 @@
 //!   (P3.8), in the plane's
 //!   coordinates
 //!   (mm). For scenarios whose subject is what comes after the sketch (P3.3).
+//! - `hypoid`: builds the Gears sample's Hypoid tab (two shafts, the pinion's moved by two
+//!   Transforms, and the hypoid pair on them) in the active Part Studio.
 //! - `gears`: builds the Gears sample (`cadrs_core::samples::gears`, issue #179) in the active
 //!   Part Studio: the Gear feature's kinds, three by three.
 //! - `gear-cover`: opens the Jackhammer Gear Cover stand-in (P3.6, PS17,
@@ -552,6 +554,9 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
             (Some("gears"), None) => {
                 commands.queue(gears);
             }
+            (Some("hypoid"), None) => {
+                commands.queue(hypoid);
+            }
             (Some("drawing-bracket"), None) => {
                 commands.queue(drawing_bracket);
             }
@@ -875,6 +880,20 @@ fn gears(world: &mut World) {
     };
     if let Err(e) = cadrs_core::samples::gears::build_in(&mut *doc, element) {
         warn!("gears: {e}");
+    }
+}
+
+/// Builds the gears sample's Hypoid tab (its shafts, their Transforms and the pair on them) in
+/// the active Part Studio.
+fn hypoid(world: &mut World) {
+    let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else {
+        return;
+    };
+    let Some(element) = doc.active_element().map(|e| e.id) else {
+        return;
+    };
+    if let Err(e) = cadrs_core::samples::gears::build_hypoid_in(&mut *doc, element) {
+        warn!("hypoid: {e}");
     }
 }
 
