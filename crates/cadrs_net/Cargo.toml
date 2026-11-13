@@ -13,6 +13,8 @@ blake3.workspace = true
 cadrs_core.workspace = true
 # Public documents are kept next to the documents (in a page too).
 cadrs_fs.workspace = true
+# Mailboxes this node keeps for others (`social`).
+cadrs_social.workspace = true
 # The persistent face, edge and vertex names a selection travels by (`session::Picked`).
 cadrs_sketch.workspace = true
 data-encoding.workspace = true
@@ -35,3 +37,8 @@ bevy_iroh = { workspace = true, features = ["wasm"] }
 # Voice while editing together: bevy_iroh's media (cpal, libopus and openh264, built from
 # source with cmake). Off by default; `cargo build -r -F voice` on the app.
 voice = ["bevy_iroh/media"]
+
+[dev-dependencies]
+# The phone app's node, talking to this one (tests/social.rs).
+cadrs_social_net.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }

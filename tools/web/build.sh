@@ -11,7 +11,9 @@
 # The app is built twice because Bevy picks a page's graphics as it is built, not as it starts:
 # the page (`index.html`) loads the WebGPU one where the browser has WebGPU and the WebGL2 one
 # where it doesn't (Chrome on Linux, older Safari and Firefox), and offers the downloads where
-# there is neither. `CADRS_WEB_ONLY=webgpu|webgl2` builds one of them alone.
+# there is neither. `CADRS_WEB_ONLY=webgpu|webgl2|phone` builds one of them alone.
+#
+# Phones get the phone page (`phone.html`, `cadrs_mobile`) instead, unless asked for `?full`.
 #
 # Needs the wasm32 target (rust-toolchain.toml installs it) and wasm-bindgen-cli at the version
 # of the wasm-bindgen crate in Cargo.lock:
@@ -58,7 +60,17 @@ samples="$(sed -n 's/^ *key: "\(.*\)",$/fixtures\/\1.cadrs/p' crates/cadrs_core/
 # shellcheck disable=SC2086
 tar --format=ustar --owner=0 --group=0 --mtime=@0 --sort=name -czf "$out/bundle.tar.gz" libraries $samples
 
+# The phone page (`cadrs_mobile`): no Bevy, a few MB. Also the site's 404 page, so the links of
+# contact cards (https://cadrs.net/c/<code>) open it.
+if [[ -z "$only" || "$only" == phone ]]; then
+    cargo build -r --locked --target wasm32-unknown-unknown -p cadrs_mobile
+    wasm-bindgen --target web --no-typescript "${names[@]}" --remove-producers-section \
+        --out-name cadrs_mobile --out-dir "$out" target/wasm32-unknown-unknown/release/cadrs_mobile.wasm
+    cp tools/web/mobile.html "$out/phone.html"
+    cp tools/web/mobile.html "$out/404.html"
+fi
+
 cp tools/web/index.html tools/web/files.js "$out/"
 cp assets/icons/cadrs.png "$out/"
-du -h "$out"/*.wasm.gz
+du -h "$out"/*.wasm.gz "$out"/cadrs_mobile_bg.wasm 2>/dev/null || true
 echo "Built $out. Try it: python3 -m http.server -d $out 8080"

@@ -54,6 +54,7 @@ pub mod menu;
 pub mod name_popup;
 pub mod path_field;
 pub mod progress;
+pub mod qr;
 pub mod quick_dim;
 pub mod radio;
 pub mod responsive;
@@ -85,6 +86,7 @@ pub mod tree;
 pub mod variable_list;
 pub mod version_graph;
 pub mod virtual_rows;
+pub mod world_map;
 
 use bevy::prelude::*;
 

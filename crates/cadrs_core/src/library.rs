@@ -67,6 +67,17 @@ pub struct DocumentMeta {
     /// Set on a fork of a public document: which one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forked_from: Option<crate::collab::ForkedFrom>,
+    /// Set on an organization document (a shop): its signed log is `org.log` beside
+    /// `document.ron`, and it opens to the organization's own tabs (`cadrs_org`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organization: Option<OrgRef>,
+}
+
+/// What marks a document as an organization's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrgRef {
+    /// The id of its log (`cadrs_social::log::LogId`).
+    pub log: [u8; 32],
 }
 
 impl DocumentMeta {
@@ -96,6 +107,7 @@ impl DocumentMeta {
             shared: None,
             published: None,
             forked_from: None,
+            organization: None,
         }
     }
 }

@@ -19,7 +19,10 @@ use std::path::PathBuf;
 
 pub mod link;
 pub mod public;
+pub mod public_chat;
 pub mod session;
+pub mod shops;
+pub mod social;
 pub mod transfer;
 
 use bevy::prelude::*;
@@ -70,6 +73,12 @@ impl Plugin for NetPlugin {
             .cloned()
             .unwrap_or_default();
         let public_handler = public::handler(public.clone());
+        let mailboxes = app
+            .world()
+            .get_resource::<social::Mailboxes>()
+            .cloned()
+            .unwrap_or_default();
+        let (social_handler, letters) = social::handler(mailboxes.clone());
         let mut iroh = IrohPlugin::default()
             .with_identity(identity)
             .with_relays(self.relays.clone())
@@ -81,11 +90,16 @@ impl Plugin for NetPlugin {
             })
             .with_protocol_factory(public::ALPN, move || {
                 Box::new(public_handler.clone()) as Box<dyn DynProtocolHandler>
+            })
+            .with_protocol_factory(social::ALPN, move || {
+                Box::new(social_handler.clone()) as Box<dyn DynProtocolHandler>
             });
         // Documents travel as their own messages, never as replicated entities.
         iroh.replicate_transform = false;
         app.add_plugins(iroh)
             .insert_resource(requests)
+            .insert_resource(letters)
+            .insert_resource(mailboxes)
             .insert_resource(public)
             .insert_resource(CanConnect);
         if let Some(id) = cadrs_id(app.world().get_resource::<Iroh>()) {
@@ -93,6 +107,8 @@ impl Plugin for NetPlugin {
         }
         session::register(app);
         public::register(app);
+        shops::register(app);
+        public_chat::register(app);
     }
 }
 

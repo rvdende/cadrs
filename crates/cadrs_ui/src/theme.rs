@@ -638,6 +638,20 @@ impl Theme {
         )
     }
 
+    /// Text that wraps at its container's width: a sentence of help, not a label.
+    pub fn paragraph(&self, text: impl Into<String>, size: f32, color: Color) -> impl Bundle {
+        (
+            Text::new(text),
+            self.font(size, FontWeight::NORMAL),
+            TextColor(color),
+            TextLayout::default(),
+            Node {
+                max_width: Val::Percent(100.0),
+                ..default()
+            },
+        )
+    }
+
     /// Body text (13 px, regular, foreground color).
     pub fn label(&self, text: impl Into<String>) -> impl Bundle {
         self.text(text, self.font_base, FontWeight::NORMAL, self.foreground)

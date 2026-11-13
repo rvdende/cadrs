@@ -64,10 +64,11 @@ async function bundle() {
   }
 }
 
-export async function openFiles() {
+// `bundled: false` skips the libraries and samples (the phone page has no use for them).
+export async function openFiles({ bundled = true } = {}) {
   let db = null;
   // The bundle's files first: the ones kept in IndexedDB replace them.
-  const shipped = bundle();
+  const shipped = bundled ? bundle() : Promise.resolve([]);
   let loaded = [];
   try {
     db = await openDb();

@@ -154,6 +154,7 @@ jobs:
         run: |
           cargo check --locked --target wasm32-unknown-unknown -p cadrs --no-default-features -F gpu,webgpu
           cargo check --locked --target wasm32-unknown-unknown -p cadrs --no-default-features
+          cargo check --locked --target wasm32-unknown-unknown -p cadrs_mobile
 
   macos:
     name: Build (macOS)

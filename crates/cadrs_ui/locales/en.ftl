@@ -6219,3 +6219,241 @@ cam-component-newest = The component is at the newest version
 cam-still-reading-parts = Still reading the Part Studio's parts
 # The heading of a CAM dialog's list of warnings.
 cam-warnings = Warnings
+
+## Organizations (shops): the organization document's screen (`cadrs_app::organization`).
+org-new = New organization
+org-new-ellipsis = New organization…
+org-new-help = An organization is a shop or a team: its machines, stock, members and the requests for quotes it gets. A one-person shop is an organization too; add people later.
+org-name-label = Name
+org-name-placeholder = Cape Waterjet
+org-create = Create organization
+org-untitled = Untitled organization
+org-cannot-create = Cannot create the organization
+org-cannot-save = Cannot save the organization
+org-saved = Saved
+org-tab-overview = Overview
+org-tab-members = Members
+org-tab-machines = Machines
+org-tab-stock = Stock
+org-tab-requests = Requests
+# Before the organization's cadrs ID.
+org-id = Organization ID
+org-about = About
+org-location = Location: latitude, longitude, city, country
+org-location-help = Any of these may be left empty. The exact point is only shown to contacts.
+# How precisely the location is shown publicly, in kilometres.
+org-public-accuracy = Shown publicly within (km)
+org-open-for-quotes = Take requests for quotes from anyone
+org-role-owner = Owner
+org-role-admin = Admin
+org-role-member = Member
+org-add-member = Add member…
+org-member-account = Their cadrs ID
+org-member-account-placeholder = 64 characters, from their profile
+org-member-bad-account = That is not a cadrs ID
+org-no-machines = No machines yet. Add the machines the shop cuts and makes parts with, so requests can be matched to them.
+org-add-machine = Add machine…
+org-machine-name = Name
+# The bed's width and depth, then the cut's width (kerf), all in mm.
+org-machine-bed = Bed X, bed Y and kerf (mm)
+org-machine-materials = Materials and the thickest it cuts (mm)
+org-machine-materials-placeholder = mild steel 100, stainless 80, glass 25
+org-machine-needs-name = Give the machine a name
+org-no-materials = No stock materials yet.
+# After how many sheets are on hand: "12 (8 free)".
+org-free = free
+org-add-material = Add material…
+org-material-name = Material
+# Thickness, then the sheet's width and depth, in mm.
+org-material-size = Thickness, sheet X and sheet Y (mm)
+org-material-needs-thickness = Give the thickness in mm
+org-material-needs-name = Name the material
+org-no-requests = No requests for quotes yet.
+org-stage-requested = Requested
+org-stage-quoted = Quoted
+org-stage-declined = Declined
+org-stage-accepted = Ordered
+org-stage-in-production = In production
+org-stage-ready = Ready
+org-stage-completed = Completed
+org-instant-quote = Quote
+org-decline = Decline
+org-no-rates = No prices are set
+org-profile-lat-placeholder = Latitude
+org-profile-lon-placeholder = Longitude
+org-profile-city-placeholder = City
+org-profile-country-placeholder = Country
+org-profile-about-placeholder = What the shop makes, and for whom
+org-tab-prices = Prices
+org-prices-help = Instant quotes use these: machine time at each machine's hourly rate, sheet at its price per square metre, plus the setup fee. You can always change a quote before sending it.
+org-rates-currency = Currency
+org-rates-setup = Setup per order
+org-rates-minimum = Least an order costs
+# How much more sheet than the parts' own area an order uses, in percent.
+org-rates-nesting = Nesting waste (%)
+org-rates-hourly = Machine time, per hour
+org-rates-sheet = Sheet, per square metre
+
+## Letters between clients and shops (`cadrs_app::social`).
+social-no-keys = This device has no keys yet
+social-not-a-member = This device can't speak for that organization
+social-no-devices = There is no device to send it to
+# { $what } is what was sent: "Your request for a quote", "The quote".
+social-sent = { $what } was delivered
+social-not-sent = { $what } wasn't delivered: { $why }
+social-what-reply = The reply
+social-what-request = Your request for a quote
+social-no-client-card = The client can't be reached: their card is missing
+social-notice-quoted = { $shop } quoted { $total }
+social-notice-declined = { $shop } declined your request
+social-notice-stage = { $shop }: your order is { $stage }
+social-notice-request = { $client } asks { $shop } for a quote
+social-notice-accepted = { $client } accepted { $shop }'s quote
+
+## Request a quote (the document menu; `cadrs_app::request_quote`).
+rfq-menu = Request a quote…
+rfq-title = Request a quote
+rfq-parts = Parts
+# A flat part: its name, thickness (mm), length of its cuts (mm) and how many cuts.
+rfq-part-flat = { $name }: flat, { $thickness } mm thick, { $length } mm of cuts in { $pierces } pieces
+# A part that isn't a flat profile: its name and size (mm).
+rfq-part-3d = { $name }: not flat, { $size } mm
+rfq-shop = Shop
+rfq-no-shops = No shops in your contacts yet: paste a shop's link.
+rfq-shop-link-placeholder = A shop's link (https://cadrs.net/c/…)
+rfq-quantity-material = Quantity and material
+rfq-notes = Notes
+rfq-notes-placeholder = Finish, deadline, anything the shop should know
+rfq-send = Send request
+rfq-not-part-studio = Open a Part Studio to request a quote for its parts
+rfq-still-building = The parts are still being built; try again in a moment
+rfq-no-parts = This Part Studio has no parts
+rfq-bad-link = That is not a shop's link
+rfq-pick-shop = Pick a shop
+org-share = Share this shop
+org-share-help = Clients scan this with their phone, or paste the link into Request a quote, to send the shop their parts.
+rfq-requests-menu = Quote requests…
+rfq-requests-title = Quote requests
+rfq-requests-none = You haven't asked a shop for a quote yet. Open a Part Studio and pick Request a quote… in the document menu.
+rfq-accept = Accept
+rfq-what-acceptance = Your acceptance
+social-add-contact-menu = Add contact…
+social-add-contact = Add contact
+social-add = Add
+social-added = { $name } is in your contacts
+
+## Linking devices to an account (the account menu; `cadrs_app::pairing_ui`).
+pair-link-menu = Link a device…
+pair-join-menu = Join my account…
+pair-link = Link a device
+pair-link-help = On your phone or other computer, open cadrs and pick Join my account… in the account menu, then scan this code or paste its text. It works once, for five minutes.
+pair-confirm-help = { $name } asks to join your account. Link it only if your other device shows the same code:
+pair-confirm = The codes match: link it
+pair-join = Join my account
+pair-join-help = On the device that has your account, pick Link a device… in the account menu, then paste the code it shows here.
+pair-input-placeholder = cadrs-pair:…
+pair-join-send = Join
+pair-join-code-help = Check your other device shows this code, and confirm there.
+pair-bad-code = That is not a code from Link a device…
+pair-expired = That code has expired; make a new one
+pair-not-the-account = Link devices from the device that holds your account
+pair-joined = This device now belongs to your account
+pair-what-request = The request to join
+# { $name } is the device's name.
+pair-what-grant = { $name }'s link
+
+## The conversation about a request for a quote (`cadrs_app::chat_ui`).
+chat-title = Messages
+chat-messages = Messages
+chat-empty = No messages yet.
+chat-placeholder = Write a message
+chat-send = Send
+chat-what = Your message
+# Nobody was online to take it, so it waits at their mailbox.
+social-left = { $what } will be delivered when they come online
+
+## Find a shop (the documents page's app menu; `cadrs_app::find_shop`).
+find-shop-menu = Find a shop…
+find-shop-title = Find a shop
+find-shop-material-placeholder = Material (mild steel)
+find-shop-thickness-placeholder = Thickness (mm)
+find-shop-lat-placeholder = Your latitude
+find-shop-lon-placeholder = Your longitude
+# { $count } is how many shops match.
+find-shop-count = Shops: { $count }
+find-shop-none = No shops heard of yet that match. Shops that take requests from anyone are listed while cadrs is online; ask a shop for its link to add it yourself.
+find-shop-add = Add to contacts
+find-shop-in-contacts = In your contacts
+find-shop-search = Search
+
+## The order after a quote is accepted (`cadrs_app::organization`, `request_quote`).
+org-start-production = Start production
+org-mark-ready = Ready
+org-delivered = Delivered
+org-needs-org-key = Only a device holding the organization's key signs for deliveries
+social-notice-delivered = { $shop } delivered your order: sign for it
+rfq-sign-delivery = Sign for delivery
+rfq-sign-needs-account = Sign for delivery on the device that holds your account
+rfq-what-receipt = Your receipt
+rfq-review = Review…
+rfq-review-title = Review the shop
+rfq-review-placeholder = How was it?
+rfq-review-send = Send review
+rfq-what-review = Your review
+
+## The organization's Jobs, Clients and Parts tabs (`cadrs_app::org_tabs`).
+org-tab-jobs = Jobs
+org-tab-clients = Clients
+org-tab-parts = Parts
+org-no-jobs = Nothing scheduled.
+org-no-orders-to-schedule = No orders waiting to be scheduled.
+org-add-job = Schedule a job…
+org-job-order = Order
+org-job-machine = Machine
+# When it starts (local time, YYYY-MM-DD HH:MM) and how many minutes it takes.
+org-job-when = Start (YYYY-MM-DD HH:MM) and minutes
+org-job-bad = Pick an order and a machine, and give the start as YYYY-MM-DD HH:MM
+org-job-scheduled = Scheduled
+org-job-running = Running
+org-job-done = Done
+org-job-start = Start
+org-job-finish = Finish
+org-no-clients = No clients yet: everyone who asks for a quote is listed here, and you can add others.
+org-add-client = Add client…
+org-client-name = Name
+org-client-email = Email
+org-client-phone = Phone
+org-client-notes = Notes
+org-client-needs-name = Give the client a name
+# After a number: "3 requests · 1 completed".
+org-client-requests = requests
+org-client-completed = completed
+org-no-parts = No parts yet.
+org-add-part = Add part…
+org-part-name = Name
+org-part-revision = Revision
+org-part-bom = What goes into it
+org-part-bom-placeholder = 0.5 mild steel 10, 4 M8 bolt
+org-part-needs-name = Give the part a name
+org-reserve = Reserve sheets…
+org-reserve-sheets = Sheets
+
+## Members' devices keeping the organization in step (`cadrs_app::org_sync`).
+org-member-who = Who: one of your contacts, or their link
+org-member-link-placeholder = Their link (https://cadrs.net/c/…)
+# { $name } is the organization's name.
+org-invited = You were added to { $name }
+org-what-invite = The invitation to { $name }
+org-tab-chat = Chat
+org-chat-empty = No messages in this channel yet. Only the organization's members see them.
+org-channel-new-placeholder = new-channel
+org-channel-open = Open channel
+
+## The public chat (`cadrs_app::public_chat_ui`).
+public-chat-menu = Public chat…
+public-chat-title = Public chat
+public-chat-empty = Nobody has said anything while you were online. Say hello: everyone online hears it.
+public-chat-someone = Someone
+public-chat-block = Block
+public-chat-slow-down = Slow down: a few lines a minute
+public-chat-offline = The network is off for this run: the chat is yours alone
