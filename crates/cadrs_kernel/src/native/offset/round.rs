@@ -432,7 +432,236 @@ pub fn offset_rounded(b: &Body, dist: &[f64]) -> Result<Body> {
             "rounded offsets with different distances per face",
         ));
     }
+    // A solid of revolution: its section grown, revolved.
+    if let Some(g) = crate::native::sweep_solid::grown_revolved(b, d) {
+        return Ok(g);
+    }
     grown_except(&merged(b), d, &[], &[])
+}
+
+/// A convex polyhedron grown by a ball of radius `d`, built face by face: each face moved out
+/// by `d`, a cylinder of radius `d` along each edge between its faces' moved copies, and a ball
+/// patch at each corner bounded by its edges' end arcs. The same solid the slabs', tubes' and
+/// balls' union makes, without the dozens of booleans. None unless every face is a plane with
+/// one loop and every edge a straight convex edge between two faces (then the result is checked).
+fn grown_convex(b: &Body, d: f64) -> Option<Body> {
+    use crate::native::pcurve::pcurve;
+    use crate::native::topo::{BodyBuilder, Coedge};
+    use std::collections::HashMap;
+    if b.solids.len() != 1 || b.shells.len() != 1 || !b.shells[0].closed {
+        return None;
+    }
+    let ef = b.edge_faces();
+    // Each face's outward normal; every face a plane with one loop.
+    let mut normal = Vec::with_capacity(b.faces.len());
+    for f in &b.faces {
+        let Surface::Plane { f: fr } = &f.surf else {
+            return None;
+        };
+        if f.loops.len() != 1 {
+            return None;
+        }
+        normal.push(fr.x.cross(&fr.y).normalize() * if f.sense { 1.0 } else { -1.0 });
+    }
+    // Each edge straight, convex, and run forward by exactly one of its two faces: (f1, f2).
+    let mut sides = vec![(usize::MAX, usize::MAX); b.edges.len()];
+    for (fi, f) in b.faces.iter().enumerate() {
+        for co in &f.loops[0] {
+            let s = &mut sides[co.edge];
+            let slot = if co.fwd { &mut s.0 } else { &mut s.1 };
+            if *slot != usize::MAX {
+                return None;
+            }
+            *slot = fi;
+        }
+    }
+    for (e, ed) in b.edges.iter().enumerate() {
+        if ed.degenerate
+            || !matches!(ed.curve, Curve::Line { .. })
+            || ef[e].len() != 2
+            || sides[e].0 == usize::MAX
+            || sides[e].1 == usize::MAX
+            || convex(b, e) != Some(true)
+        {
+            return None;
+        }
+    }
+    let mut out = BodyBuilder::new();
+    let mut vert: HashMap<(usize, usize), usize> = HashMap::new();
+    let mut at = |out: &mut BodyBuilder, f: usize, v: usize| -> usize {
+        *vert
+            .entry((f, v))
+            .or_insert_with(|| out.vertex(b.verts[v].p + normal[f] * d))
+    };
+    // The moved faces' edges: (face, edge) -> new edge, in the old edge's direction.
+    let mut line: HashMap<(usize, usize), usize> = HashMap::new();
+    for e in 0..b.edges.len() {
+        let [v0, v1] = b.edges[e].v;
+        for f in [sides[e].0, sides[e].1] {
+            let (a, z) = (at(&mut out, f, v0), at(&mut out, f, v1));
+            let (pa, pz) = (b.verts[v0].p + normal[f] * d, b.verts[v1].p + normal[f] * d);
+            let c = Curve::Line { o: pa, d: pz - pa };
+            line.insert((f, e), out.edge(c, 0.0, 1.0, a, z));
+        }
+    }
+    // Each edge's end arcs, about its vertices from f1's side to f2's: (edge, vertex) -> new edge.
+    let mut arc: HashMap<(usize, usize), (usize, Curve, f64)> = HashMap::new();
+    for e in 0..b.edges.len() {
+        let (f1, f2) = sides[e];
+        let (n1, n2) = (normal[f1], normal[f2]);
+        let y = (n2 - n1 * n1.dot(&n2)).try_normalize(tol::ANGULAR)?;
+        let th = n1.dot(&n2).clamp(-1.0, 1.0).acos();
+        for w in b.edges[e].v {
+            let c = Curve::Circle {
+                c: b.verts[w].p,
+                x: n1,
+                y,
+                r: d,
+            };
+            let (a, z) = (at(&mut out, f1, w), at(&mut out, f2, w));
+            let id = out.edge(c.clone(), 0.0, th, a, z);
+            arc.insert((e, w), (id, c, th));
+        }
+    }
+    let co = |surf: &Surface, near: P2, id: usize, c: &Curve, t0: f64, t1: f64, fwd: bool| Coedge {
+        edge: id,
+        fwd,
+        pc: pcurve(surf, c, t0, t1, Some(near)),
+    };
+    let line_curve = |f: usize, e: usize| {
+        let [v0, v1] = b.edges[e].v;
+        let pa = b.verts[v0].p + normal[f] * d;
+        let pz = b.verts[v1].p + normal[f] * d;
+        Curve::Line { o: pa, d: pz - pa }
+    };
+    let sensed = |surf: &Surface, p: P3, out_dir: V3| {
+        let (u, v) = surf.project(&p, None);
+        (P2::new(u, v), surf.normal(u, v).dot(&out_dir) > 0.0)
+    };
+    let mut faces = Vec::new();
+    // The moved faces.
+    for (fi, f) in b.faces.iter().enumerate() {
+        let Surface::Plane { f: fr } = &f.surf else {
+            return None;
+        };
+        let surf = Surface::Plane {
+            f: Frame {
+                o: fr.o + normal[fi] * d,
+                ..*fr
+            },
+        };
+        let p = b.verts[b.edges[f.loops[0][0].edge].v[0]].p + normal[fi] * d;
+        let (near, _) = sensed(&surf, p, normal[fi]);
+        let lp = f.loops[0]
+            .iter()
+            .map(|c| {
+                co(
+                    &surf,
+                    near,
+                    line[&(fi, c.edge)],
+                    &line_curve(fi, c.edge),
+                    0.0,
+                    1.0,
+                    c.fwd,
+                )
+            })
+            .collect();
+        faces.push(out.face(surf, f.sense, vec![lp]));
+    }
+    // The edges' cylinders.
+    for e in 0..b.edges.len() {
+        let (f1, f2) = sides[e];
+        let [v0, v1] = b.edges[e].v;
+        let (p0, p1) = (b.verts[v0].p, b.verts[v1].p);
+        let mid_dir = (normal[f1] + normal[f2]).normalize();
+        let surf = Surface::Cylinder {
+            f: Frame::from_xz(p0, -mid_dir, p1 - p0),
+            r: d,
+        };
+        let (near, sense) = sensed(&surf, nalgebra::center(&p0, &p1) + mid_dir * d, mid_dir);
+        let (a1, c1, t1) = &arc[&(e, v1)];
+        let (a0, c0, t0) = &arc[&(e, v0)];
+        let lp = vec![
+            co(
+                &surf,
+                near,
+                line[&(f2, e)],
+                &line_curve(f2, e),
+                0.0,
+                1.0,
+                true,
+            ),
+            co(&surf, near, *a1, c1, 0.0, *t1, false),
+            co(
+                &surf,
+                near,
+                line[&(f1, e)],
+                &line_curve(f1, e),
+                0.0,
+                1.0,
+                false,
+            ),
+            co(&surf, near, *a0, c0, 0.0, *t0, true),
+        ];
+        faces.push(out.face(surf, sense, vec![lp]));
+    }
+    // The corners' balls: each bounded by its edges' arcs, each run the other way from its
+    // cylinder (which runs an edge's end arc from f2's side to f1's, its start arc from f1's to
+    // f2's).
+    let mut around: Vec<Vec<(usize, bool)>> = vec![Vec::new(); b.verts.len()];
+    for (e, ed) in b.edges.iter().enumerate() {
+        let [v0, v1] = ed.v;
+        around[v0].push((e, false));
+        around[v1].push((e, true));
+    }
+    for (w, arcs) in around.iter().enumerate() {
+        if arcs.is_empty() {
+            continue;
+        }
+        let m = arcs
+            .iter()
+            .flat_map(|&(e, _)| [normal[sides[e].0], normal[sides[e].1]])
+            .fold(V3::zeros(), |a, n| a + n)
+            .try_normalize(tol::ANGULAR)?;
+        let pw = b.verts[w].p;
+        let surf = Surface::Sphere {
+            f: Frame::from_xz(pw, -m, any_perpendicular(&m)),
+            r: d,
+        };
+        let (near, sense) = sensed(&surf, pw + m * d, m);
+        // Chain the arcs: each from its start vertex to its end vertex in the loop's direction.
+        let ends = |&(e, fwd): &(usize, bool)| {
+            let (f1, f2) = sides[e];
+            if fwd {
+                ((f1, w), (f2, w))
+            } else {
+                ((f2, w), (f1, w))
+            }
+        };
+        let mut order = vec![arcs[0]];
+        while order.len() < arcs.len() {
+            let (_, end) = ends(order.last()?);
+            let next = arcs
+                .iter()
+                .find(|a| ends(a).0 == end && !order.contains(a))?;
+            order.push(*next);
+        }
+        if ends(order.last()?).1 != ends(&order[0]).0 {
+            return None;
+        }
+        let lp = order
+            .iter()
+            .map(|&(e, fwd)| {
+                let (id, c, th) = &arc[&(e, w)];
+                co(&surf, near, *id, c, 0.0, *th, fwd)
+            })
+            .collect();
+        faces.push(out.face(surf, sense, vec![lp]));
+    }
+    let shell = out.shell(faces, true);
+    out.solid(vec![shell]);
+    let body = out.build().ok()?;
+    body.check().is_empty().then_some(body)
 }
 
 /// A face's outward normal at a point on it.
@@ -452,6 +681,13 @@ fn outward_normal(b: &Body, fi: usize, p: &P3) -> V3 {
 /// `skip` (an outward shell's curved removed faces, whose slabs the caller cuts away). `b` is
 /// [`merged`] already.
 fn grown_except(b: &Body, d: f64, cut: &[(P3, V3)], skip: &[usize]) -> Result<Body> {
+    // A convex polyhedron: grown whole, directly (what lies beyond a cut plane, which the pieces
+    // here leave out, the callers cut away after).
+    if skip.is_empty()
+        && let Some(g) = grown_convex(b, d)
+    {
+        return Ok(g);
+    }
     let size = 1.0 + b.bbox().diagonal();
     let ef = b.edge_faces();
     // The cut plane each face lies on.
@@ -1855,4 +2091,92 @@ fn cylinder_domain(b: &Body, fi: usize) -> Option<(f64, f64, f64, f64)> {
         }
     }
     Some((lo, hi, u0, u1))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::native::kernel::NativeKernel;
+    use crate::*;
+    use nalgebra::Point3;
+    use std::f64::consts::PI;
+
+    /// A cube of side a grown by r, built directly (a convex polyhedron): its volume
+    /// a³ + 6a²r + 3πar² + 4πr³/3 and area 6a² + 6πar + 4πr², and its 26 faces (6 moved, 12
+    /// cylinder strips, 8 ball corners).
+    #[test]
+    fn a_cube_grown_is_built_directly_and_measures_right() {
+        let (a, r) = (10.0, 1.0);
+        let mut k = NativeKernel::new();
+        let id = k
+            .primitive(&Primitive::Box {
+                min: Point3::new(0.0, 0.0, 0.0),
+                max: Point3::new(a, a, a),
+            })
+            .unwrap()
+            .bodies[0];
+        let b = (**k.get(id).unwrap()).clone();
+        let g = super::grown_convex(&b, r).expect("a cube is a convex polyhedron");
+        assert_eq!(g.faces.len(), 26);
+        let gid = k.insert(g);
+        let m = k.mass_properties(gid).unwrap();
+        let volume =
+            a * a * a + 6.0 * a * a * r + 3.0 * PI * a * r * r + 4.0 * PI * r * r * r / 3.0;
+        let area = 6.0 * a * a + 6.0 * PI * a * r + 4.0 * PI * r * r;
+        assert!(
+            (m.volume - volume).abs() < 1e-9 * volume,
+            "{} {volume}",
+            m.volume
+        );
+        assert!(
+            (m.surface_area - area).abs() < 1e-9 * area,
+            "{} {area}",
+            m.surface_area
+        );
+    }
+
+    /// A cylinder and a cone grown by revolving their grown sections agree with the general
+    /// route (the slabs', tubes' and balls' union): volume and area to 1e-9, the same faces.
+    #[test]
+    fn solids_of_revolution_grown_agree_with_the_general_route() {
+        let z = nalgebra::Unit::new_normalize(nalgebra::Vector3::z());
+        let shapes = [
+            Primitive::Cylinder {
+                base: Point3::new(1.0, 2.0, 0.0),
+                axis: z,
+                radius: 5.0,
+                height: 10.0,
+            },
+            Primitive::Cone {
+                base: Point3::new(0.0, 0.0, -3.0),
+                axis: z,
+                base_radius: 6.0,
+                top_radius: 0.0,
+                height: 9.0,
+            },
+            Primitive::Cone {
+                base: Point3::new(0.0, 0.0, 0.0),
+                axis: z,
+                base_radius: 6.0,
+                top_radius: 2.0,
+                height: 5.0,
+            },
+        ];
+        for shape in shapes {
+            let mut k = NativeKernel::new();
+            let id = k.primitive(&shape).unwrap().bodies[0];
+            let b = (**k.get(id).unwrap()).clone();
+            let fast = crate::native::sweep_solid::grown_revolved(&b, 1.5).expect("revolved");
+            let general = super::grown_except(&super::merged(&b), 1.5, &[], &[]).unwrap();
+            let (f, g) = (k.insert(fast), k.insert(general));
+            let (mf, mg) = (k.mass_properties(f).unwrap(), k.mass_properties(g).unwrap());
+            assert!(
+                (mf.volume - mg.volume).abs() < 1e-9 * mg.volume,
+                "{shape:?}: {} {}",
+                mf.volume,
+                mg.volume
+            );
+            assert!((mf.surface_area - mg.surface_area).abs() < 1e-9 * mg.surface_area);
+            assert_eq!(k.faces(f).unwrap().len(), k.faces(g).unwrap().len());
+        }
+    }
 }

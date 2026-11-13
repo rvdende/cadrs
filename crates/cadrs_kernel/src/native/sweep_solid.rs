@@ -28,7 +28,7 @@ use super::surface::Surface;
 use super::tol;
 use super::topo::Body;
 use crate::*;
-use std::f64::consts::{PI, TAU};
+use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 /// A body of revolution: its own axis and its section's boundary in (ρ, h) about it.
 struct Revolved {
@@ -581,6 +581,353 @@ fn cut_torus_whole(
 }
 
 /// [`crate::Kernel::sweep_solid`].
+/// A solid of revolution grown by a ball of radius `d`, exactly: its section grown by `d` in its
+/// half plane, then revolved. A ball grows into a ball, a torus into a torus; a convex polygon
+/// section with one edge along the axis (a cylinder's, a cone's, a frustum's) into its other
+/// edges moved out by `d`, a round of radius `d` at each corner (at the axis's ends only the
+/// part off the axis), and the axis between them. None for any other body.
+pub(crate) fn grown_revolved(b: &Body, d: f64) -> Option<Body> {
+    if !(d > 0.0) {
+        return None;
+    }
+    let rev = revolved(b)?;
+    let pt = |x: f64, y: f64| nalgebra::Point2::new(x, y);
+    let curves: Vec<Curve2> = match &rev.section {
+        Section::Disk { c, r } => {
+            // A ball's disc stays one about the axis; a torus's must stay off it.
+            if c.0 != 0.0 && c.0 <= r + d {
+                return None;
+            }
+            if c.0 == 0.0 {
+                // The half disc against the axis.
+                vec![
+                    Curve2::Arc {
+                        center: pt(0.0, c.1),
+                        radius: r + d,
+                        start_angle: -FRAC_PI_2,
+                        sweep: PI,
+                        source: None,
+                    },
+                    Curve2::Line {
+                        a: pt(0.0, c.1 + r + d),
+                        b: pt(0.0, c.1 - r - d),
+                        source: None,
+                    },
+                ]
+            } else {
+                vec![Curve2::Circle {
+                    center: pt(c.0, c.1),
+                    radius: r + d,
+                    source: None,
+                }]
+            }
+        }
+        Section::Polygon(cs) => {
+            let n = cs.len();
+            let size = cs
+                .iter()
+                .fold(1.0f64, |m, c| m.max(c.0.abs()).max(c.1.abs()));
+            let on_axis = |i: usize| cs[i % n].0.abs() <= 1e-9 * size;
+            // The one edge along the axis, i → i + 1 (counter-clockwise: running down it).
+            let axis: Vec<usize> = (0..n).filter(|&i| on_axis(i) && on_axis(i + 1)).collect();
+            let &[i] = axis.as_slice() else {
+                return None;
+            };
+            if (0..n).filter(|&j| on_axis(j)).count() != 2 {
+                return None;
+            }
+            let c = |j: usize| cs[j % n];
+            // Edge j's outward normal (to the right of a counter-clockwise boundary).
+            let normal = |j: usize| {
+                let (p, q) = (c(j), c(j + 1));
+                let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+                let l = dx.hypot(dy);
+                (dy / l, -dx / l)
+            };
+            // The axis edge runs down it (the section to its left, off the axis): c(i) is its
+            // top, c(i + 1) its bottom. The edges either side face away from the axis.
+            let (before, after) = (normal(i + n - 1), normal(i + 1));
+            if before.0 < -1e-12 || after.0 < -1e-12 {
+                return None;
+            }
+            let (top, bottom) = (c(i), c(i + 1));
+            if !(top.1 > bottom.1) {
+                return None;
+            }
+            let arc = |at: (f64, f64), a0: f64, a1: f64| {
+                let sweep = (a1 - a0).rem_euclid(TAU);
+                (sweep > 1e-12 && sweep < PI).then(|| Curve2::Arc {
+                    center: pt(at.0, at.1),
+                    radius: d,
+                    start_angle: a0,
+                    sweep,
+                    source: None,
+                })
+            };
+            let mut out = Vec::new();
+            // Round the bottom from straight down to the edge after it.
+            out.extend(arc(bottom, -FRAC_PI_2, after.1.atan2(after.0)));
+            // Each edge moved out, a round at each corner between them.
+            for k in 1..n {
+                let j = i + k;
+                let (nx, ny) = normal(j);
+                let (p, q) = (c(j), c(j + 1));
+                out.push(Curve2::Line {
+                    a: pt(p.0 + nx * d, p.1 + ny * d),
+                    b: pt(q.0 + nx * d, q.1 + ny * d),
+                    source: None,
+                });
+                if k < n - 1 {
+                    let (mx, my) = normal(j + 1);
+                    out.extend(arc(q, ny.atan2(nx), my.atan2(mx)));
+                }
+            }
+            // Round the top from the edge before it to straight up, then down the axis.
+            out.extend(arc(top, before.1.atan2(before.0), FRAC_PI_2));
+            out.push(Curve2::Line {
+                a: pt(0.0, top.1 + d),
+                b: pt(0.0, bottom.1 - d),
+                source: None,
+            });
+            out
+        }
+    };
+    let region = Region {
+        outer: Loop { curves },
+        holes: vec![],
+        source: Some(0),
+    };
+    let plane = Plane {
+        origin: rev.o,
+        x_dir: nalgebra::Unit::new_normalize(rev.e1),
+        normal: nalgebra::Unit::new_normalize(rev.e1.cross(&rev.a)),
+    };
+    let axis = Axis {
+        origin: rev.o,
+        dir: nalgebra::Unit::new_normalize(rev.a),
+    };
+    let mut k = NativeKernel::new();
+    let r = k
+        .revolve_with(
+            &Profile::new(plane, vec![region]),
+            &RevolveSpec::solid(axis, None),
+        )
+        .ok()?;
+    let body = (**k.get(*r.bodies.first()?).ok()?).clone();
+    (body.check().is_empty() && super::mass::body_volume(&body) > 0.0).then_some(body)
+}
+
+/// A torus or a ball turned a whole turn about an axis that misses it (a torus's own axis along
+/// the turn's): exactly the solid of revolution of its shadow on the half plane through the
+/// axis. The ball's shadow is its great circle's disc; the torus's a stadium, the band between
+/// its tube's nearest and farthest reach ended by the tube's half circles. None for any other
+/// body or motion.
+fn whole_turn_of_round(
+    k: &mut NativeKernel,
+    b: &Body,
+    steps: &[RigidStep],
+) -> Option<Result<OpResult>> {
+    let [RigidStep::Turn { axis, from, to }] = steps else {
+        return None;
+    };
+    if (to - from).abs() < TAU - tol::ANGULAR_FINE {
+        return None;
+    }
+    let [face] = b.faces.as_slice() else {
+        return None;
+    };
+    let z = axis.dir.into_inner();
+    let (o, round) = match &face.surf {
+        Surface::Torus { f, rmaj, rmin } if f.z.cross(&z).norm() < tol::ANGULAR_FINE => {
+            (f.o, (*rmaj, *rmin))
+        }
+        Surface::Sphere { f, r } => (f.o, (0.0, *r)),
+        _ => return None,
+    };
+    let (rmaj, rmin) = round;
+    let w = o - axis.origin;
+    let h = w.dot(&z);
+    let radial = w - z * h;
+    let d = radial.norm();
+    // The axis must clear the body by a margin (else the shadow reaches it, or wraps it).
+    if !(d > rmaj + rmin + tol::POINT.max(1e-9 * d)) {
+        return None;
+    }
+    let x = radial / d;
+    let pt = |a: f64, b: f64| nalgebra::Point2::new(a, b);
+    let curves = if rmaj == 0.0 {
+        vec![Curve2::Circle {
+            center: pt(d, h),
+            radius: rmin,
+            source: None,
+        }]
+    } else {
+        let (near, far) = (d - rmaj, d + rmaj);
+        vec![
+            Curve2::Line {
+                a: pt(near, h - rmin),
+                b: pt(far, h - rmin),
+                source: None,
+            },
+            Curve2::Arc {
+                center: pt(far, h),
+                radius: rmin,
+                start_angle: -FRAC_PI_2,
+                sweep: PI,
+                source: None,
+            },
+            Curve2::Line {
+                a: pt(far, h + rmin),
+                b: pt(near, h + rmin),
+                source: None,
+            },
+            Curve2::Arc {
+                center: pt(near, h),
+                radius: rmin,
+                start_angle: FRAC_PI_2,
+                sweep: PI,
+                source: None,
+            },
+        ]
+    };
+    let region = Region {
+        outer: Loop { curves },
+        holes: vec![],
+        source: Some(0),
+    };
+    // The half plane through the axis: sketch x out from it, y along it.
+    let plane = Plane {
+        origin: axis.origin,
+        x_dir: nalgebra::Unit::new_normalize(x),
+        normal: nalgebra::Unit::new_normalize(x.cross(&z)),
+    };
+    let whole = Axis {
+        origin: axis.origin,
+        dir: axis.dir,
+    };
+    Some(k.revolve_with(
+        &Profile::new(plane, vec![region]),
+        &RevolveSpec::solid(whole, None),
+    ))
+}
+
+/// The ellipsoid `body` is, as its centre and the linear map `m` taking the unit ball onto it
+/// about that centre (`c + m·x`, `m` symmetric), when its one face lies on an ellipsoid: a
+/// quadric fitted through points of the face, then every one of a finer grid of its points on
+/// it to 1e-10. (An affine map of a ball keeps no record of the ball: its face is a NURBS.)
+fn ellipsoid_of(b: &Body) -> Option<(P3, nalgebra::Matrix3<f64>)> {
+    let [face] = b.faces.as_slice() else {
+        return None;
+    };
+    if !matches!(face.surf, Surface::Nurbs(_)) || b.shells.len() != 1 || !b.shells[0].closed {
+        return None;
+    }
+    let ((u0, u1), (v0, v1)) = face.surf.param_box();
+    let grid = |n: usize| -> Vec<P3> {
+        let mut ps = Vec::with_capacity(n * n);
+        for i in 0..n {
+            for j in 0..n {
+                let u = u0 + (u1 - u0) * (i as f64 + 0.5) / n as f64;
+                let v = v0 + (v1 - v0) * (j as f64 + 0.37) / n as f64;
+                ps.push(face.surf.eval(u, v));
+            }
+        }
+        ps
+    };
+    let pts = grid(7);
+    // Scaled about the points' middle for conditioning.
+    let mid = P3::from(pts.iter().map(|p| p.coords).sum::<V3>() / pts.len() as f64);
+    let size = pts.iter().map(|p| (p - mid).norm()).fold(0.0, f64::max);
+    if !(size > tol::POINT) {
+        return None;
+    }
+    let row = |p: &P3| {
+        let q = (p - mid) / size;
+        [
+            q.x * q.x,
+            q.y * q.y,
+            q.z * q.z,
+            q.x * q.y,
+            q.y * q.z,
+            q.z * q.x,
+            q.x,
+            q.y,
+            q.z,
+            1.0,
+        ]
+    };
+    let a = nalgebra::DMatrix::from_fn(pts.len(), 10, |i, j| row(&pts[i])[j]);
+    let svd = (a.transpose() * &a).symmetric_eigen();
+    let (k, _) = svd
+        .eigenvalues
+        .iter()
+        .enumerate()
+        .min_by(|x, y| x.1.abs().total_cmp(&y.1.abs()))?;
+    let q = svd.eigenvectors.column(k);
+    let sym = nalgebra::Matrix3::new(
+        q[0],
+        q[3] / 2.0,
+        q[5] / 2.0,
+        q[3] / 2.0,
+        q[1],
+        q[4] / 2.0,
+        q[5] / 2.0,
+        q[4] / 2.0,
+        q[2],
+    );
+    let lin = V3::new(q[6], q[7], q[8]);
+    // (q - c)ᵀ A (q - c) = r in the scaled coordinates.
+    let c = -0.5 * sym.try_inverse()? * lin;
+    let r = c.dot(&(sym * c)) - q[9];
+    let a_n = sym / r;
+    let eig = a_n.symmetric_eigen();
+    if eig.eigenvalues.iter().any(|&l| !(l > 1e-12)) {
+        return None;
+    }
+    // m = A^(-1/2), back in model units.
+    let inv_sqrt = eig.eigenvectors
+        * nalgebra::Matrix3::from_diagonal(&eig.eigenvalues.map(|l| 1.0 / l.sqrt()))
+        * eig.eigenvectors.transpose();
+    let m = inv_sqrt * size;
+    let centre = mid + c * size;
+    let m_inv = m.try_inverse()?;
+    grid(13)
+        .iter()
+        .all(|p| ((m_inv * (p - centre)).norm() - 1.0).abs() < 1e-10)
+        .then_some((centre, m))
+}
+
+/// An ellipsoid slid: the unit ball slid along the slide mapped back (sweeping commutes with
+/// the ellipsoid's linear map), a capsule, mapped onto it exactly.
+fn slid_ellipsoid(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Result<OpResult>> {
+    let [RigidStep::Slide { from, to }] = steps else {
+        return None;
+    };
+    let (c, m) = ellipsoid_of(b)?;
+    let m_inv = m.try_inverse()?;
+    let ball = super::blend::ball_body(P3::origin(), 1.0).ok()?;
+    let id = k.insert(ball);
+    let slide = SolidMotion::Rigid {
+        steps: vec![RigidStep::Slide {
+            from: m_inv * from,
+            to: m_inv * to,
+        }],
+    };
+    let r = match sweep_solid(k, id, &slide) {
+        Ok(r) => r,
+        Err(e) => return Some(Err(e)),
+    };
+    let capsule = (**k.get(*r.bodies.first()?).ok()?).clone();
+    let mapped = super::affine::affine_body(&capsule, &Affine { m, t: c.coords });
+    Some(mapped.map(|body| {
+        let id = k.insert(body);
+        OpResult {
+            bodies: vec![id],
+            history: History::default(),
+        }
+    }))
+}
+
 pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> Result<OpResult> {
     let b = (**k.get(body)?).clone();
     if let SolidMotion::Planar { normal, steps } = motion {
@@ -589,6 +936,12 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
     // One slide, turn or screw of any solid: exactly, from its leading faces' sweeps (split
     // where its faces meet the motion); else meshed.
     if let SolidMotion::Rigid { steps } = motion {
+        if let Some(r) = whole_turn_of_round(k, &b, steps) {
+            return r;
+        }
+        if let Some(r) = slid_ellipsoid(k, &b, steps) {
+            return r;
+        }
         let mut exact = None;
         // A pipe slid: exactly, as everything within its radius of the strip its spine sweeps.
         if let [RigidStep::Slide { from, to }] = steps.as_slice()
