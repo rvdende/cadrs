@@ -88,7 +88,7 @@ impl ToolKind {
         }
     }
 
-    /// The icon of the kind (icon-rs).
+    /// The icon of the kind (cadrs_icons).
     pub fn icon(self) -> &'static str {
         match self {
             ToolKind::Drill | ToolKind::Tap | ToolKind::ThreadMill => "cam-drill",

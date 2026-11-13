@@ -101,7 +101,7 @@ impl Button {
         self
     }
 
-    /// A leading icon (an icon-rs icon name).
+    /// A leading icon (a cadrs_icons icon name).
     pub fn icon(mut self, icon: impl Into<Cow<'static, str>>) -> Self {
         self.icon = Some(icon.into());
         self

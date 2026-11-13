@@ -15,7 +15,7 @@
 //!   `inspection-and-repair/ex1-step4.png`). Glyphs keep
 //!   4 px clear of the sketch axes, and their leaders stay short (at most about 24 px).
 //!
-//! The icons are icon-rs's constraint glyphs (`constraint-*`), rasterized with the other icons.
+//! The icons are cadrs_icons's constraint glyphs (`constraint-*`), rasterized with the other icons.
 
 use std::collections::HashMap;
 

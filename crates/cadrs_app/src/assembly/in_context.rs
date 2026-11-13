@@ -1398,7 +1398,7 @@ fn arrow_node(t: &Theme, name: String, s: &ArrowState) -> impl Bundle {
         Tooltip::new(s.tip.clone()),
         Pickable::default(),
         Children::spawn((
-            // icon-rs's in-context arrows (solid: a feature's, a primary instance's; dashed: a
+            // cadrs_icons's in-context arrows (solid: a feature's, a primary instance's; dashed: a
             // secondary instance's); before its release has them, its up arrow turned left, faint
             // for a secondary instance.
             SpawnWith({
