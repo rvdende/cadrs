@@ -32,6 +32,9 @@ cadrs_router.workspace = true
 # KiCad project import: a crutch that can be dropped (remove the feature and `pcb::kicad`).
 cadrs_kicad = { workspace = true, optional = true }
 cadrs_net.workspace = true
+cadrs_org.workspace = true
+cadrs_social.workspace = true
+postcard.workspace = true
 serde_json.workspace = true
 directories.workspace = true
 winit.workspace = true
@@ -56,6 +59,10 @@ ureq.workspace = true
 tar.workspace = true
 
 [dev-dependencies]
+# The phone (its state and node) against the desktop, in tests/social_flow.rs.
+cadrs_mobile.workspace = true
+cadrs_social_net.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
 # The network button's icons exist (`network`).
 icon-rs.workspace = true
 

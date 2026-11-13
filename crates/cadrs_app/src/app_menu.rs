@@ -131,6 +131,9 @@ fn document_entries(workspaces: Vec<MenuEntry>) -> Vec<MenuEntry> {
         )
         .icon("versions")
         .into(),
+        MenuItem::new("document-menu-request-quote", tr("rfq-menu"))
+            .icon("tag")
+            .into(),
         workspace.into(),
         MenuEntry::Separator,
         MenuItem::new("document-menu-units", tr("shell-app-menu-workspace-units"))
@@ -181,6 +184,12 @@ fn on_app_menu(
                 .unwrap_or_default();
             document_entries(workspaces)
         }
+        AppState::Organization => vec![
+            MenuItem::new("app-documents", tr("shell-app-menu-all-documents"))
+                .icon("home")
+                .into(),
+            MenuEntry::Separator,
+        ],
         _ => crate::landing::app_entries(&lib.lib, landing.filter),
     };
     entries.extend(app_entries());
@@ -206,6 +215,7 @@ fn on_app_menu_action(
         "app-documents" => commands.queue(crate::thumbnail::close_document),
         "document-menu-export" => commands.queue(crate::native_document::open_export),
         "document-menu-units" => commands.queue(crate::units_dialog::open_units_dialog),
+        "document-menu-request-quote" => commands.queue(crate::request_quote::open),
         "document-menu-full-rebuild" => commands.queue(crate::document::full_rebuild),
         // P3D.3: a version of the document as it is.
         "document-menu-create-version" => commands.queue(|world: &mut World| {

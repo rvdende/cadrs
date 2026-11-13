@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- Served at /phone.html and as /404.html (cards' links, /c/<code>, land there): files from the root. -->
+<base href="/">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>cadrs</title>
+<link rel="icon" href="cadrs.png">
+<style>
+  :root { --bg: #f6f7f9; --card: #fff; --fg: #1d2129; --muted: #6b7280; --line: #e3e6eb;
+          --primary: #1f5fbf; --on-primary: #fff; --me: #1f5fbf; --them: #e9ecf1; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #15171b; --card: #1f2228; --fg: #e8eaee; --muted: #9aa1ac; --line: #2c3038;
+            --primary: #5b8def; --on-primary: #0b1020; --me: #3b6fd6; --them: #2a2e36; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 15px/1.4 Inter, system-ui, -apple-system, sans-serif; }
+  #app { max-width: 640px; margin: 0 auto; padding: 0 16px 32px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; padding: 14px 0 6px; }
+  h1 { margin: 0; font-size: 20px; } h2 { font-size: 17px; margin: 16px 0 8px; }
+  .status { color: var(--muted); font-size: 13px; }
+  nav { display: flex; gap: 4px; position: sticky; top: 0; background: var(--bg); padding: 6px 0;
+        border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+  .tab { flex: 1; background: none; border: 0; padding: 10px 0; color: var(--muted); font: inherit;
+         border-bottom: 2px solid transparent; }
+  .tab.on { color: var(--primary); border-color: var(--primary); font-weight: 600; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+          padding: 12px; margin-bottom: 10px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+  .stage { font-weight: 600; font-size: 13px; }
+  button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line);
+           background: var(--card); color: var(--fg); }
+  button.primary { background: var(--primary); color: var(--on-primary); border-color: var(--primary); }
+  input { font: inherit; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--line);
+          background: var(--card); color: var(--fg); width: 100%; margin-bottom: 8px; }
+  p { margin: 8px 0; } .muted { color: var(--muted); }
+  .qr { background: #fff; padding: 12px; border-radius: 10px; width: fit-content; }
+  .qr svg { display: block; width: 240px; height: 240px; }
+  .link { font-size: 11px; word-break: break-all; color: var(--muted); }
+  .code { font-size: 28px; letter-spacing: 4px; }
+  .msg { max-width: 80%; padding: 8px 12px; border-radius: 12px; margin: 6px 0; width: fit-content; }
+  .msg.me { margin-left: auto; background: var(--me); color: #fff; }
+  .msg.them { background: var(--them); }
+  #scanner { position: fixed; inset: 0; background: #000; display: flex; flex-direction: column;
+             align-items: center; justify-content: center; gap: 16px; z-index: 10; }
+  #scanner[hidden] { display: none; }
+  #scanner video { width: 100%; max-height: 75vh; object-fit: cover; }
+</style>
+</head>
+<body>
+<div id="app"><p class="muted">Loading cadrs…</p></div>
+<!-- The camera, while scanning a code (outside #app, which is drawn again on each change). -->
+<div id="scanner" hidden>
+  <video id="cam" playsinline muted autoplay></video>
+  <button data-action="scan-stop">Stop</button>
+</div>
+<p style="text-align:center"><a href="/?full" style="color:var(--muted);font-size:13px">The full cadrs (to draw parts)</a></p>
+<script type="module">
+  import { openFiles } from "./files.js";
+  const [{ default: init }, files] = await Promise.all([
+    import("./cadrs_mobile.js"),
+    openFiles({ bundled: false }),
+  ]);
+  // `cadrs_fs` takes the files from here when the phone first reads one.
+  globalThis.cadrsFiles = files;
+  await init({ module_or_path: "./cadrs_mobile_bg.wasm" });
+</script>
+</body>
+</html>

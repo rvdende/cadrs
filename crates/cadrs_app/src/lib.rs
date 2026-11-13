@@ -61,6 +61,8 @@ pub mod manipulator;
 pub mod mass_props;
 pub mod material_dialog;
 // The MCP server listens on a port: not in the browser build (`tools/web`).
+pub mod chat_ui;
+pub mod find_shop;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mcp;
 #[cfg(not(target_arch = "wasm32"))]
@@ -70,6 +72,10 @@ pub mod move_document;
 pub mod native_document;
 pub mod network;
 pub mod notifications;
+pub mod org_sync;
+pub mod org_tabs;
+pub mod organization;
+pub mod pairing_ui;
 pub mod part_folders;
 pub mod part_shading;
 pub mod parts;
@@ -81,6 +87,7 @@ pub mod picture;
 pub mod plane_display;
 pub mod preferences_ui;
 pub mod properties_dialog;
+pub mod public_chat_ui;
 pub mod rebuild_indicator;
 pub mod rebuild_rows;
 pub mod reference_manager;
@@ -88,6 +95,7 @@ pub mod region_select;
 pub mod render_ui;
 pub mod repair;
 pub mod replace_reference;
+pub mod request_quote;
 pub mod revolve;
 pub mod revolve_dialog;
 pub mod scale_ui;
@@ -117,6 +125,7 @@ pub mod sketch_links;
 pub mod sketch_modify_tools;
 pub mod sketch_text;
 pub mod sketch_tools;
+pub mod social;
 pub mod spacemouse;
 pub mod suppress_variable;
 pub mod surfacing_ui;
@@ -154,6 +163,8 @@ pub enum AppState {
     Document,
     /// Hidden: the `cadrs_ui` component gallery (`--scenario ui_gallery`).
     Gallery,
+    /// An open organization document (a shop: `organization`).
+    Organization,
 }
 
 impl AppState {
@@ -163,6 +174,7 @@ impl AppState {
             "landing" => Some(AppState::Landing),
             "document" => Some(AppState::Document),
             "gallery" => Some(AppState::Gallery),
+            "organization" => Some(AppState::Organization),
             _ => None,
         }
     }
@@ -927,7 +939,14 @@ impl Plugin for CadrsAppPlugin {
                 shortcuts::ShortcutsPlugin,
                 script::ScriptPlugin,
             ))
-            .add_plugins((spacemouse::SpaceMousePlugin, walk::WalkPlugin))
+            .add_plugins((
+                spacemouse::SpaceMousePlugin,
+                walk::WalkPlugin,
+                organization::OrganizationPlugin,
+                social::SocialPlugin,
+                org_sync::OrgSyncPlugin,
+                public_chat_ui::PublicChatPlugin,
+            ))
             .add_plugins(top_bar::TopBarPlugin)
             .add_plugins(part_folders::PartFoldersPlugin)
             .add_plugins((

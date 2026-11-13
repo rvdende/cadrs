@@ -221,6 +221,7 @@ struct ContextDoc(DocumentId);
 #[derive(Component, Clone, Copy)]
 enum LandingDialog {
     NewDocument,
+    NewOrganization,
     NewFolder,
     Rename(DocumentId),
     Copy(DocumentId),
@@ -448,7 +449,7 @@ fn spawn_landing(
 
 /// The bar across the top: the app menu, then the version, notifications, the color scheme
 /// and the account.
-fn top_bar(p: &mut ChildSpawnerCommands, t: &Theme, profile: &UserProfile) {
+pub(crate) fn top_bar(p: &mut ChildSpawnerCommands, t: &Theme, profile: &UserProfile) {
     // Floating, as a document's top bar is.
     p.spawn((
         Name::new("top-bar"),
@@ -1527,6 +1528,7 @@ fn create_menu(t: &Theme, name: &'static str) -> impl Bundle {
         .item(
             MenuItem::new("new-folder", tr("shell-landing-new-folder-ellipsis")).icon("folder-new"),
         )
+        .item(MenuItem::new("new-organization", tr("org-new-ellipsis")).icon("users"))
         .separator()
         .item(MenuItem::new("import-files", tr("shell-landing-import-files")).icon("file-import"))
         .item(
@@ -1563,6 +1565,7 @@ fn on_create_menu_action(ev: On<MenuAction>, mut commands: Commands, theme: Res<
     match ev.item.as_str() {
         "new-document" => open_new_document_dialog(&mut commands, &theme),
         "new-folder" => open_new_folder_dialog(&mut commands, &theme),
+        "new-organization" => open_new_organization_dialog(&mut commands, &theme),
         // P3F.2: a STEP or IGES file as a new document.
         "import-files" => {
             commands.queue(|w: &mut World| {
@@ -1649,6 +1652,19 @@ pub(crate) fn app_entries(lib: &Library, filter: Filter) -> Vec<MenuEntry> {
             .icon("delete")
             .checked(filter == Filter::Trash)
             .into(),
+        MenuEntry::Separator,
+        MenuItem::new("app-find-shop", tr("find-shop-menu"))
+            .icon("search")
+            .into(),
+        MenuItem::new("app-public-chat", tr("public-chat-menu"))
+            .icon("comments")
+            .into(),
+        MenuItem::new("app-quote-requests", tr("rfq-requests-menu"))
+            .icon("tag")
+            .into(),
+        MenuItem::new("app-add-contact", tr("social-add-contact-menu"))
+            .icon("user")
+            .into(),
     ];
     if filter == Filter::Trash {
         let (docs, folders) = lib.trash();
@@ -1669,6 +1685,10 @@ pub(crate) fn app_action(world: &mut World, item: &str) -> bool {
         "app-open-folder" => open_documents_folder(world),
         "app-public" => show_filter(world, Filter::Public),
         "app-trash" => show_filter(world, Filter::Trash),
+        "app-quote-requests" => crate::request_quote::open_requests(world),
+        "app-find-shop" => crate::find_shop::open(world),
+        "app-public-chat" => crate::public_chat_ui::show(world),
+        "app-add-contact" => crate::request_quote::open_add_contact(world),
         "app-empty-trash" => {
             let theme = world.resource::<Theme>().clone();
             let lib = world.resource::<DocLibrary>().lib.clone();
@@ -1714,6 +1734,10 @@ pub(crate) fn open_document(world: &mut World, id: DocumentId) {
     file.meta.last_opened = Some(now);
     if let Err(e) = store.save(&file.document, &file.meta) {
         warn!("cannot record the open time: {e}");
+    }
+    if file.meta.organization.is_some() {
+        crate::organization::open(world, &file);
+        return;
     }
     let read_only = file
         .meta
@@ -2181,6 +2205,11 @@ fn confirm_dialog(world: &mut World) {
             close_dialogs(world);
             create_document(world, &name);
         }
+        LandingDialog::NewOrganization => {
+            let name = field_value(world, "new-organization-name-field");
+            close_dialogs(world);
+            crate::organization::create(world, &name);
+        }
         LandingDialog::Rename(id) => {
             let name = field_value(world, "rename-name-field");
             if name.trim().is_empty() {
@@ -2342,6 +2371,52 @@ fn open_new_document_dialog(commands: &mut Commands, theme: &Theme) {
             })
             .build(&t),
         LandingDialog::NewDocument,
+        DespawnOnExit(AppState::Landing),
+    ));
+}
+
+/// A new organization document (a shop): its name.
+fn open_new_organization_dialog(commands: &mut Commands, theme: &Theme) {
+    let t = theme.clone();
+    let tb = theme.clone();
+    let tf = theme.clone();
+    commands.spawn((
+        Dialog::new("new-organization-dialog")
+            .title(tr("org-new"))
+            .width(548.0)
+            .body(move |b| {
+                let t = &tb;
+                field_label(b, t, "org-name-label");
+                b.spawn(
+                    TextInput::new("new-organization-name")
+                        .placeholder(tr("org-name-placeholder"))
+                        .autofocus()
+                        .build(t),
+                );
+                b.spawn(t.paragraph(tr("org-new-help"), t.font_sm, t.muted_foreground));
+            })
+            .footer(move |f| {
+                let t = &tf;
+                f.spawn((
+                    Button::new("new-organization-create")
+                        .label(tr("org-create"))
+                        .primary()
+                        .build(t),
+                    observe(|_: On<Activate>, mut commands: Commands| {
+                        commands.queue(confirm_dialog);
+                    }),
+                ));
+                f.spawn((
+                    Button::new("new-organization-cancel")
+                        .label(tr("common-cancel"))
+                        .build(t),
+                    observe(|_: On<Activate>, mut commands: Commands| {
+                        commands.queue(close_dialogs);
+                    }),
+                ));
+            })
+            .build(&t),
+        LandingDialog::NewOrganization,
         DespawnOnExit(AppState::Landing),
     ));
 }

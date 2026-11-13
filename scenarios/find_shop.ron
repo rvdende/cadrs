@@ -1,0 +1,20 @@
+// Find a shop (the documents page's app menu): the world map with where you said you are, and
+// the shops heard of in the public room (none here: the network is off in scenarios).
+Scenario(
+    start: Some("landing"),
+    steps: [
+        WaitFor("landing-page"),
+        Click(ui("app-menu")),
+        WaitFor("app-find-shop"),
+        Click(ui("app-find-shop")),
+        WaitFor("find-shop-dialog"),
+        Click(ui("find-shop-lat")),
+        Type("-33.93"),
+        Click(ui("find-shop-lon")),
+        Type("18.86"),
+        Click(ui("find-shop-search")),
+        Wait(1),
+        WaitFor("find-shop-map"),
+        Screenshot("01-find-a-shop"),
+    ],
+)

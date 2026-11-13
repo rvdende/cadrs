@@ -211,5 +211,17 @@ fn on_bell_action(ev: On<MenuAction>, q: Query<&Name>, mut commands: Commands) {
 pub(crate) fn notice_action(commands: &mut Commands, item: &str) {
     if item == "notice-update" {
         commands.queue(crate::update::show_release_notes);
+    } else if item.starts_with("notice-letter-c-") {
+        // News of a request this user sent.
+        commands.queue(crate::request_quote::open_requests);
+    } else if let Some(rest) = item.strip_prefix("notice-letter-s-") {
+        // A shop's news: open its organization document.
+        let doc = rest.rsplit_once('-').map(|(doc, _)| doc.to_owned());
+        if let Some(id) = doc
+            .and_then(|d| uuid::Uuid::parse_str(&d).ok())
+            .map(cadrs_core::DocumentId)
+        {
+            commands.queue(move |w: &mut World| crate::landing::open_document(w, id));
+        }
     }
 }

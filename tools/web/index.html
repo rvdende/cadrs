@@ -38,6 +38,11 @@
   <div class="note" id="note">The whole app runs in this tab. Your documents stay in this browser.</div>
 </div>
 <script type="module">
+  // A phone gets the phone page (`phone.html`: contacts, quotes, messages; small and quick),
+  // unless it asks for the full app (`?full`).
+  if (/Android|iPhone|iPod/.test(navigator.userAgent) && !new URLSearchParams(location.search).has("full")) {
+    location.replace("phone.html" + location.hash);
+  }
   import { openFiles } from "./files.js";
 
   const status = document.getElementById("status");

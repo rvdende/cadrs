@@ -6,6 +6,10 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# The world map (`world_map`): coastlines and pins drawn into an image.
+tiny-skia.workspace = true
+# QR codes of contact cards and pairing codes (`qr`; MIT/Apache-2.0).
+qrcode = { workspace = true }
 cadrs_fs.workspace = true
 bevy.workspace = true
 # Icons at sizes not built in (a UI scale, a high-DPI screen), rendered like `build.rs` does.
