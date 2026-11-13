@@ -1775,6 +1775,14 @@ model-gear-worm-starts = Entradas del tornillo
 model-gear-worm-quotient = Cociente diametral
 model-gear-wheel-axis = Eje de la corona
 model-gear-fast-preview = Vista previa rápida (solo el bruto)
+model-gear-pair = Par de engranajes
+model-gear-ratio = Relación
+model-gear-auto-teeth = Dientes automáticos
+model-gear-pinion-teeth = Dientes del piñón (o entradas del tornillo)
+model-gear-pair-gear-shaft = Eje de la rueda
+model-gear-pair-pinion-shaft = Eje del piñón
+model-gear-pair-hypoid = Par hipoide: { $pinion } : { $gear } dientes
+model-gear-pair-worm = Tornillo sin fin: { $starts } entrada(s), { $gear } dientes
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = A derechas

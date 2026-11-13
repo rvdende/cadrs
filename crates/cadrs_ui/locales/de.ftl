@@ -1775,6 +1775,14 @@ model-gear-worm-starts = Gangzahl der Schnecke
 model-gear-worm-quotient = Formzahl
 model-gear-wheel-axis = Achse des Schneckenrads
 model-gear-fast-preview = Schnellvorschau (nur Rohling)
+model-gear-pair = Zahnradpaar
+model-gear-ratio = Übersetzung
+model-gear-auto-teeth = Zähnezahl automatisch
+model-gear-pinion-teeth = Zähne des Ritzels (Gänge der Schnecke)
+model-gear-pair-gear-shaft = Welle des Rads
+model-gear-pair-pinion-shaft = Welle des Ritzels
+model-gear-pair-hypoid = Hypoidradsatz: { $pinion } : { $gear } Zähne
+model-gear-pair-worm = Schneckengetriebe: { $starts } Gang/Gänge, { $gear } Zähne
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Rechtsgängig

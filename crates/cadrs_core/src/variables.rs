@@ -419,6 +419,7 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
                 &mut x.worm_quotient,
                 C,
             );
+            s("Ratio", &mut x.ratio_expr, &mut x.ratio, C);
         }
         FeatureKind::Thread(x) => {
             s("Length", &mut x.length_expr, &mut x.length, L);

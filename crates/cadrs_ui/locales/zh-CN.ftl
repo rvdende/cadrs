@@ -1775,6 +1775,14 @@ model-gear-worm-starts = 蜗杆头数
 model-gear-worm-quotient = 直径系数
 model-gear-wheel-axis = 蜗轮轴线
 model-gear-fast-preview = 快速预览（仅毛坯）
+model-gear-pair = 齿轮副
+model-gear-ratio = 传动比
+model-gear-auto-teeth = 自动齿数
+model-gear-pinion-teeth = 小轮齿数（蜗杆头数）
+model-gear-pair-gear-shaft = 大轮轴
+model-gear-pair-pinion-shaft = 小轮轴
+model-gear-pair-hypoid = 准双曲面齿轮副：{ $pinion } : { $gear } 齿
+model-gear-pair-worm = 蜗杆传动：{ $starts } 头，{ $gear } 齿
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = 右旋

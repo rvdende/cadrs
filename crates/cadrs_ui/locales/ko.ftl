@@ -1775,6 +1775,14 @@ model-gear-worm-starts = 웜의 줄 수
 model-gear-worm-quotient = 직경 계수
 model-gear-wheel-axis = 휠의 축
 model-gear-fast-preview = 빠른 미리보기 (소재만)
+model-gear-pair = 기어 쌍
+model-gear-ratio = 기어비
+model-gear-auto-teeth = 잇수 자동
+model-gear-pinion-teeth = 피니언 잇수 (웜 줄 수)
+model-gear-pair-gear-shaft = 기어 축
+model-gear-pair-pinion-shaft = 피니언 축
+model-gear-pair-hypoid = 하이포이드: { $pinion } : { $gear } 잇수
+model-gear-pair-worm = 웜 기어: { $starts } 줄, { $gear } 잇수
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = 오른나사

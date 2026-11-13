@@ -169,7 +169,7 @@ pub(crate) fn name(kind: &FeatureKind) -> Option<&'static str> {
 pub(crate) fn layout(kind: &FeatureKind) -> Option<String> {
     match kind {
         FeatureKind::Gear(x) => Some(format!(
-            "gear {:?} {:?} {} {} {} {:?} {:?} {} {}",
+            "gear {:?} {:?} {} {} {} {:?} {:?} {} {} {}",
             x.gear_type,
             x.style,
             x.face.is_some(),
@@ -178,7 +178,8 @@ pub(crate) fn layout(kind: &FeatureKind) -> Option<String> {
             x.spiral,
             x.member,
             x.shaft.is_some() && x.mate_shaft.is_some(),
-            x.fast_preview
+            x.fast_preview,
+            x.auto_teeth,
         )),
         k => crate::surfacing_ui::layout(k),
     }
@@ -258,6 +259,7 @@ fn type_key(t: GearType) -> &'static str {
         GearType::Rack => "model-gear-rack",
         GearType::Hypoid => "model-gear-hypoid",
         GearType::Worm => "model-gear-worm",
+        GearType::Pair => "model-gear-pair",
     }
 }
 
@@ -284,7 +286,10 @@ pub(crate) fn body(
     let rack = x.gear_type == GearType::Rack;
     body_column(b, |b| {
         // (A hypoid pair's member is made whole: it takes no face.)
-        if !matches!(x.gear_type, GearType::Hypoid | GearType::Worm) {
+        if !matches!(
+            x.gear_type,
+            GearType::Hypoid | GearType::Worm | GearType::Pair
+        ) {
             list(
                 b,
                 t,
@@ -317,6 +322,10 @@ pub(crate) fn body(
         }
         if x.gear_type == GearType::Worm {
             worm_body(b, t, x);
+            return;
+        }
+        if x.gear_type == GearType::Pair {
+            pair_body(b, t, x, field, items_of);
             return;
         }
         let mut num = |name: &str, key: &str, role: Role, text: &str| {
@@ -480,7 +489,7 @@ pub(crate) fn body(
                     num("gear-bore", "model-gear-bore", Role::GearBore, &x.bore_expr)
                 }
                 GearType::Ring => num("gear-rim", "model-gear-rim", Role::GearRim, &x.rim_expr),
-                GearType::Rack | GearType::Hypoid | GearType::Worm => {}
+                GearType::Rack | GearType::Hypoid | GearType::Worm | GearType::Pair => {}
             }
             if matches!(x.gear_type, GearType::Bevel | GearType::Rack) {
                 num(
@@ -870,6 +879,167 @@ fn fast_preview_row(b: &mut ChildSpawner, t: &Theme, x: &cadrs_core::gear::GearF
     );
 }
 
+/// A gear pair: its shafts (with both, the shaft angle and offset are theirs), its ratio, its
+/// tooth counts (chosen to suit, or typed), what it makes of them (a hypoid pair or a worm
+/// drive, and its teeth), the module, the spiral and pressure angles, the hand, the backlash,
+/// Fast preview; without shafts, the shaft angle and offset and where it is.
+fn pair_body(
+    b: &mut ChildSpawner,
+    t: &Theme,
+    x: &cadrs_core::gear::GearFeature,
+    field: AppliedField,
+    items_of: &dyn Fn(Role) -> Vec<String>,
+) {
+    let num = |b: &mut ChildSpawner, name: &str, key: &str, role: Role, text: &str| {
+        number(b, t, name, &tr(key), role, text, None);
+    };
+    list(
+        b,
+        t,
+        "gear-shaft-field",
+        &tr("model-gear-pair-gear-shaft"),
+        Role::GearShaft,
+        items_of(Role::GearShaft),
+        field == AppliedField::GearShaft,
+    );
+    list(
+        b,
+        t,
+        "gear-mate-shaft-field",
+        &tr("model-gear-pair-pinion-shaft"),
+        Role::GearMateShaft,
+        items_of(Role::GearMateShaft),
+        field == AppliedField::GearMateShaft,
+    );
+    let on_shafts = x.shaft.is_some() && x.mate_shaft.is_some();
+    num(
+        b,
+        "gear-ratio",
+        "model-gear-ratio",
+        Role::GearRatio,
+        &x.ratio_expr,
+    );
+    b.spawn(
+        OptionRow::new("gear-auto-teeth", tr("model-gear-auto-teeth"))
+            .checked(x.auto_teeth)
+            .build(t),
+    );
+    if !x.auto_teeth {
+        num(
+            b,
+            "gear-teeth",
+            "model-gear-teeth",
+            Role::GearTeeth,
+            &x.teeth_expr,
+        );
+        num(
+            b,
+            "gear-mate-teeth",
+            "model-gear-pinion-teeth",
+            Role::GearMateTeeth,
+            &x.mate_teeth_expr,
+        );
+    }
+    // What the pair makes of it (as typed: on shafts the view shows it where it stands).
+    if !on_shafts {
+        let (family, members) = cadrs_core::gear::pair_members(x, x.shaft_angle, x.offset);
+        let text = match family {
+            cadrs_core::gear::PairFamily::Hypoid => tr_with(
+                "model-gear-pair-hypoid",
+                &[
+                    ("pinion", &members[1].teeth.to_string()),
+                    ("gear", &members[0].teeth.to_string()),
+                ],
+            ),
+            cadrs_core::gear::PairFamily::Worm => tr_with(
+                "model-gear-pair-worm",
+                &[
+                    ("starts", &members[1].teeth.to_string()),
+                    ("gear", &members[0].teeth.to_string()),
+                ],
+            ),
+        };
+        b.spawn((
+            Name::new("gear-pair-made"),
+            t.text(
+                text,
+                t.font_sm,
+                bevy::text::FontWeight::NORMAL,
+                t.muted_foreground,
+            ),
+        ));
+    }
+    num(
+        b,
+        "gear-module",
+        "model-gear-module",
+        Role::GearModule,
+        &x.module_expr,
+    );
+    num(
+        b,
+        "gear-helix-angle",
+        "model-gear-spiral-angle",
+        Role::GearHelixAngle,
+        &x.helix_angle_expr,
+    );
+    num(
+        b,
+        "gear-pressure-angle",
+        "model-gear-pressure-angle",
+        Role::GearPressureAngle,
+        &x.pressure_angle_expr,
+    );
+    if !on_shafts {
+        let hands: Vec<(String, bool)> = HANDS.iter().map(|h| (tr(h), true)).collect();
+        select_row(
+            b,
+            t,
+            "gear-hand",
+            &tr("common-direction"),
+            Role::GearHand,
+            &hands,
+            usize::from(x.left_hand),
+            None,
+        );
+        num(
+            b,
+            "gear-shaft-angle",
+            "model-gear-shaft-angle",
+            Role::GearShaftAngle,
+            &x.shaft_angle_expr,
+        );
+        num(
+            b,
+            "gear-offset",
+            "model-gear-offset",
+            Role::GearOffset,
+            &x.offset_expr,
+        );
+    }
+    num(
+        b,
+        "gear-backlash",
+        "model-gear-backlash",
+        Role::GearBacklash,
+        &x.backlash_expr,
+    );
+    fast_preview_row(b, t, x);
+    if on_shafts {
+        return;
+    }
+    for (i, (name, label, role)) in [
+        ("gear-x", "X", Role::GearX),
+        ("gear-y", "Y", Role::GearY),
+        ("gear-z", "Z", Role::GearZ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        number(b, t, name, label, role, &x.position_expr[i], None);
+    }
+}
+
 /// The handedness options' catalog keys (a thread's).
 const HANDS: [&str; 2] = ["model-thread-right-hand", "model-thread-left-hand"];
 
@@ -905,6 +1075,7 @@ pub(crate) fn number_text(kind: &FeatureKind, role: Role) -> Option<String> {
             Role::GearPressureShift => &x.pressure_shift_expr,
             Role::GearEndRelief => &x.end_relief_expr,
             Role::GearQuotient => &x.worm_quotient_expr,
+            Role::GearRatio => &x.ratio_expr,
             _ => return None,
         }
         .clone(),
@@ -989,6 +1160,7 @@ pub(crate) fn is_checkbox(name: &str) -> bool {
     name == "gear-across-checkbox"
         || name == "gear-at-apex-checkbox"
         || name == "gear-fast-preview-checkbox"
+        || name == "gear-auto-teeth-checkbox"
         || crate::surfacing_ui::is_checkbox(name)
 }
 
@@ -997,6 +1169,10 @@ pub(crate) fn checkbox(k: &mut FeatureKind, name: &str, on: bool) -> Option<&'st
         (FeatureKind::Gear(x), "gear-across-checkbox") => {
             x.flip = on;
             Some("Teeth across the face")
+        }
+        (FeatureKind::Gear(x), "gear-auto-teeth-checkbox") => {
+            x.auto_teeth = on;
+            Some("Auto teeth")
         }
         (FeatureKind::Gear(x), "gear-fast-preview-checkbox") => {
             x.fast_preview = on;
@@ -1071,6 +1247,7 @@ pub(crate) fn number_label(role: Role) -> Option<&'static str> {
         Role::GearPressureShift => "Pressure shift",
         Role::GearEndRelief => "End relief",
         Role::GearQuotient => "Diameter quotient",
+        Role::GearRatio => "Ratio",
         r => return crate::surfacing_ui::number_label(r),
     })
 }
@@ -1112,6 +1289,7 @@ pub(crate) fn set_number(k: &mut FeatureKind, role: Role, v: f64, expr: String) 
         Role::GearPressureShift => (&mut x.pressure_shift, &mut x.pressure_shift_expr),
         Role::GearEndRelief => (&mut x.end_relief, &mut x.end_relief_expr),
         Role::GearQuotient => (&mut x.worm_quotient, &mut x.worm_quotient_expr),
+        Role::GearRatio => (&mut x.ratio, &mut x.ratio_expr),
         _ => return,
     };
     *value = v;
@@ -1129,5 +1307,331 @@ pub(crate) fn remove(k: &mut FeatureKind, role: Role, i: usize) {
         (FeatureKind::Gear(x), Role::GearShaft) => x.shaft = None,
         (FeatureKind::Gear(x), Role::GearMateShaft) => x.mate_shaft = None,
         (k, r) => crate::surfacing_ui::remove(k, r, i),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// A gear pair in the view: its pitch circles, its ratio, its size
+
+/// A shaft as the view has it: a sketch line's (its own way), a cylinder's (toward its middle),
+/// a straight edge's.
+fn shaft_of(
+    features: &[Feature],
+    cache: &PartCache,
+    a: &cadrs_core::document::AxisRef,
+) -> Option<cadrs_core::gear::Shaft> {
+    use cadrs_core::document::AxisRef;
+    match a {
+        AxisRef::SketchCurve { sketch, curve } => {
+            let sk = features.iter().find(|f| f.id == *sketch)?.sketch()?;
+            let frame = sk.plane?.frame();
+            let g = &sk.geometry;
+            match g.curves.get(*curve)?.kind {
+                cadrs_sketch::CurveKind::Line { a, b } => {
+                    let (p, q) = (frame.to_world(g.pos(a)), frame.to_world(g.pos(b)));
+                    Some((p, [q[0] - p[0], q[1] - p[1], q[2] - p[2]], None))
+                }
+                _ => None,
+            }
+        }
+        AxisRef::Face(f) => {
+            let face = cache.parts.iter().find_map(|p| p.solid.face(&f.face))?;
+            let (o, d) = face.axis?;
+            Some((o, d, face.center))
+        }
+        AxisRef::Edge(e) => {
+            let edge = cache.parts.iter().find_map(|p| p.solid.edge(&e.edge))?;
+            let (p, q) = (edge.points.first()?, edge.points.last()?);
+            Some((*p, [q[0] - p[0], q[1] - p[1], q[2] - p[2]], None))
+        }
+        AxisRef::Connector(_) => None,
+    }
+}
+
+/// The gear pair being edited, as it stands now (as dragged while dragged): its feature, its
+/// parameters, and its [`cadrs_core::gear::PairInfo`].
+fn pair_now(
+    session: Option<&crate::applied::AppliedSession>,
+    doc: Option<&crate::ActiveDocument>,
+    cache: &PartCache,
+    knob: &PairKnob,
+) -> Option<(
+    cadrs_core::FeatureId,
+    cadrs_core::gear::GearFeature,
+    cadrs_core::gear::PairInfo,
+)> {
+    let s = session.filter(|s| s.kind == crate::applied::AppliedKind::Gear)?;
+    let el = doc?.doc.element(s.element)?;
+    let kind = match knob.drag.as_ref() {
+        Some(d) => &d.kind,
+        None => &el.feature(s.feature)?.kind,
+    };
+    let FeatureKind::Gear(x) = kind else {
+        return None;
+    };
+    let x = x.clone();
+    if x.gear_type != GearType::Pair {
+        return None;
+    }
+    let features = el.features();
+    let shafts = match (&x.shaft, &x.mate_shaft) {
+        (Some(a), Some(b)) => Some([shaft_of(features, cache, a)?, shaft_of(features, cache, b)?]),
+        _ => None,
+    };
+    let info = cadrs_core::gear::pair_info(&x, shafts.as_ref())?;
+    Some((s.feature, x, info))
+}
+
+/// The gear pair's size knob (on its gear's pitch circle: dragged out or in, the module
+/// follows), and its label's place.
+#[derive(Resource, Debug, Default)]
+pub struct PairKnob {
+    /// The knob on screen (window px).
+    pub at: Option<Vec2>,
+    pub hovered: bool,
+    pub drag: Option<KnobDrag>,
+    /// The gear's pitch circle (centre, axis, radius) as last drawn.
+    circle: Option<([f64; 3], [f64; 3], f64)>,
+    /// The gear's teeth.
+    teeth: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct KnobDrag {
+    pub kind: FeatureKind,
+}
+
+const KNOB_GRAB: f32 = 9.0;
+
+/// The pair's label (its ratio and teeth), over the gear.
+#[derive(Component)]
+pub(crate) struct PairLabel;
+
+#[derive(Component)]
+pub(crate) struct PairLabelText;
+
+fn v3(a: [f64; 3]) -> Vec3 {
+    Vec3::new(a[0] as f32, a[1] as f32, a[2] as f32)
+}
+
+/// Draws the pair's pitch circles and the knob, and places its label.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_pair(
+    session: Option<Res<crate::applied::AppliedSession>>,
+    doc: Option<Res<crate::ActiveDocument>>,
+    cache: Res<PartCache>,
+    view: Res<crate::viewport::ViewportView>,
+    rect: Res<crate::viewport::ViewportRect>,
+    theme: Res<Theme>,
+    mut knob: ResMut<PairKnob>,
+    mut g: Gizmos<crate::transform_ui::RotateRingGizmos>,
+    q_area: Query<Entity, With<crate::viewport::ViewportArea>>,
+    mut q_label: Query<(Entity, &mut Node, &mut Visibility), With<PairLabel>>,
+    mut q_text: Query<&mut Text, With<PairLabelText>>,
+    mut commands: Commands,
+) {
+    let found = pair_now(session.as_deref(), doc.as_deref(), &cache, &knob);
+    let Some((_, x, info)) = found else {
+        knob.at = None;
+        knob.circle = None;
+        for (e, ..) in &q_label {
+            commands.entity(e).try_despawn();
+        }
+        return;
+    };
+    let hot = knob.hovered || knob.drag.is_some();
+    let blue = Color::srgb_u8(0x4a, 0x8c, 0xf0);
+    let orange = Color::srgb_u8(0xff, 0xb4, 0x5a);
+    // Each member's pitch circle.
+    for (i, (c, a, r)) in info.circles.iter().enumerate() {
+        let (c, a) = (v3(*c), v3(*a).normalize_or_zero());
+        let iso = Isometry3d::new(c, Quat::from_rotation_arc(Vec3::Z, a));
+        let col = if i == 0 && hot {
+            orange
+        } else {
+            blue.with_alpha(0.7)
+        };
+        g.circle(iso, *r as f32, col).resolution(96);
+    }
+    // The knob on the gear's circle, on the side toward the pinion's.
+    let (c, a, r) = info.circles[0];
+    let (cv, av) = (v3(c), v3(a).normalize_or_zero());
+    let toward = v3(info.circles[1].0) - cv;
+    let out = (toward - av * toward.dot(av)).normalize_or(av.any_orthonormal_vector());
+    let knob_p = cv + out * r as f32;
+    let col = if hot { orange } else { blue };
+    let k = 6.0 * view.view.scale;
+    g.sphere(Isometry3d::from_translation(knob_p), k, col);
+    knob.at = Some(rect.to_screen(view.view.project(knob_p)));
+    knob.circle = Some((c, a, r));
+    knob.teeth = info.teeth[0];
+    // The label, over the gear's circle (the side away from the pinion).
+    let label_at = rect.to_screen(view.view.project(cv - out * r as f32)) - rect.0.min;
+    let text = format!(
+        "1 : {}  ·  {} / {} {}  ·  {}",
+        cadrs_core::hole::fmt(x.ratio),
+        info.teeth[1],
+        info.teeth[0],
+        tr("model-gear-teeth").to_lowercase(),
+        match info.family {
+            cadrs_core::gear::PairFamily::Hypoid => tr("model-gear-hypoid"),
+            cadrs_core::gear::PairFamily::Worm => tr("model-gear-worm"),
+        }
+    );
+    if let Some((_, mut node, mut vis)) = q_label.iter_mut().next() {
+        node.left = Val::Px(label_at.x + 8.0);
+        node.top = Val::Px(label_at.y - 12.0);
+        vis.set_if_neq(Visibility::Inherited);
+        if let Some(mut t) = q_text.iter_mut().next()
+            && t.0 != text
+        {
+            t.0 = text;
+        }
+        return;
+    }
+    let Some(area) = q_area.iter().next() else {
+        return;
+    };
+    let t = &*theme;
+    let e = commands
+        .spawn((
+            Name::new("gear-pair-label"),
+            PairLabel,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(label_at.x + 8.0),
+                top: Val::Px(label_at.y - 12.0),
+                padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(4.0)),
+                ..default()
+            },
+            BackgroundColor(t.popover),
+            BorderColor::all(t.border),
+            DespawnOnExit(crate::AppState::Document),
+            bevy::ui_widgets::observe(
+                |_: On<bevy::picking::events::PointerClick>, mut commands: Commands| {
+                    commands.queue(focus_ratio);
+                },
+            ),
+        ))
+        .with_children(|l| {
+            l.spawn((
+                PairLabelText,
+                Pickable::IGNORE,
+                t.text(
+                    text,
+                    t.font_sm,
+                    bevy::text::FontWeight::MEDIUM,
+                    t.foreground,
+                ),
+            ));
+        })
+        .id();
+    commands.entity(area).add_child(e);
+}
+
+/// Puts the cursor in the dialog's Ratio field (the label clicked).
+fn focus_ratio(world: &mut World) {
+    let mut q = world.query::<(Entity, &Name)>();
+    let Some(root) = q
+        .iter(world)
+        .find(|(_, n)| n.as_str() == "gear-ratio")
+        .map(|(e, _)| e)
+    else {
+        return;
+    };
+    let mut q = world.query::<(Entity, &cadrs_ui::NumberFieldEdit)>();
+    let edit = q.iter(world).find(|(_, e)| e.0 == root).map(|(e, _)| e);
+    if let Some(e) = edit {
+        world
+            .resource_mut::<bevy::input_focus::InputFocus>()
+            .set(e, bevy::input_focus::FocusCause::Pressed);
+    }
+}
+
+/// Grabs, drags and releases the size knob: the gear's pitch radius where the pointer's ray
+/// meets its plane, the module following (to a hundredth of a millimetre).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn pair_knob_pointer(
+    mut inputs: MessageReader<bevy::picking::pointer::PointerInput>,
+    session: Option<Res<crate::applied::AppliedSession>>,
+    doc: Option<Res<crate::ActiveDocument>>,
+    mut knob: ResMut<PairKnob>,
+    view: Res<crate::viewport::ViewportView>,
+    rect: Res<crate::viewport::ViewportRect>,
+    drag: Res<crate::viewport::ViewportDrag>,
+    mut over: ResMut<crate::parts::PartOverride>,
+    mut grab: ResMut<crate::assembly::ViewportGrab>,
+    mut commands: Commands,
+) {
+    use bevy::picking::pointer::{PointerAction, PointerButton, PointerId};
+    let at = knob.at;
+    let near = |p: Vec2| at.is_some_and(|k| k.distance(p) <= KNOB_GRAB);
+    knob.hovered = knob.drag.is_some() || near(drag.pointer());
+    let (Some(s), Some((c, a, _))) = (session.as_ref(), knob.circle) else {
+        inputs.clear();
+        return;
+    };
+    let current = doc
+        .as_ref()
+        .and_then(|d| Some(d.doc.element(s.element)?.feature(s.feature)?.kind.clone()));
+    for input in inputs.read() {
+        if input.pointer_id != PointerId::Mouse {
+            continue;
+        }
+        let pos = input.location.position;
+        match input.action {
+            PointerAction::Press(PointerButton::Primary) => {
+                if near(pos)
+                    && let Some(k @ FeatureKind::Gear(_)) = current.as_ref()
+                {
+                    knob.drag = Some(KnobDrag { kind: k.clone() });
+                    grab.0 = true;
+                }
+            }
+            PointerAction::Move { .. } => {
+                let teeth = knob.teeth.max(1) as f64;
+                let Some(d) = knob.drag.as_mut() else {
+                    continue;
+                };
+                let (o, dir) = view.view.ray(rect.offset(pos));
+                let (cv, av) = (v3(c), v3(a).normalize_or_zero());
+                let den = dir.dot(av);
+                if den.abs() < 1e-4 {
+                    continue;
+                }
+                let t = (cv - o).dot(av) / den;
+                let r = (o + dir * t - cv).length() as f64;
+                let m = ((2.0 * r / teeth) * 100.0).round() / 100.0;
+                if let FeatureKind::Gear(x) = &mut d.kind
+                    && m > 0.0
+                    && (x.module - m).abs() > 1e-9
+                {
+                    x.module = m;
+                    x.module_expr = format!("{} mm", cadrs_core::hole::fmt(m));
+                }
+                let want = Some((s.feature, d.kind.clone()));
+                if over.applied != want {
+                    over.applied = want;
+                }
+            }
+            PointerAction::Release(PointerButton::Primary) if knob.drag.is_some() => {
+                commands.queue(|world: &mut World| {
+                    world.resource_mut::<crate::parts::PartOverride>().applied = None;
+                    let Some(d) = world.resource_mut::<PairKnob>().drag.take() else {
+                        return;
+                    };
+                    if crate::applied::current(world).is_some_and(|f| f.kind != d.kind) {
+                        crate::applied::set(world, d.kind, "Drag size");
+                    }
+                });
+            }
+            PointerAction::Cancel => {
+                knob.drag = None;
+                over.applied = None;
+            }
+            _ => {}
+        }
     }
 }

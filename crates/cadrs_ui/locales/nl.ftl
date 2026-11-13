@@ -1775,6 +1775,14 @@ model-gear-worm-starts = Gangen van de worm
 model-gear-worm-quotient = Diameterquotiënt
 model-gear-wheel-axis = As van het wiel
 model-gear-fast-preview = Snelle voorvertoning (alleen het ruwe stuk)
+model-gear-pair = Tandwielpaar
+model-gear-ratio = Overbrenging
+model-gear-auto-teeth = Tanden automatisch
+model-gear-pinion-teeth = Tanden van het rondsel (gangen van de worm)
+model-gear-pair-gear-shaft = As van het wiel
+model-gear-pair-pinion-shaft = As van het rondsel
+model-gear-pair-hypoid = Hypoïdpaar: { $pinion } : { $gear } tanden
+model-gear-pair-worm = Wormwielaandrijving: { $starts } gang(en), { $gear } tanden
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Rechtsdraaiend

@@ -1775,6 +1775,14 @@ model-gear-worm-starts = Principi della vite
 model-gear-worm-quotient = Quoziente diametrale
 model-gear-wheel-axis = Asse della ruota
 model-gear-fast-preview = Anteprima rapida (solo il grezzo)
+model-gear-pair = Coppia di ingranaggi
+model-gear-ratio = Rapporto
+model-gear-auto-teeth = Denti automatici
+model-gear-pinion-teeth = Denti del pignone (o principi della vite)
+model-gear-pair-gear-shaft = Albero della ruota
+model-gear-pair-pinion-shaft = Albero del pignone
+model-gear-pair-hypoid = Coppia ipoide: { $pinion } : { $gear } denti
+model-gear-pair-worm = Vite senza fine: { $starts } principio/i, { $gear } denti
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Destrorsa

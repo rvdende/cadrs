@@ -1775,6 +1775,14 @@ model-gear-worm-starts = Заходы червяка
 model-gear-worm-quotient = Коэффициент диаметра
 model-gear-wheel-axis = Ось колеса
 model-gear-fast-preview = Быстрый просмотр (только заготовка)
+model-gear-pair = Зубчатая пара
+model-gear-ratio = Передаточное число
+model-gear-auto-teeth = Число зубьев автоматически
+model-gear-pinion-teeth = Зубья шестерни (заходы червяка)
+model-gear-pair-gear-shaft = Вал колеса
+model-gear-pair-pinion-shaft = Вал шестерни
+model-gear-pair-hypoid = Гипоидная пара: { $pinion } : { $gear } зубьев
+model-gear-pair-worm = Червячная передача: { $starts } заход(а), { $gear } зубьев
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Правая

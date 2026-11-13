@@ -1775,6 +1775,14 @@ model-gear-worm-starts = Entradas do sem-fim
 model-gear-worm-quotient = Quociente diametral
 model-gear-wheel-axis = Eixo da coroa
 model-gear-fast-preview = Pré-visualização rápida (só o bruto)
+model-gear-pair = Par de engrenagens
+model-gear-ratio = Relação
+model-gear-auto-teeth = Dentes automáticos
+model-gear-pinion-teeth = Dentes do pinhão (ou entradas do sem-fim)
+model-gear-pair-gear-shaft = Eixo da coroa
+model-gear-pair-pinion-shaft = Eixo do pinhão
+model-gear-pair-hypoid = Par hipoide: { $pinion } : { $gear } dentes
+model-gear-pair-worm = Coroa e sem-fim: { $starts } entrada(s), { $gear } dentes
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Direita

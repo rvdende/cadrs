@@ -273,7 +273,7 @@ pub(super) fn hypoid_member(d: &Design, l: &Layout, gear: bool, grow: f64) -> Op
             // Down to the root and up to the face; where the flank can't be followed further
             // (it folds back: undercut, or the blade's tip takes over), on from its last
             // point (a preview's shortcut for the path of the blade's tip edge).
-            let mut ok = vec![false; FLANK + 1];
+            let mut ok = [false; FLANK + 1];
             ok[mid] = true;
             for i in (0..mid).rev() {
                 let (h, rho) = at(thetas[i]);

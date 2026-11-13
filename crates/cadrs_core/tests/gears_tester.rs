@@ -58,7 +58,7 @@ fn build(gears: &[GearFeature]) -> std::sync::Arc<rebuild::Build> {
         )
         .unwrap();
     }
-    rebuild::build(&d.element(el).unwrap().features().to_vec())
+    rebuild::build(d.element(el).unwrap().features())
 }
 
 fn run(case: &Case, exact: bool) -> Outcome {

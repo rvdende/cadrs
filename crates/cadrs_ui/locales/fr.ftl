@@ -1775,6 +1775,14 @@ model-gear-worm-starts = Filets de la vis
 model-gear-worm-quotient = Quotient diamétral
 model-gear-wheel-axis = Axe de la roue
 model-gear-fast-preview = Aperçu rapide (brut seul)
+model-gear-pair = Paire d'engrenages
+model-gear-ratio = Rapport
+model-gear-auto-teeth = Dents automatiques
+model-gear-pinion-teeth = Dents du pignon (ou filets de la vis)
+model-gear-pair-gear-shaft = Arbre de la roue
+model-gear-pair-pinion-shaft = Arbre du pignon
+model-gear-pair-hypoid = Couple hypoïde : { $pinion } : { $gear } dents
+model-gear-pair-worm = Vis sans fin : { $starts } filet(s), { $gear } dents
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = À droite

@@ -2497,6 +2497,22 @@ model-gear-worm-quotient = Diameter quotient
 model-gear-wheel-axis = Wheel's axis
 # A checkbox: a generated gear (hypoid, worm wheel) shown as its blank alone, at once, while its shafts are moved; its teeth are cut once it's off.
 model-gear-fast-preview = Fast preview (blank only)
+# A gear type: both gears of a pair on two shafts, from their ratio (a hypoid pair, or a worm drive where the shafts are square and far apart).
+model-gear-pair = Gear pair
+# A gear pair's ratio: the gear's teeth over the pinion's.
+model-gear-ratio = Ratio
+# A checkbox: the tooth counts are chosen to suit the ratio.
+model-gear-auto-teeth = Auto teeth
+# A gear pair's pinion's teeth (a worm drive's: the worm's starts).
+model-gear-pinion-teeth = Pinion's teeth (or worm's starts)
+# The gear's shaft of a gear pair (a line, an edge, a cylinder or a mate connector).
+model-gear-pair-gear-shaft = Gear's shaft
+# The pinion's (or worm's) shaft of a gear pair.
+model-gear-pair-pinion-shaft = Pinion's shaft
+# What a gear pair makes of its ratio and shafts: a hypoid pair, its pinion's and its gear's teeth.
+model-gear-pair-hypoid = Hypoid pair: { $pinion } : { $gear } teeth
+# What a gear pair makes of its ratio and shafts: a worm drive, the worm's starts and the wheel's teeth.
+model-gear-pair-worm = Worm drive: { $starts } start(s), { $gear } teeth
 
 ## crates/cadrs_app/src/thread_ui.rs
 # A thread's handedness.

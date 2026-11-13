@@ -1775,6 +1775,14 @@ model-gear-worm-starts = ウォームの条数
 model-gear-worm-quotient = 直径係数
 model-gear-wheel-axis = ホイールの軸
 model-gear-fast-preview = 高速プレビュー（素材のみ）
+model-gear-pair = 歯車対
+model-gear-ratio = 歯数比
+model-gear-auto-teeth = 歯数を自動
+model-gear-pinion-teeth = ピニオンの歯数（ウォームの条数）
+model-gear-pair-gear-shaft = 大歯車の軸
+model-gear-pair-pinion-shaft = ピニオンの軸
+model-gear-pair-hypoid = ハイポイド：{ $pinion } : { $gear } 歯
+model-gear-pair-worm = ウォーム：{ $starts } 条、{ $gear } 歯
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = 右ねじ

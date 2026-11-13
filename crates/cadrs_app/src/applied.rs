@@ -51,6 +51,7 @@ impl Plugin for AppliedPlugin {
             .init_resource::<crate::sheetmetal_ui::SmFlipArrow>()
             .init_resource::<crate::transform_ui::XyzArrows>()
             .init_resource::<crate::transform_ui::RotateRing>()
+            .init_resource::<crate::gear_ui::PairKnob>()
             .gizmo_group::<crate::transform_ui::RotateRingGizmos>()
             .add_systems(Startup, configure_ring_gizmos)
             .add_systems(
@@ -62,6 +63,7 @@ impl Plugin for AppliedPlugin {
                     radius_arrow_pointer,
                     crate::transform_ui::xyz_arrow_pointer,
                     crate::transform_ui::rotate_ring_pointer,
+                    crate::gear_ui::pair_knob_pointer,
                     crate::applied_dialog::sync_applied_dialog,
                     crate::draft_ui::sync_fillet_entries,
                     crate::sheetmetal_ui::sync_numbers,
@@ -82,6 +84,7 @@ impl Plugin for AppliedPlugin {
                     show_references,
                     draw_references,
                     crate::transform_ui::draw_rotate_ring,
+                    crate::gear_ui::draw_pair,
                     draw_sketch_point_picks,
                 )
                     .chain()

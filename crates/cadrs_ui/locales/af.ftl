@@ -1775,6 +1775,14 @@ model-gear-worm-starts = Wurm se gange
 model-gear-worm-quotient = Deursnee-kwosiënt
 model-gear-wheel-axis = Wiel se as
 model-gear-fast-preview = Vinnige voorskou (net die rou stuk)
+model-gear-pair = Ratpaar
+model-gear-ratio = Verhouding
+model-gear-auto-teeth = Outomatiese tande
+model-gear-pinion-teeth = Kleinrat se tande (of wurm se gange)
+model-gear-pair-gear-shaft = Ratas
+model-gear-pair-pinion-shaft = Kleinrat se as
+model-gear-pair-hypoid = Hipoïedpaar: { $pinion } : { $gear } tande
+model-gear-pair-worm = Wurmaandrywing: { $starts } gang(e), { $gear } tande
 
 ## crates/cadrs_app/src/thread_ui.rs
 model-thread-right-hand = Regsdraaiend

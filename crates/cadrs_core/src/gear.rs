@@ -1662,8 +1662,8 @@ pub type Shafts = [Shaft; 2];
 /// [`plan`] of a hypoid pair's member placed on its own shaft and its mate's (resolved).
 pub fn plan_on_shafts(x: &GearFeature, shafts: &Shafts) -> Result<Plan, &'static str> {
     if x.gear_type == GearType::Pair {
-        let (sigma, e) = shafts_apart(&shafts[0], &shafts[1])?;
-        return pair_plan(x, sigma, e, Some(shafts));
+        let o = on_shafts(&shafts[0], &shafts[1])?;
+        return pair_plan(x, o.angle, o.signed.abs(), Some(shafts));
     }
     if x.gear_type != GearType::Hypoid {
         return plan(x, None);
@@ -1674,40 +1674,14 @@ pub fn plan_on_shafts(x: &GearFeature, shafts: &Shafts) -> Result<Plan, &'static
     } else {
         (shafts[1], shafts[0])
     };
-    let (mut gd, mut pd) = (unit(g.1), unit(p.1));
-    // A shaft with a point to point toward: from its foot on the common perpendicular (which
-    // doesn't depend on the axes' ways) toward it.
-    {
-        let w = sub(p.0, g.0);
-        let b = dot(gd, pd);
-        if (1.0 - b * b).abs() > 1e-12 {
-            let tg = (dot(gd, w) - b * dot(pd, w)) / (1.0 - b * b);
-            let tp = (b * dot(gd, w) - dot(pd, w)) / (1.0 - b * b);
-            let (gf, pf) = (add(g.0, scale(gd, tg)), add(p.0, scale(pd, tp)));
-            if let Some(q) = g.2
-                && dot(sub(q, gf), gd) < 0.0
-            {
-                gd = scale(gd, -1.0);
-            }
-            if let Some(q) = p.2
-                && dot(sub(q, pf), pd) < 0.0
-            {
-                pd = scale(pd, -1.0);
-            }
-        }
-    }
-    let across = cross(pd, gd);
-    let sine = norm(across);
-    if sine.is_nan() || sine <= 1e-6 {
-        return Err("The two shafts are parallel: a hypoid pair's shafts cross or meet");
-    }
-    // The feet of the common perpendicular, and the offset along it (its sign the side).
-    let w = sub(p.0, g.0);
-    let (b, dd, ee) = (dot(gd, pd), dot(gd, w), dot(pd, w));
-    let tg = (dd - b * ee) / (1.0 - b * b);
-    let tp = (b * dd - ee) / (1.0 - b * b);
-    let (gf, pf) = (add(g.0, scale(gd, tg)), add(p.0, scale(pd, tp)));
-    let signed = dot(sub(pf, gf), scale(across, 1.0 / sine));
+    let OnShafts {
+        gd,
+        pd,
+        gf,
+        pf,
+        signed,
+        ..
+    } = on_shafts(&g, &p)?;
     let mut placed = x.clone();
     placed.shaft_angle = dot(gd, pd).clamp(-1.0, 1.0).acos().to_degrees();
     placed.offset = signed.abs();
@@ -1831,16 +1805,128 @@ pub fn pair_members(
     )
 }
 
-/// Two shafts' angle (degrees) and the distance between them.
-fn shafts_apart(a: &Shaft, b: &Shaft) -> Result<(f64, f64), &'static str> {
-    let (ad, bd) = (unit(a.1), unit(b.1));
-    let across = cross(bd, ad);
+/// Two shafts (the gear's, the pinion's) as a pair stands on them.
+#[derive(Debug, Clone, Copy)]
+pub struct OnShafts {
+    /// Each axis's way (from where they cross toward its point, where it has one).
+    pub gd: Vec3,
+    pub pd: Vec3,
+    /// The feet of their common perpendicular.
+    pub gf: Vec3,
+    pub pf: Vec3,
+    /// The offset along it (its sign the side: toward the gear's axis × the pinion's).
+    pub signed: f64,
+    /// Their angle (degrees).
+    pub angle: f64,
+}
+
+/// [`OnShafts`] of the gear's shaft `g` and the pinion's `p`.
+pub fn on_shafts(g: &Shaft, p: &Shaft) -> Result<OnShafts, &'static str> {
+    let (mut gd, mut pd) = (unit(g.1), unit(p.1));
+    let w = sub(p.0, g.0);
+    let b = dot(gd, pd);
+    if (1.0 - b * b).abs() <= 1e-12 {
+        return Err("The two shafts are parallel: a pair's shafts cross or meet");
+    }
+    // A shaft with a point to point toward: from its foot on the common perpendicular (which
+    // doesn't depend on the axes' ways) toward it.
+    let tg = (dot(gd, w) - b * dot(pd, w)) / (1.0 - b * b);
+    let tp = (b * dot(gd, w) - dot(pd, w)) / (1.0 - b * b);
+    let (gf, pf) = (add(g.0, scale(gd, tg)), add(p.0, scale(pd, tp)));
+    if let Some(q) = g.2
+        && dot(sub(q, gf), gd) < 0.0
+    {
+        gd = scale(gd, -1.0);
+    }
+    if let Some(q) = p.2
+        && dot(sub(q, pf), pd) < 0.0
+    {
+        pd = scale(pd, -1.0);
+    }
+    let across = cross(pd, gd);
     let sine = norm(across);
     if sine.is_nan() || sine <= 1e-6 {
-        return Err("The two shafts are parallel: a gear pair's shafts cross or meet");
+        return Err("The two shafts are parallel: a pair's shafts cross or meet");
     }
-    let apart = dot(sub(b.0, a.0), scale(across, 1.0 / sine)).abs();
-    Ok((dot(ad, bd).clamp(-1.0, 1.0).acos().to_degrees(), apart))
+    Ok(OnShafts {
+        gd,
+        pd,
+        gf,
+        pf,
+        signed: dot(sub(pf, gf), scale(across, 1.0 / sine)),
+        angle: dot(gd, pd).clamp(-1.0, 1.0).acos().to_degrees(),
+    })
+}
+
+/// A gear pair as it stands: its family, its members' teeth (the gear's, the pinion's or the
+/// worm's starts), and each member's pitch circle (its centre, its axis, its radius), the gear's
+/// first.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PairInfo {
+    pub family: PairFamily,
+    pub teeth: [u32; 2],
+    pub circles: [(Vec3, Vec3, f64); 2],
+}
+
+/// [`PairInfo`] of a gear pair on its shafts (else as typed, in its own frame).
+pub fn pair_info(x: &GearFeature, shafts: Option<&Shafts>) -> Option<PairInfo> {
+    let (angle, offset, on) = match shafts {
+        Some(s) => {
+            let o = on_shafts(&s[0], &s[1]).ok()?;
+            (o.angle, o.signed.abs(), Some(o))
+        }
+        None => (x.shaft_angle, x.offset, None),
+    };
+    let (family, [gear, pinion]) = pair_members(x, angle, offset);
+    let teeth = [gear.teeth, pinion.teeth];
+    let circles = match family {
+        PairFamily::Hypoid => {
+            let (d, _) = gear.hypoid_design();
+            let l = hypoid::layout(&d).ok()?;
+            let crossing = on.map(|o| {
+                let perp = (o.signed.abs() > 1e-9).then(|| sub(o.pf, o.gf));
+                ((o.gf, o.gd, perp, o.pd), o.signed < 0.0)
+            });
+            let (pt, dir, _) = hypoid_map(&gear, &d, &l, true, crossing);
+            let foot = |apex: Vec3, axis: Vec3| add(apex, scale(axis, dot(sub(l.m, apex), axis)));
+            let fg = foot([0.0; 3], l.gear_axis);
+            let fp = foot(l.pinion_apex, l.pinion_axis);
+            [
+                (pt(fg), dir(l.gear_axis), norm(sub(l.m, fg))),
+                (pt(fp), dir(l.pinion_axis), norm(sub(l.m, fp))),
+            ]
+        }
+        PairFamily::Worm => {
+            let d = gear.worm_design();
+            let a = d.centre_distance();
+            let (r1, r2) = (d.quotient * d.module / 2.0, d.teeth as f64 * d.module / 2.0);
+            let frame: (Vec3, [Vec3; 3]) = match on {
+                Some(o) => {
+                    let y = unit(sub(o.pf, o.gf));
+                    (o.gf, [cross(y, o.gd), y, o.gd])
+                }
+                None => {
+                    let f = own_frame(x);
+                    (f.origin, [f.x, f.y(), f.normal])
+                }
+            };
+            let dir = |v: Vec3| {
+                add(
+                    add(scale(frame.1[0], v[0]), scale(frame.1[1], v[1])),
+                    scale(frame.1[2], v[2]),
+                )
+            };
+            [
+                (frame.0, dir([0.0, 0.0, 1.0]), r2),
+                (add(frame.0, dir([0.0, a, 0.0])), dir([1.0, 0.0, 0.0]), r1),
+            ]
+        }
+    };
+    Some(PairInfo {
+        family,
+        teeth,
+        circles,
+    })
 }
 
 /// A gear pair's plan: its gear's, with its pinion's (or worm's) as the second.
@@ -3081,7 +3167,7 @@ fn hypoid_map(
             let la = frame3(
                 lg,
                 match perp {
-                    Some(_) => mirrored(hypoid::perpendicular(&l)),
+                    Some(_) => mirrored(hypoid::perpendicular(l)),
                     None => cross(lp, lg),
                 },
             );
@@ -3096,7 +3182,7 @@ fn hypoid_map(
         }
     };
     let foot = match on {
-        Some(_) => mirrored(hypoid::gear_foot(&l)),
+        Some(_) => mirrored(hypoid::gear_foot(l)),
         None => [0.0; 3],
     };
     let origin = match on {
