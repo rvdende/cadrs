@@ -490,6 +490,251 @@ pub(super) fn hypoid_member(d: &Design, l: &Layout, gear: bool, grow: f64) -> Op
     Some(mesh)
 }
 
+/// Points along a section's segment (its start and `n` more).
+fn sample(seg: &super::Seg, n: usize) -> Vec<[f64; 2]> {
+    use super::Seg;
+    match seg {
+        Seg::Line { a, b } => vec![*a, *b],
+        Seg::Arc {
+            center,
+            radius,
+            start,
+            sweep,
+        } => (0..=n)
+            .map(|i| {
+                let t = start + sweep * i as f64 / n as f64;
+                [center[0] + radius * t.cos(), center[1] + radius * t.sin()]
+            })
+            .collect(),
+        Seg::Circle { center, radius } => (0..=n)
+            .map(|i| {
+                let t = TAU * i as f64 / n as f64;
+                [center[0] + radius * t.cos(), center[1] + radius * t.sin()]
+            })
+            .collect(),
+        Seg::Spline { knots, poles } => {
+            let (lo, hi) = (knots[3], knots[knots.len() - 4]);
+            (0..=n)
+                .map(|i| {
+                    let u = lo + (hi - lo) * i as f64 / n as f64;
+                    let (span, w) = super::basis(knots, poles.len(), u);
+                    let mut p = [0.0; 2];
+                    for (k, wk) in w.iter().enumerate() {
+                        let q = poles[span - 3 + k];
+                        p = [p[0] + wk * q[0], p[1] + wk * q[1]];
+                    }
+                    p
+                })
+                .collect()
+        }
+    }
+}
+
+/// A closed outline's points (each segment's start and its inner points: the next starts
+/// where it ends).
+fn outline_points(segs: &[super::Seg], n: usize) -> Vec<[f64; 2]> {
+    let mut out = Vec::new();
+    for s in segs {
+        let mut pts = sample(s, n);
+        pts.pop();
+        out.extend(pts);
+    }
+    out
+}
+
+/// A prism-like body: the loop `ring(t)` (the same number of points each) for `t` from 0 to 1
+/// stitched into a side, and capped at both ends less the loop `hole(t)` (none for an empty
+/// one), each in the plane coordinates `flat` gives its points.
+fn ringed(
+    rings: &[Vec<Vec3>],
+    holes: &[Vec<Vec3>],
+    flat_ring: &[Vec<[f64; 2]>],
+    flat_hole: &[Vec<[f64; 2]>],
+    out_of: impl Fn(Vec3) -> Vec3,
+    ends: [Vec3; 2],
+) -> Option<Mesh> {
+    let mut mesh = Mesh::default();
+    let side = mesh.strip(rings, true);
+    let t = side.start + (side.end - side.start) / 2;
+    if dot(mesh.normal(t), out_of(mesh.middle(t))) < 0.0 {
+        mesh.flip(side);
+    }
+    if !holes.is_empty() && !holes[0].is_empty() {
+        let bore = mesh.strip(holes, true);
+        let t = bore.start + (bore.end - bore.start) / 2;
+        if dot(mesh.normal(t), out_of(mesh.middle(t))) > 0.0 {
+            mesh.flip(bore);
+        }
+    }
+    let last = rings.len() - 1;
+    for (i, end) in [(0, ends[0]), (last, ends[1])] {
+        let hole = holes.get(i).cloned().unwrap_or_default();
+        let mut flat = flat_ring[i].clone();
+        if let Some(h) = flat_hole.get(i) {
+            flat.extend(h);
+        }
+        if !mesh.cap(&rings[i], &hole, &flat, |_| end) {
+            return None;
+        }
+    }
+    mesh.finish();
+    Some(mesh)
+}
+
+/// A worm drive's member's preview, in the drive's frame (as [`super::worm`] has it): the worm
+/// as it is (its thread's straight-sided axial section along its helix, sampled), its wheel as
+/// a helical gear of the worm's lead angle, a space where the worm's thread is (near enough to
+/// see the drive; its exact teeth are hobbed).
+pub(super) fn worm_member(d: &super::worm::Design, wheel: bool, rotation: f64) -> Option<Mesh> {
+    let m = d.module;
+    let a = d.centre_distance();
+    let r1 = d.quotient * m / 2.0;
+    let pitch = PI * m;
+    let lead = d.starts as f64 * pitch;
+    let lead_angle = (d.starts as f64 / d.quotient).atan();
+    let (root, tip) = (r1 - 1.25 * m, r1 + m);
+    // The thread's middle at the angle φ round the worm (from −y, toward the wheel): where its
+    // first start's middle is, as the exact worm's helix carries it.
+    let length = d.length;
+    let from = -length / 2.0 - 2.0 * lead;
+    if wheel {
+        let z2 = d.teeth as f64;
+        let r2 = z2 * m / 2.0;
+        let b = d.width;
+        // A space under the worm's thread where it faces the wheel (φ 0, at the wheel's +y).
+        let at = (-from).rem_euclid(pitch);
+        let space = PI / 2.0 - at / r2;
+        let section = super::Section {
+            flank: super::Flank::Involute {
+                base: r2 * d.pressure.cos(),
+                half: (PI * m / 2.0) / (2.0 * r2) + super::inv(d.pressure),
+            },
+            teeth: d.teeth,
+            root: r2 - 1.25 * m,
+            tip: r2 + m,
+            fillet: 0.0,
+            phase: space + PI / z2 + rotation,
+        };
+        let outline = outline_points(&section.outline(), 4);
+        // The teeth's twist along the axis: the worm's lead angle, its hand.
+        let twist = d.hand * lead_angle.tan() / r2;
+        const STATIONS: usize = 12;
+        let z_at = |k: usize| -b / 2.0 + b * k as f64 / STATIONS as f64;
+        let turn = |p: [f64; 2], a: f64| {
+            let (s, c) = a.sin_cos();
+            [c * p[0] - s * p[1], s * p[0] + c * p[1]]
+        };
+        let flat: Vec<Vec<[f64; 2]>> = (0..=STATIONS)
+            .map(|k| outline.iter().map(|p| turn(*p, twist * z_at(k))).collect())
+            .collect();
+        let rings: Vec<Vec<Vec3>> = flat
+            .iter()
+            .enumerate()
+            .map(|(k, f)| f.iter().map(|p| [p[0], p[1], z_at(k)]).collect())
+            .collect();
+        let bore = d.wheel_bore / 2.0;
+        let n_bore = outline.len().clamp(24, 128);
+        let circle = |r: f64| -> Vec<[f64; 2]> {
+            (0..n_bore)
+                .map(|i| {
+                    let t = TAU * i as f64 / n_bore as f64;
+                    [r * t.cos(), r * t.sin()]
+                })
+                .collect()
+        };
+        let (holes, flat_holes): (Vec<Vec<Vec3>>, Vec<Vec<[f64; 2]>>) = if bore > 0.0 {
+            (0..=STATIONS)
+                .map(|k| {
+                    let c = circle(bore);
+                    (c.iter().map(|p| [p[0], p[1], z_at(k)]).collect(), c)
+                })
+                .unzip()
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        return ringed(
+            &rings,
+            &holes,
+            &flat,
+            &flat_holes,
+            |p| [p[0], p[1], 0.0],
+            [[0.0, 0.0, -1.0], [0.0, 0.0, 1.0]],
+        );
+    }
+    // The worm: its radius at x along its axis and φ round it.
+    let px = pitch;
+    let half_at =
+        |r: f64| px / 4.0 - (r - r1) * d.pressure.tan() - d.backlash / (2.0 * lead_angle.cos());
+    let radius = |x: f64, phi: f64| -> f64 {
+        if x.abs() > length / 2.0 {
+            return root;
+        }
+        let centre = from + d.hand * lead * phi / TAU;
+        let u = (x - centre).rem_euclid(px);
+        let off = u.min(px - u);
+        if off <= half_at(tip) {
+            tip
+        } else if off >= half_at(root) {
+            root
+        } else {
+            r1 + (px / 4.0 - d.backlash / (2.0 * lead_angle.cos()) - off) / d.pressure.tan()
+        }
+    };
+    let core = length / 2.0 + m;
+    let around = 96;
+    let along = ((2.0 * core / px) * 24.0).ceil() as usize;
+    let x_at = |k: usize| -core + 2.0 * core * k as f64 / along as f64;
+    let phi_at = |j: usize| TAU * j as f64 / around as f64;
+    let point = |x: f64, phi: f64, r: f64| [x, a - r * phi.cos(), -r * phi.sin()];
+    let rings: Vec<Vec<Vec3>> = (0..=along)
+        .map(|k| {
+            let x = x_at(k);
+            (0..around)
+                .map(|j| point(x, phi_at(j), radius(x, phi_at(j))))
+                .collect()
+        })
+        .collect();
+    let flat: Vec<Vec<[f64; 2]>> = [0, along]
+        .iter()
+        .map(|&k| {
+            let x = x_at(k);
+            (0..around)
+                .map(|j| {
+                    let (r, p) = (radius(x, phi_at(j)), phi_at(j));
+                    [r * p.cos(), r * p.sin()]
+                })
+                .collect()
+        })
+        .collect();
+    let mut flat_all = vec![Vec::new(); along + 1];
+    flat_all[0] = flat[0].clone();
+    flat_all[along] = flat[1].clone();
+    let bore = d.worm_bore / 2.0;
+    let (holes, flat_holes): (Vec<Vec<Vec3>>, Vec<Vec<[f64; 2]>>) = if bore > 0.0 {
+        (0..=along)
+            .map(|k| {
+                let ring: Vec<Vec3> = (0..around)
+                    .map(|j| point(x_at(k), phi_at(j), bore))
+                    .collect();
+                let flat: Vec<[f64; 2]> = (0..around)
+                    .map(|j| [bore * phi_at(j).cos(), bore * phi_at(j).sin()])
+                    .collect();
+                (ring, flat)
+            })
+            .unzip()
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    ringed(
+        &rings,
+        &holes,
+        &flat_all,
+        &flat_holes,
+        |p| [0.0, p[1] - a, p[2]],
+        [[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

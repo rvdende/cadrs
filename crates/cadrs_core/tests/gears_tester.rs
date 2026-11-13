@@ -128,7 +128,13 @@ fn run(case: &Case, exact: bool) -> Outcome {
     // (Display meshes lie a few hundredths of a millimetre off their surfaces: flank on flank
     // they may reach that far into each other.)
     } else if deep.is_some_and(|d| d > 0.1) {
-        "CLASH"
+        // (A worm wheel's preview is a helical gear of the worm's lead, not hobbed: within a
+        // few tenths of the worm.)
+        if !exact && case.family == "worm" && deep.is_some_and(|d| d < 0.35) {
+            "approx"
+        } else {
+            "CLASH"
+        }
     } else {
         "ok"
     };
@@ -287,10 +293,11 @@ fn gears_tester() {
     }
     let count = |s: &str| results.iter().filter(|o| o.status == s).count();
     println!(
-        "\n{} cases in {:.1} s on {jobs} threads: {} ok, {} with a warning, {} clashing, {} failed, {} out of range",
+        "\n{} cases in {:.1} s on {jobs} threads: {} ok, {} approximate, {} with a warning, {} clashing, {} failed, {} out of range",
         results.len(),
         t.elapsed().as_secs_f64(),
         count("ok"),
+        count("approx"),
         count("warn"),
         count("CLASH"),
         count("FAIL"),

@@ -2800,13 +2800,22 @@ fn worm_placed(
             ),
         )
     };
+    let preview_mesh = if x.fast_preview {
+        preview::worm_member(d, wheel, 0.0).map(|m| preview::Mesh {
+            positions: m.positions.into_iter().map(pt).collect(),
+            normals: m.normals.into_iter().map(dir).collect(),
+            indices: m.indices,
+        })
+    } else {
+        None
+    };
     Ok(Plan {
         blank: None,
         sweeps: Vec::new(),
         lofts: Vec::new(),
         generated,
         made,
-        preview: None,
+        preview: preview_mesh,
         module: x.module,
     })
 }

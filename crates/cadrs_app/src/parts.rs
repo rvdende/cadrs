@@ -1325,6 +1325,21 @@ pub(crate) fn effective_features(features: &[Feature], o: &PartOverride) -> Vec<
     {
         f.kind = k.clone();
     }
+    // While something is dragged (a manipulator's live value), generated gears show their Fast
+    // preview (their teeth straight from their equations, at once): the pair follows the drag,
+    // and its exact members are built when it ends.
+    if o.extrude.is_some() || o.revolve.is_some() || o.applied.is_some() {
+        for f in &mut out {
+            if let cadrs_core::FeatureKind::Gear(g) = &mut f.kind
+                && matches!(
+                    g.gear_type,
+                    cadrs_core::gear::GearType::Hypoid | cadrs_core::gear::GearType::Worm
+                )
+            {
+                g.fast_preview = true;
+            }
+        }
+    }
     if let Some(id) = o.rolled_back {
         // A Sheet metal model taking picks on its input still builds its model, table and flat
         // (no parts): the panel follows the picks (P3I.8).
