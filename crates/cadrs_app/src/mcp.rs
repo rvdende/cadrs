@@ -2427,6 +2427,9 @@ fn face_json(p: &cadrs_core::parts::Part, i: usize) -> Option<Value> {
     if let Some(r) = f.radius {
         v["radius"] = json!(round(r));
     }
+    if let Some(r) = f.fillet_radius {
+        v["fillet_radius"] = json!(round(r));
+    }
     Some(v)
 }
 

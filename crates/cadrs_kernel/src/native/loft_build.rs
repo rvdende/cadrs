@@ -272,6 +272,25 @@ pub(crate) fn skin(curves: &[NurbsCurve], v: &[f64]) -> NurbsSurface {
     } else {
         3
     };
+    let s = skin_degree(curves, v, q);
+    // (A single high-degree span through sections whose weights change quickly can swing a
+    // weight below zero: then cubic spans, and failing that straight ones.)
+    let bad = |s: &NurbsSurface| s.cps.iter().flatten().any(|h| h.w <= 0.0);
+    if !bad(&s) {
+        return s;
+    }
+    if q > 3 {
+        let s3 = skin_degree(curves, v, 3);
+        if !bad(&s3) {
+            return s3;
+        }
+    }
+    skin_degree(curves, v, 1)
+}
+
+/// [`skin`] at degree `q` across the sections.
+fn skin_degree(curves: &[NurbsCurve], v: &[f64], q: usize) -> NurbsSurface {
+    let ncp = curves[0].cps.len();
     let mut cols: Vec<Vec<H>> = Vec::new();
     let mut kv = Vec::new();
     for i in 0..ncp {
