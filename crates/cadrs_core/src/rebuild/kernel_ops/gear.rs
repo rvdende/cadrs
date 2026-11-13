@@ -646,10 +646,22 @@ impl Rebuilder {
         for member in &members {
             let made = match (&member.generated, &member.made) {
                 (Some(g), _) => Some(self.gear_generated(g, state, op, &mut next, x.fast_preview)),
-                (None, Some(lists)) => Some(
-                    self.gear_made(lists, state, op, &mut next)
-                        .map(|b| (b, None)),
-                ),
+                // (Best effort: where its pieces can't be united, its last alone: a worm's
+                // core.)
+                (None, Some(lists)) => Some(match self.gear_made(lists, state, op, &mut next) {
+                    Ok(b) => Ok((b, None)),
+                    Err(e) if lists.len() > 1 => self
+                        .gear_made(&lists[lists.len() - 1..], state, op, &mut next)
+                        .map(|b| {
+                            (
+                                b,
+                                Some(format!(
+                                    "Only the core is shown: its threads couldn't be joined to it exactly here ({e})"
+                                )),
+                            )
+                        }),
+                    Err(e) => Err(e),
+                }),
                 _ => None,
             };
             match made {

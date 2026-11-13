@@ -1731,10 +1731,10 @@ pub enum PairFamily {
 /// for shafts at `shaft_angle` (degrees) and `offset` (mm) apart. A worm drive where the shafts
 /// are square, the ratio is a worm's (5 or more) and they are far enough apart for a worm of
 /// the module between a wheel of [`WORM_WHEEL_TEETH`] or more and them (its diameter quotient
-/// 2e/m − z₂ from 4 to 30); else a hypoid pair. So as the shafts are drawn apart, a hypoid
+/// 2e/m − z₂ from 7 to 30, typed teeth from 4); else a hypoid pair. So as the shafts are drawn apart, a hypoid
 /// pair becomes a worm drive where the first worm fits. The tooth counts, unless typed: a
-/// hypoid pinion of about 48 over the ratio teeth (8 to 24); a worm of the starts (1 to 8)
-/// whose diameter quotient is nearest 10 there; and the gear the ratio times (each the ratio
+/// hypoid pinion of about 48 over the ratio teeth (8 to 24); a worm of the starts (1 to 4)
+/// whose diameter quotient (7 to 30) is nearest 10 there; and the gear the ratio times (each the ratio
 /// exactly where a count near it gives it).
 pub fn pair_members(
     x: &GearFeature,
@@ -1746,9 +1746,10 @@ pub fn pair_members(
     let quotient_of = |teeth: u32| 2.0 * offset / m - teeth as f64;
     let fits = |q: f64| (4.0..=30.0).contains(&q);
     let (worm_starts, worm_teeth) = if x.auto_teeth {
-        (1..=8u32)
+        // (Up to 4 starts and a quotient of 7 or more: what the hob's cut is made for.)
+        (1..=4u32)
             .map(|z1| (z1, (z1 as f64 * ratio).round() as u32))
-            .filter(|&(_, z2)| z2 >= WORM_WHEEL_TEETH && fits(quotient_of(z2)))
+            .filter(|&(_, z2)| z2 >= WORM_WHEEL_TEETH && (7.0..=30.0).contains(&quotient_of(z2)))
             // (The ratio exactly where some starts give it, then the quotient nearest 10.)
             .min_by(|a, b| {
                 let inexact = |(z1, z2): (u32, u32)| (z2 as f64 - z1 as f64 * ratio).abs() > 1e-6;

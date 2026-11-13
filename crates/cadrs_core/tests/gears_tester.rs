@@ -273,6 +273,21 @@ fn cases() -> Vec<Case> {
                     backlash_expr: "0.05 mm".into(),
                     ..Default::default()
                 };
+                // (PINION=n: that pinion, the gear the ratio times, typed.)
+                let g = match std::env::var("PINION")
+                    .ok()
+                    .and_then(|p| p.parse::<u32>().ok())
+                {
+                    Some(p) => GearFeature {
+                        auto_teeth: false,
+                        mate_teeth: p,
+                        mate_teeth_expr: p.to_string(),
+                        teeth: (p as f64 * ratio).round() as u32,
+                        teeth_expr: ((p as f64 * ratio).round() as u32).to_string(),
+                        ..g
+                    },
+                    None => g,
+                };
                 let (family, members) = cadrs_core::gear::pair_members(&g, 90.0, offset);
                 out.push(Case {
                     family: "pair",
