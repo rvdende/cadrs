@@ -393,6 +393,7 @@ fn ray_surface_with(
                 }
             }
         }
+        Surface::Torus { f, rmaj, rmin } => ts = ray_torus(s, f, *rmaj, *rmin, o, d, tmin, tmax),
         Surface::Extrusion { c, d: dir } => {
             // The plane through the ray parallel to the extrusion cuts it in rulings where the
             // base curve crosses that plane; each ruling meets the ray at one point.
@@ -428,50 +429,6 @@ fn ray_surface_with(
                 None => ray_parametric(s, &RayGrid::new(s), o, d),
             };
         }
-        _ => {
-            // Implicit along the ray where available, else sampled distance with projection.
-            let n = 400;
-            let f = |t: f64| -> f64 {
-                let p = o + d * t;
-                match s.signed_distance(&p) {
-                    Some(x) => x,
-                    None => {
-                        let (u, v) = s.project(&p, None);
-                        let (q, su, sv) = s.d1(u, v);
-                        (p - q).dot(&su.cross(&sv).normalize())
-                    }
-                }
-            };
-            let (lo, hi) = (tmin, tmax);
-            let mut prev = (lo, f(lo));
-            for i in 1..=n {
-                let t = lo + (hi - lo) * i as f64 / n as f64;
-                let ft = f(t);
-                if prev.1 == 0.0 {
-                    ts.push(prev.0);
-                } else if prev.1.signum() != ft.signum() {
-                    // Bisect.
-                    let (mut a, mut b, mut fa) = (prev.0, t, prev.1);
-                    for _ in 0..80 {
-                        let m = 0.5 * (a + b);
-                        let fm = f(m);
-                        if fm.signum() == fa.signum() {
-                            a = m;
-                            fa = fm;
-                        } else {
-                            b = m;
-                        }
-                    }
-                    let m = 0.5 * (a + b);
-                    // Reject sign flips across the far side of a projection jump.
-                    let p = o + d * m;
-                    if s.distance(&p) < tol::POINT {
-                        ts.push(m);
-                    }
-                }
-                prev = (t, ft);
-            }
-        }
     }
     let mut out = Vec::new();
     for t in ts {
@@ -479,8 +436,77 @@ fn ray_surface_with(
         let (u, v) = s.project(&p, None);
         out.push((t, u, v));
     }
-    // Torus: the quadric cases above miss it; handled by the sampled branch.
     out
+}
+
+/// Parameters t in [tmin, tmax] where the line o + t·d meets the torus of `s` (frame `f`,
+/// radii `rmaj` and `rmin`): the roots of the quartic (|p|² + R² − r²)² = 4R²(x² + y²) along
+/// it (in the torus's frame, from the line's point nearest its centre), each then settled by
+/// Newton on the torus's own distance, and kept where the point lies on it.
+#[allow(clippy::too_many_arguments)]
+fn ray_torus(
+    s: &Surface,
+    f: &Frame,
+    rmaj: f64,
+    rmin: f64,
+    o: &P3,
+    d: &V3,
+    tmin: f64,
+    tmax: f64,
+) -> Vec<f64> {
+    let e = V3::new(d.dot(&f.x), d.dot(&f.y), d.dot(&f.z));
+    let a = e.norm_squared();
+    if !(a > 0.0) {
+        return Vec::new();
+    }
+    let q0 = f.local(o);
+    let t0 = -q0.dot(&e) / a;
+    let q = q0 + e * t0;
+    let (b, c) = (
+        2.0 * q.dot(&e),
+        q.norm_squared() + rmaj * rmaj - rmin * rmin,
+    );
+    let (pa, pb, pc) = (
+        e.x * e.x + e.y * e.y,
+        2.0 * (q.x * e.x + q.y * e.y),
+        q.x * q.x + q.y * q.y,
+    );
+    let r4 = 4.0 * rmaj * rmaj;
+    let coeffs = [
+        c * c - r4 * pc,
+        2.0 * b * c - r4 * pb,
+        b * b + 2.0 * a * c - r4 * pa,
+        2.0 * a * b,
+        a * a,
+    ];
+    let dist = |t: f64| s.signed_distance(&(o + d * t));
+    let mut ts = Vec::new();
+    for x in poly_roots(&coeffs, tmin - t0, tmax - t0) {
+        let mut t = x + t0;
+        // (The quartic's root holds only to the square root of its rounding where the line
+        // nearly grazes the torus: a few Newton steps on the distance, taken while they help.)
+        if let Some(mut g) = dist(t) {
+            let h = 1e-7 * (1.0 + t.abs());
+            for _ in 0..3 {
+                let (Some(g1), Some(g0)) = (dist(t + h), dist(t - h)) else {
+                    break;
+                };
+                let slope = (g1 - g0) / (2.0 * h);
+                if !(slope.abs() > 1e-6) {
+                    break;
+                }
+                let nt = t - g / slope;
+                match dist(nt) {
+                    Some(ng) if ng.abs() < g.abs() => (t, g) = (nt, ng),
+                    _ => break,
+                }
+            }
+        }
+        if s.distance(&(o + d * t)) < tol::POINT {
+            ts.push(t);
+        }
+    }
+    ts
 }
 
 /// Line–surface hits on the surface a line `lo + v·ld` sweeps turning about the z axis of `f` (a
@@ -1270,6 +1296,57 @@ mod boxed_tests {
                 );
             }
         }
+    }
+
+    /// The torus's crossings along a line are where its distance changes sign along it,
+    /// found by sampling finely; each lies on the torus.
+    #[test]
+    fn torus_hits_match_sampling() {
+        let f = Frame::from_xz(
+            P3::new(0.5, -1.0, 2.0),
+            V3::new(1.0, 0.3, 0.2),
+            V3::new(-0.2, 0.4, 1.0),
+        );
+        let s = Surface::Torus {
+            f,
+            rmaj: 6.0,
+            rmin: 2.0,
+        };
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut rnd = || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
+        };
+        let mut hits = 0;
+        for _ in 0..300 {
+            let o = f.o + V3::new(10.0 * rnd(), 10.0 * rnd(), 4.0 * rnd());
+            let d = V3::new(rnd(), rnd(), 0.4 * rnd()).normalize();
+            let ts: Vec<f64> = ray_surface(&s, &o, &d, -30.0, 30.0)
+                .into_iter()
+                .map(|h| h.0)
+                .collect();
+            let n = 60_000;
+            let g = |t: f64| s.signed_distance(&(o + d * t)).unwrap();
+            let mut flips = Vec::new();
+            for i in 0..n {
+                let (a, b) = (
+                    -30.0 + 60.0 * i as f64 / n as f64,
+                    -30.0 + 60.0 * (i + 1) as f64 / n as f64,
+                );
+                if g(a).signum() != g(b).signum() {
+                    flips.push(0.5 * (a + b));
+                }
+            }
+            assert_eq!(ts.len(), flips.len(), "{ts:?} {flips:?}");
+            for (t, x) in ts.iter().zip(&flips) {
+                assert!((t - x).abs() < 1e-3, "{ts:?} {flips:?}");
+                assert!(g(*t).abs() < 1e-9, "{t}: {}", g(*t));
+            }
+            hits += ts.len();
+        }
+        assert!(hits > 200, "{hits}");
     }
 
     /// The closed form for a turned line finds the points the grid search does, and each (t, u,

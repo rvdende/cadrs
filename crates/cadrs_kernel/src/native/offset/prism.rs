@@ -1,11 +1,11 @@
-//! Insets of prisms with curved sides: a body between two parallel planar caps whose other faces
-//! are all ruled square to them (planes, cylinders and extrusions along the caps' normal), its
-//! sides moved in by one distance, is its outline's 2D inward offset ([`super::wire`]: exact,
-//! trimmed where the outline curves more tightly than the distance, and rounded about its
-//! reflex corners) extruded between the caps as they moved. That is the body's rounded inset,
-//! the points at least the distance inside (the distance to a prism's outside is the smaller of
-//! the distances to its outline and to its caps), and also its sharp one when the outline has
-//! no reflex corner.
+//! Insets of prisms with curved sides, and rounded insets of any prism: a body between two
+//! parallel planar caps whose other faces are all ruled square to them (planes, cylinders and
+//! extrusions along the caps' normal), its sides moved in by one distance, is its outline's 2D
+//! inward offset ([`super::wire`]: exact, trimmed where the outline curves more tightly than the
+//! distance, and rounded about its reflex corners) extruded between the caps as they moved. That
+//! is the body's rounded inset, the points at least the distance inside (the distance to a
+//! prism's outside is the smaller of the distances to its outline and to its caps), and also its
+//! sharp one when the outline has no reflex corner.
 
 use crate::native::curve::Curve;
 use crate::native::kernel::NativeKernel;
@@ -18,11 +18,12 @@ use crate::*;
 
 use super::wire::{Piece2, offset_wire};
 
-/// The inset of a prism with a curved side (see the module): None when `b` isn't one, its sides
-/// don't all move in by one distance, or (`rounded` false: the sharp inset) its outline has a
-/// reflex corner, which the sharp inset mitres; with `folding_only`, also None unless the
-/// outline curves more tightly than the distance somewhere (the case the faces' own offsets
-/// can't make: there they fold over themselves).
+/// The inset of a prism with a curved side, or the rounded inset of any prism (see the module):
+/// None when `b` isn't one, its sides don't all move in by one distance, or (`rounded` false:
+/// the sharp inset) its sides are all flat or its outline has a reflex corner, which the sharp
+/// inset mitres; with `folding_only`, also None unless the outline curves more tightly than the
+/// distance somewhere (the case the faces' own offsets can't make: there they fold over
+/// themselves).
 pub fn curved_prism_inset(
     b: &Body,
     dist: &[f64],
@@ -63,8 +64,9 @@ pub fn curved_prism_inset(
     let sides: Vec<usize> = (0..b.faces.len())
         .filter(|&f| f != bot && f != top)
         .collect();
-    if sides.iter().all(|&f| normals[f].is_some()) {
-        // (Plane sides only: `prism_offset`'s.)
+    if !rounded && sides.iter().all(|&f| normals[f].is_some()) {
+        // (Plane sides only: `prism_offset`'s, but for the rounded inset, which rounds the
+        // reflex corners: the outline's offset too.)
         return None;
     }
     let s = dist[sides[0]];

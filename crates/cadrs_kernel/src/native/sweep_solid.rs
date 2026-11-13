@@ -581,6 +581,142 @@ fn cut_torus_whole(
 }
 
 /// [`crate::Kernel::sweep_solid`].
+/// A solid of revolution grown by a ball of radius `d`, exactly: its section grown by `d` in its
+/// half plane, then revolved. A ball grows into a ball, a torus into a torus; a convex polygon
+/// section with one edge along the axis (a cylinder's, a cone's, a frustum's) into its other
+/// edges moved out by `d`, a round of radius `d` at each corner (at the axis's ends only the
+/// part off the axis), and the axis between them. None for any other body.
+pub(crate) fn grown_revolved(b: &Body, d: f64) -> Option<Body> {
+    if !(d > 0.0) {
+        return None;
+    }
+    let rev = revolved(b)?;
+    let pt = |x: f64, y: f64| nalgebra::Point2::new(x, y);
+    let curves: Vec<Curve2> = match &rev.section {
+        Section::Disk { c, r } => {
+            // A ball's disc stays one about the axis; a torus's must stay off it.
+            if c.0 != 0.0 && c.0 <= r + d {
+                return None;
+            }
+            if c.0 == 0.0 {
+                // The half disc against the axis.
+                vec![
+                    Curve2::Arc {
+                        center: pt(0.0, c.1),
+                        radius: r + d,
+                        start_angle: -FRAC_PI_2,
+                        sweep: PI,
+                        source: None,
+                    },
+                    Curve2::Line {
+                        a: pt(0.0, c.1 + r + d),
+                        b: pt(0.0, c.1 - r - d),
+                        source: None,
+                    },
+                ]
+            } else {
+                vec![Curve2::Circle {
+                    center: pt(c.0, c.1),
+                    radius: r + d,
+                    source: None,
+                }]
+            }
+        }
+        Section::Polygon(cs) => {
+            let n = cs.len();
+            let size = cs
+                .iter()
+                .fold(1.0f64, |m, c| m.max(c.0.abs()).max(c.1.abs()));
+            let on_axis = |i: usize| cs[i % n].0.abs() <= 1e-9 * size;
+            // The one edge along the axis, i → i + 1 (counter-clockwise: running down it).
+            let axis: Vec<usize> = (0..n).filter(|&i| on_axis(i) && on_axis(i + 1)).collect();
+            let &[i] = axis.as_slice() else {
+                return None;
+            };
+            if (0..n).filter(|&j| on_axis(j)).count() != 2 {
+                return None;
+            }
+            let c = |j: usize| cs[j % n];
+            // Edge j's outward normal (to the right of a counter-clockwise boundary).
+            let normal = |j: usize| {
+                let (p, q) = (c(j), c(j + 1));
+                let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+                let l = dx.hypot(dy);
+                (dy / l, -dx / l)
+            };
+            // The axis edge runs down it (the section to its left, off the axis): c(i) is its
+            // top, c(i + 1) its bottom. The edges either side face away from the axis.
+            let (before, after) = (normal(i + n - 1), normal(i + 1));
+            if before.0 < -1e-12 || after.0 < -1e-12 {
+                return None;
+            }
+            let (top, bottom) = (c(i), c(i + 1));
+            if !(top.1 > bottom.1) {
+                return None;
+            }
+            let arc = |at: (f64, f64), a0: f64, a1: f64| {
+                let sweep = (a1 - a0).rem_euclid(TAU);
+                (sweep > 1e-12 && sweep < PI).then(|| Curve2::Arc {
+                    center: pt(at.0, at.1),
+                    radius: d,
+                    start_angle: a0,
+                    sweep,
+                    source: None,
+                })
+            };
+            let mut out = Vec::new();
+            // Round the bottom from straight down to the edge after it.
+            out.extend(arc(bottom, -FRAC_PI_2, after.1.atan2(after.0)));
+            // Each edge moved out, a round at each corner between them.
+            for k in 1..n {
+                let j = i + k;
+                let (nx, ny) = normal(j);
+                let (p, q) = (c(j), c(j + 1));
+                out.push(Curve2::Line {
+                    a: pt(p.0 + nx * d, p.1 + ny * d),
+                    b: pt(q.0 + nx * d, q.1 + ny * d),
+                    source: None,
+                });
+                if k < n - 1 {
+                    let (mx, my) = normal(j + 1);
+                    out.extend(arc(q, ny.atan2(nx), my.atan2(mx)));
+                }
+            }
+            // Round the top from the edge before it to straight up, then down the axis.
+            out.extend(arc(top, before.1.atan2(before.0), FRAC_PI_2));
+            out.push(Curve2::Line {
+                a: pt(0.0, top.1 + d),
+                b: pt(0.0, bottom.1 - d),
+                source: None,
+            });
+            out
+        }
+    };
+    let region = Region {
+        outer: Loop { curves },
+        holes: vec![],
+        source: Some(0),
+    };
+    let plane = Plane {
+        origin: rev.o,
+        x_dir: nalgebra::Unit::new_normalize(rev.e1),
+        normal: nalgebra::Unit::new_normalize(rev.e1.cross(&rev.a)),
+    };
+    let axis = Axis {
+        origin: rev.o,
+        dir: nalgebra::Unit::new_normalize(rev.a),
+    };
+    let mut k = NativeKernel::new();
+    let r = k
+        .revolve_with(
+            &Profile::new(plane, vec![region]),
+            &RevolveSpec::solid(axis, None),
+        )
+        .ok()?;
+    let body = (**k.get(*r.bodies.first()?).ok()?).clone();
+    (body.check().is_empty() && super::mass::body_volume(&body) > 0.0).then_some(body)
+}
+
 /// A torus or a ball turned a whole turn about an axis that misses it (a torus's own axis along
 /// the turn's): exactly the solid of revolution of its shadow on the half plane through the
 /// axis. The ball's shadow is its great circle's disc; the torus's a stadium, the band between
