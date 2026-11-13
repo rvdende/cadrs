@@ -607,6 +607,9 @@ fn fitted(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Curve {
         }
         1e-9f64.max(2e-10 * bb.diagonal())
     };
+    // Each interval's midpoint's projection (and its point), once made: an interval no round
+    // splits keeps its midpoint and its hint, so its projection would come out the same.
+    let mut mids: Vec<Option<(P2, P3)>> = vec![None; ts.len() - 1];
     for _round in 0..12 {
         let fit = fit_of(&ts, &uvs);
         // Check the midpoints.
@@ -617,8 +620,11 @@ fn fitted(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Curve {
             // Measured in model space between the fit's point and the projection's (uv noise of
             // projections on B-spline surfaces would never settle; an intersection curve may lie
             // a little off the surface, which no p-curve can make up).
-            let q = project(tm, Some((uvs[k].x, uvs[k].y)));
-            let err = (s.eval(f.x, f.y) - s.eval(q.x, q.y)).norm();
+            let (q, at) = *mids[k].get_or_insert_with(|| {
+                let q = project(tm, Some((uvs[k].x, uvs[k].y)));
+                (q, s.eval(q.x, q.y))
+            });
+            let err = (s.eval(f.x, f.y) - at).norm();
             if err > tol {
                 ins.push((k + 1, tm, q));
             }
@@ -636,6 +642,9 @@ fn fitted(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Curve {
         for (k, t, q) in ins.into_iter().rev() {
             ts.insert(k, t);
             uvs.insert(k, q);
+            // (Interval k − 1 split in two, neither half's midpoint projected yet.)
+            mids[k - 1] = None;
+            mids.insert(k, None);
         }
     }
     Curve::Nurbs(Arc::new(fit_of(&ts, &uvs)))
