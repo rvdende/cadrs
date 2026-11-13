@@ -3497,14 +3497,13 @@ fn worm_placed(
             ),
         )
     };
-    let preview_mesh = if x.fast_preview {
+    // (Always: shown with Fast preview, and where the teeth can't be cut exactly.)
+    let preview_mesh = {
         preview::worm_member(d, wheel, 0.0).map(|m| preview::Mesh {
             positions: m.positions.into_iter().map(pt).collect(),
             normals: m.normals.into_iter().map(dir).collect(),
             indices: m.indices,
         })
-    } else {
-        None
     };
     Ok(Plan {
         blank: None,
@@ -3623,11 +3622,8 @@ fn hypoid_placed(x: &GearFeature, on: Option<(Crossing, bool)>) -> Result<Plan, 
         );
     }
     let warning = (!warnings.is_empty()).then(|| warnings.join("; "));
-    let preview_mesh = if x.fast_preview {
-        preview::hypoid_member(&d, &l, gear, x.backlash / 4.0)
-    } else {
-        None
-    };
+    // (Always: shown with Fast preview, and where the teeth can't be cut exactly.)
+    let preview_mesh = preview::hypoid_member(&d, &l, gear, x.backlash / 4.0);
     let (pt, dir, side) = hypoid_map(x, &d, &l, gear, on);
     let (pt, dir) = (|p: Vec3| pt(p), |v: Vec3| dir(v));
     // A frame keeps its axis (its y) and its x; its normal follows from them.

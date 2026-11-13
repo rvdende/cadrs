@@ -157,6 +157,22 @@ fn sweep_parts(s: &Sweep, next: &mut u64) -> (Profile, SweepSpec, SweepLaw, Opti
 }
 
 /// A Fast preview's mesh as a new part with no kernel body.
+/// An output of `state` as it is (no part added yet).
+fn preview_part_none(state: &Arc<State>) -> Output {
+    Output {
+        state: state.clone(),
+        error: None,
+        warning: None,
+        contacts: None,
+        owned: Vec::new(),
+        stage: None,
+        axis: None,
+        arrows: Vec::new(),
+        dots: None,
+        uses: Vec::new(),
+    }
+}
+
 fn preview_part(id: FeatureId, m: &gear::preview::Mesh, index: u32, state: &Arc<State>) -> Output {
     use crate::solid::{FaceName, FaceOrigin, Solid, SolidFace};
     let mut solid = Solid {
@@ -654,7 +670,10 @@ impl Rebuilder {
             return Ok(with_design(out));
         }
         let mut bodies: Vec<((BodyId, BodyNames), Option<String>)> = Vec::new();
-        for member in &members {
+        // Members whose teeth couldn't be cut exactly: their fast preview shown instead of
+        // their blank (which member, and why).
+        let mut previewed: Vec<(usize, String)> = Vec::new();
+        for (i, member) in members.iter().enumerate() {
             let made = match (&member.generated, &member.made) {
                 (Some(g), _) => Some(self.gear_generated(g, state, op, &mut next, x.fast_preview)),
                 // (Best effort: where its pieces can't be united, its last alone: a worm's
@@ -676,6 +695,19 @@ impl Rebuilder {
                 _ => None,
             };
             match made {
+                Some(Ok((b, Some(w))))
+                    if w.starts_with("Only the blank is shown") && member.preview.is_some() =>
+                {
+                    self.kernel.release(b.0);
+                    previewed.push((
+                        i,
+                        w.replacen(
+                            "Only the blank is shown",
+                            "Only the fast preview is shown",
+                            1,
+                        ),
+                    ));
+                }
                 Some(Ok(b)) => bodies.push(b),
                 Some(Err(err)) => {
                     for ((b, _), _) in bodies {
@@ -711,6 +743,22 @@ impl Rebuilder {
                 Some(both.map(|b| (b, warning)))
             }
         };
+        // The previewed members' meshes, each a part (after the cut ones), and why.
+        let add_previews = |mut o: Output| {
+            for (i, why) in &previewed {
+                let mesh = members[*i].preview.as_ref().expect("a preview");
+                let w = o.warning.take();
+                o = preview_part(id, mesh, 100 + *i as u32, &o.state);
+                o.warning = Some(match w {
+                    Some(w) => format!("{w}; {why}"),
+                    None => why.clone(),
+                });
+            }
+            o
+        };
+        if made.is_none() && !previewed.is_empty() {
+            return Ok(with_design(add_previews(preview_part_none(state))));
+        }
         if let Some(body) = made {
             let (body, warning) = body.map_err(|err| format!("Gear failed: {err}"))?;
             let merge = Merge {
@@ -725,7 +773,7 @@ impl Rebuilder {
                 .apply_extrude_op(id, &merge, body, state, &Contacts::default(), geoms)
                 .map(|mut o| {
                     o.warning = o.warning.or(warning);
-                    with_design(o)
+                    with_design(add_previews(o))
                 });
         }
         let mut made: Vec<(BodyId, BodyNames)> = Vec::new();
