@@ -326,6 +326,67 @@ pub fn quadratic(a: f64, b: f64, c: f64) -> Vec<f64> {
     r
 }
 
+/// The real roots in [lo, hi] of the polynomial c[0] + c[1]·x + … + c[n]·xⁿ (c[n] ≠ 0), in
+/// order: each found by bisection between neighbouring roots of its derivative (where it is
+/// monotone), so every root where it changes sign is found, however close to another. A root
+/// where it touches zero without changing sign is kept only where it is zero exactly.
+pub fn poly_roots(c: &[f64], lo: f64, hi: f64) -> Vec<f64> {
+    let eval = |x: f64| c.iter().rev().fold(0.0, |acc, &k| acc * x + k);
+    let n = c.len().saturating_sub(1);
+    if n == 0 || !(lo <= hi) {
+        return Vec::new();
+    }
+    if n == 1 {
+        let x = -c[0] / c[1];
+        return if x >= lo && x <= hi {
+            vec![x]
+        } else {
+            Vec::new()
+        };
+    }
+    let dc: Vec<f64> = (1..=n).map(|k| c[k] * k as f64).collect();
+    let mut stops = vec![lo];
+    stops.extend(poly_roots(&dc, lo, hi));
+    stops.push(hi);
+    let mut out: Vec<f64> = Vec::new();
+    for w in stops.windows(2) {
+        let (mut a, mut b) = (w[0], w[1]);
+        let (fa, fb) = (eval(a), eval(b));
+        if fa == 0.0 {
+            if out.last() != Some(&a) {
+                out.push(a);
+            }
+            continue;
+        }
+        if fb == 0.0 || fa.signum() == fb.signum() {
+            continue;
+        }
+        // Bisection to the last bit (monotone between the stops: one root).
+        let rising = fb > 0.0;
+        loop {
+            let m = 0.5 * (a + b);
+            if m <= a || m >= b {
+                break;
+            }
+            let fm = eval(m);
+            if fm == 0.0 {
+                (a, b) = (m, m);
+                break;
+            }
+            if (fm > 0.0) == rising {
+                b = m;
+            } else {
+                a = m;
+            }
+        }
+        out.push(0.5 * (a + b));
+    }
+    if eval(hi) == 0.0 && out.last() != Some(&hi) {
+        out.push(hi);
+    }
+    out
+}
+
 /// Bounding box helper.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Bbox {
@@ -395,6 +456,42 @@ mod tests {
         let v = integrate(0.0, TAU, 8, &GAUSS16, |x| x.cos().powi(4));
         assert!((v - 3.0 * PI / 4.0).abs() < 1e-14);
     }
+    /// The roots of products of known factors, close, far apart and a double one touching
+    /// zero exactly; none outside the range.
+    #[test]
+    fn polynomial_roots() {
+        let mul = |a: &[f64], b: &[f64]| {
+            let mut r = vec![0.0; a.len() + b.len() - 1];
+            for (i, x) in a.iter().enumerate() {
+                for (j, y) in b.iter().enumerate() {
+                    r[i + j] += x * y;
+                }
+            }
+            r
+        };
+        let from = |rs: &[f64]| rs.iter().fold(vec![1.0], |p, r| mul(&p, &[-r, 1.0]));
+        for rs in [
+            vec![-3.0, -1.0, 2.0, 5.0],
+            vec![1.0, 1.0 + 1e-6, 4.0, 4.5],
+            vec![-100.0, 0.25, 0.5, 300.0],
+            vec![0.7, 2.0],
+        ] {
+            let got = poly_roots(&from(&rs), -1e3, 1e3);
+            assert_eq!(got.len(), rs.len(), "{rs:?}: {got:?}");
+            for (g, r) in got.iter().zip(&rs) {
+                assert!((g - r).abs() < 1e-9 * (1.0 + r.abs()), "{rs:?}: {got:?}");
+            }
+        }
+        // x² (x − 2)²: two double roots, zero there exactly.
+        assert_eq!(
+            poly_roots(&from(&[0.0, 0.0, 2.0, 2.0]), -5.0, 5.0),
+            vec![0.0, 2.0]
+        );
+        // (x² + 1)(x − 3): one root; none in a range short of it.
+        assert_eq!(poly_roots(&[-3.0, 1.0, -3.0, 1.0], -10.0, 10.0).len(), 1);
+        assert!(poly_roots(&[-3.0, 1.0, -3.0, 1.0], -10.0, 2.0).is_empty());
+    }
+
     #[test]
     fn quadratic_roots() {
         let r = quadratic(1.0, -3.0, 2.0);
