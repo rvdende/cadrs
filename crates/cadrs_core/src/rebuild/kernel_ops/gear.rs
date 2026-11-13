@@ -595,11 +595,20 @@ impl Rebuilder {
                                 .and_then(|(part, i)| part.part.solid.faces[i].center),
                             _ => None,
                         };
-                        Ok((
+                        let (o, d) = (
                             [a.origin.x, a.origin.y, a.origin.z],
                             [a.dir.x, a.dir.y, a.dir.z],
-                            toward,
-                        ))
+                        );
+                        // A cylinder's ends: its boundary's furthest each way along the axis.
+                        let ends = match r {
+                            crate::document::AxisRef::Face(f) => {
+                                gear_face(state, f).and_then(|(part, i)| {
+                                    gear::axis_ends(&part.part.solid.faces[i].loops, o, d)
+                                })
+                            }
+                            _ => None,
+                        };
+                        Ok((o, d, toward, ends))
                     };
                 gear::plan_on_shafts(x, &[line(self, a)?, line(self, b)?])?
             }

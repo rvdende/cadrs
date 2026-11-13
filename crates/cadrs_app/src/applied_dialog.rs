@@ -327,6 +327,7 @@ pub(crate) enum Role {
     GearTilt,
     GearMateTeeth,
     GearOffset,
+    GearMount,
     GearPressureShift,
     GearEndRelief,
     GearQuotient,
@@ -2289,6 +2290,9 @@ fn on_checkbox(ev: On<CheckboxChange>, q: Query<&Name>, mut commands: Commands) 
             if let FeatureKind::Shell(x) = k {
                 x.rounded = on;
             }
+        }),
+        "gear-hold-checkbox" => commands.queue(move |world: &mut World| {
+            crate::gear_ui::toggle_hold(world, on);
         }),
         n if crate::advanced_dialog::is_checkbox(n) => {
             let n = n.to_string();

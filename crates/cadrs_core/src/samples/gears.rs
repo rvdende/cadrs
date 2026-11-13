@@ -592,6 +592,13 @@ pub fn build_hypoid_in(s: &mut dyn Studio, el: ElementId) -> Result<(), CommandE
     gear.mate_shaft = Some(pinion_shaft);
     pinion.shaft = Some(pinion_shaft);
     pinion.mate_shaft = Some(gear_shaft);
+    // The gear held on its shaft where `hypoid.sv` has it (its back 41.99 mm down from the
+    // shaft's top): the pinion's shaft moved along it, the pair sizes itself to keep in mesh.
+    for g in [&mut gear, &mut pinion] {
+        g.hold_gear = true;
+        g.mount = 41.99;
+        g.mount_expr = "41.99 mm".into();
+    }
     for (feature, g) in HYPOID_PAIR.into_iter().zip([gear, pinion]) {
         s.run(&AddFeature {
             element: el,

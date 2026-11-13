@@ -169,7 +169,7 @@ pub(crate) fn name(kind: &FeatureKind) -> Option<&'static str> {
 pub(crate) fn layout(kind: &FeatureKind) -> Option<String> {
     match kind {
         FeatureKind::Gear(x) => Some(format!(
-            "gear {:?} {:?} {} {} {} {:?} {:?} {} {} {}",
+            "gear {:?} {:?} {} {} {} {:?} {:?} {} {} {} {}",
             x.gear_type,
             x.style,
             x.face.is_some(),
@@ -180,6 +180,7 @@ pub(crate) fn layout(kind: &FeatureKind) -> Option<String> {
             x.shaft.is_some() && x.mate_shaft.is_some(),
             x.fast_preview,
             x.auto_teeth,
+            x.hold_gear,
         )),
         k => crate::surfacing_ui::layout(k),
     }
@@ -599,6 +600,9 @@ fn hypoid_body(
     );
     let on_shafts = x.shaft.is_some() && x.mate_shaft.is_some();
     fast_preview_row(b, t, x);
+    if on_shafts {
+        hold_rows(b, t, x);
+    }
     num(
         b,
         "gear-teeth",
@@ -879,6 +883,76 @@ fn fast_preview_row(b: &mut ChildSpawner, t: &Theme, x: &cadrs_core::gear::GearF
     );
 }
 
+/// On its shafts, a hypoid pair's gear held on its shaft (and where: its back into the
+/// shaft from the shaft's end), the pair sizing itself to the pinion's shaft.
+fn hold_rows(b: &mut ChildSpawner, t: &Theme, x: &cadrs_core::gear::GearFeature) {
+    b.spawn(
+        OptionRow::new("gear-hold", tr("model-gear-hold"))
+            .checked(x.hold_gear)
+            .build(t),
+    );
+    if x.hold_gear {
+        number(
+            b,
+            t,
+            "gear-mount",
+            &tr("model-gear-mount"),
+            Role::GearMount,
+            &x.mount_expr,
+            None,
+        );
+    }
+}
+
+/// Ticked: the gear held where it stands now (its mount measured on its shafts); unticked, let
+/// go (the pair laid out where its shafts cross again). One command.
+pub(crate) fn toggle_hold(world: &mut World, on: bool) {
+    let Some(feature) = crate::applied::current(world) else {
+        return;
+    };
+    let FeatureKind::Gear(mut x) = feature.kind.clone() else {
+        return;
+    };
+    if on {
+        let Some(s) = world.get_resource::<crate::applied::AppliedSession>() else {
+            return;
+        };
+        let element = s.element;
+        let cache = world.resource::<PartCache>();
+        let Some(doc) = world.get_resource::<crate::ActiveDocument>() else {
+            return;
+        };
+        let Some(el) = doc.doc.element(element) else {
+            return;
+        };
+        let features = el.features();
+        let shafts = match (&x.shaft, &x.mate_shaft) {
+            (Some(a), Some(b)) => shaft_of(features, cache, a).zip(shaft_of(features, cache, b)),
+            _ => None,
+        };
+        let Some([own, mate]) = shafts.map(|(a, b)| [a, b]) else {
+            return;
+        };
+        // (A gear pair's gear: its member as the pair makes it there.)
+        let member = if x.gear_type == GearType::Pair {
+            let Ok(o) = cadrs_core::gear::on_shafts(&own, &mate) else {
+                return;
+            };
+            cadrs_core::gear::pair_members(&x, o.angle, o.signed.abs()).1[0].clone()
+        } else {
+            x.clone()
+        };
+        let Some(m) = cadrs_core::gear::mount_of(&member, &[own, mate]) else {
+            return;
+        };
+        let m = (m * 1e4).round() / 1e4;
+        x.mount = m;
+        x.mount_expr = format!("{} mm", cadrs_core::hole::fmt(m));
+    }
+    x.hold_gear = on;
+    crate::applied::set(world, FeatureKind::Gear(x), "Hold the gear");
+}
+
 /// A gear pair: its shafts (with both, the shaft angle and offset are theirs), its ratio, its
 /// tooth counts (chosen to suit, or typed), what it makes of them (a hypoid pair or a worm
 /// drive, and its teeth), the module, the spiral and pressure angles, the hand, the backlash,
@@ -912,6 +986,9 @@ fn pair_body(
         field == AppliedField::GearMateShaft,
     );
     let on_shafts = x.shaft.is_some() && x.mate_shaft.is_some();
+    if on_shafts {
+        hold_rows(b, t, x);
+    }
     num(
         b,
         "gear-ratio",
@@ -1057,6 +1134,7 @@ pub(crate) fn number_text(kind: &FeatureKind, role: Role) -> Option<String> {
             Role::GearTilt => &x.tilt_expr,
             Role::GearMateTeeth => &x.mate_teeth_expr,
             Role::GearOffset => &x.offset_expr,
+            Role::GearMount => &x.mount_expr,
             Role::GearPressureShift => &x.pressure_shift_expr,
             Role::GearEndRelief => &x.end_relief_expr,
             Role::GearQuotient => &x.worm_quotient_expr,
@@ -1185,6 +1263,7 @@ pub(crate) fn is_signed(role: Role) -> bool {
             | Role::GearCutter
             | Role::GearTilt
             | Role::GearOffset
+            | Role::GearMount
             | Role::GearPressureShift
             | Role::GearEndRelief
     ) || crate::surfacing_ui::is_signed(role)
@@ -1229,6 +1308,7 @@ pub(crate) fn number_label(role: Role) -> Option<&'static str> {
         Role::GearTilt => "Tilt",
         Role::GearMateTeeth => "Mate's teeth",
         Role::GearOffset => "Offset",
+        Role::GearMount => "Mount",
         Role::GearPressureShift => "Pressure shift",
         Role::GearEndRelief => "End relief",
         Role::GearQuotient => "Diameter quotient",
@@ -1271,6 +1351,7 @@ pub(crate) fn set_number(k: &mut FeatureKind, role: Role, v: f64, expr: String) 
             return;
         }
         Role::GearOffset => (&mut x.offset, &mut x.offset_expr),
+        Role::GearMount => (&mut x.mount, &mut x.mount_expr),
         Role::GearPressureShift => (&mut x.pressure_shift, &mut x.pressure_shift_expr),
         Role::GearEndRelief => (&mut x.end_relief, &mut x.end_relief_expr),
         Role::GearQuotient => (&mut x.worm_quotient, &mut x.worm_quotient_expr),
@@ -1378,7 +1459,7 @@ fn shaft_of(
             match g.curves.get(*curve)?.kind {
                 cadrs_sketch::CurveKind::Line { a, b } => {
                     let (p, q) = (frame.to_world(g.pos(a)), frame.to_world(g.pos(b)));
-                    Some((p, [q[0] - p[0], q[1] - p[1], q[2] - p[2]], None))
+                    Some((p, [q[0] - p[0], q[1] - p[1], q[2] - p[2]], None, None))
                 }
                 _ => None,
             }
@@ -1386,12 +1467,17 @@ fn shaft_of(
         AxisRef::Face(f) => {
             let face = cache.parts.iter().find_map(|p| p.solid.face(&f.face))?;
             let (o, d) = face.axis?;
-            Some((o, d, face.center))
+            Some((
+                o,
+                d,
+                face.center,
+                cadrs_core::gear::axis_ends(&face.loops, o, d),
+            ))
         }
         AxisRef::Edge(e) => {
             let edge = cache.parts.iter().find_map(|p| p.solid.edge(&e.edge))?;
             let (p, q) = (edge.points.first()?, edge.points.last()?);
-            Some((*p, [q[0] - p[0], q[1] - p[1], q[2] - p[2]], None))
+            Some((*p, [q[0] - p[0], q[1] - p[1], q[2] - p[2]], None, None))
         }
         AxisRef::Connector(_) => None,
     }

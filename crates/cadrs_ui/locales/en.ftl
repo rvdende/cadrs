@@ -2503,6 +2503,8 @@ model-gear-pair = Gear pair
 model-gear-ratio = Ratio
 # A checkbox: the tooth counts are chosen to suit the ratio.
 model-gear-auto-teeth = Auto teeth
+model-gear-hold = Hold gear on its shaft
+model-gear-mount = Mount
 # A gear pair's pinion's teeth (a worm drive's: the worm's starts).
 model-gear-pinion-teeth = Pinion's teeth (or worm's starts)
 # The gear's shaft of a gear pair (a line, an edge, a cylinder or a mate connector).

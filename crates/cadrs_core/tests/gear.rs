@@ -1008,3 +1008,100 @@ fn the_hypoid_tab_falls_back_and_previews_fast() {
     assert_eq!(b.parts.len(), 4);
     assert!(took < std::time::Duration::from_secs(2), "{took:?}");
 }
+
+/// The Hypoid tab's gear held on its shaft: its pinion's shaft (15 mm off the gear's axis) moved 6 mm down along the gear's
+/// axis, the gear stays where it is (its back where it was), the pair shrinks (fewer teeth, the
+/// ratio kept) and the two still mesh. In Fast preview (at once).
+#[test]
+fn the_hypoid_tabs_held_gear_stays_as_its_pinion_moves() {
+    use cadrs_core::samples::gears::{HYPOID_MOVES, HYPOID_PAIR, document};
+    let doc = document().unwrap();
+    let el = doc.elements.iter().find(|e| e.name == "Hypoid").unwrap().id;
+    let mut st = Studio {
+        d: doc,
+        h: History::default(),
+        el,
+    };
+    let kind = |st: &Studio, f| st.features().into_iter().find(|x| x.id == f).unwrap().kind;
+    let set = |st: &mut Studio, f, k| {
+        st.h.execute(
+            &mut st.d,
+            &cadrs_core::commands::SetFeature {
+                element: st.el,
+                feature: f,
+                kind: k,
+                label: "Edit".into(),
+            },
+        )
+        .unwrap();
+    };
+    let gears = |st: &Studio| -> Vec<Part> {
+        let b = rebuild::build(&st.features());
+        assert!(b.errors.is_empty(), "{:?}", b.errors);
+        HYPOID_PAIR
+            .iter()
+            .map(|f| b.parts.iter().find(|p| p.id.feature == *f).unwrap().clone())
+            .collect()
+    };
+    let span = |p: &Part| {
+        p.solid
+            .positions
+            .iter()
+            .fold((f64::MAX, f64::MIN, 0.0f64), |(lo, hi, r), q| {
+                (lo.min(q[2]), hi.max(q[2]), r.max(q[0].hypot(q[1])))
+            })
+    };
+    let mut mount = None;
+    for f in HYPOID_PAIR {
+        let FeatureKind::Gear(mut g) = kind(&st, f) else {
+            panic!("a gear");
+        };
+        g.fast_preview = true;
+        set(&mut st, f, FeatureKind::Gear(g));
+    }
+    // (An offset of 15 mm, not 25: the pair room to shrink, its offset a smaller share of it.)
+    let FeatureKind::Transform(mut slide) = kind(&st, HYPOID_MOVES[1]) else {
+        panic!("a transform");
+    };
+    slide.dy = -10.0;
+    slide.dy_expr = "-10 mm".into();
+    set(&mut st, HYPOID_MOVES[1], FeatureKind::Transform(slide));
+    let before = span(&gears(&st)[0]);
+    // (The gear's back: its lowest, into its shaft from the shaft's top at z = 0.)
+    let m = mount.get_or_insert(-before.0);
+    eprintln!(
+        "the gear spans z {:.4} to {:.4}, radius {:.3}; its mount {m:.6}",
+        before.0, before.1, before.2
+    );
+    for f in HYPOID_PAIR {
+        let FeatureKind::Gear(mut g) = kind(&st, f) else {
+            panic!("a gear");
+        };
+        g.hold_gear = true;
+        g.mount = *m;
+        g.mount_expr = format!("{m} mm");
+        set(&mut st, f, FeatureKind::Gear(g));
+    }
+    let held = span(&gears(&st)[0]);
+    eprintln!(
+        "held: z {:.4} to {:.4}, radius {:.3}",
+        held.0, held.1, held.2
+    );
+    assert!((held.0 - before.0).abs() < 1e-3, "held where it stood");
+    let FeatureKind::Transform(mut slide) = kind(&st, HYPOID_MOVES[1]) else {
+        panic!("a transform");
+    };
+    slide.dz = -6.0;
+    slide.dz_expr = "-6 mm".into();
+    set(&mut st, HYPOID_MOVES[1], FeatureKind::Transform(slide));
+    let moved = gears(&st);
+    let after = span(&moved[0]);
+    let (deep, count) = reach_of(&moved);
+    eprintln!(
+        "pinion 6 mm down: the gear z {:.4} to {:.4}, radius {:.3}; {count} vertices inside the other, the deepest {deep} mm",
+        after.0, after.1, after.2
+    );
+    assert!((after.0 - before.0).abs() < 1e-3, "the gear's back stays");
+    assert!(after.2 < before.2 - 1.0, "the gear shrinks");
+    assert!(deep < 0.1, "in mesh, not into each other");
+}

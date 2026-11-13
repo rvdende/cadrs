@@ -229,6 +229,15 @@ pub fn gear_foot(l: &Layout) -> Vec3 {
     scale(g, t)
 }
 
+/// How far along its axis the gear's back (its blank's furthest from its apex) is from where
+/// the axes' common perpendicular meets its axis.
+pub fn back_from_foot(l: &Layout) -> f64 {
+    let p = l.gear_pitch;
+    let (back, s1) = (back_of(true, l), 1.1 * l.mean_cone);
+    let height = |s: f64, off: f64| (s * s - off * off).max(0.0).sqrt() * p.cos() - off * p.sin();
+    height(s1, -back).max(height(s1, l.addendum)) - dot(gear_foot(l), l.gear_axis)
+}
+
 /// The common perpendicular from the gear's axis to the pinion's (its length the offset).
 pub fn perpendicular(l: &Layout) -> Vec3 {
     let (g, p) = (l.gear_axis, l.pinion_axis);

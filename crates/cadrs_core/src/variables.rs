@@ -413,6 +413,7 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
                 A,
             );
             s("End relief", &mut x.end_relief_expr, &mut x.end_relief, L);
+            s("Mount", &mut x.mount_expr, &mut x.mount, L);
             s(
                 "Diameter quotient",
                 &mut x.worm_quotient_expr,

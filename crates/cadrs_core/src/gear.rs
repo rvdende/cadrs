@@ -357,6 +357,16 @@ pub struct GearFeature {
     /// typed: the gear's and the pinion's).
     #[serde(default = "yes")]
     pub auto_teeth: bool,
+    /// A hypoid pair on its shafts, its gear held on its shaft: the gear's back `mount` (mm)
+    /// into its shaft from the shaft's end nearer the pinion's. Drawn nearer or further, the
+    /// pinion's shaft sizes the pair (its teeth, the ratio kept, and its module) to keep in
+    /// mesh, the gear staying where it is.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hold_gear: bool,
+    #[serde(default)]
+    pub mount: f64,
+    #[serde(default = "zero_mm")]
+    pub mount_expr: String,
 }
 
 fn two() -> f64 {
@@ -465,6 +475,9 @@ impl Default for GearFeature {
             ratio: 2.0,
             ratio_expr: "2".into(),
             auto_teeth: true,
+            hold_gear: false,
+            mount: 0.0,
+            mount_expr: mm(0.0),
         }
     }
 }
@@ -1670,8 +1683,9 @@ pub struct Generated {
 
 /// The plan of `x`: on `target` (the face its teeth are cut into), or made whole.
 /// A shaft: a point on its axis, its direction, and (for a shaft whose axis has no way of its
-/// own: a cylinder) a point its member's back is toward from where the two axes cross.
-pub type Shaft = (Vec3, Vec3, Option<Vec3>);
+/// own: a cylinder) a point its member's back is toward from where the two axes cross; and
+/// (where it has them: a cylinder's) its two ends on its axis.
+pub type Shaft = (Vec3, Vec3, Option<Vec3>, Option<[Vec3; 2]>);
 
 /// Two shafts, [this member's, its mate's].
 pub type Shafts = [Shaft; 2];
@@ -1704,6 +1718,9 @@ pub fn plan_on_shafts(x: &GearFeature, shafts: &Shafts) -> Result<Plan, &'static
     placed.offset = signed.abs();
     if let Some(p) = placed.problem() {
         return Err(p);
+    }
+    if x.hold_gear {
+        placed = held(&placed, &g, gd, gf)?;
     }
     let crossing = (
         gf,
@@ -1849,6 +1866,130 @@ pub fn pair_members(
     )
 }
 
+/// A hypoid pair's member (`x`, its shaft angle and offset the shafts') sized to keep its gear
+/// held on the gear's shaft `g` (its axis `gd` from where the axes' common perpendicular meets
+/// it, `gf`): the gear's back `x.mount` into the shaft from its end nearer `gf`. The pair's
+/// size found first as it would grow or shrink whole (its module: the back comes nearer only as
+/// the teeth get smaller as well as fewer), its teeth then as many fewer or more (the pinion's
+/// rounded, the gear's the ratio times), and its module then set to keep it exactly there. (Its
+/// offset staying, a pair shrinks only so far: a fifth or so of the way to the pinion's axis.)
+pub fn held(x: &GearFeature, g: &Shaft, gd: Vec3, gf: Vec3) -> Result<GearFeature, &'static str> {
+    let Some([a, b]) = g.3 else {
+        return Err("To hold the gear on its shaft, pick a cylinder for the gear's shaft");
+    };
+    // The shaft's end nearer the crossing, and into the shaft from it.
+    let (end, other) = if norm(sub(a, gf)) <= norm(sub(b, gf)) {
+        (a, b)
+    } else {
+        (b, a)
+    };
+    let into = unit(sub(other, end));
+    let back = add(end, scale(into, x.mount));
+    let want = dot(sub(back, gf), gd);
+    let (d, gear) = x.hypoid_design();
+    let (z1, z2, m, c) = (d.pinion_teeth, d.gear_teeth, d.module, d.cutter_radius);
+    // The gear's back from the crossing, for teeth and a module (the cutter in proportion).
+    let reach = |p: f64, q: f64, mm: f64| {
+        let e = hypoid::Design {
+            pinion_teeth: p,
+            gear_teeth: q,
+            module: mm,
+            cutter_radius: c * (q * mm) / (z2 * m),
+            ..d
+        };
+        hypoid::layout(&e).ok().map(|l| hypoid::back_from_foot(&l))
+    };
+    // (From `at` outward a quarter at a time each way until the back passes where it's
+    // wanted, then bisection.)
+    let solve = |f: &dyn Fn(f64) -> Option<f64>, at: f64| -> Option<f64> {
+        let g = |x: f64| f(x).map(|v| v - want);
+        let g0 = g(at)?;
+        if g0 == 0.0 {
+            return Some(at);
+        }
+        let mut bracket = None;
+        'out: for step in [1.25f64, 0.8] {
+            let mut x = at;
+            for _ in 0..24 {
+                let next = x * step;
+                match g(next) {
+                    Some(v) if v.signum() != g0.signum() => {
+                        bracket = Some((x, next));
+                        break 'out;
+                    }
+                    Some(_) => x = next,
+                    None => break,
+                }
+            }
+        }
+        let (mut lo, mut hi) = bracket?;
+        let glo = g(lo)?;
+        for _ in 0..60 {
+            let mid = 0.5 * (lo + hi);
+            let gm = g(mid)?;
+            if gm.signum() == glo.signum() {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        Some(0.5 * (lo + hi))
+    };
+    let far = "The gear can't be held there: at this offset the pinion's shaft can't come that near the gear's back, or go that far from it (move it back, or change the offset)";
+    // (The size by the module first: the back comes nearer only as the teeth get smaller as
+    // well as fewer, their depth and the blank's going with them.)
+    let k = solve(&|k| reach(z1, z2, m * k), 1.0).ok_or(far)?;
+    let p = (z1 * k).round().max(5.0);
+    let q = (p * z2 / z1).round().max(p);
+    let module = solve(&|mm| reach(p, q, mm), m * z1 * k / p).ok_or(far)?;
+    let (gt, pt) = (q as u32, p as u32);
+    let mut out = x.clone();
+    (out.teeth, out.mate_teeth) = if gear { (gt, pt) } else { (pt, gt) };
+    out.teeth_expr = out.teeth.to_string();
+    out.mate_teeth_expr = out.mate_teeth.to_string();
+    out.module = module;
+    out.module_expr = format!("{module} mm");
+    out.cutter_radius = c * (q * module) / (z2 * m);
+    Ok(out)
+}
+
+/// The two ends on the axis through `o` along `d` of what `loops` bound (their points'
+/// furthest each way along it), where they have any.
+pub fn axis_ends(loops: &[Vec<Vec3>], o: Vec3, d: Vec3) -> Option<[Vec3; 2]> {
+    let d = unit(d);
+    let (lo, hi) = loops
+        .iter()
+        .flatten()
+        .map(|p| dot(sub(*p, o), d))
+        .fold((f64::MAX, f64::MIN), |(lo, hi), t| (lo.min(t), hi.max(t)));
+    (lo < hi).then(|| [add(o, scale(d, lo)), add(o, scale(d, hi))])
+}
+
+/// Where a hypoid pair's gear stands on its shaft as `x` lays it out on `shafts` (`x` a
+/// member, `shafts` its own and its mate's): its back's [`GearFeature::mount`], to hold it there.
+pub fn mount_of(x: &GearFeature, shafts: &Shafts) -> Option<f64> {
+    let gear = x.member == BevelMember::Gear;
+    let (g, p) = if gear {
+        (shafts[0], shafts[1])
+    } else {
+        (shafts[1], shafts[0])
+    };
+    let o = on_shafts(&g, &p).ok()?;
+    let mut placed = x.clone();
+    placed.shaft_angle = o.angle;
+    placed.offset = o.signed.abs();
+    let (d, _) = placed.hypoid_design();
+    let l = hypoid::layout(&d).ok()?;
+    let back = add(o.gf, scale(o.gd, hypoid::back_from_foot(&l)));
+    let [a, b] = g.3?;
+    let (end, other) = if norm(sub(a, o.gf)) <= norm(sub(b, o.gf)) {
+        (a, b)
+    } else {
+        (b, a)
+    };
+    Some(dot(sub(back, end), unit(sub(other, end))))
+}
+
 /// Two shafts (the gear's, the pinion's) as a pair stands on them.
 #[derive(Debug, Clone, Copy)]
 pub struct OnShafts {
@@ -1921,7 +2062,15 @@ pub fn pair_info(x: &GearFeature, shafts: Option<&Shafts>) -> Option<PairInfo> {
         }
         None => (x.shaft_angle, x.offset, None),
     };
-    let (family, [gear, pinion]) = pair_members(x, angle, offset);
+    let (family, [mut gear, mut pinion]) = pair_members(x, angle, offset);
+    // (Held on its shaft: the pair as sized to keep the gear there.)
+    if family == PairFamily::Hypoid
+        && x.hold_gear
+        && let (Some(s), Some(o)) = (shafts, on)
+    {
+        gear = held(&gear, &s[0], o.gd, o.gf).ok()?;
+        (pinion.teeth, pinion.mate_teeth) = (gear.mate_teeth, gear.teeth);
+    }
     let teeth = [gear.teeth, pinion.teeth];
     let circles = match family {
         PairFamily::Hypoid => {
