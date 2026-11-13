@@ -378,7 +378,8 @@ impl Cadrs {
         description = "Import a file (STEP, IGES, BREP, STL or GLB) into the open document as a new Part \
         Studio tab holding an Import feature, and make it the active tab. units sets what a mesh's numbers \
         are (\"m\" for an STL in metres; a GLB is in metres unless told); y_axis_up turns a Y-up file \
-        Z-up (a GLB always is). One undo step."
+        Z-up (a GLB always is). One undo step. A cadrs document (.cadrs) is instead copied into the \
+        library and opened, the open document saved first."
     )]
     async fn import_file(
         &self,

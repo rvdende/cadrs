@@ -615,18 +615,17 @@ impl Rebuilder {
         }
         let faces: Vec<Vec<cadrs_kernel::FaceId>> = groups.iter().map(|g| g.2.clone()).collect();
         let bodies = groups.iter().map(|g| (g.0, g.1)).collect();
-        let (t, outward, hollow) = (x.thickness, x.outward, x.hollow);
+        let (t, outward, hollow, rounded) = (x.thickness, x.outward, x.hollow, x.rounded);
         let shelled: Vec<PartId> = groups.iter().map(|g| g.0).collect();
         self.per_part(id, "Shell", state, bodies, |k, i, body| {
-            // Inward, the cavity's corners are sharp, the walls' faces extended until they
-            // meet, as Onshape shells (issue #105); outward, the walls round the body's
-            // convex edges as before.
+            // Unless rounded, the walls' corners are sharp, their faces extended until they
+            // meet, as Onshape shells: inward (issue #105) and outward (issue #237).
             let spec = ShellSpec {
                 remove: faces[i].clone(),
                 thickness: t,
                 outward,
                 hollow,
-                sharp: !outward,
+                sharp: !rounded,
             };
             let r = k.shell_with(body, &spec)?;
             // Walls so thick they meet everywhere leave nothing hollowed: the kernel's answer

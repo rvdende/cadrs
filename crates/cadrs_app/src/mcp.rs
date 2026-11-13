@@ -797,6 +797,15 @@ fn import_file(world: &mut World, p: &tools::ImportFile) -> Result<Value, String
         .and_then(|n| n.to_str())
         .ok_or("the path has no file name")?
         .to_string();
+    // A cadrs document package: a copy of it joins the library and opens.
+    if file_name.to_ascii_lowercase().ends_with(".cadrs") {
+        let store = world.resource::<DocumentStore>().0.clone();
+        let now = world.resource::<AppClock>().now();
+        let user = world.resource::<UserProfile>().id.clone();
+        let file = cadrs_core::native::import(path, &store, &user, now)?;
+        crate::move_document::open_document(world, file.document.id);
+        return describe(world);
+    }
     if ImportFormat::of_file_name(&file_name).is_none() {
         return Err(format!("{file_name}: not a file Import reads"));
     }

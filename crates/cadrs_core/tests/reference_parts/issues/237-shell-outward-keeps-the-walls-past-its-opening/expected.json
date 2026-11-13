@@ -1,0 +1,5 @@
+{
+  "issue": "https://github.com/rvdende/cadrs/issues/237",
+  "source": "onshape",
+  "description": "The L of 237-shell-keeps-a-wall-rising-past-its-opening shelled outward 1 mm (sharp, as Onshape), the short leg's face y = 5 removed: the walls of the tall leg beyond the opening's plane stay. Onshape: 1868 mm^3 (244 mm^2 of section, 22 tall, less the L), 3814 mm^2, 16 faces."
+}
