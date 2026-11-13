@@ -2074,6 +2074,8 @@ model-shell-hollow = Hollow
 model-shell-parts-to-hollow = Parts to hollow
 model-shell-faces-to-remove = Faces to remove
 model-shell-thickness = Shell thickness
+# The Shell dialog's checkbox: the walls' corners rounded instead of sharp.
+model-shell-rounded = Rounded
 # A hole's units tab: inch sizes (ANSI).
 model-hole-inch = Inch
 # A hole's units tab: metric sizes (ISO).

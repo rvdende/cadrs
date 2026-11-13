@@ -681,9 +681,22 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
                 Box::new(regions),
             ]
         };
+        // The cavity with the removed faces moved out past the body reaches past them by the
+        // walls' insets: where a kept face rises from the opening beyond its plane (an L opened
+        // at its low step, issue #237), the corner of the moved face and that face's inset lies
+        // inside its wall, and the cavity eats it. The cavity flush with the openings doesn't,
+        // and lies wholly in the body: the moved one may take out no more than it does.
+        let moved = !((concave || crossing) && !spec.sharp);
+        let flush_volume = if moved {
+            sharp(&flush)
+                .ok()
+                .map(|c| crate::native::mass::body_volume(&c))
+        } else {
+            None
+        };
         let mut first: Option<KernelError> = None;
         let mut done = None;
-        for way in &ways {
+        for (i, way) in ways.iter().enumerate() {
             let out = way().and_then(|cavity| {
                 let mut out = cur.apply(
                     &cavity,
@@ -705,6 +718,16 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
                     return Err(KernelError::InvalidResult {
                         op: "shell",
                         why: "the shell came out wrong".into(),
+                    });
+                }
+                if moved
+                    && i == 0
+                    && let Some(fv) = flush_volume
+                    && v0 - v1 > fv + 1e-7 * v0.max(1.0)
+                {
+                    return Err(KernelError::InvalidResult {
+                        op: "shell",
+                        why: "the cavity past the opening cut into a wall".into(),
                     });
                 }
                 // Walls that meet everywhere leave no cavity.
@@ -797,6 +820,23 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
                 let keep = tangent_slabs_beyond(&mb, t, fr.o, n.normalize(), &remove)?;
                 if !keep.is_empty() {
                     hs = combine_all(hs, keep, BoolOp::Subtract)?;
+                }
+                // Nor the walls of the body's part beyond the plane (a leg of an L rising past
+                // its opened step, issue #237): they are that part grown by t.
+                let beyond = match combine(&mb, &hs, BoolOp::Intersect, &|| {
+                    format!("the body beyond removed face {f}")
+                }) {
+                    Ok(x) => Some(x),
+                    Err(KernelError::EmptyResult(_)) => None,
+                    Err(e) => return Err(e),
+                };
+                if let Some(beyond) = beyond
+                    && crate::native::mass::body_volume(&beyond) > tol::ROUNDOFF
+                {
+                    let walls_beyond = offset_rounded(&beyond, &vec![t; beyond.faces.len()])?;
+                    hs = combine(&hs, &walls_beyond, BoolOp::Subtract, &|| {
+                        format!("the walls beyond removed face {f}")
+                    })?;
                 }
                 walls = walls.apply(&hs, &vec![Vec::new(); hs.faces.len()], BoolOp::Subtract)?;
             }

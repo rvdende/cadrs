@@ -1,0 +1,9 @@
+{
+  "issue": "https://github.com/rvdende/cadrs/issues/237",
+  "source": "onshape",
+  "description": "An L in plan, [0, 20] x [0, 5] and [15, 20] x [5, 20], extruded 20 mm; shelled inward 1 mm with the short leg's face y = 5 removed. The wall x = 15 rising past the opening stays whole: the cavity is the plan [1, 19] x [1, 5] and [16, 19] x [5, 19] (114 mm^2) from z = 1 to 19, so the volume is 3500 - 114 18. Area: outside 100 + 400 + 400 + 100 + 300 + 2 175, the rim 300 - 14 18, inside 4 18 + 18 18 + 18 18 + 3 18 + 14 18 + 2 114 + 18 (the cavity's face y = 5 under the wall). Sixteen faces.",
+  "body_count": 1,
+  "volume_mm3": 1448.0,
+  "area_mm2": 2970.0,
+  "faces": 16
+}
