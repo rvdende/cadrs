@@ -201,8 +201,8 @@ fn identity_menu(world: &World, width: f32, theme: &Theme) -> cadrs_ui::Menu {
     menu = menu
         .item(MenuItem::new("identity-new", tr("shell-identity-new-ellipsis")).icon("plus"))
         .item(MenuItem::new("identity-edit", tr("shell-identity-edit-ellipsis")).icon("user"))
-        .item(MenuItem::new("identity-link-device", tr("pair-link-menu")).icon("link"))
-        .item(MenuItem::new("identity-join-account", tr("pair-join-menu")).icon("link"))
+        .item(MenuItem::new("identity-link-device", tr("pair-link-menu")).icon("device-add"))
+        .item(MenuItem::new("identity-join-account", tr("pair-join-menu")).icon("qr-code"))
         .item(if cadrs_id.is_some() {
             MenuItem::new("identity-copy-id", tr("shell-identity-copy-id")).icon("copy")
         } else {

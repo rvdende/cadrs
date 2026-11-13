@@ -301,7 +301,7 @@ pub(crate) fn invited(
         .resource_mut::<crate::notifications::Notifications>()
         .push(crate::notifications::Notice {
             id: format!("invite-{}", doc.id),
-            icon: "users",
+            icon: "shop",
             title: tr_with("org-invited", &[("name", name)]),
             body: String::new(),
             unread: true,

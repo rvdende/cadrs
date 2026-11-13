@@ -132,7 +132,7 @@ fn document_entries(workspaces: Vec<MenuEntry>) -> Vec<MenuEntry> {
         .icon("versions")
         .into(),
         MenuItem::new("document-menu-request-quote", tr("rfq-menu"))
-            .icon("tag")
+            .icon("receipt")
             .into(),
         workspace.into(),
         MenuEntry::Separator,

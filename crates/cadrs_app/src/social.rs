@@ -828,7 +828,7 @@ fn take(world: &mut World, letter: letters::Letter, from: AccountId) -> Result<(
         let id = format!("letter-c-{}-{}", letter.message.request(), letter.sent);
         let (icon, title) = match news {
             News::Quoted { shop, total } => (
-                "tag",
+                "receipt",
                 tr_with(
                     "social-notice-quoted",
                     &[("shop", &shop), ("total", &total)],
@@ -845,9 +845,9 @@ fn take(world: &mut World, letter: letters::Letter, from: AccountId) -> Result<(
                     &[("shop", &shop), ("stage", &format!("{stage:?}"))],
                 ),
             ),
-            News::Chat { shop, text } => ("comments", format!("{shop}: {text}")),
+            News::Chat { shop, text } => ("chat", format!("{shop}: {text}")),
             News::Delivered { shop } => (
-                "tag",
+                "receipt",
                 tr_with("social-notice-delivered", &[("shop", &shop)]),
             ),
         };
@@ -907,7 +907,7 @@ fn take(world: &mut World, letter: letters::Letter, from: AccountId) -> Result<(
         ),
         _ => client_name,
     };
-    notify(world, id, "tag", title, String::new());
+    notify(world, id, "receipt", title, String::new());
     Ok(())
 }
 

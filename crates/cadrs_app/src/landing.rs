@@ -1528,7 +1528,7 @@ fn create_menu(t: &Theme, name: &'static str) -> impl Bundle {
         .item(
             MenuItem::new("new-folder", tr("shell-landing-new-folder-ellipsis")).icon("folder-new"),
         )
-        .item(MenuItem::new("new-organization", tr("org-new-ellipsis")).icon("users"))
+        .item(MenuItem::new("new-organization", tr("org-new-ellipsis")).icon("shop"))
         .separator()
         .item(MenuItem::new("import-files", tr("shell-landing-import-files")).icon("file-import"))
         .item(
@@ -1654,13 +1654,13 @@ pub(crate) fn app_entries(lib: &Library, filter: Filter) -> Vec<MenuEntry> {
             .into(),
         MenuEntry::Separator,
         MenuItem::new("app-find-shop", tr("find-shop-menu"))
-            .icon("search")
+            .icon("map-pin")
             .into(),
         MenuItem::new("app-public-chat", tr("public-chat-menu"))
-            .icon("comments")
+            .icon("chat")
             .into(),
         MenuItem::new("app-quote-requests", tr("rfq-requests-menu"))
-            .icon("tag")
+            .icon("receipt")
             .into(),
         MenuItem::new("app-add-contact", tr("social-add-contact-menu"))
             .icon("user")
