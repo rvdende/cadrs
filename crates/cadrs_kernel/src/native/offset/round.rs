@@ -624,11 +624,6 @@ fn grown_convex(b: &Body, d: f64) -> Option<Body> {
             .fold(V3::zeros(), |a, n| a + n)
             .try_normalize(tol::ANGULAR)?;
         let pw = b.verts[w].p;
-        let surf = Surface::Sphere {
-            f: Frame::from_xz(pw, -m, any_perpendicular(&m)),
-            r: d,
-        };
-        let (near, sense) = sensed(&surf, pw + m * d, m);
         // Chain the arcs: each from its start vertex to its end vertex in the loop's direction.
         let ends = |&(e, fwd): &(usize, bool)| {
             let (f1, f2) = sides[e];
@@ -649,13 +644,60 @@ fn grown_convex(b: &Body, d: f64) -> Option<Body> {
         if ends(order.last()?).1 != ends(&order[0]).0 {
             return None;
         }
-        let lp = order
+        // The ball's pole at the corner's point on one of its faces: the arcs through it are
+        // meridians, and those square to it the equator, both with exact p-curves (any other
+        // arc's is fitted, which costs more than the rest of the body): the face that makes
+        // the most of them.
+        let starts: Vec<usize> = order.iter().map(|a| ends(a).0.0).collect();
+        let k = starts.len();
+        let exact = |p: usize| {
+            let np = normal[p];
+            (0..k)
+                .filter(|&i| {
+                    let (fa, fb) = (starts[i], starts[(i + 1) % k]);
+                    fa == p
+                        || fb == p
+                        || (normal[fa].dot(&np).abs() < tol::ANGULAR_FINE
+                            && normal[fb].dot(&np).abs() < tol::ANGULAR_FINE)
+                })
+                .count()
+        };
+        let pole = *starts.iter().max_by_key(|&&p| exact(p))?;
+        let surf = Surface::Sphere {
+            f: Frame::from_xz(pw, m, normal[pole]),
+            r: d,
+        };
+        let (near, sense) = sensed(&surf, pw + m * d, m);
+        let mut lp: Vec<Coedge> = order
             .iter()
             .map(|&(e, fwd)| {
                 let (id, c, th) = &arc[&(e, w)];
                 co(&surf, near, *id, c, 0.0, *th, fwd)
             })
             .collect();
+        // At the pole, the loop runs along it in u from the arc coming in to the arc going out.
+        let i = (0..k).find(|&i| starts[(i + 1) % k] == pole)?;
+        // (Each arc's edge runs over 0..θ.)
+        let end_uv = |j: usize, at_end: bool| {
+            let (e, fwd) = order[j];
+            lp[j]
+                .pc
+                .point(if fwd == at_end { arc[&(e, w)].2 } else { 0.0 })
+        };
+        let (a, z) = (end_uv(i, true), end_uv((i + 1) % k, false));
+        let pole_v = at(&mut out, pole, w);
+        let de = out.degenerate_edge(pw + normal[pole] * d, 0.0, 1.0, pole_v);
+        lp.insert(
+            i + 1,
+            Coedge {
+                edge: de,
+                fwd: true,
+                pc: Curve::Line {
+                    o: P3::new(a.x, a.y, 0.0),
+                    d: V3::new(z.x - a.x, z.y - a.y, 0.0),
+                },
+            },
+        );
         faces.push(out.face(surf, sense, vec![lp]));
     }
     let shell = out.shell(faces, true);
@@ -1059,12 +1101,27 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
                 }
                 // Nor the walls of the body's part beyond the plane (a leg of an L rising past
                 // its opened step, issue #237): they are that part grown by t.
-                let beyond = match combine(&mb, &hs, BoolOp::Intersect, &|| {
-                    format!("the body beyond removed face {f}")
-                }) {
-                    Ok(x) => Some(x),
-                    Err(KernelError::EmptyResult(_)) => None,
-                    Err(e) => return Err(e),
+                // (None when the body's faces are flat and its corners all lie on or behind the
+                // plane: it lies within their hull, a convex block opened at a face.)
+                let m = n.normalize();
+                let behind = mb
+                    .faces
+                    .iter()
+                    .all(|g| matches!(g.surf, Surface::Plane { .. }))
+                    && mb
+                        .verts
+                        .iter()
+                        .all(|v| (v.p - fr.o).dot(&m) <= tol::POINT.max(tol::REL * size));
+                let beyond = if behind {
+                    None
+                } else {
+                    match combine(&mb, &hs, BoolOp::Intersect, &|| {
+                        format!("the body beyond removed face {f}")
+                    }) {
+                        Ok(x) => Some(x),
+                        Err(KernelError::EmptyResult(_)) => None,
+                        Err(e) => return Err(e),
+                    }
                 };
                 if let Some(beyond) = beyond
                     && crate::native::mass::body_volume(&beyond) > tol::ROUNDOFF
@@ -2179,4 +2236,5 @@ mod tests {
             assert_eq!(k.faces(f).unwrap().len(), k.faces(g).unwrap().len());
         }
     }
+
 }
