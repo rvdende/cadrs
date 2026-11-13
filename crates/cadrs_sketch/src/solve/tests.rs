@@ -1827,3 +1827,67 @@ fn a_drag_the_constraints_cant_reach_follows_as_near_as_they_let_it() {
         }
     }
 }
+
+/// The user's filleted outline (test_shell, Part Studio 2, Sketch 2): dragging the fillet's
+/// center keeps its radius and stretches and turns the lines, rather than shrinking the fillet
+/// to nothing and turning it inside out; the far corners stay put.
+#[test]
+fn dragging_a_fillet_center_keeps_its_radius() {
+    let mut s = Sketch::new();
+    let p = [
+        v(43.991991237810595, 9.200850388828526),
+        v(48.91638522787889, 9.168571410737757),
+        v(64.3472799519772, 6.485757158725679),
+        v(50.3061101937421, 12.461565963684604),
+        v(46.920413830174724, 14.377024899803205),
+        v(65.63724834512426, 12.461565963684604),
+        v(65.63724834512426, 6.485757158725679),
+        v(64.02239863436182, 5.237369965270501),
+    ];
+    let [p1, p2, p4, p5, p6, p7, p8, p9] = p;
+    let (l1, ..) = line(&mut s, p1, p2);
+    let (l2, ..) = line(&mut s, p2, p9);
+    let (l3, ..) = line(&mut s, p8, p7);
+    let (l4, ..) = line(&mut s, p7, p5);
+    let (l5, ..) = line(&mut s, p5, p6);
+    let (l6, ..) = line(&mut s, p6, p1);
+    let a = arc(&mut s, p4, p9, p8);
+    let _ = l1;
+    for c in [
+        Constraint::Perpendicular(CurveRef::Curve(l6), CurveRef::Curve(l5)),
+        Constraint::Vertical(Orient::Line(CurveRef::Curve(l3))),
+        Constraint::Perpendicular(CurveRef::Curve(l4), CurveRef::Curve(l3)),
+        Constraint::Tangent(CurveRef::Curve(a), CurveRef::Curve(l2)),
+        Constraint::Tangent(CurveRef::Curve(a), CurveRef::Curve(l3)),
+    ] {
+        s.constraints.insert(c);
+    }
+    let r0 = s.arc_geom(a).unwrap().radius;
+    let center = s.point_at(p4, 1e-9).unwrap();
+    let far = s.point_at(p1, 1e-9).unwrap();
+    let base = s.clone();
+    // Down and to the right, well past the fillet's own size; far out; up into the shape.
+    for d in [v(4.0, -3.0), v(15.0, -8.0), v(-3.0, 2.0)] {
+        let to = p4 + d;
+        let mut live = base.clone();
+        assert!(drag_from(
+            &base,
+            &mut live,
+            &Drag::Points(vec![(center, to)]),
+            &HashSet::new()
+        ));
+        assert!(live.pos(center).distance(to) < 1e-6);
+        let g = live.arc_geom(a).unwrap();
+        assert!(
+            (g.radius - r0).abs() < 1e-6,
+            "{d:?}: radius {} (was {r0})",
+            g.radius
+        );
+        assert!(
+            live.pos(far).distance(p1) < 0.5,
+            "{d:?}: far corner moved to {:?}",
+            live.pos(far)
+        );
+        assert!(analyze(&live).conflicting.is_empty());
+    }
+}

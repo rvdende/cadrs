@@ -4683,3 +4683,307 @@ fn debug_step_mass() {
         }
     }
 }
+
+/// `CADRS_GEAR=bevel|hypoid|worm|helicon[,…]` (or `all`): brep-bench's gears cut by their mates
+/// (`swept/straight-bevel-gear-cut-by-its-pinion` and the four after it), built as its adapter
+/// builds them, with the time each takes. `CADRS_GEAR_VIA=sweep` sweeps the tool whole and cuts
+/// it from the blank; otherwise the blank is cut by the moving tool (`Kernel::cut_swept`).
+#[test]
+fn debug_gears() {
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
+    let Ok(which) = std::env::var("CADRS_GEAR") else {
+        return;
+    };
+    let whole = std::env::var("CADRS_GEAR_VIA").is_ok_and(|v| v == "sweep");
+    let v3 = Vector3::new;
+    let p3 = Point3::new;
+    let z_axis = || Axis::new(Point3::origin(), Vector3::z());
+    let s5 = 5f64.sqrt();
+    let (g, d) = (v3(2.0 / s5, 0.0, 1.0 / s5), v3(-1.0 / s5, 0.0, 2.0 / s5));
+    let tan20 = 20f64.to_radians().tan();
+    let bevel_blank = |k: &mut NativeKernel| -> Result<BodyId> {
+        let (ae, ai) = (15.0 * s5, 15.0 * s5 - 10.0);
+        let at = |s: f64, u: f64| {
+            let p = g * s + d * u;
+            [p.x, p.z]
+        };
+        let corners = [
+            at(ae, -2.0),
+            at(ae, 6.0),
+            at(ai, 6.0),
+            at(ai, -2.0 * ai / ae),
+        ];
+        let quad = Profile::of(Plane::xz(0.0), vec![Loop::polygon(&corners)]);
+        k.revolve_with(&quad, &RevolveSpec::solid(z_axis(), None))?
+            .first()
+    };
+    let bevel_tooth = |k: &mut NativeKernel| -> Result<BodyId> {
+        let ae = 15.0 * s5;
+        let (inner, outer) = (ae - 12.0, ae + 2.0);
+        let scale = outer / ae;
+        let w = |u: f64| FRAC_PI_2 - u * tan20;
+        let base = Plane::new(Point3::origin() + g * outer, d, g);
+        let trapezoid = [
+            (2.5, w(2.5)),
+            (-2.5, w(-2.5)),
+            (-2.5, -w(-2.5)),
+            (2.5, -w(2.5)),
+        ]
+        .map(|(u, w)| [u * scale, w * scale]);
+        let spec = LoftSpec {
+            body: BodyKind::Solid,
+            sections: vec![
+                LoftSection::Profile(Profile::of(base, vec![Loop::polygon(&trapezoid)])),
+                LoftSection::Point(Point3::origin()),
+            ],
+            start: LoftEnd::default(),
+            end: LoftEnd::default(),
+            source: 1,
+        };
+        let pyramid = k.loft_with(&spec)?.first()?;
+        let slab_base = Plane::new(Point3::origin() + g * inner, d, g);
+        let slab = Profile::of(slab_base, vec![Loop::rectangle(-10.0, -10.0, 10.0, 10.0)]);
+        let slab = k
+            .extrude_with(&slab, &ExtrudeSpec::normal_to(&slab, 15.0))?
+            .first()?;
+        k.boolean(BoolOp::Intersect, pyramid, &[slab])?.first()
+    };
+    let cut = |k: &mut NativeKernel, blank: BodyId, tool: BodyId, motion: &SolidMotion| {
+        if whole {
+            let swept = k.sweep_solid(tool, motion)?.first()?;
+            k.boolean(BoolOp::Subtract, blank, &[swept])?.first()
+        } else {
+            k.cut_swept(blank, tool, motion)?.first()
+        }
+    };
+    let bevel_cut =
+        |k: &mut NativeKernel, tooth: BodyId, pinion: Axis, ratio: f64, roll: (f64, f64)| {
+            let (t0, t1) = (roll.0.to_radians(), roll.1.to_radians());
+            let motion = SolidMotion::rigid(vec![
+                RigidStep::turn(pinion, t0, t1),
+                RigidStep::turn(z_axis(), -ratio * t0, -ratio * t1),
+            ]);
+            let blank = bevel_blank(k)?;
+            cut(k, blank, tooth, &motion)
+        };
+    // The cylindrical worm's thread on the line through `at` along x, from x = `from` to `to`.
+    let worm_thread = |k: &mut NativeKernel, at: Point3<f64>, from: f64, to: f64| {
+        let w = |r: f64| FRAC_PI_2 - (r - 10.0) * tan20;
+        let turns_before = (-from / TAU).ceil() + 1.0;
+        let start = -TAU * turns_before;
+        let mid = start - FRAC_PI_2;
+        let section = [
+            [7.5, mid - w(7.5)],
+            [12.5, mid - w(12.5)],
+            [12.5, mid + w(12.5)],
+            [7.5, mid + w(7.5)],
+        ];
+        let profile = Profile::of(Plane::xz(0.0), vec![Loop::polygon(&section)]);
+        let turns = ((to - start) / TAU).ceil() + 1.0;
+        let path = Helix::new(
+            Axis::new(p3(0.0, 0.0, start), Vector3::z()),
+            10.0,
+            TAU,
+            0.0,
+            turns,
+        )
+        .path();
+        let thread = k.sweep_with(&profile, &SweepSpec::solid(path))?.first()?;
+        let ends = Profile::of(
+            Plane::square_to(p3(0.0, 0.0, from), Vector3::z()),
+            vec![Loop::circle([0.0, 0.0], 13.0)],
+        );
+        let ends = k
+            .extrude_with(&ends, &ExtrudeSpec::normal_to(&ends, to - from))?
+            .first()?;
+        let thread = k.boolean(BoolOp::Intersect, thread, &[ends])?.first()?;
+        let thread = k
+            .transform_motion(
+                thread,
+                &Motion::rotation(&Axis::new(Point3::origin(), Vector3::y()), FRAC_PI_2),
+            )?
+            .first()?;
+        k.transform(thread, &Transform::translation(at.x, at.y, at.z))?
+            .first()
+    };
+    let hobbed = |k: &mut NativeKernel, blank: BodyId, at: Point3<f64>, from: f64, to: f64| {
+        let thread = worm_thread(k, at, from, to)?;
+        let motion = SolidMotion::rigid(vec![
+            RigidStep::turn(Axis::new(at, Vector3::x()), 0.0, 60.0 * PI),
+            RigidStep::turn(z_axis(), 0.0, -TAU),
+        ]);
+        cut(k, blank, thread, &motion)
+    };
+    // The spiroid's tapered worm: its thread on the line through `at` along x from x = `from` to
+    // `to`, the pitch radius 6 + x tan 5° at x. Built about the z axis: its section in the half
+    // plane through the axis (between the cones 2.5 inside and outside the pitch cone, its sides
+    // 20° from square to the axis), carried along the spiral on the pitch cone by its screw.
+    let tapered_thread = |k: &mut NativeKernel, at: Point3<f64>, from: f64, to: f64| {
+        let tan5 = 5f64.to_radians().tan();
+        let pitch = |z: f64| 6.0 + z * tan5;
+        let w = |u: f64| FRAC_PI_2 - u * tan20;
+        let turns_before = (-from / TAU).ceil() + 1.0;
+        let start = -TAU * turns_before;
+        let mid = start - FRAC_PI_2;
+        let corner = |u: f64, side: f64| {
+            let z = mid + side * w(u);
+            [pitch(z) + u, z]
+        };
+        let section = [
+            corner(-2.5, -1.0),
+            corner(2.5, -1.0),
+            corner(2.5, 1.0),
+            corner(-2.5, 1.0),
+        ];
+        let profile = Profile::of(Plane::xz(0.0), vec![Loop::polygon(&section)]);
+        let turns = ((to - start) / TAU).ceil() + 1.0;
+        let spiral = Helix::conical(
+            Axis::new(p3(0.0, 0.0, mid), Vector3::z()),
+            pitch(mid),
+            pitch(mid + TAU * turns),
+            TAU * turns,
+            0.0,
+            turns,
+        );
+        let mut spec = SweepSpec::solid(spiral.path());
+        spec.control = SweepControl::Helix(spiral);
+        let thread = k.sweep_with(&profile, &spec)?.first()?;
+        let ends = Profile::of(
+            Plane::square_to(p3(0.0, 0.0, from), Vector3::z()),
+            vec![Loop::circle([0.0, 0.0], 20.0)],
+        );
+        let ends = k
+            .extrude_with(&ends, &ExtrudeSpec::normal_to(&ends, to - from))?
+            .first()?;
+        let thread = k.boolean(BoolOp::Intersect, thread, &[ends])?.first()?;
+        let thread = k
+            .transform_motion(
+                thread,
+                &Motion::rotation(&Axis::new(Point3::origin(), Vector3::y()), FRAC_PI_2),
+            )?
+            .first()?;
+        k.transform(thread, &Transform::translation(at.x, at.y, at.z))?
+            .first()
+    };
+    for name in ["bevel", "hypoid", "worm", "helicon", "spiroid"] {
+        if which != "all" && !which.split(',').any(|w| w == name) {
+            continue;
+        }
+        let mut k = NativeKernel::new();
+        let t0 = std::time::Instant::now();
+        let built: Result<BodyId> = (|| match name {
+            "bevel" => {
+                let tooth = bevel_tooth(&mut k)?;
+                let x = Axis::new(Point3::origin(), Vector3::x());
+                bevel_cut(&mut k, tooth, x, -0.5, (-60.0, 60.0))
+            }
+            "hypoid" => {
+                let phi = (24.0 / (75.0 - 5.0 * s5)).asin();
+                let tooth = bevel_tooth(&mut k)?;
+                let tooth = k
+                    .transform_motion(tooth, &Motion::rotation(&z_axis(), phi))?
+                    .first()?;
+                let a = Axis::new(p3(0.0, 12.0, 0.0), Vector3::x());
+                bevel_cut(&mut k, tooth, a, -7.0 / 15.0, (-70.0, 70.0))
+            }
+            "worm" => {
+                let wheel = Profile::of(
+                    Plane::square_to(p3(0.0, 0.0, -6.0), Vector3::z()),
+                    vec![Loop::circle([0.0, 0.0], 32.0)],
+                );
+                let wheel = k
+                    .extrude_with(&wheel, &ExtrudeSpec::normal_to(&wheel, 12.0))?
+                    .first()?;
+                hobbed(&mut k, wheel, p3(0.0, 40.0, 0.0), -20.0, 20.0)
+            }
+            "spiroid" => {
+                let quad = [[40.0, -9.0], [52.0, -9.0], [52.0, -1.7], [40.0, -0.3]];
+                let quad = Profile::of(Plane::xz(0.0), vec![Loop::polygon(&quad)]);
+                let ring = k
+                    .revolve_with(&quad, &RevolveSpec::solid(z_axis(), None))?
+                    .first()?;
+                let at = p3(0.0, 30.0, 6.0);
+                let thread = tapered_thread(&mut k, at, 0.0, 52.0)?;
+                if std::env::var_os("CADRS_GEAR_TOOL").is_some() {
+                    // The thread against what the case says it is: points of its faces, each
+                    // as far as it is from the solid's boundary by its own description.
+                    let b = k.get(thread)?;
+                    let tan5 = 5f64.to_radians().tan();
+                    let mut worst: f64 = 0.0;
+                    for f in &b.faces {
+                        let ((u0, u1), (v0, v1)) = f.surf.param_box();
+                        if !(u0.is_finite() && u1.is_finite() && v0.is_finite() && v1.is_finite())
+                            || (u1 - u0) > 1e3
+                            || (v1 - v0) > 1e3
+                        {
+                            continue;
+                        }
+                        for (a, bb) in [(0.3, 0.4), (0.5, 0.5), (0.7, 0.6)] {
+                            let q = f.surf.eval(u0 + (u1 - u0) * a, v0 + (v1 - v0) * bb);
+                            let (x, y, z) = (q.x - at.x, q.y - at.y, q.z - at.z);
+                            let r = y.hypot(z);
+                            let th = z.atan2(y);
+                            let d = r - (6.0 + x * tan5);
+                            let xi = (x - th + PI).rem_euclid(TAU) - PI;
+                            // (How far from the nearest of its four sides, as lengths.)
+                            let off = (d.abs() - 2.5)
+                                .abs()
+                                .min((xi.abs() - (FRAC_PI_2 - d * tan20)).abs());
+                            worst = worst.max(off.min(x.abs()).min((x - 52.0).abs()));
+                        }
+                    }
+                    eprintln!(
+                        "spiroid thread: {} faces, volume {:.6}; its faces' points off its description by up to {worst:.2e}",
+                        b.faces.len(),
+                        k.mass_properties(thread)?.volume
+                    );
+                }
+                let motion = SolidMotion::rigid(vec![
+                    RigidStep::turn(Axis::new(at, Vector3::x()), 0.0, 60.0 * PI),
+                    RigidStep::turn(z_axis(), 0.0, -TAU),
+                ]);
+                cut(&mut k, ring, thread, &motion)
+            }
+            _ => {
+                let face = Profile::with_holes(
+                    Plane::xy(-6.0),
+                    Loop::circle([0.0, 0.0], 52.0),
+                    vec![Loop::circle([0.0, 0.0], 40.0)],
+                );
+                let ring = k
+                    .extrude_with(&face, &ExtrudeSpec::normal_to(&face, 8.0))?
+                    .first()?;
+                hobbed(&mut k, ring, p3(0.0, 30.0, 10.0), 0.0, 52.0)
+            }
+        })();
+        let took = t0.elapsed();
+        match built {
+            Err(e) => eprintln!("{name}: REFUSED after {took:.2?}: {e}"),
+            Ok(id) => {
+                let m = k.mass_properties(id).unwrap();
+                let b = k.get(id).unwrap();
+                let mut kinds = std::collections::BTreeMap::<&str, usize>::new();
+                for f in &b.faces {
+                    let kind = match &f.surf {
+                        cadrs_kernel::native::surface::Surface::Plane { .. } => "plane",
+                        cadrs_kernel::native::surface::Surface::Cylinder { .. } => "cylinder",
+                        cadrs_kernel::native::surface::Surface::Cone { .. } => "cone",
+                        cadrs_kernel::native::surface::Surface::Torus { .. } => "torus",
+                        cadrs_kernel::native::surface::Surface::Nurbs(_) => "bspline",
+                        _ => "other",
+                    };
+                    *kinds.entry(kind).or_default() += 1;
+                }
+                eprintln!(
+                    "{name}: {took:.2?} volume {:.9} area {:.9} faces {:?} class {:?} check {:?} full {:?}",
+                    m.volume,
+                    m.surface_area,
+                    kinds,
+                    k.body_class(id),
+                    b.check().first(),
+                    b.check_with(CheckLevel::Full).first()
+                );
+            }
+        }
+    }
+}

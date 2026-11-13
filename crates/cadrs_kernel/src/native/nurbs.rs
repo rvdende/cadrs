@@ -1162,9 +1162,12 @@ impl NurbsCurve {
         let mut q: Vec<H> = pw[..=p].to_vec();
         let mut next: Vec<H> = vec![H::zeros(); p + 1];
         let mut alphas = vec![0.0; p + 1];
+        // (Knots a rounding error apart are one knot: a curve read from a file may end on knots
+        // that differ in their last digits, and its last span must not be taken for one more.)
+        let same = tol::REL_FINE * (u[m] - u[0]).abs();
         while b < m {
             let i = b;
-            while b < m && u[b + 1] == u[b] {
+            while b < m && (u[b + 1] - u[b]).abs() <= same {
                 b += 1;
             }
             let mult = b - i + 1;
@@ -1188,7 +1191,8 @@ impl NurbsCurve {
             out.push((u[a], u[b], q.clone()));
             if b < m {
                 for k in p.saturating_sub(mult)..=p {
-                    next[k] = pw[b - p + k];
+                    // (No pole past the last: knots that end short of a full clamp.)
+                    next[k] = pw[(b + k).saturating_sub(p).min(n)];
                 }
                 q.clone_from(&next);
                 a = b;
@@ -2155,6 +2159,33 @@ mod tests {
             let bez = NurbsCurve::new(4, [vec![*a; 5], vec![*b; 5]].concat(), q.clone()).unwrap();
             let m = 0.37 * a + 0.63 * b;
             assert!((bez.point(m) - c.point(m)).norm() < 1e-12);
+        }
+    }
+
+    /// A curve whose last knots differ in their last digit (as a file's may) has the segments
+    /// of the curve that ends on one knot there, and no span between the two.
+    #[test]
+    fn bezier_segments_take_knots_a_rounding_apart_as_one() {
+        let end = 3.0f64;
+        let near = f64::from_bits(end.to_bits() - 1);
+        let knots = vec![0.0, 0.0, 0.0, 0.0, 1.0, 2.0, near, end, end, end];
+        let cps: Vec<H> = (0..6)
+            .map(|i| {
+                hom(
+                    &P3::new(i as f64, (i as f64 * 1.1).sin(), 0.3 * i as f64),
+                    1.0,
+                )
+            })
+            .collect();
+        let c = NurbsCurve::new(3, knots, cps).unwrap();
+        let segs = c.bezier_segments();
+        assert_eq!(segs.len(), 3);
+        for (a, b, q) in &segs {
+            let bez = NurbsCurve::new(3, [vec![*a; 4], vec![*b; 4]].concat(), q.clone()).unwrap();
+            for s in [0.0, 0.37, 1.0] {
+                let t = (a + (b - a) * s).min(near);
+                assert!((bez.point(t) - c.point(t)).norm() < 1e-12);
+            }
         }
     }
 

@@ -32,6 +32,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -1063,12 +1064,14 @@ impl ProtocolHandler for Handler {
     }
 }
 
-/// Asks `peer` and reads the answer (at most `max` bytes).
+/// Asks `peer` and reads the answer (at most `max` bytes), counting it into `progress` as it
+/// comes where there is one.
 async fn ask(
     endpoint: Result<Endpoint, String>,
     peer: EndpointAddr,
     ask: Ask,
     max: usize,
+    progress: Option<Arc<AtomicU64>>,
 ) -> Result<Vec<u8>, String> {
     let endpoint = endpoint?;
     let who = peer.id.fmt_short();
@@ -1090,10 +1093,29 @@ async fn ask(
         .await
         .map_err(|e| format!("Lost {who}: {e}"))?;
     let _ = send.finish();
-    let reply = recv
-        .read_to_end(max + 1)
-        .await
-        .map_err(|e| format!("Lost {who}: {e}"))?;
+    let reply = match &progress {
+        None => recv
+            .read_to_end(max + 1)
+            .await
+            .map_err(|e| format!("Lost {who}: {e}"))?,
+        // Counted as it comes (a revision, its download shown).
+        Some(count) => {
+            let mut reply = Vec::new();
+            let mut buf = vec![0u8; 64 * 1024];
+            while let Some(n) = recv
+                .read(&mut buf)
+                .await
+                .map_err(|e| format!("Lost {who}: {e}"))?
+            {
+                reply.extend_from_slice(&buf[..n]);
+                count.store(reply.len() as u64, std::sync::atomic::Ordering::Relaxed);
+                if reply.len() > max + 1 {
+                    return Err(format!("{who} sent too much"));
+                }
+            }
+            reply
+        }
+    };
     conn.close(0u32.into(), b"done");
     match reply.split_first() {
         Some((0, bytes)) => Ok(bytes.to_vec()),
@@ -1120,7 +1142,7 @@ fn secret_key(iroh: &Iroh) -> Result<SecretKey, String> {
 pub fn start_catalog(iroh: &Iroh, peer: EndpointAddr) -> IrohTask<Result<Catalog, String>> {
     let endpoint = dial_from(iroh);
     iroh.spawn(async move {
-        let bytes = ask(endpoint, peer, Ask::Catalog, MAX_CATALOG).await?;
+        let bytes = ask(endpoint, peer, Ask::Catalog, MAX_CATALOG, None).await?;
         postcard::from_bytes(&bytes).map_err(|_| "Not a catalog".to_string())
     })
 }
@@ -1130,10 +1152,18 @@ pub fn start_revision(
     iroh: &Iroh,
     peer: EndpointAddr,
     hash: [u8; 32],
+    progress: Arc<AtomicU64>,
 ) -> IrohTask<Result<Vec<u8>, String>> {
     let endpoint = dial_from(iroh);
     iroh.spawn(async move {
-        let bytes = ask(endpoint, peer, Ask::Revision(hash), MAX_REVISION).await?;
+        let bytes = ask(
+            endpoint,
+            peer,
+            Ask::Revision(hash),
+            MAX_REVISION,
+            Some(progress),
+        )
+        .await?;
         if *blake3::hash(&bytes).as_bytes() != hash {
             return Err("The document did not match its listing".into());
         }
@@ -1149,7 +1179,7 @@ pub fn start_tell(
 ) -> IrohTask<Result<Vec<u8>, String>> {
     let endpoint = dial_from(iroh);
     let catalog = catalog.clone();
-    iroh.spawn(async move { ask(endpoint, peer, Ask::Tell(catalog), 16).await })
+    iroh.spawn(async move { ask(endpoint, peer, Ask::Tell(catalog), 16, None).await })
 }
 
 /// An HTTPS client as iroh's own (its TLS set-up and embedded roots); a page's is the browser's.
@@ -1223,7 +1253,7 @@ pub fn start_profiles(
 ) -> IrohTask<Result<Vec<Signed<Profile>>, String>> {
     let endpoint = dial_from(iroh);
     iroh.spawn(async move {
-        let bytes = ask(endpoint, peer, Ask::Profiles, MAX_CATALOG).await?;
+        let bytes = ask(endpoint, peer, Ask::Profiles, MAX_CATALOG, None).await?;
         postcard::from_bytes(&bytes).map_err(|_| "Not a list of names".to_string())
     })
 }
@@ -1232,7 +1262,7 @@ pub fn start_profiles(
 fn start_tell_profiles(iroh: &Iroh, peer: EndpointAddr, profiles: &[Signed<Profile>]) -> Asked {
     let endpoint = dial_from(iroh);
     let profiles = profiles.to_vec();
-    iroh.spawn(async move { ask(endpoint, peer, Ask::TellProfiles(profiles), 16).await })
+    iroh.spawn(async move { ask(endpoint, peer, Ask::TellProfiles(profiles), 16, None).await })
 }
 
 /// Asks `peer` for a listing's picture, checked against its hash.
@@ -1243,7 +1273,7 @@ pub fn start_picture(
 ) -> IrohTask<Result<Vec<u8>, String>> {
     let endpoint = dial_from(iroh);
     iroh.spawn(async move {
-        let bytes = ask(endpoint, peer, Ask::Picture(hash), MAX_PICTURE).await?;
+        let bytes = ask(endpoint, peer, Ask::Picture(hash), MAX_PICTURE, None).await?;
         if *blake3::hash(&bytes).as_bytes() != hash {
             return Err("The picture did not match its listing".into());
         }
@@ -1261,9 +1291,20 @@ pub struct RevisionFetch {
     ready: Option<Vec<u8>>,
     tasks: Vec<IrohTask<Result<Vec<u8>, String>>>,
     errors: Vec<String>,
+    /// The bytes each peer asked has sent so far.
+    received: Vec<Arc<AtomicU64>>,
 }
 
 impl RevisionFetch {
+    /// The most bytes any peer has sent so far (all of them once it is here).
+    pub fn received(&self) -> u64 {
+        self.received
+            .iter()
+            .map(|r| r.load(std::sync::atomic::Ordering::Relaxed))
+            .max()
+            .unwrap_or(0)
+    }
+
     /// The revision once one peer gave it (it is then kept here, to serve), or why none did.
     pub fn poll(&mut self, shared: &Shared) -> Option<Result<Vec<u8>, String>> {
         if let Some(bytes) = self.ready.take() {
@@ -1730,16 +1771,19 @@ fn fetch_for_seed(
     {
         peers.push(owner);
     }
+    let peers: Vec<EndpointId> = peers.into_iter().filter(|p| *p != iroh.id()).collect();
+    let received: Vec<Arc<AtomicU64>> = peers.iter().map(|_| Arc::default()).collect();
     room.fetches.push(RevisionFetch {
         key: listing.key(),
         hash: listing.hash,
         ready: None,
         tasks: peers
             .into_iter()
-            .filter(|p| *p != iroh.id())
-            .map(|p| start_revision(iroh, EndpointAddr::new(p), listing.hash))
+            .zip(&received)
+            .map(|(p, r)| start_revision(iroh, EndpointAddr::new(p), listing.hash, r.clone()))
             .collect(),
         errors: Vec::new(),
+        received,
     });
 }
 
@@ -2231,6 +2275,7 @@ pub fn fetch(world: &mut World, doc: &Key) -> Result<RevisionFetch, String> {
             ready: Some(bytes),
             tasks: Vec::new(),
             errors: Vec::new(),
+            received: Vec::new(),
         });
     }
     let iroh = world
@@ -2260,9 +2305,11 @@ pub fn fetch(world: &mut World, doc: &Key) -> Result<RevisionFetch, String> {
             }
         }
     }
+    let received: Vec<Arc<AtomicU64>> = ask.iter().map(|_| Arc::default()).collect();
     let tasks = ask
         .into_iter()
-        .map(|id| start_revision(iroh, EndpointAddr::new(id), hash))
+        .zip(&received)
+        .map(|(id, r)| start_revision(iroh, EndpointAddr::new(id), hash, r.clone()))
         .collect();
     Ok(RevisionFetch {
         key: doc.clone(),
@@ -2270,6 +2317,7 @@ pub fn fetch(world: &mut World, doc: &Key) -> Result<RevisionFetch, String> {
         ready: None,
         tasks,
         errors: Vec::new(),
+        received,
     })
 }
 

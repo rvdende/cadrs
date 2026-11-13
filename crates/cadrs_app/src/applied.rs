@@ -17,6 +17,7 @@
 //! - The fillet's radius (or width) has an arrow manipulator on the first edge: dragging it
 //!   changes the value live (PS14.5).
 
+use crate::GizmoGroups;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
@@ -34,12 +35,25 @@ use crate::{ActiveDocument, AppState};
 
 pub struct AppliedPlugin;
 
+/// The Rotate ring's gizmos: over the model, as the arrows are.
+fn configure_ring_gizmos(mut store: ResMut<GizmoConfigStore>) {
+    let (config, _) = store.config_mut::<crate::transform_ui::RotateRingGizmos>();
+    config.line.width = 2.4;
+    config.line.joints = GizmoLineJoint::Round(4);
+    config.render_layers =
+        bevy::camera::visibility::RenderLayers::layer(crate::viewport::OVERLAY_LAYER);
+}
+
 impl Plugin for AppliedPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<BeforeParts>()
             .init_resource::<RadiusArrow>()
             .init_resource::<crate::sheetmetal_ui::SmFlipArrow>()
             .init_resource::<crate::transform_ui::XyzArrows>()
+            .init_resource::<crate::transform_ui::RotateRing>()
+            .init_resource::<crate::gear_ui::PairKnob>()
+            .gizmo_group::<crate::transform_ui::RotateRingGizmos>()
+            .add_systems(Startup, configure_ring_gizmos)
             .add_systems(
                 Update,
                 (
@@ -48,6 +62,8 @@ impl Plugin for AppliedPlugin {
                     applied_keys,
                     radius_arrow_pointer,
                     crate::transform_ui::xyz_arrow_pointer,
+                    crate::transform_ui::rotate_ring_pointer,
+                    crate::gear_ui::pair_knob_pointer,
                     crate::applied_dialog::sync_applied_dialog,
                     crate::draft_ui::sync_fillet_entries,
                     crate::sheetmetal_ui::sync_numbers,
@@ -67,6 +83,9 @@ impl Plugin for AppliedPlugin {
                     default_hole_scope,
                     show_references,
                     draw_references,
+                    crate::transform_ui::draw_rotate_ring,
+                    crate::gear_ui::draw_pair,
+                    crate::gear_ui::update_pair_made,
                     draw_sketch_point_picks,
                 )
                     .chain()
@@ -119,6 +138,8 @@ pub enum AppliedKind {
     Fill,
     /// The Thread feature (`crate::thread_ui`).
     Thread,
+    /// The Gear feature (`crate::gear_ui`).
+    Gear,
     /// P3I.2: the Sheet metal model (`crate::sheetmetal_ui`).
     SheetMetal,
     /// P3I.9: Sheet metal loft, Form, Tag (`crate::sheetmetal_p3i9_ui`).
@@ -153,6 +174,7 @@ impl AppliedKind {
             FeatureKind::Helix(_) => Some(Self::Helix),
             FeatureKind::Fill(_) => Some(Self::Fill),
             FeatureKind::Thread(_) => Some(Self::Thread),
+            FeatureKind::Gear(_) => Some(Self::Gear),
             FeatureKind::SheetMetalModel(_) => Some(Self::SheetMetal),
             k @ (FeatureKind::SheetMetalLoft(_)
             | FeatureKind::Form(_)
@@ -247,6 +269,11 @@ pub enum AppliedField {
     FillEdges,
     /// The Thread's cylinder or hole edge.
     ThreadEdge,
+    /// The Gear's cylinder, hole, cone or flat face.
+    GearFace,
+    /// A hypoid pair's member's own shaft and its mate's.
+    GearShaft,
+    GearMateShaft,
     /// P3I.2: the Sheet metal model's fields: Convert's parts, faces to exclude and edges or
     /// cylinders to bend (Thicken's too); Extrude's curves, arcs to extrude as bends and the Up
     /// to entities of its two ends; Thicken's faces and regions.
@@ -570,6 +597,18 @@ impl AppliedSession {
                 edges: true,
                 ..none
             },
+            AppliedField::GearFace => PickFilter {
+                faces: true,
+                ..none
+            },
+            AppliedField::GearShaft | AppliedField::GearMateShaft => PickFilter {
+                origin: true,
+                faces: true,
+                edges: true,
+                sketch_curves: true,
+                connectors: true,
+                ..none
+            },
             AppliedField::Sm9(f) => crate::sheetmetal_p3i9_ui::pick_filter(f, none),
             AppliedField::FlatRegions => PickFilter {
                 regions: true,
@@ -643,6 +682,7 @@ pub fn begin(world: &mut World, kind: AppliedKind) {
         .or_else(|| crate::pattern::initial(world, kind, &picked))
         .or_else(|| crate::surfacing_ui::initial(world, kind, &picked))
         .or_else(|| crate::thread_ui::initial(world, kind, &picked))
+        .or_else(|| crate::gear_ui::initial(world, kind, &picked))
         .or_else(|| {
             (kind == AppliedKind::SheetMetal)
                 .then(|| crate::sheetmetal_ui::initial(world, &picked))
@@ -750,6 +790,7 @@ pub fn begin(world: &mut World, kind: AppliedKind) {
         | AppliedKind::Helix
         | AppliedKind::Fill
         | AppliedKind::Thread
+        | AppliedKind::Gear
         | AppliedKind::SheetMetal
         | AppliedKind::Sm9(_)
         | AppliedKind::SmFeature(_)
@@ -835,6 +876,7 @@ pub fn edit(world: &mut World, feature: FeatureId) {
         AppliedKind::Helix => AppliedField::HelixEntity,
         AppliedKind::Fill => AppliedField::FillEdges,
         AppliedKind::Thread => AppliedField::ThreadEdge,
+        AppliedKind::Gear => AppliedField::GearFace,
         AppliedKind::SheetMetal => match &before.kind {
             FeatureKind::SheetMetalModel(x) => crate::sheetmetal_ui::first_field(x.operation),
             _ => AppliedField::SmParts,
@@ -1216,6 +1258,11 @@ fn applied_picks(
                 }
                 (k @ FeatureKind::Thread(_), _) => {
                     if !crate::thread_ui::pick(world, k, field, pick) {
+                        return;
+                    }
+                }
+                (k @ FeatureKind::Gear(_), _) => {
+                    if !crate::gear_ui::pick(world, k, field, pick) {
                         return;
                     }
                 }
@@ -1607,6 +1654,7 @@ fn show_references(
             want.extend(crate::surfacing_ui::references(k, &cache))
         }
         k @ FeatureKind::Thread(_) => want.extend(crate::thread_ui::references(k, &cache)),
+        k @ FeatureKind::Gear(_) => want.extend(crate::gear_ui::references(k, &cache)),
         k @ FeatureKind::SheetMetalModel(_) => {
             want.extend(crate::sheetmetal_ui::references(k, &cache))
         }

@@ -157,7 +157,7 @@ jobs:
           cargo check --locked --target wasm32-unknown-unknown -p cadrs_mobile
 
   macos:
-    name: Build and test (macOS)
+    name: Build (macOS)
     runs-on: macos-26
     timeout-minutes: 120
     steps:
@@ -171,8 +171,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # Build only: the tests run on Linux, and building them again here took the job past its
+      # two hours on a cold cache.
       - name: Build
         run: cargo build --workspace
-
-      - name: Test
-        run: cargo test --workspace --exclude cadrs --lib

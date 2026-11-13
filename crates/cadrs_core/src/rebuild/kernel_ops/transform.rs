@@ -162,6 +162,16 @@ impl Rebuilder {
         } else {
             self.transform_moves(id, &parts, &map, state)?
         };
+        // A Rotate's axis (its origin and its direction, flipped as it turns), for the dialog's
+        // ring to drag the angle by.
+        if x.transform_type == TransformType::Rotate
+            && let Some(a) = x.axis.as_ref()
+            && let Ok(axis) = self.axis(before, state, a)
+        {
+            let sign = if x.flip { -1.0 } else { 1.0 };
+            let (o, d) = (axis.origin, axis.dir.into_inner() * sign);
+            out.axis = Some(([o.x, o.y, o.z], [d.x, d.y, d.z]));
+        }
         // Its mate connectors: moved (an explicit one's frame), or copied as its own.
         if !x.connectors.is_empty() {
             let mut next = (*out.state).clone();

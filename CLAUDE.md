@@ -47,6 +47,9 @@ Onshape-style CAD in Rust + Bevy 0.20.1. Local notes in `docs/` (git-ignored: `P
 - Kernel debugging: `CADRS_PROFILE=1`, `CADRS_BOOL_DEBUG=1` and `CADRS_DUMP_DIR=<dir>` (inputs of
   failing shells/fillets, replayed by `crates/cadrs_kernel/tests/native_debug.rs`); see the
   kernel README. The kernel is pure Rust (`cadrs_kernel::native`); there is no OCCT any more.
+- Input latency: windowed runs drop Bevy's pipelined rendering and queue one frame (so a
+  sketch drag keeps up with the cursor); `CADRS_PIPELINED=1`, `CADRS_FRAME_LATENCY=2` restore
+  Bevy's defaults to compare (`cadrs_harness::default_plugins`).
 - App debugging: `CADRS_SLOW_FRAMES=<ms>` logs every frame slower than that with its slowest
   systems (`cadrs_app::debug_tools`; add further env-switched aids there). `CADRS_NO_VSYNC=1`
   shows a frame's real cost; `CADRS_UI_CHANGES=1` names the UI nodes that change every frame
@@ -93,7 +96,8 @@ Onshape-style CAD in Rust + Bevy 0.20.1. Local notes in `docs/` (git-ignored: `P
 - Every document or sketch change goes through the command/undo layer. Give UI elements a `Name`.
 - Icons: `cadrs_icons` (vendored from icon-rs, which cadrs no longer uses). Add missing ones as
   drawing functions in `crates/cadrs_icons_gen` and run `cargo run -r -p cadrs_icons_gen`
-  (`crates/cadrs_icons/HOWTO.md`); commit the generated SVGs and `src/generated.rs`. Inter font.
+  (`crates/cadrs_icons/HOWTO.md`); commit the generated SVGs and `src/generated.rs`. Every new
+  tool or feature gets its own icon: don't reuse another tool's. Inter font.
   Never copy Onshape's logo, name or icons.
 - Units are mm.
 - End commit messages with `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`.

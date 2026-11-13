@@ -2633,6 +2633,8 @@ impl Rebuilder {
             #[cfg(feature = "brep")]
             FeatureKind::Thread(x) => self.thread(f.id, x, state).unwrap_or_else(fail),
             #[cfg(feature = "brep")]
+            FeatureKind::Gear(x) => self.gear(before, f.id, x, state).unwrap_or_else(fail),
+            #[cfg(feature = "brep")]
             FeatureKind::SheetMetalModel(x) => self
                 .sheet_metal_model(before, f.id, &f.name, x, state)
                 .unwrap_or_else(fail),
@@ -2697,6 +2699,7 @@ impl Rebuilder {
             | FeatureKind::FaceBlend(_)
             | FeatureKind::Fill(_)
             | FeatureKind::Thread(_)
+            | FeatureKind::Gear(_)
             | FeatureKind::Image(_) => fail("This feature needs the solid-modelling kernel".into()),
             #[cfg(not(feature = "brep"))]
             FeatureKind::Composite(_) => {
@@ -3005,6 +3008,7 @@ mod kernel_ops {
     mod context;
     mod derived;
     mod draft;
+    mod gear;
     mod import;
     mod linked;
     mod pattern;

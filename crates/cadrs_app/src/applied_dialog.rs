@@ -298,6 +298,41 @@ pub(crate) enum Role {
     ThreadDiameter,
     ThreadCustomPitch,
     ThreadHand,
+    // The Gear (`crate::gear_ui`).
+    GearFace,
+    GearShaft,
+    GearMateShaft,
+    GearType,
+    GearTeeth,
+    GearModule,
+    GearPressureAngle,
+    GearStyle,
+    GearHelixAngle,
+    GearHand,
+    GearWidth,
+    GearBore,
+    GearRim,
+    GearPitchAngle,
+    GearLength,
+    GearHeight,
+    GearBacklash,
+    GearX,
+    GearY,
+    GearZ,
+    GearAxis,
+    GearRotation,
+    GearSpiral,
+    GearCutter,
+    GearShaftAngle,
+    GearTilt,
+    GearMateTeeth,
+    GearOffset,
+    GearMount,
+    GearPressureShift,
+    GearEndRelief,
+    GearQuotient,
+    GearRatio,
+    GearMember,
     // The direct edits (`crate::direct_edit_ui`).
     DirectEditFaces,
     DirectEditDistance,
@@ -831,6 +866,12 @@ fn dialog(
         Role::SmSecondUpTo,
         Role::FlatRegions,
         Role::DirectEditFaces,
+        Role::HelixEntity,
+        Role::FillEdges,
+        Role::ThreadEdge,
+        Role::GearFace,
+        Role::GearShaft,
+        Role::GearMateShaft,
     ]
     .into_iter()
     .chain(crate::sheetmetal_features_ui::LIST_ROLES)
@@ -2069,6 +2110,12 @@ fn on_select(ev: On<SelectChange>, q: Query<&Role>, mut commands: Commands) {
         Role::ThreadPitch => "Pitch",
         Role::ThreadEnd => "End type",
         Role::ThreadHand => "Direction",
+        Role::GearType => "Gear type",
+        Role::GearStyle => "Tooth line",
+        Role::GearHand => "Direction",
+        Role::GearAxis => "Axis",
+        Role::GearSpiral => "Spiral",
+        Role::GearMember => "Cut as",
         _ => return,
     };
     change(&mut commands, label, move |k| match (k, role) {
@@ -2243,6 +2290,9 @@ fn on_checkbox(ev: On<CheckboxChange>, q: Query<&Name>, mut commands: Commands) 
             if let FeatureKind::Shell(x) = k {
                 x.rounded = on;
             }
+        }),
+        "gear-hold-checkbox" => commands.queue(move |world: &mut World| {
+            crate::gear_ui::toggle_hold(world, on);
         }),
         n if crate::advanced_dialog::is_checkbox(n) => {
             let n = n.to_string();
@@ -2808,6 +2858,7 @@ pub fn toolbar_kind(name: &str) -> Option<AppliedKind> {
         "helix" => Some(AppliedKind::Helix),
         "fill" => Some(AppliedKind::Fill),
         "thread" => Some(AppliedKind::Thread),
+        "gear" => Some(AppliedKind::Gear),
         "sheet-metal-model" => Some(AppliedKind::SheetMetal),
         n => crate::sheetmetal_tools_ui::SmTool::named(n).map(AppliedKind::SheetMetalTool),
     }

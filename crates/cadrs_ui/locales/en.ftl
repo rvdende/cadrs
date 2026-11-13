@@ -612,6 +612,12 @@ shell-public-view-banner = “{ $name }” by { $owner }, revision { $revision }
 shell-public-view-label = “{ $name }” by { $owner } (public)
 shell-public-opening = Opening “{ $name }”…
 shell-public-forking = Forking “{ $name }”…
+# The card at the top of the window while a public document downloads; { $name } is its name.
+shell-public-downloading = Downloading “{ $name }”
+# How much of it has come: { $got } and { $size } like “1.2 MB”, { $percent } a whole number.
+shell-public-download-amount = { $got } of { $size } ({ $percent }%)
+# Under the card's title once it has come, while its files are unpacked.
+shell-public-unpacking-detail = Unpacking its files…
 # { $why } is the reason, as cadrs gives it.
 shell-public-cannot-open = Cannot open “{ $name }”: { $why }
 shell-public-gone = That document is not public any more
@@ -939,6 +945,7 @@ shell-tool-rib = Rib
 shell-tool-shell = Shell
 shell-tool-hole = Hole
 shell-tool-thread = Thread
+shell-tool-gear = Gear
 # The direct edit tools' button.
 shell-tool-direct-edit = Move face, Delete face, Simplify
 shell-tool-linear-pattern = Linear pattern
@@ -1850,6 +1857,8 @@ sketch-glyph-select-geometry = Select geometry
 sketch-glyph-hide = Hide constraints
 # Leaves the constraint tool (as Esc does).
 sketch-glyph-escape = Escape constraint
+# A sketch point's context menu: the point's coincidences go and its curves come apart.
+sketch-point-delete-coincident = Delete coincident constraint
 sketch-unsolved = Sketch could not be solved.
 sketch-conflict = Some constraints are not applicable to the current geometry and have not been solved.
 
@@ -2389,6 +2398,125 @@ model-continuity-position = Position (G0)
 model-continuity-tangency = Tangency (G1)
 # A continuity: the surfaces meet with the same curvature (G2).
 model-continuity-curvature = Curvature (G2)
+
+## crates/cadrs_app/src/gear_ui.rs
+# The Gear dialog's selection field: the face the teeth are cut into, if any.
+model-gear-face = Cylinder, cone or flat face (optional)
+# The face field's entry: { $face } is the face ("Face of Extrude 1"), { $module } the module the gear has on it ("2 mm").
+model-gear-face-module = Module { $module }, { $face }
+# A gear type: external teeth on a cylinder.
+model-gear-spur = Spur gear
+# A gear type: internal teeth in a ring.
+model-gear-ring = Ring gear
+# A gear type: teeth on a cone.
+model-gear-bevel = Bevel gear
+# A gear type: teeth on a straight bar.
+model-gear-rack = Rack
+# A gear's number of teeth.
+model-gear-teeth = Teeth
+# A gear's module: its pitch diameter over its number of teeth.
+model-gear-module = Module
+model-gear-pressure-angle = Pressure angle
+# How a gear's teeth run across its face (straight, helical, herringbone).
+model-gear-tooth-line = Tooth line
+model-gear-straight = Straight
+model-gear-helical = Helical
+model-gear-herringbone = Herringbone
+model-gear-helix-angle = Helix angle
+# A gear's width along its teeth.
+model-gear-face-width = Face width
+# The diameter of the hole through a gear's middle.
+model-gear-bore = Bore diameter
+# A ring gear's wall outside its teeth.
+model-gear-rim = Rim thickness
+# A bevel gear's pitch angle: between its axis and its pitch cone.
+model-gear-pitch-angle = Pitch angle
+# The body under a rack's or a bevel gear's teeth.
+model-gear-body = Body thickness
+# How much thinner the teeth are made so that two gears run freely.
+model-gear-backlash = Backlash
+# The axis a gear turns about (X, Y or Z).
+model-gear-axis = Axis
+# A checkbox: a rack's teeth are spaced along the face's short side.
+model-gear-across = Teeth across the face
+# How a bevel gear's spiral teeth run along its face.
+model-gear-spiral = Spiral
+# A spiral: as a face-mill cutter leaves the teeth (Gleason's spiral bevel gears).
+model-gear-face-milled = Face-milled (Gleason)
+# A spiral: at the same angle to the cone's lines everywhere.
+model-gear-equiangular = Equiangular
+# Which of a pair of face-milled spiral bevel gears this one is.
+model-gear-member = Cut as
+# The gear of a pair: the cutter cuts both sides of a tooth space at once.
+model-gear-member-gear = Gear
+# The pinion of a pair, cut to run with its gear with localised bearing contact: its
+# teeth eased off toward their ends so the pair meets in a patch that crosses the tooth
+# (machine settings by Litvin's synthesis).
+model-gear-member-pinion = Pinion (localised contact)
+# The pinion of a pair, cut to match its gear exactly: the two meet along whole lines.
+model-gear-member-conjugate = Pinion (conjugate)
+# The radius of the face-mill cutter that makes a spiral bevel gear's teeth; 0 picks one.
+model-gear-cutter-radius = Cutter radius (0: auto)
+# A bevel gear's shaft angle: between its axis and its mate's (90° for shafts at right angles).
+model-gear-shaft-angle = Shaft angle
+# A checkbox: a bevel gear made whole is placed by its apex (the point of its pitch cone), not its back face.
+model-gear-at-apex = Position at the apex
+# A bevel gear made whole: its axis turned about a line through its apex.
+model-gear-tilt = Tilt
+# A gear type: one member of a hypoid pair (a spiral bevel pair whose shafts are offset), generated by a face-mill crown.
+model-gear-hypoid = Hypoid pair
+# The number of teeth of the other gear of the pair.
+model-gear-mate-teeth = Mate's teeth
+# A spiral bevel or hypoid gear's spiral angle at the middle of its face.
+model-gear-spiral-angle = Spiral angle
+# The pinion of a hypoid pair (generated by the crown's tooth).
+model-gear-member-hypoid-pinion = Pinion
+# A hypoid pair's offset: the distance between the two shafts' axes (0 for a spiral bevel pair).
+model-gear-offset = Offset
+# The face mill's pressure shift: its inner blade steepened and its outer flattened by this angle.
+model-gear-pressure-shift = Pressure shift
+# How far the tips' toe and heel edges are chamfered.
+model-gear-end-relief = End relief
+# The axis square to a hypoid pair's pitch plane (X, Y or Z).
+model-gear-pitch-plane-normal = Pitch plane's normal
+# A hypoid pair's member's own shaft (a line, an edge, a face of revolution or a mate connector).
+model-gear-shaft = Axis
+# The other member's shaft: with both picked, the pair is laid out on them.
+model-gear-mate-shaft = Mate's axis
+# A gear type: a worm drive's worm, or its wheel (hobbed by the worm).
+model-gear-worm = Worm drive
+# The wheel of a worm drive.
+model-gear-member-wheel = Worm wheel
+# The worm of a worm drive.
+model-gear-member-worm = Worm
+# A worm's number of starts (threads).
+model-gear-starts = Starts
+# The number of starts of the worm the wheel runs with.
+model-gear-worm-starts = Worm's starts
+# A worm's pitch diameter over its module.
+model-gear-worm-quotient = Diameter quotient
+# The axis a worm wheel turns about (X, Y or Z); the worm's runs along the frame's x.
+model-gear-wheel-axis = Wheel's axis
+# A checkbox: a generated gear (hypoid, worm wheel) shown as its blank alone, at once, while its shafts are moved; its teeth are cut once it's off.
+model-gear-fast-preview = Fast preview (blank only)
+# A gear type: both gears of a pair on two shafts, from their ratio (a hypoid pair, or a worm drive where the shafts are square and far apart).
+model-gear-pair = Gear pair
+# A gear pair's ratio: the gear's teeth over the pinion's.
+model-gear-ratio = Ratio
+# A checkbox: the tooth counts are chosen to suit the ratio.
+model-gear-auto-teeth = Auto teeth
+model-gear-hold = Hold gear on its shaft
+model-gear-mount = Mount
+# A gear pair's pinion's teeth (a worm drive's: the worm's starts).
+model-gear-pinion-teeth = Pinion's teeth (or worm's starts)
+# The gear's shaft of a gear pair (a line, an edge, a cylinder or a mate connector).
+model-gear-pair-gear-shaft = Gear's shaft
+# The pinion's (or worm's) shaft of a gear pair.
+model-gear-pair-pinion-shaft = Pinion's shaft
+# What a gear pair makes of its ratio and shafts: a hypoid pair, its pinion's and its gear's teeth.
+model-gear-pair-hypoid = Hypoid pair: { $pinion } : { $gear } teeth
+# What a gear pair makes of its ratio and shafts: a worm drive, the worm's starts and the wheel's teeth.
+model-gear-pair-worm = Worm drive: { $starts } start(s), { $gear } teeth
 
 ## crates/cadrs_app/src/thread_ui.rs
 # A thread's handedness.

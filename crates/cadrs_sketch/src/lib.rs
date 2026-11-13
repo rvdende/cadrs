@@ -22,6 +22,7 @@ pub mod diagnostics;
 pub mod dimension;
 pub mod edit;
 pub mod entity;
+pub mod extension;
 pub mod external;
 pub mod face_offset;
 pub mod geom;
@@ -688,6 +689,65 @@ pub enum CurveKind {
 }
 
 impl CurveKind {
+    /// The curve with each of its points replaced by `f` of it.
+    pub fn map_points(self, f: impl Fn(PointId) -> PointId) -> CurveKind {
+        match self {
+            CurveKind::Line { a, b } => CurveKind::Line { a: f(a), b: f(b) },
+            CurveKind::Circle { center, radius } => CurveKind::Circle {
+                center: f(center),
+                radius,
+            },
+            CurveKind::Arc { center, start, end } => CurveKind::Arc {
+                center: f(center),
+                start: f(start),
+                end: f(end),
+            },
+            CurveKind::Ellipse {
+                center,
+                major,
+                minor,
+            } => CurveKind::Ellipse {
+                center: f(center),
+                major: f(major),
+                minor,
+            },
+            CurveKind::EllipseOffset {
+                center,
+                major,
+                minor,
+                distance,
+            } => CurveKind::EllipseOffset {
+                center: f(center),
+                major: f(major),
+                minor,
+                distance,
+            },
+            CurveKind::EllipseArc {
+                center,
+                major,
+                minor,
+                start,
+                end,
+            } => CurveKind::EllipseArc {
+                center: f(center),
+                major: f(major),
+                minor,
+                start: f(start),
+                end: f(end),
+            },
+            CurveKind::Spline { start, end } => CurveKind::Spline {
+                start: f(start),
+                end: f(end),
+            },
+            CurveKind::Bezier { a, c1, c2, b } => CurveKind::Bezier {
+                a: f(a),
+                c1: f(c1),
+                c2: f(c2),
+                b: f(b),
+            },
+        }
+    }
+
     /// The curve's scalar unknown: a circle's radius or an ellipse's minor radius.
     pub fn scalar(&self) -> Option<f64> {
         match *self {
@@ -1663,6 +1723,47 @@ impl Sketch {
         }
     }
 
+    /// Undoes the coincidence at a point: removes the coincident constraints on it (with
+    /// other points, curves, the origin or the axes) and gives every curve that shares it but
+    /// the first a point of its own in the same place, so the curves are free to come apart.
+    /// The point's other constraints and dimensions stay with the first curve. Returns false
+    /// if there was nothing to undo.
+    pub fn split_point(&mut self, p: PointId) -> bool {
+        if !self.points.contains_key(p) {
+            return false;
+        }
+        let coincidences: Vec<ConstraintId> = self
+            .constraints
+            .iter()
+            .filter(|(_, c)| match **c {
+                Constraint::Coincident(a, b) => a == PointRef::Point(p) || b == PointRef::Point(p),
+                Constraint::PointOnCurve(a, _) => a == PointRef::Point(p),
+                _ => false,
+            })
+            .map(|(k, _)| k)
+            .collect();
+        let mut changed = !coincidences.is_empty();
+        for k in coincidences {
+            self.constraints.remove(k);
+        }
+        let curves: Vec<CurveId> = self.curves_at(p).collect();
+        let pos = self.points[p].pos;
+        for c in curves.into_iter().skip(1) {
+            let own = self.points.insert(Point { pos });
+            let swap = |q: PointId| if q == p { own } else { q };
+            if let Some(curve) = self.curves.get_mut(c) {
+                curve.kind = curve.kind.map_points(swap);
+            }
+            if let Some(d) = self.splines.get_mut(c) {
+                for q in &mut d.points {
+                    *q = swap(*q);
+                }
+            }
+            changed = true;
+        }
+        changed
+    }
+
     /// Replaces the point `gone` with `keep` everywhere (curves, constraints, dimensions) and
     /// removes it: the two become one point.
     pub fn merge_points(&mut self, keep: PointId, gone: PointId) {
@@ -1671,64 +1772,7 @@ impl Sketch {
         }
         let swap = |p: PointId| if p == gone { keep } else { p };
         for c in self.curves.values_mut() {
-            c.kind = match c.kind {
-                CurveKind::Line { a, b } => CurveKind::Line {
-                    a: swap(a),
-                    b: swap(b),
-                },
-                CurveKind::Circle { center, radius } => CurveKind::Circle {
-                    center: swap(center),
-                    radius,
-                },
-                CurveKind::Arc { center, start, end } => CurveKind::Arc {
-                    center: swap(center),
-                    start: swap(start),
-                    end: swap(end),
-                },
-                CurveKind::Ellipse {
-                    center,
-                    major,
-                    minor,
-                } => CurveKind::Ellipse {
-                    center: swap(center),
-                    major: swap(major),
-                    minor,
-                },
-                CurveKind::EllipseOffset {
-                    center,
-                    major,
-                    minor,
-                    distance,
-                } => CurveKind::EllipseOffset {
-                    center: swap(center),
-                    major: swap(major),
-                    minor,
-                    distance,
-                },
-                CurveKind::EllipseArc {
-                    center,
-                    major,
-                    minor,
-                    start,
-                    end,
-                } => CurveKind::EllipseArc {
-                    center: swap(center),
-                    major: swap(major),
-                    minor,
-                    start: swap(start),
-                    end: swap(end),
-                },
-                CurveKind::Spline { start, end } => CurveKind::Spline {
-                    start: swap(start),
-                    end: swap(end),
-                },
-                CurveKind::Bezier { a, c1, c2, b } => CurveKind::Bezier {
-                    a: swap(a),
-                    c1: swap(c1),
-                    c2: swap(c2),
-                    b: swap(b),
-                },
-            };
+            c.kind = c.kind.map_points(swap);
         }
         for d in self.splines.values_mut() {
             for p in &mut d.points {

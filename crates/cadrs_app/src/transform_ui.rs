@@ -179,6 +179,24 @@ pub fn pick(world: &mut World, kind: &mut FeatureKind, field: AppliedField, pick
     true
 }
 
+/// What an axis reference is in the view (to show it selected).
+pub(crate) fn axis_pick(cache: &PartCache, a: &AxisRef) -> Option<Pick> {
+    match a {
+        AxisRef::SketchCurve { sketch, curve } => Some(Pick::SketchCurve(*sketch, *curve)),
+        AxisRef::Edge(e) => cache
+            .parts
+            .iter()
+            .find(|p| p.solid.edge(&e.edge).is_some())
+            .map(|p| Pick::Edge(p.id, e.edge)),
+        AxisRef::Face(f) => cache
+            .parts
+            .iter()
+            .find(|p| p.solid.face(&f.face).is_some())
+            .map(|p| Pick::Face(p.id, f.face)),
+        AxisRef::Connector(c) => crate::pattern::connector_pick(c),
+    }
+}
+
 /// What the Transform's fields refer to, shown selected in the view while its dialog is open.
 pub fn references(kind: &FeatureKind, cache: &PartCache) -> Vec<Pick> {
     let FeatureKind::Transform(x) = kind else {
@@ -1057,6 +1075,270 @@ pub(crate) fn place_xyz_arrows(
         let c = axis_color(a.0, arrows.hovered == Some(a.0));
         if img.color != c {
             img.color = c;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Rotate: the ring
+
+/// The ring of a Rotate's gizmo: about its axis, through the middle of the parts it turns.
+#[derive(Default, Reflect, bevy::gizmos::config::GizmoConfigGroup)]
+pub struct RotateRingGizmos;
+
+/// Rotate's ring manipulator: a circle about the axis (a fixed size on screen) at the foot on
+/// the axis of the middle of the parts it turns, with a knob at the angle turned. Dragging the
+/// ring (anywhere on it) turns the angle live, snapped to whole degrees, and records one undo
+/// step on release.
+#[derive(Resource, Debug, Default)]
+pub struct RotateRing {
+    /// The ring's points on screen (window px), for the pointer to find it.
+    pub screen: Vec<Vec2>,
+    pub hovered: bool,
+    pub drag: Option<RingDrag>,
+    /// The ring as last drawn: its centre, its axis (unit), its radius (mm) and the direction
+    /// of its knob at an angle of 0.
+    ring: Option<(Vec3, Vec3, f32, Vec3)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RingDrag {
+    /// Where on the ring's plane the drag started, from its centre.
+    from: Vec3,
+    start_angle: f64,
+    /// The feature's parameters as dragged.
+    pub kind: FeatureKind,
+}
+
+impl RotateRing {
+    /// Whether the pointer is on the ring or dragging it (a press there is the ring's).
+    pub fn active(&self) -> bool {
+        self.hovered || self.drag.is_some()
+    }
+}
+
+const RING_PX: f32 = 70.0;
+const RING_GRAB: f32 = 8.0;
+
+/// The Transform being edited, when it is a Rotate (as dragged while dragged).
+fn rotate_kind(
+    session: Option<&crate::applied::AppliedSession>,
+    doc: Option<&ActiveDocument>,
+    ring: &RotateRing,
+) -> Option<(cadrs_core::FeatureId, TransformFeature)> {
+    let s = session.filter(|s| s.kind == crate::applied::AppliedKind::Transform)?;
+    let kind = match ring.drag.as_ref() {
+        Some(d) => d.kind.clone(),
+        None => doc?
+            .doc
+            .element(s.element)?
+            .feature(s.feature)?
+            .kind
+            .clone(),
+    };
+    let FeatureKind::Transform(x) = kind else {
+        return None;
+    };
+    (x.transform_type == TransformType::Rotate).then_some((s.feature, x))
+}
+
+/// Where the pointer's ray meets the ring's plane, from its centre.
+fn on_ring_plane(
+    view: &crate::camera::ViewState,
+    offset: Vec2,
+    (c, n): (Vec3, Vec3),
+) -> Option<Vec3> {
+    let (o, d) = view.ray(offset);
+    let den = d.dot(n);
+    if den.abs() < 1e-4 {
+        return None;
+    }
+    let t = (c - o).dot(n) / den;
+    let v = o + d * t - c;
+    (v.length() > 1e-6).then_some(v)
+}
+
+/// Places and draws the ring (over the model), its knob at the angle turned.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_rotate_ring(
+    session: Option<Res<crate::applied::AppliedSession>>,
+    doc: Option<Res<ActiveDocument>>,
+    before: Res<crate::applied::BeforeParts>,
+    cache: Res<PartCache>,
+    view: Res<crate::viewport::ViewportView>,
+    rect: Res<crate::viewport::ViewportRect>,
+    mut ring: ResMut<RotateRing>,
+    mut g: Gizmos<RotateRingGizmos>,
+) {
+    let found = rotate_kind(session.as_deref(), doc.as_deref(), &ring).and_then(|(f, x)| {
+        let (o, d) = cache.axes.get(&f)?;
+        let o = Vec3::new(o[0] as f32, o[1] as f32, o[2] as f32);
+        let axis = Vec3::new(d[0] as f32, d[1] as f32, d[2] as f32).normalize_or_zero();
+        if axis == Vec3::ZERO {
+            return None;
+        }
+        // The middle of the parts before they turn, and its foot on the axis.
+        let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        for p in before.parts.iter().filter(|p| x.parts.contains(&p.id)) {
+            let Some((a, b)) = p.solid.bounds() else {
+                continue;
+            };
+            lo = lo.min(Vec3::new(a[0] as f32, a[1] as f32, a[2] as f32));
+            hi = hi.max(Vec3::new(b[0] as f32, b[1] as f32, b[2] as f32));
+        }
+        let mid = if lo.x <= hi.x { (lo + hi) / 2.0 } else { o };
+        let c = o + axis * (mid - o).dot(axis);
+        // The knob at 0: toward the parts' middle, else any way square to the axis.
+        let away = mid - c;
+        let zero = if away.length() > 1e-3 {
+            away.normalize()
+        } else {
+            axis.any_orthonormal_vector()
+        };
+        Some((c, axis, zero, x.angle as f32))
+    });
+    let Some((c, axis, zero, angle)) = found else {
+        ring.screen.clear();
+        ring.ring = None;
+        ring.hovered = false;
+        return;
+    };
+    let r = RING_PX * view.view.scale;
+    let side = axis.cross(zero);
+    let at = |a: f32| c + (zero * a.cos() + side * a.sin()) * r;
+    ring.screen = (0..=64)
+        .map(|i| {
+            rect.to_screen(
+                view.view
+                    .project(at(i as f32 / 64.0 * std::f32::consts::TAU)),
+            )
+        })
+        .collect();
+    ring.ring = Some((c, axis, r, zero));
+    let hot = ring.active();
+    let color = if hot {
+        Color::srgb_u8(0xff, 0xb4, 0x5a)
+    } else {
+        Color::srgb_u8(0x4a, 0x8c, 0xf0)
+    };
+    g.linestrip(
+        (0..=96).map(|i| at(i as f32 / 96.0 * std::f32::consts::TAU)),
+        color,
+    );
+    // The knob at the angle turned (as the feature turns: about the axis), and a spoke to it.
+    let knob = at(angle.to_radians());
+    g.line(c, knob, color.with_alpha(0.6));
+    let k = r * 0.08;
+    g.linestrip(
+        (0..=16).map(|i| {
+            let a = i as f32 / 16.0 * std::f32::consts::TAU;
+            knob + (zero * a.cos() + side * a.sin()) * k
+        }),
+        color,
+    );
+    // The axis through the ring, a little past it each way.
+    g.line(
+        c - axis * r * 0.4,
+        c + axis * r * 0.4,
+        color.with_alpha(0.5),
+    );
+}
+
+/// The ring under `p`: within reach of its outline on screen.
+fn ring_at(ring: &RotateRing, p: Vec2) -> bool {
+    ring.screen.windows(2).any(|w| {
+        let (a, b) = (w[0], w[1]);
+        let ab = b - a;
+        let t = ((p - a).dot(ab) / ab.length_squared().max(1e-9)).clamp(0.0, 1.0);
+        p.distance(a + ab * t) <= RING_GRAB
+    })
+}
+
+/// Grabs, drags and releases the ring.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn rotate_ring_pointer(
+    mut inputs: MessageReader<bevy::picking::pointer::PointerInput>,
+    session: Option<Res<crate::applied::AppliedSession>>,
+    mut ring: ResMut<RotateRing>,
+    doc: Option<Res<ActiveDocument>>,
+    view: Res<crate::viewport::ViewportView>,
+    rect: Res<crate::viewport::ViewportRect>,
+    drag: Res<crate::viewport::ViewportDrag>,
+    mut over: ResMut<crate::parts::PartOverride>,
+    mut grab: ResMut<crate::assembly::ViewportGrab>,
+    mut commands: Commands,
+) {
+    use bevy::picking::pointer::{PointerAction, PointerButton, PointerId};
+    let Some((feature, x)) = rotate_kind(session.as_deref(), doc.as_deref(), &ring) else {
+        inputs.clear();
+        ring.hovered = false;
+        return;
+    };
+    ring.hovered = ring.drag.is_some() || ring_at(&ring, drag.pointer());
+    let Some((c, axis, _, _)) = ring.ring else {
+        inputs.clear();
+        return;
+    };
+    for input in inputs.read() {
+        if input.pointer_id != PointerId::Mouse {
+            continue;
+        }
+        let pos = input.location.position;
+        match input.action {
+            PointerAction::Press(PointerButton::Primary) => {
+                if ring_at(&ring, pos)
+                    && let Some(from) = on_ring_plane(&view.view, rect.offset(pos), (c, axis))
+                {
+                    ring.drag = Some(RingDrag {
+                        from,
+                        start_angle: x.angle,
+                        kind: FeatureKind::Transform(x.clone()),
+                    });
+                    // Not a click that picks a part, nor the start of a box.
+                    grab.0 = true;
+                }
+            }
+            PointerAction::Move { .. } => {
+                let Some(d) = ring.drag.as_mut() else {
+                    continue;
+                };
+                let Some(to) = on_ring_plane(&view.view, rect.offset(pos), (c, axis)) else {
+                    continue;
+                };
+                // The turn from where the drag started, about the axis, in whole degrees.
+                let turned = axis
+                    .dot(d.from.cross(to))
+                    .atan2(d.from.dot(to))
+                    .to_degrees() as f64;
+                let v = (d.start_angle + turned).round();
+                let v = v + 0.0;
+                if let FeatureKind::Transform(t) = &mut d.kind
+                    && (t.angle - v).abs() > 1e-9
+                {
+                    t.angle = v;
+                    t.angle_expr = format!("{} deg", cadrs_core::hole::fmt(v));
+                }
+                let want = Some((feature, d.kind.clone()));
+                if over.applied != want {
+                    over.applied = want;
+                }
+            }
+            PointerAction::Release(PointerButton::Primary) if ring.drag.is_some() => {
+                commands.queue(|world: &mut World| {
+                    world.resource_mut::<crate::parts::PartOverride>().applied = None;
+                    let Some(d) = world.resource_mut::<RotateRing>().drag.take() else {
+                        return;
+                    };
+                    if crate::applied::current(world).is_some_and(|f| f.kind != d.kind) {
+                        crate::applied::set(world, d.kind, "Drag angle");
+                    }
+                });
+            }
+            PointerAction::Cancel => {
+                ring.drag = None;
+                over.applied = None;
+            }
+            _ => {}
         }
     }
 }

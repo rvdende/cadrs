@@ -1,0 +1,22 @@
+// The Gears sample (`cadrs_core::samples::gears`, issue #179): fourteen gears made with the Gear
+// feature, three by three: a spur, a helical and a herringbone gear in front; a helical gear with
+// a hub and holes, a planetary set and a herringbone ring gear in the middle; a straight bevel, a
+// spiral bevel and a spiral bevel pair in mesh at the back.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        SetTimeout(180.0),
+        Custom("gears"),
+        Key("Shift+7"),
+        Key("F"),
+        MoveTo(1420, 900),
+        Wait(6),
+        Screenshot("01-gears"),
+        Key("Shift+5"),
+        Key("F"),
+        MoveTo(1420, 900),
+        Wait(6),
+        Screenshot("02-gears-top"),
+    ],
+)

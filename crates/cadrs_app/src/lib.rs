@@ -63,6 +63,7 @@ pub mod material_dialog;
 // The MCP server listens on a port: not in the browser build (`tools/web`).
 pub mod chat_ui;
 pub mod find_shop;
+pub mod gear_ui;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mcp;
 #[cfg(not(target_arch = "wasm32"))]

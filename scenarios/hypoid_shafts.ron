@@ -1,0 +1,16 @@
+// The gears sample's Hypoid tab (`cadrs_core::samples::gears::build_hypoid_in`): two shafts,
+// the pinion's moved by two Transforms, and the hypoid pair picking the shafts' cylinders. Then
+// the Rotate's angle set to 10°: both gears follow the pinion's shaft.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        SetTimeout(180.0),
+        Custom("hypoid"),
+        Key("Shift+7"),
+        Key("F"),
+        MoveTo(1420, 900),
+        Wait(10),
+        Screenshot("01-the-pair-on-its-shafts"),
+    ],
+)

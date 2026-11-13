@@ -270,6 +270,7 @@ pub mod drill;
 pub mod flange;
 pub mod gasket;
 pub mod gear_cover;
+pub mod gears;
 pub mod hand_brake;
 pub mod in_context;
 pub mod inspection;

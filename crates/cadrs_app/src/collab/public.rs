@@ -16,8 +16,12 @@
 //!   and `public/seeds.txt`, one cadrs ID a line, from the Preferences dialog) and the
 //!   contacts; the Preferences' *Public documents* switch says whether to take part at all.
 //!
+//! - While a revision comes and is unpacked, a card at the top of the window shows it: the
+//!   document's name and a progress bar, the bytes come of its size (`public-download`). The
+//!   revision is unpacked (its imported files installed) off the UI thread.
+//!
 //! Names: `public-view-banner`, `public-view-banner-text`, `public-view-fork`,
-//! `public-view-close`.
+//! `public-view-close`, `public-download`, `public-download-text`, `public-download-bar`.
 
 use bevy::prelude::*;
 use bevy::text::FontWeight;
@@ -44,6 +48,7 @@ const SEEDS_FILE: &str = "seeds.txt";
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<Shared>()
         .init_resource::<Fetches>()
+        .init_resource::<Unpacking>()
         .init_resource::<Seeds>()
         // The room is joined with the seeds and contacts (`cadrs_net::public::PublicSystems`
         // run only where cadrs can go online).
@@ -53,7 +58,15 @@ pub(super) fn plugin(app: &mut App) {
                 .chain()
                 .before(cadrs_net::public::PublicSystems),
         )
-        .add_systems(Update, (poll_fetches, keep_profile))
+        .add_systems(
+            Update,
+            (
+                poll_fetches,
+                poll_unpacking,
+                sync_download_card,
+                keep_profile,
+            ),
+        )
         .add_systems(
             Update,
             sync_view_banner.run_if(in_state(AppState::Document)),
@@ -329,19 +342,7 @@ fn start(world: &mut World, key: &Key, then: Then) {
     }
     match net::fetch(world, key) {
         Ok(f) => {
-            let name = listing.name.as_str();
-            let text = match then {
-                Then::View => tr_with("shell-public-opening", &[("name", name)]),
-                Then::Fork => tr_with("shell-public-forking", &[("name", name)]),
-            };
-            // Kept here already: no need to say it is coming.
-            if !world
-                .resource::<Shared>()
-                .lock()
-                .has_revision(&listing.hash)
-            {
-                crate::linked::toast(world, text);
-            }
+            // (The download card says it is coming.)
             world.resource_mut::<Fetches>().0.push((f, listing, then));
         }
         Err(why) => {
@@ -378,26 +379,220 @@ fn poll_fetches(world: &mut World) {
             }
         });
     for (r, listing, then) in done {
-        let name = listing.name.clone();
-        let r = r.and_then(|bytes| match then {
-            Then::View => open_view(world, &listing, &bytes),
-            Then::Fork => keep_fork(world, &listing, &bytes).map(|id| {
+        match r {
+            // Unpacked off the UI thread (its imported files written to the cache), then
+            // opened or kept by `poll_unpacking`.
+            Ok(bytes) => {
+                let task =
+                    bevy::tasks::AsyncComputeTaskPool::get().spawn(async move { unpack(&bytes) });
+                world
+                    .resource_mut::<Unpacking>()
+                    .0
+                    .push((task, listing, then));
+            }
+            Err(why) => cannot_open(world, &listing.name, &why),
+        }
+    }
+}
+
+/// Revisions being unpacked.
+#[derive(Resource, Default)]
+struct Unpacking(
+    Vec<(
+        bevy::tasks::Task<Result<cadrs_core::Document, String>>,
+        Listing,
+        Then,
+    )>,
+);
+
+fn poll_unpacking(world: &mut World) {
+    let mut done = Vec::new();
+    world
+        .resource_mut::<Unpacking>()
+        .0
+        .retain_mut(|(task, listing, then)| {
+            match bevy::tasks::block_on(bevy::tasks::futures_lite::future::poll_once(task)) {
+                None => true,
+                Some(r) => {
+                    done.push((r, listing.clone(), *then));
+                    false
+                }
+            }
+        });
+    for (r, listing, then) in done {
+        let r = r.and_then(|doc| match then {
+            Then::View => open_view(world, &listing, doc),
+            Then::Fork => keep_fork(world, &listing, doc).map(|id| {
                 world.remove_resource::<PublicView>();
                 crate::move_document::open_document(world, id);
                 crate::landing::reload_library(world);
             }),
         });
         if let Err(why) = r {
-            warn!("public document \"{name}\": {why}");
-            crate::linked::toast(
-                world,
-                tr_with(
-                    "shell-public-cannot-open",
-                    &[("name", name.as_str()), ("why", why.as_str())],
-                ),
-            );
+            cannot_open(world, &listing.name, &why);
         }
     }
+}
+
+fn cannot_open(world: &mut World, name: &str, why: &str) {
+    warn!("public document \"{name}\": {why}");
+    crate::linked::toast(
+        world,
+        tr_with("shell-public-cannot-open", &[("name", name), ("why", why)]),
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The download card
+
+/// The card at the top of the window while a public revision comes and is unpacked.
+#[derive(Component)]
+struct DownloadCard(String);
+
+/// What the card says: the first revision on its way (its name, what for, the bytes come and
+/// its size), or the first being unpacked.
+fn download_state(world: &World) -> Option<(String, Then, Option<(u64, u64)>)> {
+    if let Some((f, listing, then)) = world.resource::<Fetches>().0.first() {
+        return Some((
+            listing.name.clone(),
+            *then,
+            Some((f.received().min(listing.size), listing.size)),
+        ));
+    }
+    world
+        .resource::<Unpacking>()
+        .0
+        .first()
+        .map(|(_, listing, then)| (listing.name.clone(), *then, None))
+}
+
+/// "1.2 MB".
+fn megabytes(bytes: u64) -> String {
+    let mb = bytes as f64 / 1_000_000.0;
+    if mb < 10.0 {
+        format!("{mb:.1} MB")
+    } else {
+        format!("{mb:.0} MB")
+    }
+}
+
+fn sync_download_card(world: &mut World) {
+    let state = download_state(world);
+    let mut q = world.query::<(Entity, &DownloadCard)>();
+    let have: Option<(Entity, String)> = q.iter(world).next().map(|(e, c)| (e, c.0.clone()));
+    // The card is spawned again when what it is about changes (its name, or downloading to
+    // unpacking); its bar and its text follow the bytes every frame.
+    let key = state
+        .as_ref()
+        .map(|(name, then, bytes)| format!("{name}|{then:?}|{}", bytes.is_some()));
+    if have.as_ref().map(|h| &h.1) != key.as_ref() {
+        if let Some((e, _)) = have {
+            world.entity_mut(e).despawn();
+        }
+        if let (Some((name, then, bytes)), Some(key)) = (&state, &key) {
+            spawn_download_card(world, key.clone(), name, *then, bytes.is_some());
+        }
+    }
+    let Some((_, _, Some((got, size)))) = state else {
+        return;
+    };
+    let value = if size > 0 {
+        got as f32 / size as f32
+    } else {
+        0.0
+    };
+    let amount = tr_with(
+        "shell-public-download-amount",
+        &[
+            ("got", megabytes(got).as_str()),
+            ("size", megabytes(size).as_str()),
+            ("percent", &format!("{:.0}", 100.0 * value)),
+        ],
+    );
+    let mut bars = world.query::<(&Name, &mut cadrs_ui::ProgressBar)>();
+    for (n, mut bar) in bars.iter_mut(world) {
+        if n.as_str() == "public-download-bar" && (bar.value - value).abs() > 1e-4 {
+            bar.value = value;
+        }
+    }
+    let mut texts = world.query::<(&Name, &mut Text)>();
+    for (n, mut text) in texts.iter_mut(world) {
+        if n.as_str() == "public-download-amount" && text.0 != amount {
+            text.0 = amount.clone();
+        }
+    }
+}
+
+fn spawn_download_card(world: &mut World, key: String, name: &str, then: Then, downloading: bool) {
+    let t = world.resource::<Theme>().clone();
+    let title = match (then, downloading) {
+        (_, true) => tr_with("shell-public-downloading", &[("name", name)]),
+        (Then::View, false) => tr_with("shell-public-opening", &[("name", name)]),
+        (Then::Fork, false) => tr_with("shell-public-forking", &[("name", name)]),
+    };
+    world
+        .spawn((
+            DownloadCard(key),
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(0.0),
+                right: Val::Px(0.0),
+                top: Val::Px(64.0),
+                justify_content: JustifyContent::Center,
+                ..default()
+            },
+            Pickable::IGNORE,
+            GlobalZIndex(60),
+        ))
+        .with_children(|w| {
+            w.spawn((
+                Name::new("public-download"),
+                Node {
+                    width: Val::Px(360.0),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(8.0),
+                    padding: UiRect::all(Val::Px(12.0)),
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(6.0)),
+                    ..default()
+                },
+                BackgroundColor(t.popover),
+                BorderColor::all(t.border),
+            ))
+            .with_children(|c| {
+                c.spawn(Node {
+                    column_gap: Val::Px(8.0),
+                    align_items: AlignItems::Center,
+                    ..default()
+                })
+                .with_children(|row| {
+                    row.spawn(cadrs_ui::icon::icon("public", 16.0, t.foreground));
+                    row.spawn((
+                        Name::new("public-download-text"),
+                        t.text(title, t.font_base, FontWeight::MEDIUM, t.foreground),
+                    ));
+                });
+                // Downloading: the bytes come of its size; unpacking: a full bar.
+                c.spawn(
+                    cadrs_ui::Progress::new("public-download-bar")
+                        .value(if downloading { 0.0 } else { 1.0 })
+                        .build(&t),
+                );
+                c.spawn((
+                    Name::new("public-download-amount"),
+                    t.text(
+                        if downloading {
+                            String::new()
+                        } else {
+                            tr("shell-public-unpacking-detail")
+                        },
+                        t.font_sm,
+                        FontWeight::NORMAL,
+                        t.muted_foreground,
+                    ),
+                ));
+            });
+        });
 }
 
 /// The document a revision holds (its imported files put in the cache).
@@ -414,8 +609,11 @@ pub struct PublicView {
     pub revision: u32,
 }
 
-fn open_view(world: &mut World, listing: &Listing, bytes: &[u8]) -> Result<(), String> {
-    let doc = unpack(bytes)?;
+fn open_view(
+    world: &mut World,
+    listing: &Listing,
+    doc: cadrs_core::Document,
+) -> Result<(), String> {
     // Leave whatever is open as it would be left for the documents page.
     let store = world.resource::<DocumentStore>().0.clone();
     let now = world.resource::<AppClock>().now();
@@ -449,8 +647,11 @@ fn open_view(world: &mut World, listing: &Listing, bytes: &[u8]) -> Result<(), S
 }
 
 /// Stores a public revision as a new document of this user's.
-fn keep_fork(world: &mut World, listing: &Listing, bytes: &[u8]) -> Result<DocumentId, String> {
-    let mut doc = unpack(bytes)?;
+fn keep_fork(
+    world: &mut World,
+    listing: &Listing,
+    mut doc: cadrs_core::Document,
+) -> Result<DocumentId, String> {
     let id = DocumentId::new();
     doc.id = id;
     let store = world.resource::<DocumentStore>().0.clone();
