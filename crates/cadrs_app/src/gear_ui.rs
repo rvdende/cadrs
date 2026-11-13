@@ -942,24 +942,9 @@ fn pair_body(
     }
     // What the pair makes of it (as typed: on shafts the view shows it where it stands).
     if !on_shafts {
-        let (family, members) = cadrs_core::gear::pair_members(x, x.shaft_angle, x.offset);
-        let text = match family {
-            cadrs_core::gear::PairFamily::Hypoid => tr_with(
-                "model-gear-pair-hypoid",
-                &[
-                    ("pinion", &members[1].teeth.to_string()),
-                    ("gear", &members[0].teeth.to_string()),
-                ],
-            ),
-            cadrs_core::gear::PairFamily::Worm => tr_with(
-                "model-gear-pair-worm",
-                &[
-                    ("starts", &members[1].teeth.to_string()),
-                    ("gear", &members[0].teeth.to_string()),
-                ],
-            ),
-        };
+        let text = pair_made_text(x);
         b.spawn((
+            PairMade,
             Name::new("gear-pair-made"),
             t.text(
                 text,
@@ -1310,6 +1295,70 @@ pub(crate) fn remove(k: &mut FeatureKind, role: Role, i: usize) {
     }
 }
 
+/// The line under a gear pair's ratio: what it makes of it.
+#[derive(Component)]
+pub(crate) struct PairMade;
+
+/// What a gear pair makes of its ratio, at its shaft angle and offset as typed.
+fn pair_made_text(x: &cadrs_core::gear::GearFeature) -> String {
+    let (family, members) = cadrs_core::gear::pair_members(x, x.shaft_angle, x.offset);
+    match family {
+        cadrs_core::gear::PairFamily::Hypoid => tr_with(
+            "model-gear-pair-hypoid",
+            &[
+                ("pinion", &members[1].teeth.to_string()),
+                ("gear", &members[0].teeth.to_string()),
+            ],
+        ),
+        cadrs_core::gear::PairFamily::Worm => tr_with(
+            "model-gear-pair-worm",
+            &[
+                ("starts", &members[1].teeth.to_string()),
+                ("gear", &members[0].teeth.to_string()),
+            ],
+        ),
+    }
+}
+
+/// Keeps the gear pair's line in step with its ratio (changed from the view, or by undo).
+pub(crate) fn update_pair_made(
+    session: Option<Res<crate::applied::AppliedSession>>,
+    doc: Option<Res<crate::ActiveDocument>>,
+    over: Res<crate::parts::PartOverride>,
+    mut q: Query<&mut Text, With<PairMade>>,
+) {
+    if q.is_empty() {
+        return;
+    }
+    let Some(s) = session.as_deref() else {
+        return;
+    };
+    let dragged = over
+        .applied
+        .as_ref()
+        .filter(|(f, _)| *f == s.feature)
+        .map(|(_, k)| k.clone());
+    let kind = dragged.or_else(|| {
+        Some(
+            doc.as_deref()?
+                .doc
+                .element(s.element)?
+                .feature(s.feature)?
+                .kind
+                .clone(),
+        )
+    });
+    let Some(FeatureKind::Gear(x)) = kind else {
+        return;
+    };
+    let text = pair_made_text(&x);
+    for mut t in &mut q {
+        if t.0 != text {
+            t.0 = text.clone();
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // A gear pair in the view: its pitch circles, its ratio, its size
 
@@ -1468,7 +1517,7 @@ pub(crate) fn draw_pair(
     // The label, over the gear's circle (the side away from the pinion).
     let label_at = rect.to_screen(view.view.project(cv - out * r as f32)) - rect.0.min;
     let text = format!(
-        "1 : {}  ·  {} / {} {}  ·  {}",
+        "{} : 1  ·  {} / {} {}  ·  {}",
         cadrs_core::hole::fmt(x.ratio),
         info.teeth[1],
         info.teeth[0],
@@ -1501,7 +1550,9 @@ pub(crate) fn draw_pair(
                 position_type: PositionType::Absolute,
                 left: Val::Px(label_at.x + 8.0),
                 top: Val::Px(label_at.y - 12.0),
-                padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
+                padding: UiRect::axes(Val::Px(6.0), Val::Px(3.0)),
+                column_gap: Val::Px(6.0),
+                align_items: AlignItems::Center,
                 border: UiRect::all(Val::Px(1.0)),
                 border_radius: BorderRadius::all(Val::Px(4.0)),
                 ..default()
@@ -1515,7 +1566,52 @@ pub(crate) fn draw_pair(
                 },
             ),
         ))
+        .observe(
+            |mut ev: On<bevy::picking::events::PointerScroll>, mut commands: Commands| {
+                ev.propagate(false);
+                let by = if ev.y > 0.0 {
+                    1
+                } else if ev.y < 0.0 {
+                    -1
+                } else {
+                    0
+                };
+                if by != 0 {
+                    commands.queue(move |w: &mut World| step_ratio(w, by));
+                }
+            },
+        )
         .with_children(|l| {
+            let step =
+                |l: &mut ChildSpawnerCommands, name: &'static str, glyph: &'static str, by: i32| {
+                    l.spawn((
+                        Name::new(name),
+                        Node {
+                            width: Val::Px(18.0),
+                            height: Val::Px(18.0),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            border_radius: BorderRadius::all(Val::Px(3.0)),
+                            ..default()
+                        },
+                        BackgroundColor(t.secondary),
+                        bevy::ui_widgets::observe(
+                            move |mut ev: On<bevy::picking::events::PointerClick>,
+                                  mut commands: Commands| {
+                                // (Not the label's click: that focuses the Ratio field.)
+                                ev.propagate(false);
+                                commands.queue(move |w: &mut World| step_ratio(w, by));
+                            },
+                        ),
+                    ))
+                    .with_children(|b| {
+                        b.spawn((
+                            Pickable::IGNORE,
+                            t.text(glyph, t.font_sm, bevy::text::FontWeight::BOLD, t.foreground),
+                        ));
+                    });
+                };
+            step(l, "gear-pair-ratio-down", "−", -1);
             l.spawn((
                 PairLabelText,
                 Pickable::IGNORE,
@@ -1526,9 +1622,36 @@ pub(crate) fn draw_pair(
                     t.foreground,
                 ),
             ));
+            step(l, "gear-pair-ratio-up", "+", 1);
         })
         .id();
     commands.entity(area).add_child(e);
+}
+
+/// The ratios the pair's label steps through (its − and +, the wheel over it).
+const RATIOS: [f64; 22] = [
+    1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0, 7.5, 8.0, 10.0, 12.0, 15.0, 20.0, 25.0,
+    30.0, 40.0, 50.0, 60.0, 80.0,
+];
+
+/// The gear pair's ratio a step up (`by` 1) or down (−1) [`RATIOS`] from where it is: one
+/// command.
+fn step_ratio(world: &mut World, by: i32) {
+    crate::applied::change_kind(world, "Gear ratio", |k| {
+        let FeatureKind::Gear(x) = k else {
+            return;
+        };
+        let r = x.ratio;
+        let next = if by > 0 {
+            RATIOS.iter().copied().find(|&v| v > r + 1e-9)
+        } else {
+            RATIOS.iter().rev().copied().find(|&v| v < r - 1e-9)
+        };
+        if let Some(v) = next {
+            x.ratio = v;
+            x.ratio_expr = cadrs_core::hole::fmt(v);
+        }
+    });
 }
 
 /// Puts the cursor in the dialog's Ratio field (the label clicked).

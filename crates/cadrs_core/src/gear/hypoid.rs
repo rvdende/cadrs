@@ -255,7 +255,8 @@ pub(super) fn back_of(gear: bool, l: &Layout) -> f64 {
 }
 
 /// The crown's roll each way while it cuts a member (radians): past where its tooth or space
-/// leaves the blank at either end of the face.
+/// leaves the blank at either end of the face. (The cut tries a longer and shorter roll where
+/// this one can't be followed: [`super::ROLLS`].)
 const ROLL: f64 = 45.0 * PI / 180.0;
 
 /// One member generated, in the pair's frame (P the x–y plane): its blank, the crown's tooth

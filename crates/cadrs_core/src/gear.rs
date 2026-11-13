@@ -481,6 +481,17 @@ fn negative(v: f64) -> bool {
 
 /// The fewest teeth a gear may have.
 pub const MIN_TEETH: u32 = 6;
+
+/// The fewest teeth a gear pair's worm wheel is given (fewer are undercut by the worm).
+pub const WORM_WHEEL_TEETH: u32 = 24;
+
+/// The rolls a generated hypoid member's cut tries, over the one planned: as planned, then
+/// longer, then shorter.
+pub const ROLLS: [f64; 3] = [1.0, 4.0 / 3.0, 0.6];
+
+/// The most a hypoid pair's offset is, over its gear's pitch diameter, before its member's
+/// warn that their teeth may interfere (hypoid pairs are made with a fifth to a quarter).
+pub const HYPOID_OFFSET_LIMIT: f64 = 0.25;
 /// The most.
 pub const MAX_TEETH: u32 = 400;
 
@@ -640,7 +651,11 @@ impl GearFeature {
         let gear = self.member == BevelMember::Gear;
         let (z, mate) = (self.teeth as f64, self.mate_teeth as f64);
         let (pinion_teeth, gear_teeth) = if gear { (mate, z) } else { (z, mate) };
-        let r = self.module * pinion_teeth.hypot(gear_teeth) / 2.0;
+        // (Unless typed, the cutter is the gear's cone distance across: R = z₂ m / (2 sin δ₂),
+        // tan δ₂ = sin Σ / (z₁ / z₂ + cos Σ).)
+        let sigma = self.shaft_angle.to_radians();
+        let delta = sigma.sin().atan2(pinion_teeth / gear_teeth + sigma.cos());
+        let r = self.module * gear_teeth / (2.0 * delta.sin().max(1e-6));
         (
             hypoid::Design {
                 pinion_teeth,
@@ -1591,6 +1606,8 @@ pub struct Plan {
     pub preview: Option<preview::Mesh>,
     /// A gear pair's other member, made with it as a part of its own.
     pub second: Option<Box<Plan>>,
+    /// What about the design isn't as it should be, though it can be made (a warning).
+    pub warning: Option<String>,
     /// The module the gear came out with (mm).
     pub module: f64,
 }
@@ -1713,9 +1730,12 @@ pub enum PairFamily {
 /// A gear pair's family and its two members (the gear's, then the pinion's or the worm's),
 /// for shafts at `shaft_angle` (degrees) and `offset` (mm) apart. A worm drive where the shafts
 /// are square, the ratio is a worm's (5 or more) and they are far enough apart for a worm of
-/// the module between the wheel's teeth and them (its diameter quotient 2e/m − z₂ from 4 to
-/// 30); else a hypoid pair. The tooth counts, unless typed: a hypoid pinion of 48 over the
-/// ratio teeth (8 to 24), a worm of 40 over it starts (1 to 4), and the gear the ratio times.
+/// the module between a wheel of [`WORM_WHEEL_TEETH`] or more and them (its diameter quotient
+/// 2e/m − z₂ from 4 to 30); else a hypoid pair. So as the shafts are drawn apart, a hypoid
+/// pair becomes a worm drive where the first worm fits. The tooth counts, unless typed: a
+/// hypoid pinion of about 48 over the ratio teeth (8 to 24); a worm of the starts (1 to 8)
+/// whose diameter quotient is nearest 10 there; and the gear the ratio times (each the ratio
+/// exactly where a count near it gives it).
 pub fn pair_members(
     x: &GearFeature,
     shaft_angle: f64,
@@ -1723,21 +1743,31 @@ pub fn pair_members(
 ) -> (PairFamily, [GearFeature; 2]) {
     let m = x.module;
     let ratio = x.ratio;
-    let worm_starts = if x.auto_teeth {
-        (40.0 / ratio).round().clamp(1.0, 4.0) as u32
+    let quotient_of = |teeth: u32| 2.0 * offset / m - teeth as f64;
+    let fits = |q: f64| (4.0..=30.0).contains(&q);
+    let (worm_starts, worm_teeth) = if x.auto_teeth {
+        (1..=8u32)
+            .map(|z1| (z1, (z1 as f64 * ratio).round() as u32))
+            .filter(|&(_, z2)| z2 >= WORM_WHEEL_TEETH && fits(quotient_of(z2)))
+            // (The ratio exactly where some starts give it, then the quotient nearest 10.)
+            .min_by(|a, b| {
+                let inexact = |(z1, z2): (u32, u32)| (z2 as f64 - z1 as f64 * ratio).abs() > 1e-6;
+                let off = |z2: u32| (quotient_of(z2) - 10.0).abs();
+                inexact(*a)
+                    .cmp(&inexact(*b))
+                    .then(off(a.1).total_cmp(&off(b.1)))
+            })
+            .unwrap_or((0, 0))
     } else {
-        x.mate_teeth.max(1)
+        (x.mate_teeth.max(1), x.teeth)
     };
-    let worm_teeth = if x.auto_teeth {
-        ((worm_starts as f64 * ratio).round() as u32).max(MIN_TEETH)
-    } else {
-        x.teeth
-    };
-    let quotient = 2.0 * offset / m - worm_teeth as f64;
+    let quotient = quotient_of(worm_teeth);
     let worm = (shaft_angle - 90.0).abs() < 0.5
         && ratio >= 5.0
-        && (4.0..=30.0).contains(&quotient)
-        && worm_starts <= 4;
+        && worm_starts >= 1
+        && worm_teeth >= MIN_TEETH
+        && fits(quotient)
+        && worm_starts <= 8;
     let counts = |z: u32| (z, z.to_string());
     if worm {
         let r2 = worm_teeth as f64 * m / 2.0;
@@ -1772,7 +1802,20 @@ pub fn pair_members(
         );
     }
     let pinion = if x.auto_teeth {
-        (48.0 / ratio).round().clamp(8.0, 24.0) as u32
+        // (Near 48 over the ratio; the ratio exactly where a pinion near it gives it.)
+        let want = (48.0 / ratio).clamp(8.0, 24.0);
+        (8..=24u32)
+            .filter(|&z| (z as f64 - want).abs() <= 2.5)
+            .min_by(|&a, &b| {
+                let inexact = |z: u32| {
+                    let g = z as f64 * ratio;
+                    (g - g.round()).abs() > 1e-6
+                };
+                inexact(a)
+                    .cmp(&inexact(b))
+                    .then((a as f64 - want).abs().total_cmp(&(b as f64 - want).abs()))
+            })
+            .unwrap_or(want.round() as u32)
     } else {
         x.mate_teeth
     };
@@ -2177,6 +2220,7 @@ fn spur(x: &GearFeature) -> Result<Plan, &'static str> {
         preview: None,
         second: None,
         module: m,
+        warning: None,
     })
 }
 
@@ -2198,6 +2242,7 @@ fn ring(x: &GearFeature) -> Result<Plan, &'static str> {
         preview: None,
         second: None,
         module: m,
+        warning: None,
     })
 }
 
@@ -2258,6 +2303,7 @@ fn on_cylinder(x: &GearFeature, t: &Target) -> Result<Plan, &'static str> {
         preview: None,
         second: None,
         module: m,
+        warning: None,
     })
 }
 
@@ -2548,11 +2594,38 @@ impl FaceMill {
     /// distance from the apex along the gear's axis, its distance from the axis and its angle
     /// about it from the gear's x.
     fn point(&self, side: f64, tau: f64, w: f64) -> [f64; 3] {
+        self.at_turn(side, tau, w, self.turn_at(side, tau, w))
+    }
+
+    /// The edge's point (`tau`, `w`) on the cradle, and its normal, before the cradle turns.
+    fn edge(&self, side: f64, tau: f64, w: f64) -> (Vec3, Vec3) {
         let (st, ct) = tau.sin_cos();
         let radial = add(scale(self.u, ct), scale(self.v, st));
         let rho = self.radius + side * (self.slot / 2.0 + (w - self.level) * self.tan_alpha);
         let r0 = add(add(self.centre, scale(radial, rho)), scale(self.c, w));
         let n0 = sub(radial, scale(self.c, side * self.tan_alpha));
+        (r0, n0)
+    }
+
+    /// Where the edge's point (`tau`, `w`) is in the gear when the cradle has turned `phi` (and
+    /// the gear with it, at the ratio): as [`FaceMill::point`] has it.
+    fn at_turn(&self, side: f64, tau: f64, w: f64, phi: f64) -> [f64; 3] {
+        let (r0, _) = self.edge(side, tau, w);
+        let k = self.under * self.ratio;
+        let arm = sub(r0, self.hub);
+        let p = rot(add(self.hub, rot(arm, self.c, phi)), self.g, k * phi);
+        let zd = dot(p, self.g);
+        let out = sub(p, scale(self.g, zd));
+        [
+            zd,
+            norm(out),
+            (self.under * dot(p, self.v)).atan2(dot(p, self.x_g)),
+        ]
+    }
+
+    /// The cradle's turn at which the edge's point (`tau`, `w`) touches the flank it makes.
+    fn turn_at(&self, side: f64, tau: f64, w: f64) -> f64 {
+        let (r0, n0) = self.edge(side, tau, w);
         // The cradle's turn φ at which the cone touches the flank there (the equation of
         // meshing, the report's (2.27)): with the point r and its normal n turned by φ about
         // the cradle's axis (through the hub), and the gear turned by k φ about its own
@@ -2575,17 +2648,176 @@ impl FaceMill {
         let (base, off) = (b.atan2(a), (d / a.hypot(b)).clamp(-1.0, 1.0).acos());
         let wrap = |x: f64| (x + PI).rem_euclid(2.0 * PI) - PI;
         let (p1, p2) = (wrap(base + off), wrap(base - off));
-        let phi = if p1.abs() <= p2.abs() { p1 } else { p2 };
-        // On the cradle at that turn, then as the gear holds it: the gear has turned the other
-        // way by the ratio (its mate, over the pitch plane, the way the cradle turns).
-        let p = rot(add(self.hub, rot(arm, self.c, phi)), self.g, k * phi);
-        let zd = dot(p, self.g);
-        let out = sub(p, scale(self.g, zd));
-        [
-            zd,
-            norm(out),
-            (self.under * dot(p, self.v)).atan2(dot(p, self.x_g)),
-        ]
+        // (On the cradle at that turn, then as the gear holds it: the gear has turned the other
+        // way by the ratio, its mate over the pitch plane the way the cradle turns.)
+        if p1.abs() <= p2.abs() { p1 } else { p2 }
+    }
+
+    /// Where the blade crosses the circle `h` along the axis and `rho` from it, with the cradle
+    /// at `phi`: its edge's point, from `x`; with the circle's angle there.
+    fn crossing(
+        &self,
+        side: f64,
+        h: f64,
+        rho: f64,
+        phi: f64,
+        mut x: [f64; 2],
+    ) -> Option<([f64; 2], f64)> {
+        let s = h.hypot(rho);
+        let miss = |x: [f64; 2]| {
+            let p = self.at_turn(side, x[0], x[1], phi);
+            [p[0] - h, p[1] - rho]
+        };
+        for _ in 0..12 {
+            let f = miss(x);
+            if f[0].hypot(f[1]) < 1e-9 * s {
+                return Some((x, self.at_turn(side, x[0], x[1], phi)[2]));
+            }
+            let (dt, dw) = (1e-7, 1e-7 * s);
+            let (ft, fw) = (miss([x[0] + dt, x[1]]), miss([x[0], x[1] + dw]));
+            let j = [
+                [(ft[0] - f[0]) / dt, (fw[0] - f[0]) / dw],
+                [(ft[1] - f[1]) / dt, (fw[1] - f[1]) / dw],
+            ];
+            let det = j[0][0] * j[1][1] - j[0][1] * j[1][0];
+            if det.abs() < 1e-300 {
+                return None;
+            }
+            x[0] -= (f[0] * j[1][1] - f[1] * j[0][1]) / det;
+            x[1] -= (f[1] * j[0][0] - f[0] * j[1][0]) / det;
+        }
+        None
+    }
+
+    /// How far round the circle `h` along the axis and `rho` from it the blade reaches as the
+    /// cradle rolls (the extreme of its crossings `toward` +1 the greater angle, −1 the
+    /// lesser), from its crossing `start` (edge point and the cradle's turn): what the cutter
+    /// leaves there. Where the flank is whole, its envelope's point; where the blade undercuts
+    /// it, past that. The blade's edge runs over `blade` (from, to) in w. With the crossing it
+    /// reaches it at.
+    fn reach(
+        &self,
+        side: f64,
+        h: f64,
+        rho: f64,
+        start: ([f64; 2], f64),
+        toward: f64,
+        blade: (f64, f64),
+    ) -> Option<(f64, ([f64; 2], f64))> {
+        let wrap = |x: f64| (x + PI).rem_euclid(2.0 * PI) - PI;
+        let on = |w: f64| (blade.0..=blade.1).contains(&w);
+        let depth = blade.1 - blade.0;
+        let (x0, phi0) = start;
+        let (x0, a0) = self.crossing(side, h, rho, phi0, x0)?;
+        let mut best: Option<(f64, ([f64; 2], f64))> = on(x0[1]).then_some((a0, (x0, phi0)));
+        let consider = |best: &mut Option<(f64, ([f64; 2], f64))>, a: f64, c: ([f64; 2], f64)| {
+            let a = a0 + wrap(a - a0);
+            if best.is_none_or(|b| toward * (a - b.0) > 0.0) {
+                *best = Some((a, c));
+            }
+        };
+        // Rolled each way from there while the blade (or its line, a little past its ends)
+        // still crosses the circle; the crossings on the blade, the best of them then found
+        // between its neighbours.
+        const STEP: f64 = 0.02;
+        const STEPS: usize = 60;
+        let mut last = [(x0, phi0); 2];
+        // (How far off the blade a crossing is.)
+        let off = |w: f64| (blade.0 - w).max(w - blade.1).max(0.0);
+        for (n, dir) in [-1.0, 1.0].into_iter().enumerate() {
+            let x = &mut last[n];
+            let mut was = off(x0[1]);
+            for i in 1..=STEPS {
+                let phi = phi0 + dir * STEP * i as f64;
+                let Some((y, b)) = self.crossing(side, h, rho, phi, x.0) else {
+                    break;
+                };
+                // Off the blade and going further off: it won't come back.
+                let now = off(y[1]);
+                if now > 3.0 * depth || (now > 0.0 && now > was) {
+                    break;
+                }
+                was = now;
+                *x = (y, phi);
+                if on(y[1]) {
+                    consider(&mut best, b, (y, phi));
+                }
+            }
+        }
+        if let Some((_, (x, phi))) = best {
+            // (Golden section: the angle as a function of the turn is smooth there.)
+            let at = |p: f64| {
+                self.crossing(side, h, rho, p, x)
+                    .filter(|c| on(c.0[1]))
+                    .map(|c| (toward * (a0 + wrap(c.1 - a0)), c))
+            };
+            let g = 0.381_966_011_250_105_1;
+            let (mut lo, mut hi) = (phi - STEP, phi + STEP);
+            for _ in 0..14 {
+                let (p1, p2) = (lo + g * (hi - lo), hi - g * (hi - lo));
+                match (at(p1), at(p2)) {
+                    (Some(a), Some(b)) if a.0 > b.0 => hi = p2,
+                    (Some(_), Some(_)) => lo = p1,
+                    _ => break,
+                }
+            }
+            if let Some((_, c)) = at((lo + hi) / 2.0) {
+                consider(&mut best, c.1, (c.0, (lo + hi) / 2.0));
+            }
+        }
+        // And where the blade's ends (the edges its tip and its top sweep) cross the circle.
+        for w in [blade.0, blade.1] {
+            for from in [(x0, phi0), last[0], last[1]] {
+                if let Some((tau, phi)) = self.end_crossing(side, h, rho, w, from.0[0], from.1) {
+                    consider(
+                        &mut best,
+                        self.at_turn(side, tau, w, phi)[2],
+                        ([tau, w], phi),
+                    );
+                }
+            }
+        }
+        best
+    }
+
+    /// Where the blade's edge at `w` crosses the circle `h` along the axis and `rho` from it as
+    /// the cradle rolls: its point round the cutter and the cradle's turn, from (`tau`, `phi`).
+    fn end_crossing(
+        &self,
+        side: f64,
+        h: f64,
+        rho: f64,
+        w: f64,
+        mut tau: f64,
+        mut phi: f64,
+    ) -> Option<(f64, f64)> {
+        let s = h.hypot(rho);
+        let miss = |t: f64, p: f64| {
+            let q = self.at_turn(side, t, w, p);
+            [q[0] - h, q[1] - rho]
+        };
+        let (t0, p0) = (tau, phi);
+        for _ in 0..12 {
+            let f = miss(tau, phi);
+            if f[0].hypot(f[1]) < 1e-9 * s {
+                // (Near where it started: the same pass of the blade.)
+                let far = (tau - t0).abs() > 0.5 || (phi - p0).abs() > 0.6;
+                return (!far).then_some((tau, phi));
+            }
+            let d = 1e-7;
+            let (ft, fp) = (miss(tau + d, phi), miss(tau, phi + d));
+            let j = [
+                [(ft[0] - f[0]) / d, (fp[0] - f[0]) / d],
+                [(ft[1] - f[1]) / d, (fp[1] - f[1]) / d],
+            ];
+            let det = j[0][0] * j[1][1] - j[0][1] * j[1][0];
+            if det.abs() < 1e-300 {
+                return None;
+            }
+            tau -= (f[0] * j[1][1] - f[1] * j[0][1]) / det;
+            phi -= (f[1] * j[0][0] - f[0] * j[1][0]) / det;
+        }
+        None
     }
 
     /// The edge's point (`tau`, `w`) whose flank point is `h` from the apex along the axis and
@@ -3116,6 +3348,7 @@ fn worm_placed(
         preview: preview_mesh,
         second: None,
         module: x.module,
+        warning: None,
     })
 }
 
@@ -3205,6 +3438,24 @@ fn hypoid_placed(x: &GearFeature, on: Option<(Crossing, bool)>) -> Result<Plan, 
     let (d, gear) = x.hypoid_design();
     let l = hypoid::layout(&d)?;
     let g = hypoid::member(&d, &l, gear, x.backlash / 4.0, x.end_relief);
+    // (A crown cuts both members exactly conjugate only where the shafts meet; drawn apart
+    // past what hypoid pairs are made with, their teeth come to interfere.)
+    let mut warnings = Vec::new();
+    // (The gear's pitch diameter at its heel.)
+    let diameter = 2.0 * 1.1 * l.mean_cone * l.gear_pitch.sin();
+    if d.offset.abs() > HYPOID_OFFSET_LIMIT * diameter {
+        warnings.push(
+            "The offset is more than a quarter of the gear's pitch diameter: the teeth may interfere",
+        );
+    }
+    // (A cutter much smaller than the cone: the far side of its ring comes round through the
+    // teeth too.)
+    if d.cutter_radius < 0.6 * l.mean_cone {
+        warnings.push(
+            "The cutter radius is small for this pair's cone: the far side of the cutter may cut the teeth",
+        );
+    }
+    let warning = (!warnings.is_empty()).then(|| warnings.join("; "));
     let preview_mesh = if x.fast_preview {
         preview::hypoid_member(&d, &l, gear, x.backlash / 4.0)
     } else {
@@ -3261,6 +3512,7 @@ fn hypoid_placed(x: &GearFeature, on: Option<(Crossing, bool)>) -> Result<Plan, 
         }),
         second: None,
         module: x.module,
+        warning,
     })
 }
 
@@ -3332,6 +3584,7 @@ fn bevel(x: &GearFeature) -> Result<Plan, &'static str> {
         preview: None,
         second: None,
         module: m,
+        warning: None,
     })
 }
 
@@ -3372,6 +3625,7 @@ fn on_cone(x: &GearFeature, t: &Target) -> Result<Plan, &'static str> {
         preview: None,
         second: None,
         module: m,
+        warning: None,
     })
 }
 
@@ -3457,6 +3711,7 @@ fn rack(x: &GearFeature) -> Result<Plan, &'static str> {
         preview: None,
         second: None,
         module: m,
+        warning: None,
     })
 }
 
@@ -3499,6 +3754,7 @@ fn on_plane(x: &GearFeature, t: &Target) -> Result<Plan, &'static str> {
         preview: None,
         second: None,
         module: m,
+        warning: None,
     })
 }
 

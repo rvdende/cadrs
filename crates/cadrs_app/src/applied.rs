@@ -85,6 +85,7 @@ impl Plugin for AppliedPlugin {
                     draw_references,
                     crate::transform_ui::draw_rotate_ring,
                     crate::gear_ui::draw_pair,
+                    crate::gear_ui::update_pair_made,
                     draw_sketch_point_picks,
                 )
                     .chain()

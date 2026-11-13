@@ -435,23 +435,52 @@ impl Rebuilder {
         preview: bool,
     ) -> cadrs_kernel::Result<((BodyId, BodyNames), Option<String>)> {
         if preview {
-            return Ok((self.gear_revolved(&g.blank, state, op, next)?, None));
-        }
-        let first = self.gear_cut(g, &g.tool, state, op, next);
-        let first_err = match first {
-            Ok(b) => return Ok((b, None)),
-            Err(e) => e,
-        };
-        if let Some(tool) = &g.fallback
-            && let Ok(b) = self.gear_cut(g, tool, state, op, next)
-        {
             return Ok((
-                b,
+                self.gear_revolved(&g.blank, state, op, next)?,
                 Some(
-                    "The teeth's root fillets are left sharp here: the rounded cutter's cut couldn't be made exactly"
+                    "Fast preview: only the blank is shown, its teeth couldn't be followed here"
                         .into(),
                 ),
             ));
+        }
+        // The roll as planned, else longer or shorter (a short one leaves the tool in the blank
+        // at its ends; a long one brings a big cutter round into a small member again, and is
+        // harder to follow), the generated motion's turns kept in step.
+        let rolled = |by: f64| Generated {
+            turns: g.turns.map(|(o, a, from, to)| (o, a, from * by, to * by)),
+            ..g.clone()
+        };
+        // (A member that turns far over the roll, a small pinion, the shorter roll first.)
+        let far = (g.turns[1].3 - g.turns[1].2).abs() / 2.0 > 125f64.to_radians();
+        let rolls: Vec<Generated> = if g.starts > 1 || g.copies <= 1 {
+            vec![g.clone()]
+        } else if far {
+            gear::ROLLS.iter().rev().map(|&by| rolled(by)).collect()
+        } else {
+            gear::ROLLS.iter().map(|&by| rolled(by)).collect()
+        };
+        let mut first_err = None;
+        for r in &rolls {
+            match self.gear_cut(r, &r.tool, state, op, next) {
+                Ok(b) => return Ok((b, None)),
+                Err(e) => {
+                    first_err.get_or_insert(e);
+                }
+            }
+        }
+        let first_err = first_err.expect("a roll was tried");
+        if let Some(tool) = &g.fallback {
+            for r in &rolls {
+                if let Ok(b) = self.gear_cut(r, tool, state, op, next) {
+                    return Ok((
+                        b,
+                        Some(
+                            "The teeth's root fillets are left sharp here: the rounded cutter's cut couldn't be made exactly"
+                                .into(),
+                        ),
+                    ));
+                }
+            }
         }
         Ok((
             self.gear_revolved(&g.blank, state, op, next)?,
@@ -577,6 +606,29 @@ impl Rebuilder {
             _ => gear::plan(x, target.as_ref().map(|t| &t.1))?,
         };
         let mut next = 0u64;
+        // What about the design isn't as it should be (the members' own, once).
+        let mut design: Vec<String> = Vec::new();
+        for w in [
+            &plan.warning,
+            &plan.second.as_ref().and_then(|s| s.warning.clone()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !design.contains(w) {
+                design.push(w.clone());
+            }
+        }
+        let with_design = |mut o: Output| {
+            if !design.is_empty() {
+                let d = design.join("; ");
+                o.warning = Some(match o.warning.take() {
+                    Some(w) => format!("{d}; {w}"),
+                    None => d,
+                });
+            }
+            o
+        };
         // Fast preview: the gear's teeth straight from their equations, a part of mesh alone
         // (no kernel body), at once.
         // (A gear pair's members each with its preview: a part each.)
@@ -588,7 +640,7 @@ impl Rebuilder {
             if let Some(second) = &plan.second {
                 out = preview_part(id, second.preview.as_ref().unwrap(), 1, &out.state);
             }
-            return Ok(out);
+            return Ok(with_design(out));
         }
         let mut bodies: Vec<((BodyId, BodyNames), Option<String>)> = Vec::new();
         for member in &members {
@@ -650,7 +702,7 @@ impl Rebuilder {
                 .apply_extrude_op(id, &merge, body, state, &Contacts::default(), geoms)
                 .map(|mut o| {
                     o.warning = o.warning.or(warning);
-                    o
+                    with_design(o)
                 });
         }
         let mut made: Vec<(BodyId, BodyNames)> = Vec::new();
@@ -688,6 +740,7 @@ impl Rebuilder {
                 }
             }
         }
+        let mut loose: Vec<(BodyId, BodyNames)> = Vec::new();
         let mut teeth = if made.is_empty() {
             None
         } else {
@@ -746,8 +799,13 @@ impl Rebuilder {
                     })
                     .map_err(|err| format!("Gear failed: {err}")),
             };
-            for b in ids {
-                self.kernel.release(b);
+            // (Kept for cutting one at a time, should the blank's cut by them all fail.)
+            if plan.blank.is_some() && target.is_none() && gathered.is_ok() {
+                loose = spaces;
+            } else {
+                for b in ids {
+                    self.kernel.release(b);
+                }
             }
             teeth = Some(gathered?);
         }
@@ -759,6 +817,9 @@ impl Rebuilder {
         let none = Contacts::default();
         // Cut into the picked face's part.
         if let Some((part, _)) = target {
+            for (b, _) in loose.drain(..) {
+                self.kernel.release(b);
+            }
             let scope = [part];
             let merge = Merge {
                 op: BooleanOp::Remove,
@@ -769,27 +830,87 @@ impl Rebuilder {
             };
             return self.apply_extrude_op(id, &merge, teeth, state, &none, geoms);
         }
+        let mut warning = None;
         let body = match &plan.blank {
             None => teeth,
             Some(blank) => {
-                let cut = self
+                let blank = self
                     .gear_blank(blank, &mut next)
-                    .and_then(|r| self.name_new(state, op, &r))
-                    .and_then(|blank| {
-                        let res = self.kernel.boolean(BoolOp::Subtract, blank.0, &[teeth.0]);
-                        let named = res.and_then(|res| {
-                            let body = res.bodies[0];
-                            let inputs = [(blank.0, &blank.1), (teeth.0, &teeth.1)];
-                            Ok((
-                                body,
-                                naming::name_body(&self.kernel, body, op, &res.history, &inputs)?,
-                            ))
-                        });
-                        self.kernel.release(blank.0);
-                        named
-                    });
+                    .and_then(|r| self.name_new(state, op, &r));
+                let blank = match blank {
+                    Ok(b) => b,
+                    Err(err) => {
+                        self.kernel.release(teeth.0);
+                        for (b, _) in loose {
+                            self.kernel.release(b);
+                        }
+                        return Err(format!("Gear failed: {err}"));
+                    }
+                };
+                let subtract = |this: &mut Self,
+                                from: &(BodyId, BodyNames),
+                                tool: &(BodyId, BodyNames)|
+                 -> cadrs_kernel::Result<(BodyId, BodyNames)> {
+                    let res = this.kernel.boolean(BoolOp::Subtract, from.0, &[tool.0])?;
+                    let body = res.bodies[0];
+                    let inputs = [(from.0, &from.1), (tool.0, &tool.1)];
+                    Ok((
+                        body,
+                        naming::name_body(&this.kernel, body, op, &res.history, &inputs)?,
+                    ))
+                };
+                let all = subtract(self, &blank, &teeth);
                 self.kernel.release(teeth.0);
-                cut.map_err(|err| format!("Gear failed: {err}"))?
+                // Best effort: where the blank can't be cut by every space at once, a space at a
+                // time; where not even that, the blank alone, with why (a warning).
+                let made = match all {
+                    Ok(b) => Ok(b),
+                    Err(first) if !loose.is_empty() => {
+                        let mut at = (blank.0, blank.1.clone());
+                        let mut owned = false;
+                        let mut failed = None;
+                        for space in &loose {
+                            match subtract(self, &at, space) {
+                                Ok(b) => {
+                                    if owned {
+                                        self.kernel.release(at.0);
+                                    }
+                                    at = b;
+                                    owned = true;
+                                }
+                                Err(e) => {
+                                    failed = Some(e);
+                                    break;
+                                }
+                            }
+                        }
+                        match failed {
+                            None => Ok(at),
+                            Some(e) => {
+                                if owned {
+                                    self.kernel.release(at.0);
+                                }
+                                Err(format!("{first}; a space at a time: {e}"))
+                            }
+                        }
+                    }
+                    Err(first) => Err(first.to_string()),
+                };
+                for (b, _) in loose {
+                    self.kernel.release(b);
+                }
+                match made {
+                    Ok(b) => {
+                        self.kernel.release(blank.0);
+                        b
+                    }
+                    Err(e) => {
+                        warning = Some(format!(
+                            "Only the blank is shown: the teeth couldn't be cut exactly here ({e})"
+                        ));
+                        blank
+                    }
+                }
             }
         };
         let merge = Merge {
@@ -800,5 +921,9 @@ impl Rebuilder {
             surface: false,
         };
         self.apply_extrude_op(id, &merge, body, state, &none, geoms)
+            .map(|mut o| {
+                o.warning = o.warning.or(warning);
+                o
+            })
     }
 }

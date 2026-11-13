@@ -6,7 +6,7 @@
 //! `cargo gears-tester` (the alias for `cargo test -r -p cadrs_core --test gears_tester --
 //! --ignored --nocapture`): the Fast preview of every pair (seconds for the whole grid).
 //! `MODE=exact` builds the exact members instead (minutes); `GEARS=hypoid,worm,bevel` picks the
-//! families; `JOBS=n` runs n cases at once (the rebuilds share one kernel thread, so more only
+//! families; `ONLY=text` the cases whose description has it; `JOBS=n` runs n cases at once (the rebuilds share one kernel thread, so more only
 //! helps the previews, and makes the times a queue's).
 
 #![cfg(feature = "brep")]
@@ -113,6 +113,32 @@ fn run(case: &Case, exact: bool) -> Outcome {
         note.push(' ');
     }
     let parts: Vec<Part> = b.parts.clone();
+    // (MIXED=1 with MODE=exact: each member's preview against its mate's exact solid, to tell
+    // which preview is off.)
+    if exact && std::env::var_os("MIXED").is_some() && parts.len() == 2 {
+        let fast: Vec<GearFeature> = case
+            .pair
+            .iter()
+            .map(|g| GearFeature {
+                fast_preview: true,
+                ..g.clone()
+            })
+            .collect();
+        let f = build(&fast);
+        if f.parts.len() == 2 {
+            for (pv, ex, what) in [
+                (0, 1, "gear's preview, pinion exact"),
+                (1, 0, "pinion's preview, gear exact"),
+            ] {
+                let mixed = vec![f.parts[pv].clone(), parts[ex].clone()];
+                eprintln!(
+                    "  {}: {what}: {:.3}",
+                    case.what,
+                    support_reach::reach_of(&mixed).0
+                );
+            }
+        }
+    }
     let faces = [0, 1].map(|i| parts.get(i).map_or(0, |p| p.solid.faces.len()));
     let deep = (parts.len() == 2).then(|| support_reach::reach_of(&parts).0);
     // (A pair that can't be laid out at all: outside what the design takes.)
@@ -131,7 +157,8 @@ fn run(case: &Case, exact: bool) -> Outcome {
     } else if deep.is_some_and(|d| d > 0.1) {
         // (A worm wheel's preview is a helical gear of the worm's lead, not hobbed: within a
         // few tenths of the worm.)
-        if !exact && case.family == "worm" && deep.is_some_and(|d| d < 0.35) {
+        let worm = case.family == "worm" || case.what.contains("Worm");
+        if !exact && worm && deep.is_some_and(|d| d < 0.35) {
             "approx"
         } else {
             "CLASH"
@@ -180,8 +207,8 @@ fn cases() -> Vec<Case> {
         }
     }
     if want.iter().any(|w| w == "worm") {
-        // Worm drives: 1 to 4 starts, few and many teeth, slender and stout worms.
-        for starts in [1u32, 2, 3, 4] {
+        // Worm drives: 1 to 8 starts, few and many teeth, slender and stout worms.
+        for starts in [1u32, 2, 3, 4, 6, 8] {
             for teeth in [20u32, 40] {
                 for q in [8.0, 10.0, 14.0] {
                     let pair = worm_drive([0.0; 3]).map(|mut g| {
@@ -227,8 +254,8 @@ fn cases() -> Vec<Case> {
     if want.iter().any(|w| w == "pair") {
         // One Gear pair (module 2) at 90°, its offset drawn out from none (a spiral bevel pair)
         // through a hypoid's to a worm's, at a hypoid's ratio and a worm's.
-        for ratio in [2.0, 10.0, 30.0] {
-            for offset in [0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 80.0] {
+        for ratio in [2.0, 3.0, 5.0, 10.0, 15.0, 30.0] {
+            for offset in [0.0, 10.0, 20.0, 30.0, 35.0, 40.0, 50.0, 60.0, 70.0, 80.0] {
                 let g = GearFeature {
                     gear_type: cadrs_core::gear::GearType::Pair,
                     module: 2.0,
@@ -264,7 +291,10 @@ fn cases() -> Vec<Case> {
 #[test]
 #[ignore = "the gears tester: cargo gears-tester"]
 fn gears_tester() {
-    let cases = cases();
+    let mut cases = cases();
+    if let Ok(only) = std::env::var("ONLY") {
+        cases.retain(|c| c.what.contains(&only));
+    }
     let exact = std::env::var("MODE").is_ok_and(|m| m == "exact");
     let jobs: usize = std::env::var("JOBS")
         .ok()
@@ -323,7 +353,12 @@ fn gears_tester() {
             o.faces[0],
             o.faces[1],
             o.deep.map_or("-".into(), |d| format!("{d:.3}")),
-            o.note.chars().take(110).collect::<String>()
+            // (All of it for a case or two picked out.)
+            if std::env::var_os("ONLY").is_some() {
+                o.note.clone()
+            } else {
+                o.note.chars().take(110).collect::<String>()
+            }
         );
     }
     let count = |s: &str| results.iter().filter(|o| o.status == s).count();

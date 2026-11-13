@@ -138,6 +138,7 @@ fn about_z(p: Vec3, a: f64) -> Vec3 {
 /// A hypoid pair's member's preview, in the pair's frame (as [`super::hypoid::member`] has it),
 /// or None where its flanks can't be followed across its face.
 pub(super) fn hypoid_member(d: &Design, l: &Layout, gear: bool, grow: f64) -> Option<Mesh> {
+    let debug = std::env::var_os("PREVIEW_DEBUG").is_some();
     let z = [0.0, 0.0, 1.0];
     let (apex, axis, pitch, cone, teeth) = if gear {
         (
@@ -211,6 +212,14 @@ pub(super) fn hypoid_member(d: &Design, l: &Layout, gear: bool, grow: f64) -> Op
     let off = |s: f64, by: f64| pitch + by.atan2((s * s - by * by).max(0.0).sqrt());
     let (add_, ded, back) = (l.addendum, l.dedendum, super::hypoid::back_of(gear, l));
     let width = 0.2 * l.mean_cone;
+    // The blades' edges over the pitch plane (the crown's tool's): the gear's spaces from a
+    // dedendum under it to the teeth's base over it, the pinion's teeth from their base under
+    // it to a dedendum over it.
+    let blade = if gear {
+        (-l.dedendum, l.base)
+    } else {
+        (-l.base, l.dedendum)
+    };
     const SLICES: usize = 8;
     const FLANK: usize = 8;
     const FLOOR: usize = 3;
@@ -231,6 +240,8 @@ pub(super) fn hypoid_member(d: &Design, l: &Layout, gear: bool, grow: f64) -> Op
     // Whether the blades' flanks are the other way round about the space (set by the middle
     // slice: the blades stay which they are).
     let mut swapped = false;
+    // Which way round each blade cuts into its tooth (found at the middle slice).
+    let mut towards: [Option<f64>; 2] = [None, None];
     let order: Vec<(usize, Option<usize>)> = std::iter::once((middle, None))
         .chain((middle + 1..=SLICES).map(|j| (j, Some(j - 1))))
         .chain((0..middle).rev().map(|j| (j, Some(j + 1))))
@@ -258,7 +269,7 @@ pub(super) fn hypoid_member(d: &Design, l: &Layout, gear: bool, grow: f64) -> Op
                 {
                     Some(x) => x,
                     None => {
-                        if std::env::var_os("PREVIEW_DEBUG").is_some() {
+                        if debug {
                             eprintln!(
                                 "preview: slice {j} blade {b}: no start at θ {:.4} (pitch {:.4})",
                                 thetas[mid], pitch
@@ -292,6 +303,56 @@ pub(super) fn hypoid_member(d: &Design, l: &Layout, gear: bool, grow: f64) -> Op
                 }
             }
             let mut phis: Vec<f64> = found.iter().map(|x| m.point(1.0, x[0], x[1])[2]).collect();
+            // Which way round the blade cuts into the tooth: the envelope's point is as far as
+            // it reaches there (at the pitch cone of the middle slice, whole).
+            let toward = *towards[b].get_or_insert_with(|| {
+                let x = found[mid];
+                let phi = m.turn_at(1.0, x[0], x[1]);
+                let (h, rho) = at(thetas[mid]);
+                let side = |d: f64| m.crossing(1.0, h, rho, phi + d, x).map(|c| c.1);
+                // (The envelope's point a greatest angle: the blade reaches into the tooth the
+                // greater way round.)
+                match (side(-0.01), side(0.01)) {
+                    (Some(a), Some(c)) if a + c > 2.0 * phis[mid] => -1.0,
+                    _ => 1.0,
+                }
+            });
+            // As far as the blade reaches round each circle as the cradle rolls (past the
+            // envelope where it folds: undercut), from the envelope's point there, else the
+            // reach of the circle before.
+            let mut reached: Vec<Option<([f64; 2], f64)>> = vec![None; FLANK + 1];
+            let order = std::iter::once(mid)
+                .chain((0..mid).rev())
+                .chain(mid + 1..=FLANK);
+            for i in order {
+                let (h, rho) = at(thetas[i]);
+                let from = if ok[i] {
+                    Some((found[i], m.turn_at(1.0, found[i][0], found[i][1])))
+                } else if i < mid {
+                    reached[i + 1]
+                } else if i > mid {
+                    reached[i - 1]
+                } else {
+                    None
+                };
+                if let Some(from) = from
+                    && let Some((a, c)) = m.reach(1.0, h, rho, from, toward, blade)
+                {
+                    if debug {
+                        let d = (a - phis[i] + PI).rem_euclid(TAU) - PI;
+                        if !ok[i] || d.abs() > 1e-4 {
+                            eprintln!(
+                                "reach: gear {gear} slice {j} blade {b} i {i} ok {} env {:.5} reach {:.5} (d {d:.5}) turn {:.4} -> {:.4} w {:.3}",
+                                ok[i], phis[i], a, from.1, c.1, c.0[1]
+                            );
+                        }
+                    }
+                    // (Unwrapped along the flank below.)
+                    phis[i] = a;
+                    ok[i] = true;
+                    reached[i] = Some(c);
+                }
+            }
             for i in (0..mid).rev() {
                 if !ok[i] {
                     phis[i] = phis[i + 1];
@@ -344,7 +405,7 @@ pub(super) fn hypoid_member(d: &Design, l: &Layout, gear: bool, grow: f64) -> Op
         }
         let gap = flanks[1][FLANK / 2] - flanks[0][FLANK / 2];
         if !(gap > 0.0 && gap < tooth) {
-            if std::env::var_os("PREVIEW_DEBUG").is_some() {
+            if debug {
                 eprintln!(
                     "preview: slice {j}: the space's width {gap:.4} of a tooth's {tooth:.4}; flanks {:?} neighbour {:?}",
                     [flanks[0][FLANK / 2], flanks[1][FLANK / 2]],
@@ -760,6 +821,137 @@ mod tests {
     /// `hypoid.sv`'s pair previewed in well under a millisecond a member, closed, as much
     /// material as the exact members with their crown's sharp tips (22223 and 14634 mm³, with
     /// their end relief): within a percent or so, its spaces' fillets and the reliefs left out.
+    #[test]
+    #[ignore = "debugging: PREVIEW_DEBUG=1 prints where the flanks are followed"]
+    fn a_bevel_pairs_preview() {
+        let d = Design {
+            pinion_teeth: 24.0,
+            gear_teeth: 48.0,
+            module: 2.0,
+            shaft_angle: PI / 2.0,
+            offset: 0.0,
+            spiral: 25f64.to_radians(),
+            cutter_radius: 75.6122,
+            pressure: 20f64.to_radians(),
+            pressure_shift: 0.0,
+        };
+        let l = layout(&d).unwrap();
+        for gear in [true, false] {
+            eprintln!(
+                "{gear}: {:?}",
+                hypoid_member(&d, &l, gear, 0.0).map(|m| volume(&m))
+            );
+        }
+    }
+
+    /// Whether `p` is inside the closed mesh `m` (a ray along +z, its crossings counted).
+    fn inside(m: &Mesh, p: Vec3) -> bool {
+        let mut n = 0;
+        for t in m.indices.chunks_exact(3) {
+            let [a, b, c] = [0, 1, 2].map(|k| m.positions[t[k] as usize]);
+            let d =
+                |u: Vec3, v: Vec3| (u[0] - p[0]) * (v[1] - p[1]) - (u[1] - p[1]) * (v[0] - p[0]);
+            let (x, y, z) = (d(a, b), d(b, c), d(c, a));
+            if !((x > 0.0 && y > 0.0 && z > 0.0) || (x < 0.0 && y < 0.0 && z < 0.0)) {
+                continue;
+            }
+            let w = x + y + z;
+            let h = (y * a[2] + z * b[2] + x * c[2]) / w;
+            if h > p[2] {
+                n += 1;
+            }
+        }
+        n % 2 == 1
+    }
+
+    #[test]
+    #[ignore = "debugging: where a pair's previews clash"]
+    fn where_a_pairs_previews_clash() {
+        let ratio: f64 = std::env::var("RATIO")
+            .ok()
+            .and_then(|r| r.parse().ok())
+            .unwrap_or(2.0);
+        let offset: f64 = std::env::var("OFFSET")
+            .ok()
+            .and_then(|r| r.parse().ok())
+            .unwrap_or(20.0);
+        let g = crate::gear::GearFeature {
+            gear_type: crate::gear::GearType::Pair,
+            module: 2.0,
+            ratio,
+            helix_angle: 25.0,
+            style: crate::gear::ToothStyle::Helical,
+            shaft_angle: 90.0,
+            offset,
+            backlash: 0.05,
+            ..Default::default()
+        };
+        let shaft: f64 = std::env::var("SHAFT")
+            .ok()
+            .and_then(|r| r.parse().ok())
+            .unwrap_or(90.0);
+        let g = crate::gear::GearFeature {
+            shaft_angle: shaft,
+            ..g
+        };
+        let (_, mut members) = crate::gear::pair_members(&g, shaft, offset);
+        if std::env::var_os("SV").is_some() {
+            members = crate::samples::gears::hypoid_pair().map(|mut x| {
+                (x.shaft_angle, x.offset) = (shaft, offset);
+                x
+            });
+        }
+        let made: Vec<(Mesh, Layout, bool)> = members
+            .iter()
+            .map(|x| {
+                let (d, gear) = x.hypoid_design();
+                let l = layout(&d).unwrap();
+                (hypoid_member(&d, &l, gear, 0.05 / 4.0).unwrap(), l, gear)
+            })
+            .collect();
+        for (a, b) in [(0, 1), (1, 0)] {
+            let (m, l, gear) = &made[b];
+            let (apex, axis) = if *gear {
+                ([0.0; 3], l.gear_axis)
+            } else {
+                (l.pinion_apex, l.pinion_axis)
+            };
+            let mut found = 0;
+            for (i, p) in m.positions.iter().enumerate() {
+                if !inside(&made[a].0, [p[0] + 1.3e-7, p[1] + 2.1e-7, p[2]]) {
+                    continue;
+                }
+                // (How far in: to the other's nearest point.)
+                let deep = made[a]
+                    .0
+                    .positions
+                    .iter()
+                    .map(|q| norm(sub(*q, *p)))
+                    .fold(f64::MAX, f64::min);
+                if deep < 0.2 {
+                    continue;
+                }
+                found += 1;
+                if found > 12 {
+                    continue;
+                }
+                let q = sub(*p, apex);
+                let s = norm(q);
+                let th = (dot(q, axis) / s).acos();
+                eprintln!(
+                    "{} vertex {i} in the {}: {deep:.3} deep; s {s:.3} (cone {:.3}, face {:.3}), θ {:.4} (pitch {:.4})",
+                    if *gear { "gear's" } else { "pinion's" },
+                    if *gear { "pinion" } else { "gear" },
+                    if *gear { l.mean_cone } else { l.pinion_cone },
+                    0.2 * l.mean_cone,
+                    th,
+                    if *gear { l.gear_pitch } else { l.pinion_pitch },
+                );
+            }
+            eprintln!("{found} vertices over 0.2 mm in");
+        }
+    }
+
     #[test]
     fn the_hypoid_pairs_preview_is_fast_and_close() {
         let d = Design {
