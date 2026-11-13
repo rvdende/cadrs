@@ -382,6 +382,9 @@ fn sweep_spine(
         chain_helix = vec![Some(super::frames::Helix::of(&h)); spine.len()];
     }
     let mut run_helix: Option<super::frames::Helix> = None;
+    // The first piece swept (its run, start, piece and end): a later run that is this one moved
+    // rigidly (a helix's quarter turns, each the last screwed on) is this piece moved alike.
+    let first: std::cell::RefCell<Option<FirstPiece>> = std::cell::RefCell::new(None);
     let flush = |run: &mut Vec<Seg>,
                  place: &mut Plane,
                  out: &mut Vec<Tagged>,
@@ -392,7 +395,25 @@ fn sweep_spine(
         if run.is_empty() {
             return Ok(());
         }
-        let (b, end) = super::frames::sweep_seg(faces, chains, *place, run, frames, solid, helix)?;
+        let moved = first.borrow().as_ref().and_then(|(segs, start, b, end)| {
+            let m = congruent(segs, start, run, place)?;
+            let b = super::super::build::Built {
+                body: b.body.transformed(&m),
+                origins: b.origins.clone(),
+            };
+            Some((b, moved_plane(end, &m)))
+        });
+        let (b, end) = match moved {
+            Some(r) => r,
+            None => {
+                let (b, end) =
+                    super::frames::sweep_seg(faces, chains, *place, run, frames, solid, helix)?;
+                if first.borrow().is_none() {
+                    *first.borrow_mut() = Some((run.clone(), *place, b.clone(), end));
+                }
+                (b, end)
+            }
+        };
         out.push(Tagged::from_built(b));
         corners.push(pending.take());
         *place = end;
@@ -713,6 +734,46 @@ pub(crate) fn sweep_law_tagged(
         SweepCorners::Round => Join::Round,
     };
     sweep_spines(&faces, &chains, plane, sp, spec.control, join, solid)
+}
+
+/// A piece swept: its run, the plane it starts at, the piece and the plane it ends at.
+type FirstPiece = (Vec<Seg>, Plane, crate::native::build::Built, Plane);
+
+/// The rigid motion taking plane `a` (its origin and axes) to plane `b`, when it also takes each
+/// of segments `sa` onto the matching one of `sb` (their ends and middles within a hundredth of
+/// a micron per millimetre): then a piece swept along `sa` from `a`, so moved, is the piece
+/// along `sb` from `b`.
+fn congruent(sa: &[Seg], a: &Plane, sb: &[Seg], b: &Plane) -> Option<Affine> {
+    if sa.len() != sb.len() {
+        return None;
+    }
+    let axes = |p: &Plane| {
+        let (x, n) = (p.x_dir.into_inner(), p.normal.into_inner());
+        nalgebra::Matrix3::from_columns(&[x, n.cross(&x), n])
+    };
+    let m = axes(b) * axes(a).transpose();
+    let t = b.origin.coords - m * a.origin.coords;
+    let map = Affine { m, t };
+    let at = |g: &Seg, s: f64| {
+        let (t0, t1) = if g.rev { (g.t1, g.t0) } else { (g.t0, g.t1) };
+        g.c.point(t0 + (t1 - t0) * s)
+    };
+    let fits = sa.iter().zip(sb).all(|(g, h)| {
+        [0.0, 0.5, 1.0].iter().all(|&s| {
+            let (p, q) = (at(g, s), at(h, s));
+            (map.point(&p) - q).norm() <= 1e-8 * (1.0 + q.coords.norm())
+        })
+    });
+    fits.then_some(map)
+}
+
+/// Plane `p` moved by the rigid motion `m`.
+fn moved_plane(p: &Plane, m: &Affine) -> Plane {
+    Plane {
+        origin: m.point(&p.origin),
+        x_dir: nalgebra::Unit::new_normalize(m.m * p.x_dir.into_inner()),
+        normal: nalgebra::Unit::new_normalize(m.m * p.normal.into_inner()),
+    }
 }
 
 /// Sweeps the profile (`faces` and `chains` in `plane` coordinates) along each spine (with

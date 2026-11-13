@@ -136,7 +136,13 @@ fn build(k: &NativeKernel, spec: &CurveLoftSpec) -> Result<(Body, Vec<Vec<u64>>)
     // The profiles run the same way: with guides, each so that the guides meet it in the order
     // they meet the first (a profile turned half a turn runs the other way round); without, each
     // as its predecessor, ends nearest.
-    if spec.guides.is_empty() {
+    // The guides, each joined into one curve.
+    let gs: Vec<NurbsCurve> = spec
+        .guides
+        .iter()
+        .map(|g| chain_curve(k, g).map(|(c, _)| c))
+        .collect::<Result<_>>()?;
+    if gs.is_empty() {
         let mut prev: Option<NurbsCurve> = None;
         for (s, at) in secs.iter_mut().zip(joints.iter_mut()) {
             let Sec::Curve(c) = s else { continue };
@@ -151,11 +157,6 @@ fn build(k: &NativeKernel, spec: &CurveLoftSpec) -> Result<(Body, Vec<Vec<u64>>)
             prev = Some(c.clone());
         }
     } else {
-        let gs: Vec<NurbsCurve> = spec
-            .guides
-            .iter()
-            .map(|g| chain_curve(k, g).map(|(c, _)| c))
-            .collect::<Result<_>>()?;
         let mut first: Option<Vec<f64>> = None;
         for (s, at) in secs.iter_mut().zip(joints.iter_mut()) {
             let Sec::Curve(c) = s else { continue };
@@ -194,8 +195,8 @@ fn build(k: &NativeKernel, spec: &CurveLoftSpec) -> Result<(Body, Vec<Vec<u64>>)
     let mut guides: Vec<NurbsCurve> = Vec::new();
     let mut sigma: Vec<Vec<f64>> = Vec::new();
     let mut along: Vec<Vec<f64>> = Vec::new();
-    for g in &spec.guides {
-        let (mut c, _) = chain_curve(k, g)?;
+    for g in &gs {
+        let mut c = g.clone();
         let mut s_at = Vec::with_capacity(n);
         let mut u_at = Vec::with_capacity(n);
         for sec in &secs {
@@ -489,6 +490,16 @@ fn build(k: &NativeKernel, spec: &CurveLoftSpec) -> Result<(Body, Vec<Vec<u64>>)
         tfield.push(poles);
     }
     let tval = |i: usize, u: f64| -> V3 { ub.eval_vec(&tfield[i], u) };
+    // Profile i's point and its tangent field at u, each (i, u) once: the surface is asked at
+    // every u of a grid in each of its rows.
+    let at_profile: std::cell::RefCell<std::collections::HashMap<(usize, u64), (V3, V3)>> =
+        Default::default();
+    let profile_at = |i: usize, u: f64| -> (V3, V3) {
+        *at_profile
+            .borrow_mut()
+            .entry((i, u.to_bits()))
+            .or_insert_with(|| (secs[i].at(u).coords, tval(i, u)))
+    };
 
     // The interpolation across.
     let across = |u: f64, w: f64| -> P3 {
@@ -503,10 +514,8 @@ fn build(k: &NativeKernel, spec: &CurveLoftSpec) -> Result<(Body, Vec<Vec<u64>>)
         let h10 = t3 - 2.0 * t2 + t;
         let h01 = -2.0 * t3 + 3.0 * t2;
         let h11 = t3 - t2;
-        let p = secs[i].at(u).coords * h00
-            + tval(i, u) * (h10 * h)
-            + secs[i + 1].at(u).coords * h01
-            + tval(i + 1, u) * (h11 * h);
+        let ((p0, t0), (p1, t1)) = (profile_at(i, u), profile_at(i + 1, u));
+        let p = p0 * h00 + t0 * (h10 * h) + p1 * h01 + t1 * (h11 * h);
         P3::from(p)
     };
     // Each station's departure from it.
@@ -518,12 +527,20 @@ fn build(k: &NativeKernel, spec: &CurveLoftSpec) -> Result<(Body, Vec<Vec<u64>>)
             Station::Guide(g) => guides[*g].point(w) - across(u, w),
         }
     };
+    // (The stations' departures at the last w asked: they don't depend on u, and the surface
+    // is asked a row at a time, every u at one w.)
+    let departed: std::cell::RefCell<(f64, Vec<Option<V3>>)> =
+        std::cell::RefCell::new((f64::NAN, vec![None; st.len()]));
     let surface_at = |u: f64, w: f64| -> P3 {
         let mut p = across(u, w);
-        for j in 0..st.len() {
+        let mut memo = departed.borrow_mut();
+        if memo.0.to_bits() != w.to_bits() {
+            *memo = (w, vec![None; st.len()]);
+        }
+        for (j, d) in memo.1.iter_mut().enumerate() {
             let f = psi.value(j, u);
             if f != 0.0 {
-                p += departure(j, w) * f;
+                p += *d.get_or_insert_with(|| departure(j, w)) * f;
             }
         }
         p
@@ -722,11 +739,14 @@ fn polynomial(c: &NurbsCurve) -> NurbsCurve {
 fn meet(a: &NurbsCurve, b: &NurbsCurve) -> (f64, f64, f64) {
     let ca = Curve::Nurbs(Arc::new(a.clone()));
     let cb = Curve::Nurbs(Arc::new(b.clone()));
+    // (Each curve's samples for its closest points taken once: `Curve::closest` takes them
+    // afresh at every point.)
+    let (sa, sb) = (ca.closest_samples(0.0, 1.0), cb.closest_samples(0.0, 1.0));
     let mut best = (0.0, 0.0, f64::INFINITY);
     for i in 0..=64 {
         let s = i as f64 / 64.0;
         let p = a.point(s);
-        let t = cb.closest(&p, 0.0, 1.0);
+        let t = cb.closest_from(&p, 0.0, 1.0, &sb);
         let d = (b.point(t) - p).norm();
         if d < best.2 {
             best = (s, t, d);
@@ -734,8 +754,8 @@ fn meet(a: &NurbsCurve, b: &NurbsCurve) -> (f64, f64, f64) {
     }
     let (mut s, mut t) = (best.0, best.1);
     for _ in 0..20 {
-        s = ca.closest(&b.point(t), 0.0, 1.0);
-        t = cb.closest(&a.point(s), 0.0, 1.0);
+        s = ca.closest_from(&b.point(t), 0.0, 1.0, &sa);
+        t = cb.closest_from(&a.point(s), 0.0, 1.0, &sb);
     }
     (s, t, (a.point(s) - b.point(t)).norm())
 }
@@ -789,6 +809,9 @@ fn requirements(c: &NurbsCurve, p: usize) -> Vec<(f64, usize)> {
 struct Basis {
     p: usize,
     knots: Vec<f64>,
+    /// The decomposition [`Self::fit`] solves by, made at its first fit: the same for every
+    /// field fitted in the space.
+    fitting: std::cell::OnceCell<nalgebra::SVD<f64, nalgebra::Dyn, nalgebra::Dyn>>,
 }
 
 impl Basis {
@@ -824,7 +847,11 @@ impl Basis {
             knots.extend(std::iter::repeat_n(*k, *m));
         }
         knots.extend(std::iter::repeat_n(1.0, p + 1));
-        Self { p, knots }
+        Self {
+            p,
+            knots,
+            fitting: std::cell::OnceCell::new(),
+        }
     }
 
     fn len(&self) -> usize {
@@ -870,7 +897,9 @@ impl Basis {
         let n = self.len();
         let m = (8 * n).max(64);
         let ts: Vec<f64> = (0..=m).map(|i| i as f64 / m as f64).collect();
-        let a = self.matrix(&ts);
+        let svd = self
+            .fitting
+            .get_or_init(|| self.matrix(&ts).svd(true, true));
         let mut rhs = DMatrix::zeros(ts.len(), 3);
         for (r, &t) in ts.iter().enumerate() {
             let d = f(t);
@@ -878,8 +907,7 @@ impl Basis {
                 rhs[(r, c)] = d[c];
             }
         }
-        let sol = a
-            .svd(true, true)
+        let sol = svd
             .solve(&rhs, tol::ROUNDOFF_FINE)
             .unwrap_or_else(|_| DMatrix::zeros(n, 3));
         (0..n)

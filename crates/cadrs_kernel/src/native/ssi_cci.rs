@@ -11,34 +11,109 @@ use super::curve::Curve;
 use super::math::*;
 use super::tol;
 
-/// A piece of a curve: its range, a box sure to hold it, its size.
+/// A piece of a curve: its range, a box sure to hold it, its size, and a capsule sure to hold
+/// it (the chord between its ends, `a` to `b`, grown by `r`).
 #[derive(Clone, Copy)]
 struct Piece {
     t0: f64,
     t1: f64,
     bb: Bbox,
     size: f64,
+    a: P3,
+    b: P3,
+    r: f64,
+}
+
+impl Piece {
+    /// Whether the two pieces may come within `tol` of each other: their boxes do, and their
+    /// capsules. (Boxes alone keep two pieces running side by side aslant together, however
+    /// far apart they are for their size: a curve that touches another and leaves it slowly
+    /// was halved down to its smallest pieces all along where it left.)
+    fn near(&self, o: &Piece, tol: f64) -> bool {
+        self.bb.grow(tol).overlaps(&o.bb)
+            && segment_distance(&self.a, &self.b, &o.a, &o.b) <= self.r + o.r + tol
+    }
 }
 
 /// The piece of `c` over [t0, t1]: five samples' box grown by twice the chord's error bound
-/// (h²/8 · max |C''| over the samples).
+/// (h²/8 · max |C''| over the samples), and their chord grown by as much again past the sample
+/// farthest from it.
 fn piece(c: &Curve, t0: f64, t1: f64) -> Piece {
     let mut bb = Bbox::empty();
     let mut m2 = 0.0f64;
     const N: usize = 4;
-    for i in 0..=N {
+    let mut ps = [P3::origin(); N + 1];
+    for (i, q) in ps.iter_mut().enumerate() {
         let (p, _, d2) = c.d2(t0 + (t1 - t0) * i as f64 / N as f64);
         bb.add(&p);
         m2 = m2.max(d2.norm());
+        *q = p;
     }
     let h = (t1 - t0) / N as f64;
-    let bb = bb.grow(2.0 * h * h * m2 / 8.0 + 1e-15 * (1.0 + bb.max.coords.abs().max()));
+    let grow = 2.0 * h * h * m2 / 8.0 + 1e-15 * (1.0 + bb.max.coords.abs().max());
+    let bb = bb.grow(grow);
+    let (a, b) = (ps[0], ps[N]);
+    let off = ps[1..N]
+        .iter()
+        .map(|p| point_segment_distance(p, &a, &b))
+        .fold(0.0, f64::max);
     Piece {
         t0,
         t1,
         bb,
         size: bb.diagonal(),
+        a,
+        b,
+        // (And a little more, for the distances' rounding.)
+        r: off + grow + 1e-12 * (off + grow),
     }
+}
+
+/// The distance from `p` to the segment from `a` to `b`.
+fn point_segment_distance(p: &P3, a: &P3, b: &P3) -> f64 {
+    let d = b - a;
+    let l2 = d.norm_squared();
+    let t = if l2 > 0.0 {
+        ((p - a).dot(&d) / l2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (p - (a + d * t)).norm()
+}
+
+/// The distance between the segments from `p0` to `p1` and from `q0` to `q1` (Ericson, Real-Time
+/// Collision Detection, 5.1.9).
+fn segment_distance(p0: &P3, p1: &P3, q0: &P3, q1: &P3) -> f64 {
+    let (d1, d2, r) = (p1 - p0, q1 - q0, p0 - q0);
+    let (a, e, f) = (d1.norm_squared(), d2.norm_squared(), d2.dot(&r));
+    let (s, t) = if a <= f64::MIN_POSITIVE && e <= f64::MIN_POSITIVE {
+        (0.0, 0.0)
+    } else if a <= f64::MIN_POSITIVE {
+        (0.0, (f / e).clamp(0.0, 1.0))
+    } else {
+        let c = d1.dot(&r);
+        if e <= f64::MIN_POSITIVE {
+            ((-c / a).clamp(0.0, 1.0), 0.0)
+        } else {
+            let b = d1.dot(&d2);
+            let den = a * e - b * b;
+            let mut s = if den > 0.0 {
+                ((b * f - c * e) / den).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let mut t = (b * s + f) / e;
+            if t < 0.0 {
+                t = 0.0;
+                s = (-c / a).clamp(0.0, 1.0);
+            } else if t > 1.0 {
+                t = 1.0;
+                s = ((b - c) / a).clamp(0.0, 1.0);
+            }
+            (s, t)
+        }
+    };
+    ((p0 + d1 * s) - (q0 + d2 * t)).norm()
 }
 
 fn halves(c: &Curve, p: &Piece) -> [Piece; 2] {
@@ -147,9 +222,8 @@ pub fn curve_curve(
     // before: two fitted curves of 450 pieces each made 200 000 pairs, nearly all apart.)
     let mut stack: Vec<(Piece, Piece)> = Vec::new();
     for x in &pa {
-        let xb = x.bb.grow(tol);
         for y in &pb {
-            if xb.overlaps(&y.bb) {
+            if x.near(y, tol) {
                 stack.push((*x, *y));
             }
         }
@@ -160,7 +234,7 @@ pub fn curve_curve(
     let (mut memo_a, mut memo_b) = (HashMap::new(), HashMap::new());
     let (samples_a, samples_b) = (a.closest_samples(ra.0, ra.1), b.closest_samples(rb.0, rb.1));
     while let Some((x, y)) = stack.pop() {
-        if !x.bb.grow(tol).overlaps(&y.bb) {
+        if !x.near(&y, tol) {
             continue;
         }
         budget = budget.saturating_sub(1);
@@ -226,4 +300,81 @@ pub fn curve_curve(
     }
     uniq.sort_by(|x, y| x.0.total_cmp(&y.0));
     uniq.into_iter().map(|(s, t, _)| (s, t)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The segments' distance is the least of their points' distances, found by sampling both
+    /// densely: crossing, skew, parallel, end to end, and one a point.
+    #[test]
+    fn segment_distance_matches_sampling() {
+        let cases = [
+            (
+                P3::new(0.0, 0.0, 0.0),
+                P3::new(1.0, 0.0, 0.0),
+                P3::new(0.5, -1.0, 0.3),
+                P3::new(0.5, 1.0, 0.3),
+            ),
+            (
+                P3::new(0.0, 0.0, 0.0),
+                P3::new(1.0, 1.0, 0.0),
+                P3::new(2.0, 0.0, 1.0),
+                P3::new(3.0, 2.0, -1.0),
+            ),
+            (
+                P3::new(0.0, 0.0, 0.0),
+                P3::new(1.0, 0.0, 0.0),
+                P3::new(0.2, 0.1, 0.0),
+                P3::new(1.7, 0.1, 0.0),
+            ),
+            (
+                P3::new(0.0, 0.0, 0.0),
+                P3::new(1.0, 0.0, 0.0),
+                P3::new(1.5, 0.5, 0.0),
+                P3::new(3.0, 0.5, 0.0),
+            ),
+            (
+                P3::new(0.0, 0.0, 0.0),
+                P3::new(1.0, 2.0, 3.0),
+                P3::new(0.4, 0.4, 0.4),
+                P3::new(0.4, 0.4, 0.4),
+            ),
+        ];
+        for (p0, p1, q0, q1) in cases {
+            let n = 400;
+            let mut best = f64::INFINITY;
+            for i in 0..=n {
+                let p = p0 + (p1 - p0) * (i as f64 / n as f64);
+                for j in 0..=n {
+                    let q = q0 + (q1 - q0) * (j as f64 / n as f64);
+                    best = best.min((p - q).norm());
+                }
+            }
+            let d = segment_distance(&p0, &p1, &q0, &q1);
+            assert!(d <= best + 1e-12 && d >= best - 1e-2, "{d} {best}");
+            assert!((segment_distance(&q0, &q1, &p0, &p1) - d).abs() < 1e-12);
+        }
+    }
+
+    /// A circle touching a line it is tangent to meets it once, at the touch.
+    #[test]
+    fn tangent_touch_found_once() {
+        let c = Curve::Circle {
+            c: P3::new(0.0, 1.0, 0.0),
+            x: V3::new(0.6, -0.8, 0.0),
+            y: V3::new(0.8, 0.6, 0.0),
+            r: 1.0,
+        };
+        let l = Curve::Line {
+            o: P3::new(-3.0, 0.0, 0.0),
+            d: V3::new(1.0, 0.0, 0.0),
+        };
+        let hits = curve_curve(&c, 0.0, 6.0, &l, 0.0, 6.0, 5e-7);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        let (s, t) = hits[0];
+        assert!((c.point(s) - P3::new(0.0, 0.0, 0.0)).norm() < 1e-3, "{s}");
+        assert!((t - 3.0).abs() < 1e-3, "{t}");
+    }
 }
