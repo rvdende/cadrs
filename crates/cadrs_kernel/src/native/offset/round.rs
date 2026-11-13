@@ -2088,3 +2088,45 @@ fn cylinder_domain(b: &Body, fi: usize) -> Option<(f64, f64, f64, f64)> {
     }
     Some((lo, hi, u0, u1))
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::native::kernel::NativeKernel;
+    use crate::*;
+    use nalgebra::Point3;
+    use std::f64::consts::PI;
+
+    /// A cube of side a grown by r, built directly (a convex polyhedron): its volume
+    /// a³ + 6a²r + 3πar² + 4πr³/3 and area 6a² + 6πar + 4πr², and its 26 faces (6 moved, 12
+    /// cylinder strips, 8 ball corners).
+    #[test]
+    fn a_cube_grown_is_built_directly_and_measures_right() {
+        let (a, r) = (10.0, 1.0);
+        let mut k = NativeKernel::new();
+        let id = k
+            .primitive(&Primitive::Box {
+                min: Point3::new(0.0, 0.0, 0.0),
+                max: Point3::new(a, a, a),
+            })
+            .unwrap()
+            .bodies[0];
+        let b = (**k.get(id).unwrap()).clone();
+        let g = super::grown_convex(&b, r).expect("a cube is a convex polyhedron");
+        assert_eq!(g.faces.len(), 26);
+        let gid = k.insert(g);
+        let m = k.mass_properties(gid).unwrap();
+        let volume =
+            a * a * a + 6.0 * a * a * r + 3.0 * PI * a * r * r + 4.0 * PI * r * r * r / 3.0;
+        let area = 6.0 * a * a + 6.0 * PI * a * r + 4.0 * PI * r * r;
+        assert!(
+            (m.volume - volume).abs() < 1e-9 * volume,
+            "{} {volume}",
+            m.volume
+        );
+        assert!(
+            (m.surface_area - area).abs() < 1e-9 * area,
+            "{} {area}",
+            m.surface_area
+        );
+    }
+}
