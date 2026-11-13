@@ -1341,6 +1341,7 @@ sketch-normal-plane-parallel = Normaal: die vlak is parallel aan die skets
 sketch-glyph-select-geometry = Kies geometrie
 sketch-glyph-hide = Versteek beperkings
 sketch-glyph-escape = Verlaat beperking
+sketch-point-delete-coincident = Skrap saamvallende beperking
 sketch-unsolved = Die skets kon nie opgelos word nie.
 sketch-conflict = Sommige beperkings is nie op die huidige geometrie van toepassing nie en is nie opgelos nie.
 

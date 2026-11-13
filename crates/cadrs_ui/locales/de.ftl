@@ -1341,6 +1341,7 @@ sketch-normal-plane-parallel = Normal: Die Ebene ist parallel zur Skizze
 sketch-glyph-select-geometry = Geometrie auswählen
 sketch-glyph-hide = Abhängigkeiten ausblenden
 sketch-glyph-escape = Abhängigkeitswerkzeug verlassen
+sketch-point-delete-coincident = Koinzidenz-Abhängigkeit löschen
 sketch-unsolved = Die Skizze konnte nicht gelöst werden.
 sketch-conflict = Einige Abhängigkeiten sind auf die aktuelle Geometrie nicht anwendbar und wurden nicht gelöst.
 

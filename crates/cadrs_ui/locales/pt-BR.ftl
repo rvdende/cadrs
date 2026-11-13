@@ -1341,6 +1341,7 @@ sketch-normal-plane-parallel = Normal: o plano é paralelo ao esboço
 sketch-glyph-select-geometry = Selecionar geometria
 sketch-glyph-hide = Ocultar restrições
 sketch-glyph-escape = Sair da restrição
+sketch-point-delete-coincident = Excluir restrição de coincidência
 sketch-unsolved = Não foi possível resolver o esboço.
 sketch-conflict = Algumas restrições não se aplicam à geometria atual e não foram resolvidas.
 

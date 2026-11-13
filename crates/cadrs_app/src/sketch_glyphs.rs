@@ -7,6 +7,12 @@
 //!   sits up and to the left of it (box center 17 px left and up), with diagonal leaders.
 //!   Constraints to the fixed origin or plane axes (external references) get a pale blue
 //!   `#def1fb` box.
+//! - **Coincidences** have no glyph: a point coincident with anything (shared by curves, on a
+//!   curve, at the origin) is drawn as a solid square instead of a round dot (`sketch_draw`),
+//!   and its context menu deletes the coincidence ([`coincident_points`]).
+//! - **Perpendicular corners**: ⊥ between two lines that meet end to end is a small right-angle
+//!   mark in the corner instead of a glyph box ([`corner_marks`]); it is picked, selected and
+//!   deleted like a glyph.
 //! - **Inference glyphs**: the same icons in a `#eaedf0` box whose corner is 21 px right of and
 //!   below the cursor, one per inferred constraint.
 //! - **Snap square**: a crisp 1 px `#fdca33` square, 17 px across, centered on the snap point.
@@ -56,7 +62,99 @@ pub enum GlyphIcon {
     Curvature,
 }
 
+/// Half a sketch glyph's size (px): its strokes span about twice this.
+pub const GLYPH_HALF: f32 = 7.0;
+
+/// Points round a circle `c`, radius `r`, from `a0` to `a1` (degrees), in local units.
+fn ring(c: [f32; 2], r: f32, a0: f32, a1: f32) -> Vec<[f32; 2]> {
+    let n = (((a1 - a0).abs() / 30.0).ceil() as usize).max(2);
+    (0..=n)
+        .map(|i| {
+            let a = (a0 + (a1 - a0) * i as f32 / n as f32).to_radians();
+            [c[0] + r * a.cos(), c[1] + r * a.sin()]
+        })
+        .collect()
+}
+
 impl GlyphIcon {
+    /// The glyph as it is drawn on a sketch: strokes in a local frame (x right, y up along the
+    /// sketch's axes) spanning about -1..1, scaled by [`GLYPH_HALF`]. Lines in the schematic's
+    /// manner rather than the toolbar icons in a box.
+    pub fn strokes(self) -> Vec<Vec<[f32; 2]>> {
+        match self {
+            GlyphIcon::Horizontal => vec![vec![[-1.0, 0.0], [1.0, 0.0]]],
+            GlyphIcon::Vertical => vec![vec![[0.0, -1.0], [0.0, 1.0]]],
+            GlyphIcon::Parallel => vec![
+                vec![[-0.85, -0.9], [-0.15, 0.9]],
+                vec![[0.15, -0.9], [0.85, 0.9]],
+            ],
+            GlyphIcon::Perpendicular => vec![
+                vec![[-1.0, -0.8], [1.0, -0.8]],
+                vec![[0.0, -0.8], [0.0, 1.0]],
+            ],
+            // A circle under the line it touches.
+            GlyphIcon::Tangent => vec![
+                ring([0.0, -0.25], 0.65, 0.0, 360.0),
+                vec![[-1.0, 0.4], [1.0, 0.4]],
+            ],
+            GlyphIcon::Midpoint => vec![
+                vec![[-1.0, 0.0], [-0.4, 0.0]],
+                vec![[0.0, 0.4], [0.4, 0.0], [0.0, -0.4], [-0.4, 0.0], [0.0, 0.4]],
+                vec![[0.4, 0.0], [1.0, 0.0]],
+            ],
+            GlyphIcon::Equal => vec![
+                vec![[-0.85, 0.35], [0.85, 0.35]],
+                vec![[-0.85, -0.35], [0.85, -0.35]],
+            ],
+            GlyphIcon::Concentric => vec![
+                ring([0.0, 0.0], 0.95, 0.0, 360.0),
+                ring([0.0, 0.0], 0.4, 0.0, 360.0),
+            ],
+            // A ground.
+            GlyphIcon::Fix => vec![
+                vec![[0.0, 1.0], [0.0, 0.15]],
+                vec![[-0.95, 0.15], [0.95, 0.15]],
+                vec![[-0.6, -0.35], [0.6, -0.35]],
+                vec![[-0.25, -0.85], [0.25, -0.85]],
+            ],
+            GlyphIcon::Symmetric => vec![
+                vec![[0.0, -1.0], [0.0, 1.0]],
+                vec![[-0.25, 0.0], [-1.0, 0.6], [-1.0, -0.6], [-0.25, 0.0]],
+                vec![[0.25, 0.0], [1.0, 0.6], [1.0, -0.6], [0.25, 0.0]],
+            ],
+            GlyphIcon::Offset => vec![
+                ring([0.0, -0.9], 0.75, 25.0, 155.0),
+                ring([0.0, -0.9], 1.6, 50.0, 130.0),
+            ],
+            // A line standing on a curve.
+            GlyphIcon::Normal => vec![
+                ring([0.0, 1.0], 1.6, 235.0, 305.0),
+                vec![[0.0, -0.6], [0.0, 1.0]],
+            ],
+            // Two chain links.
+            GlyphIcon::Use => vec![
+                ring([-0.4, 0.0], 0.55, 0.0, 360.0),
+                ring([0.4, 0.0], 0.55, 0.0, 360.0),
+            ],
+            GlyphIcon::Pierce => vec![
+                ring([0.0, 0.0], 0.55, 0.0, 360.0),
+                vec![[-1.0, -1.0], [1.0, 1.0]],
+            ],
+            // The tangent's arch, doubled.
+            GlyphIcon::Curvature => vec![
+                ring([0.0, -0.8], 1.5, 40.0, 140.0),
+                ring([0.0, -0.8], 0.8, 30.0, 150.0),
+            ],
+            GlyphIcon::Coincident => vec![vec![
+                [-0.45, -0.45],
+                [0.45, -0.45],
+                [0.45, 0.45],
+                [-0.45, 0.45],
+                [-0.45, -0.45],
+            ]],
+        }
+    }
+
     pub fn icon_name(self) -> &'static str {
         match self {
             GlyphIcon::Equal => "constraint-equal",
@@ -193,6 +291,13 @@ pub fn glyph_at(overlay: &SketchOverlay, p: Vec2) -> Option<ConstraintId> {
         .filter(|g| g.style != GlyphStyle::Inference)
         .find(|g| g.contains(p))
         .and_then(|g| g.constraint)
+        .or_else(|| {
+            overlay
+                .corners
+                .iter()
+                .find(|c| c.contains(p))
+                .map(|c| c.constraint)
+        })
 }
 
 /// Screen-space overlays for this frame (filled by `sketch_draw`).
@@ -203,6 +308,126 @@ pub struct SketchOverlay {
     pub square: Option<Vec2>,
     /// Dimension value labels (for picking).
     pub dims: Vec<crate::sketch_dimension::DimLabel>,
+    /// Perpendicular corner marks (for picking).
+    pub corners: Vec<CornerSpec>,
+}
+
+/// A perpendicular corner mark on screen: the corner and the mark's two other corners along
+/// each line (`along[0]` on the first line), `size` px from it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CornerSpec {
+    pub constraint: ConstraintId,
+    pub corner: Vec2,
+    pub dirs: [Vec2; 2],
+    pub size: f32,
+}
+
+impl CornerSpec {
+    /// The mark's corners: the lines' corner, along the first line, across, along the second.
+    pub fn quad(&self) -> [Vec2; 4] {
+        let [u, v] = self.dirs.map(|d| d * self.size);
+        let c = self.corner;
+        [c, c + u, c + u + v, c + v]
+    }
+
+    /// True if the screen point picks the mark: on it (or 3 px round it), but not on the corner
+    /// point itself, which stays the point's (to drag the corner).
+    pub fn contains(&self, p: Vec2) -> bool {
+        let [u, v] = self.dirs;
+        let det = u.x * v.y - u.y * v.x;
+        if det.abs() < 1e-3 || p.distance(self.corner) <= POINT_PICK {
+            return false;
+        }
+        let d = p - self.corner;
+        let s = (d.x * v.y - d.y * v.x) / det;
+        let t = (u.x * d.y - u.y * d.x) / det;
+        let m = 3.0;
+        (-m..=self.size + m).contains(&s) && (-m..=self.size + m).contains(&t)
+    }
+}
+
+/// How close (px) to a point the pointer picks the point rather than a corner mark on it.
+const POINT_PICK: f32 = cadrs_sketch::hit::POINT_TOLERANCE_PX as f32 - 2.0;
+/// A corner mark's side (px), at most; shorter lines get a smaller one.
+pub const CORNER_MARK: f32 = 10.0;
+
+/// A perpendicular constraint between two lines that meet end to end: where they meet and the
+/// far ends of the two lines (sketch mm).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CornerMark {
+    pub constraint: ConstraintId,
+    pub lines: [CurveId; 2],
+    pub corner: SVec2,
+    pub far: [SVec2; 2],
+}
+
+/// Where two lines meet end to end (a shared point, or two ends in one place): the corner and
+/// each line's other end.
+fn line_corner(s: &Sketch, a: CurveRef, b: CurveRef) -> Option<(SVec2, [SVec2; 2])> {
+    let (CurveRef::Curve(a), CurveRef::Curve(b)) = (a, b) else {
+        return None;
+    };
+    let ends = |k: CurveId| match s.curves.get(k).map(|c| c.kind) {
+        Some(CurveKind::Line { a, b }) => Some((s.pos(a), s.pos(b))),
+        _ => None,
+    };
+    let ((a0, a1), (b0, b1)) = (ends(a)?, ends(b)?);
+    for (pa, fa) in [(a0, a1), (a1, a0)] {
+        for (pb, fb) in [(b0, b1), (b1, b0)] {
+            if pa.distance(pb) <= 1e-6 {
+                return Some((pa, [fa, fb]));
+            }
+        }
+    }
+    None
+}
+
+/// The sketch's perpendicular corners (see [`CornerMark`]), shown as marks, not glyphs.
+pub fn corner_marks(s: &Sketch) -> Vec<CornerMark> {
+    s.constraints
+        .iter()
+        .filter(|(k, _)| !s.quiet.constraints.contains(k))
+        .filter_map(|(k, c)| match *c {
+            ConstraintOf::Perpendicular(a @ CurveRef::Curve(la), b @ CurveRef::Curve(lb)) => {
+                let (corner, far) = line_corner(s, a, b)?;
+                Some(CornerMark {
+                    constraint: k,
+                    lines: [la, lb],
+                    corner,
+                    far,
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The points drawn as solid squares: coincident with something (shared by two curves, or in a
+/// coincident or point-on-curve constraint), which their context menu can undo.
+pub fn coincident_points(s: &Sketch) -> std::collections::HashSet<cadrs_sketch::PointId> {
+    let mut out: std::collections::HashSet<_> = s
+        .shared_points()
+        .into_iter()
+        .filter(|p| !s.quiet.points.contains(p))
+        .collect();
+    for (k, c) in &s.constraints {
+        if s.quiet.constraints.contains(&k) {
+            continue;
+        }
+        match *c {
+            ConstraintOf::Coincident(a, b) => {
+                out.extend([a, b].into_iter().filter_map(|p| match p {
+                    PointRef::Point(p) => Some(p),
+                    PointRef::Origin => None,
+                }));
+            }
+            ConstraintOf::PointOnCurve(PointRef::Point(p), _) => {
+                out.insert(p);
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Glyph box size and the distance between neighbouring boxes' centers (px).
@@ -215,7 +440,7 @@ const AXIS_CLEARANCE: f64 = 4.0;
 /// ... and this far from dimensions: their lines, extension lines, leaders and values (T2
 /// judge: glyphs crowding a dimension's extension line).
 const FAT_CLEARANCE: f64 = 7.0;
-/// A line's glyph row: centered this far from the line's midpoint, to the inside.
+/// A line's glyph row: centered this far from the line's midpoint, outside the shape.
 const LINE_OFFSET: f32 = 20.5;
 
 /// What a group of glyphs is attached to.
@@ -223,6 +448,9 @@ const LINE_OFFSET: f32 = 20.5;
 pub enum Host {
     Point(PointRef),
     Curve(CurveId),
+    /// Where a constraint touches, off any sketch point: a tangent's touch point
+    /// ([`cadrs_sketch::extension::touch_point`]).
+    Touch(ConstraintId),
 }
 
 /// Glyph boxes and their leaders (screen px, from the geometry to the box center).
@@ -258,6 +486,7 @@ fn host_anchor(s: &Sketch, map: &ScreenMap, host: Host) -> Option<Vec2> {
     match host {
         Host::Point(PointRef::Point(p)) => s.points.get(p).map(|p| map.to_screen(p.pos)),
         Host::Point(PointRef::Origin) => Some(map.to_screen(SVec2::ZERO)),
+        Host::Touch(k) => touch(s, k).map(|p| map.to_screen(p)),
         Host::Curve(c) => {
             let pts = curve_polyline(s, c);
             let lo = pts
@@ -269,6 +498,41 @@ fn host_anchor(s: &Sketch, map: &ScreenMap, host: Host) -> Option<Vec2> {
             (!pts.is_empty()).then(|| map.to_screen((lo + hi) * 0.5))
         }
     }
+}
+
+/// Which way is outside at a point or touch point (screen, unit): away from the other points
+/// of its curves (the shape's inside) and from the centers of the circles and arcs it touches.
+/// `None` where they balance out.
+fn outward(s: &Sketch, map: &ScreenMap, host: Host, at: Vec2) -> Option<Vec2> {
+    let toward: Vec<SVec2> = match host {
+        Host::Point(PointRef::Point(p)) => s
+            .curves_at(p)
+            .flat_map(|k| s.curve_points(k))
+            .filter(|q| *q != p)
+            .map(|q| s.pos(q))
+            .collect(),
+        Host::Touch(k) => match s.constraints.get(k) {
+            Some(ConstraintOf::Tangent(a, b)) => [*a, *b]
+                .into_iter()
+                .filter_map(|c| match c {
+                    CurveRef::Curve(c) => cadrs_sketch::extension::round(s, c).map(|(o, _)| o),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    };
+    let sum = toward
+        .iter()
+        .map(|q| (map.to_screen(*q) - at).normalize_or_zero())
+        .fold(Vec2::ZERO, |a, d| a + d);
+    (sum.length() > 0.3).then(|| -sum.normalize())
+}
+
+/// Where a constraint touches (see [`Host::Touch`]).
+fn touch(s: &Sketch, k: ConstraintId) -> Option<SVec2> {
+    cadrs_sketch::extension::touch_point(s, s.constraints.get(k)?)
 }
 
 /// Segments bucketed in a uniform screen grid, for fast "does anything cross this box" tests.
@@ -357,11 +621,10 @@ fn is_external(c: CurveRef) -> bool {
 }
 
 /// One glyph of a group: its icon, whether it refers to the origin or an axis (pale blue), and
-/// its constraint (`None` for a shared point's structural coincidence).
+/// its constraint.
 pub type GroupGlyph = (GlyphIcon, bool, Option<ConstraintId>);
 
-/// The glyph groups of a sketch's constraints, in order: one group per host. Structural
-/// coincidences (shared points) come last in their point's group, nearest the point.
+/// The glyph groups of a sketch's constraints, in order: one group per host.
 pub fn glyph_groups(s: &Sketch) -> Vec<(Host, Vec<GroupGlyph>)> {
     let mut groups: Vec<(Host, Vec<GroupGlyph>)> = Vec::new();
     // Where each host's group is in `groups` (a linear search is quadratic in big sketches).
@@ -370,23 +633,6 @@ pub fn glyph_groups(s: &Sketch) -> Vec<(Host, Vec<GroupGlyph>)> {
     let mut add = |host: Host, icon: GlyphIcon, external: bool, id: Option<ConstraintId>| {
         let found = index.get(&host).copied();
         match found.map(|i| &mut groups[i]) {
-            // One coincident glyph per point within the sketch, however many things it is
-            // coincident with (a point on a circle and shared by a line shows one, not two).
-            // One to the origin or an axis stays separate, as `screens/12a` shows at the origin
-            // corner.
-            Some((Host::Point(_), v))
-                if icon == GlyphIcon::Coincident
-                    && v.iter()
-                        .any(|(i, e, _)| *i == GlyphIcon::Coincident && *e == external) =>
-            {
-                if let Some(g) = v
-                    .iter_mut()
-                    .find(|(i, e, _)| *i == GlyphIcon::Coincident && *e == external)
-                    && g.2.is_none()
-                {
-                    g.2 = id;
-                }
-            }
             Some((_, v)) => v.push((icon, external, id)),
             None => {
                 index.insert(host, groups.len());
@@ -417,22 +663,8 @@ pub fn glyph_groups(s: &Sketch) -> Vec<(Host, Vec<GroupGlyph>)> {
         }
         let id = Some(k);
         match *c {
-            ConstraintOf::Coincident(a, b) => {
-                let (host, other) = if a == PointRef::Origin {
-                    (b, a)
-                } else {
-                    (a, b)
-                };
-                add(
-                    Host::Point(host),
-                    GlyphIcon::Coincident,
-                    other == PointRef::Origin,
-                    id,
-                );
-            }
-            ConstraintOf::PointOnCurve(p, c) => {
-                add(Host::Point(p), GlyphIcon::Coincident, is_external(c), id);
-            }
+            // Coincident points are drawn as squares instead ([`coincident_points`]).
+            ConstraintOf::Coincident(..) | ConstraintOf::PointOnCurve(..) => {}
             ConstraintOf::Midpoint(p, _) => add(Host::Point(p), GlyphIcon::Midpoint, false, id),
             ConstraintOf::Horizontal(o) | ConstraintOf::Vertical(o) => {
                 let icon = if matches!(c, ConstraintOf::Horizontal(_)) {
@@ -459,6 +691,10 @@ pub fn glyph_groups(s: &Sketch) -> Vec<(Host, Vec<GroupGlyph>)> {
                 } else {
                     GlyphIcon::Perpendicular
                 };
+                // A corner's ⊥ is a mark in the corner instead ([`corner_marks`]).
+                if icon == GlyphIcon::Perpendicular && line_corner(s, a, b).is_some() {
+                    continue;
+                }
                 // On the first line (the other may be an axis).
                 if let (CurveRef::Curve(l), true) = (a, is_line(a)) {
                     add(Host::Curve(l), icon, is_external(b), id);
@@ -495,6 +731,11 @@ pub fn glyph_groups(s: &Sketch) -> Vec<(Host, Vec<GroupGlyph>)> {
                         false,
                         id,
                     ),
+                    // Lines, circles and arcs: where they touch (the line or arc is drawn on to
+                    // it when that is past its end, `sketch_draw`).
+                    None if cadrs_sketch::extension::touch_point(s, c).is_some() => {
+                        add(Host::Touch(k), GlyphIcon::Tangent, false, id);
+                    }
                     None => {
                         // Not touching at an end: on the circle or arc (on the line, near
                         // where it touches, for an ellipse: Final re-audit, S8).
@@ -579,47 +820,7 @@ pub fn glyph_groups(s: &Sketch) -> Vec<(Host, Vec<GroupGlyph>)> {
             | ConstraintOf::TextAspect(..) => {}
         }
     }
-    for p in s.shared_points() {
-        if s.quiet.points.contains(&p) {
-            continue;
-        }
-        add(
-            Host::Point(PointRef::Point(p)),
-            GlyphIcon::Coincident,
-            false,
-            None,
-        );
-    }
     groups
-}
-
-/// The corner a line's glyph group belongs near: when the group is only ⊥ glyphs, each to a
-/// line that meets this one at the same end, that end.
-fn perpendicular_corner(
-    s: &Sketch,
-    line: CurveId,
-    icons: &[GroupGlyph],
-) -> Option<cadrs_sketch::PointId> {
-    let (a, b) = s.curve_ends(line)?;
-    let mut corner = None;
-    for (icon, _, id) in icons {
-        if *icon != GlyphIcon::Perpendicular {
-            return None;
-        }
-        let ConstraintOf::Perpendicular(CurveRef::Curve(x), CurveRef::Curve(y)) =
-            *s.constraints.get((*id)?)?
-        else {
-            return None;
-        };
-        let other = if x == line { y } else { x };
-        let (c, d) = s.curve_ends(other)?;
-        let shared = [a, b].into_iter().find(|p| *p == c || *p == d)?;
-        if corner.is_some_and(|k| k != shared) {
-            return None;
-        }
-        corner = Some(shared);
-    }
-    corner
 }
 
 /// A row of `n` glyph boxes, the first centered at `first_center`: the screen rectangles
@@ -756,12 +957,10 @@ pub fn layout_glyphs(
         // Candidate places for the row's first box center, best first; the leader starts at
         // `from`.
         let (from, candidates): (Vec2, Vec<Vec2>) = match host {
-            Host::Point(p) => {
-                let pos = match p {
-                    PointRef::Point(id) => s.pos(id),
-                    PointRef::Origin => SVec2::ZERO,
+            Host::Point(_) | Host::Touch(_) => {
+                let Some(at) = host_anchor(s, map, host) else {
+                    continue;
                 };
-                let at = map.to_screen(pos);
                 let w = (n - 1) as f32 * PITCH;
                 // Up-left (the row ending nearest the point), up-right, down-left, down-right,
                 // then straight left, right, up and down: all within ~24 px of the point.
@@ -791,6 +990,17 @@ pub fn layout_glyphs(
                     at + Vec2::new(-w / 2.0, -d),
                     at + Vec2::new(-w / 2.0, d),
                 ]);
+                // Outside: each ring's places facing away from the point's curves first.
+                if let Some(out) = outward(s, map, host, at) {
+                    let facing = |c: &Vec2| {
+                        -(*c + Vec2::new(w / 2.0, 0.0) - at)
+                            .normalize_or_zero()
+                            .dot(out)
+                    };
+                    for ring in v.chunks_mut(8) {
+                        ring.sort_by(|p, q| facing(p).total_cmp(&facing(q)));
+                    }
+                }
                 (at, v)
             }
             Host::Curve(c)
@@ -843,7 +1053,7 @@ pub fn layout_glyphs(
                 let mid = (sa + sb) / 2.0;
                 let dir = (sb - sa).normalize_or_zero();
                 let mut normal = Vec2::new(-dir.y, dir.x);
-                // Toward the neighbours (the inside of a rectangle), else down or right.
+                // Where the neighbours are (the inside of a rectangle).
                 let neighbours: Vec<SVec2> = [a, b]
                     .iter()
                     .flat_map(|p| s.curves_at(*p).filter(|k| *k != c).collect::<Vec<_>>())
@@ -857,66 +1067,40 @@ pub fn layout_glyphs(
                     let sum = neighbours.iter().fold(SVec2::ZERO, |acc, p| acc + *p);
                     Some(map.to_screen(sum / neighbours.len() as f64) - mid)
                 };
+                // Projected curves have their own points (no neighbours): away from the middle
+                // of all the projected curves instead, so a used face's four links read alike
+                // (T5 judge).
+                let links_only = icons.iter().all(|(i, ..)| *i == GlyphIcon::Use);
+                let toward = toward.or_else(|| {
+                    if !links_only {
+                        return None;
+                    }
+                    let mids: Vec<SVec2> = s
+                        .constraints
+                        .values()
+                        .filter_map(|c| match c {
+                            ConstraintOf::Use(CurveRef::Curve(k), _) => s.curve_ends(*k),
+                            _ => None,
+                        })
+                        .map(|(p, q)| s.pos(p).midpoint(s.pos(q)))
+                        .collect();
+                    (mids.len() > 1).then(|| {
+                        let sum = mids.iter().fold(SVec2::ZERO, |acc, p| acc + *p);
+                        map.to_screen(sum / mids.len() as f64) - mid
+                    })
+                });
+                // Outside the shape: away from the neighbours; with none, down or right.
                 let flip = match toward {
-                    Some(t) if t.length() > 1e-3 => normal.dot(t) < 0.0,
+                    Some(t) if t.length() > 1e-3 => normal.dot(t) > 0.0,
                     _ => normal.y < 0.0 || (normal.y == 0.0 && normal.x < 0.0),
                 };
                 if flip {
                     normal = -normal;
                 }
-                // Links of projected curves all sit outside the shape, away from the
-                // neighbours, so a used face's four links read alike (T5 judge).
-                let links_only = icons.iter().all(|(i, ..)| *i == GlyphIcon::Use);
-                if links_only {
-                    // Projected curves have their own points (no neighbours): away from the
-                    // middle of all the projected curves instead.
-                    let toward = toward.or_else(|| {
-                        let mids: Vec<SVec2> = s
-                            .constraints
-                            .values()
-                            .filter_map(|c| match c {
-                                ConstraintOf::Use(CurveRef::Curve(k), _) => s.curve_ends(*k),
-                                _ => None,
-                            })
-                            .map(|(p, q)| s.pos(p).midpoint(s.pos(q)))
-                            .collect();
-                        (mids.len() > 1).then(|| {
-                            let sum = mids.iter().fold(SVec2::ZERO, |acc, p| acc + *p);
-                            map.to_screen(sum / mids.len() as f64) - mid
-                        })
-                    });
-                    if let Some(t) = toward
-                        && t.length() > 1e-3
-                        && normal.dot(t) > 0.0
-                    {
-                        normal = -normal;
-                    }
-                } else {
-                    // The bottom side of a shape (its neighbours above it) has its glyphs
-                    // below, outside (`screens/17a`: the bottom edge's ∥ sits under the edge).
-                    if toward.is_some() && normal.y < -0.9 {
-                        normal = -normal;
-                    }
-                    // A small shape has no room inside: its glyphs go outside (T2 judge:
-                    // clusters crowding the inside of a small rectangle).
-                    if let Some(t) = toward
-                        && t.length() < 45.0
-                        && normal.dot(t) > 0.0
-                    {
-                        normal = -normal;
-                    }
-                }
                 // A horizontal row beside a steep line moves out by half its width.
                 let half_row = (n - 1) as f32 * PITCH / 2.0;
                 let len = sa.distance(sb);
-                // A lone ⊥ between this line and one it meets at a corner sits near that corner
-                // (T2 judge: an inferred ⊥ mid-segment reads as belonging to the whole line).
-                let corner = perpendicular_corner(s, c, &icons).map(|p| {
-                    let at = map.to_screen(s.pos(p));
-                    let away = if p == a { dir } else { -dir };
-                    at + away * (len * 0.3).min(30.0)
-                });
-                let base0 = corner.unwrap_or(mid);
+                let base0 = mid;
                 let mut v = Vec::new();
                 // The preferred side at the middle, then the other side there, then moving
                 // along the line to clear other things (dimension values), outside the shape
@@ -1009,42 +1193,15 @@ pub fn layout_glyphs(
         };
         let centers: Vec<Vec2> = boxes.iter().map(|(lo, hi)| (*lo + *hi) / 2.0).collect();
         match host {
-            Host::Point(_) => {
+            Host::Point(_) | Host::Touch(_) => {
                 // Leaders end at the box's edge.
                 for c in &centers {
                     out.leaders
                         .push((from, clip_to_box(from, *c, Vec2::splat(BOX / 2.0))));
                 }
             }
-            Host::Curve(_) => {
-                // From the line to the middle of the row (it runs under the boxes). A group
-                // moved along the line gets its leader from the nearest point on the line.
-                let row_mid = (centers[0] + centers[n - 1]) / 2.0;
-                let start = match host {
-                    Host::Curve(c)
-                        if matches!(
-                            s.curves.get(c).map(|c| c.kind),
-                            Some(CurveKind::Line { .. })
-                        ) =>
-                    {
-                        s.curve_ends(c)
-                            .map(|(a, b)| {
-                                let (sa, sb) = (map.to_screen(s.pos(a)), map.to_screen(s.pos(b)));
-                                let d = sb - sa;
-                                let t = ((row_mid - sa).dot(d) / d.length_squared().max(1e-6))
-                                    .clamp(0.0, 1.0);
-                                sa + d * t
-                            })
-                            .unwrap_or(from)
-                    }
-                    _ => from,
-                };
-                let half = Vec2::new(
-                    (centers[n - 1].x - centers[0].x) / 2.0 + BOX / 2.0,
-                    BOX / 2.0,
-                );
-                out.leaders.push((start, clip_to_box(start, row_mid, half)));
-            }
+            // A curve's marks sit beside it, with no leader.
+            Host::Curve(_) => {}
         }
         for ((icon, external, constraint), center) in icons.into_iter().zip(centers) {
             out.glyphs.push(GlyphSpec {
@@ -1118,6 +1275,16 @@ fn glyph_visibility(rect: &ViewportRect, center: Vec2) -> Visibility {
     }
 }
 
+/// Only inference glyphs are boxes; constraint glyphs are drawn on the sketch
+/// ([`GlyphIcon::strokes`]), their boxes kept hidden for picking's sake.
+fn box_visibility(rect: &ViewportRect, spec: &GlyphSpec) -> Visibility {
+    if spec.style == GlyphStyle::Inference {
+        glyph_visibility(rect, spec.center)
+    } else {
+        Visibility::Hidden
+    }
+}
+
 /// Keeps one UI box per [`GlyphSpec`] and the snap square, placed inside the viewport area.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(crate) fn sync_overlay(
@@ -1182,7 +1349,7 @@ pub(crate) fn sync_overlay(
         if name.as_str() != spec.style.name() {
             *name = Name::new(spec.style.name());
         }
-        vis.set_if_neq(glyph_visibility(&rect, spec.center));
+        vis.set_if_neq(box_visibility(&rect, spec));
         for c in children.iter() {
             if let Ok((mut icon, mut image)) = q_icon.get_mut(c) {
                 if icon.name != spec.icon.icon_name() {
@@ -1212,7 +1379,7 @@ pub(crate) fn sync_overlay(
                 BackgroundColor(spec.style.background()),
                 spec.style.outline(),
                 Pickable::IGNORE,
-                glyph_visibility(&rect, spec.center),
+                box_visibility(&rect, spec),
                 // Under the value labels and the sketch dialog.
                 ZIndex(-2),
                 children![(
@@ -1285,7 +1452,7 @@ mod tests {
     use cadrs_sketch::constraint::rectangle_constraints;
 
     #[test]
-    fn rectangle_glyphs_match_onshape() {
+    fn rectangle_glyphs() {
         let mut s = Sketch::new();
         let c = [
             SVec2::ZERO,
@@ -1315,16 +1482,18 @@ mod tests {
             .map(|(_, v)| v.iter().map(|(i, ..)| *i).collect())
             .collect();
         use GlyphIcon::*;
-        // Top: "⊥ —"; left: "∥"; bottom: "∥"; the origin corner: external coincident, then the
-        // corner's own; the other three corners: coincident.
-        assert_eq!(icons[0], vec![Perpendicular, Horizontal]);
-        assert_eq!(icons[1], vec![Parallel]);
-        assert_eq!(icons[2], vec![Parallel]);
-        assert_eq!(icons[3], vec![Coincident, Coincident]);
-        assert!(groups[3].1[0].1);
-        assert!(!groups[3].1[1].1);
-        assert_eq!(icons.len(), 7);
-        assert!(icons[4..].iter().all(|v| *v == vec![Coincident]));
+        // Top: "—" (its ⊥ is a mark in the corner); left: "∥"; bottom: "∥". No coincident
+        // glyphs: the corners are squares, the origin one too.
+        assert_eq!(
+            icons,
+            vec![vec![Horizontal], vec![Parallel], vec![Parallel]]
+        );
+        let marks = corner_marks(&s);
+        assert_eq!(marks.len(), 1);
+        // Top and left meet at the top-left corner.
+        assert_eq!(marks[0].corner, SVec2::new(0.0, 30.0));
+        assert_eq!(marks[0].far, [SVec2::new(50.0, 30.0), SVec2::ZERO]);
+        assert_eq!(coincident_points(&s).len(), 4);
 
         // Laid out in a normal-to view at 4 px/mm, y up.
         let map = ScreenMap {
@@ -1341,14 +1510,81 @@ mod tests {
             &GlyphOffsets::default(),
             |_| true,
         );
-        // The top edge's row is centered below its midpoint (500, 280).
-        assert_eq!(l.glyphs[0].center, Vec2::new(489.0, 301.0).round());
-        assert_eq!(l.glyphs[1].center.x - l.glyphs[0].center.x, PITCH);
-        // The left edge's glyph is to its right.
-        assert!(l.glyphs[2].center.x > 400.0 && (l.glyphs[2].center.y - 340.0).abs() < 1.0);
-        // The origin corner's row sits up and left of it.
-        assert_eq!(l.glyphs[5].center, Vec2::new(383.0, 383.0));
-        assert_eq!(l.glyphs[4].center, Vec2::new(361.0, 383.0));
-        assert_eq!(l.glyphs[4].style, GlyphStyle::External);
+        // Outside the rectangle: the top edge's glyph above its midpoint (500, 280), the left
+        // edge's to its left.
+        assert_eq!(l.glyphs[0].center, Vec2::new(500.0, 260.0));
+        assert!(l.glyphs[1].center.x < 400.0 && (l.glyphs[1].center.y - 340.0).abs() < 1.0);
+        // Curves' glyphs have no leaders.
+        assert!(l.leaders.is_empty());
+        assert_eq!(l.glyphs.len(), 3);
+    }
+
+    #[test]
+    fn corner_mark_is_picked_off_its_point() {
+        let c = CornerSpec {
+            constraint: ConstraintId::default(),
+            corner: Vec2::new(100.0, 100.0),
+            dirs: [Vec2::X, Vec2::NEG_Y],
+            size: CORNER_MARK,
+        };
+        // Inside the mark, away from the corner point.
+        assert!(c.contains(Vec2::new(108.0, 92.0)));
+        // On the corner point: the point's.
+        assert!(!c.contains(Vec2::new(101.0, 99.0)));
+        // Outside the corner.
+        assert!(!c.contains(Vec2::new(92.0, 108.0)));
+    }
+
+    #[test]
+    fn tangent_glyph_sits_where_the_circle_touches() {
+        let mut s = Sketch::new();
+        SketchOp::Batch(vec![
+            SketchOp::AddPolyline {
+                points: vec![SVec2::ZERO, SVec2::new(10.0, 0.0)],
+                closed: false,
+                construction: false,
+                label: "Add line",
+            },
+            SketchOp::AddCircle {
+                center: SVec2::new(30.0, 5.0),
+                radius: 5.0,
+                construction: false,
+            },
+        ])
+        .apply(&mut s)
+        .unwrap();
+        let ids: Vec<CurveId> = s.curves.keys().collect();
+        SketchOp::AddConstraint {
+            constraints: vec![ConstraintOf::Tangent(
+                CurveRef::Curve(ids[0]),
+                CurveRef::Curve(ids[1]),
+            )],
+            label: "Add tangent",
+        }
+        .apply(&mut s)
+        .unwrap();
+        let groups = glyph_groups(&s);
+        assert!(matches!(groups[..], [(Host::Touch(_), _)]));
+        let map = ScreenMap {
+            plane: cadrs_sketch::PlaneRef::Top,
+            origin: Vec2::new(100.0, 400.0),
+            x: Vec2::new(4.0, 0.0),
+            y: Vec2::new(0.0, -4.0),
+            w: Vec2::ZERO,
+        };
+        let l = layout_glyphs(
+            &s,
+            &map,
+            GlyphObstacles::default(),
+            &GlyphOffsets::default(),
+            |_| true,
+        );
+        // Within a box or two of the touch point (30, 0) → (220, 400), not up on the circle.
+        let touch = map.to_screen(SVec2::new(30.0, 0.0));
+        assert!(l.glyphs[0].center.distance(touch) < 40.0);
+        // The line is carried on to it.
+        let ext = cadrs_sketch::extension::extensions(&s);
+        assert_eq!(ext.len(), 1);
+        assert_eq!(ext[0].1, ids[0]);
     }
 }

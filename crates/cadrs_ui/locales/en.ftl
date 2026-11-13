@@ -1850,6 +1850,8 @@ sketch-glyph-select-geometry = Select geometry
 sketch-glyph-hide = Hide constraints
 # Leaves the constraint tool (as Esc does).
 sketch-glyph-escape = Escape constraint
+# A sketch point's context menu: the point's coincidences go and its curves come apart.
+sketch-point-delete-coincident = Delete coincident constraint
 sketch-unsolved = Sketch could not be solved.
 sketch-conflict = Some constraints are not applicable to the current geometry and have not been solved.
 

@@ -1341,6 +1341,7 @@ sketch-normal-plane-parallel = Normaal: het werkvlak is evenwijdig aan de schets
 sketch-glyph-select-geometry = Geometrie selecteren
 sketch-glyph-hide = Beperkingen verbergen
 sketch-glyph-escape = Beperking afbreken
+sketch-point-delete-coincident = Samenvallende beperking verwijderen
 sketch-unsolved = De schets kon niet worden opgelost.
 sketch-conflict = Sommige beperkingen zijn niet van toepassing op de huidige geometrie en zijn niet opgelost.
 

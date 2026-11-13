@@ -2582,22 +2582,69 @@ fn drag_with(s: &mut Sketch, drag: &Drag, skip: &HashSet<Source>, reach: Reach) 
             sys.push(Kind::PointCircle(rad), inputs, Source::Pin);
         }
     }
+    let pinned = sys.eqs.len();
+    // Radii the drag would rather keep: every circle's and arc's, but one pulled by its rim or
+    // an arc whose end is dragged (those are meant to change). Lines stretch and turn before a
+    // fillet shrinks to nothing and turns inside out.
+    let grabbed: HashSet<PointId> = match drag {
+        Drag::Points(pins) => pins.iter().map(|(p, _)| *p).collect(),
+        Drag::Rim(..) => HashSet::new(),
+    };
+    for (id, c) in &s.curves {
+        let r0 = match c.kind {
+            CurveKind::Circle { radius, .. } => radius,
+            CurveKind::Arc { center, start, end } => {
+                if grabbed.contains(&start) || grabbed.contains(&end) {
+                    continue;
+                }
+                s.pos(center).distance(s.pos(start))
+            }
+            _ => continue,
+        };
+        if matches!(drag, Drag::Rim(r, _) if *r == id) {
+            continue;
+        }
+        if let Some((_, rad, r)) = sys.round(s, CurveRef::Curve(id))
+            && r.iter().any(|i| matches!(i, In::Var(_)))
+        {
+            sys.push(Kind::Radius(rad, 1.0, r0), r, Source::Pin);
+        }
+    }
     let all: Vec<usize> = (0..sys.eqs.len()).collect();
-    let pins: Vec<usize> = (base..sys.eqs.len()).collect();
+    let pins: Vec<usize> = (base..pinned).collect();
     // The components the pins touch.
     let comps: Vec<(Vec<usize>, Vec<usize>)> = sys
         .components(&all)
         .into_iter()
-        .filter(|(_, eqs)| eqs.iter().any(|e| *e >= base))
+        .filter(|(_, eqs)| eqs.iter().any(|e| (base..pinned).contains(e)))
         .collect();
     let vars: Vec<usize> = comps.iter().flat_map(|(v, _)| v.clone()).collect();
-    let eqs: Vec<usize> = comps.iter().flat_map(|(_, e)| e.clone()).collect();
+    let with_keeps: Vec<usize> = comps.iter().flat_map(|(_, e)| e.clone()).collect();
+    let keeps: Vec<usize> = with_keeps
+        .iter()
+        .copied()
+        .filter(|e| *e >= pinned)
+        .collect();
+    let eqs: Vec<usize> = with_keeps.iter().copied().filter(|e| *e < pinned).collect();
     let weight = |v: usize| if heavy.contains(&v) { 100.0 } else { 1.0 };
     let start = sys.x.clone();
     let real: Vec<usize> = eqs.iter().copied().filter(|e| !pins.contains(e)).collect();
     match reach {
         Reach::Exact => {
+            // Every radius kept, if the constraints allow it; else the least move, with the
+            // radii then taken back as near their old size as the constraints let them go.
+            if !keeps.is_empty() && sys.solve_sub(&vars, &with_keeps, &weight) {
+                sys.write(s);
+                return true;
+            }
+            sys.x = start.clone();
             if sys.solve_sub(&vars, &eqs, &weight) {
+                if !keeps.is_empty() {
+                    let solved = sys.x.clone();
+                    if !sys.solve_nearest(&vars, &eqs, &keeps, &weight) {
+                        sys.x = solved;
+                    }
+                }
                 sys.write(s);
                 return true;
             }

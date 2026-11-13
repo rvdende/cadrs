@@ -1426,6 +1426,22 @@ pub(crate) fn sketch_pointer(
                         commands.queue(move |world: &mut World| {
                             crate::sketch_dimension::open_dimension_menu(world, id, pos)
                         });
+                    } else if let Some(p) = select
+                        .then(|| {
+                            hit_test(sketch, SVec2::new(pos.x as f64, pos.y as f64), |p| {
+                                map.to_screen64(p)
+                            })
+                        })
+                        .flatten()
+                        .and_then(|h| match h.entity {
+                            SketchEntity::Point(p) => Some(p),
+                            _ => None,
+                        })
+                    {
+                        // A point's menu (Delete coincident constraint), keeping it selected.
+                        commands.queue(move |world: &mut World| {
+                            crate::sketch_constrain::open_point_menu(world, p, pos)
+                        });
                     } else if let Some(id) = text {
                         // S16.3: Edit text.
                         commands.queue(move |world: &mut World| {

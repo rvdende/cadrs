@@ -1341,6 +1341,7 @@ sketch-normal-plane-parallel = Normale : le plan est parallèle à l'esquisse
 sketch-glyph-select-geometry = Sélectionner la géométrie
 sketch-glyph-hide = Masquer les contraintes
 sketch-glyph-escape = Quitter la contrainte
+sketch-point-delete-coincident = Supprimer la contrainte de coïncidence
 sketch-unsolved = L'esquisse n'a pas pu être résolue.
 sketch-conflict = Certaines contraintes ne s'appliquent pas à la géométrie actuelle et n'ont pas été résolues.
 

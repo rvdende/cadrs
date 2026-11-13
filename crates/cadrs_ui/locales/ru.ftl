@@ -1341,6 +1341,7 @@ sketch-normal-plane-parallel = Нормаль: плоскость паралле
 sketch-glyph-select-geometry = Выбрать геометрию
 sketch-glyph-hide = Скрыть зависимости
 sketch-glyph-escape = Выйти из инструмента зависимостей
+sketch-point-delete-coincident = Удалить зависимость совпадения
 sketch-unsolved = Не удалось решить эскиз.
 sketch-conflict = Некоторые зависимости неприменимы к текущей геометрии и не были решены.
 

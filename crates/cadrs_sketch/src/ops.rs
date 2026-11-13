@@ -149,6 +149,10 @@ pub enum SketchOp {
     Scale { center: Vec2, factor: f64 },
     /// A sketch point on its own (S10.1). Refused where a point already is.
     AddPoint { pos: Vec2 },
+    /// Deletes the coincidence at a point (its context menu): its coincident constraints go,
+    /// and the curves that share it each get a point of their own there, free to come apart
+    /// (see [`Sketch::split_point`]).
+    SplitPoint { point: PointId },
     /// An ellipse (S8): its center, the end of its major axis and its minor radius.
     AddEllipse {
         center: Vec2,
@@ -303,6 +307,7 @@ impl SketchOp {
             SketchOp::Offset { .. } => "Offset".into(),
             SketchOp::Scale { .. } => "Scale sketch".into(),
             SketchOp::AddPoint { .. } => "Add point".into(),
+            SketchOp::SplitPoint { .. } => "Delete coincident constraint".into(),
             SketchOp::AddEllipse { .. } => "Add ellipse".into(),
             SketchOp::AddBezier { .. } => "Add Bézier curve".into(),
             SketchOp::AddPolygon { .. } => "Add polygon".into(),
@@ -964,6 +969,13 @@ impl SketchOp {
                 }
                 s.add_point(*pos);
                 Ok(())
+            }
+            SketchOp::SplitPoint { point } => {
+                if s.split_point(*point) {
+                    Ok(())
+                } else {
+                    Err("the point is not coincident with anything".into())
+                }
             }
             SketchOp::AddEllipse {
                 center,
@@ -1735,6 +1747,44 @@ mod tests {
         add(&mut s, Vec2::new(10.0, 0.0), Vec2::new(10.0, 10.0));
         assert_eq!(s.curves.len(), 2);
         assert_eq!(s.points.len(), 3);
+    }
+
+    #[test]
+    fn splitting_a_corner_frees_its_lines() {
+        let mut s = Sketch::new();
+        rect(&mut s, 10.0, 5.0);
+        let corner = s.point_at(Vec2::ZERO, 1e-9).unwrap();
+        SketchOp::AddConstraint {
+            constraints: vec![Constraint::Coincident(
+                PointRef::Point(corner),
+                PointRef::Origin,
+            )],
+            label: "Add coincident",
+        }
+        .apply(&mut s)
+        .unwrap();
+        let constraints = s.constraints.len();
+        SketchOp::SplitPoint { point: corner }
+            .apply(&mut s)
+            .unwrap();
+        // The corner's lines have a point each, and the origin coincidence is gone.
+        assert_eq!(s.points.len(), 5);
+        assert_eq!(s.constraints.len(), constraints - 1);
+        let ends: Vec<PointId> = s
+            .curves
+            .keys()
+            .flat_map(|k| s.curve_points(k))
+            .filter(|p| s.pos(*p) == Vec2::ZERO)
+            .collect();
+        assert_eq!(ends.len(), 2);
+        assert_ne!(ends[0], ends[1]);
+        assert!(!s.shared_points().contains(&corner));
+        // Nothing left to undo there.
+        assert!(
+            SketchOp::SplitPoint { point: corner }
+                .apply(&mut s)
+                .is_err()
+        );
     }
 
     #[test]

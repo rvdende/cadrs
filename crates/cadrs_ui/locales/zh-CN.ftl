@@ -1341,6 +1341,7 @@ sketch-normal-plane-parallel = 法向：该平面与草图平行
 sketch-glyph-select-geometry = 选择几何体
 sketch-glyph-hide = 隐藏约束
 sketch-glyph-escape = 退出约束
+sketch-point-delete-coincident = 删除重合约束
 sketch-unsolved = 无法求解草图。
 sketch-conflict = 部分约束不适用于当前几何体，未能求解。
 

@@ -1,0 +1,50 @@
+// Solver marks instead of floating glyphs: a rectangle's corners are solid squares (no
+// coincident glyphs) and its perpendicular corner has a green right-angle mark. A line made
+// tangent to a circle shows the tangent glyph where they touch; with the circle dragged past
+// the line's end, the line carries on dashed (green) to the touch point. Right-click on a
+// corner: the point's menu, with Delete coincident constraint, keeps it selected.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Click(ui("sketch")),
+        WaitFor("sketch-dialog"),
+        ClickAt(560, 575),
+        Key("N"),
+        // A rectangle.
+        Key("G"),
+        ClickWorld(-80, 10),
+        ClickWorld(-40, 40),
+        Key("Escape"),
+        Key("Escape"),
+        // A line and a circle, made tangent with the Tangent tool.
+        Key("L"),
+        ClickWorld(-80, -30),
+        ClickWorld(-30, -30),
+        Key("Escape"),
+        Key("Escape"),
+        Key("C"),
+        ClickWorld(-50, -10),
+        ClickWorld(-50, 3),
+        Key("Escape"),
+        Key("Escape"),
+        Key("T"),
+        Click(world(-55, -30)),
+        Click(world(-63, -10)),
+        Key("Escape"),
+        Key("Escape"),
+        MoveWorld(90, -60),
+        Wait(2),
+        Screenshot("01-squares-corner-mark-tangent-at-touch"),
+        // The circle dragged past the line's end.
+        DragWorld(-50, -13, 20, -13),
+        MoveWorld(90, -60),
+        Wait(2),
+        Screenshot("02-line-extended-to-the-tangent"),
+        // Right-click a rectangle corner.
+        RightClick(world(-40, 40)),
+        Wait(2),
+        Screenshot("03-point-menu"),
+        Key("Escape"),
+    ],
+)
