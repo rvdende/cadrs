@@ -47,19 +47,19 @@ pub(crate) fn points_in(shell: &Body) -> bool {
 /// when every one says the opposite, else `None` (a thin wall or grazing rays: the volume
 /// decides).
 fn parity_orientation(shell: &Body) -> Option<bool> {
-    parity_orientation_with(
-        shell,
-        shell
-            .faces
-            .iter()
-            .map(|f| super::classify::face_polygons(shell, f))
-            .collect(),
-    )
+    let kept: Vec<_> = shell
+        .faces
+        .iter()
+        .map(|f| super::classify::face_polygons_kept(shell, f))
+        .collect();
+    parity_orientation_with(shell, &kept)
 }
 
-/// [`parity_orientation`] with the faces' polygons made already.
-fn parity_orientation_with(shell: &Body, polys: Vec<Vec<Vec<P2>>>) -> Option<bool> {
-    let cls = super::classify::Classifier::new(shell, &polys);
+/// [`parity_orientation`] with the faces' polygons and their boxes kept
+/// ([`super::classify::face_polygons_kept`]: a body checked after each of many cuts has most of
+/// its faces as the one before had them).
+fn parity_orientation_with(shell: &Body, kept: &[super::classify::KeptPolygons]) -> Option<bool> {
+    let cls = super::classify::Classifier::with_kept(shell, kept);
     let size = shell.bbox().diagonal();
     let mut verdict: Option<bool> = None;
     let mut probes = 0;
@@ -69,7 +69,7 @@ fn parity_orientation_with(shell: &Body, polys: Vec<Vec<Vec<P2>>>) -> Option<boo
         }
         // A point well inside the face's domain: of a grid over its (u, v) box, the one
         // farthest from the loops (by the metric-scaled polygon).
-        let ps = &polys[fi];
+        let ps = &kept[fi].0;
         let (mut lo, mut hi) = (
             P2::new(f64::INFINITY, f64::INFINITY),
             P2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
@@ -1033,25 +1033,30 @@ impl Body {
                 let sub = super::kernel::subset(self, &faces, true);
                 // (The subset's faces are the solid's, with their edges as they are: their
                 // polygons the same.)
-                let sp: Vec<Vec<Vec<P2>>> = faces
-                    .iter()
-                    .zip(&sub.faces)
-                    .map(|(&fi, f)| {
-                        polys
-                            .get_mut(fi)
-                            .and_then(Option::take)
-                            .unwrap_or_else(|| super::classify::face_polygons(&sub, f))
-                    })
-                    .collect();
-                if check_compare() {
-                    for (k, f) in sub.faces.iter().enumerate() {
-                        assert_eq!(
-                            sp[k],
-                            super::classify::face_polygons(&sub, f),
-                            "solid {si}: face {k}'s polygons differ from the subset's"
-                        );
+                // (Made here already, or kept from a check of the body this one was cut from.)
+                let mut sp = || -> Vec<super::classify::KeptPolygons> {
+                    let sp: Vec<super::classify::KeptPolygons> = faces
+                        .iter()
+                        .zip(&sub.faces)
+                        .map(|(&fi, f)| match polys.get_mut(fi).and_then(Option::take) {
+                            Some(p) => {
+                                let b = super::classify::poly_boxes(&p, &f.surf);
+                                std::sync::Arc::new((p, b))
+                            }
+                            None => super::classify::face_polygons_kept(&sub, f),
+                        })
+                        .collect();
+                    if check_compare() {
+                        for (k, f) in sub.faces.iter().enumerate() {
+                            assert_eq!(
+                                sp[k].0,
+                                super::classify::face_polygons(&sub, f),
+                                "solid {si}: face {k}'s polygons differ from the subset's"
+                            );
+                        }
                     }
-                }
+                    sp
+                };
                 // Ray parity settles the orientation where it can; else the exact volume. (The
                 // volume first where a face is a B-spline of few spans, an extrusion or a surface
                 // of revolution: rays meet those by a search costing more than integrating the
@@ -1066,7 +1071,7 @@ impl Body {
                     Surface::Nurbs(n) => spans(&n.ku) * spans(&n.kv) <= 64,
                     _ => true,
                 });
-                if !swept && parity_orientation_with(&sub, sp) == Some(true) {
+                if !swept && parity_orientation_with(&sub, &sp()) == Some(true) {
                     continue;
                 }
                 let v = super::mass::volume_for_sign(&sub);

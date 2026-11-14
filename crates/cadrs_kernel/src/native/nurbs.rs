@@ -1071,6 +1071,49 @@ impl NurbsCurve {
     /// # Errors
     /// `InvalidParameter` when `u` isn't strictly inside the curve's range (or isn't a number,
     /// as a corrupt file's curves can give).
+    /// The curve over `t0..t1` (within [`tol::ROUNDOFF_FINE`] of an end, to that end): split
+    /// at each end inside, as [`Self::split`] does the whole curve, from the spans about the
+    /// range alone. A knot inserted moves only the poles of the spans about it, so the poles
+    /// are the ones a split of the whole curve makes; a long curve's short piece (an edge's
+    /// box) costs its few spans, not the whole curve copied at each knot inserted.
+    pub fn piece(&self, t0: f64, t1: f64) -> Self {
+        let (a, b) = self.range();
+        let (cut0, cut1) = (t0 > a + tol::ROUNDOFF_FINE, t1 < b - tol::ROUNDOFF_FINE);
+        let (p, n) = (self.degree, self.cps.len() - 1);
+        // The spans s0..=s1: the last starting before t0 to the first ending after t1, the
+        // ends strictly inside them (else the whole curve's first or last). Only for a range
+        // inside the curve (a split outside it fails, the curve kept whole).
+        let window = (t0 < b && t1 > a && t0 <= t1).then(|| {
+            let s0 = if cut0 {
+                (p..=n).rev().find(|&s| self.knots[s] < t0).unwrap_or(p)
+            } else {
+                p
+            };
+            // (A second split at or before the first's point fails: all after it kept.)
+            let s1 = if cut1 && t1 > if cut0 { t0 } else { a } {
+                (s0..=n).find(|&s| self.knots[s + 1] > t1).unwrap_or(n)
+            } else {
+                n
+            };
+            (s0, s1)
+        });
+        let mut c = match window {
+            Some((s0, s1)) if (s0, s1) != (p, n) => Self {
+                degree: p,
+                knots: self.knots[s0 - p..=s1 + p + 1].to_vec(),
+                cps: self.cps[s0 - p..=s1].to_vec(),
+            },
+            _ => self.clone(),
+        };
+        if cut0 && let Ok((_, r)) = c.split(t0) {
+            c = r;
+        }
+        if cut1 && let Ok((l, _)) = c.split(t1) {
+            c = l;
+        }
+        c
+    }
+
     pub fn split(&self, u: f64) -> crate::Result<(Self, Self)> {
         let (a, b) = self.range();
         let outside = || {
