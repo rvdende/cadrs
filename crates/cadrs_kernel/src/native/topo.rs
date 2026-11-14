@@ -924,25 +924,30 @@ impl Body {
         // Loops don't cross themselves in (u, v).
         for (fi, f) in self.faces.iter().enumerate() {
             for (li, l) in f.loops.iter().enumerate() {
-                let mut poly: Vec<P2> = Vec::with_capacity(8 * l.len());
-                for c in l {
-                    let e = &self.edges[c.edge];
-                    let (t0, t1) = co_range(e, c.fwd);
-                    // (A straight p-curve's samples are its start's line: the start alone.)
-                    let n = if matches!(c.pc, Curve::Line { .. }) {
-                        1
-                    } else {
-                        8
-                    };
-                    for i in 0..n {
-                        let q = c.pc.point(t0 + (t1 - t0) * i as f64 / n as f64);
-                        poly.push(P2::new(q.x, q.y));
+                let poly_of = |per: usize| {
+                    let mut poly: Vec<P2> = Vec::with_capacity(per * l.len());
+                    for c in l {
+                        let e = &self.edges[c.edge];
+                        let (t0, t1) = co_range(e, c.fwd);
+                        // (A straight p-curve's samples are its start's line: the start alone.)
+                        let n = if matches!(c.pc, Curve::Line { .. }) {
+                            1
+                        } else {
+                            per
+                        };
+                        for i in 0..n {
+                            let q = c.pc.point(t0 + (t1 - t0) * i as f64 / n as f64);
+                            poly.push(P2::new(q.x, q.y));
+                        }
                     }
-                }
+                    poly
+                };
                 // Eight samples a coedge can cut across a tightly curved p-curve: a crossing
                 // they show stands only if the loop's polyline within LOOP_GAP of its p-curves
-                // crosses itself too (the full check's test).
-                if let Some((i, j)) = self_crossing(&poly)
+                // crosses itself too (the full check's test), asked only when 64 samples a
+                // coedge still cross (the full check flattens the face's every loop).
+                if let Some((i, j)) = self_crossing(&poly_of(8))
+                    && self_crossing(&poly_of(64)).is_some()
                     && self
                         .check_face_domain(fi)
                         .iter()
@@ -1047,8 +1052,21 @@ impl Body {
                         );
                     }
                 }
-                // Ray parity settles the orientation where it can; else the exact volume.
-                if parity_orientation_with(&sub, sp) == Some(true) {
+                // Ray parity settles the orientation where it can; else the exact volume. (The
+                // volume first where a face is a B-spline of few spans, an extrusion or a surface
+                // of revolution: rays meet those by a search costing more than integrating the
+                // volume's sign, which a many-spanned B-spline's costs more still.)
+                let spans = |k: &[f64]| k.windows(2).filter(|w| w[1] > w[0]).count();
+                let swept = sub.faces.iter().any(|f| {
+                    matches!(
+                        f.surf,
+                        Surface::Extrusion { .. } | Surface::Revolution { .. } | Surface::Nurbs(_)
+                    )
+                }) && sub.faces.iter().all(|f| match &f.surf {
+                    Surface::Nurbs(n) => spans(&n.ku) * spans(&n.kv) <= 64,
+                    _ => true,
+                });
+                if !swept && parity_orientation_with(&sub, sp) == Some(true) {
                     continue;
                 }
                 let v = super::mass::volume_for_sign(&sub);

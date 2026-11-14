@@ -592,6 +592,13 @@ pub fn kernel_distance(
 ) -> crate::Result<crate::DistanceResult> {
     use crate::{DistanceLocation, DistanceTarget, KernelError};
     type Side<'a> = (Vec<Piece<'a>>, Option<&'a Body>);
+    // A point on a face (a face picked by a point on it), the nearest of a point and a face:
+    // its projection on the surface is the point itself, inside the face's loops.
+    if sense == Sense::Min
+        && let Some(r) = point_on_face(k, a, b)
+    {
+        return Ok(r);
+    }
     let side = |t: &DistanceTarget| -> crate::Result<Side<'_>> {
         Ok(match *t {
             DistanceTarget::Point(p) => {
@@ -656,6 +663,60 @@ pub fn kernel_distance(
         b: x.b,
         a_at: loc(x.wa, ba),
         b_at: loc(x.wb, bb),
+    })
+}
+
+/// [`kernel_distance`]'s nearest of a point and a face when the point lies on the face (to a
+/// nanometre on its surface, and inside its loops, not on them): distance 0 there. None
+/// otherwise (the general measure then).
+fn point_on_face(
+    k: &super::NativeKernel,
+    a: &crate::DistanceTarget,
+    b: &crate::DistanceTarget,
+) -> Option<crate::DistanceResult> {
+    use crate::{DistanceLocation, DistanceTarget};
+    let (p, id, f, point_first) = match (*a, *b) {
+        (DistanceTarget::Point(p), DistanceTarget::Face(id, f)) => (p, id, f, true),
+        (DistanceTarget::Face(id, f), DistanceTarget::Point(p)) => (p, id, f, false),
+        _ => return None,
+    };
+    if !p.iter().all(|x| x.is_finite()) {
+        return None;
+    }
+    let en = k.entry(id).ok()?;
+    let fi = f.0 as usize;
+    let face = en.body.faces.get(fi)?;
+    let (u, v) = face.surf.project(&p, None);
+    let q = face.surf.eval(u, v);
+    let d = (q - p).norm();
+    if !(d <= 1e-9) {
+        return None;
+    }
+    // (Clear of the loops by 1e-5, past the polygons' sampling error, else the general
+    // measure: in_face's tolerance is the squared distance.)
+    let polys = &en.polys()[fi];
+    if super::classify::in_face(polys, &face.surf, P2::new(u, v), 1e-10)
+        != super::classify::InFace::Inside
+    {
+        return None;
+    }
+    let (on_point, on_face) = (DistanceLocation::Point, DistanceLocation::Face(f, u, v));
+    Some(if point_first {
+        crate::DistanceResult {
+            distance: d,
+            a: p,
+            b: q,
+            a_at: on_point,
+            b_at: on_face,
+        }
+    } else {
+        crate::DistanceResult {
+            distance: d,
+            a: q,
+            b: p,
+            a_at: on_face,
+            b_at: on_point,
+        }
     })
 }
 
@@ -807,5 +868,52 @@ mod tests {
         )
         .unwrap();
         assert!(m.distance < 1e-9, "{m:?}");
+    }
+
+    /// A point on a face measures 0 to it, located on it, by the shortcut and the general
+    /// measure alike; a point off it, and one on its edge, by the general measure.
+    #[test]
+    fn a_point_on_a_face_is_on_it() {
+        use crate::{DistanceLocation, DistanceTarget, Kernel, Primitive};
+        let mut k = super::super::NativeKernel::new();
+        let id = k
+            .primitive(&Primitive::block(
+                P3::new(0.0, 0.0, 0.0),
+                P3::new(10.0, 8.0, 6.0),
+            ))
+            .unwrap()
+            .bodies[0];
+        let top = k
+            .faces(id)
+            .unwrap()
+            .into_iter()
+            .find(|f| (f.center.z - 6.0).abs() < 1e-9)
+            .unwrap()
+            .id;
+        let face = DistanceTarget::Face(id, top);
+        for (p, want) in [
+            (P3::new(3.0, 4.0, 6.0), 0.0),
+            (P3::new(3.0, 4.0, 7.5), 1.5),
+            (P3::new(10.0, 4.0, 6.0), 0.0),
+            (P3::new(12.0, 4.0, 6.0), 2.0),
+        ] {
+            for (a, b) in [
+                (DistanceTarget::Point(p), face),
+                (face, DistanceTarget::Point(p)),
+            ] {
+                let m = k.min_distance(&a, &b).unwrap();
+                assert!((m.distance - want).abs() < 1e-9, "{p}: {m:?}");
+                let at = if matches!(a, DistanceTarget::Face(..)) {
+                    m.a_at
+                } else {
+                    m.b_at
+                };
+                assert!(
+                    matches!(at, DistanceLocation::Face(f, ..) if f == top)
+                        || !matches!(at, DistanceLocation::Face(..)),
+                    "{p}: {m:?}"
+                );
+            }
+        }
     }
 }

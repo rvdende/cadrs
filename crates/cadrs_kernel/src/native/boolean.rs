@@ -462,10 +462,13 @@ fn import(pool: &mut Pool, faces: &mut Vec<WFace>, b: &Body, owner: usize, merge
         loops.iter_mut().for_each(drop_slits);
         let polys = classify::face_polygons_kept(b, f);
         let mut bb = Bbox::empty();
+        // (The polygons' (u, v) box from each one's, kept with them.)
         let mut uvb = Bbox::empty();
-        for p in &polys.0 {
-            for q in p {
-                uvb.add(&P3::new(q.x, q.y, 0.0));
+        for pb in &polys.1 {
+            let [x0, x1, y0, y1] = pb.uv_box();
+            if x0 <= x1 && y0 <= y1 {
+                uvb.add(&P3::new(x0, y0, 0.0));
+                uvb.add(&P3::new(x1, y1, 0.0));
             }
         }
         for l in &f.loops {
@@ -2989,11 +2992,10 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     let uvbox = |f: &WFace| {
         let mut ub = (f64::INFINITY, f64::NEG_INFINITY);
         let mut vb = (f64::INFINITY, f64::NEG_INFINITY);
-        for p in &f.polys.0 {
-            for q in p {
-                ub = (ub.0.min(q.x), ub.1.max(q.x));
-                vb = (vb.0.min(q.y), vb.1.max(q.y));
-            }
+        for pb in &f.polys.1 {
+            let [x0, x1, y0, y1] = pb.uv_box();
+            ub = (ub.0.min(x0), ub.1.max(x1));
+            vb = (vb.0.min(y0), vb.1.max(y1));
         }
         (ub, vb)
     };

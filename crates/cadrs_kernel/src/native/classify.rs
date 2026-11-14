@@ -15,30 +15,30 @@ pub enum InFace {
 
 /// A face's loops sampled as uv polygons (for in-face tests).
 pub fn face_polygons(body: &Body, f: &Face) -> Vec<Vec<P2>> {
-    f.loops
-        .iter()
-        .map(|l| {
-            let mut pts = Vec::new();
-            for c in l {
-                let e = &body.edges[c.edge];
-                let (a, b) = co_range(e, c.fwd);
-                let n = match &c.pc {
-                    super::curve::Curve::Line { .. } => 1,
-                    _ => {
-                        // Enough points that the polygon is within ~1e-6 of the p-curve.
-                        let span = (b - a).abs();
-                        ((span * 256.0).ceil() as usize).clamp(16, 4096)
-                    }
-                };
-                for i in 0..n {
-                    let t = a + (b - a) * i as f64 / n as f64;
-                    let p = c.pc.point(t);
-                    pts.push(P2::new(p.x, p.y));
-                }
+    f.loops.iter().map(|l| loop_polygon(body, l)).collect()
+}
+
+/// One of a face's loops sampled as a uv polygon ([`face_polygons`]).
+fn loop_polygon(body: &Body, l: &[super::topo::Coedge]) -> Vec<P2> {
+    let mut pts = Vec::new();
+    for c in l {
+        let e = &body.edges[c.edge];
+        let (a, b) = co_range(e, c.fwd);
+        let n = match &c.pc {
+            super::curve::Curve::Line { .. } => 1,
+            _ => {
+                // Enough points that the polygon is within ~1e-6 of the p-curve.
+                let span = (b - a).abs();
+                ((span * 256.0).ceil() as usize).clamp(16, 4096)
             }
-            pts
-        })
-        .collect()
+        };
+        for i in 0..n {
+            let t = a + (b - a) * i as f64 / n as f64;
+            let p = c.pc.point(t);
+            pts.push(P2::new(p.x, p.y));
+        }
+    }
+    pts
 }
 
 /// A face's [`face_polygons`] and their [`poly_boxes`].
@@ -46,54 +46,110 @@ pub type KeptPolygons = std::sync::Arc<(Vec<Vec<P2>>, PolyBoxes)>;
 
 /// [`face_polygons`] and their [`poly_boxes`], kept by what they are made from (the face's
 /// surface and each p-curve over its range): a boolean takes every face of both its bodies (in
-/// its import and again to classify), most of them as the bodies before it had them.
+/// its import and again to classify), most of them as the bodies before it had them. Each loop
+/// is kept too, so a face that gained a loop since (a plate's face, a hole cut in it one after
+/// another) samples only the new one.
 pub fn face_polygons_kept(body: &Body, f: &Face) -> KeptPolygons {
     use std::hash::Hasher;
     /// Two generations of at most this many points each (16 bytes a point, and the boxes).
     const KEPT: usize = 1 << 21;
+    type KeptLoop = std::sync::Arc<(Vec<P2>, PolyBox)>;
     #[derive(Default)]
     struct Kept {
         new: rustc_hash::FxHashMap<u128, KeptPolygons>,
+        new_loops: rustc_hash::FxHashMap<u128, KeptLoop>,
         new_points: usize,
         old: rustc_hash::FxHashMap<u128, KeptPolygons>,
+        old_loops: rustc_hash::FxHashMap<u128, KeptLoop>,
+    }
+    impl Kept {
+        /// Counts `points` more kept, starting a new generation first when they don't fit.
+        fn room(&mut self, points: usize) {
+            if self.new_points + points > KEPT {
+                self.old = std::mem::take(&mut self.new);
+                self.old_loops = std::mem::take(&mut self.new_loops);
+                self.new_points = 0;
+            }
+            self.new_points += points;
+        }
     }
     static KEPT_POLYS: std::sync::LazyLock<std::sync::Mutex<Kept>> =
         std::sync::LazyLock::new(Default::default);
-    let mut h = super::fingerprint::Key128::new();
-    h.surface(&f.surf);
-    for l in &f.loops {
-        h.write_usize(l.len());
-        for c in l {
-            let (a, b) = co_range(&body.edges[c.edge], c.fwd);
-            h.f64s(&[a, b]);
-            h.curve(&c.pc);
+    // Each loop's key (the surface and the loop's p-curves over their ranges), and the face's
+    // (the loops' in order).
+    let loop_keys: Vec<u128> = f
+        .loops
+        .iter()
+        .map(|l| {
+            let mut h = super::fingerprint::Key128::new();
+            h.surface(&f.surf);
+            h.write_usize(l.len());
+            for c in l {
+                let (a, b) = co_range(&body.edges[c.edge], c.fwd);
+                h.f64s(&[a, b]);
+                h.curve(&c.pc);
+            }
+            h.key()
+        })
+        .collect();
+    let key = {
+        let mut h = super::fingerprint::Key128::new();
+        h.write_usize(loop_keys.len());
+        for k in &loop_keys {
+            h.write_u128(*k);
+        }
+        h.key()
+    };
+    let points = |p: &KeptPolygons| p.0.iter().map(Vec::len).sum::<usize>() + 1;
+    let mut k = KEPT_POLYS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(p) = k.new.get(&key).cloned() {
+        return p;
+    }
+    if let Some(p) = k.old.remove(&key) {
+        k.room(points(&p));
+        k.new.insert(key, p.clone());
+        return p;
+    }
+    // The face's loops, each kept or sampled now (the lock let go meanwhile: sampling a long
+    // loop takes a while).
+    let mut kept: Vec<Option<KeptLoop>> = loop_keys
+        .iter()
+        .map(|lk| {
+            k.new_loops.get(lk).cloned().or_else(|| {
+                let p = k.old_loops.remove(lk)?;
+                k.room(p.0.len() + 1);
+                k.new_loops.insert(*lk, p.clone());
+                Some(p)
+            })
+        })
+        .collect();
+    drop(k);
+    let mut made: Vec<(u128, KeptLoop)> = Vec::new();
+    for (i, slot) in kept.iter_mut().enumerate() {
+        if slot.is_none() {
+            let poly = loop_polygon(body, &f.loops[i]);
+            let pb = poly_boxes(std::slice::from_ref(&poly), &f.surf)
+                .pop()
+                .expect("a box per polygon");
+            let l: KeptLoop = std::sync::Arc::new((poly, pb));
+            made.push((loop_keys[i], l.clone()));
+            *slot = Some(l);
         }
     }
-    let key = h.key();
-    let points = |p: &KeptPolygons| p.0.iter().map(Vec::len).sum::<usize>() + 1;
-    let kept = {
-        let mut k = KEPT_POLYS.lock().unwrap_or_else(|e| e.into_inner());
-        match k.new.get(&key).cloned() {
-            Some(p) => Some(p),
-            None => k.old.remove(&key).inspect(|p| {
-                k.new_points += points(p);
-                k.new.insert(key, p.clone());
-            }),
-        }
-    };
-    kept.unwrap_or_else(|| {
-        let polys = face_polygons(body, f);
-        let boxes = poly_boxes(&polys, &f.surf);
-        let p: KeptPolygons = std::sync::Arc::new((polys, boxes));
-        let mut k = KEPT_POLYS.lock().unwrap_or_else(|e| e.into_inner());
-        if k.new_points + points(&p) > KEPT {
-            k.old = std::mem::take(&mut k.new);
-            k.new_points = 0;
-        }
-        k.new_points += points(&p);
-        k.new.insert(key, p.clone());
-        p
-    })
+    let (polys, boxes): (Vec<Vec<P2>>, PolyBoxes) = kept
+        .into_iter()
+        .flatten()
+        .map(|l| (l.0.clone(), l.1.clone()))
+        .unzip();
+    let p: KeptPolygons = std::sync::Arc::new((polys, boxes));
+    let mut k = KEPT_POLYS.lock().unwrap_or_else(|e| e.into_inner());
+    for (lk, l) in made {
+        k.room(l.0.len() + 1);
+        k.new_loops.insert(lk, l);
+    }
+    k.room(points(&p));
+    k.new.insert(key, p.clone());
+    p
 }
 
 /// Point in a face's domain given its sampled loops; `tol` in model units (scaled by the
@@ -164,6 +220,13 @@ impl Rows {
         let n = (self.start.len() - 1) as f64;
         let at = |y: f64| ((y - self.y0) / self.dy).floor().clamp(0.0, n - 1.0) as usize;
         at(y0)..=at(y1)
+    }
+}
+
+impl PolyBox {
+    /// The polygon's (u, v) box: (min u, max u, min v, max v).
+    pub fn uv_box(&self) -> [f64; 4] {
+        self.b
     }
 }
 

@@ -1226,6 +1226,14 @@ impl SweepKind for PathSweep {
 /// The p-curve of a profile piece's iso-line v of its skin: u(t) the parameter of the piece's
 /// own B-spline `n0` (the skin's u) at the piece's point c(t), u(t0) = ua and u(t1) = ub (a whole
 /// circle's ends are its seam), interpolated until it maps onto the piece within 1e-12.
+///
+/// Where `n0` is at most C1 (an inner knot of multiplicity p − 1 or more, such as the double
+/// knots between a rational circle's quarters), u(t)'s second derivative jumps too, and one
+/// smooth fit through it converges only as h² there: thousands of points, still short of the
+/// tolerance after every round. So u(t) is fitted span by span between those knots, each span
+/// smooth, and the spans joined there (C0 knots, the same u at the same t on both sides). Each
+/// span is a quintic (its error falls as h⁶: a cubic's, as h⁴, wanted hundreds of points a
+/// quarter circle for 1e-12, a quintic's about 60), with u′ at its ends where that is exact.
 pub(crate) fn iso_pcurve(
     n0: &NurbsCurve,
     c: &Curve,
@@ -1235,6 +1243,79 @@ pub(crate) fn iso_pcurve(
     ub: f64,
     v: f64,
 ) -> Curve {
+    let joints = iso_joints(n0, c, t0, t1, ua, ub);
+    if joints.is_empty() {
+        return Curve::Nurbs(Arc::new(iso_pcurve_span(n0, c, t0, t1, ua, ub, v)));
+    }
+    let mut ends = vec![(t0, ua)];
+    ends.extend(joints);
+    ends.push((t1, ub));
+    let spans: Vec<NurbsCurve> = ends
+        .windows(2)
+        .map(|w| iso_pcurve_span(n0, c, w[0].0, w[1].0, w[0].1, w[1].1, v))
+        .collect();
+    // (A span that fell back to a lower degree: raised to match the others.)
+    let p = spans.iter().map(|s| s.degree).max().unwrap_or(1);
+    let joined = spans
+        .into_iter()
+        .map(|s| (s.degree..p).fold(s, |s, _| s.elevated()))
+        .reduce(|acc, s| acc.joined(&s))
+        .expect("two ends make a span");
+    Curve::Nurbs(Arc::new(joined))
+}
+
+/// The inner points (t, u) of [`iso_pcurve`]'s range where `n0` is at most C1, in order from t0
+/// to t1: u its knot there, t the piece's parameter of the same point. Empty when they don't run
+/// the same way in both (then the curve is fitted whole).
+fn iso_joints(n0: &NurbsCurve, c: &Curve, t0: f64, t1: f64, ua: f64, ub: f64) -> Vec<(f64, f64)> {
+    let p = n0.degree;
+    if p == 0 {
+        return Vec::new();
+    }
+    let (lo, hi) = (ua.min(ub), ua.max(ub));
+    let eps = tol::REL_FINE * (1.0 + lo.abs().max(hi.abs()));
+    let mut out: Vec<(f64, f64)> = Vec::new();
+    let k = &n0.knots;
+    let mut i = 0;
+    while i < k.len() {
+        let mut j = i + 1;
+        while j < k.len() && k[j] - k[i] <= eps {
+            j += 1;
+        }
+        let (u, mult) = (k[i], j - i);
+        if u > lo + eps && u < hi - eps && mult + 1 >= p {
+            let t = c.closest(&n0.point(u), t0.min(t1), t0.max(t1));
+            out.push((t, u));
+        }
+        i = j;
+    }
+    out.sort_by(|a, b| a.0.total_cmp(&b.0));
+    if t1 < t0 {
+        out.reverse();
+    }
+    // Strictly from t0 to t1 and from ua to ub, else no joints.
+    let st = (t1 - t0).signum();
+    let su = (ub - ua).signum();
+    let mut prev = (t0, ua);
+    for &(t, u) in out.iter().chain(std::iter::once(&(t1, ub))) {
+        if (t - prev.0) * st <= 0.0 || (u - prev.1) * su <= 0.0 {
+            return Vec::new();
+        }
+        prev = (t, u);
+    }
+    out
+}
+
+/// [`iso_pcurve`] over a range where u(t) is smooth.
+fn iso_pcurve_span(
+    n0: &NurbsCurve,
+    c: &Curve,
+    t0: f64,
+    t1: f64,
+    ua: f64,
+    ub: f64,
+    v: f64,
+) -> NurbsCurve {
     let invert = |t: f64, guess: f64| -> f64 {
         let p = c.point(t);
         let (lo, hi) = (ua.min(ub), ua.max(ub));
@@ -1273,9 +1354,14 @@ pub(crate) fn iso_pcurve(
             }
         })
         .collect();
+    // (u′ at both ends when it is known exactly: the fit's error was largest there.)
+    let (d0, d1) = match iso_end_rates(n0, c, t0, t1, ua, ub) {
+        Some((r0, r1)) => (Some(V3::new(r0, 0.0, 0.0)), Some(V3::new(r1, 0.0, 0.0))),
+        None => (None, None),
+    };
     let fit_of = |ts: &[f64], us: &[f64]| {
         let pts: Vec<P3> = us.iter().map(|&u| P3::new(u, v, 0.0)).collect();
-        NurbsCurve::interpolate(&pts, ts, 3, None, None)
+        NurbsCurve::interpolate(&pts, ts, 5, d0, d1)
     };
     for _ in 0..10 {
         let fit = fit_of(&ts, &us);
@@ -1290,7 +1376,7 @@ pub(crate) fn iso_pcurve(
             }
         }
         if ins.is_empty() || ts.len() > 4096 {
-            return Curve::Nurbs(Arc::new(fit));
+            return fit;
         }
         let mut both: Vec<(f64, f64)> = ts.iter().copied().zip(us.iter().copied()).collect();
         both.extend(ins);
@@ -1298,8 +1384,39 @@ pub(crate) fn iso_pcurve(
         ts = both.iter().map(|x| x.0).collect();
         us = both.iter().map(|x| x.1).collect();
     }
-    let pts: Vec<P3> = us.iter().map(|&u| P3::new(u, v, 0.0)).collect();
-    Curve::Nurbs(Arc::new(NurbsCurve::interpolate(&pts, &ts, 3, None, None)))
+    fit_of(&ts, &us)
+}
+
+/// u′(t) at [`iso_pcurve_span`]'s ends, from c′(t) = n0′(u)·u′(t) with `n0`'s derivatives
+/// taken inside the span (its own part of `n0`, cut at the span's ends): None where `c`'s may
+/// not be (a B-spline piece can turn a corner where the span ends), or `n0` stops there.
+fn iso_end_rates(
+    n0: &NurbsCurve,
+    c: &Curve,
+    t0: f64,
+    t1: f64,
+    ua: f64,
+    ub: f64,
+) -> Option<(f64, f64)> {
+    if matches!(c, Curve::Nurbs(_)) {
+        return None;
+    }
+    let (lo, hi) = (ua.min(ub), ua.max(ub));
+    let (a, b) = n0.range();
+    let eps = tol::REL_FINE * (1.0 + a.abs().max(b.abs()));
+    let mut sub = std::borrow::Cow::Borrowed(n0);
+    if lo > a + eps {
+        sub = std::borrow::Cow::Owned(sub.split(lo).ok()?.1);
+    }
+    if hi < b - eps {
+        sub = std::borrow::Cow::Owned(sub.split(hi).ok()?.0);
+    }
+    let rate = |t: f64, u: f64| {
+        let nd = sub.ders(u, 1)[1];
+        let n2 = nd.norm_squared();
+        (n2 > tol::TINY && n2.is_finite()).then(|| c.tangent(t).dot(&nd) / n2)
+    };
+    Some((rate(t0, ua)?, rate(t1, ub)?))
 }
 
 /// Sweeps the profile along a run of tangent-continuous segments; the profile's plane where it

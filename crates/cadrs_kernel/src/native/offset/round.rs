@@ -8,7 +8,7 @@
 //! less each kept face swept in, a tube round each concave edge and a ball at each concave
 //! vertex. Outward, the grown body less the body, cut back to the removed faces' planes.
 
-use crate::native::blend::{Tracked, ball_body};
+use crate::native::blend::{Tracked, ball_body, ball_frame};
 use crate::native::boolean::boolean_bodies;
 use crate::native::curve::Curve;
 use crate::native::kernel::NativeKernel;
@@ -970,7 +970,25 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
         // inside its wall, and the cavity eats it. The cavity flush with the openings doesn't,
         // and lies wholly in the body: the moved one may take out no more than it does.
         let moved = !((concave || crossing) && !spec.sharp);
-        let flush_volume = if moved {
+        // (Only where some face reaches past a removed face's plane, by its box: else no wall
+        // rises beyond an opening for the cavity past it to cut into.)
+        let size_tol = tol::POINT.max(tol::REL * size);
+        let past_openings = remove.iter().any(|&f| {
+            let Surface::Plane { f: fr } = &b.faces[f].surf else {
+                return true;
+            };
+            let n = fr.x.cross(&fr.y).normalize() * if b.faces[f].sense { 1.0 } else { -1.0 };
+            (0..b.faces.len()).any(|g| {
+                let bb = b.face_bbox(g);
+                let far = P3::new(
+                    if n.x > 0.0 { bb.max.x } else { bb.min.x },
+                    if n.y > 0.0 { bb.max.y } else { bb.min.y },
+                    if n.z > 0.0 { bb.max.z } else { bb.min.z },
+                );
+                (far - fr.o).dot(&n) > size_tol
+            })
+        });
+        let flush_volume = if moved && past_openings {
             sharp(&flush)
                 .ok()
                 .map(|c| crate::native::mass::body_volume(&c))
@@ -1527,8 +1545,9 @@ enum Support {
     Plane(P3, V3),
     /// Inside (true) or outside the cylinder about the axis (o, z) of radius r.
     Cylinder(P3, V3, f64, bool),
-    /// Inside (true) or outside the sphere about c of radius r.
-    Sphere(P3, f64, bool),
+    /// Inside (true) or outside the sphere of radius r about the frame's origin (the frame the
+    /// face's own: a ball made for it keeps its poles and seam).
+    Sphere(Frame, f64, bool),
     /// Inside (true) or outside the cone about the axis (o, z): of radius `r` at o, its radius
     /// growing by `tan` a unit of height along z, `cos` the cosine of its half-angle (a moved
     /// cone's radius at a height differs by the distance over that).
@@ -1552,8 +1571,8 @@ impl Support {
                 let rho = (w - z * w.dot(z)).norm();
                 if *inside { rho - r } else { r - rho }
             }
-            Support::Sphere(c, r, inside) => {
-                let rho = (p - c).norm();
+            Support::Sphere(f, r, inside) => {
+                let rho = (p - f.o).norm();
                 if *inside { rho - r } else { r - rho }
             }
             // (Past the apex the cone's radius is less than nothing: no point there is inside
@@ -1621,7 +1640,7 @@ fn cavity_of_supports(b: &Body, remove: &[usize], t: f64) -> Option<Result<Optio
                 let radial = (q - fr.o) - z * (q - fr.o).dot(&z);
                 Support::Cylinder(fr.o, z, *r, radial.dot(&n) > 0.0)
             }
-            Surface::Sphere { f: fr, r } => Support::Sphere(fr.o, *r, (q - fr.o).dot(&n) > 0.0),
+            Surface::Sphere { f: fr, r } => Support::Sphere(*fr, *r, (q - fr.o).dot(&n) > 0.0),
             Surface::Cone { f: fr, r, a } if a.tan().abs() > tol::ANGULAR && a.cos() > 0.0 => {
                 let z = fr.z.normalize();
                 let radial = (q - fr.o) - z * (q - fr.o).dot(&z);
@@ -1742,13 +1761,17 @@ fn cavity_of_supports(b: &Body, remove: &[usize], t: f64) -> Option<Result<Optio
                     (big(o, z, r - t)?, BoolOp::Intersect)
                 }
                 Support::Cylinder(o, z, r, false) => (big(o, z, r + t)?, BoolOp::Subtract),
-                Support::Sphere(c, r, true) => {
+                // (About the face's own axis: a circle square to it, where an opening's plane
+                // meets the ball, is then one of its parallels, with an exact p-curve.)
+                Support::Sphere(f, r, true) => {
                     if r - t <= close {
                         return Ok(None);
                     }
-                    (ball_body(c, r - t)?, BoolOp::Intersect)
+                    (ball_frame(f.o, r - t, f.z, f.x)?, BoolOp::Intersect)
                 }
-                Support::Sphere(c, r, false) => (ball_body(c, r + t)?, BoolOp::Subtract),
+                Support::Sphere(f, r, false) => {
+                    (ball_frame(f.o, r + t, f.z, f.x)?, BoolOp::Subtract)
+                }
             });
         }
         keep.sort_by_key(|(_, op)| *op == BoolOp::Subtract);
