@@ -1052,8 +1052,21 @@ impl Body {
                         );
                     }
                 }
-                // Ray parity settles the orientation where it can; else the exact volume.
-                if parity_orientation_with(&sub, sp) == Some(true) {
+                // Ray parity settles the orientation where it can; else the exact volume. (The
+                // volume first where a face is a B-spline of few spans, an extrusion or a surface
+                // of revolution: rays meet those by a search costing more than integrating the
+                // volume's sign, which a many-spanned B-spline's costs more still.)
+                let spans = |k: &[f64]| k.windows(2).filter(|w| w[1] > w[0]).count();
+                let swept = sub.faces.iter().any(|f| {
+                    matches!(
+                        f.surf,
+                        Surface::Extrusion { .. } | Surface::Revolution { .. } | Surface::Nurbs(_)
+                    )
+                }) && sub.faces.iter().all(|f| match &f.surf {
+                    Surface::Nurbs(n) => spans(&n.ku) * spans(&n.kv) <= 64,
+                    _ => true,
+                });
+                if !swept && parity_orientation_with(&sub, sp) == Some(true) {
                     continue;
                 }
                 let v = super::mass::volume_for_sign(&sub);
