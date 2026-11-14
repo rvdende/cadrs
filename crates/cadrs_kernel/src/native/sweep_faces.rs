@@ -213,25 +213,35 @@ pub(crate) fn face_points(b: &Body, fi: usize, _size: f64) -> Vec<(P3, V3)> {
             })
         })
         .collect();
+    let near_piece = |qx: f64, qy: f64, [ax, ay, bx, by]: [f64; 4]| {
+        if qx < ax.min(bx) - NEAR
+            || qx > ax.max(bx) + NEAR
+            || qy < ay.min(by) - NEAR
+            || qy > ay.max(by) + NEAR
+        {
+            return false;
+        }
+        let (dx, dy) = (bx - ax, by - ay);
+        let l2 = dx * dx + dy * dy;
+        let t = if l2 > 0.0 {
+            (((qx - ax) * dx + (qy - ay) * dy) / l2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (ax + dx * t - qx).hypot(ay + dy * t - qy) < NEAR
+    };
+    // (A long outline's pieces in a coarse grid over the box, each in every cell its grown box
+    // touches: a piece near a point has the point in its grown box, so in the point's cell.)
+    let cells = PieceGrid::new(&pieces, [u0 / su, v0 / sv], NEAR);
     let near_outline = |q: P2| {
         let (qx, qy) = (q.x / su, q.y / sv);
-        pieces.iter().any(|&[ax, ay, bx, by]| {
-            if qx < ax.min(bx) - NEAR
-                || qx > ax.max(bx) + NEAR
-                || qy < ay.min(by) - NEAR
-                || qy > ay.max(by) + NEAR
-            {
-                return false;
-            }
-            let (dx, dy) = (bx - ax, by - ay);
-            let l2 = dx * dx + dy * dy;
-            let t = if l2 > 0.0 {
-                (((qx - ax) * dx + (qy - ay) * dy) / l2).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            (ax + dx * t - qx).hypot(ay + dy * t - qy) < NEAR
-        })
+        match &cells {
+            Some(g) => g
+                .cell(qx, qy)
+                .iter()
+                .any(|&k| near_piece(qx, qy, pieces[k as usize])),
+            None => pieces.iter().any(|&pc| near_piece(qx, qy, pc)),
+        }
     };
     // (The outline's polygons boxed, and long ones in rows: a point is weighed against the
     // sides near it only.)
@@ -274,6 +284,71 @@ pub(crate) fn face_points(b: &Body, fi: usize, _size: f64) -> Vec<(P3, V3)> {
                 .then(|| (p, n.normalize() * sign))
         })
         .collect()
+}
+
+/// An outline's pieces (in the box's measure, the box a unit square from `base`) by the cells
+/// of a coarse grid over the box, for [`face_points`]' nearness test.
+struct PieceGrid {
+    base: [f64; 2],
+    /// Where each cell's pieces start in `items` (row-major, one past the end last).
+    start: Vec<u32>,
+    items: Vec<u32>,
+}
+
+impl PieceGrid {
+    /// Cells a side.
+    const N: usize = 24;
+
+    /// None for an outline short enough to weigh whole.
+    fn new(pieces: &[[f64; 4]], base: [f64; 2], near: f64) -> Option<Self> {
+        if pieces.len() < 64 {
+            return None;
+        }
+        let n = Self::N;
+        let at = |x: f64, b: f64| (((x - b) * n as f64).floor().max(0.0) as usize).min(n - 1);
+        let span = |&[ax, ay, bx, by]: &[f64; 4]| {
+            (
+                at(ax.min(bx) - near, base[0])..=at(ax.max(bx) + near, base[0]),
+                at(ay.min(by) - near, base[1])..=at(ay.max(by) + near, base[1]),
+            )
+        };
+        let mut count = vec![0u32; n * n + 1];
+        for p in pieces {
+            let (iu, iv) = span(p);
+            for i in iu {
+                for j in iv.clone() {
+                    count[i * n + j + 1] += 1;
+                }
+            }
+        }
+        for c in 1..count.len() {
+            count[c] += count[c - 1];
+        }
+        let mut fill = count.clone();
+        let mut items = vec![0u32; count[n * n] as usize];
+        for (k, p) in pieces.iter().enumerate() {
+            let (iu, iv) = span(p);
+            for i in iu {
+                for j in iv.clone() {
+                    items[fill[i * n + j] as usize] = k as u32;
+                    fill[i * n + j] += 1;
+                }
+            }
+        }
+        Some(Self {
+            base,
+            start: count,
+            items,
+        })
+    }
+
+    /// The pieces that may lie near the point (in the box's measure).
+    fn cell(&self, x: f64, y: f64) -> &[u32] {
+        let n = Self::N;
+        let at = |x: f64, b: f64| (((x - b) * n as f64).floor().max(0.0) as usize).min(n - 1);
+        let c = at(x, self.base[0]) * n + at(y, self.base[1]);
+        &self.items[self.start[c] as usize..self.start[c + 1] as usize]
+    }
 }
 
 fn stand(points: &[(P3, V3)], mv: &Move) -> Stand {
