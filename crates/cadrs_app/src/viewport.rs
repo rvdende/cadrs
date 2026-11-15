@@ -194,7 +194,7 @@ pub struct GridVisible(pub bool);
 
 impl Default for GridVisible {
     fn default() -> Self {
-        Self(true)
+        Self(false)
     }
 }
 
