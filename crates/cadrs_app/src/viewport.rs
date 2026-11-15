@@ -63,6 +63,7 @@ impl Plugin for ViewportPlugin {
                 alias_backdrop.after(bevy::picking::PickingSystems::Hover),
             )
             .init_resource::<GridVisible>()
+            .init_resource::<OriginVisible>()
             .init_resource::<PlanesVisible>()
             .init_resource::<ViewportView>()
             .init_resource::<ArrowHold>()
@@ -117,6 +118,7 @@ impl Plugin for ViewportPlugin {
                 Update,
                 (
                     sync_scene_visibility,
+                    sync_origin,
                     style_planes,
                     draw_plane_edges,
                     sync_grid,
@@ -185,6 +187,16 @@ impl PlanesVisible {
     pub fn toggle_all(&mut self) {
         let show = !self.any();
         self.0 = [show; 3];
+    }
+}
+
+/// Whether the model origin bullseye is shown. This is a view setting, like the default planes.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OriginVisible(pub bool);
+
+impl Default for OriginVisible {
+    fn default() -> Self {
+        Self(true)
     }
 }
 
@@ -2857,12 +2869,29 @@ fn sync_grid(grid: Res<GridVisible>, mut q: Query<&mut Visibility, With<GroundGr
     }
 }
 
+fn sync_origin(
+    origin: Res<OriginVisible>,
+    mut q: Query<(&mut Visibility, Option<&OriginMarker>, Option<&OriginDot>), Or<(With<OriginMarker>, With<OriginDot>)>>,
+) {
+    let vis = if origin.0 {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+    for (mut v, marker, dot) in &mut q {
+        if marker.is_some() || dot.is_some() {
+            v.set_if_neq(vis);
+        }
+    }
+}
+
 /// Feature-list rows show the selection.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn sync_plane_rows(
     selection: Res<Selection>,
     kind: Res<ActiveKind>,
     planes: Res<PlanesVisible>,
+    origin: Res<OriginVisible>,
     theme: Res<Theme>,
     mut q: Query<(
         Entity,
@@ -2890,8 +2919,11 @@ fn sync_plane_rows(
         } else if !want && has {
             commands.entity(e).try_remove::<Selected>();
         }
-        let Pick::Plane(k) = row.0 else { continue };
-        let shown = planes.shows(k);
+        let shown = match row.0 {
+            Pick::Plane(k) => planes.shows(k),
+            Pick::Origin => origin.0,
+            _ => continue,
+        };
         for mut t in &mut q_toggle {
             if t.row == e && t.on != shown {
                 t.on = shown;

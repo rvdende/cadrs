@@ -99,6 +99,7 @@ impl Plugin for DocumentPlugin {
             .add_observer(on_feature_context_menu)
             .add_observer(on_error_icon_click)
             .add_observer(on_feature_menu_action)
+            .add_observer(on_origin_eye)
             .add_observer(on_plane_eye)
             .add_observer(on_sketch_eye)
             .add_observer(restore_name_button::<InlineEditCommit>)
@@ -2398,6 +2399,13 @@ fn feature_list(p: &mut ChildSpawnerCommands, t: &Theme, element: ElementId, hei
                                             .icon("origin", 12.0)
                                             .icon_color(Color::srgb_u8(0x44, 0x44, 0x44))
                                             .left(22.0)
+                                            // Show/hide the model origin marker in the viewport.
+                                            .toggle(
+                                                "feature-origin-visibility",
+                                                "visible",
+                                                "hidden",
+                                                true,
+                                            )
                                             .build(t),
                                         PickRow(Pick::Origin),
                                     ));
@@ -5384,6 +5392,17 @@ fn on_sketch_eye(ev: On<cadrs_ui::TreeRowToggled>, q: Query<&FeatureRow>, mut co
             visible: Some(!shown),
         });
     });
+}
+
+/// The eye on the origin row shows or hides that viewport marker.
+fn on_origin_eye(
+    ev: On<cadrs_ui::TreeRowToggled>,
+    q: Query<&PickRow>,
+    mut origin: ResMut<crate::viewport::OriginVisible>,
+) {
+    if let Ok(PickRow(Pick::Origin)) = q.get(ev.entity) {
+        origin.0 = !origin.0;
+    }
 }
 
 /// The eye on a plane's row shows or hides that plane (S1.4).
