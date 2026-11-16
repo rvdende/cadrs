@@ -808,12 +808,126 @@ fn point_in_face(f: &WFace, p: &P3, tol: f64) -> InFace {
 
 /// A point inside a face's domain (uv) given its loops as arcs.
 fn interior_point(loops: &[Vec<Arc>]) -> Option<P2> {
-    interior_of_polys(&arc_polys(loops))
+    interior_points(loops).into_iter().next()
 }
 
+/// Points inside a face's domain given its loops as arcs, farthest from the boundary first.
+/// The scanlines cross the arcs themselves, not their polygons: a region thinner than a
+/// polygon's sagitta (a tube's end a thousandth wide) has its points inside it all the same.
 fn interior_points(loops: &[Vec<Arc>]) -> Vec<P2> {
-    interior_points_of_polys(&arc_polys(loops))
+    let polys = arc_polys(loops);
+    let Some(scan) = Scan::new(&polys) else {
+        return Vec::new();
+    };
+    let mut cands = Vec::new();
+    for frac in SCAN_FRACTIONS {
+        let y = scan.vb.0 + (scan.vb.1 - scan.vb.0) * frac;
+        let mut xs: Vec<f64> = Vec::new();
+        for l in loops {
+            let ends: Vec<P2> = l.iter().map(|a| a.uv_at(0.0)).collect();
+            for (k, a) in l.iter().enumerate() {
+                let n = arc_steps(a);
+                let mut p = ends[k];
+                for i in 0..n {
+                    let (s0, s1) = (i as f64 / n as f64, (i + 1) as f64 / n as f64);
+                    // (The polygon's corner after an arc's last piece is the next arc's start.)
+                    let q = if i + 1 == n {
+                        ends[(k + 1) % l.len()]
+                    } else {
+                        a.uv_at(s1)
+                    };
+                    if (p.y > y) != (q.y > y) {
+                        if n == 1 {
+                            xs.push(p.x + (y - p.y) / (q.y - p.y) * (q.x - p.x));
+                        } else {
+                            // The arc's own crossing between the piece's ends.
+                            xs.push(match arc_crossing(a, y, s0, s1) {
+                                Some(x) => x,
+                                None => p.x + (y - p.y) / (q.y - p.y) * (q.x - p.x),
+                            });
+                        }
+                    }
+                    p = q;
+                }
+            }
+        }
+        xs.sort_by(f64::total_cmp);
+        let mut k = 0;
+        while k + 1 < xs.len() {
+            let x = (xs[k] + xs[k + 1]) * 0.5;
+            // How far from the crossings either side, scaled as the clearances are: what
+            // orders the candidates of a region too thin for its polygons to measure.
+            let half = (xs[k + 1] - xs[k]) * 0.5 * scan.su;
+            cands.push((half, P2::new(x, y)));
+            k += 2;
+        }
+    }
+    let mut cands: Vec<(f64, P2)> = cands
+        .into_iter()
+        .map(|(half, q)| (scan.clearance(&q, f64::NEG_INFINITY).min(half * half), q))
+        .collect();
+    cands.sort_by(|a, b| b.0.total_cmp(&a.0));
+    cands.into_iter().map(|(_, p)| p).collect()
 }
+
+/// The u where arc `a` crosses the height v = `y` between its fractions `s0` and `s1` (its ends
+/// there on either side of `y`): a circle's in closed form (A cos t + B sin t = y − c), another
+/// curve's by bisection.
+fn arc_crossing(a: &Arc, y: f64, s0: f64, s1: f64) -> Option<f64> {
+    let t_of = |s: f64| {
+        let (b, e) = if a.fwd {
+            (a.t[0], a.t[1])
+        } else {
+            (a.t[1], a.t[0])
+        };
+        b + (e - b) * s
+    };
+    if let Curve::Circle { c, x, y: cy, r } = &a.pc {
+        let (ca, cb) = (x.y * r, cy.y * r);
+        let h = ca.hypot(cb);
+        let w = (y - c.y) / h;
+        if h > 0.0 && w.abs() <= 1.0 {
+            let (mid, half) = (cb.atan2(ca), w.acos());
+            let (t0, t1) = (t_of(s0), t_of(s1));
+            let (lo, hi) = (t0.min(t1), t0.max(t1));
+            for root in [mid + half, mid - half] {
+                // The root's turn nearest the piece.
+                let t = root + ((0.5 * (lo + hi) - root) / TAU).round() * TAU;
+                if t >= lo && t <= hi {
+                    return Some(a.pc.point(t).x);
+                }
+            }
+        }
+        return None;
+    }
+    let up = a.uv_at(s0).y <= y;
+    if (a.uv_at(s1).y <= y) == up {
+        return None;
+    }
+    let (mut lo, mut hi) = (s0, s1);
+    for _ in 0..52 {
+        let m = 0.5 * (lo + hi);
+        if (a.uv_at(m).y <= y) == up {
+            lo = m
+        } else {
+            hi = m
+        }
+    }
+    Some(a.uv_at(0.5 * (lo + hi)).x)
+}
+
+/// How many pieces [`arc_polys`] cuts an arc into: a straight p-curve one, another 64.
+fn arc_steps(a: &Arc) -> usize {
+    match a.pc {
+        Curve::Line { .. } => 1,
+        _ => 64,
+    }
+}
+
+/// The heights (fractions of the box) of the scanlines interior points are looked for on.
+const SCAN_FRACTIONS: [f64; 11] = [
+    0.5123, 0.3137, 0.6863, 0.1571, 0.8429, 0.0713, 0.9287, 0.4231, 0.5869, 0.2377, 0.7623,
+];
 
 /// A face's loops as polygons in (u, v): a straight p-curve by its start, another by 64 points.
 fn arc_polys(loops: &[Vec<Arc>]) -> Vec<Vec<P2>> {
@@ -821,10 +935,7 @@ fn arc_polys(loops: &[Vec<Arc>]) -> Vec<Vec<P2>> {
     for l in loops {
         let mut pts = Vec::new();
         for a in l {
-            let n = match a.pc {
-                Curve::Line { .. } => 1,
-                _ => 64,
-            };
+            let n = arc_steps(a);
             for i in 0..n {
                 pts.push(a.uv_at(i as f64 / n as f64));
             }
@@ -866,9 +977,7 @@ impl<'a> Scan<'a> {
     /// The candidates, scanline by scanline.
     fn candidates(&self) -> Vec<P2> {
         let mut out = Vec::new();
-        for frac in [
-            0.5123, 0.3137, 0.6863, 0.1571, 0.8429, 0.0713, 0.9287, 0.4231, 0.5869, 0.2377, 0.7623,
-        ] {
+        for frac in SCAN_FRACTIONS {
             let y = self.vb.0 + (self.vb.1 - self.vb.0) * frac;
             let mut xs: Vec<f64> = Vec::new();
             for p in self.polys {
@@ -989,8 +1098,34 @@ pub fn boolean_bodies_with(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) ->
     r
 }
 
+/// Bodies no larger than this (mm, the longer of their boxes' diagonals) are scaled up for a
+/// boolean, to [`WORKING_SIZE`] or up to twice it.
+const SMALL_MODEL: f64 = 0.25;
+/// The size (mm) small bodies are scaled to for a boolean.
+const WORKING_SIZE: f64 = 64.0;
+
 /// [`boolean_bodies_with`] (counted with `CADRS_PROFILE`).
 fn boolean_bodies_counted(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Result<BoolOut> {
+    // Small bodies are worked on larger: the merge tolerances are absolute ([`tol::POINT`] and
+    // the retries up to a hundred times it), so a part a few microns across would have its
+    // features taken for coincident. Scaled by a power of two, which changes no mantissa, the
+    // boolean runs at an ordinary size and its result is scaled back exactly.
+    let size = a.bbox().diagonal().max(b.bbox().diagonal());
+    if size > 0.0 && size < SMALL_MODEL {
+        let k = (WORKING_SIZE / size).log2().floor().exp2();
+        let grow = Affine {
+            m: nalgebra::Matrix3::identity() * k,
+            t: V3::zeros(),
+        };
+        let shrink = Affine {
+            m: nalgebra::Matrix3::identity() / k,
+            t: V3::zeros(),
+        };
+        let mut out =
+            boolean_bodies_counted(&a.transformed(&grow), &b.transformed(&grow), op, opts)?;
+        out.body = out.body.transformed(&shrink);
+        return Ok(out);
+    }
     if let Some(r) = apart_set_aside(a, b, op, opts) {
         return r;
     }

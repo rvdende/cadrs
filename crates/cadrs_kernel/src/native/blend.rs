@@ -2883,6 +2883,51 @@ pub fn chamfer(
             }
         }
     }
+    // A distance and an angle where the second face curves across the edge (a ball's rim, a
+    // cone's): the chamfer's line runs from the distance's point at the angle to where it meets
+    // that face's own surface, which the section's triangle on the tangent planes misses.
+    if let ChamferSpec::DistanceAngle { distance, angle } = spec
+        && std::env::var_os("CADRS_NO_LOCAL_FILLET").is_none()
+        && distance > 0.0
+        && angle > 0.0
+        && angle < PI
+    {
+        let offsets: Option<Vec<(usize, [f64; 2])>> = sharp
+            .iter()
+            .map(|&e| {
+                let ei = e.0 as usize;
+                if super::fillet::straight_across(&b, ei) {
+                    return None;
+                }
+                let first = usize::from(opts.flip != opts.flipped.contains(&e));
+                super::fillet::chamfer_offsets_angled(&b, ei, first, distance, angle)
+                    .map(|k| (ei, k))
+            })
+            .collect();
+        if let Some(offsets) = offsets {
+            let local =
+                super::fillet::chamfer_edges_offsets(&b, body, &offsets).and_then(|(out, src)| {
+                    match local_problem(&b, &out) {
+                        Some(e) => Err(KernelError::InvalidResult {
+                            op: "chamfer",
+                            why: format!("the local chamfer isn't valid: {e}"),
+                        }),
+                        None => Ok((out, src)),
+                    }
+                });
+            match local {
+                Ok((out, src)) => return Ok(Tracked { body: out, src }.into_result(k, body)),
+                Err(e) => {
+                    if std::env::var_os("CADRS_LOCAL_FILLET_ONLY").is_some() {
+                        return Err(e);
+                    }
+                    if std::env::var_os("CADRS_BLEND_DEBUG").is_some() {
+                        eprintln!("local angled chamfer: {e}; falling back");
+                    }
+                }
+            }
+        }
+    }
     // The other specs and measures: by local trimming too, each edge with its distances along
     // its two faces (tangent ones converted once the edge's rule is chosen, as below). Two
     // distances that differ only along edges whose faces run straight across them (flat ones,
