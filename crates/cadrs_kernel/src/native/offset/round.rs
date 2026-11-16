@@ -247,7 +247,18 @@ fn edge_tube(b: &Body, e: usize, r: f64) -> Result<Body> {
                 .ok_or(KernelError::Unsupported(
                     "a tube round an edge with no direction",
                 ))?;
-            let fr = Frame::from_z(p0, t);
+            // The seam (the circle's start) turned into the body, as the straight tube's: the
+            // part of the tube left outside the faces' slabs then never runs across it (a
+            // closed B-spline's parameters don't wrap, and a face can't lie over its seam).
+            let ef = b.edge_faces();
+            let inward = -ef[e]
+                .iter()
+                .map(|&f| outward_normal(b, f, &p0))
+                .fold(V3::zeros(), |a, n| a + n.normalize());
+            let fr = match (inward - t * inward.dot(&t)).try_normalize(tol::ANGULAR) {
+                Some(x) => Frame::from_xz(p0, x, t),
+                None => Frame::from_z(p0, t),
+            };
             let plane = Plane {
                 origin: p0,
                 x_dir: nalgebra::Unit::new_normalize(fr.x),
