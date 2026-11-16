@@ -378,6 +378,53 @@ fn stand(points: &[(P3, V3)], mv: &Move) -> Stand {
     }
 }
 
+/// How face `fi` stands to the motion: by points inside it ([`face_points`]) and, under a screw,
+/// by its edges too. The points inside are a grid's, and a part of the face narrower than the
+/// grid's step has none: where a drum's contact curve runs over its seam, the corner it cuts off
+/// beside the seam leads while the rest of its piece trails, and taken for trailing it went
+/// unswept (the same screw from another start, its contact clear of the seam, swept a solid
+/// 1.6e-4 larger). An edge's points say which way the face goes beside it, where they say so
+/// by more than [`EDGE_FOLD`]: an edge split along a fitted contact reads either way by the
+/// fit's error, far less.
+fn face_stand(b: &Body, fi: usize, size: f64, mv: &Move) -> Stand {
+    let points = face_points(b, fi, size);
+    let inside = stand(&points, mv);
+    if !matches!(mv, Move::Screw { .. }) || !matches!(inside, Stand::Leads | Stand::Trails) {
+        return inside;
+    }
+    let f = &b.faces[fi];
+    let sign = if f.sense { 1.0 } else { -1.0 };
+    let (mut lead, mut trail) = (false, false);
+    for c in f.loops.iter().flatten() {
+        let e = &b.edges[c.edge];
+        if e.degenerate {
+            continue;
+        }
+        for i in 1..=7 {
+            let t = e.t[0] + (e.t[1] - e.t[0]) * i as f64 / 8.0;
+            let q = c.pc.point(t);
+            let n = f.surf.normal(q.x, q.y) * sign;
+            let v = mv.velocity(&e.point(t));
+            let s = v.norm() * n.norm();
+            if s <= tol::TINY {
+                continue;
+            }
+            let cos = n.dot(&v) / s;
+            lead |= cos > EDGE_FOLD;
+            trail |= cos < -EDGE_FOLD;
+        }
+    }
+    match inside {
+        Stand::Leads if trail => Stand::Both,
+        Stand::Trails if lead => Stand::Both,
+        s => s,
+    }
+}
+
+/// The cosine past which a point of a face's edge counts as leading or trailing
+/// ([`face_stand`]).
+const EDGE_FOLD: f64 = 1e-3;
+
 /// The cosine past which a face counts as leading and trailing both.
 const FOLD: f64 = 1e-6;
 
@@ -1018,7 +1065,7 @@ fn prepared_rising(
                 )
         };
         let both: Vec<bool> = (0..body.faces.len())
-            .map(|fi| !exact(fi) && stand(&face_points(&body, fi, size), &mv) == Stand::Both)
+            .map(|fi| !exact(fi) && face_stand(&body, fi, size, &mv) == Stand::Both)
             .collect();
         if both.iter().filter(|b| **b).count() > 1 {
             let b = &body;
@@ -1045,7 +1092,7 @@ fn prepared_rising(
             let have = stands.len();
             let more: Vec<Stand> = (have..b.faces.len())
                 .into_par_iter()
-                .map(|fi| stand(&face_points(b, fi, size), &mv))
+                .map(|fi| face_stand(b, fi, size, &mv))
                 .collect();
             stands.extend(more);
         }
@@ -1197,7 +1244,7 @@ fn prepared_rising(
         if by_curve {
             // (The split face measured again, and the faces appended at the end.)
             if fi < stands.len() {
-                stands[fi] = stand(&face_points(&body, fi, size), &mv);
+                stands[fi] = face_stand(&body, fi, size, &mv);
             }
         } else {
             traced.clear();
@@ -1245,7 +1292,7 @@ fn prepared_rising(
         }
         // (The outline's smooth edges: between a face's leading and its trailing piece.)
         let all: Vec<Stand> = (0..body.faces.len())
-            .map(|fi| stand(&face_points(&body, fi, size), &mv))
+            .map(|fi| face_stand(&body, fi, size, &mv))
             .collect();
         let ef = body.edge_faces();
         for fi in 0..body.faces.len() {
@@ -1358,7 +1405,7 @@ fn prepared_rising(
     }
     let mut pieces: Vec<Body> = Vec::new();
     for fi in 0..body.faces.len() {
-        let st = stand(&face_points(&body, fi, size), &mv);
+        let st = face_stand(&body, fi, size, &mv);
         if debug {
             eprintln!(
                 "sweep by faces: face {fi} {:?} {st:?}",
