@@ -4734,7 +4734,7 @@ fn overlap_runs(a: &Curve, b: &Curve, mut hits: Vec<(f64, f64)>, tol: f64) -> Ve
 
 /// Drops the solids of `b` that enclose no volume (to 1e-9 of the body's box, cubed): a closed
 /// shell of faces of the two inputs that met face to face, both kept, is a sheet-thin sliver,
-/// not a solid, as are two faces closing on each other. Only solids of a few faces, or holding
+/// not a solid, as are two faces closing on each other. Only solids of two faces, or holding
 /// faces from both faces of a pair in `pairs` (input faces of the two bodies on one surface:
 /// (face of a, face of b)), are measured. Their faces go too (and
 /// their entries in `from`). Returns whether any went, and the volumes of the solids left
@@ -4747,8 +4747,10 @@ fn drop_empty_solids(
     let size = b.bbox().diagonal();
     let suspect = |si: usize| {
         let faces = b.solid_faces(si);
-        // (A few faces are cheap to measure: two faces closing on each other are a sliver too.)
-        if faces.len() <= 8 {
+        // (Two faces closing on each other are a sliver too. A solid of more faces encloses
+        // nothing only where faces of the two inputs lie on one surface, as below: its
+        // volume's integrals, a third of a simple boolean's time, are not taken to find out.)
+        if faces.len() <= 2 {
             return true;
         }
         let origins: Vec<(usize, usize)> = faces
