@@ -10616,10 +10616,7 @@ pub fn chamfer_offsets_angled(
             .try_normalize(tol::DEGENERATE)?;
         // Where the chamfer starts on the first face, and the face's direction and normal
         // there, in the section.
-        let h = distance * 1e-4;
-        let p1 = along_section(&b.faces[fa], &p, &along, &w, distance);
-        let back = along_section(&b.faces[fa], &p, &along, &w, distance - h);
-        let w1 = (p1 - back).try_normalize(tol::DEGENERATE)?;
+        let (p1, w1) = along_section_dir(&b.faces[fa], &p, &along, &w, distance);
         let n1 = geom::contact(&b.faces[fa], geom::foot(&b.faces[fa], &p1, None)).n;
         // Back towards the edge, turned by the angle towards the other face: into the
         // material at a convex edge, out of it at a concave one (the other face rises from
@@ -10702,6 +10699,51 @@ pub fn chamfer_edges_offsets(
 /// plane `dist` along `w`; on a cylinder whose axis runs along `t`, `p` turned dist/R about the
 /// axis towards `w`; else marched ([`super::blend::along_face`]).
 fn along_section(f: &Face, p: &P3, t: &V3, w: &V3, dist: f64) -> P3 {
+    along_section_dir(f, p, t, w, dist).0
+}
+
+/// [`along_section`], with the direction the section runs on in at the point reached. Closed
+/// forms where the section is a line (a plane; a cone or a cylinder crossed along its
+/// rulings) or a circle (a sphere's great circle; a cylinder crossed square to its axis); else
+/// marched, the direction from the surface's normal there.
+fn along_section_dir(f: &Face, p: &P3, t: &V3, w: &V3, dist: f64) -> (P3, V3) {
+    let straight = |ruling: V3| ruling.cross(w).norm() < tol::ANGULAR_POINT;
+    match &f.surf {
+        Surface::Plane { .. } => return (p + w * dist, *w),
+        Surface::Cylinder { f: fr, .. } if straight(fr.z.normalize()) => {
+            return (p + w * dist, *w);
+        }
+        Surface::Cone { f: fr, r, a } if a.sin().abs() > tol::ANGULAR_FINE => {
+            let apex = fr.o + fr.z * (-r / a.tan());
+            if let Some(ruling) = (p - apex).try_normalize(tol::DEGENERATE)
+                && straight(ruling)
+            {
+                return (p + w * dist, *w);
+            }
+        }
+        Surface::Sphere { f: fr, r } => {
+            // The great circle through p along w.
+            let out = (p - fr.o) / *r;
+            let phi = dist / r;
+            let (sn, cs) = phi.sin_cos();
+            return (fr.o + (out * cs + w * sn) * *r, w * cs - out * sn);
+        }
+        _ => {}
+    }
+    let q = along_section_point(f, p, t, w, dist);
+    // On along the section: square to the edge's direction and to the face's normal there.
+    let n = geom::contact(f, geom::foot(f, &q, None)).n;
+    let d = t.cross(&n);
+    let d = match d.try_normalize(tol::DEGENERATE) {
+        Some(d) if d.dot(w) < 0.0 => -d,
+        Some(d) => d,
+        None => *w,
+    };
+    (q, d)
+}
+
+/// [`along_section`] where the section has no line or great circle to follow.
+fn along_section_point(f: &Face, p: &P3, t: &V3, w: &V3, dist: f64) -> P3 {
     match &f.surf {
         Surface::Plane { .. } => p + w * dist,
         Surface::Cylinder { f: fr, r } if fr.z.cross(t).norm() < tol::ANGULAR => {
@@ -11186,9 +11228,14 @@ fn local_blend(
     });
     // Rails running off their faces mid-strip are cut by the faces beyond; where that fails,
     // the strips as they are (the rail may only graze an edge).
+    let prof = std::cell::RefCell::new(super::boolean::Prof::new());
     let build = |p: &Plan| {
+        prof.borrow_mut().mark("plan");
         let pre = prepare(b, p, fit_tol);
-        trim(b, input, p, &pre, size, fit_tol, vtol, true).or_else(|e| {
+        prof.borrow_mut().mark("strips");
+        let trimmed = trim(b, input, p, &pre, size, fit_tol, vtol, true);
+        prof.borrow_mut().mark("trim");
+        trimmed.or_else(|e| {
             if budget.spent() {
                 return Err(out_of_work());
             }
@@ -11228,6 +11275,7 @@ fn local_blend(
         build(&p).map_err(|_| e)
     });
     debug(|| format!("ball solves: {}", BALL_SOLVES - budget.left()));
+    prof.borrow().report("local blend");
     r
 }
 

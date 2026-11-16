@@ -2892,6 +2892,7 @@ pub fn chamfer(
         && angle > 0.0
         && angle < PI
     {
+        let mut prof = super::boolean::Prof::new();
         let offsets: Option<Vec<(usize, [f64; 2])>> = sharp
             .iter()
             .map(|&e| {
@@ -2904,19 +2905,25 @@ pub fn chamfer(
                     .map(|k| (ei, k))
             })
             .collect();
+        prof.mark("offsets");
         if let Some(offsets) = offsets {
-            let local =
-                super::fillet::chamfer_edges_offsets(&b, body, &offsets).and_then(|(out, src)| {
-                    match local_problem(&b, &out) {
-                        Some(e) => Err(KernelError::InvalidResult {
-                            op: "chamfer",
-                            why: format!("the local chamfer isn't valid: {e}"),
-                        }),
-                        None => Ok((out, src)),
-                    }
-                });
+            let made = super::fillet::chamfer_edges_offsets(&b, body, &offsets);
+            prof.mark("blend");
+            let local = made.and_then(|(out, src)| match local_problem(&b, &out) {
+                Some(e) => Err(KernelError::InvalidResult {
+                    op: "chamfer",
+                    why: format!("the local chamfer isn't valid: {e}"),
+                }),
+                None => Ok((out, src)),
+            });
+            prof.mark("check");
             match local {
-                Ok((out, src)) => return Ok(Tracked { body: out, src }.into_result(k, body)),
+                Ok((out, src)) => {
+                    let r = Tracked { body: out, src }.into_result(k, body);
+                    prof.mark("result");
+                    prof.report("angled chamfer");
+                    return Ok(r);
+                }
                 Err(e) => {
                     if std::env::var_os("CADRS_LOCAL_FILLET_ONLY").is_some() {
                         return Err(e);
