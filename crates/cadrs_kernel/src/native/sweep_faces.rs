@@ -1004,8 +1004,21 @@ fn prepared_rising(
     let mut traced: Vec<Option<Vec<Curve>>> = {
         use rayon::prelude::*;
         super::par::start();
+        // (Not a slide's contacts with a plane, a cylinder, a cone or a sphere: those are
+        // rulings and great circles, split along exactly below, and tracing them here was a
+        // third of a mill's slide.)
+        let exact = |fi: usize| {
+            matches!(mv, Move::Slide(_))
+                && matches!(
+                    body.faces[fi].surf,
+                    super::surface::Surface::Plane { .. }
+                        | super::surface::Surface::Cylinder { .. }
+                        | super::surface::Surface::Cone { .. }
+                        | super::surface::Surface::Sphere { .. }
+                )
+        };
         let both: Vec<bool> = (0..body.faces.len())
-            .map(|fi| stand(&face_points(&body, fi, size), &mv) == Stand::Both)
+            .map(|fi| !exact(fi) && stand(&face_points(&body, fi, size), &mv) == Stand::Both)
             .collect();
         if both.iter().filter(|b| **b).count() > 1 {
             let b = &body;
