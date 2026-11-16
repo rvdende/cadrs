@@ -179,6 +179,12 @@ pub struct Element {
         skip_serializing_if = "crate::configuration::Configuration::is_empty"
     )]
     pub configuration: crate::configuration::Configuration,
+    /// The configurations of Part Studios this element's references show (a drawing's views,
+    /// a Render Studio's model): each names its configured copy
+    /// ([`crate::configuration::InstanceConfiguration::copy_id`]), which
+    /// [`crate::configuration::refresh_copies`] keeps while a reference uses it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub configured_sources: Vec<crate::configuration::InstanceConfiguration>,
 }
 
 impl Element {
@@ -204,6 +210,7 @@ impl Element {
             named_views: Vec::new(),
             studio_variables: Vec::new(),
             configuration: Default::default(),
+            configured_sources: Vec::new(),
         }
     }
 
@@ -220,6 +227,7 @@ impl Element {
             named_views: Vec::new(),
             studio_variables: Vec::new(),
             configuration: Default::default(),
+            configured_sources: Vec::new(),
         }
     }
 
@@ -254,6 +262,7 @@ impl Element {
             named_views: Vec::new(),
             studio_variables: Vec::new(),
             configuration: Default::default(),
+            configured_sources: Vec::new(),
         }
     }
 
@@ -269,6 +278,7 @@ impl Element {
             named_views: Vec::new(),
             studio_variables: Vec::new(),
             configuration: Default::default(),
+            configured_sources: Vec::new(),
         }
     }
 
@@ -285,6 +295,7 @@ impl Element {
             named_views: Vec::new(),
             studio_variables: Vec::new(),
             configuration: Default::default(),
+            configured_sources: Vec::new(),
         }
     }
 

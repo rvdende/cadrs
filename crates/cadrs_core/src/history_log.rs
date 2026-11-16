@@ -173,6 +173,7 @@ fn shell_of(e: &Element) -> Element {
         named_views,
         studio_variables,
         configuration,
+        configured_sources,
     } = e;
     let kind = match kind {
         ElementKind::PartStudio {
@@ -209,6 +210,7 @@ fn shell_of(e: &Element) -> Element {
         named_views: named_views.clone(),
         studio_variables: studio_variables.clone(),
         configuration: configuration.clone(),
+        configured_sources: configured_sources.clone(),
     }
 }
 

@@ -619,3 +619,243 @@ fn the_bom_lists_each_configuration_with_its_own_properties() {
             .any(|r| r.cells.get(pn).is_some_and(|c| c == "PL-20"))
     );
 }
+
+impl Doc {
+    /// The configuration "Size = `row`" of the plate.
+    fn sized_as(&self, row: &str) -> InstanceConfiguration {
+        let mut values = ConfigValues::default();
+        values.set(self.input("Size").id, self.row("Size", row));
+        InstanceConfiguration {
+            studio: self.el,
+            values: self.cfg().complete(&values),
+        }
+    }
+}
+
+#[test]
+fn a_drawing_view_shows_its_own_configuration() {
+    use cadrs_core::commands::{EditDrawing, InsertElement};
+    use cadrs_core::configuration::WithConfiguration;
+    use cadrs_core::drawing_source::{StudioState, live_source};
+    use cadrs_drawing::{Drawing, DrawingOp, NamedView, ObjectRef, Scale, View, template};
+
+    let mut d = Doc::sized();
+    let t = template::builtin("ANSI_A_INCH.dwt").unwrap();
+    let el = Element::drawing("Drawing 1", Drawing::from_template(&t, None));
+    let drawing = el.id;
+    d.run(&InsertElement {
+        element: el,
+        after: Some(d.el),
+        label: "Create Drawing".into(),
+    });
+    let thick = d.sized_as("Thick");
+    let copy = thick.copy_id();
+    // The view references the studio's copy in Thick; the drawing records its state.
+    let view = View::base(
+        ObjectRef {
+            element: copy.0,
+            part: Some((PLATE_PART.feature.0, PLATE_PART.index)),
+        },
+        NamedView::Front,
+        Scale::new(1, 1),
+        [100.0, 100.0],
+    );
+    let src = live_source(
+        &cadrs_core::configuration::with_copy(&d.d, &thick).unwrap(),
+        copy,
+    )
+    .unwrap();
+    let sheet = match &d.d.element(drawing).unwrap().kind {
+        cadrs_core::ElementKind::Drawing(x) => x.sheets[0].id,
+        _ => unreachable!(),
+    };
+    d.run(&WithConfiguration {
+        element: drawing,
+        configuration: thick.clone(),
+        command: EditDrawing {
+            element: drawing,
+            op: DrawingOp::Batch {
+                ops: vec![
+                    DrawingOp::SetSource(src),
+                    DrawingOp::InsertView {
+                        sheet,
+                        view: view.clone(),
+                    },
+                ],
+                label: "Insert Front view".into(),
+            },
+        },
+    });
+    let drawing_of = |d: &Doc| match &d.d.element(drawing).unwrap().kind {
+        cadrs_core::ElementKind::Drawing(x) => (**x).clone(),
+        _ => unreachable!(),
+    };
+    assert_eq!(
+        d.d.element(drawing).unwrap().configured_sources,
+        vec![thick.clone()]
+    );
+    rel(
+        Doc::volume_of(d.d.element(copy).unwrap()),
+        AREA * 20.0 - HOLE_VOLUME,
+    );
+    let depth = |snapshot: &str| {
+        StudioState::parse(snapshot)
+            .unwrap()
+            .features
+            .iter()
+            .find(|f| f.id == PLATE)
+            .unwrap()
+            .extrude()
+            .unwrap()
+            .depth
+    };
+    rel(
+        depth(&drawing_of(&d).source(copy.0).unwrap().snapshot),
+        20.0,
+    );
+    // The studio itself still shows Thin, and isn't changed by the drawing.
+    rel(d.volume(), AREA * 10.0 - HOLE_VOLUME);
+
+    // The copy follows the studio: editing Thick's depth makes the view out of date.
+    let size = d.input("Size").id;
+    d.edit(|c| c.input_mut(size).unwrap().params[0].values[1] = CellValue::Expr("25 mm".into()));
+    rel(
+        Doc::volume_of(d.d.element(copy).unwrap()),
+        AREA * 25.0 - HOLE_VOLUME,
+    );
+    let stale = cadrs_core::drawing_source::out_of_date(&d.d, &drawing_of(&d));
+    assert_eq!(stale, vec![view.id]);
+
+    // Undo and redo find the copy again; deleting the view lets it go.
+    d.h.undo(&mut d.d).unwrap();
+    d.h.undo(&mut d.d).unwrap();
+    assert!(d.d.configured.is_empty());
+    d.h.redo(&mut d.d).unwrap();
+    assert_eq!(d.d.configured.len(), 1);
+    d.run(&EditDrawing {
+        element: drawing,
+        op: DrawingOp::DeleteViews { ids: vec![view.id] },
+    });
+    // (The sheet's title block still reads the part in Thick.)
+    let s = drawing_of(&d).sheets[0].clone();
+    assert_eq!(s.reference.map(|r| r.element), Some(copy.0));
+    assert_eq!(d.d.configured.len(), 1);
+    let mut props = s.props();
+    props.reference = None;
+    d.run(&EditDrawing {
+        element: drawing,
+        op: DrawingOp::SetSheetProps { id: s.id, props },
+    });
+    assert!(d.d.element(drawing).unwrap().configured_sources.is_empty());
+    assert!(d.d.configured.is_empty());
+}
+
+#[test]
+fn a_render_studio_renders_its_own_configuration() {
+    use cadrs_core::configuration::WithConfiguration;
+    use cadrs_core::render::{SetRenderStudio, source_parts};
+
+    let mut d = Doc::sized();
+    let render = ElementId::new();
+    d.run(&AddElement {
+        id: render,
+        kind: NewElementKind::RenderStudio(Some(d.el)),
+        name: None,
+        after: None,
+    });
+    let studio_of = |d: &Doc| cadrs_core::render::studio(&d.d, render).unwrap().clone();
+    let thick = d.sized_as("Thick");
+    let mut r = studio_of(&d);
+    r.source = Some(thick.copy_id());
+    d.run(&WithConfiguration {
+        element: render,
+        configuration: thick.clone(),
+        command: SetRenderStudio {
+            element: render,
+            studio: r,
+            label: "Render in Thick".into(),
+        },
+    });
+    let volume = |d: &Doc| {
+        let source = studio_of(d).source.unwrap();
+        let (parts, _, _) = source_parts(&d.d, source, |e| {
+            Some(rebuild::build(&d.d.element(e)?.active_features()))
+        })
+        .unwrap();
+        parts
+            .iter()
+            .find(|p| p.id == PLATE_PART)
+            .unwrap()
+            .mass
+            .unwrap()
+            .volume
+    };
+    rel(volume(&d), AREA * 20.0 - HOLE_VOLUME);
+    // Back to the studio itself: the copy goes.
+    let mut r = studio_of(&d);
+    r.source = Some(d.el);
+    d.run(&SetRenderStudio {
+        element: render,
+        studio: r,
+        label: "Render Part Studio 1".into(),
+    });
+    rel(volume(&d), AREA * 10.0 - HOLE_VOLUME);
+    assert!(d.d.element(render).unwrap().configured_sources.is_empty());
+    assert!(d.d.configured.is_empty());
+}
+
+#[test]
+fn a_derived_feature_derives_its_own_configuration() {
+    use cadrs_core::derived::{AddDerived, DerivedFeature};
+    use cadrs_core::document::FeatureKind;
+
+    let mut d = Doc::sized();
+    let host = ElementId::new();
+    d.run(&AddElement {
+        id: host,
+        kind: NewElementKind::PartStudio,
+        name: None,
+        after: None,
+    });
+    let thick = d.sized_as("Thick");
+    let mut derived = DerivedFeature::new(None, d.el);
+    derived.configuration = Some(thick.values.clone());
+    let feature = cadrs_core::FeatureId::new();
+    d.run(&AddDerived {
+        element: host,
+        feature,
+        derived,
+        links: Vec::new(),
+    });
+    let volume = |d: &Doc| -> f64 {
+        let b = rebuild::build(&d.d.element(host).unwrap().active_features());
+        assert!(b.errors.is_empty(), "{:?}", b.errors);
+        b.parts
+            .iter()
+            .filter_map(|p| p.mass)
+            .map(|m| m.volume)
+            .sum()
+    };
+    rel(volume(&d), AREA * 20.0 - HOLE_VOLUME);
+    // It follows the studio's table, not the configuration the studio shows.
+    let size = d.input("Size").id;
+    d.edit(|c| c.input_mut(size).unwrap().params[0].values[1] = CellValue::Expr("30 mm".into()));
+    rel(volume(&d), AREA * 30.0 - HOLE_VOLUME);
+    d.pick("Size", d.row("Size", "Thick"));
+    d.pick("Size", d.row("Size", "Thin"));
+    rel(volume(&d), AREA * 30.0 - HOLE_VOLUME);
+    // Without one: the configuration the studio shows.
+    let mut f = match &d.d.element(host).unwrap().feature(feature).unwrap().kind {
+        FeatureKind::Derived(x) => (**x).clone(),
+        _ => unreachable!(),
+    };
+    f.configuration = None;
+    d.run(&cadrs_core::derived::SetDerived {
+        element: host,
+        feature,
+        derived: f,
+        links: Vec::new(),
+        label: "Derive".into(),
+    });
+    rel(volume(&d), AREA * 10.0 - HOLE_VOLUME);
+}

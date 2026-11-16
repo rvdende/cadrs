@@ -24,6 +24,11 @@
 //!   copies are regenerated when their studio changes and dropped when nothing uses them
 //!   ([`refresh_copies`], after every command, undo and redo). The features keep their ids,
 //!   so the parts, faces and edges do too, and mates survive a change of configuration.
+//! - **Other references** pick one the same way: a drawing's views and a Render Studio's model
+//!   name a configured copy, and the element keeps its configuration
+//!   ([`Element::configured_sources`], added with [`WithConfiguration`] in the step that first
+//!   names the copy); [`refresh_copies`] keeps those copies too, while a reference names them
+//!   ([`references`]).
 
 use cadrs_sketch::units::{Quantity, Units, VarValue};
 
@@ -1040,8 +1045,9 @@ pub fn describe_element(doc: &Document, element: ElementId) -> String {
 pub fn refresh_copies(doc: &mut Document) {
     if doc.configured.is_empty()
         && !doc.elements.iter().any(|e| {
-            e.assembly_model()
-                .is_some_and(|a| a.instances.iter().any(|i| i.configuration.is_some()))
+            !e.configured_sources.is_empty()
+                || e.assembly_model()
+                    .is_some_and(|a| a.instances.iter().any(|i| i.configuration.is_some()))
         })
     {
         return;
@@ -1049,6 +1055,17 @@ pub fn refresh_copies(doc: &mut Document) {
     let units = doc.units;
     let mut wanted: Vec<(ElementId, ConfigValues)> = Vec::new();
     for el in &mut doc.elements {
+        // A drawing's or a Render Studio's configured references (the ones still named).
+        if !el.configured_sources.is_empty() {
+            let named = references(el);
+            el.configured_sources
+                .retain(|c| named.contains(&c.copy_id()));
+            for c in &el.configured_sources {
+                if !wanted.iter().any(|(s, v)| *s == c.studio && *v == c.values) {
+                    wanted.push((c.studio, c.values.clone()));
+                }
+            }
+        }
         let Some(a) = el.assembly_model_mut() else {
             continue;
         };
@@ -1100,6 +1117,127 @@ pub fn refresh_copies(doc: &mut Document) {
         }
     }
     doc.configured = copies;
+}
+
+/// The elements `el` references that can be configured copies: a drawing's views and sheets,
+/// a Render Studio's model.
+pub fn references(el: &Element) -> Vec<ElementId> {
+    match &el.kind {
+        ElementKind::Drawing(d) => {
+            let mut out: Vec<ElementId> = Vec::new();
+            let mut add = |id: uuid::Uuid| {
+                if !out.contains(&ElementId(id)) {
+                    out.push(ElementId(id));
+                }
+            };
+            for s in &d.sheets {
+                if let Some(r) = &s.reference {
+                    add(r.element);
+                }
+                for v in &s.views {
+                    add(v.reference.element);
+                }
+            }
+            // (Not its recorded sources: a source no view shows any more is never read.)
+            out
+        }
+        ElementKind::Render(r) => r.source.into_iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The configuration `element` names when it is a configured copy (of an assembly instance, a
+/// drawing view, a Render Studio's model): its studio and values.
+pub fn configuration_of(doc: &Document, element: ElementId) -> Option<InstanceConfiguration> {
+    copy_of(doc, element).map(|(studio, values)| InstanceConfiguration { studio, values })
+}
+
+/// The configuration a reference to `studio` takes: `values` completed, when the studio is a
+/// configured Part Studio tab (`None` otherwise, or when `studio` is itself a copy).
+pub fn for_studio(
+    doc: &Document,
+    studio: ElementId,
+    values: &ConfigValues,
+) -> Option<InstanceConfiguration> {
+    let el = doc.elements.iter().find(|e| e.id == studio)?;
+    if el.configuration.is_empty() || !matches!(el.kind, ElementKind::PartStudio { .. }) {
+        return None;
+    }
+    Some(InstanceConfiguration {
+        studio,
+        values: el.configuration.complete(values),
+    })
+}
+
+/// Makes `c`'s configured copy now (if missing), so a command can look at it before
+/// [`refresh_copies`] runs.
+fn ensure_copy(doc: &mut Document, c: &InstanceConfiguration) -> Result<(), CommandError> {
+    let id = c.copy_id();
+    if doc.configured.iter().any(|x| x.element.id == id) {
+        return Ok(());
+    }
+    let source = doc
+        .elements
+        .iter()
+        .find(|e| e.id == c.studio && matches!(e.kind, ElementKind::PartStudio { .. }))
+        .ok_or_else(|| CommandError::Invalid("no such Part Studio".into()))?;
+    if source.configuration.is_empty() {
+        return Err(CommandError::Invalid(format!(
+            "{} has no configuration",
+            source.name
+        )));
+    }
+    let units = doc.units;
+    let text = ron::to_string(source).unwrap_or_default();
+    let element = generate(source, &c.values, id, &units);
+    doc.configured.push(ConfiguredStudio {
+        studio: c.studio,
+        values: c.values.clone(),
+        element,
+        stamp: stamp(&text, &c.values, &units),
+    });
+    Ok(())
+}
+
+/// `doc` with `c`'s configured copy, for a preview of a reference not made yet (a drawing
+/// view's ghost); `None` when `doc` has it already.
+pub fn with_copy(doc: &Document, c: &InstanceConfiguration) -> Option<Document> {
+    if doc.element(c.copy_id()).is_some() {
+        return None;
+    }
+    let mut d = doc.clone();
+    ensure_copy(&mut d, c).ok()?;
+    Some(d)
+}
+
+/// Another command whose references name `configuration`'s copy (a drawing view placed in a
+/// configuration, a Render Studio's model): `element` keeps the configuration
+/// ([`Element::configured_sources`]) and the copy is made before the command runs, in one undo
+/// step. The command's scope must be `element`'s.
+#[derive(Debug, Clone)]
+pub struct WithConfiguration<C: Command> {
+    pub element: ElementId,
+    pub configuration: InstanceConfiguration,
+    pub command: C,
+}
+
+impl<C: Command> Command for WithConfiguration<C> {
+    fn label(&self) -> String {
+        self.command.label()
+    }
+    fn scope(&self) -> Scope {
+        self.command.scope()
+    }
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        ensure_copy(doc, &self.configuration)?;
+        let el = doc
+            .element_mut(self.element)
+            .ok_or(CommandError::ElementNotFound(self.element))?;
+        if !el.configured_sources.contains(&self.configuration) {
+            el.configured_sources.push(self.configuration.clone());
+        }
+        self.command.apply(doc)
+    }
 }
 
 fn set_source_element(source: &mut crate::assembly::InstanceSource, id: ElementId) {

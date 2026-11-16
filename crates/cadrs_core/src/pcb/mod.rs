@@ -489,6 +489,7 @@ impl Element {
             named_views: Vec::new(),
             studio_variables: Vec::new(),
             configuration: Default::default(),
+            configured_sources: Vec::new(),
         }
     }
 
