@@ -1093,33 +1093,76 @@ pub fn delete_faces(k: &mut NativeKernel, body: BodyId, remove: &[FaceId]) -> Re
         return delete_sheet_faces(k, body, b, &gone);
     }
     let ef = b.edge_faces();
+    // A face goes whole: with the faces that carry on its surface across an edge (a round
+    // made in two strips where its rim was two edges).
+    let mut gone = gone;
+    let tc = tol::CONFUSION.max(tol::REL * b.bbox().diagonal());
+    let mut at = 0;
+    while at < gone.len() {
+        let f = gone[at];
+        at += 1;
+        for c in b.faces[f].loops.iter().flatten() {
+            for &g in &ef[c.edge] {
+                if !gone.contains(&g)
+                    && b.faces[g]
+                        .surf
+                        .same_domain(&b.faces[f].surf, tc)
+                        .is_some_and(|same| same == (b.faces[g].sense == b.faces[f].sense))
+                {
+                    gone.push(g);
+                }
+            }
+        }
+    }
     // Edges between a deleted face and a kept one.
     let boundary: Vec<usize> = (0..b.edges.len())
         .filter(|&e| {
             ef[e].iter().any(|f| gone.contains(f)) && ef[e].iter().any(|f| !gone.contains(f))
         })
         .collect();
+    // Faces closed off by whole inner loops of the faces left (a hole's wall, a boss) go with
+    // those loops; any others have the faces round them run on to meet
+    // ([`super::defeature`]).
+    let whole_inner = (0..b.faces.len()).filter(|f| !gone.contains(f)).all(|fi| {
+        b.faces[fi].loops.iter().enumerate().all(|(li, l)| {
+            let touches = l.iter().any(|c| boundary.contains(&c.edge));
+            !touches || (li != 0 && l.iter().all(|c| boundary.contains(&c.edge)))
+        })
+    });
+    if !whole_inner {
+        let (out, from) = super::defeature::delete_faces(&b, &gone)?;
+        let mut history = History::default();
+        for (i, srcs) in from.iter().enumerate() {
+            for &f in srcs {
+                history.modified.push((
+                    FaceId(i as u64),
+                    InputFace {
+                        body,
+                        face: FaceId(f as u64),
+                    },
+                ));
+            }
+        }
+        for f in &gone {
+            history.deleted.push(InputFace {
+                body,
+                face: FaceId(*f as u64),
+            });
+        }
+        let id = k.insert(out);
+        return Ok(OpResult {
+            bodies: vec![id],
+            history,
+        });
+    }
     let mut out = b.clone();
     for fi in 0..out.faces.len() {
         if gone.contains(&fi) {
             continue;
         }
-        let loops = std::mem::take(&mut out.faces[fi].loops);
-        let mut kept = Vec::new();
-        for (li, l) in loops.into_iter().enumerate() {
-            let touches = l.iter().any(|c| boundary.contains(&c.edge));
-            if !touches {
-                kept.push(l);
-                continue;
-            }
-            let all = l.iter().all(|c| boundary.contains(&c.edge));
-            if li == 0 || !all {
-                return Err(KernelError::Unsupported(
-                    "deleting faces that aren't closed off by whole inner loops (a fillet or a chamfer between faces)",
-                ));
-            }
-        }
-        out.faces[fi].loops = kept;
+        out.faces[fi]
+            .loops
+            .retain(|l| !l.iter().any(|c| boundary.contains(&c.edge)));
     }
     let keep: Vec<usize> = (0..out.faces.len()).filter(|f| !gone.contains(f)).collect();
     out.faces = keep.iter().map(|&f| out.faces[f].clone()).collect();
