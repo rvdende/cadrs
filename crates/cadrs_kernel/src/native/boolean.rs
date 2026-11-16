@@ -4125,18 +4125,9 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     }
     prof.mark("split");
     // 5. Classify.
-    let kept = |x: &Body| -> Vec<classify::KeptPolygons> {
-        x.faces
-            .iter()
-            .map(|f| classify::face_polygons_kept(x, f))
-            .collect()
-    };
-    let (polys_a, polys_b) = (kept(a), kept(b));
-    // (Each body prepared once for the many points classified against it.)
-    let (cls_a, cls_b) = (
-        classify::Classifier::with_kept(a, &polys_a),
-        classify::Classifier::with_kept(b, &polys_b),
-    );
+    // (Each body prepared once for the many points classified against it, its faces' loops
+    // sampled as rays reach them.)
+    let (cls_a, cls_b) = (classify::Classifier::lazy(a), classify::Classifier::lazy(b));
     let mut keep: Vec<(usize, Vec<Vec<Arc>>, bool)> = Vec::new(); // (face, loops, flip)
     // Sub-faces of one body joined across an edge piece no cut runs along lie on one side of
     // the other body: grouped (union-find over shared uncut pieces), each group is classified

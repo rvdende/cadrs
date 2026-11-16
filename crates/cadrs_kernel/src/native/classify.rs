@@ -185,7 +185,7 @@ pub fn in_face(polys: &[Vec<P2>], surf: &Surface, uv: P2, tol: f64) -> InFace {
 pub struct FacePolys<'a> {
     polys: &'a [Vec<P2>],
     /// Per polygon: its (u, v) box and its scaled box ([`PolyBoxes`]).
-    boxes: PolyBoxes,
+    boxes: std::borrow::Cow<'a, PolyBoxes>,
     range: ((f64, f64), (f64, f64)),
 }
 
@@ -382,8 +382,17 @@ impl<'a> FacePolys<'a> {
     pub fn with_boxes(polys: &'a [Vec<P2>], boxes: PolyBoxes) -> Self {
         FacePolys {
             polys,
-            boxes,
+            boxes: std::borrow::Cow::Owned(boxes),
             range: uv_range(polys),
+        }
+    }
+
+    /// [`Self::with_boxes`] of polygons kept elsewhere, with their range.
+    fn kept(k: &'a KeptPolygons, range: ((f64, f64), (f64, f64))) -> Self {
+        FacePolys {
+            polys: &k.0,
+            boxes: std::borrow::Cow::Borrowed(&k.1),
+            range,
         }
     }
 
@@ -984,7 +993,10 @@ pub fn parity_inside(body: &Body, polys: &[Vec<Vec<P2>>], p: &P3) -> bool {
 /// the projections.
 pub struct Classifier<'a> {
     body: &'a Body,
+    /// Each face's polygons: given, or ([`Self::lazy`]) made when a ray or a point first
+    /// reaches the face.
     polys: Vec<FacePolys<'a>>,
+    lazy: Vec<std::sync::OnceLock<LazyFace>>,
     boxes: Vec<Bbox>,
     /// The boxes in a tree (each grown by the margin a ray's or a point's test allows it), so
     /// a ray or a point meets only the faces near it, not every face of the body.
@@ -995,7 +1007,57 @@ pub struct Classifier<'a> {
     grids: Vec<std::sync::OnceLock<RayGrid>>,
 }
 
+/// A face's polygons made on demand: kept, their (u, v) range and the start for projections.
+type LazyFace = (KeptPolygons, ((f64, f64), (f64, f64)), Option<(f64, f64)>);
+
 impl<'a> Classifier<'a> {
+    /// The body, each face's sampled loops made only when a ray or a point reaches the face:
+    /// a few points classified against a body of thousands of faces (a tool against the plate
+    /// it has been cutting) sample the few faces their rays cross, not all of them.
+    pub fn lazy(body: &'a Body) -> Self {
+        let mut c = Self::with(body, std::iter::empty(), Vec::new());
+        c.lazy = (0..body.faces.len()).map(|_| Default::default()).collect();
+        c.starts = vec![None; body.faces.len()];
+        c
+    }
+
+    fn lazy_face(&self, fi: usize) -> &LazyFace {
+        self.lazy[fi].get_or_init(|| {
+            let k = face_polygons_kept(self.body, &self.body.faces[fi]);
+            let range = uv_range(&k.0);
+            let mut uv = Bbox::empty();
+            k.0.iter()
+                .flatten()
+                .for_each(|q| uv.add(&P3::new(q.x, q.y, 0.0)));
+            let start = (!uv.is_empty()).then(|| (uv.center().x, uv.center().y));
+            (k, range, start)
+        })
+    }
+
+    /// Face `fi`'s polygons, ready for point tests.
+    fn face(&self, fi: usize) -> FacePolys<'_> {
+        if self.lazy.is_empty() {
+            let f = &self.polys[fi];
+            FacePolys {
+                polys: f.polys,
+                boxes: std::borrow::Cow::Borrowed(&*f.boxes),
+                range: f.range,
+            }
+        } else {
+            let (k, range, _) = self.lazy_face(fi);
+            FacePolys::kept(k, *range)
+        }
+    }
+
+    /// The start of projections onto face `fi`: the middle of its loops' (u, v) box.
+    fn start(&self, fi: usize) -> Option<(f64, f64)> {
+        if self.lazy.is_empty() {
+            self.starts[fi]
+        } else {
+            self.lazy_face(fi).2
+        }
+    }
+
     /// The body with its faces' sampled loops ([`face_polygons`], one per face).
     pub fn new(body: &'a Body, polys: &'a [Vec<Vec<P2>>]) -> Self {
         let faces = polys
@@ -1044,6 +1106,7 @@ impl<'a> Classifier<'a> {
         Classifier {
             body,
             polys: faces,
+            lazy: Vec::new(),
             boxes,
             tree,
             bbox,
@@ -1056,7 +1119,7 @@ impl<'a> Classifier<'a> {
     /// surface's own search when that stops more than `tol` away.
     fn project(&self, fi: usize, p: &P3, tol: f64) -> (f64, f64) {
         let s = &self.body.faces[fi].surf;
-        if let Some(h) = self.starts[fi] {
+        if let Some(h) = self.start(fi) {
             let (u, v) = s.project(p, Some(h));
             if (s.eval(u, v) - p).norm() <= tol {
                 return (u, v);
@@ -1082,8 +1145,9 @@ impl<'a> Classifier<'a> {
             }
             let (u, v) = self.project(fi, p, tol);
             if (f.surf.eval(u, v) - p).norm() <= tol {
-                for uv in self.polys[fi].candidates(&f.surf, u, v) {
-                    if self.polys[fi].in_face(&f.surf, uv, tol) != InFace::Outside {
+                let polys = self.face(fi);
+                for uv in polys.candidates(&f.surf, u, v) {
+                    if polys.in_face(&f.surf, uv, tol) != InFace::Outside {
                         return crate::PointClass::OnBoundary;
                     }
                 }
@@ -1147,8 +1211,9 @@ impl<'a> Classifier<'a> {
                         bad = true;
                         break 'faces;
                     }
-                    for uv in self.polys[fi].candidates(&f.surf, u, v) {
-                        match self.polys[fi].in_face(&f.surf, uv, 1e-7) {
+                    let polys = self.face(fi);
+                    for uv in polys.candidates(&f.surf, u, v) {
+                        match polys.in_face(&f.surf, uv, 1e-7) {
                             InFace::Inside => {
                                 count += 1;
                                 break;
