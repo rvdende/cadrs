@@ -336,7 +336,7 @@ async fn ask<T: DeserializeOwned>(
         let streams = conn.open_bi().await.map_err(|e| e.to_string())?;
         Ok::<_, String>((conn, streams))
     };
-    let (conn, (mut send, mut recv)) = tokio::time::timeout(REACH_WITHIN, reach)
+    let (conn, (mut send, mut recv)) = n0_future::time::timeout(REACH_WITHIN, reach)
         .await
         .map_err(|_| "timed out".to_string())
         .and_then(|r| r)
