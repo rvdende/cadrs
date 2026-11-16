@@ -4439,11 +4439,13 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     }
     prof.mark("assemble");
     super::unify::merge_edges(&mut out);
+    prof.mark("merge edges");
     // The run merged within its tolerance: the result's entities say so, the p-curves' gaps
     // searched for as the Full check measures them. An edge lying off a face by more (an
     // input's edge off its own face, which the cut faces keep) has that recorded, up to a part
     // in 10⁵ of the result's size.
     out.fit_tolerances_searched(run_tol * 10.0);
+    prof.mark("fit");
     let wide = 1e-5 * out.bbox().diagonal();
     for fi in 0..out.faces.len() {
         // (As `fit_tolerances_searched` just measured most of them: kept by what they are of.)
@@ -4757,11 +4759,20 @@ fn drop_empty_solids(
             .iter()
             .flat_map(|&f| from.get(f).into_iter().flatten().copied())
             .collect();
-        origins.iter().filter(|o| o.0 == 0).any(|&(_, x)| {
-            origins
+        // (Every face of a sliver lies on a surface the two inputs share: a solid with a
+        // face of its own beside them, a plate with one pocket's floor flush with a tool's
+        // end, has room inside, and its thousands of faces' integrals are not taken.)
+        let shared = |&(w, x): &(usize, usize)| {
+            pairs
                 .iter()
-                .any(|&(w, y)| w == 1 && pairs.contains(&(x, y)))
-        })
+                .any(|&(a, b)| if w == 0 { a == x } else { b == x })
+        };
+        origins.iter().all(shared)
+            && origins.iter().filter(|o| o.0 == 0).any(|&(_, x)| {
+                origins
+                    .iter()
+                    .any(|&(w, y)| w == 1 && pairs.contains(&(x, y)))
+            })
     };
     let volumes: Vec<Option<f64>> = (0..b.solids.len())
         .map(|si| {

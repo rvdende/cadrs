@@ -1826,20 +1826,30 @@ pub(super) fn glued_with(
                 | super::surface::Surface::Revolution { .. }
         )
     };
-    let mut faces: Vec<(usize, usize, P3, f64, V3)> = Vec::new();
-    for (bi, b) in all.iter().enumerate() {
-        for fi in 0..b.faces.len() {
-            let (a, c) = if walked(&b.faces[fi].surf) {
-                boundary_measure(b, fi)
-            } else {
-                super::mass::face_area(b, fi)
-            };
-            let f = &b.faces[fi];
-            let (u, v) = f.surf.project(&c, None);
-            let n = f.surf.normal(u, v) * if f.sense { 1.0 } else { -1.0 };
-            faces.push((bi, fi, c, a, n));
-        }
-    }
+    // (Each face's integrals on its own: on the threads, in the faces' order.)
+    let ids: Vec<(usize, usize)> = all
+        .iter()
+        .enumerate()
+        .flat_map(|(bi, b)| (0..b.faces.len()).map(move |fi| (bi, fi)))
+        .collect();
+    let one = |&(bi, fi): &(usize, usize)| -> (usize, usize, P3, f64, V3) {
+        let b = &all[bi];
+        let (a, c) = if walked(&b.faces[fi].surf) {
+            boundary_measure(b, fi)
+        } else {
+            super::mass::face_area(b, fi)
+        };
+        let f = &b.faces[fi];
+        let (u, v) = f.surf.project(&c, None);
+        let n = f.surf.normal(u, v) * if f.sense { 1.0 } else { -1.0 };
+        (bi, fi, c, a, n)
+    };
+    let faces: Vec<(usize, usize, P3, f64, V3)> = if super::par::threads_for(ids.len(), true) {
+        use rayon::prelude::*;
+        ids.par_iter().map(one).collect()
+    } else {
+        ids.iter().map(one).collect()
+    };
     let mut dropped = vec![false; faces.len()];
     for i in 0..faces.len() {
         if dropped[i] {
