@@ -1198,6 +1198,81 @@ fn prepared_rising(
     if let Move::Turn { o, z, .. } = mv {
         split_at_axis(&mut body, o, z, size);
     }
+    // A screw whose outline (the edges between its leading and its trailing faces) runs along
+    // the motion somewhere (an edge's tangent parallel to the velocity there: the edge's own
+    // sweep stops and turns back, as a ball's outline does screwed round a helix tighter than
+    // itself) sweeps a surface that
+    // folds through itself, and the pieces would sew into a solid with the fold inside it, one
+    // too large. So does a screw of more than a turn whose body is taller than a turn's rise:
+    // its turns run into each other. Neither is this sweep's to make.
+    if let Move::Screw { z, angle, rise, .. } = mv {
+        if angle.abs() > TAU * (1.0 + tol::REL) {
+            let along: Vec<f64> = body.verts.iter().map(|v| v.p.coords.dot(&z)).collect();
+            let bb = body.bbox();
+            let reach = (0..8)
+                .map(|i| {
+                    P3::new(
+                        if i & 1 == 0 { bb.min.x } else { bb.max.x },
+                        if i & 2 == 0 { bb.min.y } else { bb.max.y },
+                        if i & 4 == 0 { bb.min.z } else { bb.max.z },
+                    )
+                    .coords
+                    .dot(&z)
+                })
+                .chain(along)
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |a, x| {
+                    (a.0.min(x), a.1.max(x))
+                });
+            let per_turn = (rise * TAU / angle).abs();
+            if reach.1 - reach.0 > per_turn {
+                return Err(KernelError::Unsupported(
+                    "a screw whose turns run into each other, by its faces' sweeps",
+                ));
+            }
+        }
+        // (The outline's smooth edges: between a face's leading and its trailing piece.)
+        let all: Vec<Stand> = (0..body.faces.len())
+            .map(|fi| stand(&face_points(&body, fi, size), &mv))
+            .collect();
+        let ef = body.edge_faces();
+        for fi in 0..body.faces.len() {
+            if !matches!(all[fi], Stand::Leads) {
+                continue;
+            }
+            let f = &body.faces[fi];
+            let sign = if f.sense { 1.0 } else { -1.0 };
+            for c in f.loops.iter().flatten() {
+                let e = &body.edges[c.edge];
+                if e.degenerate
+                    || !ef[c.edge].iter().any(|&g| {
+                        // (A face split along its contact: the same surface either side.
+                        // A sharp edge's sweep may turn back where the solid's doesn't.)
+                        g != fi && matches!(all[g], Stand::Trails) && body.faces[g].surf == f.surf
+                    })
+                {
+                    continue;
+                }
+                // The velocity's part across the edge, in the face: one side all along.
+                let (mut pos, mut neg) = (false, false);
+                for i in 0..=16 {
+                    let t = e.t[0] + (e.t[1] - e.t[0]) * i as f64 / 16.0;
+                    let p = e.point(t);
+                    let q = c.pc.point(t);
+                    let n = f.surf.normal(q.x, q.y) * sign;
+                    let v = mv.velocity(&p);
+                    let across = v.dot(&n.cross(&e.curve.tangent(t).normalize()));
+                    let small = tol::ANGULAR_POINT * v.norm();
+                    pos |= across > small;
+                    neg |= across < -small;
+                }
+                if pos && neg {
+                    return Err(KernelError::Unsupported(
+                        "a sweep whose surface folds through itself, by its faces' sweeps",
+                    ));
+                }
+            }
+        }
+    }
     // Each leading face swept, the pieces united with the start.
     let sweep = match mv {
         Move::Slide(v) => Some(BodySweep::Translate(v)),
