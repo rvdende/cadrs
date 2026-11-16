@@ -160,6 +160,11 @@ fn ref_groups(
                 Some(l) if l.source.document_or(doc.doc.id) != doc.doc.id => {
                     format!("{name} · {}", l.document_name)
                 }
+                // A configured Part Studio's copy names its configuration ("Bolt (M5)").
+                _ if cadrs_core::configuration::copy_of(&doc.doc, e).is_some() => format!(
+                    "{name} ({})",
+                    cadrs_core::configuration::describe_element(&doc.doc, e)
+                ),
                 _ => name,
             };
             Some(RefGroup {

@@ -5,7 +5,9 @@
 //!   "None") and the **Select a part or assembly** browser beside it (Current document / Other
 //!   documents, the document and its branch, Part Studios / Assemblies, a search field, type
 //!   filters, and the studios with their parts). Picking a whole Part Studio shows a warning
-//!   (D4.2). With something picked, the view follows the cursor; a click places it. It opens
+//!   (D4.2). A configured Part Studio's part shows its Configuration under the reference (the
+//!   studio's active one at first): the view shows it, through the studio's configured copy.
+//!   With something picked, the view follows the cursor; a click places it. It opens
 //!   by itself after Create Drawing → OK (D1.7).
 //! - **Projected view** (D4.4, D4.5): after the base view the tool switches to Projected view.
 //!   Moving the cursor right, up, left or down of the parent previews that orthographic view
@@ -75,6 +77,7 @@ impl Plugin for ViewToolsPlugin {
                 },
             )
             .add_observer(on_insert_select)
+            .add_observer(on_insert_check)
             .add_observer(on_browser_tab)
             .add_observer(on_browser_toggle);
     }
@@ -155,6 +158,8 @@ pub struct BrowserStudio {
     pub id: ElementId,
     pub name: String,
     pub parts: Vec<(PartId, String)>,
+    /// Its configuration (empty when it has none, or for a version's copy).
+    pub configuration: cadrs_core::configuration::Configuration,
 }
 
 /// The Insert view dialog's state.
@@ -189,6 +194,9 @@ pub struct InsertViewState {
     pub flat: bool,
     pub filter_flat: bool,
     pub flats: Vec<(ElementId, PartId, String)>,
+    /// The configuration picked for each configured Part Studio (its active one until another
+    /// is picked): the view shows the studio in it.
+    pub configs: Vec<(ElementId, cadrs_core::configuration::ConfigValues)>,
 }
 
 impl Default for InsertViewState {
@@ -215,7 +223,54 @@ impl Default for InsertViewState {
             flat: false,
             filter_flat: false,
             flats: Vec::new(),
+            configs: Vec::new(),
         }
+    }
+}
+
+impl InsertViewState {
+    /// The picked reference's configured Part Studio, its configuration and the values chosen.
+    pub fn configuration(
+        &self,
+    ) -> Option<(
+        ElementId,
+        &cadrs_core::configuration::Configuration,
+        cadrs_core::configuration::ConfigValues,
+    )> {
+        let r = self.reference?;
+        let s = self
+            .studios
+            .iter()
+            .find(|s| s.id.0 == r.element && !s.configuration.is_empty())?;
+        let values = self
+            .configs
+            .iter()
+            .find(|(e, _)| *e == s.id)
+            .map(|(_, v)| v.clone())
+            .unwrap_or_else(|| s.configuration.active.clone());
+        Some((s.id, &s.configuration, s.configuration.complete(&values)))
+    }
+
+    /// The configuration a view of the picked reference takes (its copy is what it references).
+    pub fn instance_configuration(
+        &self,
+    ) -> Option<cadrs_core::configuration::InstanceConfiguration> {
+        let (studio, _, values) = self.configuration()?;
+        Some(cadrs_core::configuration::InstanceConfiguration { studio, values })
+    }
+
+    /// Sets one input of the picked studio's configuration.
+    fn set_config_value(
+        &mut self,
+        input: cadrs_core::ConfigInputId,
+        value: cadrs_core::configuration::InputValue,
+    ) {
+        let Some((studio, _, mut values)) = self.configuration() else {
+            return;
+        };
+        values.set(input, value);
+        self.configs.retain(|(e, _)| *e != studio);
+        self.configs.push((studio, values));
     }
 }
 
@@ -340,6 +395,7 @@ pub fn open_insert_view(world: &mut World) {
                     id: el.id,
                     name: el.name.clone(),
                     parts,
+                    configuration: el.configuration.clone(),
                 });
             }
             ElementKind::Assembly => assemblies.push((el.id, el.name.clone())),
@@ -680,6 +736,7 @@ fn insert_card(p: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
                     ));
                 }
             });
+            config_rows(b, t, st);
             let mut o = Select::new("insert-view-orientation").width(Val::Percent(100.0));
             for n in NamedView::ALL {
                 o = o.option(super::views::named_view_name(n), true);
@@ -765,6 +822,56 @@ fn insert_card(p: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
                 ));
             }
         });
+    });
+}
+
+/// The picked studio's configuration (Configurations): a list of rows per List input
+/// (`insert-view-config-<k>`), a checkbox per Checkbox input (`insert-view-config-<k>-checked`).
+fn config_rows(b: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
+    use cadrs_core::configuration::{InputKind, Resolved};
+    let Some((_, c, values)) = st.configuration() else {
+        return;
+    };
+    b.spawn(Node {
+        flex_direction: FlexDirection::Column,
+        row_gap: Val::Px(2.0),
+        padding: UiRect::vertical(Val::Px(2.0)),
+        ..default()
+    })
+    .insert(Name::new("insert-view-configuration"))
+    .with_children(|b| {
+        // Each List: its name (the card is narrow), then its rows.
+        for (k, (input, r)) in c.inputs.iter().zip(c.resolve(&values)).enumerate() {
+            match (&input.kind, r) {
+                (InputKind::List { rows, .. }, Resolved::Row(i)) => {
+                    b.spawn((
+                        t.text(
+                            input.name.clone(),
+                            t.font_sm,
+                            FontWeight::NORMAL,
+                            t.muted_foreground,
+                        ),
+                        Pickable::IGNORE,
+                    ))
+                    .insert(TextLayout::no_wrap());
+                    let mut sel =
+                        Select::new(format!("insert-view-config-{k}")).width(Val::Percent(100.0));
+                    for r in rows {
+                        sel = sel.option(r.name.clone(), true);
+                    }
+                    b.spawn(sel.selected(i).build(t));
+                }
+                (InputKind::Checkbox { .. }, Resolved::Checked(on)) => {
+                    b.spawn(
+                        cadrs_ui::Checkbox::new(format!("insert-view-config-{k}-checked"))
+                            .label(input.name.clone())
+                            .checked(on)
+                            .build(t),
+                    );
+                }
+                _ => {}
+            }
+        }
     });
 }
 
@@ -1047,7 +1154,49 @@ fn on_insert_select(ev: On<SelectChange>, q: Query<&Name>, mut state: ResMut<Ins
                 state.scale = *s;
             }
         }
+        n if n.starts_with("insert-view-config-") => {
+            let Some(k) = n["insert-view-config-".len()..].parse::<usize>().ok() else {
+                return;
+            };
+            let row = state.configuration().and_then(|(_, c, _)| {
+                let input = c.inputs.get(k)?;
+                match &input.kind {
+                    cadrs_core::configuration::InputKind::List { rows, .. } => {
+                        Some((input.id, rows.get(ev.index)?.id))
+                    }
+                    _ => None,
+                }
+            });
+            if let Some((input, row)) = row {
+                state.set_config_value(input, cadrs_core::configuration::InputValue::Row(row));
+            }
+        }
         _ => {}
+    }
+}
+
+fn on_insert_check(
+    ev: On<cadrs_ui::CheckboxChange>,
+    q: Query<&Name>,
+    mut state: ResMut<InsertViewState>,
+) {
+    let Some(k) = q
+        .get(ev.entity)
+        .ok()
+        .and_then(|n| n.as_str().strip_prefix("insert-view-config-"))
+        .and_then(|n| n.strip_suffix("-checked"))
+        .and_then(|k| k.parse::<usize>().ok())
+    else {
+        return;
+    };
+    let input = state
+        .configuration()
+        .and_then(|(_, c, _)| c.inputs.get(k).map(|i| i.id));
+    if let Some(input) = input {
+        state.set_config_value(
+            input,
+            cadrs_core::configuration::InputValue::Checked(ev.checked),
+        );
     }
 }
 
@@ -1285,11 +1434,13 @@ fn update_ghost(
     insert: Res<InsertViewState>,
     mut cache: ResMut<ViewCache>,
     mut ui: ResMut<DrawingUi>,
+    mut with_copy: Local<Option<(ElementId, cadrs_core::Document)>>,
 ) {
     // The view-kind tools make their own ghost (`view_kind_tools::preview`).
     if ui.tool.is_view_kind() {
         return;
     }
+    let changed = doc.as_ref().is_some_and(|d| d.is_changed());
     let ghost = (|| {
         let doc = doc.as_deref().filter(|_| *kind == ActiveKind::Drawing)?;
         let (id, d) = active_drawing(doc)?;
@@ -1310,10 +1461,27 @@ fn update_ghost(
                     &d.style,
                 );
                 v.id = ghost_id;
+                // Configurations: the studio built in the configuration picked (its copy, not
+                // in the document until the view is placed; kept while the document is as it
+                // was).
+                if let Some(c) = insert.instance_configuration() {
+                    v.reference.element = c.copy_id().0;
+                    let id = c.copy_id();
+                    if changed || with_copy.as_ref().is_none_or(|(e, _)| *e != id) {
+                        *with_copy =
+                            cadrs_core::configuration::with_copy(&doc.doc, &c).map(|d| (id, d));
+                    }
+                } else {
+                    *with_copy = None;
+                }
                 // P3G.1: a linked source's copy, not in the document until the view is placed.
-                match super::view_linked::ghost_doc(&doc.doc, &insert) {
-                    Some(with_links) => cache.ensure(&with_links, Some(d), &v),
-                    None => cache.ensure(&doc.doc, Some(d), &v),
+                match (
+                    &*with_copy,
+                    super::view_linked::ghost_doc(&doc.doc, &insert),
+                ) {
+                    (Some((_, with)), _) => cache.ensure(with, Some(d), &v),
+                    (None, Some(with_links)) => cache.ensure(&with_links, Some(d), &v),
+                    (None, None) => cache.ensure(&doc.doc, Some(d), &v),
                 };
                 if let Some(c) = center2d(&cache, &v) {
                     let k = v.scale.factor();
@@ -1400,7 +1568,34 @@ fn tool_click(world: &mut World, p: Vec2) {
                 // P3G.1 (D13.1): a view of a version (or of another document) stores the frozen
                 // copy it shows with it, in one undo step.
                 let links = super::view_linked::pending_links(world, v.reference.element);
-                let placed = if links.is_empty() {
+                // Configurations: the view references the studio's copy in the configuration
+                // picked (the ghost's already does); the drawing keeps the configuration.
+                let config = links
+                    .is_empty()
+                    .then(|| world.resource::<InsertViewState>().instance_configuration())
+                    .flatten();
+                let placed = if let Some(c) = config {
+                    v.reference.element = c.copy_id().0;
+                    let doc = world.resource::<ActiveDocument>();
+                    let op = match cadrs_core::configuration::with_copy(&doc.doc, &c) {
+                        Some(with) => {
+                            super::view_linked::insert_view_op_in(&with, &d, sheet_id, v.clone())
+                        }
+                        None => insert_view_op(world, sheet_id, v.clone()),
+                    };
+                    let cmd = cadrs_core::configuration::WithConfiguration {
+                        element,
+                        configuration: c,
+                        command: EditDrawing { element, op },
+                    };
+                    match world.resource_mut::<ActiveDocument>().execute(&cmd) {
+                        Ok(()) => true,
+                        Err(e) => {
+                            warn!("drawing edit refused: {e}");
+                            false
+                        }
+                    }
+                } else if links.is_empty() {
                     let op = insert_view_op(world, sheet_id, v.clone());
                     exec(world, op)
                 } else {

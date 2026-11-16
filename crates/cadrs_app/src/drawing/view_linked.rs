@@ -79,6 +79,12 @@ fn lists(
                     id: to,
                     name: el.name.clone(),
                     parts,
+                    // The workspace's configurations (a version's copy is shown as it was).
+                    configuration: if to == el.id {
+                        el.configuration.clone()
+                    } else {
+                        Default::default()
+                    },
                 });
             }
             ElementKind::Assembly => assemblies.push((to, el.name.clone())),

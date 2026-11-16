@@ -3,7 +3,8 @@
 //!
 //! - **Context menu** (right-click on a view): Show/Hide hidden lines, Tangent edges ▸ (Hidden,
 //!   Solid, Phantom), Show/Hide shaded view, Show threads (P3C.8), Show part intersections,
-//!   Display state ▸ (assemblies); Create projected view, View properties…, Bring to front, Send
+//!   Display state ▸ (assemblies), Configuration ▸ (a configured Part Studio's,
+//!   [`super::view_config`]); Create projected view, View properties…, Bring to front, Send
 //!   to back; Insert BOM (P3C.5); Switch to <referenced tab>, Move to sheet…, Align view
 //!   vertical, Align view horizontal, Suppress alignment with parent, Show/hide sketches…;
 //!   Clear selection, Zoom to fit, Delete. Every change is one undoable drawing edit.
@@ -118,6 +119,8 @@ pub fn open_view_menu(world: &mut World, pos: Vec2, id: ViewId) {
     // Insert BOM is for a view of an assembly (P3C.5, D11.1).
     let is_assembly =
         cadrs_core::drawing_assembly::is_assembly(&doc.doc, ElementId(v.reference.element));
+    // Configuration ▸ for a view of a configured Part Studio (`super::view_config`).
+    let config = super::view_config::menu_item(&doc.doc, &v);
     let theme = world.resource::<Theme>().clone();
     let tangent = |t: TangentEdges, name: &'static str, label: &'static str| {
         let item = MenuItem::new(name, tr(label));
@@ -191,7 +194,13 @@ pub fn open_view_menu(world: &mut World, pos: Vec2, id: ViewId) {
             )
             .disabled(true)
             .submenu(vec![]),
-        )
+        );
+    let has_config = config.is_some();
+    let menu = match config {
+        Some(c) => menu.item(c),
+        None => menu,
+    };
+    let menu = menu
         .separator()
         .item(MenuItem::new(
             "view-menu-projected",
@@ -262,7 +271,7 @@ pub fn open_view_menu(world: &mut World, pos: Vec2, id: ViewId) {
             "drawing-view-menu-remove-broken-out",
         ),
     ];
-    let extra = removals.iter().filter(|r| r.0).count();
+    let extra = removals.iter().filter(|r| r.0).count() + usize::from(has_config);
     for (on, name, label) in removals {
         if on {
             menu = menu.item(MenuItem::new(name, tr(label)));
@@ -317,6 +326,9 @@ pub(super) fn view_menu_action(w: &mut World, id: ViewId, item: &str) {
     let Some((_, v)) = find_view(w, id) else {
         return;
     };
+    if super::view_config::menu_action(w, id, item) {
+        return;
+    }
     match item {
         "view-menu-hidden-lines" => {
             let on = !v.hidden_lines;
@@ -389,7 +401,10 @@ pub(super) fn view_menu_action(w: &mut World, id: ViewId, item: &str) {
         }
         "view-menu-switch" => {
             if let Some(mut doc) = w.get_resource_mut::<ActiveDocument>() {
-                doc.set_active(ElementId(v.reference.element));
+                // A configured view's copy: its studio's tab.
+                let tab =
+                    cadrs_core::configuration::tab_of(&doc.doc, ElementId(v.reference.element));
+                doc.set_active(tab);
             }
         }
         "view-menu-move-to-sheet" => open_move_to_sheet(w, id),
@@ -502,6 +517,11 @@ pub fn open_view_properties(world: &mut World, id: ViewId) {
     let reference = super::reference_props(&doc.doc, Some(v.reference))
         .name
         .unwrap_or_default();
+    // A configured view names its configuration ("Bolt (M5)").
+    let reference = match super::view_config::describe(&doc.doc, v.reference.element) {
+        Some(c) => format!("{reference} ({c})"),
+        None => reference,
+    };
     let studio_name = doc
         .doc
         .element(ElementId(v.reference.element))
@@ -568,7 +588,11 @@ pub fn open_view_properties(world: &mut World, id: ViewId) {
                                             && let Some(mut doc) =
                                                 w.get_resource_mut::<ActiveDocument>()
                                         {
-                                            doc.set_active(ElementId(v.reference.element));
+                                            let tab = cadrs_core::configuration::tab_of(
+                                                &doc.doc,
+                                                ElementId(v.reference.element),
+                                            );
+                                            doc.set_active(tab);
                                         }
                                     });
                                 }
