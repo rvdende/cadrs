@@ -14,6 +14,7 @@ impl Draft {
                 ("document", Value::Index(i)) => {
                     d.document = (*i).min(d.others.len());
                     d.studio = 0;
+                    d.configuration = None;
                     d.other = match d.document {
                         0 => None,
                         k => super::load_other(world, d.others[k - 1].0, None),
@@ -27,7 +28,16 @@ impl Draft {
                 }
                 ("studio", Value::Index(i)) => {
                     d.studio = *i;
+                    d.configuration = None;
                     fill_parts(world, d);
+                }
+                (k, v) if k.starts_with("config-") => {
+                    let doc = &world.resource::<ActiveDocument>().doc;
+                    if let Some((c, values)) = super::fields::insert_configuration(doc, d)
+                        && let Some(values) = super::fields::config_value(&c, &values, k, v)
+                    {
+                        d.configuration = Some(values);
+                    }
                 }
                 ("version", Value::Index(i)) => {
                     d.version = *i;
@@ -55,6 +65,22 @@ impl Draft {
             Draft::Component(c) => match (key, v) {
                 ("name", Value::Text(t)) => c.name = t.clone(),
                 ("role", Value::Index(i)) => c.role = Role::ALL[(*i).min(2)],
+                // The configuration its configured Part Studio is taken in.
+                (k, v) if k.starts_with("config-") => {
+                    let doc = &world.resource::<ActiveDocument>().doc;
+                    if let Some((cfg, values)) =
+                        crate::derived_ui::source_configuration(doc, &c.derived)
+                        && let Some(values) = super::fields::config_value(&cfg, &values, k, v)
+                        && let Some(src) = c
+                            .derived
+                            .source
+                            .and_then(|r| doc.elements.iter().find(|e| e.id == r.element))
+                    {
+                        (c.derived.studio, c.derived.props) =
+                            cadrs_core::derived::source_state(src, Some(&values), &doc.units);
+                        c.derived.configuration = Some(values);
+                    }
+                }
                 _ => {}
             },
             Draft::Job { job, .. } => match (key, v) {

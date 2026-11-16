@@ -22,6 +22,84 @@ pub(super) const AXES: [(&str, [f64; 3]); 6] = [
     ("−Y", [0.0, -1.0, 0.0]),
 ];
 
+/// A configured Part Studio's inputs as fields: a list per List input (`config-<k>`), a check
+/// per Checkbox input (`config-<k>-checked`).
+pub(super) fn config_fields(
+    f: &mut Vec<Field>,
+    c: &cadrs_core::configuration::Configuration,
+    values: &cadrs_core::configuration::ConfigValues,
+) {
+    use cadrs_core::configuration::{InputKind, Resolved};
+    f.push(Field::section(&tr("config-configuration")));
+    for (k, (input, r)) in c.inputs.iter().zip(c.resolve(values)).enumerate() {
+        match (&input.kind, r) {
+            (InputKind::List { rows, .. }, Resolved::Row(i)) => f.push(Field::select(
+                &format!("config-{k}"),
+                &input.name,
+                rows.iter().map(|r| r.name.clone()),
+                i,
+            )),
+            (InputKind::Checkbox { .. }, Resolved::Checked(on)) => f.push(Field::check(
+                &format!("config-{k}-checked"),
+                &input.name,
+                on,
+            )),
+            _ => {}
+        }
+    }
+}
+
+/// `values` with the configuration field `key` changed to `v` (`None` when it is not one).
+pub(super) fn config_value(
+    c: &cadrs_core::configuration::Configuration,
+    values: &cadrs_core::configuration::ConfigValues,
+    key: &str,
+    v: &Value,
+) -> Option<cadrs_core::configuration::ConfigValues> {
+    use cadrs_core::configuration::{InputKind, InputValue};
+    let rest = key.strip_prefix("config-")?;
+    let (k, checked) = match rest.strip_suffix("-checked") {
+        Some(k) => (k, true),
+        None => (rest, false),
+    };
+    let input = c.inputs.get(k.parse::<usize>().ok()?)?;
+    let value = match (&input.kind, v, checked) {
+        (InputKind::List { rows, .. }, Value::Index(i), false) => InputValue::Row(rows.get(*i)?.id),
+        (InputKind::Checkbox { .. }, Value::Bool(b), true) => InputValue::Checked(*b),
+        _ => return None,
+    };
+    let mut out = values.clone();
+    out.set(input.id, value);
+    Some(c.complete(&out))
+}
+
+/// The configured Part Studio an insert takes parts from (this document's workspace) and the
+/// configuration it is taken in.
+pub(super) fn insert_configuration(
+    doc: &cadrs_core::Document,
+    d: &InsertDraft,
+) -> Option<(
+    cadrs_core::configuration::Configuration,
+    cadrs_core::configuration::ConfigValues,
+)> {
+    if d.document > 0 || d.version > 0 {
+        return None;
+    }
+    let el = doc
+        .elements
+        .iter()
+        .filter(|e| matches!(e.kind, ElementKind::PartStudio { .. }))
+        .nth(d.studio)?;
+    if el.configuration.is_empty() {
+        return None;
+    }
+    let values = d
+        .configuration
+        .clone()
+        .unwrap_or_else(|| el.configuration.active.clone());
+    Some((el.configuration.clone(), el.configuration.complete(&values)))
+}
+
 pub(super) fn axis_index(v: [f64; 3]) -> Option<usize> {
     AXES.iter()
         .position(|(_, a)| (a[0] - v[0]).abs() + (a[1] - v[1]).abs() + (a[2] - v[2]).abs() < 1e-6)
@@ -319,6 +397,9 @@ impl Draft {
                         if d.version == 0 {
                             f.push(Field::note(tr("cam-insert-workspace-note")));
                         }
+                        if let Some((c, values)) = insert_configuration(ctx.doc, d) {
+                            config_fields(&mut f, &c, &values);
+                        }
                     }
                 }
                 f.push(Field::section(&tr("parts")));
@@ -341,6 +422,11 @@ impl Draft {
                     "cam-component-reference",
                     &[("reference", &c.reference_label())],
                 )));
+                if let Some((cfg, values)) =
+                    crate::derived_ui::source_configuration(ctx.doc, &c.derived)
+                {
+                    config_fields(&mut f, &cfg, &values);
+                }
             }
             Draft::Job { .. } => self.job_fields(&mut f, ctx, picking),
             Draft::Machine { .. } => self.machine_fields(&mut f),
