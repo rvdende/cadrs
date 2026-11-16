@@ -986,6 +986,9 @@ pub struct Classifier<'a> {
     body: &'a Body,
     polys: Vec<FacePolys<'a>>,
     boxes: Vec<Bbox>,
+    /// The boxes in a tree (each grown by the margin a ray's or a point's test allows it), so
+    /// a ray or a point meets only the faces near it, not every face of the body.
+    tree: super::bvh::Bvh,
     bbox: Bbox,
     starts: Vec<Option<(f64, f64)>>,
     /// Each parametric face's grid for rays, made at the first ray that reaches the face.
@@ -1034,10 +1037,15 @@ impl<'a> Classifier<'a> {
                 (!uv.is_empty()).then(|| (uv.center().x, uv.center().y))
             })
             .collect();
+        // (A margin over any the tests below grow a box by: they test the face's own box
+        // again.)
+        let margin = tol::POINT.max(tol::REL_POINT * (1.0 + bbox.diagonal()));
+        let tree = super::bvh::Bvh::new(boxes.iter().map(|b| b.grow(margin)).collect());
         Classifier {
             body,
             polys: faces,
             boxes,
+            tree,
             bbox,
             starts,
             grids: (0..body.faces.len()).map(|_| Default::default()).collect(),
@@ -1061,7 +1069,14 @@ impl<'a> Classifier<'a> {
     pub fn classify(&self, p: &P3, tol: f64) -> crate::PointClass {
         POINTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let tol = tol.max(tol::ROUNDOFF);
-        for (fi, f) in self.body.faces.iter().enumerate() {
+        let mut near = {
+            let mut at = Bbox::empty();
+            at.add(p);
+            self.tree.query(&at.grow(tol))
+        };
+        near.sort_unstable();
+        for fi in near {
+            let f = &self.body.faces[fi];
             if !self.boxes[fi].grow(tol).contains(p) {
                 continue;
             }
@@ -1091,7 +1106,7 @@ impl<'a> Classifier<'a> {
         // Five fixed directions, then 32 more spread over the sphere (a golden-angle spiral)
         // while every ray so far grazed a face or ran through an edge.
         let golden = std::f64::consts::PI * (3.0 - 5f64.sqrt());
-        let dirs: Vec<V3> = [
+        let dirs = [
             V3::new(0.5773, 0.5774, 0.5772),
             V3::new(-0.3014, 0.8123, 0.4993),
             V3::new(0.7071, -0.1213, -0.6966),
@@ -1104,8 +1119,7 @@ impl<'a> Classifier<'a> {
             let r = (1.0 - z * z).max(0.0).sqrt();
             let a = golden * i as f64 + 0.1;
             V3::new(r * a.cos(), r * a.sin(), z)
-        }))
-        .collect();
+        }));
         let bb = self.bbox.grow(1.0);
         let span = bb.diagonal() + (bb.center() - p).norm();
         let mut votes = (0, 0);
@@ -1114,7 +1128,11 @@ impl<'a> Classifier<'a> {
             let d = d.normalize();
             let mut count = 0;
             let mut bad = false;
-            'faces: for (fi, f) in self.body.faces.iter().enumerate() {
+            // (The faces in their own order, whatever the tree's.)
+            let mut reached = self.tree.ray(p, &d, 0.0, f64::INFINITY);
+            reached.sort_unstable();
+            'faces: for fi in reached {
+                let f = &self.body.faces[fi];
                 if !ray_meets_box(p, &d, &self.boxes[fi].grow(tol::REL * (1.0 + span))) {
                     continue;
                 }
