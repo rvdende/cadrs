@@ -1691,6 +1691,240 @@ pub(crate) fn planes_bound(b: &Body, surfs: &[Surface]) -> Option<Result<(Body, 
     })())
 }
 
+/// [`planes_bound`] for a right prism whose outline is not convex (an L or a T extruded): the
+/// solid its faces' new planes bound, each plane's half-space taken as the outline's own
+/// formula takes its side. The outline is its convex hull less its pockets, each pocket the
+/// common part of the *other* sides of the faces along its own hull less its pockets in turn
+/// (the convex deficiency tree); the solid is that formula of the new half-spaces, between the
+/// caps' planes. So sides drafted until they close over an arm meet in a ridge, and the two
+/// sides of an inside corner still join in a valley. None when `b` is no such prism.
+pub(crate) fn prism_planes_bound(
+    b: &Body,
+    surfs: &[Surface],
+) -> Option<Result<(Body, Vec<usize>)>> {
+    let bb = b.bbox();
+    let size = bb.diagonal();
+    let close = tol::POINT.max(tol::REL * size);
+    let plane = |s: &Surface, sense: bool| match s {
+        Surface::Plane { f } => Some((
+            f.o,
+            f.x.cross(&f.y).normalize() * if sense { 1.0 } else { -1.0 },
+        )),
+        _ => None,
+    };
+    let mut before = Vec::new();
+    let mut after = Vec::new();
+    for (f, s) in b.faces.iter().zip(surfs) {
+        before.push(plane(&f.surf, f.sense)?);
+        after.push(plane(s, f.sense)?);
+    }
+    // The caps: one face facing along some direction, one against it, every other face square
+    // to it.
+    let (bottom, top) = (0..b.faces.len()).find_map(|f| {
+        let z = -before[f].1;
+        let mut top = None;
+        for (g, (_, n)) in before.iter().enumerate() {
+            let d = n.dot(&z);
+            if g == f {
+                continue;
+            } else if d > 1.0 - tol::ANGULAR {
+                if top.replace(g).is_some() {
+                    return None;
+                }
+            } else if d.abs() > tol::ANGULAR_POINT {
+                return None;
+            }
+        }
+        Some((f, top?))
+    })?;
+    let z = -before[bottom].1;
+    let x = any_perpendicular(&z);
+    let y = z.cross(&x);
+    let o = before[bottom].0;
+    let ef = b.edge_faces();
+    // The bottom's loops as polygons, anticlockwise seen from above (holes clockwise), each
+    // corner with the side face along the edge that leaves it.
+    type Corner = (P2, Option<usize>);
+    let mut outer: Option<Vec<Corner>> = None;
+    let mut holes: Vec<Vec<Corner>> = Vec::new();
+    for l in &b.faces[bottom].loops {
+        let mut poly: Vec<Corner> = Vec::new();
+        for c in l {
+            let e = &b.edges[c.edge];
+            if !matches!(e.curve, Curve::Line { .. }) {
+                return None;
+            }
+            let side = *ef[c.edge].iter().find(|&&g| g != bottom)?;
+            if side == top {
+                return None;
+            }
+            let v = b.verts[b.co_start(c)].p - o;
+            poly.push((P2::new(v.dot(&x), v.dot(&y)), Some(side)));
+        }
+        let area: f64 = (0..poly.len())
+            .map(|i| {
+                let (a, c) = (poly[i].0, poly[(i + 1) % poly.len()].0);
+                a.x * c.y - c.x * a.y
+            })
+            .sum();
+        // (The bottom faces down: its outer loop runs clockwise seen from above.)
+        if area < 0.0 {
+            // Turned round, each corner with the edge that now leaves it.
+            let n = poly.len();
+            let turned: Vec<Corner> = (0..n)
+                .map(|i| (poly[(n - i) % n].0, poly[(2 * n - i - 1) % n].1))
+                .collect();
+            if outer.replace(turned).is_some() {
+                return None;
+            }
+        } else {
+            holes.push(poly);
+        }
+    }
+    let outer = outer?;
+    let mut reach = bb;
+    reach.add(&(bb.min - V3::repeat(size)));
+    reach.add(&(bb.max + V3::repeat(size)));
+    let half = |f: usize, inside: bool| -> Result<Body> {
+        let (o, n) = after[f];
+        super::ops::half_space_box(o, if inside { -n } else { n }, &reach)
+    };
+    // The region of an anticlockwise polygon by its faces' half-spaces (`inside`: the
+    // material's sides; else the other sides, for a pocket): those along its hull in common,
+    // less its pockets. None for a polygon with no face along its hull.
+    fn region(
+        poly: &[(P2, Option<usize>)],
+        inside: bool,
+        half: &dyn Fn(usize, bool) -> Result<Body>,
+        depth: usize,
+    ) -> Result<Option<Body>> {
+        let n = poly.len();
+        if n < 2 || depth > 64 {
+            return Ok(None);
+        }
+        // The hull's corners, in the polygon's order (collinear corners kept).
+        let mut order: Vec<usize> = (0..n).collect();
+        order.sort_by(|&a, &c| {
+            (poly[a].0.x, poly[a].0.y)
+                .partial_cmp(&(poly[c].0.x, poly[c].0.y))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let cross = |a: usize, c: usize, d: usize| {
+            let (p, q, r) = (poly[a].0, poly[c].0, poly[d].0);
+            (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x)
+        };
+        let scale = poly.iter().map(|c| c.0.coords.norm()).fold(1.0, f64::max);
+        let eps = tol::REL * scale * scale;
+        let mut hull: Vec<usize> = Vec::new();
+        for pass in 0..2 {
+            let start = hull.len();
+            let it: Box<dyn Iterator<Item = &usize>> = if pass == 0 {
+                Box::new(order.iter())
+            } else {
+                Box::new(order.iter().rev())
+            };
+            for &i in it {
+                while hull.len() >= start + 2
+                    && cross(hull[hull.len() - 2], hull[hull.len() - 1], i) < -eps
+                {
+                    hull.pop();
+                }
+                hull.push(i);
+            }
+            hull.pop();
+        }
+        let mut on_hull = vec![false; n];
+        for &i in &hull {
+            on_hull[i] = true;
+        }
+        let corners: Vec<usize> = (0..n).filter(|&i| on_hull[i]).collect();
+        let mut acc: Option<Body> = None;
+        let mut pockets: Vec<Body> = Vec::new();
+        for (k, &a) in corners.iter().enumerate() {
+            let c = corners[(k + 1) % corners.len()];
+            let steps = (c + n - a) % n;
+            if steps == 1 || corners.len() == 1 {
+                if let Some(f) = poly[a].1 {
+                    let h = half(f, inside)?;
+                    acc = Some(match acc {
+                        None => h,
+                        Some(x) => super::boolean::boolean_bodies(&x, &h, BoolOp::Intersect)?.body,
+                    });
+                }
+                continue;
+            }
+            // The pocket between the hull's chord and the polygon's chain from a to c: the
+            // chain turned round (anticlockwise), closed by the chord (no face).
+            let mut pocket: Vec<(P2, Option<usize>)> = Vec::with_capacity(steps + 1);
+            for i in 0..=steps {
+                let v = (c + n - i) % n;
+                let face = if i < steps {
+                    poly[(v + n - 1) % n].1
+                } else {
+                    None
+                };
+                pocket.push((poly[v].0, face));
+            }
+            if let Some(p) = region(&pocket, !inside, half, depth + 1)? {
+                pockets.push(p);
+            }
+        }
+        let Some(mut acc) = acc else {
+            return Ok(None);
+        };
+        for p in &pockets {
+            acc = super::boolean::boolean_bodies(&acc, p, BoolOp::Subtract)?.body;
+        }
+        Ok(Some(acc))
+    }
+    if outer.iter().all(|c| c.1.is_some()) && {
+        // (A convex outline is `planes_bound`'s.)
+        let n = outer.len();
+        (0..n).all(|i| {
+            let (p, q, r) = (outer[i].0, outer[(i + 1) % n].0, outer[(i + 2) % n].0);
+            (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x) > -tol::ROUNDOFF
+        }) && holes.is_empty()
+    } {
+        return None;
+    }
+    Some((|| {
+        let nothing = || KernelError::InvalidResult {
+            op: "draft",
+            why: "the drafted planes bound nothing".into(),
+        };
+        let mut out = region(&outer, true, &half, 0)?.ok_or_else(nothing)?;
+        for cap in [bottom, top] {
+            out = super::boolean::boolean_bodies(&out, &half(cap, true)?, BoolOp::Intersect)?.body;
+        }
+        for h in &holes {
+            // (A hole runs clockwise: turned round, its inside is the other sides' common part.)
+            let n = h.len();
+            let turned: Vec<Corner> = (0..n)
+                .map(|i| (h[(n - i) % n].0, h[(2 * n - i - 1) % n].1))
+                .collect();
+            if let Some(p) = region(&turned, false, &half, 0)? {
+                out = super::boolean::boolean_bodies(&out, &p, BoolOp::Subtract)?.body;
+            }
+        }
+        if out.faces.is_empty() {
+            return Err(nothing());
+        }
+        let mut from = Vec::new();
+        for f in &out.faces {
+            let (o, n) = plane(&f.surf, f.sense).ok_or_else(nothing)?;
+            let j = after
+                .iter()
+                .position(|(q, m)| m.dot(&n) > 1.0 - tol::ANGULAR && (o - q).dot(m).abs() < close)
+                .ok_or_else(|| KernelError::InvalidResult {
+                    op: "draft",
+                    why: "the drafted planes don't close round the part".into(),
+                })?;
+            from.push(j);
+        }
+        Ok((out, from))
+    })())
+}
+
 /// `Kernel::replace_faces`: faces given new surfaces, each keeping the side its material is
 /// on (SMLib's `SmBrep::LocalOperation` keeps the face's use).
 pub fn replace_faces(
@@ -2344,7 +2578,7 @@ pub fn draft(k: &mut NativeKernel, body: BodyId, spec: &DraftSpec) -> Result<OpR
         }
         // Faces the draft swallows (a box's top, where its sides meet below it): of a convex
         // polyhedron, the solid the planes bound, as they are after the draft.
-        Err(e) => match planes_bound(&b, &surfs) {
+        Err(e) => match planes_bound(&b, &surfs).or_else(|| prism_planes_bound(&b, &surfs)) {
             Some(Ok(r)) => r,
             Some(Err(_)) | None => return Err(e),
         },
