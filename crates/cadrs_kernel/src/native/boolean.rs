@@ -854,17 +854,13 @@ fn interior_points(loops: &[Vec<Arc>]) -> Vec<P2> {
         xs.sort_by(f64::total_cmp);
         let mut k = 0;
         while k + 1 < xs.len() {
-            let x = (xs[k] + xs[k + 1]) * 0.5;
-            // How far from the crossings either side, scaled as the clearances are: what
-            // orders the candidates of a region too thin for its polygons to measure.
-            let half = (xs[k + 1] - xs[k]) * 0.5 * scan.su;
-            cands.push((half, P2::new(x, y)));
+            cands.push(P2::new((xs[k] + xs[k + 1]) * 0.5, y));
             k += 2;
         }
     }
     let mut cands: Vec<(f64, P2)> = cands
         .into_iter()
-        .map(|(half, q)| (scan.clearance(&q, f64::NEG_INFINITY).min(half * half), q))
+        .map(|q| (scan.clearance(&q, f64::NEG_INFINITY), q))
         .collect();
     cands.sort_by(|a, b| b.0.total_cmp(&a.0));
     cands.into_iter().map(|(_, p)| p).collect()

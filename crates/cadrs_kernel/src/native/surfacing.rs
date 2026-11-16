@@ -365,6 +365,12 @@ fn thicken_sheet(k: &mut NativeKernel, sheets: &[Body], spec: &ThickenSpec) -> O
                 sharp: spec.sharp,
             },
         )
+        .map_err(|e| {
+            if std::env::var_os("CADRS_SHELL_DEBUG").is_some() {
+                eprintln!("thicken: the capped sheet's shell: {e}");
+            }
+            e
+        })
         .ok()?;
         parts.push(r.bodies[0]);
     }
