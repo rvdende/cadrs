@@ -421,6 +421,15 @@ impl Curve {
             }
             Curve::Circle { c, x, y, r } => conic_nurbs(*c, x * *r, y * *r, t0, t1),
             Curve::Ellipse { c, x, y, a, b } => conic_nurbs(*c, x * *a, y * *b, t0, t1),
+            Curve::Nurbs(n) => n.piece(t0, t1),
+        }
+    }
+
+    /// [`Self::to_nurbs`] of a B-spline the old way, the whole curve split (to check
+    /// [`NurbsCurve::piece`] against).
+    #[cfg(test)]
+    fn to_nurbs_whole(&self, t0: f64, t1: f64) -> NurbsCurve {
+        match self {
             Curve::Nurbs(n) => {
                 let (a, b) = n.range();
                 let mut c = (**n).clone();
@@ -436,6 +445,7 @@ impl Curve {
                 }
                 c
             }
+            _ => self.to_nurbs(t0, t1),
         }
     }
 }
@@ -515,6 +525,74 @@ pub(crate) fn conic_nurbs(c: P3, x: V3, y: V3, t0: f64, t1: f64) -> NurbsCurve {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A B-spline's piece from the spans about its range ([`NurbsCurve::piece`]) is the whole
+    /// curve's split there, to the bit: curves of degrees 1 to 5, rational and not, with
+    /// repeated inner knots, cut at random points, at knots, a hair from them and from the ends,
+    /// and outside the curve.
+    #[test]
+    fn a_piece_of_a_b_spline_is_the_whole_curve_split() {
+        use super::super::nurbs::{H, NurbsCurve};
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut cases = 0;
+        for p in 1..=5usize {
+            for rational in [false, true] {
+                for _ in 0..12 {
+                    let n = p + 1 + (rnd() * 20.0) as usize;
+                    let mut inner: Vec<f64> = (0..n - p).map(|_| rnd() * 10.0).collect();
+                    inner.sort_by(f64::total_cmp);
+                    // (Some knots doubled, up to the degree.)
+                    for i in 1..inner.len() {
+                        if p > 1 && rnd() < 0.2 {
+                            inner[i] = inner[i - 1];
+                        }
+                    }
+                    let mut knots = vec![0.0; p + 1];
+                    knots.extend(inner.iter().map(|k| k.clamp(1e-3, 10.0 - 1e-3)));
+                    knots.extend(vec![10.0; p + 1]);
+                    let cps: Vec<H> = (0..=n)
+                        .map(|_| {
+                            let w = if rational { 0.5 + rnd() } else { 1.0 };
+                            H::new(rnd() * w, rnd() * w, rnd() * w, w)
+                        })
+                        .collect();
+                    let c = Curve::Nurbs(std::sync::Arc::new(NurbsCurve {
+                        degree: p,
+                        knots: knots.clone(),
+                        cps,
+                    }));
+                    let mut at: Vec<f64> = vec![0.0, 10.0, 1e-13, 10.0 - 1e-13, -1.0, 11.0];
+                    for k in &knots {
+                        at.extend([*k, k + 1e-13, k - 1e-13, k + 1e-9]);
+                    }
+                    for _ in 0..8 {
+                        at.push(rnd() * 10.0);
+                    }
+                    for &t0 in &at {
+                        for &t1 in &at {
+                            if t0 > t1 && rnd() < 0.9 {
+                                continue;
+                            }
+                            let (new, old) = (c.to_nurbs(t0, t1), c.to_nurbs_whole(t0, t1));
+                            assert_eq!(
+                                (new.knots, new.cps),
+                                (old.knots, old.cps),
+                                "degree {p}, {t0}..{t1}"
+                            );
+                            cases += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(cases > 10_000, "{cases}");
+    }
 
     /// A mesh's samples of a B-spline of many pieces (a fitted circle, 200 of them) follow its
     /// curvature, not its pieces: far fewer than two a piece, its ends kept, the gaps even.
