@@ -69,6 +69,9 @@ struct Piece {
     a: P3,
     b: P3,
     old: Option<(usize, bool)>,
+    /// Whether it ends at a point where the surface collapses (a cone's apex, a sphere's
+    /// pole): the boundary turns back there along the same curve, and nothing cancels.
+    pole: bool,
 }
 
 impl Piece {
@@ -119,6 +122,8 @@ enum Event {
     End(usize),
     /// A crossing with candidate `ci` at its parameter `t`.
     Cross(usize, f64),
+    /// A point where the surface collapses.
+    Pole,
 }
 
 struct Tracer<'a> {
@@ -129,6 +134,8 @@ struct Tracer<'a> {
     tol: f64,
     /// How far ahead a path's direction is taken, to tell curves that cross tangentially apart.
     ahead: f64,
+    /// The points where the surface collapses.
+    poles: Vec<P3>,
 }
 
 impl Tracer<'_> {
@@ -163,6 +170,14 @@ impl Tracer<'_> {
                 && let Some(d) = ahead(x)
             {
                 out.push((d, x, Event::End(k)));
+            }
+        }
+        for q in &self.poles {
+            let (x, dist) = c.at(q);
+            if dist < self.tol * 4.0
+                && let Some(d) = ahead(x)
+            {
+                out.push((d, x, Event::Pole));
             }
         }
         for (j, o) in self.cands.iter().enumerate() {
@@ -252,6 +267,7 @@ impl Tracer<'_> {
                             match e.2 {
                                 Event::End(k) => format!("end {k}"),
                                 Event::Cross(j, y) => format!("cross {j} at {y}"),
+                                Event::Pole => "pole".into(),
                             }
                         ))
                         .collect::<Vec<_>>()
@@ -277,6 +293,7 @@ impl Tracer<'_> {
                 a: from.1,
                 b,
                 old: None,
+                pole: false,
             };
             // Everything at the first event's point.
             let here: Vec<&(f64, f64, Event)> = ev
@@ -289,6 +306,18 @@ impl Tracer<'_> {
             }) {
                 pieces.push(piece(first.1, ends[k]));
                 return Ok((pieces, k));
+            }
+            // At a pole the boundary turns back along the curve it came by (the other use
+            // of a seam; the pole's own edge is put between them when the body is built).
+            if here.iter().any(|e| matches!(e.2, Event::Pole)) {
+                pieces.push(Piece {
+                    pole: true,
+                    ..piece(first.1, x)
+                });
+                cur.t = first.1;
+                cur.up = !cur.up;
+                from = (cur.t, x);
+                continue;
             }
             // Straight on, or the leftmost of the curves crossing here: the first way out
             // round to the right from where the path came in.
@@ -369,7 +398,7 @@ fn cancel(mut l: Vec<Piece>, tol: f64) -> Result<Option<Vec<Piece>>> {
             if (p.b - q.a).norm() > tol * 8.0 {
                 return Err(failed("a face's new boundary has a gap"));
             }
-            if p.dir(p.tb).dot(&q.dir(q.ta)) > -1.0 + 1e-9 {
+            if p.pole || p.dir(p.tb).dot(&q.dir(q.ta)) > -1.0 + 1e-9 {
                 continue;
             }
             // `q` runs back along `p`'s curve? Where its end falls on `p`.
@@ -702,6 +731,7 @@ pub fn delete_faces(b: &Body, gone: &[usize]) -> Result<(Body, Vec<Vec<usize>>)>
             a: b.verts[va].p,
             b: b.verts[vb].p,
             old: Some((c.edge, c.fwd)),
+            pole: false,
         }
     };
     let mut pool_loops: Vec<Vec<NewLoop>> = Vec::new();
@@ -712,6 +742,7 @@ pub fn delete_faces(b: &Body, gone: &[usize]) -> Result<(Body, Vec<Vec<usize>>)>
             cands: &cands[pi],
             tol: ptol,
             ahead: 1e-4 * size,
+            poles: super::local::singular_points(&p.surf),
         };
         // The kept runs (a face, its pieces) and the lost runs (start, heading back into the
         // start, end), over all the pool's loops.
@@ -1092,9 +1123,12 @@ pub fn delete_faces(b: &Body, gone: &[usize]) -> Result<(Body, Vec<Vec<usize>>)>
             sources.push(members);
         }
     }
+    let solid = !b.solids.is_empty();
     let all: Vec<usize> = (0..xb.faces.len()).collect();
-    let shell = xb.shell(all, true);
-    xb.solid(vec![shell]);
+    let shell = xb.shell(all, solid);
+    if solid {
+        xb.solid(vec![shell]);
+    }
     let (mut out, _warnings, map) = xb.finish_mapped();
     let mut from = vec![Vec::new(); out.faces.len()];
     for (i, m) in map.iter().enumerate() {
@@ -1106,11 +1140,21 @@ pub fn delete_faces(b: &Body, gone: &[usize]) -> Result<(Body, Vec<Vec<usize>>)>
     out.shells.clear();
     out.solids.clear();
     super::boolean::assemble_shells(&mut out)?;
-    if out.solids.len() != 1 || out.shells.iter().any(|s| !s.closed) {
-        return Err(failed(
-            "the faces round the deleted ones don't close the gap",
-        ));
+    if solid {
+        if out.solids.len() != 1 || out.shells.iter().any(|s| !s.closed) {
+            return Err(failed(
+                "the faces round the deleted ones don't close the gap",
+            ));
+        }
+    } else {
+        // A sheet stays a sheet.
+        out.solids.clear();
+        for s in &mut out.shells {
+            s.closed = false;
+        }
     }
+    // Edges run on are one edge again (a seam and its piece up to the new rim).
+    super::unify::merge_edges(&mut out);
     let problems = out.check();
     if !problems.is_empty() {
         return Err(failed(format!(

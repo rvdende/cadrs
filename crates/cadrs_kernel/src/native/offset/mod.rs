@@ -87,6 +87,39 @@ fn moved_by_slabs(
     .then_some(out)
 }
 
+/// `b` without the faces that moving by `dist` takes past their own radius (a cylinder, a
+/// sphere or a torus tube whose offset has none left: [`sharp::offset_surface`]), the faces
+/// round them run on to meet ([`crate::native::defeature`]); with each of its faces' sources
+/// in `b`. None when no face vanishes, all do, or the faces round them don't close.
+pub(crate) fn without_vanishing(
+    b: &crate::native::topo::Body,
+    dist: &[f64],
+) -> Option<(crate::native::topo::Body, Vec<Vec<usize>>)> {
+    let gone: Vec<usize> = (0..b.faces.len())
+        .filter(|&f| {
+            let face = &b.faces[f];
+            dist[f] != 0.0
+                && matches!(
+                    face.surf,
+                    Surface::Cylinder { .. } | Surface::Sphere { .. } | Surface::Torus { .. }
+                )
+                && sharp::offset_surface(&face.surf, face.sense, dist[f]).is_none()
+        })
+        .collect();
+    if gone.is_empty() || gone.len() == b.faces.len() {
+        return None;
+    }
+    match crate::native::defeature::delete_faces(b, &gone) {
+        Ok(r) => Some(r),
+        Err(e) => {
+            if std::env::var_os("CADRS_SHELL_DEBUG").is_some() {
+                eprintln!("the vanishing faces {gone:?} can't be deleted: {e}");
+            }
+            None
+        }
+    }
+}
+
 pub fn offset(k: &mut NativeKernel, body: BodyId, spec: &OffsetSpec) -> Result<OpResult> {
     let b = (**k.get(body)?).clone();
     let mut dist = vec![spec.distance; b.faces.len()];
@@ -118,23 +151,51 @@ pub fn offset(k: &mut NativeKernel, body: BodyId, spec: &OffsetSpec) -> Result<O
     {
         return Err(too_far("a face would shrink to nothing"));
     }
-    let out = if spec.sharp || dist.iter().all(|d| *d == 0.0) {
-        let out = sharp::offset_sharp(&b, &dist)?;
-        if moving
-            && !out
-                .check_with(crate::native::topo::CheckLevel::Full)
-                .is_empty()
-        {
-            // (Faces run into each other: two holes widened until they merge.)
-            moved_by_slabs(&b, &spec.faces)
-                .ok_or_else(|| too_far("a face would run into another face"))?
+    let first = (|| -> Result<crate::native::topo::Body> {
+        Ok(if spec.sharp || dist.iter().all(|d| *d == 0.0) {
+            let out = sharp::offset_sharp(&b, &dist)?;
+            if moving
+                && !out
+                    .check_with(crate::native::topo::CheckLevel::Full)
+                    .is_empty()
+            {
+                // (Faces run into each other: two holes widened until they merge.)
+                moved_by_slabs(&b, &spec.faces)
+                    .ok_or_else(|| too_far("a face would run into another face"))?
+            } else {
+                out
+            }
+        } else if dist.iter().all(|d| *d <= 0.0) {
+            round::inset_rounded(&b, &dist)?
         } else {
-            out
+            round::offset_rounded(&b, &dist)?
+        })
+    })();
+    // Faces the distance takes past their own radius (a round of radius 2 moved in 3) have no
+    // offset: they are no part of the result's boundary, which the faces round them make,
+    // run on until they meet. So the body without them ([`without_vanishing`]) is offset.
+    let (b, dist, out, back) = match first {
+        Ok(out) => (b, dist, out, None),
+        Err(e) => {
+            let Some((b2, from)) = (!moving).then(|| without_vanishing(&b, &dist)).flatten() else {
+                return Err(e);
+            };
+            let d2: Vec<f64> = from.iter().map(|s| dist[s[0]]).collect();
+            let out = if spec.sharp {
+                sharp::offset_sharp(&b2, &d2)
+            } else if d2.iter().all(|d| *d <= 0.0) {
+                round::inset_rounded(&b2, &d2)
+            } else {
+                round::offset_rounded(&b2, &d2)
+            }
+            .map_err(|again| {
+                if std::env::var_os("CADRS_SHELL_DEBUG").is_some() {
+                    eprintln!("offset without the vanishing faces: {again}");
+                }
+                e
+            })?;
+            (b2, d2, out, Some((from, b.faces.len())))
         }
-    } else if dist.iter().all(|d| *d <= 0.0) {
-        round::inset_rounded(&b, &dist)?
-    } else {
-        round::offset_rounded(&b, &dist)?
     };
     let v0 = crate::native::mass::body_volume(&b);
     let v1 = crate::native::mass::body_volume(&out);
@@ -160,19 +221,28 @@ pub fn offset(k: &mut NativeKernel, body: BodyId, spec: &OffsetSpec) -> Result<O
     );
     let id = k.insert(out);
     let mut history = History::default();
-    let mut kept = vec![false; b.faces.len()];
+    // (The input's own faces, where the body offset was the one without its vanishing faces.)
+    let inputs = |i: usize| -> Vec<usize> {
+        match &back {
+            Some((from, _)) => from[i].clone(),
+            None => vec![i],
+        }
+    };
+    let mut kept = vec![false; back.as_ref().map_or(b.faces.len(), |x| x.1)];
     for (f, src) in srcs.iter().enumerate() {
         for s in src {
             match s {
                 crate::native::blend::FaceSrc::Input(i) => {
-                    kept[*i] = true;
-                    history.modified.push((
-                        FaceId(f as u64),
-                        InputFace {
-                            body,
-                            face: FaceId(*i as u64),
-                        },
-                    ));
+                    for i in inputs(*i) {
+                        kept[i] = true;
+                        history.modified.push((
+                            FaceId(f as u64),
+                            InputFace {
+                                body,
+                                face: FaceId(i as u64),
+                            },
+                        ));
+                    }
                 }
                 crate::native::blend::FaceSrc::New(o) => {
                     history.generated.push((FaceId(f as u64), *o))
@@ -180,7 +250,7 @@ pub fn offset(k: &mut NativeKernel, body: BodyId, spec: &OffsetSpec) -> Result<O
             }
         }
     }
-    history.deleted = (0..b.faces.len())
+    history.deleted = (0..kept.len())
         .filter(|&i| !kept[i])
         .map(|i| InputFace {
             body,

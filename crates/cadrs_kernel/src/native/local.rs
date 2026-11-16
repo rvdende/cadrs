@@ -295,7 +295,7 @@ pub(super) fn nurbs_iso(n: &super::nurbs::NurbsSurface, t: f64, along_v: bool) -
 }
 
 /// The points where a surface collapses: a cone's apex, a sphere's poles.
-fn singular_points(s: &Surface) -> Vec<P3> {
+pub(super) fn singular_points(s: &Surface) -> Vec<P3> {
     match s {
         Surface::Cone { f, r, a } if a.sin().abs() > tol::ANGULAR_FINE => {
             vec![f.o + f.z * (-r / a.tan())]
