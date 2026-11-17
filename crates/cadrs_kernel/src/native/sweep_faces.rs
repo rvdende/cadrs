@@ -378,8 +378,8 @@ fn stand(points: &[(P3, V3)], mv: &Move) -> Stand {
     }
 }
 
-/// How face `fi` stands to the motion: by points inside it ([`face_points`]) and, under a screw,
-/// by its edges too. The points inside are a grid's, and a part of the face narrower than the
+/// How face `fi` stands to the motion: by points inside it ([`face_points`]) and by its edges
+/// too (under a slide, a turn or a screw alike). The points inside are a grid's, and a part of the face narrower than the
 /// grid's step has none: where a drum's contact curve runs over its seam, the corner it cuts off
 /// beside the seam leads while the rest of its piece trails, and taken for trailing it went
 /// unswept (the same screw from another start, its contact clear of the seam, swept a solid
@@ -389,7 +389,7 @@ fn stand(points: &[(P3, V3)], mv: &Move) -> Stand {
 fn face_stand(b: &Body, fi: usize, size: f64, mv: &Move) -> Stand {
     let points = face_points(b, fi, size);
     let inside = stand(&points, mv);
-    if !matches!(mv, Move::Screw { .. }) || !matches!(inside, Stand::Leads | Stand::Trails) {
+    if !matches!(inside, Stand::Leads | Stand::Trails) {
         return inside;
     }
     let f = &b.faces[fi];
