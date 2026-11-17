@@ -1570,6 +1570,10 @@ pub struct VertexInfo {
 
 /// How finely to tessellate: the largest distance from a triangle or edge segment to the exact
 /// surface (mm), and the largest angle between neighbouring normals (radians).
+///
+/// The deflection is kept down to limits of the mesher's own: an arc's step is no finer than
+/// 1e-3 rad (a sagitta of 1.25e-7 of its radius), a closed surface's boundary takes at most 400
+/// steps and an edge at most 8192 samples, so a deflection finer than those allow is not met.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Tessellation {
     /// Largest distance from the mesh to the exact surface (mm), above zero.
