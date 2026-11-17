@@ -8,7 +8,8 @@
 //!   are closed forms too; the two branches meet there.
 //! - Two equal tori about one centre: they meet in two planes through it, so as a torus and
 //!   a plane twice.
-//! - A cylinder or a cone and a sphere, a cylinder or a cone. Along a ruling `B(θ) + h·D(θ)` a
+//! - A cylinder, a cone or a circle carried along a line (a slanted cylinder) and a sphere or
+//!   another of those. Along a ruling `B(θ) + h·D(θ)` a
 //!   quadric's equation is a quadratic in h: `h = (−β ± √(β² − αγ))/α`, over the stretches of θ
 //!   where the discriminant is positive.
 //!
@@ -17,11 +18,13 @@
 //! touches (a double root: the curve crosses itself or shrinks to a point there) is left to the
 //! numeric engine.
 
+use super::curve::Curve;
 use super::math::*;
 use super::ssi_numeric::Pt;
 use super::surface::Surface;
 
 type UvBox = ((f64, f64), (f64, f64));
+type M3 = nalgebra::Matrix3<f64>;
 
 /// A polyline of exact points of an intersection, and whether it closes.
 pub(super) type Poly = (Vec<Pt>, bool);
@@ -63,8 +66,11 @@ pub(super) fn graph(a: &Surface, ua: UvBox, b: &Surface, bb: &Bbox) -> Option<Ve
             Some(out)
         }
         (
-            Surface::Cylinder { .. } | Surface::Cone { .. },
-            Surface::Sphere { .. } | Surface::Cylinder { .. } | Surface::Cone { .. },
+            Surface::Cylinder { .. } | Surface::Cone { .. } | Surface::Extrusion { .. },
+            Surface::Sphere { .. }
+            | Surface::Cylinder { .. }
+            | Surface::Cone { .. }
+            | Surface::Extrusion { .. },
         ) => ruled(a, ua, b, bb),
         _ => None,
     }
@@ -422,53 +428,82 @@ fn sign_roots(d: &dyn Fn(f64) -> f64, floor: f64) -> Option<Vec<f64>> {
     Some(out)
 }
 
-/// A cylinder or a cone `a` and a sphere, a cylinder or a cone `b`: along `a`'s ruling at θ,
+/// A cylinder, a cone or a circle carried along a line `a` and a sphere, a cylinder, a cone or
+/// such a carried circle `b`: along `a`'s ruling at θ,
 /// `B(θ) + h·D(θ)`, `b`'s equation `xᵀMx + 2l·x + k = 0` (x from `b`'s origin) is
 /// `α h² + 2β h + γ = 0`.
 fn ruled(a: &Surface, ua: UvBox, b: &Surface, bb: &Bbox) -> Option<Vec<Poly>> {
+    // Whether a surface's rulings all run one way.
+    let prism = |s: &Surface| matches!(s, Surface::Cylinder { .. } | Surface::Extrusion { .. });
+    // (The other way round the rulings all meet the cone alike.)
+    if matches!(a, Surface::Cone { .. }) && prism(b) {
+        return None;
+    }
     // The ruling at θ: its point at h = 0 and its direction.
-    let (fa, ra, (sa, ca)) = match a {
-        Surface::Cylinder { f, r } => (f, *r, (0.0, 1.0)),
-        // (The other way round the cylinder's rulings all meet the cone alike.)
-        Surface::Cone { .. } if matches!(b, Surface::Cylinder { .. }) => return None,
-        Surface::Cone { f, r, a } => (f, *r, a.sin_cos()),
+    type Ruling<'a> = Box<dyn Fn(f64) -> (P3, V3) + 'a>;
+    let (ruling, ra): (Ruling, f64) = match a {
+        Surface::Cylinder { f, r } => (
+            Box::new(move |t: f64| (f.o + (f.x * t.cos() + f.y * t.sin()) * *r, f.z)),
+            *r,
+        ),
+        Surface::Cone { f, r, a } => {
+            let (sa, ca) = a.sin_cos();
+            (
+                Box::new(move |t: f64| {
+                    let e = f.x * t.cos() + f.y * t.sin();
+                    (f.o + e * *r, e * sa + f.z * ca)
+                }),
+                *r,
+            )
+        }
+        Surface::Extrusion {
+            c: c @ Curve::Circle { r, .. },
+            d,
+        } => (Box::new(move |t: f64| (c.point(t), *d)), *r),
         _ => return None,
     };
-    // b as a quadric about its origin: M = m·I − zzᵀ.
-    let (fb, m, l, k) = match b {
-        Surface::Sphere { f, r } => (f, 1.0, V3::zeros(), -r * r),
-        Surface::Cylinder { f, r } => (f, 1.0, V3::zeros(), -r * r),
+    // b as a quadric about a point: xᵀMx + 2l·x + k = 0.
+    let axial = |z: &V3, m: f64| M3::identity() * m - z * z.transpose();
+    let (ob, m, l, k) = match b {
+        Surface::Sphere { f, r } => (f.o, M3::identity(), V3::zeros(), -r * r),
+        Surface::Cylinder { f, r } => (f.o, axial(&f.z, 1.0), V3::zeros(), -r * r),
         Surface::Cone { f, r, a } => {
             let (s, c) = a.sin_cos();
             if c.abs() < 1e-6 {
                 return None;
             }
-            (f, c * c, f.z * (-r * s * c), -r * r * c * c)
+            (f.o, axial(&f.z, c * c), f.z * (-r * s * c), -r * r * c * c)
+        }
+        // A circle carried along d: a point x (from the circle's centre) is on it where its
+        // foot along d in the circle's plane, x − d (n·x)/(n·d), is r from the centre.
+        Surface::Extrusion {
+            c: Curve::Circle { c, x, y, r },
+            d,
+        } => {
+            let n = x.cross(y);
+            let nd = n.dot(d);
+            if nd.abs() < 1e-6 * d.norm() {
+                return None;
+            }
+            let foot = M3::identity() - d * n.transpose() / nd;
+            (*c, foot.transpose() * foot, V3::zeros(), -r * r)
         }
         _ => return None,
     };
-    let axial = !matches!(b, Surface::Sphere { .. });
-    let quad = |x: &V3, y: &V3| {
-        m * x.dot(y)
-            - if axial {
-                x.dot(&fb.z) * y.dot(&fb.z)
-            } else {
-                0.0
-            }
-    };
-    let o = fa.o - fb.o;
     // (α, β, γ) at θ.
     let coefs = |t: f64| {
-        let e = fa.x * t.cos() + fa.y * t.sin();
-        let (base, d) = (o + e * ra, e * sa + fa.z * ca);
+        let (base, d) = ruling(t);
+        let base = base - ob;
+        let md = m * d;
         (
-            quad(&d, &d),
-            quad(&d, &base) + l.dot(&d),
-            quad(&base, &base) + 2.0 * l.dot(&base) + k,
+            d.dot(&md),
+            base.dot(&md) + l.dot(&d),
+            base.dot(&(m * base)) + 2.0 * l.dot(&base) + k,
         )
     };
     // The rulings must all cross the quadric's directions: α of one sign, away from zero (a
     // ruling along one of b's has a root at infinity, and the branches change over there).
+    let dn = ruling(0.0).1.norm();
     let mut alpha_min = f64::INFINITY;
     let mut sign = 0.0;
     for i in 0..32 {
@@ -479,9 +514,12 @@ fn ruled(a: &Surface, ua: UvBox, b: &Surface, bb: &Bbox) -> Option<Vec<Poly>> {
         sign = al;
         alpha_min = alpha_min.min(al.abs());
     }
-    if alpha_min < 1e-6 {
+    if alpha_min < 1e-6 * dn * dn || dn < 1e-12 {
         return None;
     }
+    // (In millimetres along a ruling.)
+    let alpha_min = alpha_min / dn;
+    let o = ruling(0.0).0 - ob;
     let disc = |t: f64| {
         let (al, be, ga) = coefs(t);
         be * be - al * ga
