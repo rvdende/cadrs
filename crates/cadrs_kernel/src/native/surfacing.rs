@@ -143,6 +143,22 @@ pub fn thicken(k: &mut NativeKernel, spec: &ThickenSpec) -> Result<OpResult> {
     Ok(t.into_result(k))
 }
 
+/// Whether a surface is turned about the axis through `c` along `z`: a plane square to it, or
+/// a cylinder, cone, sphere or torus about it. Its section in every half-plane through the
+/// axis is then the same.
+fn turned_about(s: &Surface, c: &P3, z: &V3) -> bool {
+    let on_axis = |o: &P3| (o - c).cross(z).norm() <= tol::POINT;
+    let along = |d: &V3| d.cross(z).norm() <= tol::ANGULAR * d.norm();
+    match s {
+        Surface::Plane { f } => along(&f.x.cross(&f.y)),
+        Surface::Cylinder { f, .. } | Surface::Cone { f, .. } | Surface::Torus { f, .. } => {
+            on_axis(&f.o) && along(&f.z)
+        }
+        Surface::Sphere { f, .. } => on_axis(&f.o),
+        _ => false,
+    }
+}
+
 /// The solids filling the gaps between the slabs of a sheet's faces (each swept along its normal
 /// by `spec.along`, and against it by `spec.against`) where two flat faces meet along a straight
 /// crease and the sheet bends away from the side the slabs go to: the wedge between the slabs'
@@ -201,6 +217,86 @@ fn crease_fills(k: &mut NativeKernel, sheets: &[Body], spec: &ThickenSpec) -> Re
                 let t = dir.cross(&n).try_normalize(tol::TINY)?;
                 Some((n, if t.dot(&(c - m)) < 0.0 { -t } else { t }))
             };
+            // A crease round a circle between faces turned about its axis (a floor and the
+            // wall round it, a cone on a cylinder): the gap is the same all the way round, the
+            // straight crease's kite or sector turned about the axis.
+            if let Curve::Circle { c, x, y, .. } = &edge.curve
+                && let Some(z) = x.cross(y).try_normalize(tol::TINY)
+                && turned_about(&sewn.faces[f1].surf, c, &z)
+                && turned_about(&sewn.faces[f2].surf, c, &z)
+            {
+                let (t0, t1) = (edge.t[0].min(edge.t[1]), edge.t[0].max(edge.t[1]));
+                let a = edge.curve.point(t0);
+                let dir = edge.curve.tangent(t0).normalize();
+                // Each face's outward normal at the crease's start, and the way into it there.
+                let beside = |f: usize| -> Option<(V3, V3)> {
+                    let face = &sheets[f].faces.first()?;
+                    // (A hair into the face: at the crease itself a cone's apex or a pole
+                    // would have no normal.)
+                    let (centre, _) = face_normal(&sewn, f)?;
+                    let (u, v) = face.surf.project(&a, None);
+                    let n = (face.surf.normal(u, v) * if face.sense { 1.0 } else { -1.0 })
+                        .try_normalize(tol::TINY)?;
+                    let t = dir.cross(&n).try_normalize(tol::TINY)?;
+                    // (Into the face: towards its own side of the crease, told a quarter of
+                    // the way to its middle.)
+                    let towards = a + (centre - a) * 0.25;
+                    let (u2, v2) = face.surf.project(&towards, None);
+                    let inside = face.surf.eval(u2, v2) - a;
+                    Some((n, if t.dot(&inside) < 0.0 { -t } else { t }))
+                };
+                if let (Some((n1, t1v)), Some((n2, t2v))) = (beside(f1), beside(f2)) {
+                    for (d, sign) in [(spec.along, 1.0), (spec.against, -1.0)] {
+                        if d < tol::ROUNDOFF {
+                            continue;
+                        }
+                        let (m1, m2) = (n1 * sign, n2 * sign);
+                        if m1.dot(&t2v) >= -tol::ANGULAR || m2.dot(&t1v) >= -tol::ANGULAR {
+                            continue;
+                        }
+                        let px = m1;
+                        let py = dir.cross(&px);
+                        let at2 = |p: P3| nalgebra::Point2::new((p - a).dot(&px), (p - a).dot(&py));
+                        let l = |p: P3, q: P3| Curve2::Line {
+                            a: at2(p),
+                            b: at2(q),
+                            source: None,
+                        };
+                        let curves = if spec.sharp {
+                            let corner = a + (m1 + m2) * (d / (1.0 + m1.dot(&m2)));
+                            let pts = [a, a + m1 * d, corner, a + m2 * d];
+                            (0..4).map(|i| l(pts[i], pts[(i + 1) % 4])).collect()
+                        } else {
+                            // The sector about the crease from one moved face to the other.
+                            let to = m2.dot(&py).atan2(m2.dot(&px));
+                            vec![
+                                l(a, a + m1 * d),
+                                Curve2::arc(nalgebra::Point2::origin(), d, 0.0, to),
+                                l(a + m2 * d, a),
+                            ]
+                        };
+                        let plane = Plane {
+                            origin: a,
+                            x_dir: nalgebra::Unit::new_normalize(px),
+                            normal: nalgebra::Unit::new_normalize(dir),
+                        };
+                        let region = Region {
+                            outer: Loop { curves },
+                            holes: vec![],
+                            source: None,
+                        };
+                        let axis = Axis {
+                            origin: *c,
+                            dir: nalgebra::Unit::new_normalize(z),
+                        };
+                        let id = k.revolve(&Profile::new(plane, vec![region]), axis, t1 - t0)?;
+                        let body = k.get(id.bodies[0])?.as_ref().clone();
+                        k.release(id.bodies[0]);
+                        out.push(body);
+                    }
+                    continue;
+                }
+            }
             if let (Some((n1, t1)), Some((n2, t2))) = (at(f1), at(f2)) {
                 let away =
                     [(spec.along, 1.0), (spec.against, -1.0)]

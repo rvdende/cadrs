@@ -135,3 +135,68 @@ fn thicken_a_face_both_ways() {
         .is_err()
     );
 }
+
+/// A quarter of a cup thickened outwards: its floor (a quarter disc) and its wall (a quarter
+/// of a cylinder) meet along a quarter circle, where the sheet bends away from the side
+/// thickened, so the floor's slab and the wall's leave a gap all along it. Rounded, the gap is
+/// a quarter disc of the thickness turned about the cup's axis; mitred, the square ring
+/// between the slabs. (A crease along a curve had no fill: the slabs alone were an error.)
+#[test]
+fn thicken_fills_a_crease_round_a_circle() {
+    use std::f64::consts::PI;
+    let mut k = DefaultKernel::new();
+    let floor = Plane {
+        origin: Point3::origin(),
+        x_dir: Vector3::x_axis(),
+        normal: Vector3::z_axis(),
+    };
+    let quarter = Loop::from_point([0.0, 0.0])
+        .line_to([5.0, 0.0])
+        .conic_to([5.0, 5.0], 2f64.sqrt() / 2.0, [0.0, 5.0])
+        .close();
+    let solid = k
+        .extrude_with(
+            &Profile::of(floor, vec![quarter]),
+            &ExtrudeSpec::blind(Vector3::z_axis(), 5.0),
+        )
+        .unwrap()
+        .first()
+        .unwrap();
+    // Its floor (the flat face at z = 0) and its round wall.
+    let faces = k.faces(solid).unwrap();
+    let pick = |kind: SurfaceKind, z: f64| {
+        faces
+            .iter()
+            .find(|f| f.kind == kind && (f.center.z - z).abs() < 1e-6)
+            .map(|f| FaceInput {
+                body: solid,
+                face: f.id,
+                source: 1,
+            })
+            .expect("the face")
+    };
+    let sheet = vec![
+        pick(SurfaceKind::Plane, 0.0),
+        pick(SurfaceKind::Cylinder, 2.5),
+    ];
+    let t = 1.0;
+    let thickened = |k: &mut DefaultKernel, sharp: bool| {
+        let r = k
+            .thicken_surfaces(&ThickenSpec {
+                bodies: vec![],
+                faces: sheet.clone(),
+                profiles: vec![],
+                along: t,
+                against: 0.0,
+                sharp,
+                source: 7,
+            })
+            .unwrap();
+        k.mass_properties(r.bodies[0]).unwrap().volume
+    };
+    let slabs = PI * 25.0 / 4.0 * t + PI * ((5.0 + t).powi(2) - 25.0) / 4.0 * 5.0;
+    let round = slabs + (PI * t * t / 4.0) * (PI / 2.0) * (5.0 + 4.0 * t / (3.0 * PI));
+    close(thickened(&mut k, false), round, 1e-7);
+    let mitred = (PI * (5.0 + t).powi(3) - PI * 125.0) / 4.0;
+    close(thickened(&mut k, true), mitred, 1e-7);
+}
