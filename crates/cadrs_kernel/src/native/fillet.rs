@@ -10780,13 +10780,17 @@ fn chamfer_offsets_angled_at(
     Some(vec![(0.0, k), (1.0, k)])
 }
 
+/// An edge and its ball's two offsets along it: (fraction of the edge, offsets), linear
+/// between.
+pub type OffsetsAlong = (usize, Vec<(f64, [f64; 2])>);
+
 /// [`chamfer_edges_offsets`] with each edge's offsets given along it, (fraction of the edge,
 /// offsets), linear between: the first offset the ball's law, the second over the first its
 /// ratio's.
 pub fn chamfer_edges_offsets_along(
     b: &Body,
     input: BodyId,
-    edges: &[(usize, Vec<(f64, [f64; 2])>)],
+    edges: &[OffsetsAlong],
 ) -> Result<(Body, Vec<Vec<FaceSrc>>)> {
     let mut laws = Vec::new();
     let mut ratios: Vec<Ratio> = Vec::new();

@@ -2645,7 +2645,9 @@ fn conic_on_round(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Option<Vec<f64>> 
         return None;
     }
     // g at a point, and its size where the point is off the surface by its own size.
-    let (frame, g): (&Frame, Box<dyn Fn(&V3) -> (f64, f64)>) = match s {
+    // (g at a point in the surface's frame, and its size there.)
+    type Implicit = Box<dyn Fn(&V3) -> (f64, f64)>;
+    let (frame, g): (&Frame, Implicit) = match s {
         Surface::Sphere { f, r } => {
             let r2 = r * r;
             (

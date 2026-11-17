@@ -709,8 +709,7 @@ fn ray_torus(
             for _ in 0..3 {
                 // (The distance's slope along the line: its gradient, the torus's normal at
                 // the foot, along the line's direction.)
-                let Some(slope) = s.signed_distance_gradient(&(o + d * t)).map(|n| n.dot(&d))
-                else {
+                let Some(slope) = s.signed_distance_gradient(&(o + d * t)).map(|n| n.dot(d)) else {
                     break;
                 };
                 if !(slope.abs() > 1e-6) {

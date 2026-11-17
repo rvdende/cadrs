@@ -2938,7 +2938,7 @@ pub fn chamfer(
         let mut prof = super::boolean::Prof::new();
         // (Each edge's offsets: one pair where its section is the same all along it, else
         // at stations along it.)
-        let offsets: Option<Vec<(usize, Vec<(f64, [f64; 2])>)>> = sharp
+        let offsets: Option<Vec<super::fillet::OffsetsAlong>> = sharp
             .iter()
             .map(|&e| {
                 let ei = e.0 as usize;
@@ -3749,7 +3749,7 @@ fn fillet_variable_tool(
         let Curve::Line { d, .. } = &ed.curve else {
             return Err(KernelError::Unsupported("variable fillets of curved edges"));
         };
-        let [s1, s2] = edge_sides(&b, e)?;
+        let [s1, s2] = edge_sides(b, e)?;
         if !matches!(b.faces[s1.0].surf, Surface::Plane { .. })
             || !matches!(b.faces[s2.0].surf, Surface::Plane { .. })
         {
@@ -3772,8 +3772,8 @@ fn fillet_variable_tool(
         let t = d.normalize();
         let len = (ed.t[1] - ed.t[0]) * d.norm();
         let p_start = ed.point(ed.t[0]);
-        let (n1, w1) = face_dirs(&b, s1.0, e, s1.1, ed.mid_t());
-        let (n2, w2) = face_dirs(&b, s2.0, e, s2.1, ed.mid_t());
+        let (n1, w1) = face_dirs(b, s1.0, e, s1.1, ed.mid_t());
+        let (n2, w2) = face_dirs(b, s2.0, e, s2.1, ed.mid_t());
         let convex = w2.dot(&n1) < 0.0;
         let _ = n2;
         let x = w1;

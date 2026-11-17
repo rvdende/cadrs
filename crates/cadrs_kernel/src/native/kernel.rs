@@ -2485,7 +2485,7 @@ fn fillet_scaled(spec: &FilletSpec, by: f64) -> FilletSpec {
             FilletSize::Radius(r) => FilletSize::Radius(r * by),
             FilletSize::Width(w) => FilletSize::Width(w * by),
         },
-        ..spec.clone()
+        ..*spec
     }
 }
 
