@@ -1719,6 +1719,49 @@ impl NurbsSurface {
         out
     }
 
+    /// The curve of the surface at one u, along v: its poles the surface's rows of poles
+    /// weighed by u's basis functions (in homogeneous form, so a rational surface's too).
+    pub fn iso_u_curve(&self, u: f64) -> NurbsCurve {
+        let n = self.cps.len() - 1;
+        let u = u.clamp(self.ku[self.du], self.ku[n + 1]);
+        let span = find_span(n, self.du, u, &self.ku);
+        let basis = basis_ders(span, u, self.du, 0, &self.ku);
+        let cps = (0..self.cps[0].len())
+            .map(|j| {
+                (0..=self.du).fold(H::zeros(), |acc, k| {
+                    acc + self.cps[span - self.du + k][j] * basis[0][k]
+                })
+            })
+            .collect();
+        NurbsCurve {
+            degree: self.dv,
+            knots: self.kv.clone(),
+            cps,
+        }
+    }
+
+    /// The curve of the surface at one v, along u ([`Self::iso_u_curve`] the other way).
+    pub fn iso_v_curve(&self, v: f64) -> NurbsCurve {
+        let m = self.cps[0].len() - 1;
+        let v = v.clamp(self.kv[self.dv], self.kv[m + 1]);
+        let span = find_span(m, self.dv, v, &self.kv);
+        let basis = basis_ders(span, v, self.dv, 0, &self.kv);
+        let cps = self
+            .cps
+            .iter()
+            .map(|row| {
+                (0..=self.dv).fold(H::zeros(), |acc, k| {
+                    acc + row[span - self.dv + k] * basis[0][k]
+                })
+            })
+            .collect();
+        NurbsCurve {
+            degree: self.du,
+            knots: self.ku.clone(),
+            cps,
+        }
+    }
+
     /// The iso-curve at `v` for evaluating many points along u in [u0, u1] (mass properties'
     /// inner integrals): the control points of S(·, v) and ∂S/∂v(·, v), contracted along v once.
     pub fn iso_v(&self, v: f64, u0: f64, u1: f64) -> IsoV<'_> {

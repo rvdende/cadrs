@@ -2615,6 +2615,126 @@ fn nurbs_arc(c: &Curve, p0: &P3, p1: &P3, dir0: &V3) -> Option<(f64, f64)> {
     best.map(|(_, r)| r)
 }
 
+/// The ruled B-spline surface through two rims given at any parameter (`rims`, low and high),
+/// over the pieces `breaks` cuts the parameter's range into (sixteen stations to each): a
+/// drafted face that is no plane or cone. `whole`: the rims close on themselves over the
+/// range. `None` where the rims can't be fitted.
+fn ruled_through(breaks: Vec<f64>, whole: bool, rims: &dyn Fn(f64) -> [P3; 2]) -> Option<Surface> {
+    const EACH: usize = 16;
+    let (&first, &last) = (breaks.first()?, breaks.last()?);
+    let mut at: Vec<f64> = Vec::new();
+    for w in breaks.windows(2) {
+        at.extend((0..EACH).map(|i| w[0] + (w[1] - w[0]) * i as f64 / EACH as f64));
+    }
+    if !whole {
+        at.push(last);
+    }
+    if at.len() < 4 || !(last > first) {
+        return None;
+    }
+    let rim = |k: usize| -> Option<super::nurbs::NurbsCurve> {
+        let pts: Vec<P3> = at.iter().map(|&u| rims(u)[k]).collect();
+        if whole {
+            // (Its parameters with the one where it closes.)
+            let mut closed = at.clone();
+            closed.push(last);
+            super::nurbs::NurbsCurve::interpolate_periodic(&pts, &closed, 3)
+        } else {
+            Some(super::nurbs::NurbsCurve::interpolate(
+                &pts, &at, 3, None, None,
+            ))
+        }
+    };
+    let (low, high) = (rim(0)?, rim(1)?);
+    Some(Surface::Nurbs(std::sync::Arc::new(
+        super::loft_build::skin(&[low, high], &[0.0, 1.0]),
+    )))
+}
+
+/// A cylinder's face drafted where the cylinder doesn't run along the pull (and is no round
+/// between two of the faces drafted): through the curve the cylinder meets the neutral plane
+/// in, each ruling the pull leant by the angle against the face's outward normal's part
+/// across the pull there. A cylinder across the pull meets that plane along a ruling of its
+/// own, and the face becomes the plane through it; one at a slant meets it in an ellipse, and
+/// the face becomes the ruled surface through that.
+fn cylinder_across(
+    b: &Body,
+    fi: usize,
+    fr: &Frame,
+    r: f64,
+    spec: &DraftSpec,
+    pull: &V3,
+) -> Result<Surface> {
+    let f = &b.faces[fi];
+    if spec.neutral_normal.is_some() {
+        return Err(KernelError::Unsupported(
+            "drafting a cylinder about a neutral plane at an angle to the pull",
+        ));
+    }
+    let no_reach =
+        || KernelError::Unsupported("drafting a cylinder that doesn't reach the neutral plane");
+    let ((u0, u1), _) = super::heal_split::face_uv_box(b, fi).ok_or_else(no_reach)?;
+    let sign = if f.sense { 1.0 } else { -1.0 };
+    let (sa, ca) = spec.angle.sin_cos();
+    let reach = 4.0 * b.bbox().diagonal().max(tol::POINT);
+    // The cylinder's point at angle u, v along its axis, and its outward normal there.
+    let radial = |u: f64| fr.x * u.cos() + fr.y * u.sin();
+    // The ruling at a point of the neutral curve: the pull leant against the outward normal's
+    // part across the pull.
+    let ruling = |u: f64| -> Option<V3> {
+        let n = f.surf.normal(u, 0.0) * sign;
+        let across = (n - pull * pull.dot(&n)).try_normalize(tol::ANGULAR)?;
+        Some(pull * ca - across * sa)
+    };
+    let along = fr.z.dot(pull);
+    if along.abs() <= tol::ANGULAR * fr.z.norm() {
+        // Across the pull: the neutral plane holds the ruling at the angle where the
+        // cylinder's point is level with it.
+        let level = |u: f64| (fr.o + radial(u) * r - spec.neutral).dot(pull);
+        let (l0, l1) = (level(u0), level(u1));
+        if l0 * l1 > 0.0 {
+            return Err(no_reach());
+        }
+        let u = super::math::root_from(level, (u0, l0), (u1, l1));
+        let on = fr.o + radial(u) * r;
+        let lean = ruling(u).ok_or_else(no_reach)?;
+        let t = fr.z.normalize();
+        // (The plane through the cylinder's ruling there and the leant one, its normal on
+        // the face's outward side.)
+        let n = (f.surf.normal(u, 0.0) * sign).normalize();
+        let mut z = t.cross(&lean).normalize();
+        if z.dot(&n) < 0.0 {
+            z = -z;
+        }
+        let natural = if f.sense { z } else { -z };
+        return Ok(Surface::Plane {
+            f: Frame {
+                o: on,
+                x: t,
+                y: natural.cross(&t),
+                z: natural,
+            },
+        });
+    }
+    // At a slant: the ellipse the cylinder meets the neutral plane in, by the cylinder's angle.
+    let whole = (u1 - u0).abs() >= TAU - tol::ROUNDOFF;
+    let rims = |u: f64| -> [P3; 2] {
+        let p = fr.o + radial(u) * r;
+        let on = p + fr.z * ((spec.neutral - p).dot(pull) / along);
+        let lean = ruling(u).unwrap_or(*pull);
+        // (Low to high the way the cylinder's axis runs, so the face keeps its side.)
+        let up = lean * (reach * along.signum());
+        [on - up, on + up]
+    };
+    let n = (((u1 - u0).abs() / (PI / 4.0)).ceil() as usize).max(1);
+    let breaks: Vec<f64> = (0..=n)
+        .map(|i| u0 + (u1 - u0) * i as f64 / n as f64)
+        .collect();
+    ruled_through(breaks, whole, &rims).ok_or(KernelError::Unsupported(
+        "drafting this cylinder across the pull",
+    ))
+}
+
 /// A round among faces to draft: the face, its radius and the two faces it runs between.
 type Round = (usize, f64, [usize; 2]);
 
@@ -2920,9 +3040,13 @@ pub fn draft(k: &mut NativeKernel, body: BodyId, spec: &DraftSpec) -> Result<OpR
                     ));
                 }
                 if fr.z.cross(&pull).norm() > tol::ANGULAR {
-                    return Err(KernelError::Unsupported(
-                        "drafting a cylinder or cone not along the pull",
-                    ));
+                    let Surface::Cylinder { r, .. } = &f.surf else {
+                        return Err(KernelError::Unsupported(
+                            "drafting a cone not along the pull",
+                        ));
+                    };
+                    surfs[fi] = cylinder_across(&b, fi, fr, *r, spec, &pull)?;
+                    continue;
                 }
                 let (r, a0) = match &f.surf {
                     Surface::Cone { r, a, .. } => (*r, *a),
@@ -2985,37 +3109,12 @@ pub fn draft(k: &mut NativeKernel, body: BodyId, spec: &DraftSpec) -> Result<OpR
                     let p = c.point(u);
                     let on = p + d * ((spec.neutral - p).dot(&pull) / along);
                     let ruling = pull * ca - f.surf.normal(u, 0.0) * (sign * sa);
-                    [on - ruling * reach, on + ruling * reach]
+                    // (Low to high the way the extrusion runs, so the face keeps its side.)
+                    let up = ruling * (reach * along.signum());
+                    [on - up, on + up]
                 };
-                // Sixteen stations to each smooth piece of the curve.
-                const EACH: usize = 16;
-                let mut at: Vec<f64> = Vec::new();
-                for w in c.pieces(u0, u1).windows(2) {
-                    at.extend((0..EACH).map(|i| w[0] + (w[1] - w[0]) * i as f64 / EACH as f64));
-                }
-                if !whole {
-                    at.push(u1);
-                }
-                let rim = |k: usize| -> Option<super::nurbs::NurbsCurve> {
-                    let pts: Vec<P3> = at.iter().map(|&u| rims(u)[k]).collect();
-                    if whole {
-                        // (Its parameters with the one where it closes.)
-                        let mut closed = at.clone();
-                        closed.push(u1);
-                        super::nurbs::NurbsCurve::interpolate_periodic(&pts, &closed, 3)
-                    } else {
-                        Some(super::nurbs::NurbsCurve::interpolate(
-                            &pts, &at, 3, None, None,
-                        ))
-                    }
-                };
-                let (Some(low), Some(high)) = (rim(0), rim(1)) else {
-                    return Err(KernelError::Unsupported("drafting this extruded face"));
-                };
-                Surface::Nurbs(std::sync::Arc::new(super::loft_build::skin(
-                    &[low, high],
-                    &[0.0, 1.0],
-                )))
+                ruled_through(c.pieces(u0, u1), whole, &rims)
+                    .ok_or(KernelError::Unsupported("drafting this extruded face"))?
             }
             other => {
                 if crate::native::env_flag!("CADRS_DRAFT_DEBUG") {

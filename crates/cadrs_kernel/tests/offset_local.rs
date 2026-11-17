@@ -2020,3 +2020,91 @@ fn a_draft_leans_a_wall_extruded_over_an_ellipse() {
     let v = k.mass_properties(out).unwrap().volume;
     assert!((v - want).abs() < 1e-6 * want, "volume {v}, want {want}");
 }
+
+/// A block with a round hole bored through it at a slant (twenty degrees from upright), the
+/// hole's wall drafted five degrees about the block's top. The cylinder doesn't run along the
+/// pull, so it is no cone afterwards: the ruled surface through the ellipse it meets the top
+/// in, each ruling five degrees from the pull. The top keeps its hole as it was.
+#[test]
+fn a_draft_leans_a_cylinder_at_a_slant_to_the_pull() {
+    let mut k = NativeKernel::new();
+    let block = k
+        .primitive(&Primitive::block(
+            Point3::new(-10.0, -10.0, 0.0),
+            Point3::new(10.0, 10.0, 10.0),
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let lean = 20f64.to_radians();
+    let dir = Vector3::new(lean.sin(), 0.0, lean.cos());
+    let rod = k
+        .primitive(&Primitive::cylinder(
+            Point3::origin() - dir * 5.0,
+            dir,
+            3.0,
+            25.0,
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let bored = k
+        .boolean(BoolOp::Subtract, block, &[rod])
+        .unwrap()
+        .first()
+        .unwrap();
+    let top_area = |k: &NativeKernel, b: BodyId| {
+        k.faces(b)
+            .unwrap()
+            .iter()
+            .find(|f| f.kind == SurfaceKind::Plane && (f.center.z - 10.0).abs() < 1e-6)
+            .map(|f| f.area)
+            .unwrap()
+    };
+    let wall = k
+        .faces(bored)
+        .unwrap()
+        .iter()
+        .find(|f| f.kind == SurfaceKind::Cylinder)
+        .map(|f| f.id)
+        .unwrap();
+    let spec = DraftSpec {
+        faces: vec![wall],
+        angle: 5f64.to_radians(),
+        pull: Vector3::z_axis(),
+        neutral: Point3::new(0.0, 0.0, 10.0),
+        neutral_normal: None,
+        tangent_propagation: false,
+    };
+    let out = k.draft(bored, &spec).unwrap().bodies[0];
+    let b = k.get(out).unwrap();
+    assert!(b.check().is_empty(), "{:?}", b.check());
+    assert!((top_area(&k, out) - top_area(&k, bored)).abs() < 1e-6);
+    // Every normal of the new wall is five degrees off level: its rulings five off the pull.
+    let wall = b
+        .faces
+        .iter()
+        .find(|f| !matches!(f.surf, Surface::Plane { .. }))
+        .expect("the hole's wall");
+    let mut looked = 0;
+    for i in 0..=12 {
+        for j in 1..4 {
+            let (u, v) = (i as f64 / 12.0, j as f64 / 4.0);
+            let ((u0, u1), (v0, v1)) = match &wall.surf {
+                Surface::Nurbs(n) => (
+                    (n.ku[0], n.ku[n.ku.len() - 1]),
+                    (n.kv[0], n.kv[n.kv.len() - 1]),
+                ),
+                other => panic!("the wall is {:?}", other.kind()),
+            };
+            let n = wall.surf.normal(u0 + (u1 - u0) * u, v0 + (v1 - v0) * v);
+            let off_level = n.z.abs().asin().to_degrees();
+            assert!(
+                (off_level - 5.0).abs() < 1e-3,
+                "{off_level} degrees at ({u}, {v})"
+            );
+            looked += 1;
+        }
+    }
+    assert!(looked > 0);
+}

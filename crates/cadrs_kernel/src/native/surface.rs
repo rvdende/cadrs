@@ -1170,6 +1170,7 @@ impl Surface {
                     r: *rmin,
                 }
             }
+            Surface::Nurbs(n) => Curve::Nurbs(Arc::new(n.iso_u_curve(u))),
             _ => return None,
         })
     }
