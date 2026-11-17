@@ -2108,3 +2108,81 @@ fn a_draft_leans_a_cylinder_at_a_slant_to_the_pull() {
     }
     assert!(looked > 0);
 }
+
+/// A pyramid on a slab that isn't convex, two opposite faces of the pyramid drafted to thirty
+/// degrees from upright where all four stood at forty-five: its apex, where the four met,
+/// comes apart into a ridge between the two that weren't moved. (A convex body's faces are
+/// its planes' polytope; here the corner is made two and the faces moved again.) The roof is
+/// then a wedge, 3 · 6 · (2 · 6 + ridge) / 6.
+#[test]
+fn a_draft_parts_a_corner_of_four_faces() {
+    let mut k = NativeKernel::new();
+    let block = |k: &mut NativeKernel, a: [f64; 3], b: [f64; 3]| {
+        k.primitive(&Primitive::block(Point3::from(a), Point3::from(b)))
+            .unwrap()
+            .first()
+            .unwrap()
+    };
+    let slab = block(&mut k, [0.0, 0.0, 0.0], [12.0, 12.0, 2.0]);
+    let notch = block(&mut k, [6.0, -1.0, -1.0], [13.0, 6.0, 3.0]);
+    let ell = k
+        .boolean(BoolOp::Subtract, slab, &[notch])
+        .unwrap()
+        .first()
+        .unwrap();
+    let p = |x: f64, y: f64, z: f64| Point3::new(x, y, z);
+    let (a, b, c, d, top) = (
+        p(0.0, 0.0, 2.0),
+        p(6.0, 0.0, 2.0),
+        p(6.0, 6.0, 2.0),
+        p(0.0, 6.0, 2.0),
+        p(3.0, 3.0, 5.0),
+    );
+    let pyramid = k
+        .mesh_solid(
+            &[
+                [a, c, b],
+                [a, d, c],
+                [a, b, top],
+                [b, c, top],
+                [c, d, top],
+                [d, a, top],
+            ],
+            1e-7,
+        )
+        .unwrap();
+    let part = k
+        .boolean(BoolOp::Union, ell, &[pyramid])
+        .unwrap()
+        .first()
+        .unwrap();
+    let leaning: Vec<FaceId> = {
+        let body = k.get(part).unwrap();
+        (0..body.faces.len())
+            .filter(|&f| match &body.faces[f].surf {
+                Surface::Plane { f: fr } => {
+                    let n = fr.x.cross(&fr.y);
+                    n.z.abs() > 0.1 && n.x.abs() > 0.1
+                }
+                _ => false,
+            })
+            .map(|f| FaceId(f as u64))
+            .collect()
+    };
+    assert_eq!(leaning.len(), 2);
+    let spec = DraftSpec {
+        faces: leaning,
+        angle: 30f64.to_radians(),
+        pull: Vector3::z_axis(),
+        neutral: Point3::new(0.0, 0.0, 2.0),
+        neutral_normal: None,
+        tangent_propagation: false,
+    };
+    let out = k.draft(part, &spec).unwrap().bodies[0];
+    let body = k.get(out).unwrap();
+    assert!(body.check().is_empty(), "{:?}", body.check());
+    let ridge = 6.0 - 2.0 * 3.0 * 30f64.to_radians().tan();
+    let want = 216.0 + 3.0 * 6.0 * (12.0 + ridge) / 6.0;
+    let v = k.mass_properties(out).unwrap().volume;
+    assert!((v - want).abs() < 1e-9 * want, "volume {v}, want {want}");
+}

@@ -1651,7 +1651,11 @@ pub(crate) fn replace_with_events(b: &Body, surfs: &[Surface]) -> Option<(Body, 
     let mut now: Vec<Surface> = surfs.to_vec();
     let mut from: Vec<usize> = (0..b.faces.len()).collect();
     for _ in 0..b.edges.len() {
-        let e = turned_edge(&cur, &now)?;
+        let Some(e) = turned_edge(&cur, &now) else {
+            // No edge turned round: a corner of four faces that no longer meet at one point
+            // comes apart instead, into two corners with an edge between them.
+            return parted_corner(&cur, &now).map(|out| (out, from));
+        };
         let (next, gone) = contract_edge(&cur, e)?;
         for &f in gone.iter().rev() {
             now.remove(f);
@@ -1663,6 +1667,107 @@ pub(crate) fn replace_with_events(b: &Body, surfs: &[Surface]) -> Option<(Body, 
         }
     }
     None
+}
+
+/// `b` moved to `surfs` with one corner of four faces come apart: the first vertex four faces
+/// meet at whose new surfaces share no point is made two, three of the faces at each, with a
+/// new edge between them on the two faces that are opposite one another there (a pyramid's
+/// apex becoming a ridge when two of its faces lean more than the others). Of the two ways to
+/// pair the faces, the one the moved faces close with. `None` where there is no such corner or
+/// neither way closes.
+fn parted_corner(b: &Body, surfs: &[Surface]) -> Option<Body> {
+    let vf = vertex_faces(b);
+    for v in 0..b.verts.len() {
+        if vf[v].len() != 4 {
+            continue;
+        }
+        let fs: Vec<&Surface> = vf[v].iter().map(|&f| &surfs[f]).collect();
+        let together = meet(&fs, b.verts[v].p)
+            .is_some_and(|p| fs.iter().all(|s| s.distance(&p) < tol::CONFUSION));
+        if together {
+            continue;
+        }
+        for way in 0..2 {
+            if let Some(split) = split_vertex(b, v, way, surfs)
+                && let Ok(out) = replace_surfaces(&split, surfs)
+            {
+                return Some(out);
+            }
+        }
+    }
+    None
+}
+
+/// `b` with vertex `v`, where four faces meet in turn (A, B, C, D), made two: one where A, B
+/// and C meet (way 0; B, C and D for way 1) and one where the other three do, with a new edge
+/// between them on the two faces at both. The new vertex stands a hair from the old one,
+/// towards where its three faces' new surfaces `surfs` meet, so the body is as it was but for
+/// an edge of no length to speak of; the faces' move works the rest out.
+fn split_vertex(b: &Body, v: usize, way: usize, surfs: &[Surface]) -> Option<Body> {
+    // Each face's coedges into and out of the vertex: (face, loop, place of the one coming in).
+    let mut around: Vec<(usize, usize, usize)> = Vec::new();
+    for (fi, f) in b.faces.iter().enumerate() {
+        for (li, l) in f.loops.iter().enumerate() {
+            for k in 0..l.len() {
+                if b.co_end(&l[k]) == v && b.co_start(&l[(k + 1) % l.len()]) == v {
+                    around.push((fi, li, k));
+                }
+            }
+        }
+    }
+    if around.len() != 4 {
+        return None;
+    }
+    let edges_of = |a: &(usize, usize, usize)| {
+        let l = &b.faces[a.0].loops[a.1];
+        [l[a.2].edge, l[(a.2 + 1) % l.len()].edge]
+    };
+    // In turn round the vertex: each face shares an edge there with the next.
+    let mut ring = vec![around[0]];
+    while ring.len() < 4 {
+        let last = edges_of(ring.last()?);
+        let next = around.iter().find(|a| {
+            !ring.iter().any(|r| r.0 == a.0) && edges_of(a).iter().any(|e| last.contains(e))
+        })?;
+        ring.push(*next);
+    }
+    let ring: Vec<(usize, usize, usize)> = (0..4).map(|i| ring[(i + way) % 4]).collect();
+    let shared = |x: usize, y: usize| {
+        let (ex, ey) = (edges_of(&ring[x]), edges_of(&ring[y]));
+        ex.into_iter().find(|e| ey.contains(e))
+    };
+    // The edges between A and B, B and C stay at the vertex; those between C and D, D and A go
+    // to the new one. The new edge lies on A and C.
+    let (e_cd, e_da) = (shared(2, 3)?, shared(3, 0)?);
+    let (a, c, d) = (ring[0].0, ring[2].0, ring[3].0);
+    let p = b.verts[v].p;
+    let to = meet(&[&surfs[a], &surfs[c], &surfs[d]], p)?;
+    let along = (to - p).try_normalize(tol::DEGENERATE)?;
+    let hair = tol::REL_POINT * b.bbox().diagonal().max(tol::POINT) * 10.0;
+    let mut nb = b.clone();
+    let v2 = nb.add_vertex(p + along * hair);
+    for e in [e_cd, e_da] {
+        for x in &mut nb.edges[e].v {
+            if *x == v {
+                *x = v2;
+            }
+        }
+    }
+    let ne = nb.add_edge(Curve::Line { o: p, d: along }, 0.0, hair, v, v2);
+    // On A and on C, between the coedge that comes in and the one that goes out.
+    for r in [ring[0], ring[2]] {
+        let surf = nb.faces[r.0].surf.clone();
+        let l = &nb.faces[r.0].loops[r.1];
+        let from = nb.co_end(&l[r.2]);
+        let pc = super::pcurve::pcurve(&surf, &Curve::Line { o: p, d: along }, 0.0, hair, None);
+        let co = Coedge {
+            edge: ne,
+            fwd: from == v,
+            pc,
+        };
+        nb.faces[r.0].loops[r.1].insert(r.2 + 1, co);
+    }
+    Some(nb)
 }
 
 /// The edge of `b` its faces' moves to `surfs` turn round most: its ends, each where its
