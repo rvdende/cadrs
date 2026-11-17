@@ -5171,7 +5171,20 @@ fn reach(b: &Body, point: f64) -> Bbox {
 /// The union of `members` (the target first, if one), in islands: groups whose boxes (grown by
 /// their tolerances) overlap each one body, the union of its members (which lies within their
 /// boxes), the groups side by side, the first member's first; with each face's origin.
-fn united(members: Vec<(BodyId, Body)>, opts: BoolOptions) -> Result<Unioned> {
+///
+/// `copies` says, of each member, the body it is a moved copy of and the motion from that body
+/// to it (`NativeKernel::copy_of`): a group that is three or more copies of one body is united
+/// by [`union_copies`].
+fn united(
+    members: Vec<(BodyId, Body)>,
+    copies: &[(u64, Affine)],
+    opts: BoolOptions,
+) -> Result<Unioned> {
+    let placed: std::collections::HashMap<BodyId, (u64, Affine)> = members
+        .iter()
+        .zip(copies)
+        .map(|((id, _), c)| (*id, *c))
+        .collect();
     let mut members: Vec<(BodyId, Body, Bbox)> = members
         .into_iter()
         .map(|(id, b)| (id, b, Bbox::empty()))
@@ -5221,7 +5234,21 @@ fn united(members: Vec<(BodyId, Body)>, opts: BoolOptions) -> Result<Unioned> {
     super::par::start();
     let results: Vec<Result<Unioned>> = groups
         .into_par_iter()
-        .map(|g| union_islands(g, opts))
+        .map(|g| {
+            let of = |m: &(BodyId, Body, Bbox)| placed.get(&m.0).copied();
+            let one_body = g.len() >= 3
+                && of(&g[0]).is_some_and(|(root, _)| {
+                    g.iter().all(|m| of(m).is_some_and(|(r, _)| r == root))
+                });
+            if one_body {
+                let places: Vec<Affine> = g.iter().map(|m| of(m).expect("placed").1).collect();
+                // (Where a doubled union fails, one after another as before.)
+                if let Ok(u) = union_copies(&g, &places, opts) {
+                    return Ok(u);
+                }
+            }
+            union_islands(g, opts)
+        })
         .collect();
     let mut all = results.into_iter();
     let (mut cur, mut origin) = all.next().expect("the first member's group")?;
@@ -5276,6 +5303,113 @@ fn finish(
 
 /// A union's body with each face's origin (member, face).
 pub(crate) type Unioned = (Body, Vec<Vec<(BodyId, usize)>>);
+
+/// The union of `members`, each the same body moved by its motion in `places` (a pattern's
+/// copies, a part's sectors round its axis), by doubling: the members united in pairs, the
+/// pairs in pairs, and on. A pair standing to one another as a pair before did is that pair's
+/// union moved into place, no boolean run: a ring of n equal sectors takes about log n
+/// booleans, each of two bodies of one size, where one after another takes n - 1, each of all
+/// the sectors so far. With each face's origin (member, face).
+fn union_copies(
+    members: &[(BodyId, Body, Bbox)],
+    places: &[Affine],
+    opts: BoolOptions,
+) -> Result<Unioned> {
+    use super::sweep_cache::{after, back};
+    /// A union so far: the body, its faces' origins, which shape it is (`class`: two of one
+    /// class are one body moved) and the motion that puts that shape where this stands.
+    struct Part {
+        body: Body,
+        origin: Vec<Vec<(BodyId, usize)>>,
+        class: usize,
+        place: Affine,
+    }
+    /// A union made: its operands' classes and how the second stood to the first, the body
+    /// made, where the first stood then, each face's operand and face, and the class it makes.
+    struct Made {
+        of: (usize, usize),
+        stand: Affine,
+        body: Body,
+        stood: Affine,
+        from: Vec<Vec<(usize, usize)>>,
+        class: usize,
+    }
+    let same = |a: &Affine, b: &Affine| {
+        let near = |x: f64, y: f64| (x - y).abs() <= 1e-10 * (1.0 + x.abs());
+        a.m.iter().zip(b.m.iter()).all(|(x, y)| near(*x, *y))
+            && a.t.iter().zip(b.t.iter()).all(|(x, y)| near(*x, *y))
+    };
+    let mut level: Vec<Part> = members
+        .iter()
+        .zip(places)
+        .map(|((id, body, _), place)| Part {
+            origin: (0..body.faces.len()).map(|f| vec![(*id, f)]).collect(),
+            body: body.clone(),
+            class: 0,
+            place: *place,
+        })
+        .collect();
+    let mut made: Vec<Made> = Vec::new();
+    let mut classes = 1;
+    while level.len() > 1 {
+        let mut next = Vec::with_capacity(level.len() / 2 + 1);
+        let mut parts = level.into_iter();
+        while let Some(x) = parts.next() {
+            let Some(y) = parts.next() else {
+                next.push(x);
+                break;
+            };
+            let stand = after(&back(&x.place), &y.place);
+            let kept = made
+                .iter()
+                .find(|m| m.of == (x.class, y.class) && same(&m.stand, &stand));
+            let (body, from, class) = match kept {
+                Some(m) => (
+                    m.body.transformed(&after(&x.place, &back(&m.stood))),
+                    m.from.clone(),
+                    m.class,
+                ),
+                None => {
+                    let r = boolean_bodies_with(&x.body, &y.body, BoolOp::Union, opts)?;
+                    let class = classes;
+                    classes += 1;
+                    made.push(Made {
+                        of: (x.class, y.class),
+                        stand,
+                        body: r.body.clone(),
+                        stood: x.place,
+                        from: r.from.clone(),
+                        class,
+                    });
+                    (r.body, r.from, class)
+                }
+            };
+            let origin = from
+                .iter()
+                .map(|srcs| {
+                    srcs.iter()
+                        .flat_map(|&(o, f)| {
+                            if o == 0 {
+                                x.origin[f].clone()
+                            } else {
+                                y.origin[f].clone()
+                            }
+                        })
+                        .collect()
+                })
+                .collect();
+            next.push(Part {
+                body,
+                origin,
+                class,
+                place: x.place,
+            });
+        }
+        level = next;
+    }
+    let all = level.pop().expect("a member");
+    Ok((all.body, all.origin))
+}
 
 /// The union of `members` (each a body with its reach, the target or a tool, in the order
 /// given), as islands: a member apart from every island so far is an island of its own, one
@@ -5418,7 +5552,8 @@ fn boolean_opts(
         for &t in tools {
             members.push((t, (**k.get(t)?).clone()));
         }
-        (cur, origin) = united(members, opts)?;
+        let copies: Vec<(u64, Affine)> = members.iter().map(|m| k.copy_of(m.0)).collect();
+        (cur, origin) = united(members, &copies, opts)?;
     } else {
         // A − (t₁ ∪ … ∪ tₙ): the tools united (those apart side by side, without a boolean)
         // and cut at once, not one cut after another, each over all the cuts before it (a golf
@@ -5434,7 +5569,9 @@ fn boolean_opts(
                         .iter()
                         .map(|&t| Ok((t, (**k.get(t)?).clone())))
                         .collect::<Result<Vec<_>>>()?;
-                    let u = united(members, opts);
+                    let copies: Vec<(u64, Affine)> =
+                        members.iter().map(|m| k.copy_of(m.0)).collect();
+                    let u = united(members, &copies, opts);
                     if let Ok((body, from)) = &u {
                         super::sweep_cache::keep_united(k, tools, opts.tol.point, body, from);
                     }

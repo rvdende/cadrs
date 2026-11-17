@@ -134,7 +134,7 @@ pub(crate) fn keep_united(
 const KEPT: (usize, usize) = (64, 256);
 
 /// `a` after `b`.
-fn after(a: &Affine, b: &Affine) -> Affine {
+pub(crate) fn after(a: &Affine, b: &Affine) -> Affine {
     Affine {
         m: a.m * b.m,
         t: a.m * b.t + a.t,
@@ -142,12 +142,21 @@ fn after(a: &Affine, b: &Affine) -> Affine {
 }
 
 /// The inverse of a rigid motion.
-fn back(a: &Affine) -> Affine {
+pub(crate) fn back(a: &Affine) -> Affine {
     let m = a.m.transpose();
     Affine { m, t: -(m * a.t) }
 }
 
 impl NativeKernel {
+    /// The body `id` is a moved copy of, and the motion that takes that body to it (itself
+    /// and no motion, for a body never moved).
+    pub(crate) fn copy_of(&self, id: BodyId) -> (u64, Affine) {
+        self.placed
+            .get(&id.0)
+            .copied()
+            .unwrap_or((id.0, Affine::identity()))
+    }
+
     /// Records that `made` is `of` moved by `motion` (a rotation and a translation; a
     /// reflection is no such placing).
     pub(crate) fn place(&mut self, made: BodyId, of: BodyId, motion: &Affine) {
