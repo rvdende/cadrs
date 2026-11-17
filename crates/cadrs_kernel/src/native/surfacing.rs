@@ -181,11 +181,41 @@ fn crease_fills(k: &mut NativeKernel, sheets: &[Body], spec: &ThickenSpec) -> Re
             continue;
         };
         let edge = &sewn.edges[e];
-        if f1 == f2 || edge.degenerate || !matches!(edge.curve, Curve::Line { .. }) {
+        if f1 == f2 || edge.degenerate {
             continue;
         }
         let planar = |f: usize| matches!(sewn.faces[f].surf, Surface::Plane { .. });
-        if !planar(f1) || !planar(f2) {
+        if !matches!(edge.curve, Curve::Line { .. }) || !planar(f1) || !planar(f2) {
+            // A crease along a curve, or between curved faces: no fill is made for it. Where
+            // the sheet bends away from a thickened side there (each face behind the other's
+            // moving side, as below, at the crease's middle), the slabs would leave a notch
+            // the offset fills: an error, not that body.
+            let tm = 0.5 * (edge.t[0] + edge.t[1]);
+            let (m, dir) = (edge.curve.point(tm), edge.curve.tangent(tm));
+            let at = |f: usize| -> Option<(V3, V3)> {
+                let face = &sheets[f].faces.first()?;
+                let (u, v) = face.surf.project(&m, None);
+                let n = (face.surf.normal(u, v) * if face.sense { 1.0 } else { -1.0 })
+                    .try_normalize(tol::TINY)?;
+                let (c, _) = face_normal(&sewn, f)?;
+                let t = dir.cross(&n).try_normalize(tol::TINY)?;
+                Some((n, if t.dot(&(c - m)) < 0.0 { -t } else { t }))
+            };
+            if let (Some((n1, t1)), Some((n2, t2))) = (at(f1), at(f2)) {
+                let away =
+                    [(spec.along, 1.0), (spec.against, -1.0)]
+                        .into_iter()
+                        .any(|(d, sign)| {
+                            d >= tol::ROUNDOFF
+                                && (n1 * sign).dot(&t2) < -tol::ANGULAR_POINT.sqrt()
+                                && (n2 * sign).dot(&t1) < -tol::ANGULAR_POINT.sqrt()
+                        });
+                if away {
+                    return Err(KernelError::Unsupported(
+                        "thickening a sheet across a curved crease that bends away from the thickened side",
+                    ));
+                }
+            }
             continue;
         }
         // (Each face's own normal, which its slab follows; the sewn sheet's points.)

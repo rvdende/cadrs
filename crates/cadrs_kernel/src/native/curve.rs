@@ -243,7 +243,14 @@ impl Curve {
                     let r = q - p;
                     let f = r.dot(&d1);
                     let df = d1.norm_squared() + r.dot(&d2);
-                    if df.abs() < tol::TINY {
+                    // (Where the distance curves downwards, a Newton step runs to its
+                    // largest: a step down its slope instead, the tangent's length a unit.)
+                    let df = if df > tol::TINY {
+                        df
+                    } else {
+                        d1.norm_squared()
+                    };
+                    if df < tol::TINY {
                         break;
                     }
                     let nt = (t - f / df).clamp(t0, t1);

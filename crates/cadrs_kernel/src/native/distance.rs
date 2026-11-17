@@ -425,7 +425,7 @@ struct Node {
 
 impl PartialEq for Node {
     fn eq(&self, o: &Self) -> bool {
-        self.key == o.key
+        self.key.total_cmp(&o.key) == Ordering::Equal
     }
 }
 impl Eq for Node {}
