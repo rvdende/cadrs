@@ -372,6 +372,19 @@ fn edge_bbox(e: &WEdge, verts: &[P3], tol: f64) -> Bbox {
     bb.grow(tol * 10.0 + e.tol)
 }
 
+/// How many B-spline pieces' boxes a thread keeps ([`curve_bbox`]) before starting over.
+const PIECE_BOXES_KEPT: usize = 1 << 16;
+
+/// A B-spline curve (its address) and a range of it, and the curve itself, weakly: the address
+/// is that curve's for as long as this holds it.
+type PieceBoxes =
+    std::collections::HashMap<(usize, u64, u64), (std::sync::Weak<super::nurbs::NurbsCurve>, Bbox)>;
+
+thread_local! {
+    /// The boxes of B-spline curves' pieces made on this thread ([`curve_bbox`]).
+    static PIECE_BOXES: std::cell::RefCell<PieceBoxes> = std::cell::RefCell::new(PieceBoxes::new());
+}
+
 /// A box that holds the curve between t0 and t1: exact for lines, circles and ellipses (their
 /// extremes in each axis), the poles' box for B-splines (a rational B-spline with positive
 /// weights lies in its poles' convex hull).
@@ -410,6 +423,26 @@ pub fn curve_bbox(c: &Curve, t0: f64, t1: f64) -> Bbox {
             // fitted edge's every box, asked for many times an operation.)
             let (a0, a1) = whole.range();
             let all = lo <= a0 + tol::ROUNDOFF_FINE && hi >= a1 - tol::ROUNDOFF_FINE;
+            // (Over a part of it, the piece's box as this thread made it before of the same
+            // curve and range: a split edge's box is asked for by every boolean after, and
+            // the piece costs a knot inserted at each end.)
+            let key = (
+                std::sync::Arc::as_ptr(whole) as usize,
+                lo.to_bits(),
+                hi.to_bits(),
+            );
+            if !all {
+                let kept = PIECE_BOXES.with(|m| {
+                    m.borrow().get(&key).and_then(|(of, bb)| {
+                        of.upgrade()
+                            .is_some_and(|of| std::sync::Arc::ptr_eq(&of, whole))
+                            .then_some(*bb)
+                    })
+                });
+                if let Some(kept) = kept {
+                    return kept;
+                }
+            }
             let piece;
             let n: &super::nurbs::NurbsCurve = if all {
                 whole
@@ -427,6 +460,23 @@ pub fn curve_bbox(c: &Curve, t0: f64, t1: f64) -> Bbox {
                 }
                 bb = bb.grow(bb.diagonal() * 0.02);
             }
+        }
+    }
+    if let Curve::Nurbs(whole) = c {
+        let (a0, a1) = whole.range();
+        if !(lo <= a0 + tol::ROUNDOFF_FINE && hi >= a1 - tol::ROUNDOFF_FINE) {
+            PIECE_BOXES.with(|m| {
+                let mut m = m.borrow_mut();
+                if m.len() >= PIECE_BOXES_KEPT {
+                    m.clear();
+                }
+                let key = (
+                    std::sync::Arc::as_ptr(whole) as usize,
+                    lo.to_bits(),
+                    hi.to_bits(),
+                );
+                m.insert(key, (std::sync::Arc::downgrade(whole), bb));
+            });
         }
     }
     bb
@@ -5247,6 +5297,14 @@ fn united(
                     return Ok(u);
                 }
             }
+            // (A long chain in halves, the halves side by side on other threads; where a
+            // half's union fails, one after another as before.)
+            if g.len() >= 4
+                && !super::env_flag!("CADRS_UNION_IN_TURN")
+                && let Ok(u) = union_halves(&g, opts)
+            {
+                return Ok(u);
+            }
             union_islands(g, opts)
         })
         .collect();
@@ -5303,6 +5361,48 @@ fn finish(
 
 /// A union's body with each face's origin (member, face).
 pub(crate) type Unioned = (Body, Vec<Vec<(BodyId, usize)>>);
+
+/// The union of `members` (which reach one another, in the order given) by halves: each half
+/// united on its own, on another thread, and the two halves united. Members given in the order
+/// they lie (a pass's moves, each overlapping the next) are united with their neighbours, in
+/// bodies of one size, where one after another unites each with all those before it.
+fn union_halves(members: &[(BodyId, Body, Bbox)], opts: BoolOptions) -> Result<Unioned> {
+    /// A union with its faces' origins and the reaches of the members in it.
+    type Half = (Body, Vec<Vec<(BodyId, usize)>>, Vec<Bbox>);
+    fn halves(members: &[(BodyId, Body, Bbox)], opts: BoolOptions) -> Result<Half> {
+        if let [(id, body, reach)] = members {
+            let origin = (0..body.faces.len()).map(|f| vec![(*id, f)]).collect();
+            return Ok((body.clone(), origin, vec![*reach]));
+        }
+        let (l, r) = members.split_at(members.len() / 2);
+        let (x, y) = rayon::join(|| halves(l, opts), || halves(r, opts));
+        let ((xb, xo, mut xr), (yb, yo, yr)) = (x?, y?);
+        // (Halves no member of which reaches one of the other's lie apart: side by side.)
+        let apart = !xr.iter().any(|p| yr.iter().any(|q| p.overlaps(q)));
+        xr.extend(yr);
+        if apart {
+            let mut body = xb;
+            body.append(&yb);
+            let mut origin = xo;
+            origin.extend(yo);
+            return Ok((body, origin, xr));
+        }
+        let made = boolean_bodies_with(&xb, &yb, BoolOp::Union, opts)?;
+        let origin = made
+            .from
+            .iter()
+            .map(|srcs| {
+                srcs.iter()
+                    .flat_map(|&(o, f)| if o == 0 { xo[f].clone() } else { yo[f].clone() })
+                    .collect()
+            })
+            .collect();
+        Ok((made.body, origin, xr))
+    }
+    super::par::start();
+    let (body, origin, _) = halves(members, opts)?;
+    Ok((body, origin))
+}
 
 /// The union of `members`, each the same body moved by its motion in `places` (a pattern's
 /// copies, a part's sectors round its axis), by doubling: the members united in pairs, the
