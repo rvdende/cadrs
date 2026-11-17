@@ -888,11 +888,16 @@ fn interior_points(loops: &[Vec<Arc>]) -> Vec<P2> {
         return Vec::new();
     };
     let mut cands = Vec::new();
+    // (Each loop's arcs' starts and one list of crossings, for all the scanlines.)
+    let starts: Vec<Vec<P2>> = loops
+        .iter()
+        .map(|l| l.iter().map(|a| a.uv_at(0.0)).collect())
+        .collect();
+    let mut xs: Vec<f64> = Vec::new();
     for frac in SCAN_FRACTIONS {
         let y = scan.vb.0 + (scan.vb.1 - scan.vb.0) * frac;
-        let mut xs: Vec<f64> = Vec::new();
-        for l in loops {
-            let ends: Vec<P2> = l.iter().map(|a| a.uv_at(0.0)).collect();
+        xs.clear();
+        for (l, ends) in loops.iter().zip(&starts) {
             for (k, a) in l.iter().enumerate() {
                 let n = arc_steps(a);
                 let mut p = ends[k];
@@ -1033,9 +1038,11 @@ impl<'a> Scan<'a> {
     /// The candidates, scanline by scanline.
     fn candidates(&self) -> Vec<P2> {
         let mut out = Vec::new();
+        // (One list of crossings for all the scanlines.)
+        let mut xs: Vec<f64> = Vec::new();
         for frac in SCAN_FRACTIONS {
             let y = self.vb.0 + (self.vb.1 - self.vb.0) * frac;
-            let mut xs: Vec<f64> = Vec::new();
+            xs.clear();
             for p in self.polys {
                 let n = p.len();
                 for i in 0..n {
@@ -4108,7 +4115,10 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         .filter(|(fi, _)| cuts[*fi].is_empty())
         .map(|(_, f)| (f.owner, f.orig))
         .collect();
-    for (fi, f) in faces.iter().enumerate() {
+    // Each face split on its own (it reads the pool and makes only its own faces): on other
+    // threads where there are faces enough, their work counted in the faces' order.
+    let split_one = |fi: usize| -> (Vec<Vec<Vec<Arc>>>, u64) {
+        let f = &faces[fi];
         let boundary: Vec<Vec<Arc>> = f
             .loops
             .iter()
@@ -4119,8 +4129,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             })
             .collect();
         if cuts[fi].is_empty() {
-            subs.push((fi, boundary));
-            continue;
+            return (vec![boundary], 0);
         }
         let own: Vec<usize> = boundary.iter().flatten().map(|a| a.edge).collect();
         let mut cut_arcs: Vec<Arc> = Vec::new();
@@ -4169,11 +4178,9 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             }
         }
         if cut_arcs.is_empty() {
-            subs.push((fi, boundary));
-            continue;
+            return (vec![boundary], 0);
         }
         let arcs = (boundary.iter().map(|l| l.len()).sum::<usize>() + cut_arcs.len()) as u64;
-        work.spend(arcs * arcs, "face splitting")?;
         let res = split::split_face(&f.surf, !f.sense, &boundary, &cut_arcs);
         if super::env_flag!("CADRS_BOOL_DEBUG") {
             eprintln!(
@@ -4185,7 +4192,17 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 res.faces.iter().map(|l| l.len()).collect::<Vec<_>>()
             );
         }
-        for lps in res.faces {
+        (res.faces, arcs * arcs)
+    };
+    let cut_faces = cuts.iter().filter(|c| !c.is_empty()).count();
+    let split: Vec<(Vec<Vec<Vec<Arc>>>, u64)> = if super::par::threads_for(cut_faces, true) {
+        (0..faces.len()).into_par_iter().map(split_one).collect()
+    } else {
+        (0..faces.len()).map(split_one).collect()
+    };
+    for (fi, (made, spent)) in split.into_iter().enumerate() {
+        work.spend(spent, "face splitting")?;
+        for lps in made {
             subs.push((fi, lps));
         }
     }
@@ -4271,36 +4288,17 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     // tree's depth for each.)
     let depth = ((a.faces.len() + b.faces.len() + 1) as f64).log2().ceil() as u64;
     work.spend(subs.len() as u64 * depth * 8, "classification")?;
-    for (sk, (fi, loops)) in subs.into_iter().enumerate() {
+    // A sub-face's point inside it, with the face's outward normal there.
+    let point_of = |fi: usize, loops: &[Vec<Arc>]| -> Option<(P3, V3)> {
         let f = &faces[fi];
-        if imprinting {
-            if f.owner == 0 {
-                keep.push((fi, loops, false));
-            }
-            continue;
-        }
-        let g = groups[sk];
-        let settled = match group_class.get(&g) {
-            Some(&(c, true)) if propagate && !unreliable.contains(&g) => Some(c),
-            _ => None,
-        };
-        // A sub-face on no face of the other body, whose group's class is settled, takes it: no
-        // point inside it to find (most of a large part's faces, untouched); but one with no
-        // inside at all is dropped, as ever.
-        let at = if settled.is_some() && coincident[fi].is_empty() {
-            if !has_interior(&loops) {
-                continue;
-            }
-            None
-        } else {
-            let Some(uv) = interior_point(&loops) else {
-                continue;
-            };
-            let n_out = f.surf.normal(uv.x, uv.y) * if f.sense { 1.0 } else { -1.0 };
-            Some((f.surf.eval(uv.x, uv.y), n_out))
-        };
+        let uv = interior_point(loops)?;
+        let n_out = f.surf.normal(uv.x, uv.y) * if f.sense { 1.0 } else { -1.0 };
+        Some((f.surf.eval(uv.x, uv.y), n_out))
+    };
+    // Its class on a face of the other body it lies on, if any.
+    let on_other = |fi: usize, at: Option<(P3, V3)>| -> Option<Class> {
+        let f = &faces[fi];
         let mut class = None;
-        // (On faces of the other body: the sub-face found its point above.)
         if let Some((p, n_out)) = at {
             for &g in &coincident[fi] {
                 let gf = &faces[g];
@@ -4325,6 +4323,64 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 }
             }
         }
+        class
+    };
+    // What a sub-face needs whatever its group's class turns out to be, found on other
+    // threads where there are sub-faces enough: whether it has an inside at all, and, for one
+    // on a face of the other body, its point and its class there. (The rest follows the
+    // sub-faces' order: a group's class is settled by its first members.)
+    type Ready = (bool, Option<Option<(P3, V3)>>, Option<Class>);
+    let ready_one = |sk: usize| -> Ready {
+        let (fi, loops) = &subs[sk];
+        if imprinting {
+            return (true, None, None);
+        }
+        if coincident[*fi].is_empty() {
+            (has_interior(loops), None, None)
+        } else {
+            let at = point_of(*fi, loops);
+            (true, Some(at), on_other(*fi, at))
+        }
+    };
+    let ready: Vec<Ready> = if super::par::threads_for(subs.len() / 16, true) {
+        (0..subs.len()).into_par_iter().map(ready_one).collect()
+    } else {
+        (0..subs.len()).map(ready_one).collect()
+    };
+    for (sk, (fi, loops)) in subs.into_iter().enumerate() {
+        let f = &faces[fi];
+        if imprinting {
+            if f.owner == 0 {
+                keep.push((fi, loops, false));
+            }
+            continue;
+        }
+        let g = groups[sk];
+        let settled = match group_class.get(&g) {
+            Some(&(c, true)) if propagate && !unreliable.contains(&g) => Some(c),
+            _ => None,
+        };
+        let (has_inside, found, on_face) = ready[sk];
+        // A sub-face on no face of the other body, whose group's class is settled, takes it: no
+        // point inside it to find (most of a large part's faces, untouched); but one with no
+        // inside at all is dropped, as ever.
+        let at = if settled.is_some() && coincident[fi].is_empty() {
+            if !has_inside {
+                continue;
+            }
+            None
+        } else {
+            let Some(at) = found.unwrap_or_else(|| point_of(fi, &loops)) else {
+                continue;
+            };
+            Some(at)
+        };
+        // (On faces of the other body: the sub-face found its point above.)
+        let class = if found.is_some() {
+            on_face
+        } else {
+            on_other(fi, at)
+        };
         let shared = settled.filter(|_| class.is_none());
         let fresh = class.is_none() && shared.is_none();
         let class = class.or(shared).unwrap_or_else(|| {

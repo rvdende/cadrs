@@ -153,7 +153,9 @@ pub fn face_polygons_kept(body: &Body, f: &Face) -> KeptPolygons {
             self.new_points += points;
         }
     }
-    static KEPT_POLYS: std::sync::LazyLock<std::sync::Mutex<Kept>> =
+    // (Read by every face of both bodies of every boolean, on as many threads as run
+    // booleans at once, and nearly always found: readers don't wait for one another.)
+    static KEPT_POLYS: std::sync::LazyLock<std::sync::RwLock<Kept>> =
         std::sync::LazyLock::new(Default::default);
     // Each loop's key (the surface and the loop's p-curves over their ranges), and the face's
     // (the loops' in order).
@@ -181,7 +183,16 @@ pub fn face_polygons_kept(body: &Body, f: &Face) -> KeptPolygons {
         h.key()
     };
     let points = |p: &KeptPolygons| p.0.iter().map(Vec::len).sum::<usize>() + 1;
-    let mut k = KEPT_POLYS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(p) = KEPT_POLYS
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .new
+        .get(&key)
+        .cloned()
+    {
+        return p;
+    }
+    let mut k = KEPT_POLYS.write().unwrap_or_else(|e| e.into_inner());
     if let Some(p) = k.new.get(&key).cloned() {
         return p;
     }
@@ -227,7 +238,7 @@ pub fn face_polygons_kept(body: &Body, f: &Face) -> KeptPolygons {
         .map(|l| (l.0.clone(), l.1.clone()))
         .unzip();
     let p: KeptPolygons = std::sync::Arc::new((polys, boxes));
-    let mut k = KEPT_POLYS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut k = KEPT_POLYS.write().unwrap_or_else(|e| e.into_inner());
     for (lk, l) in made {
         k.room(l.0.len() + 1);
         k.new_loops.insert(lk, l);
