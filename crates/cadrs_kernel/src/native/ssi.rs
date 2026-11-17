@@ -222,6 +222,33 @@ pub fn surface_surface_tol(
     if let Some(r) = analytic(b, a, bb, tol) {
         return closed(r);
     }
+    if let Some(r) = shared_circle(a, ua, b, bb).or_else(|| shared_circle(b, ub, a, bb)) {
+        return closed(r);
+    }
+    // A graph over one parameter of one of the two: exact points with nothing traced.
+    for (p, up, q) in [(a, ua, b), (b, ub, a)] {
+        if let Some(polys) = super::ssi_graph::graph(p, up, q, bb) {
+            let work = 1 + polys.iter().map(|c| c.0.len()).sum::<usize>() as u64;
+            let curves = polys
+                .into_iter()
+                .filter(|(pts, _)| pts.len() >= 2)
+                .map(|(pts, closed)| fit_curve(p, q, pts, closed, &[]))
+                .collect();
+            return Ssi {
+                curves,
+                work,
+                ..Ssi::default()
+            };
+        }
+    }
+    // Two surfaces with distance functions that keep apart all through the box meet nowhere
+    // in it.
+    if !may_meet(a, b, bb) {
+        return Ssi {
+            work: 1,
+            ..Ssi::default()
+        };
+    }
     // Numeric, over the surface without an implicit form first (its points' parameters are
     // the ones the fit refines on).
     let implicit = |s: &Surface| s.signed_distance(&P3::origin()).is_some();
@@ -1505,6 +1532,119 @@ pub fn sdist(s: &Surface, p: &P3) -> f64 {
         return (p - q).norm();
     }
     (p - q).dot(&(n / l))
+}
+
+/// A circle carried along a line (`e`, a slanted cylinder) and a cylinder or another carried
+/// circle through that same circle (a tool's swept side against the tool where the move
+/// starts, or against the next move's): with x from the circle's centre, n its plane's normal
+/// and eᵢ = dᵢ/(n·dᵢ), the surfaces are |x − (n·x)eᵢ|² = r², whose difference is
+/// (n·x)·((n·x)(|e₁|² − |e₂|²) − 2x·(e₁ − e₂)). So they meet in the circle and in the plane
+/// through its centre square to n(|e₁|² − |e₂|²) − 2(e₁ − e₂), which cuts `e` in an ellipse; the
+/// two cross where the surfaces touch.
+fn shared_circle(
+    e: &Surface,
+    ue: ((f64, f64), (f64, f64)),
+    o: &Surface,
+    bb: &Bbox,
+) -> Option<Vec<IntCurve>> {
+    let Surface::Extrusion {
+        c: base @ Curve::Circle { c, x, y, r },
+        d,
+    } = e
+    else {
+        return None;
+    };
+    let n = x.cross(y);
+    let rel = 1e-9 * (1.0 + r.abs());
+    // The other's direction, where it holds the circle: its sections square to n are circles
+    // of this radius, and this one's centre is on the line of their centres.
+    let d2 = match o {
+        Surface::Cylinder { f, r: r2 } => ((r2 - r).abs() <= rel
+            && f.z.cross(&n).norm() <= 1e-9
+            && (c - f.o).cross(&f.z).norm() <= rel)
+            .then_some(f.z)?,
+        Surface::Extrusion {
+            c:
+                Curve::Circle {
+                    c: c2,
+                    x: x2,
+                    y: y2,
+                    r: r2,
+                },
+            d: d2,
+        } => ((r2 - r).abs() <= rel
+            && x2.cross(y2).cross(&n).norm() <= 1e-9
+            && (c - c2).cross(d2).norm() <= rel * d2.norm())
+        .then_some(*d2)?,
+        _ => return None,
+    };
+    let (nd1, nd2) = (n.dot(d), n.dot(&d2));
+    if nd1.abs() < 1e-6 * d.norm() || nd2.abs() < 1e-6 * d2.norm() {
+        return None;
+    }
+    let (e1, e2) = (d / nd1, d2 / nd2);
+    let m = n * (e1.norm_squared() - e2.norm_squared()) - (e1 - e2) * 2.0;
+    // (One direction: the same surface.)
+    let m = m.try_normalize(1e-9)?;
+    let plane = Surface::Plane {
+        f: Frame::from_z(*c, m),
+    };
+    let mut out = plane_extrusion(&plane, e, ue, bb)?;
+    let (u0, u1) = ue.0;
+    let whole = !(u1 - u0).is_finite() || u1 - u0 >= TAU - tol::ANGULAR;
+    let (t0, t1) = if whole { (0.0, TAU) } else { (u0, u1) };
+    out.push(IntCurve {
+        c: base.clone(),
+        t0,
+        t1,
+        closed: whole,
+        pcs: None,
+    });
+    Some(out)
+}
+
+/// Whether `a` and `b` may meet inside `bb`: false only where both have a distance function
+/// (a plane, a cylinder, a sphere, a torus: |distance| changes no faster than the point moves)
+/// and every part of the box, halved along its longest side until one of the two is farther
+/// from a part's middle than its corners are, is clear of one of them. Parts still near both
+/// after 192 halvings, or smaller than a 256th of the box, may hold a crossing.
+fn may_meet(a: &Surface, b: &Surface, bb: &Bbox) -> bool {
+    let measured = |s: &Surface| {
+        matches!(
+            s,
+            Surface::Plane { .. }
+                | Surface::Cylinder { .. }
+                | Surface::Sphere { .. }
+                | Surface::Torus { .. }
+        )
+    };
+    if !measured(a) || !measured(b) || bb.is_empty() {
+        return true;
+    }
+    let pad = 1e-6 + 1e-9 * bb.diagonal();
+    let least = bb.diagonal() / 256.0;
+    let mut budget = 192;
+    let mut parts = vec![(bb.min, bb.max)];
+    while let Some((lo, hi)) = parts.pop() {
+        let c = lo + (hi - lo) * 0.5;
+        let d = hi - lo;
+        let reach = 0.5 * d.norm() + pad;
+        let clear = |s: &Surface| s.signed_distance(&c).is_some_and(|x| x.abs() > reach);
+        if clear(a) || clear(b) {
+            continue;
+        }
+        if budget == 0 || d.norm() <= least {
+            return true;
+        }
+        budget -= 1;
+        let k = d.imax();
+        let (mut mid_hi, mut mid_lo) = (hi, lo);
+        mid_hi[k] = c[k];
+        mid_lo[k] = c[k];
+        parts.push((lo, mid_hi));
+        parts.push((mid_lo, hi));
+    }
+    false
 }
 
 /// The intersection by the numeric engine ([`super::ssi_numeric`]): its traced curves fitted

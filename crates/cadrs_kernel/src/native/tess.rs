@@ -240,7 +240,10 @@ pub fn edge_samples_with(body: &Body, p: &TessParams) -> EdgeSamples {
         pts[n - 1] = body.verts[e.v[1]].p;
         // Samples bunched within the edge's tolerance (a curve with knots piled up at an end,
         // or ending a hair off its vertex) are one: they only make zero-area slivers.
-        let gap = e.tol.max(super::topo::TOL_MIN);
+        // (So are samples a hundredth of the chord apart: a curl that small in a fitted curve
+        // asks for hundreds of them by its turning, which the chord doesn't see, and which a
+        // mesh written in single precision can't tell apart.)
+        let gap = e.tol.max(super::topo::TOL_MIN).max(0.01 * p.chord);
         let (mut kt, mut kp) = (vec![ts[0]], vec![pts[0]]);
         for i in 1..n - 1 {
             if (pts[i] - kp[kp.len() - 1]).norm() > gap && (pts[i] - pts[n - 1]).norm() > gap {

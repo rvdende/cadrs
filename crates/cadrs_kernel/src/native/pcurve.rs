@@ -607,6 +607,22 @@ fn fitted(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Curve {
         }
         1e-9f64.max(2e-10 * bb.diagonal())
     };
+    // The surface's point at a followed (u, v): a B-spline closed without being periodic is
+    // read inside its range (past it, it only extrapolates).
+    let wrap = match s {
+        Surface::Nurbs(n) => Some(n.range()),
+        _ => None,
+    };
+    let at_uv = |u: f64, v: f64| -> P3 {
+        let Some(((u0, u1), (v0, v1))) = wrap else {
+            return s.eval(u, v);
+        };
+        let into = |x: f64, a: f64, b: f64, p: Option<f64>| match p {
+            Some(p) if x < a || x > b => a + (x - a).rem_euclid(p),
+            _ => x,
+        };
+        s.eval(into(u, u0, u1, periods[0]), into(v, v0, v1, periods[1]))
+    };
     // Each interval's midpoint's projection (and its point), once made: an interval no round
     // splits keeps its midpoint and its hint, so its projection would come out the same.
     let mut mids: Vec<Option<(P2, P3)>> = vec![None; ts.len() - 1];
@@ -622,9 +638,9 @@ fn fitted(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Curve {
             // a little off the surface, which no p-curve can make up).
             let (q, at) = *mids[k].get_or_insert_with(|| {
                 let q = project(tm, Some((uvs[k].x, uvs[k].y)));
-                (q, s.eval(q.x, q.y))
+                (q, at_uv(q.x, q.y))
             });
-            let err = (s.eval(f.x, f.y) - at).norm();
+            let err = (at_uv(f.x, f.y) - at).norm();
             if err > tol {
                 ins.push((k + 1, tm, q));
             }

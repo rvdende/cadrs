@@ -929,6 +929,42 @@ fn slid_ellipsoid(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option
 }
 
 pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> Result<OpResult> {
+    // An endless turn or screw of a revolved body: its outline as fine as [`FINE_SLICES`], and
+    // where that builds nothing, as [`COARSE_SLICES`].
+    if matches!(
+        motion,
+        SolidMotion::Planar { .. }
+            | SolidMotion::Rigid { .. }
+            | SolidMotion::Climb { .. }
+            | SolidMotion::Path { .. }
+    ) {
+        return sweep_solid_at(k, body, motion);
+    }
+    with_slices(FINE_SLICES, || sweep_solid_at(k, body, motion))
+        .or_else(|_| with_slices(COARSE_SLICES, || sweep_solid_at(k, body, motion)))
+}
+
+/// How many slices an endless sweep's outline is traced on: the cubic B-spline through them
+/// is off the outline by the fourth power of their spacing, so four times the slices is 256
+/// times nearer (a wheel turned round a rod: its volume to 1e-8, not 1e-6).
+const FINE_SLICES: usize = 640;
+/// The slices of an outline whose finer trace builds no solid, or one a boolean can't take.
+const COARSE_SLICES: usize = 160;
+
+thread_local! {
+    static OUTLINE_SLICES: std::cell::Cell<usize> = const { std::cell::Cell::new(COARSE_SLICES) };
+}
+
+/// `f` with endless sweeps' outlines traced on `n` slices.
+fn with_slices<R>(n: usize, f: impl FnOnce() -> R) -> R {
+    let was = OUTLINE_SLICES.with(|s| s.replace(n));
+    let r = f();
+    OUTLINE_SLICES.with(|s| s.set(was));
+    r
+}
+
+/// [`sweep_solid`], an endless sweep's outline on the slices [`with_slices`] set.
+fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> Result<OpResult> {
     let b = (**k.get(body)?).clone();
     if let SolidMotion::Planar { normal, steps } = motion {
         return super::sweep_planar::sweep_planar(k, &b, normal.into_inner(), steps);
@@ -1084,7 +1120,7 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
             "screwing a solid that reaches half way round the screw's axis",
         ));
     }
-    let n = 160;
+    let n = OUTLINE_SLICES.with(|s| s.get());
     let ol = outline(&sl, lo, hi, n).ok_or_else(|| KernelError::InvalidResult {
         op: "solid sweep",
         why: "the body's outline has a slice it misses".into(),
@@ -2351,16 +2387,19 @@ pub fn cut_swept(
     // a screw without end) fills what this one does, and is made exactly as a whole (the solid
     // of revolution, the screw's helical sweep).
     if let Some(endless) = endless_within(&**k.get(target)?, &b, motion) {
-        let swept = sweep_solid(k, tool, &endless).ok();
-        if let Some(r) = swept
-            && let [s] = r.bodies.as_slice()
-        {
-            let cut = k.boolean(crate::BoolOp::Subtract, target, &[*s]);
-            k.release(*s);
-            if let Ok(c) = cut
-                && c.bodies.iter().all(|&id| k.sound(id))
+        // (Its outline fine, then coarse: a boolean may take the one and not the other.)
+        for n in [FINE_SLICES, COARSE_SLICES] {
+            let swept = with_slices(n, || sweep_solid_at(k, tool, &endless)).ok();
+            if let Some(r) = swept
+                && let [s] = r.bodies.as_slice()
             {
-                return Ok(c);
+                let cut = k.boolean(crate::BoolOp::Subtract, target, &[*s]);
+                k.release(*s);
+                if let Ok(c) = cut
+                    && c.bodies.iter().all(|&id| k.sound(id))
+                {
+                    return Ok(c);
+                }
             }
         }
     }

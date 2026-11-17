@@ -127,6 +127,10 @@ pub mod decimate;
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod decimate;
 #[cfg(feature = "testkit")]
+pub mod defeature;
+#[cfg(not(feature = "testkit"))]
+pub(crate) mod defeature;
+#[cfg(feature = "testkit")]
 pub mod distance;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
@@ -302,6 +306,7 @@ pub mod ssi_coincident;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod ssi_coincident;
+mod ssi_graph;
 #[cfg(feature = "testkit")]
 pub mod ssi_numeric;
 #[cfg(not(feature = "testkit"))]

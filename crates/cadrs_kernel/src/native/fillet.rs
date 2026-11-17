@@ -1482,6 +1482,30 @@ fn welds(b: &Body, efs: &mut [EdgeFillet]) -> Result<Vec<Weld>> {
                 });
                 continue;
             }
+            // Welded to each other only where they part at one ball: the one on the shared
+            // face that touches both walls there. Two that each run out of room elsewhere
+            // (each against the other's wall where that wall comes round to a corner of its
+            // own) are corners' strips, not a weld.
+            if (a.r() - c.r()).abs() <= tol::REL_FINE * a.r() {
+                let part = |ef: &EdgeFillet, t_m: f64| {
+                    ball_of_radius(b, ef, t_m, ef.r(), [ef.mid.q[0].uv, ef.mid.q[1].uv])
+                        .or_else(|| ef.ball_from(b, &ef.mid, ef.tm, t_m))
+                        .map(|x| x.c)
+                };
+                if let (Some(pa), Some(pc)) = (part(a, tm_a), part(c, tm_c))
+                    && (pa - pc).norm() > 0.05 * a.r()
+                {
+                    debug(|| {
+                        format!(
+                            "edges {} and {}: not welded across face {face}: they part {} apart",
+                            a.e,
+                            c.e,
+                            (pa - pc).norm()
+                        )
+                    });
+                    continue;
+                }
+            }
             debug(|| format!("edges {} and {}: welded across face {face}", a.e, c.e));
             let sides = [
                 WeldSide {
@@ -10585,10 +10609,165 @@ pub fn chamfer_offsets_along(b: &Body, e: usize, d: [f64; 2]) -> Option<[f64; 2]
         .then(|| [x.x.abs(), x.y.abs()])
 }
 
+/// The offsets from edge e's two faces (as [`chamfer_offsets`]) of the ball whose contacts are
+/// the ends of a distance-and-angle chamfer: `distance` along face `first` (0 or 1 of
+/// [`super::blend::edge_sides`]) from the edge, and where the straight line from there, at
+/// `angle` to that face, meets the other face's own surface (on a ball or a cone that is not
+/// where it would meet the face's tangent plane at the edge). `None` unless the section is
+/// the same all along the edge (a rim of a turned solid, a straight edge of faces along it).
+pub fn chamfer_offsets_angled(
+    b: &Body,
+    e: usize,
+    first: usize,
+    distance: f64,
+    angle: f64,
+) -> Option<[f64; 2]> {
+    let ed = b.edges.get(e)?;
+    let s = sides(b, e).ok()?;
+    let (fa, fb) = (s[first].0, s[1 - first].0);
+    let c1 = s[0].1;
+    let at = |frac: f64| -> Option<[f64; 2]> {
+        let t = ed.t[0] + (ed.t[1] - ed.t[0]) * frac;
+        let p = ed.point(t);
+        let tan = ed.curve.tangent(t).normalize() * if c1 { 1.0 } else { -1.0 };
+        // (The first side's face lies to the left of `tan`, the second's of `-tan`.)
+        let along = if first == 0 { tan } else { -tan };
+        let c = coedge_of(b, fa, e)?;
+        let q = c.pc.point(t);
+        let w = geom::contact(&b.faces[fa], P2::new(q.x, q.y))
+            .n
+            .cross(&along)
+            .try_normalize(tol::DEGENERATE)?;
+        // Where the chamfer starts on the first face, and the face's direction and normal
+        // there, in the section.
+        let (p1, w1) = along_section_dir(&b.faces[fa], &p, &along, &w, distance);
+        let n1 = geom::contact(&b.faces[fa], geom::foot(&b.faces[fa], &p1, None)).n;
+        // Back towards the edge, turned by the angle towards the other face: into the
+        // material at a convex edge, out of it at a concave one (the other face rises from
+        // the first there).
+        let cb = coedge_of(b, fb, e)?;
+        let qb = cb.pc.point(t);
+        let wb = geom::contact(&b.faces[fb], P2::new(qb.x, qb.y))
+            .n
+            .cross(&-along);
+        let side = if wb.dot(&geom::contact(&b.faces[fa], P2::new(q.x, q.y)).n) > 0.0 {
+            1.0
+        } else {
+            -1.0
+        };
+        let dir = (-w1 * angle.cos() + n1 * (side * angle.sin())).normalize();
+        let reach = 4.0 * distance / angle.sin().max(0.05) + (p1 - p).norm();
+        let line = Curve::Line { o: p1, d: dir };
+        let hits = super::ssi::curve_surface(&line, 0.0, reach, &b.faces[fb].surf);
+        // The crossing nearest the edge: the other face's own, not its surface's far side.
+        let sq = hits
+            .into_iter()
+            .filter(|&x| x > tol::POINT)
+            .min_by(|x, y| {
+                (line.point(*x) - p)
+                    .norm()
+                    .total_cmp(&(line.point(*y) - p).norm())
+            })?;
+        let q2 = line.point(sq);
+        let n2 = geom::contact(&b.faces[fb], geom::foot(&b.faces[fb], &q2, None)).n;
+        let mut k = ball_offsets([p1, q2], [n1, n2], &p)?;
+        if first == 1 {
+            k.swap(0, 1);
+        }
+        Some(k)
+    };
+    let k = at(0.5)?;
+    for frac in [0.1, 0.3, 0.7, 0.9] {
+        let o = at(frac)?;
+        if (0..2).any(|i| (o[i] - k[i]).abs() > tol::REL_POINT * (1.0 + k[i])) {
+            return None;
+        }
+    }
+    Some(k)
+}
+
+/// The offsets of the ball touching two faces at `q` (their outward normals there `n`): its
+/// centre on both normals, C = q₀ − k₀n₀ = q₁ − k₁n₁ (least squares; the lines meet in the
+/// section's plane), both offsets to the same side.
+fn ball_offsets(q: [P3; 2], n: [V3; 2], near: &P3) -> Option<[f64; 2]> {
+    let r = q[1] - q[0];
+    let g = n[0].dot(&n[1]);
+    let m = nalgebra::Matrix2::new(1.0, -g, -g, 1.0);
+    let x = m
+        .lu()
+        .solve(&nalgebra::Vector2::new(n[0].dot(&r), -n[1].dot(&r)))?;
+    let miss = (q[0] + n[0] * x.x - q[1] - n[1] * x.y).norm();
+    (x.x * x.y > 0.0 && miss < tol::REL_POINT * (1.0 + near.coords.abs().max()))
+        .then(|| [x.x.abs(), x.y.abs()])
+}
+
+/// [`chamfer_edges`] with each edge's ball given by its offsets from its two faces (in
+/// [`super::blend::edge_sides`] order), not by its contacts' distances.
+pub fn chamfer_edges_offsets(
+    b: &Body,
+    input: BodyId,
+    edges: &[(usize, [f64; 2])],
+) -> Result<(Body, Vec<Vec<FaceSrc>>)> {
+    let mut laws = Vec::new();
+    let mut ratios = Vec::new();
+    for &(e, k) in edges {
+        let [(_, c1), _] = sides(b, e)?;
+        let k = if c1 { k } else { [k[1], k[0]] };
+        laws.push((e, vec![(0.0, k[0]), (1.0, k[0])]));
+        ratios.push(k[1] / k[0]);
+    }
+    local_blend(b, input, &laws, &ratios, true)
+}
+
 /// The point `dist` along face f from `p` in the plane square to `t`, starting along `w`: on a
 /// plane `dist` along `w`; on a cylinder whose axis runs along `t`, `p` turned dist/R about the
 /// axis towards `w`; else marched ([`super::blend::along_face`]).
 fn along_section(f: &Face, p: &P3, t: &V3, w: &V3, dist: f64) -> P3 {
+    along_section_dir(f, p, t, w, dist).0
+}
+
+/// [`along_section`], with the direction the section runs on in at the point reached. Closed
+/// forms where the section is a line (a plane; a cone or a cylinder crossed along its
+/// rulings) or a circle (a sphere's great circle; a cylinder crossed square to its axis); else
+/// marched, the direction from the surface's normal there.
+fn along_section_dir(f: &Face, p: &P3, t: &V3, w: &V3, dist: f64) -> (P3, V3) {
+    let straight = |ruling: V3| ruling.cross(w).norm() < tol::ANGULAR_POINT;
+    match &f.surf {
+        Surface::Plane { .. } => return (p + w * dist, *w),
+        Surface::Cylinder { f: fr, .. } if straight(fr.z.normalize()) => {
+            return (p + w * dist, *w);
+        }
+        Surface::Cone { f: fr, r, a } if a.sin().abs() > tol::ANGULAR_FINE => {
+            let apex = fr.o + fr.z * (-r / a.tan());
+            if let Some(ruling) = (p - apex).try_normalize(tol::DEGENERATE)
+                && straight(ruling)
+            {
+                return (p + w * dist, *w);
+            }
+        }
+        Surface::Sphere { f: fr, r } => {
+            // The great circle through p along w.
+            let out = (p - fr.o) / *r;
+            let phi = dist / r;
+            let (sn, cs) = phi.sin_cos();
+            return (fr.o + (out * cs + w * sn) * *r, w * cs - out * sn);
+        }
+        _ => {}
+    }
+    let q = along_section_point(f, p, t, w, dist);
+    // On along the section: square to the edge's direction and to the face's normal there.
+    let n = geom::contact(f, geom::foot(f, &q, None)).n;
+    let d = t.cross(&n);
+    let d = match d.try_normalize(tol::DEGENERATE) {
+        Some(d) if d.dot(w) < 0.0 => -d,
+        Some(d) => d,
+        None => *w,
+    };
+    (q, d)
+}
+
+/// [`along_section`] where the section has no line or great circle to follow.
+fn along_section_point(f: &Face, p: &P3, t: &V3, w: &V3, dist: f64) -> P3 {
     match &f.surf {
         Surface::Plane { .. } => p + w * dist,
         Surface::Cylinder { f: fr, r } if fr.z.cross(t).norm() < tol::ANGULAR => {
@@ -11073,9 +11252,14 @@ fn local_blend(
     });
     // Rails running off their faces mid-strip are cut by the faces beyond; where that fails,
     // the strips as they are (the rail may only graze an edge).
+    let prof = std::cell::RefCell::new(super::boolean::Prof::new());
     let build = |p: &Plan| {
+        prof.borrow_mut().mark("plan");
         let pre = prepare(b, p, fit_tol);
-        trim(b, input, p, &pre, size, fit_tol, vtol, true).or_else(|e| {
+        prof.borrow_mut().mark("strips");
+        let trimmed = trim(b, input, p, &pre, size, fit_tol, vtol, true);
+        prof.borrow_mut().mark("trim");
+        trimmed.or_else(|e| {
             if budget.spent() {
                 return Err(out_of_work());
             }
@@ -11115,6 +11299,7 @@ fn local_blend(
         build(&p).map_err(|_| e)
     });
     debug(|| format!("ball solves: {}", BALL_SOLVES - budget.left()));
+    prof.borrow().report("local blend");
     r
 }
 

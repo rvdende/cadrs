@@ -378,6 +378,53 @@ fn stand(points: &[(P3, V3)], mv: &Move) -> Stand {
     }
 }
 
+/// How face `fi` stands to the motion: by points inside it ([`face_points`]) and, under a screw,
+/// by its edges too. The points inside are a grid's, and a part of the face narrower than the
+/// grid's step has none: where a drum's contact curve runs over its seam, the corner it cuts off
+/// beside the seam leads while the rest of its piece trails, and taken for trailing it went
+/// unswept (the same screw from another start, its contact clear of the seam, swept a solid
+/// 1.6e-4 larger). An edge's points say which way the face goes beside it, where they say so
+/// by more than [`EDGE_FOLD`]: an edge split along a fitted contact reads either way by the
+/// fit's error, far less.
+fn face_stand(b: &Body, fi: usize, size: f64, mv: &Move) -> Stand {
+    let points = face_points(b, fi, size);
+    let inside = stand(&points, mv);
+    if !matches!(mv, Move::Screw { .. }) || !matches!(inside, Stand::Leads | Stand::Trails) {
+        return inside;
+    }
+    let f = &b.faces[fi];
+    let sign = if f.sense { 1.0 } else { -1.0 };
+    let (mut lead, mut trail) = (false, false);
+    for c in f.loops.iter().flatten() {
+        let e = &b.edges[c.edge];
+        if e.degenerate {
+            continue;
+        }
+        for i in 1..=7 {
+            let t = e.t[0] + (e.t[1] - e.t[0]) * i as f64 / 8.0;
+            let q = c.pc.point(t);
+            let n = f.surf.normal(q.x, q.y) * sign;
+            let v = mv.velocity(&e.point(t));
+            let s = v.norm() * n.norm();
+            if s <= tol::TINY {
+                continue;
+            }
+            let cos = n.dot(&v) / s;
+            lead |= cos > EDGE_FOLD;
+            trail |= cos < -EDGE_FOLD;
+        }
+    }
+    match inside {
+        Stand::Leads if trail => Stand::Both,
+        Stand::Trails if lead => Stand::Both,
+        s => s,
+    }
+}
+
+/// The cosine past which a point of a face's edge counts as leading or trailing
+/// ([`face_stand`]).
+const EDGE_FOLD: f64 = 1e-3;
+
 /// The cosine past which a face counts as leading and trailing both.
 const FOLD: f64 = 1e-6;
 
@@ -1004,8 +1051,21 @@ fn prepared_rising(
     let mut traced: Vec<Option<Vec<Curve>>> = {
         use rayon::prelude::*;
         super::par::start();
+        // (Not a slide's contacts with a plane, a cylinder, a cone or a sphere: those are
+        // rulings and great circles, split along exactly below, and tracing them here was a
+        // third of a mill's slide.)
+        let exact = |fi: usize| {
+            matches!(mv, Move::Slide(_))
+                && matches!(
+                    body.faces[fi].surf,
+                    super::surface::Surface::Plane { .. }
+                        | super::surface::Surface::Cylinder { .. }
+                        | super::surface::Surface::Cone { .. }
+                        | super::surface::Surface::Sphere { .. }
+                )
+        };
         let both: Vec<bool> = (0..body.faces.len())
-            .map(|fi| stand(&face_points(&body, fi, size), &mv) == Stand::Both)
+            .map(|fi| !exact(fi) && face_stand(&body, fi, size, &mv) == Stand::Both)
             .collect();
         if both.iter().filter(|b| **b).count() > 1 {
             let b = &body;
@@ -1032,7 +1092,7 @@ fn prepared_rising(
             let have = stands.len();
             let more: Vec<Stand> = (have..b.faces.len())
                 .into_par_iter()
-                .map(|fi| stand(&face_points(b, fi, size), &mv))
+                .map(|fi| face_stand(b, fi, size, &mv))
                 .collect();
             stands.extend(more);
         }
@@ -1184,7 +1244,7 @@ fn prepared_rising(
         if by_curve {
             // (The split face measured again, and the faces appended at the end.)
             if fi < stands.len() {
-                stands[fi] = stand(&face_points(&body, fi, size), &mv);
+                stands[fi] = face_stand(&body, fi, size, &mv);
             }
         } else {
             traced.clear();
@@ -1197,6 +1257,81 @@ fn prepared_rising(
     // axis sweeps the apple's cap one side of it and, the other, a sheet inside the ball).
     if let Move::Turn { o, z, .. } = mv {
         split_at_axis(&mut body, o, z, size);
+    }
+    // A screw whose outline (the edges between its leading and its trailing faces) runs along
+    // the motion somewhere (an edge's tangent parallel to the velocity there: the edge's own
+    // sweep stops and turns back, as a ball's outline does screwed round a helix tighter than
+    // itself) sweeps a surface that
+    // folds through itself, and the pieces would sew into a solid with the fold inside it, one
+    // too large. So does a screw of more than a turn whose body is taller than a turn's rise:
+    // its turns run into each other. Neither is this sweep's to make.
+    if let Move::Screw { z, angle, rise, .. } = mv {
+        if angle.abs() > TAU * (1.0 + tol::REL) {
+            let along: Vec<f64> = body.verts.iter().map(|v| v.p.coords.dot(&z)).collect();
+            let bb = body.bbox();
+            let reach = (0..8)
+                .map(|i| {
+                    P3::new(
+                        if i & 1 == 0 { bb.min.x } else { bb.max.x },
+                        if i & 2 == 0 { bb.min.y } else { bb.max.y },
+                        if i & 4 == 0 { bb.min.z } else { bb.max.z },
+                    )
+                    .coords
+                    .dot(&z)
+                })
+                .chain(along)
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |a, x| {
+                    (a.0.min(x), a.1.max(x))
+                });
+            let per_turn = (rise * TAU / angle).abs();
+            if reach.1 - reach.0 > per_turn {
+                return Err(KernelError::Unsupported(
+                    "a screw whose turns run into each other, by its faces' sweeps",
+                ));
+            }
+        }
+        // (The outline's smooth edges: between a face's leading and its trailing piece.)
+        let all: Vec<Stand> = (0..body.faces.len())
+            .map(|fi| face_stand(&body, fi, size, &mv))
+            .collect();
+        let ef = body.edge_faces();
+        for fi in 0..body.faces.len() {
+            if !matches!(all[fi], Stand::Leads) {
+                continue;
+            }
+            let f = &body.faces[fi];
+            let sign = if f.sense { 1.0 } else { -1.0 };
+            for c in f.loops.iter().flatten() {
+                let e = &body.edges[c.edge];
+                if e.degenerate
+                    || !ef[c.edge].iter().any(|&g| {
+                        // (A face split along its contact: the same surface either side.
+                        // A sharp edge's sweep may turn back where the solid's doesn't.)
+                        g != fi && matches!(all[g], Stand::Trails) && body.faces[g].surf == f.surf
+                    })
+                {
+                    continue;
+                }
+                // The velocity's part across the edge, in the face: one side all along.
+                let (mut pos, mut neg) = (false, false);
+                for i in 0..=16 {
+                    let t = e.t[0] + (e.t[1] - e.t[0]) * i as f64 / 16.0;
+                    let p = e.point(t);
+                    let q = c.pc.point(t);
+                    let n = f.surf.normal(q.x, q.y) * sign;
+                    let v = mv.velocity(&p);
+                    let across = v.dot(&n.cross(&e.curve.tangent(t).normalize()));
+                    let small = tol::ANGULAR_POINT * v.norm();
+                    pos |= across > small;
+                    neg |= across < -small;
+                }
+                if pos && neg {
+                    return Err(KernelError::Unsupported(
+                        "a sweep whose surface folds through itself, by its faces' sweeps",
+                    ));
+                }
+            }
+        }
     }
     // Each leading face swept, the pieces united with the start.
     let sweep = match mv {
@@ -1270,7 +1405,7 @@ fn prepared_rising(
     }
     let mut pieces: Vec<Body> = Vec::new();
     for fi in 0..body.faces.len() {
-        let st = stand(&face_points(&body, fi, size), &mv);
+        let st = face_stand(&body, fi, size, &mv);
         if debug {
             eprintln!(
                 "sweep by faces: face {fi} {:?} {st:?}",
@@ -1751,20 +1886,30 @@ pub(super) fn glued_with(
                 | super::surface::Surface::Revolution { .. }
         )
     };
-    let mut faces: Vec<(usize, usize, P3, f64, V3)> = Vec::new();
-    for (bi, b) in all.iter().enumerate() {
-        for fi in 0..b.faces.len() {
-            let (a, c) = if walked(&b.faces[fi].surf) {
-                boundary_measure(b, fi)
-            } else {
-                super::mass::face_area(b, fi)
-            };
-            let f = &b.faces[fi];
-            let (u, v) = f.surf.project(&c, None);
-            let n = f.surf.normal(u, v) * if f.sense { 1.0 } else { -1.0 };
-            faces.push((bi, fi, c, a, n));
-        }
-    }
+    // (Each face's integrals on its own: on the threads, in the faces' order.)
+    let ids: Vec<(usize, usize)> = all
+        .iter()
+        .enumerate()
+        .flat_map(|(bi, b)| (0..b.faces.len()).map(move |fi| (bi, fi)))
+        .collect();
+    let one = |&(bi, fi): &(usize, usize)| -> (usize, usize, P3, f64, V3) {
+        let b = &all[bi];
+        let (a, c) = if walked(&b.faces[fi].surf) {
+            boundary_measure(b, fi)
+        } else {
+            super::mass::face_area(b, fi)
+        };
+        let f = &b.faces[fi];
+        let (u, v) = f.surf.project(&c, None);
+        let n = f.surf.normal(u, v) * if f.sense { 1.0 } else { -1.0 };
+        (bi, fi, c, a, n)
+    };
+    let faces: Vec<(usize, usize, P3, f64, V3)> = if super::par::threads_for(ids.len(), true) {
+        use rayon::prelude::*;
+        ids.par_iter().map(one).collect()
+    } else {
+        ids.iter().map(one).collect()
+    };
     let mut dropped = vec![false; faces.len()];
     for i in 0..faces.len() {
         if dropped[i] {

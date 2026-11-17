@@ -247,7 +247,18 @@ fn edge_tube(b: &Body, e: usize, r: f64) -> Result<Body> {
                 .ok_or(KernelError::Unsupported(
                     "a tube round an edge with no direction",
                 ))?;
-            let fr = Frame::from_z(p0, t);
+            // The seam (the circle's start) turned into the body, as the straight tube's: the
+            // part of the tube left outside the faces' slabs then never runs across it (a
+            // closed B-spline's parameters don't wrap, and a face can't lie over its seam).
+            let ef = b.edge_faces();
+            let inward = -ef[e]
+                .iter()
+                .map(|&f| outward_normal(b, f, &p0))
+                .fold(V3::zeros(), |a, n| a + n.normalize());
+            let fr = match (inward - t * inward.dot(&t)).try_normalize(tol::ANGULAR) {
+                Some(x) => Frame::from_xz(p0, x, t),
+                None => Frame::from_z(p0, t),
+            };
             let plane = Plane {
                 origin: p0,
                 x_dir: nalgebra::Unit::new_normalize(fr.x),
@@ -914,6 +925,21 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
     } else if crossing && spec.sharp {
         return Err(too_thick());
     } else if !spec.outward {
+        // Faces the thickness takes past their own radius (a round of radius 2 under a wall 3
+        // thick) are no part of the cavity's boundary: the cavity is that of the body without
+        // them, the faces round them run on to meet ([`super::without_vanishing`]).
+        let inward: Vec<f64> = (0..b.faces.len())
+            .map(|f| if remove.contains(&f) { 0.0 } else { -t })
+            .collect();
+        let (b, remove) = match super::without_vanishing(&b, &inward) {
+            Some((b2, from)) => {
+                let remove: Vec<usize> = (0..b2.faces.len())
+                    .filter(|&f| from[f].iter().any(|g| remove.contains(g)))
+                    .collect();
+                (b2, remove)
+            }
+            None => (b.clone(), remove.clone()),
+        };
         // The cavity: kept faces moved in by t, removed faces moved out past the body, or,
         // failing that (a spline wall's offset doesn't reach that far), where they are (the
         // cavity opens flush with them).
