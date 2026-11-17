@@ -200,3 +200,97 @@ fn thicken_fills_a_crease_round_a_circle() {
     let mitred = (PI * (5.0 + t).powi(3) - PI * 125.0) / 4.0;
     close(thickened(&mut k, true), mitred, 1e-7);
 }
+
+/// A cylinder cut on a slant: its slanted top and its wall, thickened outwards by a half,
+/// rounded. They meet along an ellipse, at an angle that changes round it, and the sheet bends
+/// away from the side thickened: the gap between the top's slab and the wall's is the tube
+/// round the ellipse, less what of it lies behind the sheet. The same as the whole solid
+/// grown by a half with round joins, above its foot, less the solid.
+#[test]
+fn thicken_fills_a_crease_round_an_ellipse() {
+    let mut k = DefaultKernel::new();
+    let rod = k
+        .primitive(&Primitive::cylinder(
+            Point3::origin(),
+            Vector3::z(),
+            5.0,
+            20.0,
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let side = Plane {
+        origin: Point3::new(0.0, -10.0, 0.0),
+        x_dir: Vector3::x_axis(),
+        normal: Unit::new_normalize(-Vector3::y()),
+    };
+    let outline = Loop::from_point([-10.0, 12.0])
+        .line_to([10.0, 16.0])
+        .line_to([10.0, 30.0])
+        .line_to([-10.0, 30.0])
+        .close();
+    let wedge = k
+        .extrude_with(
+            &Profile::of(side, vec![outline]),
+            &ExtrudeSpec::blind(Vector3::y_axis(), 20.0),
+        )
+        .unwrap()
+        .first()
+        .unwrap();
+    let cut = k
+        .boolean(BoolOp::Subtract, rod, &[wedge])
+        .unwrap()
+        .first()
+        .unwrap();
+    let faces = k.faces(cut).unwrap();
+    let sheet: Vec<FaceInput> = faces
+        .iter()
+        .filter(|f| f.kind == SurfaceKind::Cylinder || f.center.z > 5.0)
+        .map(|f| FaceInput {
+            body: cut,
+            face: f.id,
+            source: 1,
+        })
+        .collect();
+    assert_eq!(sheet.len(), 2);
+    let thick = k
+        .thicken_surfaces(&ThickenSpec {
+            bodies: vec![],
+            faces: sheet,
+            profiles: vec![],
+            along: 0.5,
+            against: 0.0,
+            sharp: false,
+            source: 7,
+        })
+        .unwrap()
+        .bodies[0];
+    let got = k.mass_properties(thick).unwrap().volume;
+    // The solid grown, cut off at its foot's plane, less the solid.
+    let grown = k
+        .offset(
+            cut,
+            &OffsetSpec {
+                distance: 0.5,
+                faces: vec![],
+                sharp: false,
+            },
+        )
+        .unwrap()
+        .bodies[0];
+    let above = k
+        .primitive(&Primitive::block(
+            Point3::new(-20.0, -20.0, 0.0),
+            Point3::new(20.0, 20.0, 40.0),
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let grown = k
+        .boolean(BoolOp::Intersect, grown, &[above])
+        .unwrap()
+        .first()
+        .unwrap();
+    let want = k.mass_properties(grown).unwrap().volume - k.mass_properties(cut).unwrap().volume;
+    close(got, want, 1e-6);
+}

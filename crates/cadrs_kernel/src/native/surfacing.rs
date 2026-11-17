@@ -297,6 +297,41 @@ fn crease_fills(k: &mut NativeKernel, sheets: &[Body], spec: &ThickenSpec) -> Re
                     continue;
                 }
             }
+            // Any other crease, rounded: the tube of the thickness round it, less what of it
+            // lies behind the sheet (the two faces' slabs the other way hold all of that: a
+            // point behind the sheet near the crease is over one face or the other). What is
+            // left fills the gap between the slabs and lies in them elsewhere.
+            if !spec.sharp
+                && let (Some((n1, t1)), Some((n2, t2))) = (at(f1), at(f2))
+            {
+                let mut filled = true;
+                let mut fills = Vec::new();
+                for (d, sign) in [(spec.along, 1.0), (spec.against, -1.0)] {
+                    if d < tol::ROUNDOFF
+                        || (n1 * sign).dot(&t2) >= -tol::ANGULAR_POINT.sqrt()
+                        || (n2 * sign).dot(&t1) >= -tol::ANGULAR_POINT.sqrt()
+                    {
+                        continue;
+                    }
+                    let fill = super::offset::round::edge_tube(&sewn, e, d).and_then(|tube| {
+                        [f1, f2].into_iter().try_fold(tube, |acc, f| {
+                            let behind = slab(&sheets[f], -sign * d)?;
+                            Ok(
+                                super::boolean::boolean_bodies(&acc, &behind, BoolOp::Subtract)?
+                                    .body,
+                            )
+                        })
+                    });
+                    match fill {
+                        Ok(fill) => fills.push(fill),
+                        Err(_) => filled = false,
+                    }
+                }
+                if filled {
+                    out.extend(fills);
+                    continue;
+                }
+            }
             if let (Some((n1, t1)), Some((n2, t2))) = (at(f1), at(f2)) {
                 let away =
                     [(spec.along, 1.0), (spec.against, -1.0)]

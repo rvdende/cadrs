@@ -88,7 +88,7 @@ fn face_slab(b: &Body, fi: usize, d: f64) -> Result<Body> {
 
 /// A tube of radius r round an edge (a cylinder along a line, a torus section round an arc),
 /// with flat ends.
-fn edge_tube(b: &Body, e: usize, r: f64) -> Result<Body> {
+pub(crate) fn edge_tube(b: &Body, e: usize, r: f64) -> Result<Body> {
     let ed = &b.edges[e];
     // A B-spline edge that is straight (a loft's rails to a point): the cylinder round the line
     // (a pipe swept along it touches the faces' slabs along seams the booleans can't settle).
