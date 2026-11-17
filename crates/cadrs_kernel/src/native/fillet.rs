@@ -1482,6 +1482,30 @@ fn welds(b: &Body, efs: &mut [EdgeFillet]) -> Result<Vec<Weld>> {
                 });
                 continue;
             }
+            // Welded to each other only where they part at one ball: the one on the shared
+            // face that touches both walls there. Two that each run out of room elsewhere
+            // (each against the other's wall where that wall comes round to a corner of its
+            // own) are corners' strips, not a weld.
+            if (a.r() - c.r()).abs() <= tol::REL_FINE * a.r() {
+                let part = |ef: &EdgeFillet, t_m: f64| {
+                    ball_of_radius(b, ef, t_m, ef.r(), [ef.mid.q[0].uv, ef.mid.q[1].uv])
+                        .or_else(|| ef.ball_from(b, &ef.mid, ef.tm, t_m))
+                        .map(|x| x.c)
+                };
+                if let (Some(pa), Some(pc)) = (part(a, tm_a), part(c, tm_c))
+                    && (pa - pc).norm() > 0.05 * a.r()
+                {
+                    debug(|| {
+                        format!(
+                            "edges {} and {}: not welded across face {face}: they part {} apart",
+                            a.e,
+                            c.e,
+                            (pa - pc).norm()
+                        )
+                    });
+                    continue;
+                }
+            }
             debug(|| format!("edges {} and {}: welded across face {face}", a.e, c.e));
             let sides = [
                 WeldSide {

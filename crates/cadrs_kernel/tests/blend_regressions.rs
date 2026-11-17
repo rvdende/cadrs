@@ -2782,3 +2782,49 @@ fn a_chamfer_fills_a_concave_edge_beside_a_ball_up_to_its_line() {
     });
     assert!(hit, "neither order of the two distances fills the groove");
 }
+
+/// Issue 242: a post of radius 50 with a hole of radius 25 cut halfway through its foot, the
+/// foot's edges rounded to 5. The rim's round on one side of the hole and the round along the
+/// hole's far side each run out of floor beside a wall of the other's (the hole's wall comes
+/// round to both sides), but at corners of their own, far apart: they are not welded to each
+/// other (their radii shrunk), each is mitred with its own neighbour. The rim and the hole's
+/// two sides alone have a closed form to integrate (736205.345); with the hole's end too the
+/// corners where it meets the sides are patches (Onshape: 735910.102, area 47531.943).
+#[test]
+fn rounds_that_run_out_of_floor_at_corners_of_their_own_are_not_welded() {
+    use nalgebra::{Point3, Vector3};
+    let mut k = NativeKernel::new();
+    let mut rod = |base: Point3<f64>, dir: Vector3<f64>, r: f64, l: f64| {
+        let s = Profile::of(
+            Plane::square_to(base, dir),
+            vec![Loop::circle([0.0, 0.0], r)],
+        );
+        k.extrude_with(&s, &ExtrudeSpec::normal_to(&s, l))
+            .unwrap()
+            .first()
+            .unwrap()
+    };
+    let post = rod(Point3::origin(), Vector3::z(), 50.0, 100.0);
+    let hole = rod(Point3::new(0.0, -80.0, 0.0), Vector3::y(), 25.0, 80.0);
+    let body = k
+        .boolean(BoolOp::Subtract, post, &[hole])
+        .unwrap()
+        .first()
+        .unwrap();
+    let rim = Point3::new(0.0, 50.0, 0.0);
+    let sides = [
+        Point3::new(25.0, -20.0, 0.0),
+        Point3::new(-25.0, -20.0, 0.0),
+    ];
+    let end = Point3::origin();
+    for (at, volume, slack) in [
+        (vec![rim, sides[0], sides[1]], 736205.345, 0.1),
+        (vec![rim, sides[0], sides[1], end], 735915.0, 6.0),
+    ] {
+        let edges: Vec<EdgeId> = at.iter().map(|p| k.edge_at(body, *p).unwrap()).collect();
+        let out = k.fillet(body, &edges, 5.0).unwrap().bodies[0];
+        assert!(k.get(out).unwrap().check().is_empty());
+        let got = k.mass_properties(out).unwrap().volume;
+        assert!((got - volume).abs() < slack, "{got} for {} edges", at.len());
+    }
+}
