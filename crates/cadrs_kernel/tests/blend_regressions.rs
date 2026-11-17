@@ -2828,3 +2828,66 @@ fn rounds_that_run_out_of_floor_at_corners_of_their_own_are_not_welded() {
         assert!((got - volume).abs() < slack, "{got} for {} edges", at.len());
     }
 }
+
+/// A chamfer's first distance lies on the face named for it (`ChamferOpts::first_on`), whichever
+/// way the edge runs and whichever of its faces comes first: a frustum capped by a ball, its
+/// rim (picked as the edges between the cone and the ball) chamfered by a distance and an
+/// angle, gives one solid with the distance named on the cone and another with it on the ball,
+/// and the same again when the body is built mirrored (the rim running the other way round).
+#[test]
+fn a_chamfers_first_distance_lies_on_the_face_named_for_it() {
+    use nalgebra::{Point3, Vector3};
+    let volumes = |up: f64| -> [f64; 2] {
+        let mut k = NativeKernel::new();
+        let z = Vector3::z() * up;
+        let frustum = k
+            .primitive(&Primitive::cone(Point3::origin(), z, 2.0, 4.0, 3.0))
+            .unwrap()
+            .first()
+            .unwrap();
+        let ball = k
+            .primitive(&Primitive::ball(Point3::origin(), 5.0))
+            .unwrap()
+            .first()
+            .unwrap();
+        let slab = Profile::of(
+            Plane::square_to(Point3::origin() + z * 3.0, z),
+            vec![Loop::rectangle(-6.0, -6.0, 6.0, 6.0)],
+        );
+        let slab = k
+            .extrude_with(&slab, &ExtrudeSpec::normal_to(&slab, 3.0))
+            .unwrap()
+            .first()
+            .unwrap();
+        let cap = k
+            .boolean(BoolOp::Intersect, ball, &[slab])
+            .unwrap()
+            .first()
+            .unwrap();
+        let body = k
+            .boolean(BoolOp::Union, frustum, &[cap])
+            .unwrap()
+            .first()
+            .unwrap();
+        let rim = k
+            .edges_between(body, SurfaceKind::Cone, SurfaceKind::Sphere)
+            .unwrap();
+        assert!(!rim.is_empty());
+        [SurfaceKind::Cone, SurfaceKind::Sphere].map(|kind| {
+            let spec = ChamferSpec::DistanceAngle {
+                distance: 1.0,
+                angle: 45f64.to_radians(),
+            };
+            let opts = ChamferOpts::new(spec).first_on(k.face_of(body, kind).unwrap());
+            let out = k.chamfer_with(body, &rim, &opts).unwrap().bodies[0];
+            assert!(k.get(out).unwrap().check().is_empty());
+            k.mass_properties(out).unwrap().volume
+        })
+    };
+    let (a, b) = (volumes(1.0), volumes(-1.0));
+    assert!((a[0] - a[1]).abs() > 1e-3, "{a:?}");
+    assert!(
+        (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9,
+        "{a:?} {b:?}"
+    );
+}

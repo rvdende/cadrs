@@ -1359,9 +1359,21 @@ pub struct ChamferOpts {
     /// How a corner where three or more chamfered edges meet is closed.
     #[serde(default)]
     pub corners: ChamferCorners,
+    /// Faces the first distance (and the angle) lie on: an edge with one of its two faces
+    /// among them has its first distance on that face, whatever `flip` and `flipped` say and
+    /// whichever way the edge runs.
+    #[serde(default)]
+    pub first_on: Vec<FaceId>,
 }
 
 impl ChamferOpts {
+    /// These options with the first distance on `face` for the edges that bound it
+    /// ([`ChamferOpts::first_on`]).
+    pub fn first_on(mut self, face: FaceId) -> Self {
+        self.first_on.push(face);
+        self
+    }
+
     /// `spec` measured along the faces, nothing flipped, the corners mitred.
     pub fn new(spec: ChamferSpec) -> Self {
         Self {
@@ -1370,6 +1382,7 @@ impl ChamferOpts {
             flip: false,
             flipped: Vec::new(),
             corners: ChamferCorners::Miter,
+            first_on: Vec::new(),
         }
     }
 }

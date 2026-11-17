@@ -2880,7 +2880,7 @@ pub fn chamfer(
     let edges = &real_edges(&b, edges)?[..];
     let opts = &match spec {
         ChamferSpec::EqualDistance(_) => opts.clone(),
-        _ => chain_sides(&b, edges, opts),
+        _ => first_on_named(&b, edges, chain_sides(&b, edges, opts)),
     };
     let mut local_error: Option<KernelError> = None;
     // (Local trimming passes over edges whose faces join smoothly.)
@@ -3247,6 +3247,35 @@ fn chain_sides(b: &Body, edges: &[EdgeId], opts: &ChamferOpts) -> ChamferOpts {
         flipped,
         ..opts.clone()
     }
+}
+
+/// `opts` (its sides explicit: [`chain_sides`]) with each edge that has one of its two faces
+/// among [`ChamferOpts::first_on`] flipped, or not, so that its first distance lies on that
+/// face.
+fn first_on_named(b: &Body, edges: &[EdgeId], mut opts: ChamferOpts) -> ChamferOpts {
+    if opts.first_on.is_empty() {
+        return opts;
+    }
+    let named = |f: usize| opts.first_on.iter().any(|x| x.0 as usize == f);
+    for &e in edges {
+        let Ok([(f0, _), (f1, _)]) = edge_sides(b, e.0 as usize) else {
+            continue;
+        };
+        if named(f0) == named(f1) {
+            continue;
+        }
+        let want = usize::from(named(f1));
+        let has = usize::from(opts.flip != opts.flipped.contains(&e));
+        if want != has {
+            match opts.flipped.iter().position(|x| *x == e) {
+                Some(i) => {
+                    opts.flipped.swap_remove(i);
+                }
+                None => opts.flipped.push(e),
+            }
+        }
+    }
+    opts
 }
 
 /// The chamfer by a tool and boolean alone (the sections solved on the exact faces, their
