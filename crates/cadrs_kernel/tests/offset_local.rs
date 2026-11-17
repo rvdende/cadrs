@@ -1868,3 +1868,101 @@ fn a_draft_closes_over_faces_of_a_body_that_isnt_convex() {
     let apex = 5.0 / 50f64.to_radians().tan();
     assert!((fifty.1 - 100.0 * apex / 3.0).abs() < 1e-7, "{}", fifty.1);
 }
+
+/// A house: a square block under a roof of two slopes at 45 degrees, its ridge along y.
+fn house(k: &mut NativeKernel) -> BodyId {
+    let gable = Plane {
+        origin: Point3::origin(),
+        x_dir: Vector3::x_axis(),
+        normal: nalgebra::Unit::new_normalize(-Vector3::y()),
+    };
+    let outline = Loop::from_point([0.0, 0.0])
+        .line_to([10.0, 0.0])
+        .line_to([10.0, 5.0])
+        .line_to([5.0, 10.0])
+        .line_to([0.0, 5.0])
+        .close();
+    k.extrude_with(
+        &Profile::of(gable, vec![outline]),
+        &ExtrudeSpec::blind(Vector3::y_axis(), 10.0),
+    )
+    .unwrap()
+    .first()
+    .unwrap()
+}
+
+/// The house's two slopes (their normals rise and lean along x).
+fn slopes(k: &NativeKernel, b: BodyId) -> Vec<FaceId> {
+    let body = k.get(b).unwrap();
+    (0..body.faces.len())
+        .filter(|&f| match &body.faces[f].surf {
+            Surface::Plane { f: fr } => {
+                let n = fr.x.cross(&fr.y);
+                n.z.abs() > 0.1 && n.x.abs() > 0.1
+            }
+            _ => false,
+        })
+        .map(|f| FaceId(f as u64))
+        .collect()
+}
+
+/// The house's ridge rounded, then its slopes drafted to thirty degrees from upright about
+/// the eaves (one slope picked, the round and the other slope reached across the round's
+/// smooth edges). A round across the pull can't be turned as it is: it is taken off, the slopes
+/// drafted, and the ridge they meet at rounded again at the same radius. The same body as the
+/// plain house's slopes drafted and its ridge rounded then.
+#[test]
+fn a_draft_goes_through_a_round_between_its_faces() {
+    let mut k = NativeKernel::new();
+    let spec = |faces: Vec<FaceId>, tangent_propagation: bool| DraftSpec {
+        faces,
+        angle: 30f64.to_radians(),
+        pull: Vector3::z_axis(),
+        neutral: Point3::new(0.0, 0.0, 5.0),
+        neutral_normal: None,
+        tangent_propagation,
+    };
+    let ridge = |k: &NativeKernel, b: BodyId| {
+        let body = k.get(b).unwrap();
+        let two = slopes(k, b);
+        let ef = body.edge_faces();
+        (0..body.edges.len())
+            .find(|&e| two.iter().all(|w| ef[e].contains(&(w.0 as usize))))
+            .map(|e| EdgeId(e as u64))
+            .unwrap()
+    };
+    // Drafted, then rounded.
+    let plain = house(&mut k);
+    let two = slopes(&k, plain);
+    assert_eq!(two.len(), 2);
+    let drafted = k.draft(plain, &spec(two, false)).unwrap().bodies[0];
+    let edge = ridge(&k, drafted);
+    let want = k.fillet(drafted, &[edge], 1.0).unwrap().bodies[0];
+    let want = k.mass_properties(want).unwrap().volume;
+    // Rounded, then drafted through the round.
+    let edge = ridge(&k, plain);
+    let rounded = k.fillet(plain, &[edge], 1.0).unwrap();
+    let round = rounded
+        .history
+        .generated
+        .first()
+        .map(|(f, _)| *f)
+        .expect("the round's face");
+    let rounded = rounded.bodies[0];
+    let one = slopes(&k, rounded)[0];
+    let out = k.draft(rounded, &spec(vec![one], true)).unwrap();
+    let b = k.get(out.bodies[0]).unwrap();
+    assert!(b.check().is_empty(), "{:?}", b.check());
+    assert_eq!(b.faces.len(), 8);
+    let v = k.mass_properties(out.bodies[0]).unwrap().volume;
+    assert!((v - want).abs() < 1e-9 * want, "volume {v}, want {want}");
+    // The new round continues the old one.
+    assert!(
+        out.history
+            .modified
+            .iter()
+            .any(|(_, from)| from.body == rounded && from.face == round),
+        "{:?}",
+        out.history.modified
+    );
+}

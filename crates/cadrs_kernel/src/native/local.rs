@@ -2615,6 +2615,190 @@ fn nurbs_arc(c: &Curve, p0: &P3, p1: &P3, dir0: &V3) -> Option<(f64, f64)> {
     best.map(|(_, r)| r)
 }
 
+/// A round among faces to draft: the face, its radius and the two faces it runs between.
+type Round = (usize, f64, [usize; 2]);
+
+/// The rounds among `faces` that a draft can't turn as they are ([`Round`]): a cylinder across
+/// the pull or a torus that meets two other faces smoothly along its edges (a fillet between
+/// them, of its radius).
+fn rounds_among(b: &Body, faces: &[usize], pull: &V3) -> Vec<Round> {
+    let ef = b.edge_faces();
+    let normal = |fi: usize, p: &P3| {
+        let f = &b.faces[fi];
+        let (u, v) = f.surf.project(p, None);
+        f.surf.normal(u, v) * if f.sense { 1.0 } else { -1.0 }
+    };
+    faces
+        .iter()
+        .filter_map(|&fi| {
+            let radius = match &b.faces[fi].surf {
+                Surface::Cylinder { f, r } if f.z.cross(pull).norm() > tol::ANGULAR => *r,
+                Surface::Torus { rmin, .. } => *rmin,
+                _ => return None,
+            };
+            // The faces it meets smoothly: a fillet's two.
+            let mut beside: Vec<usize> = Vec::new();
+            for c in b.faces[fi].loops.iter().flatten() {
+                let ed = &b.edges[c.edge];
+                let Some(&other) = ef[c.edge].iter().find(|&&g| g != fi) else {
+                    continue;
+                };
+                let smooth = !ed.degenerate
+                    && ef[c.edge].len() == 2
+                    && [0.25, 0.5, 0.75].iter().all(|&s| {
+                        let p = ed.point(ed.t[0] + (ed.t[1] - ed.t[0]) * s);
+                        normal(fi, &p).dot(&normal(other, &p)) > 1.0 - tol::ANGULAR_POINT
+                    });
+                if smooth && !beside.contains(&other) {
+                    beside.push(other);
+                }
+            }
+            match beside[..] {
+                [x, y] => Some((fi, radius, [x, y])),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// [`draft`] of faces with rounds among them ([`rounds_among`]): the rounds deleted (the faces
+/// beside each run on to a sharp edge), the other faces drafted, and those edges rounded again
+/// at the rounds' radii. The result's faces continue the body's: a new round its old one.
+fn draft_rounded(
+    k: &mut NativeKernel,
+    body: BodyId,
+    spec: &DraftSpec,
+    faces: &[usize],
+    rounds: &[Round],
+) -> Result<OpResult> {
+    use std::collections::HashMap;
+    let gone: Vec<FaceId> = rounds.iter().map(|r| FaceId(r.0 as u64)).collect();
+    let sharp = super::surfacing::delete_faces(k, body, &gone)?;
+    let sharp_body = *sharp.bodies.first().ok_or(KernelError::Unsupported(
+        "drafting rounds whose faces don't run on to an edge",
+    ))?;
+    // Where each face of the body went.
+    let to_sharp: HashMap<usize, usize> = sharp
+        .history
+        .modified
+        .iter()
+        .map(|(new, old)| (old.face.0 as usize, new.0 as usize))
+        .collect();
+    let keep: Vec<FaceId> = faces
+        .iter()
+        .filter(|f| !rounds.iter().any(|r| r.0 == **f))
+        .filter_map(|f| to_sharp.get(f).map(|&g| FaceId(g as u64)))
+        .collect();
+    let drafted = draft(
+        k,
+        sharp_body,
+        &DraftSpec {
+            faces: keep,
+            tangent_propagation: false,
+            ..spec.clone()
+        },
+    );
+    k.release(sharp_body);
+    let drafted = drafted?;
+    let drafted_body = drafted.bodies[0];
+    let to_drafted: HashMap<usize, usize> = drafted
+        .history
+        .modified
+        .iter()
+        .map(|(new, old)| (old.face.0 as usize, new.0 as usize))
+        .collect();
+    let through = |f: usize| to_sharp.get(&f).and_then(|g| to_drafted.get(g)).copied();
+    // Each round's edge again: between the two faces it ran between, as they are now.
+    let b = std::sync::Arc::clone(k.get(drafted_body)?);
+    let ef = b.edge_faces();
+    let mut edges: Vec<(EdgeId, usize)> = Vec::new();
+    for (ri, (_, _, beside)) in rounds.iter().enumerate() {
+        let (Some(x), Some(y)) = (through(beside[0]), through(beside[1])) else {
+            continue;
+        };
+        for e in 0..b.edges.len() {
+            let fs = &ef[e];
+            if !b.edges[e].degenerate && fs.contains(&x) && fs.contains(&y) && x != y {
+                edges.push((EdgeId(e as u64), ri));
+            }
+        }
+    }
+    // (Back from a face of the drafted body to the body's.)
+    let back_sharp: HashMap<usize, usize> = to_sharp.iter().map(|(a, b)| (*b, *a)).collect();
+    let back_drafted: HashMap<usize, usize> = to_drafted.iter().map(|(a, b)| (*b, *a)).collect();
+    let origin = |f: usize| {
+        back_drafted
+            .get(&f)
+            .and_then(|g| back_sharp.get(g))
+            .copied()
+    };
+    let from = |f: usize| InputFace {
+        body,
+        face: FaceId(f as u64),
+    };
+    // Round by round of one radius (the same radius, most often: one fillet).
+    let mut cur = drafted_body;
+    let mut now: Vec<Option<usize>> = (0..b.faces.len()).map(origin).collect();
+    let mut radii: Vec<f64> = rounds.iter().map(|r| r.1).collect();
+    radii.sort_by(f64::total_cmp);
+    radii.dedup_by(|a, b| (*a - *b).abs() <= tol::REL_POINT * (1.0 + *b));
+    for (pass, r) in radii.iter().enumerate() {
+        let same = |ri: usize| (rounds[ri].1 - r).abs() <= tol::REL_POINT * (1.0 + r);
+        // (After the first fillet the edges' numbers are another body's: found again there.)
+        let picked: Vec<(EdgeId, usize)> = if pass == 0 {
+            edges.iter().copied().filter(|x| same(x.1)).collect()
+        } else {
+            let nb = std::sync::Arc::clone(k.get(cur)?);
+            let nef = nb.edge_faces();
+            let mut out = Vec::new();
+            for (ri, (_, _, beside)) in rounds.iter().enumerate().filter(|(ri, _)| same(*ri)) {
+                let at = |f: usize| now.iter().position(|o| *o == Some(f));
+                let (Some(x), Some(y)) = (at(beside[0]), at(beside[1])) else {
+                    continue;
+                };
+                for e in 0..nb.edges.len() {
+                    if !nb.edges[e].degenerate && nef[e].contains(&x) && nef[e].contains(&y) {
+                        out.push((EdgeId(e as u64), ri));
+                    }
+                }
+            }
+            out
+        };
+        if picked.is_empty() {
+            continue;
+        }
+        let ids: Vec<EdgeId> = picked.iter().map(|x| x.0).collect();
+        let rounded = super::blend::fillet(k, cur, &ids, &FilletSpec::radius(*r));
+        k.release(cur);
+        let rounded = rounded?;
+        let n = k.get(rounded.bodies[0])?.faces.len();
+        let mut next: Vec<Option<usize>> = vec![None; n];
+        for (new, old) in &rounded.history.modified {
+            next[new.0 as usize] = now.get(old.face.0 as usize).copied().flatten();
+        }
+        // A new round's face is the round that was there.
+        for (new, o) in &rounded.history.generated {
+            if let Origin::FromEdge { edge, .. } = o
+                && let Some(&(_, ri)) = picked.iter().find(|x| x.0 == *edge)
+            {
+                next[new.0 as usize] = Some(rounds[ri].0);
+            }
+        }
+        (cur, now) = (rounded.bodies[0], next);
+    }
+    Ok(OpResult {
+        bodies: vec![cur],
+        history: History {
+            modified: now
+                .iter()
+                .enumerate()
+                .filter_map(|(f, o)| o.map(|o| (FaceId(f as u64), from(o))))
+                .collect(),
+            ..Default::default()
+        },
+    })
+}
+
 /// The faces reached from `seed` across smooth edges (the faces' normals agree along them).
 pub fn tangent_closure(b: &Body, mut seed: Vec<usize>) -> Vec<usize> {
     let ef = b.edge_faces();
@@ -2674,6 +2858,12 @@ pub fn draft(k: &mut NativeKernel, body: BodyId, spec: &DraftSpec) -> Result<OpR
     }
     if spec.tangent_propagation {
         faces = tangent_closure(&b, faces);
+    }
+    // Rounds among them (a fillet between two of the faces, reached across its smooth
+    // edges): taken off, the faces drafted, and rounded again at the same radius.
+    let rounds = rounds_among(&b, &faces, &pull);
+    if !rounds.is_empty() {
+        return draft_rounded(k, body, spec, &faces, &rounds);
     }
     for fi in faces {
         let f = &b.faces[fi];
