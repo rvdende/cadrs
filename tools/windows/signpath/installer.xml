@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SignPath artifact configuration "installer" (tools/windows/README.md): the release's
+     installer, cadrs-v<version>-x86_64-windows-setup.exe (tools/windows/cadrs.nsi), which GitHub
+     Actions uploads as a zip artifact. The name check matches its version resource. -->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file path="cadrs-v*-x86_64-windows-setup.exe" product-name="cadrs">
+      <authenticode-sign />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

@@ -2,7 +2,11 @@
 ; `tools/release/package.sh windows` with NSIS's makensis (cross-built on Linux like the exe):
 ;
 ;   makensis -DVERSION=0.2.9 -DVIVERSION=0.2.9.0 -DSRC=<the packaged folder> -DOUT=<setup.exe>
-;            [-DSIGN=<command that signs the file named last>] tools/windows/cadrs.nsi
+;            tools/windows/cadrs.nsi
+;
+; The release signs cadrs.exe before it goes in, and then the installer (tools/windows/README.md).
+; The uninstaller it writes stays unsigned: it is made on the user's machine, so it carries no
+; download mark and SmartScreen never checks it.
 ;
 ; It installs for the current user, with no administrator prompt, where `cadrs --install` does
 ; (%LOCALAPPDATA%\Programs\cadrs): the in-app updater (cadrs_app::update) swaps a new release
@@ -34,12 +38,6 @@ ManifestDPIAware true
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\cadrs"
 !define PROGID "cadrs.File"
 !define ICON "${__FILEDIR__}\..\..\assets\icons\cadrs.ico"
-
-!ifdef SIGN
-  ; Signs the installer, and the uninstaller it carries, once each is written.
-  !finalize '${SIGN} "%1"'
-  !uninstfinalize '${SIGN} "%1"'
-!endif
 
 Name "${APP}"
 OutFile "${OUT}"

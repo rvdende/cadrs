@@ -35,8 +35,8 @@ Onshape-style CAD in Rust + Bevy 0.20.1. Local notes in `docs/` (git-ignored: `P
   "Check (browser)" job compiles it.
 - Release: bump `version` in the root `Cargo.toml`, write `tools/release/notes/v<version>.md`,
   then push the tag `v<version>`; `.github/workflows/release.yml` builds the Linux and Windows
-  archives, the Windows installer (NSIS, `tools/windows/cadrs.nsi`; signed when the
-  `WINDOWS_CERTIFICATE` secret is set) and the macOS disk image (universal, ad-hoc signed; only on GitHub's macOS runner),
+  archives, the Windows installer (NSIS, `tools/windows/cadrs.nsi`; the exe and installer
+  signed through SignPath once it is set up, `tools/windows/README.md`) and the macOS disk image (universal, ad-hoc signed; only on GitHub's macOS runner),
   publishes the GitHub release and redeploys the site. `tools/release/build.sh` builds the Linux
   and Windows archives locally. Actions › Release › Run workflow with "Only build" builds them all
   as the run's artifacts without releasing.

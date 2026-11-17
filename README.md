@@ -18,7 +18,8 @@ https://github.com/rvdende/cadrs/releases/latest/download/cadrs-x86_64-windows-s
 only (no administrator prompt) into `%LOCALAPPDATA%\Programs\cadrs`, with a Start Menu
 shortcut, "Open with" for `.cadrs`, STEP, IGES, BREP, STL and GLB files, and an entry in
 Settings › Apps to uninstall it; `/S` installs silently. Or unpack the `…-windows.zip` anywhere
-and run `cadrs.exe`. Either way the app updates itself when a new release is out.
+and run `cadrs.exe`. Either way the app updates itself when a new release is out. Both are
+code-signed (see [Code signing policy](#code-signing-policy)).
 
 **A parametric, feature-based CAD app written in Rust**, with a Bevy UI and its own pure-Rust
 B-rep modeling kernel. Its workflow is sketch on a plane, constrain and dimension,
@@ -70,6 +71,33 @@ clients take the URL in their MCP settings.
 ### Tests
 
 `cargo test -r -p cadrs_core --test reference_parts -- --nocapture`
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by
+[SignPath Foundation](https://signpath.org).
+
+The Windows releases (`cadrs.exe` and the installer) are built from this repository by its
+release workflow on GitHub's own runners (`.github/workflows/release.yml`) and signed only from
+there, never from a developer's machine ([tools/windows](tools/windows/README.md)).
+
+- Committers and reviewers: the repository's members with write access; contributions from
+  others come in through reviewed pull requests.
+- Approvers (each signed release): the repository's owner, [rvdende](https://github.com/rvdende).
+
+### Privacy
+
+cadrs keeps your documents on your computer. It talks to other systems only for these:
+
+- **Updates**: when it starts, it asks GitHub (`api.github.com`) for the latest release and the
+  repository's star count, and downloads a new release when you choose Upgrade.
+  `CADRS_NO_UPDATE_CHECK=1` turns this off.
+- **Sharing and collaboration**: only when you go online or share a document (off by default),
+  it connects to other cadrs users through iroh's relays and checks in at `peers.cadrs.net`.
+  A document is sent only to the people you share it with, or to everyone when you publish
+  it to the public documents.
+- **Parts**: the library browser's JLCPCB tab searches and downloads parts from JLCPCB and
+  EasyEDA when you use it.
 
 ## Sponsors
 Thank you to: 

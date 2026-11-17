@@ -66,24 +66,27 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: linux
+          name: release-linux
           path: dist/*.tar.gz
           if-no-files-found: error
 
   # Cross-built with MinGW (its windres compiles the icon into cadrs.exe), on the nightly pinned
   # in rust-toolchain.toml, which carries the Windows target. On Ubuntu 26.04, for MinGW's
   # binutils 2.45: the cadrs.exe that 24.04's binutils 2.41 linked doesn't start on Windows.
-  # Packed as the zip and as the installer (NSIS, tools/windows/cadrs.nsi). With the secrets
-  # WINDOWS_CERTIFICATE (a code-signing certificate's .pfx, base64) and
-  # WINDOWS_CERTIFICATE_PASSWORD, cadrs.exe, the installer and its uninstaller are signed
-  # (tools/windows/sign.sh); without them they aren't, and SmartScreen warns before the first run.
+  # Packed as the zip and as the installer (NSIS, tools/windows/cadrs.nsi). Signed through
+  # SignPath (tools/windows/README.md) when the secret SIGNPATH_API_TOKEN and the variable
+  # SIGNPATH_ORGANIZATION_ID are set: cadrs.exe before it is packed, then the installer, each
+  # uploaded as an artifact that SignPath signs and hands back. Without them both stay unsigned
+  # (and SmartScreen asks before the first run).
   windows:
     name: Build (Windows)
     runs-on: ubuntu-26.04
-    timeout-minutes: 120
+    timeout-minutes: 180
     env:
-      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-      WINDOWS_SIGN_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+      SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+      SIGNPATH_PROJECT: ${{ vars.SIGNPATH_PROJECT_SLUG || 'cadrs' }}
+      SIGNPATH_POLICY: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -100,7 +103,7 @@ jobs:
           sudo -E apt-get update
           sudo -E apt-get install -y --no-install-recommends \
             clang mold gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 binutils-mingw-w64-x86-64 zip \
-            nsis osslsigncode < /dev/null
+            nsis < /dev/null
 
       - name: Check the MinGW linker
         run: |
@@ -118,22 +121,81 @@ jobs:
       - name: Build
         run: cargo build --release --locked --target x86_64-pc-windows-gnu -p cadrs
 
-      - name: Code-signing certificate
-        if: ${{ env.WINDOWS_CERTIFICATE != '' }}
+      - name: Signing
+        id: signing
         run: |
-          echo "$WINDOWS_CERTIFICATE" | base64 -d > "$RUNNER_TEMP/cadrs.pfx"
-          echo "WINDOWS_SIGN_PFX=$RUNNER_TEMP/cadrs.pfx" >> "$GITHUB_ENV"
+          if [[ -n "$SIGNPATH_API_TOKEN" && -n "$SIGNPATH_ORGANIZATION_ID" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::SignPath is not set up (tools/windows/README.md): cadrs.exe and the installer stay unsigned"
+          fi
 
-      - name: Package
-        run: tools/release/package.sh windows target/x86_64-pc-windows-gnu/release/cadrs.exe
+      - name: Package (folder)
+        run: tools/release/package.sh windows-folder target/x86_64-pc-windows-gnu/release/cadrs.exe
 
-      - name: Remove the certificate
-        if: ${{ always() }}
-        run: rm -f "$RUNNER_TEMP/cadrs.pfx"
+      # cadrs.exe, signed before the zip and the installer take it.
+      - name: Upload cadrs.exe for signing
+        id: unsigned-exe
+        if: ${{ steps.signing.outputs.enabled }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: signpath-exe
+          path: dist/cadrs-v*-x86_64-windows/cadrs.exe
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Sign cadrs.exe
+        if: ${{ steps.signing.outputs.enabled }}
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ env.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ env.SIGNPATH_PROJECT }}
+          signing-policy-slug: ${{ env.SIGNPATH_POLICY }}
+          artifact-configuration-slug: exe
+          github-artifact-id: ${{ steps.unsigned-exe.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed-exe
+
+      - name: Use the signed cadrs.exe
+        if: ${{ steps.signing.outputs.enabled }}
+        run: cp signed-exe/cadrs.exe dist/cadrs-v*-x86_64-windows/cadrs.exe
+
+      - name: Package (zip and installer)
+        run: tools/release/package.sh windows-pack
+
+      - name: Upload the installer for signing
+        id: unsigned-installer
+        if: ${{ steps.signing.outputs.enabled }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: signpath-installer
+          path: dist/*-setup.exe
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Sign the installer
+        if: ${{ steps.signing.outputs.enabled }}
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ env.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ env.SIGNPATH_PROJECT }}
+          signing-policy-slug: ${{ env.SIGNPATH_POLICY }}
+          artifact-configuration-slug: installer
+          github-artifact-id: ${{ steps.unsigned-installer.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed-installer
+
+      - name: Use the signed installer
+        if: ${{ steps.signing.outputs.enabled }}
+        run: cp signed-installer/*-setup.exe dist/
 
       - uses: actions/upload-artifact@v4
         with:
-          name: windows
+          name: release-windows
           path: |
             dist/*.zip
             dist/*-setup.exe
@@ -183,7 +245,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: macos
+          name: release-macos
           path: dist/*.dmg
           if-no-files-found: error
 
@@ -230,7 +292,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: web
+          name: release-web
           path: dist/*.tar.gz
           if-no-files-found: error
 
@@ -254,9 +316,11 @@ jobs:
           version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
           [[ "$TAG" == "v$version" ]] || { echo "tag $TAG doesn't match Cargo.toml's version $version"; exit 1; }
 
+      # The release-* artifacts only: signpath-* are the Windows job's unsigned files.
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: release-*
           merge-multiple: true
 
       # Each file again under its name without the version (cadrs-x86_64-linux.tar.gz), so a link
