@@ -472,11 +472,33 @@ pub fn rail_crossings(
                     settled = true;
                     break;
                 }
-                let h = 1e-7 * (1.0 + uv.x.abs().max(uv.y.abs()));
-                let (ru, rv) = (
-                    (res(uv + Vector2::new(h, 0.0)) - r) / h,
-                    (res(uv + Vector2::new(0.0, h)) - r) / h,
-                );
+                // The residual's rates from the surface's own derivatives: the foot's from
+                // the first, its unit normal's from the second (n = N/|N|, N = Su × Sv:
+                // n' = (N' − n (n·N'))/|N|); by differences where the normal has no length.
+                let q = contact(fo, uv);
+                let [_, su, sv, suu, suv, svv] = fo.surf.d2(uv.x, uv.y);
+                let big = su.cross(&sv);
+                let len = big.norm();
+                let (ru, rv) = if len > tol::TINY * (1.0 + su.norm() * sv.norm()) {
+                    let sign = if q.n.dot(&big) < 0.0 { -1.0 } else { 1.0 };
+                    let turn = |d: V3| (d - q.n * q.n.dot(&d)) * (sign / len);
+                    let rate = |sp: V3, nd: V3| {
+                        Vector2::new(
+                            sp.dot(t),
+                            -sp.dot(&t.cross(&q.n)) + (c - q.p).dot(&t.cross(&nd)),
+                        )
+                    };
+                    (
+                        rate(su, turn(suu.cross(&sv) + su.cross(&suv))),
+                        rate(sv, turn(suv.cross(&sv) + su.cross(&svv))),
+                    )
+                } else {
+                    let h = 1e-7 * (1.0 + uv.x.abs().max(uv.y.abs()));
+                    (
+                        (res(uv + Vector2::new(h, 0.0)) - r) / h,
+                        (res(uv + Vector2::new(0.0, h)) - r) / h,
+                    )
+                };
                 let m = Matrix2::from_columns(&[ru, rv]);
                 let d = m.lu().solve(&(-r))?;
                 uv = clamp_uv(fo, uv + d);

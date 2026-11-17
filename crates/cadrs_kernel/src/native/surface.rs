@@ -488,9 +488,21 @@ impl Surface {
                     )
                 };
                 let grid = self.grid_points(n, &at);
-                let d: Vec<f64> = grid.iter().map(|g| (g - p).norm_squared()).collect();
-                // The grid's local minima (no neighbour nearer), row by row.
+                // (The distances on the stack for the usual grid: this runs for every point
+                // projected without a hint.)
                 let w = n + 1;
+                let mut held = [0.0f64; 625];
+                let spilt: Vec<f64>;
+                let d: &[f64] = if grid.len() <= held.len() {
+                    for (x, g) in held.iter_mut().zip(grid.iter()) {
+                        *x = (g - p).norm_squared();
+                    }
+                    &held[..grid.len()]
+                } else {
+                    spilt = grid.iter().map(|g| (g - p).norm_squared()).collect();
+                    &spilt
+                };
+                // The grid's local minima (no neighbour nearer), row by row.
                 for i in 0..w {
                     let rows = i.saturating_sub(1)..(i + 1).min(n) + 1;
                     for j in 0..w {
