@@ -755,3 +755,55 @@ fn a_tapered_thread_keeps_its_section_in_the_plane_through_its_axis() {
     }
     assert!(worst < 1e-8, "a face's point is {worst:e} off the thread");
 }
+
+/// brep-bench's ball screwed round a tight helix: a ball of radius 2 whose centre runs two
+/// turns of a helix of radius 1.5 rising 3 a turn. The helix curves tighter than the ball
+/// (its radius of curvature is 1.65), so the tube about it folds, and its turns overlap. The
+/// solid is everything within 2 of the helix's arc: its faces lie on the tube and on the ball
+/// at each end, and every point of them is 2 from the arc.
+#[test]
+fn a_ball_screwed_round_a_tight_helix_is_exact() {
+    use std::f64::consts::TAU;
+    let mut k = NativeKernel::new();
+    let ball = k
+        .primitive(&Primitive::ball(Point3::new(1.5, 0.0, 0.0), 2.0))
+        .unwrap()
+        .first()
+        .unwrap();
+    let axis = Axis::new(Point3::origin(), Vector3::z());
+    let motion = SolidMotion::helical(axis, 3.0, 0.0, 2.0 * TAU);
+    let swept = k.sweep_solid(ball, &motion).unwrap().bodies[0];
+    let body = k.get(swept).unwrap();
+    assert!(
+        body.faces
+            .iter()
+            .all(|f| !matches!(f.surf, Surface::Plane { .. })),
+        "the solid is not a faceted stand-in"
+    );
+    assert!(body.faces.len() < 100, "{} faces", body.faces.len());
+    let faults = body.check();
+    assert!(faults.is_empty(), "{faults:?}");
+    let volume = k.mass_properties(swept).unwrap().volume;
+    assert!((volume - 253.4494).abs() < 1e-3, "volume {volume}");
+    // Every point of its mesh is the ball's radius from the helix's arc (the mesh's corners
+    // are on the faces).
+    let mesh = k
+        .tessellate(
+            swept,
+            Tessellation {
+                deflection: 0.01,
+                angle: 15f64.to_radians(),
+            },
+        )
+        .unwrap();
+    let helix = |w: f64| Point3::new(1.5 * w.cos(), 1.5 * w.sin(), 3.0 * w / TAU);
+    let mut off: f64 = 0.0;
+    for p in &mesh.positions {
+        let p = Point3::new(p[0], p[1], p[2]);
+        let from_arc = (0..=20_000)
+            .map(|i| (helix(2.0 * TAU * i as f64 / 20_000.0) - p).norm())
+            .fold(f64::INFINITY, f64::min);
+        off = off.max((from_arc - 2.0).abs());
+    }
+    assert!(off < 1e-5, "a point of the surface is {off} off");
+}
