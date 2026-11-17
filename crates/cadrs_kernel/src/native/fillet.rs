@@ -224,6 +224,9 @@ struct EdgeFillet {
     /// The ball's offset from the second face over its offset from the first (1 but for a
     /// chamfer of two distances: its contacts then lie unequally far from the edge).
     ratio: f64,
+    /// That ratio varying along the edge (a chamfer by a distance and an angle between faces
+    /// whose section changes along it): (edge parameter, ratio), increasing, linear between.
+    ratio_law: Option<Vec<(f64, f64)>>,
     spine: Spine,
     exact: Option<Exact>,
     /// A ball in the middle of the strip (its reference) and its spine parameter.
@@ -276,13 +279,11 @@ impl EdgeFillet {
         if t >= last.0 {
             return last.1;
         }
-        for w in law.windows(2) {
-            if t <= w[1].0 {
-                let f = (t - w[0].0) / (w[1].0 - w[0].0).max(tol::TINY);
-                return w[0].1 + (w[1].1 - w[0].1) * f;
-            }
-        }
-        last.1
+        // (The first sample at or past t: a law may have a thousand.)
+        let i = law.partition_point(|x| x.0 < t).clamp(1, law.len() - 1);
+        let w = [law[i - 1], law[i]];
+        let f = (t - w[0].0) / (w[1].0 - w[0].0).max(tol::TINY);
+        w[0].1 + (w[1].1 - w[0].1) * f
     }
 
     /// The radius's derivative along the spine at t (0 past the law's ends).
@@ -296,16 +297,53 @@ impl EdgeFillet {
             })
     }
 
+    /// The second offset over the first at spine parameter t ([`Self::ratio`], or its law's
+    /// value, the end values past the ends).
+    fn ratio_at(&self, t: f64) -> f64 {
+        let Some(law) = &self.ratio_law else {
+            return self.ratio;
+        };
+        let t = self.law_param(t);
+        let (first, last) = (law[0], law[law.len() - 1]);
+        if t <= first.0 {
+            return first.1;
+        }
+        if t >= last.0 {
+            return last.1;
+        }
+        let i = law.partition_point(|x| x.0 < t).clamp(1, law.len() - 1);
+        let w = [law[i - 1], law[i]];
+        w[0].1 + (w[1].1 - w[0].1) * (t - w[0].0) / (w[1].0 - w[0].0).max(tol::TINY)
+    }
+
+    /// The ratio's derivative along the spine at t (0 past its law's ends, or without one).
+    fn ratio_slope(&self, t: f64) -> f64 {
+        let Some(law) = &self.ratio_law else {
+            return 0.0;
+        };
+        let t = self.law_param(t);
+        law.windows(2)
+            .find(|w| t >= w[0].0 && t <= w[1].0)
+            .map_or(0.0, |w| {
+                (w[1].1 - w[0].1) / (w[1].0 - w[0].0).max(tol::TINY)
+            })
+    }
+
     /// How ball `ball` (at spine parameter t) moves along the spine: its contacts' velocities
     /// ([`geom::ball_tangent`]); `None` where its faces are tangent there.
     fn velocity(&self, b: &Body, t: f64, ball: &Ball) -> Option<[V3; 2]> {
         let f = [&b.faces[self.faces[0]], &b.faces[self.faces[1]]];
         let (p, tn, dp, dtn) = self.spine.at_d(t);
-        let s = self.k[0].signum() * self.radius_slope(t);
+        let sign = self.k[0].signum();
+        let s = sign * self.radius_slope(t);
         let v = geom::ball_tangent(
             f,
             self.k_at(t),
-            [s, s * self.ratio],
+            // (The second offset is the first times the ratio: both may change.)
+            [
+                s,
+                s * self.ratio_at(t) + sign * self.radius_at(t) * self.ratio_slope(t),
+            ],
             ball,
             &p,
             &tn,
@@ -318,7 +356,7 @@ impl EdgeFillet {
     /// The offsets at spine parameter t.
     fn k_at(&self, t: f64) -> [f64; 2] {
         let r = self.radius_at(t) * self.k[0].signum();
-        [r, r * self.ratio]
+        [r, r * self.ratio_at(t)]
     }
 
     /// The ball at spine parameter t from contacts near `guess` (default: from the edge).
@@ -622,10 +660,20 @@ fn edge_fillet(
     e: usize,
     law: &[(f64, f64)],
     flat: bool,
-    ratio: f64,
+    ratio: &Ratio,
     budget: &Budget,
 ) -> Result<EdgeFillet> {
     let ed = &b.edges[e];
+    // (The ratio's law along the edge's parameter, in increasing order, as the radius's.)
+    let ratio_law = ratio.1.as_ref().map(|l| {
+        let mut pts: Vec<(f64, f64)> = l
+            .iter()
+            .map(|&(f, x)| (ed.t[0] + (ed.t[1] - ed.t[0]) * f, x))
+            .collect();
+        pts.sort_by(|a, c| a.0.total_cmp(&c.0));
+        pts
+    });
+    let ratio = ratio.0;
     if ed.degenerate {
         return Err(KernelError::InvalidParameter(
             "A degenerate edge can't be filleted".into(),
@@ -704,7 +752,11 @@ fn edge_fillet(
         [r, r * ratio]
     };
     // The larger offset, for how far the contacts may lie.
-    let rr = r * ratio.max(1.0);
+    let rr = r * ratio_law
+        .iter()
+        .flatten()
+        .fold(ratio, |m, x| m.max(x.1))
+        .max(1.0);
     // A canal surface's envelope is real only where the radius changes slower than the spine
     // runs (Dahl, research/PAPER_SCAN.md item 11: |r′| < |g′|); past that the balls along the
     // edge nest inside one another and no ball touches both faces in its section.
@@ -728,7 +780,7 @@ fn edge_fillet(
         }
     }
     let law = varies.then_some(pts);
-    let exact = if varies {
+    let exact = if varies || ratio_law.is_some() {
         None
     } else {
         geom::exact_kind([&b.faces[faces[0]], &b.faces[faces[1]]], &spine)
@@ -741,6 +793,7 @@ fn edge_fillet(
         law,
         flat,
         ratio,
+        ratio_law,
         spine,
         exact,
         mid: dummy_ball(),
@@ -1227,7 +1280,14 @@ fn ball_of_radius(b: &Body, ef: &EdgeFillet, t: f64, rho: f64, guess: [P2; 2]) -
     let f = [&b.faces[ef.faces[0]], &b.faces[ef.faces[1]]];
     let (p, d) = ef.spine.at(t);
     let s = ef.k[0].signum();
-    geom::ball_in_plane(f, [s * rho, s * rho * ef.ratio], &p, &d, guess, ef.flat)
+    geom::ball_in_plane(
+        f,
+        [s * rho, s * rho * ef.ratio_at(t)],
+        &p,
+        &d,
+        guess,
+        ef.flat,
+    )
 }
 
 /// `ef`'s radius at spine parameter t where its ball would reach past face `wall`: that of the
@@ -4921,7 +4981,7 @@ fn pieces_of(
     e: usize,
     law: &[(f64, f64)],
     flat: bool,
-    ratio: f64,
+    ratio: &Ratio,
     budget: &Budget,
     rolls: &mut Vec<Ball>,
 ) -> Result<Vec<(EdgeFillet, [Option<usize>; 2])>> {
@@ -5261,6 +5321,7 @@ fn clone_fillet(f: &EdgeFillet) -> EdgeFillet {
         law: f.law.clone(),
         flat: f.flat,
         ratio: f.ratio,
+        ratio_law: f.ratio_law.clone(),
         spine: f.spine.clone(),
         exact: f.exact,
         mid: f.mid,
@@ -5281,7 +5342,7 @@ fn clone_fillet(f: &EdgeFillet) -> EdgeFillet {
 fn plan(
     b: &Body,
     edges: &[RadiusLaw],
-    ratios: &[f64],
+    ratios: &[Ratio],
     flat: bool,
     budget: &Budget,
     tri_first: bool,
@@ -5292,7 +5353,7 @@ fn plan(
     // Each edge's strips on their own (in parallel), then in the edges' order, their rolls
     // numbered on from the edges' before.
     type Pieces = EdgePieces;
-    let one = |((e, law), &ratio): (&RadiusLaw, &f64)| -> Result<(Pieces, Vec<Ball>)> {
+    let one = |((e, law), ratio): (&RadiusLaw, &Ratio)| -> Result<(Pieces, Vec<Ball>)> {
         let e = *e;
         debug(|| format!("edge {e}: strips"));
         let mut own = Vec::new();
@@ -10511,36 +10572,65 @@ pub(crate) fn chamfer_angle(b: &Body, e: usize) -> Option<f64> {
     theta
 }
 
+/// A law along an edge from its value at any fraction of it: sampled at sixteenths, and
+/// between two samples again wherever the value midway is off the straight line between them
+/// (by more than 1e-7 of itself), so that the law read straight between its samples is the
+/// value to that everywhere, however the faces' angle runs. `None` where it has no value.
+fn sampled_law(at: impl Fn(f64) -> Option<f64>) -> Option<Vec<(f64, f64)>> {
+    let law = sampled_laws(|s| at(s).map(|x| [x, x]))?;
+    Some(law.into_iter().map(|(s, x)| (s, x[0])).collect())
+}
+
+/// [`sampled_law`] of two values at once (a ball's two offsets).
+fn sampled_laws(at: impl Fn(f64) -> Option<[f64; 2]>) -> Option<Vec<(f64, [f64; 2])>> {
+    const FIRST: usize = 16;
+    const DEEPEST: u32 = 6;
+    let mut out: Vec<(f64, [f64; 2])> = Vec::with_capacity(FIRST + 1);
+    let mut prev = (0.0, at(0.0)?);
+    out.push(prev);
+    for i in 1..=FIRST {
+        let next = (i as f64 / FIRST as f64, at(i as f64 / FIRST as f64)?);
+        // (The stretches still to look into, the nearest first: its end and depth.)
+        let mut stack = vec![(next, 0u32)];
+        while let Some((end, depth)) = stack.pop() {
+            let mid = 0.5 * (prev.0 + end.0);
+            let value = at(mid)?;
+            let off = (0..2).any(|k| {
+                let straight = 0.5 * (prev.1[k] + end.1[k]);
+                (value[k] - straight).abs() > 1e-7 * value[k].abs().max(tol::TINY)
+            });
+            if depth < DEEPEST && off {
+                stack.push((end, depth + 1));
+                stack.push(((mid, value), depth + 1));
+            } else {
+                out.push(end);
+                prev = end;
+            }
+        }
+    }
+    Some(out)
+}
+
 /// The radius law of a fillet of width `w` (its contacts that far apart) along edge e, whose
-/// faces' angle varies along it: r = w / (2 sin(φ/2)), φ between the faces' normals, at
-/// samples along the edge (linear between).
+/// faces' angle varies along it: r = w / (2 sin(φ/2)), φ between the faces' normals
+/// ([`sampled_law`]).
 pub(crate) fn width_law(b: &Body, e: usize, w: f64) -> Option<Vec<(f64, f64)>> {
-    let n = 16;
-    (0..=n)
-        .map(|i| {
-            let s = i as f64 / n as f64;
-            // Just inside the ends (an end's p-curves may stop short of its vertex).
-            let th = angle_at(b, e, s.clamp(tol::REL_POINT, 1.0 - tol::REL_POINT))?;
-            let phi = PI - th;
-            (phi > tol::ANGULAR_POINT && phi < PI - tol::ANGULAR_POINT)
-                .then(|| (s, w / (2.0 * (phi / 2.0).sin())))
-        })
-        .collect()
+    sampled_law(|s| {
+        // Just inside the ends (an end's p-curves may stop short of its vertex).
+        let th = angle_at(b, e, s.clamp(tol::REL_POINT, 1.0 - tol::REL_POINT))?;
+        let phi = PI - th;
+        (phi > tol::ANGULAR_POINT && phi < PI - tol::ANGULAR_POINT)
+            .then(|| w / (2.0 * (phi / 2.0).sin()))
+    })
 }
 
 /// The radius law of an equal-distance chamfer `d` along edge e, whose faces' angle θ varies
-/// along it: the ball whose contacts lie d from the edge, r = d tan(θ/2), at samples along the
-/// edge (linear between).
+/// along it: the ball whose contacts lie d from the edge, r = d tan(θ/2) ([`sampled_law`]).
 pub(crate) fn chamfer_law(b: &Body, e: usize, d: f64) -> Option<Vec<(f64, f64)>> {
-    let n = 16;
-    (0..=n)
-        .map(|i| {
-            let s = i as f64 / n as f64;
-            let th = angle_at(b, e, s.clamp(tol::REL_POINT, 1.0 - tol::REL_POINT))?;
-            (th > tol::ANGULAR_POINT && th < PI - tol::ANGULAR_POINT)
-                .then(|| (s, d * (th / 2.0).tan()))
-        })
-        .collect()
+    sampled_law(|s| {
+        let th = angle_at(b, e, s.clamp(tol::REL_POINT, 1.0 - tol::REL_POINT))?;
+        (th > tol::ANGULAR_POINT && th < PI - tol::ANGULAR_POINT).then(|| d * (th / 2.0).tan())
+    })
 }
 
 /// The offsets from straight edge e's two faces (as [`chamfer_offsets`]) of the ball whose
@@ -10593,6 +10683,30 @@ pub fn chamfer_offsets_angled(
     distance: f64,
     angle: f64,
 ) -> Option<[f64; 2]> {
+    chamfer_offsets_angled_at(b, e, first, distance, angle, false).map(|k| k[0].1)
+}
+
+/// [`chamfer_offsets_angled`] where the section changes along the edge too: the offsets at
+/// stations along it, (fraction of the edge, offsets), for [`chamfer_edges_offsets_along`].
+pub fn chamfer_offsets_angled_along(
+    b: &Body,
+    e: usize,
+    first: usize,
+    distance: f64,
+    angle: f64,
+) -> Option<Vec<(f64, [f64; 2])>> {
+    chamfer_offsets_angled_at(b, e, first, distance, angle, false)
+        .or_else(|| chamfer_offsets_angled_at(b, e, first, distance, angle, true))
+}
+
+fn chamfer_offsets_angled_at(
+    b: &Body,
+    e: usize,
+    first: usize,
+    distance: f64,
+    angle: f64,
+    along_edge: bool,
+) -> Option<Vec<(f64, [f64; 2])>> {
     let ed = b.edges.get(e)?;
     let s = sides(b, e).ok()?;
     let (fa, fb) = (s[first].0, s[1 - first].0);
@@ -10612,7 +10726,11 @@ pub fn chamfer_offsets_angled(
         // Where the chamfer starts on the first face, and the face's direction and normal
         // there, in the section.
         let (p1, w1) = along_section_dir(&b.faces[fa], &p, &along, &w, distance);
-        let n1 = geom::contact(&b.faces[fa], geom::foot(&b.faces[fa], &p1, None)).n;
+        // (A chamfer's ball is a circle in the section's plane, square to the edge there: it
+        // touches the faces' sections, whose normals are the faces' normals' parts in that
+        // plane. The same normals where the faces run on unchanged along the edge.)
+        let in_section = |n: V3| (n - along * along.dot(&n)).try_normalize(tol::ANGULAR_POINT);
+        let n1 = in_section(geom::contact(&b.faces[fa], geom::foot(&b.faces[fa], &p1, None)).n)?;
         // Back towards the edge, turned by the angle towards the other face: into the
         // material at a convex edge, out of it at a concave one (the other face rises from
         // the first there).
@@ -10640,13 +10758,18 @@ pub fn chamfer_offsets_angled(
                     .total_cmp(&(line.point(*y) - p).norm())
             })?;
         let q2 = line.point(sq);
-        let n2 = geom::contact(&b.faces[fb], geom::foot(&b.faces[fb], &q2, None)).n;
+        let n2 = in_section(geom::contact(&b.faces[fb], geom::foot(&b.faces[fb], &q2, None)).n)?;
         let mut k = ball_offsets([p1, q2], [n1, n2], &p)?;
         if first == 1 {
             k.swap(0, 1);
         }
         Some(k)
     };
+    if along_edge {
+        // The offsets at stations along the edge, just inside its ends (an end's p-curves
+        // may stop short of its vertex).
+        return sampled_laws(|s| at(s.clamp(tol::REL_POINT, 1.0 - tol::REL_POINT)));
+    }
     let k = at(0.5)?;
     for frac in [0.1, 0.3, 0.7, 0.9] {
         let o = at(frac)?;
@@ -10654,7 +10777,40 @@ pub fn chamfer_offsets_angled(
             return None;
         }
     }
-    Some(k)
+    Some(vec![(0.0, k), (1.0, k)])
+}
+
+/// [`chamfer_edges_offsets`] with each edge's offsets given along it, (fraction of the edge,
+/// offsets), linear between: the first offset the ball's law, the second over the first its
+/// ratio's.
+pub fn chamfer_edges_offsets_along(
+    b: &Body,
+    input: BodyId,
+    edges: &[(usize, Vec<(f64, [f64; 2])>)],
+) -> Result<(Body, Vec<Vec<FaceSrc>>)> {
+    let mut laws = Vec::new();
+    let mut ratios: Vec<Ratio> = Vec::new();
+    for (e, along) in edges {
+        let [(_, c1), _] = sides(b, *e)?;
+        let turned: Vec<(f64, [f64; 2])> = along
+            .iter()
+            .map(|&(s, k)| (s, if c1 { k } else { [k[1], k[0]] }))
+            .collect();
+        let (Some(first), Some(mid)) = (turned.first(), turned.get(turned.len() / 2)) else {
+            return Err(KernelError::InvalidParameter(
+                "a chamfer with no offsets".into(),
+            ));
+        };
+        let same = turned.iter().all(|(_, k)| {
+            (0..2).all(|i| (k[i] - first.1[i]).abs() <= tol::REL_POINT * (1.0 + first.1[i]))
+        });
+        laws.push((*e, turned.iter().map(|&(s, k)| (s, k[0])).collect()));
+        ratios.push((
+            mid.1[1] / mid.1[0],
+            (!same).then(|| turned.iter().map(|&(s, k)| (s, k[1] / k[0])).collect()),
+        ));
+    }
+    local_blend(b, input, &laws, &ratios, true)
 }
 
 /// The offsets of the ball touching two faces at `q` (their outward normals there `n`): its
@@ -10689,7 +10845,7 @@ pub fn chamfer_edges_offsets(
         let [(_, c1), _] = sides(b, e)?;
         let k = if c1 { k } else { [k[1], k[0]] };
         laws.push((e, vec![(0.0, k[0]), (1.0, k[0])]));
-        ratios.push(k[1] / k[0]);
+        ratios.push((k[1] / k[0], None));
     }
     local_blend(b, input, &laws, &ratios, true)
 }
@@ -10785,7 +10941,7 @@ pub fn fillet_edges_laws(
     edges: &[RadiusLaw],
     flat: bool,
 ) -> Result<(Body, Vec<Vec<FaceSrc>>)> {
-    local_blend(b, input, edges, &vec![1.0; edges.len()], flat)
+    local_blend(b, input, edges, &vec![(1.0, None); edges.len()], flat)
 }
 
 /// The chamfer of each edge with the distances `d` of its contacts from it along its two faces
@@ -10835,7 +10991,7 @@ pub fn chamfer_edges_measured(
         let [(_, c1), _] = sides(b, e)?;
         let k = if c1 { k } else { [k[1], k[0]] };
         laws.push((e, vec![(0.0, k[0]), (1.0, k[0])]));
-        ratios.push(k[1] / k[0]);
+        ratios.push((k[1] / k[0], None));
     }
     local_blend(b, input, &laws, &ratios, true)
 }
@@ -10861,14 +11017,14 @@ pub fn chamfer_equal_edges(
             // In the strip's face order (the face whose loop runs along the edge first).
             let k = if c1 { k } else { [k[1], k[0]] };
             laws.push((e, vec![(0.0, k[0]), (1.0, k[0])]));
-            ratios.push(k[1] / k[0]);
+            ratios.push((k[1] / k[0], None));
         } else {
             let law = match chamfer_radius(b, e, d) {
                 Some(r) => vec![(0.0, r), (1.0, r)],
                 None => chamfer_law(b, e, d)?,
             };
             laws.push((e, law));
-            ratios.push(1.0);
+            ratios.push((1.0, None));
         }
     }
     Some(local_blend(b, input, &laws, &ratios, true))
@@ -11183,11 +11339,15 @@ pub(crate) fn fully_checked(b: &Body) -> bool {
 }
 
 /// [`fillet_edges_laws`] with each edge's [`EdgeFillet::ratio`].
+/// A blend's second offset over its first along one edge: the ratio (1 for a fillet), and
+/// where it varies along the edge its law, (fraction of the edge, ratio), linear between.
+pub(crate) type Ratio = (f64, Option<Vec<(f64, f64)>>);
+
 fn local_blend(
     b: &Body,
     input: BodyId,
     edges: &[RadiusLaw],
-    ratios: &[f64],
+    ratios: &[Ratio],
     flat: bool,
 ) -> Result<(Body, Vec<Vec<FaceSrc>>)> {
     FULLY_CHECKED.with(|c| *c.borrow_mut() = None);
@@ -11208,7 +11368,11 @@ fn local_blend(
     let r = edges
         .iter()
         .zip(ratios)
-        .flat_map(|((_, l), q)| l.iter().map(move |x| x.1 * q.max(1.0)))
+        .flat_map(|((_, l), q)| {
+            // (The larger offset, at the ratio's largest.)
+            let most = q.1.iter().flatten().fold(q.0, |m, x| m.max(x.1)).max(1.0);
+            l.iter().map(move |x| x.1 * most)
+        })
         .fold(0.0, f64::max);
     let size = b.bbox().diagonal().max(r);
     // B-spline strips within 1e-5 of the size (their sections exact at the stations): well inside
@@ -14368,7 +14532,7 @@ mod tests {
                 vec![(0.0, 2.0), (1.0, 2.0)],
             ),
         ] {
-            let ef = edge_fillet(&b, e, &law, false, 1.0, &budget).unwrap();
+            let ef = edge_fillet(&b, e, &law, false, &(1.0, None), &budget).unwrap();
             let ed = &b.edges[e];
             for f in [0.3, 0.5, 0.7] {
                 let t = ed.t[0] + (ed.t[1] - ed.t[0]) * f;
@@ -15014,7 +15178,7 @@ mod tests {
             .map(|p| (edge_near(&b, *p), vec![(0.0, 1.0), (1.0, 1.0)]))
             .collect();
         let budget = Budget::new(BALL_SOLVES);
-        let p = plan(&b, &laws, &[1.0, 1.0], false, &budget, true).unwrap();
+        let p = plan(&b, &laws, &[(1.0, None), (1.0, None)], false, &budget, true).unwrap();
         assert_eq!(p.tris.len(), 1);
         let size = b.bbox().diagonal();
         let (out, _) = trim(

@@ -468,6 +468,15 @@ pub fn edge_tool_range(
     let convex = w2.dot(&n1) < 0.0;
     let phi = n1.dot(&n2).clamp(-1.0, 1.0).acos();
     let section = kind(phi);
+    // (A chamfer by a distance and an angle: the angle and the faces' own leave a second
+    // side to reach only where they come to less than a half turn.)
+    if let SectionKind::Chamfer { d1, d2 } = section
+        && !(d1 > 0.0 && d2 > 0.0 && d2.is_finite())
+    {
+        return Err(KernelError::InvalidParameter(
+            "The chamfer's angle is too wide for the angle its faces meet at".into(),
+        ));
+    }
     let src = Src::Edge {
         body: input.0,
         edge: e as u64,
@@ -2927,7 +2936,9 @@ pub fn chamfer(
         && angle < PI
     {
         let mut prof = super::boolean::Prof::new();
-        let offsets: Option<Vec<(usize, [f64; 2])>> = sharp
+        // (Each edge's offsets: one pair where its section is the same all along it, else
+        // at stations along it.)
+        let offsets: Option<Vec<(usize, Vec<(f64, [f64; 2])>)>> = sharp
             .iter()
             .map(|&e| {
                 let ei = e.0 as usize;
@@ -2935,13 +2946,13 @@ pub fn chamfer(
                     return None;
                 }
                 let first = usize::from(opts.flip != opts.flipped.contains(&e));
-                super::fillet::chamfer_offsets_angled(&b, ei, first, distance, angle)
+                super::fillet::chamfer_offsets_angled_along(&b, ei, first, distance, angle)
                     .map(|k| (ei, k))
             })
             .collect();
         prof.mark("offsets");
         if let Some(offsets) = offsets {
-            let made = super::fillet::chamfer_edges_offsets(&b, body, &offsets);
+            let made = super::fillet::chamfer_edges_offsets_along(&b, body, &offsets);
             prof.mark("blend");
             let local = made.and_then(|(out, src)| match local_problem(&b, &out) {
                 Some(e) => Err(KernelError::InvalidResult {
@@ -2993,6 +3004,10 @@ pub fn chamfer(
                     ChamferSpec::DistanceAngle { distance, angle } => {
                         // As the blend tool's section: d₂ = d sin(a) / sin(π − a − θ).
                         let theta = super::fillet::chamfer_angle(&b, ei)?;
+                        // (No second side where the two angles come to a half turn.)
+                        if angle + theta >= PI - tol::ANGULAR {
+                            return None;
+                        }
                         (
                             distance,
                             distance * angle.sin() / (PI - angle - theta).sin(),

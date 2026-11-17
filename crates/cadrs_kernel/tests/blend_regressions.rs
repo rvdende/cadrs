@@ -216,7 +216,8 @@ fn cross_hole_fillet() {
 /// on the body Fillet 2 left, chamfered 0.5 to 2 by the local chamfer alone: valid, and each
 /// taking off about w²/2 a mm of rim (the narrowest's times (w/w₀)², a little more where corners
 /// grow faster). `want` pins what it takes off now (not an independent answer: a change that
-/// moves it should explain why); w²/2 of rim at 0.5 puts the rim at 312 mm at fillet 1 and 293
+/// moves it should explain why; last moved, by up to 4e-5, when the chamfer's law along an edge
+/// whose faces' angle varies was sampled to 1e-7 of itself, not at sixteenths joined straight); w²/2 of rim at 0.5 puts the rim at 312 mm at fillet 1 and 293
 /// at fillet 4, two loops round the opening less its rounds' corners.
 fn shell_opening_chamfer(data: &[u8], edges: &[u64], want: [f64; 4]) {
     let mut k = NativeKernel::new();
@@ -255,10 +256,10 @@ fn shell_opening_chamfer_fillet1() {
             60, 70, 71, 78, 100, 111, 128, 130, 132, 134, 136,
         ],
         [
-            39.00744516247505,
-            156.56053346663975,
-            356.892814267776,
-            648.179111849131,
+            39.007382398151094,
+            156.55954038308846,
+            356.8934442469472,
+            648.1813949486386,
         ],
     );
 }
@@ -275,10 +276,10 @@ fn shell_opening_chamfer_fillet4() {
             60, 70, 71, 99, 110, 127, 129, 134, 136, 138,
         ],
         [
-            36.63395889811363,
-            147.10515071999544,
-            334.9092740553824,
-            607.2381007844815,
+            36.6337819114342,
+            147.10587390812725,
+            334.9156336483429,
+            607.2613605735751,
         ],
     );
 }
@@ -2890,4 +2891,114 @@ fn a_chamfers_first_distance_lies_on_the_face_named_for_it() {
         (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9,
         "{a:?} {b:?}"
     );
+}
+
+/// A cylinder cut on a slant, its rim (an ellipse, where the cut's plane and the wall meet at
+/// an angle that changes round it) chamfered by a distance and an angle: by the local chamfer,
+/// its offsets a law round the rim, not by the blend tool (whose section is the triangle on
+/// the faces' tangent planes at the rim, which the wall curves away from). Its edge on the
+/// cut is the distance from the rim all the way round.
+#[test]
+fn a_slant_cut_cylinders_rim_chamfered_by_distance_and_angle() {
+    use nalgebra::{Point3, Unit, Vector3};
+    let mut k = NativeKernel::new();
+    let rod = k
+        .primitive(&Primitive::cylinder(
+            Point3::origin(),
+            Vector3::z(),
+            5.0,
+            20.0,
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    // A wedge whose underside rises from z = 12 at x = −10 to z = 16 at x = 10.
+    let side = Plane {
+        origin: Point3::new(0.0, -10.0, 0.0),
+        x_dir: Vector3::x_axis(),
+        normal: Unit::new_normalize(-Vector3::y()),
+    };
+    let outline = Loop::from_point([-10.0, 12.0])
+        .line_to([10.0, 16.0])
+        .line_to([10.0, 30.0])
+        .line_to([-10.0, 30.0])
+        .close();
+    let wedge = k
+        .extrude_with(
+            &Profile::of(side, vec![outline]),
+            &ExtrudeSpec::blind(Vector3::y_axis(), 20.0),
+        )
+        .unwrap()
+        .first()
+        .unwrap();
+    let cut = k
+        .boolean(BoolOp::Subtract, rod, &[wedge])
+        .unwrap()
+        .first()
+        .unwrap();
+    let b = std::sync::Arc::clone(k.get(cut).unwrap());
+    // The cut's plane (z = 14 + 0.2 x) and the rim on it.
+    let on_cut = |p: &Point3<f64>| (p.z - 14.0 - 0.2 * p.x).abs() < 1e-7;
+    let slant = (0..b.faces.len())
+        .find(|&f| {
+            matches!(b.faces[f].surf, Surface::Plane { .. })
+                && on_cut(&b.faces[f].surf.eval(0.0, 0.0))
+        })
+        .expect("the cut's face");
+    let rim: Vec<EdgeId> = (0..b.edges.len())
+        .filter(|&e| !b.edges[e].degenerate && on_cut(&b.edges[e].point(b.edges[e].mid_t())))
+        .map(|e| EdgeId(e as u64))
+        .collect();
+    assert!(!rim.is_empty());
+    let spec = ChamferSpec::DistanceAngle {
+        distance: 1.0,
+        angle: 45f64.to_radians(),
+    };
+    let opts = ChamferOpts::new(spec).first_on(FaceId(slant as u64));
+    let out = k.chamfer_with(cut, &rim, &opts).unwrap().bodies[0];
+    let o = k.get(out).unwrap();
+    let faults = o.check();
+    assert!(faults.is_empty(), "{faults:?}");
+    // The rim itself, closely sampled: the cylinder's points on the cut.
+    let rim_points: Vec<Point3<f64>> = (0..40_000)
+        .map(|i| {
+            let a = std::f64::consts::TAU * i as f64 / 40_000.0;
+            Point3::new(5.0 * a.cos(), 5.0 * a.sin(), 14.0 + a.cos())
+        })
+        .collect();
+    let mut seen = 0;
+    let ef = o.edge_faces();
+    let up = Vector3::new(-0.2, 0.0, 1.0).normalize();
+    for (ei, e) in o.edges.iter().enumerate().filter(|(_, e)| !e.degenerate) {
+        let mid = e.point(e.mid_t());
+        if !on_cut(&mid) || mid.x.hypot(mid.y) > 4.9 {
+            continue;
+        }
+        // (The chamfer's face along this edge: the one that isn't the cut's.)
+        let chamfer = ef[ei]
+            .iter()
+            .map(|&f| &o.faces[f])
+            .find(|f| !matches!(f.surf, Surface::Plane { .. }))
+            .expect("the chamfer's face");
+        for i in 0..=8 {
+            let p = e.point(e.t[0] + (e.t[1] - e.t[0]) * i as f64 / 8.0);
+            // The chamfer leaves the cut at the angle given, all the way round.
+            let (u, v) = chamfer.surf.project(&p, None);
+            let lean = chamfer.surf.normal(u, v).dot(&up).abs().acos().to_degrees();
+            assert!(
+                (lean - 45.0).abs() < 1e-3,
+                "the chamfer leaves the cut at {lean} degrees at {p:?}"
+            );
+            let d = rim_points
+                .iter()
+                .map(|q| (q - p).norm())
+                .fold(f64::INFINITY, f64::min);
+            assert!(
+                (d - 1.0).abs() < 1e-5,
+                "the chamfer's edge is {d} from the rim at {p:?}"
+            );
+            seen += 1;
+        }
+    }
+    assert!(seen > 0, "the chamfer's edge on the cut");
 }
