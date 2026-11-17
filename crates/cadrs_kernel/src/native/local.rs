@@ -1663,18 +1663,69 @@ pub(crate) fn planes_bound(b: &Body, surfs: &[Surface]) -> Option<Result<(Body, 
     {
         return None;
     }
-    let mut reach = bb;
-    reach.add(&(bb.min - V3::repeat(size)));
-    reach.add(&(bb.max + V3::repeat(size)));
     Some((|| {
-        let mut acc: Option<Body> = None;
-        for (o, n) in &after {
-            let h = super::ops::half_space_box(*o, -n, &reach)?;
-            acc = Some(match acc {
-                None => h,
-                Some(a) => super::boolean::boolean_bodies(&a, &h, BoolOp::Intersect)?.body,
-            });
+        // Each plane's face in closed form: a square of the plane far wider than the part,
+        // cut down by every other plane's half-space. What is left of it is the face (nothing,
+        // where the others close over it), and the faces together a triangle mesh's solid.
+        // No boolean, so nothing to retry and nothing that fails half way.
+        let wide = 4.0 * size.max(tol::POINT);
+        let centre = bb.center();
+        let same = |j: usize, k: usize| {
+            let ((oj, nj), (ok, nk)) = (after[j], after[k]);
+            nj.dot(&nk) > 1.0 - tol::ANGULAR && (ok - oj).dot(&nj).abs() < close
+        };
+        let mut triangles: Vec<[P3; 3]> = Vec::new();
+        for (j, (o, n)) in after.iter().enumerate() {
+            // (A plane given twice bounds one face: the first's.)
+            if (0..j).any(|k| same(j, k)) {
+                continue;
+            }
+            let x = any_perpendicular(n).normalize();
+            let y = n.cross(&x);
+            let mid = centre - n * (centre - o).dot(n);
+            let mut poly: Vec<P3> = [(1.0, 1.0), (-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0)]
+                .into_iter()
+                .map(|(a, b)| mid + (x * a + y * b) * wide)
+                .collect();
+            for (k, (ok, nk)) in after.iter().enumerate() {
+                if k == j || same(j, k) || poly.len() < 3 {
+                    continue;
+                }
+                let d: Vec<f64> = poly.iter().map(|p| (p - ok).dot(nk)).collect();
+                let mut cut = Vec::with_capacity(poly.len() + 2);
+                for i in 0..poly.len() {
+                    let i2 = (i + 1) % poly.len();
+                    if d[i] <= 0.0 {
+                        cut.push(poly[i]);
+                    }
+                    if (d[i] < 0.0 && d[i2] > 0.0) || (d[i] > 0.0 && d[i2] < 0.0) {
+                        cut.push(poly[i] + (poly[i2] - poly[i]) * (d[i] / (d[i] - d[i2])));
+                    }
+                }
+                poly = cut;
+            }
+            if poly.len() < 3 {
+                continue;
+            }
+            // A corner still on the square: the planes are open that way.
+            let on_square = |p: &P3| {
+                let w = p - mid;
+                w.dot(&x).abs().max(w.dot(&y).abs()) >= wide * (1.0 - tol::REL)
+            };
+            if poly.iter().any(on_square) {
+                return Err(KernelError::InvalidResult {
+                    op: "draft",
+                    why: "the drafted planes don't close round the part".into(),
+                });
+            }
+            // (Counter-clockwise about the outward normal, as the square was.)
+            for i in 1..poly.len() - 1 {
+                triangles.push([poly[0], poly[i], poly[i + 1]]);
+            }
         }
+        let acc = (!triangles.is_empty())
+            .then(|| super::meshsolid::mesh_solid(&triangles, close).ok())
+            .flatten();
         let out =
             acc.filter(|a| !a.faces.is_empty())
                 .ok_or_else(|| KernelError::InvalidResult {
