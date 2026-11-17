@@ -205,6 +205,50 @@ impl Curve {
                 let a = v.dot(y).atan2(v.dot(x));
                 clamp_periodic(a, t0, t1)
             }
+            // A whole ellipse (or more of its parameter than a turn): the nearest of sixteen
+            // points round it, polished, whatever the range's width; the range only names
+            // the turn.
+            Curve::Ellipse { .. } if (t1 - t0).abs() >= TAU - tol::ROUNDOFF_FINE => {
+                const ROUND: usize = 16;
+                let (lo, hi) = (t0.min(t1), t0.max(t1));
+                let start = (0..ROUND)
+                    .map(|i| TAU * i as f64 / ROUND as f64)
+                    .min_by(|a, b| {
+                        (self.point(*a) - p)
+                            .norm_squared()
+                            .total_cmp(&(self.point(*b) - p).norm_squared())
+                    })
+                    .unwrap_or(0.0);
+                let t = self.closest_polished(p, f64::NEG_INFINITY, f64::INFINITY, start);
+                wrap(t, lo, TAU).min(hi)
+            }
+            // A spline of more spans than the samples would see one each: four to a span.
+            Curve::Nurbs(n)
+                if 4 * n
+                    .breaks()
+                    .iter()
+                    .filter(|b| **b > t0.min(t1) && **b < t0.max(t1))
+                    .count()
+                    > CLOSEST_SAMPLES =>
+            {
+                const EACH: usize = 4;
+                let (lo, hi) = (t0.min(t1), t0.max(t1));
+                let mut best = (f64::INFINITY, lo);
+                let mut look = |t: f64| {
+                    let d = (self.point(t) - p).norm_squared();
+                    if d < best.0 {
+                        best = (d, t);
+                    }
+                };
+                let knots = self.pieces(lo, hi);
+                for w in knots.windows(2) {
+                    for i in 0..EACH {
+                        look(w[0] + (w[1] - w[0]) * i as f64 / EACH as f64);
+                    }
+                }
+                look(hi);
+                self.closest_polished(p, lo, hi, best.1)
+            }
             _ => self.closest_from(p, t0, t1, &self.closest_samples(t0, t1)),
         }
     }
@@ -237,32 +281,38 @@ impl Curve {
                         best = (d, t);
                     }
                 }
-                let mut t = best.1;
-                for _ in 0..30 {
-                    let (q, d1, d2) = self.d2(t);
-                    let r = q - p;
-                    let f = r.dot(&d1);
-                    let df = d1.norm_squared() + r.dot(&d2);
-                    // (Where the distance curves downwards, a Newton step runs to its
-                    // largest: a step down its slope instead, the tangent's length a unit.)
-                    let df = if df > tol::TINY {
-                        df
-                    } else {
-                        d1.norm_squared()
-                    };
-                    if df < tol::TINY {
-                        break;
-                    }
-                    let nt = (t - f / df).clamp(t0, t1);
-                    if (nt - t).abs() < 1e-15 * (1.0 + t.abs()) {
-                        t = nt;
-                        break;
-                    }
-                    t = nt;
-                }
-                t
+                self.closest_polished(p, t0, t1, best.1)
             }
         }
+    }
+
+    /// The parameter of the point nearest `p` from `start`, by Newton's method on the
+    /// distance's slope, kept between `t0` and `t1`.
+    fn closest_polished(&self, p: &P3, t0: f64, t1: f64, start: f64) -> f64 {
+        let mut t = start;
+        for _ in 0..30 {
+            let (q, d1, d2) = self.d2(t);
+            let r = q - p;
+            let f = r.dot(&d1);
+            let df = d1.norm_squared() + r.dot(&d2);
+            // (Where the distance curves downwards, a Newton step runs to its largest: a
+            // step down its slope instead, the tangent's length a unit.)
+            let df = if df > tol::TINY {
+                df
+            } else {
+                d1.norm_squared()
+            };
+            if df < tol::TINY {
+                break;
+            }
+            let nt = (t - f / df).clamp(t0, t1);
+            if (nt - t).abs() < 1e-15 * (1.0 + t.abs()) {
+                t = nt;
+                break;
+            }
+            t = nt;
+        }
+        t
     }
 
     /// Parameters along [t0, t1] dividing the curve so the chord deviates at most `defl` and

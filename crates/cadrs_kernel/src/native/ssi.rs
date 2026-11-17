@@ -2655,15 +2655,19 @@ fn touching_root(c: &Curve, s: &Surface, t: f64) -> f64 {
     }
     let speed = c.d2(t).1.norm().max(tol::TINY);
     let h = 1e-5 / speed;
-    let slope = |x: f64| (f(x + h).unwrap_or(0.0) - f(x - h).unwrap_or(0.0)) / (2.0 * h);
+    // (The distance's slope along the curve in closed form, the surface's normal at the foot
+    // along the curve's tangent; only the slope's own rate is differenced.)
+    let slope = |x: f64| {
+        let (p, d1, _) = c.d2(x);
+        s.signed_distance_gradient(&p).map_or(0.0, |n| n.dot(&d1))
+    };
     if slope(t).abs() > 1e-3 * speed {
         return t;
     }
     let mut x = t;
     for _ in 0..20 {
         let g = slope(x);
-        let g2 = (f(x + h).unwrap_or(0.0) - 2.0 * f(x).unwrap_or(0.0) + f(x - h).unwrap_or(0.0))
-            / (h * h);
+        let g2 = (slope(x + h) - slope(x - h)) / (2.0 * h);
         if g2.abs() < tol::TINY {
             break;
         }

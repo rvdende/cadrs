@@ -558,12 +558,13 @@ fn ray_torus(
         // (The quartic's root holds only to the square root of its rounding where the line
         // nearly grazes the torus: a few Newton steps on the distance, taken while they help.)
         if let Some(mut g) = dist(t) {
-            let h = 1e-7 * (1.0 + t.abs());
             for _ in 0..3 {
-                let (Some(g1), Some(g0)) = (dist(t + h), dist(t - h)) else {
+                // (The distance's slope along the line: its gradient, the torus's normal at
+                // the foot, along the line's direction.)
+                let Some(slope) = s.signed_distance_gradient(&(o + d * t)).map(|n| n.dot(&d))
+                else {
                     break;
                 };
-                let slope = (g1 - g0) / (2.0 * h);
                 if !(slope.abs() > 1e-6) {
                     break;
                 }

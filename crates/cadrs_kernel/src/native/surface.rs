@@ -987,6 +987,40 @@ impl Surface {
         }
     }
 
+    /// Which way [`Self::signed_distance`] grows fastest at `p`: the unit normal at its foot,
+    /// in closed form. `None` for the surfaces that function has none for, and on an axis
+    /// (where the foot is a whole circle).
+    pub fn signed_distance_gradient(&self, p: &P3) -> Option<V3> {
+        let radial = |f: &Frame| {
+            let l = f.local(p);
+            let rho = l.x.hypot(l.y);
+            (rho > tol::TINY).then(|| (f.world_vec(&V3::new(l.x / rho, l.y / rho, 0.0)), rho, l.z))
+        };
+        Some(match self {
+            Surface::Plane { f } => f.x.cross(&f.y),
+            Surface::Cylinder { f, .. } => radial(f)?.0,
+            Surface::Cone { f, a, .. } => {
+                let (sa, ca) = a.sin_cos();
+                radial(f)?.0 * ca - f.z * sa
+            }
+            Surface::Sphere { f, .. } => (p - f.o).try_normalize(tol::TINY)?,
+            Surface::Torus { f, rmaj, rmin } => {
+                let (e, rho, z) = radial(f)?;
+                let (near, far) = ((rho - rmaj).hypot(z), (rho + rmaj).hypot(z));
+                let (across, len) = if rmin > rmaj && (far - rmin).abs() < (near - rmin).abs() {
+                    (rho + rmaj, far)
+                } else {
+                    (rho - rmaj, near)
+                };
+                if len <= tol::TINY {
+                    return None;
+                }
+                (e * across + f.z * z) / len
+            }
+            _ => return None,
+        })
+    }
+
     /// Signed distance from `p` to an analytic surface (positive on the natural normal's side).
     pub fn signed_distance(&self, p: &P3) -> Option<f64> {
         Some(match self {

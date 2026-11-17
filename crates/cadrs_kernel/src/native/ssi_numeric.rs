@@ -1748,14 +1748,55 @@ fn singular_point(ctx: &Ctx, mut p: Pt) -> Option<Pt> {
     for _ in 0..30 {
         let r = res(&x);
         let mut j = nalgebra::Matrix6x4::zeros();
-        for k in 0..4 {
-            let h = 1e-7 * (1.0 + x[k].abs());
-            let (mut xp, mut xm) = (x, x);
-            xp[k] += h;
-            xm[k] -= h;
-            let (rp, rm) = (res(&xp), res(&xm));
-            for i in 0..6 {
-                j[(i, k)] = (rp[i] - rm[i]) / (2.0 * h);
+        // The residual's rates from the surfaces' own derivatives: the points' from the
+        // first, the unit normals' from the second (n = N/|N|, N = Su × Sv, so
+        // n' = (N' − n (n·N'))/|N|). Where a normal has no length (a pole, an apex), by
+        // differences.
+        let unit = |s: &Surface, u: f64, v: f64| -> Option<(V3, V3, V3, V3, V3)> {
+            let [_, su, sv, suu, suv, svv] = s.d2(u, v);
+            let big = su.cross(&sv);
+            let len = big.norm();
+            if len <= tol::TINY * (1.0 + su.norm() * sv.norm()) {
+                return None;
+            }
+            // (The surface's own normal may be this one turned over.)
+            let n = s.normal(u, v);
+            let sign = if n.dot(&big) < 0.0 { -1.0 } else { 1.0 };
+            let rate = |d: V3| (d - n * n.dot(&d)) * (sign / len);
+            Some((
+                su,
+                sv,
+                n,
+                rate(suu.cross(&sv) + su.cross(&suv)),
+                rate(suv.cross(&sv) + su.cross(&svv)),
+            ))
+        };
+        match (unit(sa, x[0], x[1]), unit(sb, x[2], x[3])) {
+            (Some((au, av, na, nau, nav)), Some((bu, bv, nb, nbu, nbv))) => {
+                let cols = [
+                    (au, nau.cross(&nb) * w),
+                    (av, nav.cross(&nb) * w),
+                    (-bu, na.cross(&nbu) * w),
+                    (-bv, na.cross(&nbv) * w),
+                ];
+                for (k, (d, c)) in cols.into_iter().enumerate() {
+                    for i in 0..3 {
+                        j[(i, k)] = d[i];
+                        j[(i + 3, k)] = c[i];
+                    }
+                }
+            }
+            _ => {
+                for k in 0..4 {
+                    let h = 1e-7 * (1.0 + x[k].abs());
+                    let (mut xp, mut xm) = (x, x);
+                    xp[k] += h;
+                    xm[k] -= h;
+                    let (rp, rm) = (res(&xp), res(&xm));
+                    for i in 0..6 {
+                        j[(i, k)] = (rp[i] - rm[i]) / (2.0 * h);
+                    }
+                }
             }
         }
         let rv = nalgebra::Vector6::from_column_slice(&r);
