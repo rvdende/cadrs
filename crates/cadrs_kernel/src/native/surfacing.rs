@@ -181,11 +181,41 @@ fn crease_fills(k: &mut NativeKernel, sheets: &[Body], spec: &ThickenSpec) -> Re
             continue;
         };
         let edge = &sewn.edges[e];
-        if f1 == f2 || edge.degenerate || !matches!(edge.curve, Curve::Line { .. }) {
+        if f1 == f2 || edge.degenerate {
             continue;
         }
         let planar = |f: usize| matches!(sewn.faces[f].surf, Surface::Plane { .. });
-        if !planar(f1) || !planar(f2) {
+        if !matches!(edge.curve, Curve::Line { .. }) || !planar(f1) || !planar(f2) {
+            // A crease along a curve, or between curved faces: no fill is made for it. Where
+            // the sheet bends away from a thickened side there (each face behind the other's
+            // moving side, as below, at the crease's middle), the slabs would leave a notch
+            // the offset fills: an error, not that body.
+            let tm = 0.5 * (edge.t[0] + edge.t[1]);
+            let (m, dir) = (edge.curve.point(tm), edge.curve.tangent(tm));
+            let at = |f: usize| -> Option<(V3, V3)> {
+                let face = &sheets[f].faces.first()?;
+                let (u, v) = face.surf.project(&m, None);
+                let n = (face.surf.normal(u, v) * if face.sense { 1.0 } else { -1.0 })
+                    .try_normalize(tol::TINY)?;
+                let (c, _) = face_normal(&sewn, f)?;
+                let t = dir.cross(&n).try_normalize(tol::TINY)?;
+                Some((n, if t.dot(&(c - m)) < 0.0 { -t } else { t }))
+            };
+            if let (Some((n1, t1)), Some((n2, t2))) = (at(f1), at(f2)) {
+                let away =
+                    [(spec.along, 1.0), (spec.against, -1.0)]
+                        .into_iter()
+                        .any(|(d, sign)| {
+                            d >= tol::ROUNDOFF
+                                && (n1 * sign).dot(&t2) < -tol::ANGULAR_POINT.sqrt()
+                                && (n2 * sign).dot(&t1) < -tol::ANGULAR_POINT.sqrt()
+                        });
+                if away {
+                    return Err(KernelError::Unsupported(
+                        "thickening a sheet across a curved crease that bends away from the thickened side",
+                    ));
+                }
+            }
             continue;
         }
         // (Each face's own normal, which its slab follows; the sewn sheet's points.)
@@ -366,7 +396,7 @@ fn thicken_sheet(k: &mut NativeKernel, sheets: &[Body], spec: &ThickenSpec) -> O
             },
         )
         .map_err(|e| {
-            if std::env::var_os("CADRS_SHELL_DEBUG").is_some() {
+            if crate::native::env_flag!("CADRS_SHELL_DEBUG") {
                 eprintln!("thicken: the capped sheet's shell: {e}");
             }
             e
@@ -931,7 +961,7 @@ pub fn sew_faces(mut b: Body, tol: f64) -> Result<Body> {
                         pc = Curve::Nurbs(std::sync::Arc::new(
                             super::nurbs::NurbsCurve::interpolate(&pts, &params, 3, None, None),
                         ));
-                        if std::env::var_os("CADRS_SEW_TRACE").is_some() {
+                        if crate::native::env_flag!("CADRS_SEW_TRACE") {
                             let after = (0..=64)
                                 .map(|k| {
                                     let t = ed.t[0] + (ed.t[1] - ed.t[0]) * k as f64 / 64.0;
@@ -1089,14 +1119,14 @@ pub fn delete_faces(k: &mut NativeKernel, body: BodyId, remove: &[FaceId]) -> Re
     if remove.is_empty() {
         return Err(invalid("Select the faces to delete"));
     }
-    let b = (**k.get(body)?).clone();
+    let b = std::sync::Arc::clone(k.get(body)?);
     let gone: Vec<usize> = remove.iter().map(|f| f.0 as usize).collect();
     if gone.iter().any(|&f| f >= b.faces.len()) {
         return Err(KernelError::InvalidParameter("unknown face".into()));
     }
     // A sheet's faces are taken away, leaving the hole open (Onshape's Leave open).
     if b.solids.is_empty() {
-        return delete_sheet_faces(k, body, b, &gone);
+        return delete_sheet_faces(k, body, (*b).clone(), &gone);
     }
     let ef = b.edge_faces();
     // A face goes whole: with the faces that carry on its surface across an edge (a round
@@ -1161,7 +1191,7 @@ pub fn delete_faces(k: &mut NativeKernel, body: BodyId, remove: &[FaceId]) -> Re
             history,
         });
     }
-    let mut out = b.clone();
+    let mut out = (*b).clone();
     for fi in 0..out.faces.len() {
         if gone.contains(&fi) {
             continue;

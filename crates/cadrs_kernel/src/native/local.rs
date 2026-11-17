@@ -39,17 +39,21 @@ fn meet(surfs: &[&Surface], p: P3) -> Option<P3> {
         for (i, s) in surfs.iter().enumerate() {
             let d = super::ssi::sdist(s, &x);
             let e = tol::DIFF_STEP;
-            let g = V3::new(
-                (super::ssi::sdist(s, &(x + V3::x() * e))
-                    - super::ssi::sdist(s, &(x - V3::x() * e)))
-                    / (2.0 * e),
-                (super::ssi::sdist(s, &(x + V3::y() * e))
-                    - super::ssi::sdist(s, &(x - V3::y() * e)))
-                    / (2.0 * e),
-                (super::ssi::sdist(s, &(x + V3::z() * e))
-                    - super::ssi::sdist(s, &(x - V3::z() * e)))
-                    / (2.0 * e),
-            );
+            // (The distance's gradient is the normal it is measured along; differenced only
+            // where there is none to write down.)
+            let g = super::ssi::sdist_gradient(s, &x, &mut None).unwrap_or_else(|| {
+                V3::new(
+                    (super::ssi::sdist(s, &(x + V3::x() * e))
+                        - super::ssi::sdist(s, &(x - V3::x() * e)))
+                        / (2.0 * e),
+                    (super::ssi::sdist(s, &(x + V3::y() * e))
+                        - super::ssi::sdist(s, &(x - V3::y() * e)))
+                        / (2.0 * e),
+                    (super::ssi::sdist(s, &(x + V3::z() * e))
+                        - super::ssi::sdist(s, &(x - V3::z() * e)))
+                        / (2.0 * e),
+                )
+            });
             jt[(i, 0)] = g.x;
             jt[(i, 1)] = g.y;
             jt[(i, 2)] = g.z;
@@ -163,10 +167,16 @@ fn line_meet(c: &Curve, surfs: &[&Surface], p: P3) -> Option<P3> {
         for _ in 0..50 {
             let (mut num, mut den) = (0.0, 0.0);
             for s in surfs {
-                let d = super::ssi::sdist(s, &c.point(t));
-                let g = (super::ssi::sdist(s, &c.point(t + h))
-                    - super::ssi::sdist(s, &c.point(t - h)))
-                    / (2.0 * h);
+                let (at, tangent, _) = c.d2(t);
+                let d = super::ssi::sdist(s, &at);
+                let g = match super::ssi::sdist_gradient(s, &at, &mut None) {
+                    Some(n) => n.dot(&tangent),
+                    None => {
+                        (super::ssi::sdist(s, &c.point(t + h))
+                            - super::ssi::sdist(s, &c.point(t - h)))
+                            / (2.0 * h)
+                    }
+                };
                 num += d * g;
                 den += g * g;
             }
@@ -1186,7 +1196,7 @@ fn replace_surfaces_checked(
                     best = Some((d, ic.c));
                 }
             }
-            if std::env::var_os("CADRS_DRAFT_DEBUG").is_some() {
+            if crate::native::env_flag!("CADRS_DRAFT_DEBUG") {
                 eprintln!(
                     "edge {e} faces {fs:?} ({:?} × {:?}): {:?}",
                     sa.kind(),
@@ -1593,7 +1603,7 @@ fn replace_surfaces_checked(
     prof.mark("check");
     prof.report(&format!("replace surfaces ({} faces)", out.faces.len()));
     if !errs.is_empty() {
-        if std::env::var_os("CADRS_DRAFT_DEBUG").is_some() {
+        if crate::native::env_flag!("CADRS_DRAFT_DEBUG") {
             for (fi, f) in out.faces.iter().enumerate() {
                 for l in &f.loops {
                     for c in l {
@@ -1932,7 +1942,7 @@ pub fn replace_faces(
     body: BodyId,
     faces: &[FaceReplacement],
 ) -> Result<OpResult> {
-    let b = (**k.get(body)?).clone();
+    let b = std::sync::Arc::clone(k.get(body)?);
     let mut surfs: Vec<Surface> = b.faces.iter().map(|f| f.surf.clone()).collect();
     let mut domains: Vec<Option<UvBox>> = vec![None; b.faces.len()];
     for r in faces {
@@ -2048,7 +2058,7 @@ pub fn move_faces(
     faces: &[FaceId],
     motion: &Motion,
 ) -> Result<OpResult> {
-    let b = (**k.get(body)?).clone();
+    let b = std::sync::Arc::clone(k.get(body)?);
     if faces.is_empty() {
         return Err(KernelError::InvalidParameter(
             "Move face needs faces to move".into(),
@@ -2456,7 +2466,7 @@ pub fn tangent_closure(b: &Body, mut seed: Vec<usize>) -> Vec<usize> {
 /// Draft: the faces turned about the neutral plane by the angle, leaning in as they rise along
 /// the pull direction.
 pub fn draft(k: &mut NativeKernel, body: BodyId, spec: &DraftSpec) -> Result<OpResult> {
-    let b = (**k.get(body)?).clone();
+    let b = std::sync::Arc::clone(k.get(body)?);
     let pull = spec.pull.into_inner();
     let mut surfs: Vec<Surface> = b.faces.iter().map(|f| f.surf.clone()).collect();
     let mut faces: Vec<usize> = Vec::new();
@@ -2564,7 +2574,7 @@ pub fn draft(k: &mut NativeKernel, body: BodyId, spec: &DraftSpec) -> Result<OpR
                 }
             }
             other => {
-                if std::env::var_os("CADRS_DRAFT_DEBUG").is_some() {
+                if crate::native::env_flag!("CADRS_DRAFT_DEBUG") {
                     eprintln!("draft: unsupported face {fi}: {:?}", other.kind());
                 }
                 return Err(KernelError::Unsupported("drafting this kind of face"));

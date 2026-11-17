@@ -5102,7 +5102,7 @@ impl NativeKernel {
             if o.edges.len() != ids.len() && o.edges.len() == body.edges.len() {
                 ids = (0..body.edges.len()).collect();
             }
-            if std::env::var_os("CADRS_ORDER_DEBUG").is_some() {
+            if crate::native::env_flag!("CADRS_ORDER_DEBUG") {
                 eprintln!(
                     "explode e: OCCT order has {} edges, the body {} ({} not degenerate)",
                     o.edges.len(),

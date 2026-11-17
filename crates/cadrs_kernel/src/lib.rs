@@ -200,6 +200,38 @@ impl KernelError {
         }
     }
 
+    /// This error with the earlier one `first` named in its words: a second method's failure
+    /// (the blend tool's) after `what` (the local fillet) failed with `first`, so that the
+    /// message names the stage that gave up first. An `Unsupported` second method leaves
+    /// `first` itself, with it named.
+    pub fn after(mut self, what: &str, first: &KernelError) -> Self {
+        let cause = format!("{what}: {}", first.message());
+        match &mut self {
+            Self::BooleanFailed { why, .. }
+            | Self::BlendFailed { why, .. }
+            | Self::BudgetExhausted { why, .. }
+            | Self::TooLarge { why, .. }
+            | Self::InvalidGeometry { why, .. }
+            | Self::InvalidResult { why, .. }
+            | Self::InvalidProfile(why)
+            | Self::OperationFailed(why)
+            | Self::EmptyResult(why)
+            | Self::OpenResult(why)
+            | Self::InvalidParameter(why)
+            | Self::InvalidInput(why) => {
+                why.push_str(&format!(" (after {cause})"));
+                self
+            }
+            Self::Unsupported(_) | Self::UnknownBody(_) => {
+                let second = self.message();
+                Self::BlendFailed {
+                    stage: "fallback",
+                    why: format!("{} (then: {second})", first.message()),
+                }
+            }
+        }
+    }
+
     /// Whether the algorithm gave up on this input ([`KernelError::OperationFailed`] or one of
     /// the typed failures, `BooleanFailed`, `BlendFailed`, `BudgetExhausted`, `TooLarge`,
     /// `InvalidGeometry`, `InvalidResult`), as opposed to refusing its arguments or finding nothing to make.
@@ -661,7 +693,9 @@ pub trait Kernel {
     /// coincident faces included). Errors: `EmptyResult` when nothing is left (an Intersect of
     /// bodies that don't meet, a Subtract that removes everything), `OpenResult` or
     /// `BooleanFailed` when the pieces don't close into a valid solid, `BudgetExhausted` for
-    /// inputs too complex for the boolean's work budget. History: every result
+    /// inputs too complex for the boolean's work budget. A result whose only fault is faces the
+    /// boolean's own check reports as crossing is returned all the same, and counted
+    /// (`native::take_invalid_results`; an error instead under `CADRS_BOOL_STRICT`). History: every result
     /// face is `modified` from the input face it is a piece of (target or tool); input faces
     /// with no piece left are `deleted`; nothing is generated.
     ///
@@ -878,7 +912,9 @@ pub trait Kernel {
     /// # Ok::<(), cadrs_kernel::KernelError>(())
     /// ```
     fn shell(&mut self, body: BodyId, remove: &[FaceId], thickness: f64) -> Result<OpResult>;
-    /// Delete face (Heal): the faces removed and their neighbours extended to close the gap.
+    /// Delete face (Heal): the faces removed and the gap closed. Faces bounded only by inner
+    /// loops of the faces left (a hole's wall, a boss) simply go; otherwise the faces round the
+    /// gap run on over it, bounded again along the curves where their surfaces meet.
     /// Faces that can't be healed over are an error (`Unsupported` or `InvalidResult`), never a
     /// wrong body.
     fn delete_faces(&mut self, body: BodyId, faces: &[FaceId]) -> Result<OpResult>;
@@ -997,7 +1033,10 @@ pub trait Kernel {
     fn draft(&mut self, body: BodyId, spec: &DraftSpec) -> Result<OpResult>;
 
     /// The solid with its faces offset (P3.10, the Boolean feature's Subtract offset): every
-    /// face moved outward by `distance`, or by its own distance. Faces are `modified`.
+    /// face moved along its normal by `distance`, or by its own distance (outward when positive,
+    /// inward when negative). Moved faces are `modified`; the rounds a rounded offset puts at
+    /// edges and vertices are `generated`; faces with nothing left of them (a round the
+    /// distance passes) are `deleted`.
     ///
     /// # Examples
     ///

@@ -1114,6 +1114,8 @@ impl NurbsCurve {
         c
     }
 
+    /// The curve's two parts either side of `u` (inside its range), each the same curve over
+    /// its own stretch.
     pub fn split(&self, u: f64) -> crate::Result<(Self, Self)> {
         let (a, b) = self.range();
         let outside = || {

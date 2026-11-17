@@ -50,7 +50,7 @@ fn read(format: ExchangeFormat, bytes: &[u8]) -> Result<ReadModel> {
             return Err(failed(&what, format!("part '{}': {why}", p.name)));
         }
     }
-    if std::env::var("CADRS_EXCHANGE_DEBUG").is_ok() {
+    if crate::native::env_flag!("CADRS_EXCHANGE_DEBUG") {
         for w in &m.warnings {
             eprintln!("{} import: {w}", format.label());
         }

@@ -252,7 +252,7 @@ impl Swept<'_> {
 pub(crate) fn mill(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<Result<OpResult>> {
     use rayon::prelude::*;
     let (mill, end_face, top_face) = Mill::of(b)?;
-    let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+    let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
     let t_start = web_time::Instant::now();
     let refused = |why: String| -> Option<Result<OpResult>> {
         if debug {

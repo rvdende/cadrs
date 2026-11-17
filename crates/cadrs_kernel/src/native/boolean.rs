@@ -172,11 +172,19 @@ thread_local! {
     static INVALID_RESULTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many booleans on this thread handed back a result with crossing faces since the last
-/// call (a run refused it and no retry did better, so it came back as it was). With
+/// Booleans on the kernel's worker threads that handed back a result with crossing faces (an
+/// operation's part booleans run there: a union's islands, a sweep's pieces). A worker can't
+/// tell which thread's operation it works for, so these are counted for whichever thread asks
+/// next ([`take_invalid_results`]) rather than left on the worker, where no one asks.
+static INVALID_ON_WORKERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many booleans handed back a result with crossing faces since the last call (a run
+/// refused it and no retry did better, so it came back as it was): those on this thread, and
+/// those on the kernel's worker threads (which serve whichever operation is running). With
 /// `CADRS_BOOL_STRICT` set, such a boolean fails instead.
 pub fn take_invalid_results() -> usize {
     INVALID_RESULTS.with(|c| c.replace(0))
+        + INVALID_ON_WORKERS.swap(0, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// A run's work so far against its budget ([`BoolOptions::work_budget`]).
@@ -1304,15 +1312,15 @@ fn ladder(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Result<BoolOut> 
     };
     // (Retried: an open shell, a face that doesn't close, an invalid result: `BooleanFailed`, and
     // the failures of the steps a run calls that say so.)
-    let broken = |m: &str| {
-        ["open shell", "left", "doesn't close", "is invalid"]
-            .iter()
-            .any(|w| m.contains(w))
+    // (By the kind of failure and the stage that reports it, never by its words.)
+    let broken = |e: &KernelError| match e {
+        KernelError::OpenResult(_) | KernelError::InvalidResult { .. } => true,
+        KernelError::BooleanFailed { stage, .. } => {
+            matches!(*stage, "face closure" | "validity") || *stage == CROSSING
+        }
+        _ => false,
     };
-    if !opts.retry
-        || (!matches!(&first, Err(KernelError::OpenResult(_)))
-            && !matches!(&first, Err(e) if e.is_failure() && broken(&e.message())))
-    {
+    if !opts.retry || !matches!(&first, Err(e) if broken(e)) {
         return first;
     }
     // Within the fuzzy value: faces a gap off the other input's surfaces moved onto them, and
@@ -1445,7 +1453,7 @@ fn ladder(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Result<BoolOut> 
 }
 
 /// A result refused for crossing faces handed back after all (as before the check), counted
-/// on this thread ([`take_invalid_results`]); under `CADRS_BOOL_STRICT` the boolean fails.
+/// ([`take_invalid_results`]); under `CADRS_BOOL_STRICT` the boolean fails.
 fn hand_back(r: BoolOut) -> Result<BoolOut> {
     if super::env_flag!("CADRS_BOOL_STRICT") {
         return Err(KernelError::BooleanFailed {
@@ -1453,7 +1461,11 @@ fn hand_back(r: BoolOut) -> Result<BoolOut> {
             why: "the boolean's result is invalid: its faces cross".into(),
         });
     }
-    INVALID_RESULTS.with(|c| c.set(c.get() + 1));
+    if rayon::current_thread_index().is_some() {
+        INVALID_ON_WORKERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    } else {
+        INVALID_RESULTS.with(|c| c.set(c.get() + 1));
+    }
     if super::env_flag!("CADRS_BOOL_DEBUG") {
         eprintln!("boolean: handed back a result with crossing faces");
     }
@@ -2472,7 +2484,7 @@ fn uv_gap(b: &Body) -> Option<String> {
                 if off(pa.x - pb.x, f.surf.u_periodic()) * mu > tol
                     || off(pa.y - pb.y, f.surf.v_periodic()) * mv > tol
                 {
-                    if std::env::var_os("CADRS_BOOL_DEBUG").is_some() {
+                    if crate::native::env_flag!("CADRS_BOOL_DEBUG") {
                         eprintln!(
                             "gap: face {fi} {:?} metric {:?}: coedge {k} edge {} {:?} ends {:?} -> next edge {} {:?} starts {:?}; 3D {:?} / {:?}",
                             f.surf.kind(),
@@ -2517,7 +2529,7 @@ fn snap_to(a: &mut Body, b: &Body, tol: f64) -> bool {
         .iter()
         .enumerate()
         .filter(|(_, f)| matches!(f.surf, Surface::Plane { .. } | Surface::Cylinder { .. }))
-        .map(|(i, _)| (i, super::kernel::subset(b, &[i], false).bbox().grow(1e-3)))
+        .map(|(i, _)| (i, b.face_bbox(i).grow(1e-3)))
         .collect();
     if targets.is_empty() {
         return false;
@@ -2843,8 +2855,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                     &ca.curve, ca.t[0], ca.t[1], &cb.curve, cb.t[0], cb.t[1], within,
                 )
             });
-            if t_pair.elapsed().as_secs_f64() > 0.01 && std::env::var_os("CADRS_EF_DEBUG").is_some()
-            {
+            if t_pair.elapsed().as_secs_f64() > 0.01 && crate::native::env_flag!("CADRS_EF_DEBUG") {
                 let kind = |c: &Curve| match c {
                     Curve::Nurbs(n) => {
                         format!("spline of degree {}, {} poles", n.degree, n.cps.len())
@@ -2984,7 +2995,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             )
     });
     let t_meets = web_time::Instant::now();
-    let timed = std::env::var_os("CADRS_EF_DEBUG").is_some();
+    let timed = crate::native::env_flag!("CADRS_EF_DEBUG");
     let meet_timed = |pr: &(usize, usize)| -> (Meet, f64) {
         let t = web_time::Instant::now();
         let m = meet(pr);
@@ -4147,7 +4158,9 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         for list in cuts.iter().chain(on_face.iter()) {
             for &e in list {
                 touching.insert(e);
-                touching.insert(canon[e.min(canon.len() - 1)]);
+                if let Some(&c) = canon.get(e) {
+                    touching.insert(c);
+                }
                 if e < pieces.len() {
                     for &p in &pieces[e] {
                         touching.insert(p);
@@ -5425,7 +5438,7 @@ fn boolean_opts(
             }
         }
         for &t in tools {
-            let tb = (**k.get(t)?).clone();
+            let tb = std::sync::Arc::clone(k.get(t)?);
             let r = boolean_bodies_with(&cur, &tb, op, opts)?;
             origin = r
                 .from

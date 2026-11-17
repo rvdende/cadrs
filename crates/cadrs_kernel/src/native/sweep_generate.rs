@@ -489,7 +489,7 @@ impl<'a> Tool<'a> {
                 closed,
             });
         }
-        if std::env::var_os("CADRS_GEN_EDGES").is_some() {
+        if crate::native::env_flag!("CADRS_GEN_EDGES") {
             for (r, run) in runs.iter().enumerate() {
                 let (mut gap, mut turn, mut bend) = (0.0f64, 0.0f64, [0.0f64; 2]);
                 for k in 1..run.parts.len() {
@@ -2904,7 +2904,7 @@ impl Gen<'_> {
             };
             let least = spans_at.iter().map(|s| s.0).fold(0.0, f64::max);
             let most = spans_at.iter().map(|s| s.1).fold(f64::INFINITY, f64::min);
-            if self.trace && std::env::var_os("CADRS_GEN_ENDS").is_some() {
+            if self.trace && crate::native::env_flag!("CADRS_GEN_ENDS") {
                 for (j, s) in spans_at.iter().enumerate().step_by(4) {
                     eprintln!(
                         "  end {end} slice {:.4}: clear after {:.1} steps, goes on {:.1}",
@@ -3765,7 +3765,7 @@ impl Gen<'_> {
             declined(debug, "the lid or a cap comes within the target");
             return None;
         }
-        if debug && std::env::var_os("CADRS_GEN_PLUG").is_some() {
+        if debug && crate::native::env_flag!("CADRS_GEN_PLUG") {
             // (Each patch's sides that are all but points: how far a side's points spread.)
             for (i, (s, ((u0, u1), (v0, v1)))) in patches.iter().enumerate() {
                 let spread = |f: &dyn Fn(f64) -> P3| {
@@ -5019,7 +5019,7 @@ impl Gen<'_> {
                 continue;
             };
             let node = self.node(run, side, c, (sigma, t_run));
-            if self.trace && std::env::var_os("CADRS_GEN_NODES").is_some() {
+            if self.trace && crate::native::env_flag!("CADRS_GEN_NODES") {
                 eprintln!(
                     "    slice {c:.5}: crossing {j} of run {run} (t {t_run:.6}) and face {face} ({:.6}): their node {:?}; came {came}, goes {goes}",
                     if matches!(chain.links[j], Link::Edge(_)) {
@@ -5870,7 +5870,7 @@ pub(super) fn cut(
     steps: &[RigidStep],
     index: Option<usize>,
 ) -> Option<Result<OpResult>> {
-    let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+    let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
     let t_start = web_time::Instant::now();
     let (tool_axis, target_axis) = two_turns(steps)?;
     if tool.solids.len() != 1 {
@@ -5989,7 +5989,7 @@ pub(super) fn cut(
         tool_box: tool.bbox(),
         near_joint: 2.0,
         debug,
-        trace: std::env::var_os("CADRS_GEN_TRACE").is_some(),
+        trace: crate::native::env_flag!("CADRS_GEN_TRACE"),
     };
     // (The charts whose middle slice has chains, but which made no plug of them.)
     #[allow(clippy::type_complexity)]
@@ -6078,7 +6078,7 @@ pub(super) fn cut(
             }
             let _ = std::fs::write(format!("{file}.{kind:?}.txt"), out);
         }
-        if std::env::var_os("CADRS_GEN_SURVEY").is_some() {
+        if crate::native::env_flag!("CADRS_GEN_SURVEY") {
             // Every chain found afresh in each of some slices.
             let mut surveyed: Vec<Vec<Link>> = Vec::new();
             for ci in 0..=32 {
@@ -6340,7 +6340,7 @@ pub(super) fn cut(
             (web_time::Instant::now() - t_start).as_secs_f64() * 1e3
         );
     }
-    if debug && std::env::var_os("CADRS_GEN_PLUG").is_some() {
+    if debug && crate::native::env_flag!("CADRS_GEN_PLUG") {
         // (The plugs themselves: what is wrong with each as a solid, and its least edges.)
         for p in &plugs {
             let faults = p.check_with(super::topo::CheckLevel::Full);

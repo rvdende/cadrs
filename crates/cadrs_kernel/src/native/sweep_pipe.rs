@@ -458,7 +458,7 @@ fn fit_curve(
 /// an error when its boundary isn't made out.
 pub(crate) fn slide(k: &mut NativeKernel, pipe: &Pipe, d: V3) -> Option<Result<OpResult>> {
     use rayon::prelude::*;
-    let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+    let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
     let t_start = web_time::Instant::now();
     let len = d.norm();
     if pipe.segs.is_empty() || !(pipe.balls[0] && pipe.balls[1]) || !(len > 1e-9 * pipe.r) {
@@ -721,7 +721,7 @@ pub(crate) fn slide(k: &mut NativeKernel, pipe: &Pipe, d: V3) -> Option<Result<O
             given.len(),
             t_start.elapsed().as_secs_f64() * 1e3
         );
-        if std::env::var_os("CADRS_TUBE_CURVES").is_some() {
+        if crate::native::env_flag!("CADRS_TUBE_CURVES") {
             for g in &given {
                 let (p, q) = (g.pts[0], g.pts[g.pts.len() - 1]);
                 eprintln!(

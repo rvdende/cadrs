@@ -2105,7 +2105,7 @@ fn flatten(pc: &Curve, t0: f64, t1: f64, scale: (f64, f64), flat: f64, tol: f64,
 /// and panics where they disagree (for the gate, to show a faster check is as strict).
 pub(crate) fn check_compare() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("CADRS_CHECK_COMPARE").is_some())
+    *ON.get_or_init(|| crate::native::env_flag!("CADRS_CHECK_COMPARE"))
 }
 
 /// [`flatten`] as it was (each span sampled afresh), for `CADRS_CHECK_COMPARE`: the domain

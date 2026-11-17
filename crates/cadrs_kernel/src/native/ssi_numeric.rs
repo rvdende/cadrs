@@ -1451,7 +1451,7 @@ pub fn intersect_stats(
 ) -> (Intersection, Stats) {
     let mut stats = Stats::default();
     if !ua.is_valid() || !ub.is_valid() || region.is_empty() {
-        if std::env::var_os("CADRS_SSI_DEBUG").is_some() {
+        if crate::native::env_flag!("CADRS_SSI_DEBUG") {
             eprintln!("ssi_numeric: nothing to search ({ua:?}, {ub:?}, region {region:?})");
         }
         return (Intersection::default(), stats);
@@ -1472,7 +1472,7 @@ pub fn intersect_stats(
     r.min = r.min.sup(&ba.min).sup(&bbx.min);
     r.max = r.max.inf(&ba.max).inf(&bbx.max);
     if r.is_empty() || r.min.y > r.max.y || r.min.z > r.max.z {
-        if std::env::var_os("CADRS_SSI_DEBUG").is_some() {
+        if crate::native::env_flag!("CADRS_SSI_DEBUG") {
             eprintln!("ssi_numeric: the boxes don't meet in the region ({r:?})");
         }
         return (Intersection::default(), stats);
@@ -1534,7 +1534,7 @@ pub fn intersect_stats(
         touches.retain(|p| !in_coin(p.a));
     }
     stats.seeds = seeds.len();
-    if std::env::var_os("CADRS_SSI_SEEDS").is_some() {
+    if crate::native::env_flag!("CADRS_SSI_SEEDS") {
         for sd in &seeds {
             eprintln!(
                 "  seed {:.6} {:.6} {:.6} a {:.6} {:.6} b {:.6} {:.6}",
@@ -1543,7 +1543,7 @@ pub fn intersect_stats(
         }
     }
     stats.touches = touches.len();
-    let dbg = std::env::var_os("CADRS_SSI_DEBUG").is_some();
+    let dbg = crate::native::env_flag!("CADRS_SSI_DEBUG");
     if dbg {
         eprintln!(
             "ssi_numeric: {:?} over {ua:?} × {:?} over {ub:?} in {:?}: {} pairs, {} seeds, {} touches, coincident {coincident}, search {:?}",
@@ -1679,7 +1679,7 @@ pub fn intersect_stats(
                 c.closed,
                 c.ends
             );
-            if std::env::var_os("CADRS_SSI_DUMP").is_some() {
+            if crate::native::env_flag!("CADRS_SSI_DUMP") {
                 for (k, q) in c.pts.iter().enumerate() {
                     eprintln!(
                         "    {k} {:.6} {:.6} {:.6}  a {:.6} {:.6}  b {:.6} {:.6}",

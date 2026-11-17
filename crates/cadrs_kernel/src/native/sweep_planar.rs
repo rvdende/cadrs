@@ -579,7 +579,7 @@ fn planar(k: &mut NativeKernel, b: &Body, n: V3, motion: Planar) -> Result<OpRes
         }
     }
     let mut pieces = distinct;
-    if std::env::var_os("CADRS_SWEEP_SOLID_DEBUG").is_some() {
+    if crate::native::env_flag!("CADRS_SWEEP_SOLID_DEBUG") {
         for (i, p) in pieces.iter().enumerate() {
             eprintln!(
                 "piece {i} cand {} {} pts len {:.4}: ({:.4}, {:.4}) -> ({:.4}, {:.4})",
@@ -613,7 +613,7 @@ fn planar(k: &mut NativeKernel, b: &Body, n: V3, motion: Planar) -> Result<OpRes
         }
     };
     let gap_most = 0.05 * size;
-    if std::env::var_os("CADRS_SWEEP_SOLID_DEBUG").is_some() {
+    if crate::native::env_flag!("CADRS_SWEEP_SOLID_DEBUG") {
         for (i, p) in pieces.iter().enumerate() {
             eprintln!(
                 "planar sweep: piece {i} cand {} straight {} {} pts {:?} -> {:?}",
@@ -769,7 +769,7 @@ fn planar(k: &mut NativeKernel, b: &Body, n: V3, motion: Planar) -> Result<OpRes
             && perimeter > tol_join * 1e4
         {
             loops.push(lp);
-        } else if std::env::var_os("CADRS_SWEEP_SOLID_DEBUG").is_some() {
+        } else if crate::native::env_flag!("CADRS_SWEEP_SOLID_DEBUG") {
             eprintln!(
                 "planar sweep: an open chain of {} pieces, gap {:e}",
                 lp.len(),
@@ -785,7 +785,7 @@ fn planar(k: &mut NativeKernel, b: &Body, n: V3, motion: Planar) -> Result<OpRes
             (p[0], *p.last().unwrap())
         }
     };
-    if std::env::var_os("CADRS_SWEEP_SOLID_DEBUG").is_some() {
+    if crate::native::env_flag!("CADRS_SWEEP_SOLID_DEBUG") {
         for lp in &loops {
             let desc: Vec<String> = lp
                 .iter()
@@ -906,7 +906,7 @@ fn planar(k: &mut NativeKernel, b: &Body, n: V3, motion: Planar) -> Result<OpRes
     };
     let prof = Profile::new(plane, regions.into_iter().map(|(r, _)| r).collect());
     let out = k.extrude_with(&prof, &ExtrudeSpec::blind(plane.normal, h1 - h0))?;
-    if std::env::var_os("CADRS_SWEEP_SOLID_DEBUG").is_some() {
+    if crate::native::env_flag!("CADRS_SWEEP_SOLID_DEBUG") {
         for &id in &out.bodies {
             let body = k.get(id)?;
             eprintln!(

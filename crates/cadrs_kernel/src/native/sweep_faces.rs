@@ -93,7 +93,7 @@ fn quarter_turns(b: &mut Body, s1: f64) {
     }
     let clock = web_time::Instant::now();
     let lap = |what: &str| {
-        if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+        if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
             eprintln!(
                 "  quarter turns: {what} by {:.0} ms",
                 clock.elapsed().as_secs_f64() * 1e3
@@ -378,8 +378,8 @@ fn stand(points: &[(P3, V3)], mv: &Move) -> Stand {
     }
 }
 
-/// How face `fi` stands to the motion: by points inside it ([`face_points`]) and, under a screw,
-/// by its edges too. The points inside are a grid's, and a part of the face narrower than the
+/// How face `fi` stands to the motion: by points inside it ([`face_points`]) and by its edges
+/// too (under a slide, a turn or a screw alike). The points inside are a grid's, and a part of the face narrower than the
 /// grid's step has none: where a drum's contact curve runs over its seam, the corner it cuts off
 /// beside the seam leads while the rest of its piece trails, and taken for trailing it went
 /// unswept (the same screw from another start, its contact clear of the seam, swept a solid
@@ -389,7 +389,7 @@ fn stand(points: &[(P3, V3)], mv: &Move) -> Stand {
 fn face_stand(b: &Body, fi: usize, size: f64, mv: &Move) -> Stand {
     let points = face_points(b, fi, size);
     let inside = stand(&points, mv);
-    if !matches!(mv, Move::Screw { .. }) || !matches!(inside, Stand::Leads | Stand::Trails) {
+    if !matches!(inside, Stand::Leads | Stand::Trails) {
         return inside;
     }
     let f = &b.faces[fi];
@@ -705,7 +705,7 @@ fn contact_curves(b: &Body, fi: usize, mv: &Move) -> Vec<Curve> {
         q
     };
     let mut out = Vec::new();
-    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
         for c in &chains {
             eprintln!(
                 "sweep by faces: box u {u0:.4}..{u1:.4} v {v0:.4}..{v1:.4}; chain of {} from {:?} to {:?}",
@@ -960,7 +960,7 @@ fn prepared_rising(
 ) -> Result<Prepared> {
     let clock = web_time::Instant::now();
     let lap = |what: &str| {
-        if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+        if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
             eprintln!(
                 "sweep by faces: {what} at {:.0} ms",
                 clock.elapsed().as_secs_f64() * 1e3
@@ -1038,7 +1038,7 @@ fn prepared_rising(
         mv => mv,
     };
     let size = start.bbox().diagonal().max(tol::POINT);
-    let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+    let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
     // The faces that both lead and trail split along their contacts' planes, one at a time (the
     // faces after a split are numbered anew).
     let mut body = start.clone();
@@ -1152,10 +1152,10 @@ fn prepared_rising(
             match split {
                 Ok(r) => {
                     if let Some(&nid) = r.bodies.first() {
-                        let nb = (**k.get(nid)?).clone();
+                        let nb = std::sync::Arc::clone(k.get(nid)?);
                         k.release(nid);
                         if nb.faces.len() > body.faces.len() {
-                            next = Some(nb);
+                            next = Some((*nb).clone());
                         }
                     }
                 }
@@ -1543,14 +1543,14 @@ pub fn by_faces_or_pieces(
         clock,
     } = prepared(k, b, steps)?;
     let lap = |what: &str| {
-        if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+        if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
             eprintln!(
                 "sweep by faces: {what} at {:.0} ms",
                 clock.elapsed().as_secs_f64() * 1e3
             );
         }
     };
-    let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+    let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
     let over = || clock.elapsed().as_secs_f64() > effort();
     if pieces.is_empty() {
         let first = k.insert(start);
@@ -1931,7 +1931,7 @@ pub(super) fn glued_with(
             }
         }
     }
-    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
         for (i, f) in faces.iter().enumerate() {
             eprintln!(
                 "  glue: body {} face {} {:?} middle {:.4?} measure {:.6} normal {:.3?}{}",
@@ -2012,7 +2012,7 @@ pub(super) fn glued_with(
             winding(m, &out) > 0.5
         });
         if let Some((bi, fi, bj, out)) = overlap {
-            if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+            if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
                 eprintln!(
                     "sweep by faces: the bodies overlap (face {fi} of body {bi}, {:?} {:.4?}, inside body {bj}; volumes {:.4?})",
                     all[bi].faces[fi].surf.kind(),
@@ -2029,7 +2029,7 @@ pub(super) fn glued_with(
         .filter(|(_, d)| !**d)
         .map(|((bi, fi, ..), _)| k.insert(super::kernel::subset(&all[*bi], &[*fi], false)))
         .collect();
-    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
         eprintln!(
             "sweep by faces: overlap check {:.0} ms",
             t_check.elapsed().as_secs_f64() * 1e3
@@ -2037,7 +2037,7 @@ pub(super) fn glued_with(
     }
     let t_sew = web_time::Instant::now();
     let r = k.sew_solid(&ids, 1e-6 * size.max(1.0));
-    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
         eprintln!(
             "sweep by faces: sewing {:.0} ms",
             t_sew.elapsed().as_secs_f64() * 1e3
@@ -2046,7 +2046,7 @@ pub(super) fn glued_with(
     for id in ids {
         k.release(id);
     }
-    let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+    let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
     if debug {
         eprintln!(
             "sweep by faces: {} of {} faces dropped in pairs; sewn: {:?}",

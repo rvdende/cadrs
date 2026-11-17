@@ -227,17 +227,50 @@ fn edge_tube(b: &Body, e: usize, r: f64) -> Result<Body> {
         _ => {
             // Where the edge curves tighter than the radius the pipe folds over itself: not a
             // valid solid (and its booleans fail only after every retry).
+            // (κ·r − 1 scaled by |c′|³, at 257 points and, between the neighbours of each that
+            // tops both, at its peak: a curvature peak between samples is found too.)
             let n = 256;
+            let over = |t: f64| {
+                let (_, d1, d2) = ed.curve.d2(t);
+                d1.cross(&d2).norm() * r - d1.norm().powi(3)
+            };
+            let at = |i: usize| ed.t[0] + (ed.t[1] - ed.t[0]) * i as f64 / n as f64;
+            let fs: Vec<f64> = (0..=n).map(|i| over(at(i))).collect();
             let tight = (0..=n).any(|i| {
-                let (_, d1, d2) = ed
-                    .curve
-                    .d2(ed.t[0] + (ed.t[1] - ed.t[0]) * i as f64 / n as f64);
-                d1.cross(&d2).norm() * r >= d1.norm().powi(3)
+                if fs[i] >= 0.0 {
+                    return true;
+                }
+                if i == 0 || i == n || fs[i] < fs[i - 1] || fs[i] < fs[i + 1] {
+                    return false;
+                }
+                const PHI: f64 = 0.618_033_988_749_894_9;
+                let (mut lo, mut hi) = (at(i - 1), at(i + 1));
+                let (mut x1, mut x2) = (hi - PHI * (hi - lo), lo + PHI * (hi - lo));
+                let (mut f1, mut f2) = (over(x1), over(x2));
+                for _ in 0..40 {
+                    if f1 > f2 {
+                        (hi, x2, f2) = (x2, x1, f1);
+                        x1 = hi - PHI * (hi - lo);
+                        f1 = over(x1);
+                    } else {
+                        (lo, x1, f1) = (x1, x2, f2);
+                        x2 = lo + PHI * (hi - lo);
+                        f2 = over(x2);
+                    }
+                }
+                f1.max(f2) >= 0.0
             });
+            let ef = b.edge_faces();
             if tight {
-                return Err(KernelError::Unsupported(
+                // The whole tube would cross itself on the edge's inner side. Where the edge
+                // lies in a plane, bends one way all along, and its faces' normals both point
+                // to its outer side, the faces' wedge of the tube lies in the tube's outer
+                // half, and that half never folds (the offsets of a convex curve on its outer
+                // side don't cross): the half disc on that side swept along the edge (a
+                // cylinder cut aslant, grown past its ellipse's radius of curvature).
+                return outer_half_tube(b, e, r, &ef[e]).ok_or(KernelError::Unsupported(
                     "a tube round an edge curved tighter than its radius",
-                ));
+                ))?;
             }
             let p0 = ed.point(ed.t[0]);
             let t = ed
@@ -250,7 +283,6 @@ fn edge_tube(b: &Body, e: usize, r: f64) -> Result<Body> {
             // The seam (the circle's start) turned into the body, as the straight tube's: the
             // part of the tube left outside the faces' slabs then never runs across it (a
             // closed B-spline's parameters don't wrap, and a face can't lie over its seam).
-            let ef = b.edge_faces();
             let inward = -ef[e]
                 .iter()
                 .map(|&f| outward_normal(b, f, &p0))
@@ -398,9 +430,9 @@ fn needs_ball(b: &Body, kinds: &[Dihedral], v: usize, rounded: Dihedral) -> bool
 /// `acc` (op) `piece`; a failure says which piece (`what`) with `CADRS_OFFSET_DEBUG`, and
 /// leaves both bodies in `CADRS_DUMP_DIR`.
 fn combine(acc: &Body, piece: &Body, op: BoolOp, what: &dyn Fn() -> String) -> Result<Body> {
-    let debug = std::env::var_os("CADRS_OFFSET_DEBUG").is_some();
+    let debug = crate::native::env_flag!("CADRS_OFFSET_DEBUG");
     let dump = || {
-        if std::env::var_os("CADRS_DUMP_DIR").is_some() {
+        if crate::native::env_flag!("CADRS_DUMP_DIR") {
             crate::native::kernel::dump("offset-target", acc, &format!("{op:?} {}", what()));
             crate::native::kernel::dump("offset-tool", piece, &format!("{op:?} {}", what()));
         }
@@ -838,7 +870,7 @@ fn combine_all(mut acc: Body, mut todo: Vec<(Body, String)>, op: BoolOp) -> Resu
             match combine(&acc, &piece, op, &|| what.clone()) {
                 Ok(r) => {
                     acc = r;
-                    if std::env::var("CADRS_SHELL_DEBUG").is_ok() {
+                    if crate::native::env_flag!("CADRS_SHELL_DEBUG") {
                         eprintln!(
                             "after {what}: {:.6} solids {}",
                             crate::native::mass::body_volume(&acc),
@@ -865,7 +897,7 @@ fn combine_all(mut acc: Body, mut todo: Vec<(Body, String)>, op: BoolOp) -> Resu
 }
 
 pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpResult> {
-    let b = (**k.get(body)?).clone();
+    let b = std::sync::Arc::clone(k.get(body)?);
     let t = spec.thickness;
     if !(t > 0.0) {
         return Err(KernelError::InvalidParameter(
@@ -895,7 +927,7 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
             "The shell's walls would intersect themselves; reduce the thickness".into(),
         )
     };
-    let cur = Tracked::of(b.clone());
+    let cur = Tracked::of((*b).clone());
     let v0 = crate::native::mass::body_volume(&b);
     // Walls whose surfaces the whole body lies within (a box's sides, a bore, a ball's sphere):
     // the cavity is where the moved surfaces' insides meet in the body, as far as the openings.
@@ -904,7 +936,7 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
     } else {
         cavity_of_supports(&b, &remove, t)
     };
-    if std::env::var("CADRS_SHELL_DEBUG").is_ok() {
+    if crate::native::env_flag!("CADRS_SHELL_DEBUG") {
         eprintln!(
             "shell: cavity of supporting walls: {:?}",
             supported
@@ -938,7 +970,7 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
                     .collect();
                 (b2, remove)
             }
-            None => (b.clone(), remove.clone()),
+            None => ((*b).clone(), remove.clone()),
         };
         // The cavity: kept faces moved in by t, removed faces moved out past the body, or,
         // failing that (a spline wall's offset doesn't reach that far), where they are (the
@@ -976,6 +1008,10 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
             })
         };
         let regions = || cavity_by_regions(&b, &remove, t);
+        // (The cavity flush with the openings, made once: for its volume below and as the
+        // second way.)
+        let flush_made: std::cell::OnceCell<Result<Body>> = std::cell::OnceCell::new();
+        let flush_cavity = || flush_made.get_or_init(|| sharp(&flush)).clone();
         let ways: Vec<Box<dyn Fn() -> Result<Body>>> = if (concave || crossing) && !spec.sharp {
             // A prism opened at a cap, or hollowed: its outline's inset, rounded about the
             // reflex corners, extruded from the kept caps' insets to past the removed ones.
@@ -986,7 +1022,7 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
         } else {
             vec![
                 Box::new(|| sharp(&dist)),
-                Box::new(|| sharp(&flush)),
+                Box::new(flush_cavity),
                 Box::new(regions),
             ]
         };
@@ -1015,7 +1051,7 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
             })
         });
         let flush_volume = if moved && past_openings {
-            sharp(&flush)
+            flush_cavity()
                 .ok()
                 .map(|c| crate::native::mass::body_volume(&c))
         } else {
@@ -1228,14 +1264,25 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
             match sharp() {
                 Ok(r) => r,
                 Err(e) => {
-                    if std::env::var("CADRS_SHELL_DEBUG").is_ok() {
+                    if crate::native::env_flag!("CADRS_SHELL_DEBUG") {
                         eprintln!("shell: sharp outward walls failed ({e}); rounded");
                     }
                     rounded()?
                 }
             }
         } else {
-            rounded()?
+            // (With no convex edge between kept faces the rounded walls are the sharp ones:
+            // where the rounded can't be made, a curved opening with a sharp rim, those.)
+            match rounded() {
+                Ok(r) => r,
+                Err(e) if !corners => {
+                    if crate::native::env_flag!("CADRS_SHELL_DEBUG") {
+                        eprintln!("shell: rounded outward walls failed ({e}); sharp");
+                    }
+                    sharp().map_err(|_| e)?
+                }
+                Err(e) => return Err(e),
+            }
         }
     };
     // The walls' faces the booleans couldn't trace (the cavity's, the grown body's): the kept
@@ -1259,7 +1306,7 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
         }
     }
     let v1 = crate::native::mass::body_volume(&result.body);
-    if std::env::var("CADRS_SHELL_DEBUG").is_ok() {
+    if crate::native::env_flag!("CADRS_SHELL_DEBUG") {
         eprintln!(
             "shell: body {v0} result {v1} solids {} faces {}",
             result.body.solids.len(),
@@ -1531,6 +1578,92 @@ fn half_space(o: P3, n: V3, size: f64) -> Result<Body> {
     ])
 }
 
+/// The outer half of the tube of radius `r` round edge `e` (a planar curve bending one way,
+/// its `faces`' outward normals on its outer side all along): the half disc on the side away
+/// from the centre of curvature, its straight side through the edge and square to its plane,
+/// swept along it. `None` where the edge isn't such a curve (`Some(Err)` where the sweep fails).
+fn outer_half_tube(b: &Body, e: usize, r: f64, faces: &[usize]) -> Option<Result<Body>> {
+    let ed = &b.edges[e];
+    let n = 64;
+    let at = |i: usize| ed.t[0] + (ed.t[1] - ed.t[0]) * i as f64 / n as f64;
+    // The plane's normal (the binormal), one all along; the outer side by it.
+    let binormal = |t: f64| {
+        let (_, d1, d2) = ed.curve.d2(t);
+        d1.cross(&d2).try_normalize(tol::DEGENERATE)
+    };
+    let up = binormal(at(0))?;
+    for i in 0..=n {
+        let t = at(i);
+        if binormal(t)?.dot(&up) < 1.0 - tol::ANGULAR_POINT.sqrt() {
+            return None;
+        }
+        let (p, d1, _) = ed.curve.d2(t);
+        // (Out of the curve's bend: the tangent turned a quarter about the binormal, away
+        // from the centre of curvature.)
+        let out = d1.cross(&up).try_normalize(tol::DEGENERATE)?;
+        if faces
+            .iter()
+            .any(|&f| outward_normal(b, f, &p).normalize().dot(&out) < -tol::ANGULAR_POINT.sqrt())
+        {
+            return None;
+        }
+    }
+    let (p0, d1, _) = ed.curve.d2(ed.t[0]);
+    let t = d1.try_normalize(tol::DEGENERATE)?;
+    let out = t.cross(&up);
+    let plane = Plane {
+        origin: p0,
+        x_dir: nalgebra::Unit::new_normalize(out),
+        normal: nalgebra::Unit::new_normalize(t),
+    };
+    let half = Loop {
+        curves: vec![
+            Curve2::Arc {
+                center: nalgebra::Point2::origin(),
+                radius: r,
+                start_angle: -std::f64::consts::FRAC_PI_2,
+                sweep: PI,
+                source: None,
+            },
+            Curve2::Line {
+                a: nalgebra::Point2::new(0.0, r),
+                b: nalgebra::Point2::new(0.0, -r),
+                source: None,
+            },
+        ],
+    };
+    let prof = Profile::new(
+        plane,
+        vec![Region {
+            outer: half,
+            holes: vec![],
+            source: None,
+        }],
+    );
+    let mut k = NativeKernel::new();
+    let body = k.insert(b.clone());
+    let spec = SweepSpec {
+        body: BodyKind::Solid,
+        path: vec![PathCurve::Edge {
+            body,
+            edge: EdgeId(e as u64),
+        }],
+        control: SweepControl::None,
+        corners: Default::default(),
+        faces: vec![],
+    };
+    Some(
+        k.sweep_with(&prof, &spec)
+            .and_then(|out| match out.bodies[..] {
+                [id] => Ok((**k.get(id)?).clone()),
+                _ => Err(KernelError::InvalidResult {
+                    op: "offset",
+                    why: "a tube round an edge isn't one body".into(),
+                }),
+            }),
+    )
+}
+
 /// Walls facing each other across the body closer than twice the thickness (kept, planar,
 /// anti-parallel, overlapping).
 fn walls_cross(b: &Body, remove: &[usize], t: f64) -> bool {
@@ -1542,8 +1675,7 @@ fn walls_cross(b: &Body, remove: &[usize], t: f64) -> bool {
         .filter_map(|(i, f)| match &f.surf {
             Surface::Plane { f: fr } => {
                 let n = fr.x.cross(&fr.y) * if f.sense { 1.0 } else { -1.0 };
-                let sub = crate::native::kernel::subset(b, &[i], false);
-                Some((i, fr.o, n, sub.bbox()))
+                Some((i, fr.o, n, b.face_bbox(i)))
             }
             _ => None,
         })
@@ -1554,9 +1686,14 @@ fn walls_cross(b: &Body, remove: &[usize], t: f64) -> bool {
                 continue;
             }
             let gap = (ob - oa).dot(na).abs();
-            // Overlap of the faces' boxes across the gap direction.
-            let pa = ba.grow(gap);
-            if gap < 2.0 * t + tol::ROUNDOFF && pa.overlaps(bb) {
+            // Overlap of the faces' boxes across the gap: the second's carried along the
+            // normal onto the first's plane (faces apart sideways stay apart).
+            let across = na * (oa - ob).dot(na);
+            let carried = Bbox {
+                min: bb.min + across,
+                max: bb.max + across,
+            };
+            if gap < 2.0 * t + tol::ROUNDOFF && ba.grow(tol::POINT).overlaps(&carried) {
                 return true;
             }
         }

@@ -592,7 +592,7 @@ pub(crate) fn trace_pieces(b: &mut Body, fi: usize, cuts: Vec<SArc>) -> Option<V
     }
     let area: f64 = out.iter().map(|&g| uv_area(b, g)).sum();
     if !((area - area0).abs() <= tol::REL_POINT * area0.abs().max(tol::DEGENERATE)) {
-        if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+        if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
             eprintln!(
                 "split: face {fi}'s {} pieces add up to {area:.9} in its parameters, not its {area0:.9}",
                 out.len()
