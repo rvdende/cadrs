@@ -260,10 +260,17 @@ fn edge_tube(b: &Body, e: usize, r: f64) -> Result<Body> {
                 }
                 f1.max(f2) >= 0.0
             });
+            let ef = b.edge_faces();
             if tight {
-                return Err(KernelError::Unsupported(
+                // The whole tube would cross itself on the edge's inner side. Where the edge
+                // lies in a plane, bends one way all along, and its faces' normals both point
+                // to its outer side, the faces' wedge of the tube lies in the tube's outer
+                // half, and that half never folds (the offsets of a convex curve on its outer
+                // side don't cross): the half disc on that side swept along the edge (a
+                // cylinder cut aslant, grown past its ellipse's radius of curvature).
+                return outer_half_tube(b, e, r, &ef[e]).ok_or(KernelError::Unsupported(
                     "a tube round an edge curved tighter than its radius",
-                ));
+                ))?;
             }
             let p0 = ed.point(ed.t[0]);
             let t = ed
@@ -276,7 +283,6 @@ fn edge_tube(b: &Body, e: usize, r: f64) -> Result<Body> {
             // The seam (the circle's start) turned into the body, as the straight tube's: the
             // part of the tube left outside the faces' slabs then never runs across it (a
             // closed B-spline's parameters don't wrap, and a face can't lie over its seam).
-            let ef = b.edge_faces();
             let inward = -ef[e]
                 .iter()
                 .map(|&f| outward_normal(b, f, &p0))
@@ -1265,7 +1271,18 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
                 }
             }
         } else {
-            rounded()?
+            // (With no convex edge between kept faces the rounded walls are the sharp ones:
+            // where the rounded can't be made, a curved opening with a sharp rim, those.)
+            match rounded() {
+                Ok(r) => r,
+                Err(e) if !corners => {
+                    if crate::native::env_flag!("CADRS_SHELL_DEBUG") {
+                        eprintln!("shell: rounded outward walls failed ({e}); sharp");
+                    }
+                    sharp().map_err(|_| e)?
+                }
+                Err(e) => return Err(e),
+            }
         }
     };
     // The walls' faces the booleans couldn't trace (the cavity's, the grown body's): the kept
@@ -1559,6 +1576,92 @@ fn half_space(o: P3, n: V3, size: f64) -> Result<Body> {
         c(size, size, size),
         c(-size, size, size),
     ])
+}
+
+/// The outer half of the tube of radius `r` round edge `e` (a planar curve bending one way,
+/// its `faces`' outward normals on its outer side all along): the half disc on the side away
+/// from the centre of curvature, its straight side through the edge and square to its plane,
+/// swept along it. `None` where the edge isn't such a curve (`Some(Err)` where the sweep fails).
+fn outer_half_tube(b: &Body, e: usize, r: f64, faces: &[usize]) -> Option<Result<Body>> {
+    let ed = &b.edges[e];
+    let n = 64;
+    let at = |i: usize| ed.t[0] + (ed.t[1] - ed.t[0]) * i as f64 / n as f64;
+    // The plane's normal (the binormal), one all along; the outer side by it.
+    let binormal = |t: f64| {
+        let (_, d1, d2) = ed.curve.d2(t);
+        d1.cross(&d2).try_normalize(tol::DEGENERATE)
+    };
+    let up = binormal(at(0))?;
+    for i in 0..=n {
+        let t = at(i);
+        if binormal(t)?.dot(&up) < 1.0 - tol::ANGULAR_POINT.sqrt() {
+            return None;
+        }
+        let (p, d1, _) = ed.curve.d2(t);
+        // (Out of the curve's bend: the tangent turned a quarter about the binormal, away
+        // from the centre of curvature.)
+        let out = d1.cross(&up).try_normalize(tol::DEGENERATE)?;
+        if faces
+            .iter()
+            .any(|&f| outward_normal(b, f, &p).normalize().dot(&out) < -tol::ANGULAR_POINT.sqrt())
+        {
+            return None;
+        }
+    }
+    let (p0, d1, _) = ed.curve.d2(ed.t[0]);
+    let t = d1.try_normalize(tol::DEGENERATE)?;
+    let out = t.cross(&up);
+    let plane = Plane {
+        origin: p0,
+        x_dir: nalgebra::Unit::new_normalize(out),
+        normal: nalgebra::Unit::new_normalize(t),
+    };
+    let half = Loop {
+        curves: vec![
+            Curve2::Arc {
+                center: nalgebra::Point2::origin(),
+                radius: r,
+                start_angle: -std::f64::consts::FRAC_PI_2,
+                sweep: PI,
+                source: None,
+            },
+            Curve2::Line {
+                a: nalgebra::Point2::new(0.0, r),
+                b: nalgebra::Point2::new(0.0, -r),
+                source: None,
+            },
+        ],
+    };
+    let prof = Profile::new(
+        plane,
+        vec![Region {
+            outer: half,
+            holes: vec![],
+            source: None,
+        }],
+    );
+    let mut k = NativeKernel::new();
+    let body = k.insert(b.clone());
+    let spec = SweepSpec {
+        body: BodyKind::Solid,
+        path: vec![PathCurve::Edge {
+            body,
+            edge: EdgeId(e as u64),
+        }],
+        control: SweepControl::None,
+        corners: Default::default(),
+        faces: vec![],
+    };
+    Some(
+        k.sweep_with(&prof, &spec)
+            .and_then(|out| match out.bodies[..] {
+                [id] => Ok((**k.get(id)?).clone()),
+                _ => Err(KernelError::InvalidResult {
+                    op: "offset",
+                    why: "a tube round an edge isn't one body".into(),
+                }),
+            }),
+    )
 }
 
 /// Walls facing each other across the body closer than twice the thickness (kept, planar,

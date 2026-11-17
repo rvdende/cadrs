@@ -1108,7 +1108,10 @@ pub fn delete_faces(b: &Body, gone: &[usize]) -> Result<(Body, Vec<Vec<usize>>)>
                 }
                 loops.push(nl);
             }
-            if loops.is_empty() {
+            // Nothing left of its boundary: the whole of a surface that closes on itself (a
+            // ball whose flat went), which the builder bounds by its seam.
+            if loops.is_empty() && !matches!(p.surf, Surface::Sphere { .. } | Surface::Torus { .. })
+            {
                 continue;
             }
             xb.face(XFace {
@@ -1141,6 +1144,33 @@ pub fn delete_faces(b: &Body, gone: &[usize]) -> Result<(Body, Vec<Vec<usize>>)>
     out.solids.clear();
     super::boolean::assemble_shells(&mut out)?;
     if solid {
+        if debug() {
+            eprintln!(
+                "healed: {} faces, {} edges, {} solids, shells closed {:?}, warnings {_warnings:?}, check {:?}",
+                out.faces.len(),
+                out.edges.len(),
+                out.solids.len(),
+                out.shells.iter().map(|s| s.closed).collect::<Vec<_>>(),
+                out.check()
+            );
+            for (i, f) in out.faces.iter().enumerate() {
+                eprintln!(
+                    "  face {i}: {:?}",
+                    f.loops
+                        .iter()
+                        .map(|l| l
+                            .iter()
+                            .map(|c| (
+                                c.edge,
+                                c.fwd,
+                                out.edges[c.edge].degenerate,
+                                out.edges[c.edge].t
+                            ))
+                            .collect::<Vec<_>>())
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
         if out.solids.len() != 1 || out.shells.iter().any(|s| !s.closed) {
             return Err(failed(
                 "the faces round the deleted ones don't close the gap",

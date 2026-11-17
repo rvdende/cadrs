@@ -470,7 +470,14 @@ fn outline(sl: &Slicer, lo: Extreme, hi: Extreme, n: usize) -> Option<Outline> {
         for i in 1..n {
             let th = -PI / 2.0 + PI * i as f64 / n as f64;
             let q = mid + half * th.sin();
-            let (v, w) = sl.extreme(q, far, seed)?;
+            // (A slice within a hair of an end, where the ends' own keys are only found to a
+            // search's precision, may miss the body: the end's point stands for it.)
+            let Some((v, w)) = sl.extreme(q, far, seed) else {
+                if 1.0 - th.sin().abs() < 1e-4 {
+                    continue;
+                }
+                return None;
+            };
             seed = w;
             out.push((v, q));
         }
@@ -947,7 +954,7 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
 /// How many slices an endless sweep's outline is traced on: the cubic B-spline through them
 /// is off the outline by the fourth power of their spacing, so four times the slices is 256
 /// times nearer (a wheel turned round a rod: its volume to 1e-8, not 1e-6).
-const FINE_SLICES: usize = 640;
+const FINE_SLICES: usize = 1280;
 /// The slices of an outline whose finer trace builds no solid, or one a boolean can't take.
 const COARSE_SLICES: usize = 160;
 
@@ -2387,12 +2394,25 @@ pub fn cut_swept(
     if let Some(endless) = endless_within(&**k.get(target)?, &b, motion) {
         // (Its outline fine, then coarse: a boolean may take the one and not the other.)
         for n in [FINE_SLICES, COARSE_SLICES] {
-            let swept = with_slices(n, || sweep_solid_at(k, tool, &endless)).ok();
-            if let Some(r) = swept
+            let swept = with_slices(n, || sweep_solid_at(k, tool, &endless));
+            let debug = crate::native::env_flag!("CADRS_SWEEP_SOLID_DEBUG");
+            if debug && let Err(e) = &swept {
+                eprintln!("endless sweep on {n} slices: {e}");
+            }
+            if let Ok(r) = swept
                 && let [s] = r.bodies.as_slice()
             {
                 let cut = k.boolean(crate::BoolOp::Subtract, target, &[*s]);
                 k.release(*s);
+                if debug {
+                    match &cut {
+                        Err(e) => eprintln!("endless sweep on {n} slices: its cut: {e}"),
+                        Ok(c) => eprintln!(
+                            "endless sweep on {n} slices: cut, sound {:?}",
+                            c.bodies.iter().map(|&id| k.sound(id)).collect::<Vec<_>>()
+                        ),
+                    }
+                }
                 if let Ok(c) = cut
                     && c.bodies.iter().all(|&id| k.sound(id))
                 {
