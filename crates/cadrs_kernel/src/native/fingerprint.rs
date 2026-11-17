@@ -1,6 +1,12 @@
 //! Geometry hashed to the bit, for the caches keyed by what a result depends on (a face's mass
-//! integrals, its mesh): two SipHash streams, told apart by a first byte, make a 128-bit key
-//! two different inputs don't share in practice.
+//! integrals, its mesh, its boundary's polygons): two 64-bit streams, each taking every word
+//! through a mixer of its own, make a 128-bit key two different inputs don't share in practice.
+//!
+//! The keys are made for every face of every boolean, of every number its curves and surface
+//! hold, so the streams are cheap ones: a word is folded into each state and the state put
+//! through a bijective mixer (two multiplications and three shifts), where two SipHash streams
+//! fed a word at a time took most of a boolean's bookkeeping. The keys only name entries of
+//! caches in memory: nothing outside the process depends on their values.
 
 use std::hash::Hasher;
 
@@ -9,22 +15,51 @@ use super::math::Frame;
 use super::surface::Surface;
 
 /// A 128-bit key: everything written goes to both streams.
-pub struct Key128([std::hash::DefaultHasher; 2]);
+pub struct Key128 {
+    a: u64,
+    b: u64,
+}
+
+/// The first stream's mixer ("moremur", a stronger variant of MurmurHash3's finalizer).
+#[inline(always)]
+fn mix_a(mut x: u64) -> u64 {
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x3C79_AC49_2BA7_B653);
+    x ^= x >> 33;
+    x = x.wrapping_mul(0x1C69_B3F7_4AC4_AE35);
+    x ^ (x >> 27)
+}
+
+/// The second stream's (SplitMix64's finalizer).
+#[inline(always)]
+fn mix_b(mut x: u64) -> u64 {
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^ (x >> 31)
+}
 
 impl Key128 {
     /// An empty key.
     pub fn new() -> Self {
-        let mut h = [
-            std::hash::DefaultHasher::new(),
-            std::hash::DefaultHasher::new(),
-        ];
-        h[1].write_u8(1);
-        Self(h)
+        Self {
+            a: 0x243F_6A88_85A3_08D3,
+            b: 0x1319_8A2E_0370_7344,
+        }
+    }
+
+    /// One word into both streams. (The constants added keep a state off zero, the mixers'
+    /// one fixed point, where a run of zero words would leave it.)
+    #[inline(always)]
+    fn word(&mut self, w: u64) {
+        self.a = mix_a(self.a ^ w).wrapping_add(0x9E37_79B9_7F4A_7C15);
+        self.b = mix_b(self.b.wrapping_add(w)).wrapping_add(0xD1B5_4A32_D192_ED03);
     }
 
     /// The key of everything written.
     pub fn key(&self) -> u128 {
-        (self.0[0].finish() as u128) << 64 | self.0[1].finish() as u128
+        (mix_a(self.a) as u128) << 64 | mix_b(self.b) as u128
     }
 
     /// Numbers, by their bits.
@@ -139,14 +174,33 @@ impl Default for Key128 {
 }
 
 impl Hasher for Key128 {
+    /// Bytes eight at a time; what is left over as one word more, its length above it (so
+    /// "ab" then "c" isn't "a" then "bc").
     fn write(&mut self, bytes: &[u8]) {
-        for h in &mut self.0 {
-            h.write(bytes);
+        let (chunks, rest) = bytes.as_chunks::<8>();
+        for c in chunks {
+            self.word(u64::from_le_bytes(*c));
         }
+        if !rest.is_empty() {
+            let mut w = [0u8; 8];
+            w[..rest.len()].copy_from_slice(rest);
+            w[7] = rest.len() as u8;
+            self.word(u64::from_le_bytes(w));
+        }
+    }
+
+    #[inline]
+    fn write_u64(&mut self, w: u64) {
+        self.word(w);
+    }
+
+    #[inline]
+    fn write_usize(&mut self, w: usize) {
+        self.word(w as u64);
     }
 
     /// The first stream's half ([`Self::key`] is the whole).
     fn finish(&self) -> u64 {
-        self.0[0].finish()
+        mix_a(self.a)
     }
 }

@@ -108,6 +108,13 @@ pub struct NativeKernel {
     /// what it comes to with a ball of its radius united at an end), by their bodies: slid, a
     /// pipe is swept as one ([`super::sweep_pipe::slide`]).
     pub(crate) pipes: HashMap<u64, Arc<super::sweep_pipe::Pipe>>,
+    /// The bodies this session made by moving another rigidly ([`Kernel::transform`]): the
+    /// body first moved, and the motion that takes it to this one ([`super::sweep_cache`]).
+    pub(crate) placed: HashMap<u64, (u64, Affine)>,
+    /// The sweeps of solids kept, by the body first moved ([`super::sweep_cache`]).
+    pub(crate) swept: HashMap<u64, Vec<Arc<super::sweep_cache::Swept>>>,
+    /// The unions of several tools kept ([`super::sweep_cache::united`]).
+    pub(crate) united: Vec<Arc<super::sweep_cache::United>>,
 }
 
 /// How many of [`Kernel::joins`]'s unions a session keeps for the union that may follow.
@@ -269,6 +276,9 @@ impl NativeKernel {
             joined: Vec::new(),
             swept_tori: self.swept_tori.clone(),
             pipes: self.pipes.clone(),
+            placed: self.placed.clone(),
+            swept: self.swept.clone(),
+            united: self.united.clone(),
         }
     }
 
@@ -1043,7 +1053,7 @@ impl Kernel for NativeKernel {
     }
 
     fn sweep_solid(&mut self, body: BodyId, motion: &SolidMotion) -> Result<OpResult> {
-        super::sweep_solid::sweep_solid(self, body, motion)
+        super::sweep_cache::sweep_solid(self, body, motion)
     }
 
     fn cut_swept(
@@ -1597,12 +1607,14 @@ impl Kernel for NativeKernel {
                 "The motion must be a rotation or a reflection (no scaling or shear)".into(),
             ));
         }
-        let b = self.get(body)?.transformed(&Affine {
+        let moved = Affine {
             m,
             t: motion.translation,
-        });
+        };
+        let b = self.get(body)?.transformed(&moved);
         let nf = b.faces.len();
         let id = self.insert(b);
+        self.place(id, body, &moved);
         let history = History {
             modified: (0..nf)
                 .map(|i| {

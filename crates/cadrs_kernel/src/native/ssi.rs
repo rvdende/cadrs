@@ -2291,7 +2291,34 @@ fn thinned(
                 let (i, j) = (idx[w], idx[w + 1]);
                 (i + 1..j)
                     .map(|k| {
-                        let s = c.closest(&pts[k].p, t[w], t[w + 1]);
+                        // The curve's point nearest the left-out one: Newton from where it
+                        // falls between its kept neighbours by count (the tracer's points
+                        // are spread evenly), the sampled search only where that leaves the
+                        // span or meets a stretch curving the wrong way.
+                        let (t0, t1) = (t[w], t[w + 1]);
+                        let mut s = t0 + (t1 - t0) * (k - i) as f64 / (j - i) as f64;
+                        let mut found = false;
+                        for _ in 0..8 {
+                            let (q, d1, d2) = c.d2(s);
+                            let r = q - pts[k].p;
+                            let df = d1.norm_squared() + r.dot(&d2);
+                            if !(df > 0.0) {
+                                break;
+                            }
+                            let step = r.dot(&d1) / df;
+                            let ns = s - step;
+                            if !(ns >= t0 && ns <= t1) {
+                                break;
+                            }
+                            s = ns;
+                            if step.abs() <= 1e-12 * (t1 - t0) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if !found {
+                            s = c.closest(&pts[k].p, t0, t1);
+                        }
                         ((c.point(s) - pts[k].p).norm(), k)
                     })
                     .filter(|&(d, _)| d > tol)

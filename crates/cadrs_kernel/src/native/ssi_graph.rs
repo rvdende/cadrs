@@ -428,6 +428,120 @@ fn sign_roots(d: &dyn Fn(f64) -> f64, floor: f64) -> Option<Vec<f64>> {
     Some(out)
 }
 
+/// [`ruled`] where `a`'s rulings all run along one of `b`'s: along the ruling at θ the equation
+/// is `2β h + γ = 0` (`coefs` gives β and γ), β a constant and a cosine and a sine of θ. The
+/// surfaces meet in the rulings where β and γ are both zero (a ruling the two share: where β's
+/// zero is double they touch along it, `a` to one side of `b`) and in the curve `h = −γ/2β`
+/// elsewhere. Only the shared rulings are given here: `None` where that curve comes within the
+/// boxes (the numeric engine's), so what this settles in closed form is the pair that only
+/// touches, a search of both faces for a crossing that isn't there.
+fn along_a_ruling(
+    a: &Surface,
+    ua: UvBox,
+    b: &Surface,
+    bb: &Bbox,
+    coefs: &dyn Fn(f64) -> (f64, f64),
+) -> Option<Vec<Poly>> {
+    let (tbox, vbox) = ua;
+    if !(vbox.0.is_finite() && vbox.1.is_finite()) || tbox.1 - tbox.0 > TAU + 1e-9 {
+        return None;
+    }
+    // β = A + B cos θ + C sin θ, from three of its values.
+    let (b0, b1, b2) = (
+        coefs(0.0).0,
+        coefs(std::f64::consts::FRAC_PI_2).0,
+        coefs(std::f64::consts::PI).0,
+    );
+    let ca = 0.5 * (b0 + b2);
+    let (cb, cc) = (b0 - ca, b1 - ca);
+    let m = cb.hypot(cc);
+    let scale = ca.abs().max(m);
+    if scale == 0.0 {
+        return None;
+    }
+    // β's zeros in a turn: two, one (double: the cosine's crest or trough at zero), or none.
+    let mut turn: Vec<f64> = Vec::new();
+    if m > 1e-12 * scale {
+        let (phi, x) = (cc.atan2(cb), -ca / m);
+        if (1.0 - x.abs()).abs() < 1e-9 {
+            turn.push(if x > 0.0 {
+                phi
+            } else {
+                phi + std::f64::consts::PI
+            });
+        } else if x.abs() < 1.0 {
+            turn.extend([phi - x.acos(), phi + x.acos()]);
+        }
+    }
+    // (Each at every turn within the box.)
+    let mut zeros: Vec<f64> = Vec::new();
+    for z in turn {
+        let mut t = z + TAU * ((tbox.0 - z) / TAU).floor();
+        while t <= tbox.1 + 1e-9 {
+            if t >= tbox.0 - 1e-9 {
+                zeros.push(t);
+            }
+            t += TAU;
+        }
+    }
+    let size = bb.diagonal().max(1.0);
+    let span = vbox.1 - vbox.0;
+    // The curve h = −γ/2β: nowhere within the boxes, or the pair is the numeric engine's.
+    // Sampled along θ (not at a zero of β, where it runs off along the ruling or through the
+    // shared one), each span between samples widened by its own length.
+    const N: usize = 512;
+    let dt = (tbox.1 - tbox.0) / N as f64;
+    let grown = bb.grow(1e-6 * size);
+    let mut last: Option<(f64, P3)> = None;
+    for i in 0..=N {
+        let t = tbox.0 + dt * i as f64;
+        if zeros.iter().any(|z| (t - z).abs() <= 0.5 * dt) {
+            last = None;
+            continue;
+        }
+        let (be, ga) = coefs(t);
+        let h = -ga / (2.0 * be);
+        if !h.is_finite() {
+            return None;
+        }
+        let q = a.eval(t, h.clamp(vbox.0 - span, vbox.1 + span));
+        let reach = last.map_or(0.0, |(h0, q0): (f64, P3)| {
+            (h - h0).abs().min(4.0 * span).max((q - q0).norm())
+        });
+        if h >= vbox.0 - reach && h <= vbox.1 + reach && grown.grow(reach).contains(&q) {
+            return None;
+        }
+        last = Some((h, q));
+    }
+    // The shared rulings: where γ is zero with β, the ruling itself within the boxes.
+    let mut polys: Vec<Poly> = Vec::new();
+    for &z in &zeros {
+        if coefs(z).1.abs() > 1e-9 * scale * size.max(span) {
+            continue;
+        }
+        const PIECES: usize = 8;
+        let pts: Vec<Pt> = (0..=PIECES)
+            .map(|i| {
+                let h = vbox.0 + span * i as f64 / PIECES as f64;
+                Pt {
+                    p: a.eval(z, h),
+                    a: (z, h),
+                    b: (0.0, 0.0),
+                }
+            })
+            .collect();
+        polys.extend(runs_in(pts, false, bb, &|_, _| true));
+    }
+    for (pts, _) in polys.iter_mut() {
+        let mut hint = None;
+        for q in pts.iter_mut() {
+            q.b = b.project(&q.p, hint);
+            hint = Some(q.b);
+        }
+    }
+    Some(polys)
+}
+
 /// A cylinder, a cone or a circle carried along a line `a` and a sphere, a cylinder, a cone or
 /// such a carried circle `b`: along `a`'s ruling at θ,
 /// `B(θ) + h·D(θ)`, `b`'s equation `xᵀMx + 2l·x + k = 0` (x from `b`'s origin) is
@@ -504,6 +618,18 @@ fn ruled(a: &Surface, ua: UvBox, b: &Surface, bb: &Bbox) -> Option<Vec<Poly>> {
     // The rulings must all cross the quadric's directions: α of one sign, away from zero (a
     // ruling along one of b's has a root at infinity, and the branches change over there).
     let dn = ruling(0.0).1.norm();
+    // Rulings that all run along one of b's own (a cylinder along a cone's ruling, as a
+    // cutter's shank lies on the cone its side sweeps): α is zero at every θ and the equation
+    // along a ruling linear.
+    if dn > 1e-12
+        && prism(a)
+        && (0..32).all(|i| coefs(TAU * i as f64 / 32.0).0.abs() <= 1e-12 * dn * dn)
+    {
+        return along_a_ruling(a, ua, b, bb, &|t| {
+            let (_, be, ga) = coefs(t);
+            (be, ga)
+        });
+    }
     let mut alpha_min = f64::INFINITY;
     let mut sign = 0.0;
     for i in 0..32 {
