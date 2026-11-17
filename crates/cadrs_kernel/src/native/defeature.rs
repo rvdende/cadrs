@@ -1079,13 +1079,7 @@ pub fn delete_faces(b: &Body, gone: &[usize]) -> Result<(Body, Vec<Vec<usize>>)>
         // The pool's faces joined where a loop runs along more than one.
         let mut root: Vec<usize> = (0..p.faces.len()).collect();
         let idx = |f: usize| p.faces.iter().position(|&g| g == f).expect("a pool's face");
-        fn find(root: &mut [usize], mut i: usize) -> usize {
-            while root[i] != i {
-                root[i] = root[root[i]];
-                i = root[i];
-            }
-            i
-        }
+        use super::math::set_of as find;
         for l in &pool_loops[pi] {
             let a = find(&mut root, idx(l.from[0]));
             for &f in &l.from[1..] {

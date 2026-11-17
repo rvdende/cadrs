@@ -82,7 +82,7 @@ pub(crate) fn chamfer(
     let chosen: std::collections::HashSet<usize> = edges.iter().copied().collect();
     // Each chamfer's plane: through the lines `d` in from the edge on each of its faces.
     for &e in edges {
-        let [f1, f2] = ef.get(e)?.as_slice() else {
+        let [f1, f2] = ef.get(e)? else {
             return None;
         };
         let (n1, n2) = (halves[*f1].n, halves[*f2].n);

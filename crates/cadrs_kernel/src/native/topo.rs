@@ -321,6 +321,44 @@ body!(pub);
 #[cfg(not(feature = "testkit"))]
 body!(pub(crate));
 
+/// The faces using each edge of a body ([`Body::edge_faces`]), in one table: `faces[e]` is
+/// edge e's, in the order its faces' loops come to it.
+#[derive(Clone, Debug, Default)]
+pub struct EdgeFaces {
+    /// Where each edge's faces start in `faces` (and, last, their count).
+    start: Vec<u32>,
+    faces: Vec<usize>,
+}
+
+impl EdgeFaces {
+    /// How many edges.
+    pub fn len(&self) -> usize {
+        self.start.len().saturating_sub(1)
+    }
+
+    /// Whether there are no edges.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Each edge's faces, in the edges' order.
+    pub fn iter(&self) -> impl Iterator<Item = &[usize]> + '_ {
+        (0..self.len()).map(move |e| &self[e])
+    }
+
+    /// Edge e's faces, or none for an edge past the table.
+    pub fn get(&self, e: usize) -> Option<&[usize]> {
+        (e < self.len()).then(|| &self[e])
+    }
+}
+
+impl std::ops::Index<usize> for EdgeFaces {
+    type Output = [usize];
+    fn index(&self, e: usize) -> &[usize] {
+        &self.faces[self.start[e] as usize..self.start[e + 1] as usize]
+    }
+}
+
 impl Body {
     /// The vertices.
     pub fn verts(&self) -> &[Vertex] {
@@ -539,16 +577,23 @@ impl Body {
     }
 
     /// For each edge, the faces using it (a seam lists its face twice).
-    pub fn edge_faces(&self) -> Vec<Vec<usize>> {
-        let mut out = vec![Vec::new(); self.edges.len()];
+    pub fn edge_faces(&self) -> EdgeFaces {
+        let mut start = vec![0u32; self.edges.len() + 1];
+        for c in self.faces.iter().flat_map(|f| f.loops.iter().flatten()) {
+            start[c.edge + 1] += 1;
+        }
+        for e in 0..self.edges.len() {
+            start[e + 1] += start[e];
+        }
+        let mut next = start.clone();
+        let mut faces = vec![0usize; start[self.edges.len()] as usize];
         for (fi, f) in self.faces.iter().enumerate() {
-            for l in &f.loops {
-                for c in l {
-                    out[c.edge].push(fi);
-                }
+            for c in f.loops.iter().flatten() {
+                faces[next[c.edge] as usize] = fi;
+                next[c.edge] += 1;
             }
         }
-        out
+        EdgeFaces { start, faces }
     }
 
     /// Faces of each solid (and the free faces of sheets as a last group).
@@ -718,13 +763,7 @@ impl Body {
     /// `faces` lists them; groups ordered by their first face).
     pub fn face_components(&self, faces: &[usize]) -> Vec<Vec<usize>> {
         let mut parent: Vec<usize> = (0..faces.len()).collect();
-        fn root(p: &mut [usize], mut i: usize) -> usize {
-            while p[i] != i {
-                p[i] = p[p[i]];
-                i = p[i];
-            }
-            i
-        }
+        use super::math::set_of as root;
         let mut by_edge: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
         for (k, &fi) in faces.iter().enumerate() {
             for c in self.faces[fi].loops.iter().flatten() {

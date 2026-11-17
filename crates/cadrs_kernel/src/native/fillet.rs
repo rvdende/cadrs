@@ -9017,14 +9017,7 @@ impl StripRails<'_> {
 /// The edges `es` grouped into the loops they close (by shared vertices).
 fn loops_of(nb: &Body, es: &[usize]) -> Vec<Vec<usize>> {
     let mut group: Vec<usize> = (0..es.len()).collect();
-    fn root(g: &mut [usize], i: usize) -> usize {
-        let mut r = i;
-        while g[r] != r {
-            r = g[r];
-        }
-        g[i] = r;
-        r
-    }
+    use super::math::set_of as root;
     for i in 0..es.len() {
         for j in i + 1..es.len() {
             let (a, c) = (&nb.edges[es[i]], &nb.edges[es[j]]);
@@ -10584,15 +10577,7 @@ pub fn chamfer_offsets_along(b: &Body, e: usize, d: [f64; 2]) -> Option<[f64; 2]
         let f = &b.faces[[f1, f2][k]];
         geom::contact(f, geom::foot(f, &q[k], None)).n
     });
-    // Least squares on a n₀ − b n₁ = q₁ − q₀ (the two lines meet in the section's plane).
-    let r = q[1] - q[0];
-    let m = nalgebra::Matrix2::new(1.0, -n[0].dot(&n[1]), -n[0].dot(&n[1]), 1.0);
-    let x = m
-        .lu()
-        .solve(&nalgebra::Vector2::new(n[0].dot(&r), -n[1].dot(&r)))?;
-    let miss = (q[0] + n[0] * x.x - q[1] - n[1] * x.y).norm();
-    (x.x * x.y > 0.0 && miss < tol::REL * (1.0 + p.coords.abs().max()))
-        .then(|| [x.x.abs(), x.y.abs()])
+    ball_offsets_within(q, n, tol::REL * (1.0 + p.coords.abs().max()))
 }
 
 /// The offsets from edge e's two faces (as [`chamfer_offsets`]) of the ball whose contacts are
@@ -10676,6 +10661,11 @@ pub fn chamfer_offsets_angled(
 /// centre on both normals, C = q₀ − k₀n₀ = q₁ − k₁n₁ (least squares; the lines meet in the
 /// section's plane), both offsets to the same side.
 fn ball_offsets(q: [P3; 2], n: [V3; 2], near: &P3) -> Option<[f64; 2]> {
+    ball_offsets_within(q, n, tol::REL_POINT * (1.0 + near.coords.abs().max()))
+}
+
+/// [`ball_offsets`], the two normals' lines meeting within `within`.
+fn ball_offsets_within(q: [P3; 2], n: [V3; 2], within: f64) -> Option<[f64; 2]> {
     let r = q[1] - q[0];
     let g = n[0].dot(&n[1]);
     let m = nalgebra::Matrix2::new(1.0, -g, -g, 1.0);
@@ -10683,8 +10673,7 @@ fn ball_offsets(q: [P3; 2], n: [V3; 2], near: &P3) -> Option<[f64; 2]> {
         .lu()
         .solve(&nalgebra::Vector2::new(n[0].dot(&r), -n[1].dot(&r)))?;
     let miss = (q[0] + n[0] * x.x - q[1] - n[1] * x.y).norm();
-    (x.x * x.y > 0.0 && miss < tol::REL_POINT * (1.0 + near.coords.abs().max()))
-        .then(|| [x.x.abs(), x.y.abs()])
+    (x.x * x.y > 0.0 && miss < within).then(|| [x.x.abs(), x.y.abs()])
 }
 
 /// [`chamfer_edges`] with each edge's ball given by its offsets from its two faces (in

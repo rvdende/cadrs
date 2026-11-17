@@ -671,7 +671,7 @@ fn a_thread_swept_along_its_helix_is_smooth_where_its_pieces_meet() {
     let mut smoothest: f64 = 1.0;
     let mut roughest: f64 = 0.0;
     for (e, faces) in b.edge_faces().iter().enumerate() {
-        let [fa, fb] = faces.as_slice() else {
+        let [fa, fb] = faces else {
             continue;
         };
         let (fa, fb) = (&b.faces()[*fa], &b.faces()[*fb]);

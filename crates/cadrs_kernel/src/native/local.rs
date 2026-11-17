@@ -76,7 +76,7 @@ fn meet(surfs: &[&Surface], p: P3) -> Option<P3> {
 /// with their new lines. Intersecting tangent surfaces is ill-conditioned, but the line is
 /// known: each of its points moved along the faces' common normal onto the new surfaces (a
 /// drafted or offset tangent pair moves together).
-fn tangent_lines(b: &Body, surfs: &[Surface], ef: &[Vec<usize>]) -> Vec<(usize, Curve)> {
+fn tangent_lines(b: &Body, surfs: &[Surface], ef: &super::topo::EdgeFaces) -> Vec<(usize, Curve)> {
     let normal = |s: &Surface, sense: bool, p: &P3| {
         let (u, v) = s.project(p, None);
         s.normal(u, v) * if sense { 1.0 } else { -1.0 }
@@ -540,7 +540,12 @@ fn reseat_seam(out: &mut Body, fi: usize) {
 ///
 /// A pole's point edge on the face turns with its seam. Returns the seams moved, whose curves
 /// are recomputed.
-fn slide_seam_ends(b: &Body, out: &mut Body, surfs: &[Surface], ef: &[Vec<usize>]) -> Vec<usize> {
+fn slide_seam_ends(
+    b: &Body,
+    out: &mut Body,
+    surfs: &[Surface],
+    ef: &super::topo::EdgeFaces,
+) -> Vec<usize> {
     let kept = |e: usize| ef[e].iter().all(|&f| surfs[f] == b.faces[f].surf);
     let mut seams = Vec::new();
     for s in 0..b.edges.len() {

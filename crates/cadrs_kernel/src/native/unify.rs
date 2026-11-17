@@ -1451,8 +1451,8 @@ pub fn merge_edges(b: &mut Body) {
             if a.v[0] == a.v[1] || c.v[0] == c.v[1] {
                 continue;
             }
-            let mut fa = ef[e1].clone();
-            let mut fc = ef[e2].clone();
+            let mut fa = ef[e1].to_vec();
+            let mut fc = ef[e2].to_vec();
             fa.sort();
             fc.sort();
             if fa != fc {

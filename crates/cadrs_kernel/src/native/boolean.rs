@@ -4199,13 +4199,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     // the other body: grouped (union-find over shared uncut pieces), each group is classified
     // once and its answer shared (faces on a coincident face keep their own test).
     let mut parent: Vec<usize> = (0..subs.len()).collect();
-    fn root(p: &mut [usize], mut i: usize) -> usize {
-        while p[i] != i {
-            p[i] = p[p[i]];
-            i = p[i];
-        }
-        i
-    }
+    use super::math::set_of as root;
     {
         // Pieces touching the other body (cuts of any face, edges lying on its faces, edges
         // merged with its edges) can separate sides: they don't join.
@@ -5236,19 +5230,7 @@ fn united(
     }
     // Union-find over the members' boxes.
     let mut group: Vec<usize> = (0..members.len()).collect();
-    fn root(group: &mut [usize], i: usize) -> usize {
-        let mut r = i;
-        while group[r] != r {
-            r = group[r];
-        }
-        let mut j = i;
-        while group[j] != r {
-            let next = group[j];
-            group[j] = r;
-            j = next;
-        }
-        r
-    }
+    use super::math::set_of as root;
     for i in 0..members.len() {
         for j in 0..i {
             if members[i].2.overlaps(&members[j].2) {

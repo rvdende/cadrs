@@ -107,7 +107,7 @@ struct Sweep<'a> {
     faces: Vec<PFace>,
     place: Place<'a>,
     /// Each edge's two faces.
-    edge_faces: Vec<Vec<usize>>,
+    edge_faces: super::topo::EdgeFaces,
 }
 
 impl Sweep<'_> {
@@ -1859,13 +1859,7 @@ fn network(tr: &Tracer, mixed: &[usize], m: usize, given: Vec<Given>, complete: 
             }
         };
         let mut root: Vec<usize> = (0..2 * given.len()).collect();
-        fn find(root: &mut [usize], mut i: usize) -> usize {
-            while root[i] != i {
-                root[i] = root[root[i]];
-                i = root[i];
-            }
-            i
-        }
+        use super::math::set_of as find;
         // (An end's places: (end, face, (u, v), point).)
         let mut places: Vec<(usize, usize, P2, P3)> = Vec::new();
         for (gi, g) in given.iter().enumerate() {
@@ -4270,7 +4264,7 @@ pub(crate) fn boundary_of_some(
                 let od = &solid.edges[o];
                 format!(
                     "edge {o} of faces {:?} is {d:.2e} off midway (its ends {:.2e}, {:.2e} from this one's)",
-                    ef[o],
+                    &ef[o],
                     (solid.verts[od.v[0]].p - solid.verts[ed.v[0]].p).norm().min((solid.verts[od.v[1]].p - solid.verts[ed.v[0]].p).norm()),
                     (solid.verts[od.v[0]].p - solid.verts[ed.v[1]].p).norm().min((solid.verts[od.v[1]].p - solid.verts[ed.v[1]].p).norm()),
                 )
@@ -4278,7 +4272,7 @@ pub(crate) fn boundary_of_some(
             eprintln!(
                 "moving sweep: edge {e} of {} faces {:?}: {:?} -> {:?}; nearest {near:?}",
                 ef[e].len(),
-                ef[e],
+                &ef[e],
                 solid.verts[ed.v[0]].p,
                 solid.verts[ed.v[1]].p
             );

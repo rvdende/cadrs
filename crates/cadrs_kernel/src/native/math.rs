@@ -289,6 +289,17 @@ pub fn seg_dist2(p: &P2, a: &P2, b: &P2) -> f64 {
     (a + ab * t - p).norm()
 }
 
+/// The set `i` is in, of sets kept as each member's parent (a set's root its own): its root,
+/// the members passed on the way joined nearer it. Two sets are joined by making one's root
+/// the other's parent.
+pub fn set_of(parent: &mut [usize], mut i: usize) -> usize {
+    while parent[i] != i {
+        parent[i] = parent[parent[i]];
+        i = parent[i];
+    }
+    i
+}
+
 /// A root of `f` between `a` and `b`, where its values `a.1` and `b.1` differ in sign: the
 /// Illinois method (regula falsi with the stale end's value halved), falling back on bisection
 /// where it gains less than a halving, to the parameter's resolution. As fast as Newton's method

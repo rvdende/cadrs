@@ -2255,7 +2255,7 @@ fn debug_draw_cone_blend() -> cadrs_kernel::Result<()> {
             eprintln!(
                 "edge {i}: degenerate {} faces {:?} {:?}",
                 e.degenerate,
-                ef[i],
+                &ef[i],
                 std::mem::discriminant(&e.curve)
             );
         }
@@ -2949,8 +2949,8 @@ fn debug_smb_fillet() {
             es.iter()
                 .map(|&e| std::mem::discriminant(&out.edges[e].curve))
                 .collect::<Vec<_>>(),
-            ef[es[0]],
-            ef[es[1]]
+            &ef[es[0]],
+            &ef[es[1]]
         );
         for &e in es {
             println!(
@@ -4526,7 +4526,7 @@ fn debug_edges_near() {
         };
         eprintln!(
             "edge {i} of faces {:?}: {d:.3e} away at t {t:.6} of {:?} (tol {:.1e}, {knots} knots); speed {:.3e}, bend {:.3e}; ends {:?} {:?}",
-            ef[i],
+            &ef[i],
             e.t,
             e.tol,
             d1.norm(),

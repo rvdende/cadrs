@@ -259,13 +259,7 @@ pub fn split_face(surf: &Surface, flip: bool, boundary: &[Vec<Arc>], cuts: &[Arc
     // Then nodes of one vertex `near` each other are one, unless an arc runs between them (an
     // edge shorter than the tolerance, both its ends one vertex, still has two).
     let mut root: Vec<usize> = (0..nodes.len()).collect();
-    fn find(root: &mut [usize], mut i: usize) -> usize {
-        while root[i] != i {
-            root[i] = root[root[i]];
-            i = root[i];
-        }
-        i
-    }
+    use super::math::set_of as find;
     let joined: std::collections::HashSet<(usize, usize)> = ends
         .iter()
         .map(|e| (e[0].min(e[1]), e[0].max(e[1])))

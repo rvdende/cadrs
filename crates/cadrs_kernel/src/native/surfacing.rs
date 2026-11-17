@@ -177,7 +177,7 @@ fn crease_fills(k: &mut NativeKernel, sheets: &[Body], spec: &ThickenSpec) -> Re
     let bb = sewn.bbox();
     let mut out = Vec::new();
     for (e, faces) in ef.iter().enumerate() {
-        let &[f1, f2] = faces.as_slice() else {
+        let &[f1, f2] = faces else {
             continue;
         };
         let edge = &sewn.edges[e];

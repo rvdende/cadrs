@@ -675,7 +675,7 @@ fn edge_infos_with(b: &Body, detail: Detail) -> Vec<EdgeInfo> {
         .par_iter()
         .enumerate()
         .map(|(ei, e)| {
-            let faces = match ef[ei].as_slice() {
+            let faces = match &ef[ei] {
                 [] => [None, None],
                 [a] => [Some(FaceId(*a as u64)), None],
                 [a, b, ..] => [Some(FaceId(*a as u64)), Some(FaceId(*b as u64))],

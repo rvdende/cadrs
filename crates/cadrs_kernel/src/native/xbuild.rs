@@ -204,14 +204,7 @@ pub fn sew_loose(
     }
     // Shells: faces connected through shared edges; closed when every edge is used twice.
     let mut parent: Vec<usize> = (0..fids.len()).collect();
-    fn find(p: &mut [usize], x: usize) -> usize {
-        let mut r = x;
-        while p[r] != r {
-            r = p[r];
-        }
-        p[x] = r;
-        r
-    }
+    use super::math::set_of as find;
     let mut users: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
     for (k, &fi) in fids.iter().enumerate() {
         for &(e, _) in xb.faces[fi].loops.iter().flatten() {
