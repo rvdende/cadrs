@@ -2956,6 +2956,67 @@ pub fn draft(k: &mut NativeKernel, body: BodyId, spec: &DraftSpec) -> Result<OpR
                     a,
                 }
             }
+            // A face extruded along the pull (a wall over a spline or an ellipse): the ruled
+            // surface through its curve on the neutral plane, each ruling the pull leant by the
+            // angle against the wall's outward normal there (the wall leans in as it rises,
+            // as a plane's does). Its sections across the pull are the curve's offsets, so it
+            // is no extrusion: a B-spline through its two rims.
+            Surface::Extrusion { c, d } => {
+                if spec.neutral_normal.is_some() {
+                    return Err(KernelError::Unsupported(
+                        "drafting an extruded face about a neutral plane at an angle to the pull",
+                    ));
+                }
+                let along = d.dot(&pull);
+                if d.cross(&pull).norm() > tol::ANGULAR * d.norm() || along.abs() < tol::TINY {
+                    return Err(KernelError::Unsupported(
+                        "drafting an extruded face not along the pull",
+                    ));
+                }
+                let ((u0, u1), _) = super::heal_split::face_uv_box(&b, fi).ok_or(
+                    KernelError::Unsupported("drafting an extruded face with no extent"),
+                )?;
+                let whole = c.is_periodic() && (u1 - u0).abs() >= TAU - tol::ROUNDOFF;
+                let sign = if f.sense { 1.0 } else { -1.0 };
+                let reach = 4.0 * b.bbox().diagonal().max(tol::POINT);
+                let (sa, ca) = spec.angle.sin_cos();
+                // The two rims' points at a parameter of the curve.
+                let rims = |u: f64| -> [P3; 2] {
+                    let p = c.point(u);
+                    let on = p + d * ((spec.neutral - p).dot(&pull) / along);
+                    let ruling = pull * ca - f.surf.normal(u, 0.0) * (sign * sa);
+                    [on - ruling * reach, on + ruling * reach]
+                };
+                // Sixteen stations to each smooth piece of the curve.
+                const EACH: usize = 16;
+                let mut at: Vec<f64> = Vec::new();
+                for w in c.pieces(u0, u1).windows(2) {
+                    at.extend((0..EACH).map(|i| w[0] + (w[1] - w[0]) * i as f64 / EACH as f64));
+                }
+                if !whole {
+                    at.push(u1);
+                }
+                let rim = |k: usize| -> Option<super::nurbs::NurbsCurve> {
+                    let pts: Vec<P3> = at.iter().map(|&u| rims(u)[k]).collect();
+                    if whole {
+                        // (Its parameters with the one where it closes.)
+                        let mut closed = at.clone();
+                        closed.push(u1);
+                        super::nurbs::NurbsCurve::interpolate_periodic(&pts, &closed, 3)
+                    } else {
+                        Some(super::nurbs::NurbsCurve::interpolate(
+                            &pts, &at, 3, None, None,
+                        ))
+                    }
+                };
+                let (Some(low), Some(high)) = (rim(0), rim(1)) else {
+                    return Err(KernelError::Unsupported("drafting this extruded face"));
+                };
+                Surface::Nurbs(std::sync::Arc::new(super::loft_build::skin(
+                    &[low, high],
+                    &[0.0, 1.0],
+                )))
+            }
             other => {
                 if crate::native::env_flag!("CADRS_DRAFT_DEBUG") {
                     eprintln!("draft: unsupported face {fi}: {:?}", other.kind());

@@ -1966,3 +1966,57 @@ fn a_draft_goes_through_a_round_between_its_faces() {
         out.history.modified
     );
 }
+
+/// The wall of a column over an ellipse (half-axes 6 and 4, 10 tall) drafted five degrees
+/// about its foot: each section across the pull is the ellipse's inward offset by its height's
+/// share, of area A − L d + π d² (A the ellipse's area, L its perimeter), so the volume is
+/// 10 A − 50 L t + (1000/3) π t², t = tan 5°. The wall is no extrusion any more: a ruled
+/// surface through its foot.
+#[test]
+fn a_draft_leans_a_wall_extruded_over_an_ellipse() {
+    let mut k = NativeKernel::new();
+    let floor = Plane {
+        origin: Point3::origin(),
+        x_dir: Vector3::x_axis(),
+        normal: Vector3::z_axis(),
+    };
+    let column = k
+        .extrude_with(
+            &Profile::of(floor, vec![Loop::ellipse([0.0, 0.0], 6.0, 4.0)]),
+            &ExtrudeSpec::blind(Vector3::z_axis(), 10.0),
+        )
+        .unwrap()
+        .first()
+        .unwrap();
+    let walls: Vec<FaceId> = {
+        let b = k.get(column).unwrap();
+        (0..b.faces.len())
+            .filter(|&f| !matches!(b.faces[f].surf, Surface::Plane { .. }))
+            .map(|f| FaceId(f as u64))
+            .collect()
+    };
+    assert!(!walls.is_empty());
+    let spec = DraftSpec {
+        faces: walls,
+        angle: 5f64.to_radians(),
+        pull: Vector3::z_axis(),
+        neutral: Point3::origin(),
+        neutral_normal: None,
+        tangent_propagation: false,
+    };
+    let out = k.draft(column, &spec).unwrap().bodies[0];
+    let b = k.get(out).unwrap();
+    assert!(b.check().is_empty(), "{:?}", b.check());
+    let t = 5f64.to_radians().tan();
+    let (a, c) = (6.0f64, 4.0f64);
+    let n = 200_000;
+    let perimeter: f64 = (0..n)
+        .map(|i| {
+            let u = std::f64::consts::TAU * (i as f64 + 0.5) / n as f64;
+            (a * u.sin()).hypot(c * u.cos()) * std::f64::consts::TAU / n as f64
+        })
+        .sum();
+    let want = 10.0 * PI * a * c - 50.0 * perimeter * t + 1000.0 / 3.0 * PI * t * t;
+    let v = k.mass_properties(out).unwrap().volume;
+    assert!((v - want).abs() < 1e-6 * want, "volume {v}, want {want}");
+}
