@@ -1392,7 +1392,7 @@ impl Tracer<'_> {
                         segs.last_mut().unwrap().pts.push(self.entry(a, &qe));
                         return (segs, End::Edge);
                     }
-                    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+                    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
                         eprintln!(
                             "  walk of faces ({a}, {b}) stuck at {x:?} ({:?}, {:?}; merging {merging})",
                             uv_of(&q, 0),
@@ -1414,7 +1414,7 @@ impl Tracer<'_> {
                         segs.last_mut().unwrap().pts.push(self.entry(a, &qe));
                         return (segs, End::Edge);
                     }
-                    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+                    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
                         eprintln!(
                             "  walk of face {a} with itself: its places merge at {p:?}, {r:?}, away from its boundary"
                         );
@@ -1510,7 +1510,7 @@ impl Tracer<'_> {
                 // The pair that goes on: corrected onto its curve, a step along it (either way,
                 // that along the way it came first) on both faces.
                 let mut found = None;
-                let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+                let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
                 'options: for (na, nb, nq) in options {
                     if self.given.contains(&(na.min(nb), na.max(nb))) {
                         // (Given whole: the curve on from here is in the network already.)
@@ -1597,7 +1597,7 @@ impl Tracer<'_> {
                     }
                 }
                 let Some((na, nb, nq, nvel)) = found else {
-                    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+                    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
                         let close: Vec<String> = self
                             .cands
                             .iter()
@@ -2060,7 +2060,7 @@ fn network(tr: &Tracer, mixed: &[usize], m: usize, given: Vec<Given>, complete: 
                 .min_by(|p, q| p.0.total_cmp(&q.0))
         });
         let Some((_, h, t)) = best else {
-            if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+            if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
                 let ls: Vec<String> = tr
                     .oracle
                     .leasts(&x)
@@ -2123,7 +2123,7 @@ fn network(tr: &Tracer, mixed: &[usize], m: usize, given: Vec<Given>, complete: 
         if matches!(end, End::Failed) {
             net.trouble.push("a curve's walk failed".into());
         }
-        if std::env::var_os("CADRS_SWEEP_DEBUG").is_some()
+        if crate::native::env_flag!("CADRS_SWEEP_DEBUG")
             && let Some(last) = segs.last()
             && let Some(p) = last.pts.last()
         {
@@ -2165,7 +2165,7 @@ fn network(tr: &Tracer, mixed: &[usize], m: usize, given: Vec<Given>, complete: 
                     Some((_, vel)) if vel.dot(&way) >= 0.0 => 1.0,
                     _ => -1.0,
                 };
-                if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+                if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
                     eprintln!("  continuing faces ({f}, {g}) from vertex {v} at {p:?}");
                 }
                 let (segs, end) = tr.walk(f, g, q, dir, &p);
@@ -2249,7 +2249,7 @@ fn network(tr: &Tracer, mixed: &[usize], m: usize, given: Vec<Given>, complete: 
                 // itself), else the nearest that works.
                 let reach = 1e-3 * size;
                 let mut best: Option<(f64, usize, Q)> = None;
-                let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+                let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
                 let consider = |j: usize, ug: P2, best: &mut Option<(f64, usize, Q)>| {
                     let g = &tr.cands[j];
                     let why: &str;
@@ -2538,7 +2538,7 @@ fn network(tr: &Tracer, mixed: &[usize], m: usize, given: Vec<Given>, complete: 
         }
     }
     if drop.iter().any(|d| *d) {
-        if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+        if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
             eprintln!(
                 "  {} stretches traced twice dropped",
                 drop.iter().filter(|d| **d).count()
@@ -2812,7 +2812,7 @@ fn assemble(
     let near = near.max(tol);
     let clock = web_time::Instant::now();
     let lap = |what: &str| {
-        if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+        if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
             eprintln!(
                 "  joining: {what} by {:.0} ms",
                 clock.elapsed().as_secs_f64() * 1e3
@@ -2952,7 +2952,7 @@ fn assemble(
         }
     }
     super::unify::compact(&mut b);
-    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
         // (The edges left with one face: where the faces don't close.)
         let ef = b.edge_faces();
         for (e, ed) in b.edges.iter().enumerate() {
@@ -3031,7 +3031,7 @@ fn assemble(
                 merged.check().is_empty()
             };
         lap("checked");
-        if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+        if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
             eprintln!(
                 "moving sweep: {} faces, {} with the pieces of one surface made whole ({})",
                 b.faces.len(),
@@ -3372,7 +3372,7 @@ pub(crate) fn cut_face(
         }
         if let Some((_, e, t)) = best {
             splits.entry(e).or_default().push((t, v));
-        } else if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+        } else if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
             // (A cut's end inside the face: fine where another cut ends there too.)
             let others = ends
                 .iter()
@@ -3482,7 +3482,7 @@ pub(crate) fn cut_face(
         boundary.extend(pieces);
     }
     let r = super::split::split_face(&f.surf, !f.sense, std::slice::from_ref(&boundary), &arcs);
-    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() && !arcs.is_empty() && r.faces.len() <= 1 {
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") && !arcs.is_empty() && r.faces.len() <= 1 {
         let desc = |a: &Arc| {
             let (p, q) = (a.uv_at(0.0), a.uv_at(1.0));
             format!(
@@ -3726,7 +3726,7 @@ fn refused(why: String) -> KernelError {
 /// The solid `sw`'s polyhedron sweeps (see the module docs).
 fn swept(sw: &Sweep, size: f64) -> Result<Body> {
     use rayon::prelude::*;
-    let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+    let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
     let t0 = web_time::Instant::now();
     let place = sw.place;
     // The chunks: between events, each turning at most CHUNK_TURN.
@@ -3837,7 +3837,7 @@ pub(crate) fn boundary_of_some(
     whole: Option<&Whole>,
 ) -> Result<Body> {
     use rayon::prelude::*;
-    let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+    let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
     let t0 = web_time::Instant::now();
     let faces: Vec<Cand> = faces.into_iter().map(Cand::new).collect();
     let t_built = web_time::Instant::now();

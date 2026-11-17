@@ -424,9 +424,9 @@ fn needs_ball(b: &Body, kinds: &[Dihedral], v: usize, rounded: Dihedral) -> bool
 /// `acc` (op) `piece`; a failure says which piece (`what`) with `CADRS_OFFSET_DEBUG`, and
 /// leaves both bodies in `CADRS_DUMP_DIR`.
 fn combine(acc: &Body, piece: &Body, op: BoolOp, what: &dyn Fn() -> String) -> Result<Body> {
-    let debug = std::env::var_os("CADRS_OFFSET_DEBUG").is_some();
+    let debug = crate::native::env_flag!("CADRS_OFFSET_DEBUG");
     let dump = || {
-        if std::env::var_os("CADRS_DUMP_DIR").is_some() {
+        if crate::native::env_flag!("CADRS_DUMP_DIR") {
             crate::native::kernel::dump("offset-target", acc, &format!("{op:?} {}", what()));
             crate::native::kernel::dump("offset-tool", piece, &format!("{op:?} {}", what()));
         }
@@ -864,7 +864,7 @@ fn combine_all(mut acc: Body, mut todo: Vec<(Body, String)>, op: BoolOp) -> Resu
             match combine(&acc, &piece, op, &|| what.clone()) {
                 Ok(r) => {
                     acc = r;
-                    if std::env::var("CADRS_SHELL_DEBUG").is_ok() {
+                    if crate::native::env_flag!("CADRS_SHELL_DEBUG") {
                         eprintln!(
                             "after {what}: {:.6} solids {}",
                             crate::native::mass::body_volume(&acc),
@@ -891,7 +891,7 @@ fn combine_all(mut acc: Body, mut todo: Vec<(Body, String)>, op: BoolOp) -> Resu
 }
 
 pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpResult> {
-    let b = (**k.get(body)?).clone();
+    let b = std::sync::Arc::clone(k.get(body)?);
     let t = spec.thickness;
     if !(t > 0.0) {
         return Err(KernelError::InvalidParameter(
@@ -921,7 +921,7 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
             "The shell's walls would intersect themselves; reduce the thickness".into(),
         )
     };
-    let cur = Tracked::of(b.clone());
+    let cur = Tracked::of((*b).clone());
     let v0 = crate::native::mass::body_volume(&b);
     // Walls whose surfaces the whole body lies within (a box's sides, a bore, a ball's sphere):
     // the cavity is where the moved surfaces' insides meet in the body, as far as the openings.
@@ -930,7 +930,7 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
     } else {
         cavity_of_supports(&b, &remove, t)
     };
-    if std::env::var("CADRS_SHELL_DEBUG").is_ok() {
+    if crate::native::env_flag!("CADRS_SHELL_DEBUG") {
         eprintln!(
             "shell: cavity of supporting walls: {:?}",
             supported
@@ -964,7 +964,7 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
                     .collect();
                 (b2, remove)
             }
-            None => (b.clone(), remove.clone()),
+            None => ((*b).clone(), remove.clone()),
         };
         // The cavity: kept faces moved in by t, removed faces moved out past the body, or,
         // failing that (a spline wall's offset doesn't reach that far), where they are (the
@@ -1002,6 +1002,10 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
             })
         };
         let regions = || cavity_by_regions(&b, &remove, t);
+        // (The cavity flush with the openings, made once: for its volume below and as the
+        // second way.)
+        let flush_made: std::cell::OnceCell<Result<Body>> = std::cell::OnceCell::new();
+        let flush_cavity = || flush_made.get_or_init(|| sharp(&flush)).clone();
         let ways: Vec<Box<dyn Fn() -> Result<Body>>> = if (concave || crossing) && !spec.sharp {
             // A prism opened at a cap, or hollowed: its outline's inset, rounded about the
             // reflex corners, extruded from the kept caps' insets to past the removed ones.
@@ -1012,7 +1016,7 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
         } else {
             vec![
                 Box::new(|| sharp(&dist)),
-                Box::new(|| sharp(&flush)),
+                Box::new(flush_cavity),
                 Box::new(regions),
             ]
         };
@@ -1041,7 +1045,7 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
             })
         });
         let flush_volume = if moved && past_openings {
-            sharp(&flush)
+            flush_cavity()
                 .ok()
                 .map(|c| crate::native::mass::body_volume(&c))
         } else {
@@ -1254,7 +1258,7 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
             match sharp() {
                 Ok(r) => r,
                 Err(e) => {
-                    if std::env::var("CADRS_SHELL_DEBUG").is_ok() {
+                    if crate::native::env_flag!("CADRS_SHELL_DEBUG") {
                         eprintln!("shell: sharp outward walls failed ({e}); rounded");
                     }
                     rounded()?
@@ -1285,7 +1289,7 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
         }
     }
     let v1 = crate::native::mass::body_volume(&result.body);
-    if std::env::var("CADRS_SHELL_DEBUG").is_ok() {
+    if crate::native::env_flag!("CADRS_SHELL_DEBUG") {
         eprintln!(
             "shell: body {v0} result {v1} solids {} faces {}",
             result.body.solids.len(),
@@ -1568,8 +1572,7 @@ fn walls_cross(b: &Body, remove: &[usize], t: f64) -> bool {
         .filter_map(|(i, f)| match &f.surf {
             Surface::Plane { f: fr } => {
                 let n = fr.x.cross(&fr.y) * if f.sense { 1.0 } else { -1.0 };
-                let sub = crate::native::kernel::subset(b, &[i], false);
-                Some((i, fr.o, n, sub.bbox()))
+                Some((i, fr.o, n, b.face_bbox(i)))
             }
             _ => None,
         })

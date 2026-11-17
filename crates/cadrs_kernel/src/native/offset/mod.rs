@@ -112,7 +112,7 @@ pub(crate) fn without_vanishing(
     match crate::native::defeature::delete_faces(b, &gone) {
         Ok(r) => Some(r),
         Err(e) => {
-            if std::env::var_os("CADRS_SHELL_DEBUG").is_some() {
+            if crate::native::env_flag!("CADRS_SHELL_DEBUG") {
                 eprintln!("the vanishing faces {gone:?} can't be deleted: {e}");
             }
             None
@@ -189,7 +189,7 @@ pub fn offset(k: &mut NativeKernel, body: BodyId, spec: &OffsetSpec) -> Result<O
                 round::offset_rounded(&b2, &d2)
             }
             .map_err(|again| {
-                if std::env::var_os("CADRS_SHELL_DEBUG").is_some() {
+                if crate::native::env_flag!("CADRS_SHELL_DEBUG") {
                     eprintln!("offset without the vanishing faces: {again}");
                 }
                 e

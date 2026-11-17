@@ -32,7 +32,7 @@ use crate::{KernelError, Result};
 
 /// Whether `CADRS_DEFEATURE_DEBUG` asks for the tracer's steps on stderr.
 fn debug() -> bool {
-    std::env::var_os("CADRS_DEFEATURE_DEBUG").is_some()
+    crate::native::env_flag!("CADRS_DEFEATURE_DEBUG")
 }
 
 fn failed(why: impl Into<String>) -> KernelError {

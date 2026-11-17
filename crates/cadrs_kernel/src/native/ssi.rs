@@ -59,7 +59,7 @@ pub fn surface_surface(
     bb: &Bbox,
 ) -> Vec<IntCurve> {
     let r = surface_surface_full(a, ua, b, ub, bb);
-    if std::env::var_os("CADRS_SSI_DEBUG").is_some() {
+    if crate::native::env_flag!("CADRS_SSI_DEBUG") {
         eprintln!(
             "surface_surface: {} crossing (length {:.4}), {} tangent, {} coincident, points {:?}",
             r.curves.len(),
@@ -435,7 +435,7 @@ fn extrusion_along(
             _ => false,
         }
     };
-    if std::env::var_os("CADRS_SSI_DEBUG").is_some() {
+    if crate::native::env_flag!("CADRS_SSI_DEBUG") {
         eprintln!(
             "extrusion along: {} roots {:?}, touching {:?}, d {:?}, s {:?}",
             roots.len(),
@@ -1746,7 +1746,7 @@ fn numeric(
         k += 1;
         keep[k - 1]
     });
-    let dbg = std::env::var("CADRS_SSI_DEBUG").is_ok();
+    let dbg = crate::native::env_flag!("CADRS_SSI_DEBUG");
     if dbg {
         eprintln!(
             "numeric: {} polylines before joining: {:?}",
@@ -2216,7 +2216,7 @@ fn fit_curve(
             })
             .collect();
         let ins: Vec<(usize, super::ssi_numeric::Pt)> = found.into_iter().flatten().collect();
-        if std::env::var_os("CADRS_SSI_DEBUG").is_some() {
+        if crate::native::env_flag!("CADRS_SSI_DEBUG") {
             eprintln!(
                 "fit round {_round}: {} points, {} to insert",
                 pts.len(),

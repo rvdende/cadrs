@@ -46,8 +46,8 @@ pub fn face_blend(k: &mut NativeKernel, spec: &FaceBlendSpec) -> Result<OpResult
     let (b1, f1) = (spec.side1.0, spec.side1.1.0 as usize);
     let (b2, f2) = (spec.side2.0, spec.side2.1.0 as usize);
     let bodies: Vec<BodyId> = if b1 == b2 { vec![b1] } else { vec![b1, b2] };
-    let one = (**k.get(b1)?).clone();
-    let two = (**k.get(b2)?).clone();
+    let one = std::sync::Arc::clone(k.get(b1)?);
+    let two = std::sync::Arc::clone(k.get(b2)?);
     if f1 >= one.faces.len() || f2 >= two.faces.len() {
         return Err(invalid("A face to blend no longer exists"));
     }
@@ -251,13 +251,14 @@ pub fn face_blend(k: &mut NativeKernel, spec: &FaceBlendSpec) -> Result<OpResult
     // The walls: each split along its rail, what lies between the rail and the edge gone.
     let mut walls: Vec<(Body, Vec<usize>, BodyId)> = Vec::new();
     let mut kept: Vec<Vec<usize>> = Vec::new();
-    for (k, (mut b, fi, ei, id)) in [(one, f1, e1, b1), (two, f2, e2, b2)]
+    for (k, (b, fi, ei, id)) in [(one, f1, e1, b1), (two, f2, e2, b2)]
         .into_iter()
         .enumerate()
     {
         if k == 1 && b1 == b2 {
             break;
         }
+        let mut b = (*b).clone();
         let mut from: Vec<usize> = (0..b.faces.len()).collect();
         let n_edges = b.edges.len();
         let pad = 0.02 * (tb - ta);

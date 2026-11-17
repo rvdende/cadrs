@@ -1196,7 +1196,7 @@ fn replace_surfaces_checked(
                     best = Some((d, ic.c));
                 }
             }
-            if std::env::var_os("CADRS_DRAFT_DEBUG").is_some() {
+            if crate::native::env_flag!("CADRS_DRAFT_DEBUG") {
                 eprintln!(
                     "edge {e} faces {fs:?} ({:?} × {:?}): {:?}",
                     sa.kind(),
@@ -1603,7 +1603,7 @@ fn replace_surfaces_checked(
     prof.mark("check");
     prof.report(&format!("replace surfaces ({} faces)", out.faces.len()));
     if !errs.is_empty() {
-        if std::env::var_os("CADRS_DRAFT_DEBUG").is_some() {
+        if crate::native::env_flag!("CADRS_DRAFT_DEBUG") {
             for (fi, f) in out.faces.iter().enumerate() {
                 for l in &f.loops {
                     for c in l {
@@ -1942,7 +1942,7 @@ pub fn replace_faces(
     body: BodyId,
     faces: &[FaceReplacement],
 ) -> Result<OpResult> {
-    let b = (**k.get(body)?).clone();
+    let b = std::sync::Arc::clone(k.get(body)?);
     let mut surfs: Vec<Surface> = b.faces.iter().map(|f| f.surf.clone()).collect();
     let mut domains: Vec<Option<UvBox>> = vec![None; b.faces.len()];
     for r in faces {
@@ -2058,7 +2058,7 @@ pub fn move_faces(
     faces: &[FaceId],
     motion: &Motion,
 ) -> Result<OpResult> {
-    let b = (**k.get(body)?).clone();
+    let b = std::sync::Arc::clone(k.get(body)?);
     if faces.is_empty() {
         return Err(KernelError::InvalidParameter(
             "Move face needs faces to move".into(),
@@ -2466,7 +2466,7 @@ pub fn tangent_closure(b: &Body, mut seed: Vec<usize>) -> Vec<usize> {
 /// Draft: the faces turned about the neutral plane by the angle, leaning in as they rise along
 /// the pull direction.
 pub fn draft(k: &mut NativeKernel, body: BodyId, spec: &DraftSpec) -> Result<OpResult> {
-    let b = (**k.get(body)?).clone();
+    let b = std::sync::Arc::clone(k.get(body)?);
     let pull = spec.pull.into_inner();
     let mut surfs: Vec<Surface> = b.faces.iter().map(|f| f.surf.clone()).collect();
     let mut faces: Vec<usize> = Vec::new();
@@ -2574,7 +2574,7 @@ pub fn draft(k: &mut NativeKernel, body: BodyId, spec: &DraftSpec) -> Result<OpR
                 }
             }
             other => {
-                if std::env::var_os("CADRS_DRAFT_DEBUG").is_some() {
+                if crate::native::env_flag!("CADRS_DRAFT_DEBUG") {
                     eprintln!("draft: unsupported face {fi}: {:?}", other.kind());
                 }
                 return Err(KernelError::Unsupported("drafting this kind of face"));

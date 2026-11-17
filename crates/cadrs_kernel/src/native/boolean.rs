@@ -2484,7 +2484,7 @@ fn uv_gap(b: &Body) -> Option<String> {
                 if off(pa.x - pb.x, f.surf.u_periodic()) * mu > tol
                     || off(pa.y - pb.y, f.surf.v_periodic()) * mv > tol
                 {
-                    if std::env::var_os("CADRS_BOOL_DEBUG").is_some() {
+                    if crate::native::env_flag!("CADRS_BOOL_DEBUG") {
                         eprintln!(
                             "gap: face {fi} {:?} metric {:?}: coedge {k} edge {} {:?} ends {:?} -> next edge {} {:?} starts {:?}; 3D {:?} / {:?}",
                             f.surf.kind(),
@@ -2529,7 +2529,7 @@ fn snap_to(a: &mut Body, b: &Body, tol: f64) -> bool {
         .iter()
         .enumerate()
         .filter(|(_, f)| matches!(f.surf, Surface::Plane { .. } | Surface::Cylinder { .. }))
-        .map(|(i, _)| (i, super::kernel::subset(b, &[i], false).bbox().grow(1e-3)))
+        .map(|(i, _)| (i, b.face_bbox(i).grow(1e-3)))
         .collect();
     if targets.is_empty() {
         return false;
@@ -2855,8 +2855,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                     &ca.curve, ca.t[0], ca.t[1], &cb.curve, cb.t[0], cb.t[1], within,
                 )
             });
-            if t_pair.elapsed().as_secs_f64() > 0.01 && std::env::var_os("CADRS_EF_DEBUG").is_some()
-            {
+            if t_pair.elapsed().as_secs_f64() > 0.01 && crate::native::env_flag!("CADRS_EF_DEBUG") {
                 let kind = |c: &Curve| match c {
                     Curve::Nurbs(n) => {
                         format!("spline of degree {}, {} poles", n.degree, n.cps.len())
@@ -2996,7 +2995,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             )
     });
     let t_meets = web_time::Instant::now();
-    let timed = std::env::var_os("CADRS_EF_DEBUG").is_some();
+    let timed = crate::native::env_flag!("CADRS_EF_DEBUG");
     let meet_timed = |pr: &(usize, usize)| -> (Meet, f64) {
         let t = web_time::Instant::now();
         let m = meet(pr);
@@ -5439,7 +5438,7 @@ fn boolean_opts(
             }
         }
         for &t in tools {
-            let tb = (**k.get(t)?).clone();
+            let tb = std::sync::Arc::clone(k.get(t)?);
             let r = boolean_bodies_with(&cur, &tb, op, opts)?;
             origin = r
                 .from

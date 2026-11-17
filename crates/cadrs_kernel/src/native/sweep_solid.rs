@@ -574,7 +574,7 @@ fn cut_torus_whole(
     {
         return Some(c);
     }
-    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
         eprintln!("swept cut: the torus's whole sweep wouldn't cut from the target");
     }
     None
@@ -965,7 +965,7 @@ fn with_slices<R>(n: usize, f: impl FnOnce() -> R) -> R {
 
 /// [`sweep_solid`], an endless sweep's outline on the slices [`with_slices`] set.
 fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> Result<OpResult> {
-    let b = (**k.get(body)?).clone();
+    let b = std::sync::Arc::clone(k.get(body)?);
     if let SolidMotion::Planar { normal, steps } = motion {
         return super::sweep_planar::sweep_planar(k, &b, normal.into_inner(), steps);
     }
@@ -995,9 +995,7 @@ fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> R
         // (And a torus slid: where it leans far enough that its outline folds, its leading
         // faces' sweeps cross one another and still sew into a solid, one too large.)
         let mut as_torus = None;
-        if steps.len() >= 2
-            || slid_torus(&b, steps)
-            || std::env::var_os("CADRS_TUBE_FIRST").is_some()
+        if steps.len() >= 2 || slid_torus(&b, steps) || crate::native::env_flag!("CADRS_TUBE_FIRST")
         {
             as_torus = super::sweep_tube::torus(k, &b, &super::sweep_tube::Motion::Steps(steps));
             if let Some(Ok(r)) = as_torus {
@@ -1125,7 +1123,7 @@ fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> R
         op: "solid sweep",
         why: "the body's outline has a slice it misses".into(),
     })?;
-    if std::env::var_os("CADRS_SWEEP_SOLID_DEBUG").is_some() {
+    if crate::native::env_flag!("CADRS_SWEEP_SOLID_DEBUG") {
         for (name, side) in [("far", &ol.far), ("near", &ol.near)] {
             let mut turns: Vec<(f64, usize)> = Vec::new();
             for i in 1..side.len() - 1 {
@@ -1436,7 +1434,7 @@ fn contour(
     t0: web_time::Instant,
 ) -> Result<OpResult> {
     use rayon::prelude::*;
-    let prof = std::env::var("CADRS_PROFILE").is_ok();
+    let prof = crate::native::env_flag!("CADRS_PROFILE");
     let at = |i: usize, j: usize, l: usize| lo + V3::new(i as f64 * h, j as f64 * h, l as f64 * h);
     let idx = |i: usize, j: usize, l: usize| (l * n[1] + j) * n[0] + i;
     let ijl = |g: usize| (g % n[0], (g / n[0]) % n[1], g / (n[0] * n[1]));
@@ -1660,7 +1658,7 @@ pub fn offset_meshed(k: &mut NativeKernel, body: BodyId, distance: f64) -> Resul
             "The offset distance isn't finite".into(),
         ));
     }
-    let b = (**k.get(body)?).clone();
+    let b = std::sync::Arc::clone(k.get(body)?);
     let md =
         super::mesh_distance::MeshDistance::new(&b, 1e-3 * b.bbox().diagonal().max(tol::POINT))
             .ok_or(KernelError::Unsupported(
@@ -2006,7 +2004,7 @@ fn cut_in_pieces_where(
                         .ok()
                         .filter(|c| c.bodies.len() == 1 && (!checked || k.sound(c.bodies[0])))
                         .map(|c| c.bodies);
-                    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+                    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
                         eprintln!(
                             "cut in pieces: piece {i}: cut {:.1} ms, checked {:.1} ms",
                             (t_cut - t_swept).as_secs_f64() * 1e3,
@@ -2064,7 +2062,7 @@ fn cut_by_leads(
     steps: &[RigidStep],
 ) -> Option<OpResult> {
     use super::surface::Surface;
-    let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+    let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
     // (`CADRS_SWEEP_LEADS=0`: every half turn cut in turn, as without this, to compare.)
     if std::env::var("CADRS_SWEEP_LEADS").is_ok_and(|v| v == "0") {
         return None;
@@ -2277,7 +2275,7 @@ fn cut_by_pieces(
 ) -> Option<Vec<BodyId>> {
     // (Pieces that only touch glued first: one cut each group, none along a tangency.)
     let pieces = super::sweep_faces::glued_groups(k, pieces);
-    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
         eprintln!("swept cut: {} groups of pieces", pieces.len());
     }
     let keep: Vec<BodyId> = targets.to_vec();
@@ -2306,7 +2304,7 @@ fn cut_by_pieces(
                     next.extend(c.bodies);
                 }
                 r => {
-                    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+                    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
                         match &r {
                             Ok(c) => eprintln!(
                                 "swept cut: a piece's cut isn't sound: {:?}",
@@ -2364,7 +2362,7 @@ pub fn cut_swept_indexed(
             "an indexed cut by a motion of two turns",
         ));
     };
-    let b = (**k.get(tool)?).clone();
+    let b = std::sync::Arc::clone(k.get(tool)?);
     let _ = axis;
     match super::sweep_generate::cut(k, target, &b, steps, (copies > 1).then_some(copies)) {
         Some(r) => r,
@@ -2382,7 +2380,7 @@ pub fn cut_swept(
     tool: BodyId,
     motion: &SolidMotion,
 ) -> Result<OpResult> {
-    let b = (**k.get(tool)?).clone();
+    let b = std::sync::Arc::clone(k.get(tool)?);
     // A motion whose ends keep clear of the target: within it the endless motion (a whole turn,
     // a screw without end) fills what this one does, and is made exactly as a whole (the solid
     // of revolution, the screw's helical sweep).
@@ -2538,7 +2536,7 @@ pub fn cut_swept(
         return Ok(r);
     }
     // Else meshed: inside the target, in none of the tool's places.
-    let t = (**k.get(target)?).clone();
+    let t = std::sync::Arc::clone(k.get(target)?);
     let tdist =
         super::mesh_distance::MeshDistance::new(&t, 1e-3 * t.bbox().diagonal().max(tol::POINT))
             .ok_or(KernelError::Unsupported(
@@ -2597,7 +2595,7 @@ fn end_mill_along(
     path: &[crate::PathCurve],
     up: V3,
 ) -> Option<OpResult> {
-    let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+    let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
     let up = up.try_normalize(tol::TINY)?;
     let segs = super::sweep::path::path_segments(k, path).ok()?;
     let p0 = segs.first()?.start();
@@ -3064,7 +3062,7 @@ fn path_screw(frames: &PathFrames, size: f64) -> Option<(P3, f64, super::sweep_f
         let (dx, dy) = (moves[i].dot(&ex), moves[i].dot(&ey));
         let off = ((1.0 - c) * ox + s_ * oy - dx).hypot(-s_ * ox + (1.0 - c) * oy - dy);
         if off > 1e-6 * size {
-            if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+            if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
                 eprintln!("path screw: the axis moves ({off:.2e} at {i} of {n})");
             }
             return None;
@@ -3115,7 +3113,7 @@ fn cut_rising_screw(
             // (After the first, the solid where a half turn starts is inside the one before.)
             Ok(p) => all.extend(p.into_iter().skip(usize::from(i > 0))),
             Err(e) => {
-                if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+                if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
                     eprintln!("path screw: part {i} of {n}: {e}");
                 }
                 return None;
@@ -3159,7 +3157,7 @@ fn path_sweep_exact(
         return None;
     }
     let r = super::sweep_planar::sweep_planar_by(k, b, up, &|t| frames.place(t));
-    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some()
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG")
         && let Err(e) = &r
     {
         eprintln!("path sweep: the planar sweep failed: {e}");

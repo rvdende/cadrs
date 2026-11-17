@@ -88,7 +88,7 @@ fn run(
     let mut origin: Vec<Vec<(BodyId, usize)>> =
         (0..cur.faces.len()).map(|i| vec![(target, i)]).collect();
     for &t in tools {
-        let tb = (**k.get(t)?).clone();
+        let tb = std::sync::Arc::clone(k.get(t)?);
         let r = combine(&cur, &tb, op, opts)?;
         origin = r
             .from
@@ -481,7 +481,7 @@ fn solid_minus_sheet(a: &Body, b: &Body) -> Result<BoolOut> {
     pair_at_cuts(&mut out, &from);
     boolean::assemble_shells(&mut out)?;
     super::unify::split_shared_vertices(&mut out);
-    if std::env::var_os("CADRS_BOOL_DEBUG").is_some() {
+    if crate::native::env_flag!("CADRS_BOOL_DEBUG") {
         let ef = out.edge_faces();
         eprintln!(
             "split by a sheet: {} faces, shells {:?}, edge uses {:?}",

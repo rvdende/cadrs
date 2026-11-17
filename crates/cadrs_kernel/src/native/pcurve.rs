@@ -646,7 +646,7 @@ fn fitted(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Curve {
             }
         }
         if ins.is_empty() || ts.len() > 4096 {
-            if !ins.is_empty() && std::env::var("CADRS_PCURVE_DEBUG").is_ok() {
+            if !ins.is_empty() && crate::native::env_flag!("CADRS_PCURVE_DEBUG") {
                 eprintln!(
                     "pcurve: no fit after {} points ({} off) of {c:?} on {s:?}",
                     ts.len(),

@@ -366,7 +366,7 @@ fn thicken_sheet(k: &mut NativeKernel, sheets: &[Body], spec: &ThickenSpec) -> O
             },
         )
         .map_err(|e| {
-            if std::env::var_os("CADRS_SHELL_DEBUG").is_some() {
+            if crate::native::env_flag!("CADRS_SHELL_DEBUG") {
                 eprintln!("thicken: the capped sheet's shell: {e}");
             }
             e
@@ -931,7 +931,7 @@ pub fn sew_faces(mut b: Body, tol: f64) -> Result<Body> {
                         pc = Curve::Nurbs(std::sync::Arc::new(
                             super::nurbs::NurbsCurve::interpolate(&pts, &params, 3, None, None),
                         ));
-                        if std::env::var_os("CADRS_SEW_TRACE").is_some() {
+                        if crate::native::env_flag!("CADRS_SEW_TRACE") {
                             let after = (0..=64)
                                 .map(|k| {
                                     let t = ed.t[0] + (ed.t[1] - ed.t[0]) * k as f64 / 64.0;
@@ -1089,14 +1089,14 @@ pub fn delete_faces(k: &mut NativeKernel, body: BodyId, remove: &[FaceId]) -> Re
     if remove.is_empty() {
         return Err(invalid("Select the faces to delete"));
     }
-    let b = (**k.get(body)?).clone();
+    let b = std::sync::Arc::clone(k.get(body)?);
     let gone: Vec<usize> = remove.iter().map(|f| f.0 as usize).collect();
     if gone.iter().any(|&f| f >= b.faces.len()) {
         return Err(KernelError::InvalidParameter("unknown face".into()));
     }
     // A sheet's faces are taken away, leaving the hole open (Onshape's Leave open).
     if b.solids.is_empty() {
-        return delete_sheet_faces(k, body, b, &gone);
+        return delete_sheet_faces(k, body, (*b).clone(), &gone);
     }
     let ef = b.edge_faces();
     // A face goes whole: with the faces that carry on its surface across an edge (a round
@@ -1161,7 +1161,7 @@ pub fn delete_faces(k: &mut NativeKernel, body: BodyId, remove: &[FaceId]) -> Re
             history,
         });
     }
-    let mut out = b.clone();
+    let mut out = (*b).clone();
     for fi in 0..out.faces.len() {
         if gone.contains(&fi) {
             continue;

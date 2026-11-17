@@ -1333,7 +1333,7 @@ impl Kernel for NativeKernel {
             }
         }
         // With CADRS_DUMP_DIR set, a failed boolean leaves its inputs there.
-        if r.is_err() && std::env::var("CADRS_DUMP_DIR").is_ok() {
+        if r.is_err() && crate::native::env_flag!("CADRS_DUMP_DIR") {
             dump("boolean-target", self.get(target)?, &format!("{op:?}"));
             for t in tools {
                 dump("boolean-tool", self.get(*t)?, &format!("{op:?}"));
@@ -2297,7 +2297,7 @@ impl Kernel for NativeKernel {
 impl NativeKernel {
     /// With `CADRS_DUMP_DIR` set, reports an operation's outcome (solids, or the error).
     fn dumped(&self, r: &Result<OpResult>) -> Result<OpResult> {
-        if std::env::var("CADRS_DUMP_DIR").is_ok() {
+        if crate::native::env_flag!("CADRS_DUMP_DIR") {
             match r {
                 Ok(o) => {
                     let solids: Vec<usize> = o
@@ -2323,7 +2323,7 @@ impl NativeKernel {
 /// With `CADRS_PROFILE` set, reports calls slower than 50 ms.
 fn slow(what: &str, t: web_time::Instant, b: &Body) {
     let e = t.elapsed();
-    if e.as_millis() >= 50 && std::env::var("CADRS_PROFILE").is_ok() {
+    if e.as_millis() >= 50 && crate::native::env_flag!("CADRS_PROFILE") {
         let nurbs = b
             .faces
             .iter()

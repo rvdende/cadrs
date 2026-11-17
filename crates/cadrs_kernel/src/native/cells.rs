@@ -28,7 +28,7 @@ fn bop(k: &mut NativeKernel, op: BoolOp, a: BodyId, b: BodyId) -> Result<Option<
 
 /// A body's connected solids, each a body of its own.
 fn pieces(k: &mut NativeKernel, b: BodyId) -> Result<Vec<BodyId>> {
-    let body = (**k.get(b)?).clone();
+    let body = std::sync::Arc::clone(k.get(b)?);
     let parts = super::exchange::split_into_solids(&body);
     if parts.len() <= 1 {
         return Ok(vec![b]);

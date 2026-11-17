@@ -1164,7 +1164,7 @@ fn merge_group(b: &mut Body, g: &[usize]) -> Option<Face> {
         polygon_area(&pts)
     };
     let wrapping: Vec<usize> = (0..chains.len()).filter(|&i| windings[i] != 0).collect();
-    if std::env::var("CADRS_BOOL_DEBUG").is_ok() {
+    if crate::native::env_flag!("CADRS_BOOL_DEBUG") {
         eprintln!(
             "merge group {g:?}: {} chains, windings {windings:?}",
             chains.len()
@@ -1689,7 +1689,7 @@ pub fn planarize(b: &mut Body) -> bool {
                 dev = dev.max((q - o).dot(&n).abs());
             }
         }
-        if std::env::var("CADRS_BOOL_DEBUG").is_ok() {
+        if crate::native::env_flag!("CADRS_BOOL_DEBUG") {
             let net = pts
                 .iter()
                 .map(|p| (p - o).dot(&n).abs())

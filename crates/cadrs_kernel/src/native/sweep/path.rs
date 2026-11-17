@@ -622,7 +622,7 @@ pub(crate) fn sweep_law_tagged(
         ));
     }
     let segs = path_segments(k, &spec.path)?;
-    if std::env::var("CADRS_SWEEP_DEBUG").is_ok() {
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
         for (i, g) in segs.iter().enumerate() {
             eprintln!(
                 "path {i}: {:?} {:?} -> {:?} ({} long)",
@@ -790,11 +790,11 @@ pub(crate) fn sweep_spines(
     solid: bool,
 ) -> Result<Tagged> {
     let frames = frames.into();
-    let prof = std::env::var("CADRS_PROFILE").is_ok();
+    let prof = crate::native::env_flag!("CADRS_PROFILE");
     let t0 = web_time::Instant::now();
     let path_len: usize = sp.iter().map(|s| s.0.len()).sum();
     let mut pieces: Vec<Tagged> = Vec::new();
-    if std::env::var("CADRS_SWEEP_DEBUG").is_ok() {
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
         for (spine, backward) in &sp {
             eprintln!(
                 "spine of {} segments, backward {backward}, from {:?}",
@@ -828,7 +828,7 @@ pub(crate) fn sweep_spines(
                 }
             });
         }
-        if std::env::var("CADRS_SWEEP_DEBUG").is_ok() {
+        if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
             for t in &these {
                 eprintln!(
                     "piece: volume {} faces {} solids {} check {:?}",
@@ -920,7 +920,7 @@ pub(crate) fn sweep_spines(
             match glue(&acc, &p) {
                 Some(g) => g,
                 None => {
-                    if std::env::var("CADRS_SWEEP_DEBUG").is_ok() {
+                    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
                         eprintln!("join: glue failed, united");
                     }
                     crate::native::features::tagged_union(&acc, &p)?
@@ -929,7 +929,7 @@ pub(crate) fn sweep_spines(
         } else {
             compound(acc, p)
         };
-        if std::env::var("CADRS_SWEEP_DEBUG").is_ok() {
+        if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
             eprintln!(
                 "join: volume {} faces {}",
                 crate::native::mass::body_volume(&acc.body),

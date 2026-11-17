@@ -569,7 +569,7 @@ pub fn face_slab(b: &Body, fi: usize, d: f64) -> Result<Body> {
     // vertices and curves), as a full check measures them.
     let size = body.bbox().diagonal();
     body.fit_tolerances_searched(1e-5 * (1.0 + size));
-    if std::env::var_os("CADRS_SLAB_DEBUG").is_some() {
+    if crate::native::env_flag!("CADRS_SLAB_DEBUG") {
         eprintln!(
             "slab of face {fi} ({:?}) by {d}: {warnings:?}",
             f.surf.kind()
@@ -975,7 +975,7 @@ fn wedge_slab(
     xb.solid(vec![shell]);
     let (mut body, warnings) = xb.finish();
     body.fit_tolerances_searched(1e-5 * (1.0 + size));
-    if std::env::var_os("CADRS_SLAB_DEBUG").is_some() {
+    if crate::native::env_flag!("CADRS_SLAB_DEBUG") {
         eprintln!(
             "wedge of face {fi} ({:?}) by {d}: {warnings:?}",
             f.surf.kind()

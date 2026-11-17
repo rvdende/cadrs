@@ -405,7 +405,7 @@ fn splits(cx: &Ctx, e: &Piece, size: f64) -> Vec<f64> {
             for fi in 0..b.faces.len() {
                 let n = out.len();
                 face_meets(cx, b, fi, e, &ts, &mut out);
-                if std::env::var("CADRS_EBOP_DEBUG").is_ok() && out.len() > n {
+                if crate::native::env_flag!("CADRS_EBOP_DEBUG") && out.len() > n {
                     eprintln!(
                         "face {fi}: splits {:?}",
                         out[n..].iter().map(|&t| e.point(t)).collect::<Vec<_>>()

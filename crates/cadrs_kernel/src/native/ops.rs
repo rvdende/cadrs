@@ -100,7 +100,7 @@ pub fn split(
     source: u64,
 ) -> Result<OpResult> {
     let (o, n) = tool_plane(k, tool)?;
-    let a = (**k.get(body)?).clone();
+    let a = std::sync::Arc::clone(k.get(body)?);
     let bb = a.bbox();
     let hs = half_space_box(o, n, &bb)?;
     // The two sides side by side (each a boolean of the part with the half space).
@@ -179,7 +179,7 @@ pub fn split_faces(
         return super::curve_split::split_faces_by_curves(k, body, faces, curves);
     }
     let (o, n) = tool_plane(k, tool)?;
-    let a = (**k.get(body)?).clone();
+    let a = std::sync::Arc::clone(k.get(body)?);
     let bb = a.bbox();
     let sheet = plane_sheet(
         o,

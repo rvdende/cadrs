@@ -70,7 +70,7 @@ const SMOOTH_DEPTH: usize = 32;
 
 /// Progress on stderr with `CADRS_FILLET_DEBUG=1`.
 fn debug(what: impl FnOnce() -> String) {
-    if std::env::var_os("CADRS_FILLET_DEBUG").is_some() {
+    if crate::native::env_flag!("CADRS_FILLET_DEBUG") {
         thread_local!(static START: web_time::Instant = web_time::Instant::now());
         let ms = START.with(|s| s.elapsed().as_millis());
         eprintln!("fillet [{ms} ms]: {}", what());

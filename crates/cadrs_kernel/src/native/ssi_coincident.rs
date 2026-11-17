@@ -91,7 +91,7 @@ pub fn region_boundary(a: &Surface, ua: UvBox, b: &Surface, ub: UvBox, tol: f64)
                     (d.c.point(d.c.closest(&p, d.t0, d.t1)) - p).norm() < 10.0 * tol
                 })
             });
-            if std::env::var_os("CADRS_SSI_DEBUG").is_some() {
+            if crate::native::env_flag!("CADRS_SSI_DEBUG") {
                 eprintln!(
                     "coincident side: {:?} .. {:?} length {:.4}{}",
                     c.c.point(c.t0),

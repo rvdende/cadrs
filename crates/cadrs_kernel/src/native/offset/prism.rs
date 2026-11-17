@@ -285,7 +285,7 @@ pub(crate) fn wire_slot(
     };
     // (The loop round the most ground is the outline; the rest are holes in it, whichever way
     // they run.)
-    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
         eprintln!(
             "slot: {} loops, areas {:?}",
             loops.len(),
