@@ -540,7 +540,7 @@ fn crossings(
             V3::zeros()
         }
     };
-    let turning = ef.flat.then_some(&section_rate as &dyn Fn(&P3, &V3) -> V3);
+    let turning = ef.flat.then_some(&section_rate as geom::Turning);
     let mut out = geom::rail_crossings(f, k, side, bd, near, reach, plane, turning);
     // A varying radius: each crossing again with the radius where it is. The crossing with the
     // radius at spine parameter t lies at F(t); secant steps on F(t) − t find where they agree.

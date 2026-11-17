@@ -413,11 +413,16 @@ pub struct Boundary<'a> {
     pub t: [f64; 2],
 }
 
+/// How a flat ball's section plane turns as its point moves: the plane's normal's rate for
+/// the point's velocity.
+pub type Turning<'a> = &'a dyn Fn(&P3, &V3) -> V3;
+
 /// Where the rail on face `f[side]` (the ball touching `f[0]` and `f[1]`, offsets `k`) crosses
 /// boundary curve `bd` of that face: each crossing's parameter on the boundary and the ball
 /// there. Found from the sign changes of the other offset's signed distance along the boundary
 /// (sampled), each refined by Newton on (t, u, v of the other face) as SMLib's
 /// `SmFilletSolver::RailEdgeuseIntersect` (SmFilletSolver.cpp) does.
+#[allow(clippy::too_many_arguments)]
 pub fn rail_crossings(
     f: [&Face; 2],
     k: [f64; 2],
@@ -426,7 +431,7 @@ pub fn rail_crossings(
     near: &P3,
     reach: f64,
     plane: Option<&dyn Fn(&P3) -> V3>,
-    turning: Option<&dyn Fn(&P3, &V3) -> V3>,
+    turning: Option<Turning>,
 ) -> Vec<(f64, Ball)> {
     let other = 1 - side;
     let (fs, fo) = (f[side], f[other]);

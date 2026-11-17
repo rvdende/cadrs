@@ -1127,8 +1127,51 @@ impl NurbsCurve {
             return Err(outside());
         }
         let p = self.degree;
+        let mult = self
+            .knots
+            .iter()
+            .filter(|k| (**k - u).abs() < 1e-14)
+            .count();
+        // Away from a knot, in one pass: only the degree's poles and one about `u` change, by
+        // de Boor's triangle (its left edge the left part's last poles, its right edge the
+        // right part's first), where inserting the knot again and again copied every pole
+        // each time.
+        if mult == 0 {
+            let k = find_span(self.cps.len() - 1, p, u, &self.knots);
+            let mut d: Vec<H> = self.cps[k - p..=k].to_vec();
+            let mut left: Vec<H> = Vec::with_capacity(k + 1);
+            left.extend_from_slice(&self.cps[..k - p]);
+            left.push(d[0]);
+            let mut right: Vec<H> = vec![d[p]];
+            for r in 1..=p {
+                for j in (r..=p).rev() {
+                    let lo = self.knots[k - p + j];
+                    let a = (u - lo) / (self.knots[k + 1 + j - r] - lo);
+                    d[j] = d[j] * a + d[j - 1] * (1.0 - a);
+                }
+                left.push(d[r]);
+                right.push(d[p]);
+            }
+            right.reverse();
+            right.extend_from_slice(&self.cps[k + 1..]);
+            let mut lk = self.knots[..=k].to_vec();
+            lk.extend(std::iter::repeat_n(u, p + 1));
+            let mut rk = vec![u; p + 1];
+            rk.extend_from_slice(&self.knots[k + 1..]);
+            return Ok((
+                Self {
+                    degree: p,
+                    knots: lk,
+                    cps: left,
+                },
+                Self {
+                    degree: p,
+                    knots: rk,
+                    cps: right,
+                },
+            ));
+        }
         let mut c = self.clone();
-        let mult = c.knots.iter().filter(|k| (**k - u).abs() < 1e-14).count();
         for _ in mult..p + 1 {
             c = c.insert_knot(u);
         }
@@ -2116,6 +2159,53 @@ impl IsoV<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A curve split in one pass has the poles and knots splitting it by inserting the knot
+    /// again and again gives, to the bit: a cubic and a quintic, rational too, at places
+    /// across their spans.
+    #[test]
+    fn a_split_in_one_pass_is_the_split_by_insertion() {
+        let by_insertion = |c: &NurbsCurve, u: f64| {
+            let p = c.degree;
+            let mut x = c.clone();
+            for _ in 0..p + 1 {
+                x = x.insert_knot(u);
+            }
+            let idx = x.knots.iter().position(|k| *k == u).unwrap();
+            (
+                (x.knots[..idx + p + 1].to_vec(), x.cps[..idx].to_vec()),
+                (x.knots[idx..].to_vec(), x.cps[idx..].to_vec()),
+            )
+        };
+        for (p, n) in [(3usize, 9usize), (5, 12), (2, 4)] {
+            let mut knots = vec![0.0; p + 1];
+            knots.extend((1..n - p).map(|i| i as f64 * 0.37));
+            knots.extend(vec![(n - p) as f64 * 0.37; p + 1]);
+            let cps: Vec<H> = (0..n)
+                .map(|i| {
+                    let t = i as f64;
+                    let w = 1.0 + 0.3 * (t * 1.7).sin();
+                    H::new(w * t.cos() * 3.0, w * (t * 0.7).sin() * 2.0, w * t * 0.1, w)
+                })
+                .collect();
+            let c = NurbsCurve {
+                degree: p,
+                knots,
+                cps,
+            };
+            let (a, b) = c.range();
+            for i in 1..40 {
+                let u = a + (b - a) * (i as f64 + 0.123) / 40.0;
+                if c.knots.iter().any(|k| (*k - u).abs() < 1e-14) {
+                    continue;
+                }
+                let (l, r) = c.split(u).unwrap();
+                let (wl, wr) = by_insertion(&c, u);
+                assert_eq!((l.knots, l.cps), wl, "degree {p} at {u}");
+                assert_eq!((r.knots, r.cps), wr, "degree {p} at {u}");
+            }
+        }
+    }
 
     /// A patch cut from the poles it hangs on is the patch cut from every row and column whole,
     /// to the bit: ranges inside spans, on knots (single and double) and at the surface's ends.
