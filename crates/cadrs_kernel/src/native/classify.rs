@@ -15,16 +15,28 @@ pub enum InFace {
 
 /// A face's loops sampled as uv polygons (for in-face tests).
 pub fn face_polygons(body: &Body, f: &Face) -> Vec<Vec<P2>> {
-    f.loops.iter().map(|l| loop_polygon(body, l)).collect()
+    let fine = polygon_fineness(&f.surf);
+    f.loops
+        .iter()
+        .map(|l| loop_polygon(body, l, fine))
+        .collect()
+}
+
+/// How far, in (u, v), a face's polygons may run from a B-spline p-curve: a hundredth of a
+/// micron's hundred on the surface (1e-5 mm), by its metric. (Finer costs every in-face test
+/// its points: at 1e-6 a raster of 112 passes took a quarter longer.)
+fn polygon_fineness(s: &Surface) -> f64 {
+    let (mu, mv) = s.metric();
+    1e-5 / mu.max(mv).max(tol::TINY)
 }
 
 /// One of a face's loops sampled as a uv polygon ([`face_polygons`]).
-fn loop_polygon(body: &Body, l: &[super::topo::Coedge]) -> Vec<P2> {
+fn loop_polygon(body: &Body, l: &[super::topo::Coedge], fine: f64) -> Vec<P2> {
     let mut pts = Vec::new();
     for c in l {
         let e = &body.edges[c.edge];
         let (a, b) = co_range(e, c.fwd);
-        let n = coedge_steps(&c.pc, a, b);
+        let n = coedge_steps(&c.pc, a, b, fine);
         for i in 0..n {
             let t = a + (b - a) * i as f64 / n as f64;
             let p = c.pc.point(t);
@@ -38,9 +50,21 @@ fn loop_polygon(body: &Body, l: &[super::topo::Coedge]) -> Vec<P2> {
 /// line, else by its parameter's span. (The polygon then runs up to a circle's sagitta inside
 /// it, 2e-6 of its radius over a whole turn: a point between the two is put right by the
 /// circle itself, [`ArcPiece`].)
-fn coedge_steps(pc: &super::curve::Curve, a: f64, b: f64) -> usize {
+fn coedge_steps(pc: &super::curve::Curve, a: f64, b: f64, fine: f64) -> usize {
     match pc {
         super::curve::Curve::Line { .. } => 1,
+        // A B-spline by how it bends, not by how its parameter runs: a chord over a step h
+        // of the parameter is off the curve by |C″| h²/8 at most, C″ taken at a few places
+        // along it. (256 points to a unit of parameter gave a spline over [0, 1] 256 whatever
+        // its length, and one over [0, 1000] the most.)
+        super::curve::Curve::Nurbs(_) => {
+            const LOOKS: usize = 16;
+            let bend = (0..=LOOKS)
+                .map(|i| pc.d2(a + (b - a) * i as f64 / LOOKS as f64).2.norm())
+                .fold(0.0, f64::max);
+            let steps = (b - a).abs() * (bend / (8.0 * fine.max(tol::TINY))).sqrt();
+            (steps.ceil() as usize).clamp(16, 4096)
+        }
         _ => (((b - a).abs() * 256.0).ceil() as usize).clamp(16, 4096),
     }
 }
@@ -107,7 +131,7 @@ fn loop_arcs(body: &Body, l: &[super::topo::Coedge]) -> Vec<ArcPiece> {
                 return None;
             };
             let (a, b) = co_range(&body.edges[c.edge], c.fwd);
-            let n = coedge_steps(&c.pc, a, b);
+            let n = coedge_steps(&c.pc, a, b, 0.0);
             Some(ArcPiece {
                 c: P2::new(o.x, o.y),
                 x: V2::new(x.x, x.y),
@@ -218,7 +242,7 @@ pub fn face_polygons_kept(body: &Body, f: &Face) -> KeptPolygons {
     let mut made: Vec<(u128, KeptLoop)> = Vec::new();
     for (i, slot) in kept.iter_mut().enumerate() {
         if slot.is_none() {
-            let poly = loop_polygon(body, &f.loops[i]);
+            let poly = loop_polygon(body, &f.loops[i], polygon_fineness(&f.surf));
             let mut pb = poly_boxes(std::slice::from_ref(&poly), &f.surf)
                 .pop()
                 .expect("a box per polygon");
