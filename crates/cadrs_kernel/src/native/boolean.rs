@@ -405,8 +405,18 @@ pub fn curve_bbox(c: &Curve, t0: f64, t1: f64) -> Bbox {
                 }
             }
         }
-        Curve::Nurbs(_) => {
-            let n = c.to_nurbs(lo, hi);
+        Curve::Nurbs(whole) => {
+            // (Over its whole range the curve's own poles, with no piece of it made: a
+            // fitted edge's every box, asked for many times an operation.)
+            let (a0, a1) = whole.range();
+            let all = lo <= a0 + tol::ROUNDOFF_FINE && hi >= a1 - tol::ROUNDOFF_FINE;
+            let piece;
+            let n: &super::nurbs::NurbsCurve = if all {
+                whole
+            } else {
+                piece = c.to_nurbs(lo, hi);
+                &piece
+            };
             if n.cps.iter().all(|h| h.w > 0.0) {
                 for h in &n.cps {
                     bb.add(&super::nurbs::dehom(h));
@@ -1114,6 +1124,8 @@ fn boolean_bodies_counted(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> 
     // the retries up to a hundred times it), so a part a few microns across would have its
     // features taken for coincident. Scaled by a power of two, which changes no mantissa, the
     // boolean runs at an ordinary size and its result is scaled back exactly.
+    // (The inputs' boxes, asked for by every stage below, made once.)
+    let _boxes = super::topo::keep_boxes(&[a, b]);
     let size = a.bbox().diagonal().max(b.bbox().diagonal());
     if size > 0.0 && size < SMALL_MODEL {
         let k = (WORKING_SIZE / size).log2().floor().exp2();
@@ -1270,6 +1282,7 @@ fn apart_set_aside(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Option<
 /// handed back flagged ([`hand_back`]); a later run's is kept, should no run after it do
 /// better.
 fn ladder(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Result<BoolOut> {
+    let _boxes = super::topo::keep_boxes(&[a, b]);
     // The first result refused for crossing faces, made over as an accepted one would be.
     let mut refused: Option<BoolOut> = None;
     // A run's result: `Ok` when sound, else the refused one (with `clean` false) or the error.
@@ -5262,7 +5275,7 @@ fn finish(
 }
 
 /// A union's body with each face's origin (member, face).
-type Unioned = (Body, Vec<Vec<(BodyId, usize)>>);
+pub(crate) type Unioned = (Body, Vec<Vec<(BodyId, usize)>>);
 
 /// The union of `members` (each a body with its reach, the target or a tool, in the order
 /// given), as islands: a member apart from every island so far is an island of its own, one
@@ -5411,11 +5424,24 @@ fn boolean_opts(
         // and cut at once, not one cut after another, each over all the cuts before it (a golf
         // ball's 62 dimples: 1.35 s against 0.1 s). One by one where that fails.
         if op == BoolOp::Subtract && tools.len() > 1 {
-            let members = tools
-                .iter()
-                .map(|&t| Ok((t, (**k.get(t)?).clone())))
-                .collect::<Result<Vec<_>>>()?;
-            if let Ok((tool, tool_from)) = united(members, opts)
+            // (The union kept of these tools standing this way to one another, if a batch
+            // before was these moved on: `sweep_cache`.)
+            let kept = super::sweep_cache::united(k, tools, opts.tol.point);
+            let made = match kept {
+                Some(u) => Ok(u),
+                None => {
+                    let members = tools
+                        .iter()
+                        .map(|&t| Ok((t, (**k.get(t)?).clone())))
+                        .collect::<Result<Vec<_>>>()?;
+                    let u = united(members, opts);
+                    if let Ok((body, from)) = &u {
+                        super::sweep_cache::keep_united(k, tools, opts.tol.point, body, from);
+                    }
+                    u
+                }
+            };
+            if let Ok((tool, tool_from)) = made
                 && let Ok(r) = boolean_bodies_with(&cur, &tool, op, opts)
             {
                 origin = r

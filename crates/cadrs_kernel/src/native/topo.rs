@@ -649,8 +649,18 @@ impl Body {
     }
 
     /// A box sure to hold the body: its vertices, its edges' exact boxes and its faces' boxes
-    /// (curved faces bulge past their edges).
+    /// (curved faces bulge past their edges). Made once for a body whose boxes are being kept
+    /// ([`keep_boxes`]).
     pub fn bbox(&self) -> Bbox {
+        if let Some(Some(bb)) = kept_box(self, |k| k.all) {
+            return bb;
+        }
+        let bb = self.bbox_made();
+        kept_box(self, |k| k.all = Some(bb));
+        bb
+    }
+
+    fn bbox_made(&self) -> Bbox {
         let mut bb = Bbox::empty();
         for v in &self.verts {
             bb.add(&v.p);
@@ -669,8 +679,22 @@ impl Body {
     }
 
     /// A box sure to hold face `fi`: its edges' exact boxes and its surface's box over the
-    /// rectangle holding its p-curves.
+    /// rectangle holding its p-curves. Made once for a body whose boxes are being kept
+    /// ([`keep_boxes`]).
     pub fn face_bbox(&self, fi: usize) -> Bbox {
+        if let Some(Some(bb)) = kept_box(self, |k| k.faces.get(fi).copied().flatten()) {
+            return bb;
+        }
+        let bb = self.face_bbox_made(fi);
+        kept_box(self, |k| {
+            if let Some(slot) = k.faces.get_mut(fi) {
+                *slot = Some(bb);
+            }
+        });
+        bb
+    }
+
+    fn face_bbox_made(&self, fi: usize) -> Bbox {
         let f = &self.faces[fi];
         let mut bb = Bbox::empty();
         let mut uv = Bbox::empty();
@@ -3343,5 +3367,73 @@ mod tests {
             b.check(),
             vec!["solid 0 encloses a volume of -6.000e3 (its faces point in)".to_string()]
         );
+    }
+}
+
+/// A body whose boxes are being kept on this thread, and those made so far.
+struct KeptBody {
+    body: *const Body,
+    all: Option<Bbox>,
+    faces: Vec<Option<Bbox>>,
+}
+
+thread_local! {
+    /// The bodies whose boxes are kept on this thread ([`keep_boxes`]), innermost last.
+    static KEPT_BOXES: std::cell::RefCell<Vec<KeptBody>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// What `f` makes of `body`'s kept boxes, if they are being kept.
+fn kept_box<R>(body: &Body, f: impl FnOnce(&mut KeptBody) -> R) -> Option<R> {
+    KEPT_BOXES.with(|k| {
+        let mut k = k.borrow_mut();
+        k.iter_mut()
+            .rev()
+            .find(|e| std::ptr::eq(e.body, body))
+            .map(f)
+    })
+}
+
+/// While it lives, [`Body::bbox`] and [`Body::face_bbox`] of the bodies it was made for are
+/// made once on this thread ([`keep_boxes`]).
+pub(crate) struct KeptBoxes<'a> {
+    kept: usize,
+    /// (The bodies stay borrowed, so none of them changes or moves while its boxes are kept;
+    /// and the keeping ends on the thread it began on.)
+    _bodies: std::marker::PhantomData<(&'a Body, *const ())>,
+}
+
+impl Drop for KeptBoxes<'_> {
+    fn drop(&mut self) {
+        KEPT_BOXES.with(|k| {
+            let mut k = k.borrow_mut();
+            let left = k.len().saturating_sub(self.kept);
+            k.truncate(left);
+        });
+    }
+}
+
+/// Keeps the boxes of `bodies` on this thread until the returned guard is dropped: an
+/// operation asks for a body's box, and its faces', many times over (each a pass over every
+/// edge, a B-spline edge's by its poles), and a body borrowed for the operation's length gives
+/// the same each time. Guards end in the order opposite to the one they began in.
+pub(crate) fn keep_boxes<'a>(bodies: &[&'a Body]) -> KeptBoxes<'a> {
+    let kept = KEPT_BOXES.with(|k| {
+        let mut k = k.borrow_mut();
+        let mut kept = 0;
+        for &b in bodies {
+            if !k.iter().any(|e| std::ptr::eq(e.body, b)) {
+                k.push(KeptBody {
+                    body: b,
+                    all: None,
+                    faces: vec![None; b.faces.len()],
+                });
+                kept += 1;
+            }
+        }
+        kept
+    });
+    KeptBoxes {
+        kept,
+        _bodies: std::marker::PhantomData,
     }
 }

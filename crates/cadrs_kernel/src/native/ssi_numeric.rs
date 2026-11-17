@@ -806,31 +806,54 @@ fn coincident(ctx: &Ctx, ca: &Cell, cb: &Cell) -> bool {
     true
 }
 
+/// What a search keeps of a cell it has met, by the cell's parameters: its halves once it has
+/// been split, and whether it is clear of the other surface (outside the region searched, or
+/// kept off the surface by its distance). A cell is paired with many of the other surface's,
+/// and neither depends on which.
+#[derive(Default)]
+struct Kept {
+    halves: Option<[Cell; 2]>,
+    clear: Option<bool>,
+}
+
+/// The cells one surface's side of a search has met ([`Kept`]).
+type Met = std::collections::HashMap<[u64; 4], Kept>;
+
+fn met<'m>(cells: &'m mut Met, c: &Cell) -> &'m mut Kept {
+    cells
+        .entry([
+            c.uv.u.0.to_bits(),
+            c.uv.u.1.to_bits(),
+            c.uv.v.0.to_bits(),
+            c.uv.v.1.to_bits(),
+        ])
+        .or_default()
+}
+
 /// Searches a starting pair of cells (depth first, in a fixed order).
 fn search(ctx: &Ctx, ca: Cell, cb: Cell) -> Found {
     let mut out = Found::default();
     let mut stack = vec![(ca, cb)];
+    let (mut met_a, mut met_b) = (Met::default(), Met::default());
+    // A true distance from the middle of a cell's box to the other surface bounds how near the
+    // cell can come to it.
+    let culled = |dom: &Dom, c: &Cell| {
+        dom.exact
+            && dom
+                .s
+                .signed_distance(&c.bb.center())
+                .is_some_and(|d| d.abs() > 0.5 * c.size + ctx.tol)
+    };
+    let clear = |cells: &mut Met, c: &Cell, other: &Dom| -> bool {
+        *met(cells, c).clear.get_or_insert_with(|| {
+            !c.bb.overlaps(&ctx.region) || culled(other, c) || off_exact(other, c, ctx.tol)
+        })
+    };
     while let Some((ca, cb)) = stack.pop() {
         out.pairs += 1;
         if !ca.bb.grow(ctx.tol).overlaps(&cb.bb)
-            || !ca.bb.overlaps(&ctx.region)
-            || !cb.bb.overlaps(&ctx.region)
-        {
-            continue;
-        }
-        // A true distance from the middle of one cell's box to the other surface bounds how
-        // near the cell can come to it.
-        let culled = |dom: &Dom, c: &Cell| {
-            dom.exact
-                && dom
-                    .s
-                    .signed_distance(&c.bb.center())
-                    .is_some_and(|d| d.abs() > 0.5 * c.size + ctx.tol)
-        };
-        if culled(&ctx.b, &ca)
-            || culled(&ctx.a, &cb)
-            || off_exact(&ctx.b, &ca, ctx.tol)
-            || off_exact(&ctx.a, &cb, ctx.tol)
+            || clear(&mut met_a, &ca, &ctx.b)
+            || clear(&mut met_b, &cb, &ctx.a)
             || apart(&ca, &cb, ctx.tol)
         {
             continue;
@@ -857,11 +880,15 @@ fn search(ctx: &Ctx, ca: Cell, cb: Cell) -> Found {
             continue;
         }
         if ca.size >= cb.size {
-            let [c1, c2] = split(ctx.a.s, &ca);
+            let [c1, c2] = *met(&mut met_a, &ca)
+                .halves
+                .get_or_insert_with(|| split(ctx.a.s, &ca));
             stack.push((c2, cb));
             stack.push((c1, cb));
         } else {
-            let [c1, c2] = split(ctx.b.s, &cb);
+            let [c1, c2] = *met(&mut met_b, &cb)
+                .halves
+                .get_or_insert_with(|| split(ctx.b.s, &cb));
             stack.push((ca, c2));
             stack.push((ca, c1));
         }

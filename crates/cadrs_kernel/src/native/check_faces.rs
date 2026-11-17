@@ -98,6 +98,8 @@ pub(crate) fn face_crossings_in(
                 .collect()
         })
         .collect();
+    // (The body's box below is its faces' again: each face's made once.)
+    let _kept = super::topo::keep_boxes(&[b]);
     let boxes: Vec<Bbox> = (0..n)
         .map(|fi| {
             if shell_of[fi].is_some() {
