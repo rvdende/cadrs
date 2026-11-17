@@ -346,6 +346,65 @@ impl NativeKernel {
         }
     }
 
+    /// An operation on one body, run at a working size where the body is small: a body no
+    /// larger than a boolean's small model ([`super::boolean::SMALL_MODEL`]) is scaled up by
+    /// a power of two (which changes no mantissa), `op` runs on that body with its lengths
+    /// scaled as much (`op`'s last argument), and the result is scaled back, its history
+    /// naming the body given. The kernel's merge distances and many of its guards are lengths
+    /// in mm: on a part a few microns across they are the part's own size, as in a boolean.
+    fn at_working_size(
+        &mut self,
+        body: BodyId,
+        op: impl FnOnce(&mut Self, BodyId, f64) -> Result<OpResult>,
+    ) -> Result<OpResult> {
+        let b = Arc::clone(self.get(body)?);
+        let size = b.bbox().diagonal();
+        if !(size > 0.0 && size < super::boolean::SMALL_MODEL) {
+            return op(self, body, 1.0);
+        }
+        let k = (super::boolean::WORKING_SIZE / size).log2().floor().exp2();
+        let scaled = |by: f64| Affine {
+            m: nalgebra::Matrix3::identity() * by,
+            t: V3::zeros(),
+        };
+        let big = self.insert(b.transformed(&scaled(k)));
+        if let Some(c) = self.colors.get(&body.0).cloned() {
+            self.colors.insert(big.0, c);
+        }
+        let r = op(self, big, k);
+        self.bodies.remove(&big.0);
+        self.colors.remove(&big.0);
+        let mut r = r?;
+        for id in &mut r.bodies {
+            let small = self.get(*id)?.transformed(&scaled(1.0 / k));
+            let colors = self.colors.remove(&id.0);
+            self.bodies.remove(&id.0);
+            *id = self.insert(small);
+            if let Some(c) = colors {
+                self.colors.insert(id.0, c);
+            }
+        }
+        // (The history's input was the scaled body: the one given.)
+        let given = |x: &mut BodyId| {
+            if *x == big {
+                *x = body;
+            }
+        };
+        for (_, o) in &mut r.history.generated {
+            match o {
+                Origin::FromEdge { body, .. } | Origin::FromVertex { body, .. } => given(body),
+                _ => {}
+            }
+        }
+        for (_, from) in &mut r.history.modified {
+            given(&mut from.body);
+        }
+        for from in &mut r.history.deleted {
+            given(&mut from.body);
+        }
+        Ok(r)
+    }
+
     /// Gives an operation's result the colours of the input faces its faces continue (the
     /// history's `modified` faces); new faces have none. Only for a result of one body (the
     /// history's face ids are that body's).
@@ -1359,9 +1418,11 @@ impl Kernel for NativeKernel {
             self.get(body)?,
             &format!("edges {edges:?} radius {radius}"),
         );
-        let r = super::blend::fillet(self, body, edges, &FilletSpec::radius(radius));
-        let r = self.dumped(&r);
-        self.colored(r)
+        self.at_working_size(body, |k, body, by| {
+            let r = super::blend::fillet(k, body, edges, &FilletSpec::radius(radius * by));
+            let r = k.dumped(&r);
+            k.colored(r)
+        })
     }
 
     fn fillet_with(
@@ -1375,9 +1436,11 @@ impl Kernel for NativeKernel {
             self.get(body)?,
             &format!("edges {edges:?} {spec:?}"),
         );
-        let r = super::blend::fillet(self, body, edges, spec);
-        let r = self.dumped(&r);
-        self.colored(r)
+        self.at_working_size(body, |k, body, by| {
+            let r = super::blend::fillet(k, body, edges, &fillet_scaled(spec, by));
+            let r = k.dumped(&r);
+            k.colored(r)
+        })
     }
 
     fn fillet_smooth(
@@ -1392,9 +1455,12 @@ impl Kernel for NativeKernel {
             self.get(body)?,
             &format!("edges {edges:?} {spec:?} smooth {setback}"),
         );
-        let r = super::blend_corner::fillet_smooth(self, body, edges, spec, setback);
-        let r = self.dumped(&r);
-        self.colored(r)
+        self.at_working_size(body, |k, body, by| {
+            let spec = fillet_scaled(spec, by);
+            let r = super::blend_corner::fillet_smooth(k, body, edges, &spec, setback * by);
+            let r = k.dumped(&r);
+            k.colored(r)
+        })
     }
 
     fn thicken_surfaces(&mut self, spec: &ThickenSpec) -> Result<OpResult> {
@@ -1425,13 +1491,22 @@ impl Kernel for NativeKernel {
     }
 
     fn delete_faces(&mut self, body: BodyId, faces: &[FaceId]) -> Result<OpResult> {
-        let r = super::surfacing::delete_faces(self, body, faces);
-        self.colored(r)
+        self.at_working_size(body, |k, body, _| {
+            let r = super::surfacing::delete_faces(k, body, faces);
+            k.colored(r)
+        })
     }
 
     fn offset(&mut self, body: BodyId, spec: &OffsetSpec) -> Result<OpResult> {
-        let r = super::offset::offset(self, body, spec);
-        self.colored(r)
+        self.at_working_size(body, |k, body, by| {
+            let spec = OffsetSpec {
+                distance: spec.distance * by,
+                faces: spec.faces.iter().map(|&(f, d)| (f, d * by)).collect(),
+                sharp: spec.sharp,
+            };
+            let r = super::offset::offset(k, body, &spec);
+            k.colored(r)
+        })
     }
 
     fn offset_meshed(&mut self, body: BodyId, distance: f64) -> Result<OpResult> {
@@ -1439,8 +1514,14 @@ impl Kernel for NativeKernel {
     }
 
     fn draft(&mut self, body: BodyId, spec: &DraftSpec) -> Result<OpResult> {
-        let r = super::local::draft(self, body, spec);
-        self.colored(r)
+        self.at_working_size(body, |k, body, by| {
+            let spec = DraftSpec {
+                neutral: Point3::from(spec.neutral.coords * by),
+                ..spec.clone()
+            };
+            let r = super::local::draft(k, body, &spec);
+            k.colored(r)
+        })
     }
 
     fn replace_faces(&mut self, body: BodyId, faces: &[FaceReplacement]) -> Result<OpResult> {
@@ -1459,26 +1540,34 @@ impl Kernel for NativeKernel {
             self.get(body)?,
             &format!("remove {remove:?} thickness {thickness}"),
         );
-        let r = super::offset::round::shell(
-            self,
-            body,
-            &ShellSpec {
-                remove: remove.to_vec(),
-                thickness,
-                outward: false,
-                hollow: false,
-                sharp: false,
-            },
-        );
-        let r = self.dumped(&r);
-        self.colored(r)
+        self.at_working_size(body, |k, body, by| {
+            let r = super::offset::round::shell(
+                k,
+                body,
+                &ShellSpec {
+                    remove: remove.to_vec(),
+                    thickness: thickness * by,
+                    outward: false,
+                    hollow: false,
+                    sharp: false,
+                },
+            );
+            let r = k.dumped(&r);
+            k.colored(r)
+        })
     }
 
     fn shell_with(&mut self, body: BodyId, spec: &ShellSpec) -> Result<OpResult> {
         dump("shell", self.get(body)?, &format!("{spec:?}"));
-        let r = super::offset::round::shell(self, body, spec);
-        let r = self.dumped(&r);
-        self.colored(r)
+        self.at_working_size(body, |k, body, by| {
+            let spec = ShellSpec {
+                thickness: spec.thickness * by,
+                ..spec.clone()
+            };
+            let r = super::offset::round::shell(k, body, &spec);
+            let r = k.dumped(&r);
+            k.colored(r)
+        })
     }
 
     fn fillet_partial(
@@ -1489,8 +1578,10 @@ impl Kernel for NativeKernel {
         from: f64,
         to: f64,
     ) -> Result<OpResult> {
-        let r = super::blend::fillet_partial(self, body, edge, spec, from, to);
-        self.colored(r)
+        self.at_working_size(body, |k, body, by| {
+            let r = super::blend::fillet_partial(k, body, edge, &fillet_scaled(spec, by), from, to);
+            k.colored(r)
+        })
     }
 
     fn fillet_variable(
@@ -1504,9 +1595,18 @@ impl Kernel for NativeKernel {
             self.get(body)?,
             &format!("{laws:?} overflow {allow_overflow}"),
         );
-        let r = super::blend::fillet_variable(self, body, laws, allow_overflow);
-        let r = self.dumped(&r);
-        self.colored(r)
+        self.at_working_size(body, |k, body, by| {
+            let laws: Vec<FilletLaw> = laws
+                .iter()
+                .map(|l| FilletLaw {
+                    edge: l.edge,
+                    radii: l.radii.iter().map(|&(s, r)| (s, r * by)).collect(),
+                })
+                .collect();
+            let r = super::blend::fillet_variable(k, body, &laws, allow_overflow);
+            let r = k.dumped(&r);
+            k.colored(r)
+        })
     }
 
     fn full_round(
@@ -1516,8 +1616,10 @@ impl Kernel for NativeKernel {
         center: FaceId,
         side2: FaceId,
     ) -> Result<OpResult> {
-        let r = super::blend::full_round(self, body, side1, center, side2);
-        self.colored(r)
+        self.at_working_size(body, |k, body, _| {
+            let r = super::blend::full_round(k, body, side1, center, side2);
+            k.colored(r)
+        })
     }
 
     fn chamfer(&mut self, body: BodyId, edges: &[EdgeId], spec: ChamferSpec) -> Result<OpResult> {
@@ -1526,9 +1628,12 @@ impl Kernel for NativeKernel {
             self.get(body)?,
             &format!("edges {edges:?} {spec:?}"),
         );
-        let r = super::blend::chamfer(self, body, edges, &ChamferOpts::new(spec));
-        let r = self.dumped(&r);
-        self.colored(r)
+        self.at_working_size(body, |k, body, by| {
+            let opts = ChamferOpts::new(chamfer_scaled(spec, by));
+            let r = super::blend::chamfer(k, body, edges, &opts);
+            let r = k.dumped(&r);
+            k.colored(r)
+        })
     }
 
     fn chamfer_with(
@@ -1542,30 +1647,36 @@ impl Kernel for NativeKernel {
             self.get(body)?,
             &format!("edges {edges:?} {opts:?}"),
         );
-        // A convex polyhedron's equal chamfers: its planes' polytope, built at once.
-        if let (ChamferSpec::EqualDistance(d), ChamferMeasure::Offset) =
-            (opts.spec, opts.measurement)
-        {
-            let b = self.get(body)?.clone();
-            let ids: Vec<usize> = super::blend::real_edges(&b, edges)?
-                .iter()
-                .map(|e| e.0 as usize)
-                .collect();
-            let flat = opts.corners == ChamferCorners::Flat;
-            if let Some(r) = super::convex_chamfer::chamfer(self, body, &ids, d, flat) {
-                let r = self.dumped(&r);
-                return self.colored(r);
+        self.at_working_size(body, |k, body, by| {
+            let opts = &ChamferOpts {
+                spec: chamfer_scaled(opts.spec, by),
+                ..opts.clone()
+            };
+            // A convex polyhedron's equal chamfers: its planes' polytope, built at once.
+            if let (ChamferSpec::EqualDistance(d), ChamferMeasure::Offset) =
+                (opts.spec, opts.measurement)
+            {
+                let b = k.get(body)?.clone();
+                let ids: Vec<usize> = super::blend::real_edges(&b, edges)?
+                    .iter()
+                    .map(|e| e.0 as usize)
+                    .collect();
+                let flat = opts.corners == ChamferCorners::Flat;
+                if let Some(r) = super::convex_chamfer::chamfer(k, body, &ids, d, flat) {
+                    let r = k.dumped(&r);
+                    return k.colored(r);
+                }
             }
-        }
-        let r = super::blend::chamfer(self, body, edges, opts);
-        let r = match r {
-            Ok(r) if opts.corners == ChamferCorners::Flat => {
-                super::blend::flat_corners(self, body, edges, opts, r)
-            }
-            r => r,
-        };
-        let r = self.dumped(&r);
-        self.colored(r)
+            let r = super::blend::chamfer(k, body, edges, opts);
+            let r = match r {
+                Ok(r) if opts.corners == ChamferCorners::Flat => {
+                    super::blend::flat_corners(k, body, edges, opts, r)
+                }
+                r => r,
+            };
+            let r = k.dumped(&r);
+            k.colored(r)
+        })
     }
 
     fn split(&mut self, body: BodyId, tool: &SplitTool, source: u64) -> Result<OpResult> {
@@ -2365,6 +2476,29 @@ pub(crate) fn dump(op: &str, b: &Body, params: &str) {
     let _ = std::fs::write(base.with_extension("body"), super::bodyio::write(b));
     let _ = std::fs::write(base.with_extension("txt"), params);
     eprintln!("dump: {op}-{n:03} {params}");
+}
+
+/// A fillet's spec with its size scaled ([`NativeKernel::at_working_size`]).
+fn fillet_scaled(spec: &FilletSpec, by: f64) -> FilletSpec {
+    FilletSpec {
+        size: match spec.size {
+            FilletSize::Radius(r) => FilletSize::Radius(r * by),
+            FilletSize::Width(w) => FilletSize::Width(w * by),
+        },
+        ..spec.clone()
+    }
+}
+
+/// A chamfer's spec with its distances scaled ([`NativeKernel::at_working_size`]).
+fn chamfer_scaled(spec: ChamferSpec, by: f64) -> ChamferSpec {
+    match spec {
+        ChamferSpec::EqualDistance(d) => ChamferSpec::EqualDistance(d * by),
+        ChamferSpec::TwoDistances(a, c) => ChamferSpec::TwoDistances(a * by, c * by),
+        ChamferSpec::DistanceAngle { distance, angle } => ChamferSpec::DistanceAngle {
+            distance: distance * by,
+            angle,
+        },
+    }
 }
 
 #[cfg(test)]

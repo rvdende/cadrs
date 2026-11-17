@@ -2100,6 +2100,9 @@ struct Model<'a> {
     /// Unit factors by context record.
     units: HashMap<u64, (f64, f64)>,
     styles: Styles,
+    /// How much larger than the file says its lengths are read ([`Model::boost_of`]): 1 but
+    /// for a small model.
+    boost: f64,
 }
 
 impl<'a> Model<'a> {
@@ -2193,8 +2196,61 @@ impl<'a> Model<'a> {
                 }
             }
         }
+        out.0 *= self.boost;
         self.units.insert(ctx, out);
         out
+    }
+
+    /// How much larger a file is read than it says: a power of two that takes a model
+    /// smaller than a boolean's small model ([`super::boolean::SMALL_MODEL`], by its points'
+    /// box in the file's first length unit) to the working size, 1 for any other. The
+    /// reader's join distances are lengths in mm (points 1e-5 apart are one, a p-curve may run
+    /// 5e-4 off its edge): on a part a few microns across they are the part's size, so it is
+    /// built larger and scaled back, as a boolean works on one.
+    fn boost_of(&self) -> f64 {
+        let unit = self
+            .ids("GLOBAL_UNIT_ASSIGNED_CONTEXT")
+            .iter()
+            .find_map(|&ctx| {
+                let units = self
+                    .rec(ctx)?
+                    .part("GLOBAL_UNIT_ASSIGNED_CONTEXT")?
+                    .first()?
+                    .as_list()?;
+                units.iter().filter_map(|u| u.as_ref()).find_map(|u| {
+                    if self.rec(u)?.has("LENGTH_UNIT") {
+                        self.unit_factor(u, 0)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .unwrap_or(1.0);
+        let mut bb = Bbox::empty();
+        for &id in self.ids("CARTESIAN_POINT") {
+            let Some(l) = self
+                .rec(id)
+                .and_then(|r| r.params().get(1))
+                .and_then(|p| p.as_list())
+            else {
+                continue;
+            };
+            let c: Vec<f64> = l.iter().filter_map(|x| x.as_f64()).collect();
+            let g = |k: usize| c.get(k).copied().unwrap_or(0.0);
+            if c.iter().all(|x| x.is_finite()) {
+                bb.add(&P3::new(g(0), g(1), g(2)));
+            }
+        }
+        let size = if bb.is_empty() {
+            0.0
+        } else {
+            bb.diagonal() * unit
+        };
+        if size > 0.0 && size < super::boolean::SMALL_MODEL {
+            (super::boolean::WORKING_SIZE / size).log2().floor().exp2()
+        } else {
+            1.0
+        }
     }
 
     fn rep_units(&mut self, rep: u64) -> (f64, f64) {
@@ -2692,7 +2748,9 @@ pub fn read(bytes: &[u8]) -> Result<ReadModel, String> {
         f: &f,
         units: HashMap::new(),
         styles: Styles::read(&f),
+        boost: 1.0,
     };
+    m.boost = m.boost_of();
     let mut out = ReadModel::default();
     let mut warnings = Vec::new();
     let mut pds: Vec<u64> = Vec::new();
@@ -2831,6 +2889,19 @@ pub fn read(bytes: &[u8]) -> Result<ReadModel, String> {
         } else {
             format!("the file holds no shapes we can read ({})", warnings[0])
         });
+    }
+    // A small model was read larger ([`Model::boost_of`]): back to its size.
+    if m.boost != 1.0 {
+        let shrink = Affine {
+            m: nalgebra::Matrix3::identity() / m.boost,
+            t: V3::zeros(),
+        };
+        for p in &mut out.parts {
+            p.body = p.body.transformed(&shrink);
+        }
+        for o in &mut out.occurrences {
+            o.placement.t /= m.boost;
+        }
     }
     out.warnings = warnings;
     Ok(out)

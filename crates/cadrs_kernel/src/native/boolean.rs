@@ -180,8 +180,8 @@ static INVALID_ON_WORKERS: std::sync::atomic::AtomicUsize = std::sync::atomic::A
 
 /// How many booleans handed back a result with crossing faces since the last call (a run
 /// refused it and no retry did better, so it came back as it was): those on this thread, and
-/// those on the kernel's worker threads (which serve whichever operation is running). With
-/// `CADRS_BOOL_STRICT` set, such a boolean fails instead.
+/// those on the kernel's worker threads (which serve whichever operation is running). Only
+/// under `CADRS_BOOL_LENIENT`: without it such a boolean fails, and this stays zero.
 pub fn take_invalid_results() -> usize {
     INVALID_RESULTS.with(|c| c.replace(0))
         + INVALID_ON_WORKERS.swap(0, std::sync::atomic::Ordering::Relaxed)
@@ -1163,9 +1163,9 @@ pub fn boolean_bodies_with(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) ->
 
 /// Bodies no larger than this (mm, the longer of their boxes' diagonals) are scaled up for a
 /// boolean, to [`WORKING_SIZE`] or up to twice it.
-const SMALL_MODEL: f64 = 0.25;
+pub(crate) const SMALL_MODEL: f64 = 0.25;
 /// The size (mm) small bodies are scaled to for a boolean.
-const WORKING_SIZE: f64 = 64.0;
+pub(crate) const WORKING_SIZE: f64 = 64.0;
 
 /// [`boolean_bodies_with`] (counted with `CADRS_PROFILE`).
 fn boolean_bodies_counted(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Result<BoolOut> {
@@ -1514,10 +1514,11 @@ fn ladder(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Result<BoolOut> 
     }
 }
 
-/// A result refused for crossing faces handed back after all (as before the check), counted
-/// ([`take_invalid_results`]); under `CADRS_BOOL_STRICT` the boolean fails.
+/// A result refused for crossing faces, which no retry bettered: the boolean fails (a body
+/// whose faces pass through one another is no answer). Under `CADRS_BOOL_LENIENT` it is handed
+/// back after all, as before the check, and counted ([`take_invalid_results`]).
 fn hand_back(r: BoolOut) -> Result<BoolOut> {
-    if super::env_flag!("CADRS_BOOL_STRICT") {
+    if !super::env_flag!("CADRS_BOOL_LENIENT") {
         return Err(KernelError::BooleanFailed {
             stage: CROSSING,
             why: "the boolean's result is invalid: its faces cross".into(),
@@ -4717,6 +4718,9 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     prof.mark("crossings");
     prof.report(&format!("{op:?} {}×{} faces", a.faces.len(), b.faces.len()));
     if let Some(why) = crossing {
+        if super::env_flag!("CADRS_BOOL_DEBUG") {
+            eprintln!("refused for crossing faces: {why}");
+        }
         // (The result kept for the ladder, should no other run do better.)
         REFUSED.with(|c| *c.borrow_mut() = Some(BoolOut { body: out, from }));
         return Err(KernelError::BooleanFailed {

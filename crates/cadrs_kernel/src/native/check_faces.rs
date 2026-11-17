@@ -11,7 +11,9 @@
 //!   an edge of one of them unless it closes inside both;
 //! - for two elementary surfaces (planes, cylinders, cones, spheres, tori), whose intersection
 //!   has a closed form, that curve itself ([`super::ssi`]) sampled: a point inside both faces,
-//!   clear of their boundaries, is a crossing. This also finds closed crossings.
+//!   clear of their boundaries, where the surfaces pass through one another (their normals
+//!   apart: a plane on a cylinder's ruling only touches it), is a crossing. This also finds
+//!   closed crossings.
 //!
 //! A closed crossing of B-spline or swept faces that meets no edge isn't looked for: the
 //! numeric intersection costs too much for a check run on every test result. A point counts
@@ -363,12 +365,26 @@ fn crossing(
             if region.contains(&p)
                 && inside(b, polys(i), i, &p, margin)
                 && inside(b, polys(j), j, &p, margin)
+                && across(fa, fb, &p)
             {
                 return Some(p);
             }
         }
     }
     None
+}
+
+/// Whether the two faces' surfaces pass through one another at `p`, a point of both: their
+/// normals there apart. Where they are one line the surfaces only touch (a plane on a
+/// cylinder's ruling: two arms of a part meeting along a line, the faces over and under them
+/// each merged across it), as an edge that touches a face without piercing it does.
+fn across(fa: &super::topo::Face, fb: &super::topo::Face, p: &P3) -> bool {
+    let normal = |f: &super::topo::Face| {
+        let (u, v) = f.surf.project(p, None);
+        f.surf.normal(u, v)
+    };
+    let (na, nb) = (normal(fa), normal(fb));
+    na.cross(&nb).norm() > 1e-3 * na.norm() * nb.norm()
 }
 
 /// The point at `t` on edge `ei` if it pierces face `y` there: inside the region
