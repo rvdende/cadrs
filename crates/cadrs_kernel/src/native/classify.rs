@@ -24,14 +24,7 @@ fn loop_polygon(body: &Body, l: &[super::topo::Coedge]) -> Vec<P2> {
     for c in l {
         let e = &body.edges[c.edge];
         let (a, b) = co_range(e, c.fwd);
-        let n = match &c.pc {
-            super::curve::Curve::Line { .. } => 1,
-            _ => {
-                // Enough points that the polygon is within ~1e-6 of the p-curve.
-                let span = (b - a).abs();
-                ((span * 256.0).ceil() as usize).clamp(16, 4096)
-            }
-        };
+        let n = coedge_steps(&c.pc, a, b);
         for i in 0..n {
             let t = a + (b - a) * i as f64 / n as f64;
             let p = c.pc.point(t);
@@ -39,6 +32,93 @@ fn loop_polygon(body: &Body, l: &[super::topo::Coedge]) -> Vec<P2> {
         }
     }
     pts
+}
+
+/// How many straight steps [`loop_polygon`] takes a coedge's p-curve in over [a, b]: one for a
+/// line, else by its parameter's span. (The polygon then runs up to a circle's sagitta inside
+/// it, 2e-6 of its radius over a whole turn: a point between the two is put right by the
+/// circle itself, [`ArcPiece`].)
+fn coedge_steps(pc: &super::curve::Curve, a: f64, b: f64) -> usize {
+    match pc {
+        super::curve::Curve::Line { .. } => 1,
+        _ => (((b - a).abs() * 256.0).ceil() as usize).clamp(16, 4096),
+    }
+}
+
+/// A circular p-curve of a loop, as [`loop_polygon`] stepped it: the circle, its range in the
+/// loop's direction and the steps. A point between the circle and its chords is inside the
+/// polygon and outside the circle, or the other way round; [`in_face_boxed`] asks the circle.
+#[derive(Debug, Clone)]
+struct ArcPiece {
+    c: P2,
+    x: V2,
+    y: V2,
+    r: f64,
+    t: [f64; 2],
+    n: usize,
+    /// How far the chords run inside the circle at most.
+    sag: f64,
+}
+
+impl ArcPiece {
+    fn point(&self, t: f64) -> P2 {
+        self.c + (self.x * t.cos() + self.y * t.sin()) * self.r
+    }
+
+    /// Whether `uv`, in this arc's sector, is on the other side of the circle from the side
+    /// of its chord it is on (`Some(true)`: the polygon has it wrong), or on the circle within
+    /// `tol` (`None`). `Some(false)` off the arc's sector, or where the two agree.
+    fn amiss(&self, uv: &P2, tol: f64) -> Option<bool> {
+        let w = uv - self.c;
+        let rho = w.norm();
+        if (rho - self.r).abs() > self.sag + tol {
+            return Some(false);
+        }
+        let (lo, span) = (self.t[0].min(self.t[1]), (self.t[1] - self.t[0]).abs());
+        let along = wrap(w.dot(&self.y).atan2(w.dot(&self.x)) - lo, 0.0, TAU);
+        if along > span {
+            return Some(false);
+        }
+        if (rho - self.r).abs() < tol {
+            return None;
+        }
+        // (The step the point's angle falls in, counted the way the loop runs.)
+        let u = if self.t[1] >= self.t[0] {
+            along / span
+        } else {
+            1.0 - along / span
+        };
+        let i = ((u * self.n as f64).floor() as usize).min(self.n - 1);
+        let at =
+            |k: usize| self.point(self.t[0] + (self.t[1] - self.t[0]) * k as f64 / self.n as f64);
+        let (a, b) = (at(i), at(i + 1));
+        let centre_side = cross2(&(b - a), &(self.c - a));
+        let own_side = cross2(&(b - a), &(uv - a));
+        Some((own_side * centre_side > 0.0) != (rho < self.r))
+    }
+}
+
+/// The circular p-curves of a loop ([`ArcPiece`]), on a surface whose (u, v) is measured the
+/// same both ways (a circle there is one in the metric too).
+fn loop_arcs(body: &Body, l: &[super::topo::Coedge]) -> Vec<ArcPiece> {
+    l.iter()
+        .filter_map(|c| {
+            let super::curve::Curve::Circle { c: o, x, y, r } = &c.pc else {
+                return None;
+            };
+            let (a, b) = co_range(&body.edges[c.edge], c.fwd);
+            let n = coedge_steps(&c.pc, a, b);
+            Some(ArcPiece {
+                c: P2::new(o.x, o.y),
+                x: V2::new(x.x, x.y),
+                y: V2::new(y.x, y.y),
+                r: *r,
+                t: [a, b],
+                n,
+                sag: r * (1.0 - ((b - a).abs() / (2.0 * n as f64)).cos()),
+            })
+        })
+        .collect()
 }
 
 /// A face's [`face_polygons`] and their [`poly_boxes`].
@@ -128,9 +208,14 @@ pub fn face_polygons_kept(body: &Body, f: &Face) -> KeptPolygons {
     for (i, slot) in kept.iter_mut().enumerate() {
         if slot.is_none() {
             let poly = loop_polygon(body, &f.loops[i]);
-            let pb = poly_boxes(std::slice::from_ref(&poly), &f.surf)
+            let mut pb = poly_boxes(std::slice::from_ref(&poly), &f.surf)
                 .pop()
                 .expect("a box per polygon");
+            let (mu, mv) = f.surf.metric();
+            if mu == mv {
+                pb.arcs = loop_arcs(body, &f.loops[i]);
+                pb.bulge = pb.arcs.iter().fold(0.0, |m, a| m.max(a.sag));
+            }
             let l: KeptLoop = std::sync::Arc::new((poly, pb));
             made.push((loop_keys[i], l.clone()));
             *slot = Some(l);
@@ -197,6 +282,10 @@ pub struct PolyBox {
     b: [f64; 4],
     m: [f64; 4],
     rows: Option<Rows>,
+    /// The loop's circular p-curves, where it was made from a loop ([`face_polygons_kept`]),
+    /// and how far the polygon runs inside them at most.
+    arcs: Vec<ArcPiece>,
+    bulge: f64,
 }
 
 /// A polygon's sides (by their first point's index) in rows of equal height over its v range:
@@ -284,7 +373,13 @@ pub fn poly_boxes(polys: &[Vec<P2>], surf: &Surface) -> PolyBoxes {
                 }
                 r
             });
-            PolyBox { b, m, rows }
+            PolyBox {
+                b,
+                m,
+                rows,
+                arcs: Vec::new(),
+                bulge: 0.0,
+            }
         })
         .collect()
 }
@@ -318,6 +413,24 @@ pub fn in_face_boxed(
                 + b[1].abs().max(b[0].abs()).max(b[3].abs()).max(b[2].abs()));
         let far_m = q.x < m[0] - gm || q.x > m[1] + gm || q.y < m[2] - gm || q.y > m[3] + gm;
         let far_b = uv.x < b[0] - gb || uv.x > b[1] + gb || uv.y < b[2] - gb || uv.y > b[3] + gb;
+        // A point between a circular edge and the chords it was stepped in is on the wrong
+        // side of the polygon (which may not even reach it): the circle says which.
+        if !pb.arcs.is_empty() {
+            let reach = pb.bulge + tol / mu.max(tol::TINY) + gb;
+            if uv.x >= b[0] - reach
+                && uv.x <= b[1] + reach
+                && uv.y >= b[2] - reach
+                && uv.y <= b[3] + reach
+            {
+                for arc in &pb.arcs {
+                    match arc.amiss(&uv, tol / mu.max(tol::TINY)) {
+                        None => return InFace::Boundary,
+                        Some(true) => inside = !inside,
+                        Some(false) => {}
+                    }
+                }
+            }
+        }
         if far_m && far_b {
             continue;
         }
