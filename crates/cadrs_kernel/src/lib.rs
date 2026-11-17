@@ -200,6 +200,38 @@ impl KernelError {
         }
     }
 
+    /// This error with the earlier one `first` named in its words: a second method's failure
+    /// (the blend tool's) after `what` (the local fillet) failed with `first`, so that the
+    /// message names the stage that gave up first. An `Unsupported` second method leaves
+    /// `first` itself, with it named.
+    pub fn after(mut self, what: &str, first: &KernelError) -> Self {
+        let cause = format!("{what}: {}", first.message());
+        match &mut self {
+            Self::BooleanFailed { why, .. }
+            | Self::BlendFailed { why, .. }
+            | Self::BudgetExhausted { why, .. }
+            | Self::TooLarge { why, .. }
+            | Self::InvalidGeometry { why, .. }
+            | Self::InvalidResult { why, .. }
+            | Self::InvalidProfile(why)
+            | Self::OperationFailed(why)
+            | Self::EmptyResult(why)
+            | Self::OpenResult(why)
+            | Self::InvalidParameter(why)
+            | Self::InvalidInput(why) => {
+                why.push_str(&format!(" (after {cause})"));
+                self
+            }
+            Self::Unsupported(_) | Self::UnknownBody(_) => {
+                let second = self.message();
+                Self::BlendFailed {
+                    stage: "fallback",
+                    why: format!("{} (then: {second})", first.message()),
+                }
+            }
+        }
+    }
+
     /// Whether the algorithm gave up on this input ([`KernelError::OperationFailed`] or one of
     /// the typed failures, `BooleanFailed`, `BlendFailed`, `BudgetExhausted`, `TooLarge`,
     /// `InvalidGeometry`, `InvalidResult`), as opposed to refusing its arguments or finding nothing to make.

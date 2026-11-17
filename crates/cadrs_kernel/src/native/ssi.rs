@@ -482,10 +482,17 @@ fn extrusion_along(
         if s.signed_distance(&c.point(t)).is_some() {
             for _ in 0..20 {
                 let f = s.signed_distance(&c.point(t)).unwrap_or(0.0);
-                let h = 1e-7 * (1.0 + t.abs());
-                let df = (s.signed_distance(&c.point(t + h)).unwrap_or(0.0)
-                    - s.signed_distance(&c.point(t - h)).unwrap_or(0.0))
-                    / (2.0 * h);
+                // (The distance's slope along the curve: its gradient on the tangent.)
+                let (at, tangent, _) = c.d2(t);
+                let df = match sdist_gradient(s, &at, &mut None) {
+                    Some(n) => n.dot(&tangent),
+                    None => {
+                        let h = 1e-7 * (1.0 + t.abs());
+                        (s.signed_distance(&c.point(t + h)).unwrap_or(0.0)
+                            - s.signed_distance(&c.point(t - h)).unwrap_or(0.0))
+                            / (2.0 * h)
+                    }
+                };
                 if df.abs() < 1e-300 {
                     break;
                 }
@@ -1960,6 +1967,39 @@ fn fit_points(mut pts: Vec<P3>, closed: bool) -> Option<IntCurve> {
 
 /// A point on both surfaces near a's (u, v): Newton on a's parameters for sd_b = 0, with the
 /// point's (u, v) on `a`.
+/// The gradient of [`sdist_hint`] at `p`: the unit normal the distance is measured along (a
+/// plane's, the direction from a cylinder's or cone's axis, a sphere's centre or a torus's
+/// core circle through the point, else the surface's normal at the point's foot). `None`
+/// where there is none (the point on the axis, the centre or the core; a foot at a pole).
+pub fn sdist_gradient(s: &Surface, p: &P3, hint: &mut Option<(f64, f64)>) -> Option<V3> {
+    let radial = |f: &Frame| {
+        let w = p - f.o;
+        (w - f.z * w.dot(&f.z)).try_normalize(tol::TINY)
+    };
+    match s {
+        Surface::Plane { f } => Some(f.x.cross(&f.y)),
+        Surface::Cylinder { f, .. } => radial(f),
+        Surface::Cone { f, a, .. } => {
+            let (sa, ca) = a.sin_cos();
+            Some(radial(f)? * ca - f.z * sa)
+        }
+        Surface::Sphere { f, .. } => (p - f.o).try_normalize(tol::TINY),
+        Surface::Torus { f, rmaj, rmin } if rmin < rmaj => {
+            let core = f.o + radial(f)? * *rmaj;
+            (p - core).try_normalize(tol::TINY)
+        }
+        _ if s.signed_distance(p).is_some() => None,
+        _ => {
+            let (u, v) = match hint {
+                Some(h) => *h,
+                None => s.project(p, None),
+            };
+            let (_, su, sv) = s.d1(u, v);
+            su.cross(&sv).try_normalize(tol::TINY)
+        }
+    }
+}
+
 pub fn refine_point_uv(a: &Surface, b: &Surface, uv: P2) -> (P3, P2) {
     let (mut u, mut v) = (uv.x, uv.y);
     let e = 1e-7;
@@ -1975,15 +2015,20 @@ pub fn refine_point_uv(a: &Surface, b: &Surface, uv: P2) -> (P3, P2) {
             break;
         }
         let (_, su, sv) = a.d1(u, v);
-        // ∇g ≈ n_b·(Su, Sv) with n_b the distance gradient.
-        let mut h1 = hint;
-        let mut h2 = hint;
-        let mut h3 = hint;
-        let mut h4 = hint;
-        let gu = (sdist_hint(b, &(p + su * e), &mut h1) - sdist_hint(b, &(p - su * e), &mut h2))
-            / (2.0 * e);
-        let gv = (sdist_hint(b, &(p + sv * e), &mut h3) - sdist_hint(b, &(p - sv * e), &mut h4))
-            / (2.0 * e);
+        // ∇g = n_b·(Su, Sv) with n_b the distance's gradient (differenced only where it has
+        // none to write down).
+        let (gu, gv) = match sdist_gradient(b, &p, &mut hint) {
+            Some(n) => (n.dot(&su), n.dot(&sv)),
+            None => {
+                let (mut h1, mut h2, mut h3, mut h4) = (hint, hint, hint, hint);
+                (
+                    (sdist_hint(b, &(p + su * e), &mut h1) - sdist_hint(b, &(p - su * e), &mut h2))
+                        / (2.0 * e),
+                    (sdist_hint(b, &(p + sv * e), &mut h3) - sdist_hint(b, &(p - sv * e), &mut h4))
+                        / (2.0 * e),
+                )
+            }
+        };
         let l = gu * gu + gv * gv;
         if l < tol::TINY {
             break;

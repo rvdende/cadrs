@@ -227,12 +227,38 @@ fn edge_tube(b: &Body, e: usize, r: f64) -> Result<Body> {
         _ => {
             // Where the edge curves tighter than the radius the pipe folds over itself: not a
             // valid solid (and its booleans fail only after every retry).
+            // (κ·r − 1 scaled by |c′|³, at 257 points and, between the neighbours of each that
+            // tops both, at its peak: a curvature peak between samples is found too.)
             let n = 256;
+            let over = |t: f64| {
+                let (_, d1, d2) = ed.curve.d2(t);
+                d1.cross(&d2).norm() * r - d1.norm().powi(3)
+            };
+            let at = |i: usize| ed.t[0] + (ed.t[1] - ed.t[0]) * i as f64 / n as f64;
+            let fs: Vec<f64> = (0..=n).map(|i| over(at(i))).collect();
             let tight = (0..=n).any(|i| {
-                let (_, d1, d2) = ed
-                    .curve
-                    .d2(ed.t[0] + (ed.t[1] - ed.t[0]) * i as f64 / n as f64);
-                d1.cross(&d2).norm() * r >= d1.norm().powi(3)
+                if fs[i] >= 0.0 {
+                    return true;
+                }
+                if i == 0 || i == n || fs[i] < fs[i - 1] || fs[i] < fs[i + 1] {
+                    return false;
+                }
+                const PHI: f64 = 0.618_033_988_749_894_9;
+                let (mut lo, mut hi) = (at(i - 1), at(i + 1));
+                let (mut x1, mut x2) = (hi - PHI * (hi - lo), lo + PHI * (hi - lo));
+                let (mut f1, mut f2) = (over(x1), over(x2));
+                for _ in 0..40 {
+                    if f1 > f2 {
+                        (hi, x2, f2) = (x2, x1, f1);
+                        x1 = hi - PHI * (hi - lo);
+                        f1 = over(x1);
+                    } else {
+                        (lo, x1, f1) = (x1, x2, f2);
+                        x2 = lo + PHI * (hi - lo);
+                        f2 = over(x2);
+                    }
+                }
+                f1.max(f2) >= 0.0
             });
             if tight {
                 return Err(KernelError::Unsupported(
@@ -1554,9 +1580,14 @@ fn walls_cross(b: &Body, remove: &[usize], t: f64) -> bool {
                 continue;
             }
             let gap = (ob - oa).dot(na).abs();
-            // Overlap of the faces' boxes across the gap direction.
-            let pa = ba.grow(gap);
-            if gap < 2.0 * t + tol::ROUNDOFF && pa.overlaps(bb) {
+            // Overlap of the faces' boxes across the gap: the second's carried along the
+            // normal onto the first's plane (faces apart sideways stay apart).
+            let across = na * (oa - ob).dot(na);
+            let carried = Bbox {
+                min: bb.min + across,
+                max: bb.max + across,
+            };
+            if gap < 2.0 * t + tol::ROUNDOFF && ba.grow(tol::POINT).overlaps(&carried) {
                 return true;
             }
         }

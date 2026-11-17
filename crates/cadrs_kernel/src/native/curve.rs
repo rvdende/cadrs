@@ -190,7 +190,16 @@ impl Curve {
     /// unwrapped into the range when possible).
     pub fn closest(&self, p: &P3, t0: f64, t1: f64) -> f64 {
         match self {
-            Curve::Line { o, d } => ((p - o).dot(d) / d.norm_squared()).clamp(t0, t1),
+            Curve::Line { o, d } => {
+                // (Either way round; a line without a direction is its one point.)
+                let (lo, hi) = (t0.min(t1), t0.max(t1));
+                let dd = d.norm_squared();
+                if dd > 0.0 {
+                    ((p - o).dot(d) / dd).clamp(lo, hi)
+                } else {
+                    lo
+                }
+            }
             Curve::Circle { c, x, y, .. } => {
                 let v = p - c;
                 let a = v.dot(y).atan2(v.dot(x));

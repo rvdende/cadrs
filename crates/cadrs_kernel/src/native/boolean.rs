@@ -172,11 +172,19 @@ thread_local! {
     static INVALID_RESULTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many booleans on this thread handed back a result with crossing faces since the last
-/// call (a run refused it and no retry did better, so it came back as it was). With
+/// Booleans on the kernel's worker threads that handed back a result with crossing faces (an
+/// operation's part booleans run there: a union's islands, a sweep's pieces). A worker can't
+/// tell which thread's operation it works for, so these are counted for whichever thread asks
+/// next ([`take_invalid_results`]) rather than left on the worker, where no one asks.
+static INVALID_ON_WORKERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many booleans handed back a result with crossing faces since the last call (a run
+/// refused it and no retry did better, so it came back as it was): those on this thread, and
+/// those on the kernel's worker threads (which serve whichever operation is running). With
 /// `CADRS_BOOL_STRICT` set, such a boolean fails instead.
 pub fn take_invalid_results() -> usize {
     INVALID_RESULTS.with(|c| c.replace(0))
+        + INVALID_ON_WORKERS.swap(0, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// A run's work so far against its budget ([`BoolOptions::work_budget`]).
@@ -1304,15 +1312,15 @@ fn ladder(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Result<BoolOut> 
     };
     // (Retried: an open shell, a face that doesn't close, an invalid result: `BooleanFailed`, and
     // the failures of the steps a run calls that say so.)
-    let broken = |m: &str| {
-        ["open shell", "left", "doesn't close", "is invalid"]
-            .iter()
-            .any(|w| m.contains(w))
+    // (By the kind of failure and the stage that reports it, never by its words.)
+    let broken = |e: &KernelError| match e {
+        KernelError::OpenResult(_) | KernelError::InvalidResult { .. } => true,
+        KernelError::BooleanFailed { stage, .. } => {
+            matches!(*stage, "face closure" | "validity") || *stage == CROSSING
+        }
+        _ => false,
     };
-    if !opts.retry
-        || (!matches!(&first, Err(KernelError::OpenResult(_)))
-            && !matches!(&first, Err(e) if e.is_failure() && broken(&e.message())))
-    {
+    if !opts.retry || !matches!(&first, Err(e) if broken(e)) {
         return first;
     }
     // Within the fuzzy value: faces a gap off the other input's surfaces moved onto them, and
@@ -1445,7 +1453,7 @@ fn ladder(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Result<BoolOut> 
 }
 
 /// A result refused for crossing faces handed back after all (as before the check), counted
-/// on this thread ([`take_invalid_results`]); under `CADRS_BOOL_STRICT` the boolean fails.
+/// ([`take_invalid_results`]); under `CADRS_BOOL_STRICT` the boolean fails.
 fn hand_back(r: BoolOut) -> Result<BoolOut> {
     if super::env_flag!("CADRS_BOOL_STRICT") {
         return Err(KernelError::BooleanFailed {
@@ -1453,7 +1461,11 @@ fn hand_back(r: BoolOut) -> Result<BoolOut> {
             why: "the boolean's result is invalid: its faces cross".into(),
         });
     }
-    INVALID_RESULTS.with(|c| c.set(c.get() + 1));
+    if rayon::current_thread_index().is_some() {
+        INVALID_ON_WORKERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    } else {
+        INVALID_RESULTS.with(|c| c.set(c.get() + 1));
+    }
     if super::env_flag!("CADRS_BOOL_DEBUG") {
         eprintln!("boolean: handed back a result with crossing faces");
     }
@@ -4147,7 +4159,9 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         for list in cuts.iter().chain(on_face.iter()) {
             for &e in list {
                 touching.insert(e);
-                touching.insert(canon[e.min(canon.len() - 1)]);
+                if let Some(&c) = canon.get(e) {
+                    touching.insert(c);
+                }
                 if e < pieces.len() {
                     for &p in &pieces[e] {
                         touching.insert(p);

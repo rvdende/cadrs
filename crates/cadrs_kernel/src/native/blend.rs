@@ -1458,6 +1458,14 @@ pub fn blend(
                 why: "the blend's tool isn't a solid".into(),
             });
         }
+        // A tool lies along its edges, within the body's reach: one many times the body's size
+        // is sections gone astray (its boolean would run on for minutes over nothing real).
+        if tool.body.bbox().diagonal() > 16.0 * b.bbox().diagonal() {
+            return Err(KernelError::InvalidResult {
+                op: "blend",
+                why: "the blend's tool runs far outside the body".into(),
+            });
+        }
         let (mut tb, mut ts) = (tool.body, tool.src);
         // Cut the extensions at the end faces as for one edge.
         if open {
@@ -1736,6 +1744,23 @@ pub fn blend(
             op: "blend",
             why: "the blend left an open body".into(),
         });
+    }
+    // Every picked edge must be blended: one still on the result's boundary all along (its
+    // tool trimmed away to nothing, or cut clear of it) was left as it was, and the result is
+    // not the blend asked for.
+    let after = super::classify::Classifier::lazy(&cur.body);
+    for &e in &picked {
+        let ed = &b.edges[e];
+        let left = [0.25, 0.5, 0.75].into_iter().all(|w| {
+            let p = ed.curve.point(ed.t[0] + (ed.t[1] - ed.t[0]) * w);
+            after.classify(&p, tol::POINT) == crate::PointClass::OnBoundary
+        });
+        if left {
+            return Err(KernelError::InvalidResult {
+                op: "blend",
+                why: format!("the blend left edge {e} as it was"),
+            });
+        }
     }
     Ok(cur.into_result(k, body))
 }
@@ -2649,6 +2674,7 @@ pub fn fillet(
     }
     let edges = &real_edges(k.get(body)?, edges)?[..];
     let mut all: Vec<EdgeId> = Vec::new();
+    let mut local_error: Option<KernelError> = None;
     for &e in edges {
         let chain = if spec.propagate {
             k.tangent_chain(body, e)?
@@ -2746,9 +2772,15 @@ pub fn fillet(
                 if std::env::var_os("CADRS_BLEND_DEBUG").is_some() {
                     eprintln!("local fillet: {e}; falling back to the blend tool");
                 }
+                local_error = Some(e);
             }
         }
     }
+    // (A failure of the tool names the local fillet's too: the stage that gave up first.)
+    let named = |e: KernelError| match &local_error {
+        Some(first) => e.after("the local fillet", first),
+        None => e,
+    };
     let spec = *spec;
     let list: Vec<EdgeBlend> = all
         .iter()
@@ -2766,9 +2798,9 @@ pub fn fillet(
         // a slightly smaller radius leaves a strip of each face here).
         Err(e) => {
             let FilletSize::Radius(radius) = spec.size else {
-                return Err(e);
+                return Err(named(e));
             };
-            return Err(consumed_face(&b, &all, radius).map_or(e, |width| KernelError::TooLarge {
+            return Err(consumed_face(&b, &all, radius).map_or_else(|| named(e), |width| KernelError::TooLarge {
                 op: "fillet",
                 why: format!(
                     "the R{radius} fillets make full rounds of two faces that meet (one {width:.3} mm wide, its \
@@ -2850,6 +2882,7 @@ pub fn chamfer(
         ChamferSpec::EqualDistance(_) => opts.clone(),
         _ => chain_sides(&b, edges, opts),
     };
+    let mut local_error: Option<KernelError> = None;
     // (Local trimming passes over edges whose faces join smoothly.)
     let sharp = sharp_edges(&b, edges)?;
     // Equal distances: by local trimming, their contacts that far along the faces
@@ -2879,6 +2912,7 @@ pub fn chamfer(
                     if std::env::var_os("CADRS_BLEND_DEBUG").is_some() {
                         eprintln!("local chamfer: {e}; falling back to the blend tool");
                     }
+                    local_error = Some(e);
                 }
             }
         }
@@ -3005,11 +3039,15 @@ pub fn chamfer(
                     if std::env::var_os("CADRS_BLEND_DEBUG").is_some() {
                         eprintln!("local chamfer: {e}; falling back to the blend tool");
                     }
+                    local_error = Some(e);
                 }
             }
         }
     }
-    chamfer_tool(k, body, edges, opts)
+    chamfer_tool(k, body, edges, opts).map_err(|e| match &local_error {
+        Some(first) => e.after("the local chamfer", first),
+        None => e,
+    })
 }
 
 /// The chamfer `r` of `edges` of `body` with its corners cut flat ([`ChamferCorners::Flat`]): at
@@ -3310,11 +3348,6 @@ pub fn chamfer_tool(
                 None => (chord(s0, a), chord(s1, c)),
             }
         };
-        let (d1, d2) = match spec {
-            ChamferSpec::EqualDistance(d) => told(d, d),
-            ChamferSpec::TwoDistances(a, c) => told(a, c),
-            ChamferSpec::DistanceAngle { distance, angle } => (distance, f64::NAN + angle),
-        };
         let kind: Box<dyn Fn(f64) -> SectionKind> = match spec {
             ChamferSpec::DistanceAngle { distance, angle } => Box::new(move |phi| {
                 // The second distance from the angle at the first face: in the section triangle
@@ -3323,7 +3356,14 @@ pub fn chamfer_tool(
                 let d2 = distance * angle.sin() / (PI - angle - theta).sin();
                 SectionKind::Chamfer { d1: distance, d2 }
             }),
-            _ => Box::new(move |_| SectionKind::Chamfer { d1, d2 }),
+            ChamferSpec::EqualDistance(d) => {
+                let (d1, d2) = told(d, d);
+                Box::new(move |_| SectionKind::Chamfer { d1, d2 })
+            }
+            ChamferSpec::TwoDistances(a, c) => {
+                let (d1, d2) = told(a, c);
+                Box::new(move |_| SectionKind::Chamfer { d1, d2 })
+            }
         };
         list.push((e, kind, flip));
     }

@@ -39,17 +39,21 @@ fn meet(surfs: &[&Surface], p: P3) -> Option<P3> {
         for (i, s) in surfs.iter().enumerate() {
             let d = super::ssi::sdist(s, &x);
             let e = tol::DIFF_STEP;
-            let g = V3::new(
-                (super::ssi::sdist(s, &(x + V3::x() * e))
-                    - super::ssi::sdist(s, &(x - V3::x() * e)))
-                    / (2.0 * e),
-                (super::ssi::sdist(s, &(x + V3::y() * e))
-                    - super::ssi::sdist(s, &(x - V3::y() * e)))
-                    / (2.0 * e),
-                (super::ssi::sdist(s, &(x + V3::z() * e))
-                    - super::ssi::sdist(s, &(x - V3::z() * e)))
-                    / (2.0 * e),
-            );
+            // (The distance's gradient is the normal it is measured along; differenced only
+            // where there is none to write down.)
+            let g = super::ssi::sdist_gradient(s, &x, &mut None).unwrap_or_else(|| {
+                V3::new(
+                    (super::ssi::sdist(s, &(x + V3::x() * e))
+                        - super::ssi::sdist(s, &(x - V3::x() * e)))
+                        / (2.0 * e),
+                    (super::ssi::sdist(s, &(x + V3::y() * e))
+                        - super::ssi::sdist(s, &(x - V3::y() * e)))
+                        / (2.0 * e),
+                    (super::ssi::sdist(s, &(x + V3::z() * e))
+                        - super::ssi::sdist(s, &(x - V3::z() * e)))
+                        / (2.0 * e),
+                )
+            });
             jt[(i, 0)] = g.x;
             jt[(i, 1)] = g.y;
             jt[(i, 2)] = g.z;
@@ -163,10 +167,16 @@ fn line_meet(c: &Curve, surfs: &[&Surface], p: P3) -> Option<P3> {
         for _ in 0..50 {
             let (mut num, mut den) = (0.0, 0.0);
             for s in surfs {
-                let d = super::ssi::sdist(s, &c.point(t));
-                let g = (super::ssi::sdist(s, &c.point(t + h))
-                    - super::ssi::sdist(s, &c.point(t - h)))
-                    / (2.0 * h);
+                let (at, tangent, _) = c.d2(t);
+                let d = super::ssi::sdist(s, &at);
+                let g = match super::ssi::sdist_gradient(s, &at, &mut None) {
+                    Some(n) => n.dot(&tangent),
+                    None => {
+                        (super::ssi::sdist(s, &c.point(t + h))
+                            - super::ssi::sdist(s, &c.point(t - h)))
+                            / (2.0 * h)
+                    }
+                };
                 num += d * g;
                 den += g * g;
             }
