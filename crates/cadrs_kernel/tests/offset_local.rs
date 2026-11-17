@@ -1771,3 +1771,100 @@ fn elliptic_cylinder_shrunk_past_its_curvature() {
         }
     }
 }
+
+/// A block with a step cut out of it (so not convex) and one corner cut off by a small facet.
+fn stepped_block_with_a_cut_corner(k: &mut NativeKernel) -> BodyId {
+    let block = |k: &mut NativeKernel, a: [f64; 3], b: [f64; 3]| {
+        k.primitive(&Primitive::block(Point3::from(a), Point3::from(b)))
+            .unwrap()
+            .first()
+            .unwrap()
+    };
+    let cube = block(k, [0.0; 3], [10.0; 3]);
+    // The corner (10, 10, 10) cut off one along each edge.
+    let p = Point3::new(10.0, 10.0, 10.0);
+    let (a, b, c) = (p - Vector3::x(), p - Vector3::y(), p - Vector3::z());
+    let far = p + Vector3::new(1.0, 1.0, 1.0);
+    let wedge = k
+        .mesh_solid(&[[a, b, c], [a, far, b], [b, far, c], [c, far, a]], 1e-7)
+        .unwrap();
+    let cut = k
+        .boolean(BoolOp::Subtract, cube, &[wedge])
+        .unwrap()
+        .first()
+        .unwrap();
+    let step = block(k, [-1.0, -1.0, 5.0], [5.0, 11.0, 11.0]);
+    k.boolean(BoolOp::Subtract, cut, &[step])
+        .unwrap()
+        .first()
+        .unwrap()
+}
+
+/// That block shrunk by one with sharp corners: its faces close over the small facet, whose
+/// edges shrink to nothing on the way, and it is the plain stepped block's inset, 8 × 8 × 3
+/// under 3 × 8 × 5. (A convex body's faces are its planes' polytope; this one's are moved again
+/// as each edge goes.)
+#[test]
+fn an_inset_closes_over_a_small_facet_of_a_body_that_isnt_convex() {
+    let mut k = NativeKernel::new();
+    let part = stepped_block_with_a_cut_corner(&mut k);
+    assert_eq!(k.get(part).unwrap().faces.len(), 9);
+    let spec = OffsetSpec {
+        distance: -1.0,
+        faces: vec![],
+        sharp: true,
+    };
+    let out = k.offset(part, &spec).unwrap().bodies[0];
+    let b = k.get(out).unwrap();
+    assert!(b.check().is_empty(), "{:?}", b.check());
+    assert_eq!(b.faces.len(), 8, "the facet is gone");
+    let v = k.mass_properties(out).unwrap().volume;
+    assert!((v - 312.0).abs() < 1e-9, "volume {v}");
+}
+
+/// The same block's upright faces drafted: at five degrees they close over the facet, at
+/// thirty over the step's floor too, and at fifty they meet below the step, the pyramid the
+/// whole block's sides make.
+#[test]
+fn a_draft_closes_over_faces_of_a_body_that_isnt_convex() {
+    let mut k = NativeKernel::new();
+    let part = stepped_block_with_a_cut_corner(&mut k);
+    let uprights: Vec<FaceId> = {
+        let b = k.get(part).unwrap();
+        (0..b.faces.len())
+            .filter(|&f| match &b.faces[f].surf {
+                Surface::Plane { f: fr } => fr.x.cross(&fr.y).z.abs() < 1e-9,
+                _ => false,
+            })
+            .map(|f| FaceId(f as u64))
+            .collect()
+    };
+    let drafted = |k: &mut NativeKernel, degrees: f64| {
+        let spec = DraftSpec {
+            faces: uprights.clone(),
+            angle: degrees.to_radians(),
+            pull: Vector3::z_axis(),
+            neutral: Point3::origin(),
+            neutral_normal: None,
+            tangent_propagation: false,
+        };
+        let out = k.draft(part, &spec).unwrap().bodies[0];
+        let b = k.get(out).unwrap();
+        assert!(b.check().is_empty(), "{degrees} degrees: {:?}", b.check());
+        (b.faces.len(), k.mass_properties(out).unwrap().volume)
+    };
+    let (five, thirty, fifty) = (
+        drafted(&mut k, 5.0),
+        drafted(&mut k, 30.0),
+        drafted(&mut k, 50.0),
+    );
+    assert_eq!((five.0, thirty.0, fifty.0), (8, 6, 5));
+    assert!(
+        five.1 > thirty.1 && thirty.1 > fifty.1,
+        "{five:?} {thirty:?} {fifty:?}"
+    );
+    // At fifty degrees the sides meet at z = 5 / tan 50°, below the step: the pyramid on the
+    // block's base, a third of its base by its height.
+    let apex = 5.0 / 50f64.to_radians().tan();
+    assert!((fifty.1 - 100.0 * apex / 3.0).abs() < 1e-7, "{}", fifty.1);
+}

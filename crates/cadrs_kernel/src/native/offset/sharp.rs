@@ -345,7 +345,12 @@ pub fn offset_sharp(b: &Body, dist: &[f64]) -> Result<Body> {
                 Some(Err(_)) | None => {
                     match super::prism::curved_prism_inset(b, dist, false, false) {
                         Some(Ok(out)) => Ok(out),
-                        _ => Err(e),
+                        // Of any other body, the faces moved again as its edges shrink to
+                        // nothing.
+                        _ => match crate::native::local::replace_with_events(b, &surfs) {
+                            Some((out, _)) => Ok(out),
+                            None => Err(e),
+                        },
                     }
                 }
             };

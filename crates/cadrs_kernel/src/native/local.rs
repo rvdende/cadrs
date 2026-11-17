@@ -1635,6 +1635,148 @@ fn replace_surfaces_checked(
     Ok(out)
 }
 
+/// `b` with its faces' surfaces replaced by `surfs` ([`replace_surfaces`]) where the moves
+/// swallow faces: an edge whose ends the moved faces carry past one another (a small facet at
+/// a corner, its neighbours closing over it under a draft or an inset) has shrunk to nothing
+/// on the way, so its ends are made one vertex, a face left with two sides goes (its two
+/// edges one), and the faces are moved again; and so on, the edge most turned round first,
+/// until they close. The body with, for each of its faces, the face of `b` it is. `None`
+/// where no edge is turned round (the failure is something else) or the faces still don't
+/// close.
+///
+/// A convex body of planes needs none of this ([`planes_bound`]); this is the same for a body
+/// that isn't convex or has curved faces, one event at a time.
+pub(crate) fn replace_with_events(b: &Body, surfs: &[Surface]) -> Option<(Body, Vec<usize>)> {
+    let mut cur = b.clone();
+    let mut now: Vec<Surface> = surfs.to_vec();
+    let mut from: Vec<usize> = (0..b.faces.len()).collect();
+    for _ in 0..b.edges.len() {
+        let e = turned_edge(&cur, &now)?;
+        let (next, gone) = contract_edge(&cur, e)?;
+        for &f in gone.iter().rev() {
+            now.remove(f);
+            from.remove(f);
+        }
+        cur = next;
+        if let Ok(out) = replace_surfaces(&cur, &now) {
+            return Some((out, from));
+        }
+    }
+    None
+}
+
+/// The edge of `b` its faces' moves to `surfs` turn round most: its ends, each where its
+/// faces' new surfaces meet, the other way round from before (or on one another). `None`
+/// where none is.
+fn turned_edge(b: &Body, surfs: &[Surface]) -> Option<usize> {
+    let vf = vertex_faces(b);
+    let moved: Vec<Option<P3>> = (0..b.verts.len())
+        .map(|v| {
+            if vf[v].len() < 3 {
+                return None;
+            }
+            let fs: Vec<&Surface> = vf[v].iter().map(|&f| &surfs[f]).collect();
+            meet(&fs, b.verts[v].p)
+        })
+        .collect();
+    let mut worst: Option<(f64, usize)> = None;
+    for (e, ed) in b.edges.iter().enumerate() {
+        if ed.degenerate || ed.v[0] == ed.v[1] {
+            continue;
+        }
+        let (Some(p), Some(q)) = (moved[ed.v[0]], moved[ed.v[1]]) else {
+            continue;
+        };
+        let was = b.verts[ed.v[1]].p - b.verts[ed.v[0]].p;
+        // (How much of its old length it has, along its old direction.)
+        let share = (q - p).dot(&was) / was.norm_squared().max(tol::TINY);
+        if share < tol::ROUNDOFF && worst.is_none_or(|(x, _)| share < x) {
+            worst = Some((share, e));
+        }
+    }
+    worst.map(|(_, e)| e)
+}
+
+/// `b` with edge `e` shrunk to a point: its two ends one vertex, the edge gone from its faces,
+/// and a face left with two sides gone too, its two edges made one (the first) in the faces
+/// beyond them. With the faces that went, in order. The geometry is the old one: the faces'
+/// move works it out again. `None` for what this doesn't cover (a face left with one side, or
+/// with holes and too few sides).
+fn contract_edge(b: &Body, e: usize) -> Option<(Body, Vec<usize>)> {
+    let [keep, lose] = b.edges[e].v;
+    if keep == lose {
+        return None;
+    }
+    let mut nb = b.clone();
+    for ed in &mut nb.edges {
+        for v in &mut ed.v {
+            if *v == lose {
+                *v = keep;
+            }
+        }
+    }
+    for f in &mut nb.faces {
+        for l in &mut f.loops {
+            l.retain(|c| c.edge != e);
+        }
+    }
+    // The faces left with two sides, and for each the edge that goes and the one that stays.
+    let mut gone: Vec<usize> = Vec::new();
+    let mut made_one: Vec<(usize, usize)> = Vec::new();
+    for (fi, f) in nb.faces.iter().enumerate() {
+        if f.loops.iter().any(|l| l.len() < 2) {
+            return None;
+        }
+        if let [l] = f.loops.as_slice()
+            && l.len() == 2
+        {
+            let (stays, goes) = (l[0].edge, l[1].edge);
+            if stays == goes || made_one.iter().any(|&(g, s)| g == stays || s == goes) {
+                return None;
+            }
+            gone.push(fi);
+            made_one.push((goes, stays));
+        } else if f.loops.iter().any(|l| l.len() < 3) && matches!(f.surf, Surface::Plane { .. }) {
+            return None;
+        }
+    }
+    for &(goes, stays) in &made_one {
+        let (ev, sv) = (nb.edges[goes].v, nb.edges[stays].v);
+        if sv[0] == sv[1] {
+            return None;
+        }
+        let (curve, t) = (nb.edges[stays].curve.clone(), nb.edges[stays].t);
+        for (fi, face) in nb.faces.iter_mut().enumerate() {
+            if gone.contains(&fi) {
+                continue;
+            }
+            let surf = face.surf.clone();
+            for c in face.loops.iter_mut().flatten().filter(|c| c.edge == goes) {
+                // (The same way round: from the vertex the edge that goes started at.)
+                let start = if c.fwd { ev[0] } else { ev[1] };
+                *c = Coedge {
+                    edge: stays,
+                    fwd: sv[0] == start,
+                    pc: super::pcurve::pcurve(&surf, &curve, t[0], t[1], None),
+                };
+            }
+        }
+    }
+    for &f in gone.iter().rev() {
+        nb.faces.remove(f);
+        for sh in &mut nb.shells {
+            sh.faces.retain(|&x| x != f);
+            for x in &mut sh.faces {
+                if *x > f {
+                    *x -= 1;
+                }
+            }
+        }
+    }
+    super::unify::compact(&mut nb);
+    Some((nb, gone))
+}
+
 /// The solid bounded by the planes `surfs` of a convex polyhedron `b` (each face's, with the
 /// material on the side it is now): the half-spaces' common part, with the face of `b` each of its
 /// faces lies on. None when `b` is not a convex polyhedron (a face curved, or a vertex outside
@@ -2639,9 +2781,14 @@ pub fn draft(k: &mut NativeKernel, body: BodyId, spec: &DraftSpec) -> Result<OpR
         }
         // Faces the draft swallows (a box's top, where its sides meet below it): of a convex
         // polyhedron, the solid the planes bound, as they are after the draft.
+        // Of any other body, the faces moved again as its edges shrink to nothing
+        // ([`replace_with_events`]).
         Err(e) => match planes_bound(&b, &surfs).or_else(|| prism_planes_bound(&b, &surfs)) {
             Some(Ok(r)) => r,
-            Some(Err(_)) | None => return Err(e),
+            Some(Err(_)) | None => match replace_with_events(&b, &surfs) {
+                Some(r) => r,
+                None => return Err(e),
+            },
         },
     };
     let id = k.insert(out);
