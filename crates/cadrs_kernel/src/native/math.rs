@@ -461,6 +461,16 @@ pub fn minimize(mut f: impl FnMut(f64) -> f64, mut a: f64, mut b: f64) -> f64 {
     0.5 * (a + b)
 }
 
+/// [`solve2`] of any system that has a solution at all: `None` only where the determinant is
+/// zero or the answer isn't a number (as an LU solve gives up), however small it is beside
+/// the coefficients. For the least-squares 2 × 2 systems of Newton steps, whose callers judge
+/// the step themselves.
+pub fn solve2_any(a: f64, b: f64, c: f64, d: f64, r0: f64, r1: f64) -> Option<(f64, f64)> {
+    let det = a * d - b * c;
+    let (x, y) = ((r0 * d - b * r1) / det, (a * r1 - c * r0) / det);
+    (det != 0.0 && x.is_finite() && y.is_finite()).then_some((x, y))
+}
+
 /// Solves a 2×2 system; None when singular.
 pub fn solve2(a: f64, b: f64, c: f64, d: f64, r0: f64, r1: f64) -> Option<(f64, f64)> {
     let det = a * d - b * c;

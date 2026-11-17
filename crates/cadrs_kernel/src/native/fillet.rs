@@ -526,7 +526,22 @@ fn crossings(
     // A flat ball's section through a point: the spine's at the point's parameter.
     let section = |p: &P3| ef.spine.at(ef.spine.param_of(p, ef.tm)).1;
     let plane = ef.flat.then_some(&section as &dyn Fn(&P3) -> V3);
-    let mut out = geom::rail_crossings(f, k, side, bd, near, reach, plane);
+    // How that section's plane turns as the point moves by `dp`: the spine's unit tangent's
+    // rate, by how fast the point's parameter on the spine runs (its nearest point's:
+    // ds = dp·C′ / (C′·C′ − (p − C)·C″)).
+    let section_rate = |p: &P3, dp: &V3| -> V3 {
+        let s = ef.spine.param_of(p, ef.tm);
+        let (_, _, _, dtn) = ef.spine.at_d(s);
+        let (c, c1, c2) = ef.spine.curve.d2(s);
+        let den = c1.norm_squared() - (p - c).dot(&c2);
+        if den.abs() > tol::TINY {
+            dtn * (dp.dot(&c1) / den)
+        } else {
+            V3::zeros()
+        }
+    };
+    let turning = ef.flat.then_some(&section_rate as &dyn Fn(&P3, &V3) -> V3);
+    let mut out = geom::rail_crossings(f, k, side, bd, near, reach, plane, turning);
     // A varying radius: each crossing again with the radius where it is. The crossing with the
     // radius at spine parameter t lies at F(t); secant steps on F(t) − t find where they agree.
     // (Only those found so: one the steps don't settle has another crossing's radius.)
@@ -534,9 +549,18 @@ fn crossings(
         let mut settled = Vec::new();
         for x in out {
             let at = |t: f64, near: &Ball| -> Option<(f64, f64, Ball)> {
-                let y = geom::rail_crossings(f, ef.k_at(t), side, bd, &near.c, 2.0 * ef.r(), plane)
-                    .into_iter()
-                    .min_by(|p, q| (p.1.c - near.c).norm().total_cmp(&(q.1.c - near.c).norm()))?;
+                let y = geom::rail_crossings(
+                    f,
+                    ef.k_at(t),
+                    side,
+                    bd,
+                    &near.c,
+                    2.0 * ef.r(),
+                    plane,
+                    turning,
+                )
+                .into_iter()
+                .min_by(|p, q| (p.1.c - near.c).norm().total_cmp(&(q.1.c - near.c).norm()))?;
                 Some((ef.spine.param_of(&y.1.c, t) - t, y.0, y.1))
             };
             let t0 = ef.spine.param_of(&x.1.c, ef.tm);
@@ -2177,10 +2201,9 @@ fn tri_corner(
     let face = &b.faces[fs];
     let to_uv = |uv: P2, d: V3| -> V2 {
         let (_, su, sv) = face.surf.d1(uv.x, uv.y);
-        let m = nalgebra::Matrix2::new(su.dot(&su), su.dot(&sv), su.dot(&sv), sv.dot(&sv));
-        m.lu()
-            .solve(&V2::new(su.dot(&d), sv.dot(&d)))
-            .unwrap_or(V2::zeros())
+        let (a, c) = (su.dot(&su), su.dot(&sv));
+        super::math::solve2_any(a, c, c, sv.dot(&sv), su.dot(&d), sv.dot(&d))
+            .map_or(V2::zeros(), |(x, y)| V2::new(x, y))
     };
     let (bridge, circular) = rail_rail_bridge(
         mates[0].0,
@@ -3099,9 +3122,16 @@ fn rail_cross(
         let da = a.velocity(body, ta, &ba)?[ka];
         let db = b.velocity(body, tb, &bb)?[kb];
         // Least squares: [da, −db] (dta, dtb) = −r.
-        let m = nalgebra::Matrix2::new(da.dot(&da), -da.dot(&db), -da.dot(&db), db.dot(&db));
-        let rhs = nalgebra::Vector2::new(-da.dot(&r), db.dot(&r));
-        let d = m.lu().solve(&rhs)?;
+        let across = -da.dot(&db);
+        let (dx, dy) = super::math::solve2_any(
+            da.dot(&da),
+            across,
+            across,
+            db.dot(&db),
+            -da.dot(&r),
+            db.dot(&r),
+        )?;
+        let d = nalgebra::Vector2::new(dx, dy);
         // Steps no longer than the radius.
         let len = (da * d.x).norm().max((db * d.y).norm());
         let f = if len > a.r() { a.r() / len } else { 1.0 };
@@ -10828,10 +10858,8 @@ fn ball_offsets(q: [P3; 2], n: [V3; 2], near: &P3) -> Option<[f64; 2]> {
 fn ball_offsets_within(q: [P3; 2], n: [V3; 2], within: f64) -> Option<[f64; 2]> {
     let r = q[1] - q[0];
     let g = n[0].dot(&n[1]);
-    let m = nalgebra::Matrix2::new(1.0, -g, -g, 1.0);
-    let x = m
-        .lu()
-        .solve(&nalgebra::Vector2::new(n[0].dot(&r), -n[1].dot(&r)))?;
+    let (x0, x1) = super::math::solve2_any(1.0, -g, -g, 1.0, n[0].dot(&r), -n[1].dot(&r))?;
+    let x = nalgebra::Vector2::new(x0, x1);
     let miss = (q[0] + n[0] * x.x - q[1] - n[1] * x.y).norm();
     (x.x * x.y > 0.0 && miss < within).then(|| [x.x.abs(), x.y.abs()])
 }
@@ -13378,10 +13406,16 @@ fn edge_crossing(c: &Curve, t: f64, e: &super::topo::Edge) -> Option<f64> {
             break;
         }
         // Least squares: [dc, −de] (dt, ds) = −r.
-        let m = nalgebra::Matrix2::new(dc.dot(&dc), -dc.dot(&de), -dc.dot(&de), de.dot(&de));
-        let d = m
-            .lu()
-            .solve(&nalgebra::Vector2::new(-dc.dot(&r), de.dot(&r)))?;
+        let across = -dc.dot(&de);
+        let (dx, dy) = super::math::solve2_any(
+            dc.dot(&dc),
+            across,
+            across,
+            de.dot(&de),
+            -dc.dot(&r),
+            de.dot(&r),
+        )?;
+        let d = nalgebra::Vector2::new(dx, dy);
         t += d.x;
         s += d.y;
     }

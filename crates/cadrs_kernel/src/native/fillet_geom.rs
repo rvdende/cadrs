@@ -25,7 +25,7 @@ use super::nurbs::{H, NurbsCurve, NurbsSurface, hom};
 use super::surface::Surface;
 use super::tol;
 use super::topo::Face;
-use nalgebra::{Matrix2, Matrix3, Matrix4, SMatrix, SVector, Vector2};
+use nalgebra::{Matrix3, Matrix4, SMatrix, SVector, Vector2};
 
 /// A point where the ball touches a face: (u, v) on the face's surface, the point and the
 /// face's outward unit normal there.
@@ -426,6 +426,7 @@ pub fn rail_crossings(
     near: &P3,
     reach: f64,
     plane: Option<&dyn Fn(&P3) -> V3>,
+    turning: Option<&dyn Fn(&P3, &V3) -> V3>,
 ) -> Vec<(f64, Ball)> {
     let other = 1 - side;
     let (fs, fo) = (f[side], f[other]);
@@ -442,13 +443,26 @@ pub fn rail_crossings(
         // flat ball's plane turning with it too, in differences).
         let dc = match pl {
             None => o.du * dp.x + o.dv * dp.y,
-            Some(_) => {
-                let h = 1e-7 * (1.0 + t.abs());
-                let (q2, _, _) = bd.pc.d2(t + h);
-                let uv2 = P2::new(q2.x, q2.y);
-                let pl2 = plane_at(&fs.surf.eval(uv2.x, uv2.y));
-                (offset(fs, k[side], uv2, pl2.as_ref())?.o - o.o) / h
-            }
+            // (The plane turns as the contact moves: by its own rate where the caller
+            // gives one. The offset runs along the normal's part m = n − t (t·n) in the
+            // plane, so the plane's turning ṫ moves it by k (ṁ − d (d·ṁ))/|m|,
+            // ṁ = −ṫ (t·n) − t (ṫ·n).)
+            Some(pt) => match turning {
+                Some(rate) => {
+                    let (_, su, sv) = fs.surf.d1(uv.x, uv.y);
+                    let turn = rate(&o.contact.p, &(su * dp.x + sv * dp.y));
+                    let n = o.contact.n;
+                    let dm = -turn * pt.dot(&n) - pt * turn.dot(&n);
+                    o.du * dp.x + o.dv * dp.y + (dm - o.dir * o.dir.dot(&dm)) * (k[side] / o.part)
+                }
+                None => {
+                    let h = 1e-7 * (1.0 + t.abs());
+                    let (q2, _, _) = bd.pc.d2(t + h);
+                    let uv2 = P2::new(q2.x, q2.y);
+                    let pl2 = plane_at(&fs.surf.eval(uv2.x, uv2.y));
+                    (offset(fs, k[side], uv2, pl2.as_ref())?.o - o.o) / h
+                }
+            },
         };
         Some((o.o, dc, o.contact, pl))
     };
@@ -499,9 +513,8 @@ pub fn rail_crossings(
                         (res(uv + Vector2::new(0.0, h)) - r) / h,
                     )
                 };
-                let m = Matrix2::from_columns(&[ru, rv]);
-                let d = m.lu().solve(&(-r))?;
-                uv = clamp_uv(fo, uv + d);
+                let (du, dv) = solve2_any(ru.x, rv.x, ru.y, rv.y, -r.x, -r.y)?;
+                uv = clamp_uv(fo, uv + Vector2::new(du, dv));
             }
             if !settled && res(uv).norm() > tol::REL_POINT * sc {
                 return None;

@@ -3883,11 +3883,14 @@ pub(crate) fn along_face(f: &Face, p: &P3, t: &V3, w: &V3, dist: f64) -> P3 {
     let h = dist / steps as f64;
     let mut q = *p;
     let mut dir = *w;
+    // (Each foot from the last: the march moves a sixty-fourth of the way at a time.)
+    let mut foot: Option<(f64, f64)> = None;
     for _ in 0..steps {
         let mut x = q + dir * h;
         // Back onto the surface and into the plane.
         for _ in 0..4 {
-            let (u, v) = f.surf.project(&x, None);
+            let (u, v) = f.surf.project(&x, foot);
+            foot = Some((u, v));
             x = f.surf.eval(u, v);
             x -= t * (x - p).dot(t);
         }

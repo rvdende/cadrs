@@ -821,10 +821,13 @@ fn tangent_along_shared_edge(
                 continue;
             }
             // Tangent along it: the normals agree (up to sign) at a few points.
+            // (Each point's feet from the last's: they lie along one edge.)
+            let mut feet: [Option<(f64, f64)>; 2] = [None, None];
             let tangent = [0.2, 0.5, 0.8].iter().all(|f| {
                 let p = e.curve.point(e.t[0] + (e.t[1] - e.t[0]) * f);
-                let (ua, va) = fa.surf.project(&p, None);
-                let (ub, vb) = fb.surf.project(&p, None);
+                let (ua, va) = fa.surf.project(&p, feet[0]);
+                let (ub, vb) = fb.surf.project(&p, feet[1]);
+                feet = [Some((ua, va)), Some((ub, vb))];
                 fa.surf.normal(ua, va).dot(&fb.surf.normal(ub, vb)).abs() > 1.0 - tol::ANGULAR_POINT
             });
             if tangent {
@@ -3145,9 +3148,12 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 // (A touch, not a crossing: the edge keeps to one side of the surface either
                 // side of the root.)
                 let (lo, hi) = (pe.t[0].min(pe.t[1]), pe.t[0].max(pe.t[1]));
+                // (The second point's foot from the first's: they are either side of one root.)
+                let foot = std::cell::Cell::new(None);
                 let side = |x: f64| {
                     let q = ed.curve.point(x.clamp(lo, hi));
-                    let (u, v) = surf.project(&q, None);
+                    let (u, v) = surf.project(&q, foot.get());
+                    foot.set(Some((u, v)));
                     (q - surf.eval(u, v)).dot(&surf.normal(u, v))
                 };
                 let near_vertex = pe
