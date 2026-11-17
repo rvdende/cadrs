@@ -396,6 +396,9 @@ impl EdgeFillet {
     ) -> ((f64, Ball), (f64, Ball)) {
         let (mut a, mut z) = (a, z);
         for _ in 0..60 {
+            if (z.0 - a.0).abs() <= 4.0 * f64::EPSILON * (1.0 + a.0.abs().max(z.0.abs())) {
+                break;
+            }
             let m = 0.5 * (a.0 + z.0);
             let Some(x) = self.ball(b, m, Some([a.1.q[0].uv, a.1.q[1].uv])) else {
                 break;
@@ -1250,27 +1253,38 @@ fn reach_radius(
     // projected from it, the last one's (they move little from one to the next: no search
     // over the whole surface per step of the bisection, most of a fillet's time).
     let mut near = None;
-    if clearance(b, ef, &full, r, wall, &mut near) >= 0.0 {
+    let at_full = clearance(b, ef, &full, r, wall, &mut near);
+    if at_full >= 0.0 {
         return Ok(None);
     }
-    let (mut lo, mut hi) = (0.02 * r, r);
+    let (lo, hi) = (0.02 * r, r);
     let mut g = *guess;
     let small = ball_of_radius(b, ef, t, lo, g).ok_or_else(lost)?;
     let mut small_near = near;
-    if clearance(b, ef, &small, lo, wall, &mut small_near) <= 0.0 {
+    let at_small = clearance(b, ef, &small, lo, wall, &mut small_near);
+    if at_small <= 0.0 {
         return Ok(Some(0.0));
     }
-    for _ in 0..60 {
-        let m = 0.5 * (lo + hi);
-        let bl = ball_of_radius(b, ef, t, m, g).ok_or_else(lost)?;
-        g = [bl.q[0].uv, bl.q[1].uv];
-        if clearance(b, ef, &bl, m, wall, &mut near) > 0.0 {
-            lo = m;
-        } else {
-            hi = m;
-        }
+    // (The radius the clearance reaches zero at, by false position: a few balls, not sixty.)
+    let mut failed = false;
+    let m = geom::bracket_root(
+        |m| match ball_of_radius(b, ef, t, m, g) {
+            Some(bl) => {
+                g = [bl.q[0].uv, bl.q[1].uv];
+                Some(clearance(b, ef, &bl, m, wall, &mut near))
+            }
+            None => {
+                failed = true;
+                None
+            }
+        },
+        (lo, at_small),
+        (hi, at_full),
+    );
+    if failed {
+        return Err(lost());
     }
-    Ok(Some(0.5 * (lo + hi)))
+    Ok(Some(m))
 }
 
 /// A welded strip's law, the end it's welded from and where it parts ([`weld_law`]).
@@ -1365,6 +1379,9 @@ fn weld_law(b: &Body, ef: &EdgeFillet, wall: usize) -> Result<Option<WeldLaw>> {
             let mut g = start;
             let _ = reach_radius(b, ef, z, wall, &mut g)?;
             for _ in 0..60 {
+                if (z - a).abs() <= 4.0 * f64::EPSILON * (1.0 + a.abs().max(z.abs())) {
+                    break;
+                }
                 let m = 0.5 * (a + z);
                 let mut gm = g;
                 if reach_radius(b, ef, m, wall, &mut gm)?.is_some() {
@@ -1547,20 +1564,11 @@ fn kink_point(b: &Body, ef: &EdgeFillet, g: &Face, t: f64) -> Option<P3> {
         let c = geom::contact(g, geom::foot(g, &p, None));
         (p - c.p).dot(&c.n)
     };
-    let (mut lo, mut hi) = (a0, a1);
-    let flo = sd(lo);
-    if flo * sd(hi) > 0.0 {
+    let (flo, fhi) = (sd(a0), sd(a1));
+    if flo * fhi > 0.0 {
         return None;
     }
-    for _ in 0..60 {
-        let m = 0.5 * (lo + hi);
-        if (sd(m) < 0.0) == (flo < 0.0) {
-            lo = m;
-        } else {
-            hi = m;
-        }
-    }
-    Some(arc.point(0.5 * (lo + hi)))
+    Some(arc.point(super::math::root_from(sd, (a0, flo), (a1, fhi))))
 }
 
 /// A face on `s` with no boundary, to march and fit a cut on.
@@ -1781,6 +1789,9 @@ fn first_contact(b: &Body, ef: &EdgeFillet, k: usize, x: Exit) -> Exit {
         return x;
     }
     for _ in 0..60 {
+        if (hi - lo).abs() <= 4.0 * f64::EPSILON * (1.0 + lo.abs().max(hi.abs())) {
+            break;
+        }
         let m = 0.5 * (lo + hi);
         match on(m, &lo_ball, lo) {
             Some((true, bl)) => (hi, hi_ball) = (m, bl),
@@ -4244,20 +4255,9 @@ fn end_chain(b: &Body, ef: &EdgeFillet, j: usize, exits: &[Exit; 2]) -> Result<V
             if let Some((sp, fp, gp)) = prev_s
                 && (fp < 0.0) != (f < 0.0)
             {
-                let (mut lo, mut hi, flo) = (sp, s, fp);
                 let mut gg = gp;
-                for _ in 0..60 {
-                    let m = 0.5 * (lo + hi);
-                    let Some((fm, _)) = dist(m, &mut gg) else {
-                        break;
-                    };
-                    if (fm < 0.0) == (flo < 0.0) {
-                        lo = m
-                    } else {
-                        hi = m
-                    }
-                }
-                found.extend(dist(0.5 * (lo + hi), &mut gg).map(|x| x.1));
+                let root = geom::bracket_root(|m| dist(m, &mut gg).map(|x| x.0), (sp, fp), (s, f));
+                found.extend(dist(root, &mut gg).map(|x| x.1));
                 if from_vertex {
                     break;
                 }
@@ -6515,16 +6515,7 @@ fn plane_crossing(b: &Body, fi: usize, v: usize, o: &P3, n: &V3) -> Option<(usiz
             if (h(a) < 0.0) == (h(z) < 0.0) {
                 continue;
             }
-            let (mut lo, mut hi) = (a, z);
-            for _ in 0..60 {
-                let mid = 0.5 * (lo + hi);
-                if (h(mid) < 0.0) == (h(lo) < 0.0) {
-                    lo = mid;
-                } else {
-                    hi = mid;
-                }
-            }
-            return Some((g, x.point(0.5 * (lo + hi))));
+            return Some((g, x.point(super::math::root_between(&h, a, z))));
         }
     }
     None
@@ -7285,17 +7276,11 @@ fn end_over_edge(
         prev = f;
         flips
     })?;
-    let (mut lo, mut hi) = ((i - 1) as f64 / m as f64, i as f64 / m as f64);
-    let f_lo = side(&ed.point(at(lo)));
-    for _ in 0..60 {
-        let mid = 0.5 * (lo + hi);
-        if (side(&ed.point(at(mid))) < 0.0) == (f_lo < 0.0) {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    let tq = at(0.5 * (lo + hi));
+    let tq = at(super::math::root_between(
+        |s| side(&ed.point(at(s))),
+        (i - 1) as f64 / m as f64,
+        i as f64 / m as f64,
+    ));
     // On the edge itself, not its extension.
     let xe = &b.edges[x];
     let p = ed.point(tq);
@@ -8536,17 +8521,18 @@ fn seam_crossing_of(nb: &Body, g: usize, ce: usize, seam: usize) -> Option<(f64,
         }
         prev = Some((t, q[axis], h));
     }
-    let (mut lo, mut hi, ulo, h0) = cross?;
-    for _ in 0..60 {
-        let t = 0.5 * (lo + hi);
-        let q = super::pcurve::project_along(&face.surf, &ed.point(lo), h0, periods);
-        let q2 = super::pcurve::project_along(&face.surf, &ed.point(t), Some((q.x, q.y)), periods);
-        if side(q2[axis]) == side(ulo) {
-            lo = t
-        } else {
-            hi = t
+    let (lo, hi, ulo, h0) = cross?;
+    // (Each step's foot from the last kept one's: projected once, where the kept end moved.)
+    let mut from = super::pcurve::project_along(&face.surf, &ed.point(lo), h0, periods);
+    let (lo, hi) = super::math::bisect(lo, hi, |t| {
+        let q =
+            super::pcurve::project_along(&face.surf, &ed.point(t), Some((from.x, from.y)), periods);
+        let same = side(q[axis]) == side(ulo);
+        if same {
+            from = q;
         }
-    }
+        same
+    });
     let tc = 0.5 * (lo + hi);
     let c0 = ed.point(tc);
     let tx = se.curve.closest(&c0, se.t[0] - 1e6, se.t[1] + 1e6);
@@ -8734,16 +8720,15 @@ impl StripRails<'_> {
             let t = t0 + (t1 - t0) * i as f64 / n as f64;
             let q = uv(t, Some(prev.1));
             if let Some(c) = between(prev.1[axis], q[axis]) {
-                let (mut lo, mut hi, mut ql) = (prev.0, t, prev.1);
-                for _ in 0..60 {
-                    let m = 0.5 * (lo + hi);
+                let mut ql = prev.1;
+                let (lo, hi) = super::math::bisect(prev.0, t, |m| {
                     let qm = uv(m, Some(ql));
-                    if (qm[axis] - c) * (ql[axis] - c) > 0.0 {
-                        (lo, ql) = (m, qm);
-                    } else {
-                        hi = m;
+                    let same = (qm[axis] - c) * (ql[axis] - c) > 0.0;
+                    if same {
+                        ql = qm;
                     }
-                }
+                    same
+                });
                 let ts = 0.5 * (lo + hi);
                 if (ts - t0).abs() > margin && (t1 - ts).abs() > margin {
                     let mut at = uv(ts, Some(ql));
@@ -9586,6 +9571,9 @@ fn seam_crossing(b: &Body, ef: &EdgeFillet, k: usize, period: f64) -> Result<Opt
                     // Bisection on the rail's coordinate against the seam's.
                     let (mut lo, mut hi, mut bl) = (tp, t, bp);
                     for _ in 0..60 {
+                        if (hi - lo).abs() <= 4.0 * f64::EPSILON * (1.0 + lo.abs().max(hi.abs())) {
+                            break;
+                        }
                         let m = 0.5 * (lo + hi);
                         let y = ef.ball_from(b, &bl, lo, m).ok_or_else(lost)?;
                         if (y.q[k].uv[axis] - sv) * (cp - sv) > 0.0 {
@@ -9685,6 +9673,9 @@ fn missed_crossings(
         if (sa < 0.0) != (sz < 0.0) {
             let mut xb = xa;
             for _ in 0..60 {
+                if (z - a).abs() <= 4.0 * f64::EPSILON * (1.0 + a.abs().max(z.abs())) {
+                    break;
+                }
                 let m = 0.5 * (a + z);
                 let Some(y) = at(&xb, a, m) else { break };
                 if (side(&y.q[k].p) < 0.0) == (sa < 0.0) {
@@ -9797,16 +9788,11 @@ fn junction_point(b: &Body, ef: &EdgeFillet, ball: &Ball, k: usize) -> Option<(f
         let Some(i) = (1..=n).find(|&i| sd(g, &at(i as f64 / n as f64)) <= 0.0) else {
             continue;
         };
-        let (mut lo, mut hi) = ((i - 1) as f64 / n as f64, i as f64 / n as f64);
-        for _ in 0..60 {
-            let m = 0.5 * (lo + hi);
-            if sd(g, &at(m)) > 0.0 {
-                lo = m;
-            } else {
-                hi = m;
-            }
-        }
-        let s = 0.5 * (lo + hi);
+        let s = super::math::root_between(
+            |s| sd(g, &at(s)),
+            (i - 1) as f64 / n as f64,
+            i as f64 / n as f64,
+        );
         if best.is_none_or(|x| s < x.0) {
             best = Some((s, g));
         }

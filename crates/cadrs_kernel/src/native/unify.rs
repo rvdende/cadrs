@@ -1310,21 +1310,13 @@ fn merge_group(b: &mut Body, g: &[usize]) -> Option<Face> {
             let c = chains[i2][k].clone();
             let e = &b.edges[c.edge];
             // Solve u(t) = target on the p-curve by bisection.
-            let (mut lo, mut hi) = (e.t[0], e.t[1]);
+            let (lo, hi) = (e.t[0], e.t[1]);
             let f = |t: f64| c.pc.point(t).x - target;
-            let flo = f(lo);
-            if flo.signum() == f(hi).signum() {
+            let (flo, fhi) = (f(lo), f(hi));
+            if flo.signum() == fhi.signum() {
                 return None;
             }
-            for _ in 0..100 {
-                let m = 0.5 * (lo + hi);
-                if f(m).signum() == flo.signum() {
-                    lo = m;
-                } else {
-                    hi = m;
-                }
-            }
-            let t = 0.5 * (lo + hi);
+            let t = super::math::root_from(f, (lo, flo), (hi, fhi));
             let e_id = c.edge;
             let v = split_edge(b, e_id, t);
             // Rebuild chain 2 with the split coedges (the split updated b.faces, not our chain).

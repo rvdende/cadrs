@@ -224,18 +224,7 @@ pub fn face_blend(k: &mut NativeKernel, spec: &FaceBlendSpec) -> Result<OpResult
             .position(|x| *x)
             .ok_or_else(|| invalid("The blend doesn't touch a face"))?;
         let last = inside.iter().rposition(|x| *x).unwrap_or(first);
-        let edge_of = |out: f64, inn: f64| {
-            let (mut a, mut z) = (out, inn);
-            for _ in 0..60 {
-                let m = 0.5 * (a + z);
-                if on_face(k, m) {
-                    z = m;
-                } else {
-                    a = m;
-                }
-            }
-            z
-        };
+        let edge_of = |out: f64, inn: f64| super::math::bisect(out, inn, |m| !on_face(k, m)).1;
         let s0 = if first == 0 {
             at(0)
         } else {

@@ -1667,16 +1667,9 @@ impl XBuilder {
                     if cur.abs() < tol::ROUNDOFF_FINE && i == m {
                         break; // the next coedge's start
                     }
-                    let (mut lo, mut hi) = ((i - 1) as f64 / m as f64, s1);
-                    for _ in 0..80 {
-                        let mid = (lo + hi) / 2.0;
-                        if (f(mid) > 0.0) == (f(lo) > 0.0) {
-                            lo = mid;
-                        } else {
-                            hi = mid;
-                        }
-                    }
-                    return Some((k, Some(a + (b - a) * (lo + hi) / 2.0)));
+                    let s =
+                        super::math::root_from(&f, ((i - 1) as f64 / m as f64, prev), (s1, cur));
+                    return Some((k, Some(a + (b - a) * s)));
                 }
                 prev = cur;
             }

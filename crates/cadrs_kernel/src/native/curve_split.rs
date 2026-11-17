@@ -371,18 +371,7 @@ fn split_in(b: &mut Body, fi: usize, c: &Curve, t0: f64, t1: f64) -> Option<Vec<
         (surf.eval(u, v) - p).norm() < on
             && in_face(&polys, &surf, P2::new(u, v), on) != InFace::Outside
     };
-    let edge_of = |out: f64, inn: f64| -> f64 {
-        let (mut a, mut z) = (out, inn);
-        for _ in 0..60 {
-            let m = 0.5 * (a + z);
-            if lies(m) {
-                z = m;
-            } else {
-                a = m;
-            }
-        }
-        z
-    };
+    let edge_of = |out: f64, inn: f64| -> f64 { super::math::bisect(out, inn, |m| !lies(m)).1 };
     let ta = if first == 0 {
         t0
     } else {

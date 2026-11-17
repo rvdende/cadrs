@@ -698,15 +698,7 @@ impl Fold<'_> {
             }
             // (The end kept on the stretch's side of the root.)
             let inside = rs[i] > 0.0;
-            let (mut lo, mut hi) = (at(i), at(i + 1));
-            for _ in 0..60 {
-                let m = 0.5 * (lo + hi);
-                if (room(m) > 0.0) == inside {
-                    lo = m;
-                } else {
-                    hi = m;
-                }
-            }
+            let (lo, hi) = super::math::bisect(at(i), at(i + 1), |m| (room(m) > 0.0) == inside);
             let root = if inside { lo } else { hi };
             match start.take() {
                 Some(from) => out.push((from, root)),

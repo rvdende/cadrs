@@ -668,12 +668,7 @@ fn plane_cone(fp: &Frame, fc: &Frame, r: f64, ang: f64, bb: &Bbox) -> Option<Vec
     }
     let edge_of = |a: f64, b: f64| -> f64 {
         // The boundary between an inside `a` and an outside `b`.
-        let (mut lo, mut hi) = (a, b);
-        for _ in 0..60 {
-            let mid = 0.5 * (lo + hi);
-            if inside(mid) { lo = mid } else { hi = mid }
-        }
-        lo
+        super::math::bisect(a, b, &inside).0
     };
     // The sample `i` steps on from `start`, unwrapped past 2π.
     let at = |start: usize, i: usize| us[(start + i) % m] + if start + i >= m { TAU } else { 0.0 };
@@ -2577,26 +2572,7 @@ pub fn curve_surface(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Vec<f64> {
         if i > 0 {
             prev = vals[i - 1];
             if prev.1.abs() >= 1e-10 && ft.abs() >= 1e-10 && prev.1.signum() != ft.signum() {
-                let (mut a, mut b, mut fa) = (prev.0, t, prev.1);
-                for _ in 0..100 {
-                    let m = 0.5 * (a + b);
-                    let fm = f(m);
-                    if fm == 0.0 {
-                        a = m;
-                        b = m;
-                        break;
-                    }
-                    if fm.signum() == fa.signum() {
-                        a = m;
-                        fa = fm;
-                    } else {
-                        b = m;
-                    }
-                    if (b - a).abs() < 1e-15 * (1.0 + a.abs()) {
-                        break;
-                    }
-                }
-                out.push(0.5 * (a + b));
+                out.push(super::math::root_from(&f, prev, (t, ft)));
             }
         }
         // Touching: a local minimum of |f| near zero between samples.
@@ -2604,17 +2580,7 @@ pub fn curve_surface(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Vec<f64> {
             let (fa, fb, fc) = (vals[i - 1].1.abs(), ft.abs(), vals[i + 1].1.abs());
             if fb < fa && fb < fc && fb < 1e-3 && vals[i - 1].1.signum() == vals[i + 1].1.signum() {
                 // Golden-section minimize |f|.
-                let (mut a, mut b) = (vals[i - 1].0, vals[i + 1].0);
-                for _ in 0..80 {
-                    let m1 = a + (b - a) * 0.382;
-                    let m2 = a + (b - a) * 0.618;
-                    if f(m1).abs() < f(m2).abs() {
-                        b = m2;
-                    } else {
-                        a = m1;
-                    }
-                }
-                let m = 0.5 * (a + b);
+                let m = super::math::minimize(|t| f(t).abs(), vals[i - 1].0, vals[i + 1].0);
                 if f(m).abs() < tol::ROUNDOFF {
                     out.push(m);
                 }

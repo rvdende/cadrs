@@ -215,17 +215,11 @@ impl Sweep<'_> {
                 if (vals[i] > 0.0) == (vals[i + 1] > 0.0) || vals[i] == 0.0 {
                     continue;
                 }
-                let (mut lo, mut hi) = (ts[i], ts[i + 1]);
-                let pos = vals[i] > 0.0;
-                for _ in 0..60 {
-                    let m = 0.5 * (lo + hi);
-                    if (f(velocity(self.place, m)) > 0.0) == pos {
-                        lo = m;
-                    } else {
-                        hi = m;
-                    }
-                }
-                out.push(0.5 * (lo + hi));
+                out.push(super::math::root_from(
+                    |m| f(velocity(self.place, m)),
+                    (ts[i], vals[i]),
+                    (ts[i + 1], vals[i + 1]),
+                ));
             }
         }
         out.sort_by(f64::total_cmp);

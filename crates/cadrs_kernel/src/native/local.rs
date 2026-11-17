@@ -211,12 +211,8 @@ fn line_meet(c: &Curve, surfs: &[&Surface], p: P3) -> Option<P3> {
         let ti = start + (t - start) * i as f64 / N as f64;
         let fi = f(ti);
         if prev.1 * fi < 0.0 {
-            let (mut a, mut z) = (prev.0, ti);
-            for _ in 0..60 {
-                let m = 0.5 * (a + z);
-                if f(m) * f(a) <= 0.0 { z = m } else { a = m }
-            }
-            if let Some(near) = newton(0.5 * (a + z)) {
+            let root = super::math::root_from(f, prev, (ti, fi));
+            if let Some(near) = newton(root) {
                 return Some(c.point(near));
             }
             break;
@@ -756,12 +752,7 @@ fn swallow_pole(out: &mut Body, fi: usize, li: usize) -> Option<(usize, usize)> 
         let (a, z) = (off(w[0]), off(w[1]));
         a * z <= 0.0 && (a - z).abs() < PI
     })?;
-    let (mut a, mut z) = (ts[k], ts[k + 1]);
-    for _ in 0..80 {
-        let m = 0.5 * (a + z);
-        if off(a) * off(m) <= 0.0 { z = m } else { a = m }
-    }
-    let th = 0.5 * (a + z);
+    let th = super::math::root_between(off, ts[k], ts[k + 1]);
     let q = he.point(th);
     let tq = match se.curve {
         Curve::Circle { .. } => unwrap_near(

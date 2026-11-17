@@ -968,15 +968,7 @@ fn arc_crossing(a: &Arc, y: f64, s0: f64, s1: f64) -> Option<f64> {
     if (a.uv_at(s1).y <= y) == up {
         return None;
     }
-    let (mut lo, mut hi) = (s0, s1);
-    for _ in 0..52 {
-        let m = 0.5 * (lo + hi);
-        if (a.uv_at(m).y <= y) == up {
-            lo = m
-        } else {
-            hi = m
-        }
-    }
+    let (lo, hi) = super::math::bisect(s0, s1, |m| (a.uv_at(m).y <= y) == up);
     Some(a.uv_at(0.5 * (lo + hi)).x)
 }
 

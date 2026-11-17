@@ -1108,46 +1108,4 @@ pub fn strip_error(s: &Strip, truth: &[(f64, Ball)]) -> Vec<f64> {
         .collect()
 }
 
-/// A root of `f` between `a` and `b`, where its values `a.1` and `b.1` differ in sign: the
-/// Illinois method (regula falsi with the stale end's value halved), falling back on bisection
-/// where it gains less than a halving, to the parameter's resolution. As fast as Newton's method
-/// on a smooth function (a few evaluations) where bisection takes fifty; on a function that
-/// fails (`None`) it stops there, at the bracket's middle.
-pub fn bracket_root(mut f: impl FnMut(f64) -> Option<f64>, a: (f64, f64), b: (f64, f64)) -> f64 {
-    let ((mut a, mut fa), (mut b, mut fb)) = (a, b);
-    let res = 4.0 * f64::EPSILON * (1.0 + a.abs().max(b.abs()));
-    // Which end moved last (−1: a, 1: b), and the bracket's width two steps ago.
-    let mut side = 0;
-    let mut widths = [f64::INFINITY; 2];
-    for _ in 0..200 {
-        let w = (b - a).abs();
-        if w <= res {
-            break;
-        }
-        let mut x = (a * fb - b * fa) / (fb - fa);
-        // Bisect where the secant leaves the bracket or the bracket stopped halving.
-        if !x.is_finite() || x <= a.min(b) || x >= a.max(b) || w > 0.5 * widths[0] {
-            x = 0.5 * (a + b);
-            side = 0;
-        }
-        widths = [widths[1], w];
-        let Some(fx) = f(x) else { break };
-        if fx == 0.0 {
-            return x;
-        }
-        if (fx < 0.0) == (fa < 0.0) {
-            (a, fa) = (x, fx);
-            if side == -1 {
-                fb *= 0.5;
-            }
-            side = -1;
-        } else {
-            (b, fb) = (x, fx);
-            if side == 1 {
-                fa *= 0.5;
-            }
-            side = 1;
-        }
-    }
-    0.5 * (a + b)
-}
+pub use super::math::bracket_root;

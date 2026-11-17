@@ -476,18 +476,11 @@ fn contact_plane(b: &Body, fi: usize, mv: &Move, size: f64) -> Option<Plane> {
         if gb.abs() <= zero || ga * gb > 0.0 {
             return;
         }
-        let (mut lo, mut hi, mut glo) = (0.0f64, 1.0f64, ga);
-        for _ in 0..60 {
-            let m = 0.5 * (lo + hi);
-            let gm = g(a.0 + (b2.0 - a.0) * m, a.1 + (b2.1 - a.1) * m);
-            if (gm < 0.0) == (glo < 0.0) {
-                lo = m;
-                glo = gm;
-            } else {
-                hi = m;
-            }
-        }
-        let m = 0.5 * (lo + hi);
+        let m = super::math::root_from(
+            |m| g(a.0 + (b2.0 - a.0) * m, a.1 + (b2.1 - a.1) * m),
+            (0.0, ga),
+            (1.0, gb),
+        );
         pts.push(s.eval(a.0 + (b2.0 - a.0) * m, a.1 + (b2.1 - a.1) * m));
     };
     for i in 0..=n {
@@ -614,15 +607,9 @@ fn contact_curves(b: &Body, fi: usize, mv: &Move) -> Vec<Curve> {
         }
         crossings.entry((i, j, d)).or_insert_with(|| {
             let (a, z) = (at(i, j), at(i2, j2));
-            let (mut lo, mut hi) = (0.0f64, 1.0f64);
-            for _ in 0..60 {
-                let m = 0.5 * (lo + hi);
-                if pos(g(a.0 + (z.0 - a.0) * m, a.1 + (z.1 - a.1) * m)) == pos(ga) {
-                    lo = m;
-                } else {
-                    hi = m;
-                }
-            }
+            let (lo, hi) = super::math::bisect(0.0, 1.0, |m| {
+                pos(g(a.0 + (z.0 - a.0) * m, a.1 + (z.1 - a.1) * m)) == pos(ga)
+            });
             let m = 0.5 * (lo + hi);
             (a.0 + (z.0 - a.0) * m, a.1 + (z.1 - a.1) * m)
         });
@@ -801,15 +788,7 @@ fn contact_isolines(b: &Body, fi: usize, mv: &Move) -> (Vec<f64>, Vec<f64>) {
             );
             let (ga, gz) = (at(a), at(z));
             if (ga > 0.0) != (gz > 0.0) {
-                let (mut lo, mut hi) = (a, z);
-                for _ in 0..60 {
-                    let m = 0.5 * (lo + hi);
-                    if (at(m) > 0.0) == (ga > 0.0) {
-                        lo = m;
-                    } else {
-                        hi = m;
-                    }
-                }
+                let (lo, hi) = super::math::bisect(a, z, |m| (at(m) > 0.0) == (ga > 0.0));
                 out = Some(0.5 * (lo + hi));
                 let _ = out;
             }
@@ -829,15 +808,7 @@ fn contact_isolines(b: &Body, fi: usize, mv: &Move) -> (Vec<f64>, Vec<f64>) {
                 );
                 let ga = at(a);
                 if (ga > 0.0) != (at(z) > 0.0) {
-                    let (mut lo, mut hi) = (a, z);
-                    for _ in 0..60 {
-                        let m = 0.5 * (lo + hi);
-                        if (at(m) > 0.0) == (ga > 0.0) {
-                            lo = m;
-                        } else {
-                            hi = m;
-                        }
-                    }
+                    let (lo, hi) = super::math::bisect(a, z, |m| (at(m) > 0.0) == (ga > 0.0));
                     xs.push(0.5 * (lo + hi));
                 }
             }
