@@ -222,6 +222,30 @@ pub fn surface_surface_tol(
     if let Some(r) = analytic(b, a, bb, tol) {
         return closed(r);
     }
+    // A graph over one parameter of one of the two: exact points with nothing traced.
+    for (p, up, q) in [(a, ua, b), (b, ub, a)] {
+        if let Some(polys) = super::ssi_graph::graph(p, up, q, bb) {
+            let work = 1 + polys.iter().map(|c| c.0.len()).sum::<usize>() as u64;
+            let curves = polys
+                .into_iter()
+                .filter(|(pts, _)| pts.len() >= 2)
+                .map(|(pts, closed)| fit_curve(p, q, pts, closed, &[]))
+                .collect();
+            return Ssi {
+                curves,
+                work,
+                ..Ssi::default()
+            };
+        }
+    }
+    // Two surfaces with distance functions that keep apart all through the box meet nowhere
+    // in it.
+    if !may_meet(a, b, bb) {
+        return Ssi {
+            work: 1,
+            ..Ssi::default()
+        };
+    }
     // Numeric, over the surface without an implicit form first (its points' parameters are
     // the ones the fit refines on).
     let implicit = |s: &Surface| s.signed_distance(&P3::origin()).is_some();
@@ -1505,6 +1529,50 @@ pub fn sdist(s: &Surface, p: &P3) -> f64 {
         return (p - q).norm();
     }
     (p - q).dot(&(n / l))
+}
+
+/// Whether `a` and `b` may meet inside `bb`: false only where both have a distance function
+/// (a plane, a cylinder, a sphere, a torus: |distance| changes no faster than the point moves)
+/// and every part of the box, halved along its longest side until one of the two is farther
+/// from a part's middle than its corners are, is clear of one of them. Parts still near both
+/// after 192 halvings, or smaller than a 256th of the box, may hold a crossing.
+fn may_meet(a: &Surface, b: &Surface, bb: &Bbox) -> bool {
+    let measured = |s: &Surface| {
+        matches!(
+            s,
+            Surface::Plane { .. }
+                | Surface::Cylinder { .. }
+                | Surface::Sphere { .. }
+                | Surface::Torus { .. }
+        )
+    };
+    if !measured(a) || !measured(b) || bb.is_empty() {
+        return true;
+    }
+    let pad = 1e-6 + 1e-9 * bb.diagonal();
+    let least = bb.diagonal() / 256.0;
+    let mut budget = 192;
+    let mut parts = vec![(bb.min, bb.max)];
+    while let Some((lo, hi)) = parts.pop() {
+        let c = lo + (hi - lo) * 0.5;
+        let d = hi - lo;
+        let reach = 0.5 * d.norm() + pad;
+        let clear = |s: &Surface| s.signed_distance(&c).is_some_and(|x| x.abs() > reach);
+        if clear(a) || clear(b) {
+            continue;
+        }
+        if budget == 0 || d.norm() <= least {
+            return true;
+        }
+        budget -= 1;
+        let k = d.imax();
+        let (mut mid_hi, mut mid_lo) = (hi, lo);
+        mid_hi[k] = c[k];
+        mid_lo[k] = c[k];
+        parts.push((lo, mid_hi));
+        parts.push((mid_lo, hi));
+    }
+    false
 }
 
 /// The intersection by the numeric engine ([`super::ssi_numeric`]): its traced curves fitted
