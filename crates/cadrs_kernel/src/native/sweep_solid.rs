@@ -495,6 +495,997 @@ fn outline(sl: &Slicer, lo: Extreme, hi: Extreme, n: usize) -> Option<Outline> {
     })
 }
 
+/// A stretch of the body's boundary with the outward normals along it, in the half plane of its
+/// section: a straight edge (one normal all along), a corner (one point, its normals fanning
+/// from the edge before's to the edge after's) or an arc of a disk (the point and its normal
+/// turning together). Each takes u from 0 to 1.
+enum Strip {
+    Edge {
+        a: (f64, f64),
+        b: (f64, f64),
+        n: (f64, f64),
+    },
+    Fan {
+        p: (f64, f64),
+        a0: f64,
+        da: f64,
+    },
+    Round {
+        c: (f64, f64),
+        r: f64,
+        a0: f64,
+        da: f64,
+    },
+}
+
+impl Strip {
+    /// The point (ρ, h) and the unit outward normal at u.
+    fn at(&self, u: f64) -> ((f64, f64), (f64, f64)) {
+        match *self {
+            Strip::Edge { a, b, n } => ((a.0 + (b.0 - a.0) * u, a.1 + (b.1 - a.1) * u), n),
+            Strip::Fan { p, a0, da } => {
+                let t = a0 + da * u;
+                (p, (t.cos(), t.sin()))
+            }
+            Strip::Round { c, r, a0, da } => {
+                let t = a0 + da * u;
+                let n = (t.cos(), t.sin());
+                ((c.0 + r * n.0, c.1 + r * n.1), n)
+            }
+        }
+    }
+}
+
+impl Section {
+    /// The boundary as strips, in order round it, the stretches along the body's own axis
+    /// left out (the boundary there is no surface of the body, and a corner on the axis no
+    /// edge of it). None for a section this doesn't take apart.
+    fn strips(&self) -> Option<Vec<Strip>> {
+        match self {
+            Section::Disk { c, r } if c.0 > *r => Some(vec![Strip::Round {
+                c: *c,
+                r: *r,
+                a0: 0.0,
+                da: TAU,
+            }]),
+            // A ball's: the half of its disk off the axis.
+            Section::Disk { c, r } if c.0 == 0.0 => Some(vec![Strip::Round {
+                c: *c,
+                r: *r,
+                a0: -FRAC_PI_2,
+                da: PI,
+            }]),
+            Section::Disk { .. } => None,
+            Section::Polygon(cs) => {
+                let n = cs.len();
+                let size = cs
+                    .iter()
+                    .fold(0.0f64, |m, c| m.max(c.0.abs()).max(c.1.abs()))
+                    .max(tol::POINT);
+                let on_axis = |i: usize| cs[i % n].0.abs() <= 1e-9 * size;
+                // Edge i's outward normal (to the right of a counter-clockwise boundary).
+                let normal = |i: usize| -> Option<(f64, f64)> {
+                    let (p, q) = (cs[i % n], cs[(i + 1) % n]);
+                    let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+                    let l = dx.hypot(dy);
+                    (l > 1e-12 * size).then(|| (dy / l, -dx / l))
+                };
+                let mut out = Vec::new();
+                for i in 0..n {
+                    let ni = normal(i)?;
+                    if !(on_axis(i) && on_axis(i + 1)) {
+                        out.push(Strip::Edge {
+                            a: cs[i],
+                            b: cs[(i + 1) % n],
+                            n: ni,
+                        });
+                    }
+                    if !on_axis(i + 1) {
+                        let nj = normal(i + 1)?;
+                        let da = (ni.0 * nj.1 - ni.1 * nj.0).atan2(ni.0 * nj.0 + ni.1 * nj.1);
+                        if da > 1e-12 {
+                            out.push(Strip::Fan {
+                                p: cs[(i + 1) % n],
+                                a0: ni.1.atan2(ni.0),
+                                da,
+                            });
+                        }
+                    }
+                }
+                Some(out)
+            }
+        }
+    }
+}
+
+/// A curve of the fold's image in the section's plane, by a parameter u: the fold on one
+/// strip (one of its equation's two solutions), or a straight stretch between two (distance,
+/// key)s (a flat face square to a turn's axis, every point of it on the fold, seen edge on).
+#[derive(Clone, Copy)]
+enum Trace {
+    Fold { strip: usize, sign: f64 },
+    Line { a: (f64, f64), b: (f64, f64) },
+}
+
+/// A [`Trace`] from u = `u0` to `u1`, with its polyline (rising u's and the points there) and
+/// the vertices on it (where it ends and where others cross it), by rising u.
+struct Arc {
+    trace: Trace,
+    u0: f64,
+    u1: f64,
+    us: Vec<f64>,
+    xs: Vec<P2>,
+    events: Vec<(f64, usize)>,
+}
+
+/// A stretch of the outline along one [`Trace`], from u = `u0` to `u1` (either way).
+#[derive(Clone, Copy)]
+struct Seg {
+    trace: Trace,
+    u0: f64,
+    u1: f64,
+}
+
+/// The body's fold under the motion, in closed form: the points of its boundary where the
+/// boundary's normal is square to the motion's velocity, which are the only ones the edge of
+/// what the body sweeps can come from. The velocity at p is z × (p − origin) + c·z (c the
+/// rise per radian turned; none for a turn). On the body's circle through the section's
+/// point (ρ, h), where the section's normal is (ν_ρ, ν_h), the normal at the turn ω about the
+/// body's axis a is ν_ρ e(ω) + ν_h a, and its product with the velocity is
+///
+///   e(ω)·[ν_ρ (z × D + c z) + (ν_ρ h − ν_h ρ)(z × a)] + ν_h a·(z × D + c z),
+///
+/// D from the motion's axis to the body's origin: A cos ω + B sin ω + C, zero at
+/// ω = atan2(B, A) ± acos(−C/√(A² + B²)). So each circle of the body gives its two points of
+/// the fold with no search, a sharp circle (a corner of the section) for each normal of its
+/// fan, and the fold's image in the slices' (distance, key) is a curve given point by point.
+struct Fold<'a> {
+    sl: &'a Slicer<'a>,
+    strips: Vec<Strip>,
+    /// The key the body's keys are unwrapped about.
+    near: f64,
+    /// z × D + c z.
+    lead: V3,
+    /// z × a.
+    zxa: V3,
+    /// An amplitude √(A² + B²) no greater is none (every turn solves the equation, or none).
+    tiny: f64,
+}
+
+impl Fold<'_> {
+    /// (A, B, C) and the section's point on strip `s` at u.
+    fn coefs(&self, s: &Strip, u: f64) -> (f64, f64, f64, (f64, f64)) {
+        let b = self.sl.body;
+        let ((rho, h), (nr, nh)) = s.at(u);
+        let g = self.lead * nr + self.zxa * (nr * h - nh * rho);
+        (
+            b.e1.dot(&g),
+            b.e2.dot(&g),
+            nh * b.a.dot(&self.lead),
+            (rho, h),
+        )
+    }
+
+    /// The fold's point on strip `s` at u (the solution `sign`), where it has one (see
+    /// [`Self::stretches`]): its distance from the motion's axis and its key.
+    fn at(&self, s: &Strip, u: f64, sign: f64) -> (f64, f64) {
+        let (a, b, c, (rho, h)) = self.coefs(s, u);
+        let x = (-c / a.hypot(b).max(self.tiny)).clamp(-1.0, 1.0);
+        let w = b.atan2(a) + sign * x.acos();
+        let body = self.sl.body;
+        let p = body.o + (body.e1 * w.cos() + body.e2 * w.sin()) * rho + body.a * h;
+        (self.sl.radius(&p), self.sl.key(&p, self.near))
+    }
+
+    /// The stretches of strip `s` (in u) whose circles hold points of the fold: where
+    /// A² + B² > C², their ends found from 64 samples' signs (256 round a disk) by bisection.
+    fn stretches(&self, s: &Strip) -> Vec<(f64, f64)> {
+        let n = match s {
+            Strip::Round { .. } => 256,
+            _ => 64,
+        };
+        let room = |u: f64| {
+            let (a, b, c, _) = self.coefs(s, u);
+            a * a + b * b - c * c - self.tiny * self.tiny
+        };
+        let at = |i: usize| i as f64 / n as f64;
+        let rs: Vec<f64> = (0..=n).map(|i| room(at(i))).collect();
+        let mut out = Vec::new();
+        let mut start = (rs[0] > 0.0).then_some(0.0);
+        for i in 0..n {
+            if (rs[i] > 0.0) == (rs[i + 1] > 0.0) {
+                continue;
+            }
+            // (The end kept on the stretch's side of the root.)
+            let inside = rs[i] > 0.0;
+            let (mut lo, mut hi) = (at(i), at(i + 1));
+            for _ in 0..60 {
+                let m = 0.5 * (lo + hi);
+                if (room(m) > 0.0) == inside {
+                    lo = m;
+                } else {
+                    hi = m;
+                }
+            }
+            let root = if inside { lo } else { hi };
+            match start.take() {
+                Some(from) => out.push((from, root)),
+                None => start = Some(root),
+            }
+        }
+        if let Some(from) = start {
+            out.push((from, 1.0));
+        }
+        out
+    }
+
+    /// Whether strip `strip`'s two solutions are one at u (the end of a stretch of it).
+    fn merges(&self, strip: usize, u: f64) -> bool {
+        let (a, b, c, _) = self.coefs(&self.strips[strip], u);
+        let m = a.hypot(b);
+        m > self.tiny && 1.0 - c.abs() / m < 1e-9
+    }
+
+    /// The (distance, key) of trace `t` at u.
+    fn rq(&self, t: &Trace, u: f64) -> (f64, f64) {
+        match *t {
+            Trace::Fold { strip, sign } => self.at(&self.strips[strip], u, sign),
+            Trace::Line { a, b } => (a.0 + (b.0 - a.0) * u, a.1 + (b.1 - a.1) * u),
+        }
+    }
+
+    /// The fold's traces: each stretch of each strip, both solutions; and for a strip that is
+    /// all fold (a flat face square to a turn's axis: the equation vanishes all over it) the
+    /// straight stretch its image is, between its outer circle's nearest and farthest points.
+    fn traces(&self, turn: bool) -> Vec<(Trace, f64, f64)> {
+        let mut out = Vec::new();
+        for (si, s) in self.strips.iter().enumerate() {
+            let stretches = self.stretches(s);
+            if stretches.is_empty()
+                && turn
+                && let Strip::Edge { a, b, .. } = *s
+            {
+                let all_fold = [0.0, 0.5, 1.0].iter().all(|&u| {
+                    let (ca, cb, cc, _) = self.coefs(s, u);
+                    ca.hypot(cb) <= self.tiny && cc.abs() <= self.tiny
+                });
+                if all_fold {
+                    let body = self.sl.body;
+                    let (rho, h) = if a.0.abs() > b.0.abs() { a } else { b };
+                    let centre = body.o + body.a * h;
+                    let d = self.sl.radius(&centre);
+                    let q = self.sl.key(&centre, self.near);
+                    out.push((
+                        Trace::Line {
+                            a: ((d - rho.abs()).abs(), q),
+                            b: (d + rho.abs(), q),
+                        },
+                        0.0,
+                        1.0,
+                    ));
+                }
+            }
+            for (u0, u1) in stretches {
+                if u1 > u0 {
+                    for sign in [1.0, -1.0] {
+                        out.push((Trace::Fold { strip: si, sign }, u0, u1));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The polyline of trace `t` over [u0, u1]: thirty-two stretches, each halved until its
+    /// middle is within `dev` of its chord's and the chord no longer than `longest`. None
+    /// past 60 000 points.
+    fn polyline(
+        &self,
+        t: &Trace,
+        (u0, u1): (f64, f64),
+        p2: &dyn Fn((f64, f64)) -> P2,
+        dev: f64,
+        longest: f64,
+    ) -> Option<(Vec<f64>, Vec<P2>)> {
+        let x = |u: f64| p2(self.rq(t, u));
+        const START: usize = 32;
+        let (mut us, mut xs) = (vec![u0], vec![x(u0)]);
+        for i in 0..START {
+            let at = |j: usize| u0 + (u1 - u0) * j as f64 / START as f64;
+            let (a, b) = (at(i), if i + 1 == START { u1 } else { at(i + 1) });
+            let mut stack = vec![(a, x(a), b, x(b), 0u32)];
+            while let Some((a, xa, b, xb, depth)) = stack.pop() {
+                let m = 0.5 * (a + b);
+                let xm = x(m);
+                let bow = (xm - nalgebra::center(&xa, &xb)).norm();
+                if depth >= 40 || (bow <= dev && (xb - xa).norm() <= longest) {
+                    us.push(b);
+                    xs.push(xb);
+                } else {
+                    stack.push((m, xm, b, xb, depth + 1));
+                    stack.push((a, xa, m, xm, depth + 1));
+                }
+                if us.len() > 60_000 {
+                    return None;
+                }
+            }
+        }
+        Some((us, xs))
+    }
+
+    /// Exact points of the piece `segs` of the outline, as many as the B-spline through them
+    /// needs to keep within `tol` of the outline: six stretches a seg to start, then, round
+    /// by round, the trace's point midway (in u) between two neighbours wherever the spline
+    /// is farther than half of `tol` from it. `first` is the piece's first point where the
+    /// piece before ends on it. None past 4000 points.
+    fn sampled(
+        &self,
+        segs: &[Seg],
+        p2: &dyn Fn((f64, f64)) -> P2,
+        tol: f64,
+        first: Option<(f64, f64)>,
+    ) -> Option<Vec<(f64, f64)>> {
+        struct Node {
+            seg: usize,
+            u: f64,
+            rq: (f64, f64),
+            x: P3,
+        }
+        let node = |seg: usize, u: f64| {
+            let rq = self.rq(&segs[seg].trace, u);
+            let x = p2(rq);
+            Node {
+                seg,
+                u,
+                rq,
+                x: P3::new(x.x, x.y, 0.0),
+            }
+        };
+        let mut nodes: Vec<Node> = Vec::new();
+        for (si, sg) in segs.iter().enumerate() {
+            const START: usize = 6;
+            for j in (if si == 0 { 0 } else { 1 })..=START {
+                let u = if j == START {
+                    sg.u1
+                } else {
+                    sg.u0 + (sg.u1 - sg.u0) * j as f64 / START as f64
+                };
+                nodes.push(node(si, u));
+            }
+        }
+        if let Some(rq) = first {
+            let x = p2(rq);
+            nodes[0].rq = rq;
+            nodes[0].x = P3::new(x.x, x.y, 0.0);
+        }
+        let size = nodes.iter().fold(tol, |m, n| m.max(n.x.coords.norm()));
+        let apart = 1e-12 * size;
+        nodes.dedup_by(|b, a| (b.x - a.x).norm() <= apart);
+        if nodes.len() < 2 {
+            return None;
+        }
+        let debug = crate::native::env_flag!("CADRS_SWEEP_SOLID_DEBUG");
+        for round in 0..24 {
+            let pts: Vec<P3> = nodes.iter().map(|n| n.x).collect();
+            let (curve, params) = fit_through(&pts);
+            let mut add: Vec<(usize, Node)> = Vec::new();
+            for k in 0..nodes.len() - 1 {
+                let (a, b) = (&nodes[k], &nodes[k + 1]);
+                let from = if a.seg == b.seg { a.u } else { segs[b.seg].u0 };
+                let mid = node(b.seg, 0.5 * (from + b.u));
+                if (mid.x - a.x).norm() <= apart || (mid.x - b.x).norm() <= apart {
+                    continue;
+                }
+                // The spline's point nearest it, between the two.
+                let (t0, t1) = (params[k], params[k + 1]);
+                let mut t = 0.5 * (t0 + t1);
+                for _ in 0..4 {
+                    let (p, d1, d2) = curve.ders2(t);
+                    let r = p - mid.x;
+                    let den = d1.norm_squared() + r.dot(&d2);
+                    if den <= 0.0 {
+                        break;
+                    }
+                    t = (t - r.dot(&d1) / den).clamp(t0, t1);
+                }
+                if (curve.point(t) - mid.x).norm() > 0.5 * tol {
+                    add.push((k + 1, mid));
+                }
+            }
+            if debug {
+                eprintln!(
+                    "  fit round {round}: {} points, {} to add",
+                    nodes.len(),
+                    add.len()
+                );
+            }
+            if add.is_empty() {
+                break;
+            }
+            if nodes.len() + add.len() > 4000 {
+                return None;
+            }
+            for (k, n) in add.into_iter().rev() {
+                nodes.insert(k, n);
+            }
+        }
+        Some(nodes.iter().map(|n| n.rq).collect())
+    }
+}
+
+/// The B-spline of degree five through `pts` (of as high a degree as fewer points allow), with
+/// the points' parameters: the lengths along the curve between them. Chords for lengths keep
+/// an interpolant only to the fourth power of the points' spacing whatever its degree, so the
+/// lengths are taken along interpolants instead: along the cubic by chords, then along the
+/// quintic by those (each gains two powers; Floater and Surazhsky, "Parameterization for
+/// curve interpolation", 2006).
+fn fit_through(pts: &[P3]) -> (super::nurbs::NurbsCurve, Vec<f64>) {
+    let fit = |params: &[f64], degree: usize| {
+        super::nurbs::NurbsCurve::interpolate(pts, params, degree.min(pts.len() - 1), None, None)
+    };
+    let mut params = vec![0.0];
+    for w in pts.windows(2) {
+        params.push(params.last().expect("a parameter") + (w[1] - w[0]).norm());
+    }
+    if pts.len() < 4 {
+        return (fit(&params, 5), params);
+    }
+    // The lengths of a curve's stretches between the parameters (five-point Gauss-Legendre).
+    const GAUSS: [(f64, f64); 5] = [
+        (0.0, 0.568_888_888_888_888_9),
+        (-0.538_469_310_105_683_1, 0.478_628_670_499_366_5),
+        (0.538_469_310_105_683_1, 0.478_628_670_499_366_5),
+        (-0.906_179_845_938_664, 0.236_926_885_056_189_1),
+        (0.906_179_845_938_664, 0.236_926_885_056_189_1),
+    ];
+    let lengths = |c: &super::nurbs::NurbsCurve, params: &[f64]| -> Vec<f64> {
+        let mut out = vec![0.0];
+        for w in params.windows(2) {
+            let (mid, half) = (0.5 * (w[0] + w[1]), 0.5 * (w[1] - w[0]));
+            let len: f64 = GAUSS
+                .iter()
+                .map(|&(x, wt)| wt * c.ders2(mid + half * x).1.norm())
+                .sum::<f64>()
+                * half;
+            out.push(out.last().expect("a length") + len.max(f64::MIN_POSITIVE));
+        }
+        out
+    };
+    let cubic = fit(&params, 3);
+    let params = lengths(&cubic, &params);
+    let quintic = fit(&params, 5);
+    let params = lengths(&quintic, &params);
+    (fit(&params, 5), params)
+}
+
+/// The signed angle from `a` to `b` (counter-clockwise positive), in (−π, π].
+fn turn_from(a: &V2, b: &V2) -> f64 {
+    (a.x * b.y - a.y * b.x).atan2(a.dot(b))
+}
+
+/// The outline in closed form ([`Fold`]): the outer edge of the fold's image in the section's
+/// plane, as its closed loop of curves, counter-clockwise. The fold's traces are exact curves
+/// there; where two cross (found on their polylines, then solved on the curves themselves)
+/// the edge passes from one to the other, and it is followed from its point farthest along
+/// the plane's x, keeping what the body doesn't sweep on its right: at each crossing or
+/// meeting of traces the way that turns most to the right. So nothing is sliced, and the
+/// edge may double back in the key (a notch where one stretch of the fold crosses another,
+/// which the least distance on each slice would cut straight across). Each stretch between
+/// two corners is then exact points dense enough for its B-spline to keep within 2e-11 of the
+/// body's reach of the outline.
+///
+/// `c` is the motion's rise per radian (0 for a turn), `near` the key the body's keys are
+/// unwrapped about, `p2` the plane's point of a (distance, key), `keys` the body's keys' range
+/// as found by search (the outline's own must agree with it). None where the section isn't
+/// taken apart ([`Section::strips`]) or the edge can't be followed (the caller slices
+/// instead). With the curves, the greatest distance from the axis.
+fn exact_outline(
+    sl: &Slicer,
+    near: f64,
+    c: f64,
+    p2: &dyn Fn((f64, f64)) -> P2,
+    keys: (f64, f64),
+) -> Option<(Vec<Curve2>, f64)> {
+    let debug = crate::native::env_flag!("CADRS_SWEEP_SOLID_DEBUG");
+    let b = sl.body;
+    let strips = b.section.strips()?;
+    let lead = sl.z.cross(&(b.o - sl.origin)) + sl.z * c;
+    let size = strips.iter().fold(0.0f64, |m, s| {
+        [0.0, 0.5, 1.0].iter().fold(m, |m, &u| {
+            let ((rho, h), _) = s.at(u);
+            m.max(rho.abs()).max(h.abs())
+        })
+    });
+    let fold = Fold {
+        sl,
+        strips,
+        near,
+        lead,
+        zxa: sl.z.cross(&b.a),
+        tiny: 1e-12 * (lead.norm() + size),
+    };
+    let x_at = |t: &Trace, u: f64| p2(fold.rq(t, u));
+    // The traces as arcs with their polylines; one whose image is a point goes.
+    let reach = (b.o - sl.origin).norm() + 2.0 * size;
+    let (dev, longest) = (1e-6 * reach, reach / 64.0);
+    let vertex_gap = 1e-8 * reach;
+    let mut arcs: Vec<Arc> = Vec::new();
+    for (trace, u0, u1) in fold.traces(c == 0.0) {
+        let (us, xs) = fold.polyline(&trace, (u0, u1), p2, dev, longest)?;
+        let length: f64 = xs.windows(2).map(|w| (w[1] - w[0]).norm()).sum();
+        if length > vertex_gap {
+            arcs.push(Arc {
+                trace,
+                u0,
+                u1,
+                us,
+                xs,
+                events: Vec::new(),
+            });
+        }
+    }
+    if arcs.is_empty() {
+        return None;
+    }
+    // A trace's derivative by u (differenced over a thousandth of its polyline's step there).
+    let ddu = |a: &Arc, u: f64| -> V2 {
+        let k = a.us.partition_point(|&x| x < u).clamp(1, a.us.len() - 1);
+        let h = 1e-3 * (a.us[k] - a.us[k - 1]);
+        let (lo, hi) = ((u - h).max(a.u0), (u + h).min(a.u1));
+        (x_at(&a.trace, hi) - x_at(&a.trace, lo)) / (hi - lo)
+    };
+    // Where two arcs cross: every pair of polyline spans whose boxes (grown by the
+    // polylines' bow) meet and whose chords' lines meet near both, solved on the curves by
+    // Newton; kept where they cross at an angle.
+    struct Cross {
+        i: usize,
+        u: f64,
+        j: usize,
+        v: f64,
+        p: P2,
+    }
+    let mut spans: Vec<(f64, f64, f64, f64, usize, usize)> = Vec::new();
+    for (ai, a) in arcs.iter().enumerate() {
+        for k in 0..a.xs.len() - 1 {
+            let (p, q) = (a.xs[k], a.xs[k + 1]);
+            spans.push((
+                p.x.min(q.x) - 2.0 * dev,
+                p.x.max(q.x) + 2.0 * dev,
+                p.y.min(q.y) - 2.0 * dev,
+                p.y.max(q.y) + 2.0 * dev,
+                ai,
+                k,
+            ));
+        }
+    }
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut crosses: Vec<Cross> = Vec::new();
+    for (n, s) in spans.iter().enumerate() {
+        for t in &spans[n + 1..] {
+            if t.0 > s.1 {
+                break;
+            }
+            if t.2 > s.3 || t.3 < s.2 {
+                continue;
+            }
+            let ((i, k), (j, l)) = ((s.4, s.5), (t.4, t.5));
+            if i == j && k.abs_diff(l) <= 1 {
+                continue;
+            }
+            let (a, c2) = (&arcs[i], &arcs[j]);
+            let (p0, p1, q0, q1) = (a.xs[k], a.xs[k + 1], c2.xs[l], c2.xs[l + 1]);
+            let (d, e) = (p1 - p0, q1 - q0);
+            let den = d.x * e.y - d.y * e.x;
+            if den.abs() <= 1e-14 * d.norm() * e.norm() {
+                continue;
+            }
+            let w = q0 - p0;
+            let (ss, tt) = ((w.x * e.y - w.y * e.x) / den, (w.x * d.y - w.y * d.x) / den);
+            if !(-0.5..=1.5).contains(&ss) || !(-0.5..=1.5).contains(&tt) {
+                continue;
+            }
+            // Newton on the curves, within a span either side.
+            let win =
+                |a: &Arc, k: usize| (a.us[k.saturating_sub(1)], a.us[(k + 2).min(a.us.len() - 1)]);
+            let ((ulo, uhi), (vlo, vhi)) = (win(a, k), win(c2, l));
+            let mut u = (a.us[k] + (a.us[k + 1] - a.us[k]) * ss).clamp(ulo, uhi);
+            let mut v = (c2.us[l] + (c2.us[l + 1] - c2.us[l]) * tt).clamp(vlo, vhi);
+            let mut found = None;
+            for _ in 0..40 {
+                let f = x_at(&a.trace, u) - x_at(&c2.trace, v);
+                let (du, dv) = (ddu(a, u), ddu(c2, v));
+                let det = -du.x * dv.y + du.y * dv.x;
+                if f.norm() <= 1e-12 * reach {
+                    let sin = det.abs() / (du.norm() * dv.norm()).max(f64::MIN_POSITIVE);
+                    if sin > 1e-7 {
+                        found = Some(x_at(&a.trace, u));
+                    }
+                    break;
+                }
+                if det.abs() <= 1e-300 {
+                    break;
+                }
+                // [du, −dv] (δu, δv) = −f.
+                let su = (f.x * dv.y - f.y * dv.x) / det;
+                let sv = (du.x * -f.y + du.y * f.x) / det;
+                u = (u + su).clamp(ulo, uhi);
+                v = (v + sv).clamp(vlo, vhi);
+            }
+            let Some(p) = found else {
+                continue;
+            };
+            // (One trace through one point at two of its own parameters, not at one.)
+            if i == j && (u - v).abs() <= 1e-9 * (a.u1 - a.u0) {
+                continue;
+            }
+            if crosses.iter().any(|x| {
+                (x.p - p).norm() <= vertex_gap && ((x.i, x.j) == (i, j) || (x.i, x.j) == (j, i))
+            }) {
+                continue;
+            }
+            crosses.push(Cross { i, u, j, v, p });
+        }
+    }
+    // The vertices: the arcs' ends, those at one point together, and the crossings.
+    let mut vertices: Vec<(P2, Vec<(usize, f64)>)> = Vec::new();
+    for ai in 0..arcs.len() {
+        for u in [arcs[ai].u0, arcs[ai].u1] {
+            let p = x_at(&arcs[ai].trace, u);
+            // Where a strip's two solutions merge (its stretch's end), its two arcs end on
+            // one point of one smooth curve; found there each is only good to the square
+            // root of the rounding (along the curve, not off it), so they are joined by what
+            // they are, not by where they come out.
+            let twin = match arcs[ai].trace {
+                Trace::Fold { strip, sign } if fold.merges(strip, u) => {
+                    vertices.iter().position(|(_, at)| {
+                        at.iter().any(|&(aj, uj)| {
+                            uj == u
+                                && matches!(arcs[aj].trace, Trace::Fold { strip: s2, sign: g2 }
+                                    if s2 == strip && g2 == -sign)
+                        })
+                    })
+                }
+                _ => None,
+            };
+            let near_by = || {
+                vertices
+                    .iter()
+                    .position(|(q, _)| (q - p).norm() <= vertex_gap)
+            };
+            let v = match twin.or_else(near_by) {
+                Some(v) => v,
+                None => {
+                    vertices.push((p, Vec::new()));
+                    vertices.len() - 1
+                }
+            };
+            vertices[v].1.push((ai, u));
+            arcs[ai].events.push((u, v));
+        }
+    }
+    // (A crossing found where arcs end on each other is that meeting, already a vertex: only
+    // an arc passing through it that isn't yet there is added to it.)
+    for x in &crosses {
+        let v = match vertices
+            .iter()
+            .position(|(q, _)| (q - x.p).norm() <= vertex_gap)
+        {
+            Some(v) => v,
+            None => {
+                vertices.push((x.p, Vec::new()));
+                vertices.len() - 1
+            }
+        };
+        for (ai, u) in [(x.i, x.u), (x.j, x.v)] {
+            let there = vertices[v].1.iter().any(|&(aj, uj)| {
+                aj == ai
+                    && (x_at(&arcs[ai].trace, uj) - x_at(&arcs[ai].trace, u)).norm() <= vertex_gap
+            });
+            if !there {
+                vertices[v].1.push((ai, u));
+                arcs[ai].events.push((u, v));
+            }
+        }
+    }
+    for a in arcs.iter_mut() {
+        a.events.sort_by(|p, q| p.0.total_cmp(&q.0));
+    }
+    if debug {
+        for (k, a) in arcs.iter().enumerate() {
+            let (p, q) = (a.xs[0], a.xs[a.xs.len() - 1]);
+            eprintln!(
+                "  arc {k}: {} u {:.6}..{:.6} from ({:.6}, {:.6}) to ({:.6}, {:.6}), {} points, events {:?}",
+                match a.trace {
+                    Trace::Fold { strip, sign } => format!("strip {strip} sign {sign}"),
+                    Trace::Line { .. } => "line".to_string(),
+                },
+                a.u0,
+                a.u1,
+                p.x,
+                p.y,
+                q.x,
+                q.y,
+                a.us.len(),
+                a.events.iter().map(|e| e.1).collect::<Vec<_>>()
+            );
+        }
+        eprintln!(
+            "exact outline: {} arcs ({} polyline points), {} crossings, {} vertices",
+            arcs.len(),
+            arcs.iter().map(|a| a.us.len()).sum::<usize>(),
+            crosses.len(),
+            vertices.len()
+        );
+    }
+    // The next event along an arc from u, the way `way` (±1): its parameter and its vertex.
+    let next = |ai: usize, u: f64, way: f64| -> Option<(f64, usize)> {
+        let ev = &arcs[ai].events;
+        if way > 0.0 {
+            ev.iter().copied().find(|e| e.0 > u)
+        } else {
+            ev.iter().rev().copied().find(|e| e.0 < u)
+        }
+    };
+    // The direction an arc leaves u in, the way `way`: to a point of it a little ahead (no
+    // farther than half way to its next event, nor than a hundred-thousandth of the reach).
+    let ahead = 1e-5 * reach;
+    let leaving = |ai: usize, u: f64, way: f64| -> Option<V2> {
+        let (un, _) = next(ai, u, way)?;
+        let a = &arcs[ai];
+        let from = x_at(&a.trace, u);
+        let mut ul = u + 0.5 * (un - u);
+        for _ in 0..80 {
+            if (x_at(&a.trace, ul) - from).norm() <= ahead {
+                break;
+            }
+            ul = u + 0.5 * (ul - u);
+        }
+        (x_at(&a.trace, ul) - from).try_normalize(1e-300)
+    };
+    // From the point farthest along x, up it (what isn't swept on the right).
+    let (mut start_arc, mut start_k, mut best) = (0usize, 0usize, f64::NEG_INFINITY);
+    for (ai, a) in arcs.iter().enumerate() {
+        for (k, p) in a.xs.iter().enumerate() {
+            if p.x > best {
+                (start_arc, start_k, best) = (ai, k, p.x);
+            }
+        }
+    }
+    let sa = &arcs[start_arc];
+    let (klo, khi) = (
+        start_k.saturating_sub(1),
+        (start_k + 1).min(sa.us.len() - 1),
+    );
+    let start_u = golden_max(&|u| x_at(&sa.trace, u).x, sa.us[klo], sa.us[khi]).0;
+    // (Off its events: a start on one would be a vertex to leave, not a point to pass.)
+    let start_u = {
+        let clear = |u: f64| {
+            sa.events
+                .iter()
+                .all(|e| (e.0 - u).abs() > 1e-9 * (sa.u1 - sa.u0))
+        };
+        if clear(start_u) {
+            start_u
+        } else {
+            let (lo, hi) = (sa.us[klo], sa.us[khi]);
+            [0.5 * (start_u + lo), 0.5 * (start_u + hi)]
+                .into_iter()
+                .find(|&u| clear(u))?
+        }
+    };
+    if debug {
+        eprintln!(
+            "exact outline: starts on arc {start_arc} at u {start_u:.6}, ({:.6}, {:.6})",
+            x_at(&sa.trace, start_u).x,
+            x_at(&sa.trace, start_u).y
+        );
+    }
+    let up = V2::new(0.0, 1.0);
+    let start_way = [1.0, -1.0]
+        .into_iter()
+        .filter_map(|w| Some((w, leaving(start_arc, start_u, w)?.dot(&up))))
+        .max_by(|p, q| p.1.total_cmp(&q.1))?
+        .0;
+    // The walk: runs along arcs, each with whether it starts at a corner.
+    let mut runs: Vec<(Seg, bool)> = Vec::new();
+    let (mut ai, mut u, mut way) = (start_arc, start_u, start_way);
+    let mut corner = false;
+    let limit = 8 * (vertices.len() + arcs.len()) + 16;
+    let mut closed = false;
+    for step in 0..limit {
+        let (un, v) = next(ai, u, way)?;
+        // Back at the start, on its arc the way it was left?
+        let passes = ai == start_arc
+            && way == start_way
+            && step > 0
+            && (start_u - u) * way > 0.0
+            && (un - start_u) * way >= 0.0;
+        let to = if passes { start_u } else { un };
+        runs.push((
+            Seg {
+                trace: arcs[ai].trace,
+                u0: u,
+                u1: to,
+            },
+            corner,
+        ));
+        if passes {
+            closed = true;
+            break;
+        }
+        // At the vertex: every way out of it but the way back, the one turning most to the
+        // right of the way in.
+        let coming = -leaving(ai, un, -way)?;
+        let mut pick: Option<(f64, usize, f64, f64)> = None;
+        for &(aj, uj) in &vertices[v].1 {
+            for w in [1.0, -1.0] {
+                if aj == ai && uj == un && w == -way {
+                    continue;
+                }
+                let Some(d) = leaving(aj, uj, w) else {
+                    continue;
+                };
+                let turn = turn_from(&coming, &d);
+                // (Not straight back along a trace lying on this one.)
+                if turn.abs() > PI - 1e-6 {
+                    continue;
+                }
+                if pick.is_none_or(|p| turn < p.0) {
+                    pick = Some((turn, aj, uj, w));
+                }
+            }
+        }
+        let Some((turn, aj, uj, w)) = pick else {
+            if debug {
+                eprintln!("exact outline: a dead end at {:?}", vertices[v].0);
+            }
+            return None;
+        };
+        if debug && step < 60 {
+            eprintln!(
+                "  walk {step}: arc {ai} {u:.6} -> {un:.6} to vertex {v} at ({:.6}, {:.6}); turns {turn:.4} onto arc {aj} at {uj:.6} way {w}",
+                vertices[v].0.x, vertices[v].0.y
+            );
+        }
+        corner = turn.abs() > 0.02;
+        (ai, u, way) = (aj, uj, w);
+    }
+    if !closed {
+        if debug {
+            eprintln!("exact outline: the edge doesn't close in {limit} steps");
+        }
+        return None;
+    }
+    // Pieces between corners: from a corner where there is one, else cut at the start and
+    // at the run half way round (a smooth closed outline: two splines).
+    runs.retain(|(s, _)| s.u0 != s.u1);
+    if runs.is_empty() {
+        return None;
+    }
+    match runs.iter().position(|r| r.1) {
+        Some(k) => runs.rotate_left(k),
+        None => {
+            runs[0].1 = true;
+            let half = runs.len() / 2;
+            if half > 0 {
+                runs[half].1 = true;
+            } else {
+                // One run all the way round: halved.
+                let (s, _) = runs[0];
+                let mid = 0.5 * (s.u0 + s.u1);
+                runs = vec![(Seg { u1: mid, ..s }, true), (Seg { u0: mid, ..s }, true)];
+            }
+        }
+    }
+    let mut pieces: Vec<Vec<Seg>> = Vec::new();
+    for (s, corner) in &runs {
+        if *corner || pieces.is_empty() {
+            pieces.push(Vec::new());
+        }
+        pieces.last_mut()?.push(*s);
+    }
+    let tol = 2e-11 * reach;
+    let mut sides: Vec<Vec<(f64, f64)>> = Vec::new();
+    for segs in &pieces {
+        let first = sides.last().and_then(|p| p.last().copied());
+        sides.push(fold.sampled(segs, p2, tol, first)?);
+    }
+    // Closed: the last piece ends on the first's first point.
+    let head = *sides.first()?.first()?;
+    *sides.last_mut()?.last_mut()? = head;
+    // The outline's keys must be the body's, and it must run counter-clockwise.
+    let all = || sides.iter().flatten();
+    let (qlo, qhi) = all().fold((f64::INFINITY, f64::NEG_INFINITY), |m, p| {
+        (m.0.min(p.1), m.1.max(p.1))
+    });
+    let span = keys.1 - keys.0;
+    let pts: Vec<P2> = all().map(|&rq| p2(rq)).collect();
+    let area: f64 = (0..pts.len())
+        .map(|k| {
+            let (p, q) = (pts[k], pts[(k + 1) % pts.len()]);
+            0.5 * (p.x * q.y - q.x * p.y)
+        })
+        .sum();
+    if debug {
+        eprintln!(
+            "exact outline: {} pieces of {:?} points; keys {qlo}..{qhi} (the body's {keys:?}); area {area}",
+            sides.len(),
+            sides.iter().map(|p| p.len()).collect::<Vec<_>>()
+        );
+    }
+    if (qlo - keys.0).abs() > 1e-4 * span || (qhi - keys.1).abs() > 1e-4 * span || !(area > 0.0) {
+        return None;
+    }
+    if debug {
+        // Against the slices' own search at fifteen keys: where the outline's points (as a
+        // polygon in distance and key) cross each, their greatest and least distance.
+        let poly: Vec<(f64, f64)> = all().copied().collect();
+        let (mut far_off, mut near_off) = (0.0f64, 0.0f64);
+        for i in 1..16 {
+            let q = keys.0 + span * i as f64 / 16.0;
+            let (mut lo_r, mut hi_r) = (f64::INFINITY, f64::NEG_INFINITY);
+            for k in 0..poly.len() {
+                let (p, n) = (poly[k], poly[(k + 1) % poly.len()]);
+                if (p.1 <= q) != (n.1 <= q) {
+                    let r = p.0 + (n.0 - p.0) * (q - p.1) / (n.1 - p.1);
+                    lo_r = lo_r.min(r);
+                    hi_r = hi_r.max(r);
+                }
+            }
+            if let Some((v, _)) = sl.extreme(q, true, 0.0) {
+                far_off = far_off.max((hi_r - v).abs());
+            }
+            if let Some((v, _)) = sl.extreme(q, false, 0.0) {
+                near_off = near_off.max((lo_r - v).abs());
+            }
+        }
+        eprintln!(
+            "exact outline: off the slices' search by {far_off:.3e} (far) and {near_off:.3e} (near), the polygon's chords' sag included"
+        );
+    }
+    let far = all().map(|p| p.0).fold(0.0, f64::max);
+    let curves = sides
+        .iter()
+        .map(|side| {
+            // (A straight stretch stays a line.)
+            let ps: Vec<P3> = side
+                .iter()
+                .map(|&rq| {
+                    let p = p2(rq);
+                    P3::new(p.x, p.y, 0.0)
+                })
+                .collect();
+            let (a, z) = (ps[0], ps[ps.len() - 1]);
+            let chord = z - a;
+            let straight = ps.iter().all(|p| {
+                let w = p - a;
+                (w - chord * (w.dot(&chord) / chord.norm_squared().max(f64::MIN_POSITIVE))).norm()
+                    <= 1e-13 * reach
+            });
+            if straight {
+                return Curve2::Line {
+                    a: P2::new(a.x, a.y),
+                    b: P2::new(z.x, z.y),
+                    source: None,
+                };
+            }
+            let c = fit_through(&ps).0;
+            Curve2::Spline {
+                degree: c.degree,
+                knots: c.knots.clone(),
+                poles: c
+                    .cps
+                    .iter()
+                    .map(|h| P2::new(h.x / h.w, h.y / h.w))
+                    .collect(),
+                weights: vec![],
+                source: None,
+            }
+        })
+        .collect();
+    Some((curves, far))
+}
+
 /// An extreme slice: its key, and where it touches the body (its distance from the axis and the
 /// turn about the body's axis there).
 #[derive(Clone, Copy)]
@@ -947,13 +1938,24 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
     ) {
         return sweep_solid_at(k, body, motion);
     }
-    with_slices(FINE_SLICES, || sweep_solid_at(k, body, motion))
-        .or_else(|_| with_slices(COARSE_SLICES, || sweep_solid_at(k, body, motion)))
+    OUTLINES
+        .into_iter()
+        .map(|n| with_slices(n, || sweep_solid_at(k, body, motion)))
+        .reduce(|done, next| done.or(next))
+        .expect("an outline to try")
 }
 
-/// How many slices an endless sweep's outline is traced on: the cubic B-spline through them
-/// is off the outline by the fourth power of their spacing, so four times the slices is 256
-/// times nearer (a wheel turned round a rod: its volume to 1e-8, not 1e-6).
+/// An endless sweep's outline in closed form ([`exact_outline`]), where [`OUTLINE_SLICES`]
+/// asks for no slices.
+const EXACT: usize = 0;
+/// The outlines an endless sweep tries in turn, until one builds a solid (and, for a cut, one
+/// its boolean takes): in closed form, traced finely, traced coarsely.
+const OUTLINES: [usize; 3] = [EXACT, FINE_SLICES, COARSE_SLICES];
+
+/// How many slices an endless sweep's outline is traced on where it isn't had in closed form:
+/// the cubic B-spline through them is off the outline by the fourth power of their spacing, so
+/// four times the slices is 256 times nearer (a wheel turned round a rod: its volume to 1e-8,
+/// not 1e-6).
 const FINE_SLICES: usize = 1280;
 /// The slices of an outline whose finer trace builds no solid, or one a boolean can't take.
 const COARSE_SLICES: usize = 160;
@@ -1126,10 +2128,99 @@ fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> R
         ));
     }
     let n = OUTLINE_SLICES.with(|s| s.get());
-    let ol = outline(&sl, lo, hi, n).ok_or_else(|| KernelError::InvalidResult {
-        op: "solid sweep",
-        why: "the body's outline has a slice it misses".into(),
-    })?;
+    // The section's plane: through the axis for a turn (x the distance, y the height); the plane
+    // square to it at height 0 for a screw (polar: distance, angle).
+    let x = any_perpendicular(&z);
+    let y = z.cross(&x);
+    let p2 = |(r, q): (f64, f64)| -> nalgebra::Point2<f64> {
+        if kk == 0.0 {
+            nalgebra::Point2::new(r, q)
+        } else {
+            nalgebra::Point2::new(r * q.cos(), r * q.sin())
+        }
+    };
+    // The outline in closed form where it can be had (and the finer trace is asked for: the
+    // coarser is what a boolean falls back on); else traced slice by slice.
+    let rise = if kk == 0.0 { 0.0 } else { 1.0 / kk };
+    let exact = (n == EXACT && !crate::native::env_flag!("CADRS_OUTLINE_SLICED"))
+        .then(|| exact_outline(&sl, near, rise, &p2, (lo.key, hi.key)))
+        .flatten();
+    let n = if n == EXACT { FINE_SLICES } else { n };
+    let (curves, reach) = match exact {
+        Some(found) => found,
+        None => {
+            let ol = outline(&sl, lo, hi, n).ok_or_else(|| KernelError::InvalidResult {
+                op: "solid sweep",
+                why: "the body's outline has a slice it misses".into(),
+            })?;
+            sliced_outline(&sl, &ol, &p2)
+        }
+    };
+    let region = Region {
+        outer: Loop { curves },
+        holes: vec![],
+        source: Some(0),
+    };
+    match span {
+        None => {
+            // The half plane through the axis: sketch x out from it, y along it.
+            let plane = Plane {
+                origin: axis.origin,
+                x_dir: nalgebra::Unit::new_normalize(x),
+                normal: nalgebra::Unit::new_normalize(x.cross(&z)),
+            };
+            k.revolve_with(
+                &Profile::new(plane, vec![region]),
+                &RevolveSpec::solid(axis, None),
+            )
+        }
+        Some((from, to)) => {
+            // The plane square to the axis at `from`, its sketch axes x and y; the region turned
+            // to where the screw has it there, then swept up the helix to `to`.
+            let turn = kk * from;
+            let (c, s) = (turn.cos(), turn.sin());
+            let (xr, yr) = (x * c + y * s, y * c - x * s);
+            let plane = Plane {
+                origin: axis.origin + z * from,
+                x_dir: nalgebra::Unit::new_normalize(xr),
+                normal: nalgebra::Unit::new_normalize(xr.cross(&yr)),
+            };
+            // The helix through a point of the region (its first pole's distance, at angle 0
+            // of the plane), rising to `to`.
+            let r0 = reach.max(tol::POINT);
+            let turns = (to - from) * kk / TAU;
+            let path = helix_path(plane.origin, z, xr, yr, r0, TAU / kk, turns);
+            // Swept by the screw's own motion (a path this short is too little of a helix for
+            // the sweep to recognise one).
+            let prof = Profile::new(plane, vec![region]);
+            let regions = super::profile::regions(&prof)?;
+            let faces = super::profile::merge_regions(&regions)?;
+            let segs = super::sweep::path::path_segments(k, &path)?;
+            let helix =
+                super::sweep::frames::Helix::new(plane.origin, z, xr, yr, r0, TAU / kk / TAU, 0.0);
+            let (built, _) = super::sweep::frames::sweep_seg(
+                &faces,
+                &[],
+                plane,
+                &segs,
+                super::sweep::Frames::Control(SweepControl::None),
+                true,
+                Some(helix),
+            )?;
+            Ok(super::features::Tagged::from_built(built).into_result(k))
+        }
+    }
+}
+
+/// The traced outline ([`outline`]) as its closed loop of curves in the section's plane, with
+/// its greatest distance from the axis: each side a cubic B-spline through its points (by the
+/// chords' square roots), piece by piece between its corners, the sides joined at the ends by
+/// the extreme slices' stretches where they don't meet.
+fn sliced_outline(
+    sl: &Slicer,
+    ol: &Outline,
+    p2: &dyn Fn((f64, f64)) -> nalgebra::Point2<f64>,
+) -> (Vec<Curve2>, f64) {
     if crate::native::env_flag!("CADRS_SWEEP_SOLID_DEBUG") {
         for (name, side) in [("far", &ol.far), ("near", &ol.near)] {
             let mut turns: Vec<(f64, usize)> = Vec::new();
@@ -1147,19 +2238,6 @@ fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> R
             );
         }
     }
-    // The section's plane: through the axis for a turn (x the distance, y the height); the plane
-    // square to it at height 0 for a screw (polar: distance, angle).
-    let x = any_perpendicular(&z);
-    let y = z.cross(&x);
-    let p2 = |(r, q): (f64, f64)| -> nalgebra::Point2<f64> {
-        if kk == 0.0 {
-            nalgebra::Point2::new(r, q)
-        } else {
-            nalgebra::Point2::new(r * q.cos(), r * q.sin())
-        }
-    };
-    // Each side a cubic B-spline through its points (by chord length), the sides joined at the
-    // ends by the extreme slices' stretches where they don't meet.
     let fit = |pts: &[(f64, f64)]| -> Curve2 {
         let ps: Vec<P3> = pts
             .iter()
@@ -1266,65 +2344,8 @@ fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> R
             source: None,
         });
     }
-    let region = Region {
-        outer: Loop { curves },
-        holes: vec![],
-        source: Some(0),
-    };
-    match span {
-        None => {
-            // The half plane through the axis: sketch x out from it, y along it.
-            let plane = Plane {
-                origin: axis.origin,
-                x_dir: nalgebra::Unit::new_normalize(x),
-                normal: nalgebra::Unit::new_normalize(x.cross(&z)),
-            };
-            k.revolve_with(
-                &Profile::new(plane, vec![region]),
-                &RevolveSpec::solid(axis, None),
-            )
-        }
-        Some((from, to)) => {
-            // The plane square to the axis at `from`, its sketch axes x and y; the region turned
-            // to where the screw has it there, then swept up the helix to `to`.
-            let turn = kk * from;
-            let (c, s) = (turn.cos(), turn.sin());
-            let (xr, yr) = (x * c + y * s, y * c - x * s);
-            let plane = Plane {
-                origin: axis.origin + z * from,
-                x_dir: nalgebra::Unit::new_normalize(xr),
-                normal: nalgebra::Unit::new_normalize(xr.cross(&yr)),
-            };
-            // The helix through a point of the region (its first pole's distance, at angle 0
-            // of the plane), rising to `to`.
-            let r0 = ol
-                .far
-                .iter()
-                .map(|p| p.0)
-                .fold(0.0, f64::max)
-                .max(tol::POINT);
-            let turns = (to - from) * kk / TAU;
-            let path = helix_path(plane.origin, z, xr, yr, r0, TAU / kk, turns);
-            // Swept by the screw's own motion (a path this short is too little of a helix for
-            // the sweep to recognise one).
-            let prof = Profile::new(plane, vec![region]);
-            let regions = super::profile::regions(&prof)?;
-            let faces = super::profile::merge_regions(&regions)?;
-            let segs = super::sweep::path::path_segments(k, &path)?;
-            let helix =
-                super::sweep::frames::Helix::new(plane.origin, z, xr, yr, r0, TAU / kk / TAU, 0.0);
-            let (built, _) = super::sweep::frames::sweep_seg(
-                &faces,
-                &[],
-                plane,
-                &segs,
-                super::sweep::Frames::Control(SweepControl::None),
-                true,
-                Some(helix),
-            )?;
-            Ok(super::features::Tagged::from_built(built).into_result(k))
-        }
-    }
+    let reach = ol.far.iter().map(|p| p.0).fold(0.0, f64::max);
+    (curves, reach)
 }
 
 /// A helix as rational quadratic pieces (sixteen a turn) about the axis through `o` along `z`,
@@ -2392,8 +3413,9 @@ pub fn cut_swept(
     // a screw without end) fills what this one does, and is made exactly as a whole (the solid
     // of revolution, the screw's helical sweep).
     if let Some(endless) = endless_within(&**k.get(target)?, &b, motion) {
-        // (Its outline fine, then coarse: a boolean may take the one and not the other.)
-        for n in [FINE_SLICES, COARSE_SLICES] {
+        // (Its outline exact, then traced finely, then coarsely: a boolean may take the one and
+        // not the other.)
+        for n in OUTLINES {
             let swept = with_slices(n, || sweep_solid_at(k, tool, &endless));
             let debug = crate::native::env_flag!("CADRS_SWEEP_SOLID_DEBUG");
             if debug && let Err(e) = &swept {
