@@ -1,0 +1,15 @@
+[package]
+name = "cadrs_org"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Organization documents (shops): members, machines, stock, quotes, orders and jobs as a signed log, without Bevy or the kernel"
+
+[dependencies]
+blake3.workspace = true
+cadrs_fs.workspace = true
+cadrs_social.workspace = true
+postcard.workspace = true
+serde.workspace = true
+serde_bytes.workspace = true

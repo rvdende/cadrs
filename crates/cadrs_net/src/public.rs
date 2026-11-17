@@ -1442,6 +1442,13 @@ pub struct PublicRoom {
     pictures: Vec<([u8; 32], Asked)>,
 }
 
+impl PublicRoom {
+    /// The room's entity once joined.
+    pub(crate) fn joined_entity(&self) -> Option<Entity> {
+        self.room.filter(|_| self.joined)
+    }
+}
+
 /// Where this node stands with the public room, for the page to say.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoomState {

@@ -43,6 +43,7 @@ pub mod import;
 pub mod library;
 pub mod link_update;
 pub mod links;
+pub mod manufacture;
 pub mod mate;
 pub mod material;
 pub mod measure;

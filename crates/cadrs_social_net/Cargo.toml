@@ -1,0 +1,15 @@
+[package]
+name = "cadrs_social_net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "cadrs's social connection (cadrs/social/1) on a plain iroh endpoint, without Bevy: for the phone app"
+
+[dependencies]
+iroh.workspace = true
+n0-future.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["sync", "rt-multi-thread", "macros"] }

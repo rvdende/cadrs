@@ -201,6 +201,8 @@ fn identity_menu(world: &World, width: f32, theme: &Theme) -> cadrs_ui::Menu {
     menu = menu
         .item(MenuItem::new("identity-new", tr("shell-identity-new-ellipsis")).icon("plus"))
         .item(MenuItem::new("identity-edit", tr("shell-identity-edit-ellipsis")).icon("user"))
+        .item(MenuItem::new("identity-link-device", tr("pair-link-menu")).icon("device-add"))
+        .item(MenuItem::new("identity-join-account", tr("pair-join-menu")).icon("qr-code"))
         .item(if cadrs_id.is_some() {
             MenuItem::new("identity-copy-id", tr("shell-identity-copy-id")).icon("copy")
         } else {
@@ -231,6 +233,8 @@ fn on_identity_action(
         "identity-new" => open_dialog(world, IdentityDialog::New),
         "identity-edit" => open_dialog(world, IdentityDialog::Edit),
         "identity-copy-id" => copy_id(world),
+        "identity-link-device" => crate::pairing_ui::open_link(world),
+        "identity-join-account" => crate::pairing_ui::open_join(world),
         "identity-preferences" => crate::preferences_ui::open_preferences(world),
         i => {
             if let Some(n) = i

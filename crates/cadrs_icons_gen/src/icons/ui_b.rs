@@ -33,6 +33,7 @@ pub fn icons() -> Vec<Def> {
         def("appearance", Line, "Appearances", appearance),
         def("properties", Line, "Properties", properties),
         def("comments", Line, "Comments", comments),
+        def("chat", Line, "Chat", chat),
         def("find", Line, "Find in document", find),
         def("list", Line, "List view", list_view),
         def("list-details", Line, "List with details", list_details),
@@ -44,6 +45,8 @@ pub fn icons() -> Vec<Def> {
         def("star", Line, "Star", star),
         def("user", Line, "User", user),
         def("users", Line, "Teams", users),
+        def("shop", Line, "Shop", shop),
+        def("device-add", Line, "Link a device", device_add),
         def("owned-by-me", Line, "Owned by me", owned_by_me),
         def("shared-with-me", Line, "Shared with me", shared_with_me),
         def("screenshot", Line, "Camera", screenshot),
@@ -55,7 +58,10 @@ pub fn icons() -> Vec<Def> {
         def("keyboard", Line, "Keyboard shortcuts", keyboard),
         def("tag", Line, "Label", tag),
         def("tag-new", Line, "Add label", tag_new),
+        def("receipt", Line, "Quote", receipt),
         def("location", Line, "Location", location),
+        def("map-pin", Line, "Find on a map", map_pin),
+        def("qr-code", Line, "QR code", qr_code),
         def("note", Line, "Note", note),
         def("bold", Line, "Bold", bold),
         def("italic", Line, "Italic", italic),
@@ -794,5 +800,104 @@ fn clock() -> Vec<String> {
     els![
         circle(12.0, 12.0, 9.0, "", ""),
         acc(polyline(&[(12.0, 7.0), (12.0, 12.0), (15.25, 14.0)], ""))
+    ]
+}
+
+// ---------------------------------------------------------------------------------------------
+// Shops and people between them (the social side: organizations, quotes, chat)
+
+fn shop() -> Vec<String> {
+    // A storefront: the awning with its scallops over the building; the door is the accent.
+    let scallops = format!(
+        "M3 8.5 {} {} {} {}",
+        a(7.5, 8.5, 2.25, 0),
+        a(12.0, 8.5, 2.25, 0),
+        a(16.5, 8.5, 2.25, 0),
+        a(21.0, 8.5, 2.25, 0)
+    );
+    els![
+        path("M3 8.5 L5 4 H19 L21 8.5", "", ""),
+        path(&scallops, "", ""),
+        path("M5 11 V20.5 H19 V11", "", ""),
+        acc(path("M10 20.5 V15 H14 V20.5", "", ""))
+    ]
+}
+
+fn receipt() -> Vec<String> {
+    // A slip with a torn bottom edge; its first line (the total) is the accent.
+    els![
+        path(
+            "M6 3 H18 V21 L16 19.5 L14 21 L12 19.5 L10 21 L8 19.5 L6 21 Z",
+            "",
+            ""
+        ),
+        acc(path("M9 7.5 H15", "", "")),
+        path("M9 11 H15", "", ""),
+        path("M9 14.5 H12.5", "", "")
+    ]
+}
+
+fn chat() -> Vec<String> {
+    // Two speech bubbles: the one behind (open where the front one covers it) and the front
+    // one, an answer, in accent.
+    let back = format!(
+        "M9.5 12.5 H8 L5 15 V12.5 {} V6 {} H12 {} V8.5",
+        a(3.0, 10.0, R, 1),
+        a(5.5, 3.5, R, 1),
+        a(14.5, 6.0, R, 1)
+    );
+    let front = format!(
+        "M12 10 H18.5 {} V15 {} H19 V20 L15.5 17.5 H12 {} V12.5 {} Z",
+        a(21.0, 12.5, R, 1),
+        a(18.5, 17.5, R, 1),
+        a(9.5, 15.0, R, 1),
+        a(12.0, 10.0, R, 1)
+    );
+    els![path(&back, "", ""), acc(path(&front, "", ""))]
+}
+
+fn map_pin() -> Vec<String> {
+    // A map folded in three, with a pin on it: the pin is the accent.
+    els![
+        path(
+            "M3 7 L8.5 5 L15.5 7 L21 5 V17 L15.5 19 L8.5 17 L3 19 Z",
+            "",
+            ""
+        ),
+        path("M8.5 5 V9.5 M8.5 15 V17 M15.5 7 V9.5 M15.5 15 V19", "", ""),
+        acc(path(
+            "M12 16 C12 16 15 13.25 15 10.75 A3 3 0 0 0 9 10.75 C9 13.25 12 16 12 16 Z",
+            "",
+            ""
+        ))
+    ]
+}
+
+fn qr_code() -> Vec<String> {
+    // Three finder squares and a scatter of modules: a plain object, ink only.
+    let finder = |x: f64, y: f64| {
+        vec![
+            rect(x, y, 6.5, 6.5, 1.0, "", ""),
+            rect(x + 2.25, y + 2.25, 2.0, 2.0, 0.0, INK, r#"stroke="none""#),
+        ]
+    };
+    els![
+        finder(3.0, 3.0),
+        finder(14.5, 3.0),
+        finder(3.0, 14.5),
+        rect(14.5, 14.5, 2.5, 2.5, 0.0, INK, r#"stroke="none""#),
+        rect(18.5, 18.5, 2.5, 2.5, 0.0, INK, r#"stroke="none""#),
+        rect(18.5, 14.5, 2.5, 2.5, 0.0, INK, r#"stroke="none""#),
+        rect(14.5, 18.5, 2.5, 2.5, 0.0, INK, r#"stroke="none""#),
+        rect(10.75, 10.75, 2.5, 2.5, 0.0, INK, r#"stroke="none""#)
+    ]
+}
+
+fn device_add() -> Vec<String> {
+    // A phone (its speaker slot at the top), and the plus of adding it: the plus is the accent.
+    els![
+        rect(4.0, 3.0, 9.5, 18.0, R, "", ""),
+        path("M7.5 6 H10", "", ""),
+        acc(plus(18.25, 12.0))
     ]
 }

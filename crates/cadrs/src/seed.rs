@@ -89,6 +89,20 @@ pub fn run(seed: Seed) -> AppExit {
     app.insert_resource(KeepAll)
         .insert_resource(PublicPeers(PublicPeers::seeds(&seed.peers)))
         .add_systems(Update, report);
+    // A mailbox for everyone: letters to people who are offline wait here, sealed, for them to
+    // collect. It signs its receipts with the node's own key, so senders find it by its ID.
+    let key = std::fs::read(seed.dir.join(cadrs_net::IDENTITY_FILE))
+        .ok()
+        .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok())
+        .map(|b| cadrs_social::keys::SecretKey::from_bytes(&b));
+    if let Some(key) = key {
+        cadrs_net::social::enable_mailbox(
+            app.world_mut(),
+            key,
+            Some(seed.dir.join("mailbox.bin")),
+            cadrs_social::mailbox::Terms::default(),
+        );
+    }
     match cadrs_net::cadrs_id(app.world().get_resource::<Iroh>()) {
         Some(id) => {
             println!("cadrs public seed, keeping {}", seed.dir.display());
@@ -122,5 +136,12 @@ fn report(world: &mut World, mut last: Local<Option<f64>>) {
         RoomState::Offline | RoomState::Off => "offline".into(),
     };
     let listed = world.resource::<Shared>().lock().directory.len();
-    info!("public seed: {listed} documents listed; peers in the room: {peers}");
+    let (letters, bytes) = world
+        .get_resource::<cadrs_net::social::Mailboxes>()
+        .and_then(|m| m.0.lock().ok()?.as_ref().map(|n| n.held()))
+        .unwrap_or_default();
+    info!(
+        "public seed: {listed} documents listed; peers in the room: {peers}; \
+         {letters} letters ({bytes} bytes) waiting in the mailbox"
+    );
 }
