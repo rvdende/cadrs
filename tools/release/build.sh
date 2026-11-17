@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Builds the release archives for Linux and Windows into dist/:
-#   cadrs-v<version>-x86_64-linux.tar.gz, cadrs-v<version>-x86_64-windows.zip, SHA256SUMS.txt
+#   cadrs-v<version>-x86_64-linux.tar.gz, cadrs-v<version>-x86_64-windows.zip, the Windows
+#   installer cadrs-v<version>-x86_64-windows-setup.exe (needs NSIS's makensis), SHA256SUMS.txt
 # (each archive: the stripped executable, the built-in libraries/, README.md and the licenses).
 #
 # - Linux is built in the `cadrs-linux-build` container (Ubuntu 22.04, see the Dockerfile here),
@@ -54,8 +55,8 @@ tools/release/package.sh linux target/linux-release/release/cadrs
 tools/release/package.sh windows target/x86_64-pc-windows-gnu/release/cadrs.exe
 linux="cadrs-v$version-x86_64-linux"
 windows="cadrs-v$version-x86_64-windows"
-(cd "$dist" && sha256sum "$linux.tar.gz" "$windows.zip" > SHA256SUMS.txt && cat SHA256SUMS.txt)
+(cd "$dist" && sha256sum "$linux.tar.gz" "$windows.zip" "$windows-setup.exe" > SHA256SUMS.txt && cat SHA256SUMS.txt)
 
 echo
 echo "To publish:"
-echo "  gh release create v$version dist/$linux.tar.gz dist/$windows.zip dist/SHA256SUMS.txt --title \"cadrs v$version\" --notes-file <notes.md>"
+echo "  gh release create v$version dist/$linux.tar.gz dist/$windows.zip dist/$windows-setup.exe dist/SHA256SUMS.txt --title \"cadrs v$version\" --notes-file <notes.md>"

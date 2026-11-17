@@ -463,6 +463,7 @@ fn sync_dialog_footer(
                             let Some(archive) = r.archive.clone() else {
                                 return;
                             };
+                            let version = r.version.clone();
                             *status = UpdateStatus::Downloading {
                                 release: r,
                                 done: 0,
@@ -470,7 +471,7 @@ fn sync_dialog_footer(
                                 started: Instant::now(),
                             };
                             spawn_job(&mut commands, move |tx| {
-                                Msg::Installed(install(&archive, tx))
+                                Msg::Installed(install(&archive, &version, tx))
                             });
                         },
                     ),
@@ -954,9 +955,9 @@ fn remove_old_executable() {
     }
 }
 
-/// Downloads the archive, unpacks it beside the executable and swaps it in, telling `tx` how far
-/// it got. Returns the new executable.
-fn install(archive: &Archive, tx: &Sender<Msg>) -> Result<PathBuf, String> {
+/// Downloads the archive of release `version`, unpacks it beside the executable and swaps it in,
+/// telling `tx` how far it got. Returns the new executable.
+fn install(archive: &Archive, version: &str, tx: &Sender<Msg>) -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| format!("cannot find this executable: {e}"))?;
     let dir = install_dir().ok_or("this build is not an install")?;
     let staging = dir.join("update.new");
@@ -966,7 +967,74 @@ fn install(archive: &Archive, tx: &Sender<Msg>) -> Result<PathBuf, String> {
     cadrs_fs::create_dir_all(&staging).map_err(|e| err("create", &staging, e))?;
     let result = download_and_swap(archive, tx, &exe, &dir, &staging);
     let _ = cadrs_fs::remove_dir_all(&staging);
+    #[cfg(windows)]
+    if result.is_ok() {
+        record_installed_version(&dir, version);
+    }
+    #[cfg(not(windows))]
+    let _ = version;
     result.map(|()| exe)
+}
+
+/// The Windows installer's entry in Settings › Apps (`tools/windows/cadrs.nsi`).
+#[cfg_attr(not(windows), allow(dead_code))]
+const UNINSTALL_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\cadrs";
+
+/// Settings › Apps shows the version the Windows installer wrote; an update of the folder it
+/// installed writes the new one there (through `reg.exe`, as nothing else here needs the
+/// registry). A copy unpacked from the zip has no entry and gets none.
+#[cfg(windows)]
+fn record_installed_version(dir: &Path, version: &str) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let reg = |args: &[&str]| {
+        std::process::Command::new("reg")
+            .args(args)
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+    };
+    let Ok(out) = reg(&["query", UNINSTALL_KEY, "/v", "InstallLocation"]) else {
+        return;
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let ours = out.status.success()
+        && reg_value(&text, "InstallLocation").is_some_and(|p| same_dir(Path::new(p), dir));
+    if ours {
+        let _ = reg(&[
+            "add",
+            UNINSTALL_KEY,
+            "/v",
+            "DisplayVersion",
+            "/t",
+            "REG_SZ",
+            "/d",
+            version,
+            "/f",
+        ]);
+    }
+}
+
+/// The data of value `name` in `reg query`'s output (`    <name>    REG_SZ    <data>`).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn reg_value<'a>(query: &'a str, name: &str) -> Option<&'a str> {
+    query.lines().find_map(|l| {
+        let mut parts = l.trim().splitn(3, "    ");
+        (parts.next()? == name).then_some(())?;
+        parts.next()?;
+        Some(parts.next()?.trim())
+    })
+}
+
+/// Windows paths, which differ only in case or a trailing separator.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn same_dir(a: &Path, b: &Path) -> bool {
+    let norm = |p: &Path| {
+        p.to_string_lossy()
+            .trim_end_matches(['\\', '/'])
+            .replace('/', "\\")
+            .to_lowercase()
+    };
+    norm(a) == norm(b)
 }
 
 fn download_and_swap(
@@ -1111,6 +1179,19 @@ fn swap(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reg_query_value_and_its_folder() {
+        let out = "\r\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\cadrs\r\n    InstallLocation    REG_SZ    C:\\Users\\Ann Lee\\AppData\\Local\\Programs\\cadrs\r\n\r\n";
+        let p = reg_value(out, "InstallLocation").unwrap();
+        assert_eq!(p, r"C:\Users\Ann Lee\AppData\Local\Programs\cadrs");
+        assert!(same_dir(
+            Path::new(p),
+            Path::new(r"c:\users\ann lee\appdata\local\programs\cadrs\")
+        ));
+        assert!(!same_dir(Path::new(p), Path::new(r"C:\cadrs")));
+        assert_eq!(reg_value(out, "DisplayVersion"), None);
+    }
 
     #[test]
     fn versions_compare_by_number() {

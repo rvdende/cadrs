@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 # Packages a built executable into dist/ as a release archive:
 #   package.sh linux <cadrs>       → dist/cadrs-v<version>-x86_64-linux.tar.gz
-#   package.sh windows <cadrs.exe> → dist/cadrs-v<version>-x86_64-windows.zip
+#   package.sh windows <cadrs.exe> → dist/cadrs-v<version>-x86_64-windows.zip and the installer
+#                                    dist/cadrs-v<version>-x86_64-windows-setup.exe (NSIS's
+#                                    makensis, tools/windows/cadrs.nsi)
 #   package.sh macos <cadrs>       → dist/cadrs-v<version>-universal-macos.dmg (on macOS, from a
 #                                    universal Apple silicon and Intel executable)
 #   package.sh web <dir>           → dist/cadrs-v<version>-web.tar.gz (the browser build's folder,
 #                                    tools/web/build.sh; the site at https://cadrs.net)
 # Each holds the stripped executable, the built-in libraries/, README.md and the licenses; the
 # macOS one holds them as the app bundle cadrs.app (`cadrs --bundle`, as `cadrs --install` makes
-# it), ad-hoc signed, beside a link to /Applications to drag it to. Used by
+# it), ad-hoc signed, beside a link to /Applications to drag it to. The Windows executable and
+# installer are signed when WINDOWS_SIGN_PFX names a code-signing certificate
+# (tools/windows/sign.sh), else left unsigned. Used by
 # tools/release/build.sh and .github/workflows/release.yml.
 set -euo pipefail
 
@@ -65,6 +69,8 @@ rm -rf "$dir"
 mkdir -p "$dir"
 cp "$exe" "$dir/$exe_name"
 "$strip" "$dir/$exe_name"
+# After stripping, which would drop a signature.
+if [[ "$platform" == windows ]]; then tools/windows/sign.sh "$dir/$exe_name"; fi
 cp README.md LICENSE-APACHE LICENSE-MIT "$dir/"
 # The built-in symbols, footprints and 3D models: the app reads them from `libraries/` beside
 # the executable.
@@ -73,6 +79,18 @@ cp -r libraries "$dir/"
 cd "$dist"
 case "$platform" in
     linux) rm -f "$name.tar.gz" && tar czf "$name.tar.gz" "$name" ;;
-    windows) rm -f "$name.zip" && zip -qr "$name.zip" "$name" ;;
+    windows)
+        rm -f "$name.zip" && zip -qr "$name.zip" "$name"
+        # The installer of the same files. Its version resource takes four numbers, so a
+        # pre-release's suffix (0.2.9-beta.1) is dropped there.
+        nums="${version%%-*}"
+        rm -f "$name-setup.exe"
+        makensis -V2 -NOCD \
+            -DVERSION="$version" -DVIVERSION="$nums.0" \
+            -DSRC="$dir" -DOUT="$dist/$name-setup.exe" \
+            -DSIGN="$root/tools/windows/sign.sh" \
+            "$root/tools/windows/cadrs.nsi"
+        ls -l "$name-setup.exe"
+        ;;
 esac
 ls -l "$dist/$name".*

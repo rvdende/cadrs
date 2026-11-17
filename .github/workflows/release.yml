@@ -1,7 +1,7 @@
 name: Release
 
 # Pushing a version tag (`git tag v0.1.6 && git push origin v0.1.6`) builds the Linux and Windows
-# archives, as tools/release/build.sh does locally, the macOS disk image (#103) and the browser
+# archives and the Windows installer, as tools/release/build.sh does locally, the macOS disk image (#103) and the browser
 # build (tools/web), and publishes them as a GitHub release with SHA256SUMS.txt. The release notes are
 # tools/release/notes/<tag>.md (GitHub's generated notes when there is none); a tag with a `-` in
 # it (v0.1.7-beta.1) is a pre-release. (The site, https://cadrs.net, is main's head, deployed on
@@ -73,10 +73,17 @@ jobs:
   # Cross-built with MinGW (its windres compiles the icon into cadrs.exe), on the nightly pinned
   # in rust-toolchain.toml, which carries the Windows target. On Ubuntu 26.04, for MinGW's
   # binutils 2.45: the cadrs.exe that 24.04's binutils 2.41 linked doesn't start on Windows.
+  # Packed as the zip and as the installer (NSIS, tools/windows/cadrs.nsi). With the secrets
+  # WINDOWS_CERTIFICATE (a code-signing certificate's .pfx, base64) and
+  # WINDOWS_CERTIFICATE_PASSWORD, cadrs.exe, the installer and its uninstaller are signed
+  # (tools/windows/sign.sh); without them they aren't, and SmartScreen warns before the first run.
   windows:
     name: Build (Windows)
     runs-on: ubuntu-26.04
     timeout-minutes: 120
+    env:
+      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+      WINDOWS_SIGN_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
@@ -92,7 +99,8 @@ jobs:
           sudo rm -f /var/lib/man-db/auto-update
           sudo -E apt-get update
           sudo -E apt-get install -y --no-install-recommends \
-            clang mold gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 binutils-mingw-w64-x86-64 zip < /dev/null
+            clang mold gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 binutils-mingw-w64-x86-64 zip \
+            nsis osslsigncode < /dev/null
 
       - name: Check the MinGW linker
         run: |
@@ -110,13 +118,25 @@ jobs:
       - name: Build
         run: cargo build --release --locked --target x86_64-pc-windows-gnu -p cadrs
 
+      - name: Code-signing certificate
+        if: ${{ env.WINDOWS_CERTIFICATE != '' }}
+        run: |
+          echo "$WINDOWS_CERTIFICATE" | base64 -d > "$RUNNER_TEMP/cadrs.pfx"
+          echo "WINDOWS_SIGN_PFX=$RUNNER_TEMP/cadrs.pfx" >> "$GITHUB_ENV"
+
       - name: Package
         run: tools/release/package.sh windows target/x86_64-pc-windows-gnu/release/cadrs.exe
+
+      - name: Remove the certificate
+        if: ${{ always() }}
+        run: rm -f "$RUNNER_TEMP/cadrs.pfx"
 
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: dist/*.zip
+          path: |
+            dist/*.zip
+            dist/*-setup.exe
           if-no-files-found: error
 
   # On Apple silicon, for Apple silicon and Intel: both built (Apple's toolchain cross-builds
@@ -249,7 +269,7 @@ jobs:
           ls -l
 
       - name: Checksums
-        run: cd dist && sha256sum *.tar.gz *.zip *.dmg > SHA256SUMS.txt && cat SHA256SUMS.txt
+        run: cd dist && sha256sum *.tar.gz *.zip *.exe *.dmg > SHA256SUMS.txt && cat SHA256SUMS.txt
 
       - name: Create the release
         run: |
@@ -260,4 +280,4 @@ jobs:
           notes="tools/release/notes/$TAG.md"
           if [[ -f "$notes" ]]; then args+=(--notes-file "$notes"); else args+=(--generate-notes); fi
           if [[ "$TAG" == *-* ]]; then args+=(--prerelease); fi
-          gh release create "$TAG" dist/*.tar.gz dist/*.zip dist/*.dmg dist/SHA256SUMS.txt "${args[@]}"
+          gh release create "$TAG" dist/*.tar.gz dist/*.zip dist/*.exe dist/*.dmg dist/SHA256SUMS.txt "${args[@]}"

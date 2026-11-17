@@ -4,12 +4,21 @@
 <!-- Download buttons: the latest release's files under their names without the version (see
 .github/workflows/release.yml), the version on each badge read from GitHub by shields.io. macOS
 goes to the releases page (its badge counts pre-releases) until a full release has the Mac
-build; then link it to https://github.com/rvdende/cadrs/releases/latest/download/cadrs-universal-macos.dmg like the others. -->
+build; then link it to https://github.com/rvdende/cadrs/releases/latest/download/cadrs-universal-macos.dmg like the others.
+Windows links the zip until a release has the installer (#200); then link it to
+https://github.com/rvdende/cadrs/releases/latest/download/cadrs-x86_64-windows-setup.exe. -->
 <p>
   <a href="https://github.com/rvdende/cadrs/releases/latest/download/cadrs-x86_64-windows.zip"><img alt="Download for Windows" src="https://img.shields.io/github/v/release/rvdende/cadrs?style=for-the-badge&label=Windows&color=0078d4&logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PHBhdGggZmlsbD0nd2hpdGUnIGQ9J00yIDQuNCAxMC4zIDMuM3Y4SDJ6TTExLjMgMy4xIDIyIDEuN3Y5LjZIMTEuM3pNMiAxMi40aDguM3Y4LjJMMiAxOS41ek0xMS4zIDEyLjRIMjJ2OS45bC0xMC43LTEuNXonLz48L3N2Zz4="></a>
   <a href="https://github.com/rvdende/cadrs/releases/latest/download/cadrs-universal-macos.dmg"><img alt="Download for macOS" src="https://img.shields.io/github/v/release/rvdende/cadrs?style=for-the-badge&include_prereleases&label=macOS&color=444444&logo=apple"></a>
   <a href="https://github.com/rvdende/cadrs/releases/latest/download/cadrs-x86_64-linux.tar.gz"><img alt="Download for Linux" src="https://img.shields.io/github/v/release/rvdende/cadrs?style=for-the-badge&label=Linux&color=e95420&logo=linux&logoColor=white"></a>
 </p>
+
+**Windows**: run `cadrs-v<version>-x86_64-windows-setup.exe` from the
+[latest release](https://github.com/rvdende/cadrs/releases/latest). It installs for your user
+only (no administrator prompt) into `%LOCALAPPDATA%\Programs\cadrs`, with a Start Menu
+shortcut, "Open with" for `.cadrs`, STEP, IGES, BREP, STL and GLB files, and an entry in
+Settings › Apps to uninstall it; `/S` installs silently. Or unpack the `…-windows.zip` anywhere
+and run `cadrs.exe`. Either way the app updates itself when a new release is out.
 
 **A parametric, feature-based CAD app written in Rust**, with a Bevy UI and its own pure-Rust
 B-rep modeling kernel. Its workflow is sketch on a plane, constrain and dimension,
