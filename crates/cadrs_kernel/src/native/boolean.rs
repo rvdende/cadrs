@@ -255,6 +255,8 @@ struct Pool {
     /// Each vertex's tolerance: points within the larger of two tolerances (and the run's) are
     /// one vertex.
     vtols: Vec<f64>,
+    /// The tolerance each vertex came with: its ball grows from this ([`Self::vertex_tol`]).
+    vbase: Vec<f64>,
     /// The grid's cell: big enough that a merge never reaches past the neighbouring cells.
     cell: f64,
     /// The run's merge distance.
@@ -269,6 +271,7 @@ impl Pool {
         Pool {
             verts: Vec::new(),
             vtols: Vec::new(),
+            vbase: Vec::new(),
             cell: (tol * 16.0).max(max_tol * 2.0),
             tol,
             grid: HashMap::default(),
@@ -310,7 +313,12 @@ impl Pool {
     fn vertex_tol(&mut self, p: P3, tol: f64) -> usize {
         if let Some(i) = self.find_tol(&p, tol) {
             if tol > 0.0 {
-                let reach = (self.verts[i] - p).norm() + tol;
+                // (Its ball holds the newcomer's, up to twice the largest tolerance met here:
+                // a ball that grew with every point it took in would take in the next a
+                // little farther off, and so on along a row of them, whatever order they
+                // came in.)
+                let most = 2.0 * self.tol.max(tol).max(self.vbase[i]);
+                let reach = ((self.verts[i] - p).norm() + tol).min(most);
                 if reach > self.vtols[i] {
                     self.vtols[i] = reach;
                 }
@@ -334,6 +342,7 @@ impl Pool {
     fn new_vertex_tol(&mut self, p: P3, tol: f64) -> usize {
         self.verts.push(p);
         self.vtols.push(tol);
+        self.vbase.push(tol);
         let i = self.verts.len() - 1;
         let c = self.cell_of(&p);
         self.grid.entry(c).or_default().push(i);
