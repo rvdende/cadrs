@@ -3687,7 +3687,7 @@ pub fn fillet_variable(
     let laws = &laws[..];
     // By local trimming first (any edge and faces), then the tool for straight edges between
     // flat faces.
-    match fillet_laws_local(k, body, laws) {
+    let first = match fillet_laws_local(k, body, laws) {
         Ok(r) => return Ok(r),
         Err(e) => {
             if crate::native::env_flag!("CADRS_LOCAL_FILLET_ONLY") {
@@ -3696,9 +3696,21 @@ pub fn fillet_variable(
             if crate::native::env_flag!("CADRS_BLEND_DEBUG") {
                 eprintln!("local variable fillet: {e}; falling back to the blend tool");
             }
+            e
         }
-    }
-    let mut cur = Tracked::of((*b).clone());
+    };
+    // (A failure of the tool names the local fillet's too: the stage that gave up first.)
+    fillet_variable_tool(k, body, &b, laws).map_err(|e| e.after("the local fillet", &first))
+}
+
+/// [`fillet_variable`] by a lofted tool: straight edges between flat faces.
+fn fillet_variable_tool(
+    k: &mut NativeKernel,
+    body: BodyId,
+    b: &Body,
+    laws: &[FilletLaw],
+) -> Result<OpResult> {
+    let mut cur = Tracked::of(b.clone());
     for law in laws {
         let e = law.edge.0 as usize;
         if e >= b.edges.len() || law.radii.is_empty() {

@@ -60,6 +60,8 @@ pub struct XBuilder {
     solids: Vec<Vec<usize>>,
     /// Problems met (faces dropped, gaps left), for diagnostics.
     pub warnings: Vec<String>,
+    /// The vertices by where they are, for [`Self::vertex_at`].
+    places: super::math::PointIndex,
     /// Whether the file says nothing of the faces' orientation (IGES trimmed surfaces): solids
     /// are then always turned to enclose a positive volume.
     pub unoriented: bool,
@@ -1634,7 +1636,11 @@ impl XBuilder {
 
     /// A vertex at `p`: an existing one within the join distance, else a new one.
     fn vertex_at(&mut self, p: P3) -> usize {
-        if let Some(i) = self.body.verts.iter().position(|v| (v.p - p).norm() < JOIN) {
+        let verts = &self.body.verts;
+        if let Some(i) = self
+            .places
+            .first_within(verts.len(), |i| verts[i].p, &p, JOIN)
+        {
             return i;
         }
         self.body.add_vertex(p)

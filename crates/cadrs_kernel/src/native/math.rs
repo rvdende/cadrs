@@ -289,6 +289,59 @@ pub fn seg_dist2(p: &P2, a: &P2, b: &P2) -> f64 {
     (a + ab * t - p).norm()
 }
 
+/// Points by the cell of a grid they fall in, to find the ones near a point without looking at
+/// them all: the points are the caller's, by index, and those added since the last question are
+/// taken in at the next.
+#[derive(Debug, Default)]
+pub struct PointIndex {
+    cell: f64,
+    cells: std::collections::HashMap<[i64; 3], Vec<usize>>,
+    seen: usize,
+}
+
+impl PointIndex {
+    fn key(&self, p: &P3) -> [i64; 3] {
+        [p.x, p.y, p.z].map(|x| (x / self.cell).floor() as i64)
+    }
+
+    /// The first of the `n` points `at` nearer than `r` to `p` (the same `r` every time).
+    pub fn first_within(
+        &mut self,
+        n: usize,
+        at: impl Fn(usize) -> P3,
+        p: &P3,
+        r: f64,
+    ) -> Option<usize> {
+        if self.cell < r {
+            // (A wider question than the cells were cut for: cut them again.)
+            (self.cell, self.seen) = (r, 0);
+            self.cells.clear();
+        }
+        for i in self.seen..n {
+            let k = self.key(&at(i));
+            self.cells.entry(k).or_default().push(i);
+        }
+        self.seen = n;
+        let k = self.key(p);
+        let mut first: Option<usize> = None;
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    let Some(list) = self.cells.get(&[k[0] + dx, k[1] + dy, k[2] + dz]) else {
+                        continue;
+                    };
+                    for &i in list {
+                        if first.is_none_or(|f| i < f) && (at(i) - p).norm() < r {
+                            first = Some(i);
+                        }
+                    }
+                }
+            }
+        }
+        first
+    }
+}
+
 /// The set `i` is in, of sets kept as each member's parent (a set's root its own): its root,
 /// the members passed on the way joined nearer it. Two sets are joined by making one's root
 /// the other's parent.

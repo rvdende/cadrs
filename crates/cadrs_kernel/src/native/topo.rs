@@ -321,6 +321,34 @@ body!(pub);
 #[cfg(not(feature = "testkit"))]
 body!(pub(crate));
 
+/// A set of a body's faces, edges or vertices by index, asked of in one step: `true` at its
+/// members.
+#[derive(Clone, Debug)]
+pub struct Mask(Vec<bool>);
+
+impl Mask {
+    /// The members `on` of `n` things.
+    pub fn of(n: usize, on: &[usize]) -> Self {
+        let mut m = Mask(vec![false; n]);
+        for &i in on {
+            m.insert(i);
+        }
+        m
+    }
+
+    /// Whether `i` is a member (the list's own `contains`, so that either reads the same).
+    pub fn contains(&self, i: &usize) -> bool {
+        self.0.get(*i).copied().unwrap_or(false)
+    }
+
+    /// Makes `i` a member.
+    pub fn insert(&mut self, i: usize) {
+        if let Some(x) = self.0.get_mut(i) {
+            *x = true;
+        }
+    }
+}
+
 /// The faces using each edge of a body ([`Body::edge_faces`]), in one table: `faces[e]` is
 /// edge e's, in the order its faces' loops come to it.
 #[derive(Clone, Debug, Default)]
@@ -574,6 +602,18 @@ impl Body {
     pub fn co_end(&self, c: &Coedge) -> usize {
         let e = &self.edges[c.edge];
         if c.fwd { e.v[1] } else { e.v[0] }
+    }
+
+    /// For each vertex, the edges ending at it, in the edges' order (a closed edge once).
+    pub fn vertex_edges(&self) -> Vec<Vec<usize>> {
+        let mut out = vec![Vec::new(); self.verts.len()];
+        for (e, ed) in self.edges.iter().enumerate() {
+            out[ed.v[0]].push(e);
+            if ed.v[1] != ed.v[0] {
+                out[ed.v[1]].push(e);
+            }
+        }
+        out
     }
 
     /// For each edge, the faces using it (a seam lists its face twice).

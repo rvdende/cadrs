@@ -546,6 +546,7 @@ fn slide_seam_ends(
     surfs: &[Surface],
     ef: &super::topo::EdgeFaces,
 ) -> Vec<usize> {
+    let ve = b.vertex_edges();
     let kept = |e: usize| ef[e].iter().all(|&f| surfs[f] == b.faces[f].surf);
     let mut seams = Vec::new();
     for s in 0..b.edges.len() {
@@ -605,8 +606,10 @@ fn slide_seam_ends(
         if let Some(k) = off {
             let (v, o) = (se.v[k], se.v[1 - k]);
             let x_new = coord(&out.verts[v].p);
-            let rims: Vec<usize> = (0..b.edges.len())
-                .filter(|&e| e != s && !b.edges[e].degenerate && b.edges[e].v.contains(&o))
+            let rims: Vec<usize> = ve[o]
+                .iter()
+                .copied()
+                .filter(|&e| e != s && !b.edges[e].degenerate)
                 .collect();
             let closed = !rims.is_empty()
                 && rims.iter().all(|&e| {
@@ -633,8 +636,10 @@ fn slide_seam_ends(
             if at_pole(&b.verts[v].p) || !(o == v || at_pole(&b.verts[o].p)) {
                 continue;
             }
-            let others: Vec<usize> = (0..b.edges.len())
-                .filter(|&e| e != s && !b.edges[e].degenerate && b.edges[e].v.contains(&v))
+            let others: Vec<usize> = ve[v]
+                .iter()
+                .copied()
+                .filter(|&e| e != s && !b.edges[e].degenerate)
                 .collect();
             let [x, y] = others[..] else { continue };
             let (a, z) = if b.edges[x].v[1] == v && b.edges[y].v[0] == v {
@@ -926,6 +931,7 @@ fn replace_surfaces_checked(
     let mut prof = super::boolean::Prof::new();
     let mut out = b.clone();
     let vf = vertex_faces(b);
+    let ve = b.vertex_edges();
     let ef = b.edge_faces();
     let tangent = tangent_lines(b, surfs, &ef);
     // Vertices.
@@ -955,12 +961,10 @@ fn replace_surfaces_checked(
         // On a seam: on the new surface's seam line (the faces around pin it only to their
         // intersection curve).
         let on_seam = || {
-            let e = (0..b.edges.len()).find(|&e| {
-                b.edges[e].v.contains(&v)
-                    && !b.edges[e].degenerate
-                    && ef[e].len() == 2
-                    && ef[e][0] == ef[e][1]
-            })?;
+            let e = ve[v]
+                .iter()
+                .copied()
+                .find(|&e| !b.edges[e].degenerate && ef[e].len() == 2 && ef[e][0] == ef[e][1])?;
             let f = ef[e][0];
             let (u, _) = b.faces[f].surf.project(&b.verts[v].p, None);
             let iso = surfs[f].iso_u(u)?;
@@ -975,10 +979,8 @@ fn replace_surfaces_checked(
         // On an edge whose faces all stay: on that edge's curve, where it crosses the moved
         // faces.
         let on_kept = || {
-            let e = (0..b.edges.len()).find(|&e| {
-                b.edges[e].v.contains(&v)
-                    && !b.edges[e].degenerate
-                    && ef[e].iter().all(|&f| surfs[f] == b.faces[f].surf)
+            let e = ve[v].iter().copied().find(|&e| {
+                !b.edges[e].degenerate && ef[e].iter().all(|&f| surfs[f] == b.faces[f].surf)
             })?;
             let others: Vec<&Surface> = vf[v]
                 .iter()
@@ -990,8 +992,10 @@ fn replace_surfaces_checked(
         };
         // At a pole or apex (the end of a point edge): the new surface's own, nearest.
         let on_pole = || {
-            let f = (0..b.edges.len())
-                .filter(|&e| b.edges[e].degenerate && b.edges[e].v.contains(&v))
+            let f = ve[v]
+                .iter()
+                .copied()
+                .filter(|&e| b.edges[e].degenerate)
                 .flat_map(|e| ef[e].iter().copied())
                 .next()?;
             let old = b.verts[v].p;
