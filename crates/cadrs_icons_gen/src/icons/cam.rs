@@ -5,10 +5,14 @@
 //! - Solid for the things on the machine: the machines themselves, the cutters and beams, the
 //!   stock, the vise, a setup (a part in the vise), a job (stock with a pocket being cut), a work
 //!   plane (a plane with its axes) and Insert part. Neutral faces with INK outlines; the ACCENT is
-//!   the cutting part (a flute, a beam, a jet, the pocket's floor, the Z axis, the plus).
+//!   the cutting part (a flute, a beam, a jet, the pocket's floor, the Z axis, the plus). The
+//!   cutters stand on their tips and differ by silhouette: each one's flutes carry the same ACCENT
+//!   helix strokes.
 //! - Sketch for the paths: a toolpath (a zigzag raster), a cut path (a contour with its lead-in and
 //!   pierce) and a drill cycle (a hole with its pecks), flat at 1.5 with the tool's position as an
-//!   ACCENT dot.
+//!   ACCENT dot. The rotary patterns are seen from the side, the part on a shaft that sticks out
+//!   of both ends; where the tool's lean is the point (swarf, multi-axis) the tool is drawn, a
+//!   TOP bar, and the ACCENT is where it touches.
 //! - Line for the commands: regenerate, preview and post, ink at 1.75 with one accent modifier.
 
 use crate::common::*;
@@ -24,6 +28,12 @@ pub fn icons() -> Vec<Def> {
         ),
         def("cam-job", Solid, "Machining job", cam_job),
         def("cam-machine", Solid, "Milling machine", cam_machine),
+        def(
+            "cam-machine-assembly",
+            Solid,
+            "Machine from an assembly",
+            cam_machine_assembly,
+        ),
         def("cam-router", Solid, "CNC router", cam_router),
         def("cam-laser", Solid, "Laser cutter", cam_laser),
         def("cam-plasma", Solid, "Plasma cutter", cam_plasma),
@@ -33,6 +43,20 @@ pub fn icons() -> Vec<Def> {
         def("cam-stock", Solid, "Stock", cam_stock),
         def("cam-tool", Solid, "Cutting tool", cam_tool),
         def("cam-drill", Solid, "Drill", cam_drill),
+        def("cam-tool-form", Solid, "Form tool", cam_tool_form),
+        def(
+            "cam-tool-taper-ball",
+            Solid,
+            "Tapered ball mill",
+            cam_tool_taper_ball,
+        ),
+        def(
+            "cam-tool-lollipop",
+            Solid,
+            "Lollipop cutter",
+            cam_tool_lollipop,
+        ),
+        def("cam-tool-barrel", Solid, "Barrel cutter", cam_tool_barrel),
         def("cam-work-plane", Solid, "Work plane", cam_work_plane),
         def("cam-toolpath", Sketch, "Toolpath", cam_toolpath),
         def("cam-cut-path", Sketch, "Cut path", cam_cut_path),
@@ -40,6 +64,12 @@ pub fn icons() -> Vec<Def> {
         def("cam-face", Sketch, "Face toolpath", cam_face),
         def("cam-pocket", Sketch, "Rough (pocket) toolpath", cam_pocket),
         def("cam-adaptive", Sketch, "Adaptive clearing", cam_adaptive),
+        def(
+            "cam-rotary-rough",
+            Sketch,
+            "Rotary roughing",
+            cam_rotary_rough,
+        ),
         def("cam-profile", Sketch, "Profile toolpath", cam_profile),
         def("cam-chamfer", Sketch, "Chamfer toolpath", cam_chamfer),
         def("cam-engrave", Sketch, "Engrave toolpath", cam_engrave),
@@ -53,6 +83,14 @@ pub fn icons() -> Vec<Def> {
         def("cam-scallop", Sketch, "Scallop finishing", cam_scallop),
         def("cam-spiral", Sketch, "Spiral finishing", cam_spiral),
         def("cam-pencil", Sketch, "Pencil finishing", cam_pencil),
+        def("cam-rotary", Sketch, "Rotary finishing", cam_rotary),
+        def("cam-swarf", Sketch, "Swarf finishing", cam_swarf),
+        def(
+            "cam-multi-axis",
+            Sketch,
+            "Multi-axis finishing (tool axis)",
+            cam_multi_axis,
+        ),
         def("cam-bore", Sketch, "Helical bore", cam_bore),
         def("cam-thread", Sketch, "Thread milling", cam_thread),
         def(
@@ -71,6 +109,18 @@ pub fn icons() -> Vec<Def> {
         ),
         def("cam-preview", Line, "Preview operation", cam_preview),
         def("cam-post", Line, "Post to G-code", cam_post),
+        def(
+            "cam-machine-show",
+            Line,
+            "Show or hide the machine",
+            cam_machine_show,
+        ),
+        def(
+            "cam-axis-limit",
+            Line,
+            "Axis beyond its travel",
+            cam_axis_limit,
+        ),
     ]
 }
 
@@ -168,6 +218,32 @@ fn cam_machine() -> Vec<String> {
         cylinder(o, 6.8, 4.0, 6.4, 9.5, 1.2),
         cylinder_with(o, 6.8, 4.0, 3.2, 6.4, 0.55, ACCENT, ACCENT, ""),
         iso_box(o, 4.5, 9.5, 1.5, 6.5, 2.0, 3.0),
+    ]
+}
+
+/// A box under an ACCENT wash, as the parts of the assembly emblem are drawn.
+#[allow(clippy::too_many_arguments)]
+fn tint_box(o: P, x0: f64, x1: f64, y0: f64, y1: f64, z0: f64, z1: f64) -> Vec<String> {
+    els![
+        iso_box(o, x0, x1, y0, y1, z0, z1),
+        iso_box_with(o, x0, x1, y0, y1, z0, z1, ACCENT, ACCENT, ACCENT, TINT),
+    ]
+}
+
+const TINT: &str = r#"stroke="none" fill-opacity="0.45""#;
+
+fn cam_machine_assembly() -> Vec<String> {
+    // The mill built of an assembly's parts: its column, head, spindle and table under the
+    // assembly emblem's accent wash, on a ground-coloured base (SOFT top) like the emblem's
+    // platform. No cutter: the machine is the point, not the cut.
+    let o = (11.0, 7.0);
+    els![
+        iso_box_with(o, 0.0, 10.0, 0.0, 8.0, 0.0, 2.0, SOFT, MID, SHADE, ""),
+        tint_box(o, 0.0, 3.0, 0.0, 8.0, 2.0, 13.0),
+        tint_box(o, 3.0, 8.5, 2.5, 5.5, 9.5, 12.5),
+        cylinder(o, 6.8, 4.0, 6.4, 9.5, 1.2),
+        cylinder_with(o, 6.8, 4.0, 6.4, 9.5, 1.2, ACCENT, ACCENT, TINT),
+        tint_box(o, 4.5, 9.5, 1.5, 6.5, 2.0, 3.0),
     ]
 }
 
@@ -336,6 +412,154 @@ fn cam_drill() -> Vec<String> {
     v
 }
 
+/// The side and top face of a cutter turned about the upright axis through `o`: `prof` is its
+/// profile as (z, radius) from the tip up. The side is the profile mirrored and closed round the
+/// front of its lowest circle; with `ball` that circle is the equator of a ball tip, drawn as a
+/// half circle below it.
+fn turned(o: P, prof: &[(f64, f64)], ball: bool) -> Vec<String> {
+    let p = projector(o);
+    let (kx, ky) = (1.5f64.sqrt(), 0.5f64.sqrt());
+    let at = |z: f64, r: f64| {
+        let (x, y) = p(0.0, 0.0, z);
+        format!("{} {}", f(x + r * kx), f(y))
+    };
+    let r0 = prof[0].1;
+    let (z1, r1) = prof[prof.len() - 1];
+    let left: Vec<String> = prof.iter().rev().map(|&(z, r)| at(z, -r)).collect();
+    let right: Vec<String> = prof.iter().map(|&(z, r)| at(z, r)).collect();
+    let d = format!(
+        "M{} A{} {} 0 0 0 {} Z",
+        left.join(" L"),
+        f(r0 * kx),
+        f(r0 * if ball { kx } else { ky }),
+        right.join(" L")
+    );
+    let (tx, ty) = p(0.0, 0.0, z1);
+    els![
+        path(&d, MID, ""),
+        ellipse(tx, ty, r1 * kx, r1 * ky, TOP, ""),
+    ]
+}
+
+/// The radius of the profile `prof` (as for `turned`) at height z.
+fn radius_at(prof: &[(f64, f64)], z: f64) -> f64 {
+    for w in prof.windows(2) {
+        let ((za, ra), (zb, rb)) = (w[0], w[1]);
+        if z <= zb && zb > za {
+            return ra + (rb - ra) * ((z - za) / (zb - za)).clamp(0.0, 1.0);
+        }
+    }
+    prof[prof.len() - 1].1
+}
+
+/// ACCENT helix strokes across the flutes of a turned cutter at the heights `zs`, down to the
+/// right as on the end mill, each as wide as the cutter is there.
+fn flutes(o: P, prof: &[(f64, f64)], zs: &[f64]) -> Vec<String> {
+    let p = projector(o);
+    let k = 1.5f64.sqrt() * 0.92;
+    zs.iter()
+        .map(|&z| {
+            let (x, y) = p(0.0, 0.0, z);
+            line(
+                x - radius_at(prof, z + 1.1) * k,
+                y - 1.1,
+                x + radius_at(prof, z - 1.1) * k,
+                y + 1.1,
+                &acc(1.1),
+            )
+        })
+        .collect()
+}
+
+fn cam_tool_form() -> Vec<String> {
+    // A form tool: under the shank a cutter ground to its own profile, here a wide band over a
+    // cove that runs down to a pilot. The steps and the hollow are what set it apart.
+    let o = (12.0, 19.0);
+    let mut prof = vec![(0.0, 1.3), (2.2, 1.3)];
+    // The cove: a quarter ellipse, hollow side out, from the pilot up to the band.
+    prof.extend((1..=6).map(|k| {
+        let t = rad(15.0 * k as f64);
+        (2.2 + 4.0 * t.sin(), 3.7 - 2.4 * t.cos())
+    }));
+    prof.push((8.8, 3.7));
+    els![
+        turned(o, &prof, false),
+        flutes(o, &prof, &[1.3, 4.3, 7.4]),
+        cylinder(o, 0.0, 0.0, 8.8, 15.5, 1.7),
+    ]
+}
+
+fn cam_tool_taper_ball() -> Vec<String> {
+    // A tapered ball mill: the flutes narrow from the shank down to a small ball tip.
+    let o = (12.0, 19.0);
+    let (r, tip) = (2.9, 0.85);
+    let z0 = tip * 1.5f64.sqrt();
+    let prof = [(z0, tip), (9.5, r), (15.5, r)];
+    let p = projector(o);
+    let (x, y) = p(0.0, 0.0, 9.5);
+    els![
+        turned(o, &prof, true),
+        flutes(o, &prof, &[2.6, 4.9, 7.2]),
+        ellipse(
+            x,
+            y,
+            r * 1.5f64.sqrt(),
+            r * 0.5f64.sqrt(),
+            "",
+            r#"fill="none""#
+        ),
+    ]
+}
+
+fn cam_tool_lollipop() -> Vec<String> {
+    // A lollipop cutter: a ball on a neck thinner than it, to reach under an overhang. The
+    // flutes are chords across the ball.
+    let o = (12.0, 19.0);
+    let p = projector(o);
+    let big = 4.3; // the ball's radius on screen
+    let (cx, cy) = p(0.0, 0.0, big);
+    // The strokes' direction (down to the right) and the normal they are spaced along.
+    let a = rad(18.0);
+    let (u, n) = ((a.cos(), a.sin()), (-a.sin(), a.cos()));
+    let chords: Vec<String> = [-2.3, 0.0, 2.3]
+        .iter()
+        .map(|&s| {
+            let half = (big * big - s * s).sqrt() - 0.6;
+            let m = (cx + s * n.0, cy + s * n.1);
+            line(
+                m.0 - half * u.0,
+                m.1 - half * u.1,
+                m.0 + half * u.0,
+                m.1 + half * u.1,
+                &acc(1.1),
+            )
+        })
+        .collect();
+    els![
+        cylinder(o, 0.0, 0.0, big, 15.5, 1.35),
+        circle(cx, cy, big, MID, ""),
+        chords,
+    ]
+}
+
+fn cam_tool_barrel() -> Vec<String> {
+    // A barrel cutter: the flutes bulge on one large radius between two flat ends, so a wide
+    // band of the side cuts at once.
+    let o = (12.0, 19.0);
+    let (len, end, bulge) = (10.5, 1.9, 1.7);
+    let prof: Vec<(f64, f64)> = (0..=12)
+        .map(|k| {
+            let t = k as f64 / 12.0;
+            (len * t, end + bulge * (1.0 - (2.0 * t - 1.0).powi(2)))
+        })
+        .collect();
+    els![
+        turned(o, &prof, false),
+        flutes(o, &prof, &[2.0, 5.25, 8.5]),
+        cylinder(o, 0.0, 0.0, len, 15.5, end),
+    ]
+}
+
 fn cam_work_plane() -> Vec<String> {
     // A plane with its axes: X and Y in ink along it, Z (the tool axis) up in accent.
     let o = (12.0, 10.4);
@@ -478,6 +702,37 @@ fn cam_adaptive() -> Vec<String> {
     ]
 }
 
+/// The two ends of the shaft a rotary pattern's part turns on, sticking out of a body from x0
+/// to x1 on the axis at height y.
+fn shaft(x0: f64, x1: f64, y: f64) -> Vec<String> {
+    els![line(1.5, y, x0, y, ""), line(x1, y, 22.5, y, "")]
+}
+
+fn cam_rotary_rough() -> Vec<String> {
+    // Round stock on its shaft, from the side, cut down a level of radius at a time: the stock
+    // still standing as steps round the part inside it (SOFT), the tool at the step it is
+    // cutting.
+    let y = 12.0;
+    let (x0, x1) = (3.5, 20.5);
+    let (part, level, stock) = (2.5, 5.25, 8.0); // radii
+    let (a, b) = (9.0, 14.5); // where the levels end
+    let side = |s: f64| -> Vec<P> {
+        vec![
+            (x0, y + s * stock),
+            (a, y + s * stock),
+            (a, y + s * level),
+            (b, y + s * level),
+            (b, y + s * part),
+        ]
+    };
+    els![
+        shaft(x0, x1, y),
+        poly(&cat(&[&side(-1.0), &rev(&side(1.0))]), TOP, ""),
+        rect(x0, y - part, x1 - x0, 2.0 * part, 0.0, SOFT, ""),
+        dot(b, y - level),
+    ]
+}
+
 fn cam_profile() -> Vec<String> {
     // A part's outline and the cutter's path round it a radius out, led in on an arc.
     let lead = arc_points(4.5, 15.5, 3.0, 3.0, 90.0, 180.0);
@@ -586,6 +841,93 @@ fn cam_pencil() -> Vec<String> {
         ),
         line(10.0, 13.0, 21.0, 13.0, &acc(2.0)),
         dot(21.0, 13.0),
+    ]
+}
+
+fn cam_rotary() -> Vec<String> {
+    // A part on its shaft, from the side, the one pass wound round it as it turns (the front of
+    // each turn a slanted line), and the tool coming down at the axis.
+    let y = 13.5;
+    let (x0, x1, r) = (4.0, 20.0, 5.5);
+    let turns: Vec<String> = (0..4)
+        .map(|k| {
+            let x = x0 + 2.2 + 3.4 * k as f64;
+            line(x, y + r, x + 2.2, y - r, "")
+        })
+        .collect();
+    let tx = x0 + 2.2 + 3.4 * 2.0 + 2.2;
+    els![
+        shaft(x0, x1, y),
+        rect(x0, y - r, x1 - x0, 2.0 * r, 1.5, SOFT, ""),
+        turns,
+        line(tx, 2.0, tx, y - r - 2.6, r#"stroke-width="2.4""#),
+        dot(tx, y - r),
+    ]
+}
+
+/// A tool as a flat bar of half width `hw` from `tip` (the middle of its end) along the unit
+/// direction `up` for `len`; with `ball` the end is rounded and `tip` is its lowest point.
+fn tool_bar(tip: P, up: P, len: f64, hw: f64, ball: bool) -> String {
+    let n = (-up.1, up.0);
+    let at = |along: f64, across: f64| {
+        (
+            tip.0 + up.0 * along + n.0 * across,
+            tip.1 + up.1 * along + n.1 * across,
+        )
+    };
+    let mut ps = vec![at(len, -hw)];
+    if ball {
+        // The half circle of the ball end, from one side round the tip to the other.
+        ps.extend((0..=12).map(|k| {
+            let t = rad(15.0 * k as f64);
+            at(hw - hw * t.sin(), -hw * t.cos())
+        }));
+    } else {
+        ps.extend([at(0.0, -hw), at(0.0, hw)]);
+    }
+    ps.push(at(len, hw));
+    poly(&ps, TOP, "")
+}
+
+fn cam_swarf() -> Vec<String> {
+    // A part with a sloped wall, in section, and the tool leaning to lie along it: the whole
+    // side of the flutes cuts the wall (accent), not the tip.
+    let (foot, top) = ((13.5, 19.5), (8.5, 6.5));
+    let l = hypot(top.0 - foot.0, top.1 - foot.1);
+    let up = ((top.0 - foot.0) / l, (top.1 - foot.1) / l);
+    let hw = 2.3;
+    // The tool's end sits on the foot of the wall, its near side on the wall.
+    let tip = (foot.0 - up.1 * hw, foot.1 + up.0 * hw);
+    els![
+        poly(
+            &[
+                (2.5, 21.5),
+                (2.5, top.1),
+                top,
+                foot,
+                (21.5, foot.1),
+                (21.5, 21.5)
+            ],
+            SOFT,
+            ""
+        ),
+        tool_bar(tip, up, 17.5, hw, false),
+        seg(foot, top, &acc(2.2)),
+    ]
+}
+
+fn cam_multi_axis() -> Vec<String> {
+    // A curved face in section and a ball mill leaning to stand square to it where it touches
+    // (the dot), as the tool axis does when it follows the surface.
+    let (cx, cy, r) = (6.5, 26.0, 12.5);
+    let face = arc_points(cx, cy, r, r, 251.3, 338.9);
+    let a = rad(-60.0);
+    let up = (a.cos(), a.sin());
+    let tip = (cx + r * up.0, cy + r * up.1);
+    els![
+        poly(&cat(&[&face, &[(18.2, 21.5), (2.5, 21.5)]]), SOFT, ""),
+        tool_bar(tip, up, 12.0, 2.2, true),
+        dot(tip.0, tip.1),
     ]
 }
 
@@ -709,5 +1051,44 @@ fn cam_post() -> Vec<String> {
         line(7.5, 16.0, 13.5, 16.0, ""),
         acc_el(line(13.5, 9.5, 21.0, 2.5, "")),
         acc_el(polyline(&[(16.0, 2.5), (21.0, 2.5), (21.0, 7.5)], "")),
+    ]
+}
+
+fn cam_machine_show() -> Vec<String> {
+    // A mill from the side (a C-frame with the spindle in its throat) and an eye beside it
+    // (accent): whether the machine is drawn in the CAM view.
+    els![
+        poly(
+            &[
+                (2.5, 20.5),
+                (11.5, 20.5),
+                (11.5, 17.0),
+                (6.5, 17.0),
+                (6.5, 9.0),
+                (11.5, 9.0),
+                (11.5, 3.5),
+                (2.5, 3.5)
+            ],
+            "",
+            ""
+        ),
+        line(9.25, 9.0, 9.25, 12.5, ""),
+        acc_el(path(
+            "M13.25 15.5 Q17.75 10 22.25 15.5 Q17.75 21 13.25 15.5 Z",
+            "",
+            ""
+        )),
+        acc_el(circle(17.75, 15.5, 1.3, INK, "")),
+    ]
+}
+
+fn cam_axis_limit() -> Vec<String> {
+    // A slide run up against its end stop: the rail, the stop at its end and the carriage hard
+    // on it, with an exclamation mark (accent) over where they meet.
+    els![
+        polyline(&[(2.5, 20.0), (20.5, 20.0), (20.5, 9.5)], ""),
+        rect(9.0, 12.0, 9.5, 6.0, 1.5, "", ""),
+        acc_el(line(14.5, 2.5, 14.5, 6.2, "")),
+        acc_el(line(14.5, 9.2, 14.5, 9.21, "")),
     ]
 }

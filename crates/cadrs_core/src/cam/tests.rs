@@ -85,6 +85,7 @@ impl Fixture {
             stock: StockDef::default(),
             workholdings: vec![],
             machine: None,
+            machine_source: None,
             setups: vec![],
             suppressed: false,
         };
@@ -533,6 +534,7 @@ fn setup_needs_a_machine() {
         stock: StockDef::default(),
         workholdings: vec![],
         machine: None,
+        machine_source: None,
         setups: vec![],
         suppressed: false,
     };
@@ -1027,4 +1029,322 @@ fn planes_at_one_origin_share_its_work_offset() {
     let p = program::nc_program(&j.setups[0], j, &run).unwrap();
     let datums: Vec<u32> = p.operations.iter().map(|o| o.datum).collect();
     assert_eq!(datums, vec![2, 2, 1]);
+}
+
+/// A mill with a rotary axis along X (cadrs_cam's sample: A turns the table mount about the
+/// line through it along X) on a LinuxCNC control.
+fn four_axis_mill() -> cadrs_cam::Machine {
+    let mut m = catalog()
+        .into_iter()
+        .find(|m| m.kind == MachineKind::Mill)
+        .unwrap();
+    m.dialect = cadrs_cam::Dialect::LinuxCnc;
+    m.post = cadrs_cam::PostSettings::for_dialect(m.dialect, MachineKind::Mill);
+    m.chain = Some(cadrs_cam::kinematics::samples::fourth_axis());
+    m
+}
+
+/// 4-axis: the plate held by its left end on a rotary axis along its length, finished round
+/// that axis. The pattern turns about the machine's axis without being told, the program
+/// turns A as X goes along, and a machine whose A stops short says so.
+#[test]
+fn a_rotary_finish_turns_about_the_machines_axis_and_posts_x_with_a() {
+    let mut f = Fixture::new();
+    let (job, setup) = f.job_on(four_axis_mill());
+    // Held on the mount by the middle of its left end, its length along the mount's X (the
+    // rotary axis's line), its top up.
+    // (Everything here is in the setup's coordinates: its work coordinate system.)
+    let parts = f.parts();
+    let b = {
+        let j = f.cam().job(job).unwrap();
+        let sf = program::setup_frame(f.cam(), j, &j.setups[0], &parts);
+        program::parts_box(&program::job_bodies(f.cam(), j, &parts), &sf)
+    };
+    let middle = [
+        b.min[0],
+        (b.min[1] + b.max[1]) / 2.0,
+        (b.min[2] + b.max[2]) / 2.0,
+    ];
+    let mut s = f.cam().job(job).unwrap().setups[0].clone();
+    s.mating = Mating::Mount {
+        origin: middle,
+        z: [0.0, 0.0, 1.0],
+        x: [1.0, 0.0, 0.0],
+    };
+    f.run(Edit::SetSetup {
+        job,
+        setup: Box::new(s),
+    })
+    .unwrap();
+    let ball = Tool::new(ToolKind::BallMill, 6.0);
+    f.add_tool(setup, ball.clone(), 1);
+    let mut p = Params::new(Pattern::Rotary, &ball, MachineKind::Mill);
+    p.step_over = 3.0;
+    let op = f.add_toolpath(setup, p);
+    // The pattern's axis is the machine's: along the plate's length through its section's
+    // middle.
+    let cam = f.cam();
+    let input = program::op_input(cam, op, &parts).unwrap();
+    let (point, dir) = input.params.rotary.axis.expect("the machine's rotary axis");
+    assert!((dir[0].abs() - 1.0).abs() < 1e-9, "{dir:?}");
+    assert!(
+        (point[1] - middle[1]).abs() < 1e-9 && (point[2] - middle[2]).abs() < 1e-9,
+        "{point:?}"
+    );
+    let tp = f.compute(op).unwrap();
+    assert!(tp.is_multi_axis());
+    let paths = HashMap::from([(op, tp)]);
+    let j = cam.job(job).unwrap();
+    let st = &j.setups[0];
+    let run = program::setup_run(cam, j, st, &parts, &paths, None).unwrap();
+    // The work origin as the mount sees it: the mount is at `middle` of the setup.
+    assert!(cadrs_cam::geom::dist(run.work.to_world(middle), [0.0; 3]) < 1e-9);
+    let nc = program::post_setup(st, j, &run).unwrap();
+    let moves = cadrs_cam::post::reader::read(&nc);
+    let feeds: Vec<_> = moves.iter().filter(|m| !m.rapid).collect();
+    assert!(feeds.len() > 10 && nc.contains("G93"), "{nc}");
+    // Round and round: A winds on through many turns while X crosses the plate's length.
+    let turned = feeds.last().unwrap().angle('A') - feeds[0].angle('A');
+    assert!(turned.abs() > 360.0 * 15.0, "{turned}");
+    let xs = cadrs_cam::Aabb::of(feeds.iter().map(|m| m.xyz));
+    assert!(
+        (xs.max[0] - xs.min[0] - (b.max[0] - b.min[0])).abs() < 0.5,
+        "{xs:?}"
+    );
+    // Read back through the machine: every feed block ends with the ball on or off the
+    // plate, never in it, the tool pointing at the rotary axis.
+    let chain = j.machine.as_ref().unwrap().kinematics();
+    let length = ball.gauge_length();
+    let zero = cadrs_cam::post::rotary::program_zero(&chain, &run.work, length).unwrap();
+    let (lin, rot) = cadrs_cam::post::rotary::words_of(&chain).unwrap();
+    for m in &feeds {
+        let mut q = chain.rest();
+        for (k, i) in lin.iter().enumerate() {
+            q[*i] = zero[*i] + m.xyz[k];
+        }
+        q[rot[0].0] = m.angle('A');
+        let at = chain.locate(&q, length).seen_from(&run.work);
+        // In the setup's coordinates: within the plate's box the tip is on or above a face.
+        let centre = cadrs_cam::geom::add(at.tip, cadrs_cam::geom::scale(at.axis, 3.0));
+        let inside = (0..3).all(|k| centre[k] > b.min[k] + 2.9 && centre[k] < b.max[k] - 2.9);
+        assert!(
+            !inside,
+            "line {}: the ball's centre is in the plate at {centre:?}",
+            m.line
+        );
+        assert!(at.axis[0].abs() < 1e-6, "line {}: {:?}", m.line, at.axis);
+    }
+    // The machine follows the whole run within its travel...
+    let stock = program::stock_in(&program::stock_shape(cam, j, &parts).unwrap(), &run.frame);
+    assert!(program::travel_warnings(j, st, &run, &stock).is_empty());
+    // ...unless its rotary axis stops: then the operation and the axis are named, once.
+    let mut limited = j.clone();
+    let chain = limited.machine.as_mut().unwrap().chain.as_mut().unwrap();
+    chain.table[0].continuous = false;
+    (chain.table[0].min, chain.table[0].max) = (-90.0, 90.0);
+    let w = program::travel_warnings(&limited, st, &run, &stock);
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert!(
+        w[0].contains("Rotary 1 takes A to") && w[0].contains("beyond its travel"),
+        "{w:?}"
+    );
+}
+
+#[test]
+fn the_work_sits_on_the_table_as_the_setups_mating_says() {
+    let stock = cadrs_cam::Aabb::new([10.0, 20.0, -5.0], [70.0, 60.0, 25.0]);
+    let mut setup = Setup {
+        id: CamId::new(),
+        name: "Setup 1".into(),
+        program_number: 1,
+        mating: Mating::Automatic,
+        wcs: WorkPlane::default(),
+        operations: vec![],
+        suppressed: false,
+    };
+    // The stock's bottom centre on the mount.
+    let w = program::work_on_table(&setup, &stock);
+    assert_eq!(w.to_world([40.0, 40.0, -5.0]), [0.0; 3]);
+    assert_eq!(w.z, [0.0, 0.0, 1.0]);
+    // Or off it.
+    setup.mating = Mating::Manual([100.0, 0.0, 12.0]);
+    assert_eq!(
+        program::work_on_table(&setup, &stock).to_world([40.0, 40.0, -5.0]),
+        [100.0, 0.0, 12.0]
+    );
+    // A frame of the setup on the mount: its origin is the mount's, its Z the mount's Z.
+    setup.mating = Mating::Mount {
+        origin: [10.0, 40.0, 10.0],
+        z: [-1.0, 0.0, 0.0],
+        x: [0.0, 1.0, 0.0],
+    };
+    let w = program::work_on_table(&setup, &stock);
+    let on = |p: [f64; 3]| w.to_world(p);
+    assert!(cadrs_cam::geom::dist(on([10.0, 40.0, 10.0]), [0.0; 3]) < 1e-12);
+    // 30 into the part along its +X is 30 below the mount (the mount looks along −X).
+    assert!(cadrs_cam::geom::dist(on([40.0, 40.0, 10.0]), [0.0, 0.0, -30.0]) < 1e-12);
+    assert!(cadrs_cam::geom::dist(on([10.0, 45.0, 10.0]), [5.0, 0.0, 0.0]) < 1e-12);
+}
+
+/// 3+2 on a control without a tilted working plane: the same Dynamic work plane posts as the
+/// trunnion's positions (it was refused before the machine's axes were known).
+#[test]
+fn a_dynamic_work_plane_posts_as_rotary_positions_on_linuxcnc() {
+    let mut f = Fixture::new();
+    let mut five = catalog()
+        .into_iter()
+        .find(|m| m.indexing.is_some())
+        .unwrap();
+    five.dialect = cadrs_cam::Dialect::LinuxCnc;
+    five.post = cadrs_cam::PostSettings::for_dialect(five.dialect, MachineKind::Mill);
+    let (job, setup) = f.job_on(five);
+    let em = Tool::new(ToolKind::EndMill, 6.0);
+    f.add_tool(setup, em.clone(), 1);
+    let wp = Operation {
+        id: CamId::new(),
+        name: "Front".into(),
+        kind: OpKind::WorkPlane(Box::new(WorkPlane {
+            z: [0.0, -1.0, 0.0],
+            x: [1.0, 0.0, 0.0],
+            kind: WorkPlaneType::Dynamic,
+            ..WorkPlane::default()
+        })),
+        suppressed: false,
+        hidden: false,
+    };
+    f.run(Edit::AddOperation {
+        setup,
+        after: None,
+        op: Box::new(wp),
+    })
+    .unwrap();
+    let mut p = Params::new(Pattern::Face, &em, MachineKind::Mill);
+    p.step_down = 0.5;
+    let front = f.add_toolpath(setup, p);
+    let paths = HashMap::from([(front, f.compute(front).unwrap())]);
+    let parts = f.parts();
+    let cam = f.cam();
+    let j = cam.job(job).unwrap();
+    let run = program::setup_run(cam, j, &j.setups[0], &parts, &paths, None).unwrap();
+    // In the setup's coordinates the tilted operation's moves carry its tool axis.
+    assert!(run.ops[0].tilted && run.ops[0].toolpath.is_multi_axis());
+    assert!(cadrs_cam::geom::dist(run.ops[0].toolpath.start_axis(), [0.0, -1.0, 0.0]) < 1e-12);
+    let nc = program::post_setup(&j.setups[0], j, &run).unwrap();
+    assert!(!nc.contains("G68.2"), "{nc}");
+    let turn = nc.lines().find(|l| l.starts_with("G0 A")).expect(&nc);
+    assert!(turn.contains("A90") || turn.contains("A-90"), "{turn}");
+    // The machine's axes follow the run: the trunnion a quarter turn while it cuts.
+    let start = [0.0, 0.0, 60.0];
+    let motions = program::run_motions(&j.setups[0], j, &run, start);
+    let track = program::axis_track(j.machine.as_ref().unwrap(), &run, &motions);
+    assert!(track.issues.is_empty(), "{:?}", track.issues);
+    let chain = j.machine.as_ref().unwrap().kinematics();
+    let a = chain.index("A").unwrap();
+    assert!((track.rows.last().unwrap()[a].abs() - 90.0).abs() < 1e-6);
+}
+
+/// A job takes its machine from an assembly set up as one and follows it: the machine has the
+/// assembly's axes, a change in the Machine Builder reaches the job, and an assembly that
+/// stops being a machine leaves the job the machine it had.
+#[test]
+fn a_jobs_machine_follows_the_assembly_it_is_taken_from() {
+    use crate::assembly::machine::{commands::SetMachineDef, samples};
+    let mut f = Fixture::new();
+    let (job, _) = f.job(MachineKind::Mill);
+    // The sample router (X, Y, Z and a rotary A on its table) as a tab of the document.
+    let sample = samples::router();
+    let mut tab = crate::document::Element::assembly("Router");
+    tab.assembly = sample.assembly.clone();
+    let asm = tab.id;
+    f.doc.elements.push(tab);
+    let source = MachineSource::workspace(&f.doc, asm).unwrap();
+    assert_eq!(source.label(), "Workspace of Router");
+    f.run(Edit::SetMachineSource {
+        job,
+        source: Some(Box::new(source)),
+        links: vec![],
+    })
+    .unwrap();
+    let names = |f: &Fixture| -> Vec<String> {
+        let m = f.cam().job(job).unwrap().machine.clone().unwrap();
+        m.kinematics().joints().map(|j| j.name.clone()).collect()
+    };
+    let machine = f.cam().job(job).unwrap().machine.clone().unwrap();
+    assert!(machine.chain.is_some() && machine.rotary_axes() == 1);
+    let mut sorted = names(&f);
+    sorted.sort();
+    assert_eq!(sorted, ["A", "X", "Y", "Z"]);
+    // The rotary axis renamed in the builder: the job's machine has it after the command.
+    let mut def = sample.def().clone();
+    let resolved = sample.resolve().unwrap();
+    def.axes = resolved.axes.clone();
+    def.axes.iter_mut().find(|a| a.name == "A").unwrap().name = "B".into();
+    f.history
+        .execute(
+            &mut f.doc,
+            &SetMachineDef {
+                element: asm,
+                def: Some(Box::new(def)),
+                label: "Edit machine".into(),
+            },
+        )
+        .unwrap();
+    assert!(names(&f).contains(&"B".to_string()) && !names(&f).contains(&"A".to_string()));
+    // Undo brings the job's machine back with the assembly's.
+    f.history.undo(&mut f.doc).expect("undo");
+    assert!(names(&f).contains(&"A".to_string()));
+    // The tab renamed: the source's name follows.
+    f.history
+        .execute(
+            &mut f.doc,
+            &crate::commands::RenameElement {
+                id: asm,
+                name: "Big router".into(),
+            },
+        )
+        .unwrap();
+    let src = f.cam().job(job).unwrap().machine_source.clone().unwrap();
+    assert_eq!(src.source_name, "Big router");
+    // No longer a machine: the job keeps the one it had.
+    f.history
+        .execute(
+            &mut f.doc,
+            &SetMachineDef {
+                element: asm,
+                def: None,
+                label: "Remove machine".into(),
+            },
+        )
+        .unwrap();
+    assert!(
+        f.cam()
+            .job(job)
+            .unwrap()
+            .machine
+            .as_ref()
+            .unwrap()
+            .chain
+            .is_some()
+    );
+    // An assembly that isn't set up as a machine is refused, saying so.
+    let err = f
+        .run(Edit::SetMachineSource {
+            job,
+            source: Some(Box::new(MachineSource::workspace(&f.doc, asm).unwrap())),
+            links: vec![],
+        })
+        .unwrap_err();
+    assert!(
+        format!("{err:?}").contains("not set up as a machine"),
+        "{err:?}"
+    );
+    // Letting go of the source keeps the machine as the job's own.
+    f.run(Edit::SetMachineSource {
+        job,
+        source: None,
+        links: vec![],
+    })
+    .unwrap();
+    let j = f.cam().job(job).unwrap();
+    assert!(j.machine_source.is_none() && j.machine.is_some());
 }

@@ -3,7 +3,8 @@
 //!
 //! - **Toolbar** (left to right, each active once the step before it is done): Insert part,
 //!   workholding or stock · Create job · Create machine · Create setup · Create tool · Create
-//!   toolpath · Create work plane · Regenerate · Preview operation · Post · Show stock.
+//!   toolpath · Create work plane · Regenerate · Preview operation · Post · Show stock · Show
+//!   machine.
 //! - **Panel**: the **Jobs** tree (job → machine → setups → their tools, toolpaths and work
 //!   planes; a toolpath's row shows its status: its time when calculated, out of date,
 //!   calculating, failed) and the **Components** list (parts, workholding and stock with
@@ -18,13 +19,17 @@
 //!   their inputs (the job cache).
 //! - **View** ([`view`]): the stock, the work coordinate systems, the toolpaths (rapids red,
 //!   cuts blue, entries green, leads cyan, links yellow, beam cuts orange).
+//! - **Machine** ([`machine_view`]): a job whose machine is an assembly of the document (the
+//!   Machine dialog's Machine from › From assembly) shows it round the work, at home or moving
+//!   with the preview; Show machine on the toolbar hides it.
 //! - **Preview operation** ([`preview`]): Back plot, Verify (the stock as the toolpaths leave
-//!   it, gouges red) and Simulate (with the tool and holder).
+//!   it, gouges red) and Simulate (with the collisions found).
 //! - **Post** ([`export`]): G-code for the job's machine, saved to a file.
 
 pub mod compute;
 pub mod dialogs;
 pub mod export;
+pub mod machine_view;
 pub mod preview;
 mod toolbar;
 mod tree;
@@ -88,6 +93,7 @@ impl Plugin for CamUiPlugin {
                 cadrs_ui::form::FormPlugin::new(FORM_PREFIX).eval(read_number),
                 dialogs::DialogsPlugin,
                 view::ViewPlugin,
+                machine_view::MachineViewPlugin,
                 preview::PreviewPlugin,
                 export::ExportPlugin,
             ))
@@ -128,6 +134,9 @@ pub struct CamUi {
     pub collapsed: HashSet<CamId>,
     /// Show the active job's stock in the view.
     pub show_stock: bool,
+    /// Show the active job's machine in the view, when it is an assembly's
+    /// ([`machine_view`]).
+    pub show_machine: bool,
     /// The last row clicked and when (double-clicks edit).
     last_click: Option<(CamId, Instant)>,
     /// Frame the parts once they're built (the first ones were just inserted).
@@ -140,6 +149,7 @@ impl Default for CamUi {
             selected: Vec::new(),
             collapsed: HashSet::new(),
             show_stock: true,
+            show_machine: true,
             last_click: None,
             fit_pending: false,
         }
@@ -174,7 +184,11 @@ fn flag_pending_work(
 /// Scripted steps (`Custom("cam …")`): `select job|setup|op N` selects the Nth job, the active
 /// job's Nth setup or its first setup's Nth operation (from 0); `play` and `pause` the preview;
 /// `preview-end` jumps it to the end; `preview-at F` to a fraction of it; `fit` zooms the view
-/// to the studio's parts and stock.
+/// to the studio's parts and stock; `preview-op N F` jumps the preview to a fraction of its
+/// Nth operation (from 0); `preview-collision` to the next collision, paused there;
+/// `machine show|hide` shows or hides the job's machine, and
+/// `machine view AZ EL` looks at the whole machine with its own Z up
+/// ([`machine_view::view_machine`]).
 pub fn script(world: &mut World, arg: &str) {
     let words: Vec<&str> = arg.split_whitespace().collect();
     let Some((_, cam)) = active_cam_owned(world) else {
@@ -221,6 +235,33 @@ pub fn script(world: &mut World, arg: &str) {
             }
         }
         ["fit"] => crate::viewport::zoom_to_fit(world),
+        ["machine", "view", az, el] => {
+            if let (Ok(az), Ok(el)) = (az.parse::<f32>(), el.parse::<f32>()) {
+                machine_view::view_machine(world, az, el);
+            }
+        }
+        ["preview-op", n, f] => {
+            let (Ok(n), Ok(f)) = (n.parse::<usize>(), f.parse::<f64>()) else {
+                return;
+            };
+            match world.get_resource_mut::<preview::PreviewState>() {
+                Some(mut s) => {
+                    s.playing = false;
+                    s.seek_op(n, f);
+                }
+                None => warn!("cam {arg}: no preview"),
+            }
+        }
+        ["preview-collision"] => match world.get_resource_mut::<preview::PreviewState>() {
+            Some(mut s) => {
+                if !s.seek_collision() {
+                    warn!("cam {arg}: no collision after here");
+                }
+            }
+            None => warn!("cam {arg}: no preview"),
+        },
+        ["machine", "show"] => world.resource_mut::<CamUi>().show_machine = true,
+        ["machine", "hide"] => world.resource_mut::<CamUi>().show_machine = false,
         _ => warn!("cam {arg}: not a CAM Studio step"),
     }
 }

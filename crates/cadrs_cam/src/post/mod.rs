@@ -18,7 +18,14 @@
 //! - **Waterjet**: `M3`/`M5` open and close the jet, with the pierce dwell.
 //!
 //! [`post`] writes a whole program: header comments, units, the work offset, each operation
-//! (tool change, spindle, coolant, its moves), and the end.
+//! (tool change, spindle, coolant, its moves), and the end. An operation whose tool leans as
+//! it cuts, or that is tilted on a control without a tilted working plane, is written through
+//! the machine's axes ([`rotary`]); [`reader`] reads a program back, for checking one.
+
+pub mod reader;
+pub mod rotary;
+
+pub use rotary::{RotaryFeed, RotaryPost, TiltedPlane};
 
 use std::fmt::Write as _;
 
@@ -172,6 +179,9 @@ pub struct PostSettings {
     pub comments: bool,
     /// Laser power: dynamic (M4) or constant (M3).
     pub laser_mode: LaserMode,
+    /// Rotary axes: tool centre point control, feeds, tolerances.
+    #[serde(default)]
+    pub rotary: RotaryPost,
 }
 
 impl PostSettings {
@@ -201,6 +211,7 @@ impl PostSettings {
             canned_chip_break: cycles,
             comments: true,
             laser_mode: LaserMode::Dynamic,
+            rotary: RotaryPost::for_dialect(d),
         }
     }
 
@@ -302,6 +313,10 @@ pub enum PostError {
     NoDatum(String),
     /// Cutter compensation on a control without it.
     NoCompensation(String),
+    /// The machine's axes aren't ones a G-code program drives (a robot arm).
+    NoPost(String),
+    /// An operation takes an axis beyond its travel.
+    Travel(String),
 }
 
 impl std::fmt::Display for PostError {
@@ -312,6 +327,8 @@ impl std::fmt::Display for PostError {
             PostError::CantTilt(s) => write!(f, "{s}"),
             PostError::NoDatum(s) => write!(f, "{s}"),
             PostError::NoCompensation(s) => write!(f, "{s}"),
+            PostError::NoPost(s) => write!(f, "{s}"),
+            PostError::Travel(s) => write!(f, "{s}"),
         }
     }
 }
@@ -386,6 +403,10 @@ struct Writer<'a> {
     comp: Option<String>,
     /// The operator has been told what the compensation register holds.
     comp_noted: bool,
+    /// The operation is written through the machine's axes: its moves are cutter locations.
+    rot: Option<Box<rotary::Axes>>,
+    /// The tool is up at the machine's Z home (nothing has moved Z since a retract there).
+    home: bool,
 }
 
 impl<'a> Writer<'a> {
@@ -405,6 +426,8 @@ impl<'a> Writer<'a> {
             rpm: None,
             comp: None,
             comp_noted: false,
+            rot: None,
+            home: false,
         }
     }
 
@@ -414,6 +437,14 @@ impl<'a> Writer<'a> {
     }
 
     fn block(&mut self, text: &str) {
+        // (Feed moves waiting to be merged are written before anything else.)
+        if let Some(mut ax) = self.rot.take() {
+            ax.flush(self);
+            self.rot = Some(ax);
+        }
+        if text.contains('Z') {
+            self.home = false;
+        }
         let numbered =
             self.s.sequence_numbers && (!self.s.numbers_at_tools_only || self.number_next);
         if numbered {
@@ -431,6 +462,10 @@ impl<'a> Writer<'a> {
     }
 
     fn comment(&mut self, text: &str) {
+        if let Some(mut ax) = self.rot.take() {
+            ax.flush(self);
+            self.rot = Some(ax);
+        }
         if self.s.comments {
             let c = self.d.comment(text);
             self.raw(&c);
@@ -488,6 +523,11 @@ impl<'a> Writer<'a> {
     }
 
     fn rapid(&mut self, p: P3) {
+        if let Some(mut ax) = self.rot.take() {
+            ax.rapid(self, p);
+            self.rot = Some(ax);
+            return;
+        }
         let axes = self.axes(p);
         if axes.is_empty() {
             return;
@@ -505,6 +545,11 @@ impl<'a> Writer<'a> {
     }
 
     fn linear(&mut self, p: P3, feed: f64) {
+        if let Some(mut ax) = self.rot.take() {
+            ax.linear(self, p, feed);
+            self.rot = Some(ax);
+            return;
+        }
         let axes = self.axes(p);
         if axes.is_empty() {
             return;
@@ -543,8 +588,22 @@ impl<'a> Writer<'a> {
     }
 }
 
-/// The program for `machine`, or why it can't be written.
+/// The program for `machine`, or why it can't be written: the work's coordinate system set
+/// square on the machine's table mount ([`post_on`] with the work placed).
 pub fn post(program: &NcProgram, machine: &Machine, s: &PostSettings) -> Result<String, PostError> {
+    post_on(program, machine, s, &crate::Frame::WORLD)
+}
+
+/// The program for `machine` with the setup's work coordinate system at `work` (in the
+/// coordinates of the machine's table mount), or why it can't be written. Where the work sits
+/// matters only to operations written through the machine's axes without tool centre point
+/// control ([`rotary`]).
+pub fn post_on(
+    program: &NcProgram,
+    machine: &Machine,
+    s: &PostSettings,
+    work: &crate::Frame,
+) -> Result<String, PostError> {
     if program.operations.iter().all(|o| o.toolpath.is_empty()) {
         return Err(PostError::Empty);
     }
@@ -559,6 +618,7 @@ pub fn post(program: &NcProgram, machine: &Machine, s: &PostSettings) -> Result<
         }
     }
     let d = machine.dialect;
+    let rotaries = machine.rotary_axes();
     for op in &program.operations {
         let compensated = op
             .toolpath
@@ -572,20 +632,20 @@ pub fn post(program: &NcProgram, machine: &Machine, s: &PostSettings) -> Result<
                 op.name
             )));
         }
-        if let Some(t) = op.tilt {
-            if d != Dialect::Fanuc {
-                return Err(PostError::CantTilt(format!(
-                    "{}: tilted work planes are posted as Fanuc's tilted working plane \
-                     (G68.2) only",
-                    op.name
-                )));
-            }
-            if !machine.can_tilt_to(t.z) {
-                return Err(PostError::CantTilt(format!(
-                    "{}: the work plane tilts the tool further than the machine can",
-                    op.name
-                )));
-            }
+        if rotary::route(op, d, s, rotaries) == rotary::Route::Axes && !machine.kind.is_milling() {
+            return Err(PostError::CantTilt(format!(
+                "{}: only a mill or a router turns its tool",
+                op.name
+            )));
+        }
+        if let Some(t) = op.tilt
+            && rotary::route(op, d, s, rotaries) == rotary::Route::Plane
+            && !machine.can_tilt_to(work.dir_to_world(t.z))
+        {
+            return Err(PostError::CantTilt(format!(
+                "{}: the work plane tilts the tool further than the machine can",
+                op.name
+            )));
         }
     }
     let mut w = Writer::new(s, d);
@@ -659,6 +719,26 @@ pub fn post(program: &NcProgram, machine: &Machine, s: &PostSettings) -> Result<
         w.comment("QtPlasmaC: torch heights and pierce delay from the material table");
         w.no_z = true;
     }
+    let chain = machine.kinematics();
+    let by_axes = program.operations.iter().any(|op| {
+        !op.toolpath.is_empty() && rotary::route(op, d, s, rotaries) == rotary::Route::Axes
+    });
+    if by_axes && s.rotary.tcp_for(d, 1, rotaries).is_none() {
+        // Without tool centre point control the program holds only where the work was put.
+        let o = work.origin;
+        w.comment(&format!(
+            "X Y Z are the machine's slides from the work origin with the rotary axes at zero. \
+             The work origin is X{} Y{} Z{} from the table's mount",
+            w.num(o[0]),
+            w.num(o[1]),
+            w.num(o[2])
+        ));
+    }
+    // The axis values an operation written through the axes left the machine at (its rotary
+    // axes may be turned).
+    let mut turned: Option<Vec<f64>> = None;
+    // The tool's length compensation went off with tool centre point control.
+    let mut length_dropped = false;
     let mut tool_in: Option<u32> = None;
     let mut tilted: Option<Tilt> = None;
     let mut datum: Option<u32> = None;
@@ -669,8 +749,15 @@ pub fn post(program: &NcProgram, machine: &Machine, s: &PostSettings) -> Result<
             continue;
         }
         w.comment(&op.name);
+        let route = rotary::route(op, d, s, rotaries);
         let changing =
             machine.kind.is_milling() && (tool_in != Some(op.tool_number) || op.force_tool_change);
+        // The rotary axes back to zero for work in the offset's own axes, or for a tilted
+        // working plane the control sets itself.
+        if turned.is_some() && route != rotary::Route::Axes {
+            rotary::unturn(&mut w, &chain, d);
+            turned = None;
+        }
         // Out of a tilted plane that isn't this one's, or for a tool change: up clear, cancel
         // it, the rotary axes home.
         if tilted.is_some() && (tilted != op.tilt || changing) {
@@ -714,6 +801,7 @@ pub fn post(program: &NcProgram, machine: &Machine, s: &PostSettings) -> Result<
                 }
             }
             length_comp = d != Dialect::Grbl || machine.kind.is_milling();
+            length_dropped = false;
             tool_in = Some(op.tool_number);
             w.at = [None; 3];
             w.mode = None;
@@ -741,6 +829,30 @@ pub fn post(program: &NcProgram, machine: &Machine, s: &PostSettings) -> Result<
             w.block(&code);
             datum = Some(want);
             w.at = [None; 3];
+        }
+        length_comp |= std::mem::take(&mut length_dropped);
+        // Through the machine's axes: up clear, the rotary axes to the first move's, then the
+        // moves as cutter locations.
+        if route == rotary::Route::Axes {
+            retract_home(&mut w, d);
+            let mut ax = rotary::Axes::new(&chain, work, op, d, s, turned.as_deref())?;
+            ax.begin(&mut w, op, d, s, length_comp);
+            w.rot = Some(Box::new(ax));
+            post_moves(&mut w, op, machine, s, beam, &mut coolant);
+            let mut ax = w.rot.take().expect("set above");
+            ax.end(&mut w, d, s, op.tool_number);
+            if let Some(e) = ax.error.take() {
+                return Err(e);
+            }
+            if ax.rewinds > 0 {
+                w.comment(&format!(
+                    "{}: {} rewind(s), the tool lifted clear for a rotary axis to come round",
+                    op.name, ax.rewinds
+                ));
+            }
+            length_dropped = ax.length_dropped;
+            turned = Some(ax.position().to_vec());
+            continue;
         }
         // Into the tilted plane: up clear first, the plane, then the rotary axes to it.
         if let Some(t) = op.tilt
@@ -822,6 +934,9 @@ pub fn post(program: &NcProgram, machine: &Machine, s: &PostSettings) -> Result<
     if tilted.is_some() {
         cancel_tilt(&mut w, machine);
     }
+    if turned.is_some() {
+        rotary::unturn(&mut w, &chain, d);
+    }
     if beam {
         // The beam off if an operation left it on.
         if w.beam_on {
@@ -861,6 +976,10 @@ fn qtplasmac(machine: &Machine) -> bool {
 }
 
 fn retract_home(w: &mut Writer, d: Dialect) {
+    // (Already there: a retract for a tool change, then one before the rotary axes turn.)
+    if w.home {
+        return;
+    }
     match d {
         Dialect::Fanuc | Dialect::Haas => w.block("G91 G28 Z0."),
         Dialect::LinuxCnc | Dialect::Mach3 => w.block("G53 G0 Z0"),
@@ -875,6 +994,7 @@ fn retract_home(w: &mut Writer, d: Dialect) {
     }
     w.at[2] = None;
     w.mode = None;
+    w.home = true;
 }
 
 /// What the operator sets for wear compensation: the path is already the tool's centre, so the
@@ -917,7 +1037,8 @@ fn post_moves(
     w.comp_noted = false;
     let max_s = machine.max_spindle.max(1.0);
     // Lines that follow a circle become arcs (when arcs are on); collect feed runs first.
-    let steps = if s.output_arcs && s.arcs_xy {
+    let by_axes = w.rot.is_some();
+    let steps = if s.output_arcs && s.arcs_xy && !by_axes {
         fit_arcs(&op.toolpath.steps, 0.005)
     } else {
         op.toolpath.steps.clone()
@@ -941,7 +1062,19 @@ fn post_moves(
             w.block("M62 P2");
         }
     }
-    for st in &steps {
+    // The lean that follows each step (the next `Step::Axis` after it), for looking ahead.
+    let mut leans: Vec<Option<P3>> = vec![None; steps.len()];
+    let mut next = None;
+    for (k, st) in steps.iter().enumerate().rev() {
+        leans[k] = next;
+        if let Step::Axis(a) = st {
+            next = Some(*a);
+        }
+    }
+    for (k, st) in steps.iter().enumerate() {
+        if let Some(ax) = &mut w.rot {
+            ax.look_ahead(leans[k]);
+        }
         match st {
             Step::Comment(c) => w.comment(c),
             Step::Spindle { rpm, cw } => {
@@ -1030,7 +1163,8 @@ fn post_moves(
                 let f = feed.min(machine.max_feed);
                 let helix = (to[2] - at[2]).abs() > 1e-9;
                 let r_ok = !at[0].is_nan();
-                if s.output_arcs && s.arcs_xy && r_ok && (!helix || s.output_helices) {
+                // (Through the machine's axes an arc is no arc of the slides': short lines.)
+                if s.output_arcs && s.arcs_xy && r_ok && !by_axes && (!helix || s.output_helices) {
                     if dist(at, *to) < 1e-9 && !helix {
                         // A full circle: two halves (some controls refuse one full circle).
                         let mid = [2.0 * center[0] - at[0], 2.0 * center[1] - at[1], at[2]];
@@ -1063,6 +1197,11 @@ fn post_moves(
                 // With the motion code written again on the move that takes it.
                 w.mode = None;
             }
+            Step::Axis(a) => {
+                if let Some(ax) = &mut w.rot {
+                    ax.lean(*a);
+                }
+            }
         }
     }
     // Never left on past the operation.
@@ -1084,7 +1223,9 @@ fn post_drill(
     tool: &Tool,
     at: &mut P3,
 ) {
-    if c.kind == CycleKind::Tap && s.canned_tap && d == Dialect::LinuxCnc {
+    // (Through the machine's axes a cycle is written as its moves.)
+    let by_axes = w.rot.is_some();
+    if c.kind == CycleKind::Tap && s.canned_tap && d == Dialect::LinuxCnc && !by_axes {
         // LinuxCNC taps with spindle-synchronised motion: in at the pitch a turn, then back
         // out the same way with the spindle reversed, to where it started.
         if !at[0].is_nan() && at[2] < c.retract {
@@ -1099,7 +1240,7 @@ fn post_drill(
         *at = [c.at[0], c.at[1], c.retract];
         return;
     }
-    if s.canned(c.kind) && d.has_cycles() {
+    if s.canned(c.kind) && d.has_cycles() && !by_axes {
         let code = match c.kind {
             CycleKind::Drill if c.dwell > 0.0 => "G82",
             CycleKind::Drill => "G81",
@@ -1362,3 +1503,5 @@ pub fn summary(nc: &str, s: &PostSettings) -> String {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_rotary;

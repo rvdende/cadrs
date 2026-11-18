@@ -13,6 +13,8 @@ pub(super) enum Needs {
     Tool,
     Toolpath,
     Calculated,
+    /// The active job's machine is an assembly of the document.
+    MachineAssembly,
 }
 
 /// The toolbar of a CAM Studio tab.
@@ -157,6 +159,18 @@ pub fn toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
             ui.show_stock = !ui.show_stock;
         }),
     ));
+    // The job's machine in the view (a machine that is an assembly of the document).
+    tb.spawn((
+        tool(
+            "cam-tb-machine-show",
+            "cam-machine-show",
+            "cam-show-hide-machine",
+        ),
+        Needs::MachineAssembly,
+        observe(|_: On<Activate>, mut ui: ResMut<CamUi>| {
+            ui.show_machine = !ui.show_machine;
+        }),
+    ));
 }
 
 #[derive(Component)]
@@ -219,6 +233,9 @@ pub(super) fn sync_toolbar(
             Needs::Tool => has_tool,
             Needs::Toolpath => has_toolpath,
             Needs::Calculated => calculated,
+            Needs::MachineAssembly => {
+                job.is_some_and(|j| j.machine.is_some() && j.machine_source.is_some())
+            }
         };
         if on && disabled {
             commands

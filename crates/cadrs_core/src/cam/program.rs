@@ -258,7 +258,7 @@ pub struct OpInput {
 
 /// An operation's input, or why it can't be computed.
 pub fn op_input(cam: &CamStudio, op: CamId, parts: &[Part]) -> Result<OpInput, String> {
-    let (job, _, o) = cam.operation(op).ok_or("The toolpath is gone")?;
+    let (job, setup, o) = cam.operation(op).ok_or("The toolpath is gone")?;
     let OpKind::Toolpath(tp) = &o.kind else {
         return Err("Not a toolpath".into());
     };
@@ -276,12 +276,19 @@ pub fn op_input(cam: &CamStudio, op: CamId, parts: &[Part]) -> Result<OpInput, S
     if bodies.is_empty() {
         return Err("The job has no bodies".into());
     }
+    let mut params = tp.params.clone();
+    // A rotary pattern with no axis of its own turns about the machine's.
+    if params.pattern.rotary_axes() == 1 && params.rotary.axis.is_none() {
+        let sf = setup_frame(cam, job, setup, parts);
+        let work = work_on_table(setup, &shape.bounds_in(&sf));
+        params.rotary.axis = rotary_line(&machine, &work, &sf, &frame);
+    }
     Ok(OpInput {
         op,
         frame,
         tool: tool.tool.clone(),
         tool_number: tool.number,
-        params: tp.params.clone(),
+        params,
         stock: stock_in(&shape, &frame),
         machine,
         parts: bodies.iter().map(|p| p.id).collect(),
@@ -437,6 +444,8 @@ pub fn move_toolpath(tp: &Toolpath, from: &Frame, to: &Frame) -> Result<Toolpath
                 c.retract += dz;
                 Step::Drill(c)
             }
+            // (A lean turns with the frame.)
+            Step::Axis(a) => Step::Axis(rel.dir_to_world(*a)),
             other => other.clone(),
         })
         .collect();
@@ -452,6 +461,9 @@ pub fn move_toolpath(tp: &Toolpath, from: &Frame, to: &Frame) -> Result<Toolpath
 pub struct SetupRun<'a> {
     pub ops: Vec<RunOp<'a>>,
     pub frame: Frame,
+    /// Where the setup's work coordinate system is on the machine, in the coordinates of its
+    /// table mount ([`work_on_table`]): what the machine's axes are worked out from.
+    pub work: Frame,
 }
 
 pub struct RunOp<'a> {
@@ -544,7 +556,57 @@ pub fn setup_run<'a>(
             tilted,
         });
     }
-    Ok(SetupRun { ops, frame })
+    let work = match stock_shape(cam, job, parts) {
+        Some(shape) => work_on_table(setup, &shape.bounds_in(&frame)),
+        None => Frame::WORLD,
+    };
+    Ok(SetupRun { ops, frame, work })
+}
+
+/// Where a setup's work coordinate system is on the machine: its frame in the coordinates of
+/// the machine's table mount, by the setup's machine mating. `stock`: the stock's box in the
+/// setup's coordinates (its bottom centre goes on the mount, or as far off as the mating says;
+/// the setup's axes square to the mount's).
+pub fn work_on_table(setup: &Setup, stock: &Aabb) -> Frame {
+    let on_centre = |shift: P3| {
+        let centre = [
+            (stock.min[0] + stock.max[0]) / 2.0,
+            (stock.min[1] + stock.max[1]) / 2.0,
+            stock.min[2],
+        ];
+        Frame {
+            origin: sub(shift, centre),
+            ..Frame::WORLD
+        }
+    };
+    match setup.mating {
+        super::Mating::Automatic => on_centre([0.0; 3]),
+        super::Mating::Manual(o) => on_centre(o),
+        // The frame given is the mount's as the setup sees it: the setup as the mount sees it
+        // is the other way about.
+        super::Mating::Mount { origin, z, x } => {
+            Frame::from_zx(origin, z, x).relative(&Frame::WORLD)
+        }
+    }
+}
+
+/// The machine's rotary axis nearest the work (the last on its table side: the one the work
+/// turns with), as a line fixed in the part: a point and a direction in `frame`'s coordinates
+/// (`frame` and `setup` given in the model's). The rotary patterns turn about it.
+pub fn rotary_line(
+    machine: &Machine,
+    work: &Frame,
+    setup: &Frame,
+    frame: &Frame,
+) -> Option<(P3, P3)> {
+    let chain = machine.kinematics();
+    let j = chain.table.iter().rev().find(|j| j.is_rotary())?;
+    // Machine (at home) → the table mount → the setup → the model → the operation's frame.
+    let to_frame =
+        |p: P3| frame.to_local(setup.to_world(work.to_local(chain.table_mount.to_local(p))));
+    let dir = frame
+        .dir_to_local(setup.dir_to_world(work.dir_to_local(chain.table_mount.dir_to_local(j.dir))));
+    Some((to_frame(j.origin), dir))
 }
 
 /// A toolpath computed in `from` as straight moves in `to`'s coordinates (any tilt between
@@ -554,9 +616,22 @@ pub fn unroll_toolpath(tp: &Toolpath, from: &Frame, to: &Frame, rapid_rate: f64)
     let Some(start) = tp.start() else {
         return Toolpath::default();
     };
-    let mut steps = vec![Step::Rapid(rel.to_world(start))];
+    // The tool's axis in `to`'s coordinates: `from`'s Z where the toolpath doesn't lean.
+    let mut lean = cadrs_cam::toolpath::UPRIGHT;
+    let mut steps = Vec::new();
+    let start_axis = rel.dir_to_world(tp.start_axis());
+    if cadrs_cam::geom::dist(start_axis, lean) > 1e-12 {
+        steps.push(Step::Axis(start_axis));
+        lean = start_axis;
+    }
+    steps.push(Step::Rapid(rel.to_world(start)));
     for seg in tp.motion(start, rapid_rate) {
         let p = rel.to_world(seg.to);
+        let axis = rel.dir_to_world(seg.axes()[1]);
+        if cadrs_cam::geom::dist(axis, lean) > 1e-12 {
+            steps.push(Step::Axis(axis));
+            lean = axis;
+        }
         steps.push(match seg.feed {
             None => Step::Rapid(p),
             Some(feed) => Step::Feed {
@@ -735,15 +810,20 @@ pub fn run_motions(
     let datums: Option<Vec<u32>> = nc_program(setup, job, run)
         .ok()
         .map(|p| p.operations.iter().map(|o| o.datum).collect());
-    let rapid = |from: P3, to: P3| Segment {
+    let upright = cadrs_cam::toolpath::UPRIGHT;
+    // A rapid with the tool's axis turning from `a` to `b` (setup coordinates).
+    let rapid = |from: P3, to: P3, (a, b): (P3, P3)| Segment {
         from,
         to,
         feed: None,
         kind: None,
         beam: false,
         minutes: cadrs_cam::geom::dist(from, to) / rapid_rate.max(1.0),
+        axis: (a != upright || b != upright).then_some([a, b]),
     };
     let mut at = start;
+    // The tool's axis where the operation before left it.
+    let mut lean = upright;
     let mut tool: Option<u32> = None;
     let mut datum: Option<u32> = None;
     let mut out = Vec::with_capacity(run.ops.len());
@@ -765,19 +845,28 @@ pub fn run_motions(
         {
             let clear = at[2].max(f[2]).max(start[2]);
             let over = [at[0], at[1], clear];
-            // Down its tool axis: the setup's Z, or a tilted plane's (3+2, entered from up
-            // clear along it, then across in it).
-            let down = match o.plane.as_ref().filter(|_| o.tilted) {
-                Some((wf, _, _)) => {
-                    let pf = run.frame.relative(wf);
-                    let (ol, fl) = (pf.to_local(over), pf.to_local(f));
-                    pf.to_world([ol[0], ol[1], fl[2]])
-                }
-                None => [at[0], at[1], f[2]],
-            };
-            for (a, b) in [(at, over), (over, down), (down, f)] {
-                if cadrs_cam::geom::dist(a, b) > 1e-9 {
-                    segs.push(rapid(a, b));
+            // Down its tool axis to its first height: the setup's Z, a tilted plane's (3+2) or
+            // the lean its first move starts with; turned to it up clear, then across.
+            let first_axis = o.toolpath.start_axis();
+            if first_axis[2] < 0.5 || lean[2] < 0.5 {
+                // A tool leant far over starts or ends beside the work, or under it: round
+                // the work to there (on the machine it is the work that turns).
+                // (From where the last operation left it, not up first: that may be under
+                // the work.)
+                segs.extend(swing(&o.toolpath, at, f, (lean, first_axis), rapid_rate));
+            } else {
+                let down = sub(
+                    over,
+                    cadrs_cam::geom::scale(first_axis, dot(sub(over, f), first_axis)),
+                );
+                for (a, b, turn) in [
+                    (at, over, (lean, lean)),
+                    (over, down, (lean, first_axis)),
+                    (down, f, (first_axis, first_axis)),
+                ] {
+                    if cadrs_cam::geom::dist(a, b) > 1e-9 || turn.0 != turn.1 {
+                        segs.push(rapid(a, b, turn));
+                    }
                 }
             }
             at = f;
@@ -789,9 +878,18 @@ pub fn run_motions(
             // post writes it).
             let h = at[2].max(f[2]);
             let (up, over) = ([at[0], at[1], h], [f[0], f[1], h]);
-            for (a, b) in [(at, up), (up, over), (over, f)] {
-                if cadrs_cam::geom::dist(a, b) > 1e-9 {
-                    segs.push(rapid(a, b));
+            let first_axis = o.toolpath.start_axis();
+            if first_axis[2] < 0.5 || lean[2] < 0.5 {
+                segs.extend(swing(&o.toolpath, at, f, (lean, first_axis), rapid_rate));
+            } else {
+                for (a, b, turn) in [
+                    (at, up, (lean, lean)),
+                    (up, over, (lean, first_axis)),
+                    (over, f, (first_axis, first_axis)),
+                ] {
+                    if cadrs_cam::geom::dist(a, b) > 1e-9 || turn.0 != turn.1 {
+                        segs.push(rapid(a, b, turn));
+                    }
                 }
             }
             at = f;
@@ -799,12 +897,68 @@ pub fn run_motions(
         segs.extend(o.toolpath.motion(at, rapid_rate));
         if let Some(l) = segs.last() {
             at = l.to;
+            lean = l.axes()[1];
         }
         tool = Some(o.tool_number);
         datum = d;
         out.push(segs);
     }
     out
+}
+
+/// Rapids from `from` to `to` round the work a toolpath cuts, the tool's axis turning from
+/// `axes.0` to `axes.1` on the way: out to a ball round everything the toolpath reaches, round
+/// it, and in. For entries a straight line would take through the work.
+fn swing(
+    tp: &Toolpath,
+    from: P3,
+    to: P3,
+    axes: (P3, P3),
+    rapid_rate: f64,
+) -> Vec<cadrs_cam::toolpath::Segment> {
+    use cadrs_cam::geom::{dist, len, scale};
+    use cadrs_cam::kinematics::{angle_between, slerp};
+    let b = tp.bounds();
+    let centre = b.center();
+    let radius = (len(b.size()) / 2.0)
+        .max(dist(from, centre))
+        .max(dist(to, centre));
+    let dir = |p: P3| {
+        let d = sub(p, centre);
+        if len(d) > 1e-9 {
+            normalize(d)
+        } else {
+            [0.0, 0.0, 1.0]
+        }
+    };
+    let (u0, u1) = (dir(from), dir(to));
+    let n = (angle_between(u0, u1) / 15.0)
+        .max(angle_between(axes.0, axes.1) / 30.0)
+        .ceil()
+        .max(1.0) as usize;
+    let mut points: Vec<(P3, P3)> = vec![(from, axes.0)];
+    for k in 0..=n {
+        let t = k as f64 / n as f64;
+        points.push((
+            add(centre, scale(slerp(u0, u1, t), radius)),
+            slerp(axes.0, axes.1, t),
+        ));
+    }
+    points.push((to, axes.1));
+    let upright = cadrs_cam::toolpath::UPRIGHT;
+    points
+        .windows(2)
+        .filter(|w| dist(w[0].0, w[1].0) > 1e-9 || w[0].1 != w[1].1)
+        .map(|w| cadrs_cam::toolpath::Segment {
+            from: w[0].0,
+            to: w[1].0,
+            feed: None,
+            kind: None,
+            beam: false,
+            minutes: dist(w[0].0, w[1].0) / rapid_rate.max(1.0),
+            axis: (w[0].1 != upright || w[1].1 != upright).then_some([w[0].1, w[1].1]),
+        })
+        .collect()
 }
 
 /// What Verify found.
@@ -891,6 +1045,108 @@ pub fn simulate(
     ))
 }
 
+/// Whether a setup's run has to be simulated on the solid stock ([`simulate_solid`]): an
+/// operation leans its tool (a rotary or 5-axis pattern, a tilted work plane) or cuts with a
+/// cutter that undercuts, neither of which a height map seen down the setup's Z can hold.
+pub fn run_needs_solid(run: &SetupRun) -> bool {
+    run.ops.iter().any(|o| {
+        o.tilted || o.toolpath.is_multi_axis() || cadrs_cam::cutter::Cutter::of(o.tool).undercut
+    })
+}
+
+/// Simulates a setup's operations (all, or up to and including `upto`) on a solid stock that
+/// is cut whichever way the tool points: what Verify and Simulate show for a run that
+/// [`run_needs_solid`]. Everything is in the setup's coordinates. The stock starts as the
+/// setups and toolpaths before left it where that could be carried ([`stock_before`]), else
+/// whole. Each operation's cuts are tagged with its place in the run (from 1).
+#[allow(clippy::too_many_arguments)]
+pub fn simulate_solid(
+    cam: &CamStudio,
+    job: &Job,
+    setup: &Setup,
+    run: &SetupRun,
+    parts: &[Part],
+    paths: &HashMap<CamId, Toolpath>,
+    upto: Option<CamId>,
+    quality: f64,
+) -> Result<cadrs_cam::sim::SolidResult, String> {
+    use cadrs_cam::dexel::{TriDexel, solid_cell};
+    let shape = stock_shape(cam, job, parts).ok_or("The job has no bodies")?;
+    let stock = stock_in(&shape, &run.frame);
+    let model = super::geometry::model_from_parts(&job_bodies(cam, job, parts), &run.frame);
+    let fixtures = workholding_triangles(job, parts, &run.frame);
+    // Room round the stock for the part and the workholding to be compared in.
+    let mut bounds = stock.bounds.union(&model.bounds());
+    for p in fixtures.iter().flatten() {
+        bounds.include(*p);
+    }
+    let cell = solid_cell(bounds.size(), quality);
+    // (A cell's margin: a solid that reaches its lattice's box loses its outermost rays.)
+    let bounds = bounds.grown(cell);
+    let world = Frame::WORLD;
+    // What the setups before left can only be carried as a height map, which holds no
+    // underside (it would fill in under a round bar): the job's first setup starts from the
+    // stock itself.
+    let first_setup = job
+        .setups
+        .iter()
+        .find(|s| !s.suppressed)
+        .is_none_or(|s| s.id == setup.id);
+    let before = if first_setup {
+        None
+    } else {
+        stock_before(
+            cam,
+            job,
+            setup.id,
+            run.ops.first().map(|o| o.id),
+            parts,
+            paths,
+            &run.frame,
+            sim::sim_cell(&stock, quality),
+        )
+    };
+    let start = match (&before, &stock.triangles) {
+        (Some(map), _) => TriDexel::of_height_map(map, &world, stock.bounds.min[2], cell),
+        (None, Some(tris)) => TriDexel::of_solid(world, tris, &bounds, cell),
+        (None, None) => TriDexel::of_solid(
+            world,
+            &cadrs_cam::model::box_triangles(&stock.bounds),
+            &bounds,
+            cell,
+        ),
+    };
+    // The part and the workholding on the stock's own lattice, to be compared ray for ray.
+    let (lattice, cell) = (start.bounds(), start.cell);
+    let part = (!model.triangles.is_empty())
+        .then(|| TriDexel::of_solid(world, &model.triangles, &lattice, cell));
+    let held = (!fixtures.is_empty()).then(|| TriDexel::of_solid(world, &fixtures, &lattice, cell));
+    let above = [0.0, 0.0, stock.bounds.max[2] + 30.0];
+    let mut motions = Vec::new();
+    for (o, m) in run.ops.iter().zip(run_motions(setup, job, run, above)) {
+        motions.push((o.tool, m));
+        if upto == Some(o.id) {
+            break;
+        }
+    }
+    let ops: Vec<sim::SolidOp> = motions
+        .iter()
+        .enumerate()
+        .map(|(k, (tool, segments))| sim::SolidOp {
+            tool,
+            segments,
+            frame: world,
+            tag: (k + 1).min(254) as u8,
+        })
+        .collect();
+    Ok(sim::simulate_mill_solid(
+        start,
+        part.as_ref(),
+        held.as_ref(),
+        &ops,
+    ))
+}
+
 /// The program for a setup's operations (see the module docs).
 pub fn nc_program(setup: &Setup, job: &Job, run: &SetupRun) -> Result<NcProgram, String> {
     let machine = job.machine.as_ref().ok_or("The job has no machine")?;
@@ -949,13 +1205,19 @@ pub fn nc_program(setup: &Setup, job: &Job, run: &SetupRun) -> Result<NcProgram,
         operations: Vec::new(),
     }];
     for o in &run.ops {
+        if o.local.is_multi_axis() && machine.rotary_axes() == 0 {
+            return Err(format!(
+                "{}: its tool leans as it cuts, which needs a machine with rotary axes",
+                o.name
+            ));
+        }
         let mut tilt = None;
         let (toolpath, datum) = match &o.plane {
             None => (o.toolpath.clone(), base),
             Some((wf, WorkPlaneType::Dynamic, _)) => {
-                if machine.indexing.is_none() {
+                if machine.rotary_axes() == 0 {
                     return Err(format!(
-                        "{}: a Dynamic work plane needs a machine with indexing (3+2)",
+                        "{}: a Dynamic work plane needs a machine with rotary axes (3+2)",
                         o.name
                     ));
                 }
@@ -1073,7 +1335,7 @@ pub fn offset_lines(setup: &Setup, job: &Job, run: &SetupRun) -> Vec<String> {
 pub fn post_setup(setup: &Setup, job: &Job, run: &SetupRun) -> Result<String, String> {
     let machine = job.machine.as_ref().ok_or("The job has no machine")?;
     let program = nc_program(setup, job, run)?;
-    cadrs_cam::post(&program, machine, &machine.post).map_err(|e| e.to_string())
+    cadrs_cam::post::post_on(&program, machine, &machine.post, &run.work).map_err(|e| e.to_string())
 }
 
 /// Moves outside the machine's travel: the setup's toolpaths placed on the table by its machine
@@ -1085,13 +1347,20 @@ pub fn travel_warnings(job: &Job, setup: &Setup, run: &SetupRun, stock: &Stock) 
     let Some(m) = &job.machine else {
         return Vec::new();
     };
+    // A machine with axes of its own is checked axis by axis, through its kinematics.
+    if m.chain.is_some() {
+        let start = [0.0, 0.0, stock.bounds.max[2] + 30.0];
+        let motions = run_motions(setup, job, run, start);
+        return axis_warnings(run, &motions, &axis_track(m, run, &motions));
+    }
     let centre = [
         (stock.bounds.min[0] + stock.bounds.max[0]) / 2.0,
         (stock.bounds.min[1] + stock.bounds.max[1]) / 2.0,
         stock.bounds.min[2],
     ];
     let shift = match setup.mating {
-        super::Mating::Automatic => [0.0; 3],
+        // (A catalogue machine is its travel alone: a mount frame says nothing of where in it.)
+        super::Mating::Automatic | super::Mating::Mount { .. } => [0.0; 3],
         super::Mating::Manual(o) => o,
     };
     let mut out = Vec::new();
@@ -1117,6 +1386,88 @@ pub fn travel_warnings(job: &Job, setup: &Setup, run: &SetupRun, stock: &Stock) 
                 "{} needs more Z travel than the machine has",
                 o.name
             ));
+        }
+    }
+    out
+}
+
+/// The machine's axes through a setup's motions ([`run_motions`], an operation each): its
+/// position at the end of every move, the work set on its table as the setup's mating says
+/// and each operation's tool at its own length. The simulation moves the machine by it; its
+/// issues are the moves the machine cannot make.
+pub fn axis_track(
+    machine: &Machine,
+    run: &SetupRun,
+    motions: &[Vec<cadrs_cam::toolpath::Segment>],
+) -> cadrs_cam::kinematics::AxisTrack {
+    use cadrs_cam::kinematics::Cl;
+    let chain = machine.kinematics();
+    let moves: Vec<(Cl, f64)> = motions
+        .iter()
+        .zip(&run.ops)
+        .flat_map(|(segs, o)| {
+            let length = o.tool.gauge_length();
+            segs.iter()
+                .map(move |s| (Cl::new(s.to, s.axes()[1]).out_of(&run.work), length))
+        })
+        .collect();
+    chain.track(&moves, &chain.rest())
+}
+
+/// What a machine cannot do of a setup's motions, an operation and an axis once each: "Finish 2
+/// takes A to 131.5, beyond its travel (-120 to 120)".
+pub fn axis_warnings(
+    run: &SetupRun,
+    motions: &[Vec<cadrs_cam::toolpath::Segment>],
+    track: &cadrs_cam::kinematics::AxisTrack,
+) -> Vec<String> {
+    use cadrs_cam::kinematics::IkError;
+    // Which operation each move belongs to: the track's moves are the operations' in order.
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<(usize, String)> = Default::default();
+    let mut counts = Vec::new();
+    let mut total = 0;
+    for segs in motions {
+        total += segs.len();
+        counts.push(total);
+    }
+    for (k, issue) in &track.issues {
+        let op = counts
+            .partition_point(|end| *end <= *k)
+            .min(run.ops.len().saturating_sub(1));
+        let Some(o) = run.ops.get(op) else {
+            continue;
+        };
+        let (what, text) = match issue {
+            IkError::Limit {
+                joint,
+                value,
+                min,
+                max,
+            } => (
+                joint.clone(),
+                format!(
+                    "{} takes {joint} to {}, beyond its travel ({} to {})",
+                    o.name,
+                    cadrs_cam::tool::fmt_mm(*value),
+                    cadrs_cam::tool::fmt_mm(*min),
+                    cadrs_cam::tool::fmt_mm(*max)
+                ),
+            ),
+            IkError::Orientation { .. } => (
+                "lean".into(),
+                format!(
+                    "{}: the machine's rotary axes cannot point the tool as it leans",
+                    o.name
+                ),
+            ),
+            IkError::Unreachable => (
+                "reach".into(),
+                format!("{}: the machine cannot reach it", o.name),
+            ),
+        };
+        if seen.insert((op, what)) {
+            out.push(text);
         }
     }
     out

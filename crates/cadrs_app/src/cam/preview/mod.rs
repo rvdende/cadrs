@@ -5,13 +5,21 @@
 //!   what's left grey.
 //! - **Verify**: the stock as the tool leaves it (a height map lowered under the cutter, or the
 //!   kerf in a sheet), cut areas shaded by depth, gouges red.
-//! - **Simulate**: Verify with the tool's holder drawn, and the collisions found (rapids into
-//!   material, cuts deeper than the flutes) listed; it can pause on a collision.
+//! - **Simulate**: Verify with the collisions found (rapids into material, cuts deeper than
+//!   the flutes, the machine into the workholding) listed; it can pause on a collision.
+//!
+//! A milling tool is drawn as a solid with its holder and arbor in every mode; a beam as its
+//! kerf. A run that leans its tool is verified on a solid stock ([`solid`]). The job's
+//! machine, when it is an assembly's, moves with the run ([`super::machine_view`]).
 //!
 //! The bar: the three modes, the speed, Step back · Run/Pause · Step next · Go to end · Reset ·
 //! Close, the progress (drag to scrub), and toggles for the tool, the toolpath, the part and
-//! pausing on collisions. Its readout shows the time, the operation, the feed and the tool's
-//! position; at the end, what Verify found.
+//! pausing on collisions (with a machine the view shows: for the machine too). Its readout
+//! shows the time, the operation, the feed and the tool's position; at the end, what Verify
+//! found; under it where the machine's own axes are (a machine with a chain) and what they
+//! cannot do of the run (a machine with rotary axes). Simulate pauses where an axis first
+//! leaves its travel and where the machine runs into itself or the work, as at the stock's
+//! collisions.
 
 use web_time::Instant;
 
@@ -31,9 +39,11 @@ use cadrs_ui::{Button, Checkbox, CheckboxChange, Slider, SliderChange};
 use super::view::{fill_motion, v3};
 use super::{CamUi, Computed, active_cam_owned, toast};
 use crate::AppState;
+use crate::part_shading::PartShading;
 use crate::viewport::ViewportArea;
 
 mod analysis;
+mod solid;
 
 use analysis::{Analysis, analyse};
 
@@ -81,8 +91,33 @@ struct OpSpan {
     tilted: bool,
     /// A tilted operation's own frame in the run's coordinates (it's checked in it).
     frame: Option<Frame>,
-    /// The tool's axis (the run's coordinates).
-    axis: P3,
+    /// Its tool's number (the magazine pocket it comes from) and its length from the tip to
+    /// the spindle's gauge line, for the machine in the view.
+    tool_number: u32,
+    gauge: f64,
+}
+
+/// The machine's own axes through the run (a machine with a chain: an assembly's, or a
+/// catalogue one with rotary axes): what moves the machine in the view
+/// ([`super::machine_view`]).
+struct MachineRun {
+    chain: cadrs_core::cam::cadrs_cam::kinematics::Chain,
+    /// The setup's frame in the coordinates of the machine's table mount.
+    work: Frame,
+    track: cadrs_core::cam::cadrs_cam::kinematics::AxisTrack,
+}
+
+/// Where the machine is at the preview's time.
+pub(in crate::cam) struct MachineNow {
+    /// Its axis values, in its chain's order.
+    pub q: Vec<f64>,
+    /// The number of the tool in the spindle.
+    pub tool_number: u32,
+    /// The setup's frame in the model, and in the table mount's coordinates.
+    pub setup: Frame,
+    pub work: Frame,
+    /// The preview's time (minutes).
+    pub t: f64,
 }
 
 /// The open preview.
@@ -123,6 +158,24 @@ pub struct PreviewState {
     sheet: Option<Vec<(cadrs_core::cam::cadrs_cam::region::Region, bool)>>,
     /// How many warnings the run's toolpaths carry (the readout counts them).
     warnings: usize,
+    /// What the machine's axes cannot do of the run (a machine with rotary axes): an axis
+    /// beyond its travel, a lean it cannot point the tool to. The readout lists them.
+    machine_warnings: Vec<String>,
+    /// The machine's axes through the run (see [`MachineRun`]).
+    machine_run: Option<MachineRun>,
+    /// When the run takes an axis beyond its travel or leans the tool where the machine
+    /// cannot point it, and what: Simulate pauses at them as at a collision.
+    machine_events: Vec<(f64, String)>,
+    /// Where the machine runs into itself, the workholding or the part (when the run's check
+    /// is done): the view reddens what collides.
+    machine_hits: Vec<super::machine_view::MachineHit>,
+    /// The run leans its tool or undercuts ([`program::run_needs_solid`]): its stock is
+    /// simulated solid ([`solid`]), and the height map is left uncut.
+    solid: bool,
+    /// A solid run's uncut stock: its surface in the model's coordinates.
+    solid_blank: Vec<[P3; 3]>,
+    /// The solid stock after each operation (when the run's check is done).
+    solid_stages: Vec<cadrs_core::cam::cadrs_cam::dexel::SimMesh>,
     /// The check of the whole run, on a worker thread until it's done.
     analysis: Option<std::sync::Mutex<std::sync::mpsc::Receiver<Analysis>>>,
 }
@@ -140,6 +193,42 @@ impl PreviewState {
 
     fn total(&self) -> f64 {
         self.timeline.total()
+    }
+
+    /// Where the machine's axes are at the preview's time: the track's row at the end of a
+    /// move, and within a move the cutter's place at this instant solved on from the move's
+    /// start ([`super::machine_view::axes_at`]). `None` for a machine known by its travel
+    /// alone.
+    pub(in crate::cam) fn machine_now(&self) -> Option<MachineNow> {
+        let run = self.machine_run.as_ref()?;
+        let (tip, i) = self.timeline.at(self.t)?;
+        let op = self.op_at(i)?;
+        let q = super::machine_view::axes_at(
+            &run.chain,
+            &run.track,
+            &run.work,
+            i,
+            tip,
+            self.timeline.axis_at(self.t),
+            op.gauge,
+        );
+        Some(MachineNow {
+            q,
+            tool_number: op.tool_number,
+            setup: self.frame,
+            work: run.work,
+            t: self.t,
+        })
+    }
+
+    /// Where the machine runs into itself or the work during the run.
+    pub(in crate::cam) fn machine_hits(&self) -> &[super::machine_view::MachineHit] {
+        &self.machine_hits
+    }
+
+    /// Whether the run moves a machine the view can show.
+    pub(in crate::cam) fn has_machine(&self) -> bool {
+        self.machine_run.is_some()
     }
 
     fn segment_index(&self) -> usize {
@@ -163,6 +252,44 @@ impl PreviewState {
         self.jump(t);
     }
 
+    /// Jumps to the next collision after the preview's time (what the machine cannot do and
+    /// where it runs into something among them) and pauses there, as playing in Simulate with
+    /// Pause on collision does. Whether there was one.
+    pub fn seek_collision(&mut self) -> bool {
+        let Some((t, _)) = self
+            .collisions
+            .iter()
+            .find(|(t, _)| *t > self.t + 1e-9)
+            .cloned()
+        else {
+            return false;
+        };
+        self.playing = false;
+        self.jump(t);
+        self.paused_at = Some(t);
+        true
+    }
+
+    /// Jumps to a fraction (0 to 1) of the run's `n`th operation (from 0).
+    pub fn seek_op(&mut self, n: usize, f: f64) {
+        let Some(op) = self.ops.get(n) else { return };
+        let end = self
+            .ops
+            .get(n + 1)
+            .map_or(self.timeline.segments.len(), |o| o.first);
+        let from = if op.first == 0 {
+            0.0
+        } else {
+            self.timeline.end_of(op.first - 1)
+        };
+        let to = if end == 0 {
+            0.0
+        } else {
+            self.timeline.end_of(end - 1)
+        };
+        self.jump(from + (to - from) * f.clamp(0.0, 1.0));
+    }
+
     fn jump(&mut self, t: f64) {
         let t = t.clamp(0.0, self.total());
         if t < self.t - 1e-12 && self.map.is_some() {
@@ -177,8 +304,23 @@ impl PreviewState {
         self.cut_to_now();
     }
 
+    /// How many of the run's operations are through at the preview's time.
+    fn ops_done(&self) -> usize {
+        let n = self.timeline.segments.len();
+        (0..self.ops.len())
+            .filter(|k| {
+                let end = self.ops.get(k + 1).map_or(n, |o| o.first);
+                end == 0 || self.t >= self.timeline.end_of(end - 1) - 1e-9
+            })
+            .count()
+    }
+
     /// Lowers the stock under every move up to now.
     fn cut_to_now(&mut self) {
+        // (A solid run's height map stays the uncut stock: see [`solid`].)
+        if self.solid {
+            return;
+        }
         let Some(map) = &mut self.map else { return };
         let upto = self.timeline.at(self.t).map_or(0, |(_, i)| i);
         let done = if self.t >= self.timeline.total() - 1e-12 {
@@ -318,9 +460,6 @@ pub fn open_for_selection(world: &mut World) {
             paths.clone(),
         )
     });
-    let Some(machine) = job.machine.clone() else {
-        return;
-    };
     let Some(shape) = program::stock_shape(&cam, job, &parts) else {
         return;
     };
@@ -330,7 +469,7 @@ pub fn open_for_selection(world: &mut World) {
     // As the program moves: from op to op, with the post's entries.
     let start: P3 = [0.0, 0.0, stock.bounds.max[2] + 30.0];
     let motions = program::run_motions(setup, job, &run, start);
-    for (o, m) in run.ops.iter().zip(motions) {
+    for (o, m) in run.ops.iter().zip(&motions) {
         spans.push(OpSpan {
             first: segments.len(),
             name: o.name.to_string(),
@@ -341,13 +480,46 @@ pub fn open_for_selection(world: &mut World) {
                 .as_ref()
                 .filter(|_| o.tilted)
                 .map(|(wf, _, _)| run.frame.relative(wf)),
-            axis: o
-                .plane
-                .as_ref()
-                .map_or([0.0, 0.0, 1.0], |(wf, _, _)| run.frame.dir_to_local(wf.z)),
+            tool_number: o.tool_number,
+            gauge: o.tool.gauge_length(),
         });
-        segments.extend(m);
+        segments.extend(m.iter().copied());
     }
+    let Some(machine) = job.machine.clone() else {
+        return;
+    };
+    // The moves through the machine's own axes: what it cannot reach or lean to, and when.
+    let (machine_run, machine_warnings, machine_events) =
+        analysis::machine_run(&machine, &run, &motions, &segments);
+    // The machine itself, when it is an assembly's and the view has it: checked against the
+    // workholding and the part as it moves (on the worker).
+    let machine_scene = machine_run.as_ref().and_then(|mr| {
+        let scene = world
+            .resource::<super::machine_view::MachineView>()
+            .scene()?;
+        let mut fixed: Vec<super::machine_view::Fixed> = Vec::new();
+        let name = |p: &cadrs_core::Part| {
+            cam.component_of(p.id)
+                .map(|c| cadrs_core::parts::display_name(p, &c.derived.props).to_string())
+                .unwrap_or_else(|| p.name.clone())
+        };
+        let holding = program::job_workholding(job, &parts).into_iter();
+        let bodies = program::job_bodies(&cam, job, &parts).into_iter();
+        for (p, workholding) in holding.map(|p| (p, true)).chain(bodies.map(|p| (p, false))) {
+            fixed.push(super::machine_view::Fixed {
+                name: name(p),
+                tris: super::machine_view::triangles(&p.solid),
+                workholding,
+            });
+        }
+        Some(analysis::MachineCheck {
+            scene,
+            setup: run.frame,
+            work: mr.work,
+            rows: mr.track.rows.clone(),
+            fixed,
+        })
+    });
     // The model the toolpaths were calculated against (the kernel's: the finest of them),
     // else the display meshes.
     let model = {
@@ -366,6 +538,16 @@ pub fn open_for_selection(world: &mut World) {
         ))
     });
     let beam = machine.kind.is_cutting();
+    // A run that leans its tool is simulated on a solid stock (the worker's run of its own).
+    let solid_input = (!beam && program::run_needs_solid(&run)).then(|| solid::SolidInput {
+        cam: cam.clone(),
+        job: job.id,
+        setup: setup.id,
+        wanted: wanted.clone(),
+        parts: parts.clone(),
+        paths: paths.clone(),
+    });
+    let is_solid = solid_input.is_some();
     let cell = sim::sim_cell(&stock, 0.25);
     let (map, top) = if beam {
         (None, 0.0)
@@ -394,9 +576,31 @@ pub fn open_for_selection(world: &mut World) {
                         )
                     })
                 });
-                analyse(
-                    &stock, &model, &fixtures, start, &segments, &spans, beam, cell,
-                )
+                let mut a = match &solid_input {
+                    Some(input) => {
+                        let (summary, collisions, stages) =
+                            match solid::analyse_solid(input, &segments, &spans) {
+                                Ok(s) => (s.summary, s.collisions, s.stages),
+                                Err(e) => (e, Vec::new(), Vec::new()),
+                            };
+                        Analysis {
+                            summary,
+                            collisions,
+                            part: None,
+                            start,
+                            sheet: None,
+                            machine_hits: Vec::new(),
+                            solid: stages,
+                        }
+                    }
+                    None => analyse(
+                        &stock, &model, &fixtures, start, &segments, &spans, beam, cell,
+                    ),
+                };
+                if let Some(check) = &machine_scene {
+                    analysis::check_machine(&mut a, check, &segments, &spans);
+                }
+                a
             }))
             .unwrap_or_else(|_| Analysis {
                 summary: tr("cam-check-failed-unexpectedly"),
@@ -404,6 +608,8 @@ pub fn open_for_selection(world: &mut World) {
                 part: None,
                 start: None,
                 sheet: None,
+                machine_hits: Vec::new(),
+                solid: Vec::new(),
             });
             let _ = tx.send(a);
         });
@@ -434,11 +640,23 @@ pub fn open_for_selection(world: &mut World) {
         mesh_dirty: true,
         mesh_at: None,
         summary: tr("cam-checking-the-run"),
-        collisions: Vec::new(),
         paused_at: None,
         start: None,
         sheet: None,
         warnings: run.ops.iter().map(|o| o.toolpath.warnings.len()).sum(),
+        machine_warnings,
+        machine_run,
+        // (Simulate pauses at them from the start: the stock's check adds its own.)
+        collisions: machine_events.clone(),
+        machine_events,
+        machine_hits: Vec::new(),
+        solid: is_solid,
+        solid_blank: if is_solid {
+            shape.triangles()
+        } else {
+            Vec::new()
+        },
+        solid_stages: Vec::new(),
         analysis,
     });
 }
@@ -458,6 +676,8 @@ fn poll_analysis(state: Option<ResMut<PreviewState>>) {
             part: None,
             start: None,
             sheet: None,
+            machine_hits: Vec::new(),
+            solid: Vec::new(),
         },
     };
     s.analysis = None;
@@ -470,7 +690,13 @@ fn poll_analysis(state: Option<ResMut<PreviewState>>) {
             tr_with("cam-toolpath-warnings", &[("count", &n.to_string())])
         ),
     };
-    s.collisions = got.collisions;
+    // With what the machine's axes cannot do, in the run's order.
+    let mut collisions = got.collisions;
+    collisions.extend(s.machine_events.iter().cloned());
+    collisions.sort_by(|a, b| a.0.total_cmp(&b.0));
+    s.collisions = collisions;
+    s.machine_hits = got.machine_hits;
+    s.solid_stages = got.solid;
     s.part = got.part;
     s.sheet = got.sheet;
     if let Some(start) = got.start {
@@ -540,10 +766,12 @@ struct PreviewBar;
 struct Readout;
 
 #[derive(Component, PartialEq, Clone)]
-struct BarKey(Mode, bool, bool, bool, bool, bool, bool);
+struct BarKey(Mode, bool, bool, bool, bool, bool, bool, Option<bool>);
 
 fn sync_bar(
     state: Option<Res<PreviewState>>,
+    ui: Res<CamUi>,
+    machine: Res<super::machine_view::MachineView>,
     q: Query<(Entity, &BarKey), With<PreviewBar>>,
     q_area: Query<Entity, With<ViewportArea>>,
     theme: Res<Theme>,
@@ -563,7 +791,10 @@ fn sync_bar(
         s.show_part,
         s.pause_on_collision,
         s.beam,
+        // The Machine check: only with a machine the view shows.
+        (s.has_machine() && machine.is_loaded()).then_some(ui.show_machine),
     );
+    let show_machine = key.7;
     if let Ok((e, k)) = q.single() {
         if *k == key {
             return;
@@ -705,6 +936,14 @@ fn sync_bar(
                         .checked(s.show_part)
                         .build(&t),
                 );
+                if let Some(on) = show_machine {
+                    r.spawn(
+                        Checkbox::new("cam-pv-machine")
+                            .label(tr("cam-machine"))
+                            .checked(on)
+                            .build(&t),
+                    );
+                }
                 if s.mode == Mode::Simulate && !s.beam {
                     r.spawn(
                         Checkbox::new("cam-pv-pause")
@@ -760,6 +999,15 @@ fn sync_readout(
     {
         text = tr_with("cam-readout-paused", &[("reason", why)]);
     }
+    // Where the machine's own axes are, for a machine that has them.
+    if let (Some(run), Some(now)) = (&s.machine_run, s.machine_now()) {
+        text = format!("{text}\n{}", axes_line(&run.chain, &now.q));
+    }
+    // What the machine cannot do of the run, under the line (in every mode: it holds
+    // whatever the stock shows).
+    if let Some(line) = machine_warning_line(&s.machine_warnings) {
+        text = format!("{text}\n{line}");
+    }
     for mut t in &mut q {
         if t.0 != text {
             t.0 = text.clone();
@@ -775,6 +1023,37 @@ fn sync_readout(
             st.value = progress;
         }
     }
+}
+
+/// The readout's line of the machine's axes: "Z-120.50  B23.10°  Y4.00  X-12.50  C45.00°".
+fn axes_line(chain: &cadrs_core::cam::cadrs_cam::kinematics::Chain, q: &[f64]) -> String {
+    chain
+        .joints()
+        .zip(q)
+        .map(|(j, v)| {
+            // (Never "-0.00".)
+            let v = if v.abs() < 0.005 { 0.0 } else { *v };
+            format!("{}{v:.2}{}", j.name, if j.is_rotary() { "°" } else { "" })
+        })
+        .collect::<Vec<_>>()
+        .join("  ")
+}
+
+/// The readout's line for the machine's warnings: the first few, and how many more.
+fn machine_warning_line(warnings: &[String]) -> Option<String> {
+    const SHOWN: usize = 3;
+    if warnings.is_empty() {
+        return None;
+    }
+    let mut line = format!("⚠ {}", warnings[..warnings.len().min(SHOWN)].join(" · "));
+    if warnings.len() > SHOWN {
+        let more = (warnings.len() - SHOWN).to_string();
+        line = format!(
+            "{line} · {}",
+            tr_with("cam-machine-warnings-more", &[("count", &more)])
+        );
+    }
+    Some(line)
 }
 
 fn on_button(ev: On<bevy::ui_widgets::Activate>, q: Query<&Name>, mut commands: Commands) {
@@ -869,10 +1148,16 @@ fn on_slider(ev: On<SliderChange>, q: Query<&Name>, state: Option<ResMut<Preview
     }
 }
 
-fn on_check(ev: On<CheckboxChange>, q: Query<&Name>, state: Option<ResMut<PreviewState>>) {
+fn on_check(
+    ev: On<CheckboxChange>,
+    q: Query<&Name>,
+    state: Option<ResMut<PreviewState>>,
+    mut ui: ResMut<CamUi>,
+) {
     let Some(mut s) = state else { return };
     let Ok(n) = q.get(ev.entity) else { return };
     match n.as_str() {
+        "cam-pv-machine" => ui.show_machine = ev.checked,
         "cam-pv-tool" => s.show_tool = ev.checked,
         "cam-pv-path" => s.show_path = ev.checked,
         "cam-pv-part" => s.show_part = ev.checked,
@@ -885,16 +1170,26 @@ fn on_check(ev: On<CheckboxChange>, q: Query<&Name>, state: Option<ResMut<Previe
 // Drawing
 
 /// The toolpath (done in colour, left grey) and the tool.
+#[allow(clippy::too_many_arguments)]
 fn draw(
     state: Option<Res<PreviewState>>,
     mut g: Gizmos,
     mut assets: ResMut<Assets<bevy::gizmos::GizmoAsset>>,
     mut slot: Local<Option<(Entity, Handle<bevy::gizmos::GizmoAsset>)>>,
     mut last: Local<Option<(usize, bool, bool)>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut shading: ResMut<Assets<PartShading>>,
+    mut tool_mat: Local<Option<Handle<PartShading>>>,
+    // The tool's mesh in the view, and the operation (by its first move) it is the tool of.
+    mut tool_slot: Local<Option<(Entity, usize)>>,
+    mut q_tool: Query<(&mut Transform, &mut Visibility), With<PreviewTool>>,
     mut commands: Commands,
 ) {
     let Some(s) = state else {
         if let Some((e, _)) = slot.take() {
+            commands.entity(e).try_despawn();
+        }
+        if let Some((e, _)) = tool_slot.take() {
             commands.entity(e).try_despawn();
         }
         *last = None;
@@ -949,6 +1244,7 @@ fn draw(
     }
     // The tool where it is now.
     if !s.show_tool {
+        hide_tool(&mut q_tool);
         return;
     }
     let Some((p, _)) = s.timeline.at(s.t) else {
@@ -957,72 +1253,82 @@ fn draw(
     let Some(op) = s.op_at(i) else { return };
     let tool = &op.tool;
     let f = &s.frame;
-    let axis = v3(f.dir_to_world(op.axis));
+    // Along the tool's axis at this moment of the move: a tilted plane's (3+2), or the lean of
+    // a 4- or 5-axis cut, turning with it.
+    let axis = v3(f.dir_to_world(s.timeline.axis_at(s.t))).normalize_or(Vec3::Z);
     let tip = v3(f.to_world(p));
-    let iso = Isometry3d::new(tip, Quat::from_rotation_arc(Vec3::Z, axis));
-    let r = tool.radius() as f32;
-    let color = Color::srgb_u8(0x52, 0x5a, 0x66);
     if tool.is_beam() {
+        hide_tool(&mut q_tool);
         // A beam: a cone of light down to the kerf.
+        let iso = Isometry3d::new(tip, Quat::from_rotation_arc(Vec3::Z, axis));
+        let r = tool.radius() as f32;
         g.circle(iso, r.max(0.3), Color::srgb_u8(0xff, 0x8a, 0x00));
         g.line(tip, tip + axis * 20.0, Color::srgb_u8(0xff, 0xb0, 0x40));
         return;
     }
-    let flute = tool.cutting_length as f32;
-    // The cutter's outline: its tip shape, the flutes and the shank to its overall length.
-    let n = 8;
-    let mut prev: Option<(f32, f32)> = None;
-    for k in 0..=n {
-        let rr = r * k as f32 / n as f32;
-        let h = tool.height_at(rr as f64).unwrap_or(0.0) as f32;
-        g.circle(
-            Isometry3d::new(tip + axis * h, iso.rotation),
-            rr.max(0.05),
-            color,
-        );
-        if let Some((pr, ph)) = prev {
-            for a in [0.0f32, 90.0, 180.0, 270.0] {
-                let d = iso.rotation * (Quat::from_rotation_z(a.to_radians()) * Vec3::X);
-                g.line(tip + axis * ph + d * pr, tip + axis * h + d * rr, color);
+    // A milling tool as a solid (its flutes, shank, holder and arbor), one mesh an operation,
+    // moved to the tip and turned to the axis.
+    let at = Transform {
+        translation: tip,
+        rotation: Quat::from_rotation_arc(Vec3::Z, axis),
+        scale: Vec3::ONE,
+    };
+    match &mut *tool_slot {
+        Some((e, first)) if q_tool.contains(*e) => {
+            if *first != op.first {
+                *first = op.first;
+                commands
+                    .entity(*e)
+                    .insert(Mesh3d(meshes.add(solid::tool_mesh(tool))));
             }
-        }
-        prev = Some((rr, h));
-    }
-    let top = tip + axis * flute;
-    g.circle(Isometry3d::new(top, iso.rotation), r, color);
-    for a in [0.0f32, 90.0, 180.0, 270.0] {
-        let d = iso.rotation * (Quat::from_rotation_z(a.to_radians()) * Vec3::X);
-        g.line(
-            tip + axis * prev.map_or(0.0, |x| x.1) + d * r,
-            top + d * r,
-            color,
-        );
-    }
-    let shank = tip + axis * (tool.overall_length as f32).max(flute);
-    g.line(top, shank, color);
-    if s.mode == Mode::Simulate
-        && let Some(h) = &tool.holder
-    {
-        // The holder from the end of the stick-out.
-        let hc = Color::srgb_u8(0x9a, 0x6b, 0x2e);
-        let mut last: Option<[f64; 2]> = None;
-        for q in &h.points {
-            let c = shank + axis * q[1] as f32;
-            g.circle(Isometry3d::new(c, iso.rotation), q[0] as f32, hc);
-            if let Some(lp) = last {
-                for a in [0.0f32, 90.0, 180.0, 270.0] {
-                    let d = iso.rotation * (Quat::from_rotation_z(a.to_radians()) * Vec3::X);
-                    g.line(
-                        shank + axis * lp[1] as f32 + d * lp[0] as f32,
-                        c + d * q[0] as f32,
-                        hc,
-                    );
+            if let Ok((mut tf, mut vis)) = q_tool.get_mut(*e) {
+                if *tf != at {
+                    *tf = at;
+                }
+                if *vis != Visibility::Inherited {
+                    *vis = Visibility::Inherited;
                 }
             }
-            last = Some(*q);
+        }
+        slot => {
+            let material = tool_mat
+                .get_or_insert_with(|| shading.add(PartShading::new(false, false)))
+                .clone();
+            let e = commands
+                .spawn((
+                    Name::new("cam-preview-tool"),
+                    PreviewTool,
+                    Mesh3d(meshes.add(solid::tool_mesh(tool))),
+                    MeshMaterial3d(material),
+                    at,
+                    Visibility::Inherited,
+                    Pickable::IGNORE,
+                    DespawnOnExit(AppState::Document),
+                ))
+                .id();
+            *slot = Some((e, op.first));
         }
     }
 }
+
+/// The preview's tool in the view.
+#[derive(Component)]
+struct PreviewTool;
+
+fn hide_tool(q: &mut Query<(&mut Transform, &mut Visibility), With<PreviewTool>>) {
+    for (_, mut vis) in q.iter_mut() {
+        if *vis != Visibility::Hidden {
+            *vis = Visibility::Hidden;
+        }
+    }
+}
+
+/// The solid stock of a run that leans its tool ([`solid`]).
+#[derive(Component)]
+struct SolidMesh;
+
+/// The stage of a solid run's stock that is the uncut stock.
+const BLANK: usize = usize::MAX;
 
 #[derive(Component)]
 struct VerifyMesh;
@@ -1067,14 +1373,61 @@ fn sync_stock_mesh(
     mut materials: ResMut<Assets<StandardMaterial>>,
     q: Query<Entity, With<VerifyMesh>>,
     mut mat: Local<Option<Handle<StandardMaterial>>>,
+    mut shading: ResMut<Assets<PartShading>>,
+    q_solid: Query<Entity, With<SolidMesh>>,
+    mut solid_mat: Local<Option<Handle<PartShading>>>,
+    mut solid_shown: Local<Option<usize>>,
     mut commands: Commands,
 ) {
     let Some(mut s) = state else {
+        for e in q.iter().chain(&q_solid) {
+            commands.entity(e).despawn();
+        }
+        *solid_shown = None;
+        return;
+    };
+    // A run simulated solid: the stock the last finished operation left, the uncut stock
+    // until there is one ([`BLANK`]).
+    if s.solid && s.mode != Mode::BackPlot {
+        let stage =
+            solid::stage_shown(s.solid_stages.len(), s.ops.len(), s.ops_done()).unwrap_or(BLANK);
+        if *solid_shown != Some(stage) || q_solid.is_empty() {
+            let mesh = match s.solid_stages.get(stage) {
+                Some(m) => solid::stock_mesh(m, &s.frame),
+                None => solid::blank_mesh(&s.solid_blank),
+            };
+            let handle = meshes.add(mesh);
+            match q_solid.iter().next() {
+                Some(e) => {
+                    commands.entity(e).insert(Mesh3d(handle));
+                }
+                None => {
+                    let m = solid_mat
+                        .get_or_insert_with(|| shading.add(PartShading::new(false, false)))
+                        .clone();
+                    commands.spawn((
+                        Name::new("cam-verify-solid-stock"),
+                        SolidMesh,
+                        Mesh3d(handle),
+                        MeshMaterial3d(m),
+                        Transform::default(),
+                        Pickable::IGNORE,
+                        DespawnOnExit(AppState::Document),
+                    ));
+                }
+            }
+            *solid_shown = Some(stage);
+        }
         for e in &q {
             commands.entity(e).despawn();
         }
+        s.mesh_dirty = true;
         return;
-    };
+    }
+    for e in &q_solid {
+        commands.entity(e).despawn();
+    }
+    *solid_shown = None;
     let at_end = s.t >= s.total() - 1e-9;
     let sheet = s.beam && s.sheet.is_some() && at_end;
     if s.mode == Mode::BackPlot || (s.map.is_none() && !sheet) {
@@ -1230,4 +1583,28 @@ fn height_mesh(map: &HeightMap, part: Option<&HeightMap>, top: f32, frame: &Fram
         }
     }
     mesh
+}
+
+#[cfg(test)]
+mod tests {
+    use super::machine_warning_line;
+
+    /// The readout's second line: nothing without warnings, the first three, then how many
+    /// more.
+    #[test]
+    fn the_readout_lists_the_first_machine_warnings() {
+        assert_eq!(machine_warning_line(&[]), None);
+        let w: Vec<String> = ["A beyond its travel", "B", "C", "D", "E"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            machine_warning_line(&w[..1]).as_deref(),
+            Some("⚠ A beyond its travel")
+        );
+        assert_eq!(
+            machine_warning_line(&w).as_deref(),
+            Some("⚠ A beyond its travel · B · C · 2 more")
+        );
+    }
 }

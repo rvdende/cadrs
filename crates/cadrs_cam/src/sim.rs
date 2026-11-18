@@ -4,9 +4,16 @@
 //!   cutter along its feed moves. Rapids that would run into material, cuts deeper than the
 //!   tool's flutes (the holder or shank rubbing) and cells cut below the part (gouges) are
 //!   reported, with the material left over the part (excess).
+//! - **Mills with the tool at any angle** ([`simulate_mill_solid`]): a height map can only be
+//!   cut from above, so a run with a leaning toolpath (4- and 5-axis), a cutter that undercuts
+//!   (a lollipop, a T-slot cutter) or a rotary operation is simulated on a solid stock instead
+//!   ([`crate::dexel`]), with the same reports.
 //! - **Beam machines** ([`simulate_sheet`]): the kerf is the area swept by the beam along its
 //!   cuts; the sheet minus the kerf falls into pieces. Kerf over the part is damage; pieces that
 //!   are parts come free.
+
+mod solid;
+pub use solid::{SolidOp, SolidResult, simulate_mill_solid};
 
 use serde::{Deserialize, Serialize};
 
@@ -677,6 +684,7 @@ mod tests {
                 kind: None,
                 beam: false,
                 minutes: 0.0,
+                axis: None,
             },
             Segment {
                 from: [10.0, 10.0, 15.0],
@@ -685,6 +693,7 @@ mod tests {
                 kind: None,
                 beam: false,
                 minutes: 0.1,
+                axis: None,
             },
             Segment {
                 from: [10.0, 10.0, 5.0],
@@ -693,6 +702,7 @@ mod tests {
                 kind: None,
                 beam: false,
                 minutes: 0.0,
+                axis: None,
             },
         ];
         let r = simulate_mill(
@@ -717,6 +727,7 @@ mod tests {
             kind: None,
             beam: false,
             minutes: 0.01,
+            axis: None,
         }
     }
 
@@ -898,6 +909,7 @@ mod tests {
             kind: feed.then_some(crate::toolpath::FeedKind::Cut),
             beam: false,
             minutes: 0.0,
+            axis: None,
         };
         // Seen from +X (its X the model's Y, its Y the model's Z, its Z the model's X − 40):
         // passes 5 deep over the end, z 10 and up.

@@ -8,7 +8,7 @@
 //! [`connector`]s, and groups), placed by the [`solver`]; **subassembly** instances (P3B.4,
 //! [`InstanceSource::Assembly`], see [`structure`]) and **folders** in both lists
 //! ([`folders`]); P3B.6: the assembly's own [`crate::properties`] and its **Bill of Materials**
-//! ([`bom`]).
+//! ([`bom`]); #278: its definition as a machine for CAM ([`machine`]).
 //!
 //! Every change goes through the commands in [`commands`] (one undo step each).
 //!
@@ -24,6 +24,7 @@ pub mod explode;
 pub mod folders;
 pub mod interference;
 pub mod items;
+pub mod machine;
 pub mod managed_context;
 pub mod mate;
 pub mod positions;
@@ -452,6 +453,10 @@ pub struct Assembly {
     /// Its **Items** (P3B.8, A1.7, [`items`]): BOM-only items with no geometry.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<items::Item>,
+    /// The assembly as a machine CAM can drive (#278, [`machine`]): its mounts, axes and
+    /// controller. `None`: an ordinary assembly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<Box<machine::MachineDef>>,
 }
 
 impl Assembly {
@@ -466,6 +471,7 @@ impl Assembly {
             && self.named_positions.is_empty()
             && self.exploded_views.is_empty()
             && self.items.is_empty()
+            && self.machine.is_none()
     }
 
     pub fn local_connector(

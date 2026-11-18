@@ -10,6 +10,8 @@
 //! - [`model`]: the parts in a setup's coordinates: triangles, exact faces, edges, holes and
 //!   sections (the studio fills them from the kernel).
 //! - [`tool`], [`machine`]: cutters and beams, the tool library; the machine catalogue.
+//! - [`cutter`]: a cutter's shape as the pieces of its revolved profile (form tools too), and
+//!   a mesh of a tool to draw.
 //! - [`strategy`]: the toolpath patterns (face, roughing, profiles, chamfers, engraving,
 //!   flatlands, 3D finishing, drilling, boring; laser, plasma and waterjet cutting, etching and
 //!   filling) and their linking.
@@ -17,16 +19,23 @@
 //! - [`dropcutter`]: the exact drop-cutter the 3D finishing patterns follow the surfaces with.
 //! - [`heightmap`], [`sim`]: the in-process stock (a Z-map), gouge and collision checks,
 //!   and the kerf simulation of sheet cutting.
+//! - [`dexel`]: the in-process stock as a solid (three grids of rays), cut by a tool at any
+//!   angle: what 4- and 5-axis toolpaths and undercutting cutters are simulated on.
 //! - [`post`]: G-code for Fanuc, Haas-style, LinuxCNC, GRBL and Mach3 controllers.
 //!
 //! Lengths are mm, feeds mm/min, angles degrees unless a name says otherwise.
 
+pub mod collide;
+pub mod cutter;
+pub mod dexel;
 pub mod dropcutter;
 pub mod feeds;
 pub mod geom;
 pub mod heightmap;
+pub mod kinematics;
 pub mod machine;
 pub mod model;
+pub mod oriented;
 pub mod post;
 pub mod region;
 pub mod sim;

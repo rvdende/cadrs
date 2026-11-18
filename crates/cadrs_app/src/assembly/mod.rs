@@ -56,6 +56,7 @@ pub mod interference;
 pub mod items;
 pub mod linked_context;
 pub mod list;
+pub mod machine_builder;
 pub mod managed_context;
 pub mod mate_dialog;
 pub mod mate_display;
@@ -167,7 +168,10 @@ impl Plugin for AssemblyPlugin {
                 replace_dialog::ReplaceDialogPlugin,
                 where_used::WhereUsedPlugin,
             ))
-            .add_plugins(insert_linked::InsertLinkedPlugin);
+            .add_plugins((
+                insert_linked::InsertLinkedPlugin,
+                machine_builder::MachineBuilderPlugin,
+            ));
     }
 }
 
@@ -344,9 +348,14 @@ fn mark_live(
     drag: Res<drag::InstanceDrag>,
     triad: Res<triad::Triad>,
     playback: Option<Res<animate::Playback>>,
+    builder: Option<Res<machine_builder::MachineBuilder>>,
     mut asm: ResMut<AssemblyParts>,
 ) {
-    let live = drag.dragging() || triad.dragging() || playback.is_some();
+    // (The Machine Builder's jog: while a slider is dragged.)
+    let live = drag.dragging()
+        || triad.dragging()
+        || playback.is_some()
+        || builder.is_some_and(|b| b.dragging);
     if asm.live != live {
         asm.live = live;
     }

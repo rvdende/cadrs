@@ -49,6 +49,7 @@ pub mod icon;
 mod icon_raster;
 pub mod inline_edit;
 pub mod input;
+pub mod jog_slider;
 pub mod list;
 pub mod menu;
 pub mod name_popup;
@@ -148,6 +149,7 @@ pub use input::{
     CaretBlinkOverride, GrowWithText, KeyboardField, TextCancel, TextInput, TextInputField,
     TextSubmit,
 };
+pub use jog_slider::{JogSlider, JogSliderChange, JogSliderState};
 pub use list::{GridItem, ListItem};
 pub use menu::{
     ContextMenuRequested, ContextMenuTarget, Menu, MenuAction, MenuEntry, MenuHeader, MenuItem,
@@ -313,6 +315,7 @@ impl Plugin for CadrsUiPlugin {
             .add_plugins(variable_list::VariableListPlugin)
             .add_plugins(file_picker::FilePickerPlugin)
             .add_plugins(radio::RadioPlugin)
+            .add_plugins(jog_slider::JogSliderPlugin)
             .add_plugins(responsive::ResponsivePlugin)
             .add_plugins(progress::ProgressPlugin)
             .add_plugins(entry_list::EntryListPlugin)

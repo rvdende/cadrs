@@ -113,21 +113,44 @@ impl Draft {
                 }
                 _ => {}
             },
-            Draft::Machine { .. } => self.set_machine(key, v),
+            Draft::Machine { .. } => self.set_machine(world, key, v),
             Draft::Setup { setup, .. } => match (key, v) {
                 ("name", Value::Text(t)) => setup.name = t.clone(),
                 ("program", Value::Number(n)) => setup.program_number = n.clamp(1.0, 9999.0) as u32,
                 ("mating", Value::Index(i)) => {
-                    setup.mating = if *i == 1 {
-                        Mating::Manual([0.0; 3])
-                    } else {
-                        Mating::Automatic
+                    setup.mating = match (*i, setup.mating) {
+                        // (Chosen again: as it was.)
+                        (1, m @ Mating::Manual(_)) | (2, m @ Mating::Mount { .. }) => m,
+                        (1, _) => Mating::Manual([0.0; 3]),
+                        // Until a face is picked or numbers typed: the setup's own origin
+                        // and axes on the mount's.
+                        (2, _) => Mating::Mount {
+                            origin: [0.0; 3],
+                            z: [0.0, 0.0, 1.0],
+                            x: [1.0, 0.0, 0.0],
+                        },
+                        _ => Mating::Automatic,
                     }
                 }
                 (k, Value::Number(n)) if k.starts_with("mate-") => {
                     if let (Mating::Manual(o), Ok(i)) = (&mut setup.mating, k[5..].parse::<usize>())
                     {
                         o[i.min(2)] = *n;
+                    }
+                }
+                // "mount-o-1": the mount frame's origin (o), Z or X, and which component.
+                (k, Value::Number(n)) if k.starts_with("mount-") => {
+                    if let Mating::Mount { origin, z, x } = &mut setup.mating
+                        && let Some((which, i)) = k["mount-".len()..].split_once('-')
+                        && let Ok(i) = i.parse::<usize>()
+                        && i < 3
+                    {
+                        match which {
+                            "o" => origin[i] = *n,
+                            "z" => z[i] = *n,
+                            "x" => x[i] = *n,
+                            _ => {}
+                        }
                     }
                 }
                 _ => {
@@ -147,7 +170,10 @@ impl Draft {
     }
 
     /// A changed field of the Machine draft.
-    fn set_machine(&mut self, key: &str, v: &Value) {
+    fn set_machine(&mut self, world: &mut World, key: &str, v: &Value) {
+        if self.set_machine_source(world, key, v) {
+            return;
+        }
         let Draft::Machine {
             machine,
             by_kind,
@@ -157,78 +183,69 @@ impl Draft {
         else {
             return;
         };
-        let s = &mut machine.post;
-        match (key, v) {
-            ("by-kind", Value::Bool(b)) => *by_kind = *b,
-            ("machine", Value::Index(i)) => {
-                let cat = catalog();
-                let mut order: Vec<usize> = (0..cat.len()).collect();
-                if *by_kind {
-                    order.sort_by_key(|i| index_of(&MachineKind::ALL, cat[*i].kind));
-                } else {
-                    order.sort_by_key(|i| cat[*i].title());
-                }
-                if let Some(&k) = order.get(*i) {
-                    **machine = cat[k].clone();
-                    *from = Some(k);
-                }
-            }
-            (k, Value::Number(n)) if k.starts_with("travel-") => {
-                if let Ok(i) = k[7..].parse::<usize>() {
-                    machine.travel[i.min(2)] = *n;
-                }
-            }
-            ("rapid", Value::Number(n)) => machine.rapid_rate = *n,
-            ("max-feed", Value::Number(n)) => machine.max_feed = *n,
-            ("max-spindle", Value::Number(n)) => machine.max_spindle = *n,
-            ("changer", Value::Bool(b)) => machine.tool_changer = *b,
-            ("indexing", Value::Bool(b)) => {
-                machine.indexing = b.then_some(cadrs_core::cam::cadrs_cam::Indexing {
-                    max_tilt: machine.indexing.map_or(110.0, |i| i.max_tilt),
-                    rotary: machine.indexing.map_or(['A', 'C'], |i| i.rotary),
-                })
-            }
-            ("rotary", Value::Index(i)) => {
-                if let Some(ix) = &mut machine.indexing {
-                    ix.rotary = if *i == 1 { ['B', 'C'] } else { ['A', 'C'] };
-                }
-            }
-            ("max-tilt", Value::Number(n)) => {
-                if let Some(i) = &mut machine.indexing {
-                    i.max_tilt = n.clamp(0.0, 180.0)
-                }
-            }
-            ("unit", Value::Index(i)) => {
-                s.output_unit = if *i == 1 { LenUnit::Inch } else { LenUnit::Mm }
-            }
-            ("adv-wp", Value::Bool(b)) => s.advanced_work_planes = *b,
-            ("seq", Value::Bool(b)) => s.sequence_numbers = *b,
-            ("block-start", Value::Number(n)) => s.block_start = n.max(0.0) as u32,
-            ("block-inc", Value::Number(n)) => s.block_increment = n.max(1.0) as u32,
-            ("tools-only", Value::Bool(b)) => s.numbers_at_tools_only = *b,
-            ("rapid-pos", Value::Bool(b)) => s.rapid_positioning = *b,
-            ("post-rapid", Value::Number(n)) => s.rapid_rate = n.max(1.0),
-            ("arcs", Value::Bool(b)) => s.output_arcs = *b,
-            ("helices", Value::Bool(b)) => s.output_helices = *b,
-            ("decimals", Value::Number(n)) => s.decimals = n.clamp(0.0, 6.0) as u32,
-            ("dec-point", Value::Bool(b)) => s.decimal_point = *b,
-            ("ret-tool", Value::Bool(b)) => s.force_retract_on_tool_change = *b,
-            ("ret-plane", Value::Bool(b)) => s.force_retract_on_plane_change = *b,
-            ("ret-end", Value::Bool(b)) => s.force_retract_on_end = *b,
-            ("cy-drill", Value::Bool(b)) => s.canned_drill = *b,
-            ("cy-peck", Value::Bool(b)) => s.canned_peck = *b,
-            ("cy-tap", Value::Bool(b)) => s.canned_tap = *b,
-            ("cy-chip", Value::Bool(b)) => s.canned_chip_break = *b,
-            ("laser-mode", Value::Index(i)) => {
-                s.laser_mode = if *i == 1 {
-                    LaserMode::Constant
-                } else {
-                    LaserMode::Dynamic
-                }
-            }
-            ("comments", Value::Bool(b)) => s.comments = *b,
-            _ => {}
+        set_controller(machine, by_kind, from, key, v);
+    }
+
+    /// A change of where the Machine draft's machine comes from: the catalogue, an assembly
+    /// of this document set up as a machine (followed at its workspace), or one of another
+    /// document at a version ([`MachineFrom`]). The draft then shows that assembly's machine.
+    /// Whether the change was one of these.
+    fn set_machine_source(&mut self, world: &mut World, key: &str, v: &Value) -> bool {
+        let Draft::Machine {
+            machine,
+            from_assembly,
+            source,
+            other,
+            ..
+        } = self
+        else {
+            return false;
+        };
+        if !matches!(
+            key,
+            "machine-from" | "machine-document" | "machine-assembly" | "machine-version"
+        ) {
+            return false;
         }
+        let chosen = match (key, v) {
+            // To the catalogue: the machine stays as it is, without the assembly's axes.
+            ("machine-from", Value::Index(0)) => {
+                *from_assembly = false;
+                if source.take().is_some() {
+                    machine.chain = None;
+                }
+                other.links.clear();
+                other.taken = None;
+                return true;
+            }
+            // From an assembly: the one it had, else the first that makes a machine.
+            ("machine-from", Value::Index(_)) => {
+                *from_assembly = true;
+                if source.is_some() {
+                    return true;
+                }
+                let document = other.document;
+                other.set_document(world, document)
+            }
+            ("machine-document", Value::Index(i)) => other.set_document(world, *i),
+            ("machine-assembly", Value::Index(i)) => other.set_assembly(world, *i),
+            ("machine-version", Value::Index(i)) => other.set_version(world, *i, source.as_ref()),
+            _ => return false,
+        };
+        // (With no assembly set up there the dialog says so, and how to.)
+        match chosen {
+            Some(src) => {
+                let doc = &world.resource::<ActiveDocument>().doc;
+                if let Ok((m, _)) = other.machine(doc, &src) {
+                    **machine = m;
+                }
+                *source = Some(src);
+            }
+            // Another document, or a version of it, without a machine: nothing is chosen.
+            None if key != "machine-from" && key != "machine-assembly" => *source = None,
+            None => {}
+        }
+        true
     }
 
     /// A changed field of the Tool draft.
@@ -318,6 +335,9 @@ impl Draft {
             ("corner", Value::Number(n)) => tool.corner_radius = *n,
             ("angle", Value::Number(n)) => tool.angle = *n,
             ("tip", Value::Number(n)) => tool.tip_diameter = *n,
+            ("neck", Value::Number(n)) => tool.neck_diameter = *n,
+            ("profile-radius", Value::Number(n)) => tool.profile_radius = *n,
+            (k, v) if k.starts_with("form-") => set_form(tool, k, v),
             ("pitch", Value::Number(n)) => tool.pitch = *n,
             ("cut-len", Value::Number(n)) => tool.cutting_length = *n,
             ("overall", Value::Number(n)) => tool.overall_length = *n,
@@ -411,6 +431,7 @@ impl Draft {
             return;
         };
         let machine = machine_of(ctx_cam, *setup);
+        let rotaries = rotaries_of(ctx_cam, *setup);
         let tool = tool_above(ctx_cam, *setup, op.id);
         let op_id = op.id;
         let name_edited = matches!(&op.kind, OpKind::Toolpath(t) if t.name_edited);
@@ -425,10 +446,11 @@ impl Draft {
                 renamed = Some(s.clone());
             }
             ("template", Value::Index(i)) => {
-                if let Some(t) = i
-                    .checked_sub(1)
-                    .and_then(|i| usable_templates(ctx_cam, tk, machine).get(i).copied())
-                {
+                if let Some(t) = i.checked_sub(1).and_then(|i| {
+                    usable_templates(ctx_cam, tk, machine, rotaries)
+                        .get(i)
+                        .copied()
+                }) {
                     let ty = t.params.pattern.type_of();
                     let fallback = Tool::new(tk, 6.0);
                     t.apply_to(p, tool.as_ref().unwrap_or(&fallback), machine);
@@ -451,13 +473,15 @@ impl Draft {
                 toast(world, &tr_with("cam-saved-template", &[("name", &name)]));
             }
             ("type", Value::Index(i)) => {
-                let types: Vec<Type> = Type::ALL
-                    .into_iter()
-                    .filter(|t| !Pattern::available(*t, tk, machine).is_empty())
-                    .collect();
+                // (The lists as the dialog shows them: the operation's own pattern is in them
+                // though the machine has lost the axes for it.)
+                let types = offered_types(tk, machine, rotaries, Some(p.pattern));
                 if let Some(t) = types.get(*i) {
                     *kind = *t;
-                    let pat = Pattern::available(*t, tk, machine)[0];
+                    let pat = offered_patterns(*t, tk, machine, rotaries, None)
+                        .first()
+                        .copied()
+                        .unwrap_or(p.pattern);
                     if let Some(tool) = &tool {
                         let drive = std::mem::take(&mut p.drive);
                         *p = Params::new(pat, tool, machine);
@@ -481,7 +505,7 @@ impl Draft {
                 }
             }
             ("pattern", Value::Index(i)) => {
-                let pats = Pattern::available(*kind, tk, machine);
+                let pats = offered_patterns(*kind, tk, machine, rotaries, Some(p.pattern));
                 if let (Some(pat), Some(tool)) = (pats.get(*i), &tool) {
                     let drive = std::mem::take(&mut p.drive);
                     *p = Params::new(*pat, tool, machine);
@@ -566,17 +590,92 @@ impl Draft {
             ("lead-in", Value::Index(i)) => p.links.lead_in = LeadKind::ALL[(*i).min(2)],
             ("lead-out", Value::Index(i)) => p.links.lead_out = LeadKind::ALL[(*i).min(2)],
             ("lead-r", Value::Number(n)) => p.links.lead_radius = n.max(0.0),
-            ("axis", Value::Index(i)) => {
-                use cadrs_core::cam::cadrs_cam::strategy::ToolAxis;
-                p.axis = if *i == 0 {
-                    ToolAxis::WorkPlane
+            ("any-axis", Value::Bool(b)) => p.cycle.any_axis = *b,
+            ("rot-style", Value::Index(i)) => {
+                use cadrs_core::cam::cadrs_cam::strategy::RotaryStyle;
+                p.rotary.style = RotaryStyle::ALL[(*i).min(3)]
+            }
+            ("rot-axis", Value::Index(i)) => {
+                p.rotary.axis = if *i == 0 {
+                    None
                 } else {
-                    // Until a face is picked: the work plane's own Z.
-                    match p.axis {
-                        ToolAxis::Direction(z) => ToolAxis::Direction(z),
-                        ToolAxis::WorkPlane => ToolAxis::Direction(op_axis(ctx_cam, *setup, op_id)),
+                    // Until one is picked: along the work plane's X through its origin.
+                    Some(p.rotary.axis.unwrap_or(([0.0; 3], [1.0, 0.0, 0.0])))
+                }
+            }
+            ("rot-offset", Value::Number(n)) => p.rotary.offset = *n,
+            ("rot-whole", Value::Bool(b)) => {
+                p.rotary.range = if *b {
+                    None
+                } else {
+                    Some(p.rotary.range.unwrap_or([0.0, 50.0]))
+                }
+            }
+            ("rot-from", Value::Number(n)) => {
+                if let Some(r) = &mut p.rotary.range {
+                    r[0] = *n;
+                }
+            }
+            ("rot-to", Value::Number(n)) => {
+                if let Some(r) = &mut p.rotary.range {
+                    r[1] = *n;
+                }
+            }
+            ("rot-start", Value::Number(n)) => p.rotary.start_angle = *n,
+            ("rot-sweep", Value::Number(n)) => p.rotary.sweep = n.clamp(-360.0, 360.0),
+            ("rot-lead", Value::Number(n)) => p.rotary.lead = n.max(0.0),
+            ("rot-left", Value::Bool(b)) => p.rotary.left_hand = *b,
+            ("rot-core", Value::Number(n)) => p.rotary.core = n.max(0.0),
+            ("axis", Value::Index(i)) => {
+                use cadrs_core::cam::cadrs_cam::strategy::{AxisMode, ToolAxis};
+                match *i {
+                    0 => {
+                        p.axis = ToolAxis::WorkPlane;
+                        p.tilt.mode = AxisMode::Fixed;
                     }
-                };
+                    1 => {
+                        p.tilt.mode = AxisMode::Fixed;
+                        // Until a face is picked: the work plane's own Z.
+                        p.axis = match p.axis {
+                            ToolAxis::Direction(z) => ToolAxis::Direction(z),
+                            ToolAxis::WorkPlane => {
+                                ToolAxis::Direction(op_axis(ctx_cam, *setup, op_id))
+                            }
+                        };
+                    }
+                    // The tool leans as it cuts, from the work plane's own Z.
+                    k => {
+                        p.axis = ToolAxis::WorkPlane;
+                        p.tilt.mode = match (k, p.tilt.mode) {
+                            (2, _) => AxisMode::Normal,
+                            // (A point or a line it had stays; until one is picked: the
+                            // work plane's origin, a point 100 mm over it, its X.)
+                            (3, AxisMode::FromPoint(q) | AxisMode::TowardPoint(q)) => {
+                                AxisMode::FromPoint(q)
+                            }
+                            (3, _) => AxisMode::FromPoint([0.0; 3]),
+                            (4, AxisMode::FromPoint(q) | AxisMode::TowardPoint(q)) => {
+                                AxisMode::TowardPoint(q)
+                            }
+                            (4, _) => AxisMode::TowardPoint([0.0, 0.0, 100.0]),
+                            (_, m @ AxisMode::ThroughLine { .. }) => m,
+                            _ => AxisMode::ThroughLine {
+                                point: [0.0; 3],
+                                dir: [1.0, 0.0, 0.0],
+                            },
+                        };
+                    }
+                }
+            }
+            ("tilt-lead", Value::Number(n)) => p.tilt.lead = n.clamp(-90.0, 90.0),
+            ("tilt-side", Value::Number(n)) => p.tilt.side = n.clamp(-90.0, 90.0),
+            ("tilt-max", Value::Number(n)) => p.tilt.max_tilt = n.clamp(0.0, 180.0),
+            ("tilt-smooth", Value::Number(n)) => p.tilt.smoothing = n.max(0.0),
+            (k @ ("tilt-px" | "tilt-py" | "tilt-pz"), Value::Number(n)) => {
+                use cadrs_core::cam::cadrs_cam::strategy::AxisMode;
+                if let AxisMode::FromPoint(q) | AxisMode::TowardPoint(q) = &mut p.tilt.mode {
+                    q[usize::from(k.as_bytes()[6] - b'x')] = *n;
+                }
             }
             ("coll", Value::Bool(b)) => p.collision.check = *b,
             ("coll-shank", Value::Number(n)) => p.collision.shank_clearance = n.max(0.0),
@@ -648,17 +747,20 @@ impl Draft {
         }
     }
 
-    /// Takes a pick in the view.
+    /// Takes a pick in the view; whether it was one `key` could use (a pick list that takes
+    /// one pick goes on waiting otherwise).
     pub(super) fn pick(
         &mut self,
         ctx: &Ctx,
         key: &str,
         pick: Pick,
         frame: Option<cadrs_core::cam::cadrs_cam::Frame>,
-    ) {
+    ) -> bool {
         match self {
             Draft::Job { job, .. } => {
-                let Some(part) = pick.part() else { return };
+                let Some(part) = pick.part() else {
+                    return false;
+                };
                 let list = if key == "workholdings" {
                     &mut job.workholdings
                 } else {
@@ -670,23 +772,73 @@ impl Draft {
                     }
                     None => list.push(part),
                 }
+                true
+            }
+            Draft::Setup { setup, job, .. } if key == "mount-face" => {
+                // The face that sits on the mount: the frame's origin at its centre, its Z
+                // into the part (against the face's normal, as a table's mount looks up into
+                // the work on it) and its X along the face, in the setup's coordinates.
+                let (Some(j), Some((centre, normal, along))) =
+                    (ctx.cam.job(*job), face_plane(ctx, pick))
+                else {
+                    return false;
+                };
+                let sf = cadrs_core::cam::program::setup_frame(ctx.cam, j, setup, ctx.parts);
+                // (Without the last bits a change of coordinates leaves: 0, not 6e-17.)
+                let tidy = |v: [f64; 3]| v.map(|c| (c * 1e9).round() / 1e9 + 0.0);
+                setup.mating = Mating::Mount {
+                    origin: tidy(sf.to_local(centre)),
+                    z: tidy(sf.dir_to_local(normal.map(|c| -c))),
+                    x: tidy(sf.dir_to_local(along)),
+                };
+                true
             }
             Draft::Setup { setup, .. } => face_z(&mut setup.wcs, ctx, pick),
-            Draft::WorkPlane { op, .. } => {
-                if let OpKind::WorkPlane(w) = &mut op.kind {
-                    face_z(w, ctx, pick);
-                }
-            }
+            Draft::WorkPlane { op, .. } => match &mut op.kind {
+                OpKind::WorkPlane(w) => face_z(w, ctx, pick),
+                _ => false,
+            },
             Draft::Toolpath { op, kind, .. } => {
+                use cadrs_core::cam::cadrs_cam::strategy::{AxisMode, ToolAxis};
                 let OpKind::Toolpath(tp) = &mut op.kind else {
-                    return;
+                    return false;
                 };
-                if key == "axis-face" {
-                    if let Some(n) = face_normal(ctx, pick) {
-                        tp.params.axis =
-                            cadrs_core::cam::cadrs_cam::strategy::ToolAxis::Direction(n);
+                match key {
+                    "axis-face" => {
+                        let Some(n) = face_normal(ctx, pick) else {
+                            return false;
+                        };
+                        tp.params.axis = ToolAxis::Direction(n);
+                        return true;
                     }
-                    return;
+                    // A vertex the tool leans away from or toward, in the operation's frame.
+                    "axis-point" => {
+                        let (Some(q), Some(fr)) = (picked_point(ctx, pick), frame) else {
+                            return false;
+                        };
+                        let q = fr.to_local(q);
+                        tp.params.tilt.mode = match tp.params.tilt.mode {
+                            AxisMode::TowardPoint(_) => AxisMode::TowardPoint(q),
+                            _ => AxisMode::FromPoint(q),
+                        };
+                        return true;
+                    }
+                    // A line (a straight edge, a cylinder's axis) in the operation's frame:
+                    // the one the tool leans through, or the one a rotary pattern turns about.
+                    "axis-line" | "rot-axis-pick" => {
+                        let (Some((point, dir)), Some(fr)) = (picked_line(ctx, pick), frame) else {
+                            return false;
+                        };
+                        let (point, dir) =
+                            (fr.to_local(point), toward_positive(fr.dir_to_local(dir)));
+                        if key == "axis-line" {
+                            tp.params.tilt.mode = AxisMode::ThroughLine { point, dir };
+                        } else {
+                            tp.params.rotary.axis = Some((point, dir));
+                        }
+                        return true;
+                    }
+                    _ => {}
                 }
                 let d = &mut tp.params.drive;
                 let toggle = |v: &mut Vec<String>, k: String| match v.iter().position(|x| *x == k) {
@@ -738,10 +890,11 @@ impl Draft {
                             }
                         }
                     }
-                    _ => {}
+                    _ => return false,
                 }
+                true
             }
-            _ => {}
+            _ => false,
         }
     }
 
@@ -793,10 +946,39 @@ impl Draft {
                     vec![Edit::SetJob(job.clone())]
                 }
             }
-            Draft::Machine { job, machine, .. } => vec![Edit::SetMachine {
+            // From an assembly: its machine is taken as it is now, and followed from there.
+            // (One of another document comes with its frozen copies.)
+            Draft::Machine {
+                job,
+                from_assembly: true,
+                source: Some(source),
+                other,
+                ..
+            } => vec![Edit::SetMachineSource {
                 job: *job,
-                machine: Some(machine.clone()),
+                source: Some(Box::new(source.clone())),
+                links: other.links.clone(),
             }],
+            // From the catalogue: a job that followed an assembly lets go of it first.
+            Draft::Machine { job, machine, .. } => {
+                let followed = ctx
+                    .cam
+                    .job(*job)
+                    .is_some_and(|j| j.machine_source.is_some());
+                let mut edits = Vec::new();
+                if followed {
+                    edits.push(Edit::SetMachineSource {
+                        job: *job,
+                        source: None,
+                        links: Vec::new(),
+                    });
+                }
+                edits.push(Edit::SetMachine {
+                    job: *job,
+                    machine: Some(machine.clone()),
+                });
+                edits
+            }
             Draft::Setup { job, setup, is_new } => {
                 if *is_new {
                     vec![Edit::AddSetup {
@@ -851,9 +1033,20 @@ impl Draft {
                 faces: true,
                 ..none
             },
-            (_, "p-face" | "axis-face") => crate::parts::PickFilter {
+            (_, "p-face" | "axis-face" | "mount-face") => crate::parts::PickFilter {
                 faces: true,
                 planar_only: true,
+                ..none
+            },
+            // A vertex (they are picked with the edges).
+            (_, "axis-point") => crate::parts::PickFilter {
+                edges: true,
+                ..none
+            },
+            // A cylindrical face or a straight edge.
+            (_, "axis-line" | "rot-axis-pick") => crate::parts::PickFilter {
+                faces: true,
+                edges: true,
                 ..none
             },
             (
@@ -906,10 +1099,10 @@ impl Draft {
     }
 }
 
-/// Points a work plane's Z along a picked planar face's normal.
-pub(super) fn face_z(w: &mut WorkPlane, ctx: &Ctx, pick: Pick) {
+/// Points a work plane's Z along a picked planar face's normal (whether the pick was one).
+pub(super) fn face_z(w: &mut WorkPlane, ctx: &Ctx, pick: Pick) -> bool {
     let Some(n) = face_normal(ctx, pick) else {
-        return;
+        return false;
     };
     w.z = n;
     if (w.z[0] * w.x[0] + w.z[1] * w.x[1] + w.z[2] * w.x[2]).abs() > 0.9 {
@@ -919,6 +1112,17 @@ pub(super) fn face_z(w: &mut WorkPlane, ctx: &Ctx, pick: Pick) {
             [1.0, 0.0, 0.0]
         };
     }
+    true
+}
+
+/// A picked line's direction the way round that points along the positive side of the axis
+/// it is nearest to (an edge or a cylinder gives its line either way round): distances along
+/// it then count up along that axis.
+fn toward_positive(d: [f64; 3]) -> [f64; 3] {
+    let k = (0..3)
+        .max_by(|a, b| d[*a].abs().total_cmp(&d[*b].abs()))
+        .unwrap_or(0);
+    if d[k] < 0.0 { d.map(|c| -c + 0.0) } else { d }
 }
 
 pub(super) fn export_library(world: &mut World, cam: &CamStudio) {
@@ -998,4 +1202,166 @@ pub(super) fn import_library(world: &mut World, path: std::path::PathBuf) {
         }
         Err(e) => toast(world, &e),
     }
+}
+
+/// A changed field of [`controller_fields`]: the catalogue machine chosen (`from`: its place
+/// in the catalogue), or one of the machine's own settings.
+pub(crate) fn set_controller(
+    machine: &mut Machine,
+    by_kind: &mut bool,
+    from: &mut Option<usize>,
+    key: &str,
+    v: &Value,
+) {
+    use cadrs_core::cam::cadrs_cam::Dialect;
+    if let ("dialect", Value::Index(i)) = (key, v) {
+        machine.dialect = Dialect::ALL[(*i).min(Dialect::ALL.len() - 1)];
+        return;
+    }
+    let s = &mut machine.post;
+    match (key, v) {
+        ("by-kind", Value::Bool(b)) => *by_kind = *b,
+        ("machine", Value::Index(i)) => {
+            let cat = catalog();
+            let mut order: Vec<usize> = (0..cat.len()).collect();
+            if *by_kind {
+                order.sort_by_key(|i| index_of(&MachineKind::ALL, cat[*i].kind));
+            } else {
+                order.sort_by_key(|i| cat[*i].title());
+            }
+            if let Some(&k) = order.get(*i) {
+                *machine = cat[k].clone();
+                *from = Some(k);
+            }
+        }
+        (k, Value::Number(n)) if k.starts_with("travel-") => {
+            if let Ok(i) = k[7..].parse::<usize>() {
+                machine.travel[i.min(2)] = *n;
+            }
+        }
+        ("rapid", Value::Number(n)) => machine.rapid_rate = *n,
+        ("max-feed", Value::Number(n)) => machine.max_feed = *n,
+        ("max-spindle", Value::Number(n)) => machine.max_spindle = *n,
+        ("changer", Value::Bool(b)) => machine.tool_changer = *b,
+        ("indexing", Value::Bool(b)) => {
+            machine.indexing = b.then_some(cadrs_core::cam::cadrs_cam::Indexing {
+                max_tilt: machine.indexing.map_or(110.0, |i| i.max_tilt),
+                rotary: machine.indexing.map_or(['A', 'C'], |i| i.rotary),
+            })
+        }
+        ("rotary", Value::Index(i)) => {
+            if let Some(ix) = &mut machine.indexing {
+                ix.rotary = if *i == 1 { ['B', 'C'] } else { ['A', 'C'] };
+            }
+        }
+        ("max-tilt", Value::Number(n)) => {
+            if let Some(i) = &mut machine.indexing {
+                i.max_tilt = n.clamp(0.0, 180.0)
+            }
+        }
+        ("unit", Value::Index(i)) => {
+            s.output_unit = if *i == 1 { LenUnit::Inch } else { LenUnit::Mm }
+        }
+        ("adv-wp", Value::Bool(b)) => s.advanced_work_planes = *b,
+        ("seq", Value::Bool(b)) => s.sequence_numbers = *b,
+        ("block-start", Value::Number(n)) => s.block_start = n.max(0.0) as u32,
+        ("block-inc", Value::Number(n)) => s.block_increment = n.max(1.0) as u32,
+        ("tools-only", Value::Bool(b)) => s.numbers_at_tools_only = *b,
+        ("rapid-pos", Value::Bool(b)) => s.rapid_positioning = *b,
+        ("post-rapid", Value::Number(n)) => s.rapid_rate = n.max(1.0),
+        ("arcs", Value::Bool(b)) => s.output_arcs = *b,
+        ("helices", Value::Bool(b)) => s.output_helices = *b,
+        ("decimals", Value::Number(n)) => s.decimals = n.clamp(0.0, 6.0) as u32,
+        ("dec-point", Value::Bool(b)) => s.decimal_point = *b,
+        ("ret-tool", Value::Bool(b)) => s.force_retract_on_tool_change = *b,
+        ("ret-plane", Value::Bool(b)) => s.force_retract_on_plane_change = *b,
+        ("ret-end", Value::Bool(b)) => s.force_retract_on_end = *b,
+        ("cy-drill", Value::Bool(b)) => s.canned_drill = *b,
+        ("cy-peck", Value::Bool(b)) => s.canned_peck = *b,
+        ("cy-tap", Value::Bool(b)) => s.canned_tap = *b,
+        ("cy-chip", Value::Bool(b)) => s.canned_chip_break = *b,
+        ("laser-mode", Value::Index(i)) => {
+            s.laser_mode = if *i == 1 {
+                LaserMode::Constant
+            } else {
+                LaserMode::Dynamic
+            }
+        }
+        ("comments", Value::Bool(b)) => s.comments = *b,
+        ("tcp", Value::Bool(b)) => s.rotary.tcp = *b,
+        ("tcp-on", Value::Text(t)) => s.rotary.tcp_on = t.trim().to_string(),
+        ("tcp-off", Value::Text(t)) => s.rotary.tcp_off = t.trim().to_string(),
+        ("tilted-plane", Value::Index(i)) => {
+            use cadrs_core::cam::cadrs_cam::post::TiltedPlane;
+            s.rotary.tilted_plane = if *i == 1 {
+                TiltedPlane::Positions
+            } else {
+                TiltedPlane::Control
+            }
+        }
+        ("rot-feed", Value::Index(i)) => {
+            use cadrs_core::cam::cadrs_cam::post::RotaryFeed;
+            s.rotary.feed = RotaryFeed::ALL[(*i).min(2)]
+        }
+        ("rot-tol", Value::Number(n)) => s.rotary.tolerance = n.clamp(0.0001, 1.0),
+        ("rot-axis-tol", Value::Number(n)) => s.rotary.axis_tolerance = n.clamp(0.001, 10.0),
+        ("rot-retract", Value::Number(n)) => s.rotary.retract = n.max(0.0),
+        ("angle-decimals", Value::Number(n)) => s.rotary.angle_decimals = n.clamp(0.0, 6.0) as u32,
+        _ => {}
+    }
+}
+
+/// A change of a form tool's profile ([`form_fields`]'s keys): a point's radius, height or
+/// bulge, a point removed (two are always left), or one added a step above the last. The
+/// tool's diameter and cutting length follow the profile ([`Tool::set_form`]).
+fn set_form(tool: &mut Tool, key: &str, v: &Value) {
+    let mut profile = tool.form.clone().unwrap_or_default();
+    let index = |prefix: &str| {
+        key.strip_prefix(prefix)
+            .and_then(|i| i.parse::<usize>().ok())
+            .filter(|i| *i < profile.points.len())
+    };
+    match v {
+        Value::Activate if key == "form-add" => {
+            if profile.points.len() >= FormProfile::MAX_POINTS {
+                return;
+            }
+            // Straight up from the last point, by a quarter of the tool's width.
+            let last = profile.points.last().copied().unwrap_or(FormPoint {
+                r: (tool.diameter / 2.0).max(0.5),
+                h: 0.0,
+                bulge: 0.0,
+            });
+            let step = (tool.diameter / 4.0).max(0.5);
+            profile.points.push(FormPoint {
+                h: if profile.points.is_empty() {
+                    0.0
+                } else {
+                    last.h + step
+                },
+                bulge: 0.0,
+                ..last
+            });
+        }
+        Value::Activate => {
+            let Some(i) = index("form-del-") else { return };
+            if profile.points.len() <= 2 {
+                return;
+            }
+            profile.points.remove(i);
+        }
+        Value::Number(n) => {
+            if let Some(i) = index("form-r-") {
+                profile.points[i].r = n.max(0.0);
+            } else if let Some(i) = index("form-h-") {
+                profile.points[i].h = *n;
+            } else if let Some(i) = index("form-b-") {
+                profile.points[i].bulge = *n;
+            } else {
+                return;
+            }
+        }
+        _ => return,
+    }
+    tool.set_form(profile);
 }

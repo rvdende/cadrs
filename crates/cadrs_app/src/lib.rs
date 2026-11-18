@@ -66,6 +66,8 @@ pub mod gear_ui;
 pub mod mcp;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mcp_board;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod mcp_machine;
 pub mod measure;
 pub mod move_document;
 pub mod native_document;

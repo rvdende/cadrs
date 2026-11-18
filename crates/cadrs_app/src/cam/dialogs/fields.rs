@@ -227,6 +227,23 @@ impl Draft {
                     None
                 }
             }
+            Draft::Machine {
+                from_assembly: true,
+                source,
+                other,
+                ..
+            } => match source {
+                None if other.document > 0 => Some(tr("cam-machine-none-in-document")),
+                None => Some(tr("cam-machine-no-assemblies")),
+                // The assembly's own errors keep it from being a machine.
+                Some(s) => other.machine(ctx.doc, s).err().map(|issues| {
+                    issues
+                        .iter()
+                        .find(|i| i.is_error())
+                        .or(issues.first())
+                        .map_or_else(|| tr("cam-machine-not-set-up"), |i| i.text.clone())
+                }),
+            },
             Draft::Machine { machine, .. } => machine.check().err(),
             Draft::Tool { op, .. } => match &op.kind {
                 OpKind::Tool(t) => t.tool.check().err(),
@@ -248,10 +265,17 @@ impl Draft {
                             } else if needs_faces {
                                 Some(tr("cam-pick-faces-to-fill"))
                             } else {
-                                None
+                                rotary_problem(p)
                             }
                         }),
                     }
+                }
+                _ => None,
+            },
+            // A mount frame with no Z says nothing of how the work sits.
+            Draft::Setup { setup, .. } => match setup.mating {
+                Mating::Mount { z, .. } if z.iter().map(|c| c * c).sum::<f64>() < 1e-18 => {
+                    Some(tr("cam-mount-needs-z"))
                 }
                 _ => None,
             },
@@ -343,7 +367,7 @@ impl Draft {
                 )));
             }
             Draft::Job { .. } => self.job_fields(&mut f, ctx, picking),
-            Draft::Machine { .. } => self.machine_fields(&mut f),
+            Draft::Machine { .. } => self.machine_fields(&mut f, ctx),
             Draft::Setup { setup, job, .. } => {
                 f.push(Field::text("name", &tr("cam-setup-name"), &setup.name));
                 f.push(Field::count(
@@ -351,19 +375,53 @@ impl Draft {
                     &tr("cam-program-number"),
                     setup.program_number as i64,
                 ));
-                let man = matches!(setup.mating, Mating::Manual(_));
                 f.push(Field::select(
                     "mating",
                     &tr("cam-machine-mating"),
-                    [tr("cam-automatic"), tr("cam-manual")],
-                    usize::from(man),
+                    [
+                        tr("cam-automatic"),
+                        tr("cam-manual"),
+                        tr("cam-mating-mount"),
+                    ],
+                    match setup.mating {
+                        Mating::Automatic => 0,
+                        Mating::Manual(_) => 1,
+                        Mating::Mount { .. } => 2,
+                    },
                 ));
-                if let Mating::Manual(o) = setup.mating {
-                    for (i, a) in ["cam-offset-x", "cam-offset-y", "cam-offset-z"]
-                        .iter()
-                        .enumerate()
-                    {
-                        f.push(Field::number(&format!("mate-{i}"), &tr(a), o[i], Unit::Mm));
+                match setup.mating {
+                    Mating::Automatic => {}
+                    Mating::Manual(o) => {
+                        for (i, a) in ["cam-offset-x", "cam-offset-y", "cam-offset-z"]
+                            .iter()
+                            .enumerate()
+                        {
+                            f.push(Field::number(&format!("mate-{i}"), &tr(a), o[i], Unit::Mm));
+                        }
+                    }
+                    Mating::Mount { origin, z, x } => {
+                        f.push(Field::picks(
+                            "mount-face",
+                            &tr("cam-mount-face"),
+                            Vec::new(),
+                            picking == Some("mount-face"),
+                        ));
+                        // (Each row: its keys' stem, its label's catalog key, the vector.)
+                        for (k, label, v, unit) in [
+                            ("mount-o", "cam-mount-origin", origin, Unit::Mm),
+                            ("mount-z", "cam-mount-z", z, Unit::None),
+                            ("mount-x", "cam-mount-x", x, Unit::None),
+                        ] {
+                            for (i, a) in ["X", "Y", "Z"].iter().enumerate() {
+                                f.push(Field::number(
+                                    &format!("{k}-{i}"),
+                                    &tr_with(label, &[("axis", a)]),
+                                    v[i],
+                                    unit,
+                                ));
+                            }
+                        }
+                        f.push(Field::note(tr("cam-mount-note")));
                     }
                 }
                 plane_fields(&mut f, &setup.wcs, picking == Some("p-face"), false);
@@ -502,229 +560,34 @@ impl Draft {
     }
 
     /// The Machine draft's fields.
-    fn machine_fields(&self, f: &mut Vec<Field>) {
+    fn machine_fields(&self, f: &mut Vec<Field>, ctx: &Ctx) {
         let Draft::Machine {
-            machine, by_kind, ..
+            job,
+            machine,
+            by_kind,
+            from_assembly,
+            source,
+            other,
+            ..
         } = self
         else {
             return;
         };
-        let cat = catalog();
-        f.push(Field::check(
-            "by-kind",
-            &tr("cam-group-by-machine-type"),
-            *by_kind,
-        ));
-        let mut order: Vec<usize> = (0..cat.len()).collect();
-        if *by_kind {
-            order.sort_by_key(|i| index_of(&MachineKind::ALL, cat[*i].kind));
-        } else {
-            order.sort_by_key(|i| cat[*i].title());
-        }
-        let opts: Vec<String> = order
-            .iter()
-            .map(|i| {
-                if *by_kind {
-                    format!("{}: {}", cat[*i].kind.label(), cat[*i].model)
-                } else {
-                    cat[*i].title()
-                }
-            })
-            .collect();
-        let current = order
-            .iter()
-            .position(|i| cat[*i].title() == machine.title())
-            .unwrap_or(0);
-        f.push(Field::select("machine", &tr("cam-machine"), opts, current));
-        f.push(Field::note(tr_with(
-            "cam-machine-kind-controller",
-            &[
-                ("kind", machine.kind.label()),
-                ("controller", machine.dialect.label()),
-            ],
-        )));
-        f.push(Field::section(&tr("cam-machine")));
-        for (i, a) in ["X", "Y", "Z"].iter().enumerate() {
-            f.push(Field::number(
-                &format!("travel-{i}"),
-                &tr_with("cam-axis-travel", &[("axis", a)]),
-                machine.travel[i],
-                Unit::Mm,
-            ));
-        }
-        f.push(Field::number(
-            "rapid",
-            &tr("cam-rapid-rate"),
-            machine.rapid_rate,
-            Unit::Feed,
-        ));
-        f.push(Field::number(
-            "max-feed",
-            &tr("cam-fastest-feed"),
-            machine.max_feed,
-            Unit::Feed,
-        ));
-        if machine.kind.is_milling() {
-            f.push(Field::number(
-                "max-spindle",
-                &tr("cam-fastest-spindle"),
-                machine.max_spindle,
-                Unit::Rpm,
-            ));
-            f.push(Field::check(
-                "changer",
-                &tr("cam-automatic-tool-changer"),
-                machine.tool_changer,
-            ));
-            f.push(Field::check(
-                "indexing",
-                &tr("cam-indexing-rotary-axes"),
-                machine.indexing.is_some(),
-            ));
-            if let Some(ix) = machine.indexing {
-                f.push(Field::number(
-                    "max-tilt",
-                    &tr("cam-largest-tilt"),
-                    ix.max_tilt,
-                    Unit::Deg,
-                ));
-                f.push(Field::select(
-                    "rotary",
-                    &tr("cam-rotary-axes"),
-                    vec![tr("cam-rotary-a-and-c"), tr("cam-rotary-b-and-c")],
-                    usize::from(ix.rotary[0] == 'B'),
-                ));
-                if machine.dialect != cadrs_core::cam::cadrs_cam::Dialect::Fanuc {
-                    f.push(Field::note(tr("cam-tilted-planes-fanuc-only")));
-                }
-            }
-        } else if machine.kind == MachineKind::Laser {
-            f.push(Field::number(
-                "max-spindle",
-                &tr("cam-s-at-full-power"),
-                machine.max_spindle,
-                Unit::None,
-            ));
-        }
-        let s = &machine.post;
-        f.push(Field::section(&tr("cam-post-settings")));
+        let _ = job;
         f.push(Field::select(
-            "unit",
-            &tr("cam-output-unit"),
-            [tr("cam-millimetres"), tr("cam-inches")],
-            usize::from(s.output_unit == LenUnit::Inch),
+            "machine-from",
+            &tr("cam-machine-from"),
+            [
+                tr("cam-machine-from-catalogue"),
+                tr("cam-machine-from-assembly"),
+            ],
+            usize::from(*from_assembly),
         ));
-        f.push(Field::check(
-            "adv-wp",
-            &tr("cam-advanced-work-planes"),
-            s.advanced_work_planes,
-        ));
-        f.push(Field::check(
-            "seq",
-            &tr("cam-sequence-numbers"),
-            s.sequence_numbers,
-        ));
-        if s.sequence_numbers {
-            f.push(Field::count(
-                "block-start",
-                &tr("cam-block-number-start"),
-                s.block_start as i64,
-            ));
-            f.push(Field::count(
-                "block-inc",
-                &tr("cam-block-increment"),
-                s.block_increment as i64,
-            ));
-            f.push(Field::check(
-                "tools-only",
-                &tr("cam-numbers-at-tool-changes-only"),
-                s.numbers_at_tools_only,
-            ));
+        if *from_assembly {
+            source_fields(f, ctx.doc, source.as_ref(), other);
+        } else {
+            controller_fields(f, machine, *by_kind, true, machine.rotary_axes() > 0);
         }
-        f.push(Field::check(
-            "rapid-pos",
-            &tr("cam-rapid-positioning"),
-            s.rapid_positioning,
-        ));
-        if !s.rapid_positioning {
-            f.push(Field::number(
-                "post-rapid",
-                &tr("cam-rapid-feed"),
-                s.rapid_rate,
-                Unit::Feed,
-            ));
-        }
-        f.push(Field::check("arcs", &tr("cam-output-arcs"), s.output_arcs));
-        if s.output_arcs {
-            f.push(Field::check(
-                "helices",
-                &tr("cam-output-helices"),
-                s.output_helices,
-            ));
-        }
-        f.push(Field::count(
-            "decimals",
-            &tr("cam-decimal-places"),
-            s.decimals as i64,
-        ));
-        f.push(Field::check(
-            "dec-point",
-            &tr("cam-always-write-decimal-point"),
-            s.decimal_point,
-        ));
-        if machine.kind.is_milling() {
-            f.push(Field::check(
-                "ret-tool",
-                &tr("cam-retract-on-tool-changes"),
-                s.force_retract_on_tool_change,
-            ));
-            f.push(Field::check(
-                "ret-plane",
-                &tr("cam-retract-on-plane-changes"),
-                s.force_retract_on_plane_change,
-            ));
-            f.push(Field::check(
-                "ret-end",
-                &tr("cam-retract-at-program-end"),
-                s.force_retract_on_end,
-            ));
-            if machine.dialect.has_cycles() {
-                f.push(Field::section(&tr("cam-fixed-cycles")));
-                f.push(Field::check(
-                    "cy-drill",
-                    &tr("cam-cycles-drilling"),
-                    s.canned_drill,
-                ));
-                f.push(Field::check(
-                    "cy-peck",
-                    &tr("cam-cycles-peck-drilling"),
-                    s.canned_peck,
-                ));
-                f.push(Field::check(
-                    "cy-tap",
-                    &tr("cam-cycles-tapping"),
-                    s.canned_tap,
-                ));
-                f.push(Field::check(
-                    "cy-chip",
-                    &tr("cam-cycles-chip-break"),
-                    s.canned_chip_break,
-                ));
-            }
-        }
-        if machine.kind == MachineKind::Laser {
-            f.push(Field::select(
-                "laser-mode",
-                &tr("cam-laser-power"),
-                [tr("cam-laser-dynamic"), tr("cam-laser-constant")],
-                usize::from(s.laser_mode == LaserMode::Constant),
-            ));
-        }
-        f.push(Field::check(
-            "comments",
-            &tr("cam-comments-in-program"),
-            s.comments,
-        ));
     }
 
     /// The Tool draft's fields.
@@ -820,13 +683,51 @@ impl Draft {
                 [tr("cam-hand-right"), tr("cam-hand-left")],
                 usize::from(tool.hand == Hand::Left),
             ));
-            f.push(Field::number(
-                "diameter",
-                &tr("cam-diameter"),
-                tool.diameter,
-                Unit::Mm,
-            ));
+            // A form tool's diameter is its profile's widest; a taper ball's is its shank's.
+            if tool.kind != ToolKind::Form {
+                f.push(Field::number(
+                    "diameter",
+                    &tr(if tool.kind == ToolKind::TaperBall {
+                        "cam-shank-diameter"
+                    } else {
+                        "cam-diameter"
+                    }),
+                    tool.diameter,
+                    Unit::Mm,
+                ));
+            }
             match tool.kind {
+                ToolKind::TaperBall => {
+                    f.push(Field::number(
+                        "tip",
+                        &tr("cam-ball-diameter"),
+                        tool.tip_diameter,
+                        Unit::Mm,
+                    ));
+                    f.push(Field::number(
+                        "angle",
+                        &tr("cam-included-angle"),
+                        tool.angle,
+                        Unit::Deg,
+                    ));
+                }
+                ToolKind::Lollipop => {
+                    f.push(Field::number(
+                        "neck",
+                        &tr("cam-neck-diameter"),
+                        tool.neck_diameter,
+                        Unit::Mm,
+                    ));
+                }
+                ToolKind::Barrel => {
+                    f.push(Field::number(
+                        "profile-radius",
+                        &tr("cam-side-radius"),
+                        tool.profile_radius,
+                        Unit::Mm,
+                    ));
+                }
+                ToolKind::Form => form_fields(f, tool),
                 ToolKind::BullMill => {
                     f.push(Field::number(
                         "corner",
@@ -867,12 +768,15 @@ impl Draft {
                 }
                 _ => {}
             }
-            f.push(Field::number(
-                "cut-len",
-                &tr("cam-cutting-length"),
-                tool.cutting_length,
-                Unit::Mm,
-            ));
+            // (A form tool cuts over its profile's height.)
+            if tool.kind != ToolKind::Form {
+                f.push(Field::number(
+                    "cut-len",
+                    &tr("cam-cutting-length"),
+                    tool.cutting_length,
+                    Unit::Mm,
+                ));
+            }
             f.push(Field::number(
                 "overall",
                 &tr("cam-overall-length"),
@@ -1052,6 +956,7 @@ impl Draft {
         };
         let p = &tp.params;
         let machine = machine_of(ctx.cam, *setup);
+        let rotaries = rotaries_of(ctx.cam, *setup);
         let tool = tool_above(ctx.cam, *setup, op.id);
         let tk = tool.as_ref().map_or(ToolKind::EndMill, |t| t.kind);
         let beam = tk.is_beam();
@@ -1158,7 +1063,7 @@ impl Draft {
                     }
                 }
             }
-            _ => toolpath_fields(f, ctx, op, p, *kind, tk, machine, picking),
+            _ => toolpath_fields(f, ctx, op, p, *kind, tk, machine, rotaries, picking),
         }
         if tool.is_none() {
             f.push(Field::error(tr("cam-no-tool-above-toolpath")));
@@ -1181,38 +1086,105 @@ pub(super) fn op_axis(cam: &CamStudio, setup: CamId, op: CamId) -> [f64; 3] {
 
 /// A picked planar face's normal (model coordinates, unit).
 pub(super) fn face_normal(ctx: &Ctx, pick: Pick) -> Option<[f64; 3]> {
+    face_plane(ctx, pick).map(|(_, n, _)| n)
+}
+
+/// A picked planar face (model coordinates): a point of it (its centre where the kernel gave
+/// one), its outward normal and a direction along it, both unit.
+pub(super) fn face_plane(ctx: &Ctx, pick: Pick) -> Option<([f64; 3], [f64; 3], [f64; 3])> {
+    use cadrs_core::cam::cadrs_cam::geom::{cross, len, normalize};
     let Pick::Face(part, name) = pick else {
         return None;
     };
-    let n = ctx
+    let face = ctx
         .parts
         .iter()
         .find(|p| p.id == part)
-        .and_then(|p| p.solid.faces.iter().find(|f| f.name == name))
-        .and_then(|f| f.plane)
-        .map(|pl| {
-            let (u, v) = (pl.u, pl.v);
-            [
-                u[1] * v[2] - u[2] * v[1],
-                u[2] * v[0] - u[0] * v[2],
-                u[0] * v[1] - u[1] * v[0],
-            ]
-        })?;
-    let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
-    (l > 1e-9).then(|| [n[0] / l, n[1] / l, n[2] / l])
+        .and_then(|p| p.solid.faces.iter().find(|f| f.name == name))?;
+    let pl = face.plane?;
+    let n = cross(pl.u, pl.v);
+    (len(n) > 1e-9 && len(pl.u) > 1e-9).then(|| {
+        (
+            face.center.unwrap_or(pl.origin),
+            normalize(n),
+            normalize(pl.u),
+        )
+    })
 }
 
-/// The library's toolpath templates a `tk` tool on a `machine` can run.
+/// The line a pick gives (model coordinates): the axis of a cylindrical face (or any face of
+/// revolution), a straight edge, or the axis of a circular edge. A point of it and its unit
+/// direction.
+pub(super) fn picked_line(ctx: &Ctx, pick: Pick) -> Option<([f64; 3], [f64; 3])> {
+    use cadrs_core::cam::cadrs_cam::geom::{cross, len, normalize, sub};
+    match pick {
+        Pick::Face(part, name) => {
+            let (point, dir) = ctx
+                .parts
+                .iter()
+                .find(|p| p.id == part)
+                .and_then(|p| p.solid.faces.iter().find(|f| f.name == name))
+                .and_then(|f| f.axis)?;
+            (len(dir) > 1e-9).then(|| (point, normalize(dir)))
+        }
+        Pick::Edge(part, name) => {
+            let edge = ctx
+                .parts
+                .iter()
+                .find(|p| p.id == part)
+                .and_then(|p| p.solid.edges.iter().find(|e| e.name == name))?;
+            if let Some(c) = edge.circle {
+                return (len(c.normal) > 1e-9).then(|| (c.center, normalize(c.normal)));
+            }
+            if edge.ellipse.is_some() {
+                return None;
+            }
+            let (a, b) = (*edge.points.first()?, *edge.points.last()?);
+            let along = sub(b, a);
+            let l = len(along);
+            // Straight: every point of it on the line between its ends.
+            let straight = l > 1e-9
+                && edge
+                    .points
+                    .iter()
+                    .all(|q| len(cross(sub(*q, a), along)) <= 1e-6 * l.max(1.0) * l);
+            straight.then(|| (a, normalize(along)))
+        }
+        _ => None,
+    }
+}
+
+/// A picked vertex's point (model coordinates).
+pub(super) fn picked_point(ctx: &Ctx, pick: Pick) -> Option<[f64; 3]> {
+    let Pick::Vertex(part, name) = pick else {
+        return None;
+    };
+    ctx.parts
+        .iter()
+        .find(|p| p.id == part)
+        .and_then(|p| p.solid.vertices.iter().find(|v| v.name == name))
+        .map(|v| v.point)
+}
+
+/// "(1.5, 0, -20)".
+pub(super) fn fmt_point(p: [f64; 3]) -> String {
+    format!("({}, {}, {})", fmt(p[0]), fmt(p[1]), fmt(p[2]))
+}
+
+/// The library's toolpath templates a `tk` tool on a `machine` with `rotaries` rotary axes can
+/// run.
 pub(super) fn usable_templates(
     cam: &CamStudio,
     tk: ToolKind,
     machine: MachineKind,
+    rotaries: usize,
 ) -> Vec<&Template> {
     cam.library
         .templates
         .iter()
         .filter(|t| {
-            Pattern::available(t.params.pattern.type_of(), tk, machine).contains(&t.params.pattern)
+            offered_patterns(t.params.pattern.type_of(), tk, machine, rotaries, None)
+                .contains(&t.params.pattern)
         })
         .collect()
 }
@@ -1221,6 +1193,567 @@ pub(super) fn machine_of(cam: &CamStudio, setup: CamId) -> MachineKind {
     cam.setup(setup)
         .and_then(|(j, _)| j.machine.as_ref())
         .map_or(MachineKind::Mill, |m| m.kind)
+}
+
+/// How many rotary axes the machine of a setup's job has.
+pub(super) fn rotaries_of(cam: &CamStudio, setup: CamId) -> usize {
+    cam.setup(setup)
+        .and_then(|(j, _)| j.machine.as_ref())
+        .map_or(0, Machine::rotary_axes)
+}
+
+/// The patterns of `kind` a toolpath is offered: those the tool and the machine can run, the
+/// machine having the rotary axes each needs. `current`, the operation's own pattern, stays in
+/// the list when only the axes are missing (the job's machine was changed under it), so the
+/// dialog shows what the operation is.
+pub(super) fn offered_patterns(
+    kind: Type,
+    tk: ToolKind,
+    machine: MachineKind,
+    rotaries: usize,
+    current: Option<Pattern>,
+) -> Vec<Pattern> {
+    Pattern::available(kind, tk, machine)
+        .into_iter()
+        .filter(|p| p.rotary_axes() <= rotaries || current == Some(*p))
+        .collect()
+}
+
+/// The types with a pattern to offer ([`offered_patterns`]).
+pub(super) fn offered_types(
+    tk: ToolKind,
+    machine: MachineKind,
+    rotaries: usize,
+    current: Option<Pattern>,
+) -> Vec<Type> {
+    Type::ALL
+        .into_iter()
+        .filter(|t| !offered_patterns(*t, tk, machine, rotaries, current).is_empty())
+        .collect()
+}
+
+/// What a machine with `rotaries` rotary axes lacks for `pattern` (`None`: it can run it).
+pub(super) fn missing_axes(pattern: Pattern, rotaries: usize) -> Option<String> {
+    let key = match (pattern.rotary_axes(), rotaries) {
+        (need, have) if need <= have => return None,
+        (1, _) => "cam-pattern-needs-a-rotary-axis",
+        (_, 0) => "cam-pattern-needs-two-rotary-axes-has-none",
+        _ => "cam-pattern-needs-two-rotary-axes-has-one",
+    };
+    Some(tr_with(key, &[("pattern", pattern.label())]))
+}
+
+/// What's wrong with a rotary pattern's own settings.
+fn rotary_problem(p: &Params) -> Option<String> {
+    use cadrs_core::cam::cadrs_cam::strategy::RotaryStyle;
+    if p.pattern.rotary_axes() != 1 {
+        return None;
+    }
+    if p.rotary.range.is_some_and(|r| r[1] <= r[0]) {
+        Some(tr("cam-rotary-range-backwards"))
+    } else if p.pattern == Pattern::Rotary
+        && p.rotary.style == RotaryStyle::Thread
+        && p.rotary.lead <= 0.0
+    {
+        Some(tr("cam-rotary-thread-needs-lead"))
+    } else {
+        None
+    }
+}
+
+/// A form tool's profile in the Tool dialog: a row of radius, height and bulge a point, from
+/// the tip upward, each with its remove button, and Add point; what is wrong with the profile
+/// under them. Keys: `form-r-<i>`, `form-h-<i>`, `form-b-<i>`, `form-del-<i>` (from 0) and
+/// `form-add`.
+fn form_fields(f: &mut Vec<Field>, tool: &Tool) {
+    f.push(Field::section(&tr("cam-form-profile")));
+    f.push(Field::note(tr("cam-form-profile-note")));
+    let empty = FormProfile::default();
+    let profile = tool.form.as_ref().unwrap_or(&empty);
+    for (i, p) in profile.points.iter().enumerate() {
+        let n = (i + 1).to_string();
+        f.push(Field::number(
+            &format!("form-r-{i}"),
+            &tr_with("cam-form-point-radius", &[("n", &n)]),
+            p.r,
+            Unit::Mm,
+        ));
+        f.push(Field::number(
+            &format!("form-h-{i}"),
+            &tr_with("cam-form-point-height", &[("n", &n)]),
+            p.h,
+            Unit::Mm,
+        ));
+        // (The first point has no segment arriving at it.)
+        if i > 0 {
+            f.push(Field::number(
+                &format!("form-b-{i}"),
+                &tr_with("cam-form-point-bulge", &[("n", &n)]),
+                p.bulge,
+                Unit::None,
+            ));
+        }
+        if profile.points.len() > 2 {
+            f.push(Field::button(
+                &format!("form-del-{i}"),
+                &tr_with("cam-form-remove-point", &[("n", &n)]),
+                "remove-circle",
+            ));
+        }
+    }
+    if profile.points.len() < FormProfile::MAX_POINTS {
+        f.push(Field::button("form-add", &tr("cam-form-add-point"), "plus"));
+    }
+    if let Err(e) = profile.check() {
+        f.push(Field::error(e));
+    }
+    f.push(Field::note(tr_with(
+        "cam-form-size",
+        &[
+            ("diameter", &fmt(tool.diameter)),
+            ("length", &fmt(tool.cutting_length)),
+        ],
+    )));
+}
+
+/// A machine's axes in a line, the tool's side then the work's: "Z B · Y X C" (a machine
+/// known by its travel alone: "X Y Z").
+pub(crate) fn axes_summary(machine: &Machine) -> String {
+    let chain = machine.kinematics();
+    let names = |joints: &[cadrs_core::cam::cadrs_cam::kinematics::Joint]| {
+        joints
+            .iter()
+            .map(|j| j.name.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    match (chain.tool.is_empty(), chain.table.is_empty()) {
+        (false, false) => format!("{} · {}", names(&chain.tool), names(&chain.table)),
+        (false, true) => names(&chain.tool),
+        _ => names(&chain.table),
+    }
+}
+
+/// The Machine dialog's fields for a machine that comes from an assembly: the document (when
+/// the library has others with versions), the assembly and, for another document's, the
+/// version; what machine it makes (its axes and controller, read-only: they are the Machine
+/// Builder's to change), what stands in its way, and the way to the builder (an assembly of
+/// this document) or where the frozen copy is from.
+fn source_fields(
+    f: &mut Vec<Field>,
+    doc: &cadrs_core::Document,
+    source: Option<&MachineSource>,
+    from: &MachineFrom,
+) {
+    if !from.others.is_empty() {
+        let mut docs = vec![tr("cam-this-document")];
+        docs.extend(from.others.iter().map(|o| o.1.clone()));
+        f.push(Field::select(
+            "machine-document",
+            &tr("cam-document"),
+            docs,
+            from.document,
+        ));
+    }
+    let current = |list: &[(ElementId, String)]| {
+        source
+            .and_then(|s| list.iter().position(|(e, _)| *e == s.reference.element))
+            .unwrap_or(0)
+    };
+    let assemblies = |f: &mut Vec<Field>, list: &[(ElementId, String)]| {
+        f.push(Field::select(
+            "machine-assembly",
+            &tr("cam-machine-assembly"),
+            list.iter().map(|(_, n)| n.clone()).collect::<Vec<_>>(),
+            current(list),
+        ));
+    };
+    if from.document == 0 {
+        let list = machine_assemblies(doc);
+        if list.is_empty() {
+            f.push(Field::note(tr("cam-machine-no-assemblies")));
+            return;
+        }
+        assemblies(f, &list);
+    } else if let Some(o) = &from.other {
+        if o.assemblies.is_empty() {
+            f.push(Field::note(tr("cam-machine-none-in-document")));
+        } else {
+            assemblies(f, &o.assemblies);
+        }
+        f.push(Field::select(
+            "machine-version",
+            &tr("common-version"),
+            o.versions.iter().map(|v| v.1.clone()).collect::<Vec<_>>(),
+            o.version,
+        ));
+    }
+    let Some(source) = source else { return };
+    // "V2 of Machines › 5-axis mill".
+    if source.copy.is_some() {
+        f.push(Field::note(source.label()));
+    }
+    let issues = match from.machine(doc, source) {
+        Ok((machine, issues)) => {
+            f.push(Field::note(tr_with(
+                "cam-machine-axes-summary",
+                &[("axes", &axes_summary(&machine))],
+            )));
+            f.push(Field::note(tr_with(
+                "cam-machine-kind-controller",
+                &[
+                    ("kind", machine.kind.label()),
+                    ("controller", machine.dialect.label()),
+                ],
+            )));
+            if machine.rotary_axes() > 0 {
+                f.push(Field::note(if machine.post.rotary.tcp {
+                    tr("cam-machine-tcp-on")
+                } else {
+                    tr("cam-machine-tcp-off")
+                }));
+            }
+            issues
+        }
+        Err(issues) => issues,
+    };
+    if !issues.is_empty() {
+        f.push(Field::section(&tr("asm-machine-issues")));
+        for i in &issues {
+            if i.is_error() {
+                f.push(Field::error(i.text.clone()));
+            } else {
+                f.push(Field::note(format!("⚠ {}", i.text)));
+            }
+        }
+    }
+    if source.copy.is_some() {
+        f.push(Field::note(tr("cam-machine-frozen-copy")));
+        return;
+    }
+    f.push(Field::note(tr("cam-machine-edit-in-builder")));
+    f.push(Field::button(
+        "open-builder",
+        &tr("cam-open-machine-builder"),
+        "machine-builder",
+    ));
+}
+
+/// A machine's controller as a dialog edits it: the catalogue machine it starts from, its
+/// spindle and tool changer, and how its programs are written (the post settings, and the
+/// rotary ones for a machine with rotary axes). `kinematics`: its travel, rates and indexing
+/// axes too, for a catalogue machine; an assembly's machine has them from its axes (the
+/// Assembly tab's Machine Builder shows the rest). [`set_controller`] takes the changes.
+pub(crate) fn controller_fields(
+    f: &mut Vec<Field>,
+    machine: &Machine,
+    by_kind: bool,
+    kinematics: bool,
+    rotary: bool,
+) {
+    use cadrs_core::cam::cadrs_cam::Dialect;
+    let by_kind = &by_kind;
+    let cat = catalog();
+    f.push(Field::check(
+        "by-kind",
+        &tr("cam-group-by-machine-type"),
+        *by_kind,
+    ));
+    let mut order: Vec<usize> = (0..cat.len()).collect();
+    if *by_kind {
+        order.sort_by_key(|i| index_of(&MachineKind::ALL, cat[*i].kind));
+    } else {
+        order.sort_by_key(|i| cat[*i].title());
+    }
+    let opts: Vec<String> = order
+        .iter()
+        .map(|i| {
+            if *by_kind {
+                format!("{}: {}", cat[*i].kind.label(), cat[*i].model)
+            } else {
+                cat[*i].title()
+            }
+        })
+        .collect();
+    let current = order
+        .iter()
+        .position(|i| cat[*i].title() == machine.title())
+        .unwrap_or(0);
+    f.push(Field::select("machine", &tr("cam-machine"), opts, current));
+    f.push(Field::note(tr_with(
+        "cam-machine-kind-controller",
+        &[
+            ("kind", machine.kind.label()),
+            ("controller", machine.dialect.label()),
+        ],
+    )));
+    if kinematics {
+        f.push(Field::section(&tr("cam-machine")));
+        for (i, a) in ["X", "Y", "Z"].iter().enumerate() {
+            f.push(Field::number(
+                &format!("travel-{i}"),
+                &tr_with("cam-axis-travel", &[("axis", a)]),
+                machine.travel[i],
+                Unit::Mm,
+            ));
+        }
+        f.push(Field::number(
+            "rapid",
+            &tr("cam-rapid-rate"),
+            machine.rapid_rate,
+            Unit::Feed,
+        ));
+        f.push(Field::number(
+            "max-feed",
+            &tr("cam-fastest-feed"),
+            machine.max_feed,
+            Unit::Feed,
+        ));
+    } else {
+        // An assembly's machine: its travel and rates are its axes'; the controller family is
+        // chosen here rather than by the catalogue machine alone.
+        f.push(Field::select(
+            "dialect",
+            &tr("cam-controller"),
+            labels(&Dialect::ALL, Dialect::label),
+            index_of(&Dialect::ALL, machine.dialect),
+        ));
+    }
+    if machine.kind.is_milling() {
+        f.push(Field::number(
+            "max-spindle",
+            &tr("cam-fastest-spindle"),
+            machine.max_spindle,
+            Unit::Rpm,
+        ));
+        f.push(Field::check(
+            "changer",
+            &tr("cam-automatic-tool-changer"),
+            machine.tool_changer,
+        ));
+        match &machine.chain {
+            _ if !kinematics => {}
+            // A machine described by an assembly has the axes that gives it.
+            Some(chain) => {
+                let axes: Vec<&str> = chain.joints().map(|j| j.name.as_str()).collect();
+                f.push(Field::note(tr_with(
+                    "cam-machine-own-axes",
+                    &[("axes", &axes.join(", "))],
+                )));
+            }
+            None => {
+                f.push(Field::check(
+                    "indexing",
+                    &tr("cam-indexing-rotary-axes"),
+                    machine.indexing.is_some(),
+                ));
+                if let Some(ix) = machine.indexing {
+                    f.push(Field::number(
+                        "max-tilt",
+                        &tr("cam-largest-tilt"),
+                        ix.max_tilt,
+                        Unit::Deg,
+                    ));
+                    f.push(Field::select(
+                        "rotary",
+                        &tr("cam-rotary-axes"),
+                        vec![tr("cam-rotary-a-and-c"), tr("cam-rotary-b-and-c")],
+                        usize::from(ix.rotary[0] == 'B'),
+                    ));
+                }
+            }
+        }
+    } else if machine.kind == MachineKind::Laser {
+        f.push(Field::number(
+            "max-spindle",
+            &tr("cam-s-at-full-power"),
+            machine.max_spindle,
+            Unit::None,
+        ));
+    }
+    let s = &machine.post;
+    f.push(Field::section(&tr("cam-post-settings")));
+    f.push(Field::select(
+        "unit",
+        &tr("cam-output-unit"),
+        [tr("cam-millimetres"), tr("cam-inches")],
+        usize::from(s.output_unit == LenUnit::Inch),
+    ));
+    f.push(Field::check(
+        "adv-wp",
+        &tr("cam-advanced-work-planes"),
+        s.advanced_work_planes,
+    ));
+    f.push(Field::check(
+        "seq",
+        &tr("cam-sequence-numbers"),
+        s.sequence_numbers,
+    ));
+    if s.sequence_numbers {
+        f.push(Field::count(
+            "block-start",
+            &tr("cam-block-number-start"),
+            s.block_start as i64,
+        ));
+        f.push(Field::count(
+            "block-inc",
+            &tr("cam-block-increment"),
+            s.block_increment as i64,
+        ));
+        f.push(Field::check(
+            "tools-only",
+            &tr("cam-numbers-at-tool-changes-only"),
+            s.numbers_at_tools_only,
+        ));
+    }
+    f.push(Field::check(
+        "rapid-pos",
+        &tr("cam-rapid-positioning"),
+        s.rapid_positioning,
+    ));
+    if !s.rapid_positioning {
+        f.push(Field::number(
+            "post-rapid",
+            &tr("cam-rapid-feed"),
+            s.rapid_rate,
+            Unit::Feed,
+        ));
+    }
+    f.push(Field::check("arcs", &tr("cam-output-arcs"), s.output_arcs));
+    if s.output_arcs {
+        f.push(Field::check(
+            "helices",
+            &tr("cam-output-helices"),
+            s.output_helices,
+        ));
+    }
+    f.push(Field::count(
+        "decimals",
+        &tr("cam-decimal-places"),
+        s.decimals as i64,
+    ));
+    f.push(Field::check(
+        "dec-point",
+        &tr("cam-always-write-decimal-point"),
+        s.decimal_point,
+    ));
+    if machine.kind.is_milling() {
+        f.push(Field::check(
+            "ret-tool",
+            &tr("cam-retract-on-tool-changes"),
+            s.force_retract_on_tool_change,
+        ));
+        f.push(Field::check(
+            "ret-plane",
+            &tr("cam-retract-on-plane-changes"),
+            s.force_retract_on_plane_change,
+        ));
+        f.push(Field::check(
+            "ret-end",
+            &tr("cam-retract-at-program-end"),
+            s.force_retract_on_end,
+        ));
+        if machine.dialect.has_cycles() {
+            f.push(Field::section(&tr("cam-fixed-cycles")));
+            f.push(Field::check(
+                "cy-drill",
+                &tr("cam-cycles-drilling"),
+                s.canned_drill,
+            ));
+            f.push(Field::check(
+                "cy-peck",
+                &tr("cam-cycles-peck-drilling"),
+                s.canned_peck,
+            ));
+            f.push(Field::check(
+                "cy-tap",
+                &tr("cam-cycles-tapping"),
+                s.canned_tap,
+            ));
+            f.push(Field::check(
+                "cy-chip",
+                &tr("cam-cycles-chip-break"),
+                s.canned_chip_break,
+            ));
+        }
+    }
+    if machine.kind == MachineKind::Laser {
+        f.push(Field::select(
+            "laser-mode",
+            &tr("cam-laser-power"),
+            [tr("cam-laser-dynamic"), tr("cam-laser-constant")],
+            usize::from(s.laser_mode == LaserMode::Constant),
+        ));
+    }
+    f.push(Field::check(
+        "comments",
+        &tr("cam-comments-in-program"),
+        s.comments,
+    ));
+    if rotary {
+        rotary_post_fields(f, machine);
+    }
+}
+
+/// The Machine dialog's group for a machine with rotary axes: how its program is written
+/// where they turn.
+fn rotary_post_fields(f: &mut Vec<Field>, machine: &Machine) {
+    use cadrs_core::cam::cadrs_cam::Dialect;
+    use cadrs_core::cam::cadrs_cam::post::{RotaryFeed, TiltedPlane};
+    let r = &machine.post.rotary;
+    f.push(Field::section(&tr("cam-rotary-post")));
+    f.push(Field::check("tcp", &tr("cam-tcp"), r.tcp));
+    if r.tcp {
+        f.push(Field::text("tcp-on", &tr("cam-tcp-on"), &r.tcp_on));
+        f.push(Field::text("tcp-off", &tr("cam-tcp-off"), &r.tcp_off));
+        // A controller family with no code of its own posts without it until one is given.
+        if r.tcp_codes(machine.dialect, 1).is_none() {
+            f.push(Field::error(tr("cam-tcp-needs-codes")));
+        } else {
+            f.push(Field::note(tr("cam-tcp-codes-note")));
+        }
+    }
+    f.push(Field::select(
+        "tilted-plane",
+        &tr("cam-tilted-planes"),
+        [
+            tr("cam-tilted-plane-control"),
+            tr("cam-tilted-plane-positions"),
+        ],
+        usize::from(r.tilted_plane == TiltedPlane::Positions),
+    ));
+    if r.tilted_plane == TiltedPlane::Control && machine.dialect != Dialect::Fanuc {
+        f.push(Field::note(tr("cam-tilted-plane-no-code")));
+    }
+    f.push(Field::select(
+        "rot-feed",
+        &tr("cam-rotary-feed"),
+        labels(&RotaryFeed::ALL, RotaryFeed::label),
+        index_of(&RotaryFeed::ALL, r.feed),
+    ));
+    f.push(Field::number(
+        "rot-tol",
+        &tr("cam-rotary-tolerance"),
+        r.tolerance,
+        Unit::Mm,
+    ));
+    f.push(Field::number(
+        "rot-axis-tol",
+        &tr("cam-rotary-axis-tolerance"),
+        r.axis_tolerance,
+        Unit::Deg,
+    ));
+    f.push(Field::number(
+        "rot-retract",
+        &tr("cam-rotary-retract"),
+        r.retract,
+        Unit::Mm,
+    ));
+    f.push(Field::count(
+        "angle-decimals",
+        &tr("cam-angle-decimal-places"),
+        r.angle_decimals as i64,
+    ));
 }
 
 /// The tool a toolpath draft would use (the one above it, or above where it goes).

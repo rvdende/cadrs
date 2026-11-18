@@ -2557,6 +2557,15 @@ fn golden_cam_studio_3d() {
 
 #[test]
 #[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_cam_machine_from_assembly() {
+    // A machine modelled as an assembly (issue #278): the Machine Builder with its axes and a
+    // jog, the CAM Studio whose job runs on it, and the machine moving with the simulation of
+    // a 5-axis and a 4-axis run (the scenario checks the axes' names and the dialog's summary).
+    run_scenario("cam_machine_from_assembly");
+}
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
 fn golden_cam_studio_other_document() {
     // CAM Studio taking its part from another document at a version (the scenario checks the
     // component comes in at V1).

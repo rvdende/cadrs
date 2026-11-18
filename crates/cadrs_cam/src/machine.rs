@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::kinematics::Chain;
 use crate::post::{Dialect, PostSettings};
 
 /// What a machine does.
@@ -111,6 +112,10 @@ pub struct Machine {
     pub indexing: Option<Indexing>,
     /// The post settings a job starts from.
     pub post: PostSettings,
+    /// Its axes, for a machine described by an assembly (`None`: a catalogue machine, known by
+    /// its travel alone; see [`Machine::kinematics`]).
+    #[serde(default)]
+    pub chain: Option<Chain>,
 }
 
 impl Machine {
@@ -137,6 +142,7 @@ impl Machine {
             tool_changer,
             indexing: None,
             post: PostSettings::for_dialect(dialect, kind),
+            chain: None,
         }
     }
 
@@ -149,10 +155,45 @@ impl Machine {
     }
 
     /// Whether it can cut in a work plane whose Z is `z` (setup coordinates): along the
-    /// setup's Z on any machine, tilted within its limit with indexing.
+    /// setup's Z on any machine, tilted within its limit with indexing, or wherever its own
+    /// axes can point the tool with the work set square on its table.
     pub fn can_tilt_to(&self, z: crate::geom::P3) -> bool {
         let tilt = z[2].clamp(-1.0, 1.0).acos().to_degrees();
-        tilt < 1e-6 || self.indexing.is_some_and(|i| tilt <= i.max_tilt + 1e-9)
+        if tilt < 1e-6 {
+            return true;
+        }
+        match &self.chain {
+            // (Its rotary axes alone decide: where the slides would have to be depends on
+            // where the work is, which the program's own check sees.)
+            Some(c) => {
+                let cl = crate::kinematics::Cl::new([0.0; 3], z);
+                c.is_mill()
+                    && c.solutions(&cl, 0.0, &c.rest()).is_ok_and(|all| {
+                        all.iter()
+                            .any(|q| c.rotaries().iter().all(|i| c.joint(*i).within(q[*i])))
+                    })
+            }
+            None => self.indexing.is_some_and(|i| tilt <= i.max_tilt + 1e-9),
+        }
+    }
+
+    /// Its axes: its own chain, or the generic one of a catalogue machine (three slides, and a
+    /// trunnion under the work when it indexes).
+    pub fn kinematics(&self) -> Chain {
+        self.chain.clone().unwrap_or_else(|| {
+            Chain::generic(
+                self.indexing
+                    .map(|i| (i.rotary[0], i.rotary[1], i.max_tilt)),
+            )
+        })
+    }
+
+    /// The number of rotary axes it has.
+    pub fn rotary_axes(&self) -> usize {
+        match &self.chain {
+            Some(c) => c.rotaries().len(),
+            None => self.indexing.map_or(0, |_| 2),
+        }
     }
 
     /// "Generic 3-axis mill — Fanuc".

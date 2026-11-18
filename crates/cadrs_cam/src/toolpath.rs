@@ -133,7 +133,16 @@ pub enum Step {
     /// right of it (G42); `None` cancels it (G40). For wear offsets on a path that is already the
     /// tool's centre.
     Compensation(Option<bool>),
+    /// Leans the tool: the next move ends with the tool's axis (a unit vector from its tip
+    /// toward the spindle, in the toolpath's frame) along this, turning steadily on the way
+    /// from where it was, and the moves after keep it there. A toolpath without one keeps the
+    /// tool along the frame's +Z, as every 3-axis pattern does. Arcs and drilling cycles are
+    /// made with the tool along +Z only.
+    Axis(P3),
 }
+
+/// The tool's axis where no [`Step::Axis`] has leant it: the frame's +Z.
+pub const UPRIGHT: P3 = [0.0, 0.0, 1.0];
 
 /// A straight piece of the expanded motion.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -147,9 +156,25 @@ pub struct Segment {
     pub beam: bool,
     /// Its time (min), including any dwell before it.
     pub minutes: f64,
+    /// The tool's axis at its start and at its end (unit vectors from the tip toward the
+    /// spindle); `None` for a tool upright (along +Z) throughout.
+    pub axis: Option<[P3; 2]>,
 }
 
 impl Segment {
+    /// The tool's axis at its start and its end.
+    pub fn axes(&self) -> [P3; 2] {
+        self.axis.unwrap_or([UPRIGHT; 2])
+    }
+
+    /// The tool's axis `f` of the way along it (0 to 1), turning steadily.
+    pub fn axis_at(&self, f: f64) -> P3 {
+        match self.axis {
+            Some([a, b]) => crate::kinematics::slerp(a, b, f),
+            None => UPRIGHT,
+        }
+    }
+
     pub fn is_rapid(&self) -> bool {
         self.feed.is_none()
     }
@@ -217,6 +242,13 @@ impl Toolpath {
         Some(k)
     }
 
+    /// Whether the tool ever leans from the frame's +Z ([`Step::Axis`]).
+    pub fn is_multi_axis(&self) -> bool {
+        self.steps
+            .iter()
+            .any(|s| matches!(s, Step::Axis(a) if dist(*a, UPRIGHT) > 1e-12))
+    }
+
     pub fn is_empty(&self) -> bool {
         !self.steps.iter().any(|s| {
             matches!(
@@ -224,6 +256,18 @@ impl Toolpath {
                 Step::Rapid(_) | Step::Feed { .. } | Step::Arc { .. } | Step::Drill(_)
             )
         })
+    }
+
+    /// The tool's axis as its first move ends: the lean stated before it, else upright.
+    pub fn start_axis(&self) -> P3 {
+        for s in &self.steps {
+            match s {
+                Step::Axis(a) => return crate::geom::normalize(*a),
+                Step::Rapid(_) | Step::Feed { .. } | Step::Arc { .. } | Step::Drill(_) => break,
+                _ => {}
+            }
+        }
+        UPRIGHT
     }
 
     /// The first position it moves to.
@@ -245,6 +289,8 @@ impl Toolpath {
             beam: false,
             dwell: 0.0,
             rapid_rate: rapid_rate.max(1.0),
+            axis: UPRIGHT,
+            lean: None,
         };
         for s in &self.steps {
             match s {
@@ -257,7 +303,13 @@ impl Toolpath {
                     feed,
                     kind,
                 } => {
-                    for p in arc_points(m.at, *to, *center, *cw, ARC_CHORD) {
+                    // (A lean asked for before an arc is spread along it.)
+                    let (from, lean) = (m.axis, m.lean.take());
+                    let points = arc_points(m.at, *to, *center, *cw, ARC_CHORD);
+                    let n = points.len() as f64;
+                    for (i, p) in points.into_iter().enumerate() {
+                        m.lean =
+                            lean.map(|l| crate::kinematics::slerp(from, l, (i + 1) as f64 / n));
                         m.go(p, Some(*feed), Some(*kind));
                     }
                 }
@@ -265,6 +317,7 @@ impl Toolpath {
                 Step::BeamOn { .. } => m.beam = true,
                 Step::BeamOff => m.beam = false,
                 Step::Dwell(s) => m.dwell += s,
+                Step::Axis(a) => m.lean = Some(crate::geom::normalize(*a)),
                 _ => {}
             }
         }
@@ -277,6 +330,7 @@ impl Toolpath {
                 kind: None,
                 beam: m.beam,
                 minutes: m.dwell / 60.0,
+                axis: (m.axis != UPRIGHT).then_some([m.axis; 2]),
             });
         }
         m.out
@@ -355,11 +409,16 @@ struct Mover {
     /// Dwell waiting to be added to the next segment's time (s).
     dwell: f64,
     rapid_rate: f64,
+    /// The tool's axis now, and the one the next move turns it to ([`Step::Axis`]).
+    axis: P3,
+    lean: Option<P3>,
 }
 
 impl Mover {
     fn go(&mut self, to: P3, feed: Option<f64>, kind: Option<FeedKind>) {
         let rate = feed.unwrap_or(self.rapid_rate).max(1e-6);
+        let end = self.lean.take().unwrap_or(self.axis);
+        let leaning = self.axis != UPRIGHT || end != UPRIGHT;
         self.out.push(Segment {
             from: self.at,
             to,
@@ -367,9 +426,11 @@ impl Mover {
             kind,
             beam: self.beam,
             minutes: dist(self.at, to) / rate + self.dwell / 60.0,
+            axis: leaning.then_some([self.axis, end]),
         });
         self.dwell = 0.0;
         self.at = to;
+        self.axis = end;
     }
 
     fn drill(&mut self, c: &DrillCycle) {
@@ -499,6 +560,21 @@ impl Timeline {
         Some((lerp(s.from, s.to, f), i))
     }
 
+    /// The tool's axis at `t` minutes (upright where the motion is empty).
+    pub fn axis_at(&self, t: f64) -> P3 {
+        let Some((_, i)) = self.at(t) else {
+            return UPRIGHT;
+        };
+        let s = &self.segments[i];
+        let start = if i == 0 { 0.0 } else { self.ends[i - 1] };
+        let f = if s.minutes > 0.0 {
+            ((t - start) / s.minutes).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        s.axis_at(f)
+    }
+
     /// The time at the end of segment `i`.
     pub fn end_of(&self, i: usize) -> f64 {
         self.ends.get(i).copied().unwrap_or_else(|| self.total())
@@ -574,6 +650,48 @@ mod tests {
             .count();
         assert_eq!(plunges, 3);
         assert_eq!(segs.last().unwrap().to, [5.0, 5.0, 10.0]);
+    }
+
+    #[test]
+    fn a_lean_turns_the_tool_over_the_next_move_and_stays() {
+        let lean = crate::geom::normalize([1.0, 0.0, 1.0]);
+        let feed = |x: f64| Step::Feed {
+            to: [x, 0.0, 0.0],
+            feed: 10.0,
+            kind: FeedKind::Cut,
+        };
+        let tp = Toolpath {
+            steps: vec![
+                feed(10.0),
+                Step::Axis(lean),
+                feed(20.0),
+                feed(30.0),
+                Step::Axis(UPRIGHT),
+                feed(40.0),
+            ],
+            warnings: vec![],
+        };
+        assert!(tp.is_multi_axis());
+        let segs = tp.motion([0.0; 3], 100.0);
+        assert_eq!(segs[0].axis, None);
+        let near = |s: &Segment, a: P3, b: P3| {
+            dist(s.axes()[0], a) < 1e-12 && dist(s.axes()[1], b) < 1e-12
+        };
+        assert!(near(&segs[1], UPRIGHT, lean) && segs[1].axis.is_some());
+        assert!(near(&segs[2], lean, lean));
+        assert!(near(&segs[3], lean, UPRIGHT));
+        // Half way along the turning move the tool is half way over (22.5° of the 45°).
+        let tl = Timeline::new(segs);
+        let a = tl.axis_at(1.5);
+        assert!((a[0].atan2(a[2]).to_degrees() - 22.5).abs() < 1e-9, "{a:?}");
+        assert_eq!(tl.axis_at(0.5), UPRIGHT);
+        assert!(dist(tl.axis_at(2.5), lean) < 1e-12);
+        // A toolpath that never leans says so.
+        let flat = Toolpath {
+            steps: vec![feed(10.0), Step::Axis(UPRIGHT)],
+            warnings: vec![],
+        };
+        assert!(!flat.is_multi_axis());
     }
 
     #[test]
