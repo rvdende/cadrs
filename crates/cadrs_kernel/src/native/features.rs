@@ -577,7 +577,7 @@ fn piece(
             };
             // A piece still at the far end: part of the profile met nothing.
             let (_, hi) = super::kernel::extent_along(&kept.body, &o, &dir);
-            if hi > far - tol::REL_POINT * far.max(1.0)
+            if hi > far - tol::REL_POINT * far.max(crate::native::tol::POINT)
                 || kept
                     .tags
                     .iter()

@@ -4146,7 +4146,7 @@ fn end_mill_along(
     let up = up.try_normalize(tol::TINY)?;
     let segs = super::sweep::path::path_segments(k, path).ok()?;
     let p0 = segs.first()?.start();
-    let size = b.bbox().diagonal().max(1.0);
+    let size = b.bbox().diagonal().max(crate::native::tol::POINT);
     let near = tol::REL_POINT * size.max((segs.last()?.end() - p0).norm());
     for s in &segs {
         for i in 0..=16 {
@@ -4346,7 +4346,7 @@ fn upright_revolution_along(
     let segs = super::sweep::path::path_segments(k, path).ok()?;
     let (first, last) = (segs.first()?, segs.last()?);
     let p0 = first.start();
-    let size = b.bbox().diagonal().max(1.0);
+    let size = b.bbox().diagonal().max(crate::native::tol::POINT);
     let near = tol::REL_POINT * size.max((last.end() - p0).norm());
     // The path in the plane square to `up` through its start.
     for s in &segs {

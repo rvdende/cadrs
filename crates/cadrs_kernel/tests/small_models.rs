@@ -110,3 +110,27 @@ fn a_micron_part_survives_step() {
         "read back {v}, written {want}"
     );
 }
+
+/// The same through IGES (whose solids name their own vertices and edges, so this held
+/// already; the trimmed surfaces that have to be sewn are `iges`' own test).
+#[test]
+fn a_micron_part_survives_iges() {
+    let mut k = NativeKernel::new();
+    let s = 1e-3;
+    let c = cube(&mut k, s);
+    let edges = uprights(&k, c);
+    let part = k.fillet(c, &edges, 0.02 * s).unwrap().bodies[0];
+    let want = k.mass_properties(part).unwrap().volume;
+    let faces = k.get(part).unwrap().faces.len();
+    let bytes = cadrs_kernel::native::iges::write(&[(&**k.get(part).unwrap(), "part")]);
+    let read = cadrs_kernel::native::iges::read(&bytes).unwrap();
+    assert_eq!(read.parts.len(), 1);
+    let b = &read.parts[0].body;
+    assert!(b.check().is_empty(), "{:?}", b.check());
+    assert_eq!(b.faces.len(), faces);
+    let v = cadrs_kernel::native::mass::body_volume(b);
+    assert!(
+        (v - want).abs() < 1e-9 * want,
+        "read back {v}, written {want}"
+    );
+}

@@ -542,7 +542,7 @@ fn snap_tiny(c: Curve) -> Curve {
             .map(|h| (h.x / h.w).abs().max((h.y / h.w).abs()))
             .fold(0.0, f64::max),
     };
-    let tiny = 1e-13 * size.max(1.0);
+    let tiny = 1e-13 * size.max(crate::native::tol::POINT);
     let z = |x: f64| if x.abs() < tiny { 0.0 } else { x };
     let p = |q: &P3| P3::new(z(q.x), z(q.y), z(q.z));
     let v = |q: &V3| V3::new(z(q.x), z(q.y), z(q.z));

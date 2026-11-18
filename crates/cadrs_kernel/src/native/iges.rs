@@ -1615,7 +1615,40 @@ fn read_wires(f: &File, out: &mut ReadModel) {
 }
 
 pub fn read(bytes: &[u8]) -> Result<ReadModel, String> {
-    let f = parse(bytes)?;
+    let out = read_at(bytes, 1.0)?;
+    // A model smaller than a boolean's small one ([`super::boolean::SMALL_MODEL`]) is read
+    // again larger, by a power of two, and scaled back: the reader's join distances are
+    // lengths in mm, the size of a part a few microns across (as STEP's `Model::boost_of`).
+    let mut bb = Bbox::empty();
+    for p in &out.parts {
+        bb.union(&p.body.bbox());
+    }
+    let size = if bb.is_empty() { 0.0 } else { bb.diagonal() };
+    if !(size > 0.0 && size < super::boolean::SMALL_MODEL) {
+        return Ok(out);
+    }
+    let boost = (super::boolean::WORKING_SIZE / size).log2().floor().exp2();
+    let Ok(mut big) = read_at(bytes, boost) else {
+        return Ok(out);
+    };
+    let shrink = Affine {
+        m: nalgebra::Matrix3::identity() / boost,
+        t: V3::zeros(),
+    };
+    for p in &mut big.parts {
+        p.body = p.body.transformed(&shrink);
+    }
+    for o in &mut big.occurrences {
+        o.placement.t /= boost;
+    }
+    Ok(big)
+}
+
+/// [`read`] with every length `boost` times what the file says.
+fn read_at(bytes: &[u8], boost: f64) -> Result<ReadModel, String> {
+    let mut f = parse(bytes)?;
+    f.scale *= boost;
+    f.resolution *= boost;
     let mut des: Vec<usize> = f.ents.keys().copied().collect();
     des.sort_unstable();
     let mut used_shells = std::collections::HashSet::new();
@@ -1728,7 +1761,19 @@ mod tests {
     /// half of them bounded the wrong way round: sewn into one outward solid.
     #[test]
     fn sews_trimmed_surfaces_into_a_solid() {
-        let c = |x: f64, y: f64, z: f64| P3::new(x * 10.0, y * 10.0, z * 10.0);
+        trimmed_cube(10.0);
+    }
+
+    /// The same four nanometres across, under the distance points are joined at (it sewed
+    /// before small models were read larger too: the cube's corners are welded by edge): read at a working size and scaled back, where the sewing's
+    /// distances (lengths in mm) are a good share of it.
+    #[test]
+    fn sews_a_micron_cube_of_trimmed_surfaces() {
+        trimmed_cube(4e-6);
+    }
+
+    fn trimmed_cube(side: f64) {
+        let c = |x: f64, y: f64, z: f64| P3::new(x * side, y * side, z * side);
         let quads = [
             [c(0., 0., 0.), c(0., 1., 0.), c(1., 1., 0.), c(1., 0., 0.)],
             [c(0., 0., 1.), c(1., 0., 1.), c(1., 1., 1.), c(0., 1., 1.)],
@@ -1801,7 +1846,8 @@ mod tests {
         assert_eq!((b.solids.len(), b.faces.len(), b.edges.len()), (1, 6, 12));
         let mp = super::super::mass::body_mass(b);
         assert!(
-            (mp.volume - 1000.0).abs() < 1e-9 && (mp.surface_area - 600.0).abs() < 1e-9,
+            (mp.volume / side.powi(3) - 1.0).abs() < 1e-12
+                && (mp.surface_area / (6.0 * side * side) - 1.0).abs() < 1e-12,
             "{mp:?}"
         );
     }

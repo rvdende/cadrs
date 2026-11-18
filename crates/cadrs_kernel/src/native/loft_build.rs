@@ -774,7 +774,7 @@ fn assemble_rows(
         let size = (far - o).norm();
         if pts
             .iter()
-            .any(|p| (p - o).dot(&nrm).abs() > tol::REL * size.max(1.0))
+            .any(|p| (p - o).dot(&nrm).abs() > tol::REL * size.max(crate::native::tol::POINT))
         {
             return None;
         }
@@ -1343,7 +1343,7 @@ fn wire_plane(parts: &[Part]) -> Option<Plane> {
     let size = pts.iter().map(|p| (p - o).norm()).fold(0.0, f64::max);
     if pts
         .iter()
-        .any(|p| (p - o).dot(&nrm).abs() > 1e-7 * size.max(1.0))
+        .any(|p| (p - o).dot(&nrm).abs() > 1e-7 * size.max(crate::native::tol::POINT))
     {
         return None;
     }
@@ -2051,7 +2051,7 @@ pub fn loft_guided(
         .iter()
         .map(|(s, e)| (s - e).norm())
         .fold(0.0, f64::max)
-        .max(1.0);
+        .max(crate::native::tol::POINT);
     let near = tol::REL_POINT * size;
     // Where each guide meets each loop section: its place along the loop (curve i at t is
     // i + t); a point section every guide meets.

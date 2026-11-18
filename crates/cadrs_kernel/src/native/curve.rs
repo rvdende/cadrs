@@ -256,16 +256,14 @@ impl Curve {
                     .unwrap_or(lo);
                 self.closest_polished(p, lo, hi, start)
             }
-            // A spline of more spans than the samples would see one each: four to a span.
-            Curve::Nurbs(n)
-                if 4 * n
-                    .breaks()
-                    .iter()
-                    .filter(|b| **b > t0.min(t1) && **b < t0.max(t1))
-                    .count()
-                    > CLOSEST_SAMPLES =>
-            {
-                const EACH: usize = 4;
+            // A spline: samples to a span, as many as a span's distance can have turns (twice
+            // its degree, and two), fewer where there are many spans, never under four. (Not
+            // sixty-five over the range whatever the curve: too many for a span or two, and
+            // under one a span for a curve of more spans than that.)
+            Curve::Nurbs(n) => {
+                let (lo, hi) = (t0.min(t1), t0.max(t1));
+                let spans = 1 + n.breaks().iter().filter(|b| **b > lo && **b < hi).count();
+                let each = (2 * n.degree + 2).min(CLOSEST_SAMPLES / spans).max(4);
                 let (lo, hi) = (t0.min(t1), t0.max(t1));
                 let mut best = (f64::INFINITY, lo);
                 let mut look = |t: f64| {
@@ -276,19 +274,19 @@ impl Curve {
                 };
                 let knots = self.pieces(lo, hi);
                 for w in knots.windows(2) {
-                    for i in 0..EACH {
-                        look(w[0] + (w[1] - w[0]) * i as f64 / EACH as f64);
+                    for i in 0..each {
+                        look(w[0] + (w[1] - w[0]) * i as f64 / each as f64);
                     }
                 }
                 look(hi);
                 self.closest_polished(p, lo, hi, best.1)
             }
-            _ => self.closest_from(p, t0, t1, &self.closest_samples(t0, t1)),
         }
     }
 
-    /// The samples [`Self::closest`] starts from over [t0, t1] (none for lines and circles):
-    /// to give [`Self::closest_from`] when projecting many points onto one range.
+    /// Samples over [t0, t1] (none for lines and circles) to give [`Self::closest_from`] when
+    /// projecting many points onto one range: taken once, where [`Self::closest`] takes its
+    /// own each call.
     pub fn closest_samples(&self, t0: f64, t1: f64) -> [P3; CLOSEST_SAMPLES + 1] {
         let mut out = [P3::origin(); CLOSEST_SAMPLES + 1];
         if !matches!(self, Curve::Line { .. } | Curve::Circle { .. }) {
@@ -299,8 +297,9 @@ impl Curve {
         out
     }
 
-    /// [`Self::closest`] with its samples over [t0, t1] taken already ([`Self::closest_samples`]
-    /// of the same range): the same answer.
+    /// [`Self::closest`] from samples over [t0, t1] taken already ([`Self::closest_samples`]
+    /// of the same range): the same nearest point (lines and circles to the bit; the others
+    /// start from these samples, not `closest`'s own, and are polished the same).
     pub fn closest_from(&self, p: &P3, t0: f64, t1: f64, samples: &[P3]) -> f64 {
         match self {
             Curve::Line { .. } | Curve::Circle { .. } => self.closest(p, t0, t1),
@@ -766,10 +765,13 @@ mod tests {
                         3.0 - 0.17 * k as f64,
                         (k as f64).sin(),
                     );
-                    assert_eq!(
-                        c.closest(&p, t0, t1).to_bits(),
-                        c.closest_from(&p, t0, t1, &samples).to_bits()
-                    );
+                    let (own, given) =
+                        (c.closest(&p, t0, t1), c.closest_from(&p, t0, t1, &samples));
+                    if matches!(c, Curve::Line { .. }) {
+                        assert_eq!(own.to_bits(), given.to_bits());
+                    }
+                    let (d0, d1) = ((c.point(own) - p).norm(), (c.point(given) - p).norm());
+                    assert!((d0 - d1).abs() < 1e-9, "{d0} against {d1}");
                 }
                 for l in [1e-4, 1e-3, 0.5, 3.0, 50.0] {
                     assert_eq!(

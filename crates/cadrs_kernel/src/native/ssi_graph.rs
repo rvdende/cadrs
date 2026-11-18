@@ -472,7 +472,7 @@ fn along_a_ruling(
             t += TAU;
         }
     }
-    let size = bb.diagonal().max(1.0);
+    let size = bb.diagonal().max(crate::native::tol::POINT);
     let span = vbox.1 - vbox.0;
     // The curve h = −γ/2β: nowhere within the boxes, or the pair is the numeric engine's.
     // Sampled along θ (not at a zero of β, where it runs off along the ruling or through the
