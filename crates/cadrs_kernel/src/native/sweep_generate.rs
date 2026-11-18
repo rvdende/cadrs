@@ -941,10 +941,87 @@ impl Gen<'_> {
             HOP / 8.0 * self.tool.size / mu.max(1e-300),
             HOP / 8.0 * self.tool.size / mv.max(1e-300),
         );
-        let (u, v) = newton2(&eq, (guess.x, guess.y), h, 1e-12 * self.tool.size, reach)?;
+        // By the surface's own second derivatives first (one evaluation a step); by
+        // differences where that finds nothing (a pole, where the normal has no slope).
+        let (u, v) = self
+            .face_in_slice_exact(f, t, c, guess, &tw, reach)
+            .or_else(|| newton2(&eq, (guess.x, guess.y), h, 1e-12 * self.tool.size, reach))?;
         let found = P2::new(u, v);
         let moved = (self.tool.at(f, found).0 - self.tool.at(f, guess).0).norm();
         (moved <= HOP * self.tool.size).then_some(found)
+    }
+
+    /// [`Self::face_in_slice`]'s root by Newton's method with the two equations' slopes in
+    /// closed form: the slice coordinate's is its gradient along the surface's tangents, and
+    /// the contact's (n · (ω × p + u), the normal square to the velocity) follows from the
+    /// normal's own slope, n′ = (m′ − n (n · m′)) / |m| for m = Sᵤ × Sᵥ, and the velocity's,
+    /// ω × Sᵤ. One evaluation of the surface to its second derivatives a step, where
+    /// differences took five of its point and five of its normal.
+    fn face_in_slice_exact(
+        &self,
+        f: usize,
+        t: f64,
+        c: f64,
+        guess: P2,
+        tw: &Twist,
+        reach: (f64, f64),
+    ) -> Option<(f64, f64)> {
+        let face = &self.tool.b.faces[f];
+        let surf = &face.surf;
+        let (rot, shift) = self.motion.place(t);
+        let scale = self.tool.size / self.speed;
+        let tol = 1e-12 * self.tool.size;
+        let sense = if face.sense { 1.0 } else { -1.0 };
+        let (mut u, mut v) = (guess.x, guess.y);
+        for _ in 0..40 {
+            let d = surf.d2(u, v);
+            let (p, su, sv) = (d[0], d[1], d[2]);
+            let m = su.cross(&sv);
+            let len = m.norm();
+            if !(len > 1e-12 * su.norm() * sv.norm()) || !len.is_finite() {
+                return None;
+            }
+            // (The face's normal as the kernel has it: the surface's, by the face's sense.)
+            let n = surf.normal(u, v) * sense;
+            let turn = m.dot(&n).signum();
+            let slope = |mx: V3| (mx - n * n.dot(&mx)) * (turn / len);
+            let (nu, nv) = (
+                slope(d[3].cross(&sv) + su.cross(&d[4])),
+                slope(d[4].cross(&sv) + su.cross(&d[5])),
+            );
+            let w = tw.0.cross(&p) + tw.1;
+            let x = P3::from(rot * p + shift);
+            let grad = self.chart.grad(&x);
+            let a = self.chart.c(&x) - c;
+            let b = n.dot(&w) * scale;
+            if !(a.is_finite() && b.is_finite()) {
+                return None;
+            }
+            if a.abs() <= tol && b.abs() <= tol {
+                return Some((u, v));
+            }
+            let (au, av) = (grad.dot(&(rot * su)), grad.dot(&(rot * sv)));
+            let (bu, bv) = (
+                (nu.dot(&w) + n.dot(&tw.0.cross(&su))) * scale,
+                (nv.dot(&w) + n.dot(&tw.0.cross(&sv))) * scale,
+            );
+            let det = au * bv - av * bu;
+            if det.abs() < 1e-300 || !det.is_finite() {
+                return None;
+            }
+            let du = (-a * bv + b * av) / det;
+            let dv = (-b * au + a * bu) / det;
+            // (A step past the reach is cut to it, as the differences' Newton does.)
+            let k = (reach.0 / du.abs().max(1e-300))
+                .min(reach.1 / dv.abs().max(1e-300))
+                .min(1.0);
+            u += du * k;
+            v += dv * k;
+            if (u - guess.x).abs() > 8.0 * reach.0 || (v - guess.y).abs() > 8.0 * reach.1 {
+                return None;
+            }
+        }
+        None
     }
 
     /// A face group's contact point in slice `c` at t, from a guess on one of its faces: on
@@ -6504,7 +6581,9 @@ pub(super) fn cut(
                 tool.append(&space.transformed(&about(i)));
             }
             let tool = k.insert(tool);
-            let step = k.boolean(BoolOp::Subtract, target, &[tool]);
+            // (The spaces lie within the target, being its common part with the plug: their
+            // faces off its surfaces meet its faces along their own edges only.)
+            let step = super::boolean::subtract_within(k, target, &[tool]);
             k.release(tool);
             match step {
                 Ok(r) if r.bodies.len() == 1 && k.sound(r.bodies[0]) => Some(r),

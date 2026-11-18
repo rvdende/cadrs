@@ -122,6 +122,12 @@ pub struct BoolOptions {
     /// growing tolerances: the ladder); off, the first run's answer stands (a question that
     /// needs no more, as whether a New's body touches a part).
     pub retry: bool,
+    /// The second body lies within the first (it was made by intersecting something with it:
+    /// a tooth space cut out of its blank): a face of it not on one of the first's surfaces
+    /// meets none of the first's faces but along its own edges, which are already there, so
+    /// no pair of faces on different surfaces is intersected. Only faces on one surface are
+    /// matched and imprinted on each other.
+    pub within: bool,
 }
 
 /// The largest default fuzzy value, as a part of the inputs' size.
@@ -141,6 +147,7 @@ impl Default for BoolOptions {
             work_budget: DEFAULT_WORK_BUDGET,
             fuzzy: None,
             retry: true,
+            within: false,
         }
     }
 }
@@ -156,6 +163,8 @@ struct RunOpts {
     /// Whether a result whose new faces cross (each other, or their own loops in (u, v)) is
     /// refused ([`CROSSING`]).
     check_crossings: bool,
+    /// [`BoolOptions::within`].
+    within: bool,
 }
 
 /// The stage of a run's refusal of a result whose new faces cross.
@@ -218,6 +227,7 @@ impl RunOpts {
         merge_coplanar: true,
         work_budget: DEFAULT_WORK_BUDGET,
         check_crossings: false,
+        within: false,
     };
 }
 
@@ -1556,6 +1566,7 @@ fn ladder(a: &Body, b: &Body, op: BoolOp, mut opts: BoolOptions) -> Result<BoolO
         merge_coplanar: opts.merge_coplanar,
         work_budget: opts.work_budget,
         check_crossings: true,
+        within: opts.within,
     };
     let first = match attempt(run(a, b, Mode::Bool(op), at(opts.tol.point))) {
         Ok((r, true)) => Ok(r),
@@ -2910,6 +2921,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         merge_coplanar,
         work_budget,
         check_crossings,
+        within,
     } = opts;
     // The work done so far, against the budget: the default one grows with the inputs (a
     // meshed solid's thousands of faces each cost their share), a smaller one stands.
@@ -3447,6 +3459,11 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             {
                 coincident[fa].push(fb);
                 coincident[fb].push(fa);
+                continue;
+            }
+            // (The second body within the first: faces on different surfaces meet only along
+            // the second's own edges, there already.)
+            if within {
                 continue;
             }
             // Faces that share an edge and are tangent along it (one continues the other): the
@@ -5874,6 +5891,20 @@ pub fn boolean_once(
     boolean_opts(k, op, target, tools, opts)
 }
 
+/// `tools` subtracted from `target` where they lie within it ([`BoolOptions::within`]).
+pub(crate) fn subtract_within(
+    k: &mut NativeKernel,
+    target: BodyId,
+    tools: &[BodyId],
+) -> Result<OpResult> {
+    let opts = BoolOptions {
+        tol: k.tolerances(),
+        within: true,
+        ..BoolOptions::default()
+    };
+    boolean_opts(k, BoolOp::Subtract, target, tools, opts)
+}
+
 fn boolean_opts(
     k: &mut NativeKernel,
     op: BoolOp,
@@ -6260,6 +6291,7 @@ mod tests {
             merge_coplanar: true,
             work_budget: DEFAULT_WORK_BUDGET,
             check_crossings: false,
+            within: false,
         };
         let r = run(&a, &b, Mode::Bool(BoolOp::Union), opts).unwrap();
         assert_eq!(r.body.solids.len(), 1);
