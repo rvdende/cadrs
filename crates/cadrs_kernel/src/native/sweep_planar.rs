@@ -360,7 +360,7 @@ fn planar(k: &mut NativeKernel, b: &Body, n: V3, motion: Planar) -> Result<OpRes
         .iter()
         .map(|q| q.coords.norm())
         .fold(0.0, f64::max)
-        .max(1.0);
+        .max(crate::native::tol::POINT);
     // Back where it started: turned whole turns, not moved.
     let turns = (t1.0 - t0.0) / (2.0 * PI);
     let closed = (turns - turns.round()).abs() < 1e-9 && (t1.1 - t0.1).norm() < 1e-9 * size;

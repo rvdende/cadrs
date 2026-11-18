@@ -53,6 +53,9 @@ pub enum Surface {
 /// Point and derivatives: S, Su, Sv, Suu, Suv, Svv.
 pub type D2 = [V3; 6];
 
+/// A side of the blocks of grid points a box is kept of ([`Surface::grid_points`]).
+const GRID_BLOCK: usize = 5;
+
 /// The surface a kept grid ([`Surface::grid_points`]) is of: a B-spline surface, or an extrusion
 /// of a B-spline curve along a direction.
 #[derive(Clone)]
@@ -475,43 +478,95 @@ impl Surface {
         // Unhinted: Newton from the nearest grid point, and when that stops short of `p` (in
         // another basin of the distance: a surface curving back on itself between grid
         // points), from the next nearest local minima of the grid too.
-        let mut others: Vec<(f64, (f64, f64))> = Vec::new();
         // The nearest grid point (squared distance): no answer may be farther.
         let mut grid_best: Option<(f64, (f64, f64))> = None;
+        let at = |i: usize, j: usize| {
+            (
+                u0 + (u1 - u0) * i as f64 / n as f64,
+                v0 + (v1 - v0) * j as f64 / n as f64,
+            )
+        };
+        let w = n + 1;
         let (u, v) = match hint {
             Some(h) => h,
             None => {
-                let at = |i: usize, j: usize| {
-                    (
-                        u0 + (u1 - u0) * i as f64 / n as f64,
-                        v0 + (v1 - v0) * j as f64 / n as f64,
-                    )
-                };
+                // The nearest grid point by its blocks' boxes, nearest block first: a block
+                // whose box is farther than the best point found is not looked into (branch
+                // and bound; most points lie near one block or two of 25). The first of equal
+                // points in row order, as a scan of them all would find.
                 let grid = self.grid_points(n, &at);
-                let d: Vec<f64> = grid.iter().map(|g| (g - p).norm_squared()).collect();
-                // The grid's local minima (no neighbour nearer), row by row.
-                let w = n + 1;
-                for i in 0..w {
-                    let rows = i.saturating_sub(1)..(i + 1).min(n) + 1;
-                    for j in 0..w {
-                        let x = d[i * w + j];
-                        let (b0, b1) = (j.saturating_sub(1), (j + 1).min(n) + 1);
-                        let lowest = rows
-                            .clone()
-                            .all(|a| d[a * w + b0..a * w + b1].iter().all(|&y| y >= x));
-                        if lowest {
-                            others.push((x, at(i, j)));
+                let (points, boxes) = grid.split_at(w * w);
+                let across = w.div_ceil(GRID_BLOCK);
+                let bound = |k: usize| {
+                    let (lo, hi) = (boxes[2 * k], boxes[2 * k + 1]);
+                    (0..3)
+                        .map(|a| (lo[a] - p[a]).max(p[a] - hi[a]).max(0.0).powi(2))
+                        .sum::<f64>()
+                };
+                let mut best = (f64::INFINITY, 0usize);
+                let look = |k: usize, best: &mut (f64, usize)| {
+                    let (bi, bj) = (k / across * GRID_BLOCK, k % across * GRID_BLOCK);
+                    for i in bi..(bi + GRID_BLOCK).min(w) {
+                        for j in bj..(bj + GRID_BLOCK).min(w) {
+                            let x = (points[i * w + j] - p).norm_squared();
+                            if x < best.0 || (x == best.0 && i * w + j < best.1) {
+                                *best = (x, i * w + j);
+                            }
                         }
                     }
+                };
+                let blocks = boxes.len() / 2;
+                let first = (0..blocks)
+                    .map(|k| (bound(k), k))
+                    .min_by(|a, b| a.0.total_cmp(&b.0))
+                    .map_or(0, |x| x.1);
+                look(first, &mut best);
+                for k in (0..blocks).filter(|k| *k != first) {
+                    // (A little slack: the bound is rounded as the distances are.)
+                    if bound(k) <= best.0 * (1.0 + 1e-12) {
+                        look(k, &mut best);
+                    }
                 }
-                others.sort_by(|a, b| a.0.total_cmp(&b.0));
-                grid_best = others.first().copied();
-                if others.is_empty() {
-                    (u0, v0)
+                if best.0.is_finite() {
+                    let uv = at(best.1 / w, best.1 % w);
+                    grid_best = Some((best.0, uv));
+                    uv
                 } else {
-                    others.remove(0).1
+                    (u0, v0)
                 }
             }
+        };
+        // Where Newton from there stops short of `p` (another basin of the distance: a surface
+        // curving back on itself between grid points), the grid's other local minima, nearest
+        // first: found only then, by a scan of the whole grid.
+        let others = || -> Vec<(f64, (f64, f64))> {
+            if hint.is_some() {
+                return Vec::new();
+            }
+            let grid = self.grid_points(n, &at);
+            let d: Vec<f64> = grid[..w * w]
+                .iter()
+                .map(|g| (g - p).norm_squared())
+                .collect();
+            let mut others = Vec::new();
+            for i in 0..w {
+                let rows = i.saturating_sub(1)..(i + 1).min(n) + 1;
+                for j in 0..w {
+                    let x = d[i * w + j];
+                    let (b0, b1) = (j.saturating_sub(1), (j + 1).min(n) + 1);
+                    let lowest = rows
+                        .clone()
+                        .all(|a| d[a * w + b0..a * w + b1].iter().all(|&y| y >= x));
+                    if lowest {
+                        others.push((x, at(i, j)));
+                    }
+                }
+            }
+            others.sort_by(|a, b| a.0.total_cmp(&b.0));
+            if !others.is_empty() {
+                others.remove(0);
+            }
+            others
         };
         let newton = |mut u: f64, mut v: f64| {
             for _ in 0..50 {
@@ -581,7 +636,12 @@ impl Surface {
         };
         let (mut u, mut v) = newton(u, v);
         let near_enough = 1e-7 * (1.0 + p.coords.norm());
-        for (_, (a, b)) in others.into_iter().take(4) {
+        let more = if (self.eval(u, v) - p).norm() <= near_enough {
+            Vec::new()
+        } else {
+            others()
+        };
+        for (_, (a, b)) in more.into_iter().take(4) {
             let off = (self.eval(u, v) - p).norm();
             if off <= near_enough {
                 break;
@@ -666,9 +726,10 @@ impl Surface {
     /// intersections, a fillet's balls against a wall): its grids are kept, per thread, for the
     /// last few surfaces, and behind those for all threads ([`SharedGrids`]) (known by their
     /// `Arc`; the `Weak` held keeps the allocation, so no other surface can come to share its
-    /// address).
+    /// address). After the points, each block of [`GRID_BLOCK`]² of them's box (its least
+    /// corner, then its greatest), row by row.
     fn grid_points(&self, n: usize, at: &dyn Fn(usize, usize) -> (f64, f64)) -> Arc<[P3]> {
-        let compute = || -> Arc<[P3]> {
+        let points = || -> Arc<[P3]> {
             // An extrusion's points of a row differ by v·d alone: its curve once per row, not
             // per point (each point as `eval` makes it).
             if let Surface::Extrusion { c, d } = self {
@@ -692,6 +753,22 @@ impl Surface {
                     self.eval(a, b)
                 })
                 .collect()
+        };
+        let compute = || -> Arc<[P3]> {
+            let mut points: Vec<P3> = points().to_vec();
+            let w = n + 1;
+            let across = w.div_ceil(GRID_BLOCK);
+            for k in 0..across * across {
+                let (bi, bj) = (k / across * GRID_BLOCK, k % across * GRID_BLOCK);
+                let mut bb = Bbox::empty();
+                for i in bi..(bi + GRID_BLOCK).min(w) {
+                    for j in bj..(bj + GRID_BLOCK).min(w) {
+                        bb.add(&points[i * w + j]);
+                    }
+                }
+                points.extend([bb.min, bb.max]);
+            }
+            points.into()
         };
         let key = match self {
             Surface::Nurbs(ns) => GridOf::Nurbs(Arc::downgrade(ns)),
@@ -987,6 +1064,40 @@ impl Surface {
         }
     }
 
+    /// Which way [`Self::signed_distance`] grows fastest at `p`: the unit normal at its foot,
+    /// in closed form. `None` for the surfaces that function has none for, and on an axis
+    /// (where the foot is a whole circle).
+    pub fn signed_distance_gradient(&self, p: &P3) -> Option<V3> {
+        let radial = |f: &Frame| {
+            let l = f.local(p);
+            let rho = l.x.hypot(l.y);
+            (rho > tol::TINY).then(|| (f.world_vec(&V3::new(l.x / rho, l.y / rho, 0.0)), rho, l.z))
+        };
+        Some(match self {
+            Surface::Plane { f } => f.x.cross(&f.y),
+            Surface::Cylinder { f, .. } => radial(f)?.0,
+            Surface::Cone { f, a, .. } => {
+                let (sa, ca) = a.sin_cos();
+                radial(f)?.0 * ca - f.z * sa
+            }
+            Surface::Sphere { f, .. } => (p - f.o).try_normalize(tol::TINY)?,
+            Surface::Torus { f, rmaj, rmin } => {
+                let (e, rho, z) = radial(f)?;
+                let (near, far) = ((rho - rmaj).hypot(z), (rho + rmaj).hypot(z));
+                let (across, len) = if rmin > rmaj && (far - rmin).abs() < (near - rmin).abs() {
+                    (rho + rmaj, far)
+                } else {
+                    (rho - rmaj, near)
+                };
+                if len <= tol::TINY {
+                    return None;
+                }
+                (e * across + f.z * z) / len
+            }
+            _ => return None,
+        })
+    }
+
     /// Signed distance from `p` to an analytic surface (positive on the natural normal's side).
     pub fn signed_distance(&self, p: &P3) -> Option<f64> {
         Some(match self {
@@ -1124,6 +1235,7 @@ impl Surface {
                     r: *rmin,
                 }
             }
+            Surface::Nurbs(n) => Curve::Nurbs(Arc::new(n.iso_u_curve(u))),
             _ => return None,
         })
     }

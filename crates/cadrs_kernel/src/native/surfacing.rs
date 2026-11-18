@@ -143,6 +143,70 @@ pub fn thicken(k: &mut NativeKernel, spec: &ThickenSpec) -> Result<OpResult> {
     Ok(t.into_result(k))
 }
 
+/// The strip that leaves a one-face sheet along `edge` of it: from the edge, `width` along the
+/// face's own tangent there, away from the face. A face whose surface ends at the edge runs
+/// on in it. Its surface faces as the face's does along the edge.
+fn tangent_strip(sheet: &Body, edge: &super::topo::Edge, width: f64) -> Result<Body> {
+    const STATIONS: usize = 32;
+    let face = &sheet.faces[0];
+    let unsupported = || KernelError::Unsupported("a mitred join at this face's edge");
+    // Away from the face: against the way to its middle, from the edge's middle.
+    let (middle, _) = face_normal(sheet, 0).ok_or_else(unsupported)?;
+    let at = |t: f64| -> Option<(P3, V3, V3)> {
+        let p = edge.curve.point(t);
+        let (u, v) = face.surf.project(&p, None);
+        let n = face.surf.normal(u, v).try_normalize(tol::TINY)?;
+        let out = edge.curve.tangent(t).cross(&n).try_normalize(tol::TINY)?;
+        Some((p, n, out))
+    };
+    let tm = 0.5 * (edge.t[0] + edge.t[1]);
+    let (pm, nm, om) = at(tm).ok_or_else(unsupported)?;
+    let away = if om.dot(&(middle - pm)) > 0.0 {
+        -1.0
+    } else {
+        1.0
+    };
+    let params: Vec<f64> = (0..=STATIONS)
+        .map(|i| edge.t[0] + (edge.t[1] - edge.t[0]) * i as f64 / STATIONS as f64)
+        .collect();
+    let mut near = Vec::new();
+    let mut far = Vec::new();
+    for &t in &params {
+        let (p, _, out) = at(t).ok_or_else(unsupported)?;
+        near.push(p);
+        far.push(p + out * (away * width));
+    }
+    let curve = |pts: &[P3]| super::nurbs::NurbsCurve::interpolate(pts, &params, 3, None, None);
+    let ruled = |a: &[P3], b: &[P3]| {
+        Surface::Nurbs(std::sync::Arc::new(super::loft_build::skin(
+            &[curve(a), curve(b)],
+            &[0.0, 1.0],
+        )))
+    };
+    // (Ruled from the edge out, or from out to the edge: whichever faces as the face does.)
+    let mut surf = ruled(&near, &far);
+    if surf.normal(tm, 0.5).dot(&nm) < 0.0 {
+        surf = ruled(&far, &near);
+    }
+    super::face_build::face_from_surface(&surf, None)
+}
+
+/// Whether a surface is turned about the axis through `c` along `z`: a plane square to it, or
+/// a cylinder, cone, sphere or torus about it. Its section in every half-plane through the
+/// axis is then the same.
+fn turned_about(s: &Surface, c: &P3, z: &V3) -> bool {
+    let on_axis = |o: &P3| (o - c).cross(z).norm() <= tol::POINT;
+    let along = |d: &V3| d.cross(z).norm() <= tol::ANGULAR * d.norm();
+    match s {
+        Surface::Plane { f } => along(&f.x.cross(&f.y)),
+        Surface::Cylinder { f, .. } | Surface::Cone { f, .. } | Surface::Torus { f, .. } => {
+            on_axis(&f.o) && along(&f.z)
+        }
+        Surface::Sphere { f, .. } => on_axis(&f.o),
+        _ => false,
+    }
+}
+
 /// The solids filling the gaps between the slabs of a sheet's faces (each swept along its normal
 /// by `spec.along`, and against it by `spec.against`) where two flat faces meet along a straight
 /// crease and the sheet bends away from the side the slabs go to: the wedge between the slabs'
@@ -177,7 +241,7 @@ fn crease_fills(k: &mut NativeKernel, sheets: &[Body], spec: &ThickenSpec) -> Re
     let bb = sewn.bbox();
     let mut out = Vec::new();
     for (e, faces) in ef.iter().enumerate() {
-        let &[f1, f2] = faces.as_slice() else {
+        let &[f1, f2] = faces else {
             continue;
         };
         let edge = &sewn.edges[e];
@@ -201,6 +265,186 @@ fn crease_fills(k: &mut NativeKernel, sheets: &[Body], spec: &ThickenSpec) -> Re
                 let t = dir.cross(&n).try_normalize(tol::TINY)?;
                 Some((n, if t.dot(&(c - m)) < 0.0 { -t } else { t }))
             };
+            // A crease round a circle between faces turned about its axis (a floor and the
+            // wall round it, a cone on a cylinder): the gap is the same all the way round, the
+            // straight crease's kite or sector turned about the axis.
+            if let Curve::Circle { c, x, y, .. } = &edge.curve
+                && let Some(z) = x.cross(y).try_normalize(tol::TINY)
+                && turned_about(&sewn.faces[f1].surf, c, &z)
+                && turned_about(&sewn.faces[f2].surf, c, &z)
+            {
+                let (t0, t1) = (edge.t[0].min(edge.t[1]), edge.t[0].max(edge.t[1]));
+                let a = edge.curve.point(t0);
+                let dir = edge.curve.tangent(t0).normalize();
+                // Each face's outward normal at the crease's start, and the way into it there.
+                let beside = |f: usize| -> Option<(V3, V3)> {
+                    let face = &sheets[f].faces.first()?;
+                    // (A hair into the face: at the crease itself a cone's apex or a pole
+                    // would have no normal.)
+                    let (centre, _) = face_normal(&sewn, f)?;
+                    let (u, v) = face.surf.project(&a, None);
+                    let n = (face.surf.normal(u, v) * if face.sense { 1.0 } else { -1.0 })
+                        .try_normalize(tol::TINY)?;
+                    let t = dir.cross(&n).try_normalize(tol::TINY)?;
+                    // (Into the face: towards its own side of the crease, told a quarter of
+                    // the way to its middle.)
+                    let towards = a + (centre - a) * 0.25;
+                    let (u2, v2) = face.surf.project(&towards, None);
+                    let inside = face.surf.eval(u2, v2) - a;
+                    Some((n, if t.dot(&inside) < 0.0 { -t } else { t }))
+                };
+                if let (Some((n1, t1v)), Some((n2, t2v))) = (beside(f1), beside(f2)) {
+                    for (d, sign) in [(spec.along, 1.0), (spec.against, -1.0)] {
+                        if d < tol::ROUNDOFF {
+                            continue;
+                        }
+                        let (m1, m2) = (n1 * sign, n2 * sign);
+                        if m1.dot(&t2v) >= -tol::ANGULAR || m2.dot(&t1v) >= -tol::ANGULAR {
+                            continue;
+                        }
+                        let px = m1;
+                        let py = dir.cross(&px);
+                        let at2 = |p: P3| nalgebra::Point2::new((p - a).dot(&px), (p - a).dot(&py));
+                        let l = |p: P3, q: P3| Curve2::Line {
+                            a: at2(p),
+                            b: at2(q),
+                            source: None,
+                        };
+                        let curves = if spec.sharp {
+                            let corner = a + (m1 + m2) * (d / (1.0 + m1.dot(&m2)));
+                            let pts = [a, a + m1 * d, corner, a + m2 * d];
+                            (0..4).map(|i| l(pts[i], pts[(i + 1) % 4])).collect()
+                        } else {
+                            // The sector about the crease from one moved face to the other.
+                            let to = m2.dot(&py).atan2(m2.dot(&px));
+                            vec![
+                                l(a, a + m1 * d),
+                                Curve2::arc(nalgebra::Point2::origin(), d, 0.0, to),
+                                l(a + m2 * d, a),
+                            ]
+                        };
+                        let plane = Plane {
+                            origin: a,
+                            x_dir: nalgebra::Unit::new_normalize(px),
+                            normal: nalgebra::Unit::new_normalize(dir),
+                        };
+                        let region = Region {
+                            outer: Loop { curves },
+                            holes: vec![],
+                            source: None,
+                        };
+                        let axis = Axis {
+                            origin: *c,
+                            dir: nalgebra::Unit::new_normalize(z),
+                        };
+                        let id = k.revolve(&Profile::new(plane, vec![region]), axis, t1 - t0)?;
+                        let body = k.get(id.bodies[0])?.as_ref().clone();
+                        k.release(id.bodies[0]);
+                        out.push(body);
+                    }
+                    continue;
+                }
+            }
+            // Any other crease, rounded: the tube of the thickness round it, less what of it
+            // lies behind the sheet (the two faces' slabs the other way hold all of that: a
+            // point behind the sheet near the crease is over one face or the other). What is
+            // left fills the gap between the slabs and lies in them elsewhere.
+            // Mitred: what lies within the thickness of both faces' surfaces run on a little
+            // past the crease (each face's slab, of the face made wider): the corner between
+            // the two slabs, out to where their far sides meet. For surfaces that run on
+            // (a spline doesn't, past its range).
+            if spec.sharp
+                && let (Some((n1, t1)), Some((n2, t2))) = (at(f1), at(f2))
+            {
+                let mut filled = true;
+                let mut fills = Vec::new();
+                for (d, sign) in [(spec.along, 1.0), (spec.against, -1.0)] {
+                    if d < tol::ROUNDOFF
+                        || (n1 * sign).dot(&t2) >= -tol::ANGULAR_POINT.sqrt()
+                        || (n2 * sign).dot(&t1) >= -tol::ANGULAR_POINT.sqrt()
+                    {
+                        continue;
+                    }
+                    let wider = |f: usize| -> Result<Body> {
+                        let face = &sheets[f].faces[0];
+                        let ((u0, u1), (v0, v1)) = super::heal_split::face_uv_box(&sheets[f], 0)
+                            .ok_or(KernelError::Unsupported("thickening a face with no extent"))?;
+                        let (mu, mv) = face.surf.metric();
+                        let (gu, gv) = (3.0 * d / mu.max(tol::TINY), 3.0 * d / mv.max(tol::TINY));
+                        // (No wider than a turn of a surface that comes round.)
+                        let span = |lo: f64, hi: f64, g: f64, round: bool| {
+                            if round && hi - lo + 2.0 * g >= std::f64::consts::TAU {
+                                (lo, lo + std::f64::consts::TAU)
+                            } else {
+                                (lo - g, hi + g)
+                            }
+                        };
+                        let domain = (
+                            span(u0, u1, gu, face.surf.u_periodic()),
+                            span(v0, v1, gv, face.surf.v_periodic()),
+                        );
+                        let run_on = super::face_build::face_from_surface(&face.surf, Some(domain));
+                        let mut ext = match run_on {
+                            Ok(ext) => ext,
+                            // A surface that doesn't run on past the crease (a B-spline, at
+                            // the end of its range): the strip that leaves it there along
+                            // its own tangent, three thicknesses wide.
+                            Err(_) => tangent_strip(&sheets[f], edge, 3.0 * d)?,
+                        };
+                        if ext.faces[0].sense != face.sense {
+                            super::topo::Body::reverse_face(&mut ext.faces[0]);
+                        }
+                        slab(&ext, sign * d)
+                    };
+                    // (And no farther along the crease than it runs: within the tube round
+                    // it, whose ends are flat across its own.)
+                    let fill = wider(f1).and_then(|a| {
+                        let b = wider(f2)?;
+                        let both = super::boolean::boolean_bodies(&a, &b, BoolOp::Intersect)?.body;
+                        let tube = super::offset::round::edge_tube(&sewn, e, 3.0 * d)?;
+                        Ok(super::boolean::boolean_bodies(&both, &tube, BoolOp::Intersect)?.body)
+                    });
+                    match fill {
+                        Ok(fill) => fills.push(fill),
+                        Err(_) => filled = false,
+                    }
+                }
+                if filled {
+                    out.extend(fills);
+                    continue;
+                }
+            }
+            if !spec.sharp
+                && let (Some((n1, t1)), Some((n2, t2))) = (at(f1), at(f2))
+            {
+                let mut filled = true;
+                let mut fills = Vec::new();
+                for (d, sign) in [(spec.along, 1.0), (spec.against, -1.0)] {
+                    if d < tol::ROUNDOFF
+                        || (n1 * sign).dot(&t2) >= -tol::ANGULAR_POINT.sqrt()
+                        || (n2 * sign).dot(&t1) >= -tol::ANGULAR_POINT.sqrt()
+                    {
+                        continue;
+                    }
+                    let fill = super::offset::round::edge_tube(&sewn, e, d).and_then(|tube| {
+                        [f1, f2].into_iter().try_fold(tube, |acc, f| {
+                            let behind = slab(&sheets[f], -sign * d)?;
+                            Ok(
+                                super::boolean::boolean_bodies(&acc, &behind, BoolOp::Subtract)?
+                                    .body,
+                            )
+                        })
+                    });
+                    match fill {
+                        Ok(fill) => fills.push(fill),
+                        Err(_) => filled = false,
+                    }
+                }
+                if filled {
+                    out.extend(fills);
+                    continue;
+                }
+            }
             if let (Some((n1, t1)), Some((n2, t2))) = (at(f1), at(f2)) {
                 let away =
                     [(spec.along, 1.0), (spec.against, -1.0)]
@@ -1132,6 +1376,8 @@ pub fn delete_faces(k: &mut NativeKernel, body: BodyId, remove: &[FaceId]) -> Re
     // A face goes whole: with the faces that carry on its surface across an edge (a round
     // made in two strips where its rim was two edges).
     let mut gone = gone;
+    // (The deleted faces, and below the edges round them, also as masks: asked of every edge.)
+    let mut is_gone = super::topo::Mask::of(b.faces.len(), &gone);
     let tc = tol::CONFUSION.max(tol::REL * b.bbox().diagonal());
     let mut at = 0;
     while at < gone.len() {
@@ -1139,13 +1385,14 @@ pub fn delete_faces(k: &mut NativeKernel, body: BodyId, remove: &[FaceId]) -> Re
         at += 1;
         for c in b.faces[f].loops.iter().flatten() {
             for &g in &ef[c.edge] {
-                if !gone.contains(&g)
+                if !is_gone.contains(&g)
                     && b.faces[g]
                         .surf
                         .same_domain(&b.faces[f].surf, tc)
                         .is_some_and(|same| same == (b.faces[g].sense == b.faces[f].sense))
                 {
                     gone.push(g);
+                    is_gone.insert(g);
                 }
             }
         }
@@ -1153,18 +1400,21 @@ pub fn delete_faces(k: &mut NativeKernel, body: BodyId, remove: &[FaceId]) -> Re
     // Edges between a deleted face and a kept one.
     let boundary: Vec<usize> = (0..b.edges.len())
         .filter(|&e| {
-            ef[e].iter().any(|f| gone.contains(f)) && ef[e].iter().any(|f| !gone.contains(f))
+            ef[e].iter().any(|f| is_gone.contains(f)) && ef[e].iter().any(|f| !is_gone.contains(f))
         })
         .collect();
+    let on_boundary = super::topo::Mask::of(b.edges.len(), &boundary);
     // Faces closed off by whole inner loops of the faces left (a hole's wall, a boss) go with
     // those loops; any others have the faces round them run on to meet
     // ([`super::defeature`]).
-    let whole_inner = (0..b.faces.len()).filter(|f| !gone.contains(f)).all(|fi| {
-        b.faces[fi].loops.iter().enumerate().all(|(li, l)| {
-            let touches = l.iter().any(|c| boundary.contains(&c.edge));
-            !touches || (li != 0 && l.iter().all(|c| boundary.contains(&c.edge)))
-        })
-    });
+    let whole_inner = (0..b.faces.len())
+        .filter(|f| !is_gone.contains(f))
+        .all(|fi| {
+            b.faces[fi].loops.iter().enumerate().all(|(li, l)| {
+                let touches = l.iter().any(|c| on_boundary.contains(&c.edge));
+                !touches || (li != 0 && l.iter().all(|c| on_boundary.contains(&c.edge)))
+            })
+        });
     if !whole_inner {
         let (out, from) = super::defeature::delete_faces(&b, &gone)?;
         let mut history = History::default();
@@ -1193,14 +1443,16 @@ pub fn delete_faces(k: &mut NativeKernel, body: BodyId, remove: &[FaceId]) -> Re
     }
     let mut out = (*b).clone();
     for fi in 0..out.faces.len() {
-        if gone.contains(&fi) {
+        if is_gone.contains(&fi) {
             continue;
         }
         out.faces[fi]
             .loops
-            .retain(|l| !l.iter().any(|c| boundary.contains(&c.edge)));
+            .retain(|l| !l.iter().any(|c| on_boundary.contains(&c.edge)));
     }
-    let keep: Vec<usize> = (0..out.faces.len()).filter(|f| !gone.contains(f)).collect();
+    let keep: Vec<usize> = (0..out.faces.len())
+        .filter(|f| !is_gone.contains(f))
+        .collect();
     out.faces = keep.iter().map(|&f| out.faces[f].clone()).collect();
     super::unify::compact(&mut out);
     out.shells.clear();

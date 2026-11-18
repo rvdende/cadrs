@@ -88,7 +88,7 @@ fn face_slab(b: &Body, fi: usize, d: f64) -> Result<Body> {
 
 /// A tube of radius r round an edge (a cylinder along a line, a torus section round an arc),
 /// with flat ends.
-fn edge_tube(b: &Body, e: usize, r: f64) -> Result<Body> {
+pub(crate) fn edge_tube(b: &Body, e: usize, r: f64) -> Result<Body> {
     let ed = &b.edges[e];
     // A B-spline edge that is straight (a loft's rails to a point): the cylinder round the line
     // (a pipe swept along it touches the faces' slabs along seams the booleans can't settle).
@@ -978,7 +978,7 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
         let dist: Vec<f64> = (0..b.faces.len())
             .map(|f| {
                 if remove.contains(&f) {
-                    size * 0.1 + 1.0
+                    size * 0.1 + crate::native::tol::small(size)
                 } else {
                     -t
                 }
@@ -1985,11 +1985,13 @@ pub fn inset_rounded(b: &Body, dist: &[f64]) -> Result<Body> {
 /// faces' edges and vertices unless `round_still`).
 fn rounds(b: &Body, still: &[usize], t: f64, round_still: bool) -> Result<Vec<(Body, String)>> {
     let ef = b.edge_faces();
+    let still = crate::native::topo::Mask::of(b.faces.len(), still);
     let at_still = |e: usize| !round_still && ef[e].iter().any(|f| still.contains(f));
     let still_verts: Vec<usize> = (0..b.edges.len())
         .filter(|&e| at_still(e))
         .flat_map(|e| b.edges[e].v)
         .collect();
+    let still_verts = crate::native::topo::Mask::of(b.verts.len(), &still_verts);
     let kinds: Vec<Dihedral> = (0..b.edges.len()).map(|e| dihedral(b, e)).collect();
     let mut pieces: Vec<(Body, String)> = Vec::new();
     let mut balls: Vec<P3> = Vec::new();

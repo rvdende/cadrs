@@ -227,7 +227,7 @@ pub fn split_face(surf: &Surface, flip: bool, boundary: &[Vec<Arc>], cuts: &[Arc
         }
         bb.diagonal().max(tol::ROUNDOFF)
     };
-    let ntol = (size * 1e-7).max(1e-7);
+    let ntol = (size * 1e-7).max(1e-7 * tol::small(size));
     let mut nodes: Vec<(usize, P2)> = Vec::new();
     // One vertex's arcs meet in one node within a part in 10³ of the face in (u, v), their
     // p-curves ending a vertex tolerance apart (a face handed on by an earlier operation), but
@@ -259,13 +259,7 @@ pub fn split_face(surf: &Surface, flip: bool, boundary: &[Vec<Arc>], cuts: &[Arc
     // Then nodes of one vertex `near` each other are one, unless an arc runs between them (an
     // edge shorter than the tolerance, both its ends one vertex, still has two).
     let mut root: Vec<usize> = (0..nodes.len()).collect();
-    fn find(root: &mut [usize], mut i: usize) -> usize {
-        while root[i] != i {
-            root[i] = root[root[i]];
-            i = root[i];
-        }
-        i
-    }
+    use super::math::set_of as find;
     let joined: std::collections::HashSet<(usize, usize)> = ends
         .iter()
         .map(|e| (e[0].min(e[1]), e[0].max(e[1])))

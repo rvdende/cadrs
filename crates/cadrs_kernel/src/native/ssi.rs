@@ -668,12 +668,7 @@ fn plane_cone(fp: &Frame, fc: &Frame, r: f64, ang: f64, bb: &Bbox) -> Option<Vec
     }
     let edge_of = |a: f64, b: f64| -> f64 {
         // The boundary between an inside `a` and an outside `b`.
-        let (mut lo, mut hi) = (a, b);
-        for _ in 0..60 {
-            let mid = 0.5 * (lo + hi);
-            if inside(mid) { lo = mid } else { hi = mid }
-        }
-        lo
+        super::math::bisect(a, b, &inside).0
     };
     // The sample `i` steps on from `start`, unwrapped past 2π.
     let at = |start: usize, i: usize| us[(start + i) % m] + if start + i >= m { TAU } else { 0.0 };
@@ -974,7 +969,7 @@ fn analytic(a: &Surface, b: &Surface, bb: &Bbox, run_tol: f64) -> Option<Vec<Int
                     // The plane's trace in the section plane: n projected square to z.
                     let np = (n - z * n.dot(&z)).try_normalize(tol::DEGENERATE)?;
                     let dd = d / n.dot(&np);
-                    if dd.abs() > *r + 1e-7 * r.max(1.0) {
+                    if dd.abs() > *r + 1e-7 * r.max(tol::POINT) {
                         return None;
                     }
                     let w = z.cross(&np).normalize();
@@ -984,7 +979,7 @@ fn analytic(a: &Surface, b: &Surface, bb: &Bbox, run_tol: f64) -> Option<Vec<Int
                 };
                 if let (Some(a), Some(b)) = (cuts(h0), cuts(h1)) {
                     let mut out = Vec::new();
-                    let tangent = (a[0] - a[1]).norm() < 1e-7 * r.max(1.0);
+                    let tangent = (a[0] - a[1]).norm() < 1e-7 * r.max(tol::POINT);
                     for i in 0..if tangent { 1 } else { 2 } {
                         if let Some(d) = (b[i] - a[i]).try_normalize(tol::DEGENERATE) {
                             out.extend(bound_line(a[i], d, &bbig));
@@ -998,7 +993,7 @@ fn analytic(a: &Surface, b: &Surface, bb: &Bbox, run_tol: f64) -> Option<Vec<Int
                 let d = (fc.o - fp.o).dot(&n); // signed distance of the axis from the plane
                 // (A plane touching within the tangency tolerance, outside as well as inside,
                 // meets the cylinder along one line.)
-                if d.abs() > r + 1e-7 * r.max(1.0) {
+                if d.abs() > r + 1e-7 * r.max(tol::POINT) {
                     return Some(vec![]);
                 }
                 let foot = fc.o - n * d;
@@ -1007,7 +1002,7 @@ fn analytic(a: &Surface, b: &Surface, bb: &Bbox, run_tol: f64) -> Option<Vec<Int
                 let mut out = Vec::new();
                 // Tangent (to within a tenth of the boolean's tolerance in distance; the two lines
                 // of a plane 1e-16 inside are still 1.5e-8 apart): one line.
-                if h < tol::ROUNDOFF || r - d.abs() < 1e-7 * r.max(1.0) {
+                if h < tol::ROUNDOFF || r - d.abs() < 1e-7 * r.max(tol::POINT) {
                     out.extend(bound_line(foot, z, &bbig));
                 } else {
                     out.extend(bound_line(foot + w * h, z, &bbig));
@@ -2437,6 +2432,9 @@ pub fn curve_surface(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Vec<f64> {
         drop_seam_twin(c, t0, t1, &mut out);
         return out;
     }
+    if let Some(out) = conic_on_round(c, t0, t1, s) {
+        return out;
+    }
     // Exact cases.
     let mut searched: Vec<f64> = Vec::new();
     if let Curve::Line { o, d } = c {
@@ -2501,12 +2499,20 @@ pub fn curve_surface(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Vec<f64> {
     let mut hints: Vec<Option<(f64, f64)>> = Vec::with_capacity(n + 1);
     let mut h: Option<(f64, f64)> = None;
     let mut vals = Vec::with_capacity(n + 1);
+    // (The stretch's length, by its samples' chords: what its fixed thresholds below are
+    // scaled by where it is under a millimetre.)
+    let mut length = 0.0;
+    let mut last: Option<P3> = None;
     for i in 0..=n {
         let t = t0 + (t1 - t0) * i as f64 / n as f64;
         let v = fh(t, &mut h);
         vals.push((t, v));
         hints.push(h);
+        let p = c.point(t);
+        length += last.map_or(0.0, |q| (p - q).norm());
+        last = Some(p);
     }
+    let (on, near) = (1e-10 * tol::small(length), 1e-3 * tol::small(length));
     // On an exact distance (1-Lipschitz in space), two samples of one sign can still have a
     // crossing pair between them where the curve runs no farther between them than their
     // distances add up to: the samples refined there, halving, until that is ruled out (a
@@ -2568,53 +2574,24 @@ pub fn curve_surface(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Vec<f64> {
         // sample would be a second vertex a hair from it.
         let touch_zone = i > 0
             && i + 1 < vals.len()
-            && vals[i - 1].1.abs() >= 1e-10
-            && vals[i + 1].1.abs() >= 1e-10
+            && vals[i - 1].1.abs() >= on
+            && vals[i + 1].1.abs() >= on
             && vals[i - 1].1.signum() == vals[i + 1].1.signum();
-        if ft.abs() < 1e-10 && !touch_zone {
+        if ft.abs() < on && !touch_zone {
             out.push(t);
         }
         if i > 0 {
             prev = vals[i - 1];
-            if prev.1.abs() >= 1e-10 && ft.abs() >= 1e-10 && prev.1.signum() != ft.signum() {
-                let (mut a, mut b, mut fa) = (prev.0, t, prev.1);
-                for _ in 0..100 {
-                    let m = 0.5 * (a + b);
-                    let fm = f(m);
-                    if fm == 0.0 {
-                        a = m;
-                        b = m;
-                        break;
-                    }
-                    if fm.signum() == fa.signum() {
-                        a = m;
-                        fa = fm;
-                    } else {
-                        b = m;
-                    }
-                    if (b - a).abs() < 1e-15 * (1.0 + a.abs()) {
-                        break;
-                    }
-                }
-                out.push(0.5 * (a + b));
+            if prev.1.abs() >= on && ft.abs() >= on && prev.1.signum() != ft.signum() {
+                out.push(super::math::root_from(&f, prev, (t, ft)));
             }
         }
         // Touching: a local minimum of |f| near zero between samples.
         if i > 0 && i + 1 < vals.len() {
             let (fa, fb, fc) = (vals[i - 1].1.abs(), ft.abs(), vals[i + 1].1.abs());
-            if fb < fa && fb < fc && fb < 1e-3 && vals[i - 1].1.signum() == vals[i + 1].1.signum() {
+            if fb < fa && fb < fc && fb < near && vals[i - 1].1.signum() == vals[i + 1].1.signum() {
                 // Golden-section minimize |f|.
-                let (mut a, mut b) = (vals[i - 1].0, vals[i + 1].0);
-                for _ in 0..80 {
-                    let m1 = a + (b - a) * 0.382;
-                    let m2 = a + (b - a) * 0.618;
-                    if f(m1).abs() < f(m2).abs() {
-                        b = m2;
-                    } else {
-                        a = m1;
-                    }
-                }
-                let m = 0.5 * (a + b);
+                let m = super::math::minimize(|t| f(t).abs(), vals[i - 1].0, vals[i + 1].0);
                 if f(m).abs() < tol::ROUNDOFF {
                     out.push(m);
                 }
@@ -2662,6 +2639,210 @@ pub fn curve_surface(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Vec<f64> {
     out
 }
 
+/// Where a circle or an ellipse meets a sphere, a cylinder, a cone or (a circle only) a torus,
+/// in closed form. Each of those surfaces is where a polynomial g of the point is zero (a
+/// cylinder's ρ² − r²; a torus's (|q|² + R² − r²)² − 4R²ρ²), and along the conic g is a
+/// trigonometric polynomial of degree two, a₀ + a₁ cos t + b₁ sin t + a₂ cos 2t + b₂ sin 2t:
+/// had exactly from eight samples, and by w = tan(t/2) a quartic in w, whose roots are the
+/// crossings and whose derivative's roots are where the conic may touch the surface. `None`
+/// for other pairs, and where g is zero all along (the conic lies on the surface: its
+/// stretches are the search's).
+fn conic_on_round(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Option<Vec<f64>> {
+    let circle = matches!(c, Curve::Circle { .. });
+    if !circle && !matches!(c, Curve::Ellipse { .. }) {
+        return None;
+    }
+    // g at a point, and its size where the point is off the surface by its own size.
+    // (g at a point in the surface's frame, and its size there.)
+    type Implicit = Box<dyn Fn(&V3) -> (f64, f64)>;
+    let (frame, g): (&Frame, Implicit) = match s {
+        Surface::Sphere { f, r } => {
+            let r2 = r * r;
+            (
+                f,
+                Box::new(move |l| (l.norm_squared() - r2, l.norm_squared() + r2)),
+            )
+        }
+        Surface::Cylinder { f, r } => {
+            let r2 = r * r;
+            (
+                f,
+                Box::new(move |l| (l.x * l.x + l.y * l.y - r2, l.norm_squared() + r2)),
+            )
+        }
+        Surface::Cone { f, r, a } => {
+            let (r, k) = (*r, a.tan());
+            (
+                f,
+                Box::new(move |l| {
+                    let m = r + l.z * k;
+                    (l.x * l.x + l.y * l.y - m * m, l.norm_squared() + m * m)
+                }),
+            )
+        }
+        Surface::Torus { f, rmaj, rmin } if circle => {
+            let (big, small) = (rmaj * rmaj, rmin * rmin);
+            (
+                f,
+                Box::new(move |l| {
+                    let q = l.norm_squared();
+                    let m = q + big - small;
+                    (
+                        m * m - 4.0 * big * (l.x * l.x + l.y * l.y),
+                        (q + big + small).powi(2),
+                    )
+                }),
+            )
+        }
+        _ => return None,
+    };
+    const N: usize = 8;
+    let mut coef = [0.0f64; 5];
+    let mut natural: f64 = 0.0;
+    let mut at_most = (0.0f64, 0.0f64);
+    for i in 0..N {
+        let t = TAU * i as f64 / N as f64;
+        let (v, n) = g(&frame.local(&c.point(t)));
+        natural = natural.max(n);
+        if v.abs() >= at_most.0 {
+            at_most = (v.abs(), t);
+        }
+        let w = 2.0 / N as f64;
+        coef[0] += v / N as f64;
+        coef[1] += v * t.cos() * w;
+        coef[2] += v * t.sin() * w;
+        coef[3] += v * (2.0 * t).cos() * w;
+        coef[4] += v * (2.0 * t).sin() * w;
+    }
+    if coef.iter().all(|x| x.abs() <= 1e-11 * natural) {
+        return None;
+    }
+    // Turned so that the parameter the tangent's half angle sends to infinity (π) is where g
+    // is largest: no root is lost there, and the quartic's leading coefficient is its largest.
+    let turn = at_most.1 - PI;
+    let (c1, s1) = (turn.cos(), turn.sin());
+    let (c2, s2) = ((2.0 * turn).cos(), (2.0 * turn).sin());
+    let (a0, a1, b1) = (
+        coef[0],
+        coef[1] * c1 + coef[2] * s1,
+        coef[2] * c1 - coef[1] * s1,
+    );
+    let (a2, b2) = (coef[3] * c2 + coef[4] * s2, coef[4] * c2 - coef[3] * s2);
+    let quartic = [
+        a0 + a1 + a2,
+        2.0 * b1 + 4.0 * b2,
+        2.0 * a0 - 6.0 * a2,
+        2.0 * b1 - 4.0 * b2,
+        a0 - a1 + a2,
+    ];
+    let lead = quartic[4];
+    if !(lead.abs() > 1e-11 * natural) {
+        return None;
+    }
+    let bound = 1.0
+        + quartic[..4]
+            .iter()
+            .fold(0.0f64, |m, x| m.max((x / lead).abs()));
+    let back = |w: f64| 2.0 * w.atan() + turn;
+    let dist = |t: f64| sdist(s, &c.point(t));
+    let slope = |t: f64| {
+        let (p, d1, _) = c.d2(t);
+        s.signed_distance_gradient(&p).map(|n| n.dot(&d1))
+    };
+    let scale = 1.0
+        + (0..N).fold(0.0f64, |m, i| {
+            m.max(c.point(TAU * i as f64 / N as f64).coords.norm())
+        });
+    // The crossings: the quartic's roots, each settled on the surface's own distance (the
+    // quartic is also zero on a cone's other half, which the distance isn't).
+    let mut ts: Vec<f64> = Vec::new();
+    for w in super::math::poly_roots(&quartic, -bound, bound) {
+        let mut t = back(w);
+        let mut f = dist(t);
+        for _ in 0..4 {
+            let Some(m) = slope(t).filter(|m| m.abs() > tol::TINY) else {
+                break;
+            };
+            // (A hair's step only: at a shallow crossing a longer one lands on the next.)
+            let nt = t - f / m;
+            let nf = dist(nt);
+            if !(nf.abs() < f.abs()) || (nt - t).abs() > 1e-6 {
+                break;
+            }
+            (t, f) = (nt, nf);
+        }
+        if f.abs() <= tol::CONFUSION {
+            ts.push(t);
+        }
+    }
+    // The touches: where g turns without crossing zero, on the surface.
+    let turning: Vec<f64> = (1..5).map(|k| quartic[k] * k as f64).collect();
+    for w in super::math::poly_roots(&turning, -bound, bound) {
+        let t = touching_root(c, s, back(w));
+        if dist(t).abs() < tol::ROUNDOFF {
+            ts.push(t);
+        }
+    }
+    ts.sort_by(f64::total_cmp);
+    // Where the conic touches the surface g's root is double (fourfold where it touches a
+    // ruling's own tangent plane along the ruling), and rounding splits it into roots a
+    // square root (a fourth root) of the rounding apart, or loses it: roots with the conic
+    // on the surface all the way between them are one contact.
+    let on = |a: f64, b: f64| (a - b).abs() < 0.1 && dist(0.5 * (a + b)).abs() <= tol::ROUNDOFF;
+    let mut contacts: Vec<f64> = Vec::new();
+    let mut i = 0;
+    while i < ts.len() {
+        let mut e = i;
+        while e + 1 < ts.len() && on(ts[e], ts[e + 1]) {
+            e += 1;
+        }
+        // (Settled where the distance is stationary, if it is a touch: a crossing stays.)
+        contacts.push(touching_root(c, s, 0.5 * (ts[i] + ts[e])));
+        i = e + 1;
+    }
+    let (lo, hi) = (t0.min(t1), t0.max(t1));
+    // A conic that runs along the surface within a hair for a stretch (three of the search's
+    // samples in a row) lies on it there as far as a boolean can tell: the stretch's ends are
+    // the search's to find, not points of g's.
+    let n = (((hi - lo) / (PI / 32.0)).ceil() as usize).max(8);
+    let mut run = 0;
+    for i in 0..=n {
+        if dist(lo + (hi - lo) * i as f64 / n as f64).abs() <= 1e-8 * scale {
+            run += 1;
+            if run >= 3 {
+                return None;
+            }
+        } else {
+            run = 0;
+        }
+    }
+    // Every turn of the range the contacts fall in; one that the range's end is the same
+    // contact as (the end on the surface, and the conic between) is the end.
+    let ends_on = [lo, hi].map(|e| dist(e).abs() <= tol::ROUNDOFF);
+    let mut out: Vec<f64> = Vec::new();
+    for t in contacts {
+        let k0 = ((lo - t) / TAU).floor() as i64 - 1;
+        let k1 = ((hi - t) / TAU).ceil() as i64 + 1;
+        for k in k0..=k1 {
+            let mut tt = t + TAU * k as f64;
+            for (e, at) in [lo, hi].into_iter().zip(ends_on) {
+                if at && on(tt, e) {
+                    tt = e;
+                }
+            }
+            if tt >= lo - tol::ROUNDOFF_FINE
+                && tt <= hi + tol::ROUNDOFF_FINE
+                && !out.iter().any(|x| (x - tt).abs() < tol::ROUNDOFF_FINE)
+            {
+                out.push(tt.clamp(lo, hi));
+            }
+        }
+    }
+    out.sort_by(f64::total_cmp);
+    drop_seam_twin(c, t0, t1, &mut out);
+    Some(out)
+}
+
 /// On a curve closed over [t0, t1] (a full circle), a crossing at its seam is one point: found
 /// at both t0 and t1, the copy at t1 goes.
 fn drop_seam_twin(c: &Curve, t0: f64, t1: f64, out: &mut Vec<f64>) {
@@ -2689,15 +2870,19 @@ fn touching_root(c: &Curve, s: &Surface, t: f64) -> f64 {
     }
     let speed = c.d2(t).1.norm().max(tol::TINY);
     let h = 1e-5 / speed;
-    let slope = |x: f64| (f(x + h).unwrap_or(0.0) - f(x - h).unwrap_or(0.0)) / (2.0 * h);
+    // (The distance's slope along the curve in closed form, the surface's normal at the foot
+    // along the curve's tangent; only the slope's own rate is differenced.)
+    let slope = |x: f64| {
+        let (p, d1, _) = c.d2(x);
+        s.signed_distance_gradient(&p).map_or(0.0, |n| n.dot(&d1))
+    };
     if slope(t).abs() > 1e-3 * speed {
         return t;
     }
     let mut x = t;
     for _ in 0..20 {
         let g = slope(x);
-        let g2 = (f(x + h).unwrap_or(0.0) - 2.0 * f(x).unwrap_or(0.0) + f(x - h).unwrap_or(0.0))
-            / (h * h);
+        let g2 = (slope(x + h) - slope(x - h)) / (2.0 * h);
         if g2.abs() < tol::TINY {
             break;
         }
@@ -3039,6 +3224,68 @@ fn curve_curve_closed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A circle against a cylinder, a sphere, a cone and a torus in closed form: where it
+    /// crosses, where it only touches (a double root), and where it touches a ruling's own
+    /// tangent plane along the ruling (a fourfold one), each to the rounding error.
+    #[test]
+    fn a_circle_meets_round_surfaces_in_closed_form() {
+        let circle = |c: P3, x: V3, y: V3, r: f64| Curve::Circle { c, x, y, r };
+        // Through a cylinder about z of radius 5, a circle of radius 12 in the plane z = 1
+        // about (13, 0): they cross where ρ = 5.
+        let cyl = Surface::Cylinder {
+            f: Frame::world(),
+            r: 5.0,
+        };
+        let c = circle(P3::new(13.0, 0.0, 1.0), V3::x(), V3::y(), 12.0);
+        let ts = curve_surface(&c, 0.0, TAU, &cyl);
+        assert_eq!(ts.len(), 2, "{ts:?}");
+        for t in &ts {
+            assert!((sdist(&cyl, &c.point(*t))).abs() < 1e-13, "{t}");
+        }
+        // The same circle about (17, 0) touches it at (5, 0, 1), where t = π.
+        let c = circle(P3::new(17.0, 0.0, 1.0), V3::x(), V3::y(), 12.0);
+        let ts = curve_surface(&c, 0.0, TAU, &cyl);
+        assert_eq!(ts.len(), 1, "{ts:?}");
+        assert!((ts[0] - PI).abs() < 1e-12, "{}", ts[0]);
+        // A circle in the cylinder's tangent plane x = 5, through (5, 0, 0) along the ruling
+        // there: it touches the ruling, the cylinder to the fourth order.
+        let c = circle(P3::new(5.0, 6.0, 0.0), V3::y(), V3::z(), 6.0);
+        let ts = curve_surface(&c, 0.0, TAU, &cyl);
+        assert_eq!(ts.len(), 1, "{ts:?}");
+        // (A fourfold root holds to the fourth root of the rounding only.)
+        assert!(
+            (c.point(ts[0]) - P3::new(5.0, 0.0, 0.0)).norm() < 1e-6,
+            "{}",
+            ts[0]
+        );
+        // A sphere of radius 5 about the origin and a circle of radius 5 about (6, 0, 0).
+        let ball = Surface::Sphere {
+            f: Frame::world(),
+            r: 5.0,
+        };
+        let c = circle(P3::new(6.0, 0.0, 0.0), V3::x(), V3::y(), 5.0);
+        let ts = curve_surface(&c, 0.0, TAU, &ball);
+        assert_eq!(ts.len(), 2, "{ts:?}");
+        for t in &ts {
+            assert!(((c.point(*t) - P3::origin()).norm() - 5.0).abs() < 1e-13);
+        }
+        // A torus (major 6, minor 2) and the circle of radius 6 in its bottom plane about
+        // (6, 0): the plane touches the torus along its bottom circle, which this one crosses
+        // twice, touching the torus at both.
+        let torus = Surface::Torus {
+            f: Frame::world(),
+            rmaj: 6.0,
+            rmin: 2.0,
+        };
+        let c = circle(P3::new(6.0, 0.0, -2.0), V3::x(), V3::y(), 6.0);
+        let ts = curve_surface(&c, 0.0, TAU, &torus);
+        assert_eq!(ts.len(), 2, "{ts:?}");
+        for t in &ts {
+            let p = c.point(*t);
+            assert!((p.x.hypot(p.y) - 6.0).abs() < 1e-7, "{p:?}");
+        }
+    }
 
     /// Lines the closed form misses (parallel, or crossing past an end) give what the general
     /// search gives: the same places, within the tolerance, and nothing where they're apart;

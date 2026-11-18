@@ -366,13 +366,7 @@ impl<'a> Tool<'a> {
         // The faces' groups: joined over smooth edges.
         let nf = b.faces.len();
         let mut group: Vec<usize> = (0..nf).collect();
-        fn root(g: &mut [usize], mut i: usize) -> usize {
-            while g[i] != i {
-                g[i] = g[g[i]];
-                i = g[i];
-            }
-            i
-        }
+        use super::math::set_of as root;
         let mut smooth: Vec<Vec<usize>> = vec![Vec::new(); nf];
         for e in 0..ne {
             if kind[e] == EdgeKind::Smooth
@@ -5876,7 +5870,7 @@ pub(super) fn cut(
     if tool.solids.len() != 1 {
         return None;
     }
-    let tb = (**k.get(target).ok()?).clone();
+    let tb = std::sync::Arc::clone(k.get(target).ok()?);
     let motion = Motion { steps };
     let tl = Tool::new(tool);
     let size = tl.size;

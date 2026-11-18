@@ -234,10 +234,11 @@ the count of flagged results below, a per-thread recursion guard, and caches of 
 sampled boundaries and surfaces' grids); `BoolOptions` also says whether faces on one surface are
 merged afterwards (`merge_coplanar`, off for the DRAW harness). A result that fails `Body::check` is an error,
 retried at the larger tolerances. A boolean also checks that no two faces of its result cross
-(across the inputs, and loops crossing in (u, v) on new periodic faces): a result whose only
-fault is crossing faces is returned flagged, not failed, and `native::take_invalid_results()`
-counts such results (this thread's, and those of the worker threads its parts ran on); with `CADRS_BOOL_STRICT=1` it is a `BooleanFailed` error
-instead (the tests run strict).
+(across the inputs, and loops crossing in (u, v) on new periodic faces; faces that only touch,
+their surfaces tangent there, don't cross): a result whose only fault is crossing faces, which
+no retry betters, is a `BooleanFailed` error. With `CADRS_BOOL_LENIENT=1` it is returned
+flagged instead, as it was, and `native::take_invalid_results()` counts such results (this
+thread's, and those of the worker threads its parts ran on).
 
 **Errors.** Every operation returns `Result<_, KernelError>`, with a message in words for the
 user. The variant says what a caller can do: `EmptyResult` (an Intersect of bodies that don't
@@ -300,10 +301,11 @@ otherwise):
 - `CADRS_NO_RECOG_S=1`, `CADRS_NO_RECOG_C=1` (`xbuild.rs`): imported B-spline surfaces and
   curves are kept as B-splines instead of being recognised as planes, cylinders, cones, spheres,
   tori and extrusions, lines and circles.
-- `CADRS_BOOL_STRICT=1` (`boolean.rs`): a boolean whose result has crossing faces fails
-  instead of returning the result flagged (`take_invalid_results`). The metamorphic and
-  stress tests don't set it; their helper (`tests/meta_common`) treats a flagged result as an
-  error instead.
+- `CADRS_DRAFT_BY_CUT=1` (`local.rs`): a draft of slanted holes' and grooves' walls is made
+  by cutting (the hollow filled and cut again as its leant wall bounds it) before it is tried
+  by moving the faces, to hold the two ways together.
+- `CADRS_BOOL_LENIENT=1` (`boolean.rs`): a boolean whose result has crossing faces returns
+  it flagged (`take_invalid_results`) instead of failing, to look at what it built.
 - `CADRS_OCCT_REBUILD=1` (`brep_occt.rs`): a text BRep file's faces are always rebuilt from
   their edges instead of being read directly.
 

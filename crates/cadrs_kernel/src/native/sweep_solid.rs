@@ -698,15 +698,7 @@ impl Fold<'_> {
             }
             // (The end kept on the stretch's side of the root.)
             let inside = rs[i] > 0.0;
-            let (mut lo, mut hi) = (at(i), at(i + 1));
-            for _ in 0..60 {
-                let m = 0.5 * (lo + hi);
-                if (room(m) > 0.0) == inside {
-                    lo = m;
-                } else {
-                    hi = m;
-                }
-            }
+            let (lo, hi) = super::math::bisect(at(i), at(i + 1), |m| (room(m) > 0.0) == inside);
             let root = if inside { lo } else { hi };
             match start.take() {
                 Some(from) => out.push((from, root)),
@@ -3619,7 +3611,7 @@ fn cut_by_leads(
     let lead = travel * TAU / angle.abs();
     let o = axis.origin;
     let height = |p: &P3| (p - o).dot(&z);
-    let t = (**k.get(target).ok()?).clone();
+    let t = std::sync::Arc::clone(k.get(target).ok()?);
     let size = t.bbox().diagonal().max(tol::POINT);
     let near = 1e-9 * size;
     if t.solids.len() != 1 || t.verts.is_empty() {
@@ -4154,7 +4146,7 @@ fn end_mill_along(
     let up = up.try_normalize(tol::TINY)?;
     let segs = super::sweep::path::path_segments(k, path).ok()?;
     let p0 = segs.first()?.start();
-    let size = b.bbox().diagonal().max(1.0);
+    let size = b.bbox().diagonal().max(crate::native::tol::POINT);
     let near = tol::REL_POINT * size.max((segs.last()?.end() - p0).norm());
     for s in &segs {
         for i in 0..=16 {
@@ -4354,7 +4346,7 @@ fn upright_revolution_along(
     let segs = super::sweep::path::path_segments(k, path).ok()?;
     let (first, last) = (segs.first()?, segs.last()?);
     let p0 = first.start();
-    let size = b.bbox().diagonal().max(1.0);
+    let size = b.bbox().diagonal().max(crate::native::tol::POINT);
     let near = tol::REL_POINT * size.max((last.end() - p0).norm());
     // The path in the plane square to `up` through its start.
     for s in &segs {

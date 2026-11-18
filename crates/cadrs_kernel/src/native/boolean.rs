@@ -180,8 +180,8 @@ static INVALID_ON_WORKERS: std::sync::atomic::AtomicUsize = std::sync::atomic::A
 
 /// How many booleans handed back a result with crossing faces since the last call (a run
 /// refused it and no retry did better, so it came back as it was): those on this thread, and
-/// those on the kernel's worker threads (which serve whichever operation is running). With
-/// `CADRS_BOOL_STRICT` set, such a boolean fails instead.
+/// those on the kernel's worker threads (which serve whichever operation is running). Only
+/// under `CADRS_BOOL_LENIENT`: without it such a boolean fails, and this stays zero.
 pub fn take_invalid_results() -> usize {
     INVALID_RESULTS.with(|c| c.replace(0))
         + INVALID_ON_WORKERS.swap(0, std::sync::atomic::Ordering::Relaxed)
@@ -255,6 +255,8 @@ struct Pool {
     /// Each vertex's tolerance: points within the larger of two tolerances (and the run's) are
     /// one vertex.
     vtols: Vec<f64>,
+    /// The tolerance each vertex came with: its ball grows from this ([`Self::vertex_tol`]).
+    vbase: Vec<f64>,
     /// The grid's cell: big enough that a merge never reaches past the neighbouring cells.
     cell: f64,
     /// The run's merge distance.
@@ -269,6 +271,7 @@ impl Pool {
         Pool {
             verts: Vec::new(),
             vtols: Vec::new(),
+            vbase: Vec::new(),
             cell: (tol * 16.0).max(max_tol * 2.0),
             tol,
             grid: HashMap::default(),
@@ -310,7 +313,12 @@ impl Pool {
     fn vertex_tol(&mut self, p: P3, tol: f64) -> usize {
         if let Some(i) = self.find_tol(&p, tol) {
             if tol > 0.0 {
-                let reach = (self.verts[i] - p).norm() + tol;
+                // (Its ball holds the newcomer's, up to twice the largest tolerance met here:
+                // a ball that grew with every point it took in would take in the next a
+                // little farther off, and so on along a row of them, whatever order they
+                // came in.)
+                let most = 2.0 * self.tol.max(tol).max(self.vbase[i]);
+                let reach = ((self.verts[i] - p).norm() + tol).min(most);
                 if reach > self.vtols[i] {
                     self.vtols[i] = reach;
                 }
@@ -334,6 +342,7 @@ impl Pool {
     fn new_vertex_tol(&mut self, p: P3, tol: f64) -> usize {
         self.verts.push(p);
         self.vtols.push(tol);
+        self.vbase.push(tol);
         let i = self.verts.len() - 1;
         let c = self.cell_of(&p);
         self.grid.entry(c).or_default().push(i);
@@ -765,7 +774,11 @@ fn tangent_along_shared_edge(
             !e.degenerate
                 && (e.t[1] - e.t[0]).abs() > 0.0
                 && edge_on_bounded(e, &g.surf, bound, 0.0, pool.tol)
-                && e.curve.longer_than(e.t[0], e.t[1], 1e-3)
+                && e.curve.longer_than(
+                    e.t[0],
+                    e.t[1],
+                    1e-3 * tol::small(f.bbox.diagonal().max(g.bbox.diagonal())),
+                )
                 && [0.25, 0.5, 0.75]
                     .iter()
                     .all(|k| tangent_at(f, g, &e.curve.point(e.t[0] + (e.t[1] - e.t[0]) * k)))
@@ -812,10 +825,13 @@ fn tangent_along_shared_edge(
                 continue;
             }
             // Tangent along it: the normals agree (up to sign) at a few points.
+            // (Each point's feet from the last's: they lie along one edge.)
+            let mut feet: [Option<(f64, f64)>; 2] = [None, None];
             let tangent = [0.2, 0.5, 0.8].iter().all(|f| {
                 let p = e.curve.point(e.t[0] + (e.t[1] - e.t[0]) * f);
-                let (ua, va) = fa.surf.project(&p, None);
-                let (ub, vb) = fb.surf.project(&p, None);
+                let (ua, va) = fa.surf.project(&p, feet[0]);
+                let (ub, vb) = fb.surf.project(&p, feet[1]);
+                feet = [Some((ua, va)), Some((ub, vb))];
                 fa.surf.normal(ua, va).dot(&fb.surf.normal(ub, vb)).abs() > 1.0 - tol::ANGULAR_POINT
             });
             if tangent {
@@ -888,11 +904,16 @@ fn interior_points(loops: &[Vec<Arc>]) -> Vec<P2> {
         return Vec::new();
     };
     let mut cands = Vec::new();
+    // (Each loop's arcs' starts and one list of crossings, for all the scanlines.)
+    let starts: Vec<Vec<P2>> = loops
+        .iter()
+        .map(|l| l.iter().map(|a| a.uv_at(0.0)).collect())
+        .collect();
+    let mut xs: Vec<f64> = Vec::new();
     for frac in SCAN_FRACTIONS {
         let y = scan.vb.0 + (scan.vb.1 - scan.vb.0) * frac;
-        let mut xs: Vec<f64> = Vec::new();
-        for l in loops {
-            let ends: Vec<P2> = l.iter().map(|a| a.uv_at(0.0)).collect();
+        xs.clear();
+        for (l, ends) in loops.iter().zip(&starts) {
             for (k, a) in l.iter().enumerate() {
                 let n = arc_steps(a);
                 let mut p = ends[k];
@@ -968,6 +989,10 @@ fn arc_crossing(a: &Arc, y: f64, s0: f64, s1: f64) -> Option<f64> {
     if (a.uv_at(s1).y <= y) == up {
         return None;
     }
+    // (Fifty-two halvings exactly, not to the parameter's resolution: the crossing's last
+    // bit places a face's inside point, and a boolean of a blend tool gone wrong
+    // (smlib_fillets' case_int) that ends in a minute with these bits runs for most of an
+    // hour with the next ones.)
     let (mut lo, mut hi) = (s0, s1);
     for _ in 0..52 {
         let m = 0.5 * (lo + hi);
@@ -1041,9 +1066,11 @@ impl<'a> Scan<'a> {
     /// The candidates, scanline by scanline.
     fn candidates(&self) -> Vec<P2> {
         let mut out = Vec::new();
+        // (One list of crossings for all the scanlines.)
+        let mut xs: Vec<f64> = Vec::new();
         for frac in SCAN_FRACTIONS {
             let y = self.vb.0 + (self.vb.1 - self.vb.0) * frac;
-            let mut xs: Vec<f64> = Vec::new();
+            xs.clear();
             for p in self.polys {
                 let n = p.len();
                 for i in 0..n {
@@ -1164,9 +1191,9 @@ pub fn boolean_bodies_with(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) ->
 
 /// Bodies no larger than this (mm, the longer of their boxes' diagonals) are scaled up for a
 /// boolean, to [`WORKING_SIZE`] or up to twice it.
-const SMALL_MODEL: f64 = 0.25;
+pub(crate) const SMALL_MODEL: f64 = 0.25;
 /// The size (mm) small bodies are scaled to for a boolean.
-const WORKING_SIZE: f64 = 64.0;
+pub(crate) const WORKING_SIZE: f64 = 64.0;
 
 /// [`boolean_bodies_with`] (counted with `CADRS_PROFILE`).
 fn boolean_bodies_counted(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Result<BoolOut> {
@@ -1212,7 +1239,7 @@ fn recognized_against(x: &Body, y: &Body) -> Option<Body> {
     if !x.faces.iter().any(|f| matches!(f.surf, Surface::Nurbs(_))) {
         return None;
     }
-    let size = x.bbox().diagonal().max(y.bbox().diagonal()).max(1.0);
+    let size = x.bbox().diagonal().max(y.bbox().diagonal()).max(tol::POINT);
     let tol = tol::REL * size;
     let mut surfs: Option<Vec<Surface>> = None;
     for (fi, f) in x.faces.iter().enumerate() {
@@ -1331,8 +1358,14 @@ fn apart_set_aside(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Option<
 /// result with crossing faces is refused ([`RunOpts::check_crossings`]): the first run's is
 /// handed back flagged ([`hand_back`]); a later run's is kept, should no run after it do
 /// better.
-fn ladder(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Result<BoolOut> {
+fn ladder(a: &Body, b: &Body, op: BoolOp, mut opts: BoolOptions) -> Result<BoolOut> {
     let _boxes = super::topo::keep_boxes(&[a, b]);
+    // The model's own tolerances where the session's are the defaults: the same for a part of
+    // a millimetre and more, smaller with a smaller part, whose retries would else be a good
+    // share of it ([`tol::Tolerances::for_model`]).
+    if opts.tol == tol::Tolerances::default() {
+        opts.tol = tol::Tolerances::for_model(a.bbox().diagonal().max(b.bbox().diagonal()));
+    }
     // The first result refused for crossing faces, made over as an accepted one would be.
     let mut refused: Option<BoolOut> = None;
     // A run's result: `Ok` when sound, else the refused one (with `clean` false) or the error.
@@ -1515,10 +1548,11 @@ fn ladder(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Result<BoolOut> 
     }
 }
 
-/// A result refused for crossing faces handed back after all (as before the check), counted
-/// ([`take_invalid_results`]); under `CADRS_BOOL_STRICT` the boolean fails.
+/// A result refused for crossing faces, which no retry bettered: the boolean fails (a body
+/// whose faces pass through one another is no answer). Under `CADRS_BOOL_LENIENT` it is handed
+/// back after all, as before the check, and counted ([`take_invalid_results`]).
 fn hand_back(r: BoolOut) -> Result<BoolOut> {
-    if super::env_flag!("CADRS_BOOL_STRICT") {
+    if !super::env_flag!("CADRS_BOOL_LENIENT") {
         return Err(KernelError::BooleanFailed {
             stage: CROSSING,
             why: "the boolean's result is invalid: its faces cross".into(),
@@ -2592,7 +2626,12 @@ fn snap_to(a: &mut Body, b: &Body, tol: f64) -> bool {
         .iter()
         .enumerate()
         .filter(|(_, f)| matches!(f.surf, Surface::Plane { .. } | Surface::Cylinder { .. }))
-        .map(|(i, _)| (i, b.face_bbox(i).grow(1e-3)))
+        .map(|(i, _)| {
+            (
+                i,
+                b.face_bbox(i).grow(1e-3 * tol::small(b.bbox().diagonal())),
+            )
+        })
         .collect();
     if targets.is_empty() {
         return false;
@@ -3136,9 +3175,12 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 // (A touch, not a crossing: the edge keeps to one side of the surface either
                 // side of the root.)
                 let (lo, hi) = (pe.t[0].min(pe.t[1]), pe.t[0].max(pe.t[1]));
+                // (The second point's foot from the first's: they are either side of one root.)
+                let foot = std::cell::Cell::new(None);
                 let side = |x: f64| {
                     let q = ed.curve.point(x.clamp(lo, hi));
-                    let (u, v) = surf.project(&q, None);
+                    let (u, v) = surf.project(&q, foot.get());
+                    foot.set(Some((u, v)));
                     (q - surf.eval(u, v)).dot(&surf.normal(u, v))
                 };
                 let near_vertex = pe
@@ -3888,10 +3930,14 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             let ed = &pool.edges[e];
             let along = (0..kept).any(|o| {
                 let oe = &out.edges[o];
-                [0.25, 0.5, 0.75].iter().all(|&f| {
-                    let p = ed.curve.point(ed.t[0] + (ed.t[1] - ed.t[0]) * f);
-                    (oe.point(oe.curve.closest(&p, oe.t[0], oe.t[1])) - p).norm() < run_tol * 10.0
-                })
+                ed.curve.runs_along(
+                    (ed.t[0], ed.t[1]),
+                    &oe.curve,
+                    (oe.t[0], oe.t[1]),
+                    [0.25, 0.5, 0.75],
+                    run_tol * 10.0,
+                    true,
+                )
             });
             if !along {
                 add(&mut out, &ed.curve, ed.t, ed.v);
@@ -4116,7 +4162,10 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         .filter(|(fi, _)| cuts[*fi].is_empty())
         .map(|(_, f)| (f.owner, f.orig))
         .collect();
-    for (fi, f) in faces.iter().enumerate() {
+    // Each face split on its own (it reads the pool and makes only its own faces): on other
+    // threads where there are faces enough, their work counted in the faces' order.
+    let split_one = |fi: usize| -> (Vec<Vec<Vec<Arc>>>, u64) {
+        let f = &faces[fi];
         let boundary: Vec<Vec<Arc>> = f
             .loops
             .iter()
@@ -4127,8 +4176,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             })
             .collect();
         if cuts[fi].is_empty() {
-            subs.push((fi, boundary));
-            continue;
+            return (vec![boundary], 0);
         }
         let own: Vec<usize> = boundary.iter().flatten().map(|a| a.edge).collect();
         let mut cut_arcs: Vec<Arc> = Vec::new();
@@ -4177,11 +4225,9 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             }
         }
         if cut_arcs.is_empty() {
-            subs.push((fi, boundary));
-            continue;
+            return (vec![boundary], 0);
         }
         let arcs = (boundary.iter().map(|l| l.len()).sum::<usize>() + cut_arcs.len()) as u64;
-        work.spend(arcs * arcs, "face splitting")?;
         let res = split::split_face(&f.surf, !f.sense, &boundary, &cut_arcs);
         if super::env_flag!("CADRS_BOOL_DEBUG") {
             eprintln!(
@@ -4193,7 +4239,17 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 res.faces.iter().map(|l| l.len()).collect::<Vec<_>>()
             );
         }
-        for lps in res.faces {
+        (res.faces, arcs * arcs)
+    };
+    let cut_faces = cuts.iter().filter(|c| !c.is_empty()).count();
+    let split: Vec<(Vec<Vec<Vec<Arc>>>, u64)> = if super::par::threads_for(cut_faces, true) {
+        (0..faces.len()).into_par_iter().map(split_one).collect()
+    } else {
+        (0..faces.len()).map(split_one).collect()
+    };
+    for (fi, (made, spent)) in split.into_iter().enumerate() {
+        work.spend(spent, "face splitting")?;
+        for lps in made {
             subs.push((fi, lps));
         }
     }
@@ -4207,13 +4263,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     // the other body: grouped (union-find over shared uncut pieces), each group is classified
     // once and its answer shared (faces on a coincident face keep their own test).
     let mut parent: Vec<usize> = (0..subs.len()).collect();
-    fn root(p: &mut [usize], mut i: usize) -> usize {
-        while p[i] != i {
-            p[i] = p[p[i]];
-            i = p[i];
-        }
-        i
-    }
+    use super::math::set_of as root;
     {
         // Pieces touching the other body (cuts of any face, edges lying on its faces, edges
         // merged with its edges) can separate sides: they don't join.
@@ -4246,7 +4296,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             .filter(|a| a.cut)
             .flat_map(|a| a.v)
             .collect();
-        let mut by_piece: HashMap<(usize, i64, i64, usize), usize> = HashMap::default();
+        let mut by_piece: HashMap<(usize, u64, u64, usize), usize> = HashMap::default();
         for (k, (fi, loops)) in subs.iter().enumerate() {
             for a in loops.iter().flatten().filter(|a| {
                 !a.cut
@@ -4255,12 +4305,9 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                     && !a.v.iter().any(|v| cut_ends.contains(v))
             }) {
                 let (lo, hi) = (a.t[0].min(a.t[1]), a.t[0].max(a.t[1]));
-                let key = (
-                    a.edge,
-                    (lo * 1e9).round() as i64,
-                    (hi * 1e9).round() as i64,
-                    faces[*fi].owner,
-                );
+                // (By the stretch's own parameters, bit for bit: two uses of one piece have
+                // the same, where rounding them to 1e-9 made one of two short pieces.)
+                let key = (a.edge, lo.to_bits(), hi.to_bits(), faces[*fi].owner);
                 match by_piece.get(&key) {
                     Some(&other) => {
                         let (x, y) = (root(&mut parent, k), root(&mut parent, other));
@@ -4285,36 +4332,17 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     // tree's depth for each.)
     let depth = ((a.faces.len() + b.faces.len() + 1) as f64).log2().ceil() as u64;
     work.spend(subs.len() as u64 * depth * 8, "classification")?;
-    for (sk, (fi, loops)) in subs.into_iter().enumerate() {
+    // A sub-face's point inside it, with the face's outward normal there.
+    let point_of = |fi: usize, loops: &[Vec<Arc>]| -> Option<(P3, V3)> {
         let f = &faces[fi];
-        if imprinting {
-            if f.owner == 0 {
-                keep.push((fi, loops, false));
-            }
-            continue;
-        }
-        let g = groups[sk];
-        let settled = match group_class.get(&g) {
-            Some(&(c, true)) if propagate && !unreliable.contains(&g) => Some(c),
-            _ => None,
-        };
-        // A sub-face on no face of the other body, whose group's class is settled, takes it: no
-        // point inside it to find (most of a large part's faces, untouched); but one with no
-        // inside at all is dropped, as ever.
-        let at = if settled.is_some() && coincident[fi].is_empty() {
-            if !has_interior(&loops) {
-                continue;
-            }
-            None
-        } else {
-            let Some(uv) = interior_point(&loops) else {
-                continue;
-            };
-            let n_out = f.surf.normal(uv.x, uv.y) * if f.sense { 1.0 } else { -1.0 };
-            Some((f.surf.eval(uv.x, uv.y), n_out))
-        };
+        let uv = interior_point(loops)?;
+        let n_out = f.surf.normal(uv.x, uv.y) * if f.sense { 1.0 } else { -1.0 };
+        Some((f.surf.eval(uv.x, uv.y), n_out))
+    };
+    // Its class on a face of the other body it lies on, if any.
+    let on_other = |fi: usize, at: Option<(P3, V3)>| -> Option<Class> {
+        let f = &faces[fi];
         let mut class = None;
-        // (On faces of the other body: the sub-face found its point above.)
         if let Some((p, n_out)) = at {
             for &g in &coincident[fi] {
                 let gf = &faces[g];
@@ -4339,6 +4367,64 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 }
             }
         }
+        class
+    };
+    // What a sub-face needs whatever its group's class turns out to be, found on other
+    // threads where there are sub-faces enough: whether it has an inside at all, and, for one
+    // on a face of the other body, its point and its class there. (The rest follows the
+    // sub-faces' order: a group's class is settled by its first members.)
+    type Ready = (bool, Option<Option<(P3, V3)>>, Option<Class>);
+    let ready_one = |sk: usize| -> Ready {
+        let (fi, loops) = &subs[sk];
+        if imprinting {
+            return (true, None, None);
+        }
+        if coincident[*fi].is_empty() {
+            (has_interior(loops), None, None)
+        } else {
+            let at = point_of(*fi, loops);
+            (true, Some(at), on_other(*fi, at))
+        }
+    };
+    let ready: Vec<Ready> = if super::par::threads_for(subs.len() / 16, true) {
+        (0..subs.len()).into_par_iter().map(ready_one).collect()
+    } else {
+        (0..subs.len()).map(ready_one).collect()
+    };
+    for (sk, (fi, loops)) in subs.into_iter().enumerate() {
+        let f = &faces[fi];
+        if imprinting {
+            if f.owner == 0 {
+                keep.push((fi, loops, false));
+            }
+            continue;
+        }
+        let g = groups[sk];
+        let settled = match group_class.get(&g) {
+            Some(&(c, true)) if propagate && !unreliable.contains(&g) => Some(c),
+            _ => None,
+        };
+        let (has_inside, found, on_face) = ready[sk];
+        // A sub-face on no face of the other body, whose group's class is settled, takes it: no
+        // point inside it to find (most of a large part's faces, untouched); but one with no
+        // inside at all is dropped, as ever.
+        let at = if settled.is_some() && coincident[fi].is_empty() {
+            if !has_inside {
+                continue;
+            }
+            None
+        } else {
+            let Some(at) = found.unwrap_or_else(|| point_of(fi, &loops)) else {
+                continue;
+            };
+            Some(at)
+        };
+        // (On faces of the other body: the sub-face found its point above.)
+        let class = if found.is_some() {
+            on_face
+        } else {
+            on_other(fi, at)
+        };
         let shared = settled.filter(|_| class.is_none());
         let fresh = class.is_none() && shared.is_none();
         let class = class.or(shared).unwrap_or_else(|| {
@@ -4363,7 +4449,9 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 PointClass::OnBoundary => {
                     // On the other body's boundary but not on a coincident face: decide by a
                     // point nudged inwards along the face.
-                    let q = p - n_out * 1e-5;
+                    // (A hundredth of a micron in, less on a part under a millimetre.)
+                    let q = p - n_out
+                        * (1e-5 * tol::small(a.bbox().diagonal().max(b.bbox().diagonal())));
                     if other.parity_inside(&q) {
                         Class::In
                     } else {
@@ -4675,6 +4763,9 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     prof.mark("crossings");
     prof.report(&format!("{op:?} {}×{} faces", a.faces.len(), b.faces.len()));
     if let Some(why) = crossing {
+        if super::env_flag!("CADRS_BOOL_DEBUG") {
+            eprintln!("refused for crossing faces: {why}");
+        }
         // (The result kept for the ladder, should no other run do better.)
         REFUSED.with(|c| *c.borrow_mut() = Some(BoolOut { body: out, from }));
         return Err(KernelError::BooleanFailed {
@@ -4958,7 +5049,9 @@ pub fn split_nonmanifold(b: &mut Body) {
             let len = (ed.t[1] - ed.t[0]).abs() * ed.curve.tangent(tm).norm();
             // (Not `clamp`: a NaN length takes 0.05 here.)
             #[allow(clippy::manual_clamp)]
-            let step = (len * 1e-2).min(0.05).max(1e-4);
+            let step = (len * 1e-2)
+                .min(0.05)
+                .max(1e-4 * tol::small(b.bbox().diagonal()));
             let (pu, su, sv) = f.surf.d1(uv.x, uv.y);
             let g = su * perp.x + sv * perp.y;
             let sgn = if g.dot(&w0) >= 0.0 { 1.0 } else { -1.0 };
@@ -5244,19 +5337,7 @@ fn united(
     }
     // Union-find over the members' boxes.
     let mut group: Vec<usize> = (0..members.len()).collect();
-    fn root(group: &mut [usize], i: usize) -> usize {
-        let mut r = i;
-        while group[r] != r {
-            r = group[r];
-        }
-        let mut j = i;
-        while group[j] != r {
-            let next = group[j];
-            group[j] = r;
-            j = next;
-        }
-        r
-    }
+    use super::math::set_of as root;
     for i in 0..members.len() {
         for j in 0..i {
             if members[i].2.overlaps(&members[j].2) {

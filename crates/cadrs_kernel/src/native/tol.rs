@@ -91,6 +91,19 @@ pub const ANGULAR_POINT: f64 = 1e-6;
 /// The step of a finite difference, or of a nudge off a point. See the module docs.
 pub const DIFF_STEP: f64 = 1e-6;
 
+/// What a length that is absolute for a part of a millimetre or more is scaled by for a
+/// smaller part: 1 from a millimetre up, the part's size in mm below. A nudge of 1e-5 mm, a
+/// shortest edge of 1e-3 mm, a floor of 1e-7 are fixed for ordinary parts and shrink with a
+/// part they would be a good share of. (A part under a quarter of a millimetre is worked on
+/// at a larger size altogether; this is for the ones between.)
+pub fn small(size: f64) -> f64 {
+    if size.is_finite() && size > 0.0 {
+        size.min(1.0)
+    } else {
+        1.0
+    }
+}
+
 /// The tolerances an operation runs with, carried by the kernel session
 /// ([`super::NativeKernel::tolerances`]) and passed explicitly to the operations that take
 /// them. `Default` is the model above.
@@ -116,6 +129,21 @@ impl Default for Tolerances {
 }
 
 impl Tolerances {
+    /// The tolerances for a model of this size (its box's diagonal, mm): the defaults for a
+    /// millimetre and more, to the bit; below that the merge distance and the retries shrink
+    /// with the model ([`small`]), down to the smallest tolerance an entity holds, so that a
+    /// retry is never a good share of the part.
+    pub fn for_model(diagonal: f64) -> Self {
+        let by = small(diagonal);
+        let d = Self::default();
+        let at_least = |x: f64| (x * by).max(d.confusion);
+        Self {
+            point: at_least(d.point),
+            retries: [at_least(d.retries[0]), at_least(d.retries[1])],
+            confusion: d.confusion,
+        }
+    }
+
     /// Checks that the tolerances are usable: finite, positive and growing
     /// (`confusion <= point <= retries`).
     pub fn validate(&self) -> crate::Result<()> {

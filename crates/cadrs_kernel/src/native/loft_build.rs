@@ -774,7 +774,7 @@ fn assemble_rows(
         let size = (far - o).norm();
         if pts
             .iter()
-            .any(|p| (p - o).dot(&nrm).abs() > tol::REL * size.max(1.0))
+            .any(|p| (p - o).dot(&nrm).abs() > tol::REL * size.max(crate::native::tol::POINT))
         {
             return None;
         }
@@ -1253,22 +1253,12 @@ fn polar_match(secs: &mut [Sec]) -> Result<()> {
             const N: usize = 64;
             let t_at = |j: usize| p.t0 + (p.t1 - p.t0) * j as f64 / N as f64;
             for j in 0..N {
-                let (mut a, mut b) = (t_at(j), t_at(j + 1));
-                let (mut fa, fb) = (side(&p.c.point(a)), side(&p.c.point(b)));
+                let (a, b) = (t_at(j), t_at(j + 1));
+                let (fa, fb) = (side(&p.c.point(a)), side(&p.c.point(b)));
                 if fa * fb > 0.0 {
                     continue;
                 }
-                for _ in 0..60 {
-                    let m = 0.5 * (a + b);
-                    let fm = side(&p.c.point(m));
-                    if fa * fm <= 0.0 {
-                        b = m;
-                    } else {
-                        a = m;
-                        fa = fm;
-                    }
-                }
-                let t = 0.5 * (a + b);
+                let t = super::math::root_from(|m| side(&p.c.point(m)), (a, fa), (b, fb));
                 let q = p.c.point(t);
                 if (q - pos[k]).dot(&d) <= 0.0 {
                     continue;
@@ -1353,7 +1343,7 @@ fn wire_plane(parts: &[Part]) -> Option<Plane> {
     let size = pts.iter().map(|p| (p - o).norm()).fold(0.0, f64::max);
     if pts
         .iter()
-        .any(|p| (p - o).dot(&nrm).abs() > 1e-7 * size.max(1.0))
+        .any(|p| (p - o).dot(&nrm).abs() > 1e-7 * size.max(crate::native::tol::POINT))
     {
         return None;
     }
@@ -2061,7 +2051,7 @@ pub fn loft_guided(
         .iter()
         .map(|(s, e)| (s - e).norm())
         .fold(0.0, f64::max)
-        .max(1.0);
+        .max(crate::native::tol::POINT);
     let near = tol::REL_POINT * size;
     // Where each guide meets each loop section: its place along the loop (curve i at t is
     // i + t); a point section every guide meets.

@@ -476,18 +476,11 @@ fn contact_plane(b: &Body, fi: usize, mv: &Move, size: f64) -> Option<Plane> {
         if gb.abs() <= zero || ga * gb > 0.0 {
             return;
         }
-        let (mut lo, mut hi, mut glo) = (0.0f64, 1.0f64, ga);
-        for _ in 0..60 {
-            let m = 0.5 * (lo + hi);
-            let gm = g(a.0 + (b2.0 - a.0) * m, a.1 + (b2.1 - a.1) * m);
-            if (gm < 0.0) == (glo < 0.0) {
-                lo = m;
-                glo = gm;
-            } else {
-                hi = m;
-            }
-        }
-        let m = 0.5 * (lo + hi);
+        let m = super::math::root_from(
+            |m| g(a.0 + (b2.0 - a.0) * m, a.1 + (b2.1 - a.1) * m),
+            (0.0, ga),
+            (1.0, gb),
+        );
         pts.push(s.eval(a.0 + (b2.0 - a.0) * m, a.1 + (b2.1 - a.1) * m));
     };
     for i in 0..=n {
@@ -614,15 +607,9 @@ fn contact_curves(b: &Body, fi: usize, mv: &Move) -> Vec<Curve> {
         }
         crossings.entry((i, j, d)).or_insert_with(|| {
             let (a, z) = (at(i, j), at(i2, j2));
-            let (mut lo, mut hi) = (0.0f64, 1.0f64);
-            for _ in 0..60 {
-                let m = 0.5 * (lo + hi);
-                if pos(g(a.0 + (z.0 - a.0) * m, a.1 + (z.1 - a.1) * m)) == pos(ga) {
-                    lo = m;
-                } else {
-                    hi = m;
-                }
-            }
+            let (lo, hi) = super::math::bisect(0.0, 1.0, |m| {
+                pos(g(a.0 + (z.0 - a.0) * m, a.1 + (z.1 - a.1) * m)) == pos(ga)
+            });
             let m = 0.5 * (lo + hi);
             (a.0 + (z.0 - a.0) * m, a.1 + (z.1 - a.1) * m)
         });
@@ -718,7 +705,7 @@ fn contact_curves(b: &Body, fi: usize, mv: &Move) -> Vec<Curve> {
     // (Interpolated through the grid's crossings, then through the contact halfway between two
     // points wherever the curve strays from it there by more than `fit`: as few poles as that
     // takes, since the sweep's sides carry a row of them for each.)
-    let fit = CONTACT_FIT * b.bbox().diagonal().max(1.0);
+    let fit = CONTACT_FIT * b.bbox().diagonal().max(crate::native::tol::POINT);
     for chain in chains {
         let mut uv = chain;
         let mut curve = None;
@@ -801,15 +788,7 @@ fn contact_isolines(b: &Body, fi: usize, mv: &Move) -> (Vec<f64>, Vec<f64>) {
             );
             let (ga, gz) = (at(a), at(z));
             if (ga > 0.0) != (gz > 0.0) {
-                let (mut lo, mut hi) = (a, z);
-                for _ in 0..60 {
-                    let m = 0.5 * (lo + hi);
-                    if (at(m) > 0.0) == (ga > 0.0) {
-                        lo = m;
-                    } else {
-                        hi = m;
-                    }
-                }
+                let (lo, hi) = super::math::bisect(a, z, |m| (at(m) > 0.0) == (ga > 0.0));
                 out = Some(0.5 * (lo + hi));
                 let _ = out;
             }
@@ -829,15 +808,7 @@ fn contact_isolines(b: &Body, fi: usize, mv: &Move) -> (Vec<f64>, Vec<f64>) {
                 );
                 let ga = at(a);
                 if (ga > 0.0) != (at(z) > 0.0) {
-                    let (mut lo, mut hi) = (a, z);
-                    for _ in 0..60 {
-                        let m = 0.5 * (lo + hi);
-                        if (at(m) > 0.0) == (ga > 0.0) {
-                            lo = m;
-                        } else {
-                            hi = m;
-                        }
-                    }
+                    let (lo, hi) = super::math::bisect(a, z, |m| (at(m) > 0.0) == (ga > 0.0));
                     xs.push(0.5 * (lo + hi));
                 }
             }
@@ -1373,7 +1344,7 @@ fn prepared_rising(
                     .map(|f| -> Rise { std::sync::Arc::new(move |s: f64| f(s * sign) * sign) }),
                 s1,
                 reach,
-                SCREW_TOL * size.max(1.0),
+                SCREW_TOL * size.max(crate::native::tol::POINT),
             ))
         }
         _ => None,
@@ -1873,7 +1844,7 @@ pub(super) fn glued_with(
     size: f64,
     apart: bool,
 ) -> Option<OpResult> {
-    let close = 1e-7 * size.max(1.0);
+    let close = 1e-7 * size.max(crate::native::tol::POINT);
     // Each face's measure and middle, and its outward normal near there: its area and
     // centroid, or on a surface that must be walked over to have them (a B-spline, a swept or
     // a revolved one) its boundary's length and middle. (A face closed on itself by a seam has
@@ -1921,7 +1892,7 @@ pub(super) fn glued_with(
                 continue;
             }
             if (a.2 - b2.2).norm() <= close
-                && (a.3 - b2.3).abs() <= close * size.max(1.0)
+                && (a.3 - b2.3).abs() <= close * size.max(crate::native::tol::POINT)
                 && coincide(&all[a.0], a.1, &all[b2.0], b2.1, close)
                 && facing(&all[a.0], a.1, &all[b2.0], b2.1)
             {
@@ -1975,7 +1946,7 @@ pub(super) fn glued_with(
         let classifier = |bj: usize| {
             classifiers[bj].get_or_init(|| super::classify::Classifier::new(&all[bj], &polys[bj]))
         };
-        let eps = 1e-3 * size.max(1.0);
+        let eps = 1e-3 * size.max(crate::native::tol::POINT);
         let kept: Vec<(usize, usize)> = faces
             .iter()
             .zip(&dropped)
@@ -2007,7 +1978,7 @@ pub(super) fn glued_with(
         let mut meshes: Vec<Option<Vec<super::tess::FaceMesh>>> = vec![None; all.len()];
         let overlap = suspects.into_iter().find(|&(_, _, bj, out)| {
             let m = meshes[bj].get_or_insert_with(|| {
-                super::tess::mesh_body(&all[bj], 1e-4 * size.max(1.0), 0.3).0
+                super::tess::mesh_body(&all[bj], 1e-4 * size.max(crate::native::tol::POINT), 0.3).0
             });
             winding(m, &out) > 0.5
         });
@@ -2036,7 +2007,7 @@ pub(super) fn glued_with(
         );
     }
     let t_sew = web_time::Instant::now();
-    let r = k.sew_solid(&ids, 1e-6 * size.max(1.0));
+    let r = k.sew_solid(&ids, 1e-6 * size.max(crate::native::tol::POINT));
     if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
         eprintln!(
             "sweep by faces: sewing {:.0} ms",

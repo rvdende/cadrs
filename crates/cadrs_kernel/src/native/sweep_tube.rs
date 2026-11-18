@@ -2420,32 +2420,22 @@ fn prepare<'a>(
                                 if !was_in && i > 0 {
                                     // In from a side: the crossing between the samples.
                                     let side = if v > th[i - 1] + k * TAU { v0 } else { v1 };
-                                    let (mut lo, mut hi) =
-                                        (u0 + (u1 - u0) * (i - 1) as f64 / n as f64, psi);
-                                    for _ in 0..60 {
-                                        let m = 0.5 * (lo + hi);
-                                        if inside(theta_at(m, k)) {
-                                            hi = m;
-                                        } else {
-                                            lo = m;
-                                        }
-                                    }
+                                    let (_, hi) = super::math::bisect(
+                                        u0 + (u1 - u0) * (i - 1) as f64 / n as f64,
+                                        psi,
+                                        |m| !inside(theta_at(m, k)),
+                                    );
                                     run.push(point(hi, side));
                                 }
                                 run.push(point(psi, v));
                             } else if was_in {
                                 // Out through a side.
                                 let side = if v > v1 { v1 } else { v0 };
-                                let (mut lo, mut hi) =
-                                    (u0 + (u1 - u0) * (i - 1) as f64 / n as f64, psi);
-                                for _ in 0..60 {
-                                    let m = 0.5 * (lo + hi);
-                                    if inside(theta_at(m, k)) {
-                                        lo = m;
-                                    } else {
-                                        hi = m;
-                                    }
-                                }
+                                let (lo, _) = super::math::bisect(
+                                    u0 + (u1 - u0) * (i - 1) as f64 / n as f64,
+                                    psi,
+                                    |m| inside(theta_at(m, k)),
+                                );
                                 run.push(point(lo, side));
                                 flush(&mut run, &mut cuts);
                             }

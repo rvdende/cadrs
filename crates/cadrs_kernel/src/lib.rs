@@ -693,9 +693,9 @@ pub trait Kernel {
     /// coincident faces included). Errors: `EmptyResult` when nothing is left (an Intersect of
     /// bodies that don't meet, a Subtract that removes everything), `OpenResult` or
     /// `BooleanFailed` when the pieces don't close into a valid solid, `BudgetExhausted` for
-    /// inputs too complex for the boolean's work budget. A result whose only fault is faces the
-    /// boolean's own check reports as crossing is returned all the same, and counted
-    /// (`native::take_invalid_results`; an error instead under `CADRS_BOOL_STRICT`). History: every result
+    /// inputs too complex for the boolean's work budget; `BooleanFailed` too for a result whose
+    /// faces the boolean's own check finds crossing one another (returned all the same, and
+    /// counted by `native::take_invalid_results`, only under `CADRS_BOOL_LENIENT`). History: every result
     /// face is `modified` from the input face it is a piece of (target or tool); input faces
     /// with no piece left are `deleted`; nothing is generated.
     ///

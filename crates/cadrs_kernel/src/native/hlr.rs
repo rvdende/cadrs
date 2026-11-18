@@ -309,7 +309,7 @@ fn edge_srcs(frame: &ViewFrame, b: &Body, bi: usize, tol: f64) -> Vec<Src> {
                 class,
                 Some(ei),
                 None,
-                faces.clone(),
+                faces.to_vec(),
                 Geo::Exact(e.curve.clone()),
                 (e.t[0], e.t[1]),
                 closed,

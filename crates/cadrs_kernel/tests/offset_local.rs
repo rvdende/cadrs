@@ -1771,3 +1771,765 @@ fn elliptic_cylinder_shrunk_past_its_curvature() {
         }
     }
 }
+
+/// A block with a step cut out of it (so not convex) and one corner cut off by a small facet.
+fn stepped_block_with_a_cut_corner(k: &mut NativeKernel) -> BodyId {
+    let block = |k: &mut NativeKernel, a: [f64; 3], b: [f64; 3]| {
+        k.primitive(&Primitive::block(Point3::from(a), Point3::from(b)))
+            .unwrap()
+            .first()
+            .unwrap()
+    };
+    let cube = block(k, [0.0; 3], [10.0; 3]);
+    // The corner (10, 10, 10) cut off one along each edge.
+    let p = Point3::new(10.0, 10.0, 10.0);
+    let (a, b, c) = (p - Vector3::x(), p - Vector3::y(), p - Vector3::z());
+    let far = p + Vector3::new(1.0, 1.0, 1.0);
+    let wedge = k
+        .mesh_solid(&[[a, b, c], [a, far, b], [b, far, c], [c, far, a]], 1e-7)
+        .unwrap();
+    let cut = k
+        .boolean(BoolOp::Subtract, cube, &[wedge])
+        .unwrap()
+        .first()
+        .unwrap();
+    let step = block(k, [-1.0, -1.0, 5.0], [5.0, 11.0, 11.0]);
+    k.boolean(BoolOp::Subtract, cut, &[step])
+        .unwrap()
+        .first()
+        .unwrap()
+}
+
+/// That block shrunk by one with sharp corners: its faces close over the small facet, whose
+/// edges shrink to nothing on the way, and it is the plain stepped block's inset, 8 × 8 × 3
+/// under 3 × 8 × 5. (A convex body's faces are its planes' polytope; this one's are moved again
+/// as each edge goes.)
+#[test]
+fn an_inset_closes_over_a_small_facet_of_a_body_that_isnt_convex() {
+    let mut k = NativeKernel::new();
+    let part = stepped_block_with_a_cut_corner(&mut k);
+    assert_eq!(k.get(part).unwrap().faces.len(), 9);
+    let spec = OffsetSpec {
+        distance: -1.0,
+        faces: vec![],
+        sharp: true,
+    };
+    let out = k.offset(part, &spec).unwrap().bodies[0];
+    let b = k.get(out).unwrap();
+    assert!(b.check().is_empty(), "{:?}", b.check());
+    assert_eq!(b.faces.len(), 8, "the facet is gone");
+    let v = k.mass_properties(out).unwrap().volume;
+    assert!((v - 312.0).abs() < 1e-9, "volume {v}");
+}
+
+/// The same block's upright faces drafted: at five degrees they close over the facet, at
+/// thirty over the step's floor too, and at fifty they meet below the step, the pyramid the
+/// whole block's sides make.
+#[test]
+fn a_draft_closes_over_faces_of_a_body_that_isnt_convex() {
+    let mut k = NativeKernel::new();
+    let part = stepped_block_with_a_cut_corner(&mut k);
+    let uprights: Vec<FaceId> = {
+        let b = k.get(part).unwrap();
+        (0..b.faces.len())
+            .filter(|&f| match &b.faces[f].surf {
+                Surface::Plane { f: fr } => fr.x.cross(&fr.y).z.abs() < 1e-9,
+                _ => false,
+            })
+            .map(|f| FaceId(f as u64))
+            .collect()
+    };
+    let drafted = |k: &mut NativeKernel, degrees: f64| {
+        let spec = DraftSpec {
+            faces: uprights.clone(),
+            angle: degrees.to_radians(),
+            pull: Vector3::z_axis(),
+            neutral: Point3::origin(),
+            neutral_normal: None,
+            tangent_propagation: false,
+        };
+        let out = k.draft(part, &spec).unwrap().bodies[0];
+        let b = k.get(out).unwrap();
+        assert!(b.check().is_empty(), "{degrees} degrees: {:?}", b.check());
+        (b.faces.len(), k.mass_properties(out).unwrap().volume)
+    };
+    let (five, thirty, fifty) = (
+        drafted(&mut k, 5.0),
+        drafted(&mut k, 30.0),
+        drafted(&mut k, 50.0),
+    );
+    assert_eq!((five.0, thirty.0, fifty.0), (8, 6, 5));
+    assert!(
+        five.1 > thirty.1 && thirty.1 > fifty.1,
+        "{five:?} {thirty:?} {fifty:?}"
+    );
+    // At fifty degrees the sides meet at z = 5 / tan 50°, below the step: the pyramid on the
+    // block's base, a third of its base by its height.
+    let apex = 5.0 / 50f64.to_radians().tan();
+    assert!((fifty.1 - 100.0 * apex / 3.0).abs() < 1e-7, "{}", fifty.1);
+}
+
+/// A house: a square block under a roof of two slopes at 45 degrees, its ridge along y.
+fn house(k: &mut NativeKernel) -> BodyId {
+    let gable = Plane {
+        origin: Point3::origin(),
+        x_dir: Vector3::x_axis(),
+        normal: nalgebra::Unit::new_normalize(-Vector3::y()),
+    };
+    let outline = Loop::from_point([0.0, 0.0])
+        .line_to([10.0, 0.0])
+        .line_to([10.0, 5.0])
+        .line_to([5.0, 10.0])
+        .line_to([0.0, 5.0])
+        .close();
+    k.extrude_with(
+        &Profile::of(gable, vec![outline]),
+        &ExtrudeSpec::blind(Vector3::y_axis(), 10.0),
+    )
+    .unwrap()
+    .first()
+    .unwrap()
+}
+
+/// The house's two slopes (their normals rise and lean along x).
+fn slopes(k: &NativeKernel, b: BodyId) -> Vec<FaceId> {
+    let body = k.get(b).unwrap();
+    (0..body.faces.len())
+        .filter(|&f| match &body.faces[f].surf {
+            Surface::Plane { f: fr } => {
+                let n = fr.x.cross(&fr.y);
+                n.z.abs() > 0.1 && n.x.abs() > 0.1
+            }
+            _ => false,
+        })
+        .map(|f| FaceId(f as u64))
+        .collect()
+}
+
+/// The house's ridge rounded, then its slopes drafted to thirty degrees from upright about
+/// the eaves (one slope picked, the round and the other slope reached across the round's
+/// smooth edges). A round across the pull can't be turned as it is: it is taken off, the slopes
+/// drafted, and the ridge they meet at rounded again at the same radius. The same body as the
+/// plain house's slopes drafted and its ridge rounded then.
+#[test]
+fn a_draft_goes_through_a_round_between_its_faces() {
+    let mut k = NativeKernel::new();
+    let spec = |faces: Vec<FaceId>, tangent_propagation: bool| DraftSpec {
+        faces,
+        angle: 30f64.to_radians(),
+        pull: Vector3::z_axis(),
+        neutral: Point3::new(0.0, 0.0, 5.0),
+        neutral_normal: None,
+        tangent_propagation,
+    };
+    let ridge = |k: &NativeKernel, b: BodyId| {
+        let body = k.get(b).unwrap();
+        let two = slopes(k, b);
+        let ef = body.edge_faces();
+        (0..body.edges.len())
+            .find(|&e| two.iter().all(|w| ef[e].contains(&(w.0 as usize))))
+            .map(|e| EdgeId(e as u64))
+            .unwrap()
+    };
+    // Drafted, then rounded.
+    let plain = house(&mut k);
+    let two = slopes(&k, plain);
+    assert_eq!(two.len(), 2);
+    let drafted = k.draft(plain, &spec(two, false)).unwrap().bodies[0];
+    let edge = ridge(&k, drafted);
+    let want = k.fillet(drafted, &[edge], 1.0).unwrap().bodies[0];
+    let want = k.mass_properties(want).unwrap().volume;
+    // Rounded, then drafted through the round.
+    let edge = ridge(&k, plain);
+    let rounded = k.fillet(plain, &[edge], 1.0).unwrap();
+    let round = rounded
+        .history
+        .generated
+        .first()
+        .map(|(f, _)| *f)
+        .expect("the round's face");
+    let rounded = rounded.bodies[0];
+    let one = slopes(&k, rounded)[0];
+    let out = k.draft(rounded, &spec(vec![one], true)).unwrap();
+    let b = k.get(out.bodies[0]).unwrap();
+    assert!(b.check().is_empty(), "{:?}", b.check());
+    assert_eq!(b.faces.len(), 8);
+    let v = k.mass_properties(out.bodies[0]).unwrap().volume;
+    assert!((v - want).abs() < 1e-9 * want, "volume {v}, want {want}");
+    // The new round continues the old one.
+    assert!(
+        out.history
+            .modified
+            .iter()
+            .any(|(_, from)| from.body == rounded && from.face == round),
+        "{:?}",
+        out.history.modified
+    );
+}
+
+/// The wall of a column over an ellipse (half-axes 6 and 4, 10 tall) drafted five degrees
+/// about its foot: each section across the pull is the ellipse's inward offset by its height's
+/// share, of area A − L d + π d² (A the ellipse's area, L its perimeter), so the volume is
+/// 10 A − 50 L t + (1000/3) π t², t = tan 5°. The wall is no extrusion any more: a ruled
+/// surface through its foot.
+#[test]
+fn a_draft_leans_a_wall_extruded_over_an_ellipse() {
+    let mut k = NativeKernel::new();
+    let floor = Plane {
+        origin: Point3::origin(),
+        x_dir: Vector3::x_axis(),
+        normal: Vector3::z_axis(),
+    };
+    let column = k
+        .extrude_with(
+            &Profile::of(floor, vec![Loop::ellipse([0.0, 0.0], 6.0, 4.0)]),
+            &ExtrudeSpec::blind(Vector3::z_axis(), 10.0),
+        )
+        .unwrap()
+        .first()
+        .unwrap();
+    let walls: Vec<FaceId> = {
+        let b = k.get(column).unwrap();
+        (0..b.faces.len())
+            .filter(|&f| !matches!(b.faces[f].surf, Surface::Plane { .. }))
+            .map(|f| FaceId(f as u64))
+            .collect()
+    };
+    assert!(!walls.is_empty());
+    let spec = DraftSpec {
+        faces: walls,
+        angle: 5f64.to_radians(),
+        pull: Vector3::z_axis(),
+        neutral: Point3::origin(),
+        neutral_normal: None,
+        tangent_propagation: false,
+    };
+    let out = k.draft(column, &spec).unwrap().bodies[0];
+    let b = k.get(out).unwrap();
+    assert!(b.check().is_empty(), "{:?}", b.check());
+    let t = 5f64.to_radians().tan();
+    let (a, c) = (6.0f64, 4.0f64);
+    let n = 200_000;
+    let perimeter: f64 = (0..n)
+        .map(|i| {
+            let u = std::f64::consts::TAU * (i as f64 + 0.5) / n as f64;
+            (a * u.sin()).hypot(c * u.cos()) * std::f64::consts::TAU / n as f64
+        })
+        .sum();
+    let want = 10.0 * PI * a * c - 50.0 * perimeter * t + 1000.0 / 3.0 * PI * t * t;
+    let v = k.mass_properties(out).unwrap().volume;
+    assert!((v - want).abs() < 1e-6 * want, "volume {v}, want {want}");
+}
+
+/// A block with a round hole bored through it at a slant (twenty degrees from upright), the
+/// hole's wall drafted five degrees about the block's top. The cylinder doesn't run along the
+/// pull, so it is no cone afterwards: the ruled surface through the ellipse it meets the top
+/// in, each ruling five degrees from the pull. The top keeps its hole as it was.
+#[test]
+fn a_draft_leans_a_cylinder_at_a_slant_to_the_pull() {
+    let mut k = NativeKernel::new();
+    let block = k
+        .primitive(&Primitive::block(
+            Point3::new(-10.0, -10.0, 0.0),
+            Point3::new(10.0, 10.0, 10.0),
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let lean = 20f64.to_radians();
+    let dir = Vector3::new(lean.sin(), 0.0, lean.cos());
+    let rod = k
+        .primitive(&Primitive::cylinder(
+            Point3::origin() - dir * 5.0,
+            dir,
+            3.0,
+            25.0,
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let bored = k
+        .boolean(BoolOp::Subtract, block, &[rod])
+        .unwrap()
+        .first()
+        .unwrap();
+    let top_area = |k: &NativeKernel, b: BodyId| {
+        k.faces(b)
+            .unwrap()
+            .iter()
+            .find(|f| f.kind == SurfaceKind::Plane && (f.center.z - 10.0).abs() < 1e-6)
+            .map(|f| f.area)
+            .unwrap()
+    };
+    let wall = k
+        .faces(bored)
+        .unwrap()
+        .iter()
+        .find(|f| f.kind == SurfaceKind::Cylinder)
+        .map(|f| f.id)
+        .unwrap();
+    let spec = DraftSpec {
+        faces: vec![wall],
+        angle: 5f64.to_radians(),
+        pull: Vector3::z_axis(),
+        neutral: Point3::new(0.0, 0.0, 10.0),
+        neutral_normal: None,
+        tangent_propagation: false,
+    };
+    let out = k.draft(bored, &spec).unwrap().bodies[0];
+    let b = k.get(out).unwrap();
+    assert!(b.check().is_empty(), "{:?}", b.check());
+    assert!((top_area(&k, out) - top_area(&k, bored)).abs() < 1e-6);
+    // Every normal of the new wall is five degrees off level: its rulings five off the pull.
+    let wall = b
+        .faces
+        .iter()
+        .find(|f| !matches!(f.surf, Surface::Plane { .. }))
+        .expect("the hole's wall");
+    let mut looked = 0;
+    for i in 0..=12 {
+        for j in 1..4 {
+            let (u, v) = (i as f64 / 12.0, j as f64 / 4.0);
+            let ((u0, u1), (v0, v1)) = match &wall.surf {
+                Surface::Nurbs(n) => (
+                    (n.ku[0], n.ku[n.ku.len() - 1]),
+                    (n.kv[0], n.kv[n.kv.len() - 1]),
+                ),
+                other => panic!("the wall is {:?}", other.kind()),
+            };
+            let n = wall.surf.normal(u0 + (u1 - u0) * u, v0 + (v1 - v0) * v);
+            let off_level = n.z.abs().asin().to_degrees();
+            assert!(
+                (off_level - 5.0).abs() < 1e-3,
+                "{off_level} degrees at ({u}, {v})"
+            );
+            looked += 1;
+        }
+    }
+    assert!(looked > 0);
+}
+
+/// A pyramid on a slab that isn't convex, two opposite faces of the pyramid drafted to thirty
+/// degrees from upright where all four stood at forty-five: its apex, where the four met,
+/// comes apart into a ridge between the two that weren't moved. (A convex body's faces are
+/// its planes' polytope; here the corner is made two and the faces moved again.) The roof is
+/// then a wedge, 3 · 6 · (2 · 6 + ridge) / 6.
+#[test]
+fn a_draft_parts_a_corner_of_four_faces() {
+    let mut k = NativeKernel::new();
+    let block = |k: &mut NativeKernel, a: [f64; 3], b: [f64; 3]| {
+        k.primitive(&Primitive::block(Point3::from(a), Point3::from(b)))
+            .unwrap()
+            .first()
+            .unwrap()
+    };
+    let slab = block(&mut k, [0.0, 0.0, 0.0], [12.0, 12.0, 2.0]);
+    let notch = block(&mut k, [6.0, -1.0, -1.0], [13.0, 6.0, 3.0]);
+    let ell = k
+        .boolean(BoolOp::Subtract, slab, &[notch])
+        .unwrap()
+        .first()
+        .unwrap();
+    let p = |x: f64, y: f64, z: f64| Point3::new(x, y, z);
+    let (a, b, c, d, top) = (
+        p(0.0, 0.0, 2.0),
+        p(6.0, 0.0, 2.0),
+        p(6.0, 6.0, 2.0),
+        p(0.0, 6.0, 2.0),
+        p(3.0, 3.0, 5.0),
+    );
+    let pyramid = k
+        .mesh_solid(
+            &[
+                [a, c, b],
+                [a, d, c],
+                [a, b, top],
+                [b, c, top],
+                [c, d, top],
+                [d, a, top],
+            ],
+            1e-7,
+        )
+        .unwrap();
+    let part = k
+        .boolean(BoolOp::Union, ell, &[pyramid])
+        .unwrap()
+        .first()
+        .unwrap();
+    let leaning: Vec<FaceId> = {
+        let body = k.get(part).unwrap();
+        (0..body.faces.len())
+            .filter(|&f| match &body.faces[f].surf {
+                Surface::Plane { f: fr } => {
+                    let n = fr.x.cross(&fr.y);
+                    n.z.abs() > 0.1 && n.x.abs() > 0.1
+                }
+                _ => false,
+            })
+            .map(|f| FaceId(f as u64))
+            .collect()
+    };
+    assert_eq!(leaning.len(), 2);
+    let spec = DraftSpec {
+        faces: leaning,
+        angle: 30f64.to_radians(),
+        pull: Vector3::z_axis(),
+        neutral: Point3::new(0.0, 0.0, 2.0),
+        neutral_normal: None,
+        tangent_propagation: false,
+    };
+    let out = k.draft(part, &spec).unwrap().bodies[0];
+    let body = k.get(out).unwrap();
+    assert!(body.check().is_empty(), "{:?}", body.check());
+    let ridge = 6.0 - 2.0 * 3.0 * 30f64.to_radians().tan();
+    let want = 216.0 + 3.0 * 6.0 * (12.0 + ridge) / 6.0;
+    let v = k.mass_properties(out).unwrap().volume;
+    assert!((v - want).abs() < 1e-9 * want, "volume {v}, want {want}");
+}
+
+/// A hip roof on a slab that isn't convex: two long slopes meeting along a ridge, a hip at
+/// each end, all at forty-five degrees. The hips drafted to seventy-five degrees from upright
+/// lean so far that they meet one another before they reach the ridge: the ridge shrinks to
+/// nothing and a new one forms across it, between the two hips, which were never neighbours.
+/// (The ridge's ends are made one corner, which then parts the other way.) The roof is the
+/// wedge under the new ridge.
+#[test]
+fn a_draft_brings_two_faces_that_werent_neighbours_together() {
+    let mut k = NativeKernel::new();
+    let block = |k: &mut NativeKernel, a: [f64; 3], b: [f64; 3]| {
+        k.primitive(&Primitive::block(Point3::from(a), Point3::from(b)))
+            .unwrap()
+            .first()
+            .unwrap()
+    };
+    let slab = block(&mut k, [0.0, 0.0, 0.0], [16.0, 8.0, 2.0]);
+    let notch = block(&mut k, [8.0, -1.0, -1.0], [17.0, 4.0, 3.0]);
+    let ell = k
+        .boolean(BoolOp::Subtract, slab, &[notch])
+        .unwrap()
+        .first()
+        .unwrap();
+    let p = |x: f64, y: f64, z: f64| Point3::new(x, y, z);
+    // The roof over [0, 8] × [4, 8]: its ridge from (2, 6) to (6, 6), two up.
+    let (a, b, c, d) = (
+        p(0.0, 4.0, 2.0),
+        p(8.0, 4.0, 2.0),
+        p(8.0, 8.0, 2.0),
+        p(0.0, 8.0, 2.0),
+    );
+    let (r0, r1) = (p(2.0, 6.0, 4.0), p(6.0, 6.0, 4.0));
+    let roof = k
+        .mesh_solid(
+            &[
+                [a, c, b],
+                [a, d, c],
+                [a, b, r1],
+                [a, r1, r0],
+                [c, d, r0],
+                [c, r0, r1],
+                [b, c, r1],
+                [d, a, r0],
+            ],
+            1e-7,
+        )
+        .unwrap();
+    let part = k
+        .boolean(BoolOp::Union, ell, &[roof])
+        .unwrap()
+        .first()
+        .unwrap();
+    let hips: Vec<FaceId> = {
+        let body = k.get(part).unwrap();
+        (0..body.faces.len())
+            .filter(|&f| match &body.faces[f].surf {
+                Surface::Plane { f: fr } => {
+                    let n = fr.x.cross(&fr.y);
+                    n.z.abs() > 0.1 && n.x.abs() > 0.1
+                }
+                _ => false,
+            })
+            .map(|f| FaceId(f as u64))
+            .collect()
+    };
+    assert_eq!(hips.len(), 2);
+    let spec = DraftSpec {
+        faces: hips,
+        angle: 75f64.to_radians(),
+        pull: Vector3::z_axis(),
+        neutral: Point3::new(0.0, 0.0, 2.0),
+        neutral_normal: None,
+        tangent_propagation: false,
+    };
+    let out = k.draft(part, &spec).unwrap().bodies[0];
+    let body = k.get(out).unwrap();
+    assert!(body.check().is_empty(), "{:?}", body.check());
+    // The hips meet over the middle, 4 / tan 75° up; the slopes are that far in there.
+    let h = 4.0 / 75f64.to_radians().tan();
+    let ridge = 4.0 - 2.0 * h;
+    let want = (16.0 * 8.0 - 8.0 * 4.0) * 2.0 + h * 8.0 * (2.0 * 4.0 + ridge) / 6.0;
+    let v = k.mass_properties(out).unwrap().volume;
+    assert!((v - want).abs() < 1e-9 * want, "volume {v}, want {want}");
+}
+
+/// A groove down a block's side, cut by a rod leaning five degrees: part of a cylinder that
+/// doesn't run along the pull, meeting the side, the top and the foot. Its wall drafted three
+/// degrees about the top, the foot or the middle is a sound body each time (the leant surface
+/// runs on past the wall's two sides to meet the block's side again), with more left of the
+/// block the higher the plane the wall is turned about.
+#[test]
+fn a_draft_leans_a_grooves_wall() {
+    let mut k = NativeKernel::new();
+    let block = k
+        .primitive(&Primitive::block(
+            Point3::new(-10.0, -10.0, 0.0),
+            Point3::new(10.0, 10.0, 10.0),
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let lean = 5f64.to_radians();
+    let dir = Vector3::new(lean.sin(), 0.0, lean.cos());
+    let rod = k
+        .primitive(&Primitive::cylinder(
+            Point3::new(10.0, 0.0, 0.0) - dir * 5.0,
+            dir,
+            3.0,
+            30.0,
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let grooved = k
+        .boolean(BoolOp::Subtract, block, &[rod])
+        .unwrap()
+        .first()
+        .unwrap();
+    let wall = k
+        .faces(grooved)
+        .unwrap()
+        .iter()
+        .find(|f| f.kind == SurfaceKind::Cylinder)
+        .map(|f| f.id)
+        .unwrap();
+    let was = k.mass_properties(grooved).unwrap().volume;
+    let about = |k: &mut NativeKernel, height: f64| {
+        let spec = DraftSpec {
+            faces: vec![wall],
+            angle: 3f64.to_radians(),
+            pull: Vector3::z_axis(),
+            neutral: Point3::new(0.0, 0.0, height),
+            neutral_normal: None,
+            tangent_propagation: false,
+        };
+        let out = k.draft(grooved, &spec).unwrap().bodies[0];
+        let faults = k
+            .get(out)
+            .unwrap()
+            .check_with(cadrs_kernel::native::topo::CheckLevel::Full);
+        assert!(faults.is_empty(), "about {height}: {faults:?}");
+        k.mass_properties(out).unwrap().volume
+    };
+    let (top, middle, foot) = (about(&mut k, 10.0), about(&mut k, 5.0), about(&mut k, 0.0));
+    assert!(top > middle && middle > foot, "{top} {middle} {foot}");
+    assert!(
+        top > was && foot < was && (middle - was).abs() < 1.0,
+        "{top} {middle} {foot} {was}"
+    );
+}
+
+/// A round-bottomed groove cut down into a block's top, its wall drafted forty-five degrees
+/// about the top. The wall is half a cylinder across the pull, level with the top at both
+/// its sides: two rulings on the neutral plane and no one plane through both, so it is cut
+/// along its lowest ruling and each half leans about its own. The groove becomes a vee three
+/// wide each side and three deep.
+#[test]
+fn a_draft_makes_a_round_groove_a_vee() {
+    let mut k = NativeKernel::new();
+    let block = k
+        .primitive(&Primitive::block(
+            Point3::new(-10.0, -10.0, 0.0),
+            Point3::new(10.0, 10.0, 10.0),
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let rod = k
+        .primitive(&Primitive::cylinder(
+            Point3::new(0.0, -15.0, 10.0),
+            Vector3::y(),
+            3.0,
+            30.0,
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let grooved = k
+        .boolean(BoolOp::Subtract, block, &[rod])
+        .unwrap()
+        .first()
+        .unwrap();
+    let wall = k
+        .faces(grooved)
+        .unwrap()
+        .iter()
+        .find(|f| f.kind == SurfaceKind::Cylinder)
+        .map(|f| f.id)
+        .unwrap();
+    let spec = DraftSpec {
+        faces: vec![wall],
+        angle: 45f64.to_radians(),
+        pull: Vector3::z_axis(),
+        neutral: Point3::new(0.0, 0.0, 10.0),
+        neutral_normal: None,
+        tangent_propagation: false,
+    };
+    let out = k.draft(grooved, &spec).unwrap();
+    let body = k.get(out.bodies[0]).unwrap();
+    let faults = body.check_with(cadrs_kernel::native::topo::CheckLevel::Full);
+    assert!(faults.is_empty(), "{faults:?}");
+    assert!(
+        body.faces
+            .iter()
+            .all(|f| matches!(f.surf, Surface::Plane { .. }))
+    );
+    let v = k.mass_properties(out.bodies[0]).unwrap().volume;
+    let want = 4000.0 - 0.5 * 6.0 * 3.0 * 20.0;
+    assert!((v - want).abs() < 1e-9 * want, "volume {v}, want {want}");
+    // Both halves continue the wall.
+    let halves = out
+        .history
+        .modified
+        .iter()
+        .filter(|(_, from)| from.body == grooved && from.face == wall)
+        .count();
+    assert_eq!(halves, 2);
+}
+
+/// A groove cut down a block's side by a rod leaning twenty degrees: it runs out of the side
+/// before the top, its wall ending in a point there. Leant three degrees its wall comes to
+/// meet faces it didn't (the top, about the foot) or leaves the block altogether (about the
+/// top, where the rod is outside it), which moving the faces as they are joined can't make:
+/// the hollow is filled and cut again as its leant wall bounds it.
+#[test]
+fn a_draft_leans_a_groove_that_runs_out() {
+    let mut k = NativeKernel::new();
+    let block = k
+        .primitive(&Primitive::block(
+            Point3::new(-10.0, -10.0, 0.0),
+            Point3::new(10.0, 10.0, 10.0),
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let lean = 20f64.to_radians();
+    let dir = Vector3::new(lean.sin(), 0.0, lean.cos());
+    let rod = k
+        .primitive(&Primitive::cylinder(
+            Point3::new(10.0, 0.0, 0.0) - dir * 5.0,
+            dir,
+            3.0,
+            30.0,
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let grooved = k
+        .boolean(BoolOp::Subtract, block, &[rod])
+        .unwrap()
+        .first()
+        .unwrap();
+    let wall = k
+        .faces(grooved)
+        .unwrap()
+        .iter()
+        .find(|f| f.kind == SurfaceKind::Cylinder)
+        .map(|f| f.id)
+        .unwrap();
+    let was = k.mass_properties(grooved).unwrap().volume;
+    let about = |k: &mut NativeKernel, height: f64| {
+        let spec = DraftSpec {
+            faces: vec![wall],
+            angle: 3f64.to_radians(),
+            pull: Vector3::z_axis(),
+            neutral: Point3::new(0.0, 0.0, height),
+            neutral_normal: None,
+            tangent_propagation: false,
+        };
+        let out = k.draft(grooved, &spec).unwrap();
+        let faults = k
+            .get(out.bodies[0])
+            .unwrap()
+            .check_with(cadrs_kernel::native::topo::CheckLevel::Full);
+        assert!(faults.is_empty(), "about {height}: {faults:?}");
+        (
+            k.mass_properties(out.bodies[0]).unwrap().volume,
+            k.get(out.bodies[0]).unwrap().faces.len(),
+        )
+    };
+    // About the foot the groove runs nearly upright from its widest, through the top.
+    let (foot, faces) = about(&mut k, 0.0);
+    assert!(foot < was - 50.0 && faces == 8, "{foot} {faces}");
+    // About the top, where the rod is outside the block, nothing is left of it.
+    let (top, faces) = about(&mut k, 10.0);
+    assert!(
+        (top - 8000.0 / 2.0).abs() < 1e-6 && faces == 6,
+        "{top} {faces}"
+    );
+}
+
+fn a_block(k: &mut NativeKernel, a: [f64; 3], b: [f64; 3]) -> BodyId {
+    k.primitive(&Primitive::block(Point3::from(a), Point3::from(b)))
+        .unwrap()
+        .first()
+        .unwrap()
+}
+
+/// A 20 × 10 × 10 block with a rib 2 thick round its middle (up its sides from z = 4 and 6
+/// over its top), shrunk by 1.5 with sharp corners: the rib's walls pass one another, so
+/// nothing of it is left, and the inset is the plain block's, 17 × 7 × 7. (Its faces moved as
+/// they stood closed into a body with the rib inside out, 60 short, that passed the check.)
+#[test]
+fn a_sharp_inset_past_a_ribs_thickness_leaves_none_of_it() {
+    let mut k = NativeKernel::new();
+    let block = a_block(&mut k, [0.0, 0.0, 0.0], [20.0, 10.0, 10.0]);
+    let rib = a_block(&mut k, [9.0, -1.0, 4.0], [11.0, 11.0, 16.0]);
+    let part = k
+        .boolean(BoolOp::Union, block, &[rib])
+        .unwrap()
+        .first()
+        .unwrap();
+    let spec = OffsetSpec {
+        distance: -1.5,
+        faces: vec![],
+        sharp: true,
+    };
+    let out = k.offset(part, &spec).unwrap().bodies[0];
+    let b = k.get(out).unwrap();
+    assert!(b.check().is_empty(), "{:?}", b.check());
+    assert_eq!(b.faces.len(), 6, "the rib is gone");
+    close(volume(&k, out), 17.0 * 7.0 * 7.0, 1e-9);
+}
+
+/// The same block with a slot 2 wide cut where the rib stood, grown by 1.5: the slot's walls
+/// pass one another and it closes, the grown block 23 × 13 × 13.
+#[test]
+fn a_sharp_offset_past_a_slots_width_closes_it() {
+    let mut k = NativeKernel::new();
+    let block = a_block(&mut k, [0.0, 0.0, 0.0], [20.0, 10.0, 10.0]);
+    let slot = a_block(&mut k, [9.0, -1.0, 4.0], [11.0, 11.0, 11.0]);
+    let part = k
+        .boolean(BoolOp::Subtract, block, &[slot])
+        .unwrap()
+        .first()
+        .unwrap();
+    let spec = OffsetSpec {
+        distance: 1.5,
+        faces: vec![],
+        sharp: true,
+    };
+    let out = k.offset(part, &spec).unwrap().bodies[0];
+    let b = k.get(out).unwrap();
+    assert!(b.check().is_empty(), "{:?}", b.check());
+    assert_eq!(b.faces.len(), 6, "the slot is gone");
+    close(volume(&k, out), 23.0 * 13.0 * 13.0, 1e-9);
+}

@@ -60,6 +60,8 @@ pub struct XBuilder {
     solids: Vec<Vec<usize>>,
     /// Problems met (faces dropped, gaps left), for diagnostics.
     pub warnings: Vec<String>,
+    /// The vertices by where they are, for [`Self::vertex_at`].
+    places: super::math::PointIndex,
     /// Whether the file says nothing of the faces' orientation (IGES trimmed surfaces): solids
     /// are then always turned to enclose a positive volume.
     pub unoriented: bool,
@@ -204,14 +206,7 @@ pub fn sew_loose(
     }
     // Shells: faces connected through shared edges; closed when every edge is used twice.
     let mut parent: Vec<usize> = (0..fids.len()).collect();
-    fn find(p: &mut [usize], x: usize) -> usize {
-        let mut r = x;
-        while p[r] != r {
-            r = p[r];
-        }
-        p[x] = r;
-        r
-    }
+    use super::math::set_of as find;
     let mut users: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
     for (k, &fi) in fids.iter().enumerate() {
         for &(e, _) in xb.faces[fi].loops.iter().flatten() {
@@ -547,7 +542,7 @@ fn snap_tiny(c: Curve) -> Curve {
             .map(|h| (h.x / h.w).abs().max((h.y / h.w).abs()))
             .fold(0.0, f64::max),
     };
-    let tiny = 1e-13 * size.max(1.0);
+    let tiny = 1e-13 * size.max(crate::native::tol::POINT);
     let z = |x: f64| if x.abs() < tiny { 0.0 } else { x };
     let p = |q: &P3| P3::new(z(q.x), z(q.y), z(q.z));
     let v = |q: &V3| V3::new(z(q.x), z(q.y), z(q.z));
@@ -1641,7 +1636,11 @@ impl XBuilder {
 
     /// A vertex at `p`: an existing one within the join distance, else a new one.
     fn vertex_at(&mut self, p: P3) -> usize {
-        if let Some(i) = self.body.verts.iter().position(|v| (v.p - p).norm() < JOIN) {
+        let verts = &self.body.verts;
+        if let Some(i) = self
+            .places
+            .first_within(verts.len(), |i| verts[i].p, &p, JOIN)
+        {
             return i;
         }
         self.body.add_vertex(p)
@@ -1667,16 +1666,9 @@ impl XBuilder {
                     if cur.abs() < tol::ROUNDOFF_FINE && i == m {
                         break; // the next coedge's start
                     }
-                    let (mut lo, mut hi) = ((i - 1) as f64 / m as f64, s1);
-                    for _ in 0..80 {
-                        let mid = (lo + hi) / 2.0;
-                        if (f(mid) > 0.0) == (f(lo) > 0.0) {
-                            lo = mid;
-                        } else {
-                            hi = mid;
-                        }
-                    }
-                    return Some((k, Some(a + (b - a) * (lo + hi) / 2.0)));
+                    let s =
+                        super::math::root_from(&f, ((i - 1) as f64 / m as f64, prev), (s1, cur));
+                    return Some((k, Some(a + (b - a) * s)));
                 }
                 prev = cur;
             }

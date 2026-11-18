@@ -599,11 +599,14 @@ pub fn fuse(b: &mut Body, tol: f64) {
                     continue;
                 }
                 let (a, c) = (&b.edges[i], &b.edges[j]);
-                let along = [0.25, 0.5, 0.75].iter().all(|f| {
-                    let m = c.point(c.t[0] + (c.t[1] - c.t[0]) * f);
-                    let (lo, hi) = (a.t[0].min(a.t[1]), a.t[0].max(a.t[1]));
-                    (a.curve.point(a.curve.closest(&m, lo, hi)) - m).norm() <= tol
-                });
+                let along = c.curve.runs_along(
+                    (c.t[0], c.t[1]),
+                    &a.curve,
+                    (a.t[0].min(a.t[1]), a.t[0].max(a.t[1])),
+                    [0.25, 0.5, 0.75],
+                    tol,
+                    false,
+                );
                 if !along {
                     continue;
                 }
@@ -761,7 +764,7 @@ fn crossings_with_pieces(a: &[Piece], b: &[Piece], tol: f64) -> Vec<P3> {
 /// Wire `a` op `b` (any kind but a mixed one).
 fn wire_with(a: &Body, b: &Body, op: BoolOp) -> Result<BoolOut> {
     let mine = pieces_of(a);
-    let size = a.bbox().diagonal().max(b.bbox().diagonal()).max(1.0);
+    let size = a.bbox().diagonal().max(b.bbox().diagonal()).max(tol::POINT);
     let t = (size * 1e-10).max(tol());
     let theirs;
     let other = match kind(b) {

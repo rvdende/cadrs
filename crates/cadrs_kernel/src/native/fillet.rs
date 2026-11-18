@@ -224,6 +224,9 @@ struct EdgeFillet {
     /// The ball's offset from the second face over its offset from the first (1 but for a
     /// chamfer of two distances: its contacts then lie unequally far from the edge).
     ratio: f64,
+    /// That ratio varying along the edge (a chamfer by a distance and an angle between faces
+    /// whose section changes along it): (edge parameter, ratio), increasing, linear between.
+    ratio_law: Option<Vec<(f64, f64)>>,
     spine: Spine,
     exact: Option<Exact>,
     /// A ball in the middle of the strip (its reference) and its spine parameter.
@@ -276,13 +279,11 @@ impl EdgeFillet {
         if t >= last.0 {
             return last.1;
         }
-        for w in law.windows(2) {
-            if t <= w[1].0 {
-                let f = (t - w[0].0) / (w[1].0 - w[0].0).max(tol::TINY);
-                return w[0].1 + (w[1].1 - w[0].1) * f;
-            }
-        }
-        last.1
+        // (The first sample at or past t: a law may have a thousand.)
+        let i = law.partition_point(|x| x.0 < t).clamp(1, law.len() - 1);
+        let w = [law[i - 1], law[i]];
+        let f = (t - w[0].0) / (w[1].0 - w[0].0).max(tol::TINY);
+        w[0].1 + (w[1].1 - w[0].1) * f
     }
 
     /// The radius's derivative along the spine at t (0 past the law's ends).
@@ -296,16 +297,53 @@ impl EdgeFillet {
             })
     }
 
+    /// The second offset over the first at spine parameter t ([`Self::ratio`], or its law's
+    /// value, the end values past the ends).
+    fn ratio_at(&self, t: f64) -> f64 {
+        let Some(law) = &self.ratio_law else {
+            return self.ratio;
+        };
+        let t = self.law_param(t);
+        let (first, last) = (law[0], law[law.len() - 1]);
+        if t <= first.0 {
+            return first.1;
+        }
+        if t >= last.0 {
+            return last.1;
+        }
+        let i = law.partition_point(|x| x.0 < t).clamp(1, law.len() - 1);
+        let w = [law[i - 1], law[i]];
+        w[0].1 + (w[1].1 - w[0].1) * (t - w[0].0) / (w[1].0 - w[0].0).max(tol::TINY)
+    }
+
+    /// The ratio's derivative along the spine at t (0 past its law's ends, or without one).
+    fn ratio_slope(&self, t: f64) -> f64 {
+        let Some(law) = &self.ratio_law else {
+            return 0.0;
+        };
+        let t = self.law_param(t);
+        law.windows(2)
+            .find(|w| t >= w[0].0 && t <= w[1].0)
+            .map_or(0.0, |w| {
+                (w[1].1 - w[0].1) / (w[1].0 - w[0].0).max(tol::TINY)
+            })
+    }
+
     /// How ball `ball` (at spine parameter t) moves along the spine: its contacts' velocities
     /// ([`geom::ball_tangent`]); `None` where its faces are tangent there.
     fn velocity(&self, b: &Body, t: f64, ball: &Ball) -> Option<[V3; 2]> {
         let f = [&b.faces[self.faces[0]], &b.faces[self.faces[1]]];
         let (p, tn, dp, dtn) = self.spine.at_d(t);
-        let s = self.k[0].signum() * self.radius_slope(t);
+        let sign = self.k[0].signum();
+        let s = sign * self.radius_slope(t);
         let v = geom::ball_tangent(
             f,
             self.k_at(t),
-            [s, s * self.ratio],
+            // (The second offset is the first times the ratio: both may change.)
+            [
+                s,
+                s * self.ratio_at(t) + sign * self.radius_at(t) * self.ratio_slope(t),
+            ],
             ball,
             &p,
             &tn,
@@ -318,7 +356,7 @@ impl EdgeFillet {
     /// The offsets at spine parameter t.
     fn k_at(&self, t: f64) -> [f64; 2] {
         let r = self.radius_at(t) * self.k[0].signum();
-        [r, r * self.ratio]
+        [r, r * self.ratio_at(t)]
     }
 
     /// The ball at spine parameter t from contacts near `guess` (default: from the edge).
@@ -396,6 +434,9 @@ impl EdgeFillet {
     ) -> ((f64, Ball), (f64, Ball)) {
         let (mut a, mut z) = (a, z);
         for _ in 0..60 {
+            if (z.0 - a.0).abs() <= 4.0 * f64::EPSILON * (1.0 + a.0.abs().max(z.0.abs())) {
+                break;
+            }
             let m = 0.5 * (a.0 + z.0);
             let Some(x) = self.ball(b, m, Some([a.1.q[0].uv, a.1.q[1].uv])) else {
                 break;
@@ -485,7 +526,22 @@ fn crossings(
     // A flat ball's section through a point: the spine's at the point's parameter.
     let section = |p: &P3| ef.spine.at(ef.spine.param_of(p, ef.tm)).1;
     let plane = ef.flat.then_some(&section as &dyn Fn(&P3) -> V3);
-    let mut out = geom::rail_crossings(f, k, side, bd, near, reach, plane);
+    // How that section's plane turns as the point moves by `dp`: the spine's unit tangent's
+    // rate, by how fast the point's parameter on the spine runs (its nearest point's:
+    // ds = dp·C′ / (C′·C′ − (p − C)·C″)).
+    let section_rate = |p: &P3, dp: &V3| -> V3 {
+        let s = ef.spine.param_of(p, ef.tm);
+        let (_, _, _, dtn) = ef.spine.at_d(s);
+        let (c, c1, c2) = ef.spine.curve.d2(s);
+        let den = c1.norm_squared() - (p - c).dot(&c2);
+        if den.abs() > tol::TINY {
+            dtn * (dp.dot(&c1) / den)
+        } else {
+            V3::zeros()
+        }
+    };
+    let turning = ef.flat.then_some(&section_rate as geom::Turning);
+    let mut out = geom::rail_crossings(f, k, side, bd, near, reach, plane, turning);
     // A varying radius: each crossing again with the radius where it is. The crossing with the
     // radius at spine parameter t lies at F(t); secant steps on F(t) − t find where they agree.
     // (Only those found so: one the steps don't settle has another crossing's radius.)
@@ -493,9 +549,18 @@ fn crossings(
         let mut settled = Vec::new();
         for x in out {
             let at = |t: f64, near: &Ball| -> Option<(f64, f64, Ball)> {
-                let y = geom::rail_crossings(f, ef.k_at(t), side, bd, &near.c, 2.0 * ef.r(), plane)
-                    .into_iter()
-                    .min_by(|p, q| (p.1.c - near.c).norm().total_cmp(&(q.1.c - near.c).norm()))?;
+                let y = geom::rail_crossings(
+                    f,
+                    ef.k_at(t),
+                    side,
+                    bd,
+                    &near.c,
+                    2.0 * ef.r(),
+                    plane,
+                    turning,
+                )
+                .into_iter()
+                .min_by(|p, q| (p.1.c - near.c).norm().total_cmp(&(q.1.c - near.c).norm()))?;
                 Some((ef.spine.param_of(&y.1.c, t) - t, y.0, y.1))
             };
             let t0 = ef.spine.param_of(&x.1.c, ef.tm);
@@ -619,10 +684,20 @@ fn edge_fillet(
     e: usize,
     law: &[(f64, f64)],
     flat: bool,
-    ratio: f64,
+    ratio: &Ratio,
     budget: &Budget,
 ) -> Result<EdgeFillet> {
     let ed = &b.edges[e];
+    // (The ratio's law along the edge's parameter, in increasing order, as the radius's.)
+    let ratio_law = ratio.1.as_ref().map(|l| {
+        let mut pts: Vec<(f64, f64)> = l
+            .iter()
+            .map(|&(f, x)| (ed.t[0] + (ed.t[1] - ed.t[0]) * f, x))
+            .collect();
+        pts.sort_by(|a, c| a.0.total_cmp(&c.0));
+        pts
+    });
+    let ratio = ratio.0;
     if ed.degenerate {
         return Err(KernelError::InvalidParameter(
             "A degenerate edge can't be filleted".into(),
@@ -701,7 +776,11 @@ fn edge_fillet(
         [r, r * ratio]
     };
     // The larger offset, for how far the contacts may lie.
-    let rr = r * ratio.max(1.0);
+    let rr = r * ratio_law
+        .iter()
+        .flatten()
+        .fold(ratio, |m, x| m.max(x.1))
+        .max(1.0);
     // A canal surface's envelope is real only where the radius changes slower than the spine
     // runs (Dahl, research/PAPER_SCAN.md item 11: |r′| < |g′|); past that the balls along the
     // edge nest inside one another and no ball touches both faces in its section.
@@ -725,7 +804,7 @@ fn edge_fillet(
         }
     }
     let law = varies.then_some(pts);
-    let exact = if varies {
+    let exact = if varies || ratio_law.is_some() {
         None
     } else {
         geom::exact_kind([&b.faces[faces[0]], &b.faces[faces[1]]], &spine)
@@ -738,6 +817,7 @@ fn edge_fillet(
         law,
         flat,
         ratio,
+        ratio_law,
         spine,
         exact,
         mid: dummy_ball(),
@@ -1224,7 +1304,14 @@ fn ball_of_radius(b: &Body, ef: &EdgeFillet, t: f64, rho: f64, guess: [P2; 2]) -
     let f = [&b.faces[ef.faces[0]], &b.faces[ef.faces[1]]];
     let (p, d) = ef.spine.at(t);
     let s = ef.k[0].signum();
-    geom::ball_in_plane(f, [s * rho, s * rho * ef.ratio], &p, &d, guess, ef.flat)
+    geom::ball_in_plane(
+        f,
+        [s * rho, s * rho * ef.ratio_at(t)],
+        &p,
+        &d,
+        guess,
+        ef.flat,
+    )
 }
 
 /// `ef`'s radius at spine parameter t where its ball would reach past face `wall`: that of the
@@ -1250,27 +1337,38 @@ fn reach_radius(
     // projected from it, the last one's (they move little from one to the next: no search
     // over the whole surface per step of the bisection, most of a fillet's time).
     let mut near = None;
-    if clearance(b, ef, &full, r, wall, &mut near) >= 0.0 {
+    let at_full = clearance(b, ef, &full, r, wall, &mut near);
+    if at_full >= 0.0 {
         return Ok(None);
     }
-    let (mut lo, mut hi) = (0.02 * r, r);
+    let (lo, hi) = (0.02 * r, r);
     let mut g = *guess;
     let small = ball_of_radius(b, ef, t, lo, g).ok_or_else(lost)?;
     let mut small_near = near;
-    if clearance(b, ef, &small, lo, wall, &mut small_near) <= 0.0 {
+    let at_small = clearance(b, ef, &small, lo, wall, &mut small_near);
+    if at_small <= 0.0 {
         return Ok(Some(0.0));
     }
-    for _ in 0..60 {
-        let m = 0.5 * (lo + hi);
-        let bl = ball_of_radius(b, ef, t, m, g).ok_or_else(lost)?;
-        g = [bl.q[0].uv, bl.q[1].uv];
-        if clearance(b, ef, &bl, m, wall, &mut near) > 0.0 {
-            lo = m;
-        } else {
-            hi = m;
-        }
+    // (The radius the clearance reaches zero at, by false position: a few balls, not sixty.)
+    let mut failed = false;
+    let m = geom::bracket_root(
+        |m| match ball_of_radius(b, ef, t, m, g) {
+            Some(bl) => {
+                g = [bl.q[0].uv, bl.q[1].uv];
+                Some(clearance(b, ef, &bl, m, wall, &mut near))
+            }
+            None => {
+                failed = true;
+                None
+            }
+        },
+        (lo, at_small),
+        (hi, at_full),
+    );
+    if failed {
+        return Err(lost());
     }
-    Ok(Some(0.5 * (lo + hi)))
+    Ok(Some(m))
 }
 
 /// A welded strip's law, the end it's welded from and where it parts ([`weld_law`]).
@@ -1365,6 +1463,9 @@ fn weld_law(b: &Body, ef: &EdgeFillet, wall: usize) -> Result<Option<WeldLaw>> {
             let mut g = start;
             let _ = reach_radius(b, ef, z, wall, &mut g)?;
             for _ in 0..60 {
+                if (z - a).abs() <= 4.0 * f64::EPSILON * (1.0 + a.abs().max(z.abs())) {
+                    break;
+                }
                 let m = 0.5 * (a + z);
                 let mut gm = g;
                 if reach_radius(b, ef, m, wall, &mut gm)?.is_some() {
@@ -1547,20 +1648,11 @@ fn kink_point(b: &Body, ef: &EdgeFillet, g: &Face, t: f64) -> Option<P3> {
         let c = geom::contact(g, geom::foot(g, &p, None));
         (p - c.p).dot(&c.n)
     };
-    let (mut lo, mut hi) = (a0, a1);
-    let flo = sd(lo);
-    if flo * sd(hi) > 0.0 {
+    let (flo, fhi) = (sd(a0), sd(a1));
+    if flo * fhi > 0.0 {
         return None;
     }
-    for _ in 0..60 {
-        let m = 0.5 * (lo + hi);
-        if (sd(m) < 0.0) == (flo < 0.0) {
-            lo = m;
-        } else {
-            hi = m;
-        }
-    }
-    Some(arc.point(0.5 * (lo + hi)))
+    Some(arc.point(super::math::root_from(sd, (a0, flo), (a1, fhi))))
 }
 
 /// A face on `s` with no boundary, to march and fit a cut on.
@@ -1781,6 +1873,9 @@ fn first_contact(b: &Body, ef: &EdgeFillet, k: usize, x: Exit) -> Exit {
         return x;
     }
     for _ in 0..60 {
+        if (hi - lo).abs() <= 4.0 * f64::EPSILON * (1.0 + lo.abs().max(hi.abs())) {
+            break;
+        }
         let m = 0.5 * (lo + hi);
         match on(m, &lo_ball, lo) {
             Some((true, bl)) => (hi, hi_ball) = (m, bl),
@@ -2106,10 +2201,9 @@ fn tri_corner(
     let face = &b.faces[fs];
     let to_uv = |uv: P2, d: V3| -> V2 {
         let (_, su, sv) = face.surf.d1(uv.x, uv.y);
-        let m = nalgebra::Matrix2::new(su.dot(&su), su.dot(&sv), su.dot(&sv), sv.dot(&sv));
-        m.lu()
-            .solve(&V2::new(su.dot(&d), sv.dot(&d)))
-            .unwrap_or(V2::zeros())
+        let (a, c) = (su.dot(&su), su.dot(&sv));
+        super::math::solve2_any(a, c, c, sv.dot(&sv), su.dot(&d), sv.dot(&d))
+            .map_or(V2::zeros(), |(x, y)| V2::new(x, y))
     };
     let (bridge, circular) = rail_rail_bridge(
         mates[0].0,
@@ -3028,9 +3122,16 @@ fn rail_cross(
         let da = a.velocity(body, ta, &ba)?[ka];
         let db = b.velocity(body, tb, &bb)?[kb];
         // Least squares: [da, −db] (dta, dtb) = −r.
-        let m = nalgebra::Matrix2::new(da.dot(&da), -da.dot(&db), -da.dot(&db), db.dot(&db));
-        let rhs = nalgebra::Vector2::new(-da.dot(&r), db.dot(&r));
-        let d = m.lu().solve(&rhs)?;
+        let across = -da.dot(&db);
+        let (dx, dy) = super::math::solve2_any(
+            da.dot(&da),
+            across,
+            across,
+            db.dot(&db),
+            -da.dot(&r),
+            db.dot(&r),
+        )?;
+        let d = nalgebra::Vector2::new(dx, dy);
         // Steps no longer than the radius.
         let len = (da * d.x).norm().max((db * d.y).norm());
         let f = if len > a.r() { a.r() / len } else { 1.0 };
@@ -4244,20 +4345,9 @@ fn end_chain(b: &Body, ef: &EdgeFillet, j: usize, exits: &[Exit; 2]) -> Result<V
             if let Some((sp, fp, gp)) = prev_s
                 && (fp < 0.0) != (f < 0.0)
             {
-                let (mut lo, mut hi, flo) = (sp, s, fp);
                 let mut gg = gp;
-                for _ in 0..60 {
-                    let m = 0.5 * (lo + hi);
-                    let Some((fm, _)) = dist(m, &mut gg) else {
-                        break;
-                    };
-                    if (fm < 0.0) == (flo < 0.0) {
-                        lo = m
-                    } else {
-                        hi = m
-                    }
-                }
-                found.extend(dist(0.5 * (lo + hi), &mut gg).map(|x| x.1));
+                let root = geom::bracket_root(|m| dist(m, &mut gg).map(|x| x.0), (sp, fp), (s, f));
+                found.extend(dist(root, &mut gg).map(|x| x.1));
                 if from_vertex {
                     break;
                 }
@@ -4921,7 +5011,7 @@ fn pieces_of(
     e: usize,
     law: &[(f64, f64)],
     flat: bool,
-    ratio: f64,
+    ratio: &Ratio,
     budget: &Budget,
     rolls: &mut Vec<Ball>,
 ) -> Result<Vec<(EdgeFillet, [Option<usize>; 2])>> {
@@ -5261,6 +5351,7 @@ fn clone_fillet(f: &EdgeFillet) -> EdgeFillet {
         law: f.law.clone(),
         flat: f.flat,
         ratio: f.ratio,
+        ratio_law: f.ratio_law.clone(),
         spine: f.spine.clone(),
         exact: f.exact,
         mid: f.mid,
@@ -5281,7 +5372,7 @@ fn clone_fillet(f: &EdgeFillet) -> EdgeFillet {
 fn plan(
     b: &Body,
     edges: &[RadiusLaw],
-    ratios: &[f64],
+    ratios: &[Ratio],
     flat: bool,
     budget: &Budget,
     tri_first: bool,
@@ -5292,7 +5383,7 @@ fn plan(
     // Each edge's strips on their own (in parallel), then in the edges' order, their rolls
     // numbered on from the edges' before.
     type Pieces = EdgePieces;
-    let one = |((e, law), &ratio): (&RadiusLaw, &f64)| -> Result<(Pieces, Vec<Ball>)> {
+    let one = |((e, law), ratio): (&RadiusLaw, &Ratio)| -> Result<(Pieces, Vec<Ball>)> {
         let e = *e;
         debug(|| format!("edge {e}: strips"));
         let mut own = Vec::new();
@@ -6515,16 +6606,7 @@ fn plane_crossing(b: &Body, fi: usize, v: usize, o: &P3, n: &V3) -> Option<(usiz
             if (h(a) < 0.0) == (h(z) < 0.0) {
                 continue;
             }
-            let (mut lo, mut hi) = (a, z);
-            for _ in 0..60 {
-                let mid = 0.5 * (lo + hi);
-                if (h(mid) < 0.0) == (h(lo) < 0.0) {
-                    lo = mid;
-                } else {
-                    hi = mid;
-                }
-            }
-            return Some((g, x.point(0.5 * (lo + hi))));
+            return Some((g, x.point(super::math::root_between(&h, a, z))));
         }
     }
     None
@@ -7285,17 +7367,11 @@ fn end_over_edge(
         prev = f;
         flips
     })?;
-    let (mut lo, mut hi) = ((i - 1) as f64 / m as f64, i as f64 / m as f64);
-    let f_lo = side(&ed.point(at(lo)));
-    for _ in 0..60 {
-        let mid = 0.5 * (lo + hi);
-        if (side(&ed.point(at(mid))) < 0.0) == (f_lo < 0.0) {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    let tq = at(0.5 * (lo + hi));
+    let tq = at(super::math::root_between(
+        |s| side(&ed.point(at(s))),
+        (i - 1) as f64 / m as f64,
+        i as f64 / m as f64,
+    ));
     // On the edge itself, not its extension.
     let xe = &b.edges[x];
     let p = ed.point(tq);
@@ -8536,17 +8612,18 @@ fn seam_crossing_of(nb: &Body, g: usize, ce: usize, seam: usize) -> Option<(f64,
         }
         prev = Some((t, q[axis], h));
     }
-    let (mut lo, mut hi, ulo, h0) = cross?;
-    for _ in 0..60 {
-        let t = 0.5 * (lo + hi);
-        let q = super::pcurve::project_along(&face.surf, &ed.point(lo), h0, periods);
-        let q2 = super::pcurve::project_along(&face.surf, &ed.point(t), Some((q.x, q.y)), periods);
-        if side(q2[axis]) == side(ulo) {
-            lo = t
-        } else {
-            hi = t
+    let (lo, hi, ulo, h0) = cross?;
+    // (Each step's foot from the last kept one's: projected once, where the kept end moved.)
+    let mut from = super::pcurve::project_along(&face.surf, &ed.point(lo), h0, periods);
+    let (lo, hi) = super::math::bisect(lo, hi, |t| {
+        let q =
+            super::pcurve::project_along(&face.surf, &ed.point(t), Some((from.x, from.y)), periods);
+        let same = side(q[axis]) == side(ulo);
+        if same {
+            from = q;
         }
-    }
+        same
+    });
     let tc = 0.5 * (lo + hi);
     let c0 = ed.point(tc);
     let tx = se.curve.closest(&c0, se.t[0] - 1e6, se.t[1] + 1e6);
@@ -8734,16 +8811,15 @@ impl StripRails<'_> {
             let t = t0 + (t1 - t0) * i as f64 / n as f64;
             let q = uv(t, Some(prev.1));
             if let Some(c) = between(prev.1[axis], q[axis]) {
-                let (mut lo, mut hi, mut ql) = (prev.0, t, prev.1);
-                for _ in 0..60 {
-                    let m = 0.5 * (lo + hi);
+                let mut ql = prev.1;
+                let (lo, hi) = super::math::bisect(prev.0, t, |m| {
                     let qm = uv(m, Some(ql));
-                    if (qm[axis] - c) * (ql[axis] - c) > 0.0 {
-                        (lo, ql) = (m, qm);
-                    } else {
-                        hi = m;
+                    let same = (qm[axis] - c) * (ql[axis] - c) > 0.0;
+                    if same {
+                        ql = qm;
                     }
-                }
+                    same
+                });
                 let ts = 0.5 * (lo + hi);
                 if (ts - t0).abs() > margin && (t1 - ts).abs() > margin {
                     let mut at = uv(ts, Some(ql));
@@ -9032,14 +9108,7 @@ impl StripRails<'_> {
 /// The edges `es` grouped into the loops they close (by shared vertices).
 fn loops_of(nb: &Body, es: &[usize]) -> Vec<Vec<usize>> {
     let mut group: Vec<usize> = (0..es.len()).collect();
-    fn root(g: &mut [usize], i: usize) -> usize {
-        let mut r = i;
-        while g[r] != r {
-            r = g[r];
-        }
-        g[i] = r;
-        r
-    }
+    use super::math::set_of as root;
     for i in 0..es.len() {
         for j in i + 1..es.len() {
             let (a, c) = (&nb.edges[es[i]], &nb.edges[es[j]]);
@@ -9586,6 +9655,9 @@ fn seam_crossing(b: &Body, ef: &EdgeFillet, k: usize, period: f64) -> Result<Opt
                     // Bisection on the rail's coordinate against the seam's.
                     let (mut lo, mut hi, mut bl) = (tp, t, bp);
                     for _ in 0..60 {
+                        if (hi - lo).abs() <= 4.0 * f64::EPSILON * (1.0 + lo.abs().max(hi.abs())) {
+                            break;
+                        }
                         let m = 0.5 * (lo + hi);
                         let y = ef.ball_from(b, &bl, lo, m).ok_or_else(lost)?;
                         if (y.q[k].uv[axis] - sv) * (cp - sv) > 0.0 {
@@ -9685,6 +9757,9 @@ fn missed_crossings(
         if (sa < 0.0) != (sz < 0.0) {
             let mut xb = xa;
             for _ in 0..60 {
+                if (z - a).abs() <= 4.0 * f64::EPSILON * (1.0 + a.abs().max(z.abs())) {
+                    break;
+                }
                 let m = 0.5 * (a + z);
                 let Some(y) = at(&xb, a, m) else { break };
                 if (side(&y.q[k].p) < 0.0) == (sa < 0.0) {
@@ -9797,16 +9872,11 @@ fn junction_point(b: &Body, ef: &EdgeFillet, ball: &Ball, k: usize) -> Option<(f
         let Some(i) = (1..=n).find(|&i| sd(g, &at(i as f64 / n as f64)) <= 0.0) else {
             continue;
         };
-        let (mut lo, mut hi) = ((i - 1) as f64 / n as f64, i as f64 / n as f64);
-        for _ in 0..60 {
-            let m = 0.5 * (lo + hi);
-            if sd(g, &at(m)) > 0.0 {
-                lo = m;
-            } else {
-                hi = m;
-            }
-        }
-        let s = 0.5 * (lo + hi);
+        let s = super::math::root_between(
+            |s| sd(g, &at(s)),
+            (i - 1) as f64 / n as f64,
+            i as f64 / n as f64,
+        );
         if best.is_none_or(|x| s < x.0) {
             best = Some((s, g));
         }
@@ -10532,36 +10602,65 @@ pub(crate) fn chamfer_angle(b: &Body, e: usize) -> Option<f64> {
     theta
 }
 
+/// A law along an edge from its value at any fraction of it: sampled at sixteenths, and
+/// between two samples again wherever the value midway is off the straight line between them
+/// (by more than 1e-7 of itself), so that the law read straight between its samples is the
+/// value to that everywhere, however the faces' angle runs. `None` where it has no value.
+fn sampled_law(at: impl Fn(f64) -> Option<f64>) -> Option<Vec<(f64, f64)>> {
+    let law = sampled_laws(|s| at(s).map(|x| [x, x]))?;
+    Some(law.into_iter().map(|(s, x)| (s, x[0])).collect())
+}
+
+/// [`sampled_law`] of two values at once (a ball's two offsets).
+fn sampled_laws(at: impl Fn(f64) -> Option<[f64; 2]>) -> Option<Vec<(f64, [f64; 2])>> {
+    const FIRST: usize = 16;
+    const DEEPEST: u32 = 6;
+    let mut out: Vec<(f64, [f64; 2])> = Vec::with_capacity(FIRST + 1);
+    let mut prev = (0.0, at(0.0)?);
+    out.push(prev);
+    for i in 1..=FIRST {
+        let next = (i as f64 / FIRST as f64, at(i as f64 / FIRST as f64)?);
+        // (The stretches still to look into, the nearest first: its end and depth.)
+        let mut stack = vec![(next, 0u32)];
+        while let Some((end, depth)) = stack.pop() {
+            let mid = 0.5 * (prev.0 + end.0);
+            let value = at(mid)?;
+            let off = (0..2).any(|k| {
+                let straight = 0.5 * (prev.1[k] + end.1[k]);
+                (value[k] - straight).abs() > 1e-7 * value[k].abs().max(tol::TINY)
+            });
+            if depth < DEEPEST && off {
+                stack.push((end, depth + 1));
+                stack.push(((mid, value), depth + 1));
+            } else {
+                out.push(end);
+                prev = end;
+            }
+        }
+    }
+    Some(out)
+}
+
 /// The radius law of a fillet of width `w` (its contacts that far apart) along edge e, whose
-/// faces' angle varies along it: r = w / (2 sin(φ/2)), φ between the faces' normals, at
-/// samples along the edge (linear between).
+/// faces' angle varies along it: r = w / (2 sin(φ/2)), φ between the faces' normals
+/// ([`sampled_law`]).
 pub(crate) fn width_law(b: &Body, e: usize, w: f64) -> Option<Vec<(f64, f64)>> {
-    let n = 16;
-    (0..=n)
-        .map(|i| {
-            let s = i as f64 / n as f64;
-            // Just inside the ends (an end's p-curves may stop short of its vertex).
-            let th = angle_at(b, e, s.clamp(tol::REL_POINT, 1.0 - tol::REL_POINT))?;
-            let phi = PI - th;
-            (phi > tol::ANGULAR_POINT && phi < PI - tol::ANGULAR_POINT)
-                .then(|| (s, w / (2.0 * (phi / 2.0).sin())))
-        })
-        .collect()
+    sampled_law(|s| {
+        // Just inside the ends (an end's p-curves may stop short of its vertex).
+        let th = angle_at(b, e, s.clamp(tol::REL_POINT, 1.0 - tol::REL_POINT))?;
+        let phi = PI - th;
+        (phi > tol::ANGULAR_POINT && phi < PI - tol::ANGULAR_POINT)
+            .then(|| w / (2.0 * (phi / 2.0).sin()))
+    })
 }
 
 /// The radius law of an equal-distance chamfer `d` along edge e, whose faces' angle θ varies
-/// along it: the ball whose contacts lie d from the edge, r = d tan(θ/2), at samples along the
-/// edge (linear between).
+/// along it: the ball whose contacts lie d from the edge, r = d tan(θ/2) ([`sampled_law`]).
 pub(crate) fn chamfer_law(b: &Body, e: usize, d: f64) -> Option<Vec<(f64, f64)>> {
-    let n = 16;
-    (0..=n)
-        .map(|i| {
-            let s = i as f64 / n as f64;
-            let th = angle_at(b, e, s.clamp(tol::REL_POINT, 1.0 - tol::REL_POINT))?;
-            (th > tol::ANGULAR_POINT && th < PI - tol::ANGULAR_POINT)
-                .then(|| (s, d * (th / 2.0).tan()))
-        })
-        .collect()
+    sampled_law(|s| {
+        let th = angle_at(b, e, s.clamp(tol::REL_POINT, 1.0 - tol::REL_POINT))?;
+        (th > tol::ANGULAR_POINT && th < PI - tol::ANGULAR_POINT).then(|| d * (th / 2.0).tan())
+    })
 }
 
 /// The offsets from straight edge e's two faces (as [`chamfer_offsets`]) of the ball whose
@@ -10598,15 +10697,7 @@ pub fn chamfer_offsets_along(b: &Body, e: usize, d: [f64; 2]) -> Option<[f64; 2]
         let f = &b.faces[[f1, f2][k]];
         geom::contact(f, geom::foot(f, &q[k], None)).n
     });
-    // Least squares on a n₀ − b n₁ = q₁ − q₀ (the two lines meet in the section's plane).
-    let r = q[1] - q[0];
-    let m = nalgebra::Matrix2::new(1.0, -n[0].dot(&n[1]), -n[0].dot(&n[1]), 1.0);
-    let x = m
-        .lu()
-        .solve(&nalgebra::Vector2::new(n[0].dot(&r), -n[1].dot(&r)))?;
-    let miss = (q[0] + n[0] * x.x - q[1] - n[1] * x.y).norm();
-    (x.x * x.y > 0.0 && miss < tol::REL * (1.0 + p.coords.abs().max()))
-        .then(|| [x.x.abs(), x.y.abs()])
+    ball_offsets_within(q, n, tol::REL * (1.0 + p.coords.abs().max()))
 }
 
 /// The offsets from edge e's two faces (as [`chamfer_offsets`]) of the ball whose contacts are
@@ -10622,6 +10713,30 @@ pub fn chamfer_offsets_angled(
     distance: f64,
     angle: f64,
 ) -> Option<[f64; 2]> {
+    chamfer_offsets_angled_at(b, e, first, distance, angle, false).map(|k| k[0].1)
+}
+
+/// [`chamfer_offsets_angled`] where the section changes along the edge too: the offsets at
+/// stations along it, (fraction of the edge, offsets), for [`chamfer_edges_offsets_along`].
+pub fn chamfer_offsets_angled_along(
+    b: &Body,
+    e: usize,
+    first: usize,
+    distance: f64,
+    angle: f64,
+) -> Option<Vec<(f64, [f64; 2])>> {
+    chamfer_offsets_angled_at(b, e, first, distance, angle, false)
+        .or_else(|| chamfer_offsets_angled_at(b, e, first, distance, angle, true))
+}
+
+fn chamfer_offsets_angled_at(
+    b: &Body,
+    e: usize,
+    first: usize,
+    distance: f64,
+    angle: f64,
+    along_edge: bool,
+) -> Option<Vec<(f64, [f64; 2])>> {
     let ed = b.edges.get(e)?;
     let s = sides(b, e).ok()?;
     let (fa, fb) = (s[first].0, s[1 - first].0);
@@ -10641,7 +10756,11 @@ pub fn chamfer_offsets_angled(
         // Where the chamfer starts on the first face, and the face's direction and normal
         // there, in the section.
         let (p1, w1) = along_section_dir(&b.faces[fa], &p, &along, &w, distance);
-        let n1 = geom::contact(&b.faces[fa], geom::foot(&b.faces[fa], &p1, None)).n;
+        // (A chamfer's ball is a circle in the section's plane, square to the edge there: it
+        // touches the faces' sections, whose normals are the faces' normals' parts in that
+        // plane. The same normals where the faces run on unchanged along the edge.)
+        let in_section = |n: V3| (n - along * along.dot(&n)).try_normalize(tol::ANGULAR_POINT);
+        let n1 = in_section(geom::contact(&b.faces[fa], geom::foot(&b.faces[fa], &p1, None)).n)?;
         // Back towards the edge, turned by the angle towards the other face: into the
         // material at a convex edge, out of it at a concave one (the other face rises from
         // the first there).
@@ -10669,13 +10788,18 @@ pub fn chamfer_offsets_angled(
                     .total_cmp(&(line.point(*y) - p).norm())
             })?;
         let q2 = line.point(sq);
-        let n2 = geom::contact(&b.faces[fb], geom::foot(&b.faces[fb], &q2, None)).n;
+        let n2 = in_section(geom::contact(&b.faces[fb], geom::foot(&b.faces[fb], &q2, None)).n)?;
         let mut k = ball_offsets([p1, q2], [n1, n2], &p)?;
         if first == 1 {
             k.swap(0, 1);
         }
         Some(k)
     };
+    if along_edge {
+        // The offsets at stations along the edge, just inside its ends (an end's p-curves
+        // may stop short of its vertex).
+        return sampled_laws(|s| at(s.clamp(tol::REL_POINT, 1.0 - tol::REL_POINT)));
+    }
     let k = at(0.5)?;
     for frac in [0.1, 0.3, 0.7, 0.9] {
         let o = at(frac)?;
@@ -10683,22 +10807,61 @@ pub fn chamfer_offsets_angled(
             return None;
         }
     }
-    Some(k)
+    Some(vec![(0.0, k), (1.0, k)])
+}
+
+/// An edge and its ball's two offsets along it: (fraction of the edge, offsets), linear
+/// between.
+pub type OffsetsAlong = (usize, Vec<(f64, [f64; 2])>);
+
+/// [`chamfer_edges_offsets`] with each edge's offsets given along it, (fraction of the edge,
+/// offsets), linear between: the first offset the ball's law, the second over the first its
+/// ratio's.
+pub fn chamfer_edges_offsets_along(
+    b: &Body,
+    input: BodyId,
+    edges: &[OffsetsAlong],
+) -> Result<(Body, Vec<Vec<FaceSrc>>)> {
+    let mut laws = Vec::new();
+    let mut ratios: Vec<Ratio> = Vec::new();
+    for (e, along) in edges {
+        let [(_, c1), _] = sides(b, *e)?;
+        let turned: Vec<(f64, [f64; 2])> = along
+            .iter()
+            .map(|&(s, k)| (s, if c1 { k } else { [k[1], k[0]] }))
+            .collect();
+        let (Some(first), Some(mid)) = (turned.first(), turned.get(turned.len() / 2)) else {
+            return Err(KernelError::InvalidParameter(
+                "a chamfer with no offsets".into(),
+            ));
+        };
+        let same = turned.iter().all(|(_, k)| {
+            (0..2).all(|i| (k[i] - first.1[i]).abs() <= tol::REL_POINT * (1.0 + first.1[i]))
+        });
+        laws.push((*e, turned.iter().map(|&(s, k)| (s, k[0])).collect()));
+        ratios.push((
+            mid.1[1] / mid.1[0],
+            (!same).then(|| turned.iter().map(|&(s, k)| (s, k[1] / k[0])).collect()),
+        ));
+    }
+    local_blend(b, input, &laws, &ratios, true)
 }
 
 /// The offsets of the ball touching two faces at `q` (their outward normals there `n`): its
 /// centre on both normals, C = q₀ − k₀n₀ = q₁ − k₁n₁ (least squares; the lines meet in the
 /// section's plane), both offsets to the same side.
 fn ball_offsets(q: [P3; 2], n: [V3; 2], near: &P3) -> Option<[f64; 2]> {
+    ball_offsets_within(q, n, tol::REL_POINT * (1.0 + near.coords.abs().max()))
+}
+
+/// [`ball_offsets`], the two normals' lines meeting within `within`.
+fn ball_offsets_within(q: [P3; 2], n: [V3; 2], within: f64) -> Option<[f64; 2]> {
     let r = q[1] - q[0];
     let g = n[0].dot(&n[1]);
-    let m = nalgebra::Matrix2::new(1.0, -g, -g, 1.0);
-    let x = m
-        .lu()
-        .solve(&nalgebra::Vector2::new(n[0].dot(&r), -n[1].dot(&r)))?;
+    let (x0, x1) = super::math::solve2_any(1.0, -g, -g, 1.0, n[0].dot(&r), -n[1].dot(&r))?;
+    let x = nalgebra::Vector2::new(x0, x1);
     let miss = (q[0] + n[0] * x.x - q[1] - n[1] * x.y).norm();
-    (x.x * x.y > 0.0 && miss < tol::REL_POINT * (1.0 + near.coords.abs().max()))
-        .then(|| [x.x.abs(), x.y.abs()])
+    (x.x * x.y > 0.0 && miss < within).then(|| [x.x.abs(), x.y.abs()])
 }
 
 /// [`chamfer_edges`] with each edge's ball given by its offsets from its two faces (in
@@ -10714,7 +10877,7 @@ pub fn chamfer_edges_offsets(
         let [(_, c1), _] = sides(b, e)?;
         let k = if c1 { k } else { [k[1], k[0]] };
         laws.push((e, vec![(0.0, k[0]), (1.0, k[0])]));
-        ratios.push(k[1] / k[0]);
+        ratios.push((k[1] / k[0], None));
     }
     local_blend(b, input, &laws, &ratios, true)
 }
@@ -10810,7 +10973,7 @@ pub fn fillet_edges_laws(
     edges: &[RadiusLaw],
     flat: bool,
 ) -> Result<(Body, Vec<Vec<FaceSrc>>)> {
-    local_blend(b, input, edges, &vec![1.0; edges.len()], flat)
+    local_blend(b, input, edges, &vec![(1.0, None); edges.len()], flat)
 }
 
 /// The chamfer of each edge with the distances `d` of its contacts from it along its two faces
@@ -10860,7 +11023,7 @@ pub fn chamfer_edges_measured(
         let [(_, c1), _] = sides(b, e)?;
         let k = if c1 { k } else { [k[1], k[0]] };
         laws.push((e, vec![(0.0, k[0]), (1.0, k[0])]));
-        ratios.push(k[1] / k[0]);
+        ratios.push((k[1] / k[0], None));
     }
     local_blend(b, input, &laws, &ratios, true)
 }
@@ -10886,14 +11049,14 @@ pub fn chamfer_equal_edges(
             // In the strip's face order (the face whose loop runs along the edge first).
             let k = if c1 { k } else { [k[1], k[0]] };
             laws.push((e, vec![(0.0, k[0]), (1.0, k[0])]));
-            ratios.push(k[1] / k[0]);
+            ratios.push((k[1] / k[0], None));
         } else {
             let law = match chamfer_radius(b, e, d) {
                 Some(r) => vec![(0.0, r), (1.0, r)],
                 None => chamfer_law(b, e, d)?,
             };
             laws.push((e, law));
-            ratios.push(1.0);
+            ratios.push((1.0, None));
         }
     }
     Some(local_blend(b, input, &laws, &ratios, true))
@@ -11208,11 +11371,15 @@ pub(crate) fn fully_checked(b: &Body) -> bool {
 }
 
 /// [`fillet_edges_laws`] with each edge's [`EdgeFillet::ratio`].
+/// A blend's second offset over its first along one edge: the ratio (1 for a fillet), and
+/// where it varies along the edge its law, (fraction of the edge, ratio), linear between.
+pub(crate) type Ratio = (f64, Option<Vec<(f64, f64)>>);
+
 fn local_blend(
     b: &Body,
     input: BodyId,
     edges: &[RadiusLaw],
-    ratios: &[f64],
+    ratios: &[Ratio],
     flat: bool,
 ) -> Result<(Body, Vec<Vec<FaceSrc>>)> {
     FULLY_CHECKED.with(|c| *c.borrow_mut() = None);
@@ -11233,7 +11400,11 @@ fn local_blend(
     let r = edges
         .iter()
         .zip(ratios)
-        .flat_map(|((_, l), q)| l.iter().map(move |x| x.1 * q.max(1.0)))
+        .flat_map(|((_, l), q)| {
+            // (The larger offset, at the ratio's largest.)
+            let most = q.1.iter().flatten().fold(q.0, |m, x| m.max(x.1)).max(1.0);
+            l.iter().map(move |x| x.1 * most)
+        })
         .fold(0.0, f64::max);
     let size = b.bbox().diagonal().max(r);
     // B-spline strips within 1e-5 of the size (their sections exact at the stations): well inside
@@ -13235,10 +13406,16 @@ fn edge_crossing(c: &Curve, t: f64, e: &super::topo::Edge) -> Option<f64> {
             break;
         }
         // Least squares: [dc, −de] (dt, ds) = −r.
-        let m = nalgebra::Matrix2::new(dc.dot(&dc), -dc.dot(&de), -dc.dot(&de), de.dot(&de));
-        let d = m
-            .lu()
-            .solve(&nalgebra::Vector2::new(-dc.dot(&r), de.dot(&r)))?;
+        let across = -dc.dot(&de);
+        let (dx, dy) = super::math::solve2_any(
+            dc.dot(&dc),
+            across,
+            across,
+            de.dot(&de),
+            -dc.dot(&r),
+            de.dot(&r),
+        )?;
+        let d = nalgebra::Vector2::new(dx, dy);
         t += d.x;
         s += d.y;
     }
@@ -14393,7 +14570,7 @@ mod tests {
                 vec![(0.0, 2.0), (1.0, 2.0)],
             ),
         ] {
-            let ef = edge_fillet(&b, e, &law, false, 1.0, &budget).unwrap();
+            let ef = edge_fillet(&b, e, &law, false, &(1.0, None), &budget).unwrap();
             let ed = &b.edges[e];
             for f in [0.3, 0.5, 0.7] {
                 let t = ed.t[0] + (ed.t[1] - ed.t[0]) * f;
@@ -15039,7 +15216,7 @@ mod tests {
             .map(|p| (edge_near(&b, *p), vec![(0.0, 1.0), (1.0, 1.0)]))
             .collect();
         let budget = Budget::new(BALL_SOLVES);
-        let p = plan(&b, &laws, &[1.0, 1.0], false, &budget, true).unwrap();
+        let p = plan(&b, &laws, &[(1.0, None), (1.0, None)], false, &budget, true).unwrap();
         assert_eq!(p.tris.len(), 1);
         let size = b.bbox().diagonal();
         let (out, _) = trim(

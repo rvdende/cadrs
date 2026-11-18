@@ -928,16 +928,7 @@ fn scan_integrals<const ALL: bool>(
                     let t = w[0] + (w[1] - w[0]) * i as f64 / SAMPLES as f64;
                     let r = rate(t);
                     if r * prev.1 < 0.0 {
-                        let (mut a, mut b) = (prev.0, t);
-                        for _ in 0..60 {
-                            let m = 0.5 * (a + b);
-                            if rate(m) * prev.1 > 0.0 {
-                                a = m;
-                            } else {
-                                b = m;
-                            }
-                        }
-                        let t = 0.5 * (a + b);
+                        let t = super::math::root_from(rate, prev, (t, r));
                         turns.push(c.pc.point(t).y);
                         cuts.push(t);
                     }
@@ -1311,16 +1302,11 @@ fn split_at_knots(pc: &Curve, ts: &[f64], ku: &[f64], kv: &[f64]) -> Vec<f64> {
                 .iter()
                 .filter(|&&kn| kn > lo + tol::ROUNDOFF_FINE && kn < hi - tol::ROUNDOFF_FINE)
             {
-                let (mut x0, mut x1) = (a, b);
-                for _ in 0..60 {
-                    let m = 0.5 * (x0 + x1);
-                    if (pc.point(m)[coord] - kn) * (cb - ca) < 0.0 {
-                        x0 = m;
-                    } else {
-                        x1 = m;
-                    }
-                }
-                cuts.push(0.5 * (x0 + x1));
+                cuts.push(super::math::root_from(
+                    |m| pc.point(m)[coord] - kn,
+                    (a, ca - kn),
+                    (b, cb - kn),
+                ));
             }
         }
         cuts.sort_by(f64::total_cmp);

@@ -404,21 +404,9 @@ fn sign_roots(d: &dyn Fn(f64) -> f64, floor: f64) -> Option<Vec<f64>> {
         // (a golden section search for the least of ±d).
         let s = if here > 0.0 { 1.0 } else { -1.0 };
         if (prev > 0.0) == (here > 0.0) && here.abs() <= prev.abs() && here.abs() <= next.abs() {
-            let (mut lo, mut hi) = (at(k) - TAU / N as f64, at(k) + TAU / N as f64);
-            const PHI: f64 = 0.618_033_988_749_894_9;
-            let (mut x1, mut x2) = (hi - PHI * (hi - lo), lo + PHI * (hi - lo));
-            let (mut f1, mut f2) = (s * d(x1), s * d(x2));
-            for _ in 0..40 {
-                if f1 < f2 {
-                    (hi, x2, f2) = (x2, x1, f1);
-                    x1 = hi - PHI * (hi - lo);
-                    f1 = s * d(x1);
-                } else {
-                    (lo, x1, f1) = (x1, x2, f2);
-                    x2 = lo + PHI * (hi - lo);
-                    f2 = s * d(x2);
-                }
-            }
+            let least =
+                super::math::minimize(|x| s * d(x), at(k) - TAU / N as f64, at(k) + TAU / N as f64);
+            let (f1, f2) = (s * d(least), f64::INFINITY);
             if f1.min(f2) < floor {
                 return None;
             }
@@ -484,7 +472,7 @@ fn along_a_ruling(
             t += TAU;
         }
     }
-    let size = bb.diagonal().max(1.0);
+    let size = bb.diagonal().max(crate::native::tol::POINT);
     let span = vbox.1 - vbox.0;
     // The curve h = −γ/2β: nowhere within the boxes, or the pair is the numeric engine's.
     // Sampled along θ (not at a zero of β, where it runs off along the ruling or through the

@@ -468,6 +468,15 @@ pub fn edge_tool_range(
     let convex = w2.dot(&n1) < 0.0;
     let phi = n1.dot(&n2).clamp(-1.0, 1.0).acos();
     let section = kind(phi);
+    // (A chamfer by a distance and an angle: the angle and the faces' own leave a second
+    // side to reach only where they come to less than a half turn.)
+    if let SectionKind::Chamfer { d1, d2 } = section
+        && !(d1 > 0.0 && d2 > 0.0 && d2.is_finite())
+    {
+        return Err(KernelError::InvalidParameter(
+            "The chamfer's angle is too wide for the angle its faces meet at".into(),
+        ));
+    }
     let src = Src::Edge {
         body: input.0,
         edge: e as u64,
@@ -2927,7 +2936,9 @@ pub fn chamfer(
         && angle < PI
     {
         let mut prof = super::boolean::Prof::new();
-        let offsets: Option<Vec<(usize, [f64; 2])>> = sharp
+        // (Each edge's offsets: one pair where its section is the same all along it, else
+        // at stations along it.)
+        let offsets: Option<Vec<super::fillet::OffsetsAlong>> = sharp
             .iter()
             .map(|&e| {
                 let ei = e.0 as usize;
@@ -2935,13 +2946,13 @@ pub fn chamfer(
                     return None;
                 }
                 let first = usize::from(opts.flip != opts.flipped.contains(&e));
-                super::fillet::chamfer_offsets_angled(&b, ei, first, distance, angle)
+                super::fillet::chamfer_offsets_angled_along(&b, ei, first, distance, angle)
                     .map(|k| (ei, k))
             })
             .collect();
         prof.mark("offsets");
         if let Some(offsets) = offsets {
-            let made = super::fillet::chamfer_edges_offsets(&b, body, &offsets);
+            let made = super::fillet::chamfer_edges_offsets_along(&b, body, &offsets);
             prof.mark("blend");
             let local = made.and_then(|(out, src)| match local_problem(&b, &out) {
                 Some(e) => Err(KernelError::InvalidResult {
@@ -2993,6 +3004,10 @@ pub fn chamfer(
                     ChamferSpec::DistanceAngle { distance, angle } => {
                         // As the blend tool's section: d₂ = d sin(a) / sin(π − a − θ).
                         let theta = super::fillet::chamfer_angle(&b, ei)?;
+                        // (No second side where the two angles come to a half turn.)
+                        if angle + theta >= PI - tol::ANGULAR {
+                            return None;
+                        }
                         (
                             distance,
                             distance * angle.sin() / (PI - angle - theta).sin(),
@@ -3075,7 +3090,8 @@ pub fn flat_corners(
         .iter()
         .map(|e| e.0 as usize)
         .collect();
-    let size = b.bbox().diagonal().max(1.0);
+    // (The part's own size, however small: no floor at a millimetre.)
+    let size = b.bbox().diagonal().max(tol::POINT);
     let near = tol::REL_POINT * size;
     let mut tools: Vec<(Body, usize)> = Vec::new();
     for v in 0..b.verts.len() {
@@ -3687,7 +3703,7 @@ pub fn fillet_variable(
     let laws = &laws[..];
     // By local trimming first (any edge and faces), then the tool for straight edges between
     // flat faces.
-    match fillet_laws_local(k, body, laws) {
+    let first = match fillet_laws_local(k, body, laws) {
         Ok(r) => return Ok(r),
         Err(e) => {
             if crate::native::env_flag!("CADRS_LOCAL_FILLET_ONLY") {
@@ -3696,9 +3712,21 @@ pub fn fillet_variable(
             if crate::native::env_flag!("CADRS_BLEND_DEBUG") {
                 eprintln!("local variable fillet: {e}; falling back to the blend tool");
             }
+            e
         }
-    }
-    let mut cur = Tracked::of((*b).clone());
+    };
+    // (A failure of the tool names the local fillet's too: the stage that gave up first.)
+    fillet_variable_tool(k, body, &b, laws).map_err(|e| e.after("the local fillet", &first))
+}
+
+/// [`fillet_variable`] by a lofted tool: straight edges between flat faces.
+fn fillet_variable_tool(
+    k: &mut NativeKernel,
+    body: BodyId,
+    b: &Body,
+    laws: &[FilletLaw],
+) -> Result<OpResult> {
+    let mut cur = Tracked::of(b.clone());
     for law in laws {
         let e = law.edge.0 as usize;
         if e >= b.edges.len() || law.radii.is_empty() {
@@ -3722,7 +3750,7 @@ pub fn fillet_variable(
         let Curve::Line { d, .. } = &ed.curve else {
             return Err(KernelError::Unsupported("variable fillets of curved edges"));
         };
-        let [s1, s2] = edge_sides(&b, e)?;
+        let [s1, s2] = edge_sides(b, e)?;
         if !matches!(b.faces[s1.0].surf, Surface::Plane { .. })
             || !matches!(b.faces[s2.0].surf, Surface::Plane { .. })
         {
@@ -3745,8 +3773,8 @@ pub fn fillet_variable(
         let t = d.normalize();
         let len = (ed.t[1] - ed.t[0]) * d.norm();
         let p_start = ed.point(ed.t[0]);
-        let (n1, w1) = face_dirs(&b, s1.0, e, s1.1, ed.mid_t());
-        let (n2, w2) = face_dirs(&b, s2.0, e, s2.1, ed.mid_t());
+        let (n1, w1) = face_dirs(b, s1.0, e, s1.1, ed.mid_t());
+        let (n2, w2) = face_dirs(b, s2.0, e, s2.1, ed.mid_t());
         let convex = w2.dot(&n1) < 0.0;
         let _ = n2;
         let x = w1;
@@ -3856,11 +3884,14 @@ pub(crate) fn along_face(f: &Face, p: &P3, t: &V3, w: &V3, dist: f64) -> P3 {
     let h = dist / steps as f64;
     let mut q = *p;
     let mut dir = *w;
+    // (Each foot from the last: the march moves a sixty-fourth of the way at a time.)
+    let mut foot: Option<(f64, f64)> = None;
     for _ in 0..steps {
         let mut x = q + dir * h;
         // Back onto the surface and into the plane.
         for _ in 0..4 {
-            let (u, v) = f.surf.project(&x, None);
+            let (u, v) = f.surf.project(&x, foot);
+            foot = Some((u, v));
             x = f.surf.eval(u, v);
             x -= t * (x - p).dot(t);
         }

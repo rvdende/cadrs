@@ -189,7 +189,7 @@ fn build(k: &NativeKernel, spec: &CurveLoftSpec) -> Result<(Body, Vec<Vec<u64>>)
         .iter()
         .flat_map(|s| (0..=8).map(move |i| s.at(i as f64 / 8.0)))
         .fold(0.0_f64, |r, p| r.max(p.coords.norm()))
-        .max(1.0);
+        .max(crate::native::tol::POINT);
 
     // Guides: where each meets each profile (guide and profile parameters).
     let mut guides: Vec<NurbsCurve> = Vec::new();
