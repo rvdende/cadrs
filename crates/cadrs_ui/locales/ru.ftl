@@ -123,6 +123,7 @@ ui-color-editor-save-color = Сохранить этот цвет
 ui-color-scheme-light = Светлая
 ui-color-scheme-dark = Темная
 ui-color-scheme-system = Как в системе
+ui-color-scheme-cycle = Цветовая схема: { $scheme } (щелчок: { $next })
 
 ## crates/cadrs_ui/src/dock.rs
 ui-dock-hide-panel = Скрыть панель
@@ -206,6 +207,8 @@ shell-top-bar-update = Обновить до v{ $version }…
 shell-top-bar-update-tooltip = Прочитать примечания к выпуску и обновить
 shell-top-bar-github = cadrs на GitHub
 shell-top-bar-github-stars = Звёзды на GitHub: { $stars }
+shell-top-bar-download-app = Скачать приложение
+shell-top-bar-download-app-tooltip = cadrs для Linux, Windows и macOS (GitHub)
 
 ## crates/cadrs_app/src/notifications.rs
 shell-notice-whats-new-title = Новый облик cadrs
@@ -585,6 +588,9 @@ shell-prefs-mcp-server = Сервер MCP
 shell-prefs-enabled = Включено
 shell-prefs-endpoint = Адрес
 shell-prefs-mcp-note = Пока он включен, ИИ-ассистенты на этом компьютере (Claude, Cursor, …) могут создавать и редактировать документы.
+shell-prefs-mcp-port = Порт
+shell-prefs-mcp-port-reset = Сбросить
+shell-prefs-mcp-port-reset-tooltip = Вернуть порт по умолчанию, { $port }
 shell-prefs-collab-heading = Совместная работа
 shell-prefs-id-while-online = Показывается в сети
 shell-prefs-p2p = Одноранговая сеть (P2P)
@@ -1898,6 +1904,20 @@ model-mass-parts = Детали для измерения
 ## crates/cadrs_app/src/mcp.rs
 model-mcp-server-on = Сервер MCP запущен: { $url }
 model-mcp-cannot-start = Не удалось запустить сервер MCP на порту { $port }: { $error }
+shell-mcp-tooltip-on = ИИ-ассистенты (MCP): включены
+shell-mcp-tooltip-off = ИИ-ассистенты (MCP): выключены
+shell-mcp-tooltip-failed = ИИ-ассистенты (MCP): не удалось запустить
+shell-mcp-serving = Включен, { $url }
+shell-mcp-off = Выключен (адрес: { $url })
+shell-mcp-failed = Не удалось запустить на порту { $port }
+shell-mcp-enable = Включить сервер MCP
+shell-mcp-port = Порт: { $port }…
+shell-mcp-port-tooltip = Порт этого компьютера, к которому подключаются ИИ-ассистенты
+shell-mcp-port-reset = Сбросить порт по умолчанию ({ $port })
+shell-mcp-copy-endpoint = Копировать адрес
+shell-mcp-copied = Скопировано: { $url }
+shell-mcp-port-title = Порт сервера MCP
+shell-mcp-port-invalid = Это не порт: { $text } (число от 1 до 65535)
 
 ## crates/cadrs_app/src/simulation_ui.rs
 model-sim-one-face = { $count } грань

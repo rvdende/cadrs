@@ -25,10 +25,12 @@ use bevy::prelude::*;
 use bevy::text::TextCursorStyle;
 use bevy::window::{WindowFocused, WindowThemeChanged};
 
-use crate::i18n::tr;
-use crate::segmented::{Segmented, SegmentedSelect, SegmentedState};
-use crate::style::Selected;
+use bevy::ui_widgets::Activate;
+
+use crate::button::IconButton;
+use crate::i18n::{tr, tr_with};
 use crate::theme::{ColorRole, Theme};
+use crate::tooltip::Tooltip;
 
 pub struct ColorSchemePlugin;
 
@@ -850,74 +852,102 @@ fn finish_scheme(
 // ---------------------------------------------------------------------------------------------
 // The toggle
 
-/// The scheme toggle of a top bar.
+/// The scheme button of a top bar.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct SchemeToggle;
 
-const CHOICES: [SchemePreference; 3] = [
-    SchemePreference::Light,
-    SchemePreference::Dark,
-    SchemePreference::System,
-];
+/// The scheme a toggle shows (its icon and tooltip are set for it).
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+struct ShowsScheme(SchemePreference);
 
-/// The light / dark / system toggle for a top bar: three icon segments named
-/// `color-scheme-0` (light), `-1` (dark) and `-2` (the system's), the [`Appearance`]
-/// preference's one on.
+impl SchemePreference {
+    /// The preferences in the order the top bar's button steps through them.
+    pub const CYCLE: [SchemePreference; 3] = [
+        SchemePreference::Light,
+        SchemePreference::Dark,
+        SchemePreference::System,
+    ];
+
+    /// The one after this in [`Self::CYCLE`].
+    pub fn next(self) -> Self {
+        let i = Self::CYCLE.iter().position(|&c| c == self).unwrap_or(0);
+        Self::CYCLE[(i + 1) % Self::CYCLE.len()]
+    }
+
+    /// Its icon (cadrs_icons, or an `icon_raster` variant of one).
+    pub fn icon(self) -> &'static str {
+        match self {
+            SchemePreference::Light => "theme-light-medium",
+            SchemePreference::Dark => "theme-dark",
+            SchemePreference::System => "theme-system",
+        }
+    }
+
+    /// Its name's catalog key.
+    pub fn label_key(self) -> &'static str {
+        match self {
+            SchemePreference::Light => "ui-color-scheme-light",
+            SchemePreference::Dark => "ui-color-scheme-dark",
+            SchemePreference::System => "ui-color-scheme-system",
+        }
+    }
+}
+
+fn toggle_tooltip(p: SchemePreference) -> String {
+    tr_with(
+        "ui-color-scheme-cycle",
+        &[
+            ("scheme", &tr(p.label_key())),
+            ("next", &tr(p.next().label_key())),
+        ],
+    )
+}
+
+/// The light / dark / system button for a top bar (`color-scheme`): it shows the
+/// [`Appearance`] preference's icon, and each click steps to the next one (light, dark, the
+/// system's).
 pub fn scheme_toggle(theme: &Theme) -> impl Bundle {
+    let p = SchemePreference::System;
     (
-        Segmented::new("color-scheme")
-            .option("", Some("theme-light-medium"), tr("ui-color-scheme-light"))
-            .option("", Some("theme-dark"), tr("ui-color-scheme-dark"))
-            .option("", Some("theme-system"), tr("ui-color-scheme-system"))
-            .selected(2)
-            .size(22.0, 14.0)
+        IconButton::new("color-scheme", p.icon())
+            .icon_size(16.0)
+            .tooltip(toggle_tooltip(p))
             .build(theme),
         SchemeToggle,
+        ShowsScheme(p),
     )
 }
 
 fn on_toggle(
-    ev: On<SegmentedSelect>,
+    ev: On<Activate>,
     toggles: Query<(), With<SchemeToggle>>,
     mut appearance: ResMut<Appearance>,
 ) {
-    if toggles.contains(ev.entity)
-        && let Some(&choice) = CHOICES.get(ev.index)
-        && appearance.preference != choice
-    {
-        appearance.preference = choice;
+    if toggles.contains(ev.entity) {
+        appearance.preference = appearance.preference.next();
     }
 }
 
 /// Shows the preference on every toggle (it can change elsewhere: the saved preferences, a
-/// script).
+/// script, the account menu).
 fn sync_toggles(
     appearance: Res<Appearance>,
-    mut toggles: Query<(&mut SegmentedState, &Children), With<SchemeToggle>>,
-    added: Query<(), Added<SchemeToggle>>,
-    selected: Query<Has<Selected>>,
+    mut toggles: Query<(Entity, &mut ShowsScheme, &Children), With<SchemeToggle>>,
+    mut icons: Query<&mut crate::icon::Icon>,
     mut commands: Commands,
 ) {
-    if !appearance.is_changed() && added.is_empty() {
-        return;
-    }
-    let want = CHOICES
-        .iter()
-        .position(|&c| c == appearance.preference)
-        .unwrap_or(2);
-    for (mut state, children) in &mut toggles {
-        if state.selected != want {
-            state.selected = want;
+    let want = appearance.preference;
+    for (e, mut shows, children) in &mut toggles {
+        if shows.0 == want {
+            continue;
         }
-        for (i, c) in children.iter().enumerate() {
-            match (selected.get(c), i == want) {
-                (Ok(false), true) => {
-                    commands.entity(c).insert(Selected);
-                }
-                (Ok(true), false) => {
-                    commands.entity(c).remove::<Selected>();
-                }
-                _ => {}
+        shows.0 = want;
+        commands
+            .entity(e)
+            .insert(Tooltip::new(toggle_tooltip(want)));
+        for c in children.iter() {
+            if let Ok(mut icon) = icons.get_mut(c) {
+                icon.name = want.icon().into();
             }
         }
     }

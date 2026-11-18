@@ -482,16 +482,16 @@ fn top_bar(p: &mut ChildSpawnerCommands, t: &Theme, profile: &UserProfile) {
             // On a narrow window these fold into the account menu (`crate::top_bar`).
             use crate::top_bar::{Fold, spawn_folding};
             crate::update::spawn_version(r, t);
+            // AI assistants (`crate::mcp_button`): not in a page, which can't serve them.
+            #[cfg(not(target_arch = "wasm32"))]
+            spawn_folding(r, Fold::Mcp, |r| crate::mcp_button::spawn_button(r, t));
             spawn_folding(r, Fold::Network, |r| crate::network::spawn_button(r, t));
             spawn_folding(r, Fold::Notifications, |r| {
                 crate::notifications::spawn_bell(r, t)
             });
             // Light, dark or the system's scheme.
             spawn_folding(r, Fold::Scheme, |r| {
-                r.spawn((
-                    cadrs_ui::scheme_toggle(t),
-                    cadrs_ui::glass::GlassFrame::bar(),
-                ));
+                crate::top_bar::spawn_scheme_button(r, t)
             });
             crate::identity::spawn_identity_button(r, t, profile);
         });

@@ -123,6 +123,7 @@ ui-color-editor-save-color = 保存此颜色
 ui-color-scheme-light = 浅色
 ui-color-scheme-dark = 深色
 ui-color-scheme-system = 跟随系统
+ui-color-scheme-cycle = 配色方案：{ $scheme }（点击切换为{ $next }）
 
 ## crates/cadrs_ui/src/dock.rs
 ui-dock-hide-panel = 隐藏面板
@@ -206,6 +207,8 @@ shell-top-bar-update = 更新到 v{ $version }…
 shell-top-bar-update-tooltip = 阅读发行说明并更新
 shell-top-bar-github = GitHub 上的 cadrs
 shell-top-bar-github-stars = GitHub 上 { $stars } 颗星
+shell-top-bar-download-app = 下载应用
+shell-top-bar-download-app-tooltip = 获取适用于 Linux、Windows 或 macOS 的 cadrs（GitHub）
 
 ## crates/cadrs_app/src/notifications.rs
 shell-notice-whats-new-title = cadrs 焕然一新
@@ -585,6 +588,9 @@ shell-prefs-mcp-server = MCP 服务器
 shell-prefs-enabled = 已启用
 shell-prefs-endpoint = 端点
 shell-prefs-mcp-note = 开启时，此计算机上的 AI 助手（Claude、Cursor…）可以创建和编辑文档。
+shell-prefs-mcp-port = 端口
+shell-prefs-mcp-port-reset = 重置
+shell-prefs-mcp-port-reset-tooltip = 恢复默认端口 { $port }
 shell-prefs-collab-heading = 协作
 shell-prefs-id-while-online = 在线时显示
 shell-prefs-p2p = P2P 网络
@@ -1898,6 +1904,20 @@ model-mass-parts = 要测量的零件
 ## crates/cadrs_app/src/mcp.rs
 model-mcp-server-on = MCP 服务器运行于 { $url }
 model-mcp-cannot-start = 无法在端口 { $port } 上启动 MCP 服务器：{ $error }
+shell-mcp-tooltip-on = AI 助手 (MCP)：已开启
+shell-mcp-tooltip-off = AI 助手 (MCP)：已关闭
+shell-mcp-tooltip-failed = AI 助手 (MCP)：无法启动
+shell-mcp-serving = 已开启，位于 { $url }
+shell-mcp-off = 已关闭（将在 { $url } 提供服务）
+shell-mcp-failed = 无法在端口 { $port } 上启动
+shell-mcp-enable = 启用 MCP 服务器
+shell-mcp-port = 端口：{ $port }…
+shell-mcp-port-tooltip = AI 助手连接到的本机端口
+shell-mcp-port-reset = 将端口重置为默认值（{ $port }）
+shell-mcp-copy-endpoint = 复制端点
+shell-mcp-copied = 已复制 { $url }
+shell-mcp-port-title = MCP 服务器端口
+shell-mcp-port-invalid = 不是有效端口：{ $text }（1 到 65535 之间的数字）
 
 ## crates/cadrs_app/src/simulation_ui.rs
 model-sim-one-face = { $count } 个面

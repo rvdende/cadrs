@@ -123,6 +123,7 @@ ui-color-editor-save-color = Stoor hierdie kleur
 ui-color-scheme-light = Lig
 ui-color-scheme-dark = Donker
 ui-color-scheme-system = Volg die stelsel
+ui-color-scheme-cycle = Kleurskema: { $scheme } (klik vir { $next })
 
 ## crates/cadrs_ui/src/dock.rs
 ui-dock-hide-panel = Versteek paneel
@@ -206,6 +207,8 @@ shell-top-bar-update = Dateer op na v{ $version }…
 shell-top-bar-update-tooltip = Lees die vrystellingsnotas en dateer op
 shell-top-bar-github = cadrs op GitHub
 shell-top-bar-github-stars = { $stars } sterre op GitHub
+shell-top-bar-download-app = Laai die toep af
+shell-top-bar-download-app-tooltip = Kry cadrs vir Linux, Windows of macOS (GitHub)
 
 ## crates/cadrs_app/src/notifications.rs
 shell-notice-whats-new-title = 'n Nuwe voorkoms vir cadrs
@@ -585,6 +588,9 @@ shell-prefs-mcp-server = MCP-bediener
 shell-prefs-enabled = Aangeskakel
 shell-prefs-endpoint = Eindpunt
 shell-prefs-mcp-note = Terwyl dit aan is, kan KI-assistente op hierdie rekenaar (Claude, Cursor, …) dokumente skep en wysig.
+shell-prefs-mcp-port = Poort
+shell-prefs-mcp-port-reset = Herstel
+shell-prefs-mcp-port-reset-tooltip = Terug na die verstekpoort, { $port }
 shell-prefs-collab-heading = Samewerking
 shell-prefs-id-while-online = Gewys terwyl aanlyn
 shell-prefs-p2p = P2P-netwerk
@@ -1898,6 +1904,20 @@ model-mass-parts = Onderdele om te meet
 ## crates/cadrs_app/src/mcp.rs
 model-mcp-server-on = MCP-bediener op { $url }
 model-mcp-cannot-start = Kan nie die MCP-bediener op poort { $port } begin nie: { $error }
+shell-mcp-tooltip-on = KI-assistente (MCP): aan
+shell-mcp-tooltip-off = KI-assistente (MCP): af
+shell-mcp-tooltip-failed = KI-assistente (MCP): kon nie begin nie
+shell-mcp-serving = Aan, by { $url }
+shell-mcp-off = Af (sou by { $url } bedien)
+shell-mcp-failed = Kon nie op poort { $port } begin nie
+shell-mcp-enable = Aktiveer MCP-bediener
+shell-mcp-port = Poort: { $port }…
+shell-mcp-port-tooltip = Die poort op hierdie rekenaar waaraan KI-assistente koppel
+shell-mcp-port-reset = Herstel poort na verstek ({ $port })
+shell-mcp-copy-endpoint = Kopieer eindpunt
+shell-mcp-copied = { $url } gekopieer
+shell-mcp-port-title = MCP-bediener se poort
+shell-mcp-port-invalid = Nie 'n poort nie: { $text } ('n getal van 1 tot 65535)
 
 ## crates/cadrs_app/src/simulation_ui.rs
 model-sim-one-face = { $count } vlak
