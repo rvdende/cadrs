@@ -345,6 +345,13 @@ pub enum HealOp {
         /// The largest width of a tail.
         max_width: f64,
     },
+    /// Faces no wider than `width` (two long edges side by side, the rest no longer than the
+    /// width) collapsed onto one of their long edges: the slivers cuts a few microns apart
+    /// leave (a simulated stock's, cut after cut), which later booleans would have to split.
+    Slivers {
+        /// The widest face collapsed.
+        width: f64,
+    },
 }
 
 /// A kernel session: it owns bodies and performs modeling operations on them.

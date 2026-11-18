@@ -2654,7 +2654,7 @@ fn snap_within(x: &mut Body, other: &Body, lim: f64, tol: f64, alike: bool) -> V
 /// [`fuzzy_merge`]'s second step: faces `lim` wide collapsed, and moved faces (`moved`) up to
 /// ten times that (a strip bridging the gap at a slant, folded back over its neighbours once
 /// on one surface with them). The faces kept, by input index.
-fn collapse_slivers(x: &mut Body, lim: f64, moved: &[usize]) -> Vec<usize> {
+pub(crate) fn collapse_slivers(x: &mut Body, lim: f64, moved: &[usize]) -> Vec<usize> {
     let mut drop = vec![false; x.faces.len()];
     for fi in 0..x.faces.len() {
         if x.faces[fi].loops.len() != 1 {
@@ -3689,11 +3689,24 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 curves.len()
             );
             for ic in &curves {
+                let angles: Vec<f64> = (0..=4)
+                    .map(|q| {
+                        let m = ic.c.point(ic.t0 + (ic.t1 - ic.t0) * q as f64 / 4.0);
+                        let n = |f: usize| {
+                            let s = &faces[f].surf;
+                            let (u, v) = s.project(&m, None);
+                            s.normal(u, v)
+                        };
+                        n(fa).cross(&n(fb)).norm()
+                    })
+                    .collect();
                 eprintln!(
-                    "    curve closed {} from {:?} to {:?}",
+                    "    curve closed {} from {:?} to {:?}, length {:.3e}, normals' sines {:.1e}",
                     ic.closed,
                     ic.c.point(ic.t0),
-                    ic.c.point(ic.t1)
+                    ic.c.point(ic.t1),
+                    (ic.c.point(ic.t1) - ic.c.point(ic.t0)).norm(),
+                    angles.iter().copied().fold(f64::INFINITY, f64::min)
                 );
             }
         }
@@ -4486,11 +4499,29 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         }
         (res.faces, arcs * arcs)
     };
+    // (With CADRS_PROFILE, each face whose split takes long named.)
+    let profiling = prof.on;
+    let timed_split = |fi: usize| {
+        let t = web_time::Instant::now();
+        let r = split_one(fi);
+        if profiling && t.elapsed().as_secs_f64() > 0.02 {
+            let size = match &faces[fi].surf {
+                Surface::Nurbs(n) => format!("{} × {} knots", n.ku.len(), n.kv.len()),
+                s => format!("{:?}", s.kind()),
+            };
+            eprintln!(
+                "[profile] split of face {fi} ({size}, {} cuts): {:.1} ms",
+                cuts[fi].len(),
+                t.elapsed().as_secs_f64() * 1e3
+            );
+        }
+        r
+    };
     let cut_faces = cuts.iter().filter(|c| !c.is_empty()).count();
     let split: Vec<(Vec<Vec<Vec<Arc>>>, u64)> = if super::par::threads_for_some(cut_faces) {
-        (0..faces.len()).into_par_iter().map(split_one).collect()
+        (0..faces.len()).into_par_iter().map(timed_split).collect()
     } else {
-        (0..faces.len()).map(split_one).collect()
+        (0..faces.len()).map(timed_split).collect()
     };
     for (fi, (made, spent)) in split.into_iter().enumerate() {
         work.spend(spent, "face splitting")?;
@@ -4961,6 +4992,12 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             ))
         });
         if let Some(why) = why {
+            prof.mark("checks");
+            prof.report(&format!(
+                "{op:?} (refused) {}×{} faces",
+                a.faces.len(),
+                b.faces.len()
+            ));
             return Err(KernelError::BooleanFailed {
                 stage: "validity",
                 why: format!("the boolean's result is invalid: {why}"),

@@ -47,7 +47,10 @@ pub const MERGE: f64 = 0.002;
 
 /// [`MERGE`], or `CADRS_EXACT_MERGE` (mm) to try others.
 fn merge() -> f64 {
-    std::env::var("CADRS_EXACT_MERGE").ok().and_then(|v| v.parse().ok()).unwrap_or(MERGE)
+    std::env::var("CADRS_EXACT_MERGE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(MERGE)
 }
 
 /// Whether two screws are one going on: the same axis (the very same line, as the machine's
@@ -353,7 +356,8 @@ impl Cut {
             || self.poses.iter().all(|(p, amount)| {
                 let m = joined.at(amount / total);
                 tops.iter().all(|q| {
-                    (m.linear * self.start.apply(*q) + m.translation - p.apply(*q)).norm() <= merge()
+                    (m.linear * self.start.apply(*q) + m.translation - p.apply(*q)).norm()
+                        <= merge()
                 })
             }) && {
                 // (And the new end, where the joined screw takes the tool.)
@@ -833,7 +837,10 @@ impl ExactStock {
                 let k = match c.screw {
                     Screw::Slide(v) => {
                         let z = c.start.rot.column(2).into_owned();
-                        format!("slide {:.0}° off the axis", v.normalize().dot(&z).abs().acos().to_degrees())
+                        format!(
+                            "slide {:.0}° off the axis",
+                            v.normalize().dot(&z).abs().acos().to_degrees()
+                        )
                     }
                     Screw::Turn { .. } => format!("turn machine={}", c.machine),
                 };
@@ -985,7 +992,41 @@ impl ExactStock {
             }
         }
         self.tags.insert(new, tags);
-        Ok(new)
+        Ok(self.without_slivers(new))
+    }
+
+    /// `body` with its faces no wider than the merge tolerance collapsed
+    /// ([`cadrs_kernel::HealOp::Slivers`]): strips that cuts a hair apart leave (a cut merged
+    /// within [`MERGE`] beside one on the machine's exact screw), which every later cut would
+    /// have to split, slowly and badly. Faces that wide are the merging's, not the toolpath's.
+    /// `body` as it is when the heal doesn't leave it sound.
+    fn without_slivers(&mut self, body: BodyId) -> BodyId {
+        let Ok(r) = self
+            .k
+            .heal(body, &[cadrs_kernel::HealOp::Slivers { width: merge() }])
+        else {
+            return body;
+        };
+        let Ok(healed) = r.first() else { return body };
+        let faces = |k: &DefaultKernel, b| k.faces(b).map_or(0, |f| f.len());
+        if faces(&self.k, healed) == faces(&self.k, body)
+            || !self.k.get(healed).is_ok_and(|b| b.check().is_empty())
+        {
+            self.k.release(healed);
+            return body;
+        }
+        let old = self.tags.get(&body).cloned().unwrap_or_default();
+        let mut tags = vec![0u8; faces(&self.k, healed)];
+        for (face, from) in &r.history.modified {
+            if from.body == body
+                && let Some(t) = tags.get_mut(face.0 as usize)
+            {
+                *t = old.get(from.face.0 as usize).copied().unwrap_or(0);
+            }
+        }
+        self.tags.insert(healed, tags);
+        self.drop_body(body);
+        healed
     }
 
     /// Lets go of a stock body no longer wanted (never the uncut stock).

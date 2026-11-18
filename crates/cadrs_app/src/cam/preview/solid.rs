@@ -158,7 +158,16 @@ pub(super) struct Live {
     /// The newest mesh, and a count that changes with it.
     pub(super) mesh: Option<SimMesh>,
     pub(super) version: u64,
+    /// When the last place was asked for.
+    asked_at: Option<Instant>,
 }
+
+/// The most places a second the worker is asked to cut to (each a boolean, for the exact
+/// stock).
+const ASKS_A_SECOND: f64 = 10.0;
+
+/// How far behind the tool (seconds) the stock may be before playing waits for it.
+const MOST_BEHIND: f64 = 0.15;
 
 impl Live {
     /// Starts the worker: it builds the stock ([`program::solid_start`]), then cuts it to each
@@ -188,12 +197,21 @@ impl Live {
             cut: None,
             mesh: None,
             version: 0,
+            asked_at: None,
         })
     }
 
     /// Whether it is still cutting to the last place asked for.
     pub(super) fn busy(&self) -> bool {
         self.asked.is_some() && self.asked != self.cut
+    }
+
+    /// Whether the stock is behind the tool by more than [`MOST_BEHIND`]: playing then waits.
+    pub(super) fn lagging(&self) -> bool {
+        self.busy()
+            && self
+                .asked_at
+                .is_some_and(|t| t.elapsed().as_secs_f64() > MOST_BEHIND)
     }
 
     /// Takes the newest mesh it has made, and asks for `to` when it is free and isn't there.
@@ -204,12 +222,17 @@ impl Live {
             self.mesh = Some(mesh);
             self.version += 1;
         }
+        let due = self
+            .asked_at
+            .is_none_or(|t| t.elapsed().as_secs_f64() >= 1.0 / ASKS_A_SECOND);
         if let Some(to) = to
             && !self.busy()
+            && due
             && self.cut != Some(to)
             && self.ask.send(to).is_ok()
         {
             self.asked = Some(to);
+            self.asked_at = Some(Instant::now());
         }
     }
 
@@ -218,6 +241,8 @@ impl Live {
     pub(super) fn settle(&mut self, to: Place, limit: std::time::Duration) {
         let until = Instant::now() + limit;
         while self.cut != Some(to) && Instant::now() < until {
+            // (A script waits: asked at once, however soon after the last.)
+            self.asked_at = None;
             self.follow(Some(to));
             if self.cut == Some(to) {
                 break;

@@ -256,10 +256,15 @@ impl PreviewState {
     }
 
     /// Minutes of program per second of playback.
+    /// How many times faster than the machine the preview plays: a tenth to a thousand times,
+    /// the speed slider's quarter (where it starts) the machine's own pace.
+    fn factor(&self) -> f64 {
+        10f64.powf(-1.0 + 4.0 * self.speed as f64)
+    }
+
+    /// The program's minutes the preview plays a second.
     fn rate(&self) -> f64 {
-        // From two minutes for the whole program (slowest) to about two seconds (fastest).
-        let secs = 120.0 * 0.02f64.powf(self.speed as f64);
-        (self.total() / secs).max(1e-6)
+        self.factor() / 60.0
     }
 
     /// Jumps to a fraction of the program (0 to 1).
@@ -651,7 +656,7 @@ pub fn open_for_selection(world: &mut World) {
         beam,
         t: 0.0,
         playing: true,
-        speed: 0.5,
+        speed: 0.25,
         show_tool: true,
         show_path: true,
         show_part: true,
@@ -772,7 +777,7 @@ fn advance(time: Res<Time>, state: Option<ResMut<PreviewState>>) {
         let to = s.place();
         if let Some(live) = s.live.as_mut() {
             live.follow(to);
-            if live.busy() || live.cut != to {
+            if live.lagging() {
                 s.held += dt;
                 return;
             }
@@ -1081,8 +1086,14 @@ fn sync_readout(
         Some(f) => tr_with("cam-readout-feed", &[("feed", &fmt0(f))]),
         None => tr("cam-readout-rapid"),
     };
+    let factor = s.factor();
+    let pace = if factor < 0.95 {
+        format!("{factor:.1}×")
+    } else {
+        format!("{factor:.0}×")
+    };
     let mut text = format!(
-        "{} · {} / {} · {} · {} · X{:.3} Y{:.3} Z{:.3}",
+        "{} · {} / {} ({pace}) · {} · {} · X{:.3} Y{:.3} Z{:.3}",
         s.label,
         super::compute::fmt_minutes(s.t),
         super::compute::fmt_minutes(s.total()),
