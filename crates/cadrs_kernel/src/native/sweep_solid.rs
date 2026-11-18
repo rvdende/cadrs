@@ -3907,6 +3907,72 @@ pub fn cut_swept_indexed(
     }
 }
 
+/// `target` less what a ball-end mill fills carried upright along a pass of straight moves
+/// ([`super::sweep_ball_pass`]): the pass's solid up to a little above the target (and above
+/// the ball's highest centre), where that is below the lowest the mill's top comes. None for
+/// another tool or path, or where the cut isn't sound.
+fn cut_ball_pass(
+    k: &mut NativeKernel,
+    target: BodyId,
+    b: &Body,
+    path: &[crate::PathCurve],
+    up: V3,
+) -> Option<OpResult> {
+    let up = up.try_normalize(tol::TINY)?;
+    let segs = super::sweep::path::path_segments(k, path).ok()?;
+    let p0 = segs.first()?.start();
+    let (centre, r, length) = super::sweep_ball_pass::ball_mill(b, &p0, &up)?;
+    let near = tol::REL_POINT * b.bbox().diagonal().max(tol::POINT);
+    let mut centres = vec![p0 + up * centre];
+    for s in &segs {
+        let (a, z) = (s.start(), s.end());
+        let mid = s.c.point(0.5 * (s.t0 + s.t1));
+        if (mid - (a + (z - a) * 0.5)).norm() > near
+            || (a + up * centre - centres[centres.len() - 1]).norm() > near
+        {
+            return None;
+        }
+        centres.push(z + up * centre);
+    }
+    let height = |p: &P3| p.coords.dot(&up);
+    let bb = k.get(target).ok()?.bbox();
+    let over = (0..8)
+        .map(|i| {
+            let pick = |k: usize| {
+                if i >> k & 1 == 0 {
+                    bb.min[k]
+                } else {
+                    bb.max[k]
+                }
+            };
+            height(&P3::new(pick(0), pick(1), pick(2)))
+        })
+        .fold(f64::NEG_INFINITY, f64::max);
+    let (low, high) = centres
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |m, c| {
+            (m.0.min(height(c)), m.1.max(height(c)))
+        });
+    let top = over.max(high) + 0.1 * r;
+    if top > low + length {
+        return None;
+    }
+    let pass = super::sweep_ball_pass::ball_pass(&centres, r, &up, top)?;
+    let id = k.insert(pass);
+    let cut = k.boolean(crate::BoolOp::Subtract, target, &[id]);
+    k.release(id);
+    match cut {
+        Ok(c) if c.bodies.iter().all(|&id| k.sound(id)) => Some(c),
+        Ok(_) => None,
+        Err(e) => {
+            if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
+                eprintln!("ball pass: its cut: {e}");
+            }
+            None
+        }
+    }
+}
+
 pub fn cut_swept(
     k: &mut NativeKernel,
     target: BodyId,
@@ -3914,6 +3980,13 @@ pub fn cut_swept(
     motion: &SolidMotion,
 ) -> Result<OpResult> {
     let b = std::sync::Arc::clone(k.get(tool)?);
+    // A ball-end mill carried upright along straight moves in one upright plane (a raster
+    // pass): what it fills below the target's top, made face by face, cut from the target.
+    if let SolidMotion::Path { path, up } = motion
+        && let Some(r) = cut_ball_pass(k, target, &b, path, up.into_inner())
+    {
+        return Ok(r);
+    }
     // A motion whose ends keep clear of the target: within it the endless motion (a whole turn,
     // a screw without end) fills what this one does, and is made exactly as a whole (the solid
     // of revolution, the screw's helical sweep).

@@ -332,6 +332,7 @@ pub mod sweep;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod sweep;
+pub(crate) mod sweep_ball_pass;
 pub(crate) mod sweep_cache;
 #[cfg(feature = "testkit")]
 pub mod sweep_faces;
