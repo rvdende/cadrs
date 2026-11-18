@@ -804,7 +804,13 @@ pub fn tilt(input: &Input, tp: Toolpath) -> Result<Toolpath, String> {
             }
         }
         smooth_axes(&places, &mut axes, p.tilt.smoothing);
-        limit_turn_rate(&places, &mut axes, MOST_TURN_PER_MM);
+        // Within the rule's limits (the most lean, upright near the pole), and then turning no
+        // faster than the rate along the way the cutter's centre goes: last, so what is posted
+        // keeps to it.
+        for a in axes.iter_mut() {
+            *a = rule.within(*a);
+        }
+        limit_turn_rate(&pivots, &mut axes, MOST_TURN_PER_MM);
         // How far up its axis a pose must back off for the leant cutter (grown by the stock to
         // leave) to clear the part: its flank, or the rim of a flat end leant over.
         let mut clear = |tip: P3, axis: P3| -> f64 {
@@ -820,7 +826,7 @@ pub fn tilt(input: &Input, tp: Toolpath) -> Result<Toolpath, String> {
         };
         let mut poses: Vec<Pose> = Vec::with_capacity(places.len());
         for i in 0..places.len() {
-            let axis = rule.within(axes[i]);
+            let axis = axes[i];
             most_lean = most_lean.max(angle_between(UPRIGHT, axis));
             let tip = sub(pivots[i], scale(axis, pivot));
             let pose = Pose {

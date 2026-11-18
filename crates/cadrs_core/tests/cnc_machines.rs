@@ -912,6 +912,7 @@ fn the_4_axis_toolpaths_compute() {
     ]);
     for (setup, paths) in [(cam4::SETUP, &piece), (cam4::WORM_SETUP, &worm)] {
         for (d, nc) in on_every_control(&doc, cam4::STUDIO, setup, paths) {
+            runnable(d, &nc);
             for five_axis in ["G43.4", "G234", "M428", "G68.2"] {
                 assert!(!nc.contains(five_axis), "{d:?} wrote {five_axis}");
             }
@@ -953,6 +954,16 @@ fn on_every_control(
             (d, nc)
         })
         .collect()
+}
+
+/// What every program a machinist would run is held to: no hair's-breadth block at the
+/// largest inverse-time feed, and the tool's length switched on with a move down in Z
+/// (`G0 G43 H1 Z…`), never by itself where the control would move to apply it.
+fn runnable(d: cadrs_cam::Dialect, nc: &str) {
+    assert!(!nc.contains("F99999"), "{d:?}: a block at F99999");
+    for l in nc.lines().filter(|l| l.contains("G43 H")) {
+        assert!(l.contains('Z'), "{d:?}: {l}");
+    }
 }
 
 /// The largest rotary word a program writes for `letter`.
@@ -1062,6 +1073,18 @@ fn the_5_axis_toolpaths_compute() {
     // stands upright (at the dome's top, across a hole's mouth).
     for (d, nc) in on_every_control(&doc, cam5::STUDIO, cam5::SETUP, &paths) {
         assert!(!nc.contains("Rewind"), "{d:?} rewinds");
+        runnable(d, &nc);
+        // Read back as each control reads it (LinuxCNC's wrapped C by the sign of its words,
+        // the others the shortest way), no cut turns the platter more than a few degrees.
+        let moves = cadrs_cam::post::reader::read(&nc);
+        for w in moves.windows(2).filter(|w| !w[1].rapid) {
+            let turn = w[1].angle('C') - w[0].angle('C');
+            assert!(
+                turn.abs() < 45.0,
+                "{d:?}: C turns {turn} at line {}",
+                w[1].line
+            );
+        }
         assert!(!nc.contains("G92") && !nc.contains("G10 L20"), "{d:?}");
     }
     let nc = posted(&doc, cam5::STUDIO, cam5::SETUP, &paths);

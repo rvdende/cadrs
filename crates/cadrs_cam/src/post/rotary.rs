@@ -339,6 +339,14 @@ pub(super) struct Axes {
     winding: Winding,
     /// The time of feed moves too small to write, owed to the next block.
     carried: f64,
+    /// Each written rotary axis's angle as last written (rounded to its decimals, as turned):
+    /// where the control has it.
+    turned_to: Vec<f64>,
+    /// The words of an axis that rolls over carry the way it turns in their sign (LinuxCNC):
+    /// else the control takes the shortest way.
+    signed: bool,
+    /// The tool's length to switch on with the first move down to the work (`G43 H…`).
+    length_on: Option<String>,
 }
 
 impl Axes {
@@ -360,6 +368,10 @@ impl Axes {
         })?;
         let codes = s.rotary.tcp_for(d, op.tool_number, rot.len());
         let tcp = codes.is_some();
+        let turned_to = {
+            let q = from.unwrap_or(&zero);
+            rot.iter().map(|(i, _)| q[*i]).collect()
+        };
         Ok(Axes {
             q: from.map_or_else(|| zero.clone(), <[f64]>::to_vec),
             chain: chain.clone(),
@@ -394,6 +406,9 @@ impl Axes {
             ahead: None,
             winding: s.rotary.winding,
             carried: 0.0,
+            turned_to,
+            signed: d == Dialect::LinuxCnc,
+            length_on: None,
         })
     }
 
@@ -412,6 +427,26 @@ impl Axes {
     fn solve(&self, cl: &Cl) -> Result<Vec<f64>, IkError> {
         self.chain
             .solve_toward(cl, self.length, &self.q, self.ahead)
+    }
+
+    /// A rapid block's motion word, with the tool's length switched on where it is still to be
+    /// and the block moves Z (`G0 G43 H1`).
+    fn with_length(&mut self, w: &mut Writer, axes: &str) -> String {
+        if axes.contains('Z')
+            && let Some(on) = self.length_on.take()
+        {
+            w.mode = Some(0);
+            return format!("G0 {on}");
+        }
+        w.motion(0)
+    }
+
+    /// Writes the tool's length on by itself if no rapid has (an operation that starts with
+    /// a feed).
+    fn length_now(&mut self, w: &mut Writer) {
+        if let Some(on) = self.length_on.take() {
+            w.block(&on);
+        }
     }
 
     /// Whether the rotary axis `k` (among the written ones) is written rolling over.
@@ -458,19 +493,39 @@ impl Axes {
     /// The rotary words that changed, and the angles noted as written.
     fn rotary_words(&mut self, w: &Writer, v: &[f64]) -> String {
         let mut out = String::new();
-        for (k, (_, letter)) in self.rot.iter().enumerate() {
-            let angle = if self.rolls(k) {
-                // (Rounded first, so 359.9996 is written 0, not 360.)
-                let step = 10f64.powi(-(self.angle_decimals.min(6) as i32));
-                let a = (v[3 + k] / step).round() * step;
-                a.rem_euclid(360.0) % 360.0
+        let step = 10f64.powi(-(self.angle_decimals.min(6) as i32));
+        let round = |a: f64| (a / step).round() * step;
+        for k in 0..self.rot.len() {
+            let letter = self.rot[k].1;
+            // (Rounded first, so 359.9996 is written 0, not 360, and the way it turns is the
+            // way the rounded angles go.)
+            let to = round(v[3 + k]);
+            let (text, key) = if self.rolls(k) {
+                let a = to.rem_euclid(360.0) % 360.0;
+                let a = if (a - 360.0).abs() < step / 2.0 {
+                    0.0
+                } else {
+                    a
+                };
+                let magnitude = decimal(a, self.angle_decimals, w.s.decimal_point);
+                // On LinuxCNC a wrapped axis turns the way the word's sign says (`-0` included):
+                // the sign is the way from where it is to where it goes.
+                let back = to < self.turned_to[k] - step / 2.0;
+                let text = if self.signed && back {
+                    format!("-{}", magnitude.trim_start_matches('-'))
+                } else {
+                    magnitude.clone()
+                };
+                (text, magnitude)
             } else {
-                v[3 + k]
+                let t = decimal(to, self.angle_decimals, w.s.decimal_point);
+                (t.clone(), t)
             };
-            let text = decimal(angle, self.angle_decimals, w.s.decimal_point);
-            if self.written[k].as_deref() != Some(text.as_str()) {
+            // (Unchanged where the control is: no word, whatever sign it would carry.)
+            if self.written[k].as_deref() != Some(key.as_str()) {
                 let _ = write!(out, " {letter}{text}");
-                self.written[k] = Some(text);
+                self.written[k] = Some(key);
+                self.turned_to[k] = to;
             }
         }
         out
@@ -536,8 +591,9 @@ impl Axes {
                     w.block(&b);
                 }
             }
+            // (Switched on with the first move down to the work, as `G0 G43 H1 Z…`.)
             None if length_comp && d != Dialect::Grbl => {
-                w.block(&format!("G43 H{}", op.tool_number))
+                self.length_on = Some(format!("G43 H{}", op.tool_number))
             }
             None => {}
         }
@@ -665,13 +721,13 @@ impl Axes {
             }
             let down = w.axes(p);
             if !down.is_empty() {
-                let m = w.motion(0);
+                let m = self.with_length(w, &down);
                 w.block(format!("{m}{down}").trim());
             }
         } else {
             let axes = w.axes(p);
             if !axes.is_empty() || !turn.is_empty() {
-                let m = w.motion(0);
+                let m = self.with_length(w, &axes);
                 w.block(format!("{m}{axes}{turn}").trim());
             }
         }
@@ -869,12 +925,15 @@ impl Axes {
     }
 
     fn one_block(&mut self, w: &mut Writer, v: &[f64], minutes: f64, feed: f64) {
+        self.length_now(w);
         // A move no word would show (a hair's breadth) is no block of its own: its time goes
         // to the next.
         let minutes = minutes + std::mem::take(&mut self.carried);
         if let Some(from) = &self.last {
-            let within = 0.5 * 10f64.powi(-(w.s.decimals.min(6) as i32));
-            let angle = 0.5 * 10f64.powi(-(self.angle_decimals.min(6) as i32));
+            // (Under a micron, or what no word would show: a hair a control can't follow at feed
+            // and would be given an absurd inverse-time feed for.)
+            let within = (0.5 * 10f64.powi(-(w.s.decimals.min(6) as i32))).max(1e-3);
+            let angle = (0.5 * 10f64.powi(-(self.angle_decimals.min(6) as i32))).max(1e-3);
             let unseen = from
                 .iter()
                 .zip(v)
@@ -977,7 +1036,7 @@ fn on_one_line(base: &[f64], moves: &[Pending], within: f64) -> bool {
 
 /// The note at a program's head for each rotary axis written rolling over: what the control
 /// must be set to.
-pub(super) fn rollover_notes(chain: &Chain, s: &PostSettings) -> Vec<String> {
+pub(super) fn rollover_notes(chain: &Chain, d: Dialect, s: &PostSettings) -> Vec<String> {
     if s.rotary.winding != Winding::Rollover {
         return Vec::new();
     }
@@ -986,29 +1045,66 @@ pub(super) fn rollover_notes(chain: &Chain, s: &PostSettings) -> Vec<String> {
     };
     rot.iter()
         .filter(|(i, _)| chain.joint(*i).continuous)
-        .map(|(_, c)| {
-            format!(
-                "{c} rolls over: set the control to turn it the shortest way to angles 0 to 360 \
-                 (LinuxCNC WRAPPED_ROTARY, Fanuc rotary roll-over)"
-            )
+        .map(|(_, c)| match d {
+            Dialect::LinuxCnc => format!(
+                "{c} rolls over, the sign giving the direction: [AXIS_{c}] WRAPPED_ROTARY = 1 in \
+                 the INI; its words are 0 to 360, a minus sign turning it backward"
+            ),
+            Dialect::Fanuc => {
+                format!("{c} rolls over the shortest way: parameter 1008 ROA = 1, RAB = 0 for {c}")
+            }
+            Dialect::Mach3 => format!(
+                "{c} rolls over the shortest way: General Config, Rot 360 rollover and \
+                 Shortest Rot on for {c}"
+            ),
+            Dialect::Haas | Dialect::Grbl => format!(
+                "{c} rolls over the shortest way: set the control's roll-over and shortest-way \
+                 parameters for {c}"
+            ),
         })
         .collect()
 }
 
 /// The rotary axes back to zero with the tool up clear, before work in the work offset's own
 /// axes or at the program's end.
-pub(super) fn unturn(w: &mut Writer, chain: &Chain, d: Dialect) {
+pub(super) fn unturn(
+    w: &mut Writer,
+    chain: &Chain,
+    d: Dialect,
+    s: &PostSettings,
+    at: Option<&[f64]>,
+) {
     let Ok((_, rot)) = words_of(chain) else {
         return;
     };
     if rot.is_empty() {
         return;
     }
-    // (A wound axis was counted from near zero again as its operation ended: this is half a
-    // turn at the most.)
     super::retract_home(w, d);
     let zero = decimal(0.0, 0, w.s.decimal_point);
-    let words: Vec<String> = rot.iter().map(|(_, c)| format!("{c}{zero}")).collect();
+    let mut words = Vec::new();
+    for (i, c) in &rot {
+        let q = at.map_or(0.0, |q| q[*i]);
+        let continuous = chain.joint(*i).continuous;
+        if continuous && s.rotary.winding == Winding::Rollover {
+            // Back to 0 the shortest way (on LinuxCNC the sign says which way that is).
+            let r = q.rem_euclid(360.0);
+            let back = d == Dialect::LinuxCnc && r > 1e-9 && r < 180.0;
+            words.push(format!("{c}{}{zero}", if back { "-" } else { "" }));
+        } else if continuous && (q / 360.0).round() != 0.0 {
+            // A wound axis stops at the whole turn nearest: the work as it started, without
+            // turning back every turn the job made.
+            let whole = 360.0 * (q / 360.0).round();
+            let text = decimal(whole, 3, w.s.decimal_point);
+            w.comment(&format!(
+                "{c} stops at {c}{text}, {} whole turns on: zero {c} there before the next program",
+                (whole / 360.0).abs()
+            ));
+            words.push(format!("{c}{text}"));
+        } else {
+            words.push(format!("{c}{zero}"));
+        }
+    }
     w.block(&format!("G0 {}", words.join(" ")));
     w.at = [None; 3];
     w.mode = None;

@@ -1590,11 +1590,11 @@ impl TriDexel {
     }
 }
 
-/// The rays along `axis` through a closed mesh (`tris`, in lattice coordinates): see
-/// [`TriDexel::of_solid`].
 /// How far inside the lattice's outermost planes their rays are taken, in steps.
 const HAIR: f64 = 1e-7;
 
+/// The rays along `axis` through a closed mesh (`tris`, in lattice coordinates): see
+/// [`TriDexel::of_solid`].
 fn solid_grid(tris: &[[P3; 3]], axis: usize, lat: &Lattice) -> Grid {
     let (b, c) = others(axis);
     let (nu, nv) = (lat.n[b], lat.n[c]);

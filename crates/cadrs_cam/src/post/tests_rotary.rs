@@ -682,10 +682,7 @@ fn a_rolling_over_axis_is_written_within_a_turn_and_never_touches_the_offsets() 
             .flat_map(|l| l.split_whitespace())
             .filter_map(|w| w.strip_prefix('A')?.parse::<f64>().ok())
             .collect();
-        assert!(
-            words.iter().all(|a| (0.0..360.0).contains(a)),
-            "{d:?}: {words:?}"
-        );
+        assert!(words.iter().all(|a| a.abs() < 360.0), "{d:?}: {words:?}");
         let moves = read(&nc);
         for w in moves.windows(2) {
             assert!((w[1].angle('A') - w[0].angle('A')).abs() < 170.0 + 1e-6);
@@ -738,5 +735,51 @@ fn every_axis_word_is_one_the_machine_has() {
                 }
             }
         }
+    }
+}
+
+/// A wrapped axis on LinuxCNC turns the way its word's sign says, not the shortest way: a cut
+/// that turns the axis back is written with a minus sign, and read back as LinuxCNC reads it
+/// (`unwrap_rotary`) it turns back, never on round nearly a turn. Fanuc's and Mach3's words
+/// carry no sign: their roll-over takes the shortest way.
+#[test]
+fn a_wrapped_axis_on_linuxcnc_turns_the_way_its_sign_says() {
+    let chain = samples::fourth_axis();
+    // Out and back round the axis: 0° → 400° → 300° → 20°.
+    let mut path = Vec::new();
+    for (from, to) in [(0.0, 400.0), (400.0, 300.0), (300.0, 20.0)] {
+        for k in 0..=40 {
+            let a: f64 = from + (to - from) * k as f64 / 40.0;
+            let axis = turned(Z, X, a);
+            path.push(Cl::new(add([a / 40.0, 0.0, 0.0], scale(axis, 10.0)), axis));
+        }
+    }
+    for d in [Dialect::LinuxCnc, Dialect::Fanuc, Dialect::Mach3] {
+        let mut m = machine_of(chain.clone(), d, false);
+        m.post.rotary.winding = Winding::Rollover;
+        let nc = post(&program(vec![leaning_op(&path, 300.0)]), &m, &m.post).unwrap();
+        let signed = nc.lines().any(|l| l.contains(" A-"));
+        assert_eq!(signed, d == Dialect::LinuxCnc, "{d:?}: {nc}");
+        let moves = read(&nc);
+        let cut: Vec<&ReadMove> = moves.iter().filter(|m| !m.rapid).collect();
+        for w in cut.windows(2) {
+            let turn = w[1].angle('A') - w[0].angle('A');
+            assert!(turn.abs() < 170.0, "{d:?}: {turn} at line {}", w[1].line);
+        }
+        // Read back it went out 400° and back to 20° (the machine's A counts the other way
+        // round from the path's turn).
+        let far = cut
+            .iter()
+            .map(|m| m.angle('A'))
+            .fold(0.0, |a: f64, b| if b.abs() > a.abs() { b } else { a });
+        let last = cut.last().unwrap().angle('A');
+        assert!((far.abs() - 400.0).abs() < 1e-3, "{d:?}: {far}");
+        assert!(
+            (last.abs() - 20.0).abs() < 1e-3 && last * far > 0.0,
+            "{d:?}: {last}"
+        );
+        // And home to 0 the short way round.
+        let home = moves.last().unwrap().angle('A');
+        assert!(home.abs() < 1e-3, "{d:?}: ends at {home}");
     }
 }

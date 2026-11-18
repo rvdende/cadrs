@@ -739,3 +739,37 @@ fn a_leaning_tool_turns_no_faster_than_its_rate_along_a_pass() {
     assert!((angle_between(axes[0], normalize([-1.0, 0.0, 1.0]))).abs() < 1e-9);
     assert!(axes[20][0] > 0.0 && axes[9][0] < 0.0);
 }
+
+/// What the dome's leaning finish hands on keeps to the turning rate: from one cut to the
+/// next the tool turns no faster than [`MOST_TURN_PER_MM`] for the way its ball's centre goes
+/// (with a little over for poses backed off over a crest), even over the pole and across the
+/// holes' mouths.
+#[test]
+fn a_leaning_finish_turns_the_tool_no_faster_than_its_rate() {
+    use super::multiaxis::MOST_TURN_PER_MM;
+    let model = dome();
+    let stock = Stock::block(Aabb::new([-40.0, -40.0, -10.0], [40.0, 40.0, 31.0]));
+    let tool = Tool::new(ToolKind::BallMill, 8.0);
+    let mut p = Params::new(Pattern::Parallel, &tool, MachineKind::Mill);
+    p.step_over = 6.0;
+    p.tolerance = 0.02;
+    p.tilt.mode = AxisMode::Normal;
+    p.tilt.max_tilt = 60.0;
+    p.heights.bottom = Height::new(HeightRef::Origin, 0.5);
+    let tp = generate(&setup(&model, &stock, &tool, &p)).unwrap();
+    let poses = cuts(&tp);
+    let mut worst: f64 = 0.0;
+    for w in poses.windows(2) {
+        let (c0, c1) = (
+            add(w[0].tip, scale(w[0].axis, 4.0)),
+            add(w[1].tip, scale(w[1].axis, 4.0)),
+        );
+        let turn = angle_between(w[0].axis, w[1].axis);
+        // (A pass's end and the next's start are no cut between them.)
+        if turn < 0.5 || dist(c0, c1) > 8.0 {
+            continue;
+        }
+        worst = worst.max(turn / dist(c0, c1).max(1e-6));
+    }
+    assert!(worst <= MOST_TURN_PER_MM * 1.1, "{worst}°/mm");
+}

@@ -39,15 +39,16 @@ pub fn read(nc: &str) -> Vec<ReadMove> {
     let mut rotary: Vec<(char, f64)> = Vec::new();
     let (mut mode, mut inverse, mut tcp) = (None::<u8>, false, false);
     // The rotary axes the program says roll over (a note at its head): their words are
-    // angles 0 to 360, each reached the shortest way round.
-    let rolling: Vec<char> = nc
+    // angles 0 to 360, reached the shortest way round, or (LinuxCNC's wrapped axis) the way
+    // the word's sign says.
+    let rolling: Vec<(char, bool)> = nc
         .lines()
         .filter_map(|l| {
             let c = l.trim_start().strip_prefix('(')?;
             let letter = c.chars().next()?;
-            c[letter.len_utf8()..]
-                .starts_with(" rolls over")
-                .then_some(letter)
+            let rest = &c[letter.len_utf8()..];
+            rest.starts_with(" rolls over")
+                .then_some((letter, rest.contains("the sign giving the direction")))
         })
         .collect();
     for (n, line) in nc.lines().enumerate() {
@@ -82,14 +83,27 @@ pub fn read(nc: &str) -> Vec<ReadMove> {
                 }
                 'A'..='C' if !passing => {
                     let now = rotary.iter().find(|r| r.0 == *letter).map_or(0.0, |r| r.1);
-                    let v = &if rolling.contains(letter) {
-                        let mut d = (*v - now).rem_euclid(360.0);
-                        if d > 180.0 {
-                            d -= 360.0;
+                    let v = &match rolling.iter().find(|r| r.0 == *letter) {
+                        // LinuxCNC's `unwrap_rotary`, as it is written there.
+                        Some((_, true)) => {
+                            let neg = v.is_sign_negative();
+                            let mut r = v.abs() + (now / 360.0).floor() * 360.0;
+                            if !neg && r < now {
+                                r += 360.0;
+                            }
+                            if neg && r > now {
+                                r -= 360.0;
+                            }
+                            r
                         }
-                        now + d
-                    } else {
-                        *v
+                        Some((_, false)) => {
+                            let mut d = (*v - now).rem_euclid(360.0);
+                            if d > 180.0 {
+                                d -= 360.0;
+                            }
+                            now + d
+                        }
+                        None => *v,
                     };
                     match rotary.iter_mut().find(|r| r.0 == *letter) {
                         Some(r) => r.1 = *v,

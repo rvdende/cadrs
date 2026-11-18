@@ -724,7 +724,7 @@ pub fn post_on(
         !op.toolpath.is_empty() && rotary::route(op, d, s, rotaries) == rotary::Route::Axes
     });
     if by_axes {
-        for note in rotary::rollover_notes(&chain, s) {
+        for note in rotary::rollover_notes(&chain, d, s) {
             w.comment(&note);
         }
     }
@@ -760,7 +760,7 @@ pub fn post_on(
         // The rotary axes back to zero for work in the offset's own axes, or for a tilted
         // working plane the control sets itself.
         if turned.is_some() && route != rotary::Route::Axes {
-            rotary::unturn(&mut w, &chain, d);
+            rotary::unturn(&mut w, &chain, d, s, turned.as_deref());
             turned = None;
         }
         // Out of a tilted plane that isn't this one's, or for a tool change: up clear, cancel
@@ -940,7 +940,7 @@ pub fn post_on(
         cancel_tilt(&mut w, machine);
     }
     if turned.is_some() {
-        rotary::unturn(&mut w, &chain, d);
+        rotary::unturn(&mut w, &chain, d, s, turned.as_deref());
     }
     if beam {
         // The beam off if an operation left it on.
