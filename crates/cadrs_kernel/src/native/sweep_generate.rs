@@ -6595,57 +6595,91 @@ pub(super) fn cut(
             if space.solids.len() != 1 {
                 return None;
             }
-            let next = space.transformed(&about(1));
-            let apart = match super::boolean::boolean_bodies(&space, &next, BoolOp::Intersect) {
-                Ok(common) => common.body.solids.is_empty(),
-                Err(e) => matches!(e, KernelError::EmptyResult(_)),
+            // Whether a space stands apart from the one `turns` on: their common part none.
+            let apart_from = |turns: usize| {
+                let other = space.transformed(&about(turns));
+                match super::boolean::boolean_bodies(&space, &other, BoolOp::Intersect) {
+                    Ok(common) => common.body.solids.is_empty(),
+                    Err(e) => matches!(e, KernelError::EmptyResult(_)),
+                }
+            };
+            // All of them one tool where each stands apart from the next; every other one
+            // where it meets the next (a tooth's tip cut away between two spaces) but not the
+            // one after; else no such tools.
+            let groups: Vec<Vec<usize>> = if apart_from(1) {
+                vec![(0..copies).collect()]
+            } else if copies >= 4 && apart_from(2) {
+                let even = copies - copies % 2;
+                let mut g = vec![
+                    (0..even).step_by(2).collect::<Vec<_>>(),
+                    (1..even).step_by(2).collect::<Vec<_>>(),
+                ];
+                if copies % 2 == 1 {
+                    g.push(vec![copies - 1]);
+                }
+                g
+            } else {
+                return None;
             };
             if debug {
                 eprintln!(
-                    "generated cut: the space inside the target has {} faces; apart from the next: {apart} ({:.0} ms)",
+                    "generated cut: the space inside the target has {} faces, its copies in {} tool(s) of spaces apart ({:.0} ms)",
                     space.faces.len(),
+                    groups.len(),
                     (web_time::Instant::now() - t_start).as_secs_f64() * 1e3
                 );
             }
-            if !apart {
-                return None;
-            }
-            let mut tool = Body::default();
-            tool.append(&space);
-            for i in 1..copies {
-                tool.append(&space.transformed(&about(i)));
-            }
-            let tool = k.insert(tool);
-            // (The spaces lie within the target, being its common part with the plug: their
-            // faces off its surfaces meet its faces along their own edges only.)
-            let step = super::boolean::subtract_within(k, target, &[tool]);
-            k.release(tool);
-            match step {
-                Ok(r) if r.bodies.len() == 1 && k.sound(r.bodies[0]) => Some(r),
-                Ok(r) => {
-                    if debug {
-                        eprintln!(
-                            "generated cut: the spaces cut together: {} bodies, not sound: {:?}",
-                            r.bodies.len(),
-                            r.bodies.first().and_then(|b| k.get(*b).ok()).map(|b| {
-                                b.check_with(super::topo::CheckLevel::Full)
-                                    .into_iter()
-                                    .take(3)
-                                    .collect::<Vec<_>>()
-                            })
-                        );
-                    }
-                    for id in r.bodies {
-                        k.release(id);
-                    }
-                    None
+            let mut at = target;
+            let mut last: Option<OpResult> = None;
+            for (gi, group) in groups.iter().enumerate() {
+                let mut tool = Body::default();
+                for &i in group {
+                    tool.append(&if i == 0 {
+                        space.clone()
+                    } else {
+                        space.transformed(&about(i))
+                    });
                 }
-                Err(e) => {
-                    if debug {
-                        eprintln!("generated cut: the spaces cut together: {e}");
-                    }
-                    None
+                let tool = k.insert(tool);
+                // (The first tool's spaces lie within the target, being its common part with
+                // the plug: their faces off its surfaces meet its faces along their own edges
+                // only. A later tool's reach into what the first took.)
+                let step = if gi == 0 {
+                    super::boolean::subtract_within(k, at, &[tool])
+                } else {
+                    k.boolean(BoolOp::Subtract, at, &[tool])
+                };
+                k.release(tool);
+                if at != target {
+                    k.release(at);
                 }
+                match step {
+                    Ok(r) if r.bodies.len() == 1 => {
+                        at = r.bodies[0];
+                        last = Some(r);
+                    }
+                    Ok(r) => {
+                        for id in r.bodies {
+                            k.release(id);
+                        }
+                        return None;
+                    }
+                    Err(e) => {
+                        if debug {
+                            eprintln!("generated cut: the spaces cut together: {e}");
+                        }
+                        return None;
+                    }
+                }
+            }
+            let r = last?;
+            if k.sound(r.bodies[0]) {
+                Some(r)
+            } else {
+                for id in r.bodies {
+                    k.release(id);
+                }
+                None
             }
         })();
         if let Some(r) = made {
