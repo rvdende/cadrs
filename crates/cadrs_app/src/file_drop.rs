@@ -19,6 +19,10 @@
 //! - **Where it was dropped.** The drag's `enter` and `motion` events carry the pointer's
 //!   position on the window, which the window's own cursor position doesn't follow during a
 //!   drag; [`DropPosition`] keeps the last one for whoever places what was dropped.
+//!
+//! In a page winit sends no drops either: the page's script (`tools/web/files.js`) reads the
+//! files dropped on it, and [`page::deliver`] copies them into the page's files
+//! (`cadrs_ui::file_picker::UPLOADS`, as the file chooser does) and writes the messages.
 
 use std::path::PathBuf;
 
@@ -30,9 +34,18 @@ pub struct FileDropPlugin;
 impl Plugin for FileDropPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DropPosition>()
+            .init_resource::<FileDrag>()
+            .add_systems(PreUpdate, track_drag)
             .add_systems(Update, log_drops);
         #[cfg(target_os = "linux")]
-        app.add_systems(PreUpdate, (wayland::listen, wayland::deliver).chain());
+        app.add_systems(
+            PreUpdate,
+            (wayland::listen, wayland::deliver)
+                .chain()
+                .before(track_drag),
+        );
+        #[cfg(target_arch = "wasm32")]
+        app.add_systems(PreUpdate, page::deliver.before(track_drag));
     }
 }
 
@@ -41,6 +54,23 @@ impl Plugin for FileDropPlugin {
 /// current during a drag).
 #[derive(Resource, Debug, Default, Clone, Copy)]
 pub struct DropPosition(pub Option<Vec2>);
+
+/// Whether files are being dragged over the window, from every platform's own signal: winit's
+/// [`FileDragAndDrop::HoveredFile`] (Windows, macOS, X11), the Wayland drag's `enter` and
+/// `leave`, the page's `dragover` (`tools/web/files.js`). A drop ends it. What they are is not
+/// known until they are dropped (Wayland and a page only say so then), so it doesn't say
+/// whether they can go where they would land. The documents page shows it
+/// (`landing::show_drop_target`).
+#[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct FileDrag(pub bool);
+
+/// Follows winit's drag messages into [`FileDrag`] (the other sources set it directly).
+fn track_drag(mut drops: MessageReader<FileDragAndDrop>, mut drag: ResMut<FileDrag>) {
+    for d in drops.read() {
+        let over = matches!(d, FileDragAndDrop::HoveredFile { .. });
+        drag.set_if_neq(FileDrag(over));
+    }
+}
 
 /// Logs every drag and drop the app is told about.
 fn log_drops(mut drops: MessageReader<FileDragAndDrop>) {
@@ -147,6 +177,8 @@ mod wayland {
     enum Event {
         /// The pointer is over the window at this position during a drag.
         At(Vec2),
+        /// A drag of files came over the window (`true`) or left it, or was dropped.
+        Over(bool),
         /// Files dropped.
         Dropped(Vec<PathBuf>),
     }
@@ -189,6 +221,7 @@ mod wayland {
         drops: Option<Res<Drops>>,
         window: Query<Entity, With<PrimaryWindow>>,
         mut position: ResMut<DropPosition>,
+        mut drag: ResMut<super::FileDrag>,
         mut out: MessageWriter<FileDragAndDrop>,
     ) {
         let Some(drops) = drops else { return };
@@ -197,6 +230,9 @@ mod wayland {
         for event in rx.try_iter() {
             match event {
                 Event::At(at) => position.0 = Some(at),
+                Event::Over(over) => {
+                    drag.set_if_neq(super::FileDrag(over));
+                }
                 Event::Dropped(paths) => {
                     for path_buf in paths {
                         out.write(FileDragAndDrop::DroppedFile { window, path_buf });
@@ -341,6 +377,7 @@ mod wayland {
                         }
                     );
                     if pending.has_uris() {
+                        let _ = state.tx.send(Event::Over(true));
                         pending.offer.accept(serial, Some(URI_LIST.to_string()));
                         pending.offer.set_actions(
                             wl_data_device_manager::DndAction::Copy,
@@ -365,12 +402,14 @@ mod wayland {
                     }
                 }
                 wl_data_device::Event::Leave => {
+                    let _ = state.tx.send(Event::Over(false));
                     if let Some(pending) = state.offer.take() {
                         info!("DRAG CANCELLED: the Wayland drag left the window");
                         pending.offer.destroy();
                     }
                 }
                 wl_data_device::Event::Drop => {
+                    let _ = state.tx.send(Event::Over(false));
                     let Some(pending) = state.offer.take() else {
                         return;
                     };
@@ -492,5 +531,79 @@ mod tests {
     fn only_local_files_are_taken() {
         let list = "#comment\r\nhttps://example.com/x.png\r\nfile://localhost/tmp/ok.png\r\n";
         assert_eq!(parse_uri_list(list), vec![PathBuf::from("/tmp/ok.png")]);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+mod page {
+    use std::path::Path;
+
+    use bevy::prelude::*;
+    use bevy::window::{FileDragAndDrop, PrimaryWindow};
+    use cadrs_ui::file_picker::UPLOADS;
+    use js_sys::wasm_bindgen::JsValue;
+    use js_sys::{Array, Reflect, Uint8Array};
+
+    use super::DropPosition;
+
+    /// Takes the drops the page's script queued on `globalThis.cadrsDrops` (`{ files: [[name,
+    /// bytes]], x, y }` each), copies their files into [`UPLOADS`] and hands them on as dropped
+    /// on the window, where they were dropped. `globalThis.cadrsDragging` says whether files
+    /// are being dragged over the page ([`super::FileDrag`]).
+    pub(super) fn deliver(
+        window: Query<Entity, With<PrimaryWindow>>,
+        mut position: ResMut<DropPosition>,
+        mut drag: ResMut<super::FileDrag>,
+        mut out: MessageWriter<FileDragAndDrop>,
+    ) {
+        let global = js_sys::global();
+        let dragging = Reflect::get(&global, &"cadrsDragging".into())
+            .ok()
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        drag.set_if_neq(super::FileDrag(dragging));
+        let Ok(queue) = Reflect::get(&global, &"cadrsDrops".into()) else {
+            return;
+        };
+        if !Array::is_array(&queue) || Array::from(&queue).length() == 0 {
+            return;
+        }
+        let _ = Reflect::set(&global, &"cadrsDrops".into(), &Array::new());
+        let Ok(window) = window.single() else {
+            return;
+        };
+        let number = |drop: &JsValue, key: &str| {
+            Reflect::get(drop, &key.into())
+                .ok()
+                .and_then(|v| v.as_f64())
+        };
+        for drop in Array::from(&queue).iter() {
+            if let (Some(x), Some(y)) = (number(&drop, "x"), number(&drop, "y")) {
+                position.0 = Some(Vec2::new(x as f32, y as f32));
+            }
+            let Ok(files) = Reflect::get(&drop, &"files".into()) else {
+                continue;
+            };
+            for file in Array::from(&files).iter() {
+                let file = Array::from(&file);
+                let Some(name) = file.get(0).as_string() else {
+                    continue;
+                };
+                // Only its name: a page's file name has no folders, but keep it so.
+                let Some(name) = Path::new(&name).file_name() else {
+                    continue;
+                };
+                let path_buf = Path::new(UPLOADS).join(name);
+                let bytes = Uint8Array::new(&file.get(1)).to_vec();
+                match cadrs_fs::create_dir_all(UPLOADS)
+                    .and_then(|()| cadrs_fs::write(&path_buf, bytes))
+                {
+                    Ok(()) => {
+                        out.write(FileDragAndDrop::DroppedFile { window, path_buf });
+                    }
+                    Err(e) => warn!("cannot keep {}: {e}", path_buf.display()),
+                }
+            }
+        }
     }
 }
