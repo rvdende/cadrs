@@ -186,6 +186,25 @@ impl Curve {
         self.length(t0, t1) > l
     }
 
+    /// Whether this curve over `own` runs along `other` over `range`: its points at the
+    /// fractions `at` of its stretch each within `within` of the other's nearest. (Three
+    /// places tell an edge lying along another from one that crosses or leaves it.)
+    pub fn runs_along(
+        &self,
+        own: (f64, f64),
+        other: &Curve,
+        range: (f64, f64),
+        at: [f64; 3],
+        within: f64,
+        strictly: bool,
+    ) -> bool {
+        at.iter().all(|f| {
+            let p = self.point(own.0 + (own.1 - own.0) * f);
+            let d = (other.point(other.closest(&p, range.0, range.1)) - p).norm();
+            if strictly { d < within } else { d <= within }
+        })
+    }
+
     /// The parameter of the point of the curve nearest `p`, in [t0, t1] (periodic curves:
     /// unwrapped into the range when possible).
     pub fn closest(&self, p: &P3, t0: f64, t1: f64) -> f64 {

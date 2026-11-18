@@ -3930,10 +3930,14 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             let ed = &pool.edges[e];
             let along = (0..kept).any(|o| {
                 let oe = &out.edges[o];
-                [0.25, 0.5, 0.75].iter().all(|&f| {
-                    let p = ed.curve.point(ed.t[0] + (ed.t[1] - ed.t[0]) * f);
-                    (oe.point(oe.curve.closest(&p, oe.t[0], oe.t[1])) - p).norm() < run_tol * 10.0
-                })
+                ed.curve.runs_along(
+                    (ed.t[0], ed.t[1]),
+                    &oe.curve,
+                    (oe.t[0], oe.t[1]),
+                    [0.25, 0.5, 0.75],
+                    run_tol * 10.0,
+                    true,
+                )
             });
             if !along {
                 add(&mut out, &ed.curve, ed.t, ed.v);
