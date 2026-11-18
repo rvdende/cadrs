@@ -9,6 +9,17 @@
 //! table mount T(q) (mount → assembly) at the axis values q and an instance's placement P(q)
 //! (instance → assembly), the instance is drawn at `S ∘ W⁻¹ ∘ T(q)⁻¹ ∘ P(q)` ([`place`]).
 //!
+//! **Relative to the machine.** That is [`Relative::Part`]. With [`Relative::Machine`] (the
+//! default: what a machinist sees standing at the machine) the machine's base stays where it
+//! stands at home and the work turns with the table: the whole scene of the part-relative view
+//! is moved by `W(q) = M(home) ∘ M(q)⁻¹` ([`work_moved`]), with M(q) the machine's coordinates
+//! in the model's at the axis values q ([`machine_in_model`]). An instance is then drawn at
+//! `M(home) ∘ P(q)`, and every thing of the work (the parts and the workholding, the stock, the
+//! toolpaths, the triads, the tool in the spindle) at W. [`place_work`] works W out before the
+//! parts are placed; it is the identity without a preview (the machine is at home then), with
+//! the machine hidden and while a dialog is open, so picking always finds the parts where their
+//! solids are.
+//!
 //! **What moves it.** While a preview runs, the axis values at its time: the run's
 //! [`cadrs_cam::kinematics::AxisTrack`] has them at the end of every move, and between two
 //! the cutter location of that instant is solved on from the move's start ([`axes_at`]). The
@@ -55,12 +66,22 @@ pub struct MachineViewPlugin;
 
 impl Plugin for MachineViewPlugin {
     fn build(&self, app: &mut App) {
+        // ([`place_work`] runs in the preview's chain, after its time moves on and before the
+        // parts are placed.)
         app.init_resource::<MachineView>()
             .add_systems(
                 Update,
                 (load_machine, move_machine)
                     .chain()
                     .after(crate::parts::PartsSet)
+                    .run_if(in_state(AppState::Document)),
+            )
+            .add_systems(
+                Update,
+                place_on_work
+                    .after(move_machine)
+                    .after(super::view::ViewSet)
+                    .after(super::preview::PreviewSet)
                     .run_if(in_state(AppState::Document)),
             )
             .add_systems(
@@ -100,6 +121,32 @@ pub fn machine_in_model(setup: &Frame, work: &Frame, table_mount: &ConnectorFram
 /// placement in the assembly at the axis values shown (see the module).
 pub fn place(setup: &Frame, work: &Frame, table_mount: &ConnectorFrame, instance: &Pose) -> Pose {
     instance.then(&machine_in_model(setup, work, table_mount))
+}
+
+/// What the CAM view keeps still while the machine moves: the part (the machine moves round
+/// it) or the machine (the work turns with its table). View state, not saved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Relative {
+    Part,
+    /// The default: with a machine from an assembly it is what a machinist expects; without
+    /// one there is no machine to keep still, and the setting does nothing.
+    #[default]
+    Machine,
+}
+
+/// How far the work moves in the view to keep the machine still (see the module): the model's
+/// coordinates of the part-relative view to those of the machine-relative one. `home_table`
+/// and `table` are the table mount's connector at home and at the axis values shown; the
+/// identity when they are the same.
+pub fn work_moved(
+    setup: &Frame,
+    work: &Frame,
+    home_table: &ConnectorFrame,
+    table: &ConnectorFrame,
+) -> Pose {
+    machine_in_model(setup, work, table)
+        .inverse()
+        .then(&machine_in_model(setup, work, home_table))
 }
 
 /// The machine's axis values part of the way through move `segment` of a run, the tool's tip
@@ -508,9 +555,33 @@ pub struct MachineView {
     /// The instances drawn red.
     red: Vec<InstanceId>,
     poses: Vec<(InstanceId, Pose)>,
+    /// How far the work is moved in the view this frame ([`work_moved`], [`place_work`]).
+    work: Pose,
 }
 
 impl MachineView {
+    /// How far the work is moved in the view this frame: the identity but while a preview
+    /// turns it with a machine kept still ([`Relative::Machine`]).
+    pub fn work(&self) -> Pose {
+        self.work
+    }
+
+    /// [`Self::work`] as a matrix.
+    pub fn work_matrix(&self) -> Mat4 {
+        mat4(&self.work)
+    }
+
+    /// A frame in the model's coordinates where the view draws it ([`Self::work`]).
+    pub fn work_frame(&self, f: &Frame) -> Frame {
+        let w = &self.work;
+        Frame {
+            origin: w.apply(f.origin),
+            x: w.rotate(f.x),
+            y: w.rotate(f.y),
+            z: w.rotate(f.z),
+        }
+    }
+
     /// The machine for a run's collision check, once its parts are built.
     pub fn scene(&self) -> Option<MachineScene> {
         self.loaded.as_ref().map(|l| l.scene.clone())
@@ -598,6 +669,71 @@ pub fn view_machine(world: &mut World, azimuth: f32, elevation: f32) {
 /// A mesh or the edges of the machine in the view.
 #[derive(Component)]
 pub struct MachineMesh;
+
+/// A thing of the work drawn in the model's coordinates (the stock, a toolpath): its
+/// `Transform` is [`MachineView::work`], set by [`place_on_work`].
+#[derive(Component)]
+pub struct OnWork;
+
+/// Works out how far the work is moved this frame ([`MachineView::work`]) and draws the
+/// studio's parts there ([`crate::parts::PartCache::moved`], which also moves their edges).
+/// Only while a preview moves a machine from an assembly that the view shows, kept still
+/// ([`Relative::Machine`]), and no dialog is open: the parts are picked where their solids
+/// are, and a dialog's picks would miss them moved.
+#[allow(clippy::too_many_arguments)]
+pub(in crate::cam) fn place_work(
+    doc: Option<Res<ActiveDocument>>,
+    mut view: ResMut<MachineView>,
+    ui: Res<CamUi>,
+    preview: Option<Res<super::preview::PreviewState>>,
+    dialog: Option<Res<super::dialogs::CamDialog>>,
+    mut cache: ResMut<crate::parts::PartCache>,
+) {
+    let in_cam = doc.as_ref().is_some_and(|d| active_cam(d).is_some());
+    let w = in_cam
+        .then(|| {
+            if ui.relative != Relative::Machine || !ui.show_machine || dialog.is_some() {
+                return None;
+            }
+            let loaded = view.loaded.as_ref()?;
+            let now = preview.as_ref()?.machine_now()?;
+            let r = &*loaded.scene.resolved;
+            let (_, Some(home)) = r.mounts(&r.home()) else {
+                return None;
+            };
+            let (_, Some(table)) = r.mounts(&now.q) else {
+                return None;
+            };
+            Some(work_moved(&now.setup, &now.work, &home, &table))
+        })
+        .flatten()
+        .unwrap_or(Pose::IDENTITY);
+    if view.work != w {
+        view.work = w;
+    }
+    // (Outside a CAM Studio the parts' own placements are another tab's: left alone.)
+    if !in_cam {
+        return;
+    }
+    let want: HashMap<cadrs_core::PartId, Mat4> = if w == Pose::IDENTITY {
+        HashMap::new()
+    } else {
+        let m = mat4(&w);
+        cache.parts.iter().map(|p| (p.id, m)).collect()
+    };
+    if cache.moved != want {
+        cache.moved = want;
+    }
+}
+
+/// Puts the things of the work drawn in the model's coordinates ([`OnWork`]) where the work is
+/// drawn this frame.
+fn place_on_work(view: Res<MachineView>, mut q: Query<&mut Transform, With<OnWork>>) {
+    let at = Transform::from_matrix(view.work_matrix());
+    for mut tf in &mut q {
+        tf.set_if_neq(at);
+    }
+}
 
 fn mat4(p: &Pose) -> Mat4 {
     let col = |v: [f64; 3]| Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32);
@@ -893,7 +1029,9 @@ fn move_machine(
     let (_, Some(table)) = r.mounts(&q_now) else {
         return;
     };
-    let to_model = machine_in_model(&setup, &work, &table);
+    // The machine's coordinates where the view draws them: moved with the work by
+    // [`MachineView::work`], which keeps the base still when the view is the machine's.
+    let to_model = machine_in_model(&setup, &work, &table).then(&view.work);
     let state = (q_now, magazine.map(|m| m.1), to_model, show);
     if view.last.as_ref() != Some(&state) {
         let actuators: Vec<(ActuatorId, f64)> = magazine.into_iter().collect();
@@ -1002,6 +1140,85 @@ pub(crate) mod tests {
             place(&Frame::WORLD, &Frame::WORLD, &id, &instance),
             instance
         );
+    }
+
+    /// Two placements alike: they take the same points to the same places.
+    fn pose_near(a: &Pose, b: &Pose) -> bool {
+        [
+            [0.0; 3],
+            [100.0, 0.0, 0.0],
+            [0.0, 100.0, 0.0],
+            [0.0, 0.0, 100.0],
+        ]
+        .iter()
+        .all(|p| dist(a.apply(*p), b.apply(*p)) < 1e-6)
+    }
+
+    /// On the 4-axis mill under the "CAM 4-axis" Worm job's setup, A turned 90°: kept still
+    /// (machine relative), the base is drawn where it stands at home and the work turns a
+    /// quarter about the chuck's axis with the chuck; part relative the work stays and the
+    /// machine moves round it, the base too. At home nothing moves.
+    #[test]
+    fn keeping_the_machine_still_turns_the_work_with_the_chuck() {
+        use cnc::assemblies::mill4 as m;
+        use cnc::cam::cam4;
+        let (doc, r) = resolved(cnc::MILL_4);
+        let cam = doc.element(cam4::STUDIO).unwrap().cam().unwrap();
+        let parts = cadrs_core::rebuild::build(cam.part_features())
+            .parts
+            .clone();
+        let (job, setup) = cam.setup(cam4::WORM_SETUP).unwrap();
+        let frame = program::setup_frame(cam, job, setup, &parts);
+        let shape = program::stock_shape(cam, job, &parts).unwrap();
+        let work = program::work_on_table(setup, &shape.bounds_in(&frame));
+        let home = r.home();
+        let a = r.axes.iter().position(|x| x.name == "A").unwrap();
+        let mut q = home.clone();
+        q[a] += 90.0;
+        let (_, Some(home_table)) = r.mounts(&home) else {
+            panic!("the table mount resolves");
+        };
+        let (_, Some(table)) = r.mounts(&q) else {
+            panic!("the table mount resolves");
+        };
+        // At home the work is not moved.
+        let still = work_moved(&frame, &work, &home_table, &home_table);
+        assert!(pose_near(&still, &Pose::IDENTITY), "{still:?}");
+        let w = work_moved(&frame, &work, &home_table, &table);
+        let poses = |q: &[f64]| {
+            let mut v = Vec::new();
+            r.poses_into(q, &[], &mut v);
+            v.into_iter().collect::<HashMap<InstanceId, Pose>>()
+        };
+        let (at_home, at_q) = (poses(&home), poses(&q));
+        let to_home = machine_in_model(&frame, &work, &home_table);
+        let to_now = machine_in_model(&frame, &work, &table);
+        // Machine relative: an instance at `P(q)` then the part-relative placement then W.
+        let drawn = |i: InstanceId| at_q[&i].then(&to_now).then(&w);
+        let base_home = at_home[&m::BASE].then(&to_home);
+        assert!(pose_near(&drawn(m::BASE), &base_home));
+        assert!(pose_near(
+            &drawn(m::COLUMN),
+            &at_home[&m::COLUMN].then(&to_home)
+        ));
+        // The chuck turned with A, the work with it: where the chuck is drawn now is where it
+        // was at home moved as the work is.
+        let chuck_home = at_home[&m::CHUCK].then(&to_home);
+        assert!(pose_near(&drawn(m::CHUCK), &chuck_home.then(&w)));
+        assert!(!pose_near(&drawn(m::CHUCK), &chuck_home));
+        // The work turns a quarter about the chuck's axis: two points on it stay, and W turns
+        // by 90° (its rotation's trace is 1 + 2 cos θ).
+        let axis = cnc::parts::CHUCK_AXIS;
+        for along in [0.0, 150.0] {
+            let p = chuck_home.apply([axis[0] + along, axis[1], axis[2]]);
+            assert!(near(w.apply(p), p), "{p:?} → {:?}", w.apply(p));
+        }
+        let rot = w.rotation;
+        let cos = (rot[0][0] + rot[1][1] + rot[2][2] - 1.0) / 2.0;
+        assert!(cos.abs() < 1e-6, "{cos}");
+        // Part relative (no W): the work stays and the machine moves round it, the base too.
+        let base_now = at_q[&m::BASE].then(&to_now);
+        assert!(!pose_near(&base_now, &base_home));
     }
 
     pub(crate) fn resolved(element: ElementId) -> (cadrs_core::Document, Resolved) {

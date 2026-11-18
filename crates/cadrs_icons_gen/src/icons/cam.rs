@@ -116,6 +116,12 @@ pub fn icons() -> Vec<Def> {
             cam_machine_show,
         ),
         def(
+            "cam-machine-relative",
+            Line,
+            "View relative to the machine",
+            cam_machine_relative,
+        ),
+        def(
             "cam-axis-limit",
             Line,
             "Axis beyond its travel",
@@ -1079,6 +1085,32 @@ fn cam_machine_show() -> Vec<String> {
             ""
         )),
         acc_el(circle(17.75, 15.5, 1.3, INK, "")),
+    ]
+}
+
+fn cam_machine_relative() -> Vec<String> {
+    // The machine's C-frame standing still (ground under it), and on its table a part with a
+    // turning arrow (accent): the view kept to the machine while the work turns.
+    els![
+        line(2.0, 21.0, 22.0, 21.0, ""),
+        poly(
+            &[
+                (3.5, 21.0),
+                (10.5, 21.0),
+                (10.5, 18.0),
+                (7.0, 18.0),
+                (7.0, 6.5),
+                (12.5, 6.5),
+                (12.5, 3.0),
+                (3.5, 3.0)
+            ],
+            "",
+            ""
+        ),
+        line(10.5, 6.5, 10.5, 9.5, ""),
+        rect(13.0, 15.0, 6.0, 3.0, 0.8, "", ""),
+        acc_el(path("M12.0 12.5 A4.5 2.6 0 1 1 20.5 12.5", "none", "")),
+        acc_el(polyline(&[(18.6, 11.2), (20.5, 12.5), (21.6, 10.4)], "")),
     ]
 }
 

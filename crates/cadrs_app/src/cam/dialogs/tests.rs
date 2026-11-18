@@ -837,6 +837,7 @@ fn machine_rotary_post_settings() {
         "tcp",
         "tilted-plane",
         "rot-feed",
+        "rot-winding",
         "rot-tol",
         "rot-axis-tol",
         "rot-retract",
@@ -865,6 +866,7 @@ fn machine_rotary_post_settings() {
         ("tcp-off", Value::Text("M129".into())),
         ("tilted-plane", Value::Index(1)),
         ("rot-feed", Value::Index(2)),
+        ("rot-winding", Value::Index(1)),
         ("rot-tol", Value::Number(0.02)),
         ("rot-axis-tol", Value::Number(0.25)),
         ("rot-retract", Value::Number(40.0)),
@@ -883,6 +885,8 @@ fn machine_rotary_post_settings() {
     );
     assert_eq!(r.tilted_plane, TiltedPlane::Positions);
     assert_eq!(r.feed, RotaryFeed::AllAxes);
+    assert_eq!(r.winding, cadrs_core::cam::cadrs_cam::post::Winding::Wound);
+    assert_eq!(select(&fields(&s, &d, 0), "rot-winding").1, 1);
     assert_eq!(
         (r.tolerance, r.axis_tolerance, r.retract),
         (0.02, 0.25, 40.0)

@@ -171,7 +171,27 @@ pub fn toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
             ui.show_machine = !ui.show_machine;
         }),
     ));
+    // Keep the machine still (lit) or the part, while a preview moves the machine.
+    tb.spawn((
+        tool(
+            "cam-tb-machine-relative",
+            "cam-machine-relative",
+            "cam-machine-relative-tooltip",
+        ),
+        Needs::MachineAssembly,
+        RelativeButton,
+        observe(|_: On<Activate>, mut ui: ResMut<CamUi>| {
+            ui.relative = match ui.relative {
+                machine_view::Relative::Part => machine_view::Relative::Machine,
+                machine_view::Relative::Machine => machine_view::Relative::Part,
+            };
+        }),
+    ));
 }
+
+/// The toolbar's Relative to the machine button: lit while the view keeps the machine still.
+#[derive(Component)]
+pub(super) struct RelativeButton;
 
 #[derive(Component)]
 pub(super) struct InsertMenu;
@@ -199,6 +219,7 @@ pub(super) fn sync_toolbar(
     computed: Res<Computed>,
     ui: Res<CamUi>,
     q: Query<(Entity, &Needs, Has<bevy::ui::InteractionDisabled>)>,
+    q_relative: Query<(Entity, Has<cadrs_ui::style::Selected>), With<RelativeButton>>,
     mut commands: Commands,
 ) {
     let Some(doc) = doc else { return };
@@ -243,6 +264,16 @@ pub(super) fn sync_toolbar(
                 .try_remove::<bevy::ui::InteractionDisabled>();
         } else if !on && !disabled {
             commands.entity(e).try_insert(bevy::ui::InteractionDisabled);
+        }
+    }
+    // Lit only with a machine from an assembly: without one the setting does nothing.
+    let lit = ui.relative == machine_view::Relative::Machine
+        && job.is_some_and(|j| j.machine.is_some() && j.machine_source.is_some());
+    for (e, selected) in &q_relative {
+        if lit && !selected {
+            commands.entity(e).try_insert(cadrs_ui::style::Selected);
+        } else if !lit && selected {
+            commands.entity(e).try_remove::<cadrs_ui::style::Selected>();
         }
     }
 }

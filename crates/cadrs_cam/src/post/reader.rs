@@ -10,8 +10,7 @@ pub struct ReadMove {
     /// Where it ends: X Y Z, as written (`NAN` for one not yet given).
     pub xyz: [f64; 3],
     /// The rotary axes there, by letter (those the program has named so far): the turns the
-    /// axis has really made, whatever the control was told it reads along the way (a wound
-    /// axis counted from near zero again).
+    /// axis has really made (an axis that rolls over followed the shortest way round).
     pub rotary: Vec<(char, f64)>,
     /// Its `F` word, when it has one of its own.
     pub feed: Option<f64>,
@@ -39,8 +38,18 @@ pub fn read(nc: &str) -> Vec<ReadMove> {
     let mut xyz = [f64::NAN; 3];
     let mut rotary: Vec<(char, f64)> = Vec::new();
     let (mut mode, mut inverse, mut tcp) = (None::<u8>, false, false);
-    // What each rotary axis's words are off its real angle by (see the resets below).
-    let mut wound: Vec<(char, f64)> = Vec::new();
+    // The rotary axes the program says roll over (a note at its head): their words are
+    // angles 0 to 360, each reached the shortest way round.
+    let rolling: Vec<char> = nc
+        .lines()
+        .filter_map(|l| {
+            let c = l.trim_start().strip_prefix('(')?;
+            let letter = c.chars().next()?;
+            c[letter.len_utf8()..]
+                .starts_with(" rolls over")
+                .then_some(letter)
+        })
+        .collect();
     for (n, line) in nc.lines().enumerate() {
         let text = strip_comments(line);
         let words = words(&text);
@@ -51,21 +60,6 @@ pub fn read(nc: &str) -> Vec<ReadMove> {
         let passing = words
             .iter()
             .any(|w| w.0 == 'G' && matches!(code(w.1), 530 | 280 | 910));
-        // A block that tells the control what a rotary axis reads where it stands (`G92 A…`,
-        // `G10 L20 P0 A…`): nothing moves; the words after it are off by the difference.
-        let resets = words
-            .iter()
-            .any(|w| w.0 == 'G' && matches!(code(w.1), 920 | 100));
-        if resets {
-            for (letter, v) in words.iter().filter(|w| ('A'..='C').contains(&w.0)) {
-                let now = rotary.iter().find(|r| r.0 == *letter).map_or(0.0, |r| r.1);
-                match wound.iter_mut().find(|r| r.0 == *letter) {
-                    Some(r) => r.1 = now - v,
-                    None => wound.push((*letter, now - v)),
-                }
-            }
-            continue;
-        }
         let mut moved = false;
         let mut feed = None;
         for (letter, v) in &words {
@@ -87,7 +81,16 @@ pub fn read(nc: &str) -> Vec<ReadMove> {
                     moved = true;
                 }
                 'A'..='C' if !passing => {
-                    let v = &(*v + wound.iter().find(|r| r.0 == *letter).map_or(0.0, |r| r.1));
+                    let now = rotary.iter().find(|r| r.0 == *letter).map_or(0.0, |r| r.1);
+                    let v = &if rolling.contains(letter) {
+                        let mut d = (*v - now).rem_euclid(360.0);
+                        if d > 180.0 {
+                            d -= 360.0;
+                        }
+                        now + d
+                    } else {
+                        *v
+                    };
                     match rotary.iter_mut().find(|r| r.0 == *letter) {
                         Some(r) => r.1 = *v,
                         None => rotary.push((*letter, *v)),

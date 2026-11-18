@@ -1699,7 +1699,7 @@ pub(crate) fn controller_fields(
 /// where they turn.
 fn rotary_post_fields(f: &mut Vec<Field>, machine: &Machine) {
     use cadrs_core::cam::cadrs_cam::Dialect;
-    use cadrs_core::cam::cadrs_cam::post::{RotaryFeed, TiltedPlane};
+    use cadrs_core::cam::cadrs_cam::post::{RotaryFeed, TiltedPlane, Winding};
     let r = &machine.post.rotary;
     f.push(Field::section(&tr("cam-rotary-post")));
     f.push(Field::check("tcp", &tr("cam-tcp"), r.tcp));
@@ -1731,6 +1731,16 @@ fn rotary_post_fields(f: &mut Vec<Field>, machine: &Machine) {
         labels(&RotaryFeed::ALL, RotaryFeed::label),
         index_of(&RotaryFeed::ALL, r.feed),
     ));
+    // A rotary axis without stops: rolled over by the control, or written as turned.
+    f.push(Field::select(
+        "rot-winding",
+        &tr("cam-rotary-winding"),
+        [tr("cam-winding-rollover"), tr("cam-winding-wound")],
+        index_of(&Winding::ALL, r.winding),
+    ));
+    if r.winding == Winding::Rollover {
+        f.push(Field::note(tr("cam-winding-rollover-note")));
+    }
     f.push(Field::number(
         "rot-tol",
         &tr("cam-rotary-tolerance"),

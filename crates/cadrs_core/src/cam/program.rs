@@ -1081,7 +1081,7 @@ pub fn simulate_solid(
         bounds.include(*p);
     }
     let cell = solid_cell(bounds.size(), quality);
-    // (A cell's margin: a solid that reaches its lattice's box loses its outermost rays.)
+    // (A cell's margin round everything: the cutter's sweep at the stock's edges is in it.)
     let bounds = bounds.grown(cell);
     let world = Frame::WORLD;
     // What the setups before left can only be carried as a height map, which holds no

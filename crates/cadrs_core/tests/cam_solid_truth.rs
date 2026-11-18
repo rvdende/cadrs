@@ -800,9 +800,6 @@ fn a_drill_plunged_along_a_leaning_axis_leaves_a_hole_with_a_conical_floor() {
 }
 
 #[test]
-#[ignore = "TriDexel::of_solid misreads rays that lie in the lattice's outermost planes \
-            (a block's own mesh on the block's lattice comes out 1.25 % short); the \
-            simulation's callers give the lattice a cell's margin"]
 fn a_block_from_its_own_mesh_is_the_block() {
     // The block as the kernel meshes it (twelve triangles, exact), made a solid stock on the
     // lattice over its own box: it should be `TriDexel::block`'s, all 72000 mm³. `of_solid`

@@ -14,7 +14,8 @@
 //!
 //! The bar: the three modes, the speed, Step back · Run/Pause · Step next · Go to end · Reset ·
 //! Close, the progress (drag to scrub), and toggles for the tool, the toolpath, the part and
-//! pausing on collisions (with a machine the view shows: for the machine too). Its readout
+//! pausing on collisions (with a machine the view shows: for the machine too, and whether the
+//! view keeps the part or the machine still, [`super::machine_view::Relative`]). Its readout
 //! shows the time, the operation, the feed and the tool's position; at the end, what Verify
 //! found; under it where the machine's own axes are (a machine with a chain) and what they
 //! cannot do of the run (a machine with rotary axes). Simulate pauses where an axis first
@@ -36,6 +37,7 @@ use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{Button, Checkbox, CheckboxChange, Slider, SliderChange};
 
+use super::machine_view::{MachineView, OnWork, Relative};
 use super::view::{fill_motion, v3};
 use super::{CamUi, Computed, active_cam_owned, toast};
 use crate::AppState;
@@ -56,12 +58,16 @@ impl Plugin for PreviewPlugin {
             (
                 poll_analysis,
                 advance,
+                // Where the work is drawn at the time just reached, before the parts are
+                // placed and the tool and stock drawn.
+                super::machine_view::place_work.before(crate::parts::PartsSet),
                 sync_bar,
                 sync_readout,
                 draw,
                 sync_stock_mesh,
             )
                 .chain()
+                .in_set(PreviewSet)
                 .run_if(in_state(AppState::Document)),
         )
         .add_systems(OnExit(AppState::Document), |mut commands: Commands| {
@@ -72,6 +78,10 @@ impl Plugin for PreviewPlugin {
         .add_observer(on_check);
     }
 }
+
+/// The preview's systems.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PreviewSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -105,6 +115,8 @@ struct MachineRun {
     /// The setup's frame in the coordinates of the machine's table mount.
     work: Frame,
     track: cadrs_core::cam::cadrs_cam::kinematics::AxisTrack,
+    /// Its rotary axes without stops roll over on the control (read 0 to 360°).
+    rolls: bool,
 }
 
 /// Where the machine is at the preview's time.
@@ -766,7 +778,17 @@ struct PreviewBar;
 struct Readout;
 
 #[derive(Component, PartialEq, Clone)]
-struct BarKey(Mode, bool, bool, bool, bool, bool, bool, Option<bool>);
+struct BarKey(
+    Mode,
+    bool,
+    bool,
+    bool,
+    bool,
+    bool,
+    bool,
+    Option<bool>,
+    Option<Relative>,
+);
 
 fn sync_bar(
     state: Option<Res<PreviewState>>,
@@ -793,8 +815,11 @@ fn sync_bar(
         s.beam,
         // The Machine check: only with a machine the view shows.
         (s.has_machine() && machine.is_loaded()).then_some(ui.show_machine),
+        // Relative to the part or the machine: with the same machine.
+        (s.has_machine() && machine.is_loaded()).then_some(ui.relative),
     );
     let show_machine = key.7;
+    let relative = key.8;
     if let Ok((e, k)) = q.single() {
         if *k == key {
             return;
@@ -944,6 +969,50 @@ fn sync_bar(
                             .build(&t),
                     );
                 }
+                if let Some(relative) = relative {
+                    r.spawn((
+                        Name::new("cam-pv-relative"),
+                        Node {
+                            align_items: AlignItems::Center,
+                            column_gap: Val::Px(4.0),
+                            ..default()
+                        },
+                    ))
+                    .with_children(|r| {
+                        r.spawn((
+                            t.text(
+                                tr("cam-relative-to"),
+                                11.0,
+                                FontWeight::NORMAL,
+                                t.muted_foreground,
+                            ),
+                            Translated("cam-relative-to"),
+                        ));
+                        // (`label` and `tip` are catalog keys.)
+                        for (name, label, tip, value) in [
+                            (
+                                "cam-pv-relative-part",
+                                "cam-relative-part",
+                                "cam-relative-part-tooltip",
+                                Relative::Part,
+                            ),
+                            (
+                                "cam-pv-relative-machine",
+                                "cam-relative-machine",
+                                "cam-relative-machine-tooltip",
+                                Relative::Machine,
+                            ),
+                        ] {
+                            let bt = Button::new(name).label(tr(label)).small().tooltip(tr(tip));
+                            let bt = if relative == value {
+                                bt.primary()
+                            } else {
+                                bt.outline()
+                            };
+                            r.spawn(bt.build(&t));
+                        }
+                    });
+                }
                 if s.mode == Mode::Simulate && !s.beam {
                     r.spawn(
                         Checkbox::new("cam-pv-pause")
@@ -1001,7 +1070,7 @@ fn sync_readout(
     }
     // Where the machine's own axes are, for a machine that has them.
     if let (Some(run), Some(now)) = (&s.machine_run, s.machine_now()) {
-        text = format!("{text}\n{}", axes_line(&run.chain, &now.q));
+        text = format!("{text}\n{}", axes_line(&run.chain, &now.q, run.rolls));
     }
     // What the machine cannot do of the run, under the line (in every mode: it holds
     // whatever the stock shows).
@@ -1025,12 +1094,23 @@ fn sync_readout(
     }
 }
 
-/// The readout's line of the machine's axes: "Z-120.50  B23.10°  Y4.00  X-12.50  C45.00°".
-fn axes_line(chain: &cadrs_core::cam::cadrs_cam::kinematics::Chain, q: &[f64]) -> String {
+/// The readout's line of the machine's axes: "Z-120.50  B23.10°  Y4.00  X-12.50  C45.00°". A
+/// rotary axis without stops reads as the control shows it: 0 to 360° when it rolls over.
+fn axes_line(
+    chain: &cadrs_core::cam::cadrs_cam::kinematics::Chain,
+    q: &[f64],
+    rolls: bool,
+) -> String {
     chain
         .joints()
         .zip(q)
         .map(|(j, v)| {
+            let rolled = (v.rem_euclid(360.0) * 100.0).round() / 100.0 % 360.0;
+            let v = &if rolls && j.continuous && j.is_rotary() {
+                rolled
+            } else {
+                *v
+            };
             // (Never "-0.00".)
             let v = if v.abs() < 0.005 { 0.0 } else { *v };
             format!("{}{v:.2}{}", j.name, if j.is_rotary() { "°" } else { "" })
@@ -1065,6 +1145,15 @@ fn on_button(ev: On<bevy::ui_widgets::Activate>, q: Query<&Name>, mut commands: 
     commands.queue(move |w: &mut World| {
         if name == "cam-pv-close" {
             w.remove_resource::<PreviewState>();
+            return;
+        }
+        let relative = match name.as_str() {
+            "cam-pv-relative-part" => Some(Relative::Part),
+            "cam-pv-relative-machine" => Some(Relative::Machine),
+            _ => None,
+        };
+        if let Some(r) = relative {
+            w.resource_mut::<CamUi>().relative = r;
             return;
         }
         let Some(mut s) = w.get_resource_mut::<PreviewState>() else {
@@ -1183,6 +1272,7 @@ fn draw(
     // The tool's mesh in the view, and the operation (by its first move) it is the tool of.
     mut tool_slot: Local<Option<(Entity, usize)>>,
     mut q_tool: Query<(&mut Transform, &mut Visibility), With<PreviewTool>>,
+    machine: Res<MachineView>,
     mut commands: Commands,
 ) {
     let Some(s) = state else {
@@ -1235,6 +1325,7 @@ fn draw(
                             depth_bias: -0.0005,
                         },
                         Transform::default(),
+                        OnWork,
                         DespawnOnExit(AppState::Document),
                     ))
                     .id();
@@ -1252,7 +1343,9 @@ fn draw(
     };
     let Some(op) = s.op_at(i) else { return };
     let tool = &op.tool;
-    let f = &s.frame;
+    // The run's frame where the work is drawn: the tool rides with it, so it stays in the
+    // spindle while the view keeps the machine still.
+    let f = &machine.work_frame(&s.frame);
     // Along the tool's axis at this moment of the move: a tilted plane's (3+2), or the lean of
     // a 4- or 5-axis cut, turning with it.
     let axis = v3(f.dir_to_world(s.timeline.axis_at(s.t))).normalize_or(Vec3::Z);
@@ -1411,6 +1504,7 @@ fn sync_stock_mesh(
                         Mesh3d(handle),
                         MeshMaterial3d(m),
                         Transform::default(),
+                        OnWork,
                         Pickable::IGNORE,
                         DespawnOnExit(AppState::Document),
                     ));
@@ -1478,6 +1572,7 @@ fn sync_stock_mesh(
                 Mesh3d(handle),
                 MeshMaterial3d(m),
                 Transform::default(),
+                OnWork,
                 DespawnOnExit(AppState::Document),
             ));
         }

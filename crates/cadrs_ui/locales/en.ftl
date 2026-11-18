@@ -4489,6 +4489,13 @@ cam-tilted-plane-positions = Rotary positions
 cam-tilted-plane-no-code = This controller has no tilted work plane code: the rotary axes' positions are written
 # A select in the Machine dialog: what the feed rate (F) means on a program block that turns a rotary axis.
 cam-rotary-feed = Feed on rotary moves
+# A select in the Machine dialog: how the program writes the angle of a rotary axis that turns without stops (a chuck, a platter).
+cam-rotary-winding = Rotary axis without stops
+# Its options: angles kept from 0 to 360, the control rolling the axis over; or angles as turned, however many turns.
+cam-winding-rollover = Rolls over (0 to 360)
+cam-winding-wound = Wound (angles as turned)
+# A note under that select when it rolls over: the control must be set up for it. WRAPPED_ROTARY is a LinuxCNC setting; keep it as is.
+cam-winding-rollover-note = Rolls over: set the control's rotary axis to roll over (LinuxCNC WRAPPED_ROTARY, Fanuc rotary roll-over)
 # A number field in the Machine dialog: how far the tool's tip may stray from a straight cut between two program blocks while a rotary axis turns.
 cam-rotary-tolerance = Tolerance
 # A number field in the Machine dialog: how far (in degrees) the tool's direction may stray between two program blocks.
@@ -6550,6 +6557,17 @@ cam-open-machine-builder = Open Machine Builder
 ## crates/cadrs_app/src/cam/machine_view.rs
 # Tooltip of a CAM Studio toolbar button: shows or hides the job's machine (an assembly of the document) in the 3D view.
 cam-show-hide-machine = Show or hide the machine
+# Tooltip of a CAM Studio toolbar button, lit while it is on: while the preview moves the job's machine, the 3D view keeps the machine still and the part turns with the machine's table; off, the part stays still and the machine moves round it.
+cam-machine-relative-tooltip = Keep the machine still (the part moves with its table)
+# In the preview bar, before two buttons: what the 3D view keeps still while the machine moves, the part or the machine.
+cam-relative-to = Relative to
+# The preview bar's button that keeps the part still in the 3D view (the machine moves round it).
+cam-relative-part = Part
+# The preview bar's button that keeps the machine still in the 3D view (the part turns with its table).
+cam-relative-machine = Machine
+# Tooltips of those two buttons.
+cam-relative-part-tooltip = Keep the part still: the machine moves round it
+cam-relative-machine-tooltip = Keep the machine still: the part moves with its table
 # A collision found by Simulate: two things of the machine, or one and the workholding or the part, run into one another. { $a } and { $b } are their names (Swivel head, Vise), { $operation } the toolpath's name.
 cam-collision-machine = { $a } hits { $b } ({ $operation })
 # In a collision found by Simulate, the name of a tool's holder (with its arbor) when it is what runs into something: "D10 flat end mill holder hits Vise (Rough 1)". { $tool } is the tool's name.

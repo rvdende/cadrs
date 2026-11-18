@@ -25,7 +25,7 @@
 pub mod reader;
 pub mod rotary;
 
-pub use rotary::{RotaryFeed, RotaryPost, TiltedPlane};
+pub use rotary::{RotaryFeed, RotaryPost, TiltedPlane, Winding};
 
 use std::fmt::Write as _;
 
@@ -723,6 +723,11 @@ pub fn post_on(
     let by_axes = program.operations.iter().any(|op| {
         !op.toolpath.is_empty() && rotary::route(op, d, s, rotaries) == rotary::Route::Axes
     });
+    if by_axes {
+        for note in rotary::rollover_notes(&chain, s) {
+            w.comment(&note);
+        }
+    }
     if by_axes && s.rotary.tcp_for(d, 1, rotaries).is_none() {
         // Without tool centre point control the program holds only where the work was put.
         let o = work.origin;
@@ -963,9 +968,14 @@ pub fn post_on(
 fn cancel_tilt(w: &mut Writer, machine: &Machine) {
     retract_home(w, machine.dialect);
     w.block("G69");
-    let [a, b] = machine.indexing.map_or(['A', 'C'], |i| i.rotary);
+    // (The machine's own rotary axes, by the letters it has.)
     let zero = decimal(0.0, 0, w.s.decimal_point);
-    w.block(&format!("G0 {a}{zero} {b}{zero}"));
+    if let Ok((_, rot)) = rotary::words_of(&machine.kinematics()) {
+        let words: Vec<String> = rot.iter().map(|(_, c)| format!("{c}{zero}")).collect();
+        if !words.is_empty() {
+            w.block(&format!("G0 {}", words.join(" ")));
+        }
+    }
     w.at = [None; 3];
     w.mode = None;
 }

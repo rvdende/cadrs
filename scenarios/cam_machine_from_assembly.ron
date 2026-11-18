@@ -10,13 +10,17 @@
 //    work at home.
 // 04 The Machine dialog: Machine from › From assembly, the assembly, its axes and controller,
 //    and the way to its Machine Builder.
-// 05 The setup's preview, a third of the way through the dome's 5-axis finishing: the head
-//    tilted over the part, the tool on the dome; the readout's second line has the machine's
-//    axes there.
+// 05 The setup's preview, a third of the way through the dome's 5-axis finishing (Parallel 1,
+//    after Rough 1), the view relative to the machine (the default): the base and column where
+//    they stand, the head tilted, the platter with the part turned by C under the tool; the
+//    readout's second line has the machine's axes there.
 // 06 Verify at the run's end: the stock as the leaning cuts leave it (simulated solid), each
 //    operation's cuts in its colour.
-// 07 "CAM 4-axis", the Worm's job half way along the thread: the worm turned in the chuck
-//    under the tool, the carousel at the tool's pocket.
+// 07 "CAM 4-axis", the Worm's job half way along the thread, relative to the machine: the
+//    machine still, the worm turned with the chuck by A under the tool, the carousel at the
+//    tool's pocket.
+// 08 The same moment relative to the part (the preview bar's Relative to › Part): the worm
+//    stands as modelled and the whole machine is turned round it.
 Scenario(
     start: Some("document"),
     steps: [
@@ -67,14 +71,17 @@ Scenario(
         Custom("cam select setup 0"),
         Click(ui("cam-tb-preview")),
         WaitFor("cam-preview-bar"),
-        Custom("cam preview-op 0 0.3"),
+        // (Rough 1 is operation 0; the 5-axis finishing, Parallel 1, operation 1.)
+        Custom("cam preview-op 1 0.3"),
         Custom("cam machine view 40 22"),
         Scroll(at(910, 600), 4),
         MoveTo(1420, 900),
         Wait(10),
         Screenshot("05-dome-finishing"),
         ExpectText("cam-pv-readout", "Parallel 1"),
-        ExpectText("cam-pv-readout", "B51."),
+        // The machine's axes on the readout's second line (B's value there follows the
+        // toolpath, which still changes with the strategy).
+        ExpectText("cam-pv-readout", "  B"),
         Click(ui("cam-pv-verify")),
         Custom("cam preview-end"),
         MoveTo(1420, 900),
@@ -97,6 +104,12 @@ Scenario(
         MoveTo(1420, 900),
         Wait(10),
         Screenshot("07-worm-thread"),
+        ExpectText("cam-pv-readout", "Rotary 2"),
+        // (The view as in 07: framing the machine again would turn the view with it.)
+        Click(ui("cam-pv-relative-part")),
+        MoveTo(1420, 900),
+        Wait(10),
+        Screenshot("08-worm-part-relative"),
         ExpectText("cam-pv-readout", "Rotary 2"),
     ],
 )

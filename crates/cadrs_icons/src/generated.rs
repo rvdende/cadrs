@@ -348,6 +348,7 @@ icons! {
     CAM_PREVIEW => ("cam-preview", Line, "Preview operation"),
     CAM_POST => ("cam-post", Line, "Post to G-code"),
     CAM_MACHINE_SHOW => ("cam-machine-show", Line, "Show or hide the machine"),
+    CAM_MACHINE_RELATIVE => ("cam-machine-relative", Line, "View relative to the machine"),
     CAM_AXIS_LIMIT => ("cam-axis-limit", Line, "Axis beyond its travel"),
     PLATFORM_WINDOWS => ("platform-windows", Line, "Windows"),
     PLATFORM_MACOS => ("platform-macos", Line, "macOS"),

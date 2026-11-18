@@ -304,7 +304,9 @@ fn a_dome_meridian_is_one_block_of_the_trunnion_and_a_pole_circle_one_of_the_pla
     let at = |lat: f64, lon: f64| Cl::new(scale(n(lat, lon), 40.0), n(lat, lon));
     let meridian: Vec<Cl> = (0..=72).map(|k| at(3.0 + k as f64, 30.0)).collect();
     let circle: Vec<Cl> = (0..=360).map(|k| at(80.0, k as f64)).collect();
-    let m = machine_of(chain, Dialect::LinuxCnc, false);
+    let mut m = machine_of(chain, Dialect::LinuxCnc, false);
+    // (Written as turned: the turn is one block.)
+    m.post.rotary.winding = Winding::Wound;
     let nc = post(&program(vec![leaning_op(&meridian, 500.0)]), &m, &m.post).unwrap();
     let feeds: Vec<String> = lines(&nc)
         .into_iter()
@@ -364,7 +366,9 @@ fn a_worm_thread_is_one_block_of_a_slide_and_a_turn_in_step() {
         })
         .collect();
     for d in Dialect::ALL {
-        let m = machine_of(chain.clone(), d, false);
+        let mut m = machine_of(chain.clone(), d, false);
+        // (Written as turned: the turn is one block.)
+        m.post.rotary.winding = Winding::Wound;
         let nc = post(&program(vec![leaning_op(&path, 300.0)]), &m, &m.post).unwrap();
         let feeds: Vec<String> = lines(&nc)
             .into_iter()
@@ -645,4 +649,94 @@ fn a_rotary_axis_at_its_stop_comes_round_with_the_tool_lifted() {
     let (_, last) = last_feed(&moves);
     let end = chain.locate(&joints(&chain, &Frame::WORLD, length, last), length);
     assert!(dist(end.tip, path.last().unwrap().tip) < 2e-3);
+}
+
+/// A continuous axis that rolls over is written 0 to 360, no block turning it half a turn:
+/// five turns round a worm are blocks of under 170° each, the control's shortest way round
+/// is the way the cut goes, read back they make the five turns, and nothing in the program
+/// touches the work offsets.
+#[test]
+fn a_rolling_over_axis_is_written_within_a_turn_and_never_touches_the_offsets() {
+    let chain = samples::fourth_axis();
+    let lead = std::f64::consts::TAU;
+    let path: Vec<Cl> = (0..=1800)
+        .map(|k| {
+            let axis = turned(Z, X, k as f64);
+            Cl::new(
+                add([lead * k as f64 / 360.0, 0.0, 0.0], scale(axis, 10.0)),
+                axis,
+            )
+        })
+        .collect();
+    for d in Dialect::ALL {
+        let mut m = machine_of(chain.clone(), d, false);
+        m.post.rotary.winding = Winding::Rollover;
+        let nc = post(&program(vec![leaning_op(&path, 300.0)]), &m, &m.post).unwrap();
+        assert!(nc.contains("(A rolls over"), "{d:?}: {nc}");
+        for bad in ["G92", "G10 L20", "G10 L2"] {
+            assert!(!nc.contains(bad), "{d:?} writes {bad}");
+        }
+        let words: Vec<f64> = nc
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('('))
+            .flat_map(|l| l.split_whitespace())
+            .filter_map(|w| w.strip_prefix('A')?.parse::<f64>().ok())
+            .collect();
+        assert!(
+            words.iter().all(|a| (0.0..360.0).contains(a)),
+            "{d:?}: {words:?}"
+        );
+        let moves = read(&nc);
+        for w in moves.windows(2) {
+            assert!((w[1].angle('A') - w[0].angle('A')).abs() < 170.0 + 1e-6);
+        }
+        let (start, end) = last_feed(&moves);
+        let _ = start;
+        let first = moves.iter().find(|m| !m.rapid).unwrap();
+        let turned_by =
+            end.angle('A') - moves[moves.iter().position(|m| m == first).unwrap() - 1].angle('A');
+        assert!(
+            (turned_by.abs() - 5.0 * 360.0).abs() < 1e-3,
+            "{d:?}: {turned_by}"
+        );
+    }
+    // GRBL has no rolling-over axis: it is written wound by default.
+    assert_eq!(
+        PostSettings::for_dialect(Dialect::Grbl, MachineKind::Mill)
+            .rotary
+            .winding,
+        Winding::Wound
+    );
+}
+
+/// Every word a program writes names an axis the machine has: a B/C machine is never sent an
+/// A word, whatever route its operations take (through its axes, or a tilted working plane).
+#[test]
+fn every_axis_word_is_one_the_machine_has() {
+    let (op, _) = tilted_op();
+    let path: Vec<Cl> = sweep(None, 40.0);
+    for (name, chain) in samples::mills() {
+        let (_, rot) = rotary::words_of(&chain).unwrap();
+        let letters: Vec<char> = rot.iter().map(|r| r.1).collect();
+        for d in Dialect::ALL {
+            let m = machine_of(chain.clone(), d, false);
+            let lean = leaning_op(&path, 500.0);
+            let ops = if letters.len() == 2 {
+                vec![op.clone(), lean]
+            } else {
+                vec![lean]
+            };
+            let Ok(nc) = post(&program(ops), &m, &m.post) else {
+                continue;
+            };
+            for l in nc.lines().filter(|l| !l.trim_start().starts_with('(')) {
+                for wd in l.split_whitespace() {
+                    let c = wd.chars().next().unwrap();
+                    if "ABC".contains(c) && wd[1..].parse::<f64>().is_ok() {
+                        assert!(letters.contains(&c), "{name} on {d:?}: {l}");
+                    }
+                }
+            }
+        }
+    }
 }

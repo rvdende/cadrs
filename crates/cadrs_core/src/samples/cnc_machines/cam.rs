@@ -407,11 +407,12 @@ pub mod cam4 {
         };
         c.job(WORM_JOB, "Worm", vec![worm], vec![], bar, doc::MILL_4)?;
         c.setup(WORM_JOB, WORM_SETUP, "Setup 2", 1002, WorkPlane::default())?;
-        // Its spigot in the chuck, the thread's start at the jaws.
+        // Its spigot in the chuck, the jaws well back from the thread so the spindle clears
+        // them.
         c.mount(
             WORM_JOB,
             WORM_SETUP,
-            [work::WORM_START, 0.0, 0.0],
+            [work::WORM_START - work::WORM_GRIP, 0.0, 0.0],
             along,
             up,
         )?;

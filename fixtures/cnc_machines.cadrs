@@ -9594,15 +9594,15 @@
                                     ),
                                 ],
                                 end: Blind,
-                                depth: 25.0,
-                                depth_expr: "25 mm",
+                                depth: 75.0,
+                                depth_expr: "75 mm",
                                 up_to: None,
                                 offset: None,
                                 flip: false,
                                 symmetric: false,
                                 start_offset: Some((
-                                    value: 175.0,
-                                    expr: "175 mm",
+                                    value: 125.0,
+                                    expr: "125 mm",
                                     flip: false,
                                 )),
                                 direction: None,
@@ -10012,6 +10012,7 @@
                                     axis_tolerance: 0.1,
                                     retract: 25.0,
                                     angle_decimals: 3,
+                                    winding: Rollover,
                                 ),
                             ),
                             chain: None,
@@ -11101,6 +11102,7 @@
                                     axis_tolerance: 0.1,
                                     retract: 25.0,
                                     angle_decimals: 3,
+                                    winding: Rollover,
                                 ),
                             ),
                             chain: None,
@@ -11648,6 +11650,7 @@
                                     axis_tolerance: 0.1,
                                     retract: 25.0,
                                     angle_decimals: 3,
+                                    winding: Rollover,
                                 ),
                             ),
                             chain: None,
@@ -16007,6 +16010,7 @@
                                         axis_tolerance: 0.1,
                                         retract: 25.0,
                                         angle_decimals: 3,
+                                        winding: Rollover,
                                     ),
                                 ),
                                 chain: Some((
@@ -16073,7 +16077,7 @@
                                 source_name: "3-axis mill",
                                 document_name: "",
                                 version_name: "",
-                                key: 10316757538470648304,
+                                key: 8983617406204841446,
                             )),
                             setups: [
                                 (
@@ -21923,15 +21927,15 @@
                                                 ),
                                             ],
                                             end: Blind,
-                                            depth: 25.0,
-                                            depth_expr: "25 mm",
+                                            depth: 75.0,
+                                            depth_expr: "75 mm",
                                             up_to: None,
                                             offset: None,
                                             flip: false,
                                             symmetric: false,
                                             start_offset: Some((
-                                                value: 175.0,
-                                                expr: "175 mm",
+                                                value: 125.0,
+                                                expr: "125 mm",
                                                 flip: false,
                                             )),
                                             direction: None,
@@ -22035,6 +22039,7 @@
                                         axis_tolerance: 0.1,
                                         retract: 25.0,
                                         angle_decimals: 3,
+                                        winding: Rollover,
                                     ),
                                 ),
                                 chain: Some((
@@ -22113,7 +22118,7 @@
                                 source_name: "4-axis mill",
                                 document_name: "",
                                 version_name: "",
-                                key: 13349886450934263725,
+                                key: 5081940877949905331,
                             )),
                             setups: [
                                 (
@@ -22687,6 +22692,7 @@
                                         axis_tolerance: 0.1,
                                         retract: 25.0,
                                         angle_decimals: 3,
+                                        winding: Rollover,
                                     ),
                                 ),
                                 chain: Some((
@@ -22765,7 +22771,7 @@
                                 source_name: "4-axis mill",
                                 document_name: "",
                                 version_name: "",
-                                key: 13349886450934263725,
+                                key: 5081940877949905331,
                             )),
                             setups: [
                                 (
@@ -22773,7 +22779,7 @@
                                     name: "Setup 2",
                                     program_number: 1002,
                                     mating: Mount(
-                                        origin: (-12.500000000000057, 0.0, -13.00000000019126),
+                                        origin: (-37.50000000000006, 0.0, -13.00000000019126),
                                         z: (1.0, 0.0, 0.0),
                                         x: (0.0, 0.0, 1.0),
                                     ),
@@ -22949,7 +22955,7 @@
                                                         axis: None,
                                                         style: Thread,
                                                         offset: 0.0,
-                                                        range: Some((-8.500000000000057, 36.49999999999994)),
+                                                        range: Some((16.499999999999943, 61.49999999999994)),
                                                         start_angle: 0.0,
                                                         sweep: 360.0,
                                                         lead: 0.0,
@@ -23125,7 +23131,7 @@
                                                         axis: None,
                                                         style: Thread,
                                                         offset: 0.0,
-                                                        range: Some((-8.500000000000057, 36.49999999999994)),
+                                                        range: Some((16.499999999999943, 61.49999999999994)),
                                                         start_angle: 0.0,
                                                         sweep: 360.0,
                                                         lead: 0.0,
@@ -28219,6 +28225,7 @@
                                         axis_tolerance: 0.1,
                                         retract: 25.0,
                                         angle_decimals: 3,
+                                        winding: Rollover,
                                     ),
                                 ),
                                 chain: Some((
@@ -28309,7 +28316,7 @@
                                 source_name: "5-axis mill",
                                 document_name: "",
                                 version_name: "",
-                                key: 322407024306690491,
+                                key: 1951633722391912035,
                             )),
                             setups: [
                                 (

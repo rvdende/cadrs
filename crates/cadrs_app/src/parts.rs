@@ -633,7 +633,8 @@ pub struct PartCache {
     /// The Assembly tab whose instances are shown (P3B.1), if one is active.
     pub assembly: Option<ElementId>,
     /// Parts drawn moved from where their solids are (a drag or an animation in an assembly,
-    /// [`crate::assembly::AssemblyParts::live`]): their meshes by their transform, their edges
+    /// [`crate::assembly::AssemblyParts::live`]; a CAM Studio's work turning with the machine's
+    /// table, `cam::machine_view::place_work`): their meshes by their transform, their edges
     /// moved as drawn, so the solids aren't placed again every frame.
     pub moved: HashMap<PartId, Mat4>,
     /// While the Extrude dialog edits an Add: the body it adds, drawn as the translucent
@@ -1496,8 +1497,9 @@ fn update_part_cache(
         }
         return;
     }
-    // Only an assembly's drag draws parts moved.
-    if !cache.moved.is_empty() {
+    // Only an assembly's drag draws parts moved, and a CAM Studio's preview that keeps the
+    // machine still (the work turning with its table, `cam::machine_view::place_work`).
+    if !cache.moved.is_empty() && !matches!(el.kind, cadrs_core::ElementKind::CamStudio(_)) {
         cache.moved.clear();
     }
     // Its sketches on parts regenerating in the background after a command: rebuilt once they

@@ -91,6 +91,33 @@ pub struct RotaryPost {
     pub retract: f64,
     /// Decimals of the angles.
     pub angle_decimals: u32,
+    /// How a rotary axis without stops is written.
+    pub winding: Winding,
+}
+
+/// How a rotary axis that turns without stops (a chuck winding round a worm, a platter) is
+/// written. The program never touches the control's work offsets to count it down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum Winding {
+    /// The control rolls the axis over (LinuxCNC's `WRAPPED_ROTARY`, Fanuc's rotary roll-over
+    /// parameter, Haas's and Mach3's roll-over settings): angles are written from 0 up to 360,
+    /// and no block turns it half a turn or more, so the control's shortest way round is the
+    /// way the cut goes.
+    #[default]
+    Rollover,
+    /// Angles as turned, however many turns: for a control that doesn't roll the axis over.
+    /// The axis comes back the way it went at the program's end.
+    Wound,
+}
+
+impl Winding {
+    pub const ALL: [Winding; 2] = [Winding::Rollover, Winding::Wound];
+    pub fn label(self) -> &'static str {
+        match self {
+            Winding::Rollover => "Rolls over (0 to 360)",
+            Winding::Wound => "Wound (angles as turned)",
+        }
+    }
 }
 
 impl Default for RotaryPost {
@@ -105,6 +132,7 @@ impl Default for RotaryPost {
             axis_tolerance: 0.1,
             retract: 25.0,
             angle_decimals: 3,
+            winding: Winding::Rollover,
         }
     }
 }
@@ -114,6 +142,12 @@ impl RotaryPost {
     pub fn for_dialect(d: Dialect) -> RotaryPost {
         RotaryPost {
             tcp: matches!(d, Dialect::Fanuc | Dialect::Haas),
+            // (GRBL has no rolling-over axis; grblHAL's needs a build option.)
+            winding: if d == Dialect::Grbl {
+                Winding::Wound
+            } else {
+                Winding::Rollover
+            },
             ..RotaryPost::default()
         }
     }
@@ -172,15 +206,6 @@ impl RotaryPost {
             return None;
         }
         self.tcp_codes(d, h)
-    }
-
-    /// The block that tells the control a rotary axis now reads `value` where it stands (a
-    /// continuous axis wound many turns is counted from nearer zero again, with no unwinding).
-    pub fn reset_code(d: Dialect, letter: char, value: &str) -> String {
-        match d {
-            Dialect::LinuxCnc | Dialect::Grbl => format!("G10 L20 P0 {letter}{value}"),
-            Dialect::Fanuc | Dialect::Haas | Dialect::Mach3 => format!("G92 {letter}{value}"),
-        }
     }
 }
 
@@ -311,7 +336,9 @@ pub(super) struct Axes {
     /// The next lean the toolpath makes after the move in hand (the table mount's
     /// coordinates): what a rotary axis the tool's lean leaves free is turned to.
     ahead: Option<P3>,
-    dialect: Dialect,
+    winding: Winding,
+    /// The time of feed moves too small to write, owed to the next block.
+    carried: f64,
 }
 
 impl Axes {
@@ -365,7 +392,8 @@ impl Axes {
             length_dropped: false,
             rewinds: 0,
             ahead: None,
-            dialect: d,
+            winding: s.rotary.winding,
+            carried: 0.0,
         })
     }
 
@@ -386,24 +414,9 @@ impl Axes {
             .solve_toward(cl, self.length, &self.q, self.ahead)
     }
 
-    /// A continuous rotary axis wound a turn or more is counted from nearer zero again: the
-    /// control is told what it reads where it stands, and nothing moves. (Not under tool
-    /// centre point control, which such a code would upset.)
-    fn unwind(&mut self, w: &mut Writer, past: f64) {
-        for (k, (i, letter)) in self.rot.clone().into_iter().enumerate() {
-            let j = self.chain.joint(i);
-            if !j.continuous || self.q[i].abs() < past {
-                continue;
-            }
-            let reduced = self.q[i] - 360.0 * (self.q[i] / 360.0).round();
-            let text = decimal(reduced, self.angle_decimals, w.s.decimal_point);
-            w.block(&RotaryPost::reset_code(self.dialect, letter, &text));
-            self.q[i] = reduced;
-            self.written[k] = Some(text);
-            if let Some(last) = &mut self.last {
-                last[3 + k] = reduced;
-            }
-        }
+    /// Whether the rotary axis `k` (among the written ones) is written rolling over.
+    fn rolls(&self, k: usize) -> bool {
+        self.winding == Winding::Rollover && self.chain.joint(self.rot[k].0).continuous
     }
 
     /// The cutter location (the table mount's coordinates) of a point and an axis given in
@@ -446,7 +459,15 @@ impl Axes {
     fn rotary_words(&mut self, w: &Writer, v: &[f64]) -> String {
         let mut out = String::new();
         for (k, (_, letter)) in self.rot.iter().enumerate() {
-            let text = decimal(v[3 + k], self.angle_decimals, w.s.decimal_point);
+            let angle = if self.rolls(k) {
+                // (Rounded first, so 359.9996 is written 0, not 360.)
+                let step = 10f64.powi(-(self.angle_decimals.min(6) as i32));
+                let a = (v[3 + k] / step).round() * step;
+                a.rem_euclid(360.0) % 360.0
+            } else {
+                v[3 + k]
+            };
+            let text = decimal(angle, self.angle_decimals, w.s.decimal_point);
             if self.written[k].as_deref() != Some(text.as_str()) {
                 let _ = write!(out, " {letter}{text}");
                 self.written[k] = Some(text);
@@ -484,7 +505,6 @@ impl Axes {
             });
             let next = leans.find(|a| dist(*a, axis) > 1e-9);
             self.look_ahead(next);
-            self.unwind(w, 180.0);
             match self.solve(&cl) {
                 Ok(q) => {
                     let v = self.words(&cl, &q);
@@ -527,6 +547,23 @@ impl Axes {
     /// The operation's end: the feed mode back, tool centre point control off.
     pub fn end(&mut self, w: &mut Writer, d: Dialect, s: &PostSettings, tool: u32) {
         self.flush(w);
+        // Under tool centre point control the tool lifts well clear along its own axis before
+        // the control is told to stop keeping the tip (some controls move the axes as it
+        // stops).
+        if self.tcp
+            && let Some(at) = self.cl
+        {
+            let up = Cl {
+                tip: add(at.tip, scale(at.axis, self.retract)),
+                axis: at.axis,
+            };
+            if let Ok(q) = self.chain.solve(&up, self.length, &self.q) {
+                let v = self.words(&up, &q);
+                self.go_rapid(w, &v, false);
+                self.q = q;
+                self.cl = Some(up);
+            }
+        }
         if self.inverse {
             w.block("G94");
             self.inverse = false;
@@ -538,7 +575,6 @@ impl Axes {
             }
             self.length_dropped = drops;
         }
-        self.unwind(w, 180.0);
         w.at = [None; 3];
         w.mode = None;
     }
@@ -553,9 +589,6 @@ impl Axes {
         let axis = self.lean.take().unwrap_or(self.axis);
         self.axis = axis;
         let cl = self.cl_of(p, axis);
-        if !self.tcp {
-            self.unwind(w, 360.0);
-        }
         let q = match self.solve(&cl) {
             Ok(q) => q,
             Err(e) => return self.fail(e),
@@ -596,6 +629,27 @@ impl Axes {
     /// A rapid to the words `v`; the operation's first goes across before it goes down (the
     /// tool comes from its home height).
     fn go_rapid(&mut self, w: &mut Writer, v: &[f64], across_first: bool) {
+        // (A rolling-over axis turning half a turn or more goes in pieces, as a feed does.)
+        if let Some(from) = self.last.clone()
+            && !across_first
+        {
+            let most = (0..self.rot.len())
+                .filter(|k| self.rolls(*k))
+                .map(|k| (v[3 + k] - from[3 + k]).abs())
+                .fold(0.0, f64::max);
+            if most >= MOST_ROLLED {
+                let n = (most / MOST_ROLLED).floor() as usize + 1;
+                for p in 1..n {
+                    let f = p as f64 / n as f64;
+                    let at: Vec<f64> = from.iter().zip(v).map(|(a, b)| a + (b - a) * f).collect();
+                    self.rapid_block(w, &at, false);
+                }
+            }
+        }
+        self.rapid_block(w, v, across_first);
+    }
+
+    fn rapid_block(&mut self, w: &mut Writer, v: &[f64], across_first: bool) {
         // (A rapid takes no feed: inverse time stays on through it.)
         let turn = self.rotary_words(w, v);
         let p = [v[0], v[1], v[2]];
@@ -794,6 +848,43 @@ impl Axes {
     }
 
     fn feed_block(&mut self, w: &mut Writer, v: &[f64], minutes: f64, feed: f64) {
+        // A rolling-over axis turns the shortest way to each angle written: a block turning it
+        // half a turn or more is written in pieces that each turn less.
+        if let Some(from) = self.last.clone() {
+            let most = (0..self.rot.len())
+                .filter(|k| self.rolls(*k))
+                .map(|k| (v[3 + k] - from[3 + k]).abs())
+                .fold(0.0, f64::max);
+            if most >= MOST_ROLLED {
+                let n = (most / MOST_ROLLED).floor() as usize + 1;
+                for p in 1..=n {
+                    let f = p as f64 / n as f64;
+                    let at: Vec<f64> = from.iter().zip(v).map(|(a, b)| a + (b - a) * f).collect();
+                    self.one_block(w, &at, minutes / n as f64, feed);
+                }
+                return;
+            }
+        }
+        self.one_block(w, v, minutes, feed);
+    }
+
+    fn one_block(&mut self, w: &mut Writer, v: &[f64], minutes: f64, feed: f64) {
+        // A move no word would show (a hair's breadth) is no block of its own: its time goes
+        // to the next.
+        let minutes = minutes + std::mem::take(&mut self.carried);
+        if let Some(from) = &self.last {
+            let within = 0.5 * 10f64.powi(-(w.s.decimals.min(6) as i32));
+            let angle = 0.5 * 10f64.powi(-(self.angle_decimals.min(6) as i32));
+            let unseen = from
+                .iter()
+                .zip(v)
+                .enumerate()
+                .all(|(k, (a, b))| (a - b).abs() < if k < 3 { within } else { angle });
+            if unseen {
+                self.carried = minutes;
+                return;
+            }
+        }
         let from = self.last.clone();
         let (lin, turn) = match &from {
             Some(f) => (
@@ -845,6 +936,10 @@ impl Axes {
     }
 }
 
+/// The most a rolling-over axis turns in one block (degrees): well short of the half turn
+/// past which the control's shortest way round is the other way.
+const MOST_ROLLED: f64 = 170.0;
+
 /// Whether every move but the last lies on the straight way from `base` to the last, one
 /// after another along it (within half of the last decimal a word is written to: a faceted
 /// surface's hair's breadths don't break a helix into a block a facet).
@@ -878,6 +973,26 @@ fn on_one_line(base: &[f64], moves: &[Pending], within: f64) -> bool {
         last = f;
     }
     true
+}
+
+/// The note at a program's head for each rotary axis written rolling over: what the control
+/// must be set to.
+pub(super) fn rollover_notes(chain: &Chain, s: &PostSettings) -> Vec<String> {
+    if s.rotary.winding != Winding::Rollover {
+        return Vec::new();
+    }
+    let Ok((_, rot)) = words_of(chain) else {
+        return Vec::new();
+    };
+    rot.iter()
+        .filter(|(i, _)| chain.joint(*i).continuous)
+        .map(|(_, c)| {
+            format!(
+                "{c} rolls over: set the control to turn it the shortest way to angles 0 to 360 \
+                 (LinuxCNC WRAPPED_ROTARY, Fanuc rotary roll-over)"
+            )
+        })
+        .collect()
 }
 
 /// The rotary axes back to zero with the tool up clear, before work in the work offset's own

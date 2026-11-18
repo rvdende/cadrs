@@ -610,6 +610,30 @@ pub fn smooth_axes(tips: &[P3], axes: &mut [P3], span: f64) {
 /// move whose ends lean opposite ways.
 const MOST_TURN_MERGED: f64 = 2.0 * POLE;
 
+/// The most the tool's lean changes for a millimetre of a pass (degrees): where the surface's
+/// normal turns faster (a hole's mouth, a sharp edge) the tool turns no faster than a
+/// machine's head or table can follow at feed, and is backed off where that leaves it short
+/// of the surface.
+pub const MOST_TURN_PER_MM: f64 = 10.0;
+
+/// The axes of a pass held to turning at most `rate` degrees a millimetre between neighbours:
+/// forward, then back, so a sudden turn is spread both ways.
+pub fn limit_turn_rate(tips: &[P3], axes: &mut [P3], rate: f64) {
+    let step = |i: usize, j: usize, axes: &mut [P3]| {
+        let most = rate * dist(tips[i], tips[j]);
+        let turn = angle_between(axes[i], axes[j]);
+        if turn > most + 1e-9 {
+            axes[j] = slerp(axes[i], axes[j], most / turn);
+        }
+    };
+    for k in 1..axes.len() {
+        step(k - 1, k, axes);
+    }
+    for k in (1..axes.len()).rev() {
+        step(k, k - 1, axes);
+    }
+}
+
 /// A pass with the poses dropped that lie on the way between their neighbours: the tip
 /// within `tol` of the straight line, the axis within a fifth of a degree of its turn.
 pub fn simplify(poses: &[Pose], tol: f64) -> Vec<Pose> {
@@ -756,7 +780,31 @@ pub fn tilt(input: &Input, tp: Toolpath) -> Result<Toolpath, String> {
                 }
             })
             .collect();
+        // Off the part the tool leans as it does at the nearest place on it: the lean neither
+        // ramps up from upright as a pass comes onto the part nor drops as it runs off.
+        let on: Vec<usize> = (0..places.len()).filter(|i| hits[*i].is_some()).collect();
+        if !on.is_empty() {
+            for i in 0..places.len() {
+                if hits[i].is_none() {
+                    let k = on.partition_point(|j| *j < i);
+                    let near = match (k.checked_sub(1).map(|a| on[a]), on.get(k)) {
+                        (Some(a), Some(b)) => {
+                            if i - a <= b - i {
+                                a
+                            } else {
+                                *b
+                            }
+                        }
+                        (Some(a), None) => a,
+                        (None, Some(b)) => *b,
+                        (None, None) => continue,
+                    };
+                    axes[i] = axes[near];
+                }
+            }
+        }
         smooth_axes(&places, &mut axes, p.tilt.smoothing);
+        limit_turn_rate(&places, &mut axes, MOST_TURN_PER_MM);
         // How far up its axis a pose must back off for the leant cutter (grown by the stock to
         // leave) to clear the part: its flank, or the rim of a flat end leant over.
         let mut clear = |tip: P3, axis: P3| -> f64 {

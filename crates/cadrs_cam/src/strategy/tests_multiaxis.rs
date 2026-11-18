@@ -364,14 +364,16 @@ fn a_parallel_finish_square_to_a_dome_holds_the_ball_on_it_with_its_axis_along_t
             assert!(len(centre) >= 34.0 - 0.05, "{q:?}: {}", len(centre));
         }
         // Where the tool leans less than its limit it is square to the dome: its axis along
-        // the radius through its tip, and its tip on the dome.
-        if lean < 59.0 && q.tip[2] > 16.0 {
+        // the radius through its tip, and its tip on the dome. (Not at the dome's foot: there
+        // the plate's normal turns 90° to the dome's at once, and the tool turns at most
+        // `MOST_TURN_PER_MM`, so it comes square to the dome a few millimetres up.)
+        if lean < 59.0 && q.tip[2] > 20.0 {
             assert!((len(q.tip) - 30.0).abs() < 0.06, "{q:?}: {}", len(q.tip));
             assert!(angle_between(q.axis, normalize(q.tip)) < 4.0, "{q:?}");
             on_dome += 1;
         }
     }
-    assert!(on_dome > 60 && most > 55.0, "{on_dome} {most}");
+    assert!(on_dome > 40 && most > 55.0, "{on_dome} {most}");
     // Upright, the same pattern is the 3-axis one: no lean at all.
     p.tilt.mode = AxisMode::Fixed;
     assert!(
@@ -713,4 +715,27 @@ fn a_leaning_tools_holder_is_kept_off_the_part_and_the_whole_tool_off_the_workho
     let over = guard.lift(&clear, &mut scratch);
     // (The ball rests on the clamp's top edge: a little under its full 8 mm.)
     assert!(over > 7.0 && over <= 8.0 + 1e-9, "{over}");
+}
+
+#[test]
+fn a_leaning_tool_turns_no_faster_than_its_rate_along_a_pass() {
+    use super::multiaxis::{MOST_TURN_PER_MM, limit_turn_rate};
+    // A pass whose surface normal flips 90° between two places a millimetre apart.
+    let tips: Vec<P3> = (0..21).map(|k| [k as f64 * 0.5, 0.0, 0.0]).collect();
+    let mut axes: Vec<P3> = (0..21)
+        .map(|k| {
+            if k < 10 {
+                normalize([-1.0, 0.0, 1.0])
+            } else {
+                normalize([1.0, 0.0, 1.0])
+            }
+        })
+        .collect();
+    limit_turn_rate(&tips, &mut axes, MOST_TURN_PER_MM);
+    for w in axes.windows(2) {
+        assert!(angle_between(w[0], w[1]) <= MOST_TURN_PER_MM * 0.5 + 1e-9);
+    }
+    // The pass starts as it leant, and turns over toward the other side after the flip.
+    assert!((angle_between(axes[0], normalize([-1.0, 0.0, 1.0]))).abs() < 1e-9);
+    assert!(axes[20][0] > 0.0 && axes[9][0] < 0.0);
 }

@@ -137,6 +137,9 @@ pub struct CamUi {
     /// Show the active job's machine in the view, when it is an assembly's
     /// ([`machine_view`]).
     pub show_machine: bool,
+    /// What the view keeps still while a preview moves that machine: the part or the machine
+    /// ([`machine_view::Relative`]).
+    pub relative: machine_view::Relative,
     /// The last row clicked and when (double-clicks edit).
     last_click: Option<(CamId, Instant)>,
     /// Frame the parts once they're built (the first ones were just inserted).
@@ -150,6 +153,7 @@ impl Default for CamUi {
             collapsed: HashSet::new(),
             show_stock: true,
             show_machine: true,
+            relative: machine_view::Relative::default(),
             last_click: None,
             fit_pending: false,
         }
@@ -186,7 +190,8 @@ fn flag_pending_work(
 /// `preview-end` jumps it to the end; `preview-at F` to a fraction of it; `fit` zooms the view
 /// to the studio's parts and stock; `preview-op N F` jumps the preview to a fraction of its
 /// Nth operation (from 0); `preview-collision` to the next collision, paused there;
-/// `machine show|hide` shows or hides the job's machine, and
+/// `machine show|hide` shows or hides the job's machine, `machine relative part|machine` keeps
+/// the part or the machine still ([`machine_view::Relative`]), and
 /// `machine view AZ EL` looks at the whole machine with its own Z up
 /// ([`machine_view::view_machine`]).
 pub fn script(world: &mut World, arg: &str) {
@@ -262,6 +267,12 @@ pub fn script(world: &mut World, arg: &str) {
         },
         ["machine", "show"] => world.resource_mut::<CamUi>().show_machine = true,
         ["machine", "hide"] => world.resource_mut::<CamUi>().show_machine = false,
+        ["machine", "relative", "part"] => {
+            world.resource_mut::<CamUi>().relative = machine_view::Relative::Part;
+        }
+        ["machine", "relative", "machine"] => {
+            world.resource_mut::<CamUi>().relative = machine_view::Relative::Machine;
+        }
         _ => warn!("cam {arg}: not a CAM Studio step"),
     }
 }

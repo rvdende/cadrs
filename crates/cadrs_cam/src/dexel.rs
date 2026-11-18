@@ -1592,6 +1592,9 @@ impl TriDexel {
 
 /// The rays along `axis` through a closed mesh (`tris`, in lattice coordinates): see
 /// [`TriDexel::of_solid`].
+/// How far inside the lattice's outermost planes their rays are taken, in steps.
+const HAIR: f64 = 1e-7;
+
 fn solid_grid(tris: &[[P3; 3]], axis: usize, lat: &Lattice) -> Grid {
     let (b, c) = others(axis);
     let (nu, nv) = (lat.n[b], lat.n[c]);
@@ -1620,9 +1623,13 @@ fn solid_grid(tris: &[[P3; 3]], axis: usize, lat: &Lattice) -> Grid {
         let range = |k: usize, step: f64, count: usize| -> Option<(usize, usize)> {
             let lo = p.iter().map(|q| q[k]).fold(f64::INFINITY, f64::min);
             let hi = p.iter().map(|q| q[k]).fold(f64::NEG_INFINITY, f64::max);
+            // (A hair wider than the triangle: the rays in the lattice's outermost planes are
+            // taken a hair inside them, below.)
             let (i0, i1) = (
-                (lo / step).ceil().max(0.0),
-                (hi / step).floor().min(count as f64 - 1.0),
+                ((lo - 2.0 * HAIR * step) / step).ceil().max(0.0),
+                ((hi + 2.0 * HAIR * step) / step)
+                    .floor()
+                    .min(count as f64 - 1.0),
             );
             (i1 >= i0).then_some((i0 as usize, i1 as usize))
         };
@@ -1633,7 +1640,14 @@ fn solid_grid(tris: &[[P3; 3]], axis: usize, lat: &Lattice) -> Grid {
         };
         for v in v0..=v1 {
             for u in u0..=u1 {
-                let q = [u as f64 * lat.step[b], v as f64 * lat.step[c]];
+                // A ray in the lattice's outermost plane is taken a hair inside it: a solid that
+                // fills the lattice's box has faces lying in those planes, and a ray lying in a
+                // face would count as inside on one side of the box only.
+                let inside = |k: usize, i: usize, count: usize| {
+                    let (hair, at) = (HAIR * lat.step[k], i as f64 * lat.step[k]);
+                    at.clamp(hair, (count - 1) as f64 * lat.step[k] - hair)
+                };
+                let q = [inside(b, u, nu), inside(c, v, nv)];
                 // Inside, or on an edge the triangle owns: of the two triangles at an edge
                 // exactly one owns it (by which way the edge runs), so a ray through an edge
                 // or a vertex crosses the surface once, as a ray a hair to one side would.

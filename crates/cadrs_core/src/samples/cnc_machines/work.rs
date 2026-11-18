@@ -17,7 +17,7 @@
 //!
 //! The **Worm** has the sizes of the worm of [`crate::samples::gears::worm_drive`] (single
 //! start, module 2, diameter quotient 10, 50 long) and lies on the X axis from x 200 to 250,
-//! with a Ø20 chucking spigot at x 175…200: beyond the Test piece's dome, as the two are
+//! with a Ø20 chucking spigot at x 125…200: beyond the Test piece's dome, as the two are
 //! components of one CAM Studio, which shows them where they are modelled. It is made from
 //! plain features, the way it would be milled, as the Gear feature's worm builds without its
 //! thread for now ("Only the core is shown"): a Ø24 blank, and the space between the thread's
@@ -322,6 +322,11 @@ pub fn test_piece(s: &mut dyn Studio, el: ElementId) -> Result<(), CommandError>
 /// The worm: where it starts along X, its length, its module, the radii of its pitch cylinder,
 /// of its thread's tips and of its root, and its lead (π × the module for one start).
 pub const WORM_START: f64 = 200.0;
+/// The worm's chucking spigot's length: long enough to hold it well out from the chuck, so
+/// the spindle clears the jaws at the thread's start.
+pub const WORM_SPIGOT: f64 = 75.0;
+/// How far back from the thread the chuck's jaws grip the spigot.
+pub const WORM_GRIP: f64 = 50.0;
 pub const WORM_LENGTH: f64 = 50.0;
 pub const WORM_MODULE: f64 = 2.0;
 pub const WORM_PITCH_RADIUS: f64 = 10.0;
@@ -437,7 +442,7 @@ pub fn worm(s: &mut dyn Studio, el: ElementId) -> Result<(), CommandError> {
         On::Right,
         vec![circle(0.0, 0.0, 20.0)],
         &[v(0.0, 0.0)],
-        (WORM_START - 25.0, WORM_START),
+        (WORM_START - WORM_SPIGOT, WORM_START),
         Add,
         &me,
     )?;

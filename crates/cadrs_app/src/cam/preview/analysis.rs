@@ -50,6 +50,7 @@ pub(super) fn machine_run(
         chain: machine.kinematics(),
         work: run.work,
         track,
+        rolls: machine.post.rotary.winding == cadrs_core::cam::cadrs_cam::post::Winding::Rollover,
     };
     (Some(mr), warnings, events)
 }

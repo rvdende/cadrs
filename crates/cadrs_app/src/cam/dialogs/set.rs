@@ -1303,6 +1303,10 @@ pub(crate) fn set_controller(
             use cadrs_core::cam::cadrs_cam::post::RotaryFeed;
             s.rotary.feed = RotaryFeed::ALL[(*i).min(2)]
         }
+        ("rot-winding", Value::Index(i)) => {
+            use cadrs_core::cam::cadrs_cam::post::Winding;
+            s.rotary.winding = Winding::ALL[(*i).min(Winding::ALL.len() - 1)]
+        }
         ("rot-tol", Value::Number(n)) => s.rotary.tolerance = n.clamp(0.0001, 1.0),
         ("rot-axis-tol", Value::Number(n)) => s.rotary.axis_tolerance = n.clamp(0.001, 10.0),
         ("rot-retract", Value::Number(n)) => s.rotary.retract = n.max(0.0),

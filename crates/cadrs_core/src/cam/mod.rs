@@ -455,8 +455,39 @@ pub fn machine_key(doc: &Document, element: ElementId) -> u64 {
     let Some(asm) = doc.element(element).and_then(|e| e.assembly_model()) else {
         return 0;
     };
-    let text = format!("{:?}{:?}{:?}", asm.machine, asm.mates, asm.instances);
-    let b = blake3::hash(text.as_bytes());
+    let mut h = blake3::Hasher::new();
+    h.update(format!("{:?}{:?}{:?}", asm.machine, asm.mates, asm.instances).as_bytes());
+    // And what its parts are made from (a pivot moved in the machine's Part Studio moves the
+    // connectors picked on it), sub-assemblies' too, each source once.
+    let mut seen = vec![element];
+    let mut todo: Vec<ElementId> = Vec::new();
+    let sources = |asm: &crate::assembly::Assembly, todo: &mut Vec<ElementId>| {
+        for i in &asm.instances {
+            todo.push(match i.source {
+                crate::assembly::InstanceSource::Part { element, .. }
+                | crate::assembly::InstanceSource::Assembly { element }
+                | crate::assembly::InstanceSource::Studio { element, .. } => element,
+            });
+        }
+    };
+    sources(asm, &mut todo);
+    while let Some(e) = todo.pop() {
+        if seen.contains(&e) {
+            continue;
+        }
+        seen.push(e);
+        let Some(el) = doc.element(e) else { continue };
+        match el.assembly_model() {
+            Some(sub) => {
+                h.update(format!("{:?}{:?}", sub.mates, sub.instances).as_bytes());
+                sources(sub, &mut todo);
+            }
+            None => {
+                h.update(format!("{:?}", el.features()).as_bytes());
+            }
+        }
+    }
+    let b = h.finalize();
     u64::from_le_bytes(b.as_bytes()[..8].try_into().unwrap())
 }
 

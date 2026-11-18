@@ -178,7 +178,7 @@ fn the_parts_are_where_they_were_designed() {
         cnc::WORM,
         &[(
             work::WORM_PART,
-            [work::WORM_START - 25.0, -tip, -tip],
+            [work::WORM_START - work::WORM_SPIGOT, -tip, -tip],
             [work::WORM_START + work::WORM_LENGTH, tip, tip],
         )],
     );
@@ -900,11 +900,7 @@ fn the_4_axis_toolpaths_compute() {
     assert!(nc.contains("O1002") || nc.contains("T2 M6"), "{nc}");
     assert!(nc.contains("G93") && nc.contains(" A"), "{nc}");
     // Every control posts both setups. A machine with one rotary axis has no tool centre
-    // point control and no tilted working plane: plain X Y Z A. The chuck winds round the
-    // worm hundreds of turns over its passes, but the control is told where the axis reads
-    // each time the tool leaves the cut: the words never pass one pass's own turns (the
-    // shaft's spiral is 22 turns in one block), far inside a control's word limit, and the
-    // program never spends minutes unwinding.
+    // point control and no tilted working plane: plain X Y Z A.
     let piece = HashMap::from([
         (cam4::FACE, face_tp.clone()),
         (cam4::FACE_ROUND, round_tp.clone()),
@@ -919,15 +915,15 @@ fn the_4_axis_toolpaths_compute() {
             for five_axis in ["G43.4", "G234", "M428", "G68.2"] {
                 assert!(!nc.contains(five_axis), "{d:?} wrote {five_axis}");
             }
+            // The program never touches the work offsets to count the axis down.
+            for offsets in ["G92", "G10 L20", "G10 L2 "] {
+                assert!(!nc.contains(offsets), "{d:?} writes {offsets}");
+            }
+            // On a control that rolls the axis over (all but GRBL) the angles stay within a
+            // turn; GRBL's are written as turned.
             let most = largest_word(&nc, 'A');
-            assert!(most < 22.5 * 360.0, "{d:?}: A{most}");
-            // The last turn home is half a turn at the most.
-            let home = nc
-                .lines()
-                .rev()
-                .find(|l| l.contains(" A") && l.contains("G0"))
-                .unwrap();
-            assert!(home.contains("A0"), "{d:?}: {home}");
+            let rolls = d != cadrs_cam::Dialect::Grbl;
+            assert!(!rolls || most < 360.0, "{d:?}: A{most}");
         }
     }
 }
@@ -1066,7 +1062,7 @@ fn the_5_axis_toolpaths_compute() {
     // stands upright (at the dome's top, across a hole's mouth).
     for (d, nc) in on_every_control(&doc, cam5::STUDIO, cam5::SETUP, &paths) {
         assert!(!nc.contains("Rewind"), "{d:?} rewinds");
-        assert!(largest_word(&nc, 'C') < 1080.0, "{d:?}");
+        assert!(!nc.contains("G92") && !nc.contains("G10 L20"), "{d:?}");
     }
     let nc = posted(&doc, cam5::STUDIO, cam5::SETUP, &paths);
     assert!(nc.contains("O1001"), "{nc}");
@@ -1075,4 +1071,30 @@ fn the_5_axis_toolpaths_compute() {
     assert!(moves.iter().any(|m| m.angle('B').abs() > 40.0), "{nc}");
     assert!(moves.iter().any(|m| m.angle('C').abs() > 80.0), "{nc}");
     assert_eq!(nc.matches("G68.2").count(), 1, "{nc}");
+}
+
+/// A job's machine is worked out again when the machine's parts change, not only its mates:
+/// the key it is kept by takes in the Part Studio its instances come from.
+#[test]
+fn the_machine_key_follows_the_machines_parts() {
+    use cadrs_core::cam::machine_key;
+    use cadrs_core::document::ElementKind;
+    let doc = cnc::document().unwrap();
+    let before = machine_key(&doc, cnc::MILL_5);
+    // The same document, a feature of "Machine parts" renamed.
+    let mut changed = doc.clone();
+    let el = changed.element_mut(cnc::MACHINE_PARTS).unwrap();
+    let ElementKind::PartStudio { features, .. } = &mut el.kind else {
+        panic!("Machine parts is a Part Studio");
+    };
+    features[0].name.push_str(" (moved)");
+    assert_ne!(machine_key(&changed, cnc::MILL_5), before);
+    // Another studio's change doesn't.
+    let mut other = doc.clone();
+    let el = other.element_mut(cnc::WORM).unwrap();
+    let ElementKind::PartStudio { features, .. } = &mut el.kind else {
+        panic!("Worm is a Part Studio");
+    };
+    features[0].name.push_str(" (moved)");
+    assert_eq!(machine_key(&other, cnc::MILL_5), before);
 }
