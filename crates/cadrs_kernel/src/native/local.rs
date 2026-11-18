@@ -2756,6 +2756,25 @@ fn ruled_through(breaks: Vec<f64>, whole: bool, rims: &dyn Fn(f64) -> [P3; 2]) -
     )))
 }
 
+/// Where a cylinder's face across the pull, level with the neutral plane at both its sides,
+/// is farthest from that plane: the angle to cut it at ([`draft`]). `None` for any other face.
+fn two_rulings(b: &Body, fi: usize, spec: &DraftSpec, pull: &V3) -> Option<f64> {
+    let Surface::Cylinder { f: fr, r } = &b.faces[fi].surf else {
+        return None;
+    };
+    if spec.neutral_normal.is_some() || fr.z.dot(pull).abs() > tol::ANGULAR * fr.z.norm() {
+        return None;
+    }
+    let ((u0, u1), _) = super::heal_split::face_uv_box(b, fi)?;
+    let level = |u: f64| (fr.o + (fr.x * u.cos() + fr.y * u.sin()) * *r - spec.neutral).dot(pull);
+    let on = tol::POINT.max(tol::REL_POINT * r);
+    if level(u0).abs() > on || level(u1).abs() > on || (u1 - u0).abs() < tol::ANGULAR_POINT {
+        return None;
+    }
+    let far = super::math::minimize(|u| -level(u).abs(), u0, u1);
+    (level(far).abs() > on).then_some(far)
+}
+
 /// A cylinder's face drafted where the cylinder doesn't run along the pull (and is no round
 /// between two of the faces drafted): through the curve the cylinder meets the neutral plane
 /// in, each ruling the pull leant by the angle against the face's outward normal's part
@@ -2779,37 +2798,6 @@ fn cylinder_across(
     let no_reach =
         || KernelError::Unsupported("drafting a cylinder that doesn't reach the neutral plane");
     let ((u0, u1), _) = super::heal_split::face_uv_box(b, fi).ok_or_else(no_reach)?;
-    // The neutral plane has to cut the face itself: the cylinder run on to a plane the face
-    // stops short of meets it somewhere else altogether (its axis isn't the pull's), and
-    // the face through that curve is another face.
-    let level = (spec.neutral - P3::origin()).dot(pull);
-    let extent = b.face_bbox(fi);
-    let (mut low, mut high) = (f64::INFINITY, f64::NEG_INFINITY);
-    for i in 0..8 {
-        let corner = P3::new(
-            if i & 1 == 0 {
-                extent.min.x
-            } else {
-                extent.max.x
-            },
-            if i & 2 == 0 {
-                extent.min.y
-            } else {
-                extent.max.y
-            },
-            if i & 4 == 0 {
-                extent.min.z
-            } else {
-                extent.max.z
-            },
-        );
-        let h = (corner - P3::origin()).dot(pull);
-        (low, high) = (low.min(h), high.max(h));
-    }
-    let slack = tol::POINT.max(tol::REL_POINT * r);
-    if level < low - slack || level > high + slack {
-        return Err(no_reach());
-    }
     let sign = if f.sense { 1.0 } else { -1.0 };
     let (sa, ca) = spec.angle.sin_cos();
     let reach = 4.0 * b.bbox().diagonal().max(tol::POINT);
@@ -2830,11 +2818,15 @@ fn cylinder_across(
         let (l0, l1) = (level(u0), level(u1));
         // (One ruling only: a face level with the plane at both its sides, a groove cut
         // down from it, has two, and no one plane through both.)
-        let on = tol::POINT.max(tol::REL_POINT * r);
-        if l0 * l1 > 0.0 || (l0.abs() <= on && l1.abs() <= on) {
-            return Err(no_reach());
-        }
-        let u = super::math::root_from(level, (u0, l0), (u1, l1));
+        let near = tol::POINT.max(tol::REL_POINT * r);
+        // (A side level with the plane is its ruling, whichever way rounding leaves it.)
+        let u = match (l0.abs() <= near, l1.abs() <= near) {
+            (true, true) => return Err(no_reach()),
+            (true, false) => u0,
+            (false, true) => u1,
+            (false, false) if l0 * l1 > 0.0 => return Err(no_reach()),
+            (false, false) => super::math::root_from(level, (u0, l0), (u1, l1)),
+        };
         let on = fr.o + radial(u) * r;
         let lean = ruling(u).ok_or_else(no_reach)?;
         let t = fr.z.normalize();
@@ -3127,6 +3119,53 @@ pub fn draft(k: &mut NativeKernel, body: BodyId, spec: &DraftSpec) -> Result<OpR
     }
     if spec.tangent_propagation {
         faces = tangent_closure(&b, faces);
+    }
+    // A cylinder across the pull that is level with the neutral plane at both its sides (a
+    // groove cut down from it) has two rulings there, and no one plane through both: the
+    // face is cut along the ruling farthest from the plane, and each part leans about its
+    // own.
+    let cuts: Vec<(usize, f64)> = faces
+        .iter()
+        .filter_map(|&fi| two_rulings(&b, fi, spec, &pull).map(|u| (fi, u)))
+        .collect();
+    if !cuts.is_empty() {
+        let mut cut = (*b).clone();
+        let mut of: Vec<usize> = (0..b.faces.len()).collect();
+        let mut picked = faces.clone();
+        for (fi, u) in cuts {
+            let parts =
+                super::heal_split::split_face_iso(&mut cut, fi, super::heal_split::Dir::U, &[u])?;
+            if parts.len() < 2 {
+                return Err(KernelError::Unsupported(
+                    "drafting a cylinder level with the neutral plane at both sides",
+                ));
+            }
+            of.resize(cut.faces.len(), fi);
+            for &p in &parts {
+                of[p] = fi;
+                if !picked.contains(&p) {
+                    picked.push(p);
+                }
+            }
+        }
+        let cut_body = k.insert(cut);
+        let drafted = draft(
+            k,
+            cut_body,
+            &DraftSpec {
+                faces: picked.iter().map(|&f| FaceId(f as u64)).collect(),
+                tangent_propagation: false,
+                ..spec.clone()
+            },
+        );
+        k.release(cut_body);
+        let mut drafted = drafted?;
+        // (The faces of the body given, not of the one cut.)
+        for (_, from) in &mut drafted.history.modified {
+            from.body = body;
+            from.face = FaceId(of[from.face.0 as usize] as u64);
+        }
+        return Ok(drafted);
     }
     // Rounds among them (a fillet between two of the faces, reached across its smooth
     // edges): taken off, the faces drafted, and rounded again at the same radius.

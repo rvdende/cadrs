@@ -143,6 +143,54 @@ pub fn thicken(k: &mut NativeKernel, spec: &ThickenSpec) -> Result<OpResult> {
     Ok(t.into_result(k))
 }
 
+/// The strip that leaves a one-face sheet along `edge` of it: from the edge, `width` along the
+/// face's own tangent there, away from the face. A face whose surface ends at the edge runs
+/// on in it. Its surface faces as the face's does along the edge.
+fn tangent_strip(sheet: &Body, edge: &super::topo::Edge, width: f64) -> Result<Body> {
+    const STATIONS: usize = 32;
+    let face = &sheet.faces[0];
+    let unsupported = || KernelError::Unsupported("a mitred join at this face's edge");
+    // Away from the face: against the way to its middle, from the edge's middle.
+    let (middle, _) = face_normal(sheet, 0).ok_or_else(unsupported)?;
+    let at = |t: f64| -> Option<(P3, V3, V3)> {
+        let p = edge.curve.point(t);
+        let (u, v) = face.surf.project(&p, None);
+        let n = face.surf.normal(u, v).try_normalize(tol::TINY)?;
+        let out = edge.curve.tangent(t).cross(&n).try_normalize(tol::TINY)?;
+        Some((p, n, out))
+    };
+    let tm = 0.5 * (edge.t[0] + edge.t[1]);
+    let (pm, nm, om) = at(tm).ok_or_else(unsupported)?;
+    let away = if om.dot(&(middle - pm)) > 0.0 {
+        -1.0
+    } else {
+        1.0
+    };
+    let params: Vec<f64> = (0..=STATIONS)
+        .map(|i| edge.t[0] + (edge.t[1] - edge.t[0]) * i as f64 / STATIONS as f64)
+        .collect();
+    let mut near = Vec::new();
+    let mut far = Vec::new();
+    for &t in &params {
+        let (p, _, out) = at(t).ok_or_else(unsupported)?;
+        near.push(p);
+        far.push(p + out * (away * width));
+    }
+    let curve = |pts: &[P3]| super::nurbs::NurbsCurve::interpolate(pts, &params, 3, None, None);
+    let ruled = |a: &[P3], b: &[P3]| {
+        Surface::Nurbs(std::sync::Arc::new(super::loft_build::skin(
+            &[curve(a), curve(b)],
+            &[0.0, 1.0],
+        )))
+    };
+    // (Ruled from the edge out, or from out to the edge: whichever faces as the face does.)
+    let mut surf = ruled(&near, &far);
+    if surf.normal(tm, 0.5).dot(&nm) < 0.0 {
+        surf = ruled(&far, &near);
+    }
+    super::face_build::face_from_surface(&surf, None)
+}
+
 /// Whether a surface is turned about the axis through `c` along `z`: a plane square to it, or
 /// a cylinder, cone, sphere or torus about it. Its section in every half-plane through the
 /// axis is then the same.
@@ -335,16 +383,26 @@ fn crease_fills(k: &mut NativeKernel, sheets: &[Body], spec: &ThickenSpec) -> Re
                             span(u0, u1, gu, face.surf.u_periodic()),
                             span(v0, v1, gv, face.surf.v_periodic()),
                         );
-                        let mut ext =
-                            super::face_build::face_from_surface(&face.surf, Some(domain))?;
+                        let run_on = super::face_build::face_from_surface(&face.surf, Some(domain));
+                        let mut ext = match run_on {
+                            Ok(ext) => ext,
+                            // A surface that doesn't run on past the crease (a B-spline, at
+                            // the end of its range): the strip that leaves it there along
+                            // its own tangent, three thicknesses wide.
+                            Err(_) => tangent_strip(&sheets[f], edge, 3.0 * d)?,
+                        };
                         if ext.faces[0].sense != face.sense {
                             super::topo::Body::reverse_face(&mut ext.faces[0]);
                         }
                         slab(&ext, sign * d)
                     };
+                    // (And no farther along the crease than it runs: within the tube round
+                    // it, whose ends are flat across its own.)
                     let fill = wider(f1).and_then(|a| {
                         let b = wider(f2)?;
-                        Ok(super::boolean::boolean_bodies(&a, &b, BoolOp::Intersect)?.body)
+                        let both = super::boolean::boolean_bodies(&a, &b, BoolOp::Intersect)?.body;
+                        let tube = super::offset::round::edge_tube(&sewn, e, 3.0 * d)?;
+                        Ok(super::boolean::boolean_bodies(&both, &tube, BoolOp::Intersect)?.body)
                     });
                     match fill {
                         Ok(fill) => fills.push(fill),

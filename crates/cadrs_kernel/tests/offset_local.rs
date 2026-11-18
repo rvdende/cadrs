@@ -2336,3 +2336,71 @@ fn a_draft_leans_a_grooves_wall() {
         "{top} {middle} {foot} {was}"
     );
 }
+
+/// A round-bottomed groove cut down into a block's top, its wall drafted forty-five degrees
+/// about the top. The wall is half a cylinder across the pull, level with the top at both
+/// its sides: two rulings on the neutral plane and no one plane through both, so it is cut
+/// along its lowest ruling and each half leans about its own. The groove becomes a vee three
+/// wide each side and three deep.
+#[test]
+fn a_draft_makes_a_round_groove_a_vee() {
+    let mut k = NativeKernel::new();
+    let block = k
+        .primitive(&Primitive::block(
+            Point3::new(-10.0, -10.0, 0.0),
+            Point3::new(10.0, 10.0, 10.0),
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let rod = k
+        .primitive(&Primitive::cylinder(
+            Point3::new(0.0, -15.0, 10.0),
+            Vector3::y(),
+            3.0,
+            30.0,
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let grooved = k
+        .boolean(BoolOp::Subtract, block, &[rod])
+        .unwrap()
+        .first()
+        .unwrap();
+    let wall = k
+        .faces(grooved)
+        .unwrap()
+        .iter()
+        .find(|f| f.kind == SurfaceKind::Cylinder)
+        .map(|f| f.id)
+        .unwrap();
+    let spec = DraftSpec {
+        faces: vec![wall],
+        angle: 45f64.to_radians(),
+        pull: Vector3::z_axis(),
+        neutral: Point3::new(0.0, 0.0, 10.0),
+        neutral_normal: None,
+        tangent_propagation: false,
+    };
+    let out = k.draft(grooved, &spec).unwrap();
+    let body = k.get(out.bodies[0]).unwrap();
+    let faults = body.check_with(cadrs_kernel::native::topo::CheckLevel::Full);
+    assert!(faults.is_empty(), "{faults:?}");
+    assert!(
+        body.faces
+            .iter()
+            .all(|f| matches!(f.surf, Surface::Plane { .. }))
+    );
+    let v = k.mass_properties(out.bodies[0]).unwrap().volume;
+    let want = 4000.0 - 0.5 * 6.0 * 3.0 * 20.0;
+    assert!((v - want).abs() < 1e-9 * want, "volume {v}, want {want}");
+    // Both halves continue the wall.
+    let halves = out
+        .history
+        .modified
+        .iter()
+        .filter(|(_, from)| from.body == grooved && from.face == wall)
+        .count();
+    assert_eq!(halves, 2);
+}

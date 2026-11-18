@@ -299,3 +299,177 @@ fn thicken_fills_a_crease_round_an_ellipse() {
         close(got, want, 1e-6);
     }
 }
+
+/// Two walls of a prism thickened outwards with a mitred join: a flat one and one over a
+/// Bézier curve, meeting along an upright edge where the curve ends. The curved wall's surface
+/// stops at that edge (its curve does), so it can't be run on past it: the mitre is cut from
+/// the strip that leaves it there along its own tangent. In plan the two bands are the walls'
+/// lengths by the thickness (the curved one's with half its turning by the thickness squared),
+/// and the corner between them the kite d² tan(θ/2), θ the turn from one wall to the other.
+#[test]
+fn thicken_mitres_a_wall_that_ends_at_the_crease() {
+    use std::f64::consts::PI;
+    let mut k = DefaultKernel::new();
+    let floor = Plane {
+        origin: Point3::origin(),
+        x_dir: Vector3::x_axis(),
+        normal: Vector3::z_axis(),
+    };
+    let poles = [[10.0, 5.0], [7.0, 9.0], [3.0, 9.0], [0.0, 5.0]];
+    let outline = Loop::from_point([0.0, 0.0])
+        .line_to([10.0, 0.0])
+        .line_to(poles[0])
+        .bezier_to(&poles[1..], &[1.0; 4])
+        .close();
+    let prism = k
+        .extrude_with(
+            &Profile::of(floor, vec![outline]),
+            &ExtrudeSpec::blind(Vector3::z_axis(), 6.0),
+        )
+        .unwrap()
+        .first()
+        .unwrap();
+    let faces = k.faces(prism).unwrap();
+    // The flat wall at x = 10 and the wall over the curve (the one that is no plane).
+    let sheet: Vec<FaceInput> = faces
+        .iter()
+        .filter(|f| {
+            f.kind != SurfaceKind::Plane
+                || ((f.center.x - 10.0).abs() < 1e-6 && (f.center.z - 3.0).abs() < 1e-6)
+        })
+        .map(|f| FaceInput {
+            body: prism,
+            face: f.id,
+            source: 1,
+        })
+        .collect();
+    assert_eq!(sheet.len(), 2);
+    let d = 0.5;
+    let thickened = |k: &mut DefaultKernel, sharp: bool| {
+        let r = k
+            .thicken_surfaces(&ThickenSpec {
+                bodies: vec![],
+                faces: sheet.clone(),
+                profiles: vec![],
+                along: d,
+                against: 0.0,
+                sharp,
+                source: 7,
+            })
+            .unwrap();
+        k.mass_properties(r.bodies[0]).unwrap().volume
+    };
+    let (round, sharp) = (thickened(&mut k, false), thickened(&mut k, true));
+    // The curve's length and its turning, by its own formula.
+    let at = |t: f64| {
+        let s = 1.0 - t;
+        let w = [s * s * s, 3.0 * s * s * t, 3.0 * s * t * t, t * t * t];
+        (0..4).fold([0.0, 0.0], |p, i| {
+            [p[0] + w[i] * poles[i][0], p[1] + w[i] * poles[i][1]]
+        })
+    };
+    let n = 200_000;
+    let length: f64 = (0..n)
+        .map(|i| {
+            let (a, b) = (at(i as f64 / n as f64), at((i + 1) as f64 / n as f64));
+            (b[0] - a[0]).hypot(b[1] - a[1])
+        })
+        .sum();
+    let heading = |a: [f64; 2], b: [f64; 2]| (b[1] - a[1]).atan2(b[0] - a[0]);
+    let turning = (heading(poles[2], poles[3]) - heading(poles[0], poles[1])).rem_euclid(2.0 * PI);
+    let corner = (heading(poles[0], poles[1]) - PI / 2.0).abs();
+    let bands = 5.0 * d + length * d + turning * d * d / 2.0;
+    close(round, 6.0 * (bands + corner * d * d / 2.0), 1e-5);
+    close(sharp, 6.0 * (bands + d * d * (corner / 2.0).tan()), 1e-5);
+}
+
+/// The same two walls, the curved one over a B-spline of two spans: its surface can't be run
+/// on past the edge where the curve ends, so the mitre is cut from the strip that leaves the
+/// wall there along its own tangent. Mitred, the join is the kite d² tan(θ/2) in plan where
+/// rounded it is the sector θ d²/2, θ the angle between the walls' normals at the edge.
+#[test]
+fn thicken_mitres_a_spline_wall_by_its_tangent_strip() {
+    use cadrs_kernel::native::NativeKernel;
+    let mut k = NativeKernel::new();
+    let floor = Plane {
+        origin: Point3::origin(),
+        x_dir: Vector3::x_axis(),
+        normal: Vector3::z_axis(),
+    };
+    let line = |a: [f64; 2], b: [f64; 2]| Curve2::Line {
+        a: Point2::new(a[0], a[1]),
+        b: Point2::new(b[0], b[1]),
+        source: None,
+    };
+    let outline = Loop {
+        curves: vec![
+            line([0.0, 0.0], [10.0, 0.0]),
+            line([10.0, 0.0], [10.0, 5.0]),
+            Curve2::spline(
+                3,
+                &[0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0],
+                &[[10.0, 5.0], [8.5, 7.5], [5.0, 9.0], [1.5, 7.5], [0.0, 5.0]],
+                &[],
+            ),
+            line([0.0, 5.0], [0.0, 0.0]),
+        ],
+    };
+    let prism = k
+        .extrude_with(
+            &Profile::of(floor, vec![outline]),
+            &ExtrudeSpec::blind(Vector3::z_axis(), 6.0),
+        )
+        .unwrap()
+        .first()
+        .unwrap();
+    let faces = k.faces(prism).unwrap();
+    let sheet: Vec<FaceInput> = faces
+        .iter()
+        .filter(|f| {
+            f.kind != SurfaceKind::Plane
+                || ((f.center.x - 10.0).abs() < 1e-6 && (f.center.z - 3.0).abs() < 1e-6)
+        })
+        .map(|f| FaceInput {
+            body: prism,
+            face: f.id,
+            source: 1,
+        })
+        .collect();
+    assert_eq!(sheet.len(), 2);
+    // The angle between the two walls' normals at the edge they share.
+    let turn = {
+        let b = k.get(prism).unwrap();
+        let at = Point3::new(10.0, 5.0, 3.0);
+        let normal = |f: &FaceInput| {
+            let face = &b.faces[f.face.0 as usize];
+            let (u, v) = face.surf.project(&at, None);
+            face.surf.normal(u, v).normalize() * if face.sense { 1.0 } else { -1.0 }
+        };
+        normal(&sheet[0])
+            .dot(&normal(&sheet[1]))
+            .clamp(-1.0, 1.0)
+            .acos()
+    };
+    assert!(turn > 0.1 && turn < 1.5, "{turn}");
+    let d = 0.5;
+    let mut thickened = |sharp: bool| {
+        let r = k
+            .thicken_surfaces(&ThickenSpec {
+                bodies: vec![],
+                faces: sheet.clone(),
+                profiles: vec![],
+                along: d,
+                against: 0.0,
+                sharp,
+                source: 7,
+            })
+            .unwrap();
+        k.mass_properties(r.bodies[0]).unwrap().volume
+    };
+    let (round, sharp) = (thickened(false), thickened(true));
+    let more = 6.0 * d * d * ((turn / 2.0).tan() - turn / 2.0);
+    assert!(
+        (sharp - round - more).abs() < 1e-5,
+        "{sharp} - {round} against {more}"
+    );
+}
