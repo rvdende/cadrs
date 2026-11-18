@@ -344,7 +344,7 @@ fn split_in(b: &mut Body, fi: usize, c: &Curve, t0: f64, t1: f64) -> Option<Vec<
     let f = b.faces[fi].clone();
     let surf = f.surf.clone();
     let polys = face_polygons(b, &f);
-    let size = b.face_bbox(fi).diagonal().max(1.0);
+    let size = b.face_bbox(fi).diagonal().max(tol::POINT);
     // (A curve fitted to points on the face, as a blend's rail, strays a little between them.)
     let on = 1e-4 * size;
     // 1. Which samples of the curve lie on the face.

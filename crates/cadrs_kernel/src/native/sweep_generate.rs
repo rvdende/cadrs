@@ -5870,7 +5870,7 @@ pub(super) fn cut(
     if tool.solids.len() != 1 {
         return None;
     }
-    let tb = (**k.get(target).ok()?).clone();
+    let tb = std::sync::Arc::clone(k.get(target).ok()?);
     let motion = Motion { steps };
     let tl = Tool::new(tool);
     let size = tl.size;

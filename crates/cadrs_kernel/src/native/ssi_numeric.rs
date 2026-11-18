@@ -1505,7 +1505,7 @@ pub fn intersect_stats(
         return (Intersection::default(), stats);
     }
     let size = r.diagonal().max(tol::ROUNDOFF);
-    let tol = REL_TOL * size.max(1.0);
+    let tol = REL_TOL * size.max(tol::POINT);
     let r = r.grow(tol::REL_POINT * size + tol);
     let ((pu0, pu1), (pv0, pv1)) = b.param_box();
     let bt = Dom::new(

@@ -774,7 +774,11 @@ fn tangent_along_shared_edge(
             !e.degenerate
                 && (e.t[1] - e.t[0]).abs() > 0.0
                 && edge_on_bounded(e, &g.surf, bound, 0.0, pool.tol)
-                && e.curve.longer_than(e.t[0], e.t[1], 1e-3)
+                && e.curve.longer_than(
+                    e.t[0],
+                    e.t[1],
+                    1e-3 * tol::small(f.bbox.diagonal().max(g.bbox.diagonal())),
+                )
                 && [0.25, 0.5, 0.75]
                     .iter()
                     .all(|k| tangent_at(f, g, &e.curve.point(e.t[0] + (e.t[1] - e.t[0]) * k)))
@@ -1235,7 +1239,7 @@ fn recognized_against(x: &Body, y: &Body) -> Option<Body> {
     if !x.faces.iter().any(|f| matches!(f.surf, Surface::Nurbs(_))) {
         return None;
     }
-    let size = x.bbox().diagonal().max(y.bbox().diagonal()).max(1.0);
+    let size = x.bbox().diagonal().max(y.bbox().diagonal()).max(tol::POINT);
     let tol = tol::REL * size;
     let mut surfs: Option<Vec<Surface>> = None;
     for (fi, f) in x.faces.iter().enumerate() {
@@ -1354,8 +1358,14 @@ fn apart_set_aside(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Option<
 /// result with crossing faces is refused ([`RunOpts::check_crossings`]): the first run's is
 /// handed back flagged ([`hand_back`]); a later run's is kept, should no run after it do
 /// better.
-fn ladder(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Result<BoolOut> {
+fn ladder(a: &Body, b: &Body, op: BoolOp, mut opts: BoolOptions) -> Result<BoolOut> {
     let _boxes = super::topo::keep_boxes(&[a, b]);
+    // The model's own tolerances where the session's are the defaults: the same for a part of
+    // a millimetre and more, smaller with a smaller part, whose retries would else be a good
+    // share of it ([`tol::Tolerances::for_model`]).
+    if opts.tol == tol::Tolerances::default() {
+        opts.tol = tol::Tolerances::for_model(a.bbox().diagonal().max(b.bbox().diagonal()));
+    }
     // The first result refused for crossing faces, made over as an accepted one would be.
     let mut refused: Option<BoolOut> = None;
     // A run's result: `Ok` when sound, else the refused one (with `clean` false) or the error.
@@ -2616,7 +2626,12 @@ fn snap_to(a: &mut Body, b: &Body, tol: f64) -> bool {
         .iter()
         .enumerate()
         .filter(|(_, f)| matches!(f.surf, Surface::Plane { .. } | Surface::Cylinder { .. }))
-        .map(|(i, _)| (i, b.face_bbox(i).grow(1e-3)))
+        .map(|(i, _)| {
+            (
+                i,
+                b.face_bbox(i).grow(1e-3 * tol::small(b.bbox().diagonal())),
+            )
+        })
         .collect();
     if targets.is_empty() {
         return false;
@@ -4277,7 +4292,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             .filter(|a| a.cut)
             .flat_map(|a| a.v)
             .collect();
-        let mut by_piece: HashMap<(usize, i64, i64, usize), usize> = HashMap::default();
+        let mut by_piece: HashMap<(usize, u64, u64, usize), usize> = HashMap::default();
         for (k, (fi, loops)) in subs.iter().enumerate() {
             for a in loops.iter().flatten().filter(|a| {
                 !a.cut
@@ -4286,12 +4301,9 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                     && !a.v.iter().any(|v| cut_ends.contains(v))
             }) {
                 let (lo, hi) = (a.t[0].min(a.t[1]), a.t[0].max(a.t[1]));
-                let key = (
-                    a.edge,
-                    (lo * 1e9).round() as i64,
-                    (hi * 1e9).round() as i64,
-                    faces[*fi].owner,
-                );
+                // (By the stretch's own parameters, bit for bit: two uses of one piece have
+                // the same, where rounding them to 1e-9 made one of two short pieces.)
+                let key = (a.edge, lo.to_bits(), hi.to_bits(), faces[*fi].owner);
                 match by_piece.get(&key) {
                     Some(&other) => {
                         let (x, y) = (root(&mut parent, k), root(&mut parent, other));
@@ -4433,7 +4445,9 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 PointClass::OnBoundary => {
                     // On the other body's boundary but not on a coincident face: decide by a
                     // point nudged inwards along the face.
-                    let q = p - n_out * 1e-5;
+                    // (A hundredth of a micron in, less on a part under a millimetre.)
+                    let q = p - n_out
+                        * (1e-5 * tol::small(a.bbox().diagonal().max(b.bbox().diagonal())));
                     if other.parity_inside(&q) {
                         Class::In
                     } else {
@@ -5031,7 +5045,9 @@ pub fn split_nonmanifold(b: &mut Body) {
             let len = (ed.t[1] - ed.t[0]).abs() * ed.curve.tangent(tm).norm();
             // (Not `clamp`: a NaN length takes 0.05 here.)
             #[allow(clippy::manual_clamp)]
-            let step = (len * 1e-2).min(0.05).max(1e-4);
+            let step = (len * 1e-2)
+                .min(0.05)
+                .max(1e-4 * tol::small(b.bbox().diagonal()));
             let (pu, su, sv) = f.surf.d1(uv.x, uv.y);
             let g = su * perp.x + sv * perp.y;
             let sgn = if g.dot(&w0) >= 0.0 { 1.0 } else { -1.0 };

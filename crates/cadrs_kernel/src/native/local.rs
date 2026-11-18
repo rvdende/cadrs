@@ -69,7 +69,7 @@ fn meet(surfs: &[&Surface], p: P3) -> Option<P3> {
         }
     }
     let worst = surfs.iter().map(|s| s.distance(&x)).fold(0.0, f64::max);
-    (worst < 1e-7).then_some(x)
+    (worst < tol::CONFUSION).then_some(x)
 }
 
 /// The straight edges whose two faces meet tangentially and still do on their new surfaces,
@@ -190,7 +190,10 @@ fn line_meet(c: &Curve, surfs: &[&Surface], p: P3) -> Option<P3> {
             }
         }
         let q = c.point(t);
-        surfs.iter().all(|s| s.distance(&q) < 1e-7).then_some(t)
+        surfs
+            .iter()
+            .all(|s| s.distance(&q) < tol::CONFUSION)
+            .then_some(t)
     };
     // (A circle's parameter within a turn: wrapped to the far end of a huge range, its
     // angle has lost its digits; a B-spline's within its range: sampled past it, it is
@@ -956,7 +959,9 @@ fn replace_surfaces_checked(
                     .map(|&f| &surfs[f])
                     .collect();
                 let p = line_meet(c, &others, b.verts[v].p)?;
-                fs.iter().all(|s| s.distance(&p) < 1e-7).then_some(p)
+                fs.iter()
+                    .all(|s| s.distance(&p) < tol::CONFUSION)
+                    .then_some(p)
             });
         // On a seam: on the new surface's seam line (the faces around pin it only to their
         // intersection curve).
@@ -974,7 +979,9 @@ fn replace_surfaces_checked(
                 .map(|&g| &surfs[g])
                 .collect();
             let p = line_meet(&iso, &others, b.verts[v].p)?;
-            fs.iter().all(|s| s.distance(&p) < 1e-7).then_some(p)
+            fs.iter()
+                .all(|s| s.distance(&p) < tol::CONFUSION)
+                .then_some(p)
         };
         // On an edge whose faces all stay: on that edge's curve, where it crosses the moved
         // faces.
@@ -988,7 +995,9 @@ fn replace_surfaces_checked(
                 .map(|&g| &surfs[g])
                 .collect();
             let p = line_meet(&b.edges[e].curve, &others, b.verts[v].p)?;
-            fs.iter().all(|s| s.distance(&p) < 1e-7).then_some(p)
+            fs.iter()
+                .all(|s| s.distance(&p) < tol::CONFUSION)
+                .then_some(p)
         };
         // At a pole or apex (the end of a point edge): the new surface's own, nearest.
         let on_pole = || {
@@ -1002,7 +1011,9 @@ fn replace_surfaces_checked(
             let p = singular_points(&surfs[f])
                 .into_iter()
                 .min_by(|x, y| (x - old).norm().total_cmp(&(y - old).norm()))?;
-            fs.iter().all(|s| s.distance(&p) < 1e-7).then_some(p)
+            fs.iter()
+                .all(|s| s.distance(&p) < tol::CONFUSION)
+                .then_some(p)
         };
         let p = on_pole()
             .or(on_line)

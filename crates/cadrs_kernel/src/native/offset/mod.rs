@@ -35,7 +35,8 @@ fn moved_by_slabs(
     faces: &[(FaceId, f64)],
 ) -> Option<crate::native::topo::Body> {
     let ef = b.edge_faces();
-    let size = b.bbox().diagonal().max(1.0);
+    // (The part's own size, however small: no floor at a millimetre.)
+    let size = b.bbox().diagonal().max(tol::POINT);
     let near = tol::REL_POINT * size;
     for &(f, d) in faces {
         let fi = f.0 as usize;
@@ -121,7 +122,7 @@ pub(crate) fn without_vanishing(
 }
 
 pub fn offset(k: &mut NativeKernel, body: BodyId, spec: &OffsetSpec) -> Result<OpResult> {
-    let b = (**k.get(body)?).clone();
+    let b = std::sync::Arc::clone(k.get(body)?);
     let mut dist = vec![spec.distance; b.faces.len()];
     for (f, d) in &spec.faces {
         if let Some(x) = dist.get_mut(f.0 as usize) {
@@ -194,17 +195,17 @@ pub fn offset(k: &mut NativeKernel, body: BodyId, spec: &OffsetSpec) -> Result<O
                 }
                 e
             })?;
-            (b2, d2, out, Some((from, b.faces.len())))
+            let n = b.faces.len();
+            (std::sync::Arc::new(b2), d2, out, Some((from, n)))
         }
     };
     let v0 = crate::native::mass::body_volume(&b);
     let v1 = crate::native::mass::body_volume(&out);
     let grow = dist.iter().any(|d| *d > 0.0);
     let shrink = dist.iter().any(|d| *d < 0.0);
-    if (grow && !shrink && v1 < v0 - tol::ROUNDOFF)
-        || (shrink && !grow && v1 > v0 + tol::ROUNDOFF)
-        || v1 <= 0.0
-    {
+    // (A volume's round-off: a cubic millimetre's for a part of a millimetre, less below.)
+    let within = tol::ROUNDOFF * tol::small(b.bbox().diagonal()).powi(3);
+    if (grow && !shrink && v1 < v0 - within) || (shrink && !grow && v1 > v0 + within) || v1 <= 0.0 {
         return Err(KernelError::TooLarge {
             op: "offset",
             why: "the offset turned the body inside out".into(),

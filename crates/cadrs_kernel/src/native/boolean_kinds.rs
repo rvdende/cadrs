@@ -761,7 +761,7 @@ fn crossings_with_pieces(a: &[Piece], b: &[Piece], tol: f64) -> Vec<P3> {
 /// Wire `a` op `b` (any kind but a mixed one).
 fn wire_with(a: &Body, b: &Body, op: BoolOp) -> Result<BoolOut> {
     let mine = pieces_of(a);
-    let size = a.bbox().diagonal().max(b.bbox().diagonal()).max(1.0);
+    let size = a.bbox().diagonal().max(b.bbox().diagonal()).max(tol::POINT);
     let t = (size * 1e-10).max(tol());
     let theirs;
     let other = match kind(b) {

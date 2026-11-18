@@ -222,6 +222,21 @@ impl Curve {
                 let t = self.closest_polished(p, f64::NEG_INFINITY, f64::INFINITY, start);
                 wrap(t, lo, TAU).min(hi)
             }
+            // A part of an ellipse: a sample a sixteenth of a turn (five at least), not
+            // sixty-five whatever the arc.
+            Curve::Ellipse { .. } => {
+                let (lo, hi) = (t0.min(t1), t0.max(t1));
+                let n = (((hi - lo) / (TAU / 16.0)).ceil() as usize).clamp(4, CLOSEST_SAMPLES);
+                let start = (0..=n)
+                    .map(|i| lo + (hi - lo) * i as f64 / n as f64)
+                    .min_by(|a, b| {
+                        (self.point(*a) - p)
+                            .norm_squared()
+                            .total_cmp(&(self.point(*b) - p).norm_squared())
+                    })
+                    .unwrap_or(lo);
+                self.closest_polished(p, lo, hi, start)
+            }
             // A spline of more spans than the samples would see one each: four to a span.
             Curve::Nurbs(n)
                 if 4 * n

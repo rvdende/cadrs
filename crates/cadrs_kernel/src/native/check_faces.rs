@@ -111,7 +111,8 @@ pub(crate) fn face_crossings_in(
             }
         })
         .collect();
-    let size = b.bbox().diagonal().max(1.0);
+    // (The part's own size, however small: no floor at a millimetre.)
+    let size = b.bbox().diagonal().max(tol::POINT);
     let bvh = Bvh::new(boxes.clone());
     let mut pairs: Vec<(usize, usize)> = bvh
         .pairs(&bvh)

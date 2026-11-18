@@ -227,7 +227,7 @@ pub fn split_face(surf: &Surface, flip: bool, boundary: &[Vec<Arc>], cuts: &[Arc
         }
         bb.diagonal().max(tol::ROUNDOFF)
     };
-    let ntol = (size * 1e-7).max(1e-7);
+    let ntol = (size * 1e-7).max(1e-7 * tol::small(size));
     let mut nodes: Vec<(usize, P2)> = Vec::new();
     // One vertex's arcs meet in one node within a part in 10³ of the face in (u, v), their
     // p-curves ending a vertex tolerance apart (a face handed on by an earlier operation), but

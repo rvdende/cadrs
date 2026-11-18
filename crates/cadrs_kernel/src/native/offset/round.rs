@@ -978,7 +978,7 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
         let dist: Vec<f64> = (0..b.faces.len())
             .map(|f| {
                 if remove.contains(&f) {
-                    size * 0.1 + 1.0
+                    size * 0.1 + crate::native::tol::small(size)
                 } else {
                     -t
                 }

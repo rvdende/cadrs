@@ -969,7 +969,7 @@ fn analytic(a: &Surface, b: &Surface, bb: &Bbox, run_tol: f64) -> Option<Vec<Int
                     // The plane's trace in the section plane: n projected square to z.
                     let np = (n - z * n.dot(&z)).try_normalize(tol::DEGENERATE)?;
                     let dd = d / n.dot(&np);
-                    if dd.abs() > *r + 1e-7 * r.max(1.0) {
+                    if dd.abs() > *r + 1e-7 * r.max(tol::POINT) {
                         return None;
                     }
                     let w = z.cross(&np).normalize();
@@ -979,7 +979,7 @@ fn analytic(a: &Surface, b: &Surface, bb: &Bbox, run_tol: f64) -> Option<Vec<Int
                 };
                 if let (Some(a), Some(b)) = (cuts(h0), cuts(h1)) {
                     let mut out = Vec::new();
-                    let tangent = (a[0] - a[1]).norm() < 1e-7 * r.max(1.0);
+                    let tangent = (a[0] - a[1]).norm() < 1e-7 * r.max(tol::POINT);
                     for i in 0..if tangent { 1 } else { 2 } {
                         if let Some(d) = (b[i] - a[i]).try_normalize(tol::DEGENERATE) {
                             out.extend(bound_line(a[i], d, &bbig));
@@ -993,7 +993,7 @@ fn analytic(a: &Surface, b: &Surface, bb: &Bbox, run_tol: f64) -> Option<Vec<Int
                 let d = (fc.o - fp.o).dot(&n); // signed distance of the axis from the plane
                 // (A plane touching within the tangency tolerance, outside as well as inside,
                 // meets the cylinder along one line.)
-                if d.abs() > r + 1e-7 * r.max(1.0) {
+                if d.abs() > r + 1e-7 * r.max(tol::POINT) {
                     return Some(vec![]);
                 }
                 let foot = fc.o - n * d;
@@ -1002,7 +1002,7 @@ fn analytic(a: &Surface, b: &Surface, bb: &Bbox, run_tol: f64) -> Option<Vec<Int
                 let mut out = Vec::new();
                 // Tangent (to within a tenth of the boolean's tolerance in distance; the two lines
                 // of a plane 1e-16 inside are still 1.5e-8 apart): one line.
-                if h < tol::ROUNDOFF || r - d.abs() < 1e-7 * r.max(1.0) {
+                if h < tol::ROUNDOFF || r - d.abs() < 1e-7 * r.max(tol::POINT) {
                     out.extend(bound_line(foot, z, &bbig));
                 } else {
                     out.extend(bound_line(foot + w * h, z, &bbig));
@@ -2499,12 +2499,20 @@ pub fn curve_surface(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Vec<f64> {
     let mut hints: Vec<Option<(f64, f64)>> = Vec::with_capacity(n + 1);
     let mut h: Option<(f64, f64)> = None;
     let mut vals = Vec::with_capacity(n + 1);
+    // (The stretch's length, by its samples' chords: what its fixed thresholds below are
+    // scaled by where it is under a millimetre.)
+    let mut length = 0.0;
+    let mut last: Option<P3> = None;
     for i in 0..=n {
         let t = t0 + (t1 - t0) * i as f64 / n as f64;
         let v = fh(t, &mut h);
         vals.push((t, v));
         hints.push(h);
+        let p = c.point(t);
+        length += last.map_or(0.0, |q| (p - q).norm());
+        last = Some(p);
     }
+    let (on, near) = (1e-10 * tol::small(length), 1e-3 * tol::small(length));
     // On an exact distance (1-Lipschitz in space), two samples of one sign can still have a
     // crossing pair between them where the curve runs no farther between them than their
     // distances add up to: the samples refined there, halving, until that is ruled out (a
@@ -2566,22 +2574,22 @@ pub fn curve_surface(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Vec<f64> {
         // sample would be a second vertex a hair from it.
         let touch_zone = i > 0
             && i + 1 < vals.len()
-            && vals[i - 1].1.abs() >= 1e-10
-            && vals[i + 1].1.abs() >= 1e-10
+            && vals[i - 1].1.abs() >= on
+            && vals[i + 1].1.abs() >= on
             && vals[i - 1].1.signum() == vals[i + 1].1.signum();
-        if ft.abs() < 1e-10 && !touch_zone {
+        if ft.abs() < on && !touch_zone {
             out.push(t);
         }
         if i > 0 {
             prev = vals[i - 1];
-            if prev.1.abs() >= 1e-10 && ft.abs() >= 1e-10 && prev.1.signum() != ft.signum() {
+            if prev.1.abs() >= on && ft.abs() >= on && prev.1.signum() != ft.signum() {
                 out.push(super::math::root_from(&f, prev, (t, ft)));
             }
         }
         // Touching: a local minimum of |f| near zero between samples.
         if i > 0 && i + 1 < vals.len() {
             let (fa, fb, fc) = (vals[i - 1].1.abs(), ft.abs(), vals[i + 1].1.abs());
-            if fb < fa && fb < fc && fb < 1e-3 && vals[i - 1].1.signum() == vals[i + 1].1.signum() {
+            if fb < fa && fb < fc && fb < near && vals[i - 1].1.signum() == vals[i + 1].1.signum() {
                 // Golden-section minimize |f|.
                 let m = super::math::minimize(|t| f(t).abs(), vals[i - 1].0, vals[i + 1].0);
                 if f(m).abs() < tol::ROUNDOFF {

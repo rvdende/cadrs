@@ -3090,7 +3090,8 @@ pub fn flat_corners(
         .iter()
         .map(|e| e.0 as usize)
         .collect();
-    let size = b.bbox().diagonal().max(1.0);
+    // (The part's own size, however small: no floor at a millimetre.)
+    let size = b.bbox().diagonal().max(tol::POINT);
     let near = tol::REL_POINT * size;
     let mut tools: Vec<(Body, usize)> = Vec::new();
     for v in 0..b.verts.len() {

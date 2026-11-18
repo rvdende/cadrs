@@ -3611,7 +3611,7 @@ fn cut_by_leads(
     let lead = travel * TAU / angle.abs();
     let o = axis.origin;
     let height = |p: &P3| (p - o).dot(&z);
-    let t = (**k.get(target).ok()?).clone();
+    let t = std::sync::Arc::clone(k.get(target).ok()?);
     let size = t.bbox().diagonal().max(tol::POINT);
     let near = 1e-9 * size;
     if t.solids.len() != 1 || t.verts.is_empty() {
