@@ -14068,17 +14068,18 @@ fn assemble(
     // Each cut face split on its own (in parallel: the faces are independent), taken in order.
     let splits: Vec<Option<Vec<Face>>> = {
         let nb = &nb;
-        super::par::start();
-        (0..nb.faces.len())
-            .into_par_iter()
-            .map(|fi| {
-                out.cuts.get(&fi).map(|cs| {
-                    split(nb, &nb.faces[fi], cs, &|e| {
-                        out.on_face.get(&(e, fi)).cloned()
-                    })
+        let one = |fi: usize| {
+            out.cuts.get(&fi).map(|cs| {
+                split(nb, &nb.faces[fi], cs, &|e| {
+                    out.on_face.get(&(e, fi)).cloned()
                 })
             })
-            .collect()
+        };
+        if super::par::threads_for_some(out.cuts.len()) {
+            (0..nb.faces.len()).into_par_iter().map(one).collect()
+        } else {
+            (0..nb.faces.len()).map(one).collect()
+        }
     };
     for (fi, ps) in splits.into_iter().enumerate() {
         match out.cuts.get(&fi) {

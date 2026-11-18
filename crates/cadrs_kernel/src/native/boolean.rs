@@ -4242,7 +4242,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         (res.faces, arcs * arcs)
     };
     let cut_faces = cuts.iter().filter(|c| !c.is_empty()).count();
-    let split: Vec<(Vec<Vec<Vec<Arc>>>, u64)> = if super::par::threads_for(cut_faces, true) {
+    let split: Vec<(Vec<Vec<Vec<Arc>>>, u64)> = if super::par::threads_for_some(cut_faces) {
         (0..faces.len()).into_par_iter().map(split_one).collect()
     } else {
         (0..faces.len()).map(split_one).collect()
@@ -5362,33 +5362,35 @@ fn united(
         };
         groups[g].push(m);
     }
-    super::par::start();
-    let results: Vec<Result<Unioned>> = groups
-        .into_par_iter()
-        .map(|g| {
-            let of = |m: &(BodyId, Body, Bbox)| placed.get(&m.0).copied();
-            let one_body = g.len() >= 3
-                && of(&g[0]).is_some_and(|(root, _)| {
-                    g.iter().all(|m| of(m).is_some_and(|(r, _)| r == root))
-                });
-            if one_body {
-                let places: Vec<Affine> = g.iter().map(|m| of(m).expect("placed").1).collect();
-                // (Where a doubled union fails, one after another as before.)
-                if let Ok(u) = union_copies(&g, &places, opts) {
-                    return Ok(u);
-                }
-            }
-            // (A long chain in halves, the halves side by side on other threads; where a
-            // half's union fails, one after another as before.)
-            if g.len() >= 4
-                && !super::env_flag!("CADRS_UNION_IN_TURN")
-                && let Ok(u) = union_halves(&g, opts)
-            {
+    let unite = |g: Vec<(BodyId, Body, Bbox)>| -> Result<Unioned> {
+        let of = |m: &(BodyId, Body, Bbox)| placed.get(&m.0).copied();
+        let one_body = g.len() >= 3
+            && of(&g[0])
+                .is_some_and(|(root, _)| g.iter().all(|m| of(m).is_some_and(|(r, _)| r == root)));
+        if one_body {
+            let places: Vec<Affine> = g.iter().map(|m| of(m).expect("placed").1).collect();
+            // (Where a doubled union fails, one after another as before.)
+            if let Ok(u) = union_copies(&g, &places, opts) {
                 return Ok(u);
             }
-            union_islands(g, opts)
-        })
-        .collect();
+        }
+        // (A long chain in halves, the halves side by side on other threads; where a
+        // half's union fails, one after another as before.)
+        if g.len() >= 4
+            && !super::env_flag!("CADRS_UNION_IN_TURN")
+            && let Ok(u) = union_halves(&g, opts)
+        {
+            return Ok(u);
+        }
+        union_islands(g, opts)
+    };
+    // (Each group a boolean or several: on the threads where there is more than one.)
+    let results: Vec<Result<Unioned>> = if groups.len() >= 2 {
+        super::par::start();
+        groups.into_par_iter().map(unite).collect()
+    } else {
+        groups.into_iter().map(unite).collect()
+    };
     let mut all = results.into_iter();
     let (mut cur, mut origin) = all.next().expect("the first member's group")?;
     for r in all {

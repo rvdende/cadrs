@@ -138,33 +138,38 @@ pub(crate) fn face_crossings_in(
     }
     let polys: &[Option<Vec<Vec<P2>>>] = polys;
     // Their boxes, for the many points tested against each ([`in_face_boxed`]).
-    super::par::start();
-    let pboxes: Vec<PolyBoxes> = (0..n)
-        .into_par_iter()
-        .map(|fi| match polys.get(fi).and_then(|p| p.as_deref()) {
-            Some(p) if paired[fi] => poly_boxes(p, &b.faces[fi].surf),
-            _ => Vec::new(),
-        })
-        .collect();
+    // (On the threads where there are pairs enough to be worth starting them.)
+    let threads = super::par::threads_for_some(pairs.len());
+    let boxes_of = |fi: usize| match polys.get(fi).and_then(|p| p.as_deref()) {
+        Some(p) if paired[fi] => poly_boxes(p, &b.faces[fi].surf),
+        _ => Vec::new(),
+    };
+    let pboxes: Vec<PolyBoxes> = if threads {
+        (0..n).into_par_iter().map(boxes_of).collect()
+    } else {
+        (0..n).map(boxes_of).collect()
+    };
     // Edge `e` against face `y`'s surface over [t0, t1] comes up from each of e's faces paired
     // with y: its roots once.
     let roots: Roots = std::sync::Mutex::new(std::collections::HashMap::new());
-    pairs
-        .par_iter()
-        .filter_map(|&(i, j)| {
-            let ov = Bbox {
-                min: boxes[i].min.sup(&boxes[j].min),
-                max: boxes[i].max.inf(&boxes[j].max),
-            };
-            // Clear of the boundaries by the faces' tolerances, and by a part in 10⁶ of the body.
-            let margin = 2.0 * tol[i].max(tol[j]) + tol::REL_POINT * size;
-            let p = crossing(b, (polys, &pboxes), (i, j), &ov, margin, &roots)?;
-            Some(format!(
-                "faces {i} and {j} cross away from their edges near ({:.6}, {:.6}, {:.6})",
-                p.x, p.y, p.z
-            ))
-        })
-        .collect()
+    let one = |&(i, j): &(usize, usize)| {
+        let ov = Bbox {
+            min: boxes[i].min.sup(&boxes[j].min),
+            max: boxes[i].max.inf(&boxes[j].max),
+        };
+        // Clear of the boundaries by the faces' tolerances, and by a part in 10⁶ of the body.
+        let margin = 2.0 * tol[i].max(tol[j]) + tol::REL_POINT * size;
+        let p = crossing(b, (polys, &pboxes), (i, j), &ov, margin, &roots)?;
+        Some(format!(
+            "faces {i} and {j} cross away from their edges near ({:.6}, {:.6}, {:.6})",
+            p.x, p.y, p.z
+        ))
+    };
+    if threads {
+        pairs.par_iter().filter_map(one).collect()
+    } else {
+        pairs.iter().filter_map(one).collect()
+    }
 }
 
 /// The uv box of a face's polygons.
