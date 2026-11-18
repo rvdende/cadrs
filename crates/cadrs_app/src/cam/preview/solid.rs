@@ -4,14 +4,13 @@
 //! run is simulated on a solid stock instead ([`program::simulate_solid`], on the analysis
 //! worker), which is cut whichever way the tool points.
 //!
-//! **What is shown.** The stock as the tool leaves it: the worker runs the simulation once and
-//! hands out the stock along the way ([`program::simulate_solid_with`]), at [`SNAPSHOTS`]
-//! evenly spaced times through the run and at every operation's end, as a mesh coloured by the
-//! operation that cut each surface. The preview shows the last one at or before its time (the
-//! uncut stock before the first: the stock's own shape, what earlier setups cut from it shows
-//! with the first snapshot), and each arrives as soon as the worker is past it, so the cut
-//! shows while the rest is still being simulated. The run's end comes again once the check is
-//! done, with its gouges in red.
+//! **What is shown.** The stock as the tool leaves it, where the tool is: a worker of its own
+//! ([`Live`]) keeps the solid stock and cuts it on to wherever the preview's time is, part
+//! way along a move too ([`cadrs_cam::sim::LiveStock`]), and sends back its mesh, coloured
+//! by the operation that cut each surface. While it is cutting, playing waits for it (the
+//! playback is slower rather than the stock behind the tool). Before its first mesh the
+//! uncut stock is shown (the stock's own shape). At the run's end, once the check is done,
+//! the check's own stock is shown, its gouges red.
 //!
 //! **What is found.** The gouges, the rapids into material, the holder in the stock and the
 //! tool in the workholding come from the same simulation, where the height map's are listed.
@@ -26,13 +25,11 @@ use cadrs_core::cam::cadrs_cam::dexel::SimMesh;
 use cadrs_core::cam::cadrs_cam::toolpath::Toolpath;
 use cadrs_ui::i18n::{tr, tr_with};
 
-/// How many times through the run the stock is shown as cut (besides each operation's end).
-pub(super) const SNAPSHOTS: usize = 120;
-
 /// How fine the solid stock's lattice is, 0 (fast) to 1 (fine).
 const QUALITY: f64 = 0.3;
 
 /// What the worker needs to simulate the run on a solid stock.
+#[derive(Clone)]
 pub(super) struct SolidInput {
     pub(super) cam: CamStudio,
     pub(super) job: CamId,
@@ -43,50 +40,20 @@ pub(super) struct SolidInput {
     pub(super) paths: std::collections::HashMap<CamId, Toolpath>,
 }
 
-/// The stock after so many of the run's moves, in the setup's coordinates.
-pub(super) type Stage = (usize, SimMesh);
-
 /// What the solid simulation gives the preview.
 pub(super) struct Solid {
-    /// The stock at the run's end, its gouges marked.
-    pub(super) end: Stage,
+    /// The stock at the run's end, its gouges marked, in the setup's coordinates.
+    pub(super) end: SimMesh,
     pub(super) summary: String,
     pub(super) collisions: Vec<(f64, String)>,
 }
 
-/// After how many moves of `segments` the stock is shown: [`SNAPSHOTS`] evenly spaced times
-/// and each operation's end, ascending, the run's end not among them.
-pub(super) fn snapshot_marks(segments: &[Segment], spans: &[OpSpan]) -> Vec<usize> {
-    let n = segments.len();
-    let tl = Timeline::new(segments.to_vec());
-    let total = tl.total();
-    let mut marks: Vec<usize> = spans.iter().skip(1).map(|o| o.first).collect();
-    let (mut k, mut done) = (0, 0);
-    for i in 1..SNAPSHOTS {
-        let t = total * i as f64 / SNAPSHOTS as f64;
-        // (The moves finished by `t`.)
-        while k < n && tl.end_of(k) <= t {
-            k += 1;
-        }
-        if k > done {
-            marks.push(k);
-            done = k;
-        }
-    }
-    marks.retain(|m| *m > 0 && *m < n);
-    marks.sort_unstable();
-    marks.dedup();
-    marks
-}
-
-/// Simulates the run on a solid stock: what the whole run finds and the stock at its end,
-/// handing `stage` the stock along the way ([`snapshot_marks`]). `Err`: why it could not be
-/// run.
+/// Simulates the run on a solid stock: what the whole run finds and the stock at its end.
+/// `Err`: why it could not be run.
 pub(super) fn analyse_solid(
     input: &SolidInput,
     segments: &[Segment],
     spans: &[OpSpan],
-    stage: &mut dyn FnMut(Stage),
 ) -> Result<Solid, String> {
     let cam = &input.cam;
     let job = cam.job(input.job).ok_or("the job is gone")?;
@@ -103,8 +70,7 @@ pub(super) fn analyse_solid(
         &input.paths,
         Some(&input.wanted),
     )?;
-    let marks = snapshot_marks(segments, spans);
-    let r = program::simulate_solid_with(
+    let r = program::simulate_solid(
         cam,
         job,
         setup,
@@ -113,10 +79,8 @@ pub(super) fn analyse_solid(
         &input.paths,
         None,
         QUALITY,
-        &marks,
-        &mut |n, stock| stage((n, stock.mesh(1))),
     )?;
-    let end = (segments.len(), r.stock.mesh(1));
+    let end = r.stock.mesh(1);
     let tl = Timeline::new(segments.to_vec());
     // One of each kind an operation: where it first happens.
     let mut collisions: Vec<(f64, String)> = Vec::new();
@@ -179,10 +143,122 @@ pub(super) fn analyse_solid(
     })
 }
 
-/// Which of `stages` (by their move counts, ascending) the preview shows with `done` of the
-/// run's moves finished: the last at or before it (`None`: the uncut stock).
-pub(super) fn stage_shown(stages: &[usize], done: usize) -> Option<usize> {
-    stages.iter().rposition(|n| *n <= done)
+/// Where a solid run's stock is cut to: the run's move, and how far along it.
+pub(super) type Place = (usize, f64);
+
+/// The worker that cuts a solid run's stock to where the preview is (see the module docs).
+pub(super) struct Live {
+    ask: std::sync::mpsc::Sender<Place>,
+    got: std::sync::Mutex<std::sync::mpsc::Receiver<(Place, SimMesh)>>,
+    /// The last place asked for, and the place of the newest mesh.
+    asked: Option<Place>,
+    pub(super) cut: Option<Place>,
+    /// The newest mesh, and a count that changes with it.
+    pub(super) mesh: Option<SimMesh>,
+    pub(super) version: u64,
+}
+
+impl Live {
+    /// Starts the worker: it builds the stock ([`program::solid_start`]), then cuts it to each
+    /// place asked for (the newest, when several are waiting). `None`: no worker.
+    pub(super) fn start(input: SolidInput) -> Option<Live> {
+        let (ask, asks) = std::sync::mpsc::channel::<Place>();
+        let (send, got) = std::sync::mpsc::channel();
+        let spawned = cadrs_core::background::spawn("cam-live-stock", move || {
+            let Some(mut live) = live_stock(&input) else {
+                return;
+            };
+            while let Ok(mut to) = asks.recv() {
+                // (Only the newest place matters.)
+                for t in asks.try_iter() {
+                    to = t;
+                }
+                live.cut_to(to.0, to.1);
+                if send.send((to, live.stock.mesh(1))).is_err() {
+                    break;
+                }
+            }
+        });
+        spawned.ok().map(|_| Live {
+            ask,
+            got: std::sync::Mutex::new(got),
+            asked: None,
+            cut: None,
+            mesh: None,
+            version: 0,
+        })
+    }
+
+    /// Whether it is still cutting to the last place asked for.
+    pub(super) fn busy(&self) -> bool {
+        self.asked.is_some() && self.asked != self.cut
+    }
+
+    /// Takes the newest mesh it has made, and asks for `to` when it is free and isn't there.
+    pub(super) fn follow(&mut self, to: Option<Place>) {
+        let newest = self.got.get_mut().ok().and_then(|rx| rx.try_iter().last());
+        if let Some((at, mesh)) = newest {
+            self.cut = Some(at);
+            self.mesh = Some(mesh);
+            self.version += 1;
+        }
+        if let Some(to) = to
+            && !self.busy()
+            && self.cut != Some(to)
+            && self.ask.send(to).is_ok()
+        {
+            self.asked = Some(to);
+        }
+    }
+
+    /// Waits (up to `limit`) until the stock is cut to `to`: for scripts, which take a
+    /// picture right after a seek.
+    pub(super) fn settle(&mut self, to: Place, limit: std::time::Duration) {
+        let until = Instant::now() + limit;
+        while self.cut != Some(to) && Instant::now() < until {
+            self.follow(Some(to));
+            if self.cut == Some(to) {
+                break;
+            }
+            let Ok(rx) = self.got.get_mut() else { return };
+            if let Ok((at, mesh)) = rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                self.cut = Some(at);
+                self.mesh = Some(mesh);
+                self.version += 1;
+            }
+        }
+    }
+}
+
+/// The run's stock to be cut as it plays.
+fn live_stock(input: &SolidInput) -> Option<cadrs_core::cam::cadrs_cam::sim::LiveStock> {
+    let cam = &input.cam;
+    let job = cam.job(input.job)?;
+    let setup = job.setups.iter().find(|s| s.id == input.setup)?;
+    let run = program::setup_run(
+        cam,
+        job,
+        setup,
+        &input.parts,
+        &input.paths,
+        Some(&input.wanted),
+    )
+    .ok()?;
+    let start = program::solid_start(
+        cam,
+        job,
+        setup,
+        &run,
+        &input.parts,
+        &input.paths,
+        None,
+        QUALITY,
+    )
+    .ok()?;
+    Some(cadrs_core::cam::cadrs_cam::sim::LiveStock::new(
+        start.stock,
+        start.ops,
+    ))
 }
 
 /// A mesh the viewport's part material lights ([`crate::part_shading::PartShading`]): its
@@ -253,50 +329,6 @@ pub(super) fn tool_mesh(tool: &Tool) -> Mesh {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_stock_shown_is_the_last_one_cut_by_now() {
-        // Nothing cut yet shows the uncut stock, then the last snapshot at or before now.
-        assert_eq!(stage_shown(&[], 5), None);
-        assert_eq!(stage_shown(&[3, 10, 20], 0), None);
-        assert_eq!(stage_shown(&[3, 10, 20], 3), Some(0));
-        assert_eq!(stage_shown(&[3, 10, 20], 19), Some(1));
-        assert_eq!(stage_shown(&[3, 10, 20], 25), Some(2));
-    }
-
-    #[test]
-    fn the_stock_is_shown_through_every_operation() {
-        let seg = |x: f64| Segment {
-            from: [x, 0.0, 0.0],
-            to: [x + 1.0, 0.0, 0.0],
-            feed: Some(60.0),
-            kind: None,
-            beam: false,
-            minutes: 0.01,
-            axis: None,
-        };
-        let segments: Vec<Segment> = (0..1000).map(|i| seg(i as f64)).collect();
-        let span = |first: usize| OpSpan {
-            first,
-            name: String::new(),
-            tool: Tool::new(cadrs_core::cam::cadrs_cam::tool::ToolKind::EndMill, 6.0),
-            tilted: false,
-            frame: None,
-            tool_number: 1,
-            gauge: 0.0,
-        };
-        let marks = snapshot_marks(&segments, &[span(0), span(7)]);
-        // Each operation's end, then every so often through the run, never its end.
-        assert!(marks.contains(&7));
-        assert!(marks.len() >= SNAPSHOTS - 1, "{}", marks.len());
-        assert!(marks.windows(2).all(|w| w[0] < w[1]));
-        assert!(marks.iter().all(|m| *m > 0 && *m < 1000));
-        assert!(
-            marks
-                .windows(2)
-                .all(|w| w[1] - w[0] <= 1000 / SNAPSHOTS + 1)
-        );
-    }
 
     #[test]
     fn the_uncut_stock_is_a_flat_faced_solid() {

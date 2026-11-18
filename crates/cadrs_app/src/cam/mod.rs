@@ -230,12 +230,14 @@ pub fn script(world: &mut World, arg: &str) {
                 "preview-end" => {
                     s.playing = false;
                     s.seek(1.0);
+                    s.settle();
                 }
                 _ => {
                     s.playing = false;
                     if let Ok(f) = words[1].parse::<f64>() {
                         s.seek(f);
                     }
+                    s.settle();
                 }
             }
         }
@@ -253,6 +255,8 @@ pub fn script(world: &mut World, arg: &str) {
                 Some(mut s) => {
                     s.playing = false;
                     s.seek_op(n, f);
+                    // (A script's picture comes next: the stock cut to here first.)
+                    s.settle();
                 }
                 None => warn!("cam {arg}: no preview"),
             }

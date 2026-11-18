@@ -62,31 +62,11 @@ pub struct SolidResult {
 /// cuts. Rapids are tested with the whole tool pulled in by half a cell, cuts' shanks and
 /// holders by the cutter's tolerance, so a tool running along a surface it cut isn't reported.
 pub fn simulate_mill_solid(
-    stock: TriDexel,
-    part: Option<&TriDexel>,
-    fixtures: Option<&TriDexel>,
-    ops: &[SolidOp],
-) -> SolidResult {
-    simulate_mill_solid_with(stock, part, fixtures, ops, &[], &mut |_, _| {})
-}
-
-/// [`simulate_mill_solid`], handing `snap` the stock as it is along the way: after the first
-/// `n` moves (counted through all the operations' segments in order) for each `n` of `after`
-/// (ascending), before the gouges are marked. For a preview that shows the stock being cut.
-pub fn simulate_mill_solid_with(
     mut stock: TriDexel,
     part: Option<&TriDexel>,
     fixtures: Option<&TriDexel>,
     ops: &[SolidOp],
-    after: &[usize],
-    snap: &mut dyn FnMut(usize, &TriDexel),
 ) -> SolidResult {
-    let mut done = 0usize;
-    let mut marks = after.iter().copied().peekable();
-    // (Marks at 0 come before any move.)
-    while let Some(n) = marks.next_if(|n| *n == 0) {
-        snap(n, &stock);
-    }
     let cell = stock.cell;
     let eps = crate::dexel::sim_eps(cell);
     // What a surface the tool cut itself can be off by: the cutter's own tolerance each way.
@@ -105,15 +85,7 @@ pub fn simulate_mill_solid_with(
             fixtures.map(|f| SimCutter::new(op.tool, crate::dexel::sim_eps(f.cell)));
         let flutes = op.tool.cutting_length.max(0.1);
         for s in op.segments {
-            // The stock after the moves before this one, where a mark asks for it.
-            while let Some(n) = marks.next_if(|n| *n <= done) {
-                snap(n, &stock);
-            }
-            done += 1;
-            let at = |f: f64| Pose {
-                tip: op.frame.to_world(crate::geom::lerp(s.from, s.to, f)),
-                axis: op.frame.dir_to_world(s.axis_at(f)),
-            };
+            let at = |f: f64| pose_on(&op.frame, s, f);
             let (from, to) = (at(0.0), at(1.0));
             if let (Some(fx), Some(c)) = (fixtures, &fixture_cutter)
                 && let Some(p) = fx.hits(c, Which::All, from, to, 2.0 * c.eps + 0.01)
@@ -126,12 +98,7 @@ pub fn simulate_mill_solid_with(
                 }
                 continue;
             }
-            let [a0, a1] = s.axes();
-            let turn = crate::kinematics::angle_between(a0, a1);
-            let pieces = (crate::geom::dist(s.from, s.to) / (flutes / 4.0).max(cell))
-                .max(turn / 5.0)
-                .ceil()
-                .clamp(1.0, 10_000.0) as usize;
+            let pieces = pieces(s, flutes, cell);
             let mut hit = false;
             for i in 0..pieces {
                 let (p0, p1) = (
@@ -145,9 +112,6 @@ pub fn simulate_mill_solid_with(
                 removed += stock.cut(&cutter, p0, p1, op.tag);
             }
         }
-    }
-    for n in marks {
-        snap(n, &stock);
     }
     let d = match part {
         Some(part) => stock.mark_gouges(part, (cell * 0.5).max(0.01)),
@@ -163,6 +127,117 @@ pub fn simulate_mill_solid_with(
         holder_hits,
         fixture_hits,
         excess: d.excess,
+    }
+}
+
+/// The tool's pose `f` of the way along move `s` (in `frame`), in the stock's coordinates.
+pub fn pose_on(frame: &crate::geom::Frame, s: &Segment, f: f64) -> Pose {
+    Pose {
+        tip: frame.to_world(crate::geom::lerp(s.from, s.to, f)),
+        axis: frame.dir_to_world(s.axis_at(f)),
+    }
+}
+
+/// How many pieces a cutting move is cut in: a quarter of the flutes long at most (a cell at
+/// least), and 5° of the tool's turn.
+fn pieces(s: &Segment, flutes: f64, cell: f64) -> usize {
+    let [a0, a1] = s.axes();
+    let turn = crate::kinematics::angle_between(a0, a1);
+    (crate::geom::dist(s.from, s.to) / (flutes / 4.0).max(cell))
+        .max(turn / 5.0)
+        .ceil()
+        .clamp(1.0, 10_000.0) as usize
+}
+
+/// A solid stock cut as a run plays ([`LiveStock::cut_to`]): to wherever the tool is, part
+/// way along a move too, for a preview that shows the stock as the tool leaves it. The cuts
+/// are [`simulate_mill_solid`]'s, without its checks.
+#[derive(Clone)]
+pub struct LiveStock {
+    start: TriDexel,
+    /// The stock as cut so far.
+    pub stock: TriDexel,
+    /// Each operation: its tool, its cutter, its moves (in the stock's coordinates) and the
+    /// index of its first move in the run.
+    ops: Vec<(Tool, SimCutter, Vec<Segment>, usize)>,
+    /// How far it is cut: the run's move, and how far along it.
+    at: (usize, f64),
+}
+
+impl LiveStock {
+    /// `start` to be cut by the operations' moves (`(tool, moves)`, in the stock's
+    /// coordinates, one after another through the run).
+    pub fn new(start: TriDexel, ops: Vec<(Tool, Vec<Segment>)>) -> LiveStock {
+        let eps = crate::dexel::sim_eps(start.cell);
+        let mut first = 0;
+        let ops = ops
+            .into_iter()
+            .map(|(tool, moves)| {
+                let cutter = SimCutter::new(&tool, eps);
+                let n = moves.len();
+                let op = (tool, cutter, moves, first);
+                first += n;
+                op
+            })
+            .collect();
+        LiveStock {
+            stock: start.clone(),
+            start,
+            ops,
+            at: (0, 0.0),
+        }
+    }
+
+    /// How far the stock is cut: the run's move, and how far along it (0 to 1).
+    pub fn at(&self) -> (usize, f64) {
+        self.at
+    }
+
+    /// The stock cut up to `f` of the way along the run's move `n` (back from the uncut stock
+    /// when that is before where it is now). Each operation's cuts tagged with its place in the
+    /// run (from 1).
+    pub fn cut_to(&mut self, n: usize, f: f64) {
+        let to = (n, f.clamp(0.0, 1.0));
+        if to.0 < self.at.0 || (to.0 == self.at.0 && to.1 < self.at.1) {
+            self.stock = self.start.clone();
+            self.at = (0, 0.0);
+        }
+        let cell = self.stock.cell;
+        for (k, (tool, cutter, moves, first)) in self.ops.iter().enumerate() {
+            let end = first + moves.len();
+            if end <= self.at.0 {
+                continue;
+            }
+            if *first > to.0 {
+                break;
+            }
+            let flutes = tool.cutting_length.max(0.1);
+            let tag = (k + 1).min(254) as u8;
+            for (i, s) in moves.iter().enumerate() {
+                let g = first + i;
+                if g < self.at.0 {
+                    continue;
+                }
+                if g > to.0 {
+                    break;
+                }
+                let f0 = if g == self.at.0 { self.at.1 } else { 0.0 };
+                let f1 = if g == to.0 { to.1 } else { 1.0 };
+                if s.is_rapid() || f1 <= f0 {
+                    continue;
+                }
+                // The move's pieces over the part of it cut now.
+                let m = ((f1 - f0) * pieces(s, flutes, cell) as f64).ceil().max(1.0) as usize;
+                let frame = crate::geom::Frame::WORLD;
+                for j in 0..m {
+                    let a = f0 + (f1 - f0) * j as f64 / m as f64;
+                    let b = f0 + (f1 - f0) * (j + 1) as f64 / m as f64;
+                    self.stock
+                        .cut(cutter, pose_on(&frame, s, a), pose_on(&frame, s, b), tag);
+                }
+            }
+        }
+        self.at = to;
     }
 }
 

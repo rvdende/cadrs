@@ -889,37 +889,26 @@ fn the_4_axis_toolpaths_compute() {
         );
         assert!(r.rapid_hits.is_empty(), "{:?}", r.rapid_hits);
         assert!(r.holder_hits.is_empty(), "{:?}", r.holder_hits);
-        // Simulate's stock as the run goes: handed out along the way, the bar getting less
-        // and less, down to what the run leaves.
-        let above = [0.0, 0.0, 0.0];
-        let moves: usize = program::run_motions(setup, job, &run, above)
-            .iter()
-            .map(|m| m.len())
-            .sum();
-        let marks: Vec<usize> = (1..40).map(|i| i * moves / 40).collect();
-        let mut seen: Vec<(usize, f64)> = Vec::new();
-        let again = program::simulate_solid_with(
-            cam,
-            job,
-            setup,
-            &run,
-            &parts,
-            &paths,
-            None,
-            0.3,
-            &marks,
-            &mut |n, stock| {
-                let _ = stock.mesh(1);
-                seen.push((n, stock.volume()));
-            },
-        )
-        .unwrap();
-        assert_eq!(seen.len(), marks.len());
-        assert!(seen.windows(2).all(|w| w[1].1 <= w[0].1 + 1e-6), "{seen:?}");
-        let (first, last) = (seen[0].1, seen[seen.len() - 1].1);
-        assert!(first - last > 0.5 * r.removed, "{seen:?}");
-        assert!(last >= again.stock.volume() - 1e-6);
-        assert_eq!(again.removed, r.removed);
+        // Simulate's stock as the run plays, cut on from where it was to each place in turn
+        // (part way along moves too): less and less of the bar, down to what the whole run
+        // leaves.
+        let start = program::solid_start(cam, job, setup, &run, &parts, &paths, None, 0.3).unwrap();
+        let moves: usize = start.ops.iter().map(|(_, m)| m.len()).sum();
+        let mut live = cadrs_core::cam::cadrs_cam::sim::LiveStock::new(start.stock, start.ops);
+        let mut seen = Vec::new();
+        for i in 1..40 {
+            live.cut_to(i * moves / 40, 0.5);
+            seen.push(live.stock.volume());
+        }
+        live.cut_to(moves - 1, 1.0);
+        assert!(seen.windows(2).all(|w| w[1] <= w[0] + 1e-6), "{seen:?}");
+        assert!(seen[0] - seen[seen.len() - 1] > 0.5 * r.removed, "{seen:?}");
+        assert!(
+            (live.stock.volume() - r.stock.volume()).abs() < 1e-3 * r.removed,
+            "{} {}",
+            live.stock.volume(),
+            r.stock.volume()
+        );
     }
     let (rough_tp, thread_tp) = (rough.clone(), thread.clone());
     let nc = posted(

@@ -541,8 +541,8 @@ impl Timeline {
         self.ends.last().copied().unwrap_or(0.0)
     }
 
-    /// Where the tool is at `t` minutes, and the index of the segment it is on.
-    pub fn at(&self, t: f64) -> Option<(P3, usize)> {
+    /// The segment the tool is on at `t` minutes, and how far along it (0 to 1).
+    pub fn place(&self, t: f64) -> Option<(usize, f64)> {
         if self.segments.is_empty() {
             return None;
         }
@@ -557,22 +557,22 @@ impl Timeline {
         } else {
             1.0
         };
+        Some((i, f))
+    }
+
+    /// Where the tool is at `t` minutes, and the index of the segment it is on.
+    pub fn at(&self, t: f64) -> Option<(P3, usize)> {
+        let (i, f) = self.place(t)?;
+        let s = &self.segments[i];
         Some((lerp(s.from, s.to, f), i))
     }
 
     /// The tool's axis at `t` minutes (upright where the motion is empty).
     pub fn axis_at(&self, t: f64) -> P3 {
-        let Some((_, i)) = self.at(t) else {
-            return UPRIGHT;
-        };
-        let s = &self.segments[i];
-        let start = if i == 0 { 0.0 } else { self.ends[i - 1] };
-        let f = if s.minutes > 0.0 {
-            ((t - start) / s.minutes).clamp(0.0, 1.0)
-        } else {
-            1.0
-        };
-        s.axis_at(f)
+        match self.place(t) {
+            Some((i, f)) => self.segments[i].axis_at(f),
+            None => UPRIGHT,
+        }
     }
 
     /// The time at the end of segment `i`.

@@ -20,7 +20,7 @@ pub(super) struct Analysis {
     /// Where the machine runs into itself, the workholding or the part ([`check_machine`]).
     pub(super) machine_hits: Vec<crate::cam::machine_view::MachineHit>,
     /// The solid stock at the run's end, for a run simulated solid ([`super::solid`]).
-    pub(super) solid: Vec<super::solid::Stage>,
+    pub(super) solid: Option<cadrs_core::cam::cadrs_cam::dexel::SimMesh>,
 }
 
 /// The machine's axes through a run's motions (an operation each, as
@@ -264,7 +264,7 @@ pub(super) fn analyse(
                 start: None,
                 sheet: Some(sheet),
                 machine_hits: Vec::new(),
-                solid: Vec::new(),
+                solid: None,
             };
         }
         program::SimResult::Mill(r) => r,
@@ -385,7 +385,7 @@ pub(super) fn analyse(
         start,
         sheet: None,
         machine_hits: Vec::new(),
-        solid: Vec::new(),
+        solid: None,
     }
 }
 

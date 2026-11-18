@@ -1070,25 +1070,43 @@ pub fn simulate_solid(
     upto: Option<CamId>,
     quality: f64,
 ) -> Result<cadrs_cam::sim::SolidResult, String> {
-    simulate_solid_with(
-        cam,
-        job,
-        setup,
-        run,
-        parts,
-        paths,
-        upto,
-        quality,
-        &[],
-        &mut |_, _| {},
-    )
+    let s = solid_start(cam, job, setup, run, parts, paths, upto, quality)?;
+    let ops: Vec<sim::SolidOp> = s
+        .ops
+        .iter()
+        .enumerate()
+        .map(|(k, (tool, segments))| sim::SolidOp {
+            tool,
+            segments,
+            frame: Frame::WORLD,
+            tag: (k + 1).min(254) as u8,
+        })
+        .collect();
+    Ok(sim::simulate_mill_solid(
+        s.stock,
+        s.part.as_ref(),
+        s.held.as_ref(),
+        &ops,
+    ))
 }
 
-/// [`simulate_solid`], handing `snap` the stock after the first `n` moves of the run's
-/// motions ([`run_motions`] from 30 over the stock, one list through all the operations) for
-/// each `n` of `after` (ascending): the stock as a preview shows it being cut.
+/// What a solid simulation of a setup starts from ([`solid_start`]), in the setup's
+/// coordinates.
+pub struct SolidStart {
+    /// The stock before the run.
+    pub stock: cadrs_cam::dexel::TriDexel,
+    /// The part and the workholding on the stock's lattice (when there are any).
+    pub part: Option<cadrs_cam::dexel::TriDexel>,
+    pub held: Option<cadrs_cam::dexel::TriDexel>,
+    /// Each operation's tool and moves ([`run_motions`] from 30 over the stock).
+    pub ops: Vec<(cadrs_cam::Tool, Vec<cadrs_cam::toolpath::Segment>)>,
+}
+
+/// The stock, part, workholding and moves [`simulate_solid`] runs (the operations up to and
+/// including `upto`), for a simulation of its own: Simulate's stock cut as the run plays
+/// ([`cadrs_cam::sim::LiveStock`]).
 #[allow(clippy::too_many_arguments)]
-pub fn simulate_solid_with(
+pub fn solid_start(
     cam: &CamStudio,
     job: &Job,
     setup: &Setup,
@@ -1097,9 +1115,7 @@ pub fn simulate_solid_with(
     paths: &HashMap<CamId, Toolpath>,
     upto: Option<CamId>,
     quality: f64,
-    after: &[usize],
-    snap: &mut dyn FnMut(usize, &cadrs_cam::dexel::TriDexel),
-) -> Result<cadrs_cam::sim::SolidResult, String> {
+) -> Result<SolidStart, String> {
     use cadrs_cam::dexel::{TriDexel, solid_cell};
     let shape = stock_shape(cam, job, parts).ok_or("The job has no bodies")?;
     let stock = stock_in(&shape, &run.frame);
@@ -1154,29 +1170,17 @@ pub fn simulate_solid_with(
     let above = [0.0, 0.0, stock.bounds.max[2] + 30.0];
     let mut motions = Vec::new();
     for (o, m) in run.ops.iter().zip(run_motions(setup, job, run, above)) {
-        motions.push((o.tool, m));
+        motions.push((o.tool.clone(), m));
         if upto == Some(o.id) {
             break;
         }
     }
-    let ops: Vec<sim::SolidOp> = motions
-        .iter()
-        .enumerate()
-        .map(|(k, (tool, segments))| sim::SolidOp {
-            tool,
-            segments,
-            frame: world,
-            tag: (k + 1).min(254) as u8,
-        })
-        .collect();
-    Ok(sim::simulate_mill_solid_with(
-        start,
-        part.as_ref(),
-        held.as_ref(),
-        &ops,
-        after,
-        snap,
-    ))
+    Ok(SolidStart {
+        stock: start,
+        part,
+        held,
+        ops: motions,
+    })
 }
 
 /// The program for a setup's operations (see the module docs).

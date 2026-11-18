@@ -375,50 +375,52 @@ fn leaning_and_undercutting_cuts() {
     }
 }
 
-/// The stock handed out along the way is the stock as it is after that many moves: each
-/// snapshot has lost what the slots cut so far, and the last is the finished stock.
+/// The stock cut as a run plays: part way along a move cuts that much of it, the whole run
+/// leaves what the simulation does, and going back starts again from the uncut stock.
 #[test]
-fn the_stock_is_handed_out_as_the_moves_cut_it() {
+fn the_live_stock_is_cut_to_where_the_tool_is() {
     let tool = Tool::new(ToolKind::EndMill, 6.0);
     let slab = TriDexel::block(
         Frame::WORLD,
         &Aabb::new([0.0, 0.0, 0.0], [60.0, 20.0, 20.0]),
         0.5,
     );
-    // Three slots across the slab, a rapid between each.
+    // Three slots across the slab (y from -10 to 30, so 20 of the 40 in it), a rapid between each.
     let mut moves = Vec::new();
     for x in [10.0, 30.0, 50.0] {
         moves.push(seg([x, -10.0, 30.0], [x, -10.0, 15.0], false, None));
         moves.push(seg([x, -10.0, 15.0], [x, 30.0, 15.0], true, None));
         moves.push(seg([x, 30.0, 15.0], [x, 30.0, 30.0], false, None));
     }
-    let op = || SolidOp {
-        tool: &tool,
-        segments: &moves,
-        frame: Frame::WORLD,
-        tag: 1,
-    };
     let full = slab.volume();
-    let mut seen: Vec<(usize, f64)> = Vec::new();
-    let r = simulate_mill_solid_with(
+    let whole = simulate_mill_solid(
         slab.clone(),
         None,
         None,
-        &[op()],
-        &[0, 2, 5, 9, 9],
-        &mut |n, s| seen.push((n, s.volume())),
+        &[SolidOp {
+            tool: &tool,
+            segments: &moves,
+            frame: Frame::WORLD,
+            tag: 1,
+        }],
     );
-    assert_eq!(
-        seen.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
-        [0, 2, 5, 9, 9]
-    );
-    let slot = (full - r.stock.volume()) / 3.0;
+    let slot = (full - whole.stock.volume()) / 3.0;
     assert!(slot > 100.0, "{slot}");
-    for ((_, v), slots) in seen.iter().zip([0.0, 1.0, 2.0, 3.0, 3.0]) {
-        assert!((full - v - slots * slot).abs() < 0.05 * slot, "{seen:?}");
-    }
-    assert_eq!(
-        r.removed,
-        simulate_mill_solid(slab, None, None, &[op()]).removed
-    );
+    let mut live = LiveStock::new(slab, vec![(tool.clone(), moves.clone())]);
+    let cut = |l: &LiveStock| (full - l.stock.volume()) / slot;
+    // Half way along the first slot's cut, its tip at y = 10: the slot from y = 0 to 10 and
+    // the cutter's half disc beyond, of the whole slot's 20 × 6.
+    let half = (10.0 * 6.0 + std::f64::consts::PI * 9.0 / 2.0) / 120.0;
+    live.cut_to(1, 0.5);
+    assert!((cut(&live) - half).abs() < 0.03, "{}", cut(&live));
+    // On to the second slot's rapid down: the first whole.
+    live.cut_to(3, 1.0);
+    assert!((cut(&live) - 1.0).abs() < 0.05, "{}", cut(&live));
+    assert_eq!(live.at(), (3, 1.0));
+    // The whole run: the simulation's stock.
+    live.cut_to(8, 1.0);
+    assert!((live.stock.volume() - whole.stock.volume()).abs() < 1e-6);
+    // Back to the first slot's half: the same as before.
+    live.cut_to(1, 0.5);
+    assert!((cut(&live) - half).abs() < 0.03, "{}", cut(&live));
 }

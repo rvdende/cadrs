@@ -13,7 +13,7 @@
 //!   are parts come free.
 
 mod solid;
-pub use solid::{SolidOp, SolidResult, simulate_mill_solid, simulate_mill_solid_with};
+pub use solid::{LiveStock, SolidOp, SolidResult, pose_on, simulate_mill_solid};
 
 use serde::{Deserialize, Serialize};
 
