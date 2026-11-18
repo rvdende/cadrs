@@ -1,0 +1,7 @@
+{
+  "source": "onshape",
+  "description": "Onshape's public Race Car Sample (document 63646fe1441530595f4cc318, Martin Kopplow; copy and export allowed), imported: a surfacing tutorial of lofts through curves with one guide and with Match tangent, projected curves, faces split along curves, a face blend, a deleted face, a Lock faces sweep and a mirror merged into the sheet. Surface 3, the body they all build, against Onshape's STEP export of it. Its first loft has a single guide, which once left a profile drawn the other way unturned (the loft and everything after it failed). The import brings some control-point splines in as splines through points on them, so the area is compared within 0.5% (it is 0.32% over, as on import) and the faces not at all (20, Onshape 18); the bounding box and the one body match.",
+  "part": "Surface 3",
+  "compare": ["body_count", "area_mm2", "bbox"],
+  "tolerance": { "rel": 0.005 }
+}

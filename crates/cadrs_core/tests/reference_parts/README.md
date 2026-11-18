@@ -22,6 +22,16 @@ says otherwise, centre of mass and bounding box within 1e-3 of the bounding box'
 face counts where given, and a STEP export read back with the same volume and area. cadrs
 also checks the mesh it draws: each face's triangles cover its exact area within 1e-2.
 
+## `issues/`
+
+Parts from cadrs' issues and imports: the user's `document.ron`, `expected.json` and, where
+there is one, `target.step` (the part as another CAD system builds it), from which the values
+`expected.json` doesn't give are measured. A case measures the document's solids, or with
+`"part": "<name>"` that one part (a surface too: its area, faces and bounding box; it has no
+volume), against the target's surfaces. `"compare"` limits what is compared and `"tolerance"`
+loosens it, for a case that only comes close (`race-car-surfaces`, an import whose splines are
+approximated).
+
 ## Running
 
 Each case is a test of its own, named after its folder (`case_49_helical_sweep` for
