@@ -21,6 +21,11 @@
 //    tool's pocket.
 // 08 The same moment relative to the part (the preview bar's Relative to › Part): the worm
 //    stands as modelled and the whole machine is turned round it.
+// 09 Simulate a tenth of the way through the worm's roughing (Rotary rough 1), close up, the
+//    part hidden: the bar with the first of the roughing's grooves in it (in its colour).
+// 10 Half way through the roughing: more of the bar cut away. (Simulate's solid stock is cut
+//    as the run goes, not only at each operation's end.)
+// 11 Half way along the thread (Rotary 2): the bar roughed, the thread's spaces opening.
 Scenario(
     start: Some("document"),
     steps: [
@@ -111,5 +116,25 @@ Scenario(
         Wait(10),
         Screenshot("08-worm-part-relative"),
         ExpectText("cam-pv-readout", "Rotary 2"),
+        Click(ui("cam-pv-relative-machine")),
+        Click(ui("cam-pv-simulate")),
+        // The stock alone, close up.
+        Click(ui("cam-pv-part")),
+        Scroll(at(830, 640), 8),
+        Scroll(at(880, 660), 6),
+        // (The solid stock's simulation on the worker: well done by then.)
+        Wait(30),
+        Custom("cam preview-op 0 0.1"),
+        MoveTo(1420, 900),
+        Wait(10),
+        Screenshot("09-worm-simulate-rough-early"),
+        Custom("cam preview-op 0 0.5"),
+        MoveTo(1420, 900),
+        Wait(10),
+        Screenshot("10-worm-simulate-rough"),
+        Custom("cam preview-op 1 0.5"),
+        MoveTo(1420, 900),
+        Wait(10),
+        Screenshot("11-worm-simulate-thread"),
     ],
 )

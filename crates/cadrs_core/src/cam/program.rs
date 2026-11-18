@@ -1070,6 +1070,36 @@ pub fn simulate_solid(
     upto: Option<CamId>,
     quality: f64,
 ) -> Result<cadrs_cam::sim::SolidResult, String> {
+    simulate_solid_with(
+        cam,
+        job,
+        setup,
+        run,
+        parts,
+        paths,
+        upto,
+        quality,
+        &[],
+        &mut |_, _| {},
+    )
+}
+
+/// [`simulate_solid`], handing `snap` the stock after the first `n` moves of the run's
+/// motions ([`run_motions`] from 30 over the stock, one list through all the operations) for
+/// each `n` of `after` (ascending): the stock as a preview shows it being cut.
+#[allow(clippy::too_many_arguments)]
+pub fn simulate_solid_with(
+    cam: &CamStudio,
+    job: &Job,
+    setup: &Setup,
+    run: &SetupRun,
+    parts: &[Part],
+    paths: &HashMap<CamId, Toolpath>,
+    upto: Option<CamId>,
+    quality: f64,
+    after: &[usize],
+    snap: &mut dyn FnMut(usize, &cadrs_cam::dexel::TriDexel),
+) -> Result<cadrs_cam::sim::SolidResult, String> {
     use cadrs_cam::dexel::{TriDexel, solid_cell};
     let shape = stock_shape(cam, job, parts).ok_or("The job has no bodies")?;
     let stock = stock_in(&shape, &run.frame);
@@ -1139,11 +1169,13 @@ pub fn simulate_solid(
             tag: (k + 1).min(254) as u8,
         })
         .collect();
-    Ok(sim::simulate_mill_solid(
+    Ok(sim::simulate_mill_solid_with(
         start,
         part.as_ref(),
         held.as_ref(),
         &ops,
+        after,
+        snap,
     ))
 }
 

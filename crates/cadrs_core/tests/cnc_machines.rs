@@ -889,6 +889,37 @@ fn the_4_axis_toolpaths_compute() {
         );
         assert!(r.rapid_hits.is_empty(), "{:?}", r.rapid_hits);
         assert!(r.holder_hits.is_empty(), "{:?}", r.holder_hits);
+        // Simulate's stock as the run goes: handed out along the way, the bar getting less
+        // and less, down to what the run leaves.
+        let above = [0.0, 0.0, 0.0];
+        let moves: usize = program::run_motions(setup, job, &run, above)
+            .iter()
+            .map(|m| m.len())
+            .sum();
+        let marks: Vec<usize> = (1..40).map(|i| i * moves / 40).collect();
+        let mut seen: Vec<(usize, f64)> = Vec::new();
+        let again = program::simulate_solid_with(
+            cam,
+            job,
+            setup,
+            &run,
+            &parts,
+            &paths,
+            None,
+            0.3,
+            &marks,
+            &mut |n, stock| {
+                let _ = stock.mesh(1);
+                seen.push((n, stock.volume()));
+            },
+        )
+        .unwrap();
+        assert_eq!(seen.len(), marks.len());
+        assert!(seen.windows(2).all(|w| w[1].1 <= w[0].1 + 1e-6), "{seen:?}");
+        let (first, last) = (seen[0].1, seen[seen.len() - 1].1);
+        assert!(first - last > 0.5 * r.removed, "{seen:?}");
+        assert!(last >= again.stock.volume() - 1e-6);
+        assert_eq!(again.removed, r.removed);
     }
     let (rough_tp, thread_tp) = (rough.clone(), thread.clone());
     let nc = posted(

@@ -19,8 +19,8 @@ pub(super) struct Analysis {
     pub(super) sheet: Option<Vec<(cadrs_core::cam::cadrs_cam::region::Region, bool)>>,
     /// Where the machine runs into itself, the workholding or the part ([`check_machine`]).
     pub(super) machine_hits: Vec<crate::cam::machine_view::MachineHit>,
-    /// The solid stock after each operation, for a run simulated solid ([`super::solid`]).
-    pub(super) solid: Vec<cadrs_core::cam::cadrs_cam::dexel::SimMesh>,
+    /// The solid stock at the run's end, for a run simulated solid ([`super::solid`]).
+    pub(super) solid: Vec<super::solid::Stage>,
 }
 
 /// The machine's axes through a run's motions (an operation each, as

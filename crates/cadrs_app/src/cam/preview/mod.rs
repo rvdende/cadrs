@@ -186,8 +186,11 @@ pub struct PreviewState {
     solid: bool,
     /// A solid run's uncut stock: its surface in the model's coordinates.
     solid_blank: Vec<[P3; 3]>,
-    /// The solid stock after each operation (when the run's check is done).
-    solid_stages: Vec<cadrs_core::cam::cadrs_cam::dexel::SimMesh>,
+    /// The solid stock as cut through the run ([`solid::Stage`]s, ascending), each as the
+    /// worker gets past it; the run's end, gouges marked, when the check is done.
+    solid_stages: Vec<solid::Stage>,
+    /// The solid stock's stages from the worker, while it's simulating.
+    solid_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<solid::Stage>>>,
     /// The check of the whole run, on a worker thread until it's done.
     analysis: Option<std::sync::Mutex<std::sync::mpsc::Receiver<Analysis>>>,
 }
@@ -316,15 +319,13 @@ impl PreviewState {
         self.cut_to_now();
     }
 
-    /// How many of the run's operations are through at the preview's time.
-    fn ops_done(&self) -> usize {
-        let n = self.timeline.segments.len();
-        (0..self.ops.len())
-            .filter(|k| {
-                let end = self.ops.get(k + 1).map_or(n, |o| o.first);
-                end == 0 || self.t >= self.timeline.end_of(end - 1) - 1e-9
-            })
-            .count()
+    /// How many of the run's moves are finished at the preview's time.
+    fn moves_done(&self) -> usize {
+        if self.t >= self.timeline.total() - 1e-12 {
+            self.timeline.segments.len()
+        } else {
+            self.timeline.at(self.t).map_or(0, |(_, i)| i)
+        }
     }
 
     /// Lowers the stock under every move up to now.
@@ -567,6 +568,7 @@ pub fn open_for_selection(world: &mut World) {
         (Some(stock.height_map(cell)), stock.bounds.max[2] as f32)
     };
     // What the whole run finds, once, on a worker thread.
+    let (stage_tx, stage_rx) = std::sync::mpsc::channel::<solid::Stage>();
     let analysis = {
         let (tx, rx) = std::sync::mpsc::channel();
         let (stock, segments, spans) = (stock.clone(), segments.clone(), spans.clone());
@@ -591,8 +593,10 @@ pub fn open_for_selection(world: &mut World) {
                 let mut a = match &solid_input {
                     Some(input) => {
                         let (summary, collisions, stages) =
-                            match solid::analyse_solid(input, &segments, &spans) {
-                                Ok(s) => (s.summary, s.collisions, s.stages),
+                            match solid::analyse_solid(input, &segments, &spans, &mut |st| {
+                                let _ = stage_tx.send(st);
+                            }) {
+                                Ok(s) => (s.summary, s.collisions, vec![s.end]),
                                 Err(e) => (e, Vec::new(), Vec::new()),
                             };
                         Analysis {
@@ -669,13 +673,22 @@ pub fn open_for_selection(world: &mut World) {
             Vec::new()
         },
         solid_stages: Vec::new(),
+        solid_rx: is_solid.then(|| std::sync::Mutex::new(stage_rx)),
         analysis,
     });
 }
 
-/// Takes the run's check when the worker has finished it.
+/// Takes the run's check when the worker has finished it, and a solid run's stock as the
+/// worker cuts it.
 fn poll_analysis(state: Option<ResMut<PreviewState>>) {
     let Some(mut s) = state else { return };
+    let got: Vec<solid::Stage> = match s.solid_rx.as_mut().map(|r| r.get_mut()) {
+        Some(Ok(rx)) => rx.try_iter().collect(),
+        _ => Vec::new(),
+    };
+    if !got.is_empty() {
+        s.solid_stages.extend(got);
+    }
     let Some(rx) = s.analysis.as_mut() else {
         return;
     };
@@ -708,7 +721,14 @@ fn poll_analysis(state: Option<ResMut<PreviewState>>) {
     collisions.sort_by(|a, b| a.0.total_cmp(&b.0));
     s.collisions = collisions;
     s.machine_hits = got.machine_hits;
-    s.solid_stages = got.solid;
+    // The run's end, its gouges marked, for the one simulated without them.
+    if let Some(rx) = s.solid_rx.take().and_then(|r| r.into_inner().ok()) {
+        s.solid_stages.extend(rx.try_iter());
+    }
+    for end in got.solid {
+        s.solid_stages.retain(|(n, _)| *n != end.0);
+        s.solid_stages.push(end);
+    }
     s.part = got.part;
     s.sheet = got.sheet;
     if let Some(start) = got.start {
@@ -1481,7 +1501,7 @@ fn sync_stock_mesh(
     mut shading: ResMut<Assets<PartShading>>,
     q_solid: Query<Entity, With<SolidMesh>>,
     mut solid_mat: Local<Option<Handle<PartShading>>>,
-    mut solid_shown: Local<Option<usize>>,
+    mut solid_shown: Local<Option<(usize, usize)>>,
     mut commands: Commands,
 ) {
     let Some(mut s) = state else {
@@ -1494,11 +1514,14 @@ fn sync_stock_mesh(
     // A run simulated solid: the stock the last finished operation left, the uncut stock
     // until there is one ([`BLANK`]).
     if s.solid && s.mode != Mode::BackPlot {
-        let stage =
-            solid::stage_shown(s.solid_stages.len(), s.ops.len(), s.ops_done()).unwrap_or(BLANK);
+        let counts: Vec<usize> = s.solid_stages.iter().map(|(n, _)| *n).collect();
+        // The stage's moves, so a stage replaced (the run's end, gouges marked) is shown again.
+        let stage = solid::stage_shown(&counts, s.moves_done())
+            .map(|i| (i, s.solid_stages.len()))
+            .unwrap_or((BLANK, 0));
         if *solid_shown != Some(stage) || q_solid.is_empty() {
-            let mesh = match s.solid_stages.get(stage) {
-                Some(m) => solid::stock_mesh(m, &s.frame),
+            let mesh = match s.solid_stages.get(stage.0) {
+                Some((_, m)) => solid::stock_mesh(m, &s.frame),
                 None => solid::blank_mesh(&s.solid_blank),
             };
             let handle = meshes.add(mesh);

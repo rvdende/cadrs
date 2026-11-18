@@ -374,3 +374,51 @@ fn leaning_and_undercutting_cuts() {
         }
     }
 }
+
+/// The stock handed out along the way is the stock as it is after that many moves: each
+/// snapshot has lost what the slots cut so far, and the last is the finished stock.
+#[test]
+fn the_stock_is_handed_out_as_the_moves_cut_it() {
+    let tool = Tool::new(ToolKind::EndMill, 6.0);
+    let slab = TriDexel::block(
+        Frame::WORLD,
+        &Aabb::new([0.0, 0.0, 0.0], [60.0, 20.0, 20.0]),
+        0.5,
+    );
+    // Three slots across the slab, a rapid between each.
+    let mut moves = Vec::new();
+    for x in [10.0, 30.0, 50.0] {
+        moves.push(seg([x, -10.0, 30.0], [x, -10.0, 15.0], false, None));
+        moves.push(seg([x, -10.0, 15.0], [x, 30.0, 15.0], true, None));
+        moves.push(seg([x, 30.0, 15.0], [x, 30.0, 30.0], false, None));
+    }
+    let op = || SolidOp {
+        tool: &tool,
+        segments: &moves,
+        frame: Frame::WORLD,
+        tag: 1,
+    };
+    let full = slab.volume();
+    let mut seen: Vec<(usize, f64)> = Vec::new();
+    let r = simulate_mill_solid_with(
+        slab.clone(),
+        None,
+        None,
+        &[op()],
+        &[0, 2, 5, 9, 9],
+        &mut |n, s| seen.push((n, s.volume())),
+    );
+    assert_eq!(
+        seen.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+        [0, 2, 5, 9, 9]
+    );
+    let slot = (full - r.stock.volume()) / 3.0;
+    assert!(slot > 100.0, "{slot}");
+    for ((_, v), slots) in seen.iter().zip([0.0, 1.0, 2.0, 3.0, 3.0]) {
+        assert!((full - v - slots * slot).abs() < 0.05 * slot, "{seen:?}");
+    }
+    assert_eq!(
+        r.removed,
+        simulate_mill_solid(slab, None, None, &[op()]).removed
+    );
+}

@@ -62,11 +62,31 @@ pub struct SolidResult {
 /// cuts. Rapids are tested with the whole tool pulled in by half a cell, cuts' shanks and
 /// holders by the cutter's tolerance, so a tool running along a surface it cut isn't reported.
 pub fn simulate_mill_solid(
-    mut stock: TriDexel,
+    stock: TriDexel,
     part: Option<&TriDexel>,
     fixtures: Option<&TriDexel>,
     ops: &[SolidOp],
 ) -> SolidResult {
+    simulate_mill_solid_with(stock, part, fixtures, ops, &[], &mut |_, _| {})
+}
+
+/// [`simulate_mill_solid`], handing `snap` the stock as it is along the way: after the first
+/// `n` moves (counted through all the operations' segments in order) for each `n` of `after`
+/// (ascending), before the gouges are marked. For a preview that shows the stock being cut.
+pub fn simulate_mill_solid_with(
+    mut stock: TriDexel,
+    part: Option<&TriDexel>,
+    fixtures: Option<&TriDexel>,
+    ops: &[SolidOp],
+    after: &[usize],
+    snap: &mut dyn FnMut(usize, &TriDexel),
+) -> SolidResult {
+    let mut done = 0usize;
+    let mut marks = after.iter().copied().peekable();
+    // (Marks at 0 come before any move.)
+    while let Some(n) = marks.next_if(|n| *n == 0) {
+        snap(n, &stock);
+    }
     let cell = stock.cell;
     let eps = crate::dexel::sim_eps(cell);
     // What a surface the tool cut itself can be off by: the cutter's own tolerance each way.
@@ -85,6 +105,11 @@ pub fn simulate_mill_solid(
             fixtures.map(|f| SimCutter::new(op.tool, crate::dexel::sim_eps(f.cell)));
         let flutes = op.tool.cutting_length.max(0.1);
         for s in op.segments {
+            // The stock after the moves before this one, where a mark asks for it.
+            while let Some(n) = marks.next_if(|n| *n <= done) {
+                snap(n, &stock);
+            }
+            done += 1;
             let at = |f: f64| Pose {
                 tip: op.frame.to_world(crate::geom::lerp(s.from, s.to, f)),
                 axis: op.frame.dir_to_world(s.axis_at(f)),
@@ -120,6 +145,9 @@ pub fn simulate_mill_solid(
                 removed += stock.cut(&cutter, p0, p1, op.tag);
             }
         }
+    }
+    for n in marks {
+        snap(n, &stock);
     }
     let d = match part {
         Some(part) => stock.mark_gouges(part, (cell * 0.5).max(0.01)),
