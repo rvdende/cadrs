@@ -204,6 +204,10 @@ const RESOLUTIONS: [(&str, f64, f64); 3] = [
     ("io-export-res-fine", 0.02, 5.0),
 ];
 
+/// The resolution of a mesh sent to a slicer: Fine.
+#[cfg(not(target_arch = "wasm32"))]
+const SEND_RESOLUTION: (&str, f64, f64) = RESOLUTIONS[2];
+
 /// A field's label, from its catalog key.
 fn label(p: &mut ChildSpawner, t: &Theme, key: &'static str) {
     p.spawn((
@@ -1223,8 +1227,10 @@ struct RunningSend {
     name: String,
 }
 
-/// Sends `parts` of the active Part Studio (all of them if empty) to `slicer`: a binary STL in
-/// millimetres each, made as an export is ([`finish_sends`] opens them in the slicer, which
+/// Sends `parts` of the active Part Studio (all of them if empty) to `slicer`: a STEP each to a
+/// slicer that imports it (exact curves, which it meshes itself), else a binary STL in
+/// millimetres at the Fine resolution (a coarser one shows its facets on a print), made as an
+/// export is ([`finish_sends`] opens them in the slicer, which
 /// is then remembered as the last one used). Like an export, it needs the Export right on a
 /// shared document.
 #[cfg(not(target_arch = "wasm32"))]
@@ -1255,9 +1261,17 @@ pub(crate) fn send_to_slicer(
             .map(|d| d.doc.name.clone())
             .unwrap_or_else(|| "Parts".into()),
     };
-    let mut req = ExportRequest::new(ModelFormat::Stl { binary: true }, name.clone(), items);
+    let format = if slicer.step {
+        ModelFormat::Step
+    } else {
+        ModelFormat::Stl { binary: true }
+    };
+    let mut req = ExportRequest::new(format, name.clone(), items);
     // A file a part: the slicer gets them as separate objects.
     req.individual = true;
+    let (_, chord, angle) = SEND_RESOLUTION;
+    req.deflection = chord;
+    req.angle = angle.to_radians();
     let pending = cadrs_core::rebuild::exchange::export_files(req);
     world.spawn((
         Name::new("running-send"),
@@ -1295,7 +1309,7 @@ fn finish_sends(q: Query<(Entity, &RunningSend)>, theme: Res<Theme>, mut command
                     .iter()
                     .map(|f| {
                         let name = f.part.as_deref().unwrap_or(&run.name);
-                        cadrs_core::slicer::write_mesh(&dir, name, &f.bytes)
+                        cadrs_core::slicer::write_file(&dir, name, f.extension, &f.bytes)
                             .map_err(|e| format!("{}: {e}", dir.display()))
                     })
                     .collect::<Result<Vec<_>, _>>()?;

@@ -1,8 +1,10 @@
 //! Sending parts to a slicer installed on this machine (issue #176): finding PrusaSlicer,
-//! OrcaSlicer, Bambu Studio, UltiMaker Cura, SuperSlicer or Creality Print, and opening a mesh in
-//! one. The mesh goes to a folder of cadrs's own ([`send_path`]) and the slicer is started with
-//! it: nothing is uploaded, no file association changes, no printer is spoken to. Not in a
-//! browser (a page can't start programs; it downloads the mesh instead).
+//! OrcaSlicer, Bambu Studio, UltiMaker Cura, SuperSlicer or Creality Print, and opening the parts
+//! in one. A slicer that imports STEP gets STEP (its curves exact, so it meshes them as finely
+//! as it likes: no facets of ours on a print), the others a fine STL. The files go to a folder
+//! of cadrs's own ([`send_dir`]) and the slicer is started with them: nothing is uploaded, no
+//! file association changes, no printer is spoken to. Not in a browser (a page can't start
+//! programs; it downloads the mesh instead).
 
 use std::path::{Path, PathBuf};
 
@@ -18,15 +20,18 @@ pub struct Slicer {
     pub args: Vec<String>,
     /// After the files (Flatpak's `@@` that closes its forwarded files).
     pub trailing: Vec<String>,
+    /// It imports STEP, so it gets that rather than a mesh.
+    pub step: bool,
 }
 
 /// The id of a program of one's own ([`custom`]).
 pub const CUSTOM: u8 = u8::MAX;
 
-/// A slicer cadrs knows: its name, its commands on the PATH (Linux, macOS), its Flatpak id, its
-/// macOS app and its usual Windows executables (under Program Files).
+/// A slicer cadrs knows: its name, whether it imports STEP, its commands on the PATH (Linux,
+/// macOS), its Flatpak id, its macOS app and its usual Windows executables (under Program Files).
 struct Known {
     name: &'static str,
+    step: bool,
     commands: &'static [&'static str],
     flatpak: &'static str,
     mac_app: &'static str,
@@ -36,6 +41,7 @@ struct Known {
 const KNOWN: &[Known] = &[
     Known {
         name: "PrusaSlicer",
+        step: true,
         commands: &["prusa-slicer", "PrusaSlicer"],
         flatpak: "com.prusa3d.PrusaSlicer",
         mac_app: "PrusaSlicer.app",
@@ -43,6 +49,7 @@ const KNOWN: &[Known] = &[
     },
     Known {
         name: "OrcaSlicer",
+        step: true,
         commands: &["orca-slicer", "OrcaSlicer"],
         flatpak: "io.github.softfever.OrcaSlicer",
         mac_app: "OrcaSlicer.app",
@@ -50,6 +57,7 @@ const KNOWN: &[Known] = &[
     },
     Known {
         name: "Bambu Studio",
+        step: true,
         commands: &["bambu-studio", "BambuStudio"],
         flatpak: "com.bambulab.BambuStudio",
         mac_app: "BambuStudio.app",
@@ -57,6 +65,8 @@ const KNOWN: &[Known] = &[
     },
     Known {
         name: "UltiMaker Cura",
+        // Only with a plugin.
+        step: false,
         commands: &["cura", "UltiMaker-Cura"],
         flatpak: "com.ultimaker.cura",
         mac_app: "UltiMaker Cura.app",
@@ -67,6 +77,7 @@ const KNOWN: &[Known] = &[
     },
     Known {
         name: "SuperSlicer",
+        step: true,
         commands: &["superslicer", "SuperSlicer"],
         flatpak: "com.superslicer.SuperSlicer",
         mac_app: "SuperSlicer.app",
@@ -74,6 +85,7 @@ const KNOWN: &[Known] = &[
     },
     Known {
         name: "Creality Print",
+        step: true,
         commands: &["CrealityPrint", "crealityprint"],
         flatpak: "io.github.crealityofficial.CrealityPrint",
         mac_app: "CrealityPrint.app",
@@ -106,6 +118,7 @@ fn find_known(id: u8, k: &Known, path: &[PathBuf]) -> Option<Slicer> {
         program,
         args,
         trailing,
+        step: k.step,
     };
     if cfg!(target_os = "windows") {
         let roots: Vec<PathBuf> = ["ProgramFiles", "ProgramFiles(x86)"]
@@ -211,10 +224,11 @@ pub fn custom(program: PathBuf) -> Slicer {
         program,
         args: Vec::new(),
         trailing: Vec::new(),
+        step: false,
     }
 }
 
-/// cadrs's folder for sent meshes (`…/cadrs/slicer` in the user's cache).
+/// cadrs's folder for sent parts (`…/cadrs/slicer` in the user's cache).
 pub fn cache_dir() -> PathBuf {
     directories::ProjectDirs::from("", "", "cadrs")
         .map(|d| d.cache_dir().join("slicer"))
@@ -254,10 +268,16 @@ pub fn send_dir(base: &Path, now_secs: u64) -> std::io::Result<PathBuf> {
     unreachable!("a free folder name")
 }
 
-/// Writes `bytes` as `<name>.stl` in `dir` (a send's own folder, [`send_dir`]): a new file.
-pub fn write_mesh(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
+/// Writes `bytes` as `<name>.<extension>` in `dir` (a send's own folder, [`send_dir`]): a new
+/// file.
+pub fn write_file(
+    dir: &Path,
+    name: &str,
+    extension: &str,
+    bytes: &[u8],
+) -> std::io::Result<PathBuf> {
     use std::io::Write;
-    let path = crate::export::unique_path_ext(dir, &crate::export::sanitize(name), "stl");
+    let path = crate::export::unique_path_ext(dir, &crate::export::sanitize(name), extension);
     std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -299,6 +319,8 @@ mod tests {
     fn a_custom_slicer_is_named_after_its_file_and_gets_the_files() {
         let s = custom(PathBuf::from("/opt/slicers/MySlicer.AppImage"));
         assert_eq!((s.id, s.name.as_str()), (CUSTOM, "MySlicer"));
+        // What a program of one's own reads isn't known: it gets a mesh.
+        assert!(!s.step);
         // `true` takes any arguments and exits: the launch itself works.
         if cfg!(unix) {
             custom(PathBuf::from("true"))
@@ -313,7 +335,7 @@ mod tests {
         let a = send_dir(&base, 1_700_000_000).unwrap();
         let b = send_dir(&base, 1_700_000_000).unwrap();
         assert_ne!(a, b);
-        let f = write_mesh(&a, "Bracket / v2", b"solid").unwrap();
+        let f = write_file(&a, "Bracket / v2", "stl", b"solid").unwrap();
         assert_eq!(f.extension().unwrap(), "stl");
         assert!(
             f.file_stem()
@@ -322,9 +344,26 @@ mod tests {
                 .starts_with("Bracket")
         );
         // Never over a file that is there (one still open in the slicer).
-        let g = write_mesh(&a, "Bracket / v2", b"solid").unwrap();
+        let g = write_file(&a, "Bracket / v2", "stl", b"solid").unwrap();
         assert_ne!(f, g);
+        let h = write_file(&a, "Bracket / v2", "step", b"ISO-10303-21;").unwrap();
+        assert_eq!(h.extension().unwrap(), "step");
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn the_slicers_that_import_step_get_it() {
+        let step: Vec<_> = KNOWN.iter().filter(|k| k.step).map(|k| k.name).collect();
+        assert_eq!(
+            step,
+            [
+                "PrusaSlicer",
+                "OrcaSlicer",
+                "Bambu Studio",
+                "SuperSlicer",
+                "Creality Print"
+            ]
+        );
     }
 
     #[test]
