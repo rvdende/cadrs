@@ -23,6 +23,14 @@ use super::topo::{Body, Coedge, Face};
 use crate::{BodyId, EdgeId, Origin};
 use std::f64::consts::TAU;
 
+/// None, saying why with `CADRS_BLEND_DEBUG`.
+fn no<T>(why: &str) -> Option<T> {
+    if crate::native::env_flag!("CADRS_BLEND_DEBUG") {
+        eprintln!("rim chamfer: not made: {why}");
+    }
+    None
+}
+
 /// A face's cut by the half-plane through the axis, near the rim: a line through `p` or a
 /// circle about `q`, with `n` its outward normal at the rim (in (radius, height)).
 enum Meridian {
@@ -106,14 +114,10 @@ impl Rim {
         let d = p - self.c;
         V2::new(d.dot(&self.m), d.dot(&self.z))
     }
-    fn lift(&self, x: &V2) -> P3 {
-        self.c + self.m * x.x + self.z * x.y
-    }
-    /// [`Self::lift`] a radian round the axis from the rim's vertex: clear of the faces'
-    /// seams, which run through the vertex.
-    fn lift_aside(&self, x: &V2) -> P3 {
+    /// [`Self::lift`] the angle `a` round the axis from the rim's first vertex.
+    fn lift_at(&self, x: &V2, a: f64) -> P3 {
         let side = self.z.cross(&self.m);
-        self.c + (self.m * 1f64.cos() + side * 1f64.sin()) * x.x + self.z * x.y
+        self.c + (self.m * a.cos() + side * a.sin()) * x.x + self.z * x.y
     }
     fn flat_dir(&self, v: &V3) -> V2 {
         V2::new(v.dot(&self.m), v.dot(&self.z))
@@ -160,36 +164,45 @@ impl Rim {
     }
 }
 
-/// A rim read for its blend: its edge, its two faces (the one the edge runs forward in first)
-/// each with where the edge is in its loops, their meridians at the rim's point `e2`, the way
-/// each runs from it, and whether the rim is a ridge (1) or a groove (−1).
+/// One arc of a rim: its edge, the angle round the axis its start is at (from the rim's first
+/// vertex), how much its circle's parameter is behind that angle, and where it is in the two
+/// faces' loops (loop, coedge).
+struct Piece {
+    edge: usize,
+    from: f64,
+    behind: f64,
+    place: [(usize, usize); 2],
+}
+
+/// A rim read for its blend: its arcs in order round the axis, its two faces (the one its
+/// edges run forward in first), their meridians at the rim's point `e2`, the way each runs
+/// from it, and whether the rim is a ridge (1) or a groove (−1).
 struct Read<'a> {
     b: &'a Body,
-    e: usize,
     rim: Rim,
-    uses: [(usize, usize, usize, bool); 2],
+    pieces: Vec<Piece>,
+    faces: [usize; 2],
     lines: [Meridian; 2],
     e2: V2,
     runs: [V2; 2],
     side: f64,
     near: f64,
     polys: [Vec<Vec<P2>>; 2],
+    /// An angle round the axis clear of every vertex of the rim (the faces' seams run through
+    /// those), where points are asked of the faces.
+    aside: f64,
 }
 
 impl<'a> Read<'a> {
-    /// The rim edge `e` of `b` is, where it is one (see the module).
-    fn of(b: &'a Body, e: usize) -> Option<Self> {
-        let ed = b.edges.get(e)?;
-        let Curve::Circle { c, x, y, r } = &ed.curve else {
-            return None;
+    /// The rim the edges `es` of `b` make, where they make one (see the module): arcs of one
+    /// circle, end to end the whole way round, between the same two faces, each running
+    /// forward in the same one.
+    fn of(b: &'a Body, es: &[usize]) -> Option<Self> {
+        let first = b.edges.get(*es.first()?)?;
+        let Curve::Circle { c, x, y, r } = &first.curve else {
+            return no("the edge is no circle");
         };
-        if ed.degenerate
-            || ed.v[0] != ed.v[1]
-            || ((ed.t[1] - ed.t[0]).abs() - TAU).abs() > tol::ANGULAR
-        {
-            return None;
-        }
-        let start = ed.curve.point(ed.t[0]);
+        let start = first.curve.point(first.t[0]);
         let rim = Rim {
             c: *c,
             z: x.cross(y).try_normalize(tol::TINY)?,
@@ -197,23 +210,86 @@ impl<'a> Read<'a> {
         };
         let size = b.bbox().diagonal();
         let near = tol::REL_POINT * (1.0 + size);
-        // The two faces: the one the edge runs forward in first.
-        let mut uses: Vec<(usize, usize, usize, bool)> = Vec::new();
-        for (fi, f) in b.faces.iter().enumerate() {
-            for (li, l) in f.loops.iter().enumerate() {
-                for (ci, co) in l.iter().enumerate() {
-                    if co.edge == e {
-                        uses.push((fi, li, ci, co.fwd));
+        // Each edge's two uses, forward and back.
+        let mut uses: Vec<[(usize, usize, usize); 2]> = Vec::with_capacity(es.len());
+        for &e in es {
+            let (mut fwd, mut rev) = (None, None);
+            for (fi, f) in b.faces.iter().enumerate() {
+                for (li, l) in f.loops.iter().enumerate() {
+                    for (ci, co) in l.iter().enumerate() {
+                        if co.edge == e {
+                            let slot = if co.fwd { &mut fwd } else { &mut rev };
+                            if slot.replace((fi, li, ci)).is_some() {
+                                return no("an edge used twice one way");
+                            }
+                        }
                     }
                 }
             }
+            uses.push([fwd?, rev?]);
         }
-        let [a, o] = uses.as_slice() else { return None };
-        if a.0 == o.0 || a.3 == o.3 {
-            return None;
+        let faces = [uses[0][0].0, uses[0][1].0];
+        if faces[0] == faces[1]
+            || uses
+                .iter()
+                .any(|u| u[0].0 != faces[0] || u[1].0 != faces[1])
+        {
+            return no("not one pair of faces all round");
         }
-        let (fwd, rev) = if a.3 { (*a, *o) } else { (*o, *a) };
-        let faces = [fwd.0, rev.0];
+        // The arcs in order round the axis from the first's start.
+        let mut pieces: Vec<Piece> = Vec::with_capacity(es.len());
+        let (mut at, mut vertex) = (0.0, first.v[0]);
+        for _ in 0..es.len() {
+            let k = es.iter().position(|&e| {
+                b.edges[e].v[0] == vertex && pieces.iter().all(|p: &Piece| p.edge != e)
+            })?;
+            let ed = &b.edges[es[k]];
+            let Curve::Circle {
+                c: c2,
+                x: x2,
+                y: y2,
+                r: r2,
+            } = &ed.curve
+            else {
+                return no("an edge is no circle");
+            };
+            let span = ed.t[1] - ed.t[0];
+            if ed.degenerate
+                || (c2 - c).norm() > near
+                || (r2 - r).abs() > near
+                || x2.cross(y2).dot(&rim.z) < 1.0 - tol::ANGULAR
+                || !(span > 0.0)
+            {
+                return no("an edge of another circle");
+            }
+            // (Its parameter's angle round the axis: where its own x axis points.)
+            let behind = at - ed.t[0];
+            if (rim.lift_at(&V2::new(*r, 0.0), ed.t[1] + behind) - ed.curve.point(ed.t[1])).norm()
+                > near
+            {
+                return no("an arc out of turn");
+            }
+            pieces.push(Piece {
+                edge: es[k],
+                from: at,
+                behind,
+                place: [(uses[k][0].1, uses[k][0].2), (uses[k][1].1, uses[k][1].2)],
+            });
+            at += span;
+            vertex = ed.v[1];
+        }
+        if (at - TAU).abs() > tol::ANGULAR || vertex != first.v[0] {
+            return no("not the whole way round");
+        }
+        // (Midway along the longest arc: as far from the vertices as may be.)
+        let aside = pieces
+            .iter()
+            .map(|p| {
+                let ed = &b.edges[p.edge];
+                (ed.t[1] - ed.t[0], p.from + 0.5 * (ed.t[1] - ed.t[0]))
+            })
+            .max_by(|a, b| a.0.total_cmp(&b.0))?
+            .1;
         let e2 = rim.flat(&start);
         let lines: Vec<Meridian> = faces
             .iter()
@@ -224,53 +300,51 @@ impl<'a> Read<'a> {
             Meridian::Circle { q, out, .. } => (e2 - q).normalize() * out,
         };
         let (n0, n1) = (normal(&lines[0]), normal(&lines[1]));
-        // Which way each face runs from the rim (in the half-plane), by a point of it a little
-        // way along; so whether the rim is a ridge or a groove.
         let polys: Vec<Vec<Vec<P2>>> = faces
             .iter()
             .map(|&f| classify::face_polygons(b, &b.faces[f]))
             .collect();
-        let within = |k: usize, p: &P3| {
-            let s = &b.faces[faces[k]].surf;
-            let (u, v) = s.project(p, None);
-            (s.eval(u, v) - p).norm() <= near
-                && classify::in_face(&polys[k], s, P2::new(u, v), tol::CONFUSION) == InFace::Inside
+        let mut lines = lines.into_iter();
+        let mut polys = polys.into_iter();
+        let mut read = Read {
+            b,
+            rim,
+            pieces,
+            faces,
+            lines: [lines.next()?, lines.next()?],
+            e2,
+            runs: [V2::zeros(); 2],
+            side: 1.0,
+            near,
+            polys: [polys.next()?, polys.next()?],
+            aside,
         };
+        // Which way each face runs from the rim (in the half-plane), by a point of it a little
+        // way along; so whether the rim is a ridge or a groove.
         let step = 1e-3 * *r;
         let runs = |k: usize, n: V2| -> Option<V2> {
             let t = V2::new(-n.y, n.x);
             [t, -t].into_iter().find(|d| {
-                lines[k]
+                read.lines[k]
                     .foot(&(e2 + d * step))
-                    .is_some_and(|x| within(k, &rim.lift_aside(&x)))
+                    .is_some_and(|x| read.within(k, &x))
             })
         };
         let (d0, d1) = (runs(0, n0)?, runs(1, n1)?);
         let ridge = d0.dot(&n1) < 0.0;
         if ridge != (d1.dot(&n0) < 0.0) {
-            return None;
+            return no("neither a ridge nor a groove");
         }
-        let mut lines = lines.into_iter();
-        let mut polys = polys.into_iter();
-        Some(Read {
-            b,
-            e,
-            rim,
-            uses: [fwd, rev],
-            lines: [lines.next()?, lines.next()?],
-            e2,
-            runs: [d0, d1],
-            side: if ridge { 1.0 } else { -1.0 },
-            near,
-            polys: [polys.next()?, polys.next()?],
-        })
+        read.runs = [d0, d1];
+        read.side = if ridge { 1.0 } else { -1.0 };
+        Some(read)
     }
 
-    /// Whether the point `x` of face k's meridian is inside the face (asked a radian round
-    /// the axis from the rim's vertex, clear of the faces' seams, which run through it).
+    /// Whether the point `x` of face k's meridian is inside the face (asked clear of the
+    /// faces' seams).
     fn within(&self, k: usize, x: &V2) -> bool {
-        let p = self.rim.lift_aside(x);
-        let s = &self.b.faces[self.uses[k].0].surf;
+        let p = self.rim.lift_at(x, self.aside);
+        let s = &self.b.faces[self.faces[k]].surf;
         let (u, v) = s.project(&p, None);
         (s.eval(u, v) - p).norm() <= self.near
             && classify::in_face(&self.polys[k], s, P2::new(u, v), tol::CONFUSION) == InFace::Inside
@@ -278,127 +352,162 @@ impl<'a> Read<'a> {
 
     /// The body with the rim cut off between `feet`, a point of each face's meridian: the
     /// faces cut back to the circles through them, the cone between. None where a foot isn't
-    /// inside its face along from the rim, something else hangs on the rim's vertex, or the
-    /// body made isn't sound.
+    /// inside its face along from the rim, something else hangs on a vertex of the rim, or
+    /// the body made isn't sound.
     fn cut(&self, input: BodyId, feet: [V2; 2]) -> Option<(Body, Vec<Vec<FaceSrc>>)> {
-        let (b, e, rim, near, e2, side) =
-            (self.b, self.e, &self.rim, self.near, self.e2, self.side);
-        let ed = &b.edges[e];
-        let Curve::Circle { x, y, .. } = &ed.curve else {
-            return None;
-        };
-        let vert = ed.v[0];
-        let [fwd, rev] = self.uses;
-        let faces = [fwd.0, rev.0];
+        let (b, rim, near, e2, side, faces) =
+            (self.b, &self.rim, self.near, self.e2, self.side, self.faces);
         if (feet[0] - e2).dot(&self.runs[0]) <= near
             || (feet[1] - e2).dot(&self.runs[1]) <= near
             || feet.iter().any(|x| x.x <= near)
             || (feet[0] - feet[1]).norm() <= near
             || !(self.within(0, &feet[0]) && self.within(1, &feet[1]))
         {
-            return None;
+            return no("a contact off its face");
         }
-        let at = [rim.lift(&feet[0]), rim.lift(&feet[1])];
+        let n = self.pieces.len();
         let mut nb = b.clone();
-        let (t0, t1) = (ed.t[0], ed.t[1]);
-        let circle = |x2: &V2| Curve::Circle {
-            c: rim.c + rim.z * x2.y,
-            x: *x,
-            y: *y,
-            r: x2.x,
-        };
-        let nv = [nb.add_vertex(at[0]), nb.add_vertex(at[1])];
-        let ne = [
-            nb.add_edge(circle(&feet[0]), t0, t1, nv[0], nv[0]),
-            nb.add_edge(circle(&feet[1]), t0, t1, nv[1], nv[1]),
-        ];
-        // Each face cut back to its circle: the rim's coedge on the new edge, and the face's seam
-        // (the one edge of its own that ended at the rim's vertex) ending at the new vertex.
+        // A vertex on each face's new circle for each of the rim's, and an arc for each arc.
+        let nv: [Vec<usize>; 2] = [0, 1].map(|k| {
+            self.pieces
+                .iter()
+                .map(|p| nb.add_vertex(rim.lift_at(&feet[k], p.from)))
+                .collect()
+        });
+        let ne: [Vec<usize>; 2] = [0, 1].map(|k| {
+            (0..n)
+                .map(|j| {
+                    let ed = &b.edges[self.pieces[j].edge];
+                    let Curve::Circle { x, y, .. } = &ed.curve else {
+                        unreachable!("a rim's arcs are circles")
+                    };
+                    let arc = Curve::Circle {
+                        c: rim.c + rim.z * feet[k].y,
+                        x: *x,
+                        y: *y,
+                        r: feet[k].x,
+                    };
+                    nb.add_edge(arc, ed.t[0], ed.t[1], nv[k][j], nv[k][(j + 1) % n])
+                })
+                .collect()
+        });
+        // Each face cut back to its circle: the rim's coedges on the new arcs, and the face's
+        // seams (the edges of its own that ended at the rim's vertices) ending at the new ones.
         let mut seams: Vec<usize> = Vec::new();
-        for (k, &(fi, li, ci, dir)) in [fwd, rev].iter().enumerate() {
+        let rim_edge = |e: usize| self.pieces.iter().any(|p| p.edge == e);
+        for k in 0..2 {
+            let fi = faces[k];
             let surf = b.faces[fi].surf.clone();
-            let old = &b.faces[fi].loops[li][ci].pc;
-            let mid = old.point(0.5 * (t0 + t1));
-            let pc = super::pcurve::pcurve(
-                &surf,
-                &nb.edges[ne[k]].curve,
-                t0,
-                t1,
-                Some(P2::new(mid.x, mid.y)),
-            );
-            // (The cut moves the rim's line in (u, v) along with its points: the hint is the old
-            // line's middle, moved as the contact is from the rim's point.)
-            nb.faces[fi].loops[li][ci] = Coedge {
-                edge: ne[k],
-                fwd: dir,
-                pc,
-            };
+            for (j, p) in self.pieces.iter().enumerate() {
+                let (li, ci) = p.place[k];
+                let ed = &b.edges[p.edge];
+                let mid = b.faces[fi].loops[li][ci]
+                    .pc
+                    .point(0.5 * (ed.t[0] + ed.t[1]));
+                // (The cut moves the rim's line in (u, v) with its points; near where it was.)
+                let pc = super::pcurve::pcurve(
+                    &surf,
+                    &nb.edges[ne[k][j]].curve,
+                    ed.t[0],
+                    ed.t[1],
+                    Some(P2::new(mid.x, mid.y)),
+                );
+                nb.faces[fi].loops[li][ci] = Coedge {
+                    edge: ne[k][j],
+                    fwd: k == 0,
+                    pc,
+                };
+            }
             for co in b.faces[fi].loops.iter().flatten() {
                 let se = co.edge;
-                if se == e || seams.contains(&se) || !b.edges[se].v.contains(&vert) {
+                if rim_edge(se) || seams.contains(&se) {
                     continue;
                 }
                 let s = &b.edges[se];
-                if s.degenerate || s.v[0] == s.v[1] {
-                    return None;
+                for (j, p) in self.pieces.iter().enumerate() {
+                    let vert = b.edges[p.edge].v[0];
+                    if !s.v.contains(&vert) {
+                        continue;
+                    }
+                    if s.degenerate || s.v[0] == s.v[1] {
+                        return no("a closed edge on the rim's vertex");
+                    }
+                    let at = nb.verts[nv[k][j]].p;
+                    let t = s.curve.closest(&at, s.t[0], s.t[1]);
+                    if (s.curve.point(t) - at).norm() > near {
+                        return no("a seam off the contact");
+                    }
+                    let end = usize::from(s.v[1] == vert);
+                    nb.edges[se].v[end] = nv[k][j];
+                    nb.edges[se].t[end] = t;
+                    if !(nb.edges[se].t[0] < nb.edges[se].t[1]) {
+                        return no("a seam shorter than the cut");
+                    }
+                    seams.push(se);
                 }
-                let t = s.curve.closest(&at[k], s.t[0], s.t[1]);
-                if (s.curve.point(t) - at[k]).norm() > near {
-                    return None;
-                }
-                let end = usize::from(s.v[1] == vert);
-                nb.edges[se].v[end] = nv[k];
-                nb.edges[se].t[end] = t;
-                if !(nb.edges[se].t[0] < nb.edges[se].t[1]) {
-                    return None;
-                }
-                seams.push(se);
             }
         }
-        // Nothing else may hang on the rim's vertex: an edge of a third face, or one shared.
+        // Nothing else may hang on the rim's vertices: an edge of a third face, or one shared.
+        let verts: Vec<usize> = self.pieces.iter().map(|p| b.edges[p.edge].v[0]).collect();
         for (fi, f) in b.faces.iter().enumerate() {
             for co in f.loops.iter().flatten() {
-                let touches = b.edges[co.edge].v.contains(&vert) && co.edge != e;
+                let touches =
+                    !rim_edge(co.edge) && b.edges[co.edge].v.iter().any(|v| verts.contains(v));
                 if touches && (!seams.contains(&co.edge) || !faces.contains(&fi)) {
-                    return None;
+                    return no("another edge on the rim's vertex");
                 }
             }
         }
         // (A seam is one face's own: used there and back in it, and nowhere else.)
         for &se in &seams {
-            let users: Vec<usize> = b
+            let users = b
                 .faces
                 .iter()
-                .enumerate()
-                .filter(|(_, f)| f.loops.iter().flatten().any(|co| co.edge == se))
-                .map(|(fi, _)| fi)
-                .collect();
-            if users.len() != 1 {
-                return None;
+                .filter(|f| f.loops.iter().flatten().any(|co| co.edge == se))
+                .count();
+            if users != 1 {
+                return no("a seam shared");
             }
         }
 
-        // The chamfer's face between the two circles, from the lower to the higher along the axis
-        // (or from the inner to the outer where it is flat), its normal out of the solid.
+        // The chamfer's face between the two circles, from the lower to the higher along the
+        // axis (or from the inner to the outer where it is flat), its normal out of the solid:
+        // towards the rim's point, which a ridge's chamfer cuts off and a groove's covers.
         let out2 = {
             let d = feet[1] - feet[0];
             let n = V2::new(-d.y, d.x).normalize();
-            // (Towards the rim's point, which a ridge's chamfer cuts off and a groove's covers.)
             n * (e2 - 0.5 * (feet[0] + feet[1])).dot(&n).signum() * side
         };
+        // Its (u, v) from the rim's first vertex round the axis: an arc's parameter is that
+        // much behind u.
         let frame = |h: f64| Frame {
             o: rim.c + rim.z * h,
-            x: *x,
-            y: *y,
+            x: rim.m,
+            y: rim.z.cross(&rim.m),
             z: rim.z,
         };
         let line_pc = |o: (f64, f64), d: (f64, f64)| Curve::Line {
             o: P3::new(o.0, o.1, 0.0),
             d: V3::new(d.0, d.1, 0.0),
         };
-        // The new coedges run against the faces' own: forward on the circle the reversed face
-        // was cut to, back on the other.
-        let dirs = [!fwd.3, !rev.3];
+        // The new coedges run against the faces' own: back on the circle the first face was
+        // cut to, forward on the other's. A loop along a circle takes its arcs in that order.
+        let round = |k: usize, pc: &dyn Fn(usize) -> Curve| -> Vec<Coedge> {
+            let fwd = k == 1;
+            let order: Vec<usize> = if fwd {
+                (0..n).collect()
+            } else {
+                (0..n).rev().collect()
+            };
+            order
+                .into_iter()
+                .map(|j| Coedge {
+                    edge: ne[k][j],
+                    fwd,
+                    pc: pc(j),
+                })
+                .collect()
+        };
         let level = (feet[0].y - feet[1].y).abs() <= near;
         let face = if level {
             // A flat ring: its outer circle first.
@@ -408,20 +517,19 @@ impl<'a> Read<'a> {
                 (1, 0)
             };
             let sense = out2.y > 0.0;
-            if dirs[outer] != sense || dirs[inner] == sense {
-                return None;
+            if (outer == 1) != sense {
+                return no("a ring the wrong way round");
             }
             let ring = |k: usize| {
-                vec![Coedge {
-                    edge: ne[k],
-                    fwd: dirs[k],
-                    pc: Curve::Circle {
+                round(k, &|j| {
+                    let a = self.pieces[j].behind;
+                    Curve::Circle {
                         c: P3::origin(),
-                        x: V3::x(),
-                        y: V3::y(),
+                        x: V3::new(a.cos(), a.sin(), 0.0),
+                        y: V3::new(-a.sin(), a.cos(), 0.0),
                         r: feet[k].x,
-                    },
-                }]
+                    }
+                })
             };
             Face {
                 surf: Surface::Plane {
@@ -438,57 +546,42 @@ impl<'a> Read<'a> {
             };
             let d = feet[hi] - feet[lo];
             let length = d.norm();
-            // (Its seam through the two new vertices: u from the rim's vertex round the axis,
-            // so a circle's parameter t is u + t0.)
-            let turned = Frame {
-                o: rim.c + rim.z * feet[lo].y,
-                x: rim.m,
-                y: rim.z.cross(&rim.m),
-                z: rim.z,
-            };
             let surf = if d.x.abs() <= near {
                 Surface::Cylinder {
-                    f: turned,
+                    f: frame(feet[lo].y),
                     r: feet[lo].x,
                 }
             } else {
                 Surface::Cone {
-                    f: turned,
+                    f: frame(feet[lo].y),
                     r: feet[lo].x,
                     a: d.x.atan2(d.y),
                 }
             };
             // The surface's own normal points away from the axis: the face's sense by that.
             let sense = out2.x > 0.0;
-            if dirs[lo] != sense || dirs[hi] == sense {
-                return None;
+            if (lo == 1) != sense {
+                return no("a cone the wrong way round");
             }
-            let (seam_curve, _) = Curve::line(at[lo], at[hi]);
-            let seam = nb.add_edge(seam_curve, 0.0, length, nv[lo], nv[hi]);
-            let bottom = Coedge {
-                edge: ne[lo],
-                fwd: dirs[lo],
-                pc: line_pc((-t0, 0.0), (1.0, 0.0)),
-            };
-            let top = Coedge {
-                edge: ne[hi],
-                fwd: dirs[hi],
-                pc: line_pc((-t0, length), (1.0, 0.0)),
-            };
+            let (seam_curve, _) = Curve::line(nb.verts[nv[lo][0]].p, nb.verts[nv[hi][0]].p);
+            let seam = nb.add_edge(seam_curve, 0.0, length, nv[lo][0], nv[hi][0]);
             let up = |u: f64, fwd: bool| Coedge {
                 edge: seam,
                 fwd,
                 pc: line_pc((u, 0.0), (0.0, 1.0)),
             };
-            let loops = if sense {
-                vec![bottom, up(TAU, true), top, up(0.0, false)]
-            } else {
-                vec![bottom, up(0.0, true), top, up(TAU, false)]
-            };
+            let along =
+                |k: usize, v: f64| round(k, &|j| line_pc((self.pieces[j].behind, v), (1.0, 0.0)));
+            // Along the lower circle, up the seam, back along the upper, down the seam: the
+            // seam at u = 2π after a circle run forward, at nought after one run back.
+            let mut l = along(lo, 0.0);
+            l.push(up(if sense { TAU } else { 0.0 }, true));
+            l.extend(along(hi, length));
+            l.push(up(if sense { 0.0 } else { TAU }, false));
             Face {
                 surf,
                 sense,
-                loops: vec![loops],
+                loops: vec![l],
             }
         };
         nb.faces.push(face);
@@ -498,38 +591,36 @@ impl<'a> Read<'a> {
                 sh.faces.push(new);
             }
         }
-        if !nb.check().is_empty() {
-            if crate::native::env_flag!("CADRS_BLEND_DEBUG") {
-                eprintln!("rim chamfer: not sound: {:?}", nb.check());
-            }
-            return None;
+        let problems = nb.check();
+        if !problems.is_empty() {
+            return no(&format!("not sound: {problems:?}"));
         }
         let mut src: Vec<Vec<FaceSrc>> = (0..b.faces.len())
             .map(|i| vec![FaceSrc::Input(i)])
             .collect();
         src.push(vec![FaceSrc::New(Origin::FromEdge {
             body: input,
-            edge: EdgeId(e as u64),
+            edge: EdgeId(self.pieces[0].edge as u64),
         })]);
         Some((nb, src))
     }
 }
 
-/// Edge `e` of `b` chamfered between the contacts of the ball whose offsets are `law` from the
-/// face the edge runs forward in and `law · ratio` from the other, where the edge is a rim
-/// (see the module): the body, and each face's source. None where it isn't one, the contacts
-/// leave their faces, or the body made isn't sound (the general blend then has it).
+/// The edges `es` of `b` chamfered between the contacts of the ball whose offsets are `law`
+/// from the face they run forward in and `law · ratio` from the other, where they are a rim
+/// (see the module): the body, and each face's source. None where they aren't one, the
+/// contacts leave their faces, or the body made isn't sound (the general blend then has it).
 pub(crate) fn rim_chamfer(
     b: &Body,
     input: BodyId,
-    e: usize,
+    es: &[usize],
     law: f64,
     ratio: f64,
 ) -> Option<(Body, Vec<Vec<FaceSrc>>)> {
     if !(law > 0.0 && ratio > 0.0) {
         return None;
     }
-    let read = Read::of(b, e)?;
+    let read = Read::of(b, es)?;
     // The ball's centre, where the two meridians moved in by its offsets meet, and its feet.
     let centre = read.lines[0]
         .moved_in(read.side * law)?
@@ -538,21 +629,21 @@ pub(crate) fn rim_chamfer(
     read.cut(input, feet)
 }
 
-/// Edge `e` of `b` chamfered along the line through the points `told` along its two faces'
-/// tangents from it (each a face and how far along its tangent at the rim, in the half-plane
-/// through the axis), where the edge is a rim: the chamfer's contacts are where that line
-/// meets the faces themselves (the tangents' own points where a face is straight there). None
-/// as [`rim_chamfer`].
+/// The edges `es` of `b` chamfered along the line through the points `told` along their two
+/// faces' tangents from them (each a face and how far along its tangent at the rim, in the
+/// half-plane through the axis), where they are a rim: the chamfer's contacts are where that
+/// line meets the faces themselves (the tangents' own points where a face is straight there).
+/// None as [`rim_chamfer`].
 pub(crate) fn rim_chamfer_through(
     b: &Body,
     input: BodyId,
-    e: usize,
+    es: &[usize],
     told: [(usize, f64); 2],
 ) -> Option<(Body, Vec<Vec<FaceSrc>>)> {
-    let read = Read::of(b, e)?;
+    let read = Read::of(b, es)?;
     let dist = |k: usize| {
         told.iter()
-            .find(|(f, _)| *f == read.uses[k].0)
+            .find(|(f, _)| *f == read.faces[k])
             .map(|x| x.1)
             .filter(|d| *d > 0.0)
     };

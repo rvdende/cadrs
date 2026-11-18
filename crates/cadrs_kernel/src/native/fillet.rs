@@ -11392,16 +11392,27 @@ fn local_blend(
             "unknown edge or empty radius law".into(),
         ));
     }
-    // A chamfer of one rim (a whole circle between faces turned about its axis), its ball
-    // the same all the way round: in closed form ([`super::rim_blend`]).
+    // A chamfer of one rim (a whole circle, in one edge or several, between faces turned
+    // about its axis), its ball the same all the way round: in closed form
+    // ([`super::rim_blend`]).
     if flat
-        && let ([(e, law)], [(ratio, None)]) = (edges, ratios)
-        && let Some(&(_, k)) = law.first()
-        && law
+        && let Some((_, law)) = edges.first()
+        && let (Some(&(_, k)), Some(&(ratio, _))) = (law.first(), ratios.first())
+        && edges.iter().all(|(_, l)| {
+            l.iter()
+                .all(|x| (x.1 - k).abs() <= tol::REL_POINT * (1.0 + k))
+        })
+        && ratios
             .iter()
-            .all(|x| (x.1 - k).abs() <= tol::REL_POINT * (1.0 + k))
+            .all(|q| q.1.is_none() && (q.0 - ratio).abs() <= tol::REL_POINT * (1.0 + ratio))
         && std::env::var_os("CADRS_NO_RIM_BLEND").is_none()
-        && let Some(made) = super::rim_blend::rim_chamfer(b, input, *e, k, *ratio)
+        && let Some(made) = super::rim_blend::rim_chamfer(
+            b,
+            input,
+            &edges.iter().map(|x| x.0).collect::<Vec<_>>(),
+            k,
+            ratio,
+        )
     {
         debug(|| "the rim's chamfer in closed form".to_string());
         // (Sound as it is made: each face cut back along its own surface to a circle inside
