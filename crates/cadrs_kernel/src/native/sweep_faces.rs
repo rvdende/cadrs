@@ -1445,6 +1445,80 @@ fn prepared_rising(
         }
     }
     let mut pieces: Vec<Body> = Vec::new();
+    // Under a screw, the leading faces swept as one sheet (each edge-connected run of them):
+    // its sweep is bounded by the sheet where it starts and ends and by the sweeps of its own
+    // boundary alone (the contacts and the edges between a leading and a trailing face), where
+    // a sweep a face at a time also sweeps the edges between leading faces, side surfaces
+    // that make neighbouring faces' pieces run into one another under a turn.
+    if let Some(w) = &screw
+        && std::env::var_os("CADRS_SWEEP_FACEWISE").is_none()
+    {
+        let stands: Vec<Stand> = (0..body.faces.len())
+            .map(|fi| face_stand(&body, fi, size, &mv))
+            .collect();
+        if stands.contains(&Stand::Both) {
+            return Err(KernelError::Unsupported(
+                "sweeping a solid whose face meets the motion along a curve it can't be split along",
+            ));
+        }
+        let leading: Vec<usize> = (0..body.faces.len())
+            .filter(|&fi| stands[fi] == Stand::Leads)
+            .collect();
+        // The runs of leading faces sharing edges.
+        let ef = body.edge_faces();
+        let mut run_of = vec![usize::MAX; body.faces.len()];
+        let mut runs: Vec<Vec<usize>> = Vec::new();
+        for &f in &leading {
+            if run_of[f] != usize::MAX {
+                continue;
+            }
+            let r = runs.len();
+            let mut stack = vec![f];
+            run_of[f] = r;
+            let mut run = Vec::new();
+            while let Some(g) = stack.pop() {
+                run.push(g);
+                for c in body.faces[g].loops.iter().flatten() {
+                    for &h in &ef[c.edge] {
+                        if stands[h] == Stand::Leads && run_of[h] == usize::MAX {
+                            run_of[h] = r;
+                            stack.push(h);
+                        }
+                    }
+                }
+            }
+            run.sort_unstable();
+            runs.push(run);
+        }
+        for run in runs {
+            let sheet = super::kernel::subset(&body, &run, false);
+            let swept = super::sweep::sweep_body(
+                &sheet,
+                &super::sweep::BodyMove::Screw(w),
+                mv_angle(&mv),
+                false,
+                0,
+            );
+            if debug {
+                match &swept {
+                    Ok(s) => eprintln!(
+                        "sweep by faces: leading faces {run:?} screwed as one: check {:?}",
+                        s.body.check().first()
+                    ),
+                    Err(e) => eprintln!("sweep by faces: sweeping faces {run:?} failed: {e}"),
+                }
+            }
+            pieces.push(swept?.body);
+        }
+        return Ok(Prepared {
+            start,
+            body,
+            pieces,
+            mv,
+            size,
+            clock,
+        });
+    }
     for fi in 0..body.faces.len() {
         let st = face_stand(&body, fi, size, &mv);
         if debug {

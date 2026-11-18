@@ -3815,6 +3815,62 @@ fn cut_by_pieces(
 ) -> Option<Vec<BodyId>> {
     // (Pieces that only touch glued first: one cut each group, none along a tangency.)
     let pieces = super::sweep_faces::glued_groups(k, pieces);
+    if pieces.len() > 1 {
+        let groups = pieces.clone();
+        if let Some(r) = cut_by_groups(k, targets, pieces) {
+            return Some(r);
+        }
+        // The groups in other orders (each order a different body for each cut to meet: one
+        // that left a sliver another doesn't), up to six.
+        let n = groups.len();
+        let mut orders: Vec<Vec<usize>> = vec![(0..n).rev().collect()];
+        if n == 3 {
+            orders.extend([vec![1, 0, 2], vec![1, 2, 0], vec![0, 2, 1], vec![2, 0, 1]]);
+        }
+        for order in orders {
+            let ordered: Vec<Body> = order.iter().map(|&i| groups[i].clone()).collect();
+            if let Some(r) = cut_by_groups(k, targets, ordered) {
+                if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
+                    eprintln!("swept cut: the groups cut in the order {order:?}");
+                }
+                return Some(r);
+            }
+        }
+        // The groups united into one tool first, then cut at once: cut one after another, a
+        // group's start lies on the end the group before left in the target (a cap on a cap,
+        // the other way round), which the target then has to lose again; united, the caps
+        // meet as two solids face to face do, and the target never sees them.
+        declined("the sweep's pieces cut one after another");
+        let ids: Vec<BodyId> = groups.into_iter().map(|g| k.insert(g)).collect();
+        let united = k.boolean(crate::BoolOp::Union, ids[0], &ids[1..]);
+        for id in &ids {
+            k.release(*id);
+        }
+        if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
+            eprintln!(
+                "swept cut: the groups united: {:?}",
+                united
+                    .as_ref()
+                    .map(|u| u.bodies.iter().map(|&b| k.sound(b)).collect::<Vec<_>>())
+            );
+        }
+        let tool = united
+            .ok()
+            .filter(|u| u.bodies.len() == 1 && k.sound(u.bodies[0]))?;
+        let one = std::sync::Arc::clone(k.get(tool.bodies[0]).ok()?);
+        k.release(tool.bodies[0]);
+        return cut_by_groups(k, targets, vec![(*one).clone()]);
+    }
+    cut_by_groups(k, targets, pieces)
+}
+
+/// The bodies `targets` less each of `pieces` (glued groups) in turn; None when a cut fails or
+/// leaves a body that isn't sound.
+fn cut_by_groups(
+    k: &mut NativeKernel,
+    targets: &[BodyId],
+    pieces: Vec<Body>,
+) -> Option<Vec<BodyId>> {
     if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
         eprintln!("swept cut: {} groups of pieces", pieces.len());
     }
@@ -4455,7 +4511,9 @@ pub fn cut_swept(
     // Under one turn past half of one, the target's faces of revolution cut into quarter
     // turns, as the tool's sweep is: a groove wound round a cylinder a turn or more would
     // otherwise be one loop of that face over a period or more of it, which no face holds.
-    if one_turn(motion).is_some_and(|t| t > std::f64::consts::PI) {
+    if one_turn(motion).is_some_and(|t| t > std::f64::consts::PI)
+        && std::env::var_os("CADRS_NO_QUARTERS").is_none()
+    {
         let mut t = (**k.get(target)?).clone();
         let before = t.faces.len();
         if super::heal_split::split_angle(&mut t, std::f64::consts::FRAC_PI_2).is_ok()

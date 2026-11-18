@@ -4293,9 +4293,13 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                         continue;
                     }
                     let pm = ed.curve.point((ed.t[0] + ed.t[1]) * 0.5);
-                    if point_in_face(&faces[fa], &pm, run_tol) == InFace::Inside
-                        && !cuts[fa].contains(&pe)
-                    {
+                    let where_ = point_in_face(&faces[fa], &pm, run_tol);
+                    if super::env_flag!("CADRS_BOOL_DEBUG") {
+                        eprintln!(
+                            "imprint {fb} on {fa}: piece {pe} of edge {e} middle {pm:?}: {where_:?}"
+                        );
+                    }
+                    if where_ == InFace::Inside && !cuts[fa].contains(&pe) {
                         cuts[fa].push(pe);
                     }
                 }

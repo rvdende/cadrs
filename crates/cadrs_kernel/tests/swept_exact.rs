@@ -917,3 +917,69 @@ fn a_flat_end_mill_screwed_half_round_a_bar_is_cut_exactly() {
         );
     }
 }
+
+/// Rotary roughing as CAM's exact simulation cuts it: a flat end mill (Ø1, pointing at the
+/// bar's axis) screwed a whole turn round a bar of radius 13, then again a level deeper along
+/// the same helix. The second pass's walls lie on the first's (the mill's side moved along its
+/// own axis sweeps the same surface), and its start on the first's start. Swept a face at a
+/// time, the pieces of neighbouring leading faces ran into one another, and the cut, the union
+/// of the pieces and the sweep itself all left an open shell; the leading faces are now swept
+/// as one sheet. Both cuts exact and sound, the second taking more away.
+#[test]
+fn a_second_roughing_level_on_the_first_ones_walls_is_cut_exactly() {
+    use std::f64::consts::TAU;
+    let mut k = NativeKernel::new();
+    let mut body = k
+        .primitive(&Primitive::cylinder(
+            Point3::new(-62.5, 0.0, -13.0),
+            Vector3::x(),
+            13.0,
+            125.0,
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let half = Profile::of(
+        Plane::xz(0.0),
+        vec![Loop::new(vec![
+            Curve2::line([0.0, 0.0], [0.5, 0.0]),
+            Curve2::line([0.5, 0.0], [0.5, 6.0]),
+            Curve2::line([0.5, 6.0], [0.0, 6.0]),
+            Curve2::line([0.0, 6.0], [0.0, 0.0]),
+        ])],
+    );
+    let mill = k
+        .revolve_with(
+            &half,
+            &RevolveSpec::solid(Axis::new(Point3::origin(), Vector3::z()), None),
+        )
+        .unwrap()
+        .first()
+        .unwrap();
+    let axis = Axis::new(Point3::new(0.0, 0.0, -13.0), Vector3::x());
+    let mut removed = Vec::new();
+    for depth in [0.9, 1.9] {
+        let start = k
+            .transform(mill, &Transform::translation(16.5, 0.0, -depth))
+            .unwrap()
+            .first()
+            .unwrap();
+        let motion = SolidMotion::rigid(vec![
+            RigidStep::turn(axis, 0.0, TAU),
+            RigidStep::slide(Vector3::zeros(), Vector3::new(TAU, 0.0, 0.0)),
+        ]);
+        let before = k.mass_properties(body).unwrap().volume;
+        body = k
+            .cut_swept_exact(body, start, &motion)
+            .unwrap_or_else(|e| panic!("depth {depth}: {e}"))
+            .first()
+            .unwrap();
+        let b = k.get(body).unwrap();
+        assert!(b.check().is_empty(), "depth {depth}: {:?}", b.check());
+        removed.push(before - k.mass_properties(body).unwrap().volume);
+    }
+    // The first a groove 0.9 deep along a turn of the helix (about 1 × 0.9 × 2π·12.55 less its
+    // ends' rounding); the second as much again, a level below it.
+    assert!(removed[0] > 50.0 && removed[0] < 80.0, "{removed:?}");
+    assert!(removed[1] > 0.9 * removed[0], "{removed:?}");
+}
