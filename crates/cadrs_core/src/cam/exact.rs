@@ -45,6 +45,11 @@ pub const STRAY: f64 = 0.002;
 /// has it then (mm, at its tip and its top): moves on one screw within this are one cut.
 pub const MERGE: f64 = 0.002;
 
+/// [`MERGE`], or `CADRS_EXACT_MERGE` (mm) to try others.
+fn merge() -> f64 {
+    std::env::var("CADRS_EXACT_MERGE").ok().and_then(|v| v.parse().ok()).unwrap_or(MERGE)
+}
+
 /// Whether two screws are one going on: the same axis (the very same line, as the machine's
 /// own screws about one of its axes are) and the same lead.
 fn on_same_screw(a: &Screw, b: &Screw) -> bool {
@@ -254,7 +259,7 @@ impl Cut {
                     .moved(&self.start);
                     [V3::zeros(), V3::new(0.0, 0.0, self.top)]
                         .iter()
-                        .all(|q| (end.apply(*q) - pose.apply(*q)).norm() <= MERGE)
+                        .all(|q| (end.apply(*q) - pose.apply(*q)).norm() <= merge())
                 };
             if !on && !near {
                 return false;
@@ -336,7 +341,7 @@ impl Cut {
                         .fold(0.0, f64::max)
                 })
                 .fold(0.0, f64::max);
-            if worst > MERGE {
+            if worst > merge() {
                 eprintln!(
                     "exact merge: a cut of {} moves ends, the next move {:?} strays {worst:.2e}",
                     self.poses.len(),
@@ -348,13 +353,13 @@ impl Cut {
             || self.poses.iter().all(|(p, amount)| {
                 let m = joined.at(amount / total);
                 tops.iter().all(|q| {
-                    (m.linear * self.start.apply(*q) + m.translation - p.apply(*q)).norm() <= MERGE
+                    (m.linear * self.start.apply(*q) + m.translation - p.apply(*q)).norm() <= merge()
                 })
             }) && {
                 // (And the new end, where the joined screw takes the tool.)
                 let end = joined.moved(&self.start);
                 tops.iter()
-                    .all(|q| (end.apply(*q) - pose.apply(*q)).norm() <= MERGE)
+                    .all(|q| (end.apply(*q) - pose.apply(*q)).norm() <= merge())
             };
         if !holds {
             return false;
@@ -472,10 +477,10 @@ fn machine_screw(
                 tops.map(|q| (m.linear * a.apply(q) + m.translation - want.apply(q)).norm())
             })
             .fold(0.0, f64::max);
-        if std::env::var_os("CADRS_EXACT_DEBUG").is_some_and(|v| v == "5") && worst > MERGE {
+        if std::env::var_os("CADRS_EXACT_DEBUG").is_some_and(|v| v == "5") && worst > merge() {
             eprintln!("machine screw: misses by {worst:.3e}, axis {off:.3e} off");
         }
-        let holds = worst <= MERGE;
+        let holds = worst <= merge();
         holds.then_some(s)
     })
 }
@@ -570,6 +575,100 @@ fn cuts_of(
         }
     }
     cuts
+}
+
+/// Whether a tool's cutting part never narrows from its tip up (an end, ball, bull-nose or
+/// taper mill, a drill): slid along its own axis it then covers no more than it does where the
+/// slide is deepest, within the length it reaches.
+fn widens_upward(tool: &Tool) -> bool {
+    let c = Cutter::of(tool);
+    !c.undercut
+        && c.pieces.iter().all(|p| {
+            let (s, e) = (p.start(), p.end());
+            e[0] >= s[0] - 1e-12 && e[1] >= s[1] - 1e-12
+        })
+}
+
+/// Whether the point (setup coordinates) is clear of the uncut stock by `margin`.
+fn clear_of_stock(shape: &StockShape, setup: &Frame, p: V3, margin: f64) -> bool {
+    let w = setup.to_world([p.x, p.y, p.z]);
+    match shape {
+        StockShape::Box { frame, b } => {
+            let q = frame.to_local(w);
+            (0..3).any(|i| q[i] < b.min[i] - margin || q[i] > b.max[i] + margin)
+        }
+        StockShape::Cylinder {
+            frame,
+            center,
+            radius,
+            z,
+        } => {
+            let q = frame.to_local(w);
+            (q[0] - center[0]).hypot(q[1] - center[1]) > radius + margin
+                || q[2] < z[0] - margin
+                || q[2] > z[1] + margin
+        }
+        StockShape::Mesh(_) => false,
+    }
+}
+
+/// Leaves out the slides along the tool's own axis that cut nothing the cut next to them
+/// doesn't: a plunge to where the next cut starts, a rise from where the last one ended, with a
+/// tool that never narrows from its tip up ([`widens_upward`]) and reaches clear of the stock
+/// there. What such a slide sweeps within the stock is the tool where it is deepest, which that
+/// cut takes away anyway; cut on its own it meets the walls that cut left tangentially, along
+/// the contacts of the very tool, the hardest case a boolean has.
+fn drop_axial_slides(cuts: &mut Vec<Cut>, run: &SetupRun, shape: &StockShape) {
+    let n = cuts.len();
+    let same =
+        |a: &Pose, b: &Pose| (a.tip - b.tip).norm() <= 1e-9 && (a.rot - b.rot).norm() <= 1e-12;
+    let mut keep = vec![true; n];
+    for i in 0..n {
+        let c = &cuts[i];
+        let Screw::Slide(v) = c.screw else { continue };
+        let z = c.start.rot.column(2).into_owned();
+        if v.norm() < 1e-12 || v.cross(&z).norm() > 1e-9 * v.norm() {
+            continue;
+        }
+        let Some(o) = run.ops.get(c.op) else { continue };
+        if !widens_upward(o.tool) {
+            continue;
+        }
+        let end = c.screw.moved(&c.start);
+        // The deepest pose, and the cut beside the slide that holds the tool there.
+        let (deep, beside) = if v.dot(&z) < 0.0 {
+            (
+                end,
+                cuts.get(i + 1)
+                    .filter(|d| d.op == c.op && same(&d.start, &end)),
+            )
+        } else {
+            (
+                c.start,
+                i.checked_sub(1)
+                    .and_then(|j| cuts.get(j))
+                    .filter(|d| d.op == c.op && same(&d.screw.moved(&d.start), &c.start)),
+            )
+        };
+        let top = deep.apply(V3::new(0.0, 0.0, o.tool.cutting_length));
+        let clear = clear_of_stock(shape, &run.frame, top, Cutter::of(o.tool).radius);
+        if std::env::var_os("CADRS_EXACT_DEBUG").is_some_and(|v| v == "6") {
+            eprintln!(
+                "axial slide {i}: plunge {} beside {} clear {clear} top {top:?}",
+                v.dot(&z) < 0.0,
+                beside.is_some()
+            );
+        }
+        if beside.is_some() && clear {
+            keep[i] = false;
+        }
+    }
+    let mut k = 0;
+    cuts.retain(|_| {
+        let kept = keep[k];
+        k += 1;
+        kept
+    });
 }
 
 /// The cutting part of a tool as a solid: its profile's pieces revolved about its axis, its
@@ -726,7 +825,26 @@ impl ExactStock {
             .iter()
             .map(|o| tool_solid(&mut k, o.tool))
             .collect::<Result<Vec<_>, _>>()?;
-        let cuts = cuts_of(machine, run, motions, rows);
+        let mut cuts = cuts_of(machine, run, motions, rows);
+        drop_axial_slides(&mut cuts, run, shape);
+        if std::env::var_os("CADRS_EXACT_DEBUG").is_some_and(|v| v == "7") {
+            let mut kinds: std::collections::BTreeMap<String, (usize, f64)> = Default::default();
+            for c in &cuts {
+                let k = match c.screw {
+                    Screw::Slide(v) => {
+                        let z = c.start.rot.column(2).into_owned();
+                        format!("slide {:.0}° off the axis", v.normalize().dot(&z).abs().acos().to_degrees())
+                    }
+                    Screw::Turn { .. } => format!("turn machine={}", c.machine),
+                };
+                let e = kinds.entry(k).or_default();
+                e.0 += 1;
+                e.1 += c.screw.amount();
+            }
+            for (k, (n, amount)) in kinds {
+                eprintln!("exact cuts: {n} {k}, amount {amount:.1}");
+            }
+        }
         if std::env::var_os("CADRS_EXACT_DEBUG").is_some_and(|v| v == "4") {
             for (i, c) in cuts.iter().enumerate().filter(|(_, c)| c.poses.len() > 100) {
                 eprintln!("exact cut {i}: {} moves, {:?}", c.poses.len(), c.screw);

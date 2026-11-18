@@ -1191,7 +1191,11 @@ fn the_worm_is_cut_exactly_as_it_plays() {
     // The first pass (the bar opened along the thread at the first level, 27 turns), cut
     // as it plays: a tenth at a time, each a cut of the one screw as far as the tool has gone,
     // then whole.
-    let first_pass = 2172.min(moves - 1);
+    let first_pass = std::env::var("WORM_UPTO")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2172)
+        .min(moves - 1);
     let mut seen = Vec::new();
     for i in 1..=10 {
         let t = Instant::now();
