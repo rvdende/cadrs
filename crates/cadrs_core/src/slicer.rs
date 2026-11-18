@@ -103,7 +103,8 @@ const KNOWN: &[Known] = &[
 ];
 
 /// The slicers installed here, in [`KNOWN`]'s order, each once (the first way found to start
-/// it). `CADRS_SLICER=<program>` adds a program of one's own first.
+/// it: on Linux the PATH, Flatpak, then the desktop entries app launchers list, which is how an
+/// AppImage kept anywhere is found). `CADRS_SLICER=<program>` adds a program of one's own first.
 pub fn find() -> Vec<Slicer> {
     let mut out = Vec::new();
     if let Some(p) = std::env::var_os("CADRS_SLICER").filter(|p| !p.is_empty()) {
@@ -112,15 +113,20 @@ pub fn find() -> Vec<Slicer> {
     let path: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect())
         .unwrap_or_default();
+    let entries = if cfg!(target_os = "linux") {
+        desktop_entries()
+    } else {
+        Vec::new()
+    };
     for (i, k) in KNOWN.iter().enumerate() {
-        if let Some(s) = find_known(i as u8, k, &path) {
+        if let Some(s) = find_known(i as u8, k, &path, &entries) {
             out.push(s);
         }
     }
     out
 }
 
-fn find_known(id: u8, k: &Known, path: &[PathBuf]) -> Option<Slicer> {
+fn find_known(id: u8, k: &Known, path: &[PathBuf], entries: &[DesktopEntry]) -> Option<Slicer> {
     let slicer = |program: PathBuf, args: Vec<String>, trailing: Vec<String>| Slicer {
         id,
         name: k.name.to_string(),
@@ -182,7 +188,142 @@ fn find_known(id: u8, k: &Known, path: &[PathBuf]) -> Option<Slicer> {
             vec!["@@".into()],
         ));
     }
-    None
+    let entry = entries.iter().find(|e| {
+        let name = squash(&e.name);
+        name == squash(k.name) || k.commands.iter().any(|c| squash(c) == name)
+    })?;
+    let launch = entry.launch(path)?;
+    Some(slicer(launch.0, launch.1, launch.2))
+}
+
+/// A name without case, spaces or punctuation ("Creality Print" and "CrealityPrint" are one).
+fn squash(name: &str) -> String {
+    name.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// An application's desktop entry (a `.desktop` file, freedesktop.org's): its name and its
+/// command line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DesktopEntry {
+    name: String,
+    exec: String,
+}
+
+/// The applications' desktop entries, the user's first (`$XDG_DATA_HOME/applications`, then
+/// each of `$XDG_DATA_DIRS`'s), one per file name as launchers do.
+fn desktop_entries() -> Vec<DesktopEntry> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let data_home = std::env::var_os("XDG_DATA_HOME")
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| home.map(|h| h.join(".local/share")));
+    let data_dirs = std::env::var_os("XDG_DATA_DIRS")
+        .filter(|d| !d.is_empty())
+        .map(|d| std::env::split_paths(&d).collect::<Vec<_>>())
+        .unwrap_or_else(|| vec!["/usr/local/share".into(), "/usr/share".into()]);
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for dir in data_home.into_iter().chain(data_dirs) {
+        let Ok(files) = std::fs::read_dir(dir.join("applications")) else {
+            continue;
+        };
+        for f in files.flatten() {
+            let file = f.file_name();
+            if !file.to_string_lossy().ends_with(".desktop") || !seen.insert(file) {
+                continue;
+            }
+            if let Some(e) = std::fs::read_to_string(f.path())
+                .ok()
+                .and_then(|text| parse_desktop_entry(&text))
+            {
+                out.push(e);
+            }
+        }
+    }
+    out
+}
+
+/// The `[Desktop Entry]` group's `Name` and `Exec` (none for a hidden entry, one taken away).
+fn parse_desktop_entry(text: &str) -> Option<DesktopEntry> {
+    let (mut name, mut exec, mut in_entry) = (None, None, false);
+    for line in text.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_entry = line == "[Desktop Entry]";
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=').filter(|_| in_entry) else {
+            continue;
+        };
+        match key.trim() {
+            "Name" => name = Some(value.trim().to_string()),
+            "Exec" => exec = Some(value.trim().to_string()),
+            "Hidden" if value.trim() == "true" => return None,
+            _ => {}
+        }
+    }
+    Some(DesktopEntry {
+        name: name?,
+        exec: exec?,
+    })
+}
+
+impl DesktopEntry {
+    /// How to start it with files: the program (found on `path` if not a path), the arguments
+    /// before the files and those after (around its `%f`/`%F`/`%u`/`%U`; the other field codes
+    /// go). None if the program isn't there.
+    fn launch(&self, path: &[PathBuf]) -> Option<(PathBuf, Vec<String>, Vec<String>)> {
+        let mut words = exec_words(&self.exec).into_iter();
+        let program = PathBuf::from(words.next()?);
+        let program = if program.components().count() > 1 {
+            program.is_file().then_some(program)?
+        } else {
+            path.iter()
+                .map(|d| d.join(&program))
+                .find(|p| p.is_file())?
+        };
+        let (mut before, mut after, mut files_seen) = (Vec::new(), Vec::new(), false);
+        for w in words {
+            match w.as_str() {
+                "%f" | "%F" | "%u" | "%U" => files_seen = true,
+                w if w.len() == 2 && w.starts_with('%') => {}
+                _ if files_seen => after.push(w.replace("%%", "%")),
+                _ => before.push(w.replace("%%", "%")),
+            }
+        }
+        Some((program, before, after))
+    }
+}
+
+/// An `Exec` line's words: split at spaces outside double quotes, `\` escaping within them.
+fn exec_words(exec: &str) -> Vec<String> {
+    let (mut out, mut word, mut quoted, mut in_word) = (Vec::new(), String::new(), false, false);
+    let mut chars = exec.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                quoted = !quoted;
+                in_word = true;
+            }
+            '\\' if quoted => word.extend(chars.next()),
+            c if c.is_whitespace() && !quoted => {
+                if in_word {
+                    out.push(std::mem::take(&mut word));
+                    in_word = false;
+                }
+            }
+            c => {
+                word.push(c);
+                in_word = true;
+            }
+        }
+    }
+    if in_word {
+        out.push(word);
+    }
+    out
 }
 
 /// The paths a Windows install path names under `root`: a `*` in a folder's name is any
@@ -385,6 +526,42 @@ mod tests {
         );
         // Every one takes STL, the fallback.
         assert!(KNOWN.iter().all(|k| k.formats.contains(&STL)));
+    }
+
+    #[test]
+    fn an_appimage_in_a_desktop_entry_is_found() {
+        let dir = std::env::temp_dir().join(format!("cadrs-slicer-desk-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let app = dir.join("CrealityPrint_V7.0.1-x86_64-Release.AppImage");
+        std::fs::write(&app, b"").unwrap();
+        let text = format!(
+            "[Desktop Entry]\nName=CrealityPrint\nName[de]=Anders\nExec=\"{}\" --x %F\n\
+             Type=Application\n[Desktop Action New]\nName=New\nExec=other\n",
+            app.display()
+        );
+        let entry = parse_desktop_entry(&text).unwrap();
+        assert_eq!(entry.name, "CrealityPrint");
+        let creality = KNOWN
+            .iter()
+            .position(|k| k.name == "Creality Print")
+            .unwrap();
+        let s = find_known(creality as u8, &KNOWN[creality], &[], &[entry]).unwrap();
+        assert_eq!(s.name, "Creality Print");
+        assert_eq!(s.program, app);
+        assert_eq!((s.args, s.trailing), (vec!["--x".to_string()], Vec::new()));
+        // An entry whose program is gone isn't a slicer, nor a hidden one.
+        std::fs::remove_file(&app).unwrap();
+        assert!(parse_desktop_entry(&text).unwrap().launch(&[]).is_none());
+        assert!(parse_desktop_entry("[Desktop Entry]\nName=a\nExec=b\nHidden=true\n").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn exec_lines_split_into_words() {
+        assert_eq!(
+            exec_words(r#"flatpak run "--a b" x\y "q\"z" @@u %U @@"#),
+            ["flatpak", "run", "--a b", r"x\y", "q\"z", "@@u", "%U", "@@"]
+        );
     }
 
     #[test]
