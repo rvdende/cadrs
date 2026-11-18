@@ -554,6 +554,14 @@ impl<'a> Tool<'a> {
             let uv = c.pc.point(s);
             (uv.x, uv.y)
         });
+        // (The edge's own p-curve on the face says where, where it is on the point to a
+        // part in 10¹² of the tool: an exact edge's is, and needs no projection onto the
+        // face; a fitted one's is the hint the projection starts from.)
+        if let Some((u, v)) = hint
+            && (face.surf.eval(u, v) - p).norm() <= 1e-12 * self.size
+        {
+            return P2::new(u, v);
+        }
         let (u, v) = face.surf.project(p, hint);
         P2::new(u, v)
     }
@@ -943,9 +951,13 @@ impl Gen<'_> {
         );
         // By the surface's own second derivatives first (one evaluation a step); by
         // differences where that finds nothing (a pole, where the normal has no slope).
-        let (u, v) = self
-            .face_in_slice_exact(f, t, c, guess, &tw, reach)
-            .or_else(|| newton2(&eq, (guess.x, guess.y), h, 1e-12 * self.tool.size, reach))?;
+        // (Where it ends without one, off beyond the reach or not settled, there is none: the
+        // differences would only take forty steps more to say so.)
+        let (u, v) = match self.face_in_slice_exact(f, t, c, guess, &tw, reach) {
+            Ok(found) => found,
+            Err(true) => newton2(&eq, (guess.x, guess.y), h, 1e-12 * self.tool.size, reach)?,
+            Err(false) => return None,
+        };
         let found = P2::new(u, v);
         let moved = (self.tool.at(f, found).0 - self.tool.at(f, guess).0).norm();
         (moved <= HOP * self.tool.size).then_some(found)
@@ -956,7 +968,9 @@ impl Gen<'_> {
     /// the contact's (n · (ω × p + u), the normal square to the velocity) follows from the
     /// normal's own slope, n′ = (m′ − n (n · m′)) / |m| for m = Sᵤ × Sᵥ, and the velocity's,
     /// ω × Sᵤ. One evaluation of the surface to its second derivatives a step, where
-    /// differences took five of its point and five of its normal.
+    /// differences took five of its point and five of its normal. `Err(true)` where the
+    /// slopes fail (a pole, where the normal has none) and differences may yet do;
+    /// `Err(false)` where there is no root within reach.
     fn face_in_slice_exact(
         &self,
         f: usize,
@@ -965,7 +979,7 @@ impl Gen<'_> {
         guess: P2,
         tw: &Twist,
         reach: (f64, f64),
-    ) -> Option<(f64, f64)> {
+    ) -> std::result::Result<(f64, f64), bool> {
         let face = &self.tool.b.faces[f];
         let surf = &face.surf;
         let (rot, shift) = self.motion.place(t);
@@ -979,7 +993,7 @@ impl Gen<'_> {
             let m = su.cross(&sv);
             let len = m.norm();
             if !(len > 1e-12 * su.norm() * sv.norm()) || !len.is_finite() {
-                return None;
+                return Err(true);
             }
             // (The face's normal as the kernel has it: the surface's, by the face's sense.)
             let n = surf.normal(u, v) * sense;
@@ -995,10 +1009,10 @@ impl Gen<'_> {
             let a = self.chart.c(&x) - c;
             let b = n.dot(&w) * scale;
             if !(a.is_finite() && b.is_finite()) {
-                return None;
+                return Err(true);
             }
             if a.abs() <= tol && b.abs() <= tol {
-                return Some((u, v));
+                return Ok((u, v));
             }
             let (au, av) = (grad.dot(&(rot * su)), grad.dot(&(rot * sv)));
             let (bu, bv) = (
@@ -1007,7 +1021,7 @@ impl Gen<'_> {
             );
             let det = au * bv - av * bu;
             if det.abs() < 1e-300 || !det.is_finite() {
-                return None;
+                return Err(true);
             }
             let du = (-a * bv + b * av) / det;
             let dv = (-b * au + a * bu) / det;
@@ -1018,10 +1032,10 @@ impl Gen<'_> {
             u += du * k;
             v += dv * k;
             if (u - guess.x).abs() > 8.0 * reach.0 || (v - guess.y).abs() > 8.0 * reach.1 {
-                return None;
+                return Err(false);
             }
         }
-        None
+        Err(false)
     }
 
     /// A face group's contact point in slice `c` at t, from a guess on one of its faces: on
