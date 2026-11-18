@@ -4422,8 +4422,56 @@ pub fn exact_only<T>(f: impl FnOnce() -> T) -> T {
     r
 }
 
+/// How far a motion of one turn about one axis turns (radians): a turn or a screw, a rigid
+/// motion of one turn step (and slides). `None` for any other: two turns about lines apart (a
+/// generated cut, which keeps its own faces) or none.
+fn one_turn(motion: &SolidMotion) -> Option<f64> {
+    match motion {
+        SolidMotion::Climb { from, to, .. } => Some((to - from).abs()),
+        SolidMotion::Rigid { steps } => {
+            let turns: Vec<f64> = steps
+                .iter()
+                .filter_map(|s| match s {
+                    RigidStep::Turn { from, to, .. } => Some((to - from).abs()),
+                    RigidStep::Slide { .. } => None,
+                })
+                .collect();
+            match turns.as_slice() {
+                [t] => Some(*t),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 /// [`crate::Kernel::cut_swept`].
 pub fn cut_swept(
+    k: &mut NativeKernel,
+    target: BodyId,
+    tool: BodyId,
+    motion: &SolidMotion,
+) -> Result<OpResult> {
+    // Under one turn past half of one, the target's faces of revolution cut into quarter
+    // turns, as the tool's sweep is: a groove wound round a cylinder a turn or more would
+    // otherwise be one loop of that face over a period or more of it, which no face holds.
+    if one_turn(motion).is_some_and(|t| t > std::f64::consts::PI) {
+        let mut t = (**k.get(target)?).clone();
+        let before = t.faces.len();
+        if super::heal_split::split_angle(&mut t, std::f64::consts::FRAC_PI_2).is_ok()
+            && t.faces.len() > before
+        {
+            let split = k.insert(t);
+            let r = cut_swept_in(k, split, tool, motion);
+            k.release(split);
+            return r;
+        }
+    }
+    cut_swept_in(k, target, tool, motion)
+}
+
+/// [`cut_swept`], the target's faces as they are.
+fn cut_swept_in(
     k: &mut NativeKernel,
     target: BodyId,
     tool: BodyId,

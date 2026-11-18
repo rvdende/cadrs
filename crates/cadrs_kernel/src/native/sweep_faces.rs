@@ -68,6 +68,75 @@ fn turned(o: P3, z: V3, angle: f64) -> Affine {
     }
 }
 
+/// The axis every face of `b` turns about, where `b` is a solid of revolution: its planes
+/// square to it, its cylinders, cones, tori and surfaces of revolution about it, its spheres
+/// centred on it.
+fn axis_of_revolution(b: &Body) -> Option<(P3, V3)> {
+    use super::surface::Surface;
+    let mut axis: Option<(P3, V3)> = None;
+    let on = |(o, a): (P3, V3), p: &P3| {
+        let d = p - o;
+        (d - a * d.dot(&a)).norm() <= tol::POINT
+    };
+    // The turned faces fix the axis; then every face must agree with it.
+    for f in &b.faces {
+        if let Surface::Cylinder { f: fr, .. }
+        | Surface::Cone { f: fr, .. }
+        | Surface::Torus { f: fr, .. }
+        | Surface::Revolution { f: fr, .. } = &f.surf
+        {
+            axis = Some((fr.o, fr.z.normalize()));
+            break;
+        }
+    }
+    let (o, a) = axis?;
+    let parallel = |z: &V3| z.normalize().cross(&a).norm() <= 1e-9;
+    let agrees = b.faces.iter().all(|f| match &f.surf {
+        Surface::Plane { f: fr } => parallel(&fr.z),
+        Surface::Cylinder { f: fr, .. }
+        | Surface::Cone { f: fr, .. }
+        | Surface::Torus { f: fr, .. }
+        | Surface::Revolution { f: fr, .. } => parallel(&fr.z) && on((o, a), &fr.o),
+        Surface::Sphere { f: fr, .. } => on((o, a), &fr.o),
+        _ => false,
+    });
+    agrees.then_some((o, a))
+}
+
+/// `b` turned about its own axis, where it is a solid of revolution (it fills the same space
+/// however it is turned so), so that its faces' seams lie along the motion's leading direction:
+/// where a face both leads and trails, its contacts with the motion are then a quarter turn
+/// from its seam. A contact a hair beside a seam splits off a sliver of face no boolean takes
+/// (a tool screwed about an axis that misses its own by a micron, from a machine's axes).
+fn seams_ahead(b: Body, mv: &Move) -> Body {
+    use super::surface::Surface;
+    let Some((o, a)) = axis_of_revolution(&b) else {
+        return b;
+    };
+    let seam = b.faces.iter().find_map(|f| match &f.surf {
+        Surface::Cylinder { f: fr, .. }
+        | Surface::Cone { f: fr, .. }
+        | Surface::Torus { f: fr, .. }
+        | Surface::Sphere { f: fr, .. }
+        | Surface::Revolution { f: fr, .. } => Some(fr.x),
+        _ => None,
+    });
+    let Some(seam) = seam else { return b };
+    let flat = |v: V3| v - a * v.dot(&a);
+    // The leading direction at the middle of the body's axis.
+    let c = b.bbox().center();
+    let m = o + a * (c - o).dot(&a);
+    let (s, d) = (flat(seam), flat(mv.velocity(&m)));
+    if s.norm() < 1e-9 || d.norm() < 1e-9 * mv.velocity(&m).norm().max(1e-300) {
+        return b;
+    }
+    let angle = a.dot(&s.cross(&d)).atan2(s.dot(&d));
+    if angle.abs() < 1e-12 {
+        return b;
+    }
+    b.transformed(&turned(o, a, angle))
+}
+
 /// How a face stands to the motion.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Stand {
@@ -1008,6 +1077,7 @@ fn prepared_rising(
         } => Move::Turn { o, z, angle },
         mv => mv,
     };
+    let start = seams_ahead(start, &mv);
     let size = start.bbox().diagonal().max(tol::POINT);
     let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
     // The faces that both lead and trail split along their contacts' planes, one at a time (the

@@ -5352,41 +5352,43 @@ pub fn split_nonmanifold(b: &mut Body) {
     }
 }
 
-/// Joins twin edges: two edges each used by one face only, in opposite senses, between the
-/// same two vertices along the same curve and range. Faces of the two inputs that lie on one
-/// another (a cut by a tool whose start is where an earlier cut by it ended: a coincident
-/// cylinder and plane) can each bring the seam between them as an edge of their own; the
-/// shell is closed by their being one.
+/// Joins twin edges: two edges each used by one face only, the other way round, between the
+/// same two vertices along the same points (whatever their curves' parametrization). Faces of
+/// the two inputs that lie on one another (a cut by a tool whose start is where an earlier cut
+/// by it ended: a coincident cylinder and plane) can each bring the seam between them as an
+/// edge of their own; the shell is closed by their being one. The one face's use is moved onto
+/// the other's edge, its p-curve made again on its surface from where the old one started.
 fn join_twin_edges(b: &mut Body) {
-    let mut uses: Vec<Vec<(usize, usize, bool)>> = vec![Vec::new(); b.edges.len()];
+    let mut uses: Vec<Vec<(usize, usize, usize)>> = vec![Vec::new(); b.edges.len()];
     for (f, face) in b.faces.iter().enumerate() {
         for (l, lp) in face.loops.iter().enumerate() {
             for (i, c) in lp.iter().enumerate() {
                 if let Some(u) = uses.get_mut(c.edge) {
-                    u.push((f, l * 1_000_000 + i, c.fwd));
+                    u.push((f, l, i));
                 }
             }
         }
     }
-    // The edges used once, by their vertices.
+    // The edges used once, by their (sorted) vertices.
     let mut by_ends: HashMap<[usize; 2], Vec<usize>> = HashMap::default();
     for (e, u) in uses.iter().enumerate() {
         let edge = &b.edges[e];
         if u.len() == 1 && !edge.degenerate && edge.v[0] != edge.v[1] {
-            by_ends.entry(edge.v).or_default().push(e);
+            let mut v = edge.v;
+            v.sort_unstable();
+            by_ends.entry(v).or_default().push(e);
         }
     }
+    // The same points: `y` passes within tolerance of `x`'s points along it.
     let same = |x: &Edge, y: &Edge| {
-        let scale = 1.0 + x.t[0].abs().max(x.t[1].abs());
         let tol = x.tol.max(y.tol).max(super::tol::POINT);
-        (x.t[0] - y.t[0]).abs() <= 1e-9 * scale
-            && (x.t[1] - y.t[1]).abs() <= 1e-9 * scale
-            && [0.25, 0.5, 0.75].iter().all(|f| {
-                let t = x.t[0] + (x.t[1] - x.t[0]) * f;
-                (x.point(t) - y.point(t)).norm() <= tol
-            })
+        [0.25, 0.5, 0.75].iter().all(|f| {
+            let p = x.point(x.t[0] + (x.t[1] - x.t[0]) * f);
+            let t = y.curve.closest(&p, y.t[0], y.t[1]);
+            (y.point(t) - p).norm() <= tol
+        })
     };
-    let mut moves: Vec<(usize, usize, usize, usize)> = Vec::new();
+    let mut moves: Vec<(usize, usize, usize, usize, bool)> = Vec::new();
     for es in by_ends.values() {
         let mut taken = vec![false; es.len()];
         for i in 0..es.len() {
@@ -5395,17 +5397,39 @@ fn join_twin_edges(b: &mut Body) {
                     continue;
                 }
                 let (a, c) = (es[i], es[j]);
-                let (ua, uc) = (uses[a][0], uses[c][0]);
-                if ua.2 != uc.2 && ua.0 != uc.0 && same(&b.edges[a], &b.edges[c]) {
+                let ((fa, la, ia), (fc, lc, ic)) = (uses[a][0], uses[c][0]);
+                if fa == fc {
+                    continue;
+                }
+                let (ea, ec) = (&b.edges[a], &b.edges[c]);
+                // Along `a`, which way the face using `c` runs.
+                let along = (ea.v == ec.v) == b.faces[fc].loops[lc][ic].fwd;
+                let a_fwd = b.faces[fa].loops[la][ia].fwd;
+                if along != a_fwd && same(ea, ec) {
                     taken[i] = true;
                     taken[j] = true;
-                    moves.push((uc.0, uc.1 / 1_000_000, uc.1 % 1_000_000, a));
+                    moves.push((fc, lc, ic, a, along));
                 }
             }
         }
     }
-    for (f, l, i, a) in moves {
-        b.faces[f].loops[l][i].edge = a;
+    for (f, l, i, a, fwd) in moves {
+        if super::env_flag!("CADRS_BOOL_DEBUG") {
+            eprintln!(
+                "twin edges: face {f} loop {l} coedge {i} moved from edge {} onto {a}",
+                b.faces[f].loops[l][i].edge
+            );
+        }
+        let old = &b.faces[f].loops[l][i];
+        let e_old = &b.edges[old.edge];
+        let start = old.pc.point(super::topo::co_range(e_old, old.fwd).0);
+        let pc = super::unify::pc_from(
+            &b.faces[f].surf,
+            &b.edges[a],
+            fwd,
+            Some(P2::new(start.x, start.y)),
+        );
+        b.faces[f].loops[l][i] = Coedge { edge: a, fwd, pc };
     }
 }
 
