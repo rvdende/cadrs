@@ -36,7 +36,10 @@ pub fn find_span(n: usize, p: usize, u: f64, knots: &[f64]) -> usize {
         return k;
     }
     let (mut lo, mut hi) = (p, n + 1);
-    let mut mid = (lo + hi) / 2;
+    // (First where evenly spaced knots would have it, which is where most are: the halving
+    // below then has nothing to do, and from anywhere else it ends at the same span.)
+    let share = (u - knots[p]) / (knots[n + 1] - knots[p]);
+    let mut mid = (p + (share * (n + 1 - p) as f64) as usize).clamp(lo, hi - 1);
     while u < knots[mid] || u >= knots[mid + 1] {
         if u < knots[mid] {
             hi = mid;
