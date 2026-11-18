@@ -2186,3 +2186,87 @@ fn a_draft_parts_a_corner_of_four_faces() {
     let v = k.mass_properties(out).unwrap().volume;
     assert!((v - want).abs() < 1e-9 * want, "volume {v}, want {want}");
 }
+
+/// A hip roof on a slab that isn't convex: two long slopes meeting along a ridge, a hip at
+/// each end, all at forty-five degrees. The hips drafted to seventy-five degrees from upright
+/// lean so far that they meet one another before they reach the ridge: the ridge shrinks to
+/// nothing and a new one forms across it, between the two hips, which were never neighbours.
+/// (The ridge's ends are made one corner, which then parts the other way.) The roof is the
+/// wedge under the new ridge.
+#[test]
+fn a_draft_brings_two_faces_that_werent_neighbours_together() {
+    let mut k = NativeKernel::new();
+    let block = |k: &mut NativeKernel, a: [f64; 3], b: [f64; 3]| {
+        k.primitive(&Primitive::block(Point3::from(a), Point3::from(b)))
+            .unwrap()
+            .first()
+            .unwrap()
+    };
+    let slab = block(&mut k, [0.0, 0.0, 0.0], [16.0, 8.0, 2.0]);
+    let notch = block(&mut k, [8.0, -1.0, -1.0], [17.0, 4.0, 3.0]);
+    let ell = k
+        .boolean(BoolOp::Subtract, slab, &[notch])
+        .unwrap()
+        .first()
+        .unwrap();
+    let p = |x: f64, y: f64, z: f64| Point3::new(x, y, z);
+    // The roof over [0, 8] × [4, 8]: its ridge from (2, 6) to (6, 6), two up.
+    let (a, b, c, d) = (
+        p(0.0, 4.0, 2.0),
+        p(8.0, 4.0, 2.0),
+        p(8.0, 8.0, 2.0),
+        p(0.0, 8.0, 2.0),
+    );
+    let (r0, r1) = (p(2.0, 6.0, 4.0), p(6.0, 6.0, 4.0));
+    let roof = k
+        .mesh_solid(
+            &[
+                [a, c, b],
+                [a, d, c],
+                [a, b, r1],
+                [a, r1, r0],
+                [c, d, r0],
+                [c, r0, r1],
+                [b, c, r1],
+                [d, a, r0],
+            ],
+            1e-7,
+        )
+        .unwrap();
+    let part = k
+        .boolean(BoolOp::Union, ell, &[roof])
+        .unwrap()
+        .first()
+        .unwrap();
+    let hips: Vec<FaceId> = {
+        let body = k.get(part).unwrap();
+        (0..body.faces.len())
+            .filter(|&f| match &body.faces[f].surf {
+                Surface::Plane { f: fr } => {
+                    let n = fr.x.cross(&fr.y);
+                    n.z.abs() > 0.1 && n.x.abs() > 0.1
+                }
+                _ => false,
+            })
+            .map(|f| FaceId(f as u64))
+            .collect()
+    };
+    assert_eq!(hips.len(), 2);
+    let spec = DraftSpec {
+        faces: hips,
+        angle: 75f64.to_radians(),
+        pull: Vector3::z_axis(),
+        neutral: Point3::new(0.0, 0.0, 2.0),
+        neutral_normal: None,
+        tangent_propagation: false,
+    };
+    let out = k.draft(part, &spec).unwrap().bodies[0];
+    let body = k.get(out).unwrap();
+    assert!(body.check().is_empty(), "{:?}", body.check());
+    // The hips meet over the middle, 4 / tan 75° up; the slopes are that far in there.
+    let h = 4.0 / 75f64.to_radians().tan();
+    let ridge = 4.0 - 2.0 * h;
+    let want = (16.0 * 8.0 - 8.0 * 4.0) * 2.0 + h * 8.0 * (2.0 * 4.0 + ridge) / 6.0;
+    let v = k.mass_properties(out).unwrap().volume;
+    assert!((v - want).abs() < 1e-9 * want, "volume {v}, want {want}");
+}

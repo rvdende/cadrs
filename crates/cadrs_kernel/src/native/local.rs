@@ -1773,7 +1773,7 @@ fn split_vertex(b: &Body, v: usize, way: usize, surfs: &[Surface]) -> Option<Bod
 /// The edge of `b` its faces' moves to `surfs` turn round most: its ends, each where its
 /// faces' new surfaces meet, the other way round from before (or on one another). `None`
 /// where none is.
-fn turned_edge(b: &Body, surfs: &[Surface]) -> Option<usize> {
+pub(crate) fn turned_edge(b: &Body, surfs: &[Surface]) -> Option<usize> {
     let vf = vertex_faces(b);
     let moved: Vec<Option<P3>> = (0..b.verts.len())
         .map(|v| {
@@ -3271,7 +3271,17 @@ pub fn draft(k: &mut NativeKernel, body: BodyId, spec: &DraftSpec) -> Result<OpR
             }
         };
     }
-    let (out, from) = match replace_surfaces(&b, &surfs) {
+    // (Moved with every corner and edge solved again is not yet moved rightly: an edge whose
+    // ends went past one another is turned round in a body that closes all the same, its
+    // faces through one another. That is no result: the faces are moved again without it.)
+    let moved = replace_surfaces(&b, &surfs).and_then(|out| match turned_edge(&b, &surfs) {
+        None => Ok(out),
+        Some(e) => Err(KernelError::InvalidResult {
+            op: "draft",
+            why: format!("the moved faces turn edge {e} round"),
+        }),
+    });
+    let (out, from) = match moved {
         Ok(out) => {
             let n = out.faces.len();
             (out, (0..n).collect::<Vec<_>>())

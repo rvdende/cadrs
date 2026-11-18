@@ -334,7 +334,18 @@ pub fn offset_sharp(b: &Body, dist: &[f64]) -> Result<Body> {
     if let Some(r) = super::prism::curved_prism_inset(b, dist, false, true) {
         return r;
     }
-    let out = match replace_surfaces(b, &surfs) {
+    // (A body that closes with an edge turned round, its ends carried past one another, has
+    // its faces through one another: where the events below make a sound one, that one.)
+    let moved = replace_surfaces(b, &surfs);
+    if moved.is_ok() && crate::native::local::turned_edge(b, &surfs).is_some() {
+        if let Some(Ok((out, _))) = crate::native::local::planes_bound(b, &surfs) {
+            return Ok(out);
+        }
+        if let Some((out, _)) = crate::native::local::replace_with_events(b, &surfs) {
+            return Ok(out);
+        }
+    }
+    let out = match moved {
         Ok(out) => out,
         // Faces or corners the moves swallow (a pyramid shrunk past its apex, which becomes a
         // ridge): of a convex polyhedron, the solid its moved planes bound; of a prism with a
