@@ -1077,10 +1077,13 @@ fn the_5_axis_toolpaths_compute() {
         // Read back as each control reads it (LinuxCNC's wrapped C by the sign of its words,
         // the others the shortest way), no cut turns the platter more than a few degrees.
         let moves = cadrs_cam::post::reader::read(&nc);
-        for w in moves.windows(2).filter(|w| !w[1].rapid) {
+        for w in moves.windows(2) {
             let turn = w[1].angle('C') - w[0].angle('C');
+            // (A rapid may turn further, the tool clear, but never half a turn, where which
+            // way it goes would be the control's choice.)
+            let most = if w[1].rapid { 179.0 } else { 45.0 };
             assert!(
-                turn.abs() < 45.0,
+                turn.abs() < most,
                 "{d:?}: C turns {turn} at line {}",
                 w[1].line
             );

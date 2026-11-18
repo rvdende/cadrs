@@ -1089,23 +1089,44 @@ pub(super) fn unturn(
         if continuous && s.rotary.winding == Winding::Rollover {
             // Back to 0 the shortest way (on LinuxCNC the sign says which way that is).
             let r = q.rem_euclid(360.0);
-            let back = d == Dialect::LinuxCnc && r > 1e-9 && r < 180.0;
-            words.push(format!("{c}{}{zero}", if back { "-" } else { "" }));
+            if d != Dialect::LinuxCnc && (r - 180.0).abs() < 1e-6 {
+                // Half a turn from 0: either way round is as short, so the control isn't left
+                // to choose: by 90 first, then 0.
+                words.push(format!("{c}{}", decimal(90.0, 0, w.s.decimal_point)));
+                words.push(format!("\n{c}{zero}"));
+            } else {
+                let back = d == Dialect::LinuxCnc && r > 1e-9 && r < 180.0;
+                words.push(format!("{c}{}{zero}", if back { "-" } else { "" }));
+            }
         } else if continuous && (q / 360.0).round() != 0.0 {
             // A wound axis stops at the whole turn nearest: the work as it started, without
             // turning back every turn the job made.
             let whole = 360.0 * (q / 360.0).round();
             let text = decimal(whole, 3, w.s.decimal_point);
+            let turns = (whole / 360.0).abs();
             w.comment(&format!(
-                "{c} stops at {c}{text}, {} whole turns on: zero {c} there before the next program",
-                (whole / 360.0).abs()
+                "{c} stops at {c}{text}, {turns} whole turn{} on: zero {c} there before the next \
+                 program",
+                if turns == 1.0 { "" } else { "s" }
             ));
             words.push(format!("{c}{text}"));
         } else {
             words.push(format!("{c}{zero}"));
         }
     }
-    w.block(&format!("G0 {}", words.join(" ")));
+    // (A word after a line break goes in a block of its own after the first.)
+    let mut first: Vec<String> = Vec::new();
+    let mut then: Vec<String> = Vec::new();
+    for wd in words {
+        match wd.strip_prefix('\n') {
+            Some(t) => then.push(t.to_string()),
+            None => first.push(wd),
+        }
+    }
+    w.block(&format!("G0 {}", first.join(" ")));
+    if !then.is_empty() {
+        w.block(&format!("G0 {}", then.join(" ")));
+    }
     w.at = [None; 3];
     w.mode = None;
 }

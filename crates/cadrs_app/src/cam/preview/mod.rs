@@ -1094,16 +1094,28 @@ fn sync_readout(
     }
 }
 
-/// The readout's line of the machine's axes: "Z-120.50  B23.10°  Y4.00  X-12.50  C45.00°". A
+/// The readout's line of the machine's axes: "X-12.50  Y4.00  Z-120.50  B23.10°  C45.00°". A
 /// rotary axis without stops reads as the control shows it: 0 to 360° when it rolls over.
 fn axes_line(
     chain: &cadrs_core::cam::cadrs_cam::kinematics::Chain,
     q: &[f64],
     rolls: bool,
 ) -> String {
-    chain
-        .joints()
-        .zip(q)
+    // In the order a control's display has them: X Y Z, then A B C, then anything else
+    // (an arm's J1…), each group as the chain has it.
+    let rank = |name: &str| match name {
+        "X" => 0,
+        "Y" => 1,
+        "Z" => 2,
+        "A" => 3,
+        "B" => 4,
+        "C" => 5,
+        _ => 6,
+    };
+    let mut joints: Vec<_> = chain.joints().zip(q).collect();
+    joints.sort_by_key(|(j, _)| rank(&j.name));
+    joints
+        .into_iter()
         .map(|(j, v)| {
             let rolled = (v.rem_euclid(360.0) * 100.0).round() / 100.0 % 360.0;
             let v = &if rolls && j.continuous && j.is_rotary() {
