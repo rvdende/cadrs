@@ -1,6 +1,6 @@
 //! The MCP server in the app (Model Context Protocol, [`cadrs_mcp`]): with the Preferences'
-//! **Enable MCP server** on, AI assistants on this machine drive the running app at
-//! `http://127.0.0.1:<port>/mcp`.
+//! **Enable MCP server** on (or the top bar's AI assistants button, `crate::mcp_button`), AI
+//! assistants on this machine drive the running app at `http://127.0.0.1:<port>/mcp`.
 //!
 //! - [`sync_server`] starts and stops the server as the preference changes (and at startup).
 //! - [`run_calls`] takes the waiting tool calls each frame and runs them on the world, every
@@ -46,12 +46,19 @@ pub struct McpServer {
     server: Option<Server>,
     /// The (enabled, port) the server was last set up for.
     applied: Option<(bool, u16)>,
+    /// Why it could not start, when it was last asked to.
+    error: Option<String>,
 }
 
 impl McpServer {
     /// The endpoint while serving.
     pub fn url(&self) -> Option<String> {
         self.server.as_ref().map(Server::url)
+    }
+
+    /// Why the server could not start, when it was last asked to.
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
     }
 }
 
@@ -89,6 +96,7 @@ fn sync_server(world: &mut World) {
     let mut state = world.resource_mut::<McpServer>();
     state.applied = Some(want);
     state.server = None;
+    state.error = None;
     if !mcp.enabled {
         return;
     }
@@ -105,6 +113,7 @@ fn sync_server(world: &mut World) {
         }
         Err(e) => {
             warn!("cannot start the MCP server on {addr}: {e}");
+            state.error = Some(e.to_string());
             cadrs_ui::Notification::error(cadrs_ui::i18n::tr_with(
                 "model-mcp-cannot-start",
                 &[("port", &mcp.port.to_string()), ("error", &e.to_string())],

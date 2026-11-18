@@ -15,12 +15,13 @@
 //! the frame panel's details (F12) and `get_frame_stats`. Off by default (it costs about a fifth of
 //! each frame), and it takes effect at the next start ([`crate::frame_profile::CpuProfiling`]).
 //!
-//! **Color scheme**: the top bar's light / dark / system toggle ([`cadrs_ui::scheme_toggle`])
-//! is saved here too, as soon as it's clicked. `CADRS_COLOR_SCHEME=light|dark|system` overrides
+//! **Color scheme**: the top bar's light / dark / system button ([`cadrs_ui::scheme_toggle`],
+//! each click the next) is saved here too, as soon as it's clicked. `CADRS_COLOR_SCHEME=light|dark|system` overrides
 //! it for one run without saving (scenarios use it to render in dark).
 //!
-//! Below it, **AI assistants (MCP)**: the *Enable MCP server* switch and the endpoint it serves
-//! (`crate::mcp` starts and stops the server as OK changes it).
+//! Below it, **AI assistants (MCP)**: the *Enable MCP server* switch, the endpoint it serves and
+//! its *Port* (with *Reset* to the default, 7680); `crate::mcp` starts and stops the server as OK
+//! changes them. The top bar's AI assistants button (`crate::mcp_button`) sets the same.
 //!
 //! Last, **Collaboration**: the cadrs ID while online, *Public documents* (take part in the
 //! public documents room while online, and the seed peers to start from: `public/seeds.txt`,
@@ -37,6 +38,8 @@ use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::text::{EditableText, FontWeight};
 use bevy::ui_widgets::{Activate, observe};
+#[cfg(not(target_arch = "wasm32"))]
+use cadrs_core::preferences::DEFAULT_MCP_PORT;
 use cadrs_core::preferences::{
     ColorScheme, Modifiers, MouseButton, MousePreset, Preferences, UI_SCALES, ViewAction,
 };
@@ -68,6 +71,29 @@ impl Plugin for PreferencesPlugin {
             )
             .add_observer(on_preset_change)
             .add_observer(on_rotation_snap_commit);
+        #[cfg(not(target_arch = "wasm32"))]
+        app.add_systems(Update, sync_mcp_endpoint);
+    }
+}
+
+/// The dialog's endpoint follows the port as it is typed (while it is one).
+#[cfg(not(target_arch = "wasm32"))]
+fn sync_mcp_endpoint(
+    fields: Query<(&Name, &EditableText), Changed<EditableText>>,
+    mut labels: Query<(&Name, &mut Text)>,
+) {
+    let Some(port) = fields
+        .iter()
+        .find(|(n, _)| n.as_str() == "pref-mcp-port-field")
+        .and_then(|(_, t)| crate::mcp_button::parse_port(&t.value().to_string()))
+    else {
+        return;
+    };
+    let url = crate::mcp_button::endpoint(port);
+    for (name, mut text) in &mut labels {
+        if name.as_str() == "pref-mcp-endpoint" && text.0 != url {
+            text.0 = url.clone();
+        }
     }
 }
 
@@ -311,6 +337,12 @@ pub fn set_mcp_enabled(world: &mut World, on: bool) {
     save(world);
 }
 
+/// Sets the MCP server's port and saves it (the AI assistants menu; the server restarts on it).
+pub fn set_mcp_port(world: &mut World, port: u16) {
+    world.resource_mut::<LocalPreferences>().0.mcp.port = port;
+    save(world);
+}
+
 /// Remembers the slicer parts were sent to, listed first next time (issue #176).
 pub fn set_last_slicer(world: &mut World, id: u8) {
     let prefs = &mut world.resource_mut::<LocalPreferences>().0;
@@ -428,10 +460,7 @@ pub fn open_preferences(world: &mut World) {
     #[cfg(not(target_arch = "wasm32"))]
     let vsync = world.resource::<LocalPreferences>().0.vsync;
     #[cfg(not(target_arch = "wasm32"))]
-    let endpoint = cadrs_mcp::url(std::net::SocketAddr::from((
-        std::net::Ipv4Addr::LOCALHOST,
-        mcp.port,
-    )));
+    let endpoint = crate::mcp_button::endpoint(mcp.port);
     let cadrs_id = cadrs_net::cadrs_id(world.get_resource::<cadrs_net::bevy_iroh::Iroh>());
     let state = *world.resource::<State<AppState>>().get();
     let theme = world.resource::<Theme>().clone();
@@ -682,6 +711,43 @@ pub fn open_preferences(world: &mut World) {
                             t.muted_foreground,
                         ),
                     ));
+                    // The port, and Reset to put the default back in the field.
+                    b.spawn(form_row(
+                        t,
+                        "pref-mcp-port-row",
+                        tr("shell-prefs-mcp-port"),
+                        150.0,
+                    ))
+                    .with_children(|r| {
+                        r.spawn(
+                            TextInput::new("pref-mcp-port")
+                                .value(mcp.port.to_string())
+                                .width(Val::Px(90.0))
+                                .build(t),
+                        );
+                        r.spawn((
+                            Button::new("pref-mcp-port-reset")
+                                .label(tr("shell-prefs-mcp-port-reset"))
+                                .ghost()
+                                .small()
+                                .tooltip(tr_with(
+                                    "shell-prefs-mcp-port-reset-tooltip",
+                                    &[("port", &DEFAULT_MCP_PORT.to_string())],
+                                ))
+                                .build(t),
+                            observe(|_: On<Activate>, mut commands: Commands| {
+                                commands.queue(|w: &mut World| {
+                                    crate::pcb::dialogs::set_text(
+                                        w,
+                                        "pref-mcp-port-field",
+                                        &DEFAULT_MCP_PORT.to_string(),
+                                    );
+                                });
+                            }),
+                        ))
+                        .entry::<Node>()
+                        .and_modify(|mut n| n.margin = UiRect::left(Val::Px(8.0)));
+                    });
                     b.spawn((
                         Name::new("pref-mcp-note"),
                         t.text(
@@ -872,6 +938,28 @@ fn save_preferences(world: &mut World) {
         };
         validated.push((name, value));
     }
+    // The MCP server's port: a dialog with a port that isn't one stays open.
+    #[cfg(not(target_arch = "wasm32"))]
+    let mcp_port = {
+        let mut q = world.query::<(&Name, &EditableText)>();
+        let text = q
+            .iter(world)
+            .find(|(n, _)| n.as_str() == "pref-mcp-port-field")
+            .map(|(_, t)| t.value().to_string());
+        match text {
+            Some(text) => match crate::mcp_button::parse_port(&text) {
+                Some(port) => Some(port),
+                None => {
+                    crate::linked::toast(
+                        world,
+                        tr_with("shell-mcp-port-invalid", &[("text", &text)]),
+                    );
+                    return;
+                }
+            },
+            None => None,
+        }
+    };
     for (name, value) in validated {
         let mut prefs = world.resource_mut::<LocalPreferences>();
         if name == "pref-rotation-snap-tolerance" {
@@ -910,6 +998,10 @@ fn save_preferences(world: &mut World) {
         .map(|(_, s)| s.on);
     if let Some(on) = mcp {
         world.resource_mut::<LocalPreferences>().0.mcp.enabled = on;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(port) = mcp_port {
+        world.resource_mut::<LocalPreferences>().0.mcp.port = port;
     }
     let autoconnect = qm
         .iter(world)

@@ -123,6 +123,7 @@ ui-color-editor-save-color = Enregistrer cette couleur
 ui-color-scheme-light = Clair
 ui-color-scheme-dark = Sombre
 ui-color-scheme-system = Comme le système
+ui-color-scheme-cycle = Thème : { $scheme } (cliquer pour { $next })
 
 ## crates/cadrs_ui/src/dock.rs
 ui-dock-hide-panel = Masquer le panneau
@@ -206,6 +207,8 @@ shell-top-bar-update = Mettre à jour vers v{ $version }…
 shell-top-bar-update-tooltip = Lire les notes de version et mettre à jour
 shell-top-bar-github = cadrs sur GitHub
 shell-top-bar-github-stars = { $stars } étoiles sur GitHub
+shell-top-bar-download-app = Télécharger l'app
+shell-top-bar-download-app-tooltip = cadrs pour Linux, Windows ou macOS (GitHub)
 
 ## crates/cadrs_app/src/notifications.rs
 shell-notice-whats-new-title = Un nouveau look pour cadrs
@@ -585,6 +588,9 @@ shell-prefs-mcp-server = Serveur MCP
 shell-prefs-enabled = Activé
 shell-prefs-endpoint = Point d'accès
 shell-prefs-mcp-note = Lorsqu'il est activé, les assistants IA de cet ordinateur (Claude, Cursor…) peuvent créer et modifier des documents.
+shell-prefs-mcp-port = Port
+shell-prefs-mcp-port-reset = Réinitialiser
+shell-prefs-mcp-port-reset-tooltip = Revenir au port par défaut, { $port }
 shell-prefs-collab-heading = Collaboration
 shell-prefs-id-while-online = Affiché en ligne
 shell-prefs-p2p = Réseau P2P
@@ -1898,6 +1904,20 @@ model-mass-parts = Pièces à mesurer
 ## crates/cadrs_app/src/mcp.rs
 model-mcp-server-on = Serveur MCP sur { $url }
 model-mcp-cannot-start = Impossible de démarrer le serveur MCP sur le port { $port } : { $error }
+shell-mcp-tooltip-on = Assistants IA (MCP) : activés
+shell-mcp-tooltip-off = Assistants IA (MCP) : désactivés
+shell-mcp-tooltip-failed = Assistants IA (MCP) : démarrage impossible
+shell-mcp-serving = Activé, sur { $url }
+shell-mcp-off = Désactivé (servirait sur { $url })
+shell-mcp-failed = Démarrage impossible sur le port { $port }
+shell-mcp-enable = Activer le serveur MCP
+shell-mcp-port = Port : { $port }…
+shell-mcp-port-tooltip = Le port de cet ordinateur auquel se connectent les assistants IA
+shell-mcp-port-reset = Réinitialiser le port par défaut ({ $port })
+shell-mcp-copy-endpoint = Copier le point de terminaison
+shell-mcp-copied = { $url } copié
+shell-mcp-port-title = Port du serveur MCP
+shell-mcp-port-invalid = Port non valide : { $text } (un nombre de 1 à 65535)
 
 ## crates/cadrs_app/src/simulation_ui.rs
 model-sim-one-face = { $count } face

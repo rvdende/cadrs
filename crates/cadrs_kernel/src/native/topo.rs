@@ -64,7 +64,9 @@ fn parity_orientation_with(shell: &Body, kept: &[super::classify::KeptPolygons])
     let mut verdict: Option<bool> = None;
     let mut probes = 0;
     for (fi, f) in shell.faces.iter().enumerate() {
-        if probes == 8 {
+        // (Three probes that agree: a shell's faces are joined each edge once each way, so
+        // they point out together or in together, and one probe not grazing would do.)
+        if probes == 3 {
             break;
         }
         // A point well inside the face's domain: of a grid over its (u, v) box, the one
@@ -86,11 +88,19 @@ fn parity_orientation_with(shell: &Body, kept: &[super::classify::KeptPolygons])
         // each loop's polyline, every so many points, at most 48 (a point well inside is all
         // that is sought; the polylines are dense, and which side it lies is asked of them
         // whole).
-        let segs: Vec<(P2, V2, f64)> = ps
+        // (And the loops thinned so, for which grid points lie inside: asked of the whole
+        // polylines only for the point chosen, which keeps clear of them by more than they
+        // were thinned by, or isn't taken.)
+        let thin: Vec<Vec<P2>> = ps
+            .iter()
+            .map(|l| {
+                let step = l.len().div_ceil(48).max(1);
+                l.iter().step_by(step).copied().collect()
+            })
+            .collect();
+        let segs: Vec<(P2, V2, f64)> = thin
             .iter()
             .flat_map(|l| {
-                let step = l.len().div_ceil(48).max(1);
-                let l: Vec<P2> = l.iter().step_by(step).copied().collect();
                 (0..l.len()).map(move |k| {
                     let (a, b) = (l[k], l[(k + 1) % l.len()]);
                     let (a, b) = (P2::new(a.x * mu, a.y * mv), P2::new(b.x * mu, b.y * mv));
@@ -121,8 +131,8 @@ fn parity_orientation_with(shell: &Body, kept: &[super::classify::KeptPolygons])
                     }
                 }
                 if best.is_none_or(|b| d > b.0) {
-                    let inside = ps.first().is_some_and(|o| point_in_polygon(&uv, o))
-                        && !ps.iter().skip(1).any(|h| point_in_polygon(&uv, h));
+                    let inside = thin.first().is_some_and(|o| point_in_polygon(&uv, o))
+                        && !thin.iter().skip(1).any(|h| point_in_polygon(&uv, h));
                     if inside {
                         best = Some((d, uv));
                     }
@@ -130,6 +140,11 @@ fn parity_orientation_with(shell: &Body, kept: &[super::classify::KeptPolygons])
             }
         }
         let Some((room, uv)) = best else { continue };
+        if !(ps.first().is_some_and(|o| point_in_polygon(&uv, o))
+            && !ps.iter().skip(1).any(|h| point_in_polygon(&uv, h)))
+        {
+            continue;
+        }
         let normal = f.surf.normal(uv.x, uv.y);
         if !(normal.norm() > 0.5) {
             continue;

@@ -71,6 +71,24 @@ fn two_lines_meeting_in_a_point_and_a_guide_make_the_triangle() {
 }
 
 #[test]
+fn one_guide_turns_a_profile_drawn_the_other_way() {
+    // The triangle above with its second profile drawn from the origin out: one guide gives no
+    // pair of guides to order, so where it meets the profiles (the first's start, the second's
+    // end) says the second runs the other way. The same flat triangle, 50.
+    let mut k = NativeKernel::new();
+    let spec = loft(
+        vec![
+            CurveSection::Wire(vec![line([10.0, 0.0, 0.0], [0.0, 0.0, 0.0])]),
+            CurveSection::Wire(vec![line([0.0, 0.0, 0.0], [0.0, 10.0, 0.0])]),
+        ],
+        vec![vec![line([10.0, 0.0, 0.0], [0.0, 10.0, 0.0])]],
+    );
+    let b = k.loft_curves(&spec).unwrap().bodies[0];
+    valid(&k, b);
+    assert!((area(&k, b) - 50.0).abs() < 1e-6, "{}", area(&k, b));
+}
+
+#[test]
 fn a_line_swept_along_a_line_is_a_rectangle() {
     // A 4 mm line swept 7 mm along a line square to it, keeping its orientation: 4 × 7 = 28.
     let mut k = NativeKernel::new();

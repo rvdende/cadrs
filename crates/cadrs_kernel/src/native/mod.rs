@@ -186,6 +186,11 @@ pub mod fingerprint;
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod fingerprint;
 #[cfg(feature = "testkit")]
+pub mod flat_union;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod flat_union;
+#[cfg(feature = "testkit")]
 pub mod heal;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
@@ -271,6 +276,7 @@ pub mod recognize;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod recognize;
+pub(crate) mod rim_blend;
 #[cfg(feature = "testkit")]
 pub mod silhouette;
 #[cfg(not(feature = "testkit"))]
@@ -332,6 +338,7 @@ pub mod sweep;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod sweep;
+pub(crate) mod sweep_ball_pass;
 pub(crate) mod sweep_cache;
 #[cfg(feature = "testkit")]
 pub mod sweep_faces;

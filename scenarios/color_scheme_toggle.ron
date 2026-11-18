@@ -1,12 +1,15 @@
-// The top bar's light / dark / system toggle: dark at once on the documents page, still dark in
-// a document (menus and dialogs too), and back to light; scripted runs read the system as light.
+// The top bar's light / dark / system button, a click stepping to the next: dark at once on the
+// documents page, still dark in a document (menus and dialogs too), and back to the system's,
+// which scripted runs read as light, then light.
 Scenario(
     start: Some("landing"),
     seed_documents: 6,
     steps: [
         WaitFor("color-scheme"),
         Screenshot("01-light-system"),
-        Click(ui("color-scheme-1")),
+        // System, then light, then dark.
+        Click(ui("color-scheme")),
+        Click(ui("color-scheme")),
         Screenshot("02-dark-documents"),
         Click(ui("create")),
         WaitFor("new-document"),
@@ -23,9 +26,9 @@ Scenario(
         WaitFor("preferences-dialog"),
         Screenshot("06-dark-preferences"),
         Click(ui("pref-cancel")),
-        Click(ui("color-scheme-0")),
-        Screenshot("07-light-document"),
-        Click(ui("color-scheme-2")),
-        Screenshot("08-system-is-light-in-scripts"),
+        Click(ui("color-scheme")),
+        Screenshot("07-system-is-light-in-scripts"),
+        Click(ui("color-scheme")),
+        Screenshot("08-light-document"),
     ],
 )

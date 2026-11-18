@@ -149,6 +149,21 @@ struct UpdateSlot;
 /// account menu on a narrow window (`crate::top_bar`).
 pub fn spawn_version(r: &mut ChildSpawnerCommands, t: &Theme) {
     let fold = cadrs_ui::HideBelow(crate::top_bar::Fold::Version.below());
+    // A page offers the app itself: the README's downloads.
+    #[cfg(target_arch = "wasm32")]
+    r.spawn((
+        Button::new("download-app")
+            .label(tr("shell-top-bar-download-app"))
+            .icon("download")
+            .outline()
+            .small()
+            .tooltip(tr("shell-top-bar-download-app-tooltip"))
+            .build(t),
+        observe(|_: On<Activate>| crate::open_url(crate::README)),
+        fold,
+    ))
+    .entry::<Node>()
+    .and_modify(|mut n| n.margin = UiRect::right(Val::Px(8.0)));
     crate::github::spawn_slot(r, fold);
     r.spawn((
         Name::new("update-slot"),

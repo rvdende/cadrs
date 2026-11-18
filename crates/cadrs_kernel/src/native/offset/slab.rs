@@ -203,6 +203,140 @@ fn side_surface(c: &Curve, t0: f64, t1: f64, o: &Curve) -> Surface {
     )))
 }
 
+/// The slab of face `fi` of `b` where the face is a whole band of its surface of revolution
+/// (a cylinder, a cone, a sphere or a torus, all the way round its axis between two of its
+/// parallels, or to a pole): the flat figure between its meridian and the meridian moved `d`
+/// along the outward normal (from the meridian moved `from`: nought for the face's own), closed
+/// by the two normals at its ends, turned once about the axis. In the half-plane through the axis the meridian is a line or a circle's arc, so its
+/// offset is one too and the two ends' normals are straight: nothing is fitted, and the sides
+/// the general slab skins as B-splines and then recognises are cones as they are made. None
+/// where the face is trimmed any other way, or the move takes the meridian across the axis or
+/// through a circle's centre.
+pub(crate) fn band_slab(b: &Body, fi: usize, from: f64, d: f64) -> Option<Body> {
+    use crate::native::sweep::{self, Revolve};
+    use crate::{Curve2, Loop, Plane, Profile, Region};
+    use std::f64::consts::TAU;
+    let f = &b.faces[fi];
+    let fr = match &f.surf {
+        Surface::Cylinder { f, .. }
+        | Surface::Cone { f, .. }
+        | Surface::Sphere { f, .. }
+        | Surface::Torus { f, .. } => *f,
+        _ => return None,
+    };
+    let near = tol::REL_POINT * (1.0 + b.face_bbox(fi).diagonal());
+    // Its edges: seams (there and back), poles, and parallels (each a v, all the way round).
+    let mut uses: HashMap<usize, usize> = HashMap::new();
+    for c in f.loops.iter().flatten() {
+        *uses.entry(c.edge).or_default() += 1;
+    }
+    let mut ends: Vec<(f64, f64)> = Vec::new();
+    for c in f.loops.iter().flatten() {
+        let e = &b.edges[c.edge];
+        if uses[&c.edge] == 2 {
+            continue;
+        }
+        let v = c.pc.point(0.5 * (e.t[0] + e.t[1])).y;
+        let turn = if e.degenerate {
+            TAU
+        } else {
+            let Curve::Circle { c: o, x, y, .. } = &e.curve else {
+                return None;
+            };
+            let w = o - fr.o;
+            if (w - fr.z * w.dot(&fr.z)).norm() > near
+                || x.cross(y).cross(&fr.z).norm() > tol::ANGULAR
+                || (c.pc.point(e.t[0]).y - v).abs() > tol::ANGULAR
+            {
+                return None;
+            }
+            (e.t[1] - e.t[0]).abs()
+        };
+        match ends.iter_mut().find(|x| (x.0 - v).abs() <= tol::ANGULAR) {
+            Some(x) => x.1 += turn,
+            None => ends.push((v, turn)),
+        }
+    }
+    let [(v0, t0), (v1, t1)] = ends[..] else {
+        return None;
+    };
+    if (t0 - TAU).abs() > tol::ANGULAR || (t1 - TAU).abs() > tol::ANGULAR {
+        return None;
+    }
+    let (v0, v1) = (v0.min(v1), v0.max(v1));
+    // The meridian in (radius, height) from the frame's origin, and the outward normal there.
+    let out = if f.sense { 1.0 } else { -1.0 };
+    let at = |v: f64| {
+        let p = f.surf.eval(0.0, v) - fr.o;
+        let n = f.surf.normal(0.0, v).normalize() * out;
+        (
+            nalgebra::Point2::new(p.dot(&fr.x), p.dot(&fr.z)),
+            nalgebra::Vector2::new(n.dot(&fr.x), n.dot(&fr.z)),
+        )
+    };
+    // (From the meridian moved `from`, to it moved `d`.)
+    let ((p0, n0), (p1, n1)) = (at(v0), at(v1));
+    let (q0, q1) = (p0 + n0 * d, p1 + n1 * d);
+    let (p0, p1) = (p0 + n0 * from, p1 + n1 * from);
+    // (The moved meridian on the axis's own side still: a radius of nought is a pole's.)
+    if q0.x < -near || q1.x < -near || p0.x < -near || p1.x < -near {
+        return None;
+    }
+    let line =
+        |a: nalgebra::Point2<f64>, b: nalgebra::Point2<f64>| Curve2::Line { a, b, source: None };
+    // The meridian from v0 to v1, and the moved one back: lines, or arcs about the tube's or
+    // the ball's centre (a sphere's v is its latitude, a torus's the angle round its tube).
+    let (there, back) = match &f.surf {
+        Surface::Cylinder { .. } | Surface::Cone { .. } => (line(p0, p1), line(q1, q0)),
+        Surface::Sphere { r, .. } | Surface::Torus { rmin: r, .. } => {
+            let centre = match &f.surf {
+                Surface::Torus { rmaj, .. } => nalgebra::Point2::new(*rmaj, 0.0),
+                _ => nalgebra::Point2::new(0.0, 0.0),
+            };
+            // (The normal points away from the centre on the outside of the ball or tube.)
+            let away = (at(v0).0 - centre).dot(&n0).signum();
+            let (start, moved) = (r + from * away, r + d * away);
+            if moved <= near || start <= near {
+                return None;
+            }
+            let arc = |radius: f64, from: f64, sweep: f64| Curve2::Arc {
+                center: centre,
+                radius,
+                start_angle: from,
+                sweep,
+                source: None,
+            };
+            (arc(start, v0, v1 - v0), arc(moved, v1, v0 - v1))
+        }
+        _ => return None,
+    };
+    let mut curves = vec![there];
+    if (q1 - p1).norm() > near {
+        curves.push(line(p1, q1));
+    }
+    curves.push(back);
+    if (q0 - p0).norm() > near {
+        curves.push(line(q0, p0));
+    }
+    let plane = Plane {
+        origin: fr.o,
+        x_dir: nalgebra::Unit::new_normalize(fr.x),
+        normal: nalgebra::Unit::new_normalize(-fr.y),
+    };
+    let section = Region {
+        outer: Loop { curves },
+        holes: vec![],
+        source: None,
+    };
+    let regions = crate::native::profile::regions(&Profile::new(plane, vec![section])).ok()?;
+    let mf = crate::native::profile::merge_regions(&regions).ok()?;
+    let kind = Revolve { plane, f: fr };
+    let body = sweep::sweep_full(&mf, &[], &kind, 0.0, TAU, true, true)
+        .ok()?
+        .body;
+    (body.solids.len() == 1).then_some(body)
+}
+
 /// The slab of face `fi` of `b` swept by `d` along its outward normals.
 pub fn face_slab(b: &Body, fi: usize, d: f64) -> Result<Body> {
     let f = &b.faces[fi];
@@ -242,6 +376,18 @@ pub fn face_slab(b: &Body, fi: usize, d: f64) -> Result<Body> {
         },
         s => (s.clone(), f.sense),
     };
+    // A whole band of a cylinder, cone, sphere or torus between two of its parallels: its
+    // slab is its meridian's, turned once.
+    if matches!(
+        f.surf,
+        Surface::Cylinder { .. }
+            | Surface::Cone { .. }
+            | Surface::Sphere { .. }
+            | Surface::Torus { .. }
+    ) && let Some(b) = band_slab(b, fi, 0.0, d)
+    {
+        return Ok(b);
+    }
     if let Some(b) = spindle_slab(b, fi, &surf, sense, d) {
         return b;
     }

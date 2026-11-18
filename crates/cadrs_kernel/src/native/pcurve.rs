@@ -567,18 +567,41 @@ pub(super) fn iso_line(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Option<Curve
     Some(line)
 }
 
+/// The degree a p-curve is fitted in. A quintic through n points of a smooth curve is off by
+/// about h⁶ where a cubic is off by h⁴: a circle on a sphere it doesn't run round, fitted to
+/// 1e-9, took 333 points as a cubic.
+const FIT_DEGREE: usize = 5;
+
 /// Interpolates projected points with the curve's own parameters.
 fn fitted(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Curve {
     let pieces = c.pieces(t0, t1);
     let mut ts: Vec<f64> = Vec::new();
     // A few samples a piece to start (refined below where the fit is off).
-    let n = (512 / pieces.len().max(1)).clamp(2, 16);
+    let n = (512 / pieces.len().max(1)).clamp(2, 8);
     for w in pieces.windows(2) {
         for i in 0..n {
             ts.push(w[0] + (w[1] - w[0]) * i as f64 / n as f64);
         }
     }
     ts.push(t1);
+    // (A curve joined of pieces may have two of its knots a rounding apart: sites that close
+    // make a fit of spans of no length, whose derivatives are no numbers.)
+    let apart = 1e-9 * (t1 - t0).abs();
+    let mut kept: Vec<f64> = Vec::with_capacity(ts.len());
+    for (i, &t) in ts.iter().enumerate() {
+        let last = i + 1 == ts.len();
+        match kept.last() {
+            Some(&k) if (t - k).abs() <= apart => {
+                // (The range's end is kept, not the site just before it.)
+                if last && kept.len() > 1 {
+                    kept.pop();
+                    kept.push(t);
+                }
+            }
+            _ => kept.push(t),
+        }
+    }
+    let mut ts = kept;
     // Followed continuously across the surface's seams (brought back into a closed
     // B-spline's range after: `into_closed_range`).
     let periods = closed_periods(s);
@@ -596,7 +619,7 @@ fn fitted(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Curve {
     settle_poles(s, &mut uvs);
     let fit_of = |ts: &[f64], uvs: &[P2]| {
         let pts: Vec<P3> = uvs.iter().map(|q| P3::new(q.x, q.y, 0.0)).collect();
-        NurbsCurve::interpolate(&pts, ts, 3.min(pts.len() - 1), None, None)
+        NurbsCurve::interpolate(&pts, ts, FIT_DEGREE.min(pts.len() - 1), None, None)
     };
     // How near the fit keeps to the curve's projection: 1e-9, or 2e-10 of the curve's size
     // on a big model (the bound an intersection curve itself is fitted to).

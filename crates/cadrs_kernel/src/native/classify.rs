@@ -32,11 +32,19 @@ fn polygon_fineness(s: &Surface) -> f64 {
 
 /// One of a face's loops sampled as a uv polygon ([`face_polygons`]).
 fn loop_polygon(body: &Body, l: &[super::topo::Coedge], fine: f64) -> Vec<P2> {
-    let mut pts = Vec::new();
-    for c in l {
+    // (Its points counted first: a circle's are hundreds, and a vector grown to them is
+    // copied over and over.)
+    let steps: Vec<usize> = l
+        .iter()
+        .map(|c| {
+            let (a, b) = co_range(&body.edges[c.edge], c.fwd);
+            coedge_steps(&c.pc, a, b, fine)
+        })
+        .collect();
+    let mut pts = Vec::with_capacity(steps.iter().sum());
+    for (c, &n) in l.iter().zip(&steps) {
         let e = &body.edges[c.edge];
         let (a, b) = co_range(e, c.fwd);
-        let n = coedge_steps(&c.pc, a, b, fine);
         for i in 0..n {
             let t = a + (b - a) * i as f64 / n as f64;
             let p = c.pc.point(t);
@@ -45,6 +53,12 @@ fn loop_polygon(body: &Body, l: &[super::topo::Coedge], fine: f64) -> Vec<P2> {
     }
     pts
 }
+
+/// Straight steps to a radian of a circular or elliptical p-curve: 403 round a whole circle,
+/// its chords within 3e-5 of its radius of it. (A point between the chords and the curve is
+/// put right by the curve itself, [`ArcPiece`]; at 256 steps a radian a circle's polygon was
+/// 1609 points, and a small solid's faces' polygons most of what it allocated.)
+const ARC_STEPS: f64 = 64.0;
 
 /// How many straight steps [`loop_polygon`] takes a coedge's p-curve in over [a, b]: one for a
 /// line, else by its parameter's span. (The polygon then runs up to a circle's sagitta inside
@@ -65,7 +79,7 @@ fn coedge_steps(pc: &super::curve::Curve, a: f64, b: f64, fine: f64) -> usize {
             let steps = (b - a).abs() * (bend / (8.0 * fine.max(tol::TINY))).sqrt();
             (steps.ceil() as usize).clamp(16, 4096)
         }
-        _ => (((b - a).abs() * 256.0).ceil() as usize).clamp(16, 4096),
+        _ => (((b - a).abs() * ARC_STEPS).ceil() as usize).clamp(16, 4096),
     }
 }
 

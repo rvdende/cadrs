@@ -121,6 +121,13 @@ pub fn icons() -> Vec<Def> {
             "Network disconnected",
             network_disconnected,
         ),
+        def("assistant", Line, "AI assistants (MCP)", assistant),
+        def(
+            "assistant-off",
+            Line,
+            "AI assistants (MCP) off",
+            assistant_off,
+        ),
         def("theme-light", Line, "Light theme", theme_light),
         def("theme-dark", Line, "Dark theme", theme_dark),
         def("theme-system", Line, "System theme", theme_system),
@@ -1098,6 +1105,59 @@ fn network_error() -> Vec<String> {
         arrows(false, false),
         acc_all(els![line(x, 4.0, x, 9.5, ""), line(x, 13.0, x, 13.01, "")])
     ]
+}
+
+// ---------------------------------------------------------------------------------------------
+// AI assistants (the MCP server): a robot's head, its eyes lit while assistants may connect,
+// struck through while they may not.
+
+/// The head's outline, the antenna's mast and its tip, the ears and the mouth (all but the
+/// eyes), as point runs.
+fn robot_runs() -> Vec<(Vec<P>, bool)> {
+    let head = rounded(&[(4.5, 8.0), (19.5, 8.0), (19.5, 20.0), (4.5, 20.0)], 3.0);
+    vec![
+        (head, true),
+        (vec![(12.0, 8.0), (12.0, 5.25)], false),
+        (
+            arc_points_step(12.0, 3.75, 1.5, 1.5, 0.0, 360.0, 20.0),
+            true,
+        ),
+        (vec![(2.25, 12.5), (2.25, 15.5)], false),
+        (vec![(21.75, 12.5), (21.75, 15.5)], false),
+        (vec![(10.0, 17.0), (14.0, 17.0)], false),
+    ]
+}
+
+const ROBOT_EYES: [P; 2] = [(9.0, 13.0), (15.0, 13.0)];
+
+fn assistant() -> Vec<String> {
+    let mut out: Vec<String> = robot_runs()
+        .into_iter()
+        .map(|(ps, closed)| path(&d(&ps, closed), "", ""))
+        .collect();
+    // The eyes, lit: what says it is on.
+    for (x, y) in ROBOT_EYES {
+        out.push(acc(circle(x, y, 0.75, INK, "")));
+    }
+    out
+}
+
+fn assistant_off() -> Vec<String> {
+    // The robot struck through, broken where the slash runs over it; its eyes unlit, the one
+    // under the slash gone.
+    let (a, b) = ((3.0, 3.0), (21.0, 21.0));
+    let mut out = Vec::new();
+    for (ps, closed) in robot_runs() {
+        out.extend(gapped(&dense(&ps, 0.2, closed), a, b, 2.2, closed));
+    }
+    for (x, y) in ROBOT_EYES {
+        // Its distance from the slash (the line y = x).
+        if (x - y).abs() / std::f64::consts::SQRT_2 > 2.5 {
+            out.push(circle(x, y, 0.75, INK, ""));
+        }
+    }
+    out.push(acc(seg(a, b, "")));
+    out
 }
 
 fn network_disconnected() -> Vec<String> {

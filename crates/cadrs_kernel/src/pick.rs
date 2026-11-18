@@ -92,7 +92,24 @@ pub trait Pick: Kernel {
 
     /// The faces of `body` on surfaces of `kind`.
     fn faces_of(&self, body: BodyId, kind: SurfaceKind) -> Result<Vec<FaceId>> {
-        self.faces_where(body, &|f| f.kind == kind)
+        Ok(self
+            .face_kinds(body)?
+            .iter()
+            .enumerate()
+            .filter(|(_, k)| **k == kind)
+            .map(|(i, _)| FaceId(i as u64))
+            .collect())
+    }
+
+    /// The faces of `body` on surfaces of another kind than `kind`.
+    fn faces_but(&self, body: BodyId, kind: SurfaceKind) -> Result<Vec<FaceId>> {
+        Ok(self
+            .face_kinds(body)?
+            .iter()
+            .enumerate()
+            .filter(|(_, k)| **k != kind)
+            .map(|(i, _)| FaceId(i as u64))
+            .collect())
     }
 
     /// The one face of `body` on a surface of `kind` (a ball's cap on a frustum, a block's one

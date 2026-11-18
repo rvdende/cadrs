@@ -145,10 +145,12 @@ ui-color-editor-default = Default
 ui-color-editor-save-color = Save this color
 
 ## crates/cadrs_ui/src/color_scheme.rs
-# Tooltips of the light / dark / system appearance toggle.
+# The light / dark / system appearance button: the schemes' names.
 ui-color-scheme-light = Light
 ui-color-scheme-dark = Dark
 ui-color-scheme-system = Match the system
+# The button's tooltip: { $scheme } is the scheme in use, { $next } the one a click picks.
+ui-color-scheme-cycle = Color scheme: { $scheme } (click for { $next })
 
 ## crates/cadrs_ui/src/dock.rs
 ui-dock-hide-panel = Hide panel
@@ -265,6 +267,9 @@ shell-top-bar-update = Update to v{ $version }…
 shell-top-bar-update-tooltip = Read the release notes and update
 shell-top-bar-github = cadrs on GitHub
 shell-top-bar-github-stars = { $stars } stars on GitHub
+# The browser version's button (and account menu entry): the desktop app's downloads on GitHub.
+shell-top-bar-download-app = Download App
+shell-top-bar-download-app-tooltip = Get cadrs for Linux, Windows or macOS (GitHub)
 
 ## crates/cadrs_app/src/notifications.rs
 shell-notice-whats-new-title = A new look for cadrs
@@ -879,6 +884,12 @@ shell-prefs-enabled = Enabled
 # The address the MCP server answers at.
 shell-prefs-endpoint = Endpoint
 shell-prefs-mcp-note = While it is on, AI assistants on this computer (Claude, Cursor, …) can create and edit documents.
+# The port on this computer the MCP server listens on.
+shell-prefs-mcp-port = Port
+# Puts the default port back in the field.
+shell-prefs-mcp-port-reset = Reset
+# { $port } is the default port (7680).
+shell-prefs-mcp-port-reset-tooltip = Back to the default port, { $port }
 shell-prefs-collab-heading = Collaboration
 shell-prefs-id-while-online = Shown while online
 shell-prefs-p2p = P2P networking
@@ -2677,6 +2688,30 @@ model-mass-parts = Parts to measure
 model-mcp-server-on = MCP server on { $url }
 # { $port } is a port number; { $error } is the system's error message (in English).
 model-mcp-cannot-start = Cannot start the MCP server on port { $port }: { $error }
+
+## crates/cadrs_app/src/mcp_button.rs
+# The top bar's AI assistants (MCP) button: its tooltip, and its entry in the account menu.
+shell-mcp-tooltip-on = AI assistants (MCP): on
+shell-mcp-tooltip-off = AI assistants (MCP): off
+shell-mcp-tooltip-failed = AI assistants (MCP): could not start
+# Its menu's header. { $url } is the server's address.
+shell-mcp-serving = On, at { $url }
+shell-mcp-off = Off (would serve at { $url })
+# { $port } is a port number.
+shell-mcp-failed = Could not start on port { $port }
+shell-mcp-enable = Enable MCP server
+# { $port } is the port in use; the item opens a box to type another.
+shell-mcp-port = Port: { $port }…
+shell-mcp-port-tooltip = The port on this computer AI assistants connect to
+# { $port } is the default port (7680).
+shell-mcp-port-reset = Reset port to default ({ $port })
+shell-mcp-copy-endpoint = Copy endpoint
+# A notice: { $url } is the address copied.
+shell-mcp-copied = Copied { $url }
+# The title of the box to type the port in.
+shell-mcp-port-title = MCP server port
+# { $text } is what was typed.
+shell-mcp-port-invalid = Not a port: { $text } (a number from 1 to 65535)
 
 ## crates/cadrs_app/src/simulation_ui.rs
 # { $count } is 1.

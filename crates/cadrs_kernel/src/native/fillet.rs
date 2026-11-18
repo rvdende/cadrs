@@ -11392,6 +11392,34 @@ fn local_blend(
             "unknown edge or empty radius law".into(),
         ));
     }
+    // A chamfer of one rim (a whole circle, in one edge or several, between faces turned
+    // about its axis), its ball the same all the way round: in closed form
+    // ([`super::rim_blend`]).
+    if flat
+        && let Some((_, law)) = edges.first()
+        && let (Some(&(_, k)), Some(&(ratio, _))) = (law.first(), ratios.first())
+        && edges.iter().all(|(_, l)| {
+            l.iter()
+                .all(|x| (x.1 - k).abs() <= tol::REL_POINT * (1.0 + k))
+        })
+        && ratios
+            .iter()
+            .all(|q| q.1.is_none() && (q.0 - ratio).abs() <= tol::REL_POINT * (1.0 + ratio))
+        && std::env::var_os("CADRS_NO_RIM_BLEND").is_none()
+        && let Some(made) = super::rim_blend::rim_chamfer(
+            b,
+            input,
+            &edges.iter().map(|x| x.0).collect::<Vec<_>>(),
+            k,
+            ratio,
+        )
+    {
+        debug(|| "the rim's chamfer in closed form".to_string());
+        // (Sound as it is made: each face cut back along its own surface to a circle inside
+        // it, the cone between the two circles; and checked there.)
+        FULLY_CHECKED.with(|c| *c.borrow_mut() = Some(made.0.clone()));
+        return Ok(made);
+    }
     let charted = loops_in_chart(b);
     let b = charted.as_ref().unwrap_or(b);
     let fixed = open_seam_holes(b);
@@ -14068,17 +14096,18 @@ fn assemble(
     // Each cut face split on its own (in parallel: the faces are independent), taken in order.
     let splits: Vec<Option<Vec<Face>>> = {
         let nb = &nb;
-        super::par::start();
-        (0..nb.faces.len())
-            .into_par_iter()
-            .map(|fi| {
-                out.cuts.get(&fi).map(|cs| {
-                    split(nb, &nb.faces[fi], cs, &|e| {
-                        out.on_face.get(&(e, fi)).cloned()
-                    })
+        let one = |fi: usize| {
+            out.cuts.get(&fi).map(|cs| {
+                split(nb, &nb.faces[fi], cs, &|e| {
+                    out.on_face.get(&(e, fi)).cloned()
                 })
             })
-            .collect()
+        };
+        if super::par::threads_for_some(out.cuts.len()) {
+            (0..nb.faces.len()).into_par_iter().map(one).collect()
+        } else {
+            (0..nb.faces.len()).map(one).collect()
+        }
     };
     for (fi, ps) in splits.into_iter().enumerate() {
         match out.cuts.get(&fi) {

@@ -123,6 +123,7 @@ ui-color-editor-save-color = Deze kleur opslaan
 ui-color-scheme-light = Licht
 ui-color-scheme-dark = Donker
 ui-color-scheme-system = Systeem volgen
+ui-color-scheme-cycle = Kleurenschema: { $scheme } (klik voor { $next })
 
 ## crates/cadrs_ui/src/dock.rs
 ui-dock-hide-panel = Paneel verbergen
@@ -206,6 +207,8 @@ shell-top-bar-update = Bijwerken naar v{ $version }…
 shell-top-bar-update-tooltip = Releaseopmerkingen lezen en bijwerken
 shell-top-bar-github = cadrs op GitHub
 shell-top-bar-github-stars = { $stars } sterren op GitHub
+shell-top-bar-download-app = App downloaden
+shell-top-bar-download-app-tooltip = cadrs voor Linux, Windows of macOS (GitHub)
 
 ## crates/cadrs_app/src/notifications.rs
 shell-notice-whats-new-title = Een nieuw uiterlijk voor cadrs
@@ -585,6 +588,9 @@ shell-prefs-mcp-server = MCP-server
 shell-prefs-enabled = Ingeschakeld
 shell-prefs-endpoint = Eindpunt
 shell-prefs-mcp-note = Zolang dit aan staat, kunnen AI-assistenten op deze computer (Claude, Cursor, …) documenten maken en bewerken.
+shell-prefs-mcp-port = Poort
+shell-prefs-mcp-port-reset = Herstellen
+shell-prefs-mcp-port-reset-tooltip = Terug naar de standaardpoort, { $port }
 shell-prefs-collab-heading = Samenwerking
 shell-prefs-id-while-online = Getoond zolang u online bent
 shell-prefs-p2p = P2P-netwerk
@@ -1898,6 +1904,20 @@ model-mass-parts = Te meten onderdelen
 ## crates/cadrs_app/src/mcp.rs
 model-mcp-server-on = MCP-server op { $url }
 model-mcp-cannot-start = Kan de MCP-server niet starten op poort { $port }: { $error }
+shell-mcp-tooltip-on = AI-assistenten (MCP): aan
+shell-mcp-tooltip-off = AI-assistenten (MCP): uit
+shell-mcp-tooltip-failed = AI-assistenten (MCP): kon niet starten
+shell-mcp-serving = Aan, op { $url }
+shell-mcp-off = Uit (zou op { $url } draaien)
+shell-mcp-failed = Kon niet starten op poort { $port }
+shell-mcp-enable = MCP-server inschakelen
+shell-mcp-port = Poort: { $port }…
+shell-mcp-port-tooltip = De poort op deze computer waarmee AI-assistenten verbinden
+shell-mcp-port-reset = Poort terugzetten naar standaard ({ $port })
+shell-mcp-copy-endpoint = Endpoint kopiëren
+shell-mcp-copied = { $url } gekopieerd
+shell-mcp-port-title = Poort van de MCP-server
+shell-mcp-port-invalid = Geen poort: { $text } (een getal van 1 tot 65535)
 
 ## crates/cadrs_app/src/simulation_ui.rs
 model-sim-one-face = { $count } vlak
