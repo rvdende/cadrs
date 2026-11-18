@@ -2404,3 +2404,75 @@ fn a_draft_makes_a_round_groove_a_vee() {
         .count();
     assert_eq!(halves, 2);
 }
+
+/// A groove cut down a block's side by a rod leaning twenty degrees: it runs out of the side
+/// before the top, its wall ending in a point there. Leant three degrees its wall comes to
+/// meet faces it didn't (the top, about the foot) or leaves the block altogether (about the
+/// top, where the rod is outside it), which moving the faces as they are joined can't make:
+/// the hollow is filled and cut again as its leant wall bounds it.
+#[test]
+fn a_draft_leans_a_groove_that_runs_out() {
+    let mut k = NativeKernel::new();
+    let block = k
+        .primitive(&Primitive::block(
+            Point3::new(-10.0, -10.0, 0.0),
+            Point3::new(10.0, 10.0, 10.0),
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let lean = 20f64.to_radians();
+    let dir = Vector3::new(lean.sin(), 0.0, lean.cos());
+    let rod = k
+        .primitive(&Primitive::cylinder(
+            Point3::new(10.0, 0.0, 0.0) - dir * 5.0,
+            dir,
+            3.0,
+            30.0,
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let grooved = k
+        .boolean(BoolOp::Subtract, block, &[rod])
+        .unwrap()
+        .first()
+        .unwrap();
+    let wall = k
+        .faces(grooved)
+        .unwrap()
+        .iter()
+        .find(|f| f.kind == SurfaceKind::Cylinder)
+        .map(|f| f.id)
+        .unwrap();
+    let was = k.mass_properties(grooved).unwrap().volume;
+    let about = |k: &mut NativeKernel, height: f64| {
+        let spec = DraftSpec {
+            faces: vec![wall],
+            angle: 3f64.to_radians(),
+            pull: Vector3::z_axis(),
+            neutral: Point3::new(0.0, 0.0, height),
+            neutral_normal: None,
+            tangent_propagation: false,
+        };
+        let out = k.draft(grooved, &spec).unwrap();
+        let faults = k
+            .get(out.bodies[0])
+            .unwrap()
+            .check_with(cadrs_kernel::native::topo::CheckLevel::Full);
+        assert!(faults.is_empty(), "about {height}: {faults:?}");
+        (
+            k.mass_properties(out.bodies[0]).unwrap().volume,
+            k.get(out.bodies[0]).unwrap().faces.len(),
+        )
+    };
+    // About the foot the groove runs nearly upright from its widest, through the top.
+    let (foot, faces) = about(&mut k, 0.0);
+    assert!(foot < was - 50.0 && faces == 8, "{foot} {faces}");
+    // About the top, where the rod is outside the block, nothing is left of it.
+    let (top, faces) = about(&mut k, 10.0);
+    assert!(
+        (top - 8000.0 / 2.0).abs() < 1e-6 && faces == 6,
+        "{top} {faces}"
+    );
+}

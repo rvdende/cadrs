@@ -3104,6 +3104,211 @@ pub fn tangent_closure(b: &Body, mut seed: Vec<usize>) -> Vec<usize> {
 /// Draft: the faces turned about the neutral plane by the angle, leaning in as they rise along
 /// the pull direction.
 pub fn draft(k: &mut NativeKernel, body: BodyId, spec: &DraftSpec) -> Result<OpResult> {
+    // By moving the faces as they are joined; where that can't be (a hole's or a groove's
+    // slanted wall that comes to meet faces it didn't, a groove that ran out below the top),
+    // by cutting the leant wall's hollow from the part with the hollow filled.
+    // (`CADRS_DRAFT_BY_CUT`: by cutting first, to hold the two ways together.)
+    if crate::native::env_flag!("CADRS_DRAFT_BY_CUT")
+        && let Some(cut) = draft_by_cut(k, body, spec)
+    {
+        return Ok(cut);
+    }
+    let moved = draft_moved(k, body, spec);
+    if moved.is_ok() {
+        return moved;
+    }
+    match draft_by_cut(k, body, spec) {
+        Some(cut) => Ok(cut),
+        None => moved,
+    }
+}
+
+/// [`draft`] of slanted hollows' walls (cylinders at a slant to the pull, facing their own
+/// axes: holes, grooves) by cutting: the walls deleted, so the part closes over the hollows,
+/// and each hollow cut again as its leant wall bounds it, the solid between the wall's two
+/// rims (each in a plane square to the pull, closed by its chord where the wall is part of a
+/// turn). Whatever the leant wall comes to meet, the cut finds. `None` for any other faces,
+/// or where a step fails or the result isn't sound.
+fn draft_by_cut(k: &mut NativeKernel, body: BodyId, spec: &DraftSpec) -> Option<OpResult> {
+    if spec.tangent_propagation || spec.neutral_normal.is_some() || spec.faces.is_empty() {
+        return None;
+    }
+    let b = std::sync::Arc::clone(k.get(body).ok()?);
+    let pull = spec.pull.into_inner();
+    let (sa, ca) = spec.angle.sin_cos();
+    if ca <= tol::ANGULAR {
+        return None;
+    }
+    // The hollows' solids reach a little past the part along the pull, and no farther: a
+    // leant wall run on far enough closes to a point and opens again inside out.
+    let was = b.bbox();
+    let level = spec.neutral.coords.dot(&pull);
+    let (mut low, mut high) = (f64::INFINITY, f64::NEG_INFINITY);
+    for i in 0..8 {
+        let h = P3::new(
+            if i & 1 == 0 { was.min.x } else { was.max.x },
+            if i & 2 == 0 { was.min.y } else { was.max.y },
+            if i & 4 == 0 { was.min.z } else { was.max.z },
+        )
+        .coords
+        .dot(&pull);
+        (low, high) = (low.min(h), high.max(h));
+    }
+    let past = 0.1 * (high - low) + tol::POINT;
+    // (How far along a leant ruling from the neutral plane to each end.)
+    let ends = [(low - past - level) / ca, (high + past - level) / ca];
+    let across = any_perpendicular(&pull).normalize();
+    let mut tools: Vec<BodyId> = Vec::new();
+    let done = |k: &mut NativeKernel, ids: &[BodyId]| {
+        for id in ids {
+            k.release(*id);
+        }
+    };
+    for fid in &spec.faces {
+        let fi = fid.0 as usize;
+        let tool = (|| -> Option<BodyId> {
+            let f = b.faces.get(fi)?;
+            let Surface::Cylinder { f: fr, r } = &f.surf else {
+                return None;
+            };
+            let along = fr.z.dot(&pull);
+            if fr.z.cross(&pull).norm() <= tol::ANGULAR || along.abs() <= tol::ANGULAR {
+                return None;
+            }
+            let ((u0, u1), _) = super::heal_split::face_uv_box(&b, fi)?;
+            let sign = if f.sense { 1.0 } else { -1.0 };
+            let radial = |u: f64| fr.x * u.cos() + fr.y * u.sin();
+            // A hollow's wall: it faces its own axis.
+            let mid = 0.5 * (u0 + u1);
+            if (f.surf.normal(mid, 0.0) * sign).dot(&radial(mid)) >= 0.0 {
+                return None;
+            }
+            let whole = (u1 - u0).abs() >= TAU - tol::ROUNDOFF;
+            let (u0, u1) = if whole {
+                (u0, u1)
+            } else {
+                let more = (0.25 * (u1 - u0))
+                    .min(0.5 * (TAU - (u1 - u0)) - 0.01)
+                    .max(0.0);
+                (u0 - more, u1 + more)
+            };
+            let rims = |u: f64| -> Option<[P3; 2]> {
+                let p = fr.o + radial(u) * *r;
+                let on = p + fr.z * ((spec.neutral - p).dot(&pull) / along);
+                let n = f.surf.normal(u, 0.0) * sign;
+                let lean = pull * ca - (n - pull * pull.dot(&n)).try_normalize(tol::ANGULAR)? * sa;
+                Some([on + lean * ends[0], on + lean * ends[1]])
+            };
+            let pieces = (((u1 - u0).abs() / (PI / 4.0)).ceil() as usize).max(1) * 16;
+            let stations: Vec<f64> = (0..=pieces)
+                .map(|i| u0 + (u1 - u0) * i as f64 / pieces as f64)
+                .collect();
+            // Each rim's outline in its own plane, square to the pull.
+            let mut sections = Vec::new();
+            for side in 0..2 {
+                let pts: Vec<P3> = stations
+                    .iter()
+                    .map(|&u| rims(u).map(|x| x[side]))
+                    .collect::<Option<_>>()?;
+                let origin = pts[0];
+                let plane = Plane {
+                    origin,
+                    x_dir: nalgebra::Unit::new_normalize(across),
+                    normal: nalgebra::Unit::new_normalize(pull),
+                };
+                let y = pull.cross(&across);
+                let flat =
+                    |p: &P3| nalgebra::Point2::new((p - origin).dot(&across), (p - origin).dot(&y));
+                let curve = if whole {
+                    super::nurbs::NurbsCurve::interpolate_periodic(
+                        &pts[..pts.len() - 1],
+                        &stations,
+                        3,
+                    )?
+                } else {
+                    super::nurbs::NurbsCurve::interpolate(&pts, &stations, 3, None, None)
+                };
+                let poles: Vec<nalgebra::Point2<f64>> = curve
+                    .cps
+                    .iter()
+                    .map(|h| flat(&super::nurbs::dehom(h)))
+                    .collect();
+                let mut curves = vec![Curve2::spline(curve.degree, &curve.knots, &poles, &[])];
+                if !whole {
+                    curves.push(Curve2::Line {
+                        a: flat(&pts[pts.len() - 1]),
+                        b: flat(&pts[0]),
+                        source: None,
+                    });
+                }
+                sections.push(Profile::of(plane, vec![Loop { curves }]));
+            }
+            k.loft_with(&LoftSpec::through(sections))
+                .ok()?
+                .bodies
+                .first()
+                .copied()
+        })();
+        match tool {
+            Some(t) => tools.push(t),
+            None => {
+                done(k, &tools);
+                return None;
+            }
+        }
+    }
+    let filled = super::surfacing::delete_faces(k, body, &spec.faces);
+    let Ok(filled) = filled else {
+        done(k, &tools);
+        return None;
+    };
+    let Some(&filled_body) = filled.bodies.first() else {
+        done(k, &tools);
+        return None;
+    };
+    let cut = k.boolean(BoolOp::Subtract, filled_body, &tools);
+    done(k, &tools);
+    k.release(filled_body);
+    let cut = cut.ok()?;
+    let &out = cut.bodies.first()?;
+    let sound = k.get(out).is_ok_and(|o| {
+        !o.solids.is_empty() && o.check_with(super::topo::CheckLevel::Full).is_empty()
+    });
+    if !sound {
+        k.release(out);
+        return None;
+    }
+    // The result's faces: the part's own through the filling, a hollow's new wall its old one.
+    let through: std::collections::HashMap<u64, FaceId> = filled
+        .history
+        .modified
+        .iter()
+        .map(|(new, old)| (new.0, old.face))
+        .collect();
+    let modified = cut
+        .history
+        .modified
+        .iter()
+        .filter_map(|(new, from)| {
+            let face = if from.body == filled_body {
+                *through.get(&from.face.0)?
+            } else {
+                spec.faces[tools.iter().position(|t| *t == from.body)?]
+            };
+            Some((*new, InputFace { body, face }))
+        })
+        .collect();
+    Some(OpResult {
+        bodies: vec![out],
+        history: History {
+            modified,
+            ..Default::default()
+        },
+    })
+}
+
+/// [`draft`] by moving the faces as they are joined.
+fn draft_moved(k: &mut NativeKernel, body: BodyId, spec: &DraftSpec) -> Result<OpResult> {
     let b = std::sync::Arc::clone(k.get(body)?);
     let pull = spec.pull.into_inner();
     let mut surfs: Vec<Surface> = b.faces.iter().map(|f| f.surf.clone()).collect();

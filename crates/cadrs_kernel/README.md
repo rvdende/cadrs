@@ -301,6 +301,9 @@ otherwise):
 - `CADRS_NO_RECOG_S=1`, `CADRS_NO_RECOG_C=1` (`xbuild.rs`): imported B-spline surfaces and
   curves are kept as B-splines instead of being recognised as planes, cylinders, cones, spheres,
   tori and extrusions, lines and circles.
+- `CADRS_DRAFT_BY_CUT=1` (`local.rs`): a draft of slanted holes' and grooves' walls is made
+  by cutting (the hollow filled and cut again as its leant wall bounds it) before it is tried
+  by moving the faces, to hold the two ways together.
 - `CADRS_BOOL_LENIENT=1` (`boolean.rs`): a boolean whose result has crossing faces returns
   it flagged (`take_invalid_results`) instead of failing, to look at what it built.
 - `CADRS_OCCT_REBUILD=1` (`brep_occt.rs`): a text BRep file's faces are always rebuilt from
