@@ -78,21 +78,64 @@ struct ArcPiece {
     x: V2,
     y: V2,
     r: f64,
+    /// An ellipse's second radius (along `y`; `r` is the one along `x`), a circle's `r` again.
+    /// An ellipse is asked as the unit circle it is with each axis measured by its radius:
+    /// which side of a chord a point is on is the same there.
+    r2: f64,
     t: [f64; 2],
     n: usize,
-    /// How far the chords run inside the circle at most.
+    /// How far the chords run inside the curve at most.
     sag: f64,
 }
 
 impl ArcPiece {
     fn point(&self, t: f64) -> P2 {
-        self.c + (self.x * t.cos() + self.y * t.sin()) * self.r
+        self.c + self.x * (t.cos() * self.r) + self.y * (t.sin() * self.r2)
+    }
+
+    /// [`Self::amiss`] of an ellipse: in the frame its radii are the units of, where it is
+    /// the unit circle (and its chords the chords of that).
+    fn amiss_ellipse(&self, uv: &P2, tol: f64) -> Option<bool> {
+        let w = uv - self.c;
+        let q = V2::new(w.dot(&self.x) / self.r, w.dot(&self.y) / self.r2);
+        let rho = q.norm();
+        let least = self.r.min(self.r2);
+        let step = (self.t[1] - self.t[0]).abs() / self.n as f64;
+        let sag = 1.0 - (step / 2.0).cos();
+        if (rho - 1.0).abs() > sag + tol / least {
+            return Some(false);
+        }
+        let (lo, span) = (self.t[0].min(self.t[1]), (self.t[1] - self.t[0]).abs());
+        let along = wrap(q.y.atan2(q.x) - lo, 0.0, TAU);
+        if along > span {
+            return Some(false);
+        }
+        if (rho - 1.0).abs() < tol / least {
+            return None;
+        }
+        let u = if self.t[1] >= self.t[0] {
+            along / span
+        } else {
+            1.0 - along / span
+        };
+        let i = ((u * self.n as f64).floor() as usize).min(self.n - 1);
+        let at = |k: usize| {
+            let t = self.t[0] + (self.t[1] - self.t[0]) * k as f64 / self.n as f64;
+            V2::new(t.cos(), t.sin())
+        };
+        let (a, b) = (at(i), at(i + 1));
+        let centre_side = cross2(&(b - a), &(-a));
+        let own_side = cross2(&(b - a), &(q - a));
+        Some((own_side * centre_side > 0.0) != (rho < 1.0))
     }
 
     /// Whether `uv`, in this arc's sector, is on the other side of the circle from the side
     /// of its chord it is on (`Some(true)`: the polygon has it wrong), or on the circle within
     /// `tol` (`None`). `Some(false)` off the arc's sector, or where the two agree.
     fn amiss(&self, uv: &P2, tol: f64) -> Option<bool> {
+        if self.r2 != self.r {
+            return self.amiss_ellipse(uv, tol);
+        }
         let w = uv - self.c;
         let rho = w.norm();
         if (rho - self.r).abs() > self.sag + tol {
@@ -122,13 +165,15 @@ impl ArcPiece {
     }
 }
 
-/// The circular p-curves of a loop ([`ArcPiece`]), on a surface whose (u, v) is measured the
+/// The circular and elliptical p-curves of a loop ([`ArcPiece`]), on a surface whose (u, v) is measured the
 /// same both ways (a circle there is one in the metric too).
 fn loop_arcs(body: &Body, l: &[super::topo::Coedge]) -> Vec<ArcPiece> {
     l.iter()
         .filter_map(|c| {
-            let super::curve::Curve::Circle { c: o, x, y, r } = &c.pc else {
-                return None;
+            let (o, x, y, r, r2) = match &c.pc {
+                super::curve::Curve::Circle { c: o, x, y, r } => (o, x, y, *r, *r),
+                super::curve::Curve::Ellipse { c: o, x, y, a, b } => (o, x, y, *a, *b),
+                _ => return None,
             };
             let (a, b) = co_range(&body.edges[c.edge], c.fwd);
             let n = coedge_steps(&c.pc, a, b, 0.0);
@@ -136,10 +181,11 @@ fn loop_arcs(body: &Body, l: &[super::topo::Coedge]) -> Vec<ArcPiece> {
                 c: P2::new(o.x, o.y),
                 x: V2::new(x.x, x.y),
                 y: V2::new(y.x, y.y),
-                r: *r,
+                r,
+                r2,
                 t: [a, b],
                 n,
-                sag: r * (1.0 - ((b - a).abs() / (2.0 * n as f64)).cos()),
+                sag: r.max(r2) * (1.0 - ((b - a).abs() / (2.0 * n as f64)).cos()),
             })
         })
         .collect()
