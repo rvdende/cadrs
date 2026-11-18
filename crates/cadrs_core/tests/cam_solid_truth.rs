@@ -831,3 +831,100 @@ fn a_block_from_its_own_mesh_is_the_block() {
         }
     }
 }
+
+/// A pocket and the walls round it roughed by a program the strategies make (Rough 3D, a Ø6
+/// flat end mill plunging, 3 deep a level), the whole program cut by the kernel as one path
+/// (its cut of a flat end mill's program: each depth's runs united in the plane, extruded and
+/// cut once; issue #278's ground truth for a real toolpath, not a move or two), against the
+/// solid simulation of the same moves.
+#[test]
+fn a_generated_pocket_program_cut_whole_by_the_kernel() {
+    use cadrs_core::cam::cadrs_cam::model::{Model, box_triangles};
+    use cadrs_core::cam::cadrs_cam::strategy::Entry;
+    use cadrs_core::cam::cadrs_cam::{Input, MachineKind, Params, Pattern, generate};
+    let started = Instant::now();
+    // The part: a 60 × 40 block 20 high with a 30 × 20 pocket 8 deep; the stock 3 bigger all
+    // round in plan and 1 over its top.
+    let mut tris = box_triangles(&Aabb::new([0.0, 0.0, 0.0], [60.0, 40.0, 12.0]));
+    for (min, max) in [
+        ([0.0, 0.0], [15.0, 40.0]),
+        ([45.0, 0.0], [60.0, 40.0]),
+        ([15.0, 0.0], [45.0, 10.0]),
+        ([15.0, 30.0], [45.0, 40.0]),
+    ] {
+        tris.extend(box_triangles(&Aabb::new(
+            [min[0], min[1], 12.0],
+            [max[0], max[1], 20.0],
+        )));
+    }
+    let model = Model::from_triangles("block", tris);
+    let blank = Stock::Block {
+        min: [-3.0, -3.0, 0.0],
+        max: [63.0, 43.0, 21.0],
+    };
+    let stock = cadrs_core::cam::cadrs_cam::Stock::block(blank.bounds());
+    let mill = tool(ToolKind::EndMill, 6.0, LENGTH);
+    let mut p = Params::new(Pattern::Rough3D, &mill, MachineKind::Mill);
+    p.step_down = 3.0;
+    p.wall_stock = 0.3;
+    p.floor_stock = 0.3;
+    p.links.entry = Entry::Plunge;
+    let input = Input {
+        model: &model,
+        stock: &stock,
+        tool: &mill,
+        machine: MachineKind::Mill,
+        params: &p,
+        rest: None,
+        fixtures: &[],
+    };
+    let tp = generate(&input).unwrap();
+    let moves = tp.motion([0.0, 0.0, 40.0], 5000.0);
+    assert!(moves.len() > 50, "{}", moves.len());
+
+    let mut k = DefaultKernel::new();
+    let body = blank.body(&mut k);
+    let cutter = flat_mill(&mut k, 3.0);
+    let start = V3::from(moves[0].from);
+    let at = placed(&mut k, cutter, start, V3::z());
+    let path: Vec<cadrs_kernel::PathCurve> = moves
+        .iter()
+        .filter(|m| m.from != m.to)
+        .map(|m| cadrs_kernel::PathCurve::Bezier3 {
+            poles: vec![Point3::from(m.from), Point3::from(m.to)],
+            weights: Vec::new(),
+        })
+        .collect();
+    let kernel_at = Instant::now();
+    let result = cut_swept(
+        &mut k,
+        body,
+        at,
+        &SolidMotion::Path {
+            path,
+            up: nalgebra::Unit::new_normalize(V3::z()),
+        },
+    );
+    println!(
+        "pocket program: {} moves cut by the kernel in {:.3} s",
+        moves.len(),
+        kernel_at.elapsed().as_secs_f64()
+    );
+
+    let mut sim = blank.dexel(&k, body, 0.5);
+    let poses: Vec<Pose> = std::iter::once(pose(start, V3::z()))
+        .chain(moves.iter().map(|m| pose(V3::from(m.to), V3::z())))
+        .collect();
+    let removed = run(&mut sim, &mill, &poses);
+    compare(
+        "pocket program",
+        &k,
+        &blank,
+        body,
+        result,
+        &sim,
+        removed,
+        0.02,
+        started,
+    );
+}
