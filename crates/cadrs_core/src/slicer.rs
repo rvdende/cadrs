@@ -1,12 +1,21 @@
 //! Sending parts to a slicer installed on this machine (issue #176): finding PrusaSlicer,
 //! OrcaSlicer, Bambu Studio, UltiMaker Cura, SuperSlicer or Creality Print, and opening the parts
-//! in one. A slicer that imports STEP gets STEP (its curves exact, so it meshes them as finely
-//! as it likes: no facets of ours on a print), the others a fine STL. The files go to a folder
+//! in one, in the first of the formats it reads ([`Slicer::formats`]): STEP where it reads
+//! that (its curves exact, so it meshes them as finely as it likes: no facets of ours on a
+//! print), else a fine STL. The files go to a folder
 //! of cadrs's own ([`send_dir`]) and the slicer is started with them: nothing is uploaded, no
 //! file association changes, no printer is spoken to. Not in a browser (a page can't start
 //! programs; it downloads the mesh instead).
 
 use std::path::{Path, PathBuf};
+
+use crate::rebuild::exchange::ModelFormat;
+
+/// Binary STL: what every slicer reads.
+const STL: ModelFormat = ModelFormat::Stl { binary: true };
+
+/// Reads STEP, STL and OBJ (the formats cadrs writes that it imports), STEP best.
+const STEP_STL_OBJ: &[ModelFormat] = &[ModelFormat::Step, STL, ModelFormat::Obj];
 
 /// A slicer to send meshes to: its name, and how to start it with files (`program args…
 /// <files> trailing…`).
@@ -20,18 +29,18 @@ pub struct Slicer {
     pub args: Vec<String>,
     /// After the files (Flatpak's `@@` that closes its forwarded files).
     pub trailing: Vec<String>,
-    /// It imports STEP, so it gets that rather than a mesh.
-    pub step: bool,
+    /// The formats cadrs writes that it imports, the one to send first.
+    pub formats: Vec<ModelFormat>,
 }
 
 /// The id of a program of one's own ([`custom`]).
 pub const CUSTOM: u8 = u8::MAX;
 
-/// A slicer cadrs knows: its name, whether it imports STEP, its commands on the PATH (Linux,
+/// A slicer cadrs knows: its name, the formats it imports (best first), its commands on the PATH (Linux,
 /// macOS), its Flatpak id, its macOS app and its usual Windows executables (under Program Files).
 struct Known {
     name: &'static str,
-    step: bool,
+    formats: &'static [ModelFormat],
     commands: &'static [&'static str],
     flatpak: &'static str,
     mac_app: &'static str,
@@ -41,7 +50,7 @@ struct Known {
 const KNOWN: &[Known] = &[
     Known {
         name: "PrusaSlicer",
-        step: true,
+        formats: STEP_STL_OBJ,
         commands: &["prusa-slicer", "PrusaSlicer"],
         flatpak: "com.prusa3d.PrusaSlicer",
         mac_app: "PrusaSlicer.app",
@@ -49,7 +58,7 @@ const KNOWN: &[Known] = &[
     },
     Known {
         name: "OrcaSlicer",
-        step: true,
+        formats: STEP_STL_OBJ,
         commands: &["orca-slicer", "OrcaSlicer"],
         flatpak: "io.github.softfever.OrcaSlicer",
         mac_app: "OrcaSlicer.app",
@@ -57,7 +66,7 @@ const KNOWN: &[Known] = &[
     },
     Known {
         name: "Bambu Studio",
-        step: true,
+        formats: STEP_STL_OBJ,
         commands: &["bambu-studio", "BambuStudio"],
         flatpak: "com.bambulab.BambuStudio",
         mac_app: "BambuStudio.app",
@@ -65,8 +74,8 @@ const KNOWN: &[Known] = &[
     },
     Known {
         name: "UltiMaker Cura",
-        // Only with a plugin.
-        step: false,
+        // STEP only with a plugin.
+        formats: &[STL, ModelFormat::Obj],
         commands: &["cura", "UltiMaker-Cura"],
         flatpak: "com.ultimaker.cura",
         mac_app: "UltiMaker Cura.app",
@@ -77,7 +86,7 @@ const KNOWN: &[Known] = &[
     },
     Known {
         name: "SuperSlicer",
-        step: true,
+        formats: STEP_STL_OBJ,
         commands: &["superslicer", "SuperSlicer"],
         flatpak: "com.superslicer.SuperSlicer",
         mac_app: "SuperSlicer.app",
@@ -85,7 +94,7 @@ const KNOWN: &[Known] = &[
     },
     Known {
         name: "Creality Print",
-        step: true,
+        formats: STEP_STL_OBJ,
         commands: &["CrealityPrint", "crealityprint"],
         flatpak: "io.github.crealityofficial.CrealityPrint",
         mac_app: "CrealityPrint.app",
@@ -118,7 +127,7 @@ fn find_known(id: u8, k: &Known, path: &[PathBuf]) -> Option<Slicer> {
         program,
         args,
         trailing,
-        step: k.step,
+        formats: k.formats.to_vec(),
     };
     if cfg!(target_os = "windows") {
         let roots: Vec<PathBuf> = ["ProgramFiles", "ProgramFiles(x86)"]
@@ -224,7 +233,8 @@ pub fn custom(program: PathBuf) -> Slicer {
         program,
         args: Vec::new(),
         trailing: Vec::new(),
-        step: false,
+        // What it reads isn't known: a mesh.
+        formats: vec![STL],
     }
 }
 
@@ -287,6 +297,11 @@ pub fn write_file(
 }
 
 impl Slicer {
+    /// The format to send it: the first it imports (binary STL if none is listed).
+    pub fn send_format(&self) -> ModelFormat {
+        self.formats.first().copied().unwrap_or(STL)
+    }
+
     /// Starts the slicer with `files` (it isn't waited for: a thread reaps it, and logs a
     /// failed exit, as a launcher's (`open -a`, `flatpak run`) that couldn't start it).
     pub fn open(&self, files: &[PathBuf]) -> std::io::Result<()> {
@@ -320,7 +335,7 @@ mod tests {
         let s = custom(PathBuf::from("/opt/slicers/MySlicer.AppImage"));
         assert_eq!((s.id, s.name.as_str()), (CUSTOM, "MySlicer"));
         // What a program of one's own reads isn't known: it gets a mesh.
-        assert!(!s.step);
+        assert_eq!(s.send_format(), STL);
         // `true` takes any arguments and exits: the launch itself works.
         if cfg!(unix) {
             custom(PathBuf::from("true"))
@@ -353,7 +368,11 @@ mod tests {
 
     #[test]
     fn the_slicers_that_import_step_get_it() {
-        let step: Vec<_> = KNOWN.iter().filter(|k| k.step).map(|k| k.name).collect();
+        let step: Vec<_> = KNOWN
+            .iter()
+            .filter(|k| k.formats.first() == Some(&ModelFormat::Step))
+            .map(|k| k.name)
+            .collect();
         assert_eq!(
             step,
             [
@@ -364,6 +383,8 @@ mod tests {
                 "Creality Print"
             ]
         );
+        // Every one takes STL, the fallback.
+        assert!(KNOWN.iter().all(|k| k.formats.contains(&STL)));
     }
 
     #[test]

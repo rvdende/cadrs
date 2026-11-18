@@ -1227,10 +1227,10 @@ struct RunningSend {
     name: String,
 }
 
-/// Sends `parts` of the active Part Studio (all of them if empty) to `slicer`: a STEP each to a
-/// slicer that imports it (exact curves, which it meshes itself), else a binary STL in
-/// millimetres at the Fine resolution (a coarser one shows its facets on a print), made as an
-/// export is ([`finish_sends`] opens them in the slicer, which
+/// Sends `parts` of the active Part Studio (all of them if empty) to `slicer`, a file each in its
+/// [`send_format`](cadrs_core::slicer::Slicer::send_format): STEP to a slicer that imports it
+/// (exact curves, which it meshes itself), else a mesh in millimetres at the Fine resolution (a
+/// coarser one shows its facets on a print), made as an export is ([`finish_sends`] opens them in the slicer, which
 /// is then remembered as the last one used). Like an export, it needs the Export right on a
 /// shared document.
 #[cfg(not(target_arch = "wasm32"))]
@@ -1261,11 +1261,7 @@ pub(crate) fn send_to_slicer(
             .map(|d| d.doc.name.clone())
             .unwrap_or_else(|| "Parts".into()),
     };
-    let format = if slicer.step {
-        ModelFormat::Step
-    } else {
-        ModelFormat::Stl { binary: true }
-    };
+    let format = slicer.send_format();
     let mut req = ExportRequest::new(format, name.clone(), items);
     // A file a part: the slicer gets them as separate objects.
     req.individual = true;
