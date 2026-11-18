@@ -5855,6 +5855,47 @@ fn two_turns(steps: &[RigidStep]) -> Option<(Axis, Axis)> {
     (turning && apart).then_some((*a, *b))
 }
 
+/// Whether `b` is a body turned about `axis` all the way round: every face a plane square to
+/// it or a cylinder, cone, sphere or torus about it, every edge a circle about it (or a seam
+/// or a pole: an edge with one face both sides, or of no length). A turn about the axis by any
+/// angle leaves such a body as it is.
+fn turned_about(b: &Body, axis: &Axis) -> bool {
+    let (o, z) = (axis.origin, axis.dir.into_inner());
+    let near = tol::REL_POINT * (1.0 + b.bbox().diagonal());
+    let along = |v: &V3| v.cross(&z).norm() < tol::ANGULAR;
+    let on = |p: &P3| {
+        let d = p - o;
+        (d - z * d.dot(&z)).norm() <= near
+    };
+    let faces = b.faces.iter().all(|f| match &f.surf {
+        Surface::Plane { f } => along(&f.z),
+        Surface::Cylinder { f, .. } | Surface::Cone { f, .. } | Surface::Torus { f, .. } => {
+            along(&f.z) && on(&f.o)
+        }
+        Surface::Sphere { f, .. } => on(&f.o),
+        _ => false,
+    });
+    let mut uses = vec![0usize; b.edges.len()];
+    let mut seam = vec![false; b.edges.len()];
+    for f in &b.faces {
+        let mut seen = std::collections::HashSet::new();
+        for c in f.loops.iter().flatten() {
+            uses[c.edge] += 1;
+            if !seen.insert(c.edge) {
+                seam[c.edge] = true;
+            }
+        }
+    }
+    faces
+        && b.edges.iter().enumerate().all(|(i, e)| {
+            uses[i] == 0
+                || e.degenerate
+                || seam[i]
+                || matches!(&e.curve, super::curve::Curve::Circle { c, x, y, .. }
+                    if on(c) && along(&x.cross(y)))
+        })
+}
+
 /// `target` less what `tool` passes through under `steps` (two turns): see the module docs.
 /// None where the cut isn't made this way.
 pub(super) fn cut(
@@ -6431,6 +6472,11 @@ pub(super) fn cut(
     if copies > 1 && plugs.len() == 1 {
         let made = (|| -> Option<OpResult> {
             let blank = std::sync::Arc::clone(k.get(target).ok()?);
+            // (Only of a target the turn leaves as it is, one turned about that axis all the
+            // way round: in a sector of a ring each copy's space is another part of the plug.)
+            if !turned_about(&blank, &target_axis) {
+                return None;
+            }
             let space = super::boolean::boolean_bodies(&plugs[0], &blank, BoolOp::Intersect)
                 .ok()?
                 .body;
