@@ -1930,11 +1930,15 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
     ) {
         return sweep_solid_at(k, body, motion);
     }
-    OUTLINES
-        .into_iter()
-        .map(|n| with_slices(n, || sweep_solid_at(k, body, motion)))
-        .reduce(|done, next| done.or(next))
-        .expect("an outline to try")
+    // (Each tried only where the one before built nothing.)
+    let mut last = None;
+    for n in OUTLINES {
+        match with_slices(n, || sweep_solid_at(k, body, motion)) {
+            Ok(r) => return Ok(r),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.expect("an outline tried"))
 }
 
 /// An endless sweep's outline in closed form ([`exact_outline`]), where [`OUTLINE_SLICES`]
