@@ -11392,6 +11392,23 @@ fn local_blend(
             "unknown edge or empty radius law".into(),
         ));
     }
+    // A chamfer of one rim (a whole circle between faces turned about its axis), its ball
+    // the same all the way round: in closed form ([`super::rim_blend`]).
+    if flat
+        && let ([(e, law)], [(ratio, None)]) = (edges, ratios)
+        && let Some(&(_, k)) = law.first()
+        && law
+            .iter()
+            .all(|x| (x.1 - k).abs() <= tol::REL_POINT * (1.0 + k))
+        && std::env::var_os("CADRS_NO_RIM_BLEND").is_none()
+        && let Some(made) = super::rim_blend::rim_chamfer(b, input, *e, k, *ratio)
+    {
+        debug(|| "the rim's chamfer in closed form".to_string());
+        // (Sound as it is made: each face cut back along its own surface to a circle inside
+        // it, the cone between the two circles; and checked there.)
+        FULLY_CHECKED.with(|c| *c.borrow_mut() = Some(made.0.clone()));
+        return Ok(made);
+    }
     let charted = loops_in_chart(b);
     let b = charted.as_ref().unwrap_or(b);
     let fixed = open_seam_holes(b);

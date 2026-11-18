@@ -130,3 +130,50 @@ fn a_plunge_is_no_pass_and_still_cuts() {
     let v = volume(&k, cut);
     assert!((v - want).abs() < 1e-9 * want, "{v} for {want}");
 }
+
+#[test]
+fn probe_frustum_topology() {
+    let mut k = NativeKernel::new();
+    let half = Profile::of(
+        Plane::xz(0.0),
+        vec![Loop::new(vec![
+            Curve2::line([0.0, 0.0], [4.0, 0.0]),
+            Curve2::line([4.0, 0.0], [2.0, 3.0]),
+            Curve2::line([2.0, 3.0], [0.0, 3.0]),
+            Curve2::line([0.0, 3.0], [0.0, 0.0]),
+        ])],
+    );
+    let axis = Axis::new(Point3::origin(), Vector3::z());
+    let id = k
+        .revolve_with(&half, &RevolveSpec::solid(axis, None))
+        .unwrap()
+        .first()
+        .unwrap();
+    let b = k.get(id).unwrap();
+    for (i, v) in b.verts.iter().enumerate() {
+        eprintln!("PROBE v{i} {:?}", v.p);
+    }
+    for (i, e) in b.edges.iter().enumerate() {
+        eprintln!(
+            "PROBE e{i} v {:?} t {:?} deg {} {:?}",
+            e.v, e.t, e.degenerate, e.curve
+        );
+    }
+    for (i, f) in b.faces.iter().enumerate() {
+        eprintln!("PROBE f{i} sense {} {:?}", f.sense, f.surf);
+        for l in &f.loops {
+            for c in l {
+                eprintln!("PROBE    co e{} fwd {} pc {:?}", c.edge, c.fwd, c.pc);
+            }
+            eprintln!("PROBE    --");
+        }
+    }
+    eprintln!(
+        "PROBE shells {:?} solids {:?}",
+        b.shells
+            .iter()
+            .map(|s| (s.faces.clone(), s.closed))
+            .collect::<Vec<_>>(),
+        b.solids.len()
+    );
+}
