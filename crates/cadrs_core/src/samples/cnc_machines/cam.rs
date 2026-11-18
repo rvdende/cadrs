@@ -8,7 +8,7 @@
 //! | CAM 3-axis | Job 1: Test piece | 3-axis mill | in the Vise, on the table | T1 D6 end mill: 2-axis rough of the pocket; T2 D6 drill: Drill of the two holes |
 //! | CAM 4-axis | Job 1: Test piece | 4-axis mill | by its block in the chuck, on the `A` axis | T1 D6 end mill: Face of the flat that faces +Z, then of the flat 120° round (indexed); T2 D6 ball mill: Rotary spiral round the shaft |
 //! | CAM 4-axis | Worm: the Worm, bar stock about X | 4-axis mill | by its spigot in the chuck | T1 D1 end mill: Rotary rough along the thread, in levels; T2 D1 ball mill: Rotary along the thread, at the lead read off the worm |
-//! | CAM 5-axis | Job 1: Test piece | 5-axis mill | standing on the Fixture plate, on the `C` axis | T1 D6 ball mill: Parallel over the dome with the tool square to it (5-axis); T2 D4 drill: Drill of the four dome holes, each down its own axis; Dynamic work plane "Dome hole" with a Drill in it (3+2) |
+//! | CAM 5-axis | Job 1: Test piece | 5-axis mill | standing on the Fixture plate, on the `C` axis | T3 D10 end mill: Rough round the dome, upright; T1 D6 ball mill: Parallel over the dome with the tool square to it (5-axis); T2 D4 drill: Drill of the four dome holes, each down its own axis; Dynamic work plane "Dome hole" with a Drill in it (3+2) |
 
 use cadrs_cam::strategy::{AxisMode, Height, HeightRef, Pattern, RotaryStyle, ToolAxis};
 use cadrs_cam::{Params, Tool, ToolKind};
@@ -439,7 +439,10 @@ pub mod cam4 {
         rough.tolerance = 0.02;
         c.toolpath(WORM_SETUP, ROUGH, rough)?;
         // Down the thread, at its own lead (read off the worm's helical edges).
-        let ball_mill = Tool::new(ToolKind::BallMill, 1.0);
+        // (Its flutes reach from the thread's root out past its tips: no shank in the cut.)
+        let mut ball_mill = Tool::new(ToolKind::BallMill, 1.0);
+        ball_mill.cutting_length = 8.0;
+        ball_mill.overall_length = 14.0;
         c.tool(WORM_SETUP, BALL_MILL, &ball_mill, 2)?;
         let mut along_thread = Params::new(Pattern::Rotary, &ball_mill, machine);
         along_thread.rotary.style = RotaryStyle::Thread;
@@ -469,7 +472,9 @@ pub mod cam5 {
     pub const DRILL: CamId = id(5, 0x35);
     /// The toolpaths.
     pub const DRILL_ALL: CamId = id(5, 0x36);
-    pub const TOOLPATHS: [CamId; 3] = [PARALLEL, DRILL_ALL, DRILL];
+    pub const ROUGHER: CamId = id(5, 0x37);
+    pub const ROUGH: CamId = id(5, 0x38);
+    pub const TOOLPATHS: [CamId; 4] = [ROUGH, PARALLEL, DRILL_ALL, DRILL];
     /// The dome hole the work plane looks along (of [`work::DOME_HOLE_AXES`]).
     pub const HOLE: usize = 0;
 
@@ -509,6 +514,16 @@ pub mod cam5 {
             [0.0, 1.0, 0.0],
         )?;
         let machine = cadrs_cam::MachineKind::Mill;
+        // The stock cleared round the dome first, upright, so the finishing tool leans in
+        // free air: a D10 end mill in levels, a little left on the dome.
+        let rougher = Tool::new(ToolKind::EndMill, 10.0);
+        c.tool(SETUP, ROUGHER, &rougher, 3)?;
+        let mut rough = Params::new(Pattern::Rough3D, &rougher, machine);
+        rough.heights.bottom = Height::new(HeightRef::ModelTop, -work::DOME_RADIUS);
+        rough.step_down = 4.0;
+        rough.wall_stock = 0.5;
+        rough.floor_stock = 0.5;
+        c.toolpath(SETUP, ROUGH, rough)?;
         let ball_mill = Tool::new(ToolKind::BallMill, 6.0);
         c.tool(SETUP, BALL_MILL, &ball_mill, 1)?;
         // The dome only, down to its rim.

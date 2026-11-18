@@ -1165,7 +1165,9 @@ fn one_angle(u: P3, w: P3, v: P3, hold: f64) -> Result<f64, IkError> {
 fn about(u: P3, w: P3, v: P3) -> Option<f64> {
     let a = sub(w, scale(u, dot(u, w)));
     let b = sub(v, scale(u, dot(u, v)));
-    if len(a) < 1e-9 || len(b) < 1e-9 {
+    // (Within a hair of the axis, about two thousandths of a degree, the turn is left free:
+    // closer still it would be set by rounding, and swing from one place to the next.)
+    if len(a) < 2e-5 || len(b) < 2e-5 {
         return None;
     }
     Some(dot(u, cross(a, b)).atan2(dot(a, b)).to_degrees())

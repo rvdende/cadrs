@@ -513,6 +513,10 @@ impl Guard {
     }
 }
 
+/// The lean (degrees from the work plane's Z) under which a leaning tool stands upright
+/// ([`AxisRule::within`]).
+pub const POLE: f64 = 3.0;
+
 /// The tool's axis by the Axis tab's rule.
 pub struct AxisRule<'a> {
     pub control: &'a AxisControl,
@@ -549,13 +553,27 @@ impl AxisRule<'_> {
     }
 
     /// The axis held within the most the tool may lean from the work plane's Z.
+    ///
+    /// Near upright the lean is eased off to none: within [`POLE`] of the work plane's Z the
+    /// tool stands upright, and up to twice that it leans twice as far past the cone's edge.
+    /// That is where a machine's rotary axis about Z (a table's C, a head's C) has to turn half
+    /// a turn in a few millimetres to follow a lean that passes beside it; upright, it can
+    /// turn while nothing changes, and the lean comes back without a jump.
     pub fn within(&self, a: P3) -> P3 {
         let lean = angle_between(UPRIGHT, a);
         let most = self.control.max_tilt.clamp(0.0, 180.0);
-        if lean > most + 1e-9 {
-            slerp(UPRIGHT, a, most / lean)
+        let eased = if lean < POLE {
+            0.0
+        } else if lean < 2.0 * POLE {
+            2.0 * (lean - POLE)
         } else {
+            lean
+        };
+        let target = eased.min(most);
+        if lean < 1e-12 || (target - lean).abs() < 1e-12 {
             a
+        } else {
+            slerp(UPRIGHT, a, target / lean)
         }
     }
 }
@@ -586,6 +604,12 @@ pub fn smooth_axes(tips: &[P3], axes: &mut [P3], span: f64) {
     }
 }
 
+/// The most the tool's axis turns over a stretch of a pass made one move ([`simplify`]): a
+/// pass over the top of a dome leans one way, stands upright and leans the other, and the
+/// upright poses (where a machine turns its free rotary axis) must not be merged away into a
+/// move whose ends lean opposite ways.
+const MOST_TURN_MERGED: f64 = 2.0 * POLE;
+
 /// A pass with the poses dropped that lie on the way between their neighbours: the tip
 /// within `tol` of the straight line, the axis within a fifth of a degree of its turn.
 pub fn simplify(poses: &[Pose], tol: f64) -> Vec<Pose> {
@@ -606,7 +630,7 @@ pub fn simplify(poses: &[Pose], tol: f64) -> Vec<Pose> {
             };
             dist(m.tip, lerp(a.tip, b.tip, t)) <= tol
                 && angle_between(m.axis, slerp(a.axis, b.axis, t)) <= 0.2
-        });
+        }) && angle_between(a.axis, b.axis) <= MOST_TURN_MERGED;
         if fits && to - from < 64 {
             to += 1;
         } else {
@@ -755,6 +779,26 @@ pub fn tilt(input: &Input, tp: Toolpath) -> Result<Toolpath, String> {
                 tip: add(tip, scale(axis, clear(tip, axis))),
                 axis,
             };
+            // A lean that swings from one side to the other past upright (across a hole's
+            // mouth, over a crest) stands upright on the way, where a machine's rotary axis
+            // about Z can turn while nothing moves ([`AxisRule::within`]).
+            if let Some(last) = poses.last().copied() {
+                let (closest, t) = (1..16)
+                    .map(|k| {
+                        let t = k as f64 / 16.0;
+                        (angle_between(UPRIGHT, slerp(last.axis, axis, t)), t)
+                    })
+                    .fold((f64::INFINITY, 0.0), |m, x| if x.0 < m.0 { x } else { m });
+                let ends = angle_between(UPRIGHT, last.axis).min(angle_between(UPRIGHT, axis));
+                if closest < 2.0 * POLE && ends > closest + 1.0 {
+                    let centre = lerp(add(last.tip, scale(last.axis, pivot)), pivots[i], t);
+                    let tip = sub(centre, scale(UPRIGHT, pivot));
+                    poses.push(Pose {
+                        tip: add(tip, scale(UPRIGHT, clear(tip, UPRIGHT))),
+                        axis: UPRIGHT,
+                    });
+                }
+            }
             // Between two poses the tip goes straight while the tool turns: where that takes
             // the cutter into the part (a quick turn over a crest), a pose between them,
             // backed off, keeps it out.

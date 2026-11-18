@@ -154,9 +154,10 @@ impl Machine {
         self
     }
 
-    /// Whether it can cut in a work plane whose Z is `z` (setup coordinates): along the
-    /// setup's Z on any machine, tilted within its limit with indexing, or wherever its own
-    /// axes can point the tool with the work set square on its table.
+    /// Whether it can cut in a work plane whose Z is `z`: along Z on any machine, tilted within
+    /// its limit with indexing (`z` in the setup's coordinates), or wherever its own axes can
+    /// point the tool (`z` in its table mount's coordinates: the setup's turned as the work
+    /// sits on the mount).
     pub fn can_tilt_to(&self, z: crate::geom::P3) -> bool {
         let tilt = z[2].clamp(-1.0, 1.0).acos().to_degrees();
         if tilt < 1e-6 {

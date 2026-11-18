@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{Dialect, NcOperation, PostError, PostSettings, Tilt, Writer, decimal};
 use crate::geom::{Frame, P3, add, dist, scale};
-use crate::kinematics::{Chain, Cl, IkError, Tolerance};
+use crate::kinematics::{Chain, Cl, IkError, Tolerance, angle_between};
 use crate::toolpath::{Step, UPRIGHT};
 
 /// What `F` means on a block that turns a rotary axis.
@@ -642,12 +642,14 @@ impl Axes {
             }
             return;
         };
-        // Where the move ends: followed from here (the machine keeps its side), a rotary the
-        // end's lean leaves free turned on the way to what comes next.
+        // Where the tool's lean leaves a rotary axis free here (upright over a platter) and the
+        // move leans it, that axis is turned first, the tool standing where it is: the lean
+        // fixes the axis the moment it starts, and it can't turn there in no time.
+        self.turn_in_place(&from, &to, feed);
+        // Where the move ends: followed from here, the machine keeping to its side.
         let cut = self
             .chain
             .follow(&from, &self.q, &to, self.length)
-            .and_then(|q1| self.chain.solve_toward(&to, self.length, &q1, self.ahead))
             .and_then(|q1| {
                 self.chain
                     .linearize_to(&from, &self.q, &to, &q1, self.length, &self.tol)
@@ -674,6 +676,47 @@ impl Axes {
             t0 = wp.t;
             self.q = wp.q;
             self.cl = Some(cl);
+        }
+    }
+
+    /// Turns the rotary axes the tool's lean at `from` leaves free to where the move to `to`
+    /// needs them the moment it leaves, the tool held at `from` (under tool centre point control
+    /// the turn alone; without it, the slides keep the tip where it is as it turns).
+    fn turn_in_place(&mut self, from: &Cl, to: &Cl, feed: f64) {
+        let free = self.chain.free_rotaries(from, self.length, &self.q);
+        if free.is_empty() || angle_between(from.axis, to.axis) < 1e-9 {
+            return;
+        }
+        // Just after the start the lean has its way: the free axes there.
+        let n = (angle_between(from.axis, to.axis) / 0.05).ceil().max(1.0);
+        let start = from.toward(to, 1.0 / n);
+        let Ok(q) = self.chain.solve(&start, self.length, &self.q) else {
+            return;
+        };
+        let mut turned = self.q.clone();
+        for i in &free {
+            turned[*i] = q[*i];
+        }
+        if free.iter().all(|i| (turned[*i] - self.q[*i]).abs() < 1e-6) {
+            return;
+        }
+        let Ok(turned) = self.chain.solve(from, self.length, &turned) else {
+            return;
+        };
+        let pieces =
+            match self
+                .chain
+                .linearize_to(from, &self.q, from, &turned, self.length, &self.tol)
+            {
+                Ok(p) => p,
+                Err(e) => return self.fail(e),
+            };
+        for wp in pieces {
+            // (A turn in place: as long as the slowest axis takes.)
+            let minutes = self.chain.least_minutes(&self.q, &wp.q, false).max(1e-7);
+            let v = self.words(from, &wp.q);
+            self.pending.push(Pending { v, minutes, feed });
+            self.q = wp.q;
         }
     }
 

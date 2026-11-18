@@ -155,8 +155,18 @@ pub(super) fn axis_fields(
                     "cam-tilted-from-setup-z",
                     &[("angle", &format!("{tilt:.1}"))],
                 )));
+                // (A machine's own axes see the tool's axis as its table mount does: the work
+                // set on the mount as the setup's mating says.)
+                let on_mount = match cadrs_core::cam::program::stock_shape(ctx.cam, job, ctx.parts)
+                {
+                    Some(shape) => {
+                        cadrs_core::cam::program::work_on_table(s, &shape.bounds_in(&frame))
+                            .dir_to_world(local)
+                    }
+                    None => local,
+                };
                 if let Some(m) = &job.machine
-                    && !m.can_tilt_to(local)
+                    && !m.can_tilt_to(if m.chain.is_some() { on_mount } else { local })
                 {
                     f.push(Field::error(tr(if m.rotary_axes() == 0 {
                         "cam-machine-no-indexing-axes"

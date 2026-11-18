@@ -612,7 +612,7 @@ fn the_cam_studios_jobs_run_on_their_assemblies_machines() {
     );
     assert_eq!(
         jobs(cam5::STUDIO),
-        [job("Job 1", "5-axis mill", cnc::MILL_5, "Z B Y X C", 1, 6)]
+        [job("Job 1", "5-axis mill", cnc::MILL_5, "Z B Y X C", 1, 8)]
     );
     // The 4-axis mill's magazine is an actuator with its eight pockets, and the tool change
     // uses it.
@@ -823,6 +823,7 @@ fn the_4_axis_toolpaths_compute() {
     );
     // The setup posts for the 4-axis mill: the chuck indexed a third of a turn for the second
     // flat, then turning on and on under the ball, with inverse-time feeds.
+    let (face_tp, round_tp, shaft_tp) = (face.clone(), round.clone(), shaft.clone());
     let paths = HashMap::from([
         (cam4::FACE, face),
         (cam4::FACE_ROUND, round),
@@ -887,7 +888,9 @@ fn the_4_axis_toolpaths_compute() {
             r.gouges.first()
         );
         assert!(r.rapid_hits.is_empty(), "{:?}", r.rapid_hits);
+        assert!(r.holder_hits.is_empty(), "{:?}", r.holder_hits);
     }
+    let (rough_tp, thread_tp) = (rough.clone(), thread.clone());
     let nc = posted(
         &doc,
         cam4::STUDIO,
@@ -896,6 +899,73 @@ fn the_4_axis_toolpaths_compute() {
     );
     assert!(nc.contains("O1002") || nc.contains("T2 M6"), "{nc}");
     assert!(nc.contains("G93") && nc.contains(" A"), "{nc}");
+    // Every control posts both setups. A machine with one rotary axis has no tool centre
+    // point control and no tilted working plane: plain X Y Z A. The chuck winds round the
+    // worm hundreds of turns over its passes, but the control is told where the axis reads
+    // each time the tool leaves the cut: the words never pass one pass's own turns (the
+    // shaft's spiral is 22 turns in one block), far inside a control's word limit, and the
+    // program never spends minutes unwinding.
+    let piece = HashMap::from([
+        (cam4::FACE, face_tp.clone()),
+        (cam4::FACE_ROUND, round_tp.clone()),
+        (cam4::SHAFT, shaft_tp.clone()),
+    ]);
+    let worm = HashMap::from([
+        (cam4::ROUGH, rough_tp.clone()),
+        (cam4::THREAD, thread_tp.clone()),
+    ]);
+    for (setup, paths) in [(cam4::SETUP, &piece), (cam4::WORM_SETUP, &worm)] {
+        for (d, nc) in on_every_control(&doc, cam4::STUDIO, setup, paths) {
+            for five_axis in ["G43.4", "G234", "M428", "G68.2"] {
+                assert!(!nc.contains(five_axis), "{d:?} wrote {five_axis}");
+            }
+            let most = largest_word(&nc, 'A');
+            assert!(most < 22.5 * 360.0, "{d:?}: A{most}");
+            // The last turn home is half a turn at the most.
+            let home = nc
+                .lines()
+                .rev()
+                .find(|l| l.contains(" A") && l.contains("G0"))
+                .unwrap();
+            assert!(home.contains("A0"), "{d:?}: {home}");
+        }
+    }
+}
+
+/// The setup's program on each of the five controls, tool centre point control as each
+/// control has it by default: what the job's machine would post if it were on that control.
+fn on_every_control(
+    doc: &Document,
+    studio: ElementId,
+    setup: CamId,
+    paths: &HashMap<CamId, cadrs_cam::Toolpath>,
+) -> Vec<(cadrs_cam::Dialect, String)> {
+    let cam = doc.element(studio).unwrap().cam().unwrap();
+    let parts = cadrs_core::rebuild::build(cam.part_features())
+        .parts
+        .clone();
+    let (job, setup) = cam.setup(setup).unwrap();
+    let run = program::setup_run(cam, job, setup, &parts, paths, None).unwrap();
+    cadrs_cam::Dialect::ALL
+        .into_iter()
+        .map(|d| {
+            let mut j = job.clone();
+            let m = j.machine.as_mut().unwrap();
+            m.dialect = d;
+            m.post = cadrs_cam::PostSettings::for_dialect(d, cadrs_cam::MachineKind::Mill);
+            let nc = program::post_setup(setup, &j, &run).unwrap_or_else(|e| panic!("{d:?}: {e}"));
+            (d, nc)
+        })
+        .collect()
+}
+
+/// The largest rotary word a program writes for `letter`.
+fn largest_word(nc: &str, letter: char) -> f64 {
+    nc.lines()
+        .filter(|l| !l.trim_start().starts_with('('))
+        .flat_map(|l| l.split_whitespace())
+        .filter_map(|w| w.strip_prefix(letter)?.parse::<f64>().ok())
+        .fold(0.0, |m: f64, v| m.max(v.abs()))
 }
 
 /// A point's distance from the worm's axis, in the Worm setup's coordinates (its origin the
@@ -958,7 +1028,10 @@ fn the_5_axis_toolpaths_compute() {
     );
     // The setup posts for the 5-axis mill: the dome and the holes under tool centre point
     // control with the head and the table turning, the last hole in a tilted working plane.
+    let rough = toolpath(&doc, cam5::STUDIO, cam5::ROUGH);
+    assert!(!rough.is_empty() && !rough.is_multi_axis());
     let paths = HashMap::from([
+        (cam5::ROUGH, rough),
         (cam5::PARALLEL, parallel),
         (cam5::DRILL_ALL, all),
         (cam5::DRILL, drill),
@@ -983,9 +1056,17 @@ fn the_5_axis_toolpaths_compute() {
             r.gouges.first()
         );
         assert!(r.rapid_hits.is_empty(), "{:?}", r.rapid_hits);
+        assert!(r.holder_hits.is_empty(), "{:?}", r.holder_hits);
         assert!(r.fixture_hits.is_empty(), "{:?}", r.fixture_hits);
         let mesh = r.stock.mesh(2);
         assert!(mesh.indices.len() > 3000);
+    }
+    // On every control, with tool centre point control or without, the finish runs on
+    // without lifting off for a rotary axis to come round: the platter turns where the tool
+    // stands upright (at the dome's top, across a hole's mouth).
+    for (d, nc) in on_every_control(&doc, cam5::STUDIO, cam5::SETUP, &paths) {
+        assert!(!nc.contains("Rewind"), "{d:?} rewinds");
+        assert!(largest_word(&nc, 'C') < 1080.0, "{d:?}");
     }
     let nc = posted(&doc, cam5::STUDIO, cam5::SETUP, &paths);
     assert!(nc.contains("O1001"), "{nc}");
