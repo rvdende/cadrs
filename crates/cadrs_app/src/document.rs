@@ -601,15 +601,13 @@ fn top_bar(root: &mut ChildSpawnerCommands, t: &Theme, doc_name: &str, profile: 
             });
             crate::update::spawn_version(r, t);
             // Online or not (`crate::network`).
+            // AI assistants (`crate::mcp_button`): not in a page, which can't serve them.
+            #[cfg(not(target_arch = "wasm32"))]
+            spawn_folding(r, Fold::Mcp, |r| crate::mcp_button::spawn_button(r, t));
             spawn_folding(r, Fold::Network, |r| crate::network::spawn_button(r, t));
             // Light, dark or the system's scheme.
             spawn_folding(r, Fold::Scheme, |r| {
-                r.spawn((
-                    cadrs_ui::scheme_toggle(t),
-                    cadrs_ui::glass::GlassFrame::bar(),
-                ))
-                .entry::<Node>()
-                .and_modify(|mut n| n.margin = UiRect::right(Val::Px(6.0)));
+                crate::top_bar::spawn_scheme_button(r, t)
             });
             spawn_folding(r, Fold::Notifications, |r| {
                 crate::notifications::spawn_bell(r, t)

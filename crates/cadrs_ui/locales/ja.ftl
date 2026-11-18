@@ -123,6 +123,7 @@ ui-color-editor-save-color = この色を保存
 ui-color-scheme-light = ライト
 ui-color-scheme-dark = ダーク
 ui-color-scheme-system = システムに合わせる
+ui-color-scheme-cycle = カラースキーム: { $scheme }（クリックで { $next }）
 
 ## crates/cadrs_ui/src/dock.rs
 ui-dock-hide-panel = パネルを隠す
@@ -206,6 +207,8 @@ shell-top-bar-update = v{ $version }に更新…
 shell-top-bar-update-tooltip = リリースノートを読んで更新
 shell-top-bar-github = GitHub の cadrs
 shell-top-bar-github-stars = GitHub のスター { $stars } 件
+shell-top-bar-download-app = アプリをダウンロード
+shell-top-bar-download-app-tooltip = Linux・Windows・macOS 版 cadrs を入手（GitHub）
 
 ## crates/cadrs_app/src/notifications.rs
 shell-notice-whats-new-title = cadrs の新しいデザイン
@@ -585,6 +588,9 @@ shell-prefs-mcp-server = MCP サーバー
 shell-prefs-enabled = 有効
 shell-prefs-endpoint = エンドポイント
 shell-prefs-mcp-note = オンの間は、このコンピューター上の AI アシスタント（Claude、Cursor など）がドキュメントを作成・編集できます。
+shell-prefs-mcp-port = ポート
+shell-prefs-mcp-port-reset = リセット
+shell-prefs-mcp-port-reset-tooltip = 既定のポート { $port } に戻します
 shell-prefs-collab-heading = コラボレーション
 shell-prefs-id-while-online = オンライン中に表示
 shell-prefs-p2p = P2P ネットワーク
@@ -1898,6 +1904,20 @@ model-mass-parts = 測定するパーツ
 ## crates/cadrs_app/src/mcp.rs
 model-mcp-server-on = MCP サーバーを起動しました：{ $url }
 model-mcp-cannot-start = ポート { $port } で MCP サーバーを起動できません：{ $error }
+shell-mcp-tooltip-on = AI アシスタント (MCP): オン
+shell-mcp-tooltip-off = AI アシスタント (MCP): オフ
+shell-mcp-tooltip-failed = AI アシスタント (MCP): 起動できませんでした
+shell-mcp-serving = オン、{ $url }
+shell-mcp-off = オフ（{ $url } で提供されます）
+shell-mcp-failed = ポート { $port } で起動できませんでした
+shell-mcp-enable = MCP サーバーを有効にする
+shell-mcp-port = ポート: { $port }…
+shell-mcp-port-tooltip = AI アシスタントが接続する、このコンピューターのポート
+shell-mcp-port-reset = ポートを既定に戻す（{ $port }）
+shell-mcp-copy-endpoint = エンドポイントをコピー
+shell-mcp-copied = { $url } をコピーしました
+shell-mcp-port-title = MCP サーバーのポート
+shell-mcp-port-invalid = ポートではありません: { $text }（1〜65535 の数値）
 
 ## crates/cadrs_app/src/simulation_ui.rs
 model-sim-one-face = { $count } 個の面

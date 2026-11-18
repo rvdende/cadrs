@@ -205,6 +205,8 @@ icons! {
     NETWORK_RX_TX => ("network-rx-tx", Line, "Network receiving and sending"),
     NETWORK_ERROR => ("network-error", Line, "Network error"),
     NETWORK_DISCONNECTED => ("network-disconnected", Line, "Network disconnected"),
+    ASSISTANT => ("assistant", Line, "AI assistants (MCP)"),
+    ASSISTANT_OFF => ("assistant-off", Line, "AI assistants (MCP) off"),
     THEME_LIGHT => ("theme-light", Line, "Light theme"),
     THEME_DARK => ("theme-dark", Line, "Dark theme"),
     THEME_SYSTEM => ("theme-system", Line, "System theme"),

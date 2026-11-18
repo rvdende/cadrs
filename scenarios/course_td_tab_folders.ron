@@ -302,8 +302,9 @@ Scenario(
         MoveTo(1420, 600),
         Wait(10),
         Screenshot("26b-strip-start"),
-        // Dark, at the window's right edge.
-        Click(ui("color-scheme-1")),
+        // Dark, at the window's right edge (the scheme button: system, light, dark).
+        Click(ui("color-scheme")),
+        Click(ui("color-scheme")),
         Wait(10),
         Scroll(ui("tab-strip"), -80),
         Wait(10),

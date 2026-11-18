@@ -123,6 +123,7 @@ ui-color-editor-save-color = Diese Farbe speichern
 ui-color-scheme-light = Hell
 ui-color-scheme-dark = Dunkel
 ui-color-scheme-system = Systemeinstellung verwenden
+ui-color-scheme-cycle = Farbschema: { $scheme } (Klick für { $next })
 
 ## crates/cadrs_ui/src/dock.rs
 ui-dock-hide-panel = Bereich ausblenden
@@ -206,6 +207,8 @@ shell-top-bar-update = Auf v{ $version } aktualisieren…
 shell-top-bar-update-tooltip = Versionshinweise lesen und aktualisieren
 shell-top-bar-github = cadrs auf GitHub
 shell-top-bar-github-stars = { $stars } Sterne auf GitHub
+shell-top-bar-download-app = App herunterladen
+shell-top-bar-download-app-tooltip = cadrs für Linux, Windows oder macOS (GitHub)
 
 ## crates/cadrs_app/src/notifications.rs
 shell-notice-whats-new-title = Ein neues Aussehen für cadrs
@@ -585,6 +588,9 @@ shell-prefs-mcp-server = MCP-Server
 shell-prefs-enabled = Aktiviert
 shell-prefs-endpoint = Endpunkt
 shell-prefs-mcp-note = Solange er aktiv ist, können KI-Assistenten auf diesem Computer (Claude, Cursor, …) Dokumente erstellen und bearbeiten.
+shell-prefs-mcp-port = Port
+shell-prefs-mcp-port-reset = Zurücksetzen
+shell-prefs-mcp-port-reset-tooltip = Zurück zum Standardport { $port }
 shell-prefs-collab-heading = Zusammenarbeit
 shell-prefs-id-while-online = Wird angezeigt, solange online
 shell-prefs-p2p = P2P-Netzwerk
@@ -1898,6 +1904,20 @@ model-mass-parts = Zu messende Teile
 ## crates/cadrs_app/src/mcp.rs
 model-mcp-server-on = MCP-Server unter { $url }
 model-mcp-cannot-start = MCP-Server kann nicht auf Port { $port } gestartet werden: { $error }
+shell-mcp-tooltip-on = KI-Assistenten (MCP): an
+shell-mcp-tooltip-off = KI-Assistenten (MCP): aus
+shell-mcp-tooltip-failed = KI-Assistenten (MCP): Start fehlgeschlagen
+shell-mcp-serving = An, unter { $url }
+shell-mcp-off = Aus (würde unter { $url } bereitstellen)
+shell-mcp-failed = Start auf Port { $port } fehlgeschlagen
+shell-mcp-enable = MCP-Server aktivieren
+shell-mcp-port = Port: { $port }…
+shell-mcp-port-tooltip = Der Port auf diesem Computer, mit dem sich KI-Assistenten verbinden
+shell-mcp-port-reset = Port auf Standard zurücksetzen ({ $port })
+shell-mcp-copy-endpoint = Endpunkt kopieren
+shell-mcp-copied = { $url } kopiert
+shell-mcp-port-title = Port des MCP-Servers
+shell-mcp-port-invalid = Kein Port: { $text } (eine Zahl von 1 bis 65535)
 
 ## crates/cadrs_app/src/simulation_ui.rs
 model-sim-one-face = { $count } Fläche

@@ -26,6 +26,8 @@ impl Plugin for TopBarPlugin {
 enum OpenNext {
     Notifications,
     Network,
+    #[cfg(not(target_arch = "wasm32"))]
+    Mcp,
 }
 
 fn open_next(q: Query<(Entity, &OpenNext)>, mut commands: Commands) {
@@ -33,6 +35,8 @@ fn open_next(q: Query<(Entity, &OpenNext)>, mut commands: Commands) {
         commands.entity(anchor).remove::<OpenNext>();
         match next {
             OpenNext::Network => crate::network::open_network_menu(&mut commands, anchor),
+            #[cfg(not(target_arch = "wasm32"))]
+            OpenNext::Mcp => crate::mcp_button::open_mcp_menu(&mut commands, anchor),
             OpenNext::Notifications => commands.queue(move |world: &mut World| {
                 let theme = world.resource::<Theme>().clone();
                 world.resource_scope(|world, mut notes: Mut<Notifications>| {
@@ -53,10 +57,12 @@ fn open_next(q: Query<(Entity, &OpenNext)>, mut commands: Commands) {
 /// What folds, in the order it goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fold {
-    /// The version, with the GitHub and update buttons beside it.
+    /// The version, with the GitHub and update buttons beside it (in a page, Download App).
     Version,
-    /// The light / dark / system toggle.
+    /// The light / dark / system button.
     Scheme,
+    /// The AI assistants (MCP) button (not in a page).
+    Mcp,
     /// The network button.
     Network,
     /// The notifications bell.
@@ -72,6 +78,7 @@ impl Fold {
         match self {
             Fold::Version => 1024.0,
             Fold::Scheme => 900.0,
+            Fold::Mcp => 850.0,
             Fold::Network => 800.0,
             Fold::Notifications => 700.0,
             Fold::Phone => 600.0,
@@ -86,6 +93,7 @@ impl Fold {
         match self {
             Fold::Version => "fold-version",
             Fold::Scheme => "fold-scheme",
+            Fold::Mcp => "fold-mcp",
             Fold::Network => "fold-network",
             Fold::Notifications => "fold-notifications",
             Fold::Phone => "fold-phone",
@@ -111,20 +119,20 @@ pub fn spawn_folding(
     .with_children(piece);
 }
 
-/// The light / dark / system choices, as the toggle has them (their labels' catalog keys).
-const SCHEMES: [(SchemePreference, &str, &str); 3] = [
-    (
-        SchemePreference::Light,
-        "ui-color-scheme-light",
-        "theme-light-medium",
-    ),
-    (SchemePreference::Dark, "ui-color-scheme-dark", "theme-dark"),
-    (
-        SchemePreference::System,
-        "ui-color-scheme-system",
-        "theme-system",
-    ),
-];
+/// The light / dark / system button ([`cadrs_ui::scheme_toggle`]), sized like the network
+/// button beside it.
+pub fn spawn_scheme_button(r: &mut ChildSpawnerCommands, t: &Theme) {
+    r.spawn(cadrs_ui::scheme_toggle(t))
+        .entry::<Node>()
+        .and_modify(|mut n| {
+            n.width = Val::Px(32.0);
+            n.height = Val::Px(32.0);
+            n.flex_shrink = 0.0;
+        });
+}
+
+/// The light / dark / system choices, in the order the button steps through them.
+const SCHEMES: [SchemePreference; 3] = SchemePreference::CYCLE;
 
 /// The account menu's entries for what is folded on a window `width` wide (none on a wide
 /// one), each named `account-…` for [`fold_action`].
@@ -161,13 +169,22 @@ pub fn menu_entries(world: &World, width: f32, theme: &Theme) -> Vec<MenuEntry> 
                 .into(),
         );
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    if Fold::Mcp.folded(width) {
+        let state = crate::mcp_button::McpState::of(world);
+        entries.push(
+            MenuItem::new("account-mcp", state.label())
+                .icon(state.icon())
+                .into(),
+        );
+    }
     if Fold::Scheme.folded(width) {
         entries.push(MenuEntry::Separator);
         let preference = world.resource::<cadrs_ui::Appearance>().preference;
-        for (i, (scheme, label, icon)) in SCHEMES.iter().enumerate() {
+        for (i, scheme) in SCHEMES.iter().enumerate() {
             entries.push(
-                MenuItem::new(format!("account-scheme-{i}"), tr(label))
-                    .icon(*icon)
+                MenuItem::new(format!("account-scheme-{i}"), tr(scheme.label_key()))
+                    .icon(scheme.icon())
                     .checked(*scheme == preference)
                     .into(),
             );
@@ -175,6 +192,13 @@ pub fn menu_entries(world: &World, width: f32, theme: &Theme) -> Vec<MenuEntry> 
     }
     if Fold::Version.folded(width) {
         entries.push(MenuEntry::Separator);
+        #[cfg(target_arch = "wasm32")]
+        entries.push(
+            MenuItem::new("account-download-app", tr("shell-top-bar-download-app"))
+                .icon("download")
+                .tooltip(tr("shell-top-bar-download-app-tooltip"))
+                .into(),
+        );
         let stars = *world.resource::<crate::github::Stars>();
         entries.push(
             MenuItem::new("account-github", tr("shell-app-menu-github"))
@@ -201,8 +225,8 @@ pub fn menu_entries(world: &World, width: f32, theme: &Theme) -> Vec<MenuEntry> 
     entries
 }
 
-/// Carries out a pick of the account menu's folded entries, or of the network or notices
-/// menu opened from them under the account button (`anchor`). Whether it was one.
+/// Carries out a pick of the account menu's folded entries, or of the network, AI assistants
+/// or notices menu opened from them under the account button (`anchor`). Whether it was one.
 pub fn fold_action(commands: &mut Commands, anchor: Entity, item: &str) -> bool {
     match item {
         "account-comments" => commands.queue(crate::collab::comments::toggle_panel),
@@ -218,12 +242,19 @@ pub fn fold_action(commands: &mut Commands, anchor: Entity, item: &str) -> bool 
         "account-network" => {
             commands.entity(anchor).insert(OpenNext::Network);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        "account-mcp" => {
+            commands.entity(anchor).insert(OpenNext::Mcp);
+        }
         "account-update" => commands.queue(crate::update::show_release_notes),
         "account-github" => crate::open_url(crate::GITHUB),
+        "account-download-app" => crate::open_url(crate::README),
         _ if item.starts_with("network-") => crate::network::network_menu_action(commands, item),
+        #[cfg(not(target_arch = "wasm32"))]
+        _ if item.starts_with("mcp-") => crate::mcp_button::mcp_menu_action(commands, anchor, item),
         _ if item.starts_with("notice-") => crate::notifications::notice_action(commands, item),
         _ => {
-            let Some((scheme, ..)) = item
+            let Some(scheme) = item
                 .strip_prefix("account-scheme-")
                 .and_then(|i| i.parse::<usize>().ok())
                 .and_then(|i| SCHEMES.get(i))
