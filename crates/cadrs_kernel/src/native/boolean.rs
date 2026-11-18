@@ -891,46 +891,81 @@ fn point_in_face(f: &WFace, p: &P3, tol: f64) -> InFace {
 }
 
 /// A point inside a face's domain (uv) given its loops as arcs.
-fn interior_point(loops: &[Vec<Arc>]) -> Option<P2> {
-    interior_points(loops).into_iter().next()
+fn interior_point(loops: &[Vec<Arc>], on: Level) -> Option<P2> {
+    interior_points(loops, on).into_iter().next()
+}
+
+/// A face's surface and its edges' curves by their index, for the heights its loops cross in
+/// closed form ([`level_crossing`]); none where they aren't to hand.
+type Level<'a> = Option<(&'a Surface, &'a dyn Fn(usize) -> Option<&'a Curve>)>;
+
+/// Where the edge `curve` over [lo, hi] meets the height v = `y` of `surf`, as its parameter:
+/// on a cylinder, a cone, a sphere or a torus the points of one v lie in a plane square to the
+/// axis, which a line meets once and a circle or an ellipse where A cos t + B sin t = w. None
+/// for another surface or curve, a curve lying in that plane, or no meeting in the range.
+/// (A fitted p-curve's crossing was bisected fifty-two times, each a B-spline's point.)
+fn level_crossing(surf: &Surface, curve: &Curve, y: f64, lo: f64, hi: f64) -> Option<f64> {
+    let (f, h) = match surf {
+        Surface::Cylinder { f, .. } => (f, y),
+        Surface::Cone { f, a, .. } => (f, y * a.cos()),
+        Surface::Sphere { f, r } => (f, r * y.sin()),
+        Surface::Torus { f, rmin, .. } => (f, rmin * y.sin()),
+        _ => return None,
+    };
+    let (c, ax, ay) = match curve {
+        Curve::Line { o, d } => {
+            let (rise, at) = (d.dot(&f.z), (o - f.o).dot(&f.z));
+            let t = (h - at) / rise;
+            return (rise.abs() > tol::TINY && t >= lo && t <= hi).then_some(t);
+        }
+        Curve::Circle { c, x, y, r } => (c, x * *r, y * *r),
+        Curve::Ellipse { c, x, y, a, b } => (c, x * *a, y * *b),
+        Curve::Nurbs(_) => return None,
+    };
+    let (ca, cb) = (ax.dot(&f.z), ay.dot(&f.z));
+    let reach = ca.hypot(cb);
+    let w = (h - (c - f.o).dot(&f.z)) / reach;
+    if !(reach > tol::TINY && w.abs() <= 1.0) {
+        return None;
+    }
+    let (mid, half) = (cb.atan2(ca), w.acos());
+    [mid + half, mid - half].into_iter().find_map(|root| {
+        // The root's turn nearest the range.
+        let t = root + ((0.5 * (lo + hi) - root) / TAU).round() * TAU;
+        (t >= lo && t <= hi).then_some(t)
+    })
 }
 
 /// Points inside a face's domain given its loops as arcs, farthest from the boundary first.
 /// The scanlines cross the arcs themselves, not their polygons: a region thinner than a
 /// polygon's sagitta (a tube's end a thousandth wide) has its points inside it all the same.
-fn interior_points(loops: &[Vec<Arc>]) -> Vec<P2> {
+fn interior_points(loops: &[Vec<Arc>], on: Level) -> Vec<P2> {
     let polys = arc_polys(loops);
     let Some(scan) = Scan::new(&polys) else {
         return Vec::new();
     };
     let mut cands = Vec::new();
-    // (Each loop's arcs' starts and one list of crossings, for all the scanlines.)
-    let starts: Vec<Vec<P2>> = loops
-        .iter()
-        .map(|l| l.iter().map(|a| a.uv_at(0.0)).collect())
-        .collect();
+    // (The arcs' points are the polygons' own, made once for all the scanlines: a fitted
+    // p-curve's 64 points were made again for each of the eleven. One list of crossings too.)
     let mut xs: Vec<f64> = Vec::new();
     for frac in SCAN_FRACTIONS {
         let y = scan.vb.0 + (scan.vb.1 - scan.vb.0) * frac;
         xs.clear();
-        for (l, ends) in loops.iter().zip(&starts) {
-            for (k, a) in l.iter().enumerate() {
+        for (l, poly) in loops.iter().zip(&polys) {
+            let mut at = 0;
+            for a in l {
                 let n = arc_steps(a);
-                let mut p = ends[k];
+                let mut p = poly[at];
                 for i in 0..n {
                     let (s0, s1) = (i as f64 / n as f64, (i + 1) as f64 / n as f64);
                     // (The polygon's corner after an arc's last piece is the next arc's start.)
-                    let q = if i + 1 == n {
-                        ends[(k + 1) % l.len()]
-                    } else {
-                        a.uv_at(s1)
-                    };
+                    let q = poly[(at + i + 1) % poly.len()];
                     if (p.y > y) != (q.y > y) {
                         if n == 1 {
                             xs.push(p.x + (y - p.y) / (q.y - p.y) * (q.x - p.x));
                         } else {
                             // The arc's own crossing between the piece's ends.
-                            xs.push(match arc_crossing(a, y, s0, s1) {
+                            xs.push(match arc_crossing(a, y, s0, s1, on) {
                                 Some(x) => x,
                                 None => p.x + (y - p.y) / (q.y - p.y) * (q.x - p.x),
                             });
@@ -938,6 +973,7 @@ fn interior_points(loops: &[Vec<Arc>]) -> Vec<P2> {
                     }
                     p = q;
                 }
+                at += n;
             }
         }
         xs.sort_by(f64::total_cmp);
@@ -958,7 +994,7 @@ fn interior_points(loops: &[Vec<Arc>]) -> Vec<P2> {
 /// The u where arc `a` crosses the height v = `y` between its fractions `s0` and `s1` (its ends
 /// there on either side of `y`): a circle's in closed form (A cos t + B sin t = y − c), another
 /// curve's by bisection.
-fn arc_crossing(a: &Arc, y: f64, s0: f64, s1: f64) -> Option<f64> {
+fn arc_crossing(a: &Arc, y: f64, s0: f64, s1: f64, on: Level) -> Option<f64> {
     let t_of = |s: f64| {
         let (b, e) = if a.fwd {
             (a.t[0], a.t[1])
@@ -967,8 +1003,11 @@ fn arc_crossing(a: &Arc, y: f64, s0: f64, s1: f64) -> Option<f64> {
         };
         b + (e - b) * s
     };
-    if let Curve::Circle { c, x, y: cy, r } = &a.pc {
-        let (ca, cb) = (x.y * r, cy.y * r);
+    if let Some((c, ca, cb)) = match &a.pc {
+        Curve::Circle { c, x, y: cy, r } => Some((c, x.y * r, cy.y * r)),
+        Curve::Ellipse { c, x, y: cy, a, b } => Some((c, x.y * a, cy.y * b)),
+        _ => None,
+    } {
         let h = ca.hypot(cb);
         let w = (y - c.y) / h;
         if h > 0.0 && w.abs() <= 1.0 {
@@ -984,6 +1023,20 @@ fn arc_crossing(a: &Arc, y: f64, s0: f64, s1: f64) -> Option<f64> {
             }
         }
         return None;
+    }
+    // A fitted p-curve: where its edge's own curve meets the surface's points of that height,
+    // taken where the p-curve agrees (it follows the edge to 1e-9; a torus has two circles
+    // of one height, and the plane of one v cuts both).
+    if let (Curve::Nurbs(_), Some((surf, curve_of))) = (&a.pc, on)
+        && let Some(curve) = curve_of(a.edge)
+    {
+        let (t0, t1) = (t_of(s0), t_of(s1));
+        if let Some(t) = level_crossing(surf, curve, y, t0.min(t1), t0.max(t1)) {
+            let q = a.pc.point(t);
+            if (q.y - y).abs() <= 1e-7 * (1.0 + y.abs()) {
+                return Some(q.x);
+            }
+        }
     }
     let up = a.uv_at(s0).y <= y;
     if (a.uv_at(s1).y <= y) == up {
@@ -1195,6 +1248,101 @@ pub(crate) const SMALL_MODEL: f64 = 0.25;
 /// The size (mm) small bodies are scaled to for a boolean.
 pub(crate) const WORKING_SIZE: f64 = 64.0;
 
+/// The ball `a` is (one whole sphere's face and nothing else) with its poles turned onto the
+/// line `other` cuts it about, where they aren't there: the line through the two centres of
+/// another sphere's face, a plane's normal, the axis of a cylinder, cone or torus through the
+/// ball's centre. A sphere is the same sphere whatever line its poles are on, but its
+/// parameters aren't: a circle about that line is a latitude, a straight line in (u, v) with
+/// an exact p-curve, where a circle about another is a curve there that has to be fitted (two
+/// balls' common part spent half its build fitting eight). None where the ball's poles are
+/// on the line already, the faces reaching it don't share one, a cut would come within three
+/// degrees of a pole, or `a` isn't a whole ball.
+fn ball_turned_to(a: &Body, other: &Body, op: BoolOp) -> Option<Body> {
+    // (A ball united with something not a ball keeps its poles: a ball on a stem goes on to
+    // be swept, and a sweep about the line the ball's poles were set along meets the ball in
+    // its meridians.)
+    let ball =
+        |b: &Body| matches!(b.faces.as_slice(), [f] if matches!(f.surf, Surface::Sphere { .. }));
+    if op == BoolOp::Union && !ball(other) {
+        return None;
+    }
+    let [face] = a.faces.as_slice() else {
+        return None;
+    };
+    let Surface::Sphere { f, r } = &face.surf else {
+        return None;
+    };
+    // (Its one loop its seam, there and back, and its two poles.)
+    let whole = face.loops.len() == 1
+        && face.loops[0].len() <= 4
+        && face.loops[0].iter().all(|c| {
+            let e = &a.edges[c.edge];
+            e.degenerate || matches!(e.curve, Curve::Circle { .. })
+        });
+    if a.solids.len() != 1 || !whole {
+        return None;
+    }
+    let (c, r) = (f.o, *r);
+    let near = tol::REL_POINT * r;
+    // Each face's line, where its surface reaches the ball, and the sine of how far from the
+    // line's pole it cuts: a circle too near a pole (two balls barely touching) is no better
+    // a latitude than it was a curve, its loop a speck round a point where every u meets.
+    const CLEAR: f64 = 0.05;
+    let mut line: Option<V3> = None;
+    let around = Bbox {
+        min: c - V3::new(r, r, r),
+        max: c + V3::new(r, r, r),
+    }
+    .grow(near);
+    for (gi, g) in other.faces.iter().enumerate() {
+        // (A face whose box is clear of the ball's cuts nothing of it.)
+        if !other.face_bbox(gi).overlaps(&around) {
+            continue;
+        }
+        let cut = match &g.surf {
+            Surface::Sphere { f: o, r: s } => {
+                let d = o.o - c;
+                let l = d.norm();
+                // (The circle's plane is (l² + r² − s²) / 2l along the line from the centre.)
+                (l > near && l < r + s && l > (r - s).abs())
+                    .then(|| (d / l, (l * l + r * r - s * s) / (2.0 * l)))
+            }
+            Surface::Plane { f: o } => {
+                let h = (o.o - c).dot(&o.z);
+                (h.abs() < r).then_some((o.z, h))
+            }
+            Surface::Cylinder { f: o, r: s } => {
+                let d = c - o.o;
+                ((d - o.z * d.dot(&o.z)).norm() <= near && *s < r)
+                    .then(|| (o.z, (r * r - s * s).sqrt()))
+            }
+            // (Another surface may reach the ball anywhere: no line to turn to.)
+            _ => return None,
+        };
+        let Some((z, h)) = cut else { continue };
+        if (1.0 - (h / r).powi(2)).max(0.0).sqrt() < CLEAR {
+            return None;
+        }
+        match line {
+            None => line = Some(z),
+            // (Faces cutting about different lines: turned to one, the others' circles would
+            // cross its seam and poles as any did before.)
+            Some(l) if l.cross(&z).norm() >= tol::ANGULAR => return None,
+            Some(_) => {}
+        }
+    }
+    let z = line?;
+    if z.cross(&f.z).norm() < tol::ANGULAR {
+        return None;
+    }
+    // Its seam as near where it was as the new poles let it be.
+    let x = (f.x - z * f.x.dot(&z))
+        .try_normalize(0.1)
+        .unwrap_or_else(|| any_perpendicular(&z));
+    let turned = super::blend::ball_frame(c, r, z, x).ok()?;
+    (turned.faces.len() == 1).then_some(turned)
+}
+
 /// [`boolean_bodies_with`] (counted with `CADRS_PROFILE`).
 fn boolean_bodies_counted(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Result<BoolOut> {
     // Small bodies are worked on larger: the merge tolerances are absolute ([`tol::POINT`] and
@@ -1221,6 +1369,16 @@ fn boolean_bodies_counted(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> 
     }
     if let Some(r) = apart_set_aside(a, b, op, opts) {
         return r;
+    }
+    // A whole ball is turned so that what cuts it cuts it along its latitudes.
+    let (ta, tb) = (ball_turned_to(a, b, op), ball_turned_to(b, a, op));
+    if ta.is_some() || tb.is_some() {
+        return boolean_bodies_counted(
+            ta.as_ref().unwrap_or(a),
+            tb.as_ref().unwrap_or(b),
+            op,
+            opts,
+        );
     }
     // B-spline faces lying exactly on an analytic face of the other body take that surface, so
     // the two coincide as analytic faces do (a sleeve whose bore is a cylinder written as a
@@ -4335,7 +4493,10 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     // A sub-face's point inside it, with the face's outward normal there.
     let point_of = |fi: usize, loops: &[Vec<Arc>]| -> Option<(P3, V3)> {
         let f = &faces[fi];
-        let uv = interior_point(loops)?;
+        let uv = interior_point(
+            loops,
+            Some((&f.surf, &|e| pool.edges.get(e).map(|e| &e.curve))),
+        )?;
         let n_out = f.surf.normal(uv.x, uv.y) * if f.sense { 1.0 } else { -1.0 };
         Some((f.surf.eval(uv.x, uv.y), n_out))
     };
@@ -4435,7 +4596,14 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             // the other body lying in it) decides nothing: try the face's other inside points.
             let mut pc = other.classify(&p, run_tol);
             if pc == PointClass::OnBoundary {
-                for q in interior_points(&loops).into_iter().skip(1).take(12) {
+                for q in interior_points(
+                    &loops,
+                    Some((&f.surf, &|e| pool.edges.get(e).map(|e| &e.curve))),
+                )
+                .into_iter()
+                .skip(1)
+                .take(12)
+                {
                     let c = other.classify(&f.surf.eval(q.x, q.y), run_tol);
                     if c != PointClass::OnBoundary {
                         pc = c;
