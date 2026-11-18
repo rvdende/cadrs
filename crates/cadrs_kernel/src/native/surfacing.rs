@@ -301,6 +301,60 @@ fn crease_fills(k: &mut NativeKernel, sheets: &[Body], spec: &ThickenSpec) -> Re
             // lies behind the sheet (the two faces' slabs the other way hold all of that: a
             // point behind the sheet near the crease is over one face or the other). What is
             // left fills the gap between the slabs and lies in them elsewhere.
+            // Mitred: what lies within the thickness of both faces' surfaces run on a little
+            // past the crease (each face's slab, of the face made wider): the corner between
+            // the two slabs, out to where their far sides meet. For surfaces that run on
+            // (a spline doesn't, past its range).
+            if spec.sharp
+                && let (Some((n1, t1)), Some((n2, t2))) = (at(f1), at(f2))
+            {
+                let mut filled = true;
+                let mut fills = Vec::new();
+                for (d, sign) in [(spec.along, 1.0), (spec.against, -1.0)] {
+                    if d < tol::ROUNDOFF
+                        || (n1 * sign).dot(&t2) >= -tol::ANGULAR_POINT.sqrt()
+                        || (n2 * sign).dot(&t1) >= -tol::ANGULAR_POINT.sqrt()
+                    {
+                        continue;
+                    }
+                    let wider = |f: usize| -> Result<Body> {
+                        let face = &sheets[f].faces[0];
+                        let ((u0, u1), (v0, v1)) = super::heal_split::face_uv_box(&sheets[f], 0)
+                            .ok_or(KernelError::Unsupported("thickening a face with no extent"))?;
+                        let (mu, mv) = face.surf.metric();
+                        let (gu, gv) = (3.0 * d / mu.max(tol::TINY), 3.0 * d / mv.max(tol::TINY));
+                        // (No wider than a turn of a surface that comes round.)
+                        let span = |lo: f64, hi: f64, g: f64, round: bool| {
+                            if round && hi - lo + 2.0 * g >= std::f64::consts::TAU {
+                                (lo, lo + std::f64::consts::TAU)
+                            } else {
+                                (lo - g, hi + g)
+                            }
+                        };
+                        let domain = (
+                            span(u0, u1, gu, face.surf.u_periodic()),
+                            span(v0, v1, gv, face.surf.v_periodic()),
+                        );
+                        let mut ext = super::face_build::face_from_surface(&face.surf, Some(domain))?;
+                        if ext.faces[0].sense != face.sense {
+                            super::topo::Body::reverse_face(&mut ext.faces[0]);
+                        }
+                        slab(&ext, sign * d)
+                    };
+                    let fill = wider(f1).and_then(|a| {
+                        let b = wider(f2)?;
+                        Ok(super::boolean::boolean_bodies(&a, &b, BoolOp::Intersect)?.body)
+                    });
+                    match fill {
+                        Ok(fill) => fills.push(fill),
+                        Err(_) => filled = false,
+                    }
+                }
+                if filled {
+                    out.extend(fills);
+                    continue;
+                }
+            }
             if !spec.sharp
                 && let (Some((n1, t1)), Some((n2, t2))) = (at(f1), at(f2))
             {
