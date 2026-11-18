@@ -2470,16 +2470,54 @@ struct Measured {
     mesh: f64,
 }
 
-fn measure(parts: &[Part]) -> Measured {
-    let solids: Vec<&Part> = parts.iter().filter(|p| p.kind == PartKind::Solid).collect();
+/// The parts a case measures: its solids, or (a surfacing case's `"part"` in
+/// `expected.json`) the one of that name; its target's and its STEP's surfaces then, which hold
+/// that part alone.
+#[derive(Debug, Clone, Copy)]
+enum Pick<'a> {
+    Solids,
+    Named(&'a str),
+    Surfaces,
+}
+
+impl Pick<'_> {
+    fn takes(self, p: &Part) -> bool {
+        match self {
+            Pick::Solids => p.kind == PartKind::Solid,
+            Pick::Named(n) => p.name == n,
+            Pick::Surfaces => p.kind == PartKind::Surface,
+        }
+    }
+
+    /// What the part's target and its STEP round trip measure.
+    fn exported(self) -> Self {
+        match self {
+            Pick::Named(_) => Pick::Surfaces,
+            p => p,
+        }
+    }
+}
+
+fn measure(parts: &[Part], pick: Pick) -> Measured {
+    let solids: Vec<&Part> = parts.iter().filter(|p| pick.takes(p)).collect();
     let (mut volume, mut area, mut faces, mut mesh) = (0.0, 0.0, 0, 0.0f64);
     let mut moment = [0.0; 3];
     let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
     for p in &solids {
-        let m = p.mass.expect("mass properties");
-        volume += m.volume;
-        area += m.surface_area;
         faces += p.solid.faces.len();
+        let s = &p.solid;
+        if p.kind == PartKind::Surface {
+            // A surface has no volume: its faces' area alone.
+            area += s.faces.iter().filter_map(|f| f.area).sum::<f64>();
+        } else {
+            let m = p.mass.expect("mass properties");
+            volume += m.volume;
+            area += m.surface_area;
+            let c = [m.center_of_mass.x, m.center_of_mass.y, m.center_of_mass.z];
+            for k in 0..3 {
+                moment[k] += m.volume * c[k];
+            }
+        }
         if std::env::var("DBG_FACES").is_ok() {
             for f in &p.solid.faces {
                 eprintln!(
@@ -2498,10 +2536,6 @@ fn measure(parts: &[Part]) -> Measured {
                 })
                 .sum();
             mesh = mesh.max((triangles - exact).abs() / exact.max(1e-9));
-        }
-        let c = [m.center_of_mass.x, m.center_of_mass.y, m.center_of_mass.z];
-        for k in 0..3 {
-            moment[k] += m.volume * c[k];
         }
         for q in &p.solid.positions {
             for k in 0..3 {
@@ -2546,8 +2580,10 @@ fn run_case(dir: &Path) -> Outcome {
         serde_json::from_str(&std::fs::read_to_string(dir.join(f)).unwrap()).unwrap()
     };
     let mut want = read("expected.json");
+    let part = want["part"].as_str().map(str::to_string);
+    let pick = part.as_deref().map_or(Pick::Solids, Pick::Named);
     if dir.join("target.step").is_file() {
-        target(dir, &mut want);
+        target(dir, &mut want, pick.exported());
     }
     let source = want["source"].as_str().unwrap_or("").to_string();
     let mut outcome = Outcome {
@@ -2615,7 +2651,12 @@ fn run_case(dir: &Path) -> Outcome {
         outcome.note = format!("failed: {e}");
         return outcome;
     }
-    let got = measure(&build.parts);
+    let got = measure(&build.parts, pick);
+    if matches!(pick, Pick::Named(_)) && got.bodies == 0 {
+        outcome.pass = Some(false);
+        outcome.note = format!("failed: no part to measure ({pick:?})");
+        return outcome;
+    }
     let only: Option<Vec<String>> = want["compare"].as_array().map(|a| {
         a.iter()
             .filter_map(|x| x.as_str().map(str::to_string))
@@ -2695,7 +2736,7 @@ fn run_case(dir: &Path) -> Outcome {
         ok: got.mesh <= MESH_TOL,
     });
     // STEP: written and read back with the same volume and area.
-    let (ok, e) = step_round_trip(&features, &mut rb, &got);
+    let (ok, e) = step_round_trip(&features, &mut rb, &got, pick);
     checks.push(Check {
         what: "STEP round trip",
         error: e,
@@ -2735,7 +2776,7 @@ fn run_case(dir: &Path) -> Outcome {
 
 /// An issue case's expected values from its `target.step` (the part as another CAD system
 /// builds it), measured as cadrs reads it: the ones `expected.json` doesn't give itself.
-fn target(dir: &Path, want: &mut Value) {
+fn target(dir: &Path, want: &mut Value, pick: Pick) {
     let text = std::fs::read_to_string(dir.join("target.step")).unwrap();
     let plan = Rebuilder::new()
         .plan_import(ImportFormat::Step, text.as_bytes())
@@ -2753,7 +2794,7 @@ fn target(dir: &Path, want: &mut Value) {
         "the target builds: {:?}",
         build.errors
     );
-    let m = measure(&build.parts);
+    let m = measure(&build.parts, pick);
     let measured = serde_json::json!({
         "body_count": m.bodies,
         "volume_mm3": m.volume,
@@ -2774,12 +2815,13 @@ fn step_round_trip(
     features: &Arc<Vec<Feature>>,
     rb: &mut Rebuilder,
     got: &Measured,
+    pick: Pick,
 ) -> (bool, f64) {
     let build = rb.rebuild(features);
     let items: Vec<ExportItem> = build
         .parts
         .iter()
-        .filter(|p| p.kind == PartKind::Solid)
+        .filter(|p| pick.takes(p))
         .map(|p| ExportItem {
             features: features.clone(),
             part: p.id,
@@ -2808,7 +2850,7 @@ fn step_round_trip(
     if !back.errors.is_empty() {
         return (false, f64::INFINITY);
     }
-    let m = measure(&back.parts);
+    let m = measure(&back.parts, pick.exported());
     let e = ((m.volume - got.volume).abs() / got.volume.abs().max(1.0))
         .max((m.area - got.area).abs() / got.area.abs().max(1.0));
     (e <= REL_TOL, e)
@@ -3026,6 +3068,7 @@ cases! {
     issue_156_wall_as_thick_as_chamfer
     issue_237_shell_keeps_a_wall_rising_past_its_opening
     issue_237_shell_outward_keeps_the_walls_past_its_opening
+    issue_race_car_surfaces
     issue_slanted_cut_cylinder_foot
 }
 
