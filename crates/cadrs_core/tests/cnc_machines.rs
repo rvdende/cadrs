@@ -1144,3 +1144,69 @@ fn the_machine_key_follows_the_machines_parts() {
     features[0].name.push_str(" (moved)");
     assert_eq!(machine_key(&other, cnc::MILL_5), before);
 }
+
+/// The worm's run cut exactly as Simulate plays it (`cam::exact`): the bar a solid of the
+/// kernel's, each move the screw the machine makes, runs of moves on one screw cut as one (a
+/// whole pass of 27 turns one screw about the machine's A axis). The first pass, played a
+/// tenth at a time: every cut exact, the stock less and less.
+#[test]
+#[ignore = "slow (over 5 s): run with cargo test -r -- --ignored"]
+fn the_worm_is_cut_exactly_as_it_plays() {
+    use std::time::Instant;
+    let doc = cnc::document().unwrap();
+    let rough = toolpath(&doc, cam4::STUDIO, cam4::ROUGH);
+    let thread = toolpath(&doc, cam4::STUDIO, cam4::THREAD);
+    let paths = HashMap::from([(cam4::ROUGH, rough), (cam4::THREAD, thread)]);
+    let cam = doc.element(cam4::STUDIO).unwrap().cam().unwrap();
+    let parts = cadrs_core::rebuild::build(cam.part_features())
+        .parts
+        .clone();
+    let (job, setup) = cam.setup(cam4::WORM_SETUP).unwrap();
+    let run = program::setup_run(cam, job, setup, &parts, &paths, None).unwrap();
+    let machine = job.machine.as_ref().unwrap();
+    let shape = program::stock_shape(cam, job, &parts).unwrap();
+    let stock = program::stock_in(&shape, &run.frame);
+    let above = [0.0, 0.0, stock.bounds.max[2] + 30.0];
+    let motions = program::run_motions(setup, job, &run, above);
+    let track = program::axis_track(machine, &run, &motions);
+    let moves: usize = motions.iter().map(|m| m.len()).sum();
+    let at = Instant::now();
+    let mut exact =
+        cadrs_core::cam::exact::ExactStock::new(machine, &run, &shape, &motions, &track.rows)
+            .unwrap();
+    let full = exact.volume();
+    {
+        let sizes = exact.cut_sizes();
+        let mut hist = std::collections::BTreeMap::new();
+        for n in &sizes {
+            *hist.entry(n.next_power_of_two()).or_insert(0usize) += 1;
+        }
+        println!("cut sizes (moves, up to a power of two: count): {hist:?}");
+    }
+    println!(
+        "worm: {moves} moves in {} cuts, set up in {:.2} s, stock {full:.1} mm³",
+        exact.cut_count(),
+        at.elapsed().as_secs_f64()
+    );
+    // The first pass (the bar opened along the thread at the first level, 27 turns), cut
+    // as it plays: a tenth at a time, each a cut of the one screw as far as the tool has gone,
+    // then whole.
+    let first_pass = 2172.min(moves - 1);
+    let mut seen = Vec::new();
+    for i in 1..=10 {
+        let t = Instant::now();
+        exact.cut_to(first_pass * i / 10, 0.5);
+        println!(
+            "  to move {}: cut {:.3} s, {:.1} mm³",
+            first_pass * i / 10,
+            t.elapsed().as_secs_f64(),
+            exact.volume()
+        );
+        seen.push(exact.volume());
+    }
+    let (mesh, _) = exact.mesh(0.01).unwrap();
+    println!("{} triangles", mesh.indices.len());
+    assert!(exact.failed.is_empty(), "{:?}", exact.failed);
+    assert!(full - seen[seen.len() - 1] > 400.0, "{seen:?}");
+    assert!(seen.windows(2).all(|w| w[1] <= w[0] + 1e-6), "{seen:?}");
+}

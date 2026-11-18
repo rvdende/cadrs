@@ -556,9 +556,14 @@ pub fn rough(input: &Input) -> Result<Toolpath, String> {
             }
             run.clear();
         };
+        // (The part where it stands above the level by no more than the tolerance is cut at the
+        // level: the part is seen through its facets, whose sag would otherwise make a pass at
+        // a level the part's own radius (with its stock) meets creep by microns, a spiral
+        // that isn't one helix.)
+        let sag = p.tolerance.max(0.0);
         for line in &lines {
             for q in line {
-                let r = q[2].max(level);
+                let r = if q[2] > level + sag { q[2] } else { level };
                 if r < above.min(t.stock_radius) - 1e-6 {
                     run.push([q[0], q[1], r]);
                 } else {

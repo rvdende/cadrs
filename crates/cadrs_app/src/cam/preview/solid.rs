@@ -6,8 +6,10 @@
 //!
 //! **What is shown.** The stock as the tool leaves it, where the tool is: a worker of its own
 //! ([`Live`]) keeps the solid stock and cuts it on to wherever the preview's time is, part
-//! way along a move too ([`cadrs_cam::sim::LiveStock`]), and sends back its mesh, coloured
-//! by the operation that cut each surface. While it is cutting, playing waits for it (the
+//! way along a move too, and sends back its mesh, coloured by the operation that cut each
+//! surface. The stock is cut exactly where it can be ([`cadrs_core::cam::exact`]: a solid
+//! of the kernel's, cut by the tool's solid along the machine's motion, drawn from its own
+//! surfaces), else on a lattice ([`cadrs_cam::sim::LiveStock`]). While it is cutting, playing waits for it (the
 //! playback is slower rather than the stock behind the tool). Before its first mesh the
 //! uncut stock is shown (the stock's own shape). At the run's end, once the check is done,
 //! the check's own stock is shown, its gouges red.
@@ -165,7 +167,7 @@ impl Live {
         let (ask, asks) = std::sync::mpsc::channel::<Place>();
         let (send, got) = std::sync::mpsc::channel();
         let spawned = cadrs_core::background::spawn("cam-live-stock", move || {
-            let Some(mut live) = live_stock(&input) else {
+            let Some(mut live) = Engine::of(&input) else {
                 return;
             };
             while let Ok(mut to) = asks.recv() {
@@ -173,8 +175,8 @@ impl Live {
                 for t in asks.try_iter() {
                     to = t;
                 }
-                live.cut_to(to.0, to.1);
-                if send.send((to, live.stock.mesh(1))).is_err() {
+                let Some(mesh) = live.cut_to(to) else { break };
+                if send.send((to, mesh)).is_err() {
                     break;
                 }
             }
@@ -230,35 +232,96 @@ impl Live {
     }
 }
 
-/// The run's stock to be cut as it plays.
-fn live_stock(input: &SolidInput) -> Option<cadrs_core::cam::cadrs_cam::sim::LiveStock> {
-    let cam = &input.cam;
-    let job = cam.job(input.job)?;
-    let setup = job.setups.iter().find(|s| s.id == input.setup)?;
-    let run = program::setup_run(
-        cam,
-        job,
-        setup,
-        &input.parts,
-        &input.paths,
-        Some(&input.wanted),
-    )
-    .ok()?;
-    let start = program::solid_start(
-        cam,
-        job,
-        setup,
-        &run,
-        &input.parts,
-        &input.paths,
-        None,
-        QUALITY,
-    )
-    .ok()?;
-    Some(cadrs_core::cam::cadrs_cam::sim::LiveStock::new(
-        start.stock,
-        start.ops,
-    ))
+/// How finely the exact stock is drawn (mm from its surfaces).
+const DEFLECTION: f64 = 0.01;
+
+/// What cuts the stock as the run plays: exactly, the stock a solid of the kernel's
+/// ([`cadrs_core::cam::exact`]), where the stock has an exact solid (a box or a bar, the
+/// job's first setup); else on the lattice the check runs on.
+enum Engine {
+    Exact(Box<cadrs_core::cam::exact::ExactStock>),
+    Lattice(Box<cadrs_core::cam::cadrs_cam::sim::LiveStock>),
+}
+
+impl Engine {
+    fn of(input: &SolidInput) -> Option<Engine> {
+        let cam = &input.cam;
+        let job = cam.job(input.job)?;
+        let setup = job.setups.iter().find(|s| s.id == input.setup)?;
+        let run = program::setup_run(
+            cam,
+            job,
+            setup,
+            &input.parts,
+            &input.paths,
+            Some(&input.wanted),
+        )
+        .ok()?;
+        let first_setup = job
+            .setups
+            .iter()
+            .find(|s| !s.suppressed)
+            .is_none_or(|s| s.id == setup.id);
+        // (Exactly only with `CADRS_EXACT_SIM=1` for now: the kernel doesn't yet make every
+        // cut of a roughing run exactly, where successive levels' walls lie on one another.)
+        let exact = std::env::var_os("CADRS_EXACT_SIM").is_some_and(|v| v == "1");
+        if exact
+            && first_setup
+            && let (Some(machine), Some(shape)) = (
+                job.machine.as_ref(),
+                program::stock_shape(cam, job, &input.parts),
+            )
+        {
+            let stock = program::stock_in(&shape, &run.frame);
+            let above = [0.0, 0.0, stock.bounds.max[2] + 30.0];
+            let motions = program::run_motions(setup, job, &run, above);
+            let track = program::axis_track(machine, &run, &motions);
+            let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                cadrs_core::cam::exact::ExactStock::new(
+                    machine,
+                    &run,
+                    &shape,
+                    &motions,
+                    &track.rows,
+                )
+            }));
+            match made {
+                Ok(Ok(e)) => return Some(Engine::Exact(Box::new(e))),
+                Ok(Err(why)) => info!("Simulate's stock on the lattice: {why}"),
+                Err(_) => warn!("Simulate's exact stock could not be made"),
+            }
+        }
+        let start = program::solid_start(
+            cam,
+            job,
+            setup,
+            &run,
+            &input.parts,
+            &input.paths,
+            None,
+            QUALITY,
+        )
+        .ok()?;
+        Some(Engine::Lattice(Box::new(
+            cadrs_core::cam::cadrs_cam::sim::LiveStock::new(start.stock, start.ops),
+        )))
+    }
+
+    /// The stock cut to `to`, as a mesh. `None`: the engine failed.
+    fn cut_to(&mut self, to: Place) -> Option<SimMesh> {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match self {
+            Engine::Exact(e) => {
+                e.cut_to(to.0, to.1);
+                e.sim_mesh(DEFLECTION)
+            }
+            Engine::Lattice(l) => {
+                l.cut_to(to.0, to.1);
+                Some(l.stock.mesh(1))
+            }
+        }))
+        .ok()
+        .flatten()
+    }
 }
 
 /// A mesh the viewport's part material lights ([`crate::part_shading::PartShading`]): its

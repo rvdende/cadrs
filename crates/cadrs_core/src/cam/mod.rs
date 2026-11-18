@@ -22,6 +22,7 @@
 //! simulation and posting are [`program`]'s; the kernel work (the parts' exact faces, holes and
 //! sections in a setup's coordinates) is [`geometry`]'s.
 
+pub mod exact;
 pub mod geometry;
 pub mod program;
 pub mod sheet;
