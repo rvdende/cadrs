@@ -2516,7 +2516,10 @@ fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> R
         if (1..=2).contains(&steps.len()) {
             match super::sweep_faces::by_faces(k, &b, steps) {
                 Ok(r) => return Ok(r),
-                Err(e) => exact = Some(e),
+                Err(e) => {
+                    declined(format!("its faces' sweeps: {e}"));
+                    exact = Some(e);
+                }
             }
         }
         // A ball screwed: exactly, its tube and end balls trimmed where they pass through
@@ -3841,6 +3844,10 @@ fn cut_by_pieces(
                     next.extend(c.bodies);
                 }
                 r => {
+                    match &r {
+                        Ok(_) => declined("a swept piece's cut left a body that isn't sound"),
+                        Err(e) => declined(format!("a swept piece's cut failed: {e}")),
+                    }
                     if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
                         match &r {
                             Ok(c) => eprintln!(
@@ -3877,7 +3884,6 @@ fn cut_by_pieces(
     Some(acc)
 }
 
-/// [`crate::Kernel::cut_swept`].
 /// [`cut_swept`] at each of `copies` places of the tool a whole turn apart about the target's
 /// axis (the second turn's): a gear's every tooth space, cut by a motion that doesn't repeat
 /// (a face mill's roll). Generated exactly, one plug made and its copies subtracted together,
@@ -4358,6 +4364,65 @@ fn cut_ball_pass(
     }
 }
 
+thread_local! {
+    /// Set while a cut is to be made only by the exact ways ([`exact_only`]).
+    static EXACT_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Why the exact ways declined the sweep or cut being made ([`declined`]), for the line
+    /// logged when it is meshed instead.
+    static DECLINED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Notes why an exact way declined the sweep or cut being made (the first few are kept).
+pub(crate) fn declined(why: impl std::fmt::Display) {
+    DECLINED.with(|d| {
+        let mut d = d.borrow_mut();
+        if d.len() < 6 {
+            d.push(why.to_string());
+        }
+    });
+}
+
+/// Forgets the reasons noted ([`declined`]): at the start of a sweep or cut asked of the
+/// kernel.
+pub(crate) fn clear_declined() {
+    DECLINED.with(|d| d.borrow_mut().clear());
+}
+
+/// The reasons noted, in one line.
+fn reasons() -> String {
+    DECLINED.with(|d| {
+        let d = d.borrow();
+        if d.is_empty() {
+            "none of the exact ways takes it".to_string()
+        } else {
+            d.join("; ")
+        }
+    })
+}
+
+/// Refused where only exact cuts are wanted ([`exact_only`]); else logged, a line on standard
+/// error, as every fall back to a mesh is (`what`: what is meshed).
+fn meshing(what: &str) -> Result<()> {
+    if EXACT_ONLY.with(|e| e.get()) {
+        return Err(KernelError::OperationFailed(format!(
+            "{what} not made exactly: {}",
+            reasons()
+        )));
+    }
+    eprintln!("cadrs_kernel: {what} meshed, not exact: {}", reasons());
+    Ok(())
+}
+
+/// Runs `f` with [`cut_swept`]'s meshed fallback off: a cut none of the exact ways takes
+/// fails instead ([`crate::Kernel::cut_swept_exact`]).
+pub fn exact_only<T>(f: impl FnOnce() -> T) -> T {
+    let was = EXACT_ONLY.with(|e| e.replace(true));
+    let r = f();
+    EXACT_ONLY.with(|e| e.set(was));
+    r
+}
+
+/// [`crate::Kernel::cut_swept`].
 pub fn cut_swept(
     k: &mut NativeKernel,
     target: BodyId,
@@ -4555,6 +4620,7 @@ pub fn cut_swept(
         return Ok(r);
     }
     // Else meshed: inside the target, in none of the tool's places.
+    meshing("a cut by a swept solid")?;
     let t = std::sync::Arc::clone(k.get(target)?);
     let tdist =
         super::mesh_distance::MeshDistance::new(&t, 1e-3 * t.bbox().diagonal().max(tol::POINT))
@@ -5376,6 +5442,10 @@ fn meshed_within(
     place: &Place,
     within: Within,
 ) -> Result<OpResult> {
+    // (A cut's fall back is logged where its target is measured, before this.)
+    if within.is_none() {
+        meshing("a sweep of a solid")?;
+    }
     let t0 = web_time::Instant::now();
     // The places sampled, and their inverses (world to body: x ↦ R x − e): 160, or more for a
     // motion that moves the body's box farther than a fiftieth of its reach between them.

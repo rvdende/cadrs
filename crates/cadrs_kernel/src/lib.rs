@@ -546,6 +546,20 @@ pub trait Kernel {
         Err(KernelError::Unsupported("cuts by swept solids"))
     }
 
+    /// [`Kernel::cut_swept`] made only by its exact ways: where none of them takes the cut it
+    /// fails (`KernelError::Unsupported`) instead of falling back to the meshed cut, for a
+    /// caller that would rather cut in smaller pieces than have a stock of flat facets (a
+    /// CAM simulation's stock).
+    fn cut_swept_exact(
+        &mut self,
+        target: BodyId,
+        tool: BodyId,
+        motion: &SolidMotion,
+    ) -> Result<OpResult> {
+        let _ = (target, tool, motion);
+        Err(KernelError::Unsupported("exact cuts by swept solids"))
+    }
+
     /// [`Kernel::cut_swept`] at each of `copies` places of the tool a whole turn apart about the
     /// axis of the motion's second turn (the target's): every tooth space of a gear cut by a
     /// motion that doesn't repeat, a face mill's roll.

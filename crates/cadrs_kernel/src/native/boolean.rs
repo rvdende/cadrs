@@ -5352,6 +5352,63 @@ pub fn split_nonmanifold(b: &mut Body) {
     }
 }
 
+/// Joins twin edges: two edges each used by one face only, in opposite senses, between the
+/// same two vertices along the same curve and range. Faces of the two inputs that lie on one
+/// another (a cut by a tool whose start is where an earlier cut by it ended: a coincident
+/// cylinder and plane) can each bring the seam between them as an edge of their own; the
+/// shell is closed by their being one.
+fn join_twin_edges(b: &mut Body) {
+    let mut uses: Vec<Vec<(usize, usize, bool)>> = vec![Vec::new(); b.edges.len()];
+    for (f, face) in b.faces.iter().enumerate() {
+        for (l, lp) in face.loops.iter().enumerate() {
+            for (i, c) in lp.iter().enumerate() {
+                if let Some(u) = uses.get_mut(c.edge) {
+                    u.push((f, l * 1_000_000 + i, c.fwd));
+                }
+            }
+        }
+    }
+    // The edges used once, by their vertices.
+    let mut by_ends: HashMap<[usize; 2], Vec<usize>> = HashMap::default();
+    for (e, u) in uses.iter().enumerate() {
+        let edge = &b.edges[e];
+        if u.len() == 1 && !edge.degenerate && edge.v[0] != edge.v[1] {
+            by_ends.entry(edge.v).or_default().push(e);
+        }
+    }
+    let same = |x: &Edge, y: &Edge| {
+        let scale = 1.0 + x.t[0].abs().max(x.t[1].abs());
+        let tol = x.tol.max(y.tol).max(super::tol::POINT);
+        (x.t[0] - y.t[0]).abs() <= 1e-9 * scale
+            && (x.t[1] - y.t[1]).abs() <= 1e-9 * scale
+            && [0.25, 0.5, 0.75].iter().all(|f| {
+                let t = x.t[0] + (x.t[1] - x.t[0]) * f;
+                (x.point(t) - y.point(t)).norm() <= tol
+            })
+    };
+    let mut moves: Vec<(usize, usize, usize, usize)> = Vec::new();
+    for es in by_ends.values() {
+        let mut taken = vec![false; es.len()];
+        for i in 0..es.len() {
+            for j in i + 1..es.len() {
+                if taken[i] || taken[j] {
+                    continue;
+                }
+                let (a, c) = (es[i], es[j]);
+                let (ua, uc) = (uses[a][0], uses[c][0]);
+                if ua.2 != uc.2 && ua.0 != uc.0 && same(&b.edges[a], &b.edges[c]) {
+                    taken[i] = true;
+                    taken[j] = true;
+                    moves.push((uc.0, uc.1 / 1_000_000, uc.1 % 1_000_000, a));
+                }
+            }
+        }
+    }
+    for (f, l, i, a) in moves {
+        b.faces[f].loops[l][i].edge = a;
+    }
+}
+
 /// Groups faces into shells by shared edges and shells into solids (outer shells and voids).
 pub fn assemble_shells(b: &mut Body) -> Result<()> {
     assemble_shells_with(b, None)
@@ -5361,6 +5418,7 @@ pub fn assemble_shells(b: &mut Body) -> Result<()> {
 /// ([`super::mass::faces_volume_terms`]): a shell's volume, which tells an outer shell from a
 /// void, is then their sum and not integrated again.
 pub(crate) fn assemble_shells_with(b: &mut Body, terms: Option<&[f64]>) -> Result<()> {
+    join_twin_edges(b);
     split_nonmanifold(b);
     let ef = b.edge_faces();
     let nf = b.faces.len();
