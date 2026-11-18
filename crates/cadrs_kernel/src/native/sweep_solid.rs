@@ -3907,6 +3907,387 @@ pub fn cut_swept_indexed(
     }
 }
 
+/// `target` less what any tool fills carried upright along a path whose every move is clear
+/// above the target or straight along `up` (a drill's program: down a hole in pecks, up, over
+/// to the next): the moves on one line that follow one another fill what one slide does, the
+/// tool drawn from the lowest of them to the highest, and each such slide is cut on its own.
+/// None for a path with another move that reaches the target.
+fn cut_plunges(
+    k: &mut NativeKernel,
+    target: BodyId,
+    b: &Body,
+    path: &[crate::PathCurve],
+    up: V3,
+) -> Option<OpResult> {
+    let up = up.try_normalize(tol::TINY)?;
+    let segs = super::sweep::path::path_segments(k, path).ok()?;
+    let p0 = segs.first()?.start();
+    let near = tol::REL_POINT * b.bbox().diagonal().max(tol::POINT);
+    let height = |p: &P3| p.coords.dot(&up);
+    let corners = |bb: &Bbox| {
+        let bb = *bb;
+        (0..8).map(move |i| {
+            let pick = |k: usize| {
+                if i >> k & 1 == 0 {
+                    bb.min[k]
+                } else {
+                    bb.max[k]
+                }
+            };
+            P3::new(pick(0), pick(1), pick(2))
+        })
+    };
+    // (The tool's lowest point below its place on the path, and the target's top.)
+    let bottom = corners(&b.bbox())
+        .map(|c| (c - p0).dot(&up))
+        .fold(f64::INFINITY, f64::min);
+    let over = corners(&k.get(target).ok()?.bbox())
+        .map(|c| height(&c))
+        .fold(f64::NEG_INFINITY, f64::max);
+    // Each hole: where the tool stands lowest in it, and how far up it is drawn from there.
+    let mut holes: Vec<(P3, f64)> = Vec::new();
+    let mut open = false;
+    for s in &segs {
+        let (a, z) = (s.start(), s.end());
+        let (ha, hz) = (height(&a), height(&z));
+        let lowest = (0..=8)
+            .map(|i| height(&s.c.point(s.t0 + (s.t1 - s.t0) * i as f64 / 8.0)))
+            .fold(ha.min(hz), f64::min);
+        if lowest + bottom >= over - near {
+            open = false;
+            continue;
+        }
+        let d = z - a;
+        let straight = (0..=4).all(|i| {
+            let f = i as f64 / 4.0;
+            let t = if s.rev {
+                s.t1 + (s.t0 - s.t1) * f
+            } else {
+                s.t0 + (s.t1 - s.t0) * f
+            };
+            (s.c.point(t) - (a + d * f)).norm() <= near
+        });
+        if !straight || (d - up * d.dot(&up)).norm() > near {
+            return None;
+        }
+        let (low, high) = if ha <= hz { (a, hz) } else { (z, ha) };
+        match holes.last_mut().filter(|_| open) {
+            Some(h) => {
+                let top = (height(&h.0) + h.1).max(high);
+                if height(&low) < height(&h.0) {
+                    h.0 = low;
+                }
+                h.1 = top - height(&h.0);
+            }
+            None => holes.push((low, high - height(&low))),
+        }
+        open = true;
+    }
+    if holes.is_empty() {
+        return None;
+    }
+    let mut at = target;
+    let mut cut: Option<OpResult> = None;
+    for (low, rise) in holes {
+        let tool = k.insert(b.transformed(&Affine::translation(low - p0)));
+        let step = cut_swept(k, at, tool, &SolidMotion::slide(up * rise));
+        k.release(tool);
+        if at != target {
+            k.release(at);
+        }
+        match step {
+            Ok(r) if r.bodies.len() == 1 => {
+                at = r.bodies[0];
+                cut = Some(r);
+            }
+            Ok(r) => {
+                for id in r.bodies {
+                    k.release(id);
+                }
+                return None;
+            }
+            Err(_) => return None,
+        }
+    }
+    cut
+}
+
+/// `target` less what a flat end mill fills carried upright through a program: a path of
+/// level moves (lines and arcs at one height), moves straight along the mill's axis (plunges
+/// and rises) and moves clear above the target. At each depth the mill reaches, everything
+/// within its radius of a level run there ([`super::offset::prism::wire_region`], exact in
+/// lines and arcs) and the disc under each plunge are one flat figure, united in the plane;
+/// that figure extruded from the depth to above the target is all the mill fills there
+/// within the target, and is cut from it in one boolean. (A plunge or a rise fills only the
+/// disc at its foot and a column above the mill's own top; a move's sweep cut on its own cuts
+/// again most of what the move before it cut.) None for another tool or path, where the mill's
+/// top would come below the target's (the column would then count), or the cuts aren't sound.
+fn cut_end_mill_program(
+    k: &mut NativeKernel,
+    target: BodyId,
+    b: &Body,
+    path: &[crate::PathCurve],
+    up: V3,
+) -> Option<OpResult> {
+    use crate::{Curve2, Loop, Region};
+    let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
+    let up = up.try_normalize(tol::TINY)?;
+    let segs = super::sweep::path::path_segments(k, path).ok()?;
+    let p0 = segs.first()?.start();
+    // The mill: a cylinder about the line through the path's start along `up`, between two
+    // flat ends.
+    if b.faces.len() != 3 || b.solids.len() != 1 {
+        return None;
+    }
+    let size = b.bbox().diagonal().max(tol::POINT);
+    let near = tol::REL_POINT * size;
+    let along = |v: &V3| v.normalize().cross(&up).norm() < 1e-9;
+    let (mut ends, mut radius) = (Vec::new(), None);
+    for f in &b.faces {
+        match &f.surf {
+            Surface::Plane { f } if along(&f.x.cross(&f.y)) => ends.push((f.o - p0).dot(&up)),
+            Surface::Cylinder { f, r } if along(&f.z) => {
+                let d = f.o - p0;
+                if (d - up * d.dot(&up)).norm() > near {
+                    return None;
+                }
+                radius = Some(*r);
+            }
+            _ => return None,
+        }
+    }
+    let (radius, [e0, e1]) = (radius?, <[f64; 2]>::try_from(ends).ok()?);
+    let (bottom, top) = (e0.min(e1), e0.max(e1));
+    let height = |p: &P3| p.coords.dot(&up);
+    let bb = k.get(target).ok()?.bbox();
+    let over = (0..8)
+        .map(|i| {
+            let pick = |k: usize| {
+                if i >> k & 1 == 0 {
+                    bb.min[k]
+                } else {
+                    bb.max[k]
+                }
+            };
+            height(&P3::new(pick(0), pick(1), pick(2)))
+        })
+        .fold(f64::NEG_INFINITY, f64::max);
+    // The plane's frame: x any way square to `up`.
+    let x = any_perpendicular(&up);
+    let y = up.cross(&x);
+    let rows = nalgebra::Matrix3::from_rows(&[x.transpose(), y.transpose(), up.transpose()]);
+    let flat = |p: &P3| nalgebra::Point2::new(p.coords.dot(&x), p.coords.dot(&y));
+    // Each depth's regions, by the height of the mill's flat end there.
+    let mut depths: Vec<(f64, Vec<Region>)> = Vec::new();
+    let mut add = |h: f64, r: Region| match depths.iter_mut().find(|d| (d.0 - h).abs() <= near) {
+        Some(d) => d.1.push(r),
+        None => depths.push((h, vec![r])),
+    };
+    let disc = |c: nalgebra::Point2<f64>, r: f64| Loop {
+        curves: vec![Curve2::circle(c, r)],
+    };
+    // The level run gathered so far: its moves in the plane's frame, at one height.
+    let mut run: Vec<(Curve, f64, f64)> = Vec::new();
+    let mut run_at = 0.0;
+    let mut reaches = false;
+    let flush = |run: &mut Vec<(Curve, f64, f64)>,
+                 h: f64,
+                 add: &mut dyn FnMut(f64, Region)|
+     -> Option<()> {
+        if run.is_empty() {
+            return Some(());
+        }
+        let wire = std::mem::take(run);
+        add(h, super::offset::prism::wire_region(&wire, radius).ok()?);
+        Some(())
+    };
+    for s in &segs {
+        let (a, z) = (s.start(), s.end());
+        // (A straight move given as a spline of two poles is a line from end to end.)
+        let straight = !matches!(s.c, Curve::Circle { .. })
+            && (z - a).norm() > near
+            && (0..=4).all(|i| {
+                let f = i as f64 / 4.0;
+                let t = if s.rev {
+                    s.t1 + (s.t0 - s.t1) * f
+                } else {
+                    s.t0 + (s.t1 - s.t0) * f
+                };
+                (s.c.point(t) - (a + (z - a) * f)).norm() <= near
+            });
+        let line;
+        let s = if straight {
+            let (c, l) = Curve::line(a, z);
+            line = super::sweep::path::Seg {
+                c,
+                t0: 0.0,
+                t1: l,
+                rev: false,
+            };
+            &line
+        } else {
+            s
+        };
+        let (ha, hz) = (height(&a), height(&z));
+        let level = (0..=8).all(|i| {
+            let t = s.t0 + (s.t1 - s.t0) * i as f64 / 8.0;
+            (height(&s.c.point(t)) - ha).abs() <= near
+        });
+        // (The mill's flat end above the target all along: nothing cut.)
+        let clear = ha.min(hz) + bottom >= over - near;
+        if !clear && ha.min(hz) + top < over - near {
+            // The mill's top under the target's: its plunges' columns would cut too.
+            return None;
+        }
+        if level && !clear {
+            let foot = ha + bottom;
+            if !run.is_empty() && (run_at - foot).abs() > near {
+                flush(&mut run, run_at, &mut add)?;
+            }
+            run_at = foot;
+            reaches = true;
+            // A whole circle: the ring within the radius of it (its hole where the circle is
+            // wider than the mill).
+            if let Curve::Circle { c, r, .. } = &s.c
+                && ((s.t1 - s.t0).abs() - TAU).abs() <= tol::ANGULAR
+            {
+                flush(&mut run, run_at, &mut add)?;
+                let centre = flat(c);
+                add(
+                    foot,
+                    Region {
+                        outer: disc(centre, r + radius),
+                        holes: if *r > radius + near {
+                            vec![disc(centre, r - radius)]
+                        } else {
+                            vec![]
+                        },
+                        source: None,
+                    },
+                );
+                continue;
+            }
+            if !matches!(s.c, Curve::Line { .. } | Curve::Circle { .. }) {
+                return None;
+            }
+            // The move in the plane's frame at its own height (z = 0 there).
+            let to_flat = Affine {
+                m: rows,
+                t: -(rows * (up * ha)),
+            };
+            let c = s.c.transformed(&to_flat);
+            run.push(if s.rev {
+                let (c, t0, t1) = c.reversed(s.t0, s.t1);
+                (c, t0, t1)
+            } else {
+                (c, s.t0, s.t1)
+            });
+            continue;
+        }
+        flush(&mut run, run_at, &mut add)?;
+        if clear {
+            continue;
+        }
+        // A move along the axis: the disc at its foot. Any other isn't this program's.
+        let d = z - a;
+        if !matches!(s.c, Curve::Line { .. }) || (d - up * d.dot(&up)).norm() > near {
+            return None;
+        }
+        reaches = true;
+        add(
+            ha.min(hz) + bottom,
+            Region {
+                outer: disc(flat(&a), radius),
+                holes: vec![],
+                source: None,
+            },
+        );
+    }
+    flush(&mut run, run_at, &mut add)?;
+    if !reaches {
+        return None;
+    }
+    // Each depth's figure extruded to a little above the target, cut from it: deepest first,
+    // and a depth whose figure lies within the deeper ones' not at all (what it would cut is
+    // cut already: a pocket stepped down over one outline is its last step's cut).
+    depths.sort_by(|p, q| p.0.total_cmp(&q.0));
+    let above = over + 0.1 * radius;
+    let mut at = target;
+    let mut cut: Option<OpResult> = None;
+    let mut deeper: Vec<Region> = Vec::new();
+    for (h, regions) in depths {
+        let n = regions.len();
+        let united = super::flat_union::union(&regions, None).and_then(|(own, _)| {
+            let m = deeper.len();
+            let mut all = std::mem::take(&mut deeper);
+            all.extend(own.iter().cloned());
+            let (both, adds) = super::flat_union::union(&all, Some(m))?;
+            deeper = both;
+            Ok((own, adds))
+        });
+        let regions = match united {
+            Ok((_, false)) => {
+                if debug {
+                    eprintln!("end mill program: depth {h}: {n} regions within the deeper ones");
+                }
+                continue;
+            }
+            Ok((own, true)) => own,
+            Err(e) => {
+                if debug {
+                    eprintln!("end mill program: depth {h}: its figure: {e}");
+                }
+                return None;
+            }
+        };
+        let prisms =
+            match super::offset::prism::regions_prisms(regions, P3::origin(), x, up, h, above) {
+                Ok(p) if !p.is_empty() => p,
+                Ok(_) => continue,
+                Err(e) => {
+                    if debug {
+                        eprintln!("end mill program: depth {h}: {e}");
+                    }
+                    return None;
+                }
+            };
+        if debug {
+            eprintln!(
+                "end mill program: depth {h}: {n} regions in {} solid(s)",
+                prisms.len()
+            );
+        }
+        let tools: Vec<BodyId> = prisms.into_iter().map(|p| k.insert(p)).collect();
+        let step = k.boolean(crate::BoolOp::Subtract, at, &tools);
+        for t in tools {
+            k.release(t);
+        }
+        if at != target {
+            k.release(at);
+        }
+        match step {
+            Ok(r) if r.bodies.len() == 1 => {
+                at = r.bodies[0];
+                cut = Some(r);
+            }
+            Ok(r) => {
+                for id in r.bodies {
+                    k.release(id);
+                }
+                return None;
+            }
+            Err(e) => {
+                if debug {
+                    eprintln!("end mill program: depth {h}: its cut: {e}");
+                }
+                return None;
+            }
+        }
+    }
+    let r = cut?;
+    r.bodies.iter().all(|&id| k.sound(id)).then_some(r)
+}
+
 /// `target` less what a ball-end mill fills carried upright along a pass of straight moves
 /// ([`super::sweep_ball_pass`]): the pass's solid up to a little above the target (and above
 /// the ball's highest centre), where that is below the lowest the mill's top comes. None for
@@ -3987,9 +4368,23 @@ pub fn cut_swept(
     {
         return Ok(r);
     }
+    // A flat end mill carried upright through a program of level moves and plunges: what it
+    // fills at each depth, united in the plane and extruded, cut once a depth.
+    if let SolidMotion::Path { path, up } = motion
+        && let Some(r) = cut_end_mill_program(k, target, &b, path, up.into_inner())
+    {
+        return Ok(r);
+    }
     // A motion whose ends keep clear of the target: within it the endless motion (a whole turn,
     // a screw without end) fills what this one does, and is made exactly as a whole (the solid
     // of revolution, the screw's helical sweep).
+    // Any tool carried through moves along its own line alone where it reaches the target (a
+    // drill's pecks): each hole's moves are one slide, from its lowest to its highest.
+    if let SolidMotion::Path { path, up } = motion
+        && let Some(r) = cut_plunges(k, target, &b, path, up.into_inner())
+    {
+        return Ok(r);
+    }
     if let Some(endless) = endless_within(&**k.get(target)?, &b, motion) {
         // (Its outline exact, then traced finely, then coarsely: a boolean may take the one and
         // not the other.)

@@ -186,6 +186,11 @@ pub mod fingerprint;
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod fingerprint;
 #[cfg(feature = "testkit")]
+pub mod flat_union;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod flat_union;
+#[cfg(feature = "testkit")]
 pub mod heal;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
