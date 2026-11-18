@@ -591,7 +591,9 @@ impl<'a> Read<'a> {
                 sh.faces.push(new);
             }
         }
-        let problems = nb.check();
+        // (Its faces point as the input's did, the cone's the way it was told to above: the
+        // check of how it is joined, without the solids' volumes for their sign.)
+        let problems = nb.check_structure();
         if !problems.is_empty() {
             return no(&format!("not sound: {problems:?}"));
         }

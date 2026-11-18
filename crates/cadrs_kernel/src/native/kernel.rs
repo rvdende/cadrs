@@ -2084,6 +2084,15 @@ impl Kernel for NativeKernel {
         )
     }
 
+    fn face_kinds(&self, body: BodyId) -> Result<Vec<SurfaceKind>> {
+        Ok(self
+            .get(body)?
+            .faces
+            .iter()
+            .map(|f| f.surf.kind())
+            .collect())
+    }
+
     fn faces(&self, body: BodyId) -> Result<Vec<FaceInfo>> {
         let e = self.entry(body)?;
         use rayon::prelude::*;
