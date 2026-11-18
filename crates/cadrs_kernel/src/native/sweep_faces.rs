@@ -113,6 +113,9 @@ fn seams_ahead(b: Body, mv: &Move) -> Body {
     let Some((o, a)) = axis_of_revolution(&b) else {
         return b;
     };
+    if crate::native::env_flag!("CADRS_NO_SEAMS_AHEAD") {
+        return b;
+    }
     let seam = b.faces.iter().find_map(|f| match &f.surf {
         Surface::Cylinder { f: fr, .. }
         | Surface::Cone { f: fr, .. }

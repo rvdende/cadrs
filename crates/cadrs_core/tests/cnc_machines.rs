@@ -1214,3 +1214,80 @@ fn the_worm_is_cut_exactly_as_it_plays() {
     assert!(full - seen[seen.len() - 1] > 400.0, "{seen:?}");
     assert!(seen.windows(2).all(|w| w[1] <= w[0] + 1e-6), "{seen:?}");
 }
+
+/// Scratch: a setup's whole run cut exactly as Simulate would (`CAM=3|4|5`), reporting time and
+/// failures.
+#[test]
+#[ignore = "diagnostic"]
+fn tmp_exact_run() {
+    use std::time::Instant;
+    let which = std::env::var("CAM").unwrap_or("3".into());
+    let (studio, setup_id, ops): (ElementId, CamId, Vec<CamId>) = match which.as_str() {
+        "3" => (cam3::STUDIO, cam3::SETUP, cam3::TOOLPATHS.to_vec()),
+        "4" => (cam4::STUDIO, cam4::SETUP, cam4::TOOLPATHS[..3].to_vec()),
+        _ => (cam5::STUDIO, cam5::SETUP, cam5::TOOLPATHS.to_vec()),
+    };
+    let doc = cnc::document().unwrap();
+    let paths: HashMap<CamId, cadrs_cam::Toolpath> = ops
+        .iter()
+        .map(|&op| (op, toolpath(&doc, studio, op)))
+        .collect();
+    let cam = doc.element(studio).unwrap().cam().unwrap();
+    let parts = cadrs_core::rebuild::build(cam.part_features())
+        .parts
+        .clone();
+    let (job, setup) = cam.setup(setup_id).unwrap();
+    let run = program::setup_run(cam, job, setup, &parts, &paths, None).unwrap();
+    let machine = job.machine.as_ref().unwrap();
+    let shape = program::stock_shape(cam, job, &parts).unwrap();
+    let stock = program::stock_in(&shape, &run.frame);
+    let above = [0.0, 0.0, stock.bounds.max[2] + 30.0];
+    let motions = program::run_motions(setup, job, &run, above);
+    let track = program::axis_track(machine, &run, &motions);
+    let moves: usize = motions.iter().map(|m| m.len()).sum();
+    let mut exact =
+        cadrs_core::cam::exact::ExactStock::new(machine, &run, &shape, &motions, &track.rows)
+            .unwrap();
+    let full = exact.volume();
+    println!(
+        "cam {which}: {moves} moves in {} cuts, stock {full:.1}",
+        exact.cut_count()
+    );
+    let steps: usize = std::env::var("STEPS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(20);
+    let at = Instant::now();
+    for i in 1..=steps {
+        let n = (i * moves / steps).min(moves - 1);
+        let t = Instant::now();
+        exact.cut_to(n, if i == steps { 1.0 } else { 0.5 });
+        println!(
+            "  to move {n}: {:.2} s, {:.1} mm³, {} failed so far",
+            t.elapsed().as_secs_f64(),
+            exact.volume(),
+            exact.failed.len()
+        );
+        if at.elapsed().as_secs_f64()
+            > std::env::var("LIMIT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(600.0)
+        {
+            println!("  (stopped: ten minutes)");
+            break;
+        }
+    }
+    let r = program::simulate_solid(cam, job, setup, &run, &parts, &paths, None, 0.3).unwrap();
+    println!(
+        "removed exactly {:.1}, on the lattice {:.1}; failures {:?}",
+        full - exact.volume(),
+        r.removed,
+        exact
+            .failed
+            .iter()
+            .map(|(c, e)| format!("{c}: {}", e.chars().take(100).collect::<String>()))
+            .take(5)
+            .collect::<Vec<_>>()
+    );
+}

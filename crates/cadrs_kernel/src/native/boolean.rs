@@ -5400,6 +5400,9 @@ pub fn split_nonmanifold(b: &mut Body) {
 /// edge of their own; the shell is closed by their being one. The one face's use is moved onto
 /// the other's edge, its p-curve made again on its surface from where the old one started.
 fn join_twin_edges(b: &mut Body) {
+    if super::env_flag!("CADRS_NO_TWINS") {
+        return;
+    }
     let mut uses: Vec<Vec<(usize, usize, usize)>> = vec![Vec::new(); b.edges.len()];
     for (f, face) in b.faces.iter().enumerate() {
         for (l, lp) in face.loops.iter().enumerate() {

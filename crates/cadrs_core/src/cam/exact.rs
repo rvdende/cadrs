@@ -1001,6 +1001,9 @@ impl ExactStock {
     /// have to split, slowly and badly. Faces that wide are the merging's, not the toolpath's.
     /// `body` as it is when the heal doesn't leave it sound.
     fn without_slivers(&mut self, body: BodyId) -> BodyId {
+        if std::env::var_os("CADRS_EXACT_NO_HEAL").is_some() {
+            return body;
+        }
         let Ok(r) = self
             .k
             .heal(body, &[cadrs_kernel::HealOp::Slivers { width: merge() }])
