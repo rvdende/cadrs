@@ -1405,8 +1405,7 @@ fn run_jobs<const ALL: bool>(
     };
     let table = table.as_ref();
     const CHUNK: usize = 32;
-    if jobs.len() >= 2 * CHUNK {
-        super::par::start();
+    if jobs.len() >= 2 * CHUNK && super::par::threads_for(jobs.len() / CHUNK, false) {
         let parts: Vec<QE> = jobs
             .par_chunks(CHUNK)
             .map(|c| {

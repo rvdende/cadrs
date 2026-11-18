@@ -729,81 +729,81 @@ fn edge_infos_with(b: &Body, detail: Detail) -> Vec<EdgeInfo> {
     let ef = b.edge_faces();
     // (Side by side: each edge's smoothness projects onto its faces, a part's display a
     // tenth of a second of a rebuild's own thread.)
-    super::par::start();
-    b.edges
-        .par_iter()
-        .enumerate()
-        .map(|(ei, e)| {
-            let faces = match &ef[ei] {
-                [] => [None, None],
-                [a] => [Some(FaceId(*a as u64)), None],
-                [a, b, ..] => [Some(FaceId(*a as u64)), Some(FaceId(*b as u64))],
-            };
-            let (t0, t1) = (e.t[0], e.t[1]);
-            let tan = |t: f64| {
-                let d = e.curve.tangent(t);
-                let l = d.norm();
-                if l > 0.0 { d / l } else { d }
-            };
-            let circle = match &e.curve {
-                Curve::Circle { c, x, y, r } if !e.degenerate => Some(Circle3 {
+    let one = |(ei, e): (usize, &super::topo::Edge)| {
+        let faces = match &ef[ei] {
+            [] => [None, None],
+            [a] => [Some(FaceId(*a as u64)), None],
+            [a, b, ..] => [Some(FaceId(*a as u64)), Some(FaceId(*b as u64))],
+        };
+        let (t0, t1) = (e.t[0], e.t[1]);
+        let tan = |t: f64| {
+            let d = e.curve.tangent(t);
+            let l = d.norm();
+            if l > 0.0 { d / l } else { d }
+        };
+        let circle = match &e.curve {
+            Curve::Circle { c, x, y, r } if !e.degenerate => Some(Circle3 {
+                center: *c,
+                normal: nalgebra::Unit::new_normalize(x.cross(y)),
+                radius: *r,
+            }),
+            _ => None,
+        };
+        let ellipse = match &e.curve {
+            Curve::Ellipse { c, x, y, a, b } if !e.degenerate => Some(if a >= b {
+                Ellipse3 {
                     center: *c,
-                    normal: nalgebra::Unit::new_normalize(x.cross(y)),
-                    radius: *r,
-                }),
-                _ => None,
-            };
-            let ellipse = match &e.curve {
-                Curve::Ellipse { c, x, y, a, b } if !e.degenerate => Some(if a >= b {
-                    Ellipse3 {
-                        center: *c,
-                        major: x * *a,
-                        minor: y * *b,
+                    major: x * *a,
+                    minor: y * *b,
+                }
+            } else {
+                Ellipse3 {
+                    center: *c,
+                    major: y * *b,
+                    minor: x * *a,
+                }
+            }),
+            _ => None,
+        };
+        EdgeInfo {
+            id: EdgeId(ei as u64),
+            faces,
+            length: match detail {
+                _ if e.degenerate => 0.0,
+                Detail::Light => 0.0,
+                Detail::Full => e.curve.length(t0, t1),
+                Detail::Shown(short) => {
+                    let chord = (b.verts[e.v[1]].p - b.verts[e.v[0]].p).norm();
+                    if chord < short {
+                        e.curve.length(t0, t1)
+                    } else {
+                        chord
                     }
-                } else {
-                    Ellipse3 {
-                        center: *c,
-                        major: y * *b,
-                        minor: x * *a,
-                    }
-                }),
-                _ => None,
-            };
-            EdgeInfo {
-                id: EdgeId(ei as u64),
-                faces,
-                length: match detail {
-                    _ if e.degenerate => 0.0,
-                    Detail::Light => 0.0,
-                    Detail::Full => e.curve.length(t0, t1),
-                    Detail::Shown(short) => {
-                        let chord = (b.verts[e.v[1]].p - b.verts[e.v[0]].p).norm();
-                        if chord < short {
-                            e.curve.length(t0, t1)
-                        } else {
-                            chord
-                        }
-                    }
-                },
-                curve: curve_kind(e),
-                start: b.verts[e.v[0]].p,
-                end: b.verts[e.v[1]].p,
-                mid: if e.degenerate {
-                    b.verts[e.v[0]].p
-                } else {
-                    e.point(e.mid_t())
-                },
-                start_tangent: tan(t0),
-                end_tangent: tan(t1),
-                circle,
-                ellipse,
-                // (Not without the lengths, for tangent chains: those ask of the edges they
-                // reach only, [`NativeKernel::tangent_chain`].)
-                smooth: !matches!(detail, Detail::Light)
-                    && super::blend::smooth_within(b, ei, TANGENT_ANGLE),
-            }
-        })
-        .collect()
+                }
+            },
+            curve: curve_kind(e),
+            start: b.verts[e.v[0]].p,
+            end: b.verts[e.v[1]].p,
+            mid: if e.degenerate {
+                b.verts[e.v[0]].p
+            } else {
+                e.point(e.mid_t())
+            },
+            start_tangent: tan(t0),
+            end_tangent: tan(t1),
+            circle,
+            ellipse,
+            // (Not without the lengths, for tangent chains: those ask of the edges they
+            // reach only, [`NativeKernel::tangent_chain`].)
+            smooth: !matches!(detail, Detail::Light)
+                && super::blend::smooth_within(b, ei, TANGENT_ANGLE),
+        }
+    };
+    if super::par::threads_for(b.edges.len(), false) {
+        b.edges.par_iter().enumerate().map(one).collect()
+    } else {
+        b.edges.iter().enumerate().map(one).collect()
+    }
 }
 
 /// Copies the listed faces (with the edges and vertices they use) into a new body; returns it
@@ -2082,6 +2082,15 @@ impl Kernel for NativeKernel {
             },
             (a1 - a0).min(TAU),
         )
+    }
+
+    fn face_kinds(&self, body: BodyId) -> Result<Vec<SurfaceKind>> {
+        Ok(self
+            .get(body)?
+            .faces
+            .iter()
+            .map(|f| f.surf.kind())
+            .collect())
     }
 
     fn faces(&self, body: BodyId) -> Result<Vec<FaceInfo>> {

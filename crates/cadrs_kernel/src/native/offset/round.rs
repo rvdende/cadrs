@@ -1758,6 +1758,62 @@ impl Support {
     }
 }
 
+/// Points all over the faces of `b`, no chord between neighbours sagging more than `sag` off
+/// its face: each face's loops' points (as its polygons have them) and a grid in its (u, v)
+/// inside them, as fine as its surface's bend asks. None where a face is neither a plane, a
+/// cylinder, a cone, a sphere nor a torus (a mesh has such a face's points). No triangles are
+/// made: a body's mesh to that sag took most of a small shell's time.
+fn face_samples(b: &Body, sag: f64) -> Option<Vec<P3>> {
+    use crate::native::classify;
+    let mut pts: Vec<P3> = b.verts.iter().map(|v| v.p).collect();
+    // The step of an angle whose chord sags `sag` on a circle of radius r.
+    let turn = |r: f64| (8.0 * sag / r.abs().max(sag)).sqrt().clamp(0.02, 0.5);
+    for f in &b.faces {
+        // (u, v) steps: an angle's on the round directions, a few across a straight one.
+        let (du, dv) = match &f.surf {
+            Surface::Plane { .. } => (None, None),
+            Surface::Cylinder { r, .. } => (Some(turn(*r)), None),
+            Surface::Cone { r, .. } => (Some(turn(r.abs().max(sag))), None),
+            Surface::Sphere { r, .. } => (Some(turn(*r)), Some(turn(*r))),
+            Surface::Torus { rmaj, rmin, .. } => (Some(turn(rmaj + rmin)), Some(turn(*rmin))),
+            _ => return None,
+        };
+        let kept = classify::face_polygons_kept(b, f);
+        let (polys, boxes) = (&kept.0, &kept.1);
+        let (mut lo, mut hi) = (
+            P2::new(f64::INFINITY, f64::INFINITY),
+            P2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
+        );
+        for q in polys.iter().flatten() {
+            lo = P2::new(lo.x.min(q.x), lo.y.min(q.y));
+            hi = P2::new(hi.x.max(q.x), hi.y.max(q.y));
+            pts.push(f.surf.eval(q.x, q.y));
+        }
+        if !(lo.x < hi.x && lo.y < hi.y) {
+            continue;
+        }
+        let steps = |span: f64, step: Option<f64>| match step {
+            Some(s) => ((span / s).ceil() as usize).clamp(4, 512),
+            None => 8,
+        };
+        let (nu, nv) = (steps(hi.x - lo.x, du), steps(hi.y - lo.y, dv));
+        for i in 1..nu {
+            for j in 1..nv {
+                let uv = P2::new(
+                    lo.x + (hi.x - lo.x) * i as f64 / nu as f64,
+                    lo.y + (hi.y - lo.y) * j as f64 / nv as f64,
+                );
+                if classify::in_face_boxed(polys, boxes, &f.surf, uv, 0.0)
+                    != classify::InFace::Outside
+                {
+                    pts.push(f.surf.eval(uv.x, uv.y));
+                }
+            }
+        }
+    }
+    Some(pts)
+}
+
 /// The cavity of an inward shell `t` thick open at the `remove` faces, when the surface of every
 /// wall (each face kept) bounds the whole body (the body on one side of the whole plane,
 /// cylinder, sphere or cone): the walls moved in by t are then those surfaces moved in, extended or
@@ -1769,12 +1825,20 @@ fn cavity_of_supports(b: &Body, remove: &[usize], t: f64) -> Option<Result<Optio
     let bb = b.bbox();
     let size = bb.diagonal();
     let close = tol::POINT.max(tol::REL * size);
-    let (meshes, _) = crate::native::tess::mesh_body(b, 1e-3 * size, 0.2);
-    let pts: Vec<P3> = meshes
-        .iter()
-        .flat_map(|m| m.positions.iter().copied())
-        .chain(b.verts.iter().map(|v| v.p))
-        .collect();
+    // Points of the body's faces, a chord's sag of a thousandth of its size apart at most:
+    // sampled straight off its faces where they are planes, cylinders, cones, spheres and
+    // tori (their loops' points and a grid inside them), else its mesh's.
+    let pts: Vec<P3> = match face_samples(b, 1e-3 * size) {
+        Some(pts) => pts,
+        None => {
+            let (meshes, _) = crate::native::tess::mesh_body(b, 1e-3 * size, 0.2);
+            meshes
+                .iter()
+                .flat_map(|m| m.positions.iter().copied())
+                .chain(b.verts.iter().map(|v| v.p))
+                .collect()
+        }
+    };
     // A concave edge between two walls rounds a rounded shell's cavity: not this one's.
     let ef = b.edge_faces();
     if (0..b.edges.len()).any(|e| {

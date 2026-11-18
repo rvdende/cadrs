@@ -15,9 +15,17 @@ static WARM: AtomicBool = AtomicBool::new(false);
 /// Items past which a loop of light ones is worth the threads.
 const MANY: usize = 64;
 
+/// Heavy items (a millisecond each, about) past which a loop is worth starting the threads
+/// for: starting them costs about one item, and a few more in the first loop's waking.
+const HEAVY: usize = 4;
+
+/// Items of some weight past which a loop is worth the threads ([`threads_for_some`]).
+const SOME: usize = 16;
+
 /// Whether a loop over `n` items should run on the threads: `heavy` when each may take long
 /// (a B-spline face's integrals, a numeric surface intersection). When it should, the pool is
 /// started ([`start`]).
+#[track_caller]
 pub(crate) fn threads_for(n: usize, heavy: bool) -> bool {
     if n < 2 {
         return false;
@@ -25,7 +33,24 @@ pub(crate) fn threads_for(n: usize, heavy: bool) -> bool {
     if WARM.load(Ordering::Relaxed) {
         return true;
     }
-    if heavy || n >= MANY {
+    if (heavy && n >= HEAVY) || n >= MANY {
+        start();
+        return true;
+    }
+    false
+}
+
+/// [`threads_for`] a loop of `n` items of some weight each (a face split, a face's p-curves
+/// fitted: tens of microseconds): worth the threads from [`SOME`] of them.
+#[track_caller]
+pub(crate) fn threads_for_some(n: usize) -> bool {
+    if n < 2 {
+        return false;
+    }
+    if WARM.load(Ordering::Relaxed) {
+        return true;
+    }
+    if n >= SOME {
         start();
         return true;
     }
@@ -42,7 +67,12 @@ pub(crate) fn threads_for(n: usize, heavy: bool) -> bool {
 /// passing the threads to another that starts them; the caller waits only until the pool is
 /// being made (inside rayon's once-only initialization, which a loop of the caller's then waits
 /// out: the handing over takes microseconds).
+#[track_caller]
 pub(crate) fn start() {
+    // (`CADRS_PAR_DEBUG=1` says which loop started the threads: a small build's shouldn't.)
+    if !WARM.load(Ordering::Relaxed) && std::env::var_os("CADRS_PAR_DEBUG").is_some() {
+        eprintln!("PAR first started at {}", std::panic::Location::caller());
+    }
     WARM.store(true, Ordering::Relaxed);
     #[cfg(not(target_arch = "wasm32"))]
     {

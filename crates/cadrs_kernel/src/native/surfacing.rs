@@ -109,6 +109,18 @@ pub fn thicken(k: &mut NativeKernel, spec: &ThickenSpec) -> Result<OpResult> {
     }
     let mut acc: Option<Body> = None;
     for s in &sheets {
+        // A whole band of a surface of revolution thickened both ways: one slab from one
+        // side to the other, not two united.
+        if spec.along > tol::ROUNDOFF
+            && spec.against > tol::ROUNDOFF
+            && let Some(sl) = super::offset::slab::band_slab(s, 0, -spec.against, spec.along)
+        {
+            acc = Some(match acc {
+                None => sl,
+                Some(a) => super::boolean::boolean_bodies(&a, &sl, BoolOp::Union)?.body,
+            });
+            continue;
+        }
         for d in [spec.along, -spec.against] {
             if d.abs() < tol::ROUNDOFF {
                 continue;

@@ -3310,6 +3310,8 @@ pub fn chamfer_tool(
     let b = std::sync::Arc::clone(k.get(body)?);
     let edges = &real_edges(&b, edges)?[..];
     let mut list: Vec<EdgeBlend> = Vec::new();
+    // (Each edge's two distances along its faces' tangents, by face.)
+    let mut rim: Vec<Option<[(usize, f64); 2]>> = Vec::new();
     for &e in edges {
         let flip = opts.flip != opts.flipped.contains(&e);
         let ei = e.0 as usize;
@@ -3406,14 +3408,47 @@ pub fn chamfer_tool(
             }),
             ChamferSpec::EqualDistance(d) => {
                 let (d1, d2) = told(d, d);
+                rim.push(
+                    edge_sides(&b, ei)
+                        .ok()
+                        .map(|s| [(s[s0].0, d1), (s[s1].0, d2)]),
+                );
                 Box::new(move |_| SectionKind::Chamfer { d1, d2 })
             }
             ChamferSpec::TwoDistances(a, c) => {
                 let (d1, d2) = told(a, c);
+                rim.push(
+                    edge_sides(&b, ei)
+                        .ok()
+                        .map(|s| [(s[s0].0, d1), (s[s1].0, d2)]),
+                );
                 Box::new(move |_| SectionKind::Chamfer { d1, d2 })
             }
         };
         list.push((e, kind, flip));
+    }
+    // One rim (a whole circle, in one edge or several, between faces turned about its axis)
+    // cut between the same two distances all round: in closed form, no tool made and no
+    // boolean ([`super::rim_blend`]).
+    if rim.len() == edges.len()
+        && let Some(Some(told)) = rim.first().copied()
+        && rim.iter().all(|r| {
+            r.is_some_and(|r| {
+                told.iter().all(|(f, d)| {
+                    r.iter()
+                        .any(|(g, x)| g == f && (x - d).abs() <= tol::REL_POINT * (1.0 + d))
+                })
+            })
+        })
+        && std::env::var_os("CADRS_NO_RIM_BLEND").is_none()
+        && let Some((out, src)) = super::rim_blend::rim_chamfer_through(
+            &b,
+            body,
+            &edges.iter().map(|e| e.0 as usize).collect::<Vec<_>>(),
+            told,
+        )
+    {
+        return Ok(Tracked { body: out, src }.into_result(k, body));
     }
     blend(k, body, &list, false)
 }

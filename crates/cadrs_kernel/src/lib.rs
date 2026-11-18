@@ -1225,6 +1225,12 @@ pub trait Kernel {
     /// plane (planar faces), area, centroid, and axis and radius (surfaces of revolution).
     fn faces(&self, body: BodyId) -> Result<Vec<FaceInfo>>;
 
+    /// Each face's surface kind, in id order: what [`Self::faces`] says of it, without the
+    /// rest (a face's area and centroid are integrals over it).
+    fn face_kinds(&self, body: BodyId) -> Result<Vec<SurfaceKind>> {
+        Ok(self.faces(body)?.iter().map(|f| f.kind).collect())
+    }
+
     /// The body's edges in id order, with the faces on either side, exact length, ends,
     /// tangents and (circular edges) the exact circle. A wire body's edges have no faces.
     fn edges(&self, body: BodyId) -> Result<Vec<EdgeInfo>>;

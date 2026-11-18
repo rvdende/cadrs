@@ -3002,3 +3002,81 @@ fn a_slant_cut_cylinders_rim_chamfered_by_distance_and_angle() {
     }
     assert!(seen > 0, "the chamfer's edge on the cut");
 }
+
+/// A rim chamfered in closed form (`native::rim_blend`): a drum's top rim, a whole circle
+/// between its side and its top, cut back to two circles with a cone between them, by equal
+/// distances, by two, and by a distance and an angle. What is cut off is a ring of
+/// triangular section, its volume the triangle's area round its centre of area (Pappus).
+#[test]
+fn a_drums_rim_chamfered_in_closed_form() {
+    use nalgebra::{Point3, Vector3};
+    use std::f64::consts::PI;
+    let (r, h) = (5.0, 10.0);
+    let drum = |k: &mut NativeKernel| {
+        k.primitive(&Primitive::cylinder(Point3::origin(), Vector3::z(), r, h))
+            .unwrap()
+            .first()
+            .unwrap()
+    };
+    // The ring cut off where the chamfer runs `across` the top and `down` the side.
+    let ring = |across: f64, down: f64| 2.0 * PI * (r - across / 3.0) * (across * down / 2.0);
+    let whole = PI * r * r * h;
+    let rim_and_top = |k: &NativeKernel, b: BodyId| {
+        let rim = k
+            .edges(b)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.circle.is_some_and(|c| (c.center.z - h).abs() < 1e-9))
+            .unwrap()
+            .id;
+        let top = k
+            .faces(b)
+            .unwrap()
+            .into_iter()
+            .find(|f| f.kind == SurfaceKind::Plane && (f.center.z - h).abs() < 1e-9)
+            .unwrap()
+            .id;
+        (rim, top)
+    };
+    let check = |k: &NativeKernel, out: BodyId, want: f64| {
+        let b = k.get(out).unwrap();
+        assert!(b.check().is_empty(), "{:?}", b.check());
+        assert_eq!(
+            b.faces().len(),
+            4,
+            "the side, the top, the bottom and the cone"
+        );
+        assert_eq!(
+            b.faces()
+                .iter()
+                .filter(|f| matches!(f.surf, Surface::Cone { .. }))
+                .count(),
+            1
+        );
+        let v = k.mass_properties(out).unwrap().volume;
+        assert!((v - want).abs() < 1e-9 * want, "{v} for {want}");
+    };
+
+    let mut k = NativeKernel::new();
+    let b = drum(&mut k);
+    let (rim, top) = rim_and_top(&k, b);
+    let out = k
+        .chamfer(b, &[rim], ChamferSpec::EqualDistance(1.0))
+        .unwrap()
+        .first()
+        .unwrap();
+    check(&k, out, whole - ring(1.0, 1.0));
+
+    let opts = ChamferOpts::new(ChamferSpec::TwoDistances(1.0, 2.0)).first_on(top);
+    let out = k.chamfer_with(b, &[rim], &opts).unwrap().first().unwrap();
+    check(&k, out, whole - ring(1.0, 2.0));
+
+    // One across the top at 60° to it: √3 down the side.
+    let opts = ChamferOpts::new(ChamferSpec::DistanceAngle {
+        distance: 1.0,
+        angle: PI / 3.0,
+    })
+    .first_on(top);
+    let out = k.chamfer_with(b, &[rim], &opts).unwrap().first().unwrap();
+    check(&k, out, whole - ring(1.0, 3f64.sqrt()));
+}

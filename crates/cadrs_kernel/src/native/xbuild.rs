@@ -1190,31 +1190,40 @@ impl XBuilder {
     fn fit_pcurves(&mut self, dropped: &[bool]) {
         use rayon::prelude::*;
         let edges = &self.body.edges;
-        super::par::start();
-        let fits: Vec<Vec<((usize, usize), Curve)>> = self
-            .faces
-            .par_iter()
-            .enumerate()
-            .filter(|(fi, _)| !dropped[*fi])
-            .map(|(fi, f)| {
-                let per = periods(&f.surf);
-                let mut seen = std::collections::HashSet::new();
-                f.loops
-                    .iter()
-                    .flatten()
-                    .filter(|(e, _)| seen.insert(*e))
-                    .map(|&(e, _)| {
-                        let ed = &edges[e];
-                        (
-                            (fi, e),
-                            snap_tiny(pcurve_unsnapped_on(
-                                &f.surf, &per, &ed.curve, ed.t[0], ed.t[1], ed.tol,
-                            )),
-                        )
-                    })
+        let one = |(fi, f): (usize, &XFace)| -> Vec<((usize, usize), Curve)> {
+            let per = periods(&f.surf);
+            let mut seen = std::collections::HashSet::new();
+            f.loops
+                .iter()
+                .flatten()
+                .filter(|(e, _)| seen.insert(*e))
+                .map(|&(e, _)| {
+                    let ed = &edges[e];
+                    (
+                        (fi, e),
+                        snap_tiny(pcurve_unsnapped_on(
+                            &f.surf, &per, &ed.curve, ed.t[0], ed.t[1], ed.tol,
+                        )),
+                    )
+                })
+                .collect()
+        };
+        let fits: Vec<Vec<((usize, usize), Curve)>> =
+            if super::par::threads_for_some(self.faces.len()) {
+                self.faces
+                    .par_iter()
+                    .enumerate()
+                    .filter(|(fi, _)| !dropped[*fi])
+                    .map(one)
                     .collect()
-            })
-            .collect();
+            } else {
+                self.faces
+                    .iter()
+                    .enumerate()
+                    .filter(|(fi, _)| !dropped[*fi])
+                    .map(one)
+                    .collect()
+            };
         self.pc_cache.get_mut().extend(fits.into_iter().flatten());
     }
 

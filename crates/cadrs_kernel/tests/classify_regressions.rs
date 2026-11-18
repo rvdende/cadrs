@@ -167,3 +167,47 @@ fn beside_a_slanted_holes_wall() {
     }
     assert!(were_wrong > 0, "the polygons alone have every point right");
 }
+
+/// Two balls' common part: each ball is turned so the circle they meet in is one of its
+/// latitudes, whose p-curve is a straight line in the sphere's (u, v), exact, where a circle
+/// about another line had to be fitted. The lens is two caps, each of height r − d/2.
+#[test]
+fn two_balls_meet_in_a_latitude_of_each() {
+    use cadrs_kernel::native::NativeKernel;
+    use cadrs_kernel::native::curve::Curve;
+    use cadrs_kernel::{BoolOp, Kernel, Primitive};
+    use nalgebra::{Point3, Vector3};
+    let mut k = NativeKernel::new();
+    let ball = |k: &mut NativeKernel, c: Point3<f64>| {
+        k.primitive(&Primitive::ball(c, 5.0))
+            .unwrap()
+            .first()
+            .unwrap()
+    };
+    // (Aslant of every axis: neither ball's own poles are on the line of centres.)
+    let d = Vector3::new(3.0, 4.0, 5.0).normalize() * 6.0;
+    let (a, b) = (
+        ball(&mut k, Point3::origin()),
+        ball(&mut k, Point3::origin() + d),
+    );
+    let lens = k
+        .boolean(BoolOp::Intersect, a, &[b])
+        .unwrap()
+        .first()
+        .unwrap();
+    let body = k.get(lens).unwrap();
+    assert!(body.check().is_empty(), "{:?}", body.check());
+    assert_eq!(body.faces.len(), 2);
+    for f in &body.faces {
+        for c in f.loops.iter().flatten() {
+            assert!(
+                !matches!(c.pc, Curve::Nurbs(_)),
+                "a fitted p-curve on a face of the lens"
+            );
+        }
+    }
+    let h: f64 = 5.0 - 3.0;
+    let want = 2.0 * std::f64::consts::PI * h * h * (3.0 * 5.0 - h) / 3.0;
+    let v = k.mass_properties(lens).unwrap().volume;
+    assert!((v - want).abs() < 1e-9 * want, "{v} for {want}");
+}

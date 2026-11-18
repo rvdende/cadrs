@@ -473,3 +473,98 @@ fn thicken_mitres_a_spline_wall_by_its_tangent_strip() {
         "{sharp} - {round} against {more}"
     );
 }
+
+/// A whole band of a surface of revolution thickened: its slab is its meridian's flat figure
+/// turned once (`offset::slab::band_slab`), so a drum's wall is a tube and a frustum's a
+/// rectangle turned about the axis, whose volume is its area round its centre (Pappus); both
+/// ways at once is one slab, not two united.
+#[test]
+fn thicken_a_band_turns_its_meridians_figure() {
+    use std::f64::consts::PI;
+    let side = |k: &DefaultKernel, b: BodyId, kind: SurfaceKind| {
+        let f = k
+            .faces(b)
+            .unwrap()
+            .into_iter()
+            .find(|f| f.kind == kind)
+            .unwrap();
+        FaceInput {
+            body: b,
+            face: f.id,
+            source: 0,
+        }
+    };
+    let thick = |k: &mut DefaultKernel, face: FaceInput, along: f64, against: f64| {
+        let r = k
+            .thicken_surfaces(&ThickenSpec {
+                bodies: vec![],
+                faces: vec![face],
+                profiles: vec![],
+                along,
+                against,
+                sharp: false,
+                source: 7,
+            })
+            .unwrap();
+        assert_eq!(r.bodies.len(), 1);
+        r.bodies[0]
+    };
+    let mut k = DefaultKernel::new();
+    let (r, h) = (5.0, 10.0);
+    let drum = k
+        .primitive(&Primitive::cylinder(Point3::origin(), Vector3::z(), r, h))
+        .unwrap()
+        .first()
+        .unwrap();
+    let wall = side(&k, drum, SurfaceKind::Cylinder);
+    let out = thick(&mut k, wall, 1.0, 0.0);
+    close(
+        k.mass_properties(out).unwrap().volume,
+        PI * ((r + 1.0).powi(2) - r * r) * h,
+        1e-9,
+    );
+    assert_eq!(
+        k.faces(out).unwrap().len(),
+        4,
+        "two walls and two flat rings"
+    );
+    let out = thick(&mut k, wall, 1.0, 0.5);
+    close(
+        k.mass_properties(out).unwrap().volume,
+        PI * ((r + 1.0).powi(2) - (r - 0.5).powi(2)) * h,
+        1e-9,
+    );
+    assert_eq!(k.faces(out).unwrap().len(), 4, "one slab, not two united");
+
+    // A frustum from radius 6 at the bottom to 3 at height 4: its wall 5 long, leaning out
+    // of upright by atan(3/4); thickened 1 outward, a 5 × 1 rectangle whose centre is half
+    // the thickness out along the wall's normal from the wall's middle.
+    let frustum = k
+        .primitive(&Primitive::cone(
+            Point3::origin(),
+            Vector3::z(),
+            6.0,
+            3.0,
+            4.0,
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let wall = side(&k, frustum, SurfaceKind::Cone);
+    let out = thick(&mut k, wall, 1.0, 0.0);
+    let centre = 4.5 + 0.5 * (4.0 / 5.0);
+    close(
+        k.mass_properties(out).unwrap().volume,
+        2.0 * PI * centre * 5.0,
+        1e-9,
+    );
+    assert_eq!(
+        k.faces(out)
+            .unwrap()
+            .iter()
+            .filter(|f| f.kind == SurfaceKind::Cone)
+            .count(),
+        4,
+        "its two walls and its two ends, each a cone, none a fitted surface"
+    );
+}
