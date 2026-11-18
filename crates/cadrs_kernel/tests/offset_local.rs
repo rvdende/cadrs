@@ -2270,3 +2270,69 @@ fn a_draft_brings_two_faces_that_werent_neighbours_together() {
     let v = k.mass_properties(out).unwrap().volume;
     assert!((v - want).abs() < 1e-9 * want, "volume {v}, want {want}");
 }
+
+/// A groove down a block's side, cut by a rod leaning five degrees: part of a cylinder that
+/// doesn't run along the pull, meeting the side, the top and the foot. Its wall drafted three
+/// degrees about the top, the foot or the middle is a sound body each time (the leant surface
+/// runs on past the wall's two sides to meet the block's side again), with more left of the
+/// block the higher the plane the wall is turned about.
+#[test]
+fn a_draft_leans_a_grooves_wall() {
+    let mut k = NativeKernel::new();
+    let block = k
+        .primitive(&Primitive::block(
+            Point3::new(-10.0, -10.0, 0.0),
+            Point3::new(10.0, 10.0, 10.0),
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let lean = 5f64.to_radians();
+    let dir = Vector3::new(lean.sin(), 0.0, lean.cos());
+    let rod = k
+        .primitive(&Primitive::cylinder(
+            Point3::new(10.0, 0.0, 0.0) - dir * 5.0,
+            dir,
+            3.0,
+            30.0,
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let grooved = k
+        .boolean(BoolOp::Subtract, block, &[rod])
+        .unwrap()
+        .first()
+        .unwrap();
+    let wall = k
+        .faces(grooved)
+        .unwrap()
+        .iter()
+        .find(|f| f.kind == SurfaceKind::Cylinder)
+        .map(|f| f.id)
+        .unwrap();
+    let was = k.mass_properties(grooved).unwrap().volume;
+    let about = |k: &mut NativeKernel, height: f64| {
+        let spec = DraftSpec {
+            faces: vec![wall],
+            angle: 3f64.to_radians(),
+            pull: Vector3::z_axis(),
+            neutral: Point3::new(0.0, 0.0, height),
+            neutral_normal: None,
+            tangent_propagation: false,
+        };
+        let out = k.draft(grooved, &spec).unwrap().bodies[0];
+        let faults = k
+            .get(out)
+            .unwrap()
+            .check_with(cadrs_kernel::native::topo::CheckLevel::Full);
+        assert!(faults.is_empty(), "about {height}: {faults:?}");
+        k.mass_properties(out).unwrap().volume
+    };
+    let (top, middle, foot) = (about(&mut k, 10.0), about(&mut k, 5.0), about(&mut k, 0.0));
+    assert!(top > middle && middle > foot, "{top} {middle} {foot}");
+    assert!(
+        top > was && foot < was && (middle - was).abs() < 1.0,
+        "{top} {middle} {foot} {was}"
+    );
+}

@@ -2865,6 +2865,16 @@ fn cylinder_across(
         let up = lean * (reach * along.signum());
         [on - up, on + up]
     };
+    // (A part of the turn runs on a little past the face's two sides: the faces it meets
+    // there meet the leant surface somewhere else along it.)
+    let (u0, u1) = if whole {
+        (u0, u1)
+    } else {
+        let more = (0.25 * (u1 - u0))
+            .min(0.5 * (TAU - (u1 - u0)) - 0.01)
+            .max(0.0);
+        (u0 - more, u1 + more)
+    };
     let n = (((u1 - u0).abs() / (PI / 4.0)).ceil() as usize).max(1);
     let breaks: Vec<f64> = (0..=n)
         .map(|i| u0 + (u1 - u0) * i as f64 / n as f64)
