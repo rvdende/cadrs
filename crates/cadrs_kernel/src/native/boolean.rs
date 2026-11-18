@@ -905,6 +905,59 @@ fn interior_point(loops: &[Vec<Arc>], on: Level) -> Option<P2> {
     interior_points(loops, on).into_iter().next()
 }
 
+/// The p-curve `pc` of `curve` over `t` on the surface `from`, as its p-curve on `to`, where
+/// the two are one surface with (u, v) that differ by a turn about the axis, a slide along it
+/// or a plane's change of frame: an affine map of (u, v), found from three points and held to
+/// at two more, so the p-curve is carried exactly and nothing is projected or fitted. None
+/// where no such map carries the curve onto `to` (within 1e-9 of its size).
+fn carried_pcurve(
+    from: &Surface,
+    to: &Surface,
+    pc: &Curve,
+    curve: &Curve,
+    t: [f64; 2],
+) -> Option<Curve> {
+    if !matches!(
+        (from, to),
+        (Surface::Plane { .. }, Surface::Plane { .. })
+            | (Surface::Cylinder { .. }, Surface::Cylinder { .. })
+            | (Surface::Cone { .. }, Surface::Cone { .. })
+            | (Surface::Sphere { .. }, Surface::Sphere { .. })
+            | (Surface::Torus { .. }, Surface::Torus { .. })
+    ) {
+        return None;
+    }
+    let mid = pc.point(0.5 * (t[0] + t[1]));
+    let (u0, v0) = (mid.x, mid.y);
+    let h = 1e-2;
+    let on = |u: f64, v: f64, hint: Option<(f64, f64)>| {
+        let (a, b) = to.project(&from.eval(u, v), hint);
+        P2::new(a, b)
+    };
+    let o = on(u0, v0, None);
+    let (a, b) = (
+        on(u0 + h, v0, Some((o.x, o.y))),
+        on(u0, v0 + h, Some((o.x, o.y))),
+    );
+    let (du, dv) = ((a - o) / h, (b - o) / h);
+    // (u, v, 0) ↦ o + du (u − u0) + dv (v − v0).
+    let m = nalgebra::Matrix3::new(du.x, dv.x, 0.0, du.y, dv.y, 0.0, 0.0, 0.0, 1.0);
+    let map = Affine {
+        m,
+        t: V3::new(o.x, o.y, 0.0) - m * V3::new(u0, v0, 0.0),
+    };
+    let carried = pc.transformed(&map);
+    let near = 1e-9 * (1.0 + curve.point(t[0]).coords.norm());
+    [0.0, 0.27, 0.5, 0.81, 1.0]
+        .iter()
+        .all(|f| {
+            let x = t[0] + (t[1] - t[0]) * f;
+            let q = carried.point(x);
+            (to.eval(q.x, q.y) - curve.point(x)).norm() <= near
+        })
+        .then_some(carried)
+}
+
 /// A face's surface and its edges' curves by their index, for the heights its loops cross in
 /// closed form ([`level_crossing`]); none where they aren't to hand.
 type Level<'a> = Option<(&'a Surface, &'a dyn Fn(usize) -> Option<&'a Curve>)>;
@@ -4372,7 +4425,20 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 let fit = ed
                     .pcs
                     .as_ref()
-                    .and_then(|p| ssi::pcurve_from(p, &f.surf, &ed.curve, ed.t[0], ed.t[1]));
+                    .and_then(|p| ssi::pcurve_from(p, &f.surf, &ed.curve, ed.t[0], ed.t[1]))
+                    // An edge of a face of the other body on this face's own surface: that
+                    // face's p-curve of it, carried from its (u, v) to this one's (the same
+                    // surface about another start line, or another plane's frame).
+                    .or_else(|| {
+                        coincident[fi].iter().find_map(|&g| {
+                            let other = &faces[g];
+                            let (_, _, pc) = other.loops.iter().flatten().find(|(e, _, _)| {
+                                (*e == p || (*e < pieces.len() && pieces[*e].contains(&p)))
+                                    && pool.edges[*e].curve == ed.curve
+                            })?;
+                            carried_pcurve(&other.surf, &f.surf, pc, &ed.curve, ed.t)
+                        })
+                    });
                 let pc =
                     pcurve::pcurve_or(&f.surf, &ed.curve, ed.t[0], ed.t[1], Some(f.uv_center), fit);
                 if super::env_flag!("CADRS_BOOL_DEBUG") {

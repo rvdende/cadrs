@@ -3353,12 +3353,33 @@ impl Gen<'_> {
         // (In steps over which the tool moves less than `deep`.)
         let n = (((z - a) * self.speed / (0.5 * deep)).ceil() as usize).max(1);
         let bb = self.tool_box.grow(deep);
-        (0..=n).any(|i| {
+        // How far the point moves in the tool's frame a step, at most; so how many steps on
+        // it stays clear, where it is that far from the tool's box or from being `deep` in
+        // the tool (a distance changes no faster than its point moves): those are passed over
+        // (half as many, to be sure), each of them a step that would have found nothing.
+        let stride = self.speed * (z - a) / n as f64;
+        let clear = |room: f64| (0.5 * room / stride.max(1e-300)).floor().max(0.0) as usize;
+        let mut i = 0;
+        while i <= n {
             let t = a + (z - a) * i as f64 / n as f64;
             let (r, d) = self.motion.place(t);
             let p = P3::from(r.inverse() * (x.coords - d));
-            bb.contains(&p) && self.tool_mesh.distance(&p) < -deep
-        })
+            let out = (0..3)
+                .map(|k| (bb.min[k] - p[k]).max(p[k] - bb.max[k]).max(0.0).powi(2))
+                .sum::<f64>()
+                .sqrt();
+            let room = if out > 0.0 {
+                out
+            } else {
+                let far = self.tool_mesh.distance(&p);
+                if far < -deep {
+                    return true;
+                }
+                far + deep
+            };
+            i += 1 + clear(room);
+        }
+        false
     }
 }
 
