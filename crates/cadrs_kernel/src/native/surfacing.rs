@@ -335,7 +335,8 @@ fn crease_fills(k: &mut NativeKernel, sheets: &[Body], spec: &ThickenSpec) -> Re
                             span(u0, u1, gu, face.surf.u_periodic()),
                             span(v0, v1, gv, face.surf.v_periodic()),
                         );
-                        let mut ext = super::face_build::face_from_surface(&face.surf, Some(domain))?;
+                        let mut ext =
+                            super::face_build::face_from_surface(&face.surf, Some(domain))?;
                         if ext.faces[0].sense != face.sense {
                             super::topo::Body::reverse_face(&mut ext.faces[0]);
                         }

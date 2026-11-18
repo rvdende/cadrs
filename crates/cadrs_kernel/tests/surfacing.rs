@@ -290,7 +290,11 @@ fn thicken_fills_a_crease_round_an_ellipse() {
             )
             .unwrap()
             .bodies[0];
-        let grown = k.boolean(BoolOp::Intersect, grown, &[above]).unwrap().first().unwrap();
+        let grown = k
+            .boolean(BoolOp::Intersect, grown, &[above])
+            .unwrap()
+            .first()
+            .unwrap();
         let want = k.mass_properties(grown).unwrap().volume - solid;
         close(got, want, 1e-6);
     }

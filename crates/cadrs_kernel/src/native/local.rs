@@ -2779,6 +2779,37 @@ fn cylinder_across(
     let no_reach =
         || KernelError::Unsupported("drafting a cylinder that doesn't reach the neutral plane");
     let ((u0, u1), _) = super::heal_split::face_uv_box(b, fi).ok_or_else(no_reach)?;
+    // The neutral plane has to cut the face itself: the cylinder run on to a plane the face
+    // stops short of meets it somewhere else altogether (its axis isn't the pull's), and
+    // the face through that curve is another face.
+    let level = (spec.neutral - P3::origin()).dot(pull);
+    let extent = b.face_bbox(fi);
+    let (mut low, mut high) = (f64::INFINITY, f64::NEG_INFINITY);
+    for i in 0..8 {
+        let corner = P3::new(
+            if i & 1 == 0 {
+                extent.min.x
+            } else {
+                extent.max.x
+            },
+            if i & 2 == 0 {
+                extent.min.y
+            } else {
+                extent.max.y
+            },
+            if i & 4 == 0 {
+                extent.min.z
+            } else {
+                extent.max.z
+            },
+        );
+        let h = (corner - P3::origin()).dot(pull);
+        (low, high) = (low.min(h), high.max(h));
+    }
+    let slack = tol::POINT.max(tol::REL_POINT * r);
+    if level < low - slack || level > high + slack {
+        return Err(no_reach());
+    }
     let sign = if f.sense { 1.0 } else { -1.0 };
     let (sa, ca) = spec.angle.sin_cos();
     let reach = 4.0 * b.bbox().diagonal().max(tol::POINT);
@@ -2797,7 +2828,10 @@ fn cylinder_across(
         // cylinder's point is level with it.
         let level = |u: f64| (fr.o + radial(u) * r - spec.neutral).dot(pull);
         let (l0, l1) = (level(u0), level(u1));
-        if l0 * l1 > 0.0 {
+        // (One ruling only: a face level with the plane at both its sides, a groove cut
+        // down from it, has two, and no one plane through both.)
+        let on = tol::POINT.max(tol::REL_POINT * r);
+        if l0 * l1 > 0.0 || (l0.abs() <= on && l1.abs() <= on) {
             return Err(no_reach());
         }
         let u = super::math::root_from(level, (u0, l0), (u1, l1));
@@ -3090,6 +3124,14 @@ pub fn draft(k: &mut NativeKernel, body: BodyId, spec: &DraftSpec) -> Result<OpR
     if !rounds.is_empty() {
         return draft_rounded(k, body, spec, &faces, &rounds);
     }
+    // (Faces that become ruled surfaces or planes of another lie can come to cross faces
+    // they never met, which moving the faces as they are joined doesn't see: looked for
+    // after.)
+    let reshaped = faces.iter().any(|&fi| match &b.faces[fi].surf {
+        Surface::Extrusion { .. } => true,
+        Surface::Cylinder { f, .. } => f.z.cross(&pull).norm() > tol::ANGULAR,
+        _ => false,
+    });
     for fi in faces {
         let f = &b.faces[fi];
         surfs[fi] = match &f.surf {
@@ -3246,6 +3288,40 @@ pub fn draft(k: &mut NativeKernel, body: BodyId, spec: &DraftSpec) -> Result<OpR
             },
         },
     };
+    if reshaped {
+        // A face turned about its curve on the neutral plane moves no point farther than
+        // its height from that plane by the angle's tangent: a result that reaches well
+        // past that took a face's far side for it.
+        let was = b.bbox();
+        let level = (spec.neutral - P3::origin()).dot(&pull);
+        let height = (0..8)
+            .map(|i| {
+                P3::new(
+                    if i & 1 == 0 { was.min.x } else { was.max.x },
+                    if i & 2 == 0 { was.min.y } else { was.max.y },
+                    if i & 4 == 0 { was.min.z } else { was.max.z },
+                )
+                .coords
+                .dot(&pull)
+            })
+            .fold(0.0f64, |m, h| m.max((h - level).abs()));
+        let room =
+            2.0 * height * spec.angle.tan().abs() + tol::REL_POINT * was.diagonal() + tol::POINT;
+        let now = out.bbox();
+        let held = was.grow(room);
+        if !(held.contains(&now.min) && held.contains(&now.max)) {
+            return Err(KernelError::InvalidResult {
+                op: "draft",
+                why: "the drafted faces run far past the part".into(),
+            });
+        }
+    }
+    if reshaped && let Some(why) = super::check_faces::face_crossings(&out).into_iter().next() {
+        return Err(KernelError::InvalidResult {
+            op: "draft",
+            why: format!("the drafted faces cross faces they didn't meet before: {why}"),
+        });
+    }
     let id = k.insert(out);
     let history = History {
         modified: from
