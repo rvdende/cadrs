@@ -1813,6 +1813,60 @@ pub(crate) fn turned_edge(b: &Body, surfs: &[Surface]) -> Option<usize> {
     worst.map(|(_, e)| e)
 }
 
+/// The faces of `b` that its faces' moves to `surfs` carry through one another and so leave
+/// nothing of: a fin thinner than twice an inset, a slot narrower than twice a growth. Its
+/// two walls pass each other, and every face between them (its top, its ends) comes out the
+/// other way round, two or more of its edges turned ([`turned_edge`]'s test); the walls are
+/// what those faces border along the edges that kept their direction. `None` where no face
+/// is turned so. (The body without them, healed, is what the move is then made of.)
+pub(crate) fn passed_through(b: &Body, surfs: &[Surface]) -> Option<Vec<usize>> {
+    let vf = vertex_faces(b);
+    let moved: Vec<Option<P3>> = (0..b.verts.len())
+        .map(|v| {
+            if vf[v].len() < 3 {
+                return None;
+            }
+            let fs: Vec<&Surface> = vf[v].iter().map(|&f| &surfs[f]).collect();
+            meet(&fs, b.verts[v].p)
+        })
+        .collect();
+    let turned: Vec<bool> = b
+        .edges
+        .iter()
+        .map(|ed| {
+            if ed.degenerate || ed.v[0] == ed.v[1] {
+                return false;
+            }
+            let (Some(p), Some(q)) = (moved[ed.v[0]], moved[ed.v[1]]) else {
+                return false;
+            };
+            let was = b.verts[ed.v[1]].p - b.verts[ed.v[0]].p;
+            (q - p).dot(&was) / was.norm_squared().max(tol::TINY) < tol::ROUNDOFF
+        })
+        .collect();
+    let between: Vec<bool> = b
+        .faces
+        .iter()
+        .map(|f| f.loops.iter().flatten().filter(|c| turned[c.edge]).count() >= 2)
+        .collect();
+    if !between.iter().any(|x| *x) {
+        return None;
+    }
+    let ef = b.edge_faces();
+    let mut gone = between.clone();
+    for (fi, f) in b.faces.iter().enumerate() {
+        if !between[fi] {
+            continue;
+        }
+        for c in f.loops.iter().flatten().filter(|c| !turned[c.edge]) {
+            for &g in ef[c.edge].iter() {
+                gone[g] = true;
+            }
+        }
+    }
+    Some((0..b.faces.len()).filter(|&f| gone[f]).collect())
+}
+
 /// `b` with edge `e` shrunk to a point: its two ends one vertex, the edge gone from its faces,
 /// and a face left with two sides gone too, its two edges made one (the first) in the faces
 /// beyond them. With the faces that went, in order. The geometry is the old one: the faces'

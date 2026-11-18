@@ -337,11 +337,17 @@ pub fn offset_sharp(b: &Body, dist: &[f64]) -> Result<Body> {
     // (A body that closes with an edge turned round, its ends carried past one another, has
     // its faces through one another: where the events below make a sound one, that one.)
     let moved = replace_surfaces(b, &surfs);
-    if moved.is_ok() && crate::native::local::turned_edge(b, &surfs).is_some() {
+    let turned = moved.is_ok() && crate::native::local::turned_edge(b, &surfs).is_some();
+    if turned {
         if let Some(Ok((out, _))) = crate::native::local::planes_bound(b, &surfs) {
             return Ok(out);
         }
         if let Some((out, _)) = crate::native::local::replace_with_events(b, &surfs) {
+            return Ok(out);
+        }
+        // A fin or a slot whose walls pass one another: nothing of it is left, and the
+        // offset is of the body without it.
+        if let Some(out) = without_passed_through(b, dist, &surfs) {
             return Ok(out);
         }
     }
@@ -373,10 +379,40 @@ pub fn offset_sharp(b: &Body, dist: &[f64]) -> Result<Body> {
     match crossed_face(b, &out) {
         Some((f, k)) if b.faces.len() > 4 => {
             let (nb, nd) = collapse_face(b, dist, f, k);
-            Ok(offset_sharp(&nb, &nd).unwrap_or(out))
+            match offset_sharp(&nb, &nd) {
+                Ok(r) => Ok(r),
+                Err(_) if !turned => Ok(out),
+                Err(e) => Err(e),
+            }
         }
+        // (Faces through one another and no way found to the sound body: no body.)
+        _ if turned => Err(KernelError::TooLarge {
+            op: "offset",
+            why: "the faces pass through one another".into(),
+        }),
         _ => Ok(out),
     }
+}
+
+/// The sharp offset of `b` without the faces its moves carry through one another
+/// ([`crate::native::local::passed_through`]), the faces round them run on to close it
+/// ([`crate::native::defeature`]). None where there are none, they don't close, or what is
+/// left doesn't offset to a sound body.
+fn without_passed_through(b: &Body, dist: &[f64], surfs: &[Surface]) -> Option<Body> {
+    let gone = crate::native::local::passed_through(b, surfs)?;
+    if gone.len() + 4 > b.faces.len() {
+        return None;
+    }
+    let (nb, from) = crate::native::defeature::delete_faces(b, &gone).ok()?;
+    let nd: Vec<f64> = from
+        .iter()
+        .map(|s| s.first().map(|&f| dist[f]))
+        .collect::<Option<_>>()?;
+    let nd = (nd.len() == nb.faces.len()).then_some(nd)?;
+    let out = offset_sharp(&nb, &nd).ok()?;
+    out.check_with(crate::native::topo::CheckLevel::Full)
+        .is_empty()
+        .then_some(out)
 }
 
 /// A face of `b` that its offset `out` (the faces moved, the topology kept) turned inside out:

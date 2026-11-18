@@ -2476,3 +2476,60 @@ fn a_draft_leans_a_groove_that_runs_out() {
         "{top} {faces}"
     );
 }
+
+fn a_block(k: &mut NativeKernel, a: [f64; 3], b: [f64; 3]) -> BodyId {
+    k.primitive(&Primitive::block(Point3::from(a), Point3::from(b)))
+        .unwrap()
+        .first()
+        .unwrap()
+}
+
+/// A 20 × 10 × 10 block with a rib 2 thick round its middle (up its sides from z = 4 and 6
+/// over its top), shrunk by 1.5 with sharp corners: the rib's walls pass one another, so
+/// nothing of it is left, and the inset is the plain block's, 17 × 7 × 7. (Its faces moved as
+/// they stood closed into a body with the rib inside out, 60 short, that passed the check.)
+#[test]
+fn a_sharp_inset_past_a_ribs_thickness_leaves_none_of_it() {
+    let mut k = NativeKernel::new();
+    let block = a_block(&mut k, [0.0, 0.0, 0.0], [20.0, 10.0, 10.0]);
+    let rib = a_block(&mut k, [9.0, -1.0, 4.0], [11.0, 11.0, 16.0]);
+    let part = k
+        .boolean(BoolOp::Union, block, &[rib])
+        .unwrap()
+        .first()
+        .unwrap();
+    let spec = OffsetSpec {
+        distance: -1.5,
+        faces: vec![],
+        sharp: true,
+    };
+    let out = k.offset(part, &spec).unwrap().bodies[0];
+    let b = k.get(out).unwrap();
+    assert!(b.check().is_empty(), "{:?}", b.check());
+    assert_eq!(b.faces.len(), 6, "the rib is gone");
+    close(volume(&k, out), 17.0 * 7.0 * 7.0, 1e-9);
+}
+
+/// The same block with a slot 2 wide cut where the rib stood, grown by 1.5: the slot's walls
+/// pass one another and it closes, the grown block 23 × 13 × 13.
+#[test]
+fn a_sharp_offset_past_a_slots_width_closes_it() {
+    let mut k = NativeKernel::new();
+    let block = a_block(&mut k, [0.0, 0.0, 0.0], [20.0, 10.0, 10.0]);
+    let slot = a_block(&mut k, [9.0, -1.0, 4.0], [11.0, 11.0, 11.0]);
+    let part = k
+        .boolean(BoolOp::Subtract, block, &[slot])
+        .unwrap()
+        .first()
+        .unwrap();
+    let spec = OffsetSpec {
+        distance: 1.5,
+        faces: vec![],
+        sharp: true,
+    };
+    let out = k.offset(part, &spec).unwrap().bodies[0];
+    let b = k.get(out).unwrap();
+    assert!(b.check().is_empty(), "{:?}", b.check());
+    assert_eq!(b.faces.len(), 6, "the slot is gone");
+    close(volume(&k, out), 23.0 * 13.0 * 13.0, 1e-9);
+}
