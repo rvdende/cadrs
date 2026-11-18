@@ -2988,6 +2988,145 @@ fn lighter_curve(n: &NurbsCurve) -> Option<NurbsCurve> {
     }
 }
 
+/// A surface of more poles than this is written in fewer digits ([`fewer_digits`]).
+const LIGHT_SURFACE_FROM: usize = 64;
+
+/// A surface of many poles (a swept or fitted face) with each pole's coordinates to a whole
+/// number of steps a hundredth of [`LIGHT_WITHIN`] of its extent, as [`lighter_curve`]'s are:
+/// the nearest power of ten below it, so that a coordinate is written in eleven digits or so
+/// and not seventeen. Such a surface follows what it was fitted to no closer than that
+/// closeness, and its poles are nine tenths of a hobbed gear's file, which is a fifth smaller
+/// for it. Its four corners are kept to the last digit. None for a rational surface or one of
+/// few poles. (Not also through fewer poles, as a curve is: a quintic through an even grid
+/// of a swept sheet's points needs as many as the sheet has, to that closeness.)
+fn fewer_digits(n: &NurbsSurface) -> Option<NurbsSurface> {
+    let (along, across) = (n.cps.len(), n.cps.first()?.len());
+    if along * across <= LIGHT_SURFACE_FROM || n.cps.iter().flatten().any(|h| h.w != 1.0) {
+        return None;
+    }
+    let mut bb = Bbox::empty();
+    for h in n.cps.iter().flatten() {
+        bb.add(&super::nurbs::dehom(h));
+    }
+    let extent = bb.diagonal();
+    if !(extent > 0.0 && extent.is_finite()) {
+        return None;
+    }
+    let scale = 10f64.powf(-(LIGHT_WITHIN * extent / 100.0).log10().floor());
+    let mut out = n.clone();
+    for (a, row) in out.cps.iter_mut().enumerate() {
+        for (b, h) in row.iter_mut().enumerate() {
+            if (a == 0 || a == along - 1) && (b == 0 || b == across - 1) {
+                continue;
+            }
+            for d in 0..3 {
+                h[d] = (h[d] * scale).round() / scale;
+            }
+        }
+    }
+    Some(out)
+}
+
+/// A surface smooth along u through fewer poles that way: each column of its poles is a curve
+/// in u (the surface is those curves weighed by v's basis, which sums to one, so it moves no
+/// farther than they do), refitted by a quintic through sites they share, the sites halved
+/// wherever a column misses by more than [`LIGHT_WITHIN`] of the extent in between. None for
+/// a rational surface, one with a knot repeated in u, or where under a quarter would go.
+fn lighter_along_u(n: &NurbsSurface) -> Option<NurbsSurface> {
+    let (along, across) = (n.cps.len(), n.cps.first()?.len());
+    if along <= 16 || n.cps.iter().flatten().any(|h| h.w != 1.0) {
+        return None;
+    }
+    if n.du < 3
+        || n.ku[n.du + 1..n.ku.len() - n.du - 1]
+            .windows(2)
+            .any(|w| w[1] <= w[0])
+    {
+        return None;
+    }
+    let mut bb = Bbox::empty();
+    for h in n.cps.iter().flatten() {
+        bb.add(&super::nurbs::dehom(h));
+    }
+    let tol = LIGHT_WITHIN * bb.diagonal();
+    if !(tol > 0.0) {
+        return None;
+    }
+    let cols: Vec<NurbsCurve> = (0..across)
+        .map(|b| NurbsCurve {
+            degree: n.du,
+            knots: n.ku.clone(),
+            cps: n.cps.iter().map(|row| row[b]).collect(),
+        })
+        .collect();
+    let ((u0, u1), _) = n.range();
+    let most = along * 3 / 4;
+    let mut sites: Vec<f64> = (0..=8).map(|i| u0 + (u1 - u0) * i as f64 / 8.0).collect();
+    loop {
+        let fits: Vec<NurbsCurve> = cols
+            .iter()
+            .map(|c| {
+                let pts: Vec<P3> = sites.iter().map(|&t| c.point(t)).collect();
+                NurbsCurve::interpolate(&pts, &sites, 5.min(sites.len() - 1), None, None)
+            })
+            .collect();
+        let split: Vec<bool> = sites
+            .windows(2)
+            .map(|w| {
+                (1..8).any(|i| {
+                    let t = w[0] + (w[1] - w[0]) * i as f64 / 8.0;
+                    cols.iter()
+                        .zip(&fits)
+                        .any(|(c, f)| (c.point(t) - f.point(t)).norm() > tol)
+                })
+            })
+            .collect();
+        if !split.iter().any(|x| *x) {
+            let m = fits[0].cps.len();
+            if m > most {
+                return None;
+            }
+            let cps: Vec<Vec<super::nurbs::H>> = (0..m)
+                .map(|a| fits.iter().map(|f| f.cps[a]).collect())
+                .collect();
+            return NurbsSurface::new(
+                fits[0].degree,
+                n.dv,
+                fits[0].knots.clone(),
+                n.kv.clone(),
+                cps,
+            )
+            .ok();
+        }
+        let mut finer = Vec::with_capacity(2 * sites.len());
+        for (i, w) in sites.windows(2).enumerate() {
+            finer.push(w[0]);
+            if split[i] {
+                finer.push(0.5 * (w[0] + w[1]));
+            }
+        }
+        finer.push(u1);
+        if finer.len() + 4 > most {
+            return None;
+        }
+        sites = finer;
+    }
+}
+
+/// A surface with its u and v changed over: the same points, (u, v) for (v, u).
+fn turned(n: &NurbsSurface) -> NurbsSurface {
+    let (along, across) = (n.cps.len(), n.cps.first().map_or(0, |r| r.len()));
+    NurbsSurface {
+        du: n.dv,
+        dv: n.du,
+        ku: n.kv.clone(),
+        kv: n.ku.clone(),
+        cps: (0..across)
+            .map(|b| (0..along).map(|a| n.cps[a][b]).collect())
+            .collect(),
+    }
+}
+
 /// A real in the file's notation: always with a decimal point, shortest round-trip digits. A
 /// non-finite value (which no file can hold; the exporters refuse such bodies) is written as 0.
 pub fn real(x: f64) -> String {
@@ -3259,6 +3398,13 @@ impl Writer {
     }
 
     fn bspline_surface(&mut self, n: &NurbsSurface) -> u64 {
+        // Through fewer poles each way it is smooth, then in fewer digits.
+        let along_u = lighter_along_u(n);
+        let n = along_u.as_ref().unwrap_or(n);
+        let along_v = lighter_along_u(&turned(n)).map(|t| turned(&t));
+        let n = along_v.as_ref().unwrap_or(n);
+        let lighter = fewer_digits(n);
+        let n = lighter.as_ref().unwrap_or(n);
         let rows: Vec<String> = n
             .cps
             .iter()
@@ -3764,6 +3910,71 @@ pub fn write_colored(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A screwed band (a line turned four times round an axis as it climbs), fitted with a
+    /// cubic through 1200 sites along the screw: written through under half the poles that way,
+    /// the same surface at the same parameters to [`LIGHT_WITHIN`] of its extent, its two poles
+    /// across kept.
+    #[test]
+    fn a_dense_surface_is_written_through_fewer_poles() {
+        let at = |t: f64, r: f64| {
+            let a = 8.0 * std::f64::consts::PI * t;
+            P3::new(r * a.cos(), r * a.sin(), 30.0 * t)
+        };
+        let ts: Vec<f64> = (0..1200).map(|i| i as f64 / 1199.0).collect();
+        let rails: Vec<NurbsCurve> = [5.0, 9.0]
+            .iter()
+            .map(|&r| {
+                let pts: Vec<P3> = ts.iter().map(|&t| at(t, r)).collect();
+                NurbsCurve::interpolate(&pts, &ts, 3, None, None)
+            })
+            .collect();
+        let n = NurbsSurface::new(
+            3,
+            1,
+            rails[0].knots.clone(),
+            vec![0.0, 0.0, 1.0, 1.0],
+            (0..rails[0].cps.len())
+                .map(|a| vec![rails[0].cps[a], rails[1].cps[a]])
+                .collect(),
+        )
+        .unwrap();
+        let l = lighter_along_u(&n).expect("a lighter surface");
+        assert!(
+            l.cps.len() * 2 < n.cps.len(),
+            "{} of {}",
+            l.cps.len(),
+            n.cps.len()
+        );
+        assert_eq!(l.cps[0].len(), 2);
+        let extent = 35.0;
+        for i in 0..=300 {
+            for j in 0..=4 {
+                let (u, v) = (i as f64 / 300.0, j as f64 / 4.0);
+                let miss = (l.point(u, v) - n.point(u, v)).norm();
+                assert!(miss < 2.0 * LIGHT_WITHIN * extent, "off by {miss:e}");
+            }
+        }
+        // Across (two poles, a line): nothing to gain, and the surface turned over is itself
+        // turned back.
+        assert!(lighter_along_u(&turned(&n)).is_none());
+        let back = turned(&turned(&n));
+        assert_eq!(back.cps, n.cps);
+        // In fewer digits: within a hundredth of that closeness, the corners to the bit.
+        let f = fewer_digits(&l).expect("fewer digits");
+        assert_eq!(f.cps[0][0], l.cps[0][0]);
+        let moved = f
+            .cps
+            .iter()
+            .flatten()
+            .zip(l.cps.iter().flatten())
+            .map(|(a, b)| (a - b).norm())
+            .fold(0.0, f64::max);
+        assert!(
+            moved > 0.0 && moved < LIGHT_WITHIN * extent / 50.0,
+            "{moved:e}"
+        );
+    }
 
     /// A smooth cubic of many poles is written as a quintic of fewer that keeps its ends to the
     /// bit and stays within [`LIGHT_WITHIN`] of it at the same parameters; a cubic with a corner
