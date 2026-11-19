@@ -479,6 +479,18 @@ pub fn offset_rounded(b: &Body, dist: &[f64]) -> Result<Body> {
     if let Some(g) = crate::native::sweep_solid::grown_revolved(b, d) {
         return Ok(g);
     }
+    // Every edge between faces that meet tangentially (a body offset already, its rounds
+    // joining its faces smoothly): each face moved along its normal meets its neighbours'
+    // moves exactly, so the sharp offset is the rounded one, without the slabs, tubes and balls.
+    if !b.edges.is_empty()
+        && (0..b.edges.len())
+            .all(|e| b.edges[e].degenerate || matches!(dihedral(b, e), Dihedral::Smooth))
+        && let Ok(g) = super::sharp::offset_sharp(b, dist)
+        && g.check_with(crate::native::topo::CheckLevel::Full)
+            .is_empty()
+    {
+        return Ok(g);
+    }
     grown_except(&merged(b), d, &[], &[])
 }
 

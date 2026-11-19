@@ -22,6 +22,20 @@ fn main() {
     // A feature case's act, else the boolean the second argument names (union by default) of
     // `a` and `b`.
     let out = match c.feature.as_ref() {
+        None if c.matrix.is_some() => {
+            let t = std::time::Instant::now();
+            let r = k.affine(&a, c.matrix.expect("a matrix"));
+            eprintln!("affine: {:?}", t.elapsed());
+            if let Ok(s) = &r {
+                let t = std::time::Instant::now();
+                let v = k.volume(s);
+                eprintln!("volume {v:?}: {:?}", t.elapsed());
+                let t = std::time::Instant::now();
+                let _ = k.check(s);
+                eprintln!("check: {:?}", t.elapsed());
+            }
+            r
+        }
         Some(f) => {
             println!("{:?} {:?} {}", f.act, f.points, f.size);
             match f.act {
