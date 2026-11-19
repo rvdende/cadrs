@@ -1004,10 +1004,12 @@ impl ExactStock {
         if std::env::var_os("CADRS_EXACT_NO_HEAL").is_some() {
             return body;
         }
-        let Ok(r) = self
-            .k
-            .heal(body, &[cadrs_kernel::HealOp::Slivers { width: merge() }])
-        else {
+        // (By the trait: with the kernel's test kit an inherent `heal` of its own shadows it.)
+        let Ok(r) = cadrs_kernel::Kernel::heal(
+            &mut self.k,
+            body,
+            &[cadrs_kernel::HealOp::Slivers { width: merge() }],
+        ) else {
             return body;
         };
         let Ok(healed) = r.first() else { return body };

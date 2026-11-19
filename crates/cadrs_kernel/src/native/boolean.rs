@@ -3413,12 +3413,28 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                     .chain([(pe.t[0], pe.v[0]), (pe.t[1], pe.v[1])])
                     .find(|&(s, w)| {
                         let h = 0.25 * (s - t);
-                        (pool.verts[w] - p).norm() <= et.max(run_tol) * 1e5
-                            && side(t - h) * side(t + h) >= 0.0
-                            && (0..=8).all(|k| {
-                                surf.distance(&ed.curve.point(t + (s - t) * k as f64 / 8.0))
-                                    <= et.max(run_tol)
-                            })
+                        // Where the sides' signs differ but both are a hundredth of the tolerance
+                        // off the surface or less, they are rounding: the edge rests on the
+                        // surface there if the whole stretch to the vertex is as near, and it
+                        // isn't one lying along the surface (which has no one point of touch).
+                        // (A curve on a cylinder crossing the line along which a plane is tangent
+                        // to the cylinder: found 0.12 µm along from the vertex there, 1e-9 off.)
+                        // (The sides only for a vertex near: `side` carries its foot on.)
+                        let noise = 1e-2 * et.max(run_tol);
+                        let along = || {
+                            let (u, v) = surf.project(&p, None);
+                            let d = ed.curve.tangent(t);
+                            d.norm() == 0.0 || (d.normalize().dot(&surf.normal(u, v))).abs() < 1e-9
+                        };
+                        (pool.verts[w] - p).norm() <= et.max(run_tol) * 1e5 && {
+                            let (a, b) = (side(t - h), side(t + h));
+                            let rests = a * b < 0.0;
+                            (!rests || (a.abs().max(b.abs()) <= noise && !along()))
+                                && (0..=8).all(|k| {
+                                    surf.distance(&ed.curve.point(t + (s - t) * k as f64 / 8.0))
+                                        <= if rests { noise } else { et.max(run_tol) }
+                                })
+                        }
                     });
                 if let Some((_, w)) = near_vertex {
                     if !face_pts[fi].contains(&w) {
@@ -3811,7 +3827,9 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 cand.push(v);
             }
         }
-        if std::env::var("CADRS_FACE_DEBUG").is_ok_and(|d| d == fa.to_string()) {
+        if super::env_flag!("CADRS_BOOL_DEBUG")
+            && std::env::var("CADRS_FACE_DEBUG").is_ok_and(|d| d == fa.to_string())
+        {
             for ic in &curves {
                 let mut near: Vec<(f64, usize, f64)> = cand
                     .iter()
@@ -4409,6 +4427,16 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                     continue;
                 }
                 let pm = ed.curve.point((ed.t[0] + ed.t[1]) * 0.5);
+                if super::env_flag!("CADRS_BOOL_DEBUG")
+                    && std::env::var("CADRS_FACE_DEBUG").is_ok_and(|d| d == fi.to_string())
+                {
+                    eprintln!(
+                        "  on face {fi}: piece {pe} of edge {e}, {:?} → {:?}, middle {:?}",
+                        ed.curve.point(ed.t[0]),
+                        ed.curve.point(ed.t[1]),
+                        point_in_face(&faces[fi], &pm, run_tol)
+                    );
+                }
                 if point_in_face(&faces[fi], &pm, run_tol) == InFace::Inside
                     && !cuts[fi].contains(&pe)
                 {
@@ -4742,7 +4770,9 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 let key = (a.edge, lo.to_bits(), hi.to_bits(), faces[*fi].owner);
                 match by_piece.get(&key) {
                     Some(&other) => {
-                        if let Ok(d) = std::env::var("CADRS_FACE_DEBUG") {
+                        if super::env_flag!("CADRS_BOOL_DEBUG")
+                            && let Ok(d) = std::env::var("CADRS_FACE_DEBUG")
+                        {
                             let (fo, _) = &subs[other];
                             if d == "all" || d == fi.to_string() || d == fo.to_string() {
                                 let ed = &pool.edges[a.edge];
@@ -5120,6 +5150,13 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     )?;
     if super::env_flag!("CADRS_BOOL_WORK") {
         eprintln!("boolean work: {}", work.done);
+    }
+    if super::env_flag!("CADRS_BOOL_DEBUG")
+        && std::env::var("CADRS_FACE_DEBUG").is_ok_and(|d| d == "out")
+    {
+        for (i, (f, src)) in out.faces.iter().zip(&from).enumerate() {
+            eprintln!("out face {i} {:?} from {src:?}", f.surf.kind());
+        }
     }
     assemble_shells(&mut out)?;
     prof.mark("shells");
