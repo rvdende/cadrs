@@ -237,6 +237,7 @@ impl Cut {
         if self.poses.len() > MOST_MOVES || (machine && !self.machine) {
             return false;
         }
+
         // The machine's own screw: one cut while it is the very same screw going on, or a move
         // the same screw turned on by its turn takes the tool to within [`MERGE`] of where
         // the machine has it.
@@ -822,6 +823,11 @@ pub struct ExactStock {
     /// A cut the kernel couldn't make whole, put off to be joined with the next
     /// ([`Self::joined`]).
     deferred: Option<usize>,
+    /// How far along the cut the tool is on (`done`) the stock shown is cut; 0 where it is the
+    /// stock kept.
+    shown_along: f64,
+    /// A cut whose part-way slice failed: not sliced again.
+    unsliced: Option<usize>,
 }
 
 impl ExactStock {
@@ -837,15 +843,28 @@ impl ExactStock {
         rows: &[Vec<f64>],
     ) -> Result<ExactStock, String> {
         let mut k = DefaultKernel::new();
+        let clock = web_time::Instant::now();
+        let lap = |what: &str| {
+            if std::env::var_os("CADRS_EXACT_DEBUG").is_some() {
+                eprintln!(
+                    "exact stock: {what} by {:.2} s",
+                    clock.elapsed().as_secs_f64()
+                );
+            }
+        };
         let start = stock_solid(&mut k, shape, &run.frame)
             .ok_or("the stock has no exact solid (only boxes and bars do)")?;
+        lap("the stock made");
         let tools = run
             .ops
             .iter()
             .map(|o| tool_solid(&mut k, o.tool))
             .collect::<Result<Vec<_>, _>>()?;
+        lap("the tools made");
         let mut cuts = cuts_of(machine, run, motions, rows);
+        lap("the cuts found");
         drop_axial_slides(&mut cuts, run, shape);
+        lap("axial slides dropped");
         if std::env::var_os("CADRS_EXACT_DEBUG").is_some_and(|v| v == "7") {
             let mut kinds: std::collections::BTreeMap<String, (usize, f64)> = Default::default();
             for c in &cuts {
@@ -884,6 +903,8 @@ impl ExactStock {
             tags: HashMap::new(),
             failed: Vec::new(),
             deferred: None,
+            shown_along: 0.0,
+            unsliced: None,
         })
     }
 
@@ -1180,16 +1201,43 @@ impl ExactStock {
             self.drop_body(self.kept);
             (self.kept, self.done, self.shown) = (self.start, 0, self.start);
             self.deferred = None;
+            self.shown_along = 0.0;
+            self.unsliced = None;
         }
         let place = to.0 as f64 + to.1;
-        if self.shown != self.kept {
+        // (The stock shown part-way along the cut the tool was on, cut on from where it was:
+        // each place asked for costs the stretch since the last, where cut afresh from the
+        // stock kept a 45 rad screw's slices grew to seconds each, the stock far behind.)
+        let incremental = std::env::var_os("CADRS_EXACT_AFRESH").is_none();
+        if self.shown != self.kept
+            && !(incremental
+                && self.shown_along > 0.0
+                && self.cuts.get(self.done).is_some_and(|c| c.from() < place))
+        {
             self.drop_body(self.shown);
+            (self.shown, self.shown_along) = (self.kept, 0.0);
         }
         // The cuts the tool is through. (One the kernel can't make whole is tried again joined
         // with the next, as one slide, once the tool is through that too: [`Self::joined`].)
         while self.done < self.cuts.len() && self.cuts[self.done].to() <= place + 1e-12 {
             let kept = self.kept;
             let c = self.done;
+            // Shown part-way along: finished on from there.
+            if self.shown != kept && self.shown_along > 0.0 {
+                let (part, along) = (self.shown, self.shown_along);
+                (self.shown, self.shown_along) = (kept, 0.0);
+                if self.deferred.is_none()
+                    && let Ok(n) = self.cut_once(part, c, along, 1.0)
+                {
+                    if n != part {
+                        self.drop_body(part);
+                    }
+                    self.keep(n);
+                    self.done += 1;
+                    continue;
+                }
+                self.drop_body(part);
+            }
             // A cut put off (whole, it failed): joined with this one, else in halves and this
             // one as ever.
             let mut b = kept;
@@ -1220,19 +1268,32 @@ impl ExactStock {
             self.keep(next);
             self.done += 1;
         }
-        self.shown = self.kept;
-        // The cut the tool is on, as far as it has gone.
+        if self.shown_along == 0.0 {
+            self.shown = self.kept;
+        }
+        // The cut the tool is on, as far as it has gone: on from where it was shown, else from
+        // the kept stock. (Shown only, in one try, the stock as it was where it fails: a
+        // fraction of a move is a sliver of a sweep, at angles the whole one doesn't meet, and
+        // halving it took ten minutes to show what the next whole cut shows anyway.)
         if let Some(c) = self.cuts.get(self.done)
             && c.from() < place
         {
             let along = c.along(place);
-            if along > 1e-9 {
-                // (Shown only, the whole cut made afresh from the kept stock once the tool is
-                // through: in one try, the stock as kept where it fails. A fraction of a move
-                // is a sliver of a sweep, at angles the whole one doesn't meet, and halving it
-                // took ten minutes to show what the next whole cut shows anyway.)
-                let kept = self.kept;
-                self.shown = self.cut_once(kept, self.done, 0.0, along).unwrap_or(kept);
+            let from = self.shown_along;
+            // (Not again for a cut once a slice of it failed: a seven-turn screw's slices
+            // failed at 20 s each, the worker stuck on them; the stock as kept is shown till
+            // the tool is through it, the whole cut then made.)
+            if along > from + 1e-9 && self.deferred.is_none() && self.unsliced != Some(self.done) {
+                let base = self.shown;
+                match self.cut_once(base, self.done, from, along) {
+                    Ok(b) => {
+                        if base != self.kept && base != b {
+                            self.drop_body(base);
+                        }
+                        (self.shown, self.shown_along) = (b, along);
+                    }
+                    Err(_) => self.unsliced = Some(self.done),
+                }
             }
         }
         self.at = to;

@@ -1225,6 +1225,11 @@ fn tmp_exact_run() {
     let (studio, setup_id, ops): (ElementId, CamId, Vec<CamId>) = match which.as_str() {
         "3" => (cam3::STUDIO, cam3::SETUP, cam3::TOOLPATHS.to_vec()),
         "4" => (cam4::STUDIO, cam4::SETUP, cam4::TOOLPATHS[..3].to_vec()),
+        "4w" => (
+            cam4::STUDIO,
+            cam4::WORM_SETUP,
+            cam4::TOOLPATHS[3..].to_vec(),
+        ),
         _ => (cam5::STUDIO, cam5::SETUP, cam5::TOOLPATHS.to_vec()),
     };
     let doc = cnc::document().unwrap();
