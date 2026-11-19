@@ -14,8 +14,11 @@ fn main() {
         .find(|c| c.id == id)
         .expect("no case of that id");
     let k = Cadrs;
+    // (REPRO_MOVED=1: both operands moved by the case's motion, as its frame-invariance check.)
+    let moved = std::env::var_os("REPRO_MOVED").is_some();
+    let place = |p: &Primitive| if moved { p.moved(&c.motion) } else { p.clone() };
     let base: Primitive = match &c.a {
-        Shape::Prim(p) => p.clone(),
+        Shape::Prim(p) => place(p),
         other => panic!("not a primitive: {other:?}"),
     };
     let a = k.make(&base).expect("making a");
@@ -65,7 +68,7 @@ fn main() {
             let Shape::Prim(pb) = &c.b else {
                 panic!("b is not a primitive")
             };
-            let b = k.make(pb).expect("making b");
+            let b = k.make(&place(pb)).expect("making b");
             match std::env::args().nth(2).as_deref() {
                 Some("intersection") => k.intersection(&a, &b),
                 Some("difference") => k.difference(&a, &b),
