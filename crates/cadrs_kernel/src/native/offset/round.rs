@@ -955,7 +955,7 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
                     Some(Ok(Some(_))) => cur,
                     _ => {
                         return Err(KernelError::InvalidParameter(
-                            "The shell is as thick as the part: nothing is left to hollow".into(),
+                            "The shell is as thick as the part, nothing is left to hollow; reduce the thickness".into(),
                         ));
                     }
                 }

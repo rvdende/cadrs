@@ -1203,6 +1203,20 @@ pub trait Kernel {
         Err(KernelError::Unsupported("fillets between faces"))
     }
 
+    /// The outward unit normal of the body's boundary at each point within `within` of it,
+    /// where the boundary has a tangent plane: a face's normal, or on an edge or vertex the
+    /// faces' normal where they meet tangentially (a seam, a fillet's rail); None at a crease or
+    /// off the boundary.
+    fn boundary_normals(
+        &self,
+        body: BodyId,
+        points: &[Point3<f64>],
+        within: f64,
+    ) -> Result<Vec<Option<Vector3<f64>>>> {
+        let _ = (body, points, within);
+        Err(KernelError::Unsupported("boundary normals"))
+    }
+
     /// The outward unit normals of `face` at the points of it nearest `points` (exact, from
     /// its surface; Final: to check that faces meet tangentially).
     fn face_normals_at(

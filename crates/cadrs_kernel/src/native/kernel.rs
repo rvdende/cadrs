@@ -1853,6 +1853,15 @@ impl Kernel for NativeKernel {
         super::ops::face_tool(self, body, faces, source)
     }
 
+    fn boundary_normals(
+        &self,
+        body: BodyId,
+        points: &[Point3<f64>],
+        within: f64,
+    ) -> Result<Vec<Option<nalgebra::Vector3<f64>>>> {
+        super::ops::boundary_normals(self, body, points, within)
+    }
+
     fn face_normals_at(
         &self,
         body: BodyId,

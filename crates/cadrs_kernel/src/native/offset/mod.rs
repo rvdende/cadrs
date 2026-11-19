@@ -80,12 +80,94 @@ fn moved_by_slabs(
             .ok()?
             .body;
     }
+    // Faces the move brought together merged (a slot closed by its wall: the tops either side
+    // of it one face again, the sliver left where the walls met gone); the union keeps faces of
+    // one input apart, as a union must.
+    let from: Vec<Vec<(usize, usize)>> = (0..out.faces.len()).map(|i| vec![(0, i)]).collect();
+    crate::native::unify::unify_faces(&mut out, from, &|_, _| true);
     // (One piece as it was: a move that breaks the body apart is no Move face.)
     (out.solids.len() == b.solids.len()
         && out
             .check_with(crate::native::topo::CheckLevel::Full)
             .is_empty())
     .then_some(out)
+}
+
+/// Whether a flat face of the offset body has shrunk to nothing (a step's riser when its tread
+/// is raised level with the one above): the sharp offset keeps it as a sliver of no area, which
+/// the slabs' union with its faces merged ([`moved_by_slabs`]) takes away.
+fn collapses_a_face(out: &crate::native::topo::Body) -> bool {
+    let size = out.bbox().diagonal().max(tol::POINT);
+    let small = tol::REL_POINT * size * size;
+    out.faces.iter().any(|f| {
+        matches!(f.surf, Surface::Plane { .. })
+            && crate::native::classify::face_polygons(out, f)
+                .first()
+                .is_some_and(|l| crate::native::math::polygon_area(l).abs() <= small)
+    })
+}
+
+/// Whether moving faces turned a flat face that stays where it was inside out: its outer
+/// loop's area in (u, v) changed sign (a step's tread raised past the one above reverses the
+/// riser between them, which the sharp offset builds back to front, a sound body that is not the
+/// move). Faces are compared by index, where the offset kept them all.
+fn turns_a_face_over(
+    b: &crate::native::topo::Body,
+    out: &crate::native::topo::Body,
+    dist: &[f64],
+) -> bool {
+    if out.faces.len() != b.faces.len() {
+        return false;
+    }
+    let size = b.bbox().diagonal().max(tol::POINT);
+    let small = tol::REL_POINT * size * size;
+    let area = |body: &crate::native::topo::Body, i: usize| {
+        let polys = crate::native::classify::face_polygons(body, &body.faces[i]);
+        // (Signed by the face's sense too: a face whose senses come from its loops may be
+        // reversed by flipping either.)
+        let sign = if body.faces[i].sense { 1.0 } else { -1.0 };
+        polys
+            .first()
+            .map(|l| sign * crate::native::math::polygon_area(l))
+    };
+    (0..b.faces.len()).any(|i| {
+        dist.get(i).copied().unwrap_or(0.0) == 0.0
+            && matches!(b.faces[i].surf, Surface::Plane { .. })
+            && matches!(out.faces[i].surf, Surface::Plane { .. })
+            && match (area(b, i), area(out, i)) {
+                (Some(x), Some(y)) => {
+                    x.abs() > small && y.abs() > small && x.signum() != y.signum()
+                }
+                _ => false,
+            }
+    })
+}
+
+/// Whether a moved flat face lands on another flat face of `b` facing it (a slot's wall pushed
+/// across the slot onto the far wall): the sharp offset leaves the two back to back, a body
+/// whose check passes but which has the closed slot's walls inside it; the slabs' union
+/// ([`moved_by_slabs`]) merges them away.
+fn lands_on_opposite(b: &crate::native::topo::Body, dist: &[f64]) -> bool {
+    let near = tol::REL_POINT * b.bbox().diagonal().max(tol::POINT);
+    let plane = |i: usize| match &b.faces[i].surf {
+        Surface::Plane { f } => Some((f.o, f.z * if b.faces[i].sense { 1.0 } else { -1.0 })),
+        _ => None,
+    };
+    (0..b.faces.len()).any(|i| {
+        let d = dist.get(i).copied().unwrap_or(0.0);
+        let Some((o, n)) = (d != 0.0).then(|| plane(i)).flatten() else {
+            return false;
+        };
+        let o = o + n * d;
+        (0..b.faces.len()).any(|j| {
+            j != i
+                && plane(j).is_some_and(|(q, m)| {
+                    // (Where the other face is moved too, its own place after the move.)
+                    let q = q + m * dist.get(j).copied().unwrap_or(0.0);
+                    n.dot(&m) < -1.0 + tol::REL && (q - o).dot(&n).abs() <= near
+                })
+        })
+    })
 }
 
 /// `b` without the faces that moving by `dist` takes past their own radius (a cylinder, a
@@ -155,10 +237,17 @@ pub fn offset(k: &mut NativeKernel, body: BodyId, spec: &OffsetSpec) -> Result<O
     let first = (|| -> Result<crate::native::topo::Body> {
         Ok(if spec.sharp || dist.iter().all(|d| *d == 0.0) {
             let out = sharp::offset_sharp(&b, &dist)?;
+            // (Faces the sharp offset found passed through and took away (a riser whose tread
+            // was raised past the one above) are faces turned inside out by the move.)
+            if moving && (out.faces.len() < b.faces.len() || turns_a_face_over(&b, &out, &dist)) {
+                return Err(too_far("a face beside them would turn inside out"));
+            }
             if moving
-                && !out
-                    .check_with(crate::native::topo::CheckLevel::Full)
-                    .is_empty()
+                && (lands_on_opposite(&b, &dist)
+                    || collapses_a_face(&out)
+                    || !out
+                        .check_with(crate::native::topo::CheckLevel::Full)
+                        .is_empty())
             {
                 // (Faces run into each other: two holes widened until they merge.)
                 moved_by_slabs(&b, &spec.faces)
