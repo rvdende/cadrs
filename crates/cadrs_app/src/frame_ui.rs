@@ -11,8 +11,11 @@
 //! - *Corner overrides*: sketch points or part vertices at corners joined otherwise; each picked
 //!   point gets a row of its own with its treatment and flip.
 //! - *Trim to parts*: parts the members are cut back by (a wall, another frame's members).
+//! - **Keep the other side** of the trims (all but the largest piece).
 //! - **End caps** with their *Thickness* (plates closing hollow members' free ends) and
-//!   **Gussets** with their *Size* and *Thickness* (triangular plates in two-member corners).
+//!   **Gussets** with their *Size*, *Thickness*, *Chamfer* and *Position* (middle, top or
+//!   bottom of the section): triangular plates in two-member corners. An override's row has a
+//!   gusset checkbox of its own, and its flip at a corner of three or more picks the next pair.
 //!
 //! The toolbar's Frame button starts it with the selected sketch curves, edges and sketches.
 //! The cut list of every frame in the Part Studio is the Cut list panel ([`crate::cut_list`]).
@@ -465,6 +468,7 @@ fn corner_row(
     })
     .with_children(|r| {
         r.spawn((
+            Name::new(format!("{name}-label")),
             t.text(
                 label,
                 t.font_sm,

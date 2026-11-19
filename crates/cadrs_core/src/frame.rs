@@ -20,7 +20,9 @@
 //!   them), coped (as butted, the second cut to the first's shape: a tube saddled round a tube) or
 //!   left as they are. **Corner overrides** give single corners another treatment. A member that
 //!   ends on another's span (a T) is cut against it; where three or more members end at one
-//!   point the longest runs on (an override picks another) and the others are cut against it.
+//!   point two in line run through, else the two at the widest angle are joined as a corner of
+//!   two (an override's turn picks another pair), and the others are cut against both and
+//!   against each other along their bisectors.
 //! - **Trim to parts** cuts members back by other parts (the larger piece kept, or the other
 //!   side); **End caps** close hollow members' free ends; **Gussets** fill two-member corners
 //!   (centred, or flush with the section's top or bottom, their inner corner chamfered), and an
@@ -270,7 +272,9 @@ pub struct FrameFeature {
     #[serde(default = "yes")]
     pub merge_tangent: bool,
     /// How members ending at one point are joined. Butt and coped: the longer member runs on
-    /// (the first in the path where they are as long), the shorter is cut against it.
+    /// (of two as long, the one along the path's first member), the other is cut against it.
+    /// At three or more, the main pair (the widest angle) is joined so and the others are cut
+    /// against both.
     #[serde(default)]
     pub corner: CornerType,
     /// Butt and coped corners: the shorter member runs on, not the longer.
@@ -293,9 +297,9 @@ pub struct FrameFeature {
     pub cap_thickness: f64,
     #[serde(default = "cap_thickness_expr")]
     pub cap_thickness_expr: String,
-    /// A triangular plate in the angle of every corner of two members: its legs `gusset_size`
-    /// along the members' inner sides from where they meet, `gusset_thickness` thick, in the
-    /// middle of the section.
+    /// A triangular plate in the angle of every corner of two members (an override can add or
+    /// leave out one): its legs `gusset_size` along the members' inner sides from where they
+    /// meet, `gusset_thickness` thick, across the section as `gusset_position` says.
     #[serde(default)]
     pub gussets: bool,
     #[serde(default = "gusset_size")]
@@ -1338,6 +1342,11 @@ pub struct MemberInfo {
     /// An end cap or a gusset (a plate, its size in `profile`, `length` 0), not a member.
     #[serde(default)]
     pub plate: bool,
+    /// Each end's cut plane's normal across the member (along its section's right and up at
+    /// that end; zero for a square or no cut): mitres the same angle but on other sides of the
+    /// section are different pieces.
+    #[serde(default)]
+    pub end_normals: [[f64; 2]; 2],
     /// A standard section's family and size (to name it in another language); `None` for a
     /// custom section or a plate.
     #[serde(default)]
@@ -1423,33 +1432,50 @@ impl CutListRow {
     }
 }
 
-/// The cut list of these members: alike ones counted together (an end cut either way round is
-/// the same piece), longest first within a section, sections in the order they first come.
+/// Which way a member's end cuts face across it, the same for the member seen from either end
+/// (turned end for end its right is its left).
+fn cuts_key(m: &MemberInfo) -> [[i64; 2]; 2] {
+    let k = |v: [f64; 2]| v.map(|c| (c * 100.0).round() as i64);
+    let ahead = [k(m.end_normals[0]), k(m.end_normals[1])];
+    let mirror = |v: [f64; 2]| [-v[0], v[1]];
+    let back = [k(mirror(m.end_normals[1])), k(mirror(m.end_normals[0]))];
+    ahead.min(back)
+}
+
+/// The cut list of these members: alike ones (section, length to 0.1 mm, end cuts, which way
+/// the cuts face across the section) counted together, longest first within a section,
+/// sections in the order they first come.
 pub fn cut_list(members: &[MemberInfo]) -> Vec<CutListRow> {
     let mut rows: Vec<CutListRow> = Vec::new();
+    let mut keys: Vec<[[i64; 2]; 2]> = Vec::new();
     let length_key = |l: f64| (l * 10.0).round() as i64;
     for m in members {
         let mut ends = m.ends;
         if ends[0].key() > ends[1].key() {
             ends.swap(0, 1);
         }
-        match rows.iter_mut().find(|r| {
-            r.profile == m.profile
+        let key = cuts_key(m);
+        match rows.iter_mut().zip(&keys).find(|(r, k)| {
+            **k == key
+                && r.profile == m.profile
                 && length_key(r.length) == length_key(m.length)
                 && r.ends.map(EndCut::key) == ends.map(EndCut::key)
                 && r.curved == m.curved
                 && r.plate == m.plate
         }) {
-            Some(r) => r.parts.push(m.part),
-            None => rows.push(CutListRow {
-                item: 0,
-                profile: m.profile.clone(),
-                length: m.length,
-                ends,
-                curved: m.curved,
-                plate: m.plate,
-                parts: vec![m.part],
-            }),
+            Some((r, _)) => r.parts.push(m.part),
+            None => {
+                keys.push(key);
+                rows.push(CutListRow {
+                    item: 0,
+                    profile: m.profile.clone(),
+                    length: m.length,
+                    ends,
+                    curved: m.curved,
+                    plate: m.plate,
+                    parts: vec![m.part],
+                });
+            }
         }
     }
     let order: Vec<String> = {
@@ -1811,6 +1837,7 @@ mod tests {
             curved: false,
             volume: 0.0,
             plate: false,
+            end_normals: [[0.0; 2]; 2],
             family: Some(ProfileFamily::SquareTube),
             plate_kind: None,
             size: "40x40x3".into(),
@@ -1878,6 +1905,7 @@ mod tests {
             curved: false,
             volume: 1.0,
             plate: false,
+            end_normals: [[0.0; 2]; 2],
             family: Some(ProfileFamily::TSlot),
             plate_kind: None,
             size: "20x20".into(),

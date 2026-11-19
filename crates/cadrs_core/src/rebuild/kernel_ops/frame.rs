@@ -28,8 +28,8 @@ type End = (usize, usize);
 /// Curves meeting at an angle below this are tangent (radians).
 const TANGENT: f64 = 0.5 * std::f64::consts::PI / 180.0;
 
-/// A circular arc of the path: its centre, the unit normal it turns about (counter-clockwise),
-/// its radius and the angle it sweeps.
+/// A circular arc of the path: its centre, the unit normal it turns about (counter-clockwise)
+/// and its radius.
 #[derive(Clone, Copy)]
 struct Arc3 {
     center: P,
@@ -137,6 +137,8 @@ struct EndPlan {
     /// the pieces on its side).
     copes: Vec<(usize, P, V)>,
     cut: Option<EndCut>,
+    /// The plane its cut lies on (its normal), for the cut list to tell cuts apart.
+    cut_normal: Option<V>,
 }
 
 /// What an end is cut against at a corner: the members there that run through it (one, or two
@@ -193,7 +195,24 @@ impl Rebuilder {
         // The path's curves.
         let mut segs: Vec<Seg> = Vec::new();
         let mut missing = 0usize;
+        // A whole sketch as its curves one by one, so each member is known by its curve (and
+        // keeps its id and names when other curves of the sketch come or go).
+        let mut refs: Vec<PathRef> = Vec::new();
         for p in &x.path {
+            match p {
+                PathRef::Sketch(sk) => match sketch_of(before, *sk) {
+                    Some((g, _)) => refs.extend(
+                        g.curves
+                            .iter()
+                            .filter(|(_, c)| !c.construction)
+                            .map(|(curve, _)| PathRef::SketchCurve { sketch: *sk, curve }),
+                    ),
+                    None => missing += 1,
+                },
+                p => refs.push(p.clone()),
+            }
+        }
+        for p in &refs {
             let curves = match self.path_curves(before, state, std::slice::from_ref(p)) {
                 Ok(c) => c,
                 Err(_) => {
@@ -201,6 +220,7 @@ impl Rebuilder {
                     continue;
                 }
             };
+            // (A spline's spans by their place along it.)
             let who = path_identity(p);
             for (k, c) in curves.into_iter().enumerate() {
                 let key = naming::stable_hash(format!("{who}/{k}").as_bytes());
@@ -384,8 +404,9 @@ impl Rebuilder {
                 let label = frame::gusset_label(x.gusset_size, x.gusset_thickness);
                 for &(v, e0, e1) in &gusset_at {
                     let (k0, k1) = (members[e0.0].key, members[e1.0].key);
+                    // (Two members can meet at both their ends.)
                     let key = naming::stable_hash(
-                        format!("gusset/{}/{}", k0.min(k1), k0.max(k1)).as_bytes(),
+                        format!("gusset/{k0}/{}/{k1}/{}", e0.1, e1.1).as_bytes(),
                     );
                     let made = self.frame_gusset(
                         state,
@@ -449,6 +470,13 @@ impl Rebuilder {
                 curved: !m.straight,
                 volume,
                 plate: false,
+                end_normals: [0, 1].map(|e| match plans[i][e].cut_normal {
+                    Some(n) if !m.closed && !trimmed[i][e] => {
+                        let (ax, ay) = m.axes(e);
+                        [n.dot(&ax), n.dot(&ay)]
+                    }
+                    _ => [0.0; 2],
+                }),
                 family: Some(x.family),
                 size: size.clone(),
                 plate_kind: None,
@@ -479,6 +507,7 @@ impl Rebuilder {
                 curved: false,
                 volume,
                 plate: true,
+                end_normals: [[0.0; 2]; 2],
                 family: None,
                 size: String::new(),
                 plate_kind: Some(kind),
@@ -1197,105 +1226,195 @@ fn plan_corners(
             for &e in ends {
                 plan_butt(section, &through, members, e, *v, coped, margin, plans);
             }
+            split_neighbours(section, members, ends, *v, margin, plans);
             continue;
         }
         match ends.as_slice() {
             [] | [_] => {}
-            [e0, e1] => {
-                let (a, b) = (members[e0.0].inward(e0.1), members[e1.0].inward(e1.1));
-                // Running straight on: two pieces end to end.
-                if a.dot(&b) < -TANGENT.cos() {
-                    continue;
-                }
-                if a.dot(&b) > TANGENT.cos() {
-                    return Err("Two members fold back on each other at a corner".into());
-                }
-                if kind == CornerType::Miter {
-                    let n = (a - b).normalize();
-                    for (e, n) in [(*e0, n), (*e1, -n)] {
-                        let m = &members[e.0];
-                        let k = m.inward(e.1).dot(&n);
-                        let over = reach(section, m.axes(e.1), &n) / k;
-                        let plan = &mut plans[e.0][e.1];
-                        plan.run_on = plan.run_on.max(over.max(0.0) + margin);
-                        plan.planes.push((*v, n));
-                        plan.cut = Some(angle_cut(k));
-                    }
-                    continue;
-                }
-                let along = |e: &End| members[e.0].inward(e.1).dot(&reference).abs();
-                let runs_on_first = |p: &End, q: &End| {
-                    let (lp, lq) = (members[p.0].length, members[q.0].length);
-                    if (lp - lq).abs() > tol {
-                        return lp > lq;
-                    }
-                    let (ap, aq) = (along(p), along(q));
-                    if (ap - aq).abs() > 1e-6 {
-                        return ap > aq;
-                    }
-                    p.0 < q.0
-                };
-                let (mut t, mut o) = if runs_on_first(e0, e1) {
-                    (*e0, *e1)
-                } else {
-                    (*e1, *e0)
-                };
-                if flip {
-                    std::mem::swap(&mut t, &mut o);
-                }
-                let through = Through {
-                    members: vec![t.0],
-                    a: members[t.0].inward(t.1),
-                    axes: members[t.0].axes(t.1),
-                    runs_on: Some(t),
-                };
-                plan_butt(section, &through, members, o, *v, coped, margin, plans);
-            }
+            [e0, e1] => join_two(
+                (*e0, *e1),
+                kind,
+                flip,
+                (section, members, reference, tol, margin),
+                *v,
+                plans,
+            )?,
             _ => {
-                // Two in line make one run through the point (a crossbar's halves), the
-                // others cut against them; else the longest runs on (the next ones with the
-                // override's turn).
+                // Two in line make one run through the point (a crossbar's halves); else the
+                // main pair, the two at the widest angle (of pairs as wide, the one lying
+                // flattest across the first member's up; an override's turn picks the next),
+                // is joined as a corner of two. The others are cut against both, and against
+                // each other along their bisectors.
                 let inline = ends.iter().enumerate().find_map(|(i, p)| {
                     ends[i + 1..].iter().find_map(|q| {
                         let (a, b) = (members[p.0].inward(p.1), members[q.0].inward(q.1));
                         (a.dot(&b) < -TANGENT.cos()).then_some((*p, *q))
                     })
                 });
-                let through = match inline {
-                    Some((p, q)) => Through {
-                        members: vec![p.0, q.0],
-                        a: members[p.0].inward(p.1),
-                        axes: members[p.0].axes(p.1),
-                        runs_on: None,
-                    },
+                let main: Vec<End> = match inline {
+                    Some((p, q)) => vec![p, q],
                     None => {
-                        let mut order = ends.clone();
-                        order.sort_by(|p, q| {
-                            members[q.0]
-                                .length
-                                .total_cmp(&members[p.0].length)
-                                .then(p.0.cmp(&q.0))
-                        });
-                        let t = order[turn % order.len()];
-                        Through {
-                            members: vec![t.0],
-                            a: members[t.0].inward(t.1),
-                            axes: members[t.0].axes(t.1),
-                            runs_on: Some(t),
+                        let up = members[0].up;
+                        let mut pairs: Vec<(End, End, f64, f64)> = Vec::new();
+                        for (i, p) in ends.iter().enumerate() {
+                            for q in &ends[i + 1..] {
+                                let (a, b) = (members[p.0].inward(p.1), members[q.0].inward(q.1));
+                                let flat = a.cross(&b).normalize().dot(&up).abs();
+                                pairs.push((*p, *q, a.dot(&b), flat));
+                            }
                         }
+                        pairs.sort_by(|x, y| {
+                            // (As whole numbers: -0 and 0 alike.)
+                            let round = |c: f64| (c * 1e6).round() as i64;
+                            round(x.2)
+                                .cmp(&round(y.2))
+                                .then(round(y.3).cmp(&round(x.3)))
+                        });
+                        let (p, q, ..) = pairs[turn % pairs.len()];
+                        join_two(
+                            (p, q),
+                            kind,
+                            flip,
+                            (section, members, reference, tol, margin),
+                            *v,
+                            plans,
+                        )?;
+                        vec![p, q]
                     }
                 };
-                for e in ends {
-                    let theirs =
-                        through.members.contains(&e.0) && (through.runs_on.is_none_or(|t| t == *e));
-                    if !theirs {
-                        plan_butt(section, &through, members, *e, *v, coped, margin, plans);
+                let others: Vec<End> = ends.iter().copied().filter(|e| !main.contains(e)).collect();
+                for &m in &main {
+                    let mm = &members[m.0];
+                    // (In line, either half's way and axes serve.)
+                    let through = Through {
+                        members: if inline.is_some() {
+                            main.iter().map(|e| e.0).collect()
+                        } else {
+                            vec![m.0]
+                        },
+                        a: mm.inward(m.1),
+                        axes: mm.axes(m.1),
+                        runs_on: None,
+                    };
+                    for &e in &others {
+                        plan_butt(section, &through, members, e, *v, coped, margin, plans);
+                    }
+                    if inline.is_some() {
+                        break;
                     }
                 }
+                split_neighbours(section, members, &others, *v, margin, plans);
             }
         }
     }
     Ok(out)
+}
+
+/// Joins two member ends at `v` as the corner `kind` says: mitred, or the one that runs on
+/// (the longer; of two as long, the one along `reference`, else along X, else Y; `flip` swaps
+/// them) cut across by the other, butted or coped. In line, nothing (two pieces end to end).
+fn join_two(
+    (e0, e1): (End, End),
+    kind: CornerType,
+    flip: bool,
+    (section, members, reference, tol, margin): (&[Region], &[Member], V, f64, f64),
+    v: P,
+    plans: &mut [[EndPlan; 2]],
+) -> Result<(), String> {
+    let (a, b) = (members[e0.0].inward(e0.1), members[e1.0].inward(e1.1));
+    if a.dot(&b) < -TANGENT.cos() {
+        return Ok(());
+    }
+    if a.dot(&b) > TANGENT.cos() {
+        return Err("Two members fold back on each other at a corner".into());
+    }
+    if kind == CornerType::Miter {
+        let n = (a - b).normalize();
+        for (e, n) in [(e0, n), (e1, -n)] {
+            let m = &members[e.0];
+            let k = m.inward(e.1).dot(&n);
+            let over = reach(section, m.axes(e.1), &n) / k;
+            let plan = &mut plans[e.0][e.1];
+            plan.run_on = plan.run_on.max(over.max(0.0) + margin);
+            plan.planes.push((v, n));
+            plan.cut = Some(angle_cut(k));
+            plan.cut_normal = Some(n);
+        }
+        return Ok(());
+    }
+    // Of two as long: the one along the reference, then along X, then Y (so every corner of a
+    // regular frame, a cube's too, picks alike).
+    let along = |e: &End| {
+        let d = members[e.0].inward(e.1);
+        [d.dot(&reference).abs(), d.x.abs(), d.y.abs()]
+    };
+    let runs_on_first = |p: &End, q: &End| {
+        let (lp, lq) = (members[p.0].length, members[q.0].length);
+        if (lp - lq).abs() > tol {
+            return lp > lq;
+        }
+        for (ap, aq) in along(p).into_iter().zip(along(q)) {
+            if (ap - aq).abs() > 1e-6 {
+                return ap > aq;
+            }
+        }
+        p.0 < q.0
+    };
+    let (mut t, mut o) = if runs_on_first(&e0, &e1) {
+        (e0, e1)
+    } else {
+        (e1, e0)
+    };
+    if flip {
+        std::mem::swap(&mut t, &mut o);
+    }
+    let through = Through {
+        members: vec![t.0],
+        a: members[t.0].inward(t.1),
+        axes: members[t.0].axes(t.1),
+        runs_on: Some(t),
+    };
+    plan_butt(
+        section,
+        &through,
+        members,
+        o,
+        v,
+        kind == CornerType::CopedButt,
+        margin,
+        plans,
+    );
+    Ok(())
+}
+
+/// Ends cut against the same members at `v` cut against each other too, on the plane halving
+/// the angle between each two of them (a post and a diagonal on one chord), so they don't
+/// overlap where they meet.
+fn split_neighbours(
+    section: &[Region],
+    members: &[Member],
+    ends: &[End],
+    v: P,
+    margin: f64,
+    plans: &mut [[EndPlan; 2]],
+) {
+    for (i, p) in ends.iter().enumerate() {
+        for q in &ends[i + 1..] {
+            let (a, b) = (members[p.0].inward(p.1), members[q.0].inward(q.1));
+            if a.dot(&b).abs() > TANGENT.cos() {
+                continue;
+            }
+            let n = (a - b).normalize();
+            for (e, n) in [(*p, n), (*q, -n)] {
+                let m = &members[e.0];
+                let k = m.inward(e.1).dot(&n);
+                let over = reach(section, m.axes(e.1), &n) / k;
+                let plan = &mut plans[e.0][e.1];
+                plan.run_on = plan.run_on.max(over.max(0.0) + margin);
+                plan.planes.push((v, n));
+            }
+        }
+    }
 }
 
 /// Who a path reference is, for its curves' keys: the sketch and curve, the edge's name, the
@@ -1729,13 +1848,20 @@ fn plan_butt(
         plan.run_on = plan.run_on.max(((mine - near) / k).max(0.0) + margin);
         plan.planes.push((v + n * near, n));
         plan.cut = Some(angle_cut(k));
+        plan.cut_normal = Some(n);
     }
     // The member that ends here runs on to this one's far side: as far along -a as this one's
     // end reaches, its end face sheared across the cut plane at an angle other than square
     // (points v + t·into + q, q in its section, on the plane (p - v)·n = near).
     if let Some((t, t_end)) = through.runs_on {
         let ab = a.dot(&into);
-        let w = -near * ab / k + reach(section, b_axes, &(n * (ab / k) - a));
+        let w_at = |c: f64| -c * ab / k + reach(section, b_axes, &(n * (ab / k) - a));
+        // Coped, the end reaches down to their far side: covered there too.
+        let w = if coped {
+            w_at(near).max(w_at(-far))
+        } else {
+            w_at(near)
+        };
         let plan = &mut plans[t][t_end];
         match plan.planes.iter().position(|(_, m)| (m - a).norm() < 1e-9) {
             Some(i) => {

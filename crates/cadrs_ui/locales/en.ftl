@@ -6339,7 +6339,7 @@ cut-list-exported = Exported { $file }
 cut-list-export-failed = Couldn't export the cut list: { $error }
 # A checkbox on a corner override's row: a gusset at that corner.
 model-frame-override-gusset = Gusset
-model-frame-gusset-position = Gusset position
+model-frame-gusset-position = Position
 model-frame-gusset-center = Middle
 model-frame-gusset-top = Top
 model-frame-gusset-bottom = Bottom

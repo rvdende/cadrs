@@ -1493,3 +1493,399 @@ fn an_override_puts_a_gusset_in_one_corner() {
     let b = st.build();
     assert_eq!(b.frames.iter().filter(|m| m.plate).count(), 1);
 }
+
+/// The sketch line of `sketch` from (x0, y0) to (x1, y1) (either way).
+fn line_at(st: &Studio, sketch: FeatureId, a: (f64, f64), b: (f64, f64)) -> cadrs_sketch::CurveId {
+    let el = st.d.element(st.el).unwrap();
+    let g = &el.feature(sketch).unwrap().sketch().unwrap().geometry;
+    let at = |p: cadrs_sketch::PointId, q: (f64, f64)| {
+        let v = g.points[p].pos;
+        (v.x - q.0).abs() < 1e-9 && (v.y - q.1).abs() < 1e-9
+    };
+    g.curves
+        .iter()
+        .find(|(_, c)| match c.kind {
+            cadrs_sketch::CurveKind::Line { a: p, b: q } => {
+                (at(p, a) && at(q, b)) || (at(p, b) && at(q, a))
+            }
+            _ => false,
+        })
+        .map(|(id, _)| id)
+        .expect("the line")
+}
+
+#[test]
+fn editing_the_sketch_keeps_the_other_members_ids() {
+    // A U of three lines framed as a whole sketch; one line deleted, another drawn: the
+    // members of the lines left keep their parts.
+    let mut st = Studio::new();
+    let sk = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(
+            &[(0.0, 300.0), (0.0, 0.0), (400.0, 0.0), (400.0, 300.0)],
+            false,
+        )],
+    );
+    let mut x = tube("40x40x3");
+    x.path = vec![PathRef::Sketch(sk)];
+    let f = st.frame(x);
+    let b = st.build();
+    let id_of = |b: &rebuild::Build, at: [f64; 3]| {
+        b.parts
+            .iter()
+            .filter(|p| p.feature == f)
+            .find(|p| {
+                let c = p.mass.unwrap().center_of_mass;
+                (c.x - at[0]).abs() < 30.0 && (c.y - at[1]).abs() < 30.0
+            })
+            .map(|p| p.id)
+    };
+    let bottom = id_of(&b, [200.0, 0.0, 0.0]).unwrap();
+    let right = id_of(&b, [400.0, 150.0, 0.0]).unwrap();
+    let left_line = line_at(&st, sk, (0.0, 300.0), (0.0, 0.0));
+    st.h.execute(
+        &mut st.d,
+        &EditSketch {
+            element: st.el,
+            feature: sk,
+            op: SketchOp::Delete {
+                curves: vec![left_line],
+                points: Vec::new(),
+                dimensions: Vec::new(),
+                constraints: Vec::new(),
+            },
+        },
+    )
+    .unwrap();
+    st.h.execute(
+        &mut st.d,
+        &EditSketch {
+            element: st.el,
+            feature: sk,
+            op: polyline(&[(-200.0, 500.0), (-100.0, 500.0)], false),
+        },
+    )
+    .unwrap();
+    let b = st.build();
+    assert_eq!(b.parts.iter().filter(|p| p.feature == f).count(), 3);
+    assert_eq!(id_of(&b, [200.0, 0.0, 0.0]), Some(bottom));
+    assert_eq!(id_of(&b, [400.0, 150.0, 0.0]), Some(right));
+}
+
+#[test]
+fn coped_corners_at_sharp_and_wide_angles_close_without_overlap() {
+    for deg in [60.0f64, 120.0] {
+        let mut st = Studio::new();
+        let t = deg.to_radians();
+        let sk = st.sketch(
+            PlaneRef::Top,
+            vec![polyline(
+                &[(300.0, 0.0), (0.0, 0.0), (250.0 * t.cos(), 250.0 * t.sin())],
+                false,
+            )],
+        );
+        let mut x = FrameFeature::default();
+        x.set_family(ProfileFamily::RoundTube);
+        x.size = "48.3x3.2".into();
+        x.corner = CornerType::CopedButt;
+        x.path = vec![PathRef::Sketch(sk)];
+        st.frame(x);
+        let b = st.build();
+        assert_eq!(b.parts.len(), 2, "{deg}°");
+        assert!(st.overlap() < 1e-6, "{deg}°");
+        // The runner covers the coped end: nothing of it past the runner's end.
+        let (lo_runner, lo_coped) = {
+            let mut los: Vec<(f64, f64)> = b
+                .parts
+                .iter()
+                .map(|p| (bounds(p).0[0], volume(p)))
+                .collect();
+            los.sort_by(|a, b| b.1.total_cmp(&a.1));
+            (los[0].0, los[1].0)
+        };
+        // (At 120° the coped member itself runs off that way.)
+        if deg < 90.0 {
+            assert!(
+                lo_coped >= lo_runner - 1e-3,
+                "{deg}°: {lo_coped} < {lo_runner}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_brace_into_a_mitred_corner_keeps_the_mitre() {
+    // Rails mitred at (0, 0) with a diagonal ending there too: the rails stay mitred (the
+    // widest pair), the brace is cut against both.
+    let mut st = Studio::new();
+    let sk = st.sketch(
+        PlaneRef::Top,
+        vec![
+            polyline(
+                &[(0.0, 0.0), (400.0, 0.0), (400.0, 300.0), (0.0, 300.0)],
+                true,
+            ),
+            polyline(&[(0.0, 0.0), (400.0, 300.0)], false),
+        ],
+    );
+    let mut x = tube("40x40x3");
+    x.path = vec![PathRef::Sketch(sk)];
+    st.frame(x);
+    let b = st.build();
+    assert_eq!(b.parts.len(), 5);
+    let mitred = b
+        .frames
+        .iter()
+        .filter(|m| {
+            m.ends
+                .iter()
+                .all(|e| matches!(e, EndCut::Angle(a) if (a - 45.0).abs() < 1e-6))
+        })
+        .count();
+    assert_eq!(mitred, 4, "{:?}", b.frames);
+    assert!(st.overlap() < 1e-6);
+}
+
+#[test]
+fn a_post_and_a_diagonal_on_one_chord_split_where_they_meet() {
+    let mut st = Studio::new();
+    let sk = st.sketch(
+        PlaneRef::Top,
+        vec![
+            polyline(&[(0.0, 0.0), (600.0, 0.0)], false),
+            polyline(&[(300.0, 0.0), (300.0, 300.0)], false),
+            polyline(&[(300.0, 0.0), (600.0, 300.0)], false),
+        ],
+    );
+    let mut x = tube("40x40x3");
+    x.corner = CornerType::Butt;
+    x.path = vec![PathRef::Sketch(sk)];
+    st.frame(x);
+    let b = st.build();
+    assert_eq!(b.parts.len(), 3);
+    assert!(st.overlap() < 1e-6);
+}
+
+#[test]
+fn a_cube_cut_list_has_two_items() {
+    // Its horizontal pairs run through at each corner, the verticals stop between them: the
+    // 4 of one way are 220, the other 8 are 180, all square.
+    let mut st = Studio::new();
+    let base = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(
+            &[(0.0, 0.0), (200.0, 0.0), (200.0, 200.0), (0.0, 200.0)],
+            true,
+        )],
+    );
+    st.extrude(base, 200.0);
+    let b = st.build();
+    let part = &b.parts[0];
+    let path: Vec<PathRef> = part
+        .solid
+        .edges
+        .iter()
+        .map(|e| {
+            PathRef::Edge(EdgeRef {
+                part: part.id,
+                edge: e.name,
+                seed: e.midpoint(),
+            })
+        })
+        .collect();
+    let mut x = tube("20x20x2");
+    x.corner = CornerType::Butt;
+    x.path = path;
+    st.frame(x);
+    let b = st.build();
+    let rows = frame::cut_list(&b.frames);
+    let mut got: Vec<(i64, usize)> = rows
+        .iter()
+        .map(|r| ((r.length * 10.0).round() as i64, r.quantity()))
+        .collect();
+    got.sort();
+    assert_eq!(got, [(1800, 8), (2200, 4)], "{rows:?}");
+}
+
+#[test]
+fn flipping_a_corner_override_swaps_the_runner() {
+    let mut st = Studio::new();
+    let sk = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(&[(300.0, 0.0), (0.0, 0.0), (0.0, 200.0)], false)],
+    );
+    let mut x = tube("40x40x3");
+    x.path = vec![PathRef::Sketch(sk)];
+    x.overrides = vec![CornerOverride {
+        point: Some(point_at(&st, sk, 0.0, 0.0)),
+        at: [0.0, 0.0, 0.0],
+        corner: CornerType::Butt,
+        flip: true,
+        turn: 1,
+        gusset: None,
+    }];
+    st.frame(x);
+    let b = st.build();
+    let mut l: Vec<f64> = b.frames.iter().map(|m| m.length).collect();
+    l.sort_by(f64::total_cmp);
+    // The shorter runs on: 200 + 20, the longer stops at it: 300 − 20.
+    assert!(
+        (l[0] - 220.0).abs() < 1e-6 && (l[1] - 280.0).abs() < 1e-6,
+        "{l:?}"
+    );
+}
+
+#[test]
+fn a_rounded_rectangle_is_one_closed_member() {
+    // 400 × 300 with corners of 50: one bent ring, its section along its whole length.
+    let mut st = Studio::new();
+    let arc = |c: (f64, f64), s: (f64, f64), e: (f64, f64)| SketchOp::AddArc {
+        center: Vec2::new(c.0, c.1),
+        start: Vec2::new(s.0, s.1),
+        end: Vec2::new(e.0, e.1),
+        construction: false,
+    };
+    let sk = st.sketch(
+        PlaneRef::Top,
+        vec![
+            polyline(&[(50.0, 0.0), (350.0, 0.0)], false),
+            arc((350.0, 50.0), (350.0, 0.0), (400.0, 50.0)),
+            polyline(&[(400.0, 50.0), (400.0, 250.0)], false),
+            arc((350.0, 250.0), (400.0, 250.0), (350.0, 300.0)),
+            polyline(&[(350.0, 300.0), (50.0, 300.0)], false),
+            arc((50.0, 250.0), (50.0, 300.0), (0.0, 250.0)),
+            polyline(&[(0.0, 250.0), (0.0, 50.0)], false),
+            arc((50.0, 50.0), (0.0, 50.0), (50.0, 0.0)),
+        ],
+    );
+    let mut x = FrameFeature::default();
+    x.set_family(ProfileFamily::RoundBar);
+    x.size = "20".into();
+    x.path = vec![PathRef::Sketch(sk)];
+    st.frame(x);
+    let b = st.build();
+    assert_eq!(b.parts.len(), 1);
+    let centre = 2.0 * 300.0 + 2.0 * 200.0 + 2.0 * PI * 50.0;
+    assert!(close(total(&b), PI * 100.0 * centre, 1e-5), "{}", total(&b));
+}
+
+#[test]
+fn a_tee_on_an_arc_is_cut_against_it() {
+    // A quarter arc of radius 300 and a spoke from its middle towards the centre.
+    let mut st = Studio::new();
+    let a = 45f64.to_radians();
+    let sk = st.sketch(
+        PlaneRef::Top,
+        vec![
+            SketchOp::AddArc {
+                center: Vec2::new(0.0, 0.0),
+                start: Vec2::new(300.0, 0.0),
+                end: Vec2::new(0.0, 300.0),
+                construction: false,
+            },
+            polyline(&[(300.0 * a.cos(), 300.0 * a.sin()), (0.0, 0.0)], false),
+        ],
+    );
+    let mut x = FrameFeature::default();
+    x.set_family(ProfileFamily::RoundBar);
+    x.size = "20".into();
+    x.corner = CornerType::CopedButt;
+    x.path = vec![PathRef::Sketch(sk)];
+    st.frame(x);
+    let b = st.build();
+    assert_eq!(b.parts.len(), 2);
+    assert!(st.overlap() < 1e-6);
+    let spoke = b.frames.iter().find(|m| !m.curved).unwrap();
+    assert!(spoke.ends.contains(&EndCut::Coped), "{:?}", spoke.ends);
+}
+
+#[test]
+fn a_trim_through_two_walls_keeps_the_longest_piece() {
+    let mut st = Studio::new();
+    let walls = st.sketch(
+        PlaneRef::Top,
+        vec![
+            polyline(
+                &[
+                    (100.0, -100.0),
+                    (120.0, -100.0),
+                    (120.0, 100.0),
+                    (100.0, 100.0),
+                ],
+                true,
+            ),
+            polyline(
+                &[
+                    (300.0, -100.0),
+                    (320.0, -100.0),
+                    (320.0, 100.0),
+                    (300.0, 100.0),
+                ],
+                true,
+            ),
+        ],
+    );
+    let e = st.extrude(walls, 50.0);
+    let sk = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(&[(0.0, 0.0), (400.0, 0.0)], false)],
+    );
+    let wall_parts: Vec<cadrs_core::PartId> = st
+        .build()
+        .parts
+        .iter()
+        .filter(|p| p.feature == e)
+        .map(|p| p.id)
+        .collect();
+    assert_eq!(wall_parts.len(), 2);
+    let mut x = FrameFeature::default();
+    x.set_family(ProfileFamily::SquareBar);
+    x.size = "10".into();
+    x.anchor = Anchor::Bottom;
+    x.path = vec![PathRef::Sketch(sk)];
+    x.trim = wall_parts;
+    let f = st.frame(x);
+    let b = st.build();
+    let m = b.parts.iter().find(|p| p.feature == f).unwrap();
+    // 0..100, 120..300 and 320..400: the middle 180 kept.
+    assert!(close(volume(m), 100.0 * 180.0, 1e-6), "{}", volume(m));
+}
+
+#[test]
+fn the_cut_list_tells_mitres_facing_other_ways_apart() {
+    // A Z (its mitres facing opposite ways) and a picture frame's piece (both the same way),
+    // all 400 long between 45° cuts: two items.
+    let mut st = Studio::new();
+    let z = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(
+            &[(0.0, 300.0), (0.0, 0.0), (400.0, 0.0), (400.0, -300.0)],
+            false,
+        )],
+    );
+    let u = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(
+            &[
+                (1000.0, 300.0),
+                (1000.0, 0.0),
+                (1400.0, 0.0),
+                (1400.0, 300.0),
+            ],
+            false,
+        )],
+    );
+    let mut x = FrameFeature::default();
+    x.set_family(ProfileFamily::RectTube);
+    x.size = "60x40x3".into();
+    x.corner = CornerType::Miter;
+    x.path = vec![PathRef::Sketch(z), PathRef::Sketch(u)];
+    st.frame(x);
+    let b = st.build();
+    let rows = frame::cut_list(&b.frames);
+    let both_mitred: Vec<&frame::CutListRow> = rows
+        .iter()
+        .filter(|r| r.ends.iter().all(|e| matches!(e, EndCut::Angle(_))))
+        .collect();
+    assert_eq!(both_mitred.len(), 2, "{rows:?}");
+}

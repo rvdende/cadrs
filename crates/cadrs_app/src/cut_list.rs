@@ -260,11 +260,14 @@ fn rebuild(world: &mut World) {
     let mut commands = world.commands();
     commands.entity(panel).with_children(|p| {
         side_panel_header(p, &t, &tr("cut-list-title"), "cut-list-panel-close");
-        p.spawn(Node {
-            padding: UiRect::new(Val::Px(8.0), Val::Px(8.0), Val::Px(6.0), Val::Px(6.0)),
-            column_gap: Val::Px(6.0),
-            ..default()
-        })
+        p.spawn((
+            Name::new("cut-list-actions"),
+            Node {
+                padding: UiRect::new(Val::Px(8.0), Val::Px(8.0), Val::Px(6.0), Val::Px(6.0)),
+                column_gap: Val::Px(6.0),
+                ..default()
+            },
+        ))
         .with_children(|r| {
             r.spawn(
                 cadrs_ui::Button::new("cut-list-copy")
@@ -428,11 +431,14 @@ fn rebuild(world: &mut World) {
             BorderColor::all(t.panel_border),
         ))
         .with_children(|s| {
-            s.spawn(t.text(
-                tr("cut-list-totals"),
-                11.0,
-                FontWeight::MEDIUM,
-                t.muted_foreground,
+            s.spawn((
+                Name::new("cut-list-stock"),
+                t.text(
+                    tr("cut-list-totals"),
+                    11.0,
+                    FontWeight::MEDIUM,
+                    t.muted_foreground,
+                ),
             ));
             for (i, (profile, length)) in totals.iter().enumerate() {
                 let of = || {
