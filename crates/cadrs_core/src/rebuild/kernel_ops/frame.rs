@@ -209,7 +209,7 @@ impl Rebuilder {
                     ),
                     None => missing += 1,
                 },
-                p => refs.push(p.clone()),
+                p => refs.push(*p),
             }
         }
         for p in &refs {
