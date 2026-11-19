@@ -298,6 +298,18 @@ pub(crate) enum Role {
     ThreadDiameter,
     ThreadCustomPitch,
     ThreadHand,
+    // The Frame (`crate::frame_ui`).
+    FramePath,
+    FrameFamily,
+    FrameSize,
+    FrameSketch,
+    FrameAnchor,
+    FrameAngle,
+    FrameCorner,
+    FrameCorners,
+    /// A corner override's treatment and its flip, by its place in the list.
+    FrameOverride(u8),
+    FrameOverrideFlip(u8),
     // The Gear (`crate::gear_ui`).
     GearFace,
     GearShaft,
@@ -869,6 +881,9 @@ fn dialog(
         Role::HelixEntity,
         Role::FillEdges,
         Role::ThreadEdge,
+        Role::FramePath,
+        Role::FrameSketch,
+        Role::FrameCorners,
         Role::GearFace,
         Role::GearShaft,
         Role::GearMateShaft,
@@ -2110,6 +2125,11 @@ fn on_select(ev: On<SelectChange>, q: Query<&Role>, mut commands: Commands) {
         Role::ThreadPitch => "Pitch",
         Role::ThreadEnd => "End type",
         Role::ThreadHand => "Direction",
+        Role::FrameFamily => "Profile",
+        Role::FrameSize => "Size",
+        Role::FrameAnchor => "Alignment",
+        Role::FrameCorner => "Corners",
+        Role::FrameOverride(_) => "Corner override",
         Role::GearType => "Gear type",
         Role::GearStyle => "Tooth line",
         Role::GearHand => "Direction",
@@ -2181,6 +2201,8 @@ fn on_select(ev: On<SelectChange>, q: Query<&Role>, mut commands: Commands) {
         Role::End if HoleEnd::ALL.get(i) == Some(&HoleEnd::UpToEntity) => {
             Some(AppliedField::HoleUpTo)
         }
+        // A Frame's Custom profile: its sketch's field takes the picks.
+        r @ Role::FrameFamily => crate::frame_ui::field_after_select(r, i),
         // The Transform's type: its first reference field takes the picks.
         Role::TransformType => cadrs_core::transform::TransformType::ALL
             .get(i)
@@ -2640,6 +2662,12 @@ fn on_button(a: On<Activate>, q: Query<&Role>, mut commands: Commands) {
                 }
             });
         }
+        Ok(Role::FrameOverrideFlip(i)) => {
+            let i = *i;
+            change(&mut commands, "Flip corner", move |k| {
+                crate::frame_ui::flip(k, Role::FrameOverrideFlip(i))
+            });
+        }
         Ok(Role::PartialFlip) => change(&mut commands, "Flip direction", |k| {
             if let FeatureKind::Fillet(x) = k {
                 x.flip_partial = !x.flip_partial;
@@ -2859,6 +2887,7 @@ pub fn toolbar_kind(name: &str) -> Option<AppliedKind> {
         "fill" => Some(AppliedKind::Fill),
         "thread" => Some(AppliedKind::Thread),
         "gear" => Some(AppliedKind::Gear),
+        "frame" => Some(AppliedKind::Frame),
         "sheet-metal-model" => Some(AppliedKind::SheetMetal),
         n => crate::sheetmetal_tools_ui::SmTool::named(n).map(AppliedKind::SheetMetalTool),
     }

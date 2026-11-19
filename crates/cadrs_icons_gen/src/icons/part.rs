@@ -23,6 +23,7 @@ pub fn icons() -> Vec<Def> {
         def("hole", Solid, "Hole", hole),
         def("thread", Solid, "Thread", thread),
         def("gear", Solid, "Gear", gear),
+        def("frame", Solid, "Frame", frame),
         def("linear-pattern", Solid, "Linear pattern", linear_pattern),
         def(
             "circular-pattern",
@@ -524,6 +525,72 @@ fn gear() -> Vec<String> {
         poly(&at(h), ACCENT, ""),
         poly(&iso_circle(o, 0.0, 0.0, h, 0.66 * r_root, 40), TOP, THIN),
         poly(&iso_circle(o, 0.0, 0.0, h, 0.28 * r_root, 24), SHADE, THIN),
+    ]
+}
+
+fn frame() -> Vec<String> {
+    // Output: two square tubes laid along an L of sketch lines, mitred where they meet (the
+    // diagonal seam on top), their open ends hollow. The members are what the tool makes, so
+    // their top faces carry an accent wash.
+    let o = (12.0, 6.0);
+    let p = projector(o);
+    let (l, t, w) = (8.5, 3.6, 0.7); // leg length, tube size, wall
+    let h = t;
+    let top = [
+        p(0.0, 0.0, h),
+        p(l, 0.0, h),
+        p(l, t, h),
+        p(t, t, h),
+        p(t, l, h),
+        p(0.0, l, h),
+    ];
+    els![
+        // Inner sides of the two legs, which meet at the inner corner of the mitre.
+        poly(
+            &[p(t, t, h), p(l, t, h), p(l, t, 0.0), p(t, t, 0.0)],
+            SHADE,
+            ""
+        ),
+        poly(
+            &[p(t, t, h), p(t, l, h), p(t, l, 0.0), p(t, t, 0.0)],
+            MID,
+            ""
+        ),
+        // The open ends, each showing the inner wall that faces the camera.
+        poly(
+            &[p(l, 0.0, h), p(l, t, h), p(l, t, 0.0), p(l, 0.0, 0.0)],
+            MID,
+            ""
+        ),
+        poly(
+            &[
+                p(l, w, h - w),
+                p(l, t - w, h - w),
+                p(l, t - w, w),
+                p(l, w, w)
+            ],
+            SHADE,
+            THIN
+        ),
+        poly(
+            &[p(0.0, l, h), p(t, l, h), p(t, l, 0.0), p(0.0, l, 0.0)],
+            SHADE,
+            ""
+        ),
+        poly(
+            &[
+                p(w, l, h - w),
+                p(t - w, l, h - w),
+                p(t - w, l, w),
+                p(w, l, w)
+            ],
+            MID,
+            THIN
+        ),
+        poly(&top, TOP, ""),
+        poly(&top, ACCENT, SEL),
+        // The mitre seam.
+        seg(p(0.0, 0.0, h), p(t, t, h), ""),
     ]
 }
 

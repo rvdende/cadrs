@@ -843,6 +843,8 @@ fn view_tools(bar: &mut ChildSpawnerCommands, t: &Theme) {
                 "sheet-metal-table",
                 "shell-doc-sheet-metal-table",
             ),
+            // Issue #266: shown once a frame has members (`crate::cut_list`).
+            ("panel-cut-list", "cut-list", "shell-doc-cut-list"),
         ] {
             g.spawn(
                 ToolButton::new(name, icon_name)
@@ -1655,6 +1657,7 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
             ("hole", "hole", false, "shell-tool-hole"),
             ("thread", "thread", false, "shell-tool-thread"),
             ("gear", "gear", false, "shell-tool-gear"),
+            ("frame", "frame", false, "shell-tool-frame"),
             ("move-face", "offset", true, "shell-tool-direct-edit"),
         ],
         &[
@@ -3686,6 +3689,7 @@ enum RowKind {
     Helix,
     Thread,
     Gear,
+    Frame,
     Fill,
     /// Move face, Delete face, Simplify (their icon).
     DirectEdit(&'static str),
@@ -3735,6 +3739,7 @@ impl RowKind {
             RowKind::Helix => "thread",
             RowKind::Thread => "thread",
             RowKind::Gear => "gear",
+            RowKind::Frame => "frame",
             RowKind::Fill => "surface",
             RowKind::Variable => "variables",
             RowKind::SheetMetalModel => "sheet-metal-model",
@@ -3899,6 +3904,7 @@ fn rebuild_feature_rows(
                     cadrs_core::FeatureKind::FaceBlend(_) => RowKind::Fillet,
                     cadrs_core::FeatureKind::Thread(_) => RowKind::Thread,
                     cadrs_core::FeatureKind::Gear(_) => RowKind::Gear,
+                    cadrs_core::FeatureKind::Frame(_) => RowKind::Frame,
                     cadrs_core::FeatureKind::Fill(_) => RowKind::Fill,
                     cadrs_core::FeatureKind::Variable(_) => RowKind::Variable,
                     cadrs_core::FeatureKind::SheetMetalModel(_) => RowKind::SheetMetalModel,

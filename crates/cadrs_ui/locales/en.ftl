@@ -915,6 +915,8 @@ shell-doc-analysis-tools = Analysis tools
 shell-doc-mass-properties = Mass properties
 shell-doc-simulation = Simulation
 shell-doc-sheet-metal-table = Sheet metal table and flat view
+# The tab bar's button for the frames' cut list panel.
+shell-doc-cut-list = Cut list
 # Tooltip of the + at the tab bar's left.
 shell-doc-insert-tab = Insert new tab
 # The tab bar's arrows: scroll to the tabs before or after, or list them all.
@@ -957,6 +959,8 @@ shell-tool-shell = Shell
 shell-tool-hole = Hole
 shell-tool-thread = Thread
 shell-tool-gear = Gear
+# The toolbar's Frame tool: structural members (beams, tubes, extrusions) along sketch lines.
+shell-tool-frame = Frame
 # The direct edit tools' button.
 shell-tool-direct-edit = Move face, Delete face, Simplify
 shell-tool-linear-pattern = Linear pattern
@@ -6254,3 +6258,71 @@ cam-component-newest = The component is at the newest version
 cam-still-reading-parts = Still reading the Part Studio's parts
 # The heading of a CAM dialog's list of warnings.
 cam-warnings = Warnings
+
+## crates/cadrs_app/src/frame_ui.rs and cut_list.rs (issue #266: frames and their cut list)
+# The Frame dialog's field of the curves the members run along.
+model-frame-path = Sketch curves or edges
+model-frame-profile = Profile
+# The Frame dialog's field for the sketch drawn as a custom section.
+model-frame-profile-sketch = Profile sketch
+model-frame-family-tslot = T-slot extrusion
+model-frame-family-square-tube = Square tube
+model-frame-family-rect-tube = Rectangular tube
+model-frame-family-round-tube = Round tube
+model-frame-family-square-bar = Square bar
+model-frame-family-round-bar = Round bar
+model-frame-family-flat-bar = Flat bar
+model-frame-family-angle = Angle
+# UPN is a European channel standard; keep it.
+model-frame-family-channel = Channel (UPN)
+# IPE is a European I-beam standard; keep it.
+model-frame-family-ibeam = I-beam (IPE)
+model-frame-family-custom = Custom (sketch)
+# Which point of the section lies on the path.
+model-frame-alignment = Alignment
+model-frame-anchor-top-left = Top left
+model-frame-anchor-top = Top
+model-frame-anchor-top-right = Top right
+model-frame-anchor-left = Left
+model-frame-anchor-center = Center
+model-frame-anchor-right = Right
+model-frame-anchor-bottom-left = Bottom left
+model-frame-anchor-bottom = Bottom
+model-frame-anchor-bottom-right = Bottom right
+# The section's own origin point.
+model-frame-anchor-origin = Section origin
+model-frame-mirror = Mirror profile
+model-frame-merge-tangent = Merge tangent segments
+model-frame-corners = Corners
+model-frame-corner-miter = Miter
+# A butt joint: one member runs on, the other is cut square against it.
+model-frame-corner-butt = Butt
+# A coped butt joint: the second member cut to the shape of the first.
+model-frame-corner-coped = Coped butt
+# Tooltip of the flip button beside the corner type.
+model-frame-flip-corner = Swap which member runs on
+# Field of sketch points at corners joined differently.
+model-frame-overrides = Corner overrides (sketch points)
+# { $n } is the corner override's number.
+model-frame-corner-n = Corner { $n }
+cut-list-title = Cut list
+cut-list-item = #
+# Column heading: quantity.
+cut-list-qty = Qty
+# Column heading: the angles of the two end cuts.
+cut-list-angles = Angles
+cut-list-coped = Coped
+# { $length } is a bent member's length along its path ("694.2 mm").
+cut-list-bent = { $length } (bent)
+cut-list-totals = Stock
+# { $profile } the section, { $length } its stock summed ("1400 mm"), { $count } how many members.
+cut-list-total = { $profile }: { $length } in { $count }
+cut-list-copy = Copy
+cut-list-export = Export CSV
+cut-list-empty = No frame members
+# { $count } is how many rows were copied.
+cut-list-copied = Copied { $count } rows
+# { $file } is the file's name.
+cut-list-exported = Exported { $file }
+# { $error } is why.
+cut-list-export-failed = Couldn't export the cut list: { $error }

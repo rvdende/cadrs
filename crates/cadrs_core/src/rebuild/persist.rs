@@ -400,6 +400,9 @@ pub struct SavedState {
     /// P3I.2.
     #[serde(default)]
     sheet_metal: Vec<crate::sheetmetal::SheetMetalContext>,
+    /// Issue #266: the Frame features' members.
+    #[serde(default)]
+    frames: Vec<crate::frame::MemberInfo>,
 }
 
 impl SavedState {
@@ -418,6 +421,7 @@ impl SavedState {
             derived,
             derived_sketches,
             sheet_metal,
+            frames,
         } = s;
         SavedState {
             parts: parts.save(w),
@@ -432,6 +436,7 @@ impl SavedState {
             derived: derived.save(w),
             derived_sketches: derived_sketches.save(w),
             sheet_metal: (**sheet_metal).clone(),
+            frames: (**frames).clone(),
         }
     }
 
@@ -449,6 +454,7 @@ impl SavedState {
             derived: Persist::load(self.derived, r)?,
             derived_sketches: Persist::load(self.derived_sketches, r)?,
             sheet_metal: Arc::new(self.sheet_metal),
+            frames: Arc::new(self.frames),
         })
     }
 }

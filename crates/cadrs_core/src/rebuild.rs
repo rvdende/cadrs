@@ -115,6 +115,11 @@ pub struct Build {
     /// contexts", SM1.3), in list order; a failed model keeps its context (the flat view shows
     /// why, SM1.5).
     pub sheet_metal: Vec<crate::sheetmetal::SheetMetalContext>,
+    /// The members every Frame feature made (issue #266), in list order: their parts, sections,
+    /// lengths and end cuts, for the cut list ([`crate::frame::cut_list`]). A member whose part a
+    /// later feature joined to another or deleted is still listed: keep those of `parts`.
+    #[serde(default)]
+    pub frames: Vec<crate::frame::MemberInfo>,
     /// It was stopped before it finished ([`Pending::stop`], a newer request for the same list):
     /// its parts are those of the features before where it stopped. Never the list's result.
     pub stopped: bool,
@@ -255,6 +260,9 @@ struct State {
     /// P3I.2: the sheet metal models so far (their definitions, flats and parts).
     #[serde(default)]
     sheet_metal: Arc<Vec<crate::sheetmetal::SheetMetalContext>>,
+    /// The Frame features' members so far (issue #266).
+    #[serde(default)]
+    frames: Arc<Vec<crate::frame::MemberInfo>>,
 }
 
 /// Why a feature can't change a part with no kernel body: a derived board's component is a mesh
@@ -688,6 +696,7 @@ impl Rebuilder {
             Arc::ptr_eq(&x.derived, &y.derived)
                 && Arc::ptr_eq(&x.derived_sketches, &y.derived_sketches)
                 && Arc::ptr_eq(&x.sheet_metal, &y.sheet_metal)
+                && Arc::ptr_eq(&x.frames, &y.frames)
                 && x.connectors == y.connectors
                 && x.connector_owners == y.connector_owners
                 && x.composites == y.composites
@@ -1835,6 +1844,7 @@ impl Rebuilder {
         out.derived = (*state.derived).clone();
         out.derived_sketches = (*state.derived_sketches).clone();
         out.sheet_metal = (*state.sheet_metal).clone();
+        out.frames = (*state.frames).clone();
         debug_assert!(
             self.depth != 0 || key == final_key(features),
             "final_key must follow the rebuild's keys"
@@ -2635,6 +2645,8 @@ impl Rebuilder {
             #[cfg(feature = "brep")]
             FeatureKind::Gear(x) => self.gear(before, f.id, x, state).unwrap_or_else(fail),
             #[cfg(feature = "brep")]
+            FeatureKind::Frame(x) => self.frame(before, f.id, x, state).unwrap_or_else(fail),
+            #[cfg(feature = "brep")]
             FeatureKind::SheetMetalModel(x) => self
                 .sheet_metal_model(before, f.id, &f.name, x, state)
                 .unwrap_or_else(fail),
@@ -2700,6 +2712,7 @@ impl Rebuilder {
             | FeatureKind::Fill(_)
             | FeatureKind::Thread(_)
             | FeatureKind::Gear(_)
+            | FeatureKind::Frame(_)
             | FeatureKind::Image(_) => fail("This feature needs the solid-modelling kernel".into()),
             #[cfg(not(feature = "brep"))]
             FeatureKind::Composite(_) => {
@@ -3008,6 +3021,7 @@ mod kernel_ops {
     mod context;
     mod derived;
     mod draft;
+    mod frame;
     mod gear;
     mod import;
     mod linked;

@@ -140,6 +140,8 @@ pub enum AppliedKind {
     Thread,
     /// The Gear feature (`crate::gear_ui`).
     Gear,
+    /// The Frame feature (`crate::frame_ui`, issue #266).
+    Frame,
     /// P3I.2: the Sheet metal model (`crate::sheetmetal_ui`).
     SheetMetal,
     /// P3I.9: Sheet metal loft, Form, Tag (`crate::sheetmetal_p3i9_ui`).
@@ -175,6 +177,7 @@ impl AppliedKind {
             FeatureKind::Fill(_) => Some(Self::Fill),
             FeatureKind::Thread(_) => Some(Self::Thread),
             FeatureKind::Gear(_) => Some(Self::Gear),
+            FeatureKind::Frame(_) => Some(Self::Frame),
             FeatureKind::SheetMetalModel(_) => Some(Self::SheetMetal),
             k @ (FeatureKind::SheetMetalLoft(_)
             | FeatureKind::Form(_)
@@ -271,6 +274,11 @@ pub enum AppliedField {
     ThreadEdge,
     /// The Gear's cylinder, hole, cone or flat face.
     GearFace,
+    /// The Frame's path (sketch curves, sketches, edges), its custom profile's sketch and its
+    /// corner overrides' sketch points.
+    FramePath,
+    FrameSketch,
+    FrameCorners,
     /// A hypoid pair's member's own shaft and its mate's.
     GearShaft,
     GearMateShaft,
@@ -597,6 +605,19 @@ impl AppliedSession {
                 edges: true,
                 ..none
             },
+            AppliedField::FramePath => PickFilter {
+                edges: true,
+                sketch_curves: true,
+                ..none
+            },
+            AppliedField::FrameSketch => PickFilter {
+                regions: true,
+                ..none
+            },
+            AppliedField::FrameCorners => PickFilter {
+                sketch_points: true,
+                ..none
+            },
             AppliedField::GearFace => PickFilter {
                 faces: true,
                 ..none
@@ -683,6 +704,7 @@ pub fn begin(world: &mut World, kind: AppliedKind) {
         .or_else(|| crate::surfacing_ui::initial(world, kind, &picked))
         .or_else(|| crate::thread_ui::initial(world, kind, &picked))
         .or_else(|| crate::gear_ui::initial(world, kind, &picked))
+        .or_else(|| crate::frame_ui::initial(world, kind, &picked))
         .or_else(|| {
             (kind == AppliedKind::SheetMetal)
                 .then(|| crate::sheetmetal_ui::initial(world, &picked))
@@ -791,6 +813,7 @@ pub fn begin(world: &mut World, kind: AppliedKind) {
         | AppliedKind::Fill
         | AppliedKind::Thread
         | AppliedKind::Gear
+        | AppliedKind::Frame
         | AppliedKind::SheetMetal
         | AppliedKind::Sm9(_)
         | AppliedKind::SmFeature(_)
@@ -877,6 +900,7 @@ pub fn edit(world: &mut World, feature: FeatureId) {
         AppliedKind::Fill => AppliedField::FillEdges,
         AppliedKind::Thread => AppliedField::ThreadEdge,
         AppliedKind::Gear => AppliedField::GearFace,
+        AppliedKind::Frame => AppliedField::FramePath,
         AppliedKind::SheetMetal => match &before.kind {
             FeatureKind::SheetMetalModel(x) => crate::sheetmetal_ui::first_field(x.operation),
             _ => AppliedField::SmParts,
@@ -1258,6 +1282,11 @@ fn applied_picks(
                 }
                 (k @ FeatureKind::Thread(_), _) => {
                     if !crate::thread_ui::pick(world, k, field, pick) {
+                        return;
+                    }
+                }
+                (k @ FeatureKind::Frame(_), _) => {
+                    if !crate::frame_ui::pick(world, k, field, pick) {
                         return;
                     }
                 }
@@ -1655,6 +1684,7 @@ fn show_references(
         }
         k @ FeatureKind::Thread(_) => want.extend(crate::thread_ui::references(k, &cache)),
         k @ FeatureKind::Gear(_) => want.extend(crate::gear_ui::references(k, &cache)),
+        k @ FeatureKind::Frame(_) => want.extend(crate::frame_ui::references(k, &cache)),
         k @ FeatureKind::SheetMetalModel(_) => {
             want.extend(crate::sheetmetal_ui::references(k, &cache))
         }

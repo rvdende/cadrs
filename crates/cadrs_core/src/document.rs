@@ -775,6 +775,7 @@ impl Feature {
             FeatureKind::Fill(x) => x.problem().is_none(),
             FeatureKind::Thread(x) => x.problem().is_none(),
             FeatureKind::Gear(x) => x.problem().is_none(),
+            FeatureKind::Frame(x) => x.problem().is_none(),
             FeatureKind::Variable(x) => x.problem().is_none(),
             FeatureKind::SheetMetalModel(x) => x.problem().is_none(),
             FeatureKind::ModifyJoint(x) => x.problem().is_none(),
@@ -820,6 +821,7 @@ impl Feature {
             FeatureKind::Fill(x) => x.problem(),
             FeatureKind::Thread(x) => x.problem(),
             FeatureKind::Gear(x) => x.problem(),
+            FeatureKind::Frame(x) => x.problem(),
             FeatureKind::Variable(x) => x.problem(),
             FeatureKind::SheetMetalModel(x) => x.problem(),
             FeatureKind::ModifyJoint(x) => x.problem(),
@@ -1010,6 +1012,7 @@ impl Feature {
             FeatureKind::FaceBlend(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::Fill(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::Thread(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::Frame(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::Gear(x) => {
                 x.parents().into_iter().for_each(&mut add);
                 for a in [&x.shaft, &x.mate_shaft].into_iter().flatten() {
@@ -1193,6 +1196,9 @@ pub enum FeatureKind {
     Thread(crate::thread::ThreadFeature),
     /// Gear teeth, as a new part or cut into a face of one ([`crate::gear`]).
     Gear(crate::gear::GearFeature),
+    /// Structural members along curves, one part each, joined at their corners (issue #266;
+    /// [`crate::frame`]).
+    Frame(crate::frame::FrameFeature),
     /// A variable, `#name = expression` (P3F.4, P5.2; [`crate::variables`]).
     Variable(crate::variables::VariableFeature),
     /// A sheet metal model: Convert, Extrude or Thicken (P3I.2, SM2; [`crate::sheetmetal`]).

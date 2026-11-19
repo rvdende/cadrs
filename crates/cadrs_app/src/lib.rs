@@ -61,6 +61,8 @@ pub mod manipulator;
 pub mod mass_props;
 pub mod material_dialog;
 // The MCP server listens on a port: not in the browser build (`tools/web`).
+pub mod cut_list;
+pub mod frame_ui;
 pub mod gear_ui;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mcp;
@@ -986,6 +988,7 @@ impl Plugin for CadrsAppPlugin {
             .add_plugins((
                 appearance::AppearancePlugin,
                 side_panel::SidePanelPlugin,
+                cut_list::CutListPlugin,
                 material_dialog::MaterialDialogPlugin,
                 applied::AppliedPlugin,
                 sheetmetal_features_ui::SheetMetalFeaturesPlugin,
