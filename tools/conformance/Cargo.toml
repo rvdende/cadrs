@@ -25,6 +25,8 @@ debug = "line-tables-only"
 incremental = true
 
 [dev-dependencies]
+# The kernel's internals for the scratch examples (resolver 2 keeps it out of the adapter's build).
+cadrs_kernel = { path = "../../crates/cadrs_kernel", features = ["testkit"] }
 # The suite's cases and checks, run in process by `examples/suite.rs`.
 brep-conformance = { git = "https://github.com/springcraft-ai/brep-conformance", rev = "54d1c8e0022022a301c51623efc43c37016db761" }
 serde_json = "1"

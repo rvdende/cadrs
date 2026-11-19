@@ -9,21 +9,43 @@ use std::collections::HashMap;
 fn build(k: &Cadrs, s: &Shape) -> Solid {
     match s {
         Shape::Prim(p) => k.make(p).expect("a primitive"),
-        Shape::Bool(op, a, b) => k.boolean(*op, &build(k, a), &build(k, b)).expect("a boolean"),
+        Shape::Bool(op, a, b) => k
+            .boolean(*op, &build(k, a), &build(k, b))
+            .expect("a boolean"),
     }
 }
 
 fn main() {
     let id = std::env::args().nth(1).expect("id");
-    let c = generate::cases(1).into_iter().find(|c| c.id == id).expect("case");
+    let c = generate::cases(1)
+        .into_iter()
+        .find(|c| c.id == id)
+        .expect("case");
     let k = Cadrs;
     let (a, b) = (build(&k, &c.a), build(&k, &c.b));
     let i = k.intersection(&a, &b).unwrap();
     let Solid::Body(bid) = i else { panic!("empty") };
-    let m = k.with(|kk| cadrs_kernel::Kernel::tessellate(kk, bid, cadrs_kernel::Tessellation { deflection: 0.01, angle: std::f64::consts::PI }).unwrap());
+    let m = k.with(|kk| {
+        cadrs_kernel::Kernel::tessellate(
+            kk,
+            bid,
+            cadrs_kernel::Tessellation {
+                deflection: 0.01,
+                angle: std::f64::consts::PI,
+            },
+        )
+        .unwrap()
+    });
     let key = |p: &nalgebra::Point3<f64>| (p.x.to_bits(), p.y.to_bits(), p.z.to_bits());
     let mut id_of: HashMap<(u64, u64, u64), usize> = HashMap::new();
-    let ids: Vec<usize> = m.positions.iter().map(|p| { let n = id_of.len(); *id_of.entry(key(p)).or_insert(n) }).collect();
+    let ids: Vec<usize> = m
+        .positions
+        .iter()
+        .map(|p| {
+            let n = id_of.len();
+            *id_of.entry(key(p)).or_insert(n)
+        })
+        .collect();
     let mut uses: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
     for (t, tri) in m.indices.iter().enumerate() {
         for k in 0..3 {
@@ -48,7 +70,12 @@ fn main() {
         let body = kk.get(bid).unwrap();
         for f in [24usize, 3, 9] {
             let face = &body.faces()[f];
-            println!("face {f}: {:?} sense {} loops {:?}", face.surf.kind(), face.sense, face.loops.iter().map(|l| l.len()).collect::<Vec<_>>());
+            println!(
+                "face {f}: {:?} sense {} loops {:?}",
+                face.surf.kind(),
+                face.sense,
+                face.loops.iter().map(|l| l.len()).collect::<Vec<_>>()
+            );
         }
     });
 }
