@@ -5191,13 +5191,16 @@ fn drop_empty_solids(
                     .any(|&(w, y)| w == 1 && pairs.contains(&(x, y)))
             })
     };
-    let volumes: Vec<Option<f64>> = (0..b.solids.len())
+    // (Each suspect's volume and area: a sliver is thin as well as small.)
+    let measured: Vec<Option<(f64, f64)>> = (0..b.solids.len())
         .map(|si| {
             suspect(si).then(|| {
-                super::mass::body_volume(&super::kernel::subset(b, &b.solid_faces(si), true))
+                let m = super::mass::body_mass(&super::kernel::subset(b, &b.solid_faces(si), true));
+                (m.volume, m.surface_area)
             })
         })
         .collect();
+    let volumes: Vec<Option<f64>> = measured.iter().map(|m| m.map(|(v, _)| v)).collect();
     // (Against the solid's own size, by its edges: the box of a cap shaved off a ball is the
     // ball's by the sphere's poles, and a cap 1e-5 high a millimetre across held nothing by it.)
     let own_size = |si: usize| {
@@ -5214,9 +5217,13 @@ fn drop_empty_solids(
     };
     let empty: Vec<usize> = (0..b.solids.len())
         .filter(|&si| {
-            volumes[si].is_some_and(|v| {
+            measured[si].is_some_and(|(v, area)| {
                 let size = own_size(si);
+                // (And thinner than the tolerance on average, twice its volume over its area: the
+                // lens two parallel cylinders overlapping by 2 µm share runs their length, its
+                // volume nothing against that length cubed, and is a solid 3 µm thick.)
                 v.abs() <= tol::REL * size * size * size
+                    && (area <= 0.0 || 2.0 * v.abs() / area <= tol::POINT)
             })
         })
         .collect();

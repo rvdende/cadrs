@@ -314,6 +314,11 @@ pub mod smb;
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod smb;
 #[cfg(feature = "testkit")]
+pub mod snap;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod snap;
+#[cfg(feature = "testkit")]
 pub mod split;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]

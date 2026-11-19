@@ -935,8 +935,10 @@ fn steps_at(dom: &Domain, u: f64, v: f64, defl: f64, ang: f64) -> (f64, f64) {
     (step(cu, ku), step(cv, kv))
 }
 
-/// The most lines a face's grid has each way (its intervals: one more than its lines).
-const GRID_MAX: usize = 400;
+/// The most lines a face's grid has each way (its intervals: one more than its lines). (Enough
+/// for a ball 5 m across meshed to a hundredth of a millimetre, about 1 600 lines round; the
+/// grid's stations follow the bends, so only a face that needs them gets them.)
+const GRID_MAX: usize = 2048;
 
 /// Where a face's grid lines cross `lo..hi` (strictly inside it): each step as long as `step`
 /// allows over the stretch it spans, so the lines are close only where the surface bends
@@ -1096,8 +1098,19 @@ fn seed_grid(
         // (The columns' mean spacing.)
         let du = wu / (us.len() + 1) as f64;
         // Rows no further apart than half the face's width, or Delaunay bridges a narrow
-        // strip from rail to rail across its curve.
-        let n = (wv / (du * 64.0).min(0.5 * wu)).ceil() as usize;
+        // strip from rail to rail across its curve. And where the boundary runs across the
+        // rulings (a face of two equal cylinders' common part, between its ellipses), two
+        // columns apart: a ruling the boundary pinches to less than the rows' spacing
+        // holds no grid point, and a triangle from its two ends to a point many columns over
+        // cuts the curve by millimetres on a part a metre across.
+        let (eu, ev) = (1e-9 * (ubox.1 - ubox.0), 1e-9 * (vbox.1 - vbox.0));
+        let across = loops.iter().any(|&(a, b)| {
+            pts[a..b]
+                .windows(2)
+                .any(|w| (w[1].x - w[0].x).abs() > eu && (w[1].y - w[0].y).abs() > ev)
+        });
+        let rows = if across { 2.0 } else { 64.0 };
+        let n = (wv / (du * rows).min(0.5 * wu)).ceil() as usize;
         vs = uniform(vbox.0, vbox.1, n.clamp(1, GRID_MAX));
     } else if us.is_empty() {
         let dv = wv / (vs.len() + 1) as f64;

@@ -1369,7 +1369,37 @@ impl Kernel for NativeKernel {
         {
             return self.colored(Ok(r));
         }
-        let r = super::boolean::boolean(self, op, target, tools);
+        let mut r = super::boolean::boolean(self, op, target, tools);
+        // Refused with a tool whose faces graze the target's a hair off them (a copy turned by a
+        // microradian): again with those faces moved onto the target's surfaces, the history
+        // naming the tool's own faces.
+        if r.is_err()
+            && !crate::native::env_flag!("CADRS_NO_SNAP")
+            && let [tool] = tools
+            && let Some(snapped) = super::snap::snapped(self.get(target)?, self.get(*tool)?)
+        {
+            let id = self.insert(snapped);
+            let again = super::boolean::boolean(self, op, target, &[id]);
+            self.release(id);
+            match again {
+                Ok(mut res) => {
+                    for (_, from) in res.history.modified.iter_mut() {
+                        if from.body == id {
+                            from.body = *tool;
+                        }
+                    }
+                    for from in res.history.deleted.iter_mut() {
+                        if from.body == id {
+                            from.body = *tool;
+                        }
+                    }
+                    r = Ok(res);
+                }
+                // (Nothing left is an answer too: a box less its copy turned a hair.)
+                Err(e @ KernelError::EmptyResult(_)) => r = Err(e),
+                Err(_) => {}
+            }
+        }
         // A pipe united with a ball of its radius about an end of its spine: a pipe closed
         // there.
         if let (BoolOp::Union, [tool], Ok(res)) = (op, tools, &r)

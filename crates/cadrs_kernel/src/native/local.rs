@@ -229,37 +229,27 @@ fn line_meet(c: &Curve, surfs: &[&Surface], p: P3) -> Option<P3> {
 /// p-curve `pc` over [t0, t1] moved across the range when its start is a whole range from `at`
 /// (the previous coedge's end) and stays in the range moved: a seam's other use.
 fn closed_spline_shift(s: &Surface, pc: &Curve, t0: f64, t1: f64, at: [f64; 2]) -> Option<Curve> {
-    let Surface::Nurbs(n) = s else { return None };
-    let ((u0, u1), (v0, v1)) = n.range();
+    // (A B-spline surface whose ends meet, or an extrusion of a closed B-spline: closed over its
+    // range without its evaluation wrapping.)
+    let ranges = match s {
+        Surface::Nurbs(n) => {
+            let (u, v) = n.range();
+            [u, v]
+        }
+        Surface::Extrusion {
+            c: Curve::Nurbs(n), ..
+        } => [n.range(), (f64::NEG_INFINITY, f64::INFINITY)],
+        _ => return None,
+    };
+    let periods = super::pcurve::closed_periods(s);
     let (q, r) = (pc.point(t0), pc.point(t1));
     let (q, r) = ([q.x, q.y], [r.x, r.y]);
     let mut shift = [0.0; 2];
-    for (k, (a, b), closed) in [
-        (
-            0,
-            (u0, u1),
-            (0..=4).all(|j| {
-                (s.eval(u0, v0 + (v1 - v0) * j as f64 / 4.0)
-                    - s.eval(u1, v0 + (v1 - v0) * j as f64 / 4.0))
-                .norm()
-                    < tol::ROUNDOFF
-            }),
-        ),
-        (
-            1,
-            (v0, v1),
-            (0..=4).all(|i| {
-                (s.eval(u0 + (u1 - u0) * i as f64 / 4.0, v0)
-                    - s.eval(u0 + (u1 - u0) * i as f64 / 4.0, v1))
-                .norm()
-                    < tol::ROUNDOFF
-            }),
-        ),
-    ] {
-        let w = b - a;
-        if !closed || w <= 0.0 {
+    for k in 0..2 {
+        let (a, b) = ranges[k];
+        let Some(w) = periods[k].filter(|w| *w > 0.0) else {
             continue;
-        }
+        };
         let m = ((at[k] - q[k]) / w).round();
         let tol = tol::REL * w;
         let inside = |x: f64| x >= a - tol && x <= b + tol;
@@ -924,7 +914,7 @@ pub fn replace_surfaces_in(b: &Body, surfs: &[Surface], domains: &[Option<UvBox>
 /// without: a caller that settles the new faces' senses itself and checks the volume after
 /// (the orientation test casts rays at every face, which on a heavy spline costs more than the
 /// rest of the operation).
-fn replace_surfaces_checked(
+pub(crate) fn replace_surfaces_checked(
     b: &Body,
     surfs: &[Surface],
     domains: &[Option<UvBox>],
