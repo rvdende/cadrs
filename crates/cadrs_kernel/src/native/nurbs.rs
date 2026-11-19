@@ -1350,6 +1350,11 @@ impl NurbsCurve {
     /// between distinct knots its ends and its p + 1 homogeneous control points, in order. One
     /// pass over the curve, where splitting it at each span's ends copies it whole each time.
     pub fn bezier_segments(&self) -> Vec<(f64, f64, Vec<H>)> {
+        // A5.6 starts from a clamped curve: an unclamped one (a periodic outline's uniform
+        // knots) is clamped to its range first, the same curve there.
+        if let Some(c) = self.clamped() {
+            return c.bezier_segments();
+        }
         let p = self.degree;
         let (u, pw) = (&self.knots, &self.cps);
         let n = pw.len() - 1;
@@ -1397,6 +1402,52 @@ impl NurbsCurve {
             }
         }
         out
+    }
+
+    /// The same curve over its range with clamped knots (each end's knot `degree + 1` times, the
+    /// curve passing through its end poles), or `None` where it is clamped already: each end's
+    /// knot inserted until it is `degree` times there, and the knots and poles outside dropped.
+    pub fn clamped(&self) -> Option<Self> {
+        let p = self.degree;
+        let last = self.knots.len() - 1;
+        let (lo, hi) = (self.knots[p], self.knots[last - p]);
+        let start = self.knots[..p].iter().any(|&k| k != lo);
+        let end = self.knots[last - p + 1..].iter().any(|&k| k != hi);
+        if !(start || end) || p == 0 {
+            return None;
+        }
+        let mut c = self.clone();
+        if start {
+            let have = c.knots.iter().filter(|&&k| k == lo).count();
+            for _ in have..p {
+                c = c.insert_knot(lo);
+            }
+            // The last of the `p` copies of `lo`; the curve there is pole `k - p`.
+            let k = c.knots.iter().rposition(|&x| x == lo)?;
+            let mut knots = vec![lo];
+            knots.extend_from_slice(&c.knots[k - p + 1..]);
+            c = Self {
+                degree: p,
+                knots,
+                cps: c.cps[k - p..].to_vec(),
+            };
+        }
+        if end {
+            let have = c.knots.iter().filter(|&&k| k == hi).count();
+            for _ in have..p {
+                c = c.insert_knot(hi);
+            }
+            // The first of the `p` copies of `hi`; the curve there is pole `j - 1`.
+            let j = c.knots.iter().position(|&x| x == hi)?;
+            let mut knots = c.knots[..j + p].to_vec();
+            knots.push(hi);
+            c = Self {
+                degree: p,
+                knots,
+                cps: c.cps[..j].to_vec(),
+            };
+        }
+        Some(c)
     }
 
     /// Inserts the knot `u` once (A5.1).
@@ -2475,6 +2526,34 @@ mod tests {
             let bez = NurbsCurve::new(4, [vec![*a; 5], vec![*b; 5]].concat(), q.clone()).unwrap();
             let m = 0.37 * a + 0.63 * b;
             assert!((bez.point(m) - c.point(m)).norm() < 1e-12);
+        }
+    }
+
+    /// An unclamped curve (a periodic cubic's uniform knots, as a closed spline outline has)
+    /// splits into the Bézier segments of its range, each the curve there.
+    #[test]
+    fn bezier_segments_of_an_unclamped_curve() {
+        let knots: Vec<f64> = (0..18).map(f64::from).collect();
+        let cps: Vec<H> = (0..14)
+            .map(|i| {
+                let t = i as f64 * std::f64::consts::TAU / 11.0;
+                hom(&P3::new(3.0 * t.cos(), 4.0 * t.sin(), 0.0), 1.0)
+            })
+            .collect();
+        let c = NurbsCurve::new(3, knots, cps).unwrap();
+        let (lo, hi) = c.range();
+        let clamped = c.clamped().unwrap();
+        assert_eq!(clamped.range(), (lo, hi));
+        let segs = c.bezier_segments();
+        assert_eq!(segs.len(), 11);
+        assert_eq!((segs[0].0, segs[10].1), (lo, hi));
+        for (a, b, q) in &segs {
+            let bez = NurbsCurve::new(3, [vec![*a; 4], vec![*b; 4]].concat(), q.clone()).unwrap();
+            for s in [0.0, 0.37, 1.0] {
+                let t = a + (b - a) * s;
+                assert!((bez.point(t) - c.point(t)).norm() < 1e-12);
+                assert!((clamped.point(t) - c.point(t)).norm() < 1e-12);
+            }
         }
     }
 
