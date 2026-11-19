@@ -3605,6 +3605,80 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     // Pairs of faces whose surfaces coincide over part of the faces (from the intersections): their
     // sub-faces on the other face's surface classify as on it, as a coincident pair's do.
     let mut partial: HashSet<(usize, usize)> = HashSet::default();
+    // A curve of a free-form face that ends away from every edge of both faces stops where it
+    // shouldn't: traced to the side of the face's box in (u, v), short of the face's own edge
+    // where that edge runs slanted across the box (a ramp's floor beside a mill's cylinder).
+    // That pair is traced again over boxes a little wider, its faces' loops trimming the
+    // curves after; the other pairs keep theirs.
+    let ssis: Vec<Found> = {
+        let free = |f: usize| {
+            matches!(
+                faces[f].surf,
+                Surface::Nurbs(_) | Surface::Extrusion { .. } | Surface::Revolution { .. }
+            )
+        };
+        let near_edges = |f: usize, p: &P3| {
+            let tol = (run_tol * 100.0).max(faces[f].tol * 10.0).max(1e-6);
+            face_edges[f].iter().any(|&e| {
+                let ed = &pool.edges[e];
+                on_curve(
+                    &ed.curve,
+                    ed.t[0].min(ed.t[1]),
+                    ed.t[0].max(ed.t[1]),
+                    p,
+                    tol,
+                )
+                .is_some()
+            })
+        };
+        let dangling = |fa: usize, fb: usize, curves: &[ssi::IntCurve]| {
+            curves.iter().any(|ic| {
+                !ic.closed
+                    && [ic.t0, ic.t1].iter().any(|&t| {
+                        let p = ic.c.point(t);
+                        // (Inside a face, near no edge of either: an end that can't be.)
+                        (point_in_face(&faces[fa], &p, run_tol) == InFace::Inside
+                            || point_in_face(&faces[fb], &p, run_tol) == InFace::Inside)
+                            && !near_edges(fa, &p)
+                            && !near_edges(fb, &p)
+                    })
+            })
+        };
+        let grown = |f: usize| {
+            let ((u0, u1), (v0, v1)) = uvbox(&faces[f]);
+            if !free(f) {
+                return ((u0, u1), (v0, v1));
+            }
+            let (du, dv) = (0.02 * (u1 - u0), 0.02 * (v1 - v0));
+            ((u0 - du, u1 + du), (v0 - dv, v1 + dv))
+        };
+        pairs
+            .iter()
+            .zip(ssis)
+            .map(|(&(fa, fb), found)| {
+                if !(free(fa) || free(fb))
+                    || super::env_flag!("CADRS_NO_RETRACE")
+                    || !dangling(fa, fb, &found.0)
+                {
+                    return found;
+                }
+                let r = ssi::surface_surface_tol(
+                    &faces[fa].surf,
+                    grown(fa),
+                    &faces[fb].surf,
+                    grown(fb),
+                    &overlap(fa, fb).grow(1e-3 * faces[fa].bbox.diagonal().max(1e-9)),
+                    run_tol,
+                );
+                if super::env_flag!("CADRS_BOOL_DEBUG") {
+                    eprintln!(
+                        "ssi {fa}×{fb}: a curve's end dangled; traced again over wider boxes"
+                    );
+                }
+                (r.curves, r.singular, found.2, r.coincident)
+            })
+            .collect()
+    };
     for (&(fa, fb), (mut curves, singular, el, shared)) in pairs.iter().zip(ssis) {
         // The shared region's boundary cuts both faces, as a crossing does.
         if !shared.is_empty() {
