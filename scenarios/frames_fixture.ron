@@ -13,7 +13,7 @@ Scenario(
         MoveTo(1420, 900),
         Wait(4),
         Screenshot("01-frames"),
-        Click(ui("tab-part-studio-2")),
+        Click(ui("tab-2020-workbench")),
         Wait(8),
         Key("Shift+7"),
         Key("F"),
