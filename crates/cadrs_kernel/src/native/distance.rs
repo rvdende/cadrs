@@ -528,11 +528,15 @@ pub fn extremum(a: &[Piece], b: &[Piece], sense: Sense) -> Option<Extremum> {
         let (sa, sb) = (nd.ba.diagonal(), nd.bb.diagonal());
         let split_a = !matches!(nd.ca, Cell::Point) && sa > root_a[nd.ia] / 50.0 && sa > eps;
         let split_b = !matches!(nd.cb, Cell::Point) && sb > root_b[nd.ib] / 50.0 && sb > eps;
-        // From the centres when they lie in their faces: always at the leaves, and wherever the
-        // centres alone beat the best.
-        if valid(pa, &xa) && valid(pb, &xb) {
+        // From the centres: always at the leaves (a leaf straddling a face's loop may have its
+        // centre outside the face and its extremum inside: polish keeps only an end in the
+        // face), and wherever centres lying in their faces alone beat the best.
+        let leaf = !(split_a || split_b);
+        if leaf {
+            consider(nd.ia, xa, nd.ib, xb, &mut best);
+        } else if valid(pa, &xa) && valid(pb, &xb) {
             let d = (jet(pa, &xa).p - jet(pb, &xb).p).norm();
-            if !(split_a || split_b) || better(d, &best) {
+            if better(d, &best) {
                 consider(nd.ia, xa, nd.ib, xb, &mut best);
             }
         }
