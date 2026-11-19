@@ -76,6 +76,10 @@ pub struct PartShadingParams {
     pub pull: Vec4,
     /// The draft bands' colours (linear), top band first ([`cadrs_core::analysis::DraftBand`]).
     pub bands: [Vec4; 6],
+    /// A cut's tween (Simulate's exact stock, `crate::cam::preview`): x how far along the cut
+    /// the tool is (0 to 1), y 1 for the stock before the cut (a point hidden once the tool is
+    /// past its time, UV y), 2 for the stock after it (shown once the tool is past it), 0 none.
+    pub tween: Vec4,
 }
 
 impl Default for PartShadingParams {
@@ -86,6 +90,7 @@ impl Default for PartShadingParams {
             analysis: Vec4::ZERO,
             pull: Vec4::ZERO,
             bands: [Vec4::ZERO; 6],
+            tween: Vec4::ZERO,
         }
     }
 }

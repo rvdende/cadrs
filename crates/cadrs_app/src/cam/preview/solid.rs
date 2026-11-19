@@ -25,6 +25,7 @@ use cadrs_core::cam::CamStudio;
 use cadrs_core::cam::cadrs_cam::cutter::{ToolMesh, cutter_mesh};
 use cadrs_core::cam::cadrs_cam::dexel::SimMesh;
 use cadrs_core::cam::cadrs_cam::toolpath::Toolpath;
+use cadrs_core::cam::exact::Tweened;
 use cadrs_ui::i18n::{tr, tr_with};
 
 /// How fine the solid stock's lattice is, 0 (fast) to 1 (fine).
@@ -151,12 +152,15 @@ pub(super) type Place = (usize, f64);
 /// The worker that cuts a solid run's stock to where the preview is (see the module docs).
 pub(super) struct Live {
     ask: std::sync::mpsc::Sender<Place>,
-    got: std::sync::Mutex<std::sync::mpsc::Receiver<(Place, SimMesh)>>,
+    got: std::sync::Mutex<std::sync::mpsc::Receiver<(Place, Shown)>>,
     /// The last place asked for, and the place of the newest mesh.
     asked: Option<Place>,
     pub(super) cut: Option<Place>,
-    /// The newest mesh, and a count that changes with it.
+    /// The newest mesh, and a count that changes with it (or with the tween).
     pub(super) mesh: Option<SimMesh>,
+    /// The newest tween of the exact stock along the cut the tool is on: in place of a mesh,
+    /// drawn as the tool moves along it with no cut made.
+    pub(super) tween: Option<Box<Tweened>>,
     pub(super) version: u64,
     /// When the last place was asked for.
     asked_at: Option<Instant>,
@@ -179,12 +183,13 @@ impl Live {
             let Some(mut live) = Engine::of(&input) else {
                 return;
             };
+            let mut tweening = None;
             while let Ok(mut to) = asks.recv() {
                 // (Only the newest place matters.)
                 for t in asks.try_iter() {
                     to = t;
                 }
-                let Some(mut mesh) = live.cut_to(to) else {
+                let Some(mut mesh) = live.show(to, &mut tweening) else {
                     break;
                 };
                 if live.gives_up()
@@ -209,7 +214,7 @@ impl Live {
                     warn!("Simulate's exact stock fails too often here: on the lattice from now");
                     live = lattice;
                     let Some(m) = live.cut_to(to) else { break };
-                    mesh = m;
+                    mesh = Shown::Mesh(m);
                 }
                 if send.send((to, mesh)).is_err() {
                     break;
@@ -222,9 +227,26 @@ impl Live {
             asked: None,
             cut: None,
             mesh: None,
+            tween: None,
             version: 0,
             asked_at: None,
         })
+    }
+
+    /// What the worker made for `at`.
+    fn take(&mut self, at: Place, shown: Shown) {
+        self.cut = Some(at);
+        match shown {
+            Shown::Mesh(m) => {
+                (self.mesh, self.tween) = (Some(m), None);
+                self.version += 1;
+            }
+            Shown::Tween(t) => {
+                (self.mesh, self.tween) = (None, Some(t));
+                self.version += 1;
+            }
+            Shown::Same => {}
+        }
     }
 
     /// Whether it is still cutting to the last place asked for.
@@ -242,11 +264,14 @@ impl Live {
 
     /// Takes the newest mesh it has made, and asks for `to` when it is free and isn't there.
     pub(super) fn follow(&mut self, to: Option<Place>) {
-        let newest = self.got.get_mut().ok().and_then(|rx| rx.try_iter().last());
-        if let Some((at, mesh)) = newest {
-            self.cut = Some(at);
-            self.mesh = Some(mesh);
-            self.version += 1;
+        let got: Vec<(Place, Shown)> = self
+            .got
+            .get_mut()
+            .ok()
+            .map(|rx| rx.try_iter().collect())
+            .unwrap_or_default();
+        for (at, shown) in got {
+            self.take(at, shown);
         }
         let due = self
             .asked_at
@@ -274,10 +299,8 @@ impl Live {
                 break;
             }
             let Ok(rx) = self.got.get_mut() else { return };
-            if let Ok((at, mesh)) = rx.recv_timeout(std::time::Duration::from_millis(50)) {
-                self.cut = Some(at);
-                self.mesh = Some(mesh);
-                self.version += 1;
+            if let Ok((at, shown)) = rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                self.take(at, shown);
             }
         }
     }
@@ -294,7 +317,37 @@ enum Engine {
     Lattice(Box<cadrs_core::cam::cadrs_cam::sim::LiveStock>),
 }
 
+/// What the worker sends for a place: the stock as a mesh, the tween along the cut the tool is
+/// on, or the same tween as last time (the place along it the viewer's own).
+pub(super) enum Shown {
+    Mesh(SimMesh),
+    Tween(Box<Tweened>),
+    Same,
+}
+
 impl Engine {
+    /// The stock at `to`: the exact one tweened along the cut the tool is on (`tweening`, the
+    /// cut tweened last, sent again as [`Shown::Same`]), else as a mesh.
+    fn show(&mut self, to: Place, tweening: &mut Option<usize>) -> Option<Shown> {
+        if let Engine::Exact(e) = self
+            && std::env::var_os("CADRS_NO_TWEEN").is_none()
+            && let Some((c, _)) = e.cut_at(to.0, to.1)
+        {
+            if *tweening == Some(c) {
+                return Some(Shown::Same);
+            }
+            let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.tweened(to.0, to.1, DEFLECTION)
+            }));
+            if let Ok(Some(t)) = made {
+                *tweening = Some(t.cut);
+                return Some(Shown::Tween(Box::new(t)));
+            }
+        }
+        *tweening = None;
+        self.cut_to(to).map(Shown::Mesh)
+    }
+
     fn of(input: &SolidInput) -> Option<Engine> {
         let cam = &input.cam;
         let job = cam.job(input.job)?;
@@ -428,6 +481,16 @@ pub(super) fn stock_mesh(m: &SimMesh, frame: &Frame) -> Mesh {
         .map(|n| v3(frame.dir_to_world([n[0] as f64, n[1] as f64, n[2] as f64])).to_array())
         .collect();
     lit_mesh(positions, normals, m.colors.clone(), m.indices.clone())
+}
+
+/// A tween's side of the stock ([`stock_mesh`]), each vertex's time along the cut in its UV y
+/// (the part shader's tween: `crate::part_shading::PartShadingParams::tween`).
+pub(super) fn timed_stock_mesh(m: &SimMesh, times: &[f32], frame: &Frame) -> Mesh {
+    let mut mesh = stock_mesh(m, frame);
+    // (Never and always as far-off times: infinities interpolate to nothing.)
+    let uv: Vec<[f32; 2]> = times.iter().map(|t| [0.0, t.clamp(-1e6, 1e6)]).collect();
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
+    mesh
 }
 
 /// The uncut stock as a solid, from its surface's triangles in the model's coordinates: flat

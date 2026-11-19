@@ -1978,6 +1978,8 @@ fn sync_shading(
             analysis: if m.cap { Vec4::ZERO } else { analysis_v },
             pull,
             bands,
+            // (Simulate's, set on its own material: kept.)
+            tween: m.params.tween,
         };
         if m.params != params
             && let Some(mut m) = materials.get_mut(id)

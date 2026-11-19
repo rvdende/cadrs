@@ -1477,6 +1477,11 @@ fn hide_tool(q: &mut Query<(&mut Transform, &mut Visibility), With<PreviewTool>>
 #[derive(Component)]
 struct SolidMesh;
 
+/// The exact stock after the cut the tool is on, beside [`SolidMesh`]'s before it: the cut's
+/// tween ([`solid::Live::tween`]).
+#[derive(Component)]
+struct SolidAfter;
+
 #[derive(Component)]
 struct VerifyMesh;
 
@@ -1524,10 +1529,12 @@ fn sync_stock_mesh(
     q_solid: Query<Entity, With<SolidMesh>>,
     mut solid_mat: Local<Option<Handle<PartShading>>>,
     mut solid_shown: Local<Option<u64>>,
+    q_after: Query<Entity, With<SolidAfter>>,
+    mut after_mat: Local<Option<Handle<PartShading>>>,
     mut commands: Commands,
 ) {
     let Some(mut s) = state else {
-        for e in q.iter().chain(&q_solid) {
+        for e in q.iter().chain(&q_solid).chain(&q_after) {
             commands.entity(e).despawn();
         }
         *solid_shown = None;
@@ -1538,18 +1545,61 @@ fn sync_stock_mesh(
         // The check's stock at the run's end (gouges marked), else the live one, else the
         // uncut stock (by a key that changes with what is shown).
         let end = s.at_end() && s.solid_end.is_some();
-        let live = s.live.as_ref().filter(|l| l.mesh.is_some());
+        let live = s
+            .live
+            .as_ref()
+            .filter(|l| l.mesh.is_some() || l.tween.is_some());
+        let tween = live.filter(|_| !end).and_then(|l| l.tween.as_deref());
         let key = match (end, live) {
             (true, _) => u64::MAX,
             (false, Some(l)) => l.version,
             (false, None) => 0,
         };
         if *solid_shown != Some(key) || q_solid.is_empty() {
-            let mesh = match (end, live) {
-                (true, _) => solid::stock_mesh(s.solid_end.as_ref().unwrap(), &s.frame),
-                (false, Some(l)) => solid::stock_mesh(l.mesh.as_ref().unwrap(), &s.frame),
-                (false, None) => solid::blank_mesh(&s.solid_blank),
+            let (mesh, after) = match (end, tween, live) {
+                (true, ..) => (
+                    solid::stock_mesh(s.solid_end.as_ref().unwrap(), &s.frame),
+                    None,
+                ),
+                (false, Some(t), _) => (
+                    solid::timed_stock_mesh(&t.before, &t.before_times, &s.frame),
+                    Some(solid::timed_stock_mesh(&t.after, &t.after_times, &s.frame)),
+                ),
+                (false, None, Some(l)) => {
+                    (solid::stock_mesh(l.mesh.as_ref().unwrap(), &s.frame), None)
+                }
+                (false, None, None) => (solid::blank_mesh(&s.solid_blank), None),
             };
+            match after {
+                Some(m) => {
+                    let handle = meshes.add(m);
+                    match q_after.iter().next() {
+                        Some(e) => {
+                            commands.entity(e).insert(Mesh3d(handle));
+                        }
+                        None => {
+                            let m = after_mat
+                                .get_or_insert_with(|| shading.add(PartShading::new(false, false)))
+                                .clone();
+                            commands.spawn((
+                                Name::new("cam-verify-solid-stock-after"),
+                                SolidAfter,
+                                Mesh3d(handle),
+                                MeshMaterial3d(m),
+                                Transform::default(),
+                                OnWork,
+                                Pickable::IGNORE,
+                                DespawnOnExit(AppState::Document),
+                            ));
+                        }
+                    }
+                }
+                None => {
+                    for e in &q_after {
+                        commands.entity(e).despawn();
+                    }
+                }
+            }
             let handle = meshes.add(mesh);
             match q_solid.iter().next() {
                 Some(e) => {
@@ -1573,13 +1623,24 @@ fn sync_stock_mesh(
             }
             *solid_shown = Some(key);
         }
+        // The tween's place along its cut, every frame (the cut made: the meshes stay).
+        let along = tween.zip(s.place()).map(|(t, p)| t.along(p.0, p.1) as f32);
+        for (h, side) in [(&*solid_mat, 1.0), (&*after_mat, 2.0)] {
+            let want = along.map_or(Vec4::ZERO, |f| Vec4::new(f, side, 0.0, 0.0));
+            if let Some(h) = h
+                && shading.get(h).is_some_and(|m| m.params.tween != want)
+                && let Some(mut m) = shading.get_mut(h)
+            {
+                m.params.tween = want;
+            }
+        }
         for e in &q {
             commands.entity(e).despawn();
         }
         s.mesh_dirty = true;
         return;
     }
-    for e in &q_solid {
+    for e in q_solid.iter().chain(&q_after) {
         commands.entity(e).despawn();
     }
     *solid_shown = None;
