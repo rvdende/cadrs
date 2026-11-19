@@ -651,6 +651,48 @@ impl Surface {
                 (u, v) = (a, b);
             }
         }
+        // Stopped at or near a pole (a row of the grid that is one point: the derivative across
+        // it nil), where Newton has no direction to go in: from the nearest point of the row a grid step
+        // in from it, where every direction is defined (springrep's tests/classify.rs, a point
+        // near a stretched ball's pole).
+        if (self.eval(u, v) - p).norm() > near_enough {
+            let d = self.d2(u, v);
+            let size = d[1].norm().max(d[2].norm()).max(tol::TINY);
+            let (h_u, h_v) = ((u1 - u0) / n as f64, (v1 - v0) / n as f64);
+            // (Nil there, or nearly: stopped a little short of the pole, where the derivative
+            // across the row is a sliver of the other.)
+            let starts: Vec<(f64, f64)> = if d[1].norm() < 1e-2 * size {
+                let v_in = if (v - v0).abs() < (v - v1).abs() {
+                    v + h_v
+                } else {
+                    v - h_v
+                };
+                (0..n)
+                    .map(|i| (u0 + h_u * i as f64, v_in.clamp(v0.min(v1), v0.max(v1))))
+                    .collect()
+            } else if d[2].norm() < 1e-2 * size {
+                let u_in = if (u - u0).abs() < (u - u1).abs() {
+                    u + h_u
+                } else {
+                    u - h_u
+                };
+                (0..n)
+                    .map(|j| (u_in.clamp(u0.min(u1), u0.max(u1)), v0 + h_v * j as f64))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            if let Some(&(a, b)) = starts.iter().min_by(|x, y| {
+                (self.eval(x.0, x.1) - p)
+                    .norm_squared()
+                    .total_cmp(&(self.eval(y.0, y.1) - p).norm_squared())
+            }) {
+                let (a, b) = newton(a, b);
+                if (self.eval(a, b) - p).norm() < (self.eval(u, v) - p).norm() {
+                    (u, v) = (a, b);
+                }
+            }
+        }
         // Stopped on a v end of a surface closed in v (a polar patch's seam): the point may lie
         // just across the seam, so go on from the other end too.
         if (v == v0 || v == v1) && (self.eval(u, v) - p).norm() > tol::ROUNDOFF {

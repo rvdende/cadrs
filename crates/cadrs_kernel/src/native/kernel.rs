@@ -968,6 +968,11 @@ impl Kernel for NativeKernel {
             Extent::Symmetric(d) => (-d.abs() / 2.0, d.abs() / 2.0),
             Extent::TwoSided { forward, backward } => (-backward, forward),
         };
+        if !(s0.is_finite() && s1.is_finite()) {
+            return Err(KernelError::InvalidParameter(format!(
+                "an extrusion's distances must be finite: {extent:?}"
+            )));
+        }
         let (dir, s0, s1) = if s1 >= s0 {
             (n, s0, s1)
         } else {
@@ -1413,6 +1418,7 @@ impl Kernel for NativeKernel {
     }
 
     fn fillet(&mut self, body: BodyId, edges: &[EdgeId], radius: f64) -> Result<OpResult> {
+        no_edges(edges, "fillet")?;
         dump(
             "fillet",
             self.get(body)?,
@@ -1431,6 +1437,7 @@ impl Kernel for NativeKernel {
         edges: &[EdgeId],
         spec: &FilletSpec,
     ) -> Result<OpResult> {
+        no_edges(edges, "fillet")?;
         dump(
             "fillet",
             self.get(body)?,
@@ -1623,6 +1630,7 @@ impl Kernel for NativeKernel {
     }
 
     fn chamfer(&mut self, body: BodyId, edges: &[EdgeId], spec: ChamferSpec) -> Result<OpResult> {
+        no_edges(edges, "chamfer")?;
         dump(
             "chamfer",
             self.get(body)?,
@@ -1642,6 +1650,7 @@ impl Kernel for NativeKernel {
         edges: &[EdgeId],
         opts: &ChamferOpts,
     ) -> Result<OpResult> {
+        no_edges(edges, "chamfer")?;
         dump(
             "chamfer",
             self.get(body)?,
@@ -2360,7 +2369,11 @@ impl Kernel for NativeKernel {
     ) -> Result<Vec<RayHit>> {
         let e = self.entry(body)?;
         let d = dir.normalize();
-        Ok(classify::ray_hits(&e.body, e.polys(), &origin, &d)
+        let mut hits = classify::ray_hits(&e.body, e.polys(), &origin, &d);
+        // A line through an edge (or a vertex) meets each face there: one crossing, not one per
+        // face (springrep's tests/rays.rs, a ray through an edge crosses there once).
+        hits.dedup_by(|a, b| (a.0 - b.0).abs() <= super::tol::POINT);
+        Ok(hits
             .into_iter()
             .map(|(t, f, p)| RayHit {
                 face: FaceId(f as u64),
@@ -2508,6 +2521,14 @@ fn chamfer_scaled(spec: ChamferSpec, by: f64) -> ChamferSpec {
             angle,
         },
     }
+}
+
+/// A blend of no edges refused: nothing to blend (springrep's tests/blends.rs).
+fn no_edges(edges: &[EdgeId], what: &str) -> Result<()> {
+    if edges.is_empty() {
+        return Err(KernelError::InvalidParameter(format!("no edges to {what}")));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
