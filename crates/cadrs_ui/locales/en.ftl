@@ -6337,3 +6337,20 @@ cut-list-copied = Copied { $count } rows
 cut-list-exported = Exported { $file }
 # { $error } is why.
 cut-list-export-failed = Couldn't export the cut list: { $error }
+# A checkbox on a corner override's row: a gusset at that corner.
+model-frame-override-gusset = Gusset
+model-frame-gusset-position = Gusset position
+model-frame-gusset-center = Middle
+model-frame-gusset-top = Top
+model-frame-gusset-bottom = Bottom
+model-frame-gusset-chamfer = Chamfer
+model-frame-trim-flip = Keep the other side
+cut-list-trimmed = Trimmed
+# { $material } is a section's usual material ("Steel S235"), named when the parts have none of their own.
+cut-list-nominal = { $material } (typical)
+# An end cap in the cut list: { $thickness } its thickness, { $profile } the section it closes.
+cut-list-cap = End cap { $thickness } mm ({ $profile })
+# A gusset in the cut list: { $size } its legs, { $thickness } its thickness.
+cut-list-gusset = Gusset { $size } x { $thickness } mm
+# A custom section named by its sketch, { $sketch }.
+model-frame-custom-named = Custom ({ $sketch })

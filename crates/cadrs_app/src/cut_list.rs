@@ -76,14 +76,37 @@ fn part_name(cache: &PartCache, id: PartId) -> String {
 /// A section's name in the current language ("Square tube 40x40x3"); a custom section's or a
 /// plate's as the cut list has it.
 fn profile_text(members: &[MemberInfo], profile: &str) -> String {
-    members
-        .iter()
-        .find(|m| m.profile == profile)
-        .and_then(|m| {
-            let f = m.family?;
-            Some(format!("{} {}", crate::frame_ui::family_text(f), m.size))
-        })
-        .unwrap_or_else(|| profile.to_string())
+    use cadrs_core::frame::{PlateKind, ProfileFamily};
+    let n = |v: f64| {
+        let s = format!("{v:.2}");
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    };
+    let Some(m) = members.iter().find(|m| m.profile == profile) else {
+        return profile.to_string();
+    };
+    // A plate's: its frame's section's.
+    let section = |m: &MemberInfo| {
+        let s = members
+            .iter()
+            .find(|o| o.feature == m.feature && !o.plate)
+            .unwrap_or(m);
+        profile_text(&[s.clone()], &s.profile)
+    };
+    match (m.plate_kind, m.family) {
+        (Some(PlateKind::Cap { thickness }), _) => tr_with(
+            "cut-list-cap",
+            &[("thickness", &n(thickness)), ("profile", &section(m))],
+        ),
+        (Some(PlateKind::Gusset { size, thickness }), _) => tr_with(
+            "cut-list-gusset",
+            &[("size", &n(size)), ("thickness", &n(thickness))],
+        ),
+        (None, Some(ProfileFamily::Custom)) => {
+            tr_with("model-frame-custom-named", &[("sketch", &m.size)])
+        }
+        (None, Some(f)) => format!("{} {}", crate::frame_ui::family_text(f), m.size),
+        (None, None) => profile.to_string(),
+    }
 }
 
 /// A mass in kg: "1.25 kg".
@@ -96,6 +119,7 @@ fn mass_text(kg: f64) -> String {
 fn end_text(e: EndCut) -> String {
     match e {
         EndCut::Coped => tr("cut-list-coped"),
+        EndCut::Trimmed => tr("cut-list-trimmed"),
         e => e.text(),
     }
 }
@@ -121,8 +145,13 @@ fn strip_button(
     cache: Res<PartCache>,
     mut open: ResMut<SidePanel>,
     mut q: Query<(&Name, &mut Node)>,
+    added: Query<(), Added<Name>>,
 ) {
-    // (Every frame: a look, no copies; a part or a copy of one of the members.)
+    // Only when what it shows may have changed, or the tab bar was made again.
+    if !cache.is_changed() && !kind.is_changed() && added.is_empty() {
+        return;
+    }
+    // (A look, no copies: a part, or a copy of one, of a member.)
     let has = *kind == ActiveKind::PartStudio
         && cache.frames.iter().any(|m| {
             cache
@@ -181,7 +210,7 @@ fn rebuild(world: &mut World) {
         .collect();
     let materials: Vec<(Option<String>, Option<f64>)> = rows
         .iter()
-        .map(|r| cadrs_core::frame::row_material(r, &cache.parts, &cache.props))
+        .map(|r| cadrs_core::frame::row_material(r, &members, &cache.parts, &cache.props))
         .collect();
     let names: Vec<Vec<String>> = rows
         .iter()
@@ -283,6 +312,7 @@ fn rebuild(world: &mut World) {
         .with_children(|h| {
             for (w, grow, key) in COLS {
                 h.spawn((
+                    Name::new(format!("cut-list-header-{key}")),
                     t.text(tr(key), 11.0, FontWeight::MEDIUM, t.muted_foreground),
                     cell(w, grow),
                 ));
@@ -306,7 +336,15 @@ fn rebuild(world: &mut World) {
                         .iter()
                         .zip(&materials)
                         .filter(|(q, _)| q.profile == r.profile)
-                        .map(|(_, m)| m.0.clone())
+                        .map(|(_, m)| {
+                            m.material.as_ref().map(|name| {
+                                if m.nominal {
+                                    tr_with("cut-list-nominal", &[("material", name)])
+                                } else {
+                                    name.clone()
+                                }
+                            })
+                        })
                         .reduce(|a, b| if a == b { a } else { None })
                         .flatten();
                     let heading = match material {
@@ -342,7 +380,12 @@ fn rebuild(world: &mut World) {
                     r.quantity().to_string(),
                     length,
                     if r.plate { String::new() } else { ends_text(r) },
-                    materials[i].1.map(mass_text).unwrap_or_else(|| "–".into()),
+                    match materials[i].mass {
+                        // (≈: the family's usual material, not the parts' own.)
+                        Some(kg) if materials[i].nominal => format!("≈{}", mass_text(kg)),
+                        Some(kg) => mass_text(kg),
+                        None => "–".into(),
+                    },
                 ];
                 let mut row = list.spawn((
                     Name::new(format!("cut-list-row-{i}")),
@@ -361,8 +404,10 @@ fn rebuild(world: &mut World) {
                     row.insert(BackgroundColor(t.primary.with_alpha(0.18)));
                 }
                 row.with_children(|c| {
-                    for ((w, grow, _), text) in COLS.iter().zip(texts) {
+                    const CELLS: [&str; 5] = ["item", "qty", "length", "angles", "mass"];
+                    for (((w, grow, _), text), cell_name) in COLS.iter().zip(texts).zip(CELLS) {
                         c.spawn((
+                            Name::new(format!("cut-list-row-{i}-{cell_name}")),
                             t.text(text, 11.5, FontWeight::NORMAL, t.foreground),
                             cell(*w, *grow),
                             Pickable::IGNORE,
@@ -396,7 +441,7 @@ fn rebuild(world: &mut World) {
                         .filter(|(r, _)| r.profile == *profile)
                 };
                 let count: usize = of().map(|(r, _)| r.quantity()).sum();
-                let mass: Option<f64> = of().map(|(_, m)| m.1).sum();
+                let mass: Option<f64> = of().map(|(_, m)| m.mass).sum();
                 let mut text = tr_with(
                     "cut-list-total",
                     &[
@@ -414,7 +459,7 @@ fn rebuild(world: &mut World) {
                 ));
             }
             // Everything the frames weigh (members and plates), where every part has a material.
-            let all: Option<f64> = materials.iter().map(|m| m.1).sum();
+            let all: Option<f64> = materials.iter().map(|m| m.mass).sum();
             if let Some(kg) = all {
                 s.spawn((
                     Name::new("cut-list-total-mass"),
@@ -473,7 +518,9 @@ fn table_text(world: &World, csv: bool) -> (String, usize) {
     let cache = world.resource::<PartCache>();
     let rows = cadrs_core::frame::cut_list(&members(cache));
     let n = rows.len();
-    let material = |r: &CutListRow| cadrs_core::frame::row_material(r, &cache.parts, &cache.props);
+    let members = members(cache);
+    let material =
+        |r: &CutListRow| cadrs_core::frame::row_material(r, &members, &cache.parts, &cache.props);
     let text = cadrs_core::frame::cut_list_csv(&rows, |p| part_name(cache, p), material);
     if csv {
         (text, n)
@@ -504,8 +551,11 @@ fn table_text(world: &World, csv: bool) -> (String, usize) {
                     r.ends[0].text(),
                     r.ends[1].text(),
                     if r.curved { "yes" } else { "no" }.into(),
-                    material(r).0.unwrap_or_default(),
-                    material(r).1.map(|m| format!("{m:.3}")).unwrap_or_default(),
+                    material(r).material.unwrap_or_default(),
+                    material(r)
+                        .mass
+                        .map(|m| format!("{m:.3}"))
+                        .unwrap_or_default(),
                     r.parts
                         .iter()
                         .map(|p| part_name(cache, *p))

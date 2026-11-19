@@ -20,7 +20,7 @@
 use bevy::prelude::*;
 use cadrs_core::advanced::PathRef;
 use cadrs_core::frame::{
-    Anchor, CornerOverride, CornerType, FrameFeature, ProfileFamily, SketchPointRef,
+    Anchor, CornerOverride, CornerType, FrameFeature, GussetPosition, ProfileFamily, SketchPointRef,
 };
 use cadrs_core::{Feature, FeatureKind};
 use cadrs_ui::i18n::{tr, tr_with};
@@ -193,6 +193,8 @@ pub fn pick(world: &mut World, kind: &mut FeatureKind, field: AppliedField, pick
                         CornerType::Butt
                     },
                     flip: false,
+                    turn: 0,
+                    gusset: None,
                 }),
             }
             true
@@ -245,22 +247,29 @@ pub(crate) fn name(kind: &FeatureKind) -> Option<&'static str> {
 
 pub(crate) fn layout(kind: &FeatureKind) -> Option<String> {
     match kind {
-        FeatureKind::Frame(x) => Some(format!(
-            "frame {:?} {} {:?} {} {} {:?} {} {:?} {} {}",
-            x.family,
-            x.size,
-            x.anchor,
-            x.mirror,
-            x.merge_tangent,
-            x.corner,
-            x.flip,
-            x.overrides
-                .iter()
-                .map(|o| (o.corner, o.flip))
-                .collect::<Vec<_>>(),
-            x.end_caps,
-            x.gussets,
-        )),
+        FeatureKind::Frame(x) => Some(
+            format!(
+                "frame {:?} {} {:?} {} {} {:?} {} {:?} {} {}",
+                x.family,
+                x.size,
+                x.anchor,
+                x.mirror,
+                x.merge_tangent,
+                x.corner,
+                x.flip,
+                x.overrides
+                    .iter()
+                    .map(|o| (o.corner, o.flip))
+                    .collect::<Vec<_>>(),
+                x.end_caps,
+                x.gussets,
+            ) + &format!(
+                " {} {:?} {:?}",
+                x.trim.is_empty(),
+                x.trim_flip,
+                x.overrides.iter().map(|o| o.gusset).collect::<Vec<_>>()
+            ),
+        ),
         k => crate::gear_ui::layout(k),
     }
 }
@@ -412,6 +421,14 @@ fn anchor_text(a: Anchor) -> String {
         Anchor::Bottom => "model-frame-anchor-bottom",
         Anchor::BottomRight => "model-frame-anchor-bottom-right",
         Anchor::Origin => "model-frame-anchor-origin",
+    })
+}
+
+fn position_text(p: GussetPosition) -> String {
+    tr(match p {
+        GussetPosition::Center => "model-frame-gusset-center",
+        GussetPosition::Top => "model-frame-gusset-top",
+        GussetPosition::Bottom => "model-frame-gusset-bottom",
     })
 }
 
@@ -589,6 +606,28 @@ pub(crate) fn body(
             items_of(Role::FrameCorners),
             field == AppliedField::FrameCorners,
         );
+        // Each override's treatment, its flip (at a corner of three or more: the next member
+        // runs on), and its gusset.
+        for (i, o) in x.overrides.iter().enumerate() {
+            let i = i.min(u8::MAX as usize) as u8;
+            corner_row(
+                b,
+                t,
+                &format!("frame-override-{i}"),
+                &tr_with("model-frame-corner-n", &[("n", &(i + 1).to_string())]),
+                Role::FrameOverride(i),
+                o.corner,
+                Some((Role::FrameOverrideFlip(i), o.flip)),
+            );
+            b.spawn(
+                OptionRow::new(
+                    format!("frame-override-{i}-gusset"),
+                    tr("model-frame-override-gusset"),
+                )
+                .checked(o.gusset.unwrap_or(x.gussets))
+                .build(t),
+            );
+        }
         list(
             b,
             t,
@@ -598,6 +637,13 @@ pub(crate) fn body(
             items_of(Role::FrameTrim),
             field == AppliedField::FrameTrim,
         );
+        if !x.trim.is_empty() {
+            b.spawn(
+                OptionRow::new("frame-trim-flip", tr("model-frame-trim-flip"))
+                    .checked(x.trim_flip)
+                    .build(t),
+            );
+        }
         b.spawn(
             OptionRow::new("frame-caps", tr("model-frame-end-caps"))
                 .checked(x.end_caps)
@@ -619,7 +665,7 @@ pub(crate) fn body(
                 .checked(x.gussets)
                 .build(t),
         );
-        if x.gussets {
+        if x.gussets || x.overrides.iter().any(|o| o.gusset == Some(true)) {
             number(
                 b,
                 t,
@@ -638,17 +684,25 @@ pub(crate) fn body(
                 &x.gusset_thickness_expr,
                 None,
             );
-        }
-        for (i, o) in x.overrides.iter().enumerate() {
-            let i = i.min(u8::MAX as usize) as u8;
-            corner_row(
+            number(
                 b,
                 t,
-                &format!("frame-override-{i}"),
-                &tr_with("model-frame-corner-n", &[("n", &(i + 1).to_string())]),
-                Role::FrameOverride(i),
-                o.corner,
-                Some((Role::FrameOverrideFlip(i), o.flip)),
+                "frame-gusset-chamfer",
+                &tr("model-frame-gusset-chamfer"),
+                Role::FrameGussetChamfer,
+                &x.gusset_chamfer_expr,
+                None,
+            );
+            let positions = opts(&GussetPosition::ALL, position_text, |_| true);
+            select_row(
+                b,
+                t,
+                "frame-gusset-position",
+                &tr("model-frame-gusset-position"),
+                Role::FrameGussetPosition,
+                &positions,
+                index_of(&GussetPosition::ALL, &x.gusset_position),
+                None,
             );
         }
     });
@@ -672,6 +726,7 @@ pub(crate) fn number_text(kind: &FeatureKind, role: Role) -> Option<String> {
         (FeatureKind::Frame(x), Role::FrameGussetThickness) => {
             Some(x.gusset_thickness_expr.clone())
         }
+        (FeatureKind::Frame(x), Role::FrameGussetChamfer) => Some(x.gusset_chamfer_expr.clone()),
         (k, r) => crate::gear_ui::number_text(k, r),
     }
 }
@@ -686,6 +741,7 @@ pub(crate) fn select_index(kind: &FeatureKind, role: Role) -> Option<usize> {
         Role::FrameAnchor => index_of(&Anchor::ALL, &x.anchor),
         Role::FrameCorner => index_of(&CornerType::ALL, &x.corner),
         Role::FrameOverride(i) => index_of(&CornerType::ALL, &x.overrides.get(i as usize)?.corner),
+        Role::FrameGussetPosition => index_of(&GussetPosition::ALL, &x.gusset_position),
         _ => return None,
     })
 }
@@ -710,6 +766,9 @@ pub(crate) fn select(k: &mut FeatureKind, role: Role, i: usize) {
                 o.corner = corner;
             }
         }
+        Role::FrameGussetPosition => {
+            x.gusset_position = GussetPosition::ALL[i.min(GussetPosition::ALL.len() - 1)]
+        }
         _ => {}
     }
 }
@@ -729,6 +788,8 @@ pub(crate) fn is_checkbox(name: &str) -> bool {
         || name == "frame-merge-checkbox"
         || name == "frame-caps-checkbox"
         || name == "frame-gussets-checkbox"
+        || name == "frame-trim-flip-checkbox"
+        || override_gusset(name).is_some()
         || crate::gear_ui::is_checkbox(name)
 }
 
@@ -750,8 +811,26 @@ pub(crate) fn checkbox(k: &mut FeatureKind, name: &str, on: bool) -> Option<&'st
             x.gussets = on;
             Some("Gussets")
         }
+        (FeatureKind::Frame(x), "frame-trim-flip-checkbox") => {
+            x.trim_flip = on;
+            Some("Keep the other side")
+        }
+        (FeatureKind::Frame(x), n) if override_gusset(n).is_some() => {
+            let o = x.overrides.get_mut(override_gusset(n)?)?;
+            // Like the frame's: back to following it.
+            o.gusset = (on != x.gussets).then_some(on);
+            Some("Corner gusset")
+        }
         (k, n) => crate::gear_ui::checkbox(k, n, on),
     }
+}
+
+/// An override's gusset checkbox ("frame-override-2-gusset-checkbox"): its override.
+fn override_gusset(name: &str) -> Option<usize> {
+    name.strip_prefix("frame-override-")?
+        .strip_suffix("-gusset-checkbox")?
+        .parse()
+        .ok()
 }
 
 pub(crate) fn is_signed(role: Role) -> bool {
@@ -772,6 +851,7 @@ pub(crate) fn number_label(role: Role) -> Option<&'static str> {
         Role::FrameCapThickness => Some("Cap thickness"),
         Role::FrameGussetSize => Some("Gusset size"),
         Role::FrameGussetThickness => Some("Gusset thickness"),
+        Role::FrameGussetChamfer => Some("Gusset chamfer"),
         r => crate::gear_ui::number_label(r),
     }
 }
@@ -794,6 +874,10 @@ pub(crate) fn set_number(k: &mut FeatureKind, role: Role, v: f64, expr: String) 
             x.gusset_thickness = v;
             x.gusset_thickness_expr = expr;
         }
+        (FeatureKind::Frame(x), Role::FrameGussetChamfer) => {
+            x.gusset_chamfer = v;
+            x.gusset_chamfer_expr = expr;
+        }
         (k, r) => crate::gear_ui::set_number(k, r, v, expr),
     }
 }
@@ -802,8 +886,10 @@ pub(crate) fn flip(k: &mut FeatureKind, role: Role) {
     match (k, role) {
         (FeatureKind::Frame(x), Role::Flip) => x.flip = !x.flip,
         (FeatureKind::Frame(x), Role::FrameOverrideFlip(i)) => {
+            // Two members: the other runs on; three or more: the next one does.
             if let Some(o) = x.overrides.get_mut(i as usize) {
                 o.flip = !o.flip;
+                o.turn = o.turn.wrapping_add(1) % 6;
             }
         }
         (k, r) => crate::gear_ui::flip(k, r),

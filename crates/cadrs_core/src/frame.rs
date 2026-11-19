@@ -20,7 +20,11 @@
 //!   them), coped (as butted, the second cut to the first's shape: a tube saddled round a tube) or
 //!   left as they are. **Corner overrides** give single corners another treatment. A member that
 //!   ends on another's span (a T) is cut against it; where three or more members end at one
-//!   point the first in the path runs on and the others are cut against it.
+//!   point the longest runs on (an override picks another) and the others are cut against it.
+//! - **Trim to parts** cuts members back by other parts (the larger piece kept, or the other
+//!   side); **End caps** close hollow members' free ends; **Gussets** fill two-member corners
+//!   (centred, or flush with the section's top or bottom, their inner corner chamfered), and an
+//!   override turns one corner's gusset on or off.
 //!
 //! Every member is exact B-rep: a straight member is its section extruded, a curved one swept
 //! along its curves (straight run-ons at its ends where a corner needs them), each corner a cut
@@ -209,6 +213,32 @@ pub struct CornerOverride {
     /// Butt and coped: the other member runs on.
     #[serde(default)]
     pub flip: bool,
+    /// Where three or more members end: which runs on, counted from the longest (wrapping).
+    #[serde(default)]
+    pub turn: u8,
+    /// A gusset here or not (`None`: as the frame's Gussets).
+    #[serde(default)]
+    pub gusset: Option<bool>,
+}
+
+/// Where a gusset sits across the corner's plane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum GussetPosition {
+    /// In the middle of the section.
+    #[default]
+    Center,
+    /// Flush with the section's top (its up side).
+    Top,
+    /// Flush with its bottom.
+    Bottom,
+}
+
+impl GussetPosition {
+    pub const ALL: [GussetPosition; 3] = [
+        GussetPosition::Center,
+        GussetPosition::Top,
+        GussetPosition::Bottom,
+    ];
 }
 
 /// A Frame feature.
@@ -222,7 +252,8 @@ pub struct FrameFeature {
     /// The size's name in [`sizes`] of the family ("20x20", "40x40x3", "IPE 100").
     #[serde(default)]
     pub size: String,
-    /// A custom section's sketch (its closed regions, its origin on the path).
+    /// A custom section's sketch (its closed regions; choosing Custom puts its origin on the
+    /// path, `Anchor::Origin`).
     #[serde(default)]
     pub sketch: Option<FeatureId>,
     #[serde(default)]
@@ -251,6 +282,9 @@ pub struct FrameFeature {
     /// member less what overlaps them, the piece holding most of it kept.
     #[serde(default)]
     pub trim: Vec<PartId>,
+    /// Keep the other side of a trim (all but the largest piece).
+    #[serde(default)]
+    pub trim_flip: bool,
     /// Plates closing the members' free ends, as thick as `cap_thickness`, outside the member
     /// (only of sections with holes: tubes, T-slot extrusions, custom sections with holes).
     #[serde(default)]
@@ -272,6 +306,17 @@ pub struct FrameFeature {
     pub gusset_thickness: f64,
     #[serde(default = "gusset_thickness_expr")]
     pub gusset_thickness_expr: String,
+    #[serde(default)]
+    pub gusset_position: GussetPosition,
+    /// The gusset's inner corner cut back this far along each leg (clear of the weld), 0: none.
+    #[serde(default)]
+    pub gusset_chamfer: f64,
+    #[serde(default = "zero_mm")]
+    pub gusset_chamfer_expr: String,
+}
+
+fn zero_mm() -> String {
+    "0 mm".into()
 }
 
 fn cap_thickness() -> f64 {
@@ -314,6 +359,7 @@ impl Default for FrameFeature {
             flip: false,
             overrides: Vec::new(),
             trim: Vec::new(),
+            trim_flip: false,
             end_caps: false,
             cap_thickness: cap_thickness(),
             cap_thickness_expr: cap_thickness_expr(),
@@ -322,6 +368,9 @@ impl Default for FrameFeature {
             gusset_size_expr: gusset_size_expr(),
             gusset_thickness: gusset_thickness(),
             gusset_thickness_expr: gusset_thickness_expr(),
+            gusset_position: GussetPosition::Center,
+            gusset_chamfer: 0.0,
+            gusset_chamfer_expr: zero_mm(),
         }
     }
 }
@@ -352,6 +401,9 @@ impl FrameFeature {
                 .any(|v| v.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater))
         {
             return Some("The gussets' size and thickness must be greater than zero");
+        }
+        if self.gussets && !(self.gusset_chamfer >= 0.0 && self.gusset_chamfer < self.gusset_size) {
+            return Some("A gusset's chamfer must be less than its size");
         }
         None
     }
@@ -390,7 +442,13 @@ impl FrameFeature {
 
     /// Switches the family, keeping the size if it has it, else its first (or a commonly used
     /// one).
+    /// A custom section sits by its own origin (as drawn), a standard one by its middle.
     pub fn set_family(&mut self, family: ProfileFamily) {
+        if family == ProfileFamily::Custom && self.family != ProfileFamily::Custom {
+            self.anchor = Anchor::Origin;
+        } else if family != ProfileFamily::Custom && self.anchor == Anchor::Origin {
+            self.anchor = Anchor::Center;
+        }
         self.family = family;
         let names = size_names(family);
         if !names.contains(&self.size.as_str()) {
@@ -479,18 +537,32 @@ const SLOT_15: TSlotSeries = TSlotSeries {
     bore: 7.9,
 };
 
-/// T-slot sizes: name, series, cells across and up.
-const T_SLOTS: [(&str, &TSlotSeries, u32, u32); 10] = [
-    ("20x20", &SLOT_20, 1, 1),
-    ("20x40", &SLOT_20, 2, 1),
-    ("30x30", &SLOT_30, 1, 1),
-    ("30x60", &SLOT_30, 2, 1),
-    ("40x40", &SLOT_40, 1, 1),
-    ("40x80", &SLOT_40, 2, 1),
-    ("1010 (1 in)", &SLOT_10, 1, 1),
-    ("1020 (1x2 in)", &SLOT_10, 2, 1),
-    ("1515 (1.5 in)", &SLOT_15, 1, 1),
-    ("1530 (1.5x3 in)", &SLOT_15, 2, 1),
+/// The 45 series (slot 10).
+const SLOT_45: TSlotSeries = TSlotSeries {
+    cell: 45.0,
+    opening: 10.2,
+    lip: 4.5,
+    width: 22.0,
+    wall: 2.5,
+    depth: 13.5,
+    bore: 8.5,
+};
+
+/// T-slot sizes: name, series, cells across and up, and the catalogue's mass (kg/m; the
+/// outline drawn here has no hollow cores, so its volume would overstate it).
+const T_SLOTS: [(&str, &TSlotSeries, u32, u32, f64); 12] = [
+    ("20x20", &SLOT_20, 1, 1, 0.50),
+    ("20x40", &SLOT_20, 2, 1, 0.88),
+    ("30x30", &SLOT_30, 1, 1, 0.92),
+    ("30x60", &SLOT_30, 2, 1, 1.65),
+    ("40x40", &SLOT_40, 1, 1, 1.50),
+    ("40x80", &SLOT_40, 2, 1, 2.80),
+    ("45x45", &SLOT_45, 1, 1, 1.90),
+    ("45x90", &SLOT_45, 2, 1, 3.40),
+    ("1010 (1 in)", &SLOT_10, 1, 1, 0.74),
+    ("1020 (1x2 in)", &SLOT_10, 2, 1, 1.34),
+    ("1515 (1.5 in)", &SLOT_15, 1, 1, 1.49),
+    ("1530 (1.5x3 in)", &SLOT_15, 2, 1, 2.68),
 ];
 
 /// Square tubes: side, wall.
@@ -612,7 +684,7 @@ pub fn section(family: ProfileFamily, size: &str) -> Option<Vec<Region>> {
     let find = |names: &[&str]| names.iter().position(|n| *n == size);
     Some(match family {
         ProfileFamily::TSlot => {
-            let (_, s, nx, ny) = T_SLOTS[find(&T_SLOTS.map(|s| s.0))?];
+            let (_, s, nx, ny, _) = T_SLOTS[find(&T_SLOTS.map(|s| s.0))?];
             t_slot(s, nx, ny)
         }
         ProfileFamily::SquareTube => {
@@ -1008,7 +1080,7 @@ pub fn radius(regions: &[Region]) -> f64 {
         / (std::f64::consts::PI / 32.0).cos()
 }
 
-/// A rigid motion of the plane (and a mirror): `p → R(angle)·(M·p) + shift`, `M` flipping x
+/// A rigid motion of the plane (and a mirror): `p → R(angle)·(M·p + shift)`, `M` flipping x
 /// when `mirror`.
 #[derive(Debug, Clone, Copy)]
 struct Place {
@@ -1064,6 +1136,23 @@ impl Place {
             } => Curve2::Circle {
                 center: self.point(center),
                 radius: radius * sweep_sign,
+                source,
+            },
+            // Mirrored, a whole ellipse runs the other way: a whole turn of arc with its minor
+            // axis flipped (a whole Ellipse has no way of its own).
+            Curve2::Ellipse {
+                center,
+                major_radius,
+                minor_radius,
+                rotation,
+                source,
+            } if m => Curve2::EllipseArc {
+                center: self.point(center),
+                major_radius,
+                minor_radius: -minor_radius,
+                rotation: self.turn(rotation),
+                start: 0.0,
+                sweep: std::f64::consts::TAU,
                 source,
             },
             Curve2::Ellipse {
@@ -1193,6 +1282,8 @@ pub enum EndCut {
     Angle(f64),
     /// To another member's shape.
     Coped,
+    /// By a part it was trimmed to.
+    Trimmed,
 }
 
 impl EndCut {
@@ -1202,6 +1293,7 @@ impl EndCut {
             EndCut::Square => "0°".into(),
             EndCut::Angle(a) => format!("{}°", trim(a, 1)),
             EndCut::Coped => "Coped".into(),
+            EndCut::Trimmed => "Trimmed".into(),
         }
     }
 
@@ -1210,6 +1302,7 @@ impl EndCut {
             EndCut::Square => 0,
             EndCut::Angle(a) => (a * 10.0).round() as i64,
             EndCut::Coped => -1,
+            EndCut::Trimmed => -2,
         }
     }
 }
@@ -1251,6 +1344,36 @@ pub struct MemberInfo {
     pub family: Option<ProfileFamily>,
     #[serde(default)]
     pub size: String,
+    /// A plate's kind and size (to name it in another language).
+    #[serde(default)]
+    pub plate_kind: Option<PlateKind>,
+}
+
+/// An end cap or a gusset, with its size (mm).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum PlateKind {
+    Cap { thickness: f64 },
+    Gusset { size: f64, thickness: f64 },
+}
+
+/// The material a family is usually made of, its name and density (kg/m³): T-slot extrusion
+/// aluminium 6063-T5, the rest structural steel S235.
+pub fn nominal_material(family: ProfileFamily) -> (&'static str, f64) {
+    match family {
+        ProfileFamily::TSlot => ("Aluminium 6063-T5", 2700.0),
+        _ => ("Steel S235", 7850.0),
+    }
+}
+
+/// What a row of the cut list is made of and weighs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RowMaterial {
+    /// Its parts' material (if they share one), else the family's usual one.
+    pub material: Option<String>,
+    /// kg, the row's members together.
+    pub mass: Option<f64>,
+    /// Not the parts' own materials: the family's usual one (T-slot by its catalogue kg/m).
+    pub nominal: bool,
 }
 
 /// The members among `parts` as they are now: each member whose part is still there, and each
@@ -1378,13 +1501,15 @@ pub fn length_text(mm: f64) -> String {
     trim(mm, 1)
 }
 
-/// A row's material (its parts', if they all have the same one) and mass (kg, if every part has
-/// a material or a mass of its own).
+/// A row's material and mass: its parts' own where every part has a material (or a mass of its
+/// own), else the family's usual material (a T-slot extrusion by its catalogue kg/m; a plate by
+/// its frame's family), marked nominal. A custom section's members have none.
 pub fn row_material(
     row: &CutListRow,
+    members: &[MemberInfo],
     parts: &[crate::Part],
     props: &[crate::PartProps],
-) -> (Option<String>, Option<f64>) {
+) -> RowMaterial {
     let of: Vec<&crate::Part> = row
         .parts
         .iter()
@@ -1394,14 +1519,62 @@ pub fn row_material(
         .iter()
         .map(|p| crate::parts::part_material(p, props).map(|m| m.name.clone()))
         .collect();
-    let material = match names.first() {
-        Some(Some(n)) if names.iter().all(|m| m.as_ref() == Some(n)) => Some(n.clone()),
-        _ => None,
-    };
     let mass = crate::parts::mass_report(&of, props)
         .and_then(|r| r.mass)
         .map(|m| m.mass);
-    (material, mass)
+    if let Some(mass) = mass {
+        let material = match names.first() {
+            Some(Some(n)) if names.iter().all(|m| m.as_ref() == Some(n)) => Some(n.clone()),
+            _ => None,
+        };
+        return RowMaterial {
+            material,
+            mass: Some(mass),
+            nominal: false,
+        };
+    }
+    // The family's usual material.
+    let member = |id: &PartId| members.iter().find(|m| m.part == *id);
+    let family = |m: &MemberInfo| {
+        m.family.or_else(|| {
+            members
+                .iter()
+                .find(|o| o.feature == m.feature && !o.plate)
+                .and_then(|o| o.family)
+        })
+    };
+    let mut total = 0.0;
+    let mut name = None;
+    for id in &row.parts {
+        let Some(m) = member(id) else {
+            return RowMaterial {
+                material: None,
+                mass: None,
+                nominal: true,
+            };
+        };
+        let Some(f) = family(m).filter(|f| *f != ProfileFamily::Custom) else {
+            return RowMaterial {
+                material: None,
+                mass: None,
+                nominal: true,
+            };
+        };
+        let (n, density) = nominal_material(f);
+        name = Some(n.to_string());
+        let per_metre = (f == ProfileFamily::TSlot && !m.plate)
+            .then(|| T_SLOTS.iter().find(|t| t.0 == m.size).map(|t| t.4))
+            .flatten();
+        total += match per_metre {
+            Some(kg_m) => kg_m * m.length / 1000.0,
+            None => m.volume * density * 1e-9,
+        };
+    }
+    RowMaterial {
+        material: name,
+        mass: Some(total),
+        nominal: true,
+    }
 }
 
 /// The cut list as CSV (comma separated, quoted where needed): Item, Qty, Profile, Length (mm),
@@ -1410,7 +1583,7 @@ pub fn row_material(
 pub fn cut_list_csv(
     rows: &[CutListRow],
     name: impl Fn(PartId) -> String,
-    material: impl Fn(&CutListRow) -> (Option<String>, Option<f64>),
+    material: impl Fn(&CutListRow) -> RowMaterial,
 ) -> String {
     let q = |s: &str| {
         if s.contains([',', '"', '\n']) {
@@ -1424,7 +1597,11 @@ pub fn cut_list_csv(
     );
     for r in rows {
         let parts: Vec<String> = r.parts.iter().map(|p| name(*p)).collect();
-        let (mat, mass) = material(r);
+        let RowMaterial {
+            material: mat,
+            mass,
+            ..
+        } = material(r);
         let (length, a1, a2) = if r.plate {
             Default::default()
         } else {
@@ -1635,6 +1812,7 @@ mod tests {
             volume: 0.0,
             plate: false,
             family: Some(ProfileFamily::SquareTube),
+            plate_kind: None,
             size: "40x40x3".into(),
         };
         let miter = EndCut::Angle(45.0);
@@ -1656,7 +1834,11 @@ mod tests {
         let csv = cut_list_csv(
             &rows,
             |p| format!("Part {}", p.index + 1),
-            |r| (Some("Steel, mild".into()), Some(r.length * 1e-3)),
+            |r| RowMaterial {
+                material: Some("Steel, mild".into()),
+                mass: Some(r.length * 1e-3),
+                nominal: false,
+            },
         );
         assert!(csv.starts_with("Item,Qty,Profile,Length (mm)"));
         assert!(
@@ -1697,6 +1879,7 @@ mod tests {
             volume: 1.0,
             plate: false,
             family: Some(ProfileFamily::TSlot),
+            plate_kind: None,
             size: "20x20".into(),
         };
         // `b` was joined to another part (gone); `a` was patterned twice over.

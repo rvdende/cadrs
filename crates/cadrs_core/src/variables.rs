@@ -363,7 +363,7 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
                     L,
                 );
             }
-            if x.gussets {
+            if x.gussets || x.overrides.iter().any(|o| o.gusset == Some(true)) {
                 s(
                     "Gusset size",
                     &mut x.gusset_size_expr,
@@ -374,6 +374,12 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
                     "Gusset thickness",
                     &mut x.gusset_thickness_expr,
                     &mut x.gusset_thickness,
+                    L,
+                );
+                s(
+                    "Gusset chamfer",
+                    &mut x.gusset_chamfer_expr,
+                    &mut x.gusset_chamfer,
                     L,
                 );
             }
