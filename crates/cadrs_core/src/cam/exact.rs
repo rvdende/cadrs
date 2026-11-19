@@ -893,6 +893,19 @@ impl ExactStock {
     }
 
     /// How many cuts the run is made in (its moves on one motion each one).
+    /// How many cuts are made so far.
+    pub fn cut_count_done(&self) -> usize {
+        self.done
+    }
+
+    /// The share of the cuts made so far that the kernel couldn't make (in whole or part).
+    pub fn failed_share(&self) -> f64 {
+        let mut cuts: Vec<usize> = self.failed.iter().map(|f| f.0).collect();
+        cuts.sort_unstable();
+        cuts.dedup();
+        cuts.len() as f64 / self.done.max(1) as f64
+    }
+
     pub fn cut_count(&self) -> usize {
         self.cuts.len()
     }

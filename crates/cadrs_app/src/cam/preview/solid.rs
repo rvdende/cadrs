@@ -184,7 +184,33 @@ impl Live {
                 for t in asks.try_iter() {
                     to = t;
                 }
-                let Some(mesh) = live.cut_to(to) else { break };
+                let Some(mut mesh) = live.cut_to(to) else {
+                    break;
+                };
+                if live.gives_up()
+                    && let Some(run) = program::setup_run(
+                        &input.cam,
+                        input
+                            .cam
+                            .job(input.job)
+                            .expect("the job the engine was made for"),
+                        input
+                            .cam
+                            .job(input.job)
+                            .and_then(|j| j.setups.iter().find(|s| s.id == input.setup))
+                            .expect("the setup the engine was made for"),
+                        &input.parts,
+                        &input.paths,
+                        Some(&input.wanted),
+                    )
+                    .ok()
+                    && let Some(lattice) = Engine::lattice(&input, &run)
+                {
+                    warn!("Simulate's exact stock fails too often here: on the lattice from now");
+                    live = lattice;
+                    let Some(m) = live.cut_to(to) else { break };
+                    mesh = m;
+                }
                 if send.send((to, mesh)).is_err() {
                     break;
                 }
@@ -287,8 +313,9 @@ impl Engine {
             .iter()
             .find(|s| !s.suppressed)
             .is_none_or(|s| s.id == setup.id);
-        // (Exactly only with `CADRS_EXACT_SIM=1` for now: the kernel doesn't yet make every
-        // cut of a roughing run exactly, where successive levels' walls lie on one another.)
+        // (Exactly only with `CADRS_EXACT_SIM=1` for now: on the worm's rotary roughing the
+        // exact stock falls far behind the tool and many of its cuts fail. On the lattice where
+        // it can't be made, or once it fails too often: [`Engine::gives_up`].)
         let exact = std::env::var_os("CADRS_EXACT_SIM").is_some_and(|v| v == "1");
         if exact
             && first_setup
@@ -316,11 +343,19 @@ impl Engine {
                 Err(_) => warn!("Simulate's exact stock could not be made"),
             }
         }
+        Engine::lattice(input, &run)
+    }
+
+    /// The stock on the lattice (tri-dexels): every setup, and the fallback of the exact one.
+    fn lattice(input: &SolidInput, run: &program::SetupRun) -> Option<Engine> {
+        let cam = &input.cam;
+        let job = cam.job(input.job)?;
+        let setup = job.setups.iter().find(|s| s.id == input.setup)?;
         let start = program::solid_start(
             cam,
             job,
             setup,
-            &run,
+            run,
             &input.parts,
             &input.paths,
             None,
@@ -330,6 +365,17 @@ impl Engine {
         Some(Engine::Lattice(Box::new(
             cadrs_core::cam::cadrs_cam::sim::LiveStock::new(start.stock, start.ops),
         )))
+    }
+
+    /// The lattice in place of an exact stock that fails too often: more than one cut in a
+    /// hundred the kernel couldn't make (a 5-axis finishing pass, rotary roughing round a
+    /// bar), past the first fifty. Its stock would show what those cuts leave; the lattice's,
+    /// coarser, shows them all.
+    fn gives_up(&self) -> bool {
+        match self {
+            Engine::Exact(e) => e.cut_count_done() >= 50 && e.failed_share() > 0.01,
+            Engine::Lattice(_) => false,
+        }
     }
 
     /// The stock cut to `to`, as a mesh. `None`: the engine failed.
