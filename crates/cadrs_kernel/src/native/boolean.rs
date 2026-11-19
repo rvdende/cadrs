@@ -562,19 +562,11 @@ fn import(pool: &mut Pool, faces: &mut Vec<WFace>, b: &Body, owner: usize, merge
             for c in l {
                 let e = &b.edges[c.edge];
                 bb.add(&b.verts[e.v[0]].p);
-                // (A conic's own box: samples along an arc miss its extremes by up to
-                // r·(1 − cos(π/16)), and a pair of faces then misses a crossing near there.)
-                if !e.degenerate
-                    && matches!(
-                        e.curve,
-                        Curve::Line { .. } | Curve::Circle { .. } | Curve::Ellipse { .. }
-                    )
-                {
+                // (The curve's own box, a conic's extremes or a B-spline's poles: samples along
+                // an arc miss its extremes by up to r·(1 − cos(π/16)), along a spline of many
+                // spans by more, and a pair of faces then misses a crossing near there.)
+                if !e.degenerate {
                     bb.union(&curve_bbox(&e.curve, e.t[0], e.t[1]));
-                } else if !e.degenerate {
-                    for i in 0..=16 {
-                        bb.add(&e.point(e.t[0] + (e.t[1] - e.t[0]) * i as f64 / 16.0));
-                    }
                 }
             }
         }
@@ -811,11 +803,14 @@ fn tangent_along_shared_edge(
             }
             // The same curve, at least where they overlap (whole circles may have their seams in
             // different places).
+            // (Within the edges' tolerances: a copy of a prism moved by a few tolerances has
+            // its seam that far from the other's, and its side crosses the other's.)
+            let within = pool.tol.max(e.tol).max(o.tol);
             let same_ends = x == y || {
                 let on = |a: &WEdge, b: &WEdge| {
                     [0.25, 0.5, 0.75].iter().all(|f| {
                         let m = b.curve.point(b.t[0] + (b.t[1] - b.t[0]) * f);
-                        on_curve(&a.curve, a.t[0], a.t[1], &m, pool.tol * 10.0).is_some()
+                        on_curve(&a.curve, a.t[0], a.t[1], &m, within).is_some()
                     })
                 };
                 on(e, o) && on(o, e)
@@ -4593,7 +4588,11 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 // (A face coinciding with g over part: where this sub-face lies on g's surface.)
                 let on_g = !partial.contains(&(fi, g))
                     || gf.surf.distance(&p) <= (run_tol * 10.0).max(f.tol).max(gf.tol);
-                if on_g && point_in_face(gf, &p, run_tol * 10.0) != InFace::Outside {
+                // (Within the tolerance of g's boundary only: a sliver of this face between
+                // g's edge and its own a few tolerances wide (boxes whose sides are 1e-5
+                // apart) has its middle off g by more than the tolerance.)
+                let near = run_tol.max(f.tol).max(gf.tol);
+                if on_g && point_in_face(gf, &p, near) != InFace::Outside {
                     let (gu, gv) = gf.surf.project(&p, Some((gf.uv_center.x, gf.uv_center.y)));
                     let gn = gf.surf.normal(gu, gv) * if gf.sense { 1.0 } else { -1.0 };
                     // Against a sheet an overlap is an overlap, whichever way the faces face.

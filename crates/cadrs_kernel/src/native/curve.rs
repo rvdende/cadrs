@@ -264,22 +264,41 @@ impl Curve {
                 let (lo, hi) = (t0.min(t1), t0.max(t1));
                 let spans = 1 + n.breaks().iter().filter(|b| **b > lo && **b < hi).count();
                 let each = (2 * n.degree + 2).min(CLOSEST_SAMPLES / spans).max(4);
-                let (lo, hi) = (t0.min(t1), t0.max(t1));
-                let mut best = (f64::INFINITY, lo);
-                let mut look = |t: f64| {
-                    let d = (self.point(t) - p).norm_squared();
-                    if d < best.0 {
-                        best = (d, t);
-                    }
-                };
+                let mut samples: Vec<(f64, f64)> = Vec::new();
                 let knots = self.pieces(lo, hi);
                 for w in knots.windows(2) {
                     for i in 0..each {
-                        look(w[0] + (w[1] - w[0]) * i as f64 / each as f64);
+                        let t = w[0] + (w[1] - w[0]) * i as f64 / each as f64;
+                        samples.push((t, (self.point(t) - p).norm_squared()));
                     }
                 }
-                look(hi);
-                self.closest_polished(p, lo, hi, best.1)
+                samples.push((hi, (self.point(hi) - p).norm_squared()));
+                // Polished from the nearest sample, and from the next nearest local minimum of
+                // the samples' distances where there is one within a few times the nearest's:
+                // a closed curve's two ends are one point, the nearest sample at either end
+                // alike, while the curve's nearest point lies just before the other end.
+                let best = samples
+                    .iter()
+                    .copied()
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
+                    .unwrap_or((lo, 0.0));
+                let t = self.closest_polished(p, lo, hi, best.0);
+                let mut out = (t, (self.point(t) - p).norm_squared());
+                let n = samples.len();
+                for i in 0..n {
+                    let d = samples[i].1;
+                    let minimum =
+                        (i == 0 || samples[i - 1].1 >= d) && (i + 1 == n || samples[i + 1].1 >= d);
+                    if !minimum || samples[i].0 == best.0 || d > 4.0 * best.1 + 1e-300 {
+                        continue;
+                    }
+                    let t = self.closest_polished(p, lo, hi, samples[i].0);
+                    let e = (self.point(t) - p).norm_squared();
+                    if e < out.1 {
+                        out = (t, e);
+                    }
+                }
+                out.0
             }
         }
     }
