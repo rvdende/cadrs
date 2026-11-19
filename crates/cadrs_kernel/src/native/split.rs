@@ -125,13 +125,32 @@ fn one_chart(surf: &Surface, boundary: &[Vec<Arc>], cuts: &[Arc]) -> (Vec<Vec<Ar
             } else {
                 &[0.0]
             };
+            // (And the whole turns taking either end onto a boundary vertex of its own: a
+            // helical strip's face runs over several turns.)
+            let mut shifts: Vec<V2> = Vec::new();
             for &i in ku {
                 for &j in kv {
-                    let d = V2::new(i * TAU, j * TAU);
-                    let n = usize::from(meets(c.v[0], s + d)) + usize::from(meets(c.v[1], e + d));
-                    if best.is_none_or(|(bn, _, _)| n > bn) {
-                        best = Some((n, d.x, d.y));
+                    shifts.push(V2::new(i * TAU, j * TAU));
+                }
+            }
+            for (k, q) in [(c.v[0], s), (c.v[1], e)] {
+                for (w, p) in &ends {
+                    if *w == k {
+                        let r = |x: f64, on: bool| if on { (x / TAU).round() * TAU } else { 0.0 };
+                        let d = V2::new(
+                            r(p.x - q.x, periods[0].is_some()),
+                            r(p.y - q.y, periods[1].is_some()),
+                        );
+                        if !shifts.contains(&d) {
+                            shifts.push(d);
+                        }
                     }
+                }
+            }
+            for d in shifts {
+                let n = usize::from(meets(c.v[0], s + d)) + usize::from(meets(c.v[1], e + d));
+                if best.is_none_or(|(bn, _, _)| n > bn) {
+                    best = Some((n, d.x, d.y));
                 }
             }
             match best {
