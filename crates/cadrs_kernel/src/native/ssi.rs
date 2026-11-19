@@ -927,6 +927,11 @@ fn equal_cylinders_crossing(
 /// where some generator misses the second or touches it (the loops join: the numeric engine's),
 /// equal cylinders a hair off meeting (their loops a hair apart where they nearly touch).
 fn cylinder_loops(f1: &Frame, r1: f64, f2: &Frame, r2: f64) -> Option<Vec<IntCurve>> {
+    // (Equal radii only, the pair whose loops nearly meet at two points at once: a fillet's
+    // cylinder crossing a smaller round near touching it is the numeric engine's, quicker by far.)
+    if (r1 - r2).abs() > 1e-6 * (r1 + r2) {
+        return None;
+    }
     let (z1, z2) = (f1.z.normalize(), f2.z.normalize());
     let (x1, y1) = (f1.x.normalize(), z1.cross(&f1.x.normalize()));
     let perp = |v: V3| v - z2 * v.dot(&z2);

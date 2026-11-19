@@ -30,10 +30,31 @@ fn main() {
             Step::Move(m) => k.transform(&s, *m),
             Step::MirrorJoin(m) => k.transform(&s, *m).and_then(|t| k.union(&s, &t)),
             Step::StepRoundTrip => k.write_step(&s).and_then(|t| k.read_step(&t)),
-            Step::Act(f) => {
-                println!("step {}: act {:?} (not run here)", i + 1, f.act);
-                return;
-            }
+            Step::Act(f) => match f.act {
+                generate::Act::Fillet => {
+                    let t = std::time::Instant::now();
+                    // (CHAIN_TIMES=n: the step n times over, for a profiler.)
+                    let n: usize = std::env::var("CHAIN_TIMES")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(1);
+                    for _ in 1..n {
+                        let _ = k.fillet(&s, &f.points, f.size);
+                    }
+                    let r = k.fillet(&s, &f.points, f.size);
+                    println!(
+                        "  fillet of {} edges by {}: {:?}",
+                        f.points.len(),
+                        f.size,
+                        t.elapsed()
+                    );
+                    r
+                }
+                _ => {
+                    println!("step {}: act {:?} (not run here)", i + 1, f.act);
+                    return;
+                }
+            },
         };
         match r {
             Ok(n) => {
