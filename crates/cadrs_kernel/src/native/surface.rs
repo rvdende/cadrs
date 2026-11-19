@@ -602,12 +602,18 @@ impl Surface {
                 }
                 let here = r.norm_squared();
                 let closer = |nu: f64, nv: f64| (self.eval(nu, nv) - p).norm_squared() < here;
-                let mut tries = 0;
-                while !closer(nu, nv) && tries < 30 {
+                // (A Newton step uphill (the distance's Hessian not positive, far off the
+                // surface) halved never comes closer: 30 evaluations wasted before the
+                // gradient's step, 100 to 200 a projection. Straight to that step then.)
+                let old = crate::native::env_flag!("CADRS_OLD_NEWTON");
+                let uphill = !old && (nu - u) * fu + (nv - v) * fv >= 0.0;
+                let most = if old { 30 } else { 16 };
+                let mut tries = if uphill { most } else { 0 };
+                while tries < most && !closer(nu, nv) {
                     (nu, nv) = (u + (nu - u) * 0.5, v + (nv - v) * 0.5);
                     tries += 1;
                 }
-                if tries == 30 {
+                if tries == most {
                     let (su, sv) = (
                         d[1].norm_squared().max(tol::TINY),
                         d[2].norm_squared().max(tol::TINY),
@@ -617,11 +623,11 @@ impl Surface {
                         (v - fv / sv).clamp(v0.min(v1), v1.max(v0)),
                     );
                     tries = 0;
-                    while !closer(nu, nv) && tries < 30 {
+                    while !closer(nu, nv) && tries < most {
                         (nu, nv) = (u + (nu - u) * 0.5, v + (nv - v) * 0.5);
                         tries += 1;
                     }
-                    if tries == 30 {
+                    if tries == most {
                         break;
                     }
                 }
