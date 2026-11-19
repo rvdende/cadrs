@@ -930,7 +930,67 @@ fn grown_by_convex_parts(b: &Body, d: f64, depth: usize) -> Option<Body> {
 /// touching configurations a boolean has to settle do (a slab's side against a neighbour's
 /// slab, not yet merged into a face). Fails when a round makes no progress, or after three
 /// rounds (each failed boolean costs its retries).
-fn combine_all(mut acc: Body, mut todo: Vec<(Body, String)>, op: BoolOp) -> Result<Body> {
+fn combine_all(acc: Body, todo: Vec<(Body, String)>, op: BoolOp) -> Result<Body> {
+    // (Batched first; where that ends in failure, piece by piece from the start, as before.)
+    // (Only for many: a few pieces gain little, and a batch that fails costs a second pass.)
+    if op == BoolOp::Union && todo.len() >= 8 && !crate::native::env_flag!("CADRS_NO_PIECE_BATCHES")
+    {
+        if let Ok(r) = combine_batched(acc.clone(), todo.clone(), op) {
+            return Ok(r);
+        }
+    }
+    combine_in_turn(acc, todo, op)
+}
+
+/// [`combine_all`] with the pieces that keep apart united in batches.
+fn combine_batched(mut acc: Body, mut todo: Vec<(Body, String)>, op: BoolOp) -> Result<Body> {
+    // A union of many pieces: those whose boxes keep apart taken together, as one body of
+    // several solids, so each union pays its fixed costs (the body's import, its check) once
+    // for the batch, not once a piece. A batch the union fails on goes piece by piece below.
+    {
+        let pad = 1e-6 * (1.0 + acc.bbox().diagonal());
+        let mut batches: Vec<(Body, Vec<Bbox>, Vec<(Body, String)>)> = Vec::new();
+        for (piece, what) in todo {
+            // (Grown by a hundredth of its size too: a box sampled off curved faces may fall a
+            // hair short of them, and two pieces that touch must not share a batch.)
+            let bb0 = piece.bbox();
+            let bb = bb0.grow(pad + 0.01 * bb0.diagonal());
+            match batches
+                .iter_mut()
+                .find(|b| !b.1.iter().any(|o| o.overlaps(&bb)))
+            {
+                Some(b) => {
+                    b.0.append(&piece);
+                    b.1.push(bb);
+                    b.2.push((piece, what));
+                }
+                None => batches.push((piece.clone(), vec![bb], vec![(piece, what)])),
+            }
+        }
+        let mut left = Vec::new();
+        for (body, _, pieces) in batches {
+            if pieces.len() == 1 {
+                left.extend(pieces);
+                continue;
+            }
+            match combine(&acc, &body, op, &|| {
+                format!("{} pieces together", pieces.len())
+            }) {
+                Ok(r) => acc = r,
+                Err(_) => left.extend(pieces),
+            }
+        }
+        todo = left;
+        if todo.is_empty() {
+            return Ok(acc);
+        }
+    }
+    combine_in_turn(acc, todo, op)
+}
+
+/// The pieces united (or subtracted) one at a time, those that fail tried again after the
+/// rest, up to three rounds.
+fn combine_in_turn(mut acc: Body, mut todo: Vec<(Body, String)>, op: BoolOp) -> Result<Body> {
     for round in 0..3 {
         let n = todo.len();
         let mut left = Vec::new();
