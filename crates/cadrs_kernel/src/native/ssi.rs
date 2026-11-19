@@ -1000,15 +1000,22 @@ fn cylinder_loops(f1: &Frame, r1: f64, f2: &Frame, r2: f64) -> Option<Vec<IntCur
         })
         .map(|i| discs[i].abs())
         .fold(f64::INFINITY, f64::min);
-    // (Not where it reaches nought, the loops touching: they join there, the numeric engine's.)
-    if near > 1e-2 * a * r2 * r2 || near < 1e-10 * a * r2 * r2 {
+    // Near touching only: some generator within a hair of touching the second cylinder (the
+    // fit costs more than the numeric engine's march where nothing is near), and not touching
+    // (a turn of the discriminant at nought: the loops join there, the numeric engine's).
+    let closest = discs.iter().map(|d| d.abs()).fold(f64::INFINITY, f64::min);
+    if closest > 1e-4 * a * r2 * r2 || near < 1e-10 * a * r2 * r2 {
         return None;
     }
     let mut out = Vec::new();
-    // (Every generator meeting it twice, one cylinder through the other: the numeric engine's,
-    // which follows those loops well.)
     if discs.iter().all(|&d| d > room) {
-        return None;
+        // Every generator meets it twice: two loops all the way round, s±(θ).
+        for sign in [1.0, -1.0] {
+            out.push(fitted(&|t: f64| {
+                point(t, sign * quad(t).1.max(0.0).sqrt())
+            })?);
+        }
+        return Some(out);
     }
     // Else each stretch of θ where the generators meet it: one loop, out along s+ and back along
     // s−, the two joined where the generator touches (the discriminant's roots α < β). In
