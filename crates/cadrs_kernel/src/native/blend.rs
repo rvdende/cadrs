@@ -900,7 +900,10 @@ pub fn ball_frame(c: P3, r: f64, z: V3, x: V3) -> Result<Body> {
         plane,
         f: Frame { o: c, x, y, z },
     };
-    Ok(sweep::sweep_full(&mf, &[], &kind, 0.0, TAU, true, true)?.body)
+    let mut body = sweep::sweep_full(&mf, &[], &kind, 0.0, TAU, true, true)?.body;
+    // (The half disk's diameter turns about itself: its line is no edge of the ball.)
+    body.drop_unused_edges();
+    Ok(body)
 }
 
 /// A hexahedron with planar faces from its 8 corners: 0–3 the bottom quad, 4–7 the top one

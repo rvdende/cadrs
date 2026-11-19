@@ -2051,7 +2051,63 @@ fn triangulate(s: &Setup, p: &TessParams, refine: bool) -> FaceMesh {
         }
     }
     out.indices = tris;
+    pole_normals(&mut out, &f.surf, sign);
     out
+}
+
+/// Normals at a pole or an apex, where the surface's derivatives vanish: each triangle there
+/// takes the normal the surface tends to coming in along it (a hair from the vertex towards the
+/// triangle's middle). Where those agree (a sphere's pole) the vertex keeps the one; where they
+/// differ (a cone's apex, a normal per generator) each triangle gets its own copy of the vertex.
+fn pole_normals(out: &mut FaceMesh, surf: &Surface, sign: f64) {
+    let normal = |u: f64, v: f64| -> Option<V3> {
+        let (_, su, sv) = surf.d1(u, v);
+        let n = su.cross(&sv);
+        let (l, lu, lv) = (n.norm(), su.norm(), sv.norm());
+        (l.is_finite() && l > 1e-10 * lu * lv && l > tol::TINY && lu > 1e-9 * lv && lv > 1e-9 * lu)
+            .then(|| n / l * sign)
+    };
+    let pole: Vec<bool> = out
+        .uvs
+        .iter()
+        .map(|uv| normal(uv.x, uv.y).is_none())
+        .collect();
+    if !pole.iter().any(|&p| p) {
+        return;
+    }
+    // Each use of a pole vertex: (triangle, corner, the normal coming in along the triangle).
+    let mut uses: HashMap<u32, Vec<(usize, usize, V3)>> = HashMap::default();
+    for (k, t) in out.indices.iter().enumerate() {
+        for c in 0..3 {
+            let i = t[c] as usize;
+            if !pole[i] {
+                continue;
+            }
+            let mid = (out.uvs[t[0] as usize].coords
+                + out.uvs[t[1] as usize].coords
+                + out.uvs[t[2] as usize].coords)
+                / 3.0;
+            let at = out.uvs[i].coords + (mid - out.uvs[i].coords) * 1e-6;
+            if let Some(n) = normal(at.x, at.y) {
+                uses.entry(t[c]).or_default().push((k, c, n));
+            }
+        }
+    }
+    for (i, us) in uses {
+        let Some(&(_, _, n0)) = us.first() else {
+            continue;
+        };
+        if us.iter().all(|u| u.2.angle(&n0) < 1e-5) {
+            out.normals[i as usize] = n0;
+            continue;
+        }
+        for (k, c, n) in us {
+            out.positions.push(out.positions[i as usize]);
+            out.normals.push(n);
+            out.uvs.push(out.uvs[i as usize]);
+            out.indices[k][c] = (out.positions.len() - 1) as u32;
+        }
+    }
 }
 
 /// The vertices along boundary segment `a`–`b` in the triangulation, `a` first and `b` last:
