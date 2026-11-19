@@ -140,7 +140,29 @@ pub fn curvatures_at(
         return Err(KernelError::InvalidInput("a body without faces".into()));
     }
     let all: Vec<usize> = (0..b.faces.len()).collect();
-    let pieces = faces_pieces(b, en.polys(), &all);
+    let polys = en.polys();
+    // After springrep's `measure::Outlines::curvature` (MIT): on analytic surfaces, whose
+    // projection is the nearest point of the whole surface, the nearest face is the nearest
+    // whose own region holds its surface's foot, unless an edge lies nearer; a general search
+    // otherwise.
+    let analytic = b.faces.iter().all(|f| {
+        matches!(
+            f.surf,
+            Surface::Plane { .. }
+                | Surface::Cylinder { .. }
+                | Surface::Sphere { .. }
+                | Surface::Torus { .. }
+        )
+    });
+    let mut edges: Vec<usize> = b
+        .faces
+        .iter()
+        .flat_map(|f| f.loops.iter().flatten().map(|c| c.edge))
+        .filter(|&e| !b.edges[e].degenerate)
+        .collect();
+    edges.sort_unstable();
+    edges.dedup();
+    let pieces = (!analytic).then(|| faces_pieces(b, polys, &all));
     points
         .iter()
         .map(|p| {
@@ -149,15 +171,51 @@ pub fn curvatures_at(
                     "a point that isn't finite".into(),
                 ));
             }
-            let x = extremum(&point_pieces(*p), &pieces, Sense::Min).ok_or_else(|| {
-                KernelError::EmptyResult("nothing to measure from: no faces".into())
-            })?;
-            let q = x.b;
-            let at: Vec<(usize, Option<(f64, f64)>)> = match x.wb {
-                Where::Face(f, u, v) => vec![(f, Some((u, v)))],
-                Where::Edge(e, _) => edge_faces(b, e).into_iter().map(|f| (f, None)).collect(),
-                Where::Vertex(v) => vertex_faces(b, v).into_iter().map(|f| (f, None)).collect(),
-                Where::Point => vec![],
+            let (q, at): (P3, Vec<(usize, Option<(f64, f64)>)>) = if let Some(pieces) = &pieces {
+                let x = extremum(&point_pieces(*p), pieces, Sense::Min).ok_or_else(|| {
+                    KernelError::EmptyResult("nothing to measure from: no faces".into())
+                })?;
+                let at = match x.wb {
+                    Where::Face(f, u, v) => vec![(f, Some((u, v)))],
+                    Where::Edge(e, _) => edge_faces(b, e).into_iter().map(|f| (f, None)).collect(),
+                    Where::Vertex(v) => vertex_faces(b, v).into_iter().map(|f| (f, None)).collect(),
+                    Where::Point => vec![],
+                };
+                (x.b, at)
+            } else {
+                let face = (0..b.faces.len())
+                    .filter_map(|fi| {
+                        let f = &b.faces[fi];
+                        let (u, v) = f.surf.project(p, None);
+                        let foot = f.surf.eval(u, v);
+                        let held = super::classify::in_face(
+                            &polys[fi],
+                            &f.surf,
+                            P2::new(u, v),
+                            tol::POINT,
+                        ) != super::classify::InFace::Outside;
+                        held.then(|| ((foot - p).norm(), fi, foot, (u, v)))
+                    })
+                    .min_by(|x, y| x.0.total_cmp(&y.0));
+                let edge = edges
+                    .iter()
+                    .map(|&e| {
+                        let ed = &b.edges[e];
+                        let foot = ed.point(ed.curve.closest(p, ed.t[0], ed.t[1]));
+                        ((foot - p).norm(), e, foot)
+                    })
+                    .min_by(|x, y| x.0.total_cmp(&y.0));
+                match (face, edge) {
+                    (Some((df, f, foot, uv)), Some((de, ..))) if df <= de + tol::POINT => {
+                        (foot, vec![(f, Some(uv))])
+                    }
+                    (_, Some((_, e, foot))) => (
+                        foot,
+                        edge_faces(b, e).into_iter().map(|f| (f, None)).collect(),
+                    ),
+                    (Some((_, f, foot, uv)), None) => (foot, vec![(f, Some(uv))]),
+                    (None, None) => return Ok(None),
+                }
             };
             let bends: Vec<_> = at
                 .iter()
