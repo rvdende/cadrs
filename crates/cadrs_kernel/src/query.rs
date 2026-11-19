@@ -83,5 +83,15 @@ pub struct DistanceResult {
     pub b_at: DistanceLocation,
 }
 
+/// How two solids meet ([`crate::Kernel::interference`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Interference {
+    /// The volume they share (mm³): 0 for solids that only touch or are apart.
+    pub volume: f64,
+    /// The least distance from a point of one to a point of the other, insides included (mm):
+    /// 0 for solids that touch or overlap.
+    pub gap: f64,
+}
+
 /// A rectangle of a surface's (u, v): `[[u0, u1], [v0, v1]]`.
 pub type UvRect = [[f64; 2]; 2];

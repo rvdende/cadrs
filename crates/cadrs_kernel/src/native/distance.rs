@@ -483,10 +483,32 @@ pub fn extremum(a: &[Piece], b: &[Piece], sense: Sense) -> Option<Extremum> {
     };
     let key = |bd: f64| if sense == Sense::Min { -bd } else { bd };
     let mut heap = BinaryHeap::new();
+    // Two flat faces on parallel planes apart are as near everywhere they overlap seen along
+    // the planes' normal, so that nearness is also reached on the boundary of one of them: their
+    // edges and vertices, which are pieces too, find it. Searched as faces, no cell of one rules
+    // out a cell of the other, and the search runs to its limit.
+    let plane = |p: &Piece| match p {
+        Piece::Face { dom, .. } => match dom.surf {
+            super::surface::Surface::Plane { f } => Some((f.o, f.x.cross(&f.y).normalize())),
+            _ => None,
+        },
+        _ => None,
+    };
+    let edged = |ps: &[Piece]| ps.iter().any(|p| matches!(p, Piece::Curve { .. }));
+    let skip_flat_pairs = sense == Sense::Min && edged(a) && edged(b);
+    let parallel_apart = |x: &Piece, y: &Piece| {
+        let (Some((oa, na)), Some((ob, nb))) = (plane(x), plane(y)) else {
+            return false;
+        };
+        na.cross(&nb).norm() <= tol::ANGULAR && (ob - oa).dot(&na).abs() > tol::ROUNDOFF
+    };
     for (ia, ra) in boxes_a.iter().enumerate() {
         let Some((ca, ba)) = ra else { continue };
         for (ib, rb) in boxes_b.iter().enumerate() {
             let Some((cb, bb)) = rb else { continue };
+            if skip_flat_pairs && parallel_apart(&a[ia], &b[ib]) {
+                continue;
+            }
             let bd = bound(ba, bb, sense);
             heap.push(Node {
                 key: key(bd),

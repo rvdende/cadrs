@@ -2453,6 +2453,37 @@ impl Kernel for NativeKernel {
         super::distance::kernel_distance(self, a, b, super::distance::Sense::Max)
     }
 
+    fn curvatures_at(&self, body: BodyId, points: &[Point3<f64>]) -> Result<Vec<Option<[f64; 2]>>> {
+        super::measure::curvatures_at(self, body, points)
+    }
+
+    fn plane_section(
+        &self,
+        body: BodyId,
+        origin: Point3<f64>,
+        normal: nalgebra::Vector3<f64>,
+        tolerance: f64,
+    ) -> Result<Vec<Vec<Point3<f64>>>> {
+        super::measure::plane_section(self, body, origin, normal, tolerance)
+    }
+
+    fn section_area(
+        &self,
+        body: BodyId,
+        origin: Point3<f64>,
+        normal: nalgebra::Vector3<f64>,
+    ) -> Result<f64> {
+        super::measure::section_area(self, body, origin, normal)
+    }
+
+    fn betti_numbers(&self, body: BodyId) -> Result<[u64; 3]> {
+        super::measure::betti_numbers(self, body)
+    }
+
+    fn interference(&mut self, a: BodyId, b: BodyId) -> Result<Interference> {
+        super::measure::interference(self, a, b)
+    }
+
     fn face_from_surface(
         &mut self,
         body: BodyId,

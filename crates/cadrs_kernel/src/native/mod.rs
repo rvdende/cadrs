@@ -237,6 +237,11 @@ pub mod math;
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod math;
 #[cfg(feature = "testkit")]
+pub mod measure;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod measure;
+#[cfg(feature = "testkit")]
 pub mod mesh_distance;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
