@@ -321,12 +321,15 @@ fn rebuild(world: &mut World) {
                 ));
             }
         });
-        p.spawn(Node {
-            flex_direction: FlexDirection::Column,
-            overflow: Overflow::scroll_y(),
-            flex_grow: 1.0,
-            ..default()
-        })
+        p.spawn((
+            Name::new("cut-list-rows"),
+            Node {
+                flex_direction: FlexDirection::Column,
+                overflow: Overflow::scroll_y(),
+                flex_grow: 1.0,
+                ..default()
+            },
+        ))
         .with_children(|list| {
             // Grouped by section: its name, then its rows.
             let mut last: Option<&str> = None;

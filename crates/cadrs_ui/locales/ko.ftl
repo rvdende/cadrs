@@ -4503,3 +4503,7 @@ cut-list-nominal = { $material } (일반)
 cut-list-cap = 엔드 캡 { $thickness } mm ({ $profile })
 cut-list-gusset = 거셋 { $size } x { $thickness } mm
 model-frame-custom-named = 사용자 정의 ({ $sketch })
+model-frame-end-offset = 끝 오프셋
+model-frame-members = 회전한 부재 (곡선)
+model-frame-member-angle = 부재 { $n } 각도
+model-frame-next-pair = 다음 쌍 (부재 셋 이상의 모서리)

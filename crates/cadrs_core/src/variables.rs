@@ -355,6 +355,10 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
         }
         FeatureKind::Frame(x) => {
             s("Angle", &mut x.angle_expr, &mut x.angle, A);
+            s("End offset", &mut x.end_offset_expr, &mut x.end_offset, L);
+            for o in &mut x.member_overrides {
+                s("Member angle", &mut o.angle_expr, &mut o.angle, A);
+            }
             if x.end_caps {
                 s(
                     "Cap thickness",

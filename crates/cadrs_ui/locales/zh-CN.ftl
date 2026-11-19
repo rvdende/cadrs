@@ -4503,3 +4503,7 @@ cut-list-nominal = { $material }（常用）
 cut-list-cap = 端盖 { $thickness } mm ({ $profile })
 cut-list-gusset = 加强板 { $size } x { $thickness } mm
 model-frame-custom-named = 自定义 ({ $sketch })
+model-frame-end-offset = 端部偏移
+model-frame-members = 旋转的构件 (曲线)
+model-frame-member-angle = 构件 { $n } 角度
+model-frame-next-pair = 下一对 (三根及以上构件的拐角)

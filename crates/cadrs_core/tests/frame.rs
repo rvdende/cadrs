@@ -2029,3 +2029,282 @@ fn mirrored_corners_cut_alike_pieces() {
         assert_eq!(q, [2, 2], "{family:?}: {rows:?}");
     }
 }
+
+#[test]
+fn a_rail_against_a_slanted_t_slot_post_is_trimmed_by_its_shape() {
+    // The post turned 30° about Z: no square face to cut the rail at, so the rail is trimmed
+    // by the post as it is, reaching past the corner of the post's box.
+    let mut st = Studio::new();
+    let t = 30f64.to_radians();
+    let post = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(
+            &[
+                (-200.0 * t.cos(), -200.0 * t.sin()),
+                (200.0 * t.cos(), 200.0 * t.sin()),
+            ],
+            false,
+        )],
+    );
+    let f = st.frame(FrameFeature {
+        size: "40x40".into(),
+        path: vec![PathRef::Sketch(post)],
+        ..Default::default()
+    });
+    let b = st.build();
+    let post_part = b.parts.iter().find(|p| p.feature == f).unwrap();
+    let post_low = bounds(post_part).0[1];
+    let rail = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(&[(0.0, -300.0), (0.0, 0.0)], false)],
+    );
+    let g = st.frame(FrameFeature {
+        path: vec![PathRef::Sketch(rail)],
+        trim: vec![post_part.id],
+        ..Default::default()
+    });
+    let b = st.build();
+    let r = b.parts.iter().find(|p| p.feature == g).unwrap();
+    assert!(
+        bounds(r).1[1] > post_low + 1.0,
+        "{} vs {post_low}",
+        bounds(r).1[1]
+    );
+    assert!(st.overlap() < 1e-6);
+}
+
+#[test]
+fn a_mitre_whose_members_both_start_there_is_butted_for_an_unsymmetric_section() {
+    let mut st = Studio::new();
+    let sk = st.sketch(
+        PlaneRef::Top,
+        vec![
+            polyline(&[(0.0, 0.0), (300.0, 0.0)], false),
+            polyline(&[(0.0, 0.0), (0.0, 200.0)], false),
+            polyline(&[(0.0, 0.0), (-150.0, -150.0)], false),
+        ],
+    );
+    let mut x = FrameFeature::default();
+    x.set_family(ProfileFamily::Angle);
+    x.size = "40x40x4".into();
+    x.corner = CornerType::Miter;
+    x.merge_tangent = false;
+    x.path = vec![PathRef::Sketch(sk)];
+    let f = st.frame(x);
+    let b = st.build();
+    assert!(
+        b.warning(f).is_some_and(|w| w.contains("butted")),
+        "{:?}",
+        b.warning(f)
+    );
+    assert!(st.overlap() < 1e-6);
+}
+
+#[test]
+fn a_loop_with_a_post_at_a_corner_keeps_a_left_section_inside() {
+    // Drawn clockwise, with a third member at one corner: still a loop, run counter-clockwise.
+    let mut st = Studio::new();
+    let sk = st.sketch(
+        PlaneRef::Top,
+        vec![
+            polyline(
+                &[(0.0, 0.0), (0.0, 300.0), (400.0, 300.0), (400.0, 0.0)],
+                true,
+            ),
+            polyline(&[(400.0, 0.0), (600.0, 0.0)], false),
+        ],
+    );
+    let mut x = tube("40x40x3");
+    x.anchor = Anchor::Left;
+    x.path = vec![PathRef::Sketch(sk)];
+    let f = st.frame(x);
+    let b = st.build();
+    let loop_parts: Vec<&Part> = b
+        .parts
+        .iter()
+        .filter(|p| p.feature == f && bounds(p).1[0] < 400.0 + 1e-3)
+        .collect();
+    assert_eq!(loop_parts.len(), 4);
+    for p in loop_parts {
+        let (lo, hi) = bounds(p);
+        assert!(
+            lo[0] > -1e-4 && lo[1] > -1e-4 && hi[1] < 300.0 + 1e-4,
+            "{lo:?} {hi:?}"
+        );
+    }
+}
+
+#[test]
+fn a_d_shaped_loop_keeps_a_left_section_inside_either_way() {
+    for reversed in [false, true] {
+        let mut st = Studio::new();
+        let line = if reversed {
+            polyline(&[(100.0, 0.0), (-100.0, 0.0)], false)
+        } else {
+            polyline(&[(-100.0, 0.0), (100.0, 0.0)], false)
+        };
+        let sk = st.sketch(
+            PlaneRef::Top,
+            vec![
+                line,
+                SketchOp::AddArc {
+                    center: Vec2::new(0.0, 0.0),
+                    start: Vec2::new(100.0, 0.0),
+                    end: Vec2::new(-100.0, 0.0),
+                    construction: false,
+                },
+            ],
+        );
+        let mut x = tube("20x20x2");
+        x.anchor = Anchor::Left;
+        x.path = vec![PathRef::Sketch(sk)];
+        st.frame(x);
+        let b = st.build();
+        for p in &b.parts {
+            let (lo, hi) = bounds(p);
+            assert!(
+                lo[1] > -1e-3 && hi[1] < 100.0 + 1e-3,
+                "{reversed}: {lo:?} {hi:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_brace_into_a_corner_is_listed_with_its_compound_cut() {
+    let mut st = Studio::new();
+    let sk = st.sketch(
+        PlaneRef::Top,
+        vec![
+            polyline(
+                &[(0.0, 0.0), (400.0, 0.0), (400.0, 300.0), (0.0, 300.0)],
+                true,
+            ),
+            polyline(&[(0.0, 0.0), (400.0, 300.0)], false),
+        ],
+    );
+    let mut x = tube("40x40x3");
+    x.path = vec![PathRef::Sketch(sk)];
+    st.frame(x);
+    let b = st.build();
+    // (The rails are 440 and 340 long, mitred; the brace is the fifth.)
+    let brace = b
+        .frames
+        .iter()
+        .find(|m| (m.length - 440.0).abs() > 1.0 && (m.length - 340.0).abs() > 1.0)
+        .expect("the brace");
+    assert!(
+        brace.ends.iter().all(|e| matches!(e, EndCut::Compound(..))),
+        "{:?}",
+        brace.ends
+    );
+}
+
+#[test]
+fn the_end_offset_runs_free_ends_on_or_back() {
+    for (off, want) in [(15.0, 330.0), (-10.0, 280.0)] {
+        let mut st = Studio::new();
+        let sk = st.sketch(
+            PlaneRef::Top,
+            vec![polyline(&[(0.0, 0.0), (300.0, 0.0)], false)],
+        );
+        let mut x = tube("20x20x2");
+        x.end_offset = off;
+        x.end_caps = true;
+        x.path = vec![PathRef::Sketch(sk)];
+        st.frame(x);
+        let b = st.build();
+        let m = b.frames.iter().find(|m| !m.plate).unwrap();
+        assert!((m.length - want).abs() < 1e-4, "{off}: {}", m.length);
+        // The caps sit on the moved ends.
+        let xs: Vec<f64> = b
+            .parts
+            .iter()
+            .filter(|p| b.frames.iter().any(|m| m.part == p.id && m.plate))
+            .map(|p| bounds(p).0[0])
+            .collect();
+        assert!(
+            xs.iter().any(|x| (x - (-off - 3.0)).abs() < 1e-4),
+            "{off}: {xs:?}"
+        );
+        assert!(st.overlap() < 1e-6);
+    }
+}
+
+#[test]
+fn a_trim_that_splits_a_member_says_so() {
+    let mut st = Studio::new();
+    let wall = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(
+            &[
+                (100.0, -100.0),
+                (120.0, -100.0),
+                (120.0, 100.0),
+                (100.0, 100.0),
+            ],
+            true,
+        )],
+    );
+    let e = st.extrude(wall, 50.0);
+    let sk = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(&[(0.0, 0.0), (400.0, 0.0)], false)],
+    );
+    let wall_part = st.build().parts.iter().find(|p| p.feature == e).unwrap().id;
+    let mut x = FrameFeature::default();
+    x.set_family(ProfileFamily::SquareBar);
+    x.size = "10".into();
+    x.anchor = Anchor::Bottom;
+    x.path = vec![PathRef::Sketch(sk)];
+    x.trim = vec![wall_part];
+    let f = st.frame(x);
+    let b = st.build();
+    assert!(
+        b.warning(f).is_some_and(|w| w.contains("split")),
+        "{:?}",
+        b.warning(f)
+    );
+}
+
+#[test]
+fn member_overrides_turn_some_members_on_edge() {
+    // A 20x40 frame, its 300 sides turned a quarter: those stand 40 high, the 400 ones lie
+    // 20 high; butted, nothing overlaps.
+    let mut st = Studio::new();
+    let sk = rectangle(&mut st);
+    let side = |st: &Studio, a, b| PathRef::SketchCurve {
+        sketch: sk,
+        curve: line_at(st, sk, a, b),
+    };
+    let overrides = vec![
+        frame::MemberOverride {
+            curve: side(&st, (400.0, 0.0), (400.0, 300.0)),
+            angle: 90.0,
+            angle_expr: "90 deg".into(),
+        },
+        frame::MemberOverride {
+            curve: side(&st, (0.0, 300.0), (0.0, 0.0)),
+            angle: 90.0,
+            angle_expr: "90 deg".into(),
+        },
+    ];
+    let f = st.frame(FrameFeature {
+        size: "20x40".into(),
+        path: vec![PathRef::Sketch(sk)],
+        member_overrides: overrides,
+        ..Default::default()
+    });
+    let b = st.build();
+    assert!(b.warning(f).is_none(), "{:?}", b.warning(f));
+    for p in &b.parts {
+        let (lo, hi) = bounds(p);
+        let (dx, dy, dz) = (hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
+        if dx > dy {
+            assert!((dz - 20.0).abs() < 1e-4, "a 400 side: {dz}");
+        } else {
+            assert!((dz - 40.0).abs() < 1e-4, "a 300 side: {dz}");
+        }
+    }
+    assert!(st.overlap() < 1e-6);
+}

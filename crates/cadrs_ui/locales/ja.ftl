@@ -4503,3 +4503,7 @@ cut-list-nominal = { $material } (標準)
 cut-list-cap = エンドキャップ { $thickness } mm ({ $profile })
 cut-list-gusset = ガセット { $size } x { $thickness } mm
 model-frame-custom-named = カスタム ({ $sketch })
+model-frame-end-offset = 端部オフセット
+model-frame-members = 回転した部材 (曲線)
+model-frame-member-angle = 部材 { $n } の角度
+model-frame-next-pair = 次のペア (3 本以上の部材のコーナー)

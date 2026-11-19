@@ -6354,3 +6354,11 @@ cut-list-cap = End cap { $thickness } mm ({ $profile })
 cut-list-gusset = Gusset { $size } x { $thickness } mm
 # A custom section named by its sketch, { $sketch }.
 model-frame-custom-named = Custom ({ $sketch })
+# How far the members' free ends run on past their curves (negative: stop short).
+model-frame-end-offset = End offset
+# The Frame dialog's field of curves whose members are turned by an angle of their own.
+model-frame-members = Turned members (curves)
+# { $n } is the turned member's number.
+model-frame-member-angle = Member { $n } angle
+# Tooltip of a corner override's button: which two members are joined at a corner of three or more.
+model-frame-next-pair = Next pair (corners of three or more members)

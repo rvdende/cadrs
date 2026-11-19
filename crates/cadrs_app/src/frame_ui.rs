@@ -139,6 +139,32 @@ pub fn pick(world: &mut World, kind: &mut FeatureKind, field: AppliedField, pick
             x.sketch = if x.sketch == Some(s) { None } else { Some(s) };
             true
         }
+        AppliedField::FrameMembers => {
+            let cache = world.resource::<PartCache>();
+            let r = match pick {
+                Pick::SketchCurve(sketch, curve) => PathRef::SketchCurve { sketch, curve },
+                Pick::Edge(..) => match crate::applied::entity_of(cache, pick) {
+                    Some(cadrs_core::applied::EdgeOrFace::Edge(e)) => PathRef::Edge(e),
+                    _ => return false,
+                },
+                _ => return false,
+            };
+            match x
+                .member_overrides
+                .iter()
+                .position(|o| same_path(&o.curve, &r))
+            {
+                Some(i) => {
+                    x.member_overrides.remove(i);
+                }
+                None => x.member_overrides.push(cadrs_core::frame::MemberOverride {
+                    curve: r,
+                    angle: 90.0,
+                    angle_expr: "90 deg".into(),
+                }),
+            }
+            true
+        }
         AppliedField::FrameTrim => {
             let Some(p) = pick.part() else {
                 return false;
@@ -235,6 +261,11 @@ pub fn references(kind: &FeatureKind, cache: &PartCache) -> Vec<Pick> {
             .filter_map(|o| o.point.map(|p| Pick::SketchPoint(p.sketch, p.point))),
     );
     out.extend(x.trim.iter().map(|p| Pick::Part(*p)));
+    out.extend(x.member_overrides.iter().filter_map(|o| match &o.curve {
+        PathRef::Edge(e) => edge(e),
+        PathRef::SketchCurve { sketch, curve } => Some(Pick::SketchCurve(*sketch, *curve)),
+        _ => None,
+    }));
     out
 }
 
@@ -271,7 +302,7 @@ pub(crate) fn layout(kind: &FeatureKind) -> Option<String> {
                 x.trim.is_empty(),
                 x.trim_flip,
                 x.overrides.iter().map(|o| o.gusset).collect::<Vec<_>>()
-            ),
+            ) + &format!(" {}", x.member_overrides.len()),
         ),
         k => crate::gear_ui::layout(k),
     }
@@ -312,6 +343,27 @@ fn curve_length(
     Some(s.trim_end_matches('0').trim_end_matches('.').to_string())
 }
 
+/// A path entry's label: "Curve of Sketch 1 · 400 mm", "Edge of Extrude 1", "Sketch 2".
+fn path_label(features: &[Feature], p: &PathRef) -> String {
+    match p {
+        PathRef::Edge(e) => tr_with(
+            "common-edge-of",
+            &[(
+                "name",
+                &op_name(features, crate::parts::edge_maker(features, &e.edge)),
+            )],
+        ),
+        PathRef::SketchCurve { sketch, curve } => {
+            let name = tr_with("common-curve-of", &[("name", &name_of(features, *sketch))]);
+            match curve_length(features, *sketch, *curve) {
+                Some(l) => format!("{name} · {l} mm"),
+                None => name,
+            }
+        }
+        PathRef::Sketch(s) | PathRef::Curve(s) => name_of(features, *s),
+    }
+}
+
 fn op_name(features: &[Feature], op: cadrs_sketch::OpId) -> String {
     name_of(features, cadrs_core::FeatureId(op))
 }
@@ -323,27 +375,13 @@ pub(crate) fn items(
     role: Role,
 ) -> Option<Vec<String>> {
     match (kind, role) {
-        (FeatureKind::Frame(x), Role::FramePath) => Some(
-            x.path
+        (FeatureKind::Frame(x), Role::FramePath) => {
+            Some(x.path.iter().map(|p| path_label(features, p)).collect())
+        }
+        (FeatureKind::Frame(x), Role::FrameMembers) => Some(
+            x.member_overrides
                 .iter()
-                .map(|p| match p {
-                    PathRef::Edge(e) => tr_with(
-                        "common-edge-of",
-                        &[(
-                            "name",
-                            &op_name(features, crate::parts::edge_maker(features, &e.edge)),
-                        )],
-                    ),
-                    PathRef::SketchCurve { sketch, curve } => {
-                        let name =
-                            tr_with("common-curve-of", &[("name", &name_of(features, *sketch))]);
-                        match curve_length(features, *sketch, *curve) {
-                            Some(l) => format!("{name} · {l} mm"),
-                            None => name,
-                        }
-                    }
-                    PathRef::Sketch(s) | PathRef::Curve(s) => name_of(features, *s),
-                })
+                .map(|o| path_label(features, &o.curve))
                 .collect(),
         ),
         (FeatureKind::Frame(x), Role::FrameSketch) => {
@@ -391,6 +429,7 @@ pub(crate) fn list_field(role: Role) -> Option<AppliedField> {
         Role::FrameSketch => Some(AppliedField::FrameSketch),
         Role::FrameCorners => Some(AppliedField::FrameCorners),
         Role::FrameTrim => Some(AppliedField::FrameTrim),
+        Role::FrameMembers => Some(AppliedField::FrameMembers),
         r => crate::gear_ui::list_field(r),
     }
 }
@@ -453,19 +492,23 @@ fn corner_row(
     role: Role,
     corner: CornerType,
     flip: Option<(Role, bool)>,
+    turn: Option<Role>,
 ) {
     let options = opts(&CornerType::ALL, corner_text, |_| true);
     let mut select = Select::new(name.to_string());
     for (o, enabled) in &options {
         select = select.option(o.clone(), *enabled);
     }
-    b.spawn(Node {
-        height: Val::Px(28.0),
-        margin: UiRect::top(Val::Px(2.0)),
-        align_items: AlignItems::Center,
-        column_gap: Val::Px(4.0),
-        ..default()
-    })
+    b.spawn((
+        Name::new(format!("{name}-row")),
+        Node {
+            height: Val::Px(28.0),
+            margin: UiRect::top(Val::Px(2.0)),
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(4.0),
+            ..default()
+        },
+    ))
     .with_children(|r| {
         r.spawn((
             Name::new(format!("{name}-label")),
@@ -500,6 +543,16 @@ fn corner_row(
                 on,
                 &tr("model-frame-flip-corner"),
             );
+        }
+        // At a corner of three or more: the next pair is the one joined.
+        if let Some(role) = turn {
+            r.spawn((
+                role,
+                IconButton::new(format!("{name}-turn"), "repeat")
+                    .icon_size(16.0)
+                    .tooltip(tr("model-frame-next-pair"))
+                    .build(t),
+            ));
         }
     });
 }
@@ -592,6 +645,36 @@ pub(crate) fn body(
                 .checked(x.merge_tangent)
                 .build(t),
         );
+        number(
+            b,
+            t,
+            "frame-end-offset",
+            &tr("model-frame-end-offset"),
+            Role::FrameEndOffset,
+            &x.end_offset_expr,
+            None,
+        );
+        list(
+            b,
+            t,
+            "frame-members-field",
+            &tr("model-frame-members"),
+            Role::FrameMembers,
+            items_of(Role::FrameMembers),
+            field == AppliedField::FrameMembers,
+        );
+        for (i, o) in x.member_overrides.iter().enumerate() {
+            let i = i.min(u8::MAX as usize) as u8;
+            number(
+                b,
+                t,
+                &format!("frame-member-{i}-angle"),
+                &tr_with("model-frame-member-angle", &[("n", &(i + 1).to_string())]),
+                Role::FrameMemberAngle(i),
+                &o.angle_expr,
+                None,
+            );
+        }
         corner_row(
             b,
             t,
@@ -600,6 +683,7 @@ pub(crate) fn body(
             Role::FrameCorner,
             x.corner,
             Some((Role::Flip, x.flip)),
+            None,
         );
         list(
             b,
@@ -622,6 +706,7 @@ pub(crate) fn body(
                 Role::FrameOverride(i),
                 o.corner,
                 Some((Role::FrameOverrideFlip(i), o.flip)),
+                Some(Role::FrameOverrideTurn(i)),
             );
             b.spawn(
                 OptionRow::new(
@@ -731,6 +816,10 @@ pub(crate) fn number_text(kind: &FeatureKind, role: Role) -> Option<String> {
             Some(x.gusset_thickness_expr.clone())
         }
         (FeatureKind::Frame(x), Role::FrameGussetChamfer) => Some(x.gusset_chamfer_expr.clone()),
+        (FeatureKind::Frame(x), Role::FrameEndOffset) => Some(x.end_offset_expr.clone()),
+        (FeatureKind::Frame(x), Role::FrameMemberAngle(i)) => {
+            Some(x.member_overrides.get(i as usize)?.angle_expr.clone())
+        }
         (k, r) => crate::gear_ui::number_text(k, r),
     }
 }
@@ -838,7 +927,10 @@ fn override_gusset(name: &str) -> Option<usize> {
 }
 
 pub(crate) fn is_signed(role: Role) -> bool {
-    role == Role::FrameAngle || crate::gear_ui::is_signed(role)
+    matches!(
+        role,
+        Role::FrameAngle | Role::FrameEndOffset | Role::FrameMemberAngle(_)
+    ) || crate::gear_ui::is_signed(role)
 }
 
 pub(crate) fn is_plain(role: Role) -> bool {
@@ -846,7 +938,7 @@ pub(crate) fn is_plain(role: Role) -> bool {
 }
 
 pub(crate) fn is_angle(role: Role) -> bool {
-    role == Role::FrameAngle || crate::gear_ui::is_angle(role)
+    matches!(role, Role::FrameAngle | Role::FrameMemberAngle(_)) || crate::gear_ui::is_angle(role)
 }
 
 pub(crate) fn number_label(role: Role) -> Option<&'static str> {
@@ -856,6 +948,8 @@ pub(crate) fn number_label(role: Role) -> Option<&'static str> {
         Role::FrameGussetSize => Some("Gusset size"),
         Role::FrameGussetThickness => Some("Gusset thickness"),
         Role::FrameGussetChamfer => Some("Gusset chamfer"),
+        Role::FrameEndOffset => Some("End offset"),
+        Role::FrameMemberAngle(_) => Some("Member angle"),
         r => crate::gear_ui::number_label(r),
     }
 }
@@ -882,6 +976,16 @@ pub(crate) fn set_number(k: &mut FeatureKind, role: Role, v: f64, expr: String) 
             x.gusset_chamfer = v;
             x.gusset_chamfer_expr = expr;
         }
+        (FeatureKind::Frame(x), Role::FrameEndOffset) => {
+            x.end_offset = v;
+            x.end_offset_expr = expr;
+        }
+        (FeatureKind::Frame(x), Role::FrameMemberAngle(i)) => {
+            if let Some(o) = x.member_overrides.get_mut(i as usize) {
+                o.angle = v;
+                o.angle_expr = expr;
+            }
+        }
         (k, r) => crate::gear_ui::set_number(k, r, v, expr),
     }
 }
@@ -890,9 +994,13 @@ pub(crate) fn flip(k: &mut FeatureKind, role: Role) {
     match (k, role) {
         (FeatureKind::Frame(x), Role::Flip) => x.flip = !x.flip,
         (FeatureKind::Frame(x), Role::FrameOverrideFlip(i)) => {
-            // Two members: the other runs on; three or more: the next one does.
             if let Some(o) = x.overrides.get_mut(i as usize) {
                 o.flip = !o.flip;
+            }
+        }
+        (FeatureKind::Frame(x), Role::FrameOverrideTurn(i)) => {
+            // The next pair (a corner of three members has three, of four six).
+            if let Some(o) = x.overrides.get_mut(i as usize) {
                 o.turn = o.turn.wrapping_add(1) % 6;
             }
         }
@@ -912,6 +1020,11 @@ pub(crate) fn remove(k: &mut FeatureKind, role: Role, i: usize) {
         (FeatureKind::Frame(x), Role::FrameTrim) => {
             if i < x.trim.len() {
                 x.trim.remove(i);
+            }
+        }
+        (FeatureKind::Frame(x), Role::FrameMembers) => {
+            if i < x.member_overrides.len() {
+                x.member_overrides.remove(i);
             }
         }
         (FeatureKind::Frame(x), Role::FrameCorners) => {

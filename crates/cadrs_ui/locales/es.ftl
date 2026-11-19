@@ -4503,3 +4503,7 @@ cut-list-nominal = { $material } (habitual)
 cut-list-cap = Tapa { $thickness } mm ({ $profile })
 cut-list-gusset = Cartela { $size } x { $thickness } mm
 model-frame-custom-named = Personalizado ({ $sketch })
+model-frame-end-offset = Desfase de extremos
+model-frame-members = Miembros girados (curvas)
+model-frame-member-angle = Ángulo del miembro { $n }
+model-frame-next-pair = Par siguiente (esquinas de tres o más miembros)

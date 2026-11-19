@@ -316,6 +316,11 @@ pub(crate) enum Role {
     /// A corner override's treatment and its flip, by its place in the list.
     FrameOverride(u8),
     FrameOverrideFlip(u8),
+    FrameOverrideTurn(u8),
+    FrameEndOffset,
+    FrameMembers,
+    /// A member override's angle, by its place in the list.
+    FrameMemberAngle(u8),
     // The Gear (`crate::gear_ui`).
     GearFace,
     GearShaft,
@@ -891,6 +896,7 @@ fn dialog(
         Role::FrameSketch,
         Role::FrameCorners,
         Role::FrameTrim,
+        Role::FrameMembers,
         Role::GearFace,
         Role::GearShaft,
         Role::GearMateShaft,
@@ -2668,6 +2674,12 @@ fn on_button(a: On<Activate>, q: Query<&Role>, mut commands: Commands) {
                 if let Some(label) = crate::sheetmetal_features_ui::flip(&mut k, r) {
                     set(world, k, label);
                 }
+            });
+        }
+        Ok(Role::FrameOverrideTurn(i)) => {
+            let i = *i;
+            change(&mut commands, "Next pair", move |k| {
+                crate::frame_ui::flip(k, Role::FrameOverrideTurn(i))
             });
         }
         Ok(Role::FrameOverrideFlip(i)) => {

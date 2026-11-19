@@ -4503,3 +4503,7 @@ cut-list-nominal = { $material } (типично)
 cut-list-cap = Заглушка { $thickness } мм ({ $profile })
 cut-list-gusset = Косынка { $size } x { $thickness } мм
 model-frame-custom-named = Пользовательский ({ $sketch })
+model-frame-end-offset = Смещение концов
+model-frame-members = Повёрнутые элементы (кривые)
+model-frame-member-angle = Угол элемента { $n }
+model-frame-next-pair = Следующая пара (углы из трёх и более элементов)

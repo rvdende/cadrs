@@ -4503,3 +4503,7 @@ cut-list-nominal = { $material } (habituel)
 cut-list-cap = Embout { $thickness } mm ({ $profile })
 cut-list-gusset = Gousset { $size } x { $thickness } mm
 model-frame-custom-named = Personnalisé ({ $sketch })
+model-frame-end-offset = Décalage des extrémités
+model-frame-members = Membres tournés (courbes)
+model-frame-member-angle = Angle du membre { $n }
+model-frame-next-pair = Paire suivante (angles de trois membres ou plus)

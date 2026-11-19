@@ -4503,3 +4503,7 @@ cut-list-nominal = { $material } (tipies)
 cut-list-cap = Entdop { $thickness } mm ({ $profile })
 cut-list-gusset = Hoekplaat { $size } x { $thickness } mm
 model-frame-custom-named = Pasgemaak ({ $sketch })
+model-frame-end-offset = Endverskuiwing
+model-frame-members = Gedraaide lede (kurwes)
+model-frame-member-angle = Hoek van lid { $n }
+model-frame-next-pair = Volgende paar (hoeke van drie of meer lede)

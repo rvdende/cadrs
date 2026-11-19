@@ -4503,3 +4503,7 @@ cut-list-nominal = { $material } (usual)
 cut-list-cap = Tampa { $thickness } mm ({ $profile })
 cut-list-gusset = Reforço { $size } x { $thickness } mm
 model-frame-custom-named = Personalizado ({ $sketch })
+model-frame-end-offset = Deslocamento das extremidades
+model-frame-members = Membros girados (curvas)
+model-frame-member-angle = Ângulo do membro { $n }
+model-frame-next-pair = Próximo par (cantos de três ou mais membros)

@@ -4503,3 +4503,7 @@ cut-list-nominal = { $material } (tipico)
 cut-list-cap = Tappo { $thickness } mm ({ $profile })
 cut-list-gusset = Fazzoletto { $size } x { $thickness } mm
 model-frame-custom-named = Personalizzato ({ $sketch })
+model-frame-end-offset = Offset estremità
+model-frame-members = Membri ruotati (curve)
+model-frame-member-angle = Angolo membro { $n }
+model-frame-next-pair = Coppia successiva (angoli di tre o più membri)

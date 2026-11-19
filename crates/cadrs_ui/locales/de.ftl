@@ -4503,3 +4503,7 @@ cut-list-nominal = { $material } (üblich)
 cut-list-cap = Endkappe { $thickness } mm ({ $profile })
 cut-list-gusset = Knotenblech { $size } x { $thickness } mm
 model-frame-custom-named = Benutzerdefiniert ({ $sketch })
+model-frame-end-offset = Endversatz
+model-frame-members = Gedrehte Teile (Kurven)
+model-frame-member-angle = Winkel Teil { $n }
+model-frame-next-pair = Nächstes Paar (Ecken mit drei oder mehr Teilen)

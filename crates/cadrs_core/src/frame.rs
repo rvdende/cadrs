@@ -225,6 +225,17 @@ pub struct CornerOverride {
     pub gusset: Option<bool>,
 }
 
+/// Some members turned about their curves more than the rest (a 2040's posts on edge where its
+/// rails lie flat).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MemberOverride {
+    /// The path curve (a sketch curve or an edge) whose member this is.
+    pub curve: PathRef,
+    /// Degrees, on top of the frame's angle.
+    pub angle: f64,
+    pub angle_expr: String,
+}
+
 /// Where a gusset sits across the corner's plane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum GussetPosition {
@@ -277,7 +288,7 @@ pub struct FrameFeature {
     /// (of two as long, the one along the path's first member), the other is cut against it.
     /// At three or more, the main pair (the widest angle) is joined so and the others are cut
     /// against both.
-    #[serde(default)]
+    #[serde(default = "butt")]
     pub corner: CornerType,
     /// Butt and coped corners: the shorter member runs on, not the longer (at a corner of three
     /// or more, within its main pair).
@@ -289,9 +300,17 @@ pub struct FrameFeature {
     /// member less what overlaps them, the piece holding most of it kept.
     #[serde(default)]
     pub trim: Vec<PartId>,
+    /// Members turned otherwise than the rest.
+    #[serde(default)]
+    pub member_overrides: Vec<MemberOverride>,
     /// Keep the other side of a trim (all but the largest piece).
     #[serde(default)]
     pub trim_flip: bool,
+    /// The members' free ends run on this far past their curves' ends (negative: stop short).
+    #[serde(default)]
+    pub end_offset: f64,
+    #[serde(default = "zero_mm")]
+    pub end_offset_expr: String,
     /// Plates closing the members' free ends, as thick as `cap_thickness`, outside the member
     /// (only of sections with holes: tubes, T-slot extrusions, custom sections with holes).
     #[serde(default)]
@@ -320,6 +339,10 @@ pub struct FrameFeature {
     pub gusset_chamfer: f64,
     #[serde(default = "zero_mm")]
     pub gusset_chamfer_expr: String,
+}
+
+fn butt() -> CornerType {
+    CornerType::Butt
 }
 
 fn zero_mm() -> String {
@@ -366,7 +389,10 @@ impl Default for FrameFeature {
             flip: false,
             overrides: Vec::new(),
             trim: Vec::new(),
+            member_overrides: Vec::new(),
             trim_flip: false,
+            end_offset: 0.0,
+            end_offset_expr: zero_mm(),
             end_caps: false,
             cap_thickness: cap_thickness(),
             cap_thickness_expr: cap_thickness_expr(),
@@ -396,6 +422,12 @@ impl FrameFeature {
         }
         if !self.angle.is_finite() {
             return Some("The angle must be a number");
+        }
+        if self.member_overrides.iter().any(|o| !o.angle.is_finite()) {
+            return Some("A member's angle must be a number");
+        }
+        if !self.end_offset.is_finite() {
+            return Some("The end offset must be a number");
         }
         if self.end_caps
             && self.cap_thickness.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater)
@@ -432,6 +464,13 @@ impl FrameFeature {
                 .filter_map(|o| o.point.map(|p| p.sketch)),
         );
         out.extend(self.trim.iter().map(|p| p.feature));
+        for o in &self.member_overrides {
+            match &o.curve {
+                PathRef::Edge(e) => out.push(FeatureId(e.edge.op())),
+                PathRef::SketchCurve { sketch, .. } | PathRef::Sketch(sketch) => out.push(*sketch),
+                PathRef::Curve(f) => out.push(*f),
+            }
+        }
         out.sort_by_key(|f| f.0);
         out.dedup();
         out
@@ -495,6 +534,8 @@ struct TSlotSeries {
     wall: f64,
     depth: f64,
     bore: f64,
+    /// The slot's sides open at 45° from its mouth (V-slot), not stepped behind a lip.
+    v_groove: bool,
 }
 
 const SLOT_20: TSlotSeries = TSlotSeries {
@@ -505,6 +546,7 @@ const SLOT_20: TSlotSeries = TSlotSeries {
     wall: 1.0,
     depth: 6.1,
     bore: 4.2,
+    v_groove: false,
 };
 const SLOT_30: TSlotSeries = TSlotSeries {
     cell: 30.0,
@@ -514,6 +556,7 @@ const SLOT_30: TSlotSeries = TSlotSeries {
     wall: 1.5,
     depth: 9.0,
     bore: 6.8,
+    v_groove: false,
 };
 const SLOT_40: TSlotSeries = TSlotSeries {
     cell: 40.0,
@@ -523,6 +566,7 @@ const SLOT_40: TSlotSeries = TSlotSeries {
     wall: 2.0,
     depth: 12.2,
     bore: 6.8,
+    v_groove: false,
 };
 
 /// Inch T-slot (the 10 and 15 series): 1 in and 1.5 in cells.
@@ -534,6 +578,7 @@ const SLOT_10: TSlotSeries = TSlotSeries {
     wall: 1.3,
     depth: 7.6,
     bore: 5.2,
+    v_groove: false,
 };
 const SLOT_15: TSlotSeries = TSlotSeries {
     cell: 38.1,
@@ -543,6 +588,7 @@ const SLOT_15: TSlotSeries = TSlotSeries {
     wall: 1.8,
     depth: 11.4,
     bore: 7.9,
+    v_groove: false,
 };
 
 /// The 45 series (slot 10).
@@ -554,17 +600,38 @@ const SLOT_45: TSlotSeries = TSlotSeries {
     wall: 2.5,
     depth: 13.5,
     bore: 8.5,
+    v_groove: false,
+};
+
+/// The V-slot 20 series (its slots' sides at 45° from the mouth).
+const SLOT_20V: TSlotSeries = TSlotSeries {
+    cell: 20.0,
+    opening: 6.2,
+    lip: 1.8,
+    width: 10.2,
+    wall: 0.8,
+    depth: 6.3,
+    bore: 4.2,
+    v_groove: true,
 };
 
 /// T-slot sizes: name, series, cells across and up, and the catalogue's mass (kg/m; the
 /// outline drawn here has no hollow cores, so its volume would overstate it).
-const T_SLOTS: [(&str, &TSlotSeries, u32, u32, f64); 12] = [
+const T_SLOTS: [(&str, &TSlotSeries, u32, u32, f64); 20] = [
     ("20x20", &SLOT_20, 1, 1, 0.50),
     ("20x40", &SLOT_20, 2, 1, 0.88),
+    ("20x60", &SLOT_20, 3, 1, 1.25),
+    ("20x80", &SLOT_20, 4, 1, 1.60),
+    ("V-slot 20x20", &SLOT_20V, 1, 1, 0.49),
+    ("V-slot 20x40", &SLOT_20V, 2, 1, 0.83),
+    ("V-slot 20x60", &SLOT_20V, 3, 1, 1.17),
+    ("V-slot 20x80", &SLOT_20V, 4, 1, 1.50),
     ("30x30", &SLOT_30, 1, 1, 0.92),
     ("30x60", &SLOT_30, 2, 1, 1.65),
+    ("30x90", &SLOT_30, 3, 1, 2.35),
     ("40x40", &SLOT_40, 1, 1, 1.50),
     ("40x80", &SLOT_40, 2, 1, 2.80),
+    ("40x120", &SLOT_40, 3, 1, 4.00),
     ("45x45", &SLOT_45, 1, 1, 1.90),
     ("45x90", &SLOT_45, 2, 1, 3.40),
     ("1010 (1 in)", &SLOT_10, 1, 1, 0.74),
@@ -879,15 +946,21 @@ fn t_slot(s: &TSlotSeries, nx: u32, ny: u32) -> Vec<Region> {
     // The cavity narrows at 45° below its straight wall.
     let floor = (s.width - 2.0 * (s.depth - s.lip - s.wall)).max(s.opening);
     // A slot's outline from the outer face inwards, as (along, in) from the slot's middle.
+    // A V-slot's sides run out at 45° from the lip to the cavity's width.
+    let flare = if s.v_groove {
+        (s.width - s.opening) / 2.0
+    } else {
+        0.0
+    };
     let notch = [
         (-s.opening / 2.0, 0.0),
         (-s.opening / 2.0, s.lip),
-        (-s.width / 2.0, s.lip),
-        (-s.width / 2.0, s.lip + s.wall),
-        (-floor / 2.0, s.depth),
-        (floor / 2.0, s.depth),
-        (s.width / 2.0, s.lip + s.wall),
-        (s.width / 2.0, s.lip),
+        (-s.width / 2.0, s.lip + flare),
+        (-s.width / 2.0, s.lip + flare + s.wall),
+        (-floor / 2.0, s.depth.max(s.lip + flare + s.wall + 0.1)),
+        (floor / 2.0, s.depth.max(s.lip + flare + s.wall + 0.1)),
+        (s.width / 2.0, s.lip + flare + s.wall),
+        (s.width / 2.0, s.lip + flare),
         (s.opening / 2.0, s.lip),
         (s.opening / 2.0, 0.0),
     ];
@@ -1292,6 +1365,8 @@ pub enum EndCut {
     Coped,
     /// By a part it was trimmed to.
     Trimmed,
+    /// On two planes (a brace into a corner: against both members): their angles.
+    Compound(f64, f64),
 }
 
 impl EndCut {
@@ -1302,6 +1377,7 @@ impl EndCut {
             EndCut::Angle(a) => format!("{}°", trim(a, 1)),
             EndCut::Coped => "Coped".into(),
             EndCut::Trimmed => "Trimmed".into(),
+            EndCut::Compound(a, b) => format!("{}°+{}°", trim(a, 1), trim(b, 1)),
         }
     }
 
@@ -1311,6 +1387,10 @@ impl EndCut {
             EndCut::Angle(a) => (a * 10.0).round() as i64,
             EndCut::Coped => -1,
             EndCut::Trimmed => -2,
+            EndCut::Compound(a, b) => {
+                let (a, b) = ((a * 10.0).round() as i64, (b * 10.0).round() as i64);
+                100_000 + a.min(b) * 10_000 + a.max(b)
+            }
         }
     }
 }
