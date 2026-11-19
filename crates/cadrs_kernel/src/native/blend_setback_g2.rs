@@ -226,7 +226,7 @@ fn solve(m: &DMatrix<f64>, rhs: DMatrix<f64>) -> Result<DMatrix<f64>> {
 /// `range`; with weights, the rational one whose weight is their product, each a polynomial of
 /// degree five at most (so held exactly by the spline).
 fn fit(
-    f: &dyn Fn(f64, f64) -> [f64; 3],
+    f: &(dyn Fn(f64, f64) -> [f64; 3] + Sync),
     weight: [Weight; 2],
     range: [(f64, f64); 2],
     spans: [usize; 2],
@@ -248,10 +248,17 @@ fn fit(
         }
     }
     // Values (weighted) at the sites, rows along the first parameter, one column per (j, c).
+    // (Each site a root of the corner's equation, found on its own: side by side, the same
+    // values whatever the threads.)
+    use rayon::prelude::*;
+    let pts: Vec<[f64; 3]> = (0..nu * nv)
+        .into_par_iter()
+        .map(|k| f(at[0][k / nv], at[1][k % nv]))
+        .collect();
     let mut vals = DMatrix::zeros(nu, nv * 3);
     for i in 0..nu {
         for j in 0..nv {
-            let p = f(at[0][i], at[1][j]);
+            let p = pts[i * nv + j];
             for c in 0..3 {
                 vals[(i, j * 3 + c)] = seen[0][i] * seen[1][j] * p[c];
             }

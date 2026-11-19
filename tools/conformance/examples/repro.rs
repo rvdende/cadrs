@@ -24,6 +24,7 @@ fn main() {
     let a = k.make(&base).expect("making a");
     // A feature case's act, else the boolean the second argument names (union by default) of
     // `a` and `b`.
+    let act_t = std::time::Instant::now();
     let out = match c.feature.as_ref() {
         None if c.matrix.is_some() => {
             let t = std::time::Instant::now();
@@ -45,6 +46,7 @@ fn main() {
                 generate::Act::OffsetFaces => k.offset_faces(&a, &f.points, f.size),
                 generate::Act::Fillet => k.fillet(&a, &f.points, f.size),
                 generate::Act::FilletG2 => k.fillet_g2(&a, &f.points, f.size, f.radii[0]),
+                generate::Act::FilletSetback => k.fillet_setback(&a, &f.points, f.size, f.radii[0]),
                 generate::Act::FilletSetbackG2 => {
                     k.fillet_setback_g2(&a, &f.points, f.size, f.radii[0])
                 }
@@ -153,6 +155,7 @@ fn main() {
             }
         });
     };
+    eprintln!("act: {:?}", act_t.elapsed());
     show("result", &out);
     let text = k.write_step(&out).expect("writing STEP");
     let back = k.read_step(&text).expect("reading STEP");
