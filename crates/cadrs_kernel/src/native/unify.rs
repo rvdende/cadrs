@@ -1218,6 +1218,14 @@ fn merge_group(b: &mut Body, g: &[usize]) -> Option<Face> {
                     })
             })
             .collect();
+        // A hole running a whole turn or more round the axis (a cylinder a thread of more than
+        // a turn bites through): every seam would cut it, so the pieces stay as they are.
+        if spans
+            .iter()
+            .any(|&(lo, hi)| (hi - lo) * mu >= TAU * mu - tol::POINT)
+        {
+            return None;
+        }
         let clear = |u: f64| {
             spans.iter().all(|&(lo, hi)| {
                 let w = unwrap_near(u, 0.5 * (lo + hi), TAU);
