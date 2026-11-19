@@ -3352,12 +3352,20 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             }
             return Meet::At(ts.into_iter().filter(on_face).collect());
         }
-        Meet::At(
-            ssi::curve_surface(&ed.curve, ed.t[0], ed.t[1], surf)
-                .into_iter()
-                .filter(on_face)
-                .collect(),
-        )
+        let roots = ssi::curve_surface(&ed.curve, ed.t[0], ed.t[1], surf);
+        if super::env_flag!("CADRS_BOOL_DEBUG")
+            && std::env::var("CADRS_FACE_DEBUG").is_ok_and(|d| d == fi.to_string())
+        {
+            for t in &roots {
+                let p = ed.curve.point(*t);
+                eprintln!(
+                    "  edge {e} root at {p:?}: {:?}, off the surface {:.1e}",
+                    point_in_face(&faces[fi], &p, run_tol.max(et)),
+                    surf.distance(&p)
+                );
+            }
+        }
+        Meet::At(roots.into_iter().filter(on_face).collect())
     };
     let numeric = near_pairs.iter().any(|&(e, fi)| {
         matches!(pool.edges[e].curve, Curve::Nurbs(_))

@@ -2563,8 +2563,33 @@ pub fn curve_surface(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Vec<f64> {
     // a fresh projection is a global search): along the samples from the previous one, inside
     // a bracket from the bracket's own sample.
     let implicit = s.signed_distance(&P3::origin()).is_some();
+    // A circle carried along a line is a quadric: a point is on it where its foot along the
+    // line in the circle's plane is the radius from the centre. That (less the radius) is
+    // the function sampled there, smooth and one-signed each side: a distance by projection
+    // jumps between the surface's two sides where the curve passes between them, a sign
+    // change with no crossing (a root 0.15 off the surface, the true one missed).
+    type Implicit = Box<dyn Fn(&P3) -> f64 + Sync>;
+    let quadric: Option<Implicit> = match s {
+        Surface::Extrusion {
+            c: Curve::Circle { c: o, x, y, r },
+            d,
+        } if !crate::native::env_flag!("CADRS_NO_QUADRIC_ROOTS") => {
+            let n = x.cross(y);
+            let nd = n.dot(d);
+            (nd.abs() > 1e-9 * d.norm()).then(|| {
+                let (o, d, r) = (*o, *d, *r);
+                Box::new(move |p: &P3| {
+                    let w = p - o;
+                    (w - d * (n.dot(&w) / nd)).norm() - r
+                }) as Implicit
+            })
+        }
+        _ => None,
+    };
     let fh = |t: f64, hint: &mut Option<(f64, f64)>| -> f64 {
-        if implicit {
+        if let Some(q) = &quadric {
+            q(&c.point(t))
+        } else if implicit {
             sdist(s, &c.point(t))
         } else {
             sdist_hint(s, &c.point(t), hint)
