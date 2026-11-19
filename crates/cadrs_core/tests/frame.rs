@@ -2308,3 +2308,31 @@ fn member_overrides_turn_some_members_on_edge() {
     }
     assert!(st.overlap() < 1e-6);
 }
+
+#[test]
+fn the_frames_fixture_is_current() {
+    // `fixtures/frames.cadrs` is the sample document as `samples::frames::document()` builds
+    // it (open it with `cadrs fixtures/frames.cadrs`). Regenerate it with
+    // `CADRS_WRITE_FIXTURES=1 cargo test -r -p cadrs_core --test frame the_frames_fixture`.
+    use cadrs_core::samples::frames;
+    let doc = frames::document().unwrap();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/frames.cadrs");
+    let file = frames::file(doc.clone());
+    let text = ron::ser::to_string_pretty(&file, ron::ser::PrettyConfig::default()).unwrap();
+    if std::env::var("CADRS_WRITE_FIXTURES").is_ok() {
+        std::fs::write(&path, &text).unwrap();
+    }
+    let stored = cadrs_core::Store::load_path(&path).expect("the fixture loads");
+    assert_eq!(stored.document, doc, "fixtures/frames.cadrs is out of date");
+    // Both Part Studios build clean.
+    for el in &stored.document.elements {
+        let b = rebuild::build(el.features());
+        assert!(
+            b.errors.is_empty() && b.warnings.is_empty(),
+            "{}: {:?} {:?}",
+            el.name,
+            b.errors,
+            b.warnings
+        );
+    }
+}
