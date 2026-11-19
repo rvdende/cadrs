@@ -3516,8 +3516,10 @@ pub fn chamfer_tool(
     blend(k, body, &list, false)
 }
 
-/// Onshape's Full round: the middle face replaced by a half cylinder tangent to two parallel
-/// flat side faces (r = half their distance).
+/// Onshape's Full round: the middle face replaced by the round tangent to it and to the two flat
+/// side faces, which stay where they are. All three faces are planes through one direction (the
+/// round's axis); between parallel sides `w` apart the round is the half cylinder of radius `w/2`,
+/// between sides that lean it is the arc of the circle touching all three planes' traces.
 pub fn full_round(
     k: &mut NativeKernel,
     body: BodyId,
@@ -3544,20 +3546,9 @@ pub fn full_round(
     let (o1, n1) = plane_of(side1)?;
     let (o2, n2) = plane_of(side2)?;
     let (om, nm) = plane_of(center)?;
-    if n1.dot(&n2) > -1.0 + tol::ANGULAR {
-        return Err(KernelError::InvalidParameter(
-            "A full round needs two parallel side faces facing away from each other".into(),
-        ));
-    }
-    if n1.dot(&nm).abs() > tol::ANGULAR {
-        return Err(KernelError::InvalidParameter(
-            "The middle face must be square to the parallel side faces".into(),
-        ));
-    }
-    let width = (o2 - o1).dot(&n1).abs();
-    let r = width / 2.0;
-    // Each side face must reach r below the middle face, else the round would cut through
-    // what lies under it: its boundary's deepest point, from points along its edges.
+    // Each side face must reach the round's contact on it, else the round would cut through what
+    // lies under it: its boundary's deepest point below the middle face, from points along its
+    // edges.
     let depth = |f: FaceId| -> f64 {
         b.faces[f.0 as usize]
             .loops
@@ -3570,21 +3561,74 @@ pub fn full_round(
             .map(|p| (om - p).dot(&nm))
             .fold(f64::NEG_INFINITY, f64::max)
     };
-    if depth(side1).min(depth(side2)) < r - tol::REL * (1.0 + r) {
-        return Err(KernelError::InvalidParameter(
-            "The side faces are too shallow for the full round".into(),
-        ));
+    let shallow = || {
+        KernelError::InvalidParameter("The side faces are too shallow for the full round".into())
+    };
+    let (plane, region, along) = if n1.dot(&n2) <= -1.0 + tol::ANGULAR {
+        if n1.dot(&nm).abs() > tol::ANGULAR {
+            return Err(KernelError::InvalidParameter(
+                "The middle face must be square to the parallel side faces".into(),
+            ));
+        }
+        let r = (o2 - o1).dot(&n1).abs() / 2.0;
+        if depth(side1).min(depth(side2)) < r - tol::REL * (1.0 + r) {
+            return Err(shallow());
+        }
+        let (plane, region) = half_round_section(n1, nm, o1, o2, om, r);
+        (plane, region, n1.cross(&nm).normalize())
+    } else {
+        let (n1, n2, nm) = (n1.normalize(), n2.normalize(), nm.normalize());
+        // The three planes must run parallel to one direction, the round's axis.
+        let a1 = n1.cross(&nm);
+        if a1.norm() < tol::ANGULAR || n2.cross(&nm).norm() < tol::ANGULAR {
+            return Err(KernelError::InvalidParameter(
+                "A full round's side faces can't be parallel to its middle face".into(),
+            ));
+        }
+        let along = a1.normalize();
+        if n2.dot(&along).abs() > tol::ANGULAR || n1.dot(&n2) > 1.0 - tol::ANGULAR {
+            return Err(KernelError::InvalidParameter(
+                "A full round needs side faces parallel to one direction with the middle face, \
+                 facing away from each other"
+                    .into(),
+            ));
+        }
+        let (plane, region, [t1, t2], r) =
+            leaning_round_section([(o1, n1), (o2, n2), (om, nm)], along)?;
+        let need = |t: P3| (om - t).dot(&nm) - tol::REL * (1.0 + r);
+        if depth(side1) < need(t1) || depth(side2) < need(t2) {
+            return Err(shallow());
+        }
+        (plane, region, along)
+    };
+    let prof = Profile::new(plane, vec![region]);
+    let regions = super::profile::regions(&prof)?;
+    let mf = super::profile::merge_regions(&regions)?;
+    // Long enough to cover the body along the axis.
+    let (lo, hi) = super::kernel::extent_along(&b, &plane.origin, &along);
+    let dir = plane.normal.into_inner();
+    let s = if dir.dot(&along) > 0.0 { 1.0 } else { -1.0 };
+    let (lo, hi) = if s > 0.0 { (lo, hi) } else { (-hi, -lo) };
+    let kind = Prism { plane, dir };
+    let built = sweep::sweep_full(&mf, &[], &kind, lo - 1.0, hi + 1.0, false, true)?;
+    let mut src = vec![Vec::new(); built.body.faces.len()];
+    for (f, o) in &built.origins {
+        if let Origin::ProfileCurve { curve: 1, .. } = o {
+            src[*f].push(FaceSrc::Input(center.0 as usize));
+        }
     }
-    // The round's axis: in the middle face's plane moved r into the material, midway between
-    // the sides, along the sides' and middle face's common direction.
-    let along = n1.cross(&nm).normalize();
-    let mid_side = o1 + (o2 - o1).dot(&n1) * n1 * 0.5 + n1 * 0.0;
-    let _ = mid_side;
+    let cur = Tracked::of((*b).clone());
+    let out = cur.apply(&built.body, &src, BoolOp::Subtract)?;
+    Ok(out.into_result(k, body))
+}
+
+/// The section of a full round's tool between parallel sides (through `o1` and `o2`, the first
+/// facing `n1`) under the middle face (through `om`, facing `nm`): the rectangle over the axis
+/// less the half disc of radius `r`, in the plane square to the axis through it.
+fn half_round_section(n1: V3, nm: V3, o1: P3, o2: P3, om: P3, r: f64) -> (Plane, Region) {
     // A point on the axis: on the middle plane, halfway between the side planes, then r down.
     let base = om + n1 * ((o1 - om).dot(&n1) + (o2 - om).dot(&n1)) * 0.5 - nm * r;
-    // Section plane square to the axis.
-    let x = n1;
-    let y = nm;
+    let (x, y) = (n1, nm);
     let plane = Plane {
         origin: base,
         x_dir: nalgebra::Unit::new_normalize(x),
@@ -3619,25 +3663,100 @@ pub fn full_round(
         holes: vec![],
         source: None,
     };
-    let prof = Profile::new(plane, vec![region]);
-    let regions = super::profile::regions(&prof)?;
-    let mf = super::profile::merge_regions(&regions)?;
-    // Long enough to cover the body along the axis.
-    let (lo, hi) = super::kernel::extent_along(&b, &base, &along);
-    let dir = plane.normal.into_inner();
-    let s = if dir.dot(&along) > 0.0 { 1.0 } else { -1.0 };
-    let (lo, hi) = if s > 0.0 { (lo, hi) } else { (-hi, -lo) };
-    let kind = Prism { plane, dir };
-    let built = sweep::sweep_full(&mf, &[], &kind, lo - 1.0, hi + 1.0, false, true)?;
-    let mut src = vec![Vec::new(); built.body.faces.len()];
-    for (f, o) in &built.origins {
-        if let Origin::ProfileCurve { curve: 1, .. } = o {
-            src[*f].push(FaceSrc::Input(center.0 as usize));
-        }
+    (plane, region)
+}
+
+/// The section of a full round's tool between sides that lean, `faces` the two sides' and the
+/// middle face's planes (a point, the unit normal out of the material), all parallel to `along`:
+/// the circle touching all three from inside, and the region between its arc over the middle
+/// face and the sides' traces run past the middle plane. Also the contacts on the sides and the
+/// radius.
+fn leaning_round_section(faces: [(P3, V3); 3], along: V3) -> Result<(Plane, Region, [P3; 2], f64)> {
+    let [(o1, n1), (o2, n2), (om, nm)] = faces;
+    // The section square to the axis: x along u, y along w = along × u.
+    let u = (nm - along * nm.dot(&along)).normalize();
+    let w = along.cross(&u);
+    // The circle's centre c = om + X·u + Y·w lies ρ within each plane, n·(c − o) = −ρ.
+    let m = nalgebra::Matrix3::from_fn(|i, j| match j {
+        0 => faces[i].1.dot(&u),
+        1 => faces[i].1.dot(&w),
+        _ => 1.0,
+    });
+    let rhs = nalgebra::Vector3::from_fn(|i, _| faces[i].1.dot(&(faces[i].0 - om)));
+    let sol = m.lu().solve(&rhs).ok_or_else(|| {
+        KernelError::InvalidParameter(
+            "A full round's faces have no circle touching all three".into(),
+        )
+    })?;
+    let r = sol[2];
+    if !(r > tol::REL) {
+        return Err(KernelError::InvalidParameter(
+            "A full round's side faces open away from the middle face".into(),
+        ));
     }
-    let cur = Tracked::of((*b).clone());
-    let out = cur.apply(&built.body, &src, BoolOp::Subtract)?;
-    Ok(out.into_result(k, body))
+    let c = om + u * sol[0] + w * sol[1];
+    let (t1, t2, tm) = (c + n1 * r, c + n2 * r, c + nm * r);
+    let _ = (o1, o2);
+    // The profile in the section through the centre, x along the first side's normal.
+    let u = (n1 - along * n1.dot(&along)).normalize();
+    let w = along.cross(&u);
+    let to2 = |p: P3| nalgebra::Point2::new((p - c).dot(&u), (p - c).dot(&w));
+    // Each side's trace runs from its contact out past the middle plane by `delta`.
+    let past = |t: P3, n: V3, delta: f64| -> P3 {
+        let mut d = along.cross(&n);
+        if d.dot(&nm) < 0.0 {
+            d = -d;
+        }
+        t + d * ((nm.dot(&(om - t)) + delta) / d.dot(&nm))
+    };
+    let mut delta = r * 0.5 + 1e-3;
+    let (mut p1, mut p2) = (past(t1, n1, delta), past(t2, n2, delta));
+    // Sides closing toward the middle: stay short of where their traces cross.
+    while (p2 - p1).dot(&(t2 - t1)) <= 0.0 && delta > tol::REL {
+        delta *= 0.5;
+        (p1, p2) = (past(t1, n1, delta), past(t2, n2, delta));
+    }
+    let ang = |p: P3| {
+        let q = to2(p);
+        q.y.atan2(q.x)
+    };
+    let (s1, sm, s2) = (ang(t1), ang(tm), ang(t2));
+    let tau = 2.0 * PI;
+    let ccw = (s2 - s1).rem_euclid(tau);
+    let sweep = if (sm - s1).rem_euclid(tau) < ccw {
+        ccw
+    } else {
+        ccw - tau
+    };
+    let l = |a: P3, q: P3| Curve2::Line {
+        a: to2(a),
+        b: to2(q),
+        source: None,
+    };
+    let plane = Plane {
+        origin: c,
+        x_dir: nalgebra::Unit::new_normalize(u),
+        normal: nalgebra::Unit::new_normalize(along),
+    };
+    let region = Region {
+        outer: Loop {
+            curves: vec![
+                Curve2::Arc {
+                    center: nalgebra::Point2::origin(),
+                    radius: r,
+                    start_angle: s1,
+                    sweep,
+                    source: Some(1),
+                },
+                l(t2, p2),
+                l(p2, p1),
+                l(p1, t1),
+            ],
+        },
+        holes: vec![],
+        source: None,
+    };
+    Ok((plane, region, [t1, t2], r))
 }
 
 /// A partial fillet (PS14.6): the whole fillet's tool between the planes square to the edge at

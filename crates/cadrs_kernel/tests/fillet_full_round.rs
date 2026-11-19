@@ -258,3 +258,72 @@ fn comb_of_prongs_like_the_cable_organizer() {
     let want = v0 - 3.0 * (strip * (high - R + tip - R) + corner + bottom);
     assert!((v - want).abs() < 1e-6 * want, "volume {v}, want {want}");
 }
+
+/// A rib whose sides lean toward its top (a trapezoid 2b wide at its foot, 2t at its top, h
+/// high, extruded along z by `LENGTH`): the full round is the arc of the circle touching the top
+/// and both sides, centred (0, h − ρ) with ρ = h·t/(s − (b − t)), s the side's length; the sides
+/// stay where they are. It takes, along the length, the four-sided piece between the top and the
+/// sides' contacts less the circle's segment over the contacts' chord.
+#[test]
+fn a_full_round_between_leaning_sides_touches_all_three() {
+    let (b, t, h) = (2.0, 1.2, 6.0);
+    let mut k = NativeKernel::new();
+    let c = [(-b, 0.0), (b, 0.0), (t, h), (-t, h)].map(|(x, y)| Point2::new(x, y));
+    let outer = Loop {
+        curves: (0..4)
+            .map(|i| Curve2::Line {
+                a: c[i],
+                b: c[(i + 1) % 4],
+                source: None,
+            })
+            .collect(),
+    };
+    let id = k
+        .extrude(
+            &Profile::new(
+                Plane::top(),
+                vec![Region {
+                    outer,
+                    holes: vec![],
+                    source: None,
+                }],
+            ),
+            Extent::Blind(LENGTH),
+        )
+        .unwrap()
+        .bodies[0];
+    let (lean, side) = (b - t, (b - t).hypot(h));
+    let face = |k: &NativeKernel, n: nalgebra::Vector3<f64>| {
+        k.faces(id)
+            .unwrap()
+            .into_iter()
+            .find(|f| f.plane.is_some_and(|pl| pl.normal.dot(&n) > 1.0 - 1e-9))
+            .unwrap()
+            .id
+    };
+    let top = face(&k, nalgebra::Vector3::y());
+    let right = face(&k, nalgebra::Vector3::new(h, lean, 0.0) / side);
+    let left = face(&k, nalgebra::Vector3::new(-h, lean, 0.0) / side);
+    let r = k.full_round(id, left, top, right).unwrap();
+    let out = k.get(r.bodies[0]).unwrap();
+    assert!(out.check().is_empty(), "{:?}", out.check());
+    let rho = h * t / (side - lean);
+    let n = (h / side, lean / side);
+    let touch = (rho * n.0, h - rho + rho * n.1);
+    // The piece above the chord between the contacts, less the segment of the circle there.
+    let quad = (2.0 * t + 2.0 * touch.0) / 2.0 * (h - touch.1);
+    let theta = PI - 2.0 * n.1.atan2(n.0);
+    let segment = rho * rho / 2.0 * (theta - theta.sin());
+    let want = LENGTH * ((b + t) * h - (quad - segment));
+    let v = k.mass_properties(r.bodies[0]).unwrap().volume;
+    assert!((v - want).abs() < 1e-9 * want, "volume {v}, want {want}");
+    // The round is a cylinder of radius ρ; the top is gone.
+    let faces = k.faces(r.bodies[0]).unwrap();
+    assert!(faces.iter().any(
+        |f| f.kind == SurfaceKind::Cylinder && f.radius.is_some_and(|x| (x - rho).abs() < 1e-9)
+    ));
+    assert!(!faces.iter().any(|f| {
+        f.plane
+            .is_some_and(|pl| pl.normal.dot(&nalgebra::Vector3::y()) > 1.0 - 1e-9)
+    }));
+}

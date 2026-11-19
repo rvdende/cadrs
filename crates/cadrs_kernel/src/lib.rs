@@ -965,9 +965,11 @@ pub trait Kernel {
     }
 
     /// Onshape's Full round fillet (P3.6, PS14.1): the `center` face is replaced by a round
-    /// tangent to the two `side` faces. Built for a flat rectangular centre face between two
-    /// parallel flat side faces at least half their distance apart deep (radius = half the
-    /// distance); anything else is an `InvalidParameter` error saying so.
+    /// tangent to it and to the two `side` faces, which stay where they are. Built for three
+    /// flat faces parallel to one direction (the round's axis): between parallel sides `w` apart
+    /// the half cylinder of radius `w/2`, between sides that lean toward the middle the arc of
+    /// the circle touching all three; the sides must reach down to the round's contacts.
+    /// Anything else is an `InvalidParameter` error saying so.
     fn full_round(
         &mut self,
         body: BodyId,
