@@ -1311,6 +1311,18 @@ impl Kernel for NativeKernel {
         }
     }
 
+    fn screw(&mut self, profile: &Profile, spec: &ScrewSpec) -> Result<OpResult> {
+        super::constructors::screw(self, profile, spec)
+    }
+
+    fn slab(&mut self, spec: &SlabSpec) -> Result<OpResult> {
+        let b = super::constructors::slab(spec)?;
+        Ok(OpResult {
+            bodies: vec![self.insert_sound(b)],
+            history: History::default(),
+        })
+    }
+
     fn sweep_with_law(
         &mut self,
         profile: &Profile,
@@ -1465,6 +1477,25 @@ impl Kernel for NativeKernel {
 
     fn sew_sheets(&mut self, bodies: &[BodyId], tol: f64) -> Result<OpResult> {
         super::surfacing::sew_sheets(self, bodies, tol)
+    }
+
+    fn sew_step(&mut self, bytes: &[u8], tol: f64) -> Result<OpResult> {
+        if !(tol > 0.0 && tol.is_finite()) {
+            return Err(KernelError::InvalidParameter(format!(
+                "The sewing tolerance must be positive (it is {tol})"
+            )));
+        }
+        let bodies = self.import_step(bytes)?;
+        if bodies.is_empty() {
+            return Err(KernelError::InvalidInput(
+                "The STEP file holds no faces to sew".into(),
+            ));
+        }
+        let r = self.sew_solid(&bodies, tol);
+        for b in bodies {
+            self.release(b);
+        }
+        r
     }
 
     fn sew_solid(&mut self, bodies: &[BodyId], tol: f64) -> Result<OpResult> {
@@ -1691,6 +1722,82 @@ impl Kernel for NativeKernel {
                     super::blend::flat_corners(k, body, edges, opts, r)
                 }
                 r => r,
+            };
+            let r = k.dumped(&r);
+            k.colored(r)
+        })
+    }
+
+    fn chamfer_distances(
+        &mut self,
+        body: BodyId,
+        edges: &[EdgeId],
+        distances: &[f64],
+        overflow: bool,
+    ) -> Result<OpResult> {
+        no_edges(edges, "chamfer")?;
+        if edges.len() != distances.len() {
+            return Err(KernelError::InvalidParameter(format!(
+                "{} edges but {} distances",
+                edges.len(),
+                distances.len()
+            )));
+        }
+        if let Some(d) = distances.iter().find(|d| !(**d > 0.0 && d.is_finite())) {
+            return Err(KernelError::InvalidParameter(format!(
+                "A chamfer's distance must be positive (one is {d})"
+            )));
+        }
+        // Each edge's tangent chain at its distance: one distance an edge.
+        let mut each: Vec<(EdgeId, f64)> = Vec::new();
+        for (&e, &d) in edges.iter().zip(distances) {
+            for c in self.tangent_chain(body, e)? {
+                match each.iter().find(|x| x.0 == c) {
+                    Some(&(_, d0)) if d0 != d => {
+                        return Err(KernelError::InvalidParameter(format!(
+                            "{c:?} is given two chamfer distances, {d0} and {d}"
+                        )));
+                    }
+                    Some(_) => {}
+                    None => each.push((c, d)),
+                }
+            }
+        }
+        // One distance for all: the chamfer of one distance.
+        if each.iter().all(|x| x.1 == each[0].1) {
+            let ids: Vec<EdgeId> = each.iter().map(|x| x.0).collect();
+            let opts = ChamferOpts {
+                overflow,
+                ..ChamferOpts::new(ChamferSpec::EqualDistance(each[0].1))
+            };
+            return self.chamfer_with(body, &ids, &opts);
+        }
+        dump(
+            "chamfer",
+            self.get(body)?,
+            &format!("edges and distances {each:?}"),
+        );
+        self.at_working_size(body, |k, body, by| {
+            let b = k.get(body)?.clone();
+            let ids: Vec<EdgeId> = each.iter().map(|x| x.0).collect();
+            let real = super::blend::real_edges(&b, &ids)?;
+            let each: Vec<(usize, f64)> = each
+                .iter()
+                .filter(|x| real.contains(&x.0))
+                .map(|&(e, d)| (e.0 as usize, d * by))
+                .collect();
+            // Without overflow, each chamfer must fit the faces at its edge.
+            if !overflow {
+                let sized: Vec<(usize, f64, f64)> = each.iter().map(|&(e, d)| (e, d, d)).collect();
+                super::blend::chamfers_fit(&b, &sized)?;
+            }
+            let r = match super::blend::chamfer_each(k, body, &each) {
+                Ok(r) => Ok(r),
+                // Where the strips can't be trimmed against each other at a corner: each
+                // distance's chamfer on its own, those solids intersected (after springrep's
+                // blend::chamfer_distances, MIT), the corner where their planes meet.
+                Err(first) => chamfer_groups(k, body, &each, overflow)
+                    .map_err(|e| e.after("chamfering by trimming", &first)),
             };
             let r = k.dumped(&r);
             k.colored(r)
@@ -2530,6 +2637,68 @@ fn chamfer_scaled(spec: ChamferSpec, by: f64) -> ChamferSpec {
             angle,
         },
     }
+}
+
+/// Each distance's edges chamfered on their own, the largest first, and the solids intersected:
+/// [`Kernel::chamfer_distances`] where the chamfers' strips can't be trimmed at a corner.
+fn chamfer_groups(
+    k: &mut NativeKernel,
+    body: BodyId,
+    each: &[(usize, f64)],
+    overflow: bool,
+) -> Result<OpResult> {
+    let mut sizes: Vec<f64> = each.iter().map(|e| e.1).collect();
+    sizes.sort_by(|a, b| b.total_cmp(a));
+    sizes.dedup();
+    let mut made: Vec<BodyId> = Vec::new();
+    let mut out: Result<OpResult> =
+        Err(KernelError::InvalidParameter("no edges to chamfer".into()));
+    for d in sizes {
+        let these: Vec<EdgeId> = each
+            .iter()
+            .filter(|e| e.1 == d)
+            .map(|e| EdgeId(e.0 as u64))
+            .collect();
+        let opts = ChamferOpts {
+            overflow,
+            ..ChamferOpts::new(ChamferSpec::EqualDistance(d))
+        };
+        let cut = k.chamfer_with(body, &these, &opts).and_then(|r| r.first());
+        let cut = match cut {
+            Ok(c) => c,
+            Err(e) => {
+                out = Err(e);
+                break;
+            }
+        };
+        made.push(cut);
+        out = match made.len() {
+            1 => Ok(OpResult {
+                bodies: vec![cut],
+                history: History::default(),
+            }),
+            _ => {
+                let prev = made[made.len() - 2];
+                let r = k.boolean(BoolOp::Intersect, prev, &[cut]);
+                if let Ok(r) = &r
+                    && let [b] = r.bodies[..]
+                {
+                    made.push(b);
+                }
+                r
+            }
+        };
+        if out.is_err() {
+            break;
+        }
+    }
+    let keep: Vec<BodyId> = out.as_ref().map(|r| r.bodies.clone()).unwrap_or_default();
+    for b in made {
+        if !keep.contains(&b) {
+            k.release(b);
+        }
+    }
+    out
 }
 
 /// A blend of no edges refused: nothing to blend (springrep's tests/blends.rs).

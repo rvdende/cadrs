@@ -101,6 +101,7 @@ pub mod classify;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod classify;
+pub(crate) mod constructors;
 #[cfg(feature = "testkit")]
 pub mod convex_chamfer;
 #[cfg(not(feature = "testkit"))]

@@ -615,6 +615,49 @@ impl RevolveSpec {
     }
 }
 
+/// A screw (a thread's solid): a profile drawn in a plane through the axis, on one side of it,
+/// turned about the axis through `angle` while rising `rise` along it per radian
+/// ([`crate::Kernel::screw`]). The point (ρ, w) of the profile (ρ out from the axis, w along it)
+/// sweeps (ρ cos φ, ρ sin φ, w + rise·φ) for 0 ≤ φ ≤ `angle`, right-handed about the axis's
+/// direction.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ScrewSpec {
+    /// The axis turned about; the rise is along its direction.
+    pub axis: Axis,
+    /// How far the profile rises per radian it turns (negative: it falls; a whole turn rises
+    /// `2π·rise`, which must be at least the profile's extent along the axis, so the turns stay
+    /// apart).
+    pub rise: f64,
+    /// How far it turns (radians, positive; past a whole turn for a thread of several).
+    pub angle: f64,
+}
+
+/// A slab ([`crate::Kernel::slab`]): a block with a flat base and four flat sides under a
+/// B-spline height field. Over the rectangle `0 ≤ u ≤ size[0]`, `0 ≤ v ≤ size[1]` of the frame
+/// (`origin`, `x`, `y`), it runs from the base up to `f(u/size[0], v/size[1])` along `x × y`,
+/// where `f` is the B-spline over [0, 1]² with the clamped knots `knots_u`, `knots_v` (each
+/// running degree + 1 times 0 first and as many times 1 last; the degrees are what the knots
+/// and the heights' counts give) and coefficients `heights[i][j]` (i along u). The top is that
+/// B-spline surface itself, its poles at the knots' Greville abscissae times the size, so its x
+/// and y run linearly with its parameters.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SlabSpec {
+    /// The base's corner.
+    pub origin: Point3<f64>,
+    /// The base's first side's direction.
+    pub x: Unit<Vector3<f64>>,
+    /// The base's second side's direction (square to `x`).
+    pub y: Unit<Vector3<f64>>,
+    /// The base's sides (mm, positive).
+    pub size: [f64; 2],
+    /// The height field's knots along u.
+    pub knots_u: Vec<f64>,
+    /// Its knots along v.
+    pub knots_v: Vec<f64>,
+    /// Its coefficients (mm, each positive): `heights[i][j]`, i along u.
+    pub heights: Vec<Vec<f64>>,
+}
+
 /// One curve of a sweep path (P3.7, PS19.2): an edge of a body or a sketch curve.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PathCurve {

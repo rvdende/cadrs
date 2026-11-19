@@ -3128,6 +3128,32 @@ pub fn chamfer(
     })
 }
 
+/// Equal-distance chamfers, each edge at its own distance (`dists`: an edge and its distance),
+/// by local trimming: where chamfers of unequal distances meet at a corner, their planes are
+/// trimmed against each other there ([`super::fillet::chamfer_edges_measured`]).
+pub fn chamfer_each(
+    k: &mut NativeKernel,
+    body: BodyId,
+    dists: &[(usize, f64)],
+) -> Result<OpResult> {
+    let b = std::sync::Arc::clone(k.get(body)?);
+    let ids: Vec<EdgeId> = dists.iter().map(|&(e, _)| EdgeId(e as u64)).collect();
+    let sharp = sharp_edges(&b, &real_edges(&b, &ids)?)?;
+    let edges: Vec<(usize, [f64; 2])> = dists
+        .iter()
+        .filter(|(e, _)| sharp.contains(&EdgeId(*e as u64)))
+        .map(|&(e, d)| (e, [d, d]))
+        .collect();
+    let (out, src) = super::fillet::chamfer_edges_measured(&b, body, &edges, false)?;
+    if let Some(e) = local_problem(&b, &out) {
+        return Err(KernelError::InvalidResult {
+            op: "chamfer",
+            why: format!("the chamfer isn't valid: {e}"),
+        });
+    }
+    Ok(Tracked { body: out, src }.into_result(k, body))
+}
+
 /// The chamfer `r` of `edges` of `body` with its corners cut flat ([`ChamferCorners::Flat`]): at
 /// each vertex of `body` whose edges (three or more) are all chamfered, with an equal distance
 /// `d`, and whose faces are flat, the plane through the points where the chamfers' lines on each

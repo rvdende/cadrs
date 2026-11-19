@@ -508,6 +508,22 @@ pub trait Kernel {
     /// ```
     fn sweep_with(&mut self, profile: &Profile, spec: &SweepSpec) -> Result<OpResult>;
 
+    /// A screw ([`ScrewSpec`]): the profile, drawn in a plane through the axis and on one side
+    /// of it, turned about the axis while rising along it, as a thread is formed. Its volume is
+    /// the profile's first moment about the axis times the angle (the rise moves each section
+    /// within its own plane). Its side faces follow the true helicoids within 1e-9 of the
+    /// profile's reach (the helix sweep's screw, [`SweepControl::Helix`]).
+    ///
+    /// Refused when the angle isn't positive, the axis is not in the profile's plane, the
+    /// profile crosses the axis, or a turn rises less than the profile's extent along the axis
+    /// (its turns would collide).
+    fn screw(&mut self, profile: &Profile, spec: &ScrewSpec) -> Result<OpResult>;
+
+    /// A slab ([`SlabSpec`]): a block, flat underneath and on its four sides, under a B-spline
+    /// height field, its top that B-spline surface exactly. Refused for sizes or heights that
+    /// aren't positive, or knots that aren't clamped over [0, 1] to fit the heights.
+    fn slab(&mut self, spec: &SlabSpec) -> Result<OpResult>;
+
     /// A primitive solid: a box, cylinder, cone, sphere or torus. Its faces are generated
     /// (`StartCap`, `EndCap` and `ProfileCurve` origins with region 0), as a sketch's extrude or
     /// revolve would make them.
@@ -884,6 +900,21 @@ pub trait Kernel {
     /// # Ok::<(), cadrs_kernel::KernelError>(())
     /// ```
     fn chamfer(&mut self, body: BodyId, edges: &[EdgeId], spec: ChamferSpec) -> Result<OpResult>;
+
+    /// Equal-distance chamfers with each edge (and its tangent chain) at its own distance
+    /// (`distances[i]` for `edges[i]`), in one operation, so that chamfers of unequal distances
+    /// meet at the corners they share: their planes trimmed against each other there. Away from
+    /// those corners each edge is cut as [`Kernel::chamfer`] cuts it at its distance. Without
+    /// `overflow` ([`ChamferOpts::overflow`]) each chamfer must fit the faces at its edge, or the
+    /// whole operation is refused.
+    fn chamfer_distances(
+        &mut self,
+        body: BodyId,
+        edges: &[EdgeId],
+        distances: &[f64],
+        overflow: bool,
+    ) -> Result<OpResult>;
+
     /// Hollows a solid inward to walls `thickness` thick, open where the faces `remove` were
     /// ([`Kernel::shell_with`] inward, rounded joins).
     ///
@@ -1176,6 +1207,11 @@ pub trait Kernel {
 
     /// Sews surface bodies that meet along their edges into one solid, if they close it.
     fn sew_solid(&mut self, bodies: &[BodyId], tol: f64) -> Result<OpResult>;
+    /// The faces a STEP file holds (loose: each its own surface with its own edges, as surface
+    /// exporters write them) sewn into one closed solid ([`Kernel::sew_solid`]): joined wherever
+    /// their edges lie within `tol` (positive) of each other, any face written inside out turned
+    /// to face outward. Refused when they don't close into a solid.
+    fn sew_step(&mut self, bytes: &[u8], tol: f64) -> Result<OpResult>;
 
     /// Sheets joined along their edges that coincide (within `tol`) into one sheet (Onshape's
     /// Add of surfaces). Each face continues (`modified`) the input face it was.
