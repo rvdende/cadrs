@@ -1761,14 +1761,17 @@ fn case_304_box() {
     );
 }
 
-/// SMLib fillet test 305: `box.smb`, radii by edge {0: 1.0, 1: 2.0, 5: 2.0}.
+/// SMLib fillet test 305: `box.smb`, radii by edge {0: 1.0, 1: 2.0, 5: 2.0}. SMLib closes the
+/// corner of unequal radii with one patch (21 edges); ours is exact and has no crease (the
+/// ball of radius 2 touching the three faces, the radius-2 strips running on to it, a cone
+/// from it shrinking to the radius-1 strip and that strip's ball's cap: 25 edges).
 #[test]
 fn case_305_box() {
     blend_laws(
         "box.smb",
         &[(0, 1.0, 1.0), (1, 2.0, 2.0), (5, 2.0, 2.0)],
         &Expect {
-            edges: Some(21),
+            edges: Some(25),
             ..Expect::default()
         },
     )

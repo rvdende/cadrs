@@ -2798,6 +2798,22 @@ pub fn fillet(
             }
         }
     }
+    // Narrow faces the ball bridges over: gone, the faces either side run on to meet, and that
+    // edge filleted in place of the two.
+    if let (FilletSize::Radius(r), FilletProfile::Circular) = (spec.size, spec.profile)
+        && let Some((nb, edges)) = swallow_narrow_faces(&b, &all, r)?
+    {
+        let id = k.insert(nb);
+        return fillet(
+            k,
+            id,
+            &edges,
+            &FilletSpec {
+                propagate: false,
+                ..*spec
+            },
+        );
+    }
     // (Local trimming passes over edges whose faces join smoothly.)
     let sharp = sharp_edges(&b, &all)?;
     let laws: Option<Vec<super::fillet::RadiusLaw>> = sharp
@@ -3543,6 +3559,117 @@ pub fn chamfer_tool(
         return Ok(Tracked { body: out, src }.into_result(k, body));
     }
     blend(k, body, &list, false)
+}
+
+/// A narrow face a fillet swallows (the API's definition of `fillet`): a flat face `N` two of
+/// whose straight edges are picked, between `N` and flat faces `A` and `B`, too narrow for both
+/// strips, so that a ball of radius `r` can't touch it (the strips' contacts on it, `r·tan(φ/2)`
+/// in from each edge, φ the faces' turn there, reach past each other). The ball rests on `A` and
+/// `B` alone and bridges over `N`: the result is `b` with `N` gone (`A` and `B` run on to meet,
+/// [`super::defeature::delete_faces`]) and that edge filleted in place of the two. Returns that
+/// body and the edges to fillet on it (`edges` found again, by their middles, with the new
+/// edges in place of the pairs); `None` where no picked pair swallows its face.
+/// After springrep's `swallowed_strip` (MIT), which rounds `A` to `B` instead.
+fn swallow_narrow_faces(b: &Body, edges: &[EdgeId], r: f64) -> Result<Option<(Body, Vec<EdgeId>)>> {
+    let normal = |f: usize| match &b.faces[f].surf {
+        Surface::Plane { f: fr } => {
+            Some(fr.x.cross(&fr.y).normalize() * if b.faces[f].sense { 1.0 } else { -1.0 })
+        }
+        _ => None,
+    };
+    let picked: Vec<usize> = edges.iter().map(|e| e.0 as usize).collect();
+    let mut gone: Vec<usize> = Vec::new();
+    let mut pairs: Vec<(usize, [usize; 2])> = Vec::new();
+    // Per picked straight convex edge on a flat face: (edge, the face, the other face, its line).
+    let mut by_face: std::collections::HashMap<usize, Vec<(usize, usize, P3, V3, f64)>> =
+        Default::default();
+    for &e in &picked {
+        let ed = &b.edges[e];
+        let Curve::Line { .. } = ed.curve else {
+            continue;
+        };
+        let Ok([(f1, _), (f2, _)]) = edge_sides(b, e) else {
+            continue;
+        };
+        let (Some(n1), Some(n2)) = (normal(f1), normal(f2)) else {
+            continue;
+        };
+        if super::fillet::edge_convexity(b, e) != Some(true) {
+            continue;
+        }
+        let (p, q) = (ed.point(ed.t[0]), ed.point(ed.t[1]));
+        let d = (q - p).normalize();
+        let turn = n1.dot(&n2).clamp(-1.0, 1.0).acos();
+        let reach = r * (turn / 2.0).tan();
+        by_face.entry(f1).or_default().push((e, f2, p, d, reach));
+        by_face.entry(f2).or_default().push((e, f1, p, d, reach));
+    }
+    let mut faces: Vec<usize> = by_face.keys().copied().collect();
+    faces.sort_unstable();
+    for nf in faces {
+        let on = &by_face[&nf];
+        let edges_of_n = b.faces[nf].loops.iter().flatten().count();
+        if on.len() != 2 || b.faces[nf].loops.len() != 1 || edges_of_n != 4 {
+            continue;
+        }
+        let ((e1, a, p1, d1, r1), (e2, bf, p2, d2, r2)) = (on[0], on[1]);
+        if a == bf || d1.cross(&d2).norm() > tol::ANGULAR {
+            continue;
+        }
+        let off = p2 - p1;
+        let width = (off - d1 * off.dot(&d1)).norm();
+        if r1 + r2 > width + tol::REL * (1.0 + r) {
+            gone.push(nf);
+            pairs.push((nf, [e1, e2]));
+            let _ = (a, bf);
+        }
+    }
+    if gone.is_empty() {
+        return Ok(None);
+    }
+    let (nb, from) = super::defeature::delete_faces(b, &gone)?;
+    let paired: Vec<usize> = pairs.iter().flat_map(|x| x.1).collect();
+    let nef = nb.edge_faces();
+    let mut out: Vec<EdgeId> = Vec::new();
+    for (nf, [e1, e2]) in &pairs {
+        let other = |e: usize| {
+            edge_sides(b, e)
+                .ok()
+                .and_then(|s| s.iter().map(|x| x.0).find(|f| f != nf))
+        };
+        let (Some(fa), Some(fb)) = (other(*e1), other(*e2)) else {
+            return Ok(None);
+        };
+        let comes = |g: usize, f: usize| from.get(g).is_some_and(|x| x.contains(&f));
+        let found = (0..nb.edges.len()).find(|&e| {
+            let fs = &nef[e];
+            fs.len() == 2
+                && ((comes(fs[0], fa) && comes(fs[1], fb))
+                    || (comes(fs[0], fb) && comes(fs[1], fa)))
+        });
+        let Some(e) = found else {
+            return Ok(None);
+        };
+        out.push(EdgeId(e as u64));
+    }
+    // The other picked edges, by their middles.
+    for &e in picked.iter().filter(|e| !paired.contains(e)) {
+        let ed = &b.edges[e];
+        let m = ed.point(ed.mid_t());
+        let near = (0..nb.edges.len())
+            .filter(|&x| !nb.edges[x].degenerate)
+            .map(|x| (x, super::fillet::edge_distance(&nb, x, &m)))
+            .min_by(|p, q| p.1.total_cmp(&q.1));
+        match near {
+            Some((x, d)) if d <= tol::POINT * (1.0 + r) => {
+                if !out.contains(&EdgeId(x as u64)) {
+                    out.push(EdgeId(x as u64));
+                }
+            }
+            _ => return Ok(None),
+        }
+    }
+    Ok(Some((nb, out)))
 }
 
 /// Onshape's Full round: the middle face replaced by the round tangent to it and to the two flat

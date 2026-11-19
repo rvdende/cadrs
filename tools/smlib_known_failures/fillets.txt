@@ -10,9 +10,7 @@ case_105_extrusion_old slow
 case_110_nurb_box slow
 case_111_box_on_box
 case_112_letter_g
-case_113_box_on_box
 case_116_filleted_box
-case_118_l_shaped_box
 case_119_l_shaped_box
 case_120_shell_fillet
 case_121_6_sided_corner
@@ -23,7 +21,6 @@ case_128_shell_fillet2
 case_201_test1 slow
 case_202_fillet0114 slow
 case_203_torii_unioned slow
-case_204_test4
 case_205_test5
 case_206_test6
 case_207_test7

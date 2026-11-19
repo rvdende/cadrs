@@ -662,7 +662,7 @@ fn wedge_at(b: &Body, ef: &EdgeFillet, t: f64) -> Option<(P3, [P2; 2], [V3; 2])>
 
 /// Whether edge e is convex (true), concave (false) or neither (its faces tangent) at its
 /// middle.
-fn edge_convexity(b: &Body, e: usize) -> Option<bool> {
+pub(crate) fn edge_convexity(b: &Body, e: usize) -> Option<bool> {
     let ed = &b.edges[e];
     let [(f1, c1), (f2, _)] = sides(b, e).ok()?;
     let faces = if c1 { [f1, f2] } else { [f2, f1] };
@@ -1015,7 +1015,10 @@ enum MitreEnd {
 /// Where two picked edges meet at an angle at a vertex of three edges, the third left as it is:
 /// the strips run into each other along a mitre (SMLib's `Nx2` bevel corner), from the contact
 /// on their common face of the ball touching all three faces to where the mitre reaches one of
-/// the other faces (on the edge left as it is when the corner is symmetric).
+/// the other faces (on the edge left as it is when the corner is symmetric). Where that edge
+/// turns the other way (convex strips round a concave edge's end) the mitre is not the rolling
+/// ball's corner: the ball swings round the edge's end ([`TriCorner`]), past the mitre's crease;
+/// the mitre is taken there only where that corner can't be built (`plan`'s `tri_first` off).
 struct Mitre {
     v: usize,
     shared: usize,
@@ -1047,6 +1050,8 @@ enum SectionKey {
     Knee(usize, usize),
     /// The line from a fan's apex down a strip running on into it (fan, side).
     Fan(usize, usize),
+    /// A strip's end at a corner of unequal radii ([`UnevenCorner`]) (vertex, edge).
+    Uneven(usize, usize),
 }
 
 impl SectionKey {
@@ -1065,6 +1070,7 @@ impl SectionKey {
             // with such corners at both ends has one at each).
             SectionKey::Tri(v, e) => usize::MAX / 4 + (e << 24) + v,
             SectionKey::Fan(c, _) => usize::MAX / 8 + c,
+            SectionKey::Uneven(v, e) => usize::MAX / 16 + (e << 24) + v,
         }
     }
 }
@@ -1077,6 +1083,611 @@ struct Corner {
     contacts: Vec<(usize, Contact)>,
     /// The picked edges meeting there.
     edges: Vec<usize>,
+}
+
+/// A corner of three planes whose three straight convex edges are filleted at radii not all
+/// equal, closed without a crease by exact surfaces (after springrep's `blend::shaped::uneven`,
+/// MIT). The ball of the largest radius `R` touching all three planes closes the corner. Along
+/// each edge whose fillet is smaller the ball rolls on from there touching that edge's two planes
+/// and shrinking evenly as it goes, down to the fillet's radius over a travel of `R`, and from
+/// there on it is the fillet's own ball. Its centre runs on a line while it shrinks, so what it
+/// sweeps is a cone, tangent to both planes along lines and to its first and last ball along
+/// circles; along an edge whose fillet is the largest the strip runs on to the corner ball. The
+/// faces: the corner ball between the cones' circles and those strips' sections, each cone
+/// between its two circles and its lines on the planes, and the cap of a cone's last ball
+/// between the cone's circle and the strip's end (its section square to the edge).
+struct UnevenCorner {
+    v: usize,
+    /// The corner ball.
+    c: P3,
+    big: f64,
+    /// Each face's unit normal into the solid; edge j lies between faces j + 1 and j + 2.
+    a: [V3; 3],
+    faces: [usize; 3],
+    /// Each edge (in the body), its strip's ball where the strip ends, and the radius there.
+    edges: [usize; 3],
+    first: [P3; 3],
+    r: [f64; 3],
+}
+
+impl UnevenCorner {
+    /// Edge j's sweep: its unit axis toward the corner ball, and its half angle (nought where
+    /// the ball keeps its radius).
+    fn cone(&self, j: usize) -> (V3, f64) {
+        let run = self.c - self.first[j];
+        (
+            run.normalize(),
+            ((self.big - self.r[j]) / run.norm()).asin(),
+        )
+    }
+}
+
+/// The corner of unequal radii ([`UnevenCorner`]) at vertex v where the strips `here` end, and
+/// each strip's end there (its section `R` on from the corner ball's foot along its edge); `None`
+/// where the corner isn't one (three planes, three straight convex edges, radii not all equal,
+/// each edge long enough).
+fn uneven_corner(
+    b: &Body,
+    efs: &[EdgeFillet],
+    here: &[(usize, usize)],
+    v: usize,
+) -> Option<(UnevenCorner, Vec<End>)> {
+    if here.len() != 3 || vertex_edges(b, v).len() != 3 {
+        return None;
+    }
+    let at = b.verts[v].p;
+    let radius = |&(i, j): &(usize, usize)| efs[i].radius_at(b.edges[efs[i].e].t[j]);
+    let rs: Vec<f64> = here.iter().map(radius).collect();
+    let big = rs.iter().copied().fold(0.0, f64::max);
+    let small = rs.iter().copied().fold(f64::INFINITY, f64::min);
+    if big - small <= tol::REL * (1.0 + big) {
+        return None;
+    }
+    // The three faces and their inward normals.
+    let mut faces: Vec<usize> = Vec::new();
+    for &(i, _) in here {
+        let ef = &efs[i];
+        if ef.flat || !matches!(b.edges[ef.e].curve, Curve::Line { .. }) {
+            return None;
+        }
+        if edge_convexity(b, ef.e) != Some(true) {
+            return None;
+        }
+        for f in ef.faces {
+            if !faces.contains(&f) {
+                faces.push(f);
+            }
+        }
+    }
+    if faces.len() != 3 {
+        return None;
+    }
+    let inward = |f: usize| -> Option<V3> {
+        match &b.faces[f].surf {
+            Surface::Plane { f: fr } => {
+                Some(-fr.x.cross(&fr.y).normalize() * if b.faces[f].sense { 1.0 } else { -1.0 })
+            }
+            _ => None,
+        }
+    };
+    let normals: Vec<V3> = faces.iter().map(|&f| inward(f)).collect::<Option<_>>()?;
+    // Edge j is the one that leaves face j (it lies on the other two).
+    let mut slot: [Option<usize>; 3] = [None; 3];
+    for (h, &(i, _)) in here.iter().enumerate() {
+        let j = (0..3).find(|&j| !efs[i].faces.contains(&faces[j]))?;
+        if slot[j].is_some() {
+            return None;
+        }
+        slot[j] = Some(h);
+    }
+    let slot = slot.map(|x| x.unwrap_or(0));
+    let a: [V3; 3] = std::array::from_fn(|j| normals[j]);
+    let e: [V3; 3] = std::array::from_fn(|j| leaving(b, efs[here[slot[j]].0].e, v));
+    let r: [f64; 3] = std::array::from_fn(|j| rs[slot[j]]);
+    if (0..3).any(|j| e[j].dot(&a[j]) <= tol::ANGULAR) {
+        debug(|| format!("vertex {v}: uneven corner edges {e:?} normals {a:?}"));
+        return None;
+    }
+    // A ball touching edge j's two faces has its centre, for each unit of its radius, `in_from`
+    // square to the edge; the one touching all three sits `along` that far along the edge.
+    let in_from = |j: usize| {
+        let (p, q) = (a[(j + 1) % 3], a[(j + 2) % 3]);
+        (p + q) / (1.0 + p.dot(&q))
+    };
+    let along = |j: usize| (1.0 - in_from(j).dot(&a[j])) / e[j].dot(&a[j]);
+    let c = at + (in_from(0) + e[0] * along(0)) * big;
+    let start = |j: usize| big * (along(j) + 1.0);
+    // An edge at the largest radius runs on to the corner ball (its strip ends at the ball's
+    // section, sharing its contacts); a smaller one ends R past it, where its ball stops shrinking.
+    let shrinks = |j: usize| big - r[j] > tol::REL * (1.0 + big);
+    let first: [P3; 3] = std::array::from_fn(|j| {
+        if shrinks(j) {
+            at + e[j] * start(j) + in_from(j) * r[j]
+        } else {
+            c
+        }
+    });
+    let mut ends = vec![None, None, None];
+    for j in 0..3 {
+        let ef = &efs[here[slot[j]].0];
+        if ed_len(b, ef.e) <= start(j) + r[j] {
+            return None;
+        }
+        let t = ef.spine.param_of(&first[j], ef.tm);
+        let ball = ef.ball_from(b, &ef.mid, ef.tm, t)?;
+        if (ball.c - first[j]).norm() > tol::REL_POINT * (1.0 + big) {
+            debug(|| {
+                format!(
+                    "vertex {v}: uneven corner ball {:?} off {:?}",
+                    ball.c, first[j]
+                )
+            });
+            return None;
+        }
+        ends[slot[j]] = Some(End::Section {
+            ball,
+            t,
+            key: if shrinks(j) {
+                SectionKey::Uneven(v, ef.e)
+            } else {
+                SectionKey::Corner(v, ef.e)
+            },
+        });
+    }
+    let corner = UnevenCorner {
+        v,
+        c,
+        big,
+        a,
+        faces: [faces[0], faces[1], faces[2]],
+        edges: std::array::from_fn(|j| efs[here[slot[j]].0].e),
+        first,
+        r,
+    };
+    Some((corner, ends.into_iter().collect::<Option<_>>()?))
+}
+
+/// The faces closing a corner of unequal radii ([`UnevenCorner`]) between its strips' ends, and
+/// the lines on its planes from the strips' rails to the corner ball's feet.
+fn uneven_faces(
+    b: &Body,
+    nb: &mut Body,
+    uc: &UnevenCorner,
+    out: &mut Pieces,
+    input: BodyId,
+) -> Result<()> {
+    let (next, prev) = (|j: usize| (j + 1) % 3, |j: usize| (j + 2) % 3);
+    let lost = || failed("corner", "a corner of unequal radii's strip has no end");
+    // The ball's feet: shared with the strips that run on to it.
+    let feet: [usize; 3] = std::array::from_fn(|i| {
+        *out.contact_verts
+            .entry((uc.v, uc.faces[i]))
+            .or_insert_with(|| nb.add_vertex(uc.c - uc.a[i] * uc.big))
+    });
+    let vi = super::blend::vertex_index(b, uc.v);
+    let src = FaceSrc::New(Origin::FromVertex {
+        body: input,
+        vertex: VertexId(vi as u64),
+    });
+    // The arc of the circle about `centre` from vertex `from` to `to`, the short way.
+    let arc = |nb: &mut Body, centre: P3, from: usize, to: usize| -> Result<usize> {
+        let (p, q) = (nb.verts[from].p - centre, nb.verts[to].p - centre);
+        let r = p.norm();
+        let x = p / r;
+        let y = (q - x * q.dot(&x))
+            .try_normalize(tol::DEGENERATE)
+            .ok_or_else(|| bad_geometry("a corner of unequal radii's arc degenerates"))?;
+        let th = q.dot(&y).atan2(q.dot(&x));
+        Ok(add_edge(
+            nb,
+            Curve::Circle { c: centre, x, y, r },
+            0.0,
+            th,
+            from,
+            to,
+        ))
+    };
+    let mut large = [0usize; 3];
+    for j in 0..3 {
+        let shrinks = uc.big - uc.r[j] > tol::REL * (1.0 + uc.big);
+        if !shrinks {
+            // The strip runs on to the ball: its section there is the ball's side.
+            let key = SectionKey::Corner(uc.v, uc.edges[j]);
+            large[j] = *out.section_edges.get(&key).ok_or_else(lost)?;
+            continue;
+        }
+        let key = SectionKey::Uneven(uc.v, uc.edges[j]);
+        let site = key.site();
+        let own = *out.section_edges.get(&key).ok_or_else(lost)?;
+        // The rail ends on face j + 1 and face j + 2.
+        let rail = |f: usize| out.contact_verts.get(&(site, uc.faces[f])).copied();
+        let (rn, rp) = (
+            rail(next(j)).ok_or_else(lost)?,
+            rail(prev(j)).ok_or_else(lost)?,
+        );
+        let (axis, half) = uc.cone(j);
+        let lines: [usize; 2] = [(rn, next(j)), (rp, prev(j))].map(|(from, f)| {
+            let (c, l) = Curve::line(nb.verts[from].p, nb.verts[feet[f]].p);
+            let x = nb.add_edge(c, 0.0, l, from, feet[f]);
+            out.cuts.entry(uc.faces[f]).or_default().push(x);
+            x
+        });
+        large[j] = arc(
+            nb,
+            uc.c - axis * (uc.big * half.sin()),
+            feet[next(j)],
+            feet[prev(j)],
+        )?;
+        let first = uc.first[j];
+        let away =
+            (P3::from((nb.verts[rn].p.coords + nb.verts[rp].p.coords) * 0.5) - first).normalize();
+        let x = (away - axis * away.dot(&axis)).normalize();
+        let (sweep, small) = {
+            let small = arc(nb, first - axis * (uc.r[j] * half.sin()), rn, rp)?;
+            let cap = Surface::Sphere {
+                f: Frame {
+                    o: first,
+                    x,
+                    y: axis.cross(&x),
+                    z: axis,
+                },
+                r: uc.r[j],
+            };
+            out.new_faces.push(NewFace {
+                surf: cap,
+                edges: vec![own, small],
+                src: src.clone(),
+                u_period: None,
+                beside: uc.faces[next(j)],
+                pcurves: Vec::new(),
+            });
+            let o = first - axis * (uc.r[j] * half.sin());
+            (
+                Surface::Cone {
+                    f: Frame {
+                        o,
+                        x,
+                        y: axis.cross(&x),
+                        z: axis,
+                    },
+                    r: uc.r[j] * half.cos(),
+                    a: half,
+                },
+                small,
+            )
+        };
+        out.new_faces.push(NewFace {
+            surf: sweep,
+            edges: vec![small, lines[1], large[j], lines[0]],
+            src: src.clone(),
+            u_period: None,
+            beside: uc.faces[next(j)],
+            pcurves: Vec::new(),
+        });
+    }
+    let contacts: Vec<P3> = feet.iter().map(|&f| nb.verts[f].p).collect();
+    let surf = corner_sphere(nb, uc.c, &contacts, &large);
+    out.new_faces.push(NewFace {
+        surf,
+        edges: large.to_vec(),
+        src,
+        u_period: None,
+        beside: uc.faces[0],
+        pcurves: Vec::new(),
+    });
+    Ok(())
+}
+
+/// A fillet chain running round a round tighter than its ball, the round's cylinder square to
+/// the plate the chain runs along and the walls either side flat and tangent to it (a prism's
+/// top rim filleted past its corner rounds; after springrep's `blend::corner`, MIT). The ball
+/// can't follow the round: it rolls along each wall, both strips ending at the section through
+/// the one corner centre `c`, `r` from the plate and from both walls. The axis is the line
+/// through `c` square to the plate, `T` the point where it meets the plate. The corner is a
+/// family of quarter ellipses, one in each half plane through the axis, from a point of the base
+/// curve `r` below the plate (along the walls and the round, square to the plate) up to `T`: the
+/// rational biquadratic whose rows are the base curve, the base curve lifted by `r`, and `T`,
+/// weighted by the base curve's weights times the quarter ellipse's (1, √½, 1). It leaves the
+/// base square to the plate, tangent to the wall or round there, reaches `T` level with the plate,
+/// and in the half planes square to the walls it is the strips' sections, so it continues them
+/// exactly. The base runs from each strip's contact on its wall along the wall to the round, and
+/// round the round between the walls.
+struct RimCorner {
+    /// The round's edge along the plate (no strip), its vertices, and the straight edge on
+    /// each wall at them.
+    arc: usize,
+    v: [usize; 2],
+    edges: [usize; 2],
+    plate: usize,
+    walls: [usize; 2],
+    round: usize,
+    /// The corner centre, the plate's outward normal, the radius.
+    c: P3,
+    up: V3,
+    r: f64,
+    /// The round's axis point level with `c`, its radius, the walls' outward normals.
+    o: P3,
+    rho: f64,
+    n: [V3; 2],
+}
+
+/// The rims ([`RimCorner`]) among the picked edges `edges`: a circular edge between a flat plate
+/// and a convex cylinder square to it of radius under the fillet's, between straight picked edges
+/// of the same constant radius along flat walls tangent to the cylinder.
+fn rim_corners(b: &Body, edges: &[RadiusLaw]) -> Vec<RimCorner> {
+    let constant = |law: &[(f64, f64)]| {
+        let r = law.first().map_or(0.0, |x| x.1);
+        law.iter()
+            .all(|x| (x.1 - r).abs() <= tol::REL * (1.0 + r))
+            .then_some(r)
+    };
+    let plane = |f: usize| match &b.faces[f].surf {
+        Surface::Plane { f: fr } => Some((
+            fr.o,
+            fr.x.cross(&fr.y).normalize() * if b.faces[f].sense { 1.0 } else { -1.0 },
+        )),
+        _ => None,
+    };
+    let mut out = Vec::new();
+    for (e, law) in edges {
+        let e = *e;
+        let ed = &b.edges[e];
+        let (Curve::Circle { .. }, Some(r)) = (&ed.curve, constant(law)) else {
+            continue;
+        };
+        if ed.v[0] == ed.v[1] || edge_convexity(b, e) != Some(true) {
+            continue;
+        }
+        let Ok([(f1, _), (f2, _)]) = sides(b, e) else {
+            continue;
+        };
+        let pick = |f: usize, g: usize| match (&b.faces[g].surf, plane(f)) {
+            (Surface::Cylinder { f: cf, r: rho }, Some(pl)) => Some((f, g, *cf, *rho, pl)),
+            _ => None,
+        };
+        let Some((plate, round, cf, rho, (po, up))) = pick(f1, f2).or_else(|| pick(f2, f1)) else {
+            continue;
+        };
+        if cf.z.normalize().cross(&up).norm() > tol::ANGULAR || rho >= r - tol::REL * (1.0 + r) {
+            continue;
+        }
+        // The straight picked edge on a wall at each end, at the same radius.
+        let mut found = [None, None];
+        for (k, &v) in ed.v.iter().enumerate() {
+            found[k] = edges.iter().find_map(|(x, xl)| {
+                let xe = &b.edges[*x];
+                if *x == e || !xe.v.contains(&v) || !matches!(xe.curve, Curve::Line { .. }) {
+                    return None;
+                }
+                if constant(xl).is_none_or(|xr| (xr - r).abs() > tol::REL * (1.0 + r)) {
+                    return None;
+                }
+                let [(g1, _), (g2, _)] = sides(b, *x).ok()?;
+                let wall = if g1 == plate {
+                    g2
+                } else if g2 == plate {
+                    g1
+                } else {
+                    return None;
+                };
+                let (wo, n) = plane(wall)?;
+                // Tangent to the round: square to the plate, the axis ρ behind it.
+                let axis_off = n.dot(&(cf.o - wo));
+                (n.dot(&up).abs() <= tol::ANGULAR
+                    && (axis_off + rho).abs() <= tol::REL_POINT * (1.0 + r))
+                    .then_some((*x, wall, wo, n))
+            });
+        }
+        let [Some((e1, w1, o1, n1)), Some((e2, w2, o2, n2))] = found else {
+            continue;
+        };
+        if w1 == w2 || n1.dot(&n2) > 1.0 - tol::ANGULAR {
+            continue;
+        }
+        // The centre: r inside the plate and both walls.
+        let rows = [(n1, o1), (n2, o2), (up, po)];
+        let m = nalgebra::Matrix3::from_fn(|i, j| rows[i].0[j]);
+        let rhs = nalgebra::Vector3::from_fn(|i, _| rows[i].0.dot(&rows[i].1.coords) - r);
+        let Some(x) = m.lu().solve(&rhs) else {
+            continue;
+        };
+        let c = P3::from(x);
+        let az = cf.z.normalize();
+        let o = cf.o + az * az.dot(&(c - cf.o));
+        // Each strip's contact on its wall lies past the round, within its edge.
+        let ok = [(e1, n1, ed.v[0]), (e2, n2, ed.v[1])]
+            .iter()
+            .all(|&(x, n, v)| {
+                let (q, b0) = (c + n * r, o + n * rho);
+                let xe = &b.edges[x];
+                let far = b.verts[if xe.v[0] == v { xe.v[1] } else { xe.v[0] }].p;
+                let along = far - b.verts[v].p;
+                let d = (q - b0).dot(&along) / along.norm();
+                d > tol::REL_POINT * (1.0 + r) && d < along.norm()
+            });
+        if !ok {
+            debug(|| format!("edge {e}: a round under the fillet, its contacts off its walls"));
+            continue;
+        }
+        debug(|| {
+            format!("edge {e}: a round of {rho} under the fillet's {r}: a rim corner at {c:?}")
+        });
+        out.push(RimCorner {
+            arc: e,
+            v: ed.v,
+            edges: [e1, e2],
+            plate,
+            walls: [w1, w2],
+            round,
+            c,
+            up,
+            r,
+            o,
+            rho,
+            n: [n1, n2],
+        });
+    }
+    out
+}
+
+/// The ends of the strips at a rim corner ([`RimCorner`]): each at its section through the
+/// corner centre (sharing the plate's contact there, the axis's foot `T`).
+fn rim_ends(
+    b: &Body,
+    efs: &[EdgeFillet],
+    rc: &RimCorner,
+    ends: &mut [[Option<End>; 2]],
+    skip_verts: &mut Vec<usize>,
+) -> Result<()> {
+    let tip = rc.c + rc.up * rc.r;
+    for k in 0..2 {
+        let (e, v) = (rc.edges[k], rc.v[k]);
+        let (i, j) = (0..efs.len())
+            .flat_map(|i| (0..2).map(move |j| (i, j)))
+            .find(|&(i, j)| efs[i].e == e && efs[i].at_vertex[j] && b.edges[e].v[j] == v)
+            .ok_or_else(|| failed("corner", "a rim corner's strip doesn't reach it"))?;
+        let ef = &efs[i];
+        let q: [Contact; 2] = std::array::from_fn(|s| {
+            let f = &b.faces[ef.faces[s]];
+            let p = if ef.faces[s] == rc.plate {
+                tip
+            } else {
+                rc.c + rc.n[k] * rc.r
+            };
+            geom::contact(f, geom::foot(f, &p, None))
+        });
+        ends[i][j] = Some(End::Section {
+            ball: Ball {
+                c: rc.c,
+                q,
+                flat: false,
+            },
+            t: ef.spine.param_of(&rc.c, b.edges[e].t[j]),
+            key: SectionKey::Corner(rc.v[0], e),
+        });
+    }
+    skip_verts.extend(rc.v);
+    Ok(())
+}
+
+/// The face of a rim corner ([`RimCorner`]) and the base curve's cuts on the walls and the round.
+fn rim_face(
+    b: &Body,
+    nb: &mut Body,
+    rc: &RimCorner,
+    vtol: f64,
+    out: &mut Pieces,
+    input: BodyId,
+) -> Result<()> {
+    let lost = || failed("corner", "a rim corner's strip has no end");
+    let site = rc.v[0];
+    let sections: Vec<usize> = rc
+        .edges
+        .iter()
+        .map(|&e| {
+            out.section_edges
+                .get(&SectionKey::Corner(site, e))
+                .copied()
+                .ok_or_else(lost)
+        })
+        .collect::<Result<_>>()?;
+    let tip = out
+        .contact_verts
+        .get(&(site, rc.plate))
+        .copied()
+        .ok_or_else(lost)?;
+    let q: Vec<usize> = rc
+        .walls
+        .iter()
+        .map(|w| out.contact_verts.get(&(site, *w)).copied().ok_or_else(lost))
+        .collect::<Result<_>>()?;
+    // Where each wall meets the round, r under the plate (on the edge between them).
+    let b0: Vec<usize> = (0..2)
+        .map(|k| {
+            vertex_on_boundary(nb, rc.walls[k], &(rc.o + rc.n[k] * rc.rho), vtol)
+                .ok_or_else(|| failed("corner", "a rim corner's round doesn't meet its wall"))
+        })
+        .collect::<Result<_>>()?;
+    let mut line = |nb: &mut Body, a: usize, z: usize, f: usize| {
+        let (c, l) = Curve::line(nb.verts[a].p, nb.verts[z].p);
+        let x = nb.add_edge(c, 0.0, l, a, z);
+        out.cuts.entry(f).or_default().push(x);
+        x
+    };
+    let l0 = line(nb, q[0], b0[0], rc.walls[0]);
+    let l1 = line(nb, b0[1], q[1], rc.walls[1]);
+    // The round's arc between the walls, r under the plate.
+    let (p0, p1) = (nb.verts[b0[0]].p - rc.o, nb.verts[b0[1]].p - rc.o);
+    let x = p0 / p0.norm();
+    let y = (p1 - x * p1.dot(&x)).normalize();
+    let th = p1.dot(&y).atan2(p1.dot(&x));
+    let arc = add_edge(
+        nb,
+        Curve::Circle {
+            c: rc.o,
+            x,
+            y,
+            r: rc.rho,
+        },
+        0.0,
+        th,
+        b0[0],
+        b0[1],
+    );
+    out.cuts.entry(rc.round).or_default().push(arc);
+    // The base as a rational quadratic B-spline: wall line, round's arc, wall line, joined at
+    // double knots (their lengths apart).
+    let pt = |v: usize| nb.verts[v].p;
+    let (qa, ba, bb, qb) = (pt(q[0]), pt(b0[0]), pt(b0[1]), pt(q[1]));
+    let half = th / 2.0;
+    let w = half.cos();
+    let mid = rc.o + (x * half.cos() + y * half.sin()) * (rc.rho / w);
+    let base: [(P3, f64); 7] = [
+        (qa, 1.0),
+        (P3::from((qa.coords + ba.coords) * 0.5), 1.0),
+        (ba, 1.0),
+        (mid, w),
+        (bb, 1.0),
+        (P3::from((bb.coords + qb.coords) * 0.5), 1.0),
+        (qb, 1.0),
+    ];
+    let lens = [(ba - qa).norm(), rc.rho * th.abs(), (qb - bb).norm()];
+    let total: f64 = lens.iter().sum();
+    let (k1, k2) = (lens[0] / total, (lens[0] + lens[1]) / total);
+    let kv = vec![0.0, 0.0, 0.0, k1, k1, k2, k2, 1.0, 1.0, 1.0];
+    let lift = rc.up * rc.r;
+    let t = pt(tip);
+    let s = std::f64::consts::FRAC_1_SQRT_2;
+    // u from T (u = 0) to the base (u = 1); v along the base from the first wall's contact.
+    let cps: Vec<Vec<H>> = vec![
+        base.iter().map(|&(_, bw)| hom(&t, bw)).collect(),
+        base.iter()
+            .map(|&(p, bw)| hom(&(p + lift), bw * s))
+            .collect(),
+        base.iter().map(|&(p, bw)| hom(&p, bw)).collect(),
+    ];
+    let surf = NurbsSurface::new(2, 2, vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0], kv, cps)
+        .map_err(|_| failed("corner", "a rim corner's surface can't be built"))?;
+    let deg = nb.add_degenerate(t, 0.0, 1.0, tip);
+    let vi = super::blend::vertex_index(b, site);
+    out.new_faces.push(NewFace {
+        surf: Surface::Nurbs(std::sync::Arc::new(surf)),
+        edges: vec![sections[0], l0, arc, l1, sections[1], deg],
+        src: FaceSrc::New(Origin::FromVertex {
+            body: input,
+            vertex: VertexId(vi as u64),
+        }),
+        u_period: None,
+        beside: rc.plate,
+        pcurves: vec![(
+            deg,
+            Curve::Line {
+                o: P3::new(0.0, 1.0, 0.0),
+                d: V3::new(0.0, -1.0, 0.0),
+            },
+        )],
+    });
+    Ok(())
 }
 
 /// A corner where every edge at a vertex is filleted but no ball touches all its faces (more
@@ -1606,6 +2217,43 @@ fn welds(b: &Body, efs: &mut [EdgeFillet]) -> Result<Vec<Weld>> {
                     });
                     continue;
                 }
+            }
+            // Welded only where the ball they part at fits: not past a flat face of an edge
+            // joining theirs (two sides of a polygon either side of a short one, whose strips
+            // would meet there but end first at their corners with it).
+            let parting = ball_of_radius(b, a, tm_a, a.r(), [a.mid.q[0].uv, a.mid.q[1].uv])
+                .or_else(|| a.ball_from(b, &a.mid, a.tm, tm_a))
+                .map(|x| x.c);
+            let joining: Vec<usize> = (0..b.edges.len())
+                .filter(|&x| {
+                    let xv = b.edges[x].v;
+                    !b.edges[x].degenerate
+                        && ea.v.iter().any(|v| xv.contains(v))
+                        && ec.v.iter().any(|v| xv.contains(v))
+                })
+                .collect();
+            let past = parting.is_some_and(|pc| {
+                joining.iter().any(|&x| {
+                    sides(b, x).is_ok_and(|fs| {
+                        fs.iter().any(|&(f, _)| match &b.faces[f].surf {
+                            Surface::Plane { f: fr } if f != face => {
+                                let n = fr.x.cross(&fr.y).normalize()
+                                    * if b.faces[f].sense { 1.0 } else { -1.0 };
+                                -n.dot(&(pc - fr.o)) < a.r() * (1.0 - 1e-6)
+                            }
+                            _ => false,
+                        })
+                    })
+                })
+            });
+            if past {
+                debug(|| {
+                    format!(
+                        "edges {} and {}: not welded across face {face}: their ball there is past a face between them",
+                        a.e, c.e
+                    )
+                });
+                continue;
             }
             debug(|| format!("edges {} and {}: welded across face {face}", a.e, c.e));
             let sides = [
@@ -4197,8 +4845,6 @@ fn coons(
     left: &dyn Fn(f64) -> P3,
     right: &dyn Fn(f64) -> P3,
 ) -> Option<Surface> {
-    let n = 13;
-    let ps: Vec<f64> = (0..n).map(|i| i as f64 / (n - 1) as f64).collect();
     let (p00, p10, p01, p11) = (bottom(0.0), bottom(1.0), top(0.0), top(1.0));
     let at = |u: f64, v: f64| -> P3 {
         let a = bottom(u).coords * (1.0 - v) + top(u).coords * v;
@@ -4209,6 +4855,13 @@ fn coons(
             + p11.coords * (u * v);
         P3::from(a + b - c)
     };
+    grid_surface(&at, 13)
+}
+
+/// The bicubic B-spline surface through an `n` × `n` grid of points of `at` over the unit
+/// square (evenly spaced in u and v).
+fn grid_surface(at: &dyn Fn(f64, f64) -> P3, n: usize) -> Option<Surface> {
+    let ps: Vec<f64> = (0..n).map(|i| i as f64 / (n - 1) as f64).collect();
     // Rows along v at each u, then the rows' control points along u.
     let rows: Vec<NurbsCurve> = ps
         .iter()
@@ -4648,14 +5301,15 @@ struct Plan {
     mitres: Vec<Mitre>,
     patches: Vec<PatchCorner>,
     tris: Vec<TriCorner>,
+    unevens: Vec<UnevenCorner>,
+    rims: Vec<RimCorner>,
     caps: Vec<Cap>,
     holes: Vec<Hole>,
     knees: Vec<Knee>,
     flushes: Vec<Flush>,
     fans: Vec<Fan>,
-    /// Whether some strips were mitred where a three-sided corner could go instead (convex
-    /// strips round a concave edge's end, or the reverse).
-    mixed_mitres: bool,
+    /// Whether some three-sided corners were taken where a mitre could go instead.
+    first_tris: bool,
     welds: Vec<Weld>,
     rounds: Vec<RoundCorner>,
 }
@@ -4924,7 +5578,7 @@ fn traced_roll(
 }
 
 /// The distance from point p to edge x.
-fn edge_distance(b: &Body, x: usize, p: &P3) -> f64 {
+pub(crate) fn edge_distance(b: &Body, x: usize, p: &P3) -> f64 {
     let xe = &b.edges[x];
     (xe.point(xe.curve.closest(p, xe.t[0], xe.t[1])) - p).norm()
 }
@@ -5368,7 +6022,11 @@ fn clone_fillet(f: &EdgeFillet) -> EdgeFillet {
 /// [`EdgeFillet::ratio`]).
 /// The strips of the picked edges and how each of their ends is settled. `tri_first`: where
 /// two strips meet at an angle round the end of an edge turning the other way, a three-sided
-/// corner (SMLib's) rather than the mitre (the exact rolling-ball corner).
+/// corner (SMLib's) rather than the mitre. The three-sided corner is the rolling ball's: past
+/// the strips' sections through the third edge's end the ball swings round that end, touching
+/// the common face, so where the edge stands square to that face the corner is the section
+/// turned about the edge (a horn torus between planes), the union of the balls inside the
+/// solid. The mitre leaves a crease where the strips cross, short of what those balls reach.
 fn plan(
     b: &Body,
     edges: &[RadiusLaw],
@@ -5383,6 +6041,19 @@ fn plan(
     // Each edge's strips on their own (in parallel), then in the edges' order, their rolls
     // numbered on from the edges' before.
     type Pieces = EdgePieces;
+    // Rounds tighter than the ball along the chain: no strip, their neighbours' corner.
+    let mut rims = if flat {
+        Vec::new()
+    } else {
+        rim_corners(b, edges)
+    };
+    let (edges, ratios): (Vec<RadiusLaw>, Vec<Ratio>) = edges
+        .iter()
+        .zip(ratios)
+        .filter(|(l, _)| !rims.iter().any(|rc| rc.arc == l.0))
+        .map(|(l, q)| (l.clone(), q.clone()))
+        .unzip();
+    let (edges, ratios) = (&edges[..], &ratios[..]);
     let one = |((e, law), ratio): (&RadiusLaw, &Ratio)| -> Result<(Pieces, Vec<Ball>)> {
         let e = *e;
         debug(|| format!("edge {e}: strips"));
@@ -5460,11 +6131,12 @@ fn plan(
     let mut mitres = Vec::new();
     let mut patches = Vec::new();
     let mut tris = Vec::new();
+    let mut unevens = Vec::new();
     let mut caps = Vec::new();
     let mut holes: Vec<Hole> = Vec::new();
     let mut knees: Vec<Knee> = Vec::new();
     let mut flushes: Vec<Flush> = Vec::new();
-    let mut mixed_mitres = false;
+    let mut first_tris = false;
     let rounds = round_corners(
         b,
         &efs,
@@ -5475,6 +6147,9 @@ fn plan(
         &mut inside,
         &mut skip_verts,
     )?;
+    for rc in &mut rims {
+        rim_ends(b, &efs, rc, &mut ends, &mut skip_verts)?;
+    }
     let at = ends_at(b, &efs);
     // Fans first: their corners' vertices are theirs.
     let mut fans: Vec<Fan> = Vec::new();
@@ -5689,7 +6364,7 @@ fn plan(
                         Some(Ok(_)) => Err(unsupported("a three-sided corner first")),
                         _ => mitre(b, &efs, here[0], here[1], v, &all),
                     };
-                    mixed_mitres |= mitred.is_ok() && mixed && !ea.flat;
+                    first_tris |= matches!(tri, Some(Ok(_)));
                     if mitred.is_err() && mixed && !ea.flat {
                         let (tc, end_a, end_b) = match tri {
                             Some(x) => x,
@@ -5858,6 +6533,14 @@ fn plan(
                 let _ = n;
                 return Err(unsupported("chamfers meeting at a corner"));
             }
+            // Three fillets of unequal radii at a corner of three planes: the largest ball and
+            // the cones it sweeps shrinking to each smaller fillet.
+            3 if let Some((uc, ue)) = uneven_corner(b, &efs, here, v) => {
+                for (&(i, j), e) in here.iter().zip(ue) {
+                    ends[i][j] = Some(e);
+                }
+                unevens.push(uc);
+            }
             // Three fillets of one radius, or more whose faces (one per fillet) all touch one
             // ball (a square pyramid's apex): a sphere corner, the ball's.
             n if n >= 3
@@ -5952,12 +6635,14 @@ fn plan(
         mitres,
         patches,
         tris,
+        unevens,
+        rims,
         caps,
         holes,
         knees,
         flushes,
         fans,
-        mixed_mitres,
+        first_tris,
         welds,
         rounds,
     })
@@ -11440,7 +12125,7 @@ fn local_blend(
     let fit_tol = 1e-5 * (1.0 + size);
     let vtol = tol::REL_POINT * (1.0 + r);
     let out_of_work = || out_of_budget("the local fillet takes more work than its budget");
-    let p = plan(b, edges, ratios, flat, &budget, false)
+    let p = plan(b, edges, ratios, flat, &budget, true)
         .map_err(|e| if budget.spent() { out_of_work() } else { e })?;
     debug(|| {
         format!(
@@ -11487,14 +12172,14 @@ fn local_blend(
             }
         })
     };
-    // Mitres round a concave edge's end that leave the faces untrimmable (their cuts running
-    // along or across the faces' edges): SMLib's three-sided corners there instead.
+    // Three-sided corners round a concave edge's end (the rolling ball's) that can't be built:
+    // the strips mitred there instead.
     let r = build(&p).or_else(|e| {
-        if !p.mixed_mitres || budget.spent() {
+        if !p.first_tris || budget.spent() {
             return Err(e);
         }
-        debug(|| format!("with mitres: {e}; again with three-sided corners"));
-        let p = plan(b, edges, ratios, flat, &budget, true).map_err(|_| e.clone())?;
+        debug(|| format!("with three-sided corners: {e}; again with mitres"));
+        let p = plan(b, edges, ratios, flat, &budget, false).map_err(|_| e.clone())?;
         build(&p).map_err(|_| e)
     });
     debug(|| format!("ball solves: {}", BALL_SOLVES - budget.left()));
@@ -12846,6 +13531,12 @@ fn trim(
             pcurves: Vec::new(),
         });
     }
+    for uc in &p.unevens {
+        uneven_faces(b, &mut nb, uc, &mut out, input)?;
+    }
+    for rc in &p.rims {
+        rim_face(b, &mut nb, rc, vtol, &mut out, input)?;
+    }
     for pc in &p.patches {
         corner_patches(b, &mut nb, p, pc, &mut out, input)?;
     }
@@ -12916,7 +13607,12 @@ fn trim(
             }
         }
     }
-    let picked: Vec<usize> = p.efs.iter().map(|ef| ef.e).collect();
+    let picked: Vec<usize> = p
+        .efs
+        .iter()
+        .map(|ef| ef.e)
+        .chain(p.rims.iter().map(|rc| rc.arc))
+        .collect();
     let radius = p.efs.iter().map(|ef| ef.r()).fold(0.0, f64::max);
     collapse(&mut nb, &mut out, vtol);
     assemble(nb, &out, &picked, size, radius)
@@ -13785,12 +14481,35 @@ fn corner_face(
         return Ok(());
     }
     // Three: degenerate at P0 (u = 0); v from curve 0 (P0→P1) to curve 2 reversed (P0→P2).
+    // Where one strip turns the other way from the other two, P0 is the crossing of those two
+    // (the patch then mirrors as the corner does).
+    let (mut curves, mut pts) = (curves, pts);
+    let odd = (0..3).find(|&i| {
+        let k = |h: usize| p.efs[pc.strips[h]].k[0] < 0.0;
+        k(i) != k((i + 1) % 3) && k(i) != k((i + 2) % 3)
+    });
+    let mut strips = pc.strips.clone();
+    if let Some(o) = odd {
+        let r = (o + 2) % 3;
+        curves.rotate_left(r);
+        pts.rotate_left(r);
+        strips.rotate_left(r);
+    }
     let bottom = along_from(nb, curves[0], pts[0]);
     let right = along_from(nb, curves[1], pts[1]);
     let top = along_from(nb, curves[2], pts[0]);
     let p0 = nb.verts[pts[0]].p;
     let left = move |_: f64| p0;
-    let surf = coons(&*bottom, &*top, &left, &*right)
+    let surf = ribbon_triangle(b, nb, p, pc.v, &strips, &curves, &pts)
+        .or_else(|| {
+            debug(|| {
+                format!(
+                    "vertex {}: no smooth three-sided patch; a Coons patch",
+                    pc.v
+                )
+            });
+            coons(&*bottom, &*top, &left, &*right)
+        })
         .ok_or_else(|| failed("corner", "a patched corner's surface can't be built"))?;
     let deg = nb.add_degenerate(p0, 0.0, 1.0, pts[0]);
     let pcs = vec![
@@ -13816,6 +14535,118 @@ fn corner_face(
         pcurves: pcs,
     });
     Ok(())
+}
+
+/// The derivative of edge e's point a fraction u of the way from its vertex `from` (as
+/// [`along_from`]) with respect to u.
+fn along_deriv_from(nb: &Body, e: usize, from: usize) -> Box<dyn Fn(f64) -> V3> {
+    let ed = nb.edges[e].clone();
+    let fwd = ed.v[0] == from;
+    Box::new(move |u: f64| {
+        let l = ed.t[1] - ed.t[0];
+        if fwd {
+            ed.curve.tangent(ed.t[0] + l * u) * l
+        } else {
+            ed.curve.tangent(ed.t[1] - l * u) * -l
+        }
+    })
+}
+
+/// The surface of a three-sided corner patch that meets each of its strips with the strip's
+/// tangent plane: `curves[i]` (the curve across strip `strips[i]` at vertex v) runs from the
+/// corner `pts[i]` to `pts[i + 1]`. Each side carries a ribbon, its curve C_i(s) and a direction
+/// T_i(s) across it in its strip's tangent plane (from the ball there), turning from the next
+/// side's way out of its start to the next side's way out of its end; the patch blends the three
+/// ribbons C_i + d_i·T_i over the triangle of barycentrics λ by weights in proportion to 1/d_i²
+/// (d_i the barycentric of the corner across from side i), so that on each side it and its first
+/// derivatives are that side's ribbon's (Kato's side blending). As a B-spline through a grid on
+/// the square degenerate at `pts[0]`, as [`coons`].
+fn ribbon_triangle(
+    b: &Body,
+    nb: &Body,
+    p: &Plan,
+    v: usize,
+    strips: &[usize],
+    curves: &[usize],
+    pts: &[usize],
+) -> Option<Surface> {
+    let c: Vec<Box<dyn Fn(f64) -> P3>> =
+        (0..3).map(|i| along_from(nb, curves[i], pts[i])).collect();
+    let dc: Vec<Box<dyn Fn(f64) -> V3>> = (0..3)
+        .map(|i| along_deriv_from(nb, curves[i], pts[i]))
+        .collect();
+    // Each strip's normal along its curve across, from its ball at each point's spine
+    // parameter, at evenly spaced points (between them, turned evenly).
+    const N: usize = 32;
+    let mut normals: Vec<Vec<V3>> = Vec::new();
+    for i in 0..3 {
+        let ef = &p.efs[strips[i]];
+        let (t0, start) = p.ends[strips[i]].iter().flatten().find_map(|e| match e {
+            End::Patch { c, t, balls, .. } if p.patches.get(*c).is_some_and(|x| x.v == v) => {
+                Some((t[0], balls[0]))
+            }
+            _ => None,
+        })?;
+        let mut ns = Vec::with_capacity(N + 1);
+        let mut cur = (t0, start);
+        for k in 0..=N {
+            let x = c[i](k as f64 / N as f64);
+            let t = ef.spine.param_of(&x, cur.0);
+            let bl = ef.ball_from(b, &cur.1, cur.0, t)?;
+            ns.push((x - bl.c).try_normalize(tol::DEGENERATE)?);
+            cur = (t, bl);
+        }
+        normals.push(ns);
+    }
+    let normal = |i: usize, s: f64| -> V3 {
+        let x = s.clamp(0.0, 1.0) * N as f64;
+        let k = (x.floor() as usize).min(N - 1);
+        let f = x - k as f64;
+        (normals[i][k] * (1.0 - f) + normals[i][k + 1] * f).normalize()
+    };
+    // The ways out of each corner along the sides: T_i(0) = −C'_{i−1}(1), T_i(1) = C'_{i+1}(0).
+    let out0: Vec<V3> = (0..3).map(|i| -dc[(i + 2) % 3](1.0)).collect();
+    let out1: Vec<V3> = (0..3).map(|i| dc[(i + 1) % 3](0.0)).collect();
+    let across = |i: usize, s: f64| -> V3 {
+        let t = out0[i] * (1.0 - s) + out1[i] * s;
+        let n = normal(i, s);
+        t - n * t.dot(&n)
+    };
+    let corner: Vec<P3> = pts.iter().map(|&x| nb.verts[x].p).collect();
+    // The ways out must cross their sides (not run along them).
+    for i in 0..3 {
+        for s in [0.0, 0.5, 1.0] {
+            let (d, t) = (dc[i](s), across(i, s));
+            if d.cross(&t).norm() <= 1e-3 * d.norm() * t.norm() {
+                return None;
+            }
+        }
+    }
+    let at = |u: f64, w: f64| -> P3 {
+        let l = [1.0 - u, u * (1.0 - w), u * w];
+        // Side i (P_i to P_{i+1}): d_i = λ_{i+2}, s_i = λ_{i+1} / (λ_i + λ_{i+1}).
+        let d: [f64; 3] = std::array::from_fn(|i| l[(i + 2) % 3]);
+        let zero: Vec<usize> = (0..3).filter(|&i| d[i] <= 0.0).collect();
+        if zero.len() >= 2 {
+            // A corner: the one whose barycentric is 1.
+            let k = (0..3).max_by(|&x, &y| l[x].total_cmp(&l[y])).unwrap_or(0);
+            return corner[k];
+        }
+        let s = |i: usize| l[(i + 1) % 3] / (l[i] + l[(i + 1) % 3]);
+        if let [i] = zero[..] {
+            return c[i](s(i));
+        }
+        let mut sum = V3::zeros();
+        let mut wsum = 0.0;
+        for i in 0..3 {
+            let wi = 1.0 / (d[i] * d[i]);
+            let si = s(i);
+            sum += (c[i](si).coords + across(i, si) * d[i]) * wi;
+            wsum += wi;
+        }
+        P3::from(sum / wsum)
+    };
+    grid_surface(&at, 17)
 }
 
 /// A stretch of a face's boundary replaced by new edges: the path of `(edge, forward)` from
@@ -15277,10 +16108,31 @@ mod tests {
             "area {}",
             m.surface_area
         );
-        // By default the strips there are mitred (the exact rolling-ball corner).
+        // By default too: the rolling ball's corner, the ball swinging round the notch's edge
+        // (no mitre). In closed form, r = 1: the L of 375 loses (1 − π/4)r² along each 5 long
+        // strip, and in the corner's quarter disk the horn torus's depth below the top,
+        // (π/2)∫₀ʳ (r − √(r² − σ²))(r − σ) dσ = (π/2)(5/6 − π/4)r³. Its area of 350 loses
+        // (2 − π/2)r a unit of strip, (1 − π/4)r² on each strip's end face and the top's quarter
+        // disk πr²/4, and gains the torus's quarter, (π/2)·(r − 2r/π)·(πr/2) by Pappus.
         let (out, _) =
             fillet_edges(&b, id, &laws.iter().map(|l| l.0).collect::<Vec<_>>(), 1.0).unwrap();
-        assert_eq!(out.faces.len(), 10);
+        assert_eq!(out.check_with(CheckLevel::Full), Vec::<String>::new());
+        assert_eq!(out.faces.len(), 11);
+        let k = 1.0 - PI / 4.0;
+        let volume = 375.0 - 10.0 * k - PI / 2.0 * (5.0 / 6.0 - PI / 4.0);
+        let area = 350.0 - 10.0 * (2.0 - PI / 2.0) - 2.0 * k - PI / 4.0
+            + PI / 2.0 * (1.0 - 2.0 / PI) * (PI / 2.0);
+        let m = crate::native::mass::body_mass(&out);
+        assert!(
+            (m.volume - volume).abs() < 1e-6 * volume,
+            "volume {} against {volume}",
+            m.volume
+        );
+        assert!(
+            (m.surface_area - area).abs() < 1e-6 * area,
+            "area {} against {area}",
+            m.surface_area
+        );
     }
 
     /// SMLib's rail-rail bridge: a circular arc where the tangents meet as far from both ends,
