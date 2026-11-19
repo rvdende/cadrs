@@ -27,6 +27,7 @@ use nalgebra::{DMatrix, DVector};
 
 use super::curve::Curve;
 use super::math::*;
+use super::surface::Surface;
 use super::tol;
 use super::topo::Body;
 use super::uvdomain::FaceDomain;
@@ -608,6 +609,11 @@ pub fn kernel_distance(
     {
         return Ok(r);
     }
+    if sense == Sense::Min
+        && let Some(r) = analytic_nearest(k, a, b)
+    {
+        return Ok(r);
+    }
     let side = |t: &DistanceTarget| -> crate::Result<Side<'_>> {
         Ok(match *t {
             DistanceTarget::Point(p) => {
@@ -744,6 +750,126 @@ fn held(
         }
     }
     Ok(None)
+}
+
+/// [`kernel_distance`]'s nearest of a point and a body's (or one face's) boundary where every
+/// face involved is a plane, a sphere or a cylinder and every edge a line or a circle: on those
+/// surfaces the point's distance has one minimum, the foot of its perpendicular, so the nearest
+/// point of a face is that foot when it lies inside the face's loops and on its edges otherwise,
+/// all in closed form. None where any of that does not hold, or a foot lies too near its face's
+/// loops to tell (the general measure then).
+fn analytic_nearest(
+    k: &super::NativeKernel,
+    a: &crate::DistanceTarget,
+    b: &crate::DistanceTarget,
+) -> Option<crate::DistanceResult> {
+    use super::classify::{InFace, in_face, periodic_candidates};
+    use crate::{DistanceLocation, DistanceTarget};
+    let (p, target, point_first) = match (*a, *b) {
+        (DistanceTarget::Point(p), t)
+            if !matches!(t, DistanceTarget::Point(_) | DistanceTarget::Edge(..)) =>
+        {
+            (p, t, true)
+        }
+        (t, DistanceTarget::Point(p))
+            if !matches!(t, DistanceTarget::Point(_) | DistanceTarget::Edge(..)) =>
+        {
+            (p, t, false)
+        }
+        _ => return None,
+    };
+    if !p.iter().all(|x| x.is_finite()) {
+        return None;
+    }
+    let (id, only) = match target {
+        DistanceTarget::Face(id, f) => (id, Some(f.0 as usize)),
+        DistanceTarget::Body(id) | DistanceTarget::Solid(id) => (id, None),
+        _ => return None,
+    };
+    let en = k.entry(id).ok()?;
+    let body = &en.body;
+    let faces: Vec<usize> = match only {
+        Some(f) if f < body.faces.len() => vec![f],
+        Some(_) => return None,
+        None => (0..body.faces.len()).collect(),
+    };
+    if faces.is_empty() {
+        return None;
+    }
+    let mut best: Option<(f64, P3, DistanceLocation)> = None;
+    let mut consider = |d: f64, q: P3, at: DistanceLocation| {
+        if best.as_ref().is_none_or(|b| d < b.0) {
+            best = Some((d, q, at));
+        }
+    };
+    let mut edges: Vec<usize> = Vec::new();
+    for &fi in &faces {
+        let f = &body.faces[fi];
+        if !matches!(
+            f.surf,
+            Surface::Plane { .. } | Surface::Sphere { .. } | Surface::Cylinder { .. }
+        ) {
+            return None;
+        }
+        let (u, v) = f.surf.project(&p, None);
+        let polys = &en.polys()[fi];
+        let mut inside = false;
+        for uv in periodic_candidates(&f.surf, u, v, polys) {
+            match in_face(polys, &f.surf, uv, 1e-10) {
+                InFace::Inside => {
+                    inside = true;
+                    let q = f.surf.eval(uv.x, uv.y);
+                    consider(
+                        (q - p).norm(),
+                        q,
+                        DistanceLocation::Face(crate::FaceId(fi as u64), uv.x, uv.y),
+                    );
+                    break;
+                }
+                InFace::Outside => {}
+                _ => return None,
+            }
+        }
+        if !inside {
+            for c in f.loops.iter().flatten() {
+                edges.push(c.edge);
+            }
+        }
+    }
+    edges.sort_unstable();
+    edges.dedup();
+    for e in edges {
+        let ed = &body.edges[e];
+        if !matches!(ed.curve, Curve::Line { .. } | Curve::Circle { .. }) {
+            return None;
+        }
+        let t = ed.curve.closest(&p, ed.t[0], ed.t[1]);
+        let q = ed.point(t);
+        consider(
+            (q - p).norm(),
+            q,
+            DistanceLocation::Edge(crate::EdgeId(e as u64), t),
+        );
+    }
+    let (d, q, at) = best?;
+    let on_point = DistanceLocation::Point;
+    Some(if point_first {
+        crate::DistanceResult {
+            distance: d,
+            a: p,
+            b: q,
+            a_at: on_point,
+            b_at: at,
+        }
+    } else {
+        crate::DistanceResult {
+            distance: d,
+            a: q,
+            b: p,
+            a_at: at,
+            b_at: on_point,
+        }
+    })
 }
 
 /// [`kernel_distance`]'s nearest of a point and a face when the point lies on the face (to a
