@@ -484,6 +484,7 @@ fn corner_text(c: CornerType) -> String {
 }
 
 /// The corner types, with a flip for those where one member runs on.
+#[allow(clippy::too_many_arguments)]
 fn corner_row(
     b: &mut ChildSpawner,
     t: &Theme,
