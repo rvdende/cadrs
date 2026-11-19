@@ -1010,6 +1010,27 @@ fn traced_at(
     })
 }
 
+/// Whether `p` is where an open curve traced before ends, but on the far side of a box from
+/// its end (a surface closed across its box without being periodic, as an extrusion of a closed
+/// spline: the curve left by the seam and runs on from the other side, a piece still to trace).
+fn across_an_end(ctx: &Ctx, p: &Pt, traced: &[(Traced, Bbox)]) -> bool {
+    let near = 1e-6 * ctx.size + 10.0 * ctx.tol;
+    let (da, db) = (&ctx.a.bx, &ctx.bt.bx);
+    let half = [da.du() / 2.0, da.dv() / 2.0, db.du() / 2.0, db.dv() / 2.0];
+    let x = [p.a.0, p.a.1, p.b.0, p.b.1];
+    traced.iter().any(|(c, _)| {
+        !c.closed
+            && [c.pts.first(), c.pts.last()]
+                .into_iter()
+                .flatten()
+                .any(|q| {
+                    let y = [q.a.0, q.a.1, q.b.0, q.b.1];
+                    (q.p - p.p).norm() < near
+                        && (0..4).any(|k| half[k].is_finite() && (x[k] - y[k]).abs() > half[k])
+                })
+    })
+}
+
 /// Distance from p to the segment ab.
 fn seg_dist3(p: &P3, a: &P3, b: &P3) -> f64 {
     let d = b - a;
@@ -1592,7 +1613,7 @@ pub fn intersect_stats(
             continue;
         }
         let t = tangent(&ctx, &sd);
-        if on_traced(&ctx, &sd.p, t.as_ref(), &traced) {
+        if on_traced(&ctx, &sd.p, t.as_ref(), &traced) && !across_an_end(&ctx, &sd, &traced) {
             continue;
         }
         if let Some(c) = march(&ctx, sd, &traced) {
