@@ -217,6 +217,18 @@ struct Cut {
     machine: bool,
 }
 
+/// A tool's motion: the operation's tool from a pose by a screw.
+#[derive(Debug, Clone, Copy)]
+struct Moving {
+    op: usize,
+    start: Pose,
+    screw: Screw,
+}
+
+/// How far two cuts joined as one slide (where one failed) may take the tool from where the
+/// moves have it: a fifth of the shown stock's deflection.
+const JOINED: f64 = 0.002 * 5.0;
+
 impl Cut {
     /// Extended by a move to `pose` at the run's place `at`, the motion `screw` from the last:
     /// when one screw from the cut's start still holds the tool at every knot within
@@ -807,6 +819,9 @@ pub struct ExactStock {
     tags: HashMap<BodyId, Vec<u8>>,
     /// Cuts the kernel could not make (left out), with why.
     pub failed: Vec<(usize, String)>,
+    /// A cut the kernel couldn't make whole, put off to be joined with the next
+    /// ([`Self::joined`]).
+    deferred: Option<usize>,
 }
 
 impl ExactStock {
@@ -868,6 +883,7 @@ impl ExactStock {
             at: (0, 0.0),
             tags: HashMap::new(),
             failed: Vec::new(),
+            deferred: None,
         })
     }
 
@@ -889,14 +905,53 @@ impl ExactStock {
     /// `body` less cut `c` from `f0` to `f1` along it, the faces it makes tagged with its
     /// operation; in halves (down to a 32nd of it) where the kernel can't make it exactly as
     /// one. What it couldn't cut at all is left (and listed in [`ExactStock::failed`]).
-    fn cut(&mut self, body: BodyId, c: usize, f0: f64, f1: f64) -> BodyId {
-        self.cut_in(body, c, f0, f1, 0)
+    /// The cuts `a` and `a + 1` as one slide, from `a`'s start to `a + 1`'s end, where both
+    /// are slides of one tool turned alike and none of their knots is further off it than
+    /// [`JOINED`]: a cut the kernel can't make (the 55 µm last stretch of a ramp, its start and
+    /// end cylinders all but one) done with the one after, which goes on the same way.
+    fn joined(&self, a: usize) -> Option<Moving> {
+        let (c0, c1) = (self.cuts.get(a)?, self.cuts.get(a + 1)?);
+        let (Screw::Slide(_), Screw::Slide(_)) = (c0.screw, c1.screw) else {
+            return None;
+        };
+        let same = |r: &Matrix3<f64>| (r - c0.start.rot).abs().max() < 1e-12;
+        if c0.op != c1.op || !same(&c1.start.rot) || (c0.to() - c1.from()).abs() > 1e-9 {
+            return None;
+        }
+        let end = c1.screw.moved(&c1.start);
+        let span = end.tip - c0.start.tip;
+        let len = span.norm();
+        if len < 1e-12 {
+            return None;
+        }
+        let off = |p: &V3| {
+            let w = p - c0.start.tip;
+            (w - span * (w.dot(&span) / (len * len))).norm()
+        };
+        let knots = c0.poses.iter().chain(&c1.poses).map(|(p, _)| p.tip);
+        (knots.chain([c1.start.tip]).all(|p| off(&p) <= JOINED)
+            && std::env::var_os("CADRS_EXACT_NO_JOIN").is_none())
+        .then_some(Moving {
+            op: c0.op,
+            start: c0.start,
+            screw: Screw::Slide(span),
+        })
+    }
+
+    /// The cut `c` in halves (it failed whole), a half that fails counted.
+    fn halves(&mut self, body: BodyId, c: usize) -> BodyId {
+        let half = self.cut_in(body, c, 0.0, 0.5, 2);
+        let whole = self.cut_in(half, c, 0.5, 1.0, 2);
+        if half != body && half != whole {
+            self.drop_body(half);
+        }
+        whole
     }
 
     fn cut_in(&mut self, body: BodyId, c: usize, f0: f64, f1: f64, depth: u32) -> BodyId {
         match self.cut_once(body, c, f0, f1) {
             Ok(b) => b,
-            Err(e) if depth >= 5 => {
+            Err(e) if depth >= 2 => {
                 self.failed.push((c, e));
                 body
             }
@@ -915,6 +970,24 @@ impl ExactStock {
     /// [`Self::cut`] in one cut by the kernel, or why it can't be.
     fn cut_once(&mut self, body: BodyId, c: usize, f0: f64, f1: f64) -> Result<BodyId, String> {
         let cut = &self.cuts[c];
+        let motion = Moving {
+            op: cut.op,
+            start: cut.start,
+            screw: cut.screw,
+        };
+        self.cut_moving(body, c, motion, f0, f1)
+    }
+
+    /// [`Self::cut_once`] by the tool of the operation `op` from `start` by `screw` (the cut
+    /// `c`'s, or two cuts joined: [`Self::joined`]).
+    fn cut_moving(
+        &mut self,
+        body: BodyId,
+        c: usize,
+        cut: Moving,
+        f0: f64,
+        f1: f64,
+    ) -> Result<BodyId, String> {
         let tool = self.tools[cut.op];
         // The tool where the stretch starts, and its motion from there.
         let at = cut.screw.at(f0);
@@ -1067,6 +1140,14 @@ impl ExactStock {
         healed
     }
 
+    /// The stock kept from now `b`, the one kept before let go.
+    fn keep(&mut self, b: BodyId) {
+        if b != self.kept {
+            self.drop_body(self.kept);
+        }
+        self.kept = b;
+    }
+
     /// Lets go of a stock body no longer wanted (never the uncut stock).
     fn drop_body(&mut self, b: BodyId) {
         if b != self.start {
@@ -1085,19 +1166,45 @@ impl ExactStock {
             }
             self.drop_body(self.kept);
             (self.kept, self.done, self.shown) = (self.start, 0, self.start);
+            self.deferred = None;
         }
         let place = to.0 as f64 + to.1;
         if self.shown != self.kept {
             self.drop_body(self.shown);
         }
-        // The cuts the tool is through.
+        // The cuts the tool is through. (One the kernel can't make whole is tried again joined
+        // with the next, as one slide, once the tool is through that too: [`Self::joined`].)
         while self.done < self.cuts.len() && self.cuts[self.done].to() <= place + 1e-12 {
             let kept = self.kept;
-            let b = self.cut(kept, self.done, 0.0, 1.0);
-            if b != kept {
-                self.drop_body(kept);
+            let c = self.done;
+            // A cut put off (whole, it failed): joined with this one, else in halves and this
+            // one as ever.
+            let mut b = kept;
+            if let Some(p) = self.deferred.take() {
+                if let Some(m) = self.joined(p)
+                    && let Ok(j) = self.cut_moving(kept, c, m, 0.0, 1.0)
+                {
+                    self.keep(j);
+                    self.done += 1;
+                    continue;
+                }
+                b = self.halves(kept, p);
             }
-            self.kept = b;
+            let next = match self.cut_once(b, c, 0.0, 1.0) {
+                Ok(n) => n,
+                // (Whole, put off for the next where it can be joined with it: its halves,
+                // each a sliver of a sweep the whole doesn't meet, the stock cut in pieces
+                // the next cuts fail on.)
+                Err(_) if self.joined(c).is_some() => {
+                    self.deferred = Some(c);
+                    b
+                }
+                Err(_) => self.halves(b, c),
+            };
+            if b != kept && b != next {
+                self.drop_body(b);
+            }
+            self.keep(next);
             self.done += 1;
         }
         self.shown = self.kept;
