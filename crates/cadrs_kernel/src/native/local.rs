@@ -2476,12 +2476,17 @@ pub fn move_faces(
         // The new face's point beside the old one's middle: the replacement lies where the old
         // face was, and meshing a heavy new surface only to find a point on it costs more than
         // the rest of the operation (else its own middle, as the old face's).
+        // (The old middle carried by the motion: the face moved rigidly, so that point is on
+        // its new surface where the old one was on the old, and its normals there compare. The
+        // old middle projected onto the new surface found the far side of a hole moved more
+        // than its radius, whose normal is the other way.)
         let near = {
             let s = &out.faces[fi].surf;
-            let (u, v) = s.project(&was, None);
+            let (u, v) = s.project(&m.point(&was), None);
             let p = s.eval(u, v);
             let size = 1.0 + b.bbox().diagonal();
-            (super::blend::on_face(&out, fi, &p) && (p - was).norm() < 0.25 * size).then_some(p)
+            (super::blend::on_face(&out, fi, &p) && (p - m.point(&was)).norm() < 0.25 * size)
+                .then_some(p)
         };
         let Some(now) = near.or_else(|| middle(&out)) else {
             continue;
@@ -2495,7 +2500,11 @@ pub fn move_faces(
             out.faces[fi].sense = !out.faces[fi].sense;
         }
     }
-    if !out.check_with(super::topo::CheckLevel::Full).is_empty() {
+    let issues = out.check_with(super::topo::CheckLevel::Full);
+    if !issues.is_empty() {
+        if super::env_flag!("CADRS_MOVE_DEBUG") {
+            eprintln!("move faces: {issues:?}");
+        }
         return Err(too_far("a face would run into another face"));
     }
     if super::mass::body_volume(&out) <= 0.0 {
@@ -2691,7 +2700,19 @@ fn param_range(c: &Curve, p0: &P3, p1: &P3, closed: bool, quarter: &P3, dir0: &V
         Curve::Circle { .. } | Curve::Ellipse { .. } => {
             let t0 = conic_closest(c, p0, -PI, PI);
             if closed {
-                // The direction from the old edge's quarter point.
+                // The way the old edge left its start, where that decides it (a hole moved
+                // farther than its radius has its old quarter point nowhere near the new circle,
+                // and the point's projection says nothing of the way round).
+                let tan = c.tangent(t0);
+                let along = tan.dot(dir0) / tan.norm().max(1e-300);
+                if along.abs() > 0.5 {
+                    return if along > 0.0 {
+                        (t0, t0 + TAU)
+                    } else {
+                        (t0, t0 - TAU)
+                    };
+                }
+                // Else the direction from the old edge's quarter point.
                 let tq = conic_closest(c, quarter, t0 - PI, t0 + PI);
                 if tq >= t0 {
                     (t0, t0 + TAU)
