@@ -286,7 +286,7 @@ fn section_loops(b: &Body, o: P3, n: V3) -> Result<(Body, Vec<Vec<(usize, bool)>
         n,
         bb.diagonal() * 2.0 + (bb.center() - o).norm() * 2.0 + 10.0,
     );
-    let sec = match super::boolean::section(b, &sheet) {
+    let mut sec = match super::boolean::section(b, &sheet) {
         Ok(s) => s,
         Err(KernelError::EmptyResult(_)) => return Ok((Body::default(), Vec::new())),
         Err(e) => return Err(e),
@@ -296,10 +296,14 @@ fn section_loops(b: &Body, o: P3, n: V3) -> Result<(Body, Vec<Vec<(usize, bool)>
     for e in (0..sec.edges.len()).filter(|&e| !sec.edges[e].degenerate) {
         let ed = &sec.edges[e];
         let (mid, len) = (ed.point(ed.mid_t()), ed.curve.length(ed.t[0], ed.t[1]));
+        // (Within a hundred-thousandth of its length, at most the point tolerance: the sliver
+        // a plane cuts through a cap 1.5 µm high has its arc and its chord 7e-7 apart at their
+        // middles, two edges of the loop, not one found twice.)
+        let near = tol::POINT.min(1e-5 * len);
         let twin = edges.iter().any(|&x| {
             let o = &sec.edges[x];
-            (o.point(o.mid_t()) - mid).norm() < tol::POINT
-                && (o.curve.length(o.t[0], o.t[1]) - len).abs() < tol::POINT
+            (o.point(o.mid_t()) - mid).norm() < near
+                && (o.curve.length(o.t[0], o.t[1]) - len).abs() < near
         });
         if !twin {
             edges.push(e);
@@ -311,6 +315,8 @@ fn section_loops(b: &Body, o: P3, n: V3) -> Result<(Body, Vec<Vec<(usize, bool)>
     let end = |e: usize, k: usize| sec.verts[sec.edges[e].v[k]].p;
     let mut used = vec![false; sec.edges.len()];
     let mut loops = Vec::new();
+    // Lines closing loops across flat faces, added once the loops are made.
+    let mut chords: Vec<(P3, P3, usize, usize)> = Vec::new();
     for &e0 in &edges {
         if used[e0] {
             continue;
@@ -332,15 +338,51 @@ fn section_loops(b: &Body, o: P3, n: V3) -> Result<(Body, Vec<Vec<(usize, bool)>
                 .filter(|x| x.2 <= gap)
                 .min_by(|x, y| x.2.total_cmp(&y.2));
             let Some((e, fwd, _)) = next else {
-                return Err(KernelError::OpenResult(
-                    "the plane's section doesn't close".into(),
-                ));
+                // Both open ends on one flat face of the body: the plane meets that face in the
+                // straight line between them, which the section lost (a cap 1.5 µm high cut
+                // through its middle: its chord within a micron of its arc, merged with it).
+                let on_plane = |q: &P3| {
+                    (0..b.faces.len())
+                        .filter(|&f| {
+                            matches!(b.faces[f].surf, Surface::Plane { .. })
+                                && b.faces[f].surf.distance(q) <= tol::POINT
+                        })
+                        .collect::<Vec<usize>>()
+                };
+                let (fa, fb) = (on_plane(&at), on_plane(&start));
+                let face = fa.iter().find(|f| fb.contains(f)).copied();
+                let mid = P3::from((at.coords + start.coords) * 0.5);
+                let inside = face.is_some_and(|f| {
+                    super::classify::Classifier::lazy(b).classify(&mid, tol::POINT)
+                        == crate::PointClass::OnBoundary
+                        && b.faces[f].surf.distance(&mid) <= tol::POINT
+                });
+                if !inside {
+                    return Err(KernelError::OpenResult(
+                        "the plane's section doesn't close".into(),
+                    ));
+                }
+                let &(last, fwd) = lp.last().unwrap_or(&(e0, true));
+                let va = sec.edges[last].v[usize::from(fwd)];
+                let vb = sec.edges[e0].v[0];
+                chords.push((at, start, va, vb));
+                lp.push((sec.edges.len() + chords.len() - 1, true));
+                break;
             };
             used[e] = true;
             at = end(e, usize::from(fwd));
             lp.push((e, fwd));
         }
         loops.push(lp);
+    }
+    for (a, z, va, vb) in chords {
+        sec.add_edge(
+            super::curve::Curve::Line { o: a, d: z - a },
+            0.0,
+            1.0,
+            va,
+            vb,
+        );
     }
     Ok((sec, loops))
 }
