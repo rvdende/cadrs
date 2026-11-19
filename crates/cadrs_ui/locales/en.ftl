@@ -6309,6 +6309,7 @@ model-frame-trim = Trim to parts
 model-frame-corner-n = Corner { $n }
 # A checkbox: plates closing the free ends of hollow frame members.
 model-frame-end-caps = End caps
+model-frame-cap-inward = Set into the end
 # A checkbox: triangular plates in the corners where two frame members meet.
 model-frame-gussets = Gussets
 model-frame-gusset-size = Gusset size
@@ -6345,6 +6346,7 @@ model-frame-gusset-top = Top
 model-frame-gusset-bottom = Bottom
 model-frame-gusset-chamfer = Chamfer
 model-frame-trim-flip = Keep the other side
+model-frame-trim-planes = Trim to planes
 cut-list-trimmed = Trimmed
 # { $material } is a section's usual material ("Steel S235"), named when the parts have none of their own.
 cut-list-nominal = { $material } (typical)

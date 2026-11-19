@@ -49,6 +49,8 @@ struct Seg {
     line: bool,
     /// A circular arc's circle.
     arc: Option<Arc3>,
+    /// Any other curve (a spline, an ellipse) as points along it, within 1e-3 mm.
+    points: Vec<P>,
     /// The section's up: the curve's sketch normal, else the world's Z.
     up: V,
     /// Who it is: from the path reference and its place among the reference's curves.
@@ -78,7 +80,11 @@ struct Member {
 impl Member {
     /// The section's right and up at an end (0: start, 1: end), square to the member.
     fn axes(&self, end: usize) -> (V, V) {
-        let t = if end == 0 { self.t0 } else { self.t1 };
+        self.axes_along(if end == 0 { self.t0 } else { self.t1 })
+    }
+
+    /// The section's right and up where the member runs along `t` (turned as it is).
+    fn axes_along(&self, t: V) -> (V, V) {
         let (x, y) = axes(t, self.up);
         if self.turn == 0.0 {
             return (x, y);
@@ -86,6 +92,52 @@ impl Member {
         // Its section turned counter-clockwise (seen back along it) by `turn`.
         let (c, s) = (self.turn.cos(), self.turn.sin());
         (x * c + y * s, y * c - x * s)
+    }
+
+    /// The point `d` into the member from an end, along its curves (its lines and arcs
+    /// exactly, a spline's as along its chord), and the way in there.
+    fn walk(&self, segs: &[Seg], end: usize, d: f64) -> (P, V) {
+        let order: Vec<(usize, bool)> = if end == 0 {
+            self.segs.clone()
+        } else {
+            self.segs.iter().rev().map(|&(i, r)| (i, !r)).collect()
+        };
+        let mut left = d;
+        let mut at = (self.point(end), self.inward(end));
+        for (i, rev) in order {
+            let s = &segs[i];
+            let (p0, t0, p1, t1) = if rev {
+                (s.end, -s.t1, s.start, -s.t0)
+            } else {
+                (s.start, s.t0, s.end, s.t1)
+            };
+            if left >= s.length {
+                left -= s.length;
+                at = (p1, t1);
+                continue;
+            }
+            return match s.arc {
+                Some(c) if !s.line => {
+                    let r0 = p0 - c.center;
+                    let sign = c.normal.cross(&r0).dot(&t0).signum();
+                    let turn = nalgebra::Rotation3::from_axis_angle(
+                        &Unit::new_normalize(c.normal),
+                        sign * left / c.radius,
+                    );
+                    (c.center + turn * r0, turn * t0)
+                }
+                _ if s.line || s.points.len() < 2 => (p0 + t0 * left, t0),
+                _ => {
+                    let pts: Vec<P> = if rev {
+                        s.points.iter().rev().copied().collect()
+                    } else {
+                        s.points.clone()
+                    };
+                    along_points(&pts, left)
+                }
+            };
+        }
+        (at.0 + at.1 * left, at.1)
     }
 
     /// The way into the member from an end.
@@ -107,6 +159,27 @@ impl Member {
         let (t0, t1) = (self.t0, self.t1);
         self.t0 = -t1;
         self.t1 = -t0;
+    }
+}
+
+/// A member as a message names it: by where it runs ("member from (0, 0, 0) to (600, 0, 0)"),
+/// as the dialog lists none by number.
+fn member_name(m: &Member) -> String {
+    let p = |p: P| {
+        let n = |v: f64| {
+            let v = (v * 10.0).round() / 10.0;
+            if v == 0.0 {
+                "0".to_string()
+            } else {
+                format!("{v}")
+            }
+        };
+        format!("({}, {}, {})", n(p.x), n(p.y), n(p.z))
+    };
+    if m.closed {
+        format!("closed member through {}", p(m.start))
+    } else {
+        format!("member from {} to {}", p(m.start), p(m.end))
     }
 }
 
@@ -141,6 +214,8 @@ fn reach(regions: &[Region], (x, y): (V, V), d: &V) -> f64 {
 struct EndPlan {
     /// How far it runs on past its curve's end.
     run_on: f64,
+    /// How far it stops short of its curve's end (a negative end offset), along the curve.
+    short: f64,
     /// Planes it is cut by: a point and the normal of the side kept.
     planes: Vec<(P, V)>,
     /// Members whose outline cuts it (copes), and a point and the way into the member (to keep
@@ -280,6 +355,7 @@ impl Rebuilder {
         let Corners {
             mut plans,
             used_override,
+            override_ends,
             free_ends,
             gusset_at,
             notes: corner_notes,
@@ -296,18 +372,32 @@ impl Rebuilder {
 
         let mut notes = corner_notes;
         // Free ends run on or stop short by the end offset.
-        let off = x.end_offset;
+        // (A cap set into the end stops the member short by its thickness.)
+        let capped = x.end_caps && section.iter().any(|r| !r.holes.is_empty());
+        let off = x.end_offset
+            - if capped && x.cap_inward {
+                x.cap_thickness
+            } else {
+                0.0
+            };
         if off.abs() > 1e-9 {
             for &(m, e) in &free_ends {
                 let mem = &members[m];
+                let ends = free_ends.iter().filter(|f| f.0 == m).count() as f64;
+                if off < 0.0 && -off * ends >= mem.length - tol {
+                    return Err(format!(
+                        "The end offset leaves nothing of the {}",
+                        member_name(mem)
+                    ));
+                }
                 let plan = &mut plans[m][e];
                 if off > 0.0 {
                     plan.run_on = plan.run_on.max(off);
                 } else {
-                    let out = -mem.inward(e);
-                    plan.planes.push((mem.point(e) + out * off, -out));
-                    // (Bounded cuts on bent members reach this far.)
-                    plan.run_on = plan.run_on.max(-off);
+                    // Along the member's curves: a bent end's cut square to it where it stops.
+                    let (at, inward) = mem.walk(&segs, e, -off);
+                    plan.planes.push((at, inward));
+                    plan.short = -off;
                 }
             }
         }
@@ -324,7 +414,7 @@ impl Rebuilder {
                 Ok(b) => bodies.push(b),
                 Err(e) => {
                     release(self, &bodies);
-                    return Err(format!("Member {} failed: {e}", i + 1));
+                    return Err(format!("The {} failed: {e}", member_name(&members[i])));
                 }
             }
         }
@@ -339,7 +429,7 @@ impl Rebuilder {
                             let base = base_of(m.key) + 0x00e0_0000;
                             let t = self
                                 .frame_cut_member(state, op, m, &segs, &envelope, &plans[by], base)
-                                .map_err(|e| format!("Member {} failed: {e}", by + 1))?;
+                                .map_err(|e| format!("The {} failed: {e}", member_name(m)))?;
                             slot.insert(t);
                         }
                         let tool = &tools[&by];
@@ -350,7 +440,10 @@ impl Rebuilder {
                             Ok(c) => bodies[i] = c,
                             Err(e) => {
                                 bodies[i].0 = BodyId(u64::MAX);
-                                return Err(format!("Member {} failed: {e}", i + 1));
+                                return Err(format!(
+                                    "The {} failed: {e}",
+                                    member_name(&members[i])
+                                ));
                             }
                         }
                     }
@@ -404,8 +497,8 @@ impl Rebuilder {
                     Ok((mut t, split)) => {
                         if split {
                             notes.push(format!(
-                                "A trim split member {} in two: its larger part was kept",
-                                i + 1
+                                "A trim split the {} in two: its larger part was kept",
+                                member_name(&members[i])
                             ));
                         }
                         // An end it now falls short of was trimmed.
@@ -443,7 +536,10 @@ impl Rebuilder {
                                         .map(|(_, b)| b.clone())
                                         .collect();
                                     release(self, &rest);
-                                    return Err(format!("Member {} failed: {err}", i + 1));
+                                    return Err(format!(
+                                        "The {} failed: {err}",
+                                        member_name(&members[i])
+                                    ));
                                 }
                             }
                         }
@@ -457,7 +553,52 @@ impl Rebuilder {
                             .map(|(_, b)| b.clone())
                             .collect();
                         release(self, &rest);
-                        return Err(format!("Member {} failed: {e}", i + 1));
+                        return Err(format!("The {} failed: {e}", member_name(&members[i])));
+                    }
+                }
+            }
+        }
+
+        // Trims at planes: each member crossing one split there, its largest piece kept (or
+        // the rest, flipped).
+        let planes: Vec<(P, V)> = x
+            .trim_planes
+            .iter()
+            .filter_map(|p| super::advanced::plane_of(state, p))
+            .map(|f| (P::from(f.origin), V::from(f.normal()).normalize()))
+            .collect();
+        if planes.len() < x.trim_planes.len() {
+            notes.push("A trim plane no longer exists".into());
+        }
+        for (k, &(o, n)) in planes.iter().enumerate() {
+            for i in 0..bodies.len() {
+                let m = &members[i];
+                let was = [0, 1].map(|e| (m.point(e) - o).dot(&n));
+                let b = (bodies[i].0, bodies[i].1.clone());
+                let source = base_of(m.key) + 0xc0 + k as u64;
+                match self.frame_trim_plane(op, b, (o, n), source, x.trim_flip) {
+                    Ok((t, cut)) => {
+                        bodies[i] = t;
+                        if cut.split {
+                            notes.push(format!(
+                                "A trim split the {} in two: its larger part was kept",
+                                member_name(m)
+                            ));
+                        }
+                        // The ends on the side cut off were trimmed.
+                        for e in 0..2 {
+                            trimmed[i][e] |= cut.happened && was[e] * cut.kept_side < 0.0;
+                        }
+                    }
+                    Err(e) => {
+                        let rest: Vec<(BodyId, BodyNames)> = bodies
+                            .iter()
+                            .enumerate()
+                            .filter(|(j, _)| *j != i)
+                            .map(|(_, b)| b.clone())
+                            .collect();
+                        release(self, &rest);
+                        return Err(format!("The {} failed: {e}", member_name(m)));
                     }
                 }
             }
@@ -466,7 +607,7 @@ impl Rebuilder {
         // End caps and gussets, parts of their own after the members.
         let mut plates: Vec<((BodyId, BodyNames), String, u64, frame::PlateKind)> = Vec::new();
         let mut plate_made = (|| -> Result<(), String> {
-            if x.end_caps && section.iter().any(|r| !r.holes.is_empty()) {
+            if capped {
                 let label = frame::cap_label(x.cap_thickness, &profile_label);
                 let kind = frame::PlateKind::Cap {
                     thickness: x.cap_thickness,
@@ -478,11 +619,11 @@ impl Rebuilder {
                     let b = self.frame_cap_at(
                         state,
                         op,
-                        mb,
+                        (mb, &segs),
                         end,
                         &section,
                         x.cap_thickness,
-                        x.end_offset,
+                        off,
                         base_of(key),
                     )?;
                     plates.push((b, label.clone(), key, kind));
@@ -494,19 +635,16 @@ impl Rebuilder {
                     thickness: x.gusset_thickness,
                 };
                 let label = frame::gusset_label(x.gusset_size, x.gusset_thickness);
-                for &(v, e0, e1) in &gusset_at {
-                    let (k0, k1) = (members[e0.0].key, members[e1.0].key);
-                    // (Two members can meet at both their ends.)
-                    let key = naming::stable_hash(
-                        format!("gusset/{k0}/{}/{k1}/{}", e0.1, e1.1).as_bytes(),
-                    );
+                for g in &gusset_at {
+                    // (Two members can meet at both their ends: the ends are in the key.)
+                    let key = naming::stable_hash(g.key.as_bytes());
                     let made = self.frame_gusset(
                         state,
                         op,
                         &section,
-                        v,
-                        (&members[e0.0], e0.1),
-                        (&members[e1.0], e1.1),
+                        g.at,
+                        g.legs,
+                        g.up,
                         (x.gusset_size, x.gusset_thickness, x.gusset_chamfer),
                         x.gusset_position,
                         base_of(key),
@@ -543,8 +681,8 @@ impl Rebuilder {
             let length = if m.straight {
                 self.long_point(body, m).unwrap_or(m.length)
             } else {
-                let runs = [plans[i][0].run_on, plans[i][1].run_on];
-                self.bent_length(body, m, r_section, runs)
+                let ends = [0, 1].map(|e| (plans[i][e].run_on, plans[i][e].short));
+                self.bent_length(body, m, r_section, ends)
                     .unwrap_or(m.length)
             };
             infos.push(MemberInfo {
@@ -622,6 +760,13 @@ impl Rebuilder {
         all.retain(|m| m.feature != id);
         all.extend(infos);
         next.frames = Arc::new(all);
+        let mut corners = (*next.frame_corners).clone();
+        corners.retain(|c| c.feature != id);
+        corners.push(frame::OverrideCorners {
+            feature: id,
+            ends: override_ends,
+        });
+        next.frame_corners = Arc::new(corners);
         let geoms = state.geoms.clone();
         let mut out = self.finish(id, placed, next, op, geoms, PartKind::Solid)?;
         let mut warnings = Vec::new();
@@ -666,10 +811,42 @@ impl Rebuilder {
             .create_wire(std::slice::from_ref(&c))
             .map_err(|e| format!("A frame curve can't be read: {e}"))?;
         let b = wire.bodies[0];
-        let edges = self.kernel.edges(b);
+        let edges = match self.kernel.edges(b) {
+            Ok(e) => e,
+            Err(e) => {
+                self.kernel.release(b);
+                return Err(e.to_string());
+            }
+        };
+        let Some(e) = edges.first() else {
+            self.kernel.release(b);
+            return Err("A frame curve has no length".into());
+        };
+        let points = if e.curve == CurveKind::Line || e.circle.is_some() {
+            Vec::new()
+        } else {
+            let mesh = self.kernel.tessellate(
+                b,
+                Tessellation {
+                    deflection: 1e-3,
+                    angle: 2f64.to_radians(),
+                },
+            );
+            let mut pts: Vec<P> = mesh
+                .ok()
+                .and_then(|m| m.edges.into_iter().next())
+                .map(|(_, p)| p)
+                .unwrap_or_default();
+            // The way the curve runs.
+            if pts
+                .first()
+                .is_some_and(|p| (p - e.end).norm() < (p - e.start).norm())
+            {
+                pts.reverse();
+            }
+            pts
+        };
         self.kernel.release(b);
-        let edges = edges.map_err(|e| e.to_string())?;
-        let e = edges.first().ok_or("A frame curve has no length")?;
         let (t0, t1) = (e.start_tangent.normalize(), e.end_tangent.normalize());
         let arc = e.circle.map(|c| {
             // Turning counter-clockwise about the normal the way the curve runs.
@@ -691,6 +868,7 @@ impl Rebuilder {
             length: e.length,
             line: e.curve == CurveKind::Line,
             arc,
+            points,
             up,
             key,
             who: String::new(),
@@ -716,7 +894,8 @@ impl Rebuilder {
                 cut_source += 1;
                 // A bent member's cut only near its end (a whole plane could cross it
                 // elsewhere too): within its run-on and its section's size.
-                let bound = (!m.straight).then(|| p.run_on + 4.0 * frame::radius(section));
+                let bound =
+                    (!m.straight).then(|| p.run_on + p.short + 4.0 * frame::radius(section));
                 b = self.frame_cut(op, b, o, n, cut_source, bound)?;
             }
         }
@@ -796,13 +975,14 @@ impl Rebuilder {
     }
 
     /// A bent member's stock length: its path, and at each end what of its body reaches past
-    /// the path's end along the member (a mitre's long point, a run-on).
+    /// the path's end along the member (a mitre's long point, a run-on), or less what it stops
+    /// short (square to its curve there).
     fn bent_length(
         &self,
         body: BodyId,
         m: &Member,
         r_section: f64,
-        run_on: [f64; 2],
+        ends: [(f64, f64); 2],
     ) -> Option<f64> {
         // A ring has no ends: its path.
         if m.closed {
@@ -819,15 +999,23 @@ impl Rebuilder {
             )
             .ok()?;
         let mut length = m.length;
-        for (end, run) in run_on.iter().enumerate() {
+        for (end, &(run, short)) in ends.iter().enumerate() {
+            if short > 0.0 {
+                length -= short;
+                continue;
+            }
             let (p, out) = (m.point(end), -m.inward(end));
             // The body's points near this end (within its section's size and its run-on: a
-            // sharp mitre's long point is far out).
+            // sharp mitre's long point is far out), and within the section's reach of the line
+            // it runs out along (not the other leg of a tight hairpin).
             let window = (4.0 * r_section).max(run + 2.0 * r_section);
             let near = mesh
                 .positions
                 .iter()
-                .filter(|q| (*q - p).norm() < window)
+                .filter(|q| {
+                    let d = *q - p;
+                    d.norm() < window && (d - out * d.dot(&out)).norm() <= r_section * 1.001
+                })
                 .map(|q| (q - p).dot(&out))
                 .fold(f64::NEG_INFINITY, f64::max);
             if near.is_finite() {
@@ -844,15 +1032,21 @@ impl Rebuilder {
         &mut self,
         state: &State,
         op: cadrs_kernel::OpId,
-        m: &Member,
+        (m, segs): (&Member, &[Seg]),
         end: usize,
         section: &[Region],
         thickness: f64,
         offset: f64,
         base: u64,
     ) -> Result<(BodyId, BodyNames), String> {
-        let out = -m.inward(end);
-        let (x, _) = m.axes(end);
+        // Stopped short: where the member stops along its curves.
+        let (at, inward) = if offset < 0.0 {
+            m.walk(segs, end, -offset)
+        } else {
+            (m.point(end) - m.inward(end) * offset, m.inward(end))
+        };
+        let out = -inward;
+        let (x, _) = m.axes_along(if end == 0 { inward } else { out });
         // Seen from outside the start, right is the member's left: x flipped, the section
         // mirrored to match.
         let x = if end == 0 { -x } else { x };
@@ -870,7 +1064,7 @@ impl Rebuilder {
             solid
         };
         let plane = Plane {
-            origin: m.point(end) - m.inward(end) * offset,
+            origin: at,
             x_dir: Unit::new_normalize(x),
             normal: Unit::new_normalize(out),
         };
@@ -884,9 +1078,11 @@ impl Rebuilder {
         self.name_new(state, op, &made).map_err(|e| e.to_string())
     }
 
-    /// A gusset in the angle between the ends `a` and `b` of two members meeting at `v`: a
-    /// triangle from where their inner sides meet, its legs `size` along them, `thickness`
-    /// thick about the middle of the section across the corner's plane.
+    /// A gusset in the angle between two legs from `v` (a member end, or one way along a member
+    /// running through): a triangle from where their inner sides meet, its legs `size` along
+    /// them (its inner corner cut back `chamfer`), `thickness` thick across the corner's plane
+    /// in the middle of the section or flush with its top or bottom (`position`; up leaning by
+    /// `up`).
     #[allow(clippy::too_many_arguments)]
     fn frame_gusset(
         &mut self,
@@ -894,17 +1090,16 @@ impl Rebuilder {
         op: cadrs_kernel::OpId,
         section: &[Region],
         v: P,
-        (am, ae): (&Member, usize),
-        (bm, be): (&Member, usize),
+        ((a, a_axes), (b, b_axes)): (Leg, Leg),
+        up: V,
         (size, thickness, chamfer): (f64, f64, f64),
         position: frame::GussetPosition,
         base: u64,
     ) -> Result<(BodyId, BodyNames), String> {
-        let (a, b) = (am.inward(ae), bm.inward(be));
         // Across the corner's plane, the way the section's up is (for Top and Bottom).
         let n = a.cross(&b).normalize();
         // (Where the corner's plane holds the up: upwards, else along +Y, else +X.)
-        let lean = [n.dot(&am.up), n.z, n.y, n.x]
+        let lean = [n.dot(&up), n.z, n.y, n.x]
             .into_iter()
             .find(|c| c.abs() > 1e-6)
             .unwrap_or(1.0);
@@ -912,8 +1107,8 @@ impl Rebuilder {
         // Each member's inner side: across it towards the other, as far as the section reaches.
         let na = (b - a * a.dot(&b)).normalize();
         let nb = (a - b * b.dot(&a)).normalize();
-        let ha = reach(section, am.axes(ae), &na);
-        let hb = reach(section, bm.axes(be), &nb);
+        let ha = reach(section, a_axes, &na);
+        let hb = reach(section, b_axes, &nb);
         // Where the inner sides meet: v + s a + ha na = v + r b + hb nb, in the corner's plane
         // (u along a, w across it towards b).
         let (u, w) = (a, n.cross(&a));
@@ -927,10 +1122,7 @@ impl Rebuilder {
         let s = r * bu + c[0];
         // Across the corner's plane: in the middle of the section, or flush with its top or
         // bottom.
-        let (top, bottom) = (
-            reach(section, am.axes(ae), &n),
-            -reach(section, am.axes(ae), &-n),
-        );
+        let (top, bottom) = (reach(section, a_axes, &n), -reach(section, a_axes, &-n));
         let low = match position {
             frame::GussetPosition::Center => (top + bottom) / 2.0 - thickness / 2.0,
             frame::GussetPosition::Top => top - thickness,
@@ -1249,6 +1441,109 @@ impl Rebuilder {
         (lo.is_finite() && (hi - lo < 1e-2 * r_section || at_face * 2 >= hits.len())).then_some(lo)
     }
 
+    /// A member trimmed at a plane: split there, the largest piece kept (`other_side`: the
+    /// rest). A member the plane misses is kept whole.
+    fn frame_trim_plane(
+        &mut self,
+        op: cadrs_kernel::OpId,
+        (body, names): (BodyId, BodyNames),
+        (o, n): (P, V),
+        source: u64,
+        other_side: bool,
+    ) -> Result<((BodyId, BodyNames), PlaneTrim), String> {
+        let missed = PlaneTrim {
+            happened: false,
+            split: false,
+            kept_side: 0.0,
+        };
+        let Ok(bb) = self.kernel.bounding_box(body) else {
+            return Ok(((body, names), missed));
+        };
+        if bb.max_along(o, &n) <= 1e-9 || bb.max_along(o, &-n) <= 1e-9 {
+            return Ok(((body, names), missed));
+        }
+        let plane = Plane {
+            origin: o,
+            x_dir: Unit::new_normalize(square_to(&n)),
+            normal: Unit::new_normalize(n),
+        };
+        let r = match self.kernel.split(body, &SplitTool::Plane(plane), source) {
+            Ok(r) if !r.bodies.is_empty() => r,
+            // Its box crosses the plane, it doesn't.
+            Ok(_) => return Ok(((body, names), missed)),
+            Err(e) => {
+                self.kernel.release(body);
+                return Err(format!("a trim failed: {e}"));
+            }
+        };
+        let cut = r.bodies[0];
+        let cut_names = naming::name_body(&self.kernel, cut, op, &r.history, &[(body, &names)])
+            .map_err(|e| e.to_string());
+        let cut_names = match cut_names {
+            Ok(c) => c,
+            Err(e) => {
+                self.kernel.release(cut);
+                self.kernel.release(body);
+                return Err(e);
+            }
+        };
+        let pieces = match self.split(cut, op, &[(cut, &cut_names)]) {
+            Ok(p) => p,
+            Err(e) => {
+                self.kernel.release(cut);
+                self.kernel.release(body);
+                return Err(e);
+            }
+        };
+        self.kernel.release(cut);
+        let side = |k: &Self, b: BodyId| {
+            k.kernel
+                .mass_properties(b)
+                .map(|m| ((m.center_of_mass - o).dot(&n), m.volume))
+                .unwrap_or((0.0, 0.0))
+        };
+        let measured: Vec<(f64, f64)> = pieces.iter().map(|p| side(self, p.body)).collect();
+        // Through the plane only at a touch: kept whole.
+        let crossing = measured.iter().any(|m| m.0 > 0.0) && measured.iter().any(|m| m.0 < 0.0);
+        if !crossing {
+            for p in pieces {
+                self.kernel.release(p.body);
+            }
+            return Ok(((body, names), missed));
+        }
+        self.kernel.release(body);
+        let largest = measured.iter().map(|m| m.1).fold(f64::MIN, f64::max);
+        let big = measured
+            .iter()
+            .find(|m| m.1 >= largest * (1.0 - 1e-9))
+            .map_or(1.0, |m| m.0.signum());
+        let several = measured.iter().filter(|m| m.1 > largest * 1e-3).count() > 2
+            || measured
+                .iter()
+                .filter(|m| m.1 > largest * 1e-3 && m.0 * big > 0.0)
+                .count()
+                > 1;
+        let kept_side = if other_side { -big } else { big };
+        let kept = self
+            .keep_pieces(op, pieces, |k, b| {
+                let (s, v) = side(k, b);
+                if other_side {
+                    !(s * big > 0.0 && v >= largest * (1.0 - 1e-9))
+                } else {
+                    s * big > 0.0 && v >= largest * (1.0 - 1e-9)
+                }
+            })?
+            .ok_or_else(|| "a trim leaves nothing of it".to_string())?;
+        Ok((
+            kept,
+            PlaneTrim {
+                happened: true,
+                split: several,
+                kept_side,
+            },
+        ))
+    }
+
     /// A member trimmed by a part: the part subtracted, the largest piece kept (`other_side`: the
     /// rest).
     fn frame_trim(
@@ -1316,13 +1611,34 @@ impl Rebuilder {
     }
 }
 
+/// What a trim at a plane did: whether it cut the member, cut it into more than two pieces
+/// (several kept or dropped), and the side kept (+1 the plane's normal's, -1 the other).
+struct PlaneTrim {
+    happened: bool,
+    split: bool,
+    kept_side: f64,
+}
+
+/// One leg of a gusset: the way it runs from the corner and the section's axes there.
+type Leg = (V, (V, V));
+
+/// A gusset to make: where, its two legs, the up it leans by, and who it is (for its id).
+struct Gusset {
+    at: P,
+    legs: (Leg, Leg),
+    up: V,
+    key: String,
+}
+
 /// The corners' plans: each member end's run-on, cut planes and copes, which overrides were
 /// used, the free ends (for end caps) and the two-member corners to put gussets in.
 struct Corners {
     plans: Vec<[EndPlan; 2]>,
     used_override: Vec<bool>,
+    /// How many member ends meet at each override (a member running through counts two).
+    override_ends: Vec<u8>,
     free_ends: Vec<End>,
-    gusset_at: Vec<(P, End, End)>,
+    gusset_at: Vec<Gusset>,
     /// What didn't go as asked (a mitre made a butt).
     notes: Vec<String>,
 }
@@ -1347,6 +1663,7 @@ fn plan_corners(
     let mut out = Corners {
         plans: vec![Default::default(); members.len()],
         used_override: vec![false; x.overrides.len()],
+        override_ends: vec![0; x.overrides.len()],
         free_ends: Vec::new(),
         gusset_at: Vec::new(),
         notes: Vec::new(),
@@ -1354,7 +1671,8 @@ fn plan_corners(
     let plans = &mut out.plans;
     // The direction ties between members as long go by.
     let reference = members.first().map_or(V::x(), |m| m.t0);
-    let symmetric = mirror_symmetric(section);
+    let outline = frame::outline(section);
+    let size = frame::radius(section);
     for (v, ends) in &corners_of(members, tol) {
         let ov = resolved
             .iter()
@@ -1369,35 +1687,79 @@ fn plan_corners(
         // more is an override's turn.)
         let turn = o.map_or(0, |o| usize::from(o.turn));
         let gusset = o.and_then(|o| o.gusset).unwrap_or(x.gussets);
-        // A member running through the point (a line's or an arc's span): the ends here are
-        // cut against it.
-        let passing = members
+        // Members running through the point (anywhere along them but their ends): the ends
+        // here are cut against each.
+        let crossing: Vec<(usize, V, (V, V))> = members
             .iter()
             .enumerate()
-            .find_map(|(i, m)| passes(segs, m, v, tol * 10.0).map(|(a, axes)| (i, a, axes)));
-        match (&passing, ends.as_slice()) {
-            (None, [e]) => out.free_ends.push(*e),
-            (None, [e0, e1]) if gusset => {
-                let (a, b) = (members[e0.0].inward(e0.1), members[e1.0].inward(e1.1));
-                if a.dot(&b).abs() < TANGENT.cos() {
-                    out.gusset_at.push((*v, *e0, *e1));
+            .filter_map(|(i, m)| passes(segs, m, v, tol * 10.0).map(|(a, axes)| (i, a, axes)))
+            .collect();
+        let passing = crossing.first().copied();
+        if let Some(i) = ov {
+            let n = ends.len() + 2 * crossing.len();
+            out.override_ends[i] = n.min(u8::MAX.into()) as u8;
+        }
+        let leg = |e: &End| (members[e.0].inward(e.1), members[e.0].axes(e.1));
+        // A gusset between two ends (not in line).
+        let pair = |p: &End, q: &End| {
+            let (a, b) = (leg(p), leg(q));
+            (a.0.dot(&b.0).abs() < TANGENT.cos()).then(|| Gusset {
+                at: *v,
+                legs: (a, b),
+                up: members[p.0].up,
+                key: format!(
+                    "gusset/{}/{}/{}/{}",
+                    members[p.0].key, p.1, members[q.0].key, q.1
+                ),
+            })
+        };
+        // Gussets on both sides of an end butting into a run through the point.
+        let tee = |e: End, (run, way, axes): (u64, V, (V, V))| {
+            [1.0, -1.0].into_iter().filter_map(move |side| {
+                let a = leg(&e);
+                let b = (way * side, axes);
+                (a.0.dot(&b.0).abs() < TANGENT.cos()).then(|| Gusset {
+                    at: *v,
+                    legs: (a, b),
+                    up: members[e.0].up,
+                    key: format!(
+                        "gusset/tee/{}/{}/{run}/{}",
+                        members[e.0].key,
+                        e.1,
+                        side < 0.0
+                    ),
+                })
+            })
+        };
+        if gusset {
+            match (&passing, ends.as_slice()) {
+                (None, [e0, e1]) => out.gusset_at.extend(pair(e0, e1)),
+                (Some((i, a, axes)), ends) => {
+                    for e in ends {
+                        out.gusset_at.extend(tee(*e, (members[*i].key, *a, *axes)));
+                    }
                 }
+                _ => {}
             }
-            _ => {}
+        }
+        if let (None, [e]) = (&passing, ends.as_slice()) {
+            out.free_ends.push(*e);
         }
         if kind == CornerType::None {
             continue;
         }
         let coped = kind == CornerType::CopedButt;
-        if let Some((i, a, axes)) = passing {
-            let through = Through {
-                members: vec![i],
-                a,
-                axes,
-                runs_on: None,
-            };
-            for &e in ends {
-                plan_butt(section, &through, members, e, *v, coped, margin, plans);
+        if !crossing.is_empty() {
+            for &(i, a, axes) in &crossing {
+                let through = Through {
+                    members: vec![i],
+                    a,
+                    axes,
+                    runs_on: None,
+                };
+                for &e in ends {
+                    plan_butt(section, &through, members, e, *v, coped, margin, plans);
+                }
             }
             split_neighbours(section, members, ends, *v, margin, plans);
             continue;
@@ -1409,7 +1771,7 @@ fn plan_corners(
                     (*e0, *e1),
                     kind,
                     flip,
-                    (section, members, reference, tol, margin, symmetric),
+                    (section, members, reference, tol, margin, (&outline, size)),
                     *v,
                     plans,
                 )? {
@@ -1452,17 +1814,26 @@ fn plan_corners(
                             (p, q),
                             kind,
                             flip,
-                            (section, members, reference, tol, margin, symmetric),
+                            (section, members, reference, tol, margin, (&outline, size)),
                             *v,
                             plans,
                         )?;
                         if butted {
                             out.notes.push(MITRE_TO_BUTT.into());
                         }
+                        if gusset {
+                            out.gusset_at.extend(pair(&p, &q));
+                        }
                         vec![p, q]
                     }
                 };
                 let others: Vec<End> = ends.iter().copied().filter(|e| !main.contains(e)).collect();
+                if let (true, Some((p, _))) = (gusset, inline) {
+                    let (way, axes) = leg(&p);
+                    for e in &others {
+                        out.gusset_at.extend(tee(*e, (members[p.0].key, way, axes)));
+                    }
+                }
                 for &m in &main {
                     let mm = &members[m.0];
                     // (In line, either half's way and axes serve.)
@@ -1497,13 +1868,13 @@ fn join_two(
     (e0, e1): (End, End),
     kind: CornerType,
     flip: bool,
-    (section, members, reference, tol, margin, symmetric): (
+    (section, members, reference, tol, margin, (outline, size)): (
         &[Region],
         &[Member],
         V,
         f64,
         f64,
-        bool,
+        (&[Vec<[f64; 2]>], f64),
     ),
     v: P,
     plans: &mut [[EndPlan; 2]],
@@ -1515,13 +1886,19 @@ fn join_two(
     if a.dot(&b) > TANGENT.cos() {
         return Err("Two members fold back on each other at a corner".into());
     }
-    // A mitre's halves are each other's mirror image across it: members not head to tail
-    // there (both starting, both ending) see an unsymmetric section mirrored, so their faces
-    // wouldn't meet: butted instead.
+    // A mitre's halves are each other's mirror image across it: where they aren't (an
+    // unsymmetric section on members both starting or both ending there, members turned
+    // differently), their faces wouldn't meet: butted instead.
     let mut kind = kind;
     let mut butted = false;
-    let turned_apart = (members[e0.0].turn - members[e1.0].turn).abs() > 1e-9;
-    if kind == CornerType::Miter && ((e0.1 == e1.1 && !symmetric) || turned_apart) {
+    if kind == CornerType::Miter
+        && !mitre_meets(
+            outline,
+            (&members[e0.0], e0.1),
+            (&members[e1.0], e1.1),
+            size,
+        )
+    {
         kind = CornerType::Butt;
         butted = true;
     }
@@ -1683,7 +2060,7 @@ fn passes(segs: &[Seg], m: &Member, v: &P, tol: f64) -> Option<(V, (V, V))> {
         let along = (v - m.start).dot(&m.t0);
         let off = (v - m.start) - m.t0 * along;
         return (off.norm() < tol && along > tol && along < m.length - tol)
-            .then(|| (m.t0, axes(m.t0, m.up)));
+            .then(|| (m.t0, m.axes_along(m.t0)));
     }
     for &(i, rev) in &m.segs {
         let s = &segs[i];
@@ -1709,14 +2086,44 @@ fn passes(segs: &[Seg], m: &Member, v: &P, tol: f64) -> Option<(V, (V, V))> {
             let within = closed || here < end + slack || here > std::f64::consts::TAU - slack;
             (in_plane && on && within).then(|| c.normal.cross(&r).normalize())
         } else {
-            None
+            // A spline's or an ellipse's: the piece of its points it lies on.
+            s.points.windows(2).find_map(|w| {
+                let d = w[1] - w[0];
+                let l = d.norm();
+                if l < 1e-12 {
+                    return None;
+                }
+                let d = d / l;
+                let along = (v - w[0]).dot(&d);
+                let off = (v - w[0]) - d * along;
+                (off.norm() < tol && along > -tol && along < l + tol).then_some(d)
+            })
         };
         if let Some(t) = t {
             let t = if rev { -t } else { t };
-            return Some((t, axes(t, m.up)));
+            return Some((t, m.axes_along(t)));
         }
     }
     None
+}
+
+/// The point `d` along a polyline from its first point, and the way it runs there (past its
+/// end: on along its last piece).
+fn along_points(pts: &[P], d: f64) -> (P, V) {
+    let mut left = d;
+    let mut way = (pts[1] - pts[0]).normalize();
+    for w in pts.windows(2) {
+        let l = (w[1] - w[0]).norm();
+        if l < 1e-12 {
+            continue;
+        }
+        way = (w[1] - w[0]) / l;
+        if left <= l {
+            return (w[0] + way * left, way);
+        }
+        left -= l;
+    }
+    (pts[pts.len() - 1] + way * left, way)
 }
 
 /// Points along a member the way it runs: its lines' ends and its arcs' every eighth.
@@ -1936,14 +2343,26 @@ fn set_source(mut c: cadrs_kernel::Curve2, s: u64) -> cadrs_kernel::Curve2 {
 const MITRE_TO_BUTT: &str = "A mitre whose halves wouldn't meet was butted (members turned \
      differently, or an unsymmetric section on members that can't run head to tail)";
 
-/// A section the same mirrored left for right (about its path).
-fn mirror_symmetric(section: &[Region]) -> bool {
-    let size = frame::radius(section);
-    (0..16).all(|i| {
-        let a = std::f64::consts::TAU * i as f64 / 16.0;
-        let (c, s) = (a.cos(), a.sin());
-        (frame::support(section, [c, s]) - frame::support(section, [-c, s])).abs() < 1e-6 * size
-    })
+/// Whether two member ends mitred meet face to face: each one's section, mirrored across the
+/// mitre plane, lies on the other's (`outline` the section's, `size` its reach).
+fn mitre_meets(
+    outline: &[Vec<[f64; 2]>],
+    p: (&Member, usize),
+    q: (&Member, usize),
+    size: f64,
+) -> bool {
+    let n = (p.0.inward(p.1) - q.0.inward(q.1)).normalize();
+    // Arcs' chords stray from them by about 1.2e-3 of their radius.
+    let tol = 2e-3 * size + 1e-9;
+    let onto = |(from, to): ((&Member, usize), (&Member, usize))| {
+        let ((fx, fy), (tx, ty)) = (from.0.axes(from.1), to.0.axes(to.1));
+        outline.iter().flatten().all(|&[u, w]| {
+            let r = fx * u + fy * w;
+            let r = r - n * (2.0 * r.dot(&n));
+            frame::on_outline(outline, [r.dot(&tx), r.dot(&ty)], tol)
+        })
+    };
+    onto((p, q)) && onto((q, p))
 }
 
 /// An end's cut with another plane's: two angles make a compound cut.

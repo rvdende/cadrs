@@ -319,6 +319,7 @@ pub(crate) enum Role {
     FrameOverrideTurn(u8),
     FrameEndOffset,
     FrameMembers,
+    FrameTrimPlanes,
     /// A member override's angle, by its place in the list.
     FrameMemberAngle(u8),
     // The Gear (`crate::gear_ui`).
@@ -491,6 +492,17 @@ fn items(features: &[Feature], cache: &PartCache, kind: &FeatureKind, role: Role
         }
         _ => crate::advanced_dialog::items(features, cache, kind, role).unwrap_or_default(),
     }
+}
+
+/// Whether three or more members meet at each of a Frame feature's corner overrides (as its
+/// last rebuild found).
+fn frame_many(cache: &PartCache, feature: cadrs_core::FeatureId) -> Vec<bool> {
+    cache
+        .frame_corners
+        .iter()
+        .find(|c| c.feature == feature)
+        .map(|c| c.ends.iter().map(|n| *n >= 3).collect())
+        .unwrap_or_default()
 }
 
 fn layout_of(kind: &FeatureKind) -> String {
@@ -897,6 +909,7 @@ fn dialog(
         Role::FrameCorners,
         Role::FrameTrim,
         Role::FrameMembers,
+        Role::FrameTrimPlanes,
         Role::GearFace,
         Role::GearShaft,
         Role::GearMateShaft,
@@ -904,6 +917,23 @@ fn dialog(
     .into_iter()
     .chain(crate::sheetmetal_features_ui::LIST_ROLES)
     .map(|r| (r, items(features, cache, &kind, r)))
+    .chain(
+        // A Frame override's next pair: offered (an item) where three or more members meet.
+        frame_many(cache, f.id)
+            .into_iter()
+            .enumerate()
+            .map(|(i, many)| {
+                let n = i.min(u8::MAX.into()) as u8;
+                (
+                    Role::FrameOverrideTurn(n),
+                    if many {
+                        vec![String::new()]
+                    } else {
+                        Vec::new()
+                    },
+                )
+            }),
+    )
     .collect();
     let items_of = move |r: Role| {
         lists
@@ -1672,7 +1702,12 @@ pub(crate) fn sync_applied_dialog(
     if let Some(d) = xyz.drag.as_ref() {
         kind = d.kind.clone();
     }
-    let layout = Layout(layout_of(&kind));
+    let mut layout = layout_of(&kind);
+    // A Frame's override rows offer the next pair where three or more members meet.
+    if matches!(kind, FeatureKind::Frame(_)) {
+        layout += &format!(" {:?}", frame_many(&cache, s.feature));
+    }
+    let layout = Layout(layout);
     match q_dialog.iter().next().map(|(e, l, _)| (e, l.clone())) {
         Some((_, ref l)) if *l == layout => {}
         other => {

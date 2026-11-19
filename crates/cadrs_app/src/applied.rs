@@ -283,6 +283,8 @@ pub enum AppliedField {
     FrameTrim,
     /// The Frame's members turned otherwise (their curves).
     FrameMembers,
+    /// Issue #266: the planes a Frame's members are trimmed at.
+    FrameTrimPlanes,
     /// A hypoid pair's member's own shaft and its mate's.
     GearShaft,
     GearMateShaft,
@@ -627,6 +629,13 @@ impl AppliedSession {
             AppliedField::FrameMembers => PickFilter {
                 edges: true,
                 sketch_curves: true,
+                ..none
+            },
+            AppliedField::FrameTrimPlanes => PickFilter {
+                planes,
+                plane_features: true,
+                faces: true,
+                planar_only: true,
                 ..none
             },
             AppliedField::FrameTrim => PickFilter {

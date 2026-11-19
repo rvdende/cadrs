@@ -11,11 +11,15 @@
 //! - *Corner overrides*: sketch points or part vertices at corners joined otherwise; each picked
 //!   point gets a row of its own with its treatment and flip.
 //! - *Trim to parts*: parts the members are cut back by (a wall, another frame's members).
+//! - *Trim to planes*: default planes, Plane features or planar faces the members are cut at.
 //! - **Keep the other side** of the trims (all but the largest piece).
-//! - **End caps** with their *Thickness* (plates closing hollow members' free ends) and
+//! - **End caps** with their *Thickness* (plates closing hollow members' free ends; **Set into
+//!   the end**: inside it, the member stopping short by their thickness) and
 //!   **Gussets** with their *Size*, *Thickness*, *Chamfer* and *Position* (middle, top or
-//!   bottom of the section): triangular plates in two-member corners. An override's row has a
-//!   gusset checkbox of its own, and its flip at a corner of three or more picks the next pair.
+//!   bottom of the section): triangular plates in the corners (at a corner of three or more,
+//!   in the pair joined; at a tee, either side). An override's row has a gusset checkbox of its
+//!   own, its flip (which member runs on) and, at a corner of three or more, a button that
+//!   joins the next pair.
 //!
 //! The toolbar's Frame button starts it with the selected sketch curves, edges and sketches.
 //! The cut list of every frame in the Part Studio is the Cut list panel ([`crate::cut_list`]).
@@ -67,6 +71,17 @@ fn path_of(features: &[Feature], cache: &PartCache, pick: Pick) -> Option<PathRe
         Pick::Feature(f) if is_curve_feature(features, f) => PathRef::Curve(f),
         _ => return None,
     })
+}
+
+/// The same trim plane: a face by its name, a Plane feature by its feature (their frames as of
+/// the last rebuild aside).
+fn same_plane(a: &cadrs_sketch::PlaneRef, b: &cadrs_sketch::PlaneRef) -> bool {
+    use cadrs_sketch::PlaneRef as R;
+    match (a, b) {
+        (R::Face(a), R::Face(b)) => a.feature == b.feature && a.face == b.face,
+        (R::Feature(a), R::Feature(b)) => a.feature == b.feature,
+        (a, b) => a == b,
+    }
 }
 
 fn same_path(a: &PathRef, b: &PathRef) -> bool {
@@ -177,6 +192,28 @@ pub fn pick(world: &mut World, kind: &mut FeatureKind, field: AppliedField, pick
             }
             true
         }
+        AppliedField::FrameTrimPlanes => {
+            let plane = match pick {
+                Pick::Plane(k) => Some(k.plane_ref()),
+                Pick::Feature(f) => cadrs_core::parts::plane_feature_ref(&features, f),
+                Pick::Face(part, face) => {
+                    world.get_resource::<crate::ActiveDocument>().and_then(|d| {
+                        crate::parts::face_plane_of(d.active_element()?, part.feature, face)
+                    })
+                }
+                _ => None,
+            };
+            let Some(plane) = plane else {
+                return false;
+            };
+            match x.trim_planes.iter().position(|q| same_plane(q, &plane)) {
+                Some(i) => {
+                    x.trim_planes.remove(i);
+                }
+                None => x.trim_planes.push(plane),
+            }
+            true
+        }
         AppliedField::FrameCorners => {
             let (at, point) = match pick {
                 Pick::SketchPoint(sketch, point) => {
@@ -261,6 +298,17 @@ pub fn references(kind: &FeatureKind, cache: &PartCache) -> Vec<Pick> {
             .filter_map(|o| o.point.map(|p| Pick::SketchPoint(p.sketch, p.point))),
     );
     out.extend(x.trim.iter().map(|p| Pick::Part(*p)));
+    out.extend(x.trim_planes.iter().filter_map(|p| {
+        match p {
+            cadrs_sketch::PlaneRef::Face(f) => cache
+                .parts
+                .iter()
+                .find(|q| q.id.feature.0 == f.feature && q.solid.face(&f.face).is_some())
+                .or_else(|| cache.parts.iter().find(|q| q.solid.face(&f.face).is_some()))
+                .map(|q| Pick::Face(q.id, f.face)),
+            p => crate::viewport::plane_pick(*p),
+        }
+    }));
     out.extend(x.member_overrides.iter().filter_map(|o| match &o.curve {
         PathRef::Edge(e) => edge(e),
         PathRef::SketchCurve { sketch, curve } => Some(Pick::SketchCurve(*sketch, *curve)),
@@ -299,10 +347,10 @@ pub(crate) fn layout(kind: &FeatureKind) -> Option<String> {
                 x.gussets,
             ) + &format!(
                 " {} {:?} {:?}",
-                x.trim.is_empty(),
+                x.trim.is_empty() && x.trim_planes.is_empty(),
                 x.trim_flip,
                 x.overrides.iter().map(|o| o.gusset).collect::<Vec<_>>()
-            ) + &format!(" {}", x.member_overrides.len()),
+            ) + &format!(" {} {}", x.member_overrides.len(), x.cap_inward),
         ),
         k => crate::gear_ui::layout(k),
     }
@@ -356,7 +404,7 @@ fn path_label(features: &[Feature], p: &PathRef) -> String {
         PathRef::SketchCurve { sketch, curve } => {
             let name = tr_with("common-curve-of", &[("name", &name_of(features, *sketch))]);
             match curve_length(features, *sketch, *curve) {
-                Some(l) => format!("{name} · {l} mm"),
+                Some(l) => format!("{l} mm · {name}"),
                 None => name,
             }
         }
@@ -406,6 +454,18 @@ pub(crate) fn items(
                 })
                 .collect(),
         ),
+        (FeatureKind::Frame(x), Role::FrameTrimPlanes) => Some(
+            x.trim_planes
+                .iter()
+                .map(|p| match p {
+                    cadrs_sketch::PlaneRef::Face(f) => tr_with(
+                        "common-face-of",
+                        &[("name", &name_of(features, cadrs_core::FeatureId(f.feature)))],
+                    ),
+                    p => crate::viewport::plane_label(features, *p),
+                })
+                .collect(),
+        ),
         (FeatureKind::Frame(x), Role::FrameTrim) => Some(
             x.trim
                 .iter()
@@ -429,6 +489,7 @@ pub(crate) fn list_field(role: Role) -> Option<AppliedField> {
         Role::FrameSketch => Some(AppliedField::FrameSketch),
         Role::FrameCorners => Some(AppliedField::FrameCorners),
         Role::FrameTrim => Some(AppliedField::FrameTrim),
+        Role::FrameTrimPlanes => Some(AppliedField::FrameTrimPlanes),
         Role::FrameMembers => Some(AppliedField::FrameMembers),
         r => crate::gear_ui::list_field(r),
     }
@@ -695,19 +756,24 @@ pub(crate) fn body(
             items_of(Role::FrameCorners),
             field == AppliedField::FrameCorners,
         );
-        // Each override's treatment, its flip (at a corner of three or more: the next member
-        // runs on), and its gusset.
+        // Each override's treatment, its flip (which member runs on), where three or more meet
+        // the next pair, and its gusset; named as its list item, with where it is.
+        let corners = items_of(Role::FrameCorners);
         for (i, o) in x.overrides.iter().enumerate() {
+            let label = corners.get(i).cloned().unwrap_or_else(|| {
+                tr_with("model-frame-corner-n", &[("n", &(i + 1).to_string())])
+            });
             let i = i.min(u8::MAX as usize) as u8;
             corner_row(
                 b,
                 t,
                 &format!("frame-override-{i}"),
-                &tr_with("model-frame-corner-n", &[("n", &(i + 1).to_string())]),
+                &label,
                 Role::FrameOverride(i),
                 o.corner,
                 Some((Role::FrameOverrideFlip(i), o.flip)),
-                Some(Role::FrameOverrideTurn(i)),
+                (!items_of(Role::FrameOverrideTurn(i)).is_empty())
+                    .then_some(Role::FrameOverrideTurn(i)),
             );
             b.spawn(
                 OptionRow::new(
@@ -727,7 +793,16 @@ pub(crate) fn body(
             items_of(Role::FrameTrim),
             field == AppliedField::FrameTrim,
         );
-        if !x.trim.is_empty() {
+        list(
+            b,
+            t,
+            "frame-trim-planes-field",
+            &tr("model-frame-trim-planes"),
+            Role::FrameTrimPlanes,
+            items_of(Role::FrameTrimPlanes),
+            field == AppliedField::FrameTrimPlanes,
+        );
+        if !x.trim.is_empty() || !x.trim_planes.is_empty() {
             b.spawn(
                 OptionRow::new("frame-trim-flip", tr("model-frame-trim-flip"))
                     .checked(x.trim_flip)
@@ -748,6 +823,11 @@ pub(crate) fn body(
                 Role::FrameCapThickness,
                 &x.cap_thickness_expr,
                 None,
+            );
+            b.spawn(
+                OptionRow::new("frame-cap-inward", tr("model-frame-cap-inward"))
+                    .checked(x.cap_inward)
+                    .build(t),
             );
         }
         b.spawn(
@@ -883,6 +963,7 @@ pub(crate) fn is_checkbox(name: &str) -> bool {
         || name == "frame-caps-checkbox"
         || name == "frame-gussets-checkbox"
         || name == "frame-trim-flip-checkbox"
+        || name == "frame-cap-inward-checkbox"
         || override_gusset(name).is_some()
         || crate::gear_ui::is_checkbox(name)
 }
@@ -904,6 +985,10 @@ pub(crate) fn checkbox(k: &mut FeatureKind, name: &str, on: bool) -> Option<&'st
         (FeatureKind::Frame(x), "frame-gussets-checkbox") => {
             x.gussets = on;
             Some("Gussets")
+        }
+        (FeatureKind::Frame(x), "frame-cap-inward-checkbox") => {
+            x.cap_inward = on;
+            Some("Set caps into the ends")
         }
         (FeatureKind::Frame(x), "frame-trim-flip-checkbox") => {
             x.trim_flip = on;
@@ -1000,9 +1085,10 @@ pub(crate) fn flip(k: &mut FeatureKind, role: Role) {
             }
         }
         (FeatureKind::Frame(x), Role::FrameOverrideTurn(i)) => {
-            // The next pair (a corner of three members has three, of four six).
+            // The next pair (a corner of three members has three, of four six, … of seven 21:
+            // 210 a multiple of each, so the turns go round evenly).
             if let Some(o) = x.overrides.get_mut(i as usize) {
-                o.turn = o.turn.wrapping_add(1) % 6;
+                o.turn = (o.turn + 1) % 210;
             }
         }
         (k, r) => crate::gear_ui::flip(k, r),
@@ -1021,6 +1107,11 @@ pub(crate) fn remove(k: &mut FeatureKind, role: Role, i: usize) {
         (FeatureKind::Frame(x), Role::FrameTrim) => {
             if i < x.trim.len() {
                 x.trim.remove(i);
+            }
+        }
+        (FeatureKind::Frame(x), Role::FrameTrimPlanes) => {
+            if i < x.trim_planes.len() {
+                x.trim_planes.remove(i);
             }
         }
         (FeatureKind::Frame(x), Role::FrameMembers) => {

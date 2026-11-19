@@ -300,10 +300,14 @@ pub struct FrameFeature {
     /// member less what overlaps them, the piece holding most of it kept.
     #[serde(default)]
     pub trim: Vec<PartId>,
+    /// Planes (default planes, Plane features, planar faces) the members are trimmed at: each
+    /// member crossing one cut there, the piece holding most of it kept.
+    #[serde(default)]
+    pub trim_planes: Vec<cadrs_sketch::PlaneRef>,
     /// Members turned otherwise than the rest.
     #[serde(default)]
     pub member_overrides: Vec<MemberOverride>,
-    /// Keep the other side of a trim (all but the largest piece).
+    /// Keep the other side of a trim (all but the largest piece), by parts and planes alike.
     #[serde(default)]
     pub trim_flip: bool,
     /// The members' free ends run on this far past their curves' ends (negative: stop short).
@@ -311,14 +315,19 @@ pub struct FrameFeature {
     pub end_offset: f64,
     #[serde(default = "zero_mm")]
     pub end_offset_expr: String,
-    /// Plates closing the members' free ends, as thick as `cap_thickness`, outside the member
-    /// (only of sections with holes: tubes, T-slot extrusions, custom sections with holes).
+    /// Plates closing the members' free ends, as thick as `cap_thickness`, against the end
+    /// (or set into it, `cap_inward`; only of sections with holes: tubes, T-slot extrusions,
+    /// custom sections with holes).
     #[serde(default)]
     pub end_caps: bool,
     #[serde(default = "cap_thickness")]
     pub cap_thickness: f64,
     #[serde(default = "cap_thickness_expr")]
     pub cap_thickness_expr: String,
+    /// The caps set into the members' ends (each member stopping short by their thickness, as
+    /// its stock is cut), not over them.
+    #[serde(default)]
+    pub cap_inward: bool,
     /// A triangular plate in the angle of every corner of two members (an override can add or
     /// leave out one): its legs `gusset_size` along the members' inner sides from where they
     /// meet, `gusset_thickness` thick, across the section as `gusset_position` says.
@@ -389,6 +398,7 @@ impl Default for FrameFeature {
             flip: false,
             overrides: Vec::new(),
             trim: Vec::new(),
+            trim_planes: Vec::new(),
             member_overrides: Vec::new(),
             trim_flip: false,
             end_offset: 0.0,
@@ -396,6 +406,7 @@ impl Default for FrameFeature {
             end_caps: false,
             cap_thickness: cap_thickness(),
             cap_thickness_expr: cap_thickness_expr(),
+            cap_inward: false,
             gussets: false,
             gusset_size: gusset_size(),
             gusset_size_expr: gusset_size_expr(),
@@ -464,6 +475,13 @@ impl FrameFeature {
                 .filter_map(|o| o.point.map(|p| p.sketch)),
         );
         out.extend(self.trim.iter().map(|p| p.feature));
+        for p in &self.trim_planes {
+            match p {
+                cadrs_sketch::PlaneRef::Feature(f) => out.push(FeatureId(f.feature)),
+                cadrs_sketch::PlaneRef::Face(f) => out.push(FeatureId(f.feature)),
+                _ => {}
+            }
+        }
         for o in &self.member_overrides {
             match &o.curve {
                 PathRef::Edge(e) => out.push(FeatureId(e.edge.op())),
@@ -1127,6 +1145,48 @@ fn sample(c: &Curve2) -> Vec<Point2<f64>> {
                 .collect()
         }
     }
+}
+
+/// How many member ends meet at each of a Frame feature's corner overrides (0 where none is at
+/// a corner; a member running through counts as two).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OverrideCorners {
+    pub feature: FeatureId,
+    pub ends: Vec<u8>,
+}
+
+/// A section's loops (outer and holes) as polylines: lines' ends, arcs' and ellipses' every
+/// 64th of a turn, splines' and Béziers' control points (which a rigid motion moves alike).
+pub fn outline(regions: &[Region]) -> Vec<Vec<[f64; 2]>> {
+    regions
+        .iter()
+        .flat_map(|r| std::iter::once(&r.outer).chain(&r.holes))
+        .map(|l| {
+            l.curves
+                .iter()
+                .flat_map(sample)
+                .map(|p| [p.x, p.y])
+                .collect()
+        })
+        .collect()
+}
+
+/// Whether `p` lies within `tol` of one of the polylines `outline` makes (each closed).
+pub fn on_outline(outline: &[Vec<[f64; 2]>], p: [f64; 2], tol: f64) -> bool {
+    outline.iter().any(|l| {
+        (0..l.len()).any(|i| {
+            let (a, b) = (l[i], l[(i + 1) % l.len()]);
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            let len2 = dx * dx + dy * dy;
+            let t = if len2 > 0.0 {
+                (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let (ex, ey) = (a[0] + t * dx - p[0], a[1] + t * dy - p[1]);
+            ex * ex + ey * ey <= tol * tol
+        })
+    })
 }
 
 /// The furthest a section reaches in the direction `d` (its outer loops').

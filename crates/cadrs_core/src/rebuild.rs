@@ -120,6 +120,10 @@ pub struct Build {
     /// later feature joined to another or deleted is still listed: keep those of `parts`.
     #[serde(default)]
     pub frames: Vec<crate::frame::MemberInfo>,
+    /// How many members meet at each Frame feature's corner overrides (the dialog offers the
+    /// next pair where three or more do).
+    #[serde(default)]
+    pub frame_corners: Vec<crate::frame::OverrideCorners>,
     /// It was stopped before it finished ([`Pending::stop`], a newer request for the same list):
     /// its parts are those of the features before where it stopped. Never the list's result.
     pub stopped: bool,
@@ -263,6 +267,9 @@ struct State {
     /// The Frame features' members so far (issue #266).
     #[serde(default)]
     frames: Arc<Vec<crate::frame::MemberInfo>>,
+    /// The Frame features' override corners so far.
+    #[serde(default)]
+    frame_corners: Arc<Vec<crate::frame::OverrideCorners>>,
 }
 
 /// Why a feature can't change a part with no kernel body: a derived board's component is a mesh
@@ -697,6 +704,7 @@ impl Rebuilder {
                 && Arc::ptr_eq(&x.derived_sketches, &y.derived_sketches)
                 && Arc::ptr_eq(&x.sheet_metal, &y.sheet_metal)
                 && Arc::ptr_eq(&x.frames, &y.frames)
+                && Arc::ptr_eq(&x.frame_corners, &y.frame_corners)
                 && x.connectors == y.connectors
                 && x.connector_owners == y.connector_owners
                 && x.composites == y.composites
@@ -1845,6 +1853,7 @@ impl Rebuilder {
         out.derived_sketches = (*state.derived_sketches).clone();
         out.sheet_metal = (*state.sheet_metal).clone();
         out.frames = (*state.frames).clone();
+        out.frame_corners = (*state.frame_corners).clone();
         debug_assert!(
             self.depth != 0 || key == final_key(features),
             "final_key must follow the rebuild's keys"

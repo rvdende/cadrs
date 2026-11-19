@@ -403,6 +403,8 @@ pub struct SavedState {
     /// Issue #266: the Frame features' members.
     #[serde(default)]
     frames: Vec<crate::frame::MemberInfo>,
+    #[serde(default)]
+    frame_corners: Vec<crate::frame::OverrideCorners>,
 }
 
 impl SavedState {
@@ -422,6 +424,7 @@ impl SavedState {
             derived_sketches,
             sheet_metal,
             frames,
+            frame_corners,
         } = s;
         SavedState {
             parts: parts.save(w),
@@ -437,6 +440,7 @@ impl SavedState {
             derived_sketches: derived_sketches.save(w),
             sheet_metal: (**sheet_metal).clone(),
             frames: (**frames).clone(),
+            frame_corners: (**frame_corners).clone(),
         }
     }
 
@@ -455,6 +459,7 @@ impl SavedState {
             derived_sketches: Persist::load(self.derived_sketches, r)?,
             sheet_metal: Arc::new(self.sheet_metal),
             frames: Arc::new(self.frames),
+            frame_corners: Arc::new(self.frame_corners),
         })
     }
 }

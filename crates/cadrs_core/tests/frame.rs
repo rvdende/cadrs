@@ -2310,6 +2310,404 @@ fn member_overrides_turn_some_members_on_edge() {
 }
 
 #[test]
+fn a_tee_into_a_turned_member_stops_at_its_turned_side() {
+    // A 400 bar of 20x40 along X, a 300 stem up from its middle: the stem stops at the bar's
+    // side, 20 out lying flat and 10 out turned on edge.
+    let mut stops = Vec::new();
+    for turned in [false, true] {
+        let mut st = Studio::new();
+        let sk = st.sketch(
+            PlaneRef::Top,
+            vec![
+                polyline(&[(0.0, 0.0), (400.0, 0.0)], false),
+                polyline(&[(200.0, 0.0), (200.0, 300.0)], false),
+            ],
+        );
+        let bar = PathRef::SketchCurve {
+            sketch: sk,
+            curve: line_at(&st, sk, (0.0, 0.0), (400.0, 0.0)),
+        };
+        let member_overrides = if turned {
+            vec![frame::MemberOverride {
+                curve: bar,
+                angle: 90.0,
+                angle_expr: "90 deg".into(),
+            }]
+        } else {
+            Vec::new()
+        };
+        let f = st.frame(FrameFeature {
+            size: "20x40".into(),
+            path: vec![PathRef::Sketch(sk)],
+            member_overrides,
+            ..Default::default()
+        });
+        let b = st.build();
+        assert!(b.warning(f).is_none(), "{:?}", b.warning(f));
+        let (bar, stem): (Vec<&Part>, Vec<&Part>) = b.parts.iter().partition(|p| {
+            let (lo, hi) = bounds(p);
+            hi[0] - lo[0] > hi[1] - lo[1]
+        });
+        let (bar_hi, stem_lo) = (bounds(bar[0]).1[1], bounds(stem[0]).0[1]);
+        assert!(
+            (bar_hi - stem_lo).abs() < 1e-4,
+            "{turned}: {bar_hi} {stem_lo}"
+        );
+        assert!(st.overlap() < 1e-6);
+        stops.push(stem_lo);
+    }
+    assert!(
+        (stops[0] - 20.0).abs() < 1e-4 && (stops[1] - 10.0).abs() < 1e-4,
+        "{stops:?}"
+    );
+}
+
+#[test]
+fn a_mitre_is_kept_only_where_its_halves_meet() {
+    // A 20x40 rectangle mitred, one side turned: a quarter turn makes its corners' halves
+    // differ (butted, and said so); a half turn doesn't (the section is the same upside down).
+    for (angle, butted) in [(0.0, false), (90.0, true), (180.0, false)] {
+        let mut st = Studio::new();
+        let sk = rectangle(&mut st);
+        let side = PathRef::SketchCurve {
+            sketch: sk,
+            curve: line_at(&st, sk, (400.0, 0.0), (400.0, 300.0)),
+        };
+        let f = st.frame(FrameFeature {
+            size: "20x40".into(),
+            path: vec![PathRef::Sketch(sk)],
+            corner: CornerType::Miter,
+            member_overrides: vec![frame::MemberOverride {
+                curve: side,
+                angle,
+                angle_expr: format!("{angle} deg"),
+            }],
+            ..Default::default()
+        });
+        let b = st.build();
+        assert_eq!(
+            b.warning(f).is_some_and(|w| w.contains("butted")),
+            butted,
+            "{angle}: {:?}",
+            b.warning(f)
+        );
+        let mitres = b
+            .frames
+            .iter()
+            .flat_map(|m| m.ends)
+            .filter(|e| matches!(e, EndCut::Angle(a) if (a - 45.0).abs() < 1e-6))
+            .count();
+        assert_eq!(mitres, if butted { 4 } else { 8 }, "{angle}");
+        assert!(st.overlap() < 1e-6, "{angle}");
+    }
+    // A channel isn't symmetric, but round a loop its members run head to tail: mitred.
+    let mut st = Studio::new();
+    let sk = rectangle(&mut st);
+    let mut x = FrameFeature::default();
+    x.set_family(ProfileFamily::Channel);
+    x.size = frame::size_names(ProfileFamily::Channel)[0].into();
+    x.corner = CornerType::Miter;
+    x.path = vec![PathRef::Sketch(sk)];
+    let f = st.frame(x);
+    let b = st.build();
+    assert!(b.warning(f).is_none(), "{:?}", b.warning(f));
+    assert!(st.overlap() < 1e-6);
+}
+
+#[test]
+fn a_negative_end_offset_on_a_bent_end_follows_its_curve() {
+    // 100 along X, then a quarter of radius 50: a round bar's free end on the arc, both ends
+    // stopped 20 short along the path.
+    let ops = vec![
+        polyline(&[(0.0, 0.0), (100.0, 0.0)], false),
+        SketchOp::AddArc {
+            center: Vec2::new(100.0, 50.0),
+            start: Vec2::new(100.0, 0.0),
+            end: Vec2::new(150.0, 50.0),
+            construction: false,
+        },
+    ];
+    let centre = 100.0 + PI * 25.0;
+    let mut st = Studio::new();
+    let sk = st.sketch(PlaneRef::Top, ops);
+    let mut x = FrameFeature::default();
+    x.set_family(ProfileFamily::RoundBar);
+    x.size = "20".into();
+    x.end_offset = -20.0;
+    x.end_offset_expr = "-20 mm".into();
+    x.path = vec![PathRef::Sketch(sk)];
+    let f = st.frame(x.clone());
+    let b = st.build();
+    assert!(b.warning(f).is_none(), "{:?}", b.warning(f));
+    let want = PI * 100.0 * (centre - 40.0);
+    assert!(close(total(&b), want, 1e-6), "{} vs {want}", total(&b));
+    assert!(
+        (b.frames[0].length - (centre - 40.0)).abs() < 1e-6,
+        "{}",
+        b.frames[0].length
+    );
+    // Its ends lie square to the path where it stops: at x 20, and 20 back round the arc from
+    // (150, 50), the bar's outside there furthest along X.
+    let (lo, hi) = bounds(&b.parts[0]);
+    let a = 20.0 / 50.0;
+    let far = 100.0 + 60.0 * f64::cos(a);
+    // (From the display mesh: within its deflection.)
+    assert!(
+        (hi[0] - far).abs() < 0.2 && (lo[0] - 20.0).abs() < 1e-3,
+        "{lo:?} {hi:?}"
+    );
+    // Stopped short more than it is long: an error.
+    let mut st = Studio::new();
+    let sk = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(&[(0.0, 0.0), (100.0, 0.0)], false)],
+    );
+    x.end_offset = -60.0;
+    x.path = vec![PathRef::Sketch(sk)];
+    let f = st.frame(x);
+    let b = rebuild::build(&st.features());
+    assert!(
+        b.error(f).is_some_and(|e| e.contains("nothing")),
+        "{:?}",
+        b.error(f)
+    );
+}
+
+#[test]
+fn gussets_go_either_side_of_a_tee_and_in_the_pair_a_corner_of_three_joins() {
+    // A tee of 40x40x3: a gusset on each side of the stem.
+    let mut st = Studio::new();
+    let sk = st.sketch(
+        PlaneRef::Top,
+        vec![
+            polyline(&[(0.0, 0.0), (400.0, 0.0)], false),
+            polyline(&[(200.0, 0.0), (200.0, 300.0)], false),
+        ],
+    );
+    let mut x = tube("40x40x3");
+    x.corner = CornerType::Butt;
+    x.gussets = true;
+    x.path = vec![PathRef::Sketch(sk)];
+    st.frame(x.clone());
+    let b = st.build();
+    let plates: Vec<&Part> = b
+        .parts
+        .iter()
+        .filter(|p| b.frames.iter().any(|m| m.part == p.id && m.plate))
+        .collect();
+    assert_eq!(plates.len(), 2);
+    for p in &plates {
+        let (lo, hi) = bounds(p);
+        // From the stem's sides (180, 220) and the bar's (y 20), out 60 (the default size).
+        let s = x_gusset_size();
+        assert!((lo[1] - 20.0).abs() < 1e-4 && (hi[1] - 20.0 - s).abs() < 1e-4);
+        assert!(
+            (hi[0] - 180.0).abs() < 1e-4 || (lo[0] - 220.0).abs() < 1e-4,
+            "{lo:?} {hi:?}"
+        );
+    }
+    assert!(st.overlap() < 1e-6);
+    // Three at a corner (X and Y on Top, up Z): one gusset, in the flat pair joined; an
+    // override there sees three members meet.
+    let mut st = Studio::new();
+    let a = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(&[(0.0, 0.0), (300.0, 0.0)], false)],
+    );
+    let b2 = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(&[(0.0, 0.0), (0.0, 250.0)], false)],
+    );
+    let c = st.sketch(
+        PlaneRef::Front,
+        vec![polyline(&[(0.0, 0.0), (0.0, 200.0)], false)],
+    );
+    x.path = vec![PathRef::Sketch(a), PathRef::Sketch(b2), PathRef::Sketch(c)];
+    x.overrides = vec![
+        CornerOverride {
+            point: None,
+            at: [0.0, 0.0, 0.0],
+            corner: CornerType::Butt,
+            flip: false,
+            turn: 0,
+            gusset: None,
+        },
+        CornerOverride {
+            point: None,
+            at: [300.0, 0.0, 0.0],
+            corner: CornerType::Butt,
+            flip: false,
+            turn: 0,
+            gusset: None,
+        },
+    ];
+    let f = st.frame(x);
+    let b = rebuild::build(&st.features());
+    let plates: Vec<&Part> = b
+        .parts
+        .iter()
+        .filter(|p| b.frames.iter().any(|m| m.part == p.id && m.plate))
+        .collect();
+    assert_eq!(plates.len(), 1);
+    let (lo, hi) = bounds(plates[0]);
+    assert!(hi[2] - lo[2] < 10.0, "flat: {lo:?} {hi:?}");
+    let corners = b.frame_corners.iter().find(|c| c.feature == f).unwrap();
+    assert_eq!(corners.ends, [3, 1]);
+}
+
+#[test]
+fn a_trim_at_a_plane_keeps_the_longer_side() {
+    // A 400 tube from x -100 to 300 crossing Right (x = 0), and a 200 one clear of it: the first
+    // cut at the plane, its 300 side kept (flipped: its 100 side); the second left whole. The
+    // cut end gets no cap.
+    for (flip, want) in [(false, 300.0), (true, 100.0)] {
+        let mut st = Studio::new();
+        let sk = st.sketch(
+            PlaneRef::Top,
+            vec![
+                polyline(&[(-100.0, 0.0), (300.0, 0.0)], false),
+                polyline(&[(50.0, 200.0), (250.0, 200.0)], false),
+            ],
+        );
+        let mut x = tube("40x40x3");
+        x.path = vec![PathRef::Sketch(sk)];
+        x.trim_planes = vec![PlaneRef::Right];
+        x.trim_flip = flip;
+        x.end_caps = true;
+        let f = st.frame(x);
+        let b = st.build();
+        assert!(b.warning(f).is_none(), "{:?}", b.warning(f));
+        let mut lengths: Vec<f64> = b
+            .frames
+            .iter()
+            .filter(|m| !m.plate)
+            .map(|m| m.length)
+            .collect();
+        lengths.sort_by(f64::total_cmp);
+        let mut expect = [200.0, want];
+        expect.sort_by(f64::total_cmp);
+        for (got, w) in lengths.iter().zip(expect) {
+            assert!((got - w).abs() < 1e-4, "{flip}: {lengths:?}");
+        }
+        let area = square_tube_area(40.0, 3.0);
+        let members: f64 = b
+            .parts
+            .iter()
+            .filter(|p| b.frames.iter().any(|m| m.part == p.id && !m.plate))
+            .map(volume)
+            .sum();
+        assert!(
+            close(members, area * (200.0 + want), 1e-6),
+            "{flip}: {members}"
+        );
+        // Caps: both of the whole one's ends, one of the cut one's.
+        assert_eq!(b.frames.iter().filter(|m| m.plate).count(), 3, "{flip}");
+        let cut = b
+            .parts
+            .iter()
+            .find(|p| bounds(p).1[1] < 30.0 && b.frames.iter().any(|m| m.part == p.id && !m.plate))
+            .unwrap();
+        let (lo, hi) = bounds(cut);
+        if flip {
+            assert!(
+                (hi[0] - 0.0).abs() < 1e-4 && (lo[0] + 100.0).abs() < 1e-3,
+                "{lo:?} {hi:?}"
+            );
+        } else {
+            assert!(
+                (lo[0] - 0.0).abs() < 1e-4 && (hi[0] - 300.0).abs() < 1e-3,
+                "{lo:?} {hi:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn caps_set_into_the_ends_shorten_the_member() {
+    // A 300 tube capped 5 thick inside its ends: the tube 290 from 5 to 295, the caps filling
+    // the last 5 at each end; nothing past 0 or 300, nothing overlapping.
+    let mut st = Studio::new();
+    let sk = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(&[(0.0, 0.0), (300.0, 0.0)], false)],
+    );
+    let mut x = tube("40x40x3");
+    x.path = vec![PathRef::Sketch(sk)];
+    x.end_caps = true;
+    x.cap_thickness = 5.0;
+    x.cap_thickness_expr = "5 mm".into();
+    x.cap_inward = true;
+    let f = st.frame(x);
+    let b = st.build();
+    assert!(b.warning(f).is_none(), "{:?}", b.warning(f));
+    let tube = b.frames.iter().find(|m| !m.plate).unwrap();
+    assert!((tube.length - 290.0).abs() < 1e-4, "{}", tube.length);
+    let mut xs: Vec<(f64, f64)> = b
+        .parts
+        .iter()
+        .map(|p| {
+            let (lo, hi) = bounds(p);
+            (lo[0], hi[0])
+        })
+        .collect();
+    xs.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    let want = [(0.0, 5.0), (5.0, 295.0), (295.0, 300.0)];
+    for (got, w) in xs.iter().zip(want) {
+        assert!(
+            (got.0 - w.0).abs() < 1e-4 && (got.1 - w.1).abs() < 1e-4,
+            "{xs:?}"
+        );
+    }
+    assert!(st.overlap() < 1e-6);
+}
+
+#[test]
+fn a_cap_on_a_bent_end_stopped_short_sits_square_to_the_arc() {
+    // A 33.7x3.2 tube 100 along X then a quarter of radius 100 round to (200, 100), stopped 20
+    // short at each end and capped: the arc end's cap lies across the tube where it stops,
+    // 0.2 rad back round the arc, and touches nothing it shouldn't.
+    let mut st = Studio::new();
+    let sk = st.sketch(
+        PlaneRef::Top,
+        vec![
+            polyline(&[(0.0, 0.0), (100.0, 0.0)], false),
+            SketchOp::AddArc {
+                center: Vec2::new(100.0, 100.0),
+                start: Vec2::new(100.0, 0.0),
+                end: Vec2::new(200.0, 100.0),
+                construction: false,
+            },
+        ],
+    );
+    let mut x = FrameFeature::default();
+    x.set_family(ProfileFamily::RoundTube);
+    x.size = "33.7x3.2".into();
+    x.end_caps = true;
+    x.end_offset = -20.0;
+    x.end_offset_expr = "-20 mm".into();
+    x.path = vec![PathRef::Sketch(sk)];
+    let f = st.frame(x);
+    let b = st.build();
+    assert!(b.warning(f).is_none(), "{:?}", b.warning(f));
+    let caps: Vec<&Part> = b
+        .parts
+        .iter()
+        .filter(|p| b.frames.iter().any(|m| m.part == p.id && m.plate))
+        .collect();
+    assert_eq!(caps.len(), 2);
+    // The arc end's cap: centred on the arc at 0.2 rad short of its end.
+    let a = 0.2f64;
+    let at = [100.0 + 100.0 * a.cos(), 100.0 - 100.0 * a.sin()];
+    let near = caps.iter().any(|p| {
+        let (lo, hi) = bounds(p);
+        let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
+        (c[0] - at[0]).hypot(c[1] - at[1]) < 4.0
+    });
+    assert!(near, "{:?}", caps.iter().map(|p| bounds(p)).collect::<Vec<_>>());
+    assert!(st.overlap() < 1e-6);
+}
+
+#[test]
 fn the_frames_fixture_is_current() {
     // `fixtures/frames.cadrs` is the sample document as `samples::frames::document()` builds
     // it (open it with `cadrs fixtures/frames.cadrs`). Regenerate it with
