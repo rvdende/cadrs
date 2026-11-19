@@ -484,9 +484,10 @@ pub fn extremum(a: &[Piece], b: &[Piece], sense: Sense) -> Option<Extremum> {
     let key = |bd: f64| if sense == Sense::Min { -bd } else { bd };
     let mut heap = BinaryHeap::new();
     // Two flat faces on parallel planes apart are as near everywhere they overlap seen along
-    // the planes' normal, so that nearness is also reached on the boundary of one of them: their
-    // edges and vertices, which are pieces too, find it. Searched as faces, no cell of one rules
-    // out a cell of the other, and the search runs to its limit.
+    // the planes' normal: no cell of one rules out a cell of the other, and searched to the
+    // usual depth such a pair alone runs the search to its limit (two blocks a micron apart).
+    // Their nearness is also reached on the boundary of one of them, which their edges, pieces
+    // too, search; the pair is searched coarsely, its cells' centres polished.
     let plane = |p: &Piece| match p {
         Piece::Face { dom, .. } => match dom.surf {
             super::surface::Surface::Plane { f } => Some((f.o, f.x.cross(&f.y).normalize())),
@@ -494,21 +495,20 @@ pub fn extremum(a: &[Piece], b: &[Piece], sense: Sense) -> Option<Extremum> {
         },
         _ => None,
     };
-    let edged = |ps: &[Piece]| ps.iter().any(|p| matches!(p, Piece::Curve { .. }));
-    let skip_flat_pairs = sense == Sense::Min && edged(a) && edged(b);
-    let parallel_apart = |x: &Piece, y: &Piece| {
-        let (Some((oa, na)), Some((ob, nb))) = (plane(x), plane(y)) else {
+    let planes_a: Vec<_> = a.iter().map(plane).collect();
+    let planes_b: Vec<_> = b.iter().map(plane).collect();
+    let parallel_apart = |ia: usize, ib: usize| {
+        let (Some((oa, na)), Some((ob, nb))) = (planes_a[ia], planes_b[ib]) else {
             return false;
         };
-        na.cross(&nb).norm() <= tol::ANGULAR && (ob - oa).dot(&na).abs() > tol::ROUNDOFF
+        sense == Sense::Min
+            && na.cross(&nb).norm() <= tol::ANGULAR
+            && (ob - oa).dot(&na).abs() > tol::ROUNDOFF
     };
     for (ia, ra) in boxes_a.iter().enumerate() {
         let Some((ca, ba)) = ra else { continue };
         for (ib, rb) in boxes_b.iter().enumerate() {
             let Some((cb, bb)) = rb else { continue };
-            if skip_flat_pairs && parallel_apart(&a[ia], &b[ib]) {
-                continue;
-            }
             let bd = bound(ba, bb, sense);
             heap.push(Node {
                 key: key(bd),
@@ -549,8 +549,13 @@ pub fn extremum(a: &[Piece], b: &[Piece], sense: Sense) -> Option<Extremum> {
         let (pa, pb) = (&a[nd.ia], &b[nd.ib]);
         let (xa, xb) = (nd.ca.centre(), nd.cb.centre());
         let (sa, sb) = (nd.ba.diagonal(), nd.bb.diagonal());
-        let split_a = !matches!(nd.ca, Cell::Point) && sa > root_a[nd.ia] / 50.0 && sa > eps;
-        let split_b = !matches!(nd.cb, Cell::Point) && sb > root_b[nd.ib] / 50.0 && sb > eps;
+        let depth = if parallel_apart(nd.ia, nd.ib) {
+            4.0
+        } else {
+            50.0
+        };
+        let split_a = !matches!(nd.ca, Cell::Point) && sa > root_a[nd.ia] / depth && sa > eps;
+        let split_b = !matches!(nd.cb, Cell::Point) && sb > root_b[nd.ib] / depth && sb > eps;
         // From the centres: always at the leaves (a leaf straddling a face's loop may have its
         // centre outside the face and its extremum inside: polish keeps only an end in the
         // face), and wherever centres lying in their faces alone beat the best.

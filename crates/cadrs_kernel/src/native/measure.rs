@@ -231,15 +231,24 @@ fn section_loops(b: &Body, o: P3, n: V3) -> Result<(Body, Vec<Vec<(usize, bool)>
         Err(KernelError::EmptyResult(_)) => return Ok((Body::default(), Vec::new())),
         Err(e) => return Err(e),
     };
-    let edges: Vec<usize> = (0..sec.edges.len())
-        .filter(|&e| !sec.edges[e].degenerate)
-        .collect();
-    let mut at: std::collections::HashMap<usize, Vec<usize>> = Default::default();
-    for &e in &edges {
-        for v in sec.edges[e].v {
-            at.entry(v).or_default().push(e);
+    // Each stretch once (an edge found twice, from both sides of a face pair, counts once).
+    let mut edges: Vec<usize> = Vec::new();
+    for e in (0..sec.edges.len()).filter(|&e| !sec.edges[e].degenerate) {
+        let ed = &sec.edges[e];
+        let (mid, len) = (ed.point(ed.mid_t()), ed.curve.length(ed.t[0], ed.t[1]));
+        let twin = edges.iter().any(|&x| {
+            let o = &sec.edges[x];
+            (o.point(o.mid_t()) - mid).norm() < tol::POINT
+                && (o.curve.length(o.t[0], o.t[1]) - len).abs() < tol::POINT
+        });
+        if !twin {
+            edges.push(e);
         }
     }
+    // Chained end to start by where their ends are (two edges may end at one point with
+    // vertices of their own), the nearest end within the loop gap next.
+    let gap = tol::LOOP_GAP * bb.diagonal().max(1.0);
+    let end = |e: usize, k: usize| sec.verts[sec.edges[e].v[k]].p;
     let mut used = vec![false; sec.edges.len()];
     let mut loops = Vec::new();
     for &e0 in &edges {
@@ -247,18 +256,28 @@ fn section_loops(b: &Body, o: P3, n: V3) -> Result<(Body, Vec<Vec<(usize, bool)>
             continue;
         }
         used[e0] = true;
-        let start = sec.edges[e0].v[0];
+        let start = end(e0, 0);
         let mut lp = vec![(e0, true)];
-        let mut end = sec.edges[e0].v[1];
-        while end != start {
-            let Some(&e) = at[&end].iter().find(|&&e| !used[e]) else {
+        let mut at = end(e0, 1);
+        while (at - start).norm() > gap {
+            let next = edges
+                .iter()
+                .filter(|&&e| !used[e])
+                .flat_map(|&e| {
+                    [
+                        (e, true, (end(e, 0) - at).norm()),
+                        (e, false, (end(e, 1) - at).norm()),
+                    ]
+                })
+                .filter(|x| x.2 <= gap)
+                .min_by(|x, y| x.2.total_cmp(&y.2));
+            let Some((e, fwd, _)) = next else {
                 return Err(KernelError::OpenResult(
                     "the plane's section doesn't close".into(),
                 ));
             };
             used[e] = true;
-            let fwd = sec.edges[e].v[0] == end;
-            end = sec.edges[e].v[usize::from(fwd)];
+            at = end(e, usize::from(fwd));
             lp.push((e, fwd));
         }
         loops.push(lp);
