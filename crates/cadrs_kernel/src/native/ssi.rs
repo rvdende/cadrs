@@ -2169,9 +2169,9 @@ fn fit_curve(
             q.b.1 = unwrap_near(q.b.1, prev.b.1, TAU);
         }
     }
-    let fit = |pts: &[super::ssi_numeric::Pt]| {
+    let fit = |pts: &[super::ssi_numeric::Pt], sharp: bool| {
         let xs: Vec<P3> = pts.iter().map(|q| q.p).collect();
-        let t = chord(&xs);
+        let t = if sharp { centripetal(&xs) } else { chord(&xs) };
         (
             NurbsCurve::interpolate(&xs, &t, 3.min(xs.len() - 1), None, None),
             t,
@@ -2193,11 +2193,27 @@ fn fit_curve(
     // curve takes; each point kept is a pole on every face the curve bounds and every sweep of
     // it): each one left out within `tol` of the fit.
     let mut pts = thinned(pts, tol, fixed_ends);
+    // By the chords, six rounds at most. Where the fit still keeps more than SWING off the
+    // intersection after them (a hairpin: two branches meeting within a face, round which a cubic
+    // by the chords rings ever wider as points crowd in), six more by centripetal parameters, on
+    // from the points found so far (all exact); the better of the two fits kept.
+    const SWING: f64 = 1e-5;
+    let mut sharp = false;
+    let mut rounds = 0;
+    // (How far the last round's fit kept off the intersection, where it was refined.)
+    let mut worst = 0.0f64;
+    let mut by_chords: Option<(Vec<super::ssi_numeric::Pt>, f64)> = None;
     super::par::start();
-    for _round in 0..6 {
-        let (c, t) = fit(&pts);
+    while rounds < 6 || (!sharp && worst > SWING && !crate::native::env_flag!("CADRS_FIT_CHORDS")) {
+        if rounds == 6 {
+            by_chords = Some((pts.clone(), worst));
+            (sharp, rounds) = (true, 0);
+        }
+        rounds += 1;
+        let (c, t) = fit(&pts, sharp);
         let last = pts.len() - 2;
-        let found: Vec<Option<(usize, super::ssi_numeric::Pt)>> = (0..pts.len() - 1)
+        worst = 0.0;
+        let found: Vec<Option<(usize, super::ssi_numeric::Pt, f64)>> = (0..pts.len() - 1)
             .into_par_iter()
             .map(|k| {
                 if (k == 0 && fixed_ends[0]) || (k == last && fixed_ends[1]) {
@@ -2205,39 +2221,61 @@ fn fit_curve(
                 }
                 let q = c.point((t[k] + t[k + 1]) / 2.0);
                 let chord = (pts[k + 1].p - pts[k].p).norm();
-                let dbg = crate::native::env_flag!("CADRS_FIT_DEBUG")
-                    && a.distance(&q).max(b.distance(&q)) > 1e-6;
-                let Some(exact) =
-                    super::ssi_numeric::refine_between(a, b, &pts[k], &pts[k + 1], &q)
-                else {
-                    if dbg {
-                        eprintln!(
-                            "fit: span {k} of {} off {:.1e}: no refined point",
-                            pts.len(),
-                            a.distance(&q).max(b.distance(&q))
-                        );
-                    }
+                if chord <= tol::POINT {
                     return None;
+                }
+                // A point between the span's ends is theirs however far the fit swung off it, as
+                // a cubic does round a hairpin where two branches meet: within its chord of both,
+                // or between them in the parameters of the surface the curve was traced over and
+                // within three chords of both (a hairpin's tip lies out beyond both ends in space,
+                // its parameters between; the parameters alone are no bound near a cone's apex).
+                let between = |x: &super::ssi_numeric::Pt| {
+                    let near =
+                        (x.p - pts[k].p).norm() <= chord && (x.p - pts[k + 1].p).norm() <= chord;
+                    let within = |x: f64, lo: f64, hi: f64| {
+                        let pad = 1e-9 * (1.0 + lo.abs().max(hi.abs()));
+                        x >= lo.min(hi) - pad && x <= lo.max(hi) + pad
+                    };
+                    let (p0, p1) = (pts[k].a, pts[k + 1].a);
+                    let un = |x: f64, on: bool| if on { unwrap_near(x, p0.0, TAU) } else { x };
+                    let vn = |x: f64, on: bool| if on { unwrap_near(x, p0.1, TAU) } else { x };
+                    let (up, vp) = (a.u_periodic(), a.v_periodic());
+                    let reach = (x.p - pts[k].p).norm().max((x.p - pts[k + 1].p).norm());
+                    near || (reach <= 3.0 * chord
+                        && within(un(x.a.0, up), p0.0, un(p1.0, up))
+                        && within(vn(x.a.1, vp), p0.1, vn(p1.1, vp)))
                 };
-                let off = (exact.p - q).norm();
-                if dbg {
+                let exact = super::ssi_numeric::refine_between(a, b, &pts[k], &pts[k + 1], &q)
+                    .filter(|x| (x.p - q).norm() < 0.5 * chord || between(x));
+                if crate::native::env_flag!("CADRS_FIT_DEBUG")
+                    && a.distance(&q).max(b.distance(&q)) > 1e-6
+                {
                     eprintln!(
-                        "fit: span {k} of {} off {off:.1e}, chord {chord:.1e}",
-                        pts.len()
+                        "fit: span {k} of {}: the fit off by {:.1e} on a chord of {chord:.1e}, {}",
+                        pts.len(),
+                        a.distance(&q).max(b.distance(&q)),
+                        if exact.is_some() {
+                            "refined"
+                        } else {
+                            "no point"
+                        }
                     );
                 }
-                // (A point between the span's ends: within its chord of both, however far the
-                // fit swung off it, as a cubic does round a hairpin where two branches meet.)
-                let between = (exact.p - pts[k].p).norm() <= chord
-                    && (exact.p - pts[k + 1].p).norm() <= chord;
-                (off > tol && chord > tol::POINT && (off < 0.5 * chord || between))
-                    .then_some((k + 1, exact))
+                let exact = exact?;
+                ((exact.p - q).norm() > tol).then_some((k + 1, exact, (exact.p - q).norm()))
             })
             .collect();
-        let ins: Vec<(usize, super::ssi_numeric::Pt)> = found.into_iter().flatten().collect();
+        let ins: Vec<(usize, super::ssi_numeric::Pt)> = found
+            .into_iter()
+            .flatten()
+            .map(|(k, p, off)| {
+                worst = worst.max(off);
+                (k, p)
+            })
+            .collect();
         if crate::native::env_flag!("CADRS_SSI_DEBUG") {
             eprintln!(
-                "fit round {_round}: {} points, {} to insert",
+                "fit round {rounds} (centripetal {sharp}): {} points, {} to insert, {worst:.1e} off",
                 pts.len(),
                 ins.len()
             );
@@ -2257,7 +2295,10 @@ fn fit_curve(
             pts.insert(k, p);
         }
     }
-    let (c, t) = fit(&pts);
+    if let Some((p, _)) = by_chords.filter(|(_, w)| *w <= worst) {
+        (pts, sharp) = (p, false);
+    }
+    let (c, t) = fit(&pts, sharp);
     let n = c.range();
     let pcs = uv_fits(a, b, &pts, &t, &c, 4.0 * tol);
     IntCurve {
@@ -2404,6 +2445,16 @@ fn chord(pts: &[P3]) -> Vec<f64> {
     let mut t = vec![0.0];
     for w in pts.windows(2) {
         t.push(t.last().unwrap() + (w[1] - w[0]).norm());
+    }
+    t
+}
+
+/// Centripetal parameters of points (by the square roots of the chords): a cubic through them
+/// keeps close round a sharp turn, where by the chords it swings wide.
+fn centripetal(pts: &[P3]) -> Vec<f64> {
+    let mut t = vec![0.0];
+    for w in pts.windows(2) {
+        t.push(t.last().unwrap() + (w[1] - w[0]).norm().sqrt());
     }
     t
 }
