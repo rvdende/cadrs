@@ -943,6 +943,9 @@ impl ExactStock {
         let (bn, bf) = (before.floor() as usize, before - before.floor());
         self.cut_to(bn, bf);
         if self.done != c {
+            if std::env::var_os("CADRS_EXACT_DEBUG").is_some() {
+                eprintln!("tween: cut {c} not reached (done {})", self.done);
+            }
             return None;
         }
         let kept = self.kept;
@@ -952,7 +955,11 @@ impl ExactStock {
                 if let Some((_, _, b)) = self.ahead.take() {
                     self.drop_body(b);
                 }
-                let b = self.cut_once(kept, c, 0.0, 1.0).ok()?;
+                // (Not made whole: in halves, as the stock kept would be.)
+                let b = match self.cut_once(kept, c, 0.0, 1.0) {
+                    Ok(b) => b,
+                    Err(_) => self.halves(kept, c),
+                };
                 self.ahead = Some((c, kept, b));
                 b
             }
@@ -961,24 +968,16 @@ impl ExactStock {
         let reach = self.tween_reach(c);
         let mut before = self.sim_mesh_of(kept, deflection)?;
         let mut after = self.sim_mesh_of(after, deflection)?;
-        refine(&mut before, TWEEN_EDGE, &reach);
-        refine(&mut after, TWEEN_EDGE, &reach);
-        let times = |m: &cadrs_cam::dexel::SimMesh, grow: f64, never: f32| -> Vec<f32> {
-            use rayon::prelude::*;
-            m.positions
-                .par_iter()
-                .map(|p| {
-                    let q = [p[0] as f64, p[1] as f64, p[2] as f64];
-                    if !reach.contains(&Point3::new(q[0], q[1], q[2])) {
-                        return never;
-                    }
-                    tween.reached(q, grow).map_or(never, |t| t as f32)
-                })
-                .collect()
+        let time = |p: &[f32; 3], grow: f64, never: f32| -> f32 {
+            let q = [p[0] as f64, p[1] as f64, p[2] as f64];
+            if !reach.contains(&Point3::new(q[0], q[1], q[2])) {
+                return never;
+            }
+            tween.reached(q, grow).map_or(never, |t| t as f32)
         };
         // (Before: hidden once reached. After: its new faces shown once made, its old ones always.)
-        let before_times = times(&before, 0.0, f32::INFINITY);
-        let after_times = times(&after, 1e-4, f32::NEG_INFINITY);
+        let before_times = refine_by_times(&mut before, &|p| time(p, 0.0, f32::INFINITY));
+        let after_times = refine_by_times(&mut after, &|p| time(p, 1e-4, f32::NEG_INFINITY));
         let cut = &self.cuts[c];
         Some(Tweened {
             cut: c,
@@ -1538,7 +1537,7 @@ fn along_knots(knots: &[(f64, f64)], x: f64) -> f64 {
 
 /// The longest edge a tweened mesh keeps within a cut's reach (mm): a vertex's time is
 /// interpolated across its triangles, and a bar's faces are strips its whole length.
-const TWEEN_EDGE: f64 = 0.5;
+const TWEEN_EDGE: f64 = 0.1;
 
 /// An axis-aligned box.
 #[derive(Debug, Clone, Copy)]
@@ -1570,8 +1569,94 @@ impl Bbox3 {
     }
 }
 
+/// Each vertex's time (`time`), `m`'s triangles split (at their longest edges' middles) where
+/// the times at their corners differ by more than [`TWEEN_STEP`] (or one is reached and another
+/// never), down to edges [`TWEEN_EDGE`] long: where an interpolated time would put the cut's
+/// front wrong. A triangle all one time stays as it is.
+fn refine_by_times(
+    m: &mut cadrs_cam::dexel::SimMesh,
+    time: &(dyn Fn(&[f32; 3]) -> f32 + Sync),
+) -> Vec<f32> {
+    use rayon::prelude::*;
+    let mut times: Vec<f32> = m.positions.par_iter().map(time).collect();
+    let mut todo: Vec<[u32; 3]> = m.indices.chunks(3).map(|t| [t[0], t[1], t[2]]).collect();
+    let mut done: Vec<u32> = Vec::with_capacity(m.indices.len());
+    let mut middles: std::collections::HashMap<(u32, u32), u32> = Default::default();
+    let differ = |a: f32, b: f32| {
+        if a.is_finite() && b.is_finite() {
+            (a - b).abs() > TWEEN_STEP
+        } else {
+            a != b
+        }
+    };
+    // In rounds, each round's new vertices timed together.
+    while !todo.is_empty() {
+        let mut next: Vec<[u32; 3]> = Vec::new();
+        let mut fresh: Vec<u32> = Vec::new();
+        for t in std::mem::take(&mut todo) {
+            let q = |i: u32| {
+                let p = m.positions[i as usize];
+                V3::new(p[0] as f64, p[1] as f64, p[2] as f64)
+            };
+            let ts = [
+                times[t[0] as usize],
+                times[t[1] as usize],
+                times[t[2] as usize],
+            ];
+            let split = differ(ts[0], ts[1]) || differ(ts[1], ts[2]) || differ(ts[2], ts[0]);
+            let lens = [
+                (q(t[1]) - q(t[0])).norm(),
+                (q(t[2]) - q(t[1])).norm(),
+                (q(t[0]) - q(t[2])).norm(),
+            ];
+            let (k, longest) = lens
+                .iter()
+                .copied()
+                .enumerate()
+                .fold((0, 0.0), |a, (i, l)| if l > a.1 { (i, l) } else { a });
+            if !split || longest <= TWEEN_EDGE || m.positions.len() > 4_000_000 {
+                done.extend(t);
+                continue;
+            }
+            let (i, j) = (t[k], t[(k + 1) % 3]);
+            let key = (i.min(j), i.max(j));
+            let mid = *middles.entry(key).or_insert_with(|| {
+                let (pi, pj) = (m.positions[i as usize], m.positions[j as usize]);
+                let (ni, nj) = (m.normals[i as usize], m.normals[j as usize]);
+                m.positions.push([0, 1, 2].map(|a| 0.5 * (pi[a] + pj[a])));
+                let n = [0, 1, 2].map(|a| 0.5 * (ni[a] + nj[a]));
+                let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt().max(1e-12);
+                m.normals.push(n.map(|x| x / l));
+                m.colors.push(m.colors[i as usize]);
+                m.tags.push(m.tags[i as usize]);
+                times.push(f32::NAN);
+                let v = (m.positions.len() - 1) as u32;
+                fresh.push(v);
+                v
+            });
+            let o = t[(k + 2) % 3];
+            next.push([i, mid, o]);
+            next.push([mid, j, o]);
+        }
+        let new: Vec<f32> = fresh
+            .par_iter()
+            .map(|&v| time(&m.positions[v as usize]))
+            .collect();
+        for (v, t) in fresh.into_iter().zip(new) {
+            times[v as usize] = t;
+        }
+        todo = next;
+    }
+    m.indices = done;
+    times
+}
+
+/// How far apart (of the cut, 0 to 1) the times at a tweened triangle's corners may be.
+const TWEEN_STEP: f32 = 0.02;
+
 /// `m`'s triangles within `reach` split (at their longest edges' middles) till no edge is
 /// longer than `edge`.
+#[allow(dead_code)]
 fn refine(m: &mut cadrs_cam::dexel::SimMesh, edge: f64, reach: &Bbox3) {
     let p = |m: &cadrs_cam::dexel::SimMesh, i: u32| {
         let q = m.positions[i as usize];
@@ -1728,8 +1813,16 @@ impl Tween {
         // (Samples so close the tool moves no more than a twentieth of a millimetre between.)
         let speed = match self.screw {
             Screw::Slide(v) => v.norm(),
-            Screw::Turn { angle, rise, .. } => {
-                angle.abs() * (self.cutter.radius.hypot(self.cutter.length) + 100.0) + rise.abs()
+            Screw::Turn {
+                at,
+                dir,
+                angle,
+                rise,
+            } => {
+                // (The point's own arc about the axis, its radius out to the tool's reach.)
+                let w = p - at;
+                let rho = (w - dir * w.dot(&dir)).norm();
+                angle.abs() * (rho + self.cutter.radius.hypot(self.cutter.length)) + rise.abs()
             }
         };
         for (a, b) in self.windows(&p) {
