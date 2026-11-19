@@ -266,11 +266,12 @@ fn butted_corners_keep_the_volume_and_square_ends() {
     assert!((lengths - 1400.0).abs() < 1e-6, "{lengths}");
     for m in &b.frames {
         assert_eq!(m.ends, [EndCut::Square, EndCut::Square], "{m:?}");
-        // Every member is 400 ± 40 or 300 ± 40 or exactly as drawn.
-        let ok = [360.0, 400.0, 440.0, 260.0, 300.0, 340.0]
-            .iter()
-            .any(|l| (m.length - l).abs() < 1e-6);
-        assert!(ok, "{}", m.length);
+    }
+    // The long sides run on at both ends, the short ones stop at them.
+    let mut l: Vec<f64> = b.frames.iter().map(|m| m.length).collect();
+    l.sort_by(f64::total_cmp);
+    for (got, want) in l.iter().zip([260.0, 260.0, 440.0, 440.0]) {
+        assert!((got - want).abs() < 1e-6, "{l:?}");
     }
 }
 
@@ -411,7 +412,9 @@ fn a_coped_tee_saddles_round_the_bar() {
 }
 
 #[test]
-fn three_members_at_a_corner_butt_against_the_first() {
+fn three_members_at_a_corner_join_the_flattest_pair() {
+    // The pair lying flat (X and Y) is joined, the longer running on; the post up Z is cut
+    // against both.
     // Along X and Y on Top, and up Z on Front, all from the origin.
     let mut st = Studio::new();
     let a = st.sketch(
@@ -427,6 +430,7 @@ fn three_members_at_a_corner_butt_against_the_first() {
         vec![polyline(&[(0.0, 0.0), (0.0, 200.0)], false)],
     );
     let mut x = tube("40x40x3");
+    x.corner = CornerType::Butt;
     x.path = vec![PathRef::Sketch(a), PathRef::Sketch(b2), PathRef::Sketch(c)];
     st.frame(x);
     let b = st.build();
@@ -434,6 +438,11 @@ fn three_members_at_a_corner_butt_against_the_first() {
     let area = square_tube_area(40.0, 3.0);
     let want = area * ((300.0 + 20.0) + (250.0 - 20.0) + (200.0 - 20.0));
     assert!(close(total(&b), want, 1e-6), "{} vs {want}", total(&b));
+    let mut l: Vec<f64> = b.frames.iter().map(|m| m.length).collect();
+    l.sort_by(f64::total_cmp);
+    for (got, want) in l.iter().zip([180.0, 230.0, 320.0]) {
+        assert!((got - want).abs() < 1e-4, "{l:?}");
+    }
 }
 
 #[test]
@@ -982,7 +991,7 @@ fn a_box_edge_loop_frames_with_one_up() {
 }
 
 #[test]
-fn flip_runs_the_next_longest_on_at_a_corner_of_three() {
+fn flip_swaps_the_runner_within_the_main_pair() {
     let mut st = Studio::new();
     let a = st.sketch(
         PlaneRef::Top,
@@ -997,6 +1006,7 @@ fn flip_runs_the_next_longest_on_at_a_corner_of_three() {
         vec![polyline(&[(0.0, 0.0), (0.0, 200.0)], false)],
     );
     let mut x = tube("40x40x3");
+    x.corner = CornerType::Butt;
     x.flip = true;
     x.path = vec![PathRef::Sketch(a), PathRef::Sketch(b2), PathRef::Sketch(c)];
     st.frame(x);
@@ -1004,6 +1014,12 @@ fn flip_runs_the_next_longest_on_at_a_corner_of_three() {
     let area = square_tube_area(40.0, 3.0);
     let want = area * ((300.0 - 20.0) + (250.0 + 20.0) + (200.0 - 20.0));
     assert!(close(total(&b), want, 1e-6), "{} vs {want}", total(&b));
+    // Y runs on now, X stops at it; the post as before.
+    let mut l: Vec<f64> = b.frames.iter().map(|m| m.length).collect();
+    l.sort_by(f64::total_cmp);
+    for (got, want) in l.iter().zip([180.0, 270.0, 280.0]) {
+        assert!((got - want).abs() < 1e-4, "{l:?}");
+    }
 }
 
 #[test]
@@ -1027,6 +1043,12 @@ fn a_circle_is_one_closed_member() {
     let want = PI * 100.0 * 2.0 * PI * 100.0;
     assert!(close(total(&b), want, 1e-5), "{} vs {want}", total(&b));
     assert!(b.frames[0].curved);
+    // A ring's stock is its centre line.
+    assert!(
+        (b.frames[0].length - 2.0 * PI * 100.0).abs() < 1e-6,
+        "{}",
+        b.frames[0].length
+    );
 }
 
 #[test]
@@ -1767,6 +1789,11 @@ fn a_rounded_rectangle_is_one_closed_member() {
     assert_eq!(b.parts.len(), 1);
     let centre = 2.0 * 300.0 + 2.0 * 200.0 + 2.0 * PI * 50.0;
     assert!(close(total(&b), PI * 100.0 * centre, 1e-5), "{}", total(&b));
+    assert!(
+        (b.frames[0].length - centre).abs() < 1e-6,
+        "{}",
+        b.frames[0].length
+    );
 }
 
 #[test]
@@ -1888,4 +1915,116 @@ fn the_cut_list_tells_mitres_facing_other_ways_apart() {
         .filter(|r| r.ends.iter().all(|e| matches!(e, EndCut::Angle(_))))
         .collect();
     assert_eq!(both_mitred.len(), 2, "{rows:?}");
+}
+
+#[test]
+fn a_t_slot_rail_trimmed_by_a_t_slot_post_keeps_nothing_in_its_slot() {
+    // A 40x40 post along X, and a 20x20 rail up to its axis in a frame of its own, trimmed by
+    // it: the rail stops at the post's face, 300 − 20 long, nothing left in the post's slot.
+    let mut st = Studio::new();
+    let post = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(&[(-200.0, 0.0), (200.0, 0.0)], false)],
+    );
+    let mut x = FrameFeature::default();
+    x.size = "40x40".into();
+    x.path = vec![PathRef::Sketch(post)];
+    let f = st.frame(x);
+    let post_part = st.build().parts.iter().find(|p| p.feature == f).unwrap().id;
+    let area = {
+        let mut st = Studio::new();
+        let sk = st.sketch(
+            PlaneRef::Top,
+            vec![polyline(&[(0.0, 0.0), (100.0, 0.0)], false)],
+        );
+        st.frame(FrameFeature {
+            path: vec![PathRef::Sketch(sk)],
+            ..Default::default()
+        });
+        total(&st.build()) / 100.0
+    };
+    let rail = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(&[(0.0, -300.0), (0.0, 0.0)], false)],
+    );
+    let g = st.frame(FrameFeature {
+        path: vec![PathRef::Sketch(rail)],
+        trim: vec![post_part],
+        ..Default::default()
+    });
+    let b = st.build();
+    let r = b.parts.iter().find(|p| p.feature == g).unwrap();
+    assert!(
+        close(volume(r), area * 280.0, 1e-6),
+        "{} vs {}",
+        volume(r),
+        area * 280.0
+    );
+    let m = b.frames.iter().find(|m| m.feature == g).unwrap();
+    assert!((m.length - 280.0).abs() < 1e-4, "{}", m.length);
+}
+
+#[test]
+fn a_curve_picked_with_its_sketch_is_one_member() {
+    let mut st = Studio::new();
+    let sk = rectangle(&mut st);
+    let line = line_at(&st, sk, (0.0, 0.0), (400.0, 0.0));
+    let mut x = tube("40x40x3");
+    x.path = vec![
+        PathRef::Sketch(sk),
+        PathRef::SketchCurve {
+            sketch: sk,
+            curve: line,
+        },
+    ];
+    st.frame(x);
+    assert_eq!(st.build().parts.len(), 4);
+}
+
+#[test]
+fn a_loop_drawn_clockwise_keeps_a_left_section_inside() {
+    // The rectangle's lines drawn the other way round (and its first one backwards): the
+    // section to the members' left is still inside it.
+    let mut st = Studio::new();
+    let sk = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(
+            &[(0.0, 0.0), (0.0, 300.0), (400.0, 300.0), (400.0, 0.0)],
+            true,
+        )],
+    );
+    let mut x = tube("40x40x3");
+    x.anchor = Anchor::Left;
+    x.path = vec![PathRef::Sketch(sk)];
+    st.frame(x);
+    let b = st.build();
+    for p in &b.parts {
+        let (lo, hi) = bounds(p);
+        assert!(lo[0] > -1e-4 && lo[1] > -1e-4 && hi[0] < 400.0 + 1e-4 && hi[1] < 300.0 + 1e-4);
+    }
+}
+
+#[test]
+fn mirrored_corners_cut_alike_pieces() {
+    // Two L corners, one the other's mirror image: round tube, then square tube; either way,
+    // two items of two.
+    for family in [ProfileFamily::RoundTube, ProfileFamily::SquareTube] {
+        let mut st = Studio::new();
+        let sk = st.sketch(
+            PlaneRef::Top,
+            vec![
+                polyline(&[(300.0, 0.0), (0.0, 0.0), (0.0, 200.0)], false),
+                polyline(&[(700.0, 0.0), (1000.0, 0.0), (1000.0, 200.0)], false),
+            ],
+        );
+        let mut x = FrameFeature::default();
+        x.set_family(family);
+        x.corner = CornerType::Miter;
+        x.path = vec![PathRef::Sketch(sk)];
+        st.frame(x);
+        let b = st.build();
+        let rows = frame::cut_list(&b.frames);
+        let q: Vec<usize> = rows.iter().map(|r| r.quantity()).collect();
+        assert_eq!(q, [2, 2], "{family:?}: {rows:?}");
+    }
 }

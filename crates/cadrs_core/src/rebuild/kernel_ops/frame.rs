@@ -212,6 +212,9 @@ impl Rebuilder {
                 p => refs.push(*p),
             }
         }
+        // (A curve picked and its sketch picked too: once.)
+        let mut seen: HashSet<String> = HashSet::new();
+        refs.retain(|p| seen.insert(path_identity(p)));
         for p in &refs {
             let curves = match self.path_curves(before, state, std::slice::from_ref(p)) {
                 Ok(c) => c,
@@ -349,12 +352,48 @@ impl Rebuilder {
                 };
                 let was = past(self, bodies[i].0);
                 let b = (bodies[i].0, bodies[i].1.clone());
+                // A T-slot member's slots would keep tongues of the trimmed member: cut it at the
+                // tool's face (its box's, square to the member's end) too.
+                let slotted = state
+                    .frames
+                    .iter()
+                    .any(|m| m.part == *p && m.family == Some(ProfileFamily::TSlot) && !m.plate);
+                let tool_box = self.kernel.bounding_box(tool).ok();
                 match self.frame_trim(op, b, tool, state, x.trim_flip) {
-                    Ok(t) => {
+                    Ok(mut t) => {
                         // An end it now falls short of was trimmed.
                         let now = past(self, t.0);
                         for e in 0..2 {
                             trimmed[i][e] |= now[e] < was[e] - 1e-6 * (1.0 + size);
+                            if !(trimmed[i][e] && slotted) {
+                                continue;
+                            }
+                            let Some(bb) = tool_box else { continue };
+                            let m = &members[i];
+                            let (pe, out) = (m.point(e), -m.inward(e));
+                            // Where the tool's box starts, coming out along this end.
+                            let face = pe - out * bb.max_along(pe, &-out);
+                            let bound = (!m.straight).then(|| plans[i][e].run_on + 4.0 * r_section);
+                            match self.frame_cut(
+                                op,
+                                t,
+                                face,
+                                -out,
+                                base_of(m.key) + 0xd0 + e as u64,
+                                bound,
+                            ) {
+                                Ok(c) => t = c,
+                                Err(err) => {
+                                    let rest: Vec<(BodyId, BodyNames)> = bodies
+                                        .iter()
+                                        .enumerate()
+                                        .filter(|(j, _)| *j != i)
+                                        .map(|(_, b)| b.clone())
+                                        .collect();
+                                    release(self, &rest);
+                                    return Err(format!("Member {} failed: {err}", i + 1));
+                                }
+                            }
                         }
                         bodies[i] = t;
                     }
@@ -451,7 +490,9 @@ impl Rebuilder {
             let length = if m.straight {
                 self.long_point(body, m).unwrap_or(m.length)
             } else {
-                self.bent_length(body, m, r_section).unwrap_or(m.length)
+                let runs = [plans[i][0].run_on, plans[i][1].run_on];
+                self.bent_length(body, m, r_section, runs)
+                    .unwrap_or(m.length)
             };
             infos.push(MemberInfo {
                 feature: id,
@@ -477,6 +518,7 @@ impl Rebuilder {
                     }
                     _ => [0.0; 2],
                 }),
+                symmetry: frame::symmetry(x),
                 family: Some(x.family),
                 size: size.clone(),
                 plate_kind: None,
@@ -508,6 +550,7 @@ impl Rebuilder {
                 volume,
                 plate: true,
                 end_normals: [[0.0; 2]; 2],
+                symmetry: frame::Symmetry::None,
                 family: None,
                 size: String::new(),
                 plate_kind: Some(kind),
@@ -695,7 +738,17 @@ impl Rebuilder {
 
     /// A bent member's stock length: its path, and at each end what of its body reaches past
     /// the path's end along the member (a mitre's long point, a run-on).
-    fn bent_length(&self, body: BodyId, m: &Member, r_section: f64) -> Option<f64> {
+    fn bent_length(
+        &self,
+        body: BodyId,
+        m: &Member,
+        r_section: f64,
+        run_on: [f64; 2],
+    ) -> Option<f64> {
+        // A ring has no ends: its path.
+        if m.closed {
+            return Some(m.length);
+        }
         let mesh = self
             .kernel
             .tessellate(
@@ -709,11 +762,13 @@ impl Rebuilder {
         let mut length = m.length;
         for end in 0..2 {
             let (p, out) = (m.point(end), -m.inward(end));
-            // The body's points near this end (within its section's size and a run-on).
+            // The body's points near this end (within its section's size and its run-on: a
+            // sharp mitre's long point is far out).
+            let window = (4.0 * r_section).max(run_on[end] + 2.0 * r_section);
             let near = mesh
                 .positions
                 .iter()
-                .filter(|q| (*q - p).norm() < 4.0 * r_section)
+                .filter(|q| (*q - p).norm() < window)
                 .map(|q| (q - p).dot(&out))
                 .fold(f64::NEG_INFINITY, f64::max);
             if near.is_finite() {
@@ -1163,7 +1218,8 @@ struct Corners {
 /// against it; two ends mitred, or butted with the longer running on (of two as long, the one
 /// along the first member's direction, so a square frame's opposite sides pair up), flip
 /// swapping them; at three or more, two in line run through and the others are cut against
-/// them, else the longest (an override's turn picks the next) runs on.
+/// them, else the main pair (the widest angle; an override's turn picks the next pair) is
+/// joined as two are and the others are cut against both and split between themselves.
 #[allow(clippy::too_many_arguments)]
 fn plan_corners(
     x: &FrameFeature,
@@ -1194,7 +1250,9 @@ fn plan_corners(
         let o = ov.map(|i| &x.overrides[i]);
         let kind = o.map_or(x.corner, |o| o.corner);
         let flip = o.map_or(x.flip, |o| o.flip);
-        let turn = o.map_or(usize::from(x.flip), |o| usize::from(o.turn));
+        // (The frame's flip swaps runners only; which pair is joined at a corner of three or
+        // more is an override's turn.)
+        let turn = o.map_or(0, |o| usize::from(o.turn));
         let gusset = o.and_then(|o| o.gusset).unwrap_or(x.gussets);
         // A member running through the point (a line's or an arc's span): the ends here are
         // cut against it.
@@ -1626,8 +1684,26 @@ fn orient(members: &mut [Member], tol: f64) {
         } else {
             n.x.signum()
         };
+        let up = n * sign;
         for &i in &run {
-            members[i].up = n * sign;
+            members[i].up = up;
+        }
+        // A closed loop runs counter-clockwise about its up, whichever way its curves were
+        // drawn: a section to its left lies inside it.
+        let links_of = |i: usize| links.iter().filter(|(a, b)| a.0 == i || b.0 == i).count();
+        if run.iter().all(|&i| links_of(i) == 2) {
+            let turning: f64 = run
+                .iter()
+                .map(|&i| {
+                    let m = &members[i];
+                    (m.start - p0).cross(&(m.end - p0)).dot(&up)
+                })
+                .sum();
+            if turning < 0.0 {
+                for &i in &run {
+                    members[i].reverse();
+                }
+            }
         }
     }
 }

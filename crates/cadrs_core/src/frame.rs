@@ -215,7 +215,9 @@ pub struct CornerOverride {
     /// Butt and coped: the other member runs on.
     #[serde(default)]
     pub flip: bool,
-    /// Where three or more members end: which runs on, counted from the longest (wrapping).
+    /// Where three or more members end: which pair is joined (as two members would be; the
+    /// others are cut against it), counted through the pairs from the widest angle (of pairs as
+    /// wide, the one lying flattest across the frame's up), wrapping.
     #[serde(default)]
     pub turn: u8,
     /// A gusset here or not (`None`: as the frame's Gussets).
@@ -277,7 +279,8 @@ pub struct FrameFeature {
     /// against both.
     #[serde(default)]
     pub corner: CornerType,
-    /// Butt and coped corners: the shorter member runs on, not the longer.
+    /// Butt and coped corners: the shorter member runs on, not the longer (at a corner of three
+    /// or more, within its main pair).
     #[serde(default)]
     pub flip: bool,
     #[serde(default)]
@@ -399,14 +402,15 @@ impl FrameFeature {
         {
             return Some("The end caps' thickness must be greater than zero");
         }
-        if self.gussets
+        let any_gusset = self.gussets || self.overrides.iter().any(|o| o.gusset == Some(true));
+        if any_gusset
             && [self.gusset_size, self.gusset_thickness]
                 .iter()
                 .any(|v| v.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater))
         {
             return Some("The gussets' size and thickness must be greater than zero");
         }
-        if self.gussets && !(self.gusset_chamfer >= 0.0 && self.gusset_chamfer < self.gusset_size) {
+        if any_gusset && !(self.gusset_chamfer >= 0.0 && self.gusset_chamfer < self.gusset_size) {
             return Some("A gusset's chamfer must be less than its size");
         }
         None
@@ -1347,6 +1351,9 @@ pub struct MemberInfo {
     /// section are different pieces.
     #[serde(default)]
     pub end_normals: [[f64; 2]; 2],
+    /// How its section maps onto itself (pieces differing by that are alike).
+    #[serde(default)]
+    pub symmetry: Symmetry,
     /// A standard section's family and size (to name it in another language); `None` for a
     /// custom section or a plate.
     #[serde(default)]
@@ -1432,14 +1439,100 @@ impl CutListRow {
     }
 }
 
-/// Which way a member's end cuts face across it, the same for the member seen from either end
-/// (turned end for end its right is its left).
-fn cuts_key(m: &MemberInfo) -> [[i64; 2]; 2] {
-    let k = |v: [f64; 2]| v.map(|c| (c * 100.0).round() as i64);
-    let ahead = [k(m.end_normals[0]), k(m.end_normals[1])];
-    let mirror = |v: [f64; 2]| [-v[0], v[1]];
-    let back = [k(mirror(m.end_normals[1])), k(mirror(m.end_normals[0]))];
-    ahead.min(back)
+/// The ways a section maps onto itself, in the member's frame (each a 2×2 matrix, row by row),
+/// or any turn (a round section): pieces that differ by one are the same piece.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub enum Symmetry {
+    #[default]
+    None,
+    Round,
+    Ops(Vec<[f64; 4]>),
+}
+
+/// A frame's section's symmetry, as placed (turned by its angle, mirrored).
+pub fn symmetry(x: &FrameFeature) -> Symmetry {
+    let id = [1.0, 0.0, 0.0, 1.0];
+    let flip_x = [-1.0, 0.0, 0.0, 1.0];
+    let flip_y = [1.0, 0.0, 0.0, -1.0];
+    let half = [-1.0, 0.0, 0.0, -1.0];
+    let quarter = [0.0, -1.0, 1.0, 0.0];
+    let three = [0.0, 1.0, -1.0, 0.0];
+    let diag = [0.0, 1.0, 1.0, 0.0];
+    let anti = [0.0, -1.0, -1.0, 0.0];
+    let square = vec![id, quarter, half, three, flip_x, flip_y, diag, anti];
+    let rect = vec![id, flip_x, flip_y, half];
+    let cells = |s: &str| T_SLOTS.iter().find(|t| t.0 == s).map(|t| (t.2, t.3));
+    let natural = match x.family {
+        ProfileFamily::RoundTube | ProfileFamily::RoundBar => return Symmetry::Round,
+        ProfileFamily::SquareTube | ProfileFamily::SquareBar => square,
+        ProfileFamily::TSlot if cells(&x.size).is_some_and(|(a, b)| a == b) => square,
+        ProfileFamily::TSlot
+        | ProfileFamily::RectTube
+        | ProfileFamily::FlatBar
+        | ProfileFamily::IBeam => rect,
+        ProfileFamily::Channel => vec![id, flip_y],
+        ProfileFamily::Angle => vec![id, diag],
+        ProfileFamily::Custom => return Symmetry::None,
+    };
+    // In the member's frame: T g T⁻¹, T the placing turn after the mirror.
+    let (c, sn) = (x.angle.to_radians().cos(), x.angle.to_radians().sin());
+    let m = if x.mirror { -1.0 } else { 1.0 };
+    let t = [c * m, -sn, sn * m, c];
+    let t_inv = [c * m, sn * m, -sn, c];
+    let mul = |a: [f64; 4], b: [f64; 4]| {
+        [
+            a[0] * b[0] + a[1] * b[2],
+            a[0] * b[1] + a[1] * b[3],
+            a[2] * b[0] + a[3] * b[2],
+            a[2] * b[1] + a[3] * b[3],
+        ]
+    };
+    Symmetry::Ops(natural.into_iter().map(|g| mul(mul(t, g), t_inv)).collect())
+}
+
+/// What a member's end cuts are, the same for alike pieces: each end's cut and the way its
+/// plane faces across the section, taken from either end (turned end for end, a member's
+/// right is its left) and through its section's symmetry, the least.
+fn cuts_key(m: &MemberInfo) -> [(i64, [i64; 2]); 2] {
+    let r = |v: [f64; 2]| v.map(|c| (c * 100.0).round() as i64);
+    let apply = |g: &[f64; 4], v: [f64; 2]| [g[0] * v[0] + g[1] * v[1], g[2] * v[0] + g[3] * v[1]];
+    let ends = |rev: bool| {
+        let (a, b) = if rev { (1, 0) } else { (0, 1) };
+        let flip = |v: [f64; 2]| if rev { [-v[0], v[1]] } else { v };
+        (
+            (m.ends[a].key(), flip(m.end_normals[a])),
+            (m.ends[b].key(), flip(m.end_normals[b])),
+        )
+    };
+    let mut best: Option<[(i64, [i64; 2]); 2]> = None;
+    for rev in [false, true] {
+        let ((k0, n0), (k1, n1)) = ends(rev);
+        let candidates: Vec<[[f64; 2]; 2]> = match &m.symmetry {
+            Symmetry::None => vec![[n0, n1]],
+            Symmetry::Ops(ops) => ops.iter().map(|g| [apply(g, n0), apply(g, n1)]).collect(),
+            Symmetry::Round => {
+                // Turned so the first cut faces +x (or the second, the first square), then
+                // the second's other side mirrored away.
+                let lead = if n0 != [0.0, 0.0] { n0 } else { n1 };
+                let a = -lead[1].atan2(lead[0]);
+                let turn = [a.cos(), -a.sin(), a.sin(), a.cos()];
+                let (p, mut q) = (apply(&turn, n0), apply(&turn, n1));
+                let mut p = p;
+                if q[1] < 0.0 || (q[1] == 0.0 && p[1] < 0.0) {
+                    q[1] = -q[1];
+                    p[1] = -p[1];
+                }
+                vec![[p, q]]
+            }
+        };
+        for [p, q] in candidates {
+            let c = [(k0, r(p)), (k1, r(q))];
+            if best.is_none_or(|b| c < b) {
+                best = Some(c);
+            }
+        }
+    }
+    best.unwrap_or_default()
 }
 
 /// The cut list of these members: alike ones (section, length to 0.1 mm, end cuts, which way
@@ -1447,19 +1540,17 @@ fn cuts_key(m: &MemberInfo) -> [[i64; 2]; 2] {
 /// sections in the order they first come.
 pub fn cut_list(members: &[MemberInfo]) -> Vec<CutListRow> {
     let mut rows: Vec<CutListRow> = Vec::new();
-    let mut keys: Vec<[[i64; 2]; 2]> = Vec::new();
-    let length_key = |l: f64| (l * 10.0).round() as i64;
+    let mut keys: Vec<[(i64, [i64; 2]); 2]> = Vec::new();
+    // Alike to within half the 0.1 mm the list shows (rounding would part 316.85 from
+    // 316.8499…).
+    let same_length = |a: f64, b: f64| (a - b).abs() < 0.05;
     for m in members {
-        let mut ends = m.ends;
-        if ends[0].key() > ends[1].key() {
-            ends.swap(0, 1);
-        }
+        let ends = m.ends;
         let key = cuts_key(m);
         match rows.iter_mut().zip(&keys).find(|(r, k)| {
             **k == key
                 && r.profile == m.profile
-                && length_key(r.length) == length_key(m.length)
-                && r.ends.map(EndCut::key) == ends.map(EndCut::key)
+                && same_length(r.length, m.length)
                 && r.curved == m.curved
                 && r.plate == m.plate
         }) {
@@ -1838,6 +1929,7 @@ mod tests {
             volume: 0.0,
             plate: false,
             end_normals: [[0.0; 2]; 2],
+            symmetry: Symmetry::None,
             family: Some(ProfileFamily::SquareTube),
             plate_kind: None,
             size: "40x40x3".into(),
@@ -1906,6 +1998,7 @@ mod tests {
             volume: 1.0,
             plate: false,
             end_normals: [[0.0; 2]; 2],
+            symmetry: Symmetry::None,
             family: Some(ProfileFamily::TSlot),
             plate_kind: None,
             size: "20x20".into(),
