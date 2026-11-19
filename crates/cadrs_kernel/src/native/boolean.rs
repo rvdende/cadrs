@@ -4237,8 +4237,18 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                         continue;
                     }
                     let (p, q) = (&pool.edges[g[i]], &pool.edges[g[j]]);
-                    // (Within the pieces' own tolerances too: edges a fuzzy gap apart are one.)
-                    let within = (run_tol * 10.0).max(p.tol.min(q.tol));
+                    // (Within the pieces' own tolerances too: edges a fuzzy gap apart are one.
+                    // Two exact curves (lines, circles, ellipses) are one only within a run
+                    // tolerance and a half, not ten: two arcs between the same two crossings of
+                    // nearly tangent circles, a lens 2 µm thick where parallel cylinders overlap
+                    // by a hair, are the lens's two sides. Fitted curves keep the ten.)
+                    let exact = |c: &Curve| !matches!(c, Curve::Nurbs(_));
+                    let k = if exact(&p.curve) && exact(&q.curve) {
+                        1.5
+                    } else {
+                        10.0
+                    };
+                    let within = (run_tol * k).max(p.tol.min(q.tol));
                     let ok = [0.25, 0.5, 0.75].iter().all(|f| {
                         let m = q.curve.point(q.t[0] + (q.t[1] - q.t[0]) * f);
                         on_curve(&p.curve, p.t[0], p.t[1], &m, within).is_some()

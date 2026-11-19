@@ -989,19 +989,26 @@ fn cylinder_loops(f1: &Frame, r1: f64, f2: &Frame, r2: f64) -> Option<Vec<IntCur
     // Only near touching: where some generator comes within a hair of touching the second
     // cylinder (the loops nearly meet there, two equal cylinders a hair off crossing), which the
     // numeric engine follows badly; elsewhere it is faster and as good.
-    let near = discs.iter().map(|d| d.abs()).fold(f64::INFINITY, f64::min);
-    if near > 1e-4 * a * r2 * r2 {
+    // (A turn of the discriminant near nought: a local extremum, not where it changes sign,
+    // which every pair whose generators partly miss has.)
+    let near = (0..N)
+        .filter(|&i| {
+            let (l, m, r) = (discs[(i + N - 1) % N], discs[i], discs[(i + 1) % N]);
+            let extremum = (m - l) * (r - m) <= 0.0;
+            let no_crossing = l.signum() == m.signum() && m.signum() == r.signum();
+            extremum && no_crossing
+        })
+        .map(|i| discs[i].abs())
+        .fold(f64::INFINITY, f64::min);
+    // (Not where it reaches nought, the loops touching: they join there, the numeric engine's.)
+    if near > 1e-2 * a * r2 * r2 || near < 1e-10 * a * r2 * r2 {
         return None;
     }
     let mut out = Vec::new();
+    // (Every generator meeting it twice, one cylinder through the other: the numeric engine's,
+    // which follows those loops well.)
     if discs.iter().all(|&d| d > room) {
-        // Every generator meets the second twice: two loops all the way round, s±(θ).
-        for sign in [1.0, -1.0] {
-            out.push(fitted(&|t: f64| {
-                point(t, sign * quad(t).1.max(0.0).sqrt())
-            })?);
-        }
-        return Some(out);
+        return None;
     }
     // Else each stretch of θ where the generators meet it: one loop, out along s+ and back along
     // s−, the two joined where the generator touches (the discriminant's roots α < β). In
@@ -1366,6 +1373,9 @@ fn analytic(a: &Surface, b: &Surface, bb: &Bbox, run_tol: f64) -> Option<Vec<Int
         (Surface::Cylinder { f: f1, r: r1 }, Surface::Cylinder { f: f2, r: r2 }) => {
             if f1.z.cross(&f2.z).norm() > tol::ANGULAR_FINE {
                 return equal_cylinders_crossing(f1, *r1, f2, *r2, bb).or_else(|| {
+                    if crate::native::env_flag!("CADRS_NO_CYLINDER_LOOPS") {
+                        return None;
+                    }
                     cylinder_loops(f1, *r1, f2, *r2).or_else(|| cylinder_loops(f2, *r2, f1, *r1))
                 });
             }
