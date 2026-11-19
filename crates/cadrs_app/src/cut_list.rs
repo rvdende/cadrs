@@ -90,7 +90,7 @@ fn profile_text(members: &[MemberInfo], profile: &str) -> String {
             .iter()
             .find(|o| o.feature == m.feature && !o.plate)
             .unwrap_or(m);
-        profile_text(&[s.clone()], &s.profile)
+        profile_text(std::slice::from_ref(s), &s.profile)
     };
     match (m.plate_kind, m.family) {
         (Some(PlateKind::Cap { thickness }), _) => tr_with(
@@ -208,7 +208,7 @@ fn rebuild(world: &mut World) {
             _ => None,
         })
         .collect();
-    let materials: Vec<(Option<String>, Option<f64>)> = rows
+    let materials: Vec<cadrs_core::frame::RowMaterial> = rows
         .iter()
         .map(|r| cadrs_core::frame::row_material(r, &members, &cache.parts, &cache.props))
         .collect();
