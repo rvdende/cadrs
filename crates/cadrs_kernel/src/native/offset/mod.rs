@@ -107,39 +107,49 @@ fn collapses_a_face(out: &crate::native::topo::Body) -> bool {
     })
 }
 
-/// Whether moving faces turned a flat face that stays where it was inside out: its outer
-/// loop's area in (u, v) changed sign (a step's tread raised past the one above reverses the
-/// riser between them, which the sharp offset builds back to front, a sound body that is not the
-/// move). Faces are compared by index, where the offset kept them all.
-fn turns_a_face_over(
-    b: &crate::native::topo::Body,
-    out: &crate::native::topo::Body,
-    dist: &[f64],
-) -> bool {
-    if out.faces.len() != b.faces.len() {
-        return false;
-    }
-    let size = b.bbox().diagonal().max(tol::POINT);
-    let small = tol::REL_POINT * size * size;
-    let area = |body: &crate::native::topo::Body, i: usize| {
-        let polys = crate::native::classify::face_polygons(body, &body.faces[i]);
-        // (Signed by the face's sense too: a face whose senses come from its loops may be
-        // reversed by flipping either.)
-        let sign = if body.faces[i].sense { 1.0 } else { -1.0 };
-        polys
-            .first()
-            .map(|l| sign * crate::native::math::polygon_area(l))
+/// Whether a moved flat face passes a flat face facing the same way that shares a neighbour
+/// with it (a step's tread raised past the one above: the riser between them would turn inside
+/// out). Faces moved into each other (a slot's walls pushed across it) are not this: they face
+/// each other, and their slabs' union is the move.
+fn passes_a_step(b: &crate::native::topo::Body, dist: &[f64]) -> bool {
+    let near = tol::REL_POINT * b.bbox().diagonal().max(tol::POINT);
+    let ef = b.edge_faces();
+    let plane = |i: usize| match &b.faces[i].surf {
+        Surface::Plane { f } => Some((f.o, f.z * if b.faces[i].sense { 1.0 } else { -1.0 })),
+        _ => None,
+    };
+    let neighbours = |i: usize| -> Vec<usize> {
+        let mut n: Vec<usize> = b.faces[i]
+            .loops
+            .iter()
+            .flatten()
+            .flat_map(|c| ef[c.edge].iter().copied())
+            .filter(|&g| g != i)
+            .collect();
+        n.sort_unstable();
+        n.dedup();
+        n
     };
     (0..b.faces.len()).any(|i| {
-        dist.get(i).copied().unwrap_or(0.0) == 0.0
-            && matches!(b.faces[i].surf, Surface::Plane { .. })
-            && matches!(out.faces[i].surf, Surface::Plane { .. })
-            && match (area(b, i), area(out, i)) {
-                (Some(x), Some(y)) => {
-                    x.abs() > small && y.abs() > small && x.signum() != y.signum()
-                }
-                _ => false,
-            }
+        let d = dist.get(i).copied().unwrap_or(0.0);
+        let Some((o, n)) = (d != 0.0).then(|| plane(i)).flatten() else {
+            return false;
+        };
+        let mine = neighbours(i);
+        (0..b.faces.len()).any(|j| {
+            j != i
+                && dist.get(j).copied().unwrap_or(0.0) == 0.0
+                && plane(j).is_some_and(|(q, m)| {
+                    // Same way, beside it, and the move takes it from one side of the other's
+                    // plane through to the other.
+                    let (before, after) = ((o - q).dot(&m), (o + n * d - q).dot(&m));
+                    n.dot(&m) > 1.0 - tol::ANGULAR_POINT
+                        && before.abs() > near
+                        && after.abs() > near
+                        && before.signum() != after.signum()
+                        && neighbours(j).iter().any(|g| mine.contains(g))
+                })
+        })
     })
 }
 
@@ -237,9 +247,7 @@ pub fn offset(k: &mut NativeKernel, body: BodyId, spec: &OffsetSpec) -> Result<O
     let first = (|| -> Result<crate::native::topo::Body> {
         Ok(if spec.sharp || dist.iter().all(|d| *d == 0.0) {
             let out = sharp::offset_sharp(&b, &dist)?;
-            // (Faces the sharp offset found passed through and took away (a riser whose tread
-            // was raised past the one above) are faces turned inside out by the move.)
-            if moving && (out.faces.len() < b.faces.len() || turns_a_face_over(&b, &out, &dist)) {
+            if moving && passes_a_step(&b, &dist) {
                 return Err(too_far("a face beside them would turn inside out"));
             }
             if moving

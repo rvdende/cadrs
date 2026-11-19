@@ -477,24 +477,21 @@ fn case_112_letter_g() {
 /// SMLib fillet test 113: `box_on_box.smb`, radius 0.5, edges [(4, 7)].
 #[test]
 fn case_113_box_on_box() {
-    known_failure(
-        blend(
-            "box_on_box.smb",
-            &[(4, 7)],
-            true,
-            Op::Fillet(0.5),
-            &Expect {
-                volume: Some(133.46685354),
-                area: Some(164.39433505),
-                faces: Some(19),
-                edges: Some(40),
-                solid: Some(true),
-                ..Expect::default()
-            },
-        ),
-        "fillets",
-        "case_113_box_on_box",
-    );
+    blend(
+        "box_on_box.smb",
+        &[(4, 7)],
+        true,
+        Op::Fillet(0.5),
+        &Expect {
+            volume: Some(133.46685354),
+            area: Some(164.39433505),
+            faces: Some(19),
+            edges: Some(40),
+            solid: Some(true),
+            ..Expect::default()
+        },
+    )
+    .unwrap();
 }
 
 /// SMLib fillet test 114: `cone_34.smb`, radius 3.0, edges [(2, 2), (4, 4), (8, 8)].
@@ -602,24 +599,21 @@ fn case_117_ext_w_hole() {
 /// SMLib fillet test 118: `l_shaped_box.smb`, radius 1.0, edges [(3, 4)].
 #[test]
 fn case_118_l_shaped_box() {
-    known_failure(
-        blend(
-            "l_shaped_box.smb",
-            &[(3, 4)],
-            true,
-            Op::Fillet(1.0),
-            &Expect {
-                volume: Some(372.778686126),
-                area: Some(345.389984255),
-                faces: Some(11),
-                edges: Some(25),
-                solid: Some(true),
-                ..Expect::default()
-            },
-        ),
-        "fillets",
-        "case_118_l_shaped_box",
-    );
+    blend(
+        "l_shaped_box.smb",
+        &[(3, 4)],
+        true,
+        Op::Fillet(1.0),
+        &Expect {
+            volume: Some(372.778686126),
+            area: Some(345.389984255),
+            faces: Some(11),
+            edges: Some(25),
+            solid: Some(true),
+            ..Expect::default()
+        },
+    )
+    .unwrap();
 }
 
 /// SMLib fillet test 119: `l_shaped_box.smb`, radius 1.0, edges [(3, 4), (13, 13)].
@@ -920,24 +914,21 @@ fn case_203_torii_unioned() {
 /// SMLib fillet test 204: `test4.smb`, radius 1.0, edges [(2, 3), (7, 7)].
 #[test]
 fn case_204_test4() {
-    known_failure(
-        blend(
-            "test4.smb",
-            &[(2, 3), (7, 7)],
-            true,
-            Op::Fillet(1.0),
-            &Expect {
-                volume: Some(644.613328017),
-                area: Some(409.561099793),
-                faces: Some(10),
-                edges: Some(23),
-                solid: Some(true),
-                ..Expect::default()
-            },
-        ),
-        "fillets",
-        "case_204_test4",
-    );
+    blend(
+        "test4.smb",
+        &[(2, 3), (7, 7)],
+        true,
+        Op::Fillet(1.0),
+        &Expect {
+            volume: Some(644.613328017),
+            area: Some(409.561099793),
+            faces: Some(10),
+            edges: Some(23),
+            solid: Some(true),
+            ..Expect::default()
+        },
+    )
+    .unwrap();
 }
 
 /// SMLib fillet test 205: `test5.smb`, radius 1.0, edges [(2, 3), (5, 5), (9, 9)].

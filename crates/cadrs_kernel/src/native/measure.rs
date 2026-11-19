@@ -206,7 +206,9 @@ pub fn curvatures_at(
                     })
                     .min_by(|x, y| x.0.total_cmp(&y.0));
                 match (face, edge) {
-                    (Some((df, f, foot, uv)), Some((de, ..))) if df <= de + tol::POINT => {
+                    // (A point on an edge is as near the faces there as the edge: the edge's,
+                    // so a crease answers None as the general search does.)
+                    (Some((df, f, foot, uv)), Some((de, ..))) if df + tol::POINT < de => {
                         (foot, vec![(f, Some(uv))])
                     }
                     (_, Some((_, e, foot))) => (
