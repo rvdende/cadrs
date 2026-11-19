@@ -848,6 +848,20 @@ pub trait Kernel {
     /// # Ok::<(), cadrs_kernel::KernelError>(())
     /// ```
     fn classify(&self, body: BodyId, point: Point3<f64>, tol: f64) -> Result<PointClass>;
+
+    /// [`Kernel::classify`] for many points against one body: the body prepared once (its
+    /// faces' boxes and their tree) and the points classified together, in order.
+    fn classify_many(
+        &self,
+        body: BodyId,
+        points: &[Point3<f64>],
+        tol: f64,
+    ) -> Result<Vec<PointClass>> {
+        points
+            .iter()
+            .map(|p| self.classify(body, *p, tol))
+            .collect()
+    }
     /// Rounds `edges` (and the edges tangent to them) with a constant `radius`: the rolling-ball
     /// fillet, [`Kernel::fillet_with`] with [`FilletSpec::radius`].
     ///

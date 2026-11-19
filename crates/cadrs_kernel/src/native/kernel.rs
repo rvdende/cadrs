@@ -2099,6 +2099,22 @@ impl Kernel for NativeKernel {
         Ok(classify::classify_point(&e.body, e.polys(), &point, tol))
     }
 
+    fn classify_many(
+        &self,
+        body: BodyId,
+        points: &[Point3<f64>],
+        tol: f64,
+    ) -> Result<Vec<PointClass>> {
+        use rayon::prelude::*;
+        let e = self.entry(body)?;
+        let c = classify::Classifier::new(&e.body, e.polys());
+        Ok(if super::par::threads_for(points.len(), false) {
+            points.par_iter().map(|p| c.classify(p, tol)).collect()
+        } else {
+            points.iter().map(|p| c.classify(p, tol)).collect()
+        })
+    }
+
     fn release(&mut self, body: BodyId) {
         self.bodies.remove(&body.0);
         self.colors.remove(&body.0);

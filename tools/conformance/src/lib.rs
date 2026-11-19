@@ -620,17 +620,17 @@ impl Kernel for Cadrs {
         let Solid::Body(b) = *s else {
             return Ok(vec![model::Side::Out; points.len()]);
         };
+        let pts: Vec<Point3<f64>> = points.iter().map(|&p| p3(p)).collect();
         self.with(|k| {
-            points
-                .iter()
-                .map(|&p| {
-                    Ok(match k.classify(b, p3(p), EPS).map_err(refusal)? {
-                        PointClass::Inside => model::Side::In,
-                        PointClass::OnBoundary => model::Side::On,
-                        PointClass::Outside => model::Side::Out,
-                    })
+            let sides = k.classify_many(b, &pts, EPS).map_err(refusal)?;
+            Ok(sides
+                .into_iter()
+                .map(|c| match c {
+                    PointClass::Inside => model::Side::In,
+                    PointClass::OnBoundary => model::Side::On,
+                    PointClass::Outside => model::Side::Out,
                 })
-                .collect()
+                .collect())
         })
     }
 
