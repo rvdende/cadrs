@@ -154,6 +154,13 @@ fn main() {
     let text = k.write_step(&out).expect("writing STEP");
     let back = k.read_step(&text).expect("reading STEP");
     show("through STEP", &back);
+    if std::env::var_os("REPRO_VOLUME").is_some() {
+        println!(
+            "volume {:?} through STEP {:?}",
+            k.volume(&out),
+            k.volume(&back)
+        );
+    }
     if std::env::var_os("REPRO_STEP").is_some() {
         std::fs::write("repro.step", &text).unwrap();
     }
