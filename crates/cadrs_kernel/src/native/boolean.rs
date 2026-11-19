@@ -749,11 +749,17 @@ fn tangent_along_shared_edge(
     bounds: (Option<&SurfaceBound>, Option<&SurfaceBound>),
     ebox: &[Bbox],
 ) -> bool {
+    // (A torus too: it meets no other surface but a plane, a sphere or a coaxial one in closed
+    // form, and contouring it against a cylinder it touches along an edge (a set-back corner's
+    // torus on its fillets) spends thirty milliseconds finding that edge again.)
     let analytic = |s: &Surface| {
         !matches!(
             s,
-            Surface::Nurbs(_) | Surface::Extrusion { .. } | Surface::Revolution { .. }
-        )
+            Surface::Nurbs(_)
+                | Surface::Extrusion { .. }
+                | Surface::Revolution { .. }
+                | Surface::Torus { .. }
+        ) || crate::native::env_flag!("CADRS_TORUS_ANALYTIC")
     };
     if analytic(&fa.surf) && analytic(&fb.surf) {
         return false;
