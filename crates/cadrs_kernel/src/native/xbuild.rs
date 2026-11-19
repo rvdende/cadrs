@@ -577,9 +577,23 @@ fn pcurve_unsnapped(s: &Surface, c: &Curve, t0: f64, t1: f64, etol: f64) -> Curv
     pcurve_unsnapped_on(s, &periods(s), c, t0, t1, etol)
 }
 
+/// [`pcurve_unsnapped_found`] moved into a closed spline surface's range ([`into_domain`]): an
+/// exact p-curve (the extrusion's own curve, along u) starts wherever its start's parameter
+/// came out, a period off at the seam.
+fn pcurve_unsnapped_on(
+    s: &Surface,
+    per: &Periods,
+    c: &Curve,
+    t0: f64,
+    t1: f64,
+    etol: f64,
+) -> Curve {
+    into_domain(pcurve_unsnapped_found(s, per, c, t0, t1, etol), per, t0, t1)
+}
+
 /// [`pcurve_unsnapped`] with the surface's [`Periods`] (its seed grid made once for all the
 /// edges of a face).
-fn pcurve_unsnapped_on(
+fn pcurve_unsnapped_found(
     s: &Surface,
     per: &Periods,
     c: &Curve,
@@ -715,35 +729,42 @@ fn fit_pieces(s: &Surface, per: &Periods, c: &Curve, pieces: &[f64], tol: &Tol) 
     }
     let out = join_spans(segs)?;
     let pc = Curve::Nurbs(Arc::new(out));
-    if let Some(((u0, u1), (v0, v1))) = per.domain {
-        let (a, b) = (pieces[0], *pieces.last().unwrap());
-        let pts: Vec<P3> = (0..=16)
-            .map(|i| pc.point(a + (b - a) * i as f64 / 16.0))
-            .collect();
-        let shift = |lo: f64, hi: f64, period: Option<f64>, get: &dyn Fn(&P3) -> f64| -> f64 {
-            let Some(p) = period else { return 0.0 };
-            let eps = tol::REL * (hi - lo).abs().max(1.0);
-            let (mn, mx) = pts
-                .iter()
-                .map(get)
-                .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), x| {
-                    (a.min(x), b.max(x))
-                });
-            if mx > hi + eps {
-                -((mx - hi - eps) / p).ceil() * p
-            } else if mn < lo - eps {
-                ((lo - eps - mn) / p).ceil() * p
-            } else {
-                0.0
-            }
-        };
-        let du = shift(u0, u1, per.pu, &|q| q.x);
-        let dv = shift(v0, v1, per.pv, &|q| q.y);
-        if du != 0.0 || dv != 0.0 {
-            return Some(pc.transformed(&Affine::translation(V3::new(du, dv, 0.0))));
+    Some(into_domain(pc, per, pieces[0], *pieces.last().unwrap()))
+}
+
+/// A p-curve on a closed spline surface (or an extrusion of a closed spline) moved by whole
+/// periods into the surface's parameter range, where it evaluates; others as they are.
+fn into_domain(pc: Curve, per: &Periods, a: f64, b: f64) -> Curve {
+    let Some(((u0, u1), (v0, v1))) = per.domain else {
+        return pc;
+    };
+    let pts: Vec<P3> = (0..=16)
+        .map(|i| pc.point(a + (b - a) * i as f64 / 16.0))
+        .collect();
+    let shift = |lo: f64, hi: f64, period: Option<f64>, get: &dyn Fn(&P3) -> f64| -> f64 {
+        let Some(p) = period else { return 0.0 };
+        let eps = tol::REL * (hi - lo).abs().max(1.0);
+        let (mn, mx) = pts
+            .iter()
+            .map(get)
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), x| {
+                (a.min(x), b.max(x))
+            });
+        if mx > hi + eps {
+            -((mx - hi - eps) / p).ceil() * p
+        } else if mn < lo - eps {
+            ((lo - eps - mn) / p).ceil() * p
+        } else {
+            0.0
         }
+    };
+    let du = shift(u0, u1, per.pu, &|q| q.x);
+    let dv = shift(v0, v1, per.pv, &|q| q.y);
+    if du != 0.0 || dv != 0.0 {
+        pc.transformed(&Affine::translation(V3::new(du, dv, 0.0)))
+    } else {
+        pc
     }
-    Some(pc)
 }
 
 /// Fitted spans joined end to end into one spline: a knot of full multiplicity at each joint,

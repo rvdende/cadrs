@@ -80,6 +80,21 @@ fn main() {
                     })
                     .collect();
                 println!("  face {fi} {:?} {:?}", f.surf.kind(), loops);
+                if std::env::var_os("REPRO_PCURVES").is_some() {
+                    for c in f.loops.iter().flatten() {
+                        let e = &body.edges()[c.edge];
+                        let (a, z) = (c.pc.point(e.t[0]), c.pc.point(e.t[1]));
+                        println!(
+                            "    e{} t {:?} pc ({:.4},{:.4}) -> ({:.4},{:.4}) fwd {}",
+                            c.edge, e.t, a.x, a.y, z.x, z.y, c.fwd
+                        );
+                    }
+                    if let cadrs_kernel::native::Surface::Extrusion { c, d } = &f.surf {
+                        if let cadrs_kernel::native::Curve::Nurbs(n) = c {
+                            println!("    extrusion: curve range {:?}, d {:?}", n.range(), d);
+                        }
+                    }
+                }
             }
             for (i, e) in body.edges().iter().enumerate() {
                 if e.tol > 1e-7 {
