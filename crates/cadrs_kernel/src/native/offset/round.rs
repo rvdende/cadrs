@@ -773,6 +773,14 @@ fn grown_except(b: &Body, d: f64, cut: &[(P3, V3)], skip: &[usize]) -> Result<Bo
     {
         return Ok(g);
     }
+    // A polyhedron with concave edges: cut into convex parts, each grown whole (growing is
+    // the union of its parts' growths), a boolean or two in place of dozens.
+    if skip.is_empty()
+        && cut.is_empty()
+        && let Some(g) = grown_by_convex_parts(b, d, 0)
+    {
+        return Ok(g);
+    }
     let size = 1.0 + b.bbox().diagonal();
     let ef = b.edge_faces();
     // The cut plane each face lies on.
@@ -854,6 +862,50 @@ fn grown_except(b: &Body, d: f64, cut: &[(P3, V3)], skip: &[usize]) -> Result<Bo
         }
     }
     combine_all(b.clone(), pieces, BoolOp::Union)
+}
+
+/// A polyhedron (every face a plane) grown by a ball of radius `d` as the union of its convex
+/// parts grown ([`grown_convex`]): a ball's sum distributes over a union, so the body cut along
+/// the plane of a face beside a concave edge grows as its two sides grown and united. None
+/// where a face isn't a plane, a side falls apart or isn't one solid, or the parts go deeper
+/// than a few cuts (the slabs', tubes' and balls' union then).
+fn grown_by_convex_parts(b: &Body, d: f64, depth: usize) -> Option<Body> {
+    if let Some(g) = grown_convex(b, d) {
+        return Some(g);
+    }
+    if depth >= 4
+        || b.solids.len() != 1
+        || !b
+            .faces
+            .iter()
+            .all(|f| matches!(f.surf, Surface::Plane { .. }))
+    {
+        return None;
+    }
+    let ef = b.edge_faces();
+    let e = (0..b.edges.len()).find(|&e| matches!(dihedral(b, e), Dihedral::Concave))?;
+    let f = *ef[e].first()?;
+    let Surface::Plane { f: fr } = &b.faces[f].surf else {
+        return None;
+    };
+    let n = fr.x.cross(&fr.y).normalize() * if b.faces[f].sense { 1.0 } else { -1.0 };
+    let size = 4.0 * (1.0 + b.bbox().diagonal());
+    let mut grown: Vec<Body> = Vec::new();
+    for side in [n, -n] {
+        let h = half_space(fr.o, side, size).ok()?;
+        let part = boolean_bodies(b, &h, BoolOp::Intersect).ok()?.body;
+        if part.solids.len() != 1 {
+            return None;
+        }
+        grown.push(grown_by_convex_parts(&part, d, depth + 1)?);
+    }
+    let [x, y] = <[Body; 2]>::try_from(grown).ok()?;
+    let out = boolean_bodies(&x, &y, BoolOp::Union).ok()?.body;
+    (out.solids.len() == 1
+        && out
+            .check_with(crate::native::topo::CheckLevel::Full)
+            .is_empty())
+    .then_some(out)
 }
 
 /// `acc` combined (`op`) with each piece in turn. A piece whose boolean fails is tried again

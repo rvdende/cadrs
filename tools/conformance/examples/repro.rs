@@ -26,6 +26,20 @@ fn main() {
             println!("{:?} {:?} {}", f.act, f.points, f.size);
             match f.act {
                 generate::Act::OffsetFaces => k.offset_faces(&a, &f.points, f.size),
+                generate::Act::Offset => {
+                    // (REPRO_TIMES=n: the act n times over, for a profiler.)
+                    let n: usize = std::env::var("REPRO_TIMES")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(1);
+                    let t = std::time::Instant::now();
+                    for _ in 1..n {
+                        let _ = k.offset(&a, f.size);
+                    }
+                    let r = k.offset(&a, f.size);
+                    eprintln!("offset x{n}: {:?} each", t.elapsed() / n as u32);
+                    r
+                }
                 generate::Act::MoveFaces => {
                     k.move_faces(&a, &f.points, f.matrix.expect("a matrix"))
                 }
