@@ -3467,18 +3467,6 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             ub = (ub.0.min(x0), ub.1.max(x1));
             vb = (vb.0.min(y0), vb.1.max(y1));
         }
-        // (A free-form face's box a little wider: a curve traced to the box's side stops
-        // short of the face's own edge where that edge runs slanted across the box, and its end
-        // then misses the crossing it should reach; the face's loops trim it after.)
-        if matches!(
-            f.surf,
-            Surface::Nurbs(_) | Surface::Extrusion { .. } | Surface::Revolution { .. }
-        ) && !super::env_flag!("CADRS_TIGHT_UV_BOX")
-        {
-            let (du, dv) = (0.02 * (ub.1 - ub.0), 0.02 * (vb.1 - vb.0));
-            ub = (ub.0 - du, ub.1 + du);
-            vb = (vb.0 - dv, vb.1 + dv);
-        }
         (ub, vb)
     };
     let overlap = |fa: usize, fb: usize| {
