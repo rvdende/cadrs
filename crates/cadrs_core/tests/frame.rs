@@ -1926,10 +1926,11 @@ fn a_t_slot_rail_trimmed_by_a_t_slot_post_keeps_nothing_in_its_slot() {
         PlaneRef::Top,
         vec![polyline(&[(-200.0, 0.0), (200.0, 0.0)], false)],
     );
-    let mut x = FrameFeature::default();
-    x.size = "40x40".into();
-    x.path = vec![PathRef::Sketch(post)];
-    let f = st.frame(x);
+    let f = st.frame(FrameFeature {
+        size: "40x40".into(),
+        path: vec![PathRef::Sketch(post)],
+        ..Default::default()
+    });
     let post_part = st.build().parts.iter().find(|p| p.feature == f).unwrap().id;
     let area = {
         let mut st = Studio::new();

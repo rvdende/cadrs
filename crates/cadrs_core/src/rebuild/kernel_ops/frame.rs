@@ -760,11 +760,11 @@ impl Rebuilder {
             )
             .ok()?;
         let mut length = m.length;
-        for end in 0..2 {
+        for (end, run) in run_on.iter().enumerate() {
             let (p, out) = (m.point(end), -m.inward(end));
             // The body's points near this end (within its section's size and its run-on: a
             // sharp mitre's long point is far out).
-            let window = (4.0 * r_section).max(run_on[end] + 2.0 * r_section);
+            let window = (4.0 * r_section).max(run + 2.0 * r_section);
             let near = mesh
                 .positions
                 .iter()
