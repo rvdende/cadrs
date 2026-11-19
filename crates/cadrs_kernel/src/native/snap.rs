@@ -87,7 +87,7 @@ fn boundary_points(b: &Body, f: usize) -> Vec<P3> {
 /// within [`SNAP_GRAZING`] where it crosses `sa` (lies on both sides of it) with the two
 /// surfaces' normals within [`TANGENT`] of each other everywhere, and further off than the point
 /// tolerance (within that, the boolean takes them for one surface already).
-fn snaps(sa: &Surface, sb: &Surface, pts: &[P3]) -> Option<f64> {
+fn snaps(sa: &Surface, sb: &Surface, pts: &[P3], before: bool) -> Option<f64> {
     let mut d = Vec::with_capacity(pts.len());
     for p in pts {
         let x = signed(sa, p);
@@ -116,9 +116,11 @@ fn snaps(sa: &Surface, sb: &Surface, pts: &[P3]) -> Option<f64> {
     // (Their normals then need only run the same way to well within a degree's thousandth: a
     // copy turned a microradian and lying within the tolerance all over.)
     if worst <= NEAR && grazing(1e-4) {
-        return Some(worst);
+        // (Before any boolean only past half the point tolerance: nearer, the boolean takes the
+        // two for one surface everywhere.)
+        return (!before || worst > 0.5 * tol::POINT).then_some(worst);
     }
-    if worst <= tol::POINT {
+    if before || worst <= tol::POINT {
         return None;
     }
     let crosses = d.iter().any(|&x| x > 0.5 * worst) && d.iter().any(|&x| x < -0.5 * worst);
@@ -129,7 +131,11 @@ fn snaps(sa: &Surface, sb: &Surface, pts: &[P3]) -> Option<f64> {
 /// face's surface; None where none does, or where moving them does not keep `b` a valid solid
 /// with every vertex within [`MOST_MOVED`] times the gap of where it was. All at once where they
 /// fit together, else one at a time, keeping each that does.
-pub fn snapped(a: &Body, b: &Body) -> Option<Body> {
+///
+/// `before`: for a boolean not yet tried, only faces within [`NEAR`] all over (where the boolean
+/// would read the gap one way here and the other there); else, for a boolean refused, those
+/// crossing at a grazing angle too.
+pub fn snapped(a: &Body, b: &Body, before: bool) -> Option<Body> {
     let reach = b.bbox().grow(SNAP_GRAZING);
     let a_faces: Vec<(usize, Bbox)> = (0..a.faces.len())
         .map(|f| (f, a.face_bbox(f).grow(SNAP_GRAZING)))
@@ -152,10 +158,10 @@ pub fn snapped(a: &Body, b: &Body) -> Option<Body> {
                 let w = d.iter().fold(0.0f64, |m, x| m.max(x.abs()));
                 eprintln!(
                     "snap? b face {fb} a face {fa}: worst {w:.3e} -> {:?}",
-                    snaps(sa, sb, pts)
+                    snaps(sa, sb, pts, before)
                 );
             }
-            if let Some(worst) = snaps(sa, sb, pts) {
+            if let Some(worst) = snaps(sa, sb, pts, before) {
                 moved.push((fb, sa.clone()));
                 gap = gap.max(worst);
                 break;

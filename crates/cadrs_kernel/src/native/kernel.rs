@@ -1369,32 +1369,46 @@ impl Kernel for NativeKernel {
         {
             return self.colored(Ok(r));
         }
-        let mut r = super::boolean::boolean(self, op, target, tools);
-        // Refused with a tool whose faces graze the target's a hair off them (a copy turned by a
-        // microradian): again with those faces moved onto the target's surfaces, the history
+        // With the tool's faces that lie a hair off the target's moved onto them, the history
         // naming the tool's own faces.
-        if r.is_err()
-            && !crate::native::env_flag!("CADRS_NO_SNAP")
-            && let [tool] = tools
-            && let Some(snapped) = super::snap::snapped(self.get(target)?, self.get(*tool)?)
-        {
-            let id = self.insert(snapped);
-            let again = super::boolean::boolean(self, op, target, &[id]);
-            self.release(id);
-            match again {
-                Ok(mut res) => {
-                    for (_, from) in res.history.modified.iter_mut() {
-                        if from.body == id {
-                            from.body = *tool;
-                        }
+        let on_snapped = |k: &mut Self, snapped: Body| -> Result<OpResult> {
+            let tool = tools[0];
+            let id = k.insert(snapped);
+            let r = super::boolean::boolean(k, op, target, &[id]);
+            k.release(id);
+            r.map(|mut res| {
+                for (_, from) in res.history.modified.iter_mut() {
+                    if from.body == id {
+                        from.body = tool;
                     }
-                    for from in res.history.deleted.iter_mut() {
-                        if from.body == id {
-                            from.body = *tool;
-                        }
-                    }
-                    r = Ok(res);
                 }
+                for from in res.history.deleted.iter_mut() {
+                    if from.body == id {
+                        from.body = tool;
+                    }
+                }
+                res
+            })
+        };
+        let snap = !crate::native::env_flag!("CADRS_NO_SNAP") && tools.len() == 1;
+        // Faces within a couple of point tolerances all over first (coaxial cylinders whose radii
+        // differ by 2 µm: a sliver of tube the boolean places in some places and not others).
+        let first = snap
+            .then(|| super::snap::snapped(self.get(target).ok()?, self.get(tools[0]).ok()?, true))
+            .flatten();
+        let mut r = match first {
+            Some(snapped) => on_snapped(self, snapped),
+            None => super::boolean::boolean(self, op, target, tools),
+        };
+        // Refused with a tool whose faces graze the target's a hair off them (a copy turned by a
+        // microradian): again with those faces moved onto the target's surfaces.
+        if r.is_err()
+            && snap
+            && let Some(snapped) =
+                super::snap::snapped(self.get(target)?, self.get(tools[0])?, false)
+        {
+            match on_snapped(self, snapped) {
+                Ok(res) => r = Ok(res),
                 // (Nothing left is an answer too: a box less its copy turned a hair.)
                 Err(e @ KernelError::EmptyResult(_)) => r = Err(e),
                 Err(_) => {}
