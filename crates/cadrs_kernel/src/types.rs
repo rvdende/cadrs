@@ -1302,6 +1302,11 @@ pub enum FilletSize {
     /// where the faces meet at an angle `φ` between their normals, the radius there is
     /// `w / (2 sin(φ/2))`, so the radius varies along an edge whose faces' angle varies.
     Width(f64),
+    /// The setback (mm): how far from the edge the fillet meets each face, measured along the
+    /// face square to the edge. Where the faces meet at an interior angle `θ`, the radius of the
+    /// ball with those contacts is `d·tan(θ/2)`; with a [`FilletProfile::Conic`] section this is
+    /// the conic's leg length.
+    Setback(f64),
 }
 
 /// A fillet's cross section (P3.6, PS14.4). Conic and Curvature keep the contact lines of the
@@ -1335,6 +1340,18 @@ pub enum FilletProfile {
         second: f64,
         /// Swap the two sizes.
         flip: bool,
+    },
+    /// The curvature-continuous blend section of order 2 (E. Hartmann, "Parametric Gⁿ blending
+    /// of curves and surfaces", 2001) between the circular fillet's contact points (the size is
+    /// its tangent offset): `apex + α(t)(a − apex) + β(t)(b − apex)` with the apex on the edge,
+    /// `α = f(1 − p₁)`, `β = (1 − f)p₂`, `f = t̄³/(t̄³ + t³)`, `p₁ = t/(1 − w + wt)`,
+    /// `p₂ = t(1 − w)/(1 − wt)`, a rational quintic. It leaves each face as straight as the face.
+    /// Its thumbweight `w` is the one giving the section's middle the radius of curvature
+    /// `center`, or, with `None`, the one at which it takes off what the round does.
+    Thumbweight {
+        /// The radius of curvature at the section's middle (mm), or `None` for the equal-area
+        /// section.
+        center: Option<f64>,
     },
 }
 

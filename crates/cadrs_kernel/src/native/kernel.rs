@@ -1467,6 +1467,36 @@ impl Kernel for NativeKernel {
         })
     }
 
+    fn fillet_setback(
+        &mut self,
+        body: BodyId,
+        edges: &[EdgeId],
+        spec: &FilletSpec,
+        setback: f64,
+    ) -> Result<OpResult> {
+        no_edges(edges, "fillet")?;
+        self.at_working_size(body, |k, body, by| {
+            let spec = fillet_scaled(spec, by);
+            let r = super::blend_setback::fillet_setback(k, body, edges, &spec, setback * by);
+            let r = k.dumped(&r);
+            k.colored(r)
+        })
+    }
+
+    fn fillet_faces(
+        &mut self,
+        body: BodyId,
+        face_a: FaceId,
+        face_b: FaceId,
+        radius: f64,
+    ) -> Result<OpResult> {
+        self.at_working_size(body, |k, body, by| {
+            let r = super::face_fillet::fillet_faces(k, body, face_a, face_b, radius * by);
+            let r = k.dumped(&r);
+            k.colored(r)
+        })
+    }
+
     fn thicken_surfaces(&mut self, spec: &ThickenSpec) -> Result<OpResult> {
         super::surfacing::thicken(self, spec)
     }
@@ -2653,6 +2683,13 @@ fn fillet_scaled(spec: &FilletSpec, by: f64) -> FilletSpec {
         size: match spec.size {
             FilletSize::Radius(r) => FilletSize::Radius(r * by),
             FilletSize::Width(w) => FilletSize::Width(w * by),
+            FilletSize::Setback(d) => FilletSize::Setback(d * by),
+        },
+        profile: match spec.profile {
+            FilletProfile::Thumbweight { center } => FilletProfile::Thumbweight {
+                center: center.map(|c| c * by),
+            },
+            p => p,
         },
         ..*spec
     }

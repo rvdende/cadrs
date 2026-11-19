@@ -1160,6 +1160,49 @@ pub trait Kernel {
         setback: f64,
     ) -> Result<OpResult>;
 
+    /// A set-back fillet: the fillet of `edges` as [`Kernel::fillet_with`] by `spec`, except at
+    /// every corner where three of the edges meet. There each fillet stops `setback` short of
+    /// the corner, on its section square to its edge, and one smooth patch, meeting the three
+    /// fillets and the three faces tangentially, closes the corner. On each face the flat stops
+    /// short of where its two fillets' contact lines would cross (the rim on the face is the
+    /// quarter circle about that point through the fillets' ends); farther than `setback` from
+    /// the corner along the edges, each edge is as the fillet makes it. With
+    /// [`FilletProfile::Thumbweight`] the fillets meet their faces with their curvature.
+    /// Built for corners of three straight edges meeting square between planes (others are
+    /// `Unsupported`); `setback` must exceed the fillet's contact distance from its edge
+    /// (`InvalidParameter`). The patch is generated [`Origin::FromVertex`].
+    fn fillet_setback(
+        &mut self,
+        body: BodyId,
+        edges: &[EdgeId],
+        spec: &FilletSpec,
+        setback: f64,
+    ) -> Result<OpResult> {
+        let _ = (body, edges, spec, setback);
+        Err(KernelError::Unsupported("set-back fillets"))
+    }
+
+    /// A fillet between two faces of a solid that need not share an edge: a ball of `radius`
+    /// rolls touching the faces `face_a` and `face_b`, and what lies outside its path between
+    /// its two contact lines is removed, the faces between them included (a chamfer narrower
+    /// than the round goes, leaving the sharp edge's fillet of `radius`). The result is a solid.
+    /// Built for two planes (the ball's path is then the exact cylinder about the line where they
+    /// meet) with the solid convex across that line: other faces are `Unsupported`.
+    /// `InvalidParameter` for a radius that isn't above zero, one face named twice, or parallel
+    /// planes; `TooLarge` where the ball's contacts miss the faces. History: the round is
+    /// generated [`Origin::ProfileCurve`] with `region` `face_a` and `curve` `face_b`; the faces
+    /// kept are `modified`, those removed `deleted`.
+    fn fillet_faces(
+        &mut self,
+        body: BodyId,
+        face_a: FaceId,
+        face_b: FaceId,
+        radius: f64,
+    ) -> Result<OpResult> {
+        let _ = (body, face_a, face_b, radius);
+        Err(KernelError::Unsupported("fillets between faces"))
+    }
+
     /// The outward unit normals of `face` at the points of it nearest `points` (exact, from
     /// its surface; Final: to check that faces meet tangentially).
     fn face_normals_at(

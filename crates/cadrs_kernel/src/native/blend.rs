@@ -165,6 +165,9 @@ pub enum SectionKind {
     Curvature { r: f64, m: f64 },
     /// Contact points of the circle for r1 (first face) and r2 (second), the circle's weight.
     Asymmetric { r1: f64, r2: f64 },
+    /// Hartmann's curvature-continuous section of order 2 between the circle's contact points
+    /// for r, its middle curving with radius `center` (or taking off what the circle does).
+    Thumbweight { r: f64, center: Option<f64> },
 }
 
 /// The geometry of an edge's blend in the plane square to it, in that plane's 2D coordinates:
@@ -193,7 +196,8 @@ pub fn section_loop(c: &Corner2, kind: SectionKind, src: Src) -> Result<(Vec<Pie
     let (a1, a2) = match kind {
         SectionKind::Circle { r }
         | SectionKind::Conic { r, .. }
-        | SectionKind::Curvature { r, .. } => (r / tan_half, r / tan_half),
+        | SectionKind::Curvature { r, .. }
+        | SectionKind::Thumbweight { r, .. } => (r / tan_half, r / tan_half),
         SectionKind::Chamfer { d1, d2 } => (d1, d2),
         SectionKind::Asymmetric { r1, r2 } => (r1 / tan_half, r2 / tan_half),
     };
@@ -261,6 +265,18 @@ pub fn section_loop(c: &Corner2, kind: SectionKind, src: Src) -> Result<(Vec<Pie
             let a = |q: P2, f: f64| q + (p - q) * f;
             let poles = [c1, a(c1, m / 2.0), a(c1, m), a(c2, m), a(c2, m / 2.0), c2].map(pt);
             Curve::Nurbs(std::sync::Arc::new(NurbsCurve::bezier(&poles, &[1.0; 6])))
+        }
+        SectionKind::Thumbweight { center, .. } => {
+            let w = match center {
+                Some(c) => super::gn_blend::center_w(theta, a1, c)?,
+                None => super::gn_blend::equal_area_w(theta)?,
+            };
+            Curve::Nurbs(std::sync::Arc::new(super::gn_blend::section(
+                pt(c1),
+                pt(p),
+                pt(c2),
+                w,
+            )?))
         }
     };
     finish(section, 0.0, 1.0, c1, c2, c, src)
@@ -1268,11 +1284,14 @@ fn fillet_section(spec: &FilletSpec, phi: f64) -> SectionKind {
     let r = match spec.size {
         FilletSize::Radius(r) => r,
         FilletSize::Width(w) => w / (2.0 * (phi / 2.0).sin()),
+        // Contacts `d` along faces at the interior angle θ = π − φ: the ball of d·tan(θ/2).
+        FilletSize::Setback(d) => d / (phi / 2.0).tan(),
     };
     match spec.profile {
         FilletProfile::Circular => SectionKind::Circle { r },
         FilletProfile::Conic { rho } => SectionKind::Conic { r, rho },
         FilletProfile::Curvature { magnitude } => SectionKind::Curvature { r, m: magnitude },
+        FilletProfile::Thumbweight { center } => SectionKind::Thumbweight { r, center },
         FilletProfile::Asymmetric { second, flip } => {
             if flip {
                 SectionKind::Asymmetric { r1: second, r2: r }
@@ -1901,7 +1920,8 @@ fn fits(
     let (a1, a2) = match kind(phi) {
         SectionKind::Circle { r }
         | SectionKind::Conic { r, .. }
-        | SectionKind::Curvature { r, .. } => (r / (theta / 2.0).tan(), r / (theta / 2.0).tan()),
+        | SectionKind::Curvature { r, .. }
+        | SectionKind::Thumbweight { r, .. } => (r / (theta / 2.0).tan(), r / (theta / 2.0).tan()),
         SectionKind::Chamfer { d1, d2 } => (d1, d2),
         SectionKind::Asymmetric { r1, r2 } => (r1 / (theta / 2.0).tan(), r2 / (theta / 2.0).tan()),
     };
@@ -2006,7 +2026,8 @@ fn check_overlaps(b: &Body, edges: &[EdgeBlend]) -> Result<()> {
         let (a1, a2) = match kind(phi) {
             SectionKind::Circle { r }
             | SectionKind::Conic { r, .. }
-            | SectionKind::Curvature { r, .. } => {
+            | SectionKind::Curvature { r, .. }
+            | SectionKind::Thumbweight { r, .. } => {
                 (r / (theta / 2.0).tan(), r / (theta / 2.0).tan())
             }
             SectionKind::Chamfer { .. } => continue,
@@ -2741,7 +2762,7 @@ pub fn fillet(
     edges: &[EdgeId],
     spec: &FilletSpec,
 ) -> Result<OpResult> {
-    let (FilletSize::Radius(r) | FilletSize::Width(r)) = spec.size;
+    let (FilletSize::Radius(r) | FilletSize::Width(r) | FilletSize::Setback(r)) = spec.size;
     if !(r > 0.0) {
         return Err(KernelError::InvalidParameter(
             "The fillet's size must be positive".into(),
@@ -2827,6 +2848,8 @@ pub fn fillet(
                     Some(th) => w / (2.0 * ((PI - th) / 2.0).sin()),
                     None => return Some((e, super::fillet::width_law(&b, e, w)?)),
                 },
+                // (Faces whose angle varies along the edge: left to the blend tool.)
+                FilletSize::Setback(d) => d * (super::fillet::chamfer_angle(&b, e)? / 2.0).tan(),
             };
             Some((e, vec![(0.0, r), (1.0, r)]))
         })
@@ -4348,7 +4371,8 @@ fn chain_tool_lofted(
     let size_guess0 = match kind(PI / 2.0) {
         SectionKind::Circle { r }
         | SectionKind::Conic { r, .. }
-        | SectionKind::Curvature { r, .. } => r,
+        | SectionKind::Curvature { r, .. }
+        | SectionKind::Thumbweight { r, .. } => r,
         SectionKind::Chamfer { d1, d2 } => d1.max(d2),
         SectionKind::Asymmetric { r1, r2 } => r1.max(r2),
     };
