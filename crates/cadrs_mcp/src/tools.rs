@@ -582,11 +582,13 @@ pub struct ConfigInputSpec {
 pub struct ConfigParamSpec {
     /// The parameter, as get_configuration's `configurable` lists them: "Extrude 1 · Depth",
     /// "Sketch 1 · D2" (a sketch dimension), "#len · Value" (a Variable feature's value),
-    /// "Fillet 1 · Suppressed".
+    /// "Fillet 1 · Suppressed", or a part's property: "Part 1 · Part number" (Name, Part
+    /// number, Description, Revision, Vendor, Category and custom properties; not Mass, Unit of
+    /// measure, Material or Appearance).
     pub parameter: String,
     /// Its value in each row (a List's rows in order; a Checkbox's unchecked then checked): an
     /// expression ("12 mm", "#Length - 2 mm") or a number in the workspace unit; true or
-    /// false for a Suppressed parameter.
+    /// false for a Suppressed parameter; text for a property ("" leaves it unset).
     pub values: Vec<serde_json::Value>,
 }
 

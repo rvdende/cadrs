@@ -573,13 +573,22 @@ fn on_part_context_menu(
         .item(MenuItem::new(
             "part-appearance",
             tr("view-part-edit-appearance"),
-        ))
-        .separator()
-        .item(
-            MenuItem::new("part-folder", tr("view-part-add-to-folder"))
-                .icon("folder")
-                .submenu(into),
-        );
+        ));
+    // Configure ▸ its properties (per configuration; `crate::configuration_ui`).
+    let menu = match (doc.as_deref(), el) {
+        (Some(d), Some(e)) if matches!(e.kind, cadrs_core::ElementKind::PartStudio { .. }) => menu
+            .item(crate::configuration_ui::configure_property_entries(
+                e,
+                &d.doc.properties,
+                row.0,
+            )),
+        _ => menu,
+    };
+    let menu = menu.separator().item(
+        MenuItem::new("part-folder", tr("view-part-add-to-folder"))
+            .icon("folder")
+            .submenu(into),
+    );
     let menu = if in_folder {
         menu.item(MenuItem::new(
             "part-folder-remove",
@@ -719,6 +728,12 @@ fn on_part_menu_action(
     let part = target.0;
     match ev.item.as_str() {
         "part-rename" => commands.queue(move |world: &mut World| rename_part(world, part)),
+        item if item.starts_with("part-configure-") => {
+            let item = item.to_string();
+            commands.queue(move |world: &mut World| {
+                crate::configuration_ui::configure_property_action(world, part, &item)
+            });
+        }
         "part-folder-new" => commands.queue(move |world: &mut World| {
             let parts = targets(world, part);
             crate::part_folders::new_folder(world, parts);

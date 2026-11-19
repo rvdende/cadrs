@@ -25,6 +25,10 @@
 //!   configured ones: picking one again removes its column). Dynamic suppression ▸
 //!   **Suppress by configuration** configures whether it is suppressed. With no List or
 //!   Checkbox yet, a List named "Configuration" is made, with the row "Default".
+//! - **Configure ▸** on a part's menu in the Parts list ([`configure_property_entries`]): its
+//!   Name, Part number, Description, Revision, Vendor, Category and custom properties (not
+//!   Mass, Unit of measure, Material or Appearance), each a text column "Part 1 · Part number"
+//!   (an empty cell: not set). The Properties dialog then edits the configuration shown.
 //! - **Assembly instances**: the instance menu's **Configuration ▸** ([`instance_menu_item`])
 //!   picks each input's value for the selected instances of the same Part Studio (a List's
 //!   rows, a Checkbox). Instances inserted from a
@@ -266,6 +270,24 @@ fn cell_text(v: &CellValue) -> String {
     }
 }
 
+/// A column's heading ("Extrude 1 · Depth", "Part 1 · Part number"): parts named as the Parts
+/// list shows them.
+pub(crate) fn target_label(world: &World, el: &Element, target: &ParamTarget) -> String {
+    let settings = world
+        .get_resource::<ActiveDocument>()
+        .map(|d| d.doc.properties.clone())
+        .unwrap_or_default();
+    let cache = world.get_resource::<crate::parts::PartCache>();
+    let name = |part: cadrs_core::PartId| {
+        cache
+            .and_then(|c| c.part_name(part))
+            .map(str::to_string)
+            .or_else(|| el.part_prop(part).and_then(|p| p.name.clone()))
+            .unwrap_or_else(|| tr("view-part-fallback-name"))
+    };
+    target.label(el.features(), &settings, &name)
+}
+
 fn rebuild(world: &mut World) {
     let Some((_, el)) = studio(world) else {
         return;
@@ -278,7 +300,7 @@ fn rebuild(world: &mut World) {
         .map(|i| {
             i.params
                 .iter()
-                .map(|p| p.target.label(el.features()))
+                .map(|p| target_label(world, &el, &p.target))
                 .collect()
         })
         .collect();
@@ -914,11 +936,18 @@ fn on_text(ev: On<TextSubmit>, q_cell: Query<&Cell>, mut commands: Commands) {
                     return false;
                 };
                 let q = p.target.quantity(el.features());
+                // A property's text is kept as typed (empty: not set); an expression takes a
+                // unit.
+                let is_text = p.target.is_text();
                 let Some(v) = p.values.get_mut(cell.row) else {
                     return false;
                 };
-                let new = CellValue::Expr(with_unit(&text, q, &units));
-                if text.is_empty() || *v == new {
+                let new = CellValue::Expr(if is_text {
+                    text.clone()
+                } else {
+                    with_unit(&text, q, &units)
+                });
+                if (text.is_empty() && !is_text) || *v == new {
                     return false;
                 }
                 *v = new;
@@ -1216,7 +1245,7 @@ fn table_inputs(c: &Configuration) -> Vec<&ConfigInput> {
 
 /// A parameter's label in the Configure menu ("Depth", "D3", "Value").
 fn param_label(target: &ParamTarget, el: &Element) -> String {
-    let full = target.label(el.features());
+    let full = target.label(el.features(), &Default::default(), &|_| String::new());
     full.split_once(" · ")
         .map_or(full.clone(), |(_, l)| l.to_string())
 }
@@ -1323,6 +1352,18 @@ pub fn configure_action(world: &mut World, feature: FeatureId, item: &str) {
     } else {
         return;
     };
+    configure_target(world, element, &el, target, input);
+}
+
+/// Configures `target` by the `input`th table input (any when `None`; a new List when there is
+/// none), or removes its column when it is configured already; opens the Configuration panel.
+fn configure_target(
+    world: &mut World,
+    element: ElementId,
+    el: &Element,
+    target: ParamTarget,
+    input: Option<usize>,
+) {
     // Configured already (by this input, or by any when none is named): removed.
     let named = input.and_then(|k| table_inputs(&el.configuration).get(k).map(|i| i.id));
     if let Some((by, _)) = el.configuration.param(&target)
@@ -1333,7 +1374,7 @@ pub fn configure_action(world: &mut World, feature: FeatureId, item: &str) {
     }
     // Else one step: off any other input, onto this one (a new List when there is none),
     // each row starting with the value it has now.
-    let Some(now) = cfg::current(&target, el.features(), el.suppressed()) else {
+    let Some(now) = cfg::current(&target, el.features(), el.suppressed(), el.part_props()) else {
         return;
     };
     let mut new_input = None;
@@ -1370,6 +1411,75 @@ pub fn configure_action(world: &mut World, feature: FeatureId, item: &str) {
             world.insert_resource(PendingName::Input(id));
         }
     }
+}
+
+// ---- Configure ▸ (the part menu) -----------------------------------------------------------
+
+/// The part menu's **Configure ▸** entries for `part`'s properties (Name, Part number, …,
+/// custom ones; not Mass, Unit of measure, Material or Appearance): item `part-configure-<p>`
+/// (or `part-configure-<p>-<i>` with several Lists and Checkboxes), `p` indexing
+/// [`cfg::configurable_properties`] and `i` the table inputs. A ✓ on the configured ones.
+pub fn configure_property_entries(
+    el: &Element,
+    settings: &cadrs_core::properties::PropertySettings,
+    part: cadrs_core::PartId,
+) -> MenuItem {
+    let c = &el.configuration;
+    let inputs = table_inputs(c);
+    let entries: Vec<MenuEntry> = cfg::configurable_properties(part, settings)
+        .iter()
+        .enumerate()
+        .map(|(p, t)| {
+            let ParamTarget::Property { key, .. } = t else {
+                unreachable!("configurable_properties gives properties")
+            };
+            let label = key.label(settings);
+            let by = c.param(t).map(|(i, _)| i.id);
+            let item = MenuItem::new(format!("part-configure-{p}"), label).checked(by.is_some());
+            if inputs.len() > 1 {
+                item.submenu(
+                    inputs
+                        .iter()
+                        .enumerate()
+                        .map(|(k, i)| {
+                            MenuItem::new(format!("part-configure-{p}-{k}"), i.name.clone())
+                                .checked(by == Some(i.id))
+                                .into()
+                        })
+                        .collect(),
+                )
+                .into()
+            } else {
+                item.into()
+            }
+        })
+        .collect();
+    MenuItem::new("part-configure", tr("config-configure"))
+        .icon("configurations")
+        .submenu(entries)
+}
+
+/// A part menu's Configure ▸ item (`part-configure-<p>[-<i>]`): configures the property (or
+/// removes its column), as [`configure_action`] does for a feature's parameter.
+pub fn configure_property_action(world: &mut World, part: cadrs_core::PartId, item: &str) {
+    let Some((element, el)) = studio(world) else {
+        return;
+    };
+    let Some(rest) = item.strip_prefix("part-configure-") else {
+        return;
+    };
+    let mut it = rest.split('-').map(|s| s.parse::<usize>().ok());
+    let (Some(Some(p)), k) = (it.next(), it.next().flatten()) else {
+        return;
+    };
+    let settings = world.resource::<ActiveDocument>().doc.properties.clone();
+    let Some(target) = cfg::configurable_properties(part, &settings)
+        .get(p)
+        .cloned()
+    else {
+        return;
+    };
+    configure_target(world, element, &el, target, k);
 }
 
 // ---- Assembly instances ---------------------------------------------------------------------

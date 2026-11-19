@@ -859,3 +859,163 @@ fn a_derived_feature_derives_its_own_configuration() {
     });
     rel(volume(&d), AREA * 10.0 - HOLE_VOLUME);
 }
+
+#[test]
+fn a_configuration_sets_part_properties() {
+    use cadrs_core::properties::{
+        self as props, AddPropertyDefinition, PropertyKey, PropertyKind, PropertyOwner,
+        PropertyValue, SetProperties,
+    };
+    let mut d = Doc::sized();
+    d.run(&AddPropertyDefinition {
+        name: "Finish".into(),
+        kind: PropertyKind::List(vec!["Anodized".into(), "Bare".into()]),
+    });
+    let finish = PropertyKey::Custom(d.d.properties.definitions[0].id);
+    let owner = PropertyOwner::Part {
+        element: d.el,
+        part: PLATE_PART,
+    };
+    let text = |d: &Doc, k| props::text(&d.d, owner, k, None);
+    let set = |d: &mut Doc, k, v: &str| {
+        d.run(&SetProperties {
+            owners: vec![owner],
+            values: vec![(k, PropertyValue::Text(v.into()))],
+            label: "Edit property".into(),
+        })
+    };
+    set(&mut d, PropertyKey::PartNumber, "PL-10");
+    let size = d.input("Size").id;
+    for key in [PropertyKey::PartNumber, PropertyKey::Name, finish] {
+        d.run(&ConfigureParameter {
+            element: d.el,
+            input: size,
+            target: ParamTarget::Property {
+                part: PLATE_PART,
+                key,
+            },
+        });
+    }
+    // A new column starts with the property as it is ("": not set).
+    let p = &d.input("Size").params;
+    assert_eq!(p[1].values, vec![CellValue::Expr("PL-10".into()); 2]);
+    assert_eq!(p[2].values, vec![CellValue::Expr(String::new()); 2]);
+    // Thick's cells; a custom value is kept as its kind spells it.
+    d.edit(|c| {
+        let i = c.input_mut(size).unwrap();
+        i.params[1].values[1] = CellValue::Expr("PL-20".into());
+        i.params[2].values[1] = CellValue::Expr("Plate 20".into());
+        i.params[3].values[1] = CellValue::Expr("anodized".into());
+    });
+    assert_eq!(
+        d.input("Size").params[3].values[1],
+        CellValue::Expr("Anodized".into())
+    );
+    assert_eq!(text(&d, PropertyKey::PartNumber), "PL-10");
+    d.pick("Size", d.row("Size", "Thick"));
+    assert_eq!(text(&d, PropertyKey::PartNumber), "PL-20");
+    assert_eq!(text(&d, PropertyKey::Name), "Plate 20");
+    assert_eq!(text(&d, finish), "Anodized");
+    // The Properties dialog edits the configuration shown; the others keep theirs.
+    set(&mut d, PropertyKey::PartNumber, "PL-25");
+    assert_eq!(
+        d.input("Size").params[1].values,
+        vec![
+            CellValue::Expr("PL-10".into()),
+            CellValue::Expr("PL-25".into())
+        ]
+    );
+    // Properties that aren't configured are the same in every configuration.
+    set(&mut d, PropertyKey::Vendor, "Acme");
+    d.pick("Size", d.row("Size", "Thin"));
+    assert_eq!(text(&d, PropertyKey::PartNumber), "PL-10");
+    // (No rename: its default name, "Part" without a rebuild to number it.)
+    assert_eq!(text(&d, PropertyKey::Name), "Part");
+    assert_eq!(text(&d, finish), "");
+    assert_eq!(text(&d, PropertyKey::Vendor), "Acme");
+
+    // A Thick instance: its part has Thick's properties, and editing it edits Thick's cell.
+    let asm = ElementId::new();
+    d.run(&AddElement {
+        id: asm,
+        kind: NewElementKind::Assembly,
+        name: None,
+        after: None,
+    });
+    let mut values = ConfigValues::default();
+    values.set(size, d.row("Size", "Thick"));
+    let thick = InstanceConfiguration {
+        studio: d.el,
+        values,
+    };
+    let mut i = Instance::new(
+        InstanceId::new(),
+        InstanceSource::Part {
+            element: d.el,
+            part: PLATE_PART,
+        },
+        Pose::default(),
+    );
+    i.configuration = Some(thick.clone());
+    d.run(&InsertInstance {
+        element: asm,
+        instance: i,
+    });
+    let copy = PropertyOwner::Part {
+        element: thick.copy_id(),
+        part: PLATE_PART,
+    };
+    let copy_text = |d: &Doc, k| props::text(&d.d, copy, k, None);
+    assert_eq!(copy_text(&d, PropertyKey::PartNumber), "PL-25");
+    assert_eq!(copy_text(&d, PropertyKey::Name), "Plate 20");
+    assert_eq!(copy_text(&d, PropertyKey::Vendor), "Acme");
+    d.run(&SetProperties {
+        owners: vec![copy],
+        values: vec![(PropertyKey::PartNumber, PropertyValue::Text("PL-30".into()))],
+        label: "Edit Part number".into(),
+    });
+    assert_eq!(copy_text(&d, PropertyKey::PartNumber), "PL-30");
+    assert_eq!(
+        d.input("Size").params[1].values[1],
+        CellValue::Expr("PL-30".into())
+    );
+    // (The studio shows Thin, untouched.)
+    assert_eq!(text(&d, PropertyKey::PartNumber), "PL-10");
+
+    // Mass and Unit of measure can't be configured, nor a custom value of the wrong kind.
+    for key in [
+        PropertyKey::Mass,
+        PropertyKey::UnitOfMeasure,
+        PropertyKey::Material,
+    ] {
+        let r = d.h.execute(
+            &mut d.d,
+            &ConfigureParameter {
+                element: d.el,
+                input: size,
+                target: ParamTarget::Property {
+                    part: PLATE_PART,
+                    key,
+                },
+            },
+        );
+        assert!(r.is_err(), "{key:?} configured");
+    }
+    let mut c = d.cfg();
+    c.input_mut(size).unwrap().params[3].values[0] = CellValue::Expr("Painted".into());
+    assert!(
+        d.h.execute(
+            &mut d.d,
+            &EditConfiguration {
+                element: d.el,
+                configuration: c,
+                label: "Edit configuration table".into(),
+            }
+        )
+        .is_err()
+    );
+
+    // A saved document keeps it all.
+    let back: Document = ron::from_str(&ron::to_string(&d.d).unwrap()).unwrap();
+    assert_eq!(back, d.d);
+}

@@ -29,6 +29,13 @@
 //!   ([`Element::configured_sources`], added with [`WithConfiguration`] in the step that first
 //!   names the copy); [`refresh_copies`] keeps those copies too, while a reference names them
 //!   ([`references`]).
+//! - **Part properties** can be configured too ([`ParamTarget::Property`]): a part's Name, Part
+//!   number, Description, Revision, Vendor, Category or a custom property, a column like any
+//!   other ([`configurable_properties`]; not Mass, Unit of measure, Material or Appearance,
+//!   which every configuration shares). Its cells are text, written into the part's
+//!   [`PartProps`] like a field into its feature ([`apply`]) and read back from them
+//!   ([`capture`]), so the Properties dialog edits the configuration shown; an empty cell
+//!   leaves the property unset. A configured instance's part edits its configuration's cell.
 
 use cadrs_sketch::units::{Quantity, Units, VarValue};
 
@@ -36,8 +43,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::assembly::InstanceId;
 use crate::command::{Command, CommandError, Scope};
-use crate::document::{Document, Element, ElementKind, Feature, FeatureKind};
-use crate::ids::{ConfigInputId, ConfigRowId, ElementId, FeatureId};
+use crate::document::{Document, Element, ElementKind, Feature, FeatureKind, PartProps};
+use crate::ids::{ConfigInputId, ConfigRowId, ElementId, FeatureId, PartId};
+use crate::properties::{PropertyKey, PropertySettings};
 use crate::variables::{VariableFeature, VariableKind};
 
 /// A Part Studio's configuration: its inputs and the values it shows now.
@@ -260,7 +268,19 @@ impl Configuration {
     pub fn configures(&self, feature: FeatureId) -> bool {
         self.inputs
             .iter()
-            .any(|i| i.params.iter().any(|p| p.target.feature() == feature))
+            .any(|i| i.params.iter().any(|p| p.target.feature() == Some(feature)))
+    }
+
+    /// The input and row whose cell gives `part`'s property `key` in the configuration
+    /// `values`, when the property is configured.
+    pub fn property_cell(
+        &self,
+        values: &ConfigValues,
+        part: PartId,
+        key: PropertyKey,
+    ) -> Option<(ConfigInputId, usize)> {
+        let (input, _) = self.param(&ParamTarget::Property { part, key })?;
+        Some((input.id, input.row_of(values.get(input.id))))
     }
 }
 
@@ -476,21 +496,34 @@ pub enum ParamTarget {
     Variable { feature: FeatureId },
     /// Whether a feature is suppressed.
     Suppressed { feature: FeatureId },
+    /// A part's property ([`PropertyKey::is_configurable`]): its text, empty for not set.
+    Property { part: PartId, key: PropertyKey },
 }
 
 impl ParamTarget {
-    pub fn feature(&self) -> FeatureId {
+    /// The feature it configures (none for a part's property).
+    pub fn feature(&self) -> Option<FeatureId> {
         match self {
             ParamTarget::Field { feature, .. }
             | ParamTarget::Dimension { feature, .. }
             | ParamTarget::Variable { feature }
-            | ParamTarget::Suppressed { feature } => *feature,
+            | ParamTarget::Suppressed { feature } => Some(*feature),
+            ParamTarget::Property { .. } => None,
         }
     }
 
-    /// The column's heading: "Extrude 1 · Depth", "Sketch 1 · D3", "Fillet 1 · Suppressed".
-    pub fn label(&self, features: &[Feature]) -> String {
-        let f = features.iter().find(|f| f.id == self.feature());
+    /// The column's heading: "Extrude 1 · Depth", "Sketch 1 · D3", "Fillet 1 · Suppressed",
+    /// "Part 1 · Part number" (`part_name` names the parts, `settings` the custom properties).
+    pub fn label(
+        &self,
+        features: &[Feature],
+        settings: &PropertySettings,
+        part_name: &dyn Fn(PartId) -> String,
+    ) -> String {
+        if let ParamTarget::Property { part, key } = self {
+            return format!("{} · {}", part_name(*part), key.label(settings));
+        }
+        let f = features.iter().find(|f| Some(f.id) == self.feature());
         let name = f.map_or("(deleted)", |f| f.name.as_str());
         match self {
             ParamTarget::Field {
@@ -516,12 +549,13 @@ impl ParamTarget {
             }
             ParamTarget::Variable { .. } => format!("{name} · Value"),
             ParamTarget::Suppressed { .. } => format!("{name} · Suppressed"),
+            ParamTarget::Property { .. } => unreachable!("labelled above"),
         }
     }
 
-    /// What its values measure (none for suppression).
+    /// What its values measure (none for suppression or a property).
     pub fn quantity(&self, features: &[Feature]) -> Option<Quantity> {
-        let f = features.iter().find(|f| f.id == self.feature())?;
+        let f = features.iter().find(|f| Some(f.id) == self.feature())?;
         match self {
             ParamTarget::Field {
                 label, occurrence, ..
@@ -539,8 +573,13 @@ impl ParamTarget {
                 FeatureKind::Variable(v) => Some(v.kind.quantity()),
                 _ => None,
             },
-            ParamTarget::Suppressed { .. } => None,
+            ParamTarget::Suppressed { .. } | ParamTarget::Property { .. } => None,
         }
+    }
+
+    /// Whether its cells are text as typed (a property), not an expression.
+    pub fn is_text(&self) -> bool {
+        matches!(self, ParamTarget::Property { .. })
     }
 }
 
@@ -636,14 +675,32 @@ pub fn configurable(feature: &Feature) -> Vec<ParamTarget> {
     out
 }
 
-/// The value a parameter has in the features now (for a new column, and [`capture`]). `None`
-/// when the target is gone (its feature deleted, a field the feature no longer has).
+/// The properties of `part` that can be configured: Name, Part number, Description, Revision,
+/// Vendor, Category and the document's custom properties ([`PropertyKey::is_configurable`]).
+pub fn configurable_properties(part: PartId, settings: &PropertySettings) -> Vec<ParamTarget> {
+    settings
+        .all_keys()
+        .into_iter()
+        .filter(PropertyKey::is_configurable)
+        .map(|key| ParamTarget::Property { part, key })
+        .collect()
+}
+
+/// The value a parameter has in the features (or a property in the parts' settings) now, for
+/// a new column and [`capture`]. `None` when the target is gone (its feature deleted, a field
+/// the feature no longer has).
 pub fn current(
     target: &ParamTarget,
     features: &[Feature],
     suppressed: &[FeatureId],
+    parts: &[PartProps],
 ) -> Option<CellValue> {
-    let f = features.iter().find(|f| f.id == target.feature())?;
+    if let ParamTarget::Property { part, key } = target {
+        return Some(CellValue::Expr(crate::properties::part_text(
+            parts, *part, *key,
+        )));
+    }
+    let f = features.iter().find(|f| Some(f.id) == target.feature())?;
     Some(match target {
         ParamTarget::Field {
             label, occurrence, ..
@@ -673,6 +730,7 @@ pub fn current(
             _ => return None,
         },
         ParamTarget::Suppressed { feature } => CellValue::Bool(suppressed.contains(feature)),
+        ParamTarget::Property { .. } => return None,
     })
 }
 
@@ -693,9 +751,14 @@ fn write(
     value: &CellValue,
     features: &mut [Feature],
     suppressed: &mut Vec<FeatureId>,
+    parts: &mut Vec<PartProps>,
     units: &Units,
 ) {
-    let Some(f) = features.iter_mut().find(|f| f.id == target.feature()) else {
+    if let (ParamTarget::Property { part, key }, CellValue::Expr(t)) = (target, value) {
+        crate::properties::set_part_text(parts, *part, *key, t);
+        return;
+    }
+    let Some(f) = features.iter_mut().find(|f| Some(f.id) == target.feature()) else {
         return;
     };
     match (target, value) {
@@ -797,27 +860,30 @@ pub fn input_variables(cfg: &Configuration, values: &ConfigValues) -> Vec<(Strin
         .collect()
 }
 
-/// Writes the configured parameters' values for `values` into the features and the
-/// suppressed list. The caller refreshes the studio afterwards (variables, sketches).
+/// Writes the configured parameters' values for `values` into the features, the suppressed
+/// list and the parts' settings. The caller refreshes the studio afterwards (variables,
+/// sketches).
 pub fn apply(
     cfg: &Configuration,
     values: &ConfigValues,
     features: &mut [Feature],
     suppressed: &mut Vec<FeatureId>,
+    parts: &mut Vec<PartProps>,
     units: &Units,
 ) {
     for input in &cfg.inputs {
         let row = input.row_of(values.get(input.id));
         for p in &input.params {
             if let Some(v) = p.values.get(row) {
-                write(&p.target, v, features, suppressed, units);
+                write(&p.target, v, features, suppressed, parts, units);
             }
         }
     }
 }
 
-/// Reads the configured parameters back from the features into the active row of each input
-/// (the configuration the studio shows), and drops the columns whose feature is gone. A cell
+/// Reads the configured parameters back from the features (and the parts' settings) into the
+/// active row of each input (the configuration the studio shows), and drops the columns whose
+/// feature is gone (a property's column stays: its part may come back). A cell
 /// keeps its text while the field has the value the text gives ("4 mm / cos(30 deg)" stays,
 /// though the sketch keeps only the number): only an edit of the field replaces it. Returns
 /// whether anything changed.
@@ -825,6 +891,7 @@ pub fn capture(
     cfg: &mut Configuration,
     features: &[Feature],
     suppressed: &[FeatureId],
+    parts: &[PartProps],
     units: &Units,
 ) -> bool {
     let active = cfg.active.clone();
@@ -832,13 +899,14 @@ pub fn capture(
     for input in &mut cfg.inputs {
         let row = input.row_of(active.get(input.id));
         let before = input.params.len();
-        input
-            .params
-            .retain(|p| features.iter().any(|f| f.id == p.target.feature()));
+        input.params.retain(|p| match p.target.feature() {
+            Some(id) => features.iter().any(|f| f.id == id),
+            None => true,
+        });
         changed |= input.params.len() != before;
         for p in &mut input.params {
             let q = p.target.quantity(features);
-            if let Some(now) = current(&p.target, features, suppressed)
+            if let Some(now) = current(&p.target, features, suppressed, parts)
                 && let Some(cell) = p.values.get_mut(row)
                 && *cell != now
                 && !same_value(cell, &now, q, units)
@@ -881,6 +949,7 @@ pub fn activate(
     let ElementKind::PartStudio {
         features,
         suppressed,
+        parts,
         ..
     } = &mut el.kind
     else {
@@ -888,7 +957,8 @@ pub fn activate(
             "configurations need a Part Studio".into(),
         ));
     };
-    apply(&cfg, &values, features, suppressed, &units);
+    apply(&cfg, &values, features, suppressed, parts, &units);
+    parts.retain(|p| !p.is_default());
     crate::commands::refresh_studio(doc, element);
     Ok(())
 }
@@ -904,12 +974,13 @@ pub fn after_command(doc: &mut Document) {
         let ElementKind::PartStudio {
             features,
             suppressed,
+            parts,
             ..
         } = &el.kind
         else {
             continue;
         };
-        capture(&mut el.configuration, features, suppressed, &units);
+        capture(&mut el.configuration, features, suppressed, parts, &units);
     }
 }
 
@@ -975,21 +1046,8 @@ pub fn generate(source: &Element, values: &ConfigValues, id: ElementId, units: &
     el.open_context = None;
     el.configuration.active = el.configuration.complete(values);
     let cfg = el.configuration.clone();
-    let base = el.variable_base();
-    let studio = el.studio_features();
-    if let ElementKind::PartStudio {
-        features,
-        suppressed,
-        rollback,
-        ..
-    } = &mut el.kind
-    {
-        *rollback = None;
-        apply(&cfg, &cfg.active, features, suppressed, units);
-        crate::variables::refresh(&base, features, suppressed, units);
-        crate::parts::regenerate_now(&studio, features);
-    }
-    // The parts' names and properties set for this configuration.
+    // The parts' names and properties set for this configuration (a configured instance's),
+    // then the configured properties' cells over them.
     let own: Vec<ConfiguredPartProps> = cfg
         .part_properties
         .iter()
@@ -1010,6 +1068,22 @@ pub fn generate(source: &Element, values: &ConfigValues, id: ElementId, units: &
             }
             props[i].properties = o.properties;
         }
+    }
+    let base = el.variable_base();
+    let studio = el.studio_features();
+    if let ElementKind::PartStudio {
+        features,
+        suppressed,
+        rollback,
+        parts,
+        ..
+    } = &mut el.kind
+    {
+        *rollback = None;
+        apply(&cfg, &cfg.active, features, suppressed, parts, units);
+        parts.retain(|p| !p.is_default());
+        crate::variables::refresh(&base, features, suppressed, units);
+        crate::parts::regenerate_now(&studio, features);
     }
     el
 }
@@ -1272,16 +1346,23 @@ impl Command for EditConfiguration {
             return Err(CommandError::Invalid(p));
         }
         let el = doc
-            .element_mut(self.element)
+            .element(self.element)
             .ok_or(CommandError::ElementNotFound(self.element))?;
         if !matches!(el.kind, ElementKind::PartStudio { .. }) {
             return Err(CommandError::Invalid(
                 "configurations need a Part Studio".into(),
             ));
         }
-        for input in &self.configuration.inputs {
+        let mut configuration = self.configuration.clone();
+        check_properties(&mut configuration, &doc.properties)?;
+        let el = doc
+            .element_mut(self.element)
+            .ok_or(CommandError::ElementNotFound(self.element))?;
+        for input in &configuration.inputs {
             for p in &input.params {
-                if !el.features().iter().any(|f| f.id == p.target.feature()) {
+                if let Some(id) = p.target.feature()
+                    && !el.features().iter().any(|f| f.id == id)
+                {
                     return Err(CommandError::Invalid(format!(
                         "{}: a configured feature is not in the Part Studio",
                         input.name
@@ -1289,10 +1370,53 @@ impl Command for EditConfiguration {
                 }
             }
         }
-        let active = self.configuration.active.clone();
-        el.configuration = self.configuration.clone();
+        let active = configuration.active.clone();
+        el.configuration = configuration;
         activate(doc, self.element, &active)
     }
+}
+
+/// Checks the configured properties' cells and writes them as they are kept: a property that
+/// can be configured, a custom one defined in the document with values of its kind (a
+/// Boolean's "yes" kept as "true"), text trimmed.
+fn check_properties(
+    cfg: &mut Configuration,
+    settings: &PropertySettings,
+) -> Result<(), CommandError> {
+    for input in &mut cfg.inputs {
+        for p in &mut input.params {
+            let ParamTarget::Property { key, .. } = p.target else {
+                continue;
+            };
+            if !key.is_configurable() {
+                return Err(CommandError::Invalid(format!(
+                    "{}: {} can't be configured",
+                    input.name,
+                    key.label(settings)
+                )));
+            }
+            for v in &mut p.values {
+                let CellValue::Expr(t) = v else {
+                    return Err(CommandError::Invalid(format!(
+                        "{}: a property's value is text",
+                        input.name
+                    )));
+                };
+                *t = match key {
+                    PropertyKey::Custom(id) => settings
+                        .definition(id)
+                        .ok_or_else(|| CommandError::Invalid("no such property".into()))?
+                        .kind
+                        .check(t)
+                        .map_err(|e| {
+                            CommandError::Invalid(format!("{}: {e}", key.label(settings)))
+                        })?,
+                    _ => t.trim().to_string(),
+                };
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Picks the configuration a Part Studio shows.
@@ -1353,8 +1477,20 @@ impl Command for ConfigureParameter {
                 "the parameter is already configured".into(),
             ));
         }
-        let now = current(&self.target, el.features(), el.suppressed())
-            .ok_or_else(|| CommandError::Invalid("no such parameter".into()))?;
+        if let ParamTarget::Property { key, .. } = self.target
+            && !key.is_configurable()
+        {
+            return Err(CommandError::Invalid(
+                "the property can't be configured".into(),
+            ));
+        }
+        let now = current(
+            &self.target,
+            el.features(),
+            el.suppressed(),
+            el.part_props(),
+        )
+        .ok_or_else(|| CommandError::Invalid("no such parameter".into()))?;
         let input = el
             .configuration
             .input_mut(self.input)

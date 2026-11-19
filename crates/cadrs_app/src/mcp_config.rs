@@ -116,19 +116,62 @@ fn values_json(c: &Configuration, values: &ConfigValues) -> Value {
     Value::Object(out)
 }
 
-/// Every configurable parameter of the studio's features, by the names the tools take.
-fn configurable(el: &Element) -> Vec<(ParamTarget, String)> {
+/// A parameter's name as the tools take it ("Extrude 1 · Depth", "Part 1 · Part number": a part
+/// named as the Parts list shows it).
+fn label(world: &World, el: &Element, t: &ParamTarget) -> String {
+    crate::configuration_ui::target_label(world, el, t)
+}
+
+/// The studio's parts the tools can configure the properties of: the ones the Parts list shows
+/// when it is the open tab, and those with settings or configured properties.
+fn parts_of(world: &World, el: &Element) -> Vec<cadrs_core::PartId> {
+    let mut out: Vec<cadrs_core::PartId> = Vec::new();
+    let active = doc(world)
+        .ok()
+        .and_then(|d| d.active_element())
+        .is_some_and(|a| a.id == el.id);
+    if active && let Some(cache) = world.get_resource::<crate::parts::PartCache>() {
+        out.extend(cache.parts.iter().map(|p| p.id));
+    }
+    out.extend(el.part_props().iter().map(|p| p.part));
+    for i in &el.configuration.inputs {
+        for p in &i.params {
+            if let ParamTarget::Property { part, .. } = p.target {
+                out.push(part);
+            }
+        }
+    }
+    let mut seen = Vec::new();
+    out.retain(|p| {
+        let new = !seen.contains(p);
+        seen.push(*p);
+        new
+    });
+    out
+}
+
+/// Every configurable parameter of the studio's features and parts, by the names the tools
+/// take.
+fn configurable(world: &World, el: &Element) -> Vec<(ParamTarget, String)> {
+    let settings = doc(world)
+        .map(|d| d.doc.properties.clone())
+        .unwrap_or_default();
     el.features()
         .iter()
         .flat_map(cfg::configurable)
+        .chain(
+            parts_of(world, el)
+                .into_iter()
+                .flat_map(|p| cfg::configurable_properties(p, &settings)),
+        )
         .map(|t| {
-            let label = t.label(el.features());
+            let label = label(world, el, &t);
             (t, label)
         })
         .collect()
 }
 
-fn target_named(el: &Element, name: &str) -> Result<ParamTarget, String> {
+fn target_named(world: &World, el: &Element, name: &str) -> Result<ParamTarget, String> {
     let norm = |s: &str| {
         s.replace(" · ", "/")
             .replace('·', "/")
@@ -136,7 +179,7 @@ fn target_named(el: &Element, name: &str) -> Result<ParamTarget, String> {
             .to_lowercase()
     };
     let want = norm(name.trim());
-    configurable(el)
+    configurable(world, el)
         .into_iter()
         .find(|(_, l)| norm(l) == want)
         .map(|(t, _)| t)
@@ -169,7 +212,7 @@ pub fn describe(world: &World, element: ElementId) -> Result<Value, String> {
                     i.params
                         .iter()
                         .map(|p| json!({
-                            "parameter": p.target.label(el.features()),
+                            "parameter": label(world, el, &p.target),
                             "values": p.values.iter().map(|x| match x {
                                 CellValue::Bool(b) => json!(b),
                                 CellValue::Expr(e) => json!(e),
@@ -181,21 +224,17 @@ pub fn describe(world: &World, element: ElementId) -> Result<Value, String> {
             v
         })
         .collect();
-    let mut by_feature: BTreeMap<usize, (String, Vec<String>)> = BTreeMap::new();
-    for (k, f) in el.features().iter().enumerate() {
-        let names: Vec<String> = cfg::configurable(f)
-            .iter()
-            .map(|t| t.label(el.features()))
-            .collect();
-        by_feature.insert(k, (f.name.clone(), names));
-    }
+    let configurable: Vec<String> = configurable(world, el)
+        .into_iter()
+        .map(|(_, l)| l)
+        .collect();
     Ok(json!({
         "part_studio": el.name,
         "inputs": inputs,
         "active": values_json(c, &c.active),
         "shows": c.describe(&c.active),
         "problem": c.problem(),
-        "configurable": by_feature.into_values().flat_map(|(_, v)| v).collect::<Vec<_>>(),
+        "configurable": configurable,
     }))
 }
 
@@ -206,6 +245,7 @@ pub fn get_configuration(world: &mut World, p: &tools::GetConfiguration) -> Resu
 
 /// The configuration a spec describes, keeping the ids of the inputs and rows it names again.
 fn build(
+    world: &World,
     el: &Element,
     specs: &[tools::ConfigInputSpec],
     units: &Units,
@@ -268,7 +308,7 @@ fn build(
         };
         let mut params = Vec::new();
         for p in &s.parameters {
-            let target = target_named(el, &p.parameter)?;
+            let target = target_named(world, el, &p.parameter)?;
             if p.values.len() != n {
                 return Err(format!(
                     "{}: {} has {} values for {n} rows",
@@ -283,6 +323,12 @@ fn build(
                 .iter()
                 .map(|v| match target {
                     ParamTarget::Suppressed { .. } => bool_of(v).map(CellValue::Bool),
+                    // A property's text as given (a number or boolean as it reads).
+                    ParamTarget::Property { .. } => Ok(CellValue::Expr(match v {
+                        Value::String(s) => s.clone(),
+                        Value::Null => String::new(),
+                        v => v.to_string(),
+                    })),
                     _ => expr_of(v, q, units).map(CellValue::Expr),
                 })
                 .collect::<Result<Vec<_>, String>>()
@@ -302,7 +348,7 @@ fn build(
 pub fn set_configuration(world: &mut World, p: &tools::SetConfiguration) -> Result<Value, String> {
     let units = units(world);
     let (element, el) = studio_el(world, p.part_studio.as_deref())?;
-    let mut c = build(&el, &p.inputs, &units)?;
+    let mut c = build(world, &el, &p.inputs, &units)?;
     if let Some(map) = &p.active {
         c.active = values_of(&c, map, &c.active)?;
     }
