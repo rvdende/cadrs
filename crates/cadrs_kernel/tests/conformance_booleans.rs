@@ -147,3 +147,35 @@ fn pcurve_round_a_closed_spline_prism() {
         }
     }
 }
+
+/// A ball shaved by a box whose face lies a hair below its top: the cap, 7.8 µm high and 22 µm
+/// across, is a solid of its own volume, not dropped as empty by the ball's size.
+#[test]
+fn cap_shaved_off_a_ball() {
+    use cadrs_kernel::{BoolOp, DefaultKernel, Kernel, Primitive};
+    use nalgebra::{Point3, Unit, Vector3};
+    let r = 7.758466922627455;
+    let z0 = 7.7584591641605325;
+    let mut k = DefaultKernel::new();
+    let ball = k
+        .primitive(&Primitive::Sphere {
+            center: Point3::origin(),
+            radius: r,
+            axis: Unit::new_normalize(Vector3::z()),
+            seam: Unit::new_normalize(Vector3::x()),
+        })
+        .unwrap()
+        .bodies[0];
+    let block = k
+        .primitive(&Primitive::Box {
+            min: Point3::new(-23.0, -23.0, z0),
+            max: Point3::new(23.0, 23.0, z0 + 15.0),
+        })
+        .unwrap()
+        .bodies[0];
+    let cap = k.boolean(BoolOp::Intersect, ball, &[block]).unwrap().bodies[0];
+    let h = r - z0;
+    let exact = std::f64::consts::PI * h * h * (3.0 * r - h) / 3.0;
+    let v = k.mass_properties(cap).unwrap().volume;
+    assert!((v - exact).abs() < 1e-6 * exact, "{v:e} against {exact:e}");
+}

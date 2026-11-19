@@ -5198,8 +5198,27 @@ fn drop_empty_solids(
             })
         })
         .collect();
+    // (Against the solid's own size, by its edges: the box of a cap shaved off a ball is the
+    // ball's by the sphere's poles, and a cap 1e-5 high a millimetre across held nothing by it.)
+    let own_size = |si: usize| {
+        let mut bb = Bbox::empty();
+        for f in b.solid_faces(si) {
+            for c in b.faces[f].loops.iter().flatten() {
+                let e = &b.edges[c.edge];
+                if !e.degenerate {
+                    bb.union(&curve_bbox(&e.curve, e.t[0], e.t[1]));
+                }
+            }
+        }
+        if bb.is_empty() { size } else { bb.diagonal() }
+    };
     let empty: Vec<usize> = (0..b.solids.len())
-        .filter(|&si| volumes[si].is_some_and(|v| v.abs() <= tol::REL * size * size * size))
+        .filter(|&si| {
+            volumes[si].is_some_and(|v| {
+                let size = own_size(si);
+                v.abs() <= tol::REL * size * size * size
+            })
+        })
         .collect();
     if empty.is_empty() {
         return (false, volumes);
