@@ -49,6 +49,10 @@ pub enum DistanceTarget {
     /// Every face, edge and vertex of a body (its boundary: a point inside a solid is not at
     /// distance 0).
     Body(BodyId),
+    /// A solid body with its inside: what it holds is at distance 0 from it, and a point inside
+    /// is its own nearest point. Its boundary otherwise, as [`DistanceTarget::Body`]; a farthest
+    /// point is on the boundary.
+    Solid(BodyId),
 }
 
 /// Where a closest (or farthest) point lies.

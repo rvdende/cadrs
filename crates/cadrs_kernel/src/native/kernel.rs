@@ -1292,35 +1292,20 @@ impl Kernel for NativeKernel {
                         "The torus needs a tube and a ring that is no less than none".into(),
                     ));
                 }
-                let plane = through(center, axis.into_inner());
                 // A ring torus's tube turned whole; a horn torus's (the tube as wide as the ring)
-                // touches the axis at the centre. A spindle torus's tube crosses the axis: the
-                // solid is what the tube fills counted once, the turn of the tube's part beyond
-                // the axis, bounded by its outer arc from (0, −h) to (0, h) and the axis.
-                let tube = if minor <= major * (1.0 + tol::REL) {
-                    vec![Curve2::Circle {
-                        center: Point2::new(major, 0.0),
-                        radius: minor,
-                        source: None,
-                    }]
-                } else {
-                    let end = PI - (major / minor).acos();
-                    let h = (minor * minor - major * major).sqrt();
-                    vec![
-                        Curve2::Arc {
-                            center: Point2::new(major, 0.0),
-                            radius: minor,
-                            start_angle: -end,
-                            sweep: 2.0 * end,
-                            source: None,
-                        },
-                        Curve2::Line {
-                            a: Point2::new(0.0, h),
-                            b: Point2::new(0.0, -h),
-                            source: None,
-                        },
-                    ]
-                };
+                // touches the axis at the centre. A tube wider than its ring crosses the axis and
+                // describes no torus: refused (a spindle is a revolve of the tube's outer part).
+                if minor > major * (1.0 + tol::REL) {
+                    return Err(KernelError::InvalidParameter(
+                        "The torus's tube is wider than its ring: it crosses the axis".into(),
+                    ));
+                }
+                let plane = through(center, axis.into_inner());
+                let tube = vec![Curve2::Circle {
+                    center: Point2::new(major, 0.0),
+                    radius: minor,
+                    source: None,
+                }];
                 turned(self, plane, tube, center, axis.into_inner())
             }
         }
@@ -1661,6 +1646,30 @@ impl Kernel for NativeKernel {
                 spec: chamfer_scaled(opts.spec, by),
                 ..opts.clone()
             };
+            // Without overflow, each chamfer must fit the faces at its edge.
+            if !opts.overflow {
+                let b = k.get(body)?.clone();
+                let mut sized = Vec::new();
+                for e in super::blend::real_edges(&b, edges)? {
+                    let e = e.0 as usize;
+                    let [s1, s2] = super::blend::edge_sides(&b, e)?;
+                    let (d1, d2) = match opts.spec {
+                        ChamferSpec::EqualDistance(d) => (d, d),
+                        ChamferSpec::TwoDistances(a, c) => (a, c),
+                        ChamferSpec::DistanceAngle { distance, angle } => {
+                            (distance, distance * angle.tan())
+                        }
+                    };
+                    let second_first = opts.first_on.contains(&FaceId(s2.0 as u64))
+                        && !opts.first_on.contains(&FaceId(s1.0 as u64));
+                    sized.push(if second_first {
+                        (e, d2, d1)
+                    } else {
+                        (e, d1, d2)
+                    });
+                }
+                super::blend::chamfers_fit(&b, &sized)?;
+            }
             // A convex polyhedron's equal chamfers: its planes' polytope, built at once.
             if let (ChamferSpec::EqualDistance(d), ChamferMeasure::Offset) =
                 (opts.spec, opts.measurement)

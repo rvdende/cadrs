@@ -1826,6 +1826,68 @@ fn narrow_wedge(theta: f64) -> bool {
 /// its tool, the wedge between the edge and its contact lines, cuts away only what is there,
 /// so one wider than a wall is high runs on through the wall and out of the face beyond.
 fn check_fits(b: &Body, e: usize, kind: &dyn Fn(f64) -> SectionKind) -> Result<()> {
+    fits(b, e, kind, false, &[0.1, 0.3, 0.5, 0.7, 0.9])
+}
+
+/// Whether a variable fillet's ball fits the faces at each of its law's stations: at fraction
+/// `t` of the edge, the contact lines of radius `r` on the faces.
+fn law_fits(b: &Body, law: &FilletLaw) -> Result<()> {
+    let e = law.edge.0 as usize;
+    // The law's radius at fraction `t`, interpolated between its stations.
+    let mut st = law.radii.clone();
+    st.sort_by(|a, c| a.0.total_cmp(&c.0));
+    let radius = |t: f64| -> f64 {
+        match st.iter().position(|s| s.0 >= t) {
+            Some(0) | None if st.len() == 1 => st[0].1,
+            Some(0) => st[0].1,
+            None => st[st.len() - 1].1,
+            Some(i) => {
+                let (a, c) = (st[i - 1], st[i]);
+                let w = if c.0 > a.0 {
+                    (t - a.0) / (c.0 - a.0)
+                } else {
+                    1.0
+                };
+                a.1 + (c.1 - a.1) * w
+            }
+        }
+    };
+    // Near each station, short of the edge's ends (where a face meeting the next at a slant
+    // takes the contact off it, and the blends of the edges there meet instead); a law that
+    // tapers to nothing has no ball to fit there.
+    for &(t, _) in &st {
+        let t = t.clamp(0.1, 0.9);
+        let r = radius(t);
+        if r > 0.0 {
+            fits(b, e, &|_| SectionKind::Circle { r }, true, &[t])?;
+        }
+    }
+    Ok(())
+}
+
+/// Whether chamfers of `d1` (on the edge's first face, [`edge_sides`]) and `d2` fit the faces at
+/// each of `edges`: their contact lines on the faces. An error naming the first that doesn't.
+pub(crate) fn chamfers_fit(b: &Body, edges: &[(usize, f64, f64)]) -> Result<()> {
+    for &(e, d1, d2) in edges {
+        fits(
+            b,
+            e,
+            &|_| SectionKind::Chamfer { d1, d2 },
+            true,
+            &[0.1, 0.3, 0.5, 0.7, 0.9],
+        )?;
+    }
+    Ok(())
+}
+
+/// [`check_fits`]; `strict`, a chamfer too (else it may run on past its faces).
+fn fits(
+    b: &Body,
+    e: usize,
+    kind: &dyn Fn(f64) -> SectionKind,
+    strict: bool,
+    fracs: &[f64],
+) -> Result<()> {
     let ed = &b.edges[e];
     let [s1, s2] = edge_sides(b, e)?;
     let tm = ed.mid_t();
@@ -1844,7 +1906,7 @@ fn check_fits(b: &Body, e: usize, kind: &dyn Fn(f64) -> SectionKind) -> Result<(
     // hole beside the edge is the boolean's business, not a misfit).
     let narrow = narrow_wedge(theta);
     let mut fits = [false, false];
-    for frac in [0.1, 0.3, 0.5, 0.7, 0.9] {
+    for &frac in fracs {
         let tm = ed.t[0] + (ed.t[1] - ed.t[0]) * frac;
         let p = ed.point(tm);
         let sides = [(s1, w1, a1), (s2, w2, a2)];
@@ -1883,7 +1945,7 @@ fn check_fits(b: &Body, e: usize, kind: &dyn Fn(f64) -> SectionKind) -> Result<(
             }
         }
     }
-    if !(fits[0] && fits[1]) && !matches!(kind(phi), SectionKind::Chamfer { .. }) {
+    if !(fits[0] && fits[1]) && (strict || !matches!(kind(phi), SectionKind::Chamfer { .. })) {
         return Err(KernelError::TooLarge {
             op: "blend",
             why: "the blend is too large for the faces at the edge".into(),
@@ -1911,14 +1973,15 @@ fn check_overlaps(b: &Body, edges: &[EdgeBlend]) -> Result<()> {
         let across = v.dot(&into);
         v.dot(&n).abs() < 1e-6 * (1.0 + w) && across > 1e-7 && across < w - 1e-7
     };
-    // Points of the strip: across it at a few widths, along it at a few places.
+    // Points of the strip: across it at a few widths and on its far side (its contact line,
+    // inside the other strip by however little they overlap), along it at a few places.
     let strip_points = |e: usize, fi: usize, fwd: bool, w: f64| -> Vec<P3> {
         let ed = &b.edges[e];
         let mut pts = Vec::new();
         for k in 1..16 {
             let t = ed.t[0] + (ed.t[1] - ed.t[0]) * k as f64 / 16.0;
             let (_, into) = face_dirs(b, fi, e, fwd, t);
-            for s in [0.05, 0.25, 0.5, 0.75, 0.95] {
+            for s in [0.05, 0.25, 0.5, 0.75, 0.95, 1.0] {
                 pts.push(ed.point(t) + into * (w * s));
             }
         }
@@ -3736,6 +3799,10 @@ pub fn fillet_variable(
         .cloned()
         .collect();
     let laws = &laws[..];
+    // Each ball must fit the faces where the law sets its radius.
+    for l in laws {
+        law_fits(&b, l)?;
+    }
     // By local trimming first (any edge and faces), then the tool for straight edges between
     // flat faces.
     let first = match fillet_laws_local(k, body, laws) {

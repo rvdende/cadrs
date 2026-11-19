@@ -603,6 +603,11 @@ pub fn kernel_distance(
     {
         return Ok(r);
     }
+    if sense == Sense::Min
+        && let Some(r) = held(k, a, b)?
+    {
+        return Ok(r);
+    }
     let side = |t: &DistanceTarget| -> crate::Result<Side<'_>> {
         Ok(match *t {
             DistanceTarget::Point(p) => {
@@ -635,7 +640,7 @@ pub fn kernel_distance(
                 }
                 (face_pieces(&en.body, fi, &en.polys()[fi]), Some(&*en.body))
             }
-            DistanceTarget::Body(id) => {
+            DistanceTarget::Body(id) | DistanceTarget::Solid(id) => {
                 let en = k.entry(id)?;
                 (body_pieces(&en.body, en.polys()), Some(&*en.body))
             }
@@ -668,6 +673,77 @@ pub fn kernel_distance(
         a_at: loc(x.wa, ba),
         b_at: loc(x.wb, bb),
     })
+}
+
+/// [`kernel_distance`]'s answer where a [`crate::DistanceTarget::Solid`] holds a point of the
+/// other side inside it: distance 0 there. Where neither holds the other, the two are apart or
+/// their boundaries meet, and the boundaries' measure is the answer. One point of each shell of a
+/// body is enough: a closed shell partly inside a solid and partly out crosses its boundary.
+fn held(
+    k: &super::NativeKernel,
+    a: &crate::DistanceTarget,
+    b: &crate::DistanceTarget,
+) -> crate::Result<Option<crate::DistanceResult>> {
+    use crate::{DistanceLocation, DistanceTarget, Kernel, PointClass};
+    if !matches!(a, DistanceTarget::Solid(_)) && !matches!(b, DistanceTarget::Solid(_)) {
+        return Ok(None);
+    }
+    // A point inside face `fi` of body `id`.
+    let face_point = |id: crate::BodyId, fi: usize| -> crate::Result<Option<P3>> {
+        let en = k.entry(id)?;
+        Ok(super::boolean::interior_points_of_polys(&en.polys()[fi])
+            .first()
+            .map(|q| en.body.faces[fi].surf.eval(q.x, q.y)))
+    };
+    let probes = |t: &DistanceTarget| -> crate::Result<Vec<P3>> {
+        Ok(match *t {
+            DistanceTarget::Point(p) => vec![p],
+            DistanceTarget::Edge(id, e) => k
+                .edges(id)?
+                .into_iter()
+                .find(|x| x.id == e)
+                .map(|x| x.mid)
+                .into_iter()
+                .collect(),
+            DistanceTarget::Face(id, f) => face_point(id, f.0 as usize)?.into_iter().collect(),
+            DistanceTarget::Body(id) | DistanceTarget::Solid(id) => {
+                let en = k.entry(id)?;
+                let mut out = Vec::new();
+                for sh in &en.body.shells {
+                    if let Some(p) = sh
+                        .faces
+                        .iter()
+                        .find_map(|&fi| face_point(id, fi).ok().flatten())
+                    {
+                        out.push(p);
+                    }
+                }
+                out
+            }
+        })
+    };
+    for (solid, other) in [(b, a), (a, b)] {
+        let DistanceTarget::Solid(id) = *solid else {
+            continue;
+        };
+        let bb = k.entry(id)?.body.bbox();
+        for p in probes(other)? {
+            if !bb.contains(&p) {
+                continue;
+            }
+            if k.classify(id, p, super::tol::POINT)? == PointClass::Inside {
+                let at = DistanceLocation::Point;
+                return Ok(Some(crate::DistanceResult {
+                    distance: 0.0,
+                    a: p,
+                    b: p,
+                    a_at: at,
+                    b_at: at,
+                }));
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// [`kernel_distance`]'s nearest of a point and a face when the point lies on the face (to a

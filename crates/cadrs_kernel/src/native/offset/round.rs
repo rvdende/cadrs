@@ -946,8 +946,20 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
     }
     let result = if let Some(Ok(cavity)) = supported {
         match cavity {
-            // Every point of the body within t of a wall: nothing is hollowed.
-            None => cur,
+            // Every point of the body within t of a wall: nothing is hollowed. Walls that just
+            // meet (a hair thinner would leave a cavity) leave the body itself; a shell thicker
+            // than that is as thick as the part, and refused, as Onshape and OCCT do.
+            None => {
+                let thinner = t - tol::POINT.max(1e-9 * size);
+                match cavity_of_supports(&b, &remove, thinner) {
+                    Some(Ok(Some(_))) => cur,
+                    _ => {
+                        return Err(KernelError::InvalidParameter(
+                            "The shell is as thick as the part: nothing is left to hollow".into(),
+                        ));
+                    }
+                }
+            }
             Some(cavity) => cur.apply(
                 &cavity,
                 &vec![Vec::new(); cavity.faces.len()],

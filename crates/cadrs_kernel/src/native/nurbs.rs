@@ -1350,10 +1350,9 @@ impl NurbsCurve {
     /// between distinct knots its ends and its p + 1 homogeneous control points, in order. One
     /// pass over the curve, where splitting it at each span's ends copies it whole each time.
     pub fn bezier_segments(&self) -> Vec<(f64, f64, Vec<H>)> {
-        // A5.6 starts from a clamped curve: an unclamped one (a periodic outline's uniform
-        // knots) is clamped to its range first, the same curve there.
-        if let Some(c) = self.clamped() {
-            return c.bezier_segments();
+        // (A5.6 walks clamped knots: a periodic curve's uniform knots run past its domain.)
+        if !self.is_clamped() {
+            return self.clamped().bezier_segments();
         }
         let p = self.degree;
         let (u, pw) = (&self.knots, &self.cps);
@@ -1404,50 +1403,42 @@ impl NurbsCurve {
         out
     }
 
-    /// The same curve over its range with clamped knots (each end's knot `degree + 1` times, the
-    /// curve passing through its end poles), or `None` where it is clamped already: each end's
-    /// knot inserted until it is `degree` times there, and the knots and poles outside dropped.
-    pub fn clamped(&self) -> Option<Self> {
+    /// Whether the first and the last `p + 1` knots are each one value, so that the curve starts
+    /// on its first pole and ends on its last.
+    pub fn is_clamped(&self) -> bool {
+        let (p, u) = (self.degree, &self.knots);
+        let m = u.len() - 1;
+        u[..=p].iter().all(|&k| k == u[0]) && u[m - p..].iter().all(|&k| k == u[m])
+    }
+
+    /// The same curve over the same domain with clamped knots: each end of the domain inserted
+    /// until it is a knot `p` times (A5.1), the poles and knots past it dropped. The knots outside
+    /// the domain of an unclamped curve, a periodic one's say, do not shape it inside.
+    pub fn clamped(&self) -> Self {
+        if self.is_clamped() {
+            return self.clone();
+        }
         let p = self.degree;
-        let last = self.knots.len() - 1;
-        let (lo, hi) = (self.knots[p], self.knots[last - p]);
-        let start = self.knots[..p].iter().any(|&k| k != lo);
-        let end = self.knots[last - p + 1..].iter().any(|&k| k != hi);
-        if !(start || end) || p == 0 {
-            return None;
-        }
+        let (lo, hi) = self.range();
         let mut c = self.clone();
-        if start {
-            let have = c.knots.iter().filter(|&&k| k == lo).count();
-            for _ in have..p {
-                c = c.insert_knot(lo);
+        for t in [lo, hi] {
+            while c.knots.iter().filter(|&&k| k == t).count() < p {
+                c = c.insert_knot(t);
             }
-            // The last of the `p` copies of `lo`; the curve there is pole `k - p`.
-            let k = c.knots.iter().rposition(|&x| x == lo)?;
-            let mut knots = vec![lo];
-            knots.extend_from_slice(&c.knots[k - p + 1..]);
-            c = Self {
-                degree: p,
-                knots,
-                cps: c.cps[k - p..].to_vec(),
-            };
         }
-        if end {
-            let have = c.knots.iter().filter(|&&k| k == hi).count();
-            for _ in have..p {
-                c = c.insert_knot(hi);
-            }
-            // The first of the `p` copies of `hi`; the curve there is pole `j - 1`.
-            let j = c.knots.iter().position(|&x| x == hi)?;
-            let mut knots = c.knots[..j + p].to_vec();
-            knots.push(hi);
-            c = Self {
-                degree: p,
-                knots,
-                cps: c.cps[..j].to_vec(),
-            };
+        // The last knot at `lo` is `k`: the curve starts on pole `k − p`. The first knot at `hi`
+        // is `j`: it ends on pole `j − 1`.
+        let k = c.knots.iter().rposition(|&x| x == lo).unwrap_or(p);
+        let j = c.knots.iter().position(|&x| x == hi).unwrap_or(c.cps.len());
+        let (first, last) = (k.saturating_sub(p), j.saturating_sub(1));
+        let mut knots = vec![lo];
+        knots.extend_from_slice(&c.knots[first + 1..=last + p]);
+        knots.push(hi);
+        Self {
+            degree: p,
+            knots,
+            cps: c.cps[first..=last].to_vec(),
         }
-        Some(c)
     }
 
     /// Inserts the knot `u` once (A5.1).
@@ -2320,6 +2311,34 @@ impl IsoV<'_> {
 mod tests {
     use super::*;
 
+    /// A periodic cubic (uniform knots, its first three poles repeated at its end) clamped is the
+    /// same curve over the same domain, and its Bézier segments cover the domain alone.
+    #[test]
+    fn a_periodic_curve_clamped_is_the_same_curve() {
+        let ring: Vec<P3> = (0..12)
+            .map(|i| {
+                let a = i as f64 * std::f64::consts::TAU / 12.0;
+                let r = if i % 2 == 0 { 3.0 } else { 2.0 };
+                P3::new(r * a.cos(), r * a.sin(), 0.0)
+            })
+            .collect();
+        let cps: Vec<H> = ring.iter().chain(&ring[..3]).map(|p| hom(p, 1.0)).collect();
+        let knots: Vec<f64> = (0..cps.len() + 4).map(|i| i as f64).collect();
+        let c = NurbsCurve::new(3, knots, cps).unwrap();
+        assert!(!c.is_clamped());
+        let k = c.clamped();
+        assert!(k.is_clamped());
+        assert_eq!(k.range(), c.range());
+        let (lo, hi) = c.range();
+        for i in 0..=100 {
+            let u = lo + (hi - lo) * i as f64 / 100.0;
+            assert!((k.point(u) - c.point(u)).norm() < 1e-12, "at {u}");
+        }
+        let segs = c.bezier_segments();
+        assert_eq!(segs.len(), 12);
+        assert_eq!((segs[0].0, segs[11].1), (lo, hi));
+    }
+
     /// A helix's cubic through 400 of its points keeps within 1e-7 of them with most of its
     /// knots removed, its ends where they were.
     #[test]
@@ -2542,7 +2561,8 @@ mod tests {
             .collect();
         let c = NurbsCurve::new(3, knots, cps).unwrap();
         let (lo, hi) = c.range();
-        let clamped = c.clamped().unwrap();
+        assert!(!c.is_clamped());
+        let clamped = c.clamped();
         assert_eq!(clamped.range(), (lo, hi));
         let segs = c.bezier_segments();
         assert_eq!(segs.len(), 11);

@@ -317,13 +317,18 @@ fn three_fillets_at_a_corner_close_with_a_sphere() {
 }
 
 #[test]
-#[ignore = "cadrs accepts a chamfer wider than the face it runs onto"]
 fn a_blend_wider_than_its_face_is_refused() {
     let mut k = K::new();
     let bx = block(&mut k, 40.0, 30.0, 4.0);
     let edges = pair(&k, bx, plane(Z, 4.0), plane(Y, 0.0));
     assert_eq!(edges.len(), 1);
-    let r = k.chamfer(bx, &chain(&k, bx, &edges), ChamferSpec::EqualDistance(5.0));
+    // (cadrs lets a chamfer run on past its face by default, as Onshape's does through a thin
+    // wall: without overflow, it is refused.)
+    let strict = ChamferOpts {
+        overflow: false,
+        ..ChamferOpts::new(ChamferSpec::EqualDistance(5.0))
+    };
+    let r = k.chamfer_with(bx, &chain(&k, bx, &edges), &strict);
     assert!(r.is_err(), "{:?}", r.map(|r| volume(&k, r.bodies[0])));
 }
 

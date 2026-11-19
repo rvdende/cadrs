@@ -190,7 +190,11 @@ pub fn spline_nurbs(
             crate::native::nurbs::hom(&Point3::new(p.x, p.y, 0.0), w)
         })
         .collect();
-    crate::native::nurbs::NurbsCurve::new(degree, knots.to_vec(), cps).ok()
+    // (Clamped: a periodic curve's uniform knots run past its domain, and the kernel works on
+    // curves that start on their first pole and end on their last.)
+    crate::native::nurbs::NurbsCurve::new(degree, knots.to_vec(), cps)
+        .ok()
+        .map(|c| c.clamped())
 }
 
 /// The point at `t` of the cubic Bézier curve with these poles.
@@ -948,9 +952,9 @@ pub enum Primitive {
         axis: Unit<Vector3<f64>>,
         /// The radius of the circle through its tube's centres.
         major: f64,
-        /// Its tube's radius: less than `major` (a ring torus), equal to it (a horn torus, its
-        /// hole closed to the centre) or more (a spindle torus: the solid the tube fills, counted
-        /// once, its hole closed between the points where the tube crosses the axis).
+        /// Its tube's radius: less than `major` (a ring torus) or equal to it (a horn torus, its
+        /// hole closed to the centre). A tube wider than that crosses the axis and is refused
+        /// (a spindle torus is a revolve of the tube's part on one side of the axis).
         minor: f64,
     },
 }
@@ -1364,6 +1368,11 @@ pub struct ChamferOpts {
     /// whichever way the edge runs.
     #[serde(default)]
     pub first_on: Vec<FaceId>,
+    /// Let a chamfer wider than a face at its edge run on past it, through the part (Onshape's
+    /// chamfer round a window in a wall thinner than the chamfer); else such a chamfer is refused
+    /// as too large for its faces. True by default.
+    #[serde(default = "yes")]
+    pub overflow: bool,
 }
 
 impl ChamferOpts {
@@ -1383,6 +1392,7 @@ impl ChamferOpts {
             flipped: Vec::new(),
             corners: ChamferCorners::Miter,
             first_on: Vec::new(),
+            overflow: true,
         }
     }
 }

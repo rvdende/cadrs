@@ -168,7 +168,6 @@ fn a_cone_is_a_frustum_or_comes_to_an_apex_at_either_end() {
 }
 
 #[test]
-#[ignore = "cadrs makes horn and spindle tori on purpose (springrep refuses a torus whose tube reaches its axis)"]
 fn a_size_at_or_below_zero_is_invalid_input() {
     // springrep refuses with `InvalidInput`; any refusal counts here.
     let mut k = NativeKernel::new();
@@ -180,8 +179,7 @@ fn a_size_at_or_below_zero_is_invalid_input() {
     assert!(refused(psphere(&mut k, &f, 0.0)), "sphere");
     assert!(refused(pcone(&mut k, &f, 0.0, 0.0, 3.0)), "cone 0 0");
     assert!(refused(pcone(&mut k, &f, 1.0, -0.5, 3.0)), "cone 1 -0.5");
-    // A tube as wide as its ring crosses the axis. (cadrs makes horn and spindle tori on
-    // purpose: `Primitive::Torus`'s doc.)
-    assert!(refused(ptorus(&mut k, &f, 1.0, 1.0)), "torus 1 1");
+    // A tube wider than its ring crosses the axis. (springrep refuses a horn torus too, whose
+    // tube just reaches the axis; cadrs makes it: `Primitive::Torus`'s doc.)
     assert!(refused(ptorus(&mut k, &f, 1.0, 1.5)), "torus 1 1.5");
 }
