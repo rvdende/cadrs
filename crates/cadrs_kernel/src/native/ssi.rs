@@ -920,6 +920,141 @@ fn equal_cylinders_crossing(
     Some(out)
 }
 
+/// Two cylinders whose axes cross at an angle, where every generator of the first (at angle θ
+/// round it) meets the second twice: the two loops `s±(θ)` along the generators, each closed in
+/// θ, exact at every θ (the generator's meeting with the second is a quadratic in s). Fitted by
+/// θ as cubics through exact points, halved until within a tenth of the point tolerance. None
+/// where some generator misses the second or touches it (the loops join: the numeric engine's),
+/// equal cylinders a hair off meeting (their loops a hair apart where they nearly touch).
+fn cylinder_loops(f1: &Frame, r1: f64, f2: &Frame, r2: f64) -> Option<Vec<IntCurve>> {
+    let (z1, z2) = (f1.z.normalize(), f2.z.normalize());
+    let (x1, y1) = (f1.x.normalize(), z1.cross(&f1.x.normalize()));
+    let perp = |v: V3| v - z2 * v.dot(&z2);
+    let zp = perp(z1);
+    let a = zp.norm_squared();
+    if a < tol::ANGULAR {
+        return None;
+    }
+    // The quadratic a s² + 2 b s + c = 0 along the generator at θ, and its discriminant.
+    let quad = |t: f64| {
+        let q = perp(f1.o + (x1 * t.cos() + y1 * t.sin()) * r1 - f2.o);
+        let b = q.dot(&zp);
+        (b, b * b - a * (q.norm_squared() - r2 * r2))
+    };
+    // (A tenth of the point tolerance, or a ten-billionth of the cylinders' size: a cylinder
+    // 37 m across fitted to 1e-7 took tens of thousands of points.)
+    let fit_tol = (0.1 * tol::POINT).max(1e-10 * (r1 + r2));
+    const N: usize = 2048;
+    let discs: Vec<f64> = (0..N).map(|i| quad(TAU * i as f64 / N as f64).1).collect();
+    let point = |t: f64, root: f64| {
+        let (b, _) = quad(t);
+        f1.o + (x1 * t.cos() + y1 * t.sin()) * r1 + z1 * ((-b + root) / a)
+    };
+    // Each loop as a closed curve in a parameter ψ, from its exact point at each ψ: cubics
+    // through them, halved until within a tenth of the point tolerance.
+    let fitted = |at: &dyn Fn(f64) -> P3| -> Option<IntCurve> {
+        let mut ts: Vec<f64> = (0..64).map(|i| TAU * i as f64 / 64.0).collect();
+        let mut fit = None;
+        for _ in 0..14 {
+            let mut params = ts.clone();
+            params.push(TAU);
+            let pts: Vec<P3> = ts.iter().map(|&t| at(t)).collect();
+            let c = NurbsCurve::interpolate_periodic(&pts, &params, 3)?;
+            let mut next = Vec::with_capacity(ts.len() * 2);
+            let mut fine = true;
+            for k in 0..ts.len() {
+                let (t0, t1) = (params[k], params[k + 1]);
+                next.push(t0);
+                let tm = 0.5 * (t0 + t1);
+                if (c.point(tm) - at(tm)).norm() > fit_tol {
+                    next.push(tm);
+                    fine = false;
+                }
+            }
+            fit = Some(c);
+            if fine {
+                break;
+            }
+            ts = next;
+        }
+        Some(IntCurve {
+            c: Curve::Nurbs(std::sync::Arc::new(fit?)),
+            t0: 0.0,
+            t1: TAU,
+            closed: true,
+            pcs: None,
+        })
+    };
+    let room = 1e-12 * a * r2 * r2;
+    // Only near touching: where some generator comes within a hair of touching the second
+    // cylinder (the loops nearly meet there, two equal cylinders a hair off crossing), which the
+    // numeric engine follows badly; elsewhere it is faster and as good.
+    let near = discs.iter().map(|d| d.abs()).fold(f64::INFINITY, f64::min);
+    if near > 1e-4 * a * r2 * r2 {
+        return None;
+    }
+    let mut out = Vec::new();
+    if discs.iter().all(|&d| d > room) {
+        // Every generator meets the second twice: two loops all the way round, s±(θ).
+        for sign in [1.0, -1.0] {
+            out.push(fitted(&|t: f64| {
+                point(t, sign * quad(t).1.max(0.0).sqrt())
+            })?);
+        }
+        return Some(out);
+    }
+    // Else each stretch of θ where the generators meet it: one loop, out along s+ and back along
+    // s−, the two joined where the generator touches (the discriminant's roots α < β). In
+    // θ = c + h cos ψ the root √disc ∝ sin ψ near the ends, so s = (−b + √disc·sgn sin ψ) / a is
+    // smooth round the whole loop.
+    let root = |mut lo: f64, mut hi: f64| {
+        // Bisection on the sign change between lo (≤ 0) and hi (> 0), to the last bit.
+        for _ in 0..200 {
+            let m = 0.5 * (lo + hi);
+            if m <= lo.min(hi) || m >= lo.max(hi) {
+                break;
+            }
+            if quad(m).1 > 0.0 {
+                hi = m;
+            } else {
+                lo = m;
+            }
+        }
+        hi
+    };
+    let step = TAU / N as f64;
+    let start = discs.iter().position(|&d| d <= 0.0)?;
+    let mut k = 0;
+    while k < N {
+        let i = (start + k) % N;
+        let j = (i + 1) % N;
+        if discs[i] <= 0.0 && discs[j] > 0.0 {
+            // A stretch begins between i and j; find where it ends.
+            let t_in = start as f64 * step + k as f64 * step;
+            let alpha = root(t_in, t_in + step);
+            let mut m = k + 1;
+            while m < N && discs[(start + m) % N] > 0.0 {
+                m += 1;
+            }
+            let t_out = start as f64 * step + m as f64 * step;
+            let beta = root(t_out, t_out - step);
+            let (c, h) = (0.5 * (alpha + beta), 0.5 * (beta - alpha));
+            if h <= 0.0 {
+                return None;
+            }
+            out.push(fitted(&|psi: f64| {
+                let t = c + h * psi.cos();
+                let sq = quad(t).1.max(0.0).sqrt();
+                point(t, if psi.sin() >= 0.0 { sq } else { -sq })
+            })?);
+            k = m;
+        } else {
+            k += 1;
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
 /// A cone's apex: where its radius r + v sin a is 0, at v = −r / sin a along its generators
 /// (its point o + ρ·r + v·(ρ sin a + z cos a)).
 fn cone_apex(f: &Frame, r: f64, a: f64) -> P3 {
@@ -1230,7 +1365,9 @@ fn analytic(a: &Surface, b: &Surface, bb: &Bbox, run_tol: f64) -> Option<Vec<Int
         }
         (Surface::Cylinder { f: f1, r: r1 }, Surface::Cylinder { f: f2, r: r2 }) => {
             if f1.z.cross(&f2.z).norm() > tol::ANGULAR_FINE {
-                return equal_cylinders_crossing(f1, *r1, f2, *r2, bb);
+                return equal_cylinders_crossing(f1, *r1, f2, *r2, bb).or_else(|| {
+                    cylinder_loops(f1, *r1, f2, *r2).or_else(|| cylinder_loops(f2, *r2, f1, *r1))
+                });
             }
             // Parallel axes: lines.
             let d = f2.o - f1.o;
