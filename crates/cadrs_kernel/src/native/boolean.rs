@@ -3762,6 +3762,20 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 faces[fb].surf.kind(),
                 curves.len()
             );
+            if std::env::var("CADRS_FACE_DEBUG").is_ok_and(|d| d == fa.to_string()) {
+                let sd = format!("{:?}", faces[fa].surf);
+                eprintln!(
+                    "  surface {fa}: {}…; uv box {:?}",
+                    &sd[..sd.len().min(300)],
+                    uvbox(&faces[fa])
+                );
+                for ic in &curves {
+                    let (s0, s1) = (ic.c.point(ic.t0), ic.c.point(ic.t1));
+                    let pa = faces[fa].surf.project(&s0, None);
+                    let pb = faces[fa].surf.project(&s1, None);
+                    eprintln!("  ends at uv {pa:?} and {pb:?}");
+                }
+            }
             for ic in &curves {
                 let angles: Vec<f64> = (0..=4)
                     .map(|q| {
@@ -3795,6 +3809,50 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         {
             if !cand.contains(&v) {
                 cand.push(v);
+            }
+        }
+        if std::env::var("CADRS_FACE_DEBUG").is_ok_and(|d| d == fa.to_string()) {
+            for ic in &curves {
+                let mut near: Vec<(f64, usize, f64)> = cand
+                    .iter()
+                    .map(|&v| {
+                        let p = pool.verts[v];
+                        let t = param_on(&ic.c, ic.t0, ic.t1, &p);
+                        ((ic.c.point(t) - p).norm(), v, t)
+                    })
+                    .collect();
+                near.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let off: Vec<String> = (0..=10)
+                    .map(|q| {
+                        let m = ic.c.point(ic.t0 + (ic.t1 - ic.t0) * q as f64 / 10.0);
+                        format!(
+                            "{:.1e}/{:.1e}",
+                            faces[fa].surf.distance(&m),
+                            faces[fb].surf.distance(&m)
+                        )
+                    })
+                    .collect();
+                eprintln!("  off the surfaces along it: {}", off.join(" "));
+                eprintln!(
+                    "  {fa}×{fb} curve t {:.4}..{:.4}: nearest vertices {:?}",
+                    ic.t0,
+                    ic.t1,
+                    near.iter()
+                        .take(4)
+                        .map(|&(d, v, t)| format!(
+                            "{v} at {:?} off {d:.2e} t {t:.4}",
+                            pool.verts[v]
+                        ))
+                        .collect::<Vec<_>>()
+                );
+            }
+            for &e in &face_edges[fa] {
+                let ed = &pool.edges[e];
+                eprintln!(
+                    "  edge {e} of {fa}: {:?} → {:?}",
+                    ed.curve.point(ed.t[0]),
+                    ed.curve.point(ed.t[1])
+                );
             }
         }
         // The pair's tolerance: the larger of the faces' (new vertices and edges carry it).
@@ -4570,6 +4628,30 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 res.faces.len(),
                 res.faces.iter().map(|l| l.len()).collect::<Vec<_>>()
             );
+            if std::env::var("CADRS_FACE_DEBUG").ok() == Some(fi.to_string()) {
+                let show = |a: &Arc| {
+                    let ed = &pool.edges[a.edge];
+                    let at = |f: f64| ed.curve.point(ed.t[0] + (ed.t[1] - ed.t[0]) * f);
+                    format!(
+                        "  edge {} cut {} {:?} → {:?} → {:?}",
+                        a.edge,
+                        a.cut,
+                        at(0.0),
+                        at(0.5),
+                        at(1.0)
+                    )
+                };
+                for l in &boundary {
+                    eprintln!(" loop:");
+                    for a in l {
+                        eprintln!("{}", show(a));
+                    }
+                }
+                eprintln!(" cuts:");
+                for a in &cut_arcs {
+                    eprintln!("{}", show(a));
+                }
+            }
         }
         (res.faces, arcs * arcs)
     };
@@ -4660,6 +4742,17 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 let key = (a.edge, lo.to_bits(), hi.to_bits(), faces[*fi].owner);
                 match by_piece.get(&key) {
                     Some(&other) => {
+                        if let Ok(d) = std::env::var("CADRS_FACE_DEBUG") {
+                            let (fo, _) = &subs[other];
+                            if d == "all" || d == fi.to_string() || d == fo.to_string() {
+                                let ed = &pool.edges[a.edge];
+                                eprintln!(
+                                    "join sub {k} (face {fi}) and sub {other} (face {fo}) across edge {} {:?}",
+                                    a.edge,
+                                    ed.curve.point(0.5 * (lo + hi))
+                                );
+                            }
+                        }
                         let (x, y) = (root(&mut parent, k), root(&mut parent, other));
                         if x != y {
                             parent[x] = y;
@@ -4842,7 +4935,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         let a_side = f.owner == 0;
         if super::env_flag!("CADRS_BOOL_DEBUG") {
             eprintln!(
-                "sub of face {fi} (owner {} orig {}): {} loops, class {class:?} at {:?}{}",
+                "sub {sk} of face {fi} (owner {} orig {}): {} loops, class {class:?} at {:?}{} group {g}",
                 f.owner,
                 f.orig,
                 loops.len(),
@@ -5636,7 +5729,19 @@ pub(crate) fn assemble_shells_with(b: &mut Body, terms: Option<&[f64]>) -> Resul
             if *u != 0 && !b.edges[*e].degenerate {
                 closed = false;
                 if super::env_flag!("CADRS_BOOL_DEBUG") {
-                    eprintln!("open edge {e}: uses {u}, {:?}", b.edges[*e]);
+                    let ed = &b.edges[*e];
+                    let mut users: Vec<String> = Vec::new();
+                    for &f in &fs {
+                        for c in b.faces[f].loops.iter().flatten().filter(|c| c.edge == *e) {
+                            users.push(format!("{f} {:?} fwd {}", b.faces[f].surf.kind(), c.fwd));
+                        }
+                    }
+                    eprintln!(
+                        "open edge {e}: uses {u}, {:?} → {:?}, by {}",
+                        ed.curve.point(ed.t[0]),
+                        ed.curve.point(ed.t[1]),
+                        users.join("; ")
+                    );
                 }
             }
         }

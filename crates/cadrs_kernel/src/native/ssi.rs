@@ -2205,9 +2205,33 @@ fn fit_curve(
                 }
                 let q = c.point((t[k] + t[k + 1]) / 2.0);
                 let chord = (pts[k + 1].p - pts[k].p).norm();
-                let exact = super::ssi_numeric::refine_between(a, b, &pts[k], &pts[k + 1], &q)?;
+                let dbg = crate::native::env_flag!("CADRS_FIT_DEBUG")
+                    && a.distance(&q).max(b.distance(&q)) > 1e-6;
+                let Some(exact) =
+                    super::ssi_numeric::refine_between(a, b, &pts[k], &pts[k + 1], &q)
+                else {
+                    if dbg {
+                        eprintln!(
+                            "fit: span {k} of {} off {:.1e}: no refined point",
+                            pts.len(),
+                            a.distance(&q).max(b.distance(&q))
+                        );
+                    }
+                    return None;
+                };
                 let off = (exact.p - q).norm();
-                (off > tol && chord > tol::POINT && off < 0.5 * chord).then_some((k + 1, exact))
+                if dbg {
+                    eprintln!(
+                        "fit: span {k} of {} off {off:.1e}, chord {chord:.1e}",
+                        pts.len()
+                    );
+                }
+                // (A point between the span's ends: within its chord of both, however far the
+                // fit swung off it, as a cubic does round a hairpin where two branches meet.)
+                let between = (exact.p - pts[k].p).norm() <= chord
+                    && (exact.p - pts[k + 1].p).norm() <= chord;
+                (off > tol && chord > tol::POINT && (off < 0.5 * chord || between))
+                    .then_some((k + 1, exact))
             })
             .collect();
         let ins: Vec<(usize, super::ssi_numeric::Pt)> = found.into_iter().flatten().collect();

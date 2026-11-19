@@ -1245,6 +1245,14 @@ fn tmp_exact_run() {
     let motions = program::run_motions(setup, job, &run, above);
     let track = program::axis_track(machine, &run, &motions);
     let moves: usize = motions.iter().map(|m| m.len()).sum();
+    if let Ok(n) = std::env::var("PRINT_MOVES") {
+        let n: usize = n.parse().unwrap_or(60);
+        println!("stock {:?}", stock.bounds);
+        for m in motions.iter().flatten().take(n) {
+            println!("  {m:?}");
+        }
+        return;
+    }
     let mut exact =
         cadrs_core::cam::exact::ExactStock::new(machine, &run, &shape, &motions, &track.rows)
             .unwrap();
