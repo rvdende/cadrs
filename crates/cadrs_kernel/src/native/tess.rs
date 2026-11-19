@@ -2100,7 +2100,35 @@ fn pole_normals(out: &mut FaceMesh, surf: &Surface, sign: f64) {
                 + out.uvs[t[1] as usize].coords
                 + out.uvs[t[2] as usize].coords)
                 / 3.0;
-            let at = out.uvs[i].coords + (mid - out.uvs[i].coords) * 1e-6;
+            // (The parameter the pole collapses, the triangle's own: a cone's apex has one u
+            // for every generator, so a step a millionth of the way in would keep that u, and
+            // every triangle the one normal. The other a hair in from the pole.)
+            // (Its value the middle of the triangle's other two corners': the pole's own is any.)
+            let p0 = out.uvs[i].coords;
+            // (The short way round on a periodic surface: corners either side of its seam.)
+            let (b, d) = (
+                out.uvs[t[(c + 1) % 3] as usize].coords,
+                out.uvs[t[(c + 2) % 3] as usize].coords,
+            );
+            let half = |x: f64, y: f64, periodic: bool| {
+                let p = std::f64::consts::TAU;
+                if periodic && (x - y).abs() > 0.5 * p {
+                    let (x, y) = if x < y { (x + p, y) } else { (x, y + p) };
+                    0.5 * (x + y)
+                } else {
+                    0.5 * (x + y)
+                }
+            };
+            let side = nalgebra::Vector2::new(
+                half(b.x, d.x, surf.u_periodic()),
+                half(b.y, d.y, surf.v_periodic()),
+            );
+            let (_, su, sv) = surf.d1(p0.x, p0.y);
+            let at = if su.norm() <= sv.norm() {
+                nalgebra::Vector2::new(side.x, p0.y + (mid.y - p0.y) * 1e-6)
+            } else {
+                nalgebra::Vector2::new(p0.x + (mid.x - p0.x) * 1e-6, side.y)
+            };
             if let Some(n) = normal(at.x, at.y) {
                 uses.entry(t[c]).or_default().push((k, c, n));
             }
