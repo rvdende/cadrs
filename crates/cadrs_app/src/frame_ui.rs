@@ -760,9 +760,10 @@ pub(crate) fn body(
         // the next pair, and its gusset; named as its list item, with where it is.
         let corners = items_of(Role::FrameCorners);
         for (i, o) in x.overrides.iter().enumerate() {
-            let label = corners.get(i).cloned().unwrap_or_else(|| {
-                tr_with("model-frame-corner-n", &[("n", &(i + 1).to_string())])
-            });
+            let label = corners
+                .get(i)
+                .cloned()
+                .unwrap_or_else(|| tr_with("model-frame-corner-n", &[("n", &(i + 1).to_string())]));
             let i = i.min(u8::MAX as usize) as u8;
             corner_row(
                 b,

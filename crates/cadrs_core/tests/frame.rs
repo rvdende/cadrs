@@ -2703,7 +2703,11 @@ fn a_cap_on_a_bent_end_stopped_short_sits_square_to_the_arc() {
         let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
         (c[0] - at[0]).hypot(c[1] - at[1]) < 4.0
     });
-    assert!(near, "{:?}", caps.iter().map(|p| bounds(p)).collect::<Vec<_>>());
+    assert!(
+        near,
+        "{:?}",
+        caps.iter().map(|p| bounds(p)).collect::<Vec<_>>()
+    );
     assert!(st.overlap() < 1e-6);
 }
 
