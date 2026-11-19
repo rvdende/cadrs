@@ -618,10 +618,21 @@ impl Surface {
                         d[1].norm_squared().max(tol::TINY),
                         d[2].norm_squared().max(tol::TINY),
                     );
-                    (nu, nv) = (
-                        self.clamp_u(u - fu / su, u0, u1),
-                        (v - fv / sv).clamp(v0.min(v1), v1.max(v0)),
-                    );
+                    // Gauss–Newton's step (the Hessian without the surface's curvature: always
+                    // downhill, and near the surface nearly Newton's), else the gradient's.
+                    let gn = (!old && !crate::native::env_flag!("CADRS_NO_GAUSS_NEWTON"))
+                        .then(|| solve2(su, d[1].dot(&d[2]), d[1].dot(&d[2]), sv, -fu, -fv))
+                        .flatten();
+                    (nu, nv) = match gn {
+                        Some((du, dv)) => (
+                            self.clamp_u(u + du, u0, u1),
+                            (v + dv).clamp(v0.min(v1), v1.max(v0)),
+                        ),
+                        None => (
+                            self.clamp_u(u - fu / su, u0, u1),
+                            (v - fv / sv).clamp(v0.min(v1), v1.max(v0)),
+                        ),
+                    };
                     tries = 0;
                     while !closer(nu, nv) && tries < most {
                         (nu, nv) = (u + (nu - u) * 0.5, v + (nv - v) * 0.5);
