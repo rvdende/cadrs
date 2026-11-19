@@ -1107,8 +1107,12 @@ impl ExactStock {
         {
             let along = c.along(place);
             if along > 1e-9 {
+                // (Shown only, the whole cut made afresh from the kept stock once the tool is
+                // through: in one try, the stock as kept where it fails. A fraction of a move
+                // is a sliver of a sweep, at angles the whole one doesn't meet, and halving it
+                // took ten minutes to show what the next whole cut shows anyway.)
                 let kept = self.kept;
-                self.shown = self.cut(kept, self.done, 0.0, along);
+                self.shown = self.cut_once(kept, self.done, 0.0, along).unwrap_or(kept);
             }
         }
         self.at = to;
