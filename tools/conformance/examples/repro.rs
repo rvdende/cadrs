@@ -19,12 +19,31 @@ fn main() {
         other => panic!("not a primitive: {other:?}"),
     };
     let a = k.make(&base).expect("making a");
-    let f = c.feature.as_ref().expect("a feature case");
-    println!("{:?} {:?} {}", f.act, f.points, f.size);
-    let out = match f.act {
-        generate::Act::OffsetFaces => k.offset_faces(&a, &f.points, f.size),
-        generate::Act::MoveFaces => k.move_faces(&a, &f.points, f.matrix.expect("a matrix")),
-        other => panic!("act {other:?} not in the repro yet"),
+    // A feature case's act, else the boolean the second argument names (union by default) of
+    // `a` and `b`.
+    let out = match c.feature.as_ref() {
+        Some(f) => {
+            println!("{:?} {:?} {}", f.act, f.points, f.size);
+            match f.act {
+                generate::Act::OffsetFaces => k.offset_faces(&a, &f.points, f.size),
+                generate::Act::MoveFaces => {
+                    k.move_faces(&a, &f.points, f.matrix.expect("a matrix"))
+                }
+                other => panic!("act {other:?} not in the repro yet"),
+            }
+        }
+        None => {
+            let Shape::Prim(pb) = &c.b else {
+                panic!("b is not a primitive")
+            };
+            let b = k.make(pb).expect("making b");
+            match std::env::args().nth(2).as_deref() {
+                Some("intersection") => k.intersection(&a, &b),
+                Some("difference") => k.difference(&a, &b),
+                Some("rdifference") => k.difference(&b, &a),
+                _ => k.union(&a, &b),
+            }
+        }
     };
     let out = match out {
         Ok(s) => s,
