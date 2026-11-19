@@ -937,8 +937,12 @@ fn steps_at(dom: &Domain, u: f64, v: f64, defl: f64, ang: f64) -> (f64, f64) {
 
 /// The most lines a face's grid has each way (its intervals: one more than its lines). (Enough
 /// for a ball 5 m across meshed to a hundredth of a millimetre, about 1 600 lines round; the
-/// grid's stations follow the bends, so only a face that needs them gets them.)
-const GRID_MAX: usize = 2048;
+/// grid's stations follow the bends, so only a face that needs them gets them; a cylinder 37 m
+/// across needs 4 300. [`GRID_POINTS`] bounds the whole grid.)
+const GRID_MAX: usize = 8192;
+
+/// The most points a face's grid has in all (about 30 MB of triangles a face).
+const GRID_POINTS: usize = 1 << 20;
 
 /// Where a face's grid lines cross `lo..hi` (strictly inside it): each step as long as `step`
 /// allows over the stretch it spans, so the lines are close only where the surface bends
@@ -1098,19 +1102,8 @@ fn seed_grid(
         // (The columns' mean spacing.)
         let du = wu / (us.len() + 1) as f64;
         // Rows no further apart than half the face's width, or Delaunay bridges a narrow
-        // strip from rail to rail across its curve. And where the boundary runs across the
-        // rulings (a face of two equal cylinders' common part, between its ellipses), two
-        // columns apart: a ruling the boundary pinches to less than the rows' spacing
-        // holds no grid point, and a triangle from its two ends to a point many columns over
-        // cuts the curve by millimetres on a part a metre across.
-        let (eu, ev) = (1e-9 * (ubox.1 - ubox.0), 1e-9 * (vbox.1 - vbox.0));
-        let across = loops.iter().any(|&(a, b)| {
-            pts[a..b]
-                .windows(2)
-                .any(|w| (w[1].x - w[0].x).abs() > eu && (w[1].y - w[0].y).abs() > ev)
-        });
-        let rows = if across { 2.0 } else { 64.0 };
-        let n = (wv / (du * rows).min(0.5 * wu)).ceil() as usize;
+        // strip from rail to rail across its curve.
+        let n = (wv / (du * 64.0).min(0.5 * wu)).ceil() as usize;
         vs = uniform(vbox.0, vbox.1, n.clamp(1, GRID_MAX));
     } else if us.is_empty() {
         let dv = wv / (vs.len() + 1) as f64;
@@ -1127,6 +1120,32 @@ fn seed_grid(
     }
     if us.is_empty() || vs.is_empty() {
         return grid;
+    }
+    // At most GRID_POINTS points in all: the lines thinned evenly where they would take more (a
+    // face 300 m long at a hundredth of a millimetre, its rows two columns apart, asked for tens
+    // of millions), the denser way first.
+    if us.len() * vs.len() > GRID_POINTS {
+        let (nu, nv) = (us.len(), vs.len());
+        let keep = |lines: &mut Vec<f64>, b: (f64, f64), n: usize| {
+            if lines.len() > n {
+                *lines = uniform(b.0, b.1, n.max(1) + 1);
+            }
+        };
+        if nv >= nu {
+            keep(
+                &mut vs,
+                vbox,
+                (GRID_POINTS / nu).max(GRID_POINTS / GRID_MAX),
+            );
+            keep(&mut us, ubox, GRID_POINTS / vs.len().max(1));
+        } else {
+            keep(
+                &mut us,
+                ubox,
+                (GRID_POINTS / nv).max(GRID_POINTS / GRID_MAX),
+            );
+            keep(&mut vs, vbox, GRID_POINTS / us.len().max(1));
+        }
     }
     // Each line's distance to its nearer neighbour (or the box's side).
     let gaps = |s: &[f64], b: (f64, f64)| -> Vec<f64> {
@@ -1646,6 +1665,12 @@ fn mesh_face_split(
             } else {
                 (scale.0 * r, scale.1)
             }
+        } else if cu.is_finite() && cu > 0.0 && !cv.is_finite() {
+            // Straight along v (a cylinder, a cone, an extrusion): its rows 64 columns apart
+            // ([`seed_grid`]) drawn 2 apart, so Delaunay joins points along the rulings, which
+            // are exact, and not a ruling's two ends the boundary pinches to a point many columns
+            // over (between two equal cylinders' ellipses: millimetres of sag a metre out).
+            (scale.0, scale.1 / 32.0)
         } else {
             scale
         }
