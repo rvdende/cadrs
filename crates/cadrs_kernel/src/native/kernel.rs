@@ -1208,20 +1208,7 @@ impl Kernel for NativeKernel {
                 if !(radius > 0.0 && height > 0.0) {
                     return bad("cylinder's radius and height");
                 }
-                let plane = Plane {
-                    origin: base,
-                    x_dir: Unit::new_normalize(any_perpendicular(&axis)),
-                    normal: axis,
-                };
-                let r = region(vec![Curve2::Circle {
-                    center: Point2::origin(),
-                    radius,
-                    source: None,
-                }]);
-                self.extrude_with(
-                    &Profile::new(plane, vec![r]),
-                    &ExtrudeSpec::blind(axis, height),
-                )
+                self.cylinder_seamed(base, axis, radius, height, any_perpendicular(&axis))
             }
             Primitive::Cone {
                 base,
@@ -1412,6 +1399,66 @@ impl Kernel for NativeKernel {
                 // (Nothing left is an answer too: a box less its copy turned a hair.)
                 Err(e @ KernelError::EmptyResult(_)) => r = Err(e),
                 Err(_) => {}
+            }
+        }
+        // A result with a vertex inside a face's own seam (a cylinder's seam line running
+        // through the corner where the boolean's cut meets it again: its loop folds back over
+        // the seam, which no mesh follows): again with an operand cylinder's seam turned half a
+        // turn, kept when that one is clear of it.
+        if let (Ok(res), [tool]) = (&r, tools)
+            && !crate::native::env_flag!("CADRS_NO_SEAM_TURN")
+            && res
+                .bodies
+                .iter()
+                .any(|id| self.get(*id).is_ok_and(|b| seam_through_a_vertex(b)))
+        {
+            for which in [*tool, target] {
+                let Some(turned) = self.get(which).ok().and_then(|b| cylinder_turned(b)) else {
+                    continue;
+                };
+                let Ok(made) =
+                    self.cylinder_seamed(turned.0, turned.1, turned.2, turned.3, turned.4)
+                else {
+                    continue;
+                };
+                let [id] = made.bodies.as_slice() else {
+                    continue;
+                };
+                let id = *id;
+                let again = if which == *tool {
+                    super::boolean::boolean(self, op, target, &[id])
+                } else {
+                    super::boolean::boolean(self, op, id, tools)
+                };
+                self.release(id);
+                let Ok(mut res2) = again else { continue };
+                if res2
+                    .bodies
+                    .iter()
+                    .any(|b| self.get(*b).is_ok_and(|b| seam_through_a_vertex(b)))
+                {
+                    for b in &res2.bodies {
+                        self.release(*b);
+                    }
+                    continue;
+                }
+                for (_, from) in res2.history.modified.iter_mut() {
+                    if from.body == id {
+                        from.body = which;
+                    }
+                }
+                for from in res2.history.deleted.iter_mut() {
+                    if from.body == id {
+                        from.body = which;
+                    }
+                }
+                if let Ok(old) = &r {
+                    for b in old.bodies.clone() {
+                        self.release(b);
+                    }
+                }
+                r = Ok(res2);
+                break;
             }
         }
         // A pipe united with a ball of its radius about an end of its spine: a pipe closed
@@ -2686,6 +2733,38 @@ impl Kernel for NativeKernel {
 }
 
 impl NativeKernel {
+    /// A cylinder from `base` along `axis` by `height`, its seam along `seam` (square to the
+    /// axis) from it.
+    pub(crate) fn cylinder_seamed(
+        &mut self,
+        base: P3,
+        axis: nalgebra::Unit<V3>,
+        radius: f64,
+        height: f64,
+        seam: V3,
+    ) -> Result<OpResult> {
+        let plane = Plane {
+            origin: base,
+            x_dir: nalgebra::Unit::new_normalize(seam),
+            normal: axis,
+        };
+        let r = Region {
+            outer: Loop {
+                curves: vec![Curve2::Circle {
+                    center: nalgebra::Point2::origin(),
+                    radius,
+                    source: None,
+                }],
+            },
+            holes: vec![],
+            source: None,
+        };
+        self.extrude_with(
+            &Profile::new(plane, vec![r]),
+            &ExtrudeSpec::blind(axis, height),
+        )
+    }
+
     /// With `CADRS_DUMP_DIR` set, reports an operation's outcome (solids, or the error).
     fn dumped(&self, r: &Result<OpResult>) -> Result<OpResult> {
         if crate::native::env_flag!("CADRS_DUMP_DIR") {
@@ -2914,4 +2993,100 @@ mod tests {
             assert_eq!(k.overlaps(id, tool).ok(), full.ok(), "{name}");
         }
     }
+}
+
+/// Whether a face of `b` on a periodic surface has a vertex of its own lying inside its seam
+/// (a line it uses twice), not at the seam's ends.
+fn seam_through_a_vertex(b: &Body) -> bool {
+    let near = 1e-7 * b.bbox().diagonal().max(1.0) + super::tol::LOOP_GAP;
+    b.faces.iter().any(|f| {
+        if !f.surf.u_periodic() {
+            return false;
+        }
+        f.loops.iter().any(|l| {
+            l.iter().enumerate().any(|(k, c)| {
+                let e = &b.edges[c.edge];
+                if e.degenerate
+                    || !matches!(e.curve, super::curve::Curve::Line { .. })
+                    || !l[k + 1..].iter().any(|d| d.edge == c.edge)
+                {
+                    return false;
+                }
+                let (p0, p1) = (e.point(e.t[0]), e.point(e.t[1]));
+                let d = p1 - p0;
+                let l2 = d.norm_squared();
+                if l2 <= 0.0 {
+                    return false;
+                }
+                f.loops.iter().flatten().any(|q| {
+                    let v = b.co_start(q);
+                    if e.v.contains(&v) {
+                        return false;
+                    }
+                    let p = b.verts[v].p;
+                    let s = (p - p0).dot(&d) / l2;
+                    let len = l2.sqrt();
+                    s * len > near && (1.0 - s) * len > near && (p0 + d * s - p).norm() < near
+                })
+            })
+        })
+    })
+}
+
+/// A body that is a plain cylinder (its side between two whole circles, two flat caps): its
+/// base, axis, radius and height, and its seam's direction turned half a turn.
+fn cylinder_turned(b: &Body) -> Option<(P3, nalgebra::Unit<V3>, f64, f64, V3)> {
+    use super::curve::Curve;
+    if b.faces.len() != 3 || b.solids.len() != 1 {
+        return None;
+    }
+    let si = b
+        .faces
+        .iter()
+        .position(|f| matches!(f.surf, Surface::Cylinder { .. }))?;
+    let side = &b.faces[si];
+    let Surface::Cylinder { f: fr, r } = &side.surf else {
+        return None;
+    };
+    if !(0..3)
+        .filter(|&i| i != si)
+        .all(|i| matches!(b.faces[i].surf, Surface::Plane { .. }))
+    {
+        return None;
+    }
+    let [l] = side.loops.as_slice() else {
+        return None;
+    };
+    let mut centres: Vec<P3> = Vec::new();
+    let mut seam: Option<P3> = None;
+    for c in l {
+        let e = &b.edges[c.edge];
+        match &e.curve {
+            Curve::Circle { c: o, .. } if e.v[0] == e.v[1] => centres.push(*o),
+            Curve::Line { .. } => seam = Some(b.verts[e.v[0]].p),
+            _ => return None,
+        }
+    }
+    let ([c0, c1], Some(on_seam)) = (centres.as_slice(), seam) else {
+        return None;
+    };
+    let mut axis = c1 - c0;
+    let height = axis.norm();
+    if height <= 0.0 {
+        return None;
+    }
+    let base = if axis.dot(&fr.z) >= 0.0 {
+        *c0
+    } else {
+        axis = -axis;
+        *c1
+    };
+    let axis = nalgebra::Unit::new_normalize(axis);
+    // The seam's direction from the axis, turned half a turn.
+    let out = on_seam - base;
+    let out = out - axis.into_inner() * out.dot(&axis);
+    if out.norm() <= 0.0 {
+        return None;
+    }
+    Some((base, axis, *r, height, -out.normalize()))
 }
