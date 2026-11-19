@@ -279,6 +279,8 @@ pub enum AppliedField {
     FramePath,
     FrameSketch,
     FrameCorners,
+    /// The Frame's parts to trim the members by.
+    FrameTrim,
     /// A hypoid pair's member's own shaft and its mate's.
     GearShaft,
     GearMateShaft,
@@ -614,8 +616,15 @@ impl AppliedSession {
                 regions: true,
                 ..none
             },
+            // Sketch points, and part vertices (an edge path's corners).
             AppliedField::FrameCorners => PickFilter {
                 sketch_points: true,
+                edges: true,
+                ..none
+            },
+            AppliedField::FrameTrim => PickFilter {
+                faces: true,
+                whole_parts: true,
                 ..none
             },
             AppliedField::GearFace => PickFilter {

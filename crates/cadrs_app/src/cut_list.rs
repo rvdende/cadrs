@@ -7,7 +7,10 @@
 //!   from 0): Item, Qty, Length and the end cuts' angles from square ("45° / 45°", "Coped"), a
 //!   bent member's length marked so. Clicking a row selects
 //!   its parts (again: deselects them); a row whose parts are selected shows so.
-//! - **Totals** (`cut-list-total-<i>`): the stock of each section, its members' lengths summed.
+//! - **Mass**: a row's members together, where their parts have materials (or masses of their
+//!   own); a section's heading names its material when its rows share one.
+//! - **Totals** (`cut-list-total-<i>`): the stock of each section, its members' lengths summed,
+//!   and its mass; the whole frame's mass (`cut-list-total-mass`).
 //! - **Copy** (`cut-list-copy`): the table tab-separated on the clipboard. **Export CSV**
 //!   (`cut-list-export`): "<Part Studio> cut list.csv" in the export folder.
 //!
@@ -70,6 +73,25 @@ fn part_name(cache: &PartCache, id: PartId) -> String {
         .unwrap_or_default()
 }
 
+/// A section's name in the current language ("Square tube 40x40x3"); a custom section's or a
+/// plate's as the cut list has it.
+fn profile_text(members: &[MemberInfo], profile: &str) -> String {
+    members
+        .iter()
+        .find(|m| m.profile == profile)
+        .and_then(|m| {
+            let f = m.family?;
+            Some(format!("{} {}", crate::frame_ui::family_text(f), m.size))
+        })
+        .unwrap_or_else(|| profile.to_string())
+}
+
+/// A mass in kg: "1.25 kg".
+fn mass_text(kg: f64) -> String {
+    let s = format!("{kg:.2}");
+    format!("{} kg", s.trim_end_matches('0').trim_end_matches('.'))
+}
+
 /// An end cut as the table shows it.
 fn end_text(e: EndCut) -> String {
     match e {
@@ -100,7 +122,14 @@ fn strip_button(
     mut open: ResMut<SidePanel>,
     mut q: Query<(&Name, &mut Node)>,
 ) {
-    let has = *kind == ActiveKind::PartStudio && !members(&cache).is_empty();
+    // (Every frame: a look, no copies; a part or a copy of one of the members.)
+    let has = *kind == ActiveKind::PartStudio
+        && cache.frames.iter().any(|m| {
+            cache
+                .parts
+                .iter()
+                .any(|p| p.id == m.part || p.source == Some(m.part))
+        });
     for (n, mut node) in &mut q {
         if n.as_str() == "panel-cut-list" {
             let want = if has { Display::Flex } else { Display::None };
@@ -150,12 +179,16 @@ fn rebuild(world: &mut World) {
             _ => None,
         })
         .collect();
+    let materials: Vec<(Option<String>, Option<f64>)> = rows
+        .iter()
+        .map(|r| cadrs_core::frame::row_material(r, &cache.parts, &cache.props))
+        .collect();
     let names: Vec<Vec<String>> = rows
         .iter()
         .map(|r| r.parts.iter().map(|p| part_name(cache, *p)).collect())
         .collect();
     let key = PanelKey(format!(
-        "{rows:?}{names:?}{selected:?}{}{}",
+        "{rows:?}{names:?}{materials:?}{selected:?}{}{}",
         units.length.symbol(),
         units.decimals
     ));
@@ -178,7 +211,7 @@ fn rebuild(world: &mut World) {
         ))
         .id();
     world.entity_mut(panel).entry::<Node>().and_modify(|mut n| {
-        n.width = Val::Px(300.0);
+        n.width = Val::Px(340.0);
         n.flex_direction = FlexDirection::Column;
     });
     let cell = |w: f32, grow: bool| Node {
@@ -188,11 +221,12 @@ fn rebuild(world: &mut World) {
         overflow: Overflow::clip(),
         ..default()
     };
-    const COLS: [(f32, bool, &str); 4] = [
-        (28.0, false, "cut-list-item"),
-        (34.0, false, "cut-list-qty"),
+    const COLS: [(f32, bool, &str); 5] = [
+        (24.0, false, "cut-list-item"),
+        (30.0, false, "cut-list-qty"),
         (0.0, true, "model-length"),
-        (112.0, false, "cut-list-angles"),
+        (92.0, false, "cut-list-angles"),
+        (62.0, false, "cut-list-mass"),
     ];
     let mut commands = world.commands();
     commands.entity(panel).with_children(|p| {
@@ -267,9 +301,21 @@ fn rebuild(world: &mut World) {
             for (i, r) in rows.iter().enumerate() {
                 if last != Some(r.profile.as_str()) {
                     last = Some(r.profile.as_str());
+                    // The section, and its material if its rows all have one.
+                    let material = rows
+                        .iter()
+                        .zip(&materials)
+                        .filter(|(q, _)| q.profile == r.profile)
+                        .map(|(_, m)| m.0.clone())
+                        .reduce(|a, b| if a == b { a } else { None })
+                        .flatten();
+                    let heading = match material {
+                        Some(m) => format!("{} · {m}", profile_text(&members, &r.profile)),
+                        None => profile_text(&members, &r.profile),
+                    };
                     list.spawn((
                         Name::new(format!("cut-list-profile-{group}")),
-                        t.text(r.profile.clone(), 11.5, FontWeight::BOLD, t.foreground),
+                        t.text(heading, 11.5, FontWeight::BOLD, t.foreground),
                         Node {
                             margin: UiRect::new(
                                 Val::Px(10.0),
@@ -284,7 +330,9 @@ fn rebuild(world: &mut World) {
                 }
                 let on = !r.parts.is_empty() && r.parts.iter().all(|p| selected.contains(p));
                 let length = length_text(&units, r.length);
-                let length = if r.curved {
+                let length = if r.plate {
+                    "–".to_string()
+                } else if r.curved {
                     tr_with("cut-list-bent", &[("length", &length)])
                 } else {
                     length
@@ -293,7 +341,8 @@ fn rebuild(world: &mut World) {
                     r.item.to_string(),
                     r.quantity().to_string(),
                     length,
-                    ends_text(r),
+                    if r.plate { String::new() } else { ends_text(r) },
+                    materials[i].1.map(mass_text).unwrap_or_else(|| "–".into()),
                 ];
                 let mut row = list.spawn((
                     Name::new(format!("cut-list-row-{i}")),
@@ -341,24 +390,38 @@ fn rebuild(world: &mut World) {
                 t.muted_foreground,
             ));
             for (i, (profile, length)) in totals.iter().enumerate() {
-                let count: usize = rows
-                    .iter()
-                    .filter(|r| r.profile == *profile)
-                    .map(CutListRow::quantity)
-                    .sum();
+                let of = || {
+                    rows.iter()
+                        .zip(&materials)
+                        .filter(|(r, _)| r.profile == *profile)
+                };
+                let count: usize = of().map(|(r, _)| r.quantity()).sum();
+                let mass: Option<f64> = of().map(|(_, m)| m.1).sum();
+                let mut text = tr_with(
+                    "cut-list-total",
+                    &[
+                        ("profile", &profile_text(&members, profile)),
+                        ("length", &length_text(&units, *length)),
+                        ("count", &count.to_string()),
+                    ],
+                );
+                if let Some(kg) = mass {
+                    text = format!("{text}, {}", mass_text(kg));
+                }
                 s.spawn((
                     Name::new(format!("cut-list-total-{i}")),
+                    t.text(text, 11.5, FontWeight::NORMAL, t.foreground),
+                ));
+            }
+            // Everything the frames weigh (members and plates), where every part has a material.
+            let all: Option<f64> = materials.iter().map(|m| m.1).sum();
+            if let Some(kg) = all {
+                s.spawn((
+                    Name::new("cut-list-total-mass"),
                     t.text(
-                        tr_with(
-                            "cut-list-total",
-                            &[
-                                ("profile", profile),
-                                ("length", &length_text(&units, *length)),
-                                ("count", &count.to_string()),
-                            ],
-                        ),
+                        tr_with("cut-list-total-mass", &[("mass", &mass_text(kg))]),
                         11.5,
-                        FontWeight::NORMAL,
+                        FontWeight::MEDIUM,
                         t.foreground,
                     ),
                 ));
@@ -410,7 +473,8 @@ fn table_text(world: &World, csv: bool) -> (String, usize) {
     let cache = world.resource::<PartCache>();
     let rows = cadrs_core::frame::cut_list(&members(cache));
     let n = rows.len();
-    let text = cadrs_core::frame::cut_list_csv(&rows, |p| part_name(cache, p));
+    let material = |r: &CutListRow| cadrs_core::frame::row_material(r, &cache.parts, &cache.props);
+    let text = cadrs_core::frame::cut_list_csv(&rows, |p| part_name(cache, p), material);
     if csv {
         (text, n)
     } else {
@@ -426,6 +490,8 @@ fn table_text(world: &World, csv: bool) -> (String, usize) {
                     "Angle 1",
                     "Angle 2",
                     "Bent",
+                    "Material",
+                    "Mass (kg)",
                     "Parts",
                 ]
                 .map(String::from)
@@ -438,6 +504,8 @@ fn table_text(world: &World, csv: bool) -> (String, usize) {
                     r.ends[0].text(),
                     r.ends[1].text(),
                     if r.curved { "yes" } else { "no" }.into(),
+                    material(r).0.unwrap_or_default(),
+                    material(r).1.map(|m| format!("{m:.3}")).unwrap_or_default(),
                     r.parts
                         .iter()
                         .map(|p| part_name(cache, *p))

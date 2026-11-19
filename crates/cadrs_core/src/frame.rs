@@ -238,14 +238,59 @@ pub struct FrameFeature {
     /// Curves meeting tangentially are one member.
     #[serde(default = "yes")]
     pub merge_tangent: bool,
-    /// How members ending at one point are joined.
+    /// How members ending at one point are joined. Butt and coped: the longer member runs on
+    /// (the first in the path where they are as long), the shorter is cut against it.
     #[serde(default)]
     pub corner: CornerType,
-    /// Butt and coped corners: the second member runs on, not the first.
+    /// Butt and coped corners: the shorter member runs on, not the longer.
     #[serde(default)]
     pub flip: bool,
     #[serde(default)]
     pub overrides: Vec<CornerOverride>,
+    /// Parts the members are trimmed by (a wall, a plate, another frame's members): each
+    /// member less what overlaps them, the piece holding most of it kept.
+    #[serde(default)]
+    pub trim: Vec<PartId>,
+    /// Plates closing the members' free ends, as thick as `cap_thickness`, outside the member
+    /// (only of sections with holes: tubes, T-slot extrusions, custom sections with holes).
+    #[serde(default)]
+    pub end_caps: bool,
+    #[serde(default = "cap_thickness")]
+    pub cap_thickness: f64,
+    #[serde(default = "cap_thickness_expr")]
+    pub cap_thickness_expr: String,
+    /// A triangular plate in the angle of every corner of two members: its legs `gusset_size`
+    /// along the members' inner sides from where they meet, `gusset_thickness` thick, in the
+    /// middle of the section.
+    #[serde(default)]
+    pub gussets: bool,
+    #[serde(default = "gusset_size")]
+    pub gusset_size: f64,
+    #[serde(default = "gusset_size_expr")]
+    pub gusset_size_expr: String,
+    #[serde(default = "gusset_thickness")]
+    pub gusset_thickness: f64,
+    #[serde(default = "gusset_thickness_expr")]
+    pub gusset_thickness_expr: String,
+}
+
+fn cap_thickness() -> f64 {
+    3.0
+}
+fn cap_thickness_expr() -> String {
+    "3 mm".into()
+}
+fn gusset_size() -> f64 {
+    60.0
+}
+fn gusset_size_expr() -> String {
+    "60 mm".into()
+}
+fn gusset_thickness() -> f64 {
+    5.0
+}
+fn gusset_thickness_expr() -> String {
+    "5 mm".into()
 }
 
 fn yes() -> bool {
@@ -264,9 +309,19 @@ impl Default for FrameFeature {
             angle_expr: "0 deg".into(),
             mirror: false,
             merge_tangent: true,
-            corner: CornerType::Miter,
+            // Aluminium extrusion (the default section) is butted.
+            corner: CornerType::Butt,
             flip: false,
             overrides: Vec::new(),
+            trim: Vec::new(),
+            end_caps: false,
+            cap_thickness: cap_thickness(),
+            cap_thickness_expr: cap_thickness_expr(),
+            gussets: false,
+            gusset_size: gusset_size(),
+            gusset_size_expr: gusset_size_expr(),
+            gusset_thickness: gusset_thickness(),
+            gusset_thickness_expr: gusset_thickness_expr(),
         }
     }
 }
@@ -286,6 +341,18 @@ impl FrameFeature {
         if !self.angle.is_finite() {
             return Some("The angle must be a number");
         }
+        if self.end_caps
+            && self.cap_thickness.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater)
+        {
+            return Some("The end caps' thickness must be greater than zero");
+        }
+        if self.gussets
+            && [self.gusset_size, self.gusset_thickness]
+                .iter()
+                .any(|v| v.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater))
+        {
+            return Some("The gussets' size and thickness must be greater than zero");
+        }
         None
     }
 
@@ -304,6 +371,7 @@ impl FrameFeature {
                 .iter()
                 .filter_map(|o| o.point.map(|p| p.sketch)),
         );
+        out.extend(self.trim.iter().map(|p| p.feature));
         out.sort_by_key(|f| f.0);
         out.dedup();
         out
@@ -391,14 +459,38 @@ const SLOT_40: TSlotSeries = TSlotSeries {
     bore: 6.8,
 };
 
+/// Inch T-slot (the 10 and 15 series): 1 in and 1.5 in cells.
+const SLOT_10: TSlotSeries = TSlotSeries {
+    cell: 25.4,
+    opening: 6.5,
+    lip: 2.2,
+    width: 14.0,
+    wall: 1.3,
+    depth: 7.6,
+    bore: 5.2,
+};
+const SLOT_15: TSlotSeries = TSlotSeries {
+    cell: 38.1,
+    opening: 8.1,
+    lip: 4.4,
+    width: 19.0,
+    wall: 1.8,
+    depth: 11.4,
+    bore: 7.9,
+};
+
 /// T-slot sizes: name, series, cells across and up.
-const T_SLOTS: [(&str, &TSlotSeries, u32, u32); 6] = [
+const T_SLOTS: [(&str, &TSlotSeries, u32, u32); 10] = [
     ("20x20", &SLOT_20, 1, 1),
     ("20x40", &SLOT_20, 2, 1),
     ("30x30", &SLOT_30, 1, 1),
     ("30x60", &SLOT_30, 2, 1),
     ("40x40", &SLOT_40, 1, 1),
     ("40x80", &SLOT_40, 2, 1),
+    ("1010 (1 in)", &SLOT_10, 1, 1),
+    ("1020 (1x2 in)", &SLOT_10, 2, 1),
+    ("1515 (1.5 in)", &SLOT_15, 1, 1),
+    ("1530 (1.5x3 in)", &SLOT_15, 2, 1),
 ];
 
 /// Square tubes: side, wall.
@@ -722,7 +814,9 @@ fn t_slot(s: &TSlotSeries, nx: u32, ny: u32) -> Vec<Region> {
     let mut p: Vec<[f64; 2]> = Vec::new();
     // Counter-clockwise: bottom (+x, inwards +y), right (+y, inwards -x), top (-x, inwards -y),
     // left (-y, inwards +x).
-    let sides: [([f64; 2], [f64; 2], [f64; 2], u32); 4] = [
+    // Each side: its start, the way along it, the way in, and its cells.
+    type Side = ([f64; 2], [f64; 2], [f64; 2], u32);
+    let sides: [Side; 4] = [
         ([x0, y0], [1.0, 0.0], [0.0, 1.0], nx),
         ([x0 + w, y0], [0.0, 1.0], [-1.0, 0.0], ny),
         ([x0 + w, y0 + h], [-1.0, 0.0], [0.0, -1.0], nx),
@@ -1120,6 +1214,16 @@ impl EndCut {
     }
 }
 
+/// An end cap's name in the cut list: "End cap 3 mm (Square tube 40x40x3)".
+pub fn cap_label(thickness: f64, profile: &str) -> String {
+    format!("End cap {} mm ({profile})", trim(thickness, 2))
+}
+
+/// A gusset's name in the cut list: "Gusset 60 x 5 mm".
+pub fn gusset_label(size: f64, thickness: f64) -> String {
+    format!("Gusset {} x {} mm", trim(size, 2), trim(thickness, 2))
+}
+
 /// A member the Frame feature made, as the cut list counts it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MemberInfo {
@@ -1138,6 +1242,15 @@ pub struct MemberInfo {
     pub curved: bool,
     /// Its mass properties' volume (mm³).
     pub volume: f64,
+    /// An end cap or a gusset (a plate, its size in `profile`, `length` 0), not a member.
+    #[serde(default)]
+    pub plate: bool,
+    /// A standard section's family and size (to name it in another language); `None` for a
+    /// custom section or a plate.
+    #[serde(default)]
+    pub family: Option<ProfileFamily>,
+    #[serde(default)]
+    pub size: String,
 }
 
 /// The members among `parts` as they are now: each member whose part is still there, and each
@@ -1175,6 +1288,8 @@ pub struct CutListRow {
     pub length: f64,
     pub ends: [EndCut; 2],
     pub curved: bool,
+    /// End caps or gussets (their size in `profile`).
+    pub plate: bool,
     /// Its members' parts.
     pub parts: Vec<PartId>,
 }
@@ -1200,6 +1315,7 @@ pub fn cut_list(members: &[MemberInfo]) -> Vec<CutListRow> {
                 && length_key(r.length) == length_key(m.length)
                 && r.ends.map(EndCut::key) == ends.map(EndCut::key)
                 && r.curved == m.curved
+                && r.plate == m.plate
         }) {
             Some(r) => r.parts.push(m.part),
             None => rows.push(CutListRow {
@@ -1208,6 +1324,7 @@ pub fn cut_list(members: &[MemberInfo]) -> Vec<CutListRow> {
                 length: m.length,
                 ends,
                 curved: m.curved,
+                plate: m.plate,
                 parts: vec![m.part],
             }),
         }
@@ -1232,10 +1349,11 @@ pub fn cut_list(members: &[MemberInfo]) -> Vec<CutListRow> {
     rows
 }
 
-/// The cut list's total length of stock for each section (mm), in the rows' order.
+/// The cut list's total length of stock for each section (mm), in the rows' order (plates
+/// left out).
 pub fn totals(rows: &[CutListRow]) -> Vec<(String, f64)> {
     let mut out: Vec<(String, f64)> = Vec::new();
-    for r in rows {
+    for r in rows.iter().filter(|r| !r.plate) {
         let l = r.length * r.quantity() as f64;
         match out.iter_mut().find(|(p, _)| *p == r.profile) {
             Some((_, t)) => *t += l,
@@ -1260,9 +1378,40 @@ pub fn length_text(mm: f64) -> String {
     trim(mm, 1)
 }
 
+/// A row's material (its parts', if they all have the same one) and mass (kg, if every part has
+/// a material or a mass of its own).
+pub fn row_material(
+    row: &CutListRow,
+    parts: &[crate::Part],
+    props: &[crate::PartProps],
+) -> (Option<String>, Option<f64>) {
+    let of: Vec<&crate::Part> = row
+        .parts
+        .iter()
+        .filter_map(|id| parts.iter().find(|p| p.id == *id))
+        .collect();
+    let names: Vec<Option<String>> = of
+        .iter()
+        .map(|p| crate::parts::part_material(p, props).map(|m| m.name.clone()))
+        .collect();
+    let material = match names.first() {
+        Some(Some(n)) if names.iter().all(|m| m.as_ref() == Some(n)) => Some(n.clone()),
+        _ => None,
+    };
+    let mass = crate::parts::mass_report(&of, props)
+        .and_then(|r| r.mass)
+        .map(|m| m.mass);
+    (material, mass)
+}
+
 /// The cut list as CSV (comma separated, quoted where needed): Item, Qty, Profile, Length (mm),
-/// Angle 1, Angle 2, Parts.
-pub fn cut_list_csv(rows: &[CutListRow], name: impl Fn(PartId) -> String) -> String {
+/// Angle 1, Angle 2, Bent, Material, Mass (kg, the row's members together), Parts. A plate's
+/// length and angles are left empty (its size is in its name).
+pub fn cut_list_csv(
+    rows: &[CutListRow],
+    name: impl Fn(PartId) -> String,
+    material: impl Fn(&CutListRow) -> (Option<String>, Option<f64>),
+) -> String {
     let q = |s: &str| {
         if s.contains([',', '"', '\n']) {
             format!("\"{}\"", s.replace('"', "\"\""))
@@ -1270,18 +1419,32 @@ pub fn cut_list_csv(rows: &[CutListRow], name: impl Fn(PartId) -> String) -> Str
             s.to_string()
         }
     };
-    let mut out = String::from("Item,Qty,Profile,Length (mm),Angle 1,Angle 2,Bent,Parts\n");
+    let mut out = String::from(
+        "Item,Qty,Profile,Length (mm),Angle 1,Angle 2,Bent,Material,Mass (kg),Parts\n",
+    );
     for r in rows {
         let parts: Vec<String> = r.parts.iter().map(|p| name(*p)).collect();
+        let (mat, mass) = material(r);
+        let (length, a1, a2) = if r.plate {
+            Default::default()
+        } else {
+            (
+                length_text(r.length),
+                q(&r.ends[0].text()),
+                q(&r.ends[1].text()),
+            )
+        };
         out.push_str(&format!(
-            "{},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{},{}\n",
             r.item,
             r.quantity(),
             q(&r.profile),
-            length_text(r.length),
-            q(&r.ends[0].text()),
-            q(&r.ends[1].text()),
+            length,
+            a1,
+            a2,
             if r.curved { "yes" } else { "no" },
+            q(mat.as_deref().unwrap_or("")),
+            mass.map(|m| trim(m, 3)).unwrap_or_default(),
             q(&parts.join("; ")),
         ));
     }
@@ -1470,6 +1633,9 @@ mod tests {
             ends,
             curved: false,
             volume: 0.0,
+            plate: false,
+            family: Some(ProfileFamily::SquareTube),
+            size: "40x40x3".into(),
         };
         let miter = EndCut::Angle(45.0);
         let rows = cut_list(&[
@@ -1487,8 +1653,63 @@ mod tests {
         assert_eq!(rows.iter().map(|r| r.item).collect::<Vec<_>>(), [1, 2, 3]);
         let t = totals(&rows);
         assert!((t[0].1 - 2200.0).abs() < 1e-9);
-        let csv = cut_list_csv(&rows, |p| format!("Part {}", p.index + 1));
+        let csv = cut_list_csv(
+            &rows,
+            |p| format!("Part {}", p.index + 1),
+            |r| (Some("Steel, mild".into()), Some(r.length * 1e-3)),
+        );
         assert!(csv.starts_with("Item,Qty,Profile,Length (mm)"));
-        assert!(csv.contains("1,2,Square tube 40x40x3,500,45°,45°,no,Part 1; Part 3"));
+        assert!(
+            csv.contains(
+                "1,2,Square tube 40x40x3,500,45°,45°,no,\"Steel, mild\",0.5,Part 1; Part 3"
+            ),
+            "{csv}"
+        );
+    }
+
+    #[test]
+    fn pattern_copies_of_members_are_members() {
+        use crate::{Part, PartKind};
+        let f = FeatureId::new();
+        let pattern = FeatureId::new();
+        let part = |id: PartId, source: Option<PartId>| Part {
+            id,
+            feature: id.feature,
+            name: String::new(),
+            kind: PartKind::Solid,
+            palette: 0,
+            solid: Default::default(),
+            mass: None,
+            features: vec![id.feature],
+            source,
+            derived: None,
+        };
+        let (a, b) = (PartId::new(f, 0), PartId::new(f, 1));
+        let copy = PartId::new(pattern, 0);
+        let copy_of_copy = PartId::new(pattern, 1);
+        let member = |p: PartId| MemberInfo {
+            feature: f,
+            part: p,
+            profile: "T-slot 20x20".into(),
+            length: 300.0,
+            ends: [EndCut::Square; 2],
+            curved: false,
+            volume: 1.0,
+            plate: false,
+            family: Some(ProfileFamily::TSlot),
+            size: "20x20".into(),
+        };
+        // `b` was joined to another part (gone); `a` was patterned twice over.
+        let live = live_members(
+            &[member(a), member(b)],
+            &[
+                part(a, None),
+                part(copy, Some(a)),
+                part(copy_of_copy, Some(copy)),
+            ],
+        );
+        let ids: Vec<PartId> = live.iter().map(|m| m.part).collect();
+        assert_eq!(ids, [a, copy, copy_of_copy]);
+        assert_eq!(cut_list(&live)[0].quantity(), 3);
     }
 }

@@ -353,7 +353,31 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
             s("Thickness 1", &mut x.thickness1_expr, &mut x.thickness1, L);
             s("Thickness 2", &mut x.thickness2_expr, &mut x.thickness2, L);
         }
-        FeatureKind::Frame(x) => s("Angle", &mut x.angle_expr, &mut x.angle, A),
+        FeatureKind::Frame(x) => {
+            s("Angle", &mut x.angle_expr, &mut x.angle, A);
+            if x.end_caps {
+                s(
+                    "Cap thickness",
+                    &mut x.cap_thickness_expr,
+                    &mut x.cap_thickness,
+                    L,
+                );
+            }
+            if x.gussets {
+                s(
+                    "Gusset size",
+                    &mut x.gusset_size_expr,
+                    &mut x.gusset_size,
+                    L,
+                );
+                s(
+                    "Gusset thickness",
+                    &mut x.gusset_thickness_expr,
+                    &mut x.gusset_thickness,
+                    L,
+                );
+            }
+        }
         FeatureKind::Gear(x) => {
             count("Teeth", &mut x.teeth_expr, &mut x.teeth, &mut s);
             s("Module", &mut x.module_expr, &mut x.module, L);

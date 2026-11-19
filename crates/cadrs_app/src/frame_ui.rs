@@ -8,8 +8,11 @@
 //! - **Alignment** (which point of the section's box sits on the path), *Angle* about the path,
 //!   **Mirror profile**, **Merge tangent segments**.
 //! - **Corners** Miter, Butt, Coped butt or None, with a flip (which member runs on).
-//! - *Corner overrides*: sketch points at corners joined otherwise; each picked point gets a
-//!   row of its own with its treatment and flip.
+//! - *Corner overrides*: sketch points or part vertices at corners joined otherwise; each picked
+//!   point gets a row of its own with its treatment and flip.
+//! - *Trim to parts*: parts the members are cut back by (a wall, another frame's members).
+//! - **End caps** with their *Thickness* (plates closing hollow members' free ends) and
+//!   **Gussets** with their *Size* and *Thickness* (triangular plates in two-member corners).
 //!
 //! The toolbar's Frame button starts it with the selected sketch curves, edges and sketches.
 //! The cut list of every frame in the Part Studio is the Cut list panel ([`crate::cut_list`]).
@@ -133,16 +136,43 @@ pub fn pick(world: &mut World, kind: &mut FeatureKind, field: AppliedField, pick
             x.sketch = if x.sketch == Some(s) { None } else { Some(s) };
             true
         }
-        AppliedField::FrameCorners => {
-            let Pick::SketchPoint(sketch, point) = pick else {
+        AppliedField::FrameTrim => {
+            let Some(p) = pick.part() else {
                 return false;
             };
-            let Some(at) = point_at(&features, sketch, point) else {
-                return false;
+            match x.trim.iter().position(|q| *q == p) {
+                Some(i) => {
+                    x.trim.remove(i);
+                }
+                None => x.trim.push(p),
+            }
+            true
+        }
+        AppliedField::FrameCorners => {
+            let (at, point) = match pick {
+                Pick::SketchPoint(sketch, point) => {
+                    let Some(at) = point_at(&features, sketch, point) else {
+                        return false;
+                    };
+                    (at, Some(SketchPointRef { sketch, point }))
+                }
+                Pick::Vertex(part, v) => {
+                    let cache = world.resource::<PartCache>();
+                    let Some(at) = cache
+                        .parts
+                        .iter()
+                        .find(|p| p.id == part)
+                        .and_then(|p| p.solid.vertex(&v))
+                        .map(|q| q.point)
+                    else {
+                        return false;
+                    };
+                    (at, None)
+                }
+                _ => return false,
             };
             let same = |o: &CornerOverride| {
-                o.point
-                    .is_some_and(|p| p.sketch == sketch && p.point == point)
+                (point.is_some() && o.point == point)
                     || (0..3)
                         .map(|k| (o.at[k] - at[k]).powi(2))
                         .sum::<f64>()
@@ -154,7 +184,7 @@ pub fn pick(world: &mut World, kind: &mut FeatureKind, field: AppliedField, pick
                     x.overrides.remove(i);
                 }
                 None => x.overrides.push(CornerOverride {
-                    point: Some(SketchPointRef { sketch, point }),
+                    point,
                     at,
                     // The other treatment than the frame's (else why override).
                     corner: if x.corner == CornerType::Butt {
@@ -199,6 +229,7 @@ pub fn references(kind: &FeatureKind, cache: &PartCache) -> Vec<Pick> {
             .iter()
             .filter_map(|o| o.point.map(|p| Pick::SketchPoint(p.sketch, p.point))),
     );
+    out.extend(x.trim.iter().map(|p| Pick::Part(*p)));
     out
 }
 
@@ -215,7 +246,7 @@ pub(crate) fn name(kind: &FeatureKind) -> Option<&'static str> {
 pub(crate) fn layout(kind: &FeatureKind) -> Option<String> {
     match kind {
         FeatureKind::Frame(x) => Some(format!(
-            "frame {:?} {} {:?} {} {} {:?} {} {:?}",
+            "frame {:?} {} {:?} {} {} {:?} {} {:?} {} {}",
             x.family,
             x.size,
             x.anchor,
@@ -226,7 +257,9 @@ pub(crate) fn layout(kind: &FeatureKind) -> Option<String> {
             x.overrides
                 .iter()
                 .map(|o| (o.corner, o.flip))
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>(),
+            x.end_caps,
+            x.gussets,
         )),
         k => crate::gear_ui::layout(k),
     }
@@ -275,7 +308,32 @@ pub(crate) fn items(
             x.overrides
                 .iter()
                 .enumerate()
-                .map(|(i, _)| tr_with("model-frame-corner-n", &[("n", &(i + 1).to_string())]))
+                .map(|(i, o)| {
+                    let n = |v: f64| {
+                        let s = format!("{v:.1}");
+                        s.trim_end_matches('0').trim_end_matches('.').to_string()
+                    };
+                    format!(
+                        "{} ({}, {}, {})",
+                        tr_with("model-frame-corner-n", &[("n", &(i + 1).to_string())]),
+                        n(o.at[0]),
+                        n(o.at[1]),
+                        n(o.at[2])
+                    )
+                })
+                .collect(),
+        ),
+        (FeatureKind::Frame(x), Role::FrameTrim) => Some(
+            x.trim
+                .iter()
+                .map(|p| {
+                    cache
+                        .parts
+                        .iter()
+                        .find(|q| q.id == *p)
+                        .map(|q| cadrs_core::parts::display_name(q, &cache.props).to_string())
+                        .unwrap_or_else(|| tr("model-unknown-part"))
+                })
                 .collect(),
         ),
         (k, r) => crate::gear_ui::items(features, cache, k, r),
@@ -287,6 +345,7 @@ pub(crate) fn list_field(role: Role) -> Option<AppliedField> {
         Role::FramePath => Some(AppliedField::FramePath),
         Role::FrameSketch => Some(AppliedField::FrameSketch),
         Role::FrameCorners => Some(AppliedField::FrameCorners),
+        Role::FrameTrim => Some(AppliedField::FrameTrim),
         r => crate::gear_ui::list_field(r),
     }
 }
@@ -497,6 +556,56 @@ pub(crate) fn body(
             items_of(Role::FrameCorners),
             field == AppliedField::FrameCorners,
         );
+        list(
+            b,
+            t,
+            "frame-trim-field",
+            &tr("model-frame-trim"),
+            Role::FrameTrim,
+            items_of(Role::FrameTrim),
+            field == AppliedField::FrameTrim,
+        );
+        b.spawn(
+            OptionRow::new("frame-caps", tr("model-frame-end-caps"))
+                .checked(x.end_caps)
+                .build(t),
+        );
+        if x.end_caps {
+            number(
+                b,
+                t,
+                "frame-cap-thickness",
+                &tr("model-frame-thickness"),
+                Role::FrameCapThickness,
+                &x.cap_thickness_expr,
+                None,
+            );
+        }
+        b.spawn(
+            OptionRow::new("frame-gussets", tr("model-frame-gussets"))
+                .checked(x.gussets)
+                .build(t),
+        );
+        if x.gussets {
+            number(
+                b,
+                t,
+                "frame-gusset-size",
+                &tr("model-frame-gusset-size"),
+                Role::FrameGussetSize,
+                &x.gusset_size_expr,
+                None,
+            );
+            number(
+                b,
+                t,
+                "frame-gusset-thickness",
+                &tr("model-frame-thickness"),
+                Role::FrameGussetThickness,
+                &x.gusset_thickness_expr,
+                None,
+            );
+        }
         for (i, o) in x.overrides.iter().enumerate() {
             let i = i.min(u8::MAX as usize) as u8;
             corner_row(
@@ -525,6 +634,11 @@ fn size_index(x: &FrameFeature) -> usize {
 pub(crate) fn number_text(kind: &FeatureKind, role: Role) -> Option<String> {
     match (kind, role) {
         (FeatureKind::Frame(x), Role::FrameAngle) => Some(x.angle_expr.clone()),
+        (FeatureKind::Frame(x), Role::FrameCapThickness) => Some(x.cap_thickness_expr.clone()),
+        (FeatureKind::Frame(x), Role::FrameGussetSize) => Some(x.gusset_size_expr.clone()),
+        (FeatureKind::Frame(x), Role::FrameGussetThickness) => {
+            Some(x.gusset_thickness_expr.clone())
+        }
         (k, r) => crate::gear_ui::number_text(k, r),
     }
 }
@@ -580,6 +694,8 @@ pub(crate) fn tab(k: &mut FeatureKind, role: Role, i: usize) {
 pub(crate) fn is_checkbox(name: &str) -> bool {
     name == "frame-mirror-checkbox"
         || name == "frame-merge-checkbox"
+        || name == "frame-caps-checkbox"
+        || name == "frame-gussets-checkbox"
         || crate::gear_ui::is_checkbox(name)
 }
 
@@ -592,6 +708,14 @@ pub(crate) fn checkbox(k: &mut FeatureKind, name: &str, on: bool) -> Option<&'st
         (FeatureKind::Frame(x), "frame-merge-checkbox") => {
             x.merge_tangent = on;
             Some("Merge tangent segments")
+        }
+        (FeatureKind::Frame(x), "frame-caps-checkbox") => {
+            x.end_caps = on;
+            Some("End caps")
+        }
+        (FeatureKind::Frame(x), "frame-gussets-checkbox") => {
+            x.gussets = on;
+            Some("Gussets")
         }
         (k, n) => crate::gear_ui::checkbox(k, n, on),
     }
@@ -612,6 +736,9 @@ pub(crate) fn is_angle(role: Role) -> bool {
 pub(crate) fn number_label(role: Role) -> Option<&'static str> {
     match role {
         Role::FrameAngle => Some("Angle"),
+        Role::FrameCapThickness => Some("Cap thickness"),
+        Role::FrameGussetSize => Some("Gusset size"),
+        Role::FrameGussetThickness => Some("Gusset thickness"),
         r => crate::gear_ui::number_label(r),
     }
 }
@@ -621,6 +748,18 @@ pub(crate) fn set_number(k: &mut FeatureKind, role: Role, v: f64, expr: String) 
         (FeatureKind::Frame(x), Role::FrameAngle) => {
             x.angle = v;
             x.angle_expr = expr;
+        }
+        (FeatureKind::Frame(x), Role::FrameCapThickness) => {
+            x.cap_thickness = v;
+            x.cap_thickness_expr = expr;
+        }
+        (FeatureKind::Frame(x), Role::FrameGussetSize) => {
+            x.gusset_size = v;
+            x.gusset_size_expr = expr;
+        }
+        (FeatureKind::Frame(x), Role::FrameGussetThickness) => {
+            x.gusset_thickness = v;
+            x.gusset_thickness_expr = expr;
         }
         (k, r) => crate::gear_ui::set_number(k, r, v, expr),
     }
@@ -647,6 +786,11 @@ pub(crate) fn remove(k: &mut FeatureKind, role: Role, i: usize) {
             }
         }
         (FeatureKind::Frame(x), Role::FrameSketch) => x.sketch = None,
+        (FeatureKind::Frame(x), Role::FrameTrim) => {
+            if i < x.trim.len() {
+                x.trim.remove(i);
+            }
+        }
         (FeatureKind::Frame(x), Role::FrameCorners) => {
             if i < x.overrides.len() {
                 x.overrides.remove(i);

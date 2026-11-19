@@ -4,8 +4,10 @@
 #![cfg(feature = "brep")]
 
 use cadrs_core::advanced::PathRef;
-use cadrs_core::commands::{AddFeature, AddSketch, EditSketch};
-use cadrs_core::document::{Document, FeatureKind};
+use cadrs_core::commands::{AddExtrude, AddFeature, AddSketch, EditSketch, SetExtrude};
+use cadrs_core::document::{
+    BooleanFeature, BooleanKind, Document, EdgeRef, ExtrudeFeature, FeatureKind,
+};
 use cadrs_core::frame::{
     self, Anchor, CornerOverride, CornerType, EndCut, FrameFeature, ProfileFamily, SketchPointRef,
 };
@@ -77,6 +79,87 @@ impl Studio {
         feature
     }
 
+    fn add(&mut self, base: &str, kind: FeatureKind) -> FeatureId {
+        let feature = FeatureId::new();
+        self.h
+            .execute(
+                &mut self.d,
+                &AddFeature {
+                    element: self.el,
+                    feature,
+                    base_name: base.into(),
+                    kind,
+                },
+            )
+            .unwrap();
+        feature
+    }
+
+    /// A box: the sketch's regions extruded `depth` up from Top.
+    fn extrude(&mut self, sketch: FeatureId, depth: f64) -> FeatureId {
+        let f = FeatureId::new();
+        self.h
+            .execute(
+                &mut self.d,
+                &AddExtrude {
+                    element: self.el,
+                    feature: f,
+                    extrude: ExtrudeFeature::default(),
+                },
+            )
+            .unwrap();
+        self.h
+            .execute(
+                &mut self.d,
+                &SetExtrude {
+                    element: self.el,
+                    feature: f,
+                    extrude: ExtrudeFeature {
+                        sketches: vec![sketch],
+                        depth,
+                        depth_expr: format!("{depth} mm"),
+                        ..Default::default()
+                    },
+                    label: "Extrude".into(),
+                },
+            )
+            .unwrap();
+        f
+    }
+
+    /// How much any two of the parts overlap (mm³): each pair intersected by a Boolean, which
+    /// fails when they only touch.
+    fn overlap(&mut self) -> f64 {
+        let parts: Vec<Part> = self.build().parts.clone();
+        let mut total = 0.0;
+        for i in 0..parts.len() {
+            for j in i + 1..parts.len() {
+                let f = self.add(
+                    "Boolean",
+                    FeatureKind::Boolean(BooleanFeature {
+                        op: BooleanKind::Intersect,
+                        tools: vec![parts[i].id, parts[j].id],
+                        targets: Vec::new(),
+                        keep_tools: true,
+                        keep_remainder: false,
+                        offset: None,
+                    }),
+                );
+                let b = rebuild::build(&self.features());
+                if b.error(f).is_none() {
+                    total += b
+                        .parts
+                        .iter()
+                        .filter(|p| p.features.contains(&f) && !parts.iter().any(|q| q.id == p.id))
+                        .map(volume)
+                        .sum::<f64>();
+                }
+                self.h.undo(&mut self.d);
+            }
+        }
+        total
+    }
+
     fn build(&self) -> std::sync::Arc<rebuild::Build> {
         let t = std::time::Instant::now();
         let b = rebuild::build(&self.features());
@@ -113,10 +196,12 @@ fn square_tube_area(b: f64, t: f64) -> f64 {
     (b * b - k * (2.0 * t).powi(2)) - ((b - 2.0 * t).powi(2) - k * t * t)
 }
 
+/// A square tube frame, mitred.
 fn tube(size: &str) -> FrameFeature {
     let mut x = FrameFeature::default();
     x.set_family(ProfileFamily::SquareTube);
     x.size = size.into();
+    x.corner = CornerType::Miter;
     x
 }
 
@@ -423,8 +508,8 @@ fn the_anchor_sets_the_section_on_the_path() {
     let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
     for q in &p.solid.positions {
         for i in 0..3 {
-            lo[i] = lo[i].min(q[i] as f64);
-            hi[i] = hi[i].max(q[i] as f64);
+            lo[i] = lo[i].min(q[i]);
+            hi[i] = hi[i].max(q[i]);
         }
     }
     // Up is the sketch's normal (Z), across is Y: a 40 × 5 bar standing on the sketch plane,
@@ -451,8 +536,8 @@ fn the_anchor_sets_the_section_on_the_path() {
     let p = &b.parts[0];
     let (mut lo, mut hi) = (f64::MAX, f64::MIN);
     for q in &p.solid.positions {
-        lo = lo.min(q[2] as f64);
-        hi = hi.max(q[2] as f64);
+        lo = lo.min(q[2]);
+        hi = hi.max(q[2]);
     }
     assert!((hi - lo - 40.0).abs() < 1e-4);
 }
@@ -514,4 +599,480 @@ fn a_missing_path_is_reported() {
     let f = st.frame(x);
     let b = rebuild::build(&st.features());
     assert!(b.error(f).is_some_and(|e| e.contains("Select")));
+}
+
+/// A part's box from its mesh: (min, max).
+fn bounds(p: &Part) -> ([f64; 3], [f64; 3]) {
+    let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+    for q in &p.solid.positions {
+        for i in 0..3 {
+            lo[i] = lo[i].min(q[i]);
+            hi[i] = hi[i].max(q[i]);
+        }
+    }
+    (lo, hi)
+}
+
+#[test]
+fn end_caps_close_a_tubes_free_ends() {
+    let mut st = Studio::new();
+    let sk = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(&[(0.0, 0.0), (200.0, 0.0)], false)],
+    );
+    let mut x = tube("40x40x3");
+    x.path = vec![PathRef::Sketch(sk)];
+    x.end_caps = true;
+    x.cap_thickness = 4.0;
+    st.frame(x);
+    let b = st.build();
+    assert_eq!(b.parts.len(), 3);
+    let outer = 1600.0 - (4.0 - PI) * 36.0;
+    let want = square_tube_area(40.0, 3.0) * 200.0 + 2.0 * outer * 4.0;
+    assert!(close(total(&b), want, 1e-6), "{} vs {want}", total(&b));
+    let caps: Vec<&Part> = b
+        .parts
+        .iter()
+        .filter(|p| {
+            b.frames
+                .iter()
+                .any(|m| m.part == p.id && m.plate && m.profile.starts_with("End cap 4 mm"))
+        })
+        .collect();
+    assert_eq!(caps.len(), 2);
+    let mut xs: Vec<(f64, f64)> = caps
+        .iter()
+        .map(|p| {
+            let (lo, hi) = bounds(p);
+            (lo[0], hi[0])
+        })
+        .collect();
+    xs.sort_by(|a, b| a.0.total_cmp(&b.0));
+    assert!(
+        (xs[0].0 + 4.0).abs() < 1e-4 && xs[0].1.abs() < 1e-4,
+        "{xs:?}"
+    );
+    assert!(
+        (xs[1].0 - 200.0).abs() < 1e-4 && (xs[1].1 - 204.0).abs() < 1e-4,
+        "{xs:?}"
+    );
+    // Plates are listed apart from the stock.
+    let rows = frame::cut_list(&b.frames);
+    assert_eq!(frame::totals(&rows).len(), 1);
+    assert!(rows.iter().any(|r| r.plate && r.quantity() == 2));
+}
+
+#[test]
+fn a_gusset_fills_the_inside_of_a_corner() {
+    let mut st = Studio::new();
+    let sk = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(&[(300.0, 0.0), (0.0, 0.0), (0.0, 200.0)], false)],
+    );
+    let mut x = tube("40x40x3");
+    x.path = vec![PathRef::Sketch(sk)];
+    x.gussets = true;
+    x.gusset_size = 60.0;
+    x.gusset_thickness = 5.0;
+    st.frame(x);
+    let b = st.build();
+    assert_eq!(b.parts.len(), 3);
+    let g = b
+        .parts
+        .iter()
+        .find(|p| b.frames.iter().any(|m| m.part == p.id && m.plate))
+        .expect("the gusset");
+    assert!(
+        close(volume(g), 0.5 * 60.0 * 60.0 * 5.0, 1e-9),
+        "{}",
+        volume(g)
+    );
+    let (lo, hi) = bounds(g);
+    // From the tubes' inner sides at (20, 20), 60 along each, about the tubes' middle.
+    for (v, w) in [(lo[0], 20.0), (lo[1], 20.0), (hi[0], 80.0), (hi[1], 80.0)] {
+        assert!((v - w).abs() < 1e-4, "{lo:?} {hi:?}");
+    }
+    assert!((lo[2] + 2.5).abs() < 1e-4 && (hi[2] - 2.5).abs() < 1e-4);
+    // At an angle: the legs still lie along the members' inner sides.
+    let mut st = Studio::new();
+    let a = 60f64.to_radians();
+    let sk = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(
+            &[(300.0, 0.0), (0.0, 0.0), (200.0 * a.cos(), 200.0 * a.sin())],
+            false,
+        )],
+    );
+    let mut x = tube("40x40x3");
+    x.path = vec![PathRef::Sketch(sk)];
+    x.gussets = true;
+    st.frame(x);
+    let b = st.build();
+    let g = b
+        .parts
+        .iter()
+        .find(|p| b.frames.iter().any(|m| m.part == p.id && m.plate))
+        .expect("the gusset");
+    let s = x_gusset_size();
+    assert!(close(volume(g), 0.5 * s * s * a.sin() * 5.0, 1e-9));
+}
+
+fn x_gusset_size() -> f64 {
+    FrameFeature::default().gusset_size
+}
+
+#[test]
+fn a_crossbar_in_two_halves_is_one_run_through_a_tee() {
+    // The bar drawn as two lines meeting at the stem, not merged: the halves end square at
+    // the stem's axis, the stem is cut against their side.
+    let mut st = Studio::new();
+    let sk = st.sketch(
+        PlaneRef::Top,
+        vec![
+            polyline(&[(0.0, 0.0), (200.0, 0.0)], false),
+            polyline(&[(200.0, 0.0), (400.0, 0.0)], false),
+            polyline(&[(200.0, 0.0), (200.0, 300.0)], false),
+        ],
+    );
+    let mut x = tube("40x40x3");
+    x.corner = CornerType::Butt;
+    x.merge_tangent = false;
+    x.path = vec![PathRef::Sketch(sk)];
+    st.frame(x);
+    let b = st.build();
+    assert_eq!(b.parts.len(), 3);
+    let a = square_tube_area(40.0, 3.0);
+    assert!(close(total(&b), a * (400.0 + 280.0), 1e-6), "{}", total(&b));
+    assert!(st.overlap() < 1e-6);
+}
+
+#[test]
+fn a_cross_runs_one_bar_through() {
+    let mut st = Studio::new();
+    let sk = st.sketch(
+        PlaneRef::Top,
+        vec![
+            polyline(&[(0.0, 0.0), (200.0, 0.0)], false),
+            polyline(&[(200.0, 0.0), (400.0, 0.0)], false),
+            polyline(&[(200.0, -150.0), (200.0, 0.0)], false),
+            polyline(&[(200.0, 0.0), (200.0, 150.0)], false),
+        ],
+    );
+    let mut x = tube("40x40x3");
+    x.corner = CornerType::Butt;
+    x.merge_tangent = false;
+    x.path = vec![PathRef::Sketch(sk)];
+    st.frame(x);
+    let b = st.build();
+    assert_eq!(b.parts.len(), 4);
+    let a = square_tube_area(40.0, 3.0);
+    assert!(
+        close(total(&b), a * (400.0 + 2.0 * 130.0), 1e-6),
+        "{}",
+        total(&b)
+    );
+}
+
+#[test]
+fn reversed_curves_keep_an_offset_section_on_one_side() {
+    // Lines drawn every which way; the section to the left of the first one's way (inside the
+    // rectangle once they run head to tail): its centroid runs 20 inside, round 1400 − 8·20.
+    let mut st = Studio::new();
+    let sk = st.sketch(
+        PlaneRef::Top,
+        vec![
+            polyline(&[(0.0, 0.0), (400.0, 0.0)], false),
+            polyline(&[(400.0, 300.0), (400.0, 0.0)], false),
+            polyline(&[(400.0, 300.0), (0.0, 300.0)], false),
+            polyline(&[(0.0, 0.0), (0.0, 300.0)], false),
+        ],
+    );
+    let mut x = tube("40x40x3");
+    x.anchor = Anchor::Left;
+    x.path = vec![PathRef::Sketch(sk)];
+    st.frame(x);
+    let b = st.build();
+    assert_eq!(b.parts.len(), 4);
+    let a = square_tube_area(40.0, 3.0);
+    assert!(
+        close(total(&b), a * 1240.0, 1e-6),
+        "{} vs {}",
+        total(&b),
+        a * 1240.0
+    );
+    assert!(st.overlap() < 1e-6);
+    // Every member inside the rectangle.
+    for p in &b.parts {
+        let (lo, hi) = bounds(p);
+        assert!(lo[0] > -1e-4 && lo[1] > -1e-4 && hi[0] < 400.0 + 1e-4 && hi[1] < 300.0 + 1e-4);
+    }
+}
+
+#[test]
+fn butts_at_other_angles_close_without_overlap() {
+    for deg in [60.0f64, 120.0] {
+        let mut st = Studio::new();
+        let t = deg.to_radians();
+        let sk = st.sketch(
+            PlaneRef::Top,
+            vec![polyline(
+                &[(300.0, 0.0), (0.0, 0.0), (250.0 * t.cos(), 250.0 * t.sin())],
+                false,
+            )],
+        );
+        let mut x = tube("40x40x3");
+        x.corner = CornerType::Butt;
+        x.path = vec![PathRef::Sketch(sk)];
+        st.frame(x);
+        let b = st.build();
+        assert_eq!(b.parts.len(), 2);
+        let a = square_tube_area(40.0, 3.0);
+        // The shorter is cut on the longer's side (20 off its axis), a plane cut keeping its
+        // section's area along its axis from where that meets the plane; the longer runs on to
+        // cover the cut end's furthest corner along it.
+        let cut = 20.0 / t.sin();
+        let mut v: Vec<f64> = b.parts.iter().map(volume).collect();
+        v.sort_by(f64::total_cmp);
+        assert!(
+            close(v[0], a * (250.0 - cut), 1e-6),
+            "{deg}: {} vs {}",
+            v[0],
+            a * (250.0 - cut)
+        );
+        // The longer runs on to the cut end's furthest corner along it: 20 (1 − cos θ) / sin θ.
+        let w = 20.0 * (1.0 - t.cos()) / t.sin();
+        let long = b.frames.iter().map(|m| m.length).fold(0.0, f64::max);
+        assert!(
+            (long - (300.0 + w)).abs() < 1e-4,
+            "{deg}: {long} vs {}",
+            300.0 + w
+        );
+        assert!(st.overlap() < 1e-6, "{deg}°");
+    }
+}
+
+#[test]
+fn a_custom_section_of_two_regions_keeps_both_at_its_cuts() {
+    let mut st = Studio::new();
+    let profile = st.sketch(
+        PlaneRef::Front,
+        vec![
+            polyline(
+                &[(-15.0, -5.0), (-5.0, -5.0), (-5.0, 5.0), (-15.0, 5.0)],
+                true,
+            ),
+            polyline(&[(5.0, -5.0), (15.0, -5.0), (15.0, 5.0), (5.0, 5.0)], true),
+        ],
+    );
+    let path = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(&[(0.0, 0.0), (150.0, 0.0), (150.0, 100.0)], false)],
+    );
+    for corner in [CornerType::Miter, CornerType::Butt] {
+        let mut x = FrameFeature::default();
+        x.set_family(ProfileFamily::Custom);
+        x.sketch = Some(profile);
+        x.corner = corner;
+        x.path = vec![PathRef::Sketch(path)];
+        let f = st.frame(x);
+        let b = st.build();
+        assert_eq!(b.parts.len(), 2);
+        // Two 10 × 10 bars either side of the path: what one gains at a corner the other loses.
+        assert!(
+            close(total(&b), 200.0 * 250.0, 1e-6),
+            "{corner:?}: {}",
+            total(&b)
+        );
+        let _ = f;
+        st.h.undo(&mut st.d);
+    }
+}
+
+#[test]
+fn a_mitred_round_tube_is_listed_by_its_long_point() {
+    let mut st = Studio::new();
+    let sk = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(&[(300.0, 0.0), (0.0, 0.0), (0.0, 200.0)], false)],
+    );
+    let mut x = FrameFeature::default();
+    x.set_family(ProfileFamily::RoundTube);
+    x.size = "48.3x3.2".into();
+    x.corner = CornerType::Miter;
+    x.path = vec![PathRef::Sketch(sk)];
+    st.frame(x);
+    let b = st.build();
+    let mut l: Vec<f64> = b.frames.iter().map(|m| m.length).collect();
+    l.sort_by(f64::total_cmp);
+    assert!(
+        (l[0] - 224.15).abs() < 2e-3 && (l[1] - 324.15).abs() < 2e-3,
+        "{l:?}"
+    );
+}
+
+#[test]
+fn a_coped_t_slot_stem_stops_at_the_bars_outline() {
+    // Coped against a T-slot extrusion, the stem is cut to its box (no tongues left in its
+    // slot): the same as butted against it.
+    let mut v = Vec::new();
+    for corner in [CornerType::Butt, CornerType::CopedButt] {
+        let mut st = Studio::new();
+        let sk = st.sketch(
+            PlaneRef::Top,
+            vec![
+                polyline(&[(0.0, 0.0), (400.0, 0.0)], false),
+                polyline(&[(200.0, 0.0), (200.0, 300.0)], false),
+            ],
+        );
+        let mut x = FrameFeature::default();
+        x.corner = corner;
+        x.path = vec![PathRef::Sketch(sk)];
+        st.frame(x);
+        let b = st.build();
+        assert_eq!(b.parts.len(), 2, "{corner:?}");
+        let mut vs: Vec<f64> = b.parts.iter().map(volume).collect();
+        vs.sort_by(f64::total_cmp);
+        v.push(vs[0]);
+    }
+    assert!(close(v[0], v[1], 1e-6), "{v:?}");
+}
+
+#[test]
+fn a_box_edge_loop_frames_with_one_up() {
+    // A 60 × 40 tube on a box's top edges: the members run head to tail with the loop's
+    // normal as their up, so each is 40 high (not 60 on two of them).
+    let mut st = Studio::new();
+    let base = rectangle(&mut st);
+    st.extrude(base, 50.0);
+    let b = st.build();
+    let part = &b.parts[0];
+    let path: Vec<PathRef> = part
+        .solid
+        .edges
+        .iter()
+        .filter(|e| e.points.iter().all(|p| (p[2] - 50.0).abs() < 1e-6))
+        .map(|e| {
+            PathRef::Edge(EdgeRef {
+                part: part.id,
+                edge: e.name,
+                seed: e.midpoint(),
+            })
+        })
+        .collect();
+    assert_eq!(path.len(), 4);
+    let mut x = FrameFeature::default();
+    x.set_family(ProfileFamily::RectTube);
+    x.size = "60x40x3".into();
+    x.corner = CornerType::Miter;
+    x.path = path;
+    let f = st.frame(x);
+    let b = st.build();
+    let members: Vec<&Part> = b.parts.iter().filter(|p| p.feature == f).collect();
+    assert_eq!(members.len(), 4);
+    for p in members {
+        let (lo, hi) = bounds(p);
+        assert!((hi[2] - lo[2] - 40.0).abs() < 1e-4, "{lo:?} {hi:?}");
+    }
+}
+
+#[test]
+fn flip_runs_the_next_longest_on_at_a_corner_of_three() {
+    let mut st = Studio::new();
+    let a = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(&[(0.0, 0.0), (300.0, 0.0)], false)],
+    );
+    let b2 = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(&[(0.0, 0.0), (0.0, 250.0)], false)],
+    );
+    let c = st.sketch(
+        PlaneRef::Front,
+        vec![polyline(&[(0.0, 0.0), (0.0, 200.0)], false)],
+    );
+    let mut x = tube("40x40x3");
+    x.flip = true;
+    x.path = vec![PathRef::Sketch(a), PathRef::Sketch(b2), PathRef::Sketch(c)];
+    st.frame(x);
+    let b = st.build();
+    let area = square_tube_area(40.0, 3.0);
+    let want = area * ((300.0 - 20.0) + (250.0 + 20.0) + (200.0 - 20.0));
+    assert!(close(total(&b), want, 1e-6), "{} vs {want}", total(&b));
+}
+
+#[test]
+fn a_circle_is_one_closed_member() {
+    let mut st = Studio::new();
+    let sk = st.sketch(
+        PlaneRef::Top,
+        vec![SketchOp::AddCircle {
+            center: Vec2::new(0.0, 0.0),
+            radius: 100.0,
+            construction: false,
+        }],
+    );
+    let mut x = FrameFeature::default();
+    x.set_family(ProfileFamily::RoundBar);
+    x.size = "20".into();
+    x.path = vec![PathRef::Sketch(sk)];
+    st.frame(x);
+    let b = st.build();
+    assert_eq!(b.parts.len(), 1);
+    let want = PI * 100.0 * 2.0 * PI * 100.0;
+    assert!(close(total(&b), want, 1e-5), "{} vs {want}", total(&b));
+    assert!(b.frames[0].curved);
+}
+
+#[test]
+fn a_member_is_trimmed_by_a_part() {
+    // A bar from x = 0 to 400 through a 40-wide wall at x 300..340: what is left of x < 300
+    // is kept.
+    let mut st = Studio::new();
+    let wall = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(
+            &[
+                (300.0, -100.0),
+                (340.0, -100.0),
+                (340.0, 100.0),
+                (300.0, 100.0),
+            ],
+            true,
+        )],
+    );
+    let e = st.extrude(wall, 50.0);
+    let sk = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(&[(0.0, 0.0), (400.0, 0.0)], false)],
+    );
+    let wall_part = st.build().parts.iter().find(|p| p.feature == e).unwrap().id;
+    let mut x = FrameFeature::default();
+    x.set_family(ProfileFamily::SquareBar);
+    x.size = "20".into();
+    x.anchor = Anchor::Bottom;
+    x.path = vec![PathRef::Sketch(sk)];
+    x.trim = vec![wall_part];
+    let f = st.frame(x);
+    let b = st.build();
+    let m = b.parts.iter().find(|p| p.feature == f).unwrap();
+    assert!(close(volume(m), 400.0 * 300.0, 1e-6), "{}", volume(m));
+}
+
+#[test]
+fn a_frame_survives_saving() {
+    let mut x = tube("40x40x3");
+    x.end_caps = true;
+    x.overrides = vec![CornerOverride {
+        point: None,
+        at: [1.0, 2.0, 3.0],
+        corner: CornerType::CopedButt,
+        flip: true,
+    }];
+    let k = FeatureKind::Frame(x);
+    let text = ron::to_string(&k).unwrap();
+    let back: FeatureKind = ron::from_str(&text).unwrap();
+    assert_eq!(back, k);
+    // An older file without the later fields reads with their defaults.
+    let old: frame::FrameFeature = ron::from_str("(size: \"20x20\")").unwrap();
+    assert!(old.merge_tangent && !old.end_caps && old.trim.is_empty());
 }

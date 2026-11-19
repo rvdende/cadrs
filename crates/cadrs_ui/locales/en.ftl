@@ -6301,22 +6301,33 @@ model-frame-corner-butt = Butt
 model-frame-corner-coped = Coped butt
 # Tooltip of the flip button beside the corner type.
 model-frame-flip-corner = Swap which member runs on
-# Field of sketch points at corners joined differently.
-model-frame-overrides = Corner overrides (sketch points)
+# Field of sketch points or part vertices at corners joined differently.
+model-frame-overrides = Corner overrides (points)
+# The Frame dialog's field of parts the members are cut back by.
+model-frame-trim = Trim to parts
 # { $n } is the corner override's number.
 model-frame-corner-n = Corner { $n }
+# A checkbox: plates closing the free ends of hollow frame members.
+model-frame-end-caps = End caps
+# A checkbox: triangular plates in the corners where two frame members meet.
+model-frame-gussets = Gussets
+model-frame-gusset-size = Gusset size
+model-frame-thickness = Thickness
 cut-list-title = Cut list
 cut-list-item = #
 # Column heading: quantity.
 cut-list-qty = Qty
 # Column heading: the angles of the two end cuts.
 cut-list-angles = Angles
+cut-list-mass = Mass
 cut-list-coped = Coped
 # { $length } is a bent member's length along its path ("694.2 mm").
 cut-list-bent = { $length } (bent)
 cut-list-totals = Stock
 # { $profile } the section, { $length } its stock summed ("1400 mm"), { $count } how many members.
 cut-list-total = { $profile }: { $length } in { $count }
+# { $mass } is what every frame member and plate weighs together ("12.5 kg").
+cut-list-total-mass = Frame mass: { $mass }
 cut-list-copy = Copy
 cut-list-export = Export CSV
 cut-list-empty = No frame members
