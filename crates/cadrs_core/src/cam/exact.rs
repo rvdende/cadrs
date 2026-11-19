@@ -1001,6 +1001,30 @@ impl ExactStock {
     /// have to split, slowly and badly. Faces that wide are the merging's, not the toolpath's.
     /// `body` as it is when the heal doesn't leave it sound.
     fn without_slivers(&mut self, body: BodyId) -> BodyId {
+        // (`CADRS_EXACT_DEBUG=8`: degenerate edges of length, by the cut or by the heal.)
+        let long_points = |k: &DefaultKernel, b: BodyId| -> Vec<String> {
+            k.get(b).map_or(Vec::new(), |x| {
+                x.edges()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, e)| {
+                        e.degenerate
+                            && (e.curve.point(e.t[0]) - e.curve.point(e.t[1])).norm() > 1e-6
+                    })
+                    .map(|(i, e)| format!("{i} at {:?}", e.curve.point(e.t[0])))
+                    .collect()
+            })
+        };
+        let debug = std::env::var_os("CADRS_EXACT_DEBUG").is_some_and(|v| v == "8");
+        if debug {
+            let l = long_points(&self.k, body);
+            if !l.is_empty() {
+                eprintln!(
+                    "exact cut {}: the cut left degenerate edges of length {l:?}",
+                    self.done
+                );
+            }
+        }
         if std::env::var_os("CADRS_EXACT_NO_HEAL").is_some() {
             return body;
         }
@@ -1030,6 +1054,15 @@ impl ExactStock {
             }
         }
         self.tags.insert(healed, tags);
+        if debug {
+            let l = long_points(&self.k, healed);
+            if !l.is_empty() {
+                eprintln!(
+                    "exact cut {}: the heal left degenerate edges of length {l:?}",
+                    self.done
+                );
+            }
+        }
         self.drop_body(body);
         healed
     }

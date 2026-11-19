@@ -2705,10 +2705,36 @@ pub(crate) fn collapse_slivers(x: &mut Body, lim: f64, moved: &[usize]) -> Vec<u
         } else {
             [(v2[0], v1[1]), (v2[1], v1[0])]
         };
+        // (Ends that meet across the width only: where one long edge runs on past the other's
+        // end, its end would be moved along it and the edge between made a point, 41 µm long.)
+        if map
+            .iter()
+            .any(|&(gone, keep)| (x.verts[gone].p - x.verts[keep].p).norm() > 2.0 * width)
+        {
+            continue;
+        }
         let short: Vec<usize> = (0..l.len())
             .filter(|k| !long.contains(k))
             .map(|k| l[k].edge)
             .collect();
+        if super::env_flag!("CADRS_SLIVER_DEBUG") {
+            let len = |e: usize| {
+                let ed = &x.edges[e];
+                (ed.curve.point(ed.t[0]) - ed.curve.point(ed.t[1])).norm()
+            };
+            eprintln!(
+                "sliver face {fi}: long {e1} ({:.1e}) and {e2} ({:.1e}), short {:?}, ends moved {:?}",
+                len(e1),
+                len(e2),
+                short
+                    .iter()
+                    .map(|&e| (e, len(e), x.edges[e].degenerate))
+                    .collect::<Vec<_>>(),
+                map.iter()
+                    .map(|&(g, k)| (x.verts[g].p - x.verts[k].p).norm())
+                    .collect::<Vec<_>>()
+            );
+        }
         for (gone, keep) in map {
             let gap = (x.verts[gone].p - x.verts[keep].p).norm();
             x.verts[keep].tol = x.verts[keep].tol.max(gap * 1.5);
@@ -3249,6 +3275,27 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     // order (edges in turn, faces in order), which splits the edges and makes the vertices.
     let mut near_pairs: Vec<(usize, usize)> = Vec::new();
     for e in 0..ne {
+        if super::env_flag!("CADRS_BOOL_DEBUG") && std::env::var("CADRS_EDGE_AT").is_ok() {
+            let at: Vec<f64> = std::env::var("CADRS_EDGE_AT")
+                .unwrap()
+                .split(',')
+                .filter_map(|x| x.parse().ok())
+                .collect();
+            let ed = &pool.edges[e];
+            let q = P3::new(at[0], at[1], at[2]);
+            if [ed.t[0], ed.t[1]]
+                .iter()
+                .any(|&t| (ed.curve.point(t) - q).norm() < 1e-3)
+            {
+                eprintln!(
+                    "  edge {e} near: {:?} → {:?}, degenerate {}, box {:?}",
+                    ed.curve.point(ed.t[0]),
+                    ed.curve.point(ed.t[1]),
+                    ed.degenerate,
+                    ebox[e]
+                );
+            }
+        }
         if pool.edges[e].degenerate {
             continue;
         }
@@ -3375,6 +3422,24 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     }
     let t_after = web_time::Instant::now();
     let meets: Vec<Meet> = meets.into_iter().map(|m| m.0).collect();
+    if super::env_flag!("CADRS_BOOL_DEBUG")
+        && let Ok(d) = std::env::var("CADRS_FACE_DEBUG")
+    {
+        for (&(e, fi), m) in near_pairs.iter().zip(&meets) {
+            if d == fi.to_string() {
+                let ed = &pool.edges[e];
+                eprintln!(
+                    "  edge {e} with face {fi}: {:?} → {:?}, {}",
+                    ed.curve.point(ed.t[0]),
+                    ed.curve.point(ed.t[1]),
+                    match m {
+                        Meet::On => "on it".to_string(),
+                        Meet::At(ts) => format!("{} crossings", ts.len()),
+                    }
+                );
+            }
+        }
+    }
     for (&(e, fi), m) in near_pairs.iter().zip(meets) {
         {
             let ts = match m {

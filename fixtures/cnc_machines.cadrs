@@ -16085,7 +16085,7 @@
                                     name: "Setup 1",
                                     program_number: 1001,
                                     mating: Mount(
-                                        origin: (-32.5, 0.0, -66.00004720187715),
+                                        origin: (-32.5, 0.0, -66.0),
                                         z: (0.0, 0.0, 1.0),
                                         x: (1.0, 0.0, 0.0),
                                     ),
@@ -22126,7 +22126,7 @@
                                     name: "Setup 1",
                                     program_number: 1001,
                                     mating: Mount(
-                                        origin: (-62.5, 0.0, -21.000047201877152),
+                                        origin: (-62.5, 0.0, -21.0),
                                         z: (1.0, 0.0, 0.0),
                                         x: (0.0, 0.0, 1.0),
                                     ),
@@ -22779,7 +22779,7 @@
                                     name: "Setup 2",
                                     program_number: 1002,
                                     mating: Mount(
-                                        origin: (-37.50000000000006, 0.0, -13.00000000019126),
+                                        origin: (-37.5, 0.0, -13.0),
                                         z: (1.0, 0.0, 0.0),
                                         x: (0.0, 0.0, 1.0),
                                     ),
@@ -22955,7 +22955,7 @@
                                                         axis: None,
                                                         style: Thread,
                                                         offset: 0.0,
-                                                        range: Some((16.499999999999943, 61.49999999999994)),
+                                                        range: Some((16.5, 61.5)),
                                                         start_angle: 0.0,
                                                         sweep: 360.0,
                                                         lead: 0.0,
@@ -23131,7 +23131,7 @@
                                                         axis: None,
                                                         style: Thread,
                                                         offset: 0.0,
-                                                        range: Some((16.499999999999943, 61.49999999999994)),
+                                                        range: Some((16.5, 61.5)),
                                                         start_angle: 0.0,
                                                         sweep: 360.0,
                                                         lead: 0.0,
@@ -28324,7 +28324,7 @@
                                     name: "Setup 1",
                                     program_number: 1001,
                                     mating: Mount(
-                                        origin: (0.0, -0.5000059009099456, -177.0),
+                                        origin: (0.0, -0.5, -177.0),
                                         z: (0.0, 0.0, 1.0),
                                         x: (1.0, 0.0, 0.0),
                                     ),

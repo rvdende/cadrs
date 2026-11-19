@@ -77,6 +77,15 @@ pub fn parts_box(parts: &[&Part], frame: &Frame) -> Aabb {
     )
 }
 
+/// A length read off the parts' display meshes, to a tenth of a micron: their coordinates are
+/// single precision, a few hundredths of a micron off at a machine's few hundred millimetres
+/// (a test piece's flat side 20.500041 from the machine's origin where it is 20.5). A stock
+/// that much wider than the part leaves a wall that thin when the roughing clears to the part,
+/// which no cut makes and none can remove cleanly.
+fn mesh_length(x: f64) -> f64 {
+    (x * 1e4).round() / 1e4
+}
+
 /// The job's stock in model coordinates.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StockShape {
@@ -142,6 +151,7 @@ pub fn stock_shape(cam: &CamStudio, job: &Job, parts: &[Part]) -> Option<StockSh
     }
     let frame = job.stock.frame();
     let b = parts_box(&bodies, &frame);
+    let b = Aabb::new(b.min.map(mesh_length), b.max.map(mesh_length));
     let o = job.stock.offsets;
     match job.stock.kind {
         StockKind::Box => Some(StockShape::Box {
@@ -158,6 +168,7 @@ pub fn stock_shape(cam: &CamStudio, job: &Job, parts: &[Part]) -> Option<StockSh
                 .flat_map(|p| p.solid.positions.iter().map(|q| frame.to_local(*q)))
                 .map(|p| (p[0] - c[0]).hypot(p[1] - c[1]))
                 .fold(0.0, f64::max);
+            let r = mesh_length(r);
             Some(StockShape::Cylinder {
                 frame,
                 center: c,
