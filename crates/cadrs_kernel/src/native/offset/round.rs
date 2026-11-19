@@ -482,7 +482,12 @@ pub fn offset_rounded(b: &Body, dist: &[f64]) -> Result<Body> {
     // Every edge between faces that meet tangentially (a body offset already, its rounds
     // joining its faces smoothly): each face moved along its normal meets its neighbours'
     // moves exactly, so the sharp offset is the rounded one, without the slabs, tubes and balls.
+    // (No torus grown past its hole: its offset crosses itself, the body inside out.)
+    let crosses_itself = b.faces.iter().any(|f| {
+        matches!(f.surf, Surface::Torus { rmaj, rmin, .. } if rmin + d >= rmaj * (1.0 - tol::REL))
+    });
     if !b.edges.is_empty()
+        && !crosses_itself
         && (0..b.edges.len())
             .all(|e| b.edges[e].degenerate || matches!(dihedral(b, e), Dihedral::Smooth))
         && let Ok(g) = super::sharp::offset_sharp(b, dist)
