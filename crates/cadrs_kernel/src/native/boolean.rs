@@ -5066,6 +5066,33 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             ))
         });
         if let Some(why) = why {
+            if super::env_flag!("CADRS_BOOL_DEBUG") {
+                // The uses of each edge used more than twice, and the input faces they're on.
+                let mut uses: Vec<Vec<usize>> = vec![Vec::new(); out.edges.len()];
+                for (f, face) in out.faces.iter().enumerate() {
+                    for c in face.loops.iter().flatten() {
+                        uses[c.edge].push(f);
+                    }
+                }
+                for (e, fs) in uses
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, fs)| fs.len() > 2)
+                    .take(4)
+                {
+                    let what: Vec<String> = fs
+                        .iter()
+                        .map(|&f| {
+                            format!("{f} {:?} from {:?}", out.faces[f].surf.kind(), from.get(f))
+                        })
+                        .collect();
+                    eprintln!(
+                        "edge {e} ({:?}) used by: {}",
+                        out.edges[e].curve.point(out.edges[e].mid_t()),
+                        what.join("; ")
+                    );
+                }
+            }
             prof.mark("checks");
             prof.report(&format!(
                 "{op:?} (refused) {}×{} faces",
