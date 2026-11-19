@@ -503,6 +503,36 @@ fn extrusion_along(
                 }
             }
         }
+        // Against another extrusion along the same direction: the two base curves' crossing in
+        // the plane square to it, by Newton in both parameters (a copy moved a few microns
+        // crosses at a hair of an angle, where one curve's root against the other's surface
+        // is placed by its samples only).
+        if let Surface::Extrusion { c: c2, .. } = s {
+            let e1 = if dn.x.abs() < 0.9 { V3::x() } else { V3::y() };
+            let e1 = (e1 - dn * e1.dot(&dn)).normalize();
+            let e2 = dn.cross(&e1);
+            let flat = |v: &V3| (v.dot(&e1), v.dot(&e2));
+            let (s0, s1) = c2.nurbs_range().unwrap_or((us.0.0, us.0.1));
+            let mut w = c2.closest(&c.point(t), s0, s1);
+            for _ in 0..30 {
+                let (pa, ta, _) = c.d2(t);
+                let (pb, tb, _) = c2.d2(w);
+                let (fx, fy) = flat(&(pa - pb));
+                let ((ax, ay), (bx, by)) = (flat(&ta), flat(&tb));
+                // [ta, −tb] (dt, dw) = −f
+                let det = ax * -by - (-bx) * ay;
+                if det.abs() < 1e-300 {
+                    break;
+                }
+                let dt = (-fx * -by - (-bx) * -fy) / det;
+                let dw = (ax * -fy - (-fx) * ay) / det;
+                t = (t + dt).clamp(lo, hi);
+                w = (w + dw).clamp(s0, s1);
+                if dt.abs() < 1e-15 * (1.0 + t.abs()) && dw.abs() < 1e-15 * (1.0 + w.abs()) {
+                    break;
+                }
+            }
+        }
         let p0 = c.point(t);
         // (Where the patches only touch along it, a point: the numeric engine's.)
         let (l0, l1) = span_of(&p0)?;

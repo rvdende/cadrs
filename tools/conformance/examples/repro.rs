@@ -26,6 +26,7 @@ fn main() {
             println!("{:?} {:?} {}", f.act, f.points, f.size);
             match f.act {
                 generate::Act::OffsetFaces => k.offset_faces(&a, &f.points, f.size),
+                generate::Act::Fillet => k.fillet(&a, &f.points, f.size),
                 generate::Act::Offset => {
                     // (REPRO_TIMES=n: the act n times over, for a profiler.)
                     let n: usize = std::env::var("REPRO_TIMES")
@@ -101,6 +102,15 @@ fn main() {
                         println!(
                             "    e{} t {:?} pc ({:.4},{:.4}) -> ({:.4},{:.4}) fwd {}",
                             c.edge, e.t, a.x, a.y, z.x, z.y, c.fwd
+                        );
+                    }
+                    if std::env::var_os("REPRO_SURF").is_some() {
+                        println!(
+                            "    surface {}",
+                            format!("{:?}", f.surf)
+                                .chars()
+                                .take(600)
+                                .collect::<String>()
                         );
                     }
                     if let cadrs_kernel::native::Surface::Extrusion { c, d } = &f.surf {
