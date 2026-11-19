@@ -3370,6 +3370,47 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     }
     let t_after = web_time::Instant::now();
     let meets: Vec<Meet> = meets.into_iter().map(|m| m.0).collect();
+    // Roots where the edge runs along the surface (within the tolerance a stretch either side:
+    // a wall's edge crossing the line a G2 blend touches the wall along) are placed last, so
+    // that the vertex another edge crosses there at a clean angle can take them.
+    let mut deferred: Vec<(usize, usize, f64)> = Vec::new();
+    // (On a fitted surface only, a blend's: a plane or a quadric's crossings at a hair's angle
+    // are crossings where they are found.)
+    let grazing = |e: usize, fi: usize, t: f64| {
+        if !matches!(
+            faces[fi].surf,
+            Surface::Nurbs(_) | Surface::Extrusion { .. } | Surface::Revolution { .. }
+        ) {
+            return false;
+        }
+        // (The edge meets it all but tangentially: a cubic contact's root is anywhere in a
+        // band along the edge.)
+        let ed = &pool.edges[e];
+        let surf = &faces[fi].surf;
+        let p = ed.curve.point(t);
+        let (u, v) = surf.project(&p, None);
+        let tn = ed.curve.tangent(t);
+        let l = tn.norm();
+        l > 0.0 && (tn.dot(&surf.normal(u, v)) / l).abs() < 1e-2
+    };
+    let meets: Vec<Meet> = near_pairs
+        .iter()
+        .zip(meets)
+        .map(|(&(e, fi), m)| match m {
+            Meet::At(ts) if !crate::native::env_flag!("CADRS_NO_GRAZE_DEFER") => Meet::At(
+                ts.into_iter()
+                    .filter(|&t| {
+                        let g = grazing(e, fi, t);
+                        if g {
+                            deferred.push((e, fi, t));
+                        }
+                        !g
+                    })
+                    .collect(),
+            ),
+            m => m,
+        })
+        .collect();
     for (&(e, fi), m) in near_pairs.iter().zip(meets) {
         {
             let ts = match m {
@@ -3428,6 +3469,57 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                     face_pts[fi].push(v);
                 }
             }
+        }
+    }
+    // The grazing roots: at a vertex already lying on both the edge and the surface, with the
+    // edge on the surface all the way between, when there is one; else as any other.
+    for (e, fi, t) in deferred {
+        let ed = pool.edges[e].clone();
+        let p = ed.curve.point(t);
+        let et = ed.tol.max(faces[fi].tol).max(run_tol);
+        let surf = &faces[fi].surf;
+        let (lo, hi) = (ed.t[0].min(ed.t[1]), ed.t[0].max(ed.t[1]));
+        // (As far along the edge as it keeps to the surface: a G2 blend stays within the
+        // tolerance of a wall for a tenth of a millimetre either side of where it touches.)
+        let reach = (ed.curve.point(lo) - ed.curve.point(hi)).norm();
+        let at = (0..pool.verts.len())
+            .filter_map(|w| {
+                let q = pool.verts[w];
+                let dq = (q - p).norm();
+                if dq > reach || surf.distance(&q) > et {
+                    return None;
+                }
+                let s = ed.curve.closest(&q, lo, hi);
+                ((ed.curve.point(s) - q).norm() <= et
+                    && (0..=8).all(|k| {
+                        surf.distance(&ed.curve.point(t + (s - t) * k as f64 / 8.0)) <= et
+                    }))
+                .then_some((dq, w, s))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        if super::env_flag!("CADRS_BOOL_DEBUG") {
+            eprintln!(
+                "grazing root of edge {e} on face {fi} at {p:?}: {:?}",
+                at.map(|a| (a.1, pool.verts[a.1], a.0))
+            );
+        }
+        let (v, t) = match at {
+            Some((_, w, s)) => (w, s),
+            None => {
+                let v = pool.vertex_tol(p, ed.tol.max(faces[fi].tol));
+                (
+                    v,
+                    refine_param(&ed.curve, ed.t[0], ed.t[1], &pool.verts[v], t),
+                )
+            }
+        };
+        let pe = &pool.edges[e];
+        let has = pe.v.contains(&v) || pe.splits.iter().any(|x| x.1 == v);
+        if !has && t > lo && t < hi {
+            pool.split(e, t, v);
+        }
+        if !face_pts[fi].contains(&v) {
+            face_pts[fi].push(v);
         }
     }
     // Vertices on each face's boundary (with the split points).

@@ -45,6 +45,9 @@ fn main() {
                 generate::Act::OffsetFaces => k.offset_faces(&a, &f.points, f.size),
                 generate::Act::Fillet => k.fillet(&a, &f.points, f.size),
                 generate::Act::FilletG2 => k.fillet_g2(&a, &f.points, f.size, f.radii[0]),
+                generate::Act::FilletSetbackG2 => {
+                    k.fillet_setback_g2(&a, &f.points, f.size, f.radii[0])
+                }
                 generate::Act::Offset => {
                     // (REPRO_TIMES=n: the act n times over, for a profiler.)
                     let n: usize = std::env::var("REPRO_TIMES")
