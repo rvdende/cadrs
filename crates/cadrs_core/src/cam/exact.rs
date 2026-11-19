@@ -808,6 +808,8 @@ pub struct ExactStock {
     /// The uncut stock, each operation's tool (at the origin, upright).
     start: BodyId,
     tools: Vec<BodyId>,
+    /// Each operation's tool's profile, for [`Tween`]s.
+    cutters: Vec<Cutter>,
     cuts: Vec<Cut>,
     /// The stock after the first `done` cuts.
     kept: BodyId,
@@ -828,6 +830,9 @@ pub struct ExactStock {
     shown_along: f64,
     /// A cut whose part-way slice failed: not sliced again.
     unsliced: Option<usize>,
+    /// A cut made whole ahead of the tool for a tween: its index, the kept stock it was cut
+    /// from, and the stock after it.
+    ahead: Option<(usize, BodyId, BodyId)>,
 }
 
 impl ExactStock {
@@ -860,6 +865,7 @@ impl ExactStock {
             .iter()
             .map(|o| tool_solid(&mut k, o.tool))
             .collect::<Result<Vec<_>, _>>()?;
+        let cutters = run.ops.iter().map(|o| Cutter::of(o.tool)).collect();
         lap("the tools made");
         let mut cuts = cuts_of(machine, run, motions, rows);
         lap("the cuts found");
@@ -895,6 +901,7 @@ impl ExactStock {
             k,
             start,
             tools,
+            cutters,
             cuts,
             kept: start,
             done: 0,
@@ -905,6 +912,7 @@ impl ExactStock {
             deferred: None,
             shown_along: 0.0,
             unsliced: None,
+            ahead: None,
         })
     }
 
@@ -915,6 +923,98 @@ impl ExactStock {
 
     /// How many cuts the run is made in (its moves on one motion each one).
     /// How many cuts are made so far.
+    /// The cut the tool is on at the run's place `n + f`, its index and how far along it that is
+    /// (0 to 1); `None` past the last cut or between cuts.
+    pub fn cut_at(&self, n: usize, f: f64) -> Option<(usize, f64)> {
+        let place = n as f64 + f.clamp(0.0, 1.0);
+        let c = self.cuts.partition_point(|c| c.to() <= place);
+        let cut = self.cuts.get(c)?;
+        (cut.from() <= place).then(|| (c, cut.along(place)))
+    }
+
+    /// For a tween at the run's place `n + f`: the stock cut through every cut before the one
+    /// the tool is on (kept), that cut made whole after it (made once, ahead of the tool), and
+    /// the two meshed with each vertex's time ([`Tween::reached`]) along it. `None` where the
+    /// tool is on no cut (the kept stock is then the whole stock to there: [`Self::sim_mesh`]).
+    pub fn tweened(&mut self, n: usize, f: f64, deflection: f64) -> Option<Tweened> {
+        let (c, _) = self.cut_at(n, f)?;
+        // The kept stock through the cuts before (the part-way slices dropped).
+        let before = self.cuts.get(c)?.from();
+        let (bn, bf) = (before.floor() as usize, before - before.floor());
+        self.cut_to(bn, bf);
+        if self.done != c {
+            return None;
+        }
+        let kept = self.kept;
+        let after = match &self.ahead {
+            Some((k, a, b)) if *k == c && *a == kept => *b,
+            _ => {
+                if let Some((_, _, b)) = self.ahead.take() {
+                    self.drop_body(b);
+                }
+                let b = self.cut_once(kept, c, 0.0, 1.0).ok()?;
+                self.ahead = Some((c, kept, b));
+                b
+            }
+        };
+        let tween = self.tween(c)?;
+        let reach = self.tween_reach(c);
+        let mut before = self.sim_mesh_of(kept, deflection)?;
+        let mut after = self.sim_mesh_of(after, deflection)?;
+        refine(&mut before, TWEEN_EDGE, &reach);
+        refine(&mut after, TWEEN_EDGE, &reach);
+        let times = |m: &cadrs_cam::dexel::SimMesh, grow: f64, never: f32| -> Vec<f32> {
+            use rayon::prelude::*;
+            m.positions
+                .par_iter()
+                .map(|p| {
+                    let q = [p[0] as f64, p[1] as f64, p[2] as f64];
+                    if !reach.contains(&Point3::new(q[0], q[1], q[2])) {
+                        return never;
+                    }
+                    tween.reached(q, grow).map_or(never, |t| t as f32)
+                })
+                .collect()
+        };
+        // (Before: hidden once reached. After: its new faces shown once made, its old ones always.)
+        let before_times = times(&before, 0.0, f32::INFINITY);
+        let after_times = times(&after, 1e-4, f32::NEG_INFINITY);
+        let cut = &self.cuts[c];
+        Some(Tweened {
+            cut: c,
+            knots: cut.knots.clone(),
+            before,
+            before_times,
+            after,
+            after_times,
+        })
+    }
+
+    /// Where cut `c` can reach: the box of its tool at its start, its end and between.
+    fn tween_reach(&self, c: usize) -> Bbox3 {
+        let cut = &self.cuts[c];
+        let cutter = &self.cutters[cut.op];
+        let r = cutter.radius.hypot(cutter.length) + 1.0;
+        let mut b = Bbox3::empty();
+        for i in 0..=64 {
+            let m = cut.screw.at(i as f64 / 64.0);
+            let mid =
+                m.linear * cut.start.apply(V3::new(0.0, 0.0, cutter.length / 2.0)) + m.translation;
+            b.add(&Point3::from(mid));
+        }
+        b.grow(r)
+    }
+
+    /// The motion of cut `c`, to tween the stock along it ([`Tween`]).
+    pub fn tween(&self, c: usize) -> Option<Tween> {
+        let cut = self.cuts.get(c)?;
+        Some(Tween {
+            cutter: self.cutters[cut.op].clone(),
+            start: cut.start,
+            screw: cut.screw,
+        })
+    }
+
     pub fn cut_count_done(&self) -> usize {
         self.done
     }
@@ -1203,6 +1303,9 @@ impl ExactStock {
             self.deferred = None;
             self.shown_along = 0.0;
             self.unsliced = None;
+            if let Some((_, _, b)) = self.ahead.take() {
+                self.drop_body(b);
+            }
         }
         let place = to.0 as f64 + to.1;
         // (The stock shown part-way along the cut the tool was on, cut on from where it was:
@@ -1222,6 +1325,20 @@ impl ExactStock {
         while self.done < self.cuts.len() && self.cuts[self.done].to() <= place + 1e-12 {
             let kept = self.kept;
             let c = self.done;
+            // Made whole ahead of the tool for a tween: that.
+            if let Some((k, from, b)) = self.ahead
+                && k == c
+                && from == kept
+            {
+                self.ahead = None;
+                if self.shown != kept {
+                    self.drop_body(self.shown);
+                }
+                (self.shown, self.shown_along) = (kept, 0.0);
+                self.keep(b);
+                self.done += 1;
+                continue;
+            }
             // Shown part-way along: finished on from there.
             if self.shown != kept && self.shown_along > 0.0 {
                 let (part, along) = (self.shown, self.shown_along);
@@ -1302,10 +1419,15 @@ impl ExactStock {
     /// The stock as shown, tessellated (`deflection` mm), with each triangle's operation (from
     /// 1; 0 the stock's own surface).
     pub fn mesh(&self, deflection: f64) -> Option<(TriMesh, Vec<u8>)> {
+        self.mesh_of(self.shown, deflection)
+    }
+
+    /// [`Self::mesh`] of a stock body.
+    fn mesh_of(&self, body: BodyId, deflection: f64) -> Option<(TriMesh, Vec<u8>)> {
         let m = self
             .k
             .tessellate(
-                self.shown,
+                body,
                 Tessellation {
                     deflection,
                     angle: 5f64.to_radians(),
@@ -1317,7 +1439,7 @@ impl ExactStock {
             .iter()
             .map(|f| {
                 self.tags
-                    .get(&self.shown)
+                    .get(&body)
                     .and_then(|t| t.get(f.0 as usize))
                     .copied()
                     .unwrap_or(0)
@@ -1329,7 +1451,12 @@ impl ExactStock {
     /// The stock as shown as the simulation's mesh ([`cadrs_cam::dexel::SimMesh`]): each
     /// vertex coloured by the operation that made its face.
     pub fn sim_mesh(&self, deflection: f64) -> Option<cadrs_cam::dexel::SimMesh> {
-        let (m, tags) = self.mesh(deflection)?;
+        self.sim_mesh_of(self.shown, deflection)
+    }
+
+    /// [`Self::sim_mesh`] of a stock body.
+    fn sim_mesh_of(&self, body: BodyId, deflection: f64) -> Option<cadrs_cam::dexel::SimMesh> {
+        let (m, tags) = self.mesh_of(body, deflection)?;
         let mut vertex_tags = vec![0u8; m.positions.len()];
         for (t, tag) in m.indices.iter().zip(&tags) {
             for i in t {
@@ -1358,8 +1485,338 @@ impl ExactStock {
     }
 }
 
+/// The stock either side of the cut the tool is on, for a tween ([`ExactStock::tweened`]).
+#[derive(Debug, Clone)]
+pub struct Tweened {
+    /// The cut.
+    pub cut: usize,
+    /// The run's places within it, and how much of its motion is done there: what the tool's
+    /// place is along it ([`Tweened::along`]).
+    pub knots: Vec<(f64, f64)>,
+    /// The stock before it, each vertex's time along it (when the tool reaches it; infinite
+    /// where never: shown till then).
+    pub before: cadrs_cam::dexel::SimMesh,
+    pub before_times: Vec<f32>,
+    /// The stock after it, each vertex's time (when the cut makes its face there; minus
+    /// infinite on the faces it leaves as they were: shown always).
+    pub after: cadrs_cam::dexel::SimMesh,
+    pub after_times: Vec<f32>,
+}
+
+impl Tweened {
+    /// How far along the cut (0 to 1) the run's place `n + f` is.
+    pub fn along(&self, n: usize, f: f64) -> f64 {
+        along_knots(&self.knots, n as f64 + f.clamp(0.0, 1.0))
+    }
+}
+
+/// How far along a cut with `knots` (places and amounts done) the place `x` is, 0 to 1.
+fn along_knots(knots: &[(f64, f64)], x: f64) -> f64 {
+    let total = knots.last().map_or(0.0, |k| k.1);
+    if total <= 0.0 || knots.len() < 2 {
+        return if knots.first().is_some_and(|k| x >= k.0) {
+            1.0
+        } else {
+            0.0
+        };
+    }
+    let i = knots.partition_point(|k| k.0 <= x);
+    if i == 0 {
+        return 0.0;
+    }
+    if i >= knots.len() {
+        return 1.0;
+    }
+    let (a, b) = (knots[i - 1], knots[i]);
+    let s = if b.0 > a.0 {
+        (x - a.0) / (b.0 - a.0)
+    } else {
+        1.0
+    };
+    ((a.1 + (b.1 - a.1) * s) / total).clamp(0.0, 1.0)
+}
+
+/// The longest edge a tweened mesh keeps within a cut's reach (mm): a vertex's time is
+/// interpolated across its triangles, and a bar's faces are strips its whole length.
+const TWEEN_EDGE: f64 = 0.5;
+
+/// An axis-aligned box.
+#[derive(Debug, Clone, Copy)]
+struct Bbox3 {
+    min: Point3<f64>,
+    max: Point3<f64>,
+}
+
+impl Bbox3 {
+    fn empty() -> Self {
+        Bbox3 {
+            min: Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY),
+            max: Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY),
+        }
+    }
+    fn add(&mut self, p: &Point3<f64>) {
+        self.min = self.min.inf(p);
+        self.max = self.max.sup(p);
+    }
+    fn grow(self, r: f64) -> Self {
+        let d = V3::new(r, r, r);
+        Bbox3 {
+            min: self.min - d,
+            max: self.max + d,
+        }
+    }
+    fn contains(&self, p: &Point3<f64>) -> bool {
+        (0..3).all(|i| p[i] >= self.min[i] && p[i] <= self.max[i])
+    }
+}
+
+/// `m`'s triangles within `reach` split (at their longest edges' middles) till no edge is
+/// longer than `edge`.
+fn refine(m: &mut cadrs_cam::dexel::SimMesh, edge: f64, reach: &Bbox3) {
+    let p = |m: &cadrs_cam::dexel::SimMesh, i: u32| {
+        let q = m.positions[i as usize];
+        Point3::new(q[0] as f64, q[1] as f64, q[2] as f64)
+    };
+    let mut middles: std::collections::HashMap<(u32, u32), u32> = Default::default();
+    let mut todo: Vec<[u32; 3]> = m.indices.chunks(3).map(|t| [t[0], t[1], t[2]]).collect();
+    let mut done: Vec<u32> = Vec::with_capacity(m.indices.len());
+    while let Some(t) = todo.pop() {
+        let (a, b, c) = (p(m, t[0]), p(m, t[1]), p(m, t[2]));
+        let near = [a, b, c].iter().any(|q| reach.contains(q))
+            || reach.contains(&Point3::from((a.coords + b.coords + c.coords) / 3.0));
+        let lens = [(b - a).norm(), (c - b).norm(), (a - c).norm()];
+        let (k, longest) = lens
+            .iter()
+            .copied()
+            .enumerate()
+            .fold((0, 0.0), |m, (i, l)| if l > m.1 { (i, l) } else { m });
+        if !near || longest <= edge || done.len() + todo.len() * 3 > 30_000_000 {
+            done.extend(t);
+            continue;
+        }
+        let (i, j) = (t[k], t[(k + 1) % 3]);
+        let key = (i.min(j), i.max(j));
+        let mid = *middles.entry(key).or_insert_with(|| {
+            let (pi, pj) = (m.positions[i as usize], m.positions[j as usize]);
+            let (ni, nj) = (m.normals[i as usize], m.normals[j as usize]);
+            m.positions.push([0, 1, 2].map(|a| 0.5 * (pi[a] + pj[a])));
+            let n = [0, 1, 2].map(|a| 0.5 * (ni[a] + nj[a]));
+            let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt().max(1e-12);
+            m.normals.push(n.map(|x| x / l));
+            m.colors.push(m.colors[i as usize]);
+            m.tags.push(m.tags[i as usize]);
+            (m.positions.len() - 1) as u32
+        });
+        let o = t[(k + 2) % 3];
+        todo.push([i, mid, o]);
+        todo.push([mid, j, o]);
+    }
+    m.indices = done;
+}
+
+/// A cut's motion, to show the stock part-way along it without cutting it there: for each point
+/// of the stock, how far along the cut the tool first reaches it. Drawn between the stock before
+/// the cut (where the tool hasn't reached yet) and after it (its new faces where it has), the cut
+/// sweeps on smoothly with the tool, each whole cut exact.
+#[derive(Debug, Clone)]
+pub struct Tween {
+    cutter: Cutter,
+    start: Pose,
+    screw: Screw,
+}
+
+impl Tween {
+    /// `p` in the tool's own frame (its tip at the origin, its axis up z) at `t` along.
+    fn local(&self, p: &V3, t: f64) -> V3 {
+        let m = self.screw.at(t);
+        let w = m.linear.transpose() * (p - m.translation);
+        self.start.rot.transpose() * (w - self.start.tip)
+    }
+
+    /// How far inside the tool a point of its frame is (negative outside): its radius short of
+    /// the profile's at its height, within the tool's length.
+    fn depth(&self, q: &V3) -> f64 {
+        let c = &self.cutter;
+        let r = q.x.hypot(q.y);
+        let radial = c.radius_at_height(q.z) - r;
+        radial.min(q.z).min(c.length - q.z)
+    }
+
+    /// The stretches of the cut (0 to 1) where the tool may reach `p`: where its path in the
+    /// tool's frame passes the tool's bounding cylinder.
+    fn windows(&self, p: &V3) -> Vec<(f64, f64)> {
+        let c = &self.cutter;
+        let reach = c.radius.hypot(c.length) + 1e-6;
+        match self.screw {
+            Screw::Slide(v) => {
+                // The path is a line in the tool's frame: where it is within `reach` of the
+                // tool's middle.
+                let q0 = self.local(p, 0.0);
+                let w = self.start.rot.transpose() * v;
+                let mid = V3::new(0.0, 0.0, c.length / 2.0);
+                let (a, b) = (w.norm_squared(), (q0 - mid).dot(&w));
+                let cc = (q0 - mid).norm_squared() - reach * reach;
+                if a < 1e-24 {
+                    return if cc <= 0.0 {
+                        vec![(0.0, 1.0)]
+                    } else {
+                        Vec::new()
+                    };
+                }
+                // |q0 − w t − mid|² = reach²: a t² − 2 b t + cc = 0.
+                let disc = b * b - a * cc;
+                if disc < 0.0 {
+                    return Vec::new();
+                }
+                let (t0, t1) = ((b - disc.sqrt()) / a, (b + disc.sqrt()) / a);
+                let (t0, t1) = (t0.max(0.0), t1.min(1.0));
+                if t0 <= t1 { vec![(t0, t1)] } else { Vec::new() }
+            }
+            Screw::Turn {
+                at,
+                dir,
+                angle,
+                rise,
+            } => {
+                // About the axis the point turns back against the tool: where its angle comes
+                // within the tool's reach of the tool's middle, each turn.
+                let mid = self.start.apply(V3::new(0.0, 0.0, c.length / 2.0));
+                let flat = |x: &V3| {
+                    let w = x - at;
+                    w - dir * w.dot(&dir)
+                };
+                let (pm, pp) = (flat(&mid), flat(p));
+                let (rm, rp) = (pm.norm(), pp.norm());
+                // (Near the axis, or the tool across it: every angle.)
+                if rm <= reach || rp <= 1e-9 || (rp - rm).abs() > reach {
+                    if (rp - rm).abs() > reach && rm > reach {
+                        return Vec::new();
+                    }
+                    return vec![(0.0, 1.0)];
+                }
+                let half = (reach / rm.min(rp)).min(1.0).asin() + 1e-3;
+                // The angle the tool must turn for its middle to come round to the point.
+                let x = pm / rm;
+                let y = dir.cross(&x);
+                let to = pp.dot(&y).atan2(pp.dot(&x)).rem_euclid(TAU);
+                let _ = rise;
+                let total = angle.abs();
+                let mut out = Vec::new();
+                let mut k = 0.0;
+                while (to + TAU * k - half) / total <= 1.0 {
+                    let (a, b) = ((to + TAU * k - half) / total, (to + TAU * k + half) / total);
+                    let (a, b) = (a.max(0.0), b.min(1.0));
+                    if a <= b {
+                        out.push((a, b));
+                    }
+                    k += 1.0;
+                }
+                // (And the window round the start, the tool already there or past it.)
+                let lead = ((half - to) / total).min(1.0);
+                if lead > 0.0 {
+                    out.insert(0, (0.0, lead));
+                }
+                out
+            }
+        }
+    }
+
+    /// How far along the cut the tool first reaches `p` (within `grow` of its surface): `None`
+    /// where it never does.
+    pub fn reached(&self, p: [f64; 3], grow: f64) -> Option<f64> {
+        let p = V3::new(p[0], p[1], p[2]);
+        // (Samples so close the tool moves no more than a twentieth of a millimetre between.)
+        let speed = match self.screw {
+            Screw::Slide(v) => v.norm(),
+            Screw::Turn { angle, rise, .. } => {
+                angle.abs() * (self.cutter.radius.hypot(self.cutter.length) + 100.0) + rise.abs()
+            }
+        };
+        for (a, b) in self.windows(&p) {
+            let n = (((b - a) * speed / 0.05).ceil() as usize).clamp(4, 4096);
+            let inside = |t: f64| self.depth(&self.local(&p, t)) >= -grow;
+            if inside(a) {
+                return Some(a);
+            }
+            let mut prev = a;
+            for i in 1..=n {
+                let t = a + (b - a) * i as f64 / n as f64;
+                if inside(t) {
+                    // The first contact, bisected.
+                    let (mut lo, mut hi) = (prev, t);
+                    for _ in 0..40 {
+                        let m = 0.5 * (lo + hi);
+                        if inside(m) {
+                            hi = m;
+                        } else {
+                            lo = m;
+                        }
+                    }
+                    return Some(hi);
+                }
+                prev = t;
+            }
+        }
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    /// A tween's first contact, against the motion sampled finely by brute force: a slide and a
+    /// half turn round a far axis (a worm's roughing), points the tool reaches and one it doesn't.
+    #[test]
+    fn a_tween_finds_when_the_tool_first_reaches_a_point() {
+        use cadrs_cam::{Tool, ToolKind};
+        let cutter = Cutter::of(&Tool::new(ToolKind::EndMill, 6.0));
+        let up = Pose {
+            rot: Matrix3::identity(),
+            tip: V3::new(0.0, 0.0, 0.0),
+        };
+        let brute = |tw: &Tween, p: [f64; 3]| {
+            let q = V3::new(p[0], p[1], p[2]);
+            (0..=200_000)
+                .map(|i| i as f64 / 200_000.0)
+                .find(|&t| tw.depth(&tw.local(&q, t)) >= 0.0)
+        };
+        let slide = Tween {
+            cutter: cutter.clone(),
+            start: up,
+            screw: Screw::Slide(V3::new(10.0, 0.0, 0.0)),
+        };
+        let turn = Tween {
+            cutter,
+            start: Pose {
+                rot: Matrix3::identity(),
+                tip: V3::new(0.0, 0.0, 20.0),
+            },
+            screw: Screw::Turn {
+                at: V3::zeros(),
+                dir: V3::new(1.0, 0.0, 0.0),
+                angle: std::f64::consts::PI,
+                rise: 0.0,
+            },
+        };
+        for (tw, p) in [
+            (&slide, [5.0, 0.0, 1.0]),
+            (&slide, [8.0, 2.0, 4.0]),
+            (&slide, [5.0, 4.0, 1.0]),
+            (&turn, [0.0, -20.0, 1.0]),
+            (&turn, [0.5, 14.0, -14.0]),
+            (&turn, [0.0, 0.0, -21.0]),
+            (&turn, [9.0, 0.0, -21.0]),
+        ] {
+            let (got, want) = (tw.reached(p, 0.0), brute(tw, p));
+            match (got, want) {
+                (Some(g), Some(w)) => assert!((g - w).abs() < 1e-4, "{p:?}: {g} against {w}"),
+                (None, None) => {}
+                _ => panic!("{p:?}: {got:?} against {want:?}"),
+            }
+        }
+        // (The front of a radius 3 tool at x = 5 when its axis is at 2: a fifth of the way.)
+        assert!((slide.reached([5.0, 0.0, 1.0], 0.0).unwrap() - 0.2).abs() < 1e-6);
+    }
+
     use super::*;
 
     fn pose(rot: Matrix3<f64>, tip: V3) -> Pose {

@@ -1274,6 +1274,25 @@ fn tmp_exact_run() {
     for i in 1..=steps {
         let n = (i * moves / steps).min(moves - 1);
         let t = Instant::now();
+        if std::env::var_os("TWEEN").is_some() {
+            match exact.tweened(n, 0.5, 0.01) {
+                Some(tw) => {
+                    let between = |ts: &[f32]| ts.iter().filter(|t| t.is_finite()).count();
+                    println!(
+                        "  tween at move {n}: cut {}, along {:.3}; before {} vertices ({} timed), after {} ({} timed), {:.2} s",
+                        tw.cut,
+                        tw.along(n, 0.5),
+                        tw.before.positions.len(),
+                        between(&tw.before_times),
+                        tw.after.positions.len(),
+                        between(&tw.after_times),
+                        t.elapsed().as_secs_f64()
+                    );
+                }
+                None => println!("  tween at move {n}: none"),
+            }
+            continue;
+        }
         exact.cut_to(n, if i == steps { 1.0 } else { 0.5 });
         println!(
             "  to move {n}: {:.2} s, {:.1} mm³, {} failed so far",
