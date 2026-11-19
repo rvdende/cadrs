@@ -50,6 +50,12 @@ fn main() {
                     );
                     r
                 }
+                generate::Act::Offset => {
+                    let t = std::time::Instant::now();
+                    let r = k.offset(&s, f.size);
+                    println!("  offset by {}: {:?}", f.size, t.elapsed());
+                    r
+                }
                 _ => {
                     println!("step {}: act {:?} (not run here)", i + 1, f.act);
                     return;
