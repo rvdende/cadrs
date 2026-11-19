@@ -398,13 +398,13 @@ impl Rebuilder {
             for i in 0..members.len() {
                 for plan in plans[i].clone() {
                     for (by, at, way) in plan.copes {
-                        if !tools.contains_key(&by) {
+                        if let std::collections::hash_map::Entry::Vacant(slot) = tools.entry(by) {
                             let m = &members[by];
                             let base = base_of(m.key) + 0x00e0_0000;
                             let t = self
                                 .frame_cut_member(state, op, m, &segs, &envelope, &plans[by], base)
                                 .map_err(|e| format!("Member {} failed: {e}", by + 1))?;
-                            tools.insert(by, t);
+                            slot.insert(t);
                         }
                         let tool = &tools[&by];
                         let tool = (tool.0, tool.1.clone());

@@ -1,11 +1,11 @@
 //! Frames (issue #266): a Part Studio of the Frame feature's members and joints.
 //!
-//! - A gate on Front: a 600 × 400 rectangle of 40x40x3 square tube, mitred, and a mid rail at
-//!   200 that butts against the uprights (a T at each end).
+//! - A gate on Front: a 600 × 400 rectangle of 40x40x3 square tube, mitred, with a gusset in
+//!   each corner, and a mid rail at 200 that butts against the uprights (a T at each end).
 //! - A base on Top behind it: a 600 × 400 rectangle of 20x40 T-slot extrusion standing on the
 //!   plane (its bottom on the path), butted, the long sides running on.
 //! - A handrail on Front: 33.7x3.2 round tube bent round a 60 mm radius between two straight
-//!   runs (one member, tangent segments merged).
+//!   runs (one member, tangent segments merged), its ends closed by end caps.
 //! - A tee on Top: a 48.3x3.2 round tube coped onto another.
 //!
 //! Every id is fixed, so the document is the same each time it is built.
@@ -116,20 +116,20 @@ pub fn build_in(s: &mut dyn Studio, el: ElementId) -> Result<(), CommandError> {
         vec![PathRef::Sketch(tee)],
     );
     tee_frame.corner = CornerType::CopedButt;
-    let frames = [
-        frame(
-            ProfileFamily::SquareTube,
-            "40x40x3",
-            vec![PathRef::Sketch(gate)],
-        ),
-        base_frame,
-        frame(
-            ProfileFamily::RoundTube,
-            "33.7x3.2",
-            vec![PathRef::Sketch(rail)],
-        ),
-        tee_frame,
-    ];
+    let mut gate_frame = frame(
+        ProfileFamily::SquareTube,
+        "40x40x3",
+        vec![PathRef::Sketch(gate)],
+    );
+    gate_frame.corner = CornerType::Miter;
+    gate_frame.gussets = true;
+    let mut rail_frame = frame(
+        ProfileFamily::RoundTube,
+        "33.7x3.2",
+        vec![PathRef::Sketch(rail)],
+    );
+    rail_frame.end_caps = true;
+    let frames = [gate_frame, base_frame, rail_frame, tee_frame];
     for (feature, x) in FRAMES.into_iter().zip(frames) {
         s.run(&AddFeature {
             element: el,
@@ -156,9 +156,11 @@ mod tests {
         let b = crate::rebuild::build(d.element(el).unwrap().features());
         assert!(b.errors.is_empty(), "{:?}", b.errors);
         assert!(b.warnings.is_empty(), "{:?}", b.warnings);
-        // Gate 5, base 4, handrail 1, tee 2.
-        assert_eq!(b.parts.len(), 12);
-        assert_eq!(b.frames.len(), 12);
+        // Gate 5 and a gusset at each of its 4 corners, base 4, handrail 1 and its 2 end caps,
+        // tee 2.
+        assert_eq!(b.parts.len(), 18);
+        assert_eq!(b.frames.len(), 18);
+        assert_eq!(b.frames.iter().filter(|m| m.plate).count(), 6);
         let rows = crate::frame::cut_list(&b.frames);
         assert!(rows.iter().any(|r| r.curved));
         assert!(

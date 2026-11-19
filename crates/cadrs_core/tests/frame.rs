@@ -924,10 +924,11 @@ fn a_coped_t_slot_stem_stops_at_the_bars_outline() {
                 polyline(&[(200.0, 0.0), (200.0, 300.0)], false),
             ],
         );
-        let mut x = FrameFeature::default();
-        x.corner = corner;
-        x.path = vec![PathRef::Sketch(sk)];
-        st.frame(x);
+        st.frame(FrameFeature {
+            corner,
+            path: vec![PathRef::Sketch(sk)],
+            ..Default::default()
+        });
         let b = st.build();
         assert_eq!(b.parts.len(), 2, "{corner:?}");
         let mut vs: Vec<f64> = b.parts.iter().map(volume).collect();

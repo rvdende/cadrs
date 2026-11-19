@@ -272,6 +272,34 @@ fn name_of(features: &[Feature], id: cadrs_core::FeatureId) -> String {
         .map_or_else(|| tr("model-unknown-part"), |f| f.name.clone())
 }
 
+/// A sketch line's, arc's or circle's length ("400", "78.5"), to tell the path's curves apart.
+fn curve_length(
+    features: &[Feature],
+    sketch: cadrs_core::FeatureId,
+    curve: cadrs_sketch::CurveId,
+) -> Option<String> {
+    use cadrs_sketch::CurveKind;
+    let g = &features.iter().find(|f| f.id == sketch)?.sketch()?.geometry;
+    let at = |p| g.points.get(p).map(|q| q.pos);
+    let l = match g.curves.get(curve)?.kind {
+        CurveKind::Line { a, b } => {
+            let (a, b) = (at(a)?, at(b)?);
+            ((b.x - a.x).powi(2) + (b.y - a.y).powi(2)).sqrt()
+        }
+        CurveKind::Circle { radius, .. } => std::f64::consts::TAU * radius,
+        CurveKind::Arc { center, start, end } => {
+            let (c, a, b) = (at(center)?, at(start)?, at(end)?);
+            let r = ((a.x - c.x).powi(2) + (a.y - c.y).powi(2)).sqrt();
+            let sweep = ((b.y - c.y).atan2(b.x - c.x) - (a.y - c.y).atan2(a.x - c.x))
+                .rem_euclid(std::f64::consts::TAU);
+            r * sweep
+        }
+        _ => return None,
+    };
+    let s = format!("{l:.1}");
+    Some(s.trim_end_matches('0').trim_end_matches('.').to_string())
+}
+
 fn op_name(features: &[Feature], op: cadrs_sketch::OpId) -> String {
     name_of(features, cadrs_core::FeatureId(op))
 }
@@ -294,8 +322,13 @@ pub(crate) fn items(
                             &op_name(features, crate::parts::edge_maker(features, &e.edge)),
                         )],
                     ),
-                    PathRef::SketchCurve { sketch, .. } => {
-                        tr_with("common-curve-of", &[("name", &name_of(features, *sketch))])
+                    PathRef::SketchCurve { sketch, curve } => {
+                        let name =
+                            tr_with("common-curve-of", &[("name", &name_of(features, *sketch))]);
+                        match curve_length(features, *sketch, *curve) {
+                            Some(l) => format!("{name} · {l} mm"),
+                            None => name,
+                        }
                     }
                     PathRef::Sketch(s) | PathRef::Curve(s) => name_of(features, *s),
                 })

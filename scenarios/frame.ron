@@ -1,8 +1,9 @@
 // Frame (`cadrs_core::frame`, issue #266). A 400 x 300 rectangle on Top and a 300 post line up
 // from one corner on Front; the toolbar's Frame with the rectangle's four lines picked: T-slot
-// 20x20 members mitred at the corners. The profile set to Square tube 40x40x3, then the corners
-// to Butt and flipped; the post added to the path (three members at one corner: the first runs
-// on, the others butt against it); accepted. Then the Cut list panel.
+// 20x20 members butted at the corners (the long sides run on). The profile set to Square tube
+// 40x40x3, then the corners to Miter; back to Butt, flipped (the short sides run on) and the
+// post added to the path (three members at one corner: the longest runs on, the others butt
+// against it); gussets on; accepted. Then the Cut list panel, and a row clicked.
 Scenario(
     start: Some("document"),
     steps: [
@@ -20,22 +21,25 @@ Scenario(
         Click(xyz(0, 150, 0)),
         MoveTo(1420, 900),
         Wait(4),
-        Screenshot("01-t-slot-mitred"),
+        Screenshot("01-t-slot-butted"),
         Click(ui("frame-family")),
         Click(ui("frame-family-option-1")),
         MoveTo(1420, 900),
         Wait(4),
         Screenshot("02-square-tube"),
         Click(ui("frame-corner")),
-        Click(ui("frame-corner-option-1")),
+        Click(ui("frame-corner-option-0")),
         MoveTo(1420, 900),
         Wait(4),
-        Screenshot("03-butt"),
+        Screenshot("03-miter"),
+        Click(ui("frame-corner")),
+        Click(ui("frame-corner-option-1")),
         Click(ui("frame-corner-flip")),
         Click(xyz(0, 0, 150)),
+        Click(ui("frame-gussets-checkbox")),
         MoveTo(1420, 900),
         Wait(4),
-        Screenshot("04-flipped-with-post"),
+        Screenshot("04-flipped-post-gussets"),
         Click(ui("frame-dialog-accept")),
         Click(ui("panel-cut-list")),
         WaitFor("cut-list-panel"),
