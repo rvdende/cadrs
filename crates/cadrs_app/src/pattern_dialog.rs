@@ -739,6 +739,7 @@ pub(crate) fn body(
             | FeatureKind::Fill(_)
             | FeatureKind::Thread(_)
             | FeatureKind::Gear(_)
+            | FeatureKind::Frame(_)
             | FeatureKind::FlatExtrude(_)
             | FeatureKind::DirectEdit(_)
     ) {

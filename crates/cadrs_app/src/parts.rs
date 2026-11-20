@@ -566,6 +566,10 @@ pub struct PartCache {
     pub derived_sketches: Vec<Feature>,
     /// P3I.3: the sheet metal models' contexts from the last rebuild (the table and flat view).
     pub sheet_metal: Vec<cadrs_core::sheetmetal::SheetMetalContext>,
+    /// Issue #266: the Frame features' members from the last rebuild (the Cut list panel).
+    pub frames: Vec<cadrs_core::frame::MemberInfo>,
+    /// How many members meet at each Frame feature's corner overrides.
+    pub frame_corners: Vec<cadrs_core::frame::OverrideCorners>,
     /// The curves of every visible sketch (P3.4: a revolve axis is picked among them).
     pub sketch_curves: Vec<SketchCurves>,
     /// Bumped whenever the parts change (or which are shown).
@@ -1253,6 +1257,12 @@ impl PartCache {
         }
         if self.sheet_metal != build.sheet_metal {
             self.sheet_metal = build.sheet_metal.clone();
+        }
+        if self.frames != build.frames {
+            self.frames = build.frames.clone();
+        }
+        if self.frame_corners != build.frame_corners {
+            self.frame_corners = build.frame_corners.clone();
         }
         self.contacts = build.contacts.clone();
         self.axes = build.axes.clone();
