@@ -338,8 +338,12 @@ impl Live {
             loop {
                 // A place asked for (the newest); waited for only when there is nothing to
                 // run ahead to (the cache full, or every cut made).
+                // (Not in a page, whose one thread this runs on.)
                 let ahead = match &live {
-                    Engine::Exact(_) if std::env::var_os("CADRS_NO_TWEEN").is_none() => {
+                    Engine::Exact(_)
+                        if std::env::var_os("CADRS_NO_TWEEN").is_none()
+                            && !cfg!(target_arch = "wasm32") =>
+                    {
                         cache.next(at, &note)
                     }
                     _ => None,
@@ -569,7 +573,7 @@ impl Live {
                 .states
                 .iter()
                 .any(|s| matches!(s, CutState::Pending | CutState::Computing));
-            if self.ended || !busy || Instant::now() >= until {
+            if self.ended || !busy || Instant::now() >= until || cfg!(target_arch = "wasm32") {
                 return;
             }
             std::thread::sleep(std::time::Duration::from_millis(50));

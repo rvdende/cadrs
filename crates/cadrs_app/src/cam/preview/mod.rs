@@ -623,8 +623,9 @@ pub fn open_for_selection(world: &mut World) {
     let solid_input = needs_solid.then(|| input(false));
     let is_solid = solid_input.is_some();
     // A run on the height map is shown exactly as it plays where its stock can be cut so (the
-    // height map still finds what it finds).
-    let exact_input = (!beam && !needs_solid).then(|| input(true));
+    // height map still finds what it finds). (Not in a page: its worker would run on the
+    // page's one thread.)
+    let exact_input = (!beam && !needs_solid && !cfg!(target_arch = "wasm32")).then(|| input(true));
     let cell = sim::sim_cell(&stock, 0.25);
     let (map, top) = if beam {
         (None, 0.0)

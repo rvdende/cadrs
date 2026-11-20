@@ -1508,7 +1508,9 @@ impl Body {
     pub(crate) fn fit_tolerances_searched_gaps(&mut self, cap: f64) -> Vec<Vec<(usize, f64)>> {
         use rayon::prelude::*;
         self.fit_tolerances(cap);
-        let measured: Vec<(Vec<(usize, f64)>, Vec<(usize, f64)>)> = self
+        // Each face's coedges' gaps (edge, gap) and its loops' ends' (vertex, distance).
+        type Measured = (Vec<(usize, f64)>, Vec<(usize, f64)>);
+        let measured: Vec<Measured> = self
             .faces
             .par_iter()
             .map(|f| {

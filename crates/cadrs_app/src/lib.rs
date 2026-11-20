@@ -68,6 +68,7 @@ pub mod mcp;
 pub mod mcp_board;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mcp_button;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod mcp_machine;
 pub mod measure;
 pub mod move_document;
