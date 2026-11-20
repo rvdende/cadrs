@@ -4,8 +4,8 @@ name: Release
 # archives, as tools/release/build.sh does locally, the macOS disk image (#103) and the browser
 # build (tools/web), and publishes them as a GitHub release with SHA256SUMS.txt. The release notes are
 # tools/release/notes/<tag>.md (GitHub's generated notes when there is none); a tag with a `-` in
-# it (v0.1.7-beta.1) is a pre-release. (The site, https://cadrs.net, is main's head, deployed on
-# every push to main: .github/workflows/pages.yml.) Running it by hand with a tag (Actions › Release › Run workflow) releases the
+# it (v0.1.7-beta.1) is a pre-release. (The site, https://cadrs.net, is main's, deployed once CI
+# passes on a push to main: .github/workflows/pages.yml.) Running it by hand with a tag (Actions › Release › Run workflow) releases the
 # chosen branch's head and creates the tag; with "Only build" ticked it publishes nothing, and the
 # archives are the run's artifacts (to try a build before releasing it).
 on:
