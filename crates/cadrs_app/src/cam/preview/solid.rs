@@ -162,6 +162,9 @@ pub(super) struct Live {
     pub(super) cut: Option<Place>,
     /// The newest mesh, and a count that changes with it (or with the tween).
     pub(super) mesh: Option<SimMesh>,
+    /// The newest mesh's edges, each a line through its points (the exact stock's; none on
+    /// the lattice).
+    pub(super) edges: Vec<Vec<[f32; 3]>>,
     /// The newest tween of the exact stock along the cut the tool is on: in place of a mesh,
     /// drawn as the tool moves along it with no cut made.
     pub(super) tween: Option<Box<Tweened>>,
@@ -224,7 +227,7 @@ impl Live {
                     warn!("Simulate's exact stock fails too often here: on the lattice from now");
                     live = lattice;
                     let Some(m) = live.cut_to(to) else { break };
-                    mesh = Shown::Mesh(m);
+                    mesh = Shown::Mesh(m.0, m.1);
                 }
                 if send.send((to, mesh)).is_err() {
                     break;
@@ -237,6 +240,7 @@ impl Live {
             asked: None,
             cut: None,
             mesh: None,
+            edges: Vec::new(),
             tween: None,
             version: 0,
             asked_at: None,
@@ -248,12 +252,12 @@ impl Live {
     fn take(&mut self, at: Place, shown: Shown) {
         self.cut = Some(at);
         match shown {
-            Shown::Mesh(m) => {
-                (self.mesh, self.tween) = (Some(m), None);
+            Shown::Mesh(m, edges) => {
+                (self.mesh, self.tween, self.edges) = (Some(m), None, edges);
                 self.version += 1;
             }
             Shown::Tween(t) => {
-                (self.mesh, self.tween) = (None, Some(t));
+                (self.mesh, self.tween, self.edges) = (None, Some(t), Vec::new());
                 self.version += 1;
             }
             Shown::Same => {}
@@ -342,7 +346,8 @@ enum Engine {
 /// What the worker sends for a place: the stock as a mesh, the tween along the cut the tool is
 /// on, or the same tween as last time (the place along it the viewer's own).
 pub(super) enum Shown {
-    Mesh(SimMesh),
+    /// The stock and its edges.
+    Mesh(SimMesh, Vec<Vec<[f32; 3]>>),
     Tween(Box<Tweened>),
     Same,
 }
@@ -367,7 +372,7 @@ impl Engine {
             }
         }
         *tweening = None;
-        self.cut_to(to).map(Shown::Mesh)
+        self.cut_to(to).map(|(m, e)| Shown::Mesh(m, e))
     }
 
     fn of(input: &SolidInput) -> Option<Engine> {
@@ -455,16 +460,16 @@ impl Engine {
         }
     }
 
-    /// The stock cut to `to`, as a mesh. `None`: the engine failed.
-    fn cut_to(&mut self, to: Place) -> Option<SimMesh> {
+    /// The stock cut to `to`, as a mesh, and its edges. `None`: the engine failed.
+    fn cut_to(&mut self, to: Place) -> Option<(SimMesh, Vec<Vec<[f32; 3]>>)> {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match self {
             Engine::Exact(e) => {
                 e.cut_to(to.0, to.1);
-                e.sim_mesh(DEFLECTION)
+                e.sim_mesh_and_edges(DEFLECTION)
             }
             Engine::Lattice(l) => {
                 l.cut_to(to.0, to.1);
-                Some(l.stock.mesh(1))
+                Some((l.stock.mesh(1), Vec::new()))
             }
         }))
         .ok()

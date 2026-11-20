@@ -66,6 +66,7 @@ impl Plugin for PreviewPlugin {
                 sync_readout,
                 draw,
                 sync_stock_mesh,
+                draw_stock_edges,
             )
                 .chain()
                 .in_set(PreviewSet)
@@ -715,6 +716,77 @@ pub fn open_for_selection(world: &mut World) {
         held: 0.0,
         analysis,
     });
+}
+
+/// The live stock's edges (the exact stock's), drawn as the parts' are. In a tween, the
+/// stock before the cut's where the tool hasn't reached and the stock after it's where it has,
+/// each line ending where the tool is: untouched stock ahead of the tool, the cut behind it.
+fn draw_stock_edges(
+    state: Option<Res<PreviewState>>,
+    q: Query<&GlobalTransform, With<SolidMesh>>,
+    mut g: Gizmos<crate::parts::PartEdgeGizmos>,
+) {
+    let Some(s) = state else { return };
+    if !s.shows_live() || s.mode == Mode::BackPlot || (s.at_end() && s.solid_end.is_some()) {
+        return;
+    }
+    let (Some(live), Some(placed)) = (s.live.as_ref(), q.iter().next()) else {
+        return;
+    };
+    let color = Color::srgb_u8(0x14, 0x14, 0x14);
+    let world = |p: [f32; 3]| {
+        let w = s.frame.to_world([p[0] as f64, p[1] as f64, p[2] as f64]);
+        placed.transform_point(Vec3::new(w[0] as f32, w[1] as f32, w[2] as f32))
+    };
+    let tween = live.tween.as_deref().zip(s.place());
+    let Some((t, (n, f))) = tween else {
+        for line in &live.edges {
+            g.linestrip(line.iter().map(|p| world(*p)), color);
+        }
+        return;
+    };
+    let along = t.along(n, f) as f32;
+    let mut strips = |lines: &[Vec<[f32; 3]>], times: &[Vec<f32>], shown: &dyn Fn(f32) -> bool| {
+        for (line, ts) in lines.iter().zip(times) {
+            let mut strip: Vec<Vec3> = Vec::new();
+            for (w, tw) in line.windows(2).zip(ts.windows(2)) {
+                let (a, b) = (world(w[0]), world(w[1]));
+                let (sa, sb) = (shown(tw[0]), shown(tw[1]));
+                // Where the piece crosses the tool's place: by its ends' times (the middle
+                // where one is never or always).
+                let cross = || {
+                    let u = if tw[0].is_finite() && tw[1].is_finite() && tw[0] != tw[1] {
+                        ((along - tw[0]) / (tw[1] - tw[0])).clamp(0.0, 1.0)
+                    } else {
+                        0.5
+                    };
+                    a.lerp(b, u)
+                };
+                match (sa, sb) {
+                    (true, true) => {
+                        if strip.is_empty() {
+                            strip.push(a);
+                        }
+                        strip.push(b);
+                    }
+                    (true, false) => {
+                        if strip.is_empty() {
+                            strip.push(a);
+                        }
+                        strip.push(cross());
+                        g.linestrip(std::mem::take(&mut strip), color);
+                    }
+                    (false, true) => strip.extend([cross(), b]),
+                    (false, false) => {}
+                }
+            }
+            if strip.len() >= 2 {
+                g.linestrip(strip, color);
+            }
+        }
+    };
+    strips(&t.before_edges, &t.before_edge_times, &|time| time > along);
+    strips(&t.after_edges, &t.after_edge_times, &|time| time <= along);
 }
 
 /// The job's bodies hidden while the preview shows the stock without them (its Part

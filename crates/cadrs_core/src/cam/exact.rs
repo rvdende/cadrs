@@ -1016,8 +1016,8 @@ impl ExactStock {
         };
         let tween = self.tween(c)?;
         let reach = self.tween_reach(c);
-        let mut before = self.sim_mesh_of(kept, deflection)?;
-        let mut after = self.sim_mesh_of(after, deflection)?;
+        let (mut before, before_edges) = self.sim_mesh_of(kept, deflection)?;
+        let (mut after, after_edges) = self.sim_mesh_of(after, deflection)?;
         let time = |p: &[f32; 3], grow: f64, never: f32| -> f32 {
             let q = [p[0] as f64, p[1] as f64, p[2] as f64];
             if !reach.contains(&Point3::new(q[0], q[1], q[2])) {
@@ -1028,6 +1028,10 @@ impl ExactStock {
         // (Before: hidden once reached. After: its new faces shown once made, its old ones always.)
         let before_times = refine_by_times(&mut before, &|p| time(p, 0.0, f32::INFINITY));
         let after_times = refine_by_times(&mut after, &|p| time(p, 1e-4, f32::NEG_INFINITY));
+        let (before_edges, before_edge_times) =
+            edges_by_times(before_edges, &|p| time(p, 0.0, f32::INFINITY));
+        let (after_edges, after_edge_times) =
+            edges_by_times(after_edges, &|p| time(p, 1e-4, f32::NEG_INFINITY));
         let cut = &self.cuts[c];
         Some(Tweened {
             cut: c,
@@ -1036,6 +1040,10 @@ impl ExactStock {
             before_times,
             after,
             after_times,
+            before_edges,
+            before_edge_times,
+            after_edges,
+            after_edge_times,
         })
     }
 
@@ -1500,11 +1508,23 @@ impl ExactStock {
     /// The stock as shown as the simulation's mesh ([`cadrs_cam::dexel::SimMesh`]): each
     /// vertex coloured by the operation that made its face.
     pub fn sim_mesh(&self, deflection: f64) -> Option<cadrs_cam::dexel::SimMesh> {
+        self.sim_mesh_of(self.shown, deflection).map(|(m, _)| m)
+    }
+
+    /// [`Self::sim_mesh`] and the stock's edges, each as a line through its points.
+    pub fn sim_mesh_and_edges(
+        &self,
+        deflection: f64,
+    ) -> Option<(cadrs_cam::dexel::SimMesh, Vec<Vec<[f32; 3]>>)> {
         self.sim_mesh_of(self.shown, deflection)
     }
 
-    /// [`Self::sim_mesh`] of a stock body.
-    fn sim_mesh_of(&self, body: BodyId, deflection: f64) -> Option<cadrs_cam::dexel::SimMesh> {
+    /// [`Self::sim_mesh_and_edges`] of a stock body.
+    fn sim_mesh_of(
+        &self,
+        body: BodyId,
+        deflection: f64,
+    ) -> Option<(cadrs_cam::dexel::SimMesh, Vec<Vec<[f32; 3]>>)> {
         let (m, tags) = self.mesh_of(body, deflection)?;
         let mut vertex_tags = vec![0u8; m.positions.len()];
         for (t, tag) in m.indices.iter().zip(&tags) {
@@ -1513,16 +1533,25 @@ impl ExactStock {
             }
         }
         let f = |v: &V3| [v.x as f32, v.y as f32, v.z as f32];
-        Some(cadrs_cam::dexel::SimMesh {
-            positions: m.positions.iter().map(|p| f(&p.coords)).collect(),
-            normals: m.normals.iter().map(f).collect(),
-            indices: m.indices.iter().flatten().copied().collect(),
-            colors: vertex_tags
-                .iter()
-                .map(|t| cadrs_cam::dexel::tag_color(*t))
-                .collect(),
-            tags: vertex_tags,
-        })
+        let edges = m
+            .edges
+            .iter()
+            .filter(|(_, pts)| pts.len() >= 2)
+            .map(|(_, pts)| pts.iter().map(|p| f(&p.coords)).collect())
+            .collect();
+        Some((
+            cadrs_cam::dexel::SimMesh {
+                positions: m.positions.iter().map(|p| f(&p.coords)).collect(),
+                normals: m.normals.iter().map(f).collect(),
+                indices: m.indices.iter().flatten().copied().collect(),
+                colors: vertex_tags
+                    .iter()
+                    .map(|t| cadrs_cam::dexel::tag_color(*t))
+                    .collect(),
+                tags: vertex_tags,
+            },
+            edges,
+        ))
     }
 
     /// The stock's volume as shown (mm³).
@@ -1558,6 +1587,12 @@ pub struct Tweened {
     /// infinite on the faces it leaves as they were: shown always).
     pub after: cadrs_cam::dexel::SimMesh,
     pub after_times: Vec<f32>,
+    /// The two stocks' edges, each a line through its points, and each point's time as their
+    /// vertices' are (split where the times differ, so a line is cut where the tool is).
+    pub before_edges: Vec<Vec<[f32; 3]>>,
+    pub before_edge_times: Vec<Vec<f32>>,
+    pub after_edges: Vec<Vec<[f32; 3]>>,
+    pub after_edge_times: Vec<Vec<f32>>,
 }
 
 impl Tweened {
@@ -1711,6 +1746,59 @@ fn refine_by_times(
 
 /// How far apart (of the cut, 0 to 1) the times at a tweened triangle's corners may be.
 const TWEEN_STEP: f32 = 0.02;
+
+/// The longest piece of an edge a tween keeps between points whose times differ (mm): the
+/// line's end is found between them by their times.
+const TWEEN_EDGE_LINE: f64 = 0.02;
+
+/// Lines (a stock's edges) with each point's time ([`refine_by_times`]'s, for lines): each
+/// piece between points whose times differ halved till it is short.
+fn edges_by_times(
+    lines: Vec<Vec<[f32; 3]>>,
+    time: &(dyn Fn(&[f32; 3]) -> f32 + Sync),
+) -> (Vec<Vec<[f32; 3]>>, Vec<Vec<f32>>) {
+    use rayon::prelude::*;
+    let differ = |a: f32, b: f32| {
+        if a.is_finite() && b.is_finite() {
+            (a - b).abs() > TWEEN_STEP
+        } else {
+            a != b
+        }
+    };
+    let len = |a: &[f32; 3], b: &[f32; 3]| {
+        ((0..3).map(|k| ((a[k] - b[k]) as f64).powi(2)).sum::<f64>()).sqrt()
+    };
+    lines
+        .into_par_iter()
+        .map(|line| {
+            let mut pts: Vec<[f32; 3]> = Vec::with_capacity(line.len());
+            let mut ts: Vec<f32> = Vec::with_capacity(line.len());
+            for w in line.windows(2) {
+                // The piece from w[0] to w[1], halved where its ends' times differ.
+                let (a, b) = (w[0], w[1]);
+                let (ta, tb) = (time(&a), time(&b));
+                if pts.is_empty() {
+                    pts.push(a);
+                    ts.push(ta);
+                }
+                let mut stack = vec![(b, tb)];
+                let (mut at, mut t_at) = (a, ta);
+                while let Some((q, tq)) = stack.pop() {
+                    if differ(t_at, tq) && len(&at, &q) > TWEEN_EDGE_LINE {
+                        let m = [0, 1, 2].map(|k| 0.5 * (at[k] + q[k]));
+                        stack.push((q, tq));
+                        stack.push((m, time(&m)));
+                        continue;
+                    }
+                    pts.push(q);
+                    ts.push(tq);
+                    (at, t_at) = (q, tq);
+                }
+            }
+            (pts, ts)
+        })
+        .unzip()
+}
 
 /// `m`'s triangles within `reach` split (at their longest edges' middles) till no edge is
 /// longer than `edge`.
