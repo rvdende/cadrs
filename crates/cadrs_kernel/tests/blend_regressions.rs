@@ -216,8 +216,10 @@ fn cross_hole_fillet() {
 /// on the body Fillet 2 left, chamfered 0.5 to 2 by the local chamfer alone: valid, and each
 /// taking off about w²/2 a mm of rim (the narrowest's times (w/w₀)², a little more where corners
 /// grow faster). `want` pins what it takes off now (not an independent answer: a change that
-/// moves it should explain why; last moved, by up to 4e-5, when the chamfer's law along an edge
-/// whose faces' angle varies was sampled to 1e-7 of itself, not at sixteenths joined straight); w²/2 of rim at 0.5 puts the rim at 312 mm at fillet 1 and 293
+/// moves it should explain why; last moved, by up to 1e-4, when blend strips were fitted to
+/// 1e-6 of the part's size, not 1e-5: at w 0.5 the fits to 1e-7, 1e-8 and 1e-9 take off
+/// 39.00406, 39.00404 and 39.00404 at fillet 1, so the volume now stands 6.6e-4 from where the
+/// fit converges, not 3.3e-3); w²/2 of rim at 0.5 puts the rim at 312 mm at fillet 1 and 293
 /// at fillet 4, two loops round the opening less its rounds' corners.
 fn shell_opening_chamfer(data: &[u8], edges: &[u64], want: [f64; 4]) {
     let mut k = NativeKernel::new();
@@ -256,10 +258,10 @@ fn shell_opening_chamfer_fillet1() {
             60, 70, 71, 78, 100, 111, 128, 130, 132, 134, 136,
         ],
         [
-            39.007382398151094,
-            156.55954038308846,
-            356.8934442469472,
-            648.1813949486386,
+            39.003378820627404,
+            156.55710586599162,
+            356.89158323180163,
+            648.1800024108015,
         ],
     );
 }
@@ -276,10 +278,10 @@ fn shell_opening_chamfer_fillet4() {
             60, 70, 71, 99, 110, 127, 129, 134, 136, 138,
         ],
         [
-            36.6337819114342,
-            147.10587390812725,
-            334.9156336483429,
-            607.2613605735751,
+            36.63185666299978,
+            147.1030018206293,
+            334.91504055220867,
+            607.2608593208934,
         ],
     );
 }

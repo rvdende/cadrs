@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 fn main() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let crates = manifest.parent().unwrap();
-    let workspace = crates.parent().unwrap();
     let mut h = Fnv(0xcbf2_9ce4_8422_2325);
     for dir in [
         "cadrs_core/src",

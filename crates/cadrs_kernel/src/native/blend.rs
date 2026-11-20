@@ -3606,6 +3606,10 @@ pub fn chamfer_tool(
     blend(k, body, &list, false)
 }
 
+/// A picked straight convex edge on a flat face: the edge, the face, the other face, a point
+/// and direction of its line, and the blend's size.
+type FlatEdge = (usize, usize, P3, V3, f64);
+
 /// A narrow face a fillet swallows (the API's definition of `fillet`): a flat face `N` two of
 /// whose straight edges are picked, between `N` and flat faces `A` and `B`, too narrow for both
 /// strips, so that a ball of radius `r` can't touch it (the strips' contacts on it, `r·tan(φ/2)`
@@ -3626,8 +3630,7 @@ fn swallow_narrow_faces(b: &Body, edges: &[EdgeId], r: f64) -> Result<Option<(Bo
     let mut gone: Vec<usize> = Vec::new();
     let mut pairs: Vec<(usize, [usize; 2])> = Vec::new();
     // Per picked straight convex edge on a flat face: (edge, the face, the other face, its line).
-    let mut by_face: std::collections::HashMap<usize, Vec<(usize, usize, P3, V3, f64)>> =
-        Default::default();
+    let mut by_face: std::collections::HashMap<usize, Vec<FlatEdge>> = Default::default();
     for &e in &picked {
         let ed = &b.edges[e];
         let Curve::Line { .. } = ed.curve else {

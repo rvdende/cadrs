@@ -151,7 +151,7 @@ fn plane_sections() {
     let pieces = k.plane_section(s, p(0.0, 0.0, 3.0), z, 1e-3).unwrap();
     let len = section_length(&pieces, p(0.0, 0.0, 3.0), z);
     let short = TAU * 4.0 - len;
-    assert!(short >= 0.0 && short < TAU * 4.0 * 1e-3 / 4.0, "{len}");
+    assert!((0.0..TAU * 4.0 * 1e-3 / 4.0).contains(&short), "{len}");
     for q in pieces.iter().flatten() {
         assert!((q.coords.norm() - 5.0).abs() < 1e-9);
     }

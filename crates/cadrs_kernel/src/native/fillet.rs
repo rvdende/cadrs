@@ -14638,9 +14638,9 @@ fn ribbon_triangle(
     };
     let corner: Vec<P3> = pts.iter().map(|&x| nb.verts[x].p).collect();
     // The ways out must cross their sides (not run along them).
-    for i in 0..3 {
+    for (i, dci) in dc.iter().enumerate() {
         for s in [0.0, 0.5, 1.0] {
-            let (d, t) = (dc[i](s), across(i, s));
+            let (d, t) = (dci(s), across(i, s));
             if d.cross(&t).norm() <= 1e-3 * d.norm() * t.norm() {
                 return None;
             }

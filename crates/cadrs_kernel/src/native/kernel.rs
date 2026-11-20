@@ -2925,76 +2925,6 @@ fn no_edges(edges: &[EdgeId], what: &str) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The session's shortcuts answer as the trait's defaults do: the tangent chain over edges
-    /// without their lengths, faces and edges kept per body, and `overlaps` by the volume alone.
-    #[test]
-    fn shortcuts_match_the_defaults() {
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/smlib/fillets");
-        for name in [
-            "blade_hub.smb",
-            "cyl_on_box_w_fillet.smb",
-            "Heart.smb",
-            "box_diff_3cyls.smb",
-        ] {
-            let b = super::super::smb::read_brep(&std::fs::read(format!("{dir}/{name}")).unwrap())
-                .unwrap()
-                .body;
-            let mut k = NativeKernel::new();
-            let id = k.insert(b);
-            let (edges, vertices) = (k.edges(id).unwrap(), k.vertices(id).unwrap());
-            assert_eq!(edges, edge_infos(k.get(id).unwrap()), "{name}");
-            assert_eq!(k.edges(id).unwrap(), edges, "{name}");
-            assert_eq!(k.faces(id).unwrap(), k.faces(id).unwrap(), "{name}");
-            for e in edges.iter().step_by(3) {
-                assert_eq!(
-                    k.tangent_chain(id, e.id).unwrap(),
-                    crate::tangent_chain_of(&edges, &vertices, e.id, &|a, c| {
-                        let b = k.get(id).unwrap();
-                        let convex = |e: EdgeId| super::super::blend::edge_convex(b, e.0 as usize);
-                        match (convex(a), convex(c)) {
-                            (Some(x), Some(y)) => x == y,
-                            _ => true,
-                        }
-                    })
-                    .unwrap(),
-                    "{name} {:?}",
-                    e.id
-                );
-            }
-        }
-        // `overlaps` of a model with a box across it.
-        for name in ["cyl_on_box_w_fillet.smb", "box_diff_3cyls.smb"] {
-            let b = super::super::smb::read_brep(&std::fs::read(format!("{dir}/{name}")).unwrap())
-                .unwrap()
-                .body;
-            let bb = b.bbox();
-            let mut k = NativeKernel::new();
-            let id = k.insert(b);
-            let c = bb.center();
-            let d = bb.max - bb.min;
-            let Ok(super::super::draw::Shape::Body(tool)) = k.box_at(
-                c.x - 0.1 * d.x,
-                c.y - 0.2 * d.y,
-                c.z - 0.3 * d.z,
-                d.x,
-                d.y,
-                d.z,
-            ) else {
-                panic!("no box")
-            };
-            let full = k
-                .boolean(BoolOp::Intersect, id, &[tool])
-                .and_then(|r| k.mass_properties(r.bodies[0]))
-                .map(|m| m.volume > tol::ROUNDOFF);
-            assert_eq!(k.overlaps(id, tool).ok(), full.ok(), "{name}");
-        }
-    }
-}
-
 /// Whether a face of `b` on a periodic surface has a vertex of its own lying inside its seam
 /// (a line it uses twice), not at the seam's ends.
 fn seam_through_a_vertex(b: &Body) -> bool {
@@ -3089,4 +3019,74 @@ fn cylinder_turned(b: &Body) -> Option<(P3, nalgebra::Unit<V3>, f64, f64, V3)> {
         return None;
     }
     Some((base, axis, *r, height, -out.normalize()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The session's shortcuts answer as the trait's defaults do: the tangent chain over edges
+    /// without their lengths, faces and edges kept per body, and `overlaps` by the volume alone.
+    #[test]
+    fn shortcuts_match_the_defaults() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/smlib/fillets");
+        for name in [
+            "blade_hub.smb",
+            "cyl_on_box_w_fillet.smb",
+            "Heart.smb",
+            "box_diff_3cyls.smb",
+        ] {
+            let b = super::super::smb::read_brep(&std::fs::read(format!("{dir}/{name}")).unwrap())
+                .unwrap()
+                .body;
+            let mut k = NativeKernel::new();
+            let id = k.insert(b);
+            let (edges, vertices) = (k.edges(id).unwrap(), k.vertices(id).unwrap());
+            assert_eq!(edges, edge_infos(k.get(id).unwrap()), "{name}");
+            assert_eq!(k.edges(id).unwrap(), edges, "{name}");
+            assert_eq!(k.faces(id).unwrap(), k.faces(id).unwrap(), "{name}");
+            for e in edges.iter().step_by(3) {
+                assert_eq!(
+                    k.tangent_chain(id, e.id).unwrap(),
+                    crate::tangent_chain_of(&edges, &vertices, e.id, &|a, c| {
+                        let b = k.get(id).unwrap();
+                        let convex = |e: EdgeId| super::super::blend::edge_convex(b, e.0 as usize);
+                        match (convex(a), convex(c)) {
+                            (Some(x), Some(y)) => x == y,
+                            _ => true,
+                        }
+                    })
+                    .unwrap(),
+                    "{name} {:?}",
+                    e.id
+                );
+            }
+        }
+        // `overlaps` of a model with a box across it.
+        for name in ["cyl_on_box_w_fillet.smb", "box_diff_3cyls.smb"] {
+            let b = super::super::smb::read_brep(&std::fs::read(format!("{dir}/{name}")).unwrap())
+                .unwrap()
+                .body;
+            let bb = b.bbox();
+            let mut k = NativeKernel::new();
+            let id = k.insert(b);
+            let c = bb.center();
+            let d = bb.max - bb.min;
+            let Ok(super::super::draw::Shape::Body(tool)) = k.box_at(
+                c.x - 0.1 * d.x,
+                c.y - 0.2 * d.y,
+                c.z - 0.3 * d.z,
+                d.x,
+                d.y,
+                d.z,
+            ) else {
+                panic!("no box")
+            };
+            let full = k
+                .boolean(BoolOp::Intersect, id, &[tool])
+                .and_then(|r| k.mass_properties(r.bodies[0]))
+                .map(|m| m.volume > tol::ROUNDOFF);
+            assert_eq!(k.overlaps(id, tool).ok(), full.ok(), "{name}");
+        }
+    }
 }
