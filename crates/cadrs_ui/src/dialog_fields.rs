@@ -1238,6 +1238,204 @@ impl Slider {
     }
 }
 
+/// The lane of a [`Timeline`] (under its ruler), for what the app shows along the timeline (a
+/// cache's state): filled by the app, its width the timeline's values (0 at its left, 1 at its
+/// right).
+#[derive(Component, Debug, Clone, Copy)]
+pub struct TimelineLane;
+
+/// The height of a [`Timeline`]'s ruler and of its lane (px).
+const RULER: f32 = 14.0;
+const LANE: f32 = 5.0;
+
+/// Builder for a timeline: a ruler with ticks (every twentieth, taller every quarter), a lane
+/// under it ([`TimelineLane`]) and labels under that (at the quarters), and a playhead across
+/// both: a line with a round head. Dragged, or pressed anywhere along it, it moves like a
+/// [`Slider`] and triggers [`SliderChange`] (it is one: [`SliderState`]).
+pub struct Timeline {
+    name: Cow<'static, str>,
+    value: f32,
+    width: f32,
+    labels: Vec<String>,
+    tooltip: Option<String>,
+}
+
+impl Timeline {
+    pub fn new(name: impl Into<Cow<'static, str>>) -> Self {
+        Self {
+            name: name.into(),
+            value: 0.0,
+            width: 400.0,
+            labels: Vec::new(),
+            tooltip: None,
+        }
+    }
+
+    pub fn value(mut self, v: f32) -> Self {
+        self.value = v.clamp(0.0, 1.0);
+        self
+    }
+
+    pub fn width(mut self, w: f32) -> Self {
+        self.width = w;
+        self
+    }
+
+    /// The labels at 0, ¼, ½, ¾ and the end (as many as given, spread evenly).
+    pub fn labels(mut self, labels: Vec<String>) -> Self {
+        self.labels = labels;
+        self
+    }
+
+    pub fn tooltip(mut self, t: impl Into<String>) -> Self {
+        self.tooltip = Some(t.into());
+        self
+    }
+
+    pub fn build(self, theme: &Theme) -> impl Bundle {
+        let width = self.width;
+        let value = self.value;
+        let name = self.name.into_owned();
+        let tip = self.tooltip.unwrap_or_default();
+        let (track, tick, text, head) = (
+            theme.secondary,
+            theme.muted_foreground,
+            theme.muted_foreground,
+            theme.foreground,
+        );
+        let label_texts: Vec<_> = self
+            .labels
+            .iter()
+            .map(|l| theme.text(l.clone(), 10.0, bevy::text::FontWeight::NORMAL, text))
+            .collect();
+        // The values' stretch: the playhead's half width in from either end.
+        let inner = width - KNOB;
+        (
+            Name::new(name.clone()),
+            SliderState { value },
+            crate::Tooltip::new(tip),
+            Hovered::default(),
+            Node {
+                width: Val::Px(width),
+                height: Val::Px(RULER + 2.0 + LANE + 14.0),
+                flex_shrink: 0.0,
+                flex_direction: FlexDirection::Column,
+                ..default()
+            },
+            Children::spawn(SpawnWith(move |p: &mut ChildSpawner| {
+                let timeline = p.target_entity();
+                // The ruler: its ticks every twentieth, the quarters taller.
+                p.spawn((
+                    Name::new(format!("{name}-ruler")),
+                    Node {
+                        width: Val::Px(width),
+                        height: Val::Px(RULER),
+                        border_radius: BorderRadius::all(Val::Px(3.0)),
+                        ..default()
+                    },
+                    BackgroundColor(track),
+                    Pickable::IGNORE,
+                ))
+                .with_children(|r| {
+                    for k in 0..=20 {
+                        let major = k % 5 == 0;
+                        let h = if major {
+                            RULER - 4.0
+                        } else {
+                            RULER / 2.0 - 1.0
+                        };
+                        r.spawn((
+                            Node {
+                                position_type: PositionType::Absolute,
+                                left: Val::Px(KNOB / 2.0 + inner * k as f32 / 20.0 - 0.5),
+                                top: Val::Px((RULER - h) / 2.0),
+                                width: Val::Px(1.0),
+                                height: Val::Px(h),
+                                ..default()
+                            },
+                            BackgroundColor(tick),
+                            Pickable::IGNORE,
+                        ));
+                    }
+                });
+                p.spawn((
+                    Name::new(format!("{name}-lane")),
+                    TimelineLane,
+                    Node {
+                        width: Val::Px(inner),
+                        height: Val::Px(LANE),
+                        margin: UiRect {
+                            left: Val::Px(KNOB / 2.0),
+                            top: Val::Px(2.0),
+                            ..default()
+                        },
+                        border_radius: BorderRadius::all(Val::Px(2.0)),
+                        overflow: Overflow::clip(),
+                        ..default()
+                    },
+                    BackgroundColor(track),
+                    Pickable::IGNORE,
+                ));
+                p.spawn((
+                    Name::new(format!("{name}-labels")),
+                    Node {
+                        width: Val::Px(width),
+                        justify_content: JustifyContent::SpaceBetween,
+                        ..default()
+                    },
+                    Pickable::IGNORE,
+                ))
+                .with_children(|l| {
+                    for t in label_texts {
+                        l.spawn((t, Pickable::IGNORE));
+                    }
+                });
+                // The playhead: a line through the ruler and the lane, its round head on the
+                // ruler.
+                p.spawn((
+                    SliderKnob(timeline),
+                    Name::new(format!("{name}-playhead")),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Px(value * inner),
+                        top: Val::Px(0.0),
+                        width: Val::Px(KNOB),
+                        height: Val::Px(RULER + 2.0 + LANE),
+                        justify_content: JustifyContent::Center,
+                        ..default()
+                    },
+                    Pickable::IGNORE,
+                ))
+                .with_children(|h| {
+                    h.spawn((
+                        Node {
+                            width: Val::Px(2.0),
+                            height: Val::Percent(100.0),
+                            ..default()
+                        },
+                        BackgroundColor(head),
+                        Pickable::IGNORE,
+                    ));
+                    h.spawn((
+                        Node {
+                            position_type: PositionType::Absolute,
+                            top: Val::Px((RULER - KNOB) / 2.0),
+                            width: Val::Px(KNOB),
+                            height: Val::Px(KNOB),
+                            border: UiRect::all(Val::Px(2.0)),
+                            border_radius: BorderRadius::MAX,
+                            ..default()
+                        },
+                        BackgroundColor(Color::WHITE),
+                        BorderColor::all(head),
+                        Pickable::IGNORE,
+                    ));
+                });
+            })),
+        )
+    }
+}
+
 fn on_slider_drag(
     ev: On<PointerDrag>,
     mut q: Query<(

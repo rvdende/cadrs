@@ -290,8 +290,10 @@ pub fn pencil(input: &Input) -> Result<Toolpath, String> {
 
 /// A cutter whose surface is `tool`'s grown by `s` all round (a flat end's becomes a bull
 /// nose with corner `s`), and how far its tip sits under `tool`'s: dropped onto the model, it
-/// leaves `s` of stock along the surface's normal, on walls as on floors. Cones are left as
-/// they are (`s` straight up).
+/// leaves `s` of stock along the surface's normal, on walls as on floors. A tapered ball, a
+/// lollipop and a barrel grow the same way (their sharp corners stay sharp, a hair outside the
+/// true offset there, so never less stock than asked). Cones and form tools are left as they
+/// are (`s` straight up).
 pub(super) fn offset_cutter(tool: &crate::tool::Tool, s: f64) -> (crate::tool::Tool, f64) {
     use crate::tool::ToolKind::*;
     let mut t = tool.clone();
@@ -311,6 +313,22 @@ pub(super) fn offset_cutter(tool: &crate::tool::Tool, s: f64) -> (crate::tool::T
         BullMill => {
             t.diameter += 2.0 * s;
             t.corner_radius += s;
+        }
+        TaperBall => {
+            // The ball and the cone tangent to it, both `s` out.
+            t.diameter += 2.0 * s;
+            t.tip_diameter += 2.0 * s;
+        }
+        Lollipop => {
+            t.diameter += 2.0 * s;
+            t.neck_diameter += 2.0 * s;
+        }
+        Barrel => {
+            // The side arc about the same centre, `s` further out: the centre stays halfway
+            // up flutes that are `s` longer at each end.
+            t.diameter += 2.0 * s;
+            t.profile_radius += s;
+            t.cutting_length += 2.0 * s;
         }
         _ => return (t, s),
     }

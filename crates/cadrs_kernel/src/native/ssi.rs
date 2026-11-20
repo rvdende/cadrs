@@ -2366,9 +2366,9 @@ fn fit_curve(
             q.b.1 = unwrap_near(q.b.1, prev.b.1, TAU);
         }
     }
-    let fit = |pts: &[super::ssi_numeric::Pt]| {
+    let fit = |pts: &[super::ssi_numeric::Pt], sharp: bool| {
         let xs: Vec<P3> = pts.iter().map(|q| q.p).collect();
-        let t = chord(&xs);
+        let t = if sharp { centripetal(&xs) } else { chord(&xs) };
         (
             NurbsCurve::interpolate(&xs, &t, 3.min(xs.len() - 1), None, None),
             t,
@@ -2390,14 +2390,30 @@ fn fit_curve(
     // curve takes; each point kept is a pole on every face the curve bounds and every sweep of
     // it): each one left out within `tol` of the fit.
     let mut pts = thinned(pts, tol, fixed_ends);
+    // By the chords, six rounds at most. Where the fit still keeps more than SWING off the
+    // intersection after them (a hairpin: two branches meeting within a face, round which a cubic
+    // by the chords rings ever wider as points crowd in), six more by centripetal parameters, on
+    // from the points found so far (all exact); the better of the two fits kept.
+    const SWING: f64 = 1e-5;
+    let mut sharp = false;
+    let mut rounds = 0;
+    // (How far the last round's fit kept off the intersection, where it was refined.)
+    let mut worst = 0.0f64;
+    let mut by_chords: Option<(Vec<super::ssi_numeric::Pt>, f64)> = None;
     let many = !crate::native::env_flag!("CADRS_FIT_HALVING");
     super::par::start();
-    for _round in 0..6 {
-        let (c, t) = fit(&pts);
+    while rounds < 6 || (!sharp && worst > SWING && !crate::native::env_flag!("CADRS_FIT_CHORDS")) {
+        if rounds == 6 {
+            by_chords = Some((pts.clone(), worst));
+            (sharp, rounds) = (true, 0);
+        }
+        rounds += 1;
+        let (c, t) = fit(&pts, sharp);
         let last = pts.len() - 2;
+        worst = 0.0;
         // (A span off by `off` takes (off/tol)^¼ pieces, a cubic's error falling as the fourth
         // power of its span: all its points at once, not a halving a round.)
-        let found: Vec<Vec<(usize, super::ssi_numeric::Pt)>> = (0..pts.len() - 1)
+        let found: Vec<Vec<(usize, super::ssi_numeric::Pt, f64)>> = (0..pts.len() - 1)
             .into_par_iter()
             .map(|k| {
                 if (k == 0 && fixed_ends[0]) || (k == last && fixed_ends[1]) {
@@ -2405,22 +2421,61 @@ fn fit_curve(
                 }
                 let q = c.point((t[k] + t[k + 1]) / 2.0);
                 let chord = (pts[k + 1].p - pts[k].p).norm();
-                let Some(exact) =
-                    super::ssi_numeric::refine_between(a, b, &pts[k], &pts[k + 1], &q)
-                else {
+                if chord <= tol::POINT {
+                    return Vec::new();
+                }
+                // A point between the span's ends is theirs however far the fit swung off it, as
+                // a cubic does round a hairpin where two branches meet: within its chord of both,
+                // or between them in the parameters of the surface the curve was traced over and
+                // within three chords of both (a hairpin's tip lies out beyond both ends in space,
+                // its parameters between; the parameters alone are no bound near a cone's apex).
+                let between = |x: &super::ssi_numeric::Pt| {
+                    let near =
+                        (x.p - pts[k].p).norm() <= chord && (x.p - pts[k + 1].p).norm() <= chord;
+                    let within = |x: f64, lo: f64, hi: f64| {
+                        let pad = 1e-9 * (1.0 + lo.abs().max(hi.abs()));
+                        x >= lo.min(hi) - pad && x <= lo.max(hi) + pad
+                    };
+                    let (p0, p1) = (pts[k].a, pts[k + 1].a);
+                    let un = |x: f64, on: bool| if on { unwrap_near(x, p0.0, TAU) } else { x };
+                    let vn = |x: f64, on: bool| if on { unwrap_near(x, p0.1, TAU) } else { x };
+                    let (up, vp) = (a.u_periodic(), a.v_periodic());
+                    let reach = (x.p - pts[k].p).norm().max((x.p - pts[k + 1].p).norm());
+                    near || (reach <= 3.0 * chord
+                        && within(un(x.a.0, up), p0.0, un(p1.0, up))
+                        && within(vn(x.a.1, vp), p0.1, vn(p1.1, vp)))
+                };
+                let exact = super::ssi_numeric::refine_between(a, b, &pts[k], &pts[k + 1], &q)
+                    .filter(|x| (x.p - q).norm() < 0.5 * chord || between(x));
+                if crate::native::env_flag!("CADRS_FIT_DEBUG")
+                    && a.distance(&q).max(b.distance(&q)) > 1e-6
+                {
+                    eprintln!(
+                        "fit: span {k} of {}: the fit off by {:.1e} on a chord of {chord:.1e}, {}",
+                        pts.len(),
+                        a.distance(&q).max(b.distance(&q)),
+                        if exact.is_some() {
+                            "refined"
+                        } else {
+                            "no point"
+                        }
+                    );
+                }
+                let Some(exact) = exact else {
                     return Vec::new();
                 };
                 let off = (exact.p - q).norm();
-                if !(off > tol && chord > tol::POINT && off < 0.5 * chord) {
+                if off <= tol {
                     return Vec::new();
                 }
-                let m = if many {
+                // (One point, the middle, where the fit swung off the span: a hairpin's.)
+                let m = if many && off < 0.5 * chord {
                     ((off / tol).powf(0.25).ceil() as usize).clamp(2, 16)
                 } else {
                     2
                 };
                 if m == 2 {
-                    return vec![(k + 1, exact)];
+                    return vec![(k + 1, exact, off)];
                 }
                 let mut got = Vec::with_capacity(m - 1);
                 for j in 1..m {
@@ -2433,24 +2488,31 @@ fn fit_curve(
                         Some(p)
                             if (p.p - qj).norm() < 0.5 * chord / m as f64
                                 && got.last().is_none_or(
-                                    |(_, l): &(usize, super::ssi_numeric::Pt)| {
+                                    |(_, l, _): &(usize, super::ssi_numeric::Pt, f64)| {
                                         (p.p - pts[k].p).dot(&(pts[k + 1].p - pts[k].p))
                                             > (l.p - pts[k].p).dot(&(pts[k + 1].p - pts[k].p))
                                     },
                                 ) =>
                         {
-                            got.push((k + 1, p))
+                            got.push((k + 1, p, off))
                         }
-                        _ => return vec![(k + 1, exact)],
+                        _ => return vec![(k + 1, exact, off)],
                     }
                 }
                 got
             })
             .collect();
-        let ins: Vec<(usize, super::ssi_numeric::Pt)> = found.into_iter().flatten().collect();
+        let ins: Vec<(usize, super::ssi_numeric::Pt)> = found
+            .into_iter()
+            .flatten()
+            .map(|(k, p, off)| {
+                worst = worst.max(off);
+                (k, p)
+            })
+            .collect();
         if crate::native::env_flag!("CADRS_SSI_DEBUG") {
             eprintln!(
-                "fit round {_round}: {} points, {} to insert",
+                "fit round {rounds} (centripetal {sharp}): {} points, {} to insert, {worst:.1e} off",
                 pts.len(),
                 ins.len()
             );
@@ -2470,7 +2532,10 @@ fn fit_curve(
             pts.insert(k, p);
         }
     }
-    let (c, t) = fit(&pts);
+    if let Some((p, _)) = by_chords.filter(|(_, w)| *w <= worst) {
+        (pts, sharp) = (p, false);
+    }
+    let (c, t) = fit(&pts, sharp);
     let n = c.range();
     let pcs = uv_fits(a, b, &pts, &t, &c, 4.0 * tol);
     IntCurve {
@@ -2621,6 +2686,16 @@ fn chord(pts: &[P3]) -> Vec<f64> {
     t
 }
 
+/// Centripetal parameters of points (by the square roots of the chords): a cubic through them
+/// keeps close round a sharp turn, where by the chords it swings wide.
+fn centripetal(pts: &[P3]) -> Vec<f64> {
+    let mut t = vec![0.0];
+    for w in pts.windows(2) {
+        t.push(t.last().unwrap() + (w[1] - w[0]).norm().sqrt());
+    }
+    t
+}
+
 /// Parameters in [t0, t1] where the curve meets the surface (sign changes of the distance,
 /// and touching points), refined.
 pub fn curve_surface(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Vec<f64> {
@@ -2728,8 +2803,33 @@ pub fn curve_surface(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Vec<f64> {
     // a fresh projection is a global search): along the samples from the previous one, inside
     // a bracket from the bracket's own sample.
     let implicit = s.signed_distance(&P3::origin()).is_some();
+    // A circle carried along a line is a quadric: a point is on it where its foot along the
+    // line in the circle's plane is the radius from the centre. That (less the radius) is
+    // the function sampled there, smooth and one-signed each side: a distance by projection
+    // jumps between the surface's two sides where the curve passes between them, a sign
+    // change with no crossing (a root 0.15 off the surface, the true one missed).
+    type Implicit = Box<dyn Fn(&P3) -> f64 + Sync>;
+    let quadric: Option<Implicit> = match s {
+        Surface::Extrusion {
+            c: Curve::Circle { c: o, x, y, r },
+            d,
+        } if !crate::native::env_flag!("CADRS_NO_QUADRIC_ROOTS") => {
+            let n = x.cross(y);
+            let nd = n.dot(d);
+            (nd.abs() > 1e-9 * d.norm()).then(|| {
+                let (o, d, r) = (*o, *d, *r);
+                Box::new(move |p: &P3| {
+                    let w = p - o;
+                    (w - d * (n.dot(&w) / nd)).norm() - r
+                }) as Implicit
+            })
+        }
+        _ => None,
+    };
     let fh = |t: f64, hint: &mut Option<(f64, f64)>| -> f64 {
-        if implicit {
+        if let Some(q) = &quadric {
+            q(&c.point(t))
+        } else if implicit {
             sdist(s, &c.point(t))
         } else {
             sdist_hint(s, &c.point(t), hint)

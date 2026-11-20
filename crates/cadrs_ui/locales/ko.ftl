@@ -3329,6 +3329,7 @@ cam-go-to-end = 끝으로 이동
 cam-reset = 처음으로
 cam-close-the-preview = 미리 보기 닫기
 cam-drag-through-program = 끌어서 프로그램 안에서 이동
+cam-simulated-ahead = 미리 시뮬레이션: 초록은 재생 준비됨, 파랑은 계산 중, 빨강은 아직 안 됨, 호박색은 정확히 절삭되지 않음
 cam-toolpath = 공구 경로
 cam-pause-on-collision = 충돌 시 일시 중지
 cam-readout-feed = 이송 { $feed } mm/min

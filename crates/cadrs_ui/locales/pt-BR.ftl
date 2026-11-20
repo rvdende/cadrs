@@ -3329,6 +3329,7 @@ cam-go-to-end = Ir para o fim
 cam-reset = Reiniciar
 cam-close-the-preview = Fechar a visualização
 cam-drag-through-program = Arraste para percorrer o programa
+cam-simulated-ahead = Simulado com antecedência: verde pronto para reproduzir, azul em cálculo, vermelho ainda não, âmbar não cortado com exatidão
 cam-toolpath = Percurso
 cam-pause-on-collision = Pausar na colisão
 cam-readout-feed = avanço { $feed } mm/min

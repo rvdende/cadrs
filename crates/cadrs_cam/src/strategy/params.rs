@@ -76,10 +76,17 @@ pub enum Pattern {
     Etch,
     /// Laser hatching of faces.
     Fill,
+    /// Finishing round a rotary axis (4-axis): the tool points at the axis and follows the
+    /// surface in a spiral, in lines along it, in rings, or down a thread at its lead.
+    Rotary,
+    /// Roughing round a rotary axis, in levels of radius from the stock down.
+    RotaryRough,
+    /// The side of the tool along ruled walls, leaning with them (5-axis).
+    Swarf,
 }
 
 impl Pattern {
-    pub const ALL: [Pattern; 19] = [
+    pub const ALL: [Pattern; 22] = [
         Pattern::Face,
         Pattern::Rough2D,
         Pattern::Profile2D,
@@ -99,6 +106,9 @@ impl Pattern {
         Pattern::Cut,
         Pattern::Etch,
         Pattern::Fill,
+        Pattern::Rotary,
+        Pattern::RotaryRough,
+        Pattern::Swarf,
     ];
 
     pub fn label(self) -> &'static str {
@@ -122,6 +132,18 @@ impl Pattern {
             Pattern::Cut => "Cut",
             Pattern::Etch => "Etch",
             Pattern::Fill => "Fill",
+            Pattern::Rotary => "Rotary",
+            Pattern::RotaryRough => "Rotary rough",
+            Pattern::Swarf => "Swarf",
+        }
+    }
+
+    /// Whether it turns the tool as it cuts, so needs a machine with rotary axes: how many.
+    pub fn rotary_axes(self) -> usize {
+        match self {
+            Pattern::Rotary | Pattern::RotaryRough => 1,
+            Pattern::Swarf => 2,
+            _ => 0,
         }
     }
 
@@ -133,14 +155,20 @@ impl Pattern {
             | Pattern::Engrave
             | Pattern::Cut
             | Pattern::Etch => Type::Edges,
-            Pattern::Face | Pattern::Rough2D | Pattern::Flatlands | Pattern::Fill => Type::Faces,
+            Pattern::Face
+            | Pattern::Rough2D
+            | Pattern::Flatlands
+            | Pattern::Fill
+            | Pattern::Swarf => Type::Faces,
             Pattern::Rough3D
             | Pattern::Adaptive
             | Pattern::Parallel
             | Pattern::ConstantZ
             | Pattern::Scallop
             | Pattern::Spiral
-            | Pattern::Pencil => Type::Bodies,
+            | Pattern::Pencil
+            | Pattern::Rotary
+            | Pattern::RotaryRough => Type::Bodies,
             Pattern::Drill | Pattern::Bore | Pattern::ThreadMill => Type::Holes,
         }
     }
@@ -166,6 +194,9 @@ impl Pattern {
             Pattern::Cut => "cam-cut-path",
             Pattern::Etch => "cam-etch",
             Pattern::Fill => "cam-fill",
+            Pattern::Rotary => "cam-rotary",
+            Pattern::RotaryRough => "cam-rotary-rough",
+            Pattern::Swarf => "cam-swarf",
         }
     }
 
@@ -181,20 +212,56 @@ impl Pattern {
             Pattern::Drill => matches!(tool, Drill | Tap | ChamferMill),
             Pattern::Bore => matches!(tool, EndMill | BullMill | BallMill),
             Pattern::Chamfer2D => matches!(tool, ChamferMill),
-            Pattern::Engrave => matches!(tool, ChamferMill | BallMill | EndMill | TaperMill),
+            Pattern::Engrave => {
+                matches!(
+                    tool,
+                    ChamferMill | BallMill | EndMill | TaperMill | TaperBall
+                )
+            }
             Pattern::Face => matches!(tool, FaceMill | EndMill | BullMill),
-            Pattern::Rough2D
-            | Pattern::Rough3D
-            | Pattern::Adaptive
-            | Pattern::Profile2D
-            | Pattern::Flatlands => {
+            Pattern::Rough2D | Pattern::Rough3D | Pattern::Adaptive | Pattern::Flatlands => {
                 matches!(tool, EndMill | BullMill | BallMill | FaceMill | TaperMill)
             }
-            Pattern::Parallel | Pattern::ConstantZ | Pattern::Scallop | Pattern::Spiral => {
-                matches!(tool, EndMill | BullMill | BallMill | TaperMill)
+            Pattern::Profile2D => {
+                matches!(
+                    tool,
+                    EndMill | BullMill | BallMill | FaceMill | TaperMill | Form
+                )
             }
-            Pattern::Pencil => matches!(tool, BallMill | BullMill),
+            // (A lollipop follows a surface as a ball does and a form tool by its underside:
+            // what they undercut shows in the solid simulation.)
+            Pattern::Parallel | Pattern::ConstantZ | Pattern::Scallop | Pattern::Spiral => {
+                matches!(
+                    tool,
+                    EndMill
+                        | BullMill
+                        | BallMill
+                        | TaperMill
+                        | TaperBall
+                        | Lollipop
+                        | Barrel
+                        | Form
+                )
+            }
+            Pattern::Pencil => matches!(tool, BallMill | BullMill | TaperBall | Lollipop),
             Pattern::ThreadMill => tool == ThreadMill,
+            Pattern::Rotary => matches!(
+                tool,
+                EndMill
+                    | BullMill
+                    | BallMill
+                    | TaperMill
+                    | ChamferMill
+                    | TaperBall
+                    | Lollipop
+                    | Barrel
+                    | Form
+            ),
+            Pattern::RotaryRough => matches!(tool, EndMill | BullMill | BallMill | TaperMill),
+            Pattern::Swarf => matches!(
+                tool,
+                EndMill | BullMill | BallMill | TaperMill | TaperBall | Barrel | Form
+            ),
         }
     }
 
@@ -623,6 +690,10 @@ pub struct Cycle {
     /// Retract to the clearance height between holes (else to the R plane).
     pub retract_full: bool,
     pub select: HoleSelect,
+    /// Holes at any angle, each down its own axis (a machine with rotary axes); off: the
+    /// holes along the work plane's Z.
+    #[serde(default)]
+    pub any_axis: bool,
 }
 
 impl Default for Cycle {
@@ -634,6 +705,7 @@ impl Default for Cycle {
             break_through: 1.0,
             retract_full: false,
             select: HoleSelect::MatchingTool,
+            any_axis: false,
         }
     }
 }
@@ -678,6 +750,158 @@ pub enum ToolAxis {
     /// A direction of its own in model coordinates (a picked face's normal): the toolpath is
     /// worked out in the work plane turned to it, cut on a 3+2 machine.
     Direction(crate::geom::P3),
+}
+
+/// How the tool's axis is set as it cuts (the Axis tab, on a machine with rotary axes).
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub enum AxisMode {
+    /// Along the work plane's Z throughout: 3-axis cutting.
+    #[default]
+    Fixed,
+    /// Square to the surface where the tool touches it.
+    Normal,
+    /// Along the line from a point to where the tool touches: leaning away from the point
+    /// (a point inside the part), in the work plane's coordinates.
+    FromPoint(crate::geom::P3),
+    /// Along the line from where the tool touches to a point: leaning toward it (a point
+    /// above the part).
+    TowardPoint(crate::geom::P3),
+    /// Square to a line, through it: as round a rotary axis (a point of the line and its
+    /// direction).
+    ThroughLine {
+        point: crate::geom::P3,
+        dir: crate::geom::P3,
+    },
+}
+
+impl AxisMode {
+    pub fn label(&self) -> &'static str {
+        match self {
+            AxisMode::Fixed => "Work plane Z",
+            AxisMode::Normal => "Normal to the surface",
+            AxisMode::FromPoint(_) => "Away from a point",
+            AxisMode::TowardPoint(_) => "Toward a point",
+            AxisMode::ThroughLine { .. } => "Through a line",
+        }
+    }
+}
+
+/// The tool's axis as it cuts: its rule, the tilts added to it and what holds it in.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct AxisControl {
+    pub mode: AxisMode,
+    /// Tilt forward along the cut (degrees; negative: dragging).
+    #[serde(default)]
+    pub lead: f64,
+    /// Tilt to the left of the cut (degrees).
+    #[serde(default)]
+    pub side: f64,
+    /// The most the tool leans from the work plane's Z (degrees).
+    #[serde(default = "upright_limit")]
+    pub max_tilt: f64,
+    /// The length of cut the axis is evened out over (mm; 0: as the surface gives it).
+    #[serde(default = "axis_smoothing")]
+    pub smoothing: f64,
+}
+
+fn upright_limit() -> f64 {
+    90.0
+}
+fn axis_smoothing() -> f64 {
+    2.0
+}
+
+impl Default for AxisControl {
+    fn default() -> Self {
+        AxisControl {
+            mode: AxisMode::Fixed,
+            lead: 0.0,
+            side: 0.0,
+            max_tilt: upright_limit(),
+            smoothing: axis_smoothing(),
+        }
+    }
+}
+
+impl AxisControl {
+    /// Whether the tool leans as it cuts.
+    pub fn leans(&self) -> bool {
+        self.mode != AxisMode::Fixed
+    }
+}
+
+/// How a rotary pattern covers the part.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum RotaryStyle {
+    /// One spiral round the axis, the step over along it each turn.
+    #[default]
+    Spiral,
+    /// Lines along the axis, the part indexed between them.
+    Line,
+    /// Rings round the axis, stepped along it.
+    Circular,
+    /// Helices at a thread's lead, stepped across it: each runs down the thread at one depth
+    /// (a worm, a screw).
+    Thread,
+}
+
+impl RotaryStyle {
+    pub const ALL: [RotaryStyle; 4] = [
+        RotaryStyle::Spiral,
+        RotaryStyle::Line,
+        RotaryStyle::Circular,
+        RotaryStyle::Thread,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            RotaryStyle::Spiral => "Spiral",
+            RotaryStyle::Line => "Lines along the axis",
+            RotaryStyle::Circular => "Rings round the axis",
+            RotaryStyle::Thread => "Along a thread",
+        }
+    }
+}
+
+/// A rotary pattern's settings.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Rotary {
+    /// The axis the part turns about, in the work plane's coordinates: a point of it and its
+    /// direction (`None`: the machine's rotary axis, or the part's length along X).
+    pub axis: Option<(crate::geom::P3, crate::geom::P3)>,
+    pub style: RotaryStyle,
+    /// The tool's distance off the axis, across it (mm): a flat end mill cuts with its edge
+    /// instead of its dead centre.
+    pub offset: f64,
+    /// Where along the axis it cuts: from and to, in mm along it from where it passes the
+    /// work plane's origin (the work plane's X, for an axis along X); `None`: the part's
+    /// length, clear of the workholding.
+    pub range: Option<[f64; 2]>,
+    /// The angle it starts at and the angle it covers (degrees).
+    pub start_angle: f64,
+    pub sweep: f64,
+    /// A thread's lead (mm a turn) and hand.
+    pub lead: f64,
+    pub left_hand: bool,
+    /// The least radius the tool's tip comes in to (mm): where nothing of the part is under
+    /// it (past an end, in a gap).
+    pub core: f64,
+}
+
+impl Default for Rotary {
+    fn default() -> Self {
+        Rotary {
+            axis: None,
+            style: RotaryStyle::Spiral,
+            offset: 0.0,
+            range: None,
+            start_angle: 0.0,
+            sweep: 360.0,
+            lead: 0.0,
+            left_hand: false,
+            core: 0.0,
+        }
+    }
 }
 
 /// A toolpath repeated (the Misc tab's pattern): the same moves at more places.
@@ -764,6 +988,12 @@ impl Repeat {
                         c.at = f(c.at);
                         Step::Drill(c)
                     }
+                    // A lean turns with its copy (a placement moves points; a direction is
+                    // the difference of two).
+                    Step::Axis(a) => {
+                        let (o, e) = (f([0.0, 0.0]), f([a[0], a[1]]));
+                        Step::Axis([e[0] - o[0], e[1] - o[1], a[2]])
+                    }
                     other => other.clone(),
                 });
             }
@@ -847,6 +1077,12 @@ pub struct Params {
     /// The Misc tab's pattern: the toolpath repeated.
     #[serde(default)]
     pub repeat: Repeat,
+    /// The Axis tab's simultaneous modes: how the tool leans as it cuts.
+    #[serde(default)]
+    pub tilt: AxisControl,
+    /// The rotary patterns' settings.
+    #[serde(default)]
+    pub rotary: Rotary,
 }
 
 fn yes() -> bool {
@@ -893,6 +1129,8 @@ impl Params {
             left_hand_thread: false,
             fine_step_down: 0.0,
             repeat: Repeat::None,
+            tilt: AxisControl::default(),
+            rotary: Rotary::default(),
             speeds: Speeds {
                 spindle_rpm: c.spindle_rpm,
                 feed: c.feed,
@@ -982,6 +1220,24 @@ impl Params {
             Pattern::ThreadMill => {
                 p.posting.coolant = Coolant::Flood;
                 p.passes = 1;
+            }
+            Pattern::Rotary => {
+                p.step_over = if tool.kind == ToolKind::BallMill {
+                    d * 0.1
+                } else {
+                    d * 0.2
+                };
+                p.links.lead_in = LeadKind::None;
+                p.links.lead_out = LeadKind::None;
+            }
+            Pattern::RotaryRough => {
+                p.wall_stock = if d >= 3.0 { 0.3 } else { 0.1 };
+                p.floor_stock = p.wall_stock;
+                p.step_over = d * 0.4;
+            }
+            Pattern::Swarf => {
+                p.links.lead_in = LeadKind::None;
+                p.links.lead_out = LeadKind::None;
             }
             Pattern::Drill => {
                 p.cycle.kind = if tool.kind == ToolKind::Tap {

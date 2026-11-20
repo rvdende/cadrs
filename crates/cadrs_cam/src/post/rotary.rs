@@ -1,0 +1,1149 @@
+//! Posting through the machine's axes: operations whose tool leans as it cuts (4- and 5-axis
+//! work), and tilted work planes on a control without a tilted-working-plane code.
+//!
+//! Such an operation's moves are cutter locations: where the tip is and which way the tool
+//! points, relative to the work. The machine's [`Chain`] turns each into axis values
+//! ([`Chain::solve`]), and what is written depends on who keeps the tip on its line:
+//!
+//! - **The control** (tool centre point control: Fanuc `G43.4`, Haas `G234`, LinuxCNC's
+//!   switchable kinematics): X Y Z are the tip in the work's coordinates, with the rotary
+//!   angles beside them. The control moves its slides to suit, whatever the tool's length and
+//!   wherever the work sits on the table.
+//! - **The post** (every other control): X Y Z are the slides themselves, measured from where
+//!   they hold the tip on the work's origin with the rotary axes at zero, so with the rotaries
+//!   at zero the program reads as a 3-axis one. Between two blocks the control runs every axis
+//!   straight, which bends the tip's path wherever an axis turns, so a move is cut up until it
+//!   stays within tolerance ([`Chain::linearize`]). Such a program is good only for the work
+//!   set where it was programmed from the rotary axes.
+//!
+//! Feeds are inverse time (`G93`, each block's `F` the reciprocal of its minutes) unless set
+//! otherwise: the one feed whose meaning does not depend on how a control weighs a degree
+//! against a millimetre. Blocks that lie on one line in the written words are merged (a helix
+//! round a rotary axis is one block). Where an axis runs out of travel mid-cut the tool lifts
+//! clear, the axis comes round, and the cut goes on.
+
+use std::fmt::Write as _;
+
+use serde::{Deserialize, Serialize};
+
+use super::{Dialect, NcOperation, PostError, PostSettings, Tilt, Writer, decimal};
+use crate::geom::{Frame, P3, add, dist, scale};
+use crate::kinematics::{Chain, Cl, IkError, Tolerance, angle_between};
+use crate::toolpath::{Step, UPRIGHT};
+
+/// What `F` means on a block that turns a rotary axis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum RotaryFeed {
+    /// `G93`: `F` is one over the block's minutes.
+    #[default]
+    InverseTime,
+    /// `G94`, the feed counted along X Y Z; a block that only turns is in degrees a minute
+    /// (LinuxCNC's and Mach3's rule).
+    LinearThenDegrees,
+    /// `G94`, the feed counted over every axis, a degree as a millimetre.
+    AllAxes,
+}
+
+impl RotaryFeed {
+    pub const ALL: [RotaryFeed; 3] = [
+        RotaryFeed::InverseTime,
+        RotaryFeed::LinearThenDegrees,
+        RotaryFeed::AllAxes,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            RotaryFeed::InverseTime => "Inverse time (G93)",
+            RotaryFeed::LinearThenDegrees => "Along X Y Z; degrees/min when only turning",
+            RotaryFeed::AllAxes => "Over every axis",
+        }
+    }
+}
+
+/// How a tilted work plane (3+2) is posted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum TiltedPlane {
+    /// The control's own tilted working plane where it has one (Fanuc `G68.2`), else the
+    /// rotary axes' positions.
+    #[default]
+    Control,
+    /// Always the rotary axes' positions, the moves in the machine's axes.
+    Positions,
+}
+
+/// A machine's post options for its rotary axes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RotaryPost {
+    /// The control keeps the tool's tip on its path as the rotary axes turn (tool centre point
+    /// control).
+    pub tcp: bool,
+    /// The blocks that switch it on and off (`;` between blocks, `{h}` the tool's number);
+    /// empty: the controller family's own.
+    pub tcp_on: String,
+    pub tcp_off: String,
+    pub tilted_plane: TiltedPlane,
+    pub feed: RotaryFeed,
+    /// How far the tip may stray from a straight cut between two blocks (mm).
+    pub tolerance: f64,
+    /// How far the tool's axis may (degrees).
+    pub axis_tolerance: f64,
+    /// How far the tool lifts along its axis where a rotary axis has to come round (mm).
+    pub retract: f64,
+    /// Decimals of the angles.
+    pub angle_decimals: u32,
+    /// How a rotary axis without stops is written.
+    pub winding: Winding,
+}
+
+/// How a rotary axis that turns without stops (a chuck winding round a worm, a platter) is
+/// written. The program never touches the control's work offsets to count it down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum Winding {
+    /// The control rolls the axis over (LinuxCNC's `WRAPPED_ROTARY`, Fanuc's rotary roll-over
+    /// parameter, Haas's and Mach3's roll-over settings): angles are written from 0 up to 360,
+    /// and no block turns it half a turn or more, so the control's shortest way round is the
+    /// way the cut goes.
+    #[default]
+    Rollover,
+    /// Angles as turned, however many turns: for a control that doesn't roll the axis over.
+    /// The axis comes back the way it went at the program's end.
+    Wound,
+}
+
+impl Winding {
+    pub const ALL: [Winding; 2] = [Winding::Rollover, Winding::Wound];
+    pub fn label(self) -> &'static str {
+        match self {
+            Winding::Rollover => "Rolls over (0 to 360)",
+            Winding::Wound => "Wound (angles as turned)",
+        }
+    }
+}
+
+impl Default for RotaryPost {
+    fn default() -> Self {
+        RotaryPost {
+            tcp: false,
+            tcp_on: String::new(),
+            tcp_off: String::new(),
+            tilted_plane: TiltedPlane::Control,
+            feed: RotaryFeed::InverseTime,
+            tolerance: 0.01,
+            axis_tolerance: 0.1,
+            retract: 25.0,
+            angle_decimals: 3,
+            winding: Winding::Rollover,
+        }
+    }
+}
+
+impl RotaryPost {
+    /// The defaults for a controller family: tool centre point control where it is usual.
+    pub fn for_dialect(d: Dialect) -> RotaryPost {
+        RotaryPost {
+            tcp: matches!(d, Dialect::Fanuc | Dialect::Haas),
+            // (GRBL has no rolling-over axis; grblHAL's needs a build option.)
+            winding: if d == Dialect::Grbl {
+                Winding::Wound
+            } else {
+                Winding::Rollover
+            },
+            ..RotaryPost::default()
+        }
+    }
+
+    /// The blocks that switch tool centre point control on and off for tool `h`, and whether
+    /// switching it off takes the tool's length compensation with it; `None` where it is off
+    /// or the control has none.
+    pub fn tcp_codes(&self, d: Dialect, h: u32) -> Option<(Vec<String>, Vec<String>, bool)> {
+        if !self.tcp {
+            return None;
+        }
+        let own = |text: &str| -> Vec<String> {
+            text.split(';')
+                .map(|b| b.trim().replace("{h}", &h.to_string()))
+                .filter(|b| !b.is_empty())
+                .collect()
+        };
+        let (on, off, drops) = match d {
+            Dialect::Fanuc => (vec![format!("G43.4 H{h}")], vec!["G49".to_string()], true),
+            Dialect::Haas => (vec![format!("G234 H{h}")], vec!["G49".to_string()], true),
+            // LinuxCNC switches its kinematics (the 5-axis sample configurations' M428 and
+            // M429); the tool's length stays on.
+            Dialect::LinuxCnc => (
+                vec![format!("G43 H{h}"), "M428".to_string()],
+                vec!["M429".to_string()],
+                false,
+            ),
+            Dialect::Grbl | Dialect::Mach3 if self.tcp_on.trim().is_empty() => return None,
+            Dialect::Grbl | Dialect::Mach3 => (vec![], vec![], false),
+        };
+        let on = if self.tcp_on.trim().is_empty() {
+            on
+        } else {
+            own(&self.tcp_on)
+        };
+        let off = if self.tcp_off.trim().is_empty() {
+            off
+        } else {
+            own(&self.tcp_off)
+        };
+        Some((on, off, drops))
+    }
+}
+
+impl RotaryPost {
+    /// [`RotaryPost::tcp_codes`] for a machine with `rotaries` rotary axes: tool centre point
+    /// control is a five-axis control's (two rotary axes or more); a machine with one posts
+    /// its slides and its angle plainly, where a helix is one block.
+    pub fn tcp_for(
+        &self,
+        d: Dialect,
+        h: u32,
+        rotaries: usize,
+    ) -> Option<(Vec<String>, Vec<String>, bool)> {
+        if rotaries < 2 {
+            return None;
+        }
+        self.tcp_codes(d, h)
+    }
+}
+
+/// How an operation is written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Route {
+    /// In the work offset's own axes, the rotary axes at zero.
+    Plain,
+    /// In a tilted working plane the control keeps (`G68.2`).
+    Plane,
+    /// Through the machine's axes.
+    Axes,
+}
+
+pub(super) fn route(op: &NcOperation, d: Dialect, s: &PostSettings, rotaries: usize) -> Route {
+    if op.toolpath.is_multi_axis() {
+        Route::Axes
+    } else if op.tilt.is_none() {
+        Route::Plain
+    } else if d == Dialect::Fanuc && s.rotary.tilted_plane == TiltedPlane::Control && rotaries >= 2
+    {
+        // (A tilted working plane is a five-axis control's: one rotary axis is indexed.)
+        Route::Plane
+    } else {
+        Route::Axes
+    }
+}
+
+/// The slides' values that hold the tip of a tool `length` long on the origin of `work` (the
+/// work's coordinate system, in the table mount's coordinates) with every rotary axis at zero:
+/// what a program's X Y Z are measured from without tool centre point control.
+pub fn program_zero(chain: &Chain, work: &Frame, length: f64) -> Option<Vec<f64>> {
+    chain.slide_to(work.origin, length, &chain.rest())
+}
+
+/// Where a chain's X, Y and Z slides are among its axis values, and its rotary axes with their
+/// letters.
+pub type AxisWords = ([usize; 3], Vec<(usize, char)>);
+
+/// The axes of a chain as a program names them; why not, for a chain a G-code program cannot
+/// drive.
+pub fn words_of(chain: &Chain) -> Result<AxisWords, String> {
+    if !chain.is_mill() {
+        return Err(
+            "the machine isn't three slides with up to two rotary axes (a robot arm has no \
+             G-code post yet)"
+                .into(),
+        );
+    }
+    let slide = |n: &str| {
+        chain
+            .index(n)
+            .filter(|i| !chain.joint(*i).is_rotary())
+            .ok_or(format!("the machine has no linear axis named {n}"))
+    };
+    let lin = [slide("X")?, slide("Y")?, slide("Z")?];
+    let mut rot = Vec::new();
+    for i in chain.rotaries() {
+        let name = &chain.joint(i).name;
+        let mut letters = name.chars();
+        match (letters.next(), letters.next()) {
+            (Some(c), None) if "ABCUVW".contains(c.to_ascii_uppercase()) => {
+                rot.push((i, c.to_ascii_uppercase()))
+            }
+            _ => {
+                return Err(format!(
+                    "the rotary axis \"{name}\" needs a letter (A, B or C)"
+                ));
+            }
+        }
+    }
+    Ok((lin, rot))
+}
+
+/// A feed move waiting to be written (moves on one line are merged first).
+struct Pending {
+    /// The words: X Y Z, then the rotary axes.
+    v: Vec<f64>,
+    minutes: f64,
+    /// The feed it was programmed at (mm/min along the tip's path).
+    feed: f64,
+}
+
+/// An operation being written through the machine's axes.
+pub(super) struct Axes {
+    chain: Chain,
+    /// The work's coordinate system in the table mount's coordinates.
+    work: Frame,
+    /// The operation's own frame in the work's (a tilted work plane).
+    local: Option<Frame>,
+    /// The tool's length from its tip to the gauge line.
+    length: f64,
+    lin: [usize; 3],
+    rot: Vec<(usize, char)>,
+    /// See [`program_zero`].
+    zero: Vec<f64>,
+    /// The axis values now.
+    q: Vec<f64>,
+    /// The cutter location now (`None` before the first move).
+    cl: Option<Cl>,
+    /// The tool's axis now (the operation's frame) and the lean the next move ends with.
+    axis: P3,
+    lean: Option<P3>,
+    /// The rotary words last written.
+    written: Vec<Option<String>>,
+    /// The words of the last block (X Y Z, then the rotary axes).
+    last: Option<Vec<f64>>,
+    pending: Vec<Pending>,
+    tcp: bool,
+    /// The tool never leans within the operation (a tilted work plane): nothing turns as it
+    /// cuts, so its feeds are plain ones along X Y Z.
+    fixed: bool,
+    /// The blocks that end tool centre point control.
+    tcp_off: Vec<String>,
+    /// `G93` is on.
+    inverse: bool,
+    feed_mode: RotaryFeed,
+    tol: Tolerance,
+    retract: f64,
+    angle_decimals: u32,
+    op: String,
+    /// The first thing that could not be written.
+    pub error: Option<PostError>,
+    /// Ending tool centre point control took the tool's length compensation with it.
+    pub length_dropped: bool,
+    /// Rewinds made (a rotary axis come round with the tool lifted).
+    pub rewinds: usize,
+    /// The next lean the toolpath makes after the move in hand (the table mount's
+    /// coordinates): what a rotary axis the tool's lean leaves free is turned to.
+    ahead: Option<P3>,
+    winding: Winding,
+    /// The time of feed moves too small to write, owed to the next block.
+    carried: f64,
+    /// Each written rotary axis's angle as last written (rounded to its decimals, as turned):
+    /// where the control has it.
+    turned_to: Vec<f64>,
+    /// The words of an axis that rolls over carry the way it turns in their sign (LinuxCNC):
+    /// else the control takes the shortest way.
+    signed: bool,
+    /// The tool's length to switch on with the first move down to the work (`G43 H…`).
+    length_on: Option<String>,
+}
+
+impl Axes {
+    pub fn new(
+        chain: &Chain,
+        work: &Frame,
+        op: &NcOperation,
+        d: Dialect,
+        s: &PostSettings,
+        from: Option<&[f64]>,
+    ) -> Result<Axes, PostError> {
+        let name = &op.name;
+        let (lin, rot) = words_of(chain).map_err(|e| PostError::NoPost(format!("{name}: {e}")))?;
+        let length = op.tool.gauge_length();
+        let zero = program_zero(chain, work, length).ok_or_else(|| {
+            PostError::NoPost(format!(
+                "{name}: the machine's slides don't reach every direction"
+            ))
+        })?;
+        let codes = s.rotary.tcp_for(d, op.tool_number, rot.len());
+        let tcp = codes.is_some();
+        let turned_to = {
+            let q = from.unwrap_or(&zero);
+            rot.iter().map(|(i, _)| q[*i]).collect()
+        };
+        Ok(Axes {
+            q: from.map_or_else(|| zero.clone(), <[f64]>::to_vec),
+            chain: chain.clone(),
+            work: *work,
+            local: op.tilt.map(|t| t.frame()),
+            length,
+            lin,
+            written: vec![None; rot.len()],
+            rot,
+            zero,
+            cl: None,
+            axis: UPRIGHT,
+            lean: None,
+            last: None,
+            pending: Vec::new(),
+            tcp,
+            fixed: !op.toolpath.is_multi_axis(),
+            tcp_off: codes.map(|c| c.1).unwrap_or_default(),
+            inverse: false,
+            feed_mode: s.rotary.feed,
+            tol: Tolerance {
+                tip: s.rotary.tolerance.max(1e-4),
+                axis: s.rotary.axis_tolerance.max(1e-3),
+                tcp,
+            },
+            retract: s.rotary.retract.max(0.0),
+            angle_decimals: s.rotary.angle_decimals,
+            op: name.clone(),
+            error: None,
+            length_dropped: false,
+            rewinds: 0,
+            ahead: None,
+            winding: s.rotary.winding,
+            carried: 0.0,
+            turned_to,
+            signed: d == Dialect::LinuxCnc,
+            length_on: None,
+        })
+    }
+
+    /// The axis values where the operation leaves the machine.
+    pub fn position(&self) -> &[f64] {
+        &self.q
+    }
+
+    /// Notes the next lean the toolpath makes (the operation's frame), for looking ahead.
+    pub fn look_ahead(&mut self, axis: Option<P3>) {
+        self.ahead = axis.map(|a| self.cl_of([0.0; 3], a).axis);
+    }
+
+    /// The axis values for `cl`, on from where the machine is, a free rotary turned to what
+    /// comes next.
+    fn solve(&self, cl: &Cl) -> Result<Vec<f64>, IkError> {
+        self.chain
+            .solve_toward(cl, self.length, &self.q, self.ahead)
+    }
+
+    /// A rapid block's motion word, with the tool's length switched on where it is still to be
+    /// and the block moves Z (`G0 G43 H1`).
+    fn with_length(&mut self, w: &mut Writer, axes: &str) -> String {
+        if axes.contains('Z')
+            && let Some(on) = self.length_on.take()
+        {
+            w.mode = Some(0);
+            return format!("G0 {on}");
+        }
+        w.motion(0)
+    }
+
+    /// Writes the tool's length on by itself if no rapid has (an operation that starts with
+    /// a feed).
+    fn length_now(&mut self, w: &mut Writer) {
+        if let Some(on) = self.length_on.take() {
+            w.block(&on);
+        }
+    }
+
+    /// Whether the rotary axis `k` (among the written ones) is written rolling over.
+    fn rolls(&self, k: usize) -> bool {
+        self.winding == Winding::Rollover && self.chain.joint(self.rot[k].0).continuous
+    }
+
+    /// The cutter location (the table mount's coordinates) of a point and an axis given in
+    /// the operation's frame.
+    fn cl_of(&self, p: P3, axis: P3) -> Cl {
+        let (p, a) = match &self.local {
+            Some(f) => (f.to_world(p), f.dir_to_world(axis)),
+            None => (p, axis),
+        };
+        Cl::new(self.work.to_world(p), self.work.dir_to_world(a))
+    }
+
+    /// The words of a position: X Y Z, then the rotary axes.
+    fn words(&self, cl: &Cl, q: &[f64]) -> Vec<f64> {
+        let xyz = if self.tcp {
+            self.work.to_local(cl.tip)
+        } else {
+            [
+                q[self.lin[0]] - self.zero[self.lin[0]],
+                q[self.lin[1]] - self.zero[self.lin[1]],
+                q[self.lin[2]] - self.zero[self.lin[2]],
+            ]
+        };
+        let mut v = xyz.to_vec();
+        v.extend(self.rot.iter().map(|(i, _)| q[*i]));
+        v
+    }
+
+    fn fail(&mut self, e: IkError) {
+        if self.error.is_none() {
+            let text = format!("{}: {e}", self.op);
+            self.error = Some(match e {
+                IkError::Limit { .. } => PostError::Travel(text),
+                _ => PostError::CantTilt(text),
+            });
+        }
+    }
+
+    /// The rotary words that changed, and the angles noted as written.
+    fn rotary_words(&mut self, w: &Writer, v: &[f64]) -> String {
+        let mut out = String::new();
+        let step = 10f64.powi(-(self.angle_decimals.min(6) as i32));
+        let round = |a: f64| (a / step).round() * step;
+        for k in 0..self.rot.len() {
+            let letter = self.rot[k].1;
+            // (Rounded first, so 359.9996 is written 0, not 360, and the way it turns is the
+            // way the rounded angles go.)
+            let to = round(v[3 + k]);
+            let (text, key) = if self.rolls(k) {
+                let a = to.rem_euclid(360.0) % 360.0;
+                let a = if (a - 360.0).abs() < step / 2.0 {
+                    0.0
+                } else {
+                    a
+                };
+                let magnitude = decimal(a, self.angle_decimals, w.s.decimal_point);
+                // On LinuxCNC a wrapped axis turns the way the word's sign says (`-0` included):
+                // the sign is the way from where it is to where it goes.
+                let back = to < self.turned_to[k] - step / 2.0;
+                let text = if self.signed && back {
+                    format!("-{}", magnitude.trim_start_matches('-'))
+                } else {
+                    magnitude.clone()
+                };
+                (text, magnitude)
+            } else {
+                let t = decimal(to, self.angle_decimals, w.s.decimal_point);
+                (t.clone(), t)
+            };
+            // (Unchanged where the control is: no word, whatever sign it would carry.)
+            if self.written[k].as_deref() != Some(key.as_str()) {
+                let _ = write!(out, " {letter}{text}");
+                self.written[k] = Some(key);
+                self.turned_to[k] = to;
+            }
+        }
+        out
+    }
+
+    /// The operation's start: the rotary axes to where its first move needs them (the tool is
+    /// up clear), then the tool's length or tool centre point control on.
+    pub fn begin(
+        &mut self,
+        w: &mut Writer,
+        op: &NcOperation,
+        d: Dialect,
+        s: &PostSettings,
+        length_comp: bool,
+    ) {
+        let mut axis = UPRIGHT;
+        let first = op.toolpath.steps.iter().find_map(|st| match st {
+            Step::Axis(a) => {
+                axis = *a;
+                None
+            }
+            Step::Rapid(p) | Step::Feed { to: p, .. } | Step::Arc { to: p, .. } => Some(*p),
+            Step::Drill(c) => Some([c.at[0], c.at[1], c.retract]),
+            _ => None,
+        });
+        if let Some(p) = first {
+            let cl = self.cl_of(p, axis);
+            // (What the first move's lean leaves free is turned to the first lean after it.)
+            let mut leans = op.toolpath.steps.iter().filter_map(|st| match st {
+                Step::Axis(a) => Some(*a),
+                _ => None,
+            });
+            let next = leans.find(|a| dist(*a, axis) > 1e-9);
+            self.look_ahead(next);
+            match self.solve(&cl) {
+                Ok(q) => {
+                    let v = self.words(&cl, &q);
+                    let turn = self.rotary_words(w, &v);
+                    if !turn.is_empty() {
+                        w.block(&format!("G0{turn}"));
+                    }
+                    w.mode = None;
+                    // The slides' words are written by the first move itself.
+                    for (i, _) in &self.rot {
+                        self.q[*i] = q[*i];
+                    }
+                }
+                Err(e) => self.fail(e),
+            }
+        }
+        // Without tool centre point control a rotary axis on the tool's side swings the tip
+        // by the tool's length: the program holds for the length it was posted with.
+        if !self.tcp && self.chain.tool.iter().any(|j| j.is_rotary()) {
+            w.comment(&format!(
+                "T{} is posted {} mm long from the spindle's gauge line: set the tool to it",
+                op.tool_number,
+                decimal(self.length, 3, false)
+            ));
+        }
+        match s.rotary.tcp_for(d, op.tool_number, self.rot.len()) {
+            Some((on, _, _)) => {
+                for b in on {
+                    w.block(&b);
+                }
+            }
+            // (Switched on with the first move down to the work, as `G0 G43 H1 Z…`.)
+            None if length_comp && d != Dialect::Grbl => {
+                self.length_on = Some(format!("G43 H{}", op.tool_number))
+            }
+            None => {}
+        }
+        w.at = [None; 3];
+    }
+
+    /// The operation's end: the feed mode back, tool centre point control off.
+    pub fn end(&mut self, w: &mut Writer, d: Dialect, s: &PostSettings, tool: u32) {
+        self.flush(w);
+        // Under tool centre point control the tool lifts well clear along its own axis before
+        // the control is told to stop keeping the tip (some controls move the axes as it
+        // stops).
+        if self.tcp
+            && let Some(at) = self.cl
+        {
+            let up = Cl {
+                tip: add(at.tip, scale(at.axis, self.retract)),
+                axis: at.axis,
+            };
+            if let Ok(q) = self.chain.solve(&up, self.length, &self.q) {
+                let v = self.words(&up, &q);
+                self.go_rapid(w, &v, false);
+                self.q = q;
+                self.cl = Some(up);
+            }
+        }
+        if self.inverse {
+            w.block("G94");
+            self.inverse = false;
+            w.feed = None;
+        }
+        if let Some((_, _, drops)) = s.rotary.tcp_for(d, tool, self.rot.len()) {
+            for b in std::mem::take(&mut self.tcp_off) {
+                w.block(&b);
+            }
+            self.length_dropped = drops;
+        }
+        w.at = [None; 3];
+        w.mode = None;
+    }
+
+    /// The lean the next move ends with ([`Step::Axis`]).
+    pub fn lean(&mut self, axis: P3) {
+        self.lean = Some(crate::geom::normalize(axis));
+    }
+
+    pub fn rapid(&mut self, w: &mut Writer, p: P3) {
+        self.flush(w);
+        let axis = self.lean.take().unwrap_or(self.axis);
+        self.axis = axis;
+        let cl = self.cl_of(p, axis);
+        let q = match self.solve(&cl) {
+            Ok(q) => q,
+            Err(e) => return self.fail(e),
+        };
+        let first = self.cl.is_none();
+        // A rapid that turns a rotary axis without tool centre point control would swing the
+        // tip off its way: it is made in pieces that keep the tip near the straight line.
+        let turns = self
+            .rot
+            .iter()
+            .any(|(i, _)| (q[*i] - self.q[*i]).abs() > 1.0);
+        if let (Some(from), true, false, false) = (self.cl, turns, self.tcp, first) {
+            let loose = Tolerance {
+                tip: (self.retract / 8.0).clamp(0.1, 2.0),
+                axis: 5.0,
+                tcp: false,
+            };
+            if let Ok(pieces) =
+                self.chain
+                    .linearize_to(&from, &self.q, &cl, &q, self.length, &loose)
+            {
+                for wp in pieces {
+                    let at = from.toward(&cl, wp.t);
+                    let v = self.words(&at, &wp.q);
+                    self.go_rapid(w, &v, false);
+                }
+                self.q = q;
+                self.cl = Some(cl);
+                return;
+            }
+        }
+        let v = self.words(&cl, &q);
+        self.go_rapid(w, &v, first);
+        self.q = q;
+        self.cl = Some(cl);
+    }
+
+    /// A rapid to the words `v`; the operation's first goes across before it goes down (the
+    /// tool comes from its home height).
+    fn go_rapid(&mut self, w: &mut Writer, v: &[f64], across_first: bool) {
+        // (A rolling-over axis turning half a turn or more goes in pieces, as a feed does.)
+        if let Some(from) = self.last.clone()
+            && !across_first
+        {
+            let most = (0..self.rot.len())
+                .filter(|k| self.rolls(*k))
+                .map(|k| (v[3 + k] - from[3 + k]).abs())
+                .fold(0.0, f64::max);
+            if most >= MOST_ROLLED {
+                let n = (most / MOST_ROLLED).floor() as usize + 1;
+                for p in 1..n {
+                    let f = p as f64 / n as f64;
+                    let at: Vec<f64> = from.iter().zip(v).map(|(a, b)| a + (b - a) * f).collect();
+                    self.rapid_block(w, &at, false);
+                }
+            }
+        }
+        self.rapid_block(w, v, across_first);
+    }
+
+    fn rapid_block(&mut self, w: &mut Writer, v: &[f64], across_first: bool) {
+        // (A rapid takes no feed: inverse time stays on through it.)
+        let turn = self.rotary_words(w, v);
+        let p = [v[0], v[1], v[2]];
+        if across_first && w.at[2].is_none() {
+            let z = w.at[2];
+            // (X and Y alone: Z is left for the block after.)
+            w.at[2] = Some(p[2]);
+            let across = w.axes(p);
+            w.at[2] = z;
+            if !across.is_empty() || !turn.is_empty() {
+                let m = w.motion(0);
+                w.block(format!("{m}{across}{turn}").trim());
+            }
+            let down = w.axes(p);
+            if !down.is_empty() {
+                let m = self.with_length(w, &down);
+                w.block(format!("{m}{down}").trim());
+            }
+        } else {
+            let axes = w.axes(p);
+            if !axes.is_empty() || !turn.is_empty() {
+                let m = self.with_length(w, &axes);
+                w.block(format!("{m}{axes}{turn}").trim());
+            }
+        }
+        self.last = Some(v.to_vec());
+    }
+
+    pub fn linear(&mut self, w: &mut Writer, p: P3, feed: f64) {
+        let axis = self.lean.take().unwrap_or(self.axis);
+        self.axis = axis;
+        let to = self.cl_of(p, axis);
+        let Some(from) = self.cl else {
+            // A feed with no position before it: straight there.
+            match self.solve(&to) {
+                Ok(q) => {
+                    let v = self.words(&to, &q);
+                    let minutes = self.chain.least_minutes(&self.q, &q, false).max(1e-6);
+                    self.pending.push(Pending { v, minutes, feed });
+                    self.q = q;
+                    self.cl = Some(to);
+                }
+                Err(e) => self.fail(e),
+            }
+            return;
+        };
+        // Where the tool's lean leaves a rotary axis free here (upright over a platter) and the
+        // move leans it, that axis is turned first, the tool standing where it is: the lean
+        // fixes the axis the moment it starts, and it can't turn there in no time.
+        self.turn_in_place(&from, &to, feed);
+        // Where the move ends: followed from here, the machine keeping to its side.
+        let cut = self
+            .chain
+            .follow(&from, &self.q, &to, self.length)
+            .and_then(|q1| {
+                self.chain
+                    .linearize_to(&from, &self.q, &to, &q1, self.length, &self.tol)
+            });
+        let cut = match cut {
+            Ok(c) => c,
+            Err(e) => return self.fail(e),
+        };
+        let length = dist(from.tip, to.tip);
+        let mut t0 = 0.0;
+        for wp in cut {
+            let cl = from.toward(&to, wp.t);
+            if wp.leap {
+                self.rewind(w, &cl, &wp.q, feed);
+            } else {
+                // The block's time: the tip's way at the feed, or longer where an axis cannot
+                // keep up.
+                let minutes = ((wp.t - t0) * length / feed.max(1e-6))
+                    .max(self.chain.least_minutes(&self.q, &wp.q, false))
+                    .max(1e-7);
+                let v = self.words(&cl, &wp.q);
+                self.pending.push(Pending { v, minutes, feed });
+            }
+            t0 = wp.t;
+            self.q = wp.q;
+            self.cl = Some(cl);
+        }
+    }
+
+    /// Turns the rotary axes the tool's lean at `from` leaves free to where the move to `to`
+    /// needs them the moment it leaves, the tool held at `from` (under tool centre point control
+    /// the turn alone; without it, the slides keep the tip where it is as it turns).
+    fn turn_in_place(&mut self, from: &Cl, to: &Cl, feed: f64) {
+        let free = self.chain.free_rotaries(from, self.length, &self.q);
+        if free.is_empty() || angle_between(from.axis, to.axis) < 1e-9 {
+            return;
+        }
+        // Just after the start the lean has its way: the free axes there.
+        let n = (angle_between(from.axis, to.axis) / 0.05).ceil().max(1.0);
+        let start = from.toward(to, 1.0 / n);
+        let Ok(q) = self.chain.solve(&start, self.length, &self.q) else {
+            return;
+        };
+        let mut turned = self.q.clone();
+        for i in &free {
+            turned[*i] = q[*i];
+        }
+        if free.iter().all(|i| (turned[*i] - self.q[*i]).abs() < 1e-6) {
+            return;
+        }
+        let Ok(turned) = self.chain.solve(from, self.length, &turned) else {
+            return;
+        };
+        let pieces =
+            match self
+                .chain
+                .linearize_to(from, &self.q, from, &turned, self.length, &self.tol)
+            {
+                Ok(p) => p,
+                Err(e) => return self.fail(e),
+            };
+        for wp in pieces {
+            // (A turn in place: as long as the slowest axis takes.)
+            let minutes = self.chain.least_minutes(&self.q, &wp.q, false).max(1e-7);
+            let v = self.words(from, &wp.q);
+            self.pending.push(Pending { v, minutes, feed });
+            self.q = wp.q;
+        }
+    }
+
+    /// A rotary axis has run out mid-cut: out along the tool's axis, round with the tool
+    /// clear, and back in to `cl` at the axis values `q`.
+    fn rewind(&mut self, w: &mut Writer, cl: &Cl, q: &[f64], feed: f64) {
+        self.flush(w);
+        self.rewinds += 1;
+        w.comment("Rewind: the tool lifts clear while a rotary axis comes round");
+        let Some(here) = self.cl else {
+            return;
+        };
+        let lifted = |c: &Cl| Cl {
+            tip: add(c.tip, scale(c.axis, self.retract)),
+            axis: c.axis,
+        };
+        let (out, back) = (lifted(&here), lifted(cl));
+        let (q_out, q_back) = match (
+            self.chain.solve(&out, self.length, &self.q),
+            self.chain.solve(&back, self.length, q),
+        ) {
+            (Ok(a), Ok(b)) => (a, b),
+            (Err(e), _) | (_, Err(e)) => return self.fail(e),
+        };
+        let v = self.words(&out, &q_out);
+        let minutes = (self.retract / feed.max(1e-6)).max(1e-7);
+        self.pending.push(Pending { v, minutes, feed });
+        self.flush(w);
+        let v = self.words(&back, &q_back);
+        self.go_rapid(w, &v, false);
+        let v = self.words(cl, q);
+        self.pending.push(Pending { v, minutes, feed });
+        self.flush(w);
+    }
+
+    /// Writes the feed moves waiting, those on one line as one block.
+    pub fn flush(&mut self, w: &mut Writer) {
+        let pending = std::mem::take(&mut self.pending);
+        let mut i = 0;
+        while i < pending.len() {
+            let mut j = i;
+            if let Some(base) = &self.last {
+                // The furthest move the ones before it lie on the way to, at times in step:
+                // tried twice as far each time, then narrowed down.
+                let within = 0.5 * 10f64.powi(-(w.s.decimals.min(6) as i32));
+                let fits = |to: usize| on_one_line(base, &pending[i..=to], within);
+                let mut step = 1;
+                loop {
+                    let next = (j + step).min(pending.len() - 1);
+                    if next == j {
+                        break;
+                    }
+                    if fits(next) {
+                        j = next;
+                        step *= 2;
+                    } else {
+                        let (mut good, mut bad) = (j, next);
+                        while bad - good > 1 {
+                            let mid = (good + bad) / 2;
+                            if fits(mid) {
+                                good = mid;
+                            } else {
+                                bad = mid;
+                            }
+                        }
+                        j = good;
+                        break;
+                    }
+                }
+            }
+            let minutes: f64 = pending[i..=j].iter().map(|p| p.minutes).sum();
+            self.feed_block(w, &pending[j].v, minutes, pending[j].feed);
+            i = j + 1;
+        }
+    }
+
+    fn feed_block(&mut self, w: &mut Writer, v: &[f64], minutes: f64, feed: f64) {
+        // A rolling-over axis turns the shortest way to each angle written: a block turning it
+        // half a turn or more is written in pieces that each turn less.
+        if let Some(from) = self.last.clone() {
+            let most = (0..self.rot.len())
+                .filter(|k| self.rolls(*k))
+                .map(|k| (v[3 + k] - from[3 + k]).abs())
+                .fold(0.0, f64::max);
+            if most >= MOST_ROLLED {
+                let n = (most / MOST_ROLLED).floor() as usize + 1;
+                for p in 1..=n {
+                    let f = p as f64 / n as f64;
+                    let at: Vec<f64> = from.iter().zip(v).map(|(a, b)| a + (b - a) * f).collect();
+                    self.one_block(w, &at, minutes / n as f64, feed);
+                }
+                return;
+            }
+        }
+        self.one_block(w, v, minutes, feed);
+    }
+
+    fn one_block(&mut self, w: &mut Writer, v: &[f64], minutes: f64, feed: f64) {
+        self.length_now(w);
+        // A move no word would show (a hair's breadth) is no block of its own: its time goes
+        // to the next.
+        let minutes = minutes + std::mem::take(&mut self.carried);
+        if let Some(from) = &self.last {
+            // (Under a micron, or what no word would show: a hair a control can't follow at feed
+            // and would be given an absurd inverse-time feed for.)
+            let within = (0.5 * 10f64.powi(-(w.s.decimals.min(6) as i32))).max(1e-3);
+            let angle = (0.5 * 10f64.powi(-(self.angle_decimals.min(6) as i32))).max(1e-3);
+            let unseen = from
+                .iter()
+                .zip(v)
+                .enumerate()
+                .all(|(k, (a, b))| (a - b).abs() < if k < 3 { within } else { angle });
+            if unseen {
+                self.carried = minutes;
+                return;
+            }
+        }
+        let from = self.last.clone();
+        let (lin, turn) = match &from {
+            Some(f) => (
+                dist([f[0], f[1], f[2]], [v[0], v[1], v[2]]),
+                f[3..]
+                    .iter()
+                    .zip(&v[3..])
+                    .map(|(a, b)| (a - b) * (a - b))
+                    .sum::<f64>()
+                    .sqrt(),
+            ),
+            None => (0.0, 0.0),
+        };
+        let inverse = !self.tcp && !self.fixed && self.feed_mode == RotaryFeed::InverseTime;
+        if inverse != self.inverse {
+            w.block(if inverse { "G93" } else { "G94" });
+            self.inverse = inverse;
+            w.feed = None;
+        }
+        let turn_words = self.rotary_words(w, v);
+        let axes = w.axes([v[0], v[1], v[2]]);
+        if axes.is_empty() && turn_words.is_empty() {
+            return;
+        }
+        let m = w.motion(1) + &w.comp_words();
+        let f = if inverse {
+            // Written on every block: one over its minutes.
+            let f = (1.0 / minutes.max(1e-9)).clamp(0.001, 99_999.0);
+            format!(" F{}", decimal(f, 3, w.s.decimal_point))
+        } else {
+            let rate = if self.tcp {
+                // The control feeds the tip; a block that only turns is in degrees a minute.
+                if lin > 1e-6 {
+                    feed
+                } else {
+                    turn / minutes.max(1e-9)
+                }
+            } else {
+                match self.feed_mode {
+                    RotaryFeed::AllAxes => lin.hypot(turn) / minutes.max(1e-9),
+                    _ if lin > 1e-6 => lin / minutes.max(1e-9),
+                    _ => turn / minutes.max(1e-9),
+                }
+            };
+            w.feed_word(rate)
+        };
+        w.block(format!("{m}{axes}{turn_words}{f}").trim());
+        self.last = Some(v.to_vec());
+    }
+}
+
+/// The most a rolling-over axis turns in one block (degrees): well short of the half turn
+/// past which the control's shortest way round is the other way.
+const MOST_ROLLED: f64 = 170.0;
+
+/// Whether every move but the last lies on the straight way from `base` to the last, one
+/// after another along it (within half of the last decimal a word is written to: a faceted
+/// surface's hair's breadths don't break a helix into a block a facet).
+fn on_one_line(base: &[f64], moves: &[Pending], within: f64) -> bool {
+    let end = &moves[moves.len() - 1];
+    if moves.iter().any(|m| (m.feed - end.feed).abs() > 1e-9) {
+        return false;
+    }
+    let along: Vec<f64> = end.v.iter().zip(base).map(|(b, a)| b - a).collect();
+    let l2: f64 = along.iter().map(|d| d * d).sum();
+    if l2 <= 0.0 {
+        return false;
+    }
+    let mut last = 0.0;
+    for m in &moves[..moves.len() - 1] {
+        // Where along the line it is, and how far off it.
+        let f =
+            m.v.iter()
+                .zip(base)
+                .zip(&along)
+                .map(|((x, a), d)| (x - a) * d)
+                .sum::<f64>()
+                / l2;
+        let off =
+            m.v.iter()
+                .zip(base.iter().zip(&along))
+                .any(|(x, (a, d))| (x - (a + d * f)).abs() > within);
+        if off || f < last - 1e-9 || f > 1.0 + 1e-9 {
+            return false;
+        }
+        last = f;
+    }
+    true
+}
+
+/// The note at a program's head for each rotary axis written rolling over: what the control
+/// must be set to.
+pub(super) fn rollover_notes(chain: &Chain, d: Dialect, s: &PostSettings) -> Vec<String> {
+    if s.rotary.winding != Winding::Rollover {
+        return Vec::new();
+    }
+    let Ok((_, rot)) = words_of(chain) else {
+        return Vec::new();
+    };
+    rot.iter()
+        .filter(|(i, _)| chain.joint(*i).continuous)
+        .map(|(_, c)| match d {
+            Dialect::LinuxCnc => format!(
+                "{c} rolls over, the sign giving the direction: [AXIS_{c}] WRAPPED_ROTARY = 1 in \
+                 the INI; its words are 0 to 360, a minus sign turning it backward"
+            ),
+            Dialect::Fanuc => {
+                format!("{c} rolls over the shortest way: parameter 1008 ROA = 1, RAB = 0 for {c}")
+            }
+            Dialect::Mach3 => format!(
+                "{c} rolls over the shortest way: General Config, Rot 360 rollover and \
+                 Shortest Rot on for {c}"
+            ),
+            Dialect::Haas | Dialect::Grbl => format!(
+                "{c} rolls over the shortest way: set the control's roll-over and shortest-way \
+                 parameters for {c}"
+            ),
+        })
+        .collect()
+}
+
+/// The rotary axes back to zero with the tool up clear, before work in the work offset's own
+/// axes or at the program's end.
+pub(super) fn unturn(
+    w: &mut Writer,
+    chain: &Chain,
+    d: Dialect,
+    s: &PostSettings,
+    at: Option<&[f64]>,
+) {
+    let Ok((_, rot)) = words_of(chain) else {
+        return;
+    };
+    if rot.is_empty() {
+        return;
+    }
+    super::retract_home(w, d);
+    let zero = decimal(0.0, 0, w.s.decimal_point);
+    let mut words = Vec::new();
+    for (i, c) in &rot {
+        let q = at.map_or(0.0, |q| q[*i]);
+        let continuous = chain.joint(*i).continuous;
+        if continuous && s.rotary.winding == Winding::Rollover {
+            // Back to 0 the shortest way (on LinuxCNC the sign says which way that is).
+            let r = q.rem_euclid(360.0);
+            if d != Dialect::LinuxCnc && (r - 180.0).abs() < 1e-6 {
+                // Half a turn from 0: either way round is as short, so the control isn't left
+                // to choose: by 90 first, then 0.
+                words.push(format!("{c}{}", decimal(90.0, 0, w.s.decimal_point)));
+                words.push(format!("\n{c}{zero}"));
+            } else {
+                let back = d == Dialect::LinuxCnc && r > 1e-9 && r < 180.0;
+                words.push(format!("{c}{}{zero}", if back { "-" } else { "" }));
+            }
+        } else if continuous && (q / 360.0).round() != 0.0 {
+            // A wound axis stops at the whole turn nearest: the work as it started, without
+            // turning back every turn the job made.
+            let whole = 360.0 * (q / 360.0).round();
+            let text = decimal(whole, 3, w.s.decimal_point);
+            let turns = (whole / 360.0).abs();
+            w.comment(&format!(
+                "{c} stops at {c}{text}, {turns} whole turn{} on: zero {c} there before the next \
+                 program",
+                if turns == 1.0 { "" } else { "s" }
+            ));
+            words.push(format!("{c}{text}"));
+        } else {
+            words.push(format!("{c}{zero}"));
+        }
+    }
+    // (A word after a line break goes in a block of its own after the first.)
+    let mut first: Vec<String> = Vec::new();
+    let mut then: Vec<String> = Vec::new();
+    for wd in words {
+        match wd.strip_prefix('\n') {
+            Some(t) => then.push(t.to_string()),
+            None => first.push(wd),
+        }
+    }
+    w.block(&format!("G0 {}", first.join(" ")));
+    if !then.is_empty() {
+        w.block(&format!("G0 {}", then.join(" ")));
+    }
+    w.at = [None; 3];
+    w.mode = None;
+}
+
+impl Tilt {
+    /// The plane's frame in the setup's coordinates, rebuilt from its angles.
+    pub fn frame(&self) -> Frame {
+        let [a, b, c] = self.euler.map(f64::to_radians);
+        let (sa, ca) = a.sin_cos();
+        let (sb, cb) = b.sin_cos();
+        let (sc, cc) = c.sin_cos();
+        // R = Rz(a)·Rx(b)·Rz(c); its columns are the frame's axes.
+        Frame {
+            origin: self.origin,
+            x: [ca * cc - sa * cb * sc, sa * cc + ca * cb * sc, sb * sc],
+            y: [-ca * sc - sa * cb * cc, -sa * sc + ca * cb * cc, sb * cc],
+            z: [sa * sb, -ca * sb, cb],
+        }
+    }
+}

@@ -636,6 +636,165 @@ pub struct SetMateValues {
     pub values: Vec<MateValueParam>,
 }
 
+/// An axis of a machine to change, found by its mate.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct MachineAxisParam {
+    /// The name of the mate that moves the axis (as get_machine lists it), or the axis's
+    /// current name.
+    pub mate: String,
+    /// The name it is programmed by: "X", "A", "J3".
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The axis counts the other way from its mate.
+    #[serde(default)]
+    pub reversed: Option<bool>,
+    /// The value it parks at (mm or degrees).
+    #[serde(default)]
+    pub home: Option<f64>,
+    /// Its least and greatest value (mm or degrees); omitted: the mate's limits.
+    #[serde(default)]
+    pub min: Option<f64>,
+    #[serde(default)]
+    pub max: Option<f64>,
+    /// A rotary axis without stops.
+    #[serde(default)]
+    pub continuous: Option<bool>,
+}
+
+/// A named position of an actuator.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MachinePositionParam {
+    /// "Open", "Pocket 1".
+    pub name: String,
+    /// The mate's value there (mm or degrees).
+    pub value: f64,
+}
+
+/// A mate that moves something other than the tool or the work (a door, a tool carousel).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct MachineActuatorParam {
+    /// The mate's name: one of get_machine's free_mates, or an actuator's mate.
+    pub mate: String,
+    /// The actuator's name; omitted: the mate's.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Its named positions (replacing those it has).
+    #[serde(default)]
+    pub positions: Option<Vec<MachinePositionParam>>,
+    /// It is the tool magazine: its positions become the pockets, numbered from 1.
+    #[serde(default)]
+    pub magazine: Option<bool>,
+}
+
+/// The machine's controller.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct MachineControllerParam {
+    /// A catalogue machine to start from, by name ("3-axis mill — Fanuc"): its dialect, post
+    /// settings, spindle and tool changer.
+    #[serde(default)]
+    pub catalogue: Option<String>,
+    /// The G-code dialect: Fanuc, Haas, LinuxCNC, GRBL or Mach3.
+    #[serde(default)]
+    pub dialect: Option<String>,
+    /// Tool centre point control (a machine with rotary axes): the controller keeps the tool's
+    /// tip on the path while they turn.
+    #[serde(default)]
+    pub tcp: Option<bool>,
+    /// It has an automatic tool changer.
+    #[serde(default)]
+    pub tool_changer: Option<bool>,
+    /// Its fastest spindle (rpm).
+    #[serde(default)]
+    pub max_spindle: Option<f64>,
+}
+
+/// Sets an assembly up as a machine CAM can drive.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct SetMachine {
+    /// The Assembly tab's name; omitted: the active tab.
+    #[serde(default)]
+    pub assembly: Option<String>,
+    /// Where the tool goes on: a frame on the spindle's nose in its instance's own coordinates,
+    /// Z out of the spindle, toward the work. Omitted: as the assembly has it.
+    #[serde(default)]
+    pub tool_mount: Option<MateFrame>,
+    /// Where the work goes on: a frame on the table (or chuck) in its instance's own
+    /// coordinates, Z out of the table. Omitted: as the assembly has it.
+    #[serde(default)]
+    pub table_mount: Option<MateFrame>,
+    /// Changes to the axes the mates make between the mounts (found by their mates' names);
+    /// an axis not listed keeps what it has, or what is proposed for it.
+    #[serde(default)]
+    pub axes: Option<Vec<MachineAxisParam>>,
+    /// Free mates to make actuators of, or actuators to change.
+    #[serde(default)]
+    pub actuators: Option<Vec<MachineActuatorParam>>,
+    #[serde(default)]
+    pub controller: Option<MachineControllerParam>,
+    /// Remove the machine definition instead: the assembly is an ordinary one again.
+    #[serde(default)]
+    pub clear: bool,
+}
+
+/// Where to move an actuator: a value, or one of its named positions.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum ActuatorTarget {
+    /// mm or degrees.
+    Value(f64),
+    /// A named position ("Open", "Pocket 3").
+    Position(String),
+}
+
+/// Moves a machine's axes.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct JogMachine {
+    /// The Assembly tab's name; omitted: the active tab.
+    #[serde(default)]
+    pub assembly: Option<String>,
+    /// Axis values by axis name, in mm or degrees: {"B": 30, "C": 45}. An axis not named stays
+    /// where it is.
+    #[serde(default)]
+    pub axes: std::collections::BTreeMap<String, f64>,
+    /// Actuators by name, each to a value (mm or degrees) or to one of its named positions:
+    /// {"Magazine": "Pocket 3"}.
+    #[serde(default)]
+    pub actuators: Option<std::collections::BTreeMap<String, ActuatorTarget>>,
+    /// Every axis to its home first (the axes named in `axes` then go where it says).
+    #[serde(default)]
+    pub home: bool,
+    /// Move the instances in the document (one undo step). Default false: a preview in the
+    /// view, with the Machine Builder open on the assembly.
+    #[serde(default)]
+    pub commit: bool,
+}
+
+/// A CAM Studio tab, by name.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct GetCam {
+    /// The CAM Studio tab's name; omitted: the active tab, or the document's only CAM Studio.
+    #[serde(default)]
+    pub cam: Option<String>,
+}
+
+/// Chooses the machine of a CAM Studio's job.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct SetCamMachine {
+    /// The CAM Studio tab's name; omitted: the active tab, or the document's only CAM Studio.
+    #[serde(default)]
+    pub cam: Option<String>,
+    /// The job's name; omitted: the active job.
+    #[serde(default)]
+    pub job: Option<String>,
+    /// A catalogue machine, by name ("3-axis mill — Fanuc"). Give this or `assembly`.
+    #[serde(default)]
+    pub catalogue: Option<String>,
+    /// An Assembly tab of this document that is set up as a machine (set_machine): the job's
+    /// machine is the assembly's, and follows it as it changes.
+    #[serde(default)]
+    pub assembly: Option<String>,
+}
+
 /// A PCB Studio board, by name.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct BoardName {

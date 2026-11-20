@@ -1,0 +1,67 @@
+// Simulate's exact stock on a 3-axis run: brep-bench's cnc/bull-nose-profile
+// (`fixtures/cnc/bull-nose-profile.cadrs`): a bull-nose mill (⌀8, corner 1.5) profiles a groove
+// round a six-lobed flower in three step-downs, its tip on the flower's arcs. The stock is cut
+// as a solid of the kernel's by the tool swept along each arc: its walls cylinders, its
+// corners tori, drawn from their own surfaces with their edges (no facets, no lattice). The
+// part is hidden (the preview bar's Part): what shows is the stock as the tool leaves it.
+// cache-filling Just opened, paused at the start: under the slider the run-ahead cache fills
+//    in (green ready to play, blue being made, red not yet).
+// cache-ready Still paused: every cut made, the strip all green (playing is now instant).
+// 00 The start: the stock, its top clean and flat, the tool over it.
+// 00b A second in: the first arc just begun, the slot cut behind the tool and nothing ahead.
+// 01 A fifth of the way: the first lap at −4 part way round, the cut ending in the tool's
+//    shape where the tool is.
+// 02 Half way: the first lap done, the second (−8) on its way.
+// 03 Four fifths: the last lap (−10) going round.
+// 04 The end: the groove, its floor's edges rounded by the mill's corner (the case's solid).
+Scenario(
+    start: Some("document"),
+    steps: [
+        SetTimeout(240),
+        WaitFor("document-shell"),
+        Key("F12"),
+        Key("F12"),
+        Custom("fixture cnc/bull-nose-profile"),
+        Wait(5),
+        Click(ui("tab-cam")),
+        WaitFor("cam-tree"),
+        Wait(5),
+        Click(ui("cam-tb-regenerate")),
+        Wait(10),
+        Click(ui("cam-tb-preview")),
+        WaitFor("cam-preview-bar"),
+        Click(ui("cam-pv-simulate")),
+        Click(ui("cam-pv-part")),
+        Custom("cam fit"),
+        Custom("cam pause"),
+        Wait(3),
+        Screenshot("cache-filling"),
+        Custom("cam cache-wait"),
+        Wait(3),
+        Screenshot("cache-ready"),
+        Custom("cam preview-at 0"),
+        MoveTo(1420, 900),
+        Wait(5),
+        Screenshot("00-start"),
+        Custom("cam preview-at 0.03"),
+        MoveTo(1420, 900),
+        Wait(5),
+        Screenshot("00b-first-arc-starts"),
+        Custom("cam preview-at 0.2"),
+        MoveTo(1420, 900),
+        Wait(5),
+        Screenshot("01-first-lap"),
+        Custom("cam preview-at 0.5"),
+        MoveTo(1420, 900),
+        Wait(5),
+        Screenshot("02-second-lap"),
+        Custom("cam preview-at 0.8"),
+        MoveTo(1420, 900),
+        Wait(5),
+        Screenshot("03-last-lap"),
+        Custom("cam preview-end"),
+        MoveTo(1420, 900),
+        Wait(10),
+        Screenshot("04-end"),
+    ],
+)

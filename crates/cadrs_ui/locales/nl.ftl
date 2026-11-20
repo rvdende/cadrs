@@ -3329,6 +3329,7 @@ cam-go-to-end = Naar einde
 cam-reset = Terug naar begin
 cam-close-the-preview = Voorbeeld sluiten
 cam-drag-through-program = Sleep om door het programma te bewegen
+cam-simulated-ahead = Vooruit gesimuleerd: groen klaar om af te spelen, blauw wordt berekend, rood nog niet, oranje niet exact gesneden
 cam-toolpath = Gereedschapsbaan
 cam-pause-on-collision = Pauzeren bij botsing
 cam-readout-feed = voeding { $feed } mm/min

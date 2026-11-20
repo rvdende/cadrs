@@ -44,13 +44,14 @@ pub(super) fn keep_out_z(input: &Input, z: f64) -> f64 {
 
 /// Where the tool's centre may go at depth `z` without touching the model (keeping the wall
 /// and floor stock), within `limit`; `solid` is the material at [`keep_out_z`].
-pub(super) fn free_centres_in(input: &Input, solid: &Region, limit: &Region) -> Region {
+pub(super) fn free_centres_in(input: &Input, z: f64, solid: &Region, limit: &Region) -> Region {
     let p = input.params;
     let r = input.tool.radius();
     // Padded by the offset's tolerance: its round corners' chords cut inside the true arc.
     let mut keep_out = region::offset(solid, r + p.wall_stock + region::ARC_TOLERANCE);
-    // The workholding: its whole footprint, the tool and its clearance off it.
-    let fixtures = fixture_footprint(input);
+    // The workholding that stands above the depth: its footprint, the tool and its clearance
+    // off it (a vise's base or a fixture plate under the cut is passed over).
+    let fixtures = fixture_footprint(input, z);
     if !fixtures.is_empty() {
         let clear = r + p.collision.shank_clearance.max(0.5);
         keep_out = region::union(&keep_out, &region::offset(&fixtures, clear));
@@ -58,8 +59,9 @@ pub(super) fn free_centres_in(input: &Input, solid: &Region, limit: &Region) -> 
     region::difference(limit, &keep_out)
 }
 
-/// The workholding's footprint from above (worked out once for a generation's fixtures).
-pub(super) fn fixture_footprint(input: &Input) -> Region {
+/// The footprint from above of the workholding that stands above the height `z` (worked out
+/// once for a generation's fixtures and a level).
+pub(super) fn fixture_footprint(input: &Input, z: f64) -> Region {
     use std::hash::{Hash, Hasher};
     use std::sync::Mutex;
     static CACHE: Mutex<Option<(u64, Region)>> = Mutex::new(None);
@@ -75,6 +77,7 @@ pub(super) fn fixture_footprint(input: &Input) -> Region {
             }
         }
     }
+    z.to_bits().hash(&mut h);
     let key = h.finish();
     // (The lock only round the lookups: toolpaths calculated at once don't wait on the union.)
     if let Some((k, r)) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
@@ -82,14 +85,15 @@ pub(super) fn fixture_footprint(input: &Input) -> Region {
     {
         return r.clone();
     }
-    let r = crate::model::Model::from_triangles("fixtures", input.fixtures.to_vec()).silhouette();
+    let r =
+        crate::model::Model::from_triangles("fixtures", input.fixtures.to_vec()).shadow_above(z);
     *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some((key, r.clone()));
     r
 }
 
 fn free_centres(input: &Input, z: f64, limit: &Region) -> Region {
     let solid = material_above(input, keep_out_z(input, z));
-    free_centres_in(input, &solid, limit)
+    free_centres_in(input, z, &solid, limit)
 }
 
 /// The stock's footprint grown so the tool clears its edges (centres up to just inside the
@@ -299,7 +303,7 @@ pub fn face(input: &Input) -> Result<Toolpath, String> {
     let solids = materials_above(input, &zs);
     let mut material_top = top;
     for (z, solid) in levels.into_iter().zip(&solids) {
-        let free = free_centres_in(input, solid, &region::offset(&covered, ext));
+        let free = free_centres_in(input, z, solid, &region::offset(&covered, ext));
         let lines = hatch(
             &region::intersection(&free, &covered),
             p.angle,
@@ -371,7 +375,7 @@ pub fn rough(input: &Input, three_d: bool) -> Result<Toolpath, String> {
     let mut per_level: Vec<(f64, f64, Vec<Face>)> = Vec::new();
     let mut prev = top;
     for (z, solid) in levels.into_iter().zip(&solids) {
-        let mut free = free_centres_in(input, solid, &limit);
+        let mut free = free_centres_in(input, z, solid, &limit);
         if p.smooth_corners > 0.0 {
             free = smooth(&free, p.smooth_corners);
         }
@@ -737,7 +741,29 @@ pub fn profile(input: &Input) -> Result<Toolpath, String> {
                 .into(),
         );
     }
-    Ok(b.finish())
+    // Along the picked circles (offset by the tool) as their arcs.
+    let dists: Vec<f64> = (0..passes)
+        .map(|k| {
+            if p.side == Side::On {
+                0.0
+            } else {
+                r + p.wall_stock + k as f64 * p.step_over
+            }
+        })
+        .collect();
+    let circles = super::arcs::offsets(&picked_circles(input), &dists);
+    Ok(super::arcs::onto_circles(b.finish(), &circles))
+}
+
+/// The exact circles of the picked edges that are circles (centre, unit normal, radius).
+fn picked_circles(input: &Input) -> Vec<(crate::geom::P3, crate::geom::P3, f64)> {
+    input
+        .params
+        .drive
+        .edges
+        .iter()
+        .filter_map(|n| input.model.edge(n)?.circle)
+        .collect()
 }
 
 /// 2-axis chamfer: a chamfer mill along the top edges (picked, else the top faces' outlines),
@@ -872,7 +898,9 @@ pub fn engrave(input: &Input) -> Result<Toolpath, String> {
             above = *z;
         }
     }
-    Ok(b.finish())
+    // Along the picked circles as their arcs.
+    let circles = super::arcs::offsets(&picked_circles(input), &[0.0]);
+    Ok(super::arcs::onto_circles(b.finish(), &circles))
 }
 
 /// Flatlands: finishes the model's flat floors (or the picked ones) with rings offset inward.

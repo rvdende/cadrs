@@ -346,6 +346,13 @@ pub enum HealOp {
         /// The largest width of a tail.
         max_width: f64,
     },
+    /// Faces no wider than `width` (two long edges side by side, the rest no longer than the
+    /// width) collapsed onto one of their long edges: the slivers cuts a few microns apart
+    /// leave (a simulated stock's, cut after cut), which later booleans would have to split.
+    Slivers {
+        /// The widest face collapsed.
+        width: f64,
+    },
 }
 
 /// A kernel session: it owns bodies and performs modeling operations on them.
@@ -561,6 +568,20 @@ pub trait Kernel {
     ) -> Result<OpResult> {
         let _ = (target, tool, motion);
         Err(KernelError::Unsupported("cuts by swept solids"))
+    }
+
+    /// [`Kernel::cut_swept`] made only by its exact ways: where none of them takes the cut it
+    /// fails (`KernelError::Unsupported`) instead of falling back to the meshed cut, for a
+    /// caller that would rather cut in smaller pieces than have a stock of flat facets (a
+    /// CAM simulation's stock).
+    fn cut_swept_exact(
+        &mut self,
+        target: BodyId,
+        tool: BodyId,
+        motion: &SolidMotion,
+    ) -> Result<OpResult> {
+        let _ = (target, tool, motion);
+        Err(KernelError::Unsupported("exact cuts by swept solids"))
     }
 
     /// [`Kernel::cut_swept`] at each of `copies` places of the tool a whole turn apart about the

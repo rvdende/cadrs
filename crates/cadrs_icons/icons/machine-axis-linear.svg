@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="2.5 1.1 21.1 21.1" width="24" height="24" fill="none" stroke="#262626" stroke-width="1.1" stroke-linejoin="round" stroke-linecap="round">
+  <polygon points="9.6,8 10.81,8.7 5.62,11.7 4.4,11" fill="#d4d4d4"/>
+  <polygon points="10.81,8.7 5.62,11.7 5.62,14.3 10.81,11.3" fill="#a4a4a4"/>
+  <polygon points="4.4,11 5.62,11.7 5.62,14.3 4.4,13.6" fill="#747474"/>
+  <polygon points="9.51,10.65 19.21,16.25 16.61,17.75 6.92,12.15" fill="#d4d4d4"/>
+  <polygon points="19.21,16.25 16.61,17.75 16.61,19.15 19.21,17.65" fill="#a4a4a4"/>
+  <polygon points="6.92,12.15 16.61,17.75 16.61,19.15 6.92,13.55" fill="#747474"/>
+  <polygon points="13.76,8.4 17.57,10.6 12.37,13.6 8.56,11.4" fill="#ffffff"/>
+  <polygon points="17.57,10.6 12.37,13.6 12.37,16.8 17.57,13.8" fill="#a4a4a4"/>
+  <polygon points="8.56,11.4 12.37,13.6 12.37,16.8 8.56,14.6" fill="#747474"/>
+  <polygon points="20.51,14.3 21.72,15 16.53,18 15.32,17.3" fill="#d4d4d4"/>
+  <polygon points="21.72,15 16.53,18 16.53,20.6 21.72,17.6" fill="#a4a4a4"/>
+  <polygon points="15.32,17.3 16.53,18 16.53,20.6 15.32,19.9" fill="#747474"/>
+  <line x1="13.06" y1="5.2" x2="10.81" y2="3.9" stroke="#2563eb"/>
+  <polygon points="8.73,2.7 12.03,2.99 10.63,5.41" fill="#2563eb" stroke="#2563eb"/>
+  <line x1="13.06" y1="5.2" x2="15.32" y2="6.5" stroke="#2563eb"/>
+  <polygon points="17.39,7.7 14.1,7.41 15.5,4.99" fill="#2563eb" stroke="#2563eb"/>
+</svg>

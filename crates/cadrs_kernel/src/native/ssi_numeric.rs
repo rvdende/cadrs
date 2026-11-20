@@ -646,7 +646,8 @@ fn edge_seeds(
             starts.push((t0, f0));
         }
         if (g0 < 0.0) != (g1 < 0.0) && g0 != 0.0 && g1 != 0.0 {
-            // Illinois regula falsi on the signed distance.
+            // Illinois regula falsi on the signed distance, to within the tolerance: the root
+            // is then solved exactly, with the other surface's parameters (`edge_newton`).
             let (mut a, mut b, mut ga, mut gb) = (t0, t1, g0, g1);
             let mut h = f0;
             let mut side = 0;
@@ -660,7 +661,7 @@ fn edge_seeds(
                 let (u, v) = at(m);
                 let (gm, fm) = sdist(o, &s.eval(u, v), h);
                 h = fm;
-                if gm.abs() < ctx.tol * 1e-3 || (b - a).abs() < 1e-14 * (1.0 + a.abs()) {
+                if gm.abs() < ctx.tol || (b - a).abs() < 1e-14 * (1.0 + a.abs()) {
                     a = m;
                     b = m;
                     break;

@@ -1117,6 +1117,7 @@ impl Kernel for NativeKernel {
     }
 
     fn sweep_solid(&mut self, body: BodyId, motion: &SolidMotion) -> Result<OpResult> {
+        super::sweep_solid::clear_declined();
         super::sweep_cache::sweep_solid(self, body, motion)
     }
 
@@ -1126,7 +1127,18 @@ impl Kernel for NativeKernel {
         tool: BodyId,
         motion: &SolidMotion,
     ) -> Result<OpResult> {
+        super::sweep_solid::clear_declined();
         super::sweep_solid::cut_swept(self, target, tool, motion)
+    }
+
+    fn cut_swept_exact(
+        &mut self,
+        target: BodyId,
+        tool: BodyId,
+        motion: &SolidMotion,
+    ) -> Result<OpResult> {
+        super::sweep_solid::clear_declined();
+        super::sweep_solid::exact_only(|| super::sweep_solid::cut_swept(self, target, tool, motion))
     }
 
     fn cut_swept_indexed(

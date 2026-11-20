@@ -206,6 +206,8 @@ impl Command for DeleteInstances {
         // P3B.9: a relation goes with its mates.
         asm.drop_orphan_relations();
         super::folders::tidy(asm);
+        // #278: so do the machine's axes, actuators and mounts on them.
+        super::machine::commands::prune(doc, self.element);
         Ok(())
     }
 }
@@ -516,6 +518,8 @@ impl Command for DeleteLocalConnector {
             !f.mate().is_some_and(|m| m.all_connectors().any(|c| matches!(c.anchor, super::connector::ConnectorAnchor::Local { id: x } if x == id)))
         });
         super::folders::tidy(asm);
+        // #278: a machine's mount on it goes, and the axes of the mates that went.
+        super::machine::commands::prune(doc, self.element);
         Ok(())
     }
 }
@@ -564,6 +568,8 @@ impl Command for DeleteMateFeatures {
             }
         }
         super::folders::tidy(asm);
+        // #278: the machine's axes and actuators on the deleted mates go with them.
+        super::machine::commands::prune(doc, self.element);
         Ok(())
     }
 }

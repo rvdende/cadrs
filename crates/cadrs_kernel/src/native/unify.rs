@@ -17,7 +17,7 @@ fn co_uv(b: &Body, c: &Coedge, end: bool) -> P2 {
 
 /// The p-curve of an edge on `s`, shifted by periods so its start (in the coedge's direction)
 /// is at `at`.
-fn pc_from(s: &Surface, e: &Edge, fwd: bool, at: Option<P2>) -> Curve {
+pub(crate) fn pc_from(s: &Surface, e: &Edge, fwd: bool, at: Option<P2>) -> Curve {
     // (Hinted by `at`: on a closed B-spline surface, an edge along the seam lies at the end
     // of the range the chain is at.)
     let pc = pcurve::pcurve(s, &e.curve, e.t[0], e.t[1], at);

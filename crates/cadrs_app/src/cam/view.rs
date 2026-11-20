@@ -8,6 +8,9 @@
 //! - **Stock**: the active job's stock, see-through (Show stock on the toolbar).
 //! - **Work coordinate systems**: each setup's and each shown work plane's triad (X red, Y green,
 //!   Z blue).
+//!
+//! All of it is the work's: moved with it while the view keeps the machine still
+//! ([`super::machine_view::Relative::Machine`]).
 
 use std::collections::HashMap;
 
@@ -20,6 +23,7 @@ use cadrs_core::cam::cadrs_cam::{Frame, P3};
 use cadrs_core::cam::program;
 use cadrs_core::cam::{CamId, OpKind};
 
+use super::machine_view::{MachineView, OnWork};
 use super::{CamUi, Computed, Status, active_cam};
 use crate::{ActiveDocument, AppState};
 
@@ -30,11 +34,16 @@ impl Plugin for ViewPlugin {
         app.add_systems(
             Update,
             (sync_toolpaths, sync_stock, draw_frames)
+                .in_set(ViewSet)
                 .after(crate::parts::PartsSet)
                 .run_if(in_state(AppState::Document)),
         );
     }
 }
+
+/// The systems that draw what this module draws.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ViewSet;
 
 /// The colour of a move.
 pub fn move_color(s: &Segment, beam: bool) -> Color {
@@ -219,6 +228,7 @@ fn sync_toolpaths(
                 depth_bias: if key.1 { -0.001 } else { -0.0005 },
             },
             Transform::default(),
+            OnWork,
             DespawnOnExit(AppState::Document),
         ));
     }
@@ -292,6 +302,7 @@ fn sync_stock(
             ..default()
         })),
         Transform::default(),
+        OnWork,
         DespawnOnExit(AppState::Document),
     ));
 }
@@ -310,9 +321,12 @@ fn draw_frames(
     cache: Res<crate::parts::PartCache>,
     ui: Res<CamUi>,
     dialog: Option<Res<super::dialogs::CamDialog>>,
+    machine: Res<MachineView>,
     mut g: Gizmos,
 ) {
     let Some(doc) = doc else { return };
+    // Where the work is drawn (moved with the table while the machine is kept still).
+    let on_work = |f: &Frame| machine.work_frame(f);
     let Some((el, cam)) = active_cam(&doc) else {
         return;
     };
@@ -338,14 +352,18 @@ fn draw_frames(
                 if let Some(j) = cam.job(*job) {
                     triad(
                         &mut g,
-                        &program::work_frame(cam, j, &setup.wcs, parts),
+                        &on_work(&program::work_frame(cam, j, &setup.wcs, parts)),
                         size,
                     );
                 }
             }
             super::dialogs::Draft::WorkPlane { op, .. } => {
                 if let OpKind::WorkPlane(w) = &op.kind {
-                    triad(&mut g, &program::work_frame(cam, job, w, parts), size * 0.8);
+                    triad(
+                        &mut g,
+                        &on_work(&program::work_frame(cam, job, w, parts)),
+                        size * 0.8,
+                    );
                 }
             }
             _ => {}
@@ -353,7 +371,11 @@ fn draw_frames(
     }
     for s in job.setups.iter().filter(|s| !s.suppressed) {
         if s.wcs.show_triad {
-            triad(&mut g, &program::setup_frame(cam, job, s, parts), size);
+            triad(
+                &mut g,
+                &on_work(&program::setup_frame(cam, job, s, parts)),
+                size,
+            );
         }
         for o in &s.operations {
             if let OpKind::WorkPlane(w) = &o.kind
@@ -361,7 +383,11 @@ fn draw_frames(
                 && !o.hidden
                 && !o.suppressed
             {
-                triad(&mut g, &program::work_frame(cam, job, w, parts), size * 0.8);
+                triad(
+                    &mut g,
+                    &on_work(&program::work_frame(cam, job, w, parts)),
+                    size * 0.8,
+                );
             }
         }
     }
@@ -370,6 +396,7 @@ fn draw_frames(
         && let Some(shape) = program::stock_shape(cam, job, parts)
         && let program::StockShape::Box { frame, b } = shape
     {
+        let frame = on_work(&frame);
         let c = b.corners().map(|p| v3(frame.to_world(p)));
         let color = Color::srgba(0.35, 0.47, 0.66, 0.8);
         for i in 0..4 {
