@@ -1142,8 +1142,14 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
         // everywhere): build it from its definition then. Each way of making the cavity is
         // tried in turn until the body less it comes out (a cavity flush with a removed face
         // shares that face with the body, which the boolean may not settle).
-        let concave =
-            (0..b.edges.len()).any(|e| !b.edges[e].degenerate && convex(&b, e) == Some(false));
+        // (An edge beside an opening has no wall on that side to round: the face moved in runs
+        // on to the opening's surface, as the sharp cavity has it. An L opened at its step.)
+        let ef = b.edge_faces();
+        let concave = (0..b.edges.len()).any(|e| {
+            !b.edges[e].degenerate
+                && convex(&b, e) == Some(false)
+                && ef[e].iter().all(|f| !remove.contains(f))
+        });
         let sharp = |x: &Vec<f64>| {
             super::sharp::offset_sharp(&b, x).and_then(|c| {
                 if crate::native::mass::body_volume(&c) > 0.0 {
