@@ -1085,8 +1085,11 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
             // than that is as thick as the part, and refused, as Onshape and OCCT do.
             None => {
                 let thinner = t - tol::POINT.max(1e-9 * size);
-                match cavity_of_supports(&b, &remove, thinner) {
-                    Some(Ok(Some(_))) => cur,
+                let meeting =
+                    || matches!(cavity_of_supports(&b, &remove, thinner), Some(Ok(Some(_))));
+                match spec.nothing_hollowed {
+                    NothingHollowed::Unchanged => cur,
+                    NothingHollowed::RefuseUnlessMeeting if meeting() => cur,
                     _ => {
                         return Err(KernelError::InvalidParameter(
                             "The shell is as thick as the part, nothing is left to hollow; reduce the thickness".into(),

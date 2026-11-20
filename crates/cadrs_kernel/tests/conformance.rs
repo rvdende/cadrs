@@ -2885,6 +2885,7 @@ pub fn shell_options(k: &mut dyn Kernel) {
         outward: false,
         hollow: false,
         sharp: false,
+        nothing_hollowed: Default::default(),
     };
     let s = one(k.shell_with(b, &spec).unwrap());
     close(volume(k, s), 100.0 * 60.0 * 40.0 - 92.0 * 52.0 * 36.0, 1e-6);
@@ -3000,6 +3001,7 @@ pub fn shell_around_a_counterbore(k: &mut dyn Kernel) {
                 outward: false,
                 hollow: false,
                 sharp: false,
+                nothing_hollowed: Default::default(),
             },
         )
         .unwrap());
@@ -3032,6 +3034,7 @@ pub fn shell_rounded_cube_at_the_radius(k: &mut dyn Kernel) {
                     outward: false,
                     hollow: false,
                     sharp: false,
+                    nothing_hollowed: Default::default(),
                 },
             )
             .unwrap());

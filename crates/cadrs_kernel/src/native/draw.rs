@@ -1913,6 +1913,7 @@ impl NativeKernel {
                 outward: d > 0.0,
                 hollow: false,
                 sharp: !arc,
+                nothing_hollowed: Default::default(),
             },
         )?;
         self.draw_history = Some((b, r.bodies[0], r.history));

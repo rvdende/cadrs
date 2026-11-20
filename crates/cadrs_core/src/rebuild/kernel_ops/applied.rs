@@ -628,6 +628,7 @@ impl Rebuilder {
                 outward,
                 hollow,
                 sharp: !rounded,
+                nothing_hollowed: Default::default(),
             };
             let r = k.shell_with(body, &spec)?;
             // Walls so thick they meet everywhere leave nothing hollowed: the kernel's answer

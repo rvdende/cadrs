@@ -738,6 +738,7 @@ impl ShellSpec {
             outward: false,
             hollow: false,
             sharp: false,
+            nothing_hollowed: Default::default(),
         }
     }
 
@@ -938,6 +939,7 @@ impl Primitive {
             axis: Unit::new_normalize(dir),
             major,
             minor,
+            spindle: Spindle::default(),
         }
     }
 }

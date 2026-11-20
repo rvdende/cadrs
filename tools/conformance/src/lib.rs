@@ -969,6 +969,7 @@ impl Kernel for Cadrs {
                 outward: false,
                 hollow: open.is_empty(),
                 sharp: false,
+                nothing_hollowed: Default::default(),
             };
             solid(k.shell_with(b, &spec))
         })

@@ -190,6 +190,7 @@ fn shell_box(
         outward: d > 0.0,
         hollow: !open,
         sharp: true,
+        nothing_hollowed: Default::default(),
     };
     let r = one(k.shell_with(b, &spec).map_err(e)?)?;
     close("volume", volume(&k, r)?, want, 2e-3)?;
@@ -240,6 +241,7 @@ fn shell_cylinder(d: f64, want: f64) -> Result<(), String> {
                 outward: d > 0.0,
                 hollow: false,
                 sharp: true,
+                nothing_hollowed: Default::default(),
             },
         )
         .map_err(e)?)?;

@@ -2,9 +2,8 @@
 //! closest distances against closed forms: between bodies, faces, edges and vertices.
 //!
 //! springrep's `distance::closest` between whole bodies measures the solids (a ball inside a box
-//! is no distance from it); cadrs's `Kernel::min_distance` with `DistanceTarget::Body` measures
-//! their boundaries, the only body distance it has, so the cases where one solid holds part of
-//! the other show that gap. A vertex selection is its point (`DistanceTarget::Point`).
+//! is no distance from it): cadrs's `Kernel::min_distance` with `DistanceTarget::Solid`;
+//! `DistanceTarget::Body` measures their boundaries. A vertex selection is its point (`DistanceTarget::Point`).
 
 mod springrep_port;
 
@@ -16,6 +15,13 @@ use springrep_port::*;
 
 fn bodies(k: &NativeKernel, a: BodyId, b: BodyId) -> DistanceResult {
     k.min_distance(&DistanceTarget::Body(a), &DistanceTarget::Body(b))
+        .unwrap()
+}
+
+/// springrep's distance between whole bodies: the solids with what they hold
+/// (`DistanceTarget::Solid`).
+fn solids(k: &NativeKernel, a: BodyId, b: BodyId) -> DistanceResult {
+    k.min_distance(&DistanceTarget::Solid(a), &DistanceTarget::Solid(b))
         .unwrap()
 }
 
@@ -130,28 +136,26 @@ fn a_ball_on_a_torus_axis_is_nearest_along_a_whole_ring() {
 }
 
 #[test]
-#[ignore = "cadrs measures distance between boundaries, and has no distance between solids"]
 fn a_ball_inside_a_box_or_through_it_is_no_distance_away() {
     let mut k = NativeKernel::new();
     let b = block(&mut k, [0.0; 3], [10.0, 6.0, 3.0]);
     // Inside, touching nothing: springrep's solids share points, so no distance (cadrs's
     // boundaries are a unit apart).
     let s = ball_at(&mut k, P3::new(5.0, 3.0, 1.5), 1.0);
-    assert_eq!(bodies(&k, s, b).distance, 0.0);
+    assert_eq!(solids(&k, s, b).distance, 0.0);
     // Through the face x = 10.
     let s = ball_at(&mut k, P3::new(10.5, 3.0, 1.5), 1.0);
-    assert_distance(bodies(&k, s, b), 0.0);
+    assert_distance(solids(&k, s, b), 0.0);
 }
 
 #[test]
-#[ignore = "cadrs measures distance between boundaries, and has no distance between solids"]
 fn a_rod_inside_one_a_hair_wider_is_no_distance_away() {
     let mut k = NativeKernel::new();
     let f = |z: f64| frame(P3::new(0.0, 0.0, z), V3::z(), V3::x());
     let outer = extrude(&mut k, f(1.28), circle(0.0, 0.0, 6.6391 / 2.0), 9.17);
     let inner = extrude(&mut k, f(1.38), circle(0.0, 0.0, 6.6390934 / 2.0), 5.64);
-    assert_distance(bodies(&k, outer, inner), 0.0);
-    assert_distance(bodies(&k, inner, outer), 0.0);
+    assert_distance(solids(&k, outer, inner), 0.0);
+    assert_distance(solids(&k, inner, outer), 0.0);
 }
 
 #[test]

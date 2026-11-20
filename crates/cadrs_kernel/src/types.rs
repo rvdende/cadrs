@@ -996,10 +996,26 @@ pub enum Primitive {
         /// The radius of the circle through its tube's centres.
         major: f64,
         /// Its tube's radius: less than `major` (a ring torus) or equal to it (a horn torus, its
-        /// hole closed to the centre). A tube wider than that crosses the axis and is refused
-        /// (a spindle torus is a revolve of the tube's part on one side of the axis).
+        /// hole closed to the centre). A tube wider than that crosses the axis: a spindle torus,
+        /// as `spindle` says.
         minor: f64,
+        /// What a tube wider than its ring gives.
+        #[serde(default)]
+        spindle: Spindle,
     },
+}
+
+/// A torus whose tube is wider than its ring ([`Primitive::Torus`]), its surface passing through
+/// itself across the axis: conventions differ, so the caller says which it wants.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Spindle {
+    /// Refused: the surface crosses itself, so it describes no torus.
+    #[default]
+    Refuse,
+    /// The solid the tube's disk fills as it turns, counted once: the turn of the disk's part
+    /// on the ring's side of the axis, bounded by the tube circle's outer arc, which meets the
+    /// axis in a dimple above and below.
+    Solid,
 }
 
 /// How a sweep's profile changes as it follows the path, beyond its control's turning: it
@@ -1486,6 +1502,24 @@ pub struct ShellSpec {
     /// rounded at the body's concave edges).
     #[serde(default)]
     pub sharp: bool,
+    /// What a wall so thick that it leaves no cavity gives (every point of the body within the
+    /// thickness of a wall that stays).
+    #[serde(default)]
+    pub nothing_hollowed: NothingHollowed,
+}
+
+/// A shell whose walls leave no cavity ([`ShellSpec::nothing_hollowed`]): conventions differ,
+/// so the caller says which it wants.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NothingHollowed {
+    /// Refused, unless the walls just meet (a hair thinner would leave a cavity): then the body
+    /// as it was. Onshape's and OCCT's.
+    #[default]
+    RefuseUnlessMeeting,
+    /// Always refused (springrep's).
+    Refuse,
+    /// The body as it was (brep-bench's: nothing is hollowed, so nothing changes).
+    Unchanged,
 }
 
 /// Volume, area, centroid and inertia, computed from exact geometry where the backend can.

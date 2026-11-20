@@ -350,7 +350,6 @@ fn a_path_sweep_along_a_straight_path_is_a_prism_or_a_twisted_one() {
 }
 
 #[test]
-#[ignore = "cadrs leaves a body shelled too thick to hollow as it is (as brep-bench's shell/frustum-too-thick-to-hollow asks), where springrep refuses"]
 fn a_shell_open_at_the_top_keeps_walls_of_its_thickness() {
     // A 10 × 8 × 6 block hollowed to 1 mm walls, open at the top: the block less a 8 × 6 × 5
     // pocket.
@@ -362,6 +361,8 @@ fn a_shell_open_at_the_top_keeps_walls_of_its_thickness() {
         outward: false,
         hollow: false,
         sharp: true,
+        // springrep's: a wall that leaves no cavity is refused.
+        nothing_hollowed: NothingHollowed::Refuse,
     };
     let b = k.shell_with(block, &spec(1.0)).unwrap().bodies[0];
     valid(&k, b);

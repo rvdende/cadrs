@@ -1273,6 +1273,7 @@ impl Kernel for NativeKernel {
                 axis,
                 major,
                 minor,
+                spindle,
             } => {
                 if !(minor > 0.0 && major >= 0.0) {
                     return Err(KernelError::InvalidParameter(
@@ -1283,9 +1284,21 @@ impl Kernel for NativeKernel {
                 // touches the axis at the centre. A tube wider than its ring crosses the axis and
                 // describes no torus: refused (a spindle is a revolve of the tube's outer part).
                 if minor > major * (1.0 + tol::REL) {
-                    return Err(KernelError::InvalidParameter(
-                        "The torus's tube is wider than its ring: it crosses the axis".into(),
-                    ));
+                    if spindle == Spindle::Refuse {
+                        return Err(KernelError::InvalidParameter(
+                            "The torus's tube is wider than its ring: it crosses the axis".into(),
+                        ));
+                    }
+                    // The tube circle's outer arc, from where it crosses the axis below round
+                    // through (major + minor, 0) to where it crosses above, closed along the axis.
+                    let h = (minor * minor - major * major).sqrt();
+                    let half = std::f64::consts::PI - h.atan2(major);
+                    let plane = through(center, axis.into_inner());
+                    let outline = vec![
+                        Curve2::arc(Point2::new(major, 0.0), minor, -half, 2.0 * half),
+                        line((0.0, h), (0.0, -h)),
+                    ];
+                    return turned(self, plane, outline, center, axis.into_inner());
                 }
                 let plane = through(center, axis.into_inner());
                 let tube = vec![Curve2::Circle {
@@ -1694,6 +1707,7 @@ impl Kernel for NativeKernel {
                     outward: false,
                     hollow: false,
                     sharp: false,
+                    nothing_hollowed: Default::default(),
                 },
             );
             let r = k.dumped(&r);

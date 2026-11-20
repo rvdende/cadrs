@@ -66,6 +66,7 @@ fn ptorus(k: &mut NativeKernel, f: &Plane, major: f64, minor: f64) -> Result<Bod
         axis: V3::z_axis(),
         major,
         minor,
+        spindle: Default::default(),
     };
     make(k, f, p)
 }

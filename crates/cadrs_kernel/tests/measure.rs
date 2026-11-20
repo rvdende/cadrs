@@ -43,6 +43,7 @@ fn ring(k: &mut NativeKernel, major: f64, minor: f64) -> BodyId {
         axis: Vector3::z_axis(),
         major,
         minor,
+        spindle: Default::default(),
     }))
 }
 
