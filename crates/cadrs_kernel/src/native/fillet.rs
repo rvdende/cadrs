@@ -12143,9 +12143,10 @@ fn local_blend(
         })
         .fold(0.0, f64::max);
     let size = b.bbox().diagonal().max(r);
-    // B-spline strips within 1e-5 of the size (their sections exact at the stations): well inside
-    // the volume and area agreement wanted, with spans few enough to integrate quickly.
-    let fit_tol = 1e-5 * (1.0 + size);
+    // B-spline strips within 1e-6 of the size (their sections exact at the stations): a rail
+    // 1e-5 off bounds its flat face's area by as much along the whole edge (an elliptic rim's
+    // top short by 1.5e-6 of the volume), past the agreement a volume is held to.
+    let fit_tol = 1e-6 * (1.0 + size);
     let vtol = tol::REL_POINT * (1.0 + r);
     let out_of_work = || out_of_budget("the local fillet takes more work than its budget");
     let p = plan(b, edges, ratios, flat, &budget, true)

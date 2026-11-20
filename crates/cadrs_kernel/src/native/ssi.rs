@@ -590,6 +590,14 @@ fn plane_extrusion(
         Some((a, b)) => (u0.max(a), u1.min(b)),
         None => (u0, u1),
     };
+    // A whole turn of a circle or ellipse: exactly one, from the face's own start, unpadded (a
+    // padded turn overshoots its start, and the closed curve then misses the seam's vertex by
+    // the pad times the radius).
+    let (lo, hi) = if c.is_periodic() && (ue.0.1 - ue.0.0).abs() >= TAU - tol::ANGULAR {
+        (ue.0.0, ue.0.0 + TAU)
+    } else {
+        (lo, hi)
+    };
     if hi <= lo {
         return Some(vec![]);
     }

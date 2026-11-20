@@ -1932,6 +1932,12 @@ fn fits(
     for &frac in fracs {
         let tm = ed.t[0] + (ed.t[1] - ed.t[0]) * frac;
         let p = ed.point(tm);
+        // (The faces' directions in from the edge at this point: round a curved edge they turn
+        // with it, and the middle's would set a contact near an end off its face.)
+        let (w1, w2) = (
+            face_dirs(b, s1.0, e, s1.1, tm).1,
+            face_dirs(b, s2.0, e, s2.1, tm).1,
+        );
         let sides = [(s1, w1, a1), (s2, w2, a2)];
         if sides.iter().any(|&(_, _, a)| !(a > 0.0) || !a.is_finite()) {
             return Err(KernelError::InvalidParameter(
@@ -2783,7 +2789,9 @@ pub fn fillet(
             }
         }
     }
-    // Section profiles other than circular: straight edges between flat faces only.
+    // Section profiles other than circular: straight edges between flat faces, and rims (a
+    // circle between faces about its axis, a plane square to it or a surface of revolution
+    // about it), whose section is the same all round and whose tool is that section revolved.
     if !matches!(spec.profile, FilletProfile::Circular) {
         let b = k.get(body)?;
         for e in &all {
@@ -2791,7 +2799,21 @@ pub fn fillet(
             let [s1, s2] = edge_sides(b, e.0 as usize)?;
             let flat = matches!(b.faces[s1.0].surf, Surface::Plane { .. })
                 && matches!(b.faces[s2.0].surf, Surface::Plane { .. });
-            if !matches!(ed.curve, Curve::Line { .. }) || !flat {
+            let rim = match &ed.curve {
+                Curve::Circle { c, x, y, .. } => {
+                    let axis = x.cross(y).normalize();
+                    let about = |s: &Surface| match s {
+                        Surface::Plane { f } => f.x.cross(&f.y).cross(&axis).norm() < tol::ANGULAR,
+                        _ => s.axis().is_some_and(|(o, z)| {
+                            z.cross(&axis).norm() < tol::ANGULAR
+                                && (o - c).cross(&axis).norm() < 1e-7
+                        }),
+                    };
+                    about(&b.faces[s1.0].surf) && about(&b.faces[s2.0].surf)
+                }
+                _ => false,
+            };
+            if !(matches!(ed.curve, Curve::Line { .. }) && flat) && !rim {
                 return Err(KernelError::InvalidParameter("Conic, curvature and asymmetric fillets work on straight edges between flat faces".into()));
             }
         }
