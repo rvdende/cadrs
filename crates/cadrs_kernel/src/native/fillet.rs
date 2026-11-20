@@ -9854,6 +9854,29 @@ fn open_cliffs(
         {
             continue;
         }
+        // A line or circle lying wholly past one end of the strip along its spine (a face's
+        // edge running on from the strip's own end): any crossing with it would be past that
+        // end, where the ends' own cuts rule; no search.
+        if matches!(x.curve, Curve::Line { .. } | Curve::Circle { .. })
+            && !crate::native::env_flag!("CADRS_NO_CLIFF_SKIP")
+        {
+            let slack = 0.01 * (hi - lo).abs() + margin;
+            let side = |s: f64| {
+                let q = x.curve.point(x.t[0] + (x.t[1] - x.t[0]) * s);
+                let t = ef.spine.param_of(&q, ef.tm);
+                if t <= lo + slack {
+                    -1
+                } else if t >= hi - slack {
+                    1
+                } else {
+                    0
+                }
+            };
+            let first = side(0.0);
+            if first != 0 && (1..=32).all(|i| side(i as f64 / 32.0) == first) {
+                continue;
+            }
+        }
         let bd = Boundary {
             curve: &x.curve,
             pc: &c.pc,
