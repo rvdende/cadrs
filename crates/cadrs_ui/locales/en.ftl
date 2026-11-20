@@ -4881,6 +4881,7 @@ cam-go-to-end = Go to end
 cam-reset = Reset
 cam-close-the-preview = Close the preview
 cam-drag-through-program = Drag to move through the program
+cam-simulated-ahead = Simulated ahead: green ready to play, blue being worked out, red not yet, amber not cut exactly
 # Show the toolpath (a checkbox of the preview).
 cam-toolpath = Toolpath
 cam-pause-on-collision = Pause on collision

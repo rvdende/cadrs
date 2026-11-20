@@ -48,6 +48,7 @@ mod analysis;
 mod solid;
 
 use analysis::{Analysis, analyse};
+use solid::CutState;
 
 pub struct PreviewPlugin;
 
@@ -67,6 +68,7 @@ impl Plugin for PreviewPlugin {
                 draw,
                 sync_stock_mesh,
                 draw_stock_edges,
+                sync_cache_strip,
             )
                 .chain()
                 .in_set(PreviewSet)
@@ -340,6 +342,23 @@ impl PreviewState {
         self.t >= self.timeline.total() - 1e-12
     }
 
+    /// The time (min) at the run's place `n + f` (a move and how far along it).
+    fn time_of_place(&self, place: f64) -> f64 {
+        let n = place.max(0.0).floor() as usize;
+        let f = place - n as f64;
+        let start = if n == 0 {
+            0.0
+        } else {
+            self.timeline.end_of(n - 1)
+        };
+        start + f * self.timeline.segments.get(n).map_or(0.0, |sg| sg.minutes)
+    }
+
+    /// Something that changes when the timeline does (its length).
+    fn version_of_timeline(&self) -> u64 {
+        self.timeline.total().to_bits() ^ self.timeline.segments.len() as u64
+    }
+
     /// Whether the stock shown is the live worker's (or, before its first, the uncut solid
     /// stock): a solid run's, or a height-map run's exact stock while it goes on.
     fn shows_live(&self) -> bool {
@@ -349,6 +368,14 @@ impl PreviewState {
                     .live
                     .as_ref()
                     .is_some_and(|l| !l.ended && (l.mesh.is_some() || l.tween.is_some())))
+    }
+
+    /// Waits until the live worker has run ahead through every cut (for scripts).
+    pub fn settle_cache(&mut self) {
+        let to = self.place();
+        if let Some(live) = self.live.as_mut() {
+            live.settle_cache(to, std::time::Duration::from_secs(180));
+        }
     }
 
     /// Waits until a solid run's stock is cut to where the preview is (for scripts).
@@ -789,6 +816,96 @@ fn draw_stock_edges(
     strips(&t.after_edges, &t.after_edge_times, &|time| time <= along);
 }
 
+/// The preview bar's timeline's lane ([`cadrs_ui::TimelineLane`]) as it shows the run-ahead
+/// cache: each cut of the
+/// exact stock green when it plays at once, blue while it is being made, red before, amber where
+/// the kernel couldn't cut it exactly. `version`: the cache's state it shows.
+#[derive(Component)]
+struct CacheStrip {
+    version: Option<(u64, u64)>,
+}
+
+/// A timeline's lane not yet showing the cache.
+type NewLane = (With<cadrs_ui::TimelineLane>, Without<CacheStrip>);
+
+/// The cache's colours.
+const CACHE_READY: Color = Color::srgb(0.24, 0.71, 0.36);
+const CACHE_COMPUTING: Color = Color::srgb(0.23, 0.51, 0.96);
+const CACHE_PENDING: Color = Color::srgb(0.88, 0.30, 0.30);
+const CACHE_FAILED: Color = Color::srgb(0.96, 0.65, 0.14);
+
+/// Fills [`CacheStrip`] from the live worker's cut states: the cuts' runs of one state, each
+/// from where its first cut starts to where the next run starts (the moves between cuts with
+/// the cut before), placed by the run's time.
+fn sync_cache_strip(
+    state: Option<Res<PreviewState>>,
+    q_lane: Query<(Entity, &Name), NewLane>,
+    mut q: Query<(Entity, &mut CacheStrip, Option<&Children>)>,
+    mut commands: Commands,
+) {
+    // (The preview bar's timeline's lane, each time the bar is made.)
+    for (e, name) in &q_lane {
+        if name.as_str() == "cam-pv-progress-lane" {
+            commands.entity(e).insert((
+                CacheStrip { version: None },
+                cadrs_ui::Tooltip::new(tr("cam-simulated-ahead")),
+                Pickable::default(),
+            ));
+        }
+    }
+    let Some(s) = state else { return };
+    let live = s.live.as_ref().filter(|l| !l.spans.is_empty());
+    for (e, mut strip, children) in &mut q {
+        let want = live.map(|l| (l.cache_version, s.version_of_timeline()));
+        if strip.version == want && strip.version.is_some() {
+            continue;
+        }
+        strip.version = want;
+        if let Some(children) = children {
+            for c in children.iter() {
+                commands.entity(c).despawn();
+            }
+        }
+        let Some(l) = live else { continue };
+        let total = s.total();
+        if total <= 0.0 {
+            continue;
+        }
+        let frac = |place: f64| (s.time_of_place(place) / total).clamp(0.0, 1.0) as f32;
+        let mut runs: Vec<(f32, f32, CutState)> = Vec::new();
+        for (k, (span, st)) in l.spans.iter().zip(&l.states).enumerate() {
+            let from = frac(span.0);
+            let to = l.spans.get(k + 1).map_or(frac(span.1), |n| frac(n.0));
+            match runs.last_mut() {
+                Some(r) if r.2 == *st => r.1 = to,
+                _ => runs.push((from, to, *st)),
+            }
+        }
+        commands.entity(e).with_children(|b| {
+            for (from, to, st) in runs {
+                let color = match st {
+                    CutState::Ready => CACHE_READY,
+                    CutState::Computing => CACHE_COMPUTING,
+                    CutState::Pending => CACHE_PENDING,
+                    CutState::Failed => CACHE_FAILED,
+                };
+                b.spawn((
+                    Name::new(format!("cam-pv-cache-{st:?}").to_lowercase()),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Percent(100.0 * from),
+                        width: Val::Percent(100.0 * (to - from).max(0.002)),
+                        height: Val::Percent(100.0),
+                        ..default()
+                    },
+                    BackgroundColor(color),
+                    Pickable::IGNORE,
+                ));
+            }
+        });
+    }
+}
+
 /// The job's bodies hidden while the preview shows the stock without them (its Part
 /// unchecked): where the part and the stock share faces (a stock that is the part's own box)
 /// the two would show through each other.
@@ -1085,10 +1202,18 @@ fn sync_bar(
                     r.spawn(IconButton::new(name, icon).tooltip(tr(tip)).build(&t));
                 }
             });
+            // The run's timeline: its ruler, the run-ahead cache's cuts in its lane
+            // (`sync_cache_strip`), the times at its quarters, the playhead across.
+            let total = s.total();
             b.spawn(
-                Slider::new("cam-pv-progress")
+                cadrs_ui::Timeline::new("cam-pv-progress")
                     .value(progress)
                     .width(638.0)
+                    .labels(
+                        (0..=4)
+                            .map(|k| super::compute::fmt_minutes(total * k as f64 / 4.0))
+                            .collect(),
+                    )
                     .tooltip(tr("cam-drag-through-program"))
                     .build(&t),
             );

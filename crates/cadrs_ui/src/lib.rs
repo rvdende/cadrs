@@ -115,7 +115,7 @@ pub use dialog::{Dialog, DialogClose, DialogRoot};
 pub use dialog_fields::{
     FieldVariables, NumberField, NumberFieldCancel, NumberFieldCommit, NumberFieldEdit,
     NumberFieldPreview, NumberFieldState, OptionRow, Select, SelectChange, SelectState, Slider,
-    SliderChange, SliderState, form_row,
+    SliderChange, SliderState, Timeline, TimelineLane, form_row,
 };
 pub use dim_edit::{
     DimEdit, DimEditBox, DimEditCancel, DimEditCommit, DimEditField, DimEditPreview,

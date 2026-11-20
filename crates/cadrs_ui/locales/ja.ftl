@@ -3329,6 +3329,7 @@ cam-go-to-end = 最後へ移動
 cam-reset = リセット
 cam-close-the-preview = プレビューを閉じる
 cam-drag-through-program = ドラッグしてプログラム内を移動
+cam-simulated-ahead = 先行シミュレーション：緑は再生可能、青は計算中、赤は未計算、琥珀色は正確に切削できず
 cam-toolpath = ツールパス
 cam-pause-on-collision = 干渉時に一時停止
 cam-readout-feed = 送り { $feed } mm/min

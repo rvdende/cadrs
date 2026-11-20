@@ -988,6 +988,31 @@ impl ExactStock {
     /// tool is on no cut (the kept stock is then the whole stock to there: [`Self::sim_mesh`]).
     pub fn tweened(&mut self, n: usize, f: f64, deflection: f64) -> Option<Tweened> {
         let (c, _) = self.cut_at(n, f)?;
+        self.tweened_cut(c, deflection)
+    }
+
+    /// Each cut's stretch of the run: the places (`n + f`) it starts and ends at.
+    pub fn cut_spans(&self) -> Vec<(f64, f64)> {
+        self.cuts.iter().map(|c| (c.from(), c.to())).collect()
+    }
+
+    /// The last cut ended by the run's place `n + f` (the stock there is the stock after it,
+    /// where the tool is between cuts).
+    pub fn cut_before(&self, n: usize, f: f64) -> Option<usize> {
+        let place = n as f64 + f.clamp(0.0, 1.0);
+        self.cuts
+            .partition_point(|c| c.to() <= place)
+            .checked_sub(1)
+    }
+
+    /// Whether cut `c` is one the kernel couldn't make exactly (cut as best it could: joined
+    /// with the next, in halves).
+    pub fn cut_failed(&self, c: usize) -> bool {
+        self.failed.iter().any(|(i, _)| *i == c)
+    }
+
+    /// [`Self::tweened`] for cut `c`: the stock before it and after it, each point timed.
+    pub fn tweened_cut(&mut self, c: usize, deflection: f64) -> Option<Tweened> {
         // The kept stock through the cuts before (the part-way slices dropped).
         let before = self.cuts.get(c)?.from();
         let (bn, bf) = (before.floor() as usize, before - before.floor());

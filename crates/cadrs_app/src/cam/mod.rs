@@ -187,7 +187,8 @@ fn flag_pending_work(
 
 /// Scripted steps (`Custom("cam …")`): `select job|setup|op N` selects the Nth job, the active
 /// job's Nth setup or its first setup's Nth operation (from 0); `play` and `pause` the preview;
-/// `preview-end` jumps it to the end; `preview-at F` to a fraction of it; `fit` zooms the view
+/// `preview-end` jumps it to the end; `preview-at F` to a fraction of it; `cache-wait` waits
+/// till Simulate's worker has run ahead through every cut; `fit` zooms the view
 /// to the studio's parts and stock; `preview-op N F` jumps the preview to a fraction of its
 /// Nth operation (from 0); `preview-collision` to the next collision, paused there;
 /// `machine show|hide` shows or hides the job's machine, `machine relative part|machine` keeps
@@ -241,6 +242,10 @@ pub fn script(world: &mut World, arg: &str) {
                 }
             }
         }
+        ["cache-wait"] => match world.get_resource_mut::<preview::PreviewState>() {
+            Some(mut s) => s.settle_cache(),
+            None => warn!("cam {arg}: no preview"),
+        },
         ["fit"] => crate::viewport::zoom_to_fit(world),
         ["machine", "view", az, el] => {
             if let (Ok(az), Ok(el)) = (az.parse::<f32>(), el.parse::<f32>()) {

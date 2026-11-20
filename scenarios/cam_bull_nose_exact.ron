@@ -4,6 +4,9 @@
 // as a solid of the kernel's by the tool swept along each arc: its walls cylinders, its
 // corners tori, drawn from their own surfaces with their edges (no facets, no lattice). The
 // part is hidden (the preview bar's Part): what shows is the stock as the tool leaves it.
+// cache-filling Just opened, paused at the start: under the slider the run-ahead cache fills
+//    in (green ready to play, blue being made, red not yet).
+// cache-ready Still paused: every cut made, the strip all green (playing is now instant).
 // 00 The start: the stock, its top clean and flat, the tool over it.
 // 00b A second in: the first arc just begun, the slot cut behind the tool and nothing ahead.
 // 01 A fifth of the way: the first lap at −4 part way round, the cut ending in the tool's
@@ -30,7 +33,12 @@ Scenario(
         Click(ui("cam-pv-simulate")),
         Click(ui("cam-pv-part")),
         Custom("cam fit"),
-        Wait(5),
+        Custom("cam pause"),
+        Wait(3),
+        Screenshot("cache-filling"),
+        Custom("cam cache-wait"),
+        Wait(3),
+        Screenshot("cache-ready"),
         Custom("cam preview-at 0"),
         MoveTo(1420, 900),
         Wait(5),

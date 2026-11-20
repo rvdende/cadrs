@@ -155,8 +155,9 @@ pub(super) type Place = (usize, f64);
 
 /// The worker that cuts a solid run's stock to where the preview is (see the module docs).
 pub(super) struct Live {
-    ask: std::sync::mpsc::Sender<Place>,
+    ask: std::sync::mpsc::Sender<Ask>,
     got: std::sync::Mutex<std::sync::mpsc::Receiver<(Place, Shown)>>,
+    notes: std::sync::Mutex<std::sync::mpsc::Receiver<Note>>,
     /// The last place asked for, and the place of the newest mesh.
     asked: Option<Place>,
     pub(super) cut: Option<Place>,
@@ -167,12 +168,137 @@ pub(super) struct Live {
     pub(super) edges: Vec<Vec<[f32; 3]>>,
     /// The newest tween of the exact stock along the cut the tool is on: in place of a mesh,
     /// drawn as the tool moves along it with no cut made.
-    pub(super) tween: Option<Box<Tweened>>,
+    pub(super) tween: Option<std::sync::Arc<Tweened>>,
     pub(super) version: u64,
     /// When the last place was asked for.
     asked_at: Option<Instant>,
     /// The worker has stopped (it couldn't go on, or an exact-only one gave up).
     pub(super) ended: bool,
+    /// The exact stock's cuts, each's stretch of the run (places `n + f`), and the state of
+    /// each in the run-ahead cache: what the timeline under the slider shows. Empty on the
+    /// lattice.
+    pub(super) spans: Vec<(f64, f64)>,
+    pub(super) states: Vec<CutState>,
+    /// A count that changes with the states.
+    pub(super) cache_version: u64,
+    /// The cuts' tweens the worker has made and still keeps: a place within one (or between it
+    /// and the next) is shown from here at once, without asking the worker.
+    tweens: std::collections::HashMap<usize, std::sync::Arc<Tweened>>,
+    /// The cut whose tween is shown, and the cut the worker was last told the tool is at.
+    tween_cut: Option<usize>,
+    told: Option<usize>,
+}
+
+/// A cut's state in the worker's run-ahead cache ([`Live::states`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CutState {
+    /// Not made yet.
+    Pending,
+    /// Being made.
+    Computing,
+    /// Made: played back at once.
+    Ready,
+    /// Made, but the kernel couldn't cut it exactly (cut as best it could), or not made.
+    Failed,
+}
+
+/// What the worker says of its cache: each cut's stretch of the run (once), a cut's state, a
+/// tween made, or one let go.
+enum Note {
+    Cuts(Vec<(f64, f64)>),
+    State(usize, CutState),
+    Made(usize, std::sync::Arc<Tweened>),
+    Dropped(usize),
+}
+
+/// What the worker is asked: the stock at a place, or only where the tool is now (a cut shown
+/// from the cache), to run ahead from there.
+enum Ask {
+    Show(Place),
+    At(usize),
+}
+
+/// The most memory the cuts' tweens kept for playing back may take (bytes): past it the ones
+/// farthest behind the tool are let go, and running ahead waits.
+const CACHE_BYTES: usize = 1 << 30;
+
+/// About how much memory a tween takes (bytes).
+fn tween_bytes(t: &Tweened) -> usize {
+    let mesh = |m: &SimMesh| m.positions.len() * (12 + 12 + 16 + 1) + m.indices.len() * 4;
+    let lines = |l: &[Vec<[f32; 3]>]| l.iter().map(|x| x.len() * 16).sum::<usize>();
+    mesh(&t.before)
+        + mesh(&t.after)
+        + (t.before_times.len() + t.after_times.len()) * 4
+        + lines(&t.before_edges)
+        + lines(&t.after_edges)
+}
+
+/// The worker's run-ahead cache: each cut's tween as made, within [`CACHE_BYTES`].
+struct TweenCache {
+    tweens: std::collections::HashMap<usize, (std::sync::Arc<Tweened>, usize)>,
+    /// Cuts tried and not made (none to show).
+    missing: std::collections::HashSet<usize>,
+    bytes: usize,
+    cuts: usize,
+}
+
+impl TweenCache {
+    /// The tween of cut `c`: kept, else made (and told of).
+    fn get(
+        &mut self,
+        e: &mut cadrs_core::cam::exact::ExactStock,
+        c: usize,
+        note: &dyn Fn(Note),
+    ) -> Option<std::sync::Arc<Tweened>> {
+        if let Some((t, _)) = self.tweens.get(&c) {
+            return Some(t.clone());
+        }
+        if self.missing.contains(&c) {
+            return None;
+        }
+        note(Note::State(c, CutState::Computing));
+        let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.tweened_cut(c, DEFLECTION)
+        }))
+        .ok()
+        .flatten();
+        let Some(t) = made else {
+            self.missing.insert(c);
+            note(Note::State(c, CutState::Failed));
+            return None;
+        };
+        let t = std::sync::Arc::new(t);
+        let bytes = tween_bytes(&t);
+        self.bytes += bytes;
+        self.tweens.insert(c, (t.clone(), bytes));
+        note(Note::Made(c, t.clone()));
+        let state = if e.cut_failed(c) {
+            CutState::Failed
+        } else {
+            CutState::Ready
+        };
+        note(Note::State(c, state));
+        Some(t)
+    }
+
+    /// Lets the tweens farthest behind `at` go while over [`CACHE_BYTES`]; then the next cut
+    /// from `at` on to make, if there is room.
+    fn next(&mut self, at: usize, note: &dyn Fn(Note)) -> Option<usize> {
+        while self.bytes > CACHE_BYTES {
+            let Some(&far) = self.tweens.keys().filter(|&&c| c < at).min() else {
+                break;
+            };
+            if let Some((_, b)) = self.tweens.remove(&far) {
+                self.bytes -= b;
+            }
+            note(Note::Dropped(far));
+            note(Note::State(far, CutState::Pending));
+        }
+        if self.bytes > CACHE_BYTES {
+            return None;
+        }
+        (at..self.cuts).find(|c| !self.tweens.contains_key(c) && !self.missing.contains(c))
+    }
 }
 
 /// The most places a second the worker is asked to cut to (each a boolean, for the exact
@@ -186,19 +312,73 @@ impl Live {
     /// Starts the worker: it builds the stock ([`program::solid_start`]), then cuts it to each
     /// place asked for (the newest, when several are waiting). `None`: no worker.
     pub(super) fn start(input: SolidInput) -> Option<Live> {
-        let (ask, asks) = std::sync::mpsc::channel::<Place>();
+        let (ask, asks) = std::sync::mpsc::channel::<Ask>();
         let (send, got) = std::sync::mpsc::channel();
+        let (tell, notes) = std::sync::mpsc::channel::<Note>();
         let spawned = cadrs_core::background::spawn("cam-live-stock", move || {
             let Some(mut live) = Engine::of(&input) else {
                 return;
             };
-            let mut tweening = None;
-            while let Ok(mut to) = asks.recv() {
+            let note = |n: Note| {
+                let _ = tell.send(n);
+            };
+            let mut cache = TweenCache {
+                tweens: Default::default(),
+                missing: Default::default(),
+                bytes: 0,
+                cuts: 0,
+            };
+            if let Engine::Exact(e) = &live {
+                let spans = e.cut_spans();
+                cache.cuts = spans.len();
+                note(Note::Cuts(spans));
+            }
+            // The cut the tool is at: running ahead goes on from there.
+            let mut at = 0usize;
+            loop {
+                // A place asked for (the newest); waited for only when there is nothing to
+                // run ahead to (the cache full, or every cut made).
+                let ahead = match &live {
+                    Engine::Exact(_) if std::env::var_os("CADRS_NO_TWEEN").is_none() => {
+                        cache.next(at, &note)
+                    }
+                    _ => None,
+                };
+                let first = match ahead {
+                    None => match asks.recv() {
+                        Ok(a) => Some(a),
+                        Err(_) => break,
+                    },
+                    Some(_) => match asks.try_recv() {
+                        Ok(a) => Some(a),
+                        Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                    },
+                };
+                let Some(first) = first else {
+                    // Nothing asked: the next cut ahead made, for playing back at once.
+                    if let (Some(c), Engine::Exact(e)) = (ahead, &mut live) {
+                        cache.get(e, c, &note);
+                    }
+                    continue;
+                };
                 // (Only the newest place matters.)
-                for t in asks.try_iter() {
-                    to = t;
+                let mut to = None;
+                for a in std::iter::once(first).chain(asks.try_iter()) {
+                    match a {
+                        Ask::Show(p) => to = Some(p),
+                        Ask::At(c) => at = c,
+                    }
                 }
-                let Some(mut mesh) = live.show(to, &mut tweening) else {
+                let Some(to) = to else { continue };
+                if let Engine::Exact(e) = &live {
+                    at = e
+                        .cut_at(to.0, to.1)
+                        .map(|(c, _)| c)
+                        .or_else(|| e.cut_before(to.0, to.1))
+                        .unwrap_or(0);
+                }
+                let Some(mut mesh) = live.show(to, &mut cache, &note) else {
                     break;
                 };
                 if live.gives_up() && input.exact_only {
@@ -226,6 +406,7 @@ impl Live {
                 {
                     warn!("Simulate's exact stock fails too often here: on the lattice from now");
                     live = lattice;
+                    note(Note::Cuts(Vec::new()));
                     let Some(m) = live.cut_to(to) else { break };
                     mesh = Shown::Mesh(m.0, m.1);
                 }
@@ -237,6 +418,7 @@ impl Live {
         spawned.ok().map(|_| Live {
             ask,
             got: std::sync::Mutex::new(got),
+            notes: std::sync::Mutex::new(notes),
             asked: None,
             cut: None,
             mesh: None,
@@ -245,6 +427,12 @@ impl Live {
             version: 0,
             asked_at: None,
             ended: false,
+            spans: Vec::new(),
+            states: Vec::new(),
+            cache_version: 0,
+            tweens: Default::default(),
+            tween_cut: None,
+            told: None,
         })
     }
 
@@ -253,14 +441,58 @@ impl Live {
         self.cut = Some(at);
         match shown {
             Shown::Mesh(m, edges) => {
+                self.tween_cut = None;
                 (self.mesh, self.tween, self.edges) = (Some(m), None, edges);
                 self.version += 1;
             }
             Shown::Tween(t) => {
-                (self.mesh, self.tween, self.edges) = (None, Some(t), Vec::new());
-                self.version += 1;
+                if !self
+                    .tween
+                    .as_ref()
+                    .is_some_and(|have| std::sync::Arc::ptr_eq(have, &t))
+                {
+                    self.tween_cut = Some(t.cut);
+                    (self.mesh, self.tween, self.edges) = (None, Some(t), Vec::new());
+                    self.version += 1;
+                }
             }
-            Shown::Same => {}
+        }
+    }
+
+    /// Takes what the worker has said of its cache.
+    fn read_notes(&mut self) {
+        let Ok(rx) = self.notes.get_mut() else { return };
+        for n in rx.try_iter() {
+            match n {
+                Note::Cuts(spans) => {
+                    self.states = vec![CutState::Pending; spans.len()];
+                    self.spans = spans;
+                    self.tweens.clear();
+                }
+                Note::State(c, st) => {
+                    if let Some(s) = self.states.get_mut(c) {
+                        *s = st;
+                    }
+                }
+                Note::Made(c, t) => {
+                    self.tweens.insert(c, t);
+                }
+                Note::Dropped(c) => {
+                    self.tweens.remove(&c);
+                }
+            }
+            self.cache_version += 1;
+        }
+    }
+
+    /// The cut whose tween shows the stock at `to`: the one the tool is on, else the last it
+    /// finished (shown whole); `None` before the first.
+    fn cut_of(&self, to: Place) -> Option<usize> {
+        let place = to.0 as f64 + to.1.clamp(0.0, 1.0);
+        let c = self.spans.partition_point(|s| s.1 <= place);
+        match self.spans.get(c) {
+            Some(s) if s.0 <= place => Some(c),
+            _ => c.checked_sub(1),
         }
     }
 
@@ -295,8 +527,22 @@ impl Live {
         for (at, shown) in got {
             self.take(at, shown);
         }
+        self.read_notes();
         if self.ended {
             self.asked = None;
+            return;
+        }
+        // A place within a cut made (or between it and the next): shown from the cache, the
+        // worker only told where the tool is (to run ahead from there).
+        if let Some(to) = to
+            && let Some(c) = self.cut_of(to)
+            && let Some(t) = self.tweens.get(&c).cloned()
+        {
+            if self.told != Some(c) && self.ask.send(Ask::At(c)).is_ok() {
+                self.told = Some(c);
+            }
+            self.take(to, Shown::Tween(t));
+            self.asked = Some(to);
             return;
         }
         let due = self
@@ -306,10 +552,27 @@ impl Live {
             && !self.busy()
             && due
             && self.cut != Some(to)
-            && self.ask.send(to).is_ok()
+            && self.ask.send(Ask::Show(to)).is_ok()
         {
             self.asked = Some(to);
             self.asked_at = Some(Instant::now());
+        }
+    }
+
+    /// Waits (up to `limit`) until the worker has made every cut it will run ahead to (none
+    /// pending or being made, or it has stopped): for scripts.
+    pub(super) fn settle_cache(&mut self, to: Option<Place>, limit: std::time::Duration) {
+        let until = Instant::now() + limit;
+        loop {
+            self.follow(to);
+            let busy = self
+                .states
+                .iter()
+                .any(|s| matches!(s, CutState::Pending | CutState::Computing));
+            if self.ended || !busy || Instant::now() >= until {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
         }
     }
 
@@ -343,35 +606,28 @@ enum Engine {
     Lattice(Box<cadrs_core::cam::cadrs_cam::sim::LiveStock>),
 }
 
-/// What the worker sends for a place: the stock as a mesh, the tween along the cut the tool is
-/// on, or the same tween as last time (the place along it the viewer's own).
+/// What the worker sends for a place: the stock as a mesh, or the tween along the cut the tool
+/// is on (the place along it the viewer's own).
 pub(super) enum Shown {
     /// The stock and its edges.
     Mesh(SimMesh, Vec<Vec<[f32; 3]>>),
-    Tween(Box<Tweened>),
-    Same,
+    Tween(std::sync::Arc<Tweened>),
 }
 
 impl Engine {
-    /// The stock at `to`: the exact one tweened along the cut the tool is on (`tweening`, the
-    /// cut tweened last, sent again as [`Shown::Same`]), else as a mesh.
-    fn show(&mut self, to: Place, tweening: &mut Option<usize>) -> Option<Shown> {
+    /// The stock at `to`: the exact one tweened along the cut the tool is on, or the last it
+    /// finished (shown whole), from the cache (`cache`, made there if need be); else as a mesh.
+    fn show(&mut self, to: Place, cache: &mut TweenCache, note: &dyn Fn(Note)) -> Option<Shown> {
         if let Engine::Exact(e) = self
             && std::env::var_os("CADRS_NO_TWEEN").is_none()
-            && let Some((c, _)) = e.cut_at(to.0, to.1)
+            && let Some(c) = e
+                .cut_at(to.0, to.1)
+                .map(|(c, _)| c)
+                .or_else(|| e.cut_before(to.0, to.1))
+            && let Some(t) = cache.get(e, c, note)
         {
-            if *tweening == Some(c) {
-                return Some(Shown::Same);
-            }
-            let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                e.tweened(to.0, to.1, DEFLECTION)
-            }));
-            if let Ok(Some(t)) = made {
-                *tweening = Some(t.cut);
-                return Some(Shown::Tween(Box::new(t)));
-            }
+            return Some(Shown::Tween(t));
         }
-        *tweening = None;
         self.cut_to(to).map(|(m, e)| Shown::Mesh(m, e))
     }
 
