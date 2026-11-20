@@ -67,7 +67,7 @@ dependencies = [
 
 [[package]]
 name = "cadrs_kernel"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "nalgebra",
  "rayon",

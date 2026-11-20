@@ -61,8 +61,9 @@ Onshape-style CAD in Rust + Bevy 0.20.1. Local notes in `docs/` (git-ignored: `P
   Chrome trace; `CADRS_SINGLE_THREADED=Update,…` runs schedules on the main thread for `perf`.
 - Cold builds take 4+ minutes. Never run two cargo builds at once.
 - Project site: https://cadrs.net is the app itself, full screen: `.github/workflows/pages.yml`
-  builds the browser build of every push to main and deploys it to GitHub Pages (also by hand),
-  so the site is always main's head, about 20 minutes after the push. In a browser with
+  builds the browser build of a push to main once its CI has passed and deploys it to GitHub
+  Pages (also by hand), so the site is the latest main whose checks all pass; a failing push
+  leaves it as it was. In a browser with
   neither WebGPU nor WebGL2 the page offers the downloads instead; the app menu links to GitHub.
 
 ## Layout
