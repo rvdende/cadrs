@@ -569,6 +569,7 @@ impl Rebuilder {
                 flipped: flipped[i].clone(),
                 corners: Default::default(),
                 first_on: Vec::new(),
+                overflow: true,
             };
             k.chamfer_with(body, &edges[i], &opts)
         })
@@ -627,6 +628,7 @@ impl Rebuilder {
                 outward,
                 hollow,
                 sharp: !rounded,
+                nothing_hollowed: Default::default(),
             };
             let r = k.shell_with(body, &spec)?;
             // Walls so thick they meet everywhere leave nothing hollowed: the kernel's answer

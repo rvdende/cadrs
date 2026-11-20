@@ -562,19 +562,11 @@ fn import(pool: &mut Pool, faces: &mut Vec<WFace>, b: &Body, owner: usize, merge
             for c in l {
                 let e = &b.edges[c.edge];
                 bb.add(&b.verts[e.v[0]].p);
-                // (A conic's own box: samples along an arc miss its extremes by up to
-                // r·(1 − cos(π/16)), and a pair of faces then misses a crossing near there.)
-                if !e.degenerate
-                    && matches!(
-                        e.curve,
-                        Curve::Line { .. } | Curve::Circle { .. } | Curve::Ellipse { .. }
-                    )
-                {
+                // (The curve's own box, a conic's extremes or a B-spline's poles: samples along
+                // an arc miss its extremes by up to r·(1 − cos(π/16)), along a spline of many
+                // spans by more, and a pair of faces then misses a crossing near there.)
+                if !e.degenerate {
                     bb.union(&curve_bbox(&e.curve, e.t[0], e.t[1]));
-                } else if !e.degenerate {
-                    for i in 0..=16 {
-                        bb.add(&e.point(e.t[0] + (e.t[1] - e.t[0]) * i as f64 / 16.0));
-                    }
                 }
             }
         }
@@ -757,11 +749,17 @@ fn tangent_along_shared_edge(
     bounds: (Option<&SurfaceBound>, Option<&SurfaceBound>),
     ebox: &[Bbox],
 ) -> bool {
+    // (A torus too: it meets no other surface but a plane, a sphere or a coaxial one in closed
+    // form, and contouring it against a cylinder it touches along an edge (a set-back corner's
+    // torus on its fillets) spends thirty milliseconds finding that edge again.)
     let analytic = |s: &Surface| {
         !matches!(
             s,
-            Surface::Nurbs(_) | Surface::Extrusion { .. } | Surface::Revolution { .. }
-        )
+            Surface::Nurbs(_)
+                | Surface::Extrusion { .. }
+                | Surface::Revolution { .. }
+                | Surface::Torus { .. }
+        ) || crate::native::env_flag!("CADRS_TORUS_ANALYTIC")
     };
     if analytic(&fa.surf) && analytic(&fb.surf) {
         return false;
@@ -811,11 +809,14 @@ fn tangent_along_shared_edge(
             }
             // The same curve, at least where they overlap (whole circles may have their seams in
             // different places).
+            // (Within the edges' tolerances: a copy of a prism moved by a few tolerances has
+            // its seam that far from the other's, and its side crosses the other's.)
+            let within = pool.tol.max(e.tol).max(o.tol);
             let same_ends = x == y || {
                 let on = |a: &WEdge, b: &WEdge| {
                     [0.25, 0.5, 0.75].iter().all(|f| {
                         let m = b.curve.point(b.t[0] + (b.t[1] - b.t[0]) * f);
-                        on_curve(&a.curve, a.t[0], a.t[1], &m, pool.tol * 10.0).is_some()
+                        on_curve(&a.curve, a.t[0], a.t[1], &m, within).is_some()
                     })
                 };
                 on(e, o) && on(o, e)
@@ -3375,6 +3376,47 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     }
     let t_after = web_time::Instant::now();
     let meets: Vec<Meet> = meets.into_iter().map(|m| m.0).collect();
+    // Roots where the edge runs along the surface (within the tolerance a stretch either side:
+    // a wall's edge crossing the line a G2 blend touches the wall along) are placed last, so
+    // that the vertex another edge crosses there at a clean angle can take them.
+    let mut deferred: Vec<(usize, usize, f64)> = Vec::new();
+    // (On a fitted surface only, a blend's: a plane or a quadric's crossings at a hair's angle
+    // are crossings where they are found.)
+    let grazing = |e: usize, fi: usize, t: f64| {
+        if !matches!(
+            faces[fi].surf,
+            Surface::Nurbs(_) | Surface::Extrusion { .. } | Surface::Revolution { .. }
+        ) {
+            return false;
+        }
+        // (The edge meets it all but tangentially: a cubic contact's root is anywhere in a
+        // band along the edge.)
+        let ed = &pool.edges[e];
+        let surf = &faces[fi].surf;
+        let p = ed.curve.point(t);
+        let (u, v) = surf.project(&p, None);
+        let tn = ed.curve.tangent(t);
+        let l = tn.norm();
+        l > 0.0 && (tn.dot(&surf.normal(u, v)) / l).abs() < 1e-2
+    };
+    let meets: Vec<Meet> = near_pairs
+        .iter()
+        .zip(meets)
+        .map(|(&(e, fi), m)| match m {
+            Meet::At(ts) if !crate::native::env_flag!("CADRS_NO_GRAZE_DEFER") => Meet::At(
+                ts.into_iter()
+                    .filter(|&t| {
+                        let g = grazing(e, fi, t);
+                        if g {
+                            deferred.push((e, fi, t));
+                        }
+                        !g
+                    })
+                    .collect(),
+            ),
+            m => m,
+        })
+        .collect();
     for (&(e, fi), m) in near_pairs.iter().zip(meets) {
         {
             let ts = match m {
@@ -3433,6 +3475,57 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                     face_pts[fi].push(v);
                 }
             }
+        }
+    }
+    // The grazing roots: at a vertex already lying on both the edge and the surface, with the
+    // edge on the surface all the way between, when there is one; else as any other.
+    for (e, fi, t) in deferred {
+        let ed = pool.edges[e].clone();
+        let p = ed.curve.point(t);
+        let et = ed.tol.max(faces[fi].tol).max(run_tol);
+        let surf = &faces[fi].surf;
+        let (lo, hi) = (ed.t[0].min(ed.t[1]), ed.t[0].max(ed.t[1]));
+        // (As far along the edge as it keeps to the surface: a G2 blend stays within the
+        // tolerance of a wall for a tenth of a millimetre either side of where it touches.)
+        let reach = (ed.curve.point(lo) - ed.curve.point(hi)).norm();
+        let at = (0..pool.verts.len())
+            .filter_map(|w| {
+                let q = pool.verts[w];
+                let dq = (q - p).norm();
+                if dq > reach || surf.distance(&q) > et {
+                    return None;
+                }
+                let s = ed.curve.closest(&q, lo, hi);
+                ((ed.curve.point(s) - q).norm() <= et
+                    && (0..=8).all(|k| {
+                        surf.distance(&ed.curve.point(t + (s - t) * k as f64 / 8.0)) <= et
+                    }))
+                .then_some((dq, w, s))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        if super::env_flag!("CADRS_BOOL_DEBUG") {
+            eprintln!(
+                "grazing root of edge {e} on face {fi} at {p:?}: {:?}",
+                at.map(|a| (a.1, pool.verts[a.1], a.0))
+            );
+        }
+        let (v, t) = match at {
+            Some((_, w, s)) => (w, s),
+            None => {
+                let v = pool.vertex_tol(p, ed.tol.max(faces[fi].tol));
+                (
+                    v,
+                    refine_param(&ed.curve, ed.t[0], ed.t[1], &pool.verts[v], t),
+                )
+            }
+        };
+        let pe = &pool.edges[e];
+        let has = pe.v.contains(&v) || pe.splits.iter().any(|x| x.1 == v);
+        if !has && t > lo && t < hi {
+            pool.split(e, t, v);
+        }
+        if !face_pts[fi].contains(&v) {
+            face_pts[fi].push(v);
         }
     }
     // Vertices on each face's boundary (with the split points).
@@ -4242,8 +4335,18 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                         continue;
                     }
                     let (p, q) = (&pool.edges[g[i]], &pool.edges[g[j]]);
-                    // (Within the pieces' own tolerances too: edges a fuzzy gap apart are one.)
-                    let within = (run_tol * 10.0).max(p.tol.min(q.tol));
+                    // (Within the pieces' own tolerances too: edges a fuzzy gap apart are one.
+                    // Two exact curves (lines, circles, ellipses) are one only within a run
+                    // tolerance and a half, not ten: two arcs between the same two crossings of
+                    // nearly tangent circles, a lens 2 µm thick where parallel cylinders overlap
+                    // by a hair, are the lens's two sides. Fitted curves keep the ten.)
+                    let exact = |c: &Curve| !matches!(c, Curve::Nurbs(_));
+                    let k = if exact(&p.curve) && exact(&q.curve) {
+                        1.5
+                    } else {
+                        10.0
+                    };
+                    let within = (run_tol * k).max(p.tol.min(q.tol));
                     let ok = [0.25, 0.5, 0.75].iter().all(|f| {
                         let m = q.curve.point(q.t[0] + (q.t[1] - q.t[0]) * f);
                         on_curve(&p.curve, p.t[0], p.t[1], &m, within).is_some()
@@ -4593,7 +4696,11 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 // (A face coinciding with g over part: where this sub-face lies on g's surface.)
                 let on_g = !partial.contains(&(fi, g))
                     || gf.surf.distance(&p) <= (run_tol * 10.0).max(f.tol).max(gf.tol);
-                if on_g && point_in_face(gf, &p, run_tol * 10.0) != InFace::Outside {
+                // (Within the tolerance of g's boundary only: a sliver of this face between
+                // g's edge and its own a few tolerances wide (boxes whose sides are 1e-5
+                // apart) has its middle off g by more than the tolerance.)
+                let near = run_tol.max(f.tol).max(gf.tol);
+                if on_g && point_in_face(gf, &p, near) != InFace::Outside {
                     let (gu, gv) = gf.surf.project(&p, Some((gf.uv_center.x, gf.uv_center.y)));
                     let gn = gf.surf.normal(gu, gv) * if gf.sense { 1.0 } else { -1.0 };
                     // Against a sheet an overlap is an overlap, whichever way the faces face.
@@ -5192,15 +5299,41 @@ fn drop_empty_solids(
                     .any(|&(w, y)| w == 1 && pairs.contains(&(x, y)))
             })
     };
-    let volumes: Vec<Option<f64>> = (0..b.solids.len())
+    // (Each suspect's volume and area: a sliver is thin as well as small.)
+    let measured: Vec<Option<(f64, f64)>> = (0..b.solids.len())
         .map(|si| {
             suspect(si).then(|| {
-                super::mass::body_volume(&super::kernel::subset(b, &b.solid_faces(si), true))
+                let m = super::mass::body_mass(&super::kernel::subset(b, &b.solid_faces(si), true));
+                (m.volume, m.surface_area)
             })
         })
         .collect();
+    let volumes: Vec<Option<f64>> = measured.iter().map(|m| m.map(|(v, _)| v)).collect();
+    // (Against the solid's own size, by its edges: the box of a cap shaved off a ball is the
+    // ball's by the sphere's poles, and a cap 1e-5 high a millimetre across held nothing by it.)
+    let own_size = |si: usize| {
+        let mut bb = Bbox::empty();
+        for f in b.solid_faces(si) {
+            for c in b.faces[f].loops.iter().flatten() {
+                let e = &b.edges[c.edge];
+                if !e.degenerate {
+                    bb.union(&curve_bbox(&e.curve, e.t[0], e.t[1]));
+                }
+            }
+        }
+        if bb.is_empty() { size } else { bb.diagonal() }
+    };
     let empty: Vec<usize> = (0..b.solids.len())
-        .filter(|&si| volumes[si].is_some_and(|v| v.abs() <= tol::REL * size * size * size))
+        .filter(|&si| {
+            measured[si].is_some_and(|(v, area)| {
+                let size = own_size(si);
+                // (And thinner than the tolerance on average, twice its volume over its area: the
+                // lens two parallel cylinders overlapping by 2 µm share runs their length, its
+                // volume nothing against that length cubed, and is a solid 3 µm thick.)
+                v.abs() <= tol::REL * size * size * size
+                    && (area <= 0.0 || 2.0 * v.abs() / area <= tol::POINT)
+            })
+        })
         .collect();
     if empty.is_empty() {
         return (false, volumes);

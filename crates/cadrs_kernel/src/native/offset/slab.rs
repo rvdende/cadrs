@@ -391,6 +391,9 @@ pub fn face_slab(b: &Body, fi: usize, d: f64) -> Result<Body> {
     if let Some(b) = spindle_slab(b, fi, &surf, sense, d) {
         return b;
     }
+    if let Some(b) = ring_slab(b, fi, &surf, sense, d) {
+        return Ok(b);
+    }
     let Some(top_surf) = super::sharp::offset_surface(&surf, sense, d) else {
         // A sphere moved to its centre or a cylinder to its axis, or past it.
         return past_centre(b, fi, &surf, sense, d);
@@ -763,6 +766,69 @@ pub fn face_slab(b: &Body, fi: usize, d: f64) -> Result<Body> {
         });
     }
     Ok(body)
+}
+
+/// The slab of a whole torus (a face bounded only by its seams) moved within its tube's reach:
+/// the ring between its meridian circle and that circle moved `d`, turned once about the axis.
+/// (The general slab skins the offset torus's seams back onto themselves, and a face with no
+/// boundary of its own has no ends to check its volume by.) None for any other face, or a move
+/// through the tube's middle circle or past the axis ([`spindle_slab`]).
+fn ring_slab(b: &Body, fi: usize, surf: &Surface, sense: bool, d: f64) -> Option<Body> {
+    use crate::native::sweep::{self, Revolve};
+    use crate::{Curve2, Loop, Plane, Profile, Region};
+    use std::f64::consts::TAU;
+    let Surface::Torus { f: fr, rmaj, rmin } = surf else {
+        return None;
+    };
+    let f = &b.faces[fi];
+    let mut uses: HashMap<usize, usize> = HashMap::new();
+    for c in f.loops.iter().flatten() {
+        *uses.entry(c.edge).or_default() += 1;
+    }
+    if !f
+        .loops
+        .iter()
+        .flatten()
+        .all(|c| b.edges[c.edge].degenerate || uses[&c.edge] > 1)
+    {
+        return None;
+    }
+    let grow = d * if sense == fr.right_handed() {
+        1.0
+    } else {
+        -1.0
+    };
+    let (inner, outer) = (rmin.min(rmin + grow), rmin.max(rmin + grow));
+    if inner <= tol::POINT || outer >= *rmaj * (1.0 - tol::REL) {
+        return None;
+    }
+    let centre = nalgebra::Point2::new(*rmaj, 0.0);
+    let circle = |radius: f64| Curve2::Circle {
+        center: centre,
+        radius,
+        source: None,
+    };
+    let plane = Plane {
+        origin: fr.o,
+        x_dir: nalgebra::Unit::new_normalize(fr.x),
+        normal: nalgebra::Unit::new_normalize(-fr.y),
+    };
+    let section = Region {
+        outer: Loop {
+            curves: vec![circle(outer)],
+        },
+        holes: vec![Loop {
+            curves: vec![circle(inner)],
+        }],
+        source: None,
+    };
+    let regions = crate::native::profile::regions(&Profile::new(plane, vec![section])).ok()?;
+    let mf = crate::native::profile::merge_regions(&regions).ok()?;
+    let kind = Revolve { plane, f: *fr };
+    let body = sweep::sweep_full(&mf, &[], &kind, 0.0, TAU, true, true)
+        .ok()?
+        .body;
+    (body.solids.len() == 1).then_some(body)
 }
 
 /// The slab of a whole torus (a face bounded only by its seams) grown outward until its tube is

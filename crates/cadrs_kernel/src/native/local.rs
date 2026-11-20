@@ -229,37 +229,27 @@ fn line_meet(c: &Curve, surfs: &[&Surface], p: P3) -> Option<P3> {
 /// p-curve `pc` over [t0, t1] moved across the range when its start is a whole range from `at`
 /// (the previous coedge's end) and stays in the range moved: a seam's other use.
 fn closed_spline_shift(s: &Surface, pc: &Curve, t0: f64, t1: f64, at: [f64; 2]) -> Option<Curve> {
-    let Surface::Nurbs(n) = s else { return None };
-    let ((u0, u1), (v0, v1)) = n.range();
+    // (A B-spline surface whose ends meet, or an extrusion of a closed B-spline: closed over its
+    // range without its evaluation wrapping.)
+    let ranges = match s {
+        Surface::Nurbs(n) => {
+            let (u, v) = n.range();
+            [u, v]
+        }
+        Surface::Extrusion {
+            c: Curve::Nurbs(n), ..
+        } => [n.range(), (f64::NEG_INFINITY, f64::INFINITY)],
+        _ => return None,
+    };
+    let periods = super::pcurve::closed_periods(s);
     let (q, r) = (pc.point(t0), pc.point(t1));
     let (q, r) = ([q.x, q.y], [r.x, r.y]);
     let mut shift = [0.0; 2];
-    for (k, (a, b), closed) in [
-        (
-            0,
-            (u0, u1),
-            (0..=4).all(|j| {
-                (s.eval(u0, v0 + (v1 - v0) * j as f64 / 4.0)
-                    - s.eval(u1, v0 + (v1 - v0) * j as f64 / 4.0))
-                .norm()
-                    < tol::ROUNDOFF
-            }),
-        ),
-        (
-            1,
-            (v0, v1),
-            (0..=4).all(|i| {
-                (s.eval(u0 + (u1 - u0) * i as f64 / 4.0, v0)
-                    - s.eval(u0 + (u1 - u0) * i as f64 / 4.0, v1))
-                .norm()
-                    < tol::ROUNDOFF
-            }),
-        ),
-    ] {
-        let w = b - a;
-        if !closed || w <= 0.0 {
+    for k in 0..2 {
+        let (a, b) = ranges[k];
+        let Some(w) = periods[k].filter(|w| *w > 0.0) else {
             continue;
-        }
+        };
         let m = ((at[k] - q[k]) / w).round();
         let tol = tol::REL * w;
         let inside = |x: f64| x >= a - tol && x <= b + tol;
@@ -924,7 +914,7 @@ pub fn replace_surfaces_in(b: &Body, surfs: &[Surface], domains: &[Option<UvBox>
 /// without: a caller that settles the new faces' senses itself and checks the volume after
 /// (the orientation test casts rays at every face, which on a heavy spline costs more than the
 /// rest of the operation).
-fn replace_surfaces_checked(
+pub(crate) fn replace_surfaces_checked(
     b: &Body,
     surfs: &[Surface],
     domains: &[Option<UvBox>],
@@ -2476,12 +2466,17 @@ pub fn move_faces(
         // The new face's point beside the old one's middle: the replacement lies where the old
         // face was, and meshing a heavy new surface only to find a point on it costs more than
         // the rest of the operation (else its own middle, as the old face's).
+        // (The old middle carried by the motion: the face moved rigidly, so that point is on
+        // its new surface where the old one was on the old, and its normals there compare. The
+        // old middle projected onto the new surface found the far side of a hole moved more
+        // than its radius, whose normal is the other way.)
         let near = {
             let s = &out.faces[fi].surf;
-            let (u, v) = s.project(&was, None);
+            let (u, v) = s.project(&m.point(&was), None);
             let p = s.eval(u, v);
             let size = 1.0 + b.bbox().diagonal();
-            (super::blend::on_face(&out, fi, &p) && (p - was).norm() < 0.25 * size).then_some(p)
+            (super::blend::on_face(&out, fi, &p) && (p - m.point(&was)).norm() < 0.25 * size)
+                .then_some(p)
         };
         let Some(now) = near.or_else(|| middle(&out)) else {
             continue;
@@ -2495,7 +2490,11 @@ pub fn move_faces(
             out.faces[fi].sense = !out.faces[fi].sense;
         }
     }
-    if !out.check_with(super::topo::CheckLevel::Full).is_empty() {
+    let issues = out.check_with(super::topo::CheckLevel::Full);
+    if !issues.is_empty() {
+        if super::env_flag!("CADRS_MOVE_DEBUG") {
+            eprintln!("move faces: {issues:?}");
+        }
         return Err(too_far("a face would run into another face"));
     }
     if super::mass::body_volume(&out) <= 0.0 {
@@ -2691,7 +2690,19 @@ fn param_range(c: &Curve, p0: &P3, p1: &P3, closed: bool, quarter: &P3, dir0: &V
         Curve::Circle { .. } | Curve::Ellipse { .. } => {
             let t0 = conic_closest(c, p0, -PI, PI);
             if closed {
-                // The direction from the old edge's quarter point.
+                // The way the old edge left its start, where that decides it (a hole moved
+                // farther than its radius has its old quarter point nowhere near the new circle,
+                // and the point's projection says nothing of the way round).
+                let tan = c.tangent(t0);
+                let along = tan.dot(dir0) / tan.norm().max(1e-300);
+                if along.abs() > 0.5 {
+                    return if along > 0.0 {
+                        (t0, t0 + TAU)
+                    } else {
+                        (t0, t0 - TAU)
+                    };
+                }
+                // Else the direction from the old edge's quarter point.
                 let tq = conic_closest(c, quarter, t0 - PI, t0 + PI);
                 if tq >= t0 {
                     (t0, t0 + TAU)

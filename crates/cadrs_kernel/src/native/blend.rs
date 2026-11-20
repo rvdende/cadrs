@@ -165,6 +165,9 @@ pub enum SectionKind {
     Curvature { r: f64, m: f64 },
     /// Contact points of the circle for r1 (first face) and r2 (second), the circle's weight.
     Asymmetric { r1: f64, r2: f64 },
+    /// Hartmann's curvature-continuous section of order 2 between the circle's contact points
+    /// for r, its middle curving with radius `center` (or taking off what the circle does).
+    Thumbweight { r: f64, center: Option<f64> },
 }
 
 /// The geometry of an edge's blend in the plane square to it, in that plane's 2D coordinates:
@@ -193,7 +196,8 @@ pub fn section_loop(c: &Corner2, kind: SectionKind, src: Src) -> Result<(Vec<Pie
     let (a1, a2) = match kind {
         SectionKind::Circle { r }
         | SectionKind::Conic { r, .. }
-        | SectionKind::Curvature { r, .. } => (r / tan_half, r / tan_half),
+        | SectionKind::Curvature { r, .. }
+        | SectionKind::Thumbweight { r, .. } => (r / tan_half, r / tan_half),
         SectionKind::Chamfer { d1, d2 } => (d1, d2),
         SectionKind::Asymmetric { r1, r2 } => (r1 / tan_half, r2 / tan_half),
     };
@@ -261,6 +265,18 @@ pub fn section_loop(c: &Corner2, kind: SectionKind, src: Src) -> Result<(Vec<Pie
             let a = |q: P2, f: f64| q + (p - q) * f;
             let poles = [c1, a(c1, m / 2.0), a(c1, m), a(c2, m), a(c2, m / 2.0), c2].map(pt);
             Curve::Nurbs(std::sync::Arc::new(NurbsCurve::bezier(&poles, &[1.0; 6])))
+        }
+        SectionKind::Thumbweight { center, .. } => {
+            let w = match center {
+                Some(c) => super::gn_blend::center_w(theta, a1, c)?,
+                None => super::gn_blend::equal_area_w(theta)?,
+            };
+            Curve::Nurbs(std::sync::Arc::new(super::gn_blend::section(
+                pt(c1),
+                pt(p),
+                pt(c2),
+                w,
+            )?))
         }
     };
     finish(section, 0.0, 1.0, c1, c2, c, src)
@@ -900,7 +916,10 @@ pub fn ball_frame(c: P3, r: f64, z: V3, x: V3) -> Result<Body> {
         plane,
         f: Frame { o: c, x, y, z },
     };
-    Ok(sweep::sweep_full(&mf, &[], &kind, 0.0, TAU, true, true)?.body)
+    let mut body = sweep::sweep_full(&mf, &[], &kind, 0.0, TAU, true, true)?.body;
+    // (The half disk's diameter turns about itself: its line is no edge of the ball.)
+    body.drop_unused_edges();
+    Ok(body)
 }
 
 /// A hexahedron with planar faces from its 8 corners: 0–3 the bottom quad, 4–7 the top one
@@ -1265,11 +1284,14 @@ fn fillet_section(spec: &FilletSpec, phi: f64) -> SectionKind {
     let r = match spec.size {
         FilletSize::Radius(r) => r,
         FilletSize::Width(w) => w / (2.0 * (phi / 2.0).sin()),
+        // Contacts `d` along faces at the interior angle θ = π − φ: the ball of d·tan(θ/2).
+        FilletSize::Setback(d) => d / (phi / 2.0).tan(),
     };
     match spec.profile {
         FilletProfile::Circular => SectionKind::Circle { r },
         FilletProfile::Conic { rho } => SectionKind::Conic { r, rho },
         FilletProfile::Curvature { magnitude } => SectionKind::Curvature { r, m: magnitude },
+        FilletProfile::Thumbweight { center } => SectionKind::Thumbweight { r, center },
         FilletProfile::Asymmetric { second, flip } => {
             if flip {
                 SectionKind::Asymmetric { r1: second, r2: r }
@@ -1826,6 +1848,68 @@ fn narrow_wedge(theta: f64) -> bool {
 /// its tool, the wedge between the edge and its contact lines, cuts away only what is there,
 /// so one wider than a wall is high runs on through the wall and out of the face beyond.
 fn check_fits(b: &Body, e: usize, kind: &dyn Fn(f64) -> SectionKind) -> Result<()> {
+    fits(b, e, kind, false, &[0.1, 0.3, 0.5, 0.7, 0.9])
+}
+
+/// Whether a variable fillet's ball fits the faces at each of its law's stations: at fraction
+/// `t` of the edge, the contact lines of radius `r` on the faces.
+fn law_fits(b: &Body, law: &FilletLaw) -> Result<()> {
+    let e = law.edge.0 as usize;
+    // The law's radius at fraction `t`, interpolated between its stations.
+    let mut st = law.radii.clone();
+    st.sort_by(|a, c| a.0.total_cmp(&c.0));
+    let radius = |t: f64| -> f64 {
+        match st.iter().position(|s| s.0 >= t) {
+            Some(0) | None if st.len() == 1 => st[0].1,
+            Some(0) => st[0].1,
+            None => st[st.len() - 1].1,
+            Some(i) => {
+                let (a, c) = (st[i - 1], st[i]);
+                let w = if c.0 > a.0 {
+                    (t - a.0) / (c.0 - a.0)
+                } else {
+                    1.0
+                };
+                a.1 + (c.1 - a.1) * w
+            }
+        }
+    };
+    // Near each station, short of the edge's ends (where a face meeting the next at a slant
+    // takes the contact off it, and the blends of the edges there meet instead); a law that
+    // tapers to nothing has no ball to fit there.
+    for &(t, _) in &st {
+        let t = t.clamp(0.1, 0.9);
+        let r = radius(t);
+        if r > 0.0 {
+            fits(b, e, &|_| SectionKind::Circle { r }, true, &[t])?;
+        }
+    }
+    Ok(())
+}
+
+/// Whether chamfers of `d1` (on the edge's first face, [`edge_sides`]) and `d2` fit the faces at
+/// each of `edges`: their contact lines on the faces. An error naming the first that doesn't.
+pub(crate) fn chamfers_fit(b: &Body, edges: &[(usize, f64, f64)]) -> Result<()> {
+    for &(e, d1, d2) in edges {
+        fits(
+            b,
+            e,
+            &|_| SectionKind::Chamfer { d1, d2 },
+            true,
+            &[0.1, 0.3, 0.5, 0.7, 0.9],
+        )?;
+    }
+    Ok(())
+}
+
+/// [`check_fits`]; `strict`, a chamfer too (else it may run on past its faces).
+fn fits(
+    b: &Body,
+    e: usize,
+    kind: &dyn Fn(f64) -> SectionKind,
+    strict: bool,
+    fracs: &[f64],
+) -> Result<()> {
     let ed = &b.edges[e];
     let [s1, s2] = edge_sides(b, e)?;
     let tm = ed.mid_t();
@@ -1836,7 +1920,8 @@ fn check_fits(b: &Body, e: usize, kind: &dyn Fn(f64) -> SectionKind) -> Result<(
     let (a1, a2) = match kind(phi) {
         SectionKind::Circle { r }
         | SectionKind::Conic { r, .. }
-        | SectionKind::Curvature { r, .. } => (r / (theta / 2.0).tan(), r / (theta / 2.0).tan()),
+        | SectionKind::Curvature { r, .. }
+        | SectionKind::Thumbweight { r, .. } => (r / (theta / 2.0).tan(), r / (theta / 2.0).tan()),
         SectionKind::Chamfer { d1, d2 } => (d1, d2),
         SectionKind::Asymmetric { r1, r2 } => (r1 / (theta / 2.0).tan(), r2 / (theta / 2.0).tan()),
     };
@@ -1844,9 +1929,15 @@ fn check_fits(b: &Body, e: usize, kind: &dyn Fn(f64) -> SectionKind) -> Result<(
     // hole beside the edge is the boolean's business, not a misfit).
     let narrow = narrow_wedge(theta);
     let mut fits = [false, false];
-    for frac in [0.1, 0.3, 0.5, 0.7, 0.9] {
+    for &frac in fracs {
         let tm = ed.t[0] + (ed.t[1] - ed.t[0]) * frac;
         let p = ed.point(tm);
+        // (The faces' directions in from the edge at this point: round a curved edge they turn
+        // with it, and the middle's would set a contact near an end off its face.)
+        let (w1, w2) = (
+            face_dirs(b, s1.0, e, s1.1, tm).1,
+            face_dirs(b, s2.0, e, s2.1, tm).1,
+        );
         let sides = [(s1, w1, a1), (s2, w2, a2)];
         if sides.iter().any(|&(_, _, a)| !(a > 0.0) || !a.is_finite()) {
             return Err(KernelError::InvalidParameter(
@@ -1883,7 +1974,7 @@ fn check_fits(b: &Body, e: usize, kind: &dyn Fn(f64) -> SectionKind) -> Result<(
             }
         }
     }
-    if !(fits[0] && fits[1]) && !matches!(kind(phi), SectionKind::Chamfer { .. }) {
+    if !(fits[0] && fits[1]) && (strict || !matches!(kind(phi), SectionKind::Chamfer { .. })) {
         return Err(KernelError::TooLarge {
             op: "blend",
             why: "the blend is too large for the faces at the edge".into(),
@@ -1911,14 +2002,15 @@ fn check_overlaps(b: &Body, edges: &[EdgeBlend]) -> Result<()> {
         let across = v.dot(&into);
         v.dot(&n).abs() < 1e-6 * (1.0 + w) && across > 1e-7 && across < w - 1e-7
     };
-    // Points of the strip: across it at a few widths, along it at a few places.
+    // Points of the strip: across it at a few widths and on its far side (its contact line,
+    // inside the other strip by however little they overlap), along it at a few places.
     let strip_points = |e: usize, fi: usize, fwd: bool, w: f64| -> Vec<P3> {
         let ed = &b.edges[e];
         let mut pts = Vec::new();
         for k in 1..16 {
             let t = ed.t[0] + (ed.t[1] - ed.t[0]) * k as f64 / 16.0;
             let (_, into) = face_dirs(b, fi, e, fwd, t);
-            for s in [0.05, 0.25, 0.5, 0.75, 0.95] {
+            for s in [0.05, 0.25, 0.5, 0.75, 0.95, 1.0] {
                 pts.push(ed.point(t) + into * (w * s));
             }
         }
@@ -1940,7 +2032,8 @@ fn check_overlaps(b: &Body, edges: &[EdgeBlend]) -> Result<()> {
         let (a1, a2) = match kind(phi) {
             SectionKind::Circle { r }
             | SectionKind::Conic { r, .. }
-            | SectionKind::Curvature { r, .. } => {
+            | SectionKind::Curvature { r, .. }
+            | SectionKind::Thumbweight { r, .. } => {
                 (r / (theta / 2.0).tan(), r / (theta / 2.0).tan())
             }
             SectionKind::Chamfer { .. } => continue,
@@ -2675,7 +2768,7 @@ pub fn fillet(
     edges: &[EdgeId],
     spec: &FilletSpec,
 ) -> Result<OpResult> {
-    let (FilletSize::Radius(r) | FilletSize::Width(r)) = spec.size;
+    let (FilletSize::Radius(r) | FilletSize::Width(r) | FilletSize::Setback(r)) = spec.size;
     if !(r > 0.0) {
         return Err(KernelError::InvalidParameter(
             "The fillet's size must be positive".into(),
@@ -2696,7 +2789,9 @@ pub fn fillet(
             }
         }
     }
-    // Section profiles other than circular: straight edges between flat faces only.
+    // Section profiles other than circular: straight edges between flat faces, and rims (a
+    // circle between faces about its axis, a plane square to it or a surface of revolution
+    // about it), whose section is the same all round and whose tool is that section revolved.
     if !matches!(spec.profile, FilletProfile::Circular) {
         let b = k.get(body)?;
         for e in &all {
@@ -2704,7 +2799,21 @@ pub fn fillet(
             let [s1, s2] = edge_sides(b, e.0 as usize)?;
             let flat = matches!(b.faces[s1.0].surf, Surface::Plane { .. })
                 && matches!(b.faces[s2.0].surf, Surface::Plane { .. });
-            if !matches!(ed.curve, Curve::Line { .. }) || !flat {
+            let rim = match &ed.curve {
+                Curve::Circle { c, x, y, .. } => {
+                    let axis = x.cross(y).normalize();
+                    let about = |s: &Surface| match s {
+                        Surface::Plane { f } => f.x.cross(&f.y).cross(&axis).norm() < tol::ANGULAR,
+                        _ => s.axis().is_some_and(|(o, z)| {
+                            z.cross(&axis).norm() < tol::ANGULAR
+                                && (o - c).cross(&axis).norm() < 1e-7
+                        }),
+                    };
+                    about(&b.faces[s1.0].surf) && about(&b.faces[s2.0].surf)
+                }
+                _ => false,
+            };
+            if !(matches!(ed.curve, Curve::Line { .. }) && flat) && !rim {
                 return Err(KernelError::InvalidParameter("Conic, curvature and asymmetric fillets work on straight edges between flat faces".into()));
             }
         }
@@ -2732,6 +2841,22 @@ pub fn fillet(
             }
         }
     }
+    // Narrow faces the ball bridges over: gone, the faces either side run on to meet, and that
+    // edge filleted in place of the two.
+    if let (FilletSize::Radius(r), FilletProfile::Circular) = (spec.size, spec.profile)
+        && let Some((nb, edges)) = swallow_narrow_faces(&b, &all, r)?
+    {
+        let id = k.insert(nb);
+        return fillet(
+            k,
+            id,
+            &edges,
+            &FilletSpec {
+                propagate: false,
+                ..*spec
+            },
+        );
+    }
     // (Local trimming passes over edges whose faces join smoothly.)
     let sharp = sharp_edges(&b, &all)?;
     let laws: Option<Vec<super::fillet::RadiusLaw>> = sharp
@@ -2745,6 +2870,8 @@ pub fn fillet(
                     Some(th) => w / (2.0 * ((PI - th) / 2.0).sin()),
                     None => return Some((e, super::fillet::width_law(&b, e, w)?)),
                 },
+                // (Faces whose angle varies along the edge: left to the blend tool.)
+                FilletSize::Setback(d) => d * (super::fillet::chamfer_angle(&b, e)? / 2.0).tan(),
             };
             Some((e, vec![(0.0, r), (1.0, r)]))
         })
@@ -3063,6 +3190,32 @@ pub fn chamfer(
         Some(first) => e.after("the local chamfer", first),
         None => e,
     })
+}
+
+/// Equal-distance chamfers, each edge at its own distance (`dists`: an edge and its distance),
+/// by local trimming: where chamfers of unequal distances meet at a corner, their planes are
+/// trimmed against each other there ([`super::fillet::chamfer_edges_measured`]).
+pub fn chamfer_each(
+    k: &mut NativeKernel,
+    body: BodyId,
+    dists: &[(usize, f64)],
+) -> Result<OpResult> {
+    let b = std::sync::Arc::clone(k.get(body)?);
+    let ids: Vec<EdgeId> = dists.iter().map(|&(e, _)| EdgeId(e as u64)).collect();
+    let sharp = sharp_edges(&b, &real_edges(&b, &ids)?)?;
+    let edges: Vec<(usize, [f64; 2])> = dists
+        .iter()
+        .filter(|(e, _)| sharp.contains(&EdgeId(*e as u64)))
+        .map(|&(e, d)| (e, [d, d]))
+        .collect();
+    let (out, src) = super::fillet::chamfer_edges_measured(&b, body, &edges, false)?;
+    if let Some(e) = local_problem(&b, &out) {
+        return Err(KernelError::InvalidResult {
+            op: "chamfer",
+            why: format!("the chamfer isn't valid: {e}"),
+        });
+    }
+    Ok(Tracked { body: out, src }.into_result(k, body))
 }
 
 /// The chamfer `r` of `edges` of `body` with its corners cut flat ([`ChamferCorners::Flat`]): at
@@ -3453,8 +3606,124 @@ pub fn chamfer_tool(
     blend(k, body, &list, false)
 }
 
-/// Onshape's Full round: the middle face replaced by a half cylinder tangent to two parallel
-/// flat side faces (r = half their distance).
+/// A picked straight convex edge on a flat face: the edge, the face, the other face, a point
+/// and direction of its line, and the blend's size.
+type FlatEdge = (usize, usize, P3, V3, f64);
+
+/// A narrow face a fillet swallows (the API's definition of `fillet`): a flat face `N` two of
+/// whose straight edges are picked, between `N` and flat faces `A` and `B`, too narrow for both
+/// strips, so that a ball of radius `r` can't touch it (the strips' contacts on it, `r·tan(φ/2)`
+/// in from each edge, φ the faces' turn there, reach past each other). The ball rests on `A` and
+/// `B` alone and bridges over `N`: the result is `b` with `N` gone (`A` and `B` run on to meet,
+/// [`super::defeature::delete_faces`]) and that edge filleted in place of the two. Returns that
+/// body and the edges to fillet on it (`edges` found again, by their middles, with the new
+/// edges in place of the pairs); `None` where no picked pair swallows its face.
+/// After springrep's `swallowed_strip` (MIT), which rounds `A` to `B` instead.
+fn swallow_narrow_faces(b: &Body, edges: &[EdgeId], r: f64) -> Result<Option<(Body, Vec<EdgeId>)>> {
+    let normal = |f: usize| match &b.faces[f].surf {
+        Surface::Plane { f: fr } => {
+            Some(fr.x.cross(&fr.y).normalize() * if b.faces[f].sense { 1.0 } else { -1.0 })
+        }
+        _ => None,
+    };
+    let picked: Vec<usize> = edges.iter().map(|e| e.0 as usize).collect();
+    let mut gone: Vec<usize> = Vec::new();
+    let mut pairs: Vec<(usize, [usize; 2])> = Vec::new();
+    // Per picked straight convex edge on a flat face: (edge, the face, the other face, its line).
+    let mut by_face: std::collections::HashMap<usize, Vec<FlatEdge>> = Default::default();
+    for &e in &picked {
+        let ed = &b.edges[e];
+        let Curve::Line { .. } = ed.curve else {
+            continue;
+        };
+        let Ok([(f1, _), (f2, _)]) = edge_sides(b, e) else {
+            continue;
+        };
+        let (Some(n1), Some(n2)) = (normal(f1), normal(f2)) else {
+            continue;
+        };
+        if super::fillet::edge_convexity(b, e) != Some(true) {
+            continue;
+        }
+        let (p, q) = (ed.point(ed.t[0]), ed.point(ed.t[1]));
+        let d = (q - p).normalize();
+        let turn = n1.dot(&n2).clamp(-1.0, 1.0).acos();
+        let reach = r * (turn / 2.0).tan();
+        by_face.entry(f1).or_default().push((e, f2, p, d, reach));
+        by_face.entry(f2).or_default().push((e, f1, p, d, reach));
+    }
+    let mut faces: Vec<usize> = by_face.keys().copied().collect();
+    faces.sort_unstable();
+    for nf in faces {
+        let on = &by_face[&nf];
+        let edges_of_n = b.faces[nf].loops.iter().flatten().count();
+        if on.len() != 2 || b.faces[nf].loops.len() != 1 || edges_of_n != 4 {
+            continue;
+        }
+        let ((e1, a, p1, d1, r1), (e2, bf, p2, d2, r2)) = (on[0], on[1]);
+        if a == bf || d1.cross(&d2).norm() > tol::ANGULAR {
+            continue;
+        }
+        let off = p2 - p1;
+        let width = (off - d1 * off.dot(&d1)).norm();
+        if r1 + r2 > width + tol::REL * (1.0 + r) {
+            gone.push(nf);
+            pairs.push((nf, [e1, e2]));
+            let _ = (a, bf);
+        }
+    }
+    if gone.is_empty() {
+        return Ok(None);
+    }
+    let (nb, from) = super::defeature::delete_faces(b, &gone)?;
+    let paired: Vec<usize> = pairs.iter().flat_map(|x| x.1).collect();
+    let nef = nb.edge_faces();
+    let mut out: Vec<EdgeId> = Vec::new();
+    for (nf, [e1, e2]) in &pairs {
+        let other = |e: usize| {
+            edge_sides(b, e)
+                .ok()
+                .and_then(|s| s.iter().map(|x| x.0).find(|f| f != nf))
+        };
+        let (Some(fa), Some(fb)) = (other(*e1), other(*e2)) else {
+            return Ok(None);
+        };
+        let comes = |g: usize, f: usize| from.get(g).is_some_and(|x| x.contains(&f));
+        let found = (0..nb.edges.len()).find(|&e| {
+            let fs = &nef[e];
+            fs.len() == 2
+                && ((comes(fs[0], fa) && comes(fs[1], fb))
+                    || (comes(fs[0], fb) && comes(fs[1], fa)))
+        });
+        let Some(e) = found else {
+            return Ok(None);
+        };
+        out.push(EdgeId(e as u64));
+    }
+    // The other picked edges, by their middles.
+    for &e in picked.iter().filter(|e| !paired.contains(e)) {
+        let ed = &b.edges[e];
+        let m = ed.point(ed.mid_t());
+        let near = (0..nb.edges.len())
+            .filter(|&x| !nb.edges[x].degenerate)
+            .map(|x| (x, super::fillet::edge_distance(&nb, x, &m)))
+            .min_by(|p, q| p.1.total_cmp(&q.1));
+        match near {
+            Some((x, d)) if d <= tol::POINT * (1.0 + r) => {
+                if !out.contains(&EdgeId(x as u64)) {
+                    out.push(EdgeId(x as u64));
+                }
+            }
+            _ => return Ok(None),
+        }
+    }
+    Ok(Some((nb, out)))
+}
+
+/// Onshape's Full round: the middle face replaced by the round tangent to it and to the two flat
+/// side faces, which stay where they are. All three faces are planes through one direction (the
+/// round's axis); between parallel sides `w` apart the round is the half cylinder of radius `w/2`,
+/// between sides that lean it is the arc of the circle touching all three planes' traces.
 pub fn full_round(
     k: &mut NativeKernel,
     body: BodyId,
@@ -3481,20 +3750,9 @@ pub fn full_round(
     let (o1, n1) = plane_of(side1)?;
     let (o2, n2) = plane_of(side2)?;
     let (om, nm) = plane_of(center)?;
-    if n1.dot(&n2) > -1.0 + tol::ANGULAR {
-        return Err(KernelError::InvalidParameter(
-            "A full round needs two parallel side faces facing away from each other".into(),
-        ));
-    }
-    if n1.dot(&nm).abs() > tol::ANGULAR {
-        return Err(KernelError::InvalidParameter(
-            "The middle face must be square to the parallel side faces".into(),
-        ));
-    }
-    let width = (o2 - o1).dot(&n1).abs();
-    let r = width / 2.0;
-    // Each side face must reach r below the middle face, else the round would cut through
-    // what lies under it: its boundary's deepest point, from points along its edges.
+    // Each side face must reach the round's contact on it, else the round would cut through what
+    // lies under it: its boundary's deepest point below the middle face, from points along its
+    // edges.
     let depth = |f: FaceId| -> f64 {
         b.faces[f.0 as usize]
             .loops
@@ -3507,21 +3765,74 @@ pub fn full_round(
             .map(|p| (om - p).dot(&nm))
             .fold(f64::NEG_INFINITY, f64::max)
     };
-    if depth(side1).min(depth(side2)) < r - tol::REL * (1.0 + r) {
-        return Err(KernelError::InvalidParameter(
-            "The side faces are too shallow for the full round".into(),
-        ));
+    let shallow = || {
+        KernelError::InvalidParameter("The side faces are too shallow for the full round".into())
+    };
+    let (plane, region, along) = if n1.dot(&n2) <= -1.0 + tol::ANGULAR {
+        if n1.dot(&nm).abs() > tol::ANGULAR {
+            return Err(KernelError::InvalidParameter(
+                "The middle face must be square to the parallel side faces".into(),
+            ));
+        }
+        let r = (o2 - o1).dot(&n1).abs() / 2.0;
+        if depth(side1).min(depth(side2)) < r - tol::REL * (1.0 + r) {
+            return Err(shallow());
+        }
+        let (plane, region) = half_round_section(n1, nm, o1, o2, om, r);
+        (plane, region, n1.cross(&nm).normalize())
+    } else {
+        let (n1, n2, nm) = (n1.normalize(), n2.normalize(), nm.normalize());
+        // The three planes must run parallel to one direction, the round's axis.
+        let a1 = n1.cross(&nm);
+        if a1.norm() < tol::ANGULAR || n2.cross(&nm).norm() < tol::ANGULAR {
+            return Err(KernelError::InvalidParameter(
+                "A full round's side faces can't be parallel to its middle face".into(),
+            ));
+        }
+        let along = a1.normalize();
+        if n2.dot(&along).abs() > tol::ANGULAR || n1.dot(&n2) > 1.0 - tol::ANGULAR {
+            return Err(KernelError::InvalidParameter(
+                "A full round needs side faces parallel to one direction with the middle face, \
+                 facing away from each other"
+                    .into(),
+            ));
+        }
+        let (plane, region, [t1, t2], r) =
+            leaning_round_section([(o1, n1), (o2, n2), (om, nm)], along)?;
+        let need = |t: P3| (om - t).dot(&nm) - tol::REL * (1.0 + r);
+        if depth(side1) < need(t1) || depth(side2) < need(t2) {
+            return Err(shallow());
+        }
+        (plane, region, along)
+    };
+    let prof = Profile::new(plane, vec![region]);
+    let regions = super::profile::regions(&prof)?;
+    let mf = super::profile::merge_regions(&regions)?;
+    // Long enough to cover the body along the axis.
+    let (lo, hi) = super::kernel::extent_along(&b, &plane.origin, &along);
+    let dir = plane.normal.into_inner();
+    let s = if dir.dot(&along) > 0.0 { 1.0 } else { -1.0 };
+    let (lo, hi) = if s > 0.0 { (lo, hi) } else { (-hi, -lo) };
+    let kind = Prism { plane, dir };
+    let built = sweep::sweep_full(&mf, &[], &kind, lo - 1.0, hi + 1.0, false, true)?;
+    let mut src = vec![Vec::new(); built.body.faces.len()];
+    for (f, o) in &built.origins {
+        if let Origin::ProfileCurve { curve: 1, .. } = o {
+            src[*f].push(FaceSrc::Input(center.0 as usize));
+        }
     }
-    // The round's axis: in the middle face's plane moved r into the material, midway between
-    // the sides, along the sides' and middle face's common direction.
-    let along = n1.cross(&nm).normalize();
-    let mid_side = o1 + (o2 - o1).dot(&n1) * n1 * 0.5 + n1 * 0.0;
-    let _ = mid_side;
+    let cur = Tracked::of((*b).clone());
+    let out = cur.apply(&built.body, &src, BoolOp::Subtract)?;
+    Ok(out.into_result(k, body))
+}
+
+/// The section of a full round's tool between parallel sides (through `o1` and `o2`, the first
+/// facing `n1`) under the middle face (through `om`, facing `nm`): the rectangle over the axis
+/// less the half disc of radius `r`, in the plane square to the axis through it.
+fn half_round_section(n1: V3, nm: V3, o1: P3, o2: P3, om: P3, r: f64) -> (Plane, Region) {
     // A point on the axis: on the middle plane, halfway between the side planes, then r down.
     let base = om + n1 * ((o1 - om).dot(&n1) + (o2 - om).dot(&n1)) * 0.5 - nm * r;
-    // Section plane square to the axis.
-    let x = n1;
-    let y = nm;
+    let (x, y) = (n1, nm);
     let plane = Plane {
         origin: base,
         x_dir: nalgebra::Unit::new_normalize(x),
@@ -3556,25 +3867,100 @@ pub fn full_round(
         holes: vec![],
         source: None,
     };
-    let prof = Profile::new(plane, vec![region]);
-    let regions = super::profile::regions(&prof)?;
-    let mf = super::profile::merge_regions(&regions)?;
-    // Long enough to cover the body along the axis.
-    let (lo, hi) = super::kernel::extent_along(&b, &base, &along);
-    let dir = plane.normal.into_inner();
-    let s = if dir.dot(&along) > 0.0 { 1.0 } else { -1.0 };
-    let (lo, hi) = if s > 0.0 { (lo, hi) } else { (-hi, -lo) };
-    let kind = Prism { plane, dir };
-    let built = sweep::sweep_full(&mf, &[], &kind, lo - 1.0, hi + 1.0, false, true)?;
-    let mut src = vec![Vec::new(); built.body.faces.len()];
-    for (f, o) in &built.origins {
-        if let Origin::ProfileCurve { curve: 1, .. } = o {
-            src[*f].push(FaceSrc::Input(center.0 as usize));
-        }
+    (plane, region)
+}
+
+/// The section of a full round's tool between sides that lean, `faces` the two sides' and the
+/// middle face's planes (a point, the unit normal out of the material), all parallel to `along`:
+/// the circle touching all three from inside, and the region between its arc over the middle
+/// face and the sides' traces run past the middle plane. Also the contacts on the sides and the
+/// radius.
+fn leaning_round_section(faces: [(P3, V3); 3], along: V3) -> Result<(Plane, Region, [P3; 2], f64)> {
+    let [(o1, n1), (o2, n2), (om, nm)] = faces;
+    // The section square to the axis: x along u, y along w = along × u.
+    let u = (nm - along * nm.dot(&along)).normalize();
+    let w = along.cross(&u);
+    // The circle's centre c = om + X·u + Y·w lies ρ within each plane, n·(c − o) = −ρ.
+    let m = nalgebra::Matrix3::from_fn(|i, j| match j {
+        0 => faces[i].1.dot(&u),
+        1 => faces[i].1.dot(&w),
+        _ => 1.0,
+    });
+    let rhs = nalgebra::Vector3::from_fn(|i, _| faces[i].1.dot(&(faces[i].0 - om)));
+    let sol = m.lu().solve(&rhs).ok_or_else(|| {
+        KernelError::InvalidParameter(
+            "A full round's faces have no circle touching all three".into(),
+        )
+    })?;
+    let r = sol[2];
+    if !(r > tol::REL) {
+        return Err(KernelError::InvalidParameter(
+            "A full round's side faces open away from the middle face".into(),
+        ));
     }
-    let cur = Tracked::of((*b).clone());
-    let out = cur.apply(&built.body, &src, BoolOp::Subtract)?;
-    Ok(out.into_result(k, body))
+    let c = om + u * sol[0] + w * sol[1];
+    let (t1, t2, tm) = (c + n1 * r, c + n2 * r, c + nm * r);
+    let _ = (o1, o2);
+    // The profile in the section through the centre, x along the first side's normal.
+    let u = (n1 - along * n1.dot(&along)).normalize();
+    let w = along.cross(&u);
+    let to2 = |p: P3| nalgebra::Point2::new((p - c).dot(&u), (p - c).dot(&w));
+    // Each side's trace runs from its contact out past the middle plane by `delta`.
+    let past = |t: P3, n: V3, delta: f64| -> P3 {
+        let mut d = along.cross(&n);
+        if d.dot(&nm) < 0.0 {
+            d = -d;
+        }
+        t + d * ((nm.dot(&(om - t)) + delta) / d.dot(&nm))
+    };
+    let mut delta = r * 0.5 + 1e-3;
+    let (mut p1, mut p2) = (past(t1, n1, delta), past(t2, n2, delta));
+    // Sides closing toward the middle: stay short of where their traces cross.
+    while (p2 - p1).dot(&(t2 - t1)) <= 0.0 && delta > tol::REL {
+        delta *= 0.5;
+        (p1, p2) = (past(t1, n1, delta), past(t2, n2, delta));
+    }
+    let ang = |p: P3| {
+        let q = to2(p);
+        q.y.atan2(q.x)
+    };
+    let (s1, sm, s2) = (ang(t1), ang(tm), ang(t2));
+    let tau = 2.0 * PI;
+    let ccw = (s2 - s1).rem_euclid(tau);
+    let sweep = if (sm - s1).rem_euclid(tau) < ccw {
+        ccw
+    } else {
+        ccw - tau
+    };
+    let l = |a: P3, q: P3| Curve2::Line {
+        a: to2(a),
+        b: to2(q),
+        source: None,
+    };
+    let plane = Plane {
+        origin: c,
+        x_dir: nalgebra::Unit::new_normalize(u),
+        normal: nalgebra::Unit::new_normalize(along),
+    };
+    let region = Region {
+        outer: Loop {
+            curves: vec![
+                Curve2::Arc {
+                    center: nalgebra::Point2::origin(),
+                    radius: r,
+                    start_angle: s1,
+                    sweep,
+                    source: Some(1),
+                },
+                l(t2, p2),
+                l(p2, p1),
+                l(p1, t1),
+            ],
+        },
+        holes: vec![],
+        source: None,
+    };
+    Ok((plane, region, [t1, t2], r))
 }
 
 /// A partial fillet (PS14.6): the whole fillet's tool between the planes square to the edge at
@@ -3736,6 +4122,10 @@ pub fn fillet_variable(
         .cloned()
         .collect();
     let laws = &laws[..];
+    // Each ball must fit the faces where the law sets its radius.
+    for l in laws {
+        law_fits(&b, l)?;
+    }
     // By local trimming first (any edge and faces), then the tool for straight edges between
     // flat faces.
     let first = match fillet_laws_local(k, body, laws) {
@@ -4006,7 +4396,8 @@ fn chain_tool_lofted(
     let size_guess0 = match kind(PI / 2.0) {
         SectionKind::Circle { r }
         | SectionKind::Conic { r, .. }
-        | SectionKind::Curvature { r, .. } => r,
+        | SectionKind::Curvature { r, .. }
+        | SectionKind::Thumbweight { r, .. } => r,
         SectionKind::Chamfer { d1, d2 } => d1.max(d2),
         SectionKind::Asymmetric { r1, r2 } => r1.max(r2),
     };

@@ -1405,20 +1405,25 @@ fn run_jobs<const ALL: bool>(
     };
     let table = table.as_ref();
     const CHUNK: usize = 32;
-    if jobs.len() >= 2 * CHUNK && super::par::threads_for(jobs.len() / CHUNK, false) {
-        let parts: Vec<QE> = jobs
-            .par_chunks(CHUNK)
-            .map(|c| {
-                let mut a = [0.0; NE];
-                let mut sc = Vec::with_capacity(64);
-                for j in c {
-                    inner::<ALL>(
-                        s, plan, j[0], j[1], j[2], shift, j[3], &mut a, &mut sc, table,
-                    );
-                }
-                a
-            })
-            .collect();
+    // (The chunks' sums alike on one thread: whether a loop runs on the threads depends on
+    // whether anything has started them, and a face weighed both ways must come out the same
+    // to the bit.)
+    if jobs.len() >= 2 * CHUNK {
+        let chunk = |c: &[[f64; 4]]| {
+            let mut a = [0.0; NE];
+            let mut sc = Vec::with_capacity(64);
+            for j in c {
+                inner::<ALL>(
+                    s, plan, j[0], j[1], j[2], shift, j[3], &mut a, &mut sc, table,
+                );
+            }
+            a
+        };
+        let parts: Vec<QE> = if super::par::threads_for(jobs.len() / CHUNK, false) {
+            jobs.par_chunks(CHUNK).map(chunk).collect()
+        } else {
+            jobs.chunks(CHUNK).map(chunk).collect()
+        };
         for p in parts {
             for (a, x) in acc.iter_mut().zip(p) {
                 *a += x;

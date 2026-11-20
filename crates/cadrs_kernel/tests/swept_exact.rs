@@ -64,6 +64,7 @@ fn a_leaning_ring_slid_past_its_fold_is_not_overfilled() {
             axis: nalgebra::Unit::new_normalize(Vector3::new(lean.sin(), 0.0, lean.cos())),
             major: 3.0,
             minor: 1.0,
+            spindle: Default::default(),
         })
         .unwrap()
         .bodies[0];

@@ -72,6 +72,7 @@ fn a_micron_cubes_edges_rounded_chamfered_and_hollowed() {
             outward: false,
             hollow: false,
             sharp: true,
+            nothing_hollowed: Default::default(),
         };
         let out = k.shell_with(c, &spec).unwrap().bodies[0];
         assert!(k.get(out).unwrap().check().is_empty(), "side {s}");

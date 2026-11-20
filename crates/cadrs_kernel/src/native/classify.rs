@@ -27,7 +27,16 @@ pub fn face_polygons(body: &Body, f: &Face) -> Vec<Vec<P2>> {
 /// its points: at 1e-6 a raster of 112 passes took a quarter longer.)
 fn polygon_fineness(s: &Surface) -> f64 {
     let (mu, mv) = s.metric();
-    1e-5 / mu.max(mv).max(tol::TINY)
+    // (A plane's spline boundaries ten times finer: two spline outlines a few microns apart, a
+    // prism's cap and its copy's moved by a hair, are told apart by their polygons, which have
+    // no exact curve to fall back on as a circle's do. Only a plane's: on spline surfaces the
+    // extra points cost a CNC raster a third of its time.)
+    let k = if matches!(s, Surface::Plane { .. }) {
+        0.1
+    } else {
+        1.0
+    };
+    k * 1e-5 / mu.max(mv).max(tol::TINY)
 }
 
 /// One of a face's loops sampled as a uv polygon ([`face_polygons`]).

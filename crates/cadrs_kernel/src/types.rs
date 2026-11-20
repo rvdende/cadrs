@@ -190,7 +190,11 @@ pub fn spline_nurbs(
             crate::native::nurbs::hom(&Point3::new(p.x, p.y, 0.0), w)
         })
         .collect();
-    crate::native::nurbs::NurbsCurve::new(degree, knots.to_vec(), cps).ok()
+    // (Clamped: a periodic curve's uniform knots run past its domain, and the kernel works on
+    // curves that start on their first pole and end on their last.)
+    crate::native::nurbs::NurbsCurve::new(degree, knots.to_vec(), cps)
+        .ok()
+        .map(|c| c.clamped())
 }
 
 /// The point at `t` of the cubic Bézier curve with these poles.
@@ -611,6 +615,49 @@ impl RevolveSpec {
     }
 }
 
+/// A screw (a thread's solid): a profile drawn in a plane through the axis, on one side of it,
+/// turned about the axis through `angle` while rising `rise` along it per radian
+/// ([`crate::Kernel::screw`]). The point (ρ, w) of the profile (ρ out from the axis, w along it)
+/// sweeps (ρ cos φ, ρ sin φ, w + rise·φ) for 0 ≤ φ ≤ `angle`, right-handed about the axis's
+/// direction.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ScrewSpec {
+    /// The axis turned about; the rise is along its direction.
+    pub axis: Axis,
+    /// How far the profile rises per radian it turns (negative: it falls; a whole turn rises
+    /// `2π·rise`, which must be at least the profile's extent along the axis, so the turns stay
+    /// apart).
+    pub rise: f64,
+    /// How far it turns (radians, positive; past a whole turn for a thread of several).
+    pub angle: f64,
+}
+
+/// A slab ([`crate::Kernel::slab`]): a block with a flat base and four flat sides under a
+/// B-spline height field. Over the rectangle `0 ≤ u ≤ size[0]`, `0 ≤ v ≤ size[1]` of the frame
+/// (`origin`, `x`, `y`), it runs from the base up to `f(u/size[0], v/size[1])` along `x × y`,
+/// where `f` is the B-spline over [0, 1]² with the clamped knots `knots_u`, `knots_v` (each
+/// running degree + 1 times 0 first and as many times 1 last; the degrees are what the knots
+/// and the heights' counts give) and coefficients `heights[i][j]` (i along u). The top is that
+/// B-spline surface itself, its poles at the knots' Greville abscissae times the size, so its x
+/// and y run linearly with its parameters.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SlabSpec {
+    /// The base's corner.
+    pub origin: Point3<f64>,
+    /// The base's first side's direction.
+    pub x: Unit<Vector3<f64>>,
+    /// The base's second side's direction (square to `x`).
+    pub y: Unit<Vector3<f64>>,
+    /// The base's sides (mm, positive).
+    pub size: [f64; 2],
+    /// The height field's knots along u.
+    pub knots_u: Vec<f64>,
+    /// Its knots along v.
+    pub knots_v: Vec<f64>,
+    /// Its coefficients (mm, each positive): `heights[i][j]`, i along u.
+    pub heights: Vec<Vec<f64>>,
+}
+
 /// One curve of a sweep path (P3.7, PS19.2): an edge of a body or a sketch curve.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PathCurve {
@@ -948,11 +995,27 @@ pub enum Primitive {
         axis: Unit<Vector3<f64>>,
         /// The radius of the circle through its tube's centres.
         major: f64,
-        /// Its tube's radius: less than `major` (a ring torus), equal to it (a horn torus, its
-        /// hole closed to the centre) or more (a spindle torus: the solid the tube fills, counted
-        /// once, its hole closed between the points where the tube crosses the axis).
+        /// Its tube's radius: less than `major` (a ring torus) or equal to it (a horn torus, its
+        /// hole closed to the centre). A tube wider than that crosses the axis: a spindle torus,
+        /// as `spindle` says.
         minor: f64,
+        /// What a tube wider than its ring gives.
+        #[serde(default)]
+        spindle: Spindle,
     },
+}
+
+/// A torus whose tube is wider than its ring ([`Primitive::Torus`]), its surface passing through
+/// itself across the axis: conventions differ, so the caller says which it wants.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Spindle {
+    /// Refused: the surface crosses itself, so it describes no torus.
+    #[default]
+    Refuse,
+    /// The solid the tube's disk fills as it turns, counted once: the turn of the disk's part
+    /// on the ring's side of the axis, bounded by the tube circle's outer arc, which meets the
+    /// axis in a dimple above and below.
+    Solid,
 }
 
 /// How a sweep's profile changes as it follows the path, beyond its control's turning: it
@@ -1255,6 +1318,11 @@ pub enum FilletSize {
     /// where the faces meet at an angle `φ` between their normals, the radius there is
     /// `w / (2 sin(φ/2))`, so the radius varies along an edge whose faces' angle varies.
     Width(f64),
+    /// The setback (mm): how far from the edge the fillet meets each face, measured along the
+    /// face square to the edge. Where the faces meet at an interior angle `θ`, the radius of the
+    /// ball with those contacts is `d·tan(θ/2)`; with a [`FilletProfile::Conic`] section this is
+    /// the conic's leg length.
+    Setback(f64),
 }
 
 /// A fillet's cross section (P3.6, PS14.4). Conic and Curvature keep the contact lines of the
@@ -1288,6 +1356,18 @@ pub enum FilletProfile {
         second: f64,
         /// Swap the two sizes.
         flip: bool,
+    },
+    /// The curvature-continuous blend section of order 2 (E. Hartmann, "Parametric Gⁿ blending
+    /// of curves and surfaces", 2001) between the circular fillet's contact points (the size is
+    /// its tangent offset): `apex + α(t)(a − apex) + β(t)(b − apex)` with the apex on the edge,
+    /// `α = f(1 − p₁)`, `β = (1 − f)p₂`, `f = t̄³/(t̄³ + t³)`, `p₁ = t/(1 − w + wt)`,
+    /// `p₂ = t(1 − w)/(1 − wt)`, a rational quintic. It leaves each face as straight as the face.
+    /// Its thumbweight `w` is the one giving the section's middle the radius of curvature
+    /// `center`, or, with `None`, the one at which it takes off what the round does.
+    Thumbweight {
+        /// The radius of curvature at the section's middle (mm), or `None` for the equal-area
+        /// section.
+        center: Option<f64>,
     },
 }
 
@@ -1364,6 +1444,11 @@ pub struct ChamferOpts {
     /// whichever way the edge runs.
     #[serde(default)]
     pub first_on: Vec<FaceId>,
+    /// Let a chamfer wider than a face at its edge run on past it, through the part (Onshape's
+    /// chamfer round a window in a wall thinner than the chamfer); else such a chamfer is refused
+    /// as too large for its faces. True by default.
+    #[serde(default = "yes")]
+    pub overflow: bool,
 }
 
 impl ChamferOpts {
@@ -1383,6 +1468,7 @@ impl ChamferOpts {
             flipped: Vec::new(),
             corners: ChamferCorners::Miter,
             first_on: Vec::new(),
+            overflow: true,
         }
     }
 }
@@ -1416,6 +1502,24 @@ pub struct ShellSpec {
     /// rounded at the body's concave edges).
     #[serde(default)]
     pub sharp: bool,
+    /// What a wall so thick that it leaves no cavity gives (every point of the body within the
+    /// thickness of a wall that stays).
+    #[serde(default)]
+    pub nothing_hollowed: NothingHollowed,
+}
+
+/// A shell whose walls leave no cavity ([`ShellSpec::nothing_hollowed`]): conventions differ,
+/// so the caller says which it wants.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NothingHollowed {
+    /// Refused, unless the walls just meet (a hair thinner would leave a cavity): then the body
+    /// as it was. Onshape's and OCCT's.
+    #[default]
+    RefuseUnlessMeeting,
+    /// Always refused (springrep's).
+    Refuse,
+    /// The body as it was (brep-bench's: nothing is hollowed, so nothing changes).
+    Unchanged,
 }
 
 /// Volume, area, centroid and inertia, computed from exact geometry where the backend can.

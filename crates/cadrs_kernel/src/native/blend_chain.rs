@@ -394,7 +394,8 @@ pub fn chain_tool(
     let size_guess0 = match kind(PI / 2.0) {
         SectionKind::Circle { r }
         | SectionKind::Conic { r, .. }
-        | SectionKind::Curvature { r, .. } => r,
+        | SectionKind::Curvature { r, .. }
+        | SectionKind::Thumbweight { r, .. } => r,
         SectionKind::Chamfer { d1, d2 } => d1.max(d2),
         SectionKind::Asymmetric { r1, r2 } => r1.max(r2),
     };

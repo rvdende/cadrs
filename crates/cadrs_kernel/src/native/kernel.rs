@@ -1208,20 +1208,7 @@ impl Kernel for NativeKernel {
                 if !(radius > 0.0 && height > 0.0) {
                     return bad("cylinder's radius and height");
                 }
-                let plane = Plane {
-                    origin: base,
-                    x_dir: Unit::new_normalize(any_perpendicular(&axis)),
-                    normal: axis,
-                };
-                let r = region(vec![Curve2::Circle {
-                    center: Point2::origin(),
-                    radius,
-                    source: None,
-                }]);
-                self.extrude_with(
-                    &Profile::new(plane, vec![r]),
-                    &ExtrudeSpec::blind(axis, height),
-                )
+                self.cylinder_seamed(base, axis, radius, height, any_perpendicular(&axis))
             }
             Primitive::Cone {
                 base,
@@ -1286,44 +1273,54 @@ impl Kernel for NativeKernel {
                 axis,
                 major,
                 minor,
+                spindle,
             } => {
                 if !(minor > 0.0 && major >= 0.0) {
                     return Err(KernelError::InvalidParameter(
                         "The torus needs a tube and a ring that is no less than none".into(),
                     ));
                 }
-                let plane = through(center, axis.into_inner());
                 // A ring torus's tube turned whole; a horn torus's (the tube as wide as the ring)
-                // touches the axis at the centre. A spindle torus's tube crosses the axis: the
-                // solid is what the tube fills counted once, the turn of the tube's part beyond
-                // the axis, bounded by its outer arc from (0, −h) to (0, h) and the axis.
-                let tube = if minor <= major * (1.0 + tol::REL) {
-                    vec![Curve2::Circle {
-                        center: Point2::new(major, 0.0),
-                        radius: minor,
-                        source: None,
-                    }]
-                } else {
-                    let end = PI - (major / minor).acos();
+                // touches the axis at the centre. A tube wider than its ring crosses the axis and
+                // describes no torus: refused (a spindle is a revolve of the tube's outer part).
+                if minor > major * (1.0 + tol::REL) {
+                    if spindle == Spindle::Refuse {
+                        return Err(KernelError::InvalidParameter(
+                            "The torus's tube is wider than its ring: it crosses the axis".into(),
+                        ));
+                    }
+                    // The tube circle's outer arc, from where it crosses the axis below round
+                    // through (major + minor, 0) to where it crosses above, closed along the axis.
                     let h = (minor * minor - major * major).sqrt();
-                    vec![
-                        Curve2::Arc {
-                            center: Point2::new(major, 0.0),
-                            radius: minor,
-                            start_angle: -end,
-                            sweep: 2.0 * end,
-                            source: None,
-                        },
-                        Curve2::Line {
-                            a: Point2::new(0.0, h),
-                            b: Point2::new(0.0, -h),
-                            source: None,
-                        },
-                    ]
-                };
+                    let half = std::f64::consts::PI - h.atan2(major);
+                    let plane = through(center, axis.into_inner());
+                    let outline = vec![
+                        Curve2::arc(Point2::new(major, 0.0), minor, -half, 2.0 * half),
+                        line((0.0, h), (0.0, -h)),
+                    ];
+                    return turned(self, plane, outline, center, axis.into_inner());
+                }
+                let plane = through(center, axis.into_inner());
+                let tube = vec![Curve2::Circle {
+                    center: Point2::new(major, 0.0),
+                    radius: minor,
+                    source: None,
+                }];
                 turned(self, plane, tube, center, axis.into_inner())
             }
         }
+    }
+
+    fn screw(&mut self, profile: &Profile, spec: &ScrewSpec) -> Result<OpResult> {
+        super::constructors::screw(self, profile, spec)
+    }
+
+    fn slab(&mut self, spec: &SlabSpec) -> Result<OpResult> {
+        let b = super::constructors::slab(spec)?;
+        Ok(OpResult {
+            bodies: vec![self.insert_sound(b)],
+            history: History::default(),
+        })
     }
 
     fn sweep_with_law(
@@ -1372,7 +1369,111 @@ impl Kernel for NativeKernel {
         {
             return self.colored(Ok(r));
         }
-        let r = super::boolean::boolean(self, op, target, tools);
+        // With the tool's faces that lie a hair off the target's moved onto them, the history
+        // naming the tool's own faces.
+        let on_snapped = |k: &mut Self, snapped: Body| -> Result<OpResult> {
+            let tool = tools[0];
+            let id = k.insert(snapped);
+            let r = super::boolean::boolean(k, op, target, &[id]);
+            k.release(id);
+            r.map(|mut res| {
+                for (_, from) in res.history.modified.iter_mut() {
+                    if from.body == id {
+                        from.body = tool;
+                    }
+                }
+                for from in res.history.deleted.iter_mut() {
+                    if from.body == id {
+                        from.body = tool;
+                    }
+                }
+                res
+            })
+        };
+        let snap = !crate::native::env_flag!("CADRS_NO_SNAP") && tools.len() == 1;
+        // Faces within a couple of point tolerances all over first (coaxial cylinders whose radii
+        // differ by 2 µm: a sliver of tube the boolean places in some places and not others).
+        let first = snap
+            .then(|| super::snap::snapped(self.get(target).ok()?, self.get(tools[0]).ok()?, true))
+            .flatten();
+        let mut r = match first {
+            Some(snapped) => on_snapped(self, snapped),
+            None => super::boolean::boolean(self, op, target, tools),
+        };
+        // Refused with a tool whose faces graze the target's a hair off them (a copy turned by a
+        // microradian): again with those faces moved onto the target's surfaces.
+        if r.is_err()
+            && snap
+            && let Some(snapped) =
+                super::snap::snapped(self.get(target)?, self.get(tools[0])?, false)
+        {
+            match on_snapped(self, snapped) {
+                Ok(res) => r = Ok(res),
+                // (Nothing left is an answer too: a box less its copy turned a hair.)
+                Err(e @ KernelError::EmptyResult(_)) => r = Err(e),
+                Err(_) => {}
+            }
+        }
+        // A result with a vertex inside a face's own seam (a cylinder's seam line running
+        // through the corner where the boolean's cut meets it again: its loop folds back over
+        // the seam, which no mesh follows): again with an operand cylinder's seam turned half a
+        // turn, kept when that one is clear of it.
+        if let (Ok(res), [tool]) = (&r, tools)
+            && !crate::native::env_flag!("CADRS_NO_SEAM_TURN")
+            && res
+                .bodies
+                .iter()
+                .any(|id| self.get(*id).is_ok_and(|b| seam_through_a_vertex(b)))
+        {
+            for which in [*tool, target] {
+                let Some(turned) = self.get(which).ok().and_then(|b| cylinder_turned(b)) else {
+                    continue;
+                };
+                let Ok(made) =
+                    self.cylinder_seamed(turned.0, turned.1, turned.2, turned.3, turned.4)
+                else {
+                    continue;
+                };
+                let [id] = made.bodies.as_slice() else {
+                    continue;
+                };
+                let id = *id;
+                let again = if which == *tool {
+                    super::boolean::boolean(self, op, target, &[id])
+                } else {
+                    super::boolean::boolean(self, op, id, tools)
+                };
+                self.release(id);
+                let Ok(mut res2) = again else { continue };
+                if res2
+                    .bodies
+                    .iter()
+                    .any(|b| self.get(*b).is_ok_and(|b| seam_through_a_vertex(b)))
+                {
+                    for b in &res2.bodies {
+                        self.release(*b);
+                    }
+                    continue;
+                }
+                for (_, from) in res2.history.modified.iter_mut() {
+                    if from.body == id {
+                        from.body = which;
+                    }
+                }
+                for from in res2.history.deleted.iter_mut() {
+                    if from.body == id {
+                        from.body = which;
+                    }
+                }
+                if let Ok(old) = &r {
+                    for b in old.bodies.clone() {
+                        self.release(b);
+                    }
+                }
+                r = Ok(res2);
+                break;
+            }
+        }
         // A pipe united with a ball of its radius about an end of its spine: a pipe closed
         // there.
         if let (BoolOp::Union, [tool], Ok(res)) = (op, tools, &r)
@@ -1470,6 +1571,36 @@ impl Kernel for NativeKernel {
         })
     }
 
+    fn fillet_setback(
+        &mut self,
+        body: BodyId,
+        edges: &[EdgeId],
+        spec: &FilletSpec,
+        setback: f64,
+    ) -> Result<OpResult> {
+        no_edges(edges, "fillet")?;
+        self.at_working_size(body, |k, body, by| {
+            let spec = fillet_scaled(spec, by);
+            let r = super::blend_setback::fillet_setback(k, body, edges, &spec, setback * by);
+            let r = k.dumped(&r);
+            k.colored(r)
+        })
+    }
+
+    fn fillet_faces(
+        &mut self,
+        body: BodyId,
+        face_a: FaceId,
+        face_b: FaceId,
+        radius: f64,
+    ) -> Result<OpResult> {
+        self.at_working_size(body, |k, body, by| {
+            let r = super::face_fillet::fillet_faces(k, body, face_a, face_b, radius * by);
+            let r = k.dumped(&r);
+            k.colored(r)
+        })
+    }
+
     fn thicken_surfaces(&mut self, spec: &ThickenSpec) -> Result<OpResult> {
         super::surfacing::thicken(self, spec)
     }
@@ -1480,6 +1611,25 @@ impl Kernel for NativeKernel {
 
     fn sew_sheets(&mut self, bodies: &[BodyId], tol: f64) -> Result<OpResult> {
         super::surfacing::sew_sheets(self, bodies, tol)
+    }
+
+    fn sew_step(&mut self, bytes: &[u8], tol: f64) -> Result<OpResult> {
+        if !(tol > 0.0 && tol.is_finite()) {
+            return Err(KernelError::InvalidParameter(format!(
+                "The sewing tolerance must be positive (it is {tol})"
+            )));
+        }
+        let bodies = self.import_step(bytes)?;
+        if bodies.is_empty() {
+            return Err(KernelError::InvalidInput(
+                "The STEP file holds no faces to sew".into(),
+            ));
+        }
+        let r = self.sew_solid(&bodies, tol);
+        for b in bodies {
+            self.release(b);
+        }
+        r
     }
 
     fn sew_solid(&mut self, bodies: &[BodyId], tol: f64) -> Result<OpResult> {
@@ -1557,6 +1707,7 @@ impl Kernel for NativeKernel {
                     outward: false,
                     hollow: false,
                     sharp: false,
+                    nothing_hollowed: Default::default(),
                 },
             );
             let r = k.dumped(&r);
@@ -1661,6 +1812,30 @@ impl Kernel for NativeKernel {
                 spec: chamfer_scaled(opts.spec, by),
                 ..opts.clone()
             };
+            // Without overflow, each chamfer must fit the faces at its edge.
+            if !opts.overflow {
+                let b = k.get(body)?.clone();
+                let mut sized = Vec::new();
+                for e in super::blend::real_edges(&b, edges)? {
+                    let e = e.0 as usize;
+                    let [s1, s2] = super::blend::edge_sides(&b, e)?;
+                    let (d1, d2) = match opts.spec {
+                        ChamferSpec::EqualDistance(d) => (d, d),
+                        ChamferSpec::TwoDistances(a, c) => (a, c),
+                        ChamferSpec::DistanceAngle { distance, angle } => {
+                            (distance, distance * angle.tan())
+                        }
+                    };
+                    let second_first = opts.first_on.contains(&FaceId(s2.0 as u64))
+                        && !opts.first_on.contains(&FaceId(s1.0 as u64));
+                    sized.push(if second_first {
+                        (e, d2, d1)
+                    } else {
+                        (e, d1, d2)
+                    });
+                }
+                super::blend::chamfers_fit(&b, &sized)?;
+            }
             // A convex polyhedron's equal chamfers: its planes' polytope, built at once.
             if let (ChamferSpec::EqualDistance(d), ChamferMeasure::Offset) =
                 (opts.spec, opts.measurement)
@@ -1688,6 +1863,82 @@ impl Kernel for NativeKernel {
         })
     }
 
+    fn chamfer_distances(
+        &mut self,
+        body: BodyId,
+        edges: &[EdgeId],
+        distances: &[f64],
+        overflow: bool,
+    ) -> Result<OpResult> {
+        no_edges(edges, "chamfer")?;
+        if edges.len() != distances.len() {
+            return Err(KernelError::InvalidParameter(format!(
+                "{} edges but {} distances",
+                edges.len(),
+                distances.len()
+            )));
+        }
+        if let Some(d) = distances.iter().find(|d| !(**d > 0.0 && d.is_finite())) {
+            return Err(KernelError::InvalidParameter(format!(
+                "A chamfer's distance must be positive (one is {d})"
+            )));
+        }
+        // Each edge's tangent chain at its distance: one distance an edge.
+        let mut each: Vec<(EdgeId, f64)> = Vec::new();
+        for (&e, &d) in edges.iter().zip(distances) {
+            for c in self.tangent_chain(body, e)? {
+                match each.iter().find(|x| x.0 == c) {
+                    Some(&(_, d0)) if d0 != d => {
+                        return Err(KernelError::InvalidParameter(format!(
+                            "{c:?} is given two chamfer distances, {d0} and {d}"
+                        )));
+                    }
+                    Some(_) => {}
+                    None => each.push((c, d)),
+                }
+            }
+        }
+        // One distance for all: the chamfer of one distance.
+        if each.iter().all(|x| x.1 == each[0].1) {
+            let ids: Vec<EdgeId> = each.iter().map(|x| x.0).collect();
+            let opts = ChamferOpts {
+                overflow,
+                ..ChamferOpts::new(ChamferSpec::EqualDistance(each[0].1))
+            };
+            return self.chamfer_with(body, &ids, &opts);
+        }
+        dump(
+            "chamfer",
+            self.get(body)?,
+            &format!("edges and distances {each:?}"),
+        );
+        self.at_working_size(body, |k, body, by| {
+            let b = k.get(body)?.clone();
+            let ids: Vec<EdgeId> = each.iter().map(|x| x.0).collect();
+            let real = super::blend::real_edges(&b, &ids)?;
+            let each: Vec<(usize, f64)> = each
+                .iter()
+                .filter(|x| real.contains(&x.0))
+                .map(|&(e, d)| (e.0 as usize, d * by))
+                .collect();
+            // Without overflow, each chamfer must fit the faces at its edge.
+            if !overflow {
+                let sized: Vec<(usize, f64, f64)> = each.iter().map(|&(e, d)| (e, d, d)).collect();
+                super::blend::chamfers_fit(&b, &sized)?;
+            }
+            let r = match super::blend::chamfer_each(k, body, &each) {
+                Ok(r) => Ok(r),
+                // Where the strips can't be trimmed against each other at a corner: each
+                // distance's chamfer on its own, those solids intersected (after springrep's
+                // blend::chamfer_distances, MIT), the corner where their planes meet.
+                Err(first) => chamfer_groups(k, body, &each, overflow)
+                    .map_err(|e| e.after("chamfering by trimming", &first)),
+            };
+            let r = k.dumped(&r);
+            k.colored(r)
+        })
+    }
+
     fn split(&mut self, body: BodyId, tool: &SplitTool, source: u64) -> Result<OpResult> {
         let r = super::ops::split(self, body, tool, source);
         self.colored(r)
@@ -1705,6 +1956,15 @@ impl Kernel for NativeKernel {
 
     fn face_tool(&mut self, body: BodyId, faces: &[FaceId], source: u64) -> Result<OpResult> {
         super::ops::face_tool(self, body, faces, source)
+    }
+
+    fn boundary_normals(
+        &self,
+        body: BodyId,
+        points: &[Point3<f64>],
+        within: f64,
+    ) -> Result<Vec<Option<nalgebra::Vector3<f64>>>> {
+        super::ops::boundary_normals(self, body, points, within)
     }
 
     fn face_normals_at(
@@ -1912,6 +2172,22 @@ impl Kernel for NativeKernel {
     fn classify(&self, body: BodyId, point: Point3<f64>, tol: f64) -> Result<PointClass> {
         let e = self.entry(body)?;
         Ok(classify::classify_point(&e.body, e.polys(), &point, tol))
+    }
+
+    fn classify_many(
+        &self,
+        body: BodyId,
+        points: &[Point3<f64>],
+        tol: f64,
+    ) -> Result<Vec<PointClass>> {
+        use rayon::prelude::*;
+        let e = self.entry(body)?;
+        let c = classify::Classifier::new(&e.body, e.polys());
+        Ok(if super::par::threads_for(points.len(), false) {
+            points.par_iter().map(|p| c.classify(p, tol)).collect()
+        } else {
+            points.iter().map(|p| c.classify(p, tol)).collect()
+        })
     }
 
     fn release(&mut self, body: BodyId) {
@@ -2337,6 +2613,37 @@ impl Kernel for NativeKernel {
         super::distance::kernel_distance(self, a, b, super::distance::Sense::Max)
     }
 
+    fn curvatures_at(&self, body: BodyId, points: &[Point3<f64>]) -> Result<Vec<Option<[f64; 2]>>> {
+        super::measure::curvatures_at(self, body, points)
+    }
+
+    fn plane_section(
+        &self,
+        body: BodyId,
+        origin: Point3<f64>,
+        normal: nalgebra::Vector3<f64>,
+        tolerance: f64,
+    ) -> Result<Vec<Vec<Point3<f64>>>> {
+        super::measure::plane_section(self, body, origin, normal, tolerance)
+    }
+
+    fn section_area(
+        &self,
+        body: BodyId,
+        origin: Point3<f64>,
+        normal: nalgebra::Vector3<f64>,
+    ) -> Result<f64> {
+        super::measure::section_area(self, body, origin, normal)
+    }
+
+    fn betti_numbers(&self, body: BodyId) -> Result<[u64; 3]> {
+        super::measure::betti_numbers(self, body)
+    }
+
+    fn interference(&mut self, a: BodyId, b: BodyId) -> Result<Interference> {
+        super::measure::interference(self, a, b)
+    }
+
     fn face_from_surface(
         &mut self,
         body: BodyId,
@@ -2440,6 +2747,38 @@ impl Kernel for NativeKernel {
 }
 
 impl NativeKernel {
+    /// A cylinder from `base` along `axis` by `height`, its seam along `seam` (square to the
+    /// axis) from it.
+    pub(crate) fn cylinder_seamed(
+        &mut self,
+        base: P3,
+        axis: nalgebra::Unit<V3>,
+        radius: f64,
+        height: f64,
+        seam: V3,
+    ) -> Result<OpResult> {
+        let plane = Plane {
+            origin: base,
+            x_dir: nalgebra::Unit::new_normalize(seam),
+            normal: axis,
+        };
+        let r = Region {
+            outer: Loop {
+                curves: vec![Curve2::Circle {
+                    center: nalgebra::Point2::origin(),
+                    radius,
+                    source: None,
+                }],
+            },
+            holes: vec![],
+            source: None,
+        };
+        self.extrude_with(
+            &Profile::new(plane, vec![r]),
+            &ExtrudeSpec::blind(axis, height),
+        )
+    }
+
     /// With `CADRS_DUMP_DIR` set, reports an operation's outcome (solids, or the error).
     fn dumped(&self, r: &Result<OpResult>) -> Result<OpResult> {
         if crate::native::env_flag!("CADRS_DUMP_DIR") {
@@ -2506,6 +2845,13 @@ fn fillet_scaled(spec: &FilletSpec, by: f64) -> FilletSpec {
         size: match spec.size {
             FilletSize::Radius(r) => FilletSize::Radius(r * by),
             FilletSize::Width(w) => FilletSize::Width(w * by),
+            FilletSize::Setback(d) => FilletSize::Setback(d * by),
+        },
+        profile: match spec.profile {
+            FilletProfile::Thumbweight { center } => FilletProfile::Thumbweight {
+                center: center.map(|c| c * by),
+            },
+            p => p,
         },
         ..*spec
     }
@@ -2523,12 +2869,170 @@ fn chamfer_scaled(spec: ChamferSpec, by: f64) -> ChamferSpec {
     }
 }
 
+/// Each distance's edges chamfered on their own, the largest first, and the solids intersected:
+/// [`Kernel::chamfer_distances`] where the chamfers' strips can't be trimmed at a corner.
+fn chamfer_groups(
+    k: &mut NativeKernel,
+    body: BodyId,
+    each: &[(usize, f64)],
+    overflow: bool,
+) -> Result<OpResult> {
+    let mut sizes: Vec<f64> = each.iter().map(|e| e.1).collect();
+    sizes.sort_by(|a, b| b.total_cmp(a));
+    sizes.dedup();
+    let mut made: Vec<BodyId> = Vec::new();
+    let mut out: Result<OpResult> =
+        Err(KernelError::InvalidParameter("no edges to chamfer".into()));
+    for d in sizes {
+        let these: Vec<EdgeId> = each
+            .iter()
+            .filter(|e| e.1 == d)
+            .map(|e| EdgeId(e.0 as u64))
+            .collect();
+        let opts = ChamferOpts {
+            overflow,
+            ..ChamferOpts::new(ChamferSpec::EqualDistance(d))
+        };
+        let cut = k.chamfer_with(body, &these, &opts).and_then(|r| r.first());
+        let cut = match cut {
+            Ok(c) => c,
+            Err(e) => {
+                out = Err(e);
+                break;
+            }
+        };
+        made.push(cut);
+        out = match made.len() {
+            1 => Ok(OpResult {
+                bodies: vec![cut],
+                history: History::default(),
+            }),
+            _ => {
+                let prev = made[made.len() - 2];
+                let r = k.boolean(BoolOp::Intersect, prev, &[cut]);
+                if let Ok(r) = &r
+                    && let [b] = r.bodies[..]
+                {
+                    made.push(b);
+                }
+                r
+            }
+        };
+        if out.is_err() {
+            break;
+        }
+    }
+    let keep: Vec<BodyId> = out.as_ref().map(|r| r.bodies.clone()).unwrap_or_default();
+    for b in made {
+        if !keep.contains(&b) {
+            k.release(b);
+        }
+    }
+    out
+}
+
 /// A blend of no edges refused: nothing to blend (springrep's tests/blends.rs).
 fn no_edges(edges: &[EdgeId], what: &str) -> Result<()> {
     if edges.is_empty() {
         return Err(KernelError::InvalidParameter(format!("no edges to {what}")));
     }
     Ok(())
+}
+
+/// Whether a face of `b` on a periodic surface has a vertex of its own lying inside its seam
+/// (a line it uses twice), not at the seam's ends.
+fn seam_through_a_vertex(b: &Body) -> bool {
+    let near = 1e-7 * b.bbox().diagonal().max(1.0) + super::tol::LOOP_GAP;
+    b.faces.iter().any(|f| {
+        if !f.surf.u_periodic() {
+            return false;
+        }
+        f.loops.iter().any(|l| {
+            l.iter().enumerate().any(|(k, c)| {
+                let e = &b.edges[c.edge];
+                if e.degenerate
+                    || !matches!(e.curve, super::curve::Curve::Line { .. })
+                    || !l[k + 1..].iter().any(|d| d.edge == c.edge)
+                {
+                    return false;
+                }
+                let (p0, p1) = (e.point(e.t[0]), e.point(e.t[1]));
+                let d = p1 - p0;
+                let l2 = d.norm_squared();
+                if l2 <= 0.0 {
+                    return false;
+                }
+                f.loops.iter().flatten().any(|q| {
+                    let v = b.co_start(q);
+                    if e.v.contains(&v) {
+                        return false;
+                    }
+                    let p = b.verts[v].p;
+                    let s = (p - p0).dot(&d) / l2;
+                    let len = l2.sqrt();
+                    s * len > near && (1.0 - s) * len > near && (p0 + d * s - p).norm() < near
+                })
+            })
+        })
+    })
+}
+
+/// A body that is a plain cylinder (its side between two whole circles, two flat caps): its
+/// base, axis, radius and height, and its seam's direction turned half a turn.
+fn cylinder_turned(b: &Body) -> Option<(P3, nalgebra::Unit<V3>, f64, f64, V3)> {
+    use super::curve::Curve;
+    if b.faces.len() != 3 || b.solids.len() != 1 {
+        return None;
+    }
+    let si = b
+        .faces
+        .iter()
+        .position(|f| matches!(f.surf, Surface::Cylinder { .. }))?;
+    let side = &b.faces[si];
+    let Surface::Cylinder { f: fr, r } = &side.surf else {
+        return None;
+    };
+    if !(0..3)
+        .filter(|&i| i != si)
+        .all(|i| matches!(b.faces[i].surf, Surface::Plane { .. }))
+    {
+        return None;
+    }
+    let [l] = side.loops.as_slice() else {
+        return None;
+    };
+    let mut centres: Vec<P3> = Vec::new();
+    let mut seam: Option<P3> = None;
+    for c in l {
+        let e = &b.edges[c.edge];
+        match &e.curve {
+            Curve::Circle { c: o, .. } if e.v[0] == e.v[1] => centres.push(*o),
+            Curve::Line { .. } => seam = Some(b.verts[e.v[0]].p),
+            _ => return None,
+        }
+    }
+    let ([c0, c1], Some(on_seam)) = (centres.as_slice(), seam) else {
+        return None;
+    };
+    let mut axis = c1 - c0;
+    let height = axis.norm();
+    if height <= 0.0 {
+        return None;
+    }
+    let base = if axis.dot(&fr.z) >= 0.0 {
+        *c0
+    } else {
+        axis = -axis;
+        *c1
+    };
+    let axis = nalgebra::Unit::new_normalize(axis);
+    // The seam's direction from the axis, turned half a turn.
+    let out = on_seam - base;
+    let out = out - axis.into_inner() * out.dot(&axis);
+    if out.norm() <= 0.0 {
+        return None;
+    }
+    Some((base, axis, *r, height, -out.normalize()))
 }
 
 #[cfg(test)]

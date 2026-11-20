@@ -2610,6 +2610,35 @@ pub fn loft_with(k: &mut NativeKernel, spec: &LoftSpec) -> Result<OpResult> {
             return Err(invalid("A loft end's magnitude must be greater than zero"));
         }
     }
+    // Profiles on parallel planes must run one way along their normal: sections that turn back
+    // fold the loft through itself (a loft through planes at 0, 2 and 1).
+    let planes: Vec<&crate::Plane> = spec
+        .sections
+        .iter()
+        .filter_map(|s| match s {
+            LoftSection::Profile(p) => Some(&p.plane),
+            _ => None,
+        })
+        .collect();
+    if planes.len() == spec.sections.len() && planes.len() > 2 {
+        let n = planes[0].normal.into_inner();
+        if planes
+            .iter()
+            .all(|p| p.normal.cross(&n).norm() < tol::ANGULAR_POINT)
+        {
+            let at: Vec<f64> = planes
+                .iter()
+                .map(|p| (p.origin - planes[0].origin).dot(&n))
+                .collect();
+            let rising = at.windows(2).all(|w| w[1] > w[0]);
+            let falling = at.windows(2).all(|w| w[1] < w[0]);
+            if !(rising || falling) {
+                return Err(invalid(
+                    "The loft's profiles turn back along their planes' normal: the loft would cross itself",
+                ));
+            }
+        }
+    }
     if let BodyKind::Thin { left, right } = spec.body {
         return loft_thin(k, spec, left, right);
     }

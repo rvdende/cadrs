@@ -602,26 +602,43 @@ impl Surface {
                 }
                 let here = r.norm_squared();
                 let closer = |nu: f64, nv: f64| (self.eval(nu, nv) - p).norm_squared() < here;
-                let mut tries = 0;
-                while !closer(nu, nv) && tries < 30 {
+                // (A Newton step uphill (the distance's Hessian not positive, far off the
+                // surface) halved never comes closer: 30 evaluations wasted before the
+                // gradient's step, 100 to 200 a projection. Straight to that step then.)
+                let old = crate::native::env_flag!("CADRS_OLD_NEWTON");
+                let uphill = !old && (nu - u) * fu + (nv - v) * fv >= 0.0;
+                let most = if old { 30 } else { 16 };
+                let mut tries = if uphill { most } else { 0 };
+                while tries < most && !closer(nu, nv) {
                     (nu, nv) = (u + (nu - u) * 0.5, v + (nv - v) * 0.5);
                     tries += 1;
                 }
-                if tries == 30 {
+                if tries == most {
                     let (su, sv) = (
                         d[1].norm_squared().max(tol::TINY),
                         d[2].norm_squared().max(tol::TINY),
                     );
-                    (nu, nv) = (
-                        self.clamp_u(u - fu / su, u0, u1),
-                        (v - fv / sv).clamp(v0.min(v1), v1.max(v0)),
-                    );
+                    // Gauss–Newton's step (the Hessian without the surface's curvature: always
+                    // downhill, and near the surface nearly Newton's), else the gradient's.
+                    let gn = (!old && !crate::native::env_flag!("CADRS_NO_GAUSS_NEWTON"))
+                        .then(|| solve2(su, d[1].dot(&d[2]), d[1].dot(&d[2]), sv, -fu, -fv))
+                        .flatten();
+                    (nu, nv) = match gn {
+                        Some((du, dv)) => (
+                            self.clamp_u(u + du, u0, u1),
+                            (v + dv).clamp(v0.min(v1), v1.max(v0)),
+                        ),
+                        None => (
+                            self.clamp_u(u - fu / su, u0, u1),
+                            (v - fv / sv).clamp(v0.min(v1), v1.max(v0)),
+                        ),
+                    };
                     tries = 0;
-                    while !closer(nu, nv) && tries < 30 {
+                    while !closer(nu, nv) && tries < most {
                         (nu, nv) = (u + (nu - u) * 0.5, v + (nv - v) * 0.5);
                         tries += 1;
                     }
-                    if tries == 30 {
+                    if tries == most {
                         break;
                     }
                 }
@@ -1278,6 +1295,11 @@ impl Surface {
                 }
             }
             Surface::Nurbs(n) => Curve::Nurbs(Arc::new(n.iso_u_curve(u))),
+            // The ruling through the curve's point at u, parametrized by v.
+            Surface::Extrusion { c, d } => Curve::Line {
+                o: c.point(u),
+                d: *d,
+            },
             _ => return None,
         })
     }

@@ -866,7 +866,18 @@ pub fn exact_strip(kind: Exact, b: &Ball, spine: &Spine) -> Option<Strip> {
             // rounded): every ball is the same, the strip a sphere, one rail the point where the
             // axis meets that face (the face goes whole).
             let sphere = rmaj <= tol::REL_POINT * (1.0 + r);
-            if rmaj <= r * (1.0 + tol::REL) && !sphere {
+            // A tube wider than its ring (a spindle torus) where the strip keeps to its outer
+            // side: both rails no nearer the axis than the ball's centre, so the arc between them,
+            // the ball's away from the material, never reaches the axis (a cone's narrow top
+            // rounded by more than its radius: the exact surface, where a fitted one bent the
+            // normals by 4e-5 at the rails).
+            let outer = |q: &P3| {
+                let hq = (q - c).dot(&z);
+                (q - (c + z * hq)).norm() >= rmaj * (1.0 - tol::REL_POINT)
+            };
+            let outer_side =
+                rmaj > tol::REL_POINT * (1.0 + r) && outer(&b.q[0].p) && outer(&b.q[1].p);
+            if rmaj <= r * (1.0 + tol::REL) && !sphere && !outer_side {
                 return None;
             }
             // The torus's frame and rails share the spine's x and y so their angles agree.

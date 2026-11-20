@@ -198,8 +198,11 @@ impl SweepKind for Revolve {
                             line2(P2::new(0.0, h0 + k * t), V2::new(1.0, 0.0))
                         }),
                     })
-                } else if dh.abs() < tol::DEGENERATE {
-                    // Plane square to the axis at h0: uv = ρ(t)(cos s, sin s).
+                } else if dh.abs() < tol::ANGULAR {
+                    // Plane square to the axis at h0: uv = ρ(t)(cos s, sin s). (Within the
+                    // angular tolerance: a profile far from the origin has its square line
+                    // a few 1e-12 off square by rounding, and a cone of half-angle a hair under
+                    // 90°, whose ray test divides by its cosine, lost the cap's crossings.)
                     let fr = Frame {
                         o: f.o + f.z * h0,
                         x: f.x,

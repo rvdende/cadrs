@@ -649,6 +649,7 @@ fn thicken_sheet(k: &mut NativeKernel, sheets: &[Body], spec: &ThickenSpec) -> O
                 outward: out,
                 hollow: false,
                 sharp: spec.sharp,
+                nothing_hollowed: Default::default(),
             },
         )
         .map_err(|e| {

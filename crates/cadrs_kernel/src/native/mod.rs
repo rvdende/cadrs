@@ -57,6 +57,16 @@ pub mod blend_corner;
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod blend_corner;
 #[cfg(feature = "testkit")]
+pub mod blend_setback;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod blend_setback;
+#[cfg(feature = "testkit")]
+pub mod blend_setback_g2;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod blend_setback_g2;
+#[cfg(feature = "testkit")]
 pub mod boolean;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
@@ -101,6 +111,7 @@ pub mod classify;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod classify;
+pub(crate) mod constructors;
 #[cfg(feature = "testkit")]
 pub mod convex_chamfer;
 #[cfg(not(feature = "testkit"))]
@@ -166,6 +177,11 @@ pub mod face_build;
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod face_build;
 #[cfg(feature = "testkit")]
+pub mod face_fillet;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod face_fillet;
+#[cfg(feature = "testkit")]
 pub mod features;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
@@ -190,6 +206,11 @@ pub mod flat_union;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod flat_union;
+#[cfg(feature = "testkit")]
+pub mod gn_blend;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod gn_blend;
 #[cfg(feature = "testkit")]
 pub mod heal;
 #[cfg(not(feature = "testkit"))]
@@ -235,6 +256,11 @@ pub mod math;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod math;
+#[cfg(feature = "testkit")]
+pub mod measure;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod measure;
 #[cfg(feature = "testkit")]
 pub mod mesh_distance;
 #[cfg(not(feature = "testkit"))]
@@ -287,6 +313,11 @@ pub mod smb;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod smb;
+#[cfg(feature = "testkit")]
+pub mod snap;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod snap;
 #[cfg(feature = "testkit")]
 pub mod split;
 #[cfg(not(feature = "testkit"))]

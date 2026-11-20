@@ -62,6 +62,17 @@ pub fn pcurve_or(
 /// parameter range where a B-spline surface closes on itself without being periodic (a
 /// revolved or skinned surface whose ends meet: its seam is the range's two ends).
 pub fn closed_periods(s: &Surface) -> [Option<f64>; 2] {
+    // An extrusion of a closed B-spline (a prism on a spline outline): closed in u over its
+    // curve's range, its seam the range's two ends.
+    if let Surface::Extrusion {
+        c: Curve::Nurbs(n), ..
+    } = s
+    {
+        let (a, b) = n.range();
+        let (p, q) = (n.point(a), n.point(b));
+        let closed = (p - q).norm() <= tol::REL * (1.0 + p.coords.norm());
+        return [closed.then_some(b - a), None];
+    }
     let Surface::Nurbs(n) = s else {
         return [s.u_periodic().then_some(TAU), s.v_periodic().then_some(TAU)];
     };
@@ -218,12 +229,13 @@ fn settle_poles(s: &Surface, uvs: &mut [P2]) {
 /// continuously across the seam must be brought back). One lying along the seam fits both
 /// ways: the copy nearest `near`. Other surfaces as they are.
 fn into_closed_range(s: &Surface, pc: Curve, t0: f64, t1: f64, near: Option<P2>) -> Curve {
-    let Surface::Nurbs(n) = s else { return pc };
+    let Some(((u0, u1), (v0, v1))) = closed_range(s) else {
+        return pc;
+    };
     let periods = closed_periods(s);
     if periods == [None, None] {
         return pc;
     }
-    let ((u0, u1), (v0, v1)) = n.range();
     let pts: Vec<P2> = (0..=16)
         .map(|i| pc.point(t0 + (t1 - t0) * i as f64 / 16.0))
         .map(|q| P2::new(q.x, q.y))
@@ -263,6 +275,19 @@ fn into_closed_range(s: &Surface, pc: Curve, t0: f64, t1: f64, near: Option<P2>)
         return pc;
     }
     pc.transformed(&Affine::translation(V3::new(du, dv, 0.0)))
+}
+
+/// The parameter range of a surface that may close on itself without being periodic (a
+/// B-spline surface, an extrusion of a B-spline curve: their evaluation doesn't wrap), else
+/// None. An extrusion's v is unbounded.
+fn closed_range(s: &Surface) -> Option<((f64, f64), (f64, f64))> {
+    match s {
+        Surface::Nurbs(n) => Some(n.range()),
+        Surface::Extrusion {
+            c: Curve::Nurbs(n), ..
+        } => Some((n.range(), (f64::NEG_INFINITY, f64::INFINITY))),
+        _ => None,
+    }
 }
 
 /// Shifts a p-curve by whole periods so its point at `tm` lies nearest `near`.
@@ -632,10 +657,7 @@ fn fitted(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Curve {
     };
     // The surface's point at a followed (u, v): a B-spline closed without being periodic is
     // read inside its range (past it, it only extrapolates).
-    let wrap = match s {
-        Surface::Nurbs(n) => Some(n.range()),
-        _ => None,
-    };
+    let wrap = closed_range(s);
     let at_uv = |u: f64, v: f64| -> P3 {
         let Some(((u0, u1), (v0, v1))) = wrap else {
             return s.eval(u, v);

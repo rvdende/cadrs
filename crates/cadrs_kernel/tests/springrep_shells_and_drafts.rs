@@ -200,6 +200,7 @@ fn shell_with(k: &mut K, solid: BodyId, open: Vec<FaceId>, t: f64, outward: bool
         outward,
         hollow: false,
         sharp: true,
+        nothing_hollowed: Default::default(),
     };
     let b = k.shell_with(solid, &spec).unwrap().bodies[0];
     unify(k, b)

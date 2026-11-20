@@ -577,9 +577,23 @@ fn pcurve_unsnapped(s: &Surface, c: &Curve, t0: f64, t1: f64, etol: f64) -> Curv
     pcurve_unsnapped_on(s, &periods(s), c, t0, t1, etol)
 }
 
+/// [`pcurve_unsnapped_found`] moved into a closed spline surface's range ([`into_domain`]): an
+/// exact p-curve (the extrusion's own curve, along u) starts wherever its start's parameter
+/// came out, a period off at the seam.
+fn pcurve_unsnapped_on(
+    s: &Surface,
+    per: &Periods,
+    c: &Curve,
+    t0: f64,
+    t1: f64,
+    etol: f64,
+) -> Curve {
+    into_domain(pcurve_unsnapped_found(s, per, c, t0, t1, etol), per, t0, t1)
+}
+
 /// [`pcurve_unsnapped`] with the surface's [`Periods`] (its seed grid made once for all the
 /// edges of a face).
-fn pcurve_unsnapped_on(
+fn pcurve_unsnapped_found(
     s: &Surface,
     per: &Periods,
     c: &Curve,
@@ -715,35 +729,42 @@ fn fit_pieces(s: &Surface, per: &Periods, c: &Curve, pieces: &[f64], tol: &Tol) 
     }
     let out = join_spans(segs)?;
     let pc = Curve::Nurbs(Arc::new(out));
-    if let Some(((u0, u1), (v0, v1))) = per.domain {
-        let (a, b) = (pieces[0], *pieces.last().unwrap());
-        let pts: Vec<P3> = (0..=16)
-            .map(|i| pc.point(a + (b - a) * i as f64 / 16.0))
-            .collect();
-        let shift = |lo: f64, hi: f64, period: Option<f64>, get: &dyn Fn(&P3) -> f64| -> f64 {
-            let Some(p) = period else { return 0.0 };
-            let eps = tol::REL * (hi - lo).abs().max(1.0);
-            let (mn, mx) = pts
-                .iter()
-                .map(get)
-                .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), x| {
-                    (a.min(x), b.max(x))
-                });
-            if mx > hi + eps {
-                -((mx - hi - eps) / p).ceil() * p
-            } else if mn < lo - eps {
-                ((lo - eps - mn) / p).ceil() * p
-            } else {
-                0.0
-            }
-        };
-        let du = shift(u0, u1, per.pu, &|q| q.x);
-        let dv = shift(v0, v1, per.pv, &|q| q.y);
-        if du != 0.0 || dv != 0.0 {
-            return Some(pc.transformed(&Affine::translation(V3::new(du, dv, 0.0))));
+    Some(into_domain(pc, per, pieces[0], *pieces.last().unwrap()))
+}
+
+/// A p-curve on a closed spline surface (or an extrusion of a closed spline) moved by whole
+/// periods into the surface's parameter range, where it evaluates; others as they are.
+fn into_domain(pc: Curve, per: &Periods, a: f64, b: f64) -> Curve {
+    let Some(((u0, u1), (v0, v1))) = per.domain else {
+        return pc;
+    };
+    let pts: Vec<P3> = (0..=16)
+        .map(|i| pc.point(a + (b - a) * i as f64 / 16.0))
+        .collect();
+    let shift = |lo: f64, hi: f64, period: Option<f64>, get: &dyn Fn(&P3) -> f64| -> f64 {
+        let Some(p) = period else { return 0.0 };
+        let eps = tol::REL * (hi - lo).abs().max(1.0);
+        let (mn, mx) = pts
+            .iter()
+            .map(get)
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), x| {
+                (a.min(x), b.max(x))
+            });
+        if mx > hi + eps {
+            -((mx - hi - eps) / p).ceil() * p
+        } else if mn < lo - eps {
+            ((lo - eps - mn) / p).ceil() * p
+        } else {
+            0.0
         }
+    };
+    let du = shift(u0, u1, per.pu, &|q| q.x);
+    let dv = shift(v0, v1, per.pv, &|q| q.y);
+    if du != 0.0 || dv != 0.0 {
+        pc.transformed(&Affine::translation(V3::new(du, dv, 0.0)))
+    } else {
+        pc
     }
-    Some(pc)
 }
 
 /// Fitted spans joined end to end into one spline: a knot of full multiplicity at each joint,
@@ -1317,13 +1338,30 @@ impl XBuilder {
         // (`base`), and the jump is no gap.
         let mut base = vec![0i64; n];
         let pu_dom = per.pu.filter(|_| per.domain.is_some());
+        // A jump of whole periods to within a part in 10⁷, or to within the joint's edges'
+        // tolerance on the surface (their p-curves are fitted to it: a closed edge's start on
+        // the seam lands a hair off).
+        let (mu, mv) = s.metric();
+        let join_tol = |j: usize| {
+            // (And how far the edges' curves end from their vertices: a file's edges meet a
+            // hair apart where the body that wrote it had tolerances to cover it.)
+            let t = |k: usize| {
+                let ed = &self.body.edges[l[k].0];
+                (0..2)
+                    .map(|i| (ed.curve.point(ed.t[i]) - self.body.verts[ed.v[i]].p).norm())
+                    .fold(ed.tol, f64::max)
+            };
+            JOIN.max(t(j)).max(t((j + n - 1) % n)) * (1.0 + 1e-3)
+        };
+        let whole =
+            |d: f64, p: f64, m: f64, j: usize| d.abs() <= 1e-7 * p || d.abs() * m <= join_tol(j);
         if let Some(pu) = pu_dom {
             for j in 1..n {
                 base[j] = base[j - 1];
                 let g = ends[j].0.x - ends[j - 1].1.x + (base[j] - base[j - 1]) as f64 * pu;
                 let k = (g / pu).round();
                 // (Not the jump round a pole: a jump in the loop, which a pole edge spans.)
-                if k != 0.0 && (g - k * pu).abs() <= 1e-7 * pu && !round_pole[j] {
+                if k != 0.0 && whole(g - k * pu, pu, mu, j) && !round_pole[j] {
                     base[j] -= k as i64;
                 }
             }
@@ -1334,7 +1372,7 @@ impl XBuilder {
                 base_v[j] = base_v[j - 1];
                 let g = ends[j].0.y - ends[j - 1].1.y;
                 let k = (g / pv).round();
-                if k != 0.0 && (g - k * pv).abs() <= 1e-7 * pv && !round_pole[j] {
+                if k != 0.0 && whole(g - k * pv, pv, mv, j) && !round_pole[j] {
                     base_v[j] -= k as i64;
                 }
             }
@@ -2187,7 +2225,12 @@ impl XBuilder {
                     let lo = (0..n)
                         .map(|k| t.ends[k].0.x.min(t.ends[k].1.x) + shift[k] as f64 * t.pu)
                         .fold(f64::INFINITY, f64::min);
-                    let c = ((u0 - lo) / t.pu - 1e-7).ceil();
+                    // (A loop below the range by less than 10 JOIN on the surface, its p-curves a
+                    // hair off at the seam, stays where it is.)
+                    let slack = (1e-7 * t.pu)
+                        .max(10.0 * JOIN / mu.max(f64::MIN_POSITIVE))
+                        .min(0.01 * t.pu);
+                    let c = ((u0 - lo - slack) / t.pu).ceil();
                     if c != 0.0 && lo + c * t.pu <= u1 {
                         shift.iter_mut().for_each(|x| *x += c as i64);
                     }
