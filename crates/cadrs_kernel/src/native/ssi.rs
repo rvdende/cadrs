@@ -2382,21 +2382,61 @@ fn fit_curve(
     // curve takes; each point kept is a pole on every face the curve bounds and every sweep of
     // it): each one left out within `tol` of the fit.
     let mut pts = thinned(pts, tol, fixed_ends);
+    let many = !crate::native::env_flag!("CADRS_FIT_HALVING");
     super::par::start();
     for _round in 0..6 {
         let (c, t) = fit(&pts);
         let last = pts.len() - 2;
-        let found: Vec<Option<(usize, super::ssi_numeric::Pt)>> = (0..pts.len() - 1)
+        // (A span off by `off` takes (off/tol)^¼ pieces, a cubic's error falling as the fourth
+        // power of its span: all its points at once, not a halving a round.)
+        let found: Vec<Vec<(usize, super::ssi_numeric::Pt)>> = (0..pts.len() - 1)
             .into_par_iter()
             .map(|k| {
                 if (k == 0 && fixed_ends[0]) || (k == last && fixed_ends[1]) {
-                    return None;
+                    return Vec::new();
                 }
                 let q = c.point((t[k] + t[k + 1]) / 2.0);
                 let chord = (pts[k + 1].p - pts[k].p).norm();
-                let exact = super::ssi_numeric::refine_between(a, b, &pts[k], &pts[k + 1], &q)?;
+                let Some(exact) =
+                    super::ssi_numeric::refine_between(a, b, &pts[k], &pts[k + 1], &q)
+                else {
+                    return Vec::new();
+                };
                 let off = (exact.p - q).norm();
-                (off > tol && chord > tol::POINT && off < 0.5 * chord).then_some((k + 1, exact))
+                if !(off > tol && chord > tol::POINT && off < 0.5 * chord) {
+                    return Vec::new();
+                }
+                let m = if many {
+                    ((off / tol).powf(0.25).ceil() as usize).clamp(2, 16)
+                } else {
+                    2
+                };
+                if m == 2 {
+                    return vec![(k + 1, exact)];
+                }
+                let mut got = Vec::with_capacity(m - 1);
+                for j in 1..m {
+                    let f = j as f64 / m as f64;
+                    let qj = c.point(t[k] + (t[k + 1] - t[k]) * f);
+                    match super::ssi_numeric::refine_at(a, b, &pts[k], &pts[k + 1], &qj, f) {
+                        // (Near where the fit puts it, as the middle's must be, and in order
+                        // along the span, each strictly past the last: not on a neighbouring
+                        // turn of a helix.)
+                        Some(p)
+                            if (p.p - qj).norm() < 0.5 * chord / m as f64
+                                && got.last().is_none_or(
+                                    |(_, l): &(usize, super::ssi_numeric::Pt)| {
+                                        (p.p - pts[k].p).dot(&(pts[k + 1].p - pts[k].p))
+                                            > (l.p - pts[k].p).dot(&(pts[k + 1].p - pts[k].p))
+                                    },
+                                ) =>
+                        {
+                            got.push((k + 1, p))
+                        }
+                        _ => return vec![(k + 1, exact)],
+                    }
+                }
+                got
             })
             .collect();
         let ins: Vec<(usize, super::ssi_numeric::Pt)> = found.into_iter().flatten().collect();

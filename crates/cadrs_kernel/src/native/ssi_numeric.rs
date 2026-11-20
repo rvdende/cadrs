@@ -928,8 +928,13 @@ fn correct(ctx: &Ctx, s: Pt, extra: &Extra<'_>) -> Option<Pt> {
 /// points of a traced curve), from their parameters' average: where a fitted curve between
 /// them should pass.
 pub fn refine_between(a: &Surface, b: &Surface, p0: &Pt, p1: &Pt, q: &P3) -> Option<Pt> {
+    refine_at(a, b, p0, p1, q, 0.5)
+}
+
+/// [`refine_between`] from the parameters the fraction `f` of the way from `p0`'s to `p1`'s.
+pub fn refine_at(a: &Surface, b: &Surface, p0: &Pt, p1: &Pt, q: &P3, f: f64) -> Option<Pt> {
     let d = (p1.p - p0.p).try_normalize(tol::TINY)?;
-    let mid = |x: (f64, f64), y: (f64, f64)| (0.5 * (x.0 + y.0), 0.5 * (x.1 + y.1));
+    let mid = |x: (f64, f64), y: (f64, f64)| (x.0 + f * (y.0 - x.0), x.1 + f * (y.1 - x.1));
     let start = Pt {
         p: *q,
         a: mid(p0.a, p1.a),
