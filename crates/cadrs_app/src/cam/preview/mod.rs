@@ -1731,7 +1731,7 @@ fn sync_stock_mesh(
                     let m = solid_mat
                         .get_or_insert_with(|| {
                             let mut m = PartShading::new(false, false);
-                            m.depth_offset = 64;
+                            m.depth_offset = 8;
                             shading.add(m)
                         })
                         .clone();

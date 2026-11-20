@@ -151,7 +151,6 @@ impl Material for PartShading {
             && let Some(depth) = descriptor.depth_stencil.as_mut()
         {
             depth.bias.constant = key.bind_group_data.depth_offset;
-            depth.bias.slope_scale = 1.0;
         }
         Ok(())
     }
