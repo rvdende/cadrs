@@ -212,8 +212,8 @@ struct Cut {
     poses: Vec<(Pose, f64)>,
     /// The tool's length to the top of its flutes.
     top: f64,
-    /// Its motion is the machine's own screw about one of its axes ([`machine_screw`]), not
-    /// one fitted to its poses.
+    /// Its motion is the machine's own screw about one of its axes ([`machine_screw`]) or an
+    /// arc's ([`arc_screw`]), not one fitted to its poses.
     machine: bool,
 }
 
@@ -502,6 +502,43 @@ fn machine_screw(
     })
 }
 
+/// The turn about the upright line through `centre` (an arc's, in the setup's XY) that takes
+/// the tool from `a` to `b`, rising with a helix's: where the tool is upright and both its
+/// tips are as far from the line (to a micron). The machine moves it so for a G2/G3; the
+/// tool turns about its own axis on the way, which leaves the space it sweeps the same.
+fn arc_screw(a: &Pose, b: &Pose, centre: [f64; 2]) -> Option<Screw> {
+    let up = V3::z();
+    if a.rot.column(2).dot(&up) < 1.0 - 1e-12 || b.rot.column(2).dot(&up) < 1.0 - 1e-12 {
+        return None;
+    }
+    let c = V3::new(centre[0], centre[1], 0.0);
+    let (ra, rb) = ((a.tip - c).xy(), (b.tip - c).xy());
+    if ra.norm() < 1e-6 || (ra.norm() - rb.norm()).abs() > 1e-3 {
+        return None;
+    }
+    let turn = ra.perp(&rb).atan2(ra.dot(&rb));
+    if turn.abs() < 1e-12 {
+        return None;
+    }
+    let dir = up * turn.signum();
+    Some(Screw::Turn {
+        at: c,
+        dir,
+        angle: turn.abs(),
+        rise: (b.tip.z - a.tip.z) * dir.z,
+    })
+}
+
+/// The pose `held` with the tool's turn about its own axis on an arc ([`arc_screw`]) undone:
+/// as the machine holds it at `machine`, the tip where `held` has it. (A tool is round about
+/// its axis: only the moves after it would turn it back.)
+fn unspun(held: Pose, machine: &Pose) -> Pose {
+    Pose {
+        rot: machine.rot,
+        tip: held.tip,
+    }
+}
+
 /// How near the machine's own places a screw about one of its axes must take the tool to be
 /// that motion (mm): rounding.
 const EXACT_POSE: f64 = 1e-9;
@@ -560,9 +597,16 @@ fn cuts_of(
                 let a = held.unwrap_or_else(|| pose(&lerp(f0)));
                 let b = pose(&lerp(f1));
                 let fitted = Screw::between(&a, &b);
-                // The machine's own screw where the move is one, else the one fitted.
+                // The machine's own screw where the move is one (an arc's chord: the arc),
+                // else the one fitted.
                 let mid = pose(&lerp((f0 + f1) / 2.0));
-                let exact = machine_screw(&a, &b, &mid, &fitted, &lines, o.tool.cutting_length);
+                let arc = s
+                    .about
+                    .filter(|_| pieces == 1)
+                    .and_then(|c| arc_screw(&a, &b, c));
+                let exact = arc.or_else(|| {
+                    machine_screw(&a, &b, &mid, &fitted, &lines, o.tool.cutting_length)
+                });
                 let machine = exact.is_some();
                 let screw = exact.unwrap_or(fitted);
                 if screw.amount() < 1e-9 {
@@ -576,9 +620,15 @@ fn cuts_of(
                     && c.extend(b, &screw, p1, machine)
                 {
                     held = Some(c.screw.moved(&c.start));
+                    if arc.is_some() {
+                        held = held.map(|h| unspun(h, &b));
+                    }
                     continue;
                 }
                 held = Some(screw.moved(&a));
+                if arc.is_some() {
+                    held = held.map(|h| unspun(h, &b));
+                }
                 cuts.push(Cut {
                     op: k,
                     start: a,
@@ -1480,6 +1530,14 @@ impl ExactStock {
         self.k
             .mass_properties(self.shown)
             .map(|m| m.volume)
+            .unwrap_or(0.0)
+    }
+
+    /// The stock's surface area as shown (mm²).
+    pub fn area(&self) -> f64 {
+        self.k
+            .mass_properties(self.shown)
+            .map(|m| m.surface_area)
             .unwrap_or(0.0)
     }
 }

@@ -817,6 +817,10 @@ pub fn run_motions(
     use cadrs_cam::toolpath::Segment;
     let rapid_rate = job.machine.as_ref().map_or(5_000.0, |m| m.rapid_rate);
     let milling = job.machine.as_ref().is_some_and(|m| m.kind.is_milling());
+    let arcs = job
+        .machine
+        .as_ref()
+        .is_some_and(|m| milling && m.post.output_arcs && m.post.arcs_xy);
     // The work offsets the program gives the operations (as posted).
     let datums: Option<Vec<u32>> = nc_program(setup, job, run)
         .ok()
@@ -824,6 +828,7 @@ pub fn run_motions(
     let upright = cadrs_cam::toolpath::UPRIGHT;
     // A rapid with the tool's axis turning from `a` to `b` (setup coordinates).
     let rapid = |from: P3, to: P3, (a, b): (P3, P3)| Segment {
+        about: None,
         from,
         to,
         feed: None,
@@ -905,7 +910,17 @@ pub fn run_motions(
             }
             at = f;
         }
-        segs.extend(o.toolpath.motion(at, rapid_rate));
+        // The arcs the post writes (G2/G3 where its feed moves follow a circle) are moved
+        // as arcs: their chords know it ([`cadrs_cam::toolpath::Segment::about`]).
+        if arcs && !o.tilted && !o.toolpath.is_multi_axis() {
+            let fitted = cadrs_cam::Toolpath {
+                steps: cadrs_cam::post::fit_arcs(&o.toolpath.steps, cadrs_cam::post::ARC_FIT),
+                warnings: Vec::new(),
+            };
+            segs.extend(fitted.motion(at, rapid_rate));
+        } else {
+            segs.extend(o.toolpath.motion(at, rapid_rate));
+        }
         if let Some(l) = segs.last() {
             at = l.to;
             lean = l.axes()[1];
@@ -961,6 +976,7 @@ fn swing(
         .windows(2)
         .filter(|w| dist(w[0].0, w[1].0) > 1e-9 || w[0].1 != w[1].1)
         .map(|w| cadrs_cam::toolpath::Segment {
+            about: None,
             from: w[0].0,
             to: w[1].0,
             feed: None,

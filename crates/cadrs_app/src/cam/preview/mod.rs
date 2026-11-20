@@ -57,6 +57,7 @@ impl Plugin for PreviewPlugin {
             Update,
             (
                 poll_analysis,
+                hide_part,
                 advance,
                 // Where the work is drawn at the time just reached, before the parts are
                 // placed and the tool and stock drawn.
@@ -184,6 +185,9 @@ pub struct PreviewState {
     /// The run leans its tool or undercuts ([`program::run_needs_solid`]): its stock is
     /// simulated solid ([`solid`]), and the height map is left uncut.
     solid: bool,
+    /// A run on the height map whose stock is shown exactly as it plays, by the live worker
+    /// ([`solid::Live`], exact only), while it has one to show ([`Self::shows_live`]).
+    exact: bool,
     /// A solid run's uncut stock: its surface in the model's coordinates.
     solid_blank: Vec<[P3; 3]>,
     /// The worker cutting a solid run's stock to where the preview is ([`solid::Live`]).
@@ -333,6 +337,17 @@ impl PreviewState {
     /// Whether the run's end is shown.
     fn at_end(&self) -> bool {
         self.t >= self.timeline.total() - 1e-12
+    }
+
+    /// Whether the stock shown is the live worker's (or, before its first, the uncut solid
+    /// stock): a solid run's, or a height-map run's exact stock while it goes on.
+    fn shows_live(&self) -> bool {
+        self.solid
+            || (self.exact
+                && self
+                    .live
+                    .as_ref()
+                    .is_some_and(|l| !l.ended && (l.mesh.is_some() || l.tween.is_some())))
     }
 
     /// Waits until a solid run's stock is cut to where the preview is (for scripts).
@@ -567,15 +582,21 @@ pub fn open_for_selection(world: &mut World) {
     });
     let beam = machine.kind.is_cutting();
     // A run that leans its tool is simulated on a solid stock (the worker's run of its own).
-    let solid_input = (!beam && program::run_needs_solid(&run)).then(|| solid::SolidInput {
+    let needs_solid = !beam && program::run_needs_solid(&run);
+    let input = |exact_only| solid::SolidInput {
         cam: cam.clone(),
         job: job.id,
         setup: setup.id,
         wanted: wanted.clone(),
         parts: parts.clone(),
         paths: paths.clone(),
-    });
+        exact_only,
+    };
+    let solid_input = needs_solid.then(|| input(false));
     let is_solid = solid_input.is_some();
+    // A run on the height map is shown exactly as it plays where its stock can be cut so (the
+    // height map still finds what it finds).
+    let exact_input = (!beam && !needs_solid).then(|| input(true));
     let cell = sim::sim_cell(&stock, 0.25);
     let (map, top) = if beam {
         (None, 0.0)
@@ -583,7 +604,10 @@ pub fn open_for_selection(world: &mut World) {
         (Some(stock.height_map(cell)), stock.bounds.max[2] as f32)
     };
     // What the whole run finds, once, on a worker thread.
-    let live = solid_input.clone().and_then(solid::Live::start);
+    let live = solid_input
+        .clone()
+        .or(exact_input)
+        .and_then(solid::Live::start);
     let analysis = {
         let (tx, rx) = std::sync::mpsc::channel();
         let (stock, segments, spans) = (stock.clone(), segments.clone(), spans.clone());
@@ -680,6 +704,7 @@ pub fn open_for_selection(world: &mut World) {
         machine_events,
         machine_hits: Vec::new(),
         solid: is_solid,
+        exact: !is_solid && !beam,
         solid_blank: if is_solid {
             shape.triangles()
         } else {
@@ -690,6 +715,27 @@ pub fn open_for_selection(world: &mut World) {
         held: 0.0,
         analysis,
     });
+}
+
+/// The job's bodies hidden while the preview shows the stock without them (its Part
+/// unchecked): where the part and the stock share faces (a stock that is the part's own box)
+/// the two would show through each other.
+fn hide_part(
+    doc: Option<Res<crate::ActiveDocument>>,
+    state: Option<Res<PreviewState>>,
+    mut cache: ResMut<crate::parts::PartCache>,
+) {
+    let want: std::collections::HashSet<cadrs_core::PartId> = match (doc, state) {
+        (Some(doc), Some(s)) if !s.show_part => super::active_cam(&doc)
+            .and_then(|(_, c)| c.active())
+            .map(|j| j.bodies.iter().copied().collect())
+            .unwrap_or_default(),
+        _ => Default::default(),
+    };
+    if cache.preview_hidden != want {
+        cache.preview_hidden = want;
+        cache.generation += 1;
+    }
 }
 
 /// Takes the run's check when the worker has finished it, and a solid run's stock as the
@@ -773,7 +819,8 @@ fn advance(time: Res<Time>, state: Option<ResMut<PreviewState>>) {
     let mut dt = time.delta_secs_f64();
     // A solid run's stock is cut as it plays: while the worker is cutting, the time waits
     // for it (and goes on by what it waited, a tenth of a second at most, when it is free).
-    if s.solid && s.mode != Mode::BackPlot && !s.at_end() {
+    let waits = s.solid || (s.exact && s.live.as_ref().is_some_and(|l| !l.ended));
+    if waits && s.mode != Mode::BackPlot && !s.at_end() {
         let to = s.place();
         if let Some(live) = s.live.as_mut() {
             live.follow(to);
@@ -1541,7 +1588,7 @@ fn sync_stock_mesh(
         return;
     };
     // A run simulated solid: its stock as the live worker or the check left it.
-    if s.solid && s.mode != Mode::BackPlot {
+    if s.shows_live() && s.mode != Mode::BackPlot {
         // The check's stock at the run's end (gouges marked), else the live one, else the
         // uncut stock (by a key that changes with what is shown).
         let end = s.at_end() && s.solid_end.is_some();
@@ -1606,8 +1653,15 @@ fn sync_stock_mesh(
                     commands.entity(e).insert(Mesh3d(handle));
                 }
                 None => {
+                    // (In front of the stock after a tween's cut where the two coincide, the
+                    // faces the cut leaves as they were: the stock before it is what is shown
+                    // there until the tool reaches it.)
                     let m = solid_mat
-                        .get_or_insert_with(|| shading.add(PartShading::new(false, false)))
+                        .get_or_insert_with(|| {
+                            let mut m = PartShading::new(false, false);
+                            m.bias = 1000.0;
+                            shading.add(m)
+                        })
                         .clone();
                     commands.spawn((
                         Name::new("cam-verify-solid-stock"),

@@ -341,6 +341,7 @@ pub fn simulate_mill_tilted(
             .segments
             .iter()
             .map(|s| Segment {
+                about: None,
                 from: f.to_local(s.from),
                 to: f.to_local(s.to),
                 ..*s
@@ -678,6 +679,7 @@ mod tests {
         let tool = Tool::new(ToolKind::EndMill, 4.0);
         let segs = vec![
             Segment {
+                about: None,
                 from: [10.0, 10.0, 20.0],
                 to: [10.0, 10.0, 15.0],
                 feed: None,
@@ -687,6 +689,7 @@ mod tests {
                 axis: None,
             },
             Segment {
+                about: None,
                 from: [10.0, 10.0, 15.0],
                 to: [10.0, 10.0, 5.0],
                 feed: Some(100.0),
@@ -696,6 +699,7 @@ mod tests {
                 axis: None,
             },
             Segment {
+                about: None,
                 from: [10.0, 10.0, 5.0],
                 to: [15.0, 15.0, 3.0],
                 feed: None,
@@ -721,6 +725,7 @@ mod tests {
 
     fn feed(from: P3, to: P3) -> Segment {
         Segment {
+            about: None,
             from,
             to,
             feed: Some(500.0),
@@ -903,6 +908,7 @@ mod tests {
         start.z.iter_mut().for_each(|z| *z = 20.0);
         let none = Model::from_triangles("none", Vec::new());
         let seg = |from: P3, to: P3, feed: bool| Segment {
+            about: None,
             from,
             to,
             feed: feed.then_some(500.0),

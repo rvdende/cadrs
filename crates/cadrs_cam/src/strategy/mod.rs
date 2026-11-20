@@ -23,6 +23,7 @@
 //!   tool-axis rule, swarf cutting, holes at any angle; the links between leaning passes.
 
 pub mod adaptive;
+pub mod arcs;
 pub mod beam;
 pub mod collision;
 pub mod finish;

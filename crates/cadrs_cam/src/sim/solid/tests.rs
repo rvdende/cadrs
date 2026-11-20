@@ -12,6 +12,7 @@ use crate::tool::ToolKind;
 
 fn seg(from: P3, to: P3, feed: bool, axis: Option<[P3; 2]>) -> Segment {
     Segment {
+        about: None,
         from,
         to,
         feed: feed.then_some(500.0),

@@ -599,6 +599,9 @@ pub struct PartCache {
     pub skinless: HashSet<PartId>,
     /// Components drawn by a drag's ghost instead, while a board's layout is edited.
     pub drag_hidden: HashSet<PartId>,
+    /// A CAM job's bodies while its preview shows the stock without the part (the preview
+    /// bar's Part unchecked, [`crate::cam::preview`]).
+    pub preview_hidden: HashSet<PartId>,
     /// The parts shown alone (Isolate), if any.
     pub isolated: Option<Vec<PartId>>,
     /// What each extrude's new body touches (the automatic Add, PS5.2).
@@ -801,6 +804,7 @@ impl PartCache {
             || self.isolated.as_ref().is_some_and(|iso| !iso.contains(&id))
             || self.layout_hidden.contains(&id)
             || self.drag_hidden.contains(&id)
+            || self.preview_hidden.contains(&id)
     }
 
     /// True if the part itself is hidden (Hide in the Parts list): its row is greyed. Isolate is

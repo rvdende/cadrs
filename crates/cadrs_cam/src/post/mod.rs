@@ -1049,7 +1049,7 @@ fn post_moves(
     // Lines that follow a circle become arcs (when arcs are on); collect feed runs first.
     let by_axes = w.rot.is_some();
     let steps = if s.output_arcs && s.arcs_xy && !by_axes {
-        fit_arcs(&op.toolpath.steps, 0.005)
+        fit_arcs(&op.toolpath.steps, ARC_FIT)
     } else {
         op.toolpath.steps.clone()
     };
@@ -1355,6 +1355,9 @@ fn post_drill(
         *at = [c.at[0], c.at[1], c.retract];
     }
 }
+
+/// How closely arcs are fitted to a toolpath's feed moves for G2/G3 ([`fit_arcs`], mm).
+pub const ARC_FIT: f64 = 0.005;
 
 /// Runs of feed moves at one feed and height that follow a circle within `tol`, replaced by
 /// arcs (the strategies make polylines; G2/G3 are shorter and smoother on the machine).

@@ -41,6 +41,10 @@ pub(super) struct SolidInput {
     pub(super) wanted: Vec<CamId>,
     pub(super) parts: Vec<cadrs_core::Part>,
     pub(super) paths: std::collections::HashMap<CamId, Toolpath>,
+    /// Only the exact stock: a run the height map simulates, whose stock is shown exactly
+    /// where it can be (the worker stops where it can't, or fails too often, and the height
+    /// map is shown).
+    pub(super) exact_only: bool,
 }
 
 /// What the solid simulation gives the preview.
@@ -164,6 +168,8 @@ pub(super) struct Live {
     pub(super) version: u64,
     /// When the last place was asked for.
     asked_at: Option<Instant>,
+    /// The worker has stopped (it couldn't go on, or an exact-only one gave up).
+    pub(super) ended: bool,
 }
 
 /// The most places a second the worker is asked to cut to (each a boolean, for the exact
@@ -192,6 +198,10 @@ impl Live {
                 let Some(mut mesh) = live.show(to, &mut tweening) else {
                     break;
                 };
+                if live.gives_up() && input.exact_only {
+                    warn!("Simulate's exact stock fails too often here: the height map from now");
+                    break;
+                }
                 if live.gives_up()
                     && let Some(run) = program::setup_run(
                         &input.cam,
@@ -230,6 +240,7 @@ impl Live {
             tween: None,
             version: 0,
             asked_at: None,
+            ended: false,
         })
     }
 
@@ -264,14 +275,25 @@ impl Live {
 
     /// Takes the newest mesh it has made, and asks for `to` when it is free and isn't there.
     pub(super) fn follow(&mut self, to: Option<Place>) {
-        let got: Vec<(Place, Shown)> = self
-            .got
-            .get_mut()
-            .ok()
-            .map(|rx| rx.try_iter().collect())
-            .unwrap_or_default();
+        let mut got: Vec<(Place, Shown)> = Vec::new();
+        if let Ok(rx) = self.got.get_mut() {
+            loop {
+                match rx.try_recv() {
+                    Ok(g) => got.push(g),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        self.ended = true;
+                        break;
+                    }
+                }
+            }
+        }
         for (at, shown) in got {
             self.take(at, shown);
+        }
+        if self.ended {
+            self.asked = None;
+            return;
         }
         let due = self
             .asked_at
@@ -291,7 +313,7 @@ impl Live {
     /// picture right after a seek.
     pub(super) fn settle(&mut self, to: Place, limit: std::time::Duration) {
         let until = Instant::now() + limit;
-        while self.cut != Some(to) && Instant::now() < until {
+        while self.cut != Some(to) && !self.ended && Instant::now() < until {
             // (A script waits: asked at once, however soon after the last.)
             self.asked_at = None;
             self.follow(Some(to));
@@ -366,10 +388,9 @@ impl Engine {
             .iter()
             .find(|s| !s.suppressed)
             .is_none_or(|s| s.id == setup.id);
-        // (Exactly only with `CADRS_EXACT_SIM=1` for now: on the worm's rotary roughing the
-        // exact stock falls far behind the tool and many of its cuts fail. On the lattice where
-        // it can't be made, or once it fails too often: [`Engine::gives_up`].)
-        let exact = std::env::var_os("CADRS_EXACT_SIM").is_some_and(|v| v == "1");
+        // (Exactly unless `CADRS_EXACT_SIM=0`. On the lattice where it can't be made, or once
+        // it fails too often: [`Engine::gives_up`]; a run on the height map then shows that.)
+        let exact = std::env::var_os("CADRS_EXACT_SIM").is_none_or(|v| v != "0");
         if exact
             && first_setup
             && let (Some(machine), Some(shape)) = (
@@ -392,9 +413,12 @@ impl Engine {
             }));
             match made {
                 Ok(Ok(e)) => return Some(Engine::Exact(Box::new(e))),
-                Ok(Err(why)) => info!("Simulate's stock on the lattice: {why}"),
+                Ok(Err(why)) => info!("Simulate's stock not exact: {why}"),
                 Err(_) => warn!("Simulate's exact stock could not be made"),
             }
+        }
+        if input.exact_only {
+            return None;
         }
         Engine::lattice(input, &run)
     }

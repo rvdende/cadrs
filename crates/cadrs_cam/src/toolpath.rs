@@ -159,6 +159,10 @@ pub struct Segment {
     /// The tool's axis at its start and at its end (unit vectors from the tip toward the
     /// spindle); `None` for a tool upright (along +Z) throughout.
     pub axis: Option<[P3; 2]>,
+    /// The centre (XY) of the arc this is a chord of: a [`Step::Arc`]'s chords, its ends on
+    /// the arc, the tool turning about the upright line through it (rising with a helix's).
+    /// The simulation cuts the arc itself, as the machine moves for a G2/G3.
+    pub about: Option<P2>,
 }
 
 impl Segment {
@@ -291,6 +295,7 @@ impl Toolpath {
             rapid_rate: rapid_rate.max(1.0),
             axis: UPRIGHT,
             lean: None,
+            about: None,
         };
         for s in &self.steps {
             match s {
@@ -307,11 +312,17 @@ impl Toolpath {
                     let (from, lean) = (m.axis, m.lean.take());
                     let points = arc_points(m.at, *to, *center, *cw, ARC_CHORD);
                     let n = points.len() as f64;
+                    // (Its chords' ends on the circle: `to` on it too, within a micron of as far
+                    // from the centre as where it starts.)
+                    let r = |p: P3| (p[0] - center[0]).hypot(p[1] - center[1]);
+                    let round = (r(*to) - r(m.at)).abs() <= 1e-3;
+                    m.about = (round && lean.is_none()).then_some(*center);
                     for (i, p) in points.into_iter().enumerate() {
                         m.lean =
                             lean.map(|l| crate::kinematics::slerp(from, l, (i + 1) as f64 / n));
                         m.go(p, Some(*feed), Some(*kind));
                     }
+                    m.about = None;
                 }
                 Step::Drill(c) => m.drill(c),
                 Step::BeamOn { .. } => m.beam = true,
@@ -324,6 +335,7 @@ impl Toolpath {
         if m.dwell > 0.0 {
             let at = m.at;
             m.out.push(Segment {
+                about: None,
                 from: at,
                 to: at,
                 feed: None,
@@ -412,6 +424,8 @@ struct Mover {
     /// The tool's axis now, and the one the next move turns it to ([`Step::Axis`]).
     axis: P3,
     lean: Option<P3>,
+    /// The centre of the arc being expanded ([`Segment::about`]).
+    about: Option<P2>,
 }
 
 impl Mover {
@@ -427,6 +441,7 @@ impl Mover {
             beam: self.beam,
             minutes: dist(self.at, to) / rate + self.dwell / 60.0,
             axis: leaning.then_some([self.axis, end]),
+            about: if leaning { None } else { self.about },
         });
         self.dwell = 0.0;
         self.at = to;

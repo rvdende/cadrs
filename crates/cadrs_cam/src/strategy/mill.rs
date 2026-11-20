@@ -741,7 +741,29 @@ pub fn profile(input: &Input) -> Result<Toolpath, String> {
                 .into(),
         );
     }
-    Ok(b.finish())
+    // Along the picked circles (offset by the tool) as their arcs.
+    let dists: Vec<f64> = (0..passes)
+        .map(|k| {
+            if p.side == Side::On {
+                0.0
+            } else {
+                r + p.wall_stock + k as f64 * p.step_over
+            }
+        })
+        .collect();
+    let circles = super::arcs::offsets(&picked_circles(input), &dists);
+    Ok(super::arcs::onto_circles(b.finish(), &circles))
+}
+
+/// The exact circles of the picked edges that are circles (centre, unit normal, radius).
+fn picked_circles(input: &Input) -> Vec<(crate::geom::P3, crate::geom::P3, f64)> {
+    input
+        .params
+        .drive
+        .edges
+        .iter()
+        .filter_map(|n| input.model.edge(n)?.circle)
+        .collect()
 }
 
 /// 2-axis chamfer: a chamfer mill along the top edges (picked, else the top faces' outlines),
@@ -876,7 +898,9 @@ pub fn engrave(input: &Input) -> Result<Toolpath, String> {
             above = *z;
         }
     }
-    Ok(b.finish())
+    // Along the picked circles as their arcs.
+    let circles = super::arcs::offsets(&picked_circles(input), &[0.0]);
+    Ok(super::arcs::onto_circles(b.finish(), &circles))
 }
 
 /// Flatlands: finishes the model's flat floors (or the picked ones) with rings offset inward.

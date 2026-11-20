@@ -311,6 +311,7 @@ pub(super) fn analyse(
         let segs: Vec<Segment> = segments[sp.first..end]
             .iter()
             .map(|s| Segment {
+                about: None,
                 from: local(s.from),
                 to: local(s.to),
                 ..*s
@@ -422,6 +423,7 @@ mod tests {
         let over: P3 = [50.0, 20.0, 60.0];
         let inside: P3 = [50.0, 20.0, -5.0];
         let seg = |from: P3, to: P3, minutes: f64| Segment {
+            about: None,
             from,
             to,
             feed: Some(500.0),

@@ -157,6 +157,7 @@ fn solid(stock: &Stock) {
     use cadrs_cam::sim::{SolidOp, simulate_mill_solid};
     use cadrs_cam::toolpath::{FeedKind, Segment};
     let feed = |from, to, axis| Segment {
+        about: None,
         from,
         to,
         feed: Some(1000.0),
