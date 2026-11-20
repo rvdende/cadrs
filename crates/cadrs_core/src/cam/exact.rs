@@ -1026,12 +1026,20 @@ impl ExactStock {
             tween.reached(q, grow).map_or(never, |t| t as f32)
         };
         // (Before: hidden once reached. After: its new faces shown once made, its old ones always.)
-        let before_times = refine_by_times(&mut before, &|p| time(p, 0.0, f32::INFINITY));
-        let after_times = refine_by_times(&mut after, &|p| time(p, 1e-4, f32::NEG_INFINITY));
+        // (Triangles within the cut's reach split till a fraction of the tool across first: a
+        // face whose corners the tool never reaches, a block's top, is still crossed by it.)
+        let coarse = (0.5 * self.cutters[self.cuts[c].op].radius, reach);
+        let before_times = refine_by_times(&mut before, coarse, &|p| time(p, 0.0, f32::INFINITY));
+        // (The stock after the cut's new faces lie on the tool's sweep, their tessellation's
+        // points within its deflection of it.)
+        let on_sweep = ON_SWEEP.max(deflection);
+        let after_times = refine_by_times(&mut after, coarse, &|p| {
+            time(p, on_sweep, f32::NEG_INFINITY)
+        });
         let (before_edges, before_edge_times) =
             edges_by_times(before_edges, &|p| time(p, 0.0, f32::INFINITY));
         let (after_edges, after_edge_times) =
-            edges_by_times(after_edges, &|p| time(p, 1e-4, f32::NEG_INFINITY));
+            edges_by_times(after_edges, &|p| time(p, on_sweep, f32::NEG_INFINITY));
         let cut = &self.cuts[c];
         Some(Tweened {
             cut: c,
@@ -1657,6 +1665,10 @@ impl Bbox3 {
             max: self.max + d,
         }
     }
+    fn overlaps(&self, o: &Bbox3) -> bool {
+        (0..3).all(|k| self.min[k] <= o.max[k] && o.min[k] <= self.max[k])
+    }
+
     fn contains(&self, p: &Point3<f64>) -> bool {
         (0..3).all(|i| p[i] >= self.min[i] && p[i] <= self.max[i])
     }
@@ -1668,13 +1680,70 @@ impl Bbox3 {
 /// front wrong. A triangle all one time stays as it is.
 fn refine_by_times(
     m: &mut cadrs_cam::dexel::SimMesh,
+    (coarse, reach): (f64, Bbox3),
     time: &(dyn Fn(&[f32; 3]) -> f32 + Sync),
 ) -> Vec<f32> {
     use rayon::prelude::*;
+    use std::collections::HashMap;
     let mut times: Vec<f32> = m.positions.par_iter().map(time).collect();
     let mut todo: Vec<[u32; 3]> = m.indices.chunks(3).map(|t| [t[0], t[1], t[2]]).collect();
     let mut done: Vec<u32> = Vec::with_capacity(m.indices.len());
-    let mut middles: std::collections::HashMap<(u32, u32), u32> = Default::default();
+    // Edges are known by where their ends are, not by their vertices: the tessellation repeats
+    // vertices (each face has its own along an edge), and an edge split on one side but not on
+    // the other cracks the mesh (pinholes along the cut's outline). Each split point is kept
+    // for each normal it is made with (each face its own, so the faces shade as they did).
+    let key = |p: &[f32; 3]| p.map(f32::to_bits);
+    let mut at: HashMap<[u32; 3], u32> = HashMap::new();
+    for (i, p) in m.positions.iter().enumerate() {
+        at.entry(key(p)).or_insert(i as u32);
+    }
+    let canon = |at: &HashMap<[u32; 3], u32>, m: &cadrs_cam::dexel::SimMesh, i: u32| {
+        at[&key(&m.positions[i as usize])]
+    };
+    // An edge's (canonical ends) split points, by normal.
+    let mut middles: HashMap<(u32, u32), Vec<u32>> = HashMap::new();
+    // The split point of `i`–`j` with their normal (made, timed later, if new: `fresh`).
+    let middle = |m: &mut cadrs_cam::dexel::SimMesh,
+                  at: &mut HashMap<[u32; 3], u32>,
+                  middles: &mut HashMap<(u32, u32), Vec<u32>>,
+                  times: &mut Vec<f32>,
+                  fresh: &mut Vec<u32>,
+                  i: u32,
+                  j: u32,
+                  make: bool|
+     -> Option<u32> {
+        let (ci, cj) = (canon(at, m, i), canon(at, m, j));
+        let k = (ci.min(cj), ci.max(cj));
+        let (ni, nj) = (m.normals[i as usize], m.normals[j as usize]);
+        let n = [0, 1, 2].map(|a| 0.5 * (ni[a] + nj[a]));
+        let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt().max(1e-12);
+        let n = n.map(|x| x / l);
+        let have = middles.get(&k);
+        if let Some(&v) = have.and_then(|v| v.iter().find(|&&v| m.normals[v as usize] == n)) {
+            return Some(v);
+        }
+        let other = have.and_then(|v| v.first().copied());
+        if other.is_none() && !make {
+            return None;
+        }
+        // (From the canonical ends, in their order: every face's copy at the very same place.)
+        let (pa, pb) = (m.positions[k.0 as usize], m.positions[k.1 as usize]);
+        m.positions.push([0, 1, 2].map(|a| 0.5 * (pa[a] + pb[a])));
+        m.normals.push(n);
+        m.colors.push(m.colors[i as usize]);
+        m.tags.push(m.tags[i as usize]);
+        let v = (m.positions.len() - 1) as u32;
+        match other {
+            Some(o) => times.push(times[o as usize]),
+            None => {
+                times.push(f32::NAN);
+                fresh.push(v);
+            }
+        }
+        at.entry(key(&m.positions[v as usize])).or_insert(v);
+        middles.entry(k).or_default().push(v);
+        Some(v)
+    };
     let differ = |a: f32, b: f32| {
         if a.is_finite() && b.is_finite() {
             (a - b).abs() > TWEEN_STEP
@@ -1707,26 +1776,22 @@ fn refine_by_times(
                 .copied()
                 .enumerate()
                 .fold((0, 0.0), |a, (i, l)| if l > a.1 { (i, l) } else { a });
+            // (Or within the cut's reach and still wide: its corners may all miss the tool.)
+            let wide = longest > coarse && {
+                let mut b = Bbox3::empty();
+                for i in t {
+                    b.add(&Point3::from(q(i)));
+                }
+                b.overlaps(&reach)
+            };
+            let split = split || wide;
             if !split || longest <= TWEEN_EDGE || m.positions.len() > 4_000_000 {
                 done.extend(t);
                 continue;
             }
             let (i, j) = (t[k], t[(k + 1) % 3]);
-            let key = (i.min(j), i.max(j));
-            let mid = *middles.entry(key).or_insert_with(|| {
-                let (pi, pj) = (m.positions[i as usize], m.positions[j as usize]);
-                let (ni, nj) = (m.normals[i as usize], m.normals[j as usize]);
-                m.positions.push([0, 1, 2].map(|a| 0.5 * (pi[a] + pj[a])));
-                let n = [0, 1, 2].map(|a| 0.5 * (ni[a] + nj[a]));
-                let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt().max(1e-12);
-                m.normals.push(n.map(|x| x / l));
-                m.colors.push(m.colors[i as usize]);
-                m.tags.push(m.tags[i as usize]);
-                times.push(f32::NAN);
-                let v = (m.positions.len() - 1) as u32;
-                fresh.push(v);
-                v
-            });
+            let mid =
+                middle(m, &mut at, &mut middles, &mut times, &mut fresh, i, j, true).expect("made");
             let o = t[(k + 2) % 3];
             next.push([i, mid, o]);
             next.push([mid, j, o]);
@@ -1738,11 +1803,51 @@ fn refine_by_times(
         for (v, t) in fresh.into_iter().zip(new) {
             times[v as usize] = t;
         }
+        // (A copy made for another face before its first was timed: timed now too.)
+        for v in 0..times.len() {
+            if times[v].is_nan() {
+                times[v] = time(&m.positions[v]);
+            }
+        }
         todo = next;
+    }
+    // No T-junctions: a triangle beside a split edge is split there too (else the mesh cracks
+    // along it, the stock behind showing through in dots).
+    let mut todo: Vec<[u32; 3]> = done.chunks(3).map(|t| [t[0], t[1], t[2]]).collect();
+    let mut done: Vec<u32> = Vec::with_capacity(todo.len() * 3);
+    let mut fresh = Vec::new();
+    while let Some(t) = todo.pop() {
+        let hanging = (0..3).find_map(|k| {
+            let (i, j) = (t[k], t[(k + 1) % 3]);
+            middle(
+                m,
+                &mut at,
+                &mut middles,
+                &mut times,
+                &mut fresh,
+                i,
+                j,
+                false,
+            )
+            .map(|mid| (k, mid))
+        });
+        match hanging {
+            Some((k, mid)) => {
+                let (i, j, o) = (t[k], t[(k + 1) % 3], t[(k + 2) % 3]);
+                todo.push([i, mid, o]);
+                todo.push([mid, j, o]);
+            }
+            None => done.extend(t),
+        }
     }
     m.indices = done;
     times
 }
+
+/// How near the tool a point of the stock after a cut is reached (mm), at least: its new faces
+/// lie on the tool's sweep, their tessellation's points (and their f32 positions) off it by up to
+/// the tessellation's deflection.
+const ON_SWEEP: f64 = 2e-3;
 
 /// How far apart (of the cut, 0 to 1) the times at a tweened triangle's corners may be.
 const TWEEN_STEP: f32 = 0.02;
@@ -1869,7 +1974,9 @@ impl Tween {
     fn depth(&self, q: &V3) -> f64 {
         let c = &self.cutter;
         let r = q.x.hypot(q.y);
-        let radial = c.radius_at_height(q.z) - r;
+        // (The radius at the height on the tool: a point in its tip's plane a rounding below
+        // it is beside the tip, not under nothing.)
+        let radial = c.radius_at_height(q.z.clamp(0.0, c.length)) - r;
         radial.min(q.z).min(c.length - q.z)
     }
 

@@ -5,6 +5,7 @@
 // corners tori, drawn from their own surfaces with their edges (no facets, no lattice). The
 // part is hidden (the preview bar's Part): what shows is the stock as the tool leaves it.
 // 00 The start: the stock, its top clean and flat, the tool over it.
+// 00b A second in: the first arc just begun, the slot cut behind the tool and nothing ahead.
 // 01 A fifth of the way: the first lap at −4 part way round, the cut ending in the tool's
 //    shape where the tool is.
 // 02 Half way: the first lap done, the second (−8) on its way.
@@ -34,6 +35,10 @@ Scenario(
         MoveTo(1420, 900),
         Wait(5),
         Screenshot("00-start"),
+        Custom("cam preview-at 0.03"),
+        MoveTo(1420, 900),
+        Wait(5),
+        Screenshot("00b-first-arc-starts"),
         Custom("cam preview-at 0.2"),
         MoveTo(1420, 900),
         Wait(5),

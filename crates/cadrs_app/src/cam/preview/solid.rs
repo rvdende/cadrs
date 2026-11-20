@@ -512,12 +512,67 @@ pub(super) fn stock_mesh(m: &SimMesh, frame: &Frame) -> Mesh {
     lit_mesh(positions, normals, m.colors.clone(), m.indices.clone())
 }
 
+/// How far past the cut's ends (0 to 1) a tween's never and always are drawn.
+const TIME_PAST: f32 = 0.002;
+
 /// A tween's side of the stock ([`stock_mesh`]), each vertex's time along the cut in its UV y
 /// (the part shader's tween: `crate::part_shading::PartShadingParams::tween`).
 pub(super) fn timed_stock_mesh(m: &SimMesh, times: &[f32], frame: &Frame) -> Mesh {
     let mut mesh = stock_mesh(m, frame);
-    // (Never and always as far-off times: infinities interpolate to nothing.)
-    let uv: Vec<[f32; 2]> = times.iter().map(|t| [0.0, t.clamp(-1e6, 1e6)]).collect();
+    // (Never and always as times just past the cut's ends (0 to 1): a triangle's time is
+    // extrapolated a little past its edges where a pixel's samples straddle it, and from an
+    // infinity, or a far-off time, that lands anywhere: −∞ or −0.1 there punched dots along the
+    // cut's outline ahead. A step past the ends keeps it near.)
+    // Nearer still: never a step past the latest of the times beside it (the vertices it shares
+    // a triangle with), always a step before the earliest; else just past the ends.
+    let mut shown: Vec<f32> = times
+        .iter()
+        .map(|t| if t.is_finite() { *t } else { f32::NAN })
+        .collect();
+    for t in m.indices.chunks(3) {
+        let finite: Vec<f32> = t
+            .iter()
+            .map(|&i| times[i as usize])
+            .filter(|x| x.is_finite())
+            .collect();
+        let (Some(lo), Some(hi)) = (
+            finite.iter().copied().reduce(f32::min),
+            finite.iter().copied().reduce(f32::max),
+        ) else {
+            continue;
+        };
+        for &i in t {
+            let (v, s) = (times[i as usize], &mut shown[i as usize]);
+            if v == f32::INFINITY {
+                *s = s.max(hi + TIME_PAST);
+            } else if v == f32::NEG_INFINITY {
+                *s = if s.is_nan() {
+                    lo - TIME_PAST
+                } else {
+                    s.min(lo - TIME_PAST)
+                };
+            }
+        }
+    }
+    let uv: Vec<[f32; 2]> = times
+        .iter()
+        .zip(&shown)
+        .map(|(t, s)| {
+            let far = if *t > 0.0 {
+                1.0 + TIME_PAST
+            } else {
+                -TIME_PAST
+            };
+            [
+                0.0,
+                if s.is_nan() {
+                    far
+                } else {
+                    s.clamp(-TIME_PAST, 1.0 + TIME_PAST)
+                },
+            ]
+        })
+        .collect();
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
     mesh
 }
