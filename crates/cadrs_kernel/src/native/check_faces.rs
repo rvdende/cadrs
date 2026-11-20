@@ -359,6 +359,24 @@ fn crossing(
     if !(elementary(&fa.surf) && elementary(&fb.surf)) {
         return None;
     }
+    // A plane keeping the torus's core circle at least the tube's radius away (less the
+    // margin) at most touches it: no crossing, and no quartic to trace (a wall a corner's
+    // rolling ball rests on).
+    for (p, t) in [(&fa.surf, &fb.surf), (&fb.surf, &fa.surf)] {
+        if let (Surface::Plane { f: pf }, Surface::Torus { f: tf, rmaj, rmin }) = (p, t) {
+            let n = pf.x.cross(&pf.y).normalize();
+            let dc = n.dot(&(tf.o - pf.o));
+            let reach = rmaj * (n.dot(&tf.x).powi(2) + n.dot(&tf.y).powi(2)).sqrt();
+            let least = if dc.abs() <= reach {
+                0.0
+            } else {
+                dc.abs() - reach
+            };
+            if least >= rmin - margin {
+                return None;
+            }
+        }
+    }
     let (ua, ub) = (uv_box(polys(i).0)?, uv_box(polys(j).0)?);
     let ssi = super::ssi::surface_surface_full(&fa.surf, ua, &fb.surf, ub, ov);
     for c in &ssi.curves {

@@ -2917,19 +2917,30 @@ pub fn shell_options(k: &mut dyn Kernel) {
         .unwrap());
     close(volume(k, hollow), 240_000.0 - 92.0 * 52.0 * 32.0, 1e-6);
     assert_eq!(k.solid_count(hollow).unwrap(), 1);
-    // Walls thicker than half the 60 mm width meet everywhere: every point of the box is within
-    // 35 of a wall, nothing is hollowed, and the shell is the box itself (brep-bench's
-    // shell/box-walls-meeting; the Shell feature reports it as a mistake).
+    // Walls half the 60 mm width meet in one plane: nothing is hollowed, and the shell is the
+    // box itself (brep-bench's shell/box-walls-meeting).
     let solid = one(k
         .shell_with(
+            b,
+            &ShellSpec {
+                thickness: 30.0,
+                ..spec.clone()
+            },
+        )
+        .unwrap());
+    close(volume(k, solid), 240_000.0, 1e-9);
+    // Thicker, the shell is as thick as the part: refused (brep-conformance's
+    // modify/rejects-shell-as-thick-as-the-part; the Shell feature reports it as a mistake).
+    assert!(
+        k.shell_with(
             b,
             &ShellSpec {
                 thickness: 35.0,
                 ..spec.clone()
             },
         )
-        .unwrap());
-    close(volume(k, solid), 240_000.0, 1e-9);
+        .is_err()
+    );
     // Nothing to remove and not hollow: an error.
     assert!(
         k.shell_with(

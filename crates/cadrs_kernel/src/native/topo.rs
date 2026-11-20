@@ -572,6 +572,46 @@ pub fn co_range(e: &Edge, fwd: bool) -> (f64, f64) {
 }
 
 impl Body {
+    /// Drops the edges no face's loop and no wire uses (a revolve's axis line, whose face
+    /// collapsed), renumbering the rest in order.
+    pub fn drop_unused_edges(&mut self) {
+        let mut used = vec![false; self.edges.len()];
+        for c in self.faces.iter().flat_map(|f| f.loops.iter().flatten()) {
+            used[c.edge] = true;
+        }
+        for w in &self.wires {
+            for &(e, _) in &w.edges {
+                used[e] = true;
+            }
+        }
+        if used.iter().all(|&u| u) {
+            return;
+        }
+        let mut map = vec![usize::MAX; self.edges.len()];
+        let mut next = 0;
+        for (i, &u) in used.iter().enumerate() {
+            if u {
+                map[i] = next;
+                next += 1;
+            }
+        }
+        let mut i = 0;
+        self.edges.retain(|_| {
+            i += 1;
+            used[i - 1]
+        });
+        for f in &mut self.faces {
+            for c in f.loops.iter_mut().flatten() {
+                c.edge = map[c.edge];
+            }
+        }
+        for w in &mut self.wires {
+            for e in &mut w.edges {
+                e.0 = map[e.0];
+            }
+        }
+    }
+
     /// Adds a vertex of tolerance [`TOL_MIN`](super::tol::CONFUSION); returns its index.
     pub fn add_vertex(&mut self, p: P3) -> usize {
         self.verts.push(Vertex { p, tol: TOL_MIN });

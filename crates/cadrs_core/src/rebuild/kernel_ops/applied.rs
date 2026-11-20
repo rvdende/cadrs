@@ -569,6 +569,7 @@ impl Rebuilder {
                 flipped: flipped[i].clone(),
                 corners: Default::default(),
                 first_on: Vec::new(),
+                overflow: true,
             };
             k.chamfer_with(body, &edges[i], &opts)
         })

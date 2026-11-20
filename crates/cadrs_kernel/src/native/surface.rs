@@ -1295,6 +1295,11 @@ impl Surface {
                 }
             }
             Surface::Nurbs(n) => Curve::Nurbs(Arc::new(n.iso_u_curve(u))),
+            // The ruling through the curve's point at u, parametrized by v.
+            Surface::Extrusion { c, d } => Curve::Line {
+                o: c.point(u),
+                d: *d,
+            },
             _ => return None,
         })
     }
