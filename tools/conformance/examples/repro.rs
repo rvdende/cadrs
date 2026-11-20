@@ -43,6 +43,35 @@ fn main() {
         Some(f) => {
             println!("{:?} {:?} {}", f.act, f.points, f.size);
             match f.act {
+                generate::Act::Shell => {
+                    // (REPRO_SHARP=1: the walls' corners sharp; the adapter asks for rounded.)
+                    let sharp = std::env::var_os("REPRO_SHARP").is_some();
+                    let cadrs_conformance::Solid::Body(b) = a else {
+                        panic!("empty")
+                    };
+                    k.with(|kk| {
+                        use cadrs_kernel::{Kernel as _, Pick as _};
+                        let remove: Vec<cadrs_kernel::FaceId> = f
+                            .points
+                            .iter()
+                            .map(|p| {
+                                kk.face_at(b, nalgebra::Point3::new(p[0], p[1], p[2]))
+                                    .unwrap()
+                            })
+                            .collect();
+                        let spec = cadrs_kernel::ShellSpec {
+                            remove,
+                            thickness: f.size,
+                            outward: false,
+                            hollow: f.points.is_empty(),
+                            sharp,
+                            nothing_hollowed: Default::default(),
+                        };
+                        kk.shell_with(b, &spec)
+                            .map(|r| cadrs_conformance::Solid::Body(r.bodies[0]))
+                            .map_err(|e| brep_protocol::Refusal::failed(e.to_string()))
+                    })
+                }
                 generate::Act::OffsetFaces => k.offset_faces(&a, &f.points, f.size),
                 generate::Act::Fillet => k.fillet(&a, &f.points, f.size),
                 generate::Act::FilletG2 => k.fillet_g2(&a, &f.points, f.size, f.radii[0]),
