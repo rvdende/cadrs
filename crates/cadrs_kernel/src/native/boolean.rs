@@ -2869,17 +2869,17 @@ fn snap_to(a: &mut Body, b: &Body, tol: f64) -> bool {
         return false;
     }
     let mut changed = false;
+    if !a.faces.iter().any(|f| matches!(f.surf, Surface::Nurbs(_))) {
+        return false;
+    }
+    // (`b`'s box once: it is not kept here, and each of its curved faces is trimmed for it.)
+    let grow = 1e-3 * tol::small(b.bbox().diagonal());
     let targets: Vec<(usize, Bbox)> = b
         .faces
         .iter()
         .enumerate()
         .filter(|(_, f)| matches!(f.surf, Surface::Plane { .. } | Surface::Cylinder { .. }))
-        .map(|(i, _)| {
-            (
-                i,
-                b.face_bbox(i).grow(1e-3 * tol::small(b.bbox().diagonal())),
-            )
-        })
+        .map(|(i, _)| (i, b.face_bbox(i).grow(grow)))
         .collect();
     if targets.is_empty() {
         return false;
@@ -3564,8 +3564,10 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         ob.max = ob.max.inf(&faces[fb].bbox.max);
         ob
     };
-    // The pairs of faces to intersect, in a fixed order.
-    let mut pairs: Vec<(usize, usize)> = Vec::new();
+    // The pairs of faces to intersect, in a fixed order: of the pairs whose boxes meet, those
+    // neither coincident nor tangent along an edge they share (each pair told apart by the two
+    // faces alone: in parallel, applied in order).
+    let mut near_pairs: Vec<(usize, usize)> = Vec::new();
     for fa in 0..na_faces {
         if !selected(faces[fa].orig) {
             continue;
@@ -3573,9 +3575,19 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         let mut near = ftree.query(&faces[fa].bbox);
         near.sort_unstable();
         for fb in near.into_iter().filter(|&f| f >= na_faces) {
-            if !faces[fa].bbox.overlaps(&faces[fb].bbox) {
-                continue;
+            if faces[fa].bbox.overlaps(&faces[fb].bbox) {
+                near_pairs.push((fa, fb));
             }
+        }
+    }
+    #[derive(Clone, Copy, PartialEq)]
+    enum PairIs {
+        Coincident,
+        Apart,
+        Crossing,
+    }
+    let tell = |&(fa, fb): &(usize, usize)| -> PairIs {
+        {
             // Coincident within the faces' tolerances (near-coincident faces have had theirs
             // raised: `near_coincident_tolerances`).
             let ctol = run_tol.max(faces[fa].tol).max(faces[fb].tol);
@@ -3599,14 +3611,12 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             if faces[fa].surf.same_domain(&faces[fb].surf, ctol).is_some()
                 && !(planes && (flat_apart(fa, fb) || flat_apart(fb, fa)))
             {
-                coincident[fa].push(fb);
-                coincident[fb].push(fa);
-                continue;
+                return PairIs::Coincident;
             }
             // (The second body within the first: faces on different surfaces meet only along
             // the second's own edges, there already.)
             if within {
-                continue;
+                return PairIs::Apart;
             }
             // Faces that share an edge and are tangent along it (one continues the other): the
             // shared edge is their contact; contouring tangent surfaces finds nothing more but
@@ -3620,7 +3630,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 (bounds[fa].as_ref(), bounds[fb].as_ref()),
                 &ebox,
             ) {
-                continue;
+                return PairIs::Apart;
             }
             if super::env_flag!("CADRS_TANGENT_DEBUG")
                 && (matches!(faces[fa].surf, Surface::Nurbs(_))
@@ -3644,7 +3654,23 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                     dev(&face_edges[fa], &faces[fb].surf)
                 );
             }
-            pairs.push((fa, fb));
+            PairIs::Crossing
+        }
+    };
+    let told: Vec<PairIs> = if super::par::threads_for(near_pairs.len(), true) {
+        near_pairs.par_iter().map(tell).collect()
+    } else {
+        near_pairs.iter().map(tell).collect()
+    };
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
+    for (&(fa, fb), is) in near_pairs.iter().zip(told) {
+        match is {
+            PairIs::Coincident => {
+                coincident[fa].push(fb);
+                coincident[fb].push(fa);
+            }
+            PairIs::Apart => {}
+            PairIs::Crossing => pairs.push((fa, fb)),
         }
     }
     // Their intersections, each a function of the two faces alone: computed in parallel and
@@ -5164,21 +5190,13 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     // searched for as the Full check measures them. An edge lying off a face by more (an
     // input's edge off its own face, which the cut faces keep) has that recorded, up to a part
     // in 10⁵ of the result's size.
-    out.fit_tolerances_searched(run_tol * 10.0);
+    let gaps = out.fit_tolerances_searched_gaps(run_tol * 10.0);
     prof.mark("fit");
     let wide = 1e-5 * out.bbox().diagonal();
-    for fi in 0..out.faces.len() {
-        // (As `fit_tolerances_searched` just measured most of them: kept by what they are of.)
-        let mut surface_key = None;
-        for c in out.faces[fi].loops.iter().flatten() {
-            let e = &out.edges[c.edge];
-            if e.degenerate {
-                continue;
-            }
-            let g = super::topo::pcurve_gap_kept(e, &c.pc, &out.faces[fi].surf, &mut surface_key);
-            if g <= wide && g * 1.01 > e.tol {
-                out.edges[c.edge].tol = g * 1.01;
-            }
+    // (The gaps just measured: only tolerances changed since.)
+    for (e, g) in gaps.into_iter().flatten() {
+        if g <= wide && g * 1.01 > out.edges[e].tol {
+            out.edges[e].tol = g * 1.01;
         }
     }
     // Likewise a vertex where the p-curves of a loop meet a hair apart (up to the same part
@@ -5619,11 +5637,15 @@ pub fn split_nonmanifold(b: &mut Body) {
             }
         }
     }
+    // The least step into a face (of the body's size; once, roughly: an exact box of a body of
+    // thousands of curved faces for each use of an edge was most of a cut's time).
+    let mut least: Option<f64> = None;
     for e in 0..ne {
         let u = uses[e].clone();
         if u.len() <= 2 || b.edges[e].degenerate {
             continue;
         }
+        let least = *least.get_or_insert_with(|| 1e-4 * tol::small(rough_bbox(b).diagonal()));
         let ed = b.edges[e].clone();
         let tm = ed.mid_t();
         let p = ed.point(tm);
@@ -5645,9 +5667,7 @@ pub fn split_nonmanifold(b: &mut Body) {
             let len = (ed.t[1] - ed.t[0]).abs() * ed.curve.tangent(tm).norm();
             // (Not `clamp`: a NaN length takes 0.05 here.)
             #[allow(clippy::manual_clamp)]
-            let step = (len * 1e-2)
-                .min(0.05)
-                .max(1e-4 * tol::small(b.bbox().diagonal()));
+            let step = (len * 1e-2).min(0.05).max(least);
             let (pu, su, sv) = f.surf.d1(uv.x, uv.y);
             let g = su * perp.x + sv * perp.y;
             let sgn = if g.dot(&w0) >= 0.0 { 1.0 } else { -1.0 };
@@ -5869,6 +5889,8 @@ pub(crate) fn assemble_shells_with(b: &mut Body, terms: Option<&[f64]>) -> Resul
     // times). Each is sized by its box, for picking the smallest one around a void. (Their
     // volumes tell the same, but integrating faces cut by long intersection curves is slow.)
     if outer.len() > 1 {
+        // (The body's box and its faces' made once here, not once per shell.)
+        let _boxes = super::topo::keep_boxes(&[&*b]);
         let polys: Vec<Vec<Vec<P2>>> = b
             .faces
             .iter()
@@ -5892,7 +5914,7 @@ pub(crate) fn assemble_shells_with(b: &mut Body, terms: Option<&[f64]>) -> Resul
                     if let Some(terms) = terms {
                         return fs.iter().map(|&f| terms[f]).sum::<f64>() >= 0.0;
                     }
-                    let shift = b.bbox().center().coords;
+                    let shift = rough_bbox(b).center().coords;
                     fs.iter()
                         .map(|&f| super::mass::face_integrals(b, &b.faces[f], &shift)[4])
                         .sum::<f64>()
@@ -5955,11 +5977,24 @@ pub(crate) fn assemble_shells_with(b: &mut Body, terms: Option<&[f64]>) -> Resul
     Ok(())
 }
 
+/// A box about `b` from its vertices and its edges' middles: for a size or a centre (its exact
+/// box trims every curved face, slow on a body of thousands). Its exact box when it has no edges.
+fn rough_bbox(b: &Body) -> Bbox {
+    let mut bb = Bbox::empty();
+    for v in &b.verts {
+        bb.add(&v.p);
+    }
+    for e in b.edges.iter().filter(|e| !e.degenerate) {
+        bb.add(&e.point(0.5 * (e.t[0] + e.t[1])));
+    }
+    if bb.is_empty() { b.bbox() } else { bb }
+}
+
 /// Whether the faces of a closed shell point out of the region it encloses, by ray parity:
 /// from points inside a few of its faces, rays along the outward normal (and two tilts of it)
 /// cross the shell an even number of times when they do. None when the votes don't settle it.
 fn shell_points_out(b: &Body, faces: &[usize], polys: &[Vec<Vec<P2>>]) -> Option<bool> {
-    let size = b.bbox().diagonal().max(tol::ROUNDOFF);
+    let size = rough_bbox(b).diagonal().max(tol::ROUNDOFF);
     // Rays against this shell's faces only, each where the line comes to its box.
     let mut boxes = vec![Bbox::empty(); b.faces.len()];
     for &f in faces {

@@ -1459,24 +1459,45 @@ impl Body {
     /// their curves actually leave (the p-curves they fit, the files' own); gaps beyond `cap`
     /// are left for the check to report.
     pub fn fit_tolerances_searched(&mut self, cap: f64) {
+        self.fit_tolerances_searched_gaps(cap);
+    }
+
+    /// [`Self::fit_tolerances_searched`], giving each face's coedges' gaps (edge, gap; none for
+    /// a degenerate edge), in order: for a caller that raises tolerances further by them. The
+    /// faces are measured in parallel.
+    pub(crate) fn fit_tolerances_searched_gaps(&mut self, cap: f64) -> Vec<Vec<(usize, f64)>> {
+        use rayon::prelude::*;
         self.fit_tolerances(cap);
-        let mut etol = vec![0.0f64; self.edges.len()];
-        let mut vtol = vec![0.0f64; self.verts.len()];
-        for f in &self.faces {
-            let mut surface_key = None;
-            for c in f.loops.iter().flatten() {
-                let e = &self.edges[c.edge];
-                if !e.degenerate {
-                    let gap = pcurve_gap_kept(e, &c.pc, &f.surf, &mut surface_key);
-                    etol[c.edge] = etol[c.edge].max(gap);
-                }
-                for k in 0..2 {
-                    let uv = c.pc.point(e.t[k]);
-                    let d = (f.surf.eval(uv.x, uv.y) - self.verts[e.v[k]].p).norm();
-                    if d.is_finite() {
-                        vtol[e.v[k]] = vtol[e.v[k]].max(d);
+        let measured: Vec<(Vec<(usize, f64)>, Vec<(usize, f64)>)> = self
+            .faces
+            .par_iter()
+            .map(|f| {
+                let mut surface_key = None;
+                let (mut gaps, mut ends) = (Vec::new(), Vec::new());
+                for c in f.loops.iter().flatten() {
+                    let e = &self.edges[c.edge];
+                    if !e.degenerate {
+                        gaps.push((c.edge, pcurve_gap_kept(e, &c.pc, &f.surf, &mut surface_key)));
+                    }
+                    for k in 0..2 {
+                        let uv = c.pc.point(e.t[k]);
+                        let d = (f.surf.eval(uv.x, uv.y) - self.verts[e.v[k]].p).norm();
+                        if d.is_finite() {
+                            ends.push((e.v[k], d));
+                        }
                     }
                 }
+                (gaps, ends)
+            })
+            .collect();
+        let mut etol = vec![0.0f64; self.edges.len()];
+        let mut vtol = vec![0.0f64; self.verts.len()];
+        for (gaps, ends) in &measured {
+            for &(e, g) in gaps {
+                etol[e] = etol[e].max(g);
+            }
+            for &(v, d) in ends {
+                vtol[v] = vtol[v].max(d);
             }
         }
         for (e, d) in self.edges.iter_mut().zip(etol) {
@@ -1489,6 +1510,7 @@ impl Body {
                 v.tol = (d * 1.01).max(TOL_MIN);
             }
         }
+        measured.into_iter().map(|(gaps, _)| gaps).collect()
     }
 }
 
@@ -1844,6 +1866,9 @@ impl Body {
     }
 }
 
+/// The most control points of an edge's curve and p-curve whose gap [`pcurve_gap_kept`] keeps.
+const KEYED_POINTS: usize = 64;
+
 /// [`pcurve_gap`], kept by what it is made from (the edge's curve and range, the p-curve, the
 /// surface: `surface_key`, the surface's own hash, made once per face): a boolean's result fits
 /// every edge's tolerance again, most of them its inputs' edges as they were.
@@ -1872,6 +1897,19 @@ pub(super) fn pcurve_gap_kept(
             Surface::Plane { .. }
         )
     ) {
+        return pcurve_gap(e, pc, surf);
+    }
+    // (Nor long B-splines: their key, every control point hashed, costs more than the gap's
+    // 75 or so samples.)
+    let size = |c: &Curve| match c {
+        Curve::Nurbs(n) => n.cps.len(),
+        _ => 0,
+    };
+    let surface_size = match surf {
+        Surface::Nurbs(n) => n.cps.len() * n.cps.first().map_or(0, |r| r.len()),
+        _ => 0,
+    };
+    if size(&e.curve) + size(pc) > KEYED_POINTS || surface_size > 4 * KEYED_POINTS {
         return pcurve_gap(e, pc, surf);
     }
     let sk = *surface_key.get_or_insert_with(|| {
