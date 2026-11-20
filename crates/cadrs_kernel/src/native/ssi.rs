@@ -590,6 +590,14 @@ fn plane_extrusion(
         Some((a, b)) => (u0.max(a), u1.min(b)),
         None => (u0, u1),
     };
+    // A whole turn of a circle or ellipse: exactly one, from the face's own start, unpadded (a
+    // padded turn overshoots its start, and the closed curve then misses the seam's vertex by
+    // the pad times the radius).
+    let (lo, hi) = if c.is_periodic() && (ue.0.1 - ue.0.0).abs() >= TAU - tol::ANGULAR {
+        (ue.0.0, ue.0.0 + TAU)
+    } else {
+        (lo, hi)
+    };
     if hi <= lo {
         return Some(vec![]);
     }
@@ -3553,6 +3561,92 @@ fn curve_curve_closed(
     out
 }
 
+/// A line against an extrusion of a B-spline (a G2 blend's tool face): seen along the
+/// extrusion, the line is a line in the plane and the surface its profile, so the crossings are
+/// where the profile meets that line, a root search in one parameter. None for any other pair,
+/// a line along the extrusion (on the surface or nowhere near: the general search decides).
+fn line_extrusion(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Option<Vec<f64>> {
+    if crate::native::env_flag!("CADRS_NO_LINE_EXTRUSION") {
+        return None;
+    }
+    let (Curve::Line { o, d: ld }, Surface::Extrusion { c: pc, d: ed }) = (c, s) else {
+        return None;
+    };
+    let Curve::Nurbs(n) = pc else { return None };
+    let e = ed.normalize();
+    let lp = ld - e * ld.dot(&e);
+    let l2 = lp.norm_squared();
+    if l2 <= 1e-12 * ld.norm_squared() {
+        return None;
+    }
+    // The signed distance in the plane square to the extrusion from the line to the profile
+    // point at u, along the normal of the projected line.
+    let nrm = e.cross(&lp).normalize();
+    let g = |u: f64| (pc.point(u) - o).dot(&nrm);
+    let (u0, u1) = n.range();
+    let spans = n.knots.windows(2).filter(|w| w[1] > w[0]).count().max(1);
+    let m = (16 * spans * n.degree.max(1)).max(64);
+    let at = |k: usize| u0 + (u1 - u0) * k as f64 / m as f64;
+    let vals: Vec<f64> = (0..=m).map(|k| g(at(k))).collect();
+    let scale = 1.0 + o.coords.norm() + ld.norm() * (t0.abs().max(t1.abs()));
+    let mut us: Vec<f64> = Vec::new();
+    let refine = |mut a: f64, mut b: f64, mut ga: f64| {
+        for _ in 0..80 {
+            let mid = 0.5 * (a + b);
+            let gm = g(mid);
+            if (gm < 0.0) == (ga < 0.0) {
+                a = mid;
+                ga = gm;
+            } else {
+                b = mid;
+            }
+            if b - a <= 1e-15 * (1.0 + b.abs()) {
+                break;
+            }
+        }
+        0.5 * (a + b)
+    };
+    for k in 0..m {
+        let (ga, gb) = (vals[k], vals[k + 1]);
+        if ga == 0.0 {
+            us.push(at(k));
+        } else if (ga < 0.0) != (gb < 0.0) && gb != 0.0 {
+            us.push(refine(at(k), at(k + 1), ga));
+        } else if k > 0 && ga.abs() < vals[k - 1].abs() && ga.abs() <= gb.abs() {
+            // A touch with no change of sign: the line resting on the profile there.
+            let (mut a, mut b) = (at(k - 1), at(k + 1));
+            for _ in 0..80 {
+                let (x1, x2) = (a + (b - a) * 0.382, a + (b - a) * 0.618);
+                if g(x1).abs() < g(x2).abs() {
+                    b = x2;
+                } else {
+                    a = x1;
+                }
+            }
+            let u = 0.5 * (a + b);
+            if g(u).abs() <= tol::ROUNDOFF * scale {
+                us.push(u);
+            }
+        }
+    }
+    if vals[m] == 0.0 {
+        us.push(u1);
+    }
+    // Each profile point's place along the line.
+    let mut ts: Vec<f64> = us
+        .into_iter()
+        .map(|u| {
+            let w = pc.point(u) - o;
+            (w - e * w.dot(&e)).dot(&lp) / l2
+        })
+        .filter(|t| *t >= t0 - tol::ROUNDOFF * scale && *t <= t1 + tol::ROUNDOFF * scale)
+        .map(|t| t.clamp(t0.min(t1), t0.max(t1)))
+        .collect();
+    ts.sort_by(|a, b| a.total_cmp(b));
+    ts.dedup_by(|a, b| (*a - *b).abs() <= tol::ROUNDOFF * scale);
+    Some(ts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3966,90 +4060,4 @@ mod tests {
             }
         }
     }
-}
-
-/// A line against an extrusion of a B-spline (a G2 blend's tool face): seen along the
-/// extrusion, the line is a line in the plane and the surface its profile, so the crossings are
-/// where the profile meets that line, a root search in one parameter. None for any other pair,
-/// a line along the extrusion (on the surface or nowhere near: the general search decides).
-fn line_extrusion(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Option<Vec<f64>> {
-    if crate::native::env_flag!("CADRS_NO_LINE_EXTRUSION") {
-        return None;
-    }
-    let (Curve::Line { o, d: ld }, Surface::Extrusion { c: pc, d: ed }) = (c, s) else {
-        return None;
-    };
-    let Curve::Nurbs(n) = pc else { return None };
-    let e = ed.normalize();
-    let lp = ld - e * ld.dot(&e);
-    let l2 = lp.norm_squared();
-    if l2 <= 1e-12 * ld.norm_squared() {
-        return None;
-    }
-    // The signed distance in the plane square to the extrusion from the line to the profile
-    // point at u, along the normal of the projected line.
-    let nrm = e.cross(&lp).normalize();
-    let g = |u: f64| (pc.point(u) - o).dot(&nrm);
-    let (u0, u1) = n.range();
-    let spans = n.knots.windows(2).filter(|w| w[1] > w[0]).count().max(1);
-    let m = (16 * spans * n.degree.max(1)).max(64);
-    let at = |k: usize| u0 + (u1 - u0) * k as f64 / m as f64;
-    let vals: Vec<f64> = (0..=m).map(|k| g(at(k))).collect();
-    let scale = 1.0 + o.coords.norm() + ld.norm() * (t0.abs().max(t1.abs()));
-    let mut us: Vec<f64> = Vec::new();
-    let refine = |mut a: f64, mut b: f64, mut ga: f64| {
-        for _ in 0..80 {
-            let mid = 0.5 * (a + b);
-            let gm = g(mid);
-            if (gm < 0.0) == (ga < 0.0) {
-                a = mid;
-                ga = gm;
-            } else {
-                b = mid;
-            }
-            if b - a <= 1e-15 * (1.0 + b.abs()) {
-                break;
-            }
-        }
-        0.5 * (a + b)
-    };
-    for k in 0..m {
-        let (ga, gb) = (vals[k], vals[k + 1]);
-        if ga == 0.0 {
-            us.push(at(k));
-        } else if (ga < 0.0) != (gb < 0.0) && gb != 0.0 {
-            us.push(refine(at(k), at(k + 1), ga));
-        } else if k > 0 && ga.abs() < vals[k - 1].abs() && ga.abs() <= gb.abs() {
-            // A touch with no change of sign: the line resting on the profile there.
-            let (mut a, mut b) = (at(k - 1), at(k + 1));
-            for _ in 0..80 {
-                let (x1, x2) = (a + (b - a) * 0.382, a + (b - a) * 0.618);
-                if g(x1).abs() < g(x2).abs() {
-                    b = x2;
-                } else {
-                    a = x1;
-                }
-            }
-            let u = 0.5 * (a + b);
-            if g(u).abs() <= tol::ROUNDOFF * scale {
-                us.push(u);
-            }
-        }
-    }
-    if vals[m] == 0.0 {
-        us.push(u1);
-    }
-    // Each profile point's place along the line.
-    let mut ts: Vec<f64> = us
-        .into_iter()
-        .map(|u| {
-            let w = pc.point(u) - o;
-            (w - e * w.dot(&e)).dot(&lp) / l2
-        })
-        .filter(|t| *t >= t0 - tol::ROUNDOFF * scale && *t <= t1 + tol::ROUNDOFF * scale)
-        .map(|t| t.clamp(t0.min(t1), t0.max(t1)))
-        .collect();
-    ts.sort_by(|a, b| a.total_cmp(b));
-    ts.dedup_by(|a, b| (*a - *b).abs() <= tol::ROUNDOFF * scale);
-    Some(ts)
 }

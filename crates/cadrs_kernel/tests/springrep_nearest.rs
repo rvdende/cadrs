@@ -150,13 +150,15 @@ fn the_nearest_point_of_a_stretched_ball_is_found_at_its_poles_as_elsewhere() {
 }
 
 #[test]
-#[ignore = "cadrs measures distance between boundaries, and has no distance between solids"]
 fn the_nearest_point_of_a_solid_to_a_point_it_holds_is_the_point() {
     let mut k = NativeKernel::new();
     let b = pblock(&mut k, &world(), [4.0, 3.0, 2.0]);
     let inside = P3::new(1.0, 2.0, 0.5);
-    // springrep's `Nearest::solid`: nil for a point the solid holds (cadrs: the boundary's).
-    let got = to(&k, b, inside);
+    // springrep's `Nearest::solid`: nil for a point the solid holds (cadrs's
+    // `DistanceTarget::Solid`; `DistanceTarget::Body` measures the boundary).
+    let got = k
+        .min_distance(&DistanceTarget::Point(inside), &DistanceTarget::Solid(b))
+        .unwrap();
     assert!(
         got.distance == 0.0 && (got.b - inside).norm() < 1e-12,
         "{got:?}"

@@ -872,6 +872,7 @@ fn a_cube_hollowed_inward() {
                 outward: false,
                 hollow: true,
                 sharp: false,
+                nothing_hollowed: Default::default(),
             },
         )
         .unwrap()
@@ -907,6 +908,7 @@ fn a_cube_hollowed_outward_with_sharp_corners() {
                 outward: true,
                 hollow: true,
                 sharp: true,
+                nothing_hollowed: Default::default(),
             },
         )
         .unwrap()
@@ -942,6 +944,7 @@ fn a_cube_hollowed_outward_with_round_corners() {
                 outward: true,
                 hollow: true,
                 sharp: false,
+                nothing_hollowed: Default::default(),
             },
         )
         .unwrap()
@@ -1027,6 +1030,7 @@ fn a_cube_with_every_edge_filleted_shelled_outward_open_at_the_top() {
                 outward: true,
                 hollow: false,
                 sharp: false,
+                nothing_hollowed: Default::default(),
             },
         )
         .unwrap()

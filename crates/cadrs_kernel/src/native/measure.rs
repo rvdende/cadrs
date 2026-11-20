@@ -171,7 +171,7 @@ pub fn curvatures_at(
                     "a point that isn't finite".into(),
                 ));
             }
-            let (q, at): (P3, Vec<(usize, Option<(f64, f64)>)>) = if let Some(pieces) = &pieces {
+            let (q, at): (P3, Vec<PieceAt>) = if let Some(pieces) = &pieces {
                 let x = extremum(&point_pieces(*p), pieces, Sense::Min).ok_or_else(|| {
                     KernelError::EmptyResult("nothing to measure from: no faces".into())
                 })?;
@@ -276,10 +276,16 @@ fn caps(b: &Body, o: P3, n: V3) -> Result<Option<(Body, Vec<usize>)>> {
     Ok(Some((r.body, caps)))
 }
 
+/// A loop of a section body's edges: each edge and whether the loop runs along it.
+type EdgeLoop = Vec<(usize, bool)>;
+
+/// A piece a measure was taken on and where on it (its parameters), if anywhere.
+type PieceAt = (usize, Option<(f64, f64)>);
+
 /// The section of the boundary of `b` by the plane through `o` square to the unit `n` as loops
 /// of edges (each an edge of the section body and whether the loop runs along it), chained by
 /// their shared vertices: what a cut is made of where the boolean that makes its faces fails.
-fn section_loops(b: &Body, o: P3, n: V3) -> Result<(Body, Vec<Vec<(usize, bool)>>)> {
+fn section_loops(b: &Body, o: P3, n: V3) -> Result<(Body, Vec<EdgeLoop>)> {
     let bb = b.bbox();
     let sheet = super::ops::plane_sheet(
         o,

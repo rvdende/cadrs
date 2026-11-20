@@ -2529,6 +2529,13 @@ fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> R
         {
             return Ok(r);
         }
+        // A ball carried by any other motion: the pipe of its radius along its centre's path,
+        // a ball at each end, where that path nowhere curves tighter than the ball.
+        if exact.is_some()
+            && let Some(Ok(r)) = ball_along(k, &b, steps)
+        {
+            return Ok(r);
+        }
         let place = |t: f64| rigid_at(steps, t);
         // A convex polyhedron whose contacts move over its faces: exactly, from its leading
         // polygons' sweeps.
@@ -5660,4 +5667,136 @@ fn meshed_within(
         }
     };
     contour(k, lo, n, h, &depth, t0)
+}
+
+/// A ball carried by the rigid motion `steps`: everything within its radius of the path its
+/// centre runs along, which is the pipe of that radius about the path with a ball at each end
+/// wherever the path curves no tighter than the radius (else the pipe folds: None). The path,
+/// a turn and slide's trochoid or any other, is a cubic B-spline through it, its points doubled
+/// until it keeps within 1e-9 of the size at every span's middle.
+fn ball_along(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Result<OpResult>> {
+    if crate::native::env_flag!("CADRS_NO_BALL_ALONG") {
+        return None;
+    }
+    let (centre, r) = match b.faces.first().map(|f| &f.surf) {
+        Some(Surface::Sphere { f, r }) => (f.o, *r),
+        _ => return None,
+    };
+    let same = |s: &Surface| {
+        matches!(s, Surface::Sphere { f, r: q }
+            if (f.o - centre).norm() <= tol::POINT && (q - r).abs() <= tol::POINT)
+    };
+    if !b.faces.iter().all(|f| same(&f.surf)) || b.solids.len() != 1 {
+        return None;
+    }
+    let at = |t: f64| {
+        let (rot, d) = rigid_at(steps, t);
+        P3::from(rot * centre.coords + d)
+    };
+    let (p0, p1) = (at(0.0), at(1.0));
+    let size = (p1 - p0).norm() + r;
+    let mut n = 64usize;
+    let curve = loop {
+        let ts: Vec<f64> = (0..=n).map(|i| i as f64 / n as f64).collect();
+        let xs: Vec<P3> = ts.iter().map(|&t| at(t)).collect();
+        let h = 1e-6;
+        let d0 = (at(h) - at(0.0)) / h;
+        let d1 = (at(1.0) - at(1.0 - h)) / h;
+        let c = super::nurbs::NurbsCurve::interpolate(&xs, &ts, 3, Some(d0), Some(d1));
+        let worst = (0..n)
+            .map(|i| {
+                let t = (i as f64 + 0.5) / n as f64;
+                (c.point(t) - at(t)).norm()
+            })
+            .fold(0.0, f64::max);
+        if worst <= 1e-9 * size {
+            break c;
+        }
+        if n >= 4096 {
+            return None;
+        }
+        n *= 2;
+    };
+    let cv = Curve::Nurbs(std::sync::Arc::new(curve.clone()));
+    // Nowhere tighter than the ball, nor still (a turn about the centre itself: no path).
+    let m = 4 * n;
+    for i in 0..=m {
+        let t = i as f64 / m as f64;
+        let (_, d1, d2) = cv.d2(t);
+        let sp = d1.norm();
+        if sp <= 1e-9 * size {
+            return None;
+        }
+        let kappa = d1.cross(&d2).norm() / (sp * sp * sp);
+        if kappa * r >= 1.0 - 1e-6 {
+            return None;
+        }
+    }
+    let poles: Vec<P3> = curve
+        .cps
+        .iter()
+        .map(|h| P3::new(h.x / h.w, h.y / h.w, h.z / h.w))
+        .collect();
+    let tangent = cv.d2(0.0).1.normalize();
+    let x = any_perpendicular(&tangent).normalize();
+    let plane = crate::Plane {
+        origin: p0,
+        x_dir: nalgebra::Unit::new_normalize(x),
+        normal: nalgebra::Unit::new_normalize(tangent),
+    };
+    let region = crate::Region {
+        outer: crate::Loop {
+            curves: vec![crate::Curve2::Circle {
+                center: nalgebra::Point2::origin(),
+                radius: r,
+                source: None,
+            }],
+        },
+        holes: vec![],
+        source: None,
+    };
+    let spec = SweepSpec {
+        body: BodyKind::Solid,
+        path: vec![PathCurve::Bspline(crate::Bspline3 {
+            degree: curve.degree,
+            knots: curve.knots.clone(),
+            poles,
+            weights: Vec::new(),
+        })],
+        control: SweepControl::None,
+        faces: Vec::new(),
+        corners: Default::default(),
+    };
+    let run = |k: &mut NativeKernel| -> Result<OpResult> {
+        let tube = k.sweep_with(&crate::Profile::new(plane, vec![region.clone()]), &spec)?;
+        let [tube] = tube.bodies[..] else {
+            return Err(KernelError::InvalidResult {
+                op: "sweep",
+                why: "a ball's pipe isn't one body".into(),
+            });
+        };
+        let mut cur = tube;
+        for p in [p0, p1] {
+            let ball = k.primitive(&Primitive::ball(p, r))?.bodies[0];
+            let joined = k.boolean(BoolOp::Union, cur, &[ball]);
+            k.release(ball);
+            if cur != tube {
+                k.release(cur);
+            }
+            let joined = joined?;
+            let [j] = joined.bodies[..] else {
+                return Err(KernelError::InvalidResult {
+                    op: "sweep",
+                    why: "a ball's pipe and its end balls aren't one body".into(),
+                });
+            };
+            cur = j;
+        }
+        k.release(tube);
+        Ok(OpResult {
+            bodies: vec![cur],
+            ..Default::default()
+        })
+    };
+    Some(run(k))
 }

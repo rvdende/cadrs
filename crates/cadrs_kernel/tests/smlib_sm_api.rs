@@ -115,6 +115,7 @@ fn shell_box(d: f64, opened: usize, want: f64) -> Result<(), String> {
         outward: d > 0.0,
         hollow: opened == 0,
         sharp: true,
+        nothing_hollowed: Default::default(),
     };
     let r = one(k.shell_with(b, &spec).map_err(e)?)?;
     if let Some(bad) = invalid(k.get(r).map_err(e)?) {

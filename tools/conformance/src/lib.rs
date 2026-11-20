@@ -167,6 +167,11 @@ fn curve(s: &profile::Seg) -> Result<Curve2, Refusal> {
                 "a blend-section segment: the kernel's sketches have no such curve",
             ));
         }
+        _ => {
+            return Err(Refusal::unsupported(
+                "a profile segment newer than this adapter: the kernel has no such curve here",
+            ));
+        }
     })
 }
 
@@ -295,8 +300,12 @@ impl Kernel for Cadrs {
         SESSION.with(|k| *k.borrow_mut() = DefaultKernel::new());
     }
 
-    fn unsupported(&self) -> Vec<String> {
-        UNSUPPORTED.iter().map(|(n, _)| n.to_string()).collect()
+    fn supports(&self) -> Vec<String> {
+        brep_protocol::FUNCTIONS
+            .iter()
+            .filter(|f| !UNSUPPORTED.iter().any(|(n, _)| n == *f))
+            .map(|f| f.to_string())
+            .collect()
     }
 
     fn make(&self, p: &Primitive) -> Result<Solid, Refusal> {
@@ -333,11 +342,13 @@ impl Kernel for Cadrs {
                 axis: z,
                 seam: unit(f.x)?,
             })),
+            // (A tube wider than its ring crosses the axis: the contract refuses it.)
             Primitive::Torus { major, minor, .. } => solid(k.primitive(&K::Torus {
                 center: o,
                 axis: z,
                 major,
                 minor,
+                spindle: cadrs_kernel::Spindle::Refuse,
             })),
             Primitive::Cone {
                 bottom,
@@ -969,6 +980,7 @@ impl Kernel for Cadrs {
                 outward: false,
                 hollow: open.is_empty(),
                 sharp: false,
+                nothing_hollowed: Default::default(),
             };
             solid(k.shell_with(b, &spec))
         })
@@ -1205,10 +1217,10 @@ impl Kernel for Cadrs {
                     },
                 )
                 .map_err(refusal)?;
-            Ok(brep_protocol::Mesh {
-                positions: m.positions.iter().map(|&p| arr(p)).collect(),
-                triangles: m.indices,
-            })
+            Ok(brep_protocol::Mesh::new(
+                m.positions.iter().map(|&p| arr(p)).collect(),
+                m.indices,
+            ))
         })
     }
 
@@ -1255,15 +1267,14 @@ impl Kernel for Cadrs {
                 });
                 face.triangles.push(tri);
             }
-            Ok(brep_protocol::Display {
-                faces: faces.into_iter().map(|(_, f, _)| f).collect(),
-                edges: m
-                    .edges
+            Ok(brep_protocol::Display::new(
+                faces.into_iter().map(|(_, f, _)| f).collect(),
+                m.edges
                     .iter()
                     .filter(|(id, _)| !smooth.contains(id))
                     .map(|(_, line)| line.iter().map(|&p| arr(p)).collect())
                     .collect(),
-            })
+            ))
         })
     }
 

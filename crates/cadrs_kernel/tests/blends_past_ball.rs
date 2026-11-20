@@ -231,7 +231,8 @@ fn a_set_back_corner_stops_each_fillet_short() {
     let (rad, s) = (1.0, 3.0);
     let k_ = 1.0 - PI / 4.0;
     let w = [10.0, 20.0, 30.0];
-    for profile in [FilletProfile::Circular] {
+    {
+        let profile = FilletProfile::Circular;
         let mut k = NativeKernel::new();
         let b = block(&mut k, w[0], w[1], w[2]);
         let edges = [

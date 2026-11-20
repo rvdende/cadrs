@@ -933,14 +933,19 @@ fn grown_by_convex_parts(b: &Body, d: f64, depth: usize) -> Option<Body> {
 fn combine_all(acc: Body, todo: Vec<(Body, String)>, op: BoolOp) -> Result<Body> {
     // (Batched first; where that ends in failure, piece by piece from the start, as before.)
     // (Only for many: a few pieces gain little, and a batch that fails costs a second pass.)
-    if op == BoolOp::Union && todo.len() >= 8 && !crate::native::env_flag!("CADRS_NO_PIECE_BATCHES")
+    if op == BoolOp::Union
+        && todo.len() >= 8
+        && !crate::native::env_flag!("CADRS_NO_PIECE_BATCHES")
+        && let Ok(r) = combine_batched(acc.clone(), todo.clone(), op)
     {
-        if let Ok(r) = combine_batched(acc.clone(), todo.clone(), op) {
-            return Ok(r);
-        }
+        return Ok(r);
     }
     combine_in_turn(acc, todo, op)
 }
+
+/// A batch of an offset's pieces that keep apart: the body they make together, their boxes,
+/// and the pieces themselves (to go one at a time if the batch fails).
+type Batch = (Body, Vec<Bbox>, Vec<(Body, String)>);
 
 /// [`combine_all`] with the pieces that keep apart united in batches.
 fn combine_batched(mut acc: Body, mut todo: Vec<(Body, String)>, op: BoolOp) -> Result<Body> {
@@ -949,7 +954,7 @@ fn combine_batched(mut acc: Body, mut todo: Vec<(Body, String)>, op: BoolOp) -> 
     // for the batch, not once a piece. A batch the union fails on goes piece by piece below.
     {
         let pad = 1e-6 * (1.0 + acc.bbox().diagonal());
-        let mut batches: Vec<(Body, Vec<Bbox>, Vec<(Body, String)>)> = Vec::new();
+        let mut batches: Vec<Batch> = Vec::new();
         for (piece, what) in todo {
             // (Grown by a hundredth of its size too: a box sampled off curved faces may fall a
             // hair short of them, and two pieces that touch must not share a batch.)
@@ -1080,8 +1085,11 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
             // than that is as thick as the part, and refused, as Onshape and OCCT do.
             None => {
                 let thinner = t - tol::POINT.max(1e-9 * size);
-                match cavity_of_supports(&b, &remove, thinner) {
-                    Some(Ok(Some(_))) => cur,
+                let meeting =
+                    || matches!(cavity_of_supports(&b, &remove, thinner), Some(Ok(Some(_))));
+                match spec.nothing_hollowed {
+                    NothingHollowed::Unchanged => cur,
+                    NothingHollowed::RefuseUnlessMeeting if meeting() => cur,
                     _ => {
                         return Err(KernelError::InvalidParameter(
                             "The shell is as thick as the part, nothing is left to hollow; reduce the thickness".into(),
@@ -1134,8 +1142,14 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
         // everywhere): build it from its definition then. Each way of making the cavity is
         // tried in turn until the body less it comes out (a cavity flush with a removed face
         // shares that face with the body, which the boolean may not settle).
-        let concave =
-            (0..b.edges.len()).any(|e| !b.edges[e].degenerate && convex(&b, e) == Some(false));
+        // (An edge beside an opening has no wall on that side to round: the face moved in runs
+        // on to the opening's surface, as the sharp cavity has it. An L opened at its step.)
+        let ef = b.edge_faces();
+        let concave = (0..b.edges.len()).any(|e| {
+            !b.edges[e].degenerate
+                && convex(&b, e) == Some(false)
+                && ef[e].iter().all(|f| !remove.contains(f))
+        });
         let sharp = |x: &Vec<f64>| {
             super::sharp::offset_sharp(&b, x).and_then(|c| {
                 if crate::native::mass::body_volume(&c) > 0.0 {

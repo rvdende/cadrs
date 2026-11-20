@@ -50,6 +50,12 @@ fn main() {
                     );
                     r
                 }
+                generate::Act::Chamfer => {
+                    let t = std::time::Instant::now();
+                    let r = k.chamfer(&s, &f.points, f.size);
+                    println!("  chamfer by {}: {:?}", f.size, t.elapsed());
+                    r
+                }
                 generate::Act::Offset => {
                     let t = std::time::Instant::now();
                     let r = k.offset(&s, f.size);

@@ -264,6 +264,7 @@ fn outward_shell_with_sharp_corners() {
         outward: true,
         hollow: false,
         sharp: true,
+        nothing_hollowed: Default::default(),
     };
     let out = one(k.shell_with(b, &spec).unwrap());
     close(
@@ -304,6 +305,7 @@ fn rounded_shell_keeps_a_thin_fin_solid() {
         outward: false,
         hollow: false,
         sharp: false,
+        nothing_hollowed: Default::default(),
     };
     let out = one(k.shell_with(b, &spec).unwrap());
     let r: f64 = 1.5;
@@ -354,6 +356,7 @@ fn rounded_shell_of_a_cube_with_a_lip() {
         outward: false,
         hollow: false,
         sharp: false,
+        nothing_hollowed: Default::default(),
     };
     let out = one(k.shell_with(b, &spec).unwrap());
     close(volume(&k, out), 1_010_000.0 - 90.0 * 80.0 * 80.0, 1e-9);
@@ -866,6 +869,7 @@ fn names_survive_offsets_and_shells() {
                 outward: false,
                 hollow: false,
                 sharp: false,
+                nothing_hollowed: Default::default(),
             },
         )
         .unwrap();
@@ -1637,6 +1641,7 @@ fn outward_shell_of_a_rounded_cube_keeps_its_rounds_round_the_opening() {
         outward: true,
         hollow: false,
         sharp: false,
+        nothing_hollowed: Default::default(),
     };
     let out = one(k.shell_with(b, &spec).unwrap());
     // A cube of side a grown by a ball of r: a³ + 6a²r + 3πar² + 4πr³/3.
@@ -1691,6 +1696,7 @@ fn outward_shell_removes_a_round_with_its_flat() {
         outward: true,
         hollow: false,
         sharp: false,
+        nothing_hollowed: Default::default(),
     };
     let out = one(k.shell_with(b, &spec).unwrap());
     let grown = |a: f64, r: f64| {

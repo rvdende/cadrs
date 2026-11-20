@@ -16,7 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 # The protocol at the suite's commit, so the in-process runner and the adapter share its types.
-brep-protocol = { git = "https://github.com/springcraft-ai/brep-conformance", rev = "54d1c8e0022022a301c51623efc43c37016db761" }
+brep-protocol = { git = "https://github.com/springcraft-ai/brep-conformance", rev = "12ffc75d305451004e12a24862dc092f6df0529b" }
 cadrs_kernel = { path = "../../crates/cadrs_kernel" }
 nalgebra = { version = "0.35", default-features = false, features = ["std"] }
 
@@ -28,5 +28,5 @@ incremental = true
 # The kernel's internals for the scratch examples (resolver 2 keeps it out of the adapter's build).
 cadrs_kernel = { path = "../../crates/cadrs_kernel", features = ["testkit"] }
 # The suite's cases and checks, run in process by `examples/suite.rs`.
-brep-conformance = { git = "https://github.com/springcraft-ai/brep-conformance", rev = "54d1c8e0022022a301c51623efc43c37016db761" }
+brep-conformance = { git = "https://github.com/springcraft-ai/brep-conformance", rev = "12ffc75d305451004e12a24862dc092f6df0529b" }
 serde_json = "1"
