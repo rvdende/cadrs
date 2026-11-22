@@ -5,9 +5,9 @@
 //!   renamed `FaceOrigin::Instance { of, face, instance }` under the pattern's id, so the copies'
 //!   faces have names of their own that survive rebuilds ("Face of Linear pattern 1").
 //! - **Part**: the parts copied; New makes one part per copy (with the seed's palette entry and
-//!   `source`, so it shows the seed's appearance and material, PS9.6). Add joins the copies
-//!   (and the seeds) to the merge scope like an extrude's body; Remove and Intersect use the
-//!   seeds and the copies as tools on the merge scope and consume the seeds (issue #300).
+//!   `source`, so it shows the seed's appearance and material, PS9.6). The other tabs use the
+//!   seeds with the copies (issue #300): Add joins both to the merge scope's parts they touch;
+//!   Remove and Intersect use both as tools on the merge scope, and the seeds are gone.
 //! - **Face**: the pocket or boss the faces bound (`Kernel::face_tool`), copied and cut or added.
 //! - **Feature** with Reapply: each instance's features are rebuilt with their sketches moved
 //!   and their references to the patterned features' faces and edges mapped to the instance's
@@ -887,6 +887,12 @@ impl Rebuilder {
         let t0 = web_time::Instant::now();
         let joined = self.join(id, copies, &[])?;
         profiled("pattern's join", t0);
+        if merge.op == BooleanOp::Add
+            && !merge.surface
+            && (merge.merge_all || !merge.scope.is_empty())
+        {
+            return self.add_with_parts(id, seeds, joined, merge, state);
+        }
         // Add with no merge scope: the copies merge with the seed parts they touch, as Onshape's
         // part pattern and mirror do, not with every part they touch (a mirrored half of a cover
         // that reaches the frame stays part of the cover); touching none, they are new parts.
@@ -912,8 +918,8 @@ impl Rebuilder {
             };
             &narrowed
         } else if merge.op == BooleanOp::Add && !merge.merge_all {
-            // Add with a merge scope: the seeds merge too, with the scope and their copies (as
-            // Onshape's do); a seed touching none of them stays a part of its own.
+            // Surfaces, Add with a merge scope: the seeds merge too, with the scope and their
+            // copies; a seed touching none of them stays a part of its own.
             own = merge
                 .scope
                 .iter()
@@ -935,6 +941,85 @@ impl Rebuilder {
         let out = self.combine(id, merge, joined, state, state.geoms.clone());
         profiled("pattern's merge", t0);
         out
+    }
+
+    /// Part pattern or mirror, Add with a merge scope or Merge with all: the seed parts join the
+    /// scope's parts along with their copies (`joined`, released here), as Onshape's part
+    /// pattern does (its boolean's tools are the seeds with the copies): one pin patterned ×4
+    /// onto a flange leaves the flange with four pins and no pin part, whether or not the pin
+    /// touches its copies (issue #300). What joins is what touches: a part of the scope a seed
+    /// or a copy touches, and a seed touching one of those, the copies or another seed; a seed
+    /// touching none stays the part it was, and copies touching none are new parts.
+    fn add_with_parts(
+        &mut self,
+        id: FeatureId,
+        seeds: &[PartId],
+        joined: (BodyId, BodyNames),
+        merge: &Merge,
+        state: &Arc<State>,
+    ) -> Result<Output, String> {
+        let geoms = state.geoms.clone();
+        let t0 = web_time::Instant::now();
+        // What the copies touch, and what each seed does (among the other parts).
+        let contacts = self.contacts(joined.0, state, false, true);
+        let seed_touches: Vec<(PartId, Vec<PartId>)> = seeds
+            .iter()
+            .filter_map(|s| {
+                let body = state.part(*s)?.body?;
+                let mut others = (**state).clone();
+                others.parts.retain(|p| p.part.id != *s);
+                Some((*s, self.contacts(body, &others, false, true).touches))
+            })
+            .collect();
+        let scope: Vec<PartId> = state
+            .parts
+            .iter()
+            .filter(|p| p.part.kind == PartKind::Solid)
+            .map(|p| p.part.id)
+            .filter(|p| !seeds.contains(p) && (merge.merge_all || merge.scope.contains(p)))
+            .filter(|p| {
+                contacts.touches.contains(p) || seed_touches.iter().any(|(_, t)| t.contains(p))
+            })
+            .collect();
+        let mut all = scope.clone();
+        for (seed, touches) in &seed_touches {
+            let joins = contacts.touches.contains(seed)
+                || touches
+                    .iter()
+                    .any(|p| scope.contains(p) || seeds.contains(p));
+            if joins && !all.contains(seed) {
+                all.push(*seed);
+            }
+        }
+        profiled("pattern's contacts", t0);
+        // The dialog's preview: the copies over the parts as they were.
+        let stage = (self.stage_for == Some(id))
+            .then(|| {
+                crate::brep::solid_of(&self.kernel, joined.0, &joined.1, &geoms, Some(id.0)).ok()
+            })
+            .flatten()
+            .map(|s| Stage {
+                before: state.parts.iter().map(|p| (*p.part).clone()).collect(),
+                tool: Arc::new(s),
+                more: Vec::new(),
+                remove: false,
+            });
+        let mut next = State {
+            geoms: geoms.clone(),
+            ..(**state).clone()
+        };
+        let t0 = web_time::Instant::now();
+        let placed = if all.is_empty() {
+            self.new_parts(id, &joined, &mut next)
+        } else {
+            self.add(id, &joined, &all, false, &mut next)
+        };
+        profiled("pattern's merge", t0);
+        self.kernel.release(joined.0);
+        let mut out = self.finish(id, placed?, next, id.0, geoms, PartKind::Solid)?;
+        out.stage = stage;
+        out.contacts = Some(contacts);
+        Ok(out)
     }
 
     /// Part pattern or mirror, Remove or Intersect: the seed parts and their copies are the

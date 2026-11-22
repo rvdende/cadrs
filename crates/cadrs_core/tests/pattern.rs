@@ -937,6 +937,65 @@ fn circular_part_pattern_intersect_keeps_what_its_pins_cover() {
 }
 
 #[test]
+fn circular_part_pattern_adds_its_pin_with_the_copies() {
+    // The issue's document with Add: a pin through the ring's wall along Z at (35, 0), R4, twice
+    // the ring's height (z −20..20, so half of it hangs below), ×4 round Z, merge scope the
+    // ring. The pin and its three copies, which are apart from one another, each add the
+    // π·4²·20 of them outside the ring: one part, the ring's, and no pin. The same with Merge
+    // with all.
+    for scope in [Scope::Ring, Scope::All] {
+        let (mut d, ring, v_ring) = ring_doc();
+        let s = d.sketch(PlaneRef::Top, vec![circle(35.0, 0.0, 4.0)]);
+        d.extrude(s, &[Vec2::new(35.0, 0.0)], |e| {
+            e.depth = 40.0;
+            e.depth_expr = "40 mm".into();
+            e.symmetric = true;
+        });
+        let pat = pattern_of_the_pin(&mut d, ring, 4, BooleanOp::Add, scope);
+        let b = d.build();
+        assert_eq!(b.error(pat), None, "{scope:?}");
+        assert_eq!(b.parts.len(), 1, "{scope:?}: the ring with its four pins");
+        assert_eq!(b.parts[0].id, ring, "{scope:?}");
+        close(
+            b.parts[0].mass.unwrap().volume,
+            v_ring + 4.0 * PI * 16.0 * 20.0,
+            1e-6 * v_ring,
+        );
+        // The dialog's preview: the copies over the ring and the pin as they were.
+        let (f, stage) = b.stage.as_ref().expect("the Add's preview");
+        assert_eq!(*f, pat);
+        assert!(!stage.remove);
+        assert_eq!(stage.before.len(), 2);
+    }
+}
+
+#[test]
+fn a_part_pattern_add_leaves_a_pin_that_touches_nothing() {
+    // A pin in the ring's bore (at (10, 0), R4), clear of the ring and of its copies, ×4, Add,
+    // merge scope the ring: nothing touches, so the ring and the pin stay as they were and the
+    // three copies are new parts.
+    let (mut d, ring, v_ring) = ring_doc();
+    let s = d.sketch(PlaneRef::Top, vec![circle(10.0, 0.0, 4.0)]);
+    d.extrude(s, &[Vec2::new(10.0, 0.0)], |e| e.depth = 20.0);
+    let pin = d.parts().iter().find(|p| p.id != ring).unwrap().id;
+    let pat = pattern_of_the_pin(&mut d, ring, 4, BooleanOp::Add, Scope::Ring);
+    let b = d.build();
+    assert_eq!(b.error(pat), None);
+    assert_eq!(b.parts.len(), 5);
+    let volume = |id: PartId| {
+        let p = b.parts.iter().find(|p| p.id == id).unwrap();
+        p.mass.unwrap().volume
+    };
+    close(volume(ring), v_ring, 1e-6);
+    close(volume(pin), PI * 16.0 * 20.0, 1e-6);
+    let copies: Vec<&Part> = b.parts.iter().filter(|p| p.id.feature == pat).collect();
+    assert_eq!(copies.len(), 3);
+    for p in copies {
+        close(p.mass.unwrap().volume, PI * 16.0 * 20.0, 1e-6);
+    }
+}
+
+#[test]
 fn a_part_pattern_with_nothing_to_cut_fails_and_keeps_its_parts() {
     // A pin clear of the ring (in its bore, at the axis side: x 10, R4) patterned ×4, Remove,
     // no scope: no tool overlaps another part, so the pattern fails and both parts stay.

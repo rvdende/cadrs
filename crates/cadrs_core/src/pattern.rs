@@ -154,9 +154,10 @@ pub struct PatternFeature {
     pub skip_on: bool,
     #[serde(default)]
     pub skipped: Vec<[u32; 2]>,
-    /// Part pattern: New, Add, Remove, Intersect, and the merge scope (PS22.6). Remove and
-    /// Intersect use the parts and their copies as tools on the merge scope's parts, and the
-    /// parts are gone afterwards (as a Boolean's tools).
+    /// Part pattern: New, Add, Remove, Intersect, and the merge scope (PS22.6). The parts are
+    /// used along with their copies: Add joins both to the merge scope's parts they touch;
+    /// Remove and Intersect use both as tools on them, and the parts are gone afterwards (as a
+    /// Boolean's tools).
     #[serde(default)]
     pub op: BooleanOp,
     #[serde(default)]
