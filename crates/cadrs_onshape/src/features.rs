@@ -35,6 +35,8 @@ use crate::studio::Studio;
 
 #[path = "frames.rs"]
 mod frames;
+#[path = "sheetmetal.rs"]
+mod sheetmetal;
 #[path = "surfacing.rs"]
 mod surfacing;
 

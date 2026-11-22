@@ -992,6 +992,9 @@ impl<'a> PartStudio<'a> {
         // disambiguation, which name neighbours).
         let mut direct: std::collections::BTreeSet<cadrs_sketch::CurveId> =
             std::collections::BTreeSet::new();
+        // Which piece of a named line bounds the region: (the line, the curve crossing it at
+        // the piece's end, -1 for the piece's start or +1 for its end).
+        let mut ends: Vec<(cadrs_sketch::CurveId, cadrs_sketch::CurveId, f64)> = Vec::new();
         // How many edges the query lists around the region (its boundary's size in Onshape).
         let mut entries = 0;
         for d in q
@@ -1015,6 +1018,35 @@ impl<'a> PartStudio<'a> {
                     continue;
                 };
                 direct.insert(c);
+                // The boundary edge's own disambiguation: the vertex at one of its ends, as
+                // the crossing of its curve with another (a line a circle cuts in pieces: the
+                // piece that starts, -1, or ends, +1, at that crossing).
+                if let Some(eq) = eq {
+                    for d2 in eq
+                        .get("disambiguationData")
+                        .map(Q::items)
+                        .unwrap_or_default()
+                    {
+                        if d2.get("disambiguationType").and_then(Q::as_str) != Some("TOPOLOGY") {
+                            continue;
+                        }
+                        for v in d2.get("entities").map(Q::items).unwrap_or_default() {
+                            let Q::Array(pair) = v else { continue };
+                            let (Some(vq), Some(end)) =
+                                (pair.first(), pair.get(1).and_then(Q::as_f64))
+                            else {
+                                continue;
+                            };
+                            let mut ids = std::collections::BTreeSet::new();
+                            refs::sketch_entities(vq, &sk, &mut ids);
+                            for other in ids.iter().filter_map(|i| map.curves.get(i).copied()) {
+                                if other != c {
+                                    ends.push((c, other, end));
+                                }
+                            }
+                        }
+                    }
+                }
                 if let Some(sign) = sign {
                     sides.push((
                         c,
@@ -1033,6 +1065,11 @@ impl<'a> PartStudio<'a> {
                 let (l, rt) = refs::side_agreement(g, &r0, &sides);
                 eprintln!("SIDES left {l} right {rt} of {}", sides.len());
             }
+        }
+        if !ends.is_empty()
+            && let Some(r) = refs::region_by_piece_ends(sid, g, &sides, &ends)
+        {
+            return Some(vec![r]);
         }
         // A region Onshape bounds by sketch curves alone that cadrs cuts in pieces with a face's
         // imprinted edges: all the pieces.
@@ -1202,6 +1239,7 @@ impl<'a> PartStudio<'a> {
                 "fill" => self.fill(f, &fid, &mut fr),
                 "sweep" => self.sweep(f, &fid, &mut fr),
                 "frame" => self.frame(f, &fid, &mut fr),
+                "sheetMetalStart" => self.sheet_metal_start(f, &fid, &mut fr),
                 "draft" => self.draft(f, &fid, &mut fr),
                 "moveFace" => self.move_face(f, &fid, &mut fr),
                 "assignVariable" => {

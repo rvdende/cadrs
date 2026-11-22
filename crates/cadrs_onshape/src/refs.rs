@@ -419,6 +419,87 @@ pub fn region_with_sides(
         .or_else(|| if sides.is_empty() { None } else { region_with_sides(sketch, g, curves, direct, &[], entries) })
 }
 
+/// The region bounded by the named piece of each line of `ends`: `(line, crossing curve, end)`
+/// says the region's piece of `line` starts (`end` -1) or ends (+1) where `crossing` meets the
+/// line (Onshape's way of telling apart the pieces a circle cuts a line into). The region must
+/// also be on the named side of its lines (`sides`). `None` unless exactly one region fits, or
+/// if a named curve is not a line.
+pub fn region_by_piece_ends(
+    sketch: FeatureId,
+    g: &Sketch,
+    sides: &[(CurveId, f64)],
+    ends: &[(CurveId, CurveId, f64)],
+) -> Option<RegionRef> {
+    use cadrs_sketch::CurveKind;
+    let all = regions_shared(g);
+    let pos = |p| g.points.get(p).map(|q: &cadrs_sketch::Point| q.pos);
+    // How far a point is from a curve (a line, an arc's or a circle's whole circle).
+    let off = |c: CurveId, p: cadrs_sketch::Vec2| -> Option<f64> {
+        Some(match g.curves.get(c)?.kind {
+            CurveKind::Line { a, b } => {
+                let (a, b) = (pos(a)?, pos(b)?);
+                let (dx, dy) = (b.x - a.x, b.y - a.y);
+                let l = (dx * dx + dy * dy).sqrt();
+                ((p.x - a.x) * dy - (p.y - a.y) * dx).abs() / l
+            }
+            CurveKind::Circle { center, radius } => {
+                let c = pos(center)?;
+                (((p.x - c.x).powi(2) + (p.y - c.y).powi(2)).sqrt() - radius).abs()
+            }
+            CurveKind::Arc { center, start, .. } => {
+                let (c, s) = (pos(center)?, pos(start)?);
+                let r = ((s.x - c.x).powi(2) + (s.y - c.y).powi(2)).sqrt();
+                (((p.x - c.x).powi(2) + (p.y - c.y).powi(2)).sqrt() - r).abs()
+            }
+            _ => return None,
+        })
+    };
+    let tol = 1e-6;
+    let mut fits: Vec<&cadrs_sketch::region::Region> = Vec::new();
+    'regions: for r in all.iter() {
+        let (agree, disagree) = side_agreement(g, r, sides);
+        if disagree > agree {
+            continue;
+        }
+        for &(line, crossing, end) in ends {
+            let CurveKind::Line { a, b } = g.curves.get(line)?.kind else {
+                return None;
+            };
+            let (a, b) = (pos(a)?, pos(b)?);
+            if !r
+                .curves
+                .iter()
+                .chain(r.hole_curves.iter().flatten())
+                .any(|c| *c == line)
+            {
+                continue 'regions;
+            }
+            // The region's points on the line, by how far along it they are.
+            let (dx, dy) = (b.x - a.x, b.y - a.y);
+            let mut on: Vec<(f64, cadrs_sketch::Vec2)> = r
+                .outer
+                .iter()
+                .chain(r.holes.iter().flatten())
+                .filter(|p| off(line, **p).is_some_and(|d| d < tol))
+                .map(|p| ((p.x - a.x) * dx + (p.y - a.y) * dy, *p))
+                .collect();
+            on.sort_by(|x, y| x.0.total_cmp(&y.0));
+            let at = if end < 0.0 { on.first() } else { on.last() };
+            let Some((_, at)) = at else {
+                continue 'regions;
+            };
+            if !off(crossing, *at).is_some_and(|d| d < tol) {
+                continue 'regions;
+            }
+        }
+        fits.push(r);
+    }
+    match fits[..] {
+        [r] => Some(RegionRef::new(sketch, r)),
+        _ => None,
+    }
+}
+
 /// When no region of `g` has every one of `direct` (the sketch curves a query names) on its
 /// boundary, but the sketch without its imprint has one that does: the pieces the imprinted face
 /// edges cut it into (Onshape's one region, which cadrs cuts with the face edges the sketch lies
