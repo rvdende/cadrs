@@ -250,6 +250,13 @@ impl Rebuilder {
         let op = id.0;
         // The section.
         let (raw, custom_name) = match x.family {
+            ProfileFamily::Custom if x.sketch.is_none() && x.library.is_some() => {
+                let l = x.library.as_ref().expect("checked");
+                if l.regions.is_empty() {
+                    return Err("The library profile has no closed regions".into());
+                }
+                (l.regions.clone(), Some(l.name.clone()))
+            }
             ProfileFamily::Custom => {
                 let sk = x.sketch.ok_or("Select the sketch of the custom profile")?;
                 let (groups, _) = sweep_groups(before, &[], &[sk], BodyType::Solid);

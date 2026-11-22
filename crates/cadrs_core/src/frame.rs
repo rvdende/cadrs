@@ -256,6 +256,16 @@ impl GussetPosition {
     ];
 }
 
+/// A section kept in the feature itself (a Custom profile with no sketch of this document): one
+/// taken from another document's profile library, as an imported frame's is.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LibraryProfile {
+    /// Its name in the cut list ("Round tube 1.375 OD x 0.049").
+    pub name: String,
+    /// The section in its own coordinates (mm), the path through its origin.
+    pub regions: Vec<Region>,
+}
+
 /// A Frame feature.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FrameFeature {
@@ -271,6 +281,9 @@ pub struct FrameFeature {
     /// path, `Anchor::Origin`).
     #[serde(default)]
     pub sketch: Option<FeatureId>,
+    /// A custom section kept here, used when there is no `sketch`.
+    #[serde(default)]
+    pub library: Option<LibraryProfile>,
     #[serde(default)]
     pub anchor: Anchor,
     /// The section turned about the path (degrees, counter-clockwise looking back along it).
@@ -388,6 +401,7 @@ impl Default for FrameFeature {
             family: ProfileFamily::TSlot,
             size: "20x20".into(),
             sketch: None,
+            library: None,
             anchor: Anchor::Center,
             angle: 0.0,
             angle_expr: "0 deg".into(),
@@ -425,7 +439,7 @@ impl FrameFeature {
             return Some("Select sketch curves or edges for the frame's members");
         }
         if self.family == ProfileFamily::Custom {
-            if self.sketch.is_none() {
+            if self.sketch.is_none() && self.library.is_none() {
                 return Some("Select the sketch of the custom profile");
             }
         } else if section(self.family, &self.size).is_none() {
@@ -498,7 +512,10 @@ impl FrameFeature {
     /// 2)" (the custom sketch's name given).
     pub fn profile_label(&self, custom_name: Option<&str>) -> String {
         match self.family {
-            ProfileFamily::Custom => format!("Custom ({})", custom_name.unwrap_or("sketch")),
+            ProfileFamily::Custom => match (&self.library, self.sketch) {
+                (Some(l), None) => l.name.clone(),
+                _ => format!("Custom ({})", custom_name.unwrap_or("sketch")),
+            },
             ProfileFamily::Channel | ProfileFamily::IBeam => self.size.clone(),
             ProfileFamily::TSlot => format!("T-slot {}", self.size),
             f => format!("{} {}", f.label(), self.size),

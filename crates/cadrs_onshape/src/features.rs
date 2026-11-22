@@ -33,6 +33,8 @@ use crate::report::{FeatureReport, Outcome};
 use crate::sketch::param;
 use crate::studio::Studio;
 
+#[path = "frames.rs"]
+mod frames;
 #[path = "surfacing.rs"]
 mod surfacing;
 
@@ -646,6 +648,82 @@ impl PartStudio<'_> {
         self.add(f, fid, "Mirror", FeatureKind::Mirror(x), fr)
     }
 
+    /// The plane of the sketch a query's entity belongs to (a region or a curve of a sketch).
+    pub(crate) fn sketch_plane(&self, q: &Q) -> Option<cadrs_sketch::PlaneRef> {
+        let op = q.get("operationId").and_then(Q::as_str)?;
+        let (map, _) = self.sketches.get(op_feature(op))?;
+        let el = self.s.doc.element(self.el)?;
+        el.features()
+            .iter()
+            .find(|x| x.id == map.feature)?
+            .sketch()?
+            .plane
+    }
+
+    /// Onshape's Draft, Neutral plane type: faces turned about where they meet a plane.
+    pub(crate) fn draft(
+        &mut self,
+        f: &Value,
+        fid: &str,
+        fr: &mut FeatureReport,
+    ) -> Result<(), CommandError> {
+        if Self::text(f, "draftFeatureType") != "NEUTRAL_PLANE" {
+            return Err(CommandError::Invalid(
+                "parting line drafts are not imported yet".into(),
+            ));
+        }
+        let neutral = match refs::picks(param(f, "neutralPlane")).into_iter().next() {
+            Some(p) => match self.plane_ref(&p) {
+                Some(pl) => Some(MirrorPlane::Plane(pl)),
+                None => match p {
+                    Pick::Query(q) => self
+                        .face_of(&q)
+                        .map(MirrorPlane::Face)
+                        // A region of a sketch: the sketch's plane.
+                        .or_else(|| self.sketch_plane(&q).map(MirrorPlane::Plane)),
+                    _ => None,
+                },
+            },
+            None => None,
+        };
+        let neutral = neutral.ok_or_else(|| {
+            CommandError::Invalid("its neutral plane could not be translated".into())
+        })?;
+        let mut lost = 0;
+        let mut faces = Vec::new();
+        for p in refs::picks(param(f, "draftFaces")) {
+            let found = match p {
+                Pick::Query(q) => self.faces_of(&q),
+                _ => Vec::new(),
+            };
+            if found.is_empty() {
+                lost += 1;
+            }
+            for face in found {
+                if !faces.contains(&face) {
+                    faces.push(face);
+                }
+            }
+        }
+        if faces.is_empty() {
+            return Err(CommandError::Invalid(
+                "its faces could not be translated".into(),
+            ));
+        }
+        Self::lost_note(fr, lost, "face selections");
+        let (angle, angle_expr) = self.quantity(f, "angle", Quantity::Angle)?;
+        let x = cadrs_core::draft::DraftFeature {
+            neutral: Some(neutral),
+            faces,
+            angle,
+            angle_expr,
+            flip: Self::flag(f, "pullDirection"),
+            tangent_propagation: Self::flag(f, "tangentPropagation"),
+            ..Default::default()
+        };
+        self.add(f, fid, "Draft", FeatureKind::Draft(x), fr)
+    }
+
     /// A Split of parts by a plane or a face (Onshape's Split, Part type).
     pub(crate) fn split(
         &mut self,
@@ -1076,6 +1154,16 @@ impl PartStudio<'_> {
             flip_alignment: Self::flag(f, "flipAlignment"),
             ..PlaneFeature::default()
         };
+        // Onshape's Line angle plane by a reference plane faces against that plane's normal
+        // (three planes of "Frames - Cut List", f2db7b31…, by their sketches' matrices: by
+        // Front, whose normal is -Y, it faces +Y); cadrs's faces along it.
+        if kind == PlaneType::LineAngle
+            && x.entities
+                .iter()
+                .any(|e| matches!(e, PlaneEntity::Plane(_) | PlaneEntity::Face(_)))
+        {
+            x.flip_normal = !x.flip_normal;
+        }
         // Onshape keeps both values whatever the type; only the type's own one must evaluate.
         match self.quantity(f, "offset", Quantity::Length) {
             Ok(v) => (x.offset, x.offset_expr) = v,

@@ -552,7 +552,7 @@ pub(crate) struct PartStudio<'a> {
     pub(crate) s: &'a mut DocStudio,
     pub(crate) el: ElementId,
     doc_id: &'a str,
-    raw: &'a RawElement,
+    pub(crate) raw: &'a RawElement,
     pub(crate) vars: HashMap<String, Var>,
     pub(crate) report: &'a mut ElementReport,
     /// Onshape feature id → cadrs feature.
@@ -1201,6 +1201,9 @@ impl<'a> PartStudio<'a> {
                 "faceBlend" => self.face_blend(f, &fid, &mut fr),
                 "fill" => self.fill(f, &fid, &mut fr),
                 "sweep" => self.sweep(f, &fid, &mut fr),
+                "frame" => self.frame(f, &fid, &mut fr),
+                "draft" => self.draft(f, &fid, &mut fr),
+                "moveFace" => self.move_face(f, &fid, &mut fr),
                 "assignVariable" => {
                     self.variable(f, &mut fr);
                     Ok(())
