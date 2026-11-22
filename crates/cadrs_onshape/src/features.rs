@@ -824,6 +824,11 @@ impl PartStudio<'_> {
                 tool = Some(SplitToolRef::Face(face));
                 break;
             }
+            // Curves of a sketch: the sketch (its curves swept through the faces).
+            if let Some((sketch, _)) = self.sketch_curve(&q) {
+                tool = Some(SplitToolRef::Sketch(sketch));
+                break;
+            }
         }
         let tool =
             tool.ok_or_else(|| CommandError::Invalid("its tool could not be translated".into()))?;

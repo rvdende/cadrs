@@ -178,16 +178,23 @@ pub fn split_faces(
     if let SplitTool::Curves(curves) = tool {
         return super::curve_split::split_faces_by_curves(k, body, faces, curves);
     }
-    let (o, n) = tool_plane(k, tool)?;
     let a = std::sync::Arc::clone(k.get(body)?);
-    let bb = a.bbox();
-    let sheet = plane_sheet(
-        o,
-        n,
-        bb.diagonal() * 2.0 + (bb.center() - o).norm() * 2.0 + 10.0,
-    );
     let list: Vec<usize> = faces.iter().map(|f| f.0 as usize).collect();
-    let r: BoolOut = imprint(&a, &sheet, Some(list.clone()))?;
+    let r: BoolOut = if let SplitTool::Body(sheet) = tool {
+        // A surface body (a sketch's curves swept through the part): the faces cut where it
+        // crosses them.
+        let sheet = std::sync::Arc::clone(k.get(*sheet)?);
+        imprint(&a, &sheet, Some(list.clone()))?
+    } else {
+        let (o, n) = tool_plane(k, tool)?;
+        let bb = a.bbox();
+        let sheet = plane_sheet(
+            o,
+            n,
+            bb.diagonal() * 2.0 + (bb.center() - o).norm() * 2.0 + 10.0,
+        );
+        imprint(&a, &sheet, Some(list.clone()))?
+    };
     if r.body.faces.len() == a.faces.len() {
         return Err(KernelError::InvalidParameter(
             "The split tool doesn't cross the faces".into(),
