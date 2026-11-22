@@ -505,6 +505,18 @@ fn frame_many(cache: &PartCache, feature: cadrs_core::FeatureId) -> Vec<bool> {
         .unwrap_or_default()
 }
 
+/// What a dialog's rows depend on: the dialog is built again when it changes. The one place it
+/// is worked out, for the dialog as it is built and as it is checked each frame (two that
+/// differ build the dialog again every frame: nothing in it can be clicked).
+fn dialog_layout(kind: &FeatureKind, cache: &PartCache, feature: cadrs_core::FeatureId) -> Layout {
+    let mut layout = layout_of(kind);
+    // A Frame's override rows offer the next pair where three or more members meet.
+    if matches!(kind, FeatureKind::Frame(_)) {
+        layout += &format!(" {:?}", frame_many(cache, feature));
+    }
+    Layout(layout)
+}
+
 fn layout_of(kind: &FeatureKind) -> String {
     match kind {
         FeatureKind::Fillet(x) => {
@@ -946,7 +958,7 @@ fn dialog(
     let sm9_items = crate::sheetmetal_p3i9_ui::lists(features, cache, &kind);
     Some((
         AppliedDialog,
-        Layout(layout_of(&kind)),
+        dialog_layout(&kind, cache, f.id),
         DespawnOnExit(AppState::Document),
         FeatureDialog::new(format!("{name}-dialog"))
             .title(f.name.clone())
@@ -1702,12 +1714,7 @@ pub(crate) fn sync_applied_dialog(
     if let Some(d) = xyz.drag.as_ref() {
         kind = d.kind.clone();
     }
-    let mut layout = layout_of(&kind);
-    // A Frame's override rows offer the next pair where three or more members meet.
-    if matches!(kind, FeatureKind::Frame(_)) {
-        layout += &format!(" {:?}", frame_many(&cache, s.feature));
-    }
-    let layout = Layout(layout);
+    let layout = dialog_layout(&kind, &cache, s.feature);
     match q_dialog.iter().next().map(|(e, l, _)| (e, l.clone())) {
         Some((_, ref l)) if *l == layout => {}
         other => {
