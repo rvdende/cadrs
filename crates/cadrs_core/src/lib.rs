@@ -106,7 +106,3 @@ pub use material::Material;
 pub use parts::{Part, PartKind};
 pub use solid::{EdgeTag, Solid, SolidEdge, SolidFace};
 pub use store::{DocumentFile, Store, StoreError};
-// timing probe
-
-#[doc(hidden)]
-pub fn __timing_probe(x: u32) -> u32 { x.wrapping_mul(3) }
