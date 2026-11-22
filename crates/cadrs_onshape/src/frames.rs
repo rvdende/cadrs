@@ -16,6 +16,7 @@ use nalgebra::Point2;
 use serde_json::Value;
 
 use crate::import::PartStudio;
+use crate::query::Value as Q;
 use crate::raw::read_json;
 use crate::refs;
 use crate::report::FeatureReport;
@@ -290,6 +291,83 @@ pub(crate) fn profile_regions(sketches: &Value) -> Option<(String, Vec<Region>)>
 }
 
 impl PartStudio<'_> {
+    /// The part of a frame's member a body query names: Onshape names a member as the body
+    /// swept (`SWEPT_BODY` of `<frame>.….sweep.opSweep`) along the path edge it lists first,
+    /// and a trimmed one as a `SPLIT` of that. The cadrs member whose path has that edge's ends.
+    pub(crate) fn frame_member(&mut self, q: &Q) -> Option<cadrs_core::ids::PartId> {
+        let mut q = q;
+        while q.get("queryType").and_then(Q::as_str) == Some("SPLIT") {
+            q = match q.get("derivedFrom")? {
+                Q::Array(a) => a.first()?,
+                d => d,
+            };
+        }
+        if q.get("queryType").and_then(Q::as_str) != Some("SWEPT_BODY") {
+            return None;
+        }
+        let op = q.get("operationId").and_then(Q::as_str)?;
+        if !op.ends_with(".sweep.opSweep") {
+            return None;
+        }
+        let frame = *self.features.get(refs::op_feature(op))?;
+        let derived = match q.get("derivedFrom")? {
+            Q::Array(a) => a.iter().collect::<Vec<_>>(),
+            d => vec![d],
+        };
+        let path = derived
+            .into_iter()
+            .find(|d| d.get("entityType").and_then(Q::as_str) == Some("EDGE"))?;
+        // The path curve's ends.
+        let ends: [[f64; 3]; 2] = if let Some((sketch, curve)) = self.sketch_curve(path) {
+            let el = self.s.doc.element(self.el)?;
+            let sk = el.feature(sketch)?.sketch()?;
+            let fr = sk.plane?.frame();
+            let (a, b) = match sk.geometry.curves.get(curve)?.kind {
+                cadrs_sketch::CurveKind::Line { a, b } => (a, b),
+                cadrs_sketch::CurveKind::Arc { start, end, .. } => (start, end),
+                _ => return None,
+            };
+            let at = |p| {
+                let q = sk.geometry.points.get(p)?.pos;
+                Some([
+                    fr.origin[0] + fr.u[0] * q.x + fr.v[0] * q.y,
+                    fr.origin[1] + fr.u[1] * q.x + fr.v[1] * q.y,
+                    fr.origin[2] + fr.u[2] * q.x + fr.v[2] * q.y,
+                ])
+            };
+            [at(a)?, at(b)?]
+        } else {
+            let parts = self.parts();
+            let edge = self.model(&parts).edges(path).into_iter().next()?;
+            let part = parts.iter().find(|p| p.id == edge.part)?;
+            let pts = &part
+                .solid
+                .edges
+                .iter()
+                .find(|e| e.name == edge.edge)?
+                .points;
+            [*pts.first()?, *pts.last()?]
+        };
+        self.parts();
+        let d = |a: [f64; 3], b: [f64; 3]| {
+            ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+        };
+        self.built
+            .as_ref()?
+            .1
+            .frames
+            .iter()
+            .filter(|m| m.feature == frame && !m.plate)
+            .map(|m| {
+                let straight = d(m.span[0], ends[0]) + d(m.span[1], ends[1]);
+                let turned = d(m.span[0], ends[1]) + d(m.span[1], ends[0]);
+                (straight.min(turned), m.part)
+            })
+            .filter(|(off, _)| *off < 1e-3)
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, p)| p)
+    }
+
     /// The profile an Onshape frame names: the library sketch's regions, from the scraped file.
     fn frame_profile(&self, f: &Value) -> Result<LibraryProfile, CommandError> {
         let p =

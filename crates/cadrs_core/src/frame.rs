@@ -1517,6 +1517,10 @@ pub struct MemberInfo {
     pub family: Option<ProfileFamily>,
     #[serde(default)]
     pub size: String,
+    /// Where its path starts and ends (mm; zero for a plate): which curve of the frame's path
+    /// a member runs along.
+    #[serde(default)]
+    pub span: [[f64; 3]; 2],
     /// A plate's kind and size (to name it in another language).
     #[serde(default)]
     pub plate_kind: Option<PlateKind>,
@@ -2090,6 +2094,7 @@ mod tests {
             family: Some(ProfileFamily::SquareTube),
             plate_kind: None,
             size: "40x40x3".into(),
+            span: [[0.0; 3]; 2],
         };
         let miter = EndCut::Angle(45.0);
         let rows = cut_list(&[
@@ -2159,6 +2164,7 @@ mod tests {
             family: Some(ProfileFamily::TSlot),
             plate_kind: None,
             size: "20x20".into(),
+            span: [[0.0; 3]; 2],
         };
         // `b` was joined to another part (gone); `a` was patterned twice over.
         let live = live_members(

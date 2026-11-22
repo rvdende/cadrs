@@ -103,6 +103,11 @@ impl PartStudio<'_> {
                 *lost += 1;
                 continue;
             };
+            // A frame's member, named by the path curve it was swept along.
+            if let Some(member) = self.frame_member(&q) {
+                picks.push((vec![member], HashMap::new()));
+                continue;
+            }
             let mut found = body_parts_in(&q, &self.features, &parts, &doc);
             // A piece of a split body: every part the splitting operation touched is a candidate.
             if q.get("queryType").and_then(Q::as_str) == Some("SPLIT")
@@ -1545,6 +1550,12 @@ impl PartStudio<'_> {
             let found = self.model(&parts).edges(&q);
             if found.is_empty() {
                 *lost += 1;
+            }
+            if std::env::var_os("CADRS_ONSHAPE_DEBUG").is_some() {
+                eprintln!("CURVEREF {} edges | {}", found.len(), self.describe(&q));
+                for e in &found {
+                    eprintln!("    {:?}", e.seed);
+                }
             }
             for e in found {
                 push(&mut out, PathRef::Edge(e));

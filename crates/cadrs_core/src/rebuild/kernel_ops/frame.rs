@@ -720,6 +720,10 @@ impl Rebuilder {
                 family: Some(x.family),
                 size: size.clone(),
                 plate_kind: None,
+                span: [0, 1].map(|e| {
+                    let p = m.point(e);
+                    [p.x, p.y, p.z]
+                }),
             });
             placed.push((
                 part,
@@ -752,6 +756,7 @@ impl Rebuilder {
                 family: None,
                 size: String::new(),
                 plate_kind: Some(kind),
+                span: [[0.0; 3]; 2],
             });
             placed.push((
                 part,
