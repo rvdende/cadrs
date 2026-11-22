@@ -346,6 +346,7 @@ fn run(world: &mut World, call: &Call) -> Result<Value, String> {
         Call::EditView(p) => edit_view(world, p),
         Call::AddSectionView(p) => add_section_view(world, p),
         Call::AddNote(p) => add_note(world, p),
+        Call::ShowSection(p) => show_section(world, p),
         Call::RenameTab(p) => rename_tab(world, p),
         Call::DeleteTab(p) => delete_tab(world, &p.name),
         Call::OpenTab(p) => {
@@ -696,6 +697,49 @@ fn add_section_view(world: &mut World, p: &tools::AddSectionView) -> Result<Valu
     ) {
         return Err("the section view could not be added".into());
     }
+    Ok(out)
+}
+
+/// Lists the document's drawing sections, or shows one in its Part Studio.
+fn show_section(world: &mut World, p: &tools::ShowSection) -> Result<Value, String> {
+    let d = doc(world)?;
+    let sections: Vec<crate::drawing_sections::DrawingSection> = d
+        .doc
+        .elements
+        .iter()
+        .filter(|e| matches!(e.kind, ElementKind::PartStudio { .. }))
+        .flat_map(|e| crate::drawing_sections::sections_of(&d.doc, e.id))
+        .collect();
+    let describe = |s: &crate::drawing_sections::DrawingSection| {
+        json!({
+            "name": s.name,
+            "drawing": s.drawing_name,
+            "part_studio": d.doc.element(s.studio).map(|e| e.name.clone()),
+            "origin": s.origin.to_array().map(|c| round(c as f64)),
+            "removed_side": s.removed.to_array().map(|c| round(c as f64)),
+        })
+    };
+    let Some(name) = p.name.as_deref() else {
+        return Ok(json!({ "sections": sections.iter().map(describe).collect::<Vec<_>>() }));
+    };
+    let found = sections
+        .iter()
+        .find(|s| {
+            s.name.eq_ignore_ascii_case(name.trim())
+                && p.drawing
+                    .as_deref()
+                    .is_none_or(|n| s.drawing_name.eq_ignore_ascii_case(n.trim()))
+        })
+        .cloned()
+        .ok_or_else(|| {
+            let names: Vec<&str> = sections.iter().map(|s| s.name.as_str()).collect();
+            format!(
+                "no section named {name:?}; the sections are {}",
+                names.join(", ")
+            )
+        })?;
+    let out = describe(&found);
+    crate::drawing_sections::jump(world, found);
     Ok(out)
 }
 

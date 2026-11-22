@@ -30,6 +30,7 @@ pub mod direct_edit_ui;
 pub mod document;
 pub mod draft_ui;
 pub mod drawing;
+pub mod drawing_sections;
 pub mod drop_import;
 pub mod eda;
 pub mod export_dialog;
@@ -1017,6 +1018,7 @@ impl Plugin for CadrsAppPlugin {
                 measure::MeasurePlugin,
                 view_options::ViewOptionsPlugin,
                 section_view::SectionViewPlugin,
+                drawing_sections::DrawingSectionsPlugin,
                 hidden_edges::HiddenEdgesPlugin,
                 sheetmetal_p3i9_ui::Sm9Plugin,
             ))

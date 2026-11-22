@@ -597,6 +597,17 @@ pub struct AddSectionView {
     pub at: [f64; 2],
 }
 
+/// A drawing's section view shown in its Part Studio.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ShowSection {
+    /// The section view's name ("Section A-A"); omitted: list the sections and show none.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The drawing it is in, when several drawings have a section of that name.
+    #[serde(default)]
+    pub drawing: Option<String>,
+}
+
 /// A note on a drawing's sheet.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AddNote {

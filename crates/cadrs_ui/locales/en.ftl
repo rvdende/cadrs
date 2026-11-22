@@ -1011,6 +1011,7 @@ shell-tool-display-states-menu = Display states, Create Part Studio in context
 shell-doc-feature-errors = A feature has errors: click to select the first one
 # The top of a Part Studio's feature list: the planes and origin every Part Studio has.
 shell-doc-default-geometry = Default geometry
+shell-doc-sections = Sections
 # The point at the coordinate system's centre (0, 0, 0).
 shell-doc-origin = Origin
 shell-doc-filter-by-name = Filter by name
@@ -3663,6 +3664,7 @@ drawing-hint-auxiliary-pick = Auxiliary view: click a straight edge of a view
 drawing-hint-auxiliary-place = Auxiliary view: click to place the view
 drawing-hint-align-vertical = Align view vertical: click an edge of the view
 drawing-hint-align-horizontal = Align view horizontal: click an edge of the view
+drawing-hint-section-jump = Double-click to see { $section } in { $name }
 
 ## crates/cadrs_app/src/drawing/flat_views.rs
 # A filter: sheet metal parts' flat patterns (the part unfolded).
@@ -3691,6 +3693,7 @@ drawing-view-menu-tangent-solid = Solid
 drawing-view-menu-tangent-phantom = Phantom
 drawing-flat-adjust-linestyle = Adjust linestyle…
 drawing-view-menu-properties = View properties…
+drawing-view-menu-show-section = Show section in { $name }
 # A submenu: which view is drawn over which.
 drawing-flat-menu-order = Order
 drawing-view-menu-bring-to-front = Bring to front

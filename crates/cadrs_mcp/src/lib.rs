@@ -78,6 +78,7 @@ pub enum Call {
     EditView(EditView),
     AddSectionView(AddSectionView),
     AddNote(AddNote),
+    ShowSection(ShowSection),
     RenameTab(RenameTab),
     DeleteTab(TabName),
     OpenTab(TabName),
@@ -373,6 +374,18 @@ impl Cadrs {
         Parameters(p): Parameters<AddNote>,
     ) -> Result<CallToolResult, ErrorData> {
         self.call(Call::AddNote(p)).await
+    }
+
+    #[tool(
+        description = "Show a drawing's section view in the Part Studio it cuts: switches to the Part Studio, cuts \
+        the 3D view by the section's plane (the Section view cutaway) and looks at the cut as the drawing does. \
+        Without a name: lists the document's drawing sections (name, drawing, Part Studio, plane)."
+    )]
+    async fn show_section(
+        &self,
+        Parameters(p): Parameters<ShowSection>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::ShowSection(p)).await
     }
 
     #[tool(

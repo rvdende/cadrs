@@ -685,6 +685,7 @@ shell-tool-display-states = 表示状態
 shell-tool-display-states-menu = 表示状態、コンテキスト内で Part Studio を作成
 shell-doc-feature-errors = エラーのあるフィーチャーがあります：クリックすると最初のものを選択します
 shell-doc-default-geometry = デフォルトのジオメトリ
+shell-doc-sections = 断面
 shell-doc-origin = 原点
 shell-doc-filter-by-name = 名前で絞り込み
 shell-doc-list-view = リスト表示
@@ -2579,6 +2580,7 @@ drawing-hint-auxiliary-pick = 補助ビュー：ビューの直線エッジを�
 drawing-hint-auxiliary-place = 補助ビュー：クリックしてビューを配置
 drawing-hint-align-vertical = ビューを垂直に整列：ビューのエッジをクリック
 drawing-hint-align-horizontal = ビューを水平に整列：ビューのエッジをクリック
+drawing-hint-section-jump = ダブルクリックで { $section } を { $name } に表示
 
 ## crates/cadrs_app/src/drawing/flat_views.rs
 drawing-flat-patterns = 展開図
@@ -2600,6 +2602,7 @@ drawing-view-menu-tangent-solid = 実線
 drawing-view-menu-tangent-phantom = 想像線
 drawing-flat-adjust-linestyle = 線種を調整…
 drawing-view-menu-properties = ビューのプロパティ…
+drawing-view-menu-show-section = { $name } で断面を表示
 drawing-flat-menu-order = 順序
 drawing-view-menu-bring-to-front = 最前面へ移動
 drawing-view-menu-send-to-back = 最背面へ移動

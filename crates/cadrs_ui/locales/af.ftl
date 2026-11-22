@@ -685,6 +685,7 @@ shell-tool-display-states = Vertoontoestande
 shell-tool-display-states-menu = Vertoontoestande, Skep Part Studio in konteks
 shell-doc-feature-errors = 'n Kenmerk het foute: klik om die eerste een te kies
 shell-doc-default-geometry = Verstekgeometrie
+shell-doc-sections = Snitte
 shell-doc-origin = Oorsprong
 shell-doc-filter-by-name = Filtreer volgens naam
 shell-doc-list-view = Lysaansig
@@ -2579,6 +2580,7 @@ drawing-hint-auxiliary-pick = Hulpaansig: klik op 'n reguit rand van 'n aansig
 drawing-hint-auxiliary-place = Hulpaansig: klik om die aansig te plaas
 drawing-hint-align-vertical = Belyn aansig vertikaal: klik op 'n rand van die aansig
 drawing-hint-align-horizontal = Belyn aansig horisontaal: klik op 'n rand van die aansig
+drawing-hint-section-jump = Dubbelklik om { $section } in { $name } te sien
 
 ## crates/cadrs_app/src/drawing/flat_views.rs
 drawing-flat-patterns = Plat uitlegte
@@ -2600,6 +2602,7 @@ drawing-view-menu-tangent-solid = Volgetrek
 drawing-view-menu-tangent-phantom = Fantoom
 drawing-flat-adjust-linestyle = Pas lynstyl aan…
 drawing-view-menu-properties = Aansigeienskappe…
+drawing-view-menu-show-section = Wys snit in { $name }
 drawing-flat-menu-order = Volgorde
 drawing-view-menu-bring-to-front = Bring na voor
 drawing-view-menu-send-to-back = Stuur na agter

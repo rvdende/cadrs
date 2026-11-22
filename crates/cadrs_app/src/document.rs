@@ -2426,6 +2426,15 @@ fn feature_list(p: &mut ChildSpawnerCommands, t: &Theme, element: ElementId, hei
                                         ));
                                     }
                                 });
+                                // The drawings' sections of this studio (`drawing_sections`).
+                                tree.spawn((
+                                    Name::new("drawing-section-rows"),
+                                    crate::drawing_sections::SectionRows::default(),
+                                    Node {
+                                        flex_direction: FlexDirection::Column,
+                                        ..default()
+                                    },
+                                ));
                                 // The Part Studio's features (sketches), rebuilt by `rebuild_feature_rows`.
                                 tree.spawn((
                                     Name::new("feature-rows"),

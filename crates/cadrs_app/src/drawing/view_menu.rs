@@ -118,6 +118,7 @@ pub fn open_view_menu(world: &mut World, pos: Vec2, id: ViewId) {
     // Insert BOM is for a view of an assembly (P3C.5, D11.1).
     let is_assembly =
         cadrs_core::drawing_assembly::is_assembly(&doc.doc, ElementId(v.reference.element));
+    let is_section = v.kind == cadrs_drawing::ViewKind::Section && v.cut.is_some();
     let theme = world.resource::<Theme>().clone();
     let tangent = |t: TangentEdges, name: &'static str, label: &'static str| {
         let item = MenuItem::new(name, tr(label));
@@ -212,6 +213,14 @@ pub fn open_view_menu(world: &mut World, pos: Vec2, id: ViewId) {
             .disabled(!is_assembly),
         )
         .separator()
+        .item(
+            MenuItem::new(
+                "view-menu-show-section",
+                tr_with("drawing-view-menu-show-section", &[("name", &reference)]),
+            )
+            .icon("section-view")
+            .disabled(!is_section),
+        )
         .item(MenuItem::new(
             "view-menu-switch",
             tr_with("asm-switch-to-named", &[("name", &reference)]),
@@ -279,7 +288,7 @@ pub fn open_view_menu(world: &mut World, pos: Vec2, id: ViewId) {
     // The menu is tall (20 items): open it where it fits below the anchor, so it is never cut
     // off at the window's edge.
     let window_h = world.resource::<cadrs_ui::RenderSurface>().size.y as f32;
-    let menu_h = (20 + extra) as f32 * 27.0 + 4.0 * 9.0 + 12.0;
+    let menu_h = (21 + extra) as f32 * 27.0 + 4.0 * 9.0 + 12.0;
     let pos = Vec2::new(pos.x, pos.y.min((window_h - menu_h - 6.0).max(0.0)));
     let mut commands = world.commands();
     let anchor = open_context_menu(&mut commands, pos, menu.build(&theme));
@@ -318,6 +327,9 @@ pub(super) fn view_menu_action(w: &mut World, id: ViewId, item: &str) {
         return;
     };
     match item {
+        "view-menu-show-section" => {
+            crate::drawing_sections::jump_to_view(w, id);
+        }
         "view-menu-hidden-lines" => {
             let on = !v.hidden_lines;
             set_view(

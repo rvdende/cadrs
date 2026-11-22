@@ -1107,6 +1107,8 @@ fn view_pointer(
     q_menus: Query<(), With<cadrs_ui::menu::MenuDismissLayer>>,
     keys: Res<ButtonInput<KeyCode>>,
     cache: Res<ViewCache>,
+    time: Res<Time<Real>>,
+    mut last_click: Local<Option<(f64, Vec2)>>,
     mut ui: ResMut<DrawingUi>,
     mut commands: Commands,
 ) {
@@ -1196,6 +1198,25 @@ fn view_pointer(
                     .is_some_and(|q| (q - p).length() as f64 <= pad);
                 if over && pressed_here && ui.tool != ViewTool::None {
                     commands.queue(move |w: &mut World| tool_click(w, p));
+                }
+                // A double click on a section view or its cutting line shows the section in
+                // its Part Studio (`drawing_sections`).
+                if over && pressed_here && ui.tool == ViewTool::None {
+                    let now = time.elapsed_secs_f64();
+                    let double = last_click
+                        .is_some_and(|(t, q)| now - t < 0.4 && (q - p).length() as f64 <= pad);
+                    *last_click = Some((now, p));
+                    if double {
+                        *last_click = None;
+                        let hit = view_at(d, index, &cache, p, pad);
+                        if let Some(section) =
+                            crate::drawing_sections::section_at(d, index, hit, p, pad)
+                        {
+                            commands.queue(move |w: &mut World| {
+                                crate::drawing_sections::jump_to_view(w, section);
+                            });
+                        }
+                    }
                 }
             }
             PointerAction::Cancel => {
@@ -1598,6 +1619,7 @@ struct ToolHint;
 #[allow(clippy::too_many_arguments)]
 fn sync_tool_hint(
     ui: Res<DrawingUi>,
+    doc: Option<Res<ActiveDocument>>,
     kind: Res<ActiveKind>,
     insert: Res<InsertViewState>,
     theme: Res<Theme>,
@@ -1610,7 +1632,25 @@ fn sync_tool_hint(
         None
     } else {
         match ui.tool {
-            ViewTool::None => None,
+            // Over a section view or its cutting line: it opens in its Part Studio.
+            ViewTool::None => doc.as_deref().and_then(|doc| {
+                let (element, d) = active_drawing(doc)?;
+                let p = ui.pointer.filter(|_| ui.view_drag.is_none())?;
+                let tol = 6.0 * mm_per_px(doc, &ui);
+                let view = crate::drawing_sections::section_at(
+                    d,
+                    ui.sheet_index(element, d),
+                    ui.hovered,
+                    p,
+                    tol,
+                )?;
+                let s = crate::drawing_sections::find(&doc.doc, view)?;
+                let studio = doc.doc.element(s.studio)?.name.clone();
+                Some(tr_with(
+                    "drawing-hint-section-jump",
+                    &[("section", &s.name), ("name", &studio)],
+                ))
+            }),
             ViewTool::Insert if insert.reference.is_none() => {
                 Some(tr("drawing-hint-insert-select"))
             }

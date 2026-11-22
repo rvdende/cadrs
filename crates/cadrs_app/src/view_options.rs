@@ -744,8 +744,11 @@ pub struct NamedViewsPanel;
 /// The panel and what its list was last built from (the names, and the row the view is at).
 #[derive(Component, Default)]
 struct PanelRoot {
-    built: Option<(Vec<String>, Option<usize>)>,
+    built: Option<(Vec<String>, Option<usize>, SectionRowsKey)>,
 }
+
+/// The drawing sections the panel lists after the saved views: (view, label, shown).
+type SectionRowsKey = Vec<(cadrs_drawing::ViewId, String, bool)>;
 
 const PANEL_WIDTH: f32 = 248.0;
 
@@ -786,6 +789,7 @@ fn sync_named_views(
     theme: Res<Theme>,
     rect: Res<ViewportRect>,
     view: Res<ViewportView>,
+    sections: Res<crate::section_view::SectionViews>,
     mut q_root: Query<(Entity, &mut PanelRoot)>,
     q_body: Query<(Entity, &FloatingPanelBody)>,
     q_area: Query<Entity, With<ViewportArea>>,
@@ -841,7 +845,26 @@ fn sync_named_views(
             n.left = Val::Px(max_left);
         }
     }
-    let key = (names.clone(), current);
+    // The sections the document's drawings cut this tab by: views too, never saved or deleted
+    // here (`drawing_sections`).
+    let section_rows: SectionRowsKey = match doc.active.filter(|_| *kind == ActiveKind::PartStudio)
+    {
+        Some(el) => {
+            let shown = crate::section_view::drawing_section_shown(&sections, el);
+            crate::drawing_sections::sections_of(&doc.doc, el)
+                .into_iter()
+                .map(|s| {
+                    (
+                        s.view,
+                        format!("{} ({})", s.name, s.drawing_name),
+                        shown == Some(s.view),
+                    )
+                })
+                .collect()
+        }
+        None => Vec::new(),
+    };
+    let key = (names.clone(), current, section_rows.clone());
     if state.built.as_ref() == Some(&key) {
         return;
     }
@@ -863,7 +886,7 @@ fn sync_named_views(
         ))
         .id();
     commands.entity(rows).with_children(|b| {
-        if names.is_empty() {
+        if names.is_empty() && section_rows.is_empty() {
             b.spawn((
                 Name::new("named-views-empty"),
                 t.text(
@@ -906,6 +929,24 @@ fn sync_named_views(
                         commands.queue(move |world: &mut World| delete_named_view(world, &d));
                     },
                 ),
+            ));
+        }
+    });
+    commands.entity(rows).with_children(|b| {
+        for (i, (section, label, on)) in section_rows.iter().enumerate() {
+            let section = *section;
+            b.spawn((
+                cadrs_ui::ActionRow::new(format!("named-view-section-{i}"), label.clone())
+                    .icon("section-view")
+                    .height(28.0)
+                    .font_size(t.font_base)
+                    .selected(*on)
+                    .build(&t),
+                observe(move |_: On<Activate>, mut commands: Commands| {
+                    commands.queue(move |world: &mut World| {
+                        crate::drawing_sections::toggle(world, section)
+                    });
+                }),
             ));
         }
     });

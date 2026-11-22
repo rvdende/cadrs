@@ -146,6 +146,8 @@ pub enum SectionRef {
     Feature(FeatureId),
     /// Through an assembly instance's middle (A3.3, X15).
     Instance(PartId),
+    /// A drawing's section view: its cutting plane ([`crate::drawing_sections`]).
+    Drawing(cadrs_drawing::ViewId),
 }
 
 /// The most section planes a section has (the shaders' clip planes).
@@ -626,6 +628,62 @@ pub fn exit(world: &mut World) {
     world.resource_mut::<SectionViews>().per.remove(&el);
 }
 
+/// Cuts the tab `el` by one plane, with no dialog (a drawing's section shown in its Part
+/// Studio): the plane through `origin` whose `removed` side goes. The plane's point is moved to
+/// the middle of the parts shown, where the dialog's gizmo would be.
+pub fn show_plane(
+    world: &mut World,
+    el: ElementId,
+    reference: SectionRef,
+    label: String,
+    origin: Vec3,
+    removed: Vec3,
+) {
+    close_dialog(world);
+    let n = removed.normalize_or_zero();
+    if n == Vec3::ZERO {
+        return;
+    }
+    let middle = parts_middle(world.resource::<PartCache>()).unwrap_or(origin);
+    let origin = middle - n * (middle - origin).dot(n);
+    world.resource_mut::<SectionViews>().per.insert(
+        el,
+        SectionState::with(SectionCutPlane::new(reference, label, origin, n)),
+    );
+}
+
+/// The middle of the parts' bounding box.
+pub fn parts_middle(cache: &PartCache) -> Option<Vec3> {
+    parts_bounds(cache).map(|(lo, hi)| (lo + hi) / 2.0)
+}
+
+/// The parts' bounding box.
+pub fn parts_bounds(cache: &PartCache) -> Option<(Vec3, Vec3)> {
+    cache
+        .parts
+        .iter()
+        .flat_map(|p| {
+            p.solid
+                .positions
+                .iter()
+                .map(|q| Vec3::new(q[0] as f32, q[1] as f32, q[2] as f32))
+        })
+        .fold(None, |acc: Option<(Vec3, Vec3)>, p| {
+            Some(acc.map_or((p, p), |(lo, hi)| (lo.min(p), hi.max(p))))
+        })
+}
+
+/// The drawing section the tab `el` is cut by, if that is its whole section.
+pub fn drawing_section_shown(views: &SectionViews, el: ElementId) -> Option<cadrs_drawing::ViewId> {
+    match views.per.get(&el)?.planes.as_slice() {
+        [p] => match p.reference {
+            SectionRef::Drawing(v) => Some(v),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Opens the dialog on the active tab, with `picked` as its plane if given (a new section).
 pub fn open_with(world: &mut World, picked: Option<SectionCutPlane>) {
     let Some(el) = modeling_tab(world) else {
@@ -817,7 +875,7 @@ fn reference_pick(r: SectionRef) -> Option<Pick> {
         SectionRef::Plane(k) => Some(Pick::Plane(k)),
         SectionRef::Face(p, f) => Some(Pick::Face(p, f)),
         SectionRef::Feature(f) => Some(Pick::Feature(f)),
-        SectionRef::Instance(_) => None,
+        SectionRef::Instance(_) | SectionRef::Drawing(_) => None,
     }
 }
 
