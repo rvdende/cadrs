@@ -562,19 +562,11 @@ fn import(pool: &mut Pool, faces: &mut Vec<WFace>, b: &Body, owner: usize, merge
             for c in l {
                 let e = &b.edges[c.edge];
                 bb.add(&b.verts[e.v[0]].p);
-                // (A conic's own box: samples along an arc miss its extremes by up to
-                // r·(1 − cos(π/16)), and a pair of faces then misses a crossing near there.)
-                if !e.degenerate
-                    && matches!(
-                        e.curve,
-                        Curve::Line { .. } | Curve::Circle { .. } | Curve::Ellipse { .. }
-                    )
-                {
+                // (The curve's own box, a conic's extremes or a B-spline's poles: samples along
+                // an arc miss its extremes by up to r·(1 − cos(π/16)), along a spline of many
+                // spans by more, and a pair of faces then misses a crossing near there.)
+                if !e.degenerate {
                     bb.union(&curve_bbox(&e.curve, e.t[0], e.t[1]));
-                } else if !e.degenerate {
-                    for i in 0..=16 {
-                        bb.add(&e.point(e.t[0] + (e.t[1] - e.t[0]) * i as f64 / 16.0));
-                    }
                 }
             }
         }
@@ -757,11 +749,17 @@ fn tangent_along_shared_edge(
     bounds: (Option<&SurfaceBound>, Option<&SurfaceBound>),
     ebox: &[Bbox],
 ) -> bool {
+    // (A torus too: it meets no other surface but a plane, a sphere or a coaxial one in closed
+    // form, and contouring it against a cylinder it touches along an edge (a set-back corner's
+    // torus on its fillets) spends thirty milliseconds finding that edge again.)
     let analytic = |s: &Surface| {
         !matches!(
             s,
-            Surface::Nurbs(_) | Surface::Extrusion { .. } | Surface::Revolution { .. }
-        )
+            Surface::Nurbs(_)
+                | Surface::Extrusion { .. }
+                | Surface::Revolution { .. }
+                | Surface::Torus { .. }
+        ) || crate::native::env_flag!("CADRS_TORUS_ANALYTIC")
     };
     if analytic(&fa.surf) && analytic(&fb.surf) {
         return false;
@@ -811,11 +809,14 @@ fn tangent_along_shared_edge(
             }
             // The same curve, at least where they overlap (whole circles may have their seams in
             // different places).
+            // (Within the edges' tolerances: a copy of a prism moved by a few tolerances has
+            // its seam that far from the other's, and its side crosses the other's.)
+            let within = pool.tol.max(e.tol).max(o.tol);
             let same_ends = x == y || {
                 let on = |a: &WEdge, b: &WEdge| {
                     [0.25, 0.5, 0.75].iter().all(|f| {
                         let m = b.curve.point(b.t[0] + (b.t[1] - b.t[0]) * f);
-                        on_curve(&a.curve, a.t[0], a.t[1], &m, pool.tol * 10.0).is_some()
+                        on_curve(&a.curve, a.t[0], a.t[1], &m, within).is_some()
                     })
                 };
                 on(e, o) && on(o, e)
@@ -2654,7 +2655,7 @@ fn snap_within(x: &mut Body, other: &Body, lim: f64, tol: f64, alike: bool) -> V
 /// [`fuzzy_merge`]'s second step: faces `lim` wide collapsed, and moved faces (`moved`) up to
 /// ten times that (a strip bridging the gap at a slant, folded back over its neighbours once
 /// on one surface with them). The faces kept, by input index.
-fn collapse_slivers(x: &mut Body, lim: f64, moved: &[usize]) -> Vec<usize> {
+pub(crate) fn collapse_slivers(x: &mut Body, lim: f64, moved: &[usize]) -> Vec<usize> {
     let mut drop = vec![false; x.faces.len()];
     for fi in 0..x.faces.len() {
         if x.faces[fi].loops.len() != 1 {
@@ -2705,10 +2706,36 @@ fn collapse_slivers(x: &mut Body, lim: f64, moved: &[usize]) -> Vec<usize> {
         } else {
             [(v2[0], v1[1]), (v2[1], v1[0])]
         };
+        // (Ends that meet across the width only: where one long edge runs on past the other's
+        // end, its end would be moved along it and the edge between made a point, 41 µm long.)
+        if map
+            .iter()
+            .any(|&(gone, keep)| (x.verts[gone].p - x.verts[keep].p).norm() > 2.0 * width)
+        {
+            continue;
+        }
         let short: Vec<usize> = (0..l.len())
             .filter(|k| !long.contains(k))
             .map(|k| l[k].edge)
             .collect();
+        if super::env_flag!("CADRS_SLIVER_DEBUG") {
+            let len = |e: usize| {
+                let ed = &x.edges[e];
+                (ed.curve.point(ed.t[0]) - ed.curve.point(ed.t[1])).norm()
+            };
+            eprintln!(
+                "sliver face {fi}: long {e1} ({:.1e}) and {e2} ({:.1e}), short {:?}, ends moved {:?}",
+                len(e1),
+                len(e2),
+                short
+                    .iter()
+                    .map(|&e| (e, len(e), x.edges[e].degenerate))
+                    .collect::<Vec<_>>(),
+                map.iter()
+                    .map(|&(g, k)| (x.verts[g].p - x.verts[k].p).norm())
+                    .collect::<Vec<_>>()
+            );
+        }
         for (gone, keep) in map {
             let gap = (x.verts[gone].p - x.verts[keep].p).norm();
             x.verts[keep].tol = x.verts[keep].tol.max(gap * 1.5);
@@ -2843,17 +2870,17 @@ fn snap_to(a: &mut Body, b: &Body, tol: f64) -> bool {
         return false;
     }
     let mut changed = false;
+    if !a.faces.iter().any(|f| matches!(f.surf, Surface::Nurbs(_))) {
+        return false;
+    }
+    // (`b`'s box once: it is not kept here, and each of its curved faces is trimmed for it.)
+    let grow = 1e-3 * tol::small(b.bbox().diagonal());
     let targets: Vec<(usize, Bbox)> = b
         .faces
         .iter()
         .enumerate()
         .filter(|(_, f)| matches!(f.surf, Surface::Plane { .. } | Surface::Cylinder { .. }))
-        .map(|(i, _)| {
-            (
-                i,
-                b.face_bbox(i).grow(1e-3 * tol::small(b.bbox().diagonal())),
-            )
-        })
+        .map(|(i, _)| (i, b.face_bbox(i).grow(grow)))
         .collect();
     if targets.is_empty() {
         return false;
@@ -3249,6 +3276,27 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     // order (edges in turn, faces in order), which splits the edges and makes the vertices.
     let mut near_pairs: Vec<(usize, usize)> = Vec::new();
     for e in 0..ne {
+        if super::env_flag!("CADRS_BOOL_DEBUG") && std::env::var("CADRS_EDGE_AT").is_ok() {
+            let at: Vec<f64> = std::env::var("CADRS_EDGE_AT")
+                .unwrap()
+                .split(',')
+                .filter_map(|x| x.parse().ok())
+                .collect();
+            let ed = &pool.edges[e];
+            let q = P3::new(at[0], at[1], at[2]);
+            if [ed.t[0], ed.t[1]]
+                .iter()
+                .any(|&t| (ed.curve.point(t) - q).norm() < 1e-3)
+            {
+                eprintln!(
+                    "  edge {e} near: {:?} → {:?}, degenerate {}, box {:?}",
+                    ed.curve.point(ed.t[0]),
+                    ed.curve.point(ed.t[1]),
+                    ed.degenerate,
+                    ebox[e]
+                );
+            }
+        }
         if pool.edges[e].degenerate {
             continue;
         }
@@ -3305,12 +3353,20 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             }
             return Meet::At(ts.into_iter().filter(on_face).collect());
         }
-        Meet::At(
-            ssi::curve_surface(&ed.curve, ed.t[0], ed.t[1], surf)
-                .into_iter()
-                .filter(on_face)
-                .collect(),
-        )
+        let roots = ssi::curve_surface(&ed.curve, ed.t[0], ed.t[1], surf);
+        if super::env_flag!("CADRS_BOOL_DEBUG")
+            && std::env::var("CADRS_FACE_DEBUG").is_ok_and(|d| d == fi.to_string())
+        {
+            for t in &roots {
+                let p = ed.curve.point(*t);
+                eprintln!(
+                    "  edge {e} root at {p:?}: {:?}, off the surface {:.1e}",
+                    point_in_face(&faces[fi], &p, run_tol.max(et)),
+                    surf.distance(&p)
+                );
+            }
+        }
+        Meet::At(roots.into_iter().filter(on_face).collect())
     };
     let numeric = near_pairs.iter().any(|&(e, fi)| {
         matches!(pool.edges[e].curve, Curve::Nurbs(_))
@@ -3375,6 +3431,65 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     }
     let t_after = web_time::Instant::now();
     let meets: Vec<Meet> = meets.into_iter().map(|m| m.0).collect();
+    if super::env_flag!("CADRS_BOOL_DEBUG")
+        && let Ok(d) = std::env::var("CADRS_FACE_DEBUG")
+    {
+        for (&(e, fi), m) in near_pairs.iter().zip(&meets) {
+            if d == fi.to_string() {
+                let ed = &pool.edges[e];
+                eprintln!(
+                    "  edge {e} with face {fi}: {:?} → {:?}, {}",
+                    ed.curve.point(ed.t[0]),
+                    ed.curve.point(ed.t[1]),
+                    match m {
+                        Meet::On => "on it".to_string(),
+                        Meet::At(ts) => format!("{} crossings", ts.len()),
+                    }
+                );
+            }
+        }
+    }
+    // Roots where the edge runs along the surface (within the tolerance a stretch either side:
+    // a wall's edge crossing the line a G2 blend touches the wall along) are placed last, so
+    // that the vertex another edge crosses there at a clean angle can take them.
+    let mut deferred: Vec<(usize, usize, f64)> = Vec::new();
+    // (On a fitted surface only, a blend's: a plane or a quadric's crossings at a hair's angle
+    // are crossings where they are found.)
+    let grazing = |e: usize, fi: usize, t: f64| {
+        if !matches!(
+            faces[fi].surf,
+            Surface::Nurbs(_) | Surface::Extrusion { .. } | Surface::Revolution { .. }
+        ) {
+            return false;
+        }
+        // (The edge meets it all but tangentially: a cubic contact's root is anywhere in a
+        // band along the edge.)
+        let ed = &pool.edges[e];
+        let surf = &faces[fi].surf;
+        let p = ed.curve.point(t);
+        let (u, v) = surf.project(&p, None);
+        let tn = ed.curve.tangent(t);
+        let l = tn.norm();
+        l > 0.0 && (tn.dot(&surf.normal(u, v)) / l).abs() < 1e-2
+    };
+    let meets: Vec<Meet> = near_pairs
+        .iter()
+        .zip(meets)
+        .map(|(&(e, fi), m)| match m {
+            Meet::At(ts) if !crate::native::env_flag!("CADRS_NO_GRAZE_DEFER") => Meet::At(
+                ts.into_iter()
+                    .filter(|&t| {
+                        let g = grazing(e, fi, t);
+                        if g {
+                            deferred.push((e, fi, t));
+                        }
+                        !g
+                    })
+                    .collect(),
+            ),
+            m => m,
+        })
+        .collect();
     for (&(e, fi), m) in near_pairs.iter().zip(meets) {
         {
             let ts = match m {
@@ -3413,12 +3528,28 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                     .chain([(pe.t[0], pe.v[0]), (pe.t[1], pe.v[1])])
                     .find(|&(s, w)| {
                         let h = 0.25 * (s - t);
-                        (pool.verts[w] - p).norm() <= et.max(run_tol) * 1e5
-                            && side(t - h) * side(t + h) >= 0.0
-                            && (0..=8).all(|k| {
-                                surf.distance(&ed.curve.point(t + (s - t) * k as f64 / 8.0))
-                                    <= et.max(run_tol)
-                            })
+                        // Where the sides' signs differ but both are a hundredth of the tolerance
+                        // off the surface or less, they are rounding: the edge rests on the
+                        // surface there if the whole stretch to the vertex is as near, and it
+                        // isn't one lying along the surface (which has no one point of touch).
+                        // (A curve on a cylinder crossing the line along which a plane is tangent
+                        // to the cylinder: found 0.12 µm along from the vertex there, 1e-9 off.)
+                        // (The sides only for a vertex near: `side` carries its foot on.)
+                        let noise = 1e-2 * et.max(run_tol);
+                        let along = || {
+                            let (u, v) = surf.project(&p, None);
+                            let d = ed.curve.tangent(t);
+                            d.norm() == 0.0 || (d.normalize().dot(&surf.normal(u, v))).abs() < 1e-9
+                        };
+                        (pool.verts[w] - p).norm() <= et.max(run_tol) * 1e5 && {
+                            let (a, b) = (side(t - h), side(t + h));
+                            let rests = a * b < 0.0;
+                            (!rests || (a.abs().max(b.abs()) <= noise && !along()))
+                                && (0..=8).all(|k| {
+                                    surf.distance(&ed.curve.point(t + (s - t) * k as f64 / 8.0))
+                                        <= if rests { noise } else { et.max(run_tol) }
+                                })
+                        }
                     });
                 if let Some((_, w)) = near_vertex {
                     if !face_pts[fi].contains(&w) {
@@ -3433,6 +3564,57 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                     face_pts[fi].push(v);
                 }
             }
+        }
+    }
+    // The grazing roots: at a vertex already lying on both the edge and the surface, with the
+    // edge on the surface all the way between, when there is one; else as any other.
+    for (e, fi, t) in deferred {
+        let ed = pool.edges[e].clone();
+        let p = ed.curve.point(t);
+        let et = ed.tol.max(faces[fi].tol).max(run_tol);
+        let surf = &faces[fi].surf;
+        let (lo, hi) = (ed.t[0].min(ed.t[1]), ed.t[0].max(ed.t[1]));
+        // (As far along the edge as it keeps to the surface: a G2 blend stays within the
+        // tolerance of a wall for a tenth of a millimetre either side of where it touches.)
+        let reach = (ed.curve.point(lo) - ed.curve.point(hi)).norm();
+        let at = (0..pool.verts.len())
+            .filter_map(|w| {
+                let q = pool.verts[w];
+                let dq = (q - p).norm();
+                if dq > reach || surf.distance(&q) > et {
+                    return None;
+                }
+                let s = ed.curve.closest(&q, lo, hi);
+                ((ed.curve.point(s) - q).norm() <= et
+                    && (0..=8).all(|k| {
+                        surf.distance(&ed.curve.point(t + (s - t) * k as f64 / 8.0)) <= et
+                    }))
+                .then_some((dq, w, s))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        if super::env_flag!("CADRS_BOOL_DEBUG") {
+            eprintln!(
+                "grazing root of edge {e} on face {fi} at {p:?}: {:?}",
+                at.map(|a| (a.1, pool.verts[a.1], a.0))
+            );
+        }
+        let (v, t) = match at {
+            Some((_, w, s)) => (w, s),
+            None => {
+                let v = pool.vertex_tol(p, ed.tol.max(faces[fi].tol));
+                (
+                    v,
+                    refine_param(&ed.curve, ed.t[0], ed.t[1], &pool.verts[v], t),
+                )
+            }
+        };
+        let pe = &pool.edges[e];
+        let has = pe.v.contains(&v) || pe.splits.iter().any(|x| x.1 == v);
+        if !has && t > lo && t < hi {
+            pool.split(e, t, v);
+        }
+        if !face_pts[fi].contains(&v) {
+            face_pts[fi].push(v);
         }
     }
     // Vertices on each face's boundary (with the split points).
@@ -3475,8 +3657,10 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         ob.max = ob.max.inf(&faces[fb].bbox.max);
         ob
     };
-    // The pairs of faces to intersect, in a fixed order.
-    let mut pairs: Vec<(usize, usize)> = Vec::new();
+    // The pairs of faces to intersect, in a fixed order: of the pairs whose boxes meet, those
+    // neither coincident nor tangent along an edge they share (each pair told apart by the two
+    // faces alone: in parallel, applied in order).
+    let mut near_pairs: Vec<(usize, usize)> = Vec::new();
     for fa in 0..na_faces {
         if !selected(faces[fa].orig) {
             continue;
@@ -3484,9 +3668,19 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         let mut near = ftree.query(&faces[fa].bbox);
         near.sort_unstable();
         for fb in near.into_iter().filter(|&f| f >= na_faces) {
-            if !faces[fa].bbox.overlaps(&faces[fb].bbox) {
-                continue;
+            if faces[fa].bbox.overlaps(&faces[fb].bbox) {
+                near_pairs.push((fa, fb));
             }
+        }
+    }
+    #[derive(Clone, Copy, PartialEq)]
+    enum PairIs {
+        Coincident,
+        Apart,
+        Crossing,
+    }
+    let tell = |&(fa, fb): &(usize, usize)| -> PairIs {
+        {
             // Coincident within the faces' tolerances (near-coincident faces have had theirs
             // raised: `near_coincident_tolerances`).
             let ctol = run_tol.max(faces[fa].tol).max(faces[fb].tol);
@@ -3510,14 +3704,12 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             if faces[fa].surf.same_domain(&faces[fb].surf, ctol).is_some()
                 && !(planes && (flat_apart(fa, fb) || flat_apart(fb, fa)))
             {
-                coincident[fa].push(fb);
-                coincident[fb].push(fa);
-                continue;
+                return PairIs::Coincident;
             }
             // (The second body within the first: faces on different surfaces meet only along
             // the second's own edges, there already.)
             if within {
-                continue;
+                return PairIs::Apart;
             }
             // Faces that share an edge and are tangent along it (one continues the other): the
             // shared edge is their contact; contouring tangent surfaces finds nothing more but
@@ -3531,7 +3723,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 (bounds[fa].as_ref(), bounds[fb].as_ref()),
                 &ebox,
             ) {
-                continue;
+                return PairIs::Apart;
             }
             if super::env_flag!("CADRS_TANGENT_DEBUG")
                 && (matches!(faces[fa].surf, Surface::Nurbs(_))
@@ -3555,7 +3747,23 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                     dev(&face_edges[fa], &faces[fb].surf)
                 );
             }
-            pairs.push((fa, fb));
+            PairIs::Crossing
+        }
+    };
+    let told: Vec<PairIs> = if super::par::threads_for(near_pairs.len(), true) {
+        near_pairs.par_iter().map(tell).collect()
+    } else {
+        near_pairs.iter().map(tell).collect()
+    };
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
+    for (&(fa, fb), is) in near_pairs.iter().zip(told) {
+        match is {
+            PairIs::Coincident => {
+                coincident[fa].push(fb);
+                coincident[fb].push(fa);
+            }
+            PairIs::Apart => {}
+            PairIs::Crossing => pairs.push((fa, fb)),
         }
     }
     // Their intersections, each a function of the two faces alone: computed in parallel and
@@ -3605,6 +3813,80 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     // Pairs of faces whose surfaces coincide over part of the faces (from the intersections): their
     // sub-faces on the other face's surface classify as on it, as a coincident pair's do.
     let mut partial: HashSet<(usize, usize)> = HashSet::default();
+    // A curve of a free-form face that ends away from every edge of both faces stops where it
+    // shouldn't: traced to the side of the face's box in (u, v), short of the face's own edge
+    // where that edge runs slanted across the box (a ramp's floor beside a mill's cylinder).
+    // That pair is traced again over boxes a little wider, its faces' loops trimming the
+    // curves after; the other pairs keep theirs.
+    let ssis: Vec<Found> = {
+        let free = |f: usize| {
+            matches!(
+                faces[f].surf,
+                Surface::Nurbs(_) | Surface::Extrusion { .. } | Surface::Revolution { .. }
+            )
+        };
+        let near_edges = |f: usize, p: &P3| {
+            let tol = (run_tol * 100.0).max(faces[f].tol * 10.0).max(1e-6);
+            face_edges[f].iter().any(|&e| {
+                let ed = &pool.edges[e];
+                on_curve(
+                    &ed.curve,
+                    ed.t[0].min(ed.t[1]),
+                    ed.t[0].max(ed.t[1]),
+                    p,
+                    tol,
+                )
+                .is_some()
+            })
+        };
+        let dangling = |fa: usize, fb: usize, curves: &[ssi::IntCurve]| {
+            curves.iter().any(|ic| {
+                !ic.closed
+                    && [ic.t0, ic.t1].iter().any(|&t| {
+                        let p = ic.c.point(t);
+                        // (Inside a face, near no edge of either: an end that can't be.)
+                        (point_in_face(&faces[fa], &p, run_tol) == InFace::Inside
+                            || point_in_face(&faces[fb], &p, run_tol) == InFace::Inside)
+                            && !near_edges(fa, &p)
+                            && !near_edges(fb, &p)
+                    })
+            })
+        };
+        let grown = |f: usize| {
+            let ((u0, u1), (v0, v1)) = uvbox(&faces[f]);
+            if !free(f) {
+                return ((u0, u1), (v0, v1));
+            }
+            let (du, dv) = (0.02 * (u1 - u0), 0.02 * (v1 - v0));
+            ((u0 - du, u1 + du), (v0 - dv, v1 + dv))
+        };
+        pairs
+            .iter()
+            .zip(ssis)
+            .map(|(&(fa, fb), found)| {
+                if !(free(fa) || free(fb))
+                    || super::env_flag!("CADRS_NO_RETRACE")
+                    || !dangling(fa, fb, &found.0)
+                {
+                    return found;
+                }
+                let r = ssi::surface_surface_tol(
+                    &faces[fa].surf,
+                    grown(fa),
+                    &faces[fb].surf,
+                    grown(fb),
+                    &overlap(fa, fb).grow(1e-3 * faces[fa].bbox.diagonal().max(1e-9)),
+                    run_tol,
+                );
+                if super::env_flag!("CADRS_BOOL_DEBUG") {
+                    eprintln!(
+                        "ssi {fa}×{fb}: a curve's end dangled; traced again over wider boxes"
+                    );
+                }
+                (r.curves, r.singular, found.2, r.coincident)
+            })
+            .collect()
+    };
     for (&(fa, fb), (mut curves, singular, el, shared)) in pairs.iter().zip(ssis) {
         // The shared region's boundary cuts both faces, as a crossing does.
         if !shared.is_empty() {
@@ -3688,12 +3970,39 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 faces[fb].surf.kind(),
                 curves.len()
             );
-            for ic in &curves {
+            if std::env::var("CADRS_FACE_DEBUG").is_ok_and(|d| d == fa.to_string()) {
+                let sd = format!("{:?}", faces[fa].surf);
                 eprintln!(
-                    "    curve closed {} from {:?} to {:?}",
+                    "  surface {fa}: {}…; uv box {:?}",
+                    &sd[..sd.len().min(300)],
+                    uvbox(&faces[fa])
+                );
+                for ic in &curves {
+                    let (s0, s1) = (ic.c.point(ic.t0), ic.c.point(ic.t1));
+                    let pa = faces[fa].surf.project(&s0, None);
+                    let pb = faces[fa].surf.project(&s1, None);
+                    eprintln!("  ends at uv {pa:?} and {pb:?}");
+                }
+            }
+            for ic in &curves {
+                let angles: Vec<f64> = (0..=4)
+                    .map(|q| {
+                        let m = ic.c.point(ic.t0 + (ic.t1 - ic.t0) * q as f64 / 4.0);
+                        let n = |f: usize| {
+                            let s = &faces[f].surf;
+                            let (u, v) = s.project(&m, None);
+                            s.normal(u, v)
+                        };
+                        n(fa).cross(&n(fb)).norm()
+                    })
+                    .collect();
+                eprintln!(
+                    "    curve closed {} from {:?} to {:?}, length {:.3e}, normals' sines {:.1e}",
                     ic.closed,
                     ic.c.point(ic.t0),
-                    ic.c.point(ic.t1)
+                    ic.c.point(ic.t1),
+                    (ic.c.point(ic.t1) - ic.c.point(ic.t0)).norm(),
+                    angles.iter().copied().fold(f64::INFINITY, f64::min)
                 );
             }
         }
@@ -3708,6 +4017,52 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         {
             if !cand.contains(&v) {
                 cand.push(v);
+            }
+        }
+        if super::env_flag!("CADRS_BOOL_DEBUG")
+            && std::env::var("CADRS_FACE_DEBUG").is_ok_and(|d| d == fa.to_string())
+        {
+            for ic in &curves {
+                let mut near: Vec<(f64, usize, f64)> = cand
+                    .iter()
+                    .map(|&v| {
+                        let p = pool.verts[v];
+                        let t = param_on(&ic.c, ic.t0, ic.t1, &p);
+                        ((ic.c.point(t) - p).norm(), v, t)
+                    })
+                    .collect();
+                near.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let off: Vec<String> = (0..=10)
+                    .map(|q| {
+                        let m = ic.c.point(ic.t0 + (ic.t1 - ic.t0) * q as f64 / 10.0);
+                        format!(
+                            "{:.1e}/{:.1e}",
+                            faces[fa].surf.distance(&m),
+                            faces[fb].surf.distance(&m)
+                        )
+                    })
+                    .collect();
+                eprintln!("  off the surfaces along it: {}", off.join(" "));
+                eprintln!(
+                    "  {fa}×{fb} curve t {:.4}..{:.4}: nearest vertices {:?}",
+                    ic.t0,
+                    ic.t1,
+                    near.iter()
+                        .take(4)
+                        .map(|&(d, v, t)| format!(
+                            "{v} at {:?} off {d:.2e} t {t:.4}",
+                            pool.verts[v]
+                        ))
+                        .collect::<Vec<_>>()
+                );
+            }
+            for &e in &face_edges[fa] {
+                let ed = &pool.edges[e];
+                eprintln!(
+                    "  edge {e} of {fa}: {:?} → {:?}",
+                    ed.curve.point(ed.t[0]),
+                    ed.curve.point(ed.t[1])
+                );
             }
         }
         // The pair's tolerance: the larger of the faces' (new vertices and edges carry it).
@@ -4242,8 +4597,18 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                         continue;
                     }
                     let (p, q) = (&pool.edges[g[i]], &pool.edges[g[j]]);
-                    // (Within the pieces' own tolerances too: edges a fuzzy gap apart are one.)
-                    let within = (run_tol * 10.0).max(p.tol.min(q.tol));
+                    // (Within the pieces' own tolerances too: edges a fuzzy gap apart are one.
+                    // Two exact curves (lines, circles, ellipses) are one only within a run
+                    // tolerance and a half, not ten: two arcs between the same two crossings of
+                    // nearly tangent circles, a lens 2 µm thick where parallel cylinders overlap
+                    // by a hair, are the lens's two sides. Fitted curves keep the ten.)
+                    let exact = |c: &Curve| !matches!(c, Curve::Nurbs(_));
+                    let k = if exact(&p.curve) && exact(&q.curve) {
+                        1.5
+                    } else {
+                        10.0
+                    };
+                    let within = (run_tol * k).max(p.tol.min(q.tol));
                     let ok = [0.25, 0.5, 0.75].iter().all(|f| {
                         let m = q.curve.point(q.t[0] + (q.t[1] - q.t[0]) * f);
                         on_curve(&p.curve, p.t[0], p.t[1], &m, within).is_some()
@@ -4264,6 +4629,16 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                     continue;
                 }
                 let pm = ed.curve.point((ed.t[0] + ed.t[1]) * 0.5);
+                if super::env_flag!("CADRS_BOOL_DEBUG")
+                    && std::env::var("CADRS_FACE_DEBUG").is_ok_and(|d| d == fi.to_string())
+                {
+                    eprintln!(
+                        "  on face {fi}: piece {pe} of edge {e}, {:?} → {:?}, middle {:?}",
+                        ed.curve.point(ed.t[0]),
+                        ed.curve.point(ed.t[1]),
+                        point_in_face(&faces[fi], &pm, run_tol)
+                    );
+                }
                 if point_in_face(&faces[fi], &pm, run_tol) == InFace::Inside
                     && !cuts[fi].contains(&pe)
                 {
@@ -4293,9 +4668,13 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                         continue;
                     }
                     let pm = ed.curve.point((ed.t[0] + ed.t[1]) * 0.5);
-                    if point_in_face(&faces[fa], &pm, run_tol) == InFace::Inside
-                        && !cuts[fa].contains(&pe)
-                    {
+                    let where_ = point_in_face(&faces[fa], &pm, run_tol);
+                    if super::env_flag!("CADRS_BOOL_DEBUG") {
+                        eprintln!(
+                            "imprint {fb} on {fa}: piece {pe} of edge {e} middle {pm:?}: {where_:?}"
+                        );
+                    }
+                    if where_ == InFace::Inside && !cuts[fa].contains(&pe) {
                         cuts[fa].push(pe);
                     }
                 }
@@ -4479,14 +4858,56 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 res.faces.len(),
                 res.faces.iter().map(|l| l.len()).collect::<Vec<_>>()
             );
+            if std::env::var("CADRS_FACE_DEBUG").ok() == Some(fi.to_string()) {
+                let show = |a: &Arc| {
+                    let ed = &pool.edges[a.edge];
+                    let at = |f: f64| ed.curve.point(ed.t[0] + (ed.t[1] - ed.t[0]) * f);
+                    format!(
+                        "  edge {} cut {} {:?} → {:?} → {:?}",
+                        a.edge,
+                        a.cut,
+                        at(0.0),
+                        at(0.5),
+                        at(1.0)
+                    )
+                };
+                for l in &boundary {
+                    eprintln!(" loop:");
+                    for a in l {
+                        eprintln!("{}", show(a));
+                    }
+                }
+                eprintln!(" cuts:");
+                for a in &cut_arcs {
+                    eprintln!("{}", show(a));
+                }
+            }
         }
         (res.faces, arcs * arcs)
     };
+    // (With CADRS_PROFILE, each face whose split takes long named.)
+    let profiling = prof.on;
+    let timed_split = |fi: usize| {
+        let t = web_time::Instant::now();
+        let r = split_one(fi);
+        if profiling && t.elapsed().as_secs_f64() > 0.02 {
+            let size = match &faces[fi].surf {
+                Surface::Nurbs(n) => format!("{} × {} knots", n.ku.len(), n.kv.len()),
+                s => format!("{:?}", s.kind()),
+            };
+            eprintln!(
+                "[profile] split of face {fi} ({size}, {} cuts): {:.1} ms",
+                cuts[fi].len(),
+                t.elapsed().as_secs_f64() * 1e3
+            );
+        }
+        r
+    };
     let cut_faces = cuts.iter().filter(|c| !c.is_empty()).count();
     let split: Vec<(Vec<Vec<Vec<Arc>>>, u64)> = if super::par::threads_for_some(cut_faces) {
-        (0..faces.len()).into_par_iter().map(split_one).collect()
+        (0..faces.len()).into_par_iter().map(timed_split).collect()
     } else {
-        (0..faces.len()).map(split_one).collect()
+        (0..faces.len()).map(timed_split).collect()
     };
     for (fi, (made, spent)) in split.into_iter().enumerate() {
         work.spend(spent, "face splitting")?;
@@ -4551,6 +4972,19 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 let key = (a.edge, lo.to_bits(), hi.to_bits(), faces[*fi].owner);
                 match by_piece.get(&key) {
                     Some(&other) => {
+                        if super::env_flag!("CADRS_BOOL_DEBUG")
+                            && let Ok(d) = std::env::var("CADRS_FACE_DEBUG")
+                        {
+                            let (fo, _) = &subs[other];
+                            if d == "all" || d == fi.to_string() || d == fo.to_string() {
+                                let ed = &pool.edges[a.edge];
+                                eprintln!(
+                                    "join sub {k} (face {fi}) and sub {other} (face {fo}) across edge {} {:?}",
+                                    a.edge,
+                                    ed.curve.point(0.5 * (lo + hi))
+                                );
+                            }
+                        }
                         let (x, y) = (root(&mut parent, k), root(&mut parent, other));
                         if x != y {
                             parent[x] = y;
@@ -4593,7 +5027,11 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 // (A face coinciding with g over part: where this sub-face lies on g's surface.)
                 let on_g = !partial.contains(&(fi, g))
                     || gf.surf.distance(&p) <= (run_tol * 10.0).max(f.tol).max(gf.tol);
-                if on_g && point_in_face(gf, &p, run_tol * 10.0) != InFace::Outside {
+                // (Within the tolerance of g's boundary only: a sliver of this face between
+                // g's edge and its own a few tolerances wide (boxes whose sides are 1e-5
+                // apart) has its middle off g by more than the tolerance.)
+                let near = run_tol.max(f.tol).max(gf.tol);
+                if on_g && point_in_face(gf, &p, near) != InFace::Outside {
                     let (gu, gv) = gf.surf.project(&p, Some((gf.uv_center.x, gf.uv_center.y)));
                     let gn = gf.surf.normal(gu, gv) * if gf.sense { 1.0 } else { -1.0 };
                     // Against a sheet an overlap is an overlap, whichever way the faces face.
@@ -4733,7 +5171,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         let a_side = f.owner == 0;
         if super::env_flag!("CADRS_BOOL_DEBUG") {
             eprintln!(
-                "sub of face {fi} (owner {} orig {}): {} loops, class {class:?} at {:?}{}",
+                "sub {sk} of face {fi} (owner {} orig {}): {} loops, class {class:?} at {:?}{} group {g}",
                 f.owner,
                 f.orig,
                 loops.len(),
@@ -4859,21 +5297,13 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     // searched for as the Full check measures them. An edge lying off a face by more (an
     // input's edge off its own face, which the cut faces keep) has that recorded, up to a part
     // in 10⁵ of the result's size.
-    out.fit_tolerances_searched(run_tol * 10.0);
+    let gaps = out.fit_tolerances_searched_gaps(run_tol * 10.0);
     prof.mark("fit");
     let wide = 1e-5 * out.bbox().diagonal();
-    for fi in 0..out.faces.len() {
-        // (As `fit_tolerances_searched` just measured most of them: kept by what they are of.)
-        let mut surface_key = None;
-        for c in out.faces[fi].loops.iter().flatten() {
-            let e = &out.edges[c.edge];
-            if e.degenerate {
-                continue;
-            }
-            let g = super::topo::pcurve_gap_kept(e, &c.pc, &out.faces[fi].surf, &mut surface_key);
-            if g <= wide && g * 1.01 > e.tol {
-                out.edges[c.edge].tol = g * 1.01;
-            }
+    // (The gaps just measured: only tolerances changed since.)
+    for (e, g) in gaps.into_iter().flatten() {
+        if g <= wide && g * 1.01 > out.edges[e].tol {
+            out.edges[e].tol = g * 1.01;
         }
     }
     // Likewise a vertex where the p-curves of a loop meet a hair apart (up to the same part
@@ -4919,6 +5349,13 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     if super::env_flag!("CADRS_BOOL_WORK") {
         eprintln!("boolean work: {}", work.done);
     }
+    if super::env_flag!("CADRS_BOOL_DEBUG")
+        && std::env::var("CADRS_FACE_DEBUG").is_ok_and(|d| d == "out")
+    {
+        for (i, (f, src)) in out.faces.iter().zip(&from).enumerate() {
+            eprintln!("out face {i} {:?} from {src:?}", f.surf.kind());
+        }
+    }
     assemble_shells(&mut out)?;
     prof.mark("shells");
     touch_voids(&mut out, run_tol * 10.0);
@@ -4957,6 +5394,39 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             ))
         });
         if let Some(why) = why {
+            if super::env_flag!("CADRS_BOOL_DEBUG") {
+                // The uses of each edge used more than twice, and the input faces they're on.
+                let mut uses: Vec<Vec<usize>> = vec![Vec::new(); out.edges.len()];
+                for (f, face) in out.faces.iter().enumerate() {
+                    for c in face.loops.iter().flatten() {
+                        uses[c.edge].push(f);
+                    }
+                }
+                for (e, fs) in uses
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, fs)| fs.len() > 2)
+                    .take(4)
+                {
+                    let what: Vec<String> = fs
+                        .iter()
+                        .map(|&f| {
+                            format!("{f} {:?} from {:?}", out.faces[f].surf.kind(), from.get(f))
+                        })
+                        .collect();
+                    eprintln!(
+                        "edge {e} ({:?}) used by: {}",
+                        out.edges[e].curve.point(out.edges[e].mid_t()),
+                        what.join("; ")
+                    );
+                }
+            }
+            prof.mark("checks");
+            prof.report(&format!(
+                "{op:?} (refused) {}×{} faces",
+                a.faces.len(),
+                b.faces.len()
+            ));
             return Err(KernelError::BooleanFailed {
                 stage: "validity",
                 why: format!("the boolean's result is invalid: {why}"),
@@ -5192,15 +5662,41 @@ fn drop_empty_solids(
                     .any(|&(w, y)| w == 1 && pairs.contains(&(x, y)))
             })
     };
-    let volumes: Vec<Option<f64>> = (0..b.solids.len())
+    // (Each suspect's volume and area: a sliver is thin as well as small.)
+    let measured: Vec<Option<(f64, f64)>> = (0..b.solids.len())
         .map(|si| {
             suspect(si).then(|| {
-                super::mass::body_volume(&super::kernel::subset(b, &b.solid_faces(si), true))
+                let m = super::mass::body_mass(&super::kernel::subset(b, &b.solid_faces(si), true));
+                (m.volume, m.surface_area)
             })
         })
         .collect();
+    let volumes: Vec<Option<f64>> = measured.iter().map(|m| m.map(|(v, _)| v)).collect();
+    // (Against the solid's own size, by its edges: the box of a cap shaved off a ball is the
+    // ball's by the sphere's poles, and a cap 1e-5 high a millimetre across held nothing by it.)
+    let own_size = |si: usize| {
+        let mut bb = Bbox::empty();
+        for f in b.solid_faces(si) {
+            for c in b.faces[f].loops.iter().flatten() {
+                let e = &b.edges[c.edge];
+                if !e.degenerate {
+                    bb.union(&curve_bbox(&e.curve, e.t[0], e.t[1]));
+                }
+            }
+        }
+        if bb.is_empty() { size } else { bb.diagonal() }
+    };
     let empty: Vec<usize> = (0..b.solids.len())
-        .filter(|&si| volumes[si].is_some_and(|v| v.abs() <= tol::REL * size * size * size))
+        .filter(|&si| {
+            measured[si].is_some_and(|(v, area)| {
+                let size = own_size(si);
+                // (And thinner than the tolerance on average, twice its volume over its area: the
+                // lens two parallel cylinders overlapping by 2 µm share runs their length, its
+                // volume nothing against that length cubed, and is a solid 3 µm thick.)
+                v.abs() <= tol::REL * size * size * size
+                    && (area <= 0.0 || 2.0 * v.abs() / area <= tol::POINT)
+            })
+        })
         .collect();
     if empty.is_empty() {
         return (false, volumes);
@@ -5274,11 +5770,15 @@ pub fn split_nonmanifold(b: &mut Body) {
             }
         }
     }
+    // The least step into a face (of the body's size; once, roughly: an exact box of a body of
+    // thousands of curved faces for each use of an edge was most of a cut's time).
+    let mut least: Option<f64> = None;
     for e in 0..ne {
         let u = uses[e].clone();
         if u.len() <= 2 || b.edges[e].degenerate {
             continue;
         }
+        let least = *least.get_or_insert_with(|| 1e-4 * tol::small(rough_bbox(b).diagonal()));
         let ed = b.edges[e].clone();
         let tm = ed.mid_t();
         let p = ed.point(tm);
@@ -5300,9 +5800,7 @@ pub fn split_nonmanifold(b: &mut Body) {
             let len = (ed.t[1] - ed.t[0]).abs() * ed.curve.tangent(tm).norm();
             // (Not `clamp`: a NaN length takes 0.05 here.)
             #[allow(clippy::manual_clamp)]
-            let step = (len * 1e-2)
-                .min(0.05)
-                .max(1e-4 * tol::small(b.bbox().diagonal()));
+            let step = (len * 1e-2).min(0.05).max(least);
             let (pu, su, sv) = f.surf.d1(uv.x, uv.y);
             let g = su * perp.x + sv * perp.y;
             let sgn = if g.dot(&w0) >= 0.0 { 1.0 } else { -1.0 };
@@ -5352,6 +5850,90 @@ pub fn split_nonmanifold(b: &mut Body) {
     }
 }
 
+/// Joins twin edges: two edges each used by one face only, the other way round, between the
+/// same two vertices along the same points (whatever their curves' parametrization). Faces of
+/// the two inputs that lie on one another (a cut by a tool whose start is where an earlier cut
+/// by it ended: a coincident cylinder and plane) can each bring the seam between them as an
+/// edge of their own; the shell is closed by their being one. The one face's use is moved onto
+/// the other's edge, its p-curve made again on its surface from where the old one started.
+fn join_twin_edges(b: &mut Body) {
+    if super::env_flag!("CADRS_NO_TWINS") {
+        return;
+    }
+    let mut uses: Vec<Vec<(usize, usize, usize)>> = vec![Vec::new(); b.edges.len()];
+    for (f, face) in b.faces.iter().enumerate() {
+        for (l, lp) in face.loops.iter().enumerate() {
+            for (i, c) in lp.iter().enumerate() {
+                if let Some(u) = uses.get_mut(c.edge) {
+                    u.push((f, l, i));
+                }
+            }
+        }
+    }
+    // The edges used once, by their (sorted) vertices.
+    let mut by_ends: HashMap<[usize; 2], Vec<usize>> = HashMap::default();
+    for (e, u) in uses.iter().enumerate() {
+        let edge = &b.edges[e];
+        if u.len() == 1 && !edge.degenerate && edge.v[0] != edge.v[1] {
+            let mut v = edge.v;
+            v.sort_unstable();
+            by_ends.entry(v).or_default().push(e);
+        }
+    }
+    // The same points: `y` passes within tolerance of `x`'s points along it.
+    let same = |x: &Edge, y: &Edge| {
+        let tol = x.tol.max(y.tol).max(super::tol::POINT);
+        [0.25, 0.5, 0.75].iter().all(|f| {
+            let p = x.point(x.t[0] + (x.t[1] - x.t[0]) * f);
+            let t = y.curve.closest(&p, y.t[0], y.t[1]);
+            (y.point(t) - p).norm() <= tol
+        })
+    };
+    let mut moves: Vec<(usize, usize, usize, usize, bool)> = Vec::new();
+    for es in by_ends.values() {
+        let mut taken = vec![false; es.len()];
+        for i in 0..es.len() {
+            for j in i + 1..es.len() {
+                if taken[i] || taken[j] {
+                    continue;
+                }
+                let (a, c) = (es[i], es[j]);
+                let ((fa, la, ia), (fc, lc, ic)) = (uses[a][0], uses[c][0]);
+                if fa == fc {
+                    continue;
+                }
+                let (ea, ec) = (&b.edges[a], &b.edges[c]);
+                // Along `a`, which way the face using `c` runs.
+                let along = (ea.v == ec.v) == b.faces[fc].loops[lc][ic].fwd;
+                let a_fwd = b.faces[fa].loops[la][ia].fwd;
+                if along != a_fwd && same(ea, ec) {
+                    taken[i] = true;
+                    taken[j] = true;
+                    moves.push((fc, lc, ic, a, along));
+                }
+            }
+        }
+    }
+    for (f, l, i, a, fwd) in moves {
+        if super::env_flag!("CADRS_BOOL_DEBUG") {
+            eprintln!(
+                "twin edges: face {f} loop {l} coedge {i} moved from edge {} onto {a}",
+                b.faces[f].loops[l][i].edge
+            );
+        }
+        let old = &b.faces[f].loops[l][i];
+        let e_old = &b.edges[old.edge];
+        let start = old.pc.point(super::topo::co_range(e_old, old.fwd).0);
+        let pc = super::unify::pc_from(
+            &b.faces[f].surf,
+            &b.edges[a],
+            fwd,
+            Some(P2::new(start.x, start.y)),
+        );
+        b.faces[f].loops[l][i] = Coedge { edge: a, fwd, pc };
+    }
+}
+
 /// Groups faces into shells by shared edges and shells into solids (outer shells and voids).
 pub fn assemble_shells(b: &mut Body) -> Result<()> {
     assemble_shells_with(b, None)
@@ -5361,6 +5943,7 @@ pub fn assemble_shells(b: &mut Body) -> Result<()> {
 /// ([`super::mass::faces_volume_terms`]): a shell's volume, which tells an outer shell from a
 /// void, is then their sum and not integrated again.
 pub(crate) fn assemble_shells_with(b: &mut Body, terms: Option<&[f64]>) -> Result<()> {
+    join_twin_edges(b);
     split_nonmanifold(b);
     let ef = b.edge_faces();
     let nf = b.faces.len();
@@ -5409,7 +5992,19 @@ pub(crate) fn assemble_shells_with(b: &mut Body, terms: Option<&[f64]>) -> Resul
             if *u != 0 && !b.edges[*e].degenerate {
                 closed = false;
                 if super::env_flag!("CADRS_BOOL_DEBUG") {
-                    eprintln!("open edge {e}: uses {u}, {:?}", b.edges[*e]);
+                    let ed = &b.edges[*e];
+                    let mut users: Vec<String> = Vec::new();
+                    for &f in &fs {
+                        for c in b.faces[f].loops.iter().flatten().filter(|c| c.edge == *e) {
+                            users.push(format!("{f} {:?} fwd {}", b.faces[f].surf.kind(), c.fwd));
+                        }
+                    }
+                    eprintln!(
+                        "open edge {e}: uses {u}, {:?} → {:?}, by {}",
+                        ed.curve.point(ed.t[0]),
+                        ed.curve.point(ed.t[1]),
+                        users.join("; ")
+                    );
                 }
             }
         }
@@ -5427,6 +6022,8 @@ pub(crate) fn assemble_shells_with(b: &mut Body, terms: Option<&[f64]>) -> Resul
     // times). Each is sized by its box, for picking the smallest one around a void. (Their
     // volumes tell the same, but integrating faces cut by long intersection curves is slow.)
     if outer.len() > 1 {
+        // (The body's box and its faces' made once here, not once per shell.)
+        let _boxes = super::topo::keep_boxes(&[&*b]);
         let polys: Vec<Vec<Vec<P2>>> = b
             .faces
             .iter()
@@ -5450,7 +6047,7 @@ pub(crate) fn assemble_shells_with(b: &mut Body, terms: Option<&[f64]>) -> Resul
                     if let Some(terms) = terms {
                         return fs.iter().map(|&f| terms[f]).sum::<f64>() >= 0.0;
                     }
-                    let shift = b.bbox().center().coords;
+                    let shift = rough_bbox(b).center().coords;
                     fs.iter()
                         .map(|&f| super::mass::face_integrals(b, &b.faces[f], &shift)[4])
                         .sum::<f64>()
@@ -5513,11 +6110,24 @@ pub(crate) fn assemble_shells_with(b: &mut Body, terms: Option<&[f64]>) -> Resul
     Ok(())
 }
 
+/// A box about `b` from its vertices and its edges' middles: for a size or a centre (its exact
+/// box trims every curved face, slow on a body of thousands). Its exact box when it has no edges.
+fn rough_bbox(b: &Body) -> Bbox {
+    let mut bb = Bbox::empty();
+    for v in &b.verts {
+        bb.add(&v.p);
+    }
+    for e in b.edges.iter().filter(|e| !e.degenerate) {
+        bb.add(&e.point(0.5 * (e.t[0] + e.t[1])));
+    }
+    if bb.is_empty() { b.bbox() } else { bb }
+}
+
 /// Whether the faces of a closed shell point out of the region it encloses, by ray parity:
 /// from points inside a few of its faces, rays along the outward normal (and two tilts of it)
 /// cross the shell an even number of times when they do. None when the votes don't settle it.
 fn shell_points_out(b: &Body, faces: &[usize], polys: &[Vec<Vec<P2>>]) -> Option<bool> {
-    let size = b.bbox().diagonal().max(tol::ROUNDOFF);
+    let size = rough_bbox(b).diagonal().max(tol::ROUNDOFF);
     // Rays against this shell's faces only, each where the line comes to its box.
     let mut boxes = vec![Bbox::empty(); b.faces.len()];
     for &f in faces {

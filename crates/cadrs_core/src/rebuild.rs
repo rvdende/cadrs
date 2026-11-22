@@ -4449,7 +4449,7 @@ mod kernel_ops {
         ) -> Result<Vec<Placed>, String> {
             let op = id.0;
             let mut placed: Vec<Placed> = Vec::new();
-            let mut release = |this: &mut Self, pieces: &[Placed]| {
+            let release = |this: &mut Self, pieces: &[Placed]| {
                 for (_, p) in pieces {
                     this.kernel.release(p.body);
                 }
@@ -4463,9 +4463,9 @@ mod kernel_ops {
                     return Err(no_body(t));
                 };
                 // `kind` of the target with `with`: its pieces (none for an empty result).
-                let mut pieces_of = |this: &mut Self,
-                                     kind: BoolOp,
-                                     with: &[&PartState]|
+                let pieces_of = |this: &mut Self,
+                                 kind: BoolOp,
+                                 with: &[&PartState]|
                  -> Result<Vec<Piece>, String> {
                     let bodies: Vec<BodyId> = with.iter().filter_map(|w| w.body).collect();
                     let mut inputs: Vec<(BodyId, &BodyNames)> = vec![(body, &*t.names)];

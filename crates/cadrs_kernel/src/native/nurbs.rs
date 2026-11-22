@@ -1350,6 +1350,10 @@ impl NurbsCurve {
     /// between distinct knots its ends and its p + 1 homogeneous control points, in order. One
     /// pass over the curve, where splitting it at each span's ends copies it whole each time.
     pub fn bezier_segments(&self) -> Vec<(f64, f64, Vec<H>)> {
+        // (A5.6 walks clamped knots: a periodic curve's uniform knots run past its domain.)
+        if !self.is_clamped() {
+            return self.clamped().bezier_segments();
+        }
         let p = self.degree;
         let (u, pw) = (&self.knots, &self.cps);
         let n = pw.len() - 1;
@@ -1397,6 +1401,44 @@ impl NurbsCurve {
             }
         }
         out
+    }
+
+    /// Whether the first and the last `p + 1` knots are each one value, so that the curve starts
+    /// on its first pole and ends on its last.
+    pub fn is_clamped(&self) -> bool {
+        let (p, u) = (self.degree, &self.knots);
+        let m = u.len() - 1;
+        u[..=p].iter().all(|&k| k == u[0]) && u[m - p..].iter().all(|&k| k == u[m])
+    }
+
+    /// The same curve over the same domain with clamped knots: each end of the domain inserted
+    /// until it is a knot `p` times (A5.1), the poles and knots past it dropped. The knots outside
+    /// the domain of an unclamped curve, a periodic one's say, do not shape it inside.
+    pub fn clamped(&self) -> Self {
+        if self.is_clamped() {
+            return self.clone();
+        }
+        let p = self.degree;
+        let (lo, hi) = self.range();
+        let mut c = self.clone();
+        for t in [lo, hi] {
+            while c.knots.iter().filter(|&&k| k == t).count() < p {
+                c = c.insert_knot(t);
+            }
+        }
+        // The last knot at `lo` is `k`: the curve starts on pole `k − p`. The first knot at `hi`
+        // is `j`: it ends on pole `j − 1`.
+        let k = c.knots.iter().rposition(|&x| x == lo).unwrap_or(p);
+        let j = c.knots.iter().position(|&x| x == hi).unwrap_or(c.cps.len());
+        let (first, last) = (k.saturating_sub(p), j.saturating_sub(1));
+        let mut knots = vec![lo];
+        knots.extend_from_slice(&c.knots[first + 1..=last + p]);
+        knots.push(hi);
+        Self {
+            degree: p,
+            knots,
+            cps: c.cps[first..=last].to_vec(),
+        }
     }
 
     /// Inserts the knot `u` once (A5.1).
@@ -2269,6 +2311,34 @@ impl IsoV<'_> {
 mod tests {
     use super::*;
 
+    /// A periodic cubic (uniform knots, its first three poles repeated at its end) clamped is the
+    /// same curve over the same domain, and its Bézier segments cover the domain alone.
+    #[test]
+    fn a_periodic_curve_clamped_is_the_same_curve() {
+        let ring: Vec<P3> = (0..12)
+            .map(|i| {
+                let a = i as f64 * std::f64::consts::TAU / 12.0;
+                let r = if i % 2 == 0 { 3.0 } else { 2.0 };
+                P3::new(r * a.cos(), r * a.sin(), 0.0)
+            })
+            .collect();
+        let cps: Vec<H> = ring.iter().chain(&ring[..3]).map(|p| hom(p, 1.0)).collect();
+        let knots: Vec<f64> = (0..cps.len() + 4).map(|i| i as f64).collect();
+        let c = NurbsCurve::new(3, knots, cps).unwrap();
+        assert!(!c.is_clamped());
+        let k = c.clamped();
+        assert!(k.is_clamped());
+        assert_eq!(k.range(), c.range());
+        let (lo, hi) = c.range();
+        for i in 0..=100 {
+            let u = lo + (hi - lo) * i as f64 / 100.0;
+            assert!((k.point(u) - c.point(u)).norm() < 1e-12, "at {u}");
+        }
+        let segs = c.bezier_segments();
+        assert_eq!(segs.len(), 12);
+        assert_eq!((segs[0].0, segs[11].1), (lo, hi));
+    }
+
     /// A helix's cubic through 400 of its points keeps within 1e-7 of them with most of its
     /// knots removed, its ends where they were.
     #[test]
@@ -2475,6 +2545,35 @@ mod tests {
             let bez = NurbsCurve::new(4, [vec![*a; 5], vec![*b; 5]].concat(), q.clone()).unwrap();
             let m = 0.37 * a + 0.63 * b;
             assert!((bez.point(m) - c.point(m)).norm() < 1e-12);
+        }
+    }
+
+    /// An unclamped curve (a periodic cubic's uniform knots, as a closed spline outline has)
+    /// splits into the Bézier segments of its range, each the curve there.
+    #[test]
+    fn bezier_segments_of_an_unclamped_curve() {
+        let knots: Vec<f64> = (0..18).map(f64::from).collect();
+        let cps: Vec<H> = (0..14)
+            .map(|i| {
+                let t = i as f64 * std::f64::consts::TAU / 11.0;
+                hom(&P3::new(3.0 * t.cos(), 4.0 * t.sin(), 0.0), 1.0)
+            })
+            .collect();
+        let c = NurbsCurve::new(3, knots, cps).unwrap();
+        let (lo, hi) = c.range();
+        assert!(!c.is_clamped());
+        let clamped = c.clamped();
+        assert_eq!(clamped.range(), (lo, hi));
+        let segs = c.bezier_segments();
+        assert_eq!(segs.len(), 11);
+        assert_eq!((segs[0].0, segs[10].1), (lo, hi));
+        for (a, b, q) in &segs {
+            let bez = NurbsCurve::new(3, [vec![*a; 4], vec![*b; 4]].concat(), q.clone()).unwrap();
+            for s in [0.0, 0.37, 1.0] {
+                let t = a + (b - a) * s;
+                assert!((bez.point(t) - c.point(t)).norm() < 1e-12);
+                assert!((clamped.point(t) - c.point(t)).norm() < 1e-12);
+            }
         }
     }
 

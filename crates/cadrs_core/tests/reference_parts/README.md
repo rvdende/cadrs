@@ -7,12 +7,25 @@ list by `tests/reference_parts.rs` and compared (issue #101). The results table 
 ## `solidcraft/`
 
 The reference cases of [SolidCraft](https://github.com/tangency-labs/solidcraft)
-(`tests/oracle/`, at commit `0870d6474a87a2cc03707080f848cfd81017f943`), copied unchanged:
+(`tests/oracle/`, at commit `fad397d325f573fe4bb0f64df70671407cb8acae`), copied unchanged:
 each case's `recipe.json` (the part, in SolidCraft's recipe format) and `expected.json` (what
 it must measure: closed-form values, or values from an independent FreeCAD build, as its
-`source` says). Their `reference.stl` files are not copied yet. Copyright (c) 2026 SolidCraft
-contributors, used under the MIT License (`solidcraft/LICENSE-MIT`); SolidCraft is also
-available under the Apache License 2.0.
+`source` says), with one exception below. Their `reference.stl` files (and `24-user-parameters`'
+`sweep.json`) are not copied yet.
+Copyright (c) 2026 SolidCraft contributors, used under the MIT License
+(`solidcraft/LICENSE-MIT`); SolidCraft is also available under the Apache License 2.0.
+
+Where SolidCraft changed a case's expected values for a convention of its own rather than a
+geometric error, cadrs keeps the earlier values:
+
+- `17-loft` keeps its FreeCAD values (from commit `0870d647`). SolidCraft's analytic values
+  match each side of the square to one rational quarter of the circle's B-spline (35080.73 mm³),
+  which depends on how the circle is stored; FreeCAD, like cadrs, matches by angle
+  (35125.50 mm³, which the closed form gives to 9 digits).
+
+`75-sm-bracket-holes` takes SolidCraft's new values (its two flanges now meet in a mitred
+corner, both bends ending at the base's corner) and fails: cadrs makes no corner between flanges
+of two features, so the first flange still runs the full 80 mm.
 
 The recipe format and its conventions are described in SolidCraft's `tests/oracle/README.md`.
 The translation into cadrs features follows SolidCraft's own reader

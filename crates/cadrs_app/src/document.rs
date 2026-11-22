@@ -722,6 +722,12 @@ fn right_strip(vp: &mut ChildSpawnerCommands, t: &Theme) {
                 "named-positions",
                 "shell-doc-named-positions",
             ),
+            // Issue #278: the assembly set up as a machine for CAM.
+            (
+                "panel-machine-builder",
+                "machine-builder",
+                "asm-machine-builder-tooltip",
+            ),
         ] {
             s.spawn(
                 ToolButton::new(name, icon_name)

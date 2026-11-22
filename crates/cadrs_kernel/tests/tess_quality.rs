@@ -478,6 +478,7 @@ fn a_face_pinched_to_no_width_along_a_line() {
         outward: false,
         hollow: false,
         sharp: true,
+        nothing_hollowed: Default::default(),
     };
     let cup = k.shell_with(block, &spec).unwrap().bodies[0];
     let back = k

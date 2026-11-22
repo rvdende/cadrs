@@ -3331,6 +3331,7 @@ cam-go-to-end = 转到末尾
 cam-reset = 重置
 cam-close-the-preview = 关闭预览
 cam-drag-through-program = 拖动以在程序中移动
+cam-simulated-ahead = 预先模拟：绿色可播放，蓝色计算中，红色尚未计算，琥珀色未能精确切削
 cam-toolpath = 刀具路径
 cam-pause-on-collision = 碰撞时暂停
 cam-readout-feed = 进给 { $feed } mm/min

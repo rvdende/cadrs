@@ -3318,6 +3318,7 @@ fn debug_carried() {
                 axis: Vector3::y_axis(),
                 major: 1.5,
                 minor: 0.5,
+                spindle: Default::default(),
             })
             .unwrap()
             .bodies[0]
@@ -3952,6 +3953,7 @@ fn debug_tumbling_tori() {
                 axis: Vector3::z_axis(),
                 major: 1.0,
                 minor: tube,
+                spindle: Default::default(),
             })?
             .bodies[0];
         let (l, a) = (lean.to_radians(), tilt.to_radians());
@@ -4438,6 +4440,7 @@ fn debug_tumbling_tori() {
                     axis: Vector3::y_axis(),
                     major: 1.5,
                     minor: 0.5,
+                    spindle: Default::default(),
                 })
                 .unwrap()
                 .bodies[0];
@@ -4469,6 +4472,7 @@ fn debug_tumbling_tori() {
                     axis: nalgebra::Unit::new_normalize(Vector3::new(lean.sin(), 0.0, lean.cos())),
                     major: 3.0,
                     minor: 1.0,
+                    spindle: Default::default(),
                 })
                 .unwrap()
                 .bodies[0];

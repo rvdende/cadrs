@@ -935,8 +935,14 @@ fn steps_at(dom: &Domain, u: f64, v: f64, defl: f64, ang: f64) -> (f64, f64) {
     (step(cu, ku), step(cv, kv))
 }
 
-/// The most lines a face's grid has each way (its intervals: one more than its lines).
-const GRID_MAX: usize = 400;
+/// The most lines a face's grid has each way (its intervals: one more than its lines). (Enough
+/// for a ball 5 m across meshed to a hundredth of a millimetre, about 1 600 lines round; the
+/// grid's stations follow the bends, so only a face that needs them gets them; a cylinder 37 m
+/// across needs 4 300. [`GRID_POINTS`] bounds the whole grid.)
+const GRID_MAX: usize = 8192;
+
+/// The most points a face's grid has in all (about 30 MB of triangles a face).
+const GRID_POINTS: usize = 1 << 20;
 
 /// Where a face's grid lines cross `lo..hi` (strictly inside it): each step as long as `step`
 /// allows over the stretch it spans, so the lines are close only where the surface bends
@@ -1114,6 +1120,32 @@ fn seed_grid(
     }
     if us.is_empty() || vs.is_empty() {
         return grid;
+    }
+    // At most GRID_POINTS points in all: the lines thinned evenly where they would take more (a
+    // face 300 m long at a hundredth of a millimetre, its rows two columns apart, asked for tens
+    // of millions), the denser way first.
+    if us.len() * vs.len() > GRID_POINTS {
+        let (nu, nv) = (us.len(), vs.len());
+        let keep = |lines: &mut Vec<f64>, b: (f64, f64), n: usize| {
+            if lines.len() > n {
+                *lines = uniform(b.0, b.1, n.max(1) + 1);
+            }
+        };
+        if nv >= nu {
+            keep(
+                &mut vs,
+                vbox,
+                (GRID_POINTS / nu).max(GRID_POINTS / GRID_MAX),
+            );
+            keep(&mut us, ubox, GRID_POINTS / vs.len().max(1));
+        } else {
+            keep(
+                &mut us,
+                ubox,
+                (GRID_POINTS / nv).max(GRID_POINTS / GRID_MAX),
+            );
+            keep(&mut vs, vbox, GRID_POINTS / us.len().max(1));
+        }
     }
     // Each line's distance to its nearer neighbour (or the box's side).
     let gaps = |s: &[f64], b: (f64, f64)| -> Vec<f64> {
@@ -1633,6 +1665,12 @@ fn mesh_face_split(
             } else {
                 (scale.0 * r, scale.1)
             }
+        } else if cu.is_finite() && cu > 0.0 && !cv.is_finite() {
+            // Straight along v (a cylinder, a cone, an extrusion): its rows 64 columns apart
+            // ([`seed_grid`]) drawn 2 apart, so Delaunay joins points along the rulings, which
+            // are exact, and not a ruling's two ends the boundary pinches to a point many columns
+            // over (between two equal cylinders' ellipses: millimetres of sag a metre out).
+            (scale.0, scale.1 / 32.0)
         } else {
             scale
         }
@@ -2051,7 +2089,91 @@ fn triangulate(s: &Setup, p: &TessParams, refine: bool) -> FaceMesh {
         }
     }
     out.indices = tris;
+    pole_normals(&mut out, &f.surf, sign);
     out
+}
+
+/// Normals at a pole or an apex, where the surface's derivatives vanish: each triangle there
+/// takes the normal the surface tends to coming in along it (a hair from the vertex towards the
+/// triangle's middle). Where those agree (a sphere's pole) the vertex keeps the one; where they
+/// differ (a cone's apex, a normal per generator) each triangle gets its own copy of the vertex.
+fn pole_normals(out: &mut FaceMesh, surf: &Surface, sign: f64) {
+    let normal = |u: f64, v: f64| -> Option<V3> {
+        let (_, su, sv) = surf.d1(u, v);
+        let n = su.cross(&sv);
+        let (l, lu, lv) = (n.norm(), su.norm(), sv.norm());
+        (l.is_finite() && l > 1e-10 * lu * lv && l > tol::TINY && lu > 1e-9 * lv && lv > 1e-9 * lu)
+            .then(|| n / l * sign)
+    };
+    let pole: Vec<bool> = out
+        .uvs
+        .iter()
+        .map(|uv| normal(uv.x, uv.y).is_none())
+        .collect();
+    if !pole.iter().any(|&p| p) {
+        return;
+    }
+    // Each use of a pole vertex: (triangle, corner, the normal coming in along the triangle).
+    let mut uses: HashMap<u32, Vec<(usize, usize, V3)>> = HashMap::default();
+    for (k, t) in out.indices.iter().enumerate() {
+        for c in 0..3 {
+            let i = t[c] as usize;
+            if !pole[i] {
+                continue;
+            }
+            let mid = (out.uvs[t[0] as usize].coords
+                + out.uvs[t[1] as usize].coords
+                + out.uvs[t[2] as usize].coords)
+                / 3.0;
+            // (The parameter the pole collapses, the triangle's own: a cone's apex has one u
+            // for every generator, so a step a millionth of the way in would keep that u, and
+            // every triangle the one normal. The other a hair in from the pole.)
+            // (Its value the middle of the triangle's other two corners': the pole's own is any.)
+            let p0 = out.uvs[i].coords;
+            // (The short way round on a periodic surface: corners either side of its seam.)
+            let (b, d) = (
+                out.uvs[t[(c + 1) % 3] as usize].coords,
+                out.uvs[t[(c + 2) % 3] as usize].coords,
+            );
+            let half = |x: f64, y: f64, periodic: bool| {
+                let p = std::f64::consts::TAU;
+                if periodic && (x - y).abs() > 0.5 * p {
+                    let (x, y) = if x < y { (x + p, y) } else { (x, y + p) };
+                    0.5 * (x + y)
+                } else {
+                    0.5 * (x + y)
+                }
+            };
+            let side = nalgebra::Vector2::new(
+                half(b.x, d.x, surf.u_periodic()),
+                half(b.y, d.y, surf.v_periodic()),
+            );
+            let (_, su, sv) = surf.d1(p0.x, p0.y);
+            let at = if su.norm() <= sv.norm() {
+                nalgebra::Vector2::new(side.x, p0.y + (mid.y - p0.y) * 1e-6)
+            } else {
+                nalgebra::Vector2::new(p0.x + (mid.x - p0.x) * 1e-6, side.y)
+            };
+            if let Some(n) = normal(at.x, at.y) {
+                uses.entry(t[c]).or_default().push((k, c, n));
+            }
+        }
+    }
+    for (i, us) in uses {
+        let Some(&(_, _, n0)) = us.first() else {
+            continue;
+        };
+        if us.iter().all(|u| u.2.angle(&n0) < 1e-5) {
+            out.normals[i as usize] = n0;
+            continue;
+        }
+        for (k, c, n) in us {
+            out.positions.push(out.positions[i as usize]);
+            out.normals.push(n);
+            out.uvs.push(out.uvs[i as usize]);
+            out.indices[k][c] = (out.positions.len() - 1) as u32;
+        }
+    }
 }
 
 /// The vertices along boundary segment `a`–`b` in the triangulation, `a` first and `b` last:

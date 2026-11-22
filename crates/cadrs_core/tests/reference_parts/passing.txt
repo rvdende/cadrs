@@ -72,7 +72,6 @@
 72-sm-contour-flange
 73-sm-hem
 74-sm-unfold-refold
-75-sm-bracket-holes
 76-sm-thickness-variant
 77-fillet-variable-linear
 78-fillet-variable-to-zero
@@ -81,6 +80,16 @@
 81-fillet-spline-radius
 82-thin-extrude-frame
 83-boundary-loop-thicken
+84-plate-two-bores
+85-plate-width-100
+86-plate-first-bore-12
+87-plate-bore1-deleted
+88-plate-four-bores
+94-plate-four-rounded-corners
+95-plate-rounded-top-chamfer
 156-face-chamfer-fillet
 156-wall-as-thick-as-chamfer
+237-shell-keeps-a-wall-rising-past-its-opening
+237-shell-outward-keeps-the-walls-past-its-opening
+race-car-surfaces
 slanted-cut-cylinder-foot

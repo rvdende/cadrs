@@ -646,7 +646,8 @@ fn edge_seeds(
             starts.push((t0, f0));
         }
         if (g0 < 0.0) != (g1 < 0.0) && g0 != 0.0 && g1 != 0.0 {
-            // Illinois regula falsi on the signed distance.
+            // Illinois regula falsi on the signed distance, to within the tolerance: the root
+            // is then solved exactly, with the other surface's parameters (`edge_newton`).
             let (mut a, mut b, mut ga, mut gb) = (t0, t1, g0, g1);
             let mut h = f0;
             let mut side = 0;
@@ -660,7 +661,7 @@ fn edge_seeds(
                 let (u, v) = at(m);
                 let (gm, fm) = sdist(o, &s.eval(u, v), h);
                 h = fm;
-                if gm.abs() < ctx.tol * 1e-3 || (b - a).abs() < 1e-14 * (1.0 + a.abs()) {
+                if gm.abs() < ctx.tol || (b - a).abs() < 1e-14 * (1.0 + a.abs()) {
                     a = m;
                     b = m;
                     break;
@@ -928,8 +929,13 @@ fn correct(ctx: &Ctx, s: Pt, extra: &Extra<'_>) -> Option<Pt> {
 /// points of a traced curve), from their parameters' average: where a fitted curve between
 /// them should pass.
 pub fn refine_between(a: &Surface, b: &Surface, p0: &Pt, p1: &Pt, q: &P3) -> Option<Pt> {
+    refine_at(a, b, p0, p1, q, 0.5)
+}
+
+/// [`refine_between`] from the parameters the fraction `f` of the way from `p0`'s to `p1`'s.
+pub fn refine_at(a: &Surface, b: &Surface, p0: &Pt, p1: &Pt, q: &P3, f: f64) -> Option<Pt> {
     let d = (p1.p - p0.p).try_normalize(tol::TINY)?;
-    let mid = |x: (f64, f64), y: (f64, f64)| (0.5 * (x.0 + y.0), 0.5 * (x.1 + y.1));
+    let mid = |x: (f64, f64), y: (f64, f64)| (x.0 + f * (y.0 - x.0), x.1 + f * (y.1 - x.1));
     let start = Pt {
         p: *q,
         a: mid(p0.a, p1.a),
@@ -1007,6 +1013,27 @@ fn traced_at(
                     && t.is_none_or(|t| l < tol::TINY || (t.dot(&ab) / l).abs() > 0.9)
             })
             .map(|k| (i, k))
+    })
+}
+
+/// Whether `p` is where an open curve traced before ends, but on the far side of a box from
+/// its end (a surface closed across its box without being periodic, as an extrusion of a closed
+/// spline: the curve left by the seam and runs on from the other side, a piece still to trace).
+fn across_an_end(ctx: &Ctx, p: &Pt, traced: &[(Traced, Bbox)]) -> bool {
+    let near = 1e-6 * ctx.size + 10.0 * ctx.tol;
+    let (da, db) = (&ctx.a.bx, &ctx.bt.bx);
+    let half = [da.du() / 2.0, da.dv() / 2.0, db.du() / 2.0, db.dv() / 2.0];
+    let x = [p.a.0, p.a.1, p.b.0, p.b.1];
+    traced.iter().any(|(c, _)| {
+        !c.closed
+            && [c.pts.first(), c.pts.last()]
+                .into_iter()
+                .flatten()
+                .any(|q| {
+                    let y = [q.a.0, q.a.1, q.b.0, q.b.1];
+                    (q.p - p.p).norm() < near
+                        && (0..4).any(|k| half[k].is_finite() && (x[k] - y[k]).abs() > half[k])
+                })
     })
 }
 
@@ -1592,7 +1619,7 @@ pub fn intersect_stats(
             continue;
         }
         let t = tangent(&ctx, &sd);
-        if on_traced(&ctx, &sd.p, t.as_ref(), &traced) {
+        if on_traced(&ctx, &sd.p, t.as_ref(), &traced) && !across_an_end(&ctx, &sd, &traced) {
             continue;
         }
         if let Some(c) = march(&ctx, sd, &traced) {

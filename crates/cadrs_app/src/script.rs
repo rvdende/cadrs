@@ -527,6 +527,14 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
             });
             continue;
         }
+        // The Machine Builder's steps (`crate::assembly::machine_builder::script`).
+        if let Some(rest) = m.0.trim().strip_prefix("machine ") {
+            let rest = rest.to_string();
+            commands.queue(move |world: &mut World| {
+                crate::assembly::machine_builder::script(world, &rest)
+            });
+            continue;
+        }
         // CAM Studio's own steps (`crate::cam::script`).
         if let Some(rest) = m.0.trim().strip_prefix("cam ") {
             let rest = rest.to_string();

@@ -60,7 +60,7 @@ pub fn adaptive(input: &Input) -> Result<Toolpath, String> {
     let mut deep_free: Vec<Region> = vec![Vec::new(); deep.len()];
     let mut above = top;
     for ((z, under), solid) in plan.into_iter().zip(&solids) {
-        let free = free_centres_in(input, solid, &limit);
+        let free = free_centres_in(input, z, solid, &limit);
         // The material at this level: the stock, or what the operations before left; at a
         // fine level, only what the deep level under it couldn't reach.
         let mut material = match input.rest.filter(|_| p.rest) {

@@ -2516,13 +2516,23 @@ fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> R
         if (1..=2).contains(&steps.len()) {
             match super::sweep_faces::by_faces(k, &b, steps) {
                 Ok(r) => return Ok(r),
-                Err(e) => exact = Some(e),
+                Err(e) => {
+                    declined(format!("its faces' sweeps: {e}"));
+                    exact = Some(e);
+                }
             }
         }
         // A ball screwed: exactly, its tube and end balls trimmed where they pass through
         // one another.
         if exact.is_some()
             && let Some(Ok(r)) = screwed_ball(k, &b, steps)
+        {
+            return Ok(r);
+        }
+        // A ball carried by any other motion: the pipe of its radius along its centre's path,
+        // a ball at each end, where that path nowhere curves tighter than the ball.
+        if exact.is_some()
+            && let Some(Ok(r)) = ball_along(k, &b, steps)
         {
             return Ok(r);
         }
@@ -3812,6 +3822,62 @@ fn cut_by_pieces(
 ) -> Option<Vec<BodyId>> {
     // (Pieces that only touch glued first: one cut each group, none along a tangency.)
     let pieces = super::sweep_faces::glued_groups(k, pieces);
+    if pieces.len() > 1 {
+        let groups = pieces.clone();
+        if let Some(r) = cut_by_groups(k, targets, pieces) {
+            return Some(r);
+        }
+        // The groups in other orders (each order a different body for each cut to meet: one
+        // that left a sliver another doesn't), up to six.
+        let n = groups.len();
+        let mut orders: Vec<Vec<usize>> = vec![(0..n).rev().collect()];
+        if n == 3 {
+            orders.extend([vec![1, 0, 2], vec![1, 2, 0], vec![0, 2, 1], vec![2, 0, 1]]);
+        }
+        for order in orders {
+            let ordered: Vec<Body> = order.iter().map(|&i| groups[i].clone()).collect();
+            if let Some(r) = cut_by_groups(k, targets, ordered) {
+                if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
+                    eprintln!("swept cut: the groups cut in the order {order:?}");
+                }
+                return Some(r);
+            }
+        }
+        // The groups united into one tool first, then cut at once: cut one after another, a
+        // group's start lies on the end the group before left in the target (a cap on a cap,
+        // the other way round), which the target then has to lose again; united, the caps
+        // meet as two solids face to face do, and the target never sees them.
+        declined("the sweep's pieces cut one after another");
+        let ids: Vec<BodyId> = groups.into_iter().map(|g| k.insert(g)).collect();
+        let united = k.boolean(crate::BoolOp::Union, ids[0], &ids[1..]);
+        for id in &ids {
+            k.release(*id);
+        }
+        if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
+            eprintln!(
+                "swept cut: the groups united: {:?}",
+                united
+                    .as_ref()
+                    .map(|u| u.bodies.iter().map(|&b| k.sound(b)).collect::<Vec<_>>())
+            );
+        }
+        let tool = united
+            .ok()
+            .filter(|u| u.bodies.len() == 1 && k.sound(u.bodies[0]))?;
+        let one = std::sync::Arc::clone(k.get(tool.bodies[0]).ok()?);
+        k.release(tool.bodies[0]);
+        return cut_by_groups(k, targets, vec![(*one).clone()]);
+    }
+    cut_by_groups(k, targets, pieces)
+}
+
+/// The bodies `targets` less each of `pieces` (glued groups) in turn; None when a cut fails or
+/// leaves a body that isn't sound.
+fn cut_by_groups(
+    k: &mut NativeKernel,
+    targets: &[BodyId],
+    pieces: Vec<Body>,
+) -> Option<Vec<BodyId>> {
     if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
         eprintln!("swept cut: {} groups of pieces", pieces.len());
     }
@@ -3841,6 +3907,10 @@ fn cut_by_pieces(
                     next.extend(c.bodies);
                 }
                 r => {
+                    match &r {
+                        Ok(_) => declined("a swept piece's cut left a body that isn't sound"),
+                        Err(e) => declined(format!("a swept piece's cut failed: {e}")),
+                    }
                     if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
                         match &r {
                             Ok(c) => eprintln!(
@@ -3877,7 +3947,6 @@ fn cut_by_pieces(
     Some(acc)
 }
 
-/// [`crate::Kernel::cut_swept`].
 /// [`cut_swept`] at each of `copies` places of the tool a whole turn apart about the target's
 /// axis (the second turn's): a gear's every tooth space, cut by a motion that doesn't repeat
 /// (a face mill's roll). Generated exactly, one plug made and its copies subtracted together,
@@ -4358,7 +4427,116 @@ fn cut_ball_pass(
     }
 }
 
+thread_local! {
+    /// Set while a cut is to be made only by the exact ways ([`exact_only`]).
+    static EXACT_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Why the exact ways declined the sweep or cut being made ([`declined`]), for the line
+    /// logged when it is meshed instead.
+    static DECLINED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Notes why an exact way declined the sweep or cut being made (the first few are kept).
+pub(crate) fn declined(why: impl std::fmt::Display) {
+    DECLINED.with(|d| {
+        let mut d = d.borrow_mut();
+        if d.len() < 6 {
+            d.push(why.to_string());
+        }
+    });
+}
+
+/// Forgets the reasons noted ([`declined`]): at the start of a sweep or cut asked of the
+/// kernel.
+pub(crate) fn clear_declined() {
+    DECLINED.with(|d| d.borrow_mut().clear());
+}
+
+/// The reasons noted, in one line.
+fn reasons() -> String {
+    DECLINED.with(|d| {
+        let d = d.borrow();
+        if d.is_empty() {
+            "none of the exact ways takes it".to_string()
+        } else {
+            d.join("; ")
+        }
+    })
+}
+
+/// Refused where only exact cuts are wanted ([`exact_only`]); else logged, a line on standard
+/// error, as every fall back to a mesh is (`what`: what is meshed).
+fn meshing(what: &str) -> Result<()> {
+    if EXACT_ONLY.with(|e| e.get()) {
+        return Err(KernelError::OperationFailed(format!(
+            "{what} not made exactly: {}",
+            reasons()
+        )));
+    }
+    eprintln!("cadrs_kernel: {what} meshed, not exact: {}", reasons());
+    Ok(())
+}
+
+/// Runs `f` with [`cut_swept`]'s meshed fallback off: a cut none of the exact ways takes
+/// fails instead ([`crate::Kernel::cut_swept_exact`]).
+pub fn exact_only<T>(f: impl FnOnce() -> T) -> T {
+    let was = EXACT_ONLY.with(|e| e.replace(true));
+    let r = f();
+    EXACT_ONLY.with(|e| e.set(was));
+    r
+}
+
+/// How far a motion of one turn about one axis turns (radians): a turn or a screw, a rigid
+/// motion of one turn step (and slides). `None` for any other: two turns about lines apart (a
+/// generated cut, which keeps its own faces) or none.
+fn one_turn(motion: &SolidMotion) -> Option<f64> {
+    match motion {
+        SolidMotion::Climb { from, to, .. } => Some((to - from).abs()),
+        SolidMotion::Rigid { steps } => {
+            let turns: Vec<f64> = steps
+                .iter()
+                .filter_map(|s| match s {
+                    RigidStep::Turn { from, to, .. } => Some((to - from).abs()),
+                    RigidStep::Slide { .. } => None,
+                })
+                .collect();
+            match turns.as_slice() {
+                [t] => Some(*t),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// [`crate::Kernel::cut_swept`].
 pub fn cut_swept(
+    k: &mut NativeKernel,
+    target: BodyId,
+    tool: BodyId,
+    motion: &SolidMotion,
+) -> Result<OpResult> {
+    // Under one turn past half of one, the target's faces of revolution cut into quarter
+    // turns, as the tool's sweep is: a groove wound round a cylinder a turn or more would
+    // otherwise be one loop of that face over a period or more of it, which no face holds.
+    if one_turn(motion).is_some_and(|t| t > std::f64::consts::PI)
+        && std::env::var_os("CADRS_NO_QUARTERS").is_none()
+    {
+        let mut t = (**k.get(target)?).clone();
+        let before = t.faces.len();
+        if super::heal_split::split_angle(&mut t, std::f64::consts::FRAC_PI_2).is_ok()
+            && t.faces.len() > before
+        {
+            let split = k.insert(t);
+            let r = cut_swept_in(k, split, tool, motion);
+            k.release(split);
+            return r;
+        }
+    }
+    cut_swept_in(k, target, tool, motion)
+}
+
+/// [`cut_swept`], the target's faces as they are.
+fn cut_swept_in(
     k: &mut NativeKernel,
     target: BodyId,
     tool: BodyId,
@@ -4555,6 +4733,7 @@ pub fn cut_swept(
         return Ok(r);
     }
     // Else meshed: inside the target, in none of the tool's places.
+    meshing("a cut by a swept solid")?;
     let t = std::sync::Arc::clone(k.get(target)?);
     let tdist =
         super::mesh_distance::MeshDistance::new(&t, 1e-3 * t.bbox().diagonal().max(tol::POINT))
@@ -5376,6 +5555,10 @@ fn meshed_within(
     place: &Place,
     within: Within,
 ) -> Result<OpResult> {
+    // (A cut's fall back is logged where its target is measured, before this.)
+    if within.is_none() {
+        meshing("a sweep of a solid")?;
+    }
     let t0 = web_time::Instant::now();
     // The places sampled, and their inverses (world to body: x ↦ R x − e): 160, or more for a
     // motion that moves the body's box farther than a fiftieth of its reach between them.
@@ -5484,4 +5667,136 @@ fn meshed_within(
         }
     };
     contour(k, lo, n, h, &depth, t0)
+}
+
+/// A ball carried by the rigid motion `steps`: everything within its radius of the path its
+/// centre runs along, which is the pipe of that radius about the path with a ball at each end
+/// wherever the path curves no tighter than the radius (else the pipe folds: None). The path,
+/// a turn and slide's trochoid or any other, is a cubic B-spline through it, its points doubled
+/// until it keeps within 1e-9 of the size at every span's middle.
+fn ball_along(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Result<OpResult>> {
+    if crate::native::env_flag!("CADRS_NO_BALL_ALONG") {
+        return None;
+    }
+    let (centre, r) = match b.faces.first().map(|f| &f.surf) {
+        Some(Surface::Sphere { f, r }) => (f.o, *r),
+        _ => return None,
+    };
+    let same = |s: &Surface| {
+        matches!(s, Surface::Sphere { f, r: q }
+            if (f.o - centre).norm() <= tol::POINT && (q - r).abs() <= tol::POINT)
+    };
+    if !b.faces.iter().all(|f| same(&f.surf)) || b.solids.len() != 1 {
+        return None;
+    }
+    let at = |t: f64| {
+        let (rot, d) = rigid_at(steps, t);
+        P3::from(rot * centre.coords + d)
+    };
+    let (p0, p1) = (at(0.0), at(1.0));
+    let size = (p1 - p0).norm() + r;
+    let mut n = 64usize;
+    let curve = loop {
+        let ts: Vec<f64> = (0..=n).map(|i| i as f64 / n as f64).collect();
+        let xs: Vec<P3> = ts.iter().map(|&t| at(t)).collect();
+        let h = 1e-6;
+        let d0 = (at(h) - at(0.0)) / h;
+        let d1 = (at(1.0) - at(1.0 - h)) / h;
+        let c = super::nurbs::NurbsCurve::interpolate(&xs, &ts, 3, Some(d0), Some(d1));
+        let worst = (0..n)
+            .map(|i| {
+                let t = (i as f64 + 0.5) / n as f64;
+                (c.point(t) - at(t)).norm()
+            })
+            .fold(0.0, f64::max);
+        if worst <= 1e-9 * size {
+            break c;
+        }
+        if n >= 4096 {
+            return None;
+        }
+        n *= 2;
+    };
+    let cv = Curve::Nurbs(std::sync::Arc::new(curve.clone()));
+    // Nowhere tighter than the ball, nor still (a turn about the centre itself: no path).
+    let m = 4 * n;
+    for i in 0..=m {
+        let t = i as f64 / m as f64;
+        let (_, d1, d2) = cv.d2(t);
+        let sp = d1.norm();
+        if sp <= 1e-9 * size {
+            return None;
+        }
+        let kappa = d1.cross(&d2).norm() / (sp * sp * sp);
+        if kappa * r >= 1.0 - 1e-6 {
+            return None;
+        }
+    }
+    let poles: Vec<P3> = curve
+        .cps
+        .iter()
+        .map(|h| P3::new(h.x / h.w, h.y / h.w, h.z / h.w))
+        .collect();
+    let tangent = cv.d2(0.0).1.normalize();
+    let x = any_perpendicular(&tangent).normalize();
+    let plane = crate::Plane {
+        origin: p0,
+        x_dir: nalgebra::Unit::new_normalize(x),
+        normal: nalgebra::Unit::new_normalize(tangent),
+    };
+    let region = crate::Region {
+        outer: crate::Loop {
+            curves: vec![crate::Curve2::Circle {
+                center: nalgebra::Point2::origin(),
+                radius: r,
+                source: None,
+            }],
+        },
+        holes: vec![],
+        source: None,
+    };
+    let spec = SweepSpec {
+        body: BodyKind::Solid,
+        path: vec![PathCurve::Bspline(crate::Bspline3 {
+            degree: curve.degree,
+            knots: curve.knots.clone(),
+            poles,
+            weights: Vec::new(),
+        })],
+        control: SweepControl::None,
+        faces: Vec::new(),
+        corners: Default::default(),
+    };
+    let run = |k: &mut NativeKernel| -> Result<OpResult> {
+        let tube = k.sweep_with(&crate::Profile::new(plane, vec![region.clone()]), &spec)?;
+        let [tube] = tube.bodies[..] else {
+            return Err(KernelError::InvalidResult {
+                op: "sweep",
+                why: "a ball's pipe isn't one body".into(),
+            });
+        };
+        let mut cur = tube;
+        for p in [p0, p1] {
+            let ball = k.primitive(&Primitive::ball(p, r))?.bodies[0];
+            let joined = k.boolean(BoolOp::Union, cur, &[ball]);
+            k.release(ball);
+            if cur != tube {
+                k.release(cur);
+            }
+            let joined = joined?;
+            let [j] = joined.bodies[..] else {
+                return Err(KernelError::InvalidResult {
+                    op: "sweep",
+                    why: "a ball's pipe and its end balls aren't one body".into(),
+                });
+            };
+            cur = j;
+        }
+        k.release(tube);
+        Ok(OpResult {
+            bodies: vec![cur],
+            ..Default::default()
+        })
+    };
+    Some(run(k))
 }

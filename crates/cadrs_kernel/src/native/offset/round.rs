@@ -479,6 +479,23 @@ pub fn offset_rounded(b: &Body, dist: &[f64]) -> Result<Body> {
     if let Some(g) = crate::native::sweep_solid::grown_revolved(b, d) {
         return Ok(g);
     }
+    // Every edge between faces that meet tangentially (a body offset already, its rounds
+    // joining its faces smoothly): each face moved along its normal meets its neighbours'
+    // moves exactly, so the sharp offset is the rounded one, without the slabs, tubes and balls.
+    // (No torus grown past its hole: its offset crosses itself, the body inside out.)
+    let crosses_itself = b.faces.iter().any(|f| {
+        matches!(f.surf, Surface::Torus { rmaj, rmin, .. } if rmin + d >= rmaj * (1.0 - tol::REL))
+    });
+    if !b.edges.is_empty()
+        && !crosses_itself
+        && (0..b.edges.len())
+            .all(|e| b.edges[e].degenerate || matches!(dihedral(b, e), Dihedral::Smooth))
+        && let Ok(g) = super::sharp::offset_sharp(b, dist)
+        && g.check_with(crate::native::topo::CheckLevel::Full)
+            .is_empty()
+    {
+        return Ok(g);
+    }
     grown_except(&merged(b), d, &[], &[])
 }
 
@@ -773,6 +790,14 @@ fn grown_except(b: &Body, d: f64, cut: &[(P3, V3)], skip: &[usize]) -> Result<Bo
     {
         return Ok(g);
     }
+    // A polyhedron with concave edges: cut into convex parts, each grown whole (growing is
+    // the union of its parts' growths), a boolean or two in place of dozens.
+    if skip.is_empty()
+        && cut.is_empty()
+        && let Some(g) = grown_by_convex_parts(b, d, 0)
+    {
+        return Ok(g);
+    }
     let size = 1.0 + b.bbox().diagonal();
     let ef = b.edge_faces();
     // The cut plane each face lies on.
@@ -856,12 +881,121 @@ fn grown_except(b: &Body, d: f64, cut: &[(P3, V3)], skip: &[usize]) -> Result<Bo
     combine_all(b.clone(), pieces, BoolOp::Union)
 }
 
+/// A polyhedron (every face a plane) grown by a ball of radius `d` as the union of its convex
+/// parts grown ([`grown_convex`]): a ball's sum distributes over a union, so the body cut along
+/// the plane of a face beside a concave edge grows as its two sides grown and united. None
+/// where a face isn't a plane, a side falls apart or isn't one solid, or the parts go deeper
+/// than a few cuts (the slabs', tubes' and balls' union then).
+fn grown_by_convex_parts(b: &Body, d: f64, depth: usize) -> Option<Body> {
+    if let Some(g) = grown_convex(b, d) {
+        return Some(g);
+    }
+    if depth >= 4
+        || b.solids.len() != 1
+        || !b
+            .faces
+            .iter()
+            .all(|f| matches!(f.surf, Surface::Plane { .. }))
+    {
+        return None;
+    }
+    let ef = b.edge_faces();
+    let e = (0..b.edges.len()).find(|&e| matches!(dihedral(b, e), Dihedral::Concave))?;
+    let f = *ef[e].first()?;
+    let Surface::Plane { f: fr } = &b.faces[f].surf else {
+        return None;
+    };
+    let n = fr.x.cross(&fr.y).normalize() * if b.faces[f].sense { 1.0 } else { -1.0 };
+    let size = 4.0 * (1.0 + b.bbox().diagonal());
+    let mut grown: Vec<Body> = Vec::new();
+    for side in [n, -n] {
+        let h = half_space(fr.o, side, size).ok()?;
+        let part = boolean_bodies(b, &h, BoolOp::Intersect).ok()?.body;
+        if part.solids.len() != 1 {
+            return None;
+        }
+        grown.push(grown_by_convex_parts(&part, d, depth + 1)?);
+    }
+    let [x, y] = <[Body; 2]>::try_from(grown).ok()?;
+    let out = boolean_bodies(&x, &y, BoolOp::Union).ok()?.body;
+    (out.solids.len() == 1
+        && out
+            .check_with(crate::native::topo::CheckLevel::Full)
+            .is_empty())
+    .then_some(out)
+}
+
 /// `acc` combined (`op`) with each piece in turn. A piece whose boolean fails is tried again
 /// after the others: a union or difference of pieces doesn't depend on their order, but the
 /// touching configurations a boolean has to settle do (a slab's side against a neighbour's
 /// slab, not yet merged into a face). Fails when a round makes no progress, or after three
 /// rounds (each failed boolean costs its retries).
-fn combine_all(mut acc: Body, mut todo: Vec<(Body, String)>, op: BoolOp) -> Result<Body> {
+fn combine_all(acc: Body, todo: Vec<(Body, String)>, op: BoolOp) -> Result<Body> {
+    // (Batched first; where that ends in failure, piece by piece from the start, as before.)
+    // (Only for many: a few pieces gain little, and a batch that fails costs a second pass.)
+    if op == BoolOp::Union
+        && todo.len() >= 8
+        && !crate::native::env_flag!("CADRS_NO_PIECE_BATCHES")
+        && let Ok(r) = combine_batched(acc.clone(), todo.clone(), op)
+    {
+        return Ok(r);
+    }
+    combine_in_turn(acc, todo, op)
+}
+
+/// A batch of an offset's pieces that keep apart: the body they make together, their boxes,
+/// and the pieces themselves (to go one at a time if the batch fails).
+type Batch = (Body, Vec<Bbox>, Vec<(Body, String)>);
+
+/// [`combine_all`] with the pieces that keep apart united in batches.
+fn combine_batched(mut acc: Body, mut todo: Vec<(Body, String)>, op: BoolOp) -> Result<Body> {
+    // A union of many pieces: those whose boxes keep apart taken together, as one body of
+    // several solids, so each union pays its fixed costs (the body's import, its check) once
+    // for the batch, not once a piece. A batch the union fails on goes piece by piece below.
+    {
+        let pad = 1e-6 * (1.0 + acc.bbox().diagonal());
+        let mut batches: Vec<Batch> = Vec::new();
+        for (piece, what) in todo {
+            // (Grown by a hundredth of its size too: a box sampled off curved faces may fall a
+            // hair short of them, and two pieces that touch must not share a batch.)
+            let bb0 = piece.bbox();
+            let bb = bb0.grow(pad + 0.01 * bb0.diagonal());
+            match batches
+                .iter_mut()
+                .find(|b| !b.1.iter().any(|o| o.overlaps(&bb)))
+            {
+                Some(b) => {
+                    b.0.append(&piece);
+                    b.1.push(bb);
+                    b.2.push((piece, what));
+                }
+                None => batches.push((piece.clone(), vec![bb], vec![(piece, what)])),
+            }
+        }
+        let mut left = Vec::new();
+        for (body, _, pieces) in batches {
+            if pieces.len() == 1 {
+                left.extend(pieces);
+                continue;
+            }
+            match combine(&acc, &body, op, &|| {
+                format!("{} pieces together", pieces.len())
+            }) {
+                Ok(r) => acc = r,
+                Err(_) => left.extend(pieces),
+            }
+        }
+        todo = left;
+        if todo.is_empty() {
+            return Ok(acc);
+        }
+    }
+    combine_in_turn(acc, todo, op)
+}
+
+/// The pieces united (or subtracted) one at a time, those that fail tried again after the
+/// rest, up to three rounds.
+fn combine_in_turn(mut acc: Body, mut todo: Vec<(Body, String)>, op: BoolOp) -> Result<Body> {
     for round in 0..3 {
         let n = todo.len();
         let mut left = Vec::new();
@@ -946,8 +1080,23 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
     }
     let result = if let Some(Ok(cavity)) = supported {
         match cavity {
-            // Every point of the body within t of a wall: nothing is hollowed.
-            None => cur,
+            // Every point of the body within t of a wall: nothing is hollowed. Walls that just
+            // meet (a hair thinner would leave a cavity) leave the body itself; a shell thicker
+            // than that is as thick as the part, and refused, as Onshape and OCCT do.
+            None => {
+                let thinner = t - tol::POINT.max(1e-9 * size);
+                let meeting =
+                    || matches!(cavity_of_supports(&b, &remove, thinner), Some(Ok(Some(_))));
+                match spec.nothing_hollowed {
+                    NothingHollowed::Unchanged => cur,
+                    NothingHollowed::RefuseUnlessMeeting if meeting() => cur,
+                    _ => {
+                        return Err(KernelError::InvalidParameter(
+                            "The shell is as thick as the part, nothing is left to hollow; reduce the thickness".into(),
+                        ));
+                    }
+                }
+            }
             Some(cavity) => cur.apply(
                 &cavity,
                 &vec![Vec::new(); cavity.faces.len()],
@@ -993,8 +1142,14 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
         // everywhere): build it from its definition then. Each way of making the cavity is
         // tried in turn until the body less it comes out (a cavity flush with a removed face
         // shares that face with the body, which the boolean may not settle).
-        let concave =
-            (0..b.edges.len()).any(|e| !b.edges[e].degenerate && convex(&b, e) == Some(false));
+        // (An edge beside an opening has no wall on that side to round: the face moved in runs
+        // on to the opening's surface, as the sharp cavity has it. An L opened at its step.)
+        let ef = b.edge_faces();
+        let concave = (0..b.edges.len()).any(|e| {
+            !b.edges[e].degenerate
+                && convex(&b, e) == Some(false)
+                && ef[e].iter().all(|f| !remove.contains(f))
+        });
         let sharp = |x: &Vec<f64>| {
             super::sharp::offset_sharp(&b, x).and_then(|c| {
                 if crate::native::mass::body_volume(&c) > 0.0 {

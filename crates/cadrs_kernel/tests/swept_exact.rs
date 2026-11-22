@@ -64,6 +64,7 @@ fn a_leaning_ring_slid_past_its_fold_is_not_overfilled() {
             axis: nalgebra::Unit::new_normalize(Vector3::new(lean.sin(), 0.0, lean.cos())),
             major: 3.0,
             minor: 1.0,
+            spindle: Default::default(),
         })
         .unwrap()
         .bodies[0];
@@ -806,4 +807,180 @@ fn a_ball_screwed_round_a_tight_helix_is_exact() {
         off = off.max((from_arc - 2.0).abs());
     }
     assert!(off < 1e-5, "a point of the surface is {off} off");
+}
+
+/// A flat end mill (Ø1, pointing at the bar's axis, its tip 1 into a bar of radius 10)
+/// screwed half a turn round the bar, rising 6 a turn along it: a rotary roughing pass, as
+/// CAM's exact simulation cuts it. Its swept pieces are made exactly; cut from the bar they
+/// once left an open shell, and the cut fell back to a mesh (tens of thousands of facets,
+/// 18 s). The cut is exact, sound, and removes the volume the screw's places sweep in the bar
+/// (integrated here cell by cell), the same after a plunge to the depth first (the tool
+/// starting in its own hole).
+#[test]
+fn a_flat_end_mill_screwed_half_round_a_bar_is_cut_exactly() {
+    use std::f64::consts::{PI, TAU};
+    // The volume of the bar the screw's places cover: cylinder cells (ρ, φ, x) over where the
+    // groove can be, each in if some place of the mill holds its centre.
+    let lead = 6.0;
+    let inside = |x: f64, y: f64, z: f64| {
+        // The places with the point within the mill's x span (20 ± 0.5 once slid back).
+        let (t0, t1) = (
+            ((x - 20.5) * TAU / lead).max(0.0),
+            ((x - 19.5) * TAU / lead).min(PI),
+        );
+        (t1 >= t0)
+            && (0..=96).any(|i| {
+                let t = t0 + (t1 - t0) * i as f64 / 96.0;
+                let qx = x - lead * t / TAU;
+                let (qy, qz) = (y * t.cos() + z * t.sin(), -y * t.sin() + z * t.cos());
+                (qx - 20.0).powi(2) + qy * qy <= 0.25 && qz >= 9.0
+            })
+    };
+    let (nr, nphi, nx) = (24, 900, 120);
+    let (phi0, phi1, x0, x1) = (-0.1, PI + 0.1, 19.4, 23.6);
+    let (dr, dphi, dx) = (
+        1.0 / nr as f64,
+        (phi1 - phi0) / nphi as f64,
+        (x1 - x0) / nx as f64,
+    );
+    let mut expected = 0.0;
+    for i in 0..nr {
+        let r = 9.0 + (i as f64 + 0.5) * dr;
+        for j in 0..nphi {
+            let phi = phi0 + (j as f64 + 0.5) * dphi;
+            let (y, z) = (-r * phi.sin(), r * phi.cos());
+            for l in 0..nx {
+                if inside(x0 + (l as f64 + 0.5) * dx, y, z) {
+                    expected += r * dr * dphi * dx;
+                }
+            }
+        }
+    }
+    for plunge in [false, true] {
+        let mut k = NativeKernel::new();
+        let bar = k
+            .primitive(&Primitive::cylinder(
+                Point3::origin(),
+                Vector3::x(),
+                10.0,
+                60.0,
+            ))
+            .unwrap()
+            .first()
+            .unwrap();
+        let mill = k
+            .primitive(&Primitive::cylinder(
+                Point3::origin(),
+                Vector3::z(),
+                0.5,
+                6.0,
+            ))
+            .unwrap()
+            .first()
+            .unwrap();
+        let at = |k: &mut NativeKernel, z: f64| {
+            k.transform(mill, &Transform::translation(20.0, 0.0, z))
+                .unwrap()
+                .first()
+                .unwrap()
+        };
+        let mut body = bar;
+        if plunge {
+            let above = at(&mut k, 12.0);
+            body = k
+                .cut_swept_exact(
+                    body,
+                    above,
+                    &SolidMotion::slide(Vector3::new(0.0, 0.0, -3.0)),
+                )
+                .unwrap()
+                .first()
+                .unwrap();
+        }
+        let before = k.mass_properties(body).unwrap().volume;
+        let start = at(&mut k, 9.0);
+        let axis = Axis::new(Point3::origin(), Vector3::x());
+        let cut = k
+            .cut_swept_exact(body, start, &SolidMotion::helical(axis, lead, 0.0, PI))
+            .unwrap_or_else(|e| panic!("plunge {plunge}: {e}"))
+            .first()
+            .unwrap();
+        let b = k.get(cut).unwrap();
+        assert!(b.check().is_empty(), "plunge {plunge}: {:?}", b.check());
+        let faces = k.faces(cut).unwrap().len();
+        assert!(faces < 60, "plunge {plunge}: {faces} faces");
+        let removed = 10.0 * 10.0 * PI * 60.0 - k.mass_properties(cut).unwrap().volume;
+        // (The plunge's hole is within the groove's start.)
+        let plunged = 10.0 * 10.0 * PI * 60.0 - before;
+        assert!(
+            (removed - expected).abs() < 0.015 * expected,
+            "plunge {plunge}: removed {removed} (the plunge {plunged}), expected {expected}"
+        );
+    }
+}
+
+/// Rotary roughing as CAM's exact simulation cuts it: a flat end mill (Ø1, pointing at the
+/// bar's axis) screwed a whole turn round a bar of radius 13, then again a level deeper along
+/// the same helix. The second pass's walls lie on the first's (the mill's side moved along its
+/// own axis sweeps the same surface), and its start on the first's start. Swept a face at a
+/// time, the pieces of neighbouring leading faces ran into one another, and the cut, the union
+/// of the pieces and the sweep itself all left an open shell; the leading faces are now swept
+/// as one sheet. Both cuts exact and sound, the second taking more away.
+#[test]
+fn a_second_roughing_level_on_the_first_ones_walls_is_cut_exactly() {
+    use std::f64::consts::TAU;
+    let mut k = NativeKernel::new();
+    let mut body = k
+        .primitive(&Primitive::cylinder(
+            Point3::new(-62.5, 0.0, -13.0),
+            Vector3::x(),
+            13.0,
+            125.0,
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let half = Profile::of(
+        Plane::xz(0.0),
+        vec![Loop::new(vec![
+            Curve2::line([0.0, 0.0], [0.5, 0.0]),
+            Curve2::line([0.5, 0.0], [0.5, 6.0]),
+            Curve2::line([0.5, 6.0], [0.0, 6.0]),
+            Curve2::line([0.0, 6.0], [0.0, 0.0]),
+        ])],
+    );
+    let mill = k
+        .revolve_with(
+            &half,
+            &RevolveSpec::solid(Axis::new(Point3::origin(), Vector3::z()), None),
+        )
+        .unwrap()
+        .first()
+        .unwrap();
+    let axis = Axis::new(Point3::new(0.0, 0.0, -13.0), Vector3::x());
+    let mut removed = Vec::new();
+    for depth in [0.9, 1.9] {
+        let start = k
+            .transform(mill, &Transform::translation(16.5, 0.0, -depth))
+            .unwrap()
+            .first()
+            .unwrap();
+        let motion = SolidMotion::rigid(vec![
+            RigidStep::turn(axis, 0.0, TAU),
+            RigidStep::slide(Vector3::zeros(), Vector3::new(TAU, 0.0, 0.0)),
+        ]);
+        let before = k.mass_properties(body).unwrap().volume;
+        body = k
+            .cut_swept_exact(body, start, &motion)
+            .unwrap_or_else(|e| panic!("depth {depth}: {e}"))
+            .first()
+            .unwrap();
+        let b = k.get(body).unwrap();
+        assert!(b.check().is_empty(), "depth {depth}: {:?}", b.check());
+        removed.push(before - k.mass_properties(body).unwrap().volume);
+    }
+    // The first a groove 0.9 deep along a turn of the helix (about 1 × 0.9 × 2π·12.55 less its
+    // ends' rounding); the second as much again, a level below it.
+    assert!(removed[0] > 50.0 && removed[0] < 80.0, "{removed:?}");
+    assert!(removed[1] > 0.9 * removed[0], "{removed:?}");
 }

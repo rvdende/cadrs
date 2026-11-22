@@ -73,7 +73,8 @@ pub use projection::{
     ViewFrame,
 };
 pub use query::{
-    DistanceLocation, DistanceResult, DistanceTarget, SilhouetteCurve, SilhouetteView, UvRect,
+    DistanceLocation, DistanceResult, DistanceTarget, Interference, SilhouetteCurve,
+    SilhouetteView, UvRect,
 };
 pub use types::*;
 
@@ -345,6 +346,13 @@ pub enum HealOp {
         /// The largest width of a tail.
         max_width: f64,
     },
+    /// Faces no wider than `width` (two long edges side by side, the rest no longer than the
+    /// width) collapsed onto one of their long edges: the slivers cuts a few microns apart
+    /// leave (a simulated stock's, cut after cut), which later booleans would have to split.
+    Slivers {
+        /// The widest face collapsed.
+        width: f64,
+    },
 }
 
 /// A kernel session: it owns bodies and performs modeling operations on them.
@@ -508,6 +516,22 @@ pub trait Kernel {
     /// ```
     fn sweep_with(&mut self, profile: &Profile, spec: &SweepSpec) -> Result<OpResult>;
 
+    /// A screw ([`ScrewSpec`]): the profile, drawn in a plane through the axis and on one side
+    /// of it, turned about the axis while rising along it, as a thread is formed. Its volume is
+    /// the profile's first moment about the axis times the angle (the rise moves each section
+    /// within its own plane). Its side faces follow the true helicoids within 1e-9 of the
+    /// profile's reach (the helix sweep's screw, [`SweepControl::Helix`]).
+    ///
+    /// Refused when the angle isn't positive, the axis is not in the profile's plane, the
+    /// profile crosses the axis, or a turn rises less than the profile's extent along the axis
+    /// (its turns would collide).
+    fn screw(&mut self, profile: &Profile, spec: &ScrewSpec) -> Result<OpResult>;
+
+    /// A slab ([`SlabSpec`]): a block, flat underneath and on its four sides, under a B-spline
+    /// height field, its top that B-spline surface exactly. Refused for sizes or heights that
+    /// aren't positive, or knots that aren't clamped over [0, 1] to fit the heights.
+    fn slab(&mut self, spec: &SlabSpec) -> Result<OpResult>;
+
     /// A primitive solid: a box, cylinder, cone, sphere or torus. Its faces are generated
     /// (`StartCap`, `EndCap` and `ProfileCurve` origins with region 0), as a sketch's extrude or
     /// revolve would make them.
@@ -544,6 +568,20 @@ pub trait Kernel {
     ) -> Result<OpResult> {
         let _ = (target, tool, motion);
         Err(KernelError::Unsupported("cuts by swept solids"))
+    }
+
+    /// [`Kernel::cut_swept`] made only by its exact ways: where none of them takes the cut it
+    /// fails (`KernelError::Unsupported`) instead of falling back to the meshed cut, for a
+    /// caller that would rather cut in smaller pieces than have a stock of flat facets (a
+    /// CAM simulation's stock).
+    fn cut_swept_exact(
+        &mut self,
+        target: BodyId,
+        tool: BodyId,
+        motion: &SolidMotion,
+    ) -> Result<OpResult> {
+        let _ = (target, tool, motion);
+        Err(KernelError::Unsupported("exact cuts by swept solids"))
     }
 
     /// [`Kernel::cut_swept`] at each of `copies` places of the tool a whole turn apart about the
@@ -831,6 +869,20 @@ pub trait Kernel {
     /// # Ok::<(), cadrs_kernel::KernelError>(())
     /// ```
     fn classify(&self, body: BodyId, point: Point3<f64>, tol: f64) -> Result<PointClass>;
+
+    /// [`Kernel::classify`] for many points against one body: the body prepared once (its
+    /// faces' boxes and their tree) and the points classified together, in order.
+    fn classify_many(
+        &self,
+        body: BodyId,
+        points: &[Point3<f64>],
+        tol: f64,
+    ) -> Result<Vec<PointClass>> {
+        points
+            .iter()
+            .map(|p| self.classify(body, *p, tol))
+            .collect()
+    }
     /// Rounds `edges` (and the edges tangent to them) with a constant `radius`: the rolling-ball
     /// fillet, [`Kernel::fillet_with`] with [`FilletSpec::radius`].
     ///
@@ -884,6 +936,21 @@ pub trait Kernel {
     /// # Ok::<(), cadrs_kernel::KernelError>(())
     /// ```
     fn chamfer(&mut self, body: BodyId, edges: &[EdgeId], spec: ChamferSpec) -> Result<OpResult>;
+
+    /// Equal-distance chamfers with each edge (and its tangent chain) at its own distance
+    /// (`distances[i]` for `edges[i]`), in one operation, so that chamfers of unequal distances
+    /// meet at the corners they share: their planes trimmed against each other there. Away from
+    /// those corners each edge is cut as [`Kernel::chamfer`] cuts it at its distance. Without
+    /// `overflow` ([`ChamferOpts::overflow`]) each chamfer must fit the faces at its edge, or the
+    /// whole operation is refused.
+    fn chamfer_distances(
+        &mut self,
+        body: BodyId,
+        edges: &[EdgeId],
+        distances: &[f64],
+        overflow: bool,
+    ) -> Result<OpResult>;
+
     /// Hollows a solid inward to walls `thickness` thick, open where the faces `remove` were
     /// ([`Kernel::shell_with`] inward, rounded joins).
     ///
@@ -965,9 +1032,11 @@ pub trait Kernel {
     }
 
     /// Onshape's Full round fillet (P3.6, PS14.1): the `center` face is replaced by a round
-    /// tangent to the two `side` faces. Built for a flat rectangular centre face between two
-    /// parallel flat side faces at least half their distance apart deep (radius = half the
-    /// distance); anything else is an `InvalidParameter` error saying so.
+    /// tangent to it and to the two `side` faces, which stay where they are. Built for three
+    /// flat faces parallel to one direction (the round's axis): between parallel sides `w` apart
+    /// the half cylinder of radius `w/2`, between sides that lean toward the middle the arc of
+    /// the circle touching all three; the sides must reach down to the round's contacts.
+    /// Anything else is an `InvalidParameter` error saying so.
     fn full_round(
         &mut self,
         body: BodyId,
@@ -1126,6 +1195,63 @@ pub trait Kernel {
         setback: f64,
     ) -> Result<OpResult>;
 
+    /// A set-back fillet: the fillet of `edges` as [`Kernel::fillet_with`] by `spec`, except at
+    /// every corner where three of the edges meet. There each fillet stops `setback` short of
+    /// the corner, on its section square to its edge, and one smooth patch, meeting the three
+    /// fillets and the three faces tangentially, closes the corner. On each face the flat stops
+    /// short of where its two fillets' contact lines would cross (the rim on the face is the
+    /// quarter circle about that point through the fillets' ends); farther than `setback` from
+    /// the corner along the edges, each edge is as the fillet makes it. With
+    /// [`FilletProfile::Thumbweight`] the fillets meet their faces with their curvature.
+    /// Built for corners of three straight edges meeting square between planes (others are
+    /// `Unsupported`); `setback` must exceed the fillet's contact distance from its edge
+    /// (`InvalidParameter`). The patch is generated [`Origin::FromVertex`].
+    fn fillet_setback(
+        &mut self,
+        body: BodyId,
+        edges: &[EdgeId],
+        spec: &FilletSpec,
+        setback: f64,
+    ) -> Result<OpResult> {
+        let _ = (body, edges, spec, setback);
+        Err(KernelError::Unsupported("set-back fillets"))
+    }
+
+    /// A fillet between two faces of a solid that need not share an edge: a ball of `radius`
+    /// rolls touching the faces `face_a` and `face_b`, and what lies outside its path between
+    /// its two contact lines is removed, the faces between them included (a chamfer narrower
+    /// than the round goes, leaving the sharp edge's fillet of `radius`). The result is a solid.
+    /// Built for two planes (the ball's path is then the exact cylinder about the line where they
+    /// meet) with the solid convex across that line: other faces are `Unsupported`.
+    /// `InvalidParameter` for a radius that isn't above zero, one face named twice, or parallel
+    /// planes; `TooLarge` where the ball's contacts miss the faces. History: the round is
+    /// generated [`Origin::ProfileCurve`] with `region` `face_a` and `curve` `face_b`; the faces
+    /// kept are `modified`, those removed `deleted`.
+    fn fillet_faces(
+        &mut self,
+        body: BodyId,
+        face_a: FaceId,
+        face_b: FaceId,
+        radius: f64,
+    ) -> Result<OpResult> {
+        let _ = (body, face_a, face_b, radius);
+        Err(KernelError::Unsupported("fillets between faces"))
+    }
+
+    /// The outward unit normal of the body's boundary at each point within `within` of it,
+    /// where the boundary has a tangent plane: a face's normal, or on an edge or vertex the
+    /// faces' normal where they meet tangentially (a seam, a fillet's rail); None at a crease or
+    /// off the boundary.
+    fn boundary_normals(
+        &self,
+        body: BodyId,
+        points: &[Point3<f64>],
+        within: f64,
+    ) -> Result<Vec<Option<Vector3<f64>>>> {
+        let _ = (body, points, within);
+        Err(KernelError::Unsupported("boundary normals"))
+    }
+
     /// The outward unit normals of `face` at the points of it nearest `points` (exact, from
     /// its surface; Final: to check that faces meet tangentially).
     fn face_normals_at(
@@ -1174,6 +1300,11 @@ pub trait Kernel {
 
     /// Sews surface bodies that meet along their edges into one solid, if they close it.
     fn sew_solid(&mut self, bodies: &[BodyId], tol: f64) -> Result<OpResult>;
+    /// The faces a STEP file holds (loose: each its own surface with its own edges, as surface
+    /// exporters write them) sewn into one closed solid ([`Kernel::sew_solid`]): joined wherever
+    /// their edges lie within `tol` (positive) of each other, any face written inside out turned
+    /// to face outward. Refused when they don't close into a solid.
+    fn sew_step(&mut self, bytes: &[u8], tol: f64) -> Result<OpResult>;
 
     /// Sheets joined along their edges that coincide (within `tol`) into one sheet (Onshape's
     /// Add of surfaces). Each face continues (`modified`) the input face it was.
@@ -1461,6 +1592,61 @@ pub trait Kernel {
     /// The maximum distance between two points, edges, faces or bodies, and the farthest
     /// points.
     fn max_distance(&self, a: &DistanceTarget, b: &DistanceTarget) -> Result<DistanceResult>;
+
+    /// The principal curvatures `[k1, k2]` (1/mm, `k1 ≥ k2`) of the body's boundary at the
+    /// point of it nearest each of `points`: positive where the boundary bends away from its
+    /// outward normal (a ball of radius R has `[1/R, 1/R]`, a hole of radius r `[0, −1/r]`), from
+    /// the exact surface; `None` where that point lies on a crease (an edge or vertex where
+    /// faces meet at an angle; a seam or a tangent edge is not one).
+    fn curvatures_at(
+        &self,
+        _body: BodyId,
+        _points: &[Point3<f64>],
+    ) -> Result<Vec<Option<[f64; 2]>>> {
+        Err(KernelError::Unsupported("curvature queries"))
+    }
+
+    /// The curves the plane through `origin` square to `normal` cuts from the body's boundary:
+    /// one polyline for each edge of the section, its points on the exact curve (on the plane
+    /// and the boundary), every chord within `tolerance` (mm) of the curve, and a closed edge's
+    /// polyline ending on its first point. The pieces join end to end into closed curves; empty
+    /// where the plane misses the body.
+    fn plane_section(
+        &self,
+        _body: BodyId,
+        _origin: Point3<f64>,
+        _normal: Vector3<f64>,
+        _tolerance: f64,
+    ) -> Result<Vec<Vec<Point3<f64>>>> {
+        Err(KernelError::Unsupported("plane sections"))
+    }
+
+    /// The area (mm²) of the cut the plane through `origin` square to `normal` makes through
+    /// the body's solids (its holes and voids left out); 0 where the plane misses them.
+    fn section_area(
+        &self,
+        _body: BodyId,
+        _origin: Point3<f64>,
+        _normal: Vector3<f64>,
+    ) -> Result<f64> {
+        Err(KernelError::Unsupported("section areas"))
+    }
+
+    /// The Betti numbers `[b0, b1, b2]` of the body's solids as one point set: its separate
+    /// pieces (solids that touch are one), the tunnels through it and the voids it encloses. A
+    /// box is `[1, 0, 0]`, a ring `[1, 1, 0]`, a box with a ball taken from inside it
+    /// `[1, 0, 1]`.
+    fn betti_numbers(&self, _body: BodyId) -> Result<[u64; 3]> {
+        Err(KernelError::Unsupported("Betti numbers"))
+    }
+
+    /// How two solid bodies meet as they stand: the volume they share and the gap between them
+    /// (the least distance from a point of one to a point of the other). Overlapping solids
+    /// have a volume above 0 and a gap of 0, touching ones 0 for both, and solids apart a
+    /// volume of 0 and their gap; a solid inside the other shares its whole volume.
+    fn interference(&mut self, _a: BodyId, _b: BodyId) -> Result<Interference> {
+        Err(KernelError::Unsupported("interference"))
+    }
 
     /// A sheet body of one face: the surface of `face` over its natural uv domain (a
     /// B-spline's range, a period of a periodic direction) or over `domain`, bounded by

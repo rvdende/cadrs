@@ -1,0 +1,32 @@
+[package]
+name = "cadrs-conformance"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "The cadrs adapter for brep-conformance's B-rep protocol, and the suite run in process"
+publish = false
+
+# A workspace of its own: cadrs's builds don't pay for the suite, and the suite's builds don't
+# touch cadrs's target directory.
+[workspace]
+
+[[bin]]
+name = "cadrs-adapter"
+path = "src/main.rs"
+
+[dependencies]
+# The protocol at the suite's commit, so the in-process runner and the adapter share its types.
+brep-protocol = { git = "https://github.com/springcraft-ai/brep-conformance", rev = "12ffc75d305451004e12a24862dc092f6df0529b" }
+cadrs_kernel = { path = "../../crates/cadrs_kernel" }
+nalgebra = { version = "0.35", default-features = false, features = ["std"] }
+
+[profile.release]
+debug = "line-tables-only"
+incremental = true
+
+[dev-dependencies]
+# The kernel's internals for the scratch examples (resolver 2 keeps it out of the adapter's build).
+cadrs_kernel = { path = "../../crates/cadrs_kernel", features = ["testkit"] }
+# The suite's cases and checks, run in process by `examples/suite.rs`.
+brep-conformance = { git = "https://github.com/springcraft-ai/brep-conformance", rev = "12ffc75d305451004e12a24862dc092f6df0529b" }
+serde_json = "1"

@@ -602,26 +602,43 @@ impl Surface {
                 }
                 let here = r.norm_squared();
                 let closer = |nu: f64, nv: f64| (self.eval(nu, nv) - p).norm_squared() < here;
-                let mut tries = 0;
-                while !closer(nu, nv) && tries < 30 {
+                // (A Newton step uphill (the distance's Hessian not positive, far off the
+                // surface) halved never comes closer: 30 evaluations wasted before the
+                // gradient's step, 100 to 200 a projection. Straight to that step then.)
+                let old = crate::native::env_flag!("CADRS_OLD_NEWTON");
+                let uphill = !old && (nu - u) * fu + (nv - v) * fv >= 0.0;
+                let most = if old { 30 } else { 16 };
+                let mut tries = if uphill { most } else { 0 };
+                while tries < most && !closer(nu, nv) {
                     (nu, nv) = (u + (nu - u) * 0.5, v + (nv - v) * 0.5);
                     tries += 1;
                 }
-                if tries == 30 {
+                if tries == most {
                     let (su, sv) = (
                         d[1].norm_squared().max(tol::TINY),
                         d[2].norm_squared().max(tol::TINY),
                     );
-                    (nu, nv) = (
-                        self.clamp_u(u - fu / su, u0, u1),
-                        (v - fv / sv).clamp(v0.min(v1), v1.max(v0)),
-                    );
+                    // Gauss–Newton's step (the Hessian without the surface's curvature: always
+                    // downhill, and near the surface nearly Newton's), else the gradient's.
+                    let gn = (!old && !crate::native::env_flag!("CADRS_NO_GAUSS_NEWTON"))
+                        .then(|| solve2(su, d[1].dot(&d[2]), d[1].dot(&d[2]), sv, -fu, -fv))
+                        .flatten();
+                    (nu, nv) = match gn {
+                        Some((du, dv)) => (
+                            self.clamp_u(u + du, u0, u1),
+                            (v + dv).clamp(v0.min(v1), v1.max(v0)),
+                        ),
+                        None => (
+                            self.clamp_u(u - fu / su, u0, u1),
+                            (v - fv / sv).clamp(v0.min(v1), v1.max(v0)),
+                        ),
+                    };
                     tries = 0;
-                    while !closer(nu, nv) && tries < 30 {
+                    while !closer(nu, nv) && tries < most {
                         (nu, nv) = (u + (nu - u) * 0.5, v + (nv - v) * 0.5);
                         tries += 1;
                     }
-                    if tries == 30 {
+                    if tries == most {
                         break;
                     }
                 }
@@ -649,6 +666,48 @@ impl Surface {
             let (a, b) = newton(a, b);
             if (self.eval(a, b) - p).norm() < off {
                 (u, v) = (a, b);
+            }
+        }
+        // Stopped at or near a pole (a row of the grid that is one point: the derivative across
+        // it nil), where Newton has no direction to go in: from the nearest point of the row a grid step
+        // in from it, where every direction is defined (springrep's tests/classify.rs, a point
+        // near a stretched ball's pole).
+        if (self.eval(u, v) - p).norm() > near_enough {
+            let d = self.d2(u, v);
+            let size = d[1].norm().max(d[2].norm()).max(tol::TINY);
+            let (h_u, h_v) = ((u1 - u0) / n as f64, (v1 - v0) / n as f64);
+            // (Nil there, or nearly: stopped a little short of the pole, where the derivative
+            // across the row is a sliver of the other.)
+            let starts: Vec<(f64, f64)> = if d[1].norm() < 1e-2 * size {
+                let v_in = if (v - v0).abs() < (v - v1).abs() {
+                    v + h_v
+                } else {
+                    v - h_v
+                };
+                (0..n)
+                    .map(|i| (u0 + h_u * i as f64, v_in.clamp(v0.min(v1), v0.max(v1))))
+                    .collect()
+            } else if d[2].norm() < 1e-2 * size {
+                let u_in = if (u - u0).abs() < (u - u1).abs() {
+                    u + h_u
+                } else {
+                    u - h_u
+                };
+                (0..n)
+                    .map(|j| (u_in.clamp(u0.min(u1), u0.max(u1)), v0 + h_v * j as f64))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            if let Some(&(a, b)) = starts.iter().min_by(|x, y| {
+                (self.eval(x.0, x.1) - p)
+                    .norm_squared()
+                    .total_cmp(&(self.eval(y.0, y.1) - p).norm_squared())
+            }) {
+                let (a, b) = newton(a, b);
+                if (self.eval(a, b) - p).norm() < (self.eval(u, v) - p).norm() {
+                    (u, v) = (a, b);
+                }
             }
         }
         // Stopped on a v end of a surface closed in v (a polar patch's seam): the point may lie
@@ -1236,6 +1295,11 @@ impl Surface {
                 }
             }
             Surface::Nurbs(n) => Curve::Nurbs(Arc::new(n.iso_u_curve(u))),
+            // The ruling through the curve's point at u, parametrized by v.
+            Surface::Extrusion { c, d } => Curve::Line {
+                o: c.point(u),
+                d: *d,
+            },
             _ => return None,
         })
     }

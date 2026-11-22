@@ -1565,7 +1565,8 @@ impl Recipe {
                             angle_expr: format!("{a} deg"),
                             flip: f["flip"].as_bool().unwrap_or(false),
                             // Flanges meeting at a corner end square, their insides the
-                            // thickness apart (SolidCraft's corners): a 45° miter with that gap.
+                            // thickness apart (SolidCraft's corners before its #9245, which
+                            // mitres them; see `75-sm-bracket-holes` in the README).
                             auto_miter: false,
                             corner_gap: Some(self.sheet.map_or(0.0, |(_, r)| r.thickness)),
                             ..FlangeFeature::default()
@@ -3064,6 +3065,13 @@ cases! {
     case_81_fillet_spline_radius
     case_82_thin_extrude_frame
     case_83_boundary_loop_thicken
+    case_84_plate_two_bores
+    case_85_plate_width_100
+    case_86_plate_first_bore_12
+    case_87_plate_bore1_deleted
+    case_88_plate_four_bores
+    case_94_plate_four_rounded_corners
+    case_95_plate_rounded_top_chamfer
     issue_156_face_chamfer_fillet
     issue_156_wall_as_thick_as_chamfer
     issue_237_shell_keeps_a_wall_rising_past_its_opening

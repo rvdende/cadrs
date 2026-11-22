@@ -68,6 +68,78 @@ fn turned(o: P3, z: V3, angle: f64) -> Affine {
     }
 }
 
+/// The axis every face of `b` turns about, where `b` is a solid of revolution: its planes
+/// square to it, its cylinders, cones, tori and surfaces of revolution about it, its spheres
+/// centred on it.
+fn axis_of_revolution(b: &Body) -> Option<(P3, V3)> {
+    use super::surface::Surface;
+    let mut axis: Option<(P3, V3)> = None;
+    let on = |(o, a): (P3, V3), p: &P3| {
+        let d = p - o;
+        (d - a * d.dot(&a)).norm() <= tol::POINT
+    };
+    // The turned faces fix the axis; then every face must agree with it.
+    for f in &b.faces {
+        if let Surface::Cylinder { f: fr, .. }
+        | Surface::Cone { f: fr, .. }
+        | Surface::Torus { f: fr, .. }
+        | Surface::Revolution { f: fr, .. } = &f.surf
+        {
+            axis = Some((fr.o, fr.z.normalize()));
+            break;
+        }
+    }
+    let (o, a) = axis?;
+    let parallel = |z: &V3| z.normalize().cross(&a).norm() <= 1e-9;
+    let agrees = b.faces.iter().all(|f| match &f.surf {
+        Surface::Plane { f: fr } => parallel(&fr.z),
+        Surface::Cylinder { f: fr, .. }
+        | Surface::Cone { f: fr, .. }
+        | Surface::Torus { f: fr, .. }
+        | Surface::Revolution { f: fr, .. } => parallel(&fr.z) && on((o, a), &fr.o),
+        Surface::Sphere { f: fr, .. } => on((o, a), &fr.o),
+        _ => false,
+    });
+    agrees.then_some((o, a))
+}
+
+/// `b` turned about its own axis, where it is a solid of revolution (it fills the same space
+/// however it is turned so), so that its faces' seams lie along the motion's leading direction:
+/// where a face both leads and trails, its contacts with the motion are then a quarter turn
+/// from its seam. A contact a hair beside a seam splits off a sliver of face no boolean takes
+/// (a tool screwed about an axis that misses its own by a micron, from a machine's axes).
+fn seams_ahead(b: Body, mv: &Move) -> Body {
+    use super::surface::Surface;
+    let Some((o, a)) = axis_of_revolution(&b) else {
+        return b;
+    };
+    if crate::native::env_flag!("CADRS_NO_SEAMS_AHEAD") {
+        return b;
+    }
+    let seam = b.faces.iter().find_map(|f| match &f.surf {
+        Surface::Cylinder { f: fr, .. }
+        | Surface::Cone { f: fr, .. }
+        | Surface::Torus { f: fr, .. }
+        | Surface::Sphere { f: fr, .. }
+        | Surface::Revolution { f: fr, .. } => Some(fr.x),
+        _ => None,
+    });
+    let Some(seam) = seam else { return b };
+    let flat = |v: V3| v - a * v.dot(&a);
+    // The leading direction at the middle of the body's axis.
+    let c = b.bbox().center();
+    let m = o + a * (c - o).dot(&a);
+    let (s, d) = (flat(seam), flat(mv.velocity(&m)));
+    if s.norm() < 1e-9 || d.norm() < 1e-9 * mv.velocity(&m).norm().max(1e-300) {
+        return b;
+    }
+    let angle = a.dot(&s.cross(&d)).atan2(s.dot(&d));
+    if angle.abs() < 1e-12 {
+        return b;
+    }
+    b.transformed(&turned(o, a, angle))
+}
+
 /// How a face stands to the motion.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Stand {
@@ -1008,6 +1080,7 @@ fn prepared_rising(
         } => Move::Turn { o, z, angle },
         mv => mv,
     };
+    let start = seams_ahead(start, &mv);
     let size = start.bbox().diagonal().max(tol::POINT);
     let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
     // The faces that both lead and trail split along their contacts' planes, one at a time (the
@@ -1375,6 +1448,80 @@ fn prepared_rising(
         }
     }
     let mut pieces: Vec<Body> = Vec::new();
+    // Under a screw, the leading faces swept as one sheet (each edge-connected run of them):
+    // its sweep is bounded by the sheet where it starts and ends and by the sweeps of its own
+    // boundary alone (the contacts and the edges between a leading and a trailing face), where
+    // a sweep a face at a time also sweeps the edges between leading faces, side surfaces
+    // that make neighbouring faces' pieces run into one another under a turn.
+    if let Some(w) = &screw
+        && std::env::var_os("CADRS_SWEEP_FACEWISE").is_none()
+    {
+        let stands: Vec<Stand> = (0..body.faces.len())
+            .map(|fi| face_stand(&body, fi, size, &mv))
+            .collect();
+        if stands.contains(&Stand::Both) {
+            return Err(KernelError::Unsupported(
+                "sweeping a solid whose face meets the motion along a curve it can't be split along",
+            ));
+        }
+        let leading: Vec<usize> = (0..body.faces.len())
+            .filter(|&fi| stands[fi] == Stand::Leads)
+            .collect();
+        // The runs of leading faces sharing edges.
+        let ef = body.edge_faces();
+        let mut run_of = vec![usize::MAX; body.faces.len()];
+        let mut runs: Vec<Vec<usize>> = Vec::new();
+        for &f in &leading {
+            if run_of[f] != usize::MAX {
+                continue;
+            }
+            let r = runs.len();
+            let mut stack = vec![f];
+            run_of[f] = r;
+            let mut run = Vec::new();
+            while let Some(g) = stack.pop() {
+                run.push(g);
+                for c in body.faces[g].loops.iter().flatten() {
+                    for &h in &ef[c.edge] {
+                        if stands[h] == Stand::Leads && run_of[h] == usize::MAX {
+                            run_of[h] = r;
+                            stack.push(h);
+                        }
+                    }
+                }
+            }
+            run.sort_unstable();
+            runs.push(run);
+        }
+        for run in runs {
+            let sheet = super::kernel::subset(&body, &run, false);
+            let swept = super::sweep::sweep_body(
+                &sheet,
+                &super::sweep::BodyMove::Screw(w),
+                mv_angle(&mv),
+                false,
+                0,
+            );
+            if debug {
+                match &swept {
+                    Ok(s) => eprintln!(
+                        "sweep by faces: leading faces {run:?} screwed as one: check {:?}",
+                        s.body.check().first()
+                    ),
+                    Err(e) => eprintln!("sweep by faces: sweeping faces {run:?} failed: {e}"),
+                }
+            }
+            pieces.push(swept?.body);
+        }
+        return Ok(Prepared {
+            start,
+            body,
+            pieces,
+            mv,
+            size,
+            clock,
+        });
+    }
     for fi in 0..body.faces.len() {
         let st = face_stand(&body, fi, size, &mv);
         if debug {

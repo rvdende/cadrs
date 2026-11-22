@@ -3331,6 +3331,7 @@ cam-go-to-end = В конец
 cam-reset = Сброс
 cam-close-the-preview = Закрыть предпросмотр
 cam-drag-through-program = Перетащите, чтобы перемещаться по программе
+cam-simulated-ahead = Расчёт наперёд: зелёный — готово к просмотру, синий — считается, красный — ещё нет, янтарный — вырезано неточно
 cam-toolpath = Траектория
 cam-pause-on-collision = Пауза при столкновении
 cam-readout-feed = подача { $feed } mm/min
