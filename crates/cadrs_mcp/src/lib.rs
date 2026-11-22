@@ -74,6 +74,10 @@ pub enum Call {
     RunScenario(RunScenario),
     CreateDrawing(CreateDrawing),
     AddAnnotation(AddAnnotation),
+    AddView(AddView),
+    EditView(EditView),
+    AddSectionView(AddSectionView),
+    AddNote(AddNote),
     RenameTab(RenameTab),
     DeleteTab(TabName),
     OpenTab(TabName),
@@ -322,6 +326,53 @@ impl Cadrs {
         Parameters(p): Parameters<AddAnnotation>,
     ) -> Result<CallToolResult, ErrorData> {
         self.call(Call::AddAnnotation(p)).await
+    }
+
+    #[tool(
+        description = "Add a view of the Part Studio to a drawing's sheet, seen along any direction (dir: eye into the \
+        model; x: the model direction pointing right on the sheet) with the model origin at `anchor` (sheet mm from the \
+        bottom-left corner), optionally with hidden lines, shading, its own scale and a turn on the sheet. \
+        create_drawing with four_views false gives an empty sheet to lay out. Returns the view."
+    )]
+    async fn add_view(
+        &self,
+        Parameters(p): Parameters<AddView>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::AddView(p)).await
+    }
+
+    #[tool(
+        description = "Change a view of a drawing: move it (anchor), rename it, set its scale, hidden lines, shading \
+        or turn, free it from its parent's alignment, or delete it. Returns the drawing's views."
+    )]
+    async fn edit_view(
+        &self,
+        Parameters(p): Parameters<EditView>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::EditView(p)).await
+    }
+
+    #[tool(
+        description = "Add a section view of a drawing view, cut along the line a-b (the cut view's 2D model mm) and \
+        folded out towards the sheet point `at`: the material between the eye and the cutting plane is removed and \
+        the cut faces are hatched; the cutting line with its letter is drawn on the parent. Returns the view."
+    )]
+    async fn add_section_view(
+        &self,
+        Parameters(p): Parameters<AddSectionView>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::AddSectionView(p)).await
+    }
+
+    #[tool(
+        description = "Add a text note to a drawing's sheet (technical requirements, a view's title), its top-left \
+        corner at `at` in sheet mm."
+    )]
+    async fn add_note(
+        &self,
+        Parameters(p): Parameters<AddNote>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::AddNote(p)).await
     }
 
     #[tool(
