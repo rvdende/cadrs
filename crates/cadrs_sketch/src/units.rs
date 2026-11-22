@@ -1117,8 +1117,51 @@ fn eval_with(
     if toks.is_empty() {
         return Err(ParseError::Empty);
     }
+    let first = eval_toks(&toks, q, default, vars);
+    // A unit at the end, after a divisor (#292: "153/2 mm", what stays of "153 mm" when "/2" is
+    // typed after the number), applies to the whole expression, as "(153/2) mm": read as the
+    // divisor's, it would make the result one over a length. Only text that is otherwise an
+    // error of units reads this way.
+    if first == Err(ParseError::Units)
+        && let [rest @ .., Tok::Unit(u)] = toks.as_slice()
+        && matches!(rest, [.., Tok::Op('/'), Tok::Num(_)])
+    {
+        let mut whole = Vec::with_capacity(toks.len() + 2);
+        whole.push(Tok::Op('('));
+        whole.extend_from_slice(rest);
+        whole.push(Tok::Op(')'));
+        whole.push(Tok::Unit(u.clone()));
+        if let Ok(v) = eval_toks(&whole, q, default, vars) {
+            return Ok(v);
+        }
+    }
+    first
+}
+
+/// Whether `text` is a formula rather than a plain value: anything that reads as more than one
+/// number (or a negative one) and its unit, such as "100/2", "2 * 20 mm" or "#width + 5".
+pub fn is_formula(text: &str) -> bool {
+    match tokenize(text) {
+        Ok(toks) => !matches!(
+            toks.as_slice(),
+            [] | [Tok::Num(_)]
+                | [Tok::Num(_), Tok::Unit(_)]
+                | [Tok::Op('-' | '+'), Tok::Num(_)]
+                | [Tok::Op('-' | '+'), Tok::Num(_), Tok::Unit(_)]
+        ),
+        Err(_) => false,
+    }
+}
+
+/// [`eval_with`] of tokens already read.
+fn eval_toks(
+    toks: &[Tok],
+    q: Quantity,
+    default: f64,
+    vars: &dyn Variables,
+) -> Result<f64, ParseError> {
     let mut p = Parser {
-        toks: &toks,
+        toks,
         i: 0,
         default,
         vars,
@@ -1293,6 +1336,41 @@ mod tests {
         close(len("2 in / 1 in * 10"), 20.0);
         close(len("(1 in)"), 25.4);
         close(len("8 / 4 / 2"), 1.0);
+    }
+
+    /// #292: "153 mm" with "/2" typed after its number is "153/2 mm", and the unit then belongs
+    /// to the whole formula. Text that already reads keeps its meaning.
+    #[test]
+    fn a_unit_after_a_formula_applies_to_all_of_it() {
+        close(len("153/2 mm"), 76.5);
+        close(len("10/2 mm"), 5.0);
+        close(len("(100 + 50)/3 cm"), 500.0);
+        close(eval("90/2 deg", Quantity::Angle), 45.0);
+        let inch = Units::new(LengthUnit::Inch, 3);
+        close(inch.eval("153/2 mm", Quantity::Length), 76.5);
+        close(inch.eval("1/2 in", Quantity::Length), 12.7);
+        // Unchanged: the unit is the last number's where that reads.
+        close(len("2*20 mm"), 40.0);
+        close(len("1 in + 5"), 30.4);
+        // Still errors: the whole of it can't take the unit either, or the unit isn't after a
+        // divisor.
+        assert_eq!(len("1 in * 2 in"), Err(ParseError::Units));
+        assert_eq!(len("2 ^ 1 mm"), Err(ParseError::Units));
+        assert_eq!(len("10/2 deg"), Err(ParseError::Units));
+        assert_eq!(len("5 deg"), Err(ParseError::Units));
+    }
+
+    #[test]
+    fn formulas_and_plain_values() {
+        for plain in ["50", "50 mm", " 2.5cm ", "-5 mm", "1 in", "45°"] {
+            assert!(!is_formula(plain), "{plain}");
+        }
+        for formula in [
+            "100/2", "153/2 mm", "2*20 mm", "#width", "#a + 5", "sqrt(16)", "(50)",
+        ] {
+            assert!(is_formula(formula), "{formula}");
+        }
+        assert!(!is_formula(""));
     }
 
     #[test]

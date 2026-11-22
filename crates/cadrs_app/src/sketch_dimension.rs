@@ -805,9 +805,10 @@ fn set_value(world: &mut World, id: DimensionId, value: f64, text: &str) {
         return;
     };
     let (element, feature) = (s.element, s.feature);
-    // P3F.4: an expression naming a variable is kept with the value (and re-evaluated when the
-    // variable changes); a plain value drops it.
-    let expr = text.contains('#').then(|| text.trim().to_string());
+    // P3F.4: a formula is kept with the value, so it opens again as typed (#205: "100/2", not
+    // just 50); one naming a variable is also re-evaluated when the variable changes. A plain
+    // value drops it.
+    let expr = units::is_formula(text).then(|| text.trim().to_string());
     let old_expr = world_sketch(world).and_then(|s| s.expression(id).map(str::to_string));
     let same = world_sketch(world)
         .and_then(|s| s.dimensions.get(id))
@@ -824,7 +825,9 @@ fn set_value(world: &mut World, id: DimensionId, value: f64, text: &str) {
         Some(sk) if first => set_value_op(sk, id, value, true),
         _ => SketchOp::SetDimensionValue { id, value },
     };
-    let op = if same || expr == old_expr {
+    // (The expression goes with a new value whenever there is one: a new value drops a formula
+    // of constants, so even the same formula is set again.)
+    let op = if same || (expr.is_none() && old_expr.is_none()) {
         op
     } else {
         SketchOp::Batch(vec![op, SketchOp::SetDimensionExpr { id, expr }])
