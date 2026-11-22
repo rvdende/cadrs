@@ -716,3 +716,150 @@ fn split_types_and_options() {
     e.set(g, FeatureKind::Split(x));
     assert!(!e.build().errors.is_empty());
 }
+
+fn circle(x: f64, y: f64, r: f64) -> SketchOp {
+    SketchOp::AddCircle {
+        center: Vec2::new(x, y),
+        radius: r,
+        construction: false,
+    }
+}
+
+/// Simpson's rule over [a, b] in `n` (even) steps.
+fn integral(f: impl Fn(f64) -> f64, a: f64, b: f64, n: usize) -> f64 {
+    let h = (b - a) / n as f64;
+    let inner: f64 = (1..n)
+        .map(|i| f(a + h * i as f64) * if i % 2 == 1 { 4.0 } else { 2.0 })
+        .sum();
+    (f(a) + inner + f(b)) * h / 3.0
+}
+
+/// Issue #300's ring: R40 with an R30 bore, 20 high (Extrude 1 New, Extrude 2 Remove).
+const RING: (f64, f64, f64) = (40.0, 30.0, 20.0);
+
+fn ring_doc() -> (Doc, PartId, f64) {
+    let (ro, ri, h) = RING;
+    let mut d = Doc::new();
+    for (r, op) in [(ro, BooleanOp::New), (ri, BooleanOp::Remove)] {
+        let s = d.sketch(PlaneRef::Top, vec![circle(0.0, 0.0, r)]);
+        d.extrude(s, &[Vec2::new(0.0, 0.0)], |e| {
+            e.op = op;
+            e.depth = h;
+            e.depth_expr = format!("{h} mm");
+        });
+    }
+    let ring = d.parts()[0].id;
+    close(d.volume(), PI * (ro * ro - ri * ri) * h, 1e-6);
+    (d, ring, PI * (ro * ro - ri * ri) * h)
+}
+
+/// A pin through the ring's wall along +X (a circle of radius `a` on Right at z = 10, extruded
+/// from `start` to x = 50), a part of its own.
+fn radial_pin(d: &mut Doc, start: f64, a: f64) {
+    let s = d.sketch(PlaneRef::Right, vec![circle(0.0, 10.0, a)]);
+    d.extrude(s, &[Vec2::new(0.0, 10.0)], |e| {
+        e.depth = 50.0 - start;
+        e.depth_expr = format!("{} mm", 50.0 - start);
+        if start > 0.0 {
+            e.start_offset = Some(Offset {
+                value: start,
+                expr: format!("{start} mm"),
+                flip: false,
+            });
+        }
+    });
+}
+
+/// What a radial pin of radius `a` takes out of the ring's wall: over the pin's section
+/// (y = a sin φ across), the wall's thickness along the pin there, √(Ro² − y²) − √(Ri² − y²).
+fn radial_hole(a: f64) -> f64 {
+    let (ro, ri, _) = RING;
+    integral(
+        |phi| {
+            let y = a * phi.sin();
+            let wall = (ro * ro - y * y).sqrt() - (ri * ri - y * y).sqrt();
+            2.0 * a * a * phi.cos().powi(2) * wall
+        },
+        -PI / 2.0,
+        PI / 2.0,
+        2000,
+    )
+}
+
+/// A circular part pattern of the document's second part round Z, `count` in 360°, Remove,
+/// with the ring as its merge scope: the pattern builds, the copies' holes (`hole` each) are
+/// gone from the ring, and the seed stays a part of its own, untouched (a part pattern's
+/// boolean is its copies', as Onshape's).
+#[track_caller]
+fn pattern_removes(d: &mut Doc, ring: PartId, v_ring: f64, count: u32, hole: f64) {
+    let parts = d.parts();
+    assert_eq!(parts.len(), 2);
+    let pin = parts.iter().find(|p| p.id != ring).unwrap();
+    let (pin, v_pin) = (pin.id, pin.mass.unwrap().volume);
+    let mut p = PatternFeature::new(PatternKind::Circular);
+    p.parts = vec![pin];
+    p.axis = Some(AxisRef::Connector(ConnectorRef::Implicit(
+        ConnectorOrigin::Origin,
+    )));
+    p.first.count = count;
+    p.op = BooleanOp::Remove;
+    p.merge_scope = vec![ring];
+    let pat = d.add("Circular pattern", FeatureKind::Pattern(p));
+    let b = d.build();
+    assert_eq!(b.error(pat), None, "{count} round");
+    assert_eq!(b.parts.len(), 2, "{count} round: the ring and the seed");
+    let volume = |id: PartId| {
+        b.parts
+            .iter()
+            .find(|p| p.id == id)
+            .unwrap()
+            .mass
+            .unwrap()
+            .volume
+    };
+    close(
+        volume(ring),
+        v_ring - (count - 1) as f64 * hole,
+        1e-6 * v_ring,
+    );
+    close(volume(pin), v_pin, 1e-9 * v_pin);
+}
+
+#[test]
+fn circular_part_pattern_removes_axial_pins_from_its_merge_scope() {
+    // Issue #300 as written: a pin through the ring's wall along Z at (35, 0), R4, as high as
+    // the ring; ×4 round Z, Remove, merge scope the ring. The three copies each take
+    // π·4²·20 out of the ring; the seed stays.
+    let (mut d, ring, v_ring) = ring_doc();
+    let s = d.sketch(PlaneRef::Top, vec![circle(35.0, 0.0, 4.0)]);
+    d.extrude(s, &[Vec2::new(35.0, 0.0)], |e| {
+        e.depth = 20.0;
+        e.depth_expr = "20 mm".into();
+    });
+    pattern_removes(&mut d, ring, v_ring, 4, PI * 16.0 * 20.0);
+}
+
+#[test]
+fn circular_part_pattern_removes_radial_pins_from_its_merge_scope() {
+    // Issue #300 with the pin across the wall (through-holes round the ring): sketched on
+    // Right, through the axis, and extruded outward, so the copies meet at the axis and
+    // overlap each other there. 3, 6 and 8 round; and 4 round with pins that start 10 mm out,
+    // clear of each other.
+    for (count, start) in [(3, 0.0), (6, 0.0), (8, 0.0), (4, 10.0)] {
+        let (mut d, ring, v_ring) = ring_doc();
+        radial_pin(&mut d, start, 4.0);
+        pattern_removes(&mut d, ring, v_ring, count, radial_hole(4.0));
+    }
+}
+
+#[test]
+#[ignore = "issue #300: four radial pins from the axis: joining the three copies makes a T the kernel can't cut from the ring"]
+fn circular_part_pattern_removes_four_radial_pins_that_meet_at_the_axis() {
+    // Issue #300 itself: as above, 4 round from the axis. The copies at 90° and 270° lie on
+    // one line and join into one rod, which the copy at 180° meets square (a T of one radius);
+    // the Remove then fails with "the boolean left an open shell" and the ring keeps its wall.
+    // (The kernel's own reproduction: cadrs_kernel's tests/issue_reports.rs.)
+    let (mut d, ring, v_ring) = ring_doc();
+    radial_pin(&mut d, 0.0, 4.0);
+    pattern_removes(&mut d, ring, v_ring, 4, radial_hole(4.0));
+}
