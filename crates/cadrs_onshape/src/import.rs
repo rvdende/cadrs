@@ -561,7 +561,7 @@ pub(crate) struct PartStudio<'a> {
     pub(crate) sketches: HashMap<String, (SketchMap, Sketch)>,
     /// The model as of the last rebuild, and how many features it covers.
     /// (The features it was built from: an edit that keeps their count must rebuild too.)
-    built: Option<(
+    pub(crate) built: Option<(
         Vec<cadrs_core::document::Feature>,
         Arc<cadrs_core::rebuild::Build>,
     )>,
@@ -1404,6 +1404,15 @@ impl<'a> PartStudio<'a> {
                         }
                         if near.is_none() && plane_near(&pl, n, o, 1.0) {
                             near = Some(pl);
+                        }
+                        if std::env::var_os("CADRS_ONSHAPE_DEBUG").is_some() {
+                            let fr = pl.frame();
+                            eprintln!(
+                                "PLANE {}: cadrs origin {:?} normal {:?}; Onshape origin {o:?} normal {n:?}",
+                                f["name"],
+                                fr.origin,
+                                fr.normal()
+                            );
                         }
                         plane_problem = Some("its Plane feature is not where Onshape has it");
                         continue;

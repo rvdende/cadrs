@@ -1187,7 +1187,64 @@ impl PartStudio<'_> {
                 "its entities don't fit the plane type: {why}"
             )));
         }
-        self.add(f, fid, "Plane", FeatureKind::Plane(x), fr)
+        self.add(f, fid, "Plane", FeatureKind::Plane(x.clone()), fr)?;
+        // Which way it faces, by a sketch drawn on it: as Onshape's (a three point plane's
+        // normal, say, follows the order Onshape evaluates its points in).
+        if self.faces_against_its_sketch(fid) == Some(true) {
+            x.flip_normal = !x.flip_normal;
+            let id = self.feature_id(fid);
+            if let Some(mut feature) = self
+                .s
+                .doc
+                .element(self.el)
+                .and_then(|e| e.feature(id))
+                .cloned()
+            {
+                feature.kind = FeatureKind::Plane(x);
+                self.s.run(&cadrs_core::commands::ReplaceFeature {
+                    element: self.el,
+                    feature,
+                    label: "Flip plane".into(),
+                })?;
+                self.built = None;
+                self.parts();
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether the Plane feature `fid`, as built, faces the other way than the first Onshape
+    /// sketch drawn on it does (`None` with no such sketch, or if they are not one plane).
+    fn faces_against_its_sketch(&mut self, fid: &str) -> Option<bool> {
+        let id = *self.features.get(fid)?;
+        self.parts();
+        let frame = *self.built.as_ref()?.1.planes.get(&id)?;
+        let (features, sketches) = (self.raw.features()?, self.raw.sketches()?);
+        let op = format!("{fid}.planeOp");
+        for f in features["features"].as_array()? {
+            if f["featureType"].as_str() != Some("newSketch") {
+                continue;
+            }
+            let on_it = refs::picks(param(f, "sketchPlane")).iter().any(|p| {
+                matches!(p, Pick::Query(q) if q.get("operationId").and_then(Q::as_str) == Some(&op))
+            });
+            if !on_it {
+                continue;
+            }
+            let solved = crate::sketch::Solved::find(&sketches, f["featureId"].as_str()?)?;
+            let (n, o) = crate::sketch::world_plane(&solved)?;
+            let fnrm = frame.normal();
+            let dot = fnrm[0] * n[0] + fnrm[1] * n[1] + fnrm[2] * n[2];
+            let off = (0..3)
+                .map(|k| (o[k] - frame.origin[k]) * fnrm[k])
+                .sum::<f64>()
+                .abs();
+            if dot.abs() < 1.0 - 1e-6 || off > 1e-4 {
+                return None;
+            }
+            return Some(dot < 0.0);
+        }
+        None
     }
 
     /// What one of a Plane's entity queries picks (`q` the query as Onshape stores it, `subs`
