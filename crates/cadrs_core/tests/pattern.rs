@@ -786,80 +786,200 @@ fn radial_hole(a: f64) -> f64 {
     )
 }
 
-/// A circular part pattern of the document's second part round Z, `count` in 360°, Remove,
-/// with the ring as its merge scope: the pattern builds, the copies' holes (`hole` each) are
-/// gone from the ring, and the seed stays a part of its own, untouched (a part pattern's
-/// boolean is its copies', as Onshape's).
-#[track_caller]
-fn pattern_removes(d: &mut Doc, ring: PartId, v_ring: f64, count: u32, hole: f64) {
+/// How a part pattern's boolean finds the parts it works on.
+#[derive(Clone, Copy, Debug)]
+enum Scope {
+    /// The ring, named as the merge scope.
+    Ring,
+    /// Merge with all.
+    All,
+    /// Neither: the parts the tools overlap.
+    Found,
+}
+
+/// A circular part pattern of the document's second part (the pin) round Z, `count` in 360°,
+/// with the ring its merge scope as `scope` has it.
+fn pattern_of_the_pin(
+    d: &mut Doc,
+    ring: PartId,
+    count: u32,
+    op: BooleanOp,
+    scope: Scope,
+) -> FeatureId {
     let parts = d.parts();
     assert_eq!(parts.len(), 2);
-    let pin = parts.iter().find(|p| p.id != ring).unwrap();
-    let (pin, v_pin) = (pin.id, pin.mass.unwrap().volume);
+    let pin = parts.iter().find(|p| p.id != ring).unwrap().id;
     let mut p = PatternFeature::new(PatternKind::Circular);
     p.parts = vec![pin];
     p.axis = Some(AxisRef::Connector(ConnectorRef::Implicit(
         ConnectorOrigin::Origin,
     )));
     p.first.count = count;
-    p.op = BooleanOp::Remove;
-    p.merge_scope = vec![ring];
-    let pat = d.add("Circular pattern", FeatureKind::Pattern(p));
-    let b = d.build();
-    assert_eq!(b.error(pat), None, "{count} round");
-    assert_eq!(b.parts.len(), 2, "{count} round: the ring and the seed");
-    let volume = |id: PartId| {
-        b.parts
-            .iter()
-            .find(|p| p.id == id)
-            .unwrap()
-            .mass
-            .unwrap()
-            .volume
-    };
-    close(
-        volume(ring),
-        v_ring - (count - 1) as f64 * hole,
-        1e-6 * v_ring,
-    );
-    close(volume(pin), v_pin, 1e-9 * v_pin);
+    p.op = op;
+    match scope {
+        Scope::Ring => p.merge_scope = vec![ring],
+        Scope::All => p.merge_all = true,
+        Scope::Found => {}
+    }
+    d.add("Circular pattern", FeatureKind::Pattern(p))
 }
 
-#[test]
-fn circular_part_pattern_removes_axial_pins_from_its_merge_scope() {
-    // Issue #300 as written: a pin through the ring's wall along Z at (35, 0), R4, as high as
-    // the ring; ×4 round Z, Remove, merge scope the ring. The three copies each take
-    // π·4²·20 out of the ring; the seed stays.
-    let (mut d, ring, v_ring) = ring_doc();
+/// A circular part pattern of the pin, Remove: the pattern builds, the seed and its copies are
+/// the tools (as a Boolean's, and as Onshape's part pattern), so `count` holes (`hole` each)
+/// are gone from the ring and the pin is no longer a part.
+#[track_caller]
+fn pattern_removes(d: &mut Doc, ring: PartId, v_ring: f64, count: u32, hole: f64, scope: Scope) {
+    let pat = pattern_of_the_pin(d, ring, count, BooleanOp::Remove, scope);
+    let b = d.build();
+    let what = format!("{count} round, scope {scope:?}");
+    assert_eq!(b.error(pat), None, "{what}");
+    assert_eq!(b.parts.len(), 1, "{what}: the ring alone, the pin used up");
+    assert_eq!(b.parts[0].id, ring, "{what}");
+    close(
+        b.parts[0].mass.unwrap().volume,
+        v_ring - count as f64 * hole,
+        1e-6 * v_ring,
+    );
+    // The dialog's preview (the pattern is the last feature): what each pin takes out of the
+    // ring, over the ring as cut.
+    let (f, stage) = b.stage.as_ref().expect("the Remove's preview");
+    assert_eq!(*f, pat);
+    assert!(stage.remove);
+    assert_eq!(1 + stage.more.len(), count as usize, "{what}");
+    assert_eq!(stage.before.len(), 1, "{what}");
+}
+
+/// Issue #300's pin as its document has it: through the ring's wall along Z at (35, 0), R4, as
+/// high as the ring.
+fn axial_pin(d: &mut Doc) {
     let s = d.sketch(PlaneRef::Top, vec![circle(35.0, 0.0, 4.0)]);
     d.extrude(s, &[Vec2::new(35.0, 0.0)], |e| {
         e.depth = 20.0;
         e.depth_expr = "20 mm".into();
     });
-    pattern_removes(&mut d, ring, v_ring, 4, PI * 16.0 * 20.0);
+}
+
+#[test]
+fn circular_part_pattern_removes_axial_pins_from_its_merge_scope() {
+    // Issue #300 as its document has it: ×4 round Z, Remove, merge scope the ring. The pin and
+    // its three copies each take π·4²·20 out of the ring: four holes, and no pin left. The same
+    // with Merge with all (the pin itself is not cut by its copies) and with no scope (the
+    // ring is what the tools overlap).
+    for scope in [Scope::Ring, Scope::All, Scope::Found] {
+        let (mut d, ring, v_ring) = ring_doc();
+        axial_pin(&mut d);
+        pattern_removes(&mut d, ring, v_ring, 4, PI * 16.0 * 20.0, scope);
+    }
 }
 
 #[test]
 fn circular_part_pattern_removes_radial_pins_from_its_merge_scope() {
     // Issue #300 with the pin across the wall (through-holes round the ring): sketched on
-    // Right, through the axis, and extruded outward, so the copies meet at the axis and
-    // overlap each other there. 3, 6 and 8 round; and 4 round with pins that start 10 mm out,
-    // clear of each other.
+    // Right, through the axis, and extruded outward, so the pins meet at the axis and overlap
+    // each other there. 3, 6 and 8 round; and 4 round with pins that start 10 mm out, clear of
+    // each other.
     for (count, start) in [(3, 0.0), (6, 0.0), (8, 0.0), (4, 10.0)] {
         let (mut d, ring, v_ring) = ring_doc();
         radial_pin(&mut d, start, 4.0);
-        pattern_removes(&mut d, ring, v_ring, count, radial_hole(4.0));
+        pattern_removes(&mut d, ring, v_ring, count, radial_hole(4.0), Scope::Ring);
     }
 }
 
 #[test]
-#[ignore = "issue #300: four radial pins from the axis: joining the three copies makes a T the kernel can't cut from the ring"]
 fn circular_part_pattern_removes_four_radial_pins_that_meet_at_the_axis() {
-    // Issue #300 itself: as above, 4 round from the axis. The copies at 90° and 270° lie on
-    // one line and join into one rod, which the copy at 180° meets square (a T of one radius);
-    // the Remove then fails with "the boolean left an open shell" and the ring keeps its wall.
-    // (The kernel's own reproduction: cadrs_kernel's tests/issue_reports.rs.)
+    // As above, 4 round from the axis: the pins at 0° and 180° lie on one line, as do those at
+    // 90° and 270°: a cross of two rods of one radius.
     let (mut d, ring, v_ring) = ring_doc();
     radial_pin(&mut d, 0.0, 4.0);
-    pattern_removes(&mut d, ring, v_ring, 4, radial_hole(4.0));
+    pattern_removes(&mut d, ring, v_ring, 4, radial_hole(4.0), Scope::Ring);
+}
+
+#[test]
+fn circular_part_pattern_removes_radial_pins_with_one_skipped() {
+    // The same with the instance at 180° skipped: the seed and the copies at 90° and 270°,
+    // which joined are a T the kernel can't cut the ring with as one tool (cadrs_kernel's
+    // tests/issue_reports.rs). A part pattern's Remove cuts with the pins as the tools they
+    // are: three holes, and the pin used up.
+    let (mut d, ring, v_ring) = ring_doc();
+    radial_pin(&mut d, 0.0, 4.0);
+    let pat = pattern_of_the_pin(&mut d, ring, 4, BooleanOp::Remove, Scope::Ring);
+    let FeatureKind::Pattern(mut p) = d.features().last().unwrap().kind.clone() else {
+        panic!("the pattern");
+    };
+    p.skip_on = true;
+    p.skipped = vec![[2, 0]];
+    d.set(pat, FeatureKind::Pattern(p));
+    let parts = d.parts();
+    assert_eq!(parts.len(), 1);
+    close(
+        parts[0].mass.unwrap().volume,
+        v_ring - 3.0 * radial_hole(4.0),
+        1e-6 * v_ring,
+    );
+}
+
+#[test]
+fn circular_part_pattern_intersect_keeps_what_its_pins_cover() {
+    // The axial pin ×4, Intersect, merge scope the ring: the ring is left as what the pin and
+    // its copies cover of it, four discs of π·4²·20 (the pins lie within the wall), the first
+    // still the ring's part; the pin is used up.
+    let (mut d, ring, _) = ring_doc();
+    axial_pin(&mut d);
+    let pat = pattern_of_the_pin(&mut d, ring, 4, BooleanOp::Intersect, Scope::Ring);
+    let b = d.build();
+    assert_eq!(b.error(pat), None);
+    assert_eq!(b.parts.len(), 4);
+    assert!(b.parts.iter().any(|p| p.id == ring));
+    assert!(b.parts.iter().all(|p| p.id == ring || p.id.feature == pat));
+    for p in &b.parts {
+        close(p.mass.unwrap().volume, PI * 16.0 * 20.0, 1e-6);
+    }
+}
+
+#[test]
+fn a_part_pattern_with_nothing_to_cut_fails_and_keeps_its_parts() {
+    // A pin clear of the ring (in its bore, at the axis side: x 10, R4) patterned ×4, Remove,
+    // no scope: no tool overlaps another part, so the pattern fails and both parts stay.
+    let (mut d, ring, v_ring) = ring_doc();
+    let s = d.sketch(PlaneRef::Top, vec![circle(10.0, 0.0, 4.0)]);
+    d.extrude(s, &[Vec2::new(10.0, 0.0)], |e| e.depth = 20.0);
+    let pat = pattern_of_the_pin(&mut d, ring, 4, BooleanOp::Remove, Scope::Found);
+    let b = d.build();
+    assert!(
+        b.error(pat)
+            .is_some_and(|e| e.starts_with("Nothing to remove"))
+    );
+    assert_eq!(b.parts.len(), 2);
+    close(b.parts[0].mass.unwrap().volume, v_ring, 1e-6);
+}
+
+#[test]
+fn part_mirror_removes_the_part_and_its_image() {
+    // A 100 × 40 × 10 plate (x −50..50) and a pin through it at (30, 0), R5: Part mirror of the
+    // pin across Right (the YZ plane), Remove, merge scope the plate. The pin and its image at
+    // (−30, 0) each take π·5²·10 out of the plate; the pin is used up.
+    let mut d = Doc::new();
+    d.block(-50.0, -20.0, 50.0, 20.0, 10.0);
+    let plate = d.parts()[0].id;
+    let s = d.sketch(PlaneRef::Top, vec![circle(30.0, 0.0, 5.0)]);
+    d.extrude(s, &[Vec2::new(30.0, 0.0)], |e| e.depth = 10.0);
+    let pin = d.parts().iter().find(|p| p.id != plate).unwrap().id;
+    let m = MirrorFeature {
+        mirror_type: PatternType::Part,
+        parts: vec![pin],
+        plane: Some(MirrorPlane::Plane(PlaneRef::Right)),
+        op: BooleanOp::Remove,
+        merge_scope: vec![plate],
+        ..MirrorFeature::default()
+    };
+    d.add("Mirror", FeatureKind::Mirror(m));
+    let parts = d.parts();
+    assert_eq!(parts.len(), 1);
+    assert_eq!(parts[0].id, plate);
+    close(
+        parts[0].mass.unwrap().volume,
+        100.0 * 40.0 * 10.0 - 2.0 * PI * 25.0 * 10.0,
+        1e-6,
+    );
+    close(parts[0].mass.unwrap().center_of_mass.x, 0.0, 1e-9);
 }

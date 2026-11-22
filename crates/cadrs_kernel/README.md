@@ -348,7 +348,7 @@ results, or with `--static`, it falls back to reading the suites' source, which 
   booleans and offsets on 1 and 4 rayon threads, which must agree). `CADRS_META_SEED`,
   `CADRS_META_CASES`, `CADRS_STRESS_*` and `CADRS_FINGERPRINT_*` set seeds, sizes and output.
 - `tests/issue_reports.rs`: bugs reported on GitHub, rebuilt from their descriptions with the
-  cases round each (a pattern's overlapping copies cut from a ring, #300; shells of a bar whose
+  cases round each (a pattern's overlapping pins cut from a ring, #300; shells of a bar whose
   round end was made three ways, #297; every edge of a chamfered block filleted smaller and
   larger than the chamfer, #299), against closed forms and identities between results. A case
   that fails today is `#[ignore]`d with the gap it waits on; CI's fast gate runs the suite.

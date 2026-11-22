@@ -4,7 +4,8 @@
 //! between results that must agree (a body shells alike however it was built; a cut by one
 //! joined tool is the cut by its pieces).
 //!
-//! - #300: a part pattern's copies that overlap one another, joined and cut from a ring.
+//! - #300: a part pattern's pins that overlap one another, cut from a ring one by one and
+//!   joined.
 //! - #297: a shell of a body whose end is a full round.
 //! - #299: a fillet beside a chamfer, smaller than it, its size and larger.
 //!
@@ -95,7 +96,7 @@ fn integral(f: impl Fn(f64) -> f64, a: f64, b: f64, n: usize) -> f64 {
 }
 
 // ---------------------------------------------------------------------------------------------
-// #300: a circular part pattern's copies, Remove, from a ring.
+// #300: a circular part pattern's pins (the seed and its copies), Remove, from a ring.
 
 /// The ring's radii and height, and the height of the pins' axes.
 const RING: (f64, f64, f64) = (40.0, 30.0, 20.0);
@@ -103,9 +104,9 @@ const PIN_Z: f64 = 10.0;
 /// The pins reach this far from the ring's axis (past its outside).
 const PIN_END: f64 = 50.0;
 
-/// A ring about Z, and the copies a circular pattern of `count` makes of a pin: a rod of radius
-/// `a` along +X from x = `start` out through the ring's wall, turned about Z by 360°/`count`
-/// each (the seed itself is not among them, as in a part pattern).
+/// A ring about Z, and the pins of a circular pattern of `count`: a rod of radius `a` along +X
+/// from x = `start` out through the ring's wall (the seed, first) and its copies turned about
+/// Z by 360°/`count` each. (A part pattern's Remove cuts with the seed and the copies.)
 fn ring_and_pins(count: usize, start: f64, a: f64) -> (NativeKernel, BodyId, Vec<BodyId>) {
     let (ro, ri, h) = RING;
     let mut k = NativeKernel::new();
@@ -123,11 +124,11 @@ fn ring_and_pins(count: usize, start: f64, a: f64) -> (NativeKernel, BodyId, Vec
         origin: Point3::origin(),
         dir: Vector3::z_axis(),
     };
-    let pins = (1..count)
-        .map(|i| {
+    let pins = std::iter::once(seed)
+        .chain((1..count).map(|i| {
             let turn = Motion::rotation(&z, 2.0 * PI * i as f64 / count as f64);
             k.transform_motion(seed, &turn).unwrap().bodies[0]
-        })
+        }))
         .collect();
     (k, ring, pins)
 }
@@ -149,12 +150,16 @@ fn pin_hole(a: f64) -> f64 {
     )
 }
 
-/// The pins as tools one by one, and joined into one body first (as a pattern joins its copies
-/// before it cuts): the same cut, each hole the closed form; and the union and intersection
-/// with the joined body account for every bit of volume (|A ∪ B| + |A ∩ B| = |A| + |B|).
-fn pins_cut_the_ring(count: usize, start: f64, a: f64) {
-    let (mut k, ring, pins) = ring_and_pins(count, start, a);
-    let what = format!("{count} round, from x = {start}, radius {a}");
+/// The pins as tools one by one (as a part pattern's Remove has them), and joined into one body
+/// first (as its Add and Intersect join them): the same cut, each hole the closed form; and the
+/// union and intersection with the joined body account for every bit of volume
+/// (|A ∪ B| + |A ∩ B| = |A| + |B|). `skip` leaves one pin out (a skipped instance).
+fn pins_cut_the_ring(count: usize, start: f64, a: f64, skip: Option<usize>) {
+    let (mut k, ring, mut pins) = ring_and_pins(count, start, a);
+    if let Some(i) = skip {
+        pins.remove(i);
+    }
+    let what = format!("{count} round less {skip:?}, from x = {start}, radius {a}");
     let holes = pins.len() as f64 * pin_hole(a);
     let v_ring = volume(&k, ring);
     let tol = 1e-6 * v_ring;
@@ -205,12 +210,14 @@ fn pins_cut_the_ring(count: usize, start: f64, a: f64) {
     close(v_common, holes, tol, &what);
 }
 
-/// Issue #300's family: the copies meet at the ring's axis (the pin sketched on a plane through
-/// it and extruded outward), where each overlaps its neighbours.
+/// Issue #300's family: the pins meet at the ring's axis (the pin sketched on a plane through
+/// it and extruded outward), where each overlaps its neighbours. All of them, and all but the
+/// seed.
 #[test]
 fn pins_patterned_from_the_axis_cut_a_ring() {
     for count in [2, 3, 5, 6, 8, 12] {
-        pins_cut_the_ring(count, 0.0, 4.0);
+        pins_cut_the_ring(count, 0.0, 4.0, None);
+        pins_cut_the_ring(count, 0.0, 4.0, Some(0));
     }
 }
 
@@ -219,19 +226,27 @@ fn pins_patterned_from_the_axis_cut_a_ring() {
 #[test]
 fn four_pins_that_stop_short_of_the_axis_cut_a_ring() {
     for start in [5.0, 4.0, 3.0] {
-        pins_cut_the_ring(4, start, 4.0);
+        pins_cut_the_ring(4, start, 4.0, None);
+        pins_cut_the_ring(4, start, 4.0, Some(0));
     }
 }
 
-/// Issue #300 itself: a pin from the axis, four round. The three copies join into a T (the two
-/// across the seed's line into one rod, the third meeting it square, all of one radius, so the
-/// T's two rods cross in two half ellipses that touch), and the T as a tool leaves the boolean
-/// an open shell, for Remove, Add and Intersect alike. (The same pins as three tools cut it.)
+/// Four round from the axis: joined, a cross of two rods of one radius.
 #[test]
-#[ignore = "issue #300: a T of three equal rods meeting at the axis, as one tool on a ring, leaves an open shell"]
 fn four_pins_from_the_axis_cut_a_ring() {
-    pins_cut_the_ring(4, 0.0, 4.0);
-    pins_cut_the_ring(4, 0.0, 3.0);
+    pins_cut_the_ring(4, 0.0, 4.0, None);
+    pins_cut_the_ring(4, 0.0, 3.0, None);
+}
+
+/// Three of the four: they join into a T (the two on one line into one rod, the third meeting
+/// it square, all of one radius, so the T's two rods cross in two half ellipses that touch),
+/// and the T as a tool leaves the boolean an open shell, for Remove, Add and Intersect alike.
+/// (The same pins as three tools cut it, which is how a part pattern's Remove has them.)
+#[test]
+#[ignore = "a T of three equal rods meeting at the axis, as one tool on a ring, leaves an open shell"]
+fn three_of_four_pins_from_the_axis_cut_a_ring() {
+    pins_cut_the_ring(4, 0.0, 4.0, Some(0));
+    pins_cut_the_ring(4, 0.0, 3.0, Some(0));
 }
 
 // ---------------------------------------------------------------------------------------------

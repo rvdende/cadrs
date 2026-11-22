@@ -3271,7 +3271,13 @@ mod kernel_ops {
             // The dialog's preview of a Remove: the material it takes out of the parts.
             let removed = (self.stage_for == Some(id) && e.op == BooleanOp::Remove && !surface)
                 .then(|| {
-                    self.removed_volume(id, &tool, &Self::scope(e, state, &contacts), state, &geoms)
+                    self.removed_volume(
+                        id,
+                        &[&tool],
+                        &Self::scope(e, state, &contacts),
+                        state,
+                        &geoms,
+                    )
                 });
             // The dialog's preview of an Add: the new body over the parts as they were.
             let joins = e.merge_all || !e.scope.is_empty() || !contacts.touches.is_empty();
@@ -3380,12 +3386,12 @@ mod kernel_ops {
                 .collect()
         }
 
-        /// What a Remove takes out of the `scope` parts: the tool's intersection with each, else
-        /// (none worked out) the whole tool.
+        /// What a Remove takes out of the `scope` parts: each tool's intersection with each,
+        /// else (none worked out) the whole tools.
         fn removed_volume(
             &mut self,
             id: FeatureId,
-            tool: &(BodyId, BodyNames),
+            tools: &[&(BodyId, BodyNames)],
             scope: &[PartId],
             state: &State,
             geoms: &crate::brep::Geoms,
@@ -3394,29 +3400,34 @@ mod kernel_ops {
             for part in scope {
                 let Some(p) = state.part(*part) else { continue };
                 let Some(body) = p.body else { continue };
-                let Ok(r) = self.kernel.boolean(BoolOp::Intersect, body, &[tool.0]) else {
-                    continue;
-                };
-                let inputs = [(body, &*p.names), (tool.0, &tool.1)];
-                for b in r.bodies {
-                    let solid = naming::name_body(&self.kernel, b, id.0, &r.history, &inputs)
-                        .map_err(|e| e.to_string())
-                        .and_then(|names| {
-                            crate::brep::solid_of(&self.kernel, b, &names, geoms, Some(id.0))
-                        });
-                    if let Ok(s) = solid
-                        && !s.faces.is_empty()
+                for tool in tools {
+                    let Ok(r) = self.kernel.boolean(BoolOp::Intersect, body, &[tool.0]) else {
+                        continue;
+                    };
+                    let inputs = [(body, &*p.names), (tool.0, &tool.1)];
+                    for b in r.bodies {
+                        let solid = naming::name_body(&self.kernel, b, id.0, &r.history, &inputs)
+                            .map_err(|e| e.to_string())
+                            .and_then(|names| {
+                                crate::brep::solid_of(&self.kernel, b, &names, geoms, Some(id.0))
+                            });
+                        if let Ok(s) = solid
+                            && !s.faces.is_empty()
+                        {
+                            out.push(Arc::new(s));
+                        }
+                        self.kernel.release(b);
+                    }
+                }
+            }
+            if out.is_empty() {
+                for tool in tools {
+                    if let Ok(s) =
+                        crate::brep::solid_of(&self.kernel, tool.0, &tool.1, geoms, Some(id.0))
                     {
                         out.push(Arc::new(s));
                     }
-                    self.kernel.release(b);
                 }
-            }
-            if out.is_empty()
-                && let Ok(s) =
-                    crate::brep::solid_of(&self.kernel, tool.0, &tool.1, geoms, Some(id.0))
-            {
-                out.push(Arc::new(s));
             }
             out
         }

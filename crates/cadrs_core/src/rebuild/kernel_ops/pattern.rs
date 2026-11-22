@@ -5,8 +5,9 @@
 //!   renamed `FaceOrigin::Instance { of, face, instance }` under the pattern's id, so the copies'
 //!   faces have names of their own that survive rebuilds ("Face of Linear pattern 1").
 //! - **Part**: the parts copied; New makes one part per copy (with the seed's palette entry and
-//!   `source`, so it shows the seed's appearance and material, PS9.6), the other tabs combine
-//!   the copies with the merge scope like an extrude's body.
+//!   `source`, so it shows the seed's appearance and material, PS9.6). Add joins the copies
+//!   (and the seeds) to the merge scope like an extrude's body; Remove and Intersect use the
+//!   seeds and the copies as tools on the merge scope and consume the seeds (issue #300).
 //! - **Face**: the pocket or boss the faces bound (`Kernel::face_tool`), copied and cut or added.
 //! - **Feature** with Reapply: each instance's features are rebuilt with their sketches moved
 //!   and their references to the patterned features' faces and edges mapped to the instance's
@@ -779,17 +780,21 @@ impl Rebuilder {
         }
     }
 
-    /// Several copies as one body (their union; they may lie apart). The copies are released.
+    /// Several copies as one body (their union; they may lie apart), with the bodies `with`
+    /// (the parts they are copies of, where those are tools too). The copies are released,
+    /// `with` are not.
     fn join(
         &mut self,
         id: FeatureId,
         mut copies: Vec<(BodyId, BodyNames)>,
+        with: &[(BodyId, BodyNames)],
     ) -> Result<(BodyId, BodyNames), String> {
-        if copies.len() == 1 {
+        if copies.len() == 1 && with.is_empty() {
             return Ok(copies.pop().expect("one"));
         }
-        let first = copies[0].0;
-        let rest: Vec<BodyId> = copies[1..].iter().map(|(b, _)| *b).collect();
+        let all: Vec<&(BodyId, BodyNames)> = copies.iter().chain(with).collect();
+        let first = all[0].0;
+        let rest: Vec<BodyId> = all[1..].iter().map(|(b, _)| *b).collect();
         let t0 = web_time::Instant::now();
         let joined = self
             .kernel
@@ -797,8 +802,7 @@ impl Rebuilder {
             .and_then(|r| {
                 profiled("pattern's union of the copies", t0);
                 let body = r.bodies[0];
-                let inputs: Vec<(BodyId, &BodyNames)> =
-                    copies.iter().map(|(b, n)| (*b, n)).collect();
+                let inputs: Vec<(BodyId, &BodyNames)> = all.iter().map(|(b, n)| (*b, n)).collect();
                 Ok((
                     body,
                     naming::name_body(&self.kernel, body, id.0, &r.history, &inputs)?,
@@ -875,8 +879,13 @@ impl Rebuilder {
             }
             return Ok(out);
         }
+        let copies: Vec<(BodyId, BodyNames)> =
+            copies.into_iter().map(|(b, n, ..)| (b, n)).collect();
+        if matches!(merge.op, BooleanOp::Remove | BooleanOp::Intersect) && !merge.surface {
+            return self.cut_with_parts(id, seeds, copies, merge, state);
+        }
         let t0 = web_time::Instant::now();
-        let joined = self.join(id, copies.into_iter().map(|(b, n, ..)| (b, n)).collect())?;
+        let joined = self.join(id, copies, &[])?;
         profiled("pattern's join", t0);
         // Add with no merge scope: the copies merge with the seed parts they touch, as Onshape's
         // part pattern and mirror do, not with every part they touch (a mirrored half of a cover
@@ -926,6 +935,106 @@ impl Rebuilder {
         let out = self.combine(id, merge, joined, state, state.geoms.clone());
         profiled("pattern's merge", t0);
         out
+    }
+
+    /// Part pattern or mirror, Remove or Intersect: the seed parts and their copies are the
+    /// tools, taken out of (or kept of) the merge scope's parts and gone afterwards, as a
+    /// Boolean's tools are and as Onshape's part pattern does (its boolean's tools are the seeds
+    /// with the copies, its targets the scope less those): four holes round a flange from one
+    /// pin patterned ×4, and no pin left (issue #300). The scope is the parts named, all the
+    /// others (Merge with all), else the ones a tool overlaps.
+    ///
+    /// A Remove cuts with the tools one beside another, not joined first: the kernel unites
+    /// tools itself where it can and cuts one by one where it can't (three of four rods of one
+    /// radius meeting at the axis, a T it can't cut with as one tool). An Intersect keeps what
+    /// any tool covers, so its tools are joined. The copies are released.
+    fn cut_with_parts(
+        &mut self,
+        id: FeatureId,
+        seeds: &[PartId],
+        copies: Vec<(BodyId, BodyNames)>,
+        merge: &Merge,
+        state: &Arc<State>,
+    ) -> Result<Output, String> {
+        let remove = merge.op == BooleanOp::Remove;
+        let seed_tools: Vec<(BodyId, BodyNames)> = seeds
+            .iter()
+            .filter_map(|s| {
+                let p = state.part(*s)?;
+                Some((p.body?, (*p.names).clone()))
+            })
+            .collect();
+        // The tools: the seeds' own bodies (the state's) and `made`, which are released here.
+        let made: Vec<(BodyId, BodyNames)> = if remove {
+            copies
+        } else {
+            let t0 = web_time::Instant::now();
+            let joined = self.join(id, copies, &seed_tools)?;
+            profiled("pattern's join", t0);
+            vec![joined]
+        };
+        let tools: Vec<&(BodyId, BodyNames)> = if remove {
+            seed_tools.iter().chain(&made).collect()
+        } else {
+            made.iter().collect()
+        };
+        let geoms = state.geoms.clone();
+        let result = (|| -> Result<Output, String> {
+            // With no scope given, what the tools overlap.
+            let automatic = !merge.merge_all && !merge.scope_set && merge.scope.is_empty();
+            let mut contacts = Contacts::default();
+            if automatic {
+                for tool in &tools {
+                    let c = self.contacts(tool.0, state, false, false);
+                    for p in c.overlaps {
+                        if !seeds.contains(&p) && !contacts.overlaps.contains(&p) {
+                            contacts.overlaps.push(p);
+                        }
+                    }
+                }
+                contacts.touches = contacts.overlaps.clone();
+            }
+            let mut scope = Self::scope(merge, state, &contacts);
+            scope.retain(|p| !seeds.contains(p));
+            if scope.is_empty() {
+                return Err(if remove {
+                    "Nothing to remove: the parts and their copies don't reach another part".into()
+                } else {
+                    "Nothing to intersect: the parts and their copies don't reach another part"
+                        .into()
+                });
+            }
+            // The dialog's preview of a Remove: the material it takes out of the parts.
+            let removed = (self.stage_for == Some(id) && remove)
+                .then(|| self.removed_volume(id, &tools, &scope, state, &geoms));
+            let mut next = (**state).clone();
+            let kind = if remove {
+                BoolOp::Subtract
+            } else {
+                BoolOp::Intersect
+            };
+            let t0 = web_time::Instant::now();
+            let mut placed = Vec::new();
+            for part in &scope {
+                placed.extend(self.cut(id, *part, kind, &tools, &mut next)?);
+            }
+            profiled("pattern's cut", t0);
+            next.parts.retain(|p| !seeds.contains(&p.part.id));
+            let mut out = self.finish(id, placed, next, id.0, geoms.clone(), PartKind::Solid)?;
+            out.stage = removed.and_then(|mut v| {
+                let first = (!v.is_empty()).then(|| v.remove(0))?;
+                Some(Stage {
+                    before: out.state.parts.iter().map(|p| (*p.part).clone()).collect(),
+                    tool: first,
+                    more: v,
+                    remove: true,
+                })
+            });
+            out.contacts = automatic.then_some(contacts);
+            Ok(out)
+        })();
+        self.release_all(&made);
+        result
     }
 
     /// New copies of the parts, moved by proper rigid motions (no reflection): each copy is its
@@ -1138,7 +1247,7 @@ impl Rebuilder {
             };
             let copies = self.copies_of(id, tool, &tool_names, make);
             self.kernel.release(tool);
-            let joined = self.join(id, copies?)?;
+            let joined = self.join(id, copies?, &[])?;
             let result = match class {
                 PointClass::Outside => self.cut(id, pid, BoolOp::Subtract, &[&joined], &mut next),
                 PointClass::Inside => self.add(id, &joined, &[pid], false, &mut next),
@@ -1291,7 +1400,7 @@ impl Rebuilder {
                 if let Some(tools) = &tools {
                     for (seed_op, body, names) in tools {
                         let copies = self.copies_of(id, *body, names, make)?;
-                        let joined = self.join(id, copies)?;
+                        let joined = self.join(id, copies, &[])?;
                         let placed = if *seed_op == BooleanOp::Remove {
                             self.cut(id, pid, BoolOp::Subtract, &[&joined], &mut next)
                         } else {
@@ -1335,7 +1444,7 @@ impl Rebuilder {
                 if let Some((b, names)) = removed {
                     let copies = self.copies_of(id, b, &names, make);
                     self.kernel.release(b);
-                    let joined = self.join(id, copies?)?;
+                    let joined = self.join(id, copies?, &[])?;
                     let placed = self.cut(id, pid, BoolOp::Subtract, &[&joined], &mut next);
                     self.kernel.release(joined.0);
                     self.place_now(&mut next, placed?, &mut changed, &mut spare);
@@ -1343,7 +1452,7 @@ impl Rebuilder {
                 if let Some((b, names)) = added {
                     let copies = self.copies_of(id, b, &names, make);
                     self.kernel.release(b);
-                    let joined = self.join(id, copies?)?;
+                    let joined = self.join(id, copies?, &[])?;
                     let placed = self.add(id, &joined, &[pid], false, &mut next);
                     self.kernel.release(joined.0);
                     self.place_now(&mut next, placed?, &mut changed, &mut spare);
