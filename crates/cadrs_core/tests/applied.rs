@@ -900,3 +900,154 @@ fn folders_hold_runs_of_features() {
     d.h.undo(&mut d.d).unwrap();
     assert_eq!(d.d.element(d.el).unwrap().folders().len(), 1);
 }
+
+/// Simpson's rule over [a, b] in `n` (even) steps.
+fn integral(f: impl Fn(f64) -> f64, a: f64, b: f64, n: usize) -> f64 {
+    let h = (b - a) / n as f64;
+    let inner: f64 = (1..n)
+        .map(|i| f(a + h * i as f64) * if i % 2 == 1 { 4.0 } else { 2.0 })
+        .sum();
+    (f(a) + inner + f(b)) * h / 3.0
+}
+
+#[test]
+fn shell_after_a_full_round_as_after_fillets() {
+    // Issue #297: two parts of one outside shape, a 30 × 10 × 8 bar with a round end (r 5),
+    // one rounded by a Full round between its sides, one by filleting its two end edges R5;
+    // each then shelled 1 mm. Both shell, to the bar (30·10·8 less the end's two corner slivers
+    // (2 − π/2)·25·8) less the cavity: the outline inset by 1 (25 − 1 long to the round's
+    // centre with the top open, 25 with the back open; 8 wide; a half disc of r 4), under the
+    // walls that stay (7 deep with the top open, 6 with the back open).
+    let (l, w, h, t) = (30.0, 10.0, 8.0, 1.0);
+    let r = w / 2.0;
+    let bar = l * w * h - (2.0 - PI / 2.0) * r * r * h;
+    let half_disc = PI * (r - t) * (r - t) / 2.0;
+    let openings = [
+        (
+            [0.0, 0.0, 1.0],
+            [10.0, 5.0, h],
+            ((l - r - t) * (w - 2.0 * t) + half_disc) * (h - t),
+        ),
+        (
+            [-1.0, 0.0, 0.0],
+            [0.0, 5.0, 4.0],
+            ((l - r) * (w - 2.0 * t) + half_disc) * (h - 2.0 * t),
+        ),
+    ];
+    for full_round in [true, false] {
+        for (normal, at, cavity) in openings {
+            let mut d = Doc::new();
+            d.block(0.0, 0.0, l, w, h);
+            let part = d.parts()[0].clone();
+            let rounding = if full_round {
+                FilletFeature {
+                    kind: FilletType::FullRound,
+                    side1: vec![face_at(&part, [0.0, -1.0, 0.0], [15.0, 0.0, 4.0])],
+                    center: vec![face_at(&part, [1.0, 0.0, 0.0], [l, 5.0, 4.0])],
+                    side2: vec![face_at(&part, [0.0, 1.0, 0.0], [15.0, w, 4.0])],
+                    ..FilletFeature::default()
+                }
+            } else {
+                FilletFeature {
+                    entities: vec![
+                        EdgeOrFace::Edge(edge_at(&part, [l, 0.0, 4.0])),
+                        EdgeOrFace::Edge(edge_at(&part, [l, w, 4.0])),
+                    ],
+                    size: r,
+                    size_expr: format!("{r} mm"),
+                    ..FilletFeature::default()
+                }
+            };
+            d.add(AddFeature::fillet(d.el, FeatureId::new(), rounding));
+            close(d.volume(), bar, 1e-6);
+            let part = d.parts()[0].clone();
+            let s = d.add(AddFeature::shell(
+                d.el,
+                FeatureId::new(),
+                ShellFeature {
+                    faces: vec![face_at(&part, normal, at)],
+                    thickness: t,
+                    thickness_expr: format!("{t} mm"),
+                    ..ShellFeature::default()
+                },
+            ));
+            let b = d.build();
+            assert_eq!(b.error(s), None, "full round {full_round}, open {normal:?}");
+            close(b.parts[0].mass.unwrap().volume, bar - cavity, 1e-6);
+        }
+    }
+}
+
+#[test]
+fn fillet_beside_a_chamfer_smaller_and_larger_than_it() {
+    // Issue #299: a 5 × 45° chamfer, then a fillet on an edge that ends at it: R6 built, R4
+    // did not, and the chamfer edited to 7 under the R6 built. The 40 × 30 × 20 block's top
+    // edge at x = 40 chamfered (c²/2 along 30), and a fillet on a side face's edge that ends
+    // at the chamfer: the upright one at (40, 0), `len` = 20, or the top one along X, `len` =
+    // 40. At u from the chamfered face the fillet stands r(1 − sin φ) off the side face
+    // (u = r(1 − cos φ)) and the body is len − c + u long under the chamfer, len past its top
+    // edge (u > c: a fillet larger than the chamfer runs on over the face beyond it).
+    let (l, w, h) = (40.0, 30.0, 20.0);
+    let removes = |len: f64, c: f64, r: f64| {
+        let f = |phi: f64| {
+            let u = r * (1.0 - phi.cos());
+            r * (1.0 - phi.sin()) * (len - c + u.min(c)) * r * phi.sin()
+        };
+        let corner = if r > c {
+            (1.0 - c / r).acos()
+        } else {
+            PI / 2.0
+        };
+        integral(f, 0.0, corner, 2000) + integral(f, corner, PI / 2.0, 2000)
+    };
+    for (seed, len) in [([l, 0.0, 7.5], h), ([17.5, 0.0, h], l)] {
+        let mut d = Doc::new();
+        d.block(0.0, 0.0, l, w, h);
+        let part = d.parts()[0].clone();
+        let chamfer = |c: f64| ChamferFeature {
+            entities: vec![EdgeOrFace::Edge(edge_at(&part, [l, w / 2.0, h]))],
+            kind: ChamferType::DistanceAngle,
+            distance: c,
+            distance_expr: format!("{c} mm"),
+            angle: 45.0,
+            ..ChamferFeature::default()
+        };
+        let ch = d.add(AddFeature::chamfer(d.el, FeatureId::new(), chamfer(5.0)));
+        close(d.volume(), l * w * h - 12.5 * w, 1e-6);
+        let edge = edge_at(&d.parts()[0], seed);
+        let fillet = |r: f64| FilletFeature {
+            entities: vec![EdgeOrFace::Edge(edge)],
+            size: r,
+            size_expr: format!("{r} mm"),
+            ..FilletFeature::default()
+        };
+        let f = d.add(AddFeature::fillet(d.el, FeatureId::new(), fillet(4.0)));
+        // The report's order: R4 and R6 beside the 5 mm chamfer, the chamfer edited to 7 under
+        // the R6, then R4 beside that, and back.
+        for (c, r) in [(5.0, 4.0), (5.0, 6.0), (7.0, 6.0), (7.0, 4.0), (5.0, 5.0)] {
+            for (feature, kind) in [
+                (ch, FeatureKind::Chamfer(chamfer(c))),
+                (f, FeatureKind::Fillet(fillet(r))),
+            ] {
+                d.h.execute(
+                    &mut d.d,
+                    &SetFeature {
+                        element: d.el,
+                        feature,
+                        kind,
+                        label: "Edit".into(),
+                    },
+                )
+                .unwrap();
+            }
+            let b = d.build();
+            assert!(b.errors.is_empty(), "C{c} R{r}: {:?}", b.errors);
+            let chamfered = l * w * h - c * c / 2.0 * w;
+            close(
+                b.parts[0].mass.unwrap().volume,
+                chamfered - removes(len, c, r),
+                1e-6,
+            );
+        }
+    }
+}

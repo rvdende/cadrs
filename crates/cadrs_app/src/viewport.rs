@@ -1332,7 +1332,7 @@ fn viewport_pointer(
     kind: Res<ActiveKind>,
     mut picks: MessageWriter<PickRequest>,
     planes: Res<PlanesVisible>,
-    (parts, sketch, extrude, applied, create, pick_override, eda2d): (
+    (parts, sketch, extrude, applied, create, pick_override, eda2d, selection): (
         Res<crate::parts::PartCache>,
         Option<Res<crate::sketch::SketchSession>>,
         Option<Res<crate::extrude::ExtrudeSession>>,
@@ -1340,6 +1340,7 @@ fn viewport_pointer(
         Option<Res<crate::create_selection::CreateSelection>>,
         Res<PickFilterOverride>,
         Res<crate::eda::Eda2d>,
+        Res<Selection>,
     ),
     (mut focus, q_number, mut grab, zoom_window, time): (
         ResMut<bevy::input_focus::InputFocus>,
@@ -1476,17 +1477,28 @@ fn viewport_pointer(
                         // A click in the viewport: toggle what is under the cursor, or clear.
                         let picked = match (*kind, filter) {
                             (ActiveKind::Assembly, Some(f)) if forced.is_some() => {
-                                crate::parts::pick_scene(&parts, &view.view, rect.offset(pos), f)
+                                crate::parts::pick_scene_selected(
+                                    &parts,
+                                    &view.view,
+                                    rect.offset(pos),
+                                    f,
+                                    &selection.0,
+                                )
                             }
-                            (ActiveKind::PartStudio, Some(f)) => {
-                                crate::parts::pick_scene(&parts, &view.view, rect.offset(pos), f)
-                            }
+                            (ActiveKind::PartStudio, Some(f)) => crate::parts::pick_scene_selected(
+                                &parts,
+                                &view.view,
+                                rect.offset(pos),
+                                f,
+                                &selection.0,
+                            ),
                             // P3B.1: faces, edges and vertices of the instances.
-                            (ActiveKind::Assembly, Some(_)) => crate::parts::pick_scene(
+                            (ActiveKind::Assembly, Some(_)) => crate::parts::pick_scene_selected(
                                 &parts,
                                 &view.view,
                                 rect.offset(pos),
                                 crate::assembly::pick_filter(),
+                                &selection.0,
                             ),
                             _ => None,
                         };
@@ -2507,13 +2519,14 @@ fn update_hover(
     session: Option<Res<crate::sketch::SketchSession>>,
     planes: Res<PlanesVisible>,
     hover_override: Res<HoverOverride>,
-    (parts, extrude, applied, create, pick_override, triad): (
+    (parts, extrude, applied, create, pick_override, triad, selection): (
         Res<crate::parts::PartCache>,
         Option<Res<crate::extrude::ExtrudeSession>>,
         Option<Res<crate::applied::AppliedSession>>,
         Option<Res<crate::create_selection::CreateSelection>>,
         Res<PickFilterOverride>,
         Option<Res<crate::assembly::triad::Triad>>,
+        Res<Selection>,
     ),
     (zoom_window, section_arrow, eda2d, fit, asm_parts): (
         Option<Res<crate::view_options::ZoomWindow>>,
@@ -2585,10 +2598,11 @@ fn update_hover(
             && lf == f
             && !parts.is_changed()
             && !view.is_changed()
+            && !selection.is_changed()
         {
             return picked;
         }
-        let picked = crate::parts::pick_scene(&parts, &view.view, offset, f);
+        let picked = crate::parts::pick_scene_selected(&parts, &view.view, offset, f, &selection.0);
         *last = Some((offset, f, picked));
         picked
     });

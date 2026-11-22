@@ -154,7 +154,10 @@ pub struct PatternFeature {
     pub skip_on: bool,
     #[serde(default)]
     pub skipped: Vec<[u32; 2]>,
-    /// Part pattern: New, Add, Remove, Intersect, and the merge scope (PS22.6).
+    /// Part pattern: New, Add, Remove, Intersect, and the merge scope (PS22.6). The parts are
+    /// used along with their copies: Add joins both to the merge scope's parts they touch;
+    /// Remove and Intersect use both as tools on them, and the parts are gone afterwards (as a
+    /// Boolean's tools).
     #[serde(default)]
     pub op: BooleanOp,
     #[serde(default)]
@@ -350,7 +353,8 @@ pub struct MirrorFeature {
     #[serde(default)]
     pub faces: Vec<FaceRef>,
     pub plane: Option<MirrorPlane>,
-    /// Part mirror: New, Add (the usual: one symmetric part, PS26.2), Remove, Intersect.
+    /// Part mirror: New, Add (the usual: one symmetric part, PS26.2), Remove, Intersect (the
+    /// parts and their images as tools on the merge scope's parts, the parts gone afterwards).
     #[serde(default)]
     pub op: BooleanOp,
     #[serde(default)]

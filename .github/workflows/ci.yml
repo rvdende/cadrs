@@ -70,12 +70,12 @@ jobs:
         run: tools/kernel_clippy.sh
 
       # The checks ran above (--no-checks).
-      - name: Fast gate (lib, conformance, smlib_booleans, validity, determinism)
+      - name: Fast gate (lib, conformance, smlib_booleans, validity, determinism, issue_reports)
         env:
           RUST_TEST_THREADS: 4
         run: |
           tools/kernel_gate.sh --tree . --commit "$GITHUB_SHA" --out "$GITHUB_WORKSPACE/kernel_gate" \
-            --no-checks --only lib,conformance,smlib_booleans,validity,determinism --hang 600
+            --no-checks --only lib,conformance,smlib_booleans,validity,determinism,issue_reports --hang 600
 
       - uses: actions/upload-artifact@v4
         if: always()

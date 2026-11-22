@@ -6,6 +6,13 @@
 linker = "clang"
 rustflags = ["-C", "link-arg=-fuse-ld=mold", "-Zshare-generics=y", "-Zthreads=8"]
 
+# Release builds of our own crates are incremental (the dependencies aren't, and build as
+# before), so an edit recompiles the changed parts of a crate instead of the whole of it; rustc
+# then splits each crate into 256 codegen units, not 16. CI, the release builds and the browser
+# build set CARGO_INCREMENTAL=0, which wins over this.
+[profile.release]
+incremental = true
+
 [alias]
 # Builds in release and installs it for the current user, with a launcher entry (Linux; see
 # crates/cadrs/src/install.rs).

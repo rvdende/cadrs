@@ -25,6 +25,7 @@ crates/cadrs_kernel/
   tests/fuzz_readers.rs # property tests: no input panics a reader or a B-spline constructor
   tests/exchange_corpus.rs # a public dataset's STEP and IGES files read and checked (needs the dataset)
   tests/native_debug.rs # reproductions and timings (several replay CADRS_DUMP_DIR dumps)
+  tests/issue_reports.rs # GitHub reports rebuilt from their descriptions, with the cases round each
 ```
 There's no Bevy dependency. `cadrs_core` depends on `cadrs_kernel`, and features rebuild through it
 (see "Rebuilding the feature list" below).
@@ -346,6 +347,11 @@ results, or with `--static`, it falls back to reading the suites' source, which 
   drill-bit cut chain) and `tests/fingerprint.rs` (a hash of each result's body for a sample of
   booleans and offsets on 1 and 4 rayon threads, which must agree). `CADRS_META_SEED`,
   `CADRS_META_CASES`, `CADRS_STRESS_*` and `CADRS_FINGERPRINT_*` set seeds, sizes and output.
+- `tests/issue_reports.rs`: bugs reported on GitHub, rebuilt from their descriptions with the
+  cases round each (a pattern's overlapping pins cut from a ring, #300; shells of a bar whose
+  round end was made three ways, #297; every edge of a chamfered block filleted smaller and
+  larger than the chamfer, #299), against closed forms and identities between results. A case
+  that fails today is `#[ignore]`d with the gap it waits on; CI's fast gate runs the suite.
 - The generated suites run on a DRAW-style harness (`native::draw`) and the SMLib oracle's body
   writer (`native::oracle`): test code, built only for tests and with the `testkit` feature
   (the crate's own tests turn it on through a dev-dependency on itself), not kernel API.
