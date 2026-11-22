@@ -409,6 +409,30 @@ impl Rebuilder {
             }
         }
 
+        // A free end inside a part the members are trimmed by runs on through it, for the trim
+        // to cut: a tube ending on another's axis is saddled to it (its square end there would
+        // touch the other's surface at two points only, and be cut to nothing sound). If the
+        // trim leaves the run-on, it is cut off again below.
+        let mut reached: Vec<End> = Vec::new();
+        if !x.trim.is_empty() {
+            let boxes: Vec<_> = x
+                .trim
+                .iter()
+                .filter_map(|p| state.part(*p).and_then(|p| p.body))
+                .filter_map(|b| self.kernel.bounding_box(b).ok())
+                .collect();
+            for &(m, e) in &free_ends {
+                let at = members[m].point(e);
+                let inside = boxes
+                    .iter()
+                    .any(|b| (0..3).all(|k| b.min[k] - tol <= at[k] && at[k] <= b.max[k] + tol));
+                if inside && plans[m][e].run_on == 0.0 && plans[m][e].short == 0.0 {
+                    plans[m][e].run_on = 2.0 * r_section;
+                    reached.push((m, e));
+                }
+            }
+        }
+
         // The members' bodies, run on and cut by their planes.
         let mut bodies: Vec<(BodyId, BodyNames)> = Vec::new();
         let release = |k: &mut Self, bodies: &[(BodyId, BodyNames)]| {
@@ -562,6 +586,38 @@ impl Rebuilder {
                         release(self, &rest);
                         return Err(format!("The {} failed: {e}", member_name(&members[i])));
                     }
+                }
+            }
+        }
+
+        // The ends run on for the trims: trimmed, or (the run-on still there) cut square where
+        // the curve ends, as an end the trims leave alone is.
+        for &(i, e) in &reached {
+            let m = &members[i];
+            let (pe, out) = (m.point(e), -m.inward(e));
+            let past = self
+                .kernel
+                .bounding_box(bodies[i].0)
+                .map_or(0.0, |bb| bb.max_along(pe, &out));
+            // (A cut of curved faces has a loose box: gone is less than half the run-on left.)
+            if past <= 0.5 * plans[i][e].run_on {
+                trimmed[i][e] = true;
+                continue;
+            }
+            trimmed[i][e] = false;
+            let b = (bodies[i].0, bodies[i].1.clone());
+            let bound = (!m.straight).then(|| plans[i][e].run_on + 4.0 * r_section);
+            match self.frame_cut(op, b, pe, -out, base_of(m.key) + 0xd8 + e as u64, bound) {
+                Ok(c) => bodies[i] = c,
+                Err(err) => {
+                    let rest: Vec<(BodyId, BodyNames)> = bodies
+                        .iter()
+                        .enumerate()
+                        .filter(|(j, _)| *j != i)
+                        .map(|(_, b)| b.clone())
+                        .collect();
+                    release(self, &rest);
+                    return Err(format!("The {} failed: {err}", member_name(m)));
                 }
             }
         }
