@@ -9,7 +9,9 @@
 //! 2. Clicking a plane in the viewport or its row in the feature list fills the field ("Top
 //!    plane ✕"). The view does **not** rotate; a larger rectangle labelled with the sketch's
 //!    name marks the sketch plane and the sketch toolbar becomes active. `N` turns the view
-//!    normal to the sketch plane.
+//!    normal to the sketch plane; with Preferences › Navigation › *View normal to the sketch
+//!    plane* on (issue #265, [`turn_to_sketch_plane`]), the view turns so by itself, here and
+//!    when a sketch is opened for editing.
 //! 3. ✓ or Enter accepts: everything done in the dialog becomes one undo step ("Insert Sketch
 //!    1" or "Edit Sketch 1"). Only ✕ cancels (Esc never leaves the sketch: one press too many
 //!    would throw it away): a new sketch is removed and an edit is reverted, as an undoable step;
@@ -580,6 +582,21 @@ fn start_session(
         .resource_mut::<NextState<PartStudioMode>>()
         .set(PartStudioMode::Sketching);
     cadrs_ui::close_toasts(world);
+    if !waiting {
+        turn_to_sketch_plane(world);
+    }
+}
+
+/// With *View normal to the sketch plane* on (`Preferences::sketch_view_normal`, issue #265):
+/// the view turns normal to the sketch plane, as `N` does. Called once a sketch has its plane:
+/// a new sketch started on one or given one, and a sketch opened for editing.
+fn turn_to_sketch_plane(world: &mut World) {
+    let on = world
+        .get_resource::<crate::preferences_ui::LocalPreferences>()
+        .is_some_and(|p| p.0.sketch_view_normal);
+    if on && world.contains_resource::<ViewportView>() {
+        crate::viewport::normal_to_sketch(world);
+    }
 }
 
 fn feature_name(world: &World, s: &SketchSession) -> String {
@@ -799,6 +816,7 @@ fn set_plane(world: &mut World, plane: Option<PlaneRef>) {
         session.plane_extent = extent;
         session.plane_center = Vec2::ZERO;
         close_prompt(world);
+        turn_to_sketch_plane(world);
     }
 }
 
@@ -2609,6 +2627,41 @@ mod tests {
         assert_eq!(curves(w), [3]);
         w.resource_mut::<ActiveDocument>().undo();
         assert_eq!(w.resource::<ActiveDocument>().doc, after);
+    }
+
+    /// Issue #265: with *View normal to the sketch plane* on, the view turns normal to the sketch
+    /// plane once a sketch has one, picked after it started or opened for editing; off (the
+    /// default, as in Onshape), the view stays where it is.
+    #[test]
+    fn the_view_turns_to_the_sketch_plane_only_when_preferred() {
+        use crate::preferences_ui::LocalPreferences;
+        let facing = |w: &World| w.resource::<ViewportView>().target().back();
+        let square_to = |w: &World, n: Vec3| facing(w).distance(n) < 1e-4;
+        for on in [false, true] {
+            let mut app = app();
+            let w = app.world_mut();
+            let mut prefs = cadrs_core::preferences::Preferences::default();
+            prefs.sketch_view_normal = on;
+            w.insert_resource(LocalPreferences(prefs));
+            let start = facing(w);
+            assert!(!square_to(w, Vec3::Z) && !square_to(w, -Vec3::Y));
+
+            begin_sketch(w);
+            assert_eq!(facing(w), start, "no plane yet: nothing to turn to");
+            set_plane(w, Some(PlaneRef::Top));
+            assert_eq!(square_to(w, Vec3::Z), on);
+            accept_sketch(w);
+
+            // Opened for editing, from another view (Front's).
+            let feature = w.resource::<ActiveDocument>().doc.elements[0].features()[0].id;
+            let front = w.resource::<ViewportView>().view.normal_to(-Vec3::Y);
+            let mut v = w.resource_mut::<ViewportView>();
+            v.view = front;
+            v.animation = None;
+            edit_sketch(w, feature);
+            assert_eq!(square_to(w, Vec3::Z), on);
+            assert_eq!(square_to(w, -Vec3::Y), !on);
+        }
     }
 
     /// The Construction button and Q (issue #45, like Onshape): with a curve selected they make

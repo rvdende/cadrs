@@ -199,6 +199,7 @@ impl PrefsDialog {
             Section::Navigation => {
                 p.mouse = d.mouse;
                 p.keep_camera_up = d.keep_camera_up;
+                p.sketch_view_normal = d.sketch_view_normal;
             }
             Section::Assembly => {
                 self.snap = degrees(d.rotation_snap_degrees);
@@ -625,6 +626,16 @@ fn groups(section: Section, s: &PrefsDialog, facts: &Facts) -> Vec<Group> {
                             Control::Switch(tr("view-menu-keep-up"), p.keep_camera_up),
                         )
                         .note("preferences-keep-up-note"),
+                        Row::new(
+                            "pref-sketch-view-normal",
+                            tr("preferences-sketch-view"),
+                            "sketch view normal to plane auto rotate align",
+                            Control::Switch(
+                                tr("preferences-sketch-view-normal"),
+                                p.sketch_view_normal,
+                            ),
+                        )
+                        .note("preferences-sketch-view-normal-note"),
                     ],
                 },
             ]
@@ -1064,6 +1075,7 @@ fn previewed(base: Preferences, draft: &Preferences, kept: &Preferences) -> Pref
         vsync: draft.vsync,
         mouse: draft.mouse,
         keep_camera_up: draft.keep_camera_up,
+        sketch_view_normal: kept.sketch_view_normal,
         language: kept.language,
         profile_cpu: kept.profile_cpu,
         autoconnect_p2p: kept.autoconnect_p2p,
@@ -1188,6 +1200,7 @@ fn on_switch(ev: On<SwitchChange>, q: Query<&Name>, mut commands: Commands) {
         "pref-vsync" => |s, on| s.draft.vsync = on,
         "pref-profile-cpu" => |s, on| s.draft.profile_cpu = on,
         "pref-keep-camera-up" => |s, on| s.draft.keep_camera_up = on,
+        "pref-sketch-view-normal" => |s, on| s.draft.sketch_view_normal = on,
         "pref-p2p-autoconnect" => |s, on| s.draft.autoconnect_p2p = on,
         "pref-public-documents" => |s, on| s.draft.public_documents = on,
         "pref-mcp-enabled" => |s, on| s.draft.mcp.enabled = on,

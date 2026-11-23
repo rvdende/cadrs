@@ -431,6 +431,11 @@ pub struct Preferences {
     /// other gesture.
     #[serde(default)]
     pub keep_camera_up: bool,
+    /// Turn the view normal to the sketch plane when a sketch starts (once it has its plane) and
+    /// when one is opened for editing, as `N` does (issue #265, like SolidWorks's "Auto-rotate
+    /// view normal to sketch plane"). Off, the view stays where it is, as in Onshape.
+    #[serde(default)]
+    pub sketch_view_normal: bool,
     /// The ground grid's look, or none ([`GridStyle`]).
     #[serde(default)]
     pub grid: GridStyle,
@@ -552,6 +557,7 @@ impl Default for Preferences {
             language: Language::English,
             last_slicer: None,
             keep_camera_up: false,
+            sketch_view_normal: false,
             grid: GridStyle::default(),
             frame_stats: FrameStatsMode::default(),
             origin: OriginStyle::default(),
@@ -745,6 +751,7 @@ mod tests {
             language: Language::PortugueseBrazil,
             last_slicer: Some(0),
             keep_camera_up: true,
+            sketch_view_normal: true,
             grid: GridStyle::Off,
             frame_stats: FrameStatsMode::Fps,
             origin: OriginStyle::Axes,

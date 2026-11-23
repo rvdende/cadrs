@@ -165,6 +165,10 @@ preferences-profiling = Profiling
 preferences-group-view = View
 preferences-camera = Camera
 preferences-keep-up-note = Rotating turns about the vertical and tilts, without rolling the view.
+# Preferences › Navigation › View: the row's label, its switch, and the note under it.
+preferences-sketch-view = Sketch
+preferences-sketch-view-normal = View normal to the sketch plane
+preferences-sketch-view-normal-note = When a sketch gets its plane, and when one is opened for editing, the view turns square to it, as N does.
 # The heading in Collaboration over the cadrs ID and going online.
 preferences-group-network = Network
 
