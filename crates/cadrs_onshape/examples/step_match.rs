@@ -106,7 +106,12 @@ fn points(k: &DefaultKernel, bodies: &[BodyId]) -> Vec<Point3<f64>> {
         }
         if let Ok(m) = k.tessellate(*b, Tessellation::default()) {
             let step = (m.positions.len() / 400).max(1);
-            out.extend(m.positions.iter().step_by(step).copied());
+            // (Only mesh points that are on the body: the mesher now and then puts one a
+            // little outside the tip of a sliver of a face, which says nothing of the body.)
+            out.extend(m.positions.iter().step_by(step).copied().filter(|p| {
+                k.min_distance(&DistanceTarget::Point(*p), &DistanceTarget::Body(*b))
+                    .is_ok_and(|r| r.distance <= 1e-7)
+            }));
         }
     }
     out
@@ -169,6 +174,47 @@ fn main() {
                             }
                         }
                         println!("   mesh points outside the box, by face: {per_face:?}");
+                        // `STEP_NEAR=x,y,z`: how near each face's mesh comes to that point,
+                        // and how far the kernel says the body is from it.
+                        if let Some(at) = std::env::var("STEP_NEAR").ok().and_then(|v| {
+                            let c: Vec<f64> = v.split(',').filter_map(|x| x.parse().ok()).collect();
+                            (c.len() == 3).then(|| Point3::new(c[0], c[1], c[2]))
+                        }) {
+                            let mut near: std::collections::BTreeMap<u32, f64> = Default::default();
+                            for (t, f) in m.indices.iter().zip(&m.triangle_faces) {
+                                for i in t {
+                                    let d = (m.positions[*i as usize] - at).norm();
+                                    let e = near.entry(f.0 as u32).or_insert(f64::MAX);
+                                    *e = e.min(d);
+                                }
+                            }
+                            println!(
+                                "   nearest mesh point by face: {near:.4?}; the body is {:?} away",
+                                k.min_distance(
+                                    &DistanceTarget::Point(at),
+                                    &DistanceTarget::Body(b)
+                                )
+                                .map(|r| r.distance)
+                            );
+                        }
+                        // Each face's mesh area against its exact area: a face meshed over
+                        // the wrong part of its surface shows here.
+                        let mut area: std::collections::BTreeMap<u32, f64> = Default::default();
+                        for (t, f) in m.indices.iter().zip(&m.triangle_faces) {
+                            let [a, b, c] = t.map(|i| m.positions[i as usize]);
+                            *area.entry(f.0 as u32).or_default() +=
+                                (b - a).cross(&(c - a)).norm() / 2.0;
+                        }
+                        for f in k.faces(b).unwrap_or_default() {
+                            let meshed = area.get(&(f.id.0 as u32)).copied().unwrap_or(0.0);
+                            println!(
+                                "   face {}: exact {:.4}, meshed {:.4} ({:+.2}%)",
+                                f.id.0,
+                                f.area,
+                                meshed,
+                                100.0 * (meshed - f.area) / f.area.max(1e-12)
+                            );
+                        }
                     }
                 }
             }
@@ -189,6 +235,29 @@ fn main() {
         .filter(|p| !b.composites.iter().any(|c| c.part == p.id))
         .map(|p| (p.id, p.name.clone()))
         .collect();
+    // `STEP_MATCH_MESH=1`: each face's shown mesh against its exact area, as the app draws it.
+    if std::env::var_os("STEP_MATCH_MESH").is_some() {
+        for p in b.parts.iter().filter(|p| only.contains(&p.name)) {
+            let s = &p.solid;
+            for (i, f) in s.faces.iter().enumerate() {
+                let mut meshed = 0.0;
+                for t in f.first_triangle..f.first_triangle + f.triangle_count {
+                    let v = |k: usize| {
+                        let q = s.positions[s.indices[3 * t + k] as usize];
+                        nalgebra::Vector3::new(q[0] as f64, q[1] as f64, q[2] as f64)
+                    };
+                    meshed += (v(1) - v(0)).cross(&(v(2) - v(0))).norm() / 2.0;
+                }
+                let exact = f.area.unwrap_or(0.0);
+                println!(
+                    "{} face {i}: exact {exact:.4}, meshed {meshed:.4} ({:+.2}%)",
+                    p.name,
+                    100.0 * (meshed - exact) / exact.max(1e-12)
+                );
+            }
+        }
+        return;
+    }
     let files = cadrs_core::rebuild::export_step(
         features,
         StepRequest {
@@ -250,6 +319,13 @@ fn main() {
     }
     for (i, (_, name)) in parts.iter().enumerate() {
         let Some(file) = files.get(i) else { continue };
+        // `STEP_MATCH_KEEP=<dir>`: our STEP files, kept to look at.
+        if let Some(dir) = std::env::var_os("STEP_MATCH_KEEP") {
+            let _ = std::fs::write(
+                std::path::Path::new(&dir).join(format!("{name}.step")),
+                &file.bytes,
+            );
+        }
         let ours = match k.import_step(&file.bytes) {
             Ok(b) => b,
             Err(e) => {

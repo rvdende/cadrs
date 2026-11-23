@@ -6523,6 +6523,11 @@ cut-list-total-mass = Frame mass: { $mass }
 cut-list-copy = Copy
 cut-list-export = Export CSV
 cut-list-empty = No frame members
+# The Cut list panel's button that shows every frame member, beside one for each Cut list
+# feature.
+cut-list-all-members = All members
+# The heading over the parts a Cut list names that aren't frame members (panels, feet).
+cut-list-other-parts = Other parts
 # { $count } is how many rows were copied.
 cut-list-copied = Copied { $count } rows
 # { $file } is the file's name.

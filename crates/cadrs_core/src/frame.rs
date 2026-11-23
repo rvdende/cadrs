@@ -1642,6 +1642,33 @@ impl CutListFeature {
         }
     }
 
+    /// Whether override `i` is for `part` (a listed part).
+    pub fn override_applies(&self, i: usize, part: PartId) -> bool {
+        let mut i = i;
+        while self.overrides.get(i).is_some_and(|o| o.same_as_previous) && i > 0 {
+            i -= 1;
+        }
+        self.overrides
+            .get(i)
+            .is_some_and(|o| o.all || o.parts.contains(&part))
+    }
+
+    /// The column values the list gives every one of `parts` (a later override of a column
+    /// taking the place of an earlier one's), in the order their columns first appear.
+    pub fn values_for(&self, parts: &[PartId]) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = Vec::new();
+        for (i, o) in self.overrides.iter().enumerate() {
+            if parts.is_empty() || !parts.iter().all(|p| self.override_applies(i, *p)) {
+                continue;
+            }
+            match out.iter_mut().find(|(c, _)| *c == o.column) {
+                Some(v) => v.1 = o.value.clone(),
+                None => out.push((o.column.clone(), o.value.clone())),
+            }
+        }
+        out
+    }
+
     /// Every part the list names: those picked and those its overrides are for.
     pub fn named_parts(&self) -> Vec<PartId> {
         // (With every member listed the parts picked are only remembered.)
