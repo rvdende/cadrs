@@ -1552,6 +1552,34 @@ impl<'a> PartStudio<'a> {
                 );
             }
         }
+        // Where the model's edges and vertices were when the sketch was made, if Onshape's
+        // model just before it was scraped (`rollback/bodydetails-<n>.json`, the features
+        // above the sketch): the ids a sketch names are often of parts later features
+        // changed, which the final model no longer has.
+        let then = self
+            .raw_json("features.json")
+            .and_then(|all| {
+                all["features"]
+                    .as_array()?
+                    .iter()
+                    .position(|x| x["featureId"].as_str() == Some(fid))
+            })
+            .and_then(|at| {
+                read_json(
+                    &self
+                        .raw
+                        .dir
+                        .join("rollback")
+                        .join(format!("bodydetails-{at:02}.json")),
+                )
+            })
+            .map(|d| {
+                let mut then = body_topology(&d);
+                for (k, v) in &self.model_points {
+                    then.entry(k.clone()).or_insert_with(|| v.clone());
+                }
+                then
+            });
         let map = sketch::import(
             self.s,
             self.el,
@@ -1560,7 +1588,7 @@ impl<'a> PartStudio<'a> {
             &solved,
             plane,
             &parts,
-            &self.model_points,
+            then.as_ref().unwrap_or(&self.model_points),
             fr,
         )?;
         let g = sketch::sketch_of(self.s, self.el, id)?;
