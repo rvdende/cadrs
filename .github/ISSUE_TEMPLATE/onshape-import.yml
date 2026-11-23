@@ -1,0 +1,80 @@
+name: Onshape import — translation gap or mismatch
+description: A feature that did not come across from Onshape, or geometry that differs from what Onshape builds.
+title: "Onshape import: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping the Onshape importer. The most useful report is the importer's own:
+        `cadrs-onshape import <document> --raw <dir>` writes `<raw>/../import-report.txt`, and
+        with `--json <file>` a machine-readable `import-report.json` (features, parts, defects
+        grouped into tickets). The desktop importer's **Report → Export bug report** and
+        **Tickets** tabs write both.
+
+        Only attach documents you own or are allowed to share. A reduced Part Studio that still
+        shows the gap is better than a whole private document.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What went wrong
+      options:
+        - A feature was not imported at all (SKIPPED)
+        - A feature was imported but something was dropped (partial)
+        - The part's geometry differs from Onshape (volume, area, faces, bounding box)
+        - An assembly's instances or mates did not come across
+        - Scraping failed or the downloaded JSON is incomplete
+        - The import crashed or hung on a feature
+        - Something else
+    validations:
+      required: true
+  - type: input
+    id: document
+    attributes:
+      label: Onshape document and Part Studio
+      description: The document's name and id (from its URL), and the Part Studio / Assembly tab.
+      placeholder: "e.g. Wrapper test (3fa34f71b410df24f38d45d1), Part Studio 1"
+    validations:
+      required: true
+  - type: textarea
+    id: timeline
+    attributes:
+      label: Onshape feature timeline
+      description: The features in order, with their types, up to and including the one that fails.
+      placeholder: |
+        1. Sketch 1 (newSketch)
+        2. Extrude 1 (extrude)
+        3. Circular pattern 1 (circularPattern)
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: Importer report
+      description: The part studio's report lines from import-report.txt (or paste the matching ticket from import-report.json).
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: How to get a document with this gap — ideally the smallest recipe of features that still shows it.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: cadrs version / commit and OS
+      placeholder: "e.g. cadrs-onshape 0.2.9 (445a6deb), Linux x86-64"
+    validations:
+      required: true
+  - type: checkboxes
+    id: attachments
+    attributes:
+      label: Attachments
+      options:
+        - label: I can attach the scraped document folder (`raw/<document id>/`)
+        - label: I can attach the imported `.cadrs` file
+        - label: I can attach Onshape's STEP export of the same Part Studio
+        - label: I can attach the Part Studio's FeatureScript representation (.fs)
+        - label: None of these; the report excerpt above is all I have
