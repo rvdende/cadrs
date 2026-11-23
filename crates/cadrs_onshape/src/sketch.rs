@@ -545,6 +545,8 @@ pub fn import(
         &uses,
     )?;
     // (A bare id no edge took may be a vertex or another sketch's point the search above found.)
+    let origin_at = origin_traces(s, el, id, feature, &plane)?;
+    let plane_lines = plane_traces(s, el, id, feature, &plane)?;
     let left = unmatched
         .iter()
         .filter(|e| !projected.contains_key(*e))
@@ -552,8 +554,6 @@ pub fn import(
     if left > 0 {
         report.notes.push(format!("{left} model edge(s) not found"));
     }
-    let origin_at = origin_traces(s, el, id, feature, &plane)?;
-    let plane_lines = plane_traces(s, el, id, feature, &plane)?;
     let pierces = pierce_links(feature, &map, &sketch_of(s, el, id)?, &plane, parts);
     let pattern_lines = pattern_lines(s, el, id, feature, &map)?;
     let g = sketch_of(s, el, id)?;
@@ -1576,6 +1576,52 @@ fn model_edges(
     swap: Option<bool>,
     report: &mut FeatureReport,
 ) -> Result<(HashMap<String, CurveId>, Vec<String>), CommandError> {
+    // What an id can be: an edge of a part, else (Onshape gives a sketch's curves ids of the
+    // same kind) a curve of an earlier sketch, each as it projects onto this sketch's plane.
+    let frame0 = plane.frame();
+    let mut candidates: Vec<(cadrs_sketch::projection::Projected, cadrs_sketch::Link)> = Vec::new();
+    for part in parts {
+        for e in &part.solid.edges {
+            if let Some(shape) = cadrs_core::links::edge_curve(e)
+                .and_then(|c| cadrs_core::links::project(c, &frame0))
+            {
+                candidates.push((
+                    shape,
+                    cadrs_sketch::Link::Edge {
+                        feature: part.id.feature.0,
+                        edge: e.name,
+                    },
+                ));
+            }
+        }
+    }
+    if let Some(element) = s.document().element(el) {
+        let earlier: Vec<cadrs_core::Feature> = element
+            .features()
+            .iter()
+            .take_while(|f| f.id != id)
+            .cloned()
+            .collect();
+        let ctx = cadrs_core::links::LinkContext {
+            solids: Vec::new(),
+            features: &earlier,
+        };
+        for f in &earlier {
+            let Some(sk) = f.sketch() else { continue };
+            for curve in sk.geometry.curves.keys() {
+                let link = cadrs_sketch::Link::SketchCurve {
+                    feature: f.id.0,
+                    curve,
+                };
+                if let Some(shape) = ctx
+                    .curve(link, &frame0)
+                    .and_then(|c| cadrs_core::links::project(c, &frame0))
+                {
+                    candidates.push((shape, link));
+                }
+            }
+        }
+    }
     // Per edge id: the points on it, and the points at its middle.
     let mut hints: std::collections::BTreeMap<String, (Vec<Vec2>, Vec<Vec2>)> = Default::default();
     // Per edge id: the centres of the circles concentric with it.
@@ -1927,13 +1973,8 @@ fn model_edges(
             usize,
         );
         let mut best: Option<Best> = None;
-        for part in parts {
-            for e in &part.solid.edges {
-                let Some(shape) = cadrs_core::links::edge_curve(e)
-                    .and_then(|c| cadrs_core::links::project(c, &frame))
-                else {
-                    continue;
-                };
+        for (shape, link) in candidates.iter().cloned() {
+            {
                 let mut hits = 0;
                 let mut err = 0.0;
                 for p in &on {
@@ -2040,10 +2081,6 @@ fn model_edges(
                 }
                 // The most hints, then one no other id took, then the most of Onshape's own
                 // points, then the closest.
-                let link = cadrs_sketch::Link::Edge {
-                    feature: part.id.feature.0,
-                    edge: e.name,
-                };
                 let score = (hits, !taken.contains(&link), fits);
                 if best
                     .as_ref()
