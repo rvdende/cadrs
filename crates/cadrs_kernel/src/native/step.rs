@@ -3305,6 +3305,18 @@ impl Writer {
             let (a, z) = n.range();
             let (lo, hi) = (t[0].min(t[1]), t[0].max(t[1]));
             let hair = 1e-9 * (z - a);
+            // An end a hair from a knot is cut at the knot: cut beside it, the piece would
+            // start with a span that narrow, which nothing downstream samples well (a reader
+            // stepping along it takes hundreds of steps and gets nowhere).
+            let at_knot = |t: f64| {
+                n.knots
+                    .iter()
+                    .copied()
+                    .filter(|k| (k - t).abs() <= hair)
+                    .min_by(|x, y| (x - t).abs().total_cmp(&(y - t).abs()))
+                    .unwrap_or(t)
+            };
+            let (lo, hi) = (at_knot(lo), at_knot(hi));
             if lo >= a && hi <= z && hi - lo > hair && (lo - a > hair || z - hi > hair) {
                 return self.bspline_curve(&n.restricted(lo, hi));
             }
