@@ -63,10 +63,32 @@ test('main: registers the tickets, reports and cadrs IPC handlers', () => {
   assert.match(mainSource, /missing-summary\.txt/);
 });
 
+test('ui: the Onshape pane has navigation and a GPU status line', () => {
+  for (const id of ['nBack', 'nFwd', 'nReload', 'nHome', 'nUrl', 'gpu', 'bGpu']) {
+    assert.match(html, new RegExp(`id="${id}"`), `#${id} exists`);
+  }
+  assert.match(html, /api\.nav\(/);
+  assert.match(html, /api\.gpu\(/);
+  assert.match(html, /describeGpu/);
+  assert.match(html, /data-open="\$\{esc\(d\.id\)\}"/);
+  assert.match(preloadSource, /nav: \(action\) => ipcRenderer\.invoke\('onshape-nav'/);
+  assert.match(preloadSource, /gpu: \(\) => ipcRenderer\.invoke\('onshape-gpu'\)/);
+});
+
+test('main: the Onshape pane gets a Chrome identity, GPU switches and navigation IPC', () => {
+  assert.match(mainSource, /require\('\.\/chrome'\)/);
+  assert.match(mainSource, /app\.userAgentFallback = BROWSER_UA/);
+  assert.match(mainSource, /applyGpuSwitches\(app\.commandLine\)/);
+  assert.match(mainSource, /ipcMain\.handle\('onshape-nav'/);
+  assert.match(mainSource, /ipcMain\.handle\('onshape-gpu'/);
+  assert.match(mainSource, /before-input-event/);
+  assert.match(mainSource, /send\(\{ type: 'nav'/);
+});
+
 test('package.json: test script and packaged files include the new modules', () => {
   assert.equal(pkg.scripts.test, 'node --test "test/**/*.test.js"');
   assert.equal(pkg.scripts.tickets, 'node tickets.js');
-  for (const file of ['main.js', 'preload.js', 'tickets.js', 'reports.js', 'reportfiles.js', 'bugreport.js', 'fsanalyze.js', 'comparereport.js', 'mdhtml.js', 'ui/**']) {
+  for (const file of ['main.js', 'chrome.js', 'preload.js', 'tickets.js', 'reports.js', 'reportfiles.js', 'bugreport.js', 'fsanalyze.js', 'comparereport.js', 'mdhtml.js', 'ui/**']) {
     assert.ok(pkg.build.files.includes(file), `packaged file ${file}`);
   }
 });

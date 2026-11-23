@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld('api', {
   exportBundle: (a) => ipcRenderer.invoke('export-bundle', a),
   bugReport: (open) => ipcRenderer.invoke('bug-report', open),
   openOnshape: (url) => ipcRenderer.invoke('open-onshape', url),
+  nav: (action) => ipcRenderer.invoke('onshape-nav', action),
+  gpu: () => ipcRenderer.invoke('onshape-gpu'),
   openPath: (which) => ipcRenderer.invoke('open-path', which),
   openCadrs: () => ipcRenderer.invoke('open-cadrs'),
   onEvent: (cb) => ipcRenderer.on('event', (_e, ev) => cb(ev)),

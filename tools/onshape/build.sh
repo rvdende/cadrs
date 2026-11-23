@@ -27,6 +27,13 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 APP="$HERE/desktop"
 
+# Pin the repository's toolchain explicitly: where ~/.rustup is read-only, rustup would try to
+# sync the channel on every cargo invocation and fail instead of using what is installed.
+if [[ -z "${RUSTUP_TOOLCHAIN:-}" && -r "$REPO/rust-toolchain.toml" ]]; then
+  pinned="$(sed -n 's/^channel *= *"\(.*\)"/\1/p' "$REPO/rust-toolchain.toml" | head -1)"
+  [[ -n "$pinned" ]] && export RUSTUP_TOOLCHAIN="$pinned"
+fi
+
 MODE=package
 case "${1:-}" in
   "") ;;

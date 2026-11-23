@@ -14,13 +14,22 @@ const { toHtml } = require('./mdhtml');
 const { summarize, roots: rootsReport, perDocument, perDocumentFromJson, formatPerDocument } = require('./reports');
 const { readReportFiles } = require('./reportfiles');
 const tickets = require('./tickets');
+const { chromeUserAgent, applyGpuSwitches } = require('./chrome');
 
 const ROOT = process.env.CADRS_ONSHAPE_ROOT || path.join(os.homedir(), 'work', 'cadrs_onshape');
 const RAW = path.join(ROOT, 'raw');
 const REPO = path.resolve(__dirname, '..', '..', '..');
-const PANEL_WIDTH = 420;
+const PANEL_WIDTH = 460;
 const PARTITION = 'persist:onshape';
 const ONSHAPE = 'https://cad.onshape.com';
+
+// Onshape checks the browser it is given and wants WebGPU; Electron presents its own user agent
+// and Linux Chromium keeps WebGPU off behind a flag. Present plain Chrome and ask for the GPU
+// features before the app is ready. Troubleshooting: CADRS_ONSHAPE_GPU=0 (no switches),
+// CADRS_ONSHAPE_DISABLE_GPU=1 (software rendering), CADRS_ONSHAPE_EXTRA_FEATURES=a,b.
+const BROWSER_UA = chromeUserAgent();
+app.userAgentFallback = BROWSER_UA;
+applyGpuSwitches(app.commandLine);
 
 // The page talks to the local receiver; Chromium's private-network checks would block that.
 app.commandLine.appendSwitch('disable-features', 'PrivateNetworkAccessSendPreflights,PrivateNetworkAccessForWorkers,BlockInsecurePrivateNetworkRequests,LocalNetworkAccessChecks');
@@ -63,8 +72,10 @@ function layout() {
 
 async function createWindow() {
   receiver = await startReceiver(ROOT);
-  keepLogin(session.fromPartition(PARTITION));
-  allowReceiver(session.fromPartition(PARTITION), receiver.port);
+  const onshapeSession = session.fromPartition(PARTITION);
+  onshapeSession.setUserAgent(BROWSER_UA);
+  keepLogin(onshapeSession);
+  allowReceiver(onshapeSession, receiver.port);
   win = new BrowserWindow({ width: 1500, height: 950, title: 'cadrs Onshape Importer' });
   panel = new WebContentsView({
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true },
@@ -72,6 +83,7 @@ async function createWindow() {
   onshape = new WebContentsView({
     webPreferences: { partition: PARTITION, preload: path.join(__dirname, 'onshape-preload.js'), contextIsolation: true, sandbox: true },
   });
+  onshape.webContents.setUserAgent(BROWSER_UA);
   win.contentView.addChildView(panel);
   win.contentView.addChildView(onshape);
   layout();
@@ -79,6 +91,12 @@ async function createWindow() {
   panel.webContents.loadFile(path.join(__dirname, 'ui', 'index.html'));
   onshape.webContents.loadURL(ONSHAPE);
   for (const ev of ['did-navigate', 'did-navigate-in-page', 'page-title-updated']) onshape.webContents.on(ev, announceCurrent);
+  for (const ev of ['did-navigate', 'did-navigate-in-page', 'did-stop-loading']) onshape.webContents.on(ev, sendNav);
+  onshape.webContents.on('did-finish-load', () => {
+    sendNav();
+    if (onshapeReady()) sendGpuStatus();
+  });
+  onshape.webContents.on('before-input-event', onshapeShortcut);
   // Links out of Onshape (help pages, etc.) open in the system browser.
   onshape.webContents.setWindowOpenHandler(({ url }) => {
     if (new URL(url).hostname.endsWith('onshape.com')) onshape.webContents.loadURL(url);
@@ -93,6 +111,85 @@ function announceCurrent() {
   if (!id) return;
   const name = onshape.webContents.getTitle().replace(/\s*\|\s*Onshape.*$/i, '').replace(/\s*-\s*Onshape.*$/i, '').trim();
   send({ type: 'current', id, name: name || `Document ${id}` });
+}
+
+// ---- the Onshape pane: navigation state, shortcuts and GPU diagnostics --------------------
+function navState() {
+  const wc = onshape && onshape.webContents;
+  if (!wc || wc.isDestroyed()) return { canGoBack: false, canGoForward: false, url: '', title: '' };
+  return {
+    canGoBack: wc.canGoBack(),
+    canGoForward: wc.canGoForward(),
+    url: wc.getURL(),
+    title: wc.getTitle(),
+  };
+}
+
+function sendNav() {
+  send({ type: 'nav', ...navState() });
+}
+
+async function gpuStatus() {
+  const wc = onshape && onshape.webContents;
+  if (!wc || wc.isDestroyed()) return { error: 'the Onshape pane is not open' };
+  if (!onshapeReady()) return { error: 'Onshape is not loaded yet - open cad.onshape.com first' };
+  try {
+    const canvas = await wc.executeJavaScript(`(() => {
+      const canvas = document.createElement('canvas');
+      const gl2 = canvas.getContext('webgl2');
+      const gl = gl2 || canvas.getContext('webgl');
+      const debug = gl && gl.getExtension('WEBGL_debug_renderer_info');
+      return {
+        webgpu: typeof navigator.gpu !== 'undefined',
+        webgl: !!gl,
+        webgl2: !!gl2,
+        renderer: gl ? (debug ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL) : 'unknown') : 'no WebGL',
+        vendor: debug ? gl.getParameter(debug.UNMASKED_VENDOR_WEBGL) : '',
+        ua: navigator.userAgent,
+      };
+    })()`, true);
+    let adapter = 'no navigator.gpu';
+    if (canvas.webgpu) {
+      adapter = await wc.executeJavaScript(`(async () => {
+        try {
+          const a = await navigator.gpu.requestAdapter();
+          if (!a) return 'no adapter (WebGPU is there, but no GPU driver accepted it)';
+          const i = a.info || {};
+          return [i.vendor, i.architecture, i.device, i.description].filter(Boolean).join(' ') || 'adapter available';
+        } catch (e) { return 'requestAdapter failed: ' + e.message; }
+      })()`, true);
+    }
+    return { ...canvas, adapter };
+  } catch (e) {
+    return { error: String(e && e.message ? e.message : e) };
+  }
+}
+
+async function sendGpuStatus() {
+  send({ type: 'gpu', status: await gpuStatus() });
+}
+
+// The Onshape pane has no browser chrome: give it the usual shortcuts.
+function onshapeShortcut(event, input) {
+  if (input.type !== 'keyDown') return;
+  const wc = onshape.webContents;
+  const key = input.key;
+  if (input.alt && key === 'ArrowLeft') {
+    if (wc.canGoBack()) wc.goBack();
+    event.preventDefault();
+  } else if (input.alt && key === 'ArrowRight') {
+    if (wc.canGoForward()) wc.goForward();
+    event.preventDefault();
+  } else if (input.alt && key === 'Home') {
+    wc.loadURL(ONSHAPE);
+    event.preventDefault();
+  } else if ((input.control || input.meta) && key.toLowerCase() === 'r') {
+    wc.reload();
+    event.preventDefault();
+  } else if (key === 'F5') {
+    wc.reload();
+    event.preventDefault();
+  }
 }
 
 // Onshape's Content-Security-Policy would block fetches to the receiver: allow just that origin.
@@ -474,6 +571,25 @@ function openIssue(title, body) {
 ipcMain.handle('issue', (_e, text, title) => openIssue(title, text));
 
 // Optional: start the cadrs app (the imported documents are already in its document store).
+// Navigation for the Onshape pane (it has no browser chrome of its own) and a GPU report that
+// says whether the pane can draw at all: WebGPU/WebGL2 and the renderer Chromium picked.
+ipcMain.handle('onshape-nav', (_e, action) => {
+  const wc = onshape && onshape.webContents;
+  if (!wc || wc.isDestroyed()) return navState();
+  try {
+    if (action === 'back' && wc.canGoBack()) wc.goBack();
+    else if (action === 'forward' && wc.canGoForward()) wc.goForward();
+    else if (action === 'reload') wc.reload();
+    else if (action === 'home') wc.loadURL(ONSHAPE);
+    else if (action === 'devtools') wc.openDevTools({ mode: 'detach' });
+  } catch (e) {
+    console.error('onshape-nav:', e);
+  }
+  sendNav();
+  return navState();
+});
+ipcMain.handle('onshape-gpu', () => gpuStatus());
+
 ipcMain.handle('open-cadrs', () => {
   const bin = cadrsBinary();
   if (!bin) return { error: 'cadrs app not found: build it with `cargo build --release -p cadrs`, or set CADRS_BIN.' };

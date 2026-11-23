@@ -6,9 +6,13 @@
   body { margin: 0; font: 13px system-ui, sans-serif; background: #15171b; color: #dde; display: flex; flex-direction: column; height: 100vh; }
   header { padding: 10px 12px; background: #1d2026; }
   h1 { margin: 0 0 6px; font-size: 15px; }
-  nav { display: flex; background: #1d2026; }
-  nav button { flex: 1; background: none; border: 0; color: #9ab; padding: 8px; cursor: pointer; }
+  nav { display: flex; flex-wrap: wrap; background: #1d2026; }
+  nav button { flex: 1 1 auto; min-width: 78px; background: none; border: 0; color: #9ab; padding: 7px 6px; cursor: pointer; }
   nav button.on { color: #fff; border-bottom: 2px solid #4a9eff; }
+  .navb { padding: 4px 9px; font-size: 13px; }
+  #nUrl { flex: 1 1 120px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .docname { color: #cde; cursor: pointer; text-decoration: underline dotted; }
+  .docname:hover { color: #fff; }
   .tab { display: none; flex: 1; min-height: 0; flex-direction: column; padding: 10px; gap: 8px; }
   .tab.on { display: flex; }
   input[type=text] { width: 100%; padding: 6px; background: #0d0f12; color: #dde; border: 1px solid #333; border-radius: 4px; }
@@ -46,6 +50,17 @@
     <button class="b" id="bOn">Onshape home</button>
     <button class="b" id="bOut">Open output folder</button>
     <button class="b" id="bCadrs" disabled title="Start the cadrs app on the imported documents">Open cadrs app</button>
+  </div>
+  <div class="row" style="margin-top:6px" title="Navigation for the Onshape pane (it has no browser chrome of its own)">
+    <button class="b navb" id="nBack" title="Back (Alt+Left)">&#8592;</button>
+    <button class="b navb" id="nFwd" title="Forward (Alt+Right)">&#8594;</button>
+    <button class="b navb" id="nReload" title="Reload (Ctrl+R or F5)">&#10227;</button>
+    <button class="b navb" id="nHome" title="Onshape home (Alt+Home)">&#8962;</button>
+    <small id="nUrl" title=""></small>
+  </div>
+  <div class="row" style="margin-top:4px">
+    <small id="gpu">GPU: not checked</small>
+    <button class="b navb" id="bGpu" title="What Chromium sees: WebGPU, WebGL2 and the renderer it picked">Check GPU</button>
   </div>
 </header>
 <nav id="nav"></nav>
@@ -143,12 +158,46 @@ let docs = [], reports = {}, tickets = [], info = null, extra = new Set(), picke
 let busy = false, loading = false;
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+// ---- Onshape pane: navigation and GPU status -----------------------------------------
+function applyNav(state) {
+  if (!state) return;
+  $('nBack').disabled = !state.canGoBack;
+  $('nFwd').disabled = !state.canGoForward;
+  const url = state.url || '';
+  $('nUrl').textContent = url ? url.replace(/^https:\/\//, '') : 'Onshape not open';
+  $('nUrl').title = url;
+}
+const nav = (action) => api.nav(action).then(applyNav).catch(() => {});
+$('nBack').onclick = () => nav('back');
+$('nFwd').onclick = () => nav('forward');
+$('nReload').onclick = () => nav('reload');
+$('nHome').onclick = () => nav('home');
+$('bOn').onclick = () => nav('home');
+function describeGpu(g) {
+  if (!g) return 'GPU: unknown';
+  if (g.error) return `GPU: ${g.error}`;
+  const yes = (v) => (v ? 'yes' : 'NO');
+  return `GPU: WebGPU ${yes(g.webgpu)}` + (g.adapter ? ` (${g.adapter})` : '')
+    + ` · WebGL2 ${yes(g.webgl2)} · ${g.renderer || ''}`;
+}
+async function checkGpu() {
+  $('gpu').textContent = 'GPU: checking…';
+  try {
+    const g = await api.gpu();
+    $('gpu').textContent = describeGpu(g);
+    $('gpu').title = g && g.ua ? g.ua : '';
+  } catch (e) {
+    $('gpu').textContent = `GPU: ${e.message}`;
+  }
+}
+$('bGpu').onclick = checkGpu;
+
 // ---- Documents tab -------------------------------------------------------------------
 function render() {
   const f = $('filter').value.toLowerCase();
   const shown = docs.filter((d) => d.name.toLowerCase().includes(f));
   $('list').innerHTML = shown.map((d) =>
-    `<label><input type="checkbox" data-id="${esc(d.id)}" ${picked.has(d.id) ? 'checked' : ''}> ${esc(d.name)}<br><small>${esc(d.owner || '')} · ${esc((d.modifiedAt || '').slice(0, 10))}</small></label>`).join('');
+    `<label><input type="checkbox" data-id="${esc(d.id)}" ${picked.has(d.id) ? 'checked' : ''}> <span class="docname" data-open="${esc(d.id)}" title="Open in the Onshape pane">${esc(d.name)}</span><br><small>${esc(d.owner || '')} · ${esc((d.modifiedAt || '').slice(0, 10))}</small></label>`).join('');
   $('count').textContent = `${picked.size} selected of ${docs.length}`;
   $('onboard').hidden = docs.length > 0;
   $('bGo').disabled = busy || !picked.size;
@@ -161,6 +210,12 @@ function renderDocsSelect() {
   $('fsDoc').innerHTML = '<option value="">cadrs timing: none</option>' + docs.map((d) => `<option value="${esc(d.id)}">cadrs timing: ${esc(d.name)}</option>`).join('');
 }
 $('list').onchange = (e) => { const id = e.target.dataset.id; e.target.checked ? picked.add(id) : picked.delete(id); render(); };
+$('list').onclick = (e) => {
+  const open = e.target.closest('[data-open]');
+  if (!open) return;
+  e.preventDefault(); // don't toggle the checkbox through the label
+  api.openOnshape(open.dataset.open);
+};
 $('filter').oninput = render;
 $('url').onkeydown = (e) => {
   if (e.key !== 'Enter') return;
@@ -191,7 +246,6 @@ async function loadDocuments() {
 }
 $('bLoad').onclick = loadDocuments;
 $('bLoadOnboard').onclick = loadDocuments;
-$('bOn').onclick = () => api.openOnshape();
 $('bOut').onclick = () => api.openPath('root');
 $('bOutOnboard').onclick = () => api.openPath('root');
 $('bCadrs').onclick = async () => {
@@ -354,10 +408,14 @@ function useCurrent(ev) {
   if (!seen.has(ev.id)) { seen.add(ev.id); picked.add(ev.id); }
   $('loginHint').textContent = 'Onshape: connected.';
   render();
+  if (!gpuChecked) { gpuChecked = true; setTimeout(checkGpu, 800); }
 }
 const seen = new Set();
+let gpuChecked = false;
 api.onEvent((ev) => {
   if (ev.type === 'current') useCurrent(ev);
+  if (ev.type === 'nav') applyNav(ev);
+  if (ev.type === 'gpu') $('gpu').textContent = describeGpu(ev.status);
   if (ev.type === 'phase') $('phase').textContent = ev.phase;
   if (ev.type === 'scrape') {
     const s = ev.state;

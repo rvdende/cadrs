@@ -87,6 +87,23 @@ The cadrs documents themselves go into the cadrs app's store (its usual
 `~/.local/share/cadrs/documents` on Linux), with the document names and Part Studios from
 Onshape.
 
+### If the Onshape pane does not draw (WebGPU/WebGL) or is stuck on a help page
+
+Electron puts its own name in the user agent, and Linux Chromium leaves WebGPU off and can
+blocklist older GPUs, so Onshape can decide the browser cannot draw and send you to its graphics
+help pages. The app presents a plain Chrome user agent, asks Chromium for WebGPU
+(`ignore-gpu-blocklist`, `enable-unsafe-webgpu`, and `enable-features=Vulkan` on Linux) before the
+window opens, and the pane has its own navigation: **← → ⟳ ⌂**, `Alt+Left`/`Alt+Right`,
+`Ctrl+R`/`F5`, `Alt+Home`. Clicking a document's name opens it in the pane.
+
+**Check GPU** (under the navigation buttons) runs the probes Onshape uses and shows what Chromium
+sees: `WebGPU yes/no (adapter) · WebGL2 yes/no · renderer`. If `WebGL2` is NO, Electron cannot
+draw Onshape on that machine: update the Mesa/Vulkan drivers, or scrape with the manual path
+(`receiver.py` plus the console snippet in [Scraping](#scraping-manual-without-the-app)) from a
+normal browser and import the downloaded folder. Troubleshooting switches:
+`CADRS_ONSHAPE_DISABLE_GPU=1` (software rendering), `CADRS_ONSHAPE_GPU=0` (start with no GPU
+switches at all), `CADRS_ONSHAPE_EXTRA_FEATURES=…` (extra Chromium features).
+
 ## Tickets
 
 The importer's report says exactly why a feature fell short ("none of its 1 selections could be
