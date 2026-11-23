@@ -1489,7 +1489,8 @@ pub(crate) fn rough_volume(body: &Body) -> Option<f64> {
         };
         Some([at(12), at(24)])
     };
-    let terms: Vec<Option<[f64; 2]>> = super::par::map(&body.faces, one);
+    let terms: Vec<Option<[f64; 2]>> =
+        super::par::map_heavy(&body.faces, body.faces.iter().any(long_integrals), one);
     let (mut coarse, mut fine) = (0.0, 0.0);
     for t in terms {
         let [c, f] = t?;

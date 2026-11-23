@@ -1556,7 +1556,8 @@ pub fn intersect_stats(
         })
         .collect();
     let clock = web_time::Instant::now();
-    let found: Vec<Found> = super::par::map(&pairs, |&(ca, cb)| search(&ctx, ca, cb));
+    // (A pair of cells searched takes a good part of a millisecond: heavy, by `par`'s count.)
+    let found: Vec<Found> = super::par::map_heavy(&pairs, true, |&(ca, cb)| search(&ctx, ca, cb));
     let mut seeds = Vec::new();
     let mut touches = Vec::new();
     let mut coin: Vec<UvBox> = Vec::new();

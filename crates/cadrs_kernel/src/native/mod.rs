@@ -26,6 +26,11 @@ macro_rules! env_flag {
 }
 pub(crate) use env_flag;
 
+/// Whether a switch of [`par`]'s (`CADRS_PAR_ALWAYS`, `CADRS_PAR_SITES`) is set: read once.
+pub(crate) fn any_par_switch() -> bool {
+    env_flag!("CADRS_PAR_ALWAYS") || env_flag!("CADRS_PAR_SITES")
+}
+
 // The kernel's internal modules: `pub(crate)`, or `pub` with the `testkit` feature.
 // Without it, what only the test kit reaches (the DRAW harness's commands: the OCCT BRep and
 // SMLib readers, 2D offsets, tails, faces from edges, ...) is unused; with it (the crate's

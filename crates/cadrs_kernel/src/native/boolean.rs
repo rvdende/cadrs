@@ -3770,14 +3770,27 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     );
     let mut ssis: Vec<Found> = Vec::with_capacity(pairs.len());
     PAIRS.fetch_add(pairs.len() as u64, std::sync::atomic::Ordering::Relaxed);
-    // (On the threads when a pair is numeric, or the pairs take long enough: see `par`.)
-    let free = |f: usize| {
-        matches!(
-            faces[f].surf,
-            Surface::Nurbs(_) | Surface::Extrusion { .. } | Surface::Revolution { .. }
-        )
+    // (On the threads from the first where a pair's curve is not a conic found in closed form:
+    // a plane with a plane, a cylinder, a cone or a sphere is, and two spheres are; a torus's
+    // sections, two quadrics askew and free-form surfaces are traced. See `par`.)
+    let conic = |fa: usize, fb: usize| {
+        let quadric = |s: &Surface| {
+            matches!(
+                s,
+                Surface::Plane { .. }
+                    | Surface::Cylinder { .. }
+                    | Surface::Cone { .. }
+                    | Surface::Sphere { .. }
+            )
+        };
+        let (a, b) = (&faces[fa].surf, &faces[fb].surf);
+        match (a, b) {
+            (Surface::Plane { .. }, other) | (other, Surface::Plane { .. }) => quadric(other),
+            (Surface::Sphere { .. }, Surface::Sphere { .. }) => true,
+            _ => false,
+        }
     };
-    let numeric = pairs.iter().any(|&(fa, fb)| free(fa) || free(fb));
+    let numeric = pairs.iter().any(|&(fa, fb)| !conic(fa, fb));
     for chunk in pairs.chunks(64) {
         let one = |&(fa, fb): &(usize, usize)| {
             let t = web_time::Instant::now();
@@ -4890,10 +4903,20 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         }
         r
     };
-    let split: Vec<(Vec<Vec<Vec<Arc>>>, u64)> =
-        super::par::map(&(0..faces.len()).collect::<Vec<usize>>(), |&i| {
-            timed_split(i)
-        });
+    // (A free-form face's split, its cuts' p-curves fitted and its loops traced, takes long:
+    // a few of them are shared from the first. See `par`.)
+    let long_splits = (0..faces.len()).any(|fi| {
+        !cuts[fi].is_empty()
+            && matches!(
+                faces[fi].surf,
+                Surface::Nurbs(_) | Surface::Extrusion { .. } | Surface::Revolution { .. }
+            )
+    });
+    let split: Vec<(Vec<Vec<Vec<Arc>>>, u64)> = super::par::map_heavy(
+        &(0..faces.len()).collect::<Vec<usize>>(),
+        long_splits,
+        |&i| timed_split(i),
+    );
     for (fi, (made, spent)) in split.into_iter().enumerate() {
         work.spend(spent, "face splitting")?;
         for lps in made {

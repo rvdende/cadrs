@@ -195,7 +195,7 @@ orientation (`build::fix_senses`). Periodic faces have seams (an edge used twice
 | `surfacing` | Thicken (a sewn sheet with flat open ends shelled as the solid it bounds), fill (planar; the Coons patch of four curves, in closed form where they are polynomial: four lines give the bilinear patch of four poles), sew, simplify, delete faces. |
 | `curve_loft` | Lofts through curves, with guides: one sheet face on a B-spline found by interpolation in the profiles' and guides' own space; two straight profiles in one plane give a flat face. |
 | `polytope` | Convex polytopes as their faces' polygons, cut by planes exactly: a flat-walled shell's cavity without a boolean a wall. |
-| `par` | When a loop goes to rayon's threads: on the caller's thread while the work left, by the items done, is less than the threads cost (`map`), from the first for items known to take long (`map_heavy`); the pool started off the caller's thread. |
+| `par` | When a loop goes to rayon's threads (`map`, `map_heavy` for items known to take long): never for a small build (the caller goes on alone while the work left, by the items done, is less than the threads cost to start); with the threads running, shared from the first item where the loop's place in the code last had long items or the loop is new and of a few, the caller taking items itself while one thread after another helps. The pool is started off the caller's thread. |
 | `mass` | Exact mass properties: the divergence theorem on each face, integrated by Green's theorem over the uv domain (nested Gauss–Legendre), along v for ruled faces, and by a tensor rule on knot spans for untrimmed B-spline patches. |
 | `tess` | Tessellation: every edge sampled once (chord deflection and half the angle step), each face triangulated by a constrained Delaunay triangulation (spade) in metric-scaled uv, in parallel (rayon). |
 | `hlr` | Hidden-line removal for drawing views: exact silhouettes and edges, crossings refined by Newton, visibility by rays against the faces. |
@@ -268,6 +268,9 @@ per process; `tools/kernel_gate.sh` and CI run with none of the switches set.
 
 Debug output (on stderr; results don't change):
 - `CADRS_PROFILE=1`: each boolean's phases, slow mass properties and tessellations, sweeps.
+- `CADRS_PAR_DEBUG=1`: the loop that first started rayon's threads. `CADRS_PAR_SITES=1`: every
+  loop that may go to the threads, with its place, items and time. `CADRS_PAR_ALWAYS=1` (or part
+  of a loop's `file:line`): those loops handed to the threads whole, to compare with.
   `CADRS_TESS_PROFILE=1`: a face tessellation's phases.
 - `CADRS_BOOL_DEBUG=1`, `CADRS_SPLIT_DEBUG=1`, `CADRS_SHELL_DEBUG=1`, `CADRS_VERTEX_DEBUG=1`,
   `CADRS_PCURVE_DEBUG=1`, `CADRS_OFFSET_DEBUG=1`, `CADRS_SLAB_DEBUG=1`: the boolean's

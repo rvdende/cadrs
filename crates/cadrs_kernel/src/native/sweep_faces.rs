@@ -1077,6 +1077,9 @@ fn prepared_rising(
     let start = seams_ahead(start, &mv);
     let size = start.bbox().diagonal().max(tol::POINT);
     let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
+    // (A sweep by its faces is contact curves traced, pieces united and volumes taken, face by
+    // face: the threads are wanted from its first loop, and made meanwhile.)
+    super::par::start();
     // The faces that both lead and trail split along their contacts' planes, one at a time (the
     // faces after a split are numbered anew).
     let mut body = start.clone();
