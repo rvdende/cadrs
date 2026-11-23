@@ -2579,6 +2579,8 @@ drawing-hint-auxiliary-pick = Vista auxiliar: clique em uma aresta reta de uma v
 drawing-hint-auxiliary-place = Vista auxiliar: clique para colocar a vista
 drawing-hint-align-vertical = Alinhar vista verticalmente: clique em uma aresta da vista
 drawing-hint-align-horizontal = Alinhar vista horizontalmente: clique em uma aresta da vista
+drawing-hint-section-click = Clique para ver { $section } em { $name }
+drawing-hint-section-jump = Clique duas vezes para ver { $section } em { $name }
 
 ## crates/cadrs_app/src/drawing/flat_views.rs
 drawing-flat-patterns = Planificações
@@ -2600,6 +2602,7 @@ drawing-view-menu-tangent-solid = Contínuas
 drawing-view-menu-tangent-phantom = Fantasma
 drawing-flat-adjust-linestyle = Ajustar estilo de linha…
 drawing-view-menu-properties = Propriedades da vista…
+drawing-view-menu-show-section = Mostrar { $section } em { $name }
 drawing-flat-menu-order = Ordem
 drawing-view-menu-bring-to-front = Trazer para a frente
 drawing-view-menu-send-to-back = Enviar para trás

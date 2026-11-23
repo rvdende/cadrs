@@ -2579,6 +2579,8 @@ drawing-hint-auxiliary-pick = 辅助视图：单击视图中的一条直边
 drawing-hint-auxiliary-place = 辅助视图：单击以放置视图
 drawing-hint-align-vertical = 竖直对齐视图：单击视图的一条边
 drawing-hint-align-horizontal = 水平对齐视图：单击视图的一条边
+drawing-hint-section-click = 单击以在 { $name } 中查看 { $section }
+drawing-hint-section-jump = 双击以在 { $name } 中查看 { $section }
 
 ## crates/cadrs_app/src/drawing/flat_views.rs
 drawing-flat-patterns = 展开图
@@ -2600,6 +2602,7 @@ drawing-view-menu-tangent-solid = 实线
 drawing-view-menu-tangent-phantom = 假想线
 drawing-flat-adjust-linestyle = 调整线型…
 drawing-view-menu-properties = 视图属性…
+drawing-view-menu-show-section = 在 { $name } 中显示 { $section }
 drawing-flat-menu-order = 顺序
 drawing-view-menu-bring-to-front = 置于顶层
 drawing-view-menu-send-to-back = 置于底层

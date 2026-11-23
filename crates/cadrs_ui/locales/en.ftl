@@ -3663,6 +3663,8 @@ drawing-hint-auxiliary-pick = Auxiliary view: click a straight edge of a view
 drawing-hint-auxiliary-place = Auxiliary view: click to place the view
 drawing-hint-align-vertical = Align view vertical: click an edge of the view
 drawing-hint-align-horizontal = Align view horizontal: click an edge of the view
+drawing-hint-section-click = Click to see { $section } in { $name }
+drawing-hint-section-jump = Double-click to see { $section } in { $name }
 
 ## crates/cadrs_app/src/drawing/flat_views.rs
 # A filter: sheet metal parts' flat patterns (the part unfolded).
@@ -3691,6 +3693,7 @@ drawing-view-menu-tangent-solid = Solid
 drawing-view-menu-tangent-phantom = Phantom
 drawing-flat-adjust-linestyle = Adjust linestyle…
 drawing-view-menu-properties = View properties…
+drawing-view-menu-show-section = Show { $section } in { $name }
 # A submenu: which view is drawn over which.
 drawing-flat-menu-order = Order
 drawing-view-menu-bring-to-front = Bring to front

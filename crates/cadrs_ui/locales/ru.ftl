@@ -2579,6 +2579,8 @@ drawing-hint-auxiliary-pick = Дополнительный вид: щелкни�
 drawing-hint-auxiliary-place = Дополнительный вид: щелкните, чтобы разместить вид
 drawing-hint-align-vertical = Выровнять вид по вертикали: щелкните ребро вида
 drawing-hint-align-horizontal = Выровнять вид по горизонтали: щелкните ребро вида
+drawing-hint-section-click = Щёлкните, чтобы увидеть { $section } в { $name }
+drawing-hint-section-jump = Дважды щёлкните, чтобы увидеть { $section } в { $name }
 
 ## crates/cadrs_app/src/drawing/flat_views.rs
 drawing-flat-patterns = Развертки
@@ -2600,6 +2602,7 @@ drawing-view-menu-tangent-solid = Сплошные
 drawing-view-menu-tangent-phantom = Штрихпунктирные
 drawing-flat-adjust-linestyle = Настроить стиль линий…
 drawing-view-menu-properties = Свойства вида…
+drawing-view-menu-show-section = Показать { $section } в { $name }
 drawing-flat-menu-order = Порядок
 drawing-view-menu-bring-to-front = На передний план
 drawing-view-menu-send-to-back = На задний план

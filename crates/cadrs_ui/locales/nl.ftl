@@ -2579,6 +2579,8 @@ drawing-hint-auxiliary-pick = Hulpaanzicht: klik op een rechte rand van een aanz
 drawing-hint-auxiliary-place = Hulpaanzicht: klik om het aanzicht te plaatsen
 drawing-hint-align-vertical = Aanzicht verticaal uitlijnen: klik op een rand van het aanzicht
 drawing-hint-align-horizontal = Aanzicht horizontaal uitlijnen: klik op een rand van het aanzicht
+drawing-hint-section-click = Klik om { $section } in { $name } te zien
+drawing-hint-section-jump = Dubbelklik om { $section } in { $name } te zien
 
 ## crates/cadrs_app/src/drawing/flat_views.rs
 drawing-flat-patterns = Uitslagen
@@ -2600,6 +2602,7 @@ drawing-view-menu-tangent-solid = Doorgetrokken
 drawing-view-menu-tangent-phantom = Streep-punt
 drawing-flat-adjust-linestyle = Lijnstijl aanpassen…
 drawing-view-menu-properties = Eigenschappen van aanzicht…
+drawing-view-menu-show-section = { $section } tonen in { $name }
 drawing-flat-menu-order = Volgorde
 drawing-view-menu-bring-to-front = Naar voorgrond
 drawing-view-menu-send-to-back = Naar achtergrond

@@ -503,9 +503,124 @@ pub struct AddAnnotation {
     /// The annotation as the drawing file stores it, e.g. {"Dimension": {"kind": {"Distance":
     /// {"a": <pick>, "b": <pick>, "orient": "Horizontal"}}, "text": [x, y]}} or {"Dimension":
     /// {"kind": {"Diameter": <edge ref>}, "text": [x, y]}}. A pick is {"Edge": <edge ref>} or
-    /// {"Point": …}; an edge ref is the "ref" that list_edges gives. Positions are view 2D in mm,
-    /// before the view's scale. Orient: "Horizontal", "Vertical" or "Aligned".
+    /// {"Point": {"edge": <edge ref>, "of": "End" | "Mid" | "Center", "hint": [x, y]}} (the end
+    /// nearest the hint); an edge ref is the "ref" that list_edges gives. Positions are view 2D
+    /// in model mm (x right, y up from the model origin), before the view's scale. Orient:
+    /// "Horizontal", "Vertical" or "Aligned". Also {"Centermark": <edge ref>}, {"HoleCallout":
+    /// {"edge": <edge ref>, "text": [x, y], "prefix": "4x"}}, {"CircleCenterline": {"ThreePoints":
+    /// [<point>, <point>, <point>]}} (points without the "Point" wrapper).
     pub annotation: serde_json::Value,
+}
+
+/// A view added to a drawing's sheet: any orientation, anywhere on the sheet.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AddView {
+    /// The drawing tab's name; omitted: the active tab (which must be a drawing).
+    #[serde(default)]
+    pub drawing: Option<String>,
+    /// The view's name on the sheet (add_annotation and edit_view find it by this); omitted:
+    /// the named orientation's ("Front", "Top" ...) or "View N".
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The Part Studio drawn; omitted: the one the drawing was made of.
+    #[serde(default)]
+    pub part_studio: Option<String>,
+    /// The direction of sight, from the eye into the model, in model coordinates: [0, 1, 0] is
+    /// the front view, [0, 0, -1] the top view.
+    pub dir: [f64; 3],
+    /// The model direction that points right on the sheet (made square to `dir`); sheet-up is
+    /// then `x` × `dir`.
+    pub x: [f64; 3],
+    /// Where the model origin goes on the sheet (mm from the sheet's bottom-left corner).
+    pub anchor: [f64; 2],
+    /// The view's scale as "1:1" or "2:1"; omitted: the sheet's.
+    #[serde(default)]
+    pub scale: Option<String>,
+    /// Show hidden edges dashed.
+    #[serde(default)]
+    pub hidden_lines: Option<bool>,
+    /// Shade the faces.
+    #[serde(default)]
+    pub shaded: Option<bool>,
+    /// Counter-clockwise turn on the sheet, in degrees.
+    #[serde(default)]
+    pub rotation: Option<f64>,
+}
+
+/// A change to a view of a drawing: only the given fields change.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct EditView {
+    /// The drawing tab's name; omitted: the active tab (which must be a drawing).
+    #[serde(default)]
+    pub drawing: Option<String>,
+    /// The view's name on the sheet.
+    pub view: String,
+    /// Rename it.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Move it: where the model origin goes on the sheet (mm from the bottom-left corner). An
+    /// aligned view (projected, section) stays in line with its parent unless `free` is set.
+    #[serde(default)]
+    pub anchor: Option<[f64; 2]>,
+    /// Its scale as "1:1" or "2:1" (it then no longer follows its parent's).
+    #[serde(default)]
+    pub scale: Option<String>,
+    #[serde(default)]
+    pub hidden_lines: Option<bool>,
+    #[serde(default)]
+    pub shaded: Option<bool>,
+    /// Counter-clockwise turn on the sheet, in degrees.
+    #[serde(default)]
+    pub rotation: Option<f64>,
+    /// Suppress (true) or restore (false) the alignment with its parent.
+    #[serde(default)]
+    pub free: Option<bool>,
+    /// Delete the view (with the views made from it) instead.
+    #[serde(default)]
+    pub delete: Option<bool>,
+}
+
+/// A section view of a view, cut along a line.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AddSectionView {
+    /// The drawing tab's name; omitted: the active tab (which must be a drawing).
+    #[serde(default)]
+    pub drawing: Option<String>,
+    /// The view that is cut: its name on the sheet.
+    pub view: String,
+    /// The cutting line's ends, in the cut view's 2D coordinates (model mm, x right and y up
+    /// from the model origin).
+    pub a: [f64; 2],
+    pub b: [f64; 2],
+    /// Where the section goes on the sheet (mm): it is folded out to this side of the cutting
+    /// line and stays in line with its parent, as far out as this point.
+    pub at: [f64; 2],
+}
+
+/// A drawing's section view shown in its Part Studio.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ShowSection {
+    /// The section view's name ("Section A-A"); omitted: list the sections and show none.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The drawing it is in, when several drawings have a section of that name.
+    #[serde(default)]
+    pub drawing: Option<String>,
+}
+
+/// A note on a drawing's sheet.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AddNote {
+    /// The drawing tab's name; omitted: the active tab (which must be a drawing).
+    #[serde(default)]
+    pub drawing: Option<String>,
+    /// The text; lines break at "\n".
+    pub text: String,
+    /// The text box's top-left corner on the sheet (mm from the bottom-left corner).
+    pub at: [f64; 2],
+    /// The cap height on the sheet in mm; omitted: 3.5.
+    #[serde(default)]
+    pub height: Option<f64>,
 }
 
 /// Renames a tab: a Part Studio (the drawing's title block shows its name) or a drawing.

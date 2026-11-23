@@ -2579,6 +2579,8 @@ drawing-hint-auxiliary-pick = Hilfsansicht: eine gerade Kante einer Ansicht ankl
 drawing-hint-auxiliary-place = Hilfsansicht: klicken, um die Ansicht zu platzieren
 drawing-hint-align-vertical = Ansicht vertikal ausrichten: eine Kante der Ansicht anklicken
 drawing-hint-align-horizontal = Ansicht horizontal ausrichten: eine Kante der Ansicht anklicken
+drawing-hint-section-click = Klicken, um { $section } in { $name } zu sehen
+drawing-hint-section-jump = Doppelklicken, um { $section } in { $name } zu sehen
 
 ## crates/cadrs_app/src/drawing/flat_views.rs
 drawing-flat-patterns = Abwicklungen
@@ -2600,6 +2602,7 @@ drawing-view-menu-tangent-solid = Durchgezogen
 drawing-view-menu-tangent-phantom = Strichpunktiert
 drawing-flat-adjust-linestyle = Linienart anpassen…
 drawing-view-menu-properties = Ansichtseigenschaften…
+drawing-view-menu-show-section = { $section } in { $name } zeigen
 drawing-flat-menu-order = Reihenfolge
 drawing-view-menu-bring-to-front = In den Vordergrund
 drawing-view-menu-send-to-back = In den Hintergrund
