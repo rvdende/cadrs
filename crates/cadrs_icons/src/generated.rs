@@ -262,6 +262,8 @@ icons! {
     BOOKS => ("books", Line, "Books"),
     IDEA => ("idea", Line, "Explore"),
     KEYBOARD => ("keyboard", Line, "Keyboard shortcuts"),
+    INTERFACE => ("interface", Line, "Interface preferences"),
+    MOUSE => ("mouse", Line, "Mouse navigation preferences"),
     TAG => ("tag", Line, "Label"),
     TAG_NEW => ("tag-new", Line, "Add label"),
     LOCATION => ("location", Line, "Location"),

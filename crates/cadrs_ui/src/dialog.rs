@@ -5,6 +5,10 @@
 //! The panel is at most 90% of the window's height. A body that doesn't fit (a small window, a
 //! large UI scale) scrolls, while the header and the footer stay in view (#142).
 //!
+//! A dialog with a [`Dialog::sidebar`] (Preferences) has a column on the left that stays while
+//! the body beside it scrolls; give it a [`Dialog::height`] so that changing what the body shows
+//! doesn't resize the panel.
+//!
 //! The ✕ button is named `<name>-close`. Clicking it or pressing Escape triggers
 //! [`DialogClose`] on the dialog root and then despawns the dialog. Clicking the backdrop does
 //! nothing (the dialog is modal).
@@ -67,6 +71,10 @@ pub struct Dialog {
     /// Title size and weight (default: the theme's large bold).
     title_font: Option<(f32, FontWeight)>,
     header_height: f32,
+    /// A fixed height (at most 90% of the window's).
+    height: Option<f32>,
+    /// A column left of the body, and its width.
+    sidebar: Option<(f32, SpawnFn)>,
 }
 
 impl Dialog {
@@ -80,7 +88,27 @@ impl Dialog {
             header: None,
             title_font: None,
             header_height: 43.0,
+            height: None,
+            sidebar: None,
         }
+    }
+
+    /// A fixed height, so the panel keeps its size whatever the body shows (still at most 90% of
+    /// the window's height).
+    pub fn height(mut self, h: f32) -> Self {
+        self.height = Some(h);
+        self
+    }
+
+    /// A column `width` px wide left of the body, filled with the sidebar colour, that stays in
+    /// place while the body scrolls (a settings dialog's sections).
+    pub fn sidebar(
+        mut self,
+        width: f32,
+        f: impl FnOnce(&mut ChildSpawner) + Send + Sync + 'static,
+    ) -> Self {
+        self.sidebar = Some((width, Box::new(f)));
+        self
     }
 
     /// The title's size and weight (Onshape's keyboard shortcuts dialog: 20 px regular).
@@ -134,6 +162,8 @@ impl Dialog {
             header,
             title_font,
             header_height,
+            height,
+            sidebar,
         } = self;
         let (title_size, title_weight) = title_font.unwrap_or((theme.font_lg, FontWeight::BOLD));
         let close_name = format!("{name}-close");
@@ -166,6 +196,7 @@ impl Dialog {
                     crate::spring::Appear::fly_up(),
                     Node {
                         width: Val::Px(width),
+                        height: height.map_or(Val::Auto, Val::Px),
                         max_height: Val::Percent(90.0),
                         flex_direction: FlexDirection::Column,
                         border: UiRect::all(Val::Px(1.0)),
@@ -219,12 +250,37 @@ impl Dialog {
                             ));
                         });
                         // Body: it shrinks to what the header and footer leave, and scrolls.
+                        // With a sidebar, the two side by side, filling the panel's height.
+                        let has_sidebar = sidebar.is_some();
                         p.spawn(Node {
-                            flex_direction: FlexDirection::Column,
+                            flex_direction: if has_sidebar {
+                                FlexDirection::Row
+                            } else {
+                                FlexDirection::Column
+                            },
                             min_height: Val::Px(0.0),
+                            flex_grow: if height.is_some() { 1.0 } else { 0.0 },
                             ..default()
                         })
                         .with_children(|a| {
+                            if let Some((w, f)) = sidebar {
+                                a.spawn((
+                                    Name::new("dialog-sidebar"),
+                                    Node {
+                                        width: Val::Px(w),
+                                        flex_shrink: 0.0,
+                                        flex_direction: FlexDirection::Column,
+                                        padding: UiRect::all(Val::Px(theme.space[3])),
+                                        row_gap: Val::Px(2.0),
+                                        border: UiRect::right(Val::Px(1.0)),
+                                        overflow: Overflow::clip_y(),
+                                        ..default()
+                                    },
+                                    BackgroundColor(theme.sidebar),
+                                    BorderColor::all(theme.separator),
+                                ))
+                                .with_children(|s| f(s));
+                            }
                             let body_area = a
                                 .spawn((
                                     Name::new("dialog-body"),
@@ -232,6 +288,7 @@ impl Dialog {
                                     Node {
                                         flex_direction: FlexDirection::Column,
                                         min_height: Val::Px(0.0),
+                                        flex_grow: if has_sidebar { 1.0 } else { 0.0 },
                                         overflow: Overflow::scroll_y(),
                                         ..default()
                                     },

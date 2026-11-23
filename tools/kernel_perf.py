@@ -5,7 +5,8 @@
                          [--known] [--occt-bench EXE] [--commit SHA]
 
 1. Builds `crates/cadrs_kernel/examples/kernel_bench.rs` and the conformance test binary
-   (release, `$CARGO_TARGET_DIR`), and `tools/occt_bench` against the static OCCT
+   (release with fat LTO and no incremental, as tagged releases are; in `$KERNEL_PERF_TARGET_DIR`,
+   default `target/bench`, so it doesn't undo the local incremental build), and `tools/occt_bench` against the static OCCT
    (`$OCCT`, see tools/occt_bench/build.sh).
 2. Writes the cases (`<out>/cases.txt`):
    - SMLib's fillet, boolean and offset cases that pass (`tests/smlib_<suite>.rs`);
@@ -387,7 +388,9 @@ def report(R, path):
 
 
 def cargo_build(target):
-    env = dict(os.environ, CARGO_TARGET_DIR=target)
+    # The fastest code, as tagged releases build it (.cargo/config.toml's local builds are
+    # incremental, without LTO).
+    env = dict(os.environ, CARGO_TARGET_DIR=target, CARGO_PROFILE_RELEASE_LTO="fat", CARGO_INCREMENTAL="0")
     env.setdefault("CARGO_BUILD_JOBS", "3")
     subprocess.run(["cargo", "build", "-r", "-p", "cadrs_kernel", "--example", "kernel_bench"], cwd=REPO, env=env, check=True)
     p = subprocess.run(["cargo", "test", "-r", "-p", "cadrs_kernel", "--test", "conformance", "--no-run", "--message-format=json"], cwd=REPO, env=env, check=True, capture_output=True, text=True)
@@ -416,7 +419,7 @@ def main():
     rpath = os.path.join(a.out, "results.json")
     R = json.load(open(rpath)) if os.path.exists(rpath) else {}
     if not a.report_only:
-        target = os.environ.get("CARGO_TARGET_DIR", os.path.join(REPO, "target"))
+        target = os.environ.get("KERNEL_PERF_TARGET_DIR", os.path.join(REPO, "target", "bench"))
         bench, conf_bin = cargo_build(target)
         occt_bin = a.occt_bench or os.path.join(a.out, "occt_bench")
         if not a.occt_bench and not a.cases_only:

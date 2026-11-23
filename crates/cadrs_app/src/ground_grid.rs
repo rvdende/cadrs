@@ -1,8 +1,10 @@
-//! The ground grid under the 3D view (on by default), drawn like the schematic's grid
-//! (`crate::eda`): a faint line on every step and a small cross on every fifth line, with the
-//! X and Y axes in their colours (`ground_grid.wesl`). It is a quad on the XY plane around the
-//! focus, as wide as the grid is seen, with a material that draws the pattern per pixel, so the
-//! lines stay one pixel at any zoom. Its step follows the zoom ([`crate::viewport`]).
+//! The ground grid under the 3D view, in the style Preferences › Interface › *Grid* picks
+//! ([`cadrs_core::preferences::GridStyle`]): a faint line on every step and either a small cross
+//! on every fifth line (*Crossed*, like the schematic's grid in `crate::eda`) or a stronger line
+//! on every tenth (*Lines*, the default), with the X and Y axes in their colours
+//! (`ground_grid.wesl`); or none (*Off*). It is a quad on the XY plane around the focus, as wide
+//! as the grid is seen, with a material that draws the pattern per pixel, so the lines stay one
+//! pixel at any zoom. Its step follows the zoom ([`crate::viewport`]).
 
 use bevy::asset::embedded_asset;
 use bevy::mesh::MeshVertexBufferLayoutRef;
@@ -36,19 +38,23 @@ pub struct GroundGridMaterial {
 #[derive(Debug, Clone, Copy, PartialEq, ShaderType)]
 pub struct GroundGridParams {
     pub line: Vec4,
+    /// The crosses (Crossed), or the major lines (Lines).
     pub cross: Vec4,
     pub x_axis: Vec4,
     pub y_axis: Vec4,
     /// x: steps per mm; y: 1 / the fade distance (mm); z: a cross every so many lines; w: a
     /// cross arm's length, a share of a step.
     pub grid: Vec4,
-    /// x: 1 / how quickly it fades at grazing angles.
+    /// x: 1 / how quickly it fades at grazing angles; y: the style (0 crossed, 1 lines); z: a
+    /// major line every so many lines (Lines).
     pub fade: Vec4,
 }
 
 /// A cross on every fifth line, its arms 0.3 of a step each way (the schematic's).
 pub const CROSS_EVERY: f32 = 5.0;
 pub const CROSS_ARM: f32 = 0.3;
+/// A major line on every tenth line (Lines).
+pub const MAJOR_EVERY: f32 = 10.0;
 
 impl Default for GroundGridParams {
     fn default() -> Self {
@@ -58,7 +64,7 @@ impl Default for GroundGridParams {
             x_axis: Vec4::ZERO,
             y_axis: Vec4::ZERO,
             grid: Vec4::new(1.0, 1e-4, CROSS_EVERY, CROSS_ARM),
-            fade: Vec4::new(2.0, 0.0, 0.0, 0.0),
+            fade: Vec4::new(2.0, 1.0, MAJOR_EVERY, 0.0),
         }
     }
 }
@@ -108,8 +114,9 @@ pub fn step_for(scale: f32) -> f32 {
         .unwrap_or(10.0 * decade)
 }
 
-/// The least distance between two lines on screen, in pixels.
-pub const MIN_SPACING_PX: f32 = 18.0;
+/// The least distance between two lines on screen, in pixels (18 was busy: a line every step
+/// read as noise).
+pub const MIN_SPACING_PX: f32 = 28.0;
 
 #[cfg(test)]
 mod tests {
@@ -117,11 +124,11 @@ mod tests {
 
     #[test]
     fn the_step_is_one_two_or_five_times_a_power_of_ten() {
-        // 0.1 mm per pixel: lines at least 1.8 mm apart.
-        assert_eq!(step_for(0.1), 2.0);
-        assert_eq!(step_for(0.2), 5.0);
-        assert_eq!(step_for(0.5), 10.0);
-        assert!((step_for(1.0) - 20.0).abs() < 1e-3);
-        assert!((step_for(0.01) - 0.2).abs() < 1e-5);
+        // 0.1 mm per pixel: lines at least 2.8 mm apart.
+        assert_eq!(step_for(0.1), 5.0);
+        assert_eq!(step_for(0.2), 10.0);
+        assert_eq!(step_for(0.5), 20.0);
+        assert!((step_for(1.0) - 50.0).abs() < 1e-3);
+        assert!((step_for(0.01) - 0.5).abs() < 1e-5);
     }
 }

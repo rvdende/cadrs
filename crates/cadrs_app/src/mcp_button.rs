@@ -244,7 +244,12 @@ pub(crate) fn mcp_menu_action(commands: &mut Commands, anchor: Entity, item: &st
             }
             crate::linked::toast(w, tr_with("shell-mcp-copied", &[("url", &url)]));
         }),
-        "mcp-preferences" => commands.queue(crate::preferences_ui::open_preferences),
+        "mcp-preferences" => commands.queue(|w: &mut World| {
+            crate::preferences_ui::open_preferences_at(
+                w,
+                crate::preferences_ui::Section::Assistants,
+            )
+        }),
         _ => {}
     }
 }

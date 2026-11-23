@@ -1,6 +1,7 @@
-// The ground grid (`crate::ground_grid`), drawn like the schematic's: a faint line on every
-// step and a small cross on every fifth line, with the X and Y axes in their colours. It fades
-// with distance from the eye, at grazing angles, and where its lines would crowd.
+// The ground grid (`crate::ground_grid`): a faint line on every step and, by its style, a small
+// cross on every fifth line (the schematic's, "Crossed") or a stronger line on every tenth
+// ("Lines"), with the X and Y axes in their colours. It fades with distance from the eye, at
+// grazing angles, and where its lines would crowd.
 
 import bevy_pbr::render::forward_io::VertexOutput;
 import bevy_pbr::render::mesh_view_bindings::view;
@@ -13,7 +14,8 @@ struct GroundGrid {
     // x: steps per mm, y: 1 / the fade distance (mm), z: a cross every so many lines, w: a
     // cross arm's length (a share of a step).
     grid: vec4<f32>,
-    // x: 1 / how quickly the grid fades at grazing angles.
+    // x: 1 / how quickly the grid fades at grazing angles; y: the style (0 crossed, 1 lines); z:
+    // a major line every so many lines (lines).
     fade: vec4<f32>,
 }
 
@@ -45,15 +47,24 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let d = abs(fract(coord + 0.5) - 0.5) / fw;
     let line = max(cover(d.x, 1.0), cover(d.y, 1.0)) * crowd;
 
-    // A cross on every `every`th line, its arms a share of a step each way.
-    let every = grid.grid.z;
-    let o = coord - round(coord / every) * every;
-    let arm = grid.grid.w;
-    let ends = clamp((arm - abs(o) ) / fw + 0.5, vec2(0.0), vec2(1.0));
-    let h = cover(abs(o.y) / fw.y, 1.5) * ends.x;
-    let v = cover(abs(o.x) / fw.x, 1.5) * ends.y;
-    let cross_crowd = clamp((spacing * every - 30.0) / 30.0, 0.0, 1.0);
-    let cross = max(h, v) * cross_crowd;
+    var mark = 0.0;
+    if grid.fade.y < 0.5 {
+        // A cross on every `every`th line, its arms a share of a step each way.
+        let every = grid.grid.z;
+        let o = coord - round(coord / every) * every;
+        let arm = grid.grid.w;
+        let ends = clamp((arm - abs(o) ) / fw + 0.5, vec2(0.0), vec2(1.0));
+        let h = cover(abs(o.y) / fw.y, 1.5) * ends.x;
+        let v = cover(abs(o.x) / fw.x, 1.5) * ends.y;
+        let cross_crowd = clamp((spacing * every - 30.0) / 30.0, 0.0, 1.0);
+        mark = max(h, v) * cross_crowd;
+    } else {
+        // A major line on every `every`th line, the full length.
+        let every = grid.fade.z;
+        let o = abs(coord - round(coord / every) * every) / fw;
+        let major_crowd = clamp((spacing * every - 24.0) / 24.0, 0.0, 1.0);
+        mark = max(cover(o.x, 1.25), cover(o.y, 1.25)) * major_crowd;
+    }
 
     // The axes: X runs where y is 0, Y where x is 0.
     let axis = abs(coord) / fw;
@@ -62,7 +73,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     var c = vec4(0.0);
     c = over(c, grid.line.rgb, grid.line.a * line);
-    c = over(c, grid.cross.rgb, grid.cross.a * cross);
+    c = over(c, grid.cross.rgb, grid.cross.a * mark);
     c = over(c, grid.x_axis.rgb, grid.x_axis.a * x_axis);
     c = over(c, grid.y_axis.rgb, grid.y_axis.a * y_axis);
 

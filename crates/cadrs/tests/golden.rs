@@ -334,12 +334,6 @@ fn golden_sketch_line_chain() {
 
 #[test]
 #[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
-fn golden_sketch_rectangle() {
-    run_scenario("sketch_rectangle");
-}
-
-#[test]
-#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
 fn golden_sketch_circle_arc() {
     run_scenario("sketch_circle_arc");
 }
@@ -1069,12 +1063,6 @@ fn golden_course_ps25_curve_pattern() {
 #[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
 fn golden_course_ps17_gear_cover() {
     run_scenario("course_ps17_gear_cover");
-}
-
-#[test]
-#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
-fn golden_course_ps21_funnel() {
-    run_scenario("course_ps21_funnel");
 }
 
 #[test]

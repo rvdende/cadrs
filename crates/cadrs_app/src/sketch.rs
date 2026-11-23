@@ -61,7 +61,7 @@ impl Plugin for SketchPlugin {
                     (sketch_keys, sketch_picks, end_session_on_tab_change)
                         .run_if(in_state(PartStudioMode::Sketching)),
                     sync_session,
-                    grow_plane_extent,
+                    fit_sketch_plane,
                     sync_sketch_dialog.after(crate::sketch_constrain::update_analysis),
                     sync_sketch_toolbar,
                     sync_sketch_final,
@@ -112,9 +112,10 @@ pub struct SketchSession {
     pub before: Option<Feature>,
     /// No plane yet: plane clicks go to the "Sketch plane" field.
     pub waiting_for_plane: bool,
-    /// Half-extents (mm) of the sketch-plane rectangle, sized from the view when the plane was
-    /// chosen.
+    /// Half-extents (mm) of the sketch-plane rectangle ([`fit_sketch_plane`]).
     pub plane_extent: Vec2,
+    /// The sketch-plane rectangle's centre, in the sketch's coordinates (mm).
+    pub plane_center: Vec2,
     /// The "Select a sketch plane" prompt was shown for the current wait (so closing it keeps
     /// it closed).
     pub prompted: bool,
@@ -379,13 +380,66 @@ impl SketchToolButton {
     }
 }
 
-/// The half-extents of the sketch-plane rectangle at the view's zoom: 1.3 × the viewport's
-/// width by 0.7 × its height, as measured in `screens/08` and `09` (1196 × 673 px in a
-/// 922 × 960 px viewport).
-fn plane_extent(world: &World) -> Vec2 {
-    let scale = world.resource::<ViewportView>().target().scale;
-    let size = world.resource::<ViewportRect>().0.size();
-    Vec2::new(0.65 * size.x, 0.35 * size.y) * scale
+/// The half-extents of a new sketch's plane rectangle: the default planes' square
+/// ([`fit_sketch_plane`] then follows what is drawn).
+fn plane_extent(_world: &World) -> Vec2 {
+    Vec2::splat(crate::viewport::PLANE_HALF)
+}
+
+/// How much larger than what is drawn the sketch plane's rectangle is, once it outgrows its
+/// default.
+const PLANE_MARGIN: f32 = 1.25;
+
+/// The sketch plane's rectangle (centre, half-extents) from its default (the default planes'
+/// 100 mm square about the sketch origin, or a face's outline) and the bounds of what is drawn
+/// (min, max): the default while what is drawn fits in it; else centred on what is drawn and
+/// [`PLANE_MARGIN`] times its size, never smaller than the default planes' square.
+pub fn plane_rect(default: (Vec2, Vec2), contents: Option<(Vec2, Vec2)>) -> (Vec2, Vec2) {
+    let (c, h) = default;
+    match contents {
+        Some((lo, hi)) if lo.cmplt(c - h).any() || hi.cmpgt(c + h).any() => (
+            (lo + hi) * 0.5,
+            ((hi - lo) * 0.5 * PLANE_MARGIN).max(Vec2::splat(crate::viewport::PLANE_HALF)),
+        ),
+        _ => default,
+    }
+}
+
+/// The bounds (min, max) of a sketch's geometry, in its coordinates: its points (ends,
+/// centres, control points) and the reach of its circles, arcs and ellipses.
+pub fn contents_bounds(g: &cadrs_sketch::Sketch) -> Option<(Vec2, Vec2)> {
+    use cadrs_sketch::CurveKind as K;
+    let v = |p: cadrs_sketch::Vec2| Vec2::new(p.x as f32, p.y as f32);
+    let mut b: Option<(Vec2, Vec2)> = None;
+    let mut add = |lo: Vec2, hi: Vec2| {
+        b = Some(b.map_or((lo, hi), |(a, z)| (a.min(lo), z.max(hi))));
+    };
+    for p in g.points.values() {
+        add(v(p.pos), v(p.pos));
+    }
+    for c in g.curves.values() {
+        let (center, r) = match c.kind {
+            K::Circle { center, radius } => (center, radius),
+            K::Arc { center, start, .. } => (center, (g.pos(start) - g.pos(center)).length()),
+            K::Ellipse { center, major, .. } | K::EllipseArc { center, major, .. } => {
+                (center, (g.pos(major) - g.pos(center)).length())
+            }
+            K::EllipseOffset {
+                center,
+                major,
+                distance,
+                ..
+            } => (
+                center,
+                (g.pos(major) - g.pos(center)).length() + distance.max(0.0),
+            ),
+            _ => continue,
+        };
+        let c = v(g.pos(center));
+        let r = Vec2::splat(r as f32);
+        add(c - r, c + r);
+    }
+    b
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -516,6 +570,7 @@ fn start_session(
         before,
         waiting_for_plane: waiting,
         plane_extent: extent,
+        plane_center: Vec2::ZERO,
         prompted: false,
         show_final: false,
     });
@@ -685,44 +740,41 @@ fn cancelled_toast(world: &mut World, name: String, feature: FeatureId) {
     world.flush();
 }
 
-/// A face's sketch-plane rectangle grows to hold what is drawn in it (P3.4 judge: on a small face in
-/// a zoomed-in view, the Reducer Coupling's Ø7.5 flange ran past it): at least 15% beyond the
-/// geometry's reach from the sketch origin.
-fn grow_plane_extent(doc: Option<Res<ActiveDocument>>, session: Option<ResMut<SketchSession>>) {
+/// The sketch plane's rectangle follows what is drawn ([`plane_rect`]): 100 mm square about the
+/// sketch origin (as the default planes), or a face's outline 10% larger; once what is drawn
+/// reaches past that, centred on it and a quarter larger.
+fn fit_sketch_plane(
+    doc: Option<Res<ActiveDocument>>,
+    session: Option<ResMut<SketchSession>>,
+    parts: Option<Res<crate::parts::PartCache>>,
+) {
     let Some(mut s) = session else { return };
-    // Only a face's sketch plane (a default plane's is sized from the view, as Onshape's).
-    let on_face = doc
-        .as_deref()
-        .and_then(|d| {
-            d.doc
-                .element(s.element)?
-                .feature(s.feature)?
-                .sketch()?
-                .plane
-        })
-        .is_some_and(|p| p.face().is_some());
-    if !on_face {
-        return;
-    }
-    let Some(g) = crate::sketch_tools::session_sketch(Some(&s), doc.as_deref()) else {
+    let Some(plane) = doc.as_deref().and_then(|d| {
+        d.doc
+            .element(s.element)?
+            .feature(s.feature)?
+            .sketch()?
+            .plane
+    }) else {
         return;
     };
-    let mut reach = Vec2::ZERO;
-    for p in g.points.values() {
-        reach = reach.max(Vec2::new(p.pos.x.abs() as f32, p.pos.y.abs() as f32));
-    }
-    for c in g.curves.values() {
-        if let cadrs_sketch::CurveKind::Circle { center, radius } = c.kind {
-            let p = g.pos(center);
-            reach = reach.max(Vec2::new(
-                (p.x.abs() + radius) as f32,
-                (p.y.abs() + radius) as f32,
-            ));
+    let default = match plane.face() {
+        Some(face) => {
+            let f = plane.frame();
+            let (u, v, o) = (to_vec3(f.u), to_vec3(f.v), to_vec3(f.origin));
+            match parts.as_deref().and_then(|p| face_bounds(p, face, u, v, o)) {
+                Some(r) => (r.center(), r.half_size() * 1.1),
+                None => (Vec2::ZERO, Vec2::splat(crate::viewport::PLANE_HALF)),
+            }
         }
-    }
-    let want = s.plane_extent.max(reach * 1.15);
-    if want != s.plane_extent {
-        s.plane_extent = want;
+        None => (Vec2::ZERO, Vec2::splat(crate::viewport::PLANE_HALF)),
+    };
+    let contents = crate::sketch_tools::session_sketch(Some(&s), doc.as_deref())
+        .and_then(|g| contents_bounds(&g));
+    let (c, h) = plane_rect(default, contents);
+    if s.plane_center != c || s.plane_extent != h {
+        s.plane_center = c;
+        s.plane_extent = h;
     }
 }
 
@@ -745,6 +797,7 @@ fn set_plane(world: &mut World, plane: Option<PlaneRef>) {
     session.prompted = false;
     if plane.is_some() {
         session.plane_extent = extent;
+        session.plane_center = Vec2::ZERO;
         close_prompt(world);
     }
 }
@@ -2215,28 +2268,24 @@ pub(crate) fn sync_sketch_toolbar(
 // ---------------------------------------------------------------------------------------------
 // Viewport
 
-/// The sketch plane: a rectangle larger than the default plane, in pale cyan, like Onshape's.
+/// The sketch plane: a rectangle in pale cyan, like Onshape's, as large as [`fit_sketch_plane`]
+/// makes it.
 fn draw_sketch_plane(
     session: Option<Res<SketchSession>>,
     doc: Option<Res<ActiveDocument>>,
     mut gizmos: Gizmos<SketchPlaneGizmos>,
     mut face_gizmos: Gizmos<FacePlaneGizmos>,
-    parts: Option<Res<crate::parts::PartCache>>,
 ) {
     let Some((s, plane)) = session_plane(session.as_deref(), doc.as_deref()) else {
         return;
     };
     let f = plane.frame();
     let (u, v, o) = (to_vec3(f.u), to_vec3(f.v), to_vec3(f.origin));
-    if let Some(face) = plane.face() {
-        // A part's face: the sketch plane's large pale-cyan rectangle, centred on the face (T2
-        // judge: a face's sketch plane was only a faint outline; `screens/08`). P3.8: only that
-        // one (the face's own 10% larger outline beside it doubled it, P3.7 judge).
-        let Some(bounds) = parts.and_then(|p| face_bounds(&p, face, u, v, o)) else {
-            return;
-        };
-        let c = bounds.center();
-        let e = s.plane_extent.max(bounds.half_size() * 1.1);
+    if plane.face().is_some() {
+        // A part's face: the sketch plane's pale-cyan rectangle, about the face (T2 judge: a
+        // face's sketch plane was only a faint outline; `screens/08`). P3.8: only that one (the
+        // face's own 10% larger outline beside it doubled it, P3.7 judge).
+        let (c, e) = (s.plane_center, s.plane_extent);
         let big = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
             .map(|(a, b)| o + u * (c.x + a * e.x) + v * (c.y + b * e.y));
         for i in 0..4 {
@@ -2249,9 +2298,9 @@ fn draw_sketch_plane(
     if matches!(plane, PlaneRef::Feature(_)) {
         return;
     }
-    let e = s.plane_extent;
+    let (c, e) = (s.plane_center, s.plane_extent);
     let corners = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
-        .map(|(a, b)| o + u * (a * e.x) + v * (b * e.y));
+        .map(|(a, b)| o + u * (c.x + a * e.x) + v * (c.y + b * e.y));
     for i in 0..4 {
         gizmos.line(corners[i], corners[(i + 1) % 4], sketch_plane_color());
     }
@@ -2408,7 +2457,13 @@ fn place_sketch_plane_label(
             s.plane_extent.y
         }
     };
-    let corner_world = to_vec3(f.origin) + w * ext(w) - u * ext(u);
+    // About the rectangle's centre (a Plane feature's square is about the plane's origin).
+    let center = if matches!(plane, PlaneRef::Feature(_)) {
+        Vec3::ZERO
+    } else {
+        to_vec3(f.u) * s.plane_center.x + to_vec3(f.v) * s.plane_center.y
+    };
+    let corner_world = to_vec3(f.origin) + center + w * ext(w) - u * ext(u);
     let corner = rect.to_screen(v.project(corner_world)) - rect.0.min;
     let size = inner_node.size() * inner_node.inverse_scale_factor();
     // Clip to the viewport: hide the label once its corner leaves it (it would otherwise draw
@@ -2437,6 +2492,43 @@ mod tests {
     //! The sketch lifecycle through the command layer: each session is one undo step, and
     //! undo/redo move between the states exactly.
     use super::*;
+
+    /// The sketch plane is the default planes' 100 mm square until what is drawn reaches past
+    /// it; then it's centred on what is drawn, a quarter larger, and never under 100 mm.
+    #[test]
+    fn the_sketch_plane_follows_what_is_drawn() {
+        let h = crate::viewport::PLANE_HALF;
+        let square = (Vec2::ZERO, Vec2::splat(h));
+        assert_eq!(plane_rect(square, None), square);
+        // Inside: the square.
+        let small = (Vec2::new(-10.0, -5.0), Vec2::new(40.0, 20.0));
+        assert_eq!(plane_rect(square, Some(small)), square);
+        // Past it: centred on it, 25% larger.
+        let (c, e) = plane_rect(
+            square,
+            Some((Vec2::new(0.0, -100.0), Vec2::new(200.0, 100.0))),
+        );
+        assert_eq!(c, Vec2::new(100.0, 0.0));
+        assert_eq!(e, Vec2::new(125.0, 125.0));
+        // A long thin line: still 100 mm across.
+        let (_, e) = plane_rect(square, Some((Vec2::new(0.0, 0.0), Vec2::new(300.0, 0.0))));
+        assert_eq!(e, Vec2::new(187.5, h));
+
+        // A circle reaches its radius beyond its centre; an arc its radius.
+        let mut g = cadrs_sketch::Sketch::default();
+        let c = g.add_point(cadrs_sketch::Vec2::new(60.0, 0.0));
+        g.curves.insert(cadrs_sketch::Curve {
+            kind: cadrs_sketch::CurveKind::Circle {
+                center: c,
+                radius: 20.0,
+            },
+            construction: false,
+        });
+        assert_eq!(
+            contents_bounds(&g),
+            Some((Vec2::new(40.0, -20.0), Vec2::new(80.0, 20.0)))
+        );
+    }
     use cadrs_core::Document;
     use cadrs_core::commands::EditSketch;
     use cadrs_sketch::{SketchOp, Vec2 as SVec2};
@@ -2809,6 +2901,7 @@ mod toolbar_tests {
                 before: None,
                 waiting_for_plane: false,
                 plane_extent: Vec2::ONE,
+                plane_center: Vec2::ZERO,
                 prompted: false,
                 show_final: false,
             })

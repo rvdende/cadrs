@@ -1518,7 +1518,7 @@ fn draw_sketches(
         new_overlay.glyphs = glyphs;
         // Dimensions (a dragged label where it is being dragged to).
         // Dimension values knock out what is under them: the region fill, or the plane.
-        let plane_half = session.as_ref().map(|s| s.plane_extent);
+        let plane_rect = session.as_ref().map(|s| (s.plane_center, s.plane_extent));
         let regs: &[cadrs_sketch::Region] =
             if sketch.dimensions.is_empty() && dim_tool.preview.is_none() {
                 &[]
@@ -1529,9 +1529,9 @@ fn draw_sketches(
             if regs.iter().any(|r| r.contains(p)) {
                 fill()
             } else {
-                knockout(
-                    plane_half.is_some_and(|h| p.x.abs() <= h.x as f64 && p.y.abs() <= h.y as f64),
-                )
+                knockout(plane_rect.is_some_and(|(c, h)| {
+                    (p.x - c.x as f64).abs() <= h.x as f64 && (p.y - c.y as f64).abs() <= h.y as f64
+                }))
             }
         };
         for (k, d) in &sketch.dimensions {

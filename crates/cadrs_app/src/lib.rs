@@ -85,6 +85,7 @@ pub mod pattern_dialog;
 pub mod pcb;
 pub mod picture;
 pub mod plane_display;
+mod preferences_dialog;
 pub mod preferences_ui;
 pub mod properties_dialog;
 pub mod rebuild_indicator;

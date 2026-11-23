@@ -285,7 +285,7 @@ impl Cadrs {
         their most in one frame and runs a frame), and the GPU ms of the slowest render passes. The CPU \
         times are only there when cadrs started with them on (profile.cpu.timed; they slow it down): \
         the Time systems preference, or CADRS_FRAME_PROFILE=1. The panel at the bottom left of the 3D \
-        view shows the same (F12 steps through it, the fps line, nothing)."
+        view shows the same when the frame_stats preference asks for it (set_preferences)."
     )]
     async fn get_frame_stats(
         &self,
@@ -689,7 +689,7 @@ impl Cadrs {
     }
 
     #[tool(
-        description = "Change this machine's preferences, as the Preferences dialog's OK does (they are saved): vsync (true: frames wait for the display's refresh; false: drawn as fast as they are made, so get_frame_stats shows what a frame costs). Give only what changes; it answers with all the preferences in force."
+        description = "Change this machine's preferences, as the Preferences dialog's OK does (they are saved): vsync (true: frames wait for the display's refresh; false: drawn as fast as they are made, so get_frame_stats shows what a frame costs); grid (off, crossed, lines); origin (hidden, dot, axes); frame_stats (off, fps, details: the panel at the view's bottom left). Give only what changes; it answers with all the preferences in force."
     )]
     async fn set_preferences(
         &self,
