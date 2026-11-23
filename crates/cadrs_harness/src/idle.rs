@@ -9,7 +9,9 @@
 //! animations, Animate and the kernel's results still to come (`cadrs_app::awake`).
 //!
 //! `CADRS_CONTINUOUS=1` puts the game's loop back, to compare or in case something waits for a
-//! frame that doesn't come.
+//! frame that doesn't come. `CADRS_IDLE_DEBUG=1` logs, once a second, how many frames ran, how
+//! many of them asked for the next one, and how many followed input (the app logs its own
+//! reasons beside it).
 
 use std::time::Duration;
 
@@ -43,6 +45,14 @@ impl Plugin for IdlePlugin {
             unfocused_mode: UpdateMode::reactive_low_power(WAIT_UNFOCUSED),
         })
         .add_systems(Last, (awake_after_input, awake_while_scenario));
+        if std::env::var_os("CADRS_IDLE_DEBUG").is_some_and(|v| v != "0") {
+            app.add_systems(
+                Last,
+                log_frames
+                    .after(awake_after_input)
+                    .after(awake_while_scenario),
+            );
+        }
     }
 }
 
@@ -84,5 +94,37 @@ fn awake_while_scenario(
 ) {
     if runner.is_some() {
         redraw.write(RequestRedraw);
+    }
+}
+
+/// Frames since the last log, those that asked for another, and those after input.
+#[derive(Default)]
+struct FrameTally {
+    since: f64,
+    frames: u32,
+    asked: u32,
+}
+
+/// `CADRS_IDLE_DEBUG`: once a second, the frames run and how many asked for the next.
+fn log_frames(
+    time: Res<Time<Real>>,
+    mut asked: MessageReader<RequestRedraw>,
+    mut tally: Local<FrameTally>,
+) {
+    tally.frames += 1;
+    tally.asked += u32::from(asked.read().count() > 0);
+    let now = time.elapsed_secs_f64();
+    if now - tally.since >= 1.0 {
+        info!(
+            "idle: {} frames in the last second, {} of them asked for the next (the rest woke on \
+             input, a window or device event, or the {} ms timer)",
+            tally.frames,
+            tally.asked,
+            WAIT.as_millis()
+        );
+        *tally = FrameTally {
+            since: now,
+            ..default()
+        };
     }
 }
