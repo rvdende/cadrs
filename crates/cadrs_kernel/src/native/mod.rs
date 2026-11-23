@@ -292,6 +292,7 @@ pub mod pcurve;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod pcurve;
+pub(crate) mod polytope;
 #[cfg(feature = "testkit")]
 pub mod profile;
 #[cfg(not(feature = "testkit"))]

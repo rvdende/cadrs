@@ -2102,6 +2102,38 @@ fn cavity_of_supports(b: &Body, remove: &[usize], t: f64) -> Option<Result<Optio
         })?;
         Ok(Some((**k.get(made.first()?)?).clone()))
     };
+    // Flat walls only: the cavity is the body behind every wall's plane moved in. Of a body that
+    // is itself where half-spaces meet (a box, a wedge) that is its polygons cut by each plane,
+    // exactly and with no boolean; of any other, the body within the one solid behind all the
+    // planes, where each plane in turn cost a boolean of its own.
+    if walls.iter().all(|w| matches!(w, Support::Plane(..))) {
+        use crate::native::polytope::Polytope;
+        let whole = Polytope::of_body(b, close);
+        let convex = whole.is_some();
+        let mut cell = whole.unwrap_or_else(|| Polytope::of_box(&grown));
+        let within = walls.iter().all(|w| match *w {
+            Support::Plane(o, n) => cell.clip(o - n * t, n, close),
+            _ => unreachable!(),
+        });
+        if !within {
+            return Some(Ok(None));
+        }
+        if let Some(cell) = cell.body(close) {
+            let cavity = if convex {
+                Ok(cell)
+            } else {
+                match boolean_bodies(b, &cell, BoolOp::Intersect) {
+                    Ok(r) if !r.body.faces.is_empty() => Ok(r.body),
+                    Ok(_) | Err(KernelError::EmptyResult(_)) => return Some(Ok(None)),
+                    Err(e) => Err(e),
+                }
+            };
+            return Some(cavity.map(|c| {
+                let v = crate::native::mass::body_volume(&c);
+                (v > tol::REL * crate::native::mass::body_volume(b)).then_some(c)
+            }));
+        }
+    }
     Some((|| {
         let mut cavity = b.clone();
         // The walls moved in: the regions the cavity is within, then those it is outside.
