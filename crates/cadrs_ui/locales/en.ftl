@@ -169,6 +169,16 @@ preferences-keep-up-note = Rotating turns about the vertical and tilts, without 
 preferences-sketch-view = Sketch
 preferences-sketch-view-normal = View normal to the sketch plane
 preferences-sketch-view-normal-note = When a sketch gets its plane, and when one is opened for editing, the view turns square to it, as N does.
+# The heading of the SpaceMouse settings (3Dconnexion's 6-DoF controller; keep the product name).
+preferences-space-mouse-heading = SpaceMouse
+preferences-space-mouse-zoom = Zoom by
+# A way of moving the SpaceMouse's cap: pulling it up and pushing it down.
+preferences-space-mouse-zoom-up-down = Pulling up and pushing down
+# A way of moving the SpaceMouse's cap: away from you and toward you.
+preferences-space-mouse-zoom-forward-backward = Moving forward and backward
+preferences-space-mouse-zoom-note = The other of the two moves the view up and down.
+# How fast a SpaceMouse pans, zooms and turns the view.
+preferences-space-mouse-speed = Speed
 # The heading in Collaboration over the cadrs ID and going online.
 preferences-group-network = Network
 
