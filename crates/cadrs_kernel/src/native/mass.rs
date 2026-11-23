@@ -1489,7 +1489,7 @@ pub(crate) fn rough_volume(body: &Body) -> Option<f64> {
         };
         Some([at(12), at(24)])
     };
-    let terms: Vec<Option<[f64; 2]>> = super::par::map_heavy(&body.faces, true, one);
+    let terms: Vec<Option<[f64; 2]>> = super::par::map(&body.faces, one);
     let (mut coarse, mut fine) = (0.0, 0.0);
     for t in terms {
         let [c, f] = t?;
@@ -1540,7 +1540,7 @@ pub(crate) fn faces_volume(body: &Body) -> f64 {
 pub(crate) fn faces_volume_terms(body: &Body, shift: &V3) -> Vec<f64> {
     let faces: Vec<usize> = (0..body.faces.len()).collect();
     let one = |&i: &usize| face_integrals_of::<false>(body, &body.faces[i], shift)[4];
-    super::par::map_heavy(&faces, body.faces.iter().any(costly), one)
+    super::par::map_heavy(&faces, body.faces.iter().any(long_integrals), one)
 }
 
 /// Mass properties of a body (solids; a body without solids is a sheet: area only).
@@ -1707,6 +1707,31 @@ fn costly(f: &Face) -> bool {
         .iter()
         .flatten()
         .any(|c| matches!(c.pc, Curve::Nurbs(_)))
+}
+
+/// Whether a face's integrals take long enough (a good part of a millisecond) that a few such
+/// faces are worth the threads from the first: a swept or revolved surface's, a B-spline's of
+/// several spans or with weights, or a boundary of B-spline p-curves of several spans. A single
+/// polynomial Bézier patch bounded by its own sides (a Coons patch, a ruled wall) is [`costly`]
+/// to no such degree: a handful of them is integrated in less time than the threads take to
+/// start.
+fn long_integrals(f: &Face) -> bool {
+    let spans = |k: &[f64]| k.windows(2).filter(|w| w[1] > w[0]).count();
+    match &f.surf {
+        Surface::Plane { .. }
+        | Surface::Cylinder { .. }
+        | Surface::Cone { .. }
+        | Surface::Sphere { .. }
+        | Surface::Torus { .. } => {}
+        Surface::Nurbs(n)
+            if spans(&n.ku) * spans(&n.kv) < 4
+                && n.cps.iter().flatten().all(|h| (h.w - 1.0).abs() < 1e-12) => {}
+        _ => return true,
+    }
+    f.loops
+        .iter()
+        .flatten()
+        .any(|c| matches!(&c.pc, Curve::Nurbs(n) if spans(&n.knots) >= 4))
 }
 
 /// What a face's integrals depend on, hashed to 128 bits ([`super::fingerprint`]): its

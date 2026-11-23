@@ -62,10 +62,10 @@ impl Prof {
             let parts: Vec<String> = self
                 .phases
                 .iter()
-                .map(|(n, d)| format!("{n} {:.1}ms", d.as_secs_f64() * 1e3))
+                .map(|(n, d)| format!("{n} {:.3}ms", d.as_secs_f64() * 1e3))
                 .collect();
             eprintln!(
-                "[profile] {what}: {:.1}ms = {}",
+                "[profile] {what}: {:.3}ms = {}",
                 total.as_secs_f64() * 1e3,
                 parts.join(", ")
             );
@@ -5644,10 +5644,27 @@ fn drop_empty_solids(
                     .any(|&(w, y)| w == 1 && pairs.contains(&(x, y)))
             })
     };
+    // A solid of two faces with a point of one a hundredth of the body's size off the other's
+    // surface has that much room between them (a ball cut by a plane, a lens of two balls): no
+    // sliver, and its integrals, a tenth of such a boolean's time, are not taken to say so.
+    let roomy = |si: usize| {
+        let faces = b.solid_faces(si);
+        let [x, y] = faces.as_slice() else {
+            return false;
+        };
+        [(*x, *y), (*y, *x)].iter().any(|&(of, off)| {
+            let f = &b.faces[of];
+            let polys = super::classify::face_polygons(b, f);
+            interior_points_of_polys(&polys)
+                .iter()
+                .take(3)
+                .any(|uv| b.faces[off].surf.distance(&f.surf.eval(uv.x, uv.y)) > 1e-2 * size)
+        })
+    };
     // (Each suspect's volume and area: a sliver is thin as well as small.)
     let measured: Vec<Option<(f64, f64)>> = (0..b.solids.len())
         .map(|si| {
-            suspect(si).then(|| {
+            (suspect(si) && !roomy(si)).then(|| {
                 let m = super::mass::body_mass(&super::kernel::subset(b, &b.solid_faces(si), true));
                 (m.volume, m.surface_area)
             })

@@ -221,6 +221,35 @@ fn spawn(thread: rayon::ThreadBuilder) -> std::io::Result<()> {
 mod tests {
     use rayon::prelude::*;
 
+    /// [`super::map`] gives each item's value in the items' order whether the loop stays on the
+    /// caller's thread (light items), goes to the threads part way (items that take long), or
+    /// is known to be heavy from the start.
+    #[test]
+    fn map_keeps_the_order_on_either_side_of_the_hand_over() {
+        let items: Vec<u64> = (0..200).collect();
+        let light = super::map(&items, |x| x * 3);
+        assert_eq!(light, items.iter().map(|x| x * 3).collect::<Vec<_>>());
+        // (Each item a fifth of a millisecond: the work left is past what the threads cost
+        // after the first few.)
+        let slow = |x: &u64| {
+            std::thread::sleep(std::time::Duration::from_micros(200));
+            x + 1
+        };
+        let some: Vec<u64> = (0..40).collect();
+        assert_eq!(super::map(&some, slow), (1..=40).collect::<Vec<_>>());
+        assert_eq!(
+            super::map_heavy(&some, true, slow),
+            (1..=40).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            super::map_heavy(&some, false, |x| x + 1),
+            (1..=40).collect::<Vec<_>>()
+        );
+        // (None, and one: nothing to hand over.)
+        assert!(super::map(&[] as &[u64], |x| *x).is_empty());
+        assert_eq!(super::map(&[7u64], |x| x * 2), vec![14]);
+    }
+
     /// The pool made by [`super::start`] runs loops, on more than one thread where there are
     /// cores for them, and starting it again changes nothing.
     #[test]
