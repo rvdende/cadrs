@@ -14,6 +14,12 @@
 //! - **Copy** (`cut-list-copy`): the table tab-separated on the clipboard. **Export CSV**
 //!   (`cut-list-export`): "<Part Studio> cut list.csv" in the export folder.
 //!
+//! - **Which list** (`cut-list-show-all`, `cut-list-show-<i>`): where the Part Studio has Cut
+//!   list features, a button for each beside **All members**. A Cut list's button shows its
+//!   own parts: its frame members, then the other parts it names under **Other parts**
+//!   (`cut-list-other-<i>`), and under each row the column values its overrides give it
+//!   ("Description: Feet · Standard: Machined", `cut-list-row-<i>-values`).
+//!
 //! The list follows the parts there are ([`cadrs_core::frame::live_members`]): a member a later
 //! feature joined to another part or deleted isn't listed, and a Pattern's or Mirror's copy of
 //! one is a member of its own.
@@ -43,12 +49,49 @@ impl Plugin for CutListPlugin {
                 .after(crate::parts::PartsSet)
                 .run_if(in_state(AppState::Document)),
         )
+        .init_resource::<CutListShown>()
         .add_observer(on_button);
     }
 }
 
 #[derive(Component)]
 struct CutListPanel;
+
+/// The Cut list feature the panel shows (`None`: every member).
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CutListShown(pub Option<cadrs_core::FeatureId>);
+
+/// The Part Studio's Cut list features: id, name, parameters.
+fn cut_lists(
+    world: &World,
+) -> Vec<(
+    cadrs_core::FeatureId,
+    String,
+    cadrs_core::frame::CutListFeature,
+)> {
+    world
+        .get_resource::<ActiveDocument>()
+        .and_then(|d| d.active_element())
+        .map(|e| {
+            e.features()
+                .iter()
+                .filter_map(|f| match &f.kind {
+                    cadrs_core::FeatureKind::CutList(c) => Some((f.id, f.name.clone(), c.clone())),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// "Column: value · Column: value".
+fn values_text(values: &[(String, String)]) -> String {
+    values
+        .iter()
+        .map(|(c, v)| format!("{c}: {v}"))
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
 
 /// What the panel shows, to rebuild it only when that changes.
 #[derive(Component, PartialEq, Eq, Clone)]
@@ -178,6 +221,7 @@ fn sync_panel(
     kind: Res<ActiveKind>,
     cache: Res<PartCache>,
     selection: Res<Selection>,
+    shown: Res<CutListShown>,
     q_panel: Query<Entity, With<CutListPanel>>,
     mut commands: Commands,
 ) {
@@ -188,15 +232,65 @@ fn sync_panel(
         }
         return;
     }
-    if cache.is_changed() || open.is_changed() || selection.is_changed() || q_panel.is_empty() {
+    if cache.is_changed()
+        || open.is_changed()
+        || selection.is_changed()
+        || shown.is_changed()
+        || q_panel.is_empty()
+    {
         commands.queue(rebuild);
     }
 }
 
 fn rebuild(world: &mut World) {
+    let lists = cut_lists(world);
+    let shown = world.resource::<CutListShown>().0;
+    let list = lists
+        .iter()
+        .find(|l| Some(l.0) == shown)
+        .map(|l| l.2.clone());
     let cache = world.resource::<PartCache>();
-    let members = members(cache);
+    let mut members = members(cache);
+    // A Cut list's own: its members, and the other parts it names.
+    let mut others: Vec<PartId> = Vec::new();
+    if let Some(c) = &list {
+        let named = c.named_parts();
+        if !c.all {
+            members.retain(|m| named.contains(&m.part));
+        }
+        others = named
+            .into_iter()
+            .filter(|p| !members.iter().any(|m| m.part == *p))
+            .filter(|p| cache.parts.iter().any(|q| q.id == *p))
+            .collect();
+    }
+    let other_rows: Vec<(PartId, String, String)> = others
+        .iter()
+        .map(|p| {
+            let values = list
+                .as_ref()
+                .map(|c| c.values_for(&[*p]))
+                .unwrap_or_default();
+            (*p, part_name(cache, *p), values_text(&values))
+        })
+        .collect();
     let rows = cadrs_core::frame::cut_list(&members);
+    let row_values: Vec<String> = rows
+        .iter()
+        .map(|r| {
+            list.as_ref()
+                .map(|c| values_text(&c.values_for(&r.parts)))
+                .unwrap_or_default()
+        })
+        .collect();
+    let buttons: Vec<(Option<cadrs_core::FeatureId>, String)> = if lists.is_empty() {
+        Vec::new()
+    } else {
+        std::iter::once((None, tr("cut-list-all-members")))
+            .chain(lists.iter().map(|l| (Some(l.0), l.1.clone())))
+            .collect()
+    };
+    let shown = list.as_ref().and(shown);
     let totals = cadrs_core::frame::totals(&rows);
     let units = world.resource::<crate::WorkspaceUnits>().0;
     let selected: Vec<PartId> = world
@@ -217,7 +311,7 @@ fn rebuild(world: &mut World) {
         .map(|r| r.parts.iter().map(|p| part_name(cache, *p)).collect())
         .collect();
     let key = PanelKey(format!(
-        "{rows:?}{names:?}{materials:?}{selected:?}{}{}",
+        "{rows:?}{names:?}{materials:?}{selected:?}{buttons:?}{shown:?}{other_rows:?}{row_values:?}{}{}",
         units.length.symbol(),
         units.decimals
     ));
@@ -284,7 +378,41 @@ fn rebuild(world: &mut World) {
                     .build(&t),
             );
         });
-        if rows.is_empty() {
+        if !buttons.is_empty() {
+            p.spawn((
+                Name::new("cut-list-shown"),
+                Node {
+                    padding: UiRect::new(Val::Px(8.0), Val::Px(8.0), Val::ZERO, Val::Px(6.0)),
+                    column_gap: Val::Px(4.0),
+                    row_gap: Val::Px(4.0),
+                    flex_wrap: FlexWrap::Wrap,
+                    flex_shrink: 0.0,
+                    ..default()
+                },
+            ))
+            .with_children(|r| {
+                for (i, (id, name)) in buttons.iter().enumerate() {
+                    let id = *id;
+                    let node = match id {
+                        None => "cut-list-show-all".to_string(),
+                        Some(_) => format!("cut-list-show-{}", i - 1),
+                    };
+                    r.spawn((
+                        cadrs_ui::Button::new(node)
+                            .label(name.clone())
+                            .small()
+                            .selected(id == shown)
+                            .build(&t),
+                        observe(move |_: On<Activate>, mut shown: ResMut<CutListShown>| {
+                            if shown.0 != id {
+                                shown.0 = id;
+                            }
+                        }),
+                    ));
+                }
+            });
+        }
+        if rows.is_empty() && other_rows.is_empty() {
             p.spawn((
                 Name::new("cut-list-empty"),
                 t.text(
@@ -416,6 +544,77 @@ fn rebuild(world: &mut World) {
                             Name::new(format!("cut-list-row-{i}-{cell_name}")),
                             t.text(text, 11.5, FontWeight::NORMAL, t.foreground),
                             cell(*w, *grow),
+                            Pickable::IGNORE,
+                        ));
+                    }
+                });
+                if !row_values[i].is_empty() {
+                    list.spawn((
+                        Name::new(format!("cut-list-row-{i}-values")),
+                        t.text(
+                            row_values[i].clone(),
+                            10.5,
+                            FontWeight::NORMAL,
+                            t.muted_foreground,
+                        ),
+                        Node {
+                            margin: UiRect::new(
+                                Val::Px(38.0),
+                                Val::Px(10.0),
+                                Val::ZERO,
+                                Val::Px(3.0),
+                            ),
+                            ..default()
+                        },
+                    ));
+                }
+            }
+            // The parts the Cut list names that aren't frame members (a panel, a foot).
+            if !other_rows.is_empty() {
+                list.spawn((
+                    Name::new("cut-list-other-parts"),
+                    t.text(
+                        tr("cut-list-other-parts"),
+                        11.5,
+                        FontWeight::BOLD,
+                        t.foreground,
+                    ),
+                    Node {
+                        margin: UiRect::new(
+                            Val::Px(10.0),
+                            Val::Px(10.0),
+                            Val::Px(6.0),
+                            Val::Px(2.0),
+                        ),
+                        ..default()
+                    },
+                ));
+            }
+            for (i, (part, name, values)) in other_rows.iter().enumerate() {
+                let on = selected.contains(part);
+                let mut row = list.spawn((
+                    Name::new(format!("cut-list-other-{i}")),
+                    CutRow(vec![*part]),
+                    bevy::ui_widgets::Button,
+                    Node {
+                        min_height: Val::Px(22.0),
+                        padding: UiRect::horizontal(Val::Px(10.0)),
+                        flex_direction: FlexDirection::Column,
+                        justify_content: JustifyContent::Center,
+                        ..default()
+                    },
+                ));
+                if on {
+                    row.insert(BackgroundColor(t.primary.with_alpha(0.18)));
+                }
+                row.with_children(|c| {
+                    c.spawn((
+                        t.text(name.clone(), 11.5, FontWeight::NORMAL, t.foreground),
+                        Pickable::IGNORE,
+                    ));
+                    if !values.is_empty() {
+                        c.spawn((
+                            t.text(values.clone(), 10.5, FontWeight::NORMAL, t.muted_foreground),
                             Pickable::IGNORE,
                         ));
                     }

@@ -462,6 +462,38 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
             });
             continue;
         }
+        // `grid off|crossed|lines`, `origin hidden|dot|axes`, `frame-stats off|fps|details`:
+        // Preferences › Interface, saved like the dialog's OK.
+        if let Some(code) = m.0.strip_prefix("grid ") {
+            let code = code.trim().to_string();
+            commands.queue(move |world: &mut World| {
+                match cadrs_core::preferences::GridStyle::from_code(&code) {
+                    Some(g) => crate::preferences_ui::set_grid(world, g),
+                    None => warn!("grid: no style {code:?}"),
+                }
+            });
+            continue;
+        }
+        if let Some(code) = m.0.strip_prefix("origin ") {
+            let code = code.trim().to_string();
+            commands.queue(move |world: &mut World| {
+                match cadrs_core::preferences::OriginStyle::from_code(&code) {
+                    Some(o) => crate::preferences_ui::set_origin(world, o),
+                    None => warn!("origin: no style {code:?}"),
+                }
+            });
+            continue;
+        }
+        if let Some(code) = m.0.strip_prefix("frame-stats ") {
+            let code = code.trim().to_string();
+            commands.queue(move |world: &mut World| {
+                match cadrs_core::preferences::FrameStatsMode::from_code(&code) {
+                    Some(f) => crate::preferences_ui::set_frame_stats(world, f),
+                    None => warn!("frame-stats: no mode {code:?}"),
+                }
+            });
+            continue;
+        }
         // `drop-file <path>`: the file dropped on the window (as from a file manager).
         if let Some(path) = m.0.strip_prefix("drop-file ") {
             let path_buf = std::path::PathBuf::from(path.trim());

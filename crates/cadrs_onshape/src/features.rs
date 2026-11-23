@@ -33,6 +33,10 @@ use crate::report::{FeatureReport, Outcome};
 use crate::sketch::param;
 use crate::studio::Studio;
 
+#[path = "frames.rs"]
+mod frames;
+#[path = "sheetmetal.rs"]
+mod sheetmetal;
 #[path = "surfacing.rs"]
 mod surfacing;
 
@@ -99,6 +103,11 @@ impl PartStudio<'_> {
                 *lost += 1;
                 continue;
             };
+            // A frame's member, named by the path curve it was swept along.
+            if let Some(member) = self.frame_member(&q) {
+                picks.push((vec![member], HashMap::new()));
+                continue;
+            }
             let mut found = body_parts_in(&q, &self.features, &parts, &doc);
             // A piece of a split body: every part the splitting operation touched is a candidate.
             if q.get("queryType").and_then(Q::as_str) == Some("SPLIT")
@@ -646,6 +655,82 @@ impl PartStudio<'_> {
         self.add(f, fid, "Mirror", FeatureKind::Mirror(x), fr)
     }
 
+    /// The plane of the sketch a query's entity belongs to (a region or a curve of a sketch).
+    pub(crate) fn sketch_plane(&self, q: &Q) -> Option<cadrs_sketch::PlaneRef> {
+        let op = q.get("operationId").and_then(Q::as_str)?;
+        let (map, _) = self.sketches.get(op_feature(op))?;
+        let el = self.s.doc.element(self.el)?;
+        el.features()
+            .iter()
+            .find(|x| x.id == map.feature)?
+            .sketch()?
+            .plane
+    }
+
+    /// Onshape's Draft, Neutral plane type: faces turned about where they meet a plane.
+    pub(crate) fn draft(
+        &mut self,
+        f: &Value,
+        fid: &str,
+        fr: &mut FeatureReport,
+    ) -> Result<(), CommandError> {
+        if Self::text(f, "draftFeatureType") != "NEUTRAL_PLANE" {
+            return Err(CommandError::Invalid(
+                "parting line drafts are not imported yet".into(),
+            ));
+        }
+        let neutral = match refs::picks(param(f, "neutralPlane")).into_iter().next() {
+            Some(p) => match self.plane_ref(&p) {
+                Some(pl) => Some(MirrorPlane::Plane(pl)),
+                None => match p {
+                    Pick::Query(q) => self
+                        .face_of(&q)
+                        .map(MirrorPlane::Face)
+                        // A region of a sketch: the sketch's plane.
+                        .or_else(|| self.sketch_plane(&q).map(MirrorPlane::Plane)),
+                    _ => None,
+                },
+            },
+            None => None,
+        };
+        let neutral = neutral.ok_or_else(|| {
+            CommandError::Invalid("its neutral plane could not be translated".into())
+        })?;
+        let mut lost = 0;
+        let mut faces = Vec::new();
+        for p in refs::picks(param(f, "draftFaces")) {
+            let found = match p {
+                Pick::Query(q) => self.faces_of(&q),
+                _ => Vec::new(),
+            };
+            if found.is_empty() {
+                lost += 1;
+            }
+            for face in found {
+                if !faces.contains(&face) {
+                    faces.push(face);
+                }
+            }
+        }
+        if faces.is_empty() {
+            return Err(CommandError::Invalid(
+                "its faces could not be translated".into(),
+            ));
+        }
+        Self::lost_note(fr, lost, "face selections");
+        let (angle, angle_expr) = self.quantity(f, "angle", Quantity::Angle)?;
+        let x = cadrs_core::draft::DraftFeature {
+            neutral: Some(neutral),
+            faces,
+            angle,
+            angle_expr,
+            flip: Self::flag(f, "pullDirection"),
+            tangent_propagation: Self::flag(f, "tangentPropagation"),
+            ..Default::default()
+        };
+        self.add(f, fid, "Draft", FeatureKind::Draft(x), fr)
+    }
+
     /// A Split of parts by a plane or a face (Onshape's Split, Part type).
     pub(crate) fn split(
         &mut self,
@@ -742,6 +827,11 @@ impl PartStudio<'_> {
             }
             if let Some(face) = self.face_of(&q) {
                 tool = Some(SplitToolRef::Face(face));
+                break;
+            }
+            // Curves of a sketch: the sketch (its curves swept through the faces).
+            if let Some((sketch, _)) = self.sketch_curve(&q) {
+                tool = Some(SplitToolRef::Sketch(sketch));
                 break;
             }
         }
@@ -1076,6 +1166,16 @@ impl PartStudio<'_> {
             flip_alignment: Self::flag(f, "flipAlignment"),
             ..PlaneFeature::default()
         };
+        // Onshape's Line angle plane by a reference plane faces against that plane's normal
+        // (three planes of "Frames - Cut List", f2db7b31…, by their sketches' matrices: by
+        // Front, whose normal is -Y, it faces +Y); cadrs's faces along it.
+        if kind == PlaneType::LineAngle
+            && x.entities
+                .iter()
+                .any(|e| matches!(e, PlaneEntity::Plane(_) | PlaneEntity::Face(_)))
+        {
+            x.flip_normal = !x.flip_normal;
+        }
         // Onshape keeps both values whatever the type; only the type's own one must evaluate.
         match self.quantity(f, "offset", Quantity::Length) {
             Ok(v) => (x.offset, x.offset_expr) = v,
@@ -1092,7 +1192,64 @@ impl PartStudio<'_> {
                 "its entities don't fit the plane type: {why}"
             )));
         }
-        self.add(f, fid, "Plane", FeatureKind::Plane(x), fr)
+        self.add(f, fid, "Plane", FeatureKind::Plane(x.clone()), fr)?;
+        // Which way it faces, by a sketch drawn on it: as Onshape's (a three point plane's
+        // normal, say, follows the order Onshape evaluates its points in).
+        if self.faces_against_its_sketch(fid) == Some(true) {
+            x.flip_normal = !x.flip_normal;
+            let id = self.feature_id(fid);
+            if let Some(mut feature) = self
+                .s
+                .doc
+                .element(self.el)
+                .and_then(|e| e.feature(id))
+                .cloned()
+            {
+                feature.kind = FeatureKind::Plane(x);
+                self.s.run(&cadrs_core::commands::ReplaceFeature {
+                    element: self.el,
+                    feature,
+                    label: "Flip plane".into(),
+                })?;
+                self.built = None;
+                self.parts();
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether the Plane feature `fid`, as built, faces the other way than the first Onshape
+    /// sketch drawn on it does (`None` with no such sketch, or if they are not one plane).
+    fn faces_against_its_sketch(&mut self, fid: &str) -> Option<bool> {
+        let id = *self.features.get(fid)?;
+        self.parts();
+        let frame = *self.built.as_ref()?.1.planes.get(&id)?;
+        let (features, sketches) = (self.raw.features()?, self.raw.sketches()?);
+        let op = format!("{fid}.planeOp");
+        for f in features["features"].as_array()? {
+            if f["featureType"].as_str() != Some("newSketch") {
+                continue;
+            }
+            let on_it = refs::picks(param(f, "sketchPlane")).iter().any(|p| {
+                matches!(p, Pick::Query(q) if q.get("operationId").and_then(Q::as_str) == Some(&op))
+            });
+            if !on_it {
+                continue;
+            }
+            let solved = crate::sketch::Solved::find(&sketches, f["featureId"].as_str()?)?;
+            let (n, o) = crate::sketch::world_plane(&solved)?;
+            let fnrm = frame.normal();
+            let dot = fnrm[0] * n[0] + fnrm[1] * n[1] + fnrm[2] * n[2];
+            let off = (0..3)
+                .map(|k| (o[k] - frame.origin[k]) * fnrm[k])
+                .sum::<f64>()
+                .abs();
+            if dot.abs() < 1.0 - 1e-6 || off > 1e-4 {
+                return None;
+            }
+            return Some(dot < 0.0);
+        }
+        None
     }
 
     /// What one of a Plane's entity queries picks (`q` the query as Onshape stores it, `subs`
@@ -1391,8 +1548,15 @@ impl PartStudio<'_> {
                 continue;
             }
             let found = self.model(&parts).edges(&q);
+            let found = self.surface_cap_edges(&q, &parts, found);
             if found.is_empty() {
                 *lost += 1;
+            }
+            if std::env::var_os("CADRS_ONSHAPE_DEBUG").is_some() {
+                eprintln!("CURVEREF {} edges | {}", found.len(), self.describe(&q));
+                for e in &found {
+                    eprintln!("    {:?}", e.seed);
+                }
             }
             for e in found {
                 push(&mut out, PathRef::Edge(e));

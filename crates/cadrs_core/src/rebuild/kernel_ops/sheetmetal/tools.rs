@@ -530,7 +530,12 @@ impl Rebuilder {
             };
             let profile = cadrs_kernel::Profile::new(
                 kplane(origin, r.x, n),
-                vec![region_of(&r.polygon, 0x5441_4200 + k as u64, &to_plane)],
+                vec![region_of(
+                    &r.polygon,
+                    0x5441_4200 + k as u64,
+                    &to_plane,
+                    &[],
+                )],
             );
             let made = self
                 .kernel

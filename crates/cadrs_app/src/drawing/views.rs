@@ -671,6 +671,20 @@ pub struct ViewScene {
     shaded: Vec<(View, Arc<ViewGeometry>)>,
     /// Views with pictures (a board's layout) to show.
     pictures: Vec<(View, Arc<ViewGeometry>)>,
+    /// The section views' cutting lines and labels, for picking (`drawing_sections`).
+    pub section_marks: Vec<(ViewId, cadrs_drawing::view_kinds::SectionMarks)>,
+}
+
+impl ViewScene {
+    /// The section view whose cutting line or label the sheet point `p` is on (within `tol`
+    /// sheet mm), the topmost first.
+    pub fn section_mark_at(&self, p: Vec2, tol: f64) -> Option<ViewId> {
+        self.section_marks
+            .iter()
+            .rev()
+            .find(|(_, m)| m.hit([p.x as f64, p.y as f64], tol))
+            .map(|(id, _)| *id)
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -678,6 +692,7 @@ struct SceneKey {
     views: Vec<View>,
     geometry: Vec<Option<usize>>,
     hovered: Option<ViewId>,
+    section_hover: Option<ViewId>,
     selected: Vec<ViewId>,
     ghost: Option<View>,
     ghost_geometry: Option<usize>,
@@ -871,6 +886,7 @@ fn rebuild_view_scene(
         views: views.clone(),
         geometry: geometry.iter().map(geom_ptr).collect(),
         hovered: ui.hovered,
+        section_hover: ui.section_hover.map(|h| h.view),
         selected: ui.selected.clone(),
         ghost: ui.ghost.clone(),
         ghost_geometry: geom_ptr(&ghost_geometry),
@@ -896,6 +912,43 @@ fn rebuild_view_scene(
     if scene.key.as_ref() == Some(&key) {
         return;
     }
+    // The section views' marks; the hovered one's cutting line is drawn apart, in blue.
+    let model = |id: ViewId| {
+        views
+            .iter()
+            .zip(&geometry)
+            .find(|(v, _)| v.id == id)
+            .map(|(v, g)| {
+                (
+                    v,
+                    g.as_deref()
+                        .map(|g| g as &dyn cadrs_drawing::annotation::ViewModel),
+                )
+            })
+    };
+    let section_marks: Vec<(ViewId, cadrs_drawing::view_kinds::SectionMarks)> = views
+        .iter()
+        .zip(&geometry)
+        .filter_map(|(v, g)| {
+            let marks = cadrs_drawing::view_kinds::section_marks(
+                &d.style,
+                v.parent.and_then(model),
+                v,
+                g.as_deref()
+                    .map(|g| g as &dyn cadrs_drawing::annotation::ViewModel),
+                &avoid,
+            )?;
+            Some((v.id, marks))
+        })
+        .collect();
+    let lit = ui
+        .section_hover
+        .and_then(|h| views.iter().find(|v| v.id == h.view));
+    let without_lit: Vec<View> = decor_views
+        .iter()
+        .filter(|v| Some(v.id) != lit.map(|l| l.id))
+        .cloned()
+        .collect();
     let mut strokes = Vec::new();
     let mut placeholders = Vec::new();
     let mut shaded = Vec::new();
@@ -924,9 +977,10 @@ fn rebuild_view_scene(
                     .map(|(_, e)| e);
                 view_strokes(&mut strokes, v, g, color, &sketches, hl);
                 strokes.extend(super::flat_views::centermark_strokes(&d.style, v, g, color));
+                let lit_here = lit.is_some_and(|l| l.parent == Some(v.id));
                 let decor = cadrs_drawing::view_kinds::view_decor(
                     &d.style,
-                    &decor_views,
+                    if lit_here { &without_lit } else { &decor_views },
                     v,
                     Some(&**g),
                     &avoid,
@@ -984,6 +1038,10 @@ fn rebuild_view_scene(
     for l in &ui.tool_strokes {
         push_line(&mut strokes, l, LineKind::Visible, ghost_color());
     }
+    if let Some((_, marks)) = lit.and_then(|l| section_marks.iter().find(|(id, _)| *id == l.id)) {
+        decor_strokes(&mut strokes, &marks.line, super::annotations::blue());
+    }
+    scene.section_marks = section_marks;
     scene.key = Some(key);
     scene.strokes = strokes;
     scene.placeholders = placeholders;

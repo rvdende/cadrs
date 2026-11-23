@@ -1696,7 +1696,9 @@ impl XBuilder {
     /// Where a loop reaches u ≡ `u` (mod 2π): a vertex (the index of the coedge starting there)
     /// or a point inside a coedge (its index and edge parameter).
     fn find_u(&self, l: &[(usize, bool)], t: &Trace, u: f64) -> Option<(usize, Option<f64>)> {
-        let off = |x: f64| wrap(x - u, -PI, P);
+        // (In the surface's own period: a closed spline's range, not 2π.)
+        let (per, quarter) = (t.pu, t.pu / 4.0);
+        let off = |x: f64| wrap(x - u, -per / 2.0, per);
         for (k, &(e, fwd)) in l.iter().enumerate() {
             if off(t.ends[k].0.x).abs() < tol::ROUNDOFF {
                 return Some((k, None));
@@ -1709,7 +1711,7 @@ impl XBuilder {
             for i in 1..=m {
                 let s1 = i as f64 / m as f64;
                 let cur = f(s1);
-                if prev.abs() < PI / 2.0 && cur.abs() < PI / 2.0 && prev * cur <= 0.0 {
+                if prev.abs() < quarter && cur.abs() < quarter && prev * cur <= 0.0 {
                     if cur.abs() < tol::ROUNDOFF_FINE && i == m {
                         break; // the next coedge's start
                     }
@@ -1721,6 +1723,97 @@ impl XBuilder {
             }
         }
         None
+    }
+
+    /// [`Self::find_u`] for v: where a loop reaches v ≡ `v` (mod 2π).
+    fn find_v(&self, l: &[(usize, bool)], t: &Trace, v: f64) -> Option<(usize, Option<f64>)> {
+        let (per, quarter) = (t.pv, t.pv / 4.0);
+        let off = |x: f64| wrap(x - v, -per / 2.0, per);
+        for (k, &(e, fwd)) in l.iter().enumerate() {
+            if off(t.ends[k].0.y).abs() < tol::ROUNDOFF {
+                return Some((k, None));
+            }
+            let ed = &self.body.edges[e];
+            let (a, b) = co_range(ed, fwd);
+            let m = 64;
+            let f = |s: f64| off(t.pcs[k].point(a + (b - a) * s).y);
+            let mut prev = f(0.0);
+            for i in 1..=m {
+                let s1 = i as f64 / m as f64;
+                let cur = f(s1);
+                if prev.abs() < quarter && cur.abs() < quarter && prev * cur <= 0.0 {
+                    if cur.abs() < tol::ROUNDOFF_FINE && i == m {
+                        break; // the next coedge's start
+                    }
+                    let s =
+                        super::math::root_from(&f, ((i - 1) as f64 / m as f64, prev), (s1, cur));
+                    return Some((k, Some(a + (b - a) * s)));
+                }
+                prev = cur;
+            }
+        }
+        None
+    }
+
+    /// [`Self::add_seam`] for a band of a torus between two loops round its tube (a bent
+    /// tube's wall, bounded by its two end circles): a seam along the v = const circle from
+    /// one loop to the other, on the side of the first the face lies.
+    fn add_seam_v(&mut self, fi: usize, wrapping: &[(usize, i64)], traces: &[Trace]) -> bool {
+        let s = self.faces[fi].surf.clone();
+        if !matches!(s, Surface::Torus { .. })
+            || wrapping.len() != 2
+            || traces.iter().any(|t| t.wu != 0)
+            || wrapping[0].1 != -wrapping[1].1
+        {
+            return false;
+        }
+        let hint = self.faces[fi].sense;
+        let (la, lb) = (wrapping[0].0, wrapping[1].0);
+        let a_loop = self.faces[fi].loops[la].clone();
+        let qa = traces[0].ends[0].0;
+        let va = self.co_start(a_loop[0].0, a_loop[0].1);
+        let Some(seam) = s.iso_v(qa.y) else {
+            return false;
+        };
+        let Some((k, inner)) = self.find_v(&self.faces[fi].loops[lb].clone(), &traces[1], qa.y)
+        else {
+            return false;
+        };
+        let (kb, vbv) = match inner {
+            None => (
+                k,
+                self.co_start(self.faces[fi].loops[lb][k].0, self.faces[fi].loops[lb][k].1),
+            ),
+            Some(t) => {
+                let (e, _) = self.faces[fi].loops[lb][k];
+                (k + 1, self.split_edge(e, t))
+            }
+        };
+        let b_loop = self.faces[fi].loops[lb].clone();
+        let pb = self.body.verts[vbv].p;
+        let (ub, _) = s.project(&pb, Some((qa.x, qa.y)));
+        // The face lies left of the first loop's way round the tube (right, its sense
+        // reversed): towards lower u when it runs up v.
+        let side = -(wrapping[0].1.signum() as f64) * if hint { 1.0 } else { -1.0 };
+        let d = wrap(ub - qa.x, 0.0, P);
+        let ub = if side > 0.0 { qa.x + d } else { qa.x + d - P };
+        if (ub - qa.x).abs() < tol::ROUNDOFF {
+            return false;
+        }
+        let fwd_seam = self.iso_edge(seam, va, qa.x, vbv, ub);
+        let mut nl: Vec<(usize, bool)> = a_loop.clone();
+        nl.push(fwd_seam);
+        let nb = b_loop.len();
+        for i in 0..nb {
+            nl.push(b_loop[(kb + i) % nb]);
+        }
+        nl.push((fwd_seam.0, !fwd_seam.1));
+        let f = &mut self.faces[fi];
+        let (lo, hi) = if la < lb { (la, lb) } else { (lb, la) };
+        f.loops.remove(hi);
+        f.loops.remove(lo);
+        f.loops.insert(0, nl);
+        true
     }
 
     /// Adds an edge along the iso line `c` (parametrized by v) between vertices at v = va and
@@ -1806,7 +1899,7 @@ impl XBuilder {
             .map(|&(li, _)| self.trace(fi, &s, &self.faces[fi].loops[li]))
             .collect();
         if traces.iter().any(|t| t.wv != 0) {
-            return false;
+            return self.add_seam_v(fi, wrapping, &traces);
         }
         let la = wrapping[0].0;
         let a_loop = self.faces[fi].loops[la].clone();
@@ -2173,7 +2266,10 @@ impl XBuilder {
                     continue;
                 }
                 let s = self.faces[fi].surf.clone();
-                if !s.u_periodic() && !s.v_periodic() {
+                // (A closed spline surface too: a tube swept along a spline, bounded by its
+                // two end circles.)
+                let per = periods(&s);
+                if per.pu.is_none() && per.pv.is_none() {
                     continue;
                 }
                 let mut wrapping = Vec::new();
@@ -2371,6 +2467,11 @@ impl XBuilder {
             .iter()
             .map(|&i| (i != usize::MAX).then_some(i))
             .collect();
+        if std::env::var_os("CADRS_XBUILD_DEBUG").is_some() {
+            for w in &self.warnings {
+                eprintln!("xbuild: {w}");
+            }
+        }
         (self.body, self.warnings, map)
     }
 }

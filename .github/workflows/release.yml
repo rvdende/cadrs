@@ -30,6 +30,8 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
+  # Fat LTO for the fastest code (.cargo/config.toml turns LTO off for local builds).
+  CARGO_PROFILE_RELEASE_LTO: fat
 
 jobs:
   # On Ubuntu 22.04, so the binary needs only glibc 2.35, on the nightly pinned in

@@ -209,6 +209,10 @@ pub fn moved_model(m: &Model, rot: nalgebra::Matrix3<f64>, t: V3) -> Model {
     for w in &mut out.walls {
         w.surface = map_surface(w.surface, &r);
     }
+    for (c, n, _) in &mut out.circles {
+        *c = r.point(*c);
+        *n = r.vec(*n);
+    }
     out
 }
 

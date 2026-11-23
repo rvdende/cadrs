@@ -256,6 +256,16 @@ impl GussetPosition {
     ];
 }
 
+/// A section kept in the feature itself (a Custom profile with no sketch of this document): one
+/// taken from another document's profile library, as an imported frame's is.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LibraryProfile {
+    /// Its name in the cut list ("Round tube 1.375 OD x 0.049").
+    pub name: String,
+    /// The section in its own coordinates (mm), the path through its origin.
+    pub regions: Vec<Region>,
+}
+
 /// A Frame feature.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FrameFeature {
@@ -271,6 +281,9 @@ pub struct FrameFeature {
     /// path, `Anchor::Origin`).
     #[serde(default)]
     pub sketch: Option<FeatureId>,
+    /// A custom section kept here, used when there is no `sketch`.
+    #[serde(default)]
+    pub library: Option<LibraryProfile>,
     #[serde(default)]
     pub anchor: Anchor,
     /// The section turned about the path (degrees, counter-clockwise looking back along it).
@@ -388,6 +401,7 @@ impl Default for FrameFeature {
             family: ProfileFamily::TSlot,
             size: "20x20".into(),
             sketch: None,
+            library: None,
             anchor: Anchor::Center,
             angle: 0.0,
             angle_expr: "0 deg".into(),
@@ -425,7 +439,7 @@ impl FrameFeature {
             return Some("Select sketch curves or edges for the frame's members");
         }
         if self.family == ProfileFamily::Custom {
-            if self.sketch.is_none() {
+            if self.sketch.is_none() && self.library.is_none() {
                 return Some("Select the sketch of the custom profile");
             }
         } else if section(self.family, &self.size).is_none() {
@@ -498,7 +512,10 @@ impl FrameFeature {
     /// 2)" (the custom sketch's name given).
     pub fn profile_label(&self, custom_name: Option<&str>) -> String {
         match self.family {
-            ProfileFamily::Custom => format!("Custom ({})", custom_name.unwrap_or("sketch")),
+            ProfileFamily::Custom => match (&self.library, self.sketch) {
+                (Some(l), None) => l.name.clone(),
+                _ => format!("Custom ({})", custom_name.unwrap_or("sketch")),
+            },
             ProfileFamily::Channel | ProfileFamily::IBeam => self.size.clone(),
             ProfileFamily::TSlot => format!("T-slot {}", self.size),
             f => format!("{} {}", f.label(), self.size),
@@ -1500,6 +1517,10 @@ pub struct MemberInfo {
     pub family: Option<ProfileFamily>,
     #[serde(default)]
     pub size: String,
+    /// Where its path starts and ends (mm; zero for a plate): which curve of the frame's path
+    /// a member runs along.
+    #[serde(default)]
+    pub span: [[f64; 3]; 2],
     /// A plate's kind and size (to name it in another language).
     #[serde(default)]
     pub plate_kind: Option<PlateKind>,
@@ -1530,6 +1551,156 @@ pub struct RowMaterial {
     pub mass: Option<f64>,
     /// Not the parts' own materials: the family's usual one (T-slot by its catalogue kg/m).
     pub nominal: bool,
+}
+
+/// Frame trim: members trimmed to one another, by groups in order. Each member of a group has
+/// the members of every group before it subtracted (as they are by then), and keeps its
+/// largest piece: the first group runs through, the last gives way to all the others.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct FrameTrimFeature {
+    /// The groups, the first trimming the rest.
+    #[serde(default)]
+    pub groups: Vec<Vec<PartId>>,
+}
+
+impl FrameTrimFeature {
+    pub fn problem(&self) -> Option<&'static str> {
+        if self.groups.iter().filter(|g| !g.is_empty()).count() < 2 {
+            return Some("Select the members to trim, in two or more groups");
+        }
+        None
+    }
+
+    /// The features that made the members.
+    pub fn parents(&self) -> Vec<FeatureId> {
+        let mut out: Vec<FeatureId> = Vec::new();
+        for p in self.groups.iter().flatten() {
+            if !out.contains(&p.feature) {
+                out.push(p.feature);
+            }
+        }
+        out
+    }
+}
+
+/// A value a Cut list feature gives a column for some of its parts (a description, a
+/// standard), instead of what the parts say themselves. Its parts are in the list whether
+/// frame members or not (a panel, a machined foot).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CutListOverride {
+    /// The parts it is for (unless `all` or `same_as_previous`).
+    #[serde(default)]
+    pub parts: Vec<PartId>,
+    /// It is for every part of the list.
+    #[serde(default)]
+    pub all: bool,
+    /// It is for the parts the override before it is for.
+    #[serde(default)]
+    pub same_as_previous: bool,
+    /// The column's name.
+    pub column: String,
+    pub value: String,
+}
+
+/// Cut list: the frame members (all there are, or the parts picked), with the parts its
+/// overrides name, gathered in an open composite part, their pieces listed by the cut list
+/// ([`cut_list`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CutListFeature {
+    /// Every frame member there is at this point of the list.
+    #[serde(default)]
+    pub all: bool,
+    /// The parts picked (with `all`: kept, not used, so the box can be cleared again).
+    #[serde(default)]
+    pub parts: Vec<PartId>,
+    #[serde(default)]
+    pub overrides: Vec<CutListOverride>,
+}
+
+impl Default for CutListFeature {
+    fn default() -> Self {
+        Self {
+            all: true,
+            parts: Vec::new(),
+            overrides: Vec::new(),
+        }
+    }
+}
+
+impl CutListFeature {
+    /// The parts override `i` names (none for one that is for every part): its own, or those
+    /// of the nearest override before it that has its own.
+    pub fn override_parts(&self, i: usize) -> &[PartId] {
+        let mut i = i;
+        loop {
+            match self.overrides.get(i) {
+                Some(o) if o.same_as_previous && i > 0 => i -= 1,
+                Some(o) if o.all => return &[],
+                Some(o) => return &o.parts,
+                None => return &[],
+            }
+        }
+    }
+
+    /// Whether override `i` is for `part` (a listed part).
+    pub fn override_applies(&self, i: usize, part: PartId) -> bool {
+        let mut i = i;
+        while self.overrides.get(i).is_some_and(|o| o.same_as_previous) && i > 0 {
+            i -= 1;
+        }
+        self.overrides
+            .get(i)
+            .is_some_and(|o| o.all || o.parts.contains(&part))
+    }
+
+    /// The column values the list gives every one of `parts` (a later override of a column
+    /// taking the place of an earlier one's), in the order their columns first appear.
+    pub fn values_for(&self, parts: &[PartId]) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = Vec::new();
+        for (i, o) in self.overrides.iter().enumerate() {
+            if parts.is_empty() || !parts.iter().all(|p| self.override_applies(i, *p)) {
+                continue;
+            }
+            match out.iter_mut().find(|(c, _)| *c == o.column) {
+                Some(v) => v.1 = o.value.clone(),
+                None => out.push((o.column.clone(), o.value.clone())),
+            }
+        }
+        out
+    }
+
+    /// Every part the list names: those picked and those its overrides are for.
+    pub fn named_parts(&self) -> Vec<PartId> {
+        // (With every member listed the parts picked are only remembered.)
+        let mut out = if self.all {
+            Vec::new()
+        } else {
+            self.parts.clone()
+        };
+        for i in 0..self.overrides.len() {
+            for p in self.override_parts(i) {
+                if !out.contains(p) {
+                    out.push(*p);
+                }
+            }
+        }
+        out
+    }
+
+    pub fn problem(&self) -> Option<&'static str> {
+        (!self.all && self.parts.is_empty()).then_some("Select the members for the cut list")
+    }
+
+    /// The features that made the parts picked.
+    pub fn parents(&self) -> Vec<FeatureId> {
+        let mut out: Vec<FeatureId> = Vec::new();
+        for p in &self.named_parts() {
+            if !out.contains(&p.feature) {
+                out.push(p.feature);
+            }
+        }
+        out
+    }
 }
 
 /// The members among `parts` as they are now: each member whose part is still there, and each
@@ -2073,6 +2244,7 @@ mod tests {
             family: Some(ProfileFamily::SquareTube),
             plate_kind: None,
             size: "40x40x3".into(),
+            span: [[0.0; 3]; 2],
         };
         let miter = EndCut::Angle(45.0);
         let rows = cut_list(&[
@@ -2142,6 +2314,7 @@ mod tests {
             family: Some(ProfileFamily::TSlot),
             plate_kind: None,
             size: "20x20".into(),
+            span: [[0.0; 3]; 2],
         };
         // `b` was joined to another part (gone); `a` was patterned twice over.
         let live = live_members(

@@ -288,6 +288,8 @@ fn line_of(g: &RefGeom) -> Option<(Vec3, Vec3)> {
     match g {
         RefGeom::Line { point, dir } => Some((*point, *dir)),
         RefGeom::Circle { center, normal, .. } => Some((*center, unit(*normal)?)),
+        // A cylindrical or conical face: its axis.
+        RefGeom::Cone { point, axis, .. } => Some((*point, unit(*axis)?)),
         _ => None,
     }
 }

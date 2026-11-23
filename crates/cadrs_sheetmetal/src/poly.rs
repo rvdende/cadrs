@@ -402,6 +402,32 @@ pub fn circle(center: P2, radius: f64, n: usize) -> Polygon {
     )
 }
 
+/// `out` (a boolean's result, on the [`GRID`]) with each vertex that is one of the inputs'
+/// own, rounded, put back where the input had it: a boolean rounds every coordinate to the
+/// grid, which moved a wall's edge up to half a nanometre off the sketch line it was drawn
+/// from. (Where two inputs' vertices round alike, the first's.) The vertices a boolean makes
+/// itself, where edges cross, stay on the grid.
+fn restored<'a>(out: Vec<Polygon>, inputs: impl IntoIterator<Item = &'a Polygon>) -> Vec<Polygon> {
+    let key = |p: P2| ((p.x / GRID).round() as i64, (p.y / GRID).round() as i64);
+    let mut exact: std::collections::HashMap<(i64, i64), P2> = std::collections::HashMap::new();
+    for poly in inputs {
+        for p in poly.outer.iter().chain(poly.holes.iter().flatten()) {
+            exact.entry(key(*p)).or_insert(*p);
+        }
+    }
+    let fix = |p: &P2| exact.get(&key(*p)).copied().unwrap_or(*p);
+    out.into_iter()
+        .map(|poly| Polygon {
+            outer: poly.outer.iter().map(fix).collect(),
+            holes: poly
+                .holes
+                .iter()
+                .map(|h| h.iter().map(fix).collect())
+                .collect(),
+        })
+        .collect()
+}
+
 /// The union of polygons, as separate polygons with holes.
 pub fn union(polys: &[Polygon]) -> Vec<Polygon> {
     let once = |polys: &[geo::Polygon<f64>]| {
@@ -438,7 +464,7 @@ pub fn union(polys: &[Polygon]) -> Vec<Polygon> {
         }
         out = again;
     }
-    out.iter().map(Polygon::from_geo).collect()
+    restored(out.iter().map(Polygon::from_geo).collect(), polys)
 }
 
 /// `a` minus every polygon of `cuts`.
@@ -452,7 +478,10 @@ pub fn difference(a: &[Polygon], cuts: &[Polygon]) -> Vec<Polygon> {
     for c in cuts.iter().filter(|p| !p.is_empty()) {
         acc = acc.difference(&geo::MultiPolygon(vec![c.to_geo()]));
     }
-    acc.0.iter().map(Polygon::from_geo).collect()
+    restored(
+        acc.0.iter().map(Polygon::from_geo).collect(),
+        a.iter().chain(cuts),
+    )
 }
 
 /// The region two polygons share.
@@ -460,13 +489,16 @@ pub fn intersection(a: &Polygon, b: &Polygon) -> Vec<Polygon> {
     if a.is_empty() || b.is_empty() {
         return Vec::new();
     }
-    a.to_geo()
-        .intersection(&b.to_geo())
-        .0
-        .iter()
-        .map(Polygon::from_geo)
-        .filter(|p| p.area() > 0.0)
-        .collect()
+    restored(
+        a.to_geo()
+            .intersection(&b.to_geo())
+            .0
+            .iter()
+            .map(Polygon::from_geo)
+            .filter(|p| p.area() > 0.0)
+            .collect(),
+        [a, b],
+    )
 }
 
 /// Total length of the polygon's loops.

@@ -19,8 +19,6 @@ Scenario(
     steps: [
         SetTimeout(240),
         WaitFor("document-shell"),
-        Key("F12"),
-        Key("F12"),
         Custom("fixture cnc/bull-nose-profile"),
         Wait(5),
         Click(ui("tab-cam")),

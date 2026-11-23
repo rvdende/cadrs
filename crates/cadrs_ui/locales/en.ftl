@@ -114,6 +114,59 @@ preferences-language = Language
 preferences-display = Display
 # After the language changes: what was built once (toolbars, the top bar) follows later.
 preferences-language-later = Some texts change when they are next opened, or after a restart.
+# The search field in the Preferences title bar.
+preferences-search = Search settings
+# The footer button that resets the settings of the section shown.
+preferences-restore-defaults = Restore Defaults
+preferences-restore-defaults-tooltip = Reset the settings in this section
+# Over the settings that match a search.
+preferences-search-results = Search results
+# { $text } is what was typed in the search field.
+preferences-search-about = Settings that match “{ $text }”.
+preferences-no-match = No settings match.
+# The section list's group headings (shown in capitals).
+preferences-group-input = Input
+preferences-group-design = Design
+preferences-group-connect = Connect
+# The sections, and the line under each one's title.
+preferences-navigation = Navigation
+preferences-assembly = Assembly
+preferences-interface-about = How cadrs looks, and what the 3D view shows.
+preferences-navigation-about = How the mouse moves the 3D view.
+preferences-assembly-about = How parts move in an assembly.
+preferences-collab-about = Sharing documents, peer to peer.
+preferences-assistants-about = Letting AI assistants on this computer work in cadrs.
+# The headings in Interface.
+preferences-group-appearance = Appearance
+preferences-group-grid = Grid and origin
+preferences-group-display = Display
+preferences-color-scheme = Color scheme
+preferences-scheme-system = System
+preferences-language-note = Takes effect when you press Apply or OK.
+# The ground grid under the 3D view: none, a line on every step with small crosses, or a
+# stronger line every ten.
+preferences-grid = Grid
+preferences-grid-off = Off
+preferences-grid-crossed = Crossed
+preferences-grid-lines = Lines
+# How the origin is drawn: not at all, a small bullseye, or red, green and blue axis lines.
+preferences-origin = Origin
+preferences-origin-hidden = Hidden
+preferences-origin-dot = Dot
+preferences-origin-axes = Axes (X, Y, Z)
+# The panel at the 3D view's bottom left with the frame rate.
+preferences-frame-stats = Frame stats
+preferences-frame-stats-off = Off
+preferences-frame-stats-fps = Frame rate
+preferences-frame-stats-details = Frame rate and details
+# The row with the Time systems switch (measuring the app itself).
+preferences-profiling = Profiling
+# The headings in Navigation.
+preferences-group-view = View
+preferences-camera = Camera
+preferences-keep-up-note = Rotating turns about the vertical and tilts, without rolling the view.
+# The heading in Collaboration over the cadrs ID and going online.
+preferences-group-network = Network
 
 ## The document window.
 # The button that shares the document with other people.
@@ -129,6 +182,8 @@ filter-placeholder = Filter by name or type
 parts = Parts
 # Bodies with no volume (sheets).
 surfaces = Surfaces
+# The Parts list's group of composite parts (each a named group of parts).
+composite-parts = Composite parts
 
 ## crates/cadrs_ui/src/color_editor.rs
 # A heading over the preset color swatches.
@@ -867,8 +922,6 @@ shell-prefs-zoom = Zoom
 shell-prefs-ui-scale-default = 100% (display default)
 shell-prefs-vsync = Vertical sync (VSync)
 shell-prefs-vsync-note = On, frames wait for the screen's refresh. Off, they are drawn as fast as they are made: the frame rate shows what a frame costs, but cadrs uses more power.
-# The panel F12 opens, with each frame's timings.
-shell-prefs-frame-panel = Frame panel (F12)
 # Measures how long each of the app's systems takes, each frame.
 shell-prefs-time-systems = Time systems
 shell-prefs-time-systems-note = Shows where each frame's CPU time goes, system by system. It slows cadrs down, so it's off unless you need it. Takes effect at the next start.
@@ -961,6 +1014,10 @@ shell-tool-thread = Thread
 shell-tool-gear = Gear
 # The toolbar's Frame tool: structural members (beams, tubes, extrusions) along sketch lines.
 shell-tool-frame = Frame
+# The toolbar's Frame trim tool: frame members cut to one another where they meet.
+shell-tool-frame-trim = Frame trim
+# The toolbar's Cut list tool: a feature that lists the frame's members as pieces to cut.
+shell-tool-cut-list = Cut list
 # The direct edit tools' button.
 shell-tool-direct-edit = Move face, Delete face, Simplify
 shell-tool-linear-pattern = Linear pattern
@@ -1653,7 +1710,6 @@ view-shortcut-rotate-90 = Rotate 90° (any arrow)
 view-shortcut-rotate-5 = Rotate 5° (any arrow)
 view-shortcut-pan = Pan (any arrow)
 view-shortcut-toggle-planes = Show or hide planes
-view-shortcut-toggle-frame-rate = Show or hide the frame rate
 view-shortcut-hide-construction = Hide construction geometry
 view-shortcut-isolate = Isolate
 view-shortcut-transparent = Transparent
@@ -2554,6 +2610,31 @@ model-flat-sketch-note = The flat view stays open while a sketch on the flat pat
 model-composite-parts = Parts and composite parts
 # A checkbox: a closed composite part (its members can't be picked on their own).
 model-composite-closed = Closed
+# The Cut list dialog's checkbox: every frame member is listed, not only the parts picked.
+model-cut-list-all = All frame members
+# The Cut list dialog's list of parts, empty: what to pick.
+model-cut-list-parts = Members and parts to list
+# The Cut list dialog's heading over its overrides. An override gives some of the listed parts
+# a text in a column ("Description" = "Feet").
+model-cut-list-overrides = Overrides
+# An override's column name field's label.
+model-cut-list-column = Column
+# Its value field's label.
+model-cut-list-value = Value
+# An override's checkbox: it is for every part of the cut list.
+model-cut-list-override-all = All parts
+# An override's checkbox: it is for the same parts as the override above it.
+model-cut-list-same-as-previous = Same parts as previous
+# The list of the parts an override is for, empty: what to pick.
+model-cut-list-override-parts = Parts it is for
+# The button that adds an override.
+model-cut-list-add-override = Add an override
+# The tooltip of the ✕ that removes one.
+model-cut-list-remove-override = Remove this override
+# The Frame trim dialog's first list, empty: these members stay whole and cut the others.
+model-frame-trim-first-group = Members that run through
+# The Frame trim dialog's later lists, empty: each is cut to the members in the lists above it.
+model-frame-trim-group = Members cut to those above
 
 ## crates/cadrs_app/src/revolve_dialog.rs
 # A revolve type: a full turn (360°).
@@ -3667,6 +3748,8 @@ drawing-hint-auxiliary-pick = Auxiliary view: click a straight edge of a view
 drawing-hint-auxiliary-place = Auxiliary view: click to place the view
 drawing-hint-align-vertical = Align view vertical: click an edge of the view
 drawing-hint-align-horizontal = Align view horizontal: click an edge of the view
+drawing-hint-section-click = Click to see { $section } in { $name }
+drawing-hint-section-jump = Double-click to see { $section } in { $name }
 
 ## crates/cadrs_app/src/drawing/flat_views.rs
 # A filter: sheet metal parts' flat patterns (the part unfolded).
@@ -3695,6 +3778,7 @@ drawing-view-menu-tangent-solid = Solid
 drawing-view-menu-tangent-phantom = Phantom
 drawing-flat-adjust-linestyle = Adjust linestyle…
 drawing-view-menu-properties = View properties…
+drawing-view-menu-show-section = Show { $section } in { $name }
 # A submenu: which view is drawn over which.
 drawing-flat-menu-order = Order
 drawing-view-menu-bring-to-front = Bring to front
@@ -6494,6 +6578,11 @@ cut-list-total-mass = Frame mass: { $mass }
 cut-list-copy = Copy
 cut-list-export = Export CSV
 cut-list-empty = No frame members
+# The Cut list panel's button that shows every frame member, beside one for each Cut list
+# feature.
+cut-list-all-members = All members
+# The heading over the parts a Cut list names that aren't frame members (panels, feet).
+cut-list-other-parts = Other parts
 # { $count } is how many rows were copied.
 cut-list-copied = Copied { $count } rows
 # { $file } is the file's name.

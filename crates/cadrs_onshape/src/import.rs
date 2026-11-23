@@ -552,7 +552,7 @@ pub(crate) struct PartStudio<'a> {
     pub(crate) s: &'a mut DocStudio,
     pub(crate) el: ElementId,
     doc_id: &'a str,
-    raw: &'a RawElement,
+    pub(crate) raw: &'a RawElement,
     pub(crate) vars: HashMap<String, Var>,
     pub(crate) report: &'a mut ElementReport,
     /// Onshape feature id → cadrs feature.
@@ -561,7 +561,7 @@ pub(crate) struct PartStudio<'a> {
     pub(crate) sketches: HashMap<String, (SketchMap, Sketch)>,
     /// The model as of the last rebuild, and how many features it covers.
     /// (The features it was built from: an edit that keeps their count must rebuild too.)
-    built: Option<(
+    pub(crate) built: Option<(
         Vec<cadrs_core::document::Feature>,
         Arc<cadrs_core::rebuild::Build>,
     )>,
@@ -992,6 +992,9 @@ impl<'a> PartStudio<'a> {
         // disambiguation, which name neighbours).
         let mut direct: std::collections::BTreeSet<cadrs_sketch::CurveId> =
             std::collections::BTreeSet::new();
+        // Which piece of a named line bounds the region: (the line, the curve crossing it at
+        // the piece's end, -1 for the piece's start or +1 for its end).
+        let mut ends: Vec<(cadrs_sketch::CurveId, cadrs_sketch::CurveId, f64)> = Vec::new();
         // How many edges the query lists around the region (its boundary's size in Onshape).
         let mut entries = 0;
         for d in q
@@ -1015,6 +1018,35 @@ impl<'a> PartStudio<'a> {
                     continue;
                 };
                 direct.insert(c);
+                // The boundary edge's own disambiguation: the vertex at one of its ends, as
+                // the crossing of its curve with another (a line a circle cuts in pieces: the
+                // piece that starts, -1, or ends, +1, at that crossing).
+                if let Some(eq) = eq {
+                    for d2 in eq
+                        .get("disambiguationData")
+                        .map(Q::items)
+                        .unwrap_or_default()
+                    {
+                        if d2.get("disambiguationType").and_then(Q::as_str) != Some("TOPOLOGY") {
+                            continue;
+                        }
+                        for v in d2.get("entities").map(Q::items).unwrap_or_default() {
+                            let Q::Array(pair) = v else { continue };
+                            let (Some(vq), Some(end)) =
+                                (pair.first(), pair.get(1).and_then(Q::as_f64))
+                            else {
+                                continue;
+                            };
+                            let mut ids = std::collections::BTreeSet::new();
+                            refs::sketch_entities(vq, &sk, &mut ids);
+                            for other in ids.iter().filter_map(|i| map.curves.get(i).copied()) {
+                                if other != c {
+                                    ends.push((c, other, end));
+                                }
+                            }
+                        }
+                    }
+                }
                 if let Some(sign) = sign {
                     sides.push((
                         c,
@@ -1033,6 +1065,11 @@ impl<'a> PartStudio<'a> {
                 let (l, rt) = refs::side_agreement(g, &r0, &sides);
                 eprintln!("SIDES left {l} right {rt} of {}", sides.len());
             }
+        }
+        if !ends.is_empty()
+            && let Some(r) = refs::region_by_piece_ends(sid, g, &sides, &ends)
+        {
+            return Some(vec![r]);
         }
         // A region Onshape bounds by sketch curves alone that cadrs cuts in pieces with a face's
         // imprinted edges: all the pieces.
@@ -1201,6 +1238,12 @@ impl<'a> PartStudio<'a> {
                 "faceBlend" => self.face_blend(f, &fid, &mut fr),
                 "fill" => self.fill(f, &fid, &mut fr),
                 "sweep" => self.sweep(f, &fid, &mut fr),
+                "frame" => self.frame(f, &fid, &mut fr),
+                "frameTrim" => self.frame_trim(f, &fid, &mut fr),
+                "cutlist" => self.cut_list(f, &fid, &mut fr),
+                "sheetMetalStart" => self.sheet_metal_start(f, &fid, &mut fr),
+                "draft" => self.draft(f, &fid, &mut fr),
+                "moveFace" => self.move_face(f, &fid, &mut fr),
                 "assignVariable" => {
                     self.variable(f, &mut fr);
                     Ok(())
@@ -1364,6 +1407,15 @@ impl<'a> PartStudio<'a> {
                         if near.is_none() && plane_near(&pl, n, o, 1.0) {
                             near = Some(pl);
                         }
+                        if std::env::var_os("CADRS_ONSHAPE_DEBUG").is_some() {
+                            let fr = pl.frame();
+                            eprintln!(
+                                "PLANE {}: cadrs origin {:?} normal {:?}; Onshape origin {o:?} normal {n:?}",
+                                f["name"],
+                                fr.origin,
+                                fr.normal()
+                            );
+                        }
                         plane_problem = Some("its Plane feature is not where Onshape has it");
                         continue;
                     }
@@ -1500,6 +1552,34 @@ impl<'a> PartStudio<'a> {
                 );
             }
         }
+        // Where the model's edges and vertices were when the sketch was made, if Onshape's
+        // model just before it was scraped (`rollback/bodydetails-<n>.json`, the features
+        // above the sketch): the ids a sketch names are often of parts later features
+        // changed, which the final model no longer has.
+        let then = self
+            .raw_json("features.json")
+            .and_then(|all| {
+                all["features"]
+                    .as_array()?
+                    .iter()
+                    .position(|x| x["featureId"].as_str() == Some(fid))
+            })
+            .and_then(|at| {
+                read_json(
+                    &self
+                        .raw
+                        .dir
+                        .join("rollback")
+                        .join(format!("bodydetails-{at:02}.json")),
+                )
+            })
+            .map(|d| {
+                let mut then = body_topology(&d);
+                for (k, v) in &self.model_points {
+                    then.entry(k.clone()).or_insert_with(|| v.clone());
+                }
+                then
+            });
         let map = sketch::import(
             self.s,
             self.el,
@@ -1508,7 +1588,7 @@ impl<'a> PartStudio<'a> {
             &solved,
             plane,
             &parts,
-            &self.model_points,
+            then.as_ref().unwrap_or(&self.model_points),
             fr,
         )?;
         let g = sketch::sketch_of(self.s, self.el, id)?;

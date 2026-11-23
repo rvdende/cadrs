@@ -2656,6 +2656,12 @@ impl Rebuilder {
             #[cfg(feature = "brep")]
             FeatureKind::Frame(x) => self.frame(before, f.id, x, state).unwrap_or_else(fail),
             #[cfg(feature = "brep")]
+            FeatureKind::FrameTrim(x) => {
+                self.frame_trim_groups(f.id, x, state).unwrap_or_else(fail)
+            }
+            #[cfg(feature = "brep")]
+            FeatureKind::CutList(x) => self.cut_list(f.id, x, state).unwrap_or_else(fail),
+            #[cfg(feature = "brep")]
             FeatureKind::SheetMetalModel(x) => self
                 .sheet_metal_model(before, f.id, &f.name, x, state)
                 .unwrap_or_else(fail),
@@ -2722,6 +2728,8 @@ impl Rebuilder {
             | FeatureKind::Thread(_)
             | FeatureKind::Gear(_)
             | FeatureKind::Frame(_)
+            | FeatureKind::FrameTrim(_)
+            | FeatureKind::CutList(_)
             | FeatureKind::Image(_) => fail("This feature needs the solid-modelling kernel".into()),
             #[cfg(not(feature = "brep"))]
             FeatureKind::Composite(_) => {

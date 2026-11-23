@@ -233,6 +233,24 @@ fn cell_box(p: &Piece, c: &Cell) -> Bbox {
     let mut bb = Bbox::empty();
     match (p, c) {
         (Piece::Point { p, .. }, _) => bb.add(p),
+        // A spline: five of its points over the cell, grown by what it can bulge between them,
+        // from the largest of its second derivative's own poles there (the curve's second
+        // derivative lies in their hull). Its second derivative at the five points says
+        // nothing sure of a curve of many spans: a long edge doubling back on itself was boxed
+        // without its tip, and a point by the tip was told the edge was far.
+        (
+            Piece::Curve {
+                c: Curve::Nurbs(n), ..
+            },
+            Cell::Curve(a, b),
+        ) if !n.is_rational() && n.degree >= 2 && second_poles_bound(n, *a, *b).is_some() => {
+            let k2 = second_poles_bound(n, *a, *b).unwrap_or(0.0);
+            for i in 0..=4 {
+                bb.add(&n.point(a + (b - a) * i as f64 / 4.0));
+            }
+            let h = (b - a) / 4.0;
+            bb = bb.grow(h * h / 8.0 * k2 + tol::ROUNDOFF_FINE);
+        }
         (Piece::Curve { c: crv, .. }, Cell::Curve(a, b)) => {
             let mut k2: f64 = 0.0;
             for i in 0..=4 {
@@ -249,6 +267,33 @@ fn cell_box(p: &Piece, c: &Cell) -> Bbox {
         _ => {}
     }
     bb
+}
+
+/// The most a polynomial B-spline's second derivative can be over [a, b]: the largest of the
+/// second derivative's own control points whose spans reach it. None where the curve has a
+/// knot repeated as often as its degree there (it has no second derivative across it).
+fn second_poles_bound(n: &super::nurbs::NurbsCurve, a: f64, b: f64) -> Option<f64> {
+    let (lo, hi) = (a.min(b), a.max(b));
+    let (p, u) = (n.degree, &n.knots);
+    let pole = |i: usize| super::nurbs::dehom(&n.cps[i]);
+    // The first derivative's pole i (over u[i + 1]..u[i + p + 1]).
+    let d = |i: usize| -> Option<V3> {
+        let w = u[i + p + 1] - u[i + 1];
+        (w > 0.0).then(|| (pole(i + 1) - pole(i)) * (p as f64 / w))
+    };
+    let mut most: f64 = 0.0;
+    for i in 0..n.cps.len().saturating_sub(2) {
+        // The second derivative's pole i reaches over u[i + 2]..u[i + p + 1].
+        if u[i + 2] > hi || u[i + p + 1] < lo {
+            continue;
+        }
+        let w = u[i + p + 1] - u[i + 2];
+        if !(w > 0.0) {
+            return None;
+        }
+        most = most.max(((d(i + 1)? - d(i)?) * ((p - 1) as f64 / w)).norm());
+    }
+    Some(most)
 }
 
 /// Lower (`Min`) or upper (`Max`) bound of the distance between points of two boxes.
@@ -1147,6 +1192,54 @@ mod tests {
                     "{p}: {m:?}"
                 );
             }
+        }
+    }
+    /// A long spline doubling back on itself (a hairpin, as the edge where a tube enters
+    /// another at a shallow angle): a point by its tip is as near it as the densest sampling
+    /// says, with other pieces further off in the search (the body's other edges).
+    #[test]
+    fn a_point_by_a_hairpin_splines_tip_is_near_it() {
+        use crate::native::nurbs::NurbsCurve;
+        // y = 0.02 x² over x in [-60, 60], through 61 points: its tip at the origin.
+        let xs: Vec<f64> = (0..=60).map(|i| -60.0 + 2.0 * i as f64).collect();
+        let pts: Vec<P3> = xs.iter().map(|x| P3::new(*x, 0.02 * x * x, 0.0)).collect();
+        let ts: Vec<f64> = (0..pts.len()).map(|i| i as f64).collect();
+        let hairpin = Curve::Nurbs(std::sync::Arc::new(NurbsCurve::interpolate(
+            &pts, &ts, 3, None, None,
+        )));
+        // A line well away, found first.
+        let far = Curve::Line {
+            o: P3::new(-60.0, -3.0, 0.0),
+            d: V3::new(1.0, 0.0, 0.0),
+        };
+        let pieces = vec![
+            Piece::Curve {
+                c: &far,
+                t: (0.0, 40.0),
+                edge: 0,
+                ends: [0, 1],
+            },
+            Piece::Curve {
+                c: &hairpin,
+                t: (0.0, 60.0),
+                edge: 1,
+                ends: [2, 3],
+            },
+        ];
+        for p in [
+            P3::new(0.3, -0.2, 0.1),
+            P3::new(5.0, 0.4, 0.0),
+            P3::new(-31.0, 19.0, 0.2),
+        ] {
+            let found = extremum(&point_pieces(p), &pieces, Sense::Min).unwrap();
+            let brute = (0..=600_000)
+                .map(|i| (hairpin.point(i as f64 / 10_000.0) - p).norm())
+                .fold(f64::INFINITY, f64::min);
+            assert!(
+                (found.distance - brute).abs() < 1e-6,
+                "{p:?}: {} vs {brute}",
+                found.distance
+            );
         }
     }
 }
