@@ -2,10 +2,13 @@
 //!
 //! Left to itself, rayon makes its global pool the first time a loop runs on it and starts a
 //! thread per core before the loop goes on: about a millisecond on a machine with dozens, more
-//! than a simple solid's whole build takes. So a loop runs on the threads only when its items are
-//! many or heavy, or once the pool is there anyway (a heavier step before made it); and the
-//! kernel makes the pool itself, before its first parallel loop ([`start`]), its threads started
-//! off the caller's thread.
+//! than a simple solid's whole build takes; and once the pool is there, a loop handed to it
+//! waits for a thread to wake, tens of microseconds, however small the loop. So the kernel's
+//! loops go through [`map`] (and [`map_heavy`], where the items are known to take long): the
+//! caller runs a loop itself while the work in it looks small, starts the threads only for a
+//! loop that is worth them (the pool made off the caller's thread, [`start`]), and shares a loop
+//! with them by taking its items itself as they do. [`threads_for`] and [`threads_for_some`]
+//! are the older rule by a loop's size alone, for the loops that are not a plain map.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -59,15 +62,18 @@ pub(crate) fn threads_for_some(n: usize) -> bool {
 
 /// Work left in a loop (by its items so far) past which the threads are worth starting: about
 /// what starting them costs, with the first loop's waking.
+#[cfg(not(target_arch = "wasm32"))]
 const COLD: f64 = 1.0e-3;
 
 /// Work in a loop past which threads that are running are worth sharing it with: about what
 /// the wait for a helper to wake costs.
+#[cfg(not(target_arch = "wasm32"))]
 const WARMED: f64 = 4.0e-5;
 
 /// Items up to which a loop met for the first time, with the threads running, is shared from
 /// its first item: a few items that take long are the loop that gains most from the threads
 /// and loses most by one being run alone to find out, and a few that don't cost one wait.
+#[cfg(not(target_arch = "wasm32"))]
 const FEW: usize = 8;
 
 /// `f` of each of `items`, in their order, on rayon's threads where that is worth it and

@@ -27,6 +27,7 @@ macro_rules! env_flag {
 pub(crate) use env_flag;
 
 /// Whether a switch of [`par`]'s (`CADRS_PAR_ALWAYS`, `CADRS_PAR_SITES`) is set: read once.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn any_par_switch() -> bool {
     env_flag!("CADRS_PAR_ALWAYS") || env_flag!("CADRS_PAR_SITES")
 }
