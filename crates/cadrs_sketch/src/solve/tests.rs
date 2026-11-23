@@ -1924,4 +1924,14 @@ fn a_new_value_drops_a_formula_of_constants_but_not_one_of_variables() {
         .apply(&mut s)
         .unwrap();
     assert_eq!(s.expression(id), Some("#w + 10"));
+    assert_eq!(s.variable_expression(id), Some("#w + 10"));
+    // Driven, a dimension measures: a formula of constants goes, one of variables waits.
+    let driven = |driven| SketchOp::SetDimensionDriven { id, driven };
+    driven(true).apply(&mut s).unwrap();
+    assert_eq!(s.expression(id), Some("#w + 10"));
+    driven(false).apply(&mut s).unwrap();
+    expr("100/2").apply(&mut s).unwrap();
+    assert_eq!(s.variable_expression(id), None);
+    driven(true).apply(&mut s).unwrap();
+    assert_eq!(s.expression(id), None);
 }

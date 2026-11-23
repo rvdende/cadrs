@@ -1569,7 +1569,7 @@ fn draw_sketches(
                     if editing {
                         l.text.clear();
                     }
-                    l.variable = !editing && sketch.expression(k).is_some();
+                    l.variable = !editing && sketch.variable_expression(k).is_some();
                 }
                 new_overlay.dims.push(crate::sketch_dimension::DimLabel {
                     id: k,

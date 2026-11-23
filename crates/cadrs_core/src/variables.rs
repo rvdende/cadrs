@@ -5,7 +5,8 @@
 //! - **Where expressions live.** Every numeric field of a feature keeps the text it was typed as
 //!   next to the value it evaluated to (`depth_expr` beside `depth`, a hole's
 //!   [`crate::hole::Length`], a pattern's `count_expr` beside `count`); a sketch keeps the
-//!   expressions of its driving dimensions in [`cadrs_sketch::Sketch::expressions`]. [`slots`]
+//!   expressions of its driving dimensions in [`cadrs_sketch::Sketch::expressions`] (of which
+//!   only those naming a variable are evaluated again, [`sketch_expressions`]). [`slots`]
 //!   visits them all.
 //! - **Order.** Variables are features: a use sees only the variables above it in the list
 //!   (after suppression and the rollback bar). [`check`] finds the uses that name a variable
@@ -654,7 +655,7 @@ pub fn sketch_expressions(
 ) -> Vec<(cadrs_sketch::DimensionId, String, Quantity)> {
     g.expressions
         .iter()
-        .filter(|(_, e)| e.contains('#'))
+        .filter(|(_, e)| units::names_variable(e))
         .filter_map(|(id, e)| Some((*id, e.clone(), g.dimensions.get(*id)?.kind.quantity())))
         .collect()
 }
@@ -863,7 +864,11 @@ pub fn check(features: &[Feature], units: &Units) -> Vec<(FeatureId, String)> {
 /// Whether any of a feature's fields names a variable (cheaply: without cloning a sketch).
 fn has_hash(k: &FeatureKind) -> bool {
     match k {
-        FeatureKind::Sketch(sk) => sk.geometry.expressions.iter().any(|(_, e)| e.contains('#')),
+        FeatureKind::Sketch(sk) => sk
+            .geometry
+            .expressions
+            .iter()
+            .any(|(_, e)| units::names_variable(e)),
         FeatureKind::Variable(_) => true,
         k => {
             let mut k = k.clone();
