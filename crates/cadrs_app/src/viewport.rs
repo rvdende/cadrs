@@ -511,7 +511,7 @@ impl PlaneKind {
 }
 
 /// Half the side length of a default plane, in mm.
-pub const PLANE_HALF: f32 = 75.0;
+pub const PLANE_HALF: f32 = 50.0;
 
 impl PlaneKind {
     /// The sketch model's name for this plane.
@@ -3807,21 +3807,20 @@ mod tests {
     #[test]
     fn picks_the_nearest_plane() {
         let v = ViewState::default();
-        assert!(matches!(
-            pick(&v, Vec2::new(-60.0, -120.0)),
-            Some(Pick::Plane(_))
-        ));
+        // The offsets were measured on 150 mm planes: they scale with the planes' size.
+        let at = |x: f32, y: f32| Vec2::new(x, y) * (PLANE_HALF / 75.0);
+        assert!(matches!(pick(&v, at(-60.0, -120.0)), Some(Pick::Plane(_))));
         // Straight above the origin only the vertical planes reach; the Front plane's corner
         // region at the far upper left belongs to the Front plane alone.
         assert_eq!(
-            pick(&v, Vec2::new(-240.0, -290.0)),
+            pick(&v, at(-240.0, -290.0)),
             Some(Pick::Plane(PlaneKind::Front))
         );
         assert_eq!(pick(&v, Vec2::ZERO), Some(Pick::Origin));
         assert_eq!(pick(&v, Vec2::new(2000.0, 0.0)), None);
         // Far left, only the Top plane reaches.
         assert_eq!(
-            pick(&v, Vec2::new(-360.0, 40.0)),
+            pick(&v, at(-360.0, 40.0)),
             Some(Pick::Plane(PlaneKind::Top))
         );
     }
@@ -3893,8 +3892,9 @@ mod tests {
         assert_eq!(PlaneKind::Top.normal(), Vec3::Z);
         assert_eq!(PlaneKind::Front.normal(), -Vec3::Y);
         assert_eq!(PlaneKind::Right.normal(), Vec3::X);
-        assert_eq!(PlaneKind::Front.label_corner(), Vec3::new(-75.0, 0.0, 75.0));
-        assert_eq!(PlaneKind::Right.label_corner(), Vec3::new(0.0, -75.0, 75.0));
-        assert_eq!(PlaneKind::Top.label_corner(), Vec3::new(-75.0, 75.0, 0.0));
+        let h = PLANE_HALF;
+        assert_eq!(PlaneKind::Front.label_corner(), Vec3::new(-h, 0.0, h));
+        assert_eq!(PlaneKind::Right.label_corner(), Vec3::new(0.0, -h, h));
+        assert_eq!(PlaneKind::Top.label_corner(), Vec3::new(-h, h, 0.0));
     }
 }
