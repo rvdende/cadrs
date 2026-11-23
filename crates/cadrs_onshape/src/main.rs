@@ -11,6 +11,9 @@
 //! --data-dir <dir>   the cadrs document store (default: the app's, as `cadrs` finds it)
 //! --user <id>        who owns the imported documents (default: $USER, as the app sees you)
 //! --timeout <s>      how long one feature may take before it counts as hung (default 300)
+//! --json <file>      also write the run's report as JSON: each document's features and
+//!                    parts, every defect, and the defects grouped into tickets
+//!                    (`report::aggregate`). The desktop app's ticket list reads it.
 //! ```
 //!
 //! Importing a document again replaces the earlier import (the cadrs ids derive from
@@ -35,6 +38,7 @@ fn main() -> ExitCode {
     let mut dry_run = false;
     let mut skip = Vec::new();
     let mut timeout = Duration::from_secs(300);
+    let mut json_out: Option<PathBuf> = None;
     // Imported documents belong to the local user, as the app identifies them.
     let mut user = std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
@@ -60,18 +64,43 @@ fn main() -> ExitCode {
                     .map(Duration::from_secs)
                     .unwrap_or(timeout)
             }
+            "--json" => json_out = it.next().map(PathBuf::from),
             _ => rest.push(a),
         }
     }
     match rest.first().map(String::as_str) {
         Some("check-queries") => check_queries(&raw_dir),
+        Some("compare") => match (rest.get(1), rest.get(2)) {
+            (Some(c), Some(s)) => match cadrs_onshape::compare::compare(c.as_ref(), s.as_ref()) {
+                Ok(j) => {
+                    println!("{j}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("compare: {e}");
+                    ExitCode::FAILURE
+                }
+            },
+            _ => {
+                eprintln!("usage: cadrs-onshape compare <file.cadrs> <file.step>");
+                ExitCode::from(2)
+            }
+        },
         Some(cmd @ ("import" | "import-one")) => {
             let Some(data_dir) = data_dir else {
                 eprintln!("no document store: pass --data-dir");
                 return ExitCode::from(2);
             };
             if cmd == "import" {
-                import(&raw_dir, &data_dir, &rest[1..], dry_run, timeout, &user)
+                import(
+                    &raw_dir,
+                    &data_dir,
+                    &rest[1..],
+                    dry_run,
+                    timeout,
+                    &user,
+                    json_out.as_deref(),
+                )
             } else {
                 import_one(
                     &raw_dir,
@@ -80,12 +109,13 @@ fn main() -> ExitCode {
                     &skip,
                     dry_run,
                     &user,
+                    json_out.as_deref(),
                 )
             }
         }
         _ => {
             eprintln!(
-                "usage: cadrs-onshape (import [<name or id>…] [--dry-run] | check-queries) [--raw <dir>] [--data-dir <dir>]"
+                "usage: cadrs-onshape (import [<name or id>…] [--dry-run] [--json <file>] | compare <file.cadrs> <file.step> | check-queries) [--raw <dir>] [--data-dir <dir>]"
             );
             ExitCode::from(2)
         }
@@ -103,6 +133,7 @@ fn import(
     dry_run: bool,
     timeout: Duration,
     user: &str,
+    json_out: Option<&Path>,
 ) -> ExitCode {
     let docs: Vec<_> = raw::documents(raw_dir)
         .into_iter()
@@ -121,12 +152,17 @@ fn import(
     let exe = std::env::current_exe().expect("own path");
     let progress =
         std::env::temp_dir().join(format!("cadrs-onshape-progress-{}", std::process::id()));
+    // Each child writes its document's report here (as JSON), for this run's aggregate.
+    let child_json =
+        std::env::temp_dir().join(format!("cadrs-onshape-report-{}.json", std::process::id()));
     let mut text = String::new();
+    let mut documents: Vec<serde_json::Value> = Vec::new();
     let mut failed = 0;
     for d in &docs {
         let mut skip: Vec<String> = Vec::new();
         let out = loop {
             std::fs::remove_file(&progress).ok();
+            std::fs::remove_file(&child_json).ok();
             let mut cmd = Command::new(&exe);
             cmd.arg("import-one")
                 .arg(&d.id)
@@ -136,6 +172,9 @@ fn import(
                 .arg(data_dir)
                 .arg("--user")
                 .arg(user);
+            if json_out.is_some() {
+                cmd.arg("--json").arg(&child_json);
+            }
             if dry_run {
                 cmd.arg("--dry-run");
             }
@@ -191,8 +230,26 @@ fn import(
                 _ => break (!s.is_empty()).then_some(s),
             }
         };
+        if json_out.is_some() {
+            match std::fs::read(&child_json)
+                .ok()
+                .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            {
+                Some(doc) => documents.push(doc),
+                None => {
+                    failed += 1;
+                    documents.push(serde_json::json!({
+                        "name": d.name,
+                        "onshape_id": d.id,
+                        "failed": true,
+                    }));
+                }
+            }
+        }
         let line = out.unwrap_or_else(|| {
-            failed += 1;
+            if json_out.is_none() {
+                failed += 1;
+            }
             format!(
                 "# {} ({})\n  ! import failed or kept hanging\n",
                 d.name, d.id
@@ -202,9 +259,22 @@ fn import(
         text += &line;
     }
     std::fs::remove_file(&progress).ok();
+    std::fs::remove_file(&child_json).ok();
     // A dry run over some documents doesn't replace the report of the last full import.
     if let Some(parent) = raw_dir.parent().filter(|_| filters.is_empty() || !dry_run) {
         std::fs::write(parent.join("import-report.txt"), &text).ok();
+    }
+    if let Some(path) = json_out {
+        let tool = format!("cadrs-onshape {}", env!("CARGO_PKG_VERSION"));
+        let json = cadrs_onshape::report::aggregate(documents, &tool, user, dry_run);
+        match serde_json::to_vec_pretty(&json) {
+            Ok(bytes) => {
+                if let Err(e) = std::fs::write(path, bytes) {
+                    eprintln!("cannot write JSON report {}: {e}", path.display());
+                }
+            }
+            Err(e) => eprintln!("cannot serialize JSON report: {e}"),
+        }
     }
     if failed == 0 {
         ExitCode::SUCCESS
@@ -221,6 +291,7 @@ fn import_one(
     skip: &[String],
     dry_run: bool,
     user: &str,
+    json_out: Option<&Path>,
 ) -> ExitCode {
     let Some(d) = raw::documents(raw_dir).into_iter().find(|d| d.id == id) else {
         eprintln!("no scraped document {id}");
@@ -283,6 +354,17 @@ fn import_one(
         }
     }
     line += &format!("  ({:.1} s)\n", started.elapsed().as_secs_f64());
+    if let Some(path) = json_out {
+        let json = imported.report.to_json(started.elapsed().as_secs_f64());
+        match serde_json::to_vec_pretty(&json) {
+            Ok(bytes) => {
+                if let Err(e) = std::fs::write(path, bytes) {
+                    line += &format!("  ! JSON report not written: {e}\n");
+                }
+            }
+            Err(e) => line += &format!("  ! JSON report not serialized: {e}\n"),
+        }
+    }
     print!("{line}");
     if ok {
         ExitCode::SUCCESS

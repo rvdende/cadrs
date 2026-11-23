@@ -7,6 +7,7 @@
 //! could not be translated is listed (assemblies: [`assembly`]) in a [`report::DocumentReport`].
 
 pub mod assembly;
+pub mod compare;
 pub mod eval;
 pub mod expr;
 pub mod features;
