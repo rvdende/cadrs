@@ -187,6 +187,18 @@ pub struct StartState(pub String);
 pub struct OpenAtStart(pub std::path::PathBuf);
 
 /// The cadrs repository, for the app menu's GitHub and the top bar's (`github`).
+/// The app's log filter: Bevy's, with the peer-to-peer networking (iroh, its gossip, its QUIC
+/// layer noq) at errors only. They warn of what a peer network does all the time (an offline
+/// peer's dial timing out, a stranger's connection refused, a path kept open), which reads as
+/// trouble when it isn't. `RUST_LOG` overrides it (`RUST_LOG=info,iroh=warn` to see them); the
+/// seed peer (`--public-seed`) keeps Bevy's filter, where they help.
+pub fn log_filter() -> String {
+    format!(
+        "{}iroh=error,iroh_gossip=error,noq_proto=error",
+        bevy::log::DEFAULT_FILTER
+    )
+}
+
 pub const GITHUB: &str = "https://github.com/rvdende/cadrs";
 /// The top of the README on GitHub, which links the downloads (the browser build's Download App).
 pub const README: &str = "https://github.com/rvdende/cadrs#readme";
