@@ -2467,8 +2467,47 @@ fn get_ui_layout(world: &mut World, p: &tools::GetUiLayout) -> Result<Value, Str
 
 /// Sets and saves the preferences given; answers with all of them.
 fn set_preferences(world: &mut World, p: &tools::SetPreferences) -> Result<Value, String> {
+    use cadrs_core::preferences::{FrameStatsMode, GridStyle, OriginStyle};
+    // All checked before any is set.
+    fn code<T>(
+        what: &str,
+        v: &Option<String>,
+        from: fn(&str) -> Option<T>,
+        all: &[&str],
+    ) -> Result<Option<T>, String> {
+        v.as_deref()
+            .map(|c| from(c).ok_or_else(|| format!("{what}: {c:?} is not one of {all:?}")))
+            .transpose()
+    }
+    let grid = code(
+        "grid",
+        &p.grid,
+        GridStyle::from_code,
+        &["off", "crossed", "lines"],
+    )?;
+    let origin = code(
+        "origin",
+        &p.origin,
+        OriginStyle::from_code,
+        &["hidden", "dot", "axes"],
+    )?;
+    let frame_stats = code(
+        "frame_stats",
+        &p.frame_stats,
+        FrameStatsMode::from_code,
+        &["off", "fps", "details"],
+    )?;
     if let Some(on) = p.vsync {
         crate::preferences_ui::set_vsync(world, on);
+    }
+    if let Some(g) = grid {
+        crate::preferences_ui::set_grid(world, g);
+    }
+    if let Some(o) = origin {
+        crate::preferences_ui::set_origin(world, o);
+    }
+    if let Some(f) = frame_stats {
+        crate::preferences_ui::set_frame_stats(world, f);
     }
     let prefs = world.resource::<LocalPreferences>().0;
     let mut v = serde_json::to_value(prefs).map_err(|e| e.to_string())?;

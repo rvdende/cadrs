@@ -32,9 +32,6 @@ Scenario(
         // Generous: the 4- and 5-axis toolpaths and their solid stock take a while.
         SetTimeout(300),
         WaitFor("document-shell"),
-        // The frame-stats panel off (F12: profile, fps, hidden).
-        Key("F12"),
-        Key("F12"),
         Custom("fixture cnc_machines"),
         Wait(5),
         Click(ui("tab-5-axis-mill")),

@@ -240,6 +240,18 @@ pub struct SetPreferences {
     /// are made (false). Omitted: unchanged.
     #[serde(default)]
     pub vsync: Option<bool>,
+    /// The ground grid: "off", "crossed" (a cross every fifth line) or "lines" (a stronger line
+    /// every tenth). Omitted: unchanged.
+    #[serde(default)]
+    pub grid: Option<String>,
+    /// How the origin is drawn: "hidden", "dot" or "axes" (red, green and blue X, Y, Z).
+    /// Omitted: unchanged.
+    #[serde(default)]
+    pub origin: Option<String>,
+    /// The frame-stats panel at the view's bottom left: "off", "fps" or "details". Omitted:
+    /// unchanged.
+    #[serde(default)]
+    pub frame_stats: Option<String>,
 }
 
 /// Renames a part and/or sets its colour.

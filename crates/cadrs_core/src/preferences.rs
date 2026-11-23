@@ -289,6 +289,96 @@ pub enum ColorScheme {
     Dark,
 }
 
+/// A choice saved by its code, so that a code this cadrs doesn't know (a newer one's) reads as
+/// the default instead of making the whole file unreadable (which would reset every preference).
+macro_rules! coded_choice {
+    ($ty:ident { $($variant:ident => $code:literal),+ $(,)? }) => {
+        impl $ty {
+            pub const ALL: &'static [$ty] = &[$($ty::$variant),+];
+
+            /// Its code, as saved.
+            pub fn code(self) -> &'static str {
+                match self {
+                    $($ty::$variant => $code),+
+                }
+            }
+
+            /// The choice with this code, if there is one.
+            pub fn from_code(code: &str) -> Option<$ty> {
+                $ty::ALL.iter().copied().find(|c| c.code() == code)
+            }
+        }
+
+        impl Serialize for $ty {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                s.serialize_str(self.code())
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $ty {
+            fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                let code = String::deserialize(d)?;
+                Ok($ty::from_code(&code).unwrap_or_default())
+            }
+        }
+    };
+}
+
+/// How the ground grid under the 3D view looks (Preferences › Interface › Grid).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum GridStyle {
+    /// No grid.
+    Off,
+    /// A faint line on every step and a small cross on every fifth line (the schematic's).
+    Crossed,
+    /// A faint line on every step and a stronger one on every tenth.
+    #[default]
+    Lines,
+}
+
+coded_choice!(GridStyle {
+    Off => "off",
+    Crossed => "crossed",
+    Lines => "lines",
+});
+
+/// How the origin is drawn in the 3D view (Preferences › Interface › Origin; the eye on the
+/// feature list's Origin row hides and shows it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum OriginStyle {
+    /// Not drawn, and not picked in the view (the feature list's row still picks it).
+    Hidden,
+    /// A small bullseye, Onshape's.
+    #[default]
+    Dot,
+    /// Short red, green and blue lines along X, Y and Z.
+    Axes,
+}
+
+coded_choice!(OriginStyle {
+    Hidden => "hidden",
+    Dot => "dot",
+    Axes => "axes",
+});
+
+/// What the frame-stats panel at the 3D view's bottom left shows (Preferences › Interface).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum FrameStatsMode {
+    /// Nothing.
+    #[default]
+    Off,
+    /// The frame rate line alone.
+    Fps,
+    /// The frame rate and where the frame's time goes.
+    Details,
+}
+
+coded_choice!(FrameStatsMode {
+    Off => "off",
+    Fps => "fps",
+    Details => "details",
+});
+
 /// The local preferences.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Preferences {
@@ -319,7 +409,7 @@ pub struct Preferences {
     /// documents others published, and help others find them. On unless the user turns it off.
     #[serde(default = "default_true")]
     pub public_documents: bool,
-    /// Time every system and schedule, for the frame panel's details (F12) and
+    /// Time every system and schedule, for the frame panel's details and
     /// `get_frame_stats`. It costs about a fifth of each frame, so it's off unless wanted, and
     /// takes effect at the next start (`cadrs_app::frame_profile::CpuProfiling`).
     #[serde(default)]
@@ -341,6 +431,15 @@ pub struct Preferences {
     /// other gesture.
     #[serde(default)]
     pub keep_camera_up: bool,
+    /// The ground grid's look, or none ([`GridStyle`]).
+    #[serde(default)]
+    pub grid: GridStyle,
+    /// What the frame-stats panel shows ([`FrameStatsMode`]); nothing unless asked for.
+    #[serde(default)]
+    pub frame_stats: FrameStatsMode,
+    /// How the origin is drawn ([`OriginStyle`]).
+    #[serde(default)]
+    pub origin: OriginStyle,
 }
 
 /// A language cadrs's interface has a catalog for (`cadrs_ui::i18n::LANGUAGES`, in the same
@@ -453,6 +552,9 @@ impl Default for Preferences {
             language: Language::English,
             last_slicer: None,
             keep_camera_up: false,
+            grid: GridStyle::default(),
+            frame_stats: FrameStatsMode::default(),
+            origin: OriginStyle::default(),
         }
     }
 }
@@ -643,6 +745,9 @@ mod tests {
             language: Language::PortugueseBrazil,
             last_slicer: Some(0),
             keep_camera_up: true,
+            grid: GridStyle::Off,
+            frame_stats: FrameStatsMode::Fps,
+            origin: OriginStyle::Axes,
         };
         p.save(&dir).unwrap();
         assert_eq!(Preferences::load(&dir), p);
@@ -694,5 +799,30 @@ mod tests {
             .ui_scale_factor(),
             2.0
         );
+    }
+
+    /// The grid and the frame panel are saved by code; one this cadrs doesn't know (a newer
+    /// one's) reads as the default and keeps the other preferences.
+    #[test]
+    fn grid_and_frame_stats_read_by_code() {
+        let p = Preferences::default();
+        assert_eq!(p.grid, GridStyle::Lines);
+        assert_eq!(p.frame_stats, FrameStatsMode::Off);
+        assert_eq!(p.origin, OriginStyle::Dot);
+        let text = ron::to_string(&Preferences {
+            grid: GridStyle::Crossed,
+            frame_stats: FrameStatsMode::Details,
+            ..p
+        })
+        .unwrap();
+        assert!(text.contains(r#"grid:"crossed""#), "{text}");
+        let back: Preferences = ron::from_str(&text).unwrap();
+        assert_eq!(back.grid, GridStyle::Crossed);
+        assert_eq!(back.frame_stats, FrameStatsMode::Details);
+        let newer: Preferences =
+            ron::from_str(r#"(grid: "dots", frame_stats: "graph", ui_scale: 125)"#).unwrap();
+        assert_eq!(newer.grid, GridStyle::Lines);
+        assert_eq!(newer.frame_stats, FrameStatsMode::Off);
+        assert_eq!(newer.ui_scale, 125);
     }
 }

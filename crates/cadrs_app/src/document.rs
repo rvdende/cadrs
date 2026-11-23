@@ -2403,7 +2403,7 @@ fn feature_list(p: &mut ChildSpawnerCommands, t: &Theme, element: ElementId, hei
                                             .icon("origin", 12.0)
                                             .icon_color(Color::srgb_u8(0x44, 0x44, 0x44))
                                             .left(22.0)
-                                            // Show/hide the model origin marker in the viewport.
+                                            // Hides and shows the origin in the view.
                                             .toggle(
                                                 "feature-origin-visibility",
                                                 "visible",
@@ -5398,14 +5398,11 @@ fn on_sketch_eye(ev: On<cadrs_ui::TreeRowToggled>, q: Query<&FeatureRow>, mut co
     });
 }
 
-/// The eye on the origin row shows or hides that viewport marker.
-fn on_origin_eye(
-    ev: On<cadrs_ui::TreeRowToggled>,
-    q: Query<&PickRow>,
-    mut origin: ResMut<crate::viewport::OriginVisible>,
-) {
+/// The eye on the origin row hides the origin, or shows it again as it was drawn before
+/// (Preferences › Interface › Origin, saved).
+fn on_origin_eye(ev: On<cadrs_ui::TreeRowToggled>, q: Query<&PickRow>, mut commands: Commands) {
     if let Ok(PickRow(Pick::Origin)) = q.get(ev.entity) {
-        origin.0 = !origin.0;
+        commands.queue(crate::preferences_ui::toggle_origin);
     }
 }
 

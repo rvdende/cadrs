@@ -8,8 +8,6 @@ Scenario(
     start: Some("document"),
     steps: [
         WaitFor("document-shell"),
-        Key("F12"),
-        Key("F12"),
         Custom("linked-fixture store linked_block_standin folder"),
         Custom("linked-fixture open linked_block_host_standin"),
         WaitFor("document-shell"),

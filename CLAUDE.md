@@ -55,7 +55,7 @@ Onshape-style CAD in Rust + Bevy 0.20.1. Local notes in `docs/` (git-ignored: `P
   shows a frame's real cost; `CADRS_UI_CHANGES=1` names the UI nodes that change every frame
   (each one costs a full UI layout), and with Bevy's `track_location` feature the code that
   changed them. System times (the
-  F12 panel, `get_frame_stats`) are off unless asked for, as they cost about a fifth of a frame:
+  frame-stats panel, Preferences › Interface › Frame stats; `get_frame_stats`) are off unless asked for, as they cost about a fifth of a frame:
   start with `CADRS_FRAME_PROFILE=1`, or the *Time systems* preference. `CADRS_TRACE=<file.json>`
   (with `CADRS_TRACE_AT=<s>`) writes a quarter second of every system's span, by thread, as a
   Chrome trace; `CADRS_SINGLE_THREADED=Update,…` runs schedules on the main thread for `perf`.
