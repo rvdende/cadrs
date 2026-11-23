@@ -1913,6 +1913,7 @@ impl NativeKernel {
                 outward: d > 0.0,
                 hollow: false,
                 sharp: !arc,
+                nothing_hollowed: Default::default(),
             },
         )?;
         self.draw_history = Some((b, r.bodies[0], r.history));
@@ -5102,7 +5103,7 @@ impl NativeKernel {
             if o.edges.len() != ids.len() && o.edges.len() == body.edges.len() {
                 ids = (0..body.edges.len()).collect();
             }
-            if std::env::var_os("CADRS_ORDER_DEBUG").is_some() {
+            if crate::native::env_flag!("CADRS_ORDER_DEBUG") {
                 eprintln!(
                     "explode e: OCCT order has {} edges, the body {} ({} not degenerate)",
                     o.edges.len(),
@@ -6738,16 +6739,8 @@ fn point_at_length(e: &DEdge, d: f64, _from_end: bool) -> Result<P3> {
     if d < -1e-9 || d > total + 1e-9 {
         return Err(err("the chamfer is longer than its edge"));
     }
-    let (mut lo, mut hi) = (e.t0, e.t1);
-    for _ in 0..80 {
-        let m = 0.5 * (lo + hi);
-        let l = e.curve.length(e.t0.min(m), e.t0.max(m));
-        if l < d {
-            lo = m;
-        } else {
-            hi = m;
-        }
-    }
+    let (lo, hi) =
+        super::math::bisect(e.t0, e.t1, |m| e.curve.length(e.t0.min(m), e.t0.max(m)) < d);
     Ok(e.curve.point(0.5 * (lo + hi)))
 }
 

@@ -155,10 +155,6 @@ const KNOWN_BAD: &[(&str, &str)] = &[
         "1 check errors (face 9 loop 0 coedge 3 (edge 7): p-curve off the edge by 2.822e-3); 3 faces dropped (face 15: loops wrap around the surface and no seam could be added)",
     ),
     (
-        "step/trj3_s1-md-214.stp",
-        "5 check errors (face 0 loop 0: p-curve gap after coedge 1: (2.115e-4, 1.500e0)); 1 faces dropped (face 0: l…",
-    ),
-    (
         "step/trj4_k1_geo-md-203.stp",
         "7 check errors (face 20 loop 0 coedge 0 (edge 64): p-curve off the edge by 1.502e-3)",
     ),

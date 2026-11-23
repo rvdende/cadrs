@@ -52,6 +52,58 @@ function untar(tar) {
   return [...[...dirs].map((d) => [d, null, 0]), ...files];
 }
 
+// Files dragged onto the page from the computer. Without this the browser opens them in place of
+// the app. Each drop is read and queued as one `{ files: [[name, Uint8Array]], x, y }` (where on
+// `canvas`, in CSS pixels) on `globalThis.cadrsDrops`, which the app empties every frame
+// (`cadrs_app::file_drop`) and treats as files dropped on its window. `globalThis.cadrsDragging`
+// says whether files are being dragged over the page, for the app to show where they can go.
+export function listenForDrops(canvas) {
+  globalThis.cadrsDrops ??= [];
+  globalThis.cadrsDragging = false;
+  const files = (e) => [...(e.dataTransfer?.items ?? [])].some((i) => i.kind === "file");
+  // Every element the drag enters and leaves counts, so it is off the page once they balance.
+  // A browser sends `dragover` every few hundred milliseconds while a drag is over the page,
+  // even a still one: without one for a second, it is gone too (a `dragleave` can go missing).
+  let entered = 0;
+  let lost = 0;
+  const dragging = (on) => {
+    globalThis.cadrsDragging = on;
+    clearTimeout(lost);
+    if (on) lost = setTimeout(() => dragging(false), 1000);
+    else entered = 0;
+  };
+  addEventListener("dragenter", (e) => {
+    if (!files(e)) return;
+    entered += 1;
+    dragging(true);
+  });
+  addEventListener("dragleave", (e) => {
+    if (!files(e)) return;
+    entered -= 1;
+    if (entered <= 0) dragging(false);
+  });
+  addEventListener("dragover", (e) => {
+    if (!files(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    dragging(true);
+  });
+  addEventListener("drop", async (e) => {
+    if (!files(e)) return;
+    e.preventDefault();
+    dragging(false);
+    const rect = canvas.getBoundingClientRect();
+    const [x, y] = [e.clientX - rect.left, e.clientY - rect.top];
+    const dropped = [...e.dataTransfer.files];
+    try {
+      const read = await Promise.all(dropped.map(async (f) => [f.name, new Uint8Array(await f.arrayBuffer())]));
+      if (read.length) globalThis.cadrsDrops.push({ files: read, x, y });
+    } catch (err) {
+      console.error("cadrs: cannot read the dropped files:", err);
+    }
+  });
+}
+
 async function bundle() {
   try {
     const r = await fetch(new URL("bundle.tar.gz", import.meta.url));

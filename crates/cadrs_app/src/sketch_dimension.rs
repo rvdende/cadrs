@@ -148,9 +148,27 @@ pub fn dimension_text(d: &Dimension, live: bool, u: &units::Units) -> String {
     }
 }
 
+/// The formula dimension `id` shows and its editor opens on: the one it was typed as, if that
+/// still gives its value. A formula of variables always does (the document evaluates it). A
+/// formula of constants (#205: "100/2") no longer does once the workspace unit its bare numbers
+/// were typed in has changed ("100/2" of 50 mm is 1270 mm in inches): the dimension then shows
+/// as a plain value, which Enter keeps.
+pub fn shown_formula<'a>(
+    sketch: &'a cadrs_sketch::Sketch,
+    id: DimensionId,
+    d: &Dimension,
+    u: &units::Units,
+) -> Option<&'a str> {
+    let e = sketch.expression(id)?;
+    let holds = units::names_variable(e)
+        || u.eval(e, d.kind.quantity())
+            .is_ok_and(|v| (v - d.value).abs() <= 1e-9 * (1.0 + d.value.abs()));
+    holds.then_some(e)
+}
+
 /// [`dimension_text`] of dimension `id` of `sketch`. With the sketch dialog's **Show
-/// expressions** on, one driven by variables shows its expression instead of its value (P3F.4:
-/// "Ø#piston_d + #clearance"), as Onshape does.
+/// expressions** on, one typed as a formula shows it instead of its value (P3F.4:
+/// "Ø#piston_d + #clearance"; [`shown_formula`]), as Onshape does.
 pub fn dimension_text_of(
     sketch: &cadrs_sketch::Sketch,
     id: DimensionId,
@@ -160,7 +178,7 @@ pub fn dimension_text_of(
     expressions: bool,
 ) -> String {
     let v = dimension_text(d, live, u);
-    match sketch.expression(id).filter(|_| expressions) {
+    match shown_formula(sketch, id, d, u).filter(|_| expressions) {
         Some(e) => match d.kind {
             DimensionKind::Diameter { .. } | DimensionKind::Diametral { .. } => format!("Ø{e}"),
             DimensionKind::Radius { .. } => format!("R{e}"),
@@ -619,10 +637,14 @@ pub fn open_editor(world: &mut World, id: DimensionId) {
         .spawn((
             // "50 mm" with the number selected, as Onshape opens it (typing replaces the
             // number and keeps the unit).
-            // P3F.4: a dimension driven by variables opens on its expression, all selected.
-            match world_sketch(world).and_then(|s| s.expression(id).map(str::to_string)) {
+            // P3F.4: a dimension typed as a formula opens on it, all selected. (The wheel
+            // steps a formula of constants from its value; one of variables it leaves.)
+            match editor_formula(world, id, &d, &u) {
                 Some(e) => {
-                    DimEdit::new("dimension-edit", e.clone()).select_prefix(e.chars().count())
+                    let plain = (!units::names_variable(&e)).then(|| u.with_unit(d.value, q));
+                    DimEdit::new("dimension-edit", e.clone())
+                        .select_prefix(e.chars().count())
+                        .wheel_from(plain)
                 }
                 None => DimEdit::new("dimension-edit", u.with_unit(d.value, q))
                     .select_prefix(u.live_value(d.value, q).chars().count()),
@@ -635,6 +657,16 @@ pub fn open_editor(world: &mut World, id: DimensionId) {
         .insert(ChildOf(area))
         .id();
     world.resource_mut::<DimensionEditor>().open = Some(OpenEdit { entity, id });
+}
+
+/// [`shown_formula`] of the open sketch's dimension `id`.
+fn editor_formula(
+    world: &World,
+    id: DimensionId,
+    d: &Dimension,
+    u: &units::Units,
+) -> Option<String> {
+    shown_formula(world_sketch(world)?, id, d, u).map(str::to_string)
 }
 
 /// Closes the value editor; with `commit`, a valid typed value is set first.
@@ -805,9 +837,10 @@ fn set_value(world: &mut World, id: DimensionId, value: f64, text: &str) {
         return;
     };
     let (element, feature) = (s.element, s.feature);
-    // P3F.4: an expression naming a variable is kept with the value (and re-evaluated when the
-    // variable changes); a plain value drops it.
-    let expr = text.contains('#').then(|| text.trim().to_string());
+    // P3F.4: a formula is kept with the value, so it opens again as typed (#205: "100/2", not
+    // just 50); one naming a variable is also re-evaluated when the variable changes. A plain
+    // value drops it.
+    let expr = units::is_formula(text).then(|| text.trim().to_string());
     let old_expr = world_sketch(world).and_then(|s| s.expression(id).map(str::to_string));
     let same = world_sketch(world)
         .and_then(|s| s.dimensions.get(id))
@@ -824,7 +857,9 @@ fn set_value(world: &mut World, id: DimensionId, value: f64, text: &str) {
         Some(sk) if first => set_value_op(sk, id, value, true),
         _ => SketchOp::SetDimensionValue { id, value },
     };
-    let op = if same || expr == old_expr {
+    // (The expression goes with a new value whenever there is one: a new value drops a formula
+    // of constants, so even the same formula is set again.)
+    let op = if same || (expr.is_none() && old_expr.is_none()) {
         op
     } else {
         SketchOp::Batch(vec![op, SketchOp::SetDimensionExpr { id, expr }])
@@ -1166,6 +1201,47 @@ mod tests {
 
     /// The wheel's steps in the value box move the sketch at once, as one undo step: Esc puts
     /// the value (and the undo stack) back, Enter keeps one step (issue #162).
+    /// #205: a formula of constants is kept as typed, shown while it still gives the value
+    /// (not once the workspace unit has changed under its bare numbers), and dropped by a plain
+    /// value.
+    #[test]
+    fn a_formula_of_constants_is_kept_while_it_gives_the_value() {
+        let (mut app, dim) = variables_app();
+        let w = app.world_mut();
+        let mm = units::Units::default();
+        let inch = units::Units::new(units::LengthUnit::Inch, 3);
+        let shown = |w: &World, u: &units::Units| {
+            let s = world_sketch(w).unwrap();
+            let d = s.dimensions[dim];
+            (
+                d.value,
+                shown_formula(s, dim, &d, u).map(str::to_string),
+                dimension_text_of(s, dim, &d, false, u, true),
+            )
+        };
+        set_value(w, dim, 50.0, " 100/2 ");
+        assert_eq!(shown(w, &mm), (50.0, Some("100/2".into()), "Ø100/2".into()));
+        // In inches "100/2" would be 1270 mm: the value shows, and its editor opens on it.
+        let (_, formula, text) = shown(w, &inch);
+        assert_eq!(formula, None);
+        assert!(!text.contains('/'), "{text}");
+        // A new formula replaces it, with its value, in one step.
+        let steps = w.resource::<ActiveDocument>().history.undo_len();
+        set_value(w, dim, 60.0, "120/2");
+        assert_eq!(shown(w, &mm).1.as_deref(), Some("120/2"));
+        assert_eq!(w.resource::<ActiveDocument>().history.undo_len(), steps + 1);
+        // The same again changes nothing; the same value typed plainly drops the formula.
+        set_value(w, dim, 60.0, "120/2");
+        assert_eq!(w.resource::<ActiveDocument>().history.undo_len(), steps + 1);
+        set_value(w, dim, 60.0, "60 mm");
+        assert_eq!(shown(w, &mm), (60.0, None, "Ø60".into()));
+        // A formula of variables shows whatever the unit.
+        set_value(w, dim, 12.0, "#above + 2");
+        assert_eq!(shown(w, &inch).1.as_deref(), Some("#above + 2"));
+        let s = world_sketch(w).unwrap();
+        assert_eq!(s.variable_expression(dim), Some("#above + 2"));
+    }
+
     #[test]
     fn wheel_steps_show_live_as_one_step() {
         let (mut app, dim) = variables_app();

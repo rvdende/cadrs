@@ -1134,7 +1134,7 @@ pub fn offset_wire(edges: &[(Curve, f64, f64)], d: f64) -> Result<Vec<Vec<Piece2
     for &side in sides {
         wire = cut_at_cusps(wire, side, d.abs());
     }
-    if std::env::var_os("CADRS_OFFSET_DEBUG").is_some() {
+    if crate::native::env_flag!("CADRS_OFFSET_DEBUG") {
         eprintln!("spine: {} pieces", wire.len());
     }
     let seq: Vec<Piece2> = if closed {
@@ -1153,7 +1153,7 @@ pub fn offset_wire(edges: &[(Curve, f64, f64)], d: f64) -> Result<Vec<Vec<Piece2
         .max(if closed { closing * 3.0 } else { 0.0 });
     let n = seq.len();
     let tick = |what: &str| {
-        if std::env::var_os("CADRS_OFFSET_DEBUG").is_some() {
+        if crate::native::env_flag!("CADRS_OFFSET_DEBUG") {
             eprintln!("  {what}: {:?}", clock.elapsed());
         }
     };
@@ -1456,7 +1456,7 @@ pub fn offset_wire(edges: &[(Curve, f64, f64)], d: f64) -> Result<Vec<Vec<Piece2
             || polyline_len(p, 16) > sliver * 2.0
     });
     tick("kept");
-    if std::env::var_os("CADRS_OFFSET_DEBUG").is_some() {
+    if crate::native::env_flag!("CADRS_OFFSET_DEBUG") {
         eprintln!(
             "offset l {l} closed {closed} size {size}: {} raw, {} cuts, {} kept",
             raw.len(),

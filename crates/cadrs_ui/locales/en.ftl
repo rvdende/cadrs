@@ -145,10 +145,12 @@ ui-color-editor-default = Default
 ui-color-editor-save-color = Save this color
 
 ## crates/cadrs_ui/src/color_scheme.rs
-# Tooltips of the light / dark / system appearance toggle.
+# The light / dark / system appearance button: the schemes' names.
 ui-color-scheme-light = Light
 ui-color-scheme-dark = Dark
 ui-color-scheme-system = Match the system
+# The button's tooltip: { $scheme } is the scheme in use, { $next } the one a click picks.
+ui-color-scheme-cycle = Color scheme: { $scheme } (click for { $next })
 
 ## crates/cadrs_ui/src/dock.rs
 ui-dock-hide-panel = Hide panel
@@ -265,6 +267,9 @@ shell-top-bar-update = Update to v{ $version }…
 shell-top-bar-update-tooltip = Read the release notes and update
 shell-top-bar-github = cadrs on GitHub
 shell-top-bar-github-stars = { $stars } stars on GitHub
+# The browser version's button (and account menu entry): the desktop app's downloads on GitHub.
+shell-top-bar-download-app = Download App
+shell-top-bar-download-app-tooltip = Get cadrs for Linux, Windows or macOS (GitHub)
 
 ## crates/cadrs_app/src/notifications.rs
 shell-notice-whats-new-title = A new look for cadrs
@@ -879,6 +884,12 @@ shell-prefs-enabled = Enabled
 # The address the MCP server answers at.
 shell-prefs-endpoint = Endpoint
 shell-prefs-mcp-note = While it is on, AI assistants on this computer (Claude, Cursor, …) can create and edit documents.
+# The port on this computer the MCP server listens on.
+shell-prefs-mcp-port = Port
+# Puts the default port back in the field.
+shell-prefs-mcp-port-reset = Reset
+# { $port } is the default port (7680).
+shell-prefs-mcp-port-reset-tooltip = Back to the default port, { $port }
 shell-prefs-collab-heading = Collaboration
 shell-prefs-id-while-online = Shown while online
 shell-prefs-p2p = P2P networking
@@ -2678,6 +2689,30 @@ model-mcp-server-on = MCP server on { $url }
 # { $port } is a port number; { $error } is the system's error message (in English).
 model-mcp-cannot-start = Cannot start the MCP server on port { $port }: { $error }
 
+## crates/cadrs_app/src/mcp_button.rs
+# The top bar's AI assistants (MCP) button: its tooltip, and its entry in the account menu.
+shell-mcp-tooltip-on = AI assistants (MCP): on
+shell-mcp-tooltip-off = AI assistants (MCP): off
+shell-mcp-tooltip-failed = AI assistants (MCP): could not start
+# Its menu's header. { $url } is the server's address.
+shell-mcp-serving = On, at { $url }
+shell-mcp-off = Off (would serve at { $url })
+# { $port } is a port number.
+shell-mcp-failed = Could not start on port { $port }
+shell-mcp-enable = Enable MCP server
+# { $port } is the port in use; the item opens a box to type another.
+shell-mcp-port = Port: { $port }…
+shell-mcp-port-tooltip = The port on this computer AI assistants connect to
+# { $port } is the default port (7680).
+shell-mcp-port-reset = Reset port to default ({ $port })
+shell-mcp-copy-endpoint = Copy endpoint
+# A notice: { $url } is the address copied.
+shell-mcp-copied = Copied { $url }
+# The title of the box to type the port in.
+shell-mcp-port-title = MCP server port
+# { $text } is what was typed.
+shell-mcp-port-invalid = Not a port: { $text } (a number from 1 to 65535)
+
 ## crates/cadrs_app/src/simulation_ui.rs
 # { $count } is 1.
 model-sim-one-face = { $count } face
@@ -3628,6 +3663,8 @@ drawing-hint-auxiliary-pick = Auxiliary view: click a straight edge of a view
 drawing-hint-auxiliary-place = Auxiliary view: click to place the view
 drawing-hint-align-vertical = Align view vertical: click an edge of the view
 drawing-hint-align-horizontal = Align view horizontal: click an edge of the view
+drawing-hint-section-click = Click to see { $section } in { $name }
+drawing-hint-section-jump = Double-click to see { $section } in { $name }
 
 ## crates/cadrs_app/src/drawing/flat_views.rs
 # A filter: sheet metal parts' flat patterns (the part unfolded).
@@ -3656,6 +3693,7 @@ drawing-view-menu-tangent-solid = Solid
 drawing-view-menu-tangent-phantom = Phantom
 drawing-flat-adjust-linestyle = Adjust linestyle…
 drawing-view-menu-properties = View properties…
+drawing-view-menu-show-section = Show { $section } in { $name }
 # A submenu: which view is drawn over which.
 drawing-flat-menu-order = Order
 drawing-view-menu-bring-to-front = Bring to front
@@ -4441,6 +4479,69 @@ cam-microjoints-per-part = Microjoints per part
 cam-microjoint-width = Microjoint width
 cam-small-holes-under = Small holes under
 cam-small-hole-feed = Small hole feed
+# The Setup dialog's third machine mating: a coordinate frame of the setup is set on the machine's table mount (where work is fixed: a table, a chuck on a rotary axis).
+cam-mating-mount = A frame on the machine's mount
+# A pick list's placeholder in the Setup dialog: the part's flat face that rests against the machine's mount.
+cam-mount-face = Face that sits on the mount
+# A number field: one coordinate of the mount frame's origin. { $axis } is X, Y or Z.
+cam-mount-origin = Origin { $axis }
+# A number field: one component of the direction of the mount frame's Z axis. { $axis } is X, Y or Z.
+cam-mount-z = Z direction: { $axis }
+# A number field: one component of the direction of the mount frame's X axis. { $axis } is X, Y or Z.
+cam-mount-x = X direction: { $axis }
+# A note under the mount frame's numbers in the Setup dialog: what the frame means and what picking a face sets.
+cam-mount-note = The frame is given in the setup's coordinates and goes on the machine's mount: its origin on the mount's, its Z and X along the mount's. Picking the face that sits on the mount puts the origin at the face's centre, Z into the part (against the face's normal) and X along the face.
+# An error in the Setup dialog: the three numbers of the mount frame's Z direction are all 0.
+cam-mount-needs-z = The mount frame's Z needs a direction
+# A note in the Machine dialog for a machine described by an assembly. { $axes } is the list of its axes' names, such as "X, Y, Z, A, C".
+cam-machine-own-axes = Its axes are its assembly's: { $axes }
+# An error in the Toolpath dialog: the machine was changed and can no longer run the pattern. { $pattern } is the pattern's name (Rotary, Rotary rough).
+cam-pattern-needs-a-rotary-axis = { $pattern } needs a machine with a rotary axis: this job's machine has none
+# As above, for a 5-axis pattern on a 3-axis machine. { $pattern } is the pattern's name (Swarf).
+cam-pattern-needs-two-rotary-axes-has-none = { $pattern } needs a machine with two rotary axes: this job's machine has none
+# As above, for a 5-axis pattern on a 4-axis machine. { $pattern } is the pattern's name (Swarf).
+cam-pattern-needs-two-rotary-axes-has-one = { $pattern } needs a machine with two rotary axes: this job's machine has one
+# An error in the Toolpath dialog: a rotary pattern's "to" along its axis is not past its "from".
+cam-rotary-range-backwards = Along the rotary axis, To must be more than From
+# An error in the Toolpath dialog: the rotary pattern's Thread style has no lead (the distance the thread advances in one turn).
+cam-rotary-thread-needs-lead = A thread needs its lead (mm a turn)
+# Section heading in the Machine dialog: how the NC program is written where the machine's rotary axes turn.
+cam-rotary-post = Rotary axes in the program
+# A checkbox in the Machine dialog: the controller keeps the tool's tip on its path while the rotary axes turn (TCP, RTCP; Fanuc G43.4).
+cam-tcp = Tool centre point control
+# A text field: the NC blocks that switch tool centre point control on.
+cam-tcp-on = Blocks that switch it on
+# A text field: the NC blocks that switch tool centre point control off.
+cam-tcp-off = Blocks that switch it off
+# A note under the two text fields above. Keep ; and {h} as they are: they are what is typed into the fields.
+cam-tcp-codes-note = Empty: the controller's own codes. Put ; between blocks; {h} is the tool's number.
+# An error in the Machine dialog: tool centre point control is ticked for a controller (GRBL, Mach3) that has no code for it, and none was typed.
+cam-tcp-needs-codes = This controller has no code of its own for it: type the blocks that switch it on and off, or the program is written without it
+# A select in the Machine dialog: how an operation in a tilted work plane (3+2 machining) is written in the program.
+cam-tilted-planes = Tilted work planes
+# An option of the select above: with the controller's tilted working plane code.
+cam-tilted-plane-control = The control's own (G68.2)
+# An option of the select above: as the rotary axes' angles, the moves in the machine's own axes.
+cam-tilted-plane-positions = Rotary positions
+# A note in the Machine dialog: the first option above is chosen for a controller without such a code.
+cam-tilted-plane-no-code = This controller has no tilted work plane code: the rotary axes' positions are written
+# A select in the Machine dialog: what the feed rate (F) means on a program block that turns a rotary axis.
+cam-rotary-feed = Feed on rotary moves
+# A select in the Machine dialog: how the program writes the angle of a rotary axis that turns without stops (a chuck, a platter).
+cam-rotary-winding = Rotary axis without stops
+# Its options: angles kept from 0 to 360, the control rolling the axis over; or angles as turned, however many turns.
+cam-winding-rollover = Rolls over (0 to 360)
+cam-winding-wound = Wound (angles as turned)
+# A note under that select when it rolls over: the control must be set up for it. WRAPPED_ROTARY is a LinuxCNC setting; keep it as is.
+cam-winding-rollover-note = Rolls over: set the control's rotary axis to roll over (LinuxCNC WRAPPED_ROTARY, Fanuc rotary roll-over)
+# A number field in the Machine dialog: how far the tool's tip may stray from a straight cut between two program blocks while a rotary axis turns.
+cam-rotary-tolerance = Tolerance
+# A number field in the Machine dialog: how far (in degrees) the tool's direction may stray between two program blocks.
+cam-rotary-axis-tolerance = Axis tolerance
+# A number field in the Machine dialog: how far the tool lifts clear where a rotary axis has run out of travel and must turn back round (rewind).
+cam-rotary-retract = Rewind retract
+# A count field in the Machine dialog: decimals the rotary axes' angles are written with.
+cam-angle-decimal-places = Decimal places of angles
 
 ## crates/cadrs_app/src/cam/dialogs/set.rs
 # The title of the file picker that imports a tool library.
@@ -4585,6 +4686,94 @@ cam-centre-x = Centre X
 cam-centre-y = Centre Y
 cam-angle-between = Angle between
 cam-repeat-note = In the toolpath's work plane; each copy is checked for collisions like the first.
+# An option of the Tool axis select: the tool cuts along a picked flat face's normal, in a tilted work plane (3+2 machining).
+cam-axis-picked-face = Normal of a picked face (3+2)
+# An option of the Tool axis select (5-axis): the tool stays square to the surface it is cutting.
+cam-axis-normal-to-surface = Normal to the surface
+# An option of the Tool axis select (5-axis): the tool points along the line from a point to where it cuts.
+cam-axis-away-from-point = Away from a point
+# An option of the Tool axis select (5-axis): the tool points from where it cuts to a point.
+cam-axis-toward-point = Toward a point
+# An option of the Tool axis select (4- and 5-axis): the tool's axis always passes through a line, square to it.
+cam-axis-through-line = Through a line
+# A pick list's placeholder on the Axis tab: a vertex of the part to take the point from.
+cam-vertex-for-tool-axis = Vertex for the point
+# The item of that pick list. { $point } is the point's coordinates, such as "(0, 0, 100)".
+cam-point-at = Point { $point }
+# A number field on the Axis tab: one coordinate of the point the tool leans from or toward. { $axis } is X, Y or Z.
+cam-axis-point-coordinate = Point { $axis }
+# A pick list's placeholder on the Axis tab: what to pick for the line the tool's axis passes through.
+cam-line-for-tool-axis = Straight edge or cylinder for the line
+# A line's read-out in a pick list. { $point } is a point of the line and { $direction } its direction, each as "(1, 0, 0)".
+cam-line-through = Through { $point } along { $direction }
+# A note on the Axis tab under "Normal to the surface".
+cam-axis-normal-to-surface-note = The tool stays square to the surface where it touches it (5-axis).
+# A note on the Axis tab under "Away from a point".
+cam-axis-away-from-point-note = The tool points along the line from the point to where it touches: a point inside the part. The point is in the toolpath's work plane.
+# A note on the Axis tab under "Toward a point".
+cam-axis-toward-point-note = The tool points from where it touches to the point: a point above the part. The point is in the toolpath's work plane.
+# A note on the Axis tab under "Through a line".
+cam-axis-through-line-note = The tool's axis passes through the line, square to it, as round a rotary axis.
+# A number field on the Axis tab: the tool tilted forward along the cut (negative: dragging behind).
+cam-lead-angle = Lead angle
+# A number field on the Axis tab: the tool tilted to the left of the cut.
+cam-side-tilt = Side tilt
+# A number field on the Axis tab: the largest angle the tool may lean from the work plane's Z.
+cam-most-lean = Most lean from Z
+# A number field on the Axis tab: the length of cut the tool's direction is evened out over (0: none).
+cam-axis-smoothing = Smoothing length
+# A note on the Axis tab: a leaning mode is set on a toolpath whose pattern ignores it.
+cam-axis-pattern-cant-lean = This pattern doesn't lean the tool: only Parallel, Scallop, Spiral and Pencil do. It cuts along the work plane's Z.
+# An error on the Axis tab: a leaning mode is set but the job's machine is 3-axis.
+cam-machine-no-rotary-axes-to-lean = The machine has no rotary axes to lean the tool
+# A note on the Axis tab of a Rotary or Rotary rough toolpath.
+cam-axis-rotary-note = A rotary pattern points the tool at its rotary axis as the part turns.
+# A note on the Axis tab of a Swarf toolpath (cutting with the tool's side), above the "Most lean from Z" field.
+cam-axis-swarf-note = Swarf leans the tool along the walls it cuts, no further than the limit below.
+# A note on the Axis tab of a Drill toolpath with "Holes at any angle" ticked, above the "Most lean from Z" field.
+cam-axis-any-angle-note = Each hole is drilled down its own axis; holes that lean further than the limit below are left out.
+# A note on the Axis tab, on a machine with rotary axes, for a pattern that cannot lean the tool as it cuts.
+cam-axis-pattern-fixed-note = This pattern keeps the tool's axis fixed. Parallel, Scallop, Spiral and Pencil can lean the tool as they cut.
+# Section heading on the Tool path tab of a Rotary or Rotary rough toolpath: the axis the part turns about.
+cam-rotary-axis = Rotary axis
+# A select under that heading: which axis the part turns about.
+cam-rotary-turns-about = The part turns about
+# An option of that select.
+cam-rotary-machine-axis = The machine's rotary axis
+# An option of that select: an axis picked on the part.
+cam-rotary-picked-axis = A picked axis
+# A pick list's placeholder: what to pick for the rotary axis.
+cam-rotary-axis-pick = Cylindrical face or straight edge
+# A note under the select when the machine's own rotary axis is used.
+cam-rotary-machine-axis-note = The part turns about the machine's rotary axis nearest the work.
+# A select: how a Rotary toolpath covers the part (a spiral, lines along the axis, rings round it, along a thread).
+cam-rotary-style = Style
+# A number field: how far a thread advances along the axis in one turn (mm).
+cam-rotary-thread-lead = Lead a turn
+# A number field: the tool set off the rotary axis, sideways, so a flat end mill cuts with its edge and not its centre.
+cam-rotary-offset = Offset across the axis
+# A number field: the smallest distance from the rotary axis the tool's tip may come in to.
+cam-rotary-core = Core radius
+# Section heading on the Tool path tab of a rotary toolpath: where along and round the axis it cuts.
+cam-rotary-extent = Extent
+# A checkbox: the rotary toolpath covers the part's whole length along the axis.
+cam-rotary-whole-part = Whole part
+# A number field: where along the rotary axis the toolpath starts (mm from the axis's point).
+cam-rotary-from = From along the axis
+# A number field: where along the rotary axis the toolpath ends (mm from the axis's point).
+cam-rotary-to = To along the axis
+# A number field: the angle round the rotary axis the toolpath starts at.
+cam-rotary-start-angle = Start angle
+# A number field: the angle round the rotary axis the toolpath covers (360: all the way round).
+cam-rotary-sweep = Sweep
+# A pick list's placeholder of a Swarf toolpath: the wall faces it cuts with the side of the tool.
+cam-swarf-walls = Walls to cut with the tool's side
+# A checkbox of a Drill toolpath on a machine with rotary axes: every hole is drilled along its own axis, whichever way it points.
+cam-holes-at-any-angle = Holes at any angle
+# A note under that checkbox when it is ticked.
+cam-holes-at-any-angle-note = Each hole is drilled down its own axis, the machine turning the tool to it. Off: only the holes along the work plane's Z.
+# An error under that checkbox: it is ticked but the job's machine is 3-axis.
+cam-any-angle-needs-rotary-axes = The machine has no rotary axes to turn the tool to the holes
 
 ## crates/cadrs_app/src/cam/export.rs
 # "Post" is to write a setup's toolpaths as an NC (G-code) program for the machine.
@@ -4598,6 +4787,14 @@ cam-parts-still-being-built = The parts are still being built
 cam-job-has-no-machine = The job has no machine
 # A note to the operator: { $offset } is a work offset to set on the machine (e.g. "G55 to X0 Y0 Z0").
 cam-set-offset = Set { $offset }
+# A warning in the Post dialog, for a machine that tilts its tool (a swivel head) posted without tool centre point control (cam-tcp): the axis values in the program were worked out for these tool lengths, so tools of other lengths would cut in the wrong place. { $tools } lists them: "T1 90 mm, T3 63.5 mm".
+cam-post-no-tcp-tool-lengths = Without tool centre point control this program is good only for the tool lengths it was posted with: { $tools }
+# One tool in cam-post-no-tcp-tool-lengths: T{ $number } is the tool's number on the machine (keep the T), { $length } its length from the tip to the spindle's gauge line, in millimetres.
+cam-post-tool-length-millimetres = T{ $number } { $length } mm
+# As cam-post-tool-length-millimetres, the length in inches.
+cam-post-tool-length-inches = T{ $number } { $length } in
+# A warning in the Post dialog, for a machine with rotary axes posted without tool centre point control (cam-tcp). "Machine mating" is the Setup dialog's field of that name (cam-machine-mating): where the setup sits on the machine's table.
+cam-post-no-tcp-work-position = Without tool centre point control the work must sit on the machine exactly where the setup's machine mating puts it
 cam-no-material-number-on-torch = No material number on the torch: QtPlasmaC cuts with the material it has loaded (set one on the tool)
 # { $machine } is the machine's name, { $post } the post processor's.
 cam-machine-with-post = { $machine } (post: { $post })
@@ -4687,6 +4884,7 @@ cam-go-to-end = Go to end
 cam-reset = Reset
 cam-close-the-preview = Close the preview
 cam-drag-through-program = Drag to move through the program
+cam-simulated-ahead = Simulated ahead: green ready to play, blue being worked out, red not yet, amber not cut exactly
 # Show the toolpath (a checkbox of the preview).
 cam-toolpath = Toolpath
 cam-pause-on-collision = Pause on collision
@@ -4696,6 +4894,8 @@ cam-readout-feed = feed { $feed } mm/min
 cam-readout-rapid = rapid
 # { $reason } is the collision the preview paused on.
 cam-readout-paused = Paused: { $reason }
+# In the preview's readout, after the first few warnings about what the machine's axes cannot do. { $count } is how many more there are.
+cam-machine-warnings-more = { $count } more
 
 ## crates/cadrs_app/src/cam/toolbar.rs
 # Toolbar tooltips of a CAM Studio.
@@ -6219,3 +6419,220 @@ cam-component-newest = The component is at the newest version
 cam-still-reading-parts = Still reading the Part Studio's parts
 # The heading of a CAM dialog's list of warnings.
 cam-warnings = Warnings
+
+## crates/cadrs_app/src/assembly/machine_builder.rs
+# The title of an assembly's side panel where the assembly (a CNC mill or a robot modelled with mates) is set up as a machine that CAM can drive.
+asm-machine-builder = Machine Builder
+# Tooltip of the button that opens that panel.
+asm-machine-builder-tooltip = Machine Builder: set this assembly up as a machine for CAM
+# Section heading: the two places of the machine where the tool and the work are fixed.
+asm-machine-mounts = Mounts
+# The connector on the spindle's nose, where a tool holder seats.
+asm-machine-tool-mount = Tool mount
+# Tooltip of the tool mount's field.
+asm-machine-tool-mount-hint = Where the tool goes on: click, then pick a point on the spindle's nose. Its Z points out of the spindle, toward the work.
+# The connector on the table, where the work is put.
+asm-machine-table-mount = Table mount
+# Tooltip of the table mount's field.
+asm-machine-table-mount-hint = Where the work goes on: click, then pick a point on the table. Its Z points out of the table.
+# Shown in a mount's field while it waits for a click in the 3D view.
+asm-machine-pick-in-view = Pick a point in the view…
+# Shown in a mount's field that has nothing picked yet.
+asm-machine-mount-unset = Click to pick
+# Tooltip: turns the mount's Z axis round to point the other way.
+asm-machine-flip-mount = Flip: turn its Z the other way
+# Tooltip: removes the mount's connector.
+asm-machine-clear-mount = Clear this mount
+# Section heading: the machine's axes (X, Y, Z, A, B, C).
+asm-machine-axes = Axes
+# A note under the Axes heading before both mounts are picked.
+asm-machine-axes-need-mounts = Set both mounts: the axes are the mates between them.
+# A note under the Axes heading when the mates make no axis.
+asm-machine-no-axes = No mate moves the tool or the table by itself.
+# Tooltip of the arrow that opens an axis row's settings.
+asm-machine-axis-settings = Zero, home, travel and rates
+# A tag on an axis row: the axis carries the tool.
+asm-machine-side-tool = Tool
+# A tag on an axis row: the axis carries the work.
+asm-machine-side-table = Table
+# Tooltip of an axis's name field (the letter it is programmed by).
+asm-machine-axis-name = The axis's name in a program: X, Y, Z, A, B, C…
+# Tooltip of an axis row's icon: the axis turns.
+asm-machine-axis-rotary = Rotary axis
+# Tooltip of an axis row's icon: the axis slides.
+asm-machine-axis-linear = Linear axis
+# Tooltip of the mate's name on an axis row. { $mate } is the mate's name.
+asm-machine-axis-mate = The mate that moves it: { $mate }
+# Tooltip of an axis row's toggle: the axis value rises as the mate's value falls.
+asm-machine-reverse = Reverse: the axis counts the other way
+# Tooltip of an axis's slider. { $axis } is the axis's name (X, A…). To jog a machine is to move one axis by hand.
+asm-machine-jog = Jog { $axis }: moves the machine in the view only
+# Section heading: mates that move something other than the tool or the work (a door, a tool carousel).
+asm-machine-actuators = Actuators
+# A note under the Actuators heading when there is nothing to list.
+asm-machine-no-actuators = No other mate moves by itself.
+# Tooltip of an actuator's name field.
+asm-machine-actuator-name = The actuator's name: Door, Magazine…
+# Shown on an actuator's row whose mate can no longer move.
+asm-machine-actuator-lost = its mate cannot move
+# Tooltip: the mate stops being an actuator.
+asm-machine-remove-actuator = Remove this actuator
+# Tooltip of a button on an actuator's named position. { $name } is the position's name.
+asm-machine-go-to-position = Move it to { $name }
+# Tooltip: deletes an actuator's named position.
+asm-machine-remove-position = Remove this position
+# A button: adds a named position of the actuator where it is now.
+asm-machine-add-position-here = Add position here
+# A button on a free mate's row: makes it an actuator.
+asm-machine-add-actuator = Add as actuator
+# Tooltip of that button.
+asm-machine-add-actuator-tooltip = Make this mate an actuator: something the machine moves besides its axes
+# Section heading: where and how the machine changes tools.
+asm-machine-tool-change = Tool change
+# Shown where the tool change position would be when none is set.
+asm-machine-tool-change-unset = No tool change position
+# A button: the tool change position becomes where the axes are jogged to now.
+asm-machine-set-from-current = Set from current
+# Tooltip of that button.
+asm-machine-set-from-current-tooltip = The axes go where they are jogged to now for a tool change
+# A button: jogs the machine to the tool change position.
+asm-machine-go-there = Go there
+# Tooltip: removes the tool change position.
+asm-machine-clear-tool-change = Clear the tool change position
+# Tooltip of a pocket's button (a pocket of the tool magazine): clicking removes the pocket.
+asm-machine-remove-pocket = Remove this pocket
+# A button: adds a pocket of the tool magazine where the magazine is jogged to now.
+asm-machine-add-pocket-here = Add pocket here
+# A button: the magazine's named positions become its pockets, numbered from 1.
+asm-machine-pockets-from-positions = From its positions
+# Section heading: the machine's guards, doors and covers, which the CAM view draws see-through.
+asm-machine-enclosure = Enclosure
+# Shown when no instance is part of the enclosure.
+asm-machine-enclosure-none = Nothing drawn see-through
+# { $count } is how many instances are part of the enclosure.
+asm-machine-enclosure-count = { $count } drawn see-through
+# A button: the selected instances become part of the enclosure.
+asm-machine-enclosure-add = Add selection
+# Tooltip of that button.
+asm-machine-enclosure-tooltip = The selected instances (guards, doors, covers) are drawn see-through in the CAM view
+# Tooltip: nothing is part of the enclosure any more.
+asm-machine-enclosure-clear = Clear the enclosure
+# A warning when Add selection is clicked with nothing selected.
+asm-machine-enclosure-select-first = Select the enclosure's instances first
+# Tooltip of the arrow that opens the Controller section.
+asm-machine-controller-settings = The controller's dialect, spindle, tool changer and post settings
+# Section heading: the machine's CNC controller.
+asm-machine-controller = Controller
+# Section heading: what keeps the assembly from being a machine, and what the machine leaves out.
+asm-machine-issues = Issues
+# Tooltip of an issue's row.
+asm-machine-issue-tooltip = Click to select the mates and instances it is about
+# A button: every axis to its home position.
+asm-machine-go-home = Home
+# Tooltip of that button.
+asm-machine-go-home-tooltip = Jog every axis to its home
+# A button: the machine back to where the document has it.
+asm-machine-reset-pose = Reset pose
+# Tooltip of that button.
+asm-machine-reset-pose-tooltip = Back to where the assembly is in the document
+# Tooltip: the assembly stops being a machine (one undo step).
+asm-machine-remove = Remove machine: the assembly is an ordinary one again
+# Tooltip of ✓.
+asm-machine-accept = Save the machine (one undo step)
+# Tooltip of ✗.
+asm-machine-cancel = Close without saving
+# A button in an axis's settings: the axis reads 0 where it is jogged to now.
+asm-machine-set-zero-here = Set zero here
+# A number field in an axis's settings: the value the axis parks at.
+asm-machine-home = Home
+# A button in an axis's settings: the axis parks where it is jogged to now.
+asm-machine-set-home-here = Set home here
+# A checkbox in a rotary axis's settings: it turns without stops.
+asm-machine-continuous = Continuous
+# Number fields in an axis's settings: the least and the greatest value the axis can reach.
+asm-machine-travel-min = Travel from
+asm-machine-travel-max = Travel to
+# A note in an axis's settings: its travel is the mate's limits.
+asm-machine-travel-follows-mate = The travel follows the mate's limits.
+# A button in an axis's settings: the typed travel is dropped for the mate's limits.
+asm-machine-from-mate-limits = From the mate's limits
+# Number fields in a rotary axis's settings, in degrees a minute.
+asm-machine-rapid-rotary = Rapid rate (°/min)
+asm-machine-feed-rotary = Fastest feed (°/min)
+# An option of the Magazine select: the machine has no tool magazine.
+asm-machine-no-magazine = None
+# A select: the actuator that brings a tool pocket to the spindle (a carousel, a chain).
+asm-machine-magazine = Magazine
+
+## crates/cadrs_app/src/cam/dialogs/fields.rs (the machine from an assembly)
+# A select in the Machine Builder: the family of the machine's CNC controller (Fanuc, LinuxCNC…).
+cam-controller = Controller
+# A select at the top of the Machine dialog: where the job's machine comes from.
+cam-machine-from = Machine from
+# An option of that select: one of the built-in machines.
+cam-machine-from-catalogue = Catalogue
+# An option of that select: an assembly of this document set up as a machine.
+cam-machine-from-assembly = From assembly
+# A note (and the reason ✓ is off) when no assembly of the document is set up as a machine. "Machine Builder" is the panel's name (asm-machine-builder).
+cam-machine-no-assemblies = No assembly of this document is set up as a machine: open an assembly and use its Machine Builder
+# A note in the Machine dialog (and the reason ✓ is off) when the other document chosen has no assembly set up as a machine at the version chosen. "Machine Builder" is the panel's name (asm-machine-builder).
+cam-machine-none-in-document = No assembly of that document is set up as a machine at this version: set one up with its Machine Builder and make a version
+# A note in the Machine dialog under a machine taken from another document at a version: the job keeps a copy that does not change until a newer version is chosen here.
+cam-machine-frozen-copy = A frozen copy of that version: change the machine in its own document, make a version there and choose it here.
+# The reason ✓ is off when the chosen assembly does not make a machine.
+cam-machine-not-set-up = The assembly is not a working machine yet
+# A select in the Machine dialog: which assembly the machine is.
+cam-machine-assembly = Assembly
+# A note in the Machine dialog. { $axes } is the machine's axes, the tool's side then the work's, such as "Z B · Y X C".
+cam-machine-axes-summary = Axes: { $axes }
+# Notes in the Machine dialog for a machine with rotary axes: whether its controller keeps the tool's tip on the path while they turn.
+cam-machine-tcp-on = Tool centre point control: on
+cam-machine-tcp-off = Tool centre point control: off
+# A note in the Machine dialog over the button below.
+cam-machine-edit-in-builder = Set in the assembly's Machine Builder.
+# A button in the Machine dialog: opens the assembly's tab with the Machine Builder panel.
+cam-open-machine-builder = Open Machine Builder
+
+## crates/cadrs_app/src/cam/machine_view.rs
+# Tooltip of a CAM Studio toolbar button: shows or hides the job's machine (an assembly of the document) in the 3D view.
+cam-show-hide-machine = Show or hide the machine
+# Tooltip of a CAM Studio toolbar button, lit while it is on: while the preview moves the job's machine, the 3D view keeps the machine still and the part turns with the machine's table; off, the part stays still and the machine moves round it.
+cam-machine-relative-tooltip = Keep the machine still (the part moves with its table)
+# In the preview bar, before two buttons: what the 3D view keeps still while the machine moves, the part or the machine.
+cam-relative-to = Relative to
+# The preview bar's button that keeps the part still in the 3D view (the machine moves round it).
+cam-relative-part = Part
+# The preview bar's button that keeps the machine still in the 3D view (the part turns with its table).
+cam-relative-machine = Machine
+# Tooltips of those two buttons.
+cam-relative-part-tooltip = Keep the part still: the machine moves round it
+cam-relative-machine-tooltip = Keep the machine still: the part moves with its table
+# A collision found by Simulate: two things of the machine, or one and the workholding or the part, run into one another. { $a } and { $b } are their names (Swivel head, Vise), { $operation } the toolpath's name.
+cam-collision-machine = { $a } hits { $b } ({ $operation })
+# In a collision found by Simulate, the name of a tool's holder (with its arbor) when it is what runs into something: "D10 flat end mill holder hits Vise (Rough 1)". { $tool } is the tool's name.
+cam-collision-holder = { $tool } holder
+
+## crates/cadrs_app/src/cam/dialogs/fields.rs (the form tools)
+# The Tool dialog, a tapered ball mill: the diameter of its shank, which the taper widens to.
+cam-shank-diameter = Shank diameter
+# The Tool dialog, a tapered ball mill: the diameter of the ball at its tip.
+cam-ball-diameter = Ball diameter
+# The Tool dialog, a lollipop mill (a ball on a thinner neck): the neck's diameter.
+cam-neck-diameter = Neck diameter
+# The Tool dialog, a barrel mill: the radius of the arc its side is.
+cam-side-radius = Side radius
+# Section heading in the Tool dialog of a form tool: the outline of the cutter, which is revolved round its axis.
+cam-form-profile = Profile
+# A note under that heading.
+cam-form-profile-note = The cutter's outline from the tip upward: each point's distance from the axis and height above the tip. A bulge makes the line arriving at a point an arc (0: straight).
+# Number fields of a profile point. { $n } is the point's number, from 1.
+cam-form-point-radius = Point { $n } radius
+cam-form-point-height = Point { $n } height
+# The bulge of the line arriving at the point: the tangent of a quarter of the arc's angle, as in DXF.
+cam-form-point-bulge = Point { $n } bulge
+# A button: removes a point of the profile. { $n } is the point's number.
+cam-form-remove-point = Remove point { $n }
+# A button: adds a point to the profile, above its last.
+cam-form-add-point = Add point
+# A note under a form tool's profile: the sizes it gives the tool. { $diameter } and { $length } are numbers in mm.
+cam-form-size = Diameter { $diameter } mm, cutting length { $length } mm (from the profile)

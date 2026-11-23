@@ -25,3 +25,189 @@ fn inside_the_tolblend_c9_tool() {
         PointClass::Inside
     );
 }
+
+/// A plate with a hole of radius 100 bored through it: a point of the hole a tenth of a micron
+/// in from its wall is off the plate's top face, and one as far into the wall on it. The face
+/// tests points against its loops as polygons, the hole's circle stepped in 805 chords a half
+/// turn, which run up to 1.9e-4 inside it: a point between the circle and a chord was taken
+/// for one of the face.
+#[test]
+fn beside_a_wide_holes_wall() {
+    use cadrs_kernel::native::NativeKernel;
+    use cadrs_kernel::{BoolOp, Kernel, Primitive};
+    use nalgebra::{Point3, Vector3};
+    let mut k = NativeKernel::new();
+    let plate = k
+        .primitive(&Primitive::block(
+            Point3::new(-200.0, -200.0, 0.0),
+            Point3::new(200.0, 200.0, 10.0),
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let rod = k
+        .primitive(&Primitive::cylinder(
+            Point3::new(0.0, 0.0, -5.0),
+            Vector3::z(),
+            100.0,
+            20.0,
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let bored = k
+        .boolean(BoolOp::Subtract, plate, &[rod])
+        .unwrap()
+        .first()
+        .unwrap();
+    let b = k.get(bored).unwrap();
+    // The plate's top: the flat face at z = 10, the hole's circle one of its loops.
+    let top = b
+        .faces
+        .iter()
+        .find(|f| f.loops.len() == 2 && (f.surf.eval(0.0, 0.0).z - 10.0).abs() < 1e-9)
+        .expect("the top face");
+    let kept = classify::face_polygons_kept(b, top);
+    let sampled = classify::face_polygons(b, top);
+    let step = std::f64::consts::PI / 805.0;
+    let mut were_wrong = 0;
+    for i in 0..400 {
+        // (Across the chords, wherever the circle's halves start.)
+        let a = i as f64 * 0.05 * step;
+        for (r, want) in [
+            (100.0 - 1e-4, classify::InFace::Outside),
+            (100.0 + 1e-4, classify::InFace::Inside),
+        ] {
+            let (u, v) = top
+                .surf
+                .project(&P3::new(r * a.cos(), r * a.sin(), 10.0), None);
+            let uv = P2::new(u, v);
+            assert_eq!(
+                classify::in_face_boxed(&kept.0, &kept.1, &top.surf, uv, 1e-7),
+                want,
+                "at {a} rad, radius {r}"
+            );
+            if classify::in_face(&sampled, &top.surf, uv, 1e-7) != want {
+                were_wrong += 1;
+            }
+        }
+    }
+    assert!(were_wrong > 0, "the polygons alone have every point right");
+}
+
+/// The same beside a slanted hole's wall: its rim on the plate's top is an ellipse, stepped in
+/// chords like a circle, and a point between the two is asked of the ellipse itself.
+#[test]
+fn beside_a_slanted_holes_wall() {
+    use cadrs_kernel::native::NativeKernel;
+    use cadrs_kernel::native::curve::Curve;
+    use cadrs_kernel::{BoolOp, Kernel, Primitive};
+    use nalgebra::{Point3, Vector3};
+    let mut k = NativeKernel::new();
+    let plate = k
+        .primitive(&Primitive::block(
+            Point3::new(-300.0, -300.0, 0.0),
+            Point3::new(300.0, 300.0, 10.0),
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let lean = Vector3::new(1.0, 0.0, 1.0).normalize();
+    let rod = k
+        .primitive(&Primitive::cylinder(
+            Point3::origin() - lean * 300.0,
+            lean,
+            100.0,
+            600.0,
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let bored = k
+        .boolean(BoolOp::Subtract, plate, &[rod])
+        .unwrap()
+        .first()
+        .unwrap();
+    let b = k.get(bored).unwrap();
+    let top = b
+        .faces
+        .iter()
+        .find(|f| f.loops.len() == 2 && (f.surf.eval(0.0, 0.0).z - 10.0).abs() < 1e-9)
+        .expect("the top face");
+    assert!(
+        top.loops
+            .iter()
+            .flatten()
+            .any(|c| matches!(c.pc, Curve::Ellipse { .. })),
+        "the rim is an ellipse on the plate"
+    );
+    let kept = classify::face_polygons_kept(b, top);
+    let sampled = classify::face_polygons(b, top);
+    // The rim: the wall's points at z = 10, (10 + 100√2 cos t, 100 sin t).
+    let (a, c) = (100.0 * 2f64.sqrt(), 100.0);
+    let mut were_wrong = 0;
+    for i in 0..800 {
+        let t = 0.3 + i as f64 * 0.05 * std::f64::consts::PI / 805.0;
+        for (s, want) in [
+            (1.0 - 1e-6, classify::InFace::Outside),
+            (1.0 + 1e-6, classify::InFace::Inside),
+        ] {
+            let p = P3::new(10.0 + s * a * t.cos(), s * c * t.sin(), 10.0);
+            let (u, v) = top.surf.project(&p, None);
+            let uv = P2::new(u, v);
+            assert_eq!(
+                classify::in_face_boxed(&kept.0, &kept.1, &top.surf, uv, 1e-7),
+                want,
+                "at {t} rad, {s} of the rim"
+            );
+            if classify::in_face(&sampled, &top.surf, uv, 1e-7) != want {
+                were_wrong += 1;
+            }
+        }
+    }
+    assert!(were_wrong > 0, "the polygons alone have every point right");
+}
+
+/// Two balls' common part: each ball is turned so the circle they meet in is one of its
+/// latitudes, whose p-curve is a straight line in the sphere's (u, v), exact, where a circle
+/// about another line had to be fitted. The lens is two caps, each of height r − d/2.
+#[test]
+fn two_balls_meet_in_a_latitude_of_each() {
+    use cadrs_kernel::native::NativeKernel;
+    use cadrs_kernel::native::curve::Curve;
+    use cadrs_kernel::{BoolOp, Kernel, Primitive};
+    use nalgebra::{Point3, Vector3};
+    let mut k = NativeKernel::new();
+    let ball = |k: &mut NativeKernel, c: Point3<f64>| {
+        k.primitive(&Primitive::ball(c, 5.0))
+            .unwrap()
+            .first()
+            .unwrap()
+    };
+    // (Aslant of every axis: neither ball's own poles are on the line of centres.)
+    let d = Vector3::new(3.0, 4.0, 5.0).normalize() * 6.0;
+    let (a, b) = (
+        ball(&mut k, Point3::origin()),
+        ball(&mut k, Point3::origin() + d),
+    );
+    let lens = k
+        .boolean(BoolOp::Intersect, a, &[b])
+        .unwrap()
+        .first()
+        .unwrap();
+    let body = k.get(lens).unwrap();
+    assert!(body.check().is_empty(), "{:?}", body.check());
+    assert_eq!(body.faces.len(), 2);
+    for f in &body.faces {
+        for c in f.loops.iter().flatten() {
+            assert!(
+                !matches!(c.pc, Curve::Nurbs(_)),
+                "a fitted p-curve on a face of the lens"
+            );
+        }
+    }
+    let h: f64 = 5.0 - 3.0;
+    let want = 2.0 * std::f64::consts::PI * h * h * (3.0 * 5.0 - h) / 3.0;
+    let v = k.mass_properties(lens).unwrap().volume;
+    assert!((v - want).abs() < 1e-9 * want, "{v} for {want}");
+}

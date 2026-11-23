@@ -131,6 +131,10 @@ pub fn path_segments(k: &NativeKernel, path: &[PathCurve]) -> Result<Vec<Seg>> {
                 });
             }
             PathCurve::Bspline(b) => {
+                if let Some(seg) = straight(&b.poles) {
+                    out.push(seg);
+                    continue;
+                }
                 let n = crate::native::nurbs::NurbsCurve::from_bspline(b)?;
                 let (t0, t1) = n.range();
                 out.push(Seg {
@@ -143,6 +147,35 @@ pub fn path_segments(k: &NativeKernel, path: &[PathCurve]) -> Result<Vec<Seg>> {
         }
     }
     Ok(out)
+}
+
+/// A spline path whose control points all lie in order along the segment between its ends is
+/// that segment: swept along it, a profile makes a prism of exact faces (the straight
+/// knurl ring of an insert, flush with the sleeve it stands on).
+fn straight(poles: &[P3]) -> Option<Seg> {
+    let (a, z) = (*poles.first()?, *poles.last()?);
+    let d = z - a;
+    let len = d.norm();
+    if poles.len() < 2 || !(len > 0.0) {
+        return None;
+    }
+    let u = d / len;
+    let mut last = 0.0;
+    for p in poles {
+        let s = (p - a).dot(&u);
+        if (p - (a + u * s)).norm() > crate::native::tol::REL_FINE * len.max(1.0)
+            || s < last - crate::native::tol::REL_FINE * len
+        {
+            return None;
+        }
+        last = s;
+    }
+    Some(Seg {
+        c: Curve::Line { o: a, d: u },
+        t0: 0.0,
+        t1: len,
+        rev: false,
+    })
 }
 
 /// Orders and orients the segments into one chain; whether it closes.
@@ -622,7 +655,7 @@ pub(crate) fn sweep_law_tagged(
         ));
     }
     let segs = path_segments(k, &spec.path)?;
-    if std::env::var("CADRS_SWEEP_DEBUG").is_ok() {
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
         for (i, g) in segs.iter().enumerate() {
             eprintln!(
                 "path {i}: {:?} {:?} -> {:?} ({} long)",
@@ -718,7 +751,7 @@ pub(crate) fn sweep_law_tagged(
                 "a sweep that twists or scales round a corner of its path",
             ));
         }
-        let (b, _) = super::frames::sweep_seg_law(
+        let (mut b, _) = super::frames::sweep_seg_law(
             &faces,
             &chains,
             plane,
@@ -727,6 +760,12 @@ pub(crate) fn sweep_law_tagged(
             solid,
             *law,
         )?;
+        if let ([seg], 1.0) = (spine.as_slice(), law.scale)
+            && let Curve::Line { o, d } = &seg.c
+            && !crate::native::env_flag!("CADRS_NO_TWIST_CYLINDERS")
+        {
+            exact_cylinders(&mut b.body, *o, d.normalize());
+        }
         return Ok(Tagged::from_built(b));
     }
     let join = match spec.corners {
@@ -790,11 +829,11 @@ pub(crate) fn sweep_spines(
     solid: bool,
 ) -> Result<Tagged> {
     let frames = frames.into();
-    let prof = std::env::var("CADRS_PROFILE").is_ok();
+    let prof = crate::native::env_flag!("CADRS_PROFILE");
     let t0 = web_time::Instant::now();
     let path_len: usize = sp.iter().map(|s| s.0.len()).sum();
     let mut pieces: Vec<Tagged> = Vec::new();
-    if std::env::var("CADRS_SWEEP_DEBUG").is_ok() {
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
         for (spine, backward) in &sp {
             eprintln!(
                 "spine of {} segments, backward {backward}, from {:?}",
@@ -828,7 +867,7 @@ pub(crate) fn sweep_spines(
                 }
             });
         }
-        if std::env::var("CADRS_SWEEP_DEBUG").is_ok() {
+        if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
             for t in &these {
                 eprintln!(
                     "piece: volume {} faces {} solids {} check {:?}",
@@ -920,7 +959,7 @@ pub(crate) fn sweep_spines(
             match glue(&acc, &p) {
                 Some(g) => g,
                 None => {
-                    if std::env::var("CADRS_SWEEP_DEBUG").is_ok() {
+                    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
                         eprintln!("join: glue failed, united");
                     }
                     crate::native::features::tagged_union(&acc, &p)?
@@ -929,7 +968,7 @@ pub(crate) fn sweep_spines(
         } else {
             compound(acc, p)
         };
-        if std::env::var("CADRS_SWEEP_DEBUG").is_ok() {
+        if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
             eprintln!(
                 "join: volume {} faces {}",
                 crate::native::mass::body_volume(&acc.body),
@@ -1232,4 +1271,103 @@ fn compound(mut a: Tagged, b: Tagged) -> Tagged {
     a.body.append(&b.body);
     a.tags.extend(b.tags);
     a
+}
+
+/// The faces of a sweep along the line through `o` along the unit `axis` (twisted, not scaled)
+/// that lie on a cylinder about that line, as a profile's arc centred on it sweeps: given that
+/// cylinder, their p-curves projected onto it (their edges lie on it already). A knurl's inner
+/// faces then meet the sleeve they stand on as the same surface.
+fn exact_cylinders(b: &mut crate::native::topo::Body, o: P3, axis: V3) {
+    use crate::native::surface::Surface;
+    let tol = crate::native::tol::POINT;
+    for fi in 0..b.faces.len() {
+        let s = b.faces[fi].surf.clone();
+        if !matches!(s, Surface::Nurbs(_)) {
+            continue;
+        }
+        let ((u0, u1), (v0, v1)) = s.param_box();
+        let mut pts = Vec::new();
+        for i in 0..=6 {
+            for j in 0..=6 {
+                let (u, v) = (
+                    u0 + (u1 - u0) * i as f64 / 6.0,
+                    v0 + (v1 - v0) * j as f64 / 6.0,
+                );
+                pts.push((u, v, s.eval(u, v)));
+            }
+        }
+        let radial = |p: &P3| {
+            let w = p - o;
+            w - axis * w.dot(&axis)
+        };
+        let r = radial(&pts[0].2).norm();
+        if !(r > 1e-6)
+            || pts
+                .iter()
+                .any(|(_, _, p)| (radial(p).norm() - r).abs() > tol)
+        {
+            continue;
+        }
+        // (The edges too, all along.)
+        let on = b.faces[fi].loops.iter().flatten().all(|c| {
+            let e = &b.edges[c.edge];
+            (0..=8).all(|k| {
+                let p = e.point(e.t[0] + (e.t[1] - e.t[0]) * k as f64 / 8.0);
+                (radial(&p).norm() - r).abs() <= tol.max(e.tol)
+            })
+        });
+        if !on {
+            continue;
+        }
+        let x = radial(&pts[0].2).normalize();
+        let cyl = Surface::Cylinder {
+            f: Frame {
+                o,
+                x,
+                y: axis.cross(&x),
+                z: axis,
+            },
+            r,
+        };
+        // The face's side: the old normal's against the cylinder's at a point.
+        let (u, v, p) = pts[24];
+        let (cu, cv) = cyl.project(&p, None);
+        let flip = s.normal(u, v).dot(&cyl.normal(cu, cv)) < 0.0;
+        let mut loops = b.faces[fi].loops.clone();
+        let mut ok = true;
+        for l in loops.iter_mut() {
+            let mut at: Option<P2> = None;
+            for c in l.iter_mut() {
+                let e = &b.edges[c.edge];
+                let pc = crate::native::pcurve::pcurve(&cyl, &e.curve, e.t[0], e.t[1], None);
+                // (Continuous round the loop: each p-curve a whole turn over where it must be.)
+                let (t0, t1) = crate::native::topo::co_range(e, c.fwd);
+                let start = pc.point(t0);
+                let du = at.map_or(0.0, |a| ((a.x - start.x) / TAU).round() * TAU);
+                let pc = if du == 0.0 {
+                    pc
+                } else {
+                    pc.transformed(&Affine::translation(V3::new(du, 0.0, 0.0)))
+                };
+                let end = pc.point(t1);
+                at = Some(P2::new(end.x, end.y));
+                c.pc = pc;
+            }
+            // The loop closes in (u, v).
+            if let (Some(a), Some(c)) = (at, l.first()) {
+                let e = &b.edges[c.edge];
+                let (t0, _) = crate::native::topo::co_range(e, c.fwd);
+                let q = c.pc.point(t0);
+                ok &= (a.x - q.x).abs() < 1e-6 && (a.y - q.y).abs() < 1e-6;
+            }
+        }
+        if !ok {
+            continue;
+        }
+        b.faces[fi].surf = cyl;
+        b.faces[fi].loops = loops;
+        if flip {
+            b.faces[fi].sense = !b.faces[fi].sense;
+        }
+    }
 }

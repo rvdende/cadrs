@@ -49,6 +49,10 @@ pub enum DistanceTarget {
     /// Every face, edge and vertex of a body (its boundary: a point inside a solid is not at
     /// distance 0).
     Body(BodyId),
+    /// A solid body with its inside: what it holds is at distance 0 from it, and a point inside
+    /// is its own nearest point. Its boundary otherwise, as [`DistanceTarget::Body`]; a farthest
+    /// point is on the boundary.
+    Solid(BodyId),
 }
 
 /// Where a closest (or farthest) point lies.
@@ -77,6 +81,16 @@ pub struct DistanceResult {
     pub a_at: DistanceLocation,
     /// Where `b` lies.
     pub b_at: DistanceLocation,
+}
+
+/// How two solids meet ([`crate::Kernel::interference`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Interference {
+    /// The volume they share (mm³): 0 for solids that only touch or are apart.
+    pub volume: f64,
+    /// The least distance from a point of one to a point of the other, insides included (mm):
+    /// 0 for solids that touch or overlap.
+    pub gap: f64,
 }
 
 /// A rectangle of a surface's (u, v): `[[u0, u1], [v0, v1]]`.

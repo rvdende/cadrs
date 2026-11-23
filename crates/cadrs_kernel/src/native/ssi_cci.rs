@@ -291,10 +291,16 @@ pub fn curve_curve(
     }
     // One point per crossing (many small pairs solve to it).
     // (Each kept point's position with it: a near-overlap leaves tens of thousands to sift.)
+    // (Found by the cell of a grid they fall in, not by looking at every one kept.)
     let mut uniq: Vec<(f64, f64, P3)> = Vec::new();
+    let mut places = super::math::PointIndex::default();
+    let within = tol * (1.0 + 4.0 * f64::EPSILON);
     for (s, t) in out {
         let p = a.point(s);
-        if !uniq.iter().any(|(_, _, q)| (q - p).norm() <= tol) {
+        if places
+            .first_within(uniq.len(), |i| uniq[i].2, &p, within)
+            .is_none()
+        {
             uniq.push((s, t, p));
         }
     }

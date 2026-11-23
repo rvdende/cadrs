@@ -161,6 +161,7 @@ fn valid_models_pass_the_full_check() {
                 outward: false,
                 hollow: true,
                 sharp: true,
+                nothing_hollowed: Default::default(),
             },
         )
         .unwrap()

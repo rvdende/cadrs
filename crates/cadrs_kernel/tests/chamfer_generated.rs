@@ -771,6 +771,7 @@ fn prism(k: &mut NativeKernel, outer: &[P2], holes: &[Vec<P2>], h: f64) -> Resul
 
 #[test]
 fn filleted_prisms() {
+    use std::f64::consts::PI;
     let mut rng = Rng(0xf111_e7ed);
     let mut failures = Vec::new();
     let cases = 45;
@@ -794,12 +795,30 @@ fn filleted_prisms() {
         // ∫₀ʳ g(t) (P − 2Kt) dt, g the round's depth at t from the edge (Gauss–Legendre).
         let g = |t: f64| r - (r * r - (r - t) * (r - t)).max(0.0).sqrt();
         let n = 400;
-        let expected: f64 = (0..n)
+        let mitred: f64 = (0..n)
             .map(|j| {
                 let t = (j as f64 + 0.5) / n as f64 * r;
                 g(t) * (perimeter - 2.0 * k_sum * t) * r / n as f64
             })
             .sum();
+        // That is with every corner mitred. Round an inside corner (θ > π) the ball doesn't
+        // mitre: past the strips' sections through the corner's edge it swings round that edge
+        // through α = θ − π, its depth below the top at ρ from the edge g(ρ). Over the sector that
+        // takes α∫₀ʳ g(ρ)ρ dρ = α(5/6 − π/4)r³, where the strips run on to their mitre took
+        // 2∫₀^{α/2}∫₀^{r/cos φ} g(ρ cos φ)ρ dρ dφ = 2 tan(α/2)(5/6 − π/4)r³. Each such corner is
+        // one face more.
+        let inside: Vec<f64> = loops
+            .iter()
+            .flat_map(|(_, a)| a.iter().copied())
+            .filter(|&t| t > PI + 1e-9)
+            .map(|t| t - PI)
+            .collect();
+        let swing = (5.0 / 6.0 - PI / 4.0) * r * r * r;
+        let expected = mitred
+            + inside
+                .iter()
+                .map(|&a| swing * (a - 2.0 * (a / 2.0).tan()))
+                .sum::<f64>();
         let mut case = Case {
             name: format!(
                 "filleted prism {i} ({} corners, {} holes, r {r:.3})",
@@ -857,11 +876,8 @@ fn filleted_prisms() {
                     format!("removed {removed:.6}, expected {expected:.6}"),
                 );
                 let nf = k.faces(out).unwrap().len();
-                case.check(
-                    "faces",
-                    nf == n0 + edges.len(),
-                    format!("{nf} faces, expected {}", n0 + edges.len()),
-                );
+                let want = n0 + edges.len() + inside.len();
+                case.check("faces", nf == want, format!("{nf} faces, expected {want}"));
             }
         }
         failures.extend(case.failures);

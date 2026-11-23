@@ -41,6 +41,10 @@ pub struct PartShading {
     /// Added to a blended mesh's view depth when the see-through meshes are sorted (mm; more
     /// positive draws later, over the rest): the Shell dialog's picked faces over its x-ray.
     pub bias: f32,
+    /// Drawn this far in front of what it shares a depth with, in the depth test (depth-buffer
+    /// units; 0 none): Simulate's stock before a cut over the stock after it, where the two
+    /// share faces.
+    pub depth_offset: i32,
     #[uniform(0)]
     pub params: PartShadingParams,
 }
@@ -54,6 +58,7 @@ impl PartShading {
             translucent: false,
             unclipped: false,
             bias: 0.0,
+            depth_offset: 0,
             params: PartShadingParams::default(),
         }
     }
@@ -76,6 +81,10 @@ pub struct PartShadingParams {
     pub pull: Vec4,
     /// The draft bands' colours (linear), top band first ([`cadrs_core::analysis::DraftBand`]).
     pub bands: [Vec4; 6],
+    /// A cut's tween (Simulate's exact stock, `crate::cam::preview`): x how far along the cut
+    /// the tool is (0 to 1), y 1 for the stock before the cut (a point hidden once the tool is
+    /// past its time, UV y), 2 for the stock after it (shown once the tool is past it), 0 none.
+    pub tween: Vec4,
 }
 
 impl Default for PartShadingParams {
@@ -86,6 +95,7 @@ impl Default for PartShadingParams {
             analysis: Vec4::ZERO,
             pull: Vec4::ZERO,
             bands: [Vec4::ZERO; 6],
+            tween: Vec4::ZERO,
         }
     }
 }
@@ -93,12 +103,14 @@ impl Default for PartShadingParams {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PartShadingKey {
     cull_back: bool,
+    depth_offset: i32,
 }
 
 impl From<&PartShading> for PartShadingKey {
     fn from(m: &PartShading) -> Self {
         Self {
             cull_back: m.cull_back,
+            depth_offset: m.depth_offset,
         }
     }
 }
@@ -135,6 +147,11 @@ impl Material for PartShading {
         key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         descriptor.primitive.cull_mode = key.bind_group_data.cull_back.then_some(Face::Back);
+        if key.bind_group_data.depth_offset != 0
+            && let Some(depth) = descriptor.depth_stencil.as_mut()
+        {
+            depth.bias.constant = key.bind_group_data.depth_offset;
+        }
         Ok(())
     }
 }

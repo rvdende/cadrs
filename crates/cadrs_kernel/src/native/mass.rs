@@ -928,16 +928,7 @@ fn scan_integrals<const ALL: bool>(
                     let t = w[0] + (w[1] - w[0]) * i as f64 / SAMPLES as f64;
                     let r = rate(t);
                     if r * prev.1 < 0.0 {
-                        let (mut a, mut b) = (prev.0, t);
-                        for _ in 0..60 {
-                            let m = 0.5 * (a + b);
-                            if rate(m) * prev.1 > 0.0 {
-                                a = m;
-                            } else {
-                                b = m;
-                            }
-                        }
-                        let t = 0.5 * (a + b);
+                        let t = super::math::root_from(rate, prev, (t, r));
                         turns.push(c.pc.point(t).y);
                         cuts.push(t);
                     }
@@ -1311,16 +1302,11 @@ fn split_at_knots(pc: &Curve, ts: &[f64], ku: &[f64], kv: &[f64]) -> Vec<f64> {
                 .iter()
                 .filter(|&&kn| kn > lo + tol::ROUNDOFF_FINE && kn < hi - tol::ROUNDOFF_FINE)
             {
-                let (mut x0, mut x1) = (a, b);
-                for _ in 0..60 {
-                    let m = 0.5 * (x0 + x1);
-                    if (pc.point(m)[coord] - kn) * (cb - ca) < 0.0 {
-                        x0 = m;
-                    } else {
-                        x1 = m;
-                    }
-                }
-                cuts.push(0.5 * (x0 + x1));
+                cuts.push(super::math::root_from(
+                    |m| pc.point(m)[coord] - kn,
+                    (a, ca - kn),
+                    (b, cb - kn),
+                ));
             }
         }
         cuts.sort_by(f64::total_cmp);
@@ -1419,21 +1405,25 @@ fn run_jobs<const ALL: bool>(
     };
     let table = table.as_ref();
     const CHUNK: usize = 32;
+    // (The chunks' sums alike on one thread: whether a loop runs on the threads depends on
+    // whether anything has started them, and a face weighed both ways must come out the same
+    // to the bit.)
     if jobs.len() >= 2 * CHUNK {
-        super::par::start();
-        let parts: Vec<QE> = jobs
-            .par_chunks(CHUNK)
-            .map(|c| {
-                let mut a = [0.0; NE];
-                let mut sc = Vec::with_capacity(64);
-                for j in c {
-                    inner::<ALL>(
-                        s, plan, j[0], j[1], j[2], shift, j[3], &mut a, &mut sc, table,
-                    );
-                }
-                a
-            })
-            .collect();
+        let chunk = |c: &[[f64; 4]]| {
+            let mut a = [0.0; NE];
+            let mut sc = Vec::with_capacity(64);
+            for j in c {
+                inner::<ALL>(
+                    s, plan, j[0], j[1], j[2], shift, j[3], &mut a, &mut sc, table,
+                );
+            }
+            a
+        };
+        let parts: Vec<QE> = if super::par::threads_for(jobs.len() / CHUNK, false) {
+            jobs.par_chunks(CHUNK).map(chunk).collect()
+        } else {
+            jobs.chunks(CHUNK).map(chunk).collect()
+        };
         for p in parts {
             for (a, x) in acc.iter_mut().zip(p) {
                 *a += x;

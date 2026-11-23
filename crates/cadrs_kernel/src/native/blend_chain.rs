@@ -394,7 +394,8 @@ pub fn chain_tool(
     let size_guess0 = match kind(PI / 2.0) {
         SectionKind::Circle { r }
         | SectionKind::Conic { r, .. }
-        | SectionKind::Curvature { r, .. } => r,
+        | SectionKind::Curvature { r, .. }
+        | SectionKind::Thumbweight { r, .. } => r,
         SectionKind::Chamfer { d1, d2 } => d1.max(d2),
         SectionKind::Asymmetric { r1, r2 } => r1.max(r2),
     };
@@ -568,7 +569,7 @@ pub fn chain_tool(
             h *= 0.5;
         }
     }
-    if std::env::var("CADRS_BLEND_DEBUG").is_ok() {
+    if crate::native::env_flag!("CADRS_BLEND_DEBUG") {
         let ss: Vec<String> = stations.iter().map(|st| format!("{:.3}", st.s)).collect();
         eprintln!(
             "chain stations ({} on [{total_lo:.3}, {total_hi:.3}], chain length {len:.3}, {solved} sections solved): {}",
@@ -599,7 +600,7 @@ pub fn chain_tool(
                 let (g0, g1) = flags(lo);
                 let (pa, pla, _) = ch.section(lo, [(f[0], g0), (f[1], g1)])?;
                 let (pb, plb, _) = ch.section(lo, [(st.faces[0], g0), (st.faces[1], g1)])?;
-                if std::env::var("CADRS_BLEND_DEBUG").is_ok() {
+                if crate::native::env_flag!("CADRS_BLEND_DEBUG") {
                     let ends = |ps: &[Piece], pl: &Plane| {
                         ps.iter()
                             .map(|x| {
@@ -679,7 +680,7 @@ pub fn chain_tool(
         op: "blend",
         why: "the blend's tool is empty".into(),
     })?;
-    if std::env::var("CADRS_BLEND_DEBUG").is_ok() {
+    if crate::native::env_flag!("CADRS_BLEND_DEBUG") {
         eprintln!(
             "chain tool: {} pieces {:?}, volume {}, check {:?}",
             groups.len(),

@@ -125,6 +125,12 @@ impl Healing {
             } => {
                 super::tails::fix_tails(b, max_angle, max_width)?;
             }
+            HealOp::Slivers { width } => {
+                let keep = super::boolean::collapse_slivers(b, width, &[]);
+                if keep.len() != self.from.len() {
+                    self.from = keep.iter().map(|&f| self.from[f].clone()).collect();
+                }
+            }
         }
         if self.from.len() != self.body.faces.len() {
             return Err(KernelError::InvalidResult {

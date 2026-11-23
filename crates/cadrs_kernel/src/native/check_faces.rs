@@ -11,7 +11,9 @@
 //!   an edge of one of them unless it closes inside both;
 //! - for two elementary surfaces (planes, cylinders, cones, spheres, tori), whose intersection
 //!   has a closed form, that curve itself ([`super::ssi`]) sampled: a point inside both faces,
-//!   clear of their boundaries, is a crossing. This also finds closed crossings.
+//!   clear of their boundaries, where the surfaces pass through one another (their normals
+//!   apart: a plane on a cylinder's ruling only touches it), is a crossing. This also finds
+//!   closed crossings.
 //!
 //! A closed crossing of B-spline or swept faces that meets no edge isn't looked for: the
 //! numeric intersection costs too much for a check run on every test result. A point counts
@@ -98,6 +100,8 @@ pub(crate) fn face_crossings_in(
                 .collect()
         })
         .collect();
+    // (The body's box below is its faces' again: each face's made once.)
+    let _kept = super::topo::keep_boxes(&[b]);
     let boxes: Vec<Bbox> = (0..n)
         .map(|fi| {
             if shell_of[fi].is_some() {
@@ -107,7 +111,8 @@ pub(crate) fn face_crossings_in(
             }
         })
         .collect();
-    let size = b.bbox().diagonal().max(1.0);
+    // (The part's own size, however small: no floor at a millimetre.)
+    let size = b.bbox().diagonal().max(tol::POINT);
     let bvh = Bvh::new(boxes.clone());
     let mut pairs: Vec<(usize, usize)> = bvh
         .pairs(&bvh)
@@ -133,33 +138,38 @@ pub(crate) fn face_crossings_in(
     }
     let polys: &[Option<Vec<Vec<P2>>>] = polys;
     // Their boxes, for the many points tested against each ([`in_face_boxed`]).
-    super::par::start();
-    let pboxes: Vec<PolyBoxes> = (0..n)
-        .into_par_iter()
-        .map(|fi| match polys.get(fi).and_then(|p| p.as_deref()) {
-            Some(p) if paired[fi] => poly_boxes(p, &b.faces[fi].surf),
-            _ => Vec::new(),
-        })
-        .collect();
+    // (On the threads where there are pairs enough to be worth starting them.)
+    let threads = super::par::threads_for_some(pairs.len());
+    let boxes_of = |fi: usize| match polys.get(fi).and_then(|p| p.as_deref()) {
+        Some(p) if paired[fi] => poly_boxes(p, &b.faces[fi].surf),
+        _ => Vec::new(),
+    };
+    let pboxes: Vec<PolyBoxes> = if threads {
+        (0..n).into_par_iter().map(boxes_of).collect()
+    } else {
+        (0..n).map(boxes_of).collect()
+    };
     // Edge `e` against face `y`'s surface over [t0, t1] comes up from each of e's faces paired
     // with y: its roots once.
     let roots: Roots = std::sync::Mutex::new(std::collections::HashMap::new());
-    pairs
-        .par_iter()
-        .filter_map(|&(i, j)| {
-            let ov = Bbox {
-                min: boxes[i].min.sup(&boxes[j].min),
-                max: boxes[i].max.inf(&boxes[j].max),
-            };
-            // Clear of the boundaries by the faces' tolerances, and by a part in 10⁶ of the body.
-            let margin = 2.0 * tol[i].max(tol[j]) + tol::REL_POINT * size;
-            let p = crossing(b, (polys, &pboxes), (i, j), &ov, margin, &roots)?;
-            Some(format!(
-                "faces {i} and {j} cross away from their edges near ({:.6}, {:.6}, {:.6})",
-                p.x, p.y, p.z
-            ))
-        })
-        .collect()
+    let one = |&(i, j): &(usize, usize)| {
+        let ov = Bbox {
+            min: boxes[i].min.sup(&boxes[j].min),
+            max: boxes[i].max.inf(&boxes[j].max),
+        };
+        // Clear of the boundaries by the faces' tolerances, and by a part in 10⁶ of the body.
+        let margin = 2.0 * tol[i].max(tol[j]) + tol::REL_POINT * size;
+        let p = crossing(b, (polys, &pboxes), (i, j), &ov, margin, &roots)?;
+        Some(format!(
+            "faces {i} and {j} cross away from their edges near ({:.6}, {:.6}, {:.6})",
+            p.x, p.y, p.z
+        ))
+    };
+    if threads {
+        pairs.par_iter().filter_map(one).collect()
+    } else {
+        pairs.iter().filter_map(one).collect()
+    }
 }
 
 /// The uv box of a face's polygons.
@@ -349,6 +359,24 @@ fn crossing(
     if !(elementary(&fa.surf) && elementary(&fb.surf)) {
         return None;
     }
+    // A plane keeping the torus's core circle at least the tube's radius away (less the
+    // margin) at most touches it: no crossing, and no quartic to trace (a wall a corner's
+    // rolling ball rests on).
+    for (p, t) in [(&fa.surf, &fb.surf), (&fb.surf, &fa.surf)] {
+        if let (Surface::Plane { f: pf }, Surface::Torus { f: tf, rmaj, rmin }) = (p, t) {
+            let n = pf.x.cross(&pf.y).normalize();
+            let dc = n.dot(&(tf.o - pf.o));
+            let reach = rmaj * (n.dot(&tf.x).powi(2) + n.dot(&tf.y).powi(2)).sqrt();
+            let least = if dc.abs() <= reach {
+                0.0
+            } else {
+                dc.abs() - reach
+            };
+            if least >= rmin - margin {
+                return None;
+            }
+        }
+    }
     let (ua, ub) = (uv_box(polys(i).0)?, uv_box(polys(j).0)?);
     let ssi = super::ssi::surface_surface_full(&fa.surf, ua, &fb.surf, ub, ov);
     for c in &ssi.curves {
@@ -361,12 +389,26 @@ fn crossing(
             if region.contains(&p)
                 && inside(b, polys(i), i, &p, margin)
                 && inside(b, polys(j), j, &p, margin)
+                && across(fa, fb, &p)
             {
                 return Some(p);
             }
         }
     }
     None
+}
+
+/// Whether the two faces' surfaces pass through one another at `p`, a point of both: their
+/// normals there apart. Where they are one line the surfaces only touch (a plane on a
+/// cylinder's ruling: two arms of a part meeting along a line, the faces over and under them
+/// each merged across it), as an edge that touches a face without piercing it does.
+fn across(fa: &super::topo::Face, fb: &super::topo::Face, p: &P3) -> bool {
+    let normal = |f: &super::topo::Face| {
+        let (u, v) = f.surf.project(p, None);
+        f.surf.normal(u, v)
+    };
+    let (na, nb) = (normal(fa), normal(fb));
+    na.cross(&nb).norm() > 1e-3 * na.norm() * nb.norm()
 }
 
 /// The point at `t` on edge `ei` if it pierces face `y` there: inside the region

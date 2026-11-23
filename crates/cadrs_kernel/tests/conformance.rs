@@ -2826,7 +2826,10 @@ pub fn fillet_sections(k: &mut dyn Kernel) {
     };
     let filled = one(k.fillet_with(lb, &[inner], &spec).unwrap());
     close(volume(k, filled), before + 4.0 / 6.0 * 10.0, 1e-6);
-    // Not a straight edge between flat faces: refused with the reason.
+    // A rim (a circle between faces about its axis): the section turned round it. A parabola
+    // (rho 0.5) 3 along each face from the rim of a cylinder of radius 10 takes off the region
+    // √u + √v ≤ √3 of each half plane (u, v in from the side and down from the top), area 3²/6
+    // and first moment 3³/30 about the side: 2π(10·9/6 − 27/30) by Pappus.
     let cyl = one(k
         .extrude(
             &top(vec![region(circle(p(0.0, 0.0), 10.0))]),
@@ -2834,10 +2837,11 @@ pub fn fillet_sections(k: &mut dyn Kernel) {
         )
         .unwrap());
     let rim = edges_at_height(k, cyl, 10.0)[0].id;
-    let err = k
+    let blended = one(k
         .fillet_with(cyl, &[rim], &with(FilletProfile::Conic { rho: 0.5 }))
-        .unwrap_err();
-    assert!(err.to_string().contains("straight edges"), "{err}");
+        .unwrap());
+    let removed = 2.0 * std::f64::consts::PI * (10.0 * 9.0 / 6.0 - 27.0 / 30.0);
+    close(volume(k, blended), volume(k, cyl) - removed, 1e-6);
 }
 
 pub fn full_round(k: &mut dyn Kernel) {
@@ -2881,6 +2885,7 @@ pub fn shell_options(k: &mut dyn Kernel) {
         outward: false,
         hollow: false,
         sharp: false,
+        nothing_hollowed: Default::default(),
     };
     let s = one(k.shell_with(b, &spec).unwrap());
     close(volume(k, s), 100.0 * 60.0 * 40.0 - 92.0 * 52.0 * 36.0, 1e-6);
@@ -2917,19 +2922,30 @@ pub fn shell_options(k: &mut dyn Kernel) {
         .unwrap());
     close(volume(k, hollow), 240_000.0 - 92.0 * 52.0 * 32.0, 1e-6);
     assert_eq!(k.solid_count(hollow).unwrap(), 1);
-    // Walls thicker than half the 60 mm width meet everywhere: every point of the box is within
-    // 35 of a wall, nothing is hollowed, and the shell is the box itself (brep-bench's
-    // shell/box-walls-meeting; the Shell feature reports it as a mistake).
+    // Walls half the 60 mm width meet in one plane: nothing is hollowed, and the shell is the
+    // box itself (brep-bench's shell/box-walls-meeting).
     let solid = one(k
         .shell_with(
+            b,
+            &ShellSpec {
+                thickness: 30.0,
+                ..spec.clone()
+            },
+        )
+        .unwrap());
+    close(volume(k, solid), 240_000.0, 1e-9);
+    // Thicker, the shell is as thick as the part: refused (brep-conformance's
+    // modify/rejects-shell-as-thick-as-the-part; the Shell feature reports it as a mistake).
+    assert!(
+        k.shell_with(
             b,
             &ShellSpec {
                 thickness: 35.0,
                 ..spec.clone()
             },
         )
-        .unwrap());
-    close(volume(k, solid), 240_000.0, 1e-9);
+        .is_err()
+    );
     // Nothing to remove and not hollow: an error.
     assert!(
         k.shell_with(
@@ -2985,6 +3001,7 @@ pub fn shell_around_a_counterbore(k: &mut dyn Kernel) {
                 outward: false,
                 hollow: false,
                 sharp: false,
+                nothing_hollowed: Default::default(),
             },
         )
         .unwrap());
@@ -3017,6 +3034,7 @@ pub fn shell_rounded_cube_at_the_radius(k: &mut dyn Kernel) {
                     outward: false,
                     hollow: false,
                     sharp: false,
+                    nothing_hollowed: Default::default(),
                 },
             )
             .unwrap());

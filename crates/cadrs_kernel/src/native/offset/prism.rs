@@ -84,7 +84,8 @@ pub fn curved_prism_inset(
     let y = n.cross(&x);
     let h = (b.verts[b.edges[b.faces[top].loops[0][0].edge].v[0]].p - o).dot(&n);
     // Every vertex on one cap or the other: the sides run the whole height.
-    let size = b.bbox().diagonal().max(1.0);
+    // (The part's own size, however small: no floor at a millimetre.)
+    let size = b.bbox().diagonal().max(tol::POINT);
     if h <= tol::ROUNDOFF
         || b.verts.iter().any(|v| {
             let z = (v.p - o).dot(&n);
@@ -258,6 +259,59 @@ pub(crate) fn wire_slot(
     z0: f64,
     z1: f64,
 ) -> Result<Body> {
+    let region = wire_region(wire, d)?;
+    let plane = Plane {
+        origin: o + n * z0,
+        x_dir: nalgebra::Unit::new_normalize(x),
+        normal: nalgebra::Unit::new_normalize(n),
+    };
+    let mut kk = NativeKernel::new();
+    let r = crate::Kernel::extrude(
+        &mut kk,
+        &Profile::new(plane, vec![region]),
+        Extent::Blind(z1 - z0),
+    )?;
+    let [id] = r.bodies[..] else {
+        return Err(KernelError::InvalidResult {
+            op: "sweep",
+            why: "the slot isn't one body".into(),
+        });
+    };
+    Ok((**kk.get(id)?).clone())
+}
+
+/// Regions of one plane that lie apart (what a flat end mill fills at one depth, its runs'
+/// [`wire_region`]s and its plunges' discs united in the plane:
+/// [`crate::native::flat_union::union`]) extruded from z0 to z1 along n, in the frame
+/// (x, n × x, n) at o: a solid for each piece of ground.
+pub(crate) fn regions_prisms(
+    regions: Vec<Region>,
+    o: P3,
+    x: V3,
+    n: V3,
+    z0: f64,
+    z1: f64,
+) -> Result<Vec<Body>> {
+    let plane = Plane {
+        origin: o + n * z0,
+        x_dir: nalgebra::Unit::new_normalize(x),
+        normal: nalgebra::Unit::new_normalize(n),
+    };
+    let mut kk = NativeKernel::new();
+    let r = crate::Kernel::extrude(
+        &mut kk,
+        &Profile::new(plane, regions),
+        Extent::Blind(z1 - z0),
+    )?;
+    r.bodies
+        .iter()
+        .map(|id| Ok((**kk.get(*id)?).clone()))
+        .collect()
+}
+
+/// Everything within `d` of the open wire `wire` in its plane (z = 0), as a profile's region:
+/// [`wire_slot`]'s outline and holes.
+pub(crate) fn wire_region(wire: &[(Curve, f64, f64)], d: f64) -> Result<Region> {
     let loops = offset_wire(wire, d)?;
     // Each loop's way round: counter-clockwise bounds a piece, clockwise a hole in it.
     let area = |lp: &[Piece2]| -> f64 {
@@ -285,7 +339,7 @@ pub(crate) fn wire_slot(
     };
     // (The loop round the most ground is the outline; the rest are holes in it, whichever way
     // they run.)
-    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
         eprintln!(
             "slot: {} loops, areas {:?}",
             loops.len(),
@@ -304,32 +358,27 @@ pub(crate) fn wire_slot(
         .filter(|(i, _)| *i != big)
         .map(|(_, lp)| lp)
         .collect();
-    let region = Region {
+    let mut holes = holes
+        .iter()
+        .map(|h| as_loop(h))
+        .collect::<Result<Vec<_>>>()?;
+    // A wire that closes on itself (a lap round a pocket's wall) is offset outwards alone:
+    // the ground it runs round and stays `d` clear of is a hole too, the wire offset inwards.
+    // (None where the wire is too tight to have one: its inward offset is nothing.)
+    let (first, last) = (wire.first(), wire.last());
+    if let (Some(a), Some(z)) = (first, last)
+        && (a.0.point(a.1) - z.0.point(z.2)).norm() <= tol::REL_POINT * (1.0 + d.abs())
+        && wire.len() > 1
+    {
+        for lp in offset_wire(wire, -d.abs())? {
+            holes.push(as_loop(&lp)?);
+        }
+    }
+    Ok(Region {
         outer: as_loop(outer)?,
-        holes: holes
-            .iter()
-            .map(|h| as_loop(h))
-            .collect::<Result<Vec<_>>>()?,
+        holes,
         source: None,
-    };
-    let plane = Plane {
-        origin: o + n * z0,
-        x_dir: nalgebra::Unit::new_normalize(x),
-        normal: nalgebra::Unit::new_normalize(n),
-    };
-    let mut kk = NativeKernel::new();
-    let r = crate::Kernel::extrude(
-        &mut kk,
-        &Profile::new(plane, vec![region]),
-        Extent::Blind(z1 - z0),
-    )?;
-    let [id] = r.bodies[..] else {
-        return Err(KernelError::InvalidResult {
-            op: "sweep",
-            why: "the slot isn't one body".into(),
-        });
-    };
-    Ok((**kk.get(id)?).clone())
+    })
 }
 
 /// A piece of the offset (in the plane z = 0, run from t0 to t1) as a profile curve; `whole`

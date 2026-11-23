@@ -8,7 +8,13 @@ use std::path::{Path, PathBuf};
 fn main() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let crates = manifest.parent().unwrap();
-    let workspace = crates.parent().unwrap();
+    // FNV-1a's standard 64-bit offset basis (14,695,981,039,346,656,037), the hash's starting
+    // state, paired with the FNV prime 0x100000001b3 in `Fnv::write`. It is the 64-bit FNV-0
+    // hash of the string "chongo <Landon Curt Noll> /\../\" (the signature of one of FNV's
+    // authors), chosen only to give the hash a non-zero start; the same constant turns up in
+    // hash tables, bloom filters and checksums everywhere. Nothing secret or cryptographic: FNV
+    // is a fast, non-cryptographic hash, used here only to key a cache by the source it was
+    // built from.
     let mut h = Fnv(0xcbf2_9ce4_8422_2325);
     for dir in [
         "cadrs_core/src",
@@ -53,7 +59,8 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// FNV-1a: stable across Rust versions, unlike the standard hasher.
+/// FNV-1a (Fowler–Noll–Vo), 64-bit: stable across Rust versions, unlike the standard hasher.
+/// Not a cryptographic hash, and not meant as one: see the offset basis in `main`.
 struct Fnv(u64);
 
 impl Fnv {

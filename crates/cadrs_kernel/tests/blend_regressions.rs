@@ -216,7 +216,10 @@ fn cross_hole_fillet() {
 /// on the body Fillet 2 left, chamfered 0.5 to 2 by the local chamfer alone: valid, and each
 /// taking off about w²/2 a mm of rim (the narrowest's times (w/w₀)², a little more where corners
 /// grow faster). `want` pins what it takes off now (not an independent answer: a change that
-/// moves it should explain why); w²/2 of rim at 0.5 puts the rim at 312 mm at fillet 1 and 293
+/// moves it should explain why; last moved, by up to 1e-4, when blend strips were fitted to
+/// 1e-6 of the part's size, not 1e-5: at w 0.5 the fits to 1e-7, 1e-8 and 1e-9 take off
+/// 39.00406, 39.00404 and 39.00404 at fillet 1, so the volume now stands 6.6e-4 from where the
+/// fit converges, not 3.3e-3); w²/2 of rim at 0.5 puts the rim at 312 mm at fillet 1 and 293
 /// at fillet 4, two loops round the opening less its rounds' corners.
 fn shell_opening_chamfer(data: &[u8], edges: &[u64], want: [f64; 4]) {
     let mut k = NativeKernel::new();
@@ -255,10 +258,10 @@ fn shell_opening_chamfer_fillet1() {
             60, 70, 71, 78, 100, 111, 128, 130, 132, 134, 136,
         ],
         [
-            39.00744516247505,
-            156.56053346663975,
-            356.892814267776,
-            648.179111849131,
+            39.003378820627404,
+            156.55710586599162,
+            356.89158323180163,
+            648.1800024108015,
         ],
     );
 }
@@ -275,10 +278,10 @@ fn shell_opening_chamfer_fillet4() {
             60, 70, 71, 99, 110, 127, 129, 134, 136, 138,
         ],
         [
-            36.63395889811363,
-            147.10515071999544,
-            334.9092740553824,
-            607.2381007844815,
+            36.63185666299978,
+            147.1030018206293,
+            334.91504055220867,
+            607.2608593208934,
         ],
     );
 }
@@ -2781,4 +2784,301 @@ fn a_chamfer_fills_a_concave_edge_beside_a_ball_up_to_its_line() {
         (volume - want).abs() < 1e-9 * want
     });
     assert!(hit, "neither order of the two distances fills the groove");
+}
+
+/// Issue 242: a post of radius 50 with a hole of radius 25 cut halfway through its foot, the
+/// foot's edges rounded to 5. The rim's round on one side of the hole and the round along the
+/// hole's far side each run out of floor beside a wall of the other's (the hole's wall comes
+/// round to both sides), but at corners of their own, far apart: they are not welded to each
+/// other (their radii shrunk), each is mitred with its own neighbour. The rim and the hole's
+/// two sides alone have a closed form to integrate (736205.345); with the hole's end too the
+/// corners where it meets the sides are patches (Onshape: 735910.102, area 47531.943).
+#[test]
+fn rounds_that_run_out_of_floor_at_corners_of_their_own_are_not_welded() {
+    use nalgebra::{Point3, Vector3};
+    let mut k = NativeKernel::new();
+    let mut rod = |base: Point3<f64>, dir: Vector3<f64>, r: f64, l: f64| {
+        let s = Profile::of(
+            Plane::square_to(base, dir),
+            vec![Loop::circle([0.0, 0.0], r)],
+        );
+        k.extrude_with(&s, &ExtrudeSpec::normal_to(&s, l))
+            .unwrap()
+            .first()
+            .unwrap()
+    };
+    let post = rod(Point3::origin(), Vector3::z(), 50.0, 100.0);
+    let hole = rod(Point3::new(0.0, -80.0, 0.0), Vector3::y(), 25.0, 80.0);
+    let body = k
+        .boolean(BoolOp::Subtract, post, &[hole])
+        .unwrap()
+        .first()
+        .unwrap();
+    let rim = Point3::new(0.0, 50.0, 0.0);
+    let sides = [
+        Point3::new(25.0, -20.0, 0.0),
+        Point3::new(-25.0, -20.0, 0.0),
+    ];
+    let end = Point3::origin();
+    for (at, volume, slack) in [
+        (vec![rim, sides[0], sides[1]], 736205.345, 0.1),
+        (vec![rim, sides[0], sides[1], end], 735915.0, 6.0),
+    ] {
+        let edges: Vec<EdgeId> = at.iter().map(|p| k.edge_at(body, *p).unwrap()).collect();
+        let out = k.fillet(body, &edges, 5.0).unwrap().bodies[0];
+        assert!(k.get(out).unwrap().check().is_empty());
+        let got = k.mass_properties(out).unwrap().volume;
+        assert!((got - volume).abs() < slack, "{got} for {} edges", at.len());
+    }
+}
+
+/// A chamfer's first distance lies on the face named for it (`ChamferOpts::first_on`), whichever
+/// way the edge runs and whichever of its faces comes first: a frustum capped by a ball, its
+/// rim (picked as the edges between the cone and the ball) chamfered by a distance and an
+/// angle, gives one solid with the distance named on the cone and another with it on the ball,
+/// and the same again when the body is built mirrored (the rim running the other way round).
+#[test]
+fn a_chamfers_first_distance_lies_on_the_face_named_for_it() {
+    use nalgebra::{Point3, Vector3};
+    let volumes = |up: f64| -> [f64; 2] {
+        let mut k = NativeKernel::new();
+        let z = Vector3::z() * up;
+        let frustum = k
+            .primitive(&Primitive::cone(Point3::origin(), z, 2.0, 4.0, 3.0))
+            .unwrap()
+            .first()
+            .unwrap();
+        let ball = k
+            .primitive(&Primitive::ball(Point3::origin(), 5.0))
+            .unwrap()
+            .first()
+            .unwrap();
+        let slab = Profile::of(
+            Plane::square_to(Point3::origin() + z * 3.0, z),
+            vec![Loop::rectangle(-6.0, -6.0, 6.0, 6.0)],
+        );
+        let slab = k
+            .extrude_with(&slab, &ExtrudeSpec::normal_to(&slab, 3.0))
+            .unwrap()
+            .first()
+            .unwrap();
+        let cap = k
+            .boolean(BoolOp::Intersect, ball, &[slab])
+            .unwrap()
+            .first()
+            .unwrap();
+        let body = k
+            .boolean(BoolOp::Union, frustum, &[cap])
+            .unwrap()
+            .first()
+            .unwrap();
+        let rim = k
+            .edges_between(body, SurfaceKind::Cone, SurfaceKind::Sphere)
+            .unwrap();
+        assert!(!rim.is_empty());
+        [SurfaceKind::Cone, SurfaceKind::Sphere].map(|kind| {
+            let spec = ChamferSpec::DistanceAngle {
+                distance: 1.0,
+                angle: 45f64.to_radians(),
+            };
+            let opts = ChamferOpts::new(spec).first_on(k.face_of(body, kind).unwrap());
+            let out = k.chamfer_with(body, &rim, &opts).unwrap().bodies[0];
+            assert!(k.get(out).unwrap().check().is_empty());
+            k.mass_properties(out).unwrap().volume
+        })
+    };
+    let (a, b) = (volumes(1.0), volumes(-1.0));
+    assert!((a[0] - a[1]).abs() > 1e-3, "{a:?}");
+    assert!(
+        (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9,
+        "{a:?} {b:?}"
+    );
+}
+
+/// A cylinder cut on a slant, its rim (an ellipse, where the cut's plane and the wall meet at
+/// an angle that changes round it) chamfered by a distance and an angle: by the local chamfer,
+/// its offsets a law round the rim, not by the blend tool (whose section is the triangle on
+/// the faces' tangent planes at the rim, which the wall curves away from). Its edge on the
+/// cut is the distance from the rim all the way round.
+#[test]
+fn a_slant_cut_cylinders_rim_chamfered_by_distance_and_angle() {
+    use nalgebra::{Point3, Unit, Vector3};
+    let mut k = NativeKernel::new();
+    let rod = k
+        .primitive(&Primitive::cylinder(
+            Point3::origin(),
+            Vector3::z(),
+            5.0,
+            20.0,
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    // A wedge whose underside rises from z = 12 at x = −10 to z = 16 at x = 10.
+    let side = Plane {
+        origin: Point3::new(0.0, -10.0, 0.0),
+        x_dir: Vector3::x_axis(),
+        normal: Unit::new_normalize(-Vector3::y()),
+    };
+    let outline = Loop::from_point([-10.0, 12.0])
+        .line_to([10.0, 16.0])
+        .line_to([10.0, 30.0])
+        .line_to([-10.0, 30.0])
+        .close();
+    let wedge = k
+        .extrude_with(
+            &Profile::of(side, vec![outline]),
+            &ExtrudeSpec::blind(Vector3::y_axis(), 20.0),
+        )
+        .unwrap()
+        .first()
+        .unwrap();
+    let cut = k
+        .boolean(BoolOp::Subtract, rod, &[wedge])
+        .unwrap()
+        .first()
+        .unwrap();
+    let b = std::sync::Arc::clone(k.get(cut).unwrap());
+    // The cut's plane (z = 14 + 0.2 x) and the rim on it.
+    let on_cut = |p: &Point3<f64>| (p.z - 14.0 - 0.2 * p.x).abs() < 1e-7;
+    let slant = (0..b.faces.len())
+        .find(|&f| {
+            matches!(b.faces[f].surf, Surface::Plane { .. })
+                && on_cut(&b.faces[f].surf.eval(0.0, 0.0))
+        })
+        .expect("the cut's face");
+    let rim: Vec<EdgeId> = (0..b.edges.len())
+        .filter(|&e| !b.edges[e].degenerate && on_cut(&b.edges[e].point(b.edges[e].mid_t())))
+        .map(|e| EdgeId(e as u64))
+        .collect();
+    assert!(!rim.is_empty());
+    let spec = ChamferSpec::DistanceAngle {
+        distance: 1.0,
+        angle: 45f64.to_radians(),
+    };
+    let opts = ChamferOpts::new(spec).first_on(FaceId(slant as u64));
+    let out = k.chamfer_with(cut, &rim, &opts).unwrap().bodies[0];
+    let o = k.get(out).unwrap();
+    let faults = o.check();
+    assert!(faults.is_empty(), "{faults:?}");
+    // The rim itself, closely sampled: the cylinder's points on the cut.
+    let rim_points: Vec<Point3<f64>> = (0..40_000)
+        .map(|i| {
+            let a = std::f64::consts::TAU * i as f64 / 40_000.0;
+            Point3::new(5.0 * a.cos(), 5.0 * a.sin(), 14.0 + a.cos())
+        })
+        .collect();
+    let mut seen = 0;
+    let ef = o.edge_faces();
+    let up = Vector3::new(-0.2, 0.0, 1.0).normalize();
+    for (ei, e) in o.edges.iter().enumerate().filter(|(_, e)| !e.degenerate) {
+        let mid = e.point(e.mid_t());
+        if !on_cut(&mid) || mid.x.hypot(mid.y) > 4.9 {
+            continue;
+        }
+        // (The chamfer's face along this edge: the one that isn't the cut's.)
+        let chamfer = ef[ei]
+            .iter()
+            .map(|&f| &o.faces[f])
+            .find(|f| !matches!(f.surf, Surface::Plane { .. }))
+            .expect("the chamfer's face");
+        for i in 0..=8 {
+            let p = e.point(e.t[0] + (e.t[1] - e.t[0]) * i as f64 / 8.0);
+            // The chamfer leaves the cut at the angle given, all the way round.
+            let (u, v) = chamfer.surf.project(&p, None);
+            let lean = chamfer.surf.normal(u, v).dot(&up).abs().acos().to_degrees();
+            assert!(
+                (lean - 45.0).abs() < 1e-3,
+                "the chamfer leaves the cut at {lean} degrees at {p:?}"
+            );
+            let d = rim_points
+                .iter()
+                .map(|q| (q - p).norm())
+                .fold(f64::INFINITY, f64::min);
+            assert!(
+                (d - 1.0).abs() < 1e-5,
+                "the chamfer's edge is {d} from the rim at {p:?}"
+            );
+            seen += 1;
+        }
+    }
+    assert!(seen > 0, "the chamfer's edge on the cut");
+}
+
+/// A rim chamfered in closed form (`native::rim_blend`): a drum's top rim, a whole circle
+/// between its side and its top, cut back to two circles with a cone between them, by equal
+/// distances, by two, and by a distance and an angle. What is cut off is a ring of
+/// triangular section, its volume the triangle's area round its centre of area (Pappus).
+#[test]
+fn a_drums_rim_chamfered_in_closed_form() {
+    use nalgebra::{Point3, Vector3};
+    use std::f64::consts::PI;
+    let (r, h) = (5.0, 10.0);
+    let drum = |k: &mut NativeKernel| {
+        k.primitive(&Primitive::cylinder(Point3::origin(), Vector3::z(), r, h))
+            .unwrap()
+            .first()
+            .unwrap()
+    };
+    // The ring cut off where the chamfer runs `across` the top and `down` the side.
+    let ring = |across: f64, down: f64| 2.0 * PI * (r - across / 3.0) * (across * down / 2.0);
+    let whole = PI * r * r * h;
+    let rim_and_top = |k: &NativeKernel, b: BodyId| {
+        let rim = k
+            .edges(b)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.circle.is_some_and(|c| (c.center.z - h).abs() < 1e-9))
+            .unwrap()
+            .id;
+        let top = k
+            .faces(b)
+            .unwrap()
+            .into_iter()
+            .find(|f| f.kind == SurfaceKind::Plane && (f.center.z - h).abs() < 1e-9)
+            .unwrap()
+            .id;
+        (rim, top)
+    };
+    let check = |k: &NativeKernel, out: BodyId, want: f64| {
+        let b = k.get(out).unwrap();
+        assert!(b.check().is_empty(), "{:?}", b.check());
+        assert_eq!(
+            b.faces().len(),
+            4,
+            "the side, the top, the bottom and the cone"
+        );
+        assert_eq!(
+            b.faces()
+                .iter()
+                .filter(|f| matches!(f.surf, Surface::Cone { .. }))
+                .count(),
+            1
+        );
+        let v = k.mass_properties(out).unwrap().volume;
+        assert!((v - want).abs() < 1e-9 * want, "{v} for {want}");
+    };
+
+    let mut k = NativeKernel::new();
+    let b = drum(&mut k);
+    let (rim, top) = rim_and_top(&k, b);
+    let out = k
+        .chamfer(b, &[rim], ChamferSpec::EqualDistance(1.0))
+        .unwrap()
+        .first()
+        .unwrap();
+    check(&k, out, whole - ring(1.0, 1.0));
+
+    let opts = ChamferOpts::new(ChamferSpec::TwoDistances(1.0, 2.0)).first_on(top);
+    let out = k.chamfer_with(b, &[rim], &opts).unwrap().first().unwrap();
+    check(&k, out, whole - ring(1.0, 2.0));
+
+    // One across the top at 60° to it: √3 down the side.
+    let opts = ChamferOpts::new(ChamferSpec::DistanceAngle {
+        distance: 1.0,
+        angle: PI / 3.0,
+    })
+    .first_on(top);
+    let out = k.chamfer_with(b, &[rim], &opts).unwrap().first().unwrap();
+    check(&k, out, whole - ring(1.0, 3f64.sqrt()));
 }

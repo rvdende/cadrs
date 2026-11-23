@@ -39,17 +39,21 @@ fn meet(surfs: &[&Surface], p: P3) -> Option<P3> {
         for (i, s) in surfs.iter().enumerate() {
             let d = super::ssi::sdist(s, &x);
             let e = tol::DIFF_STEP;
-            let g = V3::new(
-                (super::ssi::sdist(s, &(x + V3::x() * e))
-                    - super::ssi::sdist(s, &(x - V3::x() * e)))
-                    / (2.0 * e),
-                (super::ssi::sdist(s, &(x + V3::y() * e))
-                    - super::ssi::sdist(s, &(x - V3::y() * e)))
-                    / (2.0 * e),
-                (super::ssi::sdist(s, &(x + V3::z() * e))
-                    - super::ssi::sdist(s, &(x - V3::z() * e)))
-                    / (2.0 * e),
-            );
+            // (The distance's gradient is the normal it is measured along; differenced only
+            // where there is none to write down.)
+            let g = super::ssi::sdist_gradient(s, &x, &mut None).unwrap_or_else(|| {
+                V3::new(
+                    (super::ssi::sdist(s, &(x + V3::x() * e))
+                        - super::ssi::sdist(s, &(x - V3::x() * e)))
+                        / (2.0 * e),
+                    (super::ssi::sdist(s, &(x + V3::y() * e))
+                        - super::ssi::sdist(s, &(x - V3::y() * e)))
+                        / (2.0 * e),
+                    (super::ssi::sdist(s, &(x + V3::z() * e))
+                        - super::ssi::sdist(s, &(x - V3::z() * e)))
+                        / (2.0 * e),
+                )
+            });
             jt[(i, 0)] = g.x;
             jt[(i, 1)] = g.y;
             jt[(i, 2)] = g.z;
@@ -65,14 +69,14 @@ fn meet(surfs: &[&Surface], p: P3) -> Option<P3> {
         }
     }
     let worst = surfs.iter().map(|s| s.distance(&x)).fold(0.0, f64::max);
-    (worst < 1e-7).then_some(x)
+    (worst < tol::CONFUSION).then_some(x)
 }
 
 /// The straight edges whose two faces meet tangentially and still do on their new surfaces,
 /// with their new lines. Intersecting tangent surfaces is ill-conditioned, but the line is
 /// known: each of its points moved along the faces' common normal onto the new surfaces (a
 /// drafted or offset tangent pair moves together).
-fn tangent_lines(b: &Body, surfs: &[Surface], ef: &[Vec<usize>]) -> Vec<(usize, Curve)> {
+fn tangent_lines(b: &Body, surfs: &[Surface], ef: &super::topo::EdgeFaces) -> Vec<(usize, Curve)> {
     let normal = |s: &Surface, sense: bool, p: &P3| {
         let (u, v) = s.project(p, None);
         s.normal(u, v) * if sense { 1.0 } else { -1.0 }
@@ -163,10 +167,16 @@ fn line_meet(c: &Curve, surfs: &[&Surface], p: P3) -> Option<P3> {
         for _ in 0..50 {
             let (mut num, mut den) = (0.0, 0.0);
             for s in surfs {
-                let d = super::ssi::sdist(s, &c.point(t));
-                let g = (super::ssi::sdist(s, &c.point(t + h))
-                    - super::ssi::sdist(s, &c.point(t - h)))
-                    / (2.0 * h);
+                let (at, tangent, _) = c.d2(t);
+                let d = super::ssi::sdist(s, &at);
+                let g = match super::ssi::sdist_gradient(s, &at, &mut None) {
+                    Some(n) => n.dot(&tangent),
+                    None => {
+                        (super::ssi::sdist(s, &c.point(t + h))
+                            - super::ssi::sdist(s, &c.point(t - h)))
+                            / (2.0 * h)
+                    }
+                };
                 num += d * g;
                 den += g * g;
             }
@@ -180,7 +190,10 @@ fn line_meet(c: &Curve, surfs: &[&Surface], p: P3) -> Option<P3> {
             }
         }
         let q = c.point(t);
-        surfs.iter().all(|s| s.distance(&q) < 1e-7).then_some(t)
+        surfs
+            .iter()
+            .all(|s| s.distance(&q) < tol::CONFUSION)
+            .then_some(t)
     };
     // (A circle's parameter within a turn: wrapped to the far end of a huge range, its
     // angle has lost its digits; a B-spline's within its range: sampled past it, it is
@@ -201,12 +214,8 @@ fn line_meet(c: &Curve, surfs: &[&Surface], p: P3) -> Option<P3> {
         let ti = start + (t - start) * i as f64 / N as f64;
         let fi = f(ti);
         if prev.1 * fi < 0.0 {
-            let (mut a, mut z) = (prev.0, ti);
-            for _ in 0..60 {
-                let m = 0.5 * (a + z);
-                if f(m) * f(a) <= 0.0 { z = m } else { a = m }
-            }
-            if let Some(near) = newton(0.5 * (a + z)) {
+            let root = super::math::root_from(f, prev, (ti, fi));
+            if let Some(near) = newton(root) {
                 return Some(c.point(near));
             }
             break;
@@ -220,37 +229,27 @@ fn line_meet(c: &Curve, surfs: &[&Surface], p: P3) -> Option<P3> {
 /// p-curve `pc` over [t0, t1] moved across the range when its start is a whole range from `at`
 /// (the previous coedge's end) and stays in the range moved: a seam's other use.
 fn closed_spline_shift(s: &Surface, pc: &Curve, t0: f64, t1: f64, at: [f64; 2]) -> Option<Curve> {
-    let Surface::Nurbs(n) = s else { return None };
-    let ((u0, u1), (v0, v1)) = n.range();
+    // (A B-spline surface whose ends meet, or an extrusion of a closed B-spline: closed over its
+    // range without its evaluation wrapping.)
+    let ranges = match s {
+        Surface::Nurbs(n) => {
+            let (u, v) = n.range();
+            [u, v]
+        }
+        Surface::Extrusion {
+            c: Curve::Nurbs(n), ..
+        } => [n.range(), (f64::NEG_INFINITY, f64::INFINITY)],
+        _ => return None,
+    };
+    let periods = super::pcurve::closed_periods(s);
     let (q, r) = (pc.point(t0), pc.point(t1));
     let (q, r) = ([q.x, q.y], [r.x, r.y]);
     let mut shift = [0.0; 2];
-    for (k, (a, b), closed) in [
-        (
-            0,
-            (u0, u1),
-            (0..=4).all(|j| {
-                (s.eval(u0, v0 + (v1 - v0) * j as f64 / 4.0)
-                    - s.eval(u1, v0 + (v1 - v0) * j as f64 / 4.0))
-                .norm()
-                    < tol::ROUNDOFF
-            }),
-        ),
-        (
-            1,
-            (v0, v1),
-            (0..=4).all(|i| {
-                (s.eval(u0 + (u1 - u0) * i as f64 / 4.0, v0)
-                    - s.eval(u0 + (u1 - u0) * i as f64 / 4.0, v1))
-                .norm()
-                    < tol::ROUNDOFF
-            }),
-        ),
-    ] {
-        let w = b - a;
-        if !closed || w <= 0.0 {
+    for k in 0..2 {
+        let (a, b) = ranges[k];
+        let Some(w) = periods[k].filter(|w| *w > 0.0) else {
             continue;
-        }
+        };
         let m = ((at[k] - q[k]) / w).round();
         let tol = tol::REL * w;
         let inside = |x: f64| x >= a - tol && x <= b + tol;
@@ -295,7 +294,7 @@ pub(super) fn nurbs_iso(n: &super::nurbs::NurbsSurface, t: f64, along_v: bool) -
 }
 
 /// The points where a surface collapses: a cone's apex, a sphere's poles.
-fn singular_points(s: &Surface) -> Vec<P3> {
+pub(super) fn singular_points(s: &Surface) -> Vec<P3> {
     match s {
         Surface::Cone { f, r, a } if a.sin().abs() > tol::ANGULAR_FINE => {
             vec![f.o + f.z * (-r / a.tan())]
@@ -534,7 +533,13 @@ fn reseat_seam(out: &mut Body, fi: usize) {
 ///
 /// A pole's point edge on the face turns with its seam. Returns the seams moved, whose curves
 /// are recomputed.
-fn slide_seam_ends(b: &Body, out: &mut Body, surfs: &[Surface], ef: &[Vec<usize>]) -> Vec<usize> {
+fn slide_seam_ends(
+    b: &Body,
+    out: &mut Body,
+    surfs: &[Surface],
+    ef: &super::topo::EdgeFaces,
+) -> Vec<usize> {
+    let ve = b.vertex_edges();
     let kept = |e: usize| ef[e].iter().all(|&f| surfs[f] == b.faces[f].surf);
     let mut seams = Vec::new();
     for s in 0..b.edges.len() {
@@ -594,8 +599,10 @@ fn slide_seam_ends(b: &Body, out: &mut Body, surfs: &[Surface], ef: &[Vec<usize>
         if let Some(k) = off {
             let (v, o) = (se.v[k], se.v[1 - k]);
             let x_new = coord(&out.verts[v].p);
-            let rims: Vec<usize> = (0..b.edges.len())
-                .filter(|&e| e != s && !b.edges[e].degenerate && b.edges[e].v.contains(&o))
+            let rims: Vec<usize> = ve[o]
+                .iter()
+                .copied()
+                .filter(|&e| e != s && !b.edges[e].degenerate)
                 .collect();
             let closed = !rims.is_empty()
                 && rims.iter().all(|&e| {
@@ -622,8 +629,10 @@ fn slide_seam_ends(b: &Body, out: &mut Body, surfs: &[Surface], ef: &[Vec<usize>
             if at_pole(&b.verts[v].p) || !(o == v || at_pole(&b.verts[o].p)) {
                 continue;
             }
-            let others: Vec<usize> = (0..b.edges.len())
-                .filter(|&e| e != s && !b.edges[e].degenerate && b.edges[e].v.contains(&v))
+            let others: Vec<usize> = ve[v]
+                .iter()
+                .copied()
+                .filter(|&e| e != s && !b.edges[e].degenerate)
                 .collect();
             let [x, y] = others[..] else { continue };
             let (a, z) = if b.edges[x].v[1] == v && b.edges[y].v[0] == v {
@@ -746,12 +755,7 @@ fn swallow_pole(out: &mut Body, fi: usize, li: usize) -> Option<(usize, usize)> 
         let (a, z) = (off(w[0]), off(w[1]));
         a * z <= 0.0 && (a - z).abs() < PI
     })?;
-    let (mut a, mut z) = (ts[k], ts[k + 1]);
-    for _ in 0..80 {
-        let m = 0.5 * (a + z);
-        if off(a) * off(m) <= 0.0 { z = m } else { a = m }
-    }
-    let th = 0.5 * (a + z);
+    let th = super::math::root_between(off, ts[k], ts[k + 1]);
     let q = he.point(th);
     let tq = match se.curve {
         Curve::Circle { .. } => unwrap_near(
@@ -910,7 +914,7 @@ pub fn replace_surfaces_in(b: &Body, surfs: &[Surface], domains: &[Option<UvBox>
 /// without: a caller that settles the new faces' senses itself and checks the volume after
 /// (the orientation test casts rays at every face, which on a heavy spline costs more than the
 /// rest of the operation).
-fn replace_surfaces_checked(
+pub(crate) fn replace_surfaces_checked(
     b: &Body,
     surfs: &[Surface],
     domains: &[Option<UvBox>],
@@ -920,6 +924,7 @@ fn replace_surfaces_checked(
     let mut prof = super::boolean::Prof::new();
     let mut out = b.clone();
     let vf = vertex_faces(b);
+    let ve = b.vertex_edges();
     let ef = b.edge_faces();
     let tangent = tangent_lines(b, surfs, &ef);
     // Vertices.
@@ -944,17 +949,17 @@ fn replace_surfaces_checked(
                     .map(|&f| &surfs[f])
                     .collect();
                 let p = line_meet(c, &others, b.verts[v].p)?;
-                fs.iter().all(|s| s.distance(&p) < 1e-7).then_some(p)
+                fs.iter()
+                    .all(|s| s.distance(&p) < tol::CONFUSION)
+                    .then_some(p)
             });
         // On a seam: on the new surface's seam line (the faces around pin it only to their
         // intersection curve).
         let on_seam = || {
-            let e = (0..b.edges.len()).find(|&e| {
-                b.edges[e].v.contains(&v)
-                    && !b.edges[e].degenerate
-                    && ef[e].len() == 2
-                    && ef[e][0] == ef[e][1]
-            })?;
+            let e = ve[v]
+                .iter()
+                .copied()
+                .find(|&e| !b.edges[e].degenerate && ef[e].len() == 2 && ef[e][0] == ef[e][1])?;
             let f = ef[e][0];
             let (u, _) = b.faces[f].surf.project(&b.verts[v].p, None);
             let iso = surfs[f].iso_u(u)?;
@@ -964,15 +969,15 @@ fn replace_surfaces_checked(
                 .map(|&g| &surfs[g])
                 .collect();
             let p = line_meet(&iso, &others, b.verts[v].p)?;
-            fs.iter().all(|s| s.distance(&p) < 1e-7).then_some(p)
+            fs.iter()
+                .all(|s| s.distance(&p) < tol::CONFUSION)
+                .then_some(p)
         };
         // On an edge whose faces all stay: on that edge's curve, where it crosses the moved
         // faces.
         let on_kept = || {
-            let e = (0..b.edges.len()).find(|&e| {
-                b.edges[e].v.contains(&v)
-                    && !b.edges[e].degenerate
-                    && ef[e].iter().all(|&f| surfs[f] == b.faces[f].surf)
+            let e = ve[v].iter().copied().find(|&e| {
+                !b.edges[e].degenerate && ef[e].iter().all(|&f| surfs[f] == b.faces[f].surf)
             })?;
             let others: Vec<&Surface> = vf[v]
                 .iter()
@@ -980,19 +985,25 @@ fn replace_surfaces_checked(
                 .map(|&g| &surfs[g])
                 .collect();
             let p = line_meet(&b.edges[e].curve, &others, b.verts[v].p)?;
-            fs.iter().all(|s| s.distance(&p) < 1e-7).then_some(p)
+            fs.iter()
+                .all(|s| s.distance(&p) < tol::CONFUSION)
+                .then_some(p)
         };
         // At a pole or apex (the end of a point edge): the new surface's own, nearest.
         let on_pole = || {
-            let f = (0..b.edges.len())
-                .filter(|&e| b.edges[e].degenerate && b.edges[e].v.contains(&v))
+            let f = ve[v]
+                .iter()
+                .copied()
+                .filter(|&e| b.edges[e].degenerate)
                 .flat_map(|e| ef[e].iter().copied())
                 .next()?;
             let old = b.verts[v].p;
             let p = singular_points(&surfs[f])
                 .into_iter()
                 .min_by(|x, y| (x - old).norm().total_cmp(&(y - old).norm()))?;
-            fs.iter().all(|s| s.distance(&p) < 1e-7).then_some(p)
+            fs.iter()
+                .all(|s| s.distance(&p) < tol::CONFUSION)
+                .then_some(p)
         };
         let p = on_pole()
             .or(on_line)
@@ -1186,7 +1197,7 @@ fn replace_surfaces_checked(
                     best = Some((d, ic.c));
                 }
             }
-            if std::env::var_os("CADRS_DRAFT_DEBUG").is_some() {
+            if crate::native::env_flag!("CADRS_DRAFT_DEBUG") {
                 eprintln!(
                     "edge {e} faces {fs:?} ({:?} × {:?}): {:?}",
                     sa.kind(),
@@ -1593,7 +1604,7 @@ fn replace_surfaces_checked(
     prof.mark("check");
     prof.report(&format!("replace surfaces ({} faces)", out.faces.len()));
     if !errs.is_empty() {
-        if std::env::var_os("CADRS_DRAFT_DEBUG").is_some() {
+        if crate::native::env_flag!("CADRS_DRAFT_DEBUG") {
             for (fi, f) in out.faces.iter().enumerate() {
                 for l in &f.loops {
                     for c in l {
@@ -1625,6 +1636,307 @@ fn replace_surfaces_checked(
     Ok(out)
 }
 
+/// `b` with its faces' surfaces replaced by `surfs` ([`replace_surfaces`]) where the moves
+/// swallow faces: an edge whose ends the moved faces carry past one another (a small facet at
+/// a corner, its neighbours closing over it under a draft or an inset) has shrunk to nothing
+/// on the way, so its ends are made one vertex, a face left with two sides goes (its two
+/// edges one), and the faces are moved again; and so on, the edge most turned round first,
+/// until they close. The body with, for each of its faces, the face of `b` it is. `None`
+/// where no edge is turned round (the failure is something else) or the faces still don't
+/// close.
+///
+/// A convex body of planes needs none of this ([`planes_bound`]); this is the same for a body
+/// that isn't convex or has curved faces, one event at a time.
+pub(crate) fn replace_with_events(b: &Body, surfs: &[Surface]) -> Option<(Body, Vec<usize>)> {
+    let mut cur = b.clone();
+    let mut now: Vec<Surface> = surfs.to_vec();
+    let mut from: Vec<usize> = (0..b.faces.len()).collect();
+    for _ in 0..b.edges.len() {
+        let Some(e) = turned_edge(&cur, &now) else {
+            // No edge turned round: a corner of four faces that no longer meet at one point
+            // comes apart instead, into two corners with an edge between them.
+            return parted_corner(&cur, &now).map(|out| (out, from));
+        };
+        let (next, gone) = contract_edge(&cur, e)?;
+        for &f in gone.iter().rev() {
+            now.remove(f);
+            from.remove(f);
+        }
+        cur = next;
+        if let Ok(out) = replace_surfaces(&cur, &now) {
+            return Some((out, from));
+        }
+    }
+    None
+}
+
+/// `b` moved to `surfs` with one corner of four faces come apart: the first vertex four faces
+/// meet at whose new surfaces share no point is made two, three of the faces at each, with a
+/// new edge between them on the two faces that are opposite one another there (a pyramid's
+/// apex becoming a ridge when two of its faces lean more than the others). Of the two ways to
+/// pair the faces, the one the moved faces close with. `None` where there is no such corner or
+/// neither way closes.
+fn parted_corner(b: &Body, surfs: &[Surface]) -> Option<Body> {
+    let vf = vertex_faces(b);
+    for v in 0..b.verts.len() {
+        if vf[v].len() != 4 {
+            continue;
+        }
+        let fs: Vec<&Surface> = vf[v].iter().map(|&f| &surfs[f]).collect();
+        let together = meet(&fs, b.verts[v].p)
+            .is_some_and(|p| fs.iter().all(|s| s.distance(&p) < tol::CONFUSION));
+        if together {
+            continue;
+        }
+        for way in 0..2 {
+            if let Some(split) = split_vertex(b, v, way, surfs)
+                && let Ok(out) = replace_surfaces(&split, surfs)
+            {
+                return Some(out);
+            }
+        }
+    }
+    None
+}
+
+/// `b` with vertex `v`, where four faces meet in turn (A, B, C, D), made two: one where A, B
+/// and C meet (way 0; B, C and D for way 1) and one where the other three do, with a new edge
+/// between them on the two faces at both. The new vertex stands a hair from the old one,
+/// towards where its three faces' new surfaces `surfs` meet, so the body is as it was but for
+/// an edge of no length to speak of; the faces' move works the rest out.
+fn split_vertex(b: &Body, v: usize, way: usize, surfs: &[Surface]) -> Option<Body> {
+    // Each face's coedges into and out of the vertex: (face, loop, place of the one coming in).
+    let mut around: Vec<(usize, usize, usize)> = Vec::new();
+    for (fi, f) in b.faces.iter().enumerate() {
+        for (li, l) in f.loops.iter().enumerate() {
+            for k in 0..l.len() {
+                if b.co_end(&l[k]) == v && b.co_start(&l[(k + 1) % l.len()]) == v {
+                    around.push((fi, li, k));
+                }
+            }
+        }
+    }
+    if around.len() != 4 {
+        return None;
+    }
+    let edges_of = |a: &(usize, usize, usize)| {
+        let l = &b.faces[a.0].loops[a.1];
+        [l[a.2].edge, l[(a.2 + 1) % l.len()].edge]
+    };
+    // In turn round the vertex: each face shares an edge there with the next.
+    let mut ring = vec![around[0]];
+    while ring.len() < 4 {
+        let last = edges_of(ring.last()?);
+        let next = around.iter().find(|a| {
+            !ring.iter().any(|r| r.0 == a.0) && edges_of(a).iter().any(|e| last.contains(e))
+        })?;
+        ring.push(*next);
+    }
+    let ring: Vec<(usize, usize, usize)> = (0..4).map(|i| ring[(i + way) % 4]).collect();
+    let shared = |x: usize, y: usize| {
+        let (ex, ey) = (edges_of(&ring[x]), edges_of(&ring[y]));
+        ex.into_iter().find(|e| ey.contains(e))
+    };
+    // The edges between A and B, B and C stay at the vertex; those between C and D, D and A go
+    // to the new one. The new edge lies on A and C.
+    let (e_cd, e_da) = (shared(2, 3)?, shared(3, 0)?);
+    let (a, c, d) = (ring[0].0, ring[2].0, ring[3].0);
+    let p = b.verts[v].p;
+    let to = meet(&[&surfs[a], &surfs[c], &surfs[d]], p)?;
+    let along = (to - p).try_normalize(tol::DEGENERATE)?;
+    let hair = tol::REL_POINT * b.bbox().diagonal().max(tol::POINT) * 10.0;
+    let mut nb = b.clone();
+    let v2 = nb.add_vertex(p + along * hair);
+    for e in [e_cd, e_da] {
+        for x in &mut nb.edges[e].v {
+            if *x == v {
+                *x = v2;
+            }
+        }
+    }
+    let ne = nb.add_edge(Curve::Line { o: p, d: along }, 0.0, hair, v, v2);
+    // On A and on C, between the coedge that comes in and the one that goes out.
+    for r in [ring[0], ring[2]] {
+        let surf = nb.faces[r.0].surf.clone();
+        let l = &nb.faces[r.0].loops[r.1];
+        let from = nb.co_end(&l[r.2]);
+        let pc = super::pcurve::pcurve(&surf, &Curve::Line { o: p, d: along }, 0.0, hair, None);
+        let co = Coedge {
+            edge: ne,
+            fwd: from == v,
+            pc,
+        };
+        nb.faces[r.0].loops[r.1].insert(r.2 + 1, co);
+    }
+    Some(nb)
+}
+
+/// The edge of `b` its faces' moves to `surfs` turn round most: its ends, each where its
+/// faces' new surfaces meet, the other way round from before (or on one another). `None`
+/// where none is.
+pub(crate) fn turned_edge(b: &Body, surfs: &[Surface]) -> Option<usize> {
+    let vf = vertex_faces(b);
+    let moved: Vec<Option<P3>> = (0..b.verts.len())
+        .map(|v| {
+            if vf[v].len() < 3 {
+                return None;
+            }
+            let fs: Vec<&Surface> = vf[v].iter().map(|&f| &surfs[f]).collect();
+            meet(&fs, b.verts[v].p)
+        })
+        .collect();
+    let mut worst: Option<(f64, usize)> = None;
+    for (e, ed) in b.edges.iter().enumerate() {
+        if ed.degenerate || ed.v[0] == ed.v[1] {
+            continue;
+        }
+        let (Some(p), Some(q)) = (moved[ed.v[0]], moved[ed.v[1]]) else {
+            continue;
+        };
+        let was = b.verts[ed.v[1]].p - b.verts[ed.v[0]].p;
+        // (How much of its old length it has, along its old direction.)
+        let share = (q - p).dot(&was) / was.norm_squared().max(tol::TINY);
+        if share < tol::ROUNDOFF && worst.is_none_or(|(x, _)| share < x) {
+            worst = Some((share, e));
+        }
+    }
+    worst.map(|(_, e)| e)
+}
+
+/// The faces of `b` that its faces' moves to `surfs` carry through one another and so leave
+/// nothing of: a fin thinner than twice an inset, a slot narrower than twice a growth. Its
+/// two walls pass each other, and every face between them (its top, its ends) comes out the
+/// other way round, two or more of its edges turned ([`turned_edge`]'s test); the walls are
+/// what those faces border along the edges that kept their direction. `None` where no face
+/// is turned so. (The body without them, healed, is what the move is then made of.)
+pub(crate) fn passed_through(b: &Body, surfs: &[Surface]) -> Option<Vec<usize>> {
+    let vf = vertex_faces(b);
+    let moved: Vec<Option<P3>> = (0..b.verts.len())
+        .map(|v| {
+            if vf[v].len() < 3 {
+                return None;
+            }
+            let fs: Vec<&Surface> = vf[v].iter().map(|&f| &surfs[f]).collect();
+            meet(&fs, b.verts[v].p)
+        })
+        .collect();
+    let turned: Vec<bool> = b
+        .edges
+        .iter()
+        .map(|ed| {
+            if ed.degenerate || ed.v[0] == ed.v[1] {
+                return false;
+            }
+            let (Some(p), Some(q)) = (moved[ed.v[0]], moved[ed.v[1]]) else {
+                return false;
+            };
+            let was = b.verts[ed.v[1]].p - b.verts[ed.v[0]].p;
+            (q - p).dot(&was) / was.norm_squared().max(tol::TINY) < tol::ROUNDOFF
+        })
+        .collect();
+    let between: Vec<bool> = b
+        .faces
+        .iter()
+        .map(|f| f.loops.iter().flatten().filter(|c| turned[c.edge]).count() >= 2)
+        .collect();
+    if !between.iter().any(|x| *x) {
+        return None;
+    }
+    let ef = b.edge_faces();
+    let mut gone = between.clone();
+    for (fi, f) in b.faces.iter().enumerate() {
+        if !between[fi] {
+            continue;
+        }
+        for c in f.loops.iter().flatten().filter(|c| !turned[c.edge]) {
+            for &g in ef[c.edge].iter() {
+                gone[g] = true;
+            }
+        }
+    }
+    Some((0..b.faces.len()).filter(|&f| gone[f]).collect())
+}
+
+/// `b` with edge `e` shrunk to a point: its two ends one vertex, the edge gone from its faces,
+/// and a face left with two sides gone too, its two edges made one (the first) in the faces
+/// beyond them. With the faces that went, in order. The geometry is the old one: the faces'
+/// move works it out again. `None` for what this doesn't cover (a face left with one side, or
+/// with holes and too few sides).
+fn contract_edge(b: &Body, e: usize) -> Option<(Body, Vec<usize>)> {
+    let [keep, lose] = b.edges[e].v;
+    if keep == lose {
+        return None;
+    }
+    let mut nb = b.clone();
+    for ed in &mut nb.edges {
+        for v in &mut ed.v {
+            if *v == lose {
+                *v = keep;
+            }
+        }
+    }
+    for f in &mut nb.faces {
+        for l in &mut f.loops {
+            l.retain(|c| c.edge != e);
+        }
+    }
+    // The faces left with two sides, and for each the edge that goes and the one that stays.
+    let mut gone: Vec<usize> = Vec::new();
+    let mut made_one: Vec<(usize, usize)> = Vec::new();
+    for (fi, f) in nb.faces.iter().enumerate() {
+        if f.loops.iter().any(|l| l.len() < 2) {
+            return None;
+        }
+        if let [l] = f.loops.as_slice()
+            && l.len() == 2
+        {
+            let (stays, goes) = (l[0].edge, l[1].edge);
+            if stays == goes || made_one.iter().any(|&(g, s)| g == stays || s == goes) {
+                return None;
+            }
+            gone.push(fi);
+            made_one.push((goes, stays));
+        } else if f.loops.iter().any(|l| l.len() < 3) && matches!(f.surf, Surface::Plane { .. }) {
+            return None;
+        }
+    }
+    for &(goes, stays) in &made_one {
+        let (ev, sv) = (nb.edges[goes].v, nb.edges[stays].v);
+        if sv[0] == sv[1] {
+            return None;
+        }
+        let (curve, t) = (nb.edges[stays].curve.clone(), nb.edges[stays].t);
+        for (fi, face) in nb.faces.iter_mut().enumerate() {
+            if gone.contains(&fi) {
+                continue;
+            }
+            let surf = face.surf.clone();
+            for c in face.loops.iter_mut().flatten().filter(|c| c.edge == goes) {
+                // (The same way round: from the vertex the edge that goes started at.)
+                let start = if c.fwd { ev[0] } else { ev[1] };
+                *c = Coedge {
+                    edge: stays,
+                    fwd: sv[0] == start,
+                    pc: super::pcurve::pcurve(&surf, &curve, t[0], t[1], None),
+                };
+            }
+        }
+    }
+    for &f in gone.iter().rev() {
+        nb.faces.remove(f);
+        for sh in &mut nb.shells {
+            sh.faces.retain(|&x| x != f);
+            for x in &mut sh.faces {
+                if *x > f {
+                    *x -= 1;
+                }
+            }
+        }
+    }
+    super::unify::compact(&mut nb);
+    Some((nb, gone))
+}
+
 /// The solid bounded by the planes `surfs` of a convex polyhedron `b` (each face's, with the
 /// material on the side it is now): the half-spaces' common part, with the face of `b` each of its
 /// faces lies on. None when `b` is not a convex polyhedron (a face curved, or a vertex outside
@@ -1653,18 +1965,69 @@ pub(crate) fn planes_bound(b: &Body, surfs: &[Surface]) -> Option<Result<(Body, 
     {
         return None;
     }
-    let mut reach = bb;
-    reach.add(&(bb.min - V3::repeat(size)));
-    reach.add(&(bb.max + V3::repeat(size)));
     Some((|| {
-        let mut acc: Option<Body> = None;
-        for (o, n) in &after {
-            let h = super::ops::half_space_box(*o, -n, &reach)?;
-            acc = Some(match acc {
-                None => h,
-                Some(a) => super::boolean::boolean_bodies(&a, &h, BoolOp::Intersect)?.body,
-            });
+        // Each plane's face in closed form: a square of the plane far wider than the part,
+        // cut down by every other plane's half-space. What is left of it is the face (nothing,
+        // where the others close over it), and the faces together a triangle mesh's solid.
+        // No boolean, so nothing to retry and nothing that fails half way.
+        let wide = 4.0 * size.max(tol::POINT);
+        let centre = bb.center();
+        let same = |j: usize, k: usize| {
+            let ((oj, nj), (ok, nk)) = (after[j], after[k]);
+            nj.dot(&nk) > 1.0 - tol::ANGULAR && (ok - oj).dot(&nj).abs() < close
+        };
+        let mut triangles: Vec<[P3; 3]> = Vec::new();
+        for (j, (o, n)) in after.iter().enumerate() {
+            // (A plane given twice bounds one face: the first's.)
+            if (0..j).any(|k| same(j, k)) {
+                continue;
+            }
+            let x = any_perpendicular(n).normalize();
+            let y = n.cross(&x);
+            let mid = centre - n * (centre - o).dot(n);
+            let mut poly: Vec<P3> = [(1.0, 1.0), (-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0)]
+                .into_iter()
+                .map(|(a, b)| mid + (x * a + y * b) * wide)
+                .collect();
+            for (k, (ok, nk)) in after.iter().enumerate() {
+                if k == j || same(j, k) || poly.len() < 3 {
+                    continue;
+                }
+                let d: Vec<f64> = poly.iter().map(|p| (p - ok).dot(nk)).collect();
+                let mut cut = Vec::with_capacity(poly.len() + 2);
+                for i in 0..poly.len() {
+                    let i2 = (i + 1) % poly.len();
+                    if d[i] <= 0.0 {
+                        cut.push(poly[i]);
+                    }
+                    if (d[i] < 0.0 && d[i2] > 0.0) || (d[i] > 0.0 && d[i2] < 0.0) {
+                        cut.push(poly[i] + (poly[i2] - poly[i]) * (d[i] / (d[i] - d[i2])));
+                    }
+                }
+                poly = cut;
+            }
+            if poly.len() < 3 {
+                continue;
+            }
+            // A corner still on the square: the planes are open that way.
+            let on_square = |p: &P3| {
+                let w = p - mid;
+                w.dot(&x).abs().max(w.dot(&y).abs()) >= wide * (1.0 - tol::REL)
+            };
+            if poly.iter().any(on_square) {
+                return Err(KernelError::InvalidResult {
+                    op: "draft",
+                    why: "the drafted planes don't close round the part".into(),
+                });
+            }
+            // (Counter-clockwise about the outward normal, as the square was.)
+            for i in 1..poly.len() - 1 {
+                triangles.push([poly[0], poly[i], poly[i + 1]]);
+            }
         }
+        let acc = (!triangles.is_empty())
+            .then(|| super::meshsolid::mesh_solid(&triangles, close).ok())
+            .flatten();
         let out =
             acc.filter(|a| !a.faces.is_empty())
                 .ok_or_else(|| KernelError::InvalidResult {
@@ -1691,6 +2054,240 @@ pub(crate) fn planes_bound(b: &Body, surfs: &[Surface]) -> Option<Result<(Body, 
     })())
 }
 
+/// [`planes_bound`] for a right prism whose outline is not convex (an L or a T extruded): the
+/// solid its faces' new planes bound, each plane's half-space taken as the outline's own
+/// formula takes its side. The outline is its convex hull less its pockets, each pocket the
+/// common part of the *other* sides of the faces along its own hull less its pockets in turn
+/// (the convex deficiency tree); the solid is that formula of the new half-spaces, between the
+/// caps' planes. So sides drafted until they close over an arm meet in a ridge, and the two
+/// sides of an inside corner still join in a valley. None when `b` is no such prism.
+pub(crate) fn prism_planes_bound(
+    b: &Body,
+    surfs: &[Surface],
+) -> Option<Result<(Body, Vec<usize>)>> {
+    let bb = b.bbox();
+    let size = bb.diagonal();
+    let close = tol::POINT.max(tol::REL * size);
+    let plane = |s: &Surface, sense: bool| match s {
+        Surface::Plane { f } => Some((
+            f.o,
+            f.x.cross(&f.y).normalize() * if sense { 1.0 } else { -1.0 },
+        )),
+        _ => None,
+    };
+    let mut before = Vec::new();
+    let mut after = Vec::new();
+    for (f, s) in b.faces.iter().zip(surfs) {
+        before.push(plane(&f.surf, f.sense)?);
+        after.push(plane(s, f.sense)?);
+    }
+    // The caps: one face facing along some direction, one against it, every other face square
+    // to it.
+    let (bottom, top) = (0..b.faces.len()).find_map(|f| {
+        let z = -before[f].1;
+        let mut top = None;
+        for (g, (_, n)) in before.iter().enumerate() {
+            let d = n.dot(&z);
+            if g == f {
+                continue;
+            } else if d > 1.0 - tol::ANGULAR {
+                if top.replace(g).is_some() {
+                    return None;
+                }
+            } else if d.abs() > tol::ANGULAR_POINT {
+                return None;
+            }
+        }
+        Some((f, top?))
+    })?;
+    let z = -before[bottom].1;
+    let x = any_perpendicular(&z);
+    let y = z.cross(&x);
+    let o = before[bottom].0;
+    let ef = b.edge_faces();
+    // The bottom's loops as polygons, anticlockwise seen from above (holes clockwise), each
+    // corner with the side face along the edge that leaves it.
+    type Corner = (P2, Option<usize>);
+    let mut outer: Option<Vec<Corner>> = None;
+    let mut holes: Vec<Vec<Corner>> = Vec::new();
+    for l in &b.faces[bottom].loops {
+        let mut poly: Vec<Corner> = Vec::new();
+        for c in l {
+            let e = &b.edges[c.edge];
+            if !matches!(e.curve, Curve::Line { .. }) {
+                return None;
+            }
+            let side = *ef[c.edge].iter().find(|&&g| g != bottom)?;
+            if side == top {
+                return None;
+            }
+            let v = b.verts[b.co_start(c)].p - o;
+            poly.push((P2::new(v.dot(&x), v.dot(&y)), Some(side)));
+        }
+        let area: f64 = (0..poly.len())
+            .map(|i| {
+                let (a, c) = (poly[i].0, poly[(i + 1) % poly.len()].0);
+                a.x * c.y - c.x * a.y
+            })
+            .sum();
+        // (The bottom faces down: its outer loop runs clockwise seen from above.)
+        if area < 0.0 {
+            // Turned round, each corner with the edge that now leaves it.
+            let n = poly.len();
+            let turned: Vec<Corner> = (0..n)
+                .map(|i| (poly[(n - i) % n].0, poly[(2 * n - i - 1) % n].1))
+                .collect();
+            if outer.replace(turned).is_some() {
+                return None;
+            }
+        } else {
+            holes.push(poly);
+        }
+    }
+    let outer = outer?;
+    let mut reach = bb;
+    reach.add(&(bb.min - V3::repeat(size)));
+    reach.add(&(bb.max + V3::repeat(size)));
+    let half = |f: usize, inside: bool| -> Result<Body> {
+        let (o, n) = after[f];
+        super::ops::half_space_box(o, if inside { -n } else { n }, &reach)
+    };
+    // The region of an anticlockwise polygon by its faces' half-spaces (`inside`: the
+    // material's sides; else the other sides, for a pocket): those along its hull in common,
+    // less its pockets. None for a polygon with no face along its hull.
+    fn region(
+        poly: &[(P2, Option<usize>)],
+        inside: bool,
+        half: &dyn Fn(usize, bool) -> Result<Body>,
+        depth: usize,
+    ) -> Result<Option<Body>> {
+        let n = poly.len();
+        if n < 2 || depth > 64 {
+            return Ok(None);
+        }
+        // The hull's corners, in the polygon's order (collinear corners kept).
+        let mut order: Vec<usize> = (0..n).collect();
+        order.sort_by(|&a, &c| {
+            (poly[a].0.x, poly[a].0.y)
+                .partial_cmp(&(poly[c].0.x, poly[c].0.y))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let cross = |a: usize, c: usize, d: usize| {
+            let (p, q, r) = (poly[a].0, poly[c].0, poly[d].0);
+            (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x)
+        };
+        let scale = poly.iter().map(|c| c.0.coords.norm()).fold(1.0, f64::max);
+        let eps = tol::REL * scale * scale;
+        let mut hull: Vec<usize> = Vec::new();
+        for pass in 0..2 {
+            let start = hull.len();
+            let it: Box<dyn Iterator<Item = &usize>> = if pass == 0 {
+                Box::new(order.iter())
+            } else {
+                Box::new(order.iter().rev())
+            };
+            for &i in it {
+                while hull.len() >= start + 2
+                    && cross(hull[hull.len() - 2], hull[hull.len() - 1], i) < -eps
+                {
+                    hull.pop();
+                }
+                hull.push(i);
+            }
+            hull.pop();
+        }
+        let mut on_hull = vec![false; n];
+        for &i in &hull {
+            on_hull[i] = true;
+        }
+        let corners: Vec<usize> = (0..n).filter(|&i| on_hull[i]).collect();
+        let mut acc: Option<Body> = None;
+        let mut pockets: Vec<Body> = Vec::new();
+        for (k, &a) in corners.iter().enumerate() {
+            let c = corners[(k + 1) % corners.len()];
+            let steps = (c + n - a) % n;
+            if steps == 1 || corners.len() == 1 {
+                if let Some(f) = poly[a].1 {
+                    let h = half(f, inside)?;
+                    acc = Some(match acc {
+                        None => h,
+                        Some(x) => super::boolean::boolean_bodies(&x, &h, BoolOp::Intersect)?.body,
+                    });
+                }
+                continue;
+            }
+            // The pocket between the hull's chord and the polygon's chain from a to c: the
+            // chain turned round (anticlockwise), closed by the chord (no face).
+            let mut pocket: Vec<(P2, Option<usize>)> = Vec::with_capacity(steps + 1);
+            for i in 0..=steps {
+                let v = (c + n - i) % n;
+                let face = if i < steps {
+                    poly[(v + n - 1) % n].1
+                } else {
+                    None
+                };
+                pocket.push((poly[v].0, face));
+            }
+            if let Some(p) = region(&pocket, !inside, half, depth + 1)? {
+                pockets.push(p);
+            }
+        }
+        let Some(mut acc) = acc else {
+            return Ok(None);
+        };
+        for p in &pockets {
+            acc = super::boolean::boolean_bodies(&acc, p, BoolOp::Subtract)?.body;
+        }
+        Ok(Some(acc))
+    }
+    if outer.iter().all(|c| c.1.is_some()) && {
+        // (A convex outline is `planes_bound`'s.)
+        let n = outer.len();
+        (0..n).all(|i| {
+            let (p, q, r) = (outer[i].0, outer[(i + 1) % n].0, outer[(i + 2) % n].0);
+            (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x) > -tol::ROUNDOFF
+        }) && holes.is_empty()
+    } {
+        return None;
+    }
+    Some((|| {
+        let nothing = || KernelError::InvalidResult {
+            op: "draft",
+            why: "the drafted planes bound nothing".into(),
+        };
+        let mut out = region(&outer, true, &half, 0)?.ok_or_else(nothing)?;
+        for cap in [bottom, top] {
+            out = super::boolean::boolean_bodies(&out, &half(cap, true)?, BoolOp::Intersect)?.body;
+        }
+        for h in &holes {
+            // (A hole runs clockwise: turned round, its inside is the other sides' common part.)
+            let n = h.len();
+            let turned: Vec<Corner> = (0..n)
+                .map(|i| (h[(n - i) % n].0, h[(2 * n - i - 1) % n].1))
+                .collect();
+            if let Some(p) = region(&turned, false, &half, 0)? {
+                out = super::boolean::boolean_bodies(&out, &p, BoolOp::Subtract)?.body;
+            }
+        }
+        if out.faces.is_empty() {
+            return Err(nothing());
+        }
+        let mut from = Vec::new();
+        for f in &out.faces {
+            let (o, n) = plane(&f.surf, f.sense).ok_or_else(nothing)?;
+            let j = after
+                .iter()
+                .position(|(q, m)| m.dot(&n) > 1.0 - tol::ANGULAR && (o - q).dot(m).abs() < close)
+                .ok_or_else(|| KernelError::InvalidResult {
+                    op: "draft",
+                    why: "the drafted planes don't close round the part".into(),
+                })?;
+            from.push(j);
+        }
+        Ok((out, from))
+    })())
+}
+
 /// `Kernel::replace_faces`: faces given new surfaces, each keeping the side its material is
 /// on (SMLib's `SmBrep::LocalOperation` keeps the face's use).
 pub fn replace_faces(
@@ -1698,7 +2295,7 @@ pub fn replace_faces(
     body: BodyId,
     faces: &[FaceReplacement],
 ) -> Result<OpResult> {
-    let b = (**k.get(body)?).clone();
+    let b = std::sync::Arc::clone(k.get(body)?);
     let mut surfs: Vec<Surface> = b.faces.iter().map(|f| f.surf.clone()).collect();
     let mut domains: Vec<Option<UvBox>> = vec![None; b.faces.len()];
     for r in faces {
@@ -1814,7 +2411,7 @@ pub fn move_faces(
     faces: &[FaceId],
     motion: &Motion,
 ) -> Result<OpResult> {
-    let b = (**k.get(body)?).clone();
+    let b = std::sync::Arc::clone(k.get(body)?);
     if faces.is_empty() {
         return Err(KernelError::InvalidParameter(
             "Move face needs faces to move".into(),
@@ -1869,12 +2466,17 @@ pub fn move_faces(
         // The new face's point beside the old one's middle: the replacement lies where the old
         // face was, and meshing a heavy new surface only to find a point on it costs more than
         // the rest of the operation (else its own middle, as the old face's).
+        // (The old middle carried by the motion: the face moved rigidly, so that point is on
+        // its new surface where the old one was on the old, and its normals there compare. The
+        // old middle projected onto the new surface found the far side of a hole moved more
+        // than its radius, whose normal is the other way.)
         let near = {
             let s = &out.faces[fi].surf;
-            let (u, v) = s.project(&was, None);
+            let (u, v) = s.project(&m.point(&was), None);
             let p = s.eval(u, v);
             let size = 1.0 + b.bbox().diagonal();
-            (super::blend::on_face(&out, fi, &p) && (p - was).norm() < 0.25 * size).then_some(p)
+            (super::blend::on_face(&out, fi, &p) && (p - m.point(&was)).norm() < 0.25 * size)
+                .then_some(p)
         };
         let Some(now) = near.or_else(|| middle(&out)) else {
             continue;
@@ -1888,7 +2490,11 @@ pub fn move_faces(
             out.faces[fi].sense = !out.faces[fi].sense;
         }
     }
-    if !out.check_with(super::topo::CheckLevel::Full).is_empty() {
+    let issues = out.check_with(super::topo::CheckLevel::Full);
+    if !issues.is_empty() {
+        if super::env_flag!("CADRS_MOVE_DEBUG") {
+            eprintln!("move faces: {issues:?}");
+        }
         return Err(too_far("a face would run into another face"));
     }
     if super::mass::body_volume(&out) <= 0.0 {
@@ -2084,7 +2690,19 @@ fn param_range(c: &Curve, p0: &P3, p1: &P3, closed: bool, quarter: &P3, dir0: &V
         Curve::Circle { .. } | Curve::Ellipse { .. } => {
             let t0 = conic_closest(c, p0, -PI, PI);
             if closed {
-                // The direction from the old edge's quarter point.
+                // The way the old edge left its start, where that decides it (a hole moved
+                // farther than its radius has its old quarter point nowhere near the new circle,
+                // and the point's projection says nothing of the way round).
+                let tan = c.tangent(t0);
+                let along = tan.dot(dir0) / tan.norm().max(1e-300);
+                if along.abs() > 0.5 {
+                    return if along > 0.0 {
+                        (t0, t0 + TAU)
+                    } else {
+                        (t0, t0 - TAU)
+                    };
+                }
+                // Else the direction from the old edge's quarter point.
                 let tq = conic_closest(c, quarter, t0 - PI, t0 + PI);
                 if tq >= t0 {
                     (t0, t0 + TAU)
@@ -2178,6 +2796,346 @@ fn nurbs_arc(c: &Curve, p0: &P3, p1: &P3, dir0: &V3) -> Option<(f64, f64)> {
     best.map(|(_, r)| r)
 }
 
+/// The ruled B-spline surface through two rims given at any parameter (`rims`, low and high),
+/// over the pieces `breaks` cuts the parameter's range into (sixteen stations to each): a
+/// drafted face that is no plane or cone. `whole`: the rims close on themselves over the
+/// range. `None` where the rims can't be fitted.
+fn ruled_through(breaks: Vec<f64>, whole: bool, rims: &dyn Fn(f64) -> [P3; 2]) -> Option<Surface> {
+    const EACH: usize = 16;
+    let (&first, &last) = (breaks.first()?, breaks.last()?);
+    let mut at: Vec<f64> = Vec::new();
+    for w in breaks.windows(2) {
+        at.extend((0..EACH).map(|i| w[0] + (w[1] - w[0]) * i as f64 / EACH as f64));
+    }
+    if !whole {
+        at.push(last);
+    }
+    if at.len() < 4 || !(last > first) {
+        return None;
+    }
+    let rim = |k: usize| -> Option<super::nurbs::NurbsCurve> {
+        let pts: Vec<P3> = at.iter().map(|&u| rims(u)[k]).collect();
+        if whole {
+            // (Its parameters with the one where it closes.)
+            let mut closed = at.clone();
+            closed.push(last);
+            super::nurbs::NurbsCurve::interpolate_periodic(&pts, &closed, 3)
+        } else {
+            Some(super::nurbs::NurbsCurve::interpolate(
+                &pts, &at, 3, None, None,
+            ))
+        }
+    };
+    let (low, high) = (rim(0)?, rim(1)?);
+    Some(Surface::Nurbs(std::sync::Arc::new(
+        super::loft_build::skin(&[low, high], &[0.0, 1.0]),
+    )))
+}
+
+/// Where a cylinder's face across the pull, level with the neutral plane at both its sides,
+/// is farthest from that plane: the angle to cut it at ([`draft`]). `None` for any other face.
+fn two_rulings(b: &Body, fi: usize, spec: &DraftSpec, pull: &V3) -> Option<f64> {
+    let Surface::Cylinder { f: fr, r } = &b.faces[fi].surf else {
+        return None;
+    };
+    if spec.neutral_normal.is_some() || fr.z.dot(pull).abs() > tol::ANGULAR * fr.z.norm() {
+        return None;
+    }
+    let ((u0, u1), _) = super::heal_split::face_uv_box(b, fi)?;
+    let level = |u: f64| (fr.o + (fr.x * u.cos() + fr.y * u.sin()) * *r - spec.neutral).dot(pull);
+    let on = tol::POINT.max(tol::REL_POINT * r);
+    if level(u0).abs() > on || level(u1).abs() > on || (u1 - u0).abs() < tol::ANGULAR_POINT {
+        return None;
+    }
+    let far = super::math::minimize(|u| -level(u).abs(), u0, u1);
+    (level(far).abs() > on).then_some(far)
+}
+
+/// A cylinder's face drafted where the cylinder doesn't run along the pull (and is no round
+/// between two of the faces drafted): through the curve the cylinder meets the neutral plane
+/// in, each ruling the pull leant by the angle against the face's outward normal's part
+/// across the pull there. A cylinder across the pull meets that plane along a ruling of its
+/// own, and the face becomes the plane through it; one at a slant meets it in an ellipse, and
+/// the face becomes the ruled surface through that.
+fn cylinder_across(
+    b: &Body,
+    fi: usize,
+    fr: &Frame,
+    r: f64,
+    spec: &DraftSpec,
+    pull: &V3,
+) -> Result<Surface> {
+    let f = &b.faces[fi];
+    if spec.neutral_normal.is_some() {
+        return Err(KernelError::Unsupported(
+            "drafting a cylinder about a neutral plane at an angle to the pull",
+        ));
+    }
+    let no_reach =
+        || KernelError::Unsupported("drafting a cylinder that doesn't reach the neutral plane");
+    let ((u0, u1), _) = super::heal_split::face_uv_box(b, fi).ok_or_else(no_reach)?;
+    let sign = if f.sense { 1.0 } else { -1.0 };
+    let (sa, ca) = spec.angle.sin_cos();
+    let reach = 4.0 * b.bbox().diagonal().max(tol::POINT);
+    // The cylinder's point at angle u, v along its axis, and its outward normal there.
+    let radial = |u: f64| fr.x * u.cos() + fr.y * u.sin();
+    // The ruling at a point of the neutral curve: the pull leant against the outward normal's
+    // part across the pull.
+    let ruling = |u: f64| -> Option<V3> {
+        let n = f.surf.normal(u, 0.0) * sign;
+        let across = (n - pull * pull.dot(&n)).try_normalize(tol::ANGULAR)?;
+        Some(pull * ca - across * sa)
+    };
+    let along = fr.z.dot(pull);
+    if along.abs() <= tol::ANGULAR * fr.z.norm() {
+        // Across the pull: the neutral plane holds the ruling at the angle where the
+        // cylinder's point is level with it.
+        let level = |u: f64| (fr.o + radial(u) * r - spec.neutral).dot(pull);
+        let (l0, l1) = (level(u0), level(u1));
+        // (One ruling only: a face level with the plane at both its sides, a groove cut
+        // down from it, has two, and no one plane through both.)
+        let near = tol::POINT.max(tol::REL_POINT * r);
+        // (A side level with the plane is its ruling, whichever way rounding leaves it.)
+        let u = match (l0.abs() <= near, l1.abs() <= near) {
+            (true, true) => return Err(no_reach()),
+            (true, false) => u0,
+            (false, true) => u1,
+            (false, false) if l0 * l1 > 0.0 => return Err(no_reach()),
+            (false, false) => super::math::root_from(level, (u0, l0), (u1, l1)),
+        };
+        let on = fr.o + radial(u) * r;
+        let lean = ruling(u).ok_or_else(no_reach)?;
+        let t = fr.z.normalize();
+        // (The plane through the cylinder's ruling there and the leant one, its normal on
+        // the face's outward side.)
+        let n = (f.surf.normal(u, 0.0) * sign).normalize();
+        let mut z = t.cross(&lean).normalize();
+        if z.dot(&n) < 0.0 {
+            z = -z;
+        }
+        let natural = if f.sense { z } else { -z };
+        return Ok(Surface::Plane {
+            f: Frame {
+                o: on,
+                x: t,
+                y: natural.cross(&t),
+                z: natural,
+            },
+        });
+    }
+    // At a slant: the ellipse the cylinder meets the neutral plane in, by the cylinder's angle.
+    let whole = (u1 - u0).abs() >= TAU - tol::ROUNDOFF;
+    let rims = |u: f64| -> [P3; 2] {
+        let p = fr.o + radial(u) * r;
+        let on = p + fr.z * ((spec.neutral - p).dot(pull) / along);
+        let lean = ruling(u).unwrap_or(*pull);
+        // (Low to high the way the cylinder's axis runs, so the face keeps its side.)
+        let up = lean * (reach * along.signum());
+        [on - up, on + up]
+    };
+    // (A part of the turn runs on a little past the face's two sides: the faces it meets
+    // there meet the leant surface somewhere else along it.)
+    let (u0, u1) = if whole {
+        (u0, u1)
+    } else {
+        let more = (0.25 * (u1 - u0))
+            .min(0.5 * (TAU - (u1 - u0)) - 0.01)
+            .max(0.0);
+        (u0 - more, u1 + more)
+    };
+    let n = (((u1 - u0).abs() / (PI / 4.0)).ceil() as usize).max(1);
+    let breaks: Vec<f64> = (0..=n)
+        .map(|i| u0 + (u1 - u0) * i as f64 / n as f64)
+        .collect();
+    ruled_through(breaks, whole, &rims).ok_or(KernelError::Unsupported(
+        "drafting this cylinder across the pull",
+    ))
+}
+
+/// A round among faces to draft: the face, its radius and the two faces it runs between.
+type Round = (usize, f64, [usize; 2]);
+
+/// The rounds among `faces` that a draft can't turn as they are ([`Round`]): a cylinder across
+/// the pull or a torus that meets two other faces smoothly along its edges (a fillet between
+/// them, of its radius).
+fn rounds_among(b: &Body, faces: &[usize], pull: &V3) -> Vec<Round> {
+    let ef = b.edge_faces();
+    let normal = |fi: usize, p: &P3| {
+        let f = &b.faces[fi];
+        let (u, v) = f.surf.project(p, None);
+        f.surf.normal(u, v) * if f.sense { 1.0 } else { -1.0 }
+    };
+    faces
+        .iter()
+        .filter_map(|&fi| {
+            let radius = match &b.faces[fi].surf {
+                Surface::Cylinder { f, r } if f.z.cross(pull).norm() > tol::ANGULAR => *r,
+                Surface::Torus { rmin, .. } => *rmin,
+                _ => return None,
+            };
+            // The faces it meets smoothly: a fillet's two.
+            let mut beside: Vec<usize> = Vec::new();
+            for c in b.faces[fi].loops.iter().flatten() {
+                let ed = &b.edges[c.edge];
+                let Some(&other) = ef[c.edge].iter().find(|&&g| g != fi) else {
+                    continue;
+                };
+                let smooth = !ed.degenerate
+                    && ef[c.edge].len() == 2
+                    && [0.25, 0.5, 0.75].iter().all(|&s| {
+                        let p = ed.point(ed.t[0] + (ed.t[1] - ed.t[0]) * s);
+                        normal(fi, &p).dot(&normal(other, &p)) > 1.0 - tol::ANGULAR_POINT
+                    });
+                if smooth && !beside.contains(&other) {
+                    beside.push(other);
+                }
+            }
+            match beside[..] {
+                [x, y] => Some((fi, radius, [x, y])),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// [`draft`] of faces with rounds among them ([`rounds_among`]): the rounds deleted (the faces
+/// beside each run on to a sharp edge), the other faces drafted, and those edges rounded again
+/// at the rounds' radii. The result's faces continue the body's: a new round its old one.
+fn draft_rounded(
+    k: &mut NativeKernel,
+    body: BodyId,
+    spec: &DraftSpec,
+    faces: &[usize],
+    rounds: &[Round],
+) -> Result<OpResult> {
+    use std::collections::HashMap;
+    let gone: Vec<FaceId> = rounds.iter().map(|r| FaceId(r.0 as u64)).collect();
+    let sharp = super::surfacing::delete_faces(k, body, &gone)?;
+    let sharp_body = *sharp.bodies.first().ok_or(KernelError::Unsupported(
+        "drafting rounds whose faces don't run on to an edge",
+    ))?;
+    // Where each face of the body went.
+    let to_sharp: HashMap<usize, usize> = sharp
+        .history
+        .modified
+        .iter()
+        .map(|(new, old)| (old.face.0 as usize, new.0 as usize))
+        .collect();
+    let keep: Vec<FaceId> = faces
+        .iter()
+        .filter(|f| !rounds.iter().any(|r| r.0 == **f))
+        .filter_map(|f| to_sharp.get(f).map(|&g| FaceId(g as u64)))
+        .collect();
+    let drafted = draft(
+        k,
+        sharp_body,
+        &DraftSpec {
+            faces: keep,
+            tangent_propagation: false,
+            ..spec.clone()
+        },
+    );
+    k.release(sharp_body);
+    let drafted = drafted?;
+    let drafted_body = drafted.bodies[0];
+    let to_drafted: HashMap<usize, usize> = drafted
+        .history
+        .modified
+        .iter()
+        .map(|(new, old)| (old.face.0 as usize, new.0 as usize))
+        .collect();
+    let through = |f: usize| to_sharp.get(&f).and_then(|g| to_drafted.get(g)).copied();
+    // Each round's edge again: between the two faces it ran between, as they are now.
+    let b = std::sync::Arc::clone(k.get(drafted_body)?);
+    let ef = b.edge_faces();
+    let mut edges: Vec<(EdgeId, usize)> = Vec::new();
+    for (ri, (_, _, beside)) in rounds.iter().enumerate() {
+        let (Some(x), Some(y)) = (through(beside[0]), through(beside[1])) else {
+            continue;
+        };
+        for e in 0..b.edges.len() {
+            let fs = &ef[e];
+            if !b.edges[e].degenerate && fs.contains(&x) && fs.contains(&y) && x != y {
+                edges.push((EdgeId(e as u64), ri));
+            }
+        }
+    }
+    // (Back from a face of the drafted body to the body's.)
+    let back_sharp: HashMap<usize, usize> = to_sharp.iter().map(|(a, b)| (*b, *a)).collect();
+    let back_drafted: HashMap<usize, usize> = to_drafted.iter().map(|(a, b)| (*b, *a)).collect();
+    let origin = |f: usize| {
+        back_drafted
+            .get(&f)
+            .and_then(|g| back_sharp.get(g))
+            .copied()
+    };
+    let from = |f: usize| InputFace {
+        body,
+        face: FaceId(f as u64),
+    };
+    // Round by round of one radius (the same radius, most often: one fillet).
+    let mut cur = drafted_body;
+    let mut now: Vec<Option<usize>> = (0..b.faces.len()).map(origin).collect();
+    let mut radii: Vec<f64> = rounds.iter().map(|r| r.1).collect();
+    radii.sort_by(f64::total_cmp);
+    radii.dedup_by(|a, b| (*a - *b).abs() <= tol::REL_POINT * (1.0 + *b));
+    for (pass, r) in radii.iter().enumerate() {
+        let same = |ri: usize| (rounds[ri].1 - r).abs() <= tol::REL_POINT * (1.0 + r);
+        // (After the first fillet the edges' numbers are another body's: found again there.)
+        let picked: Vec<(EdgeId, usize)> = if pass == 0 {
+            edges.iter().copied().filter(|x| same(x.1)).collect()
+        } else {
+            let nb = std::sync::Arc::clone(k.get(cur)?);
+            let nef = nb.edge_faces();
+            let mut out = Vec::new();
+            for (ri, (_, _, beside)) in rounds.iter().enumerate().filter(|(ri, _)| same(*ri)) {
+                let at = |f: usize| now.iter().position(|o| *o == Some(f));
+                let (Some(x), Some(y)) = (at(beside[0]), at(beside[1])) else {
+                    continue;
+                };
+                for e in 0..nb.edges.len() {
+                    if !nb.edges[e].degenerate && nef[e].contains(&x) && nef[e].contains(&y) {
+                        out.push((EdgeId(e as u64), ri));
+                    }
+                }
+            }
+            out
+        };
+        if picked.is_empty() {
+            continue;
+        }
+        let ids: Vec<EdgeId> = picked.iter().map(|x| x.0).collect();
+        let rounded = super::blend::fillet(k, cur, &ids, &FilletSpec::radius(*r));
+        k.release(cur);
+        let rounded = rounded?;
+        let n = k.get(rounded.bodies[0])?.faces.len();
+        let mut next: Vec<Option<usize>> = vec![None; n];
+        for (new, old) in &rounded.history.modified {
+            next[new.0 as usize] = now.get(old.face.0 as usize).copied().flatten();
+        }
+        // A new round's face is the round that was there.
+        for (new, o) in &rounded.history.generated {
+            if let Origin::FromEdge { edge, .. } = o
+                && let Some(&(_, ri)) = picked.iter().find(|x| x.0 == *edge)
+            {
+                next[new.0 as usize] = Some(rounds[ri].0);
+            }
+        }
+        (cur, now) = (rounded.bodies[0], next);
+    }
+    Ok(OpResult {
+        bodies: vec![cur],
+        history: History {
+            modified: now
+                .iter()
+                .enumerate()
+                .filter_map(|(f, o)| o.map(|o| (FaceId(f as u64), from(o))))
+                .collect(),
+            ..Default::default()
+        },
+    })
+}
+
 /// The faces reached from `seed` across smooth edges (the faces' normals agree along them).
 pub fn tangent_closure(b: &Body, mut seed: Vec<usize>) -> Vec<usize> {
     let ef = b.edge_faces();
@@ -2222,7 +3180,212 @@ pub fn tangent_closure(b: &Body, mut seed: Vec<usize>) -> Vec<usize> {
 /// Draft: the faces turned about the neutral plane by the angle, leaning in as they rise along
 /// the pull direction.
 pub fn draft(k: &mut NativeKernel, body: BodyId, spec: &DraftSpec) -> Result<OpResult> {
-    let b = (**k.get(body)?).clone();
+    // By moving the faces as they are joined; where that can't be (a hole's or a groove's
+    // slanted wall that comes to meet faces it didn't, a groove that ran out below the top),
+    // by cutting the leant wall's hollow from the part with the hollow filled.
+    // (`CADRS_DRAFT_BY_CUT`: by cutting first, to hold the two ways together.)
+    if crate::native::env_flag!("CADRS_DRAFT_BY_CUT")
+        && let Some(cut) = draft_by_cut(k, body, spec)
+    {
+        return Ok(cut);
+    }
+    let moved = draft_moved(k, body, spec);
+    if moved.is_ok() {
+        return moved;
+    }
+    match draft_by_cut(k, body, spec) {
+        Some(cut) => Ok(cut),
+        None => moved,
+    }
+}
+
+/// [`draft`] of slanted hollows' walls (cylinders at a slant to the pull, facing their own
+/// axes: holes, grooves) by cutting: the walls deleted, so the part closes over the hollows,
+/// and each hollow cut again as its leant wall bounds it, the solid between the wall's two
+/// rims (each in a plane square to the pull, closed by its chord where the wall is part of a
+/// turn). Whatever the leant wall comes to meet, the cut finds. `None` for any other faces,
+/// or where a step fails or the result isn't sound.
+fn draft_by_cut(k: &mut NativeKernel, body: BodyId, spec: &DraftSpec) -> Option<OpResult> {
+    if spec.tangent_propagation || spec.neutral_normal.is_some() || spec.faces.is_empty() {
+        return None;
+    }
+    let b = std::sync::Arc::clone(k.get(body).ok()?);
+    let pull = spec.pull.into_inner();
+    let (sa, ca) = spec.angle.sin_cos();
+    if ca <= tol::ANGULAR {
+        return None;
+    }
+    // The hollows' solids reach a little past the part along the pull, and no farther: a
+    // leant wall run on far enough closes to a point and opens again inside out.
+    let was = b.bbox();
+    let level = spec.neutral.coords.dot(&pull);
+    let (mut low, mut high) = (f64::INFINITY, f64::NEG_INFINITY);
+    for i in 0..8 {
+        let h = P3::new(
+            if i & 1 == 0 { was.min.x } else { was.max.x },
+            if i & 2 == 0 { was.min.y } else { was.max.y },
+            if i & 4 == 0 { was.min.z } else { was.max.z },
+        )
+        .coords
+        .dot(&pull);
+        (low, high) = (low.min(h), high.max(h));
+    }
+    let past = 0.1 * (high - low) + tol::POINT;
+    // (How far along a leant ruling from the neutral plane to each end.)
+    let ends = [(low - past - level) / ca, (high + past - level) / ca];
+    let across = any_perpendicular(&pull).normalize();
+    let mut tools: Vec<BodyId> = Vec::new();
+    let done = |k: &mut NativeKernel, ids: &[BodyId]| {
+        for id in ids {
+            k.release(*id);
+        }
+    };
+    for fid in &spec.faces {
+        let fi = fid.0 as usize;
+        let tool = (|| -> Option<BodyId> {
+            let f = b.faces.get(fi)?;
+            let Surface::Cylinder { f: fr, r } = &f.surf else {
+                return None;
+            };
+            let along = fr.z.dot(&pull);
+            if fr.z.cross(&pull).norm() <= tol::ANGULAR || along.abs() <= tol::ANGULAR {
+                return None;
+            }
+            let ((u0, u1), _) = super::heal_split::face_uv_box(&b, fi)?;
+            let sign = if f.sense { 1.0 } else { -1.0 };
+            let radial = |u: f64| fr.x * u.cos() + fr.y * u.sin();
+            // A hollow's wall: it faces its own axis.
+            let mid = 0.5 * (u0 + u1);
+            if (f.surf.normal(mid, 0.0) * sign).dot(&radial(mid)) >= 0.0 {
+                return None;
+            }
+            let whole = (u1 - u0).abs() >= TAU - tol::ROUNDOFF;
+            let (u0, u1) = if whole {
+                (u0, u1)
+            } else {
+                let more = (0.25 * (u1 - u0))
+                    .min(0.5 * (TAU - (u1 - u0)) - 0.01)
+                    .max(0.0);
+                (u0 - more, u1 + more)
+            };
+            let rims = |u: f64| -> Option<[P3; 2]> {
+                let p = fr.o + radial(u) * *r;
+                let on = p + fr.z * ((spec.neutral - p).dot(&pull) / along);
+                let n = f.surf.normal(u, 0.0) * sign;
+                let lean = pull * ca - (n - pull * pull.dot(&n)).try_normalize(tol::ANGULAR)? * sa;
+                Some([on + lean * ends[0], on + lean * ends[1]])
+            };
+            let pieces = (((u1 - u0).abs() / (PI / 4.0)).ceil() as usize).max(1) * 16;
+            let stations: Vec<f64> = (0..=pieces)
+                .map(|i| u0 + (u1 - u0) * i as f64 / pieces as f64)
+                .collect();
+            // Each rim's outline in its own plane, square to the pull.
+            let mut sections = Vec::new();
+            for side in 0..2 {
+                let pts: Vec<P3> = stations
+                    .iter()
+                    .map(|&u| rims(u).map(|x| x[side]))
+                    .collect::<Option<_>>()?;
+                let origin = pts[0];
+                let plane = Plane {
+                    origin,
+                    x_dir: nalgebra::Unit::new_normalize(across),
+                    normal: nalgebra::Unit::new_normalize(pull),
+                };
+                let y = pull.cross(&across);
+                let flat =
+                    |p: &P3| nalgebra::Point2::new((p - origin).dot(&across), (p - origin).dot(&y));
+                let curve = if whole {
+                    super::nurbs::NurbsCurve::interpolate_periodic(
+                        &pts[..pts.len() - 1],
+                        &stations,
+                        3,
+                    )?
+                } else {
+                    super::nurbs::NurbsCurve::interpolate(&pts, &stations, 3, None, None)
+                };
+                let poles: Vec<nalgebra::Point2<f64>> = curve
+                    .cps
+                    .iter()
+                    .map(|h| flat(&super::nurbs::dehom(h)))
+                    .collect();
+                let mut curves = vec![Curve2::spline(curve.degree, &curve.knots, &poles, &[])];
+                if !whole {
+                    curves.push(Curve2::Line {
+                        a: flat(&pts[pts.len() - 1]),
+                        b: flat(&pts[0]),
+                        source: None,
+                    });
+                }
+                sections.push(Profile::of(plane, vec![Loop { curves }]));
+            }
+            k.loft_with(&LoftSpec::through(sections))
+                .ok()?
+                .bodies
+                .first()
+                .copied()
+        })();
+        match tool {
+            Some(t) => tools.push(t),
+            None => {
+                done(k, &tools);
+                return None;
+            }
+        }
+    }
+    let filled = super::surfacing::delete_faces(k, body, &spec.faces);
+    let Ok(filled) = filled else {
+        done(k, &tools);
+        return None;
+    };
+    let Some(&filled_body) = filled.bodies.first() else {
+        done(k, &tools);
+        return None;
+    };
+    let cut = k.boolean(BoolOp::Subtract, filled_body, &tools);
+    done(k, &tools);
+    k.release(filled_body);
+    let cut = cut.ok()?;
+    let &out = cut.bodies.first()?;
+    let sound = k.get(out).is_ok_and(|o| {
+        !o.solids.is_empty() && o.check_with(super::topo::CheckLevel::Full).is_empty()
+    });
+    if !sound {
+        k.release(out);
+        return None;
+    }
+    // The result's faces: the part's own through the filling, a hollow's new wall its old one.
+    let through: std::collections::HashMap<u64, FaceId> = filled
+        .history
+        .modified
+        .iter()
+        .map(|(new, old)| (new.0, old.face))
+        .collect();
+    let modified = cut
+        .history
+        .modified
+        .iter()
+        .filter_map(|(new, from)| {
+            let face = if from.body == filled_body {
+                *through.get(&from.face.0)?
+            } else {
+                spec.faces[tools.iter().position(|t| *t == from.body)?]
+            };
+            Some((*new, InputFace { body, face }))
+        })
+        .collect();
+    Some(OpResult {
+        bodies: vec![out],
+        history: History {
+            modified,
+            ..Default::default()
+        },
+    })
+}
+
+/// [`draft`] by moving the faces as they are joined.
+fn draft_moved(k: &mut NativeKernel, body: BodyId, spec: &DraftSpec) -> Result<OpResult> {
+    let b = std::sync::Arc::clone(k.get(body)?);
     let pull = spec.pull.into_inner();
     let mut surfs: Vec<Surface> = b.faces.iter().map(|f| f.surf.clone()).collect();
     let mut faces: Vec<usize> = Vec::new();
@@ -2238,6 +3401,67 @@ pub fn draft(k: &mut NativeKernel, body: BodyId, spec: &DraftSpec) -> Result<OpR
     if spec.tangent_propagation {
         faces = tangent_closure(&b, faces);
     }
+    // A cylinder across the pull that is level with the neutral plane at both its sides (a
+    // groove cut down from it) has two rulings there, and no one plane through both: the
+    // face is cut along the ruling farthest from the plane, and each part leans about its
+    // own.
+    let cuts: Vec<(usize, f64)> = faces
+        .iter()
+        .filter_map(|&fi| two_rulings(&b, fi, spec, &pull).map(|u| (fi, u)))
+        .collect();
+    if !cuts.is_empty() {
+        let mut cut = (*b).clone();
+        let mut of: Vec<usize> = (0..b.faces.len()).collect();
+        let mut picked = faces.clone();
+        for (fi, u) in cuts {
+            let parts =
+                super::heal_split::split_face_iso(&mut cut, fi, super::heal_split::Dir::U, &[u])?;
+            if parts.len() < 2 {
+                return Err(KernelError::Unsupported(
+                    "drafting a cylinder level with the neutral plane at both sides",
+                ));
+            }
+            of.resize(cut.faces.len(), fi);
+            for &p in &parts {
+                of[p] = fi;
+                if !picked.contains(&p) {
+                    picked.push(p);
+                }
+            }
+        }
+        let cut_body = k.insert(cut);
+        let drafted = draft(
+            k,
+            cut_body,
+            &DraftSpec {
+                faces: picked.iter().map(|&f| FaceId(f as u64)).collect(),
+                tangent_propagation: false,
+                ..spec.clone()
+            },
+        );
+        k.release(cut_body);
+        let mut drafted = drafted?;
+        // (The faces of the body given, not of the one cut.)
+        for (_, from) in &mut drafted.history.modified {
+            from.body = body;
+            from.face = FaceId(of[from.face.0 as usize] as u64);
+        }
+        return Ok(drafted);
+    }
+    // Rounds among them (a fillet between two of the faces, reached across its smooth
+    // edges): taken off, the faces drafted, and rounded again at the same radius.
+    let rounds = rounds_among(&b, &faces, &pull);
+    if !rounds.is_empty() {
+        return draft_rounded(k, body, spec, &faces, &rounds);
+    }
+    // (Faces that become ruled surfaces or planes of another lie can come to cross faces
+    // they never met, which moving the faces as they are joined doesn't see: looked for
+    // after.)
+    let reshaped = faces.iter().any(|&fi| match &b.faces[fi].surf {
+        Surface::Extrusion { .. } => true,
+        Surface::Cylinder { f, .. } => f.z.cross(&pull).norm() > tol::ANGULAR,
+        _ => false,
+    });
     for fi in faces {
         let f = &b.faces[fi];
         surfs[fi] = match &f.surf {
@@ -2293,9 +3517,13 @@ pub fn draft(k: &mut NativeKernel, body: BodyId, spec: &DraftSpec) -> Result<OpR
                     ));
                 }
                 if fr.z.cross(&pull).norm() > tol::ANGULAR {
-                    return Err(KernelError::Unsupported(
-                        "drafting a cylinder or cone not along the pull",
-                    ));
+                    let Surface::Cylinder { r, .. } = &f.surf else {
+                        return Err(KernelError::Unsupported(
+                            "drafting a cone not along the pull",
+                        ));
+                    };
+                    surfs[fi] = cylinder_across(&b, fi, fr, *r, spec, &pull)?;
+                    continue;
                 }
                 let (r, a0) = match &f.surf {
                     Surface::Cone { r, a, .. } => (*r, *a),
@@ -2329,26 +3557,111 @@ pub fn draft(k: &mut NativeKernel, body: BodyId, spec: &DraftSpec) -> Result<OpR
                     a,
                 }
             }
+            // A face extruded along the pull (a wall over a spline or an ellipse): the ruled
+            // surface through its curve on the neutral plane, each ruling the pull leant by the
+            // angle against the wall's outward normal there (the wall leans in as it rises,
+            // as a plane's does). Its sections across the pull are the curve's offsets, so it
+            // is no extrusion: a B-spline through its two rims.
+            Surface::Extrusion { c, d } => {
+                if spec.neutral_normal.is_some() {
+                    return Err(KernelError::Unsupported(
+                        "drafting an extruded face about a neutral plane at an angle to the pull",
+                    ));
+                }
+                let along = d.dot(&pull);
+                if d.cross(&pull).norm() > tol::ANGULAR * d.norm() || along.abs() < tol::TINY {
+                    return Err(KernelError::Unsupported(
+                        "drafting an extruded face not along the pull",
+                    ));
+                }
+                let ((u0, u1), _) = super::heal_split::face_uv_box(&b, fi).ok_or(
+                    KernelError::Unsupported("drafting an extruded face with no extent"),
+                )?;
+                let whole = c.is_periodic() && (u1 - u0).abs() >= TAU - tol::ROUNDOFF;
+                let sign = if f.sense { 1.0 } else { -1.0 };
+                let reach = 4.0 * b.bbox().diagonal().max(tol::POINT);
+                let (sa, ca) = spec.angle.sin_cos();
+                // The two rims' points at a parameter of the curve.
+                let rims = |u: f64| -> [P3; 2] {
+                    let p = c.point(u);
+                    let on = p + d * ((spec.neutral - p).dot(&pull) / along);
+                    let ruling = pull * ca - f.surf.normal(u, 0.0) * (sign * sa);
+                    // (Low to high the way the extrusion runs, so the face keeps its side.)
+                    let up = ruling * (reach * along.signum());
+                    [on - up, on + up]
+                };
+                ruled_through(c.pieces(u0, u1), whole, &rims)
+                    .ok_or(KernelError::Unsupported("drafting this extruded face"))?
+            }
             other => {
-                if std::env::var_os("CADRS_DRAFT_DEBUG").is_some() {
+                if crate::native::env_flag!("CADRS_DRAFT_DEBUG") {
                     eprintln!("draft: unsupported face {fi}: {:?}", other.kind());
                 }
                 return Err(KernelError::Unsupported("drafting this kind of face"));
             }
         };
     }
-    let (out, from) = match replace_surfaces(&b, &surfs) {
+    // (Moved with every corner and edge solved again is not yet moved rightly: an edge whose
+    // ends went past one another is turned round in a body that closes all the same, its
+    // faces through one another. That is no result: the faces are moved again without it.)
+    let moved = replace_surfaces(&b, &surfs).and_then(|out| match turned_edge(&b, &surfs) {
+        None => Ok(out),
+        Some(e) => Err(KernelError::InvalidResult {
+            op: "draft",
+            why: format!("the moved faces turn edge {e} round"),
+        }),
+    });
+    let (out, from) = match moved {
         Ok(out) => {
             let n = out.faces.len();
             (out, (0..n).collect::<Vec<_>>())
         }
         // Faces the draft swallows (a box's top, where its sides meet below it): of a convex
         // polyhedron, the solid the planes bound, as they are after the draft.
-        Err(e) => match planes_bound(&b, &surfs) {
+        // Of any other body, the faces moved again as its edges shrink to nothing
+        // ([`replace_with_events`]).
+        Err(e) => match planes_bound(&b, &surfs).or_else(|| prism_planes_bound(&b, &surfs)) {
             Some(Ok(r)) => r,
-            Some(Err(_)) | None => return Err(e),
+            Some(Err(_)) | None => match replace_with_events(&b, &surfs) {
+                Some(r) => r,
+                None => return Err(e),
+            },
         },
     };
+    if reshaped {
+        // A face turned about its curve on the neutral plane moves no point farther than
+        // its height from that plane by the angle's tangent: a result that reaches well
+        // past that took a face's far side for it.
+        let was = b.bbox();
+        let level = (spec.neutral - P3::origin()).dot(&pull);
+        let height = (0..8)
+            .map(|i| {
+                P3::new(
+                    if i & 1 == 0 { was.min.x } else { was.max.x },
+                    if i & 2 == 0 { was.min.y } else { was.max.y },
+                    if i & 4 == 0 { was.min.z } else { was.max.z },
+                )
+                .coords
+                .dot(&pull)
+            })
+            .fold(0.0f64, |m, h| m.max((h - level).abs()));
+        let room =
+            2.0 * height * spec.angle.tan().abs() + tol::REL_POINT * was.diagonal() + tol::POINT;
+        let now = out.bbox();
+        let held = was.grow(room);
+        if !(held.contains(&now.min) && held.contains(&now.max)) {
+            return Err(KernelError::InvalidResult {
+                op: "draft",
+                why: "the drafted faces run far past the part".into(),
+            });
+        }
+    }
+    if reshaped && let Some(why) = super::check_faces::face_crossings(&out).into_iter().next() {
+        return Err(KernelError::InvalidResult {
+            op: "draft",
+            why: format!("the drafted faces cross faces they didn't meet before: {why}"),
+        });
+    }
     let id = k.insert(out);
     let history = History {
         modified: from

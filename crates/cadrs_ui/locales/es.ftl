@@ -123,6 +123,7 @@ ui-color-editor-save-color = Guardar este color
 ui-color-scheme-light = Claro
 ui-color-scheme-dark = Oscuro
 ui-color-scheme-system = Usar el del sistema
+ui-color-scheme-cycle = Esquema de color: { $scheme } (clic para { $next })
 
 ## crates/cadrs_ui/src/dock.rs
 ui-dock-hide-panel = Ocultar panel
@@ -206,6 +207,8 @@ shell-top-bar-update = Actualizar a v{ $version }…
 shell-top-bar-update-tooltip = Leer las notas de la versión y actualizar
 shell-top-bar-github = cadrs en GitHub
 shell-top-bar-github-stars = { $stars } estrellas en GitHub
+shell-top-bar-download-app = Descargar la app
+shell-top-bar-download-app-tooltip = Obtén cadrs para Linux, Windows o macOS (GitHub)
 
 ## crates/cadrs_app/src/notifications.rs
 shell-notice-whats-new-title = Un nuevo aspecto para cadrs
@@ -585,6 +588,9 @@ shell-prefs-mcp-server = Servidor MCP
 shell-prefs-enabled = Activado
 shell-prefs-endpoint = Punto de conexión
 shell-prefs-mcp-note = Mientras esté activado, los asistentes de IA de este equipo (Claude, Cursor, …) pueden crear y editar documentos.
+shell-prefs-mcp-port = Puerto
+shell-prefs-mcp-port-reset = Restablecer
+shell-prefs-mcp-port-reset-tooltip = Volver al puerto predeterminado, { $port }
 shell-prefs-collab-heading = Colaboración
 shell-prefs-id-while-online = Se muestra mientras está en línea
 shell-prefs-p2p = Red P2P
@@ -1898,6 +1904,20 @@ model-mass-parts = Piezas que medir
 ## crates/cadrs_app/src/mcp.rs
 model-mcp-server-on = Servidor MCP en { $url }
 model-mcp-cannot-start = No se puede iniciar el servidor MCP en el puerto { $port }: { $error }
+shell-mcp-tooltip-on = Asistentes de IA (MCP): activados
+shell-mcp-tooltip-off = Asistentes de IA (MCP): desactivados
+shell-mcp-tooltip-failed = Asistentes de IA (MCP): no se pudo iniciar
+shell-mcp-serving = Activado, en { $url }
+shell-mcp-off = Desactivado (serviría en { $url })
+shell-mcp-failed = No se pudo iniciar en el puerto { $port }
+shell-mcp-enable = Activar el servidor MCP
+shell-mcp-port = Puerto: { $port }…
+shell-mcp-port-tooltip = El puerto de este equipo al que se conectan los asistentes de IA
+shell-mcp-port-reset = Restablecer el puerto predeterminado ({ $port })
+shell-mcp-copy-endpoint = Copiar el endpoint
+shell-mcp-copied = Copiado { $url }
+shell-mcp-port-title = Puerto del servidor MCP
+shell-mcp-port-invalid = No es un puerto: { $text } (un número de 1 a 65535)
 
 ## crates/cadrs_app/src/simulation_ui.rs
 model-sim-one-face = { $count } cara
@@ -2559,6 +2579,8 @@ drawing-hint-auxiliary-pick = Vista auxiliar: haga clic en una arista recta de u
 drawing-hint-auxiliary-place = Vista auxiliar: haga clic para colocar la vista
 drawing-hint-align-vertical = Alinear vista verticalmente: haga clic en una arista de la vista
 drawing-hint-align-horizontal = Alinear vista horizontalmente: haga clic en una arista de la vista
+drawing-hint-section-click = Haz clic para ver { $section } en { $name }
+drawing-hint-section-jump = Doble clic para ver { $section } en { $name }
 
 ## crates/cadrs_app/src/drawing/flat_views.rs
 drawing-flat-patterns = Desarrollos
@@ -2580,6 +2602,7 @@ drawing-view-menu-tangent-solid = Continuas
 drawing-view-menu-tangent-phantom = Fantasma
 drawing-flat-adjust-linestyle = Ajustar estilo de línea…
 drawing-view-menu-properties = Propiedades de la vista…
+drawing-view-menu-show-section = Mostrar { $section } en { $name }
 drawing-flat-menu-order = Orden
 drawing-view-menu-bring-to-front = Traer al frente
 drawing-view-menu-send-to-back = Enviar al fondo
@@ -3309,6 +3332,7 @@ cam-go-to-end = Ir al final
 cam-reset = Restablecer
 cam-close-the-preview = Cerrar la vista previa
 cam-drag-through-program = Arrastre para recorrer el programa
+cam-simulated-ahead = Simulado por adelantado: verde listo para reproducir, azul calculándose, rojo aún no, ámbar no cortado con exactitud
 cam-toolpath = Trayectoria
 cam-pause-on-collision = Pausar en caso de colisión
 cam-readout-feed = avance { $feed } mm/min

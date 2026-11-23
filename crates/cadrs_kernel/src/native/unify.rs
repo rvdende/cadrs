@@ -17,7 +17,7 @@ fn co_uv(b: &Body, c: &Coedge, end: bool) -> P2 {
 
 /// The p-curve of an edge on `s`, shifted by periods so its start (in the coedge's direction)
 /// is at `at`.
-fn pc_from(s: &Surface, e: &Edge, fwd: bool, at: Option<P2>) -> Curve {
+pub(crate) fn pc_from(s: &Surface, e: &Edge, fwd: bool, at: Option<P2>) -> Curve {
     // (Hinted by `at`: on a closed B-spline surface, an edge along the seam lies at the end
     // of the range the chain is at.)
     let pc = pcurve::pcurve(s, &e.curve, e.t[0], e.t[1], at);
@@ -1164,7 +1164,7 @@ fn merge_group(b: &mut Body, g: &[usize]) -> Option<Face> {
         polygon_area(&pts)
     };
     let wrapping: Vec<usize> = (0..chains.len()).filter(|&i| windings[i] != 0).collect();
-    if std::env::var("CADRS_BOOL_DEBUG").is_ok() {
+    if crate::native::env_flag!("CADRS_BOOL_DEBUG") {
         eprintln!(
             "merge group {g:?}: {} chains, windings {windings:?}",
             chains.len()
@@ -1218,6 +1218,14 @@ fn merge_group(b: &mut Body, g: &[usize]) -> Option<Face> {
                     })
             })
             .collect();
+        // A hole running a whole turn or more round the axis (a cylinder a thread of more than
+        // a turn bites through): every seam would cut it, so the pieces stay as they are.
+        if spans
+            .iter()
+            .any(|&(lo, hi)| (hi - lo) * mu >= TAU * mu - tol::POINT)
+        {
+            return None;
+        }
         let clear = |u: f64| {
             spans.iter().all(|&(lo, hi)| {
                 let w = unwrap_near(u, 0.5 * (lo + hi), TAU);
@@ -1310,21 +1318,13 @@ fn merge_group(b: &mut Body, g: &[usize]) -> Option<Face> {
             let c = chains[i2][k].clone();
             let e = &b.edges[c.edge];
             // Solve u(t) = target on the p-curve by bisection.
-            let (mut lo, mut hi) = (e.t[0], e.t[1]);
+            let (lo, hi) = (e.t[0], e.t[1]);
             let f = |t: f64| c.pc.point(t).x - target;
-            let flo = f(lo);
-            if flo.signum() == f(hi).signum() {
+            let (flo, fhi) = (f(lo), f(hi));
+            if flo.signum() == fhi.signum() {
                 return None;
             }
-            for _ in 0..100 {
-                let m = 0.5 * (lo + hi);
-                if f(m).signum() == flo.signum() {
-                    lo = m;
-                } else {
-                    hi = m;
-                }
-            }
-            let t = 0.5 * (lo + hi);
+            let t = super::math::root_from(f, (lo, flo), (hi, fhi));
             let e_id = c.edge;
             let v = split_edge(b, e_id, t);
             // Rebuild chain 2 with the split coedges (the split updated b.faces, not our chain).
@@ -1459,8 +1459,8 @@ pub fn merge_edges(b: &mut Body) {
             if a.v[0] == a.v[1] || c.v[0] == c.v[1] {
                 continue;
             }
-            let mut fa = ef[e1].clone();
-            let mut fc = ef[e2].clone();
+            let mut fa = ef[e1].to_vec();
+            let mut fc = ef[e2].to_vec();
             fa.sort();
             fc.sort();
             if fa != fc {
@@ -1689,7 +1689,7 @@ pub fn planarize(b: &mut Body) -> bool {
                 dev = dev.max((q - o).dot(&n).abs());
             }
         }
-        if std::env::var("CADRS_BOOL_DEBUG").is_ok() {
+        if crate::native::env_flag!("CADRS_BOOL_DEBUG") {
             let net = pts
                 .iter()
                 .map(|p| (p - o).dot(&n).abs())

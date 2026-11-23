@@ -51,9 +51,10 @@ Differences without errors, still to check:
     fillet larger than the round it runs over, a rail running off a face, a crease of 1° taken as
     tangent); groups E, G and C are still open;
   - fillets take about 1.2× OCCT's time on smlib_fillets.
-- [ ] Booleans: a boolean now checks that its result's faces don't cross and flags a result that does
-  (`take_invalid_results`; `CADRS_BOOL_STRICT=1` makes it an error). Three booleans still
-  return a flagged result: volumemaker_f5, shape_type_a_a1 and nightlight's Boolean 7.
+- [ ] Booleans: a boolean checks that its result's faces don't cross, and fails where they do and
+  no retry betters it (`CADRS_BOOL_LENIENT=1` returns the result flagged instead, counted by
+  `take_invalid_results`). Three booleans returned a flagged result and so fail now:
+  volumemaker_f5, shape_type_a_a1 and nightlight's Boolean 7.
 - [ ] Offsets: smlib_offset has 4 known failures (offset_04, 05, 07, 08).
 - [ ] Remaining known failures: `tools/smlib_known_failures/` (the SMLib ssi suites and a few
   others).

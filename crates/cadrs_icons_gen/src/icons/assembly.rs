@@ -3,7 +3,9 @@
 //! Roles: context geometry is neutral (TOP/SOFT/MID/SHADE); ACCENT marks only what explains the tool.
 //! Mates show two parts (the fixed one lit a step darker, SOFT top) and ACCENT for the motion the mate
 //! allows or the faces it constrains. Relations accent the coupled motion. The document types share one
-//! base, a square platform, with the type's emblem on it in ACCENT.
+//! base, a square platform, with the type's emblem on it in ACCENT. The Machine Builder's icons show a
+//! piece of a machine tool, what stands still in the ground colours and what moves in TOP, with ACCENT
+//! for the motion or the marker the command sets.
 
 use crate::common::*;
 use Kind::Solid;
@@ -58,6 +60,46 @@ pub fn icons() -> Vec<Def> {
             Solid,
             "Standard content",
             standard_content,
+        ),
+        def("machine-builder", Solid, "Machine builder", machine_builder),
+        def(
+            "machine-tool-mount",
+            Solid,
+            "Tool mount",
+            machine_tool_mount,
+        ),
+        def(
+            "machine-table-mount",
+            Solid,
+            "Table mount",
+            machine_table_mount,
+        ),
+        def(
+            "machine-axis-linear",
+            Solid,
+            "Linear axis",
+            machine_axis_linear,
+        ),
+        def(
+            "machine-axis-rotary",
+            Solid,
+            "Rotary axis",
+            machine_axis_rotary,
+        ),
+        def(
+            "machine-axis-flip",
+            Solid,
+            "Reverse axis direction",
+            machine_axis_flip,
+        ),
+        def("machine-jog", Solid, "Jog axis", machine_jog),
+        def("machine-home", Solid, "Home machine", machine_home),
+        def("machine-actuator", Solid, "Actuator", machine_actuator),
+        def(
+            "machine-tool-change",
+            Solid,
+            "Tool change",
+            machine_tool_change,
         ),
         def("assembly", Solid, "Assembly", assembly),
         def("assembly-rigid", Solid, "Rigid subassembly", assembly_rigid),
@@ -774,6 +816,244 @@ fn standard_content() -> Vec<String> {
         &hexv.iter().map(|&(x, y)| p(x, y, h1)).collect::<Vec<_>>(),
         TOP,
         "",
+    ));
+    out
+}
+
+// ---------------------------------------------------------------------------------------------
+// Machine Builder: turning an assembly into a machine tool. Each icon is one piece of a machine
+// (a slide, a rotary table, a spindle, a handwheel...), so they tell apart by silhouette first.
+
+/// The connector marker of a mount: an accent triad from `c`, its z arrow to `z` and its two
+/// short arms to `x` and `y`, over a dot.
+fn connector(c: P, z: P, x: P, y: P) -> Vec<String> {
+    let w = r#"stroke-width="1.4""#;
+    els![
+        arrow(c.0, c.1, x.0, x.1, 2.4, 2.4, ACCENT, w),
+        arrow(c.0, c.1, y.0, y.1, 2.4, 2.4, ACCENT, w),
+        arrow(c.0, c.1, z.0, z.1, 3.0, 2.8, ACCENT, w),
+        circle(c.0, c.1, 1.3, ACCENT, r#"stroke="none""#),
+    ]
+}
+
+/// A slide: a rail along x between two end blocks, and the carriage riding it from x = `at`.
+fn slide(o: P, len: f64, at: f64) -> Vec<String> {
+    els![
+        ground_box(o, 0.0, 1.4, 0.0, 6.0, 0.0, 2.6),
+        ground_box(o, 1.4, len - 1.4, 1.5, 4.5, 0.0, 1.4),
+        iso_box(o, at, at + 4.4, 0.0, 6.0, 1.4, 4.6),
+        ground_box(o, len - 1.4, len, 0.0, 6.0, 0.0, 2.6),
+    ]
+}
+
+fn machine_builder() -> Vec<String> {
+    // A machine tool (bed, column, head with its spindle, table) with the axes the builder
+    // gives it marked in accent: the table's travel along the bed, the head's up the column.
+    let o = (11.6, 10.6);
+    let p = projector(o);
+    els![
+        ground_box(o, 0.0, 9.0, 0.0, 7.5, 0.0, 1.8),
+        ground_box(o, 0.0, 2.6, 0.8, 6.7, 1.8, 10.6),
+        iso_box(o, 2.6, 7.2, 2.3, 5.2, 7.8, 10.6),
+        cylinder(o, 5.6, 3.75, 5.6, 7.8, 1.0),
+        iso_box(o, 3.8, 8.6, 1.2, 6.3, 1.8, 2.8),
+        darrow(p(-0.4, 10.6, 0.0), p(9.4, 10.6, 0.0), 2.8, 2.6),
+        darrow(p(10.8, 0.6, 4.4), p(10.8, 0.6, 11.4), 2.8, 2.6),
+    ]
+}
+
+fn machine_tool_mount() -> Vec<String> {
+    // A spindle (its housing and the nose under it) with the tool mount's connector on the end
+    // of the nose: z out of the spindle, where the tool goes.
+    let o = (12.0, 18.6);
+    let p = projector(o);
+    let z = 2.4;
+    els![
+        cylinder(o, 0.0, 0.0, z, 8.4, 2.3),
+        cylinder(o, 0.0, 0.0, 8.4, 13.8, 4.0),
+        connector(
+            p(0.0, 0.0, z),
+            p(0.0, 0.0, z - 6.2),
+            p(5.6, 0.0, z),
+            p(0.0, 5.6, z)
+        ),
+    ]
+}
+
+fn machine_table_mount() -> Vec<String> {
+    // A machine table with its T-slots and the table mount's connector in the middle of it: z
+    // up off the table, where the work goes.
+    let o = (12.0, 11.4);
+    let p = projector(o);
+    let (l, w, h) = (12.0, 9.0, 2.2);
+    let slots: Vec<String> = [2.25, 6.75]
+        .iter()
+        .map(|&y| seg(p(0.0, y, h), p(l, y, h), THIN))
+        .collect();
+    els![
+        iso_box(o, 0.0, l, 0.0, w, 0.0, h),
+        slots,
+        connector(
+            p(l / 2.0, w / 2.0, h),
+            p(l / 2.0, w / 2.0, h + 8.0),
+            p(l - 0.6, w / 2.0, h),
+            p(l / 2.0, w - 0.2, h)
+        ),
+    ]
+}
+
+fn machine_axis_linear() -> Vec<String> {
+    // A slide with a double arrow over it along the rail: the carriage's travel.
+    let o = (9.6, 10.6);
+    let p = projector(o);
+    els![
+        slide(o, 14.0, 4.8),
+        darrow(p(2.0, 3.0, 10.4), p(12.0, 3.0, 10.4), 3.0, 2.8),
+    ]
+}
+
+fn machine_axis_rotary() -> Vec<String> {
+    // A rotary table (a round platter on its square housing) with the turn it makes as an
+    // arrow round the face of the platter.
+    let o = (12.0, 9.6);
+    let (c, z) = (4.7, 5.0);
+    els![
+        ground_box(o, 0.0, 2.0 * c, 0.0, 2.0 * c, 0.0, 2.6),
+        cylinder(o, c, c, 2.6, z, 4.6),
+        poly(&ring(o, c, c, z, 0.8, 0.0, 360.0, 10.0), SHADE, THIN),
+        curved_arrow(
+            &ring(o, c, c, z, 2.9, 245.0, -25.0, 5.0),
+            2.6,
+            2.5,
+            ACCENT,
+            r#"stroke-width="1.3""#
+        ),
+    ]
+}
+
+fn machine_axis_flip() -> Vec<String> {
+    // An axis (a bare rail) and a hairpin arrow over it that sets out one way along it and
+    // comes back the other: its positive direction reversed.
+    let o = (8.2, 12.8);
+    let p = projector(o);
+    let (y, x1) = (1.5, 10.6);
+    let (zm, r) = (6.0, 2.1); // the hairpin's mid height and the radius of its bend
+    let bend: Vec<P> = (0..=12)
+        .map(|k| {
+            let t = rad(15.0 * k as f64);
+            p(x1 + r * t.sin(), y, zm + r * t.cos())
+        })
+        .collect();
+    let hairpin = cat(&[&[p(3.0, y, zm + r)], &bend, &[p(0.8, y, zm - r)]]);
+    els![
+        ground_box(o, 0.0, 14.0, 0.0, 3.0, 0.0, 1.4),
+        curved_arrow(&hairpin, 3.0, 2.8, ACCENT, r#"stroke-width="1.4""#),
+    ]
+}
+
+fn machine_jog() -> Vec<String> {
+    // A handwheel, face on to x: its rim, dished face and hub, with the crank handle and the
+    // turn a hand gives it in accent.
+    let o = (10.6, 12.6);
+    let p = projector(o);
+    let (r, t) = (5.6, 1.5); // the wheel's radius and thickness
+    let disc = |x: f64, cy: f64, cz: f64, r: f64| -> Vec<P> {
+        (0..48)
+            .map(|i| around(cy, cz, r, i, 48))
+            .map(|(y, z)| p(x, y, z))
+            .collect()
+    };
+    let (hy, hz) = (-3.3, 3.3); // the handle, on the rim
+    let turn: Vec<P> = (15..=110)
+        .step_by(5)
+        .map(|a| rad(a as f64))
+        .map(|a| p(t, 7.6 * a.cos(), 7.6 * a.sin()))
+        .collect();
+    els![
+        xcyl(o, 0.0, t, 0.0, 0.0, r),
+        poly(&disc(t, 0.0, 0.0, r - 1.5), SOFT, THIN),
+        xcyl(o, t, t + 1.4, 0.0, 0.0, 1.4),
+        poly(
+            &hull(&cat(&[&disc(t, hy, hz, 0.9), &disc(t + 4.2, hy, hz, 0.9)])),
+            ACCENT,
+            &acc("")
+        ),
+        curved_arrow(&turn, 2.8, 2.6, ACCENT, ""),
+    ]
+}
+
+fn machine_home() -> Vec<String> {
+    // A slide with its carriage back at the end of the rail, and a house (accent): the position
+    // the machine goes home to.
+    els![
+        slide((7.6, 12.8), 12.0, 1.4),
+        path(
+            "M14 6.8 L18.1 2.7 L22.2 6.8 H21 V11.2 H15.2 V6.8 Z",
+            ACCENT,
+            &acc("")
+        ),
+        line(
+            18.1,
+            11.0,
+            18.1,
+            8.9,
+            &format!(r#"stroke="{TOP}" stroke-width="1.5""#)
+        ),
+    ]
+}
+
+fn machine_actuator() -> Vec<String> {
+    // An air cylinder, the kind that works a door, a clamp or a tool carousel: its barrel, the
+    // rod out of its end with a block on it, and the rod's stroke as a double arrow under it.
+    // It moves something, but it is no axis of the cut.
+    let o = (8.2, 7.6);
+    let p = projector(o);
+    let (c, r) = (3.6, 3.6); // the bore's axis (y = z = c) and the barrel's radius
+    els![
+        xcyl(o, 0.0, 5.6, c, c, r),
+        xcyl(o, 5.6, 11.0, c, c, 1.2),
+        iso_box(o, 11.0, 13.0, c - 2.0, c + 2.0, c - 2.0, c + 2.0),
+        darrow(p(3.6, c + 5.4, 0.0), p(13.0, c + 5.4, 0.0), 2.8, 2.6),
+    ]
+}
+
+fn machine_tool_change() -> Vec<String> {
+    // A tool magazine (a carousel with tools standing round it) and one tool lifted out of its
+    // pocket, in accent: the one being changed.
+    let o = (11.0, 14.2);
+    let (zt, n) = (1.8, 6);
+    // Tool positions round the carousel, turned so the pocket on the right has no tool behind
+    // it; the far ones first.
+    let place = |i: usize| {
+        let a = rad(-45.0 + 360.0 * i as f64 / n as f64);
+        (4.2 * a.cos(), 4.2 * a.sin())
+    };
+    let mut at: Vec<(usize, P)> = (0..n).map(|i| (i, place(i))).collect();
+    at.sort_by(|a, b| (a.1.0 + a.1.1).partial_cmp(&(b.1.0 + b.1.1)).unwrap());
+    let mut out = vec![cylinder_with(o, 0.0, 0.0, 0.0, zt, 6.0, SOFT, MID, "")];
+    for (i, (x, y)) in at {
+        if i == 0 {
+            // The empty pocket.
+            out.push(poly(
+                &ring(o, x, y, zt, 1.05, 0.0, 360.0, 10.0),
+                SHADE,
+                THIN,
+            ));
+        } else {
+            out.push(cylinder(o, x, y, zt, zt + 3.0, 1.05));
+        }
+    }
+    let (x, y) = place(0);
+    out.push(cylinder_with(
+        o,
+        x,
+        y,
+        zt + 3.6,
+        zt + 7.4,
+        1.05,
+        ACCENT,
+        ACCENT,
+        &acc(""),
     ));
     out
 }

@@ -46,8 +46,8 @@ pub fn face_blend(k: &mut NativeKernel, spec: &FaceBlendSpec) -> Result<OpResult
     let (b1, f1) = (spec.side1.0, spec.side1.1.0 as usize);
     let (b2, f2) = (spec.side2.0, spec.side2.1.0 as usize);
     let bodies: Vec<BodyId> = if b1 == b2 { vec![b1] } else { vec![b1, b2] };
-    let one = (**k.get(b1)?).clone();
-    let two = (**k.get(b2)?).clone();
+    let one = std::sync::Arc::clone(k.get(b1)?);
+    let two = std::sync::Arc::clone(k.get(b2)?);
     if f1 >= one.faces.len() || f2 >= two.faces.len() {
         return Err(invalid("A face to blend no longer exists"));
     }
@@ -65,7 +65,7 @@ pub fn face_blend(k: &mut NativeKernel, spec: &FaceBlendSpec) -> Result<OpResult
         .face_bbox(f1)
         .diagonal()
         .max(two.face_bbox(f2).diagonal())
-        .max(1.0);
+        .max(crate::native::tol::POINT);
     let near = 1e-6 * scale;
     // Which way into each face, square to the spine, at `p` with tangent `t`.
     let into = |k: usize, p: &P3, t: &V3, hint: Option<P2>| -> Option<(V3, V3, P2)> {
@@ -224,18 +224,7 @@ pub fn face_blend(k: &mut NativeKernel, spec: &FaceBlendSpec) -> Result<OpResult
             .position(|x| *x)
             .ok_or_else(|| invalid("The blend doesn't touch a face"))?;
         let last = inside.iter().rposition(|x| *x).unwrap_or(first);
-        let edge_of = |out: f64, inn: f64| {
-            let (mut a, mut z) = (out, inn);
-            for _ in 0..60 {
-                let m = 0.5 * (a + z);
-                if on_face(k, m) {
-                    z = m;
-                } else {
-                    a = m;
-                }
-            }
-            z
-        };
+        let edge_of = |out: f64, inn: f64| super::math::bisect(out, inn, |m| !on_face(k, m)).1;
         let s0 = if first == 0 {
             at(0)
         } else {
@@ -251,13 +240,14 @@ pub fn face_blend(k: &mut NativeKernel, spec: &FaceBlendSpec) -> Result<OpResult
     // The walls: each split along its rail, what lies between the rail and the edge gone.
     let mut walls: Vec<(Body, Vec<usize>, BodyId)> = Vec::new();
     let mut kept: Vec<Vec<usize>> = Vec::new();
-    for (k, (mut b, fi, ei, id)) in [(one, f1, e1, b1), (two, f2, e2, b2)]
+    for (k, (b, fi, ei, id)) in [(one, f1, e1, b1), (two, f2, e2, b2)]
         .into_iter()
         .enumerate()
     {
         if k == 1 && b1 == b2 {
             break;
         }
+        let mut b = (*b).clone();
         let mut from: Vec<usize> = (0..b.faces.len()).collect();
         let n_edges = b.edges.len();
         let pad = 0.02 * (tb - ta);

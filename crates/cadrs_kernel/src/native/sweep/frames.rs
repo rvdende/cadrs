@@ -239,7 +239,7 @@ pub fn fit_helix_segs(segs: &[Seg]) -> Option<Helix> {
     // between (a rational arc's height isn't linear in its angle), so its rise is fitted there.
     let nodes: Vec<usize> = (0..=segs.len()).map(|k| k * 64).collect();
     let h = fit_helix(&pts, &tans, Some(&nodes), 1e-4 * (1.0 + size));
-    if std::env::var("CADRS_SWEEP_DEBUG").is_ok() {
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
         eprintln!("helix fit over {} segments: {h:?}", segs.len());
     }
     h
@@ -480,7 +480,7 @@ impl PathSweep {
             me.helix = match helix {
                 Some(h) => {
                     let th0 = h.angle_of(&pts[0], h.th0);
-                    if std::env::var("CADRS_SWEEP_DEBUG").is_ok() {
+                    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
                         let end = &pts[fine];
                         eprintln!(
                             "run of {} segments: th0 {th0} (end angle {}), start {:?}",
@@ -1497,7 +1497,7 @@ fn sweep_seg_with(
     // surfaces, so booleans see them coincide with faces of the same surface.
     crate::native::unify::planarize(&mut b.body);
     crate::native::unify::cylindrize(&mut b.body);
-    if std::env::var("CADRS_PROFILE").is_ok() {
+    if crate::native::env_flag!("CADRS_PROFILE") {
         eprintln!(
             "[profile] sweep piece: frames {t1:?}, faces {:?}, recognise {:?} ({} sections)",
             t2 - t1,

@@ -2255,7 +2255,7 @@ fn debug_draw_cone_blend() -> cadrs_kernel::Result<()> {
             eprintln!(
                 "edge {i}: degenerate {} faces {:?} {:?}",
                 e.degenerate,
-                ef[i],
+                &ef[i],
                 std::mem::discriminant(&e.curve)
             );
         }
@@ -2949,8 +2949,8 @@ fn debug_smb_fillet() {
             es.iter()
                 .map(|&e| std::mem::discriminant(&out.edges[e].curve))
                 .collect::<Vec<_>>(),
-            ef[es[0]],
-            ef[es[1]]
+            &ef[es[0]],
+            &ef[es[1]]
         );
         for &e in es {
             println!(
@@ -3318,6 +3318,7 @@ fn debug_carried() {
                 axis: Vector3::y_axis(),
                 major: 1.5,
                 minor: 0.5,
+                spindle: Default::default(),
             })
             .unwrap()
             .bodies[0]
@@ -3952,6 +3953,7 @@ fn debug_tumbling_tori() {
                 axis: Vector3::z_axis(),
                 major: 1.0,
                 minor: tube,
+                spindle: Default::default(),
             })?
             .bodies[0];
         let (l, a) = (lean.to_radians(), tilt.to_radians());
@@ -4438,6 +4440,7 @@ fn debug_tumbling_tori() {
                     axis: Vector3::y_axis(),
                     major: 1.5,
                     minor: 0.5,
+                    spindle: Default::default(),
                 })
                 .unwrap()
                 .bodies[0];
@@ -4469,6 +4472,7 @@ fn debug_tumbling_tori() {
                     axis: nalgebra::Unit::new_normalize(Vector3::new(lean.sin(), 0.0, lean.cos())),
                     major: 3.0,
                     minor: 1.0,
+                    spindle: Default::default(),
                 })
                 .unwrap()
                 .bodies[0];
@@ -4526,7 +4530,7 @@ fn debug_edges_near() {
         };
         eprintln!(
             "edge {i} of faces {:?}: {d:.3e} away at t {t:.6} of {:?} (tol {:.1e}, {knots} knots); speed {:.3e}, bend {:.3e}; ends {:?} {:?}",
-            ef[i],
+            &ef[i],
             e.t,
             e.tol,
             d1.norm(),

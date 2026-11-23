@@ -65,8 +65,10 @@ impl Default for Collision {
 /// The tool assembly above the flutes as discs: (radius, height above the tip it starts at).
 pub fn assembly_discs(tool: &Tool, c: &Collision) -> Vec<(f64, f64)> {
     let mut out = Vec::new();
-    if tool.cutting_length < tool.overall_length {
-        out.push((tool.radius() + c.shank_clearance, tool.cutting_length));
+    // (The shank of a lollipop or a form tool is its neck, from the top of its shape.)
+    let (shank, from) = tool.shank();
+    if from < tool.overall_length {
+        out.push((shank + c.shank_clearance, from));
     }
     let mut base = tool.overall_length;
     for profile in [&tool.holder, &tool.arbor].into_iter().flatten() {

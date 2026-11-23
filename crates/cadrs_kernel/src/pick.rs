@@ -90,6 +90,59 @@ pub trait Pick: Kernel {
             .collect())
     }
 
+    /// The faces of `body` on surfaces of `kind`.
+    fn faces_of(&self, body: BodyId, kind: SurfaceKind) -> Result<Vec<FaceId>> {
+        Ok(self
+            .face_kinds(body)?
+            .iter()
+            .enumerate()
+            .filter(|(_, k)| **k == kind)
+            .map(|(i, _)| FaceId(i as u64))
+            .collect())
+    }
+
+    /// The faces of `body` on surfaces of another kind than `kind`.
+    fn faces_but(&self, body: BodyId, kind: SurfaceKind) -> Result<Vec<FaceId>> {
+        Ok(self
+            .face_kinds(body)?
+            .iter()
+            .enumerate()
+            .filter(|(_, k)| **k != kind)
+            .map(|(i, _)| FaceId(i as u64))
+            .collect())
+    }
+
+    /// The one face of `body` on a surface of `kind` (a ball's cap on a frustum, a block's one
+    /// cylinder): an error where there is none, or more than one to choose from.
+    fn face_of(&self, body: BodyId, kind: SurfaceKind) -> Result<FaceId> {
+        match self.faces_of(body, kind)?[..] {
+            [f] => Ok(f),
+            [] => Err(KernelError::OperationFailed(format!(
+                "the body has no {kind:?} face"
+            ))),
+            _ => Err(KernelError::OperationFailed(format!(
+                "the body has more than one {kind:?} face"
+            ))),
+        }
+    }
+
+    /// The edges of `body`, its seams left out, between a face on a surface of kind `a` and one
+    /// on a surface of kind `b` (a rim between a cone and a ball, whichever is which side).
+    fn edges_between(&self, body: BodyId, a: SurfaceKind, b: SurfaceKind) -> Result<Vec<EdgeId>> {
+        let kinds: std::collections::HashMap<FaceId, SurfaceKind> = self
+            .faces(body)?
+            .into_iter()
+            .map(|f| (f.id, f.kind))
+            .collect();
+        self.edges_where(body, &|e| {
+            let [Some(f), Some(g)] = e.faces else {
+                return false;
+            };
+            let (x, y) = (kinds.get(&f), kinds.get(&g));
+            (x == Some(&a) && y == Some(&b)) || (x == Some(&b) && y == Some(&a))
+        })
+    }
+
     /// Where `point` lies on `body`: the face, edge or vertex nearest it.
     fn location_at(&self, body: BodyId, point: Point3<f64>) -> Result<DistanceLocation> {
         Ok(self

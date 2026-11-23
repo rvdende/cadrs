@@ -74,6 +74,11 @@ pub enum Call {
     RunScenario(RunScenario),
     CreateDrawing(CreateDrawing),
     AddAnnotation(AddAnnotation),
+    AddView(AddView),
+    EditView(EditView),
+    AddSectionView(AddSectionView),
+    AddNote(AddNote),
+    ShowSection(ShowSection),
     RenameTab(RenameTab),
     DeleteTab(TabName),
     OpenTab(TabName),
@@ -82,6 +87,11 @@ pub enum Call {
     ImportFile(ImportFile),
     AddMate(AddMate),
     SetMateValues(SetMateValues),
+    GetMachine(AssemblyName),
+    SetMachine(SetMachine),
+    JogMachine(JogMachine),
+    GetCam(GetCam),
+    SetCamMachine(SetCamMachine),
     GetBoard(BoardName),
     GetBoardFit(BoardFit),
     DeriveBoard(DeriveBoard),
@@ -320,6 +330,65 @@ impl Cadrs {
     }
 
     #[tool(
+        description = "Add a view of the Part Studio to a drawing's sheet, seen along any direction (dir: eye into the \
+        model; x: the model direction pointing right on the sheet) with the model origin at `anchor` (sheet mm from the \
+        bottom-left corner), optionally with hidden lines, shading, its own scale and a turn on the sheet. \
+        create_drawing with four_views false gives an empty sheet to lay out. Returns the view."
+    )]
+    async fn add_view(
+        &self,
+        Parameters(p): Parameters<AddView>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::AddView(p)).await
+    }
+
+    #[tool(
+        description = "Change a view of a drawing: move it (anchor), rename it, set its scale, hidden lines, shading \
+        or turn, free it from its parent's alignment, or delete it. Returns the drawing's views."
+    )]
+    async fn edit_view(
+        &self,
+        Parameters(p): Parameters<EditView>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::EditView(p)).await
+    }
+
+    #[tool(
+        description = "Add a section view of a drawing view, cut along the line a-b (the cut view's 2D model mm) and \
+        folded out towards the sheet point `at`: the material between the eye and the cutting plane is removed and \
+        the cut faces are hatched; the cutting line with its letter is drawn on the parent. Returns the view."
+    )]
+    async fn add_section_view(
+        &self,
+        Parameters(p): Parameters<AddSectionView>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::AddSectionView(p)).await
+    }
+
+    #[tool(
+        description = "Add a text note to a drawing's sheet (technical requirements, a view's title), its top-left \
+        corner at `at` in sheet mm."
+    )]
+    async fn add_note(
+        &self,
+        Parameters(p): Parameters<AddNote>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::AddNote(p)).await
+    }
+
+    #[tool(
+        description = "Show a drawing's section view in the Part Studio it cuts: switches to the Part Studio, cuts \
+        the 3D view by the section's plane (the Section view cutaway) and looks at the cut as the drawing does. \
+        Without a name: lists the document's drawing sections (name, drawing, Part Studio, plane)."
+    )]
+    async fn show_section(
+        &self,
+        Parameters(p): Parameters<ShowSection>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::ShowSection(p)).await
+    }
+
+    #[tool(
         description = "Rename a tab: a Part Studio (the title block of its drawings shows the name) or a drawing."
     )]
     async fn rename_tab(
@@ -414,6 +483,73 @@ impl Cadrs {
         Parameters(p): Parameters<SetMateValues>,
     ) -> Result<CallToolResult, ErrorData> {
         self.call(Call::SetMateValues(p)).await
+    }
+
+    #[tool(
+        description = "Describe an assembly as a machine (a CNC mill or robot modelled with mates): its two \
+        mounts (where the tool and the work go on), the axes its mates make between them (name, mate, side, \
+        linear or rotary, current value, home, travel), its actuators, the free mates that could be actuators, \
+        the tool change, the controller, where the tool mount is over the table mount (tool_in_table) and the \
+        issues that keep it from being a machine. Works on an assembly that is not set up yet too (set_up false)."
+    )]
+    async fn get_machine(
+        &self,
+        Parameters(p): Parameters<AssemblyName>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::GetMachine(p)).await
+    }
+
+    #[tool(
+        description = "Set an assembly up as a machine CAM can drive: give the tool mount (a frame on the \
+        spindle's nose, Z out of the spindle toward the work) and the table mount (a frame on the table, Z out \
+        of it), each in its instance's own coordinates. The axes are detected from the mates between the mounts \
+        (letters by direction, travel from the mates' limits); axes, actuators and controller then override \
+        what was detected. One undo step. clear removes the definition. Returns the machine as get_machine does."
+    )]
+    async fn set_machine(
+        &self,
+        Parameters(p): Parameters<SetMachine>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::SetMachine(p)).await
+    }
+
+    #[tool(
+        description = "Move a machine's axes to values by name (mm or degrees), and its actuators to values \
+        or named positions. By default a preview: the view shows the machine there with the Machine Builder \
+        open, and the document is not changed; commit moves the instances (one undo step). Returns every axis's \
+        value, where the tool mount is over the table mount (tool_in_table: origin, Z and X in the table \
+        mount's coordinates) and the axes beyond their travel (limit_hits)."
+    )]
+    async fn jog_machine(
+        &self,
+        Parameters(p): Parameters<JogMachine>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::JogMachine(p)).await
+    }
+
+    #[tool(
+        description = "Describe a CAM Studio tab: its components and its jobs, each with its machine (name, \
+        kind, dialect, axes, and whether it comes from the catalogue or from an assembly), its setups (program \
+        number, machine mating) and their operations (tools with their numbers, toolpaths with their pattern, \
+        whether each is calculated and its warnings; toolpaths are calculated for the tab that is open)."
+    )]
+    async fn get_cam(
+        &self,
+        Parameters(p): Parameters<GetCam>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::GetCam(p)).await
+    }
+
+    #[tool(
+        description = "Choose the machine of a CAM Studio's job: a catalogue machine by name, or an assembly \
+        of the document that set_machine set up (the job then follows the assembly as it changes; an assembly \
+        that is not a working machine is refused with why). Returns the CAM Studio as get_cam does."
+    )]
+    async fn set_cam_machine(
+        &self,
+        Parameters(p): Parameters<SetCamMachine>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::SetCamMachine(p)).await
     }
 
     #[tool(description = "Add a Part Studio tab to the open document and make it the active tab.")]
@@ -807,7 +943,9 @@ impl ServerHandler for Cadrs {
              add_sketch on Top, extrude its region, then get_document to check the parts and screenshot to see \
              them. What the user selected in the 3D view (\"this face\"): get_selection, whose refs the \
              feature tools take. PCB Studio boards: get_board, derive_board into a Part Studio, get_board_fit for the pins \
-             and holes around, move_footprint (onto_part lines a pad up with a pin).",
+             and holes around, move_footprint (onto_part lines a pad up with a pin). Machines: an assembly whose \
+             mates are a machine's axes becomes a machine with set_machine (get_machine, jog_machine to try it), \
+             and a CAM Studio's job runs on it with set_cam_machine (get_cam).",
         )
     }
 }

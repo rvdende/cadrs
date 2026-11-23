@@ -22,6 +22,7 @@
 //! simulation and posting are [`program`]'s; the kernel work (the parts' exact faces, holes and
 //! sections in a setup's coordinates) is [`geometry`]'s.
 
+pub mod exact;
 pub mod geometry;
 pub mod program;
 pub mod sheet;
@@ -284,6 +285,10 @@ pub enum Mating {
     Automatic,
     /// Moved from the table's centre by this (mm).
     Manual(P3),
+    /// A frame of the setup (its origin, Z and X in the setup's coordinates) set on the
+    /// machine's table mount: how work is held where the mount isn't a flat table under it (a
+    /// chuck on a rotary axis, whose mount looks along the part).
+    Mount { origin: P3, z: P3, x: P3 },
 }
 
 /// A setup: one way of holding the parts, with its coordinate system and operations.
@@ -368,6 +373,125 @@ impl Operation {
     }
 }
 
+/// Where a job's machine comes from when it is an assembly set up as a machine (the Assembly
+/// tab's Machine Builder): this document's workspace, followed as the assembly changes, or a
+/// version of this or another document, frozen as a copy in the document.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MachineSource {
+    pub reference: crate::external::SourceRef,
+    /// A version reference's frozen copy among the document's linked elements.
+    #[serde(default)]
+    pub copy: Option<ElementId>,
+    /// The assembly's name, its document's and its version's, for the tree and the dialog.
+    pub source_name: String,
+    #[serde(default)]
+    pub document_name: String,
+    #[serde(default)]
+    pub version_name: String,
+    /// What the machine was last worked out from ([`machine_key`]): a workspace reference is
+    /// worked out again when its assembly's differs.
+    #[serde(default)]
+    pub key: u64,
+}
+
+impl MachineSource {
+    /// A reference to the assembly `element` of this document at its workspace.
+    pub fn workspace(doc: &Document, element: ElementId) -> Option<MachineSource> {
+        let el = doc.elements.iter().find(|e| e.id == element)?;
+        el.assembly_model()?;
+        Some(MachineSource {
+            reference: crate::external::SourceRef {
+                document: None,
+                at: crate::external::RefAt::Workspace,
+                element,
+                pinned: false,
+            },
+            copy: None,
+            source_name: el.name.clone(),
+            document_name: String::new(),
+            version_name: String::new(),
+            key: 0,
+        })
+    }
+
+    /// The element of the document that holds the assembly: its tab, or its frozen copy.
+    pub fn element(&self) -> ElementId {
+        self.copy.unwrap_or(self.reference.element)
+    }
+
+    /// "Workspace of 5-axis mill", "V2 of Machines › Trunnion".
+    pub fn label(&self) -> String {
+        let at = if self.version_name.is_empty() {
+            "Workspace"
+        } else {
+            &self.version_name
+        };
+        if self.document_name.is_empty() {
+            format!("{at} of {}", self.source_name)
+        } else {
+            format!("{at} of {} › {}", self.document_name, self.source_name)
+        }
+    }
+}
+
+/// The machine of an assembly of `doc` set up as one: its controller with its axes, the
+/// warnings there were on the way; or what stands in the way. The connectors are taken where
+/// they were last placed (the app works it out again on the built parts,
+/// [`crate::assembly::machine::frames_on`], where picks may have moved).
+pub fn machine_of(
+    doc: &Document,
+    element: ElementId,
+) -> Result<(Machine, Vec<crate::assembly::machine::Issue>), Vec<crate::assembly::machine::Issue>> {
+    use crate::assembly::machine;
+    // A connector picked on a face or an edge is taken at the frame it was last placed at:
+    // the document has no built parts to find it on again.
+    let last_placed = |c: &crate::assembly::connector::MateConnector| Some(c.local_frame(None));
+    let r = machine::resolve(doc, element, &last_placed)?;
+    Ok((r.machine, r.issues))
+}
+
+/// A key of everything an assembly's machine is worked out from (its definition, mates and
+/// instances): the same key, the same machine.
+pub fn machine_key(doc: &Document, element: ElementId) -> u64 {
+    let Some(asm) = doc.element(element).and_then(|e| e.assembly_model()) else {
+        return 0;
+    };
+    let mut h = blake3::Hasher::new();
+    h.update(format!("{:?}{:?}{:?}", asm.machine, asm.mates, asm.instances).as_bytes());
+    // And what its parts are made from (a pivot moved in the machine's Part Studio moves the
+    // connectors picked on it), sub-assemblies' too, each source once.
+    let mut seen = vec![element];
+    let mut todo: Vec<ElementId> = Vec::new();
+    let sources = |asm: &crate::assembly::Assembly, todo: &mut Vec<ElementId>| {
+        for i in &asm.instances {
+            todo.push(match i.source {
+                crate::assembly::InstanceSource::Part { element, .. }
+                | crate::assembly::InstanceSource::Assembly { element }
+                | crate::assembly::InstanceSource::Studio { element, .. } => element,
+            });
+        }
+    };
+    sources(asm, &mut todo);
+    while let Some(e) = todo.pop() {
+        if seen.contains(&e) {
+            continue;
+        }
+        seen.push(e);
+        let Some(el) = doc.element(e) else { continue };
+        match el.assembly_model() {
+            Some(sub) => {
+                h.update(format!("{:?}{:?}", sub.mates, sub.instances).as_bytes());
+                sources(sub, &mut todo);
+            }
+            None => {
+                h.update(format!("{:?}", el.features()).as_bytes());
+            }
+        }
+    }
+    let b = h.finalize();
+    u64::from_le_bytes(b.as_bytes()[..8].try_into().unwrap())
+}
+
 /// A job: what is machined, from what, on which machine, in which setups.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Job {
@@ -383,6 +507,11 @@ pub struct Job {
     pub workholdings: Vec<PartId>,
     #[serde(default)]
     pub machine: Option<Machine>,
+    /// The assembly the machine is taken from (`None`: a catalogue machine, or one typed in).
+    /// `machine` is then that assembly's machine as last worked out: its controller and its
+    /// axes ([`machine_of`]), kept up with a workspace reference by [`refresh`].
+    #[serde(default)]
+    pub machine_source: Option<MachineSource>,
     #[serde(default)]
     pub setups: Vec<Setup>,
     #[serde(default)]
@@ -624,6 +753,7 @@ impl Element {
 pub fn refresh(doc: &mut Document) {
     use crate::external::RefAt;
     let this = doc.id;
+    refresh_machines(doc);
     let mut updates = Vec::new();
     for (i, el) in doc.elements.iter().enumerate() {
         let Some(cam) = el.cam() else { continue };
@@ -691,6 +821,14 @@ pub enum Edit {
     SetSetup {
         job: CamId,
         setup: Box<Setup>,
+    },
+    /// Takes a job's machine from an assembly set up as one (with the frozen copies a version
+    /// reference needs), or, with `None`, lets go of it: the machine stays as it is, a machine
+    /// of the job's own.
+    SetMachineSource {
+        job: CamId,
+        source: Option<Box<MachineSource>>,
+        links: Vec<crate::external::LinkedElement>,
     },
     /// Adds an operation at the end of a setup (or right after `after`).
     AddOperation {
@@ -773,6 +911,7 @@ impl Command for EditCam {
             Edit::AddJob(_) => "Create job".into(),
             Edit::SetJob(_) => "Edit job".into(),
             Edit::SetMachine { .. } => "Create machine".into(),
+            Edit::SetMachineSource { .. } => "Machine from assembly".into(),
             Edit::AddSetup { .. } => "Create setup".into(),
             Edit::SetSetup { .. } => "Edit setup".into(),
             Edit::AddOperation { op, .. } => match op.kind {
@@ -805,9 +944,10 @@ impl Command for EditCam {
     fn scope(&self) -> Scope {
         match &self.edit {
             // Version references add frozen copies to the document.
-            Edit::AddComponents { .. } | Edit::SetComponent { .. } | Edit::Delete(_) => {
-                Scope::Whole
-            }
+            Edit::AddComponents { .. }
+            | Edit::SetComponent { .. }
+            | Edit::Delete(_)
+            | Edit::SetMachineSource { .. } => Scope::Whole,
             Edit::Batch(v)
                 if v.iter()
                     .any(|e| EditCam::new(self.element, e.clone()).scope() == Scope::Whole) =>
@@ -878,6 +1018,51 @@ impl Command for EditCam {
                     m.check().map_err(CommandError::Invalid)?;
                 }
                 j.machine = machine.as_deref().cloned();
+            }
+            Edit::SetMachineSource { job, source, links } => {
+                add_links(doc, links);
+                // The assembly's machine as it is now (a broken one is refused: its issues
+                // say why).
+                let taken = match source {
+                    Some(src) => {
+                        let (machine, _) = machine_of(doc, src.element()).map_err(|issues| {
+                            CommandError::Invalid(
+                                issues
+                                    .iter()
+                                    .filter(|i| i.is_error())
+                                    .map(|i| i.text.clone())
+                                    .collect::<Vec<_>>()
+                                    .join("; "),
+                            )
+                        })?;
+                        let mut src = (**src).clone();
+                        src.key = machine_key(doc, src.element());
+                        Some((machine, src))
+                    }
+                    None => None,
+                };
+                let old = {
+                    let s = studio_mut(doc, self.element)?;
+                    let j = s
+                        .jobs
+                        .iter_mut()
+                        .find(|j| j.id == *job)
+                        .ok_or_else(|| invalid("no such job"))?;
+                    let old = j.machine_source.as_ref().and_then(|m| m.copy);
+                    match taken {
+                        Some((machine, src)) => {
+                            j.machine = Some(machine);
+                            j.machine_source = Some(src);
+                        }
+                        None => j.machine_source = None,
+                    }
+                    old
+                };
+                // A frozen copy nothing uses any more goes with it.
+                let now = source.as_ref().and_then(|s| s.copy);
+                if let Some(c) = old.filter(|c| Some(*c) != now) {
+                    crate::link_update::prune(doc, &[c]);
+                }
             }
             Edit::AddSetup { job, setup } => {
                 let s = studio_mut(doc, self.element)?;
@@ -1114,6 +1299,54 @@ fn add_links(doc: &mut Document, links: &[crate::external::LinkedElement]) {
     for l in links {
         if doc.linked_element(l.id()).is_none() {
             doc.linked.push(l.clone());
+        }
+    }
+}
+
+/// Brings every job's machine that follows an assembly's workspace up to date with it: its
+/// name, and the machine itself when what it is worked out from has changed (an axis renamed
+/// in the Machine Builder, a mate's limits moved). An assembly that no longer makes a machine
+/// leaves the job the one it had.
+fn refresh_machines(doc: &mut Document) {
+    use crate::external::RefAt;
+    let this = doc.id;
+    let mut updates: Vec<(usize, CamId, String, u64, Option<Machine>)> = Vec::new();
+    for (i, el) in doc.elements.iter().enumerate() {
+        let Some(cam) = el.cam() else { continue };
+        for j in &cam.jobs {
+            let Some(src) = &j.machine_source else {
+                continue;
+            };
+            let r = src.reference;
+            if r.at != RefAt::Workspace || r.document_or(this) != this {
+                continue;
+            }
+            let Some(asm) = doc.elements.iter().find(|e| e.id == r.element) else {
+                continue;
+            };
+            let key = machine_key(doc, r.element);
+            if key == src.key && asm.name == src.source_name {
+                continue;
+            }
+            let machine = (key != src.key)
+                .then(|| machine_of(doc, r.element).ok().map(|m| m.0))
+                .flatten();
+            updates.push((i, j.id, asm.name.clone(), key, machine));
+        }
+    }
+    for (i, job, name, key, machine) in updates {
+        let Some(cam) = doc.elements[i].cam_mut() else {
+            continue;
+        };
+        let Some(j) = cam.jobs.iter_mut().find(|j| j.id == job) else {
+            continue;
+        };
+        if let Some(src) = &mut j.machine_source {
+            src.source_name = name;
+            src.key = key;
+        }
+        if let Some(m) = machine {
+            j.machine = Some(m);
         }
     }
 }

@@ -123,6 +123,7 @@ ui-color-editor-save-color = 이 색상 저장
 ui-color-scheme-light = 밝게
 ui-color-scheme-dark = 어둡게
 ui-color-scheme-system = 시스템 설정에 맞춤
+ui-color-scheme-cycle = 색 구성표: { $scheme } (클릭하면 { $next })
 
 ## crates/cadrs_ui/src/dock.rs
 ui-dock-hide-panel = 패널 숨기기
@@ -206,6 +207,8 @@ shell-top-bar-update = v{ $version } 업데이트…
 shell-top-bar-update-tooltip = 릴리스 노트를 보고 업데이트합니다
 shell-top-bar-github = GitHub의 cadrs
 shell-top-bar-github-stars = GitHub 스타 { $stars }개
+shell-top-bar-download-app = 앱 다운로드
+shell-top-bar-download-app-tooltip = Linux, Windows, macOS용 cadrs 받기 (GitHub)
 
 ## crates/cadrs_app/src/notifications.rs
 shell-notice-whats-new-title = 새로워진 cadrs
@@ -585,6 +588,9 @@ shell-prefs-mcp-server = MCP 서버
 shell-prefs-enabled = 사용
 shell-prefs-endpoint = 엔드포인트
 shell-prefs-mcp-note = 켜져 있는 동안 이 컴퓨터의 AI 어시스턴트(Claude, Cursor 등)가 문서를 만들고 편집할 수 있습니다.
+shell-prefs-mcp-port = 포트
+shell-prefs-mcp-port-reset = 재설정
+shell-prefs-mcp-port-reset-tooltip = 기본 포트 { $port }(으)로 되돌립니다
 shell-prefs-collab-heading = 공동 작업
 shell-prefs-id-while-online = 온라인일 때 표시
 shell-prefs-p2p = P2P 네트워킹
@@ -1898,6 +1904,20 @@ model-mass-parts = 측정할 파트
 ## crates/cadrs_app/src/mcp.rs
 model-mcp-server-on = MCP 서버 실행 중: { $url }
 model-mcp-cannot-start = 포트 { $port }에서 MCP 서버를 시작할 수 없습니다: { $error }
+shell-mcp-tooltip-on = AI 어시스턴트 (MCP): 켜짐
+shell-mcp-tooltip-off = AI 어시스턴트 (MCP): 꺼짐
+shell-mcp-tooltip-failed = AI 어시스턴트 (MCP): 시작할 수 없음
+shell-mcp-serving = 켜짐, { $url }
+shell-mcp-off = 꺼짐 ({ $url }에서 제공 예정)
+shell-mcp-failed = 포트 { $port }에서 시작할 수 없음
+shell-mcp-enable = MCP 서버 사용
+shell-mcp-port = 포트: { $port }…
+shell-mcp-port-tooltip = AI 어시스턴트가 연결하는 이 컴퓨터의 포트
+shell-mcp-port-reset = 포트를 기본값으로 재설정 ({ $port })
+shell-mcp-copy-endpoint = 엔드포인트 복사
+shell-mcp-copied = { $url } 복사됨
+shell-mcp-port-title = MCP 서버 포트
+shell-mcp-port-invalid = 포트가 아닙니다: { $text } (1~65535 사이의 숫자)
 
 ## crates/cadrs_app/src/simulation_ui.rs
 model-sim-one-face = 면 { $count }개
@@ -2559,6 +2579,8 @@ drawing-hint-auxiliary-pick = 보조도: 뷰의 직선 모서리를 클릭하세
 drawing-hint-auxiliary-place = 보조도: 클릭하여 뷰 배치
 drawing-hint-align-vertical = 뷰 수직 정렬: 뷰의 모서리를 클릭하세요
 drawing-hint-align-horizontal = 뷰 수평 정렬: 뷰의 모서리를 클릭하세요
+drawing-hint-section-click = 클릭하여 { $name }에서 { $section } 보기
+drawing-hint-section-jump = 두 번 클릭하여 { $name }에서 { $section } 보기
 
 ## crates/cadrs_app/src/drawing/flat_views.rs
 drawing-flat-patterns = 전개도
@@ -2580,6 +2602,7 @@ drawing-view-menu-tangent-solid = 실선
 drawing-view-menu-tangent-phantom = 가상선
 drawing-flat-adjust-linestyle = 선 스타일 조정…
 drawing-view-menu-properties = 뷰 속성…
+drawing-view-menu-show-section = { $name }에서 { $section } 표시
 drawing-flat-menu-order = 순서
 drawing-view-menu-bring-to-front = 맨 앞으로 가져오기
 drawing-view-menu-send-to-back = 맨 뒤로 보내기
@@ -3309,6 +3332,7 @@ cam-go-to-end = 끝으로 이동
 cam-reset = 처음으로
 cam-close-the-preview = 미리 보기 닫기
 cam-drag-through-program = 끌어서 프로그램 안에서 이동
+cam-simulated-ahead = 미리 시뮬레이션: 초록은 재생 준비됨, 파랑은 계산 중, 빨강은 아직 안 됨, 호박색은 정확히 절삭되지 않음
 cam-toolpath = 공구 경로
 cam-pause-on-collision = 충돌 시 일시 중지
 cam-readout-feed = 이송 { $feed } mm/min

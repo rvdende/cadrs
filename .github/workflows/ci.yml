@@ -70,12 +70,12 @@ jobs:
         run: tools/kernel_clippy.sh
 
       # The checks ran above (--no-checks).
-      - name: Fast gate (lib, conformance, smlib_booleans, validity, determinism)
+      - name: Fast gate (lib, conformance, smlib_booleans, validity, determinism, issue_reports)
         env:
           RUST_TEST_THREADS: 4
         run: |
           tools/kernel_gate.sh --tree . --commit "$GITHUB_SHA" --out "$GITHUB_WORKSPACE/kernel_gate" \
-            --no-checks --only lib,conformance,smlib_booleans,validity,determinism --hang 600
+            --no-checks --only lib,conformance,smlib_booleans,validity,determinism,issue_reports --hang 600
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -125,6 +125,117 @@ jobs:
       # `cargo test --workspace`.
       - name: Test
         run: cargo test --workspace --exclude cadrs --lib
+
+  # Per push and pull request: brep-conformance's suite (springcraft-ai/brep-conformance, at the
+  # commit tools/conformance pins) run on this kernel in process (tools/conformance's
+  # `examples/suite.rs`), and no case that passes in tools/ci/conformance.baseline.json fails
+  # (tools/ci/regressions.py; gains are listed: move the baseline with `--update` and commit it).
+  conformance:
+    name: Conformance (no regressions)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang mold
+
+      - name: Rust toolchain
+        run: rustup toolchain install && rustc -V
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: conformance
+          workspaces: tools/conformance -> target
+
+      - name: The suite, on this kernel
+        working-directory: tools/conformance
+        run: |
+          cargo run --release --locked --example suite -- \
+            --out "$GITHUB_WORKSPACE/conformance.json" | tee "$GITHUB_WORKSPACE/conformance.txt"
+
+      - name: No regressions
+        run: |
+          python3 tools/ci/regressions.py conformance.json tools/ci/conformance.baseline.json \
+            --name brep-conformance
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: conformance
+          path: |
+            conformance.json
+            conformance.txt
+
+  # Per push and pull request: brep-bench (bmander/brep-bench, at BREP_BENCH_REV) graded on this
+  # kernel: its cadrs runner (kernels/cadrs) built against this checkout's cadrs_kernel (a
+  # [patch] of the git dependency it pins), every case run by its harness (each STEP measured to
+  # 1e-6), and no case that passes in tools/ci/brep-bench.baseline.json fails. The two are
+  # checked out side by side: inside cadrs's tree, the runner would be taken for a member of
+  # cadrs's workspace. Moving BREP_BENCH_REV can add cases (listed as new) or change them: run it
+  # and move the baseline with the same commit.
+  brep-bench:
+    name: brep-bench (no regressions)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      BREP_BENCH_REV: 4273a001e20fdac3667315eb03f2e73950452d88
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: cadrs
+
+      - uses: actions/checkout@v4
+        with:
+          repository: bmander/brep-bench
+          ref: ${{ env.BREP_BENCH_REV }}
+          path: brep-bench
+
+      # The nightly cadrs pins, for the runner too (it lies outside cadrs's tree, where
+      # rust-toolchain.toml doesn't reach).
+      - name: Rust toolchain
+        working-directory: cadrs
+        run: |
+          rustup toolchain install && rustc -V
+          echo "RUSTUP_TOOLCHAIN=$(grep -oP 'channel = "\K[^"]+' rust-toolchain.toml)" >> "$GITHUB_ENV"
+
+      - name: The cadrs runner on this kernel
+        run: |
+          cat >> brep-bench/kernels/cadrs/Cargo.toml <<EOF
+
+          [patch."https://github.com/rvdende/cadrs"]
+          cadrs_kernel = { path = "$GITHUB_WORKSPACE/cadrs/crates/cadrs_kernel" }
+          EOF
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: brep-bench
+          workspaces: brep-bench/kernels/cadrs -> target
+
+      # (harness/run.py runs the built runner; build.py builds it, and reports a failure
+      # without failing: the runner must be there.)
+      - name: Build the runner
+        working-directory: brep-bench
+        run: |
+          python3 harness/build.py cadrs
+          test -x kernels/cadrs/target/release/brep-bench-cadrs
+
+      - name: Every case
+        working-directory: brep-bench
+        run: python3 harness/run.py --kernel cadrs --timeout 300
+
+      - name: No regressions
+        run: |
+          python3 cadrs/tools/ci/regressions.py brep-bench/results/cadrs.json \
+            cadrs/tools/ci/brep-bench.baseline.json --name brep-bench
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: brep-bench
+          path: brep-bench/results/cadrs.json
 
   # The browser build (tools/web) compiles: code that also runs in a page reads files through
   # cadrs_fs, tells the time with web_time and starts no threads (CLAUDE.md), which a native build

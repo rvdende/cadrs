@@ -366,13 +366,7 @@ impl<'a> Tool<'a> {
         // The faces' groups: joined over smooth edges.
         let nf = b.faces.len();
         let mut group: Vec<usize> = (0..nf).collect();
-        fn root(g: &mut [usize], mut i: usize) -> usize {
-            while g[i] != i {
-                g[i] = g[g[i]];
-                i = g[i];
-            }
-            i
-        }
+        use super::math::set_of as root;
         let mut smooth: Vec<Vec<usize>> = vec![Vec::new(); nf];
         for e in 0..ne {
             if kind[e] == EdgeKind::Smooth
@@ -489,7 +483,7 @@ impl<'a> Tool<'a> {
                 closed,
             });
         }
-        if std::env::var_os("CADRS_GEN_EDGES").is_some() {
+        if crate::native::env_flag!("CADRS_GEN_EDGES") {
             for (r, run) in runs.iter().enumerate() {
                 let (mut gap, mut turn, mut bend) = (0.0f64, 0.0f64, [0.0f64; 2]);
                 for k in 1..run.parts.len() {
@@ -560,6 +554,14 @@ impl<'a> Tool<'a> {
             let uv = c.pc.point(s);
             (uv.x, uv.y)
         });
+        // (The edge's own p-curve on the face says where, where it is on the point to a
+        // part in 10¹² of the tool: an exact edge's is, and needs no projection onto the
+        // face; a fitted one's is the hint the projection starts from.)
+        if let Some((u, v)) = hint
+            && (face.surf.eval(u, v) - p).norm() <= 1e-12 * self.size
+        {
+            return P2::new(u, v);
+        }
         let (u, v) = face.surf.project(p, hint);
         P2::new(u, v)
     }
@@ -947,10 +949,93 @@ impl Gen<'_> {
             HOP / 8.0 * self.tool.size / mu.max(1e-300),
             HOP / 8.0 * self.tool.size / mv.max(1e-300),
         );
-        let (u, v) = newton2(&eq, (guess.x, guess.y), h, 1e-12 * self.tool.size, reach)?;
+        // By the surface's own second derivatives first (one evaluation a step); by
+        // differences where that finds nothing (a pole, where the normal has no slope).
+        // (Where it ends without one, off beyond the reach or not settled, there is none: the
+        // differences would only take forty steps more to say so.)
+        let (u, v) = match self.face_in_slice_exact(f, t, c, guess, &tw, reach) {
+            Ok(found) => found,
+            Err(true) => newton2(&eq, (guess.x, guess.y), h, 1e-12 * self.tool.size, reach)?,
+            Err(false) => return None,
+        };
         let found = P2::new(u, v);
         let moved = (self.tool.at(f, found).0 - self.tool.at(f, guess).0).norm();
         (moved <= HOP * self.tool.size).then_some(found)
+    }
+
+    /// [`Self::face_in_slice`]'s root by Newton's method with the two equations' slopes in
+    /// closed form: the slice coordinate's is its gradient along the surface's tangents, and
+    /// the contact's (n · (ω × p + u), the normal square to the velocity) follows from the
+    /// normal's own slope, n′ = (m′ − n (n · m′)) / |m| for m = Sᵤ × Sᵥ, and the velocity's,
+    /// ω × Sᵤ. One evaluation of the surface to its second derivatives a step, where
+    /// differences took five of its point and five of its normal. `Err(true)` where the
+    /// slopes fail (a pole, where the normal has none) and differences may yet do;
+    /// `Err(false)` where there is no root within reach.
+    fn face_in_slice_exact(
+        &self,
+        f: usize,
+        t: f64,
+        c: f64,
+        guess: P2,
+        tw: &Twist,
+        reach: (f64, f64),
+    ) -> std::result::Result<(f64, f64), bool> {
+        let face = &self.tool.b.faces[f];
+        let surf = &face.surf;
+        let (rot, shift) = self.motion.place(t);
+        let scale = self.tool.size / self.speed;
+        let tol = 1e-12 * self.tool.size;
+        let sense = if face.sense { 1.0 } else { -1.0 };
+        let (mut u, mut v) = (guess.x, guess.y);
+        for _ in 0..40 {
+            let d = surf.d2(u, v);
+            let (p, su, sv) = (d[0], d[1], d[2]);
+            let m = su.cross(&sv);
+            let len = m.norm();
+            if !(len > 1e-12 * su.norm() * sv.norm()) || !len.is_finite() {
+                return Err(true);
+            }
+            // (The face's normal as the kernel has it: the surface's, by the face's sense.)
+            let n = surf.normal(u, v) * sense;
+            let turn = m.dot(&n).signum();
+            let slope = |mx: V3| (mx - n * n.dot(&mx)) * (turn / len);
+            let (nu, nv) = (
+                slope(d[3].cross(&sv) + su.cross(&d[4])),
+                slope(d[4].cross(&sv) + su.cross(&d[5])),
+            );
+            let w = tw.0.cross(&p) + tw.1;
+            let x = P3::from(rot * p + shift);
+            let grad = self.chart.grad(&x);
+            let a = self.chart.c(&x) - c;
+            let b = n.dot(&w) * scale;
+            if !(a.is_finite() && b.is_finite()) {
+                return Err(true);
+            }
+            if a.abs() <= tol && b.abs() <= tol {
+                return Ok((u, v));
+            }
+            let (au, av) = (grad.dot(&(rot * su)), grad.dot(&(rot * sv)));
+            let (bu, bv) = (
+                (nu.dot(&w) + n.dot(&tw.0.cross(&su))) * scale,
+                (nv.dot(&w) + n.dot(&tw.0.cross(&sv))) * scale,
+            );
+            let det = au * bv - av * bu;
+            if det.abs() < 1e-300 || !det.is_finite() {
+                return Err(true);
+            }
+            let du = (-a * bv + b * av) / det;
+            let dv = (-b * au + a * bu) / det;
+            // (A step past the reach is cut to it, as the differences' Newton does.)
+            let k = (reach.0 / du.abs().max(1e-300))
+                .min(reach.1 / dv.abs().max(1e-300))
+                .min(1.0);
+            u += du * k;
+            v += dv * k;
+            if (u - guess.x).abs() > 8.0 * reach.0 || (v - guess.y).abs() > 8.0 * reach.1 {
+                return Err(false);
+            }
+        }
+        Err(false)
     }
 
     /// A face group's contact point in slice `c` at t, from a guess on one of its faces: on
@@ -2904,7 +2989,7 @@ impl Gen<'_> {
             };
             let least = spans_at.iter().map(|s| s.0).fold(0.0, f64::max);
             let most = spans_at.iter().map(|s| s.1).fold(f64::INFINITY, f64::min);
-            if self.trace && std::env::var_os("CADRS_GEN_ENDS").is_some() {
+            if self.trace && crate::native::env_flag!("CADRS_GEN_ENDS") {
                 for (j, s) in spans_at.iter().enumerate().step_by(4) {
                     eprintln!(
                         "  end {end} slice {:.4}: clear after {:.1} steps, goes on {:.1}",
@@ -3282,12 +3367,33 @@ impl Gen<'_> {
         // (In steps over which the tool moves less than `deep`.)
         let n = (((z - a) * self.speed / (0.5 * deep)).ceil() as usize).max(1);
         let bb = self.tool_box.grow(deep);
-        (0..=n).any(|i| {
+        // How far the point moves in the tool's frame a step, at most; so how many steps on
+        // it stays clear, where it is that far from the tool's box or from being `deep` in
+        // the tool (a distance changes no faster than its point moves): those are passed over
+        // (half as many, to be sure), each of them a step that would have found nothing.
+        let stride = self.speed * (z - a) / n as f64;
+        let clear = |room: f64| (0.5 * room / stride.max(1e-300)).floor().max(0.0) as usize;
+        let mut i = 0;
+        while i <= n {
             let t = a + (z - a) * i as f64 / n as f64;
             let (r, d) = self.motion.place(t);
             let p = P3::from(r.inverse() * (x.coords - d));
-            bb.contains(&p) && self.tool_mesh.distance(&p) < -deep
-        })
+            let out = (0..3)
+                .map(|k| (bb.min[k] - p[k]).max(p[k] - bb.max[k]).max(0.0).powi(2))
+                .sum::<f64>()
+                .sqrt();
+            let room = if out > 0.0 {
+                out
+            } else {
+                let far = self.tool_mesh.distance(&p);
+                if far < -deep {
+                    return true;
+                }
+                far + deep
+            };
+            i += 1 + clear(room);
+        }
+        false
     }
 }
 
@@ -3765,7 +3871,7 @@ impl Gen<'_> {
             declined(debug, "the lid or a cap comes within the target");
             return None;
         }
-        if debug && std::env::var_os("CADRS_GEN_PLUG").is_some() {
+        if debug && crate::native::env_flag!("CADRS_GEN_PLUG") {
             // (Each patch's sides that are all but points: how far a side's points spread.)
             for (i, (s, ((u0, u1), (v0, v1)))) in patches.iter().enumerate() {
                 let spread = |f: &dyn Fn(f64) -> P3| {
@@ -5019,7 +5125,7 @@ impl Gen<'_> {
                 continue;
             };
             let node = self.node(run, side, c, (sigma, t_run));
-            if self.trace && std::env::var_os("CADRS_GEN_NODES").is_some() {
+            if self.trace && crate::native::env_flag!("CADRS_GEN_NODES") {
                 eprintln!(
                     "    slice {c:.5}: crossing {j} of run {run} (t {t_run:.6}) and face {face} ({:.6}): their node {:?}; came {came}, goes {goes}",
                     if matches!(chain.links[j], Link::Edge(_)) {
@@ -5861,6 +5967,47 @@ fn two_turns(steps: &[RigidStep]) -> Option<(Axis, Axis)> {
     (turning && apart).then_some((*a, *b))
 }
 
+/// Whether `b` is a body turned about `axis` all the way round: every face a plane square to
+/// it or a cylinder, cone, sphere or torus about it, every edge a circle about it (or a seam
+/// or a pole: an edge with one face both sides, or of no length). A turn about the axis by any
+/// angle leaves such a body as it is.
+fn turned_about(b: &Body, axis: &Axis) -> bool {
+    let (o, z) = (axis.origin, axis.dir.into_inner());
+    let near = tol::REL_POINT * (1.0 + b.bbox().diagonal());
+    let along = |v: &V3| v.cross(&z).norm() < tol::ANGULAR;
+    let on = |p: &P3| {
+        let d = p - o;
+        (d - z * d.dot(&z)).norm() <= near
+    };
+    let faces = b.faces.iter().all(|f| match &f.surf {
+        Surface::Plane { f } => along(&f.z),
+        Surface::Cylinder { f, .. } | Surface::Cone { f, .. } | Surface::Torus { f, .. } => {
+            along(&f.z) && on(&f.o)
+        }
+        Surface::Sphere { f, .. } => on(&f.o),
+        _ => false,
+    });
+    let mut uses = vec![0usize; b.edges.len()];
+    let mut seam = vec![false; b.edges.len()];
+    for f in &b.faces {
+        let mut seen = std::collections::HashSet::new();
+        for c in f.loops.iter().flatten() {
+            uses[c.edge] += 1;
+            if !seen.insert(c.edge) {
+                seam[c.edge] = true;
+            }
+        }
+    }
+    faces
+        && b.edges.iter().enumerate().all(|(i, e)| {
+            uses[i] == 0
+                || e.degenerate
+                || seam[i]
+                || matches!(&e.curve, super::curve::Curve::Circle { c, x, y, .. }
+                    if on(c) && along(&x.cross(y)))
+        })
+}
+
 /// `target` less what `tool` passes through under `steps` (two turns): see the module docs.
 /// None where the cut isn't made this way.
 pub(super) fn cut(
@@ -5870,13 +6017,13 @@ pub(super) fn cut(
     steps: &[RigidStep],
     index: Option<usize>,
 ) -> Option<Result<OpResult>> {
-    let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+    let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
     let t_start = web_time::Instant::now();
     let (tool_axis, target_axis) = two_turns(steps)?;
     if tool.solids.len() != 1 {
         return None;
     }
-    let tb = (**k.get(target).ok()?).clone();
+    let tb = std::sync::Arc::clone(k.get(target).ok()?);
     let motion = Motion { steps };
     let tl = Tool::new(tool);
     let size = tl.size;
@@ -5989,7 +6136,7 @@ pub(super) fn cut(
         tool_box: tool.bbox(),
         near_joint: 2.0,
         debug,
-        trace: std::env::var_os("CADRS_GEN_TRACE").is_some(),
+        trace: crate::native::env_flag!("CADRS_GEN_TRACE"),
     };
     // (The charts whose middle slice has chains, but which made no plug of them.)
     #[allow(clippy::type_complexity)]
@@ -6078,7 +6225,7 @@ pub(super) fn cut(
             }
             let _ = std::fs::write(format!("{file}.{kind:?}.txt"), out);
         }
-        if std::env::var_os("CADRS_GEN_SURVEY").is_some() {
+        if crate::native::env_flag!("CADRS_GEN_SURVEY") {
             // Every chain found afresh in each of some slices.
             let mut surveyed: Vec<Vec<Link>> = Vec::new();
             for ci in 0..=32 {
@@ -6340,7 +6487,7 @@ pub(super) fn cut(
             (web_time::Instant::now() - t_start).as_secs_f64() * 1e3
         );
     }
-    if debug && std::env::var_os("CADRS_GEN_PLUG").is_some() {
+    if debug && crate::native::env_flag!("CADRS_GEN_PLUG") {
         // (The plugs themselves: what is wrong with each as a solid, and its least edges.)
         for p in &plugs {
             let faults = p.check_with(super::topo::CheckLevel::Full);
@@ -6428,6 +6575,123 @@ pub(super) fn cut(
     // to unite first): all of them where a plug stands clear of its copy a turn on; every
     // other one where it meets that copy (as plugs may, outside the target) but not the one
     // two turns on; else each on its own.
+    // Copies round the target's axis: the plug's part inside the target (the tooth space
+    // itself) is made once and turned to each place, and all of them are cut in one boolean.
+    // The plugs themselves often run into one another outside the target, where the tool's
+    // sweep goes on past the blank, and were then cut one after another from a body that grew
+    // by a tooth space each time; the spaces stand apart wherever a tooth is left between
+    // them. Whether they do is asked of one space and the next (their common part: none).
+    if copies > 1 && plugs.len() == 1 {
+        let made = (|| -> Option<OpResult> {
+            let blank = std::sync::Arc::clone(k.get(target).ok()?);
+            // (Only of a target the turn leaves as it is, one turned about that axis all the
+            // way round: in a sector of a ring each copy's space is another part of the plug.)
+            if !turned_about(&blank, &target_axis) {
+                return None;
+            }
+            let space = super::boolean::boolean_bodies(&plugs[0], &blank, BoolOp::Intersect)
+                .ok()?
+                .body;
+            if space.solids.len() != 1 {
+                return None;
+            }
+            // Whether a space stands apart from the one `turns` on: their common part none.
+            let apart_from = |turns: usize| {
+                let other = space.transformed(&about(turns));
+                match super::boolean::boolean_bodies(&space, &other, BoolOp::Intersect) {
+                    Ok(common) => common.body.solids.is_empty(),
+                    Err(e) => matches!(e, KernelError::EmptyResult(_)),
+                }
+            };
+            // All of them one tool where each stands apart from the next; every other one
+            // where it meets the next (a tooth's tip cut away between two spaces) but not the
+            // one after; else no such tools.
+            let groups: Vec<Vec<usize>> = if apart_from(1) {
+                vec![(0..copies).collect()]
+            } else if copies >= 4 && apart_from(2) {
+                let even = copies - copies % 2;
+                let mut g = vec![
+                    (0..even).step_by(2).collect::<Vec<_>>(),
+                    (1..even).step_by(2).collect::<Vec<_>>(),
+                ];
+                if copies % 2 == 1 {
+                    g.push(vec![copies - 1]);
+                }
+                g
+            } else {
+                return None;
+            };
+            if debug {
+                eprintln!(
+                    "generated cut: the space inside the target has {} faces, its copies in {} tool(s) of spaces apart ({:.0} ms)",
+                    space.faces.len(),
+                    groups.len(),
+                    (web_time::Instant::now() - t_start).as_secs_f64() * 1e3
+                );
+            }
+            let mut at = target;
+            let mut last: Option<OpResult> = None;
+            for (gi, group) in groups.iter().enumerate() {
+                let mut tool = Body::default();
+                for &i in group {
+                    tool.append(&if i == 0 {
+                        space.clone()
+                    } else {
+                        space.transformed(&about(i))
+                    });
+                }
+                let tool = k.insert(tool);
+                // (The first tool's spaces lie within the target, being its common part with
+                // the plug: their faces off its surfaces meet its faces along their own edges
+                // only. A later tool's reach into what the first took.)
+                let step = if gi == 0 {
+                    super::boolean::subtract_within(k, at, &[tool])
+                } else {
+                    k.boolean(BoolOp::Subtract, at, &[tool])
+                };
+                k.release(tool);
+                if at != target {
+                    k.release(at);
+                }
+                match step {
+                    Ok(r) if r.bodies.len() == 1 => {
+                        at = r.bodies[0];
+                        last = Some(r);
+                    }
+                    Ok(r) => {
+                        for id in r.bodies {
+                            k.release(id);
+                        }
+                        return None;
+                    }
+                    Err(e) => {
+                        if debug {
+                            eprintln!("generated cut: the spaces cut together: {e}");
+                        }
+                        return None;
+                    }
+                }
+            }
+            let r = last?;
+            if k.sound(r.bodies[0]) {
+                Some(r)
+            } else {
+                for id in r.bodies {
+                    k.release(id);
+                }
+                None
+            }
+        })();
+        if let Some(r) = made {
+            if debug {
+                eprintln!(
+                    "generated cut: {copies} spaces cut together ({:.0} ms)",
+                    (web_time::Instant::now() - t_start).as_secs_f64() * 1e3
+                );
+            }
+            return Some(Ok(r));
+        }
+    }
     let groups: Vec<Vec<usize>> = if copies > 1 && plugs.len() == 1 {
         let polys: Vec<Vec<Vec<P2>>> = plugs[0]
             .faces

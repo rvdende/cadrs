@@ -3,5 +3,5 @@
 # the browser build (tools/web).
 [toolchain]
 channel = "nightly-2026-10-21"
-components = ["clippy", "rustfmt"]
+components = ["clippy", "rustfmt", "rust-analyzer", "rust-src"]
 targets = ["x86_64-pc-windows-gnu", "wasm32-unknown-unknown"]

@@ -1668,6 +1668,8 @@ struct SceneKey {
     ghost: Option<View>,
     ghost_geometry: Option<usize>,
     view_selected: Vec<ViewId>,
+    /// The section view whose cutting line and label are lit (`DrawingUi::section_hover`).
+    section_hover: Option<ViewId>,
     guides: Vec<([f64; 2], [f64; 2])>,
     /// The sheet's tables and the drawing's sources (callouts read them, P3C.5).
     tables: Vec<cadrs_drawing::Table>,
@@ -1721,6 +1723,7 @@ fn rebuild_scene(
             .and_then(|g| cache.geometry(g))
             .map(|g| Arc::as_ptr(&g) as usize),
         view_selected: dui.selected.clone(),
+        section_hover: dui.section_hover.map(|h| h.view),
         guides: ui.guides.clone(),
         tables: active_drawing(&doc)
             .and_then(|(id, d)| d.sheets.get(dui.sheet_index(id, d)))
@@ -1863,6 +1866,29 @@ fn rebuild_scene(
             .and_then(|(id, d)| d.sheets.get(dui.sheet_index(id, d)))
             .map(cadrs_drawing::view_kinds::label_avoid)
             .unwrap_or_default();
+        // The hovered section's cutting line (on its parent) and label are blue: they are
+        // what a click on either shows in the Part Studio (`drawing_sections`).
+        let lit = dui
+            .section_hover
+            .and_then(|h| views.iter().find(|(v, _)| v.id == h.view));
+        let marks = lit.and_then(|(s, g)| {
+            let parent = s
+                .parent
+                .and_then(|p| views.iter().find(|(v, _)| v.id == p))
+                .map(|(v, g)| (v, g.as_deref().map(|g| g as &dyn ann::ViewModel)));
+            cadrs_drawing::view_kinds::section_marks(
+                &d.style,
+                parent,
+                s,
+                g.as_deref().map(|g| g as &dyn ann::ViewModel),
+                &avoid,
+            )
+        });
+        let without_lit: Vec<View> = all
+            .iter()
+            .filter(|v| Some(v.id) != lit.map(|(l, _)| l.id))
+            .cloned()
+            .collect();
         for (v, g, color) in views
             .iter()
             .map(|(v, g)| {
@@ -1875,9 +1901,11 @@ fn rebuild_scene(
             })
             .chain(ghost.iter().map(|(v, g)| (v, g.clone(), ghost_blue)))
         {
+            let lit_parent = lit.is_some_and(|(l, _)| l.parent == Some(v.id));
+            let lit_view = lit.is_some_and(|(l, _)| l.id == v.id);
             let dec = cadrs_drawing::view_kinds::view_decor(
                 &d.style,
-                &all,
+                if lit_parent { &without_lit } else { &all },
                 v,
                 g.as_deref().map(|g| g as &dyn ann::ViewModel),
                 &avoid,
@@ -1886,7 +1914,19 @@ fn rebuild_scene(
                 fills.push((t.map(|p| v2(&p)), color));
             }
             for t in &dec.texts {
-                texts.push(SceneText::plain(t.clone(), color));
+                let label = lit_view && marks.as_ref().is_some_and(|m| m.label.contains(t));
+                texts.push(SceneText::plain(
+                    t.clone(),
+                    if label { blue() } else { color },
+                ));
+            }
+        }
+        if let Some(m) = &marks {
+            for t in &m.line.fills {
+                fills.push((t.map(|p| v2(&p)), blue()));
+            }
+            for t in &m.line.texts {
+                texts.push(SceneText::plain(t.clone(), blue()));
             }
         }
     }

@@ -43,11 +43,12 @@ pub(crate) fn chamfer(
     d: f64,
     flat: bool,
 ) -> Option<Result<OpResult>> {
-    let b = (**k.get(body).ok()?).clone();
+    let b = std::sync::Arc::clone(k.get(body).ok()?);
     if !(d > 0.0) || edges.is_empty() || b.solids.len() != 1 || b.shells.len() != 1 {
         return None;
     }
-    let size = b.bbox().diagonal().max(1.0);
+    // (The part's own size, however small: no floor at a millimetre.)
+    let size = b.bbox().diagonal().max(tol::POINT);
     let eps = 1e-9 * size;
     // The faces' half-spaces.
     let mut halves: Vec<Half> = Vec::new();
@@ -82,7 +83,7 @@ pub(crate) fn chamfer(
     let chosen: std::collections::HashSet<usize> = edges.iter().copied().collect();
     // Each chamfer's plane: through the lines `d` in from the edge on each of its faces.
     for &e in edges {
-        let [f1, f2] = ef.get(e)?.as_slice() else {
+        let [f1, f2] = ef.get(e)? else {
             return None;
         };
         let (n1, n2) = (halves[*f1].n, halves[*f2].n);

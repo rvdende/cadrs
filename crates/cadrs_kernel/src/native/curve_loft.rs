@@ -158,11 +158,13 @@ fn build(k: &NativeKernel, spec: &CurveLoftSpec) -> Result<(Body, Vec<Vec<u64>>)
         }
     } else {
         let mut first: Option<Vec<f64>> = None;
+        let mut prev: Option<NurbsCurve> = None;
         for (s, at) in secs.iter_mut().zip(joints.iter_mut()) {
             let Sec::Curve(c) = s else { continue };
             let us: Vec<f64> = gs.iter().map(|g| meet(g, c).1).collect();
             let Some(f) = &first else {
                 first = Some(us);
+                prev = Some(c.clone());
                 continue;
             };
             let (mut same, mut other) = (0, 0);
@@ -178,10 +180,29 @@ fn build(k: &NativeKernel, spec: &CurveLoftSpec) -> Result<(Body, Vec<Vec<u64>>)
                     }
                 }
             }
-            if other > same {
+            // The pairs of guides don't say (one guide, or guides meeting it together): where
+            // they meet it does, a guide meeting the first profile at its start and this one at
+            // its end saying it runs the other way; failing that, ends nearest its predecessor.
+            let reverse = if other != same {
+                other > same
+            } else {
+                let kept: f64 = f.iter().zip(&us).map(|(a, b)| (a - b).abs()).sum();
+                let turned: f64 = f.iter().zip(&us).map(|(a, b)| (a - (1.0 - b)).abs()).sum();
+                if (kept - turned).abs() > 1e-6 {
+                    turned < kept
+                } else {
+                    prev.as_ref().is_some_and(|p| {
+                        let (a0, a1) = (p.point(0.0), p.point(1.0));
+                        let (b0, b1) = (c.point(0.0), c.point(1.0));
+                        (b1 - a0).norm() + (b0 - a1).norm() < (b0 - a0).norm() + (b1 - a1).norm()
+                    })
+                }
+            };
+            if reverse {
                 *c = c.reversed();
                 *at = at.iter().rev().map(|j| 1.0 - j).collect();
             }
+            prev = Some(c.clone());
         }
     }
     // How far the profiles reach from the origin: the scale of the tolerances.
@@ -189,7 +210,7 @@ fn build(k: &NativeKernel, spec: &CurveLoftSpec) -> Result<(Body, Vec<Vec<u64>>)
         .iter()
         .flat_map(|s| (0..=8).map(move |i| s.at(i as f64 / 8.0)))
         .fold(0.0_f64, |r, p| r.max(p.coords.norm()))
-        .max(1.0);
+        .max(crate::native::tol::POINT);
 
     // Guides: where each meets each profile (guide and profile parameters).
     let mut guides: Vec<NurbsCurve> = Vec::new();

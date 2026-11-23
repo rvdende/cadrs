@@ -194,6 +194,16 @@ fn program_text(world: &World, s: &ExportSession) -> Result<Program, String> {
             program::travel_warnings(job, setup, &run, &stock)
         })
         .unwrap_or_default();
+    let mut tools: Vec<(u32, &cadrs_core::cam::cadrs_cam::Tool)> = Vec::new();
+    for o in &run.ops {
+        if !tools
+            .iter()
+            .any(|(n, t)| *n == o.tool_number && *t == o.tool)
+        {
+            tools.push((o.tool_number, o.tool));
+        }
+    }
+    notes.extend(tcp_notes(m, &tools, s.inch));
     if m.kind == cadrs_core::cam::cadrs_cam::MachineKind::Plasma
         && m.dialect == post::Dialect::LinuxCnc
         && run.ops.iter().any(|o| o.tool.beam.material == 0)
@@ -212,6 +222,56 @@ fn program_text(world: &World, s: &ExportSession) -> Result<Program, String> {
         notes,
         travel,
     })
+}
+
+/// What a program for a machine with rotary axes holds its operator to when it is posted
+/// without tool centre point control (off, or the control has none: `tcp_for`): the axis
+/// values are then worked out here, from where the work sits and how long each tool is.
+///
+/// - With a rotary axis on the tool's side (a swivel head) the tool's length is in every
+///   block: the program is good only for the lengths it was posted with, listed by tool
+///   (`tools`: number and tool, lengths to the spindle's gauge line in the output's units).
+/// - On any of them the work must sit on the machine where the setup's machine mating says.
+fn tcp_notes(
+    m: &cadrs_core::cam::cadrs_cam::Machine,
+    tools: &[(u32, &cadrs_core::cam::cadrs_cam::Tool)],
+    inch: bool,
+) -> Vec<String> {
+    use cadrs_core::cam::cadrs_cam::tool::fmt_mm;
+    let rotaries = m.rotary_axes();
+    if rotaries == 0 {
+        return Vec::new();
+    }
+    // (As the post decides it, a tool at a time.)
+    let tcp = |h: u32| m.post.rotary.tcp_for(m.dialect, h, rotaries).is_some();
+    let without: Vec<&(u32, &cadrs_core::cam::cadrs_cam::Tool)> =
+        tools.iter().filter(|(h, _)| !tcp(*h)).collect();
+    if without.is_empty() {
+        return Vec::new();
+    }
+    let mut notes = Vec::new();
+    if m.kinematics().tool.iter().any(|j| j.is_rotary()) {
+        let lengths: Vec<String> = without
+            .iter()
+            .map(|(h, t)| {
+                let (key, length) = if inch {
+                    ("cam-post-tool-length-inches", t.gauge_length() / 25.4)
+                } else {
+                    ("cam-post-tool-length-millimetres", t.gauge_length())
+                };
+                tr_with(
+                    key,
+                    &[("number", &h.to_string()), ("length", &fmt_mm(length))],
+                )
+            })
+            .collect();
+        notes.push(tr_with(
+            "cam-post-no-tcp-tool-lengths",
+            &[("tools", &lengths.join(", "))],
+        ));
+    }
+    notes.push(tr("cam-post-no-tcp-work-position"));
+    notes
 }
 
 fn open_dialog(world: &mut World) {
@@ -602,5 +662,72 @@ pub fn post_now(world: &mut World) {
                 ],
             ),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tcp_notes;
+    use cadrs_core::cam::cadrs_cam::tool::{Profile, Tool, ToolKind};
+    use cadrs_core::cam::cadrs_cam::{Machine, machine::catalog};
+    use cadrs_core::samples::cnc_machines as cnc;
+
+    /// The sample document's machine of an assembly.
+    fn sample(element: cadrs_core::ElementId) -> Machine {
+        let doc = cnc::document().unwrap();
+        cadrs_core::cam::machine_of(&doc, element).unwrap().0
+    }
+
+    fn tools() -> (Tool, Tool) {
+        let mut a = Tool::new(ToolKind::EndMill, 10.0);
+        a.overall_length = 50.0;
+        a.holder = Some(Profile::cylinder("Holder", 40.0, 40.0));
+        let mut b = Tool::new(ToolKind::EndMill, 6.0);
+        b.overall_length = 63.5;
+        (a, b)
+    }
+
+    /// A swivel-head machine posted without tool centre point control: the program is tied
+    /// to its tools' lengths, each listed, and to where the work sits. With the control on,
+    /// neither; a 3-axis machine has nothing to say.
+    #[test]
+    fn a_rotary_head_without_tcp_is_tied_to_its_tool_lengths() {
+        let (a, b) = tools();
+        let list = [(1, &a), (3, &b)];
+        let mut m = sample(cnc::MILL_5);
+        assert!(m.kinematics().tool.iter().any(|j| j.is_rotary()));
+        m.post.rotary.tcp = false;
+        let notes = tcp_notes(&m, &list, false);
+        assert_eq!(notes.len(), 2, "{notes:?}");
+        assert!(notes[0].contains("T1 90 mm, T3 63.5 mm"), "{notes:?}");
+        assert!(notes[0].contains("tool lengths"), "{notes:?}");
+        assert!(notes[1].contains("machine mating"), "{notes:?}");
+        // In inches when the program is.
+        let inch = tcp_notes(&m, &list, true);
+        assert!(inch[0].contains("T1 3.543 in, T3 2.5 in"), "{inch:?}");
+        // The control's own tool centre point: the lengths come from its tool table and the
+        // work's place from its offsets.
+        m.dialect = cadrs_core::cam::cadrs_cam::Dialect::Fanuc;
+        m.post.rotary.tcp = true;
+        assert!(tcp_notes(&m, &list, false).is_empty());
+        // Ticked on a control that has no code for it (GRBL, none typed): it is not used.
+        m.dialect = cadrs_core::cam::cadrs_cam::Dialect::Grbl;
+        m.post.rotary.tcp_on.clear();
+        assert_eq!(tcp_notes(&m, &list, false).len(), 2);
+        assert!(tcp_notes(&sample(cnc::MILL_3), &list, false).is_empty());
+        assert!(tcp_notes(&catalog()[0], &list, false).is_empty());
+    }
+
+    /// A machine whose rotary axes are all under the table (the sample's 4-axis mill: one
+    /// axis, never tool centre point control): only where the work sits matters.
+    #[test]
+    fn a_rotary_table_without_tcp_only_needs_the_work_in_its_place() {
+        let (a, _) = tools();
+        let m = sample(cnc::MILL_4);
+        assert_eq!(m.rotary_axes(), 1);
+        assert!(!m.kinematics().tool.iter().any(|j| j.is_rotary()));
+        let notes = tcp_notes(&m, &[(1, &a)], false);
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].contains("machine mating"), "{notes:?}");
     }
 }

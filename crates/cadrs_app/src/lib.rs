@@ -30,6 +30,7 @@ pub mod direct_edit_ui;
 pub mod document;
 pub mod draft_ui;
 pub mod drawing;
+pub mod drawing_sections;
 pub mod drop_import;
 pub mod eda;
 pub mod export_dialog;
@@ -66,6 +67,10 @@ pub mod gear_ui;
 pub mod mcp;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mcp_board;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod mcp_button;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod mcp_machine;
 pub mod measure;
 pub mod move_document;
 pub mod native_document;
@@ -182,6 +187,8 @@ pub struct OpenAtStart(pub std::path::PathBuf);
 
 /// The cadrs repository, for the app menu's GitHub and the top bar's (`github`).
 pub const GITHUB: &str = "https://github.com/rvdende/cadrs";
+/// The top of the README on GitHub, which links the downloads (the browser build's Download App).
+pub const README: &str = "https://github.com/rvdende/cadrs#readme";
 
 /// Opens `url` in the user's browser (in a page, a new tab).
 pub fn open_url(url: &str) {
@@ -1011,6 +1018,7 @@ impl Plugin for CadrsAppPlugin {
                 measure::MeasurePlugin,
                 view_options::ViewOptionsPlugin,
                 section_view::SectionViewPlugin,
+                drawing_sections::DrawingSectionsPlugin,
                 hidden_edges::HiddenEdgesPlugin,
                 sheetmetal_p3i9_ui::Sm9Plugin,
             ))
@@ -1067,7 +1075,7 @@ impl Plugin for CadrsAppPlugin {
                 ),
             );
         #[cfg(not(target_arch = "wasm32"))]
-        app.add_plugins(mcp::McpPlugin);
+        app.add_plugins((mcp::McpPlugin, mcp_button::McpButtonPlugin));
     }
 
     fn finish(&self, app: &mut App) {

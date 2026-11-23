@@ -36,7 +36,7 @@ pub fn fillet_smooth(
             "The setback must be positive".into(),
         ));
     }
-    let b0 = (**k.get(body)?).clone();
+    let b0 = std::sync::Arc::clone(k.get(body)?);
     // The picked edges with their tangent chains, and the vertices where three or more meet.
     let mut all: Vec<usize> = Vec::new();
     for &e in edges {
@@ -61,7 +61,7 @@ pub fn fillet_smooth(
         return Ok(plain);
     }
     // The fillet's faces with their sources.
-    let fb = (**k.get(plain.bodies[0])?).clone();
+    let fb = std::sync::Arc::clone(k.get(plain.bodies[0])?);
     let mut src: Vec<Vec<FaceSrc>> = vec![Vec::new(); fb.faces.len()];
     for (f, o) in &plain.history.generated {
         src[f.0 as usize].push(FaceSrc::New(*o));
@@ -70,7 +70,10 @@ pub fn fillet_smooth(
         src[f.0 as usize].push(FaceSrc::Input(i.face.0 as usize));
     }
     k.release(plain.bodies[0]);
-    let mut cur = Tracked { body: fb, src };
+    let mut cur = Tracked {
+        body: (*fb).clone(),
+        src,
+    };
     let rho = (setback * setback + r * r).sqrt();
     for &v in &corners {
         let vp = b0.verts[v].p;
@@ -366,7 +369,7 @@ fn fill_corner(mut t: Tracked, mark: &FaceSrc, vp: P3, out: V3) -> Result<Tracke
     body.faces = faces;
     let nf = body.faces.len();
     super::build::fix_senses(&mut body, nf - 1..nf);
-    if std::env::var("CADRS_BLEND_DEBUG").is_ok() {
+    if crate::native::env_flag!("CADRS_BLEND_DEBUG") {
         let f = &body.faces[nf - 1];
         let mut worst: f64 = 0.0;
         for x in &smp {

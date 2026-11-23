@@ -309,7 +309,7 @@ fn edge_srcs(frame: &ViewFrame, b: &Body, bi: usize, tol: f64) -> Vec<Src> {
                 class,
                 Some(ei),
                 None,
-                faces.clone(),
+                faces.to_vec(),
                 Geo::Exact(e.curve.clone()),
                 (e.t[0], e.t[1]),
                 closed,
@@ -764,7 +764,9 @@ fn piece_visibility(
 ) -> Vec<(f64, f64, bool)> {
     let vis = |t: f64| occ.visible(&src.point(t), src.body, &src.own);
     let at = |f: f64| a + (b - a) * f;
-    let len = (frame.to_2d(&src.point(a)) - frame.to_2d(&src.point(b))).norm();
+    // (Through the middle: a whole closed curve ends where it starts.)
+    let p2 = |t: f64| frame.to_2d(&src.point(t));
+    let len = (p2(a) - p2(at(0.5))).norm() + (p2(at(0.5)) - p2(b)).norm();
     let mid = vis(at(0.5));
     if len < 20.0 * tol || (vis(at(0.15)) == mid && vis(at(0.85)) == mid) {
         return vec![(a, b, mid)];

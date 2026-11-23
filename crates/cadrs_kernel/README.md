@@ -25,6 +25,7 @@ crates/cadrs_kernel/
   tests/fuzz_readers.rs # property tests: no input panics a reader or a B-spline constructor
   tests/exchange_corpus.rs # a public dataset's STEP and IGES files read and checked (needs the dataset)
   tests/native_debug.rs # reproductions and timings (several replay CADRS_DUMP_DIR dumps)
+  tests/issue_reports.rs # GitHub reports rebuilt from their descriptions, with the cases round each
 ```
 There's no Bevy dependency. `cadrs_core` depends on `cadrs_kernel`, and features rebuild through it
 (see "Rebuilding the feature list" below).
@@ -57,8 +58,9 @@ let step = k.export_step(&round.bodies)?;               // and import_step / imp
 - **Errors** (`KernelError`) say what a caller can do: `InvalidParameter` (a size or selection
   that can't build: tell the user), `InvalidProfile`, `EmptyResult` (an Intersect that finds
   nothing), `OpenResult`/`OperationFailed` (the algorithm gave up: try other options),
-  `InvalidInput` (a bad file or body), `Unsupported`, `UnknownBody`. A wrong body is never
-  returned instead of an error.
+  `InvalidInput` (a bad file or body), `Unsupported`, `UnknownBody`. An operation that knows
+  its result is wrong returns an error; the one exception is a boolean whose only fault is
+  faces its own check reports as crossing, which is returned and counted (see Tolerances).
 - **Units and tolerances.** mm and radians. Exact geometry is within `tol::POINT` (1e-6 mm);
   read and healed bodies carry their own vertex and edge tolerances. See "Tolerances" below.
 - **Validity.** Every result passes `Body::check()` (`native::topo`): the fast structural check
@@ -186,7 +188,7 @@ orientation (`build::fix_senses`). Periodic faces have seams (an edge used twice
 | `evolved`, `cells` | Evolved solids (`Kernel::evolved`: a profile swept square to a planar spine of lines and arcs, arc joins at its outer corners; DRAW's `evolved` with wire profiles, open ones closed by lids, cut into strips that reach the spine) and the cells of an arrangement of solids (`Kernel::cells`). |
 | `loft_build` | Lofts: exact skinning of compatible section curves (two sections give ruled surfaces), or sampled interpolation with end conditions. `loft_pieces` skins sections that already correspond. |
 | `ssi` | Surface intersections: analytic cases (planes, quadrics, tori, coaxial surfaces of revolution, plane × extrusion, plane × cone as exact conics), and the numeric engine (`ssi_numeric`): the uv boxes cut into cells at knots and quarter turns, cell pairs subdivided while their boxes overlap until their normal cones hold no pair of parallel normals (Sederberg–Meyers' loop test), seeds where branches cross the cells' borders, each branch marched along n_a × n_b and corrected onto both surfaces, then fitted (projections hinted by the neighbouring point). Curve–curve and curve–surface hits. |
-| `boolean`, `boolean_kinds`, `split`, `classify`, `unify` | Booleans: a pool of the inputs' vertices and edges, split at vertex-on-edge, edge–edge, edge–face and face–face intersections; coincident faces imprinted and coincident pieces made one edge; faces split in uv; pieces classified by exact ray parity; the kept faces assembled into shells; coplanar and same-surface faces merged (`unify`). Sheets, wires and points (`boolean_kinds`): sheets split by `imprint` and their pieces kept by a point inside each, solid − sheet a split into solids, wires through `edge_bop`; the result kind per operation is tabled in the module. |
+| `boolean`, `boolean_kinds`, `split`, `classify`, `unify` | Booleans: a pool of the inputs' vertices and edges, split at vertex-on-edge, edge–edge, edge–face and face–face intersections; coincident faces imprinted and coincident pieces made one edge; faces split in uv; pieces classified by ray parity (against each face's exact surface, its boundary a polygon sampled along its p-curves); the kept faces assembled into shells; coplanar and same-surface faces merged (`unify`). Sheets, wires and points (`boolean_kinds`): sheets split by `imprint` and their pieces kept by a point inside each, solid − sheet a split into solids, wires through `edge_bop`; the result kind per operation is tabled in the module. |
 | `fillet`, `fillet_geom` | Constant-radius fillets by local trimming (SMLib's fillet executive): the rolling ball's contact curves on both faces, the strip imprinted into its faces in place of the edge (no boolean), three-edge corners a sphere patch, other corners (some of a vertex's edges filleted, or more than three) set back with one patch filling the hole; end faces that meet past the vertex grow over the fillet's end (also where they meet a step along a filleted face's boundary from it: a chamfer across a wall's end beside the wall's top), and end faces that only touch at the vertex (a corner whose next round an outward shell took away) are capped on that round's surface, one end edge swept along the other; faces the strip hangs over grow to its cut (seams run on to it); two strips rounding the same way either side of a face too narrow for both weld across it, each radius that of the ball touching all three faces where its full one would reach past the other's wall, their rails one edge where they meet (a full round where they meet all along); width fillets where the faces' angle varies take a law of radii, chamfers (equal or two distances) on a cylinder running along a straight edge measure round it, elsewhere where a face curves across the edge (and along a tangent chain with such an edge, so its sections meet) as the ball whose contacts on the faces' tangent planes lie that far; what it doesn't cover falls back to `blend`. |
 | `blend`, `blend_chain`, `blend_corner` | Fillets and chamfers as tool bodies (an exact prism or revolution of the rolling-ball or chamfer section where the edge allows, a lofted chain tool otherwise) subtracted or added; corner tools where three blended edges meet; variable, partial, asymmetric, conic and curvature sections; overlap and fit checks. |
 | `local`, `offset_round`, `slab` | Offsets (sharp: the faces' new surfaces re-intersected; rounded: the body ∪ each face's slab ∪ a tube round each convex edge (none on smooth or concave edges) ∪ a ball at each vertex, a concave cylinder's slab its wedge out to the axis when the distance passes its radius; rounded insets: the body less each face's inward slab, a tube round each concave edge and a ball at each of its vertices), drafts, face replacement (`Kernel::replace_faces`, SMLib's local operation, the new surface's domain picking the crossings), shells (inward and outward, hollow, corners rounded or sharp; the cavity built from its definition: the body less each kept face's slab, tubes and balls). Slabs keep the body's edge and vertex tolerances. |
@@ -217,8 +219,9 @@ computed exactly: `tol::REL_FINE`, `ANGULAR_FINE`, `ROUNDOFF_FINE`, and `tol::DE
 computed length, norm or denominator taken as zero: no direction, nothing to divide by). At the
 merge level (1e-6): `tol::POINT` (absolute), `REL_POINT` (a fraction of a size or span),
 `ANGULAR_POINT` (directions or angles taken as the same) and `DIFF_STEP` (the step of a finite
-difference or of a nudge off a point). Bare literals of these values are left only in tests and
-where a constant names them already.
+difference or of a nudge off a point). Most uses name these constants; bare literals of the same values are still left in places
+(the blends, the intersections and the booleans above all), and several thresholds are
+absolute lengths that do not shrink with a small model.
 
 Above these, vertices and edges carry their own tolerance (a read or healed body's gaps,
 `Body::fit_tolerances`), and operations take the larger of their own and the entities'.
@@ -227,13 +230,16 @@ The values an operation runs with are a `tol::Tolerances` carried by the session
 explicitly: `boolean::boolean_bodies_with(a, b, op, BoolOptions { tol, .. })`. A boolean whose
 first run leaves an open shell runs again at `Tolerances::retries` (1e-5, then 1e-4). A run
 passes its merge distance down to its helpers and the intersections it calls as an argument
-(no thread-local or global state); `BoolOptions` also says whether faces on one surface are
+(the run's values are arguments; the kernel does keep a few thread-local and global items:
+the count of flagged results below, a per-thread recursion guard, and caches of faces'
+sampled boundaries and surfaces' grids); `BoolOptions` also says whether faces on one surface are
 merged afterwards (`merge_coplanar`, off for the DRAW harness). A result that fails `Body::check` is an error,
 retried at the larger tolerances. A boolean also checks that no two faces of its result cross
-(across the inputs, and loops crossing in (u, v) on new periodic faces): a result whose only
-fault is crossing faces is returned flagged, not failed, and `native::take_invalid_results()`
-counts such results on the thread; with `CADRS_BOOL_STRICT=1` it is a `BooleanFailed` error
-instead (the tests run strict).
+(across the inputs, and loops crossing in (u, v) on new periodic faces; faces that only touch,
+their surfaces tangent there, don't cross): a result whose only fault is crossing faces, which
+no retry betters, is a `BooleanFailed` error. With `CADRS_BOOL_LENIENT=1` it is returned
+flagged instead, as it was, and `native::take_invalid_results()` counts such results (this
+thread's, and those of the worker threads its parts ran on).
 
 **Errors.** Every operation returns `Result<_, KernelError>`, with a message in words for the
 user. The variant says what a caller can do: `EmptyResult` (an Intersect of bodies that don't
@@ -251,8 +257,11 @@ blend's deterministic work budget ran out), `InvalidResult { op }` (a built body
 `OperationFailed` for the rest. The enum is `#[non_exhaustive]`. `KernelError::message` gives
 the words without the kind's prefix; `Display` is "operation failed: ..." for every failure.
 
-**Environment variables.** None is needed in normal use. Every one the kernel reads is listed
-here; `tools/kernel_gate.sh` and CI run with none of the switches set.
+**Environment variables.** None is needed in normal use. The ones in everyday use are listed
+here (a few more debug switches are read by single modules: `CADRS_EF_DEBUG`,
+`CADRS_SEW_TRACE`, `CADRS_CHECK_COMPARE`, `CADRS_SWEEP_SOLID_DEBUG`, `CADRS_FILLET_DEBUG`;
+and `CADRS_SEW_REUSE=0` and the `CADRS_TUBE_*` family change results). A switch is read once
+per process; `tools/kernel_gate.sh` and CI run with none of the switches set.
 
 Debug output (on stderr; results don't change):
 - `CADRS_PROFILE=1`: each boolean's phases, slow mass properties and tessellations, sweeps.
@@ -293,10 +302,11 @@ otherwise):
 - `CADRS_NO_RECOG_S=1`, `CADRS_NO_RECOG_C=1` (`xbuild.rs`): imported B-spline surfaces and
   curves are kept as B-splines instead of being recognised as planes, cylinders, cones, spheres,
   tori and extrusions, lines and circles.
-- `CADRS_BOOL_STRICT=1` (`boolean.rs`): a boolean whose result has crossing faces fails
-  instead of returning the result flagged (`take_invalid_results`). The metamorphic and
-  stress tests don't set it; their helper (`tests/meta_common`) treats a flagged result as an
-  error instead.
+- `CADRS_DRAFT_BY_CUT=1` (`local.rs`): a draft of slanted holes' and grooves' walls is made
+  by cutting (the hollow filled and cut again as its leant wall bounds it) before it is tried
+  by moving the faces, to hold the two ways together.
+- `CADRS_BOOL_LENIENT=1` (`boolean.rs`): a boolean whose result has crossing faces returns
+  it flagged (`take_invalid_results`) instead of failing, to look at what it built.
 - `CADRS_OCCT_REBUILD=1` (`brep_occt.rs`): a text BRep file's faces are always rebuilt from
   their edges instead of being read directly.
 
@@ -337,6 +347,11 @@ results, or with `--static`, it falls back to reading the suites' source, which 
   drill-bit cut chain) and `tests/fingerprint.rs` (a hash of each result's body for a sample of
   booleans and offsets on 1 and 4 rayon threads, which must agree). `CADRS_META_SEED`,
   `CADRS_META_CASES`, `CADRS_STRESS_*` and `CADRS_FINGERPRINT_*` set seeds, sizes and output.
+- `tests/issue_reports.rs`: bugs reported on GitHub, rebuilt from their descriptions with the
+  cases round each (a pattern's overlapping pins cut from a ring, #300; shells of a bar whose
+  round end was made three ways, #297; every edge of a chamfered block filleted smaller and
+  larger than the chamfer, #299), against closed forms and identities between results. A case
+  that fails today is `#[ignore]`d with the gap it waits on; CI's fast gate runs the suite.
 - The generated suites run on a DRAW-style harness (`native::draw`) and the SMLib oracle's body
   writer (`native::oracle`): test code, built only for tests and with the `testkit` feature
   (the crate's own tests turn it on through a dev-dependency on itself), not kernel API.

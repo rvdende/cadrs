@@ -726,23 +726,11 @@ fn tilted_planes_post_as_g68_2() {
         2,
         "{nc2}"
     );
-    // Haas-style controls aren't given G68.2.
-    let mut haas = five.clone();
-    haas.dialect = Dialect::Haas;
-    assert!(matches!(
-        post(&p, &haas, &haas.post),
-        Err(PostError::CantTilt(_))
-    ));
-    // Not on a 3-axis machine, nor on LinuxCNC.
+    // A 3-axis machine can't tilt at all. (A control without G68.2 gets the rotary axes'
+    // positions instead: `tests_rotary`.)
     let three = machine(MachineKind::Mill, Dialect::Fanuc);
     assert!(matches!(
         post(&p, &three, &three.post),
-        Err(PostError::CantTilt(_))
-    ));
-    let mut lcnc = five.clone();
-    lcnc.dialect = Dialect::LinuxCnc;
-    assert!(matches!(
-        post(&p, &lcnc, &lcnc.post),
         Err(PostError::CantTilt(_))
     ));
 }

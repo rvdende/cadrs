@@ -86,6 +86,7 @@ fn shell(
         outward: d > 0.0,
         hollow: false,
         sharp,
+        nothing_hollowed: Default::default(),
     };
     let input = m.body.clone();
     let mut k = NativeKernel::new();

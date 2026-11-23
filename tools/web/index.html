@@ -38,7 +38,7 @@
   <div class="note" id="note">The whole app runs in this tab. Your documents stay in this browser.</div>
 </div>
 <script type="module">
-  import { openFiles } from "./files.js";
+  import { listenForDrops, openFiles } from "./files.js";
 
   const status = document.getElementById("status");
   const message = document.getElementById("message");
@@ -105,6 +105,9 @@
     const wasm = response.body.pipeThrough(progress).pipeThrough(new DecompressionStream("gzip"));
     return new Response(wasm, { headers: { "content-type": "application/wasm" } });
   }
+
+  // From the start, so a file dropped while the app loads waits for it instead of replacing the page.
+  listenForDrops(document.getElementById("cadrs"));
 
   async function start() {
     const kind = await graphics();

@@ -1200,9 +1200,9 @@ pub struct Sketch {
     /// The points and end tangents of each [`CurveKind::Spline`], by curve.
     #[serde(default, skip_serializing_if = "slotmap::SecondaryMap::is_empty")]
     pub splines: slotmap::SecondaryMap<CurveId, spline::SplineData>,
-    /// The expressions typed into driving dimensions that name variables (P3F.4:
-    /// `#piston_d + #clearance`), kept next to the value they evaluated to (the dimension's
-    /// `value`). The document re-evaluates them when a variable changes.
+    /// The formulas typed into driving dimensions (P3F.4: `#piston_d + #clearance`; #205:
+    /// `100/2`), kept next to the value they evaluated to (the dimension's `value`). The
+    /// document re-evaluates those that name variables when a variable changes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub expressions: Vec<(DimensionId, String)>,
 }
@@ -1313,7 +1313,20 @@ impl Sketch {
         Self::default()
     }
 
-    /// The expression a dimension's value came from (P3F.4), if it names variables.
+    /// The formula of a dimension that names variables ([`units::names_variable`]): the one
+    /// the document evaluates again, and which sets the value whatever else would.
+    pub fn variable_expression(&self, id: DimensionId) -> Option<&str> {
+        self.expression(id).filter(|e| units::names_variable(e))
+    }
+
+    /// Forgets a dimension's formula of constants (#205: "100/2"): it is only what was typed
+    /// for a value the dimension no longer has. One naming variables stays.
+    pub(crate) fn drop_constant_formula(&mut self, id: DimensionId) {
+        self.expressions
+            .retain(|(d, e)| *d != id || units::names_variable(e));
+    }
+
+    /// The formula a dimension's value came from (P3F.4), if it was typed as one.
     pub fn expression(&self, id: DimensionId) -> Option<&str> {
         self.expressions
             .iter()

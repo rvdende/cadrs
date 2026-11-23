@@ -872,6 +872,7 @@ fn a_cube_hollowed_inward() {
                 outward: false,
                 hollow: true,
                 sharp: false,
+                nothing_hollowed: Default::default(),
             },
         )
         .unwrap()
@@ -907,6 +908,7 @@ fn a_cube_hollowed_outward_with_sharp_corners() {
                 outward: true,
                 hollow: true,
                 sharp: true,
+                nothing_hollowed: Default::default(),
             },
         )
         .unwrap()
@@ -942,6 +944,7 @@ fn a_cube_hollowed_outward_with_round_corners() {
                 outward: true,
                 hollow: true,
                 sharp: false,
+                nothing_hollowed: Default::default(),
             },
         )
         .unwrap()
@@ -1027,6 +1030,7 @@ fn a_cube_with_every_edge_filleted_shelled_outward_open_at_the_top() {
                 outward: true,
                 hollow: false,
                 sharp: false,
+                nothing_hollowed: Default::default(),
             },
         )
         .unwrap()
@@ -1433,24 +1437,14 @@ fn a_frustum_shelled_to_a_cavity_sealed_below_its_opening() {
 }
 
 #[test]
-fn a_frustum_shelled_too_thick_to_hollow_is_itself() {
+fn a_frustum_shelled_too_thick_to_hollow_is_refused() {
     // The side moved 3.5 in has its apex at z = 13/6, below the base moved up to z = 3.5: no
-    // point of the frustum is farther than 3.5 from both, and nothing is hollowed.
+    // point of the frustum is farther than 3.5 from both, nothing is hollowed, and a hair thinner
+    // hollows nothing either: the shell is as thick as the part, and refused.
     let mut k = NativeKernel::new();
     let f = frustum(&mut k, 6.0, 3.0, 4.0);
-    let b = shelled(&mut k, f, &[[1.0, 1.0, 4.0]], 3.5);
-    check(
-        &k,
-        b,
-        Want {
-            volume: 84.0 * PI,
-            area: 90.0 * PI,
-            faces: 3,
-            min: [-6.0, -6.0, 0.0],
-            max: [6.0, 6.0, 4.0],
-            centroid: None,
-        },
-    );
+    let top = k.face_at(f, Point3::new(1.0, 1.0, 4.0)).unwrap();
+    assert!(k.shell_with(f, &ShellSpec::inward(vec![top], 3.5)).is_err());
 }
 
 #[test]

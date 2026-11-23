@@ -865,10 +865,16 @@ impl SketchOp {
                 check_value(d, *value)?;
                 if let crate::DimensionKind::Sides { circle, .. } = d.kind {
                     // A polygon's side count rebuilds it (S7.4).
-                    return crate::entity::set_polygon_sides(s, circle, value.round() as u32);
+                    crate::entity::set_polygon_sides(s, circle, value.round() as u32)?;
+                    s.drop_constant_formula(*id);
+                    return Ok(());
                 }
                 let (kind, before) = (d.kind, d.value);
                 d.value = *value;
+                // A formula naming no variable (#205: "100/2") is only what was typed for the
+                // old value: a new value drops it. One naming a variable stays, to be
+                // re-evaluated.
+                s.drop_constant_formula(*id);
                 // A distance turning negative (or back) puts its point on the other side.
                 if kind.signed() && (before < 0.0) != (*value < 0.0) {
                     flip_side(s, kind);
@@ -893,11 +899,15 @@ impl SketchOp {
                     d.value = v;
                 }
                 d.driven = *driven;
+                // (A driven dimension measures, and one driving again starts from what it
+                // measured: neither is the value a formula of constants was typed for.)
+                s.drop_constant_formula(*id);
                 Ok(())
             }
             SketchOp::SetAngleOutside { id, outside } => {
-                // (Its expression would set it back to the variable's value.)
-                if s.expressions.iter().any(|(d, _)| d == id) {
+                // (Its expression would set it back to the variable's value. A formula of
+                // constants only goes with the value it was typed for.)
+                if s.variable_expression(*id).is_some() {
                     return Err("an angle set by an expression keeps its value".into());
                 }
                 let d = *s.dimensions.get(*id).ok_or("the dimension is gone")?;
@@ -917,6 +927,7 @@ impl SketchOp {
                     *ccw = ccw.map(|c| !c);
                 }
                 d.value = 360.0 - sweep.abs();
+                s.drop_constant_formula(*id);
                 Ok(())
             }
             SketchOp::MoveDimensionLabel { id, offset, along } => {
@@ -1662,6 +1673,31 @@ mod tests {
         ));
         assert!(solve::solve(&mut s).conflicting.is_empty());
         (s, angle)
+    }
+
+    /// #205: "90/2" is only what was typed for 45°, so the angle can still be measured round
+    /// the outside (and the formula goes with the old value); a variable's angle keeps its
+    /// value.
+    #[test]
+    fn an_angle_of_a_constant_formula_is_measured_outside() {
+        let (mut s, id) = split_quarter_arc();
+        let expr = |e: &str| SketchOp::SetDimensionExpr {
+            id,
+            expr: Some(e.into()),
+        };
+        expr("90/2").apply(&mut s).unwrap();
+        SketchOp::SetAngleOutside { id, outside: true }
+            .apply(&mut s)
+            .unwrap();
+        assert!(outside_angle(s.dimensions[id].value));
+        assert_eq!(s.expression(id), None);
+        expr("#a").apply(&mut s).unwrap();
+        assert!(
+            SketchOp::SetAngleOutside { id, outside: false }
+                .apply(&mut s)
+                .is_err()
+        );
+        assert_eq!(s.expression(id), Some("#a"));
     }
 
     #[test]

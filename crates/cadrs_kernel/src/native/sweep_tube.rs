@@ -1655,7 +1655,7 @@ fn wide_band(
             round: 4.0,
             bend: [x[0], x[1], x[2], x[3], x[4]],
         };
-        if std::env::var_os("CADRS_TUBE_NEAR").is_some() {
+        if crate::native::env_flag!("CADRS_TUBE_NEAR") {
             let worst = line
                 .iter()
                 .filter(|l| l.0.abs() <= room_y + step)
@@ -1698,7 +1698,7 @@ fn prepare<'a>(
     if !(rmin < rmaj) || !f.sense || b.solids.len() != 1 {
         return None;
     }
-    let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+    let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
     let t_start = web_time::Instant::now();
     let refused = |why: String| -> Option<Result<Prep<'a>>> {
         if debug {
@@ -1744,7 +1744,7 @@ fn prepare<'a>(
     pinches.retain(|c| !on_line(c));
     let mut near_pinches = tube.find_near_pinches(&pinches, &grid);
     near_pinches.retain(|c| !on_line(&c.0));
-    if std::env::var_os("CADRS_TUBE_NEAR").is_some() {
+    if crate::native::env_flag!("CADRS_TUBE_NEAR") {
         for &(c, least) in &near_pinches {
             let d = tube.across_d(c.x, c.y).svd(true, true);
             eprintln!(
@@ -2033,7 +2033,7 @@ fn prepare<'a>(
             }
         }
     }
-    if std::env::var_os("CADRS_TUBE_SEAM").is_some() {
+    if crate::native::env_flag!("CADRS_TUBE_SEAM") {
         // (Each pinch's seam in (t, ψ), and how far the chart's place read back is off.)
         for (k, pn) in tube.pinches.iter().enumerate() {
             eprintln!(
@@ -2420,32 +2420,22 @@ fn prepare<'a>(
                                 if !was_in && i > 0 {
                                     // In from a side: the crossing between the samples.
                                     let side = if v > th[i - 1] + k * TAU { v0 } else { v1 };
-                                    let (mut lo, mut hi) =
-                                        (u0 + (u1 - u0) * (i - 1) as f64 / n as f64, psi);
-                                    for _ in 0..60 {
-                                        let m = 0.5 * (lo + hi);
-                                        if inside(theta_at(m, k)) {
-                                            hi = m;
-                                        } else {
-                                            lo = m;
-                                        }
-                                    }
+                                    let (_, hi) = super::math::bisect(
+                                        u0 + (u1 - u0) * (i - 1) as f64 / n as f64,
+                                        psi,
+                                        |m| !inside(theta_at(m, k)),
+                                    );
                                     run.push(point(hi, side));
                                 }
                                 run.push(point(psi, v));
                             } else if was_in {
                                 // Out through a side.
                                 let side = if v > v1 { v1 } else { v0 };
-                                let (mut lo, mut hi) =
-                                    (u0 + (u1 - u0) * (i - 1) as f64 / n as f64, psi);
-                                for _ in 0..60 {
-                                    let m = 0.5 * (lo + hi);
-                                    if inside(theta_at(m, k)) {
-                                        lo = m;
-                                    } else {
-                                        hi = m;
-                                    }
-                                }
+                                let (lo, _) = super::math::bisect(
+                                    u0 + (u1 - u0) * (i - 1) as f64 / n as f64,
+                                    psi,
+                                    |m| inside(theta_at(m, k)),
+                                );
                                 run.push(point(lo, side));
                                 flush(&mut run, &mut cuts);
                             }
@@ -2474,7 +2464,7 @@ fn prepare<'a>(
                         }
                     }
                 };
-                if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+                if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
                     let js: Vec<String> = [u0, 0.5 * (u0 + u1), u1]
                         .iter()
                         .map(|&psi| {
@@ -2595,7 +2585,7 @@ pub(crate) fn torus(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<R
     let widened = std::cell::Cell::new(false);
     match torus_seamed(k, b, motion, Seam::Wide, &widened)? {
         Err(e) if widened.get() => {
-            if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+            if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
                 eprintln!("tube sweep: with wide seams: {e}; again with narrow ones");
             }
             torus_seamed(k, b, motion, Seam::Narrow, &widened)
@@ -2612,7 +2602,7 @@ fn torus_seamed(
     seam: Seam,
     widened: &std::cell::Cell<bool>,
 ) -> Option<Result<OpResult>> {
-    let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+    let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
     let t_start = web_time::Instant::now();
     let refused = |why: String| -> Option<Result<OpResult>> {
         if debug {
@@ -2665,7 +2655,7 @@ fn torus_seamed(
                 ms(t_fitted, t_traced),
             );
             // Curves' ends near one another but not together.
-            let ends = std::env::var_os("CADRS_TUBE_ENDS").is_some();
+            let ends = crate::native::env_flag!("CADRS_TUBE_ENDS");
             for (i, g) in given.iter().enumerate().filter(|_| ends) {
                 for (j, h) in given.iter().enumerate().skip(i + 1) {
                     for p in [g.pts[0], g.pts[g.pts.len() - 1]] {
@@ -2694,7 +2684,7 @@ fn torus_seamed(
                     }
                 }
             }
-            if std::env::var_os("CADRS_TUBE_CURVES").is_some() {
+            if crate::native::env_flag!("CADRS_TUBE_CURVES") {
                 for g in &given {
                     let (p, q) = (g.pts[0], g.pts[g.pts.len() - 1]);
                     eprintln!(
@@ -2768,7 +2758,7 @@ fn torus_seamed(
                     .map(|f| (f.0.cps.len(), f.0.cps[0].len()))
                     .collect::<Vec<_>>()
             );
-            if std::env::var_os("CADRS_TUBE_FITS").is_some() {
+            if crate::native::env_flag!("CADRS_TUBE_FITS") {
                 for (sh, f) in prep.sheets.iter().zip(&fits) {
                     let (chart, a0, a1, p0, p1) = sh.patch;
                     let ((u0, u1), (v0, v1)) = f.1;
@@ -2894,7 +2884,7 @@ pub(crate) fn boolean(
     // and the boolean doesn't come out, with narrow ones for both, their sheets fitted anew.)
     match boolean_seamed(k, op, a, b, [a.seam, b.seam])? {
         Err(e) if a.seam == Seam::Wide || b.seam == Seam::Wide => {
-            if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+            if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
                 eprintln!("tube boolean: with wide seams: {e}; again with narrow ones");
             }
             boolean_seamed(k, op, a, b, [Seam::Narrow; 2])
@@ -2911,7 +2901,7 @@ fn boolean_seamed(
     b: &SweptTorus,
     seams: [Seam; 2],
 ) -> Option<Result<OpResult>> {
-    let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+    let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
     let t_start = web_time::Instant::now();
     let refused = |why: String| -> Option<Result<OpResult>> {
         if debug {
@@ -3059,7 +3049,7 @@ fn boolean_seamed(
             given.len() - n_sheet_curves,
             t_start.elapsed().as_secs_f64() * 1e3
         );
-        if std::env::var_os("CADRS_TUBE_CURVES").is_some() {
+        if crate::native::env_flag!("CADRS_TUBE_CURVES") {
             for g in &given {
                 let (p, q) = (g.pts[0], g.pts[g.pts.len() - 1]);
                 eprintln!(
@@ -3336,7 +3326,7 @@ fn fit_sheets(
     let ns = prep.sheets.len();
     let sheet = |f: usize| f.checked_sub(base).filter(|&i| i < ns);
     let mut on_sheet: Vec<Vec<(P3, P2)>> = vec![Vec::new(); ns];
-    let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+    let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
     for g in given {
         for (k, p) in g.pts.iter().enumerate() {
             for (i, w) in [(sheet(g.a), p.1), (sheet(g.b), p.2)] {
@@ -3381,7 +3371,7 @@ fn fit_sheets(
     for f in fitted {
         fits.push(f?);
     }
-    if std::env::var_os("CADRS_TUBE_FITS").is_some() {
+    if crate::native::env_flag!("CADRS_TUBE_FITS") {
         // (How far each fitted sheet is off its chart midway between its curves' points.)
         for g in given {
             for (f, second) in [(sheet(g.a), false), (sheet(g.b), true)] {
@@ -3624,7 +3614,7 @@ fn trace(
                 .collect()
         }
     };
-    if std::env::var_os("CADRS_TUBE_TIMES").is_some() {
+    if crate::native::env_flag!("CADRS_TUBE_TIMES") {
         eprintln!(
             "  trace: from face {base}: the other's hold of the nodes read by {:.0} ms",
             t_trace.elapsed().as_secs_f64() * 1e3
@@ -3715,7 +3705,7 @@ fn trace(
                 &through,
             )
             .unwrap_or_default();
-            if std::env::var_os("CADRS_TUBE_TIMES").is_some() {
+            if crate::native::env_flag!("CADRS_TUBE_TIMES") {
                 eprintln!(
                     "  trace: sheet {i} grid {mu}x{mv}: nodes {:.0} ms, curves {:.0} ms ({} chains, {} points)",
                     (t_curves - t_nodes).as_secs_f64() * 1e3,
@@ -3897,7 +3887,7 @@ fn trace(
             };
             let out: Vec<super::sweep_moving::Given> =
                 chains.par_iter().map(run_of).flatten_iter().collect();
-            if std::env::var_os("CADRS_TUBE_TIMES").is_some() {
+            if crate::native::env_flag!("CADRS_TUBE_TIMES") {
                 eprintln!(
                     "  trace: sheet {i}: runs {:.0} ms ({} curves)",
                     t_runs.elapsed().as_secs_f64() * 1e3,
@@ -3907,7 +3897,7 @@ fn trace(
             out
         })
         .collect();
-    if std::env::var_os("CADRS_TUBE_TIMES").is_some() {
+    if crate::native::env_flag!("CADRS_TUBE_TIMES") {
         let n: Vec<usize> = BY_MARGIN
             .iter()
             .map(|c| c.swap(0, std::sync::atomic::Ordering::Relaxed))
@@ -3954,7 +3944,7 @@ pub(super) fn drop_twins(
             })
         })
     };
-    if std::env::var_os("CADRS_TUBE_TWINS").is_some() {
+    if crate::native::env_flag!("CADRS_TUBE_TWINS") {
         // (How far each reading's points are off its twins' polylines, at worst.)
         for (i, g) in given.iter().enumerate() {
             for (j, h) in given.iter().enumerate() {
@@ -4368,7 +4358,7 @@ fn fit_tensor(
     if let Some((before, _)) = done {
         return Ok((before, dom));
     }
-    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
         let surf = tensor(&at, &us, &vs);
         let worst = pts
             .iter()
@@ -4461,7 +4451,7 @@ impl Faces<'_> {
                     first.get_or_insert((i, uv));
                 }
             }
-            if first.is_none() && std::env::var_os("CADRS_TUBE_AT").is_some() {
+            if first.is_none() && crate::native::env_flag!("CADRS_TUBE_AT") {
                 let rows: Vec<String> = (self.sheets..self.patches.len())
                     .filter(|&i| self.patches[i].0 == chart)
                     .map(|i| {
@@ -5063,7 +5053,7 @@ pub(super) fn cover_curves(
         // (The later of two on one chain first: the other's place in it stands.)
         passes.sort_by_key(|p| std::cmp::Reverse((p.1, p.2)));
         for (_, c, k) in passes {
-            if std::env::var_os("CADRS_TUBE_NODES").is_some() {
+            if crate::native::env_flag!("CADRS_TUBE_NODES") {
                 let pts = &chains[c].pts;
                 eprintln!(
                     "  node {wn:?} ({tn:.9}) into chain {c} of {} points after {k}: {:?}",
@@ -5157,7 +5147,7 @@ pub(super) fn cover_curves(
                 fresh.insert(i + k, true);
             }
         }
-        if std::env::var_os("CADRS_TUBE_NODES").is_some() {
+        if crate::native::env_flag!("CADRS_TUBE_NODES") {
             for &(wn, _) in through {
                 for (k, _) in chain.pts.iter().enumerate().filter(|(_, p)| p.0 == wn) {
                     eprintln!(
@@ -5365,7 +5355,7 @@ pub(super) fn chain_runs(
         }
         let was: Vec<P2> = pts[i..=j].iter().map(|p| p.0).collect();
         pts[i..=j].sort_by(|x, y| (x.0 - wc).norm().total_cmp(&(y.0 - wc).norm()));
-        if std::env::var_os("CADRS_TUBE_NODES").is_some()
+        if crate::native::env_flag!("CADRS_TUBE_NODES")
             && was != pts[i..=j].iter().map(|p| p.0).collect::<Vec<_>>()
         {
             eprintln!(
@@ -5431,7 +5421,7 @@ pub(super) fn chain_runs(
                 tries.into_iter().find_map(|start| {
                     let mut w = start;
                     let (mut ta, mut tb) = (t0, tau);
-                    let trace = std::env::var_os("CADRS_TUBE_CORNER").is_some();
+                    let trace = crate::native::env_flag!("CADRS_TUBE_CORNER");
                     if trace {
                         eprintln!(
                             "  corner of {c:?} and {f:?} from {start:?} (instants {ta:.9}, {tb:.9}; reach {reach:.2e})"
@@ -5561,7 +5551,7 @@ pub(super) fn chain_runs(
             // (A node ends one stretch and begins the next: the faces touch there, and two
             // curves cross.)
             if node(&w) && !run.is_empty() {
-                if std::env::var_os("CADRS_TUBE_NODES").is_some() {
+                if crate::native::env_flag!("CADRS_TUBE_NODES") {
                     eprintln!(
                         "  node at {w:?} (point {i} of {}): the stretch before it ends {:?}; after it {:?}",
                         pts.len(),

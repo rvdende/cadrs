@@ -1135,6 +1135,10 @@ fn step(
                 None => {}
             }
             let asked = matches!(ping, Some((at, _)) if t - *at < RETRY_EVERY);
+            // An owner that quit answers only when the dial gives up (REACH_WITHIN), after
+            // RETRY_EVERY: starting over then would drop the question, and nobody would ever
+            // take over.
+            let pending = ping.is_some();
             if back {
                 follow_host(world, g, room, owner, g.owner_name.clone());
             } else if !incoming.is_empty() {
@@ -1149,7 +1153,7 @@ fn step(
                 // Someone else keeps the edits in order: follow them (if they aren't yet,
                 // the fetch fails and this is tried again).
                 follow_host(world, g, room, id, name);
-            } else if t - since > RETRY_EVERY {
+            } else if t - since > RETRY_EVERY && !pending {
                 g.state = GuestState::Away {
                     since: t,
                     ping: None,
