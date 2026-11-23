@@ -577,9 +577,13 @@ fn region_of(
     poly: &Polygon,
     source: u64,
     to_plane: &dyn Fn(P2) -> nalgebra::Point2<f64>,
+    circles: &[(nalgebra::Point2<f64>, f64)],
 ) -> cadrs_kernel::Region {
-    let lp = |l: &[P2], base: u64| Loop {
-        curves: loop_curves(&l.iter().map(|q| to_plane(*q)).collect::<Vec<_>>(), base),
+    let lp = |l: &[P2], base: u64| {
+        let pts: Vec<_> = l.iter().map(|q| to_plane(*q)).collect();
+        Loop {
+            curves: known_arcs(&pts, base, circles).unwrap_or_else(|| loop_curves(&pts, base)),
+        }
     };
     cadrs_kernel::Region {
         outer: lp(&poly.outer, 0),
@@ -610,6 +614,100 @@ fn circle3(
     let (b2, c2) = (ab.norm_squared(), ac.norm_squared());
     let o = nalgebra::Vector2::new(ac.y * b2 - ab.y * c2, ab.x * c2 - ac.x * b2) / d;
     Some((a + o, o.norm()))
+}
+
+/// A closed loop of points as kernel curves where it follows circles known exactly (`circles`:
+/// centre and radius in the loop's plane): each run of three or more of its points on one of
+/// them is that circle's arc between the run's ends (a loop all on one, the circle), the rest
+/// lines. `None` if no run is on a known circle ([`loop_curves`] then finds its rounds by their
+/// points alone).
+fn known_arcs(
+    pts: &[nalgebra::Point2<f64>],
+    base: u64,
+    circles: &[(nalgebra::Point2<f64>, f64)],
+) -> Option<Vec<Curve2>> {
+    let n = pts.len();
+    if n < 3 || circles.is_empty() {
+        return None;
+    }
+    let on = |k: usize, i: usize| {
+        let (c, r) = circles[k];
+        ((pts[i % n] - c).norm() - r).abs() <= 1e-6 + 1e-9 * r
+    };
+    // Which way round a circle the loop goes from point i to the next.
+    let way =
+        |k: usize, i: usize| (pts[i % n] - circles[k].0).perp(&(pts[(i + 1) % n] - circles[k].0));
+    // A whole circle.
+    for k in 0..circles.len() {
+        if (0..n).all(|i| on(k, i)) && (0..n).all(|i| way(k, i).signum() == way(k, 0).signum()) {
+            let (c, r) = circles[k];
+            return Some(vec![Curve2::Circle {
+                center: c,
+                radius: if way(k, 0) > 0.0 { r } else { -r },
+                source: Some(base),
+            }]);
+        }
+    }
+    // The circle each segment is an arc of: both its ends on the circle and so is a
+    // neighbouring point, going the same way round (a chord of a circle between two of a
+    // straight side's points is not an arc).
+    let seg: Vec<Option<usize>> = (0..n)
+        .map(|i| {
+            (0..circles.len()).find(|&k| {
+                on(k, i)
+                    && on(k, i + 1)
+                    && ((on(k, i + 2) && way(k, i).signum() == way(k, i + 1).signum())
+                        || (on(k, i + n - 1) && way(k, i).signum() == way(k, i + n - 1).signum()))
+            })
+        })
+        .collect();
+    if seg.iter().all(Option::is_none) {
+        return None;
+    }
+    // Start where a run starts.
+    let start = (0..n)
+        .find(|&i| seg[i] != seg[(i + n - 1) % n])
+        .unwrap_or(0);
+    let mut out = Vec::new();
+    let mut j = 0;
+    while j < n {
+        let i = (start + j) % n;
+        let Some(k) = seg[i] else {
+            out.push(Curve2::Line {
+                a: pts[i],
+                b: pts[(i + 1) % n],
+                source: Some(base + i as u64),
+            });
+            j += 1;
+            continue;
+        };
+        let sign = way(k, i).signum();
+        let mut len = 1;
+        while j + len < n
+            && seg[(start + j + len) % n] == Some(k)
+            && way(k, start + j + len).signum() == sign
+        {
+            len += 1;
+        }
+        let (c, r) = circles[k];
+        let (a, b) = (pts[i], pts[(start + j + len) % n]);
+        let a0 = (a - c).y.atan2((a - c).x);
+        let a1 = (b - c).y.atan2((b - c).x);
+        let tau = std::f64::consts::TAU;
+        let mut sweep = (a1 - a0).rem_euclid(tau);
+        if sign < 0.0 {
+            sweep -= tau;
+        }
+        out.push(Curve2::Arc {
+            center: c,
+            radius: r,
+            start_angle: a0,
+            sweep,
+            source: Some(base + i as u64),
+        });
+        j += len;
+    }
+    Some(out)
 }
 
 /// A closed loop of points as kernel curves: runs of points on one circle (a polygonised arc:
@@ -853,7 +951,9 @@ impl Rebuilder {
                         Some(wall) if slabs.contains(&w) => {
                             self.slab_bodies(op_of(piece.source), model, wall, &removed, t)
                         }
-                        Some(wall) => self.wall_bodies(op_of(piece.source), wall, &removed, t),
+                        Some(wall) => {
+                            self.wall_bodies(op_of(piece.source), wall, &removed, t, &model.circles)
+                        }
                         None => continue,
                     },
                     PieceSource::Bend(j) => self.bend_body(op_of(piece.source), model, j, &removed),
@@ -908,7 +1008,7 @@ impl Rebuilder {
         t: f64,
     ) -> Result<Vec<(BodyId, BodyNames, f64)>, String> {
         let Some(tris) = cadrs_sheetmetal::loft::wall_slab(model, wall.id, removed) else {
-            return self.wall_bodies(op, wall, removed, t);
+            return self.wall_bodies(op, wall, removed, t, &model.circles);
         };
         let size = tris
             .iter()
@@ -916,7 +1016,7 @@ impl Rebuilder {
             .map(|p| p.coords.norm())
             .fold(1.0, f64::max);
         let Ok(b) = self.kernel.mesh_solid(&tris, 1e-7 * size) else {
-            return self.wall_bodies(op, wall, removed, t);
+            return self.wall_bodies(op, wall, removed, t, &model.circles);
         };
         let names = naming::name_body(&self.kernel, b, op, &cadrs_kernel::History::default(), &[])
             .map_err(|e| e.to_string());
@@ -941,6 +1041,7 @@ impl Rebuilder {
         wall: &Wall,
         removed: &[Polygon],
         t: f64,
+        circles: &[(P3, V3, f64)],
     ) -> Result<Vec<(BodyId, BodyNames, f64)>, String> {
         let source = 0x5741_4c4c_0000_0000 | wall.id.0 as u64;
         let profile = match wall.surface {
@@ -952,6 +1053,19 @@ impl Rebuilder {
                     let p = wall.surface.point(q);
                     nalgebra::Point2::new((p - origin).dot(&x), (p - origin).dot(&y))
                 };
+                // The model's exact circles in this wall's plane.
+                let known: Vec<(nalgebra::Point2<f64>, f64)> = circles
+                    .iter()
+                    .filter(|(c, axis, _)| {
+                        axis.cross(&n).norm() < 1e-9 && (c - origin).dot(&n).abs() < 1e-6
+                    })
+                    .map(|(c, _, r)| {
+                        (
+                            nalgebra::Point2::new((c - origin).dot(&x), (c - origin).dot(&y)),
+                            *r,
+                        )
+                    })
+                    .collect();
                 let polys = if removed.is_empty() {
                     vec![wall.outline.clone()]
                 } else {
@@ -961,7 +1075,7 @@ impl Rebuilder {
                     .iter()
                     .filter(|p| p.area() > 1e-9)
                     .enumerate()
-                    .map(|(k, p)| region_of(p, source ^ ((k as u64) << 40), &to_plane))
+                    .map(|(k, p)| region_of(p, source ^ ((k as u64) << 40), &to_plane, &known))
                     .collect();
                 if regions.is_empty() {
                     return Ok(Vec::new());
@@ -1188,7 +1302,9 @@ impl Rebuilder {
         let p = x.params;
         let mut consumed: Vec<PartId> = Vec::new();
         let mut warning: Option<String> = None;
-        let built = match x.operation {
+        // Exact circles of the sketch regions thickened ([`Model::circles`]).
+        let mut circles: Vec<(P3, V3, f64)> = Vec::new();
+        let mut built = match x.operation {
             SheetMetalOp::Convert | SheetMetalOp::Thicken => {
                 let mut g = Gathered::default();
                 let mut missing = 0;
@@ -1252,6 +1368,25 @@ impl Rebuilder {
                     missing += lost;
                     for grp in &groups {
                         let f = &grp.frame;
+                        // The regions' circles and arcs, exactly (the outlines are polygons).
+                        {
+                            let (o, u, v) =
+                                (p3(f.origin), v3(f.u).normalize(), v3(f.v).normalize());
+                            for (_, r) in &grp.regions {
+                                for piece in
+                                    r.outer_pieces.iter().chain(r.hole_pieces.iter().flatten())
+                                {
+                                    if let cadrs_sketch::region::Piece::Arc(a) = piece {
+                                        let c3 = o + u * a.center.x + v * a.center.y;
+                                        if !circles.iter().any(|(c, _, r)| {
+                                            (c - c3).norm() < 1e-9 && (r - a.radius).abs() < 1e-9
+                                        }) {
+                                            circles.push((c3, u.cross(&v), a.radius));
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         let polys: Vec<Polygon> = grp
                             .regions
                             .iter()
@@ -1382,8 +1517,10 @@ impl Rebuilder {
                 all.ok_or("Nothing to extrude")?
             }
         };
+        built.model.circles = circles.clone();
         let mut def = cadrs_sheetmetal::definition::Definition::sharp(built.def);
         def.table_order = x.table_order.clone();
+        def.circles = circles;
         let ctx = SheetMetalContext {
             feature: id,
             name: name.to_string(),

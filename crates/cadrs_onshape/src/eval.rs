@@ -949,6 +949,16 @@ impl Model<'_> {
         {
             return found;
         }
+        // A sheet metal model's face standing in for the one of the body it was made from:
+        // that one.
+        if qtype == "SUBSTITUTION"
+            && let Some(d) = derived().first()
+        {
+            let found = self.eval_depth(d, depth + 1);
+            if !found.is_empty() {
+                return found;
+            }
+        }
         let mut cands: Vec<Ent> = match qtype {
             "COPY" => self.copies(q, &derived(), depth),
             "MERGE" | "SPLIT" => {
@@ -1090,7 +1100,7 @@ impl Model<'_> {
                         a.len() == 2 && a.iter().all(|f| faces.contains(f))
                     })
                     .collect();
-                let mut v = if between.is_empty() {
+                let mut v: Vec<Ent> = if between.is_empty() {
                     edges
                         .into_iter()
                         .filter(|e| self.distinct_faces(*e).len() == 1)
@@ -1099,6 +1109,35 @@ impl Model<'_> {
                     between
                 };
                 v.sort();
+                // Of a face split by several sketch lines, the edges this one's line made:
+                // those lying in the plane the line sweeps.
+                let sheets: Vec<([f64; 3], [f64; 3])> = derived()
+                    .iter()
+                    .filter_map(|d| self.line_sheet(d))
+                    .collect();
+                if !sheets.is_empty() {
+                    let on_sheet: Vec<Ent> = v
+                        .iter()
+                        .copied()
+                        .filter(|e| {
+                            let Ent::Edge(p, i) = *e else { return false };
+                            let pts = &self.parts[p].solid.edges[i].points;
+                            !pts.is_empty()
+                                && sheets.iter().any(|(o, n)| {
+                                    pts.iter().all(|q| {
+                                        ((q[0] - o[0]) * n[0]
+                                            + (q[1] - o[1]) * n[1]
+                                            + (q[2] - o[2]) * n[2])
+                                            .abs()
+                                            < 1e-6
+                                    })
+                                })
+                        })
+                        .collect();
+                    if !on_sheet.is_empty() {
+                        return on_sheet;
+                    }
+                }
                 v
             }
             _ => {
@@ -1871,7 +1910,116 @@ impl Model<'_> {
     /// The vertex `q` refers to: a cap corner of an extrude (`CAP_VERTEX`, where the cap meets
     /// the side faces its two sketch curves swept), or a copy of one (a derived part's), found
     /// as the vertex of the three faces the same queries name.
+    /// The plane a sketch line sweeps along its sketch's normal (a point of it and its unit
+    /// normal), if `d` names a line of a sketch: where that line cuts the faces it splits.
+    fn line_sheet(&self, d: &Value) -> Option<([f64; 3], [f64; 3])> {
+        if d.get("queryType").and_then(Value::as_str) != Some("SKETCH_ENTITY") {
+            return None;
+        }
+        let op = d.get("operationId").and_then(Value::as_str)?;
+        let (map, _) = self.sketches.get(op_feature(op))?;
+        let curve = *map
+            .curves
+            .get(d.get("sketchEntityId").and_then(Value::as_str)?)?;
+        let sk = self.doc.iter().find(|f| f.id == map.feature)?.sketch()?;
+        let frame = sk.plane?.frame();
+        let cadrs_sketch::CurveKind::Line { a, b } = sk.geometry.curves.get(curve)?.kind else {
+            return None;
+        };
+        let at = |p| {
+            let q = sk.geometry.points.get(p)?.pos;
+            Some([
+                frame.origin[0] + frame.u[0] * q.x + frame.v[0] * q.y,
+                frame.origin[1] + frame.u[1] * q.x + frame.v[1] * q.y,
+                frame.origin[2] + frame.u[2] * q.x + frame.v[2] * q.y,
+            ])
+        };
+        let (a, b) = (at(a)?, at(b)?);
+        let (d, n) = ([b[0] - a[0], b[1] - a[1], b[2] - a[2]], frame.normal());
+        let m = [
+            d[1] * n[2] - d[2] * n[1],
+            d[2] * n[0] - d[0] * n[2],
+            d[0] * n[1] - d[1] * n[0],
+        ];
+        let l = (m[0] * m[0] + m[1] * m[1] + m[2] * m[2]).sqrt();
+        (l > 1e-12).then(|| (a, [m[0] / l, m[1] / l, m[2] / l]))
+    }
+
+    /// A vertex a split of faces made (`IMPRINT_ON_FACE`): where the faces and edges it is
+    /// derived from and the sketch lines that cut them (swept along their sketch's normal)
+    /// meet. By geometry: the part's vertex on all of them (the one, else none).
+    fn imprint_vertex(&self, q: &Value) -> Option<VertexRef> {
+        let derived = match q.get("derivedFrom")? {
+            Value::Array(a) => a.iter().collect::<Vec<_>>(),
+            d => vec![d],
+        };
+        let sub = |a: [f64; 3], b: [f64; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+        let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        // Planes the vertex lies on (a point and a unit normal): each sketch line's sweep.
+        let mut sheets: Vec<([f64; 3], [f64; 3])> = Vec::new();
+        let mut faces: Vec<HashSet<Ent>> = Vec::new();
+        let mut edges: Vec<Vec<Ent>> = Vec::new();
+        for d in derived {
+            if d.get("queryType").and_then(Value::as_str) == Some("SKETCH_ENTITY") {
+                sheets.push(self.line_sheet(d)?);
+                continue;
+            }
+            let found = self.eval(d);
+            match d.get("entityType").and_then(Value::as_str) {
+                Some("FACE") => faces.push(found.into_iter().collect()),
+                Some("EDGE") => edges.push(found),
+                _ => {}
+            }
+        }
+        if sheets.is_empty() {
+            return None;
+        }
+        let tol = 1e-6;
+        let near_edge = |v: [f64; 3], e: &Ent| {
+            let Ent::Edge(p, i) = *e else { return false };
+            let pts = &self.parts[p].solid.edges[i].points;
+            pts.windows(2).any(|w| {
+                let (ab, av) = (sub(w[1], w[0]), sub(v, w[0]));
+                let t = (dot(av, ab) / dot(ab, ab).max(1e-300)).clamp(0.0, 1.0);
+                let d = sub(av, [ab[0] * t, ab[1] * t, ab[2] * t]);
+                dot(d, d).sqrt() < 1e-4
+            })
+        };
+        let mut found: Vec<VertexRef> = Vec::new();
+        for (p, part) in self.parts.iter().enumerate() {
+            for v in &part.solid.vertices {
+                let ok = sheets
+                    .iter()
+                    .all(|(o, n)| dot(sub(v.point, *o), *n).abs() < tol)
+                    && faces.iter().filter(|s| !s.is_empty()).all(|s| {
+                        s.iter().any(|e| {
+                            matches!(*e, Ent::Face(fp, _) if fp == p)
+                                && self.face_names(*e).iter().any(|n| v.name.faces.contains(n))
+                        })
+                    })
+                    && edges
+                        .iter()
+                        .filter(|s| !s.is_empty())
+                        .all(|s| s.iter().any(|e| near_edge(v.point, e)));
+                if ok && !found.iter().any(|f| f.vertex == v.name) {
+                    found.push(VertexRef {
+                        part: part.id,
+                        vertex: v.name,
+                        point: v.point,
+                    });
+                }
+            }
+        }
+        match found.len() {
+            1 => found.pop(),
+            _ => None,
+        }
+    }
+
     pub fn vertex(&self, q: &Value) -> Option<VertexRef> {
+        if q.get("queryType").and_then(Value::as_str) == Some("IMPRINT_ON_FACE") {
+            return self.imprint_vertex(q);
+        }
         let mut sets: Vec<HashSet<Ent>> = match self.blend_vertex_faces(q) {
             Some(sets) => sets,
             None => vertex_faces(q, 0)?

@@ -585,6 +585,11 @@ pub struct Model {
     /// P3I.6: material removed in the flat (SM14, [`crate::flat_edit`]).
     #[serde(default)]
     pub flat_cuts: Vec<crate::flat_edit::FlatCut>,
+    /// Exact circles the walls' outlines follow (centre, unit normal, radius): the arcs and
+    /// circles of the sketch regions a model was thickened from. The outlines are polygons; a
+    /// run of an outline's points on one of these is built as that circle's arc, exactly.
+    #[serde(default)]
+    pub circles: Vec<(P3, V3, f64)>,
 }
 
 impl Model {
@@ -1506,6 +1511,7 @@ impl SharpBuilder {
             corner_overrides: Vec::new(),
             bend_relief_overrides: Vec::new(),
             flat_cuts: Vec::new(),
+            circles: Vec::new(),
         })
     }
 }

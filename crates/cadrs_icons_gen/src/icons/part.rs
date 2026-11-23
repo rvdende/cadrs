@@ -23,6 +23,9 @@ pub fn icons() -> Vec<Def> {
         def("hole", Solid, "Hole", hole),
         def("thread", Solid, "Thread", thread),
         def("gear", Solid, "Gear", gear),
+        def("frame", Solid, "Frame", frame),
+        def("frame-trim", Solid, "Frame trim", frame_trim),
+        def("cut-list-feature", Solid, "Cut list", cut_list_feature),
         def("linear-pattern", Solid, "Linear pattern", linear_pattern),
         def(
             "circular-pattern",
@@ -533,6 +536,72 @@ fn gear() -> Vec<String> {
     ]
 }
 
+fn frame() -> Vec<String> {
+    // Output: two square tubes laid along an L of sketch lines, mitred where they meet (the
+    // diagonal seam on top), their open ends hollow. The members are what the tool makes, so
+    // their top faces carry an accent wash.
+    let o = (12.0, 6.0);
+    let p = projector(o);
+    let (l, t, w) = (8.5, 3.6, 0.7); // leg length, tube size, wall
+    let h = t;
+    let top = [
+        p(0.0, 0.0, h),
+        p(l, 0.0, h),
+        p(l, t, h),
+        p(t, t, h),
+        p(t, l, h),
+        p(0.0, l, h),
+    ];
+    els![
+        // Inner sides of the two legs, which meet at the inner corner of the mitre.
+        poly(
+            &[p(t, t, h), p(l, t, h), p(l, t, 0.0), p(t, t, 0.0)],
+            SHADE,
+            ""
+        ),
+        poly(
+            &[p(t, t, h), p(t, l, h), p(t, l, 0.0), p(t, t, 0.0)],
+            MID,
+            ""
+        ),
+        // The open ends, each showing the inner wall that faces the camera.
+        poly(
+            &[p(l, 0.0, h), p(l, t, h), p(l, t, 0.0), p(l, 0.0, 0.0)],
+            MID,
+            ""
+        ),
+        poly(
+            &[
+                p(l, w, h - w),
+                p(l, t - w, h - w),
+                p(l, t - w, w),
+                p(l, w, w)
+            ],
+            SHADE,
+            THIN
+        ),
+        poly(
+            &[p(0.0, l, h), p(t, l, h), p(t, l, 0.0), p(0.0, l, 0.0)],
+            SHADE,
+            ""
+        ),
+        poly(
+            &[
+                p(w, l, h - w),
+                p(t - w, l, h - w),
+                p(t - w, l, w),
+                p(w, l, w)
+            ],
+            MID,
+            THIN
+        ),
+        poly(&top, TOP, ""),
+        poly(&top, ACCENT, SEL),
+        // The mitre seam.
+        seg(p(0.0, 0.0, h), p(t, t, h), ""),
+    ]
+}
+
 fn linear_pattern() -> Vec<String> {
     // Context: the seed cube. Output: two dashed copies along x.
     let o = (6.6, 8.9);
@@ -645,6 +714,47 @@ fn transform() -> Vec<String> {
         iso_box(o1, 0.0, c, 0.0, c, 0.0, c),
         arrow(a.0, a.1, b.0, b.1, 3.0, 2.8, INK, r#"stroke-width="1.4""#),
     ]
+}
+
+fn frame_trim() -> Vec<String> {
+    // Context: a member running through. Output: a second member ending against it, cut to
+    // it (the accent seam where they meet).
+    let o = (11.8, 6.2);
+    let p = projector(o);
+    let t = 3.2;
+    let (x0, x1) = (3.4, 6.6);
+    els![
+        iso_box(o, 0.0, 10.0, 0.0, t, 0.0, t),
+        iso_box(o, x0, x1, t, 9.2, 0.0, t),
+        // (What the tool changes: the member cut, its top washed.)
+        poly(
+            &[p(x0, t, t), p(x1, t, t), p(x1, 9.2, t), p(x0, 9.2, t)],
+            ACCENT,
+            SEL
+        ),
+        polyline(
+            &[p(x0, t, t), p(x1, t, t), p(x1, t, 0.0)],
+            &format!(r#"stroke="{ACCENT}" stroke-width="1.5""#)
+        ),
+    ]
+}
+
+fn cut_list_feature() -> Vec<String> {
+    // Output: the members as the pieces to cut, laid side by side, longest first, each with
+    // its cut end in accent.
+    let o = (11.8, 6.6);
+    let p = projector(o);
+    let t = 2.2;
+    let bars = [(0.0, 10.0), (3.1, 7.4), (6.2, 4.8)];
+    let mut out = Vec::new();
+    for (y, len) in bars {
+        out.push(iso_box(o, 0.0, len, y, y + t, 0.0, t));
+        out.push(polyline(
+            &[p(len, y, t), p(len, y + t, t), p(len, y + t, 0.0)],
+            &format!(r#"stroke="{ACCENT}" stroke-width="1.3""#),
+        ));
+    }
+    out
 }
 
 fn composite_part() -> Vec<String> {

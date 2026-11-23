@@ -850,6 +850,8 @@ fn view_tools(bar: &mut ChildSpawnerCommands, t: &Theme) {
                 "sheet-metal-table",
                 "shell-doc-sheet-metal-table",
             ),
+            // Issue #266: shown once a frame has members (`crate::cut_list`).
+            ("panel-cut-list", "cut-list", "shell-doc-cut-list"),
         ] {
             g.spawn(
                 ToolButton::new(name, icon_name)
@@ -1662,6 +1664,14 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
             ("hole", "hole", false, "shell-tool-hole"),
             ("thread", "thread", false, "shell-tool-thread"),
             ("gear", "gear", false, "shell-tool-gear"),
+            ("frame", "frame", false, "shell-tool-frame"),
+            ("frame-trim", "frame-trim", false, "shell-tool-frame-trim"),
+            (
+                "cut-list-feature",
+                "cut-list-feature",
+                false,
+                "shell-tool-cut-list",
+            ),
             ("move-face", "offset", true, "shell-tool-direct-edit"),
         ],
         &[
@@ -1939,6 +1949,20 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                         .build(t),
                     observe(move |_: On<Activate>, mut commands: Commands| {
                         commands.queue(move |world: &mut World| crate::applied::begin(world, kind));
+                    }),
+                ));
+                continue;
+            }
+            if *name == "frame-trim" || *name == "cut-list-feature" {
+                let begin: fn(&mut World) = if *name == "frame-trim" {
+                    crate::composite_ui::begin_frame_trim
+                } else {
+                    crate::composite_ui::begin_cut_list
+                };
+                tb.spawn((
+                    ToolButton::new(*name, *icon_name).tooltip(tr(tip)).build(t),
+                    observe(move |_: On<Activate>, mut commands: Commands| {
+                        commands.queue(begin);
                     }),
                 ));
                 continue;
@@ -3700,6 +3724,9 @@ enum RowKind {
     Helix,
     Thread,
     Gear,
+    Frame,
+    FrameTrim,
+    CutList,
     Fill,
     /// Move face, Delete face, Simplify (their icon).
     DirectEdit(&'static str),
@@ -3749,6 +3776,9 @@ impl RowKind {
             RowKind::Helix => "thread",
             RowKind::Thread => "thread",
             RowKind::Gear => "gear",
+            RowKind::Frame => "frame",
+            RowKind::FrameTrim => "frame-trim",
+            RowKind::CutList => "cut-list-feature",
             RowKind::Fill => "surface",
             RowKind::Variable => "variables",
             RowKind::SheetMetalModel => "sheet-metal-model",
@@ -3913,6 +3943,9 @@ fn rebuild_feature_rows(
                     cadrs_core::FeatureKind::FaceBlend(_) => RowKind::Fillet,
                     cadrs_core::FeatureKind::Thread(_) => RowKind::Thread,
                     cadrs_core::FeatureKind::Gear(_) => RowKind::Gear,
+                    cadrs_core::FeatureKind::Frame(_) => RowKind::Frame,
+                    cadrs_core::FeatureKind::FrameTrim(_) => RowKind::FrameTrim,
+                    cadrs_core::FeatureKind::CutList(_) => RowKind::CutList,
                     cadrs_core::FeatureKind::Fill(_) => RowKind::Fill,
                     cadrs_core::FeatureKind::Variable(_) => RowKind::Variable,
                     cadrs_core::FeatureKind::SheetMetalModel(_) => RowKind::SheetMetalModel,
@@ -4781,7 +4814,7 @@ pub fn edit_feature(world: &mut World, id: FeatureId) {
         crate::applied::edit(world, id);
     } else if matches!(kind, cadrs_core::FeatureKind::Boolean(_)) {
         crate::boolean::edit_boolean(world, id);
-    } else if matches!(kind, cadrs_core::FeatureKind::Composite(_)) {
+    } else if crate::composite_ui::edits(&kind) {
         crate::composite_ui::edit(world, id);
     } else if matches!(kind, cadrs_core::FeatureKind::ModifyJoint(_)) {
         // P3I.3.

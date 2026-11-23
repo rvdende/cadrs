@@ -40,6 +40,8 @@ pub enum SidePanel {
     Simulation,
     /// P3I.3: the Sheet metal table and flat view ([`crate::sheetmetal_table`]).
     SheetMetal,
+    /// Issue #266: the frames' Cut list ([`crate::cut_list`]).
+    CutList,
 }
 
 fn on_panel_button(a: On<Activate>, q: Query<&Name>, mut open: ResMut<SidePanel>) {
@@ -54,9 +56,11 @@ fn on_panel_button(a: On<Activate>, q: Query<&Name>, mut open: ResMut<SidePanel>
         "panel-exploded-views" => toggle(&mut open, SidePanel::ExplodedViews),
         "panel-machine-builder" => toggle(&mut open, SidePanel::MachineBuilder),
         "panel-sheet-metal" => toggle(&mut open, SidePanel::SheetMetal),
-        "bom-panel-close" | "named-positions-panel-close" | "exploded-views-panel-close" => {
-            *open = SidePanel::None
-        }
+        "panel-cut-list" => toggle(&mut open, SidePanel::CutList),
+        "bom-panel-close"
+        | "named-positions-panel-close"
+        | "exploded-views-panel-close"
+        | "cut-list-panel-close" => *open = SidePanel::None,
         _ => {}
     }
 }
@@ -94,6 +98,7 @@ fn sync_panel_buttons(
             "panel-machine-builder" => *open == SidePanel::MachineBuilder,
             "panel-simulation" => *open == SidePanel::Simulation,
             "panel-sheet-metal" => *open == SidePanel::SheetMetal,
+            "panel-cut-list" => *open == SidePanel::CutList,
             _ => continue,
         };
         if want && !selected {

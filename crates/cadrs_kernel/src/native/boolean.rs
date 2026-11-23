@@ -4620,8 +4620,12 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             }
         }
     }
-    // Edges lying on a face (not on its boundary) imprint it.
+    // Edges lying on a face (not on its boundary) imprint it (an imprint of chosen faces: only
+    // those; a sheet's fold lying in a neighbouring face leaves that face whole).
     for fi in 0..faces.len() {
+        if fi < na_faces && !selected(faces[fi].orig) {
+            continue;
+        }
         for &e in &on_face[fi].clone() {
             for &pe in &pieces[e] {
                 let ed = &pool.edges[pe];

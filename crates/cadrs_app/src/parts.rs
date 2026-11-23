@@ -566,6 +566,14 @@ pub struct PartCache {
     pub derived_sketches: Vec<Feature>,
     /// P3I.3: the sheet metal models' contexts from the last rebuild (the table and flat view).
     pub sheet_metal: Vec<cadrs_core::sheetmetal::SheetMetalContext>,
+    /// Issue #266: the Frame features' members from the last rebuild (the Cut list panel).
+    pub frames: Vec<cadrs_core::frame::MemberInfo>,
+    /// The composite parts from the last rebuild, with their members. An open one is a group
+    /// of its members, not a body of its own: it isn't drawn (its members are), and selected
+    /// or hovered it shows on them.
+    pub composites: Vec<cadrs_core::transform::Composite>,
+    /// How many members meet at each Frame feature's corner overrides.
+    pub frame_corners: Vec<cadrs_core::frame::OverrideCorners>,
     /// The curves of every visible sketch (P3.4: a revolve axis is picked among them).
     pub sketch_curves: Vec<SketchCurves>,
     /// Bumped whenever the parts change (or which are shown).
@@ -801,9 +809,52 @@ impl PartCache {
         }
     }
 
+    /// True if the part is an open composite part: a group of its members.
+    pub fn is_open_composite(&self, id: PartId) -> bool {
+        self.composites.iter().any(|c| c.part == id && !c.closed)
+    }
+
+    /// Whether a part's row shows as hidden: the part's own Hide; for an open composite part,
+    /// whether every one of its members is hidden (it has no visibility of its own: it sums
+    /// up its members').
+    pub fn row_hidden(&self, id: PartId) -> bool {
+        match self.composites.iter().find(|c| c.part == id && !c.closed) {
+            Some(c) => !c.members.is_empty() && c.members.iter().all(|m| self.is_hidden_part(*m)),
+            None => self.is_hidden_part(id),
+        }
+    }
+
+    /// The parts a Hide or Show of `parts` is for: an open composite part's members in its
+    /// place.
+    pub fn visibility_targets(&self, parts: &[PartId]) -> Vec<PartId> {
+        let mut out: Vec<PartId> = Vec::new();
+        for p in parts {
+            let these = match self.composites.iter().find(|c| c.part == *p && !c.closed) {
+                Some(c) => c.members.clone(),
+                None => vec![*p],
+            };
+            for t in these {
+                if !out.contains(&t) {
+                    out.push(t);
+                }
+            }
+        }
+        out
+    }
+
+    /// The open composite parts `part` is a member of.
+    pub fn open_composites_of(&self, part: PartId) -> impl Iterator<Item = PartId> + '_ {
+        self.composites
+            .iter()
+            .filter(move |c| !c.closed && c.members.contains(&part))
+            .map(|c| c.part)
+    }
+
     /// True if the part is hidden (Hide in the Parts list), or outside an isolation.
     pub fn is_hidden(&self, id: PartId) -> bool {
         self.is_hidden_part(id)
+            // (An open composite part is its members, which are drawn.)
+            || self.is_open_composite(id)
             || self.isolated.as_ref().is_some_and(|iso| !iso.contains(&id))
             || self.layout_hidden.contains(&id)
             || self.drag_hidden.contains(&id)
@@ -1270,6 +1321,16 @@ impl PartCache {
         }
         if self.sheet_metal != build.sheet_metal {
             self.sheet_metal = build.sheet_metal.clone();
+        }
+        if self.frames != build.frames {
+            self.frames = build.frames.clone();
+        }
+        if self.composites != build.composites {
+            self.composites = build.composites.clone();
+            self.generation += 1;
+        }
+        if self.frame_corners != build.frame_corners {
+            self.frame_corners = build.frame_corners.clone();
         }
         self.contacts = build.contacts.clone();
         self.axes = build.axes.clone();
@@ -3255,6 +3316,18 @@ fn shade_parts(
                 _ => None,
             })
             .collect();
+        // An open composite part selected: its members.
+        let members: Vec<PartId> = cache
+            .composites
+            .iter()
+            .filter(|c| !c.closed && out.contains(&c.part))
+            .flat_map(|c| c.members.iter().copied())
+            .collect();
+        for m in members {
+            if !out.contains(&m) {
+                out.push(m);
+            }
+        }
         // P3B.4: a subassembly instance's row selects all of its parts (`PartId(instance, k)`).
         if cache.assembly.is_some() {
             let whole: Vec<FeatureId> = out
@@ -3508,12 +3581,19 @@ fn draw_part_edges(
         let clip = section.clip_for(part.id);
         let preview = over.previews(part);
         let part_selected = selection.contains(Pick::Part(part.id))
+            // (A member of a selected open composite part.)
+            || cache
+                .open_composites_of(part.id)
+                .any(|c| selection.contains(Pick::Part(c)))
             || (cache.assembly.is_some()
                 && part.id.index > 0
                 && selection.contains(Pick::Part(PartId::new(part.id.feature, 0))));
         let feature_faces =
             list_feature.is_some_and(|f| part.solid.faces.iter().any(|x| x.name.op == f.0));
         let part_hovered = highlight.is_hovered(Pick::Part(part.id))
+            || cache
+                .open_composites_of(part.id)
+                .any(|c| highlight.is_hovered(Pick::Part(c)))
             || hover_parts.0.contains(&part.id)
             || hover_parts.1.contains(&part.id)
             || list_feature.is_some_and(|f| !feature_faces && part.features.contains(&f));

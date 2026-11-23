@@ -153,6 +153,9 @@ pub struct Definition {
     /// one part with it, though no joint joins them).
     #[serde(default)]
     pub merges: Vec<(WallId, WallId)>,
+    /// The model's exact circles ([`Model::circles`]).
+    #[serde(default)]
+    pub circles: Vec<(crate::model::P3, crate::model::V3, f64)>,
 }
 
 impl Definition {
@@ -163,6 +166,7 @@ impl Definition {
             table_order: Vec::new(),
             slabs: Vec::new(),
             merges: Vec::new(),
+            circles: Vec::new(),
         }
     }
 
@@ -179,6 +183,7 @@ impl Definition {
             table_order: Vec::new(),
             slabs: walls,
             merges: Vec::new(),
+            circles: Vec::new(),
         }
     }
 
@@ -237,6 +242,9 @@ impl Definition {
             );
         }
         joint_edit::reorder(&mut m, &self.table_order);
+        if !self.circles.is_empty() {
+            m.circles = self.circles.clone();
+        }
         Ok((m, made))
     }
 
