@@ -1,0 +1,391 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>cadrs Onshape Importer</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px system-ui, sans-serif; background: #15171b; color: #dde; display: flex; flex-direction: column; height: 100vh; }
+  header { padding: 10px 12px; background: #1d2026; }
+  h1 { margin: 0 0 6px; font-size: 15px; }
+  nav { display: flex; background: #1d2026; }
+  nav button { flex: 1; background: none; border: 0; color: #9ab; padding: 8px; cursor: pointer; }
+  nav button.on { color: #fff; border-bottom: 2px solid #4a9eff; }
+  .tab { display: none; flex: 1; min-height: 0; flex-direction: column; padding: 10px; gap: 8px; }
+  .tab.on { display: flex; }
+  input[type=text] { width: 100%; padding: 6px; background: #0d0f12; color: #dde; border: 1px solid #333; border-radius: 4px; }
+  textarea, select { width: 100%; padding: 6px; background: #0d0f12; color: #dde; border: 1px solid #333; border-radius: 4px; font: 12px monospace; }
+  select { width: auto; flex: 1; }
+  button.a { background: #2d6cdf; color: #fff; border: 0; padding: 7px 12px; border-radius: 4px; cursor: pointer; }
+  button.b { background: #2a2e36; color: #dde; border: 0; padding: 7px 12px; border-radius: 4px; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  #list { flex: 1; overflow: auto; border: 1px solid #262a31; border-radius: 4px; }
+  #list label { display: block; padding: 5px 8px; border-bottom: 1px solid #20242a; cursor: pointer; }
+  #list label:hover { background: #1d2026; }
+  small { color: #889; }
+  pre { flex: 1; margin: 0; overflow: auto; background: #0d0f12; padding: 8px; border-radius: 4px; white-space: pre-wrap; font-size: 12px; }
+  .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  progress { width: 100%; }
+  #msg { color: #fb6; }
+  [hidden] { display: none !important; }
+  .card { background: #1a1e24; border: 1px solid #2a303a; border-radius: 6px; padding: 10px; }
+  .card ol { margin: 6px 0; padding-left: 20px; line-height: 1.5; }
+  .notice { background: #1a2430; border: 1px solid #274058; border-radius: 6px; padding: 8px; color: #bcd; }
+  .notice.warn { background: #2a2318; border-color: #5a4a22; color: #fd9; }
+  #tSummary { display: flex; flex-direction: column; gap: 6px; }
+  #tList { flex: 1; min-height: 80px; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+  .ticket { background: #1a1e24; border: 1px solid #262c35; border-radius: 6px; padding: 8px; }
+  .ticket .trow { display: flex; gap: 8px; align-items: baseline; }
+  .ticket .trow b { flex: 1; font-size: 13px; }
+  .pill { background: #2d6cdf; color: #fff; border-radius: 10px; padding: 1px 8px; font-size: 11px; }
+  .ticket .row { margin-top: 6px; }
+  #tIndex { max-height: 45vh; flex: 0 1 auto; border: 1px solid #262a31; }
+</style>
+<header>
+  <h1>cadrs · Onshape importer</h1>
+  <div class="row"><small id="where"></small></div>
+  <div class="row" style="margin-top:6px">
+    <button class="b" id="bOn">Onshape home</button>
+    <button class="b" id="bOut">Open output folder</button>
+    <button class="b" id="bCadrs" disabled title="Start the cadrs app on the imported documents">Open cadrs app</button>
+  </div>
+</header>
+<nav id="nav"></nav>
+
+<div class="tab" id="docs">
+  <div class="card" id="onboard">
+    <b>First time here?</b>
+    <ol>
+      <li><b>Log in to Onshape</b> in the right-hand pane (the session is kept between restarts).</li>
+      <li>Press <b>Load my documents</b> and tick the ones to convert; a shared document's URL can be pasted too.</li>
+      <li>Imported documents go to the output folder shown above; the report and ticket drafts are saved next to it.</li>
+    </ol>
+    <div class="row">
+      <button class="a" id="bLoadOnboard">Load my documents</button>
+      <button class="b" id="bOutOnboard">Open output folder</button>
+    </div>
+    <small id="loginHint" style="display:block;margin-top:6px">Step 1: log in to Onshape in the right-hand pane.</small>
+  </div>
+  <div class="row">
+    <button class="b" id="bLoad">Load my documents</button>
+    <small id="count"></small>
+    <small id="loadState"></small>
+  </div>
+  <input type="text" id="filter" placeholder="Filter by name">
+  <input type="text" id="url" placeholder="…or paste an Onshape document URL / id, then press Enter (shared documents)">
+  <div id="list"></div>
+  <div class="row">
+    <label><input type="checkbox" id="refresh" checked> re-download</label>
+    <label><input type="checkbox" id="dry"> dry run</label>
+  </div>
+  <div class="row"><button class="a" id="bGo" disabled>Convert selected</button><button class="b" id="bCancel" disabled>Cancel</button></div>
+  <div id="msg"></div>
+</div>
+
+<div class="tab" id="progress">
+  <b id="phase">Idle</b>
+  <progress id="bar" value="0" max="1"></progress>
+  <small id="cur"></small>
+  <pre id="log"></pre>
+</div>
+
+<div class="tab" id="report">
+  <div class="row">
+    <button class="b" data-r="byDocument" disabled>Per-document results</button>
+    <button class="b" data-r="summary" disabled>What is missing</button>
+    <button class="b" data-r="roots" disabled>First failures</button>
+    <button class="b" data-r="report" disabled>Full report</button>
+    <button class="b" id="bug" disabled>Export bug report</button>
+    <button class="b" id="bugGh" disabled>Open GitHub issue</button>
+  </div>
+  <pre id="rep">Run a conversion, or press a button to load the last report.</pre>
+</div>
+
+<div class="tab" id="tickets">
+  <div class="row">
+    <button class="a" id="tGen">Generate tickets from last report</button>
+    <button class="b" id="tSave" disabled>Save all tickets</button>
+    <button class="b" id="tOpen" disabled>Open tickets folder</button>
+  </div>
+  <small id="tInfo">One Markdown GitHub issue draft per translation defect group, built offline from the last import report. Check for an existing issue before opening a new one.</small>
+  <div id="tSummary"></div>
+  <div id="tList"></div>
+  <pre id="tIndex" hidden></pre>
+</div>
+
+<div class="tab" id="fsx">
+  <div class="row"><button class="b" id="fsFile">Open .fs file…</button>
+    <select id="fsDoc"></select></div>
+  <textarea id="fsText" rows="7" placeholder="Paste the Part Studio's FeatureScript here (Part Studio tab → Feature script representation), or open a file"></textarea>
+  <textarea id="fsRegen" rows="4" placeholder="Optional: paste Onshape's Regeneration times (lines like 'Extrude 2 9ms' or 'Extrude 2=9')"></textarea>
+  <div class="row"><button class="a" id="fsGo">Analyze and compare</button><button class="b" id="fsCopy">Copy as Markdown</button></div>
+  <pre id="fsOut"></pre>
+</div>
+
+<div class="tab" id="cmp">
+  <div class="row"><button class="b" id="cFs">FeatureScript (.fs)…</button><small id="cFsN">none (optional)</small></div>
+  <textarea id="cFsText" rows="4" placeholder="…or paste the FeatureScript here (optional: adds the step match and decodes its encoded queries with python3 when available)"></textarea>
+  <div class="row"><button class="b" id="cCadrs">cadrs file…</button><small id="cCadrsN">none</small></div>
+  <div class="row"><button class="b" id="cStep">Onshape STEP…</button><small id="cStepN">none</small></div>
+  <div class="row"><button class="a" id="cGo">Compare</button><button class="b" id="cCopy">Copy report</button><button class="b" id="cBundle">Export folder</button><button class="b" id="cMd">Export .md</button><button class="b" id="cPdf">Export PDF</button><button class="b" id="cIssue">Open GitHub issue</button></div>
+  <pre id="cOut"></pre>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const tabs = { docs: 'Documents', progress: 'Progress', report: 'Report', tickets: 'Tickets', fsx: 'FeatureScript', cmp: 'Compare' };
+for (const [k, v] of Object.entries(tabs)) {
+  const b = document.createElement('button'); b.textContent = v; b.dataset.t = k; b.onclick = () => show(k); $('nav').append(b);
+}
+function show(k) {
+  document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('on', t.id === k));
+  document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('on', b.dataset.t === k));
+}
+let docs = [], reports = {}, tickets = [], info = null, extra = new Set(), picked = new Set();
+let busy = false, loading = false;
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// ---- Documents tab -------------------------------------------------------------------
+function render() {
+  const f = $('filter').value.toLowerCase();
+  const shown = docs.filter((d) => d.name.toLowerCase().includes(f));
+  $('list').innerHTML = shown.map((d) =>
+    `<label><input type="checkbox" data-id="${esc(d.id)}" ${picked.has(d.id) ? 'checked' : ''}> ${esc(d.name)}<br><small>${esc(d.owner || '')} · ${esc((d.modifiedAt || '').slice(0, 10))}</small></label>`).join('');
+  $('count').textContent = `${picked.size} selected of ${docs.length}`;
+  $('onboard').hidden = docs.length > 0;
+  $('bGo').disabled = busy || !picked.size;
+  $('bCancel').disabled = !busy;
+  $('bLoad').disabled = busy || loading;
+  $('bLoadOnboard').disabled = busy || loading;
+  renderDocsSelect();
+}
+function renderDocsSelect() {
+  $('fsDoc').innerHTML = '<option value="">cadrs timing: none</option>' + docs.map((d) => `<option value="${esc(d.id)}">cadrs timing: ${esc(d.name)}</option>`).join('');
+}
+$('list').onchange = (e) => { const id = e.target.dataset.id; e.target.checked ? picked.add(id) : picked.delete(id); render(); };
+$('filter').oninput = render;
+$('url').onkeydown = (e) => {
+  if (e.key !== 'Enter') return;
+  const m = /([0-9a-f]{24})/.exec($('url').value);
+  if (!m) { $('msg').textContent = 'No document id found in that text.'; return; }
+  if (!docs.some((d) => d.id === m[1])) docs.unshift({ id: m[1], name: `Document ${m[1]}`, owner: 'added by URL' });
+  picked.add(m[1]); $('url').value = ''; $('msg').textContent = ''; render();
+};
+async function loadDocuments() {
+  loading = true; render(); $('msg').textContent = 'Loading…'; $('loadState').textContent = '';
+  try {
+    const r = await api.listDocuments();
+    if (r.error) {
+      $('msg').textContent = r.error;
+      $('loginHint').textContent = r.error;
+      return;
+    }
+    $('msg').textContent = '';
+    $('loginHint').textContent = 'Onshape: logged in.';
+    const added = docs.filter((d) => d.owner !== undefined && ['added by URL', 'open in Onshape'].includes(d.owner) && !r.documents.some((x) => x.id === d.id));
+    docs = [...added, ...r.documents];
+    $('loadState').textContent = `${docs.length} document(s)`;
+  } catch (e) {
+    $('msg').textContent = `Cannot load documents: ${e.message}`;
+  } finally {
+    loading = false; render();
+  }
+}
+$('bLoad').onclick = loadDocuments;
+$('bLoadOnboard').onclick = loadDocuments;
+$('bOn').onclick = () => api.openOnshape();
+$('bOut').onclick = () => api.openPath('root');
+$('bOutOnboard').onclick = () => api.openPath('root');
+$('bCadrs').onclick = async () => {
+  $('bCadrs').disabled = true;
+  const r = await api.openCadrs();
+  $('bCadrs').disabled = !info || !info.cadrsBin;
+  show('docs');
+  $('msg').textContent = r.error || `Started the cadrs app (${r.bin}). The imported documents are in its document store.`;
+};
+$('bCancel').onclick = () => api.cancel();
+$('bGo').onclick = async () => {
+  if (!picked.size) { $('msg').textContent = 'Open a document in Onshape or tick one in the list.'; return; }
+  $('msg').textContent = ''; $('log').textContent = ''; busy = true; render();
+  show('progress');
+  try {
+    const r = await api.convert({ ids: [...picked], refresh: $('refresh').checked, dryRun: $('dry').checked });
+    if (r.error) { $('phase').textContent = 'Failed'; $('log').textContent += '\n' + r.error; }
+    if (r.reports) { reports = r.reports; updateReportButtons(); showReport('byDocument'); }
+    if (!r.error) show('report');
+    else show('docs');
+  } catch (e) {
+    $('phase').textContent = 'Failed';
+    $('log').textContent += `\n${e.message}`;
+  } finally {
+    busy = false; render();
+  }
+};
+
+// ---- Report tab ----------------------------------------------------------------------
+function updateReportButtons() {
+  const has = !!(reports && reports.report);
+  document.querySelectorAll('[data-r]').forEach((b) => { b.disabled = !has; });
+  $('bug').disabled = !has;
+  $('bugGh').disabled = !has;
+}
+function showReport(w) {
+  if (!reports || !reports.report) { $('rep').textContent = 'No import report yet — run a conversion first.'; return; }
+  $('rep').textContent = reports[w] || '(nothing to show)';
+}
+document.querySelectorAll('[data-r]').forEach((b) => b.onclick = () => showReport(b.dataset.r));
+async function bug(open) {
+  try {
+    const r = await api.bugReport(open);
+    reports.bug = r.markdown;
+    $('rep').textContent = (r.count ? '' : 'No defects found in the last report.\n\n') + `Saved to ${r.file} and copied to the clipboard.\n\n` + r.markdown;
+  } catch (e) {
+    $('rep').textContent = `Cannot build the bug report: ${e.message}`;
+  }
+}
+$('bug').onclick = () => bug(false);
+$('bugGh').onclick = () => bug(true);
+
+// ---- Tickets tab ---------------------------------------------------------------------
+function statusText(s) {
+  return [s.skipped ? `skipped ${s.skipped}` : '', s.partial ? `partial ${s.partial}` : '', s.mismatch ? `result mismatch ${s.mismatch}` : ''].filter(Boolean).join(', ');
+}
+function renderTickets(r) {
+  tickets = r.tickets || [];
+  const s = r.summary;
+  const source = s.source ? ` (${s.source === 'json' ? 'machine-readable JSON' : 'text'} report)` : '';
+  $('tInfo').textContent = `${s.groups} defect group(s), ${s.occurrences} occurrence(s) in ${s.documents} document(s)${source}; saved to ${r.dir}`;
+  $('tSummary').innerHTML = `<div class="notice">Before opening an issue, search GitHub for the same title (the draft has a stable dedup key). ${s.skipped} skipped, ${s.partial} partial, ${s.mismatch} result mismatch occurrence(s). Drafts are plain files in <code>${esc(r.dir)}</code> — no network was used.</div>` +
+    (s.warnings && s.warnings.length ? `<div class="notice warn">${esc(s.warnings.join('; '))}</div>` : '');
+  $('tList').innerHTML = tickets.map((t, i) =>
+    `<div class="ticket"><div class="trow"><b>${esc(t.title)}</b><span class="pill" title="occurrences">${t.occurrences}</span></div>` +
+    `<small>${esc(t.kind)}${t.severity ? ' · ' + esc(t.severity) : ''} · ${esc(statusText(t.statuses))} · ${esc(t.documents.map((d) => d.name).join(', '))}${t.previous ? ' · refreshed' : ' · new'}</small>` +
+    `<div class="row"><button class="b" data-copy="${i}">Copy issue</button><button class="b" data-gh="${i}">Open GitHub new issue</button><button class="b" data-view="${i}">Preview</button></div></div>`).join('');
+  $('tSave').disabled = false;
+  $('tOpen').disabled = false;
+  $('tIndex').hidden = true;
+}
+async function generateTickets() {
+  $('tGen').disabled = true;
+  $('tInfo').textContent = 'Generating ticket drafts…';
+  try {
+    const r = await api.ticketsGenerate();
+    if (r.error) { $('tInfo').textContent = r.error; $('tIndex').hidden = true; return; }
+    renderTickets(r);
+  } catch (e) {
+    $('tInfo').textContent = `Cannot generate tickets: ${e.message}`;
+  } finally {
+    $('tGen').disabled = false;
+  }
+}
+$('tGen').onclick = generateTickets;
+$('tSave').onclick = async () => {
+  await generateTickets();
+  $('tOpen').disabled = false;
+  await api.openPath('tickets');
+};
+$('tOpen').onclick = () => api.openPath('tickets');
+$('tList').onclick = async (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  const i = Number(b.dataset.copy ?? b.dataset.gh ?? b.dataset.view);
+  const t = tickets[i];
+  if (!t) return;
+  if (b.dataset.copy !== undefined) {
+    await api.ticketCopy(t.markdown);
+    $('tInfo').textContent = `Copied "${t.title}" to the clipboard — paste it into a new GitHub issue body.`;
+  }
+  if (b.dataset.gh !== undefined) {
+    await api.ticketOpen({ title: t.title, markdown: t.markdown, key: t.key });
+    $('tInfo').textContent = 'Body copied to the clipboard; GitHub opened with the title prefilled. Search for an existing issue with this title first.';
+  }
+  if (b.dataset.view !== undefined) {
+    $('tIndex').hidden = false;
+    $('tIndex').textContent = t.markdown;
+  }
+};
+
+// ---- FeatureScript tab ---------------------------------------------------------------
+$('fsFile').onclick = async () => { const t = await api.fsOpen(); if (t !== null) $('fsText').value = t; };
+$('fsGo').onclick = async () => {
+  if (!$('fsText').value.trim()) { $('fsOut').textContent = 'Paste or open a FeatureScript first.'; return; }
+  $('fsOut').textContent = 'Working…';
+  const r = await api.fsCompare({ text: $('fsText').value, regen: $('fsRegen').value, docId: $('fsDoc').value });
+  $('fsOut').textContent = `Saved to ${r.file}${$('fsDoc').value && !r.traced ? ' (cadrs timing unavailable)' : ''}\n\n` + r.markdown;
+  fsMd = r.markdown;
+};
+let fsMd = '';
+$('fsCopy').onclick = () => navigator.clipboard.writeText(fsMd);
+
+// ---- Compare tab ---------------------------------------------------------------------
+let cadrsFile = '', stepFile = '', cmpMd = '', cmpDefects = 0;
+$('cFs').onclick = async () => { const t = await api.fsOpen(); if (t !== null) { $('cFsText').value = t; $('cFsN').textContent = 'loaded'; } };
+$('cCadrs').onclick = async () => { const p = await api.pickFile('cadrs'); if (p) { cadrsFile = p; $('cCadrsN').textContent = p; } };
+$('cStep').onclick = async () => { const p = await api.pickFile('step') || ''; if (p) { stepFile = p; $('cStepN').textContent = p; } };
+$('cGo').onclick = async () => {
+  $('cOut').textContent = 'Comparing…';
+  try {
+    const r = await api.compareRun({ fsText: $('cFsText').value, cadrsFile, stepFile });
+    if (r.error) { $('cOut').textContent = r.error; return; }
+    cmpMd = r.markdown; cmpDefects = r.defects.length;
+    $('cOut').textContent = (r.note ? `Note: ${r.note}\n\n` : '') + `Saved to ${r.file}\n\n` + r.markdown;
+  } catch (e) {
+    $('cOut').textContent = `Compare failed: ${e.message}`;
+  }
+};
+const exp = async (format) => {
+  if (!cmpMd) { $('cOut').textContent = 'Run Compare first.'; return; }
+  const p = await api.exportReport({ markdown: cmpMd, format, name: 'compare-report' });
+  if (p) $('cOut').textContent = `Exported to ${p}\n\n` + cmpMd;
+};
+$('cBundle').onclick = async () => {
+  if (!cmpMd) { $('cOut').textContent = 'Run Compare first.'; return; }
+  const d = await api.exportBundle({ markdown: cmpMd, fsText: $('cFsText').value, cadrsFile, stepFile });
+  if (d) $('cOut').textContent = `Exported to ${d}\n\n` + cmpMd;
+};
+$('cMd').onclick = () => exp('md');
+$('cPdf').onclick = () => exp('pdf');
+$('cCopy').onclick = () => navigator.clipboard.writeText(cmpMd);
+$('cIssue').onclick = async () => { if (cmpMd) await api.issue(cmpMd, 'Onshape vs cadrs mismatch'); else $('cOut').textContent = 'Run Compare first.'; };
+
+// ---- Events from the main process ----------------------------------------------------
+function useCurrent(ev) {
+  const known = docs.find((d) => d.id === ev.id);
+  if (known) { if (known.owner === 'open in Onshape') known.name = ev.name; }
+  else docs.unshift({ id: ev.id, name: ev.name, owner: 'open in Onshape' });
+  if (!seen.has(ev.id)) { seen.add(ev.id); picked.add(ev.id); }
+  $('loginHint').textContent = 'Onshape: connected.';
+  render();
+}
+const seen = new Set();
+api.onEvent((ev) => {
+  if (ev.type === 'current') useCurrent(ev);
+  if (ev.type === 'phase') $('phase').textContent = ev.phase;
+  if (ev.type === 'scrape') {
+    const s = ev.state;
+    $('bar').max = s.docsTotal || 1; $('bar').value = s.docsDone;
+    $('cur').textContent = `${s.docsDone}/${s.docsTotal} documents · ${s.requests} requests · ${s.current}`;
+    $('log').textContent = s.errors.length ? 'Errors:\n' + s.errors.slice(-20).join('\n') : '';
+  }
+  if (ev.type === 'import-log') { $('log').textContent += ev.text; $('log').scrollTop = 1e9; }
+});
+// Init: output folder, python/cadrs availability, last report (so the report/tickets tabs work
+// before a conversion), onboarding and empty states.
+(async () => {
+  try {
+    info = await api.info();
+    $('where').textContent = `Output: ${info.root}`;
+    $('bCadrs').disabled = !info.cadrsBin;
+    $('bCadrs').title = info.cadrsBin ? `Start ${info.cadrsBin}` : 'cadrs app not built: cargo build --release -p cadrs (or set CADRS_BIN)';
+    if (info.loggedIn) $('loginHint').textContent = 'Onshape: logged in.';
+  } catch (e) {
+    $('where').textContent = `Cannot read the app settings: ${e.message}`;
+  }
+  try {
+    reports = await api.reports();
+    updateReportButtons();
+    if (reports.report) $('rep').textContent = 'A previous import report was found — press a button above, or run a conversion.';
+  } catch { updateReportButtons(); }
+  show('docs');
+  render();
+  api.current();
+})();
+</script>

@@ -1,0 +1,224 @@
+{
+  "kind": "cadrs-onshape-import",
+  "schema": 1,
+  "tool": "cadrs-onshape test",
+  "dry_run": false,
+  "summary": {
+    "documents": 3,
+    "failed_documents": 1,
+    "part_studios": 2,
+    "clean_part_studios": 0,
+    "features": {
+      "total": 10,
+      "full": 3,
+      "partial": 2,
+      "skipped": 5,
+      "suppressed": 0
+    },
+    "parts": {
+      "matched": 1,
+      "total": 5
+    },
+    "defects": 7,
+    "tickets": 4
+  },
+  "tickets": [
+    {
+      "key": "onshape-import:extrude:none-of-its-n-selections-could-be-translated",
+      "severity": "high",
+      "count": 3
+    },
+    {
+      "key": "onshape-import:part:volume-mismatch",
+      "severity": "high",
+      "count": 1
+    },
+    {
+      "key": "onshape-import:part:bounding-box-mismatch",
+      "severity": "medium",
+      "count": 1
+    },
+    {
+      "key": "onshape-import:assembly:instances-not-placed",
+      "severity": "high",
+      "count": 1
+    }
+  ],
+  "documents": [
+    {
+      "name": "Test Cartridge",
+      "onshape_id": "aaaaaaaaaaaaaaaaaaaaaaaa",
+      "elapsed_s": 1.2,
+      "counts": {
+        "part_studios": 2,
+        "features": {
+          "full": 2,
+          "partial": 2,
+          "skipped": 3,
+          "suppressed": 1
+        },
+        "parts": {
+          "matched": 0,
+          "total": 2
+        }
+      },
+      "elements": [
+        {
+          "name": "holder",
+          "kind": "partstudio",
+          "imported": true,
+          "counts": {
+            "full": 2,
+            "partial": 2,
+            "skipped": 3,
+            "suppressed": 1
+          },
+          "parts_matched": 0,
+          "features": [],
+          "parts": [
+            {
+              "name": "Part 1",
+              "match": false
+            },
+            {
+              "name": "Part 4",
+              "match": false
+            }
+          ]
+        },
+        {
+          "name": "Holder",
+          "kind": "assembly",
+          "imported": true,
+          "counts": {
+            "full": 0,
+            "partial": 0,
+            "skipped": 0,
+            "suppressed": 0
+          },
+          "parts_matched": 0,
+          "features": [],
+          "parts": [],
+          "assembly": {
+            "instances": {
+              "placed": 1,
+              "total": 3
+            },
+            "mates": {
+              "placed": 0,
+              "total": 0
+            }
+          }
+        }
+      ],
+      "defects": [
+        {
+          "key": "onshape-import:extrude:none-of-its-n-selections-could-be-translated",
+          "severity": "high",
+          "document": "Test Cartridge",
+          "element": "holder",
+          "element_kind": "partstudio",
+          "feature": "Extrude 2",
+          "feature_kind": "extrude",
+          "outcome": "skipped",
+          "reason": "none of its 1 selections could be translated"
+        },
+        {
+          "key": "onshape-import:extrude:none-of-its-n-selections-could-be-translated",
+          "severity": "high",
+          "document": "Test Cartridge",
+          "element": "holder",
+          "element_kind": "partstudio",
+          "feature": "Extrude 9",
+          "feature_kind": "extrude",
+          "outcome": "skipped",
+          "reason": "none of its 3 selections could be translated"
+        },
+        {
+          "key": "onshape-import:part:volume-mismatch",
+          "severity": "high",
+          "document": "Test Cartridge",
+          "element": "holder",
+          "element_kind": "partstudio",
+          "feature": "Plate",
+          "feature_kind": "part",
+          "outcome": "mismatch",
+          "reason": "volume is 42.80 % off (67584.0 vs 47337.2 mm\u00b3)"
+        },
+        {
+          "key": "onshape-import:part:bounding-box-mismatch",
+          "severity": "medium",
+          "document": "Test Cartridge",
+          "element": "holder",
+          "element_kind": "partstudio",
+          "feature": "Plate",
+          "feature_kind": "part",
+          "outcome": "mismatch",
+          "reason": "box differs (mm): x- -20.00, y- -25.00, z- -8.70"
+        },
+        {
+          "key": "onshape-import:assembly:instances-not-placed",
+          "severity": "high",
+          "document": "Test Cartridge",
+          "element": "Holder",
+          "element_kind": "assembly",
+          "feature": "",
+          "feature_kind": "assembly",
+          "outcome": "partial",
+          "reason": "1 of 3 instances placed"
+        }
+      ]
+    },
+    {
+      "name": "Other",
+      "onshape_id": "bbbbbbbbbbbbbbbbbbbbbbbb",
+      "elapsed_s": 0.3,
+      "counts": {
+        "part_studios": 1,
+        "features": {
+          "full": 0,
+          "partial": 0,
+          "skipped": 1,
+          "suppressed": 0
+        },
+        "parts": {
+          "matched": 0,
+          "total": 1
+        }
+      },
+      "elements": [
+        {
+          "name": "Plate",
+          "kind": "partstudio",
+          "imported": true,
+          "counts": {
+            "full": 0,
+            "partial": 0,
+            "skipped": 1,
+            "suppressed": 0
+          },
+          "parts_matched": 0,
+          "features": [],
+          "parts": []
+        }
+      ],
+      "defects": [
+        {
+          "key": "onshape-import:extrude:none-of-its-n-selections-could-be-translated",
+          "severity": "high",
+          "document": "Other",
+          "element": "Plate",
+          "element_kind": "partstudio",
+          "feature": "Extrude 1",
+          "feature_kind": "extrude",
+          "outcome": "skipped",
+          "reason": "none of its 1 selections could be translated"
+        }
+      ]
+    },
+    {
+      "failed": true,
+      "name": "Broken document"
+    }
+  ]
+}

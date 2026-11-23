@@ -1,0 +1,25 @@
+const { contextBridge, ipcRenderer } = require('electron');
+
+contextBridge.exposeInMainWorld('api', {
+  info: () => ipcRenderer.invoke('info'),
+  current: () => ipcRenderer.invoke('current'),
+  listDocuments: () => ipcRenderer.invoke('list-documents'),
+  convert: (opts) => ipcRenderer.invoke('convert', opts),
+  cancel: () => ipcRenderer.invoke('cancel'),
+  reports: () => ipcRenderer.invoke('reports'),
+  ticketsGenerate: () => ipcRenderer.invoke('tickets-generate'),
+  ticketCopy: (text) => ipcRenderer.invoke('tickets-copy', text),
+  ticketOpen: (ticket) => ipcRenderer.invoke('tickets-open', ticket),
+  fsOpen: () => ipcRenderer.invoke('fs-open'),
+  fsCompare: (a) => ipcRenderer.invoke('fs-compare', a),
+  pickFile: (ext) => ipcRenderer.invoke('pick-file', ext),
+  compareRun: (a) => ipcRenderer.invoke('compare-run', a),
+  issue: (t, title) => ipcRenderer.invoke('issue', t, title),
+  exportReport: (a) => ipcRenderer.invoke('export-report', a),
+  exportBundle: (a) => ipcRenderer.invoke('export-bundle', a),
+  bugReport: (open) => ipcRenderer.invoke('bug-report', open),
+  openOnshape: (url) => ipcRenderer.invoke('open-onshape', url),
+  openPath: (which) => ipcRenderer.invoke('open-path', which),
+  openCadrs: () => ipcRenderer.invoke('open-cadrs'),
+  onEvent: (cb) => ipcRenderer.on('event', (_e, ev) => cb(ev)),
+});

@@ -1,0 +1,5 @@
+[
+  { "name": "holder", "id": "111111111111111111111111", "type": "Part Studio", "elementType": "PARTSTUDIO" },
+  { "name": "Mount", "id": "222222222222222222222222", "type": "Part Studio", "elementType": "PARTSTUDIO" },
+  { "name": "Holder", "id": "333333333333333333333333", "type": "Assembly", "elementType": "ASSEMBLY" }
+]

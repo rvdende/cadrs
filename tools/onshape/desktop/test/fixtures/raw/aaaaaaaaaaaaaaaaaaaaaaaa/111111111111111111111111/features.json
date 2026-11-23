@@ -1,0 +1,40 @@
+{
+  "btType": "BTFeatureListResponse-2456",
+  "features": [
+    {
+      "name": "Sketch 1",
+      "featureType": "newSketch",
+      "parameters": []
+    },
+    {
+      "name": "Extrude 1",
+      "featureType": "extrude",
+      "parameters": [
+        { "parameterId": "operationType", "enumValue": "NEW" },
+        { "parameterId": "depth", "expression": "5 mm" }
+      ]
+    },
+    {
+      "name": "Extrude 2",
+      "featureType": "extrude",
+      "parameters": [
+        { "parameterId": "operationType", "enumValue": "REMOVE" },
+        { "parameterId": "depth", "expression": "25 mm" }
+      ]
+    },
+    {
+      "name": "Chamfer 1",
+      "featureType": "chamfer",
+      "parameters": [
+        { "parameterId": "angle", "expression": "45 deg" }
+      ]
+    },
+    {
+      "name": "Draft 1",
+      "featureType": "draft",
+      "parameters": [
+        { "parameterId": "angle", "expression": "3 deg" }
+      ]
+    }
+  ]
+}

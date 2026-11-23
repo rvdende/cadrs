@@ -1,0 +1,26 @@
+{
+  "btType": "BTFeatureListResponse-2456",
+  "features": [
+    {
+      "name": "Sketch 1",
+      "featureType": "newSketch",
+      "parameters": []
+    },
+    {
+      "name": "Extrude 1",
+      "featureType": "extrude",
+      "parameters": [
+        { "parameterId": "operationType", "enumValue": "NEW" },
+        { "parameterId": "depth", "expression": "10 mm" }
+      ]
+    },
+    {
+      "name": "Extrude 2",
+      "featureType": "extrude",
+      "parameters": [
+        { "parameterId": "operationType", "enumValue": "REMOVE" },
+        { "parameterId": "depth", "expression": "2 mm" }
+      ]
+    }
+  ]
+}

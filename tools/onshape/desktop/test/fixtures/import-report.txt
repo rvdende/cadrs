@@ -1,0 +1,36 @@
+# Test Cartridge (aaaaaaaaaaaaaaaaaaaaaaaa)
+  [partstudio] holder: 2 full, 2 partial, 3 skipped; parts 0/2 match Onshape
+      partial    Extrude 1 (extrude)
+                 - up-to face not translated: blind instead
+      SKIPPED    Extrude 2 (extrude)
+                 - none of its 1 selections could be translated
+      SKIPPED    Chamfer 1 (chamfer)
+                 - none of its edges could be translated
+      SKIPPED    Chamfer 2 (chamfer)
+                 - none of its edges could be translated
+      partial    Fillet 1 (fillet)
+                 - 2 edge selections not translated
+      SKIPPED    Draft 1 (draft)
+                 - no importer for this feature type yet
+      suppressed Sketch 2 (newSketch)
+      placed     Part 1: box differs (mm): x- -9.00, y- -2.54, z- +6.50
+      volume     Plate: 42.8 % off (67584.0 vs 47337.2 mm³)
+                 box differs (mm): x- -20.00, y- -25.00, z- -8.70
+      faces      Plate: 98 vs 59
+      missing    part Part 4 (2346.4 mm³)
+  [partstudio] Mount: 1 full, 0 partial, 1 skipped; parts 1/2 match Onshape
+      partial    Extrude 1 (extrude)
+                 - up-to face not translated: blind instead
+      SKIPPED    Extrude 2 (extrude)
+                 - none of its 1 selections could be translated
+  [assembly] Holder: instances 1/3 placed; mates 0/0
+  [blob] test.step (not imported)
+      ! no cadrs equivalent yet
+  (1.2 s)
+# Other (bbbbbbbbbbbbbbbbbbbbbbbb)
+  [partstudio] Plate: 0 full, 0 partial, 1 skipped; parts 0/1 match Onshape
+      SKIPPED    Extrude 1 (extrude)
+                 - none of its 1 selections could be translated
+      SKIPPED    Thicken 1 (thicken)
+                 - none of its 1 selections could be translated
+  (0.3 s)
