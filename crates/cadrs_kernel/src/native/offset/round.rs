@@ -2119,19 +2119,23 @@ fn cavity_of_supports(b: &Body, remove: &[usize], t: f64) -> Option<Result<Optio
             return Some(Ok(None));
         }
         if let Some(cell) = cell.body(close) {
+            // (A boolean with the one solid that fails leaves the walls to be taken one at a
+            // time, below, as before.)
             let cavity = if convex {
-                Ok(cell)
+                Some(cell)
             } else {
                 match boolean_bodies(b, &cell, BoolOp::Intersect) {
-                    Ok(r) if !r.body.faces.is_empty() => Ok(r.body),
+                    Ok(r) if !r.body.faces.is_empty() => Some(r.body),
                     Ok(_) | Err(KernelError::EmptyResult(_)) => return Some(Ok(None)),
-                    Err(e) => Err(e),
+                    Err(_) => None,
                 }
             };
-            return Some(cavity.map(|c| {
+            if let Some(c) = cavity {
                 let v = crate::native::mass::body_volume(&c);
-                (v > tol::REL * crate::native::mass::body_volume(b)).then_some(c)
-            }));
+                return Some(Ok(
+                    (v > tol::REL * crate::native::mass::body_volume(b)).then_some(c)
+                ));
+            }
         }
     }
     Some((|| {
