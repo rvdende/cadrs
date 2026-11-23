@@ -164,6 +164,10 @@ pub struct PatternFeature {
     pub merge_all: bool,
     #[serde(default)]
     pub merge_scope: Vec<PartId>,
+    /// Part pattern, Remove: the seed parts are tools too (Onshape's pattern counts the seed
+    /// among its instances): they are cut with the copies and consumed.
+    #[serde(default)]
+    pub include_seed: bool,
 }
 
 fn full_turn() -> f64 {
@@ -201,6 +205,7 @@ impl Default for PatternFeature {
             op: BooleanOp::New,
             merge_all: false,
             merge_scope: Vec::new(),
+            include_seed: false,
         }
     }
 }
