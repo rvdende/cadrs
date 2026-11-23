@@ -811,6 +811,34 @@ impl PartCache {
         self.composites.iter().any(|c| c.part == id && !c.closed)
     }
 
+    /// Whether a part's row shows as hidden: the part's own Hide; for an open composite part,
+    /// whether every one of its members is hidden (it has no visibility of its own: it sums
+    /// up its members').
+    pub fn row_hidden(&self, id: PartId) -> bool {
+        match self.composites.iter().find(|c| c.part == id && !c.closed) {
+            Some(c) => !c.members.is_empty() && c.members.iter().all(|m| self.is_hidden_part(*m)),
+            None => self.is_hidden_part(id),
+        }
+    }
+
+    /// The parts a Hide or Show of `parts` is for: an open composite part's members in its
+    /// place.
+    pub fn visibility_targets(&self, parts: &[PartId]) -> Vec<PartId> {
+        let mut out: Vec<PartId> = Vec::new();
+        for p in parts {
+            let these = match self.composites.iter().find(|c| c.part == *p && !c.closed) {
+                Some(c) => c.members.clone(),
+                None => vec![*p],
+            };
+            for t in these {
+                if !out.contains(&t) {
+                    out.push(t);
+                }
+            }
+        }
+        out
+    }
+
     /// The open composite parts `part` is a member of.
     pub fn open_composites_of(&self, part: PartId) -> impl Iterator<Item = PartId> + '_ {
         self.composites

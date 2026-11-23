@@ -14,6 +14,9 @@
 //!   view, `ex2-step8.png`).
 //! - A hidden part's row is greyed, with a crossed eye. A row's eye shows while it is hovered;
 //!   a click shows or hides the part.
+//! - **Composite parts (n)**, a group of their own. An open composite part is its members:
+//!   its eye (and Hide / Show) hides or shows them all, and its row is greyed once they all
+//!   are hidden.
 //! - A derived PCB board is a folder: its board part's row has a chevron, and its components
 //!   are listed under it (closed at first).
 
@@ -210,7 +213,7 @@ fn rebuild_part_list(
                 over.previews(p)
                     || (staged && over.staged.is_some_and(|f| p.features.contains(&f))),
                 // A board component hidden by its board's layout view greys as hidden.
-                cache.is_hidden_part(p.id) || cache.layout_hidden.contains(&p.id),
+                cache.row_hidden(p.id) || cache.layout_hidden.contains(&p.id),
                 composite(p.id),
             )
         })
@@ -514,8 +517,10 @@ fn on_part_eye(ev: On<cadrs_ui::TreeRowToggled>, q: Query<&PartRow>, mut command
     };
     let part = row.0;
     commands.queue(move |world: &mut World| {
-        let hidden = !world.resource::<PartCache>().is_hidden_part(part);
-        let parts = vec![part];
+        // (A composite part's eye: all of its members, hidden unless they all are already.)
+        let cache = world.resource::<PartCache>();
+        let hidden = !cache.row_hidden(part);
+        let parts = cache.visibility_targets(&[part]);
         let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else {
             return;
         };
@@ -585,7 +590,7 @@ fn on_part_context_menu(
     let name = cache
         .part_name(row.0)
         .map_or_else(|| tr("view-part-fallback-name"), str::to_string);
-    let hidden = cache.is_hidden_part(row.0);
+    let hidden = cache.row_hidden(row.0);
     #[cfg(not(target_arch = "wasm32"))]
     let last_slicer = prefs.0.last_slicer;
     // Add to folder ▸ a new folder or one there is (`crate::part_folders`).
@@ -802,6 +807,7 @@ fn on_part_menu_action(
             let hidden = ev.item == "part-hide";
             commands.queue(move |world: &mut World| {
                 let parts = targets(world, part);
+                let parts = world.resource::<PartCache>().visibility_targets(&parts);
                 let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else {
                     return;
                 };
