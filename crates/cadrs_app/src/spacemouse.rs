@@ -7,8 +7,9 @@
 //! HID reports) and Linux (the spacenavd daemon). macOS and the browser have no backend yet.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, SendError, Sender};
 use std::time::Duration;
 
 use bevy::prelude::*;
@@ -67,11 +68,43 @@ impl LegacyWheelGuard {
     }
 }
 
+/// Sends the device's samples to the app, and wakes it: it sleeps while idle (#298), and a
+/// sample would otherwise wait for its next frame.
+#[derive(Clone)]
+struct SampleSender {
+    tx: Sender<MotionSample>,
+    wake: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+impl SampleSender {
+    fn send(&self, sample: MotionSample) -> Result<(), SendError<MotionSample>> {
+        self.tx.send(sample)?;
+        if let Some(wake) = &self.wake {
+            wake();
+        }
+        Ok(())
+    }
+}
+
 pub struct SpaceMousePlugin;
 
 impl Plugin for SpaceMousePlugin {
     fn build(&self, app: &mut App) {
-        let (sender, receiver) = mpsc::channel();
+        let (tx, receiver) = mpsc::channel();
+        // The window's event loop, to wake it from the device's thread (none without a window).
+        let wake = app
+            .world()
+            .get_resource::<bevy::winit::EventLoopProxyWrapper>()
+            .map(|proxy| {
+                // (A mutex: the proxy is Send but not Sync on every platform.)
+                let proxy = Mutex::new((**proxy).clone());
+                Arc::new(move || {
+                    if let Ok(proxy) = proxy.lock() {
+                        let _ = proxy.send_event(bevy::winit::WinitUserEvent::WakeUp);
+                    }
+                }) as Arc<dyn Fn() + Send + Sync>
+            });
+        let sender = SampleSender { tx, wake };
         let wheel_guard = LegacyWheelGuard::default();
         start_backend(sender, wheel_guard.clone());
         app.insert_resource(MotionReceiver(Mutex::new(receiver)))
@@ -82,7 +115,7 @@ impl Plugin for SpaceMousePlugin {
 
 /// Starts reading the device on a thread of its own.
 #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
-fn start_backend(sender: Sender<MotionSample>, wheel_guard: LegacyWheelGuard) {
+fn start_backend(sender: SampleSender, wheel_guard: LegacyWheelGuard) {
     #[cfg(target_os = "windows")]
     windows_backend::start(sender, wheel_guard);
     #[cfg(target_os = "linux")]
@@ -275,7 +308,7 @@ mod windows_backend {
         0xc62b, // SpaceMouse Pro
     ];
 
-    pub(super) fn start(sender: Sender<MotionSample>, wheel_guard: LegacyWheelGuard) {
+    pub(super) fn start(sender: SampleSender, wheel_guard: LegacyWheelGuard) {
         let _ = thread::Builder::new()
             .name("cadrs-spacemouse-hid".into())
             .spawn(move || run(sender, wheel_guard));
@@ -291,7 +324,7 @@ mod windows_backend {
         }
     }
 
-    fn run(sender: Sender<MotionSample>, wheel_guard: LegacyWheelGuard) {
+    fn run(sender: SampleSender, wheel_guard: LegacyWheelGuard) {
         loop {
             let Ok(api) = HidApi::new() else {
                 thread::sleep(Duration::from_secs(2));
@@ -317,7 +350,7 @@ mod windows_backend {
     /// Forwards the device's motion until it goes away; an error when the app has quit.
     fn read_device(
         device: &HidDevice,
-        sender: &Sender<MotionSample>,
+        sender: &SampleSender,
         wheel_guard: &LegacyWheelGuard,
     ) -> Result<(), mpsc::SendError<MotionSample>> {
         let mut sample = MotionSample::default();
@@ -355,13 +388,13 @@ mod linux_backend {
     use spnav_rs::{SpnavClient, SpnavEvent};
     use std::thread;
 
-    pub(super) fn start(sender: Sender<MotionSample>) {
+    pub(super) fn start(sender: SampleSender) {
         let _ = thread::Builder::new()
             .name("cadrs-spacemouse-spnav".into())
             .spawn(move || run(sender));
     }
 
-    fn run(sender: Sender<MotionSample>) {
+    fn run(sender: SampleSender) {
         let runtime = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
