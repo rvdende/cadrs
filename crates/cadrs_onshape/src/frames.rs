@@ -554,19 +554,18 @@ impl PartStudio<'_> {
             if column.is_empty() {
                 continue;
             }
-            // "Same frames as previous": the parts of the override before it.
-            let parts = if Self::flag(item, "overrideAllFrames") {
+            let all = Self::flag(item, "overrideAllFrames");
+            let same_as_previous =
+                Self::flag(item, "sameFramesAsPrevious") && !Self::flag(item, "isFirst");
+            let parts = if all || same_as_previous {
                 Vec::new()
-            } else if Self::flag(item, "sameFramesAsPrevious") && !Self::flag(item, "isFirst") {
-                overrides
-                    .last()
-                    .map(|o| o.parts.clone())
-                    .unwrap_or_default()
             } else {
                 self.parts_param(item, "overrideFrames", &mut lost)
             };
             overrides.push(cadrs_core::frame::CutListOverride {
                 parts,
+                all,
+                same_as_previous,
                 column,
                 value,
             });

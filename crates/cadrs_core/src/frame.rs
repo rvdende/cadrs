@@ -1588,9 +1588,15 @@ impl FrameTrimFeature {
 /// frame members or not (a panel, a machined foot).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CutListOverride {
-    /// The parts it is for; none: every part of the list.
+    /// The parts it is for (unless `all` or `same_as_previous`).
     #[serde(default)]
     pub parts: Vec<PartId>,
+    /// It is for every part of the list.
+    #[serde(default)]
+    pub all: bool,
+    /// It is for the parts the override before it is for.
+    #[serde(default)]
+    pub same_as_previous: bool,
     /// The column's name.
     pub column: String,
     pub value: String,
@@ -1622,6 +1628,33 @@ impl Default for CutListFeature {
 }
 
 impl CutListFeature {
+    /// The parts override `i` names (none for one that is for every part): its own, or those
+    /// of the nearest override before it that has its own.
+    pub fn override_parts(&self, i: usize) -> &[PartId] {
+        let mut i = i;
+        loop {
+            match self.overrides.get(i) {
+                Some(o) if o.same_as_previous && i > 0 => i -= 1,
+                Some(o) if o.all => return &[],
+                Some(o) => return &o.parts,
+                None => return &[],
+            }
+        }
+    }
+
+    /// Every part the list names: those picked and those its overrides are for.
+    pub fn named_parts(&self) -> Vec<PartId> {
+        let mut out = self.parts.clone();
+        for i in 0..self.overrides.len() {
+            for p in self.override_parts(i) {
+                if !out.contains(p) {
+                    out.push(*p);
+                }
+            }
+        }
+        out
+    }
+
     pub fn problem(&self) -> Option<&'static str> {
         (!self.all && self.parts.is_empty()).then_some("Select the members for the cut list")
     }
@@ -1629,11 +1662,7 @@ impl CutListFeature {
     /// The features that made the parts picked.
     pub fn parents(&self) -> Vec<FeatureId> {
         let mut out: Vec<FeatureId> = Vec::new();
-        for p in self
-            .parts
-            .iter()
-            .chain(self.overrides.iter().flat_map(|o| &o.parts))
-        {
+        for p in &self.named_parts() {
             if !out.contains(&p.feature) {
                 out.push(p.feature);
             }

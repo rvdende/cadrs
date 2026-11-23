@@ -3058,11 +3058,7 @@ impl Rebuilder {
         }
         let mut missing = 0;
         // (A part a column's value is given for is listed: a panel, a machined foot.)
-        for p in x
-            .parts
-            .iter()
-            .chain(x.overrides.iter().flat_map(|o| &o.parts))
-        {
+        for p in &x.named_parts() {
             if state.part(*p).is_none() {
                 missing += 1;
             } else if !parts.contains(p) {

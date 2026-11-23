@@ -2564,6 +2564,23 @@ model-cut-list-all = All frame members
 model-cut-list-parts = Members and parts to list
 # The same list while All frame members is on: parts that aren't frame members can be added.
 model-cut-list-more-parts = Other parts to list
+# The Cut list dialog's heading over its overrides. An override gives some of the listed parts
+# a text in a column ("Description" = "Feet").
+model-cut-list-overrides = Overrides
+# An override's column name field's label.
+model-cut-list-column = Column
+# Its value field's label.
+model-cut-list-value = Value
+# An override's checkbox: it is for every part of the cut list.
+model-cut-list-override-all = All parts
+# An override's checkbox: it is for the same parts as the override above it.
+model-cut-list-same-as-previous = Same parts as previous
+# The list of the parts an override is for, empty: what to pick.
+model-cut-list-override-parts = Parts it is for
+# The button that adds an override.
+model-cut-list-add-override = Add an override
+# The tooltip of the ✕ that removes one.
+model-cut-list-remove-override = Remove this override
 # The Frame trim dialog's first list, empty: these members stay whole and cut the others.
 model-frame-trim-first-group = Members that run through
 # The Frame trim dialog's later lists, empty: each is cut to the members in the lists above it.

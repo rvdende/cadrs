@@ -2923,6 +2923,7 @@ fn a_cut_list_gathers_the_members_in_an_open_composite() {
                 parts: vec![plate_part],
                 column: "Description".into(),
                 value: "Foot".into(),
+                ..Default::default()
             }],
         }),
     );
