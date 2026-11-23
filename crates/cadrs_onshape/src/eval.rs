@@ -949,6 +949,16 @@ impl Model<'_> {
         {
             return found;
         }
+        // A sheet metal model's face standing in for the one of the body it was made from:
+        // that one.
+        if qtype == "SUBSTITUTION"
+            && let Some(d) = derived().first()
+        {
+            let found = self.eval_depth(d, depth + 1);
+            if !found.is_empty() {
+                return found;
+            }
+        }
         let mut cands: Vec<Ent> = match qtype {
             "COPY" => self.copies(q, &derived(), depth),
             "MERGE" | "SPLIT" => {
@@ -1945,13 +1955,6 @@ impl Model<'_> {
         };
         let sub = |a: [f64; 3], b: [f64; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
         let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-        let cross = |a: [f64; 3], b: [f64; 3]| {
-            [
-                a[1] * b[2] - a[2] * b[1],
-                a[2] * b[0] - a[0] * b[2],
-                a[0] * b[1] - a[1] * b[0],
-            ]
-        };
         // Planes the vertex lies on (a point and a unit normal): each sketch line's sweep.
         let mut sheets: Vec<([f64; 3], [f64; 3])> = Vec::new();
         let mut faces: Vec<HashSet<Ent>> = Vec::new();

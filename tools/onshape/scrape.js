@@ -162,8 +162,37 @@
     const elements = await save(`${d}/elements.json`, `${API}/documents/d/${d}/w/${w}/elements`);
     for (const el of elements || []) {
       for (const [file, url, opts] of ELEMENT_FETCHES[el.elementType] || []) {
-        await save(`${d}/${el.id}/${file}`, url(d, w, el.id), opts);
+        const got = await save(`${d}/${el.id}/${file}`, url(d, w, el.id), opts);
+        if (file === 'features.json') await scrapeFrameProfiles(got);
       }
+    }
+  }
+
+  // A Frame feature's profile is a sketch of a library document at a version, in one of its
+  // configurations (`profileSketch`: the namespace `d<doc>::v<version>::e<element>::m…` and the
+  // configuration's parameters). That sketch, once for each profile, under the library
+  // document's folder: `<doc>/versions/<version>/<element>/sketches-<configuration>.json`, the
+  // configuration as its `parameter=value` pairs joined by `;` with everything but letters,
+  // digits, `=`, `.`, `-`, `_` and `;` as `_` (the importer's `configuration_key`).
+  const profilesDone = new Set();
+  async function scrapeFrameProfiles(features) {
+    for (const f of (features && features.features) || []) {
+      if (f.featureType !== 'frame') continue;
+      const p = (f.parameters || []).find((q) => q.parameterId === 'profileSketch');
+      const m = p && /^d([0-9a-f]+)::v([0-9a-f]+)::e([0-9a-f]+)/.exec(p.namespace || '');
+      if (!m) continue;
+      const pairs = (p.configuration || [])
+        .map((c) => {
+          const v = c.value === undefined || c.value === null ? c.expression : c.value;
+          return v === undefined || v === null || !c.parameterId ? null : `${c.parameterId}=${v}`;
+        })
+        .filter((x) => x !== null);
+      const key = pairs.join(';').replace(/[^A-Za-z0-9=.\-_;]/g, '_');
+      const file = `${m[1]}/versions/${m[2]}/${m[3]}/${key ? `sketches-${key}` : 'sketches'}.json`;
+      if (profilesDone.has(file)) continue;
+      profilesDone.add(file);
+      const conf = pairs.length ? `&configuration=${encodeURIComponent(pairs.join(';'))}` : '';
+      await save(file, `${API}/partstudios/d/${m[1]}/v/${m[2]}/e/${m[3]}/sketches?includeGeometry=true${conf}`);
     }
   }
 

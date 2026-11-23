@@ -582,7 +582,7 @@ impl PartStudio<'_> {
     /// A `CAP_EDGE` of a surface extrude (it has no cap faces, so the query finds the side
     /// face's edges): its open edges at the end the query names (`isStart`: on the sketch
     /// plane, else the far end).
-    fn surface_cap_edges(
+    pub(crate) fn surface_cap_edges(
         &self,
         q: &Q,
         parts: &[cadrs_core::parts::Part],

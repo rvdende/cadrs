@@ -338,7 +338,11 @@ impl PartStudio<'_> {
             [at(a)?, at(b)?]
         } else {
             let parts = self.parts();
-            let edge = self.model(&parts).edges(path).into_iter().next()?;
+            let found = self.model(&parts).edges(path);
+            let edge = self
+                .surface_cap_edges(path, &parts, found)
+                .into_iter()
+                .next()?;
             let part = parts.iter().find(|p| p.id == edge.part)?;
             let pts = &part
                 .solid
@@ -352,12 +356,28 @@ impl PartStudio<'_> {
         let d = |a: [f64; 3], b: [f64; 3]| {
             ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
         };
-        self.built
+        // How far a point is from the segment between a member's ends.
+        let off_span = |p: [f64; 3], m: &cadrs_core::frame::MemberInfo| {
+            let (a, b) = (m.span[0], m.span[1]);
+            let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let len2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+            if len2 < 1e-18 {
+                return d(p, a);
+            }
+            let t = ((p[0] - a[0]) * ab[0] + (p[1] - a[1]) * ab[1] + (p[2] - a[2]) * ab[2]) / len2;
+            let t = t.clamp(0.0, 1.0);
+            d(p, [a[0] + ab[0] * t, a[1] + ab[1] * t, a[2] + ab[2] * t])
+        };
+        let members: Vec<&cadrs_core::frame::MemberInfo> = self
+            .built
             .as_ref()?
             .1
             .frames
             .iter()
             .filter(|m| m.feature == frame && !m.plate)
+            .collect();
+        let exact = members
+            .iter()
             .map(|m| {
                 let straight = d(m.span[0], ends[0]) + d(m.span[1], ends[1]);
                 let turned = d(m.span[0], ends[1]) + d(m.span[1], ends[0]);
@@ -365,7 +385,17 @@ impl PartStudio<'_> {
             })
             .filter(|(off, _)| *off < 1e-3)
             .min_by(|a, b| a.0.total_cmp(&b.0))
-            .map(|(_, p)| p)
+            .map(|(_, p)| p);
+        // A straight member of several curves in line (merged): the one the edge lies on.
+        exact.or_else(|| {
+            members
+                .iter()
+                .filter(|m| !m.curved)
+                .map(|m| (off_span(ends[0], m) + off_span(ends[1], m), m.part))
+                .filter(|(off, _)| *off < 1e-3)
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .map(|(_, p)| p)
+        })
     }
 
     /// The profile an Onshape frame names: the library sketch's regions, from the scraped file.
@@ -459,6 +489,100 @@ impl PartStudio<'_> {
             Self::lost_note(fr, lost, "trim selections");
         }
         self.add(f, fid, "Frame", FeatureKind::Frame(x), fr)
+    }
+
+    /// Onshape's Frame trim by groups: each group trimmed by those before it.
+    pub(crate) fn frame_trim(
+        &mut self,
+        f: &Value,
+        fid: &str,
+        fr: &mut FeatureReport,
+    ) -> Result<(), CommandError> {
+        let kind = Self::text(f, "trimType");
+        if kind != "GROUP" {
+            return Err(CommandError::Invalid(format!(
+                "its trim type ({kind}) is not supported"
+            )));
+        }
+        let items = param(f, "frameGroups")
+            .and_then(|p| p["items"].as_array())
+            .cloned()
+            .unwrap_or_default();
+        let mut lost = 0;
+        let mut groups = Vec::new();
+        for item in &items {
+            let g = self.parts_param(item, "frames", &mut lost);
+            if !g.is_empty() {
+                groups.push(g);
+            }
+        }
+        Self::lost_note(fr, lost, "member selections");
+        let x = cadrs_core::frame::FrameTrimFeature { groups };
+        if let Some(p) = x.problem() {
+            return Err(CommandError::Invalid(format!(
+                "its members could not be translated ({p})"
+            )));
+        }
+        self.add(f, fid, "Frame trim", FeatureKind::FrameTrim(x), fr)
+    }
+
+    /// Onshape's Cut list: the frame members (all, or those picked) in an open composite part,
+    /// with its column overrides.
+    pub(crate) fn cut_list(
+        &mut self,
+        f: &Value,
+        fid: &str,
+        fr: &mut FeatureReport,
+    ) -> Result<(), CommandError> {
+        let mut lost = 0;
+        let all = Self::flag(f, "selectAllFrames");
+        let parts = if all {
+            Vec::new()
+        } else {
+            self.parts_param(f, "frames", &mut lost)
+        };
+        Self::lost_note(fr, lost, "member selections");
+        let items = param(f, "columnOverrides")
+            .and_then(|p| p["items"].as_array())
+            .cloned()
+            .unwrap_or_default();
+        let mut overrides: Vec<cadrs_core::frame::CutListOverride> = Vec::new();
+        let mut lost = 0;
+        for item in &items {
+            let column = Self::text(item, "column");
+            let value = Self::text(item, "value");
+            if column.is_empty() {
+                continue;
+            }
+            // "Same frames as previous": the parts of the override before it.
+            let parts = if Self::flag(item, "overrideAllFrames") {
+                Vec::new()
+            } else if Self::flag(item, "sameFramesAsPrevious") && !Self::flag(item, "isFirst") {
+                overrides
+                    .last()
+                    .map(|o| o.parts.clone())
+                    .unwrap_or_default()
+            } else {
+                self.parts_param(item, "overrideFrames", &mut lost)
+            };
+            overrides.push(cadrs_core::frame::CutListOverride {
+                parts,
+                column,
+                value,
+            });
+        }
+        Self::lost_note(fr, lost, "column override selections");
+        let x = cadrs_core::frame::CutListFeature {
+            all,
+            parts,
+            overrides,
+        };
+        if let Some(p) = x.problem() {
+            return Err(CommandError::Invalid(format!(
+                "its members could not be translated ({p})"
+            )));
+        }
+        self.add(f, fid, "Cut list", FeatureKind::CutList(x), fr)
     }
 }
 

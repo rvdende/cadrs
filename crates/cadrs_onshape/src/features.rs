@@ -1548,6 +1548,7 @@ impl PartStudio<'_> {
                 continue;
             }
             let found = self.model(&parts).edges(&q);
+            let found = self.surface_cap_edges(&q, &parts, found);
             if found.is_empty() {
                 *lost += 1;
             }

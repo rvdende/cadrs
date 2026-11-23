@@ -1239,6 +1239,8 @@ impl<'a> PartStudio<'a> {
                 "fill" => self.fill(f, &fid, &mut fr),
                 "sweep" => self.sweep(f, &fid, &mut fr),
                 "frame" => self.frame(f, &fid, &mut fr),
+                "frameTrim" => self.frame_trim(f, &fid, &mut fr),
+                "cutlist" => self.cut_list(f, &fid, &mut fr),
                 "sheetMetalStart" => self.sheet_metal_start(f, &fid, &mut fr),
                 "draft" => self.draft(f, &fid, &mut fr),
                 "moveFace" => self.move_face(f, &fid, &mut fr),
