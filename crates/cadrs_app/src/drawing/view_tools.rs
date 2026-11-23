@@ -1107,6 +1107,7 @@ fn view_pointer(
     q_menus: Query<(), With<cadrs_ui::menu::MenuDismissLayer>>,
     keys: Res<ButtonInput<KeyCode>>,
     cache: Res<ViewCache>,
+    scene: Res<super::views::ViewScene>,
     time: Res<Time<Real>>,
     mut last_click: Local<Option<(f64, Vec2)>>,
     mut ui: ResMut<DrawingUi>,
@@ -1129,6 +1130,9 @@ fn view_pointer(
     let area = sheet_area(&rect, &ui);
     let over = pointer_over_sheet(&hover, &q_area) && q_menus.is_empty();
     let pad = 6.0 * mm_per_px(&doc, &ui);
+    // A section's cutting line and label are picked closer than a view is: the line runs
+    // across its parent, which a press next to it still selects and drags.
+    let mark_tol = pad * 2.0 / 3.0;
     let ctrl = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     for input in inputs.read() {
         if input.pointer_id != PointerId::Mouse {
@@ -1153,7 +1157,9 @@ fn view_pointer(
             PointerAction::Press(PointerButton::Primary) if over && !ui.annotation_press => {
                 ui.pointer = Some(p);
                 ui.press = Some(p);
-                if ui.tool == ViewTool::None {
+                // A press on a section's cutting line or label is a click on the section
+                // (see the release), not on the view under it.
+                if ui.tool == ViewTool::None && scene.section_mark_at(p, mark_tol).is_none() {
                     let hit = view_at(d, index, &cache, p, pad);
                     match hit {
                         Some(v) => {
@@ -1199,23 +1205,24 @@ fn view_pointer(
                 if over && pressed_here && ui.tool != ViewTool::None {
                     commands.queue(move |w: &mut World| tool_click(w, p));
                 }
-                // A double click on a section view or its cutting line shows the section in
-                // its Part Studio (`drawing_sections`).
+                // A click on a section's cutting line or label, or a double click on the
+                // section view itself, shows the section in its Part Studio
+                // (`drawing_sections`).
                 if over && pressed_here && ui.tool == ViewTool::None {
                     let now = time.elapsed_secs_f64();
                     let double = last_click
                         .is_some_and(|(t, q)| now - t < 0.4 && (q - p).length() as f64 <= pad);
                     *last_click = Some((now, p));
-                    if double {
+                    let section = scene.section_mark_at(p, mark_tol).or_else(|| {
+                        view_at(d, index, &cache, p, pad).filter(|id| {
+                            double && crate::drawing_sections::find(&doc.doc, *id).is_some()
+                        })
+                    });
+                    if let Some(section) = section {
                         *last_click = None;
-                        let hit = view_at(d, index, &cache, p, pad);
-                        if let Some(section) =
-                            crate::drawing_sections::section_at(d, index, hit, p, pad)
-                        {
-                            commands.queue(move |w: &mut World| {
-                                crate::drawing_sections::jump_to_view(w, section);
-                            });
-                        }
+                        commands.queue(move |w: &mut World| {
+                            crate::drawing_sections::jump_to_view(w, section);
+                        });
                     }
                 }
             }
@@ -1246,6 +1253,33 @@ fn view_pointer(
         },
         _ => None,
     };
+    // A section's cutting line or label under the pointer, else the section view under it.
+    let on_mark = match (ui.pointer, ui.tool) {
+        (Some(p), ViewTool::None)
+            if over && !ui.annotating && !ui.annotation_hover && ui.view_drag.is_none() =>
+        {
+            scene.section_mark_at(p, mark_tol)
+        }
+        _ => None,
+    };
+    let section_hover = on_mark
+        .map(|view| super::SectionHover {
+            view,
+            on_mark: true,
+        })
+        .or_else(|| {
+            let view = hovered.filter(|_| ui.tool == ViewTool::None)?;
+            crate::drawing_sections::find(&doc.doc, view)?;
+            Some(super::SectionHover {
+                view,
+                on_mark: false,
+            })
+        });
+    // On a cutting line the view it crosses is not what a click would pick.
+    let hovered = hovered.filter(|_| on_mark.is_none());
+    if ui.section_hover != section_hover {
+        ui.section_hover = section_hover;
+    }
     if ui.hovered != hovered {
         ui.hovered = hovered;
     }
@@ -1632,22 +1666,17 @@ fn sync_tool_hint(
         None
     } else {
         match ui.tool {
-            // Over a section view or its cutting line: it opens in its Part Studio.
+            // At a section view, its cutting line or its label: it opens in its Part Studio.
             ViewTool::None => doc.as_deref().and_then(|doc| {
-                let (element, d) = active_drawing(doc)?;
-                let p = ui.pointer.filter(|_| ui.view_drag.is_none())?;
-                let tol = 6.0 * mm_per_px(doc, &ui);
-                let view = crate::drawing_sections::section_at(
-                    d,
-                    ui.sheet_index(element, d),
-                    ui.hovered,
-                    p,
-                    tol,
-                )?;
-                let s = crate::drawing_sections::find(&doc.doc, view)?;
+                let hover = ui.section_hover.filter(|_| ui.view_drag.is_none())?;
+                let s = crate::drawing_sections::find(&doc.doc, hover.view)?;
                 let studio = doc.doc.element(s.studio)?.name.clone();
                 Some(tr_with(
-                    "drawing-hint-section-jump",
+                    if hover.on_mark {
+                        "drawing-hint-section-click"
+                    } else {
+                        "drawing-hint-section-jump"
+                    },
                     &[("section", &s.name), ("name", &studio)],
                 ))
             }),

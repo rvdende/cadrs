@@ -937,11 +937,13 @@ fn sync_named_views(
             let section = *section;
             b.spawn((
                 cadrs_ui::ActionRow::new(format!("named-view-section-{i}"), label.clone())
-                    .icon("section-view")
+                    .icon("drawing-section")
                     .height(28.0)
                     .font_size(t.font_base)
                     .selected(*on)
                     .build(&t),
+                // The cutting plane shows in the view while the pointer is on the row.
+                crate::drawing_sections::SectionRow(section),
                 observe(move |_: On<Activate>, mut commands: Commands| {
                     commands.queue(move |world: &mut World| {
                         crate::drawing_sections::toggle(world, section)

@@ -685,7 +685,6 @@ shell-tool-display-states = 표시 상태
 shell-tool-display-states-menu = 표시 상태, 컨텍스트에서 파트 스튜디오 만들기
 shell-doc-feature-errors = 오류가 있는 피처가 있습니다: 클릭하면 첫 번째 피처를 선택합니다
 shell-doc-default-geometry = 기본 형상
-shell-doc-sections = 단면
 shell-doc-origin = 원점
 shell-doc-filter-by-name = 이름으로 필터링
 shell-doc-list-view = 목록 보기
@@ -2580,6 +2579,7 @@ drawing-hint-auxiliary-pick = 보조도: 뷰의 직선 모서리를 클릭하세
 drawing-hint-auxiliary-place = 보조도: 클릭하여 뷰 배치
 drawing-hint-align-vertical = 뷰 수직 정렬: 뷰의 모서리를 클릭하세요
 drawing-hint-align-horizontal = 뷰 수평 정렬: 뷰의 모서리를 클릭하세요
+drawing-hint-section-click = 클릭하여 { $name }에서 { $section } 보기
 drawing-hint-section-jump = 두 번 클릭하여 { $name }에서 { $section } 보기
 
 ## crates/cadrs_app/src/drawing/flat_views.rs
@@ -2602,7 +2602,7 @@ drawing-view-menu-tangent-solid = 실선
 drawing-view-menu-tangent-phantom = 가상선
 drawing-flat-adjust-linestyle = 선 스타일 조정…
 drawing-view-menu-properties = 뷰 속성…
-drawing-view-menu-show-section = { $name }에서 단면 표시
+drawing-view-menu-show-section = { $name }에서 { $section } 표시
 drawing-flat-menu-order = 순서
 drawing-view-menu-bring-to-front = 맨 앞으로 가져오기
 drawing-view-menu-send-to-back = 맨 뒤로 보내기

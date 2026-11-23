@@ -685,7 +685,6 @@ shell-tool-display-states = États d'affichage
 shell-tool-display-states-menu = États d'affichage, Créer un Part Studio en contexte
 shell-doc-feature-errors = Une fonction comporte des erreurs : cliquez pour sélectionner la première
 shell-doc-default-geometry = Géométrie par défaut
-shell-doc-sections = Coupes
 shell-doc-origin = Origine
 shell-doc-filter-by-name = Filtrer par nom
 shell-doc-list-view = Vue en liste
@@ -2580,6 +2579,7 @@ drawing-hint-auxiliary-pick = Vue auxiliaire : cliquez sur une arête droite d'u
 drawing-hint-auxiliary-place = Vue auxiliaire : cliquez pour placer la vue
 drawing-hint-align-vertical = Aligner la vue verticalement : cliquez sur une arête de la vue
 drawing-hint-align-horizontal = Aligner la vue horizontalement : cliquez sur une arête de la vue
+drawing-hint-section-click = Cliquez pour voir { $section } dans { $name }
 drawing-hint-section-jump = Double-cliquez pour voir { $section } dans { $name }
 
 ## crates/cadrs_app/src/drawing/flat_views.rs
@@ -2602,7 +2602,7 @@ drawing-view-menu-tangent-solid = Continues
 drawing-view-menu-tangent-phantom = Fantôme
 drawing-flat-adjust-linestyle = Ajuster le style de ligne…
 drawing-view-menu-properties = Propriétés de la vue…
-drawing-view-menu-show-section = Afficher la coupe dans { $name }
+drawing-view-menu-show-section = Afficher { $section } dans { $name }
 drawing-flat-menu-order = Ordre
 drawing-view-menu-bring-to-front = Mettre au premier plan
 drawing-view-menu-send-to-back = Mettre à l'arrière-plan

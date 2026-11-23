@@ -26,6 +26,7 @@ icons! {
     CUSTOM_FEATURE => ("custom-feature", Solid, "Add custom feature"),
     MEASURE => ("measure", Solid, "Measure"),
     SECTION_VIEW => ("section-view", Solid, "Section view"),
+    DRAWING_SECTION => ("drawing-section", Sketch, "Drawing section"),
     MASS_PROPERTIES => ("mass-properties", Solid, "Mass properties"),
     PART => ("part", Solid, "Part"),
     SKETCH => ("sketch", Solid, "Sketch"),

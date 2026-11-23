@@ -97,6 +97,10 @@ pub fn open_space_menu(world: &mut World, pos: Vec2) {
     }
 }
 
+/// The names of the menu's **Show Section A-A in …** items: this and the section's place in
+/// [`crate::drawing_sections::sections_at_view`].
+const SHOW_SECTION: &str = "view-menu-show-section-";
+
 /// The view's context menu.
 pub fn open_view_menu(world: &mut World, pos: Vec2, id: ViewId) {
     let Some((_, v)) = find_view(world, id) else {
@@ -118,7 +122,8 @@ pub fn open_view_menu(world: &mut World, pos: Vec2, id: ViewId) {
     // Insert BOM is for a view of an assembly (P3C.5, D11.1).
     let is_assembly =
         cadrs_core::drawing_assembly::is_assembly(&doc.doc, ElementId(v.reference.element));
-    let is_section = v.kind == cadrs_drawing::ViewKind::Section && v.cut.is_some();
+    // The sections this view leads to: itself, and those cut on it.
+    let sections = crate::drawing_sections::sections_at_view(&doc.doc, id);
     let theme = world.resource::<Theme>().clone();
     let tangent = |t: TangentEdges, name: &'static str, label: &'static str| {
         let item = MenuItem::new(name, tr(label));
@@ -212,15 +217,21 @@ pub fn open_view_menu(world: &mut World, pos: Vec2, id: ViewId) {
             )
             .disabled(!is_assembly),
         )
-        .separator()
-        .item(
+        .separator();
+    let mut menu = menu;
+    for (k, section) in sections.iter().enumerate() {
+        menu = menu.item(
             MenuItem::new(
-                "view-menu-show-section",
-                tr_with("drawing-view-menu-show-section", &[("name", &reference)]),
+                format!("{SHOW_SECTION}{k}"),
+                tr_with(
+                    "drawing-view-menu-show-section",
+                    &[("section", &section.name), ("name", &reference)],
+                ),
             )
-            .icon("section-view")
-            .disabled(!is_section),
-        )
+            .icon("drawing-section"),
+        );
+    }
+    let menu = menu
         .item(MenuItem::new(
             "view-menu-switch",
             tr_with("asm-switch-to-named", &[("name", &reference)]),
@@ -271,7 +282,7 @@ pub fn open_view_menu(world: &mut World, pos: Vec2, id: ViewId) {
             "drawing-view-menu-remove-broken-out",
         ),
     ];
-    let extra = removals.iter().filter(|r| r.0).count();
+    let extra = removals.iter().filter(|r| r.0).count() + sections.len();
     for (on, name, label) in removals {
         if on {
             menu = menu.item(MenuItem::new(name, tr(label)));
@@ -288,7 +299,7 @@ pub fn open_view_menu(world: &mut World, pos: Vec2, id: ViewId) {
     // The menu is tall (20 items): open it where it fits below the anchor, so it is never cut
     // off at the window's edge.
     let window_h = world.resource::<cadrs_ui::RenderSurface>().size.y as f32;
-    let menu_h = (21 + extra) as f32 * 27.0 + 4.0 * 9.0 + 12.0;
+    let menu_h = (20 + extra) as f32 * 27.0 + 4.0 * 9.0 + 12.0;
     let pos = Vec2::new(pos.x, pos.y.min((window_h - menu_h - 6.0).max(0.0)));
     let mut commands = world.commands();
     let anchor = open_context_menu(&mut commands, pos, menu.build(&theme));
@@ -326,10 +337,21 @@ pub(super) fn view_menu_action(w: &mut World, id: ViewId, item: &str) {
     let Some((_, v)) = find_view(w, id) else {
         return;
     };
-    match item {
-        "view-menu-show-section" => {
-            crate::drawing_sections::jump_to_view(w, id);
+    if let Some(k) = item
+        .strip_prefix(SHOW_SECTION)
+        .and_then(|k| k.parse::<usize>().ok())
+    {
+        let section = w.get_resource::<ActiveDocument>().and_then(|d| {
+            crate::drawing_sections::sections_at_view(&d.doc, id)
+                .get(k)
+                .cloned()
+        });
+        if let Some(section) = section {
+            crate::drawing_sections::jump(w, section);
         }
+        return;
+    }
+    match item {
         "view-menu-hidden-lines" => {
             let on = !v.hidden_lines;
             set_view(

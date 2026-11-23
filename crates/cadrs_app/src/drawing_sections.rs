@@ -1,30 +1,26 @@
 //! **Drawing sections in the Part Studio**: a section view of a drawing is a cut of the Part
 //! Studio it draws, so the studio shows it too.
 //!
-//! - The feature list has a **Sections** group under Default geometry, one row per section view
-//!   of the document's drawings that draw this studio ("Section A-A"). Hovering a row draws the
-//!   cutting plane in the view; clicking it cuts the 3D view by that plane ([`crate::section_view`],
-//!   the same cutaway as **Section view…**) seen as the drawing sees it; clicking it again ends
-//!   the section.
-//! - The **Named views** panel lists the same sections after the saved views
-//!   ([`crate::view_options`]).
-//! - From the drawing: a double click on a section view or on its cutting line, or the view
-//!   menu's **Show section in …**, switches to the Part Studio with that section on
-//!   ([`jump`]). While the pointer is over one, the hint at the bottom of the sheet says so.
+//! - The **Named views** panel lists, after the saved views, the section views of the
+//!   document's drawings that draw this studio ("Section A-A (Drawing 1)",
+//!   [`crate::view_options`]). Hovering a row draws the cutting plane in the view; clicking it
+//!   cuts the 3D view by that plane ([`crate::section_view`], the same cutaway as **Section
+//!   view…**) seen as the drawing sees it; clicking it again ends the section.
+//! - From the drawing: a click on a section's cutting line or on its "SECTION A-A" label, a
+//!   double click on the section view, or the view menu's **Show Section A-A in …** (of the
+//!   section view and of the view it is cut on) switches to the Part Studio with that section on
+//!   ([`jump`]). The cutting line and the label turn blue under the pointer and with the pointer
+//!   on the section view (`DrawingUi::section_hover`), and the hint at the bottom of the sheet
+//!   says what the click does.
 //!
 //! Nothing is stored: the sections are read from the drawings each frame they are needed, so a
 //! section moved, renamed or deleted in the drawing is moved, renamed or gone here.
 
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
-use bevy::text::FontWeight;
-use bevy::ui_widgets::{Activate, observe};
 use cadrs_core::ElementId;
 use cadrs_core::document::{Document, ElementKind};
 use cadrs_drawing::{ViewId, ViewKind};
-use cadrs_ui::TreeItem;
-use cadrs_ui::i18n::tr;
-use cadrs_ui::prelude::*;
 
 use crate::parts::PartCache;
 use crate::section_view::{self, SectionPlaneGizmos, SectionRef, SectionViews};
@@ -37,7 +33,7 @@ impl Plugin for DrawingSectionsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PendingSection>().add_systems(
             Update,
-            (apply_pending, sync_rows, draw_hovered_plane)
+            (apply_pending, draw_hovered_plane)
                 .chain()
                 .run_if(in_state(AppState::Document)),
         );
@@ -118,40 +114,25 @@ pub fn find(doc: &Document, view: ViewId) -> Option<DrawingSection> {
     })
 }
 
-/// The section of the active drawing a sheet point (mm) is on: the section view under it, or
-/// the cutting line (within `tol` sheet mm) drawn on its parent.
-pub fn section_at(
-    d: &cadrs_drawing::Drawing,
-    sheet: usize,
-    hovered: Option<ViewId>,
-    p: Vec2,
-    tol: f64,
-) -> Option<ViewId> {
-    let sheet = d.sheets.get(sheet)?;
-    let on_line = sheet.views.iter().find(|v| {
-        let (Some(line), Some(parent)) = (&v.section, v.parent.and_then(|id| sheet.view(id)))
-        else {
-            return false;
+/// The sections the view `view` of the open document's drawings leads to: itself if it is a
+/// section view, then the sections cut on it (whose cutting lines it carries).
+pub fn sections_at_view(doc: &Document, view: ViewId) -> Vec<DrawingSection> {
+    let mut out = Vec::new();
+    for el in &doc.elements {
+        let ElementKind::Drawing(d) = &el.kind else {
+            continue;
         };
-        let (a, b) = (parent.to_sheet(line.a), parent.to_sheet(line.b));
-        let (a, b) = (
-            Vec2::new(a[0] as f32, a[1] as f32),
-            Vec2::new(b[0] as f32, b[1] as f32),
+        let Some(sheet) = d.sheets.iter().find(|s| s.view(view).is_some()) else {
+            continue;
+        };
+        let own = sheet.views.iter().filter(|v| v.id == view);
+        let cut_on_it = sheet.views.iter().filter(|v| v.parent == Some(view));
+        out.extend(
+            own.chain(cut_on_it)
+                .filter_map(|v| section_of(el.id, &el.name, v)),
         );
-        let ab = b - a;
-        let t = if ab.length_squared() > 0.0 {
-            ((p - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        ((a + ab * t) - p).length() as f64 <= tol
-    });
-    on_line.map(|v| v.id).or_else(|| {
-        hovered
-            .and_then(|id| sheet.view(id))
-            .filter(|v| v.kind == ViewKind::Section && v.cut.is_some())
-            .map(|v| v.id)
-    })
+    }
+    out
 }
 
 /// A section waiting for its Part Studio's tab to be the one shown.
@@ -178,7 +159,7 @@ pub fn jump_to_view(world: &mut World, view: ViewId) -> bool {
     true
 }
 
-/// A click on a section's row (the feature list, the Named views panel): shows it, or ends it
+/// A click on a section's row in the Named views panel: shows it, or ends it
 /// when it is the one shown.
 pub fn toggle(world: &mut World, view: ViewId) {
     let Some(doc) = world.get_resource::<ActiveDocument>() else {
@@ -233,79 +214,9 @@ fn apply_pending(world: &mut World) {
     view.animate_to(to);
 }
 
-// ---------------------------------------------------------------------------------------------
-// The feature list's Sections group
-
-/// The container of the Sections group in the feature list (empty with no sections).
-#[derive(Component, Default)]
-pub struct SectionRows {
-    built: Option<Vec<(ViewId, String, bool)>>,
-}
-
-/// A section's row.
+/// A section's row in the Named views panel.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct SectionRow(pub ViewId);
-
-fn sync_rows(
-    doc: Option<Res<ActiveDocument>>,
-    kind: Res<ActiveKind>,
-    views: Res<SectionViews>,
-    theme: Res<Theme>,
-    mut q: Query<(Entity, &mut SectionRows)>,
-    mut commands: Commands,
-) {
-    let Some(doc) = doc else { return };
-    let Some(el) = doc.active.filter(|_| *kind == ActiveKind::PartStudio) else {
-        return;
-    };
-    let sections = sections_of(&doc.doc, el);
-    let shown = section_view::drawing_section_shown(&views, el);
-    let several = sections.iter().any(|s| s.drawing != sections[0].drawing);
-    let key: Vec<(ViewId, String, bool)> = sections
-        .iter()
-        .map(|s| {
-            let label = if several {
-                format!("{} ({})", s.name, s.drawing_name)
-            } else {
-                s.name.clone()
-            };
-            (s.view, label, shown == Some(s.view))
-        })
-        .collect();
-    for (root, mut rows) in &mut q {
-        if rows.built.as_ref() == Some(&key) {
-            continue;
-        }
-        rows.built = Some(key.clone());
-        commands.entity(root).despawn_related::<Children>();
-        if key.is_empty() {
-            continue;
-        }
-        let t = theme.clone();
-        let key = key.clone();
-        commands.entity(root).with_children(move |c| {
-            c.spawn(
-                TreeItem::new("feature-sections", tr("shell-doc-sections"))
-                    .left(2.0)
-                    .weight(FontWeight::NORMAL)
-                    .build(&t),
-            );
-            for (i, (view, label, on)) in key.into_iter().enumerate() {
-                c.spawn((
-                    TreeItem::new(format!("feature-section-{i}"), label)
-                        .icon("section-view", 16.0)
-                        .left(22.0)
-                        .selected(on)
-                        .build(&t),
-                    SectionRow(view),
-                    observe(move |_: On<Activate>, mut commands: Commands| {
-                        commands.queue(move |world: &mut World| toggle(world, view));
-                    }),
-                ));
-            }
-        });
-    }
-}
 
 /// The cutting plane of the section whose row the pointer is on, drawn in the view.
 fn draw_hovered_plane(
@@ -386,7 +297,7 @@ mod tests {
     }
 
     #[test]
-    fn a_point_on_the_cutting_line_or_the_section_view_finds_the_section() {
+    fn a_view_leads_to_itself_and_the_sections_cut_on_it() {
         let studio = ElementId::new();
         let parent = View::base(
             ObjectRef {
@@ -397,35 +308,34 @@ mod tests {
             Scale::new(2, 1),
             [100.0, 100.0],
         );
-        let section = cadrs_drawing::view_kinds::section_view(
-            &parent,
-            [3.0, -10.0],
-            [3.0, 10.0],
-            [200.0, 100.0],
-            cadrs_drawing::Projection::Third,
-            "A",
-        )
-        .unwrap();
-        let (pid, sid) = (parent.id, section.id);
+        let cut = |x: f64, letter: &str| {
+            cadrs_drawing::view_kinds::section_view(
+                &parent,
+                [x, -10.0],
+                [x, 10.0],
+                [200.0, 100.0],
+                cadrs_drawing::Projection::Third,
+                letter,
+            )
+            .unwrap()
+        };
+        let (a, b) = (cut(3.0, "A"), cut(-3.0, "B"));
+        let (pid, aid, bid) = (parent.id, a.id, b.id);
         let mut d =
             cadrs_drawing::Drawing::from_template(&cadrs_drawing::builtin_templates()[0], None);
-        d.sheets[0].views = vec![parent, section];
-        // The line is at x = 3 of the parent, at 2:1: sheet x = 106, y from 80 to 120.
-        assert_eq!(
-            section_at(&d, 0, Some(pid), Vec2::new(106.4, 95.0), 1.0),
-            Some(sid)
-        );
-        // Off the line, over the parent: nothing.
-        assert_eq!(
-            section_at(&d, 0, Some(pid), Vec2::new(90.0, 95.0), 1.0),
-            None
-        );
-        // Past the line's end.
-        assert_eq!(section_at(&d, 0, None, Vec2::new(106.0, 130.0), 1.0), None);
-        // Over the section view itself.
-        assert_eq!(
-            section_at(&d, 0, Some(sid), Vec2::new(200.0, 100.0), 1.0),
-            Some(sid)
-        );
+        d.sheets[0].views = vec![parent, a, b];
+        let mut doc = Document::new("t");
+        doc.elements
+            .push(cadrs_core::document::Element::drawing("Drawing 1", d));
+        let ids = |v| {
+            sections_at_view(&doc, v)
+                .iter()
+                .map(|s| s.view)
+                .collect::<Vec<_>>()
+        };
+        // The parent carries both cutting lines; a section view is its own section.
+        assert_eq!(ids(pid), vec![aid, bid]);
+        assert_eq!(ids(aid), vec![aid]);
+        assert_eq!(ids(ViewId::new()), Vec::<ViewId>::new());
     }
 }
