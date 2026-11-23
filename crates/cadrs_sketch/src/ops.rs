@@ -869,6 +869,10 @@ impl SketchOp {
                 }
                 let (kind, before) = (d.kind, d.value);
                 d.value = *value;
+                // A formula naming no variable (#205: "100/2") is only what was typed for the
+                // old value: a new value drops it. One naming a variable stays, to be
+                // re-evaluated.
+                s.expressions.retain(|(d, e)| d != id || e.contains('#'));
                 // A distance turning negative (or back) puts its point on the other side.
                 if kind.signed() && (before < 0.0) != (*value < 0.0) {
                     flip_side(s, kind);

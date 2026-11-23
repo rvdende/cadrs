@@ -646,12 +646,15 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
     }
 }
 
-/// A sketch's dimension expressions: (dimension, expression, what it measures).
+/// A sketch's dimension expressions that name variables: (dimension, expression, what it
+/// measures). A formula of constants (#205: "100/2") is kept only as typed, and not evaluated
+/// again: its bare numbers would read in whatever unit the workspace has by then.
 pub fn sketch_expressions(
     g: &cadrs_sketch::Sketch,
 ) -> Vec<(cadrs_sketch::DimensionId, String, Quantity)> {
     g.expressions
         .iter()
+        .filter(|(_, e)| e.contains('#'))
         .filter_map(|(id, e)| Some((*id, e.clone(), g.dimensions.get(*id)?.kind.quantity())))
         .collect()
 }
@@ -860,7 +863,7 @@ pub fn check(features: &[Feature], units: &Units) -> Vec<(FeatureId, String)> {
 /// Whether any of a feature's fields names a variable (cheaply: without cloning a sketch).
 fn has_hash(k: &FeatureKind) -> bool {
     match k {
-        FeatureKind::Sketch(sk) => !sk.geometry.expressions.is_empty(),
+        FeatureKind::Sketch(sk) => sk.geometry.expressions.iter().any(|(_, e)| e.contains('#')),
         FeatureKind::Variable(_) => true,
         k => {
             let mut k = k.clone();

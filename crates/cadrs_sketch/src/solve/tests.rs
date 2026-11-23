@@ -1891,3 +1891,37 @@ fn dragging_a_fillet_center_keeps_its_radius() {
         assert!(analyze(&live).conflicting.is_empty());
     }
 }
+
+/// #205: a formula of constants is kept as typed until a new value replaces it; one naming a
+/// variable stays, for the document to evaluate again.
+#[test]
+fn a_new_value_drops_a_formula_of_constants_but_not_one_of_variables() {
+    let mut s = Sketch::new();
+    let (sides, _) = origin_rect(&mut s);
+    let (b0, b1) = s.curve_ends(sides[0]).unwrap();
+    dim(&mut s, DimensionKind::Aligned { a: b0, b: b1 }, 50.0);
+    let id = s.dimensions.keys().next().unwrap();
+    let expr = |e: &str| SketchOp::SetDimensionExpr {
+        id,
+        expr: Some(e.into()),
+    };
+    expr("100/2").apply(&mut s).unwrap();
+    assert_eq!(s.expression(id), Some("100/2"));
+    SketchOp::SetDimensionValue { id, value: 60.0 }
+        .apply(&mut s)
+        .unwrap();
+    assert_eq!(s.expression(id), None);
+    // A new value and its formula together, as the value editor sets them.
+    SketchOp::Batch(vec![
+        SketchOp::SetDimensionValue { id, value: 70.0 },
+        expr("140/2"),
+    ])
+    .apply(&mut s)
+    .unwrap();
+    assert_eq!(s.expression(id), Some("140/2"));
+    expr("#w + 10").apply(&mut s).unwrap();
+    SketchOp::SetDimensionValue { id, value: 80.0 }
+        .apply(&mut s)
+        .unwrap();
+    assert_eq!(s.expression(id), Some("#w + 10"));
+}
