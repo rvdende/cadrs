@@ -1489,11 +1489,7 @@ pub(crate) fn rough_volume(body: &Body) -> Option<f64> {
         };
         Some([at(12), at(24)])
     };
-    let terms: Vec<Option<[f64; 2]>> = if super::par::threads_for(body.faces.len(), true) {
-        body.faces.par_iter().map(one).collect()
-    } else {
-        body.faces.iter().map(one).collect()
-    };
+    let terms: Vec<Option<[f64; 2]>> = super::par::map_heavy(&body.faces, true, one);
     let (mut coarse, mut fine) = (0.0, 0.0);
     for t in terms {
         let [c, f] = t?;
@@ -1544,12 +1540,7 @@ pub(crate) fn faces_volume(body: &Body) -> f64 {
 pub(crate) fn faces_volume_terms(body: &Body, shift: &V3) -> Vec<f64> {
     let faces: Vec<usize> = (0..body.faces.len()).collect();
     let one = |&i: &usize| face_integrals_of::<false>(body, &body.faces[i], shift)[4];
-    let heavy = body.faces.iter().any(costly);
-    if super::par::threads_for(faces.len(), heavy) {
-        faces.par_iter().map(one).collect()
-    } else {
-        faces.iter().map(one).collect()
-    }
+    super::par::map_heavy(&faces, body.faces.iter().any(costly), one)
 }
 
 /// Mass properties of a body (solids; a body without solids is a sheet: area only).
@@ -1569,12 +1560,7 @@ pub fn body_mass(body: &Body) -> crate::MassProperties {
         let (center, q) = face_integrals_about_center(body, i);
         shifted(&q, &center, &shift)
     };
-    let heavy = body.faces.iter().any(costly);
-    let qs: Vec<Q> = if super::par::threads_for(faces.len(), heavy) {
-        faces.par_iter().map(one).collect()
-    } else {
-        faces.iter().map(one).collect()
-    };
+    let qs: Vec<Q> = super::par::map_heavy(&faces, body.faces.iter().any(costly), one);
     let mut q = [0.0; NQ];
     for f in &qs {
         for k in 0..NQ {

@@ -1947,11 +1947,7 @@ fn triangulate(s: &Setup, p: &TessParams, refine: bool) -> FaceMesh {
             })
             .collect();
         let split = |(_, _, v, cons): &(_, usize, _, _)| split_point(dom, v, *cons, p, min_len);
-        let splits: Vec<Option<P2>> = if super::par::threads_for(todo.len(), false) {
-            todo.par_iter().map(split).collect()
-        } else {
-            todo.iter().map(split).collect()
-        };
+        let splits: Vec<Option<P2>> = super::par::map(&todo, split);
         let mut proposed: FastSet<(u64, u64)> = FastSet::default();
         let mut at: Vec<P2> = Vec::new();
         for ((key, fi, _, _), q) in todo.iter().zip(splits) {
@@ -1968,11 +1964,7 @@ fn triangulate(s: &Setup, p: &TessParams, refine: bool) -> FaceMesh {
             }
         }
         let add = |&q: &P2| vx(dom, q, None, scale);
-        let mut adds: Vec<Vx> = if super::par::threads_for(at.len(), false) {
-            at.par_iter().map(add).collect()
-        } else {
-            at.iter().map(add).collect()
-        };
+        let mut adds: Vec<Vx> = super::par::map(&at, add);
         if let Some(t) = s.prof {
             eprintln!(
                 "tess face: refinement round at {} vertices, {} to add, {:?}",
@@ -2314,18 +2306,15 @@ fn mesh_all(body: &Body, p: &TessParams) -> (Vec<FaceMesh>, EdgeSamples) {
         mesh_cache().insert(key, std::sync::Arc::new(m.clone()));
         m
     };
-    // (On the threads when the faces are many or curved beyond the analytic: see `par`.)
+    // (On the threads when the faces are curved beyond the analytic, or take long enough: see
+    // `par`.)
     let free = body.faces.iter().any(|f| {
         matches!(
             f.surf,
             Surface::Nurbs(_) | Surface::Extrusion { .. } | Surface::Revolution { .. }
         )
     });
-    let faces: Vec<FaceMesh> = if super::par::threads_for(body.faces.len(), free) {
-        body.faces.par_iter().map(one).collect()
-    } else {
-        body.faces.iter().map(one).collect()
-    };
+    let faces: Vec<FaceMesh> = super::par::map_heavy(&body.faces, free, one);
     let faces = split_shared_sides(body, &es, p, faces);
     (faces, es)
 }
@@ -2390,11 +2379,7 @@ fn split_shared_sides(
     let redo = |(fi, pairs): &(usize, Vec<[P3; 2]>)| {
         (*fi, mesh_face_split(body, &body.faces[*fi], es, p, pairs))
     };
-    let redone: Vec<(usize, FaceMesh)> = if super::par::threads_for(todo.len(), true) {
-        todo.par_iter().map(redo).collect()
-    } else {
-        todo.iter().map(redo).collect()
-    };
+    let redone: Vec<(usize, FaceMesh)> = super::par::map_heavy(&todo, true, redo);
     for (fi, m) in redone {
         if !m.indices.is_empty() {
             faces[fi] = m;

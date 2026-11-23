@@ -250,11 +250,8 @@ fn fit(
     // Values (weighted) at the sites, rows along the first parameter, one column per (j, c).
     // (Each site a root of the corner's equation, found on its own: side by side, the same
     // values whatever the threads.)
-    use rayon::prelude::*;
-    let pts: Vec<[f64; 3]> = (0..nu * nv)
-        .into_par_iter()
-        .map(|k| f(at[0][k / nv], at[1][k % nv]))
-        .collect();
+    let sites: Vec<usize> = (0..nu * nv).collect();
+    let pts: Vec<[f64; 3]> = super::par::map(&sites, |&k| f(at[0][k / nv], at[1][k % nv]));
     let mut vals = DMatrix::zeros(nu, nv * 3);
     for i in 0..nu {
         for j in 0..nv {

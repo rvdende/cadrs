@@ -9,7 +9,6 @@ use super::math::*;
 use super::nurbs::NurbsCurve;
 use super::surface::Surface;
 use super::tol;
-use rayon::prelude::*;
 
 /// A piece of an intersection curve.
 #[derive(Debug, Clone)]
@@ -2401,7 +2400,6 @@ fn fit_curve(
     let mut worst = 0.0f64;
     let mut by_chords: Option<(Vec<super::ssi_numeric::Pt>, f64)> = None;
     let many = !crate::native::env_flag!("CADRS_FIT_HALVING");
-    super::par::start();
     while rounds < 6 || (!sharp && worst > SWING && !crate::native::env_flag!("CADRS_FIT_CHORDS")) {
         if rounds == 6 {
             by_chords = Some((pts.clone(), worst));
@@ -2413,95 +2411,92 @@ fn fit_curve(
         worst = 0.0;
         // (A span off by `off` takes (off/tol)^¼ pieces, a cubic's error falling as the fourth
         // power of its span: all its points at once, not a halving a round.)
-        let found: Vec<Vec<(usize, super::ssi_numeric::Pt, f64)>> = (0..pts.len() - 1)
-            .into_par_iter()
-            .map(|k| {
-                if (k == 0 && fixed_ends[0]) || (k == last && fixed_ends[1]) {
-                    return Vec::new();
-                }
-                let q = c.point((t[k] + t[k + 1]) / 2.0);
-                let chord = (pts[k + 1].p - pts[k].p).norm();
-                if chord <= tol::POINT {
-                    return Vec::new();
-                }
-                // A point between the span's ends is theirs however far the fit swung off it, as
-                // a cubic does round a hairpin where two branches meet: within its chord of both,
-                // or between them in the parameters of the surface the curve was traced over and
-                // within three chords of both (a hairpin's tip lies out beyond both ends in space,
-                // its parameters between; the parameters alone are no bound near a cone's apex).
-                let between = |x: &super::ssi_numeric::Pt| {
-                    let near =
-                        (x.p - pts[k].p).norm() <= chord && (x.p - pts[k + 1].p).norm() <= chord;
-                    let within = |x: f64, lo: f64, hi: f64| {
-                        let pad = 1e-9 * (1.0 + lo.abs().max(hi.abs()));
-                        x >= lo.min(hi) - pad && x <= lo.max(hi) + pad
-                    };
-                    let (p0, p1) = (pts[k].a, pts[k + 1].a);
-                    let un = |x: f64, on: bool| if on { unwrap_near(x, p0.0, TAU) } else { x };
-                    let vn = |x: f64, on: bool| if on { unwrap_near(x, p0.1, TAU) } else { x };
-                    let (up, vp) = (a.u_periodic(), a.v_periodic());
-                    let reach = (x.p - pts[k].p).norm().max((x.p - pts[k + 1].p).norm());
-                    near || (reach <= 3.0 * chord
-                        && within(un(x.a.0, up), p0.0, un(p1.0, up))
-                        && within(vn(x.a.1, vp), p0.1, vn(p1.1, vp)))
+        let spans: Vec<usize> = (0..pts.len() - 1).collect();
+        let found: Vec<Vec<(usize, super::ssi_numeric::Pt, f64)>> = super::par::map(&spans, |&k| {
+            if (k == 0 && fixed_ends[0]) || (k == last && fixed_ends[1]) {
+                return Vec::new();
+            }
+            let q = c.point((t[k] + t[k + 1]) / 2.0);
+            let chord = (pts[k + 1].p - pts[k].p).norm();
+            if chord <= tol::POINT {
+                return Vec::new();
+            }
+            // A point between the span's ends is theirs however far the fit swung off it, as
+            // a cubic does round a hairpin where two branches meet: within its chord of both,
+            // or between them in the parameters of the surface the curve was traced over and
+            // within three chords of both (a hairpin's tip lies out beyond both ends in space,
+            // its parameters between; the parameters alone are no bound near a cone's apex).
+            let between = |x: &super::ssi_numeric::Pt| {
+                let near = (x.p - pts[k].p).norm() <= chord && (x.p - pts[k + 1].p).norm() <= chord;
+                let within = |x: f64, lo: f64, hi: f64| {
+                    let pad = 1e-9 * (1.0 + lo.abs().max(hi.abs()));
+                    x >= lo.min(hi) - pad && x <= lo.max(hi) + pad
                 };
-                let exact = super::ssi_numeric::refine_between(a, b, &pts[k], &pts[k + 1], &q)
-                    .filter(|x| (x.p - q).norm() < 0.5 * chord || between(x));
-                if crate::native::env_flag!("CADRS_FIT_DEBUG")
-                    && a.distance(&q).max(b.distance(&q)) > 1e-6
-                {
-                    eprintln!(
-                        "fit: span {k} of {}: the fit off by {:.1e} on a chord of {chord:.1e}, {}",
-                        pts.len(),
-                        a.distance(&q).max(b.distance(&q)),
-                        if exact.is_some() {
-                            "refined"
-                        } else {
-                            "no point"
-                        }
-                    );
-                }
-                let Some(exact) = exact else {
-                    return Vec::new();
-                };
-                let off = (exact.p - q).norm();
-                if off <= tol {
-                    return Vec::new();
-                }
-                // (One point, the middle, where the fit swung off the span: a hairpin's.)
-                let m = if many && off < 0.5 * chord {
-                    ((off / tol).powf(0.25).ceil() as usize).clamp(2, 16)
-                } else {
-                    2
-                };
-                if m == 2 {
-                    return vec![(k + 1, exact, off)];
-                }
-                let mut got = Vec::with_capacity(m - 1);
-                for j in 1..m {
-                    let f = j as f64 / m as f64;
-                    let qj = c.point(t[k] + (t[k + 1] - t[k]) * f);
-                    match super::ssi_numeric::refine_at(a, b, &pts[k], &pts[k + 1], &qj, f) {
-                        // (Near where the fit puts it, as the middle's must be, and in order
-                        // along the span, each strictly past the last: not on a neighbouring
-                        // turn of a helix.)
-                        Some(p)
-                            if (p.p - qj).norm() < 0.5 * chord / m as f64
-                                && got.last().is_none_or(
-                                    |(_, l, _): &(usize, super::ssi_numeric::Pt, f64)| {
-                                        (p.p - pts[k].p).dot(&(pts[k + 1].p - pts[k].p))
-                                            > (l.p - pts[k].p).dot(&(pts[k + 1].p - pts[k].p))
-                                    },
-                                ) =>
-                        {
-                            got.push((k + 1, p, off))
-                        }
-                        _ => return vec![(k + 1, exact, off)],
+                let (p0, p1) = (pts[k].a, pts[k + 1].a);
+                let un = |x: f64, on: bool| if on { unwrap_near(x, p0.0, TAU) } else { x };
+                let vn = |x: f64, on: bool| if on { unwrap_near(x, p0.1, TAU) } else { x };
+                let (up, vp) = (a.u_periodic(), a.v_periodic());
+                let reach = (x.p - pts[k].p).norm().max((x.p - pts[k + 1].p).norm());
+                near || (reach <= 3.0 * chord
+                    && within(un(x.a.0, up), p0.0, un(p1.0, up))
+                    && within(vn(x.a.1, vp), p0.1, vn(p1.1, vp)))
+            };
+            let exact = super::ssi_numeric::refine_between(a, b, &pts[k], &pts[k + 1], &q)
+                .filter(|x| (x.p - q).norm() < 0.5 * chord || between(x));
+            if crate::native::env_flag!("CADRS_FIT_DEBUG")
+                && a.distance(&q).max(b.distance(&q)) > 1e-6
+            {
+                eprintln!(
+                    "fit: span {k} of {}: the fit off by {:.1e} on a chord of {chord:.1e}, {}",
+                    pts.len(),
+                    a.distance(&q).max(b.distance(&q)),
+                    if exact.is_some() {
+                        "refined"
+                    } else {
+                        "no point"
                     }
+                );
+            }
+            let Some(exact) = exact else {
+                return Vec::new();
+            };
+            let off = (exact.p - q).norm();
+            if off <= tol {
+                return Vec::new();
+            }
+            // (One point, the middle, where the fit swung off the span: a hairpin's.)
+            let m = if many && off < 0.5 * chord {
+                ((off / tol).powf(0.25).ceil() as usize).clamp(2, 16)
+            } else {
+                2
+            };
+            if m == 2 {
+                return vec![(k + 1, exact, off)];
+            }
+            let mut got = Vec::with_capacity(m - 1);
+            for j in 1..m {
+                let f = j as f64 / m as f64;
+                let qj = c.point(t[k] + (t[k + 1] - t[k]) * f);
+                match super::ssi_numeric::refine_at(a, b, &pts[k], &pts[k + 1], &qj, f) {
+                    // (Near where the fit puts it, as the middle's must be, and in order
+                    // along the span, each strictly past the last: not on a neighbouring
+                    // turn of a helix.)
+                    Some(p)
+                        if (p.p - qj).norm() < 0.5 * chord / m as f64
+                            && got.last().is_none_or(
+                                |(_, l, _): &(usize, super::ssi_numeric::Pt, f64)| {
+                                    (p.p - pts[k].p).dot(&(pts[k + 1].p - pts[k].p))
+                                        > (l.p - pts[k].p).dot(&(pts[k + 1].p - pts[k].p))
+                                },
+                            ) =>
+                    {
+                        got.push((k + 1, p, off))
+                    }
+                    _ => return vec![(k + 1, exact, off)],
                 }
-                got
-            })
-            .collect();
+            }
+            got
+        });
         let ins: Vec<(usize, super::ssi_numeric::Pt)> = found
             .into_iter()
             .flatten()
@@ -2582,47 +2577,48 @@ fn thinned(
             None,
             None,
         )));
-        let add: Vec<usize> = (0..idx.len() - 1)
-            .into_par_iter()
-            .filter_map(|w| {
-                let (i, j) = (idx[w], idx[w + 1]);
-                (i + 1..j)
-                    .map(|k| {
-                        // The curve's point nearest the left-out one: Newton from where it
-                        // falls between its kept neighbours by count (the tracer's points
-                        // are spread evenly), the sampled search only where that leaves the
-                        // span or meets a stretch curving the wrong way.
-                        let (t0, t1) = (t[w], t[w + 1]);
-                        let mut s = t0 + (t1 - t0) * (k - i) as f64 / (j - i) as f64;
-                        let mut found = false;
-                        for _ in 0..8 {
-                            let (q, d1, d2) = c.d2(s);
-                            let r = q - pts[k].p;
-                            let df = d1.norm_squared() + r.dot(&d2);
-                            if !(df > 0.0) {
-                                break;
-                            }
-                            let step = r.dot(&d1) / df;
-                            let ns = s - step;
-                            if !(ns >= t0 && ns <= t1) {
-                                break;
-                            }
-                            s = ns;
-                            if step.abs() <= 1e-12 * (t1 - t0) {
-                                found = true;
-                                break;
-                            }
+        let spans: Vec<usize> = (0..idx.len() - 1).collect();
+        let add: Vec<usize> = super::par::map(&spans, |&w| {
+            let (i, j) = (idx[w], idx[w + 1]);
+            (i + 1..j)
+                .map(|k| {
+                    // The curve's point nearest the left-out one: Newton from where it
+                    // falls between its kept neighbours by count (the tracer's points
+                    // are spread evenly), the sampled search only where that leaves the
+                    // span or meets a stretch curving the wrong way.
+                    let (t0, t1) = (t[w], t[w + 1]);
+                    let mut s = t0 + (t1 - t0) * (k - i) as f64 / (j - i) as f64;
+                    let mut found = false;
+                    for _ in 0..8 {
+                        let (q, d1, d2) = c.d2(s);
+                        let r = q - pts[k].p;
+                        let df = d1.norm_squared() + r.dot(&d2);
+                        if !(df > 0.0) {
+                            break;
                         }
-                        if !found {
-                            s = c.closest(&pts[k].p, t0, t1);
+                        let step = r.dot(&d1) / df;
+                        let ns = s - step;
+                        if !(ns >= t0 && ns <= t1) {
+                            break;
                         }
-                        ((c.point(s) - pts[k].p).norm(), k)
-                    })
-                    .filter(|&(d, _)| d > tol)
-                    .max_by(|x, y| x.0.total_cmp(&y.0))
-                    .map(|(_, k)| k)
-            })
-            .collect();
+                        s = ns;
+                        if step.abs() <= 1e-12 * (t1 - t0) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        s = c.closest(&pts[k].p, t0, t1);
+                    }
+                    ((c.point(s) - pts[k].p).norm(), k)
+                })
+                .filter(|&(d, _)| d > tol)
+                .max_by(|x, y| x.0.total_cmp(&y.0))
+                .map(|(_, k)| k)
+        })
+        .into_iter()
+        .flatten()
+        .collect();
         if add.is_empty() {
             return idx.into_iter().map(|i| pts[i]).collect();
         }

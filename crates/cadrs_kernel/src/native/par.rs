@@ -57,6 +57,89 @@ pub(crate) fn threads_for_some(n: usize) -> bool {
     false
 }
 
+/// Work left in a loop (by its items so far) past which the threads are worth starting: about
+/// what starting them costs, with the first loop's waking.
+const COLD: f64 = 1.0e-3;
+
+/// Work left in a loop past which threads that are running are worth handing it to: about what
+/// the hand-over and the wait for its end cost from a thread outside the pool.
+const WARMED: f64 = 4.0e-5;
+
+/// `f` of each of `items`, in their order: on the caller's thread while the work left looks
+/// small, on rayon's threads from the item where it looks worth them. The work left is what the
+/// items done took, each, times those to come, so a loop of a few microseconds never starts the
+/// threads or waits on them, whatever its items are, and a loop whose first item takes a
+/// millisecond has the rest side by side. (A loop inside one of the threads' own jobs is split
+/// at once: that costs it nothing.)
+#[track_caller]
+pub(crate) fn map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    use rayon::prelude::*;
+    let n = items.len();
+    if n < 2 {
+        return items.iter().map(f).collect();
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if rayon::current_thread_index().is_some() {
+        return items.par_iter().map(&f).collect();
+    }
+    serial_then_threads(items, f)
+}
+
+/// [`map`] for items the caller knows are `heavy` (a millisecond each, about: a fillet's edge,
+/// a numeric surface intersection, a B-spline face's integrals): on the threads from the first
+/// where they are running or the items are [`HEAVY`] or more, since finding out by running one
+/// alone costs a whole item. Light items, and a few heavy ones before the threads are up, go as
+/// [`map`]'s do.
+#[track_caller]
+pub(crate) fn map_heavy<T: Sync, R: Send>(
+    items: &[T],
+    heavy: bool,
+    f: impl Fn(&T) -> R + Sync,
+) -> Vec<R> {
+    use rayon::prelude::*;
+    if heavy && threads_for(items.len(), true) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if rayon::current_thread_index().is_none() && rayon::current_num_threads() < 2 {
+            return items.iter().map(f).collect();
+        }
+        return items.par_iter().map(&f).collect();
+    }
+    map(items, f)
+}
+
+#[track_caller]
+fn serial_then_threads<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    use rayon::prelude::*;
+    let n = items.len();
+    let mut out: Vec<R> = Vec::with_capacity(n);
+    let t = web_time::Instant::now();
+    for (i, item) in items.iter().enumerate() {
+        out.push(f(item));
+        let left = n - i - 1;
+        if left < 2 {
+            continue;
+        }
+        let ahead = t.elapsed().as_secs_f64() / (i + 1) as f64 * left as f64;
+        let worth = if WARM.load(Ordering::Relaxed) {
+            WARMED
+        } else {
+            COLD
+        };
+        if ahead > worth {
+            start();
+            // (On one thread the hand-over to it and back costs more than it saves.)
+            #[cfg(not(target_arch = "wasm32"))]
+            if rayon::current_num_threads() < 2 {
+                out.extend(items[i + 1..].iter().map(&f));
+                break;
+            }
+            out.par_extend(items[i + 1..].par_iter().map(&f));
+            break;
+        }
+    }
+    out
+}
+
 /// Makes rayon's global pool (once) with its threads started on a thread of their own, so the
 /// caller goes on as soon as the pool exists: its first job waits for one thread to start, not
 /// for all of them. Called before each of the kernel's parallel loops (the first does the work).

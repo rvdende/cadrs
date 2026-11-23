@@ -3382,11 +3382,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         let m = meet(pr);
         (m, t.elapsed().as_secs_f64())
     };
-    let meets: Vec<(Meet, f64)> = if super::par::threads_for(near_pairs.len(), numeric) {
-        near_pairs.par_iter().map(meet_timed).collect()
-    } else {
-        near_pairs.iter().map(meet_timed).collect()
-    };
+    let meets: Vec<(Meet, f64)> = super::par::map_heavy(&near_pairs, numeric, meet_timed);
     if timed {
         let mut order: Vec<usize> = (0..meets.len()).collect();
         order.sort_by(|&a, &b| meets[b].1.total_cmp(&meets[a].1));
@@ -3750,11 +3746,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             PairIs::Crossing
         }
     };
-    let told: Vec<PairIs> = if super::par::threads_for(near_pairs.len(), true) {
-        near_pairs.par_iter().map(tell).collect()
-    } else {
-        near_pairs.iter().map(tell).collect()
-    };
+    let told: Vec<PairIs> = super::par::map(&near_pairs, tell);
     let mut pairs: Vec<(usize, usize)> = Vec::new();
     for (&(fa, fb), is) in near_pairs.iter().zip(told) {
         match is {
@@ -3778,7 +3770,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     );
     let mut ssis: Vec<Found> = Vec::with_capacity(pairs.len());
     PAIRS.fetch_add(pairs.len() as u64, std::sync::atomic::Ordering::Relaxed);
-    // (On the threads when the pairs are many or one is numeric: see `par`.)
+    // (On the threads when a pair is numeric, or the pairs take long enough: see `par`.)
     let free = |f: usize| {
         matches!(
             faces[f].surf,
@@ -3786,7 +3778,6 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         )
     };
     let numeric = pairs.iter().any(|&(fa, fb)| free(fa) || free(fb));
-    let threads = super::par::threads_for(pairs.len(), numeric);
     for chunk in pairs.chunks(64) {
         let one = |&(fa, fb): &(usize, usize)| {
             let t = web_time::Instant::now();
@@ -3802,11 +3793,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             );
             ((r.curves, r.singular, t.elapsed(), r.coincident), r.work)
         };
-        let done: Vec<(Found, u64)> = if threads {
-            chunk.par_iter().map(one).collect()
-        } else {
-            chunk.iter().map(one).collect()
-        };
+        let done: Vec<(Found, u64)> = super::par::map_heavy(chunk, numeric, one);
         work.spend(done.iter().map(|d| d.1).sum(), "surface intersection")?;
         ssis.extend(done.into_iter().map(|(f, _)| f));
     }
@@ -4903,12 +4890,10 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         }
         r
     };
-    let cut_faces = cuts.iter().filter(|c| !c.is_empty()).count();
-    let split: Vec<(Vec<Vec<Vec<Arc>>>, u64)> = if super::par::threads_for_some(cut_faces) {
-        (0..faces.len()).into_par_iter().map(timed_split).collect()
-    } else {
-        (0..faces.len()).map(timed_split).collect()
-    };
+    let split: Vec<(Vec<Vec<Vec<Arc>>>, u64)> =
+        super::par::map(&(0..faces.len()).collect::<Vec<usize>>(), |&i| {
+            timed_split(i)
+        });
     for (fi, (made, spent)) in split.into_iter().enumerate() {
         work.spend(spent, "face splitting")?;
         for lps in made {
@@ -5068,11 +5053,8 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             (true, Some(at), on_other(*fi, at))
         }
     };
-    let ready: Vec<Ready> = if super::par::threads_for(subs.len() / 16, true) {
-        (0..subs.len()).into_par_iter().map(ready_one).collect()
-    } else {
-        (0..subs.len()).map(ready_one).collect()
-    };
+    let ready: Vec<Ready> =
+        super::par::map(&(0..subs.len()).collect::<Vec<usize>>(), |&i| ready_one(i));
     for (sk, (fi, loops)) in subs.into_iter().enumerate() {
         let f = &faces[fi];
         if imprinting {

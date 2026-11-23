@@ -1161,7 +1161,6 @@ impl Body {
             errs.extend(self.check_ends_on_faces(&fully));
             errs.extend(self.check_shells());
             // (Each face's on its own, in parallel; their problems in face order.)
-            use rayon::prelude::*;
             let one = |fi: usize| {
                 if fully(fi) {
                     self.check_face_domain(fi)
@@ -1169,11 +1168,8 @@ impl Body {
                     Vec::new()
                 }
             };
-            let domain: Vec<Vec<String>> = if super::par::threads_for(self.faces.len(), false) {
-                (0..self.faces.len()).into_par_iter().map(one).collect()
-            } else {
-                (0..self.faces.len()).map(one).collect()
-            };
+            let domain: Vec<Vec<String>> =
+                super::par::map(&(0..self.faces.len()).collect::<Vec<usize>>(), |&i| one(i));
             errs.extend(domain.into_iter().flatten());
             if errs.is_empty() {
                 let marked = |f: usize| only.is_none_or(|c| c.get(f).copied().unwrap_or(true));
@@ -1506,32 +1502,27 @@ impl Body {
     /// a degenerate edge), in order: for a caller that raises tolerances further by them. The
     /// faces are measured in parallel.
     pub(crate) fn fit_tolerances_searched_gaps(&mut self, cap: f64) -> Vec<Vec<(usize, f64)>> {
-        use rayon::prelude::*;
         self.fit_tolerances(cap);
         // Each face's coedges' gaps (edge, gap) and its loops' ends' (vertex, distance).
         type Measured = (Vec<(usize, f64)>, Vec<(usize, f64)>);
-        let measured: Vec<Measured> = self
-            .faces
-            .par_iter()
-            .map(|f| {
-                let mut surface_key = None;
-                let (mut gaps, mut ends) = (Vec::new(), Vec::new());
-                for c in f.loops.iter().flatten() {
-                    let e = &self.edges[c.edge];
-                    if !e.degenerate {
-                        gaps.push((c.edge, pcurve_gap_kept(e, &c.pc, &f.surf, &mut surface_key)));
-                    }
-                    for k in 0..2 {
-                        let uv = c.pc.point(e.t[k]);
-                        let d = (f.surf.eval(uv.x, uv.y) - self.verts[e.v[k]].p).norm();
-                        if d.is_finite() {
-                            ends.push((e.v[k], d));
-                        }
+        let measured: Vec<Measured> = super::par::map(&self.faces, |f| {
+            let mut surface_key = None;
+            let (mut gaps, mut ends) = (Vec::new(), Vec::new());
+            for c in f.loops.iter().flatten() {
+                let e = &self.edges[c.edge];
+                if !e.degenerate {
+                    gaps.push((c.edge, pcurve_gap_kept(e, &c.pc, &f.surf, &mut surface_key)));
+                }
+                for k in 0..2 {
+                    let uv = c.pc.point(e.t[k]);
+                    let d = (f.surf.eval(uv.x, uv.y) - self.verts[e.v[k]].p).norm();
+                    if d.is_finite() {
+                        ends.push((e.v[k], d));
                     }
                 }
-                (gaps, ends)
-            })
-            .collect();
+            }
+            (gaps, ends)
+        });
         let mut etol = vec![0.0f64; self.edges.len()];
         let mut vtol = vec![0.0f64; self.verts.len()];
         for (gaps, ends) in &measured {

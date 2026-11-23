@@ -334,15 +334,9 @@ pub(crate) fn face_points(b: &Body, fi: usize, _size: f64) -> Vec<(P3, V3)> {
             })
             .collect()
     };
-    let mut uvs: Vec<P2> = if super::par::threads_for(n + 1, pieces.len() >= 64) {
-        use rayon::prelude::*;
-        (0..=n)
-            .into_par_iter()
-            .map(row)
-            .collect::<Vec<_>>()
-            .concat()
-    } else {
-        (0..=n).flat_map(row).collect()
+    let mut uvs: Vec<P2> = {
+        let rows: Vec<usize> = (0..=n).collect();
+        super::par::map(&rows, |&i| row(i)).concat()
     };
     // A sliver with no point clear of its outline: the outline's own points.
     if uvs.is_empty() {
@@ -1093,8 +1087,6 @@ fn prepared_rising(
     // (most of the work where many faces need them: a coil's). A curve split keeps the other
     // faces' numbers, so they stay good until a split of another kind renumbers the faces.
     let mut traced: Vec<Option<Vec<Curve>>> = {
-        use rayon::prelude::*;
-        super::par::start();
         // (Not a slide's contacts with a plane, a cylinder, a cone or a sphere: those are
         // rulings and great circles, split along exactly below, and tracing them here was a
         // third of a mill's slide.)
@@ -1113,10 +1105,10 @@ fn prepared_rising(
             .collect();
         if both.iter().filter(|b| **b).count() > 1 {
             let b = &body;
-            (0..b.faces.len())
-                .into_par_iter()
-                .map(|fi| both[fi].then(|| contact_curves(b, fi, &mv)))
-                .collect()
+            let ids: Vec<usize> = (0..b.faces.len()).collect();
+            super::par::map_heavy(&ids, true, |&fi| {
+                both[fi].then(|| contact_curves(b, fi, &mv))
+            })
         } else {
             Vec::new()
         }
@@ -2022,12 +2014,7 @@ pub(super) fn glued_with(
         let n = f.surf.normal(u, v) * if f.sense { 1.0 } else { -1.0 };
         (bi, fi, c, a, n)
     };
-    let faces: Vec<(usize, usize, P3, f64, V3)> = if super::par::threads_for(ids.len(), true) {
-        use rayon::prelude::*;
-        ids.par_iter().map(one).collect()
-    } else {
-        ids.iter().map(one).collect()
-    };
+    let faces: Vec<(usize, usize, P3, f64, V3)> = super::par::map_heavy(&ids, true, one);
     let mut dropped = vec![false; faces.len()];
     for i in 0..faces.len() {
         if dropped[i] {
