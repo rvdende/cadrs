@@ -99,6 +99,7 @@ impl Plugin for DocumentPlugin {
             .add_observer(on_feature_context_menu)
             .add_observer(on_error_icon_click)
             .add_observer(on_feature_menu_action)
+            .add_observer(on_origin_eye)
             .add_observer(on_plane_eye)
             .add_observer(on_sketch_eye)
             .add_observer(restore_name_button::<InlineEditCommit>)
@@ -2426,6 +2427,13 @@ fn feature_list(p: &mut ChildSpawnerCommands, t: &Theme, element: ElementId, hei
                                             .icon("origin", 12.0)
                                             .icon_color(Color::srgb_u8(0x44, 0x44, 0x44))
                                             .left(22.0)
+                                            // Hides and shows the origin in the view.
+                                            .toggle(
+                                                "feature-origin-visibility",
+                                                "visible",
+                                                "hidden",
+                                                true,
+                                            )
                                             .build(t),
                                         PickRow(Pick::Origin),
                                     ));
@@ -5421,6 +5429,14 @@ fn on_sketch_eye(ev: On<cadrs_ui::TreeRowToggled>, q: Query<&FeatureRow>, mut co
             visible: Some(!shown),
         });
     });
+}
+
+/// The eye on the origin row hides the origin, or shows it again as it was drawn before
+/// (Preferences › Interface › Origin, saved).
+fn on_origin_eye(ev: On<cadrs_ui::TreeRowToggled>, q: Query<&PickRow>, mut commands: Commands) {
+    if let Ok(PickRow(Pick::Origin)) = q.get(ev.entity) {
+        commands.queue(crate::preferences_ui::toggle_origin);
+    }
 }
 
 /// The eye on a plane's row shows or hides that plane (S1.4).

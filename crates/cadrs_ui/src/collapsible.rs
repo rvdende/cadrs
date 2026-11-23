@@ -62,6 +62,7 @@ pub struct Collapsible {
     highlight: bool,
     header_height: f32,
     section: bool,
+    heading: bool,
     error: bool,
     content: Option<SpawnFn>,
     trailing: Option<SpawnFn>,
@@ -80,6 +81,7 @@ impl Collapsible {
             highlight: false,
             header_height: 33.0,
             section: false,
+            heading: false,
             error: false,
             content: None,
             trailing: None,
@@ -121,6 +123,14 @@ impl Collapsible {
     pub fn section(mut self) -> Self {
         self.section = true;
         self.header_height = 26.0;
+        self
+    }
+
+    /// A settings page's section (Preferences): a small chevron, the label in small muted
+    /// capitals and a thin rule to the right edge; the rows under it flush with the label.
+    pub fn heading(mut self) -> Self {
+        self.heading = true;
+        self.header_height = 30.0;
         self
     }
 
@@ -166,6 +176,7 @@ impl Collapsible {
             highlight,
             header_height,
             section,
+            heading,
             error,
             content,
             trailing,
@@ -186,9 +197,13 @@ impl Collapsible {
                 let root = p.target_entity();
                 let fg = if error {
                     theme.feature_error
+                } else if heading {
+                    theme.muted_foreground
                 } else {
                     theme.foreground
                 };
+                // A heading is laid out as a section is (flush, small chevron).
+                let section = section || heading;
                 let base_bg = match (header_background, highlight) {
                     (Some(c), _) => c,
                     (None, true) => theme.list_hover,
@@ -236,7 +251,13 @@ impl Collapsible {
                                 "chevron-right"
                             },
                             // P3I.2 judge: 12 px read far smaller than Onshape's chevrons.
-                            if section { 20.0 } else { 14.0 },
+                            if heading {
+                                14.0
+                            } else if section {
+                                20.0
+                            } else {
+                                14.0
+                            },
                             fg,
                         ),
                         CollapsibleChevron(root),
@@ -266,11 +287,39 @@ impl Collapsible {
                     } else {
                         FontWeight::BOLD
                     };
-                    h.spawn((
-                        theme.text(label, theme.font_base, weight, fg),
-                        InheritFg,
-                        Pickable::IGNORE,
-                    ));
+                    if heading {
+                        h.spawn((
+                            theme.text(
+                                label.to_uppercase(),
+                                theme.font_xs,
+                                FontWeight::SEMIBOLD,
+                                fg,
+                            ),
+                            InheritFg,
+                            Pickable::IGNORE,
+                            Node {
+                                margin: UiRect::right(Val::Px(theme.space[2])),
+                                ..default()
+                            },
+                        ));
+                        if trailing.is_none() {
+                            h.spawn((
+                                Node {
+                                    flex_grow: 1.0,
+                                    height: Val::Px(1.0),
+                                    ..default()
+                                },
+                                BackgroundColor(theme.separator),
+                                Pickable::IGNORE,
+                            ));
+                        }
+                    } else {
+                        h.spawn((
+                            theme.text(label, theme.font_base, weight, fg),
+                            InheritFg,
+                            Pickable::IGNORE,
+                        ));
+                    }
                     if let Some(f) = trailing {
                         h.spawn(Node {
                             flex_grow: 1.0,
@@ -281,7 +330,15 @@ impl Collapsible {
                         .with_children(|t| f(t));
                     }
                 });
-                let node = if flush {
+                let node = if heading {
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        padding: UiRect::new(Val::Px(18.0), Val::ZERO, Val::Px(4.0), Val::Px(12.0)),
+                        row_gap: Val::Px(4.0),
+                        display: if open { Display::Flex } else { Display::None },
+                        ..default()
+                    }
+                } else if flush {
                     Node {
                         flex_direction: FlexDirection::Column,
                         display: if open { Display::Flex } else { Display::None },
@@ -312,7 +369,7 @@ impl Collapsible {
                         ..default()
                     }
                 };
-                let line = if section {
+                let line = if section && !heading {
                     Color::srgb_u8(0xd4, 0xd4, 0xd8)
                 } else {
                     Color::NONE

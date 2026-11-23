@@ -1,0 +1,62 @@
+// The Preferences dialog in sections (the sections on the left, the search in the title bar,
+// Restore Defaults, Cancel, Apply and OK), and Interface's grid and origin.
+// 01 Interface: Appearance, Grid and origin, Display; the grid behind it is Lines (the default).
+// 02 Grid › Crossed: previewed behind the dialog at once; Apply is enabled.
+// 03 Origin › Axes: red, green and blue lines at the origin instead of the bullseye.
+// 04-07 Navigation, Assembly, Collaboration, AI assistants.
+// 08 "snap" in the search: the settings that match, from every section, under their section.
+// 09 Cancel: the grid is Lines again and the origin a bullseye.
+// 10 `grid crossed` and `origin axes`: the schematic's crosses, and X, Y, Z in red, green, blue.
+// 11 `grid off` and `origin hidden`: no grid and no origin.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(10),
+        Click(ui("app-menu")),
+        WaitFor("app-preferences"),
+        Click(ui("app-preferences")),
+        WaitFor("preferences-dialog"),
+        ExpectText("pref-page-title", "Interface"),
+        Wait(5),
+        Screenshot("01-interface"),
+        Click(ui("pref-grid")),
+        WaitFor("pref-grid-option-1"),
+        Click(ui("pref-grid-option-1")),
+        Wait(5),
+        Screenshot("02-grid-crossed-previewed"),
+        Click(ui("pref-origin")),
+        WaitFor("pref-origin-option-2"),
+        Click(ui("pref-origin-option-2")),
+        Wait(5),
+        Screenshot("03-origin-axes"),
+        Click(ui("pref-section-navigation")),
+        ExpectText("pref-page-title", "Navigation"),
+        Wait(3),
+        Screenshot("04-navigation"),
+        Click(ui("pref-section-assembly")),
+        Wait(3),
+        Screenshot("05-assembly"),
+        Click(ui("pref-section-collaboration")),
+        Wait(3),
+        Screenshot("06-collaboration"),
+        Click(ui("pref-section-assistants")),
+        Wait(3),
+        Screenshot("07-assistants"),
+        Click(ui("pref-search-field")),
+        Type("snap"),
+        Wait(5),
+        Screenshot("08-search"),
+        Click(ui("pref-cancel")),
+        Wait(5),
+        Screenshot("09-cancelled"),
+        Custom("grid crossed"),
+        Custom("origin axes"),
+        Wait(5),
+        Screenshot("10-crossed-and-axes"),
+        Custom("grid off"),
+        Custom("origin hidden"),
+        Wait(5),
+        Screenshot("11-no-grid-no-origin"),
+    ],
+)

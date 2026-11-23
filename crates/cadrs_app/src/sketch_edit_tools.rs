@@ -1617,6 +1617,7 @@ mod tests {
                 before: None,
                 waiting_for_plane: false,
                 plane_extent: Vec2::splat(100.0),
+                plane_center: Vec2::ZERO,
                 prompted: false,
                 show_final: false,
             })

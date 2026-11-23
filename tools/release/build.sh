@@ -23,8 +23,10 @@ toolchain="$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)"
 image="cadrs-linux-build:$toolchain"
 dist="$root/dist"
 echo "cadrs v$version"
-# Whole-crate builds, not .cargo/config.toml's incremental ones.
+# Whole-crate builds, not .cargo/config.toml's incremental ones, with fat LTO (the config turns
+# LTO off for local builds), as release.yml builds them.
 export CARGO_INCREMENTAL=0
+export CARGO_PROFILE_RELEASE_LTO=fat
 
 if ! docker image inspect "$image" >/dev/null 2>&1; then
     docker build -t "$image" --build-arg "TOOLCHAIN=$toolchain" tools/release
@@ -47,6 +49,7 @@ docker run --rm \
     -e CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=cc \
     -e RUSTFLAGS= \
     -e CARGO_INCREMENTAL=0 \
+    -e CARGO_PROFILE_RELEASE_LTO=fat \
     -e RUSTUP_TOOLCHAIN="$toolchain" \
     "$image" cargo build --release --locked -p cadrs
 

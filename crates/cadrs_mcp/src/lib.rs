@@ -74,6 +74,11 @@ pub enum Call {
     RunScenario(RunScenario),
     CreateDrawing(CreateDrawing),
     AddAnnotation(AddAnnotation),
+    AddView(AddView),
+    EditView(EditView),
+    AddSectionView(AddSectionView),
+    AddNote(AddNote),
+    ShowSection(ShowSection),
     RenameTab(RenameTab),
     DeleteTab(TabName),
     OpenTab(TabName),
@@ -280,7 +285,7 @@ impl Cadrs {
         their most in one frame and runs a frame), and the GPU ms of the slowest render passes. The CPU \
         times are only there when cadrs started with them on (profile.cpu.timed; they slow it down): \
         the Time systems preference, or CADRS_FRAME_PROFILE=1. The panel at the bottom left of the 3D \
-        view shows the same (F12 steps through it, the fps line, nothing)."
+        view shows the same when the frame_stats preference asks for it (set_preferences)."
     )]
     async fn get_frame_stats(
         &self,
@@ -322,6 +327,65 @@ impl Cadrs {
         Parameters(p): Parameters<AddAnnotation>,
     ) -> Result<CallToolResult, ErrorData> {
         self.call(Call::AddAnnotation(p)).await
+    }
+
+    #[tool(
+        description = "Add a view of the Part Studio to a drawing's sheet, seen along any direction (dir: eye into the \
+        model; x: the model direction pointing right on the sheet) with the model origin at `anchor` (sheet mm from the \
+        bottom-left corner), optionally with hidden lines, shading, its own scale and a turn on the sheet. \
+        create_drawing with four_views false gives an empty sheet to lay out. Returns the view."
+    )]
+    async fn add_view(
+        &self,
+        Parameters(p): Parameters<AddView>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::AddView(p)).await
+    }
+
+    #[tool(
+        description = "Change a view of a drawing: move it (anchor), rename it, set its scale, hidden lines, shading \
+        or turn, free it from its parent's alignment, or delete it. Returns the drawing's views."
+    )]
+    async fn edit_view(
+        &self,
+        Parameters(p): Parameters<EditView>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::EditView(p)).await
+    }
+
+    #[tool(
+        description = "Add a section view of a drawing view, cut along the line a-b (the cut view's 2D model mm) and \
+        folded out towards the sheet point `at`: the material between the eye and the cutting plane is removed and \
+        the cut faces are hatched; the cutting line with its letter is drawn on the parent. Returns the view."
+    )]
+    async fn add_section_view(
+        &self,
+        Parameters(p): Parameters<AddSectionView>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::AddSectionView(p)).await
+    }
+
+    #[tool(
+        description = "Add a text note to a drawing's sheet (technical requirements, a view's title), its top-left \
+        corner at `at` in sheet mm."
+    )]
+    async fn add_note(
+        &self,
+        Parameters(p): Parameters<AddNote>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::AddNote(p)).await
+    }
+
+    #[tool(
+        description = "Show a drawing's section view in the Part Studio it cuts: switches to the Part Studio, cuts \
+        the 3D view by the section's plane (the Section view cutaway) and looks at the cut as the drawing does. \
+        Without a name: lists the document's drawing sections (name, drawing, Part Studio, plane)."
+    )]
+    async fn show_section(
+        &self,
+        Parameters(p): Parameters<ShowSection>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::ShowSection(p)).await
     }
 
     #[tool(
@@ -625,7 +689,7 @@ impl Cadrs {
     }
 
     #[tool(
-        description = "Change this machine's preferences, as the Preferences dialog's OK does (they are saved): vsync (true: frames wait for the display's refresh; false: drawn as fast as they are made, so get_frame_stats shows what a frame costs). Give only what changes; it answers with all the preferences in force."
+        description = "Change this machine's preferences, as the Preferences dialog's OK does (they are saved): vsync (true: frames wait for the display's refresh; false: drawn as fast as they are made, so get_frame_stats shows what a frame costs); grid (off, crossed, lines); origin (hidden, dot, axes); frame_stats (off, fps, details: the panel at the view's bottom left). Give only what changes; it answers with all the preferences in force."
     )]
     async fn set_preferences(
         &self,

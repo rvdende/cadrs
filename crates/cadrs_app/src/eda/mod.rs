@@ -1118,10 +1118,22 @@ fn draw_grid_mesh(
                     "eda-grid-lines"
                 }),
                 GridMesh(cross),
-                Mesh2d(meshes.add(Mesh::new(
-                    bevy::mesh::PrimitiveTopology::TriangleList,
-                    bevy::asset::RenderAssetUsages::default(),
-                ))),
+                // One degenerate triangle until the grid is drawn: the renderer warns of a
+                // mesh with no vertices.
+                Mesh2d(
+                    meshes.add(
+                        Mesh::new(
+                            bevy::mesh::PrimitiveTopology::TriangleList,
+                            bevy::asset::RenderAssetUsages::default(),
+                        )
+                        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 3])
+                        .with_inserted_attribute(
+                            Mesh::ATTRIBUTE_NORMAL,
+                            vec![[0.0f32, 0.0, 1.0]; 3],
+                        )
+                        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0f32; 2]; 3]),
+                    ),
+                ),
                 MeshMaterial2d(materials.add(m)),
                 Transform::from_xyz(0.0, 0.0, z),
                 Visibility::Hidden,

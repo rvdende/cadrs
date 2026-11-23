@@ -1,21 +1,21 @@
 //! Frame rate: the real time between frames over the last couple of seconds ([`FrameStats`]),
 //! shown at the bottom left of the 3D view with where the frame's time goes
 //! ([`crate::frame_profile`]): the main thread's schedules as one bar, the slowest systems and
-//! the slowest GPU passes as bars of the frame. F12 steps through the "60 fps · 16.7 ms" line
-//! alone (to start, with the key's hint), the whole panel, and nothing (#69). The MCP tool `get_frame_stats` ([`crate::mcp`])
-//! returns the same, so a slow view can be measured at any time.
+//! the slowest GPU passes as bars of the frame. Preferences › Interface › *Frame stats* picks
+//! nothing (the default), the "60 fps · 16.7 ms" line alone, or the whole panel (#69;
+//! [`cadrs_core::preferences::FrameStatsMode`]). The MCP tool `get_frame_stats` ([`crate::mcp`])
+//! returns the same whatever is shown, so a slow view can be measured at any time.
 
 use std::collections::VecDeque;
 
-use bevy::input::ButtonState;
-use bevy::input::keyboard::KeyboardInput;
-use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
-use cadrs_ui::{ShortcutKey, Theme};
+use cadrs_core::preferences::FrameStatsMode;
+use cadrs_ui::Theme;
 use serde_json::{Value, json};
 
 use crate::AppState;
 use crate::frame_profile::{CpuProfiling, FrameProfile, Row, short_name};
+use crate::preferences_ui::LocalPreferences;
 
 /// How far back the stats look.
 const WINDOW_SECS: f64 = 2.0;
@@ -33,41 +33,7 @@ impl Plugin for FrameStatsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<FrameStats>()
             .add_systems(First, record_frame)
-            .add_systems(
-                Update,
-                (toggle_on_key, sync_panel)
-                    .chain()
-                    .run_if(in_state(AppState::Document)),
-            );
-    }
-}
-
-/// What the panel shows; F12 steps to the next.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PanelMode {
-    /// The frame rate line alone.
-    #[default]
-    Fps,
-    /// The frame rate and where the frame's time goes.
-    Profile,
-    Hidden,
-}
-
-impl PanelMode {
-    fn next(self) -> Self {
-        match self {
-            PanelMode::Fps => PanelMode::Profile,
-            PanelMode::Profile => PanelMode::Hidden,
-            PanelMode::Hidden => PanelMode::Fps,
-        }
-    }
-
-    /// What F12 does next, after the frame rate.
-    fn hint(self) -> &'static str {
-        match self {
-            PanelMode::Fps => "F12: details",
-            _ => "F12: hide",
-        }
+            .add_systems(Update, sync_panel.run_if(in_state(AppState::Document)));
     }
 }
 
@@ -75,7 +41,6 @@ impl PanelMode {
 #[derive(Resource, Debug, Default)]
 pub struct FrameStats {
     frames: VecDeque<(f64, f32)>,
-    pub mode: PanelMode,
 }
 
 impl FrameStats {
@@ -147,10 +112,6 @@ struct FrameStatsPanel;
 #[derive(Component)]
 struct FrameStatsText;
 
-/// What F12 does next, beside the frame rate.
-#[derive(Component)]
-struct FrameStatsHint;
-
 /// The bars under the frame rate, rebuilt as they change.
 #[derive(Component)]
 struct FrameProfileRows;
@@ -188,18 +149,11 @@ pub fn spawn_frame_stats(p: &mut ChildSpawnerCommands, t: &Theme) {
                 },
                 Pickable::IGNORE,
             ))
-            .with_children(|line| {
-                line.spawn((
-                    FrameStatsText,
-                    t.text("", t.font_sm, FontWeight::NORMAL, t.foreground),
-                    Pickable::IGNORE,
-                ));
-                line.spawn((
-                    FrameStatsHint,
-                    t.text("", t.font_sm, FontWeight::NORMAL, t.muted_foreground),
-                    Pickable::IGNORE,
-                ));
-            });
+            .with_child((
+                FrameStatsText,
+                t.text("", t.font_sm, FontWeight::NORMAL, t.foreground),
+                Pickable::IGNORE,
+            ));
         panel.spawn((
             Name::new("frame-profile"),
             FrameProfileRows,
@@ -211,25 +165,6 @@ pub fn spawn_frame_stats(p: &mut ChildSpawnerCommands, t: &Theme) {
             Pickable::IGNORE,
         ));
     });
-}
-
-/// F12 steps through the panel's modes (not while typing in a field).
-fn toggle_on_key(
-    mut keys_in: MessageReader<KeyboardInput>,
-    focus: Res<InputFocus>,
-    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
-    mut stats: ResMut<FrameStats>,
-) {
-    let typing = focus.get().is_some_and(|e| q_fields.contains(e));
-    for k in keys_in.read() {
-        if k.state == ButtonState::Pressed
-            && !k.repeat
-            && k.shortcut_code() == KeyCode::F12
-            && !typing
-        {
-            stats.mode = stats.mode.next();
-        }
-    }
 }
 
 /// Colours for the main loop's schedules, in turn.
@@ -245,14 +180,14 @@ const SCHEDULE_COLORS: [(u8, u8, u8); 6] = [
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn sync_panel(
     stats: Res<FrameStats>,
+    prefs: Res<LocalPreferences>,
     profile: Res<FrameProfile>,
     time: Res<Time<Real>>,
     theme: Res<Theme>,
-    mut last: Local<(f32, Option<PanelMode>)>,
+    mut last: Local<(f32, Option<FrameStatsMode>)>,
     mut commands: Commands,
     mut q_panel: Query<&mut Node, With<FrameStatsPanel>>,
-    mut q_text: Query<&mut Text, (With<FrameStatsText>, Without<FrameStatsHint>)>,
-    mut q_hint: Query<&mut Text, With<FrameStatsHint>>,
+    mut q_text: Query<&mut Text, With<FrameStatsText>>,
     q_rows: Query<Entity, With<FrameProfileRows>>,
     cpu: Res<CpuProfiling>,
     q_over: Query<
@@ -267,7 +202,8 @@ fn sync_panel(
 ) {
     // Out of the way while a menu, a name popup or a tab's card is up over it (a tab folder's
     // list left slivers of it showing either side).
-    let display = if stats.mode == PanelMode::Hidden || !q_over.is_empty() {
+    let mode = prefs.0.frame_stats;
+    let display = if mode == FrameStatsMode::Off || !q_over.is_empty() {
         Display::None
     } else {
         Display::Flex
@@ -279,22 +215,17 @@ fn sync_panel(
     }
     // Not on `stats` changing: the frame's time is written to it every frame.
     let now = time.elapsed_secs();
-    if last.1 == Some(stats.mode) && now - last.0 < LABEL_EVERY_SECS {
+    if mode == FrameStatsMode::Off || (last.1 == Some(mode) && now - last.0 < LABEL_EVERY_SECS) {
         return;
     }
-    *last = (now, Some(stats.mode));
+    *last = (now, Some(mode));
     for mut text in &mut q_text {
         text.0 = stats.label();
-    }
-    for mut text in &mut q_hint {
-        if text.0 != stats.mode.hint() {
-            text.0 = stats.mode.hint().into();
-        }
     }
     let t = &*theme;
     for rows in &q_rows {
         commands.entity(rows).despawn_children();
-        if stats.mode != PanelMode::Profile {
+        if mode != FrameStatsMode::Details {
             continue;
         }
         let s = profile.summary();

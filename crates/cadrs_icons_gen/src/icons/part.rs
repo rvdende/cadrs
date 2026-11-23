@@ -47,6 +47,12 @@ pub fn icons() -> Vec<Def> {
         ),
         def("measure", Solid, "Measure", measure),
         def("section-view", Solid, "Section view", section_view),
+        def(
+            "drawing-section",
+            Kind::Sketch,
+            "Drawing section",
+            drawing_section,
+        ),
         def("mass-properties", Solid, "Mass properties", mass_properties),
         def("part", Solid, "Part", part),
         def("sketch", Solid, "Sketch", sketch),
@@ -915,6 +921,25 @@ fn measure() -> Vec<String> {
             ACCENT,
             r#"stroke-width="1.4""#
         ),
+    ]
+}
+
+fn drawing_section() -> Vec<String> {
+    // A section view of a drawing, as its Part Studio lists it: the part's outline as the sheet
+    // shows it, and across it the cutting line with the arrows of its direction of sight (the
+    // accent: what the row shows in 3D).
+    let x = 10.0;
+    els![
+        rect(3.0, 6.5, 14.0, 11.0, 1.0, SOFT, ""),
+        line(
+            x,
+            3.0,
+            x,
+            21.0,
+            &format!(r#"stroke="{ACCENT}" {}"#, dash_dot(1.5))
+        ),
+        arrow(x, 3.0, x + 8.5, 3.0, 3.4, 3.4, ACCENT, ""),
+        arrow(x, 21.0, x + 8.5, 21.0, 3.4, 3.4, ACCENT, ""),
     ]
 }
 

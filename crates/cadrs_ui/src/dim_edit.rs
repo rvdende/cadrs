@@ -103,6 +103,23 @@ struct Colors {
 #[derive(Component, Debug, Clone, Copy)]
 pub struct DimEditField;
 
+/// On a [`DimEditField`] that opened on a formula of constants ("100/2"): the formula and its
+/// value as a plain number ("50 mm"), which the wheel steps while the formula is still the text
+/// ([`DimEdit::wheel_from`]).
+#[derive(Component, Debug, Clone, Default)]
+pub struct DimEditWheelFrom(Option<(String, String)>);
+
+impl DimEditWheelFrom {
+    /// The text the wheel steps when the field holds `text`: `text` itself, or the plain value
+    /// of the formula the field opened on while that is still its text.
+    fn stepped<'a>(&'a self, text: &'a str) -> &'a str {
+        match &self.0 {
+            Some((formula, plain)) if formula.trim() == text.trim() => plain,
+            _ => text,
+        }
+    }
+}
+
 /// The error message under a [`DimEditBox`].
 #[derive(Component, Debug, Clone, Copy)]
 pub struct DimEditMessage;
@@ -114,6 +131,7 @@ pub struct DimEdit {
     value: String,
     select: Option<usize>,
     variables: Vec<ListedVariable>,
+    wheel_from: Option<String>,
 }
 
 /// Measured in `screens/16b`: an 11 px handle strip, a 1 px separator and a 32 px value row.
@@ -134,7 +152,15 @@ impl DimEdit {
             value: value.into(),
             select: None,
             variables: Vec::new(),
+            wheel_from: None,
         }
+    }
+
+    /// The value as a plain number ("50 mm") of an editor that opens on a formula of constants
+    /// ("100/2"): the wheel, which doesn't step a formula, steps this instead (to "51 mm").
+    pub fn wheel_from(mut self, plain: Option<String>) -> Self {
+        self.wheel_from = plain;
+        self
     }
 
     /// The variables `#` lists.
@@ -236,6 +262,9 @@ impl DimEdit {
                         (
                             Name::new(format!("{name}-field")),
                             DimEditField,
+                            DimEditWheelFrom(
+                                self.wheel_from.map(|plain| (self.value.clone(), plain)),
+                            ),
                             // Under the box (the field's grandparent).
                             VariableList::new(self.variables)
                                 .new_variable(true)
@@ -329,11 +358,12 @@ pub enum DimEditButton {
 
 /// The mouse wheel over the box (its value focused) steps the value (issue #162,
 /// [`crate::dialog_fields::step_number_text`]) and offers it as a [`DimEditPreview`]; an
-/// expression isn't stepped.
+/// expression isn't stepped, but for the formula of constants the editor opened on, whose value
+/// is ([`DimEditWheelFrom`]).
 fn on_wheel(
     mut ev: On<PointerScroll>,
     q_box: Query<(), With<DimEditBox>>,
-    mut q_field: Query<(Entity, &mut EditableText), With<DimEditField>>,
+    mut q_field: Query<(Entity, &mut EditableText, Option<&DimEditWheelFrom>), With<DimEditField>>,
     focus: Res<InputFocus>,
     keys: Res<ButtonInput<KeyCode>>,
     mut rest: Local<(Option<Entity>, f32)>,
@@ -342,14 +372,17 @@ fn on_wheel(
     if !(q_box.contains(ev.entity) || q_field.contains(ev.entity)) {
         return;
     }
-    let Some((field, mut text)) = q_field.iter_mut().find(|(e, _)| focus.get() == Some(*e)) else {
+    let Some((field, mut text, from)) = q_field.iter_mut().find(|(e, ..)| focus.get() == Some(*e))
+    else {
         return;
     };
     ev.propagate(false);
     let Some(delta) = crate::dialog_fields::wheel_step(&ev, &keys, field, &mut rest) else {
         return;
     };
-    if let Some(next) = crate::dialog_fields::step_number_text(&text.value().to_string(), delta) {
+    let now = text.value().to_string();
+    let stepped = from.map_or(now.as_str(), |f| f.stepped(&now));
+    if let Some(next) = crate::dialog_fields::step_number_text(stepped, delta) {
         text.editor_mut().set_text(&next);
         text.queue_edit(TextEdit::SelectAll);
         commands.trigger(DimEditPreview {
@@ -489,5 +522,26 @@ fn style_boxes(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dialog_fields::step_number_text;
+
+    /// The wheel steps a formula of constants from its value, while the formula is the text.
+    #[test]
+    fn the_wheel_steps_a_formula_of_constants_from_its_value() {
+        let from = DimEditWheelFrom(Some(("100/2".into(), "50 mm".into())));
+        assert_eq!(step_number_text("100/2", 1.0), None);
+        assert_eq!(
+            step_number_text(from.stepped("100/2"), 1.0).as_deref(),
+            Some("51 mm")
+        );
+        // Stepped or typed over, the text is what steps.
+        assert_eq!(from.stepped("51 mm"), "51 mm");
+        assert_eq!(from.stepped("100/4"), "100/4");
+        assert_eq!(DimEditWheelFrom(None).stepped("100/2"), "100/2");
     }
 }

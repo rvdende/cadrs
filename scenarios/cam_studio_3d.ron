@@ -14,9 +14,6 @@ Scenario(
         // Generous: adaptive clearing and Verify of the dish take a while on a busy machine.
         SetTimeout(240),
         WaitFor("document-shell"),
-        // The frame-stats panel off (F12: profile, fps, hidden).
-        Key("F12"),
-        Key("F12"),
         Custom("reflector"),
         Wait(3),
         Click(ui("insert-tab")),

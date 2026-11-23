@@ -629,6 +629,9 @@ pub struct PartCache {
     pub curves: HashMap<FeatureId, cadrs_core::surfacing::CurveGeom>,
     /// Whether the connectors are shown (K), so they can be picked.
     pub connectors_shown: bool,
+    /// Whether the origin is hidden (Preferences › Interface › Origin), so it isn't picked in
+    /// the view.
+    pub origin_hidden: bool,
     /// Each pattern's instances and where their Skip dots go (P3.8).
     pub dots: HashMap<FeatureId, Vec<cadrs_core::pattern::InstanceDot>>,
     /// What each feature depends on beyond its references (P3.11, PS11.2; see
@@ -4945,7 +4948,7 @@ pub fn pick_scene_selected(
     {
         return Some(p);
     }
-    if filter.origin && view.project(Vec3::ZERO).distance(offset) <= 6.0 {
+    if filter.origin && !cache.origin_hidden && view.project(Vec3::ZERO).distance(offset) <= 6.0 {
         return Some(Pick::Origin);
     }
     // A sketch point (a hole's place) wins over everything around it.
