@@ -466,11 +466,18 @@ impl CompositeFeature {
 }
 
 /// Whether the part `part` of the element `element` is a composite part (made by a Composite
-/// part feature): its Parts list and Instances rows show the `composite-part` icon.
+/// part feature, or a Cut list's): its Parts list and Instances rows show the `composite-part`
+/// icon.
 pub fn is_composite_part(doc: &Document, element: ElementId, part: PartId) -> bool {
     doc.element(element)
         .and_then(|e| e.feature(part.feature))
-        .is_some_and(|f| matches!(f.kind, crate::document::FeatureKind::Composite(_)))
+        .is_some_and(|f| {
+            matches!(
+                f.kind,
+                crate::document::FeatureKind::Composite(_)
+                    | crate::document::FeatureKind::CutList(_)
+            )
+        })
 }
 
 /// A composite part a rebuild made: its part, its members and whether it is closed.

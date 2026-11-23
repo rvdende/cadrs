@@ -77,13 +77,19 @@ pub struct ShownParts(pub Vec<PartId>);
 struct GroupsOpen {
     parts: bool,
     surfaces: bool,
+    composites: bool,
 }
+
+/// The "Composite parts (n)" header.
+#[derive(Component, Debug, Clone, Copy)]
+struct CompositesHeader;
 
 impl Default for GroupsOpen {
     fn default() -> Self {
         Self {
             parts: true,
             surfaces: true,
+            composites: true,
         }
     }
 }
@@ -127,6 +133,8 @@ type RowKey = (
     Vec<cadrs_core::document::PartFolder>,
     // The interface's language (the headers' words).
     &'static str,
+    // Whether the composite parts' group is open.
+    bool,
 );
 
 /// Rebuilds the groups and rows when the parts, their names or visibility change.
@@ -232,6 +240,7 @@ fn rebuild_part_list(
         folders,
         // The headers' words.
         cadrs_ui::i18n::language(),
+        open.composites,
     );
     if !added && !moved && last.as_ref() == Some(&key) {
         return;
@@ -248,7 +257,8 @@ fn rebuild_part_list(
                 .id()
         });
         for kind in [PartKind::Solid, PartKind::Surface] {
-            let members: Vec<&PartRowKey> = key.0.iter().filter(|r| r.2 == kind).collect();
+            // (Composite parts have a group of their own, below.)
+            let members: Vec<&PartRowKey> = key.0.iter().filter(|r| r.2 == kind && !r.5).collect();
             // Onshape shows "Parts (0)" in an empty studio, and the other groups once they have
             // something.
             if kind == PartKind::Surface && members.is_empty() {
@@ -317,6 +327,33 @@ fn rebuild_part_list(
                 .filter(|m| !component(&m.0) && !in_folder(&m.0))
             {
                 rows.spawn(c, &t, &mut slots, &mut shown, m, 22.0, None);
+            }
+        }
+        // Composite parts: groups of parts, listed apart from them as Onshape does.
+        let composites: Vec<&PartRowKey> = key.0.iter().filter(|r| r.5).collect();
+        if !composites.is_empty() {
+            if slots.take(PART_ROW_PITCH) {
+                c.spawn((
+                    TreeItem::new(
+                        "composite-parts-section-header",
+                        format!("{} ({})", tr("composite-parts"), composites.len()),
+                    )
+                    .disclosure(Some(open.composites))
+                    .left(2.0)
+                    .build(&t),
+                    CompositesHeader,
+                ));
+            }
+            if open.composites {
+                let rows = Rows {
+                    members: &composites,
+                    boards: &key.3,
+                    boards_open: &key.4,
+                    kind: PartKind::Solid,
+                };
+                for m in &composites {
+                    rows.spawn(c, &t, &mut slots, &mut shown, m, 22.0, None);
+                }
             }
         }
         if let Some(above) = above {
@@ -493,7 +530,15 @@ fn on_part_eye(ev: On<cadrs_ui::TreeRowToggled>, q: Query<&PartRow>, mut command
     });
 }
 
-fn on_group_toggle(ev: On<TreeToggle>, q: Query<&GroupHeader>, mut open: ResMut<GroupsOpen>) {
+fn on_group_toggle(
+    ev: On<TreeToggle>,
+    q: Query<&GroupHeader>,
+    q_composites: Query<(), With<CompositesHeader>>,
+    mut open: ResMut<GroupsOpen>,
+) {
+    if q_composites.contains(ev.entity) {
+        open.composites = !open.composites;
+    }
     if let Ok(g) = q.get(ev.entity) {
         match g.0 {
             PartKind::Solid => open.parts = !open.parts,

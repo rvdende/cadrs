@@ -129,6 +129,8 @@ filter-placeholder = Filter by name or type
 parts = Parts
 # Bodies with no volume (sheets).
 surfaces = Surfaces
+# The Parts list's group of composite parts (each a named group of parts).
+composite-parts = Composite parts
 
 ## crates/cadrs_ui/src/color_editor.rs
 # A heading over the preset color swatches.
