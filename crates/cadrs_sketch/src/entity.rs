@@ -1067,9 +1067,17 @@ mod tests {
                 .find(|(_, d)| matches!(d.kind, DimensionKind::Sides { .. }))
                 .unwrap()
                 .0;
+            // (#205: a count typed as a formula of constants goes with the old count.)
+            SketchOp::SetDimensionExpr {
+                id,
+                expr: Some("2*3".into()),
+            }
+            .apply(&mut s)
+            .unwrap();
             SketchOp::SetDimensionValue { id, value: 8.0 }
                 .apply(&mut s)
                 .unwrap();
+            assert_eq!(s.expression(id), None);
             let circle = circle_of(&s);
             let parts = polygon_parts(&s, circle, inscribed).unwrap();
             assert_eq!(parts.sides.len(), 8);

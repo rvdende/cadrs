@@ -1118,24 +1118,39 @@ fn eval_with(
         return Err(ParseError::Empty);
     }
     let first = eval_toks(&toks, q, default, vars);
-    // A unit at the end, after a divisor (#292: "153/2 mm", what stays of "153 mm" when "/2" is
-    // typed after the number), applies to the whole expression, as "(153/2) mm": read as the
-    // divisor's, it would make the result one over a length. Only text that is otherwise an
-    // error of units reads this way.
     if first == Err(ParseError::Units)
-        && let [rest @ .., Tok::Unit(u)] = toks.as_slice()
-        && matches!(rest, [.., Tok::Op('/'), Tok::Num(_)])
+        && let Some(whole) = unit_for_all(&toks)
+        && let Ok(v) = eval_toks(&whole, q, default, vars)
     {
-        let mut whole = Vec::with_capacity(toks.len() + 2);
-        whole.push(Tok::Op('('));
-        whole.extend_from_slice(rest);
-        whole.push(Tok::Op(')'));
-        whole.push(Tok::Unit(u.clone()));
-        if let Ok(v) = eval_toks(&whole, q, default, vars) {
-            return Ok(v);
-        }
+        return Ok(v);
     }
     first
+}
+
+/// `toks` with a unit at the end, after a divisor, applied to everything before it (#292:
+/// "153/2 mm", what stays of "153 mm" when "/2" is typed after the number, as "(153/2) mm";
+/// "1 + 153/2 mm" as "(1 + 153/2) mm"). Read as the divisor's, the unit makes the result one
+/// over a length, so only text that is otherwise an error of units is read this way. `None`
+/// when the text doesn't end in a plain number divided by and its unit.
+fn unit_for_all(toks: &[Tok]) -> Option<Vec<Tok>> {
+    let [rest @ .., Tok::Unit(u)] = toks else {
+        return None;
+    };
+    if !matches!(rest, [.., Tok::Op('/'), Tok::Num(_)]) {
+        return None;
+    }
+    let mut whole = Vec::with_capacity(toks.len() + 2);
+    whole.push(Tok::Op('('));
+    whole.extend_from_slice(rest);
+    whole.push(Tok::Op(')'));
+    whole.push(Tok::Unit(u.clone()));
+    Some(whole)
+}
+
+/// Whether a formula names a variable (`#name`): such a formula is evaluated again when the
+/// variables change, a formula of constants ("100/2") is only what was typed for a value.
+pub fn names_variable(formula: &str) -> bool {
+    formula.contains('#')
 }
 
 /// Whether `text` is a formula rather than a plain value: anything that reads as more than one
@@ -1196,8 +1211,21 @@ pub fn eval_any(text: &str, default: f64, vars: &dyn Variables) -> Result<VarVal
     if toks.is_empty() {
         return Err(ParseError::Empty);
     }
+    let first = any_toks(&toks, default, vars);
+    // (#292: "153/2 mm" as a dimension reads it.)
+    if matches!(first, Err(ParseError::Units))
+        && let Some(whole) = unit_for_all(&toks)
+        && let Ok(v) = any_toks(&whole, default, vars)
+    {
+        return Ok(v);
+    }
+    first
+}
+
+/// [`eval_any`] of tokens already read.
+fn any_toks(toks: &[Tok], default: f64, vars: &dyn Variables) -> Result<VarValue, ParseError> {
     let mut p = Parser {
-        toks: &toks,
+        toks,
         i: 0,
         default,
         vars,
@@ -1358,6 +1386,19 @@ mod tests {
         assert_eq!(len("2 ^ 1 mm"), Err(ParseError::Units));
         assert_eq!(len("10/2 deg"), Err(ParseError::Units));
         assert_eq!(len("5 deg"), Err(ParseError::Units));
+        // The unit applies to everything before it, not only to the division.
+        close(len("1 + 153/2 mm"), 77.5);
+        close(len("-153/2 mm"), -76.5);
+        // Only after a plain number divided by, at the very end.
+        assert_eq!(len("153/-2 mm"), Err(ParseError::Units));
+        assert_eq!(len("2/(1+1) mm"), Err(ParseError::Units));
+        assert_eq!(len("153/2 mm + 1"), Err(ParseError::Units));
+        // A Variable's own expression reads the same.
+        let v = eval_any("153/2 mm", 1.0, &NoVariables).unwrap();
+        assert_eq!((v.value, v.quantity), (76.5, Quantity::Length));
+        let v = eval_any("90/2 deg", 1.0, &NoVariables).unwrap();
+        assert_eq!((v.value, v.quantity), (45.0, Quantity::Angle));
+        assert!(eval_any("1 in * 2 in", 1.0, &NoVariables).is_err());
     }
 
     #[test]

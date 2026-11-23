@@ -1313,6 +1313,19 @@ impl Sketch {
         Self::default()
     }
 
+    /// The formula of a dimension that names variables ([`units::names_variable`]): the one
+    /// the document evaluates again, and which sets the value whatever else would.
+    pub fn variable_expression(&self, id: DimensionId) -> Option<&str> {
+        self.expression(id).filter(|e| units::names_variable(e))
+    }
+
+    /// Forgets a dimension's formula of constants (#205: "100/2"): it is only what was typed
+    /// for a value the dimension no longer has. One naming variables stays.
+    pub(crate) fn drop_constant_formula(&mut self, id: DimensionId) {
+        self.expressions
+            .retain(|(d, e)| *d != id || units::names_variable(e));
+    }
+
     /// The formula a dimension's value came from (P3F.4), if it was typed as one.
     pub fn expression(&self, id: DimensionId) -> Option<&str> {
         self.expressions
