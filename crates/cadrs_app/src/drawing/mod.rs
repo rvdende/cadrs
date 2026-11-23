@@ -195,6 +195,14 @@ pub struct SheetView {
     pub fitted: bool,
 }
 
+/// The section view the pointer is at (see [`DrawingUi::section_hover`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SectionHover {
+    pub view: cadrs_drawing::ViewId,
+    /// On the cutting line, its letters or the view's label, not on the view itself.
+    pub on_mark: bool,
+}
+
 /// Per-session drawing UI state (not saved, not undoable): each drawing's active sheet, each
 /// sheet's view, and which side panels are open.
 #[derive(Resource, Debug, Default)]
@@ -214,6 +222,10 @@ pub struct DrawingUi {
     /// The selected views and the view under the pointer.
     pub selected: Vec<cadrs_drawing::ViewId>,
     pub hovered: Option<cadrs_drawing::ViewId>,
+    /// The section view the pointer is on, or on whose cutting line or label it is: both are
+    /// drawn in blue, and a click (the view itself: a double click) shows the section in its
+    /// Part Studio (`drawing_sections`).
+    pub section_hover: Option<SectionHover>,
     /// The view the tool would place (drawn in blue, following the cursor), and the id it
     /// uses while it is a ghost.
     pub ghost: Option<cadrs_drawing::View>,

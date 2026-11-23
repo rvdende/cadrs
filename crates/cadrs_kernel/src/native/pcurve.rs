@@ -62,6 +62,17 @@ pub fn pcurve_or(
 /// parameter range where a B-spline surface closes on itself without being periodic (a
 /// revolved or skinned surface whose ends meet: its seam is the range's two ends).
 pub fn closed_periods(s: &Surface) -> [Option<f64>; 2] {
+    // An extrusion of a closed B-spline (a prism on a spline outline): closed in u over its
+    // curve's range, its seam the range's two ends.
+    if let Surface::Extrusion {
+        c: Curve::Nurbs(n), ..
+    } = s
+    {
+        let (a, b) = n.range();
+        let (p, q) = (n.point(a), n.point(b));
+        let closed = (p - q).norm() <= tol::REL * (1.0 + p.coords.norm());
+        return [closed.then_some(b - a), None];
+    }
     let Surface::Nurbs(n) = s else {
         return [s.u_periodic().then_some(TAU), s.v_periodic().then_some(TAU)];
     };
@@ -218,12 +229,13 @@ fn settle_poles(s: &Surface, uvs: &mut [P2]) {
 /// continuously across the seam must be brought back). One lying along the seam fits both
 /// ways: the copy nearest `near`. Other surfaces as they are.
 fn into_closed_range(s: &Surface, pc: Curve, t0: f64, t1: f64, near: Option<P2>) -> Curve {
-    let Surface::Nurbs(n) = s else { return pc };
+    let Some(((u0, u1), (v0, v1))) = closed_range(s) else {
+        return pc;
+    };
     let periods = closed_periods(s);
     if periods == [None, None] {
         return pc;
     }
-    let ((u0, u1), (v0, v1)) = n.range();
     let pts: Vec<P2> = (0..=16)
         .map(|i| pc.point(t0 + (t1 - t0) * i as f64 / 16.0))
         .map(|q| P2::new(q.x, q.y))
@@ -263,6 +275,19 @@ fn into_closed_range(s: &Surface, pc: Curve, t0: f64, t1: f64, near: Option<P2>)
         return pc;
     }
     pc.transformed(&Affine::translation(V3::new(du, dv, 0.0)))
+}
+
+/// The parameter range of a surface that may close on itself without being periodic (a
+/// B-spline surface, an extrusion of a B-spline curve: their evaluation doesn't wrap), else
+/// None. An extrusion's v is unbounded.
+fn closed_range(s: &Surface) -> Option<((f64, f64), (f64, f64))> {
+    match s {
+        Surface::Nurbs(n) => Some(n.range()),
+        Surface::Extrusion {
+            c: Curve::Nurbs(n), ..
+        } => Some((n.range(), (f64::NEG_INFINITY, f64::INFINITY))),
+        _ => None,
+    }
 }
 
 /// Shifts a p-curve by whole periods so its point at `tm` lies nearest `near`.
@@ -567,18 +592,41 @@ pub(super) fn iso_line(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Option<Curve
     Some(line)
 }
 
+/// The degree a p-curve is fitted in. A quintic through n points of a smooth curve is off by
+/// about h⁶ where a cubic is off by h⁴: a circle on a sphere it doesn't run round, fitted to
+/// 1e-9, took 333 points as a cubic.
+const FIT_DEGREE: usize = 5;
+
 /// Interpolates projected points with the curve's own parameters.
 fn fitted(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Curve {
     let pieces = c.pieces(t0, t1);
     let mut ts: Vec<f64> = Vec::new();
     // A few samples a piece to start (refined below where the fit is off).
-    let n = (512 / pieces.len().max(1)).clamp(2, 16);
+    let n = (512 / pieces.len().max(1)).clamp(2, 8);
     for w in pieces.windows(2) {
         for i in 0..n {
             ts.push(w[0] + (w[1] - w[0]) * i as f64 / n as f64);
         }
     }
     ts.push(t1);
+    // (A curve joined of pieces may have two of its knots a rounding apart: sites that close
+    // make a fit of spans of no length, whose derivatives are no numbers.)
+    let apart = 1e-9 * (t1 - t0).abs();
+    let mut kept: Vec<f64> = Vec::with_capacity(ts.len());
+    for (i, &t) in ts.iter().enumerate() {
+        let last = i + 1 == ts.len();
+        match kept.last() {
+            Some(&k) if (t - k).abs() <= apart => {
+                // (The range's end is kept, not the site just before it.)
+                if last && kept.len() > 1 {
+                    kept.pop();
+                    kept.push(t);
+                }
+            }
+            _ => kept.push(t),
+        }
+    }
+    let mut ts = kept;
     // Followed continuously across the surface's seams (brought back into a closed
     // B-spline's range after: `into_closed_range`).
     let periods = closed_periods(s);
@@ -596,7 +644,7 @@ fn fitted(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Curve {
     settle_poles(s, &mut uvs);
     let fit_of = |ts: &[f64], uvs: &[P2]| {
         let pts: Vec<P3> = uvs.iter().map(|q| P3::new(q.x, q.y, 0.0)).collect();
-        NurbsCurve::interpolate(&pts, ts, 3.min(pts.len() - 1), None, None)
+        NurbsCurve::interpolate(&pts, ts, FIT_DEGREE.min(pts.len() - 1), None, None)
     };
     // How near the fit keeps to the curve's projection: 1e-9, or 2e-10 of the curve's size
     // on a big model (the bound an intersection curve itself is fitted to).
@@ -607,6 +655,22 @@ fn fitted(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Curve {
         }
         1e-9f64.max(2e-10 * bb.diagonal())
     };
+    // The surface's point at a followed (u, v): a B-spline closed without being periodic is
+    // read inside its range (past it, it only extrapolates).
+    let wrap = closed_range(s);
+    let at_uv = |u: f64, v: f64| -> P3 {
+        let Some(((u0, u1), (v0, v1))) = wrap else {
+            return s.eval(u, v);
+        };
+        let into = |x: f64, a: f64, b: f64, p: Option<f64>| match p {
+            Some(p) if x < a || x > b => a + (x - a).rem_euclid(p),
+            _ => x,
+        };
+        s.eval(into(u, u0, u1, periods[0]), into(v, v0, v1, periods[1]))
+    };
+    // Each interval's midpoint's projection (and its point), once made: an interval no round
+    // splits keeps its midpoint and its hint, so its projection would come out the same.
+    let mut mids: Vec<Option<(P2, P3)>> = vec![None; ts.len() - 1];
     for _round in 0..12 {
         let fit = fit_of(&ts, &uvs);
         // Check the midpoints.
@@ -617,14 +681,17 @@ fn fitted(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Curve {
             // Measured in model space between the fit's point and the projection's (uv noise of
             // projections on B-spline surfaces would never settle; an intersection curve may lie
             // a little off the surface, which no p-curve can make up).
-            let q = project(tm, Some((uvs[k].x, uvs[k].y)));
-            let err = (s.eval(f.x, f.y) - s.eval(q.x, q.y)).norm();
+            let (q, at) = *mids[k].get_or_insert_with(|| {
+                let q = project(tm, Some((uvs[k].x, uvs[k].y)));
+                (q, at_uv(q.x, q.y))
+            });
+            let err = (at_uv(f.x, f.y) - at).norm();
             if err > tol {
                 ins.push((k + 1, tm, q));
             }
         }
         if ins.is_empty() || ts.len() > 4096 {
-            if !ins.is_empty() && std::env::var("CADRS_PCURVE_DEBUG").is_ok() {
+            if !ins.is_empty() && crate::native::env_flag!("CADRS_PCURVE_DEBUG") {
                 eprintln!(
                     "pcurve: no fit after {} points ({} off) of {c:?} on {s:?}",
                     ts.len(),
@@ -636,6 +703,9 @@ fn fitted(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Curve {
         for (k, t, q) in ins.into_iter().rev() {
             ts.insert(k, t);
             uvs.insert(k, q);
+            // (Interval k − 1 split in two, neither half's midpoint projected yet.)
+            mids[k - 1] = None;
+            mids.insert(k, None);
         }
     }
     Curve::Nurbs(Arc::new(fit_of(&ts, &uvs)))

@@ -566,6 +566,14 @@ pub struct PartCache {
     pub derived_sketches: Vec<Feature>,
     /// P3I.3: the sheet metal models' contexts from the last rebuild (the table and flat view).
     pub sheet_metal: Vec<cadrs_core::sheetmetal::SheetMetalContext>,
+    /// Issue #266: the Frame features' members from the last rebuild (the Cut list panel).
+    pub frames: Vec<cadrs_core::frame::MemberInfo>,
+    /// The composite parts from the last rebuild, with their members. An open one is a group
+    /// of its members, not a body of its own: it isn't drawn (its members are), and selected
+    /// or hovered it shows on them.
+    pub composites: Vec<cadrs_core::transform::Composite>,
+    /// How many members meet at each Frame feature's corner overrides.
+    pub frame_corners: Vec<cadrs_core::frame::OverrideCorners>,
     /// The curves of every visible sketch (P3.4: a revolve axis is picked among them).
     pub sketch_curves: Vec<SketchCurves>,
     /// Bumped whenever the parts change (or which are shown).
@@ -599,6 +607,9 @@ pub struct PartCache {
     pub skinless: HashSet<PartId>,
     /// Components drawn by a drag's ghost instead, while a board's layout is edited.
     pub drag_hidden: HashSet<PartId>,
+    /// A CAM job's bodies while its preview shows the stock without the part (the preview
+    /// bar's Part unchecked, [`crate::cam::preview`]).
+    pub preview_hidden: HashSet<PartId>,
     /// The parts shown alone (Isolate), if any.
     pub isolated: Option<Vec<PartId>>,
     /// What each extrude's new body touches (the automatic Add, PS5.2).
@@ -618,6 +629,9 @@ pub struct PartCache {
     pub curves: HashMap<FeatureId, cadrs_core::surfacing::CurveGeom>,
     /// Whether the connectors are shown (K), so they can be picked.
     pub connectors_shown: bool,
+    /// Whether the origin is hidden (Preferences › Interface › Origin), so it isn't picked in
+    /// the view.
+    pub origin_hidden: bool,
     /// Each pattern's instances and where their Skip dots go (P3.8).
     pub dots: HashMap<FeatureId, Vec<cadrs_core::pattern::InstanceDot>>,
     /// What each feature depends on beyond its references (P3.11, PS11.2; see
@@ -633,7 +647,8 @@ pub struct PartCache {
     /// The Assembly tab whose instances are shown (P3B.1), if one is active.
     pub assembly: Option<ElementId>,
     /// Parts drawn moved from where their solids are (a drag or an animation in an assembly,
-    /// [`crate::assembly::AssemblyParts::live`]): their meshes by their transform, their edges
+    /// [`crate::assembly::AssemblyParts::live`]; a CAM Studio's work turning with the machine's
+    /// table, `cam::machine_view::place_work`): their meshes by their transform, their edges
     /// moved as drawn, so the solids aren't placed again every frame.
     pub moved: HashMap<PartId, Mat4>,
     /// While the Extrude dialog edits an Add: the body it adds, drawn as the translucent
@@ -794,12 +809,56 @@ impl PartCache {
         }
     }
 
+    /// True if the part is an open composite part: a group of its members.
+    pub fn is_open_composite(&self, id: PartId) -> bool {
+        self.composites.iter().any(|c| c.part == id && !c.closed)
+    }
+
+    /// Whether a part's row shows as hidden: the part's own Hide; for an open composite part,
+    /// whether every one of its members is hidden (it has no visibility of its own: it sums
+    /// up its members').
+    pub fn row_hidden(&self, id: PartId) -> bool {
+        match self.composites.iter().find(|c| c.part == id && !c.closed) {
+            Some(c) => !c.members.is_empty() && c.members.iter().all(|m| self.is_hidden_part(*m)),
+            None => self.is_hidden_part(id),
+        }
+    }
+
+    /// The parts a Hide or Show of `parts` is for: an open composite part's members in its
+    /// place.
+    pub fn visibility_targets(&self, parts: &[PartId]) -> Vec<PartId> {
+        let mut out: Vec<PartId> = Vec::new();
+        for p in parts {
+            let these = match self.composites.iter().find(|c| c.part == *p && !c.closed) {
+                Some(c) => c.members.clone(),
+                None => vec![*p],
+            };
+            for t in these {
+                if !out.contains(&t) {
+                    out.push(t);
+                }
+            }
+        }
+        out
+    }
+
+    /// The open composite parts `part` is a member of.
+    pub fn open_composites_of(&self, part: PartId) -> impl Iterator<Item = PartId> + '_ {
+        self.composites
+            .iter()
+            .filter(move |c| !c.closed && c.members.contains(&part))
+            .map(|c| c.part)
+    }
+
     /// True if the part is hidden (Hide in the Parts list), or outside an isolation.
     pub fn is_hidden(&self, id: PartId) -> bool {
         self.is_hidden_part(id)
+            // (An open composite part is its members, which are drawn.)
+            || self.is_open_composite(id)
             || self.isolated.as_ref().is_some_and(|iso| !iso.contains(&id))
             || self.layout_hidden.contains(&id)
             || self.drag_hidden.contains(&id)
+            || self.preview_hidden.contains(&id)
     }
 
     /// True if the part itself is hidden (Hide in the Parts list): its row is greyed. Isolate is
@@ -821,8 +880,17 @@ impl PartCache {
         if self.ghost.is_empty() {
             Box::new(self.shown().filter(|p| !self.unpickable.contains(&p.id)))
         } else {
-            Box::new(self.ghost.iter())
+            Box::new(
+                self.ghost_shown()
+                    .filter(|p| !self.unpickable.contains(&p.id)),
+            )
         }
+    }
+
+    /// The ghost's parts on screen: a hidden part's ghost is hidden too, or a click on the part
+    /// in front of it picks the hidden one's face lying on the same plane.
+    pub fn ghost_shown(&self) -> impl Iterator<Item = &Part> {
+        self.ghost.iter().filter(|p| !self.is_hidden(p.id))
     }
 
     /// The geometry hover and selection are drawn on for `part`: its ghost while there is one.
@@ -1254,6 +1322,16 @@ impl PartCache {
         if self.sheet_metal != build.sheet_metal {
             self.sheet_metal = build.sheet_metal.clone();
         }
+        if self.frames != build.frames {
+            self.frames = build.frames.clone();
+        }
+        if self.composites != build.composites {
+            self.composites = build.composites.clone();
+            self.generation += 1;
+        }
+        if self.frame_corners != build.frame_corners {
+            self.frame_corners = build.frame_corners.clone();
+        }
         self.contacts = build.contacts.clone();
         self.axes = build.axes.clone();
         self.arrows = build.arrows.clone();
@@ -1496,8 +1574,9 @@ fn update_part_cache(
         }
         return;
     }
-    // Only an assembly's drag draws parts moved.
-    if !cache.moved.is_empty() {
+    // Only an assembly's drag draws parts moved, and a CAM Studio's preview that keeps the
+    // machine still (the work turning with its table, `cam::machine_view::place_work`).
+    if !cache.moved.is_empty() && !matches!(el.kind, cadrs_core::ElementKind::CamStudio(_)) {
         cache.moved.clear();
     }
     // Its sketches on parts regenerating in the background after a command: rebuilt once they
@@ -3086,6 +3165,10 @@ pub struct GhostMesh;
 /// The ghost's opacity: faint enough to read the result through it.
 const GHOST_PART_ALPHA: f32 = 0.18;
 
+/// What the ghost's meshes were built from: the ghost's and the parts' generations (a part
+/// hidden or shown), the selected faces, the hovered one, and whether only those are drawn.
+type GhostMeshKey = (u64, u64, Vec<Pick>, Option<Pick>, bool);
+
 /// Keeps one faint mesh per ghost part (the parts before the edited feature).
 #[allow(clippy::too_many_arguments)]
 fn sync_ghost_meshes(
@@ -3097,7 +3180,7 @@ fn sync_ghost_meshes(
     mut materials: ResMut<Assets<PartShading>>,
     mut mat: Local<Option<Handle<PartShading>>>,
     q: Query<Entity, With<GhostMesh>>,
-    mut last: Local<Option<(u64, Vec<Pick>, Option<Pick>, bool)>>,
+    mut last: Local<Option<GhostMeshKey>>,
     mut over_mat: Local<Option<Handle<PartShading>>>,
     mut commands: Commands,
 ) {
@@ -3107,7 +3190,13 @@ fn sync_ghost_meshes(
     // (it would lie on the result's own faces, fighting them for depth).
     let hovered = highlight.viewport.filter(|p| matches!(p, Pick::Face(..)));
     let only_picks = over.over_result;
-    let key = (cache.ghost_generation, faces.0.clone(), hovered, only_picks);
+    let key = (
+        cache.ghost_generation,
+        cache.generation,
+        faces.0.clone(),
+        hovered,
+        only_picks,
+    );
     if last.as_ref() == Some(&key) {
         return;
     }
@@ -3126,7 +3215,7 @@ fn sync_ghost_meshes(
         mat.get_or_insert_with(|| materials.add(PartShading::new(true, true)))
     }
     .clone();
-    for part in &cache.ghost {
+    for part in cache.ghost_shown() {
         let mut bases = cache.bases(part);
         for (fi, b) in bases.iter_mut().enumerate() {
             b.alpha = if only_picks {
@@ -3185,7 +3274,7 @@ fn draw_ghost_edges(
     section: Res<crate::section_view::SectionClip>,
     mut g: Gizmos<PreviewEdgeGizmos>,
 ) {
-    for part in &cache.ghost {
+    for part in cache.ghost_shown() {
         let shown = cache.part(part.id);
         for e in part.solid.edges.iter().filter(|e| !e.smooth) {
             if shown.is_some_and(|s| s.solid.edge(&e.name).is_some()) {
@@ -3227,6 +3316,18 @@ fn shade_parts(
                 _ => None,
             })
             .collect();
+        // An open composite part selected: its members.
+        let members: Vec<PartId> = cache
+            .composites
+            .iter()
+            .filter(|c| !c.closed && out.contains(&c.part))
+            .flat_map(|c| c.members.iter().copied())
+            .collect();
+        for m in members {
+            if !out.contains(&m) {
+                out.push(m);
+            }
+        }
         // P3B.4: a subassembly instance's row selects all of its parts (`PartId(instance, k)`).
         if cache.assembly.is_some() {
             let whole: Vec<FeatureId> = out
@@ -3480,12 +3581,19 @@ fn draw_part_edges(
         let clip = section.clip_for(part.id);
         let preview = over.previews(part);
         let part_selected = selection.contains(Pick::Part(part.id))
+            // (A member of a selected open composite part.)
+            || cache
+                .open_composites_of(part.id)
+                .any(|c| selection.contains(Pick::Part(c)))
             || (cache.assembly.is_some()
                 && part.id.index > 0
                 && selection.contains(Pick::Part(PartId::new(part.id.feature, 0))));
         let feature_faces =
             list_feature.is_some_and(|f| part.solid.faces.iter().any(|x| x.name.op == f.0));
         let part_hovered = highlight.is_hovered(Pick::Part(part.id))
+            || cache
+                .open_composites_of(part.id)
+                .any(|c| highlight.is_hovered(Pick::Part(c)))
             || hover_parts.0.contains(&part.id)
             || hover_parts.1.contains(&part.id)
             || list_feature.is_some_and(|f| !feature_faces && part.features.contains(&f));
@@ -4657,20 +4765,58 @@ pub fn pick_face_skipping(
     offset: Vec2,
     skip: Option<cadrs_sketch::OpId>,
 ) -> Option<(PartId, FaceName, f32)> {
+    pick_face_preferring(cache, view, offset, skip, &[])
+}
+
+/// How far apart along the pick ray (mm) two parts' faces are taken to lie on each other.
+const SAME_DEPTH: f32 = 1.0e-2;
+
+/// [`pick_face_skipping`] where parts' faces lie on each other (two parts of one shape in one
+/// place): the face that is `selected` (itself, or its part), so a click on a selected face
+/// takes it away rather than adding the other part's face under it; else the face of a part
+/// that has something selected, so the next face picked for a shell is one of the part the
+/// first was on, not of the part lying in it.
+pub fn pick_face_preferring(
+    cache: &PartCache,
+    view: &ViewState,
+    offset: Vec2,
+    skip: Option<cadrs_sketch::OpId>,
+    selected: &[Pick],
+) -> Option<(PartId, FaceName, f32)> {
     let (o, d) = view.ray(offset);
-    let mut best: Option<(PartId, FaceName, f32)> = None;
+    // 2: the face is selected (or its part); 1: something else of its part is; 0: neither.
+    let rank = |part: PartId, face: FaceName| {
+        if selected
+            .iter()
+            .any(|p| *p == Pick::Face(part, face) || *p == Pick::Part(part))
+        {
+            2
+        } else if selected.iter().any(|p| p.part() == Some(part)) {
+            1
+        } else {
+            0u8
+        }
+    };
+    // The nearest hit, and its rank.
+    let mut best: Option<(PartId, FaceName, f32, u8)> = None;
     for part in cache.pickable() {
         if let Some((f, t)) = sectioned_hit(cache.section.as_ref(), part.id, o, d, |o| {
             part.solid
                 .pick_where(to64(o), to64(d), |f| Some(f.name.op) != skip)
         }) {
-            let t = t as f32;
-            if best.is_none_or(|b| t < b.2) {
-                best = Some((part.id, part.solid.faces[f].name, t));
+            let (t, name) = (t as f32, part.solid.faces[f].name);
+            let r = rank(part.id, name);
+            let better = match best {
+                None => true,
+                Some((.., bt, br)) if (t - bt).abs() <= SAME_DEPTH && r != br => r > br,
+                Some((.., bt, _)) => t < bt,
+            };
+            if better {
+                best = Some((part.id, name, t, r));
             }
         }
     }
-    best
+    best.map(|(p, f, t, _)| (p, f, t))
 }
 
 /// The closed sketch region under a screen offset (the smallest if they nest), with its
@@ -4777,6 +4923,18 @@ pub fn pick_scene(
     offset: Vec2,
     filter: PickFilter,
 ) -> Option<Pick> {
+    pick_scene_selected(cache, view, offset, filter, &[])
+}
+
+/// [`pick_scene`] for a click or the hover in the view, where `selected` is the selection: of
+/// faces lying on each other the selected one is picked ([`pick_face_preferring`]).
+pub fn pick_scene_selected(
+    cache: &PartCache,
+    view: &ViewState,
+    offset: Vec2,
+    filter: PickFilter,
+    selected: &[Pick],
+) -> Option<Pick> {
     // A pattern's Skip dot (P3.8) and a mate connector win over what lies under them.
     if let Some(p) = filter
         .dots
@@ -4790,7 +4948,7 @@ pub fn pick_scene(
     {
         return Some(p);
     }
-    if filter.origin && view.project(Vec3::ZERO).distance(offset) <= 6.0 {
+    if filter.origin && !cache.origin_hidden && view.project(Vec3::ZERO).distance(offset) <= 6.0 {
         return Some(Pick::Origin);
     }
     // A sketch point (a hole's place) wins over everything around it.
@@ -4825,7 +4983,7 @@ pub fn pick_scene(
         }
     }
     let face = if filter.faces {
-        pick_face_skipping(cache, view, offset, filter.skip_op).filter(|(f, tag, _)| {
+        pick_face_preferring(cache, view, offset, filter.skip_op, selected).filter(|(f, tag, _)| {
             !filter.planar_only
                 || cache
                     .part(*f)
@@ -5198,6 +5356,98 @@ mod tests {
             construction: false,
         };
         assert_side_and_bottom_shared(&extruded(circle, &[10.0, 20.0]));
+    }
+
+    /// While a feature's dialog is open picks land on the ghost (the parts before the feature):
+    /// not on a hidden part's, whose faces can lie on the shown part's (issue #297's document:
+    /// a click on one part's end picked the hidden part's end cap in the same plane).
+    #[test]
+    fn a_hidden_parts_ghost_is_not_picked() {
+        let circle = cadrs_sketch::SketchOp::AddCircle {
+            center: cadrs_sketch::Vec2::new(0.0, 0.0),
+            radius: 10.0,
+            construction: false,
+        };
+        let parts = extruded(circle, &[10.0, 20.0]);
+        let (hidden, shown) = (parts[0].id, parts[1].id);
+        let mut cache = PartCache {
+            ghost: parts.clone(),
+            parts,
+            ..Default::default()
+        };
+        let ids = |c: &PartCache| c.pickable().map(|p| p.id).collect::<Vec<_>>();
+        assert_eq!(ids(&cache), [hidden, shown]);
+        cache.props = vec![cadrs_core::document::PartProps {
+            hidden: true,
+            ..cadrs_core::document::PartProps::new(hidden)
+        }];
+        assert_eq!(ids(&cache), [shown]);
+        assert_eq!(
+            cache.ghost_shown().map(|p| p.id).collect::<Vec<_>>(),
+            [shown]
+        );
+        cache.props.clear();
+        cache.isolated = Some(vec![hidden]);
+        assert_eq!(ids(&cache), [hidden]);
+    }
+
+    /// Two parts of one shape in one place: a click on a face picks the first part's, unless the
+    /// other part's face there is the selected one (then the click takes it away, rather than
+    /// adding the first part's under it); a selected part's face too. A nearer face still wins.
+    #[test]
+    fn of_faces_lying_on_each_other_the_selected_one_is_picked() {
+        let circle = |radius| cadrs_sketch::SketchOp::AddCircle {
+            center: cadrs_sketch::Vec2::new(0.0, 0.0),
+            radius,
+            construction: false,
+        };
+        let mut parts = extruded(circle(10.0), &[10.0, 10.0]);
+        let (a, b) = (parts[0].id, parts[1].id);
+        let view = ViewState::standard(StandardView::Top);
+        let mut cache = PartCache {
+            parts: parts.clone(),
+            ..Default::default()
+        };
+        let pick = |c: &PartCache, sel: &[Pick]| {
+            pick_face_preferring(c, &view, Vec2::ZERO, None, sel).map(|(p, f, _)| (p, f))
+        };
+        let (first, top_a) = pick(&cache, &[]).expect("the top is under the pointer");
+        assert_eq!(first, a);
+        let top_b = cache.parts[1]
+            .solid
+            .faces
+            .iter()
+            .find(|f| f.plane.is_some_and(|p| p.normal()[2] > 0.5))
+            .expect("the second part's top")
+            .name;
+        assert_eq!(pick(&cache, &[Pick::Face(b, top_b)]), Some((b, top_b)));
+        assert_eq!(pick(&cache, &[Pick::Part(b)]), Some((b, top_b)));
+        assert_eq!(pick(&cache, &[Pick::Face(a, top_a)]), Some((a, top_a)));
+        // Both selected, or a selection elsewhere: as with none.
+        let both = [Pick::Face(a, top_a), Pick::Face(b, top_b)];
+        assert_eq!(pick(&cache, &both), Some((a, top_a)));
+        assert_eq!(pick(&cache, &[Pick::Origin]), Some((a, top_a)));
+        // Another face of the second part selected (its bottom): its top is the one picked.
+        let bottom_b = cache.parts[1]
+            .solid
+            .faces
+            .iter()
+            .find(|f| f.plane.is_some_and(|p| p.normal()[2] < -0.5))
+            .expect("the second part's bottom")
+            .name;
+        assert_eq!(pick(&cache, &[Pick::Face(b, bottom_b)]), Some((b, top_b)));
+        // The first part's top selected as well: a click there takes that away.
+        let mixed = [Pick::Face(b, bottom_b), Pick::Face(a, top_a)];
+        assert_eq!(pick(&cache, &mixed), Some((a, top_a)));
+        // A taller part's top is nearer: picked, whatever is selected under it.
+        let tall = extruded(circle(10.0), &[10.0, 20.0]).remove(1);
+        let tall_id = tall.id;
+        parts.push(tall);
+        cache.parts = parts;
+        assert_eq!(
+            pick(&cache, &[Pick::Face(b, top_b)]).map(|x| x.0),
+            Some(tall_id)
+        );
     }
 
     /// So do two extrudes of one ellipse (a swept ellipse, compared mesh to mesh: the presso

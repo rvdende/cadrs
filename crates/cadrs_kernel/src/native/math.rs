@@ -289,6 +289,188 @@ pub fn seg_dist2(p: &P2, a: &P2, b: &P2) -> f64 {
     (a + ab * t - p).norm()
 }
 
+/// Points by the cell of a grid they fall in, to find the ones near a point without looking at
+/// them all: the points are the caller's, by index, and those added since the last question are
+/// taken in at the next.
+#[derive(Debug, Default)]
+pub struct PointIndex {
+    cell: f64,
+    cells: std::collections::HashMap<[i64; 3], Vec<usize>>,
+    seen: usize,
+}
+
+impl PointIndex {
+    fn key(&self, p: &P3) -> [i64; 3] {
+        [p.x, p.y, p.z].map(|x| (x / self.cell).floor() as i64)
+    }
+
+    /// The first of the `n` points `at` nearer than `r` to `p` (the same `r` every time).
+    pub fn first_within(
+        &mut self,
+        n: usize,
+        at: impl Fn(usize) -> P3,
+        p: &P3,
+        r: f64,
+    ) -> Option<usize> {
+        if self.cell < r {
+            // (A wider question than the cells were cut for: cut them again.)
+            (self.cell, self.seen) = (r, 0);
+            self.cells.clear();
+        }
+        for i in self.seen..n {
+            let k = self.key(&at(i));
+            self.cells.entry(k).or_default().push(i);
+        }
+        self.seen = n;
+        let k = self.key(p);
+        let mut first: Option<usize> = None;
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    let Some(list) = self.cells.get(&[k[0] + dx, k[1] + dy, k[2] + dz]) else {
+                        continue;
+                    };
+                    for &i in list {
+                        if first.is_none_or(|f| i < f) && (at(i) - p).norm() < r {
+                            first = Some(i);
+                        }
+                    }
+                }
+            }
+        }
+        first
+    }
+}
+
+/// The set `i` is in, of sets kept as each member's parent (a set's root its own): its root,
+/// the members passed on the way joined nearer it. Two sets are joined by making one's root
+/// the other's parent.
+pub fn set_of(parent: &mut [usize], mut i: usize) -> usize {
+    while parent[i] != i {
+        parent[i] = parent[parent[i]];
+        i = parent[i];
+    }
+    i
+}
+
+/// A root of `f` between `a` and `b`, where its values `a.1` and `b.1` differ in sign: the
+/// Illinois method (regula falsi with the stale end's value halved), falling back on bisection
+/// where it gains less than a halving, to the parameter's resolution. As fast as Newton's method
+/// on a smooth function (a few evaluations) where bisection takes fifty; on a function that
+/// fails (`None`) it stops there, at the bracket's middle.
+pub fn bracket_root(mut f: impl FnMut(f64) -> Option<f64>, a: (f64, f64), b: (f64, f64)) -> f64 {
+    let ((mut a, mut fa), (mut b, mut fb)) = (a, b);
+    let res = 4.0 * f64::EPSILON * (1.0 + a.abs().max(b.abs()));
+    // Which end moved last (−1: a, 1: b), and the bracket's width two steps ago.
+    let mut side = 0;
+    let mut widths = [f64::INFINITY; 2];
+    for _ in 0..200 {
+        let w = (b - a).abs();
+        if w <= res {
+            break;
+        }
+        let mut x = (a * fb - b * fa) / (fb - fa);
+        // Bisect where the secant leaves the bracket or the bracket stopped halving.
+        if !x.is_finite() || x <= a.min(b) || x >= a.max(b) || w > 0.5 * widths[0] {
+            x = 0.5 * (a + b);
+            side = 0;
+        }
+        widths = [widths[1], w];
+        let Some(fx) = f(x) else { break };
+        if fx == 0.0 {
+            return x;
+        }
+        if (fx < 0.0) == (fa < 0.0) {
+            (a, fa) = (x, fx);
+            if side == -1 {
+                fb *= 0.5;
+            }
+            side = -1;
+        } else {
+            (b, fb) = (x, fx);
+            if side == 1 {
+                fa *= 0.5;
+            }
+            side = 1;
+        }
+    }
+    0.5 * (a + b)
+}
+
+/// [`bracket_root`] of a function that never fails, its ends' values taken here: the root of
+/// `f` between `a` and `b`, where its signs differ (an end where it is zero).
+pub fn root_between(mut f: impl FnMut(f64) -> f64, a: f64, b: f64) -> f64 {
+    let (fa, fb) = (f(a), f(b));
+    root_from(f, (a, fa), (b, fb))
+}
+
+/// [`root_between`] with the ends' values known.
+pub fn root_from(mut f: impl FnMut(f64) -> f64, a: (f64, f64), b: (f64, f64)) -> f64 {
+    if a.1 == 0.0 {
+        return a.0;
+    }
+    if b.1 == 0.0 {
+        return b.0;
+    }
+    bracket_root(|x| Some(f(x)), a, b)
+}
+
+/// Where a yes-or-no question changes its answer between `lo` and `hi`, by halving until the
+/// two are the parameter's resolution apart: the last point that answers as `lo` does (`same`)
+/// and the first that doesn't.
+pub fn bisect(mut lo: f64, mut hi: f64, mut same: impl FnMut(f64) -> bool) -> (f64, f64) {
+    for _ in 0..64 {
+        if (hi - lo).abs() <= 2.0 * f64::EPSILON * (1.0 + lo.abs().max(hi.abs())) {
+            break;
+        }
+        let m = 0.5 * (lo + hi);
+        if same(m) {
+            lo = m;
+        } else {
+            hi = m;
+        }
+    }
+    (lo, hi)
+}
+
+/// The least of `f` between `a` and `b` by golden-section search, one evaluation a step, to
+/// where a least can be told (the square root of the parameter's resolution): the parameter.
+pub fn minimize(mut f: impl FnMut(f64) -> f64, mut a: f64, mut b: f64) -> f64 {
+    const GR: f64 = 0.618_033_988_749_895;
+    let (mut c, mut d) = (b - GR * (b - a), a + GR * (b - a));
+    let (mut fc, mut fd) = (f(c), f(d));
+    let res = f64::EPSILON.sqrt() * (1.0 + a.abs().max(b.abs()));
+    for _ in 0..100 {
+        if (b - a).abs() <= res {
+            break;
+        }
+        if fc < fd {
+            b = d;
+            d = c;
+            fd = fc;
+            c = b - GR * (b - a);
+            fc = f(c);
+        } else {
+            a = c;
+            c = d;
+            fc = fd;
+            d = a + GR * (b - a);
+            fd = f(d);
+        }
+    }
+    0.5 * (a + b)
+}
+
+/// [`solve2`] of any system that has a solution at all: `None` only where the determinant is
+/// zero or the answer isn't a number (as an LU solve gives up), however small it is beside
+/// the coefficients. For the least-squares 2 × 2 systems of Newton steps, whose callers judge
+/// the step themselves.
+pub fn solve2_any(a: f64, b: f64, c: f64, d: f64, r0: f64, r1: f64) -> Option<(f64, f64)> {
+    let det = a * d - b * c;
+    let (x, y) = ((r0 * d - b * r1) / det, (a * r1 - c * r0) / det);
+    (det != 0.0 && x.is_finite() && y.is_finite()).then_some((x, y))
+}
+
 /// Solves a 2×2 system; None when singular.
 pub fn solve2(a: f64, b: f64, c: f64, d: f64, r0: f64, r1: f64) -> Option<(f64, f64)> {
     let det = a * d - b * c;
@@ -324,6 +506,67 @@ pub fn quadratic(a: f64, b: f64, c: f64) -> Vec<f64> {
     }
     r.sort_by(f64::total_cmp);
     r
+}
+
+/// The real roots in [lo, hi] of the polynomial c[0] + c[1]·x + … + c[n]·xⁿ (c[n] ≠ 0), in
+/// order: each found by bisection between neighbouring roots of its derivative (where it is
+/// monotone), so every root where it changes sign is found, however close to another. A root
+/// where it touches zero without changing sign is kept only where it is zero exactly.
+pub fn poly_roots(c: &[f64], lo: f64, hi: f64) -> Vec<f64> {
+    let eval = |x: f64| c.iter().rev().fold(0.0, |acc, &k| acc * x + k);
+    let n = c.len().saturating_sub(1);
+    if n == 0 || !(lo <= hi) {
+        return Vec::new();
+    }
+    if n == 1 {
+        let x = -c[0] / c[1];
+        return if x >= lo && x <= hi {
+            vec![x]
+        } else {
+            Vec::new()
+        };
+    }
+    let dc: Vec<f64> = (1..=n).map(|k| c[k] * k as f64).collect();
+    let mut stops = vec![lo];
+    stops.extend(poly_roots(&dc, lo, hi));
+    stops.push(hi);
+    let mut out: Vec<f64> = Vec::new();
+    for w in stops.windows(2) {
+        let (mut a, mut b) = (w[0], w[1]);
+        let (fa, fb) = (eval(a), eval(b));
+        if fa == 0.0 {
+            if out.last() != Some(&a) {
+                out.push(a);
+            }
+            continue;
+        }
+        if fb == 0.0 || fa.signum() == fb.signum() {
+            continue;
+        }
+        // Bisection to the last bit (monotone between the stops: one root).
+        let rising = fb > 0.0;
+        loop {
+            let m = 0.5 * (a + b);
+            if m <= a || m >= b {
+                break;
+            }
+            let fm = eval(m);
+            if fm == 0.0 {
+                (a, b) = (m, m);
+                break;
+            }
+            if (fm > 0.0) == rising {
+                b = m;
+            } else {
+                a = m;
+            }
+        }
+        out.push(0.5 * (a + b));
+    }
+    if eval(hi) == 0.0 && out.last() != Some(&hi) {
+        out.push(hi);
+    }
+    out
 }
 
 /// Bounding box helper.
@@ -395,6 +638,42 @@ mod tests {
         let v = integrate(0.0, TAU, 8, &GAUSS16, |x| x.cos().powi(4));
         assert!((v - 3.0 * PI / 4.0).abs() < 1e-14);
     }
+    /// The roots of products of known factors, close, far apart and a double one touching
+    /// zero exactly; none outside the range.
+    #[test]
+    fn polynomial_roots() {
+        let mul = |a: &[f64], b: &[f64]| {
+            let mut r = vec![0.0; a.len() + b.len() - 1];
+            for (i, x) in a.iter().enumerate() {
+                for (j, y) in b.iter().enumerate() {
+                    r[i + j] += x * y;
+                }
+            }
+            r
+        };
+        let from = |rs: &[f64]| rs.iter().fold(vec![1.0], |p, r| mul(&p, &[-r, 1.0]));
+        for rs in [
+            vec![-3.0, -1.0, 2.0, 5.0],
+            vec![1.0, 1.0 + 1e-6, 4.0, 4.5],
+            vec![-100.0, 0.25, 0.5, 300.0],
+            vec![0.7, 2.0],
+        ] {
+            let got = poly_roots(&from(&rs), -1e3, 1e3);
+            assert_eq!(got.len(), rs.len(), "{rs:?}: {got:?}");
+            for (g, r) in got.iter().zip(&rs) {
+                assert!((g - r).abs() < 1e-9 * (1.0 + r.abs()), "{rs:?}: {got:?}");
+            }
+        }
+        // x² (x − 2)²: two double roots, zero there exactly.
+        assert_eq!(
+            poly_roots(&from(&[0.0, 0.0, 2.0, 2.0]), -5.0, 5.0),
+            vec![0.0, 2.0]
+        );
+        // (x² + 1)(x − 3): one root; none in a range short of it.
+        assert_eq!(poly_roots(&[-3.0, 1.0, -3.0, 1.0], -10.0, 10.0).len(), 1);
+        assert!(poly_roots(&[-3.0, 1.0, -3.0, 1.0], -10.0, 2.0).is_empty());
+    }
+
     #[test]
     fn quadratic_roots() {
         let r = quadratic(1.0, -3.0, 2.0);

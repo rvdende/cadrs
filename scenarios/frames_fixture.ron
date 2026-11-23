@@ -1,0 +1,26 @@
+// `fixtures/frames.cadrs` (issue #266, `cadrs_core::samples::frames::document`): the Frames
+// Part Studio (a mitred gate with gussets and a butted mid rail, a T-slot base, a bent
+// handrail with end caps, a coped tee), then the 2020 workbench and its cut list.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        SetTimeout(60.0),
+        Custom("fixture frames"),
+        Wait(8),
+        Key("Shift+7"),
+        Key("F"),
+        MoveTo(1420, 900),
+        Wait(4),
+        Screenshot("01-frames"),
+        Click(ui("tab-2020-workbench")),
+        Wait(8),
+        Key("Shift+7"),
+        Key("F"),
+        Click(ui("panel-cut-list")),
+        WaitFor("cut-list-panel"),
+        MoveTo(1420, 900),
+        Wait(4),
+        Screenshot("02-workbench-cut-list"),
+    ],
+)

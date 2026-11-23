@@ -20,16 +20,19 @@ pub mod boolean;
 pub mod cam;
 pub mod camera;
 pub mod change_preview;
+pub mod chat_ui;
 pub mod collab;
 pub mod composite_ui;
 pub mod create_selection;
 pub mod cursor;
+pub mod cut_list;
 pub mod debug_tools;
 pub mod derived_ui;
 pub mod direct_edit_ui;
 pub mod document;
 pub mod draft_ui;
 pub mod drawing;
+pub mod drawing_sections;
 pub mod drop_import;
 pub mod eda;
 pub mod export_dialog;
@@ -40,11 +43,14 @@ pub mod feature_folders;
 pub mod feature_list;
 pub mod feature_menu;
 pub mod file_drop;
+pub mod find_shop;
 pub mod flat_export_dialog;
 pub mod flat_ui;
 pub mod frame_profile;
 pub mod frame_stats;
+pub mod frame_ui;
 pub mod gallery;
+pub mod gear_ui;
 pub mod github;
 pub mod ground_grid;
 pub mod hidden_edges;
@@ -61,13 +67,14 @@ pub mod manipulator;
 pub mod mass_props;
 pub mod material_dialog;
 // The MCP server listens on a port: not in the browser build (`tools/web`).
-pub mod chat_ui;
-pub mod find_shop;
-pub mod gear_ui;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mcp;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mcp_board;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod mcp_button;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod mcp_machine;
 pub mod measure;
 pub mod move_document;
 pub mod native_document;
@@ -86,6 +93,7 @@ pub mod pattern_dialog;
 pub mod pcb;
 pub mod picture;
 pub mod plane_display;
+mod preferences_dialog;
 pub mod preferences_ui;
 pub mod properties_dialog;
 pub mod public_chat_ui;
@@ -193,7 +201,21 @@ pub struct StartState(pub String);
 pub struct OpenAtStart(pub std::path::PathBuf);
 
 /// The cadrs repository, for the app menu's GitHub and the top bar's (`github`).
+/// The app's log filter: Bevy's, with the peer-to-peer networking (iroh, its gossip, its QUIC
+/// layer noq) at errors only. They warn of what a peer network does all the time (an offline
+/// peer's dial timing out, a stranger's connection refused, a path kept open), which reads as
+/// trouble when it isn't. `RUST_LOG` overrides it (`RUST_LOG=info,iroh=warn` to see them); the
+/// seed peer (`--public-seed`) keeps Bevy's filter, where they help.
+pub fn log_filter() -> String {
+    format!(
+        "{}iroh=error,iroh_gossip=error,noq_proto=error",
+        bevy::log::DEFAULT_FILTER
+    )
+}
+
 pub const GITHUB: &str = "https://github.com/rvdende/cadrs";
+/// The top of the README on GitHub, which links the downloads (the browser build's Download App).
+pub const README: &str = "https://github.com/rvdende/cadrs#readme";
 
 /// Opens `url` in the user's browser (in a page, a new tab).
 pub fn open_url(url: &str) {
@@ -1001,6 +1023,7 @@ impl Plugin for CadrsAppPlugin {
             .add_plugins((
                 appearance::AppearancePlugin,
                 side_panel::SidePanelPlugin,
+                cut_list::CutListPlugin,
                 material_dialog::MaterialDialogPlugin,
                 applied::AppliedPlugin,
                 sheetmetal_features_ui::SheetMetalFeaturesPlugin,
@@ -1030,6 +1053,7 @@ impl Plugin for CadrsAppPlugin {
                 measure::MeasurePlugin,
                 view_options::ViewOptionsPlugin,
                 section_view::SectionViewPlugin,
+                drawing_sections::DrawingSectionsPlugin,
                 hidden_edges::HiddenEdgesPlugin,
                 sheetmetal_p3i9_ui::Sm9Plugin,
             ))
@@ -1086,7 +1110,7 @@ impl Plugin for CadrsAppPlugin {
                 ),
             );
         #[cfg(not(target_arch = "wasm32"))]
-        app.add_plugins(mcp::McpPlugin);
+        app.add_plugins((mcp::McpPlugin, mcp_button::McpButtonPlugin));
     }
 
     fn finish(&self, app: &mut App) {

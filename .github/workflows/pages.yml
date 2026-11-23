@@ -1,12 +1,17 @@
 name: Pages
 
 # https://cadrs.net is the app itself, full screen: the browser build (tools/web/build.sh) of
-# main's head at the site's root, built and deployed on every push to main (and by hand), so
-# the site is always the latest main. It draws with WebGPU, or WebGL2 where the browser has no
-# WebGPU; with neither the page offers the downloads instead (tools/web/index.html). /app/,
-# where the app used to be, and any path there is no page for go to it.
+# main at the site's root, built and deployed once CI has passed on a push to main (and by hand,
+# on main; never from another branch): the site is the latest main whose checks all pass (its
+# tests, the kernel's gate, no regressions on brep-bench or brep-conformance). A push whose CI
+# fails, or is cancelled by a newer push, leaves the site as it was. It draws with WebGPU, or
+# WebGL2 where the browser has no WebGPU; with neither the page offers the downloads instead
+# (tools/web/index.html). /app/, where the app used to be, and any path there is no page for go
+# to it.
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -20,10 +25,19 @@ concurrency:
 jobs:
   build:
     name: Build the site
+    # Only main: after CI, a push to main whose run passed; by hand, run on main.
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
+      # The commit CI passed (main may have moved on since).
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       # clang and mold link the build scripts (.cargo/config.toml's host settings).
       - name: System packages
@@ -52,6 +66,10 @@ jobs:
           key: pages-web
 
       - name: Build
+        # rustc's default LTO (.cargo/config.toml turns it off for local builds; tagged releases
+        # build with fat LTO).
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "false"
         run: tools/web/build.sh site
 
       - name: Redirects

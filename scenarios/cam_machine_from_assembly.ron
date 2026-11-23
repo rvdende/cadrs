@@ -1,0 +1,137 @@
+// A machine modelled as an assembly, set up in the Machine Builder, picked in a CAM Studio and
+// moving with the simulation (issue #278), on the "CNC machines" sample
+// (`fixtures/cnc_machines.cadrs`: three mills as assemblies, a CAM Studio for each).
+// 01 The Machine Builder docked on "5-axis mill": its mounts, the axes its mates make (the
+//    tool's side Z and B, the table's Y, X and C) each with its jog slider, the tool change,
+//    the controller.
+// 02 B jogged to 30° and C to 45° (a preview: nothing is written): the head tilted, the
+//    platter turned; B's row open on its zero, home, travel and rates.
+// 03 "CAM 5-axis": the job's Machine row names the assembly, and the machine stands round the
+//    work at home.
+// 04 The Machine dialog: Machine from › From assembly, the assembly, its axes and controller,
+//    and the way to its Machine Builder.
+// 05 The setup's preview, a third of the way through the dome's 5-axis finishing (Parallel 1,
+//    after Rough 1), the view relative to the machine (the default): the base and column where
+//    they stand, the head tilted, the platter with the part turned by C under the tool; the
+//    readout's second line has the machine's axes there.
+// 06 Verify at the run's end: the stock as the leaning cuts leave it (simulated solid), each
+//    operation's cuts in its colour.
+// 07 "CAM 4-axis", the Worm's job half way along the thread, relative to the machine: the
+//    machine still, the worm turned with the chuck by A under the tool, the carousel at the
+//    tool's pocket.
+// 08 The same moment relative to the part (the preview bar's Relative to › Part): the worm
+//    stands as modelled and the whole machine is turned round it.
+// 09 Simulate a tenth of the way through the worm's roughing (Rotary rough 1), close up, the
+//    part hidden: the bar with the first of the roughing's grooves in it (in its colour).
+// 10 Half way through the roughing: more of the bar cut away. (Simulate's solid stock is cut
+//    as the run goes, not only at each operation's end.)
+// 11 Half way along the thread (Rotary 2): the bar roughed, the thread's spaces opening.
+Scenario(
+    start: Some("document"),
+    steps: [
+        // Generous: the 4- and 5-axis toolpaths and their solid stock take a while.
+        SetTimeout(300),
+        WaitFor("document-shell"),
+        Custom("fixture cnc_machines"),
+        Wait(5),
+        Click(ui("tab-5-axis-mill")),
+        Wait(10),
+        Click(ui("panel-machine-builder")),
+        WaitFor("machine-builder-panel"),
+        WaitFor("machine-axis-5"),
+        ExpectText("machine-axis-2-name", "B"),
+        ExpectText("machine-axis-5-mate", "C"),
+        MoveTo(900, 600),
+        Wait(5),
+        Screenshot("01-machine-builder"),
+        Custom("machine jog B 30"),
+        Custom("machine jog C 45"),
+        Click(ui("machine-axis-2-expand")),
+        WaitFor("cam-f-mb-ax2-zero"),
+        ExpectText("machine-axis-2-jog-value", "30°"),
+        MoveTo(900, 600),
+        Wait(5),
+        Screenshot("02-jogged"),
+        Click(ui("machine-builder-panel-close")),
+        Click(ui("tab-cam-5-axis")),
+        WaitFor("cam-tree"),
+        Wait(30),
+        Custom("cam select setup 0"),
+        Click(ui("cam-tb-regenerate")),
+        Wait(10),
+        Custom("cam machine view 40 22"),
+        MoveTo(1420, 900),
+        Wait(10),
+        Screenshot("03-cam-machine-row"),
+        Click(ui("cam-tb-machine")),
+        WaitFor("cam-dialog"),
+        ExpectText("cam-dialog", "Axes: Z B · Y X C"),
+        MoveTo(1420, 900),
+        Wait(5),
+        Screenshot("04-machine-dialog"),
+        Click(ui("cam-dialog-cancel")),
+        Custom("cam select setup 0"),
+        Click(ui("cam-tb-preview")),
+        WaitFor("cam-preview-bar"),
+        // (Rough 1 is operation 0; the 5-axis finishing, Parallel 1, operation 1.)
+        Custom("cam preview-op 1 0.3"),
+        Custom("cam machine view 40 22"),
+        Scroll(at(910, 600), 4),
+        MoveTo(1420, 900),
+        Wait(10),
+        Screenshot("05-dome-finishing"),
+        ExpectText("cam-pv-readout", "Parallel 1"),
+        // The machine's axes on the readout's second line (B's value there follows the
+        // toolpath, which still changes with the strategy).
+        ExpectText("cam-pv-readout", "  B"),
+        Click(ui("cam-pv-verify")),
+        Custom("cam preview-end"),
+        MoveTo(1420, 900),
+        Wait(10),
+        Screenshot("06-dome-verify"),
+        ExpectText("cam-pv-readout", "no gouges"),
+        Click(ui("cam-pv-close")),
+        Click(ui("tab-cam-4-axis")),
+        WaitFor("cam-tree"),
+        Wait(30),
+        // The Worm's job (a click on its row makes it the active one).
+        Click(ui("cam-job-c4c0027800004011")),
+        Click(ui("cam-tb-regenerate")),
+        Wait(10),
+        Click(ui("cam-tb-preview")),
+        WaitFor("cam-preview-bar"),
+        Custom("cam preview-op 1 0.5"),
+        Custom("cam machine view 40 22"),
+        Scroll(at(910, 600), 4),
+        MoveTo(1420, 900),
+        Wait(10),
+        Screenshot("07-worm-thread"),
+        ExpectText("cam-pv-readout", "Rotary 2"),
+        // (The view as in 07: framing the machine again would turn the view with it.)
+        Click(ui("cam-pv-relative-part")),
+        MoveTo(1420, 900),
+        Wait(10),
+        Screenshot("08-worm-part-relative"),
+        ExpectText("cam-pv-readout", "Rotary 2"),
+        Click(ui("cam-pv-relative-machine")),
+        Click(ui("cam-pv-simulate")),
+        // The stock alone, close up.
+        Click(ui("cam-pv-part")),
+        Scroll(at(830, 640), 8),
+        Scroll(at(880, 660), 6),
+        // (The solid stock's simulation on the worker: well done by then.)
+        Wait(30),
+        Custom("cam preview-op 0 0.1"),
+        MoveTo(1420, 900),
+        Wait(10),
+        Screenshot("09-worm-simulate-rough-early"),
+        Custom("cam preview-op 0 0.5"),
+        MoveTo(1420, 900),
+        Wait(10),
+        Screenshot("10-worm-simulate-rough"),
+        Custom("cam preview-op 1 0.5"),
+        MoveTo(1420, 900),
+        Wait(10),
+        Screenshot("11-worm-simulate-thread"),
+    ],
+)

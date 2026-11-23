@@ -99,6 +99,7 @@ impl Plugin for DocumentPlugin {
             .add_observer(on_feature_context_menu)
             .add_observer(on_error_icon_click)
             .add_observer(on_feature_menu_action)
+            .add_observer(on_origin_eye)
             .add_observer(on_plane_eye)
             .add_observer(on_sketch_eye)
             .add_observer(restore_name_button::<InlineEditCommit>)
@@ -601,15 +602,13 @@ fn top_bar(root: &mut ChildSpawnerCommands, t: &Theme, doc_name: &str, profile: 
             });
             crate::update::spawn_version(r, t);
             // Online or not (`crate::network`).
+            // AI assistants (`crate::mcp_button`): not in a page, which can't serve them.
+            #[cfg(not(target_arch = "wasm32"))]
+            spawn_folding(r, Fold::Mcp, |r| crate::mcp_button::spawn_button(r, t));
             spawn_folding(r, Fold::Network, |r| crate::network::spawn_button(r, t));
             // Light, dark or the system's scheme.
             spawn_folding(r, Fold::Scheme, |r| {
-                r.spawn((
-                    cadrs_ui::scheme_toggle(t),
-                    cadrs_ui::glass::GlassFrame::bar(),
-                ))
-                .entry::<Node>()
-                .and_modify(|mut n| n.margin = UiRect::right(Val::Px(6.0)));
+                crate::top_bar::spawn_scheme_button(r, t)
             });
             spawn_folding(r, Fold::Notifications, |r| {
                 crate::notifications::spawn_bell(r, t)
@@ -723,6 +722,12 @@ fn right_strip(vp: &mut ChildSpawnerCommands, t: &Theme) {
                 "panel-named-positions",
                 "named-positions",
                 "shell-doc-named-positions",
+            ),
+            // Issue #278: the assembly set up as a machine for CAM.
+            (
+                "panel-machine-builder",
+                "machine-builder",
+                "asm-machine-builder-tooltip",
             ),
         ] {
             s.spawn(
@@ -845,6 +850,8 @@ fn view_tools(bar: &mut ChildSpawnerCommands, t: &Theme) {
                 "sheet-metal-table",
                 "shell-doc-sheet-metal-table",
             ),
+            // Issue #266: shown once a frame has members (`crate::cut_list`).
+            ("panel-cut-list", "cut-list", "shell-doc-cut-list"),
         ] {
             g.spawn(
                 ToolButton::new(name, icon_name)
@@ -1657,6 +1664,14 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
             ("hole", "hole", false, "shell-tool-hole"),
             ("thread", "thread", false, "shell-tool-thread"),
             ("gear", "gear", false, "shell-tool-gear"),
+            ("frame", "frame", false, "shell-tool-frame"),
+            ("frame-trim", "frame-trim", false, "shell-tool-frame-trim"),
+            (
+                "cut-list-feature",
+                "cut-list-feature",
+                false,
+                "shell-tool-cut-list",
+            ),
             ("move-face", "offset", true, "shell-tool-direct-edit"),
         ],
         &[
@@ -1934,6 +1949,20 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                         .build(t),
                     observe(move |_: On<Activate>, mut commands: Commands| {
                         commands.queue(move |world: &mut World| crate::applied::begin(world, kind));
+                    }),
+                ));
+                continue;
+            }
+            if *name == "frame-trim" || *name == "cut-list-feature" {
+                let begin: fn(&mut World) = if *name == "frame-trim" {
+                    crate::composite_ui::begin_frame_trim
+                } else {
+                    crate::composite_ui::begin_cut_list
+                };
+                tb.spawn((
+                    ToolButton::new(*name, *icon_name).tooltip(tr(tip)).build(t),
+                    observe(move |_: On<Activate>, mut commands: Commands| {
+                        commands.queue(begin);
                     }),
                 ));
                 continue;
@@ -2398,6 +2427,13 @@ fn feature_list(p: &mut ChildSpawnerCommands, t: &Theme, element: ElementId, hei
                                             .icon("origin", 12.0)
                                             .icon_color(Color::srgb_u8(0x44, 0x44, 0x44))
                                             .left(22.0)
+                                            // Hides and shows the origin in the view.
+                                            .toggle(
+                                                "feature-origin-visibility",
+                                                "visible",
+                                                "hidden",
+                                                true,
+                                            )
                                             .build(t),
                                         PickRow(Pick::Origin),
                                     ));
@@ -3688,6 +3724,9 @@ enum RowKind {
     Helix,
     Thread,
     Gear,
+    Frame,
+    FrameTrim,
+    CutList,
     Fill,
     /// Move face, Delete face, Simplify (their icon).
     DirectEdit(&'static str),
@@ -3737,6 +3776,9 @@ impl RowKind {
             RowKind::Helix => "thread",
             RowKind::Thread => "thread",
             RowKind::Gear => "gear",
+            RowKind::Frame => "frame",
+            RowKind::FrameTrim => "frame-trim",
+            RowKind::CutList => "cut-list-feature",
             RowKind::Fill => "surface",
             RowKind::Variable => "variables",
             RowKind::SheetMetalModel => "sheet-metal-model",
@@ -3901,6 +3943,9 @@ fn rebuild_feature_rows(
                     cadrs_core::FeatureKind::FaceBlend(_) => RowKind::Fillet,
                     cadrs_core::FeatureKind::Thread(_) => RowKind::Thread,
                     cadrs_core::FeatureKind::Gear(_) => RowKind::Gear,
+                    cadrs_core::FeatureKind::Frame(_) => RowKind::Frame,
+                    cadrs_core::FeatureKind::FrameTrim(_) => RowKind::FrameTrim,
+                    cadrs_core::FeatureKind::CutList(_) => RowKind::CutList,
                     cadrs_core::FeatureKind::Fill(_) => RowKind::Fill,
                     cadrs_core::FeatureKind::Variable(_) => RowKind::Variable,
                     cadrs_core::FeatureKind::SheetMetalModel(_) => RowKind::SheetMetalModel,
@@ -4769,7 +4814,7 @@ pub fn edit_feature(world: &mut World, id: FeatureId) {
         crate::applied::edit(world, id);
     } else if matches!(kind, cadrs_core::FeatureKind::Boolean(_)) {
         crate::boolean::edit_boolean(world, id);
-    } else if matches!(kind, cadrs_core::FeatureKind::Composite(_)) {
+    } else if crate::composite_ui::edits(&kind) {
         crate::composite_ui::edit(world, id);
     } else if matches!(kind, cadrs_core::FeatureKind::ModifyJoint(_)) {
         // P3I.3.
@@ -5384,6 +5429,14 @@ fn on_sketch_eye(ev: On<cadrs_ui::TreeRowToggled>, q: Query<&FeatureRow>, mut co
             visible: Some(!shown),
         });
     });
+}
+
+/// The eye on the origin row hides the origin, or shows it again as it was drawn before
+/// (Preferences › Interface › Origin, saved).
+fn on_origin_eye(ev: On<cadrs_ui::TreeRowToggled>, q: Query<&PickRow>, mut commands: Commands) {
+    if let Ok(PickRow(Pick::Origin)) = q.get(ev.entity) {
+        commands.queue(crate::preferences_ui::toggle_origin);
+    }
 }
 
 /// The eye on a plane's row shows or hides that plane (S1.4).

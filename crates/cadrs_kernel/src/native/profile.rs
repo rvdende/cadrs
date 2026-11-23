@@ -545,6 +545,19 @@ pub fn regions(profile: &Profile) -> Result<Vec<Region2>> {
             if a > 0.0 {
                 h = reverse_loop(&h);
             }
+            // (A hole's boundary crossing the outline is the crossing check's; a hole wholly
+            // outside it describes no face.)
+            // (At a few points of each piece: a whole circle's middle, at angle π, can lie on
+            // the line through two of the outline's vertices, where the ray's count goes wrong,
+            // a bored pillow block's bore level with its arch's springing.)
+            if !h
+                .iter()
+                .any(|p| [0.21, 0.5, 0.79].iter().any(|&s| in_loop(&outer, &p.at(s))))
+            {
+                return Err(KernelError::InvalidProfile(
+                    "a hole lies outside its region".into(),
+                ));
+            }
             holes.push(h);
         }
         let outer = outer.iter().map(along_travel).collect();

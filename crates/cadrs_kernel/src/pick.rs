@@ -9,13 +9,26 @@ pub trait Pick: Kernel {
     /// The face of `body` nearest `point` (a point on it, away from its edges).
     fn face_at(&self, body: BodyId, point: Point3<f64>) -> Result<FaceId> {
         let mut best: Option<(f64, FaceId)> = None;
-        for f in self.faces(body)? {
+        // The faces whose middles are nearest first: the face through the point is most often
+        // among them, and the search stops on it.
+        let mut faces = self.faces(body)?;
+        faces.sort_by(|a, b| {
+            (a.center - point)
+                .norm_squared()
+                .total_cmp(&(b.center - point).norm_squared())
+        });
+        for f in faces {
             let d = self.min_distance(
                 &DistanceTarget::Point(point),
                 &DistanceTarget::Face(body, f.id),
             )?;
             if best.is_none_or(|(b, _)| d.distance < b) {
                 best = Some((d.distance, f.id));
+            }
+            // On the face (to a nanometre): no other face is nearer, so none need be measured
+            // (on an edge, where two faces tie, either was the pick).
+            if d.distance <= 1e-9 {
+                break;
             }
         }
         best.map(|(_, f)| f)
@@ -75,6 +88,59 @@ pub trait Pick: Kernel {
             .filter(|f| keep(f))
             .map(|f| f.id)
             .collect())
+    }
+
+    /// The faces of `body` on surfaces of `kind`.
+    fn faces_of(&self, body: BodyId, kind: SurfaceKind) -> Result<Vec<FaceId>> {
+        Ok(self
+            .face_kinds(body)?
+            .iter()
+            .enumerate()
+            .filter(|(_, k)| **k == kind)
+            .map(|(i, _)| FaceId(i as u64))
+            .collect())
+    }
+
+    /// The faces of `body` on surfaces of another kind than `kind`.
+    fn faces_but(&self, body: BodyId, kind: SurfaceKind) -> Result<Vec<FaceId>> {
+        Ok(self
+            .face_kinds(body)?
+            .iter()
+            .enumerate()
+            .filter(|(_, k)| **k != kind)
+            .map(|(i, _)| FaceId(i as u64))
+            .collect())
+    }
+
+    /// The one face of `body` on a surface of `kind` (a ball's cap on a frustum, a block's one
+    /// cylinder): an error where there is none, or more than one to choose from.
+    fn face_of(&self, body: BodyId, kind: SurfaceKind) -> Result<FaceId> {
+        match self.faces_of(body, kind)?[..] {
+            [f] => Ok(f),
+            [] => Err(KernelError::OperationFailed(format!(
+                "the body has no {kind:?} face"
+            ))),
+            _ => Err(KernelError::OperationFailed(format!(
+                "the body has more than one {kind:?} face"
+            ))),
+        }
+    }
+
+    /// The edges of `body`, its seams left out, between a face on a surface of kind `a` and one
+    /// on a surface of kind `b` (a rim between a cone and a ball, whichever is which side).
+    fn edges_between(&self, body: BodyId, a: SurfaceKind, b: SurfaceKind) -> Result<Vec<EdgeId>> {
+        let kinds: std::collections::HashMap<FaceId, SurfaceKind> = self
+            .faces(body)?
+            .into_iter()
+            .map(|f| (f.id, f.kind))
+            .collect();
+        self.edges_where(body, &|e| {
+            let [Some(f), Some(g)] = e.faces else {
+                return false;
+            };
+            let (x, y) = (kinds.get(&f), kinds.get(&g));
+            (x == Some(&a) && y == Some(&b)) || (x == Some(&b) && y == Some(&a))
+        })
     }
 
     /// Where `point` lies on `body`: the face, edge or vertex nearest it.

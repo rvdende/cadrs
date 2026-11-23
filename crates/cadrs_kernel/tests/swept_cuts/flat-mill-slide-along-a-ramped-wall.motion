@@ -1,0 +1,2 @@
+slide 0e0 0e0 0e0 4.355599999999992e0 1.7763568394002505e-15 -2.2826732344520906e-1
+# operation failed: a cut by a swept solid not made exactly: a swept piece's cut failed: operation failed: the boolean's result is invalid: edge 170 is used by 3 faces (a sheet must be manifold)

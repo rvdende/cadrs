@@ -119,8 +119,11 @@ pub trait Emit {
 }
 
 impl Emit for String {
+    /// (An empty element, such as a polygon clipped away, is left out.)
     fn emit(self, out: &mut Vec<String>) {
-        out.push(self);
+        if !self.is_empty() {
+            out.push(self);
+        }
     }
 }
 
@@ -196,11 +199,19 @@ pub fn attrs(fill: &str, extra: &str) -> String {
 // ---------------------------------------------------------------------------------------------
 // Primitives
 
+/// A polygon; nothing for fewer than two points (one clipped away), which SVG readers warn of.
 pub fn poly(ps: &[P], fill: &str, extra: &str) -> String {
+    if ps.len() < 2 {
+        return String::new();
+    }
     format!(r#"<polygon points="{}"{}/>"#, pts(ps), attrs(fill, extra))
 }
 
+/// A polyline; nothing for fewer than two points.
 pub fn polyline(ps: &[P], extra: &str) -> String {
+    if ps.len() < 2 {
+        return String::new();
+    }
     format!(r#"<polyline points="{}"{}/>"#, pts(ps), attrs("", extra))
 }
 
@@ -605,14 +616,15 @@ pub fn curved_arrow(ps: &[P], head: f64, width: f64, color: &str, extra: &str) -
     if color != INK {
         head_el = stroked(&head_el, color);
     }
-    join(vec![
+    // A shaft trimmed to one point (a short arrow) is left out: the head alone.
+    let shaft_el = (shaft.len() > 1).then(|| {
         format!(
             r#"<polyline points="{}"{stroke}{}/>"#,
             pts(shaft),
             attrs("", extra)
-        ),
-        head_el,
-    ])
+        )
+    });
+    join(shaft_el.into_iter().chain([head_el]).collect())
 }
 
 /// Pairs each item with the next, wrapping around: the edges of a polygon.

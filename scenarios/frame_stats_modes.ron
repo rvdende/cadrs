@@ -1,18 +1,21 @@
-// #69: the frame stats start as the frame rate line alone, with F12's hint; F12 shows the whole
-// panel (long system names cut at its edge), F12 again hides it. The systems are timed, as with
-// the *Time systems* preference.
+// #69: the frame stats are off for a new user (no panel); Preferences › Interface › Frame stats
+// shows the frame rate line alone, or the whole panel (long system names cut at its edge). The
+// systems are timed, as with the *Time systems* preference.
 Scenario(
     start: Some("document"),
     profile_cpu: true,
     steps: [
         WaitFor("document-shell"),
         Wait(40),
-        Screenshot("01-fps-line-with-hint"),
-        Key("F12"),
+        Screenshot("01-off"),
+        Custom("frame-stats fps"),
         Wait(40),
-        Screenshot("02-profile-clipped"),
-        Key("F12"),
+        Screenshot("02-fps-line"),
+        Custom("frame-stats details"),
+        Wait(40),
+        Screenshot("03-profile-clipped"),
+        Custom("frame-stats off"),
         Wait(5),
-        Screenshot("03-hidden"),
+        Screenshot("04-off-again"),
     ],
 )

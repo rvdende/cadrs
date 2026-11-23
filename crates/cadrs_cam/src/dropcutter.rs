@@ -9,12 +9,19 @@
 //! The highest contact wins. A grid of triangle bins over XY keeps each drop to the triangles
 //! near it.
 //!
+//! The kinds with a formula of their own keep it. The others (form tools, tapered ball,
+//! lollipop and barrel mills) go by their profile's pieces ([`crate::cutter`]): the facet
+//! contact is on the rim at either end of a piece or where a convex arc is parallel to the
+//! plane, and only the pieces that face down or sideways count, since a cutter coming down its
+//! axis meets the model with its lower envelope (the neck above a lollipop's ball never does).
+//!
 //! [`drop_line`] samples a path adaptively: segments whose middle drops more than the tolerance
 //! away from the straight line between their ends are split, so the result follows the surface
 //! within the tolerance with as few points as it needs.
 
 use rayon::prelude::*;
 
+use crate::cutter::{Piece, each_piece};
 use crate::geom::{P2, P3, cross, normalize, sub};
 use crate::model::point_in_tri2;
 use crate::tool::{Tool, ToolKind};
@@ -155,6 +162,53 @@ fn facet(tool: &Tool, t: &[P3; 3], n: P3, p: P2) -> Option<f64> {
                 .flatten()
                 .reduce(f64::max)
         }
+        ToolKind::TaperBall | ToolKind::Lollipop | ToolKind::Barrel | ToolKind::Form => {
+            let mut best: Option<f64> = None;
+            let mut take = |h: Option<f64>| {
+                if let Some(h) = h {
+                    best = Some(best.map_or(h, |b| b.max(h)));
+                }
+            };
+            each_piece(tool, |piece| match piece {
+                // A line touches with the rim at either end; one facing up never does.
+                Piece::Cone { r0, h0, r1, h1 } => {
+                    if r1 >= r0 - 1e-12 {
+                        take(disc(r0, h0));
+                        take(disc(r1, h1));
+                    }
+                }
+                Piece::Arc {
+                    rc,
+                    hc,
+                    rho,
+                    a0,
+                    a1,
+                    convex,
+                } => {
+                    // The part of the arc that faces down: up to its widest point when it
+                    // bulges out, from its narrowest when it is hollow.
+                    let (lo, hi) = if convex {
+                        (a0, a1.min(0.0))
+                    } else {
+                        (a1, a0.min(std::f64::consts::PI))
+                    };
+                    if lo > hi {
+                        return;
+                    }
+                    for a in [lo, hi] {
+                        take(disc(rc + rho * a.cos(), hc + rho * a.sin()));
+                    }
+                    // Where a convex arc is parallel to the plane (the bull mill's formula
+                    // with the arc's own centre); a hollow one only ever touches with a rim.
+                    let a = (-n[2]).atan2(nxy);
+                    if convex && a >= lo - 1e-12 && a <= hi + 1e-12 {
+                        let cc = [p[0] - rc * u[0] - rho * n[0], p[1] - rc * u[1] - rho * n[1]];
+                        take(point_in_tri2(cc, t).then(|| plane_z(t[0], n, cc) + rho * n[2] - hc));
+                    }
+                }
+            });
+            best
+        }
         _ => disc(r, 0.0),
     }
 }
@@ -236,23 +290,30 @@ pub fn drop_point(tool: &Tool, idx: &TriIndex, p: P2, floor: f64, scratch: &mut 
     idx.near(p, r, scratch);
     let mut z = floor;
     for &k in scratch.iter() {
-        let t = &idx.tris[k as usize];
-        let n = idx.normals[k as usize];
-        // Quick reject: the triangle's highest point can't beat what we have.
-        let top = t[0][2].max(t[1][2]).max(t[2][2]);
-        if top <= z {
-            continue;
-        }
-        if let Some(h) = facet(tool, t, n, p) {
+        z = touch(tool, &idx.tris[k as usize], idx.normals[k as usize], p, z);
+    }
+    z
+}
+
+/// The lowest tip height at `p` that clears the triangle `t` (unit normal `n`) and is no
+/// lower than `z`: the cutter against its facet, its vertices and its edges. The triangle is in
+/// the cutter's own frame (the tool along +Z), which is how a leaning cutter is dropped too
+/// ([`crate::oriented`]).
+pub fn touch(tool: &Tool, t: &[P3; 3], n: P3, p: P2, mut z: f64) -> f64 {
+    // Quick reject: the triangle's highest point can't beat what we have.
+    let top = t[0][2].max(t[1][2]).max(t[2][2]);
+    if top <= z {
+        return z;
+    }
+    if let Some(h) = facet(tool, t, n, p) {
+        z = z.max(h);
+    }
+    for i in 0..3 {
+        if let Some(h) = vertex(tool, t[i], p) {
             z = z.max(h);
         }
-        for i in 0..3 {
-            if let Some(h) = vertex(tool, t[i], p) {
-                z = z.max(h);
-            }
-            if let Some(h) = edge(tool, t[i], t[(i + 1) % 3], p) {
-                z = z.max(h);
-            }
+        if let Some(h) = edge(tool, t[i], t[(i + 1) % 3], p) {
+            z = z.max(h);
         }
     }
     z

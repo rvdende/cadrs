@@ -262,12 +262,15 @@ impl crate::rebuild::task::Task for StepFixture {
         }
     }
 }
+pub mod bull_nose_profile;
+pub mod cnc_machines;
 pub mod conrod;
 pub mod design_intent;
 pub mod drawing_bar;
 pub mod drawing_bracket;
 pub mod drill;
 pub mod flange;
+pub mod frames;
 pub mod gasket;
 pub mod gear_cover;
 pub mod gears;

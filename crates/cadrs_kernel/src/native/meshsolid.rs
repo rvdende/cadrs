@@ -541,19 +541,7 @@ fn split_touching(tris: Vec<[usize; 3]>, pts: &mut Vec<P3>) -> Result<Vec<[usize
     // Corners joined across paired edges at the same vertex; each group of corners of a
     // vertex beyond the first gets its own copy of the vertex.
     let mut parent: Vec<usize> = (0..tris.len() * 3).collect();
-    fn find(p: &mut [usize], x: usize) -> usize {
-        let mut r = x;
-        while p[r] != r {
-            r = p[r];
-        }
-        let mut y = x;
-        while p[y] != r {
-            let n = p[y];
-            p[y] = r;
-            y = n;
-        }
-        r
-    }
+    use super::math::set_of as find;
     for i in 0..tris.len() {
         for k in 0..3 {
             let j = across[i][k];

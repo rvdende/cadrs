@@ -584,17 +584,12 @@ impl Store {
 
     /// The document's thumbnail as RGBA8 at the lists' size, if it has one.
     pub fn read_thumbnail(&self, id: DocumentId) -> Option<RgbaImage> {
-        image::open(self.thumbnail_path(id))
-            .ok()
-            .map(|i| i.to_rgba8())
+        read_png(&self.thumbnail_path(id))
     }
 
     /// The document's large thumbnail (the details panel's), else its small one.
     pub fn read_thumbnail_large(&self, id: DocumentId) -> Option<RgbaImage> {
-        image::open(self.doc_dir(id).join(THUMBNAIL_LARGE_FILE))
-            .ok()
-            .map(|i| i.to_rgba8())
-            .or_else(|| self.read_thumbnail(id))
+        read_png(&self.doc_dir(id).join(THUMBNAIL_LARGE_FILE)).or_else(|| self.read_thumbnail(id))
     }
 
     /// Fills the store with `n` sample documents with fixed ids, names and timestamps (for
@@ -933,6 +928,15 @@ fn write_entry(doc_path: &Path, entry: &DocumentEntry) -> Result<(), StoreError>
         .map_err(|e| StoreError::Parse(e.to_string()))?;
     write_atomic(&doc_path.with_file_name(ENTRY_FILE), text.as_bytes())?;
     Ok(())
+}
+
+/// A saved picture, read through `cadrs_fs` (`image::open` reads with `std::fs`, which a page
+/// does not have).
+fn read_png(path: &Path) -> Option<RgbaImage> {
+    let bytes = cadrs_fs::read(path).ok()?;
+    image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
+        .ok()
+        .map(|i| i.to_rgba8())
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {

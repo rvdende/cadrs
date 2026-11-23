@@ -639,8 +639,11 @@ fn plane_now(world: &World) -> Option<SketchPlane> {
         .active?;
     let f = map.plane.frame();
     let v = |p: [f64; 3]| [p[0] as f32, p[1] as f32, p[2] as f32];
+    // The rectangle's centre travels as its origin (it follows what is drawn).
+    let c = s.plane_center.as_dvec2();
+    let origin = std::array::from_fn(|i| f.origin[i] + f.u[i] * c.x + f.v[i] * c.y);
     Some(SketchPlane {
-        origin: v(f.origin),
+        origin: v(origin),
         u: v(f.u),
         v: v(f.v),
         half: s.plane_extent.to_array(),

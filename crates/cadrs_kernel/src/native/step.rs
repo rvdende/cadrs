@@ -2100,6 +2100,9 @@ struct Model<'a> {
     /// Unit factors by context record.
     units: HashMap<u64, (f64, f64)>,
     styles: Styles,
+    /// How much larger than the file says its lengths are read ([`Model::boost_of`]): 1 but
+    /// for a small model.
+    boost: f64,
 }
 
 impl<'a> Model<'a> {
@@ -2193,8 +2196,61 @@ impl<'a> Model<'a> {
                 }
             }
         }
+        out.0 *= self.boost;
         self.units.insert(ctx, out);
         out
+    }
+
+    /// How much larger a file is read than it says: a power of two that takes a model
+    /// smaller than a boolean's small model ([`super::boolean::SMALL_MODEL`], by its points'
+    /// box in the file's first length unit) to the working size, 1 for any other. The
+    /// reader's join distances are lengths in mm (points 1e-5 apart are one, a p-curve may run
+    /// 5e-4 off its edge): on a part a few microns across they are the part's size, so it is
+    /// built larger and scaled back, as a boolean works on one.
+    fn boost_of(&self) -> f64 {
+        let unit = self
+            .ids("GLOBAL_UNIT_ASSIGNED_CONTEXT")
+            .iter()
+            .find_map(|&ctx| {
+                let units = self
+                    .rec(ctx)?
+                    .part("GLOBAL_UNIT_ASSIGNED_CONTEXT")?
+                    .first()?
+                    .as_list()?;
+                units.iter().filter_map(|u| u.as_ref()).find_map(|u| {
+                    if self.rec(u)?.has("LENGTH_UNIT") {
+                        self.unit_factor(u, 0)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .unwrap_or(1.0);
+        let mut bb = Bbox::empty();
+        for &id in self.ids("CARTESIAN_POINT") {
+            let Some(l) = self
+                .rec(id)
+                .and_then(|r| r.params().get(1))
+                .and_then(|p| p.as_list())
+            else {
+                continue;
+            };
+            let c: Vec<f64> = l.iter().filter_map(|x| x.as_f64()).collect();
+            let g = |k: usize| c.get(k).copied().unwrap_or(0.0);
+            if c.iter().all(|x| x.is_finite()) {
+                bb.add(&P3::new(g(0), g(1), g(2)));
+            }
+        }
+        let size = if bb.is_empty() {
+            0.0
+        } else {
+            bb.diagonal() * unit
+        };
+        if size > 0.0 && size < super::boolean::SMALL_MODEL {
+            (super::boolean::WORKING_SIZE / size).log2().floor().exp2()
+        } else {
+            1.0
+        }
     }
 
     fn rep_units(&mut self, rep: u64) -> (f64, f64) {
@@ -2692,7 +2748,9 @@ pub fn read(bytes: &[u8]) -> Result<ReadModel, String> {
         f: &f,
         units: HashMap::new(),
         styles: Styles::read(&f),
+        boost: 1.0,
     };
+    m.boost = m.boost_of();
     let mut out = ReadModel::default();
     let mut warnings = Vec::new();
     let mut pds: Vec<u64> = Vec::new();
@@ -2832,6 +2890,19 @@ pub fn read(bytes: &[u8]) -> Result<ReadModel, String> {
             format!("the file holds no shapes we can read ({})", warnings[0])
         });
     }
+    // A small model was read larger ([`Model::boost_of`]): back to its size.
+    if m.boost != 1.0 {
+        let shrink = Affine {
+            m: nalgebra::Matrix3::identity() / m.boost,
+            t: V3::zeros(),
+        };
+        for p in &mut out.parts {
+            p.body = p.body.transformed(&shrink);
+        }
+        for o in &mut out.occurrences {
+            o.placement.t /= m.boost;
+        }
+    }
     out.warnings = warnings;
     Ok(out)
 }
@@ -2914,6 +2985,145 @@ fn lighter_curve(n: &NurbsCurve) -> Option<NurbsCurve> {
             return None;
         }
         sites = finer;
+    }
+}
+
+/// A surface of more poles than this is written in fewer digits ([`fewer_digits`]).
+const LIGHT_SURFACE_FROM: usize = 64;
+
+/// A surface of many poles (a swept or fitted face) with each pole's coordinates to a whole
+/// number of steps a hundredth of [`LIGHT_WITHIN`] of its extent, as [`lighter_curve`]'s are:
+/// the nearest power of ten below it, so that a coordinate is written in eleven digits or so
+/// and not seventeen. Such a surface follows what it was fitted to no closer than that
+/// closeness, and its poles are nine tenths of a hobbed gear's file, which is a fifth smaller
+/// for it. Its four corners are kept to the last digit. None for a rational surface or one of
+/// few poles. (Not also through fewer poles, as a curve is: a quintic through an even grid
+/// of a swept sheet's points needs as many as the sheet has, to that closeness.)
+fn fewer_digits(n: &NurbsSurface) -> Option<NurbsSurface> {
+    let (along, across) = (n.cps.len(), n.cps.first()?.len());
+    if along * across <= LIGHT_SURFACE_FROM || n.cps.iter().flatten().any(|h| h.w != 1.0) {
+        return None;
+    }
+    let mut bb = Bbox::empty();
+    for h in n.cps.iter().flatten() {
+        bb.add(&super::nurbs::dehom(h));
+    }
+    let extent = bb.diagonal();
+    if !(extent > 0.0 && extent.is_finite()) {
+        return None;
+    }
+    let scale = 10f64.powf(-(LIGHT_WITHIN * extent / 100.0).log10().floor());
+    let mut out = n.clone();
+    for (a, row) in out.cps.iter_mut().enumerate() {
+        for (b, h) in row.iter_mut().enumerate() {
+            if (a == 0 || a == along - 1) && (b == 0 || b == across - 1) {
+                continue;
+            }
+            for d in 0..3 {
+                h[d] = (h[d] * scale).round() / scale;
+            }
+        }
+    }
+    Some(out)
+}
+
+/// A surface smooth along u through fewer poles that way: each column of its poles is a curve
+/// in u (the surface is those curves weighed by v's basis, which sums to one, so it moves no
+/// farther than they do), refitted by a quintic through sites they share, the sites halved
+/// wherever a column misses by more than [`LIGHT_WITHIN`] of the extent in between. None for
+/// a rational surface, one with a knot repeated in u, or where under a quarter would go.
+fn lighter_along_u(n: &NurbsSurface) -> Option<NurbsSurface> {
+    let (along, across) = (n.cps.len(), n.cps.first()?.len());
+    if along <= 16 || n.cps.iter().flatten().any(|h| h.w != 1.0) {
+        return None;
+    }
+    if n.du < 3
+        || n.ku[n.du + 1..n.ku.len() - n.du - 1]
+            .windows(2)
+            .any(|w| w[1] <= w[0])
+    {
+        return None;
+    }
+    let mut bb = Bbox::empty();
+    for h in n.cps.iter().flatten() {
+        bb.add(&super::nurbs::dehom(h));
+    }
+    let tol = LIGHT_WITHIN * bb.diagonal();
+    if !(tol > 0.0) {
+        return None;
+    }
+    let cols: Vec<NurbsCurve> = (0..across)
+        .map(|b| NurbsCurve {
+            degree: n.du,
+            knots: n.ku.clone(),
+            cps: n.cps.iter().map(|row| row[b]).collect(),
+        })
+        .collect();
+    let ((u0, u1), _) = n.range();
+    let most = along * 3 / 4;
+    let mut sites: Vec<f64> = (0..=8).map(|i| u0 + (u1 - u0) * i as f64 / 8.0).collect();
+    loop {
+        let fits: Vec<NurbsCurve> = cols
+            .iter()
+            .map(|c| {
+                let pts: Vec<P3> = sites.iter().map(|&t| c.point(t)).collect();
+                NurbsCurve::interpolate(&pts, &sites, 5.min(sites.len() - 1), None, None)
+            })
+            .collect();
+        let split: Vec<bool> = sites
+            .windows(2)
+            .map(|w| {
+                (1..8).any(|i| {
+                    let t = w[0] + (w[1] - w[0]) * i as f64 / 8.0;
+                    cols.iter()
+                        .zip(&fits)
+                        .any(|(c, f)| (c.point(t) - f.point(t)).norm() > tol)
+                })
+            })
+            .collect();
+        if !split.iter().any(|x| *x) {
+            let m = fits[0].cps.len();
+            if m > most {
+                return None;
+            }
+            let cps: Vec<Vec<super::nurbs::H>> = (0..m)
+                .map(|a| fits.iter().map(|f| f.cps[a]).collect())
+                .collect();
+            return NurbsSurface::new(
+                fits[0].degree,
+                n.dv,
+                fits[0].knots.clone(),
+                n.kv.clone(),
+                cps,
+            )
+            .ok();
+        }
+        let mut finer = Vec::with_capacity(2 * sites.len());
+        for (i, w) in sites.windows(2).enumerate() {
+            finer.push(w[0]);
+            if split[i] {
+                finer.push(0.5 * (w[0] + w[1]));
+            }
+        }
+        finer.push(u1);
+        if finer.len() + 4 > most {
+            return None;
+        }
+        sites = finer;
+    }
+}
+
+/// A surface with its u and v changed over: the same points, (u, v) for (v, u).
+fn turned(n: &NurbsSurface) -> NurbsSurface {
+    let (along, across) = (n.cps.len(), n.cps.first().map_or(0, |r| r.len()));
+    NurbsSurface {
+        du: n.dv,
+        dv: n.du,
+        ku: n.kv.clone(),
+        kv: n.ku.clone(),
+        cps: (0..across)
+            .map(|b| (0..along).map(|a| n.cps[a][b]).collect())
+            .collect(),
     }
 }
 
@@ -3095,6 +3305,18 @@ impl Writer {
             let (a, z) = n.range();
             let (lo, hi) = (t[0].min(t[1]), t[0].max(t[1]));
             let hair = 1e-9 * (z - a);
+            // An end a hair from a knot is cut at the knot: cut beside it, the piece would
+            // start with a span that narrow, which nothing downstream samples well (a reader
+            // stepping along it takes hundreds of steps and gets nowhere).
+            let at_knot = |t: f64| {
+                n.knots
+                    .iter()
+                    .copied()
+                    .filter(|k| (k - t).abs() <= hair)
+                    .min_by(|x, y| (x - t).abs().total_cmp(&(y - t).abs()))
+                    .unwrap_or(t)
+            };
+            let (lo, hi) = (at_knot(lo), at_knot(hi));
             if lo >= a && hi <= z && hi - lo > hair && (lo - a > hair || z - hi > hair) {
                 return self.bspline_curve(&n.restricted(lo, hi));
             }
@@ -3188,6 +3410,13 @@ impl Writer {
     }
 
     fn bspline_surface(&mut self, n: &NurbsSurface) -> u64 {
+        // Through fewer poles each way it is smooth, then in fewer digits.
+        let along_u = lighter_along_u(n);
+        let n = along_u.as_ref().unwrap_or(n);
+        let along_v = lighter_along_u(&turned(n)).map(|t| turned(&t));
+        let n = along_v.as_ref().unwrap_or(n);
+        let lighter = fewer_digits(n);
+        let n = lighter.as_ref().unwrap_or(n);
         let rows: Vec<String> = n
             .cps
             .iter()
@@ -3694,6 +3923,71 @@ pub fn write_colored(
 mod tests {
     use super::*;
 
+    /// A screwed band (a line turned four times round an axis as it climbs), fitted with a
+    /// cubic through 1200 sites along the screw: written through under half the poles that way,
+    /// the same surface at the same parameters to [`LIGHT_WITHIN`] of its extent, its two poles
+    /// across kept.
+    #[test]
+    fn a_dense_surface_is_written_through_fewer_poles() {
+        let at = |t: f64, r: f64| {
+            let a = 8.0 * std::f64::consts::PI * t;
+            P3::new(r * a.cos(), r * a.sin(), 30.0 * t)
+        };
+        let ts: Vec<f64> = (0..1200).map(|i| i as f64 / 1199.0).collect();
+        let rails: Vec<NurbsCurve> = [5.0, 9.0]
+            .iter()
+            .map(|&r| {
+                let pts: Vec<P3> = ts.iter().map(|&t| at(t, r)).collect();
+                NurbsCurve::interpolate(&pts, &ts, 3, None, None)
+            })
+            .collect();
+        let n = NurbsSurface::new(
+            3,
+            1,
+            rails[0].knots.clone(),
+            vec![0.0, 0.0, 1.0, 1.0],
+            (0..rails[0].cps.len())
+                .map(|a| vec![rails[0].cps[a], rails[1].cps[a]])
+                .collect(),
+        )
+        .unwrap();
+        let l = lighter_along_u(&n).expect("a lighter surface");
+        assert!(
+            l.cps.len() * 2 < n.cps.len(),
+            "{} of {}",
+            l.cps.len(),
+            n.cps.len()
+        );
+        assert_eq!(l.cps[0].len(), 2);
+        let extent = 35.0;
+        for i in 0..=300 {
+            for j in 0..=4 {
+                let (u, v) = (i as f64 / 300.0, j as f64 / 4.0);
+                let miss = (l.point(u, v) - n.point(u, v)).norm();
+                assert!(miss < 2.0 * LIGHT_WITHIN * extent, "off by {miss:e}");
+            }
+        }
+        // Across (two poles, a line): nothing to gain, and the surface turned over is itself
+        // turned back.
+        assert!(lighter_along_u(&turned(&n)).is_none());
+        let back = turned(&turned(&n));
+        assert_eq!(back.cps, n.cps);
+        // In fewer digits: within a hundredth of that closeness, the corners to the bit.
+        let f = fewer_digits(&l).expect("fewer digits");
+        assert_eq!(f.cps[0][0], l.cps[0][0]);
+        let moved = f
+            .cps
+            .iter()
+            .flatten()
+            .zip(l.cps.iter().flatten())
+            .map(|(a, b)| (a - b).norm())
+            .fold(0.0, f64::max);
+        assert!(
+            moved > 0.0 && moved < LIGHT_WITHIN * extent / 50.0,
+            "{moved:e}"
+        );
+    }
+
     /// A smooth cubic of many poles is written as a quintic of fewer that keeps its ends to the
     /// bit and stays within [`LIGHT_WITHIN`] of it at the same parameters; a cubic with a corner
     /// (a knot three times) and a short one are written as they are.
@@ -4085,5 +4379,78 @@ END-ISO-10303-21;
         assert_eq!(b.solids.len(), 1);
         let mp = super::super::mass::body_mass(b);
         assert!((mp.volume - 25.4f64.powi(3)).abs() < 1e-6, "{}", mp.volume);
+    }
+    /// A quarter elbow of a round bar as Onshape writes a bent tube: its wall a face of a
+    /// torus bounded only by the two end circles (no seam), then two flat ends.
+    #[test]
+    fn reads_a_torus_band_between_two_circles() {
+        let mut s = String::from(
+            "ISO-10303-21;\nHEADER;\nFILE_SCHEMA(('CONFIG_CONTROL_DESIGN'));\nENDSEC;\nDATA;\n",
+        );
+        // Points and directions.
+        for (id, p) in [
+            (1, [0., 0., 0.]),
+            (2, [50., 0., 0.]),
+            (3, [0., 50., 0.]),
+            (4, [55., 0., 0.]),
+            (5, [0., 55., 0.]),
+        ] {
+            let _ = writeln!(
+                s,
+                "#{id}=CARTESIAN_POINT('',({},{},{}));",
+                real(p[0]),
+                real(p[1]),
+                real(p[2])
+            );
+        }
+        for (id, d) in [
+            (11, [0., 0., 1.]),
+            (12, [1., 0., 0.]),
+            (13, [0., 1., 0.]),
+            (14, [0., -1., 0.]),
+            (15, [-1., 0., 0.]),
+        ] {
+            let _ = writeln!(
+                s,
+                "#{id}=DIRECTION('',({},{},{}));",
+                real(d[0]),
+                real(d[1]),
+                real(d[2])
+            );
+        }
+        s.push_str(
+            "#20=AXIS2_PLACEMENT_3D('',#1,#11,#12);\n\
+             #21=TOROIDAL_SURFACE('',#20,50.,5.);\n\
+             #22=AXIS2_PLACEMENT_3D('',#2,#13,#12);\n#23=CIRCLE('',#22,5.);\n\
+             #24=AXIS2_PLACEMENT_3D('',#3,#12,#13);\n#25=CIRCLE('',#24,5.);\n\
+             #26=AXIS2_PLACEMENT_3D('',#2,#14,#12);\n#27=PLANE('',#26);\n\
+             #28=AXIS2_PLACEMENT_3D('',#3,#15,#13);\n#29=PLANE('',#28);\n\
+             #30=VERTEX_POINT('',#4);\n#31=VERTEX_POINT('',#5);\n\
+             #32=EDGE_CURVE('',#30,#30,#23,.T.);\n#33=EDGE_CURVE('',#31,#31,#25,.T.);\n\
+             #40=ORIENTED_EDGE('',*,*,#32,.T.);\n#41=ORIENTED_EDGE('',*,*,#33,.T.);\n\
+             #42=ORIENTED_EDGE('',*,*,#32,.F.);\n#43=ORIENTED_EDGE('',*,*,#33,.F.);\n\
+             #50=EDGE_LOOP('',(#40));\n#51=EDGE_LOOP('',(#41));\n\
+             #52=EDGE_LOOP('',(#42));\n#53=EDGE_LOOP('',(#43));\n\
+             #60=FACE_BOUND('',#50,.T.);\n#61=FACE_BOUND('',#51,.T.);\n\
+             #62=FACE_BOUND('',#52,.T.);\n#63=FACE_BOUND('',#53,.T.);\n\
+             #70=ADVANCED_FACE('',(#60,#61),#21,.T.);\n\
+             #71=ADVANCED_FACE('',(#62),#27,.T.);\n#72=ADVANCED_FACE('',(#63),#29,.T.);\n\
+             #80=CLOSED_SHELL('',(#70,#71,#72));\n#81=MANIFOLD_SOLID_BREP('elbow',#80);\n\
+             #82=ADVANCED_BREP_SHAPE_REPRESENTATION('',(#81),#83);\n\
+             #83=(GEOMETRIC_REPRESENTATION_CONTEXT(3) GLOBAL_UNIT_ASSIGNED_CONTEXT((#84,#85)) REPRESENTATION_CONTEXT('',''));\n\
+             #84=(LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.));\n\
+             #85=(NAMED_UNIT(*) PLANE_ANGLE_UNIT() SI_UNIT($,.RADIAN.));\n\
+             ENDSEC;\nEND-ISO-10303-21;\n",
+        );
+        let m = read(s.as_bytes()).unwrap();
+        assert_eq!(m.parts.len(), 1);
+        let b = &m.parts[0].body;
+        assert!(b.check().is_empty(), "{:?}", b.check());
+        assert_eq!(b.solids.len(), 1);
+        assert_eq!(b.faces.len(), 3);
+        // A quarter of a torus: 2π²Rr² / 4.
+        let want = std::f64::consts::PI.powi(2) * 50.0 * 25.0 / 2.0;
+        let mp = super::super::mass::body_mass(b);
+        assert!((mp.volume - want).abs() < 1e-6, "{} vs {want}", mp.volume);
     }
 }

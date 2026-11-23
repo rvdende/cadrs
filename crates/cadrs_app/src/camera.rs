@@ -447,8 +447,13 @@ impl ViewState {
             -normal
         } else {
             normal
-        }
-        .normalize();
+        };
+        self.seen_from(n)
+    }
+
+    /// The orientation looking straight at a plane from the side its normal `n` points to.
+    pub fn seen_from(self, n: Vec3) -> Self {
+        let n = n.normalize();
         let elevation = n.z.clamp(-1.0, 1.0).asin().to_degrees();
         let azimuth = if n.z.abs() > 0.9999 {
             // Straight up or down: keep X to the right, like the Top view.

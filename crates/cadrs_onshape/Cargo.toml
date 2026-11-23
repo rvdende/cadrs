@@ -14,6 +14,7 @@ path = "src/main.rs"
 cadrs_core.workspace = true
 cadrs_sketch.workspace = true
 cadrs_kernel.workspace = true
+nalgebra.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 ron.workspace = true

@@ -334,12 +334,6 @@ fn golden_sketch_line_chain() {
 
 #[test]
 #[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
-fn golden_sketch_rectangle() {
-    run_scenario("sketch_rectangle");
-}
-
-#[test]
-#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
 fn golden_sketch_circle_arc() {
     run_scenario("sketch_circle_arc");
 }
@@ -1069,12 +1063,6 @@ fn golden_course_ps25_curve_pattern() {
 #[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
 fn golden_course_ps17_gear_cover() {
     run_scenario("course_ps17_gear_cover");
-}
-
-#[test]
-#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
-fn golden_course_ps21_funnel() {
-    run_scenario("course_ps21_funnel");
 }
 
 #[test]
@@ -2553,6 +2541,16 @@ fn golden_cam_studio_3d() {
     // CAM Studio 3D: adaptive clearing and a parallel finish of the reflector's dish from
     // below (the scenario checks Verify finds no gouges and no collisions).
     run_scenario("cam_studio_3d");
+}
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_cam_machine_from_assembly() {
+    // A machine modelled as an assembly (issue #278): the Machine Builder with its axes and a
+    // jog, the CAM Studio whose job runs on it, and the machine moving with the simulation of
+    // a 5-axis and a 4-axis run, kept still with the work turning on it and, for comparison,
+    // moving round the part (the scenario checks the axes' names and the dialog's summary).
+    run_scenario("cam_machine_from_assembly");
 }
 
 #[test]

@@ -100,7 +100,7 @@ pub fn split(
     source: u64,
 ) -> Result<OpResult> {
     let (o, n) = tool_plane(k, tool)?;
-    let a = (**k.get(body)?).clone();
+    let a = std::sync::Arc::clone(k.get(body)?);
     let bb = a.bbox();
     let hs = half_space_box(o, n, &bb)?;
     // The two sides side by side (each a boolean of the part with the half space).
@@ -178,16 +178,23 @@ pub fn split_faces(
     if let SplitTool::Curves(curves) = tool {
         return super::curve_split::split_faces_by_curves(k, body, faces, curves);
     }
-    let (o, n) = tool_plane(k, tool)?;
-    let a = (**k.get(body)?).clone();
-    let bb = a.bbox();
-    let sheet = plane_sheet(
-        o,
-        n,
-        bb.diagonal() * 2.0 + (bb.center() - o).norm() * 2.0 + 10.0,
-    );
+    let a = std::sync::Arc::clone(k.get(body)?);
     let list: Vec<usize> = faces.iter().map(|f| f.0 as usize).collect();
-    let r: BoolOut = imprint(&a, &sheet, Some(list.clone()))?;
+    let r: BoolOut = if let SplitTool::Body(sheet) = tool {
+        // A surface body (a sketch's curves swept through the part): the faces cut where it
+        // crosses them.
+        let sheet = std::sync::Arc::clone(k.get(*sheet)?);
+        imprint(&a, &sheet, Some(list.clone()))?
+    } else {
+        let (o, n) = tool_plane(k, tool)?;
+        let bb = a.bbox();
+        let sheet = plane_sheet(
+            o,
+            n,
+            bb.diagonal() * 2.0 + (bb.center() - o).norm() * 2.0 + 10.0,
+        );
+        imprint(&a, &sheet, Some(list.clone()))?
+    };
     if r.body.faces.len() == a.faces.len() {
         return Err(KernelError::InvalidParameter(
             "The split tool doesn't cross the faces".into(),
@@ -368,6 +375,55 @@ pub fn face_tool(
 }
 
 /// The exact outward normals of a face at the points nearest the given ones.
+/// The boundary's outward unit normal at each point within `within` of it, where it has a
+/// tangent plane there: on a face, the face's; on an edge or a vertex, the faces' there when they
+/// all agree (a seam, a fillet's rail: the faces meet tangentially), else None (a crease). None
+/// for a point off the boundary.
+pub fn boundary_normals(
+    k: &NativeKernel,
+    body: BodyId,
+    points: &[P3],
+    within: f64,
+) -> Result<Vec<Option<V3>>> {
+    let b = k.get(body)?;
+    let ef = b.edge_faces();
+    points
+        .iter()
+        .map(|p| {
+            let r = k.min_distance(&DistanceTarget::Point(*p), &DistanceTarget::Body(body))?;
+            if r.distance > within {
+                return Ok(None);
+            }
+            let mut faces: Vec<usize> = match r.b_at {
+                DistanceLocation::Face(f, ..) => vec![f.0 as usize],
+                DistanceLocation::Edge(e, _) => ef[e.0 as usize].to_vec(),
+                DistanceLocation::Vertex(v) => (0..b.edges.len())
+                    .filter(|&e| b.edges[e].v.contains(&(v.0 as usize)))
+                    .flat_map(|e| ef[e].iter().copied())
+                    .collect(),
+                DistanceLocation::Point => Vec::new(),
+            };
+            faces.sort_unstable();
+            faces.dedup();
+            let mut normals = Vec::with_capacity(faces.len());
+            for f in faces {
+                normals.extend(face_normals_at(k, body, FaceId(f as u64), &[*p])?);
+            }
+            let Some(first) = normals.first().and_then(|n| n.try_normalize(tol::TINY)) else {
+                return Ok(None);
+            };
+            let agree = normals.iter().all(|n| {
+                n.try_normalize(tol::TINY)
+                    .is_some_and(|n| n.dot(&first) >= 1.0 - tol::ANGULAR_POINT)
+            });
+            Ok(agree.then(|| {
+                let sum: V3 = normals.iter().sum();
+                sum.normalize()
+            }))
+        })
+        .collect()
+}
+
 pub fn face_normals_at(
     k: &NativeKernel,
     body: BodyId,

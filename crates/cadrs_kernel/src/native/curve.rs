@@ -186,22 +186,126 @@ impl Curve {
         self.length(t0, t1) > l
     }
 
+    /// Whether this curve over `own` runs along `other` over `range`: its points at the
+    /// fractions `at` of its stretch each within `within` of the other's nearest. (Three
+    /// places tell an edge lying along another from one that crosses or leaves it.)
+    pub fn runs_along(
+        &self,
+        own: (f64, f64),
+        other: &Curve,
+        range: (f64, f64),
+        at: [f64; 3],
+        within: f64,
+        strictly: bool,
+    ) -> bool {
+        at.iter().all(|f| {
+            let p = self.point(own.0 + (own.1 - own.0) * f);
+            let d = (other.point(other.closest(&p, range.0, range.1)) - p).norm();
+            if strictly { d < within } else { d <= within }
+        })
+    }
+
     /// The parameter of the point of the curve nearest `p`, in [t0, t1] (periodic curves:
     /// unwrapped into the range when possible).
     pub fn closest(&self, p: &P3, t0: f64, t1: f64) -> f64 {
         match self {
-            Curve::Line { o, d } => ((p - o).dot(d) / d.norm_squared()).clamp(t0, t1),
+            Curve::Line { o, d } => {
+                // (Either way round; a line without a direction is its one point.)
+                let (lo, hi) = (t0.min(t1), t0.max(t1));
+                let dd = d.norm_squared();
+                if dd > 0.0 {
+                    ((p - o).dot(d) / dd).clamp(lo, hi)
+                } else {
+                    lo
+                }
+            }
             Curve::Circle { c, x, y, .. } => {
                 let v = p - c;
                 let a = v.dot(y).atan2(v.dot(x));
                 clamp_periodic(a, t0, t1)
             }
-            _ => self.closest_from(p, t0, t1, &self.closest_samples(t0, t1)),
+            // A whole ellipse (or more of its parameter than a turn): the nearest of sixteen
+            // points round it, polished, whatever the range's width; the range only names
+            // the turn.
+            Curve::Ellipse { .. } if (t1 - t0).abs() >= TAU - tol::ROUNDOFF_FINE => {
+                const ROUND: usize = 16;
+                let (lo, hi) = (t0.min(t1), t0.max(t1));
+                let start = (0..ROUND)
+                    .map(|i| TAU * i as f64 / ROUND as f64)
+                    .min_by(|a, b| {
+                        (self.point(*a) - p)
+                            .norm_squared()
+                            .total_cmp(&(self.point(*b) - p).norm_squared())
+                    })
+                    .unwrap_or(0.0);
+                let t = self.closest_polished(p, f64::NEG_INFINITY, f64::INFINITY, start);
+                wrap(t, lo, TAU).min(hi)
+            }
+            // A part of an ellipse: a sample a sixteenth of a turn (five at least), not
+            // sixty-five whatever the arc.
+            Curve::Ellipse { .. } => {
+                let (lo, hi) = (t0.min(t1), t0.max(t1));
+                let n = (((hi - lo) / (TAU / 16.0)).ceil() as usize).clamp(4, CLOSEST_SAMPLES);
+                let start = (0..=n)
+                    .map(|i| lo + (hi - lo) * i as f64 / n as f64)
+                    .min_by(|a, b| {
+                        (self.point(*a) - p)
+                            .norm_squared()
+                            .total_cmp(&(self.point(*b) - p).norm_squared())
+                    })
+                    .unwrap_or(lo);
+                self.closest_polished(p, lo, hi, start)
+            }
+            // A spline: samples to a span, as many as a span's distance can have turns (twice
+            // its degree, and two), fewer where there are many spans, never under four. (Not
+            // sixty-five over the range whatever the curve: too many for a span or two, and
+            // under one a span for a curve of more spans than that.)
+            Curve::Nurbs(n) => {
+                let (lo, hi) = (t0.min(t1), t0.max(t1));
+                let spans = 1 + n.breaks().iter().filter(|b| **b > lo && **b < hi).count();
+                let each = (2 * n.degree + 2).min(CLOSEST_SAMPLES / spans).max(4);
+                let mut samples: Vec<(f64, f64)> = Vec::new();
+                let knots = self.pieces(lo, hi);
+                for w in knots.windows(2) {
+                    for i in 0..each {
+                        let t = w[0] + (w[1] - w[0]) * i as f64 / each as f64;
+                        samples.push((t, (self.point(t) - p).norm_squared()));
+                    }
+                }
+                samples.push((hi, (self.point(hi) - p).norm_squared()));
+                // Polished from the nearest sample, and from the next nearest local minimum of
+                // the samples' distances where there is one within a few times the nearest's:
+                // a closed curve's two ends are one point, the nearest sample at either end
+                // alike, while the curve's nearest point lies just before the other end.
+                let best = samples
+                    .iter()
+                    .copied()
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
+                    .unwrap_or((lo, 0.0));
+                let t = self.closest_polished(p, lo, hi, best.0);
+                let mut out = (t, (self.point(t) - p).norm_squared());
+                let n = samples.len();
+                for i in 0..n {
+                    let d = samples[i].1;
+                    let minimum =
+                        (i == 0 || samples[i - 1].1 >= d) && (i + 1 == n || samples[i + 1].1 >= d);
+                    if !minimum || samples[i].0 == best.0 || d > 4.0 * best.1 + 1e-300 {
+                        continue;
+                    }
+                    let t = self.closest_polished(p, lo, hi, samples[i].0);
+                    let e = (self.point(t) - p).norm_squared();
+                    if e < out.1 {
+                        out = (t, e);
+                    }
+                }
+                out.0
+            }
         }
     }
 
-    /// The samples [`Self::closest`] starts from over [t0, t1] (none for lines and circles):
-    /// to give [`Self::closest_from`] when projecting many points onto one range.
+    /// Samples over [t0, t1] (none for lines and circles) to give [`Self::closest_from`] when
+    /// projecting many points onto one range: taken once, where [`Self::closest`] takes its
+    /// own each call.
     pub fn closest_samples(&self, t0: f64, t1: f64) -> [P3; CLOSEST_SAMPLES + 1] {
         let mut out = [P3::origin(); CLOSEST_SAMPLES + 1];
         if !matches!(self, Curve::Line { .. } | Curve::Circle { .. }) {
@@ -212,8 +316,9 @@ impl Curve {
         out
     }
 
-    /// [`Self::closest`] with its samples over [t0, t1] taken already ([`Self::closest_samples`]
-    /// of the same range): the same answer.
+    /// [`Self::closest`] from samples over [t0, t1] taken already ([`Self::closest_samples`]
+    /// of the same range): the same nearest point (lines and circles to the bit; the others
+    /// start from these samples, not `closest`'s own, and are polished the same).
     pub fn closest_from(&self, p: &P3, t0: f64, t1: f64, samples: &[P3]) -> f64 {
         match self {
             Curve::Line { .. } | Curve::Circle { .. } => self.closest(p, t0, t1),
@@ -228,25 +333,38 @@ impl Curve {
                         best = (d, t);
                     }
                 }
-                let mut t = best.1;
-                for _ in 0..30 {
-                    let (q, d1, d2) = self.d2(t);
-                    let r = q - p;
-                    let f = r.dot(&d1);
-                    let df = d1.norm_squared() + r.dot(&d2);
-                    if df.abs() < tol::TINY {
-                        break;
-                    }
-                    let nt = (t - f / df).clamp(t0, t1);
-                    if (nt - t).abs() < 1e-15 * (1.0 + t.abs()) {
-                        t = nt;
-                        break;
-                    }
-                    t = nt;
-                }
-                t
+                self.closest_polished(p, t0, t1, best.1)
             }
         }
+    }
+
+    /// The parameter of the point nearest `p` from `start`, by Newton's method on the
+    /// distance's slope, kept between `t0` and `t1`.
+    fn closest_polished(&self, p: &P3, t0: f64, t1: f64, start: f64) -> f64 {
+        let mut t = start;
+        for _ in 0..30 {
+            let (q, d1, d2) = self.d2(t);
+            let r = q - p;
+            let f = r.dot(&d1);
+            let df = d1.norm_squared() + r.dot(&d2);
+            // (Where the distance curves downwards, a Newton step runs to its largest: a
+            // step down its slope instead, the tangent's length a unit.)
+            let df = if df > tol::TINY {
+                df
+            } else {
+                d1.norm_squared()
+            };
+            if df < tol::TINY {
+                break;
+            }
+            let nt = (t - f / df).clamp(t0, t1);
+            if (nt - t).abs() < 1e-15 * (1.0 + t.abs()) {
+                t = nt;
+                break;
+            }
+            t = nt;
+        }
+        t
     }
 
     /// Parameters along [t0, t1] dividing the curve so the chord deviates at most `defl` and
@@ -421,6 +539,15 @@ impl Curve {
             }
             Curve::Circle { c, x, y, r } => conic_nurbs(*c, x * *r, y * *r, t0, t1),
             Curve::Ellipse { c, x, y, a, b } => conic_nurbs(*c, x * *a, y * *b, t0, t1),
+            Curve::Nurbs(n) => n.piece(t0, t1),
+        }
+    }
+
+    /// [`Self::to_nurbs`] of a B-spline the old way, the whole curve split (to check
+    /// [`NurbsCurve::piece`] against).
+    #[cfg(test)]
+    fn to_nurbs_whole(&self, t0: f64, t1: f64) -> NurbsCurve {
+        match self {
             Curve::Nurbs(n) => {
                 let (a, b) = n.range();
                 let mut c = (**n).clone();
@@ -436,6 +563,7 @@ impl Curve {
                 }
                 c
             }
+            _ => self.to_nurbs(t0, t1),
         }
     }
 }
@@ -516,6 +644,74 @@ pub(crate) fn conic_nurbs(c: P3, x: V3, y: V3, t0: f64, t1: f64) -> NurbsCurve {
 mod tests {
     use super::*;
 
+    /// A B-spline's piece from the spans about its range ([`NurbsCurve::piece`]) is the whole
+    /// curve's split there, to the bit: curves of degrees 1 to 5, rational and not, with
+    /// repeated inner knots, cut at random points, at knots, a hair from them and from the ends,
+    /// and outside the curve.
+    #[test]
+    fn a_piece_of_a_b_spline_is_the_whole_curve_split() {
+        use super::super::nurbs::{H, NurbsCurve};
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut cases = 0;
+        for p in 1..=5usize {
+            for rational in [false, true] {
+                for _ in 0..12 {
+                    let n = p + 1 + (rnd() * 20.0) as usize;
+                    let mut inner: Vec<f64> = (0..n - p).map(|_| rnd() * 10.0).collect();
+                    inner.sort_by(f64::total_cmp);
+                    // (Some knots doubled, up to the degree.)
+                    for i in 1..inner.len() {
+                        if p > 1 && rnd() < 0.2 {
+                            inner[i] = inner[i - 1];
+                        }
+                    }
+                    let mut knots = vec![0.0; p + 1];
+                    knots.extend(inner.iter().map(|k| k.clamp(1e-3, 10.0 - 1e-3)));
+                    knots.extend(vec![10.0; p + 1]);
+                    let cps: Vec<H> = (0..=n)
+                        .map(|_| {
+                            let w = if rational { 0.5 + rnd() } else { 1.0 };
+                            H::new(rnd() * w, rnd() * w, rnd() * w, w)
+                        })
+                        .collect();
+                    let c = Curve::Nurbs(std::sync::Arc::new(NurbsCurve {
+                        degree: p,
+                        knots: knots.clone(),
+                        cps,
+                    }));
+                    let mut at: Vec<f64> = vec![0.0, 10.0, 1e-13, 10.0 - 1e-13, -1.0, 11.0];
+                    for k in &knots {
+                        at.extend([*k, k + 1e-13, k - 1e-13, k + 1e-9]);
+                    }
+                    for _ in 0..8 {
+                        at.push(rnd() * 10.0);
+                    }
+                    for &t0 in &at {
+                        for &t1 in &at {
+                            if t0 > t1 && rnd() < 0.9 {
+                                continue;
+                            }
+                            let (new, old) = (c.to_nurbs(t0, t1), c.to_nurbs_whole(t0, t1));
+                            assert_eq!(
+                                (new.knots, new.cps),
+                                (old.knots, old.cps),
+                                "degree {p}, {t0}..{t1}"
+                            );
+                            cases += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(cases > 10_000, "{cases}");
+    }
+
     /// A mesh's samples of a B-spline of many pieces (a fitted circle, 200 of them) follow its
     /// curvature, not its pieces: far fewer than two a piece, its ends kept, the gaps even.
     #[test]
@@ -588,10 +784,13 @@ mod tests {
                         3.0 - 0.17 * k as f64,
                         (k as f64).sin(),
                     );
-                    assert_eq!(
-                        c.closest(&p, t0, t1).to_bits(),
-                        c.closest_from(&p, t0, t1, &samples).to_bits()
-                    );
+                    let (own, given) =
+                        (c.closest(&p, t0, t1), c.closest_from(&p, t0, t1, &samples));
+                    if matches!(c, Curve::Line { .. }) {
+                        assert_eq!(own.to_bits(), given.to_bits());
+                    }
+                    let (d0, d1) = ((c.point(own) - p).norm(), (c.point(given) - p).norm());
+                    assert!((d0 - d1).abs() < 1e-9, "{d0} against {d1}");
                 }
                 for l in [1e-4, 1e-3, 0.5, 3.0, 50.0] {
                     assert_eq!(

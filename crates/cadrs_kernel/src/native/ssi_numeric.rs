@@ -646,7 +646,8 @@ fn edge_seeds(
             starts.push((t0, f0));
         }
         if (g0 < 0.0) != (g1 < 0.0) && g0 != 0.0 && g1 != 0.0 {
-            // Illinois regula falsi on the signed distance.
+            // Illinois regula falsi on the signed distance, to within the tolerance: the root
+            // is then solved exactly, with the other surface's parameters (`edge_newton`).
             let (mut a, mut b, mut ga, mut gb) = (t0, t1, g0, g1);
             let mut h = f0;
             let mut side = 0;
@@ -660,7 +661,7 @@ fn edge_seeds(
                 let (u, v) = at(m);
                 let (gm, fm) = sdist(o, &s.eval(u, v), h);
                 h = fm;
-                if gm.abs() < ctx.tol * 1e-3 || (b - a).abs() < 1e-14 * (1.0 + a.abs()) {
+                if gm.abs() < ctx.tol || (b - a).abs() < 1e-14 * (1.0 + a.abs()) {
                     a = m;
                     b = m;
                     break;
@@ -806,31 +807,54 @@ fn coincident(ctx: &Ctx, ca: &Cell, cb: &Cell) -> bool {
     true
 }
 
+/// What a search keeps of a cell it has met, by the cell's parameters: its halves once it has
+/// been split, and whether it is clear of the other surface (outside the region searched, or
+/// kept off the surface by its distance). A cell is paired with many of the other surface's,
+/// and neither depends on which.
+#[derive(Default)]
+struct Kept {
+    halves: Option<[Cell; 2]>,
+    clear: Option<bool>,
+}
+
+/// The cells one surface's side of a search has met ([`Kept`]).
+type Met = std::collections::HashMap<[u64; 4], Kept>;
+
+fn met<'m>(cells: &'m mut Met, c: &Cell) -> &'m mut Kept {
+    cells
+        .entry([
+            c.uv.u.0.to_bits(),
+            c.uv.u.1.to_bits(),
+            c.uv.v.0.to_bits(),
+            c.uv.v.1.to_bits(),
+        ])
+        .or_default()
+}
+
 /// Searches a starting pair of cells (depth first, in a fixed order).
 fn search(ctx: &Ctx, ca: Cell, cb: Cell) -> Found {
     let mut out = Found::default();
     let mut stack = vec![(ca, cb)];
+    let (mut met_a, mut met_b) = (Met::default(), Met::default());
+    // A true distance from the middle of a cell's box to the other surface bounds how near the
+    // cell can come to it.
+    let culled = |dom: &Dom, c: &Cell| {
+        dom.exact
+            && dom
+                .s
+                .signed_distance(&c.bb.center())
+                .is_some_and(|d| d.abs() > 0.5 * c.size + ctx.tol)
+    };
+    let clear = |cells: &mut Met, c: &Cell, other: &Dom| -> bool {
+        *met(cells, c).clear.get_or_insert_with(|| {
+            !c.bb.overlaps(&ctx.region) || culled(other, c) || off_exact(other, c, ctx.tol)
+        })
+    };
     while let Some((ca, cb)) = stack.pop() {
         out.pairs += 1;
         if !ca.bb.grow(ctx.tol).overlaps(&cb.bb)
-            || !ca.bb.overlaps(&ctx.region)
-            || !cb.bb.overlaps(&ctx.region)
-        {
-            continue;
-        }
-        // A true distance from the middle of one cell's box to the other surface bounds how
-        // near the cell can come to it.
-        let culled = |dom: &Dom, c: &Cell| {
-            dom.exact
-                && dom
-                    .s
-                    .signed_distance(&c.bb.center())
-                    .is_some_and(|d| d.abs() > 0.5 * c.size + ctx.tol)
-        };
-        if culled(&ctx.b, &ca)
-            || culled(&ctx.a, &cb)
-            || off_exact(&ctx.b, &ca, ctx.tol)
-            || off_exact(&ctx.a, &cb, ctx.tol)
+            || clear(&mut met_a, &ca, &ctx.b)
+            || clear(&mut met_b, &cb, &ctx.a)
             || apart(&ca, &cb, ctx.tol)
         {
             continue;
@@ -857,11 +881,15 @@ fn search(ctx: &Ctx, ca: Cell, cb: Cell) -> Found {
             continue;
         }
         if ca.size >= cb.size {
-            let [c1, c2] = split(ctx.a.s, &ca);
+            let [c1, c2] = *met(&mut met_a, &ca)
+                .halves
+                .get_or_insert_with(|| split(ctx.a.s, &ca));
             stack.push((c2, cb));
             stack.push((c1, cb));
         } else {
-            let [c1, c2] = split(ctx.b.s, &cb);
+            let [c1, c2] = *met(&mut met_b, &cb)
+                .halves
+                .get_or_insert_with(|| split(ctx.b.s, &cb));
             stack.push((ca, c2));
             stack.push((ca, c1));
         }
@@ -901,8 +929,13 @@ fn correct(ctx: &Ctx, s: Pt, extra: &Extra<'_>) -> Option<Pt> {
 /// points of a traced curve), from their parameters' average: where a fitted curve between
 /// them should pass.
 pub fn refine_between(a: &Surface, b: &Surface, p0: &Pt, p1: &Pt, q: &P3) -> Option<Pt> {
+    refine_at(a, b, p0, p1, q, 0.5)
+}
+
+/// [`refine_between`] from the parameters the fraction `f` of the way from `p0`'s to `p1`'s.
+pub fn refine_at(a: &Surface, b: &Surface, p0: &Pt, p1: &Pt, q: &P3, f: f64) -> Option<Pt> {
     let d = (p1.p - p0.p).try_normalize(tol::TINY)?;
-    let mid = |x: (f64, f64), y: (f64, f64)| (0.5 * (x.0 + y.0), 0.5 * (x.1 + y.1));
+    let mid = |x: (f64, f64), y: (f64, f64)| (x.0 + f * (y.0 - x.0), x.1 + f * (y.1 - x.1));
     let start = Pt {
         p: *q,
         a: mid(p0.a, p1.a),
@@ -980,6 +1013,27 @@ fn traced_at(
                     && t.is_none_or(|t| l < tol::TINY || (t.dot(&ab) / l).abs() > 0.9)
             })
             .map(|k| (i, k))
+    })
+}
+
+/// Whether `p` is where an open curve traced before ends, but on the far side of a box from
+/// its end (a surface closed across its box without being periodic, as an extrusion of a closed
+/// spline: the curve left by the seam and runs on from the other side, a piece still to trace).
+fn across_an_end(ctx: &Ctx, p: &Pt, traced: &[(Traced, Bbox)]) -> bool {
+    let near = 1e-6 * ctx.size + 10.0 * ctx.tol;
+    let (da, db) = (&ctx.a.bx, &ctx.bt.bx);
+    let half = [da.du() / 2.0, da.dv() / 2.0, db.du() / 2.0, db.dv() / 2.0];
+    let x = [p.a.0, p.a.1, p.b.0, p.b.1];
+    traced.iter().any(|(c, _)| {
+        !c.closed
+            && [c.pts.first(), c.pts.last()]
+                .into_iter()
+                .flatten()
+                .any(|q| {
+                    let y = [q.a.0, q.a.1, q.b.0, q.b.1];
+                    (q.p - p.p).norm() < near
+                        && (0..4).any(|k| half[k].is_finite() && (x[k] - y[k]).abs() > half[k])
+                })
     })
 }
 
@@ -1451,7 +1505,7 @@ pub fn intersect_stats(
 ) -> (Intersection, Stats) {
     let mut stats = Stats::default();
     if !ua.is_valid() || !ub.is_valid() || region.is_empty() {
-        if std::env::var_os("CADRS_SSI_DEBUG").is_some() {
+        if crate::native::env_flag!("CADRS_SSI_DEBUG") {
             eprintln!("ssi_numeric: nothing to search ({ua:?}, {ub:?}, region {region:?})");
         }
         return (Intersection::default(), stats);
@@ -1472,13 +1526,13 @@ pub fn intersect_stats(
     r.min = r.min.sup(&ba.min).sup(&bbx.min);
     r.max = r.max.inf(&ba.max).inf(&bbx.max);
     if r.is_empty() || r.min.y > r.max.y || r.min.z > r.max.z {
-        if std::env::var_os("CADRS_SSI_DEBUG").is_some() {
+        if crate::native::env_flag!("CADRS_SSI_DEBUG") {
             eprintln!("ssi_numeric: the boxes don't meet in the region ({r:?})");
         }
         return (Intersection::default(), stats);
     }
     let size = r.diagonal().max(tol::ROUNDOFF);
-    let tol = REL_TOL * size.max(1.0);
+    let tol = REL_TOL * size.max(tol::POINT);
     let r = r.grow(tol::REL_POINT * size + tol);
     let ((pu0, pu1), (pv0, pv1)) = b.param_box();
     let bt = Dom::new(
@@ -1534,7 +1588,7 @@ pub fn intersect_stats(
         touches.retain(|p| !in_coin(p.a));
     }
     stats.seeds = seeds.len();
-    if std::env::var_os("CADRS_SSI_SEEDS").is_some() {
+    if crate::native::env_flag!("CADRS_SSI_SEEDS") {
         for sd in &seeds {
             eprintln!(
                 "  seed {:.6} {:.6} {:.6} a {:.6} {:.6} b {:.6} {:.6}",
@@ -1543,7 +1597,7 @@ pub fn intersect_stats(
         }
     }
     stats.touches = touches.len();
-    let dbg = std::env::var_os("CADRS_SSI_DEBUG").is_some();
+    let dbg = crate::native::env_flag!("CADRS_SSI_DEBUG");
     if dbg {
         eprintln!(
             "ssi_numeric: {:?} over {ua:?} × {:?} over {ub:?} in {:?}: {} pairs, {} seeds, {} touches, coincident {coincident}, search {:?}",
@@ -1565,7 +1619,7 @@ pub fn intersect_stats(
             continue;
         }
         let t = tangent(&ctx, &sd);
-        if on_traced(&ctx, &sd.p, t.as_ref(), &traced) {
+        if on_traced(&ctx, &sd.p, t.as_ref(), &traced) && !across_an_end(&ctx, &sd, &traced) {
             continue;
         }
         if let Some(c) = march(&ctx, sd, &traced) {
@@ -1679,7 +1733,7 @@ pub fn intersect_stats(
                 c.closed,
                 c.ends
             );
-            if std::env::var_os("CADRS_SSI_DUMP").is_some() {
+            if crate::native::env_flag!("CADRS_SSI_DUMP") {
                 for (k, q) in c.pts.iter().enumerate() {
                     eprintln!(
                         "    {k} {:.6} {:.6} {:.6}  a {:.6} {:.6}  b {:.6} {:.6}",
@@ -1721,14 +1775,55 @@ fn singular_point(ctx: &Ctx, mut p: Pt) -> Option<Pt> {
     for _ in 0..30 {
         let r = res(&x);
         let mut j = nalgebra::Matrix6x4::zeros();
-        for k in 0..4 {
-            let h = 1e-7 * (1.0 + x[k].abs());
-            let (mut xp, mut xm) = (x, x);
-            xp[k] += h;
-            xm[k] -= h;
-            let (rp, rm) = (res(&xp), res(&xm));
-            for i in 0..6 {
-                j[(i, k)] = (rp[i] - rm[i]) / (2.0 * h);
+        // The residual's rates from the surfaces' own derivatives: the points' from the
+        // first, the unit normals' from the second (n = N/|N|, N = Su × Sv, so
+        // n' = (N' − n (n·N'))/|N|). Where a normal has no length (a pole, an apex), by
+        // differences.
+        let unit = |s: &Surface, u: f64, v: f64| -> Option<(V3, V3, V3, V3, V3)> {
+            let [_, su, sv, suu, suv, svv] = s.d2(u, v);
+            let big = su.cross(&sv);
+            let len = big.norm();
+            if len <= tol::TINY * (1.0 + su.norm() * sv.norm()) {
+                return None;
+            }
+            // (The surface's own normal may be this one turned over.)
+            let n = s.normal(u, v);
+            let sign = if n.dot(&big) < 0.0 { -1.0 } else { 1.0 };
+            let rate = |d: V3| (d - n * n.dot(&d)) * (sign / len);
+            Some((
+                su,
+                sv,
+                n,
+                rate(suu.cross(&sv) + su.cross(&suv)),
+                rate(suv.cross(&sv) + su.cross(&svv)),
+            ))
+        };
+        match (unit(sa, x[0], x[1]), unit(sb, x[2], x[3])) {
+            (Some((au, av, na, nau, nav)), Some((bu, bv, nb, nbu, nbv))) => {
+                let cols = [
+                    (au, nau.cross(&nb) * w),
+                    (av, nav.cross(&nb) * w),
+                    (-bu, na.cross(&nbu) * w),
+                    (-bv, na.cross(&nbv) * w),
+                ];
+                for (k, (d, c)) in cols.into_iter().enumerate() {
+                    for i in 0..3 {
+                        j[(i, k)] = d[i];
+                        j[(i + 3, k)] = c[i];
+                    }
+                }
+            }
+            _ => {
+                for k in 0..4 {
+                    let h = 1e-7 * (1.0 + x[k].abs());
+                    let (mut xp, mut xm) = (x, x);
+                    xp[k] += h;
+                    xm[k] -= h;
+                    let (rp, rm) = (res(&xp), res(&xm));
+                    for i in 0..6 {
+                        j[(i, k)] = (rp[i] - rm[i]) / (2.0 * h);
+                    }
+                }
             }
         }
         let rv = nalgebra::Vector6::from_column_slice(&r);

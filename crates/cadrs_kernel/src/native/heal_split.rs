@@ -228,23 +228,7 @@ fn roots(g: &dyn Fn(f64) -> f64, t0: f64, t1: f64, n: usize) -> Vec<f64> {
             continue;
         }
         if a * b < 0.0 {
-            let (mut lo, mut hi, mut glo) = (ts[i], ts[i + 1], a);
-            for _ in 0..80 {
-                let mid = 0.5 * (lo + hi);
-                let gm = g(mid);
-                if gm == 0.0 {
-                    lo = mid;
-                    hi = mid;
-                    break;
-                }
-                if (gm < 0.0) == (glo < 0.0) {
-                    lo = mid;
-                    glo = gm;
-                } else {
-                    hi = mid;
-                }
-            }
-            out.push(0.5 * (lo + hi));
+            out.push(super::math::root_from(&g, (ts[i], a), (ts[i + 1], b)));
         }
     }
     if gs[n] == 0.0 {
@@ -592,7 +576,7 @@ pub(crate) fn trace_pieces(b: &mut Body, fi: usize, cuts: Vec<SArc>) -> Option<V
     }
     let area: f64 = out.iter().map(|&g| uv_area(b, g)).sum();
     if !((area - area0).abs() <= tol::REL_POINT * area0.abs().max(tol::DEGENERATE)) {
-        if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+        if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
             eprintln!(
                 "split: face {fi}'s {} pieces add up to {area:.9} in its parameters, not its {area0:.9}",
                 out.len()

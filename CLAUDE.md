@@ -5,7 +5,9 @@ Onshape-style CAD in Rust + Bevy 0.20.1. Local notes in `docs/` (git-ignored: `P
 
 ## Commands
 - Build in release everywhere so nothing builds twice: `cargo build -r`,
-  `cargo clippy --workspace --all-targets`.
+  `cargo clippy --workspace --all-targets`. Local release builds are incremental and without LTO
+  (`.cargo/config.toml`), for quick rebuilds; tagged releases and `tools/kernel_perf.py` set
+  `CARGO_PROFILE_RELEASE_LTO=fat` for the fastest code (kernel_perf in `target/bench`).
 - Format before committing: `cargo fmt --all`; CI's "Format" job checks it.
 - Tests:
   - `cargo test -r`: the fast tests of the crates without Bevy (about a minute).
@@ -55,14 +57,15 @@ Onshape-style CAD in Rust + Bevy 0.20.1. Local notes in `docs/` (git-ignored: `P
   shows a frame's real cost; `CADRS_UI_CHANGES=1` names the UI nodes that change every frame
   (each one costs a full UI layout), and with Bevy's `track_location` feature the code that
   changed them. System times (the
-  F12 panel, `get_frame_stats`) are off unless asked for, as they cost about a fifth of a frame:
+  frame-stats panel, Preferences › Interface › Frame stats; `get_frame_stats`) are off unless asked for, as they cost about a fifth of a frame:
   start with `CADRS_FRAME_PROFILE=1`, or the *Time systems* preference. `CADRS_TRACE=<file.json>`
   (with `CADRS_TRACE_AT=<s>`) writes a quarter second of every system's span, by thread, as a
   Chrome trace; `CADRS_SINGLE_THREADED=Update,…` runs schedules on the main thread for `perf`.
 - Cold builds take 4+ minutes. Never run two cargo builds at once.
 - Project site: https://cadrs.net is the app itself, full screen: `.github/workflows/pages.yml`
-  builds the browser build of every push to main and deploys it to GitHub Pages (also by hand),
-  so the site is always main's head, about 20 minutes after the push. In a browser with
+  builds the browser build of a push to main once its CI has passed and deploys it to GitHub
+  Pages (also by hand), so the site is the latest main whose checks all pass; a failing push
+  leaves it as it was. In a browser with
   neither WebGPU nor WebGL2 the page offers the downloads instead; the app menu links to GitHub.
 
 ## Layout

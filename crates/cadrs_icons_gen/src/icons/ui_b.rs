@@ -28,6 +28,7 @@ pub fn icons() -> Vec<Def> {
         def("apps", Line, "Apps", apps),
         def("custom-table", Line, "Custom tables", custom_table),
         def("column-add", Line, "Add column", column_add),
+        def("cut-list", Line, "Cut list", cut_list),
         def("configurations", Line, "Configurations", configurations),
         def("variables", Line, "Variables", variables),
         def("appearance", Line, "Appearances", appearance),
@@ -56,6 +57,8 @@ pub fn icons() -> Vec<Def> {
         def("books", Line, "Books", books),
         def("idea", Line, "Explore", idea),
         def("keyboard", Line, "Keyboard shortcuts", keyboard),
+        def("interface", Line, "Interface preferences", interface),
+        def("mouse", Line, "Mouse navigation preferences", mouse),
         def("tag", Line, "Label", tag),
         def("tag-new", Line, "Add label", tag_new),
         def("receipt", Line, "Quote", receipt),
@@ -349,6 +352,15 @@ fn column_add() -> Vec<String> {
         rect(3.0, 4.0, 11.0, 16.0, R, "", ""),
         path("M3 9.5 H14 M8.5 4 V20", "", ""),
         acc(plus(18.5, 12.0))
+    ]
+}
+
+fn cut_list() -> Vec<String> {
+    // A table of members under the member itself: a bar with mitred ends (accent).
+    els![
+        acc(path("M3 8 L7 4 H17 L21 8 Z", "", "")),
+        rect(3.0, 11.0, 18.0, 10.0, R, "", ""),
+        path("M3 16 H21 M9.5 11 V21", "", ""),
     ]
 }
 
@@ -684,6 +696,24 @@ fn keyboard() -> Vec<String> {
         rect(2.5, 6.0, 19.0, 12.0, R, "", ""),
         path(&format!("{keys} M6.5 14 h.01 M17.5 14 h.01"), "", ""),
         acc(line(9.5, 14.0, 14.5, 14.0, "")),
+    ]
+}
+
+fn interface() -> Vec<String> {
+    // A window with its title bar and a side panel; what fills it is the accent.
+    els![
+        rect(2.5, 4.0, 19.0, 16.0, R, "", ""),
+        path("M2.5 8.5 H21.5 M8 8.5 V20", "", ""),
+        acc(path("M11.5 12.5 H18 M11.5 16 H15.5", "", "")),
+    ]
+}
+
+fn mouse() -> Vec<String> {
+    // A mouse seen from above, its buttons parted; the wheel is the accent.
+    els![
+        rect(6.0, 2.5, 12.0, 19.0, 6.0, "", ""),
+        path("M6 10.5 H18 M12 2.5 V5 M12 9 V10.5", "", ""),
+        acc(line(12.0, 6.0, 12.0, 8.0, "")),
     ]
 }
 

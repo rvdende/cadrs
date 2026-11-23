@@ -49,6 +49,7 @@ pub mod icon;
 mod icon_raster;
 pub mod inline_edit;
 pub mod input;
+pub mod jog_slider;
 pub mod list;
 pub mod menu;
 pub mod name_popup;
@@ -116,7 +117,7 @@ pub use dialog::{Dialog, DialogClose, DialogRoot};
 pub use dialog_fields::{
     FieldVariables, NumberField, NumberFieldCancel, NumberFieldCommit, NumberFieldEdit,
     NumberFieldPreview, NumberFieldState, OptionRow, Select, SelectChange, SelectState, Slider,
-    SliderChange, SliderState, form_row,
+    SliderChange, SliderState, Timeline, TimelineLane, form_row,
 };
 pub use dim_edit::{
     DimEdit, DimEditBox, DimEditCancel, DimEditCommit, DimEditField, DimEditPreview,
@@ -150,6 +151,7 @@ pub use input::{
     CaretBlinkOverride, GrowWithText, KeyboardField, TextCancel, TextInput, TextInputField,
     TextSubmit,
 };
+pub use jog_slider::{JogSlider, JogSliderChange, JogSliderState};
 pub use list::{GridItem, ListItem};
 pub use menu::{
     ContextMenuRequested, ContextMenuTarget, Menu, MenuAction, MenuEntry, MenuHeader, MenuItem,
@@ -315,6 +317,7 @@ impl Plugin for CadrsUiPlugin {
             .add_plugins(variable_list::VariableListPlugin)
             .add_plugins(file_picker::FilePickerPlugin)
             .add_plugins(radio::RadioPlugin)
+            .add_plugins(jog_slider::JogSliderPlugin)
             .add_plugins(responsive::ResponsivePlugin)
             .add_plugins(progress::ProgressPlugin)
             .add_plugins(entry_list::EntryListPlugin)

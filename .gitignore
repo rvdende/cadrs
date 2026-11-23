@@ -14,3 +14,7 @@ __pycache__/
 
 # Research papers: the PDFs stay local; their Markdown (docling) and text (pdftotext) conversions are committed.
 /research/papers/**/*.pdf
+
+# Editors' own settings.
+/.vscode/
+

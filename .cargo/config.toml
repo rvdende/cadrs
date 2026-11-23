@@ -6,6 +6,20 @@
 linker = "clang"
 rustflags = ["-C", "link-arg=-fuse-ld=mold", "-Zshare-generics=y", "-Zthreads=8"]
 
+# Release builds of our own crates are incremental (the dependencies aren't, and build as
+# before), so an edit recompiles the changed parts of a crate instead of the whole of it; rustc
+# then splits each crate into 256 codegen units, not 16. CI, the release builds and the browser
+# build set CARGO_INCREMENTAL=0, which wins over this.
+#
+# And without LTO: rustc's default ThinLTO across a crate's codegen units is redone in full after
+# any edit (about 50 s of a minute's rebuild of cadrs_app for a one-line change; 13 s without).
+# Tagged releases (release.yml, tools/release/build.sh) and the kernel benchmark
+# (tools/kernel_perf.py) set CARGO_PROFILE_RELEASE_LTO=fat for the fastest code; the site's build
+# of main (pages.yml) keeps rustc's default.
+[profile.release]
+incremental = true
+lto = "off"
+
 [alias]
 # Builds in release and installs it for the current user, with a launcher entry (Linux; see
 # crates/cadrs/src/install.rs).

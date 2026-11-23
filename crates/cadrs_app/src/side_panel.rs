@@ -34,10 +34,14 @@ pub enum SidePanel {
     NamedPositions,
     /// P3B.8: an assembly's Exploded views ([`crate::assembly::explode`]).
     ExplodedViews,
+    /// An assembly's Machine Builder ([`crate::assembly::machine_builder`], issue #278).
+    MachineBuilder,
     /// P3F.5: the Simulation panel ([`crate::simulation_ui`]).
     Simulation,
     /// P3I.3: the Sheet metal table and flat view ([`crate::sheetmetal_table`]).
     SheetMetal,
+    /// Issue #266: the frames' Cut list ([`crate::cut_list`]).
+    CutList,
 }
 
 fn on_panel_button(a: On<Activate>, q: Query<&Name>, mut open: ResMut<SidePanel>) {
@@ -50,10 +54,13 @@ fn on_panel_button(a: On<Activate>, q: Query<&Name>, mut open: ResMut<SidePanel>
         "panel-bom" | "assembly-bom" => toggle(&mut open, SidePanel::Bom),
         "panel-named-positions" => toggle(&mut open, SidePanel::NamedPositions),
         "panel-exploded-views" => toggle(&mut open, SidePanel::ExplodedViews),
+        "panel-machine-builder" => toggle(&mut open, SidePanel::MachineBuilder),
         "panel-sheet-metal" => toggle(&mut open, SidePanel::SheetMetal),
-        "bom-panel-close" | "named-positions-panel-close" | "exploded-views-panel-close" => {
-            *open = SidePanel::None
-        }
+        "panel-cut-list" => toggle(&mut open, SidePanel::CutList),
+        "bom-panel-close"
+        | "named-positions-panel-close"
+        | "exploded-views-panel-close"
+        | "cut-list-panel-close" => *open = SidePanel::None,
         _ => {}
     }
 }
@@ -88,8 +95,10 @@ fn sync_panel_buttons(
             "panel-bom" | "assembly-bom" => *open == SidePanel::Bom,
             "panel-named-positions" => *open == SidePanel::NamedPositions,
             "panel-exploded-views" => *open == SidePanel::ExplodedViews,
+            "panel-machine-builder" => *open == SidePanel::MachineBuilder,
             "panel-simulation" => *open == SidePanel::Simulation,
             "panel-sheet-metal" => *open == SidePanel::SheetMetal,
+            "panel-cut-list" => *open == SidePanel::CutList,
             _ => continue,
         };
         if want && !selected {

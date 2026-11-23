@@ -3,12 +3,14 @@
 //!
 //! Each dialog is a [`Draft`] being edited: [`Draft::fields`] lays it out with [`form`],
 //! [`Draft::set`] takes a changed field, [`Draft::pick`] a pick in the view (bodies,
-//! workholding, drive edges, faces and holes, the face a work plane's Z follows), and
+//! workholding, drive edges, faces and holes, the face a work plane's Z follows, the point or
+//! line a tool leans by, a rotary pattern's axis, the face a setup sits on its mount with), and
 //! [`Draft::commit`] gives the edits ✓ makes, one undo step each. A toolpath previews live: its
 //! draft is calculated (a moment after the last change) and drawn in the view; ✓ keeps the
 //! result (the job cache).
 
 use bevy::prelude::*;
+use cadrs_core::cam::cadrs_cam::cutter::{FormPoint, FormProfile};
 use cadrs_core::cam::cadrs_cam::feeds::{self, WorkMaterial};
 use cadrs_core::cam::cadrs_cam::machine::{Machine, MachineKind, catalog};
 use cadrs_core::cam::cadrs_cam::post::LaserMode;
@@ -21,9 +23,9 @@ use cadrs_core::cam::cadrs_cam::tool::{
 };
 use cadrs_core::cam::cadrs_cam::toolpath::{Coolant, CycleKind};
 use cadrs_core::cam::{
-    CamId, CamStudio, Component, Edit, Job, Mating, NodeRef, OpKind, Operation, Origin, Role,
-    Setup, StockDef, StockDirection, StockKind, ToolOp, ToolpathOp, WorkPlane, WorkPlaneType,
-    geometry,
+    CamId, CamStudio, Component, Edit, Job, MachineSource, Mating, NodeRef, OpKind, Operation,
+    Origin, Role, Setup, StockDef, StockDirection, StockKind, ToolOp, ToolpathOp, WorkPlane,
+    WorkPlaneType, geometry,
 };
 use cadrs_core::{ElementId, ElementKind, PartId};
 use cadrs_ui::i18n::tr;
@@ -36,7 +38,12 @@ use crate::{ActiveDocument, AppState};
 use cadrs_ui::form::{self, Field, FieldChange, FieldUnits, Unit, Value};
 
 mod fields;
+mod machine_from;
 mod set;
+pub(crate) use fields::{axes_summary, controller_fields};
+pub(crate) use machine_from::machine_assemblies;
+pub use machine_from::{MachineFrom, OtherMachines};
+pub(crate) use set::set_controller;
 #[cfg(test)]
 mod tests;
 mod toolpath_fields;
@@ -87,6 +94,7 @@ impl CamDialog {
     pub fn waiting(&self) -> bool {
         (self.changed.is_some() && matches!(self.draft, Draft::Toolpath { .. }))
             || matches!(&self.draft, Draft::Insert(d) if d.others_pending)
+            || matches!(&self.draft, Draft::Machine { other, .. } if other.others_pending)
     }
 }
 
@@ -105,6 +113,13 @@ pub enum Draft {
         /// The catalogue entry it started from (`None`: as the job had it).
         from: Option<usize>,
         by_kind: bool,
+        /// "Machine from" is From assembly: the machine is an assembly's, set up in its
+        /// Machine Builder: one of this document's, or of another document at a version.
+        from_assembly: bool,
+        /// That assembly (`None` while there is none to choose).
+        source: Option<MachineSource>,
+        /// The document it is chosen in, and what a source of another document comes with.
+        other: Box<MachineFrom>,
     },
     Setup {
         job: CamId,
@@ -391,6 +406,20 @@ fn take_insert_parts(world: &mut World) {
         }
         dlg.shown = None;
     }
+    // The Machine dialog's other documents likewise (and the one its machine is from).
+    let pending = world
+        .get_resource::<CamDialog>()
+        .is_some_and(|d| matches!(&d.draft, Draft::Machine { other, .. } if other.others_pending));
+    if pending
+        && let Some(others) = other_documents(world)
+        && let Some(mut dlg) = world.remove_resource::<CamDialog>()
+    {
+        if let Draft::Machine { other, source, .. } = &mut dlg.draft {
+            other.others_read(world, others, source.as_ref());
+        }
+        dlg.shown = None;
+        world.insert_resource(dlg);
+    }
     let Some(mut job) = world.get_resource_mut::<InsertParts>() else {
         return;
     };
@@ -495,6 +524,7 @@ pub fn create_job(world: &mut World) {
         stock: StockDef::default(),
         workholdings: Vec::new(),
         machine: None,
+        machine_source: None,
         setups: Vec::new(),
         suppressed: false,
     };
@@ -530,6 +560,7 @@ pub fn edit_machine(world: &mut World, job: CamId) {
         Some(m) => (m.clone(), None),
         None => (catalog().remove(0), Some(0)),
     };
+    let other = MachineFrom::open(world, j.machine_source.as_ref());
     open(
         world,
         Draft::Machine {
@@ -537,6 +568,9 @@ pub fn edit_machine(world: &mut World, job: CamId) {
             machine: Box::new(machine),
             from,
             by_kind: true,
+            from_assembly: j.machine_source.is_some(),
+            source: j.machine_source.clone(),
+            other: Box::new(other),
         },
     );
 }
@@ -648,6 +682,7 @@ pub fn create_toolpath(world: &mut World) {
         return;
     };
     let kind = job.machine.as_ref().map_or(MachineKind::Mill, |m| m.kind);
+    let rotaries = job.machine.as_ref().map_or(0, Machine::rotary_axes);
     // The tool it will use: the last above where it goes.
     let at = after
         .and_then(|a| s.operations.iter().position(|o| o.id == a))
@@ -661,15 +696,13 @@ pub fn create_toolpath(world: &mut World) {
         toast(world, &tr("cam-create-tool-first"));
         return;
     };
-    let types: Vec<Type> = Type::ALL
-        .into_iter()
-        .filter(|t| !Pattern::available(*t, tool.tool.kind, kind).is_empty())
-        .collect();
+    // (Only the patterns the machine has the rotary axes for.)
+    let types = offered_types(tool.tool.kind, kind, rotaries, None);
     let Some(&t) = types.first() else {
         toast(world, &tr("cam-tool-no-patterns"));
         return;
     };
-    let pattern = Pattern::available(t, tool.tool.kind, kind)[0];
+    let pattern = offered_patterns(t, tool.tool.kind, kind, rotaries, None)[0];
     let params = Params::new(pattern, &tool.tool, kind);
     let op = Operation {
         id: CamId::new(),
@@ -891,6 +924,23 @@ fn apply_changes(world: &mut World, changes: Vec<FieldChange>, files: Vec<std::p
             continue;
         }
         match (c.key.as_str(), &c.value) {
+            // The Machine dialog's way to the assembly its machine comes from: the dialog
+            // closes (its draft dropped) and the assembly's tab opens with the builder.
+            ("open-builder", Value::Activate) => {
+                let element = match &d.draft {
+                    // (An assembly of this document: another's is a frozen copy.)
+                    Draft::Machine {
+                        source: Some(s), ..
+                    } if s.copy.is_none() => Some(s.reference.element),
+                    _ => None,
+                };
+                world.insert_resource(d);
+                if let Some(element) = element {
+                    close(world);
+                    crate::assembly::machine_builder::open_on(world, element);
+                }
+                return;
+            }
             ("tab", Value::Index(i)) => d.tab = *i,
             (k, Value::Activate) if is_pick_key(k) => {
                 d.picking = if d.picking.as_deref() == Some(k) {
@@ -902,9 +952,25 @@ fn apply_changes(world: &mut World, changes: Vec<FieldChange>, files: Vec<std::p
             ("p-z", Value::Index(i)) if *i >= AXES.len() => {
                 d.picking = Some("p-face".into());
             }
-            ("axis", Value::Index(1)) => {
+            // A choice that takes a pick starts it; one that takes none ends the pick the
+            // choice before it started.
+            ("axis" | "rot-axis" | "mating", Value::Index(i)) => {
                 d.draft.set(world, &c.key, &c.value, &cam);
-                d.picking = Some("axis-face".into());
+                let pick = match (c.key.as_str(), *i) {
+                    ("axis", 1) => Some("axis-face"),
+                    ("axis", 3 | 4) => Some("axis-point"),
+                    ("axis", 5) => Some("axis-line"),
+                    ("rot-axis", 1) => Some("rot-axis-pick"),
+                    _ => None,
+                };
+                let theirs: &[&str] = match c.key.as_str() {
+                    "axis" => &["axis-face", "axis-point", "axis-line"],
+                    "rot-axis" => &["rot-axis-pick"],
+                    _ => &["mount-face"],
+                };
+                if pick.is_some() || d.picking.as_deref().is_some_and(|k| theirs.contains(&k)) {
+                    d.picking = pick.map(str::to_string);
+                }
             }
             _ => {
                 d.draft.set(world, &c.key, &c.value, &cam);
@@ -918,13 +984,19 @@ fn apply_changes(world: &mut World, changes: Vec<FieldChange>, files: Vec<std::p
 }
 
 fn is_button_key(k: &str) -> bool {
-    matches!(k, "lib-import" | "lib-export")
+    matches!(k, "lib-import" | "lib-export" | "open-builder" | "form-add")
+        || k.starts_with("form-del-")
 }
 
 fn is_pick_key(k: &str) -> bool {
+    matches!(k, "bodies" | "workholdings" | "drive") || takes_one_pick(k)
+}
+
+/// The pick lists that hold one thing: a pick they can use ends the picking.
+fn takes_one_pick(k: &str) -> bool {
     matches!(
         k,
-        "bodies" | "workholdings" | "drive" | "p-face" | "axis-face"
+        "p-face" | "axis-face" | "axis-point" | "axis-line" | "rot-axis-pick" | "mount-face"
     )
 }
 
@@ -951,8 +1023,8 @@ fn apply_picks(world: &mut World, picks: Vec<Pick>) {
         let frame = with_ctx(world, op_frame).flatten();
         with_ctx(world, |w, ctx| {
             if let Some(mut d) = w.remove_resource::<CamDialog>() {
-                d.draft.pick(ctx, &key, pick, frame);
-                if key == "p-face" || key == "axis-face" {
+                let taken = d.draft.pick(ctx, &key, pick, frame);
+                if taken && takes_one_pick(&key) {
                     d.picking = None;
                 }
                 d.changed = Some(web_time::Instant::now());

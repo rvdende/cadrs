@@ -5,7 +5,8 @@
 //! - **Where expressions live.** Every numeric field of a feature keeps the text it was typed as
 //!   next to the value it evaluated to (`depth_expr` beside `depth`, a hole's
 //!   [`crate::hole::Length`], a pattern's `count_expr` beside `count`); a sketch keeps the
-//!   expressions of its driving dimensions in [`cadrs_sketch::Sketch::expressions`]. [`slots`]
+//!   expressions of its driving dimensions in [`cadrs_sketch::Sketch::expressions`] (of which
+//!   only those naming a variable are evaluated again, [`sketch_expressions`]). [`slots`]
 //!   visits them all.
 //! - **Order.** Variables are features: a use sees only the variables above it in the list
 //!   (after suppression and the rollback bar). [`check`] finds the uses that name a variable
@@ -353,6 +354,41 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
             s("Thickness 1", &mut x.thickness1_expr, &mut x.thickness1, L);
             s("Thickness 2", &mut x.thickness2_expr, &mut x.thickness2, L);
         }
+        FeatureKind::Frame(x) => {
+            s("Angle", &mut x.angle_expr, &mut x.angle, A);
+            s("End offset", &mut x.end_offset_expr, &mut x.end_offset, L);
+            for o in &mut x.member_overrides {
+                s("Member angle", &mut o.angle_expr, &mut o.angle, A);
+            }
+            if x.end_caps {
+                s(
+                    "Cap thickness",
+                    &mut x.cap_thickness_expr,
+                    &mut x.cap_thickness,
+                    L,
+                );
+            }
+            if x.gussets || x.overrides.iter().any(|o| o.gusset == Some(true)) {
+                s(
+                    "Gusset size",
+                    &mut x.gusset_size_expr,
+                    &mut x.gusset_size,
+                    L,
+                );
+                s(
+                    "Gusset thickness",
+                    &mut x.gusset_thickness_expr,
+                    &mut x.gusset_thickness,
+                    L,
+                );
+                s(
+                    "Gusset chamfer",
+                    &mut x.gusset_chamfer_expr,
+                    &mut x.gusset_chamfer,
+                    L,
+                );
+            }
+        }
         FeatureKind::Gear(x) => {
             count("Teeth", &mut x.teeth_expr, &mut x.teeth, &mut s);
             s("Module", &mut x.module_expr, &mut x.module, L);
@@ -642,16 +678,21 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
         | FeatureKind::Image(_)
         | FeatureKind::Derived(_)
         | FeatureKind::Composite(_)
+        | FeatureKind::FrameTrim(_)
+        | FeatureKind::CutList(_)
         | FeatureKind::FlatExtrude(_) => {}
     }
 }
 
-/// A sketch's dimension expressions: (dimension, expression, what it measures).
+/// A sketch's dimension expressions that name variables: (dimension, expression, what it
+/// measures). A formula of constants (#205: "100/2") is kept only as typed, and not evaluated
+/// again: its bare numbers would read in whatever unit the workspace has by then.
 pub fn sketch_expressions(
     g: &cadrs_sketch::Sketch,
 ) -> Vec<(cadrs_sketch::DimensionId, String, Quantity)> {
     g.expressions
         .iter()
+        .filter(|(_, e)| units::names_variable(e))
         .filter_map(|(id, e)| Some((*id, e.clone(), g.dimensions.get(*id)?.kind.quantity())))
         .collect()
 }
@@ -860,7 +901,11 @@ pub fn check(features: &[Feature], units: &Units) -> Vec<(FeatureId, String)> {
 /// Whether any of a feature's fields names a variable (cheaply: without cloning a sketch).
 fn has_hash(k: &FeatureKind) -> bool {
     match k {
-        FeatureKind::Sketch(sk) => !sk.geometry.expressions.is_empty(),
+        FeatureKind::Sketch(sk) => sk
+            .geometry
+            .expressions
+            .iter()
+            .any(|(_, e)| units::names_variable(e)),
         FeatureKind::Variable(_) => true,
         k => {
             let mut k = k.clone();

@@ -115,6 +115,15 @@ pub struct Build {
     /// contexts", SM1.3), in list order; a failed model keeps its context (the flat view shows
     /// why, SM1.5).
     pub sheet_metal: Vec<crate::sheetmetal::SheetMetalContext>,
+    /// The members every Frame feature made (issue #266), in list order: their parts, sections,
+    /// lengths and end cuts, for the cut list ([`crate::frame::cut_list`]). A member whose part a
+    /// later feature joined to another or deleted is still listed: keep those of `parts`.
+    #[serde(default)]
+    pub frames: Vec<crate::frame::MemberInfo>,
+    /// How many members meet at each Frame feature's corner overrides (the dialog offers the
+    /// next pair where three or more do).
+    #[serde(default)]
+    pub frame_corners: Vec<crate::frame::OverrideCorners>,
     /// It was stopped before it finished ([`Pending::stop`], a newer request for the same list):
     /// its parts are those of the features before where it stopped. Never the list's result.
     pub stopped: bool,
@@ -255,6 +264,12 @@ struct State {
     /// P3I.2: the sheet metal models so far (their definitions, flats and parts).
     #[serde(default)]
     sheet_metal: Arc<Vec<crate::sheetmetal::SheetMetalContext>>,
+    /// The Frame features' members so far (issue #266).
+    #[serde(default)]
+    frames: Arc<Vec<crate::frame::MemberInfo>>,
+    /// The Frame features' override corners so far.
+    #[serde(default)]
+    frame_corners: Arc<Vec<crate::frame::OverrideCorners>>,
 }
 
 /// Why a feature can't change a part with no kernel body: a derived board's component is a mesh
@@ -688,6 +703,8 @@ impl Rebuilder {
             Arc::ptr_eq(&x.derived, &y.derived)
                 && Arc::ptr_eq(&x.derived_sketches, &y.derived_sketches)
                 && Arc::ptr_eq(&x.sheet_metal, &y.sheet_metal)
+                && Arc::ptr_eq(&x.frames, &y.frames)
+                && Arc::ptr_eq(&x.frame_corners, &y.frame_corners)
                 && x.connectors == y.connectors
                 && x.connector_owners == y.connector_owners
                 && x.composites == y.composites
@@ -1835,6 +1852,8 @@ impl Rebuilder {
         out.derived = (*state.derived).clone();
         out.derived_sketches = (*state.derived_sketches).clone();
         out.sheet_metal = (*state.sheet_metal).clone();
+        out.frames = (*state.frames).clone();
+        out.frame_corners = (*state.frame_corners).clone();
         debug_assert!(
             self.depth != 0 || key == final_key(features),
             "final_key must follow the rebuild's keys"
@@ -2635,6 +2654,14 @@ impl Rebuilder {
             #[cfg(feature = "brep")]
             FeatureKind::Gear(x) => self.gear(before, f.id, x, state).unwrap_or_else(fail),
             #[cfg(feature = "brep")]
+            FeatureKind::Frame(x) => self.frame(before, f.id, x, state).unwrap_or_else(fail),
+            #[cfg(feature = "brep")]
+            FeatureKind::FrameTrim(x) => {
+                self.frame_trim_groups(f.id, x, state).unwrap_or_else(fail)
+            }
+            #[cfg(feature = "brep")]
+            FeatureKind::CutList(x) => self.cut_list(f.id, x, state).unwrap_or_else(fail),
+            #[cfg(feature = "brep")]
             FeatureKind::SheetMetalModel(x) => self
                 .sheet_metal_model(before, f.id, &f.name, x, state)
                 .unwrap_or_else(fail),
@@ -2700,6 +2727,9 @@ impl Rebuilder {
             | FeatureKind::Fill(_)
             | FeatureKind::Thread(_)
             | FeatureKind::Gear(_)
+            | FeatureKind::Frame(_)
+            | FeatureKind::FrameTrim(_)
+            | FeatureKind::CutList(_)
             | FeatureKind::Image(_) => fail("This feature needs the solid-modelling kernel".into()),
             #[cfg(not(feature = "brep"))]
             FeatureKind::Composite(_) => {
@@ -3008,6 +3038,7 @@ mod kernel_ops {
     mod context;
     mod derived;
     mod draft;
+    mod frame;
     mod gear;
     mod import;
     mod linked;
@@ -3271,7 +3302,13 @@ mod kernel_ops {
             // The dialog's preview of a Remove: the material it takes out of the parts.
             let removed = (self.stage_for == Some(id) && e.op == BooleanOp::Remove && !surface)
                 .then(|| {
-                    self.removed_volume(id, &tool, &Self::scope(e, state, &contacts), state, &geoms)
+                    self.removed_volume(
+                        id,
+                        &[&tool],
+                        &Self::scope(e, state, &contacts),
+                        state,
+                        &geoms,
+                    )
                 });
             // The dialog's preview of an Add: the new body over the parts as they were.
             let joins = e.merge_all || !e.scope.is_empty() || !contacts.touches.is_empty();
@@ -3380,12 +3417,12 @@ mod kernel_ops {
                 .collect()
         }
 
-        /// What a Remove takes out of the `scope` parts: the tool's intersection with each, else
-        /// (none worked out) the whole tool.
+        /// What a Remove takes out of the `scope` parts: each tool's intersection with each,
+        /// else (none worked out) the whole tools.
         fn removed_volume(
             &mut self,
             id: FeatureId,
-            tool: &(BodyId, BodyNames),
+            tools: &[&(BodyId, BodyNames)],
             scope: &[PartId],
             state: &State,
             geoms: &crate::brep::Geoms,
@@ -3394,29 +3431,34 @@ mod kernel_ops {
             for part in scope {
                 let Some(p) = state.part(*part) else { continue };
                 let Some(body) = p.body else { continue };
-                let Ok(r) = self.kernel.boolean(BoolOp::Intersect, body, &[tool.0]) else {
-                    continue;
-                };
-                let inputs = [(body, &*p.names), (tool.0, &tool.1)];
-                for b in r.bodies {
-                    let solid = naming::name_body(&self.kernel, b, id.0, &r.history, &inputs)
-                        .map_err(|e| e.to_string())
-                        .and_then(|names| {
-                            crate::brep::solid_of(&self.kernel, b, &names, geoms, Some(id.0))
-                        });
-                    if let Ok(s) = solid
-                        && !s.faces.is_empty()
+                for tool in tools {
+                    let Ok(r) = self.kernel.boolean(BoolOp::Intersect, body, &[tool.0]) else {
+                        continue;
+                    };
+                    let inputs = [(body, &*p.names), (tool.0, &tool.1)];
+                    for b in r.bodies {
+                        let solid = naming::name_body(&self.kernel, b, id.0, &r.history, &inputs)
+                            .map_err(|e| e.to_string())
+                            .and_then(|names| {
+                                crate::brep::solid_of(&self.kernel, b, &names, geoms, Some(id.0))
+                            });
+                        if let Ok(s) = solid
+                            && !s.faces.is_empty()
+                        {
+                            out.push(Arc::new(s));
+                        }
+                        self.kernel.release(b);
+                    }
+                }
+            }
+            if out.is_empty() {
+                for tool in tools {
+                    if let Ok(s) =
+                        crate::brep::solid_of(&self.kernel, tool.0, &tool.1, geoms, Some(id.0))
                     {
                         out.push(Arc::new(s));
                     }
-                    self.kernel.release(b);
                 }
-            }
-            if out.is_empty()
-                && let Ok(s) =
-                    crate::brep::solid_of(&self.kernel, tool.0, &tool.1, geoms, Some(id.0))
-            {
-                out.push(Arc::new(s));
             }
             out
         }
@@ -4426,7 +4468,7 @@ mod kernel_ops {
         ) -> Result<Vec<Placed>, String> {
             let op = id.0;
             let mut placed: Vec<Placed> = Vec::new();
-            let mut release = |this: &mut Self, pieces: &[Placed]| {
+            let release = |this: &mut Self, pieces: &[Placed]| {
                 for (_, p) in pieces {
                     this.kernel.release(p.body);
                 }
@@ -4440,9 +4482,9 @@ mod kernel_ops {
                     return Err(no_body(t));
                 };
                 // `kind` of the target with `with`: its pieces (none for an empty result).
-                let mut pieces_of = |this: &mut Self,
-                                     kind: BoolOp,
-                                     with: &[&PartState]|
+                let pieces_of = |this: &mut Self,
+                                 kind: BoolOp,
+                                 with: &[&PartState]|
                  -> Result<Vec<Piece>, String> {
                     let bodies: Vec<BodyId> = with.iter().filter_map(|w| w.body).collect();
                     let mut inputs: Vec<(BodyId, &BodyNames)> = vec![(body, &*t.names)];

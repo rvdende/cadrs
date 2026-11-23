@@ -1,6 +1,6 @@
 //! The MCP server in the app (Model Context Protocol, [`cadrs_mcp`]): with the Preferences'
-//! **Enable MCP server** on, AI assistants on this machine drive the running app at
-//! `http://127.0.0.1:<port>/mcp`.
+//! **Enable MCP server** on (or the top bar's AI assistants button, `crate::mcp_button`), AI
+//! assistants on this machine drive the running app at `http://127.0.0.1:<port>/mcp`.
 //!
 //! - [`sync_server`] starts and stops the server as the preference changes (and at startup).
 //! - [`run_calls`] takes the waiting tool calls each frame and runs them on the world, every
@@ -46,12 +46,19 @@ pub struct McpServer {
     server: Option<Server>,
     /// The (enabled, port) the server was last set up for.
     applied: Option<(bool, u16)>,
+    /// Why it could not start, when it was last asked to.
+    error: Option<String>,
 }
 
 impl McpServer {
     /// The endpoint while serving.
     pub fn url(&self) -> Option<String> {
         self.server.as_ref().map(Server::url)
+    }
+
+    /// Why the server could not start, when it was last asked to.
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
     }
 }
 
@@ -89,6 +96,7 @@ fn sync_server(world: &mut World) {
     let mut state = world.resource_mut::<McpServer>();
     state.applied = Some(want);
     state.server = None;
+    state.error = None;
     if !mcp.enabled {
         return;
     }
@@ -105,6 +113,7 @@ fn sync_server(world: &mut World) {
         }
         Err(e) => {
             warn!("cannot start the MCP server on {addr}: {e}");
+            state.error = Some(e.to_string());
             cadrs_ui::Notification::error(cadrs_ui::i18n::tr_with(
                 "model-mcp-cannot-start",
                 &[("port", &mcp.port.to_string()), ("error", &e.to_string())],
@@ -333,6 +342,11 @@ fn run(world: &mut World, call: &Call) -> Result<Value, String> {
         Call::ExportFile(p) => export_file(world, p),
         Call::CreateDrawing(p) => create_drawing(world, p),
         Call::AddAnnotation(p) => add_annotation(world, p),
+        Call::AddView(p) => add_view(world, p),
+        Call::EditView(p) => edit_view(world, p),
+        Call::AddSectionView(p) => add_section_view(world, p),
+        Call::AddNote(p) => add_note(world, p),
+        Call::ShowSection(p) => show_section(world, p),
         Call::RenameTab(p) => rename_tab(world, p),
         Call::DeleteTab(p) => delete_tab(world, &p.name),
         Call::OpenTab(p) => {
@@ -354,6 +368,11 @@ fn run(world: &mut World, call: &Call) -> Result<Value, String> {
         Call::ImportFile(p) => import_file(world, p),
         Call::AddMate(p) => add_mate(world, p),
         Call::SetMateValues(p) => set_mate_values(world, p),
+        Call::GetMachine(p) => crate::mcp_machine::get_machine(world, p),
+        Call::SetMachine(p) => crate::mcp_machine::set_machine(world, p),
+        Call::JogMachine(p) => crate::mcp_machine::jog_machine(world, p),
+        Call::GetCam(p) => crate::mcp_machine::get_cam(world, p),
+        Call::SetCamMachine(p) => crate::mcp_machine::set_cam_machine(world, p),
         Call::GetBoard(p) => crate::mcp_board::get_board(world, p),
         Call::GetBoardFit(p) => crate::mcp_board::get_board_fit(world, p),
         Call::DeriveBoard(p) => crate::mcp_board::derive_board(world, p),
@@ -481,11 +500,9 @@ fn create_drawing(world: &mut World, p: &tools::CreateDrawing) -> Result<Value, 
     Ok(json!({ "drawing": name, "template": template.name, "scale": sheet_scale, "views": views }))
 }
 
-/// Adds an annotation to a view of a drawing (the drawing is made the active tab first).
-fn add_annotation(world: &mut World, p: &tools::AddAnnotation) -> Result<Value, String> {
-    let kind: cadrs_drawing::annotation::AnnotationKind =
-        serde_json::from_value(p.annotation.clone()).map_err(|e| format!("annotation: {e}"))?;
-    if let Some(name) = &p.drawing {
+/// Makes the named drawing the active tab (the drawing edits run on the active one).
+fn open_drawing(world: &mut World, name: Option<&str>) -> Result<(), String> {
+    if let Some(name) = name {
         let mut d = doc_mut(world)?;
         let id = d
             .doc
@@ -496,6 +513,263 @@ fn add_annotation(world: &mut World, p: &tools::AddAnnotation) -> Result<Value, 
             .ok_or_else(|| format!("no drawing named {name:?}"))?;
         d.set_active(id);
     }
+    let d = doc(world)?;
+    let el = d.active_element().ok_or("no tab is active")?;
+    match &el.kind {
+        ElementKind::Drawing(_) => Ok(()),
+        _ => Err(format!("{:?} is not a drawing", el.name)),
+    }
+}
+
+/// The active drawing.
+fn drawing_of(world: &World) -> Result<&cadrs_drawing::Drawing, String> {
+    let d = doc(world)?;
+    match d.active_element().map(|e| &e.kind) {
+        Some(ElementKind::Drawing(drawing)) => Ok(drawing),
+        _ => Err("the active tab is not a drawing".into()),
+    }
+}
+
+/// The view of the active drawing with this name, and its sheet.
+fn drawing_view(
+    world: &World,
+    name: &str,
+) -> Result<(cadrs_drawing::SheetId, cadrs_drawing::View), String> {
+    let drawing = drawing_of(world)?;
+    drawing
+        .sheets
+        .iter()
+        .flat_map(|s| s.views.iter().map(move |v| (s.id, v)))
+        .find(|(_, v)| v.name.eq_ignore_ascii_case(name))
+        .map(|(s, v)| (s, v.clone()))
+        .ok_or_else(|| {
+            let names: Vec<&str> = drawing
+                .sheets
+                .iter()
+                .flat_map(|s| s.views.iter())
+                .map(|v| v.name.as_str())
+                .collect();
+            format!("no view named {name:?}; the views are {}", names.join(", "))
+        })
+}
+
+/// The active drawing's views, as the view tools return them.
+fn views_json(world: &World) -> Result<Value, String> {
+    let drawing = drawing_of(world)?;
+    let views: Vec<Value> = drawing
+        .sheets
+        .iter()
+        .flat_map(|s| s.views.iter())
+        .map(view_json)
+        .collect();
+    Ok(json!({ "views": views }))
+}
+
+/// Turns the edge references list_edges gives ({part, edge, seed}) into a drawing's ({edge,
+/// shape}: the shape is only what a dangling reference shows), anywhere in an annotation.
+fn drawing_edge_refs(v: &mut Value) {
+    match v {
+        Value::Object(o) => {
+            if o.contains_key("part") && o.contains_key("seed") && o.contains_key("edge") {
+                let edge = o.remove("edge").unwrap_or(Value::Null);
+                *v = json!({ "edge": edge, "shape": { "Point": [0.0, 0.0] } });
+                return;
+            }
+            for x in o.values_mut() {
+                drawing_edge_refs(x);
+            }
+        }
+        Value::Array(a) => a.iter_mut().for_each(drawing_edge_refs),
+        _ => {}
+    }
+}
+
+/// Adds a view with any orientation to the active drawing's first sheet.
+fn add_view(world: &mut World, p: &tools::AddView) -> Result<Value, String> {
+    open_drawing(world, p.drawing.as_deref())?;
+    let norm = |v: [f64; 3]| v.iter().map(|c| c * c).sum::<f64>().sqrt();
+    if norm(p.dir) < 1e-9 || norm(p.x) < 1e-9 {
+        return Err("dir and x must not be zero".into());
+    }
+    let frame = cadrs_drawing::view::Frame3::new(p.dir, p.x);
+    let (sheet, sheet_scale, reference, count) = {
+        let drawing = drawing_of(world)?;
+        let sheet = drawing.sheets.first().ok_or("the drawing has no sheet")?;
+        let reference = match p.part_studio.as_deref() {
+            Some(n) => Some(cadrs_drawing::ObjectRef {
+                element: part_studio(doc(world)?, Some(n))?.0,
+                part: None,
+            }),
+            None => sheet.views.first().map(|v| v.reference).or(sheet.reference),
+        };
+        let count = drawing.sheets.iter().map(|s| s.views.len()).sum::<usize>();
+        (sheet.id, sheet.scale, reference, count)
+    };
+    let reference = reference.ok_or("the drawing shows no Part Studio yet: give part_studio")?;
+    let scale = match p.scale.as_deref() {
+        Some(s) => parse_scale(s)?,
+        None => sheet_scale,
+    };
+    let mut v =
+        cadrs_drawing::View::base(reference, cadrs_drawing::NamedView::Front, scale, p.anchor);
+    v.frame = frame;
+    v.name = p
+        .name
+        .clone()
+        .filter(|n| !n.trim().is_empty())
+        .or_else(|| cadrs_drawing::NamedView::of(&frame).map(|n| n.label().to_string()))
+        .unwrap_or_else(|| format!("View {}", count + 1));
+    v.hidden_lines = p.hidden_lines.unwrap_or(false);
+    v.shaded = p.shaded.unwrap_or(false);
+    v.rotation = p.rotation.unwrap_or(0.0).to_radians();
+    let out = view_json(&v);
+    let op = crate::drawing::view_tools::insert_view_op(world, sheet, v);
+    if !crate::drawing::view_tools::edit_drawing(world, op) {
+        return Err("the view could not be added".into());
+    }
+    Ok(out)
+}
+
+/// Changes or deletes a view of the active drawing.
+fn edit_view(world: &mut World, p: &tools::EditView) -> Result<Value, String> {
+    open_drawing(world, p.drawing.as_deref())?;
+    let (_, mut v) = drawing_view(world, &p.view)?;
+    let op = if p.delete.unwrap_or(false) {
+        cadrs_drawing::DrawingOp::DeleteViews { ids: vec![v.id] }
+    } else {
+        if let Some(n) = p.name.clone().filter(|n| !n.trim().is_empty()) {
+            v.name = n;
+        }
+        if let Some(free) = p.free {
+            v.align_suppressed = free;
+        }
+        if let Some(a) = p.anchor {
+            v.anchor = a;
+        }
+        if let Some(s) = p.scale.as_deref() {
+            v.scale = parse_scale(s)?;
+            v.scale_inherited = false;
+        }
+        if let Some(h) = p.hidden_lines {
+            v.hidden_lines = h;
+        }
+        if let Some(s) = p.shaded {
+            v.shaded = s;
+        }
+        if let Some(r) = p.rotation {
+            v.rotation = r.to_radians();
+        }
+        cadrs_drawing::DrawingOp::SetView {
+            view: v,
+            label: "Edit view".into(),
+        }
+    };
+    if !crate::drawing::view_tools::edit_drawing(world, op) {
+        return Err("the view could not be changed".into());
+    }
+    views_json(world)
+}
+
+/// Adds a section view of a view of the active drawing.
+fn add_section_view(world: &mut World, p: &tools::AddSectionView) -> Result<Value, String> {
+    open_drawing(world, p.drawing.as_deref())?;
+    let (sheet, parent) = drawing_view(world, &p.view)?;
+    let (projection, letter, scale) = {
+        let drawing = drawing_of(world)?;
+        (
+            drawing.projection,
+            cadrs_drawing::view_kinds::next_letter(
+                drawing.sheets.iter().flat_map(|s| s.views.iter()),
+            ),
+            drawing.effective_scale(parent.id),
+        )
+    };
+    let mut v =
+        cadrs_drawing::view_kinds::section_view(&parent, p.a, p.b, p.at, projection, &letter)
+            .ok_or("the cutting line has no length")?;
+    if let Some(s) = scale {
+        v.scale = s;
+    }
+    let out = view_json(&v);
+    if !crate::drawing::view_tools::edit_drawing(
+        world,
+        cadrs_drawing::DrawingOp::InsertView { sheet, view: v },
+    ) {
+        return Err("the section view could not be added".into());
+    }
+    Ok(out)
+}
+
+/// Lists the document's drawing sections, or shows one in its Part Studio.
+fn show_section(world: &mut World, p: &tools::ShowSection) -> Result<Value, String> {
+    let d = doc(world)?;
+    let sections: Vec<crate::drawing_sections::DrawingSection> = d
+        .doc
+        .elements
+        .iter()
+        .filter(|e| matches!(e.kind, ElementKind::PartStudio { .. }))
+        .flat_map(|e| crate::drawing_sections::sections_of(&d.doc, e.id))
+        .collect();
+    let describe = |s: &crate::drawing_sections::DrawingSection| {
+        json!({
+            "name": s.name,
+            "drawing": s.drawing_name,
+            "part_studio": d.doc.element(s.studio).map(|e| e.name.clone()),
+            "origin": s.origin.to_array().map(|c| round(c as f64)),
+            "removed_side": s.removed.to_array().map(|c| round(c as f64)),
+        })
+    };
+    let Some(name) = p.name.as_deref() else {
+        return Ok(json!({ "sections": sections.iter().map(describe).collect::<Vec<_>>() }));
+    };
+    let found = sections
+        .iter()
+        .find(|s| {
+            s.name.eq_ignore_ascii_case(name.trim())
+                && p.drawing
+                    .as_deref()
+                    .is_none_or(|n| s.drawing_name.eq_ignore_ascii_case(n.trim()))
+        })
+        .cloned()
+        .ok_or_else(|| {
+            let names: Vec<&str> = sections.iter().map(|s| s.name.as_str()).collect();
+            format!(
+                "no section named {name:?}; the sections are {}",
+                names.join(", ")
+            )
+        })?;
+    let out = describe(&found);
+    crate::drawing_sections::jump(world, found);
+    Ok(out)
+}
+
+/// Adds a note to the active drawing's first sheet.
+fn add_note(world: &mut World, p: &tools::AddNote) -> Result<Value, String> {
+    open_drawing(world, p.drawing.as_deref())?;
+    let sheet = drawing_of(world)?
+        .sheets
+        .first()
+        .map(|s| s.id)
+        .ok_or("the drawing has no sheet")?;
+    let mut note = cadrs_drawing::note::Note::new(p.at, p.height.unwrap_or(3.5));
+    note.text = cadrs_drawing::rich::RichText::plain(&p.text);
+    let id = note.id;
+    if !crate::drawing::view_tools::edit_drawing(
+        world,
+        cadrs_drawing::DrawingOp::AddNote { sheet, note },
+    ) {
+        return Err("the note could not be added".into());
+    }
+    Ok(json!({ "note": serde_json::to_value(id).unwrap_or(Value::Null) }))
+}
+
+/// Adds an annotation to a view of a drawing (the drawing is made the active tab first).
+fn add_annotation(world: &mut World, p: &tools::AddAnnotation) -> Result<Value, String> {
+    let mut value = p.annotation.clone();
+    drawing_edge_refs(&mut value);
+    let kind: cadrs_drawing::annotation::AnnotationKind =
+        serde_json::from_value(value).map_err(|e| format!("annotation: {e}"))?;
+    open_drawing(world, p.drawing.as_deref())?;
     let view = {
         let d = doc(world)?;
         let el = d.active_element().ok_or("no tab is active")?;
@@ -1678,6 +1952,9 @@ fn template(kind: &str) -> Option<FeatureKind> {
             "helix" => FeatureKind::Helix(surfacing::HelixFeature::default()),
             "thread" => FeatureKind::Thread(cadrs_core::thread::ThreadFeature::default()),
             "gear" => FeatureKind::Gear(cadrs_core::gear::GearFeature::default()),
+            "frame" => FeatureKind::Frame(cadrs_core::frame::FrameFeature::default()),
+            "frametrim" => FeatureKind::FrameTrim(cadrs_core::frame::FrameTrimFeature::default()),
+            "cutlist" => FeatureKind::CutList(cadrs_core::frame::CutListFeature::default()),
             "deleteface" => {
                 FeatureKind::DirectEdit(cadrs_core::direct_edit::DirectEditFeature::default())
             }
@@ -2193,8 +2470,47 @@ fn get_ui_layout(world: &mut World, p: &tools::GetUiLayout) -> Result<Value, Str
 
 /// Sets and saves the preferences given; answers with all of them.
 fn set_preferences(world: &mut World, p: &tools::SetPreferences) -> Result<Value, String> {
+    use cadrs_core::preferences::{FrameStatsMode, GridStyle, OriginStyle};
+    // All checked before any is set.
+    fn code<T>(
+        what: &str,
+        v: &Option<String>,
+        from: fn(&str) -> Option<T>,
+        all: &[&str],
+    ) -> Result<Option<T>, String> {
+        v.as_deref()
+            .map(|c| from(c).ok_or_else(|| format!("{what}: {c:?} is not one of {all:?}")))
+            .transpose()
+    }
+    let grid = code(
+        "grid",
+        &p.grid,
+        GridStyle::from_code,
+        &["off", "crossed", "lines"],
+    )?;
+    let origin = code(
+        "origin",
+        &p.origin,
+        OriginStyle::from_code,
+        &["hidden", "dot", "axes"],
+    )?;
+    let frame_stats = code(
+        "frame_stats",
+        &p.frame_stats,
+        FrameStatsMode::from_code,
+        &["off", "fps", "details"],
+    )?;
     if let Some(on) = p.vsync {
         crate::preferences_ui::set_vsync(world, on);
+    }
+    if let Some(g) = grid {
+        crate::preferences_ui::set_grid(world, g);
+    }
+    if let Some(o) = origin {
+        crate::preferences_ui::set_origin(world, o);
+    }
+    if let Some(f) = frame_stats {
+        crate::preferences_ui::set_frame_stats(world, f);
     }
     let prefs = world.resource::<LocalPreferences>().0;
     let mut v = serde_json::to_value(prefs).map_err(|e| e.to_string())?;

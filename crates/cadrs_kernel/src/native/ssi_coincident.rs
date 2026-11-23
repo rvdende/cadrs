@@ -86,12 +86,16 @@ pub fn region_boundary(a: &Surface, ua: UvBox, b: &Surface, ub: UvBox, tol: f64)
             // A side found from both surfaces (shared edges of the boxes), or the two sides of
             // a full turn's seam: once.
             let dup = out.iter().any(|d| {
-                [0.2, 0.5, 0.8].iter().all(|f| {
-                    let p = c.c.point(c.t0 + (c.t1 - c.t0) * f);
-                    (d.c.point(d.c.closest(&p, d.t0, d.t1)) - p).norm() < 10.0 * tol
-                })
+                c.c.runs_along(
+                    (c.t0, c.t1),
+                    &d.c,
+                    (d.t0, d.t1),
+                    [0.2, 0.5, 0.8],
+                    10.0 * tol,
+                    true,
+                )
             });
-            if std::env::var_os("CADRS_SSI_DEBUG").is_some() {
+            if crate::native::env_flag!("CADRS_SSI_DEBUG") {
                 eprintln!(
                     "coincident side: {:?} .. {:?} length {:.4}{}",
                     c.c.point(c.t0),
@@ -343,15 +347,14 @@ pub fn crossing_sides(
                 }
                 // (A side shared by both boxes, found from each: once.)
                 let dup = out.iter().any(|d| {
-                    [0.2, 0.5, 0.8].iter().all(|f| {
-                        let q = c.c.point(c.t0 + (c.t1 - c.t0) * f);
-                        (d.curve
-                            .c
-                            .point(d.curve.c.closest(&q, d.curve.t0, d.curve.t1))
-                            - q)
-                            .norm()
-                            < 10.0 * tol
-                    })
+                    c.c.runs_along(
+                        (c.t0, c.t1),
+                        &d.curve.c,
+                        (d.curve.t0, d.curve.t1),
+                        [0.2, 0.5, 0.8],
+                        10.0 * tol,
+                        true,
+                    )
                 });
                 if !dup {
                     out.push(Side {

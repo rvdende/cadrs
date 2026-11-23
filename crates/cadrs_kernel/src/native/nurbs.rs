@@ -36,7 +36,10 @@ pub fn find_span(n: usize, p: usize, u: f64, knots: &[f64]) -> usize {
         return k;
     }
     let (mut lo, mut hi) = (p, n + 1);
-    let mut mid = (lo + hi) / 2;
+    // (First where evenly spaced knots would have it, which is where most are: the halving
+    // below then has nothing to do, and from anywhere else it ends at the same span.)
+    let share = (u - knots[p]) / (knots[n + 1] - knots[p]);
+    let mut mid = (p + (share * (n + 1 - p) as f64) as usize).clamp(lo, hi - 1);
     while u < knots[mid] || u >= knots[mid + 1] {
         if u < knots[mid] {
             hi = mid;
@@ -1071,6 +1074,157 @@ impl NurbsCurve {
     /// # Errors
     /// `InvalidParameter` when `u` isn't strictly inside the curve's range (or isn't a number,
     /// as a corrupt file's curves can give).
+    /// The curve over `t0..t1` (within [`tol::ROUNDOFF_FINE`] of an end, to that end): split
+    /// at each end inside, as [`Self::split`] does the whole curve, from the spans about the
+    /// range alone. A knot inserted moves only the poles of the spans about it, so the poles
+    /// are the ones a split of the whole curve makes; a long curve's short piece (an edge's
+    /// box) costs its few spans, not the whole curve copied at each knot inserted.
+    pub fn piece(&self, t0: f64, t1: f64) -> Self {
+        let (a, b) = self.range();
+        let (cut0, cut1) = (t0 > a + tol::ROUNDOFF_FINE, t1 < b - tol::ROUNDOFF_FINE);
+        let (p, n) = (self.degree, self.cps.len() - 1);
+        // The spans s0..=s1: the last starting before t0 to the first ending after t1, the
+        // ends strictly inside them (else the whole curve's first or last). Only for a range
+        // inside the curve (a split outside it fails, the curve kept whole).
+        let window = (t0 < b && t1 > a && t0 <= t1).then(|| {
+            let s0 = if cut0 {
+                (p..=n).rev().find(|&s| self.knots[s] < t0).unwrap_or(p)
+            } else {
+                p
+            };
+            // (A second split at or before the first's point fails: all after it kept.)
+            let s1 = if cut1 && t1 > if cut0 { t0 } else { a } {
+                (s0..=n).find(|&s| self.knots[s + 1] > t1).unwrap_or(n)
+            } else {
+                n
+            };
+            (s0, s1)
+        });
+        let mut c = match window {
+            Some((s0, s1)) if (s0, s1) != (p, n) => Self {
+                degree: p,
+                knots: self.knots[s0 - p..=s1 + p + 1].to_vec(),
+                cps: self.cps[s0 - p..=s1].to_vec(),
+            },
+            _ => self.clone(),
+        };
+        if cut0 && let Ok((_, r)) = c.split(t0) {
+            c = r;
+        }
+        if cut1 && let Ok((l, _)) = c.split(t1) {
+            c = l;
+        }
+        c
+    }
+
+    /// This curve with as many of its inner knots removed as leave it within `tol` of every
+    /// one of `sites` (parameters and the points wanted there, in order of parameter): Piegl
+    /// and Tiller's knot removal (A5.8), a knot at a time, sweep after sweep until none goes.
+    /// A knot's removal moves the poles round it and drops one; how far the curve moves by it
+    /// is bounded by one pole's move, which rules most out before any site is looked at.
+    /// (Not what an intersection curve is fitted by: over 728 traced curves of the tests it
+    /// left 4 % fewer poles than keeping every traced point the cubic needs, in a quarter of
+    /// 0.1 s, and the curve's two p-curves would have to lose the same knots.)
+    pub fn without_knots(&self, tol: f64, sites: &[(f64, P3)]) -> Self {
+        let p = self.degree;
+        let ord = p + 1;
+        let (mut knots, mut cps) = (self.knots.clone(), self.cps.clone());
+        let point = |knots: &[f64], cps: &[H], u: f64| -> P3 {
+            let span = find_span(cps.len() - 1, p, u, knots);
+            let mut d: Vec<H> = (0..=p).map(|j| cps[span - p + j]).collect();
+            for r in 1..=p {
+                for j in (r..=p).rev() {
+                    let i = span - p + j;
+                    let den = knots[i + ord - r] - knots[i];
+                    let a = if den > 0.0 { (u - knots[i]) / den } else { 0.0 };
+                    d[j] = d[j - 1] * (1.0 - a) + d[j] * a;
+                }
+            }
+            P3::new(d[p][0] / d[p][3], d[p][1] / d[p][3], d[p][2] / d[p][3])
+        };
+        let mut temp: Vec<H> = Vec::new();
+        loop {
+            let mut removed = false;
+            let mut r = ord;
+            while r + ord < knots.len() {
+                // (The last of a repeated knot, and how many times it is there.)
+                if knots[r + 1] == knots[r] && r + 1 + ord < knots.len() {
+                    r += 1;
+                    continue;
+                }
+                let s = (0..=r).rev().take_while(|&k| knots[k] == knots[r]).count();
+                let u = knots[r];
+                let (first, last) = (r - p, r - s);
+                if last < first {
+                    r += 1;
+                    continue;
+                }
+                let off = first - 1;
+                temp.clear();
+                temp.resize(last - off + 2, H::zeros());
+                temp[0] = cps[off];
+                temp[last + 1 - off] = cps[last + 1];
+                let (mut i, mut j, mut ii, mut jj) = (first, last, 1, last - off);
+                while j > i {
+                    let ai = (u - knots[i]) / (knots[i + ord] - knots[i]);
+                    let aj = (u - knots[j]) / (knots[j + ord] - knots[j]);
+                    temp[ii] = (cps[i] - temp[ii - 1] * (1.0 - ai)) / ai;
+                    temp[jj] = (cps[j] - temp[jj + 1] * aj) / (1.0 - aj);
+                    i += 1;
+                    ii += 1;
+                    j -= 1;
+                    jj -= 1;
+                }
+                let moved = if j < i {
+                    (temp[ii - 1] - temp[jj + 1]).norm()
+                } else {
+                    let ai = (u - knots[i]) / (knots[i + ord] - knots[i]);
+                    (cps[i] - (temp[ii + 1] * ai + temp[ii - 1] * (1.0 - ai))).norm()
+                };
+                if !(moved <= tol) {
+                    r += 1;
+                    continue;
+                }
+                // Tried: the poles as they would be, and the sites they bear on.
+                let (from, to) = (knots[first], knots[last + ord]);
+                let mut new_cps = cps.clone();
+                let (mut i, mut j) = (first, last);
+                while j > i {
+                    new_cps[i] = temp[i - off];
+                    new_cps[j] = temp[j - off];
+                    i += 1;
+                    j -= 1;
+                }
+                new_cps.remove((2 * r - s - p) / 2);
+                let mut new_knots = knots.clone();
+                new_knots.remove(r);
+                let lo = sites.partition_point(|x| x.0 < from);
+                let hi = sites.partition_point(|x| x.0 <= to);
+                let near = sites[lo..hi]
+                    .iter()
+                    .all(|(t, q)| (point(&new_knots, &new_cps, *t) - q).norm() <= tol);
+                if near {
+                    (knots, cps) = (new_knots, new_cps);
+                    removed = true;
+                    // (Not the next knot in this sweep: its neighbours go in turn.)
+                    r += 1;
+                } else {
+                    r += 1;
+                }
+            }
+            if !removed {
+                break;
+            }
+        }
+        Self {
+            degree: p,
+            knots,
+            cps,
+        }
+    }
+
+    /// The curve's two parts either side of `u` (inside its range), each the same curve over
+    /// its own stretch.
     pub fn split(&self, u: f64) -> crate::Result<(Self, Self)> {
         let (a, b) = self.range();
         let outside = || {
@@ -1082,8 +1236,51 @@ impl NurbsCurve {
             return Err(outside());
         }
         let p = self.degree;
+        let mult = self
+            .knots
+            .iter()
+            .filter(|k| (**k - u).abs() < 1e-14)
+            .count();
+        // Away from a knot, in one pass: only the degree's poles and one about `u` change, by
+        // de Boor's triangle (its left edge the left part's last poles, its right edge the
+        // right part's first), where inserting the knot again and again copied every pole
+        // each time.
+        if mult == 0 {
+            let k = find_span(self.cps.len() - 1, p, u, &self.knots);
+            let mut d: Vec<H> = self.cps[k - p..=k].to_vec();
+            let mut left: Vec<H> = Vec::with_capacity(k + 1);
+            left.extend_from_slice(&self.cps[..k - p]);
+            left.push(d[0]);
+            let mut right: Vec<H> = vec![d[p]];
+            for r in 1..=p {
+                for j in (r..=p).rev() {
+                    let lo = self.knots[k - p + j];
+                    let a = (u - lo) / (self.knots[k + 1 + j - r] - lo);
+                    d[j] = d[j] * a + d[j - 1] * (1.0 - a);
+                }
+                left.push(d[r]);
+                right.push(d[p]);
+            }
+            right.reverse();
+            right.extend_from_slice(&self.cps[k + 1..]);
+            let mut lk = self.knots[..=k].to_vec();
+            lk.extend(std::iter::repeat_n(u, p + 1));
+            let mut rk = vec![u; p + 1];
+            rk.extend_from_slice(&self.knots[k + 1..]);
+            return Ok((
+                Self {
+                    degree: p,
+                    knots: lk,
+                    cps: left,
+                },
+                Self {
+                    degree: p,
+                    knots: rk,
+                    cps: right,
+                },
+            ));
+        }
         let mut c = self.clone();
-        let mult = c.knots.iter().filter(|k| (**k - u).abs() < 1e-14).count();
         for _ in mult..p + 1 {
             c = c.insert_knot(u);
         }
@@ -1153,6 +1350,10 @@ impl NurbsCurve {
     /// between distinct knots its ends and its p + 1 homogeneous control points, in order. One
     /// pass over the curve, where splitting it at each span's ends copies it whole each time.
     pub fn bezier_segments(&self) -> Vec<(f64, f64, Vec<H>)> {
+        // (A5.6 walks clamped knots: a periodic curve's uniform knots run past its domain.)
+        if !self.is_clamped() {
+            return self.clamped().bezier_segments();
+        }
         let p = self.degree;
         let (u, pw) = (&self.knots, &self.cps);
         let n = pw.len() - 1;
@@ -1200,6 +1401,44 @@ impl NurbsCurve {
             }
         }
         out
+    }
+
+    /// Whether the first and the last `p + 1` knots are each one value, so that the curve starts
+    /// on its first pole and ends on its last.
+    pub fn is_clamped(&self) -> bool {
+        let (p, u) = (self.degree, &self.knots);
+        let m = u.len() - 1;
+        u[..=p].iter().all(|&k| k == u[0]) && u[m - p..].iter().all(|&k| k == u[m])
+    }
+
+    /// The same curve over the same domain with clamped knots: each end of the domain inserted
+    /// until it is a knot `p` times (A5.1), the poles and knots past it dropped. The knots outside
+    /// the domain of an unclamped curve, a periodic one's say, do not shape it inside.
+    pub fn clamped(&self) -> Self {
+        if self.is_clamped() {
+            return self.clone();
+        }
+        let p = self.degree;
+        let (lo, hi) = self.range();
+        let mut c = self.clone();
+        for t in [lo, hi] {
+            while c.knots.iter().filter(|&&k| k == t).count() < p {
+                c = c.insert_knot(t);
+            }
+        }
+        // The last knot at `lo` is `k`: the curve starts on pole `k − p`. The first knot at `hi`
+        // is `j`: it ends on pole `j − 1`.
+        let k = c.knots.iter().rposition(|&x| x == lo).unwrap_or(p);
+        let j = c.knots.iter().position(|&x| x == hi).unwrap_or(c.cps.len());
+        let (first, last) = (k.saturating_sub(p), j.saturating_sub(1));
+        let mut knots = vec![lo];
+        knots.extend_from_slice(&c.knots[first + 1..=last + p]);
+        knots.push(hi);
+        Self {
+            degree: p,
+            knots,
+            cps: c.cps[first..=last].to_vec(),
+        }
     }
 
     /// Inserts the knot `u` once (A5.1).
@@ -1674,6 +1913,49 @@ impl NurbsSurface {
         out
     }
 
+    /// The curve of the surface at one u, along v: its poles the surface's rows of poles
+    /// weighed by u's basis functions (in homogeneous form, so a rational surface's too).
+    pub fn iso_u_curve(&self, u: f64) -> NurbsCurve {
+        let n = self.cps.len() - 1;
+        let u = u.clamp(self.ku[self.du], self.ku[n + 1]);
+        let span = find_span(n, self.du, u, &self.ku);
+        let basis = basis_ders(span, u, self.du, 0, &self.ku);
+        let cps = (0..self.cps[0].len())
+            .map(|j| {
+                (0..=self.du).fold(H::zeros(), |acc, k| {
+                    acc + self.cps[span - self.du + k][j] * basis[0][k]
+                })
+            })
+            .collect();
+        NurbsCurve {
+            degree: self.dv,
+            knots: self.kv.clone(),
+            cps,
+        }
+    }
+
+    /// The curve of the surface at one v, along u ([`Self::iso_u_curve`] the other way).
+    pub fn iso_v_curve(&self, v: f64) -> NurbsCurve {
+        let m = self.cps[0].len() - 1;
+        let v = v.clamp(self.kv[self.dv], self.kv[m + 1]);
+        let span = find_span(m, self.dv, v, &self.kv);
+        let basis = basis_ders(span, v, self.dv, 0, &self.kv);
+        let cps = self
+            .cps
+            .iter()
+            .map(|row| {
+                (0..=self.dv).fold(H::zeros(), |acc, k| {
+                    acc + row[span - self.dv + k] * basis[0][k]
+                })
+            })
+            .collect();
+        NurbsCurve {
+            degree: self.du,
+            knots: self.ku.clone(),
+            cps,
+        }
+    }
+
     /// The iso-curve at `v` for evaluating many points along u in [u0, u1] (mass properties'
     /// inner integrals): the control points of S(·, v) and ∂S/∂v(·, v), contracted along v once.
     pub fn iso_v(&self, v: f64, u0: f64, u1: f64) -> IsoV<'_> {
@@ -2029,6 +2311,110 @@ impl IsoV<'_> {
 mod tests {
     use super::*;
 
+    /// A periodic cubic (uniform knots, its first three poles repeated at its end) clamped is the
+    /// same curve over the same domain, and its Bézier segments cover the domain alone.
+    #[test]
+    fn a_periodic_curve_clamped_is_the_same_curve() {
+        let ring: Vec<P3> = (0..12)
+            .map(|i| {
+                let a = i as f64 * std::f64::consts::TAU / 12.0;
+                let r = if i % 2 == 0 { 3.0 } else { 2.0 };
+                P3::new(r * a.cos(), r * a.sin(), 0.0)
+            })
+            .collect();
+        let cps: Vec<H> = ring.iter().chain(&ring[..3]).map(|p| hom(p, 1.0)).collect();
+        let knots: Vec<f64> = (0..cps.len() + 4).map(|i| i as f64).collect();
+        let c = NurbsCurve::new(3, knots, cps).unwrap();
+        assert!(!c.is_clamped());
+        let k = c.clamped();
+        assert!(k.is_clamped());
+        assert_eq!(k.range(), c.range());
+        let (lo, hi) = c.range();
+        for i in 0..=100 {
+            let u = lo + (hi - lo) * i as f64 / 100.0;
+            assert!((k.point(u) - c.point(u)).norm() < 1e-12, "at {u}");
+        }
+        let segs = c.bezier_segments();
+        assert_eq!(segs.len(), 12);
+        assert_eq!((segs[0].0, segs[11].1), (lo, hi));
+    }
+
+    /// A helix's cubic through 400 of its points keeps within 1e-7 of them with most of its
+    /// knots removed, its ends where they were.
+    #[test]
+    fn knots_removed_to_a_tolerance() {
+        let at = |t: f64| P3::new(10.0 * (3.0 * t).cos(), 10.0 * (3.0 * t).sin(), 4.0 * t);
+        let ts: Vec<f64> = (0..400).map(|i| i as f64 / 399.0).collect();
+        let pts: Vec<P3> = ts.iter().map(|&t| at(t)).collect();
+        let c = NurbsCurve::interpolate(&pts, &ts, 3, None, None);
+        let sites: Vec<(f64, P3)> = ts.iter().copied().zip(pts.iter().copied()).collect();
+        let light = c.without_knots(1e-7, &sites);
+        assert!(
+            light.cps.len() < c.cps.len() / 3,
+            "{} poles of {}",
+            light.cps.len(),
+            c.cps.len()
+        );
+        assert_eq!(light.knots.len(), light.cps.len() + 4);
+        for (t, q) in &sites {
+            assert!((light.point(*t) - q).norm() <= 1e-7);
+        }
+        assert!((light.point(0.0) - pts[0]).norm() < 1e-12);
+        assert!((light.point(1.0) - pts[399]).norm() < 1e-12);
+        // Between the sites too: the curve it was, nearly.
+        for i in 0..2000 {
+            let t = i as f64 / 1999.0;
+            assert!((light.point(t) - c.point(t)).norm() < 1e-6);
+        }
+    }
+
+    /// A curve split in one pass has the poles and knots splitting it by inserting the knot
+    /// again and again gives, to the bit: a cubic and a quintic, rational too, at places
+    /// across their spans.
+    #[test]
+    fn a_split_in_one_pass_is_the_split_by_insertion() {
+        let by_insertion = |c: &NurbsCurve, u: f64| {
+            let p = c.degree;
+            let mut x = c.clone();
+            for _ in 0..p + 1 {
+                x = x.insert_knot(u);
+            }
+            let idx = x.knots.iter().position(|k| *k == u).unwrap();
+            (
+                (x.knots[..idx + p + 1].to_vec(), x.cps[..idx].to_vec()),
+                (x.knots[idx..].to_vec(), x.cps[idx..].to_vec()),
+            )
+        };
+        for (p, n) in [(3usize, 9usize), (5, 12), (2, 4)] {
+            let mut knots = vec![0.0; p + 1];
+            knots.extend((1..n - p).map(|i| i as f64 * 0.37));
+            knots.extend(vec![(n - p) as f64 * 0.37; p + 1]);
+            let cps: Vec<H> = (0..n)
+                .map(|i| {
+                    let t = i as f64;
+                    let w = 1.0 + 0.3 * (t * 1.7).sin();
+                    H::new(w * t.cos() * 3.0, w * (t * 0.7).sin() * 2.0, w * t * 0.1, w)
+                })
+                .collect();
+            let c = NurbsCurve {
+                degree: p,
+                knots,
+                cps,
+            };
+            let (a, b) = c.range();
+            for i in 1..40 {
+                let u = a + (b - a) * (i as f64 + 0.123) / 40.0;
+                if c.knots.iter().any(|k| (*k - u).abs() < 1e-14) {
+                    continue;
+                }
+                let (l, r) = c.split(u).unwrap();
+                let (wl, wr) = by_insertion(&c, u);
+                assert_eq!((l.knots, l.cps), wl, "degree {p} at {u}");
+                assert_eq!((r.knots, r.cps), wr, "degree {p} at {u}");
+            }
+        }
+    }
+
     /// A patch cut from the poles it hangs on is the patch cut from every row and column whole,
     /// to the bit: ranges inside spans, on knots (single and double) and at the surface's ends.
     #[test]
@@ -2159,6 +2545,35 @@ mod tests {
             let bez = NurbsCurve::new(4, [vec![*a; 5], vec![*b; 5]].concat(), q.clone()).unwrap();
             let m = 0.37 * a + 0.63 * b;
             assert!((bez.point(m) - c.point(m)).norm() < 1e-12);
+        }
+    }
+
+    /// An unclamped curve (a periodic cubic's uniform knots, as a closed spline outline has)
+    /// splits into the Bézier segments of its range, each the curve there.
+    #[test]
+    fn bezier_segments_of_an_unclamped_curve() {
+        let knots: Vec<f64> = (0..18).map(f64::from).collect();
+        let cps: Vec<H> = (0..14)
+            .map(|i| {
+                let t = i as f64 * std::f64::consts::TAU / 11.0;
+                hom(&P3::new(3.0 * t.cos(), 4.0 * t.sin(), 0.0), 1.0)
+            })
+            .collect();
+        let c = NurbsCurve::new(3, knots, cps).unwrap();
+        let (lo, hi) = c.range();
+        assert!(!c.is_clamped());
+        let clamped = c.clamped();
+        assert_eq!(clamped.range(), (lo, hi));
+        let segs = c.bezier_segments();
+        assert_eq!(segs.len(), 11);
+        assert_eq!((segs[0].0, segs[10].1), (lo, hi));
+        for (a, b, q) in &segs {
+            let bez = NurbsCurve::new(3, [vec![*a; 4], vec![*b; 4]].concat(), q.clone()).unwrap();
+            for s in [0.0, 0.37, 1.0] {
+                let t = a + (b - a) * s;
+                assert!((bez.point(t) - c.point(t)).norm() < 1e-12);
+                assert!((clamped.point(t) - c.point(t)).norm() < 1e-12);
+            }
         }
     }
 

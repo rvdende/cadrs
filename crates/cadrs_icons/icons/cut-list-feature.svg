@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="2.9 -0.75 19.2 19.2" width="24" height="24" fill="none" stroke="#262626" stroke-width="1.1" stroke-linejoin="round" stroke-linecap="round">
+  <polygon points="11.8,4.4 20.46,9.4 18.55,10.5 9.89,5.5" fill="#ffffff"/>
+  <polygon points="20.46,9.4 18.55,10.5 18.55,12.7 20.46,11.6" fill="#a4a4a4"/>
+  <polygon points="9.89,5.5 18.55,10.5 18.55,12.7 9.89,7.7" fill="#747474"/>
+  <polyline points="20.46,9.4 18.55,10.5 18.55,12.7" stroke="#2563eb" stroke-width="1.3"/>
+  <polygon points="9.12,5.95 15.52,9.65 13.62,10.75 7.21,7.05" fill="#ffffff"/>
+  <polygon points="15.52,9.65 13.62,10.75 13.62,12.95 15.52,11.85" fill="#a4a4a4"/>
+  <polygon points="7.21,7.05 13.62,10.75 13.62,12.95 7.21,9.25" fill="#747474"/>
+  <polyline points="15.52,9.65 13.62,10.75 13.62,12.95" stroke="#2563eb" stroke-width="1.3"/>
+  <polygon points="6.43,7.5 10.59,9.9 8.68,11 4.53,8.6" fill="#ffffff"/>
+  <polygon points="10.59,9.9 8.68,11 8.68,13.2 10.59,12.1" fill="#a4a4a4"/>
+  <polygon points="4.53,8.6 8.68,11 8.68,13.2 4.53,10.8" fill="#747474"/>
+  <polyline points="10.59,9.9 8.68,11 8.68,13.2" stroke="#2563eb" stroke-width="1.3"/>
+</svg>

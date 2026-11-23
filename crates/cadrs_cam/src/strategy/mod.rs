@@ -18,15 +18,21 @@
 //! - [`holes`]: Drill (drill, peck, chip break and tap cycles) and Bore (helical hole milling).
 //! - [`beam`]: Cut (through-cutting with kerf compensation, pierces, leads and microjoints,
 //!   holes before outlines), Etch (marking along edges) and Fill (laser hatching).
+//! - [`rotary`]: finishing and roughing round a rotary axis (4-axis).
+//! - [`multiaxis`]: the tool leaning as it cuts (5-axis): any 3D finishing pattern with a
+//!   tool-axis rule, swarf cutting, holes at any angle; the links between leaning passes.
 
 pub mod adaptive;
+pub mod arcs;
 pub mod beam;
 pub mod collision;
 pub mod finish;
 pub mod holes;
 pub mod link;
 pub mod mill;
+pub mod multiaxis;
 pub mod path;
+pub mod rotary;
 
 use serde::{Deserialize, Serialize};
 
@@ -380,22 +386,38 @@ pub fn generate(input: &Input) -> Result<Toolpath, String> {
         Pattern::Spiral => finish::spiral(input),
         Pattern::Pencil => finish::pencil(input),
         Pattern::ThreadMill => holes::thread_mill(input),
+        Pattern::Drill if p.cycle.any_axis => multiaxis::drill(input),
         Pattern::Drill => holes::drill(input),
         Pattern::Bore => holes::bore(input),
         Pattern::Cut => beam::cut(input),
         Pattern::Etch => beam::etch(input),
         Pattern::Fill => beam::fill(input),
+        Pattern::Rotary => rotary::finish(input),
+        Pattern::RotaryRough => rotary::rough(input),
+        Pattern::Swarf => multiaxis::swarf(input),
     }?;
+    // A 3D finishing pattern with a tool-axis rule: its passes with the tool leant.
+    let tilts = p.tilt.leans()
+        && matches!(
+            p.pattern,
+            Pattern::Parallel | Pattern::Scallop | Pattern::Spiral | Pattern::Pencil
+        );
+    let tp = if tilts {
+        multiaxis::tilt(input, tp)?
+    } else {
+        tp
+    };
     // Repeated, then every copy checked.
     let tp = p.repeat.apply(tp);
-    let mut tp = if input.machine.is_milling() {
+    let leaning = tp.is_multi_axis();
+    let mut tp = if input.machine.is_milling() && !leaning {
         collision::apply(input, tp)
     } else {
         tp
     };
     // Through the bottom of the stock (a hole's break-through, a profile's cut-off): whatever
     // the part sits on is there.
-    if input.machine.is_milling() {
+    if input.machine.is_milling() && !leaning {
         let lowest = tp
             .steps
             .iter()
@@ -445,3 +467,6 @@ pub(crate) mod testing;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod tests_multiaxis;

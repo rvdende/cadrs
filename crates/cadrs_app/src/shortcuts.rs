@@ -115,7 +115,6 @@ pub const SHORTCUTS: &[(usize, &str, &str, u8)] = &[
     (3, "Ctrl+←", "view-shortcut-rotate-5", 0),
     (3, "Ctrl+Shift+←", "view-shortcut-pan", 0),
     (3, "P", "view-shortcut-toggle-planes", 0),
-    (3, "F12", "view-shortcut-toggle-frame-rate", 0),
     (3, "Shift+P", "view-shortcut-hide-construction", OFF),
     (3, "Shift+I", "view-shortcut-isolate", OFF),
     (3, "Shift+T", "view-shortcut-transparent", OFF),

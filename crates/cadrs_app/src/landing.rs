@@ -80,6 +80,7 @@ impl Plugin for LandingPlugin {
                     .chain()
                     .run_if(in_state(AppState::Landing)),
             )
+            .add_systems(Update, show_drop_target.run_if(in_state(AppState::Landing)))
             .add_systems(
                 Update,
                 (
@@ -482,16 +483,16 @@ pub(crate) fn top_bar(p: &mut ChildSpawnerCommands, t: &Theme, profile: &UserPro
             // On a narrow window these fold into the account menu (`crate::top_bar`).
             use crate::top_bar::{Fold, spawn_folding};
             crate::update::spawn_version(r, t);
+            // AI assistants (`crate::mcp_button`): not in a page, which can't serve them.
+            #[cfg(not(target_arch = "wasm32"))]
+            spawn_folding(r, Fold::Mcp, |r| crate::mcp_button::spawn_button(r, t));
             spawn_folding(r, Fold::Network, |r| crate::network::spawn_button(r, t));
             spawn_folding(r, Fold::Notifications, |r| {
                 crate::notifications::spawn_bell(r, t)
             });
             // Light, dark or the system's scheme.
             spawn_folding(r, Fold::Scheme, |r| {
-                r.spawn((
-                    cadrs_ui::scheme_toggle(t),
-                    cadrs_ui::glass::GlassFrame::bar(),
-                ));
+                crate::top_bar::spawn_scheme_button(r, t)
             });
             crate::identity::spawn_identity_button(r, t, profile);
         });
@@ -766,7 +767,55 @@ fn documents_card(p: &mut ChildSpawnerCommands, t: &Theme) {
                 ..default()
             },
         ));
+        // Last, so it lies over the list.
+        card.spawn((
+            Name::new("drop-target"),
+            DropTarget,
+            Node {
+                display: Display::None,
+                position_type: PositionType::Absolute,
+                // Over the card's 1 px rim.
+                left: Val::Px(-1.0),
+                right: Val::Px(-1.0),
+                top: Val::Px(-1.0),
+                bottom: Val::Px(-1.0),
+                border: UiRect::all(Val::Px(DROP_TARGET_BORDER)),
+                border_radius: BorderRadius::all(Val::Px(t.radius_panel)),
+                ..default()
+            },
+            BackgroundColor(Color::NONE),
+            BorderColor::all(Color::NONE),
+            Pickable::IGNORE,
+        ));
     });
+}
+
+/// The documents card's highlight while files are dragged over the window: they would be
+/// dropped here (`drop_import`).
+#[derive(Component)]
+struct DropTarget;
+
+const DROP_TARGET_BORDER: f32 = 2.0;
+
+/// Shows the documents card as where dragged files go ([`crate::file_drop::FileDrag`]): a border
+/// and a tint in the primary color, the New document button's.
+fn show_drop_target(
+    drag: Res<crate::file_drop::FileDrag>,
+    theme: Res<Theme>,
+    added: Query<(), Added<DropTarget>>,
+    mut target: Query<(&mut Node, &mut BackgroundColor, &mut BorderColor), With<DropTarget>>,
+) {
+    if !drag.is_changed() && !theme.is_changed() && added.is_empty() {
+        return;
+    }
+    for (mut node, mut fill, mut border) in &mut target {
+        let display = if drag.0 { Display::Flex } else { Display::None };
+        if node.display != display {
+            node.display = display;
+        }
+        fill.set_if_neq(BackgroundColor(theme.primary.with_alpha(0.12)));
+        border.set_if_neq(BorderColor::all(theme.primary));
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

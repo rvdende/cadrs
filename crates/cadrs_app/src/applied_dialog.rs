@@ -298,6 +298,30 @@ pub(crate) enum Role {
     ThreadDiameter,
     ThreadCustomPitch,
     ThreadHand,
+    // The Frame (`crate::frame_ui`).
+    FramePath,
+    FrameFamily,
+    FrameSize,
+    FrameSketch,
+    FrameAnchor,
+    FrameAngle,
+    FrameCapThickness,
+    FrameGussetSize,
+    FrameGussetThickness,
+    FrameGussetChamfer,
+    FrameGussetPosition,
+    FrameCorner,
+    FrameCorners,
+    FrameTrim,
+    /// A corner override's treatment and its flip, by its place in the list.
+    FrameOverride(u8),
+    FrameOverrideFlip(u8),
+    FrameOverrideTurn(u8),
+    FrameEndOffset,
+    FrameMembers,
+    FrameTrimPlanes,
+    /// A member override's angle, by its place in the list.
+    FrameMemberAngle(u8),
     // The Gear (`crate::gear_ui`).
     GearFace,
     GearShaft,
@@ -468,6 +492,29 @@ fn items(features: &[Feature], cache: &PartCache, kind: &FeatureKind, role: Role
         }
         _ => crate::advanced_dialog::items(features, cache, kind, role).unwrap_or_default(),
     }
+}
+
+/// Whether three or more members meet at each of a Frame feature's corner overrides (as its
+/// last rebuild found).
+fn frame_many(cache: &PartCache, feature: cadrs_core::FeatureId) -> Vec<bool> {
+    cache
+        .frame_corners
+        .iter()
+        .find(|c| c.feature == feature)
+        .map(|c| c.ends.iter().map(|n| *n >= 3).collect())
+        .unwrap_or_default()
+}
+
+/// What a dialog's rows depend on: the dialog is built again when it changes. The one place it
+/// is worked out, for the dialog as it is built and as it is checked each frame (two that
+/// differ build the dialog again every frame: nothing in it can be clicked).
+fn dialog_layout(kind: &FeatureKind, cache: &PartCache, feature: cadrs_core::FeatureId) -> Layout {
+    let mut layout = layout_of(kind);
+    // A Frame's override rows offer the next pair where three or more members meet.
+    if matches!(kind, FeatureKind::Frame(_)) {
+        layout += &format!(" {:?}", frame_many(cache, feature));
+    }
+    Layout(layout)
 }
 
 fn layout_of(kind: &FeatureKind) -> String {
@@ -869,6 +916,12 @@ fn dialog(
         Role::HelixEntity,
         Role::FillEdges,
         Role::ThreadEdge,
+        Role::FramePath,
+        Role::FrameSketch,
+        Role::FrameCorners,
+        Role::FrameTrim,
+        Role::FrameMembers,
+        Role::FrameTrimPlanes,
         Role::GearFace,
         Role::GearShaft,
         Role::GearMateShaft,
@@ -876,6 +929,23 @@ fn dialog(
     .into_iter()
     .chain(crate::sheetmetal_features_ui::LIST_ROLES)
     .map(|r| (r, items(features, cache, &kind, r)))
+    .chain(
+        // A Frame override's next pair: offered (an item) where three or more members meet.
+        frame_many(cache, f.id)
+            .into_iter()
+            .enumerate()
+            .map(|(i, many)| {
+                let n = i.min(u8::MAX.into()) as u8;
+                (
+                    Role::FrameOverrideTurn(n),
+                    if many {
+                        vec![String::new()]
+                    } else {
+                        Vec::new()
+                    },
+                )
+            }),
+    )
     .collect();
     let items_of = move |r: Role| {
         lists
@@ -888,7 +958,7 @@ fn dialog(
     let sm9_items = crate::sheetmetal_p3i9_ui::lists(features, cache, &kind);
     Some((
         AppliedDialog,
-        Layout(layout_of(&kind)),
+        dialog_layout(&kind, cache, f.id),
         DespawnOnExit(AppState::Document),
         FeatureDialog::new(format!("{name}-dialog"))
             .title(f.name.clone())
@@ -1644,7 +1714,7 @@ pub(crate) fn sync_applied_dialog(
     if let Some(d) = xyz.drag.as_ref() {
         kind = d.kind.clone();
     }
-    let layout = Layout(layout_of(&kind));
+    let layout = dialog_layout(&kind, &cache, s.feature);
     match q_dialog.iter().next().map(|(e, l, _)| (e, l.clone())) {
         Some((_, ref l)) if *l == layout => {}
         other => {
@@ -2110,6 +2180,12 @@ fn on_select(ev: On<SelectChange>, q: Query<&Role>, mut commands: Commands) {
         Role::ThreadPitch => "Pitch",
         Role::ThreadEnd => "End type",
         Role::ThreadHand => "Direction",
+        Role::FrameFamily => "Profile",
+        Role::FrameSize => "Size",
+        Role::FrameAnchor => "Alignment",
+        Role::FrameCorner => "Corners",
+        Role::FrameOverride(_) => "Corner override",
+        Role::FrameGussetPosition => "Gusset position",
         Role::GearType => "Gear type",
         Role::GearStyle => "Tooth line",
         Role::GearHand => "Direction",
@@ -2181,6 +2257,8 @@ fn on_select(ev: On<SelectChange>, q: Query<&Role>, mut commands: Commands) {
         Role::End if HoleEnd::ALL.get(i) == Some(&HoleEnd::UpToEntity) => {
             Some(AppliedField::HoleUpTo)
         }
+        // A Frame's Custom profile: its sketch's field takes the picks.
+        r @ Role::FrameFamily => crate::frame_ui::field_after_select(r, i),
         // The Transform's type: its first reference field takes the picks.
         Role::TransformType => cadrs_core::transform::TransformType::ALL
             .get(i)
@@ -2640,6 +2718,18 @@ fn on_button(a: On<Activate>, q: Query<&Role>, mut commands: Commands) {
                 }
             });
         }
+        Ok(Role::FrameOverrideTurn(i)) => {
+            let i = *i;
+            change(&mut commands, "Next pair", move |k| {
+                crate::frame_ui::flip(k, Role::FrameOverrideTurn(i))
+            });
+        }
+        Ok(Role::FrameOverrideFlip(i)) => {
+            let i = *i;
+            change(&mut commands, "Flip corner", move |k| {
+                crate::frame_ui::flip(k, Role::FrameOverrideFlip(i))
+            });
+        }
         Ok(Role::PartialFlip) => change(&mut commands, "Flip direction", |k| {
             if let FeatureKind::Fillet(x) = k {
                 x.flip_partial = !x.flip_partial;
@@ -2859,6 +2949,7 @@ pub fn toolbar_kind(name: &str) -> Option<AppliedKind> {
         "fill" => Some(AppliedKind::Fill),
         "thread" => Some(AppliedKind::Thread),
         "gear" => Some(AppliedKind::Gear),
+        "frame" => Some(AppliedKind::Frame),
         "sheet-metal-model" => Some(AppliedKind::SheetMetal),
         n => crate::sheetmetal_tools_ui::SmTool::named(n).map(AppliedKind::SheetMetalTool),
     }

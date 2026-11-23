@@ -88,7 +88,7 @@ fn run(
     let mut origin: Vec<Vec<(BodyId, usize)>> =
         (0..cur.faces.len()).map(|i| vec![(target, i)]).collect();
     for &t in tools {
-        let tb = (**k.get(t)?).clone();
+        let tb = std::sync::Arc::clone(k.get(t)?);
         let r = combine(&cur, &tb, op, opts)?;
         origin = r
             .from
@@ -481,7 +481,7 @@ fn solid_minus_sheet(a: &Body, b: &Body) -> Result<BoolOut> {
     pair_at_cuts(&mut out, &from);
     boolean::assemble_shells(&mut out)?;
     super::unify::split_shared_vertices(&mut out);
-    if std::env::var_os("CADRS_BOOL_DEBUG").is_some() {
+    if crate::native::env_flag!("CADRS_BOOL_DEBUG") {
         let ef = out.edge_faces();
         eprintln!(
             "split by a sheet: {} faces, shells {:?}, edge uses {:?}",
@@ -599,11 +599,14 @@ pub fn fuse(b: &mut Body, tol: f64) {
                     continue;
                 }
                 let (a, c) = (&b.edges[i], &b.edges[j]);
-                let along = [0.25, 0.5, 0.75].iter().all(|f| {
-                    let m = c.point(c.t[0] + (c.t[1] - c.t[0]) * f);
-                    let (lo, hi) = (a.t[0].min(a.t[1]), a.t[0].max(a.t[1]));
-                    (a.curve.point(a.curve.closest(&m, lo, hi)) - m).norm() <= tol
-                });
+                let along = c.curve.runs_along(
+                    (c.t[0], c.t[1]),
+                    &a.curve,
+                    (a.t[0].min(a.t[1]), a.t[0].max(a.t[1])),
+                    [0.25, 0.5, 0.75],
+                    tol,
+                    false,
+                );
                 if !along {
                     continue;
                 }
@@ -761,7 +764,7 @@ fn crossings_with_pieces(a: &[Piece], b: &[Piece], tol: f64) -> Vec<P3> {
 /// Wire `a` op `b` (any kind but a mixed one).
 fn wire_with(a: &Body, b: &Body, op: BoolOp) -> Result<BoolOut> {
     let mine = pieces_of(a);
-    let size = a.bbox().diagonal().max(b.bbox().diagonal()).max(1.0);
+    let size = a.bbox().diagonal().max(b.bbox().diagonal()).max(tol::POINT);
     let t = (size * 1e-10).max(tol());
     let theirs;
     let other = match kind(b) {

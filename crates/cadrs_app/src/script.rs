@@ -22,6 +22,8 @@
 //!   (mm). For scenarios whose subject is what comes after the sketch (P3.3).
 //! - `hypoid`: builds the Gears sample's Hypoid tab (two shafts, the pinion's moved by two
 //!   Transforms, and the hypoid pair on them) in the active Part Studio.
+//! - `frames`: builds the Frames sample (`cadrs_core::samples::frames`, issue #266) in the
+//!   active Part Studio: mitred, butted, coped and bent members.
 //! - `gears`: builds the Gears sample (`cadrs_core::samples::gears`, issue #179) in the active
 //!   Part Studio: the Gear feature's kinds, three by three.
 //! - `gear-cover`: opens the Jackhammer Gear Cover stand-in (P3.6, PS17,
@@ -460,6 +462,38 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
             });
             continue;
         }
+        // `grid off|crossed|lines`, `origin hidden|dot|axes`, `frame-stats off|fps|details`:
+        // Preferences › Interface, saved like the dialog's OK.
+        if let Some(code) = m.0.strip_prefix("grid ") {
+            let code = code.trim().to_string();
+            commands.queue(move |world: &mut World| {
+                match cadrs_core::preferences::GridStyle::from_code(&code) {
+                    Some(g) => crate::preferences_ui::set_grid(world, g),
+                    None => warn!("grid: no style {code:?}"),
+                }
+            });
+            continue;
+        }
+        if let Some(code) = m.0.strip_prefix("origin ") {
+            let code = code.trim().to_string();
+            commands.queue(move |world: &mut World| {
+                match cadrs_core::preferences::OriginStyle::from_code(&code) {
+                    Some(o) => crate::preferences_ui::set_origin(world, o),
+                    None => warn!("origin: no style {code:?}"),
+                }
+            });
+            continue;
+        }
+        if let Some(code) = m.0.strip_prefix("frame-stats ") {
+            let code = code.trim().to_string();
+            commands.queue(move |world: &mut World| {
+                match cadrs_core::preferences::FrameStatsMode::from_code(&code) {
+                    Some(f) => crate::preferences_ui::set_frame_stats(world, f),
+                    None => warn!("frame-stats: no mode {code:?}"),
+                }
+            });
+            continue;
+        }
         // `drop-file <path>`: the file dropped on the window (as from a file manager).
         if let Some(path) = m.0.strip_prefix("drop-file ") {
             let path_buf = std::path::PathBuf::from(path.trim());
@@ -525,6 +559,14 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
             });
             continue;
         }
+        // The Machine Builder's steps (`crate::assembly::machine_builder::script`).
+        if let Some(rest) = m.0.trim().strip_prefix("machine ") {
+            let rest = rest.to_string();
+            commands.queue(move |world: &mut World| {
+                crate::assembly::machine_builder::script(world, &rest)
+            });
+            continue;
+        }
         // CAM Studio's own steps (`crate::cam::script`).
         if let Some(rest) = m.0.trim().strip_prefix("cam ") {
             let rest = rest.to_string();
@@ -553,6 +595,9 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
             }
             (Some("gears"), None) => {
                 commands.queue(gears);
+            }
+            (Some("frames"), None) => {
+                commands.queue(frames);
             }
             (Some("hypoid"), None) => {
                 commands.queue(hypoid);
@@ -867,6 +912,19 @@ impl cadrs_core::samples::gear_cover::Studio for ActiveDocument {
     }
     fn document(&self) -> &cadrs_core::Document {
         &self.doc
+    }
+}
+
+/// Builds the Frames sample (`cadrs_core::samples::frames`, issue #266) in the active Part Studio.
+fn frames(world: &mut World) {
+    let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else {
+        return;
+    };
+    let Some(element) = doc.active_element().map(|e| e.id) else {
+        return;
+    };
+    if let Err(e) = cadrs_core::samples::frames::build_in(&mut *doc, element) {
+        warn!("frames: {e}");
     }
 }
 

@@ -782,6 +782,119 @@ pub fn label_avoid(sheet: &crate::Sheet) -> Vec<(P2, P2)> {
     vec![(r.min, r.max)]
 }
 
+/// The label under a section or detail view ("SECTION A-A"; "DETAIL B" and its scale), or above
+/// it where it would cover one of `avoid`.
+fn view_label(
+    style: &DrawingStyle,
+    view: &View,
+    m: &dyn ViewModel,
+    avoid: &[(P2, P2)],
+) -> Vec<PlacedText> {
+    let h = style.dim_text_height;
+    let mut out = Vec::new();
+    let bounds = shown_bounds(view, m);
+    let label_lines: Vec<String> = match (&view.section, &view.detail) {
+        (Some(s), _) => vec![format!("SECTION {0}-{0}", s.letter)],
+        (_, Some(dt)) => vec![
+            format!("DETAIL {}", dt.letter),
+            format!("SCALE {}", view.scale.label()),
+        ],
+        _ => Vec::new(),
+    };
+    if !label_lines.is_empty()
+        && let Some((lo, hi)) = bounds.or_else(|| {
+            view.detail.as_ref().map(|dt| {
+                let c = view.to_sheet(dt.center);
+                let r = dt.radius * view.scale.factor();
+                ([c[0] - r, c[1] - r], [c[0] + r, c[1] + r])
+            })
+        })
+    {
+        let cx = (lo[0] + hi[0]) / 2.0;
+        let n = label_lines.len() as f64;
+        let block = 1.25 * h + 1.9 * h * (n - 1.0);
+        let w = label_lines
+            .iter()
+            .map(|l| crate::annotation::text_width(l) * 1.25 * h)
+            .fold(0.0, f64::max);
+        let below_top = lo[1] - 2.2 * h + 0.7 * h;
+        let below = (
+            [cx - w / 2.0, below_top - block - 0.5 * h],
+            [cx + w / 2.0, below_top],
+        );
+        let overlaps = |(a, b): (P2, P2), (c, e): &(P2, P2)| {
+            a[0] < e[0] && b[0] > c[0] && a[1] < e[1] && b[1] > c[1]
+        };
+        let mut y = if avoid.iter().any(|r| overlaps(below, r)) {
+            hi[1] + 2.0 * h + block - 1.25 * h
+        } else {
+            lo[1] - 2.2 * h
+        };
+        for (k, l) in label_lines.iter().enumerate() {
+            let hh = if k == 0 { h * 1.25 } else { h };
+            out.push(centred_text([cx, y], hh, l));
+            y -= 1.9 * h;
+        }
+    }
+    out
+}
+
+/// What stands for a section view on its sheet besides the view itself: the cutting line on its
+/// parent (with its ends, arrows and letters) and the "SECTION A-A" label by the view.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SectionMarks {
+    /// The cutting line as [`view_decor`] draws it on the parent.
+    pub line: Decor,
+    /// The line without its dashes' gaps: end to end, and the two legs (for picking).
+    pub path: Vec<[P2; 2]>,
+    pub label: Vec<PlacedText>,
+}
+
+/// The box of a placed text (its left end is at the middle of the capitals).
+fn text_box(t: &PlacedText) -> (P2, P2) {
+    let w = crate::annotation::text_width(&t.text) * t.height;
+    (
+        [t.pos[0], t.pos[1] - t.height / 2.0],
+        [t.pos[0] + w, t.pos[1] + t.height / 2.0],
+    )
+}
+
+impl SectionMarks {
+    /// Whether the sheet point `p` is on the marks: within `tol` of the cutting line, of one of
+    /// its letters or of the label.
+    pub fn hit(&self, p: P2, tol: f64) -> bool {
+        self.path.iter().any(|[a, b]| seg_dist(p, *a, *b) <= tol)
+            || self.line.texts.iter().chain(&self.label).any(|t| {
+                let (lo, hi) = text_box(t);
+                p[0] >= lo[0] - tol
+                    && p[0] <= hi[0] + tol
+                    && p[1] >= lo[1] - tol
+                    && p[1] <= hi[1] + tol
+            })
+    }
+}
+
+/// The marks of the section view `section`: its cutting line on `parent` (whose model, if it has
+/// been generated, says how far the line runs) and its label (which needs its own model `m`).
+pub fn section_marks(
+    style: &DrawingStyle,
+    parent: Option<(&View, Option<&dyn ViewModel>)>,
+    section: &View,
+    m: Option<&dyn ViewModel>,
+    avoid: &[(P2, P2)],
+) -> Option<SectionMarks> {
+    let s = section.section.as_ref()?;
+    let mut marks = SectionMarks::default();
+    if let Some((parent, pm)) = parent {
+        let bounds = pm.and_then(|pm| shown_bounds(parent, pm));
+        marks.path = cutting_line(&mut marks.line, style, parent, section, s, bounds);
+    }
+    if let Some(m) = m {
+        marks.label = view_label(style, section, m, avoid);
+    }
+    Some(marks)
+}
+
 /// The decorations of `view` (one of `sheet_views`, the views of its sheet), with its model
 /// `m` if it has been generated. A section or detail label goes under its view, or above it
 /// where it would cover one of `avoid` (the title block).
@@ -841,51 +954,7 @@ pub fn view_decor(
                 ]);
             }
         }
-        let bounds = shown_bounds(view, m);
-        // Labels under section and detail views.
-        let label_lines: Vec<String> = match (&view.section, &view.detail) {
-            (Some(s), _) => vec![format!("SECTION {0}-{0}", s.letter)],
-            (_, Some(dt)) => vec![
-                format!("DETAIL {}", dt.letter),
-                format!("SCALE {}", view.scale.label()),
-            ],
-            _ => Vec::new(),
-        };
-        if !label_lines.is_empty()
-            && let Some((lo, hi)) = bounds.or_else(|| {
-                view.detail.as_ref().map(|dt| {
-                    let c = view.to_sheet(dt.center);
-                    let r = dt.radius * view.scale.factor();
-                    ([c[0] - r, c[1] - r], [c[0] + r, c[1] + r])
-                })
-            })
-        {
-            let cx = (lo[0] + hi[0]) / 2.0;
-            let n = label_lines.len() as f64;
-            let block = 1.25 * h + 1.9 * h * (n - 1.0);
-            let w = label_lines
-                .iter()
-                .map(|l| crate::annotation::text_width(l) * 1.25 * h)
-                .fold(0.0, f64::max);
-            let below_top = lo[1] - 2.2 * h + 0.7 * h;
-            let below = (
-                [cx - w / 2.0, below_top - block - 0.5 * h],
-                [cx + w / 2.0, below_top],
-            );
-            let overlaps = |(a, b): (P2, P2), (c, e): &(P2, P2)| {
-                a[0] < e[0] && b[0] > c[0] && a[1] < e[1] && b[1] > c[1]
-            };
-            let mut y = if avoid.iter().any(|r| overlaps(below, r)) {
-                hi[1] + 2.0 * h + block - 1.25 * h
-            } else {
-                lo[1] - 2.2 * h
-            };
-            for (k, l) in label_lines.iter().enumerate() {
-                let hh = if k == 0 { h * 1.25 } else { h };
-                d.texts.push(centred_text([cx, y], hh, l));
-                y -= 1.9 * h;
-            }
-        }
+        d.texts.extend(view_label(style, view, m, avoid));
     }
     // A detail view's boundary: a thin circle.
     if let Some(dt) = &view.detail {
@@ -977,7 +1046,8 @@ pub fn view_decor(
 const CUT_CLEAR: f64 = 3.0;
 
 /// The section line of child `c` on its parent `view`: a chain line with thick ends, arrows
-/// pointing in the child's direction of sight, and the letters beside the arrows' tips (on the
+/// pointing in the child's direction of sight
+/// with their tips on the line's ends, and the letters beside the arrows' tails (on the
 /// outside). The
 /// line runs across the parent's outline `bounds` and a gap beyond it (P3C.8's delta: its ends
 /// and letters sat on the view and its dimensions).
@@ -988,7 +1058,7 @@ fn cutting_line(
     c: &View,
     s: &SectionLine,
     bounds: Option<(P2, P2)>,
-) {
+) -> Vec<[P2; 2]> {
     let h = style.dim_text_height;
     let (mut a, mut b) = (view.to_sheet(s.a), view.to_sheet(s.b));
     let along = unit(sub(b, a));
@@ -1013,17 +1083,21 @@ fn cutting_line(
     }
     let leg = 5.0;
     let arrow_len = style.dim_arrow_length * 1.4;
+    let mut path = vec![[sub(a, mul(along, 3.0)), add(b, mul(along, 3.0))]];
     for (end, out) in [(a, mul(along, -1.0)), (b, along)] {
-        // A thick end stroke, the leg perpendicular to it and the arrow at its end.
+        // A thick end stroke, and the arrow across its end: its tail on the eye's side, its
+        // tip on the line.
         d.medium.push(vec![end, add(end, mul(out, 3.0))]);
         let root = add(end, mul(out, 3.0));
-        let tip = add(root, mul(sight, leg));
-        d.medium.push(vec![root, tip]);
-        arrow(d, tip, sight, arrow_len);
-        // The letter beside the arrow's tip, on the outside.
-        let lp = add(tip, mul(out, 1.25 * h));
+        let tail = sub(root, mul(sight, leg));
+        d.medium.push(vec![tail, root]);
+        path.push([tail, root]);
+        arrow(d, root, sight, arrow_len);
+        // The letter beside the arrow's tail, on the outside.
+        let lp = add(tail, mul(out, 1.25 * h));
         d.texts.push(centred_text(lp, h * 1.25, &s.letter));
     }
+    path
 }
 
 /// Thread marks of the model's tapped holes in `view` (when the view shows threads).
@@ -1177,6 +1251,91 @@ mod tests {
                 .any(|s| s == "I" || s == "O" || s == "Q")
         );
         assert_eq!(letter(23), "AA");
+    }
+
+    /// A model whose projection is the box `lo`–`hi`.
+    fn box_model(lo: P2, hi: P2) -> crate::annotation::ModelData {
+        use cadrs_kernel::{ProjClass, ProjCurve, ProjEdge, ProjVisibility};
+        let c = [lo, [hi[0], lo[1]], hi, [lo[0], hi[1]], lo];
+        let mut m = crate::annotation::ModelData::default();
+        for w in c.windows(2) {
+            m.projection.edges.push(ProjEdge {
+                visibility: ProjVisibility::Visible,
+                class: ProjClass::Sharp,
+                curve: ProjCurve::Line {
+                    start: w[0].into(),
+                    end: w[1].into(),
+                },
+                points: vec![w[0].into(), w[1].into()],
+                source: None,
+            });
+        }
+        m
+    }
+
+    #[test]
+    fn a_sections_marks_are_its_cutting_line_with_arrow_tips_on_it_and_its_label() {
+        let style = DrawingStyle::default();
+        let p = base();
+        // A vertical cutting line at x = 10 of the Front view (1:2, so sheet x = 105), the
+        // section placed to the right.
+        let s = section_view(
+            &p,
+            [10.0, -20.0],
+            [10.0, 20.0],
+            [200.0, 80.0],
+            Projection::Third,
+            "A",
+        )
+        .unwrap();
+        let (pm, sm) = (
+            box_model([-30.0, -20.0], [30.0, 20.0]),
+            box_model([-10.0, -20.0], [10.0, 20.0]),
+        );
+        let marks = section_marks(
+            &style,
+            Some((&p, Some(&pm as &dyn ViewModel))),
+            &s,
+            Some(&sm as &dyn ViewModel),
+            &[],
+        )
+        .unwrap();
+        // The same line the parent's decorations draw.
+        let decor = view_decor(&style, &[p.clone(), s.clone()], &p, Some(&pm), &[]);
+        assert!(marks.line.medium.iter().all(|l| decor.medium.contains(l)));
+        assert_eq!(marks.line.fills, decor.fills);
+        // Two arrows: each tip is on the cutting line (sheet x = 105), its tail on one side.
+        assert_eq!(marks.line.fills.len(), 2);
+        let side: Vec<f64> = marks
+            .line
+            .fills
+            .iter()
+            .map(|[tip, base, _]| {
+                assert!((tip[0] - 105.0).abs() < 1e-9, "{tip:?}");
+                base[0] - 105.0
+            })
+            .collect();
+        assert!(side[0].abs() > 1.0 && side[0].signum() == side[1].signum());
+        // The arrows point along the section's direction of sight, seen in the parent.
+        let pf = p.frame.view_frame();
+        let dir = nalgebra::Vector3::new(s.frame.dir[0], s.frame.dir[1], s.frame.dir[2]);
+        assert!(
+            dir.dot(&pf.x) * side[0] < 0.0,
+            "the tail is on the eye's side"
+        );
+        // Picking: the line (also in a dash's gap and past the outline), a letter, the label.
+        let label = &marks.label[0];
+        assert_eq!(label.text, "SECTION A-A");
+        let letter = &marks.line.texts[0];
+        assert!(marks.hit([105.3, 80.0], 0.5));
+        assert!(marks.hit([105.0, 68.0], 0.5));
+        assert!(marks.hit([letter.pos[0] + 0.5, letter.pos[1]], 0.5));
+        assert!(marks.hit([label.pos[0] + 5.0, label.pos[1]], 0.5));
+        // Not beside the line, nor on the section view itself.
+        assert!(!marks.hit([108.0, 80.0], 0.5));
+        assert!(!marks.hit([s.anchor[0], s.anchor[1]], 0.5));
+        // A view that is no section has no marks.
+        assert!(section_marks(&style, None, &p, Some(&pm), &[]).is_none());
     }
 
     #[test]

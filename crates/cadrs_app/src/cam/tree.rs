@@ -106,22 +106,13 @@ pub(super) fn rows_of(
         jobs.push(RowSnap {
             row: CamRow::Machine(job.id),
             depth: 1,
-            label: job
-                .machine
-                .as_ref()
-                // (The model alone for the catalogue's generic machines: the row is narrow.)
-                .map(|m| {
-                    if m.builder == "Generic" {
-                        m.model.clone()
-                    } else {
-                        m.title()
-                    }
-                })
-                .unwrap_or_else(|| tr("cam-no-machine-create-machine")),
-            icon: job
-                .machine
-                .as_ref()
-                .map_or("cam-machine", |m| m.kind.icon()),
+            label: machine_row_label(job),
+            icon: match (&job.machine_source, &job.machine) {
+                // A machine that is an assembly of the document.
+                (Some(_), Some(_)) => "cam-machine-assembly",
+                (_, Some(m)) => m.kind.icon(),
+                _ => "cam-machine",
+            },
             open: None,
             bold: false,
             muted: job.machine.is_none(),
@@ -129,7 +120,17 @@ pub(super) fn rows_of(
             selected: false,
             trailing: None,
             error: false,
-            tip: None,
+            // The machine an assembly makes: its axes.
+            tip: job
+                .machine
+                .as_ref()
+                .filter(|_| job.machine_source.is_some())
+                .map(|m| {
+                    tr_with(
+                        "cam-machine-axes-summary",
+                        &[("axes", &super::dialogs::axes_summary(m))],
+                    )
+                }),
             warn: false,
             eye: None,
         });
@@ -331,6 +332,18 @@ pub(super) fn note(p: &mut ChildSpawnerCommands, t: &Theme, text: &str) {
 }
 
 /// A row's `Name`: its kind and id (`cam-op-1f2e…`).
+/// A job's Machine row: the assembly its machine comes from ("Workspace of 5-axis mill"),
+/// else the catalogue machine's name.
+pub(super) fn machine_row_label(job: &cadrs_core::cam::Job) -> String {
+    match (&job.machine_source, &job.machine) {
+        (Some(src), Some(_)) => src.label(),
+        // (The model alone for the catalogue's generic machines: the row is narrow.)
+        (_, Some(m)) if m.builder == "Generic" => m.model.clone(),
+        (_, Some(m)) => m.title(),
+        _ => tr("cam-no-machine-create-machine"),
+    }
+}
+
 pub fn row_name(r: CamRow) -> String {
     let (k, id) = match r {
         CamRow::Component(i) => ("comp", i),

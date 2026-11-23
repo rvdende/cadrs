@@ -1,0 +1,21 @@
+// The Frames sample (`cadrs_core::samples::frames`, issue #266): a mitred gate with a butted mid
+// rail, a T-slot base, a bent handrail and a coped tee; then the Cut list panel.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        SetTimeout(60.0),
+        Custom("frames"),
+        Wait(6),
+        Key("Shift+7"),
+        Key("F"),
+        MoveTo(1420, 900),
+        Wait(4),
+        Screenshot("01-frames"),
+        Click(ui("panel-cut-list")),
+        WaitFor("cut-list-panel"),
+        MoveTo(1420, 900),
+        Wait(4),
+        Screenshot("02-cut-list"),
+    ],
+)

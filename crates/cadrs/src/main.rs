@@ -226,6 +226,7 @@ fn main() -> AppExit {
     ));
     app.add_plugins(
         cadrs_harness::default_plugins(&opts).set(bevy::log::LogPlugin {
+            filter: cadrs_app::log_filter(),
             custom_layer: cadrs_app::frame_profile::profiler_layer,
             ..default()
         }),

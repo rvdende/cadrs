@@ -1,16 +1,22 @@
 //! Cutting tools and the tool library.
 //!
-//! A [`Tool`] is either a **cutter** (end, ball, bull, chamfer and taper mills, drills and taps,
-//! for mills and routers) or a **beam** (a laser, a plasma torch or a waterjet nozzle) whose
-//! "diameter" is its kerf. Its cutting data ([`CuttingData`]) seeds the speeds of the toolpaths
-//! that use it. Mills can carry a holder and an arbor ([`Profile`], a revolved outline of X/Z
-//! points) for collision checks and the simulation.
+//! A [`Tool`] is either a **cutter** (end, ball, bull, chamfer and taper mills, tapered ball,
+//! lollipop and barrel mills, form tools, drills and taps, for mills and routers) or a **beam**
+//! (a laser, a plasma torch or a waterjet nozzle) whose "diameter" is its kerf. Its cutting data
+//! ([`CuttingData`]) seeds the speeds of the toolpaths that use it. Mills can carry a holder and
+//! an arbor ([`Profile`], a revolved outline of X/Z points) for collision checks and the
+//! simulation.
+//!
+//! A cutter's shape is its sizes read by its kind; a **form tool**'s is the profile it carries
+//! ([`FormProfile`]). [`crate::cutter`] turns either into the pieces everything else works
+//! from.
 //!
 //! The [`ToolLibrary`] is the studio's collection of tools, holders and arbors: tools are added
 //! to it as they are created, and it exports to and imports from JSON.
 
 use serde::{Deserialize, Serialize};
 
+use crate::cutter::{FormProfile, Piece, each_piece};
 use crate::machine::MachineKind;
 
 /// The family a tool belongs to, as the tool dialog's "Machining type" filter.
@@ -46,6 +52,17 @@ pub enum ToolKind {
     ChamferMill,
     TaperMill,
     FaceMill,
+    /// A tapered mill with a ball tip: `tip_diameter` is the ball's, `angle` twice the taper's
+    /// side angle, `diameter` the shank's, which the taper widens to (or stops short of, at the
+    /// end of the flutes).
+    TaperBall,
+    /// A ball of `diameter` on a neck of `neck_diameter`: it cuts under overhangs.
+    Lollipop,
+    /// A barrel: its side an arc of `profile_radius`, widest (`diameter`) halfway up the
+    /// flutes, for finishing walls in few passes with the tool leant against them.
+    Barrel,
+    /// A form tool: any revolved shape, given by its profile ([`Tool::form`]).
+    Form,
     Drill,
     Tap,
     /// A single-form thread mill: cuts a thread with a helix, a pitch per turn.
@@ -56,13 +73,17 @@ pub enum ToolKind {
 }
 
 impl ToolKind {
-    pub const ALL: [ToolKind; 12] = [
+    pub const ALL: [ToolKind; 16] = [
         ToolKind::EndMill,
         ToolKind::BallMill,
         ToolKind::BullMill,
         ToolKind::ChamferMill,
         ToolKind::TaperMill,
         ToolKind::FaceMill,
+        ToolKind::TaperBall,
+        ToolKind::Lollipop,
+        ToolKind::Barrel,
+        ToolKind::Form,
         ToolKind::Drill,
         ToolKind::Tap,
         ToolKind::ThreadMill,
@@ -79,6 +100,10 @@ impl ToolKind {
             ToolKind::ChamferMill => "Chamfer mill / V-bit",
             ToolKind::TaperMill => "Taper mill",
             ToolKind::FaceMill => "Face mill",
+            ToolKind::TaperBall => "Tapered ball mill",
+            ToolKind::Lollipop => "Lollipop mill",
+            ToolKind::Barrel => "Barrel mill",
+            ToolKind::Form => "Form tool",
             ToolKind::Drill => "Drill",
             ToolKind::Tap => "Thread tap",
             ToolKind::ThreadMill => "Thread mill",
@@ -95,6 +120,10 @@ impl ToolKind {
             ToolKind::Laser => "cam-laser",
             ToolKind::Plasma => "cam-plasma",
             ToolKind::Waterjet => "cam-waterjet",
+            ToolKind::TaperBall => "cam-tool-taper-ball",
+            ToolKind::Lollipop => "cam-tool-lollipop",
+            ToolKind::Barrel => "cam-tool-barrel",
+            ToolKind::Form => "cam-tool-form",
             _ => "cam-tool",
         }
     }
@@ -300,6 +329,16 @@ pub struct Tool {
     /// Thread pitch (mm per turn) of a tap.
     #[serde(default)]
     pub pitch: f64,
+    /// Diameter of a lollipop mill's neck (mm).
+    #[serde(default)]
+    pub neck_diameter: f64,
+    /// Radius of a barrel mill's side arc (mm).
+    #[serde(default)]
+    pub profile_radius: f64,
+    /// A form tool's profile ([`Tool::set_form`] keeps the diameter and the cutting length in
+    /// step with it).
+    #[serde(default)]
+    pub form: Option<FormProfile>,
     #[serde(default)]
     pub holder: Option<Profile>,
     #[serde(default)]
@@ -344,6 +383,9 @@ impl Tool {
             flutes: 2,
             center_cutting: true,
             pitch: 0.0,
+            neck_diameter: 0.0,
+            profile_radius: 0.0,
+            form: None,
             holder: None,
             arbor: None,
             cutting: CuttingData {
@@ -368,6 +410,34 @@ impl Tool {
                 t.center_cutting = false;
                 t.cutting.step_over = d * 0.7;
                 t.cutting.spindle_rpm = 8_000.0;
+            }
+            ToolKind::TaperBall => {
+                // A ball a third of the shank, 5° a side.
+                t.angle = 10.0;
+                t.tip_diameter = d / 3.0;
+                t.cutting.step_over = t.tip_diameter * 0.2;
+                t.cutting.step_down = (t.tip_diameter * 0.5).max(0.1);
+            }
+            ToolKind::Lollipop => {
+                t.neck_diameter = d * 0.5;
+                t.cutting_length = d;
+                t.cutting.step_over = d * 0.1;
+            }
+            ToolKind::Barrel => {
+                t.profile_radius = d * 5.0;
+                t.cutting_length = d * 1.5;
+                t.flutes = 4;
+                t.cutting.step_over = d * 0.05;
+            }
+            ToolKind::Form => {
+                // A T-slot cutter, until the profile is drawn.
+                t.center_cutting = false;
+                t.set_form(FormProfile::t_slot(
+                    d,
+                    (d * 0.25).max(0.5),
+                    d * 0.4,
+                    (d * 1.5).max(5.0),
+                ));
             }
             ToolKind::Drill => {
                 t.angle = 118.0;
@@ -447,6 +517,13 @@ impl Tool {
         self.kind.is_beam()
     }
 
+    /// From its tip to the spindle's gauge line: its stick-out, its holder and its arbor.
+    pub fn gauge_length(&self) -> f64 {
+        self.overall_length
+            + self.holder.as_ref().map_or(0.0, Profile::length)
+            + self.arbor.as_ref().map_or(0.0, Profile::length)
+    }
+
     /// How high above its tip the cutter's surface is at distance `r` from its axis (`None`
     /// outside the cutter). This is the shape the drop-cutter and the stock simulation use.
     pub fn height_at(&self, r: f64) -> Option<f64> {
@@ -456,6 +533,16 @@ impl Tool {
         }
         let r = r.min(rad);
         Some(match self.kind {
+            ToolKind::TaperBall | ToolKind::Lollipop | ToolKind::Barrel | ToolKind::Form => {
+                // The lower envelope of its pieces.
+                let mut low: Option<f64> = None;
+                each_piece(self, |p| {
+                    if let Some(h) = p.height_at(r) {
+                        low = Some(low.map_or(h, |l| l.min(h)));
+                    }
+                });
+                return low;
+            }
             ToolKind::EndMill | ToolKind::FaceMill => 0.0,
             ToolKind::BallMill => rad - (rad * rad - r * r).max(0.0).sqrt(),
             ToolKind::BullMill => {
@@ -492,6 +579,19 @@ impl Tool {
     /// The horizontal distance of the flank point at `depth` above the tip from the axis.
     pub fn radius_at_height(&self, h: f64) -> f64 {
         match self.kind {
+            ToolKind::TaperBall | ToolKind::Lollipop | ToolKind::Barrel | ToolKind::Form => {
+                // The widest of its pieces at that height (its top's above the top).
+                let mut top = 0.0f64;
+                each_piece(self, |p| top = top.max(p.end()[1]));
+                let h = h.clamp(0.0, top);
+                let mut r = 0.0f64;
+                each_piece(self, |p| {
+                    if let Some(x) = p.radius_at(h) {
+                        r = r.max(x);
+                    }
+                });
+                r
+            }
             ToolKind::ChamferMill | ToolKind::TaperMill | ToolKind::Drill => {
                 let half = (self.angle.clamp(1.0, 179.0) / 2.0).to_radians();
                 (self.tip_diameter / 2.0 + h * half.tan()).min(self.radius())
@@ -508,10 +608,79 @@ impl Tool {
         }
     }
 
+    /// Gives a form tool its profile: the diameter becomes the profile's widest and the
+    /// cutting length its height.
+    pub fn set_form(&mut self, profile: FormProfile) {
+        let (r, top) = (profile.max_radius(), profile.top());
+        if r > 0.0 {
+            self.diameter = 2.0 * r;
+        }
+        if top > 0.0 {
+            self.cutting_length = top;
+        }
+        self.form = Some(profile);
+    }
+
+    /// The shank above the cutting part: its radius and the height above the tip it starts at
+    /// (the end of the flutes, or the top of the cutter's shape where that is higher).
+    pub fn shank(&self) -> (f64, f64) {
+        match self.kind {
+            ToolKind::TaperBall | ToolKind::Lollipop | ToolKind::Barrel | ToolKind::Form => {
+                let mut last: Option<Piece> = None;
+                each_piece(self, |p| last = Some(p));
+                let [r, h] = last.map_or([self.radius(), 0.0], |p| p.end());
+                // (A tapered mill's shank is its full diameter, wherever its flutes end.)
+                let r = if self.kind == ToolKind::TaperBall {
+                    self.radius()
+                } else {
+                    r
+                };
+                (r, h.max(self.cutting_length))
+            }
+            _ => (self.radius(), self.cutting_length),
+        }
+    }
+
     /// Problems that make the tool unusable.
     pub fn check(&self) -> Result<(), String> {
         if self.diameter.is_nan() || self.diameter <= 0.0 {
             return Err("The diameter must be more than 0".into());
+        }
+        match self.kind {
+            ToolKind::TaperBall => {
+                if !(self.tip_diameter > 0.0 && self.tip_diameter <= self.diameter) {
+                    return Err(
+                        "The ball tip must be more than 0 and no wider than the diameter".into(),
+                    );
+                }
+                if !(0.0..180.0).contains(&self.angle) {
+                    return Err("The taper angle must be from 0° to under 180°".into());
+                }
+            }
+            ToolKind::Lollipop => {
+                if !(self.neck_diameter > 0.0 && self.neck_diameter < self.diameter) {
+                    return Err("The neck must be narrower than the ball".into());
+                }
+            }
+            ToolKind::Barrel => {
+                if self.cutting_length > 0.0 && crate::cutter::barrel(self).is_none() {
+                    return Err(
+                        "The side radius must be at least half the cutting length, and the \
+                         barrel must not close before its tip"
+                            .into(),
+                    );
+                }
+            }
+            ToolKind::Form => {
+                let Some(profile) = &self.form else {
+                    return Err("The form tool has no profile".into());
+                };
+                profile.check()?;
+                if (self.diameter - 2.0 * profile.max_radius()).abs() > 1e-6 {
+                    return Err("The diameter must be the profile's widest".into());
+                }
+            }
+            _ => {}
         }
         if self.kind == ToolKind::BullMill && self.corner_radius * 2.0 > self.diameter + 1e-9 {
             return Err("The corner radius must be at most half the diameter".into());
@@ -629,7 +798,9 @@ impl Template {
 
 /// The file format's name and version, checked on import.
 pub const LIBRARY_FORMAT: &str = "cadrs-cam-tool-library";
-pub const LIBRARY_VERSION: u32 = 1;
+/// Version 2 added the form tools (a tool's `form`, `neck_diameter` and `profile_radius`, and
+/// the kinds that use them); a version 1 file reads as it always did.
+pub const LIBRARY_VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize)]
 struct LibraryFile {
@@ -803,6 +974,76 @@ mod tests {
         let mut a = ToolLibrary::default();
         assert_eq!(a.merge(&lib), lib.tools.len());
         assert_eq!(a.merge(&lib), 0);
+    }
+
+    /// A library written before the form tools (version 1: no `form`, `neck_diameter` or
+    /// `profile_radius`) still loads, and the new kinds go round.
+    #[test]
+    fn old_libraries_load_and_form_tools_round_trip() {
+        let old = r#"{
+            "format": "cadrs-cam-tool-library",
+            "version": 1,
+            "tools": [{
+                "name": "D6 end mill", "kind": "EndMill", "unit": "Mm", "hand": "Right",
+                "diameter": 6.0, "corner_radius": 0.0, "angle": 90.0, "tip_diameter": 0.0,
+                "cutting_length": 18.0, "overall_length": 36.0, "flutes": 2,
+                "center_cutting": true, "pitch": 0.0,
+                "holder": {"name": "ER20", "points": [[16.0, 0.0], [16.0, 30.0]]},
+                "arbor": null,
+                "cutting": {"spindle_rpm": 10000.0, "feed": 1200.0, "plunge_feed": 300.0,
+                            "step_down": 3.0, "step_over": 2.4},
+                "beam": {"power": 80.0, "min_power": 0.0, "pierce_delay": 0.0,
+                         "pierce_height": 3.8, "cut_height": 1.5, "thc": true,
+                         "air_assist": true, "passes": 1}
+            }],
+            "holders": [{"name": "ER20", "points": [[16.0, 0.0], [16.0, 30.0]]}],
+            "arbors": []
+        }"#;
+        let lib = ToolLibrary::from_json(old).unwrap();
+        let mut want = Tool::new(ToolKind::EndMill, 6.0);
+        want.holder = Some(Profile::cylinder("ER20", 32.0, 30.0));
+        want.cutting.step_over = 2.4;
+        assert_eq!(lib.tools, vec![want]);
+        assert_eq!(lib.holders.len(), 1);
+
+        let mut lib = ToolLibrary::starter();
+        for kind in [
+            ToolKind::TaperBall,
+            ToolKind::Lollipop,
+            ToolKind::Barrel,
+            ToolKind::Form,
+        ] {
+            let t = Tool::new(kind, 8.0);
+            t.check().unwrap();
+            assert!(kind.fits(MachineKind::Mill) && !kind.fits(MachineKind::Laser));
+            assert_eq!(kind.machining(), MachiningType::Milling);
+            lib.add(&t);
+        }
+        let mut ball = Tool::new(ToolKind::Form, 1.0);
+        ball.set_form(FormProfile {
+            points: vec![
+                crate::cutter::FormPoint {
+                    r: 0.0,
+                    h: 0.0,
+                    bulge: 0.0,
+                },
+                crate::cutter::FormPoint {
+                    r: 3.0,
+                    h: 3.0,
+                    bulge: 0.414_213_562_373_095_05,
+                },
+            ],
+        });
+        ball.check().unwrap();
+        lib.add(&ball);
+        let json = lib.to_json();
+        assert!(json.contains("\"version\": 2"));
+        assert_eq!(ToolLibrary::from_json(&json).unwrap(), lib);
+        // A file from a later cadrs is refused by its version, not misread.
+        let newer = json.replace("\"version\": 2", "\"version\": 3");
+        assert!(ToolLibrary::from_json(&newer).is_err());
+        assert_eq!(Tool::new(ToolKind::Form, 6.0).name, "D6 form tool");
+        assert_eq!(Tool::new(ToolKind::Lollipop, 6.0).name, "D6 lollipop mill");
     }
 
     #[test]

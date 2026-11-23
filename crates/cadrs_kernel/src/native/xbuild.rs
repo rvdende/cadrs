@@ -60,6 +60,8 @@ pub struct XBuilder {
     solids: Vec<Vec<usize>>,
     /// Problems met (faces dropped, gaps left), for diagnostics.
     pub warnings: Vec<String>,
+    /// The vertices by where they are, for [`Self::vertex_at`].
+    places: super::math::PointIndex,
     /// Whether the file says nothing of the faces' orientation (IGES trimmed surfaces): solids
     /// are then always turned to enclose a positive volume.
     pub unoriented: bool,
@@ -204,14 +206,7 @@ pub fn sew_loose(
     }
     // Shells: faces connected through shared edges; closed when every edge is used twice.
     let mut parent: Vec<usize> = (0..fids.len()).collect();
-    fn find(p: &mut [usize], x: usize) -> usize {
-        let mut r = x;
-        while p[r] != r {
-            r = p[r];
-        }
-        p[x] = r;
-        r
-    }
+    use super::math::set_of as find;
     let mut users: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
     for (k, &fi) in fids.iter().enumerate() {
         for &(e, _) in xb.faces[fi].loops.iter().flatten() {
@@ -547,7 +542,7 @@ fn snap_tiny(c: Curve) -> Curve {
             .map(|h| (h.x / h.w).abs().max((h.y / h.w).abs()))
             .fold(0.0, f64::max),
     };
-    let tiny = 1e-13 * size.max(1.0);
+    let tiny = 1e-13 * size.max(crate::native::tol::POINT);
     let z = |x: f64| if x.abs() < tiny { 0.0 } else { x };
     let p = |q: &P3| P3::new(z(q.x), z(q.y), z(q.z));
     let v = |q: &V3| V3::new(z(q.x), z(q.y), z(q.z));
@@ -582,9 +577,23 @@ fn pcurve_unsnapped(s: &Surface, c: &Curve, t0: f64, t1: f64, etol: f64) -> Curv
     pcurve_unsnapped_on(s, &periods(s), c, t0, t1, etol)
 }
 
+/// [`pcurve_unsnapped_found`] moved into a closed spline surface's range ([`into_domain`]): an
+/// exact p-curve (the extrusion's own curve, along u) starts wherever its start's parameter
+/// came out, a period off at the seam.
+fn pcurve_unsnapped_on(
+    s: &Surface,
+    per: &Periods,
+    c: &Curve,
+    t0: f64,
+    t1: f64,
+    etol: f64,
+) -> Curve {
+    into_domain(pcurve_unsnapped_found(s, per, c, t0, t1, etol), per, t0, t1)
+}
+
 /// [`pcurve_unsnapped`] with the surface's [`Periods`] (its seed grid made once for all the
 /// edges of a face).
-fn pcurve_unsnapped_on(
+fn pcurve_unsnapped_found(
     s: &Surface,
     per: &Periods,
     c: &Curve,
@@ -720,35 +729,42 @@ fn fit_pieces(s: &Surface, per: &Periods, c: &Curve, pieces: &[f64], tol: &Tol) 
     }
     let out = join_spans(segs)?;
     let pc = Curve::Nurbs(Arc::new(out));
-    if let Some(((u0, u1), (v0, v1))) = per.domain {
-        let (a, b) = (pieces[0], *pieces.last().unwrap());
-        let pts: Vec<P3> = (0..=16)
-            .map(|i| pc.point(a + (b - a) * i as f64 / 16.0))
-            .collect();
-        let shift = |lo: f64, hi: f64, period: Option<f64>, get: &dyn Fn(&P3) -> f64| -> f64 {
-            let Some(p) = period else { return 0.0 };
-            let eps = tol::REL * (hi - lo).abs().max(1.0);
-            let (mn, mx) = pts
-                .iter()
-                .map(get)
-                .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), x| {
-                    (a.min(x), b.max(x))
-                });
-            if mx > hi + eps {
-                -((mx - hi - eps) / p).ceil() * p
-            } else if mn < lo - eps {
-                ((lo - eps - mn) / p).ceil() * p
-            } else {
-                0.0
-            }
-        };
-        let du = shift(u0, u1, per.pu, &|q| q.x);
-        let dv = shift(v0, v1, per.pv, &|q| q.y);
-        if du != 0.0 || dv != 0.0 {
-            return Some(pc.transformed(&Affine::translation(V3::new(du, dv, 0.0))));
+    Some(into_domain(pc, per, pieces[0], *pieces.last().unwrap()))
+}
+
+/// A p-curve on a closed spline surface (or an extrusion of a closed spline) moved by whole
+/// periods into the surface's parameter range, where it evaluates; others as they are.
+fn into_domain(pc: Curve, per: &Periods, a: f64, b: f64) -> Curve {
+    let Some(((u0, u1), (v0, v1))) = per.domain else {
+        return pc;
+    };
+    let pts: Vec<P3> = (0..=16)
+        .map(|i| pc.point(a + (b - a) * i as f64 / 16.0))
+        .collect();
+    let shift = |lo: f64, hi: f64, period: Option<f64>, get: &dyn Fn(&P3) -> f64| -> f64 {
+        let Some(p) = period else { return 0.0 };
+        let eps = tol::REL * (hi - lo).abs().max(1.0);
+        let (mn, mx) = pts
+            .iter()
+            .map(get)
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), x| {
+                (a.min(x), b.max(x))
+            });
+        if mx > hi + eps {
+            -((mx - hi - eps) / p).ceil() * p
+        } else if mn < lo - eps {
+            ((lo - eps - mn) / p).ceil() * p
+        } else {
+            0.0
         }
+    };
+    let du = shift(u0, u1, per.pu, &|q| q.x);
+    let dv = shift(v0, v1, per.pv, &|q| q.y);
+    if du != 0.0 || dv != 0.0 {
+        pc.transformed(&Affine::translation(V3::new(du, dv, 0.0)))
+    } else {
+        pc
     }
-    Some(pc)
 }
 
 /// Fitted spans joined end to end into one spline: a knot of full multiplicity at each joint,
@@ -1195,31 +1211,40 @@ impl XBuilder {
     fn fit_pcurves(&mut self, dropped: &[bool]) {
         use rayon::prelude::*;
         let edges = &self.body.edges;
-        super::par::start();
-        let fits: Vec<Vec<((usize, usize), Curve)>> = self
-            .faces
-            .par_iter()
-            .enumerate()
-            .filter(|(fi, _)| !dropped[*fi])
-            .map(|(fi, f)| {
-                let per = periods(&f.surf);
-                let mut seen = std::collections::HashSet::new();
-                f.loops
-                    .iter()
-                    .flatten()
-                    .filter(|(e, _)| seen.insert(*e))
-                    .map(|&(e, _)| {
-                        let ed = &edges[e];
-                        (
-                            (fi, e),
-                            snap_tiny(pcurve_unsnapped_on(
-                                &f.surf, &per, &ed.curve, ed.t[0], ed.t[1], ed.tol,
-                            )),
-                        )
-                    })
+        let one = |(fi, f): (usize, &XFace)| -> Vec<((usize, usize), Curve)> {
+            let per = periods(&f.surf);
+            let mut seen = std::collections::HashSet::new();
+            f.loops
+                .iter()
+                .flatten()
+                .filter(|(e, _)| seen.insert(*e))
+                .map(|&(e, _)| {
+                    let ed = &edges[e];
+                    (
+                        (fi, e),
+                        snap_tiny(pcurve_unsnapped_on(
+                            &f.surf, &per, &ed.curve, ed.t[0], ed.t[1], ed.tol,
+                        )),
+                    )
+                })
+                .collect()
+        };
+        let fits: Vec<Vec<((usize, usize), Curve)>> =
+            if super::par::threads_for_some(self.faces.len()) {
+                self.faces
+                    .par_iter()
+                    .enumerate()
+                    .filter(|(fi, _)| !dropped[*fi])
+                    .map(one)
                     .collect()
-            })
-            .collect();
+            } else {
+                self.faces
+                    .iter()
+                    .enumerate()
+                    .filter(|(fi, _)| !dropped[*fi])
+                    .map(one)
+                    .collect()
+            };
         self.pc_cache.get_mut().extend(fits.into_iter().flatten());
     }
 
@@ -1313,13 +1338,30 @@ impl XBuilder {
         // (`base`), and the jump is no gap.
         let mut base = vec![0i64; n];
         let pu_dom = per.pu.filter(|_| per.domain.is_some());
+        // A jump of whole periods to within a part in 10⁷, or to within the joint's edges'
+        // tolerance on the surface (their p-curves are fitted to it: a closed edge's start on
+        // the seam lands a hair off).
+        let (mu, mv) = s.metric();
+        let join_tol = |j: usize| {
+            // (And how far the edges' curves end from their vertices: a file's edges meet a
+            // hair apart where the body that wrote it had tolerances to cover it.)
+            let t = |k: usize| {
+                let ed = &self.body.edges[l[k].0];
+                (0..2)
+                    .map(|i| (ed.curve.point(ed.t[i]) - self.body.verts[ed.v[i]].p).norm())
+                    .fold(ed.tol, f64::max)
+            };
+            JOIN.max(t(j)).max(t((j + n - 1) % n)) * (1.0 + 1e-3)
+        };
+        let whole =
+            |d: f64, p: f64, m: f64, j: usize| d.abs() <= 1e-7 * p || d.abs() * m <= join_tol(j);
         if let Some(pu) = pu_dom {
             for j in 1..n {
                 base[j] = base[j - 1];
                 let g = ends[j].0.x - ends[j - 1].1.x + (base[j] - base[j - 1]) as f64 * pu;
                 let k = (g / pu).round();
                 // (Not the jump round a pole: a jump in the loop, which a pole edge spans.)
-                if k != 0.0 && (g - k * pu).abs() <= 1e-7 * pu && !round_pole[j] {
+                if k != 0.0 && whole(g - k * pu, pu, mu, j) && !round_pole[j] {
                     base[j] -= k as i64;
                 }
             }
@@ -1330,7 +1372,7 @@ impl XBuilder {
                 base_v[j] = base_v[j - 1];
                 let g = ends[j].0.y - ends[j - 1].1.y;
                 let k = (g / pv).round();
-                if k != 0.0 && (g - k * pv).abs() <= 1e-7 * pv && !round_pole[j] {
+                if k != 0.0 && whole(g - k * pv, pv, mv, j) && !round_pole[j] {
                     base_v[j] -= k as i64;
                 }
             }
@@ -1641,7 +1683,11 @@ impl XBuilder {
 
     /// A vertex at `p`: an existing one within the join distance, else a new one.
     fn vertex_at(&mut self, p: P3) -> usize {
-        if let Some(i) = self.body.verts.iter().position(|v| (v.p - p).norm() < JOIN) {
+        let verts = &self.body.verts;
+        if let Some(i) = self
+            .places
+            .first_within(verts.len(), |i| verts[i].p, &p, JOIN)
+        {
             return i;
         }
         self.body.add_vertex(p)
@@ -1650,7 +1696,9 @@ impl XBuilder {
     /// Where a loop reaches u ≡ `u` (mod 2π): a vertex (the index of the coedge starting there)
     /// or a point inside a coedge (its index and edge parameter).
     fn find_u(&self, l: &[(usize, bool)], t: &Trace, u: f64) -> Option<(usize, Option<f64>)> {
-        let off = |x: f64| wrap(x - u, -PI, P);
+        // (In the surface's own period: a closed spline's range, not 2π.)
+        let (per, quarter) = (t.pu, t.pu / 4.0);
+        let off = |x: f64| wrap(x - u, -per / 2.0, per);
         for (k, &(e, fwd)) in l.iter().enumerate() {
             if off(t.ends[k].0.x).abs() < tol::ROUNDOFF {
                 return Some((k, None));
@@ -1663,25 +1711,109 @@ impl XBuilder {
             for i in 1..=m {
                 let s1 = i as f64 / m as f64;
                 let cur = f(s1);
-                if prev.abs() < PI / 2.0 && cur.abs() < PI / 2.0 && prev * cur <= 0.0 {
+                if prev.abs() < quarter && cur.abs() < quarter && prev * cur <= 0.0 {
                     if cur.abs() < tol::ROUNDOFF_FINE && i == m {
                         break; // the next coedge's start
                     }
-                    let (mut lo, mut hi) = ((i - 1) as f64 / m as f64, s1);
-                    for _ in 0..80 {
-                        let mid = (lo + hi) / 2.0;
-                        if (f(mid) > 0.0) == (f(lo) > 0.0) {
-                            lo = mid;
-                        } else {
-                            hi = mid;
-                        }
-                    }
-                    return Some((k, Some(a + (b - a) * (lo + hi) / 2.0)));
+                    let s =
+                        super::math::root_from(&f, ((i - 1) as f64 / m as f64, prev), (s1, cur));
+                    return Some((k, Some(a + (b - a) * s)));
                 }
                 prev = cur;
             }
         }
         None
+    }
+
+    /// [`Self::find_u`] for v: where a loop reaches v ≡ `v` (mod 2π).
+    fn find_v(&self, l: &[(usize, bool)], t: &Trace, v: f64) -> Option<(usize, Option<f64>)> {
+        let (per, quarter) = (t.pv, t.pv / 4.0);
+        let off = |x: f64| wrap(x - v, -per / 2.0, per);
+        for (k, &(e, fwd)) in l.iter().enumerate() {
+            if off(t.ends[k].0.y).abs() < tol::ROUNDOFF {
+                return Some((k, None));
+            }
+            let ed = &self.body.edges[e];
+            let (a, b) = co_range(ed, fwd);
+            let m = 64;
+            let f = |s: f64| off(t.pcs[k].point(a + (b - a) * s).y);
+            let mut prev = f(0.0);
+            for i in 1..=m {
+                let s1 = i as f64 / m as f64;
+                let cur = f(s1);
+                if prev.abs() < quarter && cur.abs() < quarter && prev * cur <= 0.0 {
+                    if cur.abs() < tol::ROUNDOFF_FINE && i == m {
+                        break; // the next coedge's start
+                    }
+                    let s =
+                        super::math::root_from(&f, ((i - 1) as f64 / m as f64, prev), (s1, cur));
+                    return Some((k, Some(a + (b - a) * s)));
+                }
+                prev = cur;
+            }
+        }
+        None
+    }
+
+    /// [`Self::add_seam`] for a band of a torus between two loops round its tube (a bent
+    /// tube's wall, bounded by its two end circles): a seam along the v = const circle from
+    /// one loop to the other, on the side of the first the face lies.
+    fn add_seam_v(&mut self, fi: usize, wrapping: &[(usize, i64)], traces: &[Trace]) -> bool {
+        let s = self.faces[fi].surf.clone();
+        if !matches!(s, Surface::Torus { .. })
+            || wrapping.len() != 2
+            || traces.iter().any(|t| t.wu != 0)
+            || wrapping[0].1 != -wrapping[1].1
+        {
+            return false;
+        }
+        let hint = self.faces[fi].sense;
+        let (la, lb) = (wrapping[0].0, wrapping[1].0);
+        let a_loop = self.faces[fi].loops[la].clone();
+        let qa = traces[0].ends[0].0;
+        let va = self.co_start(a_loop[0].0, a_loop[0].1);
+        let Some(seam) = s.iso_v(qa.y) else {
+            return false;
+        };
+        let Some((k, inner)) = self.find_v(&self.faces[fi].loops[lb].clone(), &traces[1], qa.y)
+        else {
+            return false;
+        };
+        let (kb, vbv) = match inner {
+            None => (
+                k,
+                self.co_start(self.faces[fi].loops[lb][k].0, self.faces[fi].loops[lb][k].1),
+            ),
+            Some(t) => {
+                let (e, _) = self.faces[fi].loops[lb][k];
+                (k + 1, self.split_edge(e, t))
+            }
+        };
+        let b_loop = self.faces[fi].loops[lb].clone();
+        let pb = self.body.verts[vbv].p;
+        let (ub, _) = s.project(&pb, Some((qa.x, qa.y)));
+        // The face lies left of the first loop's way round the tube (right, its sense
+        // reversed): towards lower u when it runs up v.
+        let side = -(wrapping[0].1.signum() as f64) * if hint { 1.0 } else { -1.0 };
+        let d = wrap(ub - qa.x, 0.0, P);
+        let ub = if side > 0.0 { qa.x + d } else { qa.x + d - P };
+        if (ub - qa.x).abs() < tol::ROUNDOFF {
+            return false;
+        }
+        let fwd_seam = self.iso_edge(seam, va, qa.x, vbv, ub);
+        let mut nl: Vec<(usize, bool)> = a_loop.clone();
+        nl.push(fwd_seam);
+        let nb = b_loop.len();
+        for i in 0..nb {
+            nl.push(b_loop[(kb + i) % nb]);
+        }
+        nl.push((fwd_seam.0, !fwd_seam.1));
+        let f = &mut self.faces[fi];
+        let (lo, hi) = if la < lb { (la, lb) } else { (lb, la) };
+        f.loops.remove(hi);
+        f.loops.remove(lo);
+        f.loops.insert(0, nl);
+        true
     }
 
     /// Adds an edge along the iso line `c` (parametrized by v) between vertices at v = va and
@@ -1767,7 +1899,7 @@ impl XBuilder {
             .map(|&(li, _)| self.trace(fi, &s, &self.faces[fi].loops[li]))
             .collect();
         if traces.iter().any(|t| t.wv != 0) {
-            return false;
+            return self.add_seam_v(fi, wrapping, &traces);
         }
         let la = wrapping[0].0;
         let a_loop = self.faces[fi].loops[la].clone();
@@ -2134,7 +2266,10 @@ impl XBuilder {
                     continue;
                 }
                 let s = self.faces[fi].surf.clone();
-                if !s.u_periodic() && !s.v_periodic() {
+                // (A closed spline surface too: a tube swept along a spline, bounded by its
+                // two end circles.)
+                let per = periods(&s);
+                if per.pu.is_none() && per.pv.is_none() {
                     continue;
                 }
                 let mut wrapping = Vec::new();
@@ -2186,7 +2321,12 @@ impl XBuilder {
                     let lo = (0..n)
                         .map(|k| t.ends[k].0.x.min(t.ends[k].1.x) + shift[k] as f64 * t.pu)
                         .fold(f64::INFINITY, f64::min);
-                    let c = ((u0 - lo) / t.pu - 1e-7).ceil();
+                    // (A loop below the range by less than 10 JOIN on the surface, its p-curves a
+                    // hair off at the seam, stays where it is.)
+                    let slack = (1e-7 * t.pu)
+                        .max(10.0 * JOIN / mu.max(f64::MIN_POSITIVE))
+                        .min(0.01 * t.pu);
+                    let c = ((u0 - lo - slack) / t.pu).ceil();
                     if c != 0.0 && lo + c * t.pu <= u1 {
                         shift.iter_mut().for_each(|x| *x += c as i64);
                     }
@@ -2327,6 +2467,11 @@ impl XBuilder {
             .iter()
             .map(|&i| (i != usize::MAX).then_some(i))
             .collect();
+        if std::env::var_os("CADRS_XBUILD_DEBUG").is_some() {
+            for w in &self.warnings {
+                eprintln!("xbuild: {w}");
+            }
+        }
         (self.body, self.warnings, map)
     }
 }
@@ -2473,24 +2618,39 @@ pub fn orient_shells(b: &mut Body, always: bool) -> usize {
             for &fi in &faces {
                 bb.union(&b.face_bbox(fi));
             }
-            // The sign of the enclosed volume from a coarse tessellation (exact integration of
-            // spline faces would cost far more).
+            // The sign of the enclosed volume: integrated exactly where no face is a B-spline
+            // of many spans (analytic faces integrate along their boundaries, quicker than
+            // they mesh); else from a coarse tessellation (exact integration of such spline
+            // faces would cost far more).
+            let long = |fi: &usize| {
+                let Surface::Nurbs(n) = &b.faces[*fi].surf else {
+                    return false;
+                };
+                let spans = |k: &[f64]| k.windows(2).filter(|w| w[1] > w[0]).count();
+                spans(&n.ku) * spans(&n.kv) >= 256
+            };
+            let exact = (!faces.iter().any(long))
+                .then(|| super::mass::faces_volume(&super::kernel::subset(b, &faces, false)))
+                .filter(|v| v.is_finite() && *v != 0.0);
             let shift = bb.center().coords;
             let defl = (bb.diagonal() * 1e-2).max(tol::POINT);
-            let es = super::tess::edge_samples(b, defl, 0.5);
-            let vol: f64 = faces
-                .iter()
-                .map(|&fi| {
-                    let m = super::tess::mesh_face(b, &b.faces[fi], &es, defl, 0.5);
-                    m.indices
-                        .iter()
-                        .map(|t| {
-                            let [p, q, r] = t.map(|i| m.positions[i as usize].coords - shift);
-                            p.dot(&q.cross(&r)) / 6.0
-                        })
-                        .sum::<f64>()
-                })
-                .sum();
+            let es = || super::tess::edge_samples(b, defl, 0.5);
+            let vol: f64 = exact.unwrap_or_else(|| {
+                let es = es();
+                faces
+                    .iter()
+                    .map(|&fi| {
+                        let m = super::tess::mesh_face(b, &b.faces[fi], &es, defl, 0.5);
+                        m.indices
+                            .iter()
+                            .map(|t| {
+                                let [p, q, r] = t.map(|i| m.positions[i as usize].coords - shift);
+                                p.dot(&q.cross(&r)) / 6.0
+                            })
+                            .sum::<f64>()
+                    })
+                    .sum()
+            });
             if (vol < 0.0) != void.contains(&si) {
                 for &fi in &faces {
                     Body::reverse_face(&mut b.faces[fi]);

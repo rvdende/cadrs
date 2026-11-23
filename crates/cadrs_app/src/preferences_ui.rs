@@ -1,54 +1,37 @@
-//! The local preferences (P3E.3, TD6.2, D2.2): the app menu's **Preferences…** opens a
-//! dialog with the **3D view mouse controls** preset (Onshape, SolidWorks, Inventor, Creo) and
-//! what its gestures do (Rotate, Rotate without roll, Pan, Zoom). OK keeps the choice in the store root's
-//! `preferences.ron` ([`cadrs_core::preferences`]); it is this machine's, not a document's, so
-//! nothing is undone. The Part Studio and Assembly viewports (`crate::viewport`) and the
-//! drawing sheet (`crate::drawing`) read it for their drags.
+//! The local preferences (P3E.3, TD6.2, D2.2): this machine's, not a document's, kept in the
+//! store root's `preferences.ron` ([`cadrs_core::preferences`]), so nothing is undone. The app
+//! menu's **Preferences…** opens their dialog ([`crate::preferences_dialog`]); this module holds
+//! them in force ([`LocalPreferences`]), applies them, and keeps the ones set elsewhere.
 //!
-//! **Interface › UI scale** (issue #12): 75–200 % of the display's own scale, for large or
-//! high-resolution screens; applied to the whole window as soon as OK is pressed. Ctrl+= and
+//! **UI scale** (issue #12): 75–200 % of the display's own scale ([`apply_ui_scale`]); Ctrl+= and
 //! Ctrl+- step through its sizes anywhere, as a browser's zoom does ([`step_ui_scale`]).
-//! **Interface › Vertical sync** (`vsync`, on by default): frames wait for the display's refresh;
-//! off, they are drawn as fast as they are made. Applied as soon as OK is pressed
-//! ([`apply_vsync`]); `CADRS_NO_VSYNC=1` turns it off for one run without saving.
-//! **Frame panel › Time systems** (`profile_cpu`): the CPU time of every system and schedule in
-//! the frame panel's details (F12) and `get_frame_stats`. Off by default (it costs about a fifth of
-//! each frame), and it takes effect at the next start ([`crate::frame_profile::CpuProfiling`]).
+//! **Vertical sync** (`vsync`, on by default; [`apply_vsync`]): `CADRS_NO_VSYNC=1` turns it off
+//! for one run without saving. **Time systems** (`profile_cpu`): the CPU time of every system in
+//! the frame panel's details and `get_frame_stats`, from the next start
+//! ([`crate::frame_profile::CpuProfiling`]). **Grid**, **Origin** and **Frame stats** are read
+//! where they're drawn (`crate::viewport`, `crate::frame_stats`); the eye on the feature list's
+//! Origin row hides and shows the origin ([`toggle_origin`]).
 //!
-//! **Color scheme**: the top bar's light / dark / system toggle ([`cadrs_ui::scheme_toggle`])
+//! **Color scheme**: the top bar's light / dark / system button ([`cadrs_ui::scheme_toggle`])
 //! is saved here too, as soon as it's clicked. `CADRS_COLOR_SCHEME=light|dark|system` overrides
 //! it for one run without saving (scenarios use it to render in dark).
 //!
-//! Below it, **AI assistants (MCP)**: the *Enable MCP server* switch and the endpoint it serves
-//! (`crate::mcp` starts and stops the server as OK changes it).
-//!
-//! Last, **Collaboration**: the cadrs ID while online, *Public documents* (take part in the
-//! public documents room while online, and the seed peers to start from: `public/seeds.txt`,
-//! [`crate::collab::public`]), and *Connect when cadrs starts*
-//! (`autoconnect_p2p`, off by default: cadrs stays offline until the user connects,
-//! [`crate::network`]). It takes effect at the next start; the top bar's network button goes
-//! online or offline now.
-//!
-//! *Keep camera up* (`keep_camera_up`, off by default, issue #97) is set from the view menu
-//! ([`set_keep_camera_up`]): every rotate gesture turns without roll.
+//! *Keep camera up* (`keep_camera_up`, off by default, issue #97) is also set from the view
+//! menu ([`set_keep_camera_up`]): every rotate gesture turns without roll. The top bar's AI
+//! assistants button (`crate::mcp_button`) sets the MCP server's switch and port, and the network
+//! button's menu *Connect when cadrs starts* (`autoconnect_p2p`).
 
 use bevy::input::keyboard::KeyboardInput;
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
-use bevy::text::{EditableText, FontWeight};
-use bevy::ui_widgets::{Activate, observe};
 use cadrs_core::preferences::{
-    ColorScheme, Modifiers, MouseButton, MousePreset, Preferences, UI_SCALES, ViewAction,
+    ColorScheme, FrameStatsMode, GridStyle, Modifiers, MouseButton, MousePreset, OriginStyle,
+    Preferences, UI_SCALES,
 };
-use cadrs_ui::Switch;
-use cadrs_ui::i18n::{Translated, tr, tr_with};
-use cadrs_ui::prelude::*;
-use cadrs_ui::{
-    Button, DialogClose, NumberField, NumberFieldCommit, NumberFieldEdit, NumberFieldState, Select,
-    SelectChange, SelectState, SelectableText, ShortcutKey, SwitchState, form_row,
-};
+use cadrs_ui::i18n::{tr, tr_with};
+use cadrs_ui::{ShortcutKey, Theme};
 
-use crate::{AppState, DocumentStore};
+use crate::DocumentStore;
 
 pub struct PreferencesPlugin;
 
@@ -65,11 +48,12 @@ impl Plugin for PreferencesPlugin {
                     apply_language,
                     save_color_scheme,
                 ),
-            )
-            .add_observer(on_preset_change)
-            .add_observer(on_rotation_snap_commit);
+            );
+        crate::preferences_dialog::plugin(app);
     }
 }
+
+pub use crate::preferences_dialog::{Section, open_preferences, open_preferences_at};
 
 /// The interface shows the language of the preferences (at start, and when it changes in the
 /// Preferences dialog: texts already shown that come from the catalogs change with it).
@@ -114,7 +98,7 @@ fn load_preferences(
 }
 
 /// `CADRS_COLOR_SCHEME`, when set to a scheme.
-fn scheme_override() -> Option<ColorScheme> {
+pub(crate) fn scheme_override() -> Option<ColorScheme> {
     match std::env::var("CADRS_COLOR_SCHEME").ok()?.as_str() {
         "light" => Some(ColorScheme::Light),
         "dark" => Some(ColorScheme::Dark),
@@ -123,7 +107,7 @@ fn scheme_override() -> Option<ColorScheme> {
     }
 }
 
-fn to_ui(c: ColorScheme) -> cadrs_ui::SchemePreference {
+pub(crate) fn to_ui(c: ColorScheme) -> cadrs_ui::SchemePreference {
     match c {
         ColorScheme::System => cadrs_ui::SchemePreference::System,
         ColorScheme::Light => cadrs_ui::SchemePreference::Light,
@@ -131,7 +115,7 @@ fn to_ui(c: ColorScheme) -> cadrs_ui::SchemePreference {
     }
 }
 
-fn from_ui(p: cadrs_ui::SchemePreference) -> ColorScheme {
+pub(crate) fn from_ui(p: cadrs_ui::SchemePreference) -> ColorScheme {
     match p {
         cadrs_ui::SchemePreference::System => ColorScheme::System,
         cadrs_ui::SchemePreference::Light => ColorScheme::Light,
@@ -311,6 +295,12 @@ pub fn set_mcp_enabled(world: &mut World, on: bool) {
     save(world);
 }
 
+/// Sets the MCP server's port and saves it (the AI assistants menu; the server restarts on it).
+pub fn set_mcp_port(world: &mut World, port: u16) {
+    world.resource_mut::<LocalPreferences>().0.mcp.port = port;
+    save(world);
+}
+
 /// Remembers the slicer parts were sent to, listed first next time (issue #176).
 pub fn set_last_slicer(world: &mut World, id: u8) {
     let prefs = &mut world.resource_mut::<LocalPreferences>().0;
@@ -347,6 +337,43 @@ pub fn set_keep_camera_up(world: &mut World, on: bool) {
     }
 }
 
+/// Sets and saves the ground grid's look (scenarios, `set_preferences`).
+pub fn set_grid(world: &mut World, grid: GridStyle) {
+    world.resource_mut::<LocalPreferences>().0.grid = grid;
+    save(world);
+}
+
+/// Sets and saves how the origin is drawn (scenarios, `set_preferences`).
+pub fn set_origin(world: &mut World, origin: OriginStyle) {
+    world.resource_mut::<LocalPreferences>().0.origin = origin;
+    save(world);
+}
+
+/// Sets and saves what the frame-stats panel shows (scenarios, `set_preferences`).
+pub fn set_frame_stats(world: &mut World, mode: FrameStatsMode) {
+    world.resource_mut::<LocalPreferences>().0.frame_stats = mode;
+    save(world);
+}
+
+/// The eye on the feature list's Origin row: hides the origin, or shows it again as it was
+/// drawn before it was hidden (a bullseye if it was hidden from the start), and saves it.
+pub fn toggle_origin(world: &mut World) {
+    let now = world.resource::<LocalPreferences>().0.origin;
+    let next = if now == OriginStyle::Hidden {
+        world
+            .get_resource::<ShownOrigin>()
+            .map_or(OriginStyle::Dot, |s| s.0)
+    } else {
+        world.insert_resource(ShownOrigin(now));
+        OriginStyle::Hidden
+    };
+    set_origin(world, next);
+}
+
+/// How the origin was drawn before the eye hid it.
+#[derive(Resource)]
+struct ShownOrigin(OriginStyle);
+
 /// Remembers that the user has seen "What's new" up to `edition`
 /// ([`crate::notifications::WHATS_NEW`]).
 pub(crate) fn mark_whats_new_seen(world: &mut World, edition: u32) {
@@ -357,635 +384,13 @@ pub(crate) fn mark_whats_new_seen(world: &mut World, edition: u32) {
     save(world);
 }
 
-fn save(world: &mut World) {
+pub(crate) fn save(world: &mut World) {
     let prefs = world.resource::<LocalPreferences>().0;
     if let Some(store) = world.get_resource::<DocumentStore>()
         && let Err(e) = prefs.save(store.0.root())
     {
         warn!("cannot save the preferences: {e}");
     }
-}
-
-// ---------------------------------------------------------------------------------------------
-// The dialog
-
-/// The dialog's root.
-#[derive(Component)]
-struct PreferencesDialog;
-
-/// A gesture row's text (its action).
-#[derive(Component)]
-struct GestureText(ViewAction);
-
-/// The view actions: the row's name, its label's catalog key.
-const ACTIONS: [(ViewAction, &str, &str); 4] = [
-    (
-        ViewAction::Rotate,
-        "pref-mouse-rotate",
-        "shell-prefs-rotate",
-    ),
-    (
-        ViewAction::RotateTurntable,
-        "pref-mouse-turntable",
-        "shell-prefs-rotate-turntable",
-    ),
-    (ViewAction::Pan, "pref-mouse-pan", "shell-prefs-pan"),
-    (ViewAction::Zoom, "pref-mouse-zoom", "shell-prefs-zoom"),
-];
-
-fn gesture_text(preset: MousePreset, action: ViewAction) -> String {
-    let g = preset.gestures(action);
-    if g.is_empty() {
-        "—".into()
-    } else {
-        g.join(", ")
-    }
-}
-
-/// Opens the Preferences dialog with the preferences in force.
-pub fn open_preferences(world: &mut World) {
-    let preset = world.resource::<LocalPreferences>().mouse();
-    #[cfg(not(target_arch = "wasm32"))]
-    let mcp = world.resource::<LocalPreferences>().0.mcp;
-    let autoconnect = world.resource::<LocalPreferences>().0.autoconnect_p2p;
-    let public_on = world.resource::<LocalPreferences>().0.public_documents;
-    let seeds = world
-        .get_resource::<crate::collab::public::Seeds>()
-        .map(|s| s.0.join(", "))
-        .unwrap_or_default();
-    #[cfg(not(target_arch = "wasm32"))]
-    let profile_cpu = world.resource::<LocalPreferences>().0.profile_cpu;
-    let snap = world
-        .resource::<LocalPreferences>()
-        .0
-        .rotation_snap_degrees();
-    let tolerance = world
-        .resource::<LocalPreferences>()
-        .0
-        .rotation_snap_tolerance_degrees();
-    let ui_scale = world.resource::<LocalPreferences>().0.ui_scale;
-    let language = world.resource::<LocalPreferences>().0.language;
-    #[cfg(not(target_arch = "wasm32"))]
-    let vsync = world.resource::<LocalPreferences>().0.vsync;
-    #[cfg(not(target_arch = "wasm32"))]
-    let endpoint = cadrs_mcp::url(std::net::SocketAddr::from((
-        std::net::Ipv4Addr::LOCALHOST,
-        mcp.port,
-    )));
-    let cadrs_id = cadrs_net::cadrs_id(world.get_resource::<cadrs_net::bevy_iroh::Iroh>());
-    let state = *world.resource::<State<AppState>>().get();
-    let theme = world.resource::<Theme>().clone();
-    let (tb, tf) = (theme.clone(), theme.clone());
-    world.commands().spawn((
-        Dialog::new("preferences-dialog")
-            .title(tr("preferences"))
-            .width(440.0)
-            .body(move |b| {
-                let t = &tb;
-                b.spawn((
-                    Name::new("pref-mouse-heading"),
-                    t.text(
-                        tr("preferences-mouse-heading"),
-                        t.font_base,
-                        FontWeight::BOLD,
-                        t.foreground,
-                    ),
-                    Node {
-                        margin: UiRect::bottom(Val::Px(4.0)),
-                        ..default()
-                    },
-                ));
-                let mut select = Select::new("pref-mouse-preset").width(Val::Px(200.0));
-                for p in MousePreset::ALL {
-                    select = select.option(p.label(), true);
-                }
-                let selected = MousePreset::ALL
-                    .iter()
-                    .position(|p| *p == preset)
-                    .unwrap_or(0);
-                b.spawn(form_row(
-                    t,
-                    "pref-mouse-row",
-                    tr("preferences-mouse-controls"),
-                    150.0,
-                ))
-                .with_child(select.selected(selected).build(t));
-                for (action, name, label) in ACTIONS {
-                    b.spawn(form_row(t, format!("{name}-row"), tr(label), 150.0))
-                        .with_child((
-                            Name::new(name),
-                            GestureText(action),
-                            t.text(
-                                gesture_text(preset, action),
-                                t.font_base,
-                                FontWeight::NORMAL,
-                                t.muted_foreground,
-                            ),
-                        ));
-                }
-                b.spawn((
-                    Name::new("pref-interface-heading"),
-                    t.text(
-                        tr("preferences-interface"),
-                        t.font_base,
-                        FontWeight::BOLD,
-                        t.foreground,
-                    ),
-                    Node {
-                        margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(14.0), Val::Px(4.0)),
-                        ..default()
-                    },
-                ));
-                let mut sizes = Select::new("pref-ui-scale").width(Val::Px(200.0));
-                for p in UI_SCALES {
-                    sizes = sizes.option(
-                        if p == 100 {
-                            tr("shell-prefs-ui-scale-default")
-                        } else {
-                            format!("{p}%")
-                        },
-                        true,
-                    );
-                }
-                let at = UI_SCALES.iter().position(|p| *p == ui_scale).unwrap_or(2);
-                b.spawn(form_row(
-                    t,
-                    "pref-ui-scale-row",
-                    tr("preferences-ui-scale"),
-                    150.0,
-                ))
-                .with_child(sizes.selected(at).build(t));
-                // Issue #178: each language by its own name, known by its code (`pref-language-option-fr`).
-                // One not offered (its script has no font yet) shows as English, as it reads.
-                let mut languages = Select::new("pref-language").width(Val::Px(200.0));
-                for (code, name) in cadrs_ui::i18n::offered() {
-                    languages = languages.keyed_option(code, name, true);
-                }
-                let languages = languages.selected_key("en").selected_key(language.code());
-                b.spawn(form_row(
-                    t,
-                    "pref-language-row",
-                    tr("preferences-language"),
-                    150.0,
-                ))
-                .with_child(languages.build(t));
-                // A page presents as the browser does.
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    b.spawn(form_row(
-                        t,
-                        "pref-vsync-row",
-                        tr("preferences-display"),
-                        150.0,
-                    ))
-                    .with_child(
-                        Switch::new("pref-vsync")
-                            .label(tr("shell-prefs-vsync"))
-                            .on(vsync)
-                            .build(t),
-                    );
-                    b.spawn((
-                        Name::new("pref-vsync-note"),
-                        t.text(
-                            tr("shell-prefs-vsync-note"),
-                            t.font_sm,
-                            FontWeight::NORMAL,
-                            t.muted_foreground,
-                        ),
-                        Translated("shell-prefs-vsync-note"),
-                        Node {
-                            width: Val::Px(400.0),
-                            margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(6.0), Val::Px(8.0)),
-                            ..default()
-                        },
-                    ))
-                    .insert(TextLayout::default());
-                }
-                // The browser build has no system times to show.
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    b.spawn(form_row(
-                        t,
-                        "pref-profile-cpu-row",
-                        tr("shell-prefs-frame-panel"),
-                        150.0,
-                    ))
-                    .with_child(
-                        Switch::new("pref-profile-cpu")
-                            .label(tr("shell-prefs-time-systems"))
-                            .on(profile_cpu)
-                            .build(t),
-                    );
-                    b.spawn((
-                        Name::new("pref-profile-cpu-note"),
-                        t.text(
-                            tr("shell-prefs-time-systems-note"),
-                            t.font_sm,
-                            FontWeight::NORMAL,
-                            t.muted_foreground,
-                        ),
-                        Translated("shell-prefs-time-systems-note"),
-                        Node {
-                            width: Val::Px(400.0),
-                            margin: UiRect::top(Val::Px(6.0)),
-                            ..default()
-                        },
-                    ))
-                    .insert(TextLayout::default());
-                }
-                b.spawn((
-                    Name::new("pref-assembly-heading"),
-                    t.text(
-                        tr("shell-prefs-assembly-heading"),
-                        t.font_base,
-                        FontWeight::BOLD,
-                        t.foreground,
-                    ),
-                    Translated("shell-prefs-assembly-heading"),
-                    Node {
-                        margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(14.0), Val::Px(4.0)),
-                        ..default()
-                    },
-                ));
-                b.spawn(
-                    NumberField::new("pref-rotation-snap", tr("shell-prefs-rotation-snap"))
-                        .text(format!("{snap} deg"))
-                        .label_width(200.0)
-                        .build(t),
-                );
-                b.spawn(
-                    NumberField::new(
-                        "pref-rotation-snap-tolerance",
-                        tr("shell-prefs-snap-tolerance"),
-                    )
-                    .text(format!("{tolerance} deg"))
-                    .label_width(200.0)
-                    .build(t),
-                );
-                b.spawn((
-                    Name::new("pref-rotation-snap-hint"),
-                    t.text(
-                        tr("shell-prefs-snap-hint"),
-                        t.font_sm,
-                        FontWeight::NORMAL,
-                        t.muted_foreground,
-                    ),
-                    Translated("shell-prefs-snap-hint"),
-                    Node {
-                        width: Val::Px(400.0),
-                        margin: UiRect::top(Val::Px(6.0)),
-                        ..default()
-                    },
-                ))
-                .insert(TextLayout::default());
-                // A page can't serve one.
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    b.spawn((
-                        Name::new("pref-mcp-heading"),
-                        t.text(
-                            tr("shell-prefs-mcp-heading"),
-                            t.font_base,
-                            FontWeight::BOLD,
-                            t.foreground,
-                        ),
-                        Translated("shell-prefs-mcp-heading"),
-                        Node {
-                            margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(14.0), Val::Px(4.0)),
-                            ..default()
-                        },
-                    ));
-                    b.spawn(form_row(
-                        t,
-                        "pref-mcp-row",
-                        tr("shell-prefs-mcp-server"),
-                        150.0,
-                    ))
-                    .with_child(
-                        Switch::new("pref-mcp-enabled")
-                            .label(tr("shell-prefs-enabled"))
-                            .on(mcp.enabled)
-                            .build(t),
-                    );
-                    b.spawn(form_row(
-                        t,
-                        "pref-mcp-endpoint-row",
-                        tr("shell-prefs-endpoint"),
-                        150.0,
-                    ))
-                    .with_child((
-                        Name::new("pref-mcp-endpoint"),
-                        t.text(
-                            endpoint,
-                            t.font_base,
-                            FontWeight::NORMAL,
-                            t.muted_foreground,
-                        ),
-                    ));
-                    b.spawn((
-                        Name::new("pref-mcp-note"),
-                        t.text(
-                            tr("shell-prefs-mcp-note"),
-                            t.font_sm,
-                            FontWeight::NORMAL,
-                            t.muted_foreground,
-                        ),
-                        Translated("shell-prefs-mcp-note"),
-                        Node {
-                            width: Val::Px(400.0),
-                            margin: UiRect::top(Val::Px(6.0)),
-                            ..default()
-                        },
-                    ))
-                    // Wrapped (the theme's text doesn't wrap).
-                    .insert(TextLayout::default());
-                }
-                b.spawn((
-                    Name::new("pref-collab-heading"),
-                    t.text(
-                        tr("shell-prefs-collab-heading"),
-                        t.font_base,
-                        FontWeight::BOLD,
-                        t.foreground,
-                    ),
-                    Translated("shell-prefs-collab-heading"),
-                    Node {
-                        margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(14.0), Val::Px(4.0)),
-                        ..default()
-                    },
-                ));
-                b.spawn(form_row(
-                    t,
-                    "pref-cadrs-id-row",
-                    tr("shell-share-cadrs-id"),
-                    150.0,
-                ))
-                .with_children(|r| match &cadrs_id {
-                    Some(id) => {
-                        r.spawn(
-                            SelectableText::new("pref-cadrs-id")
-                                .value(id.clone())
-                                .font(t.font_sm, FontWeight::NORMAL)
-                                .copy_button()
-                                .build(t),
-                        );
-                    }
-                    None => {
-                        r.spawn((
-                            Name::new("pref-cadrs-id"),
-                            t.text(
-                                tr("shell-prefs-id-while-online"),
-                                t.font_base,
-                                FontWeight::NORMAL,
-                                t.muted_foreground,
-                            ),
-                            Translated("shell-prefs-id-while-online"),
-                        ));
-                    }
-                });
-                b.spawn(form_row(t, "pref-p2p-row", tr("shell-prefs-p2p"), 150.0))
-                    .with_child(
-                        Switch::new("pref-p2p-autoconnect")
-                            .label(tr("shell-network-autoconnect"))
-                            .on(autoconnect)
-                            .build(t),
-                    );
-                // Public documents: take part while online, and the seed peers to start from.
-                b.spawn(form_row(
-                    t,
-                    "pref-public-row",
-                    tr("shell-prefs-public"),
-                    150.0,
-                ))
-                .with_child(
-                    Switch::new("pref-public-documents")
-                        .label(tr("shell-prefs-public-switch"))
-                        .on(public_on)
-                        .build(t),
-                );
-                b.spawn(form_row(
-                    t,
-                    "pref-public-seeds-row",
-                    tr("shell-prefs-public-seeds"),
-                    150.0,
-                ))
-                .with_child(
-                    TextInput::new("pref-public-seeds")
-                        .placeholder(tr("shell-prefs-public-seeds-placeholder"))
-                        .value(seeds.clone())
-                        .width(Val::Px(330.0))
-                        .build(t),
-                );
-                b.spawn((
-                    Name::new("pref-collab-note"),
-                    t.text(
-                        tr("shell-prefs-collab-note"),
-                        t.font_sm,
-                        FontWeight::NORMAL,
-                        t.muted_foreground,
-                    ),
-                    Translated("shell-prefs-collab-note"),
-                    Node {
-                        width: Val::Px(400.0),
-                        margin: UiRect::top(Val::Px(6.0)),
-                        ..default()
-                    },
-                ))
-                .insert(TextLayout::default());
-            })
-            .footer(move |f| {
-                let t = &tf;
-                f.spawn((
-                    Button::new("pref-ok")
-                        .label(tr("common-ok"))
-                        .primary()
-                        .build(t),
-                    observe(|_: On<Activate>, mut commands: Commands| {
-                        commands.queue(save_preferences)
-                    }),
-                ));
-                f.spawn((
-                    Button::new("pref-cancel")
-                        .label(tr("common-cancel"))
-                        .build(t),
-                    observe(
-                        |_: On<Activate>,
-                         q: Query<Entity, With<PreferencesDialog>>,
-                         mut commands: Commands| {
-                            for e in &q {
-                                commands.trigger(DialogClose { entity: e });
-                            }
-                        },
-                    ),
-                ));
-            })
-            .build(&theme),
-        PreferencesDialog,
-        DespawnOnExit(state),
-    ));
-    world.flush();
-}
-
-/// The preset changed in the dialog: its gestures follow.
-fn on_preset_change(
-    ev: On<SelectChange>,
-    q: Query<&Name>,
-    mut q_text: Query<(&GestureText, &mut Text)>,
-) {
-    if q.get(ev.entity).map(|n| n.as_str()) != Ok("pref-mouse-preset") {
-        return;
-    }
-    let Some(preset) = MousePreset::ALL.get(ev.index).copied() else {
-        return;
-    };
-    for (g, mut t) in &mut q_text {
-        t.0 = gesture_text(preset, g.0);
-    }
-}
-
-/// OK: the chosen preset, interface size, vertical sync and the MCP and P2P switches are kept.
-fn save_preferences(world: &mut World) {
-    let mut q = world.query_filtered::<Entity, With<PreferencesDialog>>();
-    let Some(dialog) = q.iter(world).next() else {
-        return;
-    };
-    // Read the live edit so clicking OK works even before a blur-commit is processed.
-    let mut fields = world.query::<(&NumberFieldEdit, &EditableText)>();
-    let values: Vec<_> = fields
-        .iter(world)
-        .filter_map(|(edit, text)| {
-            let name = world.get::<Name>(edit.0)?.as_str();
-            matches!(name, "pref-rotation-snap" | "pref-rotation-snap-tolerance")
-                .then(|| (edit.0, name.to_string(), text.value().to_string()))
-        })
-        .collect();
-    let mut validated = Vec::new();
-    for (entity, name, text) in values {
-        let value = parse_rotation_snap(&text)
-            .filter(|v| name != "pref-rotation-snap-tolerance" || *v <= 90.0);
-        let Some(value) = value else {
-            if let Some(mut state) = world.get_mut::<NumberFieldState>(entity) {
-                state.text = text;
-                state.error = true;
-            }
-            return;
-        };
-        validated.push((name, value));
-    }
-    for (name, value) in validated {
-        let mut prefs = world.resource_mut::<LocalPreferences>();
-        if name == "pref-rotation-snap-tolerance" {
-            prefs.0.rotation_snap_tolerance_degrees = value;
-        } else {
-            prefs.0.rotation_snap_degrees = value;
-        }
-    }
-    let mut qs = world.query::<(&Name, &SelectState)>();
-    let preset = qs
-        .iter(world)
-        .find(|(n, _)| n.as_str() == "pref-mouse-preset")
-        .and_then(|(_, s)| MousePreset::ALL.get(s.selected).copied());
-    if let Some(p) = preset {
-        world.resource_mut::<LocalPreferences>().0.mouse = p;
-    }
-    let language = qs
-        .iter(world)
-        .find(|(n, _)| n.as_str() == "pref-language")
-        .and_then(|(_, s)| s.selected_key())
-        .and_then(cadrs_core::preferences::Language::from_code);
-    if let Some(l) = language {
-        world.resource_mut::<LocalPreferences>().0.language = l;
-    }
-    let size = qs
-        .iter(world)
-        .find(|(n, _)| n.as_str() == "pref-ui-scale")
-        .and_then(|(_, s)| UI_SCALES.get(s.selected).copied());
-    if let Some(p) = size {
-        set_ui_scale(world, p);
-    }
-    let mut qm = world.query::<(&Name, &SwitchState)>();
-    let mcp = qm
-        .iter(world)
-        .find(|(n, _)| n.as_str() == "pref-mcp-enabled")
-        .map(|(_, s)| s.on);
-    if let Some(on) = mcp {
-        world.resource_mut::<LocalPreferences>().0.mcp.enabled = on;
-    }
-    let autoconnect = qm
-        .iter(world)
-        .find(|(n, _)| n.as_str() == "pref-p2p-autoconnect")
-        .map(|(_, s)| s.on);
-    if let Some(on) = autoconnect {
-        world.resource_mut::<LocalPreferences>().0.autoconnect_p2p = on;
-    }
-    let public_on = qm
-        .iter(world)
-        .find(|(n, _)| n.as_str() == "pref-public-documents")
-        .map(|(_, s)| s.on);
-    if let Some(on) = public_on {
-        world.resource_mut::<LocalPreferences>().0.public_documents = on;
-    }
-    let mut qt = world.query::<(&Name, &EditableText)>();
-    let seeds = qt
-        .iter(world)
-        .find(|(n, _)| n.as_str() == "pref-public-seeds-field")
-        .map(|(_, t)| crate::collab::public::Seeds::parse(&t.value().to_string()));
-    if let Some(seeds) = seeds
-        && world.get_resource::<crate::collab::public::Seeds>() != Some(&seeds)
-    {
-        if let Some(store) = world.get_resource::<DocumentStore>()
-            && let Err(e) = seeds.save(store.0.root())
-        {
-            warn!("cannot keep the seed peers: {e}");
-        }
-        world.insert_resource(seeds);
-    }
-    let profile_cpu = qm
-        .iter(world)
-        .find(|(n, _)| n.as_str() == "pref-profile-cpu")
-        .map(|(_, s)| s.on);
-    if let Some(on) = profile_cpu {
-        world.resource_mut::<LocalPreferences>().0.profile_cpu = on;
-    }
-    let vsync = qm
-        .iter(world)
-        .find(|(n, _)| n.as_str() == "pref-vsync")
-        .map(|(_, s)| s.on);
-    if let Some(on) = vsync {
-        world.resource_mut::<LocalPreferences>().0.vsync = on;
-    }
-    save(world);
-    world.trigger(DialogClose { entity: dialog });
-}
-
-fn parse_rotation_snap(text: &str) -> Option<f64> {
-    let value: f64 = text
-        .trim()
-        .trim_end_matches("deg")
-        .trim_end_matches('°')
-        .trim()
-        .parse()
-        .ok()?;
-    (value.is_finite() && (0.0..=180.0).contains(&value)).then_some(value)
-}
-
-fn on_rotation_snap_commit(
-    ev: On<NumberFieldCommit>,
-    mut fields: Query<(&Name, &mut NumberFieldState)>,
-) {
-    let Ok((name, mut state)) = fields.get_mut(ev.entity) else {
-        return;
-    };
-    if !matches!(
-        name.as_str(),
-        "pref-rotation-snap" | "pref-rotation-snap-tolerance"
-    ) {
-        return;
-    }
-    state.text = ev.text.clone();
-    state.error = parse_rotation_snap(&ev.text)
-        .filter(|v| name.as_str() != "pref-rotation-snap-tolerance" || *v <= 90.0)
-        .is_none();
 }
 
 #[cfg(test)]
@@ -1031,171 +436,5 @@ mod tests {
             .map(|(_, t)| t.0.clone())
             .collect();
         assert_eq!(shown, ["UI scale 125%"]);
-    }
-
-    #[test]
-    fn preferences_dialog_exposes_the_rotation_increment_and_shift_hint() {
-        let mut world = World::new();
-        world.init_resource::<LocalPreferences>();
-        world.init_resource::<Theme>();
-        world.insert_resource(State::new(AppState::Document));
-        open_preferences(&mut world);
-        let mut fields = world.query::<(&Name, &NumberFieldState)>();
-        let (_, snap) = fields
-            .iter(&world)
-            .find(|(name, _)| name.as_str() == "pref-rotation-snap")
-            .unwrap();
-        assert_eq!(snap.text, "45 deg");
-        let (_, tolerance) = fields
-            .iter(&world)
-            .find(|(name, _)| name.as_str() == "pref-rotation-snap-tolerance")
-            .unwrap();
-        assert_eq!(tolerance.text, "10 deg");
-        let mut texts = world.query::<(&Name, &Text)>();
-        let (_, hint) = texts
-            .iter(&world)
-            .find(|(name, _)| name.as_str() == "pref-rotation-snap-hint")
-            .unwrap();
-        assert!(hint.0.contains("Shift"));
-    }
-
-    #[test]
-    fn rotation_snap_accepts_fractional_degrees_and_validates_before_saving() {
-        assert_eq!(parse_rotation_snap("22.5 deg"), Some(22.5));
-        assert_eq!(parse_rotation_snap("0°"), Some(0.0));
-        assert_eq!(parse_rotation_snap("180"), Some(180.0));
-        for text in ["-1", "181", "NaN", "inf", "", "abc"] {
-            assert_eq!(parse_rotation_snap(text), None);
-        }
-        let mut world = World::new();
-        world.init_resource::<LocalPreferences>();
-        world.spawn(PreferencesDialog);
-        let field = world
-            .spawn((
-                Name::new("pref-rotation-snap"),
-                NumberFieldState {
-                    text: "45 deg".into(),
-                    error: false,
-                },
-            ))
-            .id();
-        let edit = world
-            .spawn((NumberFieldEdit(field), EditableText::new("22.5")))
-            .id();
-        let tolerance = world
-            .spawn((
-                Name::new("pref-rotation-snap-tolerance"),
-                NumberFieldState::default(),
-            ))
-            .id();
-        let tolerance_edit = world
-            .spawn((NumberFieldEdit(tolerance), EditableText::new("15")))
-            .id();
-        save_preferences(&mut world);
-        assert_eq!(
-            world
-                .resource::<LocalPreferences>()
-                .0
-                .rotation_snap_degrees(),
-            22.5,
-            "OK must read the live edit without requiring Enter"
-        );
-        assert_eq!(
-            world
-                .resource::<LocalPreferences>()
-                .0
-                .rotation_snap_tolerance_degrees(),
-            15.0
-        );
-        world.entity_mut(edit).insert(EditableText::new("-10"));
-        save_preferences(&mut world);
-        assert_eq!(
-            world
-                .resource::<LocalPreferences>()
-                .0
-                .rotation_snap_degrees(),
-            22.5,
-            "invalid edits must not change saved preferences"
-        );
-        assert!(world.get::<NumberFieldState>(field).unwrap().error);
-        world.entity_mut(edit).insert(EditableText::new("60"));
-        world
-            .entity_mut(tolerance_edit)
-            .insert(EditableText::new("91"));
-        save_preferences(&mut world);
-        assert_eq!(
-            world
-                .resource::<LocalPreferences>()
-                .0
-                .rotation_snap_degrees(),
-            22.5,
-            "invalid tolerance must not partially apply a new increment"
-        );
-        assert_eq!(
-            world
-                .resource::<LocalPreferences>()
-                .0
-                .rotation_snap_tolerance_degrees(),
-            15.0
-        );
-        assert!(world.get::<NumberFieldState>(tolerance).unwrap().error);
-    }
-
-    /// Vertical sync, on by default: the dialog's switch shows it, OK keeps the switch's state,
-    /// and the window presents without waiting for the display while it's off (its own mode
-    /// back when it's on again).
-    #[test]
-    fn vsync_switch_is_kept_and_applied() {
-        use bevy::window::{PresentMode, PrimaryWindow};
-        let mut world = World::new();
-        world.init_resource::<LocalPreferences>();
-        world.init_resource::<Theme>();
-        world.insert_resource(State::new(AppState::Document));
-        assert!(world.resource::<LocalPreferences>().0.vsync);
-        open_preferences(&mut world);
-        world.flush();
-        let mut switches = world.query::<(Entity, &Name, &SwitchState)>();
-        let (switch, on) = switches
-            .iter(&world)
-            .find(|(_, n, _)| n.as_str() == "pref-vsync")
-            .map(|(e, _, s)| (e, s.on))
-            .unwrap();
-        assert!(on);
-        world.get_mut::<SwitchState>(switch).unwrap().on = false;
-        save_preferences(&mut world);
-        assert!(!world.resource::<LocalPreferences>().0.vsync);
-
-        let window = world.spawn((Window::default(), PrimaryWindow)).id();
-        let apply = world.register_system(apply_vsync);
-        world.run_system(apply).unwrap();
-        let mode = |w: &World| w.get::<Window>(window).unwrap().present_mode;
-        assert_eq!(mode(&world), PresentMode::AutoNoVsync);
-        world.resource_mut::<LocalPreferences>().0.vsync = true;
-        world.run_system(apply).unwrap();
-        assert_eq!(mode(&world), Window::default().present_mode);
-    }
-
-    #[test]
-    fn gesture_rows_read_like_the_table() {
-        assert_eq!(
-            gesture_text(MousePreset::Onshape, ViewAction::Rotate),
-            "Right drag"
-        );
-        assert_eq!(
-            gesture_text(MousePreset::Onshape, ViewAction::RotateTurntable),
-            "Alt+Right drag"
-        );
-        assert_eq!(
-            gesture_text(MousePreset::SolidWorks, ViewAction::RotateTurntable),
-            "—"
-        );
-        assert_eq!(
-            gesture_text(MousePreset::Onshape, ViewAction::Pan),
-            "Middle drag, Ctrl+Right drag"
-        );
-        assert_eq!(
-            gesture_text(MousePreset::SolidWorks, ViewAction::Zoom),
-            "Scroll wheel, Shift+Middle drag"
-        );
     }
 }

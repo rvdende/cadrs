@@ -15,7 +15,7 @@ Scenario(
         MoveTo(560, 575),
         Wait(3),
         Screenshot("02-hover-top-plane"),
-        ClickAt(560, 575),
+        ClickAt(678, 559),
         MoveTo(1420, 780),
         Wait(3),
         Screenshot("03-top-plane-selected-no-rotation"),

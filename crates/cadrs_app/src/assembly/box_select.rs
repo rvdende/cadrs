@@ -334,6 +334,9 @@ mod tests {
             .init_resource::<super::super::drag::InstanceDrag>()
             .init_resource::<crate::eda::Eda2d>()
             .init_resource::<crate::parts::HoverParts>()
+            .init_resource::<crate::transform_ui::XyzArrows>()
+            .init_resource::<crate::transform_ui::RotateRing>()
+            .init_resource::<crate::gear_ui::PairKnob>()
             .init_resource::<AssemblyBox>()
             .add_systems(Update, box_select);
         let area = app.world_mut().spawn(ViewportArea).id();

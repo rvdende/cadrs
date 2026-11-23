@@ -125,13 +125,32 @@ fn one_chart(surf: &Surface, boundary: &[Vec<Arc>], cuts: &[Arc]) -> (Vec<Vec<Ar
             } else {
                 &[0.0]
             };
+            // (And the whole turns taking either end onto a boundary vertex of its own: a
+            // helical strip's face runs over several turns.)
+            let mut shifts: Vec<V2> = Vec::new();
             for &i in ku {
                 for &j in kv {
-                    let d = V2::new(i * TAU, j * TAU);
-                    let n = usize::from(meets(c.v[0], s + d)) + usize::from(meets(c.v[1], e + d));
-                    if best.is_none_or(|(bn, _, _)| n > bn) {
-                        best = Some((n, d.x, d.y));
+                    shifts.push(V2::new(i * TAU, j * TAU));
+                }
+            }
+            for (k, q) in [(c.v[0], s), (c.v[1], e)] {
+                for (w, p) in &ends {
+                    if *w == k {
+                        let r = |x: f64, on: bool| if on { (x / TAU).round() * TAU } else { 0.0 };
+                        let d = V2::new(
+                            r(p.x - q.x, periods[0].is_some()),
+                            r(p.y - q.y, periods[1].is_some()),
+                        );
+                        if !shifts.contains(&d) {
+                            shifts.push(d);
+                        }
                     }
+                }
+            }
+            for d in shifts {
+                let n = usize::from(meets(c.v[0], s + d)) + usize::from(meets(c.v[1], e + d));
+                if best.is_none_or(|(bn, _, _)| n > bn) {
+                    best = Some((n, d.x, d.y));
                 }
             }
             match best {
@@ -227,7 +246,7 @@ pub fn split_face(surf: &Surface, flip: bool, boundary: &[Vec<Arc>], cuts: &[Arc
         }
         bb.diagonal().max(tol::ROUNDOFF)
     };
-    let ntol = (size * 1e-7).max(1e-7);
+    let ntol = (size * 1e-7).max(1e-7 * tol::small(size));
     let mut nodes: Vec<(usize, P2)> = Vec::new();
     // One vertex's arcs meet in one node within a part in 10³ of the face in (u, v), their
     // p-curves ending a vertex tolerance apart (a face handed on by an earlier operation), but
@@ -259,13 +278,7 @@ pub fn split_face(surf: &Surface, flip: bool, boundary: &[Vec<Arc>], cuts: &[Arc
     // Then nodes of one vertex `near` each other are one, unless an arc runs between them (an
     // edge shorter than the tolerance, both its ends one vertex, still has two).
     let mut root: Vec<usize> = (0..nodes.len()).collect();
-    fn find(root: &mut [usize], mut i: usize) -> usize {
-        while root[i] != i {
-            root[i] = root[root[i]];
-            i = root[i];
-        }
-        i
-    }
+    use super::math::set_of as find;
     let joined: std::collections::HashSet<(usize, usize)> = ends
         .iter()
         .map(|e| (e[0].min(e[1]), e[0].max(e[1])))

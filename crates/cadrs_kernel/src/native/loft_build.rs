@@ -774,7 +774,7 @@ fn assemble_rows(
         let size = (far - o).norm();
         if pts
             .iter()
-            .any(|p| (p - o).dot(&nrm).abs() > tol::REL * size.max(1.0))
+            .any(|p| (p - o).dot(&nrm).abs() > tol::REL * size.max(crate::native::tol::POINT))
         {
             return None;
         }
@@ -1253,22 +1253,12 @@ fn polar_match(secs: &mut [Sec]) -> Result<()> {
             const N: usize = 64;
             let t_at = |j: usize| p.t0 + (p.t1 - p.t0) * j as f64 / N as f64;
             for j in 0..N {
-                let (mut a, mut b) = (t_at(j), t_at(j + 1));
-                let (mut fa, fb) = (side(&p.c.point(a)), side(&p.c.point(b)));
+                let (a, b) = (t_at(j), t_at(j + 1));
+                let (fa, fb) = (side(&p.c.point(a)), side(&p.c.point(b)));
                 if fa * fb > 0.0 {
                     continue;
                 }
-                for _ in 0..60 {
-                    let m = 0.5 * (a + b);
-                    let fm = side(&p.c.point(m));
-                    if fa * fm <= 0.0 {
-                        b = m;
-                    } else {
-                        a = m;
-                        fa = fm;
-                    }
-                }
-                let t = 0.5 * (a + b);
+                let t = super::math::root_from(|m| side(&p.c.point(m)), (a, fa), (b, fb));
                 let q = p.c.point(t);
                 if (q - pos[k]).dot(&d) <= 0.0 {
                     continue;
@@ -1353,7 +1343,7 @@ fn wire_plane(parts: &[Part]) -> Option<Plane> {
     let size = pts.iter().map(|p| (p - o).norm()).fold(0.0, f64::max);
     if pts
         .iter()
-        .any(|p| (p - o).dot(&nrm).abs() > 1e-7 * size.max(1.0))
+        .any(|p| (p - o).dot(&nrm).abs() > 1e-7 * size.max(crate::native::tol::POINT))
     {
         return None;
     }
@@ -2061,7 +2051,7 @@ pub fn loft_guided(
         .iter()
         .map(|(s, e)| (s - e).norm())
         .fold(0.0, f64::max)
-        .max(1.0);
+        .max(crate::native::tol::POINT);
     let near = tol::REL_POINT * size;
     // Where each guide meets each loop section: its place along the loop (curve i at t is
     // i + t); a point section every guide meets.
@@ -2618,6 +2608,35 @@ pub fn loft_with(k: &mut NativeKernel, spec: &LoftSpec) -> Result<OpResult> {
         if e.condition != LoftCondition::Default && !(e.magnitude.is_finite() && e.magnitude > 0.0)
         {
             return Err(invalid("A loft end's magnitude must be greater than zero"));
+        }
+    }
+    // Profiles on parallel planes must run one way along their normal: sections that turn back
+    // fold the loft through itself (a loft through planes at 0, 2 and 1).
+    let planes: Vec<&crate::Plane> = spec
+        .sections
+        .iter()
+        .filter_map(|s| match s {
+            LoftSection::Profile(p) => Some(&p.plane),
+            _ => None,
+        })
+        .collect();
+    if planes.len() == spec.sections.len() && planes.len() > 2 {
+        let n = planes[0].normal.into_inner();
+        if planes
+            .iter()
+            .all(|p| p.normal.cross(&n).norm() < tol::ANGULAR_POINT)
+        {
+            let at: Vec<f64> = planes
+                .iter()
+                .map(|p| (p.origin - planes[0].origin).dot(&n))
+                .collect();
+            let rising = at.windows(2).all(|w| w[1] > w[0]);
+            let falling = at.windows(2).all(|w| w[1] < w[0]);
+            if !(rising || falling) {
+                return Err(invalid(
+                    "The loft's profiles turn back along their planes' normal: the loft would cross itself",
+                ));
+            }
         }
     }
     if let BodyKind::Thin { left, right } = spec.body {

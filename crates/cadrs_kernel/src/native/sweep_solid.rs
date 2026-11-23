@@ -28,7 +28,7 @@ use super::surface::Surface;
 use super::tol;
 use super::topo::Body;
 use crate::*;
-use std::f64::consts::{PI, TAU};
+use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 /// A body of revolution: its own axis and its section's boundary in (ρ, h) about it.
 struct Revolved {
@@ -470,7 +470,14 @@ fn outline(sl: &Slicer, lo: Extreme, hi: Extreme, n: usize) -> Option<Outline> {
         for i in 1..n {
             let th = -PI / 2.0 + PI * i as f64 / n as f64;
             let q = mid + half * th.sin();
-            let (v, w) = sl.extreme(q, far, seed)?;
+            // (A slice within a hair of an end, where the ends' own keys are only found to a
+            // search's precision, may miss the body: the end's point stands for it.)
+            let Some((v, w)) = sl.extreme(q, far, seed) else {
+                if 1.0 - th.sin().abs() < 1e-4 {
+                    continue;
+                }
+                return None;
+            };
             seed = w;
             out.push((v, q));
         }
@@ -486,6 +493,989 @@ fn outline(sl: &Slicer, lo: Extreme, hi: Extreme, n: usize) -> Option<Outline> {
         far: far?,
         near: near?,
     })
+}
+
+/// A stretch of the body's boundary with the outward normals along it, in the half plane of its
+/// section: a straight edge (one normal all along), a corner (one point, its normals fanning
+/// from the edge before's to the edge after's) or an arc of a disk (the point and its normal
+/// turning together). Each takes u from 0 to 1.
+enum Strip {
+    Edge {
+        a: (f64, f64),
+        b: (f64, f64),
+        n: (f64, f64),
+    },
+    Fan {
+        p: (f64, f64),
+        a0: f64,
+        da: f64,
+    },
+    Round {
+        c: (f64, f64),
+        r: f64,
+        a0: f64,
+        da: f64,
+    },
+}
+
+impl Strip {
+    /// The point (ρ, h) and the unit outward normal at u.
+    fn at(&self, u: f64) -> ((f64, f64), (f64, f64)) {
+        match *self {
+            Strip::Edge { a, b, n } => ((a.0 + (b.0 - a.0) * u, a.1 + (b.1 - a.1) * u), n),
+            Strip::Fan { p, a0, da } => {
+                let t = a0 + da * u;
+                (p, (t.cos(), t.sin()))
+            }
+            Strip::Round { c, r, a0, da } => {
+                let t = a0 + da * u;
+                let n = (t.cos(), t.sin());
+                ((c.0 + r * n.0, c.1 + r * n.1), n)
+            }
+        }
+    }
+}
+
+impl Section {
+    /// The boundary as strips, in order round it, the stretches along the body's own axis
+    /// left out (the boundary there is no surface of the body, and a corner on the axis no
+    /// edge of it). None for a section this doesn't take apart.
+    fn strips(&self) -> Option<Vec<Strip>> {
+        match self {
+            Section::Disk { c, r } if c.0 > *r => Some(vec![Strip::Round {
+                c: *c,
+                r: *r,
+                a0: 0.0,
+                da: TAU,
+            }]),
+            // A ball's: the half of its disk off the axis.
+            Section::Disk { c, r } if c.0 == 0.0 => Some(vec![Strip::Round {
+                c: *c,
+                r: *r,
+                a0: -FRAC_PI_2,
+                da: PI,
+            }]),
+            Section::Disk { .. } => None,
+            Section::Polygon(cs) => {
+                let n = cs.len();
+                let size = cs
+                    .iter()
+                    .fold(0.0f64, |m, c| m.max(c.0.abs()).max(c.1.abs()))
+                    .max(tol::POINT);
+                let on_axis = |i: usize| cs[i % n].0.abs() <= 1e-9 * size;
+                // Edge i's outward normal (to the right of a counter-clockwise boundary).
+                let normal = |i: usize| -> Option<(f64, f64)> {
+                    let (p, q) = (cs[i % n], cs[(i + 1) % n]);
+                    let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+                    let l = dx.hypot(dy);
+                    (l > 1e-12 * size).then(|| (dy / l, -dx / l))
+                };
+                let mut out = Vec::new();
+                for i in 0..n {
+                    let ni = normal(i)?;
+                    if !(on_axis(i) && on_axis(i + 1)) {
+                        out.push(Strip::Edge {
+                            a: cs[i],
+                            b: cs[(i + 1) % n],
+                            n: ni,
+                        });
+                    }
+                    if !on_axis(i + 1) {
+                        let nj = normal(i + 1)?;
+                        let da = (ni.0 * nj.1 - ni.1 * nj.0).atan2(ni.0 * nj.0 + ni.1 * nj.1);
+                        if da > 1e-12 {
+                            out.push(Strip::Fan {
+                                p: cs[(i + 1) % n],
+                                a0: ni.1.atan2(ni.0),
+                                da,
+                            });
+                        }
+                    }
+                }
+                Some(out)
+            }
+        }
+    }
+}
+
+/// A curve of the fold's image in the section's plane, by a parameter u: the fold on one
+/// strip (one of its equation's two solutions), or a straight stretch between two (distance,
+/// key)s (a flat face square to a turn's axis, every point of it on the fold, seen edge on).
+#[derive(Clone, Copy)]
+enum Trace {
+    Fold { strip: usize, sign: f64 },
+    Line { a: (f64, f64), b: (f64, f64) },
+}
+
+/// A [`Trace`] from u = `u0` to `u1`, with its polyline (rising u's and the points there) and
+/// the vertices on it (where it ends and where others cross it), by rising u.
+struct Arc {
+    trace: Trace,
+    u0: f64,
+    u1: f64,
+    us: Vec<f64>,
+    xs: Vec<P2>,
+    events: Vec<(f64, usize)>,
+}
+
+/// A stretch of the outline along one [`Trace`], from u = `u0` to `u1` (either way).
+#[derive(Clone, Copy)]
+struct Seg {
+    trace: Trace,
+    u0: f64,
+    u1: f64,
+}
+
+/// The body's fold under the motion, in closed form: the points of its boundary where the
+/// boundary's normal is square to the motion's velocity, which are the only ones the edge of
+/// what the body sweeps can come from. The velocity at p is z × (p − origin) + c·z (c the
+/// rise per radian turned; none for a turn). On the body's circle through the section's
+/// point (ρ, h), where the section's normal is (ν_ρ, ν_h), the normal at the turn ω about the
+/// body's axis a is ν_ρ e(ω) + ν_h a, and its product with the velocity is
+///
+///   e(ω)·[ν_ρ (z × D + c z) + (ν_ρ h − ν_h ρ)(z × a)] + ν_h a·(z × D + c z),
+///
+/// D from the motion's axis to the body's origin: A cos ω + B sin ω + C, zero at
+/// ω = atan2(B, A) ± acos(−C/√(A² + B²)). So each circle of the body gives its two points of
+/// the fold with no search, a sharp circle (a corner of the section) for each normal of its
+/// fan, and the fold's image in the slices' (distance, key) is a curve given point by point.
+struct Fold<'a> {
+    sl: &'a Slicer<'a>,
+    strips: Vec<Strip>,
+    /// The key the body's keys are unwrapped about.
+    near: f64,
+    /// z × D + c z.
+    lead: V3,
+    /// z × a.
+    zxa: V3,
+    /// An amplitude √(A² + B²) no greater is none (every turn solves the equation, or none).
+    tiny: f64,
+}
+
+impl Fold<'_> {
+    /// (A, B, C) and the section's point on strip `s` at u.
+    fn coefs(&self, s: &Strip, u: f64) -> (f64, f64, f64, (f64, f64)) {
+        let b = self.sl.body;
+        let ((rho, h), (nr, nh)) = s.at(u);
+        let g = self.lead * nr + self.zxa * (nr * h - nh * rho);
+        (
+            b.e1.dot(&g),
+            b.e2.dot(&g),
+            nh * b.a.dot(&self.lead),
+            (rho, h),
+        )
+    }
+
+    /// The fold's point on strip `s` at u (the solution `sign`), where it has one (see
+    /// [`Self::stretches`]): its distance from the motion's axis and its key.
+    fn at(&self, s: &Strip, u: f64, sign: f64) -> (f64, f64) {
+        let (a, b, c, (rho, h)) = self.coefs(s, u);
+        let x = (-c / a.hypot(b).max(self.tiny)).clamp(-1.0, 1.0);
+        let w = b.atan2(a) + sign * x.acos();
+        let body = self.sl.body;
+        let p = body.o + (body.e1 * w.cos() + body.e2 * w.sin()) * rho + body.a * h;
+        (self.sl.radius(&p), self.sl.key(&p, self.near))
+    }
+
+    /// The stretches of strip `s` (in u) whose circles hold points of the fold: where
+    /// A² + B² > C², their ends found from 64 samples' signs (256 round a disk) by bisection.
+    fn stretches(&self, s: &Strip) -> Vec<(f64, f64)> {
+        let n = match s {
+            Strip::Round { .. } => 256,
+            _ => 64,
+        };
+        let room = |u: f64| {
+            let (a, b, c, _) = self.coefs(s, u);
+            a * a + b * b - c * c - self.tiny * self.tiny
+        };
+        let at = |i: usize| i as f64 / n as f64;
+        let rs: Vec<f64> = (0..=n).map(|i| room(at(i))).collect();
+        let mut out = Vec::new();
+        let mut start = (rs[0] > 0.0).then_some(0.0);
+        for i in 0..n {
+            if (rs[i] > 0.0) == (rs[i + 1] > 0.0) {
+                continue;
+            }
+            // (The end kept on the stretch's side of the root.)
+            let inside = rs[i] > 0.0;
+            let (lo, hi) = super::math::bisect(at(i), at(i + 1), |m| (room(m) > 0.0) == inside);
+            let root = if inside { lo } else { hi };
+            match start.take() {
+                Some(from) => out.push((from, root)),
+                None => start = Some(root),
+            }
+        }
+        if let Some(from) = start {
+            out.push((from, 1.0));
+        }
+        out
+    }
+
+    /// Whether strip `strip`'s two solutions are one at u (the end of a stretch of it).
+    fn merges(&self, strip: usize, u: f64) -> bool {
+        let (a, b, c, _) = self.coefs(&self.strips[strip], u);
+        let m = a.hypot(b);
+        m > self.tiny && 1.0 - c.abs() / m < 1e-9
+    }
+
+    /// The (distance, key) of trace `t` at u.
+    fn rq(&self, t: &Trace, u: f64) -> (f64, f64) {
+        match *t {
+            Trace::Fold { strip, sign } => self.at(&self.strips[strip], u, sign),
+            Trace::Line { a, b } => (a.0 + (b.0 - a.0) * u, a.1 + (b.1 - a.1) * u),
+        }
+    }
+
+    /// The fold's traces: each stretch of each strip, both solutions; and for a strip that is
+    /// all fold (a flat face square to a turn's axis: the equation vanishes all over it) the
+    /// straight stretch its image is, between its outer circle's nearest and farthest points.
+    fn traces(&self, turn: bool) -> Vec<(Trace, f64, f64)> {
+        let mut out = Vec::new();
+        for (si, s) in self.strips.iter().enumerate() {
+            let stretches = self.stretches(s);
+            if stretches.is_empty()
+                && turn
+                && let Strip::Edge { a, b, .. } = *s
+            {
+                let all_fold = [0.0, 0.5, 1.0].iter().all(|&u| {
+                    let (ca, cb, cc, _) = self.coefs(s, u);
+                    ca.hypot(cb) <= self.tiny && cc.abs() <= self.tiny
+                });
+                if all_fold {
+                    let body = self.sl.body;
+                    let (rho, h) = if a.0.abs() > b.0.abs() { a } else { b };
+                    let centre = body.o + body.a * h;
+                    let d = self.sl.radius(&centre);
+                    let q = self.sl.key(&centre, self.near);
+                    out.push((
+                        Trace::Line {
+                            a: ((d - rho.abs()).abs(), q),
+                            b: (d + rho.abs(), q),
+                        },
+                        0.0,
+                        1.0,
+                    ));
+                }
+            }
+            for (u0, u1) in stretches {
+                if u1 > u0 {
+                    for sign in [1.0, -1.0] {
+                        out.push((Trace::Fold { strip: si, sign }, u0, u1));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The polyline of trace `t` over [u0, u1]: thirty-two stretches, each halved until its
+    /// middle is within `dev` of its chord's and the chord no longer than `longest`. None
+    /// past 60 000 points.
+    fn polyline(
+        &self,
+        t: &Trace,
+        (u0, u1): (f64, f64),
+        p2: &dyn Fn((f64, f64)) -> P2,
+        dev: f64,
+        longest: f64,
+    ) -> Option<(Vec<f64>, Vec<P2>)> {
+        let x = |u: f64| p2(self.rq(t, u));
+        const START: usize = 32;
+        let (mut us, mut xs) = (vec![u0], vec![x(u0)]);
+        for i in 0..START {
+            let at = |j: usize| u0 + (u1 - u0) * j as f64 / START as f64;
+            let (a, b) = (at(i), if i + 1 == START { u1 } else { at(i + 1) });
+            let mut stack = vec![(a, x(a), b, x(b), 0u32)];
+            while let Some((a, xa, b, xb, depth)) = stack.pop() {
+                let m = 0.5 * (a + b);
+                let xm = x(m);
+                let bow = (xm - nalgebra::center(&xa, &xb)).norm();
+                if depth >= 40 || (bow <= dev && (xb - xa).norm() <= longest) {
+                    us.push(b);
+                    xs.push(xb);
+                } else {
+                    stack.push((m, xm, b, xb, depth + 1));
+                    stack.push((a, xa, m, xm, depth + 1));
+                }
+                if us.len() > 60_000 {
+                    return None;
+                }
+            }
+        }
+        Some((us, xs))
+    }
+
+    /// Exact points of the piece `segs` of the outline, as many as the B-spline through them
+    /// needs to keep within `tol` of the outline: six stretches a seg to start, then, round
+    /// by round, the trace's point midway (in u) between two neighbours wherever the spline
+    /// is farther than half of `tol` from it. `first` is the piece's first point where the
+    /// piece before ends on it. None past 4000 points.
+    fn sampled(
+        &self,
+        segs: &[Seg],
+        p2: &dyn Fn((f64, f64)) -> P2,
+        tol: f64,
+        first: Option<(f64, f64)>,
+    ) -> Option<Vec<(f64, f64)>> {
+        struct Node {
+            seg: usize,
+            u: f64,
+            rq: (f64, f64),
+            x: P3,
+        }
+        let node = |seg: usize, u: f64| {
+            let rq = self.rq(&segs[seg].trace, u);
+            let x = p2(rq);
+            Node {
+                seg,
+                u,
+                rq,
+                x: P3::new(x.x, x.y, 0.0),
+            }
+        };
+        let mut nodes: Vec<Node> = Vec::new();
+        for (si, sg) in segs.iter().enumerate() {
+            const START: usize = 6;
+            for j in (if si == 0 { 0 } else { 1 })..=START {
+                let u = if j == START {
+                    sg.u1
+                } else {
+                    sg.u0 + (sg.u1 - sg.u0) * j as f64 / START as f64
+                };
+                nodes.push(node(si, u));
+            }
+        }
+        if let Some(rq) = first {
+            let x = p2(rq);
+            nodes[0].rq = rq;
+            nodes[0].x = P3::new(x.x, x.y, 0.0);
+        }
+        let size = nodes.iter().fold(tol, |m, n| m.max(n.x.coords.norm()));
+        let apart = 1e-12 * size;
+        nodes.dedup_by(|b, a| (b.x - a.x).norm() <= apart);
+        if nodes.len() < 2 {
+            return None;
+        }
+        let debug = crate::native::env_flag!("CADRS_SWEEP_SOLID_DEBUG");
+        for round in 0..24 {
+            let pts: Vec<P3> = nodes.iter().map(|n| n.x).collect();
+            let (curve, params) = fit_through(&pts);
+            let mut add: Vec<(usize, Node)> = Vec::new();
+            for k in 0..nodes.len() - 1 {
+                let (a, b) = (&nodes[k], &nodes[k + 1]);
+                let from = if a.seg == b.seg { a.u } else { segs[b.seg].u0 };
+                let mid = node(b.seg, 0.5 * (from + b.u));
+                if (mid.x - a.x).norm() <= apart || (mid.x - b.x).norm() <= apart {
+                    continue;
+                }
+                // The spline's point nearest it, between the two.
+                let (t0, t1) = (params[k], params[k + 1]);
+                let mut t = 0.5 * (t0 + t1);
+                for _ in 0..4 {
+                    let (p, d1, d2) = curve.ders2(t);
+                    let r = p - mid.x;
+                    let den = d1.norm_squared() + r.dot(&d2);
+                    if den <= 0.0 {
+                        break;
+                    }
+                    t = (t - r.dot(&d1) / den).clamp(t0, t1);
+                }
+                if (curve.point(t) - mid.x).norm() > 0.5 * tol {
+                    add.push((k + 1, mid));
+                }
+            }
+            if debug {
+                eprintln!(
+                    "  fit round {round}: {} points, {} to add",
+                    nodes.len(),
+                    add.len()
+                );
+            }
+            if add.is_empty() {
+                break;
+            }
+            if nodes.len() + add.len() > 4000 {
+                return None;
+            }
+            for (k, n) in add.into_iter().rev() {
+                nodes.insert(k, n);
+            }
+        }
+        Some(nodes.iter().map(|n| n.rq).collect())
+    }
+}
+
+/// The B-spline of degree five through `pts` (of as high a degree as fewer points allow), with
+/// the points' parameters: the lengths along the curve between them. Chords for lengths keep
+/// an interpolant only to the fourth power of the points' spacing whatever its degree, so the
+/// lengths are taken along interpolants instead: along the cubic by chords, then along the
+/// quintic by those (each gains two powers; Floater and Surazhsky, "Parameterization for
+/// curve interpolation", 2006).
+fn fit_through(pts: &[P3]) -> (super::nurbs::NurbsCurve, Vec<f64>) {
+    let fit = |params: &[f64], degree: usize| {
+        super::nurbs::NurbsCurve::interpolate(pts, params, degree.min(pts.len() - 1), None, None)
+    };
+    let mut params = vec![0.0];
+    for w in pts.windows(2) {
+        params.push(params.last().expect("a parameter") + (w[1] - w[0]).norm());
+    }
+    if pts.len() < 4 {
+        return (fit(&params, 5), params);
+    }
+    // The lengths of a curve's stretches between the parameters (five-point Gauss-Legendre).
+    const GAUSS: [(f64, f64); 5] = [
+        (0.0, 0.568_888_888_888_888_9),
+        (-0.538_469_310_105_683_1, 0.478_628_670_499_366_5),
+        (0.538_469_310_105_683_1, 0.478_628_670_499_366_5),
+        (-0.906_179_845_938_664, 0.236_926_885_056_189_1),
+        (0.906_179_845_938_664, 0.236_926_885_056_189_1),
+    ];
+    let lengths = |c: &super::nurbs::NurbsCurve, params: &[f64]| -> Vec<f64> {
+        let mut out = vec![0.0];
+        for w in params.windows(2) {
+            let (mid, half) = (0.5 * (w[0] + w[1]), 0.5 * (w[1] - w[0]));
+            let len: f64 = GAUSS
+                .iter()
+                .map(|&(x, wt)| wt * c.ders2(mid + half * x).1.norm())
+                .sum::<f64>()
+                * half;
+            out.push(out.last().expect("a length") + len.max(f64::MIN_POSITIVE));
+        }
+        out
+    };
+    let cubic = fit(&params, 3);
+    let params = lengths(&cubic, &params);
+    let quintic = fit(&params, 5);
+    let params = lengths(&quintic, &params);
+    (fit(&params, 5), params)
+}
+
+/// The signed angle from `a` to `b` (counter-clockwise positive), in (−π, π].
+fn turn_from(a: &V2, b: &V2) -> f64 {
+    (a.x * b.y - a.y * b.x).atan2(a.dot(b))
+}
+
+/// The outline in closed form ([`Fold`]): the outer edge of the fold's image in the section's
+/// plane, as its closed loop of curves, counter-clockwise. The fold's traces are exact curves
+/// there; where two cross (found on their polylines, then solved on the curves themselves)
+/// the edge passes from one to the other, and it is followed from its point farthest along
+/// the plane's x, keeping what the body doesn't sweep on its right: at each crossing or
+/// meeting of traces the way that turns most to the right. So nothing is sliced, and the
+/// edge may double back in the key (a notch where one stretch of the fold crosses another,
+/// which the least distance on each slice would cut straight across). Each stretch between
+/// two corners is then exact points dense enough for its B-spline to keep within 2e-11 of the
+/// body's reach of the outline.
+///
+/// `c` is the motion's rise per radian (0 for a turn), `near` the key the body's keys are
+/// unwrapped about, `p2` the plane's point of a (distance, key), `keys` the body's keys' range
+/// as found by search (the outline's own must agree with it). None where the section isn't
+/// taken apart ([`Section::strips`]) or the edge can't be followed (the caller slices
+/// instead). With the curves, the greatest distance from the axis.
+fn exact_outline(
+    sl: &Slicer,
+    near: f64,
+    c: f64,
+    p2: &dyn Fn((f64, f64)) -> P2,
+    keys: (f64, f64),
+) -> Option<(Vec<Curve2>, f64)> {
+    let debug = crate::native::env_flag!("CADRS_SWEEP_SOLID_DEBUG");
+    let b = sl.body;
+    let strips = b.section.strips()?;
+    let lead = sl.z.cross(&(b.o - sl.origin)) + sl.z * c;
+    let size = strips.iter().fold(0.0f64, |m, s| {
+        [0.0, 0.5, 1.0].iter().fold(m, |m, &u| {
+            let ((rho, h), _) = s.at(u);
+            m.max(rho.abs()).max(h.abs())
+        })
+    });
+    let fold = Fold {
+        sl,
+        strips,
+        near,
+        lead,
+        zxa: sl.z.cross(&b.a),
+        tiny: 1e-12 * (lead.norm() + size),
+    };
+    let x_at = |t: &Trace, u: f64| p2(fold.rq(t, u));
+    // The traces as arcs with their polylines; one whose image is a point goes.
+    let reach = (b.o - sl.origin).norm() + 2.0 * size;
+    let (dev, longest) = (1e-6 * reach, reach / 64.0);
+    let vertex_gap = 1e-8 * reach;
+    let mut arcs: Vec<Arc> = Vec::new();
+    for (trace, u0, u1) in fold.traces(c == 0.0) {
+        let (us, xs) = fold.polyline(&trace, (u0, u1), p2, dev, longest)?;
+        let length: f64 = xs.windows(2).map(|w| (w[1] - w[0]).norm()).sum();
+        if length > vertex_gap {
+            arcs.push(Arc {
+                trace,
+                u0,
+                u1,
+                us,
+                xs,
+                events: Vec::new(),
+            });
+        }
+    }
+    if arcs.is_empty() {
+        return None;
+    }
+    // A trace's derivative by u (differenced over a thousandth of its polyline's step there).
+    let ddu = |a: &Arc, u: f64| -> V2 {
+        let k = a.us.partition_point(|&x| x < u).clamp(1, a.us.len() - 1);
+        let h = 1e-3 * (a.us[k] - a.us[k - 1]);
+        let (lo, hi) = ((u - h).max(a.u0), (u + h).min(a.u1));
+        (x_at(&a.trace, hi) - x_at(&a.trace, lo)) / (hi - lo)
+    };
+    // Where two arcs cross: every pair of polyline spans whose boxes (grown by the
+    // polylines' bow) meet and whose chords' lines meet near both, solved on the curves by
+    // Newton; kept where they cross at an angle.
+    struct Cross {
+        i: usize,
+        u: f64,
+        j: usize,
+        v: f64,
+        p: P2,
+    }
+    let mut spans: Vec<(f64, f64, f64, f64, usize, usize)> = Vec::new();
+    for (ai, a) in arcs.iter().enumerate() {
+        for k in 0..a.xs.len() - 1 {
+            let (p, q) = (a.xs[k], a.xs[k + 1]);
+            spans.push((
+                p.x.min(q.x) - 2.0 * dev,
+                p.x.max(q.x) + 2.0 * dev,
+                p.y.min(q.y) - 2.0 * dev,
+                p.y.max(q.y) + 2.0 * dev,
+                ai,
+                k,
+            ));
+        }
+    }
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut crosses: Vec<Cross> = Vec::new();
+    for (n, s) in spans.iter().enumerate() {
+        for t in &spans[n + 1..] {
+            if t.0 > s.1 {
+                break;
+            }
+            if t.2 > s.3 || t.3 < s.2 {
+                continue;
+            }
+            let ((i, k), (j, l)) = ((s.4, s.5), (t.4, t.5));
+            if i == j && k.abs_diff(l) <= 1 {
+                continue;
+            }
+            let (a, c2) = (&arcs[i], &arcs[j]);
+            let (p0, p1, q0, q1) = (a.xs[k], a.xs[k + 1], c2.xs[l], c2.xs[l + 1]);
+            let (d, e) = (p1 - p0, q1 - q0);
+            let den = d.x * e.y - d.y * e.x;
+            if den.abs() <= 1e-14 * d.norm() * e.norm() {
+                continue;
+            }
+            let w = q0 - p0;
+            let (ss, tt) = ((w.x * e.y - w.y * e.x) / den, (w.x * d.y - w.y * d.x) / den);
+            if !(-0.5..=1.5).contains(&ss) || !(-0.5..=1.5).contains(&tt) {
+                continue;
+            }
+            // Newton on the curves, within a span either side.
+            let win =
+                |a: &Arc, k: usize| (a.us[k.saturating_sub(1)], a.us[(k + 2).min(a.us.len() - 1)]);
+            let ((ulo, uhi), (vlo, vhi)) = (win(a, k), win(c2, l));
+            let mut u = (a.us[k] + (a.us[k + 1] - a.us[k]) * ss).clamp(ulo, uhi);
+            let mut v = (c2.us[l] + (c2.us[l + 1] - c2.us[l]) * tt).clamp(vlo, vhi);
+            let mut found = None;
+            for _ in 0..40 {
+                let f = x_at(&a.trace, u) - x_at(&c2.trace, v);
+                let (du, dv) = (ddu(a, u), ddu(c2, v));
+                let det = -du.x * dv.y + du.y * dv.x;
+                if f.norm() <= 1e-12 * reach {
+                    let sin = det.abs() / (du.norm() * dv.norm()).max(f64::MIN_POSITIVE);
+                    if sin > 1e-7 {
+                        found = Some(x_at(&a.trace, u));
+                    }
+                    break;
+                }
+                if det.abs() <= 1e-300 {
+                    break;
+                }
+                // [du, −dv] (δu, δv) = −f.
+                let su = (f.x * dv.y - f.y * dv.x) / det;
+                let sv = (du.x * -f.y + du.y * f.x) / det;
+                u = (u + su).clamp(ulo, uhi);
+                v = (v + sv).clamp(vlo, vhi);
+            }
+            let Some(p) = found else {
+                continue;
+            };
+            // (One trace through one point at two of its own parameters, not at one.)
+            if i == j && (u - v).abs() <= 1e-9 * (a.u1 - a.u0) {
+                continue;
+            }
+            if crosses.iter().any(|x| {
+                (x.p - p).norm() <= vertex_gap && ((x.i, x.j) == (i, j) || (x.i, x.j) == (j, i))
+            }) {
+                continue;
+            }
+            crosses.push(Cross { i, u, j, v, p });
+        }
+    }
+    // The vertices: the arcs' ends, those at one point together, and the crossings.
+    let mut vertices: Vec<(P2, Vec<(usize, f64)>)> = Vec::new();
+    for ai in 0..arcs.len() {
+        for u in [arcs[ai].u0, arcs[ai].u1] {
+            let p = x_at(&arcs[ai].trace, u);
+            // Where a strip's two solutions merge (its stretch's end), its two arcs end on
+            // one point of one smooth curve; found there each is only good to the square
+            // root of the rounding (along the curve, not off it), so they are joined by what
+            // they are, not by where they come out.
+            let twin = match arcs[ai].trace {
+                Trace::Fold { strip, sign } if fold.merges(strip, u) => {
+                    vertices.iter().position(|(_, at)| {
+                        at.iter().any(|&(aj, uj)| {
+                            uj == u
+                                && matches!(arcs[aj].trace, Trace::Fold { strip: s2, sign: g2 }
+                                    if s2 == strip && g2 == -sign)
+                        })
+                    })
+                }
+                _ => None,
+            };
+            let near_by = || {
+                vertices
+                    .iter()
+                    .position(|(q, _)| (q - p).norm() <= vertex_gap)
+            };
+            let v = match twin.or_else(near_by) {
+                Some(v) => v,
+                None => {
+                    vertices.push((p, Vec::new()));
+                    vertices.len() - 1
+                }
+            };
+            vertices[v].1.push((ai, u));
+            arcs[ai].events.push((u, v));
+        }
+    }
+    // (A crossing found where arcs end on each other is that meeting, already a vertex: only
+    // an arc passing through it that isn't yet there is added to it.)
+    for x in &crosses {
+        let v = match vertices
+            .iter()
+            .position(|(q, _)| (q - x.p).norm() <= vertex_gap)
+        {
+            Some(v) => v,
+            None => {
+                vertices.push((x.p, Vec::new()));
+                vertices.len() - 1
+            }
+        };
+        for (ai, u) in [(x.i, x.u), (x.j, x.v)] {
+            let there = vertices[v].1.iter().any(|&(aj, uj)| {
+                aj == ai
+                    && (x_at(&arcs[ai].trace, uj) - x_at(&arcs[ai].trace, u)).norm() <= vertex_gap
+            });
+            if !there {
+                vertices[v].1.push((ai, u));
+                arcs[ai].events.push((u, v));
+            }
+        }
+    }
+    for a in arcs.iter_mut() {
+        a.events.sort_by(|p, q| p.0.total_cmp(&q.0));
+    }
+    if debug {
+        for (k, a) in arcs.iter().enumerate() {
+            let (p, q) = (a.xs[0], a.xs[a.xs.len() - 1]);
+            eprintln!(
+                "  arc {k}: {} u {:.6}..{:.6} from ({:.6}, {:.6}) to ({:.6}, {:.6}), {} points, events {:?}",
+                match a.trace {
+                    Trace::Fold { strip, sign } => format!("strip {strip} sign {sign}"),
+                    Trace::Line { .. } => "line".to_string(),
+                },
+                a.u0,
+                a.u1,
+                p.x,
+                p.y,
+                q.x,
+                q.y,
+                a.us.len(),
+                a.events.iter().map(|e| e.1).collect::<Vec<_>>()
+            );
+        }
+        eprintln!(
+            "exact outline: {} arcs ({} polyline points), {} crossings, {} vertices",
+            arcs.len(),
+            arcs.iter().map(|a| a.us.len()).sum::<usize>(),
+            crosses.len(),
+            vertices.len()
+        );
+    }
+    // The next event along an arc from u, the way `way` (±1): its parameter and its vertex.
+    let next = |ai: usize, u: f64, way: f64| -> Option<(f64, usize)> {
+        let ev = &arcs[ai].events;
+        if way > 0.0 {
+            ev.iter().copied().find(|e| e.0 > u)
+        } else {
+            ev.iter().rev().copied().find(|e| e.0 < u)
+        }
+    };
+    // The direction an arc leaves u in, the way `way`: to a point of it a little ahead (no
+    // farther than half way to its next event, nor than a hundred-thousandth of the reach).
+    let ahead = 1e-5 * reach;
+    let leaving = |ai: usize, u: f64, way: f64| -> Option<V2> {
+        let (un, _) = next(ai, u, way)?;
+        let a = &arcs[ai];
+        let from = x_at(&a.trace, u);
+        let mut ul = u + 0.5 * (un - u);
+        for _ in 0..80 {
+            if (x_at(&a.trace, ul) - from).norm() <= ahead {
+                break;
+            }
+            ul = u + 0.5 * (ul - u);
+        }
+        (x_at(&a.trace, ul) - from).try_normalize(1e-300)
+    };
+    // From the point farthest along x, up it (what isn't swept on the right).
+    let (mut start_arc, mut start_k, mut best) = (0usize, 0usize, f64::NEG_INFINITY);
+    for (ai, a) in arcs.iter().enumerate() {
+        for (k, p) in a.xs.iter().enumerate() {
+            if p.x > best {
+                (start_arc, start_k, best) = (ai, k, p.x);
+            }
+        }
+    }
+    let sa = &arcs[start_arc];
+    let (klo, khi) = (
+        start_k.saturating_sub(1),
+        (start_k + 1).min(sa.us.len() - 1),
+    );
+    let start_u = golden_max(&|u| x_at(&sa.trace, u).x, sa.us[klo], sa.us[khi]).0;
+    // (Off its events: a start on one would be a vertex to leave, not a point to pass.)
+    let start_u = {
+        let clear = |u: f64| {
+            sa.events
+                .iter()
+                .all(|e| (e.0 - u).abs() > 1e-9 * (sa.u1 - sa.u0))
+        };
+        if clear(start_u) {
+            start_u
+        } else {
+            let (lo, hi) = (sa.us[klo], sa.us[khi]);
+            [0.5 * (start_u + lo), 0.5 * (start_u + hi)]
+                .into_iter()
+                .find(|&u| clear(u))?
+        }
+    };
+    if debug {
+        eprintln!(
+            "exact outline: starts on arc {start_arc} at u {start_u:.6}, ({:.6}, {:.6})",
+            x_at(&sa.trace, start_u).x,
+            x_at(&sa.trace, start_u).y
+        );
+    }
+    let up = V2::new(0.0, 1.0);
+    let start_way = [1.0, -1.0]
+        .into_iter()
+        .filter_map(|w| Some((w, leaving(start_arc, start_u, w)?.dot(&up))))
+        .max_by(|p, q| p.1.total_cmp(&q.1))?
+        .0;
+    // The walk: runs along arcs, each with whether it starts at a corner.
+    let mut runs: Vec<(Seg, bool)> = Vec::new();
+    let (mut ai, mut u, mut way) = (start_arc, start_u, start_way);
+    let mut corner = false;
+    let limit = 8 * (vertices.len() + arcs.len()) + 16;
+    let mut closed = false;
+    for step in 0..limit {
+        let (un, v) = next(ai, u, way)?;
+        // Back at the start, on its arc the way it was left?
+        let passes = ai == start_arc
+            && way == start_way
+            && step > 0
+            && (start_u - u) * way > 0.0
+            && (un - start_u) * way >= 0.0;
+        let to = if passes { start_u } else { un };
+        runs.push((
+            Seg {
+                trace: arcs[ai].trace,
+                u0: u,
+                u1: to,
+            },
+            corner,
+        ));
+        if passes {
+            closed = true;
+            break;
+        }
+        // At the vertex: every way out of it but the way back, the one turning most to the
+        // right of the way in.
+        let coming = -leaving(ai, un, -way)?;
+        let mut pick: Option<(f64, usize, f64, f64)> = None;
+        for &(aj, uj) in &vertices[v].1 {
+            for w in [1.0, -1.0] {
+                if aj == ai && uj == un && w == -way {
+                    continue;
+                }
+                let Some(d) = leaving(aj, uj, w) else {
+                    continue;
+                };
+                let turn = turn_from(&coming, &d);
+                // (Not straight back along a trace lying on this one.)
+                if turn.abs() > PI - 1e-6 {
+                    continue;
+                }
+                if pick.is_none_or(|p| turn < p.0) {
+                    pick = Some((turn, aj, uj, w));
+                }
+            }
+        }
+        let Some((turn, aj, uj, w)) = pick else {
+            if debug {
+                eprintln!("exact outline: a dead end at {:?}", vertices[v].0);
+            }
+            return None;
+        };
+        if debug && step < 60 {
+            eprintln!(
+                "  walk {step}: arc {ai} {u:.6} -> {un:.6} to vertex {v} at ({:.6}, {:.6}); turns {turn:.4} onto arc {aj} at {uj:.6} way {w}",
+                vertices[v].0.x, vertices[v].0.y
+            );
+        }
+        corner = turn.abs() > 0.02;
+        (ai, u, way) = (aj, uj, w);
+    }
+    if !closed {
+        if debug {
+            eprintln!("exact outline: the edge doesn't close in {limit} steps");
+        }
+        return None;
+    }
+    // Pieces between corners: from a corner where there is one, else cut at the start and
+    // at the run half way round (a smooth closed outline: two splines).
+    runs.retain(|(s, _)| s.u0 != s.u1);
+    if runs.is_empty() {
+        return None;
+    }
+    match runs.iter().position(|r| r.1) {
+        Some(k) => runs.rotate_left(k),
+        None => {
+            runs[0].1 = true;
+            let half = runs.len() / 2;
+            if half > 0 {
+                runs[half].1 = true;
+            } else {
+                // One run all the way round: halved.
+                let (s, _) = runs[0];
+                let mid = 0.5 * (s.u0 + s.u1);
+                runs = vec![(Seg { u1: mid, ..s }, true), (Seg { u0: mid, ..s }, true)];
+            }
+        }
+    }
+    let mut pieces: Vec<Vec<Seg>> = Vec::new();
+    for (s, corner) in &runs {
+        if *corner || pieces.is_empty() {
+            pieces.push(Vec::new());
+        }
+        pieces.last_mut()?.push(*s);
+    }
+    let tol = 2e-11 * reach;
+    let mut sides: Vec<Vec<(f64, f64)>> = Vec::new();
+    for segs in &pieces {
+        let first = sides.last().and_then(|p| p.last().copied());
+        sides.push(fold.sampled(segs, p2, tol, first)?);
+    }
+    // Closed: the last piece ends on the first's first point.
+    let head = *sides.first()?.first()?;
+    *sides.last_mut()?.last_mut()? = head;
+    // The outline's keys must be the body's, and it must run counter-clockwise.
+    let all = || sides.iter().flatten();
+    let (qlo, qhi) = all().fold((f64::INFINITY, f64::NEG_INFINITY), |m, p| {
+        (m.0.min(p.1), m.1.max(p.1))
+    });
+    let span = keys.1 - keys.0;
+    let pts: Vec<P2> = all().map(|&rq| p2(rq)).collect();
+    let area: f64 = (0..pts.len())
+        .map(|k| {
+            let (p, q) = (pts[k], pts[(k + 1) % pts.len()]);
+            0.5 * (p.x * q.y - q.x * p.y)
+        })
+        .sum();
+    if debug {
+        eprintln!(
+            "exact outline: {} pieces of {:?} points; keys {qlo}..{qhi} (the body's {keys:?}); area {area}",
+            sides.len(),
+            sides.iter().map(|p| p.len()).collect::<Vec<_>>()
+        );
+    }
+    if (qlo - keys.0).abs() > 1e-4 * span || (qhi - keys.1).abs() > 1e-4 * span || !(area > 0.0) {
+        return None;
+    }
+    if debug {
+        // Against the slices' own search at fifteen keys: where the outline's points (as a
+        // polygon in distance and key) cross each, their greatest and least distance.
+        let poly: Vec<(f64, f64)> = all().copied().collect();
+        let (mut far_off, mut near_off) = (0.0f64, 0.0f64);
+        for i in 1..16 {
+            let q = keys.0 + span * i as f64 / 16.0;
+            let (mut lo_r, mut hi_r) = (f64::INFINITY, f64::NEG_INFINITY);
+            for k in 0..poly.len() {
+                let (p, n) = (poly[k], poly[(k + 1) % poly.len()]);
+                if (p.1 <= q) != (n.1 <= q) {
+                    let r = p.0 + (n.0 - p.0) * (q - p.1) / (n.1 - p.1);
+                    lo_r = lo_r.min(r);
+                    hi_r = hi_r.max(r);
+                }
+            }
+            if let Some((v, _)) = sl.extreme(q, true, 0.0) {
+                far_off = far_off.max((hi_r - v).abs());
+            }
+            if let Some((v, _)) = sl.extreme(q, false, 0.0) {
+                near_off = near_off.max((lo_r - v).abs());
+            }
+        }
+        eprintln!(
+            "exact outline: off the slices' search by {far_off:.3e} (far) and {near_off:.3e} (near), the polygon's chords' sag included"
+        );
+    }
+    let far = all().map(|p| p.0).fold(0.0, f64::max);
+    let curves = sides
+        .iter()
+        .map(|side| {
+            // (A straight stretch stays a line.)
+            let ps: Vec<P3> = side
+                .iter()
+                .map(|&rq| {
+                    let p = p2(rq);
+                    P3::new(p.x, p.y, 0.0)
+                })
+                .collect();
+            let (a, z) = (ps[0], ps[ps.len() - 1]);
+            let chord = z - a;
+            let straight = ps.iter().all(|p| {
+                let w = p - a;
+                (w - chord * (w.dot(&chord) / chord.norm_squared().max(f64::MIN_POSITIVE))).norm()
+                    <= 1e-13 * reach
+            });
+            if straight {
+                return Curve2::Line {
+                    a: P2::new(a.x, a.y),
+                    b: P2::new(z.x, z.y),
+                    source: None,
+                };
+            }
+            let c = fit_through(&ps).0;
+            Curve2::Spline {
+                degree: c.degree,
+                knots: c.knots.clone(),
+                poles: c
+                    .cps
+                    .iter()
+                    .map(|h| P2::new(h.x / h.w, h.y / h.w))
+                    .collect(),
+                weights: vec![],
+                source: None,
+            }
+        })
+        .collect();
+    Some((curves, far))
 }
 
 /// An extreme slice: its key, and where it touches the body (its distance from the axis and the
@@ -574,21 +1564,931 @@ fn cut_torus_whole(
     {
         return Some(c);
     }
-    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
         eprintln!("swept cut: the torus's whole sweep wouldn't cut from the target");
     }
     None
 }
 
 /// [`crate::Kernel::sweep_solid`].
+/// A solid of revolution grown by a ball of radius `d`, exactly: its section grown by `d` in its
+/// half plane, then revolved. A ball grows into a ball, a torus into a torus; a convex polygon
+/// section with one edge along the axis (a cylinder's, a cone's, a frustum's) into its other
+/// edges moved out by `d`, a round of radius `d` at each corner (at the axis's ends only the
+/// part off the axis), and the axis between them. None for any other body.
+pub(crate) fn grown_revolved(b: &Body, d: f64) -> Option<Body> {
+    if !(d > 0.0) {
+        return None;
+    }
+    let rev = revolved(b)?;
+    let pt = |x: f64, y: f64| nalgebra::Point2::new(x, y);
+    let curves: Vec<Curve2> = match &rev.section {
+        Section::Disk { c, r } => {
+            // A ball's disc stays one about the axis; a torus's must stay off it.
+            if c.0 != 0.0 && c.0 <= r + d {
+                return None;
+            }
+            if c.0 == 0.0 {
+                // The half disc against the axis.
+                vec![
+                    Curve2::Arc {
+                        center: pt(0.0, c.1),
+                        radius: r + d,
+                        start_angle: -FRAC_PI_2,
+                        sweep: PI,
+                        source: None,
+                    },
+                    Curve2::Line {
+                        a: pt(0.0, c.1 + r + d),
+                        b: pt(0.0, c.1 - r - d),
+                        source: None,
+                    },
+                ]
+            } else {
+                vec![Curve2::Circle {
+                    center: pt(c.0, c.1),
+                    radius: r + d,
+                    source: None,
+                }]
+            }
+        }
+        Section::Polygon(cs) => {
+            let n = cs.len();
+            let size = cs
+                .iter()
+                .fold(1.0f64, |m, c| m.max(c.0.abs()).max(c.1.abs()));
+            let on_axis = |i: usize| cs[i % n].0.abs() <= 1e-9 * size;
+            // The one edge along the axis, i → i + 1 (counter-clockwise: running down it).
+            let axis: Vec<usize> = (0..n).filter(|&i| on_axis(i) && on_axis(i + 1)).collect();
+            let &[i] = axis.as_slice() else {
+                return None;
+            };
+            if (0..n).filter(|&j| on_axis(j)).count() != 2 {
+                return None;
+            }
+            let c = |j: usize| cs[j % n];
+            // Edge j's outward normal (to the right of a counter-clockwise boundary).
+            let normal = |j: usize| {
+                let (p, q) = (c(j), c(j + 1));
+                let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+                let l = dx.hypot(dy);
+                (dy / l, -dx / l)
+            };
+            // The axis edge runs down it (the section to its left, off the axis): c(i) is its
+            // top, c(i + 1) its bottom. The edges either side face away from the axis.
+            let (before, after) = (normal(i + n - 1), normal(i + 1));
+            if before.0 < -1e-12 || after.0 < -1e-12 {
+                return None;
+            }
+            let (top, bottom) = (c(i), c(i + 1));
+            if !(top.1 > bottom.1) {
+                return None;
+            }
+            let arc = |at: (f64, f64), a0: f64, a1: f64| {
+                let sweep = (a1 - a0).rem_euclid(TAU);
+                (sweep > 1e-12 && sweep < PI).then(|| Curve2::Arc {
+                    center: pt(at.0, at.1),
+                    radius: d,
+                    start_angle: a0,
+                    sweep,
+                    source: None,
+                })
+            };
+            let mut out = Vec::new();
+            // Round the bottom from straight down to the edge after it.
+            out.extend(arc(bottom, -FRAC_PI_2, after.1.atan2(after.0)));
+            // Each edge moved out, a round at each corner between them.
+            for k in 1..n {
+                let j = i + k;
+                let (nx, ny) = normal(j);
+                let (p, q) = (c(j), c(j + 1));
+                out.push(Curve2::Line {
+                    a: pt(p.0 + nx * d, p.1 + ny * d),
+                    b: pt(q.0 + nx * d, q.1 + ny * d),
+                    source: None,
+                });
+                if k < n - 1 {
+                    let (mx, my) = normal(j + 1);
+                    out.extend(arc(q, ny.atan2(nx), my.atan2(mx)));
+                }
+            }
+            // Round the top from the edge before it to straight up, then down the axis.
+            out.extend(arc(top, before.1.atan2(before.0), FRAC_PI_2));
+            out.push(Curve2::Line {
+                a: pt(0.0, top.1 + d),
+                b: pt(0.0, bottom.1 - d),
+                source: None,
+            });
+            out
+        }
+    };
+    let region = Region {
+        outer: Loop { curves },
+        holes: vec![],
+        source: Some(0),
+    };
+    let plane = Plane {
+        origin: rev.o,
+        x_dir: nalgebra::Unit::new_normalize(rev.e1),
+        normal: nalgebra::Unit::new_normalize(rev.e1.cross(&rev.a)),
+    };
+    let axis = Axis {
+        origin: rev.o,
+        dir: nalgebra::Unit::new_normalize(rev.a),
+    };
+    let mut k = NativeKernel::new();
+    let r = k
+        .revolve_with(
+            &Profile::new(plane, vec![region]),
+            &RevolveSpec::solid(axis, None),
+        )
+        .ok()?;
+    let body = (**k.get(*r.bodies.first()?).ok()?).clone();
+    (body.check().is_empty() && super::mass::body_volume(&body) > 0.0).then_some(body)
+}
+
+/// A torus or a ball turned a whole turn about an axis that misses it (a torus's own axis along
+/// the turn's): exactly the solid of revolution of its shadow on the half plane through the
+/// axis. The ball's shadow is its great circle's disc; the torus's a stadium, the band between
+/// its tube's nearest and farthest reach ended by the tube's half circles. None for any other
+/// body or motion.
+fn whole_turn_of_round(
+    k: &mut NativeKernel,
+    b: &Body,
+    steps: &[RigidStep],
+) -> Option<Result<OpResult>> {
+    let [RigidStep::Turn { axis, from, to }] = steps else {
+        return None;
+    };
+    if (to - from).abs() < TAU - tol::ANGULAR_FINE {
+        return None;
+    }
+    let [face] = b.faces.as_slice() else {
+        return None;
+    };
+    let z = axis.dir.into_inner();
+    let (o, round) = match &face.surf {
+        Surface::Torus { f, rmaj, rmin } if f.z.cross(&z).norm() < tol::ANGULAR_FINE => {
+            (f.o, (*rmaj, *rmin))
+        }
+        Surface::Sphere { f, r } => (f.o, (0.0, *r)),
+        _ => return None,
+    };
+    let (rmaj, rmin) = round;
+    let w = o - axis.origin;
+    let h = w.dot(&z);
+    let radial = w - z * h;
+    let d = radial.norm();
+    // The axis must clear the body by a margin (else the shadow reaches it, or wraps it).
+    if !(d > rmaj + rmin + tol::POINT.max(1e-9 * d)) {
+        return None;
+    }
+    let x = radial / d;
+    let pt = |a: f64, b: f64| nalgebra::Point2::new(a, b);
+    let curves = if rmaj == 0.0 {
+        vec![Curve2::Circle {
+            center: pt(d, h),
+            radius: rmin,
+            source: None,
+        }]
+    } else {
+        let (near, far) = (d - rmaj, d + rmaj);
+        vec![
+            Curve2::Line {
+                a: pt(near, h - rmin),
+                b: pt(far, h - rmin),
+                source: None,
+            },
+            Curve2::Arc {
+                center: pt(far, h),
+                radius: rmin,
+                start_angle: -FRAC_PI_2,
+                sweep: PI,
+                source: None,
+            },
+            Curve2::Line {
+                a: pt(far, h + rmin),
+                b: pt(near, h + rmin),
+                source: None,
+            },
+            Curve2::Arc {
+                center: pt(near, h),
+                radius: rmin,
+                start_angle: FRAC_PI_2,
+                sweep: PI,
+                source: None,
+            },
+        ]
+    };
+    let region = Region {
+        outer: Loop { curves },
+        holes: vec![],
+        source: Some(0),
+    };
+    // The half plane through the axis: sketch x out from it, y along it.
+    let plane = Plane {
+        origin: axis.origin,
+        x_dir: nalgebra::Unit::new_normalize(x),
+        normal: nalgebra::Unit::new_normalize(x.cross(&z)),
+    };
+    let whole = Axis {
+        origin: axis.origin,
+        dir: axis.dir,
+    };
+    Some(k.revolve_with(
+        &Profile::new(plane, vec![region]),
+        &RevolveSpec::solid(whole, None),
+    ))
+}
+
+/// The ellipsoid `body` is, as its centre and the linear map `m` taking the unit ball onto it
+/// about that centre (`c + m·x`, `m` symmetric), when its one face lies on an ellipsoid: a
+/// quadric fitted through points of the face, then every one of a finer grid of its points on
+/// it to 1e-10. (An affine map of a ball keeps no record of the ball: its face is a NURBS.)
+fn ellipsoid_of(b: &Body) -> Option<(P3, nalgebra::Matrix3<f64>)> {
+    let [face] = b.faces.as_slice() else {
+        return None;
+    };
+    if !matches!(face.surf, Surface::Nurbs(_)) || b.shells.len() != 1 || !b.shells[0].closed {
+        return None;
+    }
+    let ((u0, u1), (v0, v1)) = face.surf.param_box();
+    let grid = |n: usize| -> Vec<P3> {
+        let mut ps = Vec::with_capacity(n * n);
+        for i in 0..n {
+            for j in 0..n {
+                let u = u0 + (u1 - u0) * (i as f64 + 0.5) / n as f64;
+                let v = v0 + (v1 - v0) * (j as f64 + 0.37) / n as f64;
+                ps.push(face.surf.eval(u, v));
+            }
+        }
+        ps
+    };
+    let pts = grid(7);
+    // Scaled about the points' middle for conditioning.
+    let mid = P3::from(pts.iter().map(|p| p.coords).sum::<V3>() / pts.len() as f64);
+    let size = pts.iter().map(|p| (p - mid).norm()).fold(0.0, f64::max);
+    if !(size > tol::POINT) {
+        return None;
+    }
+    let row = |p: &P3| {
+        let q = (p - mid) / size;
+        [
+            q.x * q.x,
+            q.y * q.y,
+            q.z * q.z,
+            q.x * q.y,
+            q.y * q.z,
+            q.z * q.x,
+            q.x,
+            q.y,
+            q.z,
+            1.0,
+        ]
+    };
+    let a = nalgebra::DMatrix::from_fn(pts.len(), 10, |i, j| row(&pts[i])[j]);
+    let svd = (a.transpose() * &a).symmetric_eigen();
+    let (k, _) = svd
+        .eigenvalues
+        .iter()
+        .enumerate()
+        .min_by(|x, y| x.1.abs().total_cmp(&y.1.abs()))?;
+    let q = svd.eigenvectors.column(k);
+    let sym = nalgebra::Matrix3::new(
+        q[0],
+        q[3] / 2.0,
+        q[5] / 2.0,
+        q[3] / 2.0,
+        q[1],
+        q[4] / 2.0,
+        q[5] / 2.0,
+        q[4] / 2.0,
+        q[2],
+    );
+    let lin = V3::new(q[6], q[7], q[8]);
+    // (q - c)ᵀ A (q - c) = r in the scaled coordinates.
+    let c = -0.5 * sym.try_inverse()? * lin;
+    let r = c.dot(&(sym * c)) - q[9];
+    let a_n = sym / r;
+    let eig = a_n.symmetric_eigen();
+    if eig.eigenvalues.iter().any(|&l| !(l > 1e-12)) {
+        return None;
+    }
+    // m = A^(-1/2), back in model units.
+    let inv_sqrt = eig.eigenvectors
+        * nalgebra::Matrix3::from_diagonal(&eig.eigenvalues.map(|l| 1.0 / l.sqrt()))
+        * eig.eigenvectors.transpose();
+    let m = inv_sqrt * size;
+    let centre = mid + c * size;
+    let m_inv = m.try_inverse()?;
+    grid(13)
+        .iter()
+        .all(|p| ((m_inv * (p - centre)).norm() - 1.0).abs() < 1e-10)
+        .then_some((centre, m))
+}
+
+/// An ellipsoid slid: the unit ball slid along the slide mapped back (sweeping commutes with
+/// the ellipsoid's linear map), a capsule, mapped onto it exactly.
+fn slid_ellipsoid(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Result<OpResult>> {
+    let [RigidStep::Slide { from, to }] = steps else {
+        return None;
+    };
+    let (c, m) = ellipsoid_of(b)?;
+    let m_inv = m.try_inverse()?;
+    let ball = super::blend::ball_body(P3::origin(), 1.0).ok()?;
+    let id = k.insert(ball);
+    let slide = SolidMotion::Rigid {
+        steps: vec![RigidStep::Slide {
+            from: m_inv * from,
+            to: m_inv * to,
+        }],
+    };
+    let r = match sweep_solid(k, id, &slide) {
+        Ok(r) => r,
+        Err(e) => return Some(Err(e)),
+    };
+    let capsule = (**k.get(*r.bodies.first()?).ok()?).clone();
+    let mapped = super::affine::affine_body(&capsule, &Affine { m, t: c.coords });
+    Some(mapped.map(|body| {
+        let id = k.insert(body);
+        OpResult {
+            bodies: vec![id],
+            history: History::default(),
+        }
+    }))
+}
+
 pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> Result<OpResult> {
-    let b = (**k.get(body)?).clone();
+    // An endless turn or screw of a revolved body: its outline as fine as [`FINE_SLICES`], and
+    // where that builds nothing, as [`COARSE_SLICES`].
+    if matches!(
+        motion,
+        SolidMotion::Planar { .. }
+            | SolidMotion::Rigid { .. }
+            | SolidMotion::Climb { .. }
+            | SolidMotion::Path { .. }
+    ) {
+        return sweep_solid_at(k, body, motion);
+    }
+    // (Each tried only where the one before built nothing.)
+    let mut last = None;
+    for n in OUTLINES {
+        match with_slices(n, || sweep_solid_at(k, body, motion)) {
+            Ok(r) => return Ok(r),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.expect("an outline tried"))
+}
+
+/// An endless sweep's outline in closed form ([`exact_outline`]), where [`OUTLINE_SLICES`]
+/// asks for no slices.
+const EXACT: usize = 0;
+/// The outlines an endless sweep tries in turn, until one builds a solid (and, for a cut, one
+/// its boolean takes): in closed form, traced finely, traced coarsely.
+const OUTLINES: [usize; 3] = [EXACT, FINE_SLICES, COARSE_SLICES];
+
+/// How many slices an endless sweep's outline is traced on where it isn't had in closed form:
+/// the cubic B-spline through them is off the outline by the fourth power of their spacing, so
+/// four times the slices is 256 times nearer (a wheel turned round a rod: its volume to 1e-8,
+/// not 1e-6).
+const FINE_SLICES: usize = 1280;
+/// The slices of an outline whose finer trace builds no solid, or one a boolean can't take.
+const COARSE_SLICES: usize = 160;
+
+thread_local! {
+    static OUTLINE_SLICES: std::cell::Cell<usize> = const { std::cell::Cell::new(COARSE_SLICES) };
+}
+
+/// `f` with endless sweeps' outlines traced on `n` slices.
+fn with_slices<R>(n: usize, f: impl FnOnce() -> R) -> R {
+    let was = OUTLINE_SLICES.with(|s| s.replace(n));
+    let r = f();
+    OUTLINE_SLICES.with(|s| s.set(was));
+    r
+}
+
+/// A ball screwed about an axis (a turn and a slide along the turn's axis at once): everything
+/// within its radius of the arc of a helix its centre runs along, exactly, where the tube about
+/// the helix folds through itself (the helix curving tighter than the ball) or its turns
+/// overlap.
+///
+/// The solid's faces lie on the tube about the helix (the ball's great circle square to the
+/// helix, screwed along it) and on the ball at each end, and a point of those surfaces is on
+/// the solid exactly where nothing of the arc is nearer it than the ball's radius. So: the
+/// tube in short stretches and the two spheres, each cut along where the others cross it
+/// ([`super::boolean::imprint`]), the pieces kept whose inside point is the radius from the
+/// arc, and those sewn.
+fn screwed_ball(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Result<OpResult>> {
+    let (centre, r) = match b.faces.first().map(|f| &f.surf) {
+        Some(Surface::Sphere { f, r }) => (f.o, *r),
+        _ => return None,
+    };
+    let same = |s: &Surface| {
+        matches!(s, Surface::Sphere { f, r: q }
+            if (f.o - centre).norm() <= tol::POINT && (q - r).abs() <= tol::POINT)
+    };
+    if !b.faces.iter().all(|f| same(&f.surf)) {
+        return None;
+    }
+    let (axis, turn, slide) = match steps {
+        [
+            RigidStep::Turn { axis, from, to },
+            RigidStep::Slide { from: s0, to: s1 },
+        ]
+        | [
+            RigidStep::Slide { from: s0, to: s1 },
+            RigidStep::Turn { axis, from, to },
+        ] => (*axis, to - from, s1 - s0),
+        _ => return None,
+    };
+    let z = axis.dir.into_inner();
+    let rise = slide.dot(&z);
+    if turn <= 1e-9 || (slide - z * rise).norm() > tol::POINT {
+        return None;
+    }
+    let pose = |t: f64| {
+        let (q, d) = rigid_at(steps, t);
+        Affine {
+            m: q.into_inner(),
+            t: d,
+        }
+    };
+    let first = pose(0.0);
+    let start = first.point(&centre);
+    let foot = axis.origin + z * (start - axis.origin).dot(&z);
+    let a = (start - foot).norm();
+    if a <= 1e-6 * r {
+        return None;
+    }
+    // The helix: its radius a, rising c a radian.
+    let c = rise / turn;
+    let e = (start - foot) / a;
+    let ahead = z.cross(&e);
+    let tangent = (ahead * a + z * c).normalize();
+    let helix_at = |w: f64| foot + (e * w.cos() + ahead * w.sin()) * a + z * (c * w);
+    // How far a point is from the arc: the least over its samples, then by Newton on the
+    // distance's derivative from each sample that is a least among its neighbours.
+    let from_arc = |p: &P3| -> f64 {
+        const N: usize = 1440;
+        let d2 = |w: f64| (helix_at(w) - p).norm_squared();
+        let ds: Vec<f64> = (0..=N).map(|i| d2(turn * i as f64 / N as f64)).collect();
+        let mut best = ds[0].min(ds[N]);
+        for i in 0..=N {
+            let lo = if i == 0 { f64::INFINITY } else { ds[i - 1] };
+            let hi = if i == N { f64::INFINITY } else { ds[i + 1] };
+            if ds[i] <= lo && ds[i] <= hi {
+                let mut w = turn * i as f64 / N as f64;
+                for _ in 0..12 {
+                    let q = helix_at(w);
+                    let d1 = (-e * w.sin() + ahead * w.cos()) * a + z * c;
+                    let dd = -(e * w.cos() + ahead * w.sin()) * a;
+                    let (g, h) = ((q - p).dot(&d1), d1.norm_squared() + (q - p).dot(&dd));
+                    if h.abs() < 1e-14 {
+                        break;
+                    }
+                    w = (w - g / h).clamp(0.0, turn);
+                }
+                best = best.min(d2(w));
+            }
+        }
+        best.sqrt()
+    };
+    // The ball's great circle square to the helix at its start, in four arcs.
+    let plane = Plane {
+        origin: start,
+        x_dir: nalgebra::Unit::new_normalize(-e),
+        normal: nalgebra::Unit::new_normalize(tangent),
+    };
+    let o2 = nalgebra::Point2::new(0.0, 0.0);
+    // Where the helix curves tighter than the ball the tube folds: along the two lines where
+    // the circle is the helix's radius of curvature toward its centre the tube turns back, and
+    // the strip between them (nearer that centre) is inside the solid all along. The circle is
+    // cut there, and that strip left out.
+    let rho = (a * a + c * c) / a;
+    let fold = (rho < r * (1.0 - 1e-9)).then(|| (rho / r).acos());
+    let curves: Vec<Curve2> = match fold {
+        Some(f) => std::iter::once(Curve2::arc(o2, r, -f, 2.0 * f))
+            .chain((0..4).map(|i| {
+                let q = (TAU - 2.0 * f) / 4.0;
+                Curve2::arc(o2, r, f + q * i as f64, q)
+            }))
+            .collect(),
+        None => (0..4)
+            .map(|i| Curve2::arc(o2, r, FRAC_PI_2 * (i as f64 - 0.5), FRAC_PI_2))
+            .collect(),
+    };
+    // (In stretches of thirty degrees: short enough that one meets itself nowhere.)
+    let n = (turn / 30f64.to_radians()).ceil().max(1.0) as usize;
+    let step = turn / n as f64;
+    let debug = crate::native::env_flag!("CADRS_SWEEP_SOLID_DEBUG");
+    let made = (|| -> Result<Body> {
+        let region = Region {
+            outer: Loop { curves },
+            holes: vec![],
+            source: Some(0),
+        };
+        let path = helix_path(foot, z, e, ahead, a, TAU * c, step / TAU);
+        let prof = Profile::new(plane, vec![region]);
+        let regions = super::profile::regions(&prof)?;
+        let faces = super::profile::merge_regions(&regions)?;
+        let segs = super::sweep::path::path_segments(k, &path)?;
+        let helix = super::sweep::frames::Helix::new(foot, z, e, ahead, a, c, 0.0);
+        let (built, _) = super::sweep::frames::sweep_seg(
+            &faces,
+            &[],
+            plane,
+            &segs,
+            super::sweep::Frames::Control(SweepControl::None),
+            true,
+            Some(helix),
+        )?;
+        let wall: Vec<usize> = (0..built.body.faces.len())
+            .filter(|&f| !matches!(built.body.faces[f].surf, Surface::Plane { .. }))
+            .filter(|&f| {
+                let Some(((u0, u1), _)) = super::heal_split::face_uv_box(&built.body, f) else {
+                    return true;
+                };
+                let mid = (0.5 * (u0 + u1)).rem_euclid(TAU);
+                fold.is_none_or(|w| mid.min(TAU - mid) > w)
+            })
+            .collect();
+        let stretch = super::kernel::subset(&built.body, &wall, false);
+        let on = |i: usize| {
+            let w = step * i as f64;
+            let q = nalgebra::Rotation3::from_axis_angle(&axis.dir, w).into_inner();
+            Affine {
+                m: q,
+                t: axis.origin.coords - q * axis.origin.coords + z * (c * w),
+            }
+        };
+        // The sheets, a face each: the tube's stretches' and the two spheres'.
+        let all = |x: &Body| -> Vec<usize> { (0..x.faces.len()).collect() };
+        let mut sheets: Vec<Body> = Vec::new();
+        // (The stretch each of the tube's sheets is of.)
+        let mut of: Vec<Option<usize>> = Vec::new();
+        // (The end each of the spheres' sheets is at: whether the start.)
+        let mut end_of: Vec<Option<bool>> = Vec::new();
+        for i in 0..n {
+            let s = stretch.transformed(&on(i));
+            for f in 0..s.faces.len() {
+                sheets.push(super::kernel::subset(&s, &[f], false));
+                of.push(Some(i));
+                end_of.push(None);
+            }
+        }
+        // The balls' halves beyond the arc's ends: behind the helix's plane at its start, and
+        // that ball's other half screwed on to the end. (The halves toward the arc are inside
+        // the tube, which touches the spheres along the circles between.)
+        {
+            let disc = Region {
+                outer: Loop {
+                    curves: vec![
+                        Curve2::arc(o2, 1.5 * r, 0.0, PI),
+                        Curve2::arc(o2, 1.5 * r, PI, PI),
+                    ],
+                },
+                holes: vec![],
+                source: Some(0),
+            };
+            let mut scratch = NativeKernel::new();
+            let behind = scratch.extrude_with(
+                &Profile::new(plane, vec![disc]),
+                &ExtrudeSpec::blind(nalgebra::Unit::new_normalize(-tangent), 1.5 * r),
+            )?;
+            let behind = (**scratch.get(behind.bodies[0])?).clone();
+            let ball = b.transformed(&first);
+            let opts = super::boolean::BoolOptions::default();
+            let mut halves = Vec::new();
+            for op in [BoolOp::Intersect, BoolOp::Subtract] {
+                halves.push(super::boolean::boolean_bodies_with(&ball, &behind, op, opts)?.body);
+            }
+            for (place, at_start) in [(on(0), true), (on(n), false)] {
+                for half in &halves {
+                    for f in all(half) {
+                        if matches!(half.faces[f].surf, Surface::Sphere { .. }) {
+                            sheets
+                                .push(super::kernel::subset(half, &[f], false).transformed(&place));
+                            of.push(None);
+                            end_of.push(Some(at_start));
+                        }
+                    }
+                }
+            }
+        }
+        // The angle about the helix, d radians of its turn in from an end, of the point of
+        // the tube's circle there that is on that end's ball (and the circle's centre and
+        // axes): see below.
+        let leaving = |at_start: bool, branch: f64, d: f64| -> Option<(f64, P3, V3, V3)> {
+            let (w0, dir) = if at_start { (0.0, 1.0) } else { (turn, -1.0) };
+            let w = w0 + dir * d;
+            let es = e * w.cos() + ahead * w.sin();
+            let t = ((ahead * w.cos() - e * w.sin()) * a + z * c).normalize();
+            let (nn, bn) = (-es, t.cross(&-es));
+            let delta = helix_at(w) - helix_at(w0);
+            let (ca, cb) = (delta.dot(&nn), delta.dot(&bn));
+            let x = -delta.norm_squared() / (2.0 * r * ca.hypot(cb));
+            (x.abs() <= 1.0).then(|| {
+                let phi = cb.atan2(ca) + branch * x.acos();
+                ((phi + PI).rem_euclid(TAU) - PI, helix_at(w), nn, bn)
+            })
+        };
+        // The stretch at each end, where the fold shows: its face beside the fold's line ends
+        // not on that line but on the curve where the tube leaves the ball, which starts along
+        // the line (the two touch there), too near it to be cut from the face. So that face
+        // is made on the tube between the curve and its far side.
+        let mut made_whole = vec![false; sheets.len()];
+        if let Some(f) = fold {
+            let q = (TAU - 2.0 * f) / 4.0;
+            let per = stretch.faces.len();
+            for at_start in [true, false] {
+                for branch in [1.0, -1.0] {
+                    // (The branch that shows: its points no nearer the rest of the arc.)
+                    let shows =
+                        leaving(at_start, branch, 0.5 * step).is_some_and(|(phi, o, nn, bn)| {
+                            from_arc(&(o + (nn * phi.cos() + bn * phi.sin()) * r)) >= r - 1e-6
+                        });
+                    let Some((near, ..)) = leaving(at_start, branch, 1e-3) else {
+                        continue;
+                    };
+                    if !shows {
+                        continue;
+                    }
+                    let side = near.signum();
+                    let far = side * (f + q);
+                    const ACROSS: usize = 24;
+                    const ALONG: usize = 32;
+                    let across: Vec<f64> = (0..=ACROSS).map(|i| i as f64 / ACROSS as f64).collect();
+                    let mut rows = Vec::new();
+                    let mut at = Vec::new();
+                    for j in 0..=ALONG {
+                        let d = step * j as f64 / ALONG as f64;
+                        let Some((phi, o, nn, bn)) = leaving(at_start, branch, d.max(1e-9)) else {
+                            break;
+                        };
+                        let phi = if j == 0 { side * f } else { phi };
+                        let pts: Vec<P3> = across
+                            .iter()
+                            .map(|x| {
+                                let u = phi + (far - phi) * x;
+                                o + (nn * u.cos() + bn * u.sin()) * r
+                            })
+                            .collect();
+                        rows.push(super::nurbs::NurbsCurve::interpolate(
+                            &pts, &across, 3, None, None,
+                        ));
+                        at.push(d);
+                    }
+                    if rows.len() <= ALONG {
+                        continue;
+                    }
+                    let surf =
+                        Surface::Nurbs(std::sync::Arc::new(super::loft_build::skin(&rows, &at)));
+                    let Ok(sheet) = super::face_build::face_from_surface(&surf, None) else {
+                        continue;
+                    };
+                    // (The face it stands in for: the end's stretch's, on the fold's side.)
+                    let i = if at_start { 0 } else { n - 1 };
+                    let which = (0..per).find(|&x| {
+                        super::heal_split::face_uv_box(&stretch, x).is_some_and(|((u0, u1), _)| {
+                            let mid = (0.5 * (u0 + u1) + PI).rem_euclid(TAU) - PI;
+                            mid * side > 0.0 && mid.abs() < f + q
+                        })
+                    });
+                    if let Some(x) = which {
+                        if debug {
+                            eprintln!(
+                                "screwed ball: sheet {} made whole, from {:.4} to {far:.4}",
+                                i * per + x,
+                                side * f
+                            );
+                        }
+                        sheets[i * per + x] = sheet;
+                        made_whole[i * per + x] = true;
+                    }
+                }
+            }
+        }
+        // Where the tube leaves an end's ball the two cross along a curve that starts where
+        // they touch, too flat there for the search to find: but in closed form. The tube's
+        // circle at w is c(w) + r (cos φ N + sin φ B); its points r from the end's centre c₀
+        // are where Δ·N cos φ + Δ·B sin φ = −|Δ|²/2r, Δ = c(w) − c₀. The first two stretches
+        // from an end and that end's sphere are cut along it by a sheet of the rays from c₀
+        // through the curve, which crosses both squarely, in place of one another.
+        const GUIDED: usize = 2;
+        let mut guides: Vec<(Body, bool)> = Vec::new();
+        for at_start in [true, false] {
+            let c0 = helix_at(if at_start { 0.0 } else { turn });
+            let reach = (GUIDED.min(n) as f64) * step;
+            for branch in [1.0, -1.0] {
+                const ALONG: usize = 48;
+                // (From a little before the end to a little past the stretches, and not at
+                // the end itself, where every point of the circle is on the ball.)
+                let pts: Vec<P3> = (0..=ALONG)
+                    .map(|i| -0.06 + (reach + 0.12) * i as f64 / ALONG as f64)
+                    .filter(|d| d.abs() >= 2e-3)
+                    .filter_map(|d| leaving(at_start, branch, d))
+                    .map(|(phi, o, nn, bn)| o + (nn * phi.cos() + bn * phi.sin()) * r)
+                    .collect();
+                if pts.len() < 8 {
+                    continue;
+                }
+                let mut params = vec![0.0];
+                for w in pts.windows(2) {
+                    params.push(params.last().unwrap() + (w[1] - w[0]).norm());
+                }
+                let curve = super::nurbs::NurbsCurve::interpolate(&pts, &params, 3, None, None);
+                let ray = |h: &super::nurbs::H, f: f64| {
+                    let q = c0 + (super::nurbs::dehom(h) - c0) * f;
+                    super::nurbs::H::new(q.x, q.y, q.z, 1.0)
+                };
+                let surf = Surface::Nurbs(std::sync::Arc::new(super::nurbs::NurbsSurface {
+                    du: curve.degree,
+                    dv: 1,
+                    ku: curve.knots.clone(),
+                    kv: vec![0.0, 0.0, 1.0, 1.0],
+                    cps: curve
+                        .cps
+                        .iter()
+                        .map(|h| vec![ray(h, 0.75), ray(h, 1.25)])
+                        .collect(),
+                }));
+                if let Ok(sheet) = super::face_build::face_from_surface(&surf, None) {
+                    guides.push((sheet, at_start));
+                }
+            }
+        }
+        if debug {
+            eprintln!("screwed ball: {} guide sheets", guides.len());
+        }
+        // Whether sheet i is one an end's guides stand in for against sheet j: that end's
+        // sphere against the stretches next to it.
+        let ball_at = |i: usize| -> Option<bool> { end_of[i] };
+        let near_end = |i: usize, at_start: bool| -> bool {
+            of[i].is_some_and(|x| {
+                if at_start {
+                    x < GUIDED
+                } else {
+                    x + GUIDED >= n
+                }
+            })
+        };
+        let guided = |i: usize, j: usize| -> Option<bool> {
+            match (ball_at(i), ball_at(j)) {
+                (Some(end), None) if near_end(j, end) => Some(end),
+                (None, Some(end)) if near_end(i, end) => Some(end),
+                _ => None,
+            }
+        };
+        // A sheet's point inside a face of it.
+        let inside = |x: &Body, f: usize| -> Option<P3> {
+            let polys = super::classify::face_polygons(x, &x.faces[f]);
+            let uv = super::boolean::interior_points_of_polys(&polys)
+                .into_iter()
+                .next()?;
+            Some(x.faces[f].surf.eval(uv.x, uv.y))
+        };
+        // The sheets wholly inside the solid (every sample of theirs deeper than the samples
+        // lie apart: the distance changes no faster than the point moves) cut nothing seen
+        // and are left out.
+        let buried = |x: &Body| -> bool {
+            const M: usize = 10;
+            x.faces.iter().all(|f| {
+                let polys = super::classify::face_polygons(x, f);
+                let mut uv = Bbox::empty();
+                for q in polys.iter().flatten() {
+                    uv.add(&P3::new(q.x, q.y, 0.0));
+                }
+                if uv.is_empty() {
+                    return false;
+                }
+                let at = |i: usize, j: usize| {
+                    f.surf.eval(
+                        uv.min.x + (uv.max.x - uv.min.x) * i as f64 / M as f64,
+                        uv.min.y + (uv.max.y - uv.min.y) * j as f64 / M as f64,
+                    )
+                };
+                let mut gap: f64 = 0.0;
+                let mut shallow: f64 = 0.0;
+                for i in 0..=M {
+                    for j in 0..=M {
+                        let p = at(i, j);
+                        shallow = shallow.max(from_arc(&p));
+                        if i < M {
+                            gap = gap.max((at(i + 1, j) - p).norm());
+                        }
+                        if j < M {
+                            gap = gap.max((at(i, j + 1) - p).norm());
+                        }
+                    }
+                }
+                shallow < r - gap
+            })
+        };
+        let seen: Vec<bool> = sheets.iter().map(|x| !buried(x)).collect();
+        let boxes: Vec<Bbox> = sheets.iter().map(|x| x.bbox().grow(1e-6)).collect();
+        if debug {
+            eprintln!(
+                "screwed ball: {n} stretches, {} sheets, {} not buried",
+                sheets.len(),
+                seen.iter().filter(|s| **s).count()
+            );
+        }
+        let mut kept: Vec<Body> = Vec::new();
+        for i in 0..sheets.len() {
+            if !seen[i] {
+                continue;
+            }
+            // (By all the others it reaches at once: a crease crosses a face against two
+            // stretches of the turn beside it, and a cut by one alone ends inside the face.)
+            let mut others = Body::default();
+            for j in 0..sheets.len() {
+                // (Not the tube's own stretch or the ones next to it: the surface goes on
+                // through them, and the tube meets itself only a turn on or at its ends.)
+                let beside = matches!((of[i], of[j]), (Some(x), Some(y)) if x.abs_diff(y) <= 1);
+                if j != i
+                    && seen[j]
+                    && !beside
+                    && guided(i, j).is_none()
+                    && !(end_of[i].is_some() && end_of[i] == end_of[j])
+                    && boxes[i].overlaps(&boxes[j])
+                {
+                    others.append(&sheets[j]);
+                }
+            }
+            for (g, at_start) in &guides {
+                let mine = match ball_at(i) {
+                    Some(end) => end == *at_start,
+                    None => near_end(i, *at_start),
+                };
+                if mine && !made_whole[i] {
+                    others.append(g);
+                }
+            }
+            let cur = if others.faces.is_empty() {
+                sheets[i].clone()
+            } else {
+                match super::boolean::imprint(&sheets[i], &others, None) {
+                    Ok(out) => out.body,
+                    Err(e) => {
+                        if debug {
+                            eprintln!(
+                                "screwed ball: sheet {i} ({:?}) by {} faces: {e}",
+                                of[i],
+                                others.faces.len()
+                            );
+                        }
+                        sheets[i].clone()
+                    }
+                }
+            };
+            let on_it: Vec<usize> = (0..cur.faces.len())
+                .filter(|&f| inside(&cur, f).is_some_and(|p| from_arc(&p) >= r - 1e-6))
+                .collect();
+            if debug {
+                eprintln!(
+                    "screwed ball: sheet {i}: {} pieces, {} kept",
+                    cur.faces.len(),
+                    on_it.len()
+                );
+            }
+            if !on_it.is_empty() {
+                kept.push(super::kernel::subset(&cur, &on_it, false));
+            }
+        }
+        let mut whole = Body::default();
+        for x in &kept {
+            whole.append(x);
+        }
+        super::surfacing::sewn_solid(whole, 1e-5)
+    })();
+    if debug {
+        match &made {
+            Ok(t) => eprintln!("screwed ball: {} faces", t.faces.len()),
+            Err(e) => eprintln!("screwed ball: failed: {e}"),
+        }
+    }
+    Some(made.map(|body| OpResult {
+        bodies: vec![k.insert(body)],
+        history: History::default(),
+    }))
+}
+
+/// [`sweep_solid`], an endless sweep's outline on the slices [`with_slices`] set.
+fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> Result<OpResult> {
+    let b = std::sync::Arc::clone(k.get(body)?);
     if let SolidMotion::Planar { normal, steps } = motion {
         return super::sweep_planar::sweep_planar(k, &b, normal.into_inner(), steps);
     }
     // One slide, turn or screw of any solid: exactly, from its leading faces' sweeps (split
     // where its faces meet the motion); else meshed.
     if let SolidMotion::Rigid { steps } = motion {
+        if let Some(r) = whole_turn_of_round(k, &b, steps) {
+            return r;
+        }
+        if let Some(r) = slid_ellipsoid(k, &b, steps) {
+            return r;
+        }
         let mut exact = None;
         // A pipe slid: exactly, as everything within its radius of the strip its spine sweeps.
         if let [RigidStep::Slide { from, to }] = steps.as_slice()
@@ -606,9 +2506,7 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
         // (And a torus slid: where it leans far enough that its outline folds, its leading
         // faces' sweeps cross one another and still sew into a solid, one too large.)
         let mut as_torus = None;
-        if steps.len() >= 2
-            || slid_torus(&b, steps)
-            || std::env::var_os("CADRS_TUBE_FIRST").is_some()
+        if steps.len() >= 2 || slid_torus(&b, steps) || crate::native::env_flag!("CADRS_TUBE_FIRST")
         {
             as_torus = super::sweep_tube::torus(k, &b, &super::sweep_tube::Motion::Steps(steps));
             if let Some(Ok(r)) = as_torus {
@@ -618,8 +2516,25 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
         if (1..=2).contains(&steps.len()) {
             match super::sweep_faces::by_faces(k, &b, steps) {
                 Ok(r) => return Ok(r),
-                Err(e) => exact = Some(e),
+                Err(e) => {
+                    declined(format!("its faces' sweeps: {e}"));
+                    exact = Some(e);
+                }
             }
+        }
+        // A ball screwed: exactly, its tube and end balls trimmed where they pass through
+        // one another.
+        if exact.is_some()
+            && let Some(Ok(r)) = screwed_ball(k, &b, steps)
+        {
+            return Ok(r);
+        }
+        // A ball carried by any other motion: the pipe of its radius along its centre's path,
+        // a ball at each end, where that path nowhere curves tighter than the ball.
+        if exact.is_some()
+            && let Some(Ok(r)) = ball_along(k, &b, steps)
+        {
+            return Ok(r);
         }
         let place = |t: f64| rigid_at(steps, t);
         // A convex polyhedron whose contacts move over its faces: exactly, from its leading
@@ -731,12 +2646,101 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
             "screwing a solid that reaches half way round the screw's axis",
         ));
     }
-    let n = 160;
-    let ol = outline(&sl, lo, hi, n).ok_or_else(|| KernelError::InvalidResult {
-        op: "solid sweep",
-        why: "the body's outline has a slice it misses".into(),
-    })?;
-    if std::env::var_os("CADRS_SWEEP_SOLID_DEBUG").is_some() {
+    let n = OUTLINE_SLICES.with(|s| s.get());
+    // The section's plane: through the axis for a turn (x the distance, y the height); the plane
+    // square to it at height 0 for a screw (polar: distance, angle).
+    let x = any_perpendicular(&z);
+    let y = z.cross(&x);
+    let p2 = |(r, q): (f64, f64)| -> nalgebra::Point2<f64> {
+        if kk == 0.0 {
+            nalgebra::Point2::new(r, q)
+        } else {
+            nalgebra::Point2::new(r * q.cos(), r * q.sin())
+        }
+    };
+    // The outline in closed form where it can be had (and the finer trace is asked for: the
+    // coarser is what a boolean falls back on); else traced slice by slice.
+    let rise = if kk == 0.0 { 0.0 } else { 1.0 / kk };
+    let exact = (n == EXACT && !crate::native::env_flag!("CADRS_OUTLINE_SLICED"))
+        .then(|| exact_outline(&sl, near, rise, &p2, (lo.key, hi.key)))
+        .flatten();
+    let n = if n == EXACT { FINE_SLICES } else { n };
+    let (curves, reach) = match exact {
+        Some(found) => found,
+        None => {
+            let ol = outline(&sl, lo, hi, n).ok_or_else(|| KernelError::InvalidResult {
+                op: "solid sweep",
+                why: "the body's outline has a slice it misses".into(),
+            })?;
+            sliced_outline(&sl, &ol, &p2)
+        }
+    };
+    let region = Region {
+        outer: Loop { curves },
+        holes: vec![],
+        source: Some(0),
+    };
+    match span {
+        None => {
+            // The half plane through the axis: sketch x out from it, y along it.
+            let plane = Plane {
+                origin: axis.origin,
+                x_dir: nalgebra::Unit::new_normalize(x),
+                normal: nalgebra::Unit::new_normalize(x.cross(&z)),
+            };
+            k.revolve_with(
+                &Profile::new(plane, vec![region]),
+                &RevolveSpec::solid(axis, None),
+            )
+        }
+        Some((from, to)) => {
+            // The plane square to the axis at `from`, its sketch axes x and y; the region turned
+            // to where the screw has it there, then swept up the helix to `to`.
+            let turn = kk * from;
+            let (c, s) = (turn.cos(), turn.sin());
+            let (xr, yr) = (x * c + y * s, y * c - x * s);
+            let plane = Plane {
+                origin: axis.origin + z * from,
+                x_dir: nalgebra::Unit::new_normalize(xr),
+                normal: nalgebra::Unit::new_normalize(xr.cross(&yr)),
+            };
+            // The helix through a point of the region (its first pole's distance, at angle 0
+            // of the plane), rising to `to`.
+            let r0 = reach.max(tol::POINT);
+            let turns = (to - from) * kk / TAU;
+            let path = helix_path(plane.origin, z, xr, yr, r0, TAU / kk, turns);
+            // Swept by the screw's own motion (a path this short is too little of a helix for
+            // the sweep to recognise one).
+            let prof = Profile::new(plane, vec![region]);
+            let regions = super::profile::regions(&prof)?;
+            let faces = super::profile::merge_regions(&regions)?;
+            let segs = super::sweep::path::path_segments(k, &path)?;
+            let helix =
+                super::sweep::frames::Helix::new(plane.origin, z, xr, yr, r0, TAU / kk / TAU, 0.0);
+            let (built, _) = super::sweep::frames::sweep_seg(
+                &faces,
+                &[],
+                plane,
+                &segs,
+                super::sweep::Frames::Control(SweepControl::None),
+                true,
+                Some(helix),
+            )?;
+            Ok(super::features::Tagged::from_built(built).into_result(k))
+        }
+    }
+}
+
+/// The traced outline ([`outline`]) as its closed loop of curves in the section's plane, with
+/// its greatest distance from the axis: each side a cubic B-spline through its points (by the
+/// chords' square roots), piece by piece between its corners, the sides joined at the ends by
+/// the extreme slices' stretches where they don't meet.
+fn sliced_outline(
+    sl: &Slicer,
+    ol: &Outline,
+    p2: &dyn Fn((f64, f64)) -> nalgebra::Point2<f64>,
+) -> (Vec<Curve2>, f64) {
+    if crate::native::env_flag!("CADRS_SWEEP_SOLID_DEBUG") {
         for (name, side) in [("far", &ol.far), ("near", &ol.near)] {
             let mut turns: Vec<(f64, usize)> = Vec::new();
             for i in 1..side.len() - 1 {
@@ -753,19 +2757,6 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
             );
         }
     }
-    // The section's plane: through the axis for a turn (x the distance, y the height); the plane
-    // square to it at height 0 for a screw (polar: distance, angle).
-    let x = any_perpendicular(&z);
-    let y = z.cross(&x);
-    let p2 = |(r, q): (f64, f64)| -> nalgebra::Point2<f64> {
-        if kk == 0.0 {
-            nalgebra::Point2::new(r, q)
-        } else {
-            nalgebra::Point2::new(r * q.cos(), r * q.sin())
-        }
-    };
-    // Each side a cubic B-spline through its points (by chord length), the sides joined at the
-    // ends by the extreme slices' stretches where they don't meet.
     let fit = |pts: &[(f64, f64)]| -> Curve2 {
         let ps: Vec<P3> = pts
             .iter()
@@ -872,65 +2863,8 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
             source: None,
         });
     }
-    let region = Region {
-        outer: Loop { curves },
-        holes: vec![],
-        source: Some(0),
-    };
-    match span {
-        None => {
-            // The half plane through the axis: sketch x out from it, y along it.
-            let plane = Plane {
-                origin: axis.origin,
-                x_dir: nalgebra::Unit::new_normalize(x),
-                normal: nalgebra::Unit::new_normalize(x.cross(&z)),
-            };
-            k.revolve_with(
-                &Profile::new(plane, vec![region]),
-                &RevolveSpec::solid(axis, None),
-            )
-        }
-        Some((from, to)) => {
-            // The plane square to the axis at `from`, its sketch axes x and y; the region turned
-            // to where the screw has it there, then swept up the helix to `to`.
-            let turn = kk * from;
-            let (c, s) = (turn.cos(), turn.sin());
-            let (xr, yr) = (x * c + y * s, y * c - x * s);
-            let plane = Plane {
-                origin: axis.origin + z * from,
-                x_dir: nalgebra::Unit::new_normalize(xr),
-                normal: nalgebra::Unit::new_normalize(xr.cross(&yr)),
-            };
-            // The helix through a point of the region (its first pole's distance, at angle 0
-            // of the plane), rising to `to`.
-            let r0 = ol
-                .far
-                .iter()
-                .map(|p| p.0)
-                .fold(0.0, f64::max)
-                .max(tol::POINT);
-            let turns = (to - from) * kk / TAU;
-            let path = helix_path(plane.origin, z, xr, yr, r0, TAU / kk, turns);
-            // Swept by the screw's own motion (a path this short is too little of a helix for
-            // the sweep to recognise one).
-            let prof = Profile::new(plane, vec![region]);
-            let regions = super::profile::regions(&prof)?;
-            let faces = super::profile::merge_regions(&regions)?;
-            let segs = super::sweep::path::path_segments(k, &path)?;
-            let helix =
-                super::sweep::frames::Helix::new(plane.origin, z, xr, yr, r0, TAU / kk / TAU, 0.0);
-            let (built, _) = super::sweep::frames::sweep_seg(
-                &faces,
-                &[],
-                plane,
-                &segs,
-                super::sweep::Frames::Control(SweepControl::None),
-                true,
-                Some(helix),
-            )?;
-            Ok(super::features::Tagged::from_built(built).into_result(k))
-        }
-    }
+    let reach = ol.far.iter().map(|p| p.0).fold(0.0, f64::max);
+    (curves, reach)
 }
 
 /// A helix as rational quadratic pieces (sixteen a turn) about the axis through `o` along `z`,
@@ -1047,7 +2981,7 @@ fn contour(
     t0: web_time::Instant,
 ) -> Result<OpResult> {
     use rayon::prelude::*;
-    let prof = std::env::var("CADRS_PROFILE").is_ok();
+    let prof = crate::native::env_flag!("CADRS_PROFILE");
     let at = |i: usize, j: usize, l: usize| lo + V3::new(i as f64 * h, j as f64 * h, l as f64 * h);
     let idx = |i: usize, j: usize, l: usize| (l * n[1] + j) * n[0] + i;
     let ijl = |g: usize| (g % n[0], (g / n[0]) % n[1], g / (n[0] * n[1]));
@@ -1271,7 +3205,7 @@ pub fn offset_meshed(k: &mut NativeKernel, body: BodyId, distance: f64) -> Resul
             "The offset distance isn't finite".into(),
         ));
     }
-    let b = (**k.get(body)?).clone();
+    let b = std::sync::Arc::clone(k.get(body)?);
     let md =
         super::mesh_distance::MeshDistance::new(&b, 1e-3 * b.bbox().diagonal().max(tol::POINT))
             .ok_or(KernelError::Unsupported(
@@ -1617,7 +3551,7 @@ fn cut_in_pieces_where(
                         .ok()
                         .filter(|c| c.bodies.len() == 1 && (!checked || k.sound(c.bodies[0])))
                         .map(|c| c.bodies);
-                    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+                    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
                         eprintln!(
                             "cut in pieces: piece {i}: cut {:.1} ms, checked {:.1} ms",
                             (t_cut - t_swept).as_secs_f64() * 1e3,
@@ -1675,7 +3609,7 @@ fn cut_by_leads(
     steps: &[RigidStep],
 ) -> Option<OpResult> {
     use super::surface::Surface;
-    let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+    let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
     // (`CADRS_SWEEP_LEADS=0`: every half turn cut in turn, as without this, to compare.)
     if std::env::var("CADRS_SWEEP_LEADS").is_ok_and(|v| v == "0") {
         return None;
@@ -1691,7 +3625,7 @@ fn cut_by_leads(
     let lead = travel * TAU / angle.abs();
     let o = axis.origin;
     let height = |p: &P3| (p - o).dot(&z);
-    let t = (**k.get(target).ok()?).clone();
+    let t = std::sync::Arc::clone(k.get(target).ok()?);
     let size = t.bbox().diagonal().max(tol::POINT);
     let near = 1e-9 * size;
     if t.solids.len() != 1 || t.verts.is_empty() {
@@ -1888,7 +3822,63 @@ fn cut_by_pieces(
 ) -> Option<Vec<BodyId>> {
     // (Pieces that only touch glued first: one cut each group, none along a tangency.)
     let pieces = super::sweep_faces::glued_groups(k, pieces);
-    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+    if pieces.len() > 1 {
+        let groups = pieces.clone();
+        if let Some(r) = cut_by_groups(k, targets, pieces) {
+            return Some(r);
+        }
+        // The groups in other orders (each order a different body for each cut to meet: one
+        // that left a sliver another doesn't), up to six.
+        let n = groups.len();
+        let mut orders: Vec<Vec<usize>> = vec![(0..n).rev().collect()];
+        if n == 3 {
+            orders.extend([vec![1, 0, 2], vec![1, 2, 0], vec![0, 2, 1], vec![2, 0, 1]]);
+        }
+        for order in orders {
+            let ordered: Vec<Body> = order.iter().map(|&i| groups[i].clone()).collect();
+            if let Some(r) = cut_by_groups(k, targets, ordered) {
+                if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
+                    eprintln!("swept cut: the groups cut in the order {order:?}");
+                }
+                return Some(r);
+            }
+        }
+        // The groups united into one tool first, then cut at once: cut one after another, a
+        // group's start lies on the end the group before left in the target (a cap on a cap,
+        // the other way round), which the target then has to lose again; united, the caps
+        // meet as two solids face to face do, and the target never sees them.
+        declined("the sweep's pieces cut one after another");
+        let ids: Vec<BodyId> = groups.into_iter().map(|g| k.insert(g)).collect();
+        let united = k.boolean(crate::BoolOp::Union, ids[0], &ids[1..]);
+        for id in &ids {
+            k.release(*id);
+        }
+        if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
+            eprintln!(
+                "swept cut: the groups united: {:?}",
+                united
+                    .as_ref()
+                    .map(|u| u.bodies.iter().map(|&b| k.sound(b)).collect::<Vec<_>>())
+            );
+        }
+        let tool = united
+            .ok()
+            .filter(|u| u.bodies.len() == 1 && k.sound(u.bodies[0]))?;
+        let one = std::sync::Arc::clone(k.get(tool.bodies[0]).ok()?);
+        k.release(tool.bodies[0]);
+        return cut_by_groups(k, targets, vec![(*one).clone()]);
+    }
+    cut_by_groups(k, targets, pieces)
+}
+
+/// The bodies `targets` less each of `pieces` (glued groups) in turn; None when a cut fails or
+/// leaves a body that isn't sound.
+fn cut_by_groups(
+    k: &mut NativeKernel,
+    targets: &[BodyId],
+    pieces: Vec<Body>,
+) -> Option<Vec<BodyId>> {
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
         eprintln!("swept cut: {} groups of pieces", pieces.len());
     }
     let keep: Vec<BodyId> = targets.to_vec();
@@ -1917,7 +3907,11 @@ fn cut_by_pieces(
                     next.extend(c.bodies);
                 }
                 r => {
-                    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+                    match &r {
+                        Ok(_) => declined("a swept piece's cut left a body that isn't sound"),
+                        Err(e) => declined(format!("a swept piece's cut failed: {e}")),
+                    }
+                    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
                         match &r {
                             Ok(c) => eprintln!(
                                 "swept cut: a piece's cut isn't sound: {:?}",
@@ -1953,7 +3947,6 @@ fn cut_by_pieces(
     Some(acc)
 }
 
-/// [`crate::Kernel::cut_swept`].
 /// [`cut_swept`] at each of `copies` places of the tool a whole turn apart about the target's
 /// axis (the second turn's): a gear's every tooth space, cut by a motion that doesn't repeat
 /// (a face mill's roll). Generated exactly, one plug made and its copies subtracted together,
@@ -1975,7 +3968,7 @@ pub fn cut_swept_indexed(
             "an indexed cut by a motion of two turns",
         ));
     };
-    let b = (**k.get(tool)?).clone();
+    let b = std::sync::Arc::clone(k.get(tool)?);
     let _ = axis;
     match super::sweep_generate::cut(k, target, &b, steps, (copies > 1).then_some(copies)) {
         Some(r) => r,
@@ -1987,27 +3980,621 @@ pub fn cut_swept_indexed(
     }
 }
 
+/// `target` less what any tool fills carried upright along a path whose every move is clear
+/// above the target or straight along `up` (a drill's program: down a hole in pecks, up, over
+/// to the next): the moves on one line that follow one another fill what one slide does, the
+/// tool drawn from the lowest of them to the highest, and each such slide is cut on its own.
+/// None for a path with another move that reaches the target.
+fn cut_plunges(
+    k: &mut NativeKernel,
+    target: BodyId,
+    b: &Body,
+    path: &[crate::PathCurve],
+    up: V3,
+) -> Option<OpResult> {
+    let up = up.try_normalize(tol::TINY)?;
+    let segs = super::sweep::path::path_segments(k, path).ok()?;
+    let p0 = segs.first()?.start();
+    let near = tol::REL_POINT * b.bbox().diagonal().max(tol::POINT);
+    let height = |p: &P3| p.coords.dot(&up);
+    let corners = |bb: &Bbox| {
+        let bb = *bb;
+        (0..8).map(move |i| {
+            let pick = |k: usize| {
+                if i >> k & 1 == 0 {
+                    bb.min[k]
+                } else {
+                    bb.max[k]
+                }
+            };
+            P3::new(pick(0), pick(1), pick(2))
+        })
+    };
+    // (The tool's lowest point below its place on the path, and the target's top.)
+    let bottom = corners(&b.bbox())
+        .map(|c| (c - p0).dot(&up))
+        .fold(f64::INFINITY, f64::min);
+    let over = corners(&k.get(target).ok()?.bbox())
+        .map(|c| height(&c))
+        .fold(f64::NEG_INFINITY, f64::max);
+    // Each hole: where the tool stands lowest in it, and how far up it is drawn from there.
+    let mut holes: Vec<(P3, f64)> = Vec::new();
+    let mut open = false;
+    for s in &segs {
+        let (a, z) = (s.start(), s.end());
+        let (ha, hz) = (height(&a), height(&z));
+        let lowest = (0..=8)
+            .map(|i| height(&s.c.point(s.t0 + (s.t1 - s.t0) * i as f64 / 8.0)))
+            .fold(ha.min(hz), f64::min);
+        if lowest + bottom >= over - near {
+            open = false;
+            continue;
+        }
+        let d = z - a;
+        let straight = (0..=4).all(|i| {
+            let f = i as f64 / 4.0;
+            let t = if s.rev {
+                s.t1 + (s.t0 - s.t1) * f
+            } else {
+                s.t0 + (s.t1 - s.t0) * f
+            };
+            (s.c.point(t) - (a + d * f)).norm() <= near
+        });
+        if !straight || (d - up * d.dot(&up)).norm() > near {
+            return None;
+        }
+        let (low, high) = if ha <= hz { (a, hz) } else { (z, ha) };
+        match holes.last_mut().filter(|_| open) {
+            Some(h) => {
+                let top = (height(&h.0) + h.1).max(high);
+                if height(&low) < height(&h.0) {
+                    h.0 = low;
+                }
+                h.1 = top - height(&h.0);
+            }
+            None => holes.push((low, high - height(&low))),
+        }
+        open = true;
+    }
+    if holes.is_empty() {
+        return None;
+    }
+    let mut at = target;
+    let mut cut: Option<OpResult> = None;
+    for (low, rise) in holes {
+        let tool = k.insert(b.transformed(&Affine::translation(low - p0)));
+        let step = cut_swept(k, at, tool, &SolidMotion::slide(up * rise));
+        k.release(tool);
+        if at != target {
+            k.release(at);
+        }
+        match step {
+            Ok(r) if r.bodies.len() == 1 => {
+                at = r.bodies[0];
+                cut = Some(r);
+            }
+            Ok(r) => {
+                for id in r.bodies {
+                    k.release(id);
+                }
+                return None;
+            }
+            Err(_) => return None,
+        }
+    }
+    cut
+}
+
+/// `target` less what a flat end mill fills carried upright through a program: a path of
+/// level moves (lines and arcs at one height), moves straight along the mill's axis (plunges
+/// and rises) and moves clear above the target. At each depth the mill reaches, everything
+/// within its radius of a level run there ([`super::offset::prism::wire_region`], exact in
+/// lines and arcs) and the disc under each plunge are one flat figure, united in the plane;
+/// that figure extruded from the depth to above the target is all the mill fills there
+/// within the target, and is cut from it in one boolean. (A plunge or a rise fills only the
+/// disc at its foot and a column above the mill's own top; a move's sweep cut on its own cuts
+/// again most of what the move before it cut.) None for another tool or path, where the mill's
+/// top would come below the target's (the column would then count), or the cuts aren't sound.
+fn cut_end_mill_program(
+    k: &mut NativeKernel,
+    target: BodyId,
+    b: &Body,
+    path: &[crate::PathCurve],
+    up: V3,
+) -> Option<OpResult> {
+    use crate::{Curve2, Loop, Region};
+    let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
+    let up = up.try_normalize(tol::TINY)?;
+    let segs = super::sweep::path::path_segments(k, path).ok()?;
+    let p0 = segs.first()?.start();
+    // The mill: a cylinder about the line through the path's start along `up`, between two
+    // flat ends.
+    if b.faces.len() != 3 || b.solids.len() != 1 {
+        return None;
+    }
+    let size = b.bbox().diagonal().max(tol::POINT);
+    let near = tol::REL_POINT * size;
+    let along = |v: &V3| v.normalize().cross(&up).norm() < 1e-9;
+    let (mut ends, mut radius) = (Vec::new(), None);
+    for f in &b.faces {
+        match &f.surf {
+            Surface::Plane { f } if along(&f.x.cross(&f.y)) => ends.push((f.o - p0).dot(&up)),
+            Surface::Cylinder { f, r } if along(&f.z) => {
+                let d = f.o - p0;
+                if (d - up * d.dot(&up)).norm() > near {
+                    return None;
+                }
+                radius = Some(*r);
+            }
+            _ => return None,
+        }
+    }
+    let (radius, [e0, e1]) = (radius?, <[f64; 2]>::try_from(ends).ok()?);
+    let (bottom, top) = (e0.min(e1), e0.max(e1));
+    let height = |p: &P3| p.coords.dot(&up);
+    let bb = k.get(target).ok()?.bbox();
+    let over = (0..8)
+        .map(|i| {
+            let pick = |k: usize| {
+                if i >> k & 1 == 0 {
+                    bb.min[k]
+                } else {
+                    bb.max[k]
+                }
+            };
+            height(&P3::new(pick(0), pick(1), pick(2)))
+        })
+        .fold(f64::NEG_INFINITY, f64::max);
+    // The plane's frame: x any way square to `up`.
+    let x = any_perpendicular(&up);
+    let y = up.cross(&x);
+    let rows = nalgebra::Matrix3::from_rows(&[x.transpose(), y.transpose(), up.transpose()]);
+    let flat = |p: &P3| nalgebra::Point2::new(p.coords.dot(&x), p.coords.dot(&y));
+    // Each depth's regions, by the height of the mill's flat end there.
+    let mut depths: Vec<(f64, Vec<Region>)> = Vec::new();
+    let mut add = |h: f64, r: Region| match depths.iter_mut().find(|d| (d.0 - h).abs() <= near) {
+        Some(d) => d.1.push(r),
+        None => depths.push((h, vec![r])),
+    };
+    let disc = |c: nalgebra::Point2<f64>, r: f64| Loop {
+        curves: vec![Curve2::circle(c, r)],
+    };
+    // The level run gathered so far: its moves in the plane's frame, at one height.
+    let mut run: Vec<(Curve, f64, f64)> = Vec::new();
+    let mut run_at = 0.0;
+    let mut reaches = false;
+    let flush = |run: &mut Vec<(Curve, f64, f64)>,
+                 h: f64,
+                 add: &mut dyn FnMut(f64, Region)|
+     -> Option<()> {
+        if run.is_empty() {
+            return Some(());
+        }
+        let wire = std::mem::take(run);
+        add(h, super::offset::prism::wire_region(&wire, radius).ok()?);
+        Some(())
+    };
+    for s in &segs {
+        let (a, z) = (s.start(), s.end());
+        // (A straight move given as a spline of two poles is a line from end to end.)
+        let straight = !matches!(s.c, Curve::Circle { .. })
+            && (z - a).norm() > near
+            && (0..=4).all(|i| {
+                let f = i as f64 / 4.0;
+                let t = if s.rev {
+                    s.t1 + (s.t0 - s.t1) * f
+                } else {
+                    s.t0 + (s.t1 - s.t0) * f
+                };
+                (s.c.point(t) - (a + (z - a) * f)).norm() <= near
+            });
+        let line;
+        let s = if straight {
+            let (c, l) = Curve::line(a, z);
+            line = super::sweep::path::Seg {
+                c,
+                t0: 0.0,
+                t1: l,
+                rev: false,
+            };
+            &line
+        } else {
+            s
+        };
+        let (ha, hz) = (height(&a), height(&z));
+        let level = (0..=8).all(|i| {
+            let t = s.t0 + (s.t1 - s.t0) * i as f64 / 8.0;
+            (height(&s.c.point(t)) - ha).abs() <= near
+        });
+        // (The mill's flat end above the target all along: nothing cut.)
+        let clear = ha.min(hz) + bottom >= over - near;
+        if !clear && ha.min(hz) + top < over - near {
+            // The mill's top under the target's: its plunges' columns would cut too.
+            return None;
+        }
+        if level && !clear {
+            let foot = ha + bottom;
+            if !run.is_empty() && (run_at - foot).abs() > near {
+                flush(&mut run, run_at, &mut add)?;
+            }
+            run_at = foot;
+            reaches = true;
+            // A whole circle: the ring within the radius of it (its hole where the circle is
+            // wider than the mill).
+            if let Curve::Circle { c, r, .. } = &s.c
+                && ((s.t1 - s.t0).abs() - TAU).abs() <= tol::ANGULAR
+            {
+                flush(&mut run, run_at, &mut add)?;
+                let centre = flat(c);
+                add(
+                    foot,
+                    Region {
+                        outer: disc(centre, r + radius),
+                        holes: if *r > radius + near {
+                            vec![disc(centre, r - radius)]
+                        } else {
+                            vec![]
+                        },
+                        source: None,
+                    },
+                );
+                continue;
+            }
+            if !matches!(s.c, Curve::Line { .. } | Curve::Circle { .. }) {
+                return None;
+            }
+            // The move in the plane's frame at its own height (z = 0 there).
+            let to_flat = Affine {
+                m: rows,
+                t: -(rows * (up * ha)),
+            };
+            let c = s.c.transformed(&to_flat);
+            run.push(if s.rev {
+                let (c, t0, t1) = c.reversed(s.t0, s.t1);
+                (c, t0, t1)
+            } else {
+                (c, s.t0, s.t1)
+            });
+            continue;
+        }
+        flush(&mut run, run_at, &mut add)?;
+        if clear {
+            continue;
+        }
+        // A move along the axis: the disc at its foot. Any other isn't this program's.
+        let d = z - a;
+        if !matches!(s.c, Curve::Line { .. }) || (d - up * d.dot(&up)).norm() > near {
+            return None;
+        }
+        reaches = true;
+        add(
+            ha.min(hz) + bottom,
+            Region {
+                outer: disc(flat(&a), radius),
+                holes: vec![],
+                source: None,
+            },
+        );
+    }
+    flush(&mut run, run_at, &mut add)?;
+    if !reaches {
+        return None;
+    }
+    // Each depth's figure extruded to a little above the target, cut from it: deepest first,
+    // and a depth whose figure lies within the deeper ones' not at all (what it would cut is
+    // cut already: a pocket stepped down over one outline is its last step's cut).
+    depths.sort_by(|p, q| p.0.total_cmp(&q.0));
+    let above = over + 0.1 * radius;
+    let mut at = target;
+    let mut cut: Option<OpResult> = None;
+    let mut deeper: Vec<Region> = Vec::new();
+    for (h, regions) in depths {
+        let n = regions.len();
+        let united = super::flat_union::union(&regions, None).and_then(|(own, _)| {
+            let m = deeper.len();
+            let mut all = std::mem::take(&mut deeper);
+            all.extend(own.iter().cloned());
+            let (both, adds) = super::flat_union::union(&all, Some(m))?;
+            deeper = both;
+            Ok((own, adds))
+        });
+        let regions = match united {
+            Ok((_, false)) => {
+                if debug {
+                    eprintln!("end mill program: depth {h}: {n} regions within the deeper ones");
+                }
+                continue;
+            }
+            Ok((own, true)) => own,
+            Err(e) => {
+                if debug {
+                    eprintln!("end mill program: depth {h}: its figure: {e}");
+                }
+                return None;
+            }
+        };
+        let prisms =
+            match super::offset::prism::regions_prisms(regions, P3::origin(), x, up, h, above) {
+                Ok(p) if !p.is_empty() => p,
+                Ok(_) => continue,
+                Err(e) => {
+                    if debug {
+                        eprintln!("end mill program: depth {h}: {e}");
+                    }
+                    return None;
+                }
+            };
+        if debug {
+            eprintln!(
+                "end mill program: depth {h}: {n} regions in {} solid(s)",
+                prisms.len()
+            );
+        }
+        let tools: Vec<BodyId> = prisms.into_iter().map(|p| k.insert(p)).collect();
+        let step = k.boolean(crate::BoolOp::Subtract, at, &tools);
+        for t in tools {
+            k.release(t);
+        }
+        if at != target {
+            k.release(at);
+        }
+        match step {
+            Ok(r) if r.bodies.len() == 1 => {
+                at = r.bodies[0];
+                cut = Some(r);
+            }
+            Ok(r) => {
+                for id in r.bodies {
+                    k.release(id);
+                }
+                return None;
+            }
+            Err(e) => {
+                if debug {
+                    eprintln!("end mill program: depth {h}: its cut: {e}");
+                }
+                return None;
+            }
+        }
+    }
+    let r = cut?;
+    r.bodies.iter().all(|&id| k.sound(id)).then_some(r)
+}
+
+/// `target` less what a ball-end mill fills carried upright along a pass of straight moves
+/// ([`super::sweep_ball_pass`]): the pass's solid up to a little above the target (and above
+/// the ball's highest centre), where that is below the lowest the mill's top comes. None for
+/// another tool or path, or where the cut isn't sound.
+fn cut_ball_pass(
+    k: &mut NativeKernel,
+    target: BodyId,
+    b: &Body,
+    path: &[crate::PathCurve],
+    up: V3,
+) -> Option<OpResult> {
+    let up = up.try_normalize(tol::TINY)?;
+    let segs = super::sweep::path::path_segments(k, path).ok()?;
+    let p0 = segs.first()?.start();
+    let (centre, r, length) = super::sweep_ball_pass::ball_mill(b, &p0, &up)?;
+    let near = tol::REL_POINT * b.bbox().diagonal().max(tol::POINT);
+    let mut centres = vec![p0 + up * centre];
+    for s in &segs {
+        let (a, z) = (s.start(), s.end());
+        let mid = s.c.point(0.5 * (s.t0 + s.t1));
+        if (mid - (a + (z - a) * 0.5)).norm() > near
+            || (a + up * centre - centres[centres.len() - 1]).norm() > near
+        {
+            return None;
+        }
+        centres.push(z + up * centre);
+    }
+    let height = |p: &P3| p.coords.dot(&up);
+    let bb = k.get(target).ok()?.bbox();
+    let over = (0..8)
+        .map(|i| {
+            let pick = |k: usize| {
+                if i >> k & 1 == 0 {
+                    bb.min[k]
+                } else {
+                    bb.max[k]
+                }
+            };
+            height(&P3::new(pick(0), pick(1), pick(2)))
+        })
+        .fold(f64::NEG_INFINITY, f64::max);
+    let (low, high) = centres
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |m, c| {
+            (m.0.min(height(c)), m.1.max(height(c)))
+        });
+    let top = over.max(high) + 0.1 * r;
+    if top > low + length {
+        return None;
+    }
+    let pass = super::sweep_ball_pass::ball_pass(&centres, r, &up, top)?;
+    let id = k.insert(pass);
+    let cut = k.boolean(crate::BoolOp::Subtract, target, &[id]);
+    k.release(id);
+    match cut {
+        Ok(c) if c.bodies.iter().all(|&id| k.sound(id)) => Some(c),
+        Ok(_) => None,
+        Err(e) => {
+            if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
+                eprintln!("ball pass: its cut: {e}");
+            }
+            None
+        }
+    }
+}
+
+thread_local! {
+    /// Set while a cut is to be made only by the exact ways ([`exact_only`]).
+    static EXACT_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Why the exact ways declined the sweep or cut being made ([`declined`]), for the line
+    /// logged when it is meshed instead.
+    static DECLINED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Notes why an exact way declined the sweep or cut being made (the first few are kept).
+pub(crate) fn declined(why: impl std::fmt::Display) {
+    DECLINED.with(|d| {
+        let mut d = d.borrow_mut();
+        if d.len() < 6 {
+            d.push(why.to_string());
+        }
+    });
+}
+
+/// Forgets the reasons noted ([`declined`]): at the start of a sweep or cut asked of the
+/// kernel.
+pub(crate) fn clear_declined() {
+    DECLINED.with(|d| d.borrow_mut().clear());
+}
+
+/// The reasons noted, in one line.
+fn reasons() -> String {
+    DECLINED.with(|d| {
+        let d = d.borrow();
+        if d.is_empty() {
+            "none of the exact ways takes it".to_string()
+        } else {
+            d.join("; ")
+        }
+    })
+}
+
+/// Refused where only exact cuts are wanted ([`exact_only`]); else logged, a line on standard
+/// error, as every fall back to a mesh is (`what`: what is meshed).
+fn meshing(what: &str) -> Result<()> {
+    if EXACT_ONLY.with(|e| e.get()) {
+        return Err(KernelError::OperationFailed(format!(
+            "{what} not made exactly: {}",
+            reasons()
+        )));
+    }
+    eprintln!("cadrs_kernel: {what} meshed, not exact: {}", reasons());
+    Ok(())
+}
+
+/// Runs `f` with [`cut_swept`]'s meshed fallback off: a cut none of the exact ways takes
+/// fails instead ([`crate::Kernel::cut_swept_exact`]).
+pub fn exact_only<T>(f: impl FnOnce() -> T) -> T {
+    let was = EXACT_ONLY.with(|e| e.replace(true));
+    let r = f();
+    EXACT_ONLY.with(|e| e.set(was));
+    r
+}
+
+/// How far a motion of one turn about one axis turns (radians): a turn or a screw, a rigid
+/// motion of one turn step (and slides). `None` for any other: two turns about lines apart (a
+/// generated cut, which keeps its own faces) or none.
+fn one_turn(motion: &SolidMotion) -> Option<f64> {
+    match motion {
+        SolidMotion::Climb { from, to, .. } => Some((to - from).abs()),
+        SolidMotion::Rigid { steps } => {
+            let turns: Vec<f64> = steps
+                .iter()
+                .filter_map(|s| match s {
+                    RigidStep::Turn { from, to, .. } => Some((to - from).abs()),
+                    RigidStep::Slide { .. } => None,
+                })
+                .collect();
+            match turns.as_slice() {
+                [t] => Some(*t),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// [`crate::Kernel::cut_swept`].
 pub fn cut_swept(
     k: &mut NativeKernel,
     target: BodyId,
     tool: BodyId,
     motion: &SolidMotion,
 ) -> Result<OpResult> {
-    let b = (**k.get(tool)?).clone();
+    // Under one turn past half of one, the target's faces of revolution cut into quarter
+    // turns, as the tool's sweep is: a groove wound round a cylinder a turn or more would
+    // otherwise be one loop of that face over a period or more of it, which no face holds.
+    if one_turn(motion).is_some_and(|t| t > std::f64::consts::PI)
+        && std::env::var_os("CADRS_NO_QUARTERS").is_none()
+    {
+        let mut t = (**k.get(target)?).clone();
+        let before = t.faces.len();
+        if super::heal_split::split_angle(&mut t, std::f64::consts::FRAC_PI_2).is_ok()
+            && t.faces.len() > before
+        {
+            let split = k.insert(t);
+            let r = cut_swept_in(k, split, tool, motion);
+            k.release(split);
+            return r;
+        }
+    }
+    cut_swept_in(k, target, tool, motion)
+}
+
+/// [`cut_swept`], the target's faces as they are.
+fn cut_swept_in(
+    k: &mut NativeKernel,
+    target: BodyId,
+    tool: BodyId,
+    motion: &SolidMotion,
+) -> Result<OpResult> {
+    let b = std::sync::Arc::clone(k.get(tool)?);
+    // A ball-end mill carried upright along straight moves in one upright plane (a raster
+    // pass): what it fills below the target's top, made face by face, cut from the target.
+    if let SolidMotion::Path { path, up } = motion
+        && let Some(r) = cut_ball_pass(k, target, &b, path, up.into_inner())
+    {
+        return Ok(r);
+    }
+    // A flat end mill carried upright through a program of level moves and plunges: what it
+    // fills at each depth, united in the plane and extruded, cut once a depth.
+    if let SolidMotion::Path { path, up } = motion
+        && let Some(r) = cut_end_mill_program(k, target, &b, path, up.into_inner())
+    {
+        return Ok(r);
+    }
     // A motion whose ends keep clear of the target: within it the endless motion (a whole turn,
     // a screw without end) fills what this one does, and is made exactly as a whole (the solid
     // of revolution, the screw's helical sweep).
+    // Any tool carried through moves along its own line alone where it reaches the target (a
+    // drill's pecks): each hole's moves are one slide, from its lowest to its highest.
+    if let SolidMotion::Path { path, up } = motion
+        && let Some(r) = cut_plunges(k, target, &b, path, up.into_inner())
+    {
+        return Ok(r);
+    }
     if let Some(endless) = endless_within(&**k.get(target)?, &b, motion) {
-        let swept = sweep_solid(k, tool, &endless).ok();
-        if let Some(r) = swept
-            && let [s] = r.bodies.as_slice()
-        {
-            let cut = k.boolean(crate::BoolOp::Subtract, target, &[*s]);
-            k.release(*s);
-            if let Ok(c) = cut
-                && c.bodies.iter().all(|&id| k.sound(id))
+        // (Its outline exact, then traced finely, then coarsely: a boolean may take the one and
+        // not the other.)
+        for n in OUTLINES {
+            let swept = with_slices(n, || sweep_solid_at(k, tool, &endless));
+            let debug = crate::native::env_flag!("CADRS_SWEEP_SOLID_DEBUG");
+            if debug && let Err(e) = &swept {
+                eprintln!("endless sweep on {n} slices: {e}");
+            }
+            if let Ok(r) = swept
+                && let [s] = r.bodies.as_slice()
             {
-                return Ok(c);
+                let cut = k.boolean(crate::BoolOp::Subtract, target, &[*s]);
+                k.release(*s);
+                if debug {
+                    match &cut {
+                        Err(e) => eprintln!("endless sweep on {n} slices: its cut: {e}"),
+                        Ok(c) => eprintln!(
+                            "endless sweep on {n} slices: cut, sound {:?}",
+                            c.bodies.iter().map(|&id| k.sound(id)).collect::<Vec<_>>()
+                        ),
+                    }
+                }
+                if let Ok(c) = cut
+                    && c.bodies.iter().all(|&id| k.sound(id))
+                {
+                    return Ok(c);
+                }
             }
         }
     }
@@ -2146,7 +4733,8 @@ pub fn cut_swept(
         return Ok(r);
     }
     // Else meshed: inside the target, in none of the tool's places.
-    let t = (**k.get(target)?).clone();
+    meshing("a cut by a swept solid")?;
+    let t = std::sync::Arc::clone(k.get(target)?);
     let tdist =
         super::mesh_distance::MeshDistance::new(&t, 1e-3 * t.bbox().diagonal().max(tol::POINT))
             .ok_or(KernelError::Unsupported(
@@ -2205,11 +4793,11 @@ fn end_mill_along(
     path: &[crate::PathCurve],
     up: V3,
 ) -> Option<OpResult> {
-    let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+    let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
     let up = up.try_normalize(tol::TINY)?;
     let segs = super::sweep::path::path_segments(k, path).ok()?;
     let p0 = segs.first()?.start();
-    let size = b.bbox().diagonal().max(1.0);
+    let size = b.bbox().diagonal().max(crate::native::tol::POINT);
     let near = tol::REL_POINT * size.max((segs.last()?.end() - p0).norm());
     for s in &segs {
         for i in 0..=16 {
@@ -2409,7 +4997,7 @@ fn upright_revolution_along(
     let segs = super::sweep::path::path_segments(k, path).ok()?;
     let (first, last) = (segs.first()?, segs.last()?);
     let p0 = first.start();
-    let size = b.bbox().diagonal().max(1.0);
+    let size = b.bbox().diagonal().max(crate::native::tol::POINT);
     let near = tol::REL_POINT * size.max((last.end() - p0).norm());
     // The path in the plane square to `up` through its start.
     for s in &segs {
@@ -2672,7 +5260,7 @@ fn path_screw(frames: &PathFrames, size: f64) -> Option<(P3, f64, super::sweep_f
         let (dx, dy) = (moves[i].dot(&ex), moves[i].dot(&ey));
         let off = ((1.0 - c) * ox + s_ * oy - dx).hypot(-s_ * ox + (1.0 - c) * oy - dy);
         if off > 1e-6 * size {
-            if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+            if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
                 eprintln!("path screw: the axis moves ({off:.2e} at {i} of {n})");
             }
             return None;
@@ -2723,7 +5311,7 @@ fn cut_rising_screw(
             // (After the first, the solid where a half turn starts is inside the one before.)
             Ok(p) => all.extend(p.into_iter().skip(usize::from(i > 0))),
             Err(e) => {
-                if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+                if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
                     eprintln!("path screw: part {i} of {n}: {e}");
                 }
                 return None;
@@ -2767,7 +5355,7 @@ fn path_sweep_exact(
         return None;
     }
     let r = super::sweep_planar::sweep_planar_by(k, b, up, &|t| frames.place(t));
-    if std::env::var_os("CADRS_SWEEP_DEBUG").is_some()
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG")
         && let Err(e) = &r
     {
         eprintln!("path sweep: the planar sweep failed: {e}");
@@ -2967,6 +5555,10 @@ fn meshed_within(
     place: &Place,
     within: Within,
 ) -> Result<OpResult> {
+    // (A cut's fall back is logged where its target is measured, before this.)
+    if within.is_none() {
+        meshing("a sweep of a solid")?;
+    }
     let t0 = web_time::Instant::now();
     // The places sampled, and their inverses (world to body: x ↦ R x − e): 160, or more for a
     // motion that moves the body's box farther than a fiftieth of its reach between them.
@@ -3075,4 +5667,136 @@ fn meshed_within(
         }
     };
     contour(k, lo, n, h, &depth, t0)
+}
+
+/// A ball carried by the rigid motion `steps`: everything within its radius of the path its
+/// centre runs along, which is the pipe of that radius about the path with a ball at each end
+/// wherever the path curves no tighter than the radius (else the pipe folds: None). The path,
+/// a turn and slide's trochoid or any other, is a cubic B-spline through it, its points doubled
+/// until it keeps within 1e-9 of the size at every span's middle.
+fn ball_along(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Result<OpResult>> {
+    if crate::native::env_flag!("CADRS_NO_BALL_ALONG") {
+        return None;
+    }
+    let (centre, r) = match b.faces.first().map(|f| &f.surf) {
+        Some(Surface::Sphere { f, r }) => (f.o, *r),
+        _ => return None,
+    };
+    let same = |s: &Surface| {
+        matches!(s, Surface::Sphere { f, r: q }
+            if (f.o - centre).norm() <= tol::POINT && (q - r).abs() <= tol::POINT)
+    };
+    if !b.faces.iter().all(|f| same(&f.surf)) || b.solids.len() != 1 {
+        return None;
+    }
+    let at = |t: f64| {
+        let (rot, d) = rigid_at(steps, t);
+        P3::from(rot * centre.coords + d)
+    };
+    let (p0, p1) = (at(0.0), at(1.0));
+    let size = (p1 - p0).norm() + r;
+    let mut n = 64usize;
+    let curve = loop {
+        let ts: Vec<f64> = (0..=n).map(|i| i as f64 / n as f64).collect();
+        let xs: Vec<P3> = ts.iter().map(|&t| at(t)).collect();
+        let h = 1e-6;
+        let d0 = (at(h) - at(0.0)) / h;
+        let d1 = (at(1.0) - at(1.0 - h)) / h;
+        let c = super::nurbs::NurbsCurve::interpolate(&xs, &ts, 3, Some(d0), Some(d1));
+        let worst = (0..n)
+            .map(|i| {
+                let t = (i as f64 + 0.5) / n as f64;
+                (c.point(t) - at(t)).norm()
+            })
+            .fold(0.0, f64::max);
+        if worst <= 1e-9 * size {
+            break c;
+        }
+        if n >= 4096 {
+            return None;
+        }
+        n *= 2;
+    };
+    let cv = Curve::Nurbs(std::sync::Arc::new(curve.clone()));
+    // Nowhere tighter than the ball, nor still (a turn about the centre itself: no path).
+    let m = 4 * n;
+    for i in 0..=m {
+        let t = i as f64 / m as f64;
+        let (_, d1, d2) = cv.d2(t);
+        let sp = d1.norm();
+        if sp <= 1e-9 * size {
+            return None;
+        }
+        let kappa = d1.cross(&d2).norm() / (sp * sp * sp);
+        if kappa * r >= 1.0 - 1e-6 {
+            return None;
+        }
+    }
+    let poles: Vec<P3> = curve
+        .cps
+        .iter()
+        .map(|h| P3::new(h.x / h.w, h.y / h.w, h.z / h.w))
+        .collect();
+    let tangent = cv.d2(0.0).1.normalize();
+    let x = any_perpendicular(&tangent).normalize();
+    let plane = crate::Plane {
+        origin: p0,
+        x_dir: nalgebra::Unit::new_normalize(x),
+        normal: nalgebra::Unit::new_normalize(tangent),
+    };
+    let region = crate::Region {
+        outer: crate::Loop {
+            curves: vec![crate::Curve2::Circle {
+                center: nalgebra::Point2::origin(),
+                radius: r,
+                source: None,
+            }],
+        },
+        holes: vec![],
+        source: None,
+    };
+    let spec = SweepSpec {
+        body: BodyKind::Solid,
+        path: vec![PathCurve::Bspline(crate::Bspline3 {
+            degree: curve.degree,
+            knots: curve.knots.clone(),
+            poles,
+            weights: Vec::new(),
+        })],
+        control: SweepControl::None,
+        faces: Vec::new(),
+        corners: Default::default(),
+    };
+    let run = |k: &mut NativeKernel| -> Result<OpResult> {
+        let tube = k.sweep_with(&crate::Profile::new(plane, vec![region.clone()]), &spec)?;
+        let [tube] = tube.bodies[..] else {
+            return Err(KernelError::InvalidResult {
+                op: "sweep",
+                why: "a ball's pipe isn't one body".into(),
+            });
+        };
+        let mut cur = tube;
+        for p in [p0, p1] {
+            let ball = k.primitive(&Primitive::ball(p, r))?.bodies[0];
+            let joined = k.boolean(BoolOp::Union, cur, &[ball]);
+            k.release(ball);
+            if cur != tube {
+                k.release(cur);
+            }
+            let joined = joined?;
+            let [j] = joined.bodies[..] else {
+                return Err(KernelError::InvalidResult {
+                    op: "sweep",
+                    why: "a ball's pipe and its end balls aren't one body".into(),
+                });
+            };
+            cur = j;
+        }
+        k.release(tube);
+        Ok(OpResult {
+            bodies: vec![cur],
+            ..Default::default()
+        })
+    };
+    Some(run(k))
 }

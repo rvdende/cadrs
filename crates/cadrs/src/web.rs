@@ -53,6 +53,7 @@ pub fn run() -> AppExit {
             })
             // The frame panel's CPU times, as in the app.
             .set(bevy::log::LogPlugin {
+                filter: cadrs_app::log_filter(),
                 custom_layer: cadrs_app::frame_profile::profiler_layer,
                 ..default()
             }),

@@ -8,7 +8,7 @@ Scenario(
         WaitFor("document-shell"),
         Click(ui("sketch")),
         WaitFor("sketch-dialog"),
-        ClickAt(560, 575),
+        ClickAt(678, 559),
         Click(ui("sketch-dialog-accept")),
         RightDrag(at(1300, 700), at(1220, 730)),
         MoveTo(1420, 780),

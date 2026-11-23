@@ -161,36 +161,15 @@ fn samples(e: &Piece, size: f64) -> Vec<f64> {
 }
 
 /// Bisects for where `pred` changes between `lo` (where it is `at_lo`) and `hi`.
-fn bisect(mut lo: f64, mut hi: f64, at_lo: bool, pred: impl Fn(f64) -> bool) -> f64 {
-    for _ in 0..60 {
-        let m = (lo + hi) / 2.0;
-        if pred(m) == at_lo { lo = m } else { hi = m }
-    }
+fn bisect(lo: f64, hi: f64, at_lo: bool, pred: impl Fn(f64) -> bool) -> f64 {
+    let (lo, hi) = super::math::bisect(lo, hi, |m| pred(m) == at_lo);
     // The point on the "on" side.
     if at_lo { lo } else { hi }
 }
 
 /// Golden-section search for the smallest `f` on [a, b].
-fn argmin(mut a: f64, mut b: f64, f: impl Fn(f64) -> f64) -> f64 {
-    let gr = 0.618_033_988_749_895;
-    let (mut c, mut d) = (b - gr * (b - a), a + gr * (b - a));
-    let (mut fc, mut fd) = (f(c), f(d));
-    for _ in 0..100 {
-        if fc < fd {
-            b = d;
-            d = c;
-            fd = fc;
-            c = b - gr * (b - a);
-            fc = f(c);
-        } else {
-            a = c;
-            c = d;
-            fc = fd;
-            d = a + gr * (b - a);
-            fd = f(d);
-        }
-    }
-    (a + b) / 2.0
+fn argmin(a: f64, b: f64, f: impl Fn(f64) -> f64) -> f64 {
+    super::math::minimize(f, a, b)
 }
 
 /// How much tighter than the tolerance a stretch where two edges run within it is measured
@@ -364,11 +343,7 @@ fn face_meets(cx: &Ctx, b: &Body, fi: usize, e: &Piece, ts: &[f64], out: &mut Ve
         {
             continue;
         }
-        let (mut lo, mut hi) = (ts[i - 1], ts[i]);
-        for _ in 0..60 {
-            let m = (lo + hi) / 2.0;
-            if gd(m) * g0 > 0.0 { lo = m } else { hi = m }
-        }
+        let (lo, hi) = super::math::bisect(ts[i - 1], ts[i], |m| gd(m) * g0 > 0.0);
         let t = (lo + hi) / 2.0;
         if on(t) {
             out.push(t);
@@ -405,7 +380,7 @@ fn splits(cx: &Ctx, e: &Piece, size: f64) -> Vec<f64> {
             for fi in 0..b.faces.len() {
                 let n = out.len();
                 face_meets(cx, b, fi, e, &ts, &mut out);
-                if std::env::var("CADRS_EBOP_DEBUG").is_ok() && out.len() > n {
+                if crate::native::env_flag!("CADRS_EBOP_DEBUG") && out.len() > n {
                     eprintln!(
                         "face {fi}: splits {:?}",
                         out[n..].iter().map(|&t| e.point(t)).collect::<Vec<_>>()

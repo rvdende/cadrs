@@ -47,29 +47,31 @@ pub(crate) fn points_in(shell: &Body) -> bool {
 /// when every one says the opposite, else `None` (a thin wall or grazing rays: the volume
 /// decides).
 fn parity_orientation(shell: &Body) -> Option<bool> {
-    parity_orientation_with(
-        shell,
-        shell
-            .faces
-            .iter()
-            .map(|f| super::classify::face_polygons(shell, f))
-            .collect(),
-    )
+    let kept: Vec<_> = shell
+        .faces
+        .iter()
+        .map(|f| super::classify::face_polygons_kept(shell, f))
+        .collect();
+    parity_orientation_with(shell, &kept)
 }
 
-/// [`parity_orientation`] with the faces' polygons made already.
-fn parity_orientation_with(shell: &Body, polys: Vec<Vec<Vec<P2>>>) -> Option<bool> {
-    let cls = super::classify::Classifier::new(shell, &polys);
+/// [`parity_orientation`] with the faces' polygons and their boxes kept
+/// ([`super::classify::face_polygons_kept`]: a body checked after each of many cuts has most of
+/// its faces as the one before had them).
+fn parity_orientation_with(shell: &Body, kept: &[super::classify::KeptPolygons]) -> Option<bool> {
+    let cls = super::classify::Classifier::with_kept(shell, kept);
     let size = shell.bbox().diagonal();
     let mut verdict: Option<bool> = None;
     let mut probes = 0;
     for (fi, f) in shell.faces.iter().enumerate() {
-        if probes == 8 {
+        // (Three probes that agree: a shell's faces are joined each edge once each way, so
+        // they point out together or in together, and one probe not grazing would do.)
+        if probes == 3 {
             break;
         }
         // A point well inside the face's domain: of a grid over its (u, v) box, the one
         // farthest from the loops (by the metric-scaled polygon).
-        let ps = &polys[fi];
+        let ps = &kept[fi].0;
         let (mut lo, mut hi) = (
             P2::new(f64::INFINITY, f64::INFINITY),
             P2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
@@ -86,11 +88,19 @@ fn parity_orientation_with(shell: &Body, polys: Vec<Vec<Vec<P2>>>) -> Option<boo
         // each loop's polyline, every so many points, at most 48 (a point well inside is all
         // that is sought; the polylines are dense, and which side it lies is asked of them
         // whole).
-        let segs: Vec<(P2, V2, f64)> = ps
+        // (And the loops thinned so, for which grid points lie inside: asked of the whole
+        // polylines only for the point chosen, which keeps clear of them by more than they
+        // were thinned by, or isn't taken.)
+        let thin: Vec<Vec<P2>> = ps
+            .iter()
+            .map(|l| {
+                let step = l.len().div_ceil(48).max(1);
+                l.iter().step_by(step).copied().collect()
+            })
+            .collect();
+        let segs: Vec<(P2, V2, f64)> = thin
             .iter()
             .flat_map(|l| {
-                let step = l.len().div_ceil(48).max(1);
-                let l: Vec<P2> = l.iter().step_by(step).copied().collect();
                 (0..l.len()).map(move |k| {
                     let (a, b) = (l[k], l[(k + 1) % l.len()]);
                     let (a, b) = (P2::new(a.x * mu, a.y * mv), P2::new(b.x * mu, b.y * mv));
@@ -121,8 +131,8 @@ fn parity_orientation_with(shell: &Body, polys: Vec<Vec<Vec<P2>>>) -> Option<boo
                     }
                 }
                 if best.is_none_or(|b| d > b.0) {
-                    let inside = ps.first().is_some_and(|o| point_in_polygon(&uv, o))
-                        && !ps.iter().skip(1).any(|h| point_in_polygon(&uv, h));
+                    let inside = thin.first().is_some_and(|o| point_in_polygon(&uv, o))
+                        && !thin.iter().skip(1).any(|h| point_in_polygon(&uv, h));
                     if inside {
                         best = Some((d, uv));
                     }
@@ -130,6 +140,11 @@ fn parity_orientation_with(shell: &Body, polys: Vec<Vec<Vec<P2>>>) -> Option<boo
             }
         }
         let Some((room, uv)) = best else { continue };
+        if !(ps.first().is_some_and(|o| point_in_polygon(&uv, o))
+            && !ps.iter().skip(1).any(|h| point_in_polygon(&uv, h)))
+        {
+            continue;
+        }
         let normal = f.surf.normal(uv.x, uv.y);
         if !(normal.norm() > 0.5) {
             continue;
@@ -321,6 +336,72 @@ body!(pub);
 #[cfg(not(feature = "testkit"))]
 body!(pub(crate));
 
+/// A set of a body's faces, edges or vertices by index, asked of in one step: `true` at its
+/// members.
+#[derive(Clone, Debug)]
+pub struct Mask(Vec<bool>);
+
+impl Mask {
+    /// The members `on` of `n` things.
+    pub fn of(n: usize, on: &[usize]) -> Self {
+        let mut m = Mask(vec![false; n]);
+        for &i in on {
+            m.insert(i);
+        }
+        m
+    }
+
+    /// Whether `i` is a member (the list's own `contains`, so that either reads the same).
+    pub fn contains(&self, i: &usize) -> bool {
+        self.0.get(*i).copied().unwrap_or(false)
+    }
+
+    /// Makes `i` a member.
+    pub fn insert(&mut self, i: usize) {
+        if let Some(x) = self.0.get_mut(i) {
+            *x = true;
+        }
+    }
+}
+
+/// The faces using each edge of a body ([`Body::edge_faces`]), in one table: `faces[e]` is
+/// edge e's, in the order its faces' loops come to it.
+#[derive(Clone, Debug, Default)]
+pub struct EdgeFaces {
+    /// Where each edge's faces start in `faces` (and, last, their count).
+    start: Vec<u32>,
+    faces: Vec<usize>,
+}
+
+impl EdgeFaces {
+    /// How many edges.
+    pub fn len(&self) -> usize {
+        self.start.len().saturating_sub(1)
+    }
+
+    /// Whether there are no edges.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Each edge's faces, in the edges' order.
+    pub fn iter(&self) -> impl Iterator<Item = &[usize]> + '_ {
+        (0..self.len()).map(move |e| &self[e])
+    }
+
+    /// Edge e's faces, or none for an edge past the table.
+    pub fn get(&self, e: usize) -> Option<&[usize]> {
+        (e < self.len()).then(|| &self[e])
+    }
+}
+
+impl std::ops::Index<usize> for EdgeFaces {
+    type Output = [usize];
+    fn index(&self, e: usize) -> &[usize] {
+        &self.faces[self.start[e] as usize..self.start[e + 1] as usize]
+    }
+}
+
 impl Body {
     /// The vertices.
     pub fn verts(&self) -> &[Vertex] {
@@ -491,6 +572,46 @@ pub fn co_range(e: &Edge, fwd: bool) -> (f64, f64) {
 }
 
 impl Body {
+    /// Drops the edges no face's loop and no wire uses (a revolve's axis line, whose face
+    /// collapsed), renumbering the rest in order.
+    pub fn drop_unused_edges(&mut self) {
+        let mut used = vec![false; self.edges.len()];
+        for c in self.faces.iter().flat_map(|f| f.loops.iter().flatten()) {
+            used[c.edge] = true;
+        }
+        for w in &self.wires {
+            for &(e, _) in &w.edges {
+                used[e] = true;
+            }
+        }
+        if used.iter().all(|&u| u) {
+            return;
+        }
+        let mut map = vec![usize::MAX; self.edges.len()];
+        let mut next = 0;
+        for (i, &u) in used.iter().enumerate() {
+            if u {
+                map[i] = next;
+                next += 1;
+            }
+        }
+        let mut i = 0;
+        self.edges.retain(|_| {
+            i += 1;
+            used[i - 1]
+        });
+        for f in &mut self.faces {
+            for c in f.loops.iter_mut().flatten() {
+                c.edge = map[c.edge];
+            }
+        }
+        for w in &mut self.wires {
+            for e in &mut w.edges {
+                e.0 = map[e.0];
+            }
+        }
+    }
+
     /// Adds a vertex of tolerance [`TOL_MIN`](super::tol::CONFUSION); returns its index.
     pub fn add_vertex(&mut self, p: P3) -> usize {
         self.verts.push(Vertex { p, tol: TOL_MIN });
@@ -538,17 +659,36 @@ impl Body {
         if c.fwd { e.v[1] } else { e.v[0] }
     }
 
-    /// For each edge, the faces using it (a seam lists its face twice).
-    pub fn edge_faces(&self) -> Vec<Vec<usize>> {
-        let mut out = vec![Vec::new(); self.edges.len()];
-        for (fi, f) in self.faces.iter().enumerate() {
-            for l in &f.loops {
-                for c in l {
-                    out[c.edge].push(fi);
-                }
+    /// For each vertex, the edges ending at it, in the edges' order (a closed edge once).
+    pub fn vertex_edges(&self) -> Vec<Vec<usize>> {
+        let mut out = vec![Vec::new(); self.verts.len()];
+        for (e, ed) in self.edges.iter().enumerate() {
+            out[ed.v[0]].push(e);
+            if ed.v[1] != ed.v[0] {
+                out[ed.v[1]].push(e);
             }
         }
         out
+    }
+
+    /// For each edge, the faces using it (a seam lists its face twice).
+    pub fn edge_faces(&self) -> EdgeFaces {
+        let mut start = vec![0u32; self.edges.len() + 1];
+        for c in self.faces.iter().flat_map(|f| f.loops.iter().flatten()) {
+            start[c.edge + 1] += 1;
+        }
+        for e in 0..self.edges.len() {
+            start[e + 1] += start[e];
+        }
+        let mut next = start.clone();
+        let mut faces = vec![0usize; start[self.edges.len()] as usize];
+        for (fi, f) in self.faces.iter().enumerate() {
+            for c in f.loops.iter().flatten() {
+                faces[next[c.edge] as usize] = fi;
+                next[c.edge] += 1;
+            }
+        }
+        EdgeFaces { start, faces }
     }
 
     /// Faces of each solid (and the free faces of sheets as a last group).
@@ -649,8 +789,18 @@ impl Body {
     }
 
     /// A box sure to hold the body: its vertices, its edges' exact boxes and its faces' boxes
-    /// (curved faces bulge past their edges).
+    /// (curved faces bulge past their edges). Made once for a body whose boxes are being kept
+    /// ([`keep_boxes`]).
     pub fn bbox(&self) -> Bbox {
+        if let Some(Some(bb)) = kept_box(self, |k| k.all) {
+            return bb;
+        }
+        let bb = self.bbox_made();
+        kept_box(self, |k| k.all = Some(bb));
+        bb
+    }
+
+    fn bbox_made(&self) -> Bbox {
         let mut bb = Bbox::empty();
         for v in &self.verts {
             bb.add(&v.p);
@@ -669,8 +819,22 @@ impl Body {
     }
 
     /// A box sure to hold face `fi`: its edges' exact boxes and its surface's box over the
-    /// rectangle holding its p-curves.
+    /// rectangle holding its p-curves. Made once for a body whose boxes are being kept
+    /// ([`keep_boxes`]).
     pub fn face_bbox(&self, fi: usize) -> Bbox {
+        if let Some(Some(bb)) = kept_box(self, |k| k.faces.get(fi).copied().flatten()) {
+            return bb;
+        }
+        let bb = self.face_bbox_made(fi);
+        kept_box(self, |k| {
+            if let Some(slot) = k.faces.get_mut(fi) {
+                *slot = Some(bb);
+            }
+        });
+        bb
+    }
+
+    fn face_bbox_made(&self, fi: usize) -> Bbox {
         let f = &self.faces[fi];
         let mut bb = Bbox::empty();
         let mut uv = Bbox::empty();
@@ -694,13 +858,7 @@ impl Body {
     /// `faces` lists them; groups ordered by their first face).
     pub fn face_components(&self, faces: &[usize]) -> Vec<Vec<usize>> {
         let mut parent: Vec<usize> = (0..faces.len()).collect();
-        fn root(p: &mut [usize], mut i: usize) -> usize {
-            while p[i] != i {
-                p[i] = p[p[i]];
-                i = p[i];
-            }
-            i
-        }
+        use super::math::set_of as root;
         let mut by_edge: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
         for (k, &fi) in faces.iter().enumerate() {
             for c in self.faces[fi].loops.iter().flatten() {
@@ -924,25 +1082,30 @@ impl Body {
         // Loops don't cross themselves in (u, v).
         for (fi, f) in self.faces.iter().enumerate() {
             for (li, l) in f.loops.iter().enumerate() {
-                let mut poly: Vec<P2> = Vec::with_capacity(8 * l.len());
-                for c in l {
-                    let e = &self.edges[c.edge];
-                    let (t0, t1) = co_range(e, c.fwd);
-                    // (A straight p-curve's samples are its start's line: the start alone.)
-                    let n = if matches!(c.pc, Curve::Line { .. }) {
-                        1
-                    } else {
-                        8
-                    };
-                    for i in 0..n {
-                        let q = c.pc.point(t0 + (t1 - t0) * i as f64 / n as f64);
-                        poly.push(P2::new(q.x, q.y));
+                let poly_of = |per: usize| {
+                    let mut poly: Vec<P2> = Vec::with_capacity(per * l.len());
+                    for c in l {
+                        let e = &self.edges[c.edge];
+                        let (t0, t1) = co_range(e, c.fwd);
+                        // (A straight p-curve's samples are its start's line: the start alone.)
+                        let n = if matches!(c.pc, Curve::Line { .. }) {
+                            1
+                        } else {
+                            per
+                        };
+                        for i in 0..n {
+                            let q = c.pc.point(t0 + (t1 - t0) * i as f64 / n as f64);
+                            poly.push(P2::new(q.x, q.y));
+                        }
                     }
-                }
+                    poly
+                };
                 // Eight samples a coedge can cut across a tightly curved p-curve: a crossing
                 // they show stands only if the loop's polyline within LOOP_GAP of its p-curves
-                // crosses itself too (the full check's test).
-                if let Some((i, j)) = self_crossing(&poly)
+                // crosses itself too (the full check's test), asked only when 64 samples a
+                // coedge still cross (the full check flattens the face's every loop).
+                if let Some((i, j)) = self_crossing(&poly_of(8))
+                    && self_crossing(&poly_of(64)).is_some()
                     && self
                         .check_face_domain(fi)
                         .iter()
@@ -1028,27 +1191,45 @@ impl Body {
                 let sub = super::kernel::subset(self, &faces, true);
                 // (The subset's faces are the solid's, with their edges as they are: their
                 // polygons the same.)
-                let sp: Vec<Vec<Vec<P2>>> = faces
-                    .iter()
-                    .zip(&sub.faces)
-                    .map(|(&fi, f)| {
-                        polys
-                            .get_mut(fi)
-                            .and_then(Option::take)
-                            .unwrap_or_else(|| super::classify::face_polygons(&sub, f))
-                    })
-                    .collect();
-                if check_compare() {
-                    for (k, f) in sub.faces.iter().enumerate() {
-                        assert_eq!(
-                            sp[k],
-                            super::classify::face_polygons(&sub, f),
-                            "solid {si}: face {k}'s polygons differ from the subset's"
-                        );
+                // (Made here already, or kept from a check of the body this one was cut from.)
+                let mut sp = || -> Vec<super::classify::KeptPolygons> {
+                    let sp: Vec<super::classify::KeptPolygons> = faces
+                        .iter()
+                        .zip(&sub.faces)
+                        .map(|(&fi, f)| match polys.get_mut(fi).and_then(Option::take) {
+                            Some(p) => {
+                                let b = super::classify::poly_boxes(&p, &f.surf);
+                                std::sync::Arc::new((p, b))
+                            }
+                            None => super::classify::face_polygons_kept(&sub, f),
+                        })
+                        .collect();
+                    if check_compare() {
+                        for (k, f) in sub.faces.iter().enumerate() {
+                            assert_eq!(
+                                sp[k].0,
+                                super::classify::face_polygons(&sub, f),
+                                "solid {si}: face {k}'s polygons differ from the subset's"
+                            );
+                        }
                     }
-                }
-                // Ray parity settles the orientation where it can; else the exact volume.
-                if parity_orientation_with(&sub, sp) == Some(true) {
+                    sp
+                };
+                // Ray parity settles the orientation where it can; else the exact volume. (The
+                // volume first where a face is a B-spline of few spans, an extrusion or a surface
+                // of revolution: rays meet those by a search costing more than integrating the
+                // volume's sign, which a many-spanned B-spline's costs more still.)
+                let spans = |k: &[f64]| k.windows(2).filter(|w| w[1] > w[0]).count();
+                let swept = sub.faces.iter().any(|f| {
+                    matches!(
+                        f.surf,
+                        Surface::Extrusion { .. } | Surface::Revolution { .. } | Surface::Nurbs(_)
+                    )
+                }) && sub.faces.iter().all(|f| match &f.surf {
+                    Surface::Nurbs(n) => spans(&n.ku) * spans(&n.kv) <= 64,
+                    _ => true,
+                });
+                if !swept && parity_orientation_with(&sub, &sp()) == Some(true) {
                     continue;
                 }
                 let v = super::mass::volume_for_sign(&sub);
@@ -1318,24 +1499,47 @@ impl Body {
     /// their curves actually leave (the p-curves they fit, the files' own); gaps beyond `cap`
     /// are left for the check to report.
     pub fn fit_tolerances_searched(&mut self, cap: f64) {
+        self.fit_tolerances_searched_gaps(cap);
+    }
+
+    /// [`Self::fit_tolerances_searched`], giving each face's coedges' gaps (edge, gap; none for
+    /// a degenerate edge), in order: for a caller that raises tolerances further by them. The
+    /// faces are measured in parallel.
+    pub(crate) fn fit_tolerances_searched_gaps(&mut self, cap: f64) -> Vec<Vec<(usize, f64)>> {
+        use rayon::prelude::*;
         self.fit_tolerances(cap);
-        let mut etol = vec![0.0f64; self.edges.len()];
-        let mut vtol = vec![0.0f64; self.verts.len()];
-        for f in &self.faces {
-            let mut surface_key = None;
-            for c in f.loops.iter().flatten() {
-                let e = &self.edges[c.edge];
-                if !e.degenerate {
-                    let gap = pcurve_gap_kept(e, &c.pc, &f.surf, &mut surface_key);
-                    etol[c.edge] = etol[c.edge].max(gap);
-                }
-                for k in 0..2 {
-                    let uv = c.pc.point(e.t[k]);
-                    let d = (f.surf.eval(uv.x, uv.y) - self.verts[e.v[k]].p).norm();
-                    if d.is_finite() {
-                        vtol[e.v[k]] = vtol[e.v[k]].max(d);
+        // Each face's coedges' gaps (edge, gap) and its loops' ends' (vertex, distance).
+        type Measured = (Vec<(usize, f64)>, Vec<(usize, f64)>);
+        let measured: Vec<Measured> = self
+            .faces
+            .par_iter()
+            .map(|f| {
+                let mut surface_key = None;
+                let (mut gaps, mut ends) = (Vec::new(), Vec::new());
+                for c in f.loops.iter().flatten() {
+                    let e = &self.edges[c.edge];
+                    if !e.degenerate {
+                        gaps.push((c.edge, pcurve_gap_kept(e, &c.pc, &f.surf, &mut surface_key)));
+                    }
+                    for k in 0..2 {
+                        let uv = c.pc.point(e.t[k]);
+                        let d = (f.surf.eval(uv.x, uv.y) - self.verts[e.v[k]].p).norm();
+                        if d.is_finite() {
+                            ends.push((e.v[k], d));
+                        }
                     }
                 }
+                (gaps, ends)
+            })
+            .collect();
+        let mut etol = vec![0.0f64; self.edges.len()];
+        let mut vtol = vec![0.0f64; self.verts.len()];
+        for (gaps, ends) in &measured {
+            for &(e, g) in gaps {
+                etol[e] = etol[e].max(g);
+            }
+            for &(v, d) in ends {
+                vtol[v] = vtol[v].max(d);
             }
         }
         for (e, d) in self.edges.iter_mut().zip(etol) {
@@ -1348,6 +1552,7 @@ impl Body {
                 v.tol = (d * 1.01).max(TOL_MIN);
             }
         }
+        measured.into_iter().map(|(gaps, _)| gaps).collect()
     }
 }
 
@@ -1703,6 +1908,9 @@ impl Body {
     }
 }
 
+/// The most control points of an edge's curve and p-curve whose gap [`pcurve_gap_kept`] keeps.
+const KEYED_POINTS: usize = 64;
+
 /// [`pcurve_gap`], kept by what it is made from (the edge's curve and range, the p-curve, the
 /// surface: `surface_key`, the surface's own hash, made once per face): a boolean's result fits
 /// every edge's tolerance again, most of them its inputs' edges as they were.
@@ -1731,6 +1939,19 @@ pub(super) fn pcurve_gap_kept(
             Surface::Plane { .. }
         )
     ) {
+        return pcurve_gap(e, pc, surf);
+    }
+    // (Nor long B-splines: their key, every control point hashed, costs more than the gap's
+    // 75 or so samples.)
+    let size = |c: &Curve| match c {
+        Curve::Nurbs(n) => n.cps.len(),
+        _ => 0,
+    };
+    let surface_size = match surf {
+        Surface::Nurbs(n) => n.cps.len() * n.cps.first().map_or(0, |r| r.len()),
+        _ => 0,
+    };
+    if size(&e.curve) + size(pc) > KEYED_POINTS || surface_size > 4 * KEYED_POINTS {
         return pcurve_gap(e, pc, surf);
     }
     let sk = *surface_key.get_or_insert_with(|| {
@@ -2082,7 +2303,7 @@ fn flatten(pc: &Curve, t0: f64, t1: f64, scale: (f64, f64), flat: f64, tol: f64,
 /// and panics where they disagree (for the gate, to show a faster check is as strict).
 pub(crate) fn check_compare() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("CADRS_CHECK_COMPARE").is_some())
+    *ON.get_or_init(|| crate::native::env_flag!("CADRS_CHECK_COMPARE"))
 }
 
 /// [`flatten`] as it was (each span sampled afresh), for `CADRS_CHECK_COMPARE`: the domain
@@ -3320,5 +3541,73 @@ mod tests {
             b.check(),
             vec!["solid 0 encloses a volume of -6.000e3 (its faces point in)".to_string()]
         );
+    }
+}
+
+/// A body whose boxes are being kept on this thread, and those made so far.
+struct KeptBody {
+    body: *const Body,
+    all: Option<Bbox>,
+    faces: Vec<Option<Bbox>>,
+}
+
+thread_local! {
+    /// The bodies whose boxes are kept on this thread ([`keep_boxes`]), innermost last.
+    static KEPT_BOXES: std::cell::RefCell<Vec<KeptBody>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// What `f` makes of `body`'s kept boxes, if they are being kept.
+fn kept_box<R>(body: &Body, f: impl FnOnce(&mut KeptBody) -> R) -> Option<R> {
+    KEPT_BOXES.with(|k| {
+        let mut k = k.borrow_mut();
+        k.iter_mut()
+            .rev()
+            .find(|e| std::ptr::eq(e.body, body))
+            .map(f)
+    })
+}
+
+/// While it lives, [`Body::bbox`] and [`Body::face_bbox`] of the bodies it was made for are
+/// made once on this thread ([`keep_boxes`]).
+pub(crate) struct KeptBoxes<'a> {
+    kept: usize,
+    /// (The bodies stay borrowed, so none of them changes or moves while its boxes are kept;
+    /// and the keeping ends on the thread it began on.)
+    _bodies: std::marker::PhantomData<(&'a Body, *const ())>,
+}
+
+impl Drop for KeptBoxes<'_> {
+    fn drop(&mut self) {
+        KEPT_BOXES.with(|k| {
+            let mut k = k.borrow_mut();
+            let left = k.len().saturating_sub(self.kept);
+            k.truncate(left);
+        });
+    }
+}
+
+/// Keeps the boxes of `bodies` on this thread until the returned guard is dropped: an
+/// operation asks for a body's box, and its faces', many times over (each a pass over every
+/// edge, a B-spline edge's by its poles), and a body borrowed for the operation's length gives
+/// the same each time. Guards end in the order opposite to the one they began in.
+pub(crate) fn keep_boxes<'a>(bodies: &[&'a Body]) -> KeptBoxes<'a> {
+    let kept = KEPT_BOXES.with(|k| {
+        let mut k = k.borrow_mut();
+        let mut kept = 0;
+        for &b in bodies {
+            if !k.iter().any(|e| std::ptr::eq(e.body, b)) {
+                k.push(KeptBody {
+                    body: b,
+                    all: None,
+                    faces: vec![None; b.faces.len()],
+                });
+                kept += 1;
+            }
+        }
+        kept
+    });
+    KeptBoxes {
+        kept,
+        _bodies: std::marker::PhantomData,
     }
 }

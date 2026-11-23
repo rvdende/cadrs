@@ -127,6 +127,67 @@ impl PartStudio<'_> {
         self.add(f, fid, "Delete face", FeatureKind::DirectEdit(x), fr)
     }
 
+    /// Onshape's Move face, Offset type: faces moved along their normals (the other types,
+    /// Translate and Rotate, have no cadrs equivalent yet).
+    pub(crate) fn move_face(
+        &mut self,
+        f: &Value,
+        fid: &str,
+        fr: &mut FeatureReport,
+    ) -> Result<(), CommandError> {
+        match Self::text(f, "moveFaceType").as_str() {
+            "OFFSET" => {}
+            other => {
+                return Err(CommandError::Invalid(format!(
+                    "move face type {other} not imported yet"
+                )));
+            }
+        }
+        if Self::text(f, "limitType") != "BLIND" {
+            fr.notes.push("its Up to limit is not imported".into());
+        }
+        let mut lost = 0;
+        let mut faces = Vec::new();
+        for p in refs::picks(param(f, "moveFaces")) {
+            match p {
+                Pick::Query(q) => {
+                    let found = self.faces_of(&q);
+                    if found.is_empty() {
+                        if std::env::var_os("CADRS_ONSHAPE_DEBUG").is_some() {
+                            eprintln!("LOST {} | {}", f["name"], self.describe(&q));
+                        }
+                        lost += 1;
+                    }
+                    for face in found {
+                        if !faces.contains(&face) {
+                            faces.push(face);
+                        }
+                    }
+                }
+                _ => lost += 1,
+            }
+        }
+        if faces.is_empty() {
+            return Err(CommandError::Invalid(
+                "its faces could not be translated".into(),
+            ));
+        }
+        Self::lost_note(fr, lost, "face selections");
+        let (mut distance, mut distance_expr) =
+            self.quantity(f, "offsetDistance", Quantity::Length)?;
+        if Self::flag(f, "oppositeDirection") {
+            distance = -distance;
+            distance_expr = format!("-({distance_expr})");
+        }
+        let x = cadrs_core::direct_edit::DirectEditFeature {
+            kind: cadrs_core::direct_edit::DirectEditKind::MoveFace,
+            faces,
+            distance,
+            distance_expr,
+        };
+        self.add(f, fid, "Move face", FeatureKind::DirectEdit(x), fr)
+    }
+
     /// Onshape's Projected curve, Curve to face type: curves projected onto faces along a
     /// direction (a curve feature, as a Helix).
     pub(crate) fn project_curves(
@@ -521,7 +582,7 @@ impl PartStudio<'_> {
     /// A `CAP_EDGE` of a surface extrude (it has no cap faces, so the query finds the side
     /// face's edges): its open edges at the end the query names (`isStart`: on the sketch
     /// plane, else the far end).
-    fn surface_cap_edges(
+    pub(crate) fn surface_cap_edges(
         &self,
         q: &Q,
         parts: &[cadrs_core::parts::Part],

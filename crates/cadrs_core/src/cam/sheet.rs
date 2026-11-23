@@ -122,6 +122,12 @@ pub fn setup_sheet(
                 fmt_mm(o[1]),
                 fmt_mm(o[2])
             ),
+            super::Mating::Mount { origin, .. } => format!(
+                "Set on the machine's mount at X {} Y {} Z {} of the work coordinate system",
+                fmt_mm(origin[0]),
+                fmt_mm(origin[1]),
+                fmt_mm(origin[2])
+            ),
         },
     );
     row(&mut h, "Tool axis (Z)", &axis_words(&run.frame));

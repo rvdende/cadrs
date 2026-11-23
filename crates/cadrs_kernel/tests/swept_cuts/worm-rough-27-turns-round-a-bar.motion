@@ -1,0 +1,3 @@
+turn 0e0 1.0887987542673727e-6 -1.299999677320348e1 1e0 0e0 0e0 0e0 4.4999969479203024e1
+slide 0e0 0e0 0e0 4.499999999999999e1 0e0 0e0
+# operation failed: a cut by a swept solid not made exactly: a swept piece's cut failed: operation failed: the boolean's result is invalid: its faces cross; a swept piece's cut failed: operation failed: the boolean's result is invalid: its faces cross

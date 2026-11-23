@@ -27,6 +27,8 @@ root="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$root"
 out="${1:-target/web}"
 mkdir -p "$out"
+# Whole-crate builds, not .cargo/config.toml's incremental ones (smaller and faster code).
+export CARGO_INCREMENTAL=0
 
 want="$(sed -n '/^name = "wasm-bindgen"$/{n;s/^version = "\(.*\)"/\1/p}' Cargo.lock)"
 have="$(wasm-bindgen --version 2>/dev/null | cut -d' ' -f2 || true)"

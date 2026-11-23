@@ -23,6 +23,8 @@ struct PartShadingParams {
     analysis: vec4<f32>,
     pull: vec4<f32>,
     bands: array<vec4<f32>, 6>,
+    // A cut's tween (`PartShadingParams::tween`): x how far along, y the stock's side of it.
+    tween: vec4<f32>,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> params: PartShadingParams;
@@ -104,6 +106,12 @@ fn section_removed(clip: array<vec4<f32>, 4>, p: vec3<f32>) -> bool {
 fn fragment(in: VertexOutput) -> FragmentOutput {
     // The section view's removed part: on the removed side of every plane.
     if (section_removed(params.clip, in.world_position.xyz)) {
+        discard;
+    }
+    // A cut's tween: the stock before the cut where the tool hasn't reached yet (the point's
+    // time, UV y, still ahead), the stock after it where it has.
+    let side = i32(round(params.tween.y));
+    if ((side == 1 && in.uv.y <= params.tween.x) || (side == 2 && in.uv.y > params.tween.x)) {
         discard;
     }
     let len = length(in.world_normal);
