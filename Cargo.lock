@@ -2402,6 +2402,7 @@ dependencies = [
  "cadrs_render",
  "cadrs_sheetmetal",
  "cadrs_sketch",
+ "cadrs_solidcraft",
  "cadrs_vars",
  "directories",
  "earcutr",
@@ -2695,6 +2696,17 @@ dependencies = [
  "slotmap",
  "ttf-parser",
  "uuid",
+]
+
+[[package]]
+name = "cadrs_solidcraft"
+version = "0.2.9"
+dependencies = [
+ "cadrs_core",
+ "cadrs_sheetmetal",
+ "cadrs_sketch",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

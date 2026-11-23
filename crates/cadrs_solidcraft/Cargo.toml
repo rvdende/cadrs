@@ -1,0 +1,20 @@
+[package]
+name = "cadrs_solidcraft"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Translates SolidCraft recipe.json parts into cadrs documents (library and CLI)"
+
+[[bin]]
+name = "cadrs-solidcraft"
+path = "src/main.rs"
+
+[dependencies]
+cadrs_core.workspace = true
+cadrs_sketch.workspace = true
+cadrs_sheetmetal.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
