@@ -29,6 +29,18 @@ use cadrs_ui::{
 };
 
 use crate::preferences_ui::{LocalPreferences, from_ui, save, scheme_override, to_ui};
+// The MCP server's port and endpoint (the AI assistants section). A page serves none and has
+// no `mcp_button` (nor `cadrs_mcp`): its section isn't offered, so it never asks.
+#[cfg(not(target_arch = "wasm32"))]
+use crate::mcp_button::{endpoint as mcp_endpoint, parse_port as parse_mcp_port};
+#[cfg(target_arch = "wasm32")]
+fn parse_mcp_port(_: &str) -> Option<u16> {
+    None
+}
+#[cfg(target_arch = "wasm32")]
+fn mcp_endpoint(_: u16) -> String {
+    String::new()
+}
 use crate::{AppState, DocumentStore};
 
 pub(crate) fn plugin(app: &mut App) {
@@ -707,9 +719,7 @@ fn groups(section: Section, s: &PrefsDialog, facts: &Facts) -> Vec<Group> {
         }
         Section::Assistants => {
             let port = s.port.clone();
-            let endpoint = crate::mcp_button::parse_port(&port)
-                .map(crate::mcp_button::endpoint)
-                .unwrap_or_default();
+            let endpoint = parse_mcp_port(&port).map(mcp_endpoint).unwrap_or_default();
             vec![Group {
                 key: "shell-prefs-mcp-server",
                 rows: vec![
@@ -1234,8 +1244,8 @@ fn follow_texts(
                 commands.queue(move |w: &mut World| edit(w, |s| s.seeds = value));
             }
             "pref-mcp-port-field" if value != s.port => {
-                if let Some(port) = crate::mcp_button::parse_port(&value) {
-                    let url = crate::mcp_button::endpoint(port);
+                if let Some(port) = parse_mcp_port(&value) {
+                    let url = mcp_endpoint(port);
                     for (name, mut text) in &mut labels {
                         if name.as_str() == "pref-mcp-endpoint" && text.0 != url {
                             text.0 = url.clone();
@@ -1289,7 +1299,7 @@ pub fn apply(world: &mut World) -> bool {
     let port = if cfg!(target_arch = "wasm32") {
         s.draft.mcp.port
     } else {
-        match crate::mcp_button::parse_port(&s.port) {
+        match parse_mcp_port(&s.port) {
             Some(p) => p,
             None => {
                 show_section(world, Section::Assistants);
