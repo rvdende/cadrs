@@ -4368,4 +4368,77 @@ END-ISO-10303-21;
         let mp = super::super::mass::body_mass(b);
         assert!((mp.volume - 25.4f64.powi(3)).abs() < 1e-6, "{}", mp.volume);
     }
+    /// A quarter elbow of a round bar as Onshape writes a bent tube: its wall a face of a
+    /// torus bounded only by the two end circles (no seam), then two flat ends.
+    #[test]
+    fn reads_a_torus_band_between_two_circles() {
+        let mut s = String::from(
+            "ISO-10303-21;\nHEADER;\nFILE_SCHEMA(('CONFIG_CONTROL_DESIGN'));\nENDSEC;\nDATA;\n",
+        );
+        // Points and directions.
+        for (id, p) in [
+            (1, [0., 0., 0.]),
+            (2, [50., 0., 0.]),
+            (3, [0., 50., 0.]),
+            (4, [55., 0., 0.]),
+            (5, [0., 55., 0.]),
+        ] {
+            let _ = writeln!(
+                s,
+                "#{id}=CARTESIAN_POINT('',({},{},{}));",
+                real(p[0]),
+                real(p[1]),
+                real(p[2])
+            );
+        }
+        for (id, d) in [
+            (11, [0., 0., 1.]),
+            (12, [1., 0., 0.]),
+            (13, [0., 1., 0.]),
+            (14, [0., -1., 0.]),
+            (15, [-1., 0., 0.]),
+        ] {
+            let _ = writeln!(
+                s,
+                "#{id}=DIRECTION('',({},{},{}));",
+                real(d[0]),
+                real(d[1]),
+                real(d[2])
+            );
+        }
+        s.push_str(
+            "#20=AXIS2_PLACEMENT_3D('',#1,#11,#12);\n\
+             #21=TOROIDAL_SURFACE('',#20,50.,5.);\n\
+             #22=AXIS2_PLACEMENT_3D('',#2,#13,#12);\n#23=CIRCLE('',#22,5.);\n\
+             #24=AXIS2_PLACEMENT_3D('',#3,#12,#13);\n#25=CIRCLE('',#24,5.);\n\
+             #26=AXIS2_PLACEMENT_3D('',#2,#14,#12);\n#27=PLANE('',#26);\n\
+             #28=AXIS2_PLACEMENT_3D('',#3,#15,#13);\n#29=PLANE('',#28);\n\
+             #30=VERTEX_POINT('',#4);\n#31=VERTEX_POINT('',#5);\n\
+             #32=EDGE_CURVE('',#30,#30,#23,.T.);\n#33=EDGE_CURVE('',#31,#31,#25,.T.);\n\
+             #40=ORIENTED_EDGE('',*,*,#32,.T.);\n#41=ORIENTED_EDGE('',*,*,#33,.T.);\n\
+             #42=ORIENTED_EDGE('',*,*,#32,.F.);\n#43=ORIENTED_EDGE('',*,*,#33,.F.);\n\
+             #50=EDGE_LOOP('',(#40));\n#51=EDGE_LOOP('',(#41));\n\
+             #52=EDGE_LOOP('',(#42));\n#53=EDGE_LOOP('',(#43));\n\
+             #60=FACE_BOUND('',#50,.T.);\n#61=FACE_BOUND('',#51,.T.);\n\
+             #62=FACE_BOUND('',#52,.T.);\n#63=FACE_BOUND('',#53,.T.);\n\
+             #70=ADVANCED_FACE('',(#60,#61),#21,.T.);\n\
+             #71=ADVANCED_FACE('',(#62),#27,.T.);\n#72=ADVANCED_FACE('',(#63),#29,.T.);\n\
+             #80=CLOSED_SHELL('',(#70,#71,#72));\n#81=MANIFOLD_SOLID_BREP('elbow',#80);\n\
+             #82=ADVANCED_BREP_SHAPE_REPRESENTATION('',(#81),#83);\n\
+             #83=(GEOMETRIC_REPRESENTATION_CONTEXT(3) GLOBAL_UNIT_ASSIGNED_CONTEXT((#84,#85)) REPRESENTATION_CONTEXT('',''));\n\
+             #84=(LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.));\n\
+             #85=(NAMED_UNIT(*) PLANE_ANGLE_UNIT() SI_UNIT($,.RADIAN.));\n\
+             ENDSEC;\nEND-ISO-10303-21;\n",
+        );
+        let m = read(s.as_bytes()).unwrap();
+        assert_eq!(m.parts.len(), 1);
+        let b = &m.parts[0].body;
+        assert!(b.check().is_empty(), "{:?}", b.check());
+        assert_eq!(b.solids.len(), 1);
+        assert_eq!(b.faces.len(), 3);
+        // A quarter of a torus: 2π²Rr² / 4.
+        let want = std::f64::consts::PI.powi(2) * 50.0 * 25.0 / 2.0;
+        let mp = super::super::mass::body_mass(b);
+        assert!((mp.volume - want).abs() < 1e-6, "{} vs {want}", mp.volume);
+    }
 }
