@@ -105,6 +105,38 @@ struct BuiltFor(u8, bool, u64);
 #[derive(Component)]
 struct PartsField(usize);
 
+/// The frame of a part of the dialog that scrolls when the dialog can't show it all: it
+/// gives way (`shrink` against the other such parts) down to a few rows. Holds a
+/// [`scroll_area`] and its scrollbar.
+fn scroll_frame(name: &str, shrink: f32) -> impl Bundle {
+    (
+        Name::new(name.to_string()),
+        Node {
+            flex_direction: FlexDirection::Column,
+            flex_shrink: shrink,
+            min_height: Val::Px(44.0),
+            width: Val::Percent(100.0),
+            ..default()
+        },
+    )
+}
+
+/// The scrolling node inside a [`scroll_frame`].
+fn scroll_area(name: &str) -> impl Bundle {
+    (
+        Name::new(name.to_string()),
+        cadrs_ui::WheelScroll,
+        cadrs_ui::scrollbar::ScrollGutter(10.0),
+        Node {
+            flex_direction: FlexDirection::Column,
+            flex_shrink: 1.0,
+            min_height: Val::Px(0.0),
+            overflow: Overflow::scroll_y(),
+            ..default()
+        },
+    )
+}
+
 /// Whether this dialog edits the feature.
 pub fn edits(kind: &FeatureKind) -> bool {
     matches!(
@@ -797,6 +829,7 @@ fn sync_dialog(
                 layout,
                 DespawnOnExit(AppState::Document),
                 FeatureDialog::new(dialog_name)
+                    .fit_height()
                     .title(f.name.clone())
                     .valid(valid)
                     .body(move |b| match which {
@@ -821,18 +854,29 @@ fn sync_dialog(
                                     .checked(checked)
                                     .build(&t),
                             );
-                            b.spawn((
-                                PartsField(0),
-                                SelectionList::new("cut-list-parts-field")
-                                    .placeholder(if checked {
-                                        tr("model-cut-list-more-parts")
-                                    } else {
-                                        tr("model-cut-list-parts")
-                                    })
-                                    .items(items[0].clone())
-                                    .active(actives[0])
-                                    .build(&t),
-                            ));
+                            // (With every member listed there is nothing to pick: the list
+                            // is put away, its parts kept for when the box is cleared.)
+                            if !checked {
+                                b.spawn(scroll_frame("cut-list-parts-frame", 2.0))
+                                    .with_children(|frame| {
+                                        let area = frame
+                                            .spawn(scroll_area("cut-list-parts-scroll"))
+                                            .with_child((
+                                                PartsField(0),
+                                                SelectionList::new("cut-list-parts-field")
+                                                    .placeholder(tr("model-cut-list-parts"))
+                                                    .items(items[0].clone())
+                                                    .active(actives[0])
+                                                    .build(&t),
+                                            ))
+                                            .id();
+                                        frame.spawn(cadrs_ui::vertical_scrollbar(
+                                            &t,
+                                            "cut-list-parts-scrollbar",
+                                            area,
+                                        ));
+                                    });
+                            }
                             b.spawn((
                                 Name::new("cut-list-overrides-label"),
                                 Text::new(tr("model-cut-list-overrides")),
@@ -843,18 +887,23 @@ fn sync_dialog(
                                     ..default()
                                 },
                             ));
-                            for (i, o) in overrides.iter().enumerate() {
-                                let is_open = open == i + 1;
-                                b.spawn((
-                                    Name::new(format!("cut-list-override-row-{i}")),
-                                    Node {
-                                        width: Val::Percent(100.0),
-                                        align_items: AlignItems::Center,
-                                        ..default()
-                                    },
-                                ))
-                                .with_children(|r| {
-                                    r.spawn(Node {
+                            b.spawn(scroll_frame("cut-list-overrides-frame", 1.0))
+                                .with_children(|frame| {
+                                    let area = frame
+                                        .spawn(scroll_area("cut-list-overrides-scroll"))
+                                        .with_children(|b| {
+                                            for (i, o) in overrides.iter().enumerate() {
+                                                let is_open = open == i + 1;
+                                                b.spawn((
+                                                    Name::new(format!("cut-list-override-row-{i}")),
+                                                    Node {
+                                                        width: Val::Percent(100.0),
+                                                        align_items: AlignItems::Center,
+                                                        ..default()
+                                                    },
+                                                ))
+                                                .with_children(|r| {
+                                                    r.spawn(Node {
                                         flex_grow: 1.0,
                                         flex_shrink: 1.0,
                                         min_width: Val::Px(0.0),
@@ -878,7 +927,7 @@ fn sync_dialog(
                                             });
                                         }),
                                     ));
-                                    r.spawn((
+                                                    r.spawn((
                                         IconButton::new(format!("cut-list-remove-{i}"), "close")
                                             .ghost()
                                             .small()
@@ -890,24 +939,26 @@ fn sync_dialog(
                                             });
                                         }),
                                     ));
-                                });
-                                if !is_open {
-                                    continue;
-                                }
-                                b.spawn((
-                                    Name::new(format!("cut-list-override-body-{i}")),
-                                    Node {
-                                        width: Val::Percent(100.0),
-                                        flex_direction: FlexDirection::Column,
-                                        row_gap: Val::Px(4.0),
-                                        padding: UiRect::left(Val::Px(14.0)),
-                                        margin: UiRect::bottom(Val::Px(6.0)),
-                                        ..default()
-                                    },
-                                ))
-                                .with_children(|g| {
-                                    if i > 0 {
-                                        g.spawn(
+                                                });
+                                                if !is_open {
+                                                    continue;
+                                                }
+                                                b.spawn((
+                                                    Name::new(format!(
+                                                        "cut-list-override-body-{i}"
+                                                    )),
+                                                    Node {
+                                                        width: Val::Percent(100.0),
+                                                        flex_direction: FlexDirection::Column,
+                                                        row_gap: Val::Px(4.0),
+                                                        padding: UiRect::left(Val::Px(14.0)),
+                                                        margin: UiRect::bottom(Val::Px(6.0)),
+                                                        ..default()
+                                                    },
+                                                ))
+                                                .with_children(|g| {
+                                                    if i > 0 {
+                                                        g.spawn(
                                             OptionRow::new(
                                                 format!("cut-list-same-{i}"),
                                                 tr("model-cut-list-same-as-previous"),
@@ -915,61 +966,85 @@ fn sync_dialog(
                                             .checked(o.same_as_previous)
                                             .build(&t),
                                         );
-                                    }
-                                    let same = i > 0 && o.same_as_previous;
-                                    if !same {
-                                        g.spawn(
-                                            OptionRow::new(
-                                                format!("cut-list-override-all-{i}"),
-                                                tr("model-cut-list-override-all"),
-                                            )
-                                            .checked(o.all)
-                                            .build(&t),
-                                        );
-                                    }
-                                    if !same && !o.all {
-                                        g.spawn((
-                                            PartsField(i + 1),
-                                            SelectionList::new(format!("cut-list-override-{i}"))
-                                                .placeholder(tr("model-cut-list-override-parts"))
-                                                .items(items[i + 1].clone())
-                                                .active(true)
-                                                .build(&t),
-                                        ));
-                                    }
-                                    for (key, name, value) in [
-                                        ("model-cut-list-column", "column", &o.column),
-                                        ("model-cut-list-value", "value", &o.value),
-                                    ] {
-                                        g.spawn(Node {
-                                            width: Val::Percent(100.0),
-                                            align_items: AlignItems::Center,
-                                            column_gap: Val::Px(6.0),
-                                            ..default()
+                                                    }
+                                                    let same = i > 0 && o.same_as_previous;
+                                                    if !same {
+                                                        g.spawn(
+                                                            OptionRow::new(
+                                                                format!(
+                                                                    "cut-list-override-all-{i}"
+                                                                ),
+                                                                tr("model-cut-list-override-all"),
+                                                            )
+                                                            .checked(o.all)
+                                                            .build(&t),
+                                                        );
+                                                    }
+                                                    if !same && !o.all {
+                                                        g.spawn((
+                                                            PartsField(i + 1),
+                                                            SelectionList::new(format!(
+                                                                "cut-list-override-{i}"
+                                                            ))
+                                                            .placeholder(tr(
+                                                                "model-cut-list-override-parts",
+                                                            ))
+                                                            .items(items[i + 1].clone())
+                                                            .active(true)
+                                                            .build(&t),
+                                                        ));
+                                                    }
+                                                    for (key, name, value) in [
+                                                        (
+                                                            "model-cut-list-column",
+                                                            "column",
+                                                            &o.column,
+                                                        ),
+                                                        ("model-cut-list-value", "value", &o.value),
+                                                    ] {
+                                                        g.spawn(Node {
+                                                            width: Val::Percent(100.0),
+                                                            align_items: AlignItems::Center,
+                                                            column_gap: Val::Px(6.0),
+                                                            ..default()
+                                                        })
+                                                        .with_children(|r| {
+                                                            r.spawn((
+                                                                Text::new(tr(key)),
+                                                                TextFont::from_font_size(12.0),
+                                                                TextColor(t.muted_foreground),
+                                                                Node {
+                                                                    width: Val::Px(52.0),
+                                                                    ..default()
+                                                                },
+                                                            ));
+                                                            r.spawn(
+                                                                TextInput::new(format!(
+                                                                    "cut-list-{name}-{i}"
+                                                                ))
+                                                                .value(value.clone())
+                                                                .width(Val::Percent(100.0))
+                                                                .build(&t),
+                                                            );
+                                                        });
+                                                    }
+                                                });
+                                            }
                                         })
-                                        .with_children(
-                                            |r| {
-                                                r.spawn((
-                                                    Text::new(tr(key)),
-                                                    TextFont::from_font_size(12.0),
-                                                    TextColor(t.muted_foreground),
-                                                    Node {
-                                                        width: Val::Px(52.0),
-                                                        ..default()
-                                                    },
-                                                ));
-                                                r.spawn(
-                                                    TextInput::new(format!("cut-list-{name}-{i}"))
-                                                        .value(value.clone())
-                                                        .width(Val::Percent(100.0))
-                                                        .build(&t),
-                                                );
-                                            },
-                                        );
-                                    }
+                                        .id();
+                                    frame.spawn(cadrs_ui::vertical_scrollbar(
+                                        &t,
+                                        "cut-list-overrides-scrollbar",
+                                        area,
+                                    ));
                                 });
-                            }
-                            b.spawn((
+                            b.spawn(Node {
+                                flex_shrink: 0.0,
+                                flex_direction: FlexDirection::Column,
+                                margin: UiRect::top(Val::Px(4.0)),
+                                ..default()
+                            })
+                            .with_child((
                                 Button::new("cut-list-add-override")
                                     .label(tr("model-cut-list-add-override"))
                                     .icon("plus")

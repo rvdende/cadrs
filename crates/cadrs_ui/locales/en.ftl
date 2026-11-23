@@ -2562,8 +2562,6 @@ model-composite-closed = Closed
 model-cut-list-all = All frame members
 # The Cut list dialog's list of parts, empty: what to pick.
 model-cut-list-parts = Members and parts to list
-# The same list while All frame members is on: parts that aren't frame members can be added.
-model-cut-list-more-parts = Other parts to list
 # The Cut list dialog's heading over its overrides. An override gives some of the listed parts
 # a text in a column ("Description" = "Feet").
 model-cut-list-overrides = Overrides

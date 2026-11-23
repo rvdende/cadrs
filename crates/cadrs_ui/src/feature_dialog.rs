@@ -81,6 +81,7 @@ pub struct FeatureDialog {
     footer: Option<SpawnFn>,
     plain_title: bool,
     no_accept: bool,
+    fit_height: bool,
 }
 
 impl FeatureDialog {
@@ -95,11 +96,20 @@ impl FeatureDialog {
             footer: None,
             plain_title: false,
             no_accept: false,
+            fit_height: false,
         }
     }
 
     /// Only the ✕ in the header, no ✓ (a panel that acts through its own buttons, such as
     /// Create selection, `ex4-step15.png`).
+    /// No taller than its parent (the view it floats in): its body shrinks to fit, so a
+    /// scrolling part of the body (a node with `flex_shrink: 1.0`, `min_height: 0` and
+    /// `overflow: scroll_y`) takes up what doesn't fit, the header and footer staying in view.
+    pub fn fit_height(mut self) -> Self {
+        self.fit_height = true;
+        self
+    }
+
     pub fn no_accept(mut self) -> Self {
         self.no_accept = true;
         self
@@ -158,6 +168,7 @@ impl FeatureDialog {
             footer,
             plain_title,
             no_accept,
+            fit_height,
         } = self;
         let accept_name = format!("{name}-accept");
         let cancel_name = format!("{name}-cancel");
@@ -175,6 +186,11 @@ impl FeatureDialog {
                 left: Val::Px(0.0),
                 top: Val::Px(0.0),
                 width: Val::Px(width),
+                max_height: if fit_height {
+                    Val::Percent(100.0)
+                } else {
+                    Val::Auto
+                },
                 flex_direction: FlexDirection::Column,
                 border: UiRect::all(Val::Px(1.0)),
                 border_radius: BorderRadius::all(Val::Px(t.radius_panel)),
@@ -287,7 +303,8 @@ impl FeatureDialog {
                 // Body.
                 p.spawn(Node {
                     flex_direction: FlexDirection::Column,
-                    flex_shrink: 0.0,
+                    flex_shrink: if fit_height { 1.0 } else { 0.0 },
+                    min_height: if fit_height { Val::Px(0.0) } else { Val::Auto },
                     padding: body_padding,
                     ..default()
                 })

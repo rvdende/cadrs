@@ -1602,15 +1602,15 @@ pub struct CutListOverride {
     pub value: String,
 }
 
-/// Cut list: the frame members (all there are, or those picked, with any other parts picked)
-/// gathered in an open composite part, their pieces listed by the cut list
+/// Cut list: the frame members (all there are, or the parts picked), with the parts its
+/// overrides name, gathered in an open composite part, their pieces listed by the cut list
 /// ([`cut_list`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CutListFeature {
     /// Every frame member there is at this point of the list.
     #[serde(default)]
     pub all: bool,
-    /// The parts picked (with `all`: besides the members).
+    /// The parts picked (with `all`: kept, not used, so the box can be cleared again).
     #[serde(default)]
     pub parts: Vec<PartId>,
     #[serde(default)]
@@ -1644,7 +1644,12 @@ impl CutListFeature {
 
     /// Every part the list names: those picked and those its overrides are for.
     pub fn named_parts(&self) -> Vec<PartId> {
-        let mut out = self.parts.clone();
+        // (With every member listed the parts picked are only remembered.)
+        let mut out = if self.all {
+            Vec::new()
+        } else {
+            self.parts.clone()
+        };
         for i in 0..self.overrides.len() {
             for p in self.override_parts(i) {
                 if !out.contains(p) {
