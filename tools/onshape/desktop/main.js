@@ -14,7 +14,7 @@ const { toHtml } = require('./mdhtml');
 const { summarize, roots: rootsReport, perDocument, perDocumentFromJson, formatPerDocument } = require('./reports');
 const { readReportFiles } = require('./reportfiles');
 const tickets = require('./tickets');
-const { chromeUserAgent, applyGpuSwitches } = require('./chrome');
+const { chromeUserAgent, applyGpuSwitches, softwareMode, softwareRelaunchArgs } = require('./chrome');
 
 const ROOT = process.env.CADRS_ONSHAPE_ROOT || path.join(os.homedir(), 'work', 'cadrs_onshape');
 const RAW = path.join(ROOT, 'raw');
@@ -28,8 +28,14 @@ const ONSHAPE = 'https://cad.onshape.com';
 // features before the app is ready. Troubleshooting: CADRS_ONSHAPE_GPU=0 (no switches),
 // CADRS_ONSHAPE_DISABLE_GPU=1 (software rendering), CADRS_ONSHAPE_EXTRA_FEATURES=a,b.
 const BROWSER_UA = chromeUserAgent();
+const SOFTWARE = softwareMode();
 app.userAgentFallback = BROWSER_UA;
-applyGpuSwitches(app.commandLine);
+if (SOFTWARE) {
+  // Asked for explicitly (`--disable-gpu` or CADRS_ONSHAPE_DISABLE_GPU=1): SwiftShader draw.
+  app.commandLine.appendSwitch('disable-gpu');
+} else {
+  applyGpuSwitches(app.commandLine);
+}
 
 // The page talks to the local receiver; Chromium's private-network checks would block that.
 app.commandLine.appendSwitch('disable-features', 'PrivateNetworkAccessSendPreflights,PrivateNetworkAccessForWorkers,BlockInsecurePrivateNetworkRequests,LocalNetworkAccessChecks');
@@ -64,6 +70,46 @@ function send(ev) {
   if (panel && !panel.webContents.isDestroyed()) panel.webContents.send('event', ev);
 }
 
+// A GPU process that crashes (or an Onshape renderer that goes away) loses the page's WebGL
+// context: Onshape then says "the WebGL rendering context has been lost. Refresh the browser."
+// Reload the pane automatically a few times, and let the panel offer a software-rendering
+// restart when it keeps happening.
+let gpuCrashes = [];
+let reloadAfterCrash = null;
+function onGpuGone(what, details = {}) {
+  const now = Date.now();
+  gpuCrashes = gpuCrashes.filter((t) => now - t < 5 * 60 * 1000);
+  gpuCrashes.push(now);
+  const reason = details.reason || 'unknown';
+  console.error(`onshape: ${what} gone (${reason}); ${gpuCrashes.length} time(s) in 5 min`);
+  send({ type: 'gpu-crash', what, reason, count: gpuCrashes.length, software: SOFTWARE });
+  if (SOFTWARE) return; // software rendering losing its context is not fixed by reloading
+  if (reloadAfterCrash) clearTimeout(reloadAfterCrash);
+  if (gpuCrashes.length <= 3 && onshape && !onshape.webContents.isDestroyed()) {
+    reloadAfterCrash = setTimeout(() => {
+      reloadAfterCrash = null;
+      try {
+        onshape.webContents.reload();
+      } catch (e) {
+        console.error('onshape: cannot reload after a GPU crash:', e);
+      }
+    }, 1500);
+  }
+}
+app.on('child-process-gone', (_event, details) => {
+  if (details && details.type === 'GPU') onGpuGone('the GPU process', details);
+});
+// The page's own signal (capture listener in onshape-preload.js): a lost WebGL context does not
+// always kill the GPU process, and this is exactly what Onshape's "Refresh the browser" is about.
+ipcMain.on('onshape-context-lost', () => onGpuGone('the WebGL context', { reason: 'the page lost it' }));
+ipcMain.on('onshape-context-restored', () => {
+  if (reloadAfterCrash) {
+    clearTimeout(reloadAfterCrash);
+    reloadAfterCrash = null;
+  }
+  send({ type: 'gpu-recovered' });
+});
+
 function layout() {
   const [w, h] = win.getContentSize();
   panel.setBounds({ x: 0, y: 0, width: PANEL_WIDTH, height: h });
@@ -94,9 +140,14 @@ async function createWindow() {
   for (const ev of ['did-navigate', 'did-navigate-in-page', 'did-stop-loading']) onshape.webContents.on(ev, sendNav);
   onshape.webContents.on('did-finish-load', () => {
     sendNav();
+    send({ type: 'gpu-recovered' });
     if (onshapeReady()) sendGpuStatus();
   });
   onshape.webContents.on('before-input-event', onshapeShortcut);
+  onshape.webContents.on('render-process-gone', (_e, details) => onGpuGone('the Onshape renderer', details));
+  panel.webContents.on('render-process-gone', () => {
+    if (panel && !panel.webContents.isDestroyed()) panel.webContents.reload();
+  });
   // Links out of Onshape (help pages, etc.) open in the system browser.
   onshape.webContents.setWindowOpenHandler(({ url }) => {
     if (new URL(url).hostname.endsWith('onshape.com')) onshape.webContents.loadURL(url);
@@ -589,6 +640,14 @@ ipcMain.handle('onshape-nav', (_e, action) => {
   return navState();
 });
 ipcMain.handle('onshape-gpu', () => gpuStatus());
+
+// "Restart in software mode" from the panel: relaunch this app with software rendering (the
+// Onshape login survives in its persistent partition, so the document is still there).
+ipcMain.handle('restart-software', () => {
+  app.relaunch({ args: softwareRelaunchArgs() });
+  app.exit(0);
+  return { relaunching: true };
+});
 
 ipcMain.handle('open-cadrs', () => {
   const bin = cadrsBinary();

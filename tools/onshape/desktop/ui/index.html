@@ -62,6 +62,13 @@
     <small id="gpu">GPU: not checked</small>
     <button class="b navb" id="bGpu" title="What Chromium sees: WebGPU, WebGL2 and the renderer it picked">Check GPU</button>
   </div>
+  <div id="gpuLoss" class="notice warn" style="margin-top:6px" hidden>
+    <b>Onshape lost its WebGL rendering context</b> <small id="gpuLossWhy"></small>
+    <div class="row" style="margin-top:6px">
+      <button class="b" id="gpuReload">Reload Onshape</button>
+      <button class="b" id="gpuSoftware" title="Relaunch with software rendering (slower; the login and documents are kept)">Restart in software mode</button>
+    </div>
+  </div>
 </header>
 <nav id="nav"></nav>
 
@@ -191,6 +198,16 @@ async function checkGpu() {
   }
 }
 $('bGpu').onclick = checkGpu;
+$('gpuReload').onclick = () => nav('reload');
+$('gpuSoftware').onclick = async () => {
+  $('gpuLoss').hidden = true;
+  $('gpu').textContent = 'GPU: restarting with software rendering…';
+  try {
+    await api.restartSoftware();
+  } catch (e) {
+    $('gpu').textContent = `GPU: cannot restart: ${e.message}`;
+  }
+};
 
 // ---- Documents tab -------------------------------------------------------------------
 function render() {
@@ -416,6 +433,12 @@ api.onEvent((ev) => {
   if (ev.type === 'current') useCurrent(ev);
   if (ev.type === 'nav') applyNav(ev);
   if (ev.type === 'gpu') $('gpu').textContent = describeGpu(ev.status);
+  if (ev.type === 'gpu-crash') {
+    $('gpuLoss').hidden = false;
+    $('gpuLossWhy').textContent = `(${ev.what}: ${ev.reason}; ${ev.count} time(s) in 5 minutes${ev.software ? '; software rendering' : '; reloading automatically'})`;
+    $('gpu').textContent = `GPU: lost the context (${ev.reason})`;
+  }
+  if (ev.type === 'gpu-recovered') $('gpuLoss').hidden = true;
   if (ev.type === 'phase') $('phase').textContent = ev.phase;
   if (ev.type === 'scrape') {
     const s = ev.state;

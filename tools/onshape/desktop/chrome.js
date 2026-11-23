@@ -54,4 +54,22 @@ function applyGpuSwitches(commandLine, env = process.env, platform = process.pla
   }
 }
 
-module.exports = { chromeUserAgent, gpuSwitches, applyGpuSwitches };
+/** True when this launch asked for software rendering: `--disable-gpu` on the command line or
+ *  `CADRS_ONSHAPE_DISABLE_GPU=1`. Onshape then draws through SwiftShader, which is slower but does
+ *  not lose its context when an old GPU driver resets. */
+function softwareMode(argv = process.argv, env = process.env) {
+  return argv.includes('--disable-gpu') || env.CADRS_ONSHAPE_DISABLE_GPU === '1';
+}
+
+/** The arguments to relaunch with software rendering (the flag is not duplicated). */
+function softwareRelaunchArgs(argv = process.argv) {
+  return [...argv.slice(1).filter((arg) => arg !== '--disable-gpu'), '--disable-gpu'];
+}
+
+module.exports = {
+  chromeUserAgent,
+  gpuSwitches,
+  applyGpuSwitches,
+  softwareMode,
+  softwareRelaunchArgs,
+};

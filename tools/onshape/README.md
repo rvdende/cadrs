@@ -104,6 +104,14 @@ normal browser and import the downloaded folder. Troubleshooting switches:
 `CADRS_ONSHAPE_DISABLE_GPU=1` (software rendering), `CADRS_ONSHAPE_GPU=0` (start with no GPU
 switches at all), `CADRS_ONSHAPE_EXTRA_FEATURES=…` (extra Chromium features).
 
+**Onshape says "the WebGL rendering context has been lost"** — a GPU process reset, which older
+Intel/Mesa drivers do on heavy documents. The app notices it (the page's own
+`webglcontextlost` signal, `child-process-gone` for the GPU process, `render-process-gone` for the
+pane), shows a banner and reloads Onshape automatically up to three times in five minutes. After that — or straight away, if you prefer — press **Restart in
+software mode**: the same app is relaunched with `--disable-gpu` (SwiftShader), keeping the
+Onshape login; drawing is slower but stable. From a terminal that is
+`CADRS_ONSHAPE_DISABLE_GPU=1 admin_local_tools/onshape.sh restart`.
+
 ## Tickets
 
 The importer's report says exactly why a feature fell short ("none of its 1 selections could be

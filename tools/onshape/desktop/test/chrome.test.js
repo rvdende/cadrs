@@ -4,7 +4,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { chromeUserAgent, gpuSwitches, applyGpuSwitches } = require('../chrome');
+const { chromeUserAgent, gpuSwitches, applyGpuSwitches, softwareMode, softwareRelaunchArgs } = require('../chrome');
 
 test('chrome.js: the user agent is a plain Chrome one, with no Electron/app token', () => {
   const ua = chromeUserAgent({ chromeVersion: '130.0.6723.152', platform: 'linux' });
@@ -44,4 +44,12 @@ test('chrome.js: applyGpuSwitches passes names and values to the command line', 
     ['enable-unsafe-webgpu', undefined],
     ['enable-features', 'Vulkan'],
   ]);
+});
+
+test('chrome.js: software mode is explicit, and the relaunch does not duplicate the flag', () => {
+  assert.equal(softwareMode(['electron', '.'], {}), false);
+  assert.equal(softwareMode(['electron', '.', '--disable-gpu'], {}), true);
+  assert.equal(softwareMode(['electron', '.'], { CADRS_ONSHAPE_DISABLE_GPU: '1' }), true);
+  assert.deepEqual(softwareRelaunchArgs(['app', '.', '--disable-gpu', '--x']), ['.', '--x', '--disable-gpu']);
+  assert.deepEqual(softwareRelaunchArgs(['app', '.']), ['.', '--disable-gpu']);
 });

@@ -75,6 +75,21 @@ test('ui: the Onshape pane has navigation and a GPU status line', () => {
   assert.match(preloadSource, /gpu: \(\) => ipcRenderer\.invoke\('onshape-gpu'\)/);
 });
 
+test('ui: a lost WebGL context offers reload or a software restart', () => {
+  for (const id of ['gpuLoss', 'gpuLossWhy', 'gpuReload', 'gpuSoftware']) {
+    assert.match(html, new RegExp(`id="${id}"`), `#${id} exists`);
+  }
+  assert.match(html, /api\.restartSoftware\(\)/);
+  assert.match(preloadSource, /restartSoftware: \(\) => ipcRenderer\.invoke\('restart-software'\)/);
+  assert.match(mainSource, /ipcMain\.handle\('restart-software'/);
+  assert.match(mainSource, /child-process-gone/);
+  assert.match(mainSource, /render-process-gone/);
+  assert.match(mainSource, /softwareRelaunchArgs/);
+  assert.match(mainSource, /onshape-context-lost/);
+  assert.match(mainSource, /onshape-context-restored/);
+  assert.match(fs.readFileSync(path.join(desktop, 'onshape-preload.js'), 'utf8'), /webglcontextlost/);
+});
+
 test('main: the Onshape pane gets a Chrome identity, GPU switches and navigation IPC', () => {
   assert.match(mainSource, /require\('\.\/chrome'\)/);
   assert.match(mainSource, /app\.userAgentFallback = BROWSER_UA/);

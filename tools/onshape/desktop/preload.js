@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('api', {
   openOnshape: (url) => ipcRenderer.invoke('open-onshape', url),
   nav: (action) => ipcRenderer.invoke('onshape-nav', action),
   gpu: () => ipcRenderer.invoke('onshape-gpu'),
+  restartSoftware: () => ipcRenderer.invoke('restart-software'),
   openPath: (which) => ipcRenderer.invoke('open-path', which),
   openCadrs: () => ipcRenderer.invoke('open-cadrs'),
   onEvent: (cb) => ipcRenderer.on('event', (_e, ev) => cb(ev)),
