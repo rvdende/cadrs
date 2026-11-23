@@ -14,6 +14,7 @@ pub mod appearance;
 pub mod applied;
 pub mod applied_dialog;
 pub mod assembly;
+pub mod awake;
 pub mod board_fit;
 pub mod board_in_studio;
 pub mod boolean;
@@ -950,7 +951,11 @@ impl Plugin for CadrsAppPlugin {
                 shortcuts::ShortcutsPlugin,
                 script::ScriptPlugin,
             ))
-            .add_plugins((spacemouse::SpaceMousePlugin, walk::WalkPlugin))
+            .add_plugins((
+                spacemouse::SpaceMousePlugin,
+                walk::WalkPlugin,
+                awake::AwakePlugin,
+            ))
             .add_plugins(top_bar::TopBarPlugin)
             .add_plugins(part_folders::PartFoldersPlugin)
             .add_plugins((

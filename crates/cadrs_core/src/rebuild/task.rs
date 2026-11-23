@@ -11,7 +11,7 @@
 //! a job on a worker that stopped.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock, RwLock, mpsc};
+use std::sync::{OnceLock, RwLock, mpsc};
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -102,7 +102,7 @@ pub fn run<T: Task>(task: T) -> PendingJob<T::Output> {
     let input = match super::process::encode(&task) {
         Ok(i) => i,
         // Dropping `reply` reports no result.
-        Err(_) => return PendingJob { rx: Mutex::new(rx) },
+        Err(_) => return PendingJob::new(rx),
     };
     let done = Box::new(move |output: Option<Vec<u8>>| {
         if let Some(out) = output.and_then(|o| super::process::decode::<T::Output>(&o).ok()) {
@@ -115,5 +115,5 @@ pub fn run<T: Task>(task: T) -> PendingJob<T::Output> {
         done,
     };
     super::submit(job);
-    PendingJob { rx: Mutex::new(rx) }
+    PendingJob::new(rx)
 }
