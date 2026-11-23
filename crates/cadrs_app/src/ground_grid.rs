@@ -114,8 +114,9 @@ pub fn step_for(scale: f32) -> f32 {
         .unwrap_or(10.0 * decade)
 }
 
-/// The least distance between two lines on screen, in pixels.
-pub const MIN_SPACING_PX: f32 = 18.0;
+/// The least distance between two lines on screen, in pixels (18 was busy: a line every step
+/// read as noise).
+pub const MIN_SPACING_PX: f32 = 28.0;
 
 #[cfg(test)]
 mod tests {
@@ -123,11 +124,11 @@ mod tests {
 
     #[test]
     fn the_step_is_one_two_or_five_times_a_power_of_ten() {
-        // 0.1 mm per pixel: lines at least 1.8 mm apart.
-        assert_eq!(step_for(0.1), 2.0);
-        assert_eq!(step_for(0.2), 5.0);
-        assert_eq!(step_for(0.5), 10.0);
-        assert!((step_for(1.0) - 20.0).abs() < 1e-3);
-        assert!((step_for(0.01) - 0.2).abs() < 1e-5);
+        // 0.1 mm per pixel: lines at least 2.8 mm apart.
+        assert_eq!(step_for(0.1), 5.0);
+        assert_eq!(step_for(0.2), 10.0);
+        assert_eq!(step_for(0.5), 20.0);
+        assert!((step_for(1.0) - 50.0).abs() < 1e-3);
+        assert!((step_for(0.01) - 0.5).abs() < 1e-5);
     }
 }

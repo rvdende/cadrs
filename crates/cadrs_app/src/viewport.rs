@@ -2792,7 +2792,7 @@ impl PlaneEdge for Theme {
 type GridKey = (f32, f32, bool, Vec3, GridStyle);
 
 /// The ground grid's step follows the zoom (1, 2 or 5 times a power of ten mm, lines at least
-/// 18 px apart, [`crate::ground_grid::step_for`]) and it fades out past the view; its quad
+/// 28 px apart, [`crate::ground_grid::step_for`]) and it fades out past the view; its quad
 /// follows the focus. Its colours follow the scheme: in dark, the schematic's faint warm lines
 /// and crosses, its salmon and green for the axes. Lines (Preferences › Interface › Grid) draws a
 /// stronger line on every tenth instead of the crosses.
