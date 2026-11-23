@@ -2650,3 +2650,410 @@ fn plan_butt(
         plan.cut.get_or_insert(EndCut::Square);
     }
 }
+
+/// What [`Rebuilder::trim_member_by`] made of a member: its new body, the ends the trim cut,
+/// and whether it was cut in two (the larger kept).
+struct GroupTrim {
+    body: (BodyId, BodyNames),
+    ends: [bool; 2],
+    split: bool,
+}
+
+fn boxes_meet(a: &cadrs_kernel::Aabb, b: &cadrs_kernel::Aabb, tol: f64) -> bool {
+    (0..3).all(|k| a.min[k] - tol <= b.max[k] && b.min[k] - tol <= a.max[k])
+}
+
+impl Rebuilder {
+    /// The Frame trim feature: every member of a group has the members of the groups before
+    /// it subtracted, as they are by then, and keeps its largest piece (its part unchanged).
+    pub(in crate::rebuild) fn frame_trim_groups(
+        &mut self,
+        id: FeatureId,
+        x: &frame::FrameTrimFeature,
+        state: &Arc<State>,
+    ) -> Result<Output, String> {
+        if let Some(p) = x.problem() {
+            return Err(p.into());
+        }
+        let op = id.0;
+        // The members trimmed so far: their new bodies, ours until they are placed.
+        let mut now: Vec<(PartId, (BodyId, BodyNames))> = Vec::new();
+        let mut infos = (*state.frames).clone();
+        let mut notes: Vec<String> = Vec::new();
+        let mut earlier: Vec<PartId> = Vec::new();
+        let mut missing = 0;
+        for (gi, group) in x.groups.iter().enumerate() {
+            for (pi, &pid) in group.iter().enumerate() {
+                if gi == 0 || earlier.contains(&pid) {
+                    missing += usize::from(state.part(pid).is_none());
+                    continue;
+                }
+                let Some(ps) = state.part(pid) else {
+                    missing += 1;
+                    continue;
+                };
+                let source = 0x7f00_0000 + ((gi as u64) << 12) + ((pi as u64) << 1);
+                let made = match self.trim_member_by(op, state, &now, pid, &earlier, source) {
+                    Ok(Some(m)) => m,
+                    Ok(None) => continue,
+                    Err(e) => {
+                        for (_, (b, _)) in now {
+                            self.kernel.release(b);
+                        }
+                        return Err(format!("{} failed: {e}", ps.part.name));
+                    }
+                };
+                if made.split {
+                    notes.push(format!(
+                        "The trim split {} in two: its larger part was kept",
+                        ps.part.name
+                    ));
+                }
+                let volume = self
+                    .kernel
+                    .mass_properties(made.body.0)
+                    .map(|m| m.volume)
+                    .unwrap_or(0.0);
+                if let Some(m) = infos.iter_mut().find(|m| m.part == pid && !m.plate) {
+                    m.volume = volume;
+                    for e in 0..2 {
+                        if made.ends[e] {
+                            m.ends[e] = EndCut::Trimmed;
+                            m.end_normals[e] = [0.0; 2];
+                        }
+                    }
+                    let (a, b) = (P::from(m.span[0]), P::from(m.span[1]));
+                    if !m.curved && (b - a).norm() > 1e-9 {
+                        let t = (b - a).normalize();
+                        let mesh = self.kernel.tessellate(
+                            made.body.0,
+                            Tessellation {
+                                deflection: 1e-3,
+                                angle: 2f64.to_radians(),
+                            },
+                        );
+                        if let Ok(mesh) = mesh {
+                            let (lo, hi) = mesh
+                                .positions
+                                .iter()
+                                .map(|p| (p - a).dot(&t))
+                                .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
+                                    (lo.min(v), hi.max(v))
+                                });
+                            if hi > lo {
+                                m.length = hi - lo;
+                            }
+                        }
+                    }
+                }
+                if let Some(at) = now.iter().position(|(p, _)| *p == pid) {
+                    let (_, (old, _)) = now.remove(at);
+                    self.kernel.release(old);
+                }
+                now.push((pid, made.body));
+            }
+            for p in group {
+                if !earlier.contains(p) {
+                    earlier.push(*p);
+                }
+            }
+        }
+        let mut next = (**state).clone();
+        next.frames = Arc::new(infos);
+        let placed: Vec<Placed> = now
+            .into_iter()
+            .map(|(pid, (body, names))| {
+                let volume = self
+                    .kernel
+                    .mass_properties(body)
+                    .map(|m| m.volume)
+                    .unwrap_or(0.0);
+                (
+                    pid,
+                    Piece {
+                        body,
+                        names,
+                        from: HashSet::new(),
+                        volume,
+                    },
+                )
+            })
+            .collect();
+        let geoms = state.geoms.clone();
+        next.geoms = geoms.clone();
+        let mut out = self.finish(id, placed, next, op, geoms, PartKind::Solid)?;
+        if missing > 0 {
+            notes.insert(0, "A member to trim no longer exists".into());
+        }
+        if !notes.is_empty() {
+            out.warning = Some(notes.join("; "));
+        }
+        Ok(out)
+    }
+
+    /// The member `pid` with the parts `tools` subtracted (those its box meets; each as it is
+    /// in `now`, else in `state`), its largest piece kept; `None` if none of them reaches it.
+    /// A straight member's square end lying inside a tool runs on through it first (a tube
+    /// ending on another's axis is saddled to it; its end there would touch the other at two
+    /// points only), and is cut square there again if the trim leaves the run-on. The bodies
+    /// given are left alone; what it makes and doesn't return is released.
+    fn trim_member_by(
+        &mut self,
+        op: cadrs_kernel::OpId,
+        state: &Arc<State>,
+        now: &[(PartId, (BodyId, BodyNames))],
+        pid: PartId,
+        tools: &[PartId],
+        source: u64,
+    ) -> Result<Option<GroupTrim>, String> {
+        let current = |p: PartId| -> Option<(BodyId, BodyNames)> {
+            if let Some((_, (b, n))) = now.iter().find(|(q, _)| *q == p) {
+                return Some((*b, n.clone()));
+            }
+            let ps = state.part(p)?;
+            Some((ps.body?, (*ps.names).clone()))
+        };
+        let Some((body, names)) = current(pid) else {
+            return Ok(None);
+        };
+        let bb = self.kernel.bounding_box(body).map_err(|e| e.to_string())?;
+        let tol = 1e-6;
+        let mut boxes = Vec::new();
+        let tools: Vec<(BodyId, BodyNames)> = tools
+            .iter()
+            .filter(|t| **t != pid)
+            .filter_map(|t| current(*t))
+            .filter(|(b, _)| match self.kernel.bounding_box(*b) {
+                Ok(tb) if boxes_meet(&bb, &tb, tol) => {
+                    boxes.push(tb);
+                    true
+                }
+                _ => false,
+            })
+            .collect();
+        if tools.is_empty() {
+            return Ok(None);
+        }
+        // The body being worked on, once it is one of ours.
+        let mut work: Option<(BodyId, BodyNames)> = None;
+        let info = state
+            .frames
+            .iter()
+            .find(|m| m.part == pid && !m.plate && !m.curved);
+        let span = info
+            .map(|m| (P::from(m.span[0]), P::from(m.span[1])))
+            .filter(|(a, b)| (b - a).norm() > 1e-9);
+        // The ends run on: where, the way out, and how far.
+        let mut reached: Vec<(usize, P, V, f64)> = Vec::new();
+        if let Some((a, b)) = span {
+            for e in 0..2 {
+                let (pe, other) = if e == 0 { (a, b) } else { (b, a) };
+                let out = (pe - other).normalize();
+                let inside = boxes
+                    .iter()
+                    .any(|b| (0..3).all(|k| b.min[k] - tol <= pe[k] && pe[k] <= b.max[k] + tol));
+                if !inside {
+                    continue;
+                }
+                let cb = work.as_ref().map_or(body, |w| w.0);
+                let Ok(faces) = self.kernel.faces(cb) else {
+                    continue;
+                };
+                let caps: Vec<cadrs_kernel::FaceId> = faces
+                    .iter()
+                    .filter(|f| {
+                        f.plane.as_ref().is_some_and(|pl| {
+                            pl.normal.dot(&out).abs() > 1.0 - 1e-9
+                                && (pl.origin - pe).dot(&out).abs() < 1e-6
+                        })
+                    })
+                    .map(|f| f.id)
+                    .collect();
+                if caps.is_empty() {
+                    continue;
+                }
+                // The section's reach from the path: its corners, its round faces.
+                let r = self.kernel.vertices(cb).map_or(0.0, |vs| {
+                    vs.iter()
+                        .filter(|v| (v.point - pe).dot(&out).abs() < 1e-6)
+                        .map(|v| (v.point - pe).norm())
+                        .fold(0.0, f64::max)
+                });
+                let r = faces
+                    .iter()
+                    .filter(|f| f.kind == cadrs_kernel::SurfaceKind::Cylinder)
+                    .filter_map(|f| {
+                        let ax = f.axis.as_ref()?;
+                        (ax.dir.dot(&out).abs() > 1.0 - 1e-9).then_some(())?;
+                        let off = ax.origin - pe;
+                        Some((off - out * off.dot(&out)).norm() + f.radius?)
+                    })
+                    .fold(r, f64::max);
+                if r <= 0.0 {
+                    continue;
+                }
+                let run_on = 2.0 * r;
+                let spec = cadrs_kernel::OffsetSpec {
+                    distance: 0.0,
+                    faces: caps.iter().map(|f| (*f, run_on)).collect(),
+                    sharp: true,
+                };
+                let Ok(made) = self.kernel.offset(cb, &spec) else {
+                    continue;
+                };
+                let nb = made.bodies[0];
+                let cn = work.as_ref().map_or(&names, |w| &w.1);
+                let named = naming::name_body(&self.kernel, nb, op, &made.history, &[(cb, cn)]);
+                match named {
+                    Ok(n) => {
+                        if let Some((old, _)) = work.replace((nb, n)) {
+                            self.kernel.release(old);
+                        }
+                        reached.push((e, pe, out, run_on));
+                    }
+                    Err(_) => self.kernel.release(nb),
+                }
+            }
+        }
+        // How far it reaches past each end, before and after.
+        let past = |k: &Self, b: BodyId| -> [f64; 2] {
+            let Some((a, z)) = span else {
+                return [0.0; 2];
+            };
+            let bb = k.kernel.bounding_box(b).ok();
+            [(a, a - z), (z, z - a)].map(|(p, out)| {
+                bb.as_ref()
+                    .map_or(0.0, |bb| bb.max_along(p, &out.normalize()))
+            })
+        };
+        let (cb, cn) = match &work {
+            Some(w) => (w.0, w.1.clone()),
+            None => (body, names.clone()),
+        };
+        let was = past(self, cb);
+        let ids: Vec<BodyId> = tools.iter().map(|t| t.0).collect();
+        let release_work = |k: &mut Self, work: &Option<(BodyId, BodyNames)>| {
+            if let Some((b, _)) = work {
+                k.kernel.release(*b);
+            }
+        };
+        let r = match self.kernel.boolean(BoolOp::Subtract, cb, &ids) {
+            Ok(r) => r,
+            Err(cadrs_kernel::KernelError::EmptyResult(_)) => {
+                release_work(self, &work);
+                return Err("the trim leaves nothing of it".into());
+            }
+            Err(e) => {
+                release_work(self, &work);
+                return Err(format!("the trim failed: {e}"));
+            }
+        };
+        let mut inputs: Vec<(BodyId, &BodyNames)> = vec![(cb, &cn)];
+        inputs.extend(tools.iter().map(|(b, n)| (*b, n)));
+        let pieces = self.split_result(r, op, &inputs);
+        release_work(self, &work);
+        let pieces = pieces?;
+        let largest = pieces.iter().map(|p| p.volume).fold(f64::MIN, f64::max);
+        // Cut through, not just at an end: more than one piece of some size, the offcuts of
+        // the ends run on aside (what a hollow tool leaves in its bore and beyond it: all
+        // within twice the run-on of the end).
+        let offcut = |k: &Self, b: BodyId| {
+            let Ok(bb) = k.kernel.bounding_box(b) else {
+                return false;
+            };
+            reached
+                .iter()
+                .any(|(_, pe, out, run_on)| bb.max_along(*pe, &-*out) <= 2.0 * run_on)
+        };
+        let split = pieces
+            .iter()
+            .filter(|p| p.volume > largest * 1e-3 && !offcut(self, p.body))
+            .count()
+            > 1;
+        let mut kept = self
+            .keep_pieces(op, pieces, |k, b| {
+                k.kernel
+                    .mass_properties(b)
+                    .is_ok_and(|m| m.volume >= largest * (1.0 - 1e-9))
+            })?
+            .ok_or_else(|| "the trim leaves nothing of it".to_string())?;
+        let after = past(self, kept.0);
+        let size = bb.diagonal();
+        if std::env::var_os("CADRS_FRAME_DEBUG").is_some() {
+            eprintln!(
+                "TRIM {pid:?} tools {} reached {:?} was {was:?} after {after:?} largest {largest} split {split}",
+                tools.len(),
+                reached.iter().map(|r| (r.0, r.3)).collect::<Vec<_>>()
+            );
+        }
+        let mut ends = [0, 1].map(|e| after[e] < was[e] - 1e-6 * (1.0 + size));
+        // An end run on that the trim left: cut square where it was.
+        for (e, pe, out, run_on) in reached {
+            let left = self
+                .kernel
+                .bounding_box(kept.0)
+                .map_or(0.0, |bb| bb.max_along(pe, &out));
+            // (A cut of curved faces has a loose box: gone is less than half the run-on left.)
+            if left <= 0.5 * run_on {
+                ends[e] = true;
+                continue;
+            }
+            ends[e] = false;
+            kept = self.frame_cut(op, kept, pe, -out, source + e as u64, None)?;
+        }
+        Ok(Some(GroupTrim {
+            body: kept,
+            ends,
+            split,
+        }))
+    }
+
+    /// The Cut list feature: the frame members there are (or those picked) and any other parts
+    /// picked, gathered in an open composite part.
+    pub(in crate::rebuild) fn cut_list(
+        &mut self,
+        id: FeatureId,
+        x: &frame::CutListFeature,
+        state: &Arc<State>,
+    ) -> Result<Output, String> {
+        if let Some(p) = x.problem() {
+            return Err(p.into());
+        }
+        let mut parts: Vec<PartId> = Vec::new();
+        if x.all {
+            let there: Vec<crate::Part> = state.parts.iter().map(|p| (*p.part).clone()).collect();
+            for m in frame::live_members(&state.frames, &there) {
+                if !parts.contains(&m.part) {
+                    parts.push(m.part);
+                }
+            }
+        }
+        let mut missing = 0;
+        // (A part a column's value is given for is listed: a panel, a machined foot.)
+        for p in x
+            .parts
+            .iter()
+            .chain(x.overrides.iter().flat_map(|o| &o.parts))
+        {
+            if state.part(*p).is_none() {
+                missing += 1;
+            } else if !parts.contains(p) {
+                parts.push(*p);
+            }
+        }
+        // (A composite part in another isn't a piece to cut.)
+        parts.retain(|p| !state.composites.iter().any(|c| c.part == *p));
+        if parts.is_empty() {
+            return Err("There are no frame members for the cut list".into());
+        }
+        let composite = crate::transform::CompositeFeature {
+            parts,
+            closed: false,
+        };
+        let mut out = self.composite(id, &composite, state)?;
+        if missing > 0 {
+            out.warning = Some("A part of the cut list no longer exists".into());
+        }
+        Ok(out)
+    }
+}

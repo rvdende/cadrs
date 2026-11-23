@@ -961,6 +961,10 @@ shell-tool-thread = Thread
 shell-tool-gear = Gear
 # The toolbar's Frame tool: structural members (beams, tubes, extrusions) along sketch lines.
 shell-tool-frame = Frame
+# The toolbar's Frame trim tool: frame members cut to one another where they meet.
+shell-tool-frame-trim = Frame trim
+# The toolbar's Cut list tool: a feature that lists the frame's members as pieces to cut.
+shell-tool-cut-list = Cut list
 # The direct edit tools' button.
 shell-tool-direct-edit = Move face, Delete face, Simplify
 shell-tool-linear-pattern = Linear pattern
@@ -2554,6 +2558,16 @@ model-flat-sketch-note = The flat view stays open while a sketch on the flat pat
 model-composite-parts = Parts and composite parts
 # A checkbox: a closed composite part (its members can't be picked on their own).
 model-composite-closed = Closed
+# The Cut list dialog's checkbox: every frame member is listed, not only the parts picked.
+model-cut-list-all = All frame members
+# The Cut list dialog's list of parts, empty: what to pick.
+model-cut-list-parts = Members and parts to list
+# The same list while All frame members is on: parts that aren't frame members can be added.
+model-cut-list-more-parts = Other parts to list
+# The Frame trim dialog's first list, empty: these members stay whole and cut the others.
+model-frame-trim-first-group = Members that run through
+# The Frame trim dialog's later lists, empty: each is cut to the members in the lists above it.
+model-frame-trim-group = Members cut to those above
 
 ## crates/cadrs_app/src/revolve_dialog.rs
 # A revolve type: a full turn (360°).

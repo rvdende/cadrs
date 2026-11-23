@@ -1693,6 +1693,8 @@ fn template(kind: &str) -> Option<FeatureKind> {
             "thread" => FeatureKind::Thread(cadrs_core::thread::ThreadFeature::default()),
             "gear" => FeatureKind::Gear(cadrs_core::gear::GearFeature::default()),
             "frame" => FeatureKind::Frame(cadrs_core::frame::FrameFeature::default()),
+            "frametrim" => FeatureKind::FrameTrim(cadrs_core::frame::FrameTrimFeature::default()),
+            "cutlist" => FeatureKind::CutList(cadrs_core::frame::CutListFeature::default()),
             "deleteface" => {
                 FeatureKind::DirectEdit(cadrs_core::direct_edit::DirectEditFeature::default())
             }

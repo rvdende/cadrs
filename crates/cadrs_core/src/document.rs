@@ -776,6 +776,8 @@ impl Feature {
             FeatureKind::Thread(x) => x.problem().is_none(),
             FeatureKind::Gear(x) => x.problem().is_none(),
             FeatureKind::Frame(x) => x.problem().is_none(),
+            FeatureKind::FrameTrim(x) => x.problem().is_none(),
+            FeatureKind::CutList(x) => x.problem().is_none(),
             FeatureKind::Variable(x) => x.problem().is_none(),
             FeatureKind::SheetMetalModel(x) => x.problem().is_none(),
             FeatureKind::ModifyJoint(x) => x.problem().is_none(),
@@ -822,6 +824,8 @@ impl Feature {
             FeatureKind::Thread(x) => x.problem(),
             FeatureKind::Gear(x) => x.problem(),
             FeatureKind::Frame(x) => x.problem(),
+            FeatureKind::FrameTrim(x) => x.problem(),
+            FeatureKind::CutList(x) => x.problem(),
             FeatureKind::Variable(x) => x.problem(),
             FeatureKind::SheetMetalModel(x) => x.problem(),
             FeatureKind::ModifyJoint(x) => x.problem(),
@@ -1013,6 +1017,8 @@ impl Feature {
             FeatureKind::Fill(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::Thread(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::Frame(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::FrameTrim(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::CutList(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::Gear(x) => {
                 x.parents().into_iter().for_each(&mut add);
                 for a in [&x.shaft, &x.mate_shaft].into_iter().flatten() {
@@ -1199,6 +1205,11 @@ pub enum FeatureKind {
     /// Structural members along curves, one part each, joined at their corners (issue #266;
     /// [`crate::frame`]).
     Frame(crate::frame::FrameFeature),
+    /// Frame members trimmed to one another, by groups ([`crate::frame::FrameTrimFeature`]).
+    FrameTrim(crate::frame::FrameTrimFeature),
+    /// A cut list: frame members gathered in an open composite part
+    /// ([`crate::frame::CutListFeature`]).
+    CutList(crate::frame::CutListFeature),
     /// A variable, `#name = expression` (P3F.4, P5.2; [`crate::variables`]).
     Variable(crate::variables::VariableFeature),
     /// A sheet metal model: Convert, Extrude or Thicken (P3I.2, SM2; [`crate::sheetmetal`]).

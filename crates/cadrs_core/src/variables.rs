@@ -677,6 +677,8 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
         | FeatureKind::Image(_)
         | FeatureKind::Derived(_)
         | FeatureKind::Composite(_)
+        | FeatureKind::FrameTrim(_)
+        | FeatureKind::CutList(_)
         | FeatureKind::FlatExtrude(_) => {}
     }
 }

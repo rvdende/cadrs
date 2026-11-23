@@ -2738,3 +2738,195 @@ fn the_frames_fixture_is_current() {
         );
     }
 }
+
+/// A 400 round tube along X and a 300 one up from its middle, each a Frame of its own (so
+/// neither is joined to the other): their features and the sketch they follow.
+fn two_tubes(st: &mut Studio) -> (FeatureId, FeatureId) {
+    let bar = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(&[(0.0, 0.0), (400.0, 0.0)], false)],
+    );
+    let stem = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(&[(200.0, 0.0), (200.0, 300.0)], false)],
+    );
+    let made = [bar, stem].map(|sk| {
+        let mut x = FrameFeature::default();
+        x.set_family(ProfileFamily::RoundTube);
+        x.size = "48.3x3.2".into();
+        x.path = vec![PathRef::Sketch(sk)];
+        st.frame(x)
+    });
+    (made[0], made[1])
+}
+
+/// ∫∫ √(R² − z²) over a disc of radius r (z across it): what a cylinder of radius R, its axis
+/// through the disc's centre and in its plane, takes off a bar of that section ending on the
+/// axis (Simpson's rule in z = r sin t, smooth there).
+fn saddle(r: f64, big: f64) -> f64 {
+    let n = 4000;
+    let f = |t: f64| 2.0 * r * r * t.cos().powi(2) * (big * big - (r * t.sin()).powi(2)).sqrt();
+    let h = PI / n as f64;
+    let mut s = f(-PI / 2.0) + f(PI / 2.0);
+    for i in 1..n {
+        s += f(-PI / 2.0 + i as f64 * h) * if i % 2 == 1 { 4.0 } else { 2.0 };
+    }
+    s * h / 3.0
+}
+
+#[test]
+fn a_frame_trim_saddles_a_tube_ending_on_anothers_axis() {
+    // The stem ends on the bar's axis: trimmed to the bar, its end is the bar's outside.
+    let mut st = Studio::new();
+    let (bar, stem) = two_tubes(&mut st);
+    let before = st.build();
+    let part =
+        |b: &rebuild::Build, f: FeatureId| b.parts.iter().find(|p| p.feature == f).unwrap().id;
+    let (bar_part, stem_part) = (part(&before, bar), part(&before, stem));
+    let trim = st.add(
+        "Frame trim",
+        FeatureKind::FrameTrim(frame::FrameTrimFeature {
+            groups: vec![vec![bar_part], vec![stem_part]],
+        }),
+    );
+    let b = st.build();
+    assert!(b.errors.is_empty(), "{:?}", b.errors);
+    assert!(b.warnings.is_empty(), "{:?}", b.warnings);
+    assert_eq!(b.parts.len(), 2);
+    let (ro, ri) = (24.15, 24.15 - 3.2);
+    let a = PI * (ro * ro - ri * ri);
+    // The bar is whole; the stem keeps its part and loses the saddle.
+    let bar_now = b.parts.iter().find(|p| p.id == bar_part).unwrap();
+    assert!(
+        close(volume(bar_now), a * 400.0, 1e-9),
+        "{}",
+        volume(bar_now)
+    );
+    let stem_now = b.parts.iter().find(|p| p.id == stem_part).unwrap();
+    assert!(stem_now.features.contains(&trim));
+    let want = a * 300.0 - (saddle(ro, ro) - saddle(ri, ro));
+    assert!(
+        close(volume(stem_now), want, 1e-9),
+        "{} vs {want}",
+        volume(stem_now)
+    );
+    // The cut list says so, and gives the stem its length to the bar's side at its longest.
+    let m = b.frames.iter().find(|m| m.part == stem_part).unwrap();
+    assert_eq!(m.ends[0], EndCut::Trimmed);
+    assert_eq!(m.ends[1], EndCut::Square);
+    assert!(close(m.volume, want, 1e-9));
+    let long = 300.0 - (ro * ro - ri * ri).sqrt();
+    assert!(m.length <= 300.0 && m.length >= long - 1e-6, "{}", m.length);
+}
+
+#[test]
+fn a_frame_trims_later_groups_give_way_to_all_before_them() {
+    // Three groups: the bar, the stem, and a brace across the stem. The brace is cut by the
+    // stem (and would be by the bar); the stem only by the bar.
+    let mut st = Studio::new();
+    let (bar, stem) = two_tubes(&mut st);
+    let across = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(&[(100.0, 150.0), (200.0, 150.0)], false)],
+    );
+    let mut x = FrameFeature::default();
+    x.set_family(ProfileFamily::RoundTube);
+    x.size = "33.7x3.2".into();
+    x.path = vec![PathRef::Sketch(across)];
+    let brace = st.frame(x);
+    let before = st.build();
+    let part = |f: FeatureId| before.parts.iter().find(|p| p.feature == f).unwrap().id;
+    let (bar_part, stem_part, brace_part) = (part(bar), part(stem), part(brace));
+    let stem_before = volume(before.parts.iter().find(|p| p.id == stem_part).unwrap());
+    st.add(
+        "Frame trim",
+        FeatureKind::FrameTrim(frame::FrameTrimFeature {
+            groups: vec![vec![bar_part], vec![stem_part], vec![brace_part]],
+        }),
+    );
+    let b = st.build();
+    assert!(b.errors.is_empty(), "{:?}", b.errors);
+    let (ro, ri) = (24.15, 24.15 - 3.2);
+    let a = PI * (ro * ro - ri * ri);
+    let stem_now = volume(b.parts.iter().find(|p| p.id == stem_part).unwrap());
+    let want = a * 300.0 - (saddle(ro, ro) - saddle(ri, ro));
+    assert!(close(stem_before, a * 300.0, 1e-9));
+    assert!(close(stem_now, want, 1e-9), "{stem_now} vs {want}");
+    // The brace ends on the stem's axis: saddled to the stem's outside.
+    let (bo, bi) = (16.85, 16.85 - 3.2);
+    let brace_now = volume(b.parts.iter().find(|p| p.id == brace_part).unwrap());
+    let want = PI * (bo * bo - bi * bi) * 100.0 - (saddle(bo, ro) - saddle(bi, ro));
+    assert!(close(brace_now, want, 1e-9), "{brace_now} vs {want}");
+}
+
+#[test]
+fn a_cut_list_gathers_the_members_in_an_open_composite() {
+    let mut st = Studio::new();
+    let (bar, stem) = two_tubes(&mut st);
+    let f = st.add(
+        "Cut list",
+        FeatureKind::CutList(frame::CutListFeature::default()),
+    );
+    let b = st.build();
+    assert!(b.errors.is_empty(), "{:?}", b.errors);
+    assert_eq!(b.composites.len(), 1);
+    let c = &b.composites[0];
+    assert_eq!(c.part.feature, f);
+    assert!(!c.closed);
+    let made: Vec<FeatureId> = c.members.iter().map(|p| p.feature).collect();
+    assert_eq!(made, vec![bar, stem]);
+    // Its members are still parts of their own, and still the cut list's rows.
+    assert_eq!(b.parts.len(), 3);
+    let live = frame::live_members(&b.frames, &b.parts);
+    assert_eq!(live.len(), 2);
+
+    // Only the parts picked, when not every member.
+    let mut st = Studio::new();
+    let (bar, _) = two_tubes(&mut st);
+    let bar_part = st
+        .build()
+        .parts
+        .iter()
+        .find(|p| p.feature == bar)
+        .unwrap()
+        .id;
+    st.add(
+        "Cut list",
+        FeatureKind::CutList(frame::CutListFeature {
+            all: false,
+            parts: vec![bar_part],
+            overrides: Vec::new(),
+        }),
+    );
+    let b = st.build();
+    assert_eq!(b.composites[0].members, vec![bar_part]);
+
+    // A part a column's value is given for is listed too, frame member or not.
+    let mut st = Studio::new();
+    let (bar, stem) = two_tubes(&mut st);
+    let plate = st.sketch(
+        PlaneRef::Top,
+        vec![polyline(
+            &[(0.0, 100.0), (50.0, 100.0), (50.0, 150.0), (0.0, 150.0)],
+            true,
+        )],
+    );
+    let plate = st.extrude(plate, 5.0);
+    let before = st.build();
+    let plate_part = before.parts.iter().find(|p| p.feature == plate).unwrap().id;
+    st.add(
+        "Cut list",
+        FeatureKind::CutList(frame::CutListFeature {
+            all: true,
+            parts: Vec::new(),
+            overrides: vec![frame::CutListOverride {
+                parts: vec![plate_part],
+                column: "Description".into(),
+                value: "Foot".into(),
+            }],
+        }),
+    );
+    let b = st.build();
+    let made: Vec<FeatureId> = b.composites[0].members.iter().map(|p| p.feature).collect();
+    assert_eq!(made, vec![bar, stem, plate]);
+}

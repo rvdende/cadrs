@@ -16,6 +16,8 @@ icons! {
     THREAD => ("thread", Solid, "Thread"),
     GEAR => ("gear", Solid, "Gear"),
     FRAME => ("frame", Solid, "Frame"),
+    FRAME_TRIM => ("frame-trim", Solid, "Frame trim"),
+    CUT_LIST_FEATURE => ("cut-list-feature", Solid, "Cut list"),
     LINEAR_PATTERN => ("linear-pattern", Solid, "Linear pattern"),
     CIRCULAR_PATTERN => ("circular-pattern", Solid, "Circular pattern"),
     BOOLEAN => ("boolean", Solid, "Boolean"),

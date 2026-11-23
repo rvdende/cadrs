@@ -1553,6 +1553,95 @@ pub struct RowMaterial {
     pub nominal: bool,
 }
 
+/// Frame trim: members trimmed to one another, by groups in order. Each member of a group has
+/// the members of every group before it subtracted (as they are by then), and keeps its
+/// largest piece: the first group runs through, the last gives way to all the others.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct FrameTrimFeature {
+    /// The groups, the first trimming the rest.
+    #[serde(default)]
+    pub groups: Vec<Vec<PartId>>,
+}
+
+impl FrameTrimFeature {
+    pub fn problem(&self) -> Option<&'static str> {
+        if self.groups.iter().filter(|g| !g.is_empty()).count() < 2 {
+            return Some("Select the members to trim, in two or more groups");
+        }
+        None
+    }
+
+    /// The features that made the members.
+    pub fn parents(&self) -> Vec<FeatureId> {
+        let mut out: Vec<FeatureId> = Vec::new();
+        for p in self.groups.iter().flatten() {
+            if !out.contains(&p.feature) {
+                out.push(p.feature);
+            }
+        }
+        out
+    }
+}
+
+/// A value a Cut list feature gives a column for some of its parts (a description, a
+/// standard), instead of what the parts say themselves. Its parts are in the list whether
+/// frame members or not (a panel, a machined foot).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CutListOverride {
+    /// The parts it is for; none: every part of the list.
+    #[serde(default)]
+    pub parts: Vec<PartId>,
+    /// The column's name.
+    pub column: String,
+    pub value: String,
+}
+
+/// Cut list: the frame members (all there are, or those picked, with any other parts picked)
+/// gathered in an open composite part, their pieces listed by the cut list
+/// ([`cut_list`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CutListFeature {
+    /// Every frame member there is at this point of the list.
+    #[serde(default)]
+    pub all: bool,
+    /// The parts picked (with `all`: besides the members).
+    #[serde(default)]
+    pub parts: Vec<PartId>,
+    #[serde(default)]
+    pub overrides: Vec<CutListOverride>,
+}
+
+impl Default for CutListFeature {
+    fn default() -> Self {
+        Self {
+            all: true,
+            parts: Vec::new(),
+            overrides: Vec::new(),
+        }
+    }
+}
+
+impl CutListFeature {
+    pub fn problem(&self) -> Option<&'static str> {
+        (!self.all && self.parts.is_empty()).then_some("Select the members for the cut list")
+    }
+
+    /// The features that made the parts picked.
+    pub fn parents(&self) -> Vec<FeatureId> {
+        let mut out: Vec<FeatureId> = Vec::new();
+        for p in self
+            .parts
+            .iter()
+            .chain(self.overrides.iter().flat_map(|o| &o.parts))
+        {
+            if !out.contains(&p.feature) {
+                out.push(p.feature);
+            }
+        }
+        out
+    }
+}
+
 /// The members among `parts` as they are now: each member whose part is still there, and each
 /// copy a Pattern or Mirror made of one (a part whose `source` leads back to a member's), as a
 /// member of its own. A member a later feature joined to another part, or deleted, is gone.

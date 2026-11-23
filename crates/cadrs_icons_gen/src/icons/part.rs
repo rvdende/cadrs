@@ -24,6 +24,8 @@ pub fn icons() -> Vec<Def> {
         def("thread", Solid, "Thread", thread),
         def("gear", Solid, "Gear", gear),
         def("frame", Solid, "Frame", frame),
+        def("frame-trim", Solid, "Frame trim", frame_trim),
+        def("cut-list-feature", Solid, "Cut list", cut_list_feature),
         def("linear-pattern", Solid, "Linear pattern", linear_pattern),
         def(
             "circular-pattern",
@@ -706,6 +708,47 @@ fn transform() -> Vec<String> {
         iso_box(o1, 0.0, c, 0.0, c, 0.0, c),
         arrow(a.0, a.1, b.0, b.1, 3.0, 2.8, INK, r#"stroke-width="1.4""#),
     ]
+}
+
+fn frame_trim() -> Vec<String> {
+    // Context: a member running through. Output: a second member ending against it, cut to
+    // it (the accent seam where they meet).
+    let o = (11.8, 6.2);
+    let p = projector(o);
+    let t = 3.2;
+    let (x0, x1) = (3.4, 6.6);
+    els![
+        iso_box(o, 0.0, 10.0, 0.0, t, 0.0, t),
+        iso_box(o, x0, x1, t, 9.2, 0.0, t),
+        // (What the tool changes: the member cut, its top washed.)
+        poly(
+            &[p(x0, t, t), p(x1, t, t), p(x1, 9.2, t), p(x0, 9.2, t)],
+            ACCENT,
+            SEL
+        ),
+        polyline(
+            &[p(x0, t, t), p(x1, t, t), p(x1, t, 0.0)],
+            &format!(r#"stroke="{ACCENT}" stroke-width="1.5""#)
+        ),
+    ]
+}
+
+fn cut_list_feature() -> Vec<String> {
+    // Output: the members as the pieces to cut, laid side by side, longest first, each with
+    // its cut end in accent.
+    let o = (11.8, 6.6);
+    let p = projector(o);
+    let t = 2.2;
+    let bars = [(0.0, 10.0), (3.1, 7.4), (6.2, 4.8)];
+    let mut out = Vec::new();
+    for (y, len) in bars {
+        out.push(iso_box(o, 0.0, len, y, y + t, 0.0, t));
+        out.push(polyline(
+            &[p(len, y, t), p(len, y + t, t), p(len, y + t, 0.0)],
+            &format!(r#"stroke="{ACCENT}" stroke-width="1.3""#),
+        ));
+    }
+    out
 }
 
 fn composite_part() -> Vec<String> {
