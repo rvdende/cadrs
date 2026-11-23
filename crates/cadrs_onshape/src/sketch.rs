@@ -557,6 +557,7 @@ pub fn import(
     let pierces = pierce_links(feature, &map, &sketch_of(s, el, id)?, &plane, parts);
     let pattern_lines = pattern_lines(s, el, id, feature, &map)?;
     let g = sketch_of(s, el, id)?;
+    let use_ends = use_end_links(feature, &map, &g, &vertices);
     let ctx = Ctx {
         map: &map,
         g: &g,
@@ -568,6 +569,7 @@ pub fn import(
         origin_at,
         plane_lines: &plane_lines,
         pierces: &pierces,
+        use_ends: &use_ends,
         pattern_lines: &pattern_lines,
     };
     let mut specs = Vec::new();
@@ -1035,6 +1037,56 @@ fn model_vertices(
     out
 }
 
+/// The ends of a sketch's used edges (its `PROJECTED` constraints of type `USE_END`) whose
+/// model vertex was found where the point is: the point and the edge piercing the plane there.
+fn use_end_links(
+    feature: &Value,
+    map: &SketchMap,
+    g: &Sketch,
+    vertices: &HashMap<String, (Vec2, cadrs_sketch::Link)>,
+) -> HashMap<PointId, cadrs_sketch::Link> {
+    let mut out = HashMap::new();
+    for c in feature["constraints"].as_array().into_iter().flatten() {
+        if c["constraintType"].as_str() != Some("PROJECTED") {
+            continue;
+        }
+        let params = c["parameters"].as_array().cloned().unwrap_or_default();
+        let value = |id: &str| {
+            params
+                .iter()
+                .find(|p| p["parameterId"] == id)
+                .and_then(|p| p["value"].as_str())
+        };
+        if value("projectionType") != Some("USE_END") {
+            continue;
+        }
+        let vertex = params
+            .iter()
+            .find(|p| p["parameterId"] == "externalVertex")
+            .and_then(|p| {
+                p["queries"].as_array()?.first()?["deterministicIds"]
+                    .as_array()?
+                    .first()?
+                    .as_str()
+            });
+        let (Some(local), Some(vertex)) = (value("localFirst"), vertex) else {
+            continue;
+        };
+        let Some(&pid) = map.points.get(local) else {
+            continue;
+        };
+        let (Some(pos), Some((at, link))) =
+            (g.points.get(pid).map(|p| p.pos), vertices.get(vertex))
+        else {
+            continue;
+        };
+        if pos.distance(*at) < 1e-5 {
+            out.insert(pid, *link);
+        }
+    }
+    out
+}
+
 /// For each Pierce constraint of a sketch, the part edge that crosses the sketch plane at its
 /// point (within a micron, and not lying in the plane), by the point's Onshape entity id.
 fn pierce_links(
@@ -1444,7 +1496,25 @@ fn projected_vertices(
                                     frame.to_sketch(other.to_world(sk.geometry.pos(a))),
                                     frame.to_sketch(other.to_world(sk.geometry.pos(b))),
                                 );
+                                // A line seen end-on is a point: where it pierces the plane.
                                 if qa.distance(qb) < 1e-6 {
+                                    if ((coord(qa) - coord(at)).abs() - apart).abs() < 1e-4
+                                        && qa.distance(at) > 1e-6
+                                        && best
+                                            .as_ref()
+                                            .is_none_or(|(b, _)| qa.distance(at) < b.distance(at))
+                                    {
+                                        best = Some((
+                                            qa,
+                                            (
+                                                None,
+                                                cadrs_sketch::Link::SketchCurve {
+                                                    feature: f.id.0,
+                                                    curve: k,
+                                                },
+                                            ),
+                                        ));
+                                    }
                                     continue;
                                 }
                                 for q in [qa, qb] {
@@ -2232,6 +2302,9 @@ struct Ctx<'a> {
     /// Default planes (by Onshape id) seen edge-on away from the sketch's axes → the
     /// construction Use line along each one's trace.
     plane_lines: &'a HashMap<String, CurveId>,
+    /// The ends of used (projected) edges that lie on a model vertex found for them → the part
+    /// edge piercing the sketch plane there.
+    use_ends: &'a HashMap<PointId, cadrs_sketch::Link>,
     /// Each Pierce constraint's point (by its Onshape entity id) → the point and the part edge
     /// that crosses the sketch plane there.
     pierces: &'a HashMap<String, (PointId, cadrs_sketch::Link)>,
@@ -2652,7 +2725,23 @@ impl Ctx<'_> {
                 }
             }
             "PROJECTED" => match first {
-                // The projected curve keeps its place; the link to the model is not imported.
+                // A used line whose two ends are held at the model's vertices follows them.
+                Some(Ent::Curve(l))
+                    if matches!(
+                        self.g.curves.get(l).map(|x| x.kind),
+                        Some(CurveKind::Line { a, b })
+                            if self.use_ends.contains_key(&a) && self.use_ends.contains_key(&b)
+                    ) =>
+                {
+                    Nothing
+                }
+                // The end of a used edge, at a vertex the model has: pierced there, so it is
+                // where the model puts it (Onshape's own position for it is rounded).
+                Some(Ent::Point(id, p)) if self.use_ends.contains_key(&id) => {
+                    one(ConstraintOf::Pierce(PointSpec::At(p), self.use_ends[&id]))
+                }
+                // Else the projected curve keeps its place; the link to the model is not
+                // imported.
                 Some(Ent::Curve(l)) => one(ConstraintOf::FixCurve(CurveSpec::Id(l))),
                 Some(Ent::Point(_, p)) => one(ConstraintOf::FixPoint(PointSpec::At(p))),
                 _ => Dropped("unsupported references"),
