@@ -524,7 +524,18 @@ impl Rebuilder {
                     .frames
                     .iter()
                     .any(|m| m.part == *p && m.family == Some(ProfileFamily::TSlot) && !m.plate);
-                match self.frame_trim(op, b, tool, state, x.trim_flip) {
+                // (What an end run on leaves in a hollow tool and just past it is no split.)
+                let slack = [0, 1]
+                    .map(|e| {
+                        if reached.contains(&(i, e)) {
+                            plans[i][e].run_on
+                        } else {
+                            0.0
+                        }
+                    })
+                    .into_iter()
+                    .fold(0.0, f64::max);
+                match self.frame_trim(op, b, tool, state, x.trim_flip, slack) {
                     Ok((mut t, split)) => {
                         if split {
                             notes.push(format!(
@@ -1621,6 +1632,7 @@ impl Rebuilder {
         tool: BodyId,
         state: &State,
         other_side: bool,
+        slack: f64,
     ) -> Result<((BodyId, BodyNames), bool), String> {
         let r = match self.kernel.boolean(BoolOp::Subtract, body, &[tool]) {
             Ok(r) => r,
@@ -1661,7 +1673,19 @@ impl Rebuilder {
         self.kernel.release(cut);
         let largest = pieces.iter().map(|p| p.volume).fold(f64::MIN, f64::max);
         // (Pieces of more than a sliver: a member cut through, not just its end.)
-        let several = pieces.iter().filter(|p| p.volume > largest * 1e-3).count() > 1;
+        // (Not what is left inside a hollow tool, or within `slack` of it: the offcuts of an
+        // end run on through it.)
+        let tool_box = self.kernel.bounding_box(tool).ok();
+        let offcut = |k: &Self, b: BodyId| match (&tool_box, k.kernel.bounding_box(b)) {
+            (Some(t), Ok(bb)) => box_within(&bb, t, slack),
+            _ => false,
+        };
+        let several = pieces
+            .iter()
+            .filter(|p| p.volume > largest * 1e-3)
+            .filter(|p| p.volume >= largest * (1.0 - 1e-9) || !offcut(self, p.body))
+            .count()
+            > 1;
         self.keep_pieces(op, pieces, |k, b| {
             let is_largest = k
                 .kernel
@@ -2659,6 +2683,11 @@ struct GroupTrim {
     split: bool,
 }
 
+/// Whether `a` lies within `b` grown by `slack` every way.
+fn box_within(a: &cadrs_kernel::Aabb, b: &cadrs_kernel::Aabb, slack: f64) -> bool {
+    (0..3).all(|k| a.min[k] >= b.min[k] - slack && a.max[k] <= b.max[k] + slack)
+}
+
 fn boxes_meet(a: &cadrs_kernel::Aabb, b: &cadrs_kernel::Aabb, tol: f64) -> bool {
     (0..3).all(|k| a.min[k] - tol <= b.max[k] && b.min[k] - tol <= a.max[k])
 }
@@ -2955,19 +2984,18 @@ impl Rebuilder {
         let pieces = pieces?;
         let largest = pieces.iter().map(|p| p.volume).fold(f64::MIN, f64::max);
         // Cut through, not just at an end: more than one piece of some size, the offcuts of
-        // the ends run on aside (what a hollow tool leaves in its bore and beyond it: all
-        // within twice the run-on of the end).
+        // the ends run on aside (what a hollow tool leaves in its bore and just beyond it).
+        let slack = reached.iter().map(|r| r.3).fold(0.0, f64::max);
         let offcut = |k: &Self, b: BodyId| {
             let Ok(bb) = k.kernel.bounding_box(b) else {
                 return false;
             };
-            reached
-                .iter()
-                .any(|(_, pe, out, run_on)| bb.max_along(*pe, &-*out) <= 2.0 * run_on)
+            boxes.iter().any(|t| box_within(&bb, t, slack))
         };
         let split = pieces
             .iter()
-            .filter(|p| p.volume > largest * 1e-3 && !offcut(self, p.body))
+            .filter(|p| p.volume > largest * 1e-3)
+            .filter(|p| p.volume >= largest * (1.0 - 1e-9) || !offcut(self, p.body))
             .count()
             > 1;
         let mut kept = self
