@@ -1,7 +1,7 @@
 // The node view (`cadrs_app::node_view`): the feature list as a node graph, with a
 // configuration. `blocks 2`: two blocks, each a sketch and a New extrude.
-// 01 The node view: the feature panel widened into a canvas with the schematic's grid; each
-//    feature a node (an extrude's node its dialog), geometry traces from sketches into
+// 01 The node view: a panel under the 3D view (the feature list staying on the left), a canvas
+//    with the schematic's grid; each feature a node (an extrude's node its dialog), geometry traces from sketches into
 //    extrudes, each node's output row, and the Parts node on the right.
 // 02 Add configuration, + Input: the Configuration node with presets and an input `input1`.
 // 03 The input's socket dragged onto Extrude 1's Depth: Depth reads #input1, a trace from the
@@ -12,7 +12,7 @@
 // 06 + Preset: Preset 2, active, in the node and in the features header.
 // 07 Presets table: every preset's value of `input1` side by side in the Configuration node.
 // 08 Auto arrange: laid out again and framed.
-// 09 Back to the list: the feature list, narrow again, with the preset dropdown.
+// 09 The node view closed: the 3D view full height again, the preset dropdown in the list.
 Scenario(
     start: Some("document"),
     steps: [

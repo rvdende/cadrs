@@ -33,6 +33,9 @@ pub struct Splitter {
     pub min_after: f32,
     start: f32,
     dragging: bool,
+    /// The pane it resizes is the one after it (it is that pane's top edge, [`top_edge`]):
+    /// dragging up makes it taller. `min_before` is then the least height left above it.
+    below: bool,
 }
 
 impl Splitter {
@@ -67,6 +70,7 @@ pub fn horizontal_splitter(
             min_after,
             start: 0.0,
             dragging: false,
+            below: false,
         },
         HoverCursor(CursorKind::RowResize),
         Hovered::default(),
@@ -94,6 +98,43 @@ pub fn horizontal_splitter(
     )
 }
 
+/// The top edge of `target`, a pane at the bottom of a column (a panel under the 3D view), as a
+/// grip that resizes it: dragging up makes it taller, the pane above taking the rest. Goes in
+/// `target` (absolutely placed over its top edge, `reach` px above it); `target` needs a fixed
+/// height and `flex_shrink: 0`. Each keeps at least `min_above` / `min_height` px.
+pub fn top_edge(
+    name: &str,
+    target: Entity,
+    reach: f32,
+    min_above: f32,
+    min_height: f32,
+) -> impl Bundle {
+    (
+        Name::new(name.to_string()),
+        Splitter {
+            target,
+            min_before: min_above,
+            min_after: min_height,
+            start: 0.0,
+            dragging: false,
+            below: true,
+        },
+        HoverCursor(CursorKind::RowResize),
+        Hovered::default(),
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(0.0),
+            right: Val::Px(0.0),
+            top: Val::Px(-reach),
+            height: Val::Px(reach + 3.0),
+            ..default()
+        },
+        // Transparent, but picked (a node without a background is still hit).
+        Pickable::default(),
+        ZIndex(10),
+    )
+}
+
 /// Shows its cursor kind while the element is hovered (see [`crate::cursor`]).
 #[derive(Component, Debug, Clone, Copy)]
 pub struct HoverCursor(pub CursorKind);
@@ -117,6 +158,7 @@ fn on_drag_start(
 fn on_drag(
     mut ev: On<PointerDrag>,
     q: Query<(&Splitter, &ChildOf)>,
+    q_parent: Query<&ChildOf>,
     q_computed: Query<&ComputedNode>,
     mut q_node: Query<&mut Node>,
 ) {
@@ -125,6 +167,26 @@ fn on_drag(
     };
     ev.propagate(false);
     if !s.dragging {
+        return;
+    }
+    if s.below {
+        // The pane's column: it may take the column's height less the pane above's minimum.
+        let Some(p) = q_parent
+            .get(s.target)
+            .ok()
+            .and_then(|c| q_computed.get(c.parent()).ok())
+        else {
+            return;
+        };
+        let room = p.size().y * p.inverse_scale_factor() - s.min_before;
+        let h = (s.start - ev.distance.y)
+            .clamp(s.min_after, room.max(s.min_after))
+            .round();
+        if let Ok(mut n) = q_node.get_mut(s.target)
+            && n.height != Val::Px(h)
+        {
+            n.height = Val::Px(h);
+        }
         return;
     }
     // The pane above may take the parent's height less the divider and the pane below's minimum.

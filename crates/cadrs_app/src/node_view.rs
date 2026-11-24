@@ -1,8 +1,9 @@
 //! The **node view** of a Part Studio: its feature list as a node graph (Blender's geometry
 //! nodes, Houdini's networks), with the studio's configuration as the node its values come from
-//! (see `cadrs_core::configuration`). The feature list's header has a button that turns it on;
-//! the feature panel then widens, and the list and the floating feature dialog give way to an
-//! endless canvas ([`cadrs_ui::node_graph`]) where:
+//! (see `cadrs_core::configuration`). The feature list's header has a button that turns it on:
+//! a panel opens under the 3D view (the feature list staying on the left; its top edge drags to
+//! resize it) with an endless canvas ([`cadrs_ui::node_graph`]), the floating feature dialog
+//! moving into its node, where:
 //!
 //! - **every feature is a node whose body is its dialog**. The feature being edited has its live
 //!   dialog moved into its node; the others show a copy of their dialog with their parameters
@@ -70,6 +71,7 @@ impl Plugin for NodeViewPlugin {
             track_pointer_over.after(bevy::picking::PickingSystems::Hover),
         )
         .add_observer(on_toggle)
+        .add_observer(on_panel_resized)
         .add_observer(on_view_changed)
         .add_observer(on_node_moved)
         .add_observer(on_wire_connect)
@@ -115,6 +117,8 @@ pub struct NodeView {
     views: HashMap<ElementId, PanZoom>,
     /// The Part Studios whose Configuration node shows its presets table.
     tables: HashSet<ElementId>,
+    /// The node panel's height (px), as its top edge was last dragged to.
+    height: Option<f32>,
 }
 
 impl NodeView {
@@ -133,14 +137,13 @@ impl NodeView {
     }
 }
 
-/// Where the node view goes in the feature panel (a sibling of the feature list's body, which it
-/// takes the place of). Spawned hidden with the feature list ([`host_bundle`]).
+/// The panel under the 3D view the node view shows in ([`panel`]), the feature list staying
+/// where it is.
 #[derive(Component, Debug, Clone, Copy)]
-pub struct NodeViewHost(pub ElementId);
+pub struct NodePanel;
 
-/// The feature list's scrolling body: hidden while the node view shows.
-#[derive(Component, Debug, Clone, Copy)]
-pub struct FeatureListBody;
+/// The node panel's top edge, which resizes it.
+const PANEL_EDGE: &str = "node-panel-edge";
 
 /// The node view's canvas, for the Part Studio it shows.
 #[derive(Component, Debug, Clone, Copy)]
@@ -406,20 +409,39 @@ fn squash(s: &str) -> String {
 // ---------------------------------------------------------------------------------------------
 // The toggle and the panel
 
-/// The button in the feature list's header, and the host the canvas goes in (both spawned by
-/// `document::feature_list`).
-pub fn host_bundle(element: ElementId) -> impl Bundle {
+/// The node panel: under the 3D view, the width of it, hidden until the feature list header's
+/// node view button shows it (`document`'s shell spawns it, [`panel_edge`] in it).
+pub fn panel(t: &Theme, gap: f32) -> impl Bundle {
     (
-        Name::new("node-view-host"),
-        NodeViewHost(element),
+        Name::new("node-panel"),
+        NodePanel,
         Node {
-            flex_grow: 1.0,
+            height: Val::Percent(40.0),
+            flex_shrink: 0.0,
             min_height: Val::Px(0.0),
+            margin: UiRect::top(Val::Px(gap)),
             flex_direction: FlexDirection::Column,
+            // (Not clipped: its top edge's grip reaches into the gap above it. The canvas clips
+            // itself.)
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(t.radius_panel)),
             display: Display::None,
             ..default()
         },
+        cadrs_ui::glass::panel(t),
     )
+}
+
+/// The node panel's top edge (in the gap above it): dragged, the panel grows or shrinks.
+pub fn panel_edge(panel: Entity, gap: f32) -> impl Bundle {
+    cadrs_ui::top_edge(PANEL_EDGE, panel, gap + 1.0, 120.0, 120.0)
+}
+
+/// Remembers the node panel's height when its edge is let go.
+fn on_panel_resized(ev: On<cadrs_ui::SplitterMoved>, q: Query<&Name>, mut view: ResMut<NodeView>) {
+    if q.get(ev.entity).is_ok_and(|n| n.as_str() == PANEL_EDGE) {
+        view.height = Some(ev.height);
+    }
 }
 
 fn on_toggle(a: On<Activate>, q: Query<&Name>, mut commands: Commands) {
@@ -443,33 +465,30 @@ pub fn toggle(world: &mut World) {
     v.set(el, on);
 }
 
-/// Shows the canvas or the list, and keeps the header button pressed while the canvas shows.
-/// (The feature panel's width follows in `assembly::list::list_width`.)
+/// Shows the node panel while the active Part Studio's node view is on (at the height it was
+/// last dragged to), and keeps the header button pressed meanwhile.
 #[allow(clippy::type_complexity)]
 fn sync_mode(
     view: Res<NodeView>,
     doc: Res<ActiveDocument>,
-    mut q_host: Query<(&NodeViewHost, &mut Node), Without<FeatureListBody>>,
-    mut q_body: Query<&mut Node, (With<FeatureListBody>, Without<NodeViewHost>)>,
+    mut q_panel: Query<&mut Node, With<NodePanel>>,
+    q_edge: Query<&cadrs_ui::Splitter>,
     q_button: Query<(Entity, &Name, Has<cadrs_ui::Selected>), With<bevy::ui_widgets::Button>>,
     mut commands: Commands,
 ) {
     let active = doc.active_element().map(|e| e.id);
     let on = active.is_some_and(|e| view.is_on(e));
-    for (host, mut n) in &mut q_host {
-        let want = if Some(host.0) == active && on {
-            Display::Flex
-        } else {
-            Display::None
-        };
+    let dragging = q_edge.iter().any(|s| s.dragging());
+    for mut n in &mut q_panel {
+        let want = if on { Display::Flex } else { Display::None };
         if n.display != want {
             n.display = want;
         }
-    }
-    for mut n in &mut q_body {
-        let want = if on { Display::None } else { Display::Flex };
-        if n.display != want {
-            n.display = want;
+        if let Some(h) = view.height
+            && !dragging
+            && n.height != Val::Px(h)
+        {
+            n.height = Val::Px(h);
         }
     }
     for (e, name, sel) in &q_button {
@@ -833,8 +852,8 @@ fn sync_nodes(world: &mut World, mut last_edited: Local<Option<Option<FeatureId>
         .active_element()
         .map(|e| e.id);
     let on = active.filter(|e| world.resource::<NodeView>().is_on(*e));
-    let mut q_host = world.query::<(Entity, &NodeViewHost)>();
-    let host = on.and_then(|el| q_host.iter(world).find(|(_, h)| h.0 == el).map(|(e, _)| e));
+    let mut q_host = world.query_filtered::<Entity, With<NodePanel>>();
+    let host = on.and_then(|_| q_host.iter(world).next());
     let mut q_canvas = world.query::<(Entity, &NodeViewCanvas, &NodeCanvas)>();
     let canvases: Vec<(Entity, ElementId, NodeCanvas)> =
         q_canvas.iter(world).map(|(e, c, n)| (e, c.0, *n)).collect();

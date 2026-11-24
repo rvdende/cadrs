@@ -1166,82 +1166,31 @@ fn width_key(kind: crate::viewport::ActiveKind) -> &'static str {
     }
 }
 
-/// The list panel's right edge was dragged: that width for this kind of tab (or for the node
-/// view, while it shows).
+/// The list panel's right edge was dragged: that width for this kind of tab.
 pub fn on_panel_resized(
     ev: On<cadrs_ui::dock::DockPanelResized>,
     q: Query<&Name>,
     kind: Res<crate::viewport::ActiveKind>,
-    nodes: Option<Res<crate::node_view::NodeView>>,
-    doc: Option<Res<crate::ActiveDocument>>,
     mut widths: ResMut<PanelWidths>,
 ) {
     if q.get(ev.entity)
         .is_ok_and(|n| n.as_str() == "feature-panel")
     {
-        let key = if node_view_shown(nodes.as_deref(), doc.as_deref()) {
-            NODE_VIEW_KEY
-        } else {
-            width_key(*kind)
-        };
-        widths.0.insert(key, ev.width);
+        widths.0.insert(width_key(*kind), ev.width);
     }
-}
-
-/// The width key of the node view (`crate::node_view`), whatever the tab.
-const NODE_VIEW_KEY: &str = "node-view";
-
-/// Whether the active Part Studio shows its node view.
-fn node_view_shown(
-    nodes: Option<&crate::node_view::NodeView>,
-    doc: Option<&crate::ActiveDocument>,
-) -> bool {
-    let active = doc.and_then(|d| d.active_element().map(|e| e.id));
-    nodes.is_some_and(|n| active.is_some_and(|e| n.is_on(e)))
 }
 
 /// The list panel of an assembly is wider than a Part Studio's feature list, so instance names
 /// ("Base Frame Bar <1>") fit beside their state icons (P3B.8 judge); a width dragged to wins.
-#[allow(clippy::too_many_arguments)]
 fn list_width(
     kind: Res<crate::viewport::ActiveKind>,
     widths: Res<PanelWidths>,
-    mut q: Query<(Entity, &Name, &mut cadrs_ui::dock::DockPanelState)>,
+    mut q: Query<(&Name, &mut cadrs_ui::dock::DockPanelState)>,
     q_grip: Query<&cadrs_ui::DockGrip>,
-    nodes: Option<Res<crate::node_view::NodeView>>,
-    doc: Option<Res<crate::ActiveDocument>>,
-    q_window: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    mut commands: Commands,
 ) {
     // While its edge is dragged, the panel follows the pointer.
     if q_grip.iter().any(|g| g.dragging()) {
         return;
-    }
-    // The node view takes most of the window's width (dragged: as dragged), up to 85 %.
-    if node_view_shown(nodes.as_deref(), doc.as_deref()) {
-        let window = q_window.iter().next().map_or(1280.0, |w| w.width());
-        let want = widths
-            .0
-            .get(NODE_VIEW_KEY)
-            .copied()
-            .unwrap_or(window * 0.55)
-            .min(window * 0.85);
-        for (e, n, mut st) in &mut q {
-            if n.as_str() == "feature-panel" {
-                commands
-                    .entity(e)
-                    .insert(cadrs_ui::dock::DockMaxWidth(window * 0.85));
-                if st.width() != want {
-                    st.set_width(want);
-                }
-            }
-        }
-        return;
-    }
-    for (e, n, _) in &q {
-        if n.as_str() == "feature-panel" {
-            commands.entity(e).remove::<cadrs_ui::dock::DockMaxWidth>();
-        }
     }
     let want = widths
         .0
@@ -1255,7 +1204,7 @@ fn list_width(
             crate::viewport::ActiveKind::CamStudio => crate::cam::PANEL_W,
             _ => PART_STUDIO_LIST_W,
         });
-    for (_, n, mut st) in &mut q {
+    for (n, mut st) in &mut q {
         if n.as_str() == "feature-panel" && st.width() != want {
             st.set_width(want);
         }

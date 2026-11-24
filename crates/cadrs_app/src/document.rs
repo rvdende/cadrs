@@ -432,23 +432,43 @@ fn spawn_shell(
                             // Above the viewport so its grip stays grabbable.
                             ZIndex(1),
                         ));
+                        // The 3D view, and the node view's panel under it
+                        // (`crate::node_view`, hidden until shown).
                         mid.spawn((
-                            Name::new("viewport-area"),
-                            ViewportArea,
-                            cadrs_ui::ToastHost,
+                            Name::new("viewport-column"),
                             Node {
                                 flex_grow: 1.0,
-                                overflow: Overflow::clip(),
+                                min_width: Val::Px(0.0),
+                                flex_direction: FlexDirection::Column,
                                 ..default()
                             },
+                            Pickable::IGNORE,
                         ))
-                        .with_children(|vp| {
-                            crate::viewport::spawn_viewport_overlay(vp, &t);
-                            crate::rebuild_indicator::spawn_rebuild_indicator(vp, &t);
-                            crate::frame_stats::spawn_frame_stats(vp, &t);
-                            crate::view_cube::spawn_view_cube(vp, &t, cube.0.clone());
-                            right_strip(vp, &t);
-                            viewport_readouts(vp, &t);
+                        .with_children(|col| {
+                            col.spawn((
+                                Name::new("viewport-area"),
+                                ViewportArea,
+                                cadrs_ui::ToastHost,
+                                Node {
+                                    flex_grow: 1.0,
+                                    min_height: Val::Px(0.0),
+                                    overflow: Overflow::clip(),
+                                    ..default()
+                                },
+                            ))
+                            .with_children(|vp| {
+                                crate::viewport::spawn_viewport_overlay(vp, &t);
+                                crate::rebuild_indicator::spawn_rebuild_indicator(vp, &t);
+                                crate::frame_stats::spawn_frame_stats(vp, &t);
+                                crate::view_cube::spawn_view_cube(vp, &t, cube.0.clone());
+                                right_strip(vp, &t);
+                                viewport_readouts(vp, &t);
+                            });
+                            col.spawn(crate::node_view::panel(&t, PANEL_GAP))
+                                .with_children(|p| {
+                                    let panel = p.target_entity();
+                                    p.spawn(crate::node_view::panel_edge(panel, PANEL_GAP));
+                                });
                         });
                     });
                 });
@@ -2374,10 +2394,8 @@ fn feature_list(p: &mut ChildSpawnerCommands, t: &Theme, element: ElementId, hei
             });
             // P3.9: Show dependencies' legend (hidden until used).
             crate::feature_list::dependency_legend(pane, t);
-            pane.spawn(crate::node_view::host_bundle(element));
             pane.spawn((
                 Name::new("feature-scroll-frame"),
-                crate::node_view::FeatureListBody,
                 Node {
                     flex_grow: 1.0,
                     min_height: Val::Px(0.0),
