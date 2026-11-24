@@ -6863,3 +6863,12 @@ node-view-kind-boolean = Boolean
 asm-menu-preset = Preset
 # The features header's dropdown of the configuration's presets.
 node-view-active-preset = Preset the Part Studio shows
+# Lays the node view's nodes out again (forgetting where they were dragged).
+node-view-arrange = Auto arrange
+# The node on the right listing the parts the Part Studio ends with.
+node-view-parts = Parts
+node-view-no-parts = No parts
+# A node's output row when the feature makes no part (or none yet).
+node-view-output = Output
+node-view-output-sketch = Sketch
+node-view-output-plane = Plane

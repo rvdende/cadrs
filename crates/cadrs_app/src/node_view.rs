@@ -56,36 +56,43 @@ pub struct NodeViewPlugin;
 
 impl Plugin for NodeViewPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<NodeView>()
-            .init_resource::<PendingMoves>()
-            .add_observer(on_toggle)
-            .add_observer(on_view_changed)
-            .add_observer(on_node_moved)
-            .add_observer(on_wire_connect)
-            .add_observer(on_wire_disconnect)
-            .add_observer(on_body_press)
-            .add_observer(on_body_click)
-            .add_observer(on_config_button)
-            .add_observer(on_config_number)
-            .add_observer(on_config_select)
-            .add_observer(on_config_text)
-            .add_observer(on_config_checkbox)
-            .add_observer(on_collapse)
-            .add_observer(on_header_preset)
-            .add_systems(
-                Update,
-                (
-                    sync_mode,
-                    flush_moves,
-                    sync_nodes,
-                    host_live_dialog,
-                    sync_selected,
-                    fit_later,
-                    sync_header_preset,
-                )
-                    .chain()
-                    .run_if(resource_exists::<ActiveDocument>),
-            );
+        // Wires go round the nodes as the PCB autorouter's tracks go round copper.
+        app.insert_resource(cadrs_ui::node_graph::WireRouter(Some(std::sync::Arc::new(
+            route_node_wires,
+        ))))
+        .init_resource::<NodeView>()
+        .init_resource::<PendingMoves>()
+        .init_resource::<MeasuredHeights>()
+        .add_observer(on_toggle)
+        .add_observer(on_view_changed)
+        .add_observer(on_node_moved)
+        .add_observer(on_wire_connect)
+        .add_observer(on_wire_disconnect)
+        .add_observer(on_body_press)
+        .add_observer(on_body_click)
+        .add_observer(on_config_button)
+        .add_observer(on_config_number)
+        .add_observer(on_config_select)
+        .add_observer(on_config_text)
+        .add_observer(on_config_checkbox)
+        .add_observer(on_collapse)
+        .add_observer(on_header_preset)
+        .add_observer(on_box_selected)
+        .add_systems(
+            Update,
+            (
+                sync_mode,
+                flush_moves,
+                sync_nodes,
+                host_live_dialog,
+                sync_selected,
+                fit_later,
+                sync_header_preset,
+                measure_heights,
+            )
+                .chain()
+                .run_if(resource_exists::<ActiveDocument>),
+        );
     }
 }
 
@@ -146,7 +153,16 @@ struct NodeKey {
     suppressed: bool,
     rolled_back: bool,
     error: Option<String>,
+    /// What its output row lists (the parts it makes or changes).
+    outputs: Vec<String>,
     theme: u64,
+}
+
+/// The Parts node (on the right, as Blender's Group Output): a row for each part the studio
+/// ends with, wired from the last feature that changes it.
+#[derive(Component, Debug, Clone)]
+struct PartsNode {
+    key: (Vec<(cadrs_core::PartId, String)>, u64),
 }
 
 /// The Configuration node, and what it was built from.
@@ -182,6 +198,8 @@ enum SocketKey {
     Input(String),
     /// A Variable feature's value, by name.
     Variable(String),
+    /// A part of the Parts node.
+    Part(cadrs_core::PartId),
 }
 
 /// A node's collapse chevron.
@@ -191,6 +209,23 @@ struct CollapseButton(FeatureId);
 /// The press that may become a click on a body (where it was), so a drag isn't taken for one.
 #[derive(Component, Debug, Clone, Copy)]
 struct PressedAt(Vec2);
+
+/// The feature nodes' heights as laid out (graph px), so the auto layout stacks them without
+/// overlapping once they have been laid out once.
+#[derive(Resource, Debug, Default)]
+struct MeasuredHeights(HashMap<FeatureId, f32>);
+
+fn measure_heights(
+    q: Query<(&FeatureNode, &ComputedNode), Changed<ComputedNode>>,
+    mut heights: ResMut<MeasuredHeights>,
+) {
+    for (n, c) in &q {
+        let h = (c.size().y * c.inverse_scale_factor()).round();
+        if h > 0.0 && heights.0.get(&n.feature) != Some(&h) {
+            heights.0.insert(n.feature, h);
+        }
+    }
+}
 
 /// Frames the canvas's nodes in this many frames (once they are laid out).
 #[derive(Component, Debug, Clone, Copy)]
@@ -396,6 +431,8 @@ fn on_view_changed(
 const NODE_W: f32 = 236.0;
 /// The Configuration node's width (room for an input's name, kind and value).
 const CONFIG_W: f32 = 300.0;
+/// A column taller than this (graph px) goes on in another beside it.
+const TALL: f32 = 2400.0;
 /// Columns are this far apart.
 const COLUMN: f32 = NODE_W + 90.0;
 
@@ -411,34 +448,154 @@ fn height_guess(f: &Feature, collapsed: bool) -> f32 {
     }
 }
 
-/// Where each node goes: its saved place, or a column by how deep its references go (a sketch
-/// with none in the first column, its extrude in the next…), stacked in list order.
-fn layout(el: &Element) -> (Vec2, HashMap<FeatureId, Vec2>) {
+/// Where the nodes go: the Configuration node's place, each feature's, and the Parts node's.
+struct Layout {
+    inputs: Vec2,
+    features: HashMap<FeatureId, Vec2>,
+    parts: Vec2,
+}
+
+/// Where each node goes: its saved place, or laid out in layers (Sugiyama's way, roughly): a
+/// column by how deep its references go (a sketch with none in the first column, its extrude in
+/// the next…), each column ordered by where its nodes' references are (the mean height of
+/// their parents, so wires cross less; list order breaks ties) and stacked. The Parts node is
+/// right of them all.
+fn layout(el: &Element, measured: &HashMap<FeatureId, f32>) -> Layout {
     let saved = el.node_layout();
     let features = el.features();
     let collapsed = |f: FeatureId| saved.is_some_and(|l| l.collapsed.contains(&f));
+    let parents: Vec<Vec<FeatureId>> = features
+        .iter()
+        .map(|f| cadrs_core::feature_list::parents(features, f.id))
+        .collect();
     let mut depth: HashMap<FeatureId, usize> = HashMap::new();
-    let mut next_y: HashMap<usize, f32> = HashMap::new();
-    let mut out = HashMap::new();
-    for f in features {
-        let d = cadrs_core::feature_list::parents(features, f.id)
+    let mut columns: Vec<Vec<usize>> = Vec::new();
+    for (i, f) in features.iter().enumerate() {
+        let d = parents[i]
             .iter()
             .filter_map(|p| depth.get(p))
             .max()
             .map_or(0, |d| d + 1);
         depth.insert(f.id, d);
-        let y = next_y.entry(d).or_insert(0.0);
-        let auto = Vec2::new(COLUMN * (d as f32 + 1.0), *y);
-        *y += height_guess(f, collapsed(f.id)) + 24.0;
-        let pos = saved
-            .and_then(|l| l.positions.get(&f.id))
-            .map_or(auto, |p| Vec2::from_array(*p));
-        out.insert(f.id, pos);
+        if columns.len() <= d {
+            columns.resize(d + 1, Vec::new());
+        }
+        columns[d].push(i);
+    }
+    let mut out: HashMap<FeatureId, Vec2> = HashMap::new();
+    // The middle of each node placed so far, for ordering the next column.
+    let mut middle: HashMap<FeatureId, f32> = HashMap::new();
+    let mut right = 0.0f32;
+    // Where the next column starts: a column taller than TALL wraps into several side by side.
+    let mut x = COLUMN;
+    for (d, column) in columns.iter_mut().enumerate() {
+        let key = |i: &usize| -> f32 {
+            let ys: Vec<f32> = parents[*i]
+                .iter()
+                .filter_map(|p| middle.get(p).copied())
+                .collect();
+            if ys.is_empty() {
+                f32::MAX
+            } else {
+                ys.iter().sum::<f32>() / ys.len() as f32
+            }
+        };
+        if d > 0 {
+            column.sort_by(|a, b| key(a).total_cmp(&key(b)).then(a.cmp(b)));
+        }
+        let mut y = 0.0;
+        for &i in column.iter() {
+            let f = &features[i];
+            // Its height as laid out, once it has been; a guess before.
+            let h = measured
+                .get(&f.id)
+                .copied()
+                .unwrap_or_else(|| height_guess(f, collapsed(f.id)));
+            if y > 0.0 && y + h > TALL {
+                x += COLUMN;
+                y = 0.0;
+            }
+            let auto = Vec2::new(x, y);
+            y += h + 24.0;
+            let pos = saved
+                .and_then(|l| l.positions.get(&f.id))
+                .map_or(auto, |p| Vec2::from_array(*p));
+            middle.insert(f.id, pos.y + h / 2.0);
+            right = right.max(pos.x + NODE_W);
+            out.insert(f.id, pos);
+        }
+        x += COLUMN;
     }
     let inputs = saved
         .and_then(|l| l.inputs_node)
         .map_or(Vec2::ZERO, Vec2::from_array);
-    (inputs, out)
+    Layout {
+        inputs,
+        features: out,
+        parts: Vec2::new(right.max(COLUMN) + 90.0, 0.0),
+    }
+}
+
+/// The parts each feature makes or changes (its output row lists them).
+fn outputs_of(
+    parts: &[cadrs_core::Part],
+    props: &[cadrs_core::PartProps],
+) -> HashMap<FeatureId, Vec<String>> {
+    let mut out: HashMap<FeatureId, Vec<String>> = HashMap::new();
+    for p in parts {
+        let name = cadrs_core::parts::display_name(p, props).to_string();
+        let mut fs = p.features.clone();
+        if !fs.contains(&p.feature) {
+            fs.insert(0, p.feature);
+        }
+        for f in fs {
+            let v = out.entry(f).or_default();
+            if !v.contains(&name) {
+                v.push(name.clone());
+            }
+        }
+    }
+    out
+}
+
+/// The last feature (in list order) that makes or changes each part: the Parts node's wires.
+fn last_feature_of(features: &[Feature], part: &cadrs_core::Part) -> Option<FeatureId> {
+    features
+        .iter()
+        .rev()
+        .find(|f| f.id == part.feature || part.features.contains(&f.id))
+        .map(|f| f.id)
+}
+
+/// The canvas's grid: the PCB Studio schematic's (`cadrs_eda::render::SchematicTheme`), its
+/// faint lines and crosses on every fifth line; in light, crosses alone, darker.
+fn canvas_grid() -> cadrs_ui::node_graph::CanvasGrid {
+    let rgba = |c: [u8; 4]| Color::srgba_u8(c[0], c[1], c[2], c[3]);
+    if cadrs_ui::dark_in_force() {
+        let th = cadrs_eda::render::SchematicTheme::dark();
+        cadrs_ui::node_graph::CanvasGrid {
+            step: 20.0,
+            line: rgba(th.grid_line),
+            mark: rgba(th.grid),
+        }
+    } else {
+        let th = cadrs_eda::render::SchematicTheme::default();
+        cadrs_ui::node_graph::CanvasGrid {
+            step: 20.0,
+            line: Color::srgba_u8(0, 0, 0, 0x0c),
+            mark: rgba(th.grid),
+        }
+    }
+}
+
+/// The canvas's colour: the dark schematic's ground in dark, the view's background in light.
+fn canvas_background(t: &Theme) -> Color {
+    if cadrs_ui::dark_in_force() {
+        let g = cadrs_eda::render::SchematicTheme::dark().background;
+        Color::srgba_u8(g[0], g[1], g[2], g[3])
+    } else {
+        t.viewport_background
+    }
 }
 
 /// A cheap fingerprint of the theme (a scheme change rebuilds the nodes).
@@ -476,6 +633,8 @@ fn sync_nodes(world: &mut World) {
             let mut commands = world.commands();
             let e = NodeCanvasBuilder::new("node-canvas")
                 .view(saved.unwrap_or_default())
+                .grid(canvas_grid())
+                .background(canvas_background(&theme))
                 .spawn(&mut commands, host, &theme);
             commands.entity(e).insert(NodeViewCanvas(element));
             world.flush();
@@ -501,7 +660,13 @@ fn sync_nodes(world: &mut World) {
     let suppressed = el.all_suppressed();
     let bar = el.rollback_index();
     let tk = theme_key(&theme);
-    let (inputs_pos, positions) = layout(&el);
+    let Layout {
+        inputs: inputs_pos,
+        features: positions,
+        parts: parts_pos,
+    } = layout(&el, &world.resource::<MeasuredHeights>().0);
+    let parts: Vec<cadrs_core::Part> = world.resource::<PartCache>().parts.clone();
+    let outputs = outputs_of(&parts, el.part_props());
     let collapsed = |f: FeatureId| el.node_layout().is_some_and(|l| l.collapsed.contains(&f));
 
     // The nodes there are, and those to rebuild.
@@ -522,6 +687,7 @@ fn sync_nodes(world: &mut World) {
             suppressed: suppressed.contains(&f.id),
             rolled_back: i >= bar,
             error: cache_errors.get(&f.id).cloned(),
+            outputs: outputs.get(&f.id).cloned().unwrap_or_default(),
             theme: tk,
         };
         let pos = positions.get(&f.id).copied().unwrap_or_default();
@@ -577,10 +743,36 @@ fn sync_nodes(world: &mut World) {
             changed = true;
         }
     }
+    // The Parts node.
+    let pkey = (
+        parts
+            .iter()
+            .map(|p| {
+                (
+                    p.id,
+                    cadrs_core::parts::display_name(p, el.part_props()).to_string(),
+                )
+            })
+            .collect::<Vec<_>>(),
+        tk,
+    );
+    let mut q_parts = world.query::<(Entity, &PartsNode)>();
+    let parts_have: Vec<(Entity, PartsNode)> =
+        q_parts.iter(world).map(|(e, c)| (e, c.clone())).collect();
+    match parts_have.first() {
+        Some((_, c)) if c.key == pkey => {}
+        _ => {
+            for (e, _) in &parts_have {
+                world.entity_mut(*e).despawn();
+            }
+            spawn_parts_node(world, pkey, parts_pos, canvas.world(), &theme);
+            changed = true;
+        }
+    }
     // The wires, again whenever a node or the list changed.
     let doc_changed = world.resource_ref::<ActiveDocument>().is_changed();
     if changed || doc_changed {
-        rebuild_wires(world, &el, canvas_e, canvas.wires());
+        rebuild_wires(world, &el, &parts, canvas_e, canvas.wires());
     }
 }
 
@@ -597,16 +789,129 @@ fn spawn_canvas_tools(world: &mut World, canvas: Entity, t: &Theme) {
         },
         ZIndex(10),
         ChildOf(canvas),
-        children![(
-            IconButton::new("node-canvas-fit", "zoom-fit")
-                .icon_size(16.0)
-                .tooltip(tr("node-view-fit"))
-                .build(t),
-            bevy::ui_widgets::observe(move |_: On<Activate>, mut commands: Commands| {
-                commands.trigger(FitCanvas { entity: canvas });
-            }),
-        )],
+        children![
+            (
+                IconButton::new("node-canvas-arrange", "auto-arrange")
+                    .icon_size(16.0)
+                    .tooltip(tr("node-view-arrange"))
+                    .build(t),
+                bevy::ui_widgets::observe(move |_: On<Activate>, mut commands: Commands| {
+                    commands.queue(move |world: &mut World| arrange(world, canvas));
+                }),
+            ),
+            (
+                IconButton::new("node-canvas-fit", "zoom-fit")
+                    .icon_size(16.0)
+                    .tooltip(tr("node-view-fit"))
+                    .build(t),
+                bevy::ui_widgets::observe(move |_: On<Activate>, mut commands: Commands| {
+                    commands.trigger(FitCanvas { entity: canvas });
+                }),
+            ),
+        ],
     ));
+}
+
+/// Auto arrange: forgets where the nodes were put (one undo step), so they are laid out again
+/// ([`layout`]), and frames them.
+fn arrange(world: &mut World, canvas: Entity) {
+    let Some(element) = world
+        .resource::<ActiveDocument>()
+        .active_element()
+        .map(|e| e.id)
+    else {
+        return;
+    };
+    run(world, &cfg::ResetNodeLayout { element });
+    if let Ok(mut e) = world.get_entity_mut(canvas) {
+        e.insert(FitLater(3));
+    }
+}
+
+/// The Parts node: a row for each part, with an input socket.
+fn spawn_parts_node(
+    world: &mut World,
+    key: (Vec<(cadrs_core::PartId, String)>, u64),
+    pos: Vec2,
+    parent: Entity,
+    t: &Theme,
+) {
+    let parts = key.0.clone();
+    let root = world
+        .spawn((
+            GraphNode::bundle("node-parts", pos),
+            PartsNode { key },
+            ChildOf(parent),
+        ))
+        .id();
+    let tb = t.clone();
+    let rows = parts.clone();
+    let card = FeatureDialog::new("node-parts-card")
+        .static_copy()
+        .width(160.0)
+        .title(tr("node-view-parts"))
+        .header_color(Color::srgba_u8(0x4c, 0xb0, 0x5c, 0x40))
+        .body(move |b| {
+            let t = &tb;
+            if rows.is_empty() {
+                b.spawn((
+                    t.text(
+                        tr("node-view-no-parts"),
+                        t.font_sm,
+                        bevy::text::FontWeight::NORMAL,
+                        t.muted_foreground,
+                    ),
+                    Node {
+                        margin: UiRect::all(Val::Px(4.0)),
+                        ..default()
+                    },
+                ));
+            }
+            for (i, (_, name)) in rows.iter().enumerate() {
+                b.spawn((
+                    Name::new(format!("node-part-{i}")),
+                    row(),
+                    children![(
+                        t.text(
+                            name.clone(),
+                            t.font_sm,
+                            bevy::text::FontWeight::MEDIUM,
+                            t.foreground
+                        ),
+                        Node {
+                            margin: UiRect::left(Val::Px(8.0)),
+                            ..default()
+                        },
+                    )],
+                ));
+            }
+        });
+    let card = world.spawn((card.build(t), ChildOf(root))).id();
+    if let Some(h) = world.get::<Children>(card).and_then(|c| c.first().copied()) {
+        world.entity_mut(h).insert(GraphNodeHandle);
+    }
+    let named = named_descendants(world, card);
+    for (i, (id, _)) in parts.iter().enumerate() {
+        let want = squash(&format!("node-part-{i}"));
+        let Some(row) = named.iter().find(|(n, _)| *n == want).map(|(_, e)| *e) else {
+            continue;
+        };
+        world.spawn((
+            SocketKey::Part(*id),
+            Socket::bundle(
+                format!("node-part-{i}-in"),
+                SocketSide::In,
+                GEOMETRY,
+                Some(row),
+                socket_color(GEOMETRY),
+                t,
+            ),
+            ChildOf(root),
+        ));
+    }
+    if let Some(mut n) = world.get_mut::<Node>(root) {
+        n.width = Val::Px(160.0);
+    }
 }
 
 /// Spawns a feature's node: its card (a copy of its dialog, or its fields as rows), a cover
@@ -705,14 +1010,55 @@ fn spawn_feature_node(
             left: Val::Px(0.0),
             right: Val::Px(0.0),
             top: Val::Px(30.0),
-            bottom: Val::Px(0.0),
+            bottom: Val::Px(24.0),
             ..default()
         },
         ZIndex(4),
         Pickable::default(),
         ChildOf(root),
     ));
-    // Sockets: geometry in and out on the header, Bypass under the geometry input.
+    // The output row: what the feature makes, its geometry socket beside it.
+    let what = if key.outputs.is_empty() {
+        match f.kind {
+            FeatureKind::Sketch(_) => tr("node-view-output-sketch"),
+            FeatureKind::Plane(_) => tr("node-view-output-plane"),
+            _ => tr("node-view-output"),
+        }
+    } else {
+        key.outputs.join(", ")
+    };
+    let output = world
+        .spawn((
+            Name::new(format!("node-{slug}-output")),
+            Node {
+                height: Val::Px(24.0),
+                margin: UiRect::top(Val::Px(-1.0)),
+                padding: UiRect::new(Val::Px(8.0), Val::Px(12.0), Val::ZERO, Val::ZERO),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::FlexEnd,
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::bottom(Val::Px(t.radius_panel)),
+                overflow: Overflow::clip(),
+                ..default()
+            },
+            BackgroundColor(t.floating),
+            BorderColor::all(t.glass_rim),
+            ChildOf(root),
+        ))
+        .id();
+    world
+        .spawn((
+            t.text(
+                what,
+                t.font_sm,
+                bevy::text::FontWeight::MEDIUM,
+                t.muted_foreground,
+            ),
+            ChildOf(output),
+        ))
+        // One line, clipped when long (insert replaces the text's own layout).
+        .insert(TextLayout::no_wrap());
+    // Sockets: geometry in on the header, Bypass under it, geometry out on the output row.
     let geo = world.spawn((
         SocketKey::GeoIn(f.id),
         Socket::bundle(
@@ -732,7 +1078,7 @@ fn spawn_feature_node(
             format!("node-{slug}-geometry-out"),
             SocketSide::Out,
             GEOMETRY,
-            None,
+            Some(output),
             geometry_color(f),
             t,
         ),
@@ -895,7 +1241,13 @@ fn generic_card(f: &Feature, units: &Units, t: &Theme) -> FeatureDialog {
 
 /// The wires between the shown nodes: geometry from each feature's references, values from the
 /// expressions that name an input or a Variable, Bypass from suppression variables.
-fn rebuild_wires(world: &mut World, el: &Element, canvas: Entity, layer: Entity) {
+fn rebuild_wires(
+    world: &mut World,
+    el: &Element,
+    parts: &[cadrs_core::Part],
+    canvas: Entity,
+    layer: Entity,
+) {
     let mut q_wires = world.query::<(Entity, &ChildOf, &Wire)>();
     let old: Vec<Entity> = q_wires
         .iter(world)
@@ -960,6 +1312,17 @@ fn rebuild_wires(world: &mut World, el: &Element, canvas: Entity, layer: Entity)
                     wires.push((src, SocketKey::Bypass(f.id), socket_color(BOOLEAN), !exact));
                 }
             }
+        }
+    }
+    // Each part from the last feature that changes it into the Parts node.
+    for p in parts {
+        if let Some(f) = last_feature_of(features, p) {
+            wires.push((
+                SocketKey::GeoOut(f),
+                SocketKey::Part(p.id),
+                socket_color(GEOMETRY),
+                false,
+            ));
         }
     }
     for (i, (a, b, color, dashed)) in wires.into_iter().enumerate() {
@@ -1662,6 +2025,7 @@ fn on_body_press(ev: On<PointerPress>, q: Query<(), With<BodyCover>>, mut comman
 fn on_body_click(
     ev: On<PointerClick>,
     q: Query<(&BodyCover, Option<&PressedAt>)>,
+    keys: Res<ButtonInput<KeyCode>>,
     mut commands: Commands,
 ) {
     if ev.button != PointerButton::Primary || ev.count > 1 {
@@ -1675,6 +2039,24 @@ fn on_body_click(
         return;
     }
     let id = cover.0;
+    // Shift or Ctrl: add it to the selection (or take it out), without editing.
+    if keys.any_pressed([
+        KeyCode::ShiftLeft,
+        KeyCode::ShiftRight,
+        KeyCode::ControlLeft,
+        KeyCode::ControlRight,
+    ]) {
+        commands.queue(move |world: &mut World| {
+            let mut sel = world.resource_mut::<Selection>();
+            let p = Pick::Feature(id);
+            if let Some(i) = sel.0.iter().position(|x| *x == p) {
+                sel.0.remove(i);
+            } else {
+                sel.0.push(p);
+            }
+        });
+        return;
+    }
     commands.queue(move |world: &mut World| {
         world.resource_mut::<Selection>().0 = vec![Pick::Feature(id)];
         let sketch = world
@@ -1720,9 +2102,9 @@ fn host_live_dialog(world: &mut World) {
     {
         let mut commands = world.commands();
         cadrs_ui::feature_dialog::embed(&mut commands, dialog, &t);
-        commands
-            .entity(dialog)
-            .insert((HostedDialog, ChildOf(node)));
+        commands.entity(dialog).insert(HostedDialog);
+        // First in the node: above its output row.
+        commands.entity(node).insert_children(0, &[dialog]);
     }
     world.flush();
     if let Some(mut n) = world.get_mut::<Node>(dialog) {
@@ -1841,21 +2223,239 @@ fn sync_selected(
         let on = selection.0.contains(&Pick::Feature(n.feature));
         match (on, o.is_some()) {
             (true, false) => {
-                commands
-                    .entity(e)
-                    .insert(Outline::new(Val::Px(2.0), Val::Px(1.0), theme.primary));
+                // Selected nodes move together when one is dragged.
+                commands.entity(e).insert((
+                    Outline::new(Val::Px(2.0), Val::Px(1.0), theme.primary),
+                    cadrs_ui::node_graph::GraphNodeSelected,
+                ));
             }
             (false, true) => {
-                commands.entity(e).remove::<Outline>();
+                commands
+                    .entity(e)
+                    .remove::<(Outline, cadrs_ui::node_graph::GraphNodeSelected)>();
             }
             _ => {}
         }
     }
 }
 
+/// A box dragged on the canvas selects the features of the nodes it touches (added to the
+/// selection with Shift or Ctrl).
+fn on_box_selected(
+    ev: On<cadrs_ui::node_graph::BoxSelected>,
+    q: Query<&FeatureNode>,
+    mut selection: ResMut<Selection>,
+) {
+    let picked: Vec<Pick> = ev
+        .nodes
+        .iter()
+        .filter_map(|e| q.get(*e).ok())
+        .map(|n| Pick::Feature(n.feature))
+        .collect();
+    if !ev.add {
+        selection.0.retain(|p| !matches!(p, Pick::Feature(_)));
+    }
+    for p in picked {
+        if !selection.0.contains(&p) {
+            selection.0.push(p);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Routing the wires
+
+/// The routing grid's pitch (graph px).
+const PITCH: f32 = 10.0;
+/// The room kept round a node (graph px).
+const CLEAR: f32 = 8.0;
+/// How far a wire runs straight out of its output and into its input (graph px).
+const STUB: f32 = 18.0;
+
+/// Routes the node view's wires round its nodes with the PCB autorouter's search
+/// (`cadrs_router::search`: A* over octilinear steps, a cell's cost raised by the wires already
+/// through it, as its negotiated congestion does): the nodes, grown by [`CLEAR`], are walls; each
+/// wire leaves its output and enters its input straight ([`STUB`]); a route is then pulled
+/// straight between the points that can see each other. A wire with no way round is a curve.
+fn route_node_wires(p: &cadrs_ui::node_graph::RouteProblem) -> Vec<Option<Vec<Vec2>>> {
+    use cadrs_router::grid::{Grid, Sizes};
+    use cadrs_router::search::{Costs, Searcher};
+    use cadrs_router_kernels::{FREE, Params, WALL};
+    let mut bounds: Option<Rect> = None;
+    let mut grow = |r: Rect| bounds = Some(bounds.map_or(r, |b| b.union(r)));
+    for o in &p.obstacles {
+        grow(*o);
+    }
+    for (a, b) in &p.wires {
+        grow(Rect::from_corners(*a, *b));
+    }
+    let Some(b) = bounds else {
+        return vec![None; p.wires.len()];
+    };
+    let b = b.inflate(160.0);
+    let (nx, ny) = (
+        (b.width() / PITCH).ceil() as u32 + 1,
+        (b.height() / PITCH).ceil() as u32 + 1,
+    );
+    if (nx as u64) * (ny as u64) > 3_000_000 {
+        return vec![None; p.wires.len()];
+    }
+    let cell = |v: Vec2| -> (u32, u32) {
+        let c = ((v - b.min) / PITCH).floor();
+        (
+            (c.x.max(0.0) as u32).min(nx - 1),
+            (c.y.max(0.0) as u32).min(ny - 1),
+        )
+    };
+    let centre = |x: u32, y: u32| b.min + (Vec2::new(x as f32, y as f32) + 0.5) * PITCH;
+    let mut owner = vec![FREE; (nx * ny) as usize];
+    for o in &p.obstacles {
+        let o = o.inflate(CLEAR);
+        let ((x0, y0), (x1, y1)) = (cell(o.min), cell(o.max));
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                owner[(y * nx + x) as usize] = WALL;
+            }
+        }
+    }
+    let walls = owner.clone();
+    let blocked = |v: Vec2| -> bool {
+        let (x, y) = cell(v);
+        walls[(y * nx + x) as usize] == WALL
+    };
+    // Whether the straight line from `a` to `b` stays off the walls.
+    let clear = |a: Vec2, b: Vec2| -> bool {
+        let n = (a.distance(b) / (PITCH / 3.0)).ceil().max(1.0) as usize;
+        (0..=n).all(|i| !blocked(a.lerp(b, i as f32 / n as f32)))
+    };
+    let params = Params {
+        nx,
+        ny,
+        nl: 1,
+        slots: 1,
+        ortho: 10,
+        diag: 14,
+        via: u32::MAX / 4,
+        ..Default::default()
+    };
+    let sizes = Sizes {
+        track: 0,
+        clearance: 0,
+        via: 0,
+        drill: 0,
+        edge: 0,
+        hole: 0,
+        hole_to_hole: 0,
+    };
+    let mut grid = Grid {
+        params,
+        origin: cadrs_eda::units::Pt::ZERO,
+        pitch: 1,
+        layers: vec![cadrs_eda::layer::Layer::TopCopper],
+        owner,
+        via_owner: vec![WALL; (nx * ny) as usize],
+        nets: Vec::new(),
+        sizes,
+    };
+    let mut occ = vec![0u16; (nx * ny) as usize];
+    let hist = vec![0u32; (nx * ny) as usize];
+    let mut searcher = Searcher::default();
+    // Short wires first: they have the least choice.
+    let mut order: Vec<usize> = (0..p.wires.len()).collect();
+    order.sort_by(|i, j| {
+        let d = |k: usize| p.wires[k].0.distance(p.wires[k].1);
+        d(*i).total_cmp(&d(*j))
+    });
+    let mut out = vec![None; p.wires.len()];
+    for k in order {
+        let (a, z) = p.wires[k];
+        let (s, t) = (a + Vec2::X * STUB, z - Vec2::X * STUB);
+        let (cs, ct) = (cell(s), cell(t));
+        let (is, it) = (
+            grid.params.index(cs.0, cs.1, 0),
+            grid.params.index(ct.0, ct.1, 0),
+        );
+        // The stubs' ends may sit in a neighbour's clearance: open them for this wire.
+        let keep = (grid.owner[is as usize], grid.owner[it as usize]);
+        grid.owner[is as usize] = FREE;
+        grid.owner[it as usize] = FREE;
+        let path = {
+            let costs = Costs {
+                grid: &grid,
+                occ: &occ,
+                hist: &hist,
+                // Dear enough that wires sharing a channel take lanes of their own.
+                present: 40,
+            };
+            searcher.search(&costs, 1, &[is], &[it])
+        };
+        grid.owner[is as usize] = keep.0;
+        grid.owner[it as usize] = keep.1;
+        let Some(path) = path else { continue };
+        for c in &path {
+            occ[*c as usize] = occ[*c as usize].saturating_add(1);
+        }
+        // The cells' centres, from the stub's end to the other's, pulled straight.
+        let mut pts: Vec<Vec2> = path
+            .iter()
+            .map(|c| {
+                let (x, y, _) = grid.params.coords(*c);
+                centre(x, y)
+            })
+            .collect();
+        if let Some(f) = pts.first_mut() {
+            *f = s;
+        }
+        if let Some(l) = pts.last_mut() {
+            *l = t;
+        }
+        let mut pulled = vec![pts[0]];
+        let mut i = 0;
+        while i + 1 < pts.len() {
+            let mut j = pts.len() - 1;
+            while j > i + 1 && !clear(pts[i], pts[j]) {
+                j -= 1;
+            }
+            pulled.push(pts[j]);
+            i = j;
+        }
+        out[k] = Some(pulled);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wires_go_round_nodes() {
+        use cadrs_ui::node_graph::RouteProblem;
+        // A node between the two ends: the wire can't go straight through it.
+        let block = Rect::new(100.0, -100.0, 200.0, 100.0);
+        let p = RouteProblem {
+            obstacles: vec![block],
+            wires: vec![(Vec2::new(0.0, 0.0), Vec2::new(300.0, 0.0))],
+        };
+        let r = route_node_wires(&p);
+        let via = r[0].as_ref().expect("routed");
+        let mut pts = vec![Vec2::ZERO];
+        pts.extend(via.iter().copied());
+        pts.push(Vec2::new(300.0, 0.0));
+        let grown = block.inflate(CLEAR - 1.0);
+        for w in pts.windows(2) {
+            for i in 0..=50 {
+                let q = w[0].lerp(w[1], i as f32 / 50.0);
+                assert!(!grown.contains(q), "{q} is in the node: {pts:?}");
+            }
+        }
+        // With nothing in the way it is short and straight-ish.
+        let r = route_node_wires(&RouteProblem {
+            obstacles: Vec::new(),
+            wires: vec![(Vec2::new(0.0, 0.0), Vec2::new(300.0, 40.0))],
+        });
+        assert!(r[0].as_ref().unwrap().len() <= 3, "{:?}", r[0]);
+    }
 
     #[test]
     fn labels_match_row_names() {
@@ -1881,7 +2481,7 @@ mod tests {
         e.sketches.push(sketch);
         let _ = RegionRef::new;
         fs.push(Feature::new(ext, "Extrude 1", FeatureKind::Extrude(e)));
-        let (_, pos) = layout(&el);
+        let pos = layout(&el, &HashMap::new()).features;
         assert!(pos[&ext].x > pos[&sketch].x);
         assert_eq!(pos[&sketch].x, COLUMN);
         // A saved place wins.
@@ -1889,7 +2489,7 @@ mod tests {
             .unwrap()
             .positions
             .insert(ext, [5.0, 6.0]);
-        let (_, pos) = layout(&el);
+        let pos = layout(&el, &HashMap::new()).features;
         assert_eq!(pos[&ext], Vec2::new(5.0, 6.0));
     }
 }

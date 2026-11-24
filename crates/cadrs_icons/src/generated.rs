@@ -244,6 +244,7 @@ icons! {
     CONFIGURATIONS => ("configurations", Line, "Configurations"),
     NODE_GRAPH => ("node-graph", Line, "Node view"),
     ZOOM_FIT => ("zoom-fit", Line, "Fit all"),
+    AUTO_ARRANGE => ("auto-arrange", Line, "Auto arrange"),
     VARIABLES => ("variables", Line, "Variables"),
     APPEARANCE => ("appearance", Line, "Appearances"),
     PROPERTIES => ("properties", Line, "Properties"),

@@ -1052,6 +1052,29 @@ impl Command for MoveGraphNodes {
     }
 }
 
+/// Forgets where the node view's nodes were put (Auto arrange): they are laid out again.
+#[derive(Debug, Clone)]
+pub struct ResetNodeLayout {
+    pub element: ElementId,
+}
+
+impl Command for ResetNodeLayout {
+    fn label(&self) -> String {
+        "Arrange nodes".into()
+    }
+    fn scope(&self) -> Scope {
+        Scope::Element(self.element)
+    }
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        let l = studio_mut(doc, self.element)?
+            .node_layout_mut()
+            .ok_or_else(|| CommandError::Invalid("nodes need a Part Studio".into()))?;
+        l.positions.clear();
+        l.inputs_node = None;
+        Ok(())
+    }
+}
+
 /// Collapses a node of the node view to its header, or opens it.
 #[derive(Debug, Clone)]
 pub struct SetNodeCollapsed {

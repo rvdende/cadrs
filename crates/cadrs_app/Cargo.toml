@@ -29,6 +29,7 @@ serde.workspace = true
 ron.workspace = true
 cadrs_eda.workspace = true
 cadrs_router.workspace = true
+cadrs_router_kernels.workspace = true
 # KiCad project import: a crutch that can be dropped (remove the feature and `pcb::kicad`).
 cadrs_kicad = { workspace = true, optional = true }
 cadrs_net.workspace = true

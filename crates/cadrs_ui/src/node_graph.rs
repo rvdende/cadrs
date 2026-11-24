@@ -16,6 +16,10 @@
 //!   input of the same [type](Socket::ty) (within [`SNAP`] px of it) triggers [`WireConnect`];
 //!   dragging a wire off an input triggers [`WireDisconnect`] (and the drag goes on from the
 //!   wire's output, so it can be dropped on another input). An input takes one wire.
+//! - **Selecting**: a drag on the empty canvas draws a box; at its end [`BoxSelected`] lists the
+//!   nodes it touches (the app selects them; [`GraphNodeSelected`] marks what is selected).
+//! - Nodes well outside the view are hidden ([`cull_nodes`]), so a large graph draws only what
+//!   shows.
 //! - **[`Wire`]**: a cubic Bézier from an output socket to an input socket, drawn as short thin
 //!   segments (rotated nodes) on the wire layer, each frame its ends moved.
 //!
@@ -36,7 +40,8 @@ pub struct NodeGraphPlugin;
 
 impl Plugin for NodeGraphPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(on_scroll)
+        app.init_resource::<WireRouter>()
+            .add_observer(on_scroll)
             .add_observer(on_pan_drag)
             .add_observer(on_node_press)
             .add_observer(on_node_drag)
@@ -45,13 +50,22 @@ impl Plugin for NodeGraphPlugin {
             .add_observer(on_socket_drag)
             .add_observer(on_socket_drag_end)
             .add_observer(on_fit)
+            .add_observer(on_box_start)
+            .add_observer(on_box_drag)
+            .add_observer(on_box_end)
             .add_systems(
                 PostUpdate,
                 (apply_views, place_nodes, mark_static_copies).before(bevy::ui::UiSystems::Prepare),
             )
             .add_systems(
                 PostUpdate,
-                (place_sockets, draw_wires)
+                (
+                    place_sockets,
+                    route_wires,
+                    draw_wires,
+                    draw_grid,
+                    cull_nodes,
+                )
                     .chain()
                     .after(bevy::ui::UiSystems::Layout),
             );
@@ -61,7 +75,7 @@ impl Plugin for NodeGraphPlugin {
 /// How near (px on screen) a dropped wire must be to an input to connect to it.
 pub const SNAP: f32 = 14.0;
 /// The zoom range.
-pub const MIN_ZOOM: f32 = 0.25;
+pub const MIN_ZOOM: f32 = 0.1;
 pub const MAX_ZOOM: f32 = 1.0;
 /// A socket's diameter (px at 1×).
 pub const SOCKET: f32 = 10.0;
@@ -162,6 +176,8 @@ struct CanvasLayer;
 pub struct NodeCanvasBuilder {
     name: Cow<'static, str>,
     view: PanZoom,
+    grid: Option<CanvasGrid>,
+    background: Option<Color>,
 }
 
 impl NodeCanvasBuilder {
@@ -169,11 +185,25 @@ impl NodeCanvasBuilder {
         Self {
             name: name.into(),
             view: PanZoom::default(),
+            grid: None,
+            background: None,
         }
     }
 
     pub fn view(mut self, v: PanZoom) -> Self {
         self.view = v;
+        self
+    }
+
+    /// Draws a grid under the wires ([`CanvasGrid`]).
+    pub fn grid(mut self, g: CanvasGrid) -> Self {
+        self.grid = Some(g);
+        self
+    }
+
+    /// The canvas's colour (the theme's view background by default).
+    pub fn background(mut self, c: Color) -> Self {
+        self.background = Some(c);
         self
     }
 
@@ -189,11 +219,31 @@ impl NodeCanvasBuilder {
                     overflow: Overflow::clip(),
                     ..default()
                 },
-                BackgroundColor(t.viewport_background),
+                BackgroundColor(self.background.unwrap_or(t.viewport_background)),
                 Pickable::default(),
                 ChildOf(parent),
             ))
             .id();
+        if let Some(g) = self.grid {
+            // First, so under the wires and the nodes; not moved with the view (its lines are
+            // placed in canvas px, [`draw_grid`]).
+            commands.spawn((
+                Name::new(format!("{}-grid", self.name)),
+                g,
+                GridDrawn::default(),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(0.0),
+                    top: Val::Px(0.0),
+                    right: Val::Px(0.0),
+                    bottom: Val::Px(0.0),
+                    overflow: Overflow::clip(),
+                    ..default()
+                },
+                Pickable::IGNORE,
+                ChildOf(canvas),
+            ));
+        }
         let layer = |name: String| {
             (
                 Name::new(name),
@@ -214,12 +264,122 @@ impl NodeCanvasBuilder {
         };
         let wires = commands.spawn(layer(format!("{}-wires", self.name))).id();
         let world = commands.spawn(layer(format!("{}-world", self.name))).id();
-        commands.entity(canvas).insert(NodeCanvas {
-            view: self.view,
-            world,
-            wires,
-        });
+        commands.entity(canvas).insert((
+            NodeCanvas {
+                view: self.view,
+                world,
+                wires,
+            },
+            CanvasRoutes::default(),
+        ));
         canvas
+    }
+}
+
+/// A canvas's grid, after the PCB Studio's schematic (Horizon EDA's look): faint lines every
+/// `step` graph px (every 2nd, 4th, … when they would be closer than 12 px on screen) and a
+/// cross on every fifth line. A transparent `line` draws the crosses alone.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub struct CanvasGrid {
+    pub step: f32,
+    pub line: Color,
+    pub mark: Color,
+}
+
+/// The view and size a grid was last drawn for.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq)]
+struct GridDrawn(Option<(PanZoom, Vec2)>);
+
+/// The grid's lines and crosses, in canvas px, for a view of a canvas `size` px: (vertical line
+/// xs, horizontal line ys, cross centres).
+pub fn grid_lines(g: &CanvasGrid, view: &PanZoom, size: Vec2) -> (Vec<f32>, Vec<f32>, Vec<Vec2>) {
+    let mut step = g.step.max(1.0);
+    while step * view.zoom < 12.0 {
+        step *= 2.0;
+    }
+    let lo = view.to_graph(Vec2::ZERO);
+    let hi = view.to_graph(size);
+    let (i0, i1) = ((lo.x / step).floor() as i64, (hi.x / step).ceil() as i64);
+    let (j0, j1) = ((lo.y / step).floor() as i64, (hi.y / step).ceil() as i64);
+    let xs: Vec<(i64, f32)> = (i0..=i1)
+        .map(|i| (i, view.to_screen(Vec2::new(i as f32 * step, 0.0)).x))
+        .collect();
+    let ys: Vec<(i64, f32)> = (j0..=j1)
+        .map(|j| (j, view.to_screen(Vec2::new(0.0, j as f32 * step)).y))
+        .collect();
+    let mut crosses = Vec::new();
+    for (i, x) in xs.iter().filter(|(i, _)| i.rem_euclid(5) == 0) {
+        for (j, y) in ys.iter().filter(|(j, _)| j.rem_euclid(5) == 0) {
+            let _ = (i, j);
+            crosses.push(Vec2::new(*x, *y));
+        }
+    }
+    (
+        xs.into_iter().map(|(_, x)| x).collect(),
+        ys.into_iter().map(|(_, y)| y).collect(),
+        crosses,
+    )
+}
+
+/// One line or cross arm of a grid.
+#[derive(Component, Debug, Clone, Copy)]
+struct GridPiece;
+
+/// Draws each canvas's grid again when its view or size changed.
+fn draw_grid(
+    q_canvas: Query<(&NodeCanvas, &ComputedNode, &Children)>,
+    mut q_grid: Query<(Entity, &CanvasGrid, &mut GridDrawn, Option<&Children>)>,
+    mut commands: Commands,
+) {
+    for (c, cn, kids) in &q_canvas {
+        let size = cn.size() * cn.inverse_scale_factor();
+        for k in kids.iter() {
+            let Ok((e, g, mut drawn, pieces)) = q_grid.get_mut(k) else {
+                continue;
+            };
+            let now = Some((c.view, size));
+            if drawn.0 == now || size.x <= 0.0 {
+                continue;
+            }
+            drawn.0 = now;
+            if let Some(p) = pieces {
+                for x in p.iter() {
+                    commands.entity(x).despawn();
+                }
+            }
+            let (xs, ys, crosses) = grid_lines(g, &c.view, size);
+            let piece = |l: f32, t: f32, w: f32, h: f32, color: Color| {
+                (
+                    GridPiece,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Px(l),
+                        top: Val::Px(t),
+                        width: Val::Px(w),
+                        height: Val::Px(h),
+                        ..default()
+                    },
+                    BackgroundColor(color),
+                    Pickable::IGNORE,
+                    ChildOf(e),
+                )
+            };
+            if g.line.alpha() > 0.0 {
+                for x in xs {
+                    commands.spawn(piece(x.round(), 0.0, 1.0, size.y, g.line));
+                }
+                for y in ys {
+                    commands.spawn(piece(0.0, y.round(), size.x, 1.0, g.line));
+                }
+            }
+            // A cross's arms: a fixed share of a grid step, at least 3 px.
+            let arm = (g.step * c.view.zoom * 0.3).clamp(3.0, 8.0);
+            for p in crosses {
+                let p = p.round();
+                commands.spawn(piece(p.x - arm, p.y, 2.0 * arm + 1.0, 1.0, g.mark));
+                commands.spawn(piece(p.x, p.y - arm, 1.0, 2.0 * arm + 1.0, g.mark));
+            }
+        }
     }
 }
 
@@ -336,6 +496,160 @@ fn on_pan_drag(
         entity: ev.entity,
         view,
     });
+}
+
+/// A box being dragged on a canvas's empty ground: where it started and where it is (canvas
+/// px), and the node drawing it.
+#[derive(Component, Debug, Clone, Copy)]
+struct BoxDrag {
+    from: Vec2,
+    to: Vec2,
+    shape: Entity,
+}
+
+/// A box was dragged on a canvas (triggered on it): the nodes it touches; `add` when Shift or
+/// Ctrl was held (add to the selection instead of replacing it).
+#[derive(EntityEvent, Debug, Clone)]
+pub struct BoxSelected {
+    pub entity: Entity,
+    pub nodes: Vec<Entity>,
+    pub add: bool,
+}
+
+fn on_box_start(
+    mut ev: On<PointerDragStart>,
+    q_canvas: Query<&NodeCanvas>,
+    q_geo: Query<(&ComputedNode, &UiGlobalTransform)>,
+    theme: Option<Res<Theme>>,
+    mut commands: Commands,
+) {
+    if ev.button != PointerButton::Primary
+        || ev.original_event_target() != ev.entity
+        || !q_canvas.contains(ev.entity)
+    {
+        return;
+    }
+    ev.propagate(false);
+    let Some(at) = canvas_point(ev.pointer.position, ev.entity, &q_geo) else {
+        return;
+    };
+    let color = theme.map_or(Color::srgb(0.3, 0.5, 1.0), |t| t.primary);
+    let shape = commands
+        .spawn((
+            Name::new("node-canvas-box"),
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(at.x),
+                top: Val::Px(at.y),
+                border: UiRect::all(Val::Px(1.0)),
+                ..default()
+            },
+            BackgroundColor(color.with_alpha(0.12)),
+            BorderColor::all(color),
+            ZIndex(20),
+            Pickable::IGNORE,
+            ChildOf(ev.entity),
+        ))
+        .id();
+    commands.entity(ev.entity).insert(BoxDrag {
+        from: at,
+        to: at,
+        shape,
+    });
+}
+
+fn on_box_drag(
+    ev: On<PointerDrag>,
+    mut q_box: Query<&mut BoxDrag>,
+    q_geo: Query<(&ComputedNode, &UiGlobalTransform)>,
+    mut q_node: Query<&mut Node>,
+) {
+    if ev.button != PointerButton::Primary {
+        return;
+    }
+    let Ok(mut b) = q_box.get_mut(ev.entity) else {
+        return;
+    };
+    let Some(at) = canvas_point(ev.pointer.position, ev.entity, &q_geo) else {
+        return;
+    };
+    b.to = at;
+    let r = Rect::from_corners(b.from, b.to);
+    if let Ok(mut n) = q_node.get_mut(b.shape) {
+        n.left = Val::Px(r.min.x);
+        n.top = Val::Px(r.min.y);
+        n.width = Val::Px(r.width());
+        n.height = Val::Px(r.height());
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn on_box_end(
+    ev: On<PointerDragEnd>,
+    q_box: Query<&BoxDrag>,
+    q_canvas: Query<&NodeCanvas>,
+    q_nodes: Query<(Entity, &GraphNode, &ComputedNode, &ChildOf)>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut commands: Commands,
+) {
+    let Ok(b) = q_box.get(ev.entity) else {
+        return;
+    };
+    commands.entity(b.shape).despawn();
+    commands.entity(ev.entity).remove::<BoxDrag>();
+    let Ok(c) = q_canvas.get(ev.entity) else {
+        return;
+    };
+    let r = Rect::from_corners(c.view.to_graph(b.from), c.view.to_graph(b.to));
+    let nodes: Vec<Entity> = q_nodes
+        .iter()
+        .filter(|(_, _, _, p)| p.parent() == c.world)
+        .filter(|(_, g, n, _)| {
+            let nr = Rect::from_corners(g.pos, g.pos + n.size() * n.inverse_scale_factor());
+            !nr.intersect(r).is_empty()
+        })
+        .map(|(e, ..)| e)
+        .collect();
+    let add = keys.any_pressed([
+        KeyCode::ShiftLeft,
+        KeyCode::ShiftRight,
+        KeyCode::ControlLeft,
+        KeyCode::ControlRight,
+    ]);
+    commands.trigger(BoxSelected {
+        entity: ev.entity,
+        nodes,
+        add,
+    });
+}
+
+/// Hides the nodes (and their wires stay) well outside the view: a large graph's bodies cost
+/// nothing to draw while off screen.
+pub fn cull_nodes(
+    q_canvas: Query<(&NodeCanvas, &ComputedNode)>,
+    mut q_nodes: Query<(&GraphNode, &ComputedNode, &ChildOf, &mut Visibility)>,
+) {
+    /// How far outside the view (px on screen) a node still shows.
+    const MARGIN: f32 = 300.0;
+    for (c, cn) in &q_canvas {
+        let size = cn.size() * cn.inverse_scale_factor();
+        let view = Rect::from_corners(Vec2::splat(-MARGIN), size + MARGIN);
+        for (g, n, p, mut vis) in &mut q_nodes {
+            if p.parent() != c.world {
+                continue;
+            }
+            let nsize = n.size() * n.inverse_scale_factor();
+            let r = Rect::from_corners(c.view.to_screen(g.pos), c.view.to_screen(g.pos + nsize));
+            let want = if r.intersect(view).is_empty() && nsize != Vec2::ZERO {
+                Visibility::Hidden
+            } else {
+                Visibility::Inherited
+            };
+            if *vis != want {
+                *vis = want;
+            }
+        }
+    }
 }
 
 fn on_fit(
@@ -620,9 +934,64 @@ impl Wire {
     }
 }
 
-/// The ends a wire was last drawn with.
+/// The ends a wire was last drawn with, and whether along a route.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq)]
-struct WireDrawn(Option<(Vec2, Vec2)>);
+struct WireDrawn(Option<(Vec2, Vec2, bool)>);
+
+/// What a [`WireRouter`] is asked: the nodes to go round (graph px rectangles) and each wire's
+/// ends (its output's socket, its input's).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RouteProblem {
+    pub obstacles: Vec<Rect>,
+    pub wires: Vec<(Vec2, Vec2)>,
+}
+
+/// Routes wires round the nodes once they have stopped moving (the app's: a PCB-style router).
+/// For each wire of the problem, the points to pass through between its ends (graph px), or
+/// `None` to draw it as a plain curve. Without one, every wire is a curve.
+pub type RouteFn = dyn Fn(&RouteProblem) -> Vec<Option<Vec<Vec2>>> + Send + Sync;
+
+#[derive(Resource, Default, Clone)]
+pub struct WireRouter(pub Option<std::sync::Arc<RouteFn>>);
+
+/// How long (frames) a canvas's nodes and wires must stay put before its wires are routed.
+const SETTLE: u8 = 3;
+
+/// A canvas's routing: the geometry routed last, and each wire's route.
+#[derive(Component, Debug, Clone, Default)]
+struct CanvasRoutes {
+    /// The geometry now, and for how many frames it has been so.
+    key: u64,
+    still: u8,
+    /// The geometry the routes are for.
+    routed: u64,
+    routes: std::collections::HashMap<Entity, Vec<Vec2>>,
+}
+
+/// A path through `pts` with its corners rounded (each by up to `r`, less on short legs).
+pub fn rounded(pts: &[Vec2], r: f32) -> Vec<Vec2> {
+    if pts.len() < 3 {
+        return pts.to_vec();
+    }
+    let mut out = vec![pts[0]];
+    for w in pts.windows(3) {
+        let (a, b, c) = (w[0], w[1], w[2]);
+        let (u, v) = ((a - b), (c - b));
+        let k = r.min(u.length() / 2.0).min(v.length() / 2.0);
+        if k < 0.5 {
+            out.push(b);
+            continue;
+        }
+        let (p, q) = (b + u.normalize() * k, b + v.normalize() * k);
+        for i in 0..=6 {
+            let t = i as f32 / 6.0;
+            let m = 1.0 - t;
+            out.push(p * m * m + b * 2.0 * m * t + q * t * t);
+        }
+    }
+    out.push(pts[pts.len() - 1]);
+    out
+}
 
 /// One straight piece of a wire.
 #[derive(Component, Debug, Clone, Copy)]
@@ -691,9 +1060,85 @@ fn socket_point(
     Some(inv.transform_point2(sg.translation) * layer_scale)
 }
 
+/// Routes each canvas's wires once its nodes and wires have stayed put for [`SETTLE`] frames;
+/// while anything moves, the wires are curves.
+#[allow(clippy::type_complexity)]
+fn route_wires(
+    router: Res<WireRouter>,
+    mut q_canvas: Query<(&NodeCanvas, &mut CanvasRoutes)>,
+    q_wire: Query<(Entity, &Wire, &ChildOf)>,
+    q_nodes: Query<(&GraphNode, &ComputedNode, &ChildOf)>,
+    q_geo: Query<(&ComputedNode, &UiGlobalTransform)>,
+) {
+    use std::hash::{Hash, Hasher};
+    let Some(route) = router.0.clone() else {
+        return;
+    };
+    for (c, mut r) in &mut q_canvas {
+        let Ok((ln, lg)) = q_geo.get(c.wires) else {
+            continue;
+        };
+        let s = ln.inverse_scale_factor();
+        let mut problem = RouteProblem::default();
+        let mut ids = Vec::new();
+        for (g, n, p) in &q_nodes {
+            if p.parent() == c.world {
+                let size = n.size() * n.inverse_scale_factor();
+                problem
+                    .obstacles
+                    .push(Rect::from_corners(g.pos, g.pos + size));
+            }
+        }
+        for (e, w, p) in &q_wire {
+            if p.parent() != c.wires {
+                continue;
+            }
+            if let (Some(a), Some(b)) = (
+                socket_point(w.from, lg, s, &q_geo),
+                socket_point(w.to, lg, s, &q_geo),
+            ) {
+                problem.wires.push((a, b));
+                ids.push(e);
+            }
+        }
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for o in &problem.obstacles {
+            [o.min, o.max]
+                .map(|v| v.round().to_array().map(|x| x as i32))
+                .hash(&mut h);
+        }
+        for (a, b) in &problem.wires {
+            [*a, *b]
+                .map(|v| v.round().to_array().map(|x| x as i32))
+                .hash(&mut h);
+        }
+        ids.hash(&mut h);
+        let key = h.finish();
+        if key != r.key {
+            r.key = key;
+            r.still = 0;
+            if !r.routes.is_empty() {
+                r.routes.clear();
+            }
+            continue;
+        }
+        r.still = r.still.saturating_add(1);
+        if r.still < SETTLE || r.routed == key {
+            continue;
+        }
+        r.routed = key;
+        let paths = route(&problem);
+        r.routes = ids
+            .into_iter()
+            .zip(paths)
+            .filter_map(|(e, p)| p.map(|p| (e, p)))
+            .collect();
+    }
+}
+
 #[allow(clippy::type_complexity)]
 fn draw_wires(
-    q_canvas: Query<&NodeCanvas>,
+    q_canvas: Query<(&NodeCanvas, Option<&CanvasRoutes>)>,
     mut q_wire: Query<
         (
             Entity,
@@ -723,21 +1168,30 @@ fn draw_wires(
             _ => None,
         };
         let Some((a, b)) = ends else { continue };
-        if drawn.0 == Some((a, b)) {
+        let canvas = q_canvas.iter().find(|(c, _)| c.wires == layer);
+        let route = canvas
+            .and_then(|(_, r)| r)
+            .and_then(|r| r.routes.get(&entity).cloned());
+        if drawn.0 == Some((a, b, route.is_some())) {
             continue;
         }
-        drawn.0 = Some((a, b));
+        drawn.0 = Some((a, b, route.is_some()));
         let (color, dashed) = match wire {
             Some(w) => (w.color, w.dashed),
             None => (Color::WHITE, false),
         };
-        let zoom = q_canvas
-            .iter()
-            .find(|c| c.wires == layer)
-            .map_or(1.0, |c| c.view.zoom);
+        let zoom = canvas.map_or(1.0, |(c, _)| c.view.zoom);
         // A wire stays at least a pixel thick however far out it is zoomed.
         let thick = (2.0f32).max(1.2 / zoom);
-        let pts = wire_points(a, b, 24);
+        let pts = match &route {
+            Some(via) => {
+                let mut p = vec![a];
+                p.extend(via.iter().copied());
+                p.push(b);
+                rounded(&p, 14.0)
+            }
+            None => wire_points(a, b, 24),
+        };
         if let Some(children) = children {
             for c in children.iter() {
                 if q_seg.contains(c) {
@@ -988,6 +1442,47 @@ mod tests {
                 .distance(Vec2::new(400.0, 300.0))
                 < 1e-3
         );
+    }
+
+    #[test]
+    fn grid_lines_space_out_when_zoomed_out() {
+        let g = CanvasGrid {
+            step: 20.0,
+            line: Color::WHITE,
+            mark: Color::WHITE,
+        };
+        let size = Vec2::new(400.0, 200.0);
+        let v = PanZoom {
+            pan: Vec2::ZERO,
+            zoom: 1.0,
+        };
+        let (xs, ys, crosses) = grid_lines(&g, &v, size);
+        assert_eq!((xs.len(), ys.len()), (21, 11));
+        assert!((xs[1] - xs[0] - 20.0).abs() < 1e-4);
+        // Every fifth line has crosses: x 0, 100, … 400 and y 0, 100, 200.
+        assert_eq!(crosses.len(), 5 * 3);
+        // At a quarter, 20 px would be 5 px apart: every 4th line (80 graph px, 20 px apart).
+        let v = PanZoom {
+            pan: Vec2::new(7.0, 0.0),
+            zoom: 0.25,
+        };
+        let (xs, _, _) = grid_lines(&g, &v, size);
+        assert!(xs.windows(2).all(|w| (w[1] - w[0] - 20.0).abs() < 1e-3));
+        // The grid moves with the view.
+        assert!(xs.iter().any(|x| (x - 7.0).abs() < 1e-3));
+    }
+
+    #[test]
+    fn corners_are_rounded() {
+        let p = rounded(
+            &[Vec2::ZERO, Vec2::new(100.0, 0.0), Vec2::new(100.0, 100.0)],
+            10.0,
+        );
+        assert_eq!(p[0], Vec2::ZERO);
+        assert_eq!(*p.last().unwrap(), Vec2::new(100.0, 100.0));
+        // The corner is cut: no point at it, the curve starts 10 px before it.
+        assert!(p.iter().all(|q| q.distance(Vec2::new(100.0, 0.0)) > 2.0));
+        assert!(p.contains(&Vec2::new(90.0, 0.0)));
     }
 
     #[test]

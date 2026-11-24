@@ -32,6 +32,7 @@ pub fn icons() -> Vec<Def> {
         def("configurations", Line, "Configurations", configurations),
         def("node-graph", Line, "Node view", node_graph),
         def("zoom-fit", Line, "Fit all", zoom_fit),
+        def("auto-arrange", Line, "Auto arrange", auto_arrange),
         def("variables", Line, "Variables", variables),
         def("appearance", Line, "Appearances", appearance),
         def("properties", Line, "Properties", properties),
@@ -318,6 +319,18 @@ fn node_graph() -> Vec<String> {
         acc(path("M10 7.5 C13.5 7.5 10.5 16.5 14 16.5", "", "")),
         circle(10.0, 7.5, 1.25, INK, r#"stroke="none""#),
         circle(14.0, 16.5, 1.25, INK, r#"stroke="none""#),
+    ]
+}
+
+/// Auto arrange: a column of one node and a column of two, lined up, the links between them
+/// (what arranging tidies) in accent.
+fn auto_arrange() -> Vec<String> {
+    els![
+        rect(2.5, 9.0, 6.5, 6.0, 1.5, "", ""),
+        rect(15.0, 3.5, 6.5, 6.0, 1.5, "", ""),
+        rect(15.0, 14.5, 6.5, 6.0, 1.5, "", ""),
+        acc(path("M9 12 C12 12 12 6.5 15 6.5", "", "")),
+        acc(path("M9 12 C12 12 12 17.5 15 17.5", "", "")),
     ]
 }
 
