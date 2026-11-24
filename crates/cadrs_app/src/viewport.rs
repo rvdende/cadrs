@@ -3023,40 +3023,40 @@ fn sync_plane_rows(
     }
 }
 
-/// Marks the feature-list row lit up because its sketch is under the pointer in the view.
+/// Marks a feature-list row shown as selected because what its feature made is under the
+/// pointer in the view (its [`cadrs_ui::ForceState`] is ours to take away).
 #[derive(Component)]
 struct ViewHoveredRow;
 
-/// A sketch's curve, point or region under the pointer in the view lights up the sketch's row
-/// in the feature list as hovered, so it shows which sketch a double click would edit. (Not
-/// over a selected row, whose own colour wins.)
+/// What is under the pointer in the view (a face, an edge, a vertex, a sketch's curve, point or
+/// region, a plane) lights up the row of the feature a double click would edit (the one that
+/// made it, [`feature_of`]), in the selected rows' blue.
 #[allow(clippy::type_complexity)]
 fn sync_view_hovered_row(
     highlight: Res<PlaneHighlight>,
     kind: Res<ActiveKind>,
+    doc: Option<Res<crate::ActiveDocument>>,
     q: Query<(
         Entity,
         &crate::document::FeatureRow,
         Has<ViewHoveredRow>,
         Has<cadrs_ui::ForceState>,
-        Has<Selected>,
     )>,
     q_new: Query<(), Added<crate::document::FeatureRow>>,
-    q_selected: Query<(), (Changed<Selected>, With<crate::document::FeatureRow>)>,
     mut commands: Commands,
 ) {
-    if !highlight.is_changed() && q_new.is_empty() && q_selected.is_empty() {
+    if !highlight.is_changed() && q_new.is_empty() {
         return;
     }
     let target = highlight
         .viewport
-        .and_then(|p| p.sketch())
-        .filter(|_| *kind == ActiveKind::PartStudio);
-    for (e, row, ours, forced, selected) in &q {
-        let want = target == Some(row.0) && !selected;
+        .filter(|_| *kind == ActiveKind::PartStudio)
+        .and_then(|p| feature_of(doc.as_ref()?.active_element()?.features(), p));
+    for (e, row, ours, forced) in &q {
+        let want = target == Some(row.0);
         if want && !forced {
             commands.entity(e).try_insert((
-                cadrs_ui::ForceState(cadrs_ui::VisualState::Hover),
+                cadrs_ui::ForceState(cadrs_ui::VisualState::Selected),
                 ViewHoveredRow,
             ));
         } else if !want && ours {
