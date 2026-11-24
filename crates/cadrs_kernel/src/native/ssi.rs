@@ -2400,6 +2400,12 @@ fn fit_curve(
     let mut worst = 0.0f64;
     let mut by_chords: Option<(Vec<super::ssi_numeric::Pt>, f64)> = None;
     let many = !crate::native::env_flag!("CADRS_FIT_HALVING");
+    // (The centripetal rounds' best so far, and how many of them in a row gained nothing: a
+    // fit that more points no longer bring nearer, a crease no cubic follows, is left at its
+    // best, where each further round took three times the points for the same distance off.)
+    let mut best: Option<(Vec<super::ssi_numeric::Pt>, f64)> = None;
+    let mut stalled = 0;
+    let mut before = f64::INFINITY;
     while rounds < 6 || (!sharp && worst > SWING && !crate::native::env_flag!("CADRS_FIT_CHORDS")) {
         if rounds == 6 {
             by_chords = Some((pts.clone(), worst));
@@ -2523,9 +2529,34 @@ fn fit_curve(
                 pcs,
             };
         }
+        if !sharp {
+            // (By the chords and no nearer for the points added: a crease, which the
+            // centripetal rounds take from here.)
+            if rounds >= 2 && rounds < 6 && worst > SWING && worst > 0.5 * before {
+                rounds = 6;
+            }
+            before = worst;
+        }
+        if sharp {
+            match &best {
+                // (Farther off than with fewer points: more will not bring it back.)
+                Some((_, least)) if worst > *least => stalled += 2,
+                Some((_, least)) if worst > 0.5 * least => stalled += 1,
+                _ => stalled = 0,
+            }
+            if best.as_ref().is_none_or(|(_, least)| worst < *least) {
+                best = Some((pts.clone(), worst));
+            }
+            if stalled >= 2 {
+                break;
+            }
+        }
         for (k, p) in ins.into_iter().rev() {
             pts.insert(k, p);
         }
+    }
+    if let Some((p, w)) = best.filter(|(_, w)| *w <= worst) {
+        (pts, worst) = (p, w);
     }
     if let Some((p, _)) = by_chords.filter(|(_, w)| *w <= worst) {
         (pts, sharp) = (p, false);

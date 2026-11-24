@@ -349,7 +349,99 @@ impl Slicer<'_> {
                 }
             };
         }
-        // A helicoid: sign changes of key − q along the boundary, refined by bisection.
+        // A helicoid and a polygon's straight side: along the side the polar angle about the
+        // motion's axis turns one way only (its rate is a constant over the distance from the
+        // axis squared), so the key, that angle less k × height, has at most two turning
+        // points, the roots of a quadratic; between them it runs one way, and each slice it
+        // crosses there is one root, found by false position. No sampling of the side.
+        if let Section::Polygon(p) = &b.section {
+            let dir = b.e1 * w.cos() + b.e2 * w.sin();
+            let n = p.len();
+            let mut out = Vec::new();
+            for i in 0..n {
+                let ((r0, h0), (r1, h1)) = (p[i], p[(i + 1) % n]);
+                let a = b.o + dir * r0 + b.a * h0 - self.origin;
+                let d = dir * (r1 - r0) + b.a * (h1 - h0);
+                let (x0, y0, z0) = (a.dot(&self.x), a.dot(&self.y), a.dot(&self.z));
+                let (dx, dy, dz) = (d.dot(&self.x), d.dot(&self.y), d.dot(&self.z));
+                // The key along the side, continuous from its start (the side keeps off the
+                // axis: its angle turns by less than half a turn).
+                let t0 = y0.atan2(x0);
+                let key = |f: f64| {
+                    let (x, y) = (x0 + dx * f, y0 + dy * f);
+                    t0 + (x0 * y - y0 * x).atan2(x0 * x + y0 * y) - self.k * (z0 + dz * f)
+                };
+                // Where it turns: c / ρ² = k dz, ρ² the side's distance from the axis squared.
+                let c = x0 * dy - y0 * dx;
+                let mut at = vec![0.0, 1.0];
+                let rate = self.k * dz;
+                if rate != 0.0 && c / rate > 0.0 {
+                    let (qa, qb, qc) = (
+                        dx * dx + dy * dy,
+                        2.0 * (x0 * dx + y0 * dy),
+                        x0 * x0 + y0 * y0 - c / rate,
+                    );
+                    let disc = qb * qb - 4.0 * qa * qc;
+                    if qa > 0.0 && disc > 0.0 {
+                        for sign in [-1.0, 1.0] {
+                            let f = (-qb + sign * disc.sqrt()) / (2.0 * qa);
+                            if f > 0.0 && f < 1.0 {
+                                at.push(f);
+                            }
+                        }
+                        at.sort_by(f64::total_cmp);
+                    }
+                }
+                for piece in at.windows(2) {
+                    let (fa, fb) = (piece[0], piece[1]);
+                    let (ka, kb) = (key(fa), key(fb));
+                    // Each turn of the slice (q + a whole number of turns) the piece crosses.
+                    let (lo, hi) = (ka.min(kb), ka.max(kb));
+                    let mut m = ((lo - q) / TAU).ceil();
+                    while q + m * TAU <= hi {
+                        let target = q + m * TAU;
+                        m += 1.0;
+                        if target == kb && kb != ka {
+                            // (The piece's far end is the next piece's start.)
+                            continue;
+                        }
+                        let (mut lo, mut hi, mut flo, mut fhi) = (fa, fb, ka - target, kb - target);
+                        let mut side = 0i8;
+                        for _ in 0..60 {
+                            if flo == fhi || hi - lo <= 1e-15 {
+                                break;
+                            }
+                            let mid = lo + (hi - lo) * flo / (flo - fhi);
+                            let fm = key(mid) - target;
+                            if (fm <= 0.0) == (flo <= 0.0) {
+                                lo = mid;
+                                flo = fm;
+                                if side == -1 {
+                                    fhi *= 0.5;
+                                }
+                                side = -1;
+                            } else {
+                                hi = mid;
+                                fhi = fm;
+                                if side == 1 {
+                                    flo *= 0.5;
+                                }
+                                side = 1;
+                            }
+                            if fm.abs() < 1e-15 {
+                                lo = mid;
+                                hi = mid;
+                                break;
+                            }
+                        }
+                        out.push((i as f64 + 0.5 * (lo + hi)) / n as f64);
+                    }
+                }
+            }
+            return out;
+        }
+        // A helicoid and a disk: sign changes of key − q along the boundary, refined by
+        // bisection.
         let f = |s: f64| self.key(&b.point(s, w), q) - q;
         let n = 48;
         let mut out = Vec::new();
@@ -402,41 +494,74 @@ impl Slicer<'_> {
     /// it is: sampled all round and finely about `seed` (the slice before's, where a slice by an
     /// extreme one meets the body in a sliver), then refined (None when the slice misses it).
     fn extreme(&self, q: f64, far: bool, seed: f64) -> Option<(f64, f64)> {
-        let sign = if far { 1.0 } else { -1.0 };
-        let best_at = |w: f64| -> Option<f64> {
+        let (f, n) = self.extremes(q, [seed, seed], [far, !far]);
+        if far { f } else { n }
+    }
+
+    /// [`Self::extreme`] for the greatest distance and for the least at once (those of `want`
+    /// asked for), each with its own seed: the half planes all round are met with the slice
+    /// once for both.
+    fn extremes(
+        &self,
+        q: f64,
+        seeds: [f64; 2],
+        want: [bool; 2],
+    ) -> (Option<(f64, f64)>, Option<(f64, f64)>) {
+        // The greatest and the least distance on the half plane at w.
+        let both_at = |w: f64| -> Option<(f64, f64)> {
             self.crossings(w, q)
                 .into_iter()
-                .map(|s| sign * self.radius(&self.body.point(s, w)))
-                .fold(None, |a: Option<f64>, x| Some(a.map_or(x, |a| a.max(x))))
+                .map(|s| self.radius(&self.body.point(s, w)))
+                .fold(None, |a: Option<(f64, f64)>, x| {
+                    Some(a.map_or((x, x), |(hi, lo)| (hi.max(x), lo.min(x))))
+                })
         };
         let n = 240;
         let h = TAU / n as f64;
-        let mut best: Option<(f64, f64)> = None;
-        let try_at = |w: f64, best: &mut Option<(f64, f64)>| {
-            if let Some(v) = best_at(w)
-                && best.is_none_or(|b| v > b.1)
-            {
-                *best = Some((w, v));
+        // (The best of each side so far: the turn and the signed distance, greater the better.)
+        let mut best: [Option<(f64, f64)>; 2] = [None, None];
+        let mut try_at = |w: f64, sides: [bool; 2]| {
+            if let Some((hi, lo)) = both_at(w) {
+                for (side, v) in [(0, hi), (1, -lo)] {
+                    if sides[side] && best[side].is_none_or(|b| v > b.1) {
+                        best[side] = Some((w, v));
+                    }
+                }
             }
         };
         for i in 0..n {
-            try_at(TAU * i as f64 / n as f64, &mut best);
+            try_at(TAU * i as f64 / n as f64, want);
         }
-        for i in -16..=16 {
-            try_at(seed + h * 2.0 * i as f64 / 16.0, &mut best);
+        for side in 0..2 {
+            if want[side] {
+                for i in -16..=16 {
+                    try_at(
+                        seeds[side] + h * 2.0 * i as f64 / 16.0,
+                        [side == 0, side == 1],
+                    );
+                }
+            }
         }
-        let (w0, v0) = best?;
-        let (w, v) = golden_max_in(
-            &|w| best_at(w).unwrap_or(f64::NEG_INFINITY),
-            w0 - h,
-            w0 + h,
-            40,
-        );
-        Some(if v > v0 {
-            (sign * v, w)
-        } else {
-            (sign * v0, w0)
-        })
+        let refined = |side: usize| -> Option<(f64, f64)> {
+            let sign = if side == 0 { 1.0 } else { -1.0 };
+            let (w0, v0) = best[side]?;
+            let one = |w: f64| {
+                both_at(w).map_or(
+                    f64::NEG_INFINITY,
+                    |(hi, lo)| if side == 0 { hi } else { -lo },
+                )
+            };
+            let (w, v) = golden_max_in(&one, w0 - h, w0 + h, 40);
+            Some(if v > v0 {
+                (sign * v, w)
+            } else {
+                (sign * v0, w0)
+            })
+        };
+        (
+            if want[0] { refined(0) } else { None },
+            if want[1] { refined(1) } else { None },
+        )
     }
 }
 
@@ -464,35 +589,48 @@ fn outline(sl: &Slicer, lo: Extreme, hi: Extreme, n: usize) -> Option<Outline> {
     let eps = 1e-9 * span;
     let (lo_far, lo_near) = end(lo.key + eps, lo);
     let (hi_far, hi_near) = end(hi.key - eps, hi);
-    let side = |far: bool, a: (f64, f64), b: (f64, f64)| -> Option<Vec<(f64, f64)>> {
-        let mut out = vec![a];
-        let mut seed = lo.w;
-        for i in 1..n {
+    // The slices in runs, side by side (each slice's two sides found together, each from the
+    // slice before's turn; a run's first from the low end's: the same runs, and so the same
+    // points, whatever the threads).
+    const RUN: usize = 32;
+    let slices: Vec<usize> = (1..n).collect();
+    let runs: Vec<&[usize]> = slices.chunks(RUN).collect();
+    type Sides = Option<Vec<[Option<(f64, f64)>; 2]>>;
+    let found: Vec<Sides> = super::par::map_heavy(&runs, true, |run| {
+        let mut seeds = [lo.w, lo.w];
+        let mut out = Vec::with_capacity(run.len());
+        for &i in run.iter() {
             let th = -PI / 2.0 + PI * i as f64 / n as f64;
             let q = mid + half * th.sin();
+            let (far, near) = sl.extremes(q, seeds, [true, true]);
             // (A slice within a hair of an end, where the ends' own keys are only found to a
             // search's precision, may miss the body: the end's point stands for it.)
-            let Some((v, w)) = sl.extreme(q, far, seed) else {
-                if 1.0 - th.sin().abs() < 1e-4 {
-                    continue;
+            let close = 1.0 - th.sin().abs() < 1e-4;
+            let mut at = [None, None];
+            for (side, got) in [far, near].into_iter().enumerate() {
+                match got {
+                    Some((v, w)) => {
+                        seeds[side] = w;
+                        at[side] = Some((v, q));
+                    }
+                    None if close => {}
+                    None => return None,
                 }
-                return None;
-            };
-            seed = w;
-            out.push((v, q));
+            }
+            out.push(at);
         }
-        out.push(b);
         Some(out)
-    };
-    super::par::start();
-    let (far, near) = rayon::join(
-        || side(true, lo_far, hi_far),
-        || side(false, lo_near, hi_near),
-    );
-    Some(Outline {
-        far: far?,
-        near: near?,
-    })
+    });
+    let (mut far, mut near) = (vec![lo_far], vec![lo_near]);
+    for run in found {
+        for [f, nr] in run? {
+            far.extend(f);
+            near.extend(nr);
+        }
+    }
+    far.push(hi_far);
+    near.push(hi_near);
+    Some(Outline { far, near })
 }
 
 /// A stretch of the body's boundary with the outward normals along it, in the half plane of its

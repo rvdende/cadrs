@@ -3063,24 +3063,21 @@ fn lighter_along_u(n: &NurbsSurface) -> Option<NurbsSurface> {
     let most = along * 3 / 4;
     let mut sites: Vec<f64> = (0..=8).map(|i| u0 + (u1 - u0) * i as f64 / 8.0).collect();
     loop {
-        let fits: Vec<NurbsCurve> = cols
-            .iter()
-            .map(|c| {
-                let pts: Vec<P3> = sites.iter().map(|&t| c.point(t)).collect();
-                NurbsCurve::interpolate(&pts, &sites, 5.min(sites.len() - 1), None, None)
+        // (Each column fitted on its own, and each stretch between sites checked on its own:
+        // side by side where they are many, see `par`.)
+        let fits: Vec<NurbsCurve> = super::par::map(&cols, |c| {
+            let pts: Vec<P3> = sites.iter().map(|&t| c.point(t)).collect();
+            NurbsCurve::interpolate(&pts, &sites, 5.min(sites.len() - 1), None, None)
+        });
+        let stretches: Vec<(f64, f64)> = sites.windows(2).map(|w| (w[0], w[1])).collect();
+        let split: Vec<bool> = super::par::map(&stretches, |&(a, b)| {
+            (1..8).any(|i| {
+                let t = a + (b - a) * i as f64 / 8.0;
+                cols.iter()
+                    .zip(&fits)
+                    .any(|(c, f)| (c.point(t) - f.point(t)).norm() > tol)
             })
-            .collect();
-        let split: Vec<bool> = sites
-            .windows(2)
-            .map(|w| {
-                (1..8).any(|i| {
-                    let t = w[0] + (w[1] - w[0]) * i as f64 / 8.0;
-                    cols.iter()
-                        .zip(&fits)
-                        .any(|(c, f)| (c.point(t) - f.point(t)).norm() > tol)
-                })
-            })
-            .collect();
+        });
         if !split.iter().any(|x| *x) {
             let m = fits[0].cps.len();
             if m > most {
