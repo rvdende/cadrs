@@ -533,6 +533,10 @@ fn import(pool: &mut Pool, faces: &mut Vec<WFace>, b: &Body, owner: usize, merge
             pcs: None,
         });
     }
+    // (Each face's polygons, side by side where they are many and new: a tool of a hundred
+    // swept faces, each outline sampled the once, took a tenth of its cut.)
+    let mut all_polys =
+        super::par::map(&b.faces, |f| classify::face_polygons_kept(b, f)).into_iter();
     for (fi, f) in b.faces.iter().enumerate() {
         let mut loops: Vec<Vec<(usize, bool, Curve)>> = f
             .loops
@@ -544,7 +548,9 @@ fn import(pool: &mut Pool, faces: &mut Vec<WFace>, b: &Body, owner: usize, merge
             })
             .collect();
         loops.iter_mut().for_each(drop_slits);
-        let polys = classify::face_polygons_kept(b, f);
+        let polys = all_polys
+            .next()
+            .unwrap_or_else(|| classify::face_polygons_kept(b, f));
         let mut bb = Bbox::empty();
         // (The polygons' (u, v) box from each one's, kept with them.)
         let mut uvb = Bbox::empty();
@@ -2090,6 +2096,15 @@ fn near_coincident_tolerances(a: &Body, b: &Body, tol: f64, fuzzy: f64) -> Optio
                 continue;
             }
             let (sa, sb) = (&a.faces[fa].surf, &b.faces[fb].surf);
+            // (A boundary point of either face farther from the other's surface than the
+            // gap below may be rules the pair out, for one projection: whether two B-splines
+            // are one surface is asked by projecting a grid of each, and a hundred swept
+            // faces against a hundred, their boxes overlapping, spent a fifth of a cut on it.)
+            let far =
+                |s: &Surface, pts: &[P3]| pts.first().is_some_and(|p| s.distance(p) > ctol * 2.0);
+            if far(sa, pb) || far(sb, pa) {
+                continue;
+            }
             if sa.same_domain(sb, tol).is_some() || sa.same_domain(sb, ctol).is_none() {
                 continue;
             }
