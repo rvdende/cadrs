@@ -199,6 +199,7 @@ impl PrefsDialog {
             Section::Navigation => {
                 p.mouse = d.mouse;
                 p.keep_camera_up = d.keep_camera_up;
+                p.invert_wheel_zoom = d.invert_wheel_zoom;
                 p.sketch_view_normal = d.sketch_view_normal;
                 p.space_mouse_zoom = d.space_mouse_zoom;
                 p.space_mouse_speed = d.space_mouse_speed;
@@ -620,6 +621,15 @@ fn groups(section: Section, s: &PrefsDialog, facts: &Facts) -> Vec<Group> {
                     })),
                 ));
             }
+            mouse.push(
+                Row::new(
+                    "pref-invert-wheel-zoom",
+                    tr("preferences-wheel-zoom"),
+                    "mouse wheel scroll zoom invert reverse direction",
+                    Control::Switch(tr("preferences-invert-wheel-zoom"), p.invert_wheel_zoom),
+                )
+                .note("preferences-invert-wheel-zoom-note"),
+            );
             vec![
                 Group {
                     key: "preferences-mouse-heading",
@@ -1116,6 +1126,7 @@ fn previewed(base: Preferences, draft: &Preferences, kept: &Preferences) -> Pref
         vsync: draft.vsync,
         mouse: draft.mouse,
         keep_camera_up: draft.keep_camera_up,
+        invert_wheel_zoom: draft.invert_wheel_zoom,
         sketch_view_normal: kept.sketch_view_normal,
         space_mouse_zoom: draft.space_mouse_zoom,
         space_mouse_speed: draft.space_mouse_speed,
@@ -1251,6 +1262,7 @@ fn on_switch(ev: On<SwitchChange>, q: Query<&Name>, mut commands: Commands) {
         "pref-vsync" => |s, on| s.draft.vsync = on,
         "pref-profile-cpu" => |s, on| s.draft.profile_cpu = on,
         "pref-keep-camera-up" => |s, on| s.draft.keep_camera_up = on,
+        "pref-invert-wheel-zoom" => |s, on| s.draft.invert_wheel_zoom = on,
         "pref-sketch-view-normal" => |s, on| s.draft.sketch_view_normal = on,
         "pref-p2p-autoconnect" => |s, on| s.draft.autoconnect_p2p = on,
         "pref-public-documents" => |s, on| s.draft.public_documents = on,

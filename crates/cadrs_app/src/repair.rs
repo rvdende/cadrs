@@ -1030,6 +1030,7 @@ fn on_body_scroll(
     ev: On<PointerScroll>,
     mut repair: ResMut<Repair>,
     q: Query<(&ComputedNode, &bevy::ui::UiGlobalTransform), With<RepairBody>>,
+    prefs: Option<Res<crate::preferences_ui::LocalPreferences>>,
 ) {
     let Some((node, t)) = q.iter().next() else {
         return;
@@ -1037,11 +1038,7 @@ fn on_body_scroll(
     let s = node.inverse_scale_factor();
     let center = t.translation * s;
     let cursor = ev.pointer.position - center;
-    let lines = if ev.unit == bevy::input::mouse::MouseScrollUnit::Line {
-        ev.y
-    } else {
-        ev.y / 40.0
-    };
+    let lines = crate::preferences_ui::wheel_zoom_lines(prefs.as_deref(), ev.unit, ev.y);
     repair.view.wheel(lines, cursor);
 }
 

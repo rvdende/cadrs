@@ -165,6 +165,9 @@ preferences-profiling = Profiling
 preferences-group-view = View
 preferences-camera = Camera
 preferences-keep-up-note = Rotating turns about the vertical and tilts, without rolling the view.
+preferences-wheel-zoom = Wheel zoom
+preferences-invert-wheel-zoom = Invert zoom direction
+preferences-invert-wheel-zoom-note = Off, rolling the wheel away from you zooms in. On, rolling it toward you zooms in.
 # Preferences › Navigation › View: the row's label, its switch, and the note under it.
 preferences-sketch-view = Sketch
 preferences-sketch-view-normal = View normal to the sketch plane
