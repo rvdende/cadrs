@@ -46,6 +46,11 @@ pub struct Document {
     /// folders: the tabs are then in element order.
     #[serde(default, skip_serializing_if = "crate::tab_tree::TabTree::is_empty")]
     pub tab_tree: crate::tab_tree::TabTree,
+    /// The presets of its configured Part Studios that its assemblies use, as generated Part
+    /// Studios that are not tabs, found by [`Document::element`] (see
+    /// [`crate::configuration`]). Kept up to date by [`crate::configuration::refresh`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub configured: Vec<crate::configuration::ConfiguredStudio>,
 }
 
 impl Document {
@@ -63,6 +68,7 @@ impl Document {
             linked: Vec::new(),
             moved: Vec::new(),
             tab_tree: Default::default(),
+            configured: Vec::new(),
         }
     }
 
@@ -81,14 +87,24 @@ impl Document {
         doc
     }
 
-    /// A tab, a standard content configuration's generated Part Studio (P3B.5), or a linked
-    /// element's frozen copy (P3G.1).
+    /// A tab, a standard content configuration's generated Part Studio (P3B.5), a linked
+    /// element's frozen copy (P3G.1), or a configured Part Studio's preset as an assembly uses
+    /// it ([`crate::configuration::ConfiguredStudio`]).
     pub fn element(&self, id: ElementId) -> Option<&Element> {
         self.elements
             .iter()
             .find(|e| e.id == id)
             .or_else(|| self.standard_part(id).map(|p| &p.element))
             .or_else(|| self.linked_element(id).map(|l| &l.element))
+            .or_else(|| self.configured_studio(id).map(|c| &c.element))
+    }
+
+    /// The generated studio of a preset under `id` ([`crate::configuration`]).
+    pub fn configured_studio(
+        &self,
+        id: ElementId,
+    ) -> Option<&crate::configuration::ConfiguredStudio> {
+        self.configured.iter().find(|c| c.element.id == id)
     }
 
     /// The linked element (P3G.1) stored under `id`.
@@ -178,6 +194,8 @@ impl Element {
                 suppressed: Vec::new(),
                 rollback: None,
                 part_folders: Vec::new(),
+                configuration: None,
+                node_layout: None,
             },
             assembly: Default::default(),
             contexts: Vec::new(),
@@ -205,11 +223,52 @@ impl Element {
 
     /// The Variable Studios' variables as this Part Studio's or Assembly's expressions see
     /// them (defined above its own list), see [`crate::variable_studio`].
+    /// A configured Part Studio's inputs come first, with the active preset's values
+    /// ([`crate::configuration`]).
     pub fn variable_base(&self) -> Vec<(String, cadrs_sketch::units::VarValue)> {
-        self.studio_variables
-            .iter()
-            .map(|v| (v.name.clone(), v.var_value()))
-            .collect()
+        let mut out = self
+            .configuration()
+            .map(|c| c.values(None))
+            .unwrap_or_default();
+        out.extend(
+            self.studio_variables
+                .iter()
+                .map(|v| (v.name.clone(), v.var_value())),
+        );
+        out
+    }
+
+    /// A Part Studio's configuration: its inputs and presets ([`crate::configuration`]).
+    pub fn configuration(&self) -> Option<&crate::configuration::Configuration> {
+        match &self.kind {
+            ElementKind::PartStudio { configuration, .. } => configuration.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn configuration_mut(&mut self) -> Option<&mut crate::configuration::Configuration> {
+        match &mut self.kind {
+            ElementKind::PartStudio { configuration, .. } => configuration.as_deref_mut(),
+            _ => None,
+        }
+    }
+
+    /// Where the node view puts a Part Studio's nodes.
+    pub fn node_layout(&self) -> Option<&crate::configuration::NodeLayout> {
+        match &self.kind {
+            ElementKind::PartStudio { node_layout, .. } => node_layout.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// The node view's layout, made empty if the Part Studio has none yet.
+    pub fn node_layout_mut(&mut self) -> Option<&mut crate::configuration::NodeLayout> {
+        match &mut self.kind {
+            ElementKind::PartStudio { node_layout, .. } => {
+                Some(node_layout.get_or_insert_with(Box::default))
+            }
+            _ => None,
+        }
     }
 
     /// A Render Studio tab of `source` (P3F.6).
@@ -394,13 +453,21 @@ impl Element {
     /// features a rebuild sees ahead of the list
     /// ([`crate::variable_studio::ImportedVariable::feature`]). Every list handed to a rebuild
     /// starts with them ([`Self::active_features`], [`Self::features_to_build`]).
+    /// A configured studio's inputs come first, with the active preset's values
+    /// ([`crate::configuration::Configuration::features`]).
     pub fn studio_features(&self) -> Vec<Feature> {
-        match self.kind {
-            ElementKind::PartStudio { .. } => self
-                .studio_variables
-                .iter()
-                .filter(|v| v.used)
-                .map(|v| v.feature())
+        match &self.kind {
+            ElementKind::PartStudio { configuration, .. } => configuration
+                .as_deref()
+                .map(|c| c.features())
+                .unwrap_or_default()
+                .into_iter()
+                .chain(
+                    self.studio_variables
+                        .iter()
+                        .filter(|v| v.used)
+                        .map(|v| v.feature()),
+                )
                 .collect(),
             _ => Vec::new(),
         }
@@ -551,6 +618,12 @@ pub enum ElementKind {
         /// Folders in the Parts list: they group the parts' rows, nothing else.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         part_folders: Vec<PartFolder>,
+        /// Its configuration inputs and presets ([`crate::configuration`]); `None` without.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        configuration: Option<Box<crate::configuration::Configuration>>,
+        /// Where the node view puts its nodes (`None` until one is moved).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        node_layout: Option<Box<crate::configuration::NodeLayout>>,
     },
     Assembly,
     /// A drawing (P3C): sheets, templates and drawing properties, see `cadrs_drawing`.

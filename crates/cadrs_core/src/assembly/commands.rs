@@ -46,6 +46,8 @@ impl Command for InsertInstance {
     }
     fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
         let src = self.instance.source.element();
+        // A preset of a configured Part Studio: its generated studio, made now.
+        crate::configuration::ensure(doc, src);
         match self.instance.source {
             super::InstanceSource::Part { .. } => {
                 if !doc.element(src).is_some_and(|e| {

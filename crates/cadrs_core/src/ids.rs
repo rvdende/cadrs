@@ -49,6 +49,14 @@ id_type!(
     FeatureId
 );
 id_type!(
+    /// Identifies a configuration input of a Part Studio ([`crate::configuration`]).
+    InputId
+);
+id_type!(
+    /// Identifies a configuration preset of a Part Studio ([`crate::configuration`]).
+    PresetId
+);
+id_type!(
     /// Identifies a folder on the documents page.
     FolderId
 );

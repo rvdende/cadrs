@@ -518,7 +518,11 @@ impl Element {
             ElementKind::CamStudio(c) => c.part_features().into(),
             // The Variable Studios' variables it names come first (see
             // `Element::features_to_build`).
-            _ if self.studio_variables.iter().any(|v| v.used) => self.features_to_build().into(),
+            _ if self.studio_variables.iter().any(|v| v.used)
+                || self.configuration().is_some_and(|c| !c.inputs.is_empty()) =>
+            {
+                self.features_to_build().into()
+            }
             _ => self.features().into(),
         }
     }

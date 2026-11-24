@@ -876,6 +876,8 @@ mod migrate {
                         suppressed: Vec::new(),
                         rollback: None,
                         part_folders: Vec::new(),
+                        configuration: None,
+                        node_layout: None,
                     },
                     ElementKindV1::Assembly => cur::ElementKind::Assembly,
                 },
@@ -896,6 +898,7 @@ mod migrate {
                 linked: Vec::new(),
                 moved: Vec::new(),
                 tab_tree: Default::default(),
+                configured: Vec::new(),
             },
         })
     }

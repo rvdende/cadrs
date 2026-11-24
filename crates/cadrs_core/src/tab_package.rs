@@ -183,6 +183,8 @@ pub fn features_document(
         suppressed,
         rollback,
         part_folders,
+        node_layout,
+        ..
     } = &mut el.kind
     else {
         return None;
@@ -201,6 +203,10 @@ pub fn features_document(
     parts.clear();
     part_folders.clear();
     *rollback = None;
+    if let Some(l) = node_layout {
+        l.positions.retain(|f, _| kept.contains(f));
+        l.collapsed.retain(|f| kept.contains(f));
+    }
     tab_document(&trimmed, tab)
 }
 

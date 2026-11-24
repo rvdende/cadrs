@@ -972,6 +972,8 @@ pub fn derived_of(
 /// ([`DerivedFeature::props`]; Include properties). Called by the undo history after every
 /// command, undo and redo; cheap when there are no Derived features.
 pub fn refresh(doc: &mut Document) {
+    // The presets the assemblies use follow their configured Part Studios.
+    crate::configuration::refresh(doc);
     // P3I.9: Form features that use a form Part Studio of this document follow it the same way.
     crate::sheetmetal_form::refresh(doc);
     // Board outlines that follow a sketch, before the boards are taken into Part Studios.

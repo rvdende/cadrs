@@ -19,6 +19,7 @@ pub mod check;
 pub mod collab;
 pub mod command;
 pub mod commands;
+pub mod configuration;
 pub mod derived;
 pub mod direct_edit;
 pub mod document;

@@ -477,6 +477,8 @@ impl ActiveDocument {
         // Derived features take their sources' snapshots (neither is an edit).
         cadrs_core::variable_studio::propagate(&mut doc, None);
         cadrs_core::derived::resolve_document(&mut doc);
+        // The presets its assemblies use, as their studios are now.
+        cadrs_core::configuration::refresh(&mut doc);
         Self {
             saved: std::sync::Arc::new(doc.clone()),
             opened: doc.clone(),

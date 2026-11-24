@@ -184,8 +184,12 @@ fn shell_of(e: &Element) -> Element {
             folders,
             suppressed,
             rollback,
+            configuration,
+            node_layout,
         } => ElementKind::PartStudio {
             features: Vec::new(),
+            configuration: configuration.clone(),
+            node_layout: node_layout.clone(),
             parts: parts.clone(),
             part_folders: part_folders.clone(),
             sketch_visibility: sketch_visibility.clone(),
@@ -287,6 +291,7 @@ fn head_of(doc: &Document) -> Document {
         linked,
         moved,
         tab_tree,
+        configured,
     } = doc;
     Document {
         id: *id,
@@ -300,6 +305,7 @@ fn head_of(doc: &Document) -> Document {
         linked: linked.clone(),
         moved: moved.clone(),
         tab_tree: tab_tree.clone(),
+        configured: configured.clone(),
     }
 }
 
