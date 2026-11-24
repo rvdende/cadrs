@@ -119,6 +119,10 @@ fn card_verifies(card: &Signed<cadrs_social::contact::Card>) -> bool {
     true
 }
 
+/// The most bytes one thing kept for the organization's wallet may be ([`Op::Credits`]): a
+/// movement with its note is a few hundred.
+pub const MAX_CREDITS_EFFECT: usize = 4 << 10;
+
 /// A new random [`Id`].
 pub fn new_id() -> Id {
     u128::from_le_bytes(cadrs_social::random_bytes())
@@ -436,6 +440,11 @@ pub enum Op {
         account: AccountId,
         blocked: bool,
     },
+    /// Something that happened in the organization's wallet (credits in, out, held), as
+    /// whatever keeps its credits wrote it (`cadrs_credits`: with no bank, the members'
+    /// devices keep the wallet here, so that they all see the same one). Kept as it is and in
+    /// order; what it means is the wallet's business, not this document's.
+    Credits(#[serde(with = "serde_bytes")] Vec<u8>),
 }
 
 impl Op {
@@ -502,6 +511,8 @@ pub struct Org {
     pub requests: BTreeMap<Id, Request>,
     /// The accounts whose requests aren't taken ([`Op::SetBlocked`]).
     pub blocked: std::collections::BTreeSet<AccountId>,
+    /// What happened in the organization's wallet, in order ([`Op::Credits`]).
+    pub credits: Vec<Vec<u8>>,
     /// What the checks on a new request count, kept as operations apply.
     intake: Intake,
     pub jobs: BTreeMap<Id, Job>,
@@ -894,6 +905,13 @@ impl Org {
                         card,
                     },
                 );
+                Outcome::Applied
+            }
+            Op::Credits(effect) => {
+                if effect.is_empty() || effect.len() > MAX_CREDITS_EFFECT {
+                    return conflict("that is not something a wallet keeps");
+                }
+                self.credits.push(effect);
                 Outcome::Applied
             }
             Op::SetBlocked { account, blocked } => {

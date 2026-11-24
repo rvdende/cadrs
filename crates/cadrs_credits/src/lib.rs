@@ -1,43 +1,33 @@
-//! Credits: the money cadrs uses until there is real payment. Play money, kept properly.
+//! Credits: the money cadrs uses until there is real payment. Test money, to try the whole of
+//! buying and selling with: prices, paying, payments held for an order, wallets for people
+//! and organizations.
 //!
-//! A **bank** ([`bank::Bank`]) keeps every wallet's balance and signs a receipt for every
-//! movement. It is a cadrs peer like any other (cadrs's own seed is one): a device asks it over
-//! the social connection (`cadrs_social::post::Post::Bank`) and it answers, and tells the
-//! devices of whoever was paid as it happens (`Post::Credited`).
+//! What keeps the money is a [`Bank`], and that is all the rest of cadrs knows of it: the
+//! wallet screens, Accept and pay and an organization's pages ask a bank and show what it
+//! answers. Today's bank is [`trusting::Trusting`]: there is no bank at all. Each device keeps
+//! its own wallets ([`book::Book`]) and tells whoever it pays, and whoever is told believes it.
+//! Nothing stops a changed cadrs from paying with credits it doesn't have, which is fine for
+//! test money and is exactly what a real ledger is for: a Solana client (or any other) takes
+//! the trusting bank's place by implementing [`Bank`], and nothing else changes.
 //!
-//! - A **wallet** belongs to an account: a person's, or an organization's. A person's wallet
-//!   is spent from by that person's devices. An organization's is spent from by the accounts
-//!   its key names ([`Ask::Access`]): its owners and admins; its other members may look.
+//! - A **wallet** belongs to an account: a person's, or an organization's.
 //! - The **faucet** gives a person [`FAUCET`] credits, once every [`FAUCET_EVERY`].
 //! - A **transfer** moves credits from one wallet to another at once. A **payout** is a
 //!   transfer from an organization to a person, called what it is.
 //! - A **held payment** takes credits out of the payer's balance for a payee, for an order:
 //!   the payer releases them (the goods arrived), or the payee returns them (it won't be
-//!   made). Neither can take them alone the other way; a payee may claim a hold nobody
-//!   settled after [`CLAIM_AFTER`].
-//!
-//! What the bank decides is in [`book::Book`], a plain state machine over [`book::Effect`]s;
-//! the bank writes each effect down before it counts ([`bank::Journal`]).
-//!
-//! # What anyone can make the bank do
-//! An ask is a few hundred bytes ([`MAX_ASKED`]), signed by the device that sends it, for this
-//! bank and this minute ([`CLOCK_SLACK`]); a device asks so many times a minute
-//! ([`bank::ASKS_A_MINUTE`]) and a wallet pays so many times a day ([`MAX_MOVES_A_DAY`]).
-//! Accounts cost nothing to make, so anyone can farm the faucet with many of them: these are
-//! play credits, and that is accepted until they are worth something.
-//!
-//! # Who keeps the ledger
-//! The bank does, and has to be trusted with it: it could refuse someone or make credits.
-//! Every movement comes with a receipt it signed, so what it said can be shown to anyone. A
-//! ledger no one keeps (peer to peer) can take the bank's place behind the same asks.
+//!   made). Neither takes them alone the other way; a payee may claim a hold nobody settled
+//!   after [`CLAIM_AFTER`].
+//! - Asking twice moves once: a movement has an id its asker chose ([`MoveId`]), an order's
+//!   hold an id worked out from the order ([`order_hold_id`]).
 
 pub use cadrs_social::keys::{AccountId, DeviceId};
 use cadrs_social::keys::{DeviceCert, Growing, SecretKey, Signed, SignedBytes};
 use serde::{Deserialize, Serialize};
 
-pub mod bank;
 pub mod book;
 pub mod refusal;
+pub mod trusting;
 
 pub use refusal::Refusal;
 
@@ -55,13 +45,8 @@ pub const FAUCET_EVERY: u64 = 60 * 60 * 1000;
 pub const MAX_NOTE: usize = 140;
 /// The most one movement carries.
 pub const MAX_AMOUNT: Credits = 1_000_000_000;
-/// How far a device's clock may be from the bank's, in milliseconds.
-pub const CLOCK_SLACK: u64 = 10 * 60 * 1000;
 /// How many movements a statement lists at most.
 pub const PAGE: usize = 50;
-/// How many accounts may spend from an organization's wallet, and how many may look.
-pub const MAX_SPENDERS: usize = 64;
-pub const MAX_VIEWERS: usize = 1000;
 /// How many payments a wallet may have held at once, as their payer.
 pub const MAX_OPEN_HOLDS: usize = 200;
 /// How many payments one wallet may have held for one other at once. (What is held *for* a
@@ -76,9 +61,8 @@ pub const MAX_HOLDS_LISTED: usize = 200;
 pub const CLAIM_AFTER: u64 = 30 * 24 * 60 * 60 * 1000;
 /// How many movements a wallet may pay in a day.
 pub const MAX_MOVES_A_DAY: usize = 2000;
-/// The most bytes an ask may be: an organization's longest list of who may spend and look
-/// ([`MAX_SPENDERS`], [`MAX_VIEWERS`]) fits, with room.
-pub const MAX_ASKED: usize = 60 << 10;
+/// The most bytes a note may be (a movement told to its other side).
+pub const MAX_NOTE_BYTES: usize = 4 << 10;
 /// How many held payments an ask for a statement may name ([`Ask::Statement`]).
 pub const MAX_HOLDS_NAMED: usize = 200;
 
@@ -259,47 +243,6 @@ pub enum Ask {
     Return { id: MoveId, hold: MoveId },
     /// The payee takes a held payment nobody settled in [`CLAIM_AFTER`].
     Claim { id: MoveId, hold: MoveId },
-    /// An organization's key says who may spend from its wallet and who may look. Signed by
-    /// that key itself.
-    Access {
-        spenders: Vec<AccountId>,
-        viewers: Vec<AccountId>,
-    },
-}
-
-/// An ask, as signed: about which wallet, of which bank, when.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Request {
-    pub bank: AccountId,
-    pub wallet: AccountId,
-    /// The asker's clock, milliseconds since the Unix epoch.
-    pub time: u64,
-    pub ask: Ask,
-}
-
-impl Growing for Request {
-    const CONTEXT: &'static str = "cadrs credits request 1";
-}
-
-/// What goes to the bank: the request signed by the device that asks, and the account's
-/// certificate for that device (none when the account's own key signs, as an organization's
-/// does for [`Ask::Access`]).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Asked {
-    pub request: SignedBytes<Request>,
-    #[serde(default)]
-    pub cert: Option<Signed<DeviceCert>>,
-}
-
-/// The bank's word that a movement happened.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Receipt {
-    pub bank: AccountId,
-    pub movement: Movement,
-}
-
-impl Growing for Receipt {
-    const CONTEXT: &'static str = "cadrs credits receipt 1";
 }
 
 /// A wallet as its owner sees it.
@@ -343,82 +286,122 @@ pub struct Statement {
     pub organization: bool,
 }
 
-/// The bank's answer to an ask it took.
+/// A bank's answer to an ask it took.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Answer {
     /// A movement happened (or had already, asked for twice).
-    Receipt(SignedBytes<Receipt>),
+    Moved(Movement),
     Statement(Statement),
-    /// Done, with nothing to show ([`Ask::Access`]).
-    Done,
 }
 
-/// An ask about `wallet` from a device, ready to send to `bank`.
-pub fn ask(
-    device: &SecretKey,
-    cert: &Signed<DeviceCert>,
-    bank: AccountId,
-    wallet: AccountId,
-    ask: Ask,
-    now: u64,
-) -> Vec<u8> {
-    let request = Request {
-        bank,
-        wallet,
-        time: now,
-        ask,
-    };
-    cadrs_social::codec::encode(&Asked {
-        request: SignedBytes::new(device, &request),
-        cert: Some(cert.clone()),
+/// Who asks a bank: the person, and whether they may spend from the wallet they ask about
+/// (their own; an organization's if they are an owner or admin of it) or only look.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Asker {
+    pub account: AccountId,
+    pub may_spend: bool,
+}
+
+/// What names an ask until its answer comes.
+pub type Ticket = u64;
+
+/// What a bank has to say, when asked what happened ([`Bank::poll`]).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Event {
+    /// The answer to an ask, or why there is none (a sentence: [`refusal`]).
+    Answered(Ticket, Result<Answer, String>),
+    /// Credits arrived in (or were held for, or came back to) `wallet` by someone else's
+    /// doing: news for whoever watches it.
+    Credited {
+        wallet: AccountId,
+        movement: Movement,
+    },
+    /// To be told to account `to`, by whatever way cadrs reaches people: a note
+    /// ([`Bank::receive`] on their side). A bank that keeps a ledger everyone can read has
+    /// nothing to send.
+    Tell { to: AccountId, note: Vec<u8> },
+    /// To be kept for `wallet`, and given back when cadrs next starts ([`Bank::restore`]): a
+    /// bank that keeps its books nowhere else (the trusting one) hands them over this way.
+    Keep {
+        wallet: AccountId,
+        effect: book::Effect,
+    },
+}
+
+/// What keeps wallets and moves credits between them. The rest of cadrs knows only this: an
+/// ask about a wallet, and later its answer.
+///
+/// Answers don't come at once (a ledger across a network takes its time): [`Bank::ask`] gives
+/// a [`Ticket`], and [`Bank::poll`], called every frame, says what was answered since, with
+/// whatever else happened.
+pub trait Bank: Send + Sync {
+    /// Asks `ask` about `wallet` on behalf of `by`, at `now` (milliseconds since the Unix
+    /// epoch). The answer comes from [`Bank::poll`] under the ticket.
+    fn ask(&mut self, by: Asker, wallet: AccountId, ask: Ask, now: u64) -> Ticket;
+
+    /// What happened since the last call.
+    fn poll(&mut self, now: u64) -> Vec<Event>;
+
+    /// A note another cadrs was told to deliver here ([`Event::Tell`]), from an account's
+    /// device. Refused, with why, when it isn't one this bank takes.
+    fn receive(&mut self, note: &[u8], now: u64) -> Result<(), String>;
+
+    /// The wallets this bank is to keep for this device: the user's own and their
+    /// organizations' (`organization` says which kind), each with what was kept for it
+    /// ([`Event::Keep`]) so far. Called at the start and whenever what is kept changed
+    /// elsewhere (an organization's, by another member's device).
+    fn restore(&mut self, wallet: AccountId, organization: bool, kept: &[book::Effect]);
+}
+
+/// A movement told to its other side: by whom, and signed by their device with their
+/// account's certificate for it, so that whoever takes it knows whose word it is.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Note {
+    pub movement: Movement,
+}
+
+impl Growing for Note {
+    const CONTEXT: &'static str = "cadrs credits note 1";
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct SignedNote {
+    note: SignedBytes<Note>,
+    cert: Signed<DeviceCert>,
+}
+
+/// `movement` as a note from the device with key `device`, which `cert` says is its
+/// account's.
+pub fn write_note(device: &SecretKey, cert: &Signed<DeviceCert>, movement: &Movement) -> Vec<u8> {
+    cadrs_social::codec::encode(&SignedNote {
+        note: SignedBytes::new(
+            device,
+            &Note {
+                movement: movement.clone(),
+            },
+        ),
+        cert: cert.clone(),
     })
 }
 
-/// An ask about an account's own wallet signed by the account's key (an organization's, for
-/// [`Ask::Access`]).
-pub fn ask_as(key: &SecretKey, bank: AccountId, ask: Ask, now: u64) -> Vec<u8> {
-    let request = Request {
-        bank,
-        wallet: key.public(),
-        time: now,
-        ask,
-    };
-    cadrs_social::codec::encode(&Asked {
-        request: SignedBytes::new(key, &request),
-        cert: None,
-    })
-}
-
-/// A receipt's movement, if `bank` signed it.
-pub fn open_receipt(receipt: &SignedBytes<Receipt>, bank: &AccountId) -> Result<Movement, String> {
-    if &receipt.signer != bank {
-        return Err("the receipt is not this bank's".into());
+/// Reads a note: the account whose device signed it, and the movement it tells of. Only a
+/// note whose signatures hold (the device's over the note, its account's over the device),
+/// and that says it is that account's own doing, is read.
+pub fn read_note(bytes: &[u8]) -> Result<(AccountId, Movement), String> {
+    if bytes.len() > MAX_NOTE_BYTES {
+        return Err(refusal::TOO_LARGE.into());
     }
-    let receipt = receipt
-        .open()
-        .map_err(|_| "the receipt doesn't verify".to_string())?;
-    if &receipt.bank != bank {
-        return Err("the receipt is for another bank".into());
+    let signed: SignedNote =
+        cadrs_social::codec::decode(bytes).map_err(|_| "not a note about credits".to_string())?;
+    let cert = signed.cert.verify().map_err(|_| refusal::SIGNATURE)?;
+    if signed.cert.signer != cert.account || cert.device != signed.note.signer {
+        return Err(refusal::SIGNATURE.into());
     }
-    Ok(receipt.movement)
-}
-
-/// Reads the bank's answer, checking a receipt in it is `bank`'s.
-pub fn read_answer(bytes: &[u8], bank: &AccountId) -> Result<Answer, String> {
-    let answer: Answer = cadrs_social::codec::decode(bytes)
-        .map_err(|_| "the bank's answer can't be read".to_string())?;
-    if let Answer::Receipt(receipt) = &answer {
-        open_receipt(receipt, bank)?;
+    let note = signed.note.open().map_err(|_| refusal::SIGNATURE)?;
+    if note.movement.by != cert.account {
+        return Err(refusal::SIGNATURE.into());
     }
-    Ok(answer)
-}
-
-/// Reads what a bank tells a device that was paid (`Post::Credited`): the movement, if `bank`
-/// signed it.
-pub fn read_credited(bytes: &[u8], bank: &AccountId) -> Result<Movement, String> {
-    let receipt: SignedBytes<Receipt> = cadrs_social::codec::decode(bytes)
-        .map_err(|_| "the bank's word can't be read".to_string())?;
-    open_receipt(&receipt, bank)
+    Ok((cert.account, note.movement))
 }
 
 /// A wallet's address as people pass it on: the account's id, 64 hex digits

@@ -9,34 +9,23 @@ use serde::{Deserialize, Serialize};
 use crate::refusal as why;
 use crate::{
     AccountId, Ask, CLAIM_AFTER, Credits, FAUCET, FAUCET_EVERY, Hold, HoldState, Kind, MAX_AMOUNT,
-    MAX_HELD_BETWEEN, MAX_HOLDS_LISTED, MAX_MOVES_A_DAY, MAX_NOTE, MAX_OPEN_HOLDS, MAX_SPENDERS,
-    MAX_VIEWERS, MoveId, Movement, PAGE, Statement,
+    MAX_HELD_BETWEEN, MAX_HOLDS_LISTED, MAX_MOVES_A_DAY, MAX_NOTE, MAX_OPEN_HOLDS, MoveId,
+    Movement, PAGE, Statement,
 };
 
 const DAY: u64 = 24 * 60 * 60 * 1000;
 
-/// Who may spend from an organization's wallet, and who may look, as its key last said.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Access {
-    pub spenders: Vec<AccountId>,
-    pub viewers: Vec<AccountId>,
-    /// When the organization said so (its clock): a later list replaces an earlier one.
-    pub issued: u64,
-}
-
 /// What changes the books.
+// (Nearly every effect is a movement: boxing it would save nothing.)
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Effect {
     Move(Movement),
-    Access { wallet: AccountId, access: Access },
-}
-
-/// What an account may do with a wallet.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Level {
-    Nothing,
-    Look,
-    Spend,
+    /// `wallet` is an organization's: the faucet doesn't serve it, and what it pays a person
+    /// is a payout.
+    Organization {
+        wallet: AccountId,
+    },
 }
 
 #[derive(Clone, Debug, Default)]
@@ -52,7 +41,7 @@ struct Wallet {
     open: Vec<MoveId>,
     /// When it paid, lately (the day's count).
     paid: VecDeque<u64>,
-    access: Option<Access>,
+    organization: bool,
 }
 
 /// What an ask comes to.
@@ -62,8 +51,6 @@ pub enum Decision {
     Effect(Effect),
     /// Asked before, and done then: the movement it was.
     Already(Movement),
-    /// Nothing to do: what was said is how things are.
-    Unchanged,
     Statement(Statement),
 }
 
@@ -116,36 +103,21 @@ impl Book {
             .sum()
     }
 
-    /// What `account` may do with `wallet`: its own, or an organization's that names it.
-    pub fn may(&self, account: &AccountId, wallet: &AccountId) -> Level {
-        if account == wallet {
-            return Level::Spend;
-        }
-        match self.wallets.get(wallet).and_then(|w| w.access.as_ref()) {
-            Some(access) if access.spenders.contains(account) => Level::Spend,
-            Some(access) if access.viewers.contains(account) => Level::Look,
-            _ => Level::Nothing,
-        }
-    }
-
     fn is_organization(&self, wallet: &AccountId) -> bool {
-        self.wallets.get(wallet).is_some_and(|w| w.access.is_some())
+        self.wallets.get(wallet).is_some_and(|w| w.organization)
     }
 
-    /// What `ask` about `wallet` by `by` comes to at `now` (the bank's clock). `own_key`: the
-    /// wallet's own key signed the ask, not a device of someone's.
+    /// What `ask` about `wallet` by `by` comes to at `now`. Whoever may spend from the wallet
+    /// may do anything with it; whoever may not, may look.
     pub fn decide(
         &self,
         wallet: &AccountId,
-        by: &AccountId,
-        own_key: bool,
+        by: &crate::Asker,
         ask: &Ask,
-        time: u64,
         now: u64,
     ) -> Result<Decision, &'static str> {
-        let level = self.may(by, wallet);
         let spend = || {
-            if level == Level::Spend {
+            if by.may_spend {
                 Ok(())
             } else {
                 Err(why::NOT_YOURS)
@@ -163,7 +135,7 @@ impl Book {
             amount,
             note: note.trim().to_owned(),
             about,
-            by: *by,
+            by: by.account,
             hold,
         };
         // Asked twice is done once: the same id for the same thing is answered with what was
@@ -185,10 +157,7 @@ impl Book {
         let effect = |m: Movement| Ok(Decision::Effect(Effect::Move(m)));
         match ask {
             Ask::Statement { before, holds } => {
-                if level < Level::Look {
-                    return Err(why::NOT_YOURS_TO_SEE);
-                }
-                let mut statement = self.statement(wallet, level == Level::Spend, *before, now);
+                let mut statement = self.statement(wallet, by.may_spend, *before, now);
                 // The held payments it asked after, if this wallet is a side of them.
                 statement.named = holds
                     .iter()
@@ -200,11 +169,12 @@ impl Book {
                 Ok(Decision::Statement(statement))
             }
             Ask::Faucet { id } => {
-                if by != wallet {
-                    return Err(why::NOT_YOURS);
-                }
-                if own_key || self.is_organization(wallet) {
+                // A person's own wallet only.
+                if self.is_organization(wallet) {
                     return Err(why::FAUCET_PEOPLE);
+                }
+                if &by.account != wallet {
+                    return Err(why::NOT_YOURS);
                 }
                 if let Some(done) = already(id, &[Kind::Faucet], None) {
                     return done;
@@ -334,37 +304,6 @@ impl Book {
                     Some(*hold),
                 ))
             }
-            Ask::Access { spenders, viewers } => {
-                if !own_key || by != wallet {
-                    return Err(why::ACCESS);
-                }
-                if spenders.len() > MAX_SPENDERS || viewers.len() > MAX_VIEWERS {
-                    return Err(why::ACCESS);
-                }
-                let known = self.wallets.get(wallet).and_then(|w| w.access.as_ref());
-                if known.is_some_and(|known| known.issued > time) {
-                    return Err(why::OLD_ACCESS);
-                }
-                let mut access = Access {
-                    spenders: spenders.clone(),
-                    viewers: viewers.clone(),
-                    issued: time,
-                };
-                access.spenders.sort();
-                access.spenders.dedup();
-                access.viewers.sort();
-                access.viewers.dedup();
-                // The same list again (said at every start) is not written down again.
-                if known.is_some_and(|known| {
-                    known.spenders == access.spenders && known.viewers == access.viewers
-                }) {
-                    return Ok(Decision::Unchanged);
-                }
-                Ok(Decision::Effect(Effect::Access {
-                    wallet: *wallet,
-                    access,
-                }))
-            }
         }
     }
 
@@ -441,7 +380,7 @@ impl Book {
             None => w.history.len(),
         };
         let start = end.saturating_sub(PAGE);
-        let organization = w.access.is_some();
+        let organization = w.organization;
         Statement {
             balance: w.balance,
             held_out: w.held_out,
@@ -474,8 +413,8 @@ impl Book {
     /// a balance at its floor or ceiling rather than a wrong one elsewhere.
     pub fn apply(&mut self, effect: &Effect) {
         let m = match effect {
-            Effect::Access { wallet, access } => {
-                self.wallets.entry(*wallet).or_default().access = Some(access.clone());
+            Effect::Organization { wallet } => {
+                self.wallets.entry(*wallet).or_default().organization = true;
                 return;
             }
             Effect::Move(m) => m,

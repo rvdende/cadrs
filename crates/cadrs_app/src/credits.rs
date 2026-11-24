@@ -1,54 +1,66 @@
 //! Credits in the app: the user's wallet and their organizations', as the bank says they are
-//! (`cadrs_credits`). The bank is a cadrs peer (cadrs's own seed, unless `CADRS_BANK` names
-//! another): this module asks it, keeps what it answered for the interface to show, and takes
-//! what it tells this device as it happens (someone paid you).
+//! (`cadrs_credits`). The app knows a bank only as [`cadrs_credits::Bank`]: this module asks
+//! it, keeps what it answered for the interface to show, and does the errands it asks for.
 //!
 //! - [`refresh`] asks for a wallet's statement; [`faucet`], [`pay`], [`hold`], [`release`] and
 //!   [`give_back`] move credits. Each says what happened in a toast, and [`Credits::version`]
-//!   counts up so what shows a wallet draws it again.
-//! - `CADRS_BANK=<cadrs ID>` asks another bank, `CADRS_BANK=here` keeps one in this app (in
-//!   memory: a scenario's, a test's), `CADRS_BANK=0` none.
-//! - An organization's wallet is spent from by its owners and admins: the device that holds
-//!   the organization's key tells the bank who they are ([`say_access`]) whenever that changes.
+//!   counts up when what a wallet shows changed, so what draws it draws it again.
+//! - The bank is [`cadrs_credits::trusting::Trusting`] unless another was put in its place
+//!   ([`use_bank`]): there is no bank, each device keeps its own wallets, and whoever is paid
+//!   is told with a note and believes it. Test credits; a real ledger (Solana) takes its place
+//!   behind the same trait.
+//! - The bank's errands ([`cadrs_credits::Event`]): what it wants kept is written to a file
+//!   beside the user's keys (their own wallet) or into the organization's document (an
+//!   organization's, so that its members' devices share one wallet); what it wants told is
+//!   sent to the other side's devices as `Post::Credited`, again later when they weren't
+//!   reached; what arrived is said in a toast and a notice.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::prelude::*;
-use cadrs_credits::{About, Answer, Ask, Credits as Amount, Movement, Refusal, Statement};
+use cadrs_credits::book::Effect;
+use cadrs_credits::{
+    About, Answer, Ask, Asker, Bank, Credits as Amount, Event, Movement, Refusal, Statement, Ticket,
+};
 use cadrs_net::bevy_iroh::iroh::EndpointId;
 use cadrs_net::bevy_iroh::{Iroh, IrohTask};
-use cadrs_social::keys::{AccountId, PublicKey};
+use cadrs_social::keys::{AccountId, DeviceId};
 use cadrs_social::post::Post;
 use cadrs_ui::i18n::{tr, tr_with};
 
 use crate::notifications::{Notice, Notifications};
 use crate::social::Social;
 
-/// How often the wallets on screen are asked for again, in seconds (the bank tells a device of
-/// each movement as it happens; this is for the ones that didn't arrive).
+/// How often the wallets on screen are asked for again, in seconds.
 const REFRESH_EVERY: f64 = 60.0;
-/// How long before an organization's list of who may spend is sent to the bank again when the
-/// bank didn't take it, in seconds.
-const ACCESS_AGAIN_AFTER: f64 = 60.0;
-/// How often the user's wallet and their organizations' are asked for while nothing shows
-/// them, in seconds: often enough that the bank keeps telling this device of what is paid.
-const BACKGROUND_EVERY: f64 = 300.0;
+/// How long before someone who wasn't reached is told again what they were paid, in seconds:
+/// soon at first (they were away for a moment), then less and less often, up to a minute.
+/// And how many such notes wait at most (the oldest are dropped first).
+const TELL_AGAIN_AFTER: f64 = 3.0;
+const TELL_AGAIN_AT_MOST: f64 = 60.0;
+const MAX_UNTOLD: usize = 500;
+/// The file the user's own wallet is kept in, beside their keys.
+const WALLET_FILE: &str = "credits.bin";
 
 pub struct CreditsPlugin;
 
 impl Plugin for CreditsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Credits>()
-            .add_systems(Update, (poll, keep_fresh).chain());
+            .add_systems(Update, (poll, tell, keep_fresh).chain());
     }
 }
 
-/// The bank this app asks.
-#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
-pub struct BankAt {
-    pub id: AccountId,
-    /// This app keeps it itself ([`cadrs_net::bank::Hosted`]).
-    pub here: bool,
+/// The bank the app asks: whatever keeps the credits.
+#[derive(Resource)]
+pub struct TheBank(pub Box<dyn Bank>);
+
+/// Puts `bank` in the place of the trusting one (a real ledger's client).
+pub fn use_bank(world: &mut World, bank: Box<dyn Bank>) {
+    world.insert_resource(TheBank(bank));
+    let mut credits = world.resource_mut::<Credits>();
+    credits.restored.clear();
+    credits.changed();
 }
 
 /// A wallet as last heard from the bank.
@@ -81,29 +93,33 @@ pub type Then = Box<dyn FnOnce(&mut World, Result<&Answer, &str>) + Send + Sync>
 struct Asking {
     wallet: AccountId,
     older: bool,
-    task: IrohTask<Result<Vec<u8>, String>>,
     then: Option<Then>,
+}
+
+/// A note for someone who was paid, on its way or waiting to be sent again.
+struct Untold {
+    to: AccountId,
+    note: Vec<u8>,
+    tasks: Vec<IrohTask<Result<Vec<u8>, String>>>,
+    /// When it was last sent, and how long to wait before sending it again.
+    tried: Option<(f64, f64)>,
 }
 
 #[derive(Resource, Default)]
 pub struct Credits {
     pub wallets: BTreeMap<AccountId, Wallet>,
-    /// Counts up whenever anything here changed.
+    /// Counts up whenever what a wallet shows changed.
     pub version: u32,
     /// The wallets on screen now (the open wallet dialog's, an open organization's).
     watched: BTreeSet<AccountId>,
-    asking: Vec<Asking>,
-    /// What each organization's key last told the bank: who spends, who looks.
-    access_said: BTreeMap<AccountId, (Vec<AccountId>, Vec<AccountId>)>,
-    /// The organizations whose list was said (or tried) since this run started.
-    access_tried: BTreeSet<AccountId>,
+    asking: BTreeMap<Ticket, Asking>,
     /// The held payments each wallet's statement is asked to say of: its orders' own.
     named: BTreeMap<AccountId, Vec<cadrs_credits::MoveId>>,
-    /// When each organization's list was last sent to the bank (seconds since start): one the
-    /// bank didn't take is sent again after a while, not at once.
-    access_asked: BTreeMap<AccountId, f64>,
-    /// How many times a bank across the network was asked anything, since this run started.
-    pub asked: u64,
+    /// The wallets the bank was given what is kept for them, and how much of it there was.
+    restored: BTreeMap<AccountId, usize>,
+    /// What is kept for the user's own wallet (the file's contents).
+    mine: Vec<Effect>,
+    untold: Vec<Untold>,
 }
 
 impl Credits {
@@ -128,49 +144,117 @@ pub fn me(world: &World) -> Option<AccountId> {
         .map(|k| k.account_id())
 }
 
-/// The bank to ask: what `CADRS_BANK` says, else cadrs's own seed. None when there is none.
-pub fn bank(world: &mut World) -> Option<BankAt> {
-    if let Some(at) = world.get_resource::<BankAt>() {
-        return Some(*at);
+/// The bank is there (the trusting one, made with this device's keys, unless another was put
+/// in its place), and keeps the user's own wallet. False without keys.
+fn ensure_bank(world: &mut World) -> bool {
+    crate::social::ensure_loaded(world);
+    let Some(me) = me(world) else {
+        return false;
+    };
+    if !world.contains_resource::<TheBank>() {
+        let Some((device, cert)) = world
+            .resource::<Social>()
+            .keys()
+            .map(|keys| (keys.device.clone(), keys.cert.clone()))
+        else {
+            return false;
+        };
+        let bank = cadrs_credits::trusting::Trusting::new(device, cert);
+        world.insert_resource(TheBank(Box::new(bank)));
+        world.resource_mut::<Credits>().restored.clear();
     }
-    let named = std::env::var("CADRS_BANK").ok();
-    let at = match named.as_deref().map(str::trim) {
-        Some("0") => return None,
-        Some("here") => return keep_here(world),
-        Some(id) if !id.is_empty() => bank_id(id)?,
-        _ => bank_id(cadrs_net::public::DEFAULT_SEEDS.first()?)?,
-    };
-    let at = BankAt {
-        id: at,
-        here: false,
-    };
-    world.insert_resource(at);
-    Some(at)
+    if !world.resource::<Credits>().restored.contains_key(&me) {
+        let kept: Vec<Effect> = crate::social::load_file(world, WALLET_FILE);
+        world.resource_mut::<TheBank>().0.restore(me, false, &kept);
+        let mut credits = world.resource_mut::<Credits>();
+        credits.restored.insert(me, kept.len());
+        credits.mine = kept;
+    }
+    true
 }
 
-fn bank_id(id: &str) -> Option<AccountId> {
-    id.parse::<EndpointId>()
-        .ok()
-        .map(|id| PublicKey(*id.as_bytes()))
+/// What is kept for organization `account`'s wallet, in its document: the open one's, else
+/// read from disk.
+fn org_kept(world: &World, account: &AccountId) -> Option<Vec<Vec<u8>>> {
+    if let Some(open) = world.get_resource::<crate::organization::OpenOrg>()
+        && open.session.org().org.as_ref() == Some(account)
+    {
+        return Some(open.session.org().credits.clone());
+    }
+    let social = world.get_resource::<Social>()?;
+    let mine = social.orgs.iter().find(|o| &o.account == account)?;
+    crate::social::org_state(world, mine).map(|org| org.credits)
 }
 
-/// Keeps a bank in this app, in memory, and asks that one: a scenario's, a test's. Its key is
-/// made for the run.
-pub fn keep_here(world: &mut World) -> Option<BankAt> {
-    if !world.contains_resource::<cadrs_net::bank::Hosted>() {
-        let key = cadrs_social::keys::SecretKey::generate();
-        cadrs_net::bank::host(world, key, None).ok()?;
+/// How much is kept for organization `account`'s wallet, without reading it all when the
+/// organization is the open one.
+fn org_kept_len(world: &World, account: &AccountId) -> Option<usize> {
+    match world.get_resource::<crate::organization::OpenOrg>() {
+        Some(open) if open.session.org().org.as_ref() == Some(account) => {
+            Some(open.session.org().credits.len())
+        }
+        _ => org_kept(world, account).map(|kept| kept.len()),
     }
-    let id = world.resource::<cadrs_net::bank::Hosted>().0.id();
-    let at = BankAt { id, here: true };
-    world.insert_resource(at);
-    Some(at)
+}
+
+/// The bank keeps organization `account`'s wallet as its document has it now: given to the
+/// bank the first time, and again when the document has more (another member's device paid,
+/// or was paid). True when the bank was given anything.
+fn sync_org(world: &mut World, account: AccountId) -> bool {
+    if !is_my_org(world, &account) || !world.contains_resource::<TheBank>() {
+        return false;
+    }
+    let known = world.resource::<Credits>().restored.get(&account).copied();
+    if known.is_some() && org_kept_len(world, &account) == known {
+        return false;
+    }
+    let Some(kept) = org_kept(world, &account) else {
+        return false;
+    };
+    let effects: Vec<Effect> = kept
+        .iter()
+        .filter_map(|bytes| cadrs_social::codec::decode(bytes).ok())
+        .collect();
+    world
+        .resource_mut::<TheBank>()
+        .0
+        .restore(account, true, &effects);
+    world
+        .resource_mut::<Credits>()
+        .restored
+        .insert(account, kept.len());
+    true
+}
+
+/// Who asks about `wallet`: the user, who may spend from their own wallet and from an
+/// organization's of which they are an owner or admin, and may look at one they are a member
+/// of.
+fn asker(world: &World, me: AccountId, wallet: &AccountId) -> Asker {
+    let may_spend = &me == wallet || {
+        let role = |org: &cadrs_org::Org| org.members.get(&me).copied();
+        let role = match world.get_resource::<crate::organization::OpenOrg>() {
+            Some(open) if open.session.org().org.as_ref() == Some(wallet) => {
+                role(open.session.org())
+            }
+            _ => world
+                .resource::<Social>()
+                .orgs
+                .iter()
+                .find(|o| &o.account == wallet)
+                .and_then(|mine| crate::social::org_state(world, mine))
+                .and_then(|org| role(&org)),
+        };
+        role.is_some_and(|role| role >= cadrs_org::Role::Admin)
+    };
+    Asker {
+        account: me,
+        may_spend,
+    }
 }
 
 /// A refusal in the user's language, when it is one of the bank's own; else as it was said.
 pub fn reason(error: &str) -> String {
-    let why = cadrs_social::post::refusal(error).unwrap_or(error);
-    let key = match Refusal::of(why) {
+    let key = match Refusal::of(error) {
         Some(Refusal::NotEnough) => "credits-refused-not-enough",
         Some(Refusal::FaucetNotYet) => "credits-refused-faucet-not-yet",
         Some(Refusal::FaucetPeople) => "credits-refused-faucet-people",
@@ -184,22 +268,16 @@ pub fn reason(error: &str) -> String {
         Some(Refusal::NotPayee) => "credits-refused-not-payee",
         Some(Refusal::TooEarly) => "credits-refused-too-early",
         Some(Refusal::TooMany) => "credits-refused-too-many",
-        Some(Refusal::Clock) => "credits-refused-clock",
-        Some(Refusal::TooOften) => "credits-refused-too-often",
-        None if cadrs_social::post::refusal(error).is_some() => return why.to_owned(),
-        // Not reached at all.
-        None => return tr_with("credits-bank-unreachable", &[("why", why)]),
+        None => return error.to_owned(),
     };
     tr(key)
 }
 
-/// Asks the bank `ask` about `wallet`, as this device. False when it couldn't be asked (no
-/// keys, no bank, offline), with `then` told why.
+/// Asks the bank `ask` about `wallet`, as the user. False when it couldn't be asked (no
+/// keys), with `then` told why. The answer comes in a later frame ([`poll`]).
 pub fn ask(world: &mut World, wallet: AccountId, ask: Ask, then: Option<Then>) -> bool {
-    crate::social::ensure_loaded(world);
-    let fail = |world: &mut World, then: Option<Then>, why: String| {
-        // Said once: the same failure again (offline, asked every minute) is no news, and
-        // nothing that shows the wallet is drawn again for it.
+    if !ensure_bank(world) {
+        let why = tr("social-no-keys");
         let mut credits = world.resource_mut::<Credits>();
         let w = credits.wallets.entry(wallet).or_default();
         if w.error.as_deref() != Some(why.as_str()) {
@@ -209,17 +287,12 @@ pub fn ask(world: &mut World, wallet: AccountId, ask: Ask, then: Option<Then>) -
         if let Some(then) = then {
             then(world, Err(&why));
         }
-        false
+        return false;
+    }
+    let Some(me) = me(world) else {
+        return false;
     };
-    let Some(at) = bank(world) else {
-        return fail(world, then, tr("credits-no-bank"));
-    };
-    let Some(bytes) = world.resource::<Social>().keys().map(|keys| {
-        let now = cadrs_social::wall_millis();
-        cadrs_credits::ask(&keys.device, &keys.cert, at.id, wallet, ask.clone(), now)
-    }) else {
-        return fail(world, then, tr("social-no-keys"));
-    };
+    sync_org(world, wallet);
     let older = matches!(
         ask,
         Ask::Statement {
@@ -227,42 +300,19 @@ pub fn ask(world: &mut World, wallet: AccountId, ask: Ask, then: Option<Then>) -
             ..
         }
     );
-    if at.here {
-        let answer = cadrs_net::bank::answer(world, &bytes, None);
-        took(world, wallet, older, answer, then);
-        return true;
-    }
-    if !world.contains_resource::<Iroh>() && !crate::network::connect(world) {
-        return fail(world, then, tr("credits-offline"));
-    }
-    let Some(iroh) = world.get_resource::<Iroh>() else {
-        return fail(world, then, tr("credits-offline"));
-    };
-    let Ok(to) = EndpointId::from_bytes(&at.id.0) else {
-        return fail(world, then, tr("credits-no-bank"));
-    };
-    // A known address (a bank on this network), else the bare key for discovery to find.
-    let addr = world
-        .get_resource::<crate::social::PeerAddrs>()
-        .and_then(|hints| hints.0.get(&to).cloned())
-        .unwrap_or_else(|| to.into());
-    let task = cadrs_net::social::start_send(iroh, addr, Post::Bank(bytes).encode());
+    let by = asker(world, me, &wallet);
+    let now = cadrs_social::wall_millis();
+    let ticket = world.resource_mut::<TheBank>().0.ask(by, wallet, ask, now);
     let mut credits = world.resource_mut::<Credits>();
-    credits.asked += 1;
-    let now_asking = credits.wallets.entry(wallet).or_default();
-    // Only a wallet that shows nothing yet, and wasn't being asked for already, says that it
-    // is being asked for.
-    let news = now_asking.statement.is_none() && !now_asking.asking && now_asking.error.is_none();
-    now_asking.asking = true;
-    credits.asking.push(Asking {
-        wallet,
-        older,
-        task,
-        then,
-    });
-    if news {
-        credits.changed();
-    }
+    credits.wallets.entry(wallet).or_default().asking = true;
+    credits.asking.insert(
+        ticket,
+        Asking {
+            wallet,
+            older,
+            then,
+        },
+    );
     true
 }
 
@@ -271,14 +321,9 @@ fn took(
     world: &mut World,
     wallet: AccountId,
     older: bool,
-    answer: Result<Vec<u8>, String>,
+    answer: Result<Answer, String>,
     then: Option<Then>,
 ) {
-    let at = world.get_resource::<BankAt>().copied();
-    let answer = answer.and_then(|bytes| match at {
-        Some(at) => cadrs_credits::read_answer(&bytes, &at.id),
-        None => Err(tr("credits-no-bank")),
-    });
     let mut again = Vec::new();
     {
         let mut credits = world.resource_mut::<Credits>();
@@ -332,18 +377,15 @@ fn took(
                     });
                 }
             }
-            Ok(Answer::Receipt(receipt)) => {
+            Ok(Answer::Moved(movement)) => {
                 w.error = None;
                 // Both sides' wallets, if this device shows them, are asked for again.
-                if let Ok(receipt) = receipt.open() {
-                    again.extend(receipt.movement.from);
-                    again.push(receipt.movement.to);
-                }
+                again.extend(movement.from);
+                again.push(movement.to);
             }
-            Ok(Answer::Done) => w.error = None,
             Err(why) => w.error = Some(reason(why)),
         }
-        // The faucet's wait is compared as time left, to the minute: the bank's clock moved on.
+        // The faucet's wait is compared as time left, to the minute: the clock moved on.
         let minute = |s: (Option<Statement>, Vec<Movement>, bool, Option<String>)| {
             let wait =
                 s.0.as_ref()
@@ -384,24 +426,141 @@ fn shown(world: &World, wallet: &AccountId) -> bool {
         || is_my_org(world, wallet)
 }
 
+/// What the bank has to say is heard, and its errands done.
 fn poll(world: &mut World) {
-    if world.resource::<Credits>().asking.is_empty() {
+    if !world.contains_resource::<TheBank>() {
         return;
     }
-    let mut done = Vec::new();
-    world
-        .resource_mut::<Credits>()
-        .asking
-        .retain_mut(|a| match a.task.try_take() {
-            Some(answer) => {
-                done.push((a.wallet, a.older, answer, a.then.take()));
+    let now = cadrs_social::wall_millis();
+    let events = world.resource_mut::<TheBank>().0.poll(now);
+    for event in events {
+        match event {
+            Event::Answered(ticket, answer) => {
+                if let Some(asked) = world.resource_mut::<Credits>().asking.remove(&ticket) {
+                    took(world, asked.wallet, asked.older, answer, asked.then);
+                }
+            }
+            Event::Keep { wallet, effect } => keep(world, wallet, effect),
+            Event::Tell { to, note } => {
+                let mut credits = world.resource_mut::<Credits>();
+                if credits.untold.len() >= MAX_UNTOLD {
+                    credits.untold.remove(0);
+                }
+                credits.untold.push(Untold {
+                    to,
+                    note,
+                    tasks: Vec::new(),
+                    tried: None,
+                });
+            }
+            Event::Credited { wallet, movement } => arrived(world, wallet, &movement),
+        }
+    }
+}
+
+/// Keeps `effect` for `wallet`: in the user's own file, or in the organization's document
+/// (where its other members' devices find it).
+fn keep(world: &mut World, wallet: AccountId, effect: Effect) {
+    if me(world) == Some(wallet) {
+        let mut credits = world.resource_mut::<Credits>();
+        credits.mine.push(effect);
+        let count = credits.mine.len();
+        credits.restored.insert(wallet, count);
+        let kept = std::mem::take(&mut world.resource_mut::<Credits>().mine);
+        crate::social::save_file(world, WALLET_FILE, &kept);
+        world.resource_mut::<Credits>().mine = kept;
+        return;
+    }
+    let op = cadrs_org::Op::Credits(cadrs_social::codec::encode(&effect));
+    match crate::social::write_org(world, &wallet, op) {
+        // The bank has it already: what is kept and what the bank knows stay level.
+        Ok(()) => {
+            if let Some(count) = world.resource_mut::<Credits>().restored.get_mut(&wallet) {
+                *count += 1;
+            }
+        }
+        Err(why) => warn!("an organization's wallet couldn't be kept: {why}"),
+    }
+}
+
+/// Where an account's devices are, as far as this device knows: a contact's card, a shop's
+/// listing, a member of the open organization, a client by the card their request came with.
+fn devices_of(world: &World, account: &AccountId) -> Vec<DeviceId> {
+    let social = world.resource::<Social>();
+    if let Some(card) = social.contacts.get(account) {
+        return card.devices.clone();
+    }
+    if let Some(shop) = social.directory.get(account) {
+        return shop.card.value.devices.clone();
+    }
+    let Some(open) = world.get_resource::<crate::organization::OpenOrg>() else {
+        return Vec::new();
+    };
+    let org = open.session.org();
+    let members: Vec<DeviceId> = org.devices.of(account).iter().map(|c| c.device).collect();
+    if !members.is_empty() {
+        return members;
+    }
+    org.requests
+        .values()
+        .filter(|r| &r.client == account)
+        .find_map(|r| r.card.as_ref().map(|card| card.value.devices.clone()))
+        .unwrap_or_default()
+}
+
+/// Whoever was paid is told: each note is sent to the other side's devices, and again after a
+/// while when none of them took it.
+fn tell(world: &mut World) {
+    if world.resource::<Credits>().untold.is_empty() {
+        return;
+    }
+    let now = world
+        .resource::<Time<bevy::time::Real>>()
+        .elapsed_secs_f64();
+    let mut untold = std::mem::take(&mut world.resource_mut::<Credits>().untold);
+    untold.retain_mut(|waiting| {
+        // One device taking it is enough.
+        let mut taken = false;
+        waiting.tasks.retain_mut(|task| match task.try_take() {
+            Some(Ok(_)) => {
+                taken = true;
                 false
             }
+            Some(Err(_)) => false,
             None => true,
         });
-    for (wallet, older, answer, then) in done {
-        took(world, wallet, older, answer, then);
-    }
+        if taken {
+            return false;
+        }
+        let due =
+            waiting.tasks.is_empty() && waiting.tried.is_none_or(|(at, wait)| now - at >= wait);
+        if due {
+            let wait = waiting.tried.map_or(TELL_AGAIN_AFTER, |(_, wait)| {
+                (wait * 2.0).min(TELL_AGAIN_AT_MOST)
+            });
+            waiting.tried = Some((now, wait));
+            let devices = devices_of(world, &waiting.to);
+            if let Some(iroh) = world.get_resource::<Iroh>() {
+                let hints = world.get_resource::<crate::social::PeerAddrs>();
+                let post = Post::Credited(waiting.note.clone()).encode();
+                waiting.tasks = crate::social::dialed(&devices)
+                    .iter()
+                    .filter_map(|device| EndpointId::from_bytes(&device.0).ok())
+                    .map(|device| {
+                        let addr = hints
+                            .and_then(|h| h.0.get(&device).cloned())
+                            .unwrap_or_else(|| device.into());
+                        cadrs_net::social::start_send(iroh, addr, post.clone())
+                    })
+                    .collect();
+            }
+        }
+        true
+    });
+    // What the bank asked to be told meanwhile comes after what waited.
+    let mut credits = world.resource_mut::<Credits>();
+    untold.append(&mut credits.untold);
+    credits.untold = untold;
 }
 
 /// Asks for `wallet`'s statement: its balance and newest movements.
@@ -470,8 +629,8 @@ pub fn unwatch(world: &mut World, wallet: &AccountId) {
     world.resource_mut::<Credits>().watched.remove(wallet);
 }
 
-/// The user's wallet, and those something shows, are asked for again now and then, and at once
-/// when first wanted.
+/// The wallets on screen are asked for again now and then, and an organization's at once
+/// when its document has more for its wallet (another member's device paid, or was paid).
 fn keep_fresh(world: &mut World, mut last: Local<Option<f64>>) {
     let now = world
         .resource::<Time<bevy::time::Real>>()
@@ -480,8 +639,6 @@ fn keep_fresh(world: &mut World, mut last: Local<Option<f64>>) {
         return;
     }
     *last = Some(now);
-    // Nothing is asked before the user has keys (made when the account menu is first opened,
-    // or when the first letter arrives).
     let Some(me) = me(world) else {
         return;
     };
@@ -493,66 +650,21 @@ fn keep_fresh(world: &mut World, mut last: Local<Option<f64>>) {
         .resource_mut::<Credits>()
         .watched
         .retain(|w| *w == me || Some(*w) == open);
-    // A bank across the network is asked in the background only while online; one kept here,
-    // only for what is on screen.
-    let Some(at) = bank(world) else {
-        return;
-    };
-    let background = !at.here && world.contains_resource::<Iroh>();
-    // The organizations whose key this device holds: the bank is told who may spend from each
-    // once a run (and whenever its members change), so a list said while the bank was away,
-    // or to a bank that lost it, is said again.
-    if background || at.here {
-        let unsaid: Vec<crate::social::MyOrg> = world
-            .resource::<Social>()
-            .orgs
-            .iter()
-            .filter(|o| {
-                !world
-                    .resource::<Credits>()
-                    .access_tried
-                    .contains(&o.account)
-            })
-            .cloned()
-            .collect();
-        for mine in unsaid {
-            world
-                .resource_mut::<Credits>()
-                .access_tried
-                .insert(mine.account);
-            if let Some(org) = crate::social::org_state(world, &mine) {
-                say_access(world, mine.account, &org);
-            }
-        }
-    }
-    let credits = world.resource::<Credits>();
-    let mine: Vec<AccountId> = world
-        .resource::<Social>()
-        .orgs
-        .iter()
-        .map(|o| o.account)
-        .chain([me])
-        .collect();
-    let due: Vec<AccountId> = mine
+    let watched: Vec<AccountId> = world
+        .resource::<Credits>()
+        .watched
         .iter()
         .copied()
-        .filter(|_| background)
-        .chain(credits.watched.iter().copied())
-        .filter(|w| {
-            let every = if credits.watched.contains(w) {
-                REFRESH_EVERY
-            } else {
-                BACKGROUND_EVERY
-            };
-            credits
-                .wallet(w)
-                .is_none_or(|w| !w.asking && w.asked_at.is_none_or(|t| now - t >= every))
-        })
-        .collect::<BTreeSet<_>>()
-        .into_iter()
         .collect();
-    for wallet in due {
-        refresh(world, wallet);
+    for wallet in watched {
+        let news = sync_org(world, wallet);
+        let due = world
+            .resource::<Credits>()
+            .wallet(&wallet)
+            .is_none_or(|w| !w.asking && w.asked_at.is_none_or(|t| now - t >= REFRESH_EVERY));
+        if news || due {
+            refresh(world, wallet);
+        }
     }
 }
 
@@ -890,77 +1002,70 @@ pub fn short(account: &AccountId) -> String {
     account.to_string().chars().take(8).collect()
 }
 
-/// The bank told this device of a movement (`Post::Credited`): believed if the bank this app
-/// asks signed it and it is about a wallet this device shows.
-///
-/// `from` is the device it came from: only the bank's own word is taken (a receipt is the
-/// bank's whoever sends it, and the other side of an old payment has one to send again and
-/// again). A bank kept in this app tells it in person (`from` is none).
-pub fn credited(world: &mut World, bytes: &[u8], from: Option<PublicKey>) -> Result<(), String> {
-    let at = bank(world).ok_or("this cadrs asks no bank")?;
-    if !(at.here && from.is_none()) && from != Some(at.id) {
-        return Err("only the bank says what was paid".into());
+/// Credits arrived in `wallet` by someone else's doing (the bank said so): said in a toast
+/// and a notice, and the wallet asked for again.
+fn arrived(world: &mut World, wallet: AccountId, movement: &Movement) {
+    let change = movement.change_for(&wallet);
+    let held_for_us = movement.kind == cadrs_credits::Kind::Held && movement.to == wallet;
+    // Anyone can hold credits for a shop: one that says no order it is for is no news (it
+    // shows in the wallet, to be returned), so strangers can't make a shop's devices ring.
+    let stray = held_for_us && movement.about.as_ref().and_then(About::order_id).is_none();
+    // The other side's doing is news; one's own was said already when it was asked for.
+    if (change > 0 || held_for_us) && !stray && Some(movement.by) != me(world) {
+        let amount = cadrs_credits::show(movement.amount);
+        let from = movement
+            .other(&wallet)
+            .map_or_else(|| tr("credits-the-faucet"), |a| name_of(world, &a));
+        let to = name_of(world, &wallet);
+        let key = if held_for_us {
+            "credits-notice-held"
+        } else {
+            "credits-notice-received"
+        };
+        let title = tr_with(
+            key,
+            &[("amount", &amount), ("name", &from), ("wallet", &to)],
+        );
+        let body = movement
+            .about
+            .as_ref()
+            .map(|a| a.label.clone())
+            .filter(|l| !l.is_empty())
+            .unwrap_or_else(|| movement.note.clone());
+        crate::linked::toast(world, title.clone());
+        world.resource_mut::<Notifications>().push(Notice {
+            id: format!("credits-{}-{}", short(&wallet), movement.seq),
+            icon: "wallet",
+            title,
+            body,
+            unread: true,
+        });
     }
-    let movement = cadrs_credits::read_credited(bytes, &at.id)?;
-    let mine: Vec<AccountId> = movement
-        .from
-        .into_iter()
-        .chain([movement.to])
-        .filter(|w| shown(world, w) || is_my_org(world, w))
+    if shown(world, &wallet) {
+        refresh(world, wallet);
+    }
+}
+
+/// A note about credits arrived (`Post::Credited`): given to the bank, which believes it or
+/// says why not. The wallets it could be for are the user's own and their organizations'.
+pub fn credited(world: &mut World, bytes: &[u8]) -> Result<(), String> {
+    if !ensure_bank(world) {
+        return Err("this cadrs has no wallet yet".into());
+    }
+    let orgs: Vec<AccountId> = world
+        .resource::<Social>()
+        .orgs
+        .iter()
+        .map(|o| o.account)
         .collect();
-    if mine.is_empty() {
-        return Err("not about a wallet of this device".into());
+    for org in orgs {
+        sync_org(world, org);
     }
-    // Told before, or older than what is known already: no news, and nothing asked.
-    let known = |world: &World, wallet: &AccountId| {
-        world
-            .resource::<Credits>()
-            .wallet(wallet)
-            .and_then(|w| w.movements.first())
-            .is_some_and(|newest| movement.seq <= newest.seq)
-    };
-    if mine.iter().all(|wallet| known(world, wallet)) {
-        return Ok(());
-    }
-    for wallet in &mine {
-        let change = movement.change_for(wallet);
-        let held_for_us = movement.kind == cadrs_credits::Kind::Held && &movement.to == wallet;
-        // Anyone can hold credits for a shop: one that says no order it is for is no news (it
-        // shows in the wallet, to be returned), so strangers can't make a shop's devices ring.
-        let stray = held_for_us && movement.about.as_ref().and_then(About::order_id).is_none();
-        // The other side's doing is news; one's own was said already when it was asked for.
-        if (change > 0 || held_for_us) && !stray && movement.by != me(world).unwrap_or(*wallet) {
-            let amount = cadrs_credits::show(movement.amount);
-            let from = movement
-                .other(wallet)
-                .map_or_else(|| tr("credits-the-faucet"), |a| name_of(world, &a));
-            let to = name_of(world, wallet);
-            let key = if held_for_us {
-                "credits-notice-held"
-            } else {
-                "credits-notice-received"
-            };
-            let title = tr_with(
-                key,
-                &[("amount", &amount), ("name", &from), ("wallet", &to)],
-            );
-            let body = movement
-                .about
-                .as_ref()
-                .map(|a| a.label.clone())
-                .filter(|l| !l.is_empty())
-                .unwrap_or_else(|| movement.note.clone());
-            crate::linked::toast(world, title.clone());
-            world.resource_mut::<Notifications>().push(Notice {
-                id: format!("credits-{}", movement.seq),
-                icon: "wallet",
-                title,
-                body,
-                unread: true,
-            });
-        }
-        refresh(world, *wallet);
-    }
+    let now = cadrs_social::wall_millis();
+    world.resource_mut::<TheBank>().0.receive(bytes, now)?;
+    // What it led to (to be kept, to be said) is done now, not a frame later: whoever sent it
+    // is answered once it is kept.
+    poll(world);
     Ok(())
 }
 
@@ -968,100 +1073,6 @@ fn is_my_org(world: &World, account: &AccountId) -> bool {
     world
         .get_resource::<Social>()
         .is_some_and(|s| s.orgs.iter().any(|o| &o.account == account))
-}
-
-/// Who may spend from an organization's wallet (its owners and admins) and who may look (its
-/// other members), from its document.
-pub fn access_of(org: &cadrs_org::Org) -> (Vec<AccountId>, Vec<AccountId>) {
-    let mut spenders = Vec::new();
-    let mut viewers = Vec::new();
-    for (account, role) in &org.members {
-        if *role >= cadrs_org::Role::Admin {
-            spenders.push(*account);
-        } else {
-            viewers.push(*account);
-        }
-    }
-    spenders.truncate(cadrs_credits::MAX_SPENDERS);
-    viewers.truncate(cadrs_credits::MAX_VIEWERS);
-    (spenders, viewers)
-}
-
-/// Tells the bank who may spend from organization `account`'s wallet, if this device holds the
-/// organization's key and hasn't said this list already. (A device that doesn't hold the key
-/// can't: the list stays as the key's holder last said it.)
-pub fn say_access(world: &mut World, account: AccountId, org: &cadrs_org::Org) {
-    let access = access_of(org);
-    if world.resource::<Credits>().access_said.get(&account) == Some(&access) {
-        return;
-    }
-    // Not taken yet (the bank is away, or older than this cadrs): said again after a while,
-    // however often something asks for it to be said.
-    let now = world
-        .resource::<Time<bevy::time::Real>>()
-        .elapsed_secs_f64();
-    let credits = world.resource::<Credits>();
-    if credits
-        .access_asked
-        .get(&account)
-        .is_some_and(|at| now - at < ACCESS_AGAIN_AFTER)
-    {
-        return;
-    }
-    let Some(key) = crate::social::org_key(world, &account) else {
-        return;
-    };
-    let Some(at) = bank(world) else {
-        return;
-    };
-    let said = Ask::Access {
-        spenders: access.0.clone(),
-        viewers: access.1.clone(),
-    };
-    let bytes = cadrs_credits::ask_as(&key, at.id, said, cadrs_social::wall_millis());
-    if at.here {
-        if cadrs_net::bank::answer(world, &bytes, None).is_ok() {
-            world
-                .resource_mut::<Credits>()
-                .access_said
-                .insert(account, access);
-        }
-        return;
-    }
-    let Some(iroh) = world.get_resource::<Iroh>() else {
-        return;
-    };
-    let Ok(to) = EndpointId::from_bytes(&at.id.0) else {
-        return;
-    };
-    let addr = world
-        .get_resource::<crate::social::PeerAddrs>()
-        .and_then(|hints| hints.0.get(&to).cloned())
-        .unwrap_or_else(|| to.into());
-    let task = cadrs_net::social::start_send(iroh, addr, Post::Bank(bytes).encode());
-    {
-        let mut credits = world.resource_mut::<Credits>();
-        credits.access_asked.insert(account, now);
-        credits.asked += 1;
-    }
-    // Remembered once the bank took it; asked again after a while otherwise.
-    let then: Then = Box::new(move |world: &mut World, answer: Result<&Answer, &str>| {
-        if answer.is_ok() {
-            world
-                .resource_mut::<Credits>()
-                .access_said
-                .insert(account, access);
-            if shown(world, &account) {
-                refresh(world, account);
-            }
-        }
-    });
-    world.resource_mut::<Credits>().asking.push(Asking {
-        wallet: account,
-        older: false,
-        task,
-        then: Some(then),
-    });
 }
 
 #[cfg(test)]

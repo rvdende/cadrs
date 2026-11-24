@@ -1100,7 +1100,6 @@ fn refresh_body(world: &mut World, mut built: Local<(Option<Built>, Option<Built
         .filter(|_| world.contains_resource::<crate::credits::Credits>())
         .map(|account| {
             let org = world.resource::<OpenOrg>().session.org().clone();
-            crate::credits::say_access(world, account, &org);
             // Its orders' payments are asked after by name: the newest quoted ones.
             let mut quoted: Vec<(u32, cadrs_credits::MoveId)> = org
                 .requests

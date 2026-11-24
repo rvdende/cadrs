@@ -19,14 +19,11 @@ pub const TOO_MANY_HELD: &str = "too many payments are held from that wallet";
 pub const TOO_MANY_BETWEEN: &str = "too many payments are held between those two wallets";
 pub const TOO_MANY_TODAY: &str = "that wallet paid too many times today";
 pub const TOO_FULL: &str = "that wallet can't hold more credits";
-pub const ACCESS: &str = "who may spend is said by the organization's own key, a list at a time";
-pub const OLD_ACCESS: &str = "a newer list of who may spend is known";
-pub const CLOCK: &str = "your clock and the bank's are too far apart";
-pub const OTHER_BANK: &str = "that was asked of another bank";
-pub const SIGNATURE: &str = "the request's signature doesn't hold";
-pub const TOO_LARGE: &str = "larger than a request may be";
-pub const TOO_OFTEN: &str = "asked too often: wait a minute";
-pub const JOURNAL: &str = "the bank can't write that down now";
+pub const SIGNATURE: &str = "the note's signature doesn't hold";
+pub const TOO_LARGE: &str = "larger than a note may be";
+pub const NOT_BELIEVED: &str =
+    "a note is believed when it pays this wallet, not when it takes from it";
+pub const NOT_OURS: &str = "that note is about no wallet kept here";
 
 /// A refusal's kind, told from its sentence (so the app can put it in the user's language;
 /// anything else is shown as the bank said it).
@@ -45,8 +42,6 @@ pub enum Refusal {
     NotPayee,
     TooEarly,
     TooMany,
-    Clock,
-    TooOften,
 }
 
 impl Refusal {
@@ -65,8 +60,6 @@ impl Refusal {
             NOT_PAYEE => Self::NotPayee,
             TOO_EARLY => Self::TooEarly,
             TOO_MANY_HELD | TOO_MANY_BETWEEN | TOO_MANY_TODAY | TOO_FULL => Self::TooMany,
-            CLOCK => Self::Clock,
-            TOO_OFTEN => Self::TooOften,
             _ => return None,
         })
     }

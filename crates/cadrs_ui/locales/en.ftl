@@ -7439,10 +7439,6 @@ wallet-confirm-ok = Send { $amount } credits
 org-tab-wallet = Wallet
 org-wallet-about = The organization's credits: what clients paid, what is held for orders that aren't delivered yet, and what was paid out. Owners and admins transfer and pay out; every member sees it.
 credits-the-faucet = The faucet
-credits-no-bank = No bank is set up, so there are no credits here.
-credits-offline = Offline: the bank can't be asked now.
-# { $why } is what went wrong reaching it.
-credits-bank-unreachable = The bank didn't answer: { $why }
 credits-faucet-took = { $amount } test credits are in your wallet
 credits-sent = Sent { $amount } credits to { $name }
 credits-paid-out = Paid out { $amount } credits to { $name }
@@ -7466,8 +7462,6 @@ credits-refused-not-payer = Only whoever paid can release a held payment
 credits-refused-not-payee = Only whoever it is held for can return a held payment
 credits-refused-too-early = A held payment can be claimed after thirty days
 credits-refused-too-many = Too many payments from that wallet for now
-credits-refused-clock = This computer's clock is too far from the bank's
-credits-refused-too-often = The bank was asked too often. Wait a minute.
 # A price in credits. { $amount } is a number ("724").
 credits-price = { $amount } credits
 # A price in a currency, with the credits it is paid with. { $price } is "ZAR 724.00".

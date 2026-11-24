@@ -1602,3 +1602,25 @@ fn names_and_texts_have_limits() {
     assert_eq!(org.requests[&request].snapshot_blob(), None);
     assert_eq!(org.requests[&request].stage, Stage::Requested);
 }
+
+/// What is kept for the organization's wallet goes into its document as it is, in order, from
+/// any member's device, so that all of them see one wallet. What it means is the wallet's
+/// business: the document only bounds its size.
+#[test]
+fn what_the_wallet_keeps_is_kept_in_order() {
+    let mut shop = founded();
+    shop.write(LAPTOP, Op::Credits(b"first".to_vec()));
+    shop.write(LAPTOP, Op::Credits(b"second".to_vec()));
+    let (org, conflicts) = shop.state(&shop.laptop.log);
+    assert!(conflicts.is_empty());
+    assert_eq!(org.credits, [b"first".to_vec(), b"second".to_vec()]);
+    // Nothing, and more than a wallet keeps at once, aren't taken.
+    shop.write(LAPTOP, Op::Credits(Vec::new()));
+    shop.write(
+        LAPTOP,
+        Op::Credits(vec![0; cadrs_org::MAX_CREDITS_EFFECT + 1]),
+    );
+    let (org, conflicts) = shop.state(&shop.laptop.log);
+    assert_eq!(conflicts.len(), 2);
+    assert_eq!(org.credits.len(), 2);
+}

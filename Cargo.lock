@@ -2669,7 +2669,6 @@ dependencies = [
  "bevy_iroh",
  "blake3",
  "cadrs_core",
- "cadrs_credits",
  "cadrs_fs",
  "cadrs_sketch",
  "cadrs_social",

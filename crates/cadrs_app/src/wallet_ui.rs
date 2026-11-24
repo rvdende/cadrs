@@ -73,8 +73,6 @@ pub(crate) struct WalletView {
     /// How long until the faucet gives again, in milliseconds (0: now); none for a wallet it
     /// doesn't serve.
     pub faucet_in: Option<u64>,
-    /// There is a bank to ask.
-    pub bank: bool,
     /// The payments held from or for the wallet that still wait.
     pub held: Vec<HeldLine>,
 }
@@ -197,7 +195,6 @@ impl WalletView {
             error: wallet.and_then(|w| w.error.clone()),
             asking: wallet.is_some_and(|w| w.asking),
             faucet_in: wallet.and_then(|w| faucet_in(w, now)),
-            bank: world.contains_resource::<credits::BankAt>(),
             held: wallet
                 .and_then(|w| w.statement.as_ref())
                 .map(|s| {
@@ -459,9 +456,6 @@ pub(crate) fn page(b: &mut ChildSpawnerCommands, t: &Theme, v: &WalletView, pref
             ));
         }
     });
-    if !v.bank {
-        muted(b, t, tr("credits-no-bank"));
-    }
 }
 
 /// How many held payments the wallet lists (the largest; the bank sends no more than its own
@@ -1298,7 +1292,6 @@ mod tests {
             error: None,
             asking: false,
             faucet_in: None,
-            bank: true,
             held: Vec::new(),
         };
         assert_eq!(

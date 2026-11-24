@@ -14,7 +14,6 @@ cadrs_core.workspace = true
 # Public documents are kept next to the documents (in a page too).
 cadrs_fs.workspace = true
 # Mailboxes this node keeps for others (`social`).
-cadrs_credits.workspace = true
 cadrs_social.workspace = true
 # The persistent face, edge and vertex names a selection travels by (`session::Picked`).
 cadrs_sketch.workspace = true

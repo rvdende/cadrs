@@ -74,12 +74,9 @@ pub enum Post {
     /// To a device of a listed organization, from anyone: a picture its listing names (its
     /// logo). Answered with [`Blobs`]: the one picture, or none.
     PublicBlob { org: AccountId, hash: [u8; 32] },
-    /// To a bank (`cadrs_credits`; cadrs's seed is one): an ask about a wallet, signed by the
-    /// device that sends it. Answered with the bank's answer: a statement, or a receipt it
-    /// signed.
-    Bank(#[serde(with = "serde_bytes")] Vec<u8>),
-    /// From a bank, to a device that looked at a wallet lately: a movement of that wallet as it
-    /// happened, as the receipt the bank signed.
+    /// To a device of whoever was paid: a note about credits (`cadrs_credits`), signed by the
+    /// device that paid, with its account's certificate. What takes it decides whether to
+    /// believe it.
     Credited(#[serde(with = "serde_bytes")] Vec<u8>),
 }
 

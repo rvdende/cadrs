@@ -5,8 +5,7 @@
 //!   (512 × 512 unless given; a small or oblong one shows what the dialog says of it).
 //! - `org market`: three shops are heard of in the marketplace, with their logos.
 //! - `org request`: a client asks the open organization for a quote.
-//! - `org bank`: this app keeps a bank of its own, in memory (the network is off in
-//!   scenarios), so the wallet works.
+//! - `org bank`: nothing, any more (there is no bank: every cadrs keeps its own wallets).
 //! - `org pay <credits>`: a client pays the open organization that much, as the bank would
 //!   tell this device.
 //! - `org stray <n>`: a stranger holds `n` single credits for the open organization, for no
@@ -53,9 +52,8 @@ pub(crate) fn script(world: &mut World, arg: &str) {
         }
         Some("market") => market(world),
         Some("request") => request(world),
-        Some("bank") => {
-            crate::credits::keep_here(world);
-        }
+        // (There is no bank to set up any more: every cadrs keeps its own wallets.)
+        Some("bank") => {}
         Some("accept") => client_accepts(world),
         Some("stray") => {
             let count = words.next().and_then(|w| w.parse().ok()).unwrap_or(1);
@@ -69,95 +67,112 @@ pub(crate) fn script(world: &mut World, arg: &str) {
     }
 }
 
-/// A client with credits of their own (from the faucet) pays the open organization `amount`,
-/// and the bank tells this device, as it would over the network.
-fn client_pays(world: &mut World, amount: u64) {
-    use cadrs_credits::{Answer, Ask};
-    let Some(at) = crate::credits::keep_here(world) else {
-        return;
-    };
-    let Some(shop) = world
-        .get_resource::<crate::organization::OpenOrg>()
-        .and_then(|open| open.session.org().org)
-    else {
-        return;
-    };
-    let now = cadrs_social::wall_millis();
-    let client = Account::generate();
-    let device = SecretKey::generate();
-    let cert = client.certify(device.public(), "laptop", now);
-    let asked = |world: &mut World, ask: Ask| {
-        let bytes = cadrs_credits::ask(&device, &cert, at.id, client.id(), ask, now);
-        cadrs_net::bank::answer(world, &bytes, None)
-            .ok()
-            .and_then(|answer| cadrs_credits::read_answer(&answer, &at.id).ok())
-    };
-    // As many takes from the faucet as it needs: a client who saved up.
-    let id = cadrs_credits::new_id;
-    asked(world, Ask::Faucet { id: id() });
-    let transfer = Ask::Transfer {
-        id: id(),
-        to: shop,
-        amount: amount.min(cadrs_credits::FAUCET),
-        note: "deposit".into(),
-        about: None,
-        payout: false,
-    };
-    if let Some(Answer::Receipt(receipt)) = asked(world, transfer) {
-        let _ = crate::credits::credited(world, &cadrs_social::codec::encode(&receipt), None);
-    }
+/// Someone else's cadrs, for a scenario: an account with a device, which pays by sending the
+/// notes another cadrs would.
+struct Payer {
+    account: Account,
+    device: SecretKey,
 }
 
-/// A stranger holds `count` single credits for the open organization, about nothing it knows.
-fn stranger_holds(world: &mut World, count: u32) {
-    use cadrs_credits::{Answer, Ask};
-    let Some(at) = crate::credits::keep_here(world) else {
-        return;
-    };
-    let Some(shop) = world
-        .get_resource::<crate::organization::OpenOrg>()
-        .and_then(|open| open.session.org().org)
-    else {
-        return;
-    };
-    let now = cadrs_social::wall_millis();
-    let stranger = Account::generate();
-    let device = SecretKey::generate();
-    let cert = stranger.certify(device.public(), "laptop", now);
-    let asked = |world: &mut World, ask: Ask| {
-        let bytes = cadrs_credits::ask(&device, &cert, at.id, stranger.id(), ask, now);
-        cadrs_net::bank::answer(world, &bytes, None)
-            .ok()
-            .and_then(|answer| cadrs_credits::read_answer(&answer, &at.id).ok())
-    };
-    asked(
-        world,
-        Ask::Faucet {
-            id: cadrs_credits::new_id(),
-        },
-    );
-    for _ in 0..count {
-        let hold = Ask::Hold {
-            id: cadrs_credits::new_id(),
-            to: shop,
-            amount: 1,
-            note: String::new(),
-            about: None,
+impl Payer {
+    fn new() -> Self {
+        Self {
+            account: Account::generate(),
+            device: SecretKey::generate(),
+        }
+    }
+
+    /// The scripted client who last asked for a quote, else someone new.
+    fn client(world: &World) -> Self {
+        match world.get_resource::<ScriptClient>() {
+            Some(client) => Self {
+                account: Account::from_key(client.account.key().clone()),
+                device: SecretKey::from_bytes(&client.device.to_bytes()),
+            },
+            None => Self::new(),
+        }
+    }
+
+    /// Tells this cadrs of a movement of the payer's doing, as its note would arrive.
+    fn tells(
+        &self,
+        world: &mut World,
+        kind: cadrs_credits::Kind,
+        id: cadrs_credits::MoveId,
+        to: cadrs_social::keys::AccountId,
+        amount: u64,
+        about: Option<cadrs_credits::About>,
+    ) {
+        let now = cadrs_social::wall_millis();
+        let cert = self.account.certify(self.device.public(), "laptop", now);
+        let movement = cadrs_credits::Movement {
+            seq: 0,
+            // What the payer's own cadrs would call it.
+            id: cadrs_credits::scoped_id(&self.account.id(), &id),
+            time: now,
+            kind,
+            from: Some(self.account.id()),
+            to,
+            amount,
+            // A plain payment says what it is; a held one says its order.
+            note: if kind == cadrs_credits::Kind::Transfer {
+                "deposit".to_owned()
+            } else {
+                String::new()
+            },
+            about,
+            by: self.account.id(),
+            hold: None,
         };
-        if let Some(Answer::Receipt(receipt)) = asked(world, hold) {
-            let _ = crate::credits::credited(world, &cadrs_social::codec::encode(&receipt), None);
+        let bytes = cadrs_credits::write_note(&self.device, &cert, &movement);
+        if let Err(why) = crate::credits::credited(world, &bytes) {
+            warn!("the scripted payment wasn't taken: {why}");
         }
     }
 }
 
-/// The client of the newest quoted request accepts its quote and pays: the credits are held at
-/// the bank for the organization (which this device is told), and the acceptance arrives as its
-/// letter would.
-fn client_accepts(world: &mut World) {
-    use cadrs_credits::{About, Answer, Ask};
-    let Some(at) = crate::credits::keep_here(world) else {
+fn open_shop(world: &World) -> Option<cadrs_social::keys::AccountId> {
+    world
+        .get_resource::<crate::organization::OpenOrg>()
+        .and_then(|open| open.session.org().org)
+}
+
+/// A client pays the open organization `amount`, as their note would arrive.
+fn client_pays(world: &mut World, amount: u64) {
+    let Some(shop) = open_shop(world) else {
         return;
     };
+    Payer::new().tells(
+        world,
+        cadrs_credits::Kind::Transfer,
+        cadrs_credits::new_id(),
+        shop,
+        amount,
+        None,
+    );
+}
+
+/// A stranger holds `count` single credits for the open organization, about nothing it knows.
+fn stranger_holds(world: &mut World, count: u32) {
+    let Some(shop) = open_shop(world) else {
+        return;
+    };
+    let stranger = Payer::new();
+    for _ in 0..count {
+        stranger.tells(
+            world,
+            cadrs_credits::Kind::Held,
+            cadrs_credits::new_id(),
+            shop,
+            1,
+            None,
+        );
+    }
+}
+
+/// The client of the newest quoted request accepts its quote and pays: the credits are held
+/// for the organization (their note arrives), and the acceptance arrives as its letter would.
+fn client_accepts(world: &mut World) {
     let Some(open) = world.get_resource::<crate::organization::OpenOrg>() else {
         return;
     };
@@ -175,48 +190,24 @@ fn client_accepts(world: &mut World) {
         warn!("org accept: no quoted request");
         return;
     };
-    let now = cadrs_social::wall_millis();
-    // Whoever asked for it pays for it.
-    let (payer, device) = match world.get_resource::<ScriptClient>() {
-        Some(client) => (
-            Account::from_key(client.account.key().clone()),
-            SecretKey::from_bytes(&client.device.to_bytes()),
-        ),
-        None => (Account::generate(), SecretKey::generate()),
-    };
-    let cert = payer.certify(device.public(), "laptop", now);
-    let asked = |world: &mut World, ask: Ask| {
-        let bytes = cadrs_credits::ask(&device, &cert, at.id, payer.id(), ask, now);
-        cadrs_net::bank::answer(world, &bytes, None)
-            .ok()
-            .and_then(|answer| cadrs_credits::read_answer(&answer, &at.id).ok())
-    };
-    asked(
+    // Whoever asked for it pays for it, under the order's own id, as their cadrs does.
+    Payer::client(world).tells(
         world,
-        Ask::Faucet {
-            id: cadrs_credits::new_id(),
-        },
-    );
-    let hold = Ask::Hold {
-        // The order's own id, as the client's cadrs asks with.
-        id: cadrs_credits::order_hold_id(id, quote.id),
-        to: shop,
-        amount: quote.total.credits().min(cadrs_credits::FAUCET),
-        note: String::new(),
-        about: Some(About::order(
+        cadrs_credits::Kind::Held,
+        cadrs_credits::order_hold_id(id, quote.id),
+        shop,
+        quote.total.credits(),
+        Some(cadrs_credits::About::order(
             id,
             crate::organization::request_number(number),
         )),
-    };
-    if let Some(Answer::Receipt(receipt)) = asked(world, hold) {
-        let _ = crate::credits::credited(world, &cadrs_social::codec::encode(&receipt), None);
-    }
+    );
     let _ = crate::organization::take_op(
         world,
         Op::Accept {
             request: id,
             quote: quote.id,
-            at: now,
+            at: cadrs_social::wall_millis(),
         },
     );
 }

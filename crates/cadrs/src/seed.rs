@@ -2,8 +2,7 @@
 //! documents ([`cadrs_net::public`]), with no window. It stays online in the public room, keeps
 //! every listing, star and published revision it hears of, and hands them to whoever asks, so
 //! a newcomer always has someone to start from and a document stays reachable while its owner
-//! is offline. It is also a mailbox for letters to people who are offline, and a bank for
-//! everyone's credits ([`cadrs_net::bank`]), its books in `bank/` of its data dir.
+//! is offline.
 //!
 //! Its identity and what it keeps live in its data dir: `--data-dir`, else `CADRS_DATA_DIR`,
 //! else `seed` next to the app's documents (`~/.local/share/cadrs/seed`), never the app's own,
@@ -97,24 +96,6 @@ pub fn run(seed: Seed) -> AppExit {
         .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok())
         .map(|b| cadrs_social::keys::SecretKey::from_bytes(&b));
     if let Some(key) = key {
-        // A bank for everyone's credits (`cadrs_credits`): its books in the data dir, its
-        // receipts signed with the node's key, so the bank's id is this seed's cadrs ID.
-        let bank_key = cadrs_social::keys::SecretKey::from_bytes(&key.to_bytes());
-        match cadrs_net::bank::host(app.world_mut(), bank_key, Some(&seed.dir.join("bank"))) {
-            Ok(()) => {
-                let cut = app.world().resource::<cadrs_net::bank::Hosted>().0.cut;
-                if cut > 0 {
-                    eprintln!(
-                        "the bank's journal ended in a torn record ({cut} bytes): cut off and \
-                         kept beside it as credits.journal.cut"
-                    );
-                }
-                app.add_plugins(cadrs_net::bank::BankPlugin);
-            }
-            // A journal that doesn't read is left as it is, and there is no bank until someone
-            // has looked: starting one on half the books would move everyone's balances.
-            Err(e) => eprintln!("NO BANK: its books can't be read. {e}"),
-        }
         cadrs_net::social::enable_mailbox(
             app.world_mut(),
             key,
@@ -159,12 +140,8 @@ fn report(world: &mut World, mut last: Local<Option<f64>>) {
         .get_resource::<cadrs_net::social::Mailboxes>()
         .and_then(|m| m.0.lock().ok()?.as_ref().map(|n| n.held()))
         .unwrap_or_default();
-    let moved = world
-        .get_resource::<cadrs_net::bank::Hosted>()
-        .map_or(0, |bank| bank.0.book().len());
     info!(
         "public seed: {listed} documents listed; peers in the room: {peers}; \
-         {letters} letters ({bytes} bytes) waiting in the mailbox; \
-         {moved} movements in the bank's books"
+         {letters} letters ({bytes} bytes) waiting in the mailbox"
     );
 }

@@ -434,13 +434,34 @@ pub fn org_changed(world: &mut World, doc: DocumentId, org: &cadrs_org::Org) {
         mine.logo = org.profile.logo;
         mine.listed = listed;
     }
-    // Who may spend the organization's credits follows its members' roles.
-    let account = social.orgs.iter().find(|o| o.doc == doc).map(|o| o.account);
-    if let Some(account) = account
-        && world.contains_resource::<crate::credits::Credits>()
-    {
-        crate::credits::say_access(world, account, org);
+}
+
+/// Writes `op` into organization `account`'s document as something that arrived (not the
+/// person's own doing): the open one's, else the one on disk.
+pub(crate) fn write_org(
+    world: &mut World,
+    account: &AccountId,
+    op: cadrs_org::Op,
+) -> Result<(), String> {
+    let open_here = world
+        .get_resource::<crate::organization::OpenOrg>()
+        .is_some_and(|open| open.session.org().org.as_ref() == Some(account));
+    if open_here {
+        return crate::organization::take_op(world, op);
     }
+    let social = world.resource::<Social>();
+    let mine = social
+        .orgs
+        .iter()
+        .find(|o| &o.account == account)
+        .ok_or("not an organization of this device")?;
+    let keys = social.keys.clone().ok_or("no keys")?;
+    let store = world.resource::<DocumentStore>().0.clone();
+    let path = cadrs_org::file::path(&store.doc_dir(mine.doc));
+    let (log, _) = cadrs_org::file::load(&path).map_err(|e| e.to_string())?;
+    let mut session = Session::open(log, keys.device);
+    session.write(op, cadrs_social::wall_millis())?;
+    cadrs_org::file::save(&path, session.log()).map_err(|e| e.to_string())
 }
 
 /// Adds a contact from its card; true when it was new.
@@ -1023,9 +1044,8 @@ fn handle(world: &mut World, post: Post, from: Option<DeviceId>) -> Result<Vec<u
             crate::org_sync::blobs_wanted(world, from, log, &cert, &blobs)
         }
         Post::PublicBlob { org, hash } => public_blob(world, &org, &hash),
-        // An ask of the bank this cadrs keeps, if it keeps one.
-        Post::Bank(ask) => cadrs_net::bank::answer(world, &ask, from),
-        Post::Credited(receipt) => none(crate::credits::credited(world, &receipt, from)),
+        // Someone says they paid a wallet kept here (the user's, an organization's).
+        Post::Credited(note) => none(crate::credits::credited(world, &note)),
     }
 }
 
