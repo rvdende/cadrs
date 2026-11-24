@@ -29,6 +29,8 @@ pub mod cut_list;
 pub mod debug_tools;
 pub mod derived_ui;
 pub mod direct_edit_ui;
+#[cfg(test)]
+mod docs_reference;
 pub mod document;
 pub mod draft_ui;
 pub mod drawing;
