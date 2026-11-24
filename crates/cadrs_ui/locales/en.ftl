@@ -6872,3 +6872,6 @@ node-view-no-parts = No parts
 node-view-output = Output
 node-view-output-sketch = Sketch
 node-view-output-plane = Plane
+# Shows the presets × inputs table in the Configuration node (and hides it).
+node-view-show-table = Presets table
+node-view-hide-table = Hide presets table

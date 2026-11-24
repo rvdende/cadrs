@@ -7,8 +7,9 @@
 // 03 The input's socket dragged onto the first extrude's Depth: Depth reads #input1 and the
 //    block is 10 mm tall; a grey wire from the input to the field.
 // 04 + Preset: Preset 2, active, in the node and in the features header.
-// 05 Auto arrange: laid out again and framed.
-// 06 Back to the list: the feature list, narrow again, with the preset dropdown.
+// 05 Presets table: every preset's value of `input1` side by side in the Configuration node.
+// 06 Auto arrange: laid out again and framed.
+// 07 Back to the list: the feature list, narrow again, with the preset dropdown.
 Scenario(
     start: Some("document"),
     steps: [
@@ -28,11 +29,14 @@ Scenario(
         Click(ui("node-preset-add")),
         Wait(20),
         Screenshot("04-preset"),
+        Click(ui("node-presets-table")),
+        Wait(20),
+        Screenshot("05-table"),
         Click(ui("node-canvas-arrange")),
         Wait(40),
-        Screenshot("05-arranged"),
+        Screenshot("06-arranged"),
         Click(ui("feature-node-view")),
         Wait(20),
-        Screenshot("06-list"),
+        Screenshot("07-list"),
     ],
 )

@@ -29,6 +29,7 @@ use cadrs_core::document::{
 use cadrs_core::{Feature, FeatureId, PartId, RevolveFeature};
 use cadrs_sketch::units::Quantity;
 use cadrs_ui::i18n::{tr, tr_with};
+use cadrs_ui::node_graph::StaticCopy;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     CheckboxChange, FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState, NumberField,
@@ -418,15 +419,50 @@ fn revolve_dialog(
     field: ExtrudeField,
     labels: &Labels,
 ) -> impl Bundle {
+    (
+        RevolveDialog,
+        RevolveLayout::of(r, field),
+        DespawnOnExit(AppState::Document),
+        revolve_card(theme, title, valid, r, field, labels).build(theme),
+    )
+}
+
+/// A copy of a revolve's dialog with its parameters, shown for looks (the node view's node of a
+/// revolve not being edited, [`crate::node_view`]).
+pub(crate) fn static_card(
+    theme: &Theme,
+    el: &cadrs_core::Element,
+    cache: &PartCache,
+    feature: &Feature,
+) -> Option<FeatureDialog> {
+    let r = feature.revolve()?;
+    let labels = labels(el.features(), cache, feature.id, r);
+    let valid = feature.is_valid() && !cache.errors.contains_key(&feature.id);
+    // No selection field is waiting for picks (Direction is not one of a revolve's).
+    Some(revolve_card(
+        theme,
+        &feature.name,
+        valid,
+        r,
+        ExtrudeField::Direction,
+        &labels,
+    ))
+}
+
+/// The dialog's card: its title, rows and footer.
+fn revolve_card(
+    theme: &Theme,
+    title: &str,
+    valid: bool,
+    r: &RevolveFeature,
+    field: ExtrudeField,
+    labels: &Labels,
+) -> FeatureDialog {
     let tb = theme.clone();
     let tf = theme.clone();
     let r = r.clone();
-    let layout = RevolveLayout::of(&r, field);
     let labels = labels.clone();
-    (
-        RevolveDialog,
-        layout,
-        DespawnOnExit(AppState::Document),
+    {
         FeatureDialog::new("revolve-dialog")
             .title(title)
             .valid(valid)
@@ -652,8 +688,7 @@ fn revolve_dialog(
                     Tooltip::new(tr("common-help")),
                 ));
             })
-            .build(theme),
-    )
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -670,9 +705,9 @@ pub(crate) fn sync_revolve_dialog(
     focus: Res<InputFocus>,
     q_area: Query<Entity, With<ViewportArea>>,
     mut q_dialog: Query<(Entity, &RevolveLayout, &mut FeatureDialogState), With<RevolveDialog>>,
-    mut q_lists: Query<(&Role, &mut SelectionListState)>,
-    mut q_numbers: Query<(Entity, &Role, &mut NumberFieldState)>,
-    mut q_selects: Query<(&Role, &mut SelectState)>,
+    mut q_lists: Query<(&Role, &mut SelectionListState), Without<StaticCopy>>,
+    mut q_numbers: Query<(Entity, &Role, &mut NumberFieldState), Without<StaticCopy>>,
+    mut q_selects: Query<(&Role, &mut SelectState), Without<StaticCopy>>,
     q_edit: Query<&cadrs_ui::NumberFieldEdit>,
     mut commands: Commands,
 ) {

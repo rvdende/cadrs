@@ -53,19 +53,17 @@ impl Plugin for NodeGraphPlugin {
             .add_observer(on_box_start)
             .add_observer(on_box_drag)
             .add_observer(on_box_end)
+            // The wires are drawn before the layout, from where the nodes are now (a dragged
+            // node's wires move with it in the same frame, with no frame left without them).
             .add_systems(
                 PostUpdate,
-                (apply_views, place_nodes, mark_static_copies).before(bevy::ui::UiSystems::Prepare),
+                (apply_views, place_nodes, draw_wires, mark_static_copies)
+                    .chain()
+                    .before(bevy::ui::UiSystems::Prepare),
             )
             .add_systems(
                 PostUpdate,
-                (
-                    place_sockets,
-                    route_wires,
-                    draw_wires,
-                    draw_grid,
-                    cull_nodes,
-                )
+                (place_sockets, route_wires, draw_grid, cull_nodes)
                     .chain()
                     .after(bevy::ui::UiSystems::Layout),
             );
@@ -1076,11 +1074,15 @@ fn route_wires(
     q_wire: Query<(Entity, &Wire, &ChildOf)>,
     q_nodes: Query<(&GraphNode, &ComputedNode, &ChildOf)>,
     q_geo: Query<(&ComputedNode, &UiGlobalTransform)>,
+    q_dragging: Query<(), Or<(With<GraphNodeDragging>, With<DragWire>)>>,
 ) {
     use std::hash::{Hash, Hasher};
     let Some(route) = router.0.clone() else {
         return;
     };
+    // Not while something is dragged: a pause mid-drag would swap the curves for routes and
+    // back again.
+    let dragging = !q_dragging.is_empty();
     for (c, mut r) in &mut q_canvas {
         let Ok((ln, lg)) = q_geo.get(c.wires) else {
             continue;
@@ -1129,6 +1131,10 @@ fn route_wires(
             }
             continue;
         }
+        if dragging {
+            r.still = 0;
+            continue;
+        }
         r.still = r.still.saturating_add(1);
         if r.still < SETTLE || r.routed == key {
             continue;
@@ -1143,7 +1149,30 @@ fn route_wires(
     }
 }
 
-#[allow(clippy::type_complexity)]
+/// A socket's centre (graph px) where its node is now: where it was in the node at the last
+/// layout, from the node's place now (a dragged node's [`GraphNode::pos`] runs ahead of the
+/// layout by a frame).
+fn socket_now(
+    socket: Entity,
+    q_parent: &Query<&ChildOf>,
+    q_node: &Query<&GraphNode>,
+    q_geo: &Query<(&ComputedNode, &UiGlobalTransform)>,
+    layer: &UiGlobalTransform,
+    layer_scale: f32,
+) -> Option<Vec2> {
+    let was = socket_point(socket, layer, layer_scale, q_geo)?;
+    let node = q_parent.get(socket).ok()?.parent();
+    let Ok(g) = q_node.get(node) else {
+        return Some(was);
+    };
+    let (nn, ng) = q_geo.get(node).ok()?;
+    let inv = layer.try_inverse()?;
+    let centre = inv.transform_point2(ng.translation) * layer_scale;
+    let top_left = centre - nn.size() * nn.inverse_scale_factor() / 2.0;
+    Some(g.pos + (was - top_left))
+}
+
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn draw_wires(
     q_canvas: Query<(&NodeCanvas, Option<&CanvasRoutes>)>,
     mut q_wire: Query<
@@ -1158,7 +1187,9 @@ fn draw_wires(
         Or<(With<Wire>, With<DragWire>)>,
     >,
     q_geo: Query<(&ComputedNode, &UiGlobalTransform)>,
-    q_seg: Query<(), With<WireSegment>>,
+    q_parent: Query<&ChildOf>,
+    q_node: Query<&GraphNode>,
+    mut q_seg: Query<(&mut Node, &mut UiTransform, &mut BackgroundColor), With<WireSegment>>,
     mut commands: Commands,
 ) {
     for (entity, wire, drag, mut drawn, parent, children) in &mut q_wire {
@@ -1167,11 +1198,10 @@ fn draw_wires(
             continue;
         };
         let s = ln.inverse_scale_factor();
+        let at = |socket| socket_now(socket, &q_parent, &q_node, &q_geo, lg, s);
         let ends = match (wire, drag) {
-            (Some(w), _) => {
-                socket_point(w.from, lg, s, &q_geo).zip(socket_point(w.to, lg, s, &q_geo))
-            }
-            (None, Some(d)) => socket_point(d.from, lg, s, &q_geo).map(|a| (a, d.to)),
+            (Some(w), _) => at(w.from).zip(at(w.to)),
+            (None, Some(d)) => at(d.from).map(|a| (a, d.to)),
             _ => None,
         };
         let Some((a, b)) = ends else { continue };
@@ -1199,39 +1229,55 @@ fn draw_wires(
             }
             None => wire_points(a, b, 24),
         };
-        if let Some(children) = children {
-            for c in children.iter() {
-                if q_seg.contains(c) {
-                    commands.entity(c).despawn();
+        // The pieces: the wire's own, moved where they go (spawning only those it lacks), so
+        // it is never left without them for a frame.
+        let pieces: Vec<(Vec2, Vec2)> = pts
+            .windows(2)
+            .enumerate()
+            .filter(|(i, _)| !dashed || i % 2 == 0)
+            .map(|(_, w)| (w[0], w[1]))
+            .collect();
+        let mut have: Vec<Entity> = children
+            .map(|c| c.iter().filter(|e| q_seg.contains(*e)).collect())
+            .unwrap_or_default();
+        for (k, (p, q)) in pieces.iter().enumerate() {
+            let d = *q - *p;
+            let len = d.length() + 0.6;
+            let mid = (*p + *q) / 2.0;
+            let node = Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(mid.x - len / 2.0),
+                top: Val::Px(mid.y - thick / 2.0),
+                width: Val::Px(len),
+                height: Val::Px(thick),
+                ..default()
+            };
+            let tf = UiTransform {
+                rotation: Rot2::radians(d.y.atan2(d.x)),
+                ..default()
+            };
+            match have.get(k).and_then(|e| q_seg.get_mut(*e).ok()) {
+                Some((mut n, mut t, mut bg)) => {
+                    *n = node;
+                    *t = tf;
+                    if bg.0 != color {
+                        bg.0 = color;
+                    }
+                }
+                None => {
+                    commands.spawn((
+                        WireSegment,
+                        node,
+                        tf,
+                        BackgroundColor(color),
+                        Pickable::IGNORE,
+                        ChildOf(entity),
+                    ));
                 }
             }
         }
-        for (i, w) in pts.windows(2).enumerate() {
-            if dashed && i % 2 == 1 {
-                continue;
-            }
-            let (p, q) = (w[0], w[1]);
-            let d = q - p;
-            let len = d.length() + 0.6;
-            let mid = (p + q) / 2.0;
-            commands.spawn((
-                WireSegment,
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: Val::Px(mid.x - len / 2.0),
-                    top: Val::Px(mid.y - thick / 2.0),
-                    width: Val::Px(len),
-                    height: Val::Px(thick),
-                    ..default()
-                },
-                UiTransform {
-                    rotation: Rot2::radians(d.y.atan2(d.x)),
-                    ..default()
-                },
-                BackgroundColor(color),
-                Pickable::IGNORE,
-                ChildOf(entity),
-            ));
+        for extra in have.drain(pieces.len().min(have.len())..) {
+            commands.entity(extra).despawn();
         }
     }
 }
