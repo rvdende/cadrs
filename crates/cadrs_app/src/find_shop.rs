@@ -70,14 +70,33 @@ pub fn open(world: &mut World) {
         .parse::<f64>()
         .ok();
     let material = (!search.material.trim().is_empty()).then(|| search.material.trim().to_owned());
-    let found = social
-        .directory
-        .search(me.as_ref(), None, material.as_deref(), thickness);
+    let found = social.directory.search(&cadrs_org::directory::Query {
+        near: me.as_ref(),
+        material: material.as_deref(),
+        thickness,
+        ..Default::default()
+    });
+    // What can be asked for: any material, the Part Studio's, and what the shops say.
+    let mut materials: Vec<String> = std::iter::once(tr("find-shop-any-material"))
+        .chain(
+            cadrs_core::material::LIBRARY
+                .iter()
+                .map(|m| m.name.to_owned()),
+        )
+        .collect();
+    for shop in social.directory.listings() {
+        for (name, _) in shop.offers.iter().flat_map(|o| &o.materials) {
+            if !materials.iter().any(|m| m.eq_ignore_ascii_case(name)) && materials.len() < 500 {
+                materials.push(name.clone());
+            }
+        }
+    }
     let theme = world.resource::<Theme>().clone();
     let mut pins: Vec<Pin> = found
         .iter()
-        .filter_map(|f| {
-            let place = f.listing.place.as_ref()?;
+        // Every public location of every shop found.
+        .flat_map(|f| f.listing.places.iter())
+        .filter_map(|place| {
             let (lat, lon) = surface(place)?;
             Some(Pin {
                 lat,
@@ -103,16 +122,17 @@ pub fn open(world: &mut World) {
                 .offers
                 .iter()
                 .map(|o| {
+                    // The thickest it cuts, where it says (a printer or a mill doesn't).
                     let thickest = o.materials.iter().map(|m| m.1).fold(0.0, f64::max);
-                    format!("{} ≤ {thickest} mm", o.process.label())
+                    cadrs_org::capability::material_label(
+                        &crate::organization::process_name(o.process),
+                        thickest,
+                    )
                 })
                 .collect();
             what.dedup();
-            if let Some(region) = l.place.as_ref().and_then(|p| p.region.as_ref()) {
-                what.insert(0, region.label());
-            }
-            if let Some((stars, n)) = l.rating {
-                what.push(format!("★ {stars:.1} ({n})"));
+            if let Some(place) = l.where_label() {
+                what.insert(0, place);
             }
             Row {
                 name: l.name().to_owned(),
@@ -170,8 +190,24 @@ pub fn open(world: &mut World) {
                     ..default()
                 })
                 .with_children(|r| {
+                    // The material, picked as a part's is (the Part Studio's materials, and
+                    // whatever else the shops heard of say they work in): the same names a
+                    // shop's machines carry. The first choice is any material.
+                    r.spawn(Node {
+                        width: Val::Px(220.0),
+                        flex_direction: FlexDirection::Column,
+                        ..default()
+                    })
+                    .with_child(
+                        crate::organization::material_picker("find-shop-material", materials)
+                            .placeholder(tr("find-shop-any-material"))
+                            .chosen(
+                                (!search.material.trim().is_empty())
+                                    .then(|| search.material.trim().to_owned()),
+                            )
+                            .build(t),
+                    );
                     for (name, value, width) in [
-                        ("find-shop-material", search.material.clone(), 180.0),
                         ("find-shop-thickness", search.thickness.clone(), 110.0),
                         ("find-shop-lat", lat.clone(), 110.0),
                         ("find-shop-lon", lon.clone(), 110.0),
@@ -270,7 +306,10 @@ pub fn open(world: &mut World) {
 
 /// Search again with what the fields say (and remember where the user is).
 fn search_again(world: &mut World) {
-    let material = field(world, "find-shop-material");
+    // (Its first choice, any material, is no material asked for.)
+    let material = crate::organization::picked(world, "find-shop-material")
+        .filter(|chosen| *chosen != tr("find-shop-any-material"))
+        .unwrap_or_default();
     let thickness = field(world, "find-shop-thickness");
     let number = |s: String| s.trim().replace(',', ".").parse::<f64>().ok();
     let lat = number(field(world, "find-shop-lat"));

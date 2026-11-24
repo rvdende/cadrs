@@ -18,6 +18,25 @@ pub use iroh;
 pub const ALPN: &[u8] = b"cadrs/social/1";
 /// The largest post (a request for a quote carries its parts' document).
 const MAX_POST: usize = 64 << 20;
+/// How the error of a send starts when the device was reached and refused the post, as distinct
+/// from not being reached (the same words as `cadrs_social::post::REFUSED`, which this crate
+/// doesn't depend on; the app's tests hold the two together).
+pub const REFUSED: &str = "refused: ";
+/// The most of a refusal's reason that is kept, in characters (as
+/// `cadrs_social::post::MAX_REASON`).
+pub const MAX_REASON: usize = 200;
+
+/// A reached device's refusal as the sender's error: [`REFUSED`] and its reason, cut to a
+/// sentence. The reason is whatever the other device chose to send, megabytes if it likes.
+fn refused(why: &[u8]) -> String {
+    let head = &why[..why.len().min(4 * MAX_REASON)];
+    let reason: String = String::from_utf8_lossy(head)
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_REASON)
+        .collect();
+    format!("{REFUSED}{reason}")
+}
 const ANSWER_WITHIN: Duration = Duration::from_secs(30);
 const REACH_WITHIN: Duration = Duration::from_secs(15);
 
@@ -155,15 +174,30 @@ impl Node {
             .await
             .map_err(|e| format!("Lost {who}: {e}"))?;
         let _ = send.finish();
-        let reply = recv
-            .read_to_end(MAX_POST)
-            .await
-            .map_err(|e| format!("Lost {who}: {e}"))?;
-        conn.close(0u32.into(), b"done");
-        match reply.split_first() {
-            Some((0, answer)) => Ok(answer.to_vec()),
-            Some((_, why)) => Err(String::from_utf8_lossy(why).into_owned()),
-            None => Err(format!("{who} sent nothing")),
+        // The first byte says which it is: an answer, read whole, or a refusal, of which only
+        // a sentence's worth is read whatever was sent.
+        let mut status = [0u8; 1];
+        if recv.read_exact(&mut status).await.is_err() {
+            conn.close(0u32.into(), b"done");
+            return Err(format!("{who} sent nothing"));
         }
+        let result = if status[0] == 0 {
+            recv.read_to_end(MAX_POST)
+                .await
+                .map_err(|e| format!("Lost {who}: {e}"))
+        } else {
+            let mut why = vec![0u8; 4 * MAX_REASON];
+            let mut read = 0;
+            while read < why.len() {
+                match recv.read(&mut why[read..]).await {
+                    Ok(Some(n)) if n > 0 => read += n,
+                    _ => break,
+                }
+            }
+            // Reached, and refused: told apart from not being reached.
+            Err(refused(&why[..read]))
+        };
+        conn.close(0u32.into(), b"done");
+        result
     }
 }

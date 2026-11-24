@@ -87,6 +87,12 @@ Onshape-style CAD in Rust + Bevy 0.20.1. Local notes in `docs/` (git-ignored: `P
   (`tools/web/mobile.html`, built as `phone.html` and `404.html` by `tools/web/build.sh`,
   `CADRS_WEB_ONLY=phone`). Two-app tests over local iroh: `cargo test -r -p cadrs_app --test
   social_flow`.
+- Credits (play money until there is real payment): `cadrs_credits` (wallets, the faucet,
+  transfers, held payments; `crates/cadrs_credits/README.md`). The bank is a cadrs peer: the seed
+  keeps one (`cadrs_net::bank`, books in `<seed data dir>/bank/`), the app asks it
+  (`cadrs_app::credits`, `wallet_ui`). `CADRS_BANK=<cadrs ID>|here|0` asks another, keeps one in
+  the app (scenarios: `Custom("org bank")`), or none. Three-app test: `cargo test -r -p cadrs_app
+  --test credits_flow`.
 - Library parts are data, never code: `libraries/<Library>/<name>.symbol.ron|.footprint.ron`,
   read at runtime. `cargo run -r -p cadrs_libgen -- libraries` rewrites the built-in ones from
   their generators. The library browser's JLCPCB parts tab (`cadrs_easyeda`) downloads parts

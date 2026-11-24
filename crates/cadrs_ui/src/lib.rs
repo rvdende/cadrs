@@ -60,12 +60,14 @@ pub mod quick_dim;
 pub mod radio;
 pub mod responsive;
 pub mod scrollbar;
+pub mod search_select;
 pub mod segmented;
 pub mod selectable_text;
 pub mod selection_box;
 pub mod selection_field;
 pub mod selection_list;
 pub mod shortcut_key;
+pub mod side_nav;
 pub mod spinner;
 pub mod splitter;
 pub mod spring;
@@ -169,6 +171,7 @@ pub use quick_dim::{
 pub use radio::{RadioChange, RadioGroup, RadioGroupState, RadioOption};
 pub use responsive::HideBelow;
 pub use scrollbar::{WheelScroll, horizontal_scrollbar, vertical_scrollbar};
+pub use search_select::{SearchSelect, SearchSelectPick, SearchSelectState};
 pub use segmented::{Segmented, SegmentedSelect, SegmentedState};
 pub use selectable_text::{
     ReadOnlyText, SelectableText, SelectableTextField, SelectableValue, TextCopied,
@@ -182,6 +185,7 @@ pub use selection_list::{
     SelectionListState,
 };
 pub use shortcut_key::ShortcutKey;
+pub use side_nav::{SideNav, SideNavSelect, SideNavState};
 pub use spinner::Spinner;
 pub use splitter::{HoverCursor, Splitter, SplitterMoved, horizontal_splitter};
 pub use style::{ForceState, InheritFg, Selected, StateColors, VisualState, Visuals};
@@ -325,6 +329,8 @@ impl Plugin for CadrsUiPlugin {
             .add_plugins((
                 floating_panel::FloatingPanelPlugin,
                 segmented::SegmentedPlugin,
+                side_nav::SideNavPlugin,
+                search_select::SearchSelectPlugin,
                 switch::SwitchPlugin,
                 version_graph::VersionGraphPlugin,
                 splitter::SplitterPlugin,

@@ -4,6 +4,10 @@
 //! A [`Letter`] is signed by the sending device and carries the device's certificate, so the
 //! receiver knows which account it is from. It travels straight to one of the recipient's devices
 //! (an iroh connection, encrypted to that device's key) or, later, sealed through a mailbox.
+//! It is signed as the bytes it was written in ([`cadrs_social::keys::SignedBytes`]), so a
+//! client and a shop on different versions of cadrs still read each other: new fields are
+//! skipped by the older one, and a kind of message it doesn't know is refused as
+//! [`Refused::Newer`], not as a forgery.
 //!
 //! The shop's side turns letters into operations on its organization document
 //! ([`shop_op`]); the client's side keeps a [`ClientBook`] of the requests it sent.
@@ -11,7 +15,7 @@
 use std::collections::BTreeMap;
 
 use cadrs_social::contact::Card;
-use cadrs_social::keys::{AccountId, DeviceCert, SecretKey, Signed, Statement};
+use cadrs_social::keys::{AccountId, DeviceCert, Growing, SecretKey, Signed, SignedBytes};
 use cadrs_social::receipts::{CoSigned, HalfSigned};
 use serde::{Deserialize, Serialize};
 
@@ -40,8 +44,13 @@ pub enum Message {
     Quote { request: Id, quote: Quote },
     /// Shop → client.
     Decline { request: Id, reason: String },
-    /// Client → shop: go ahead.
-    Accept { request: Id },
+    /// Client → shop: go ahead with quote `quote` ([`Quote::id`]; 0 from a client that doesn't
+    /// say which).
+    Accept {
+        request: Id,
+        #[serde(default)]
+        quote: Id,
+    },
     /// Shop → client: the order moved on.
     Stage { request: Id, stage: Stage },
     /// Either way: a message about a request.
@@ -59,12 +68,64 @@ pub enum Message {
 }
 
 impl Message {
+    /// What this message holds that a message may not: every text, list and card has a limit,
+    /// the same ones the organization's document keeps, so that neither a client nor a shop
+    /// can make the other keep more than a letter's worth.
+    pub fn problem(&self) -> Option<&'static str> {
+        let long = |text: &str, max: usize| text.chars().count() > max;
+        match self {
+            Message::Request {
+                parts,
+                notes,
+                snapshot,
+                client,
+                ..
+            } => {
+                if long(notes, crate::MAX_TEXT) {
+                    return Some("the notes are too long");
+                }
+                if snapshot.len() as u64 > crate::MAX_SNAPSHOT {
+                    return Some("the document is too large");
+                }
+                if parts.len() > crate::MAX_REQUEST_PARTS
+                    || parts.iter().any(|(part, _)| {
+                        long(&part.name, crate::MAX_LABEL)
+                            || part
+                                .material
+                                .as_ref()
+                                .is_some_and(|m| long(m, crate::MAX_LABEL))
+                    })
+                {
+                    return Some("too many parts, or a name too long");
+                }
+                (!client.value.valid()).then_some("not something a card may say")
+            }
+            Message::Quote { quote, .. } => (long(&quote.note, crate::MAX_TEXT)
+                || long(&quote.currency, 8)
+                || quote.lines.len() > crate::MAX_REQUEST_PARTS
+                || quote.lines.iter().any(|l| {
+                    long(&l.part, crate::MAX_LABEL) || long(&l.machine, crate::MAX_LABEL)
+                }))
+            .then_some("a quote has that many lines, of that length, at the most"),
+            Message::Decline { reason, .. } => {
+                long(reason, crate::MAX_TEXT).then_some("the reason is too long")
+            }
+            Message::Chat { text, .. } | Message::Review { text, .. } => {
+                long(text, crate::MAX_TEXT).then_some("the message is too long")
+            }
+            Message::Accept { .. }
+            | Message::Stage { .. }
+            | Message::Delivered { .. }
+            | Message::Received { .. } => None,
+        }
+    }
+
     pub fn request(&self) -> Id {
         match self {
             Message::Request { id, .. } => *id,
             Message::Quote { request, .. }
             | Message::Decline { request, .. }
-            | Message::Accept { request }
+            | Message::Accept { request, .. }
             | Message::Stage { request, .. }
             | Message::Chat { request, .. }
             | Message::Delivered { request, .. }
@@ -84,7 +145,7 @@ pub struct Letter {
     pub message: Message,
 }
 
-impl Statement for Letter {
+impl Growing for Letter {
     const CONTEXT: &'static str = "cadrs letter 1";
 }
 
@@ -95,10 +156,28 @@ pub enum Refused {
     Forged,
     /// For another account.
     NotForUs,
+    /// A kind of message a newer cadrs writes: this one can't act on it.
+    Newer,
     /// It doesn't fit what we know (a quote for a request we never sent, an acceptance from
     /// someone other than the client).
     Unexpected(String),
+    /// Larger than a letter may be, or one of its parts is ([`Message::problem`]).
+    TooLarge(&'static str),
 }
+
+/// The most a letter weighs besides the document a request carries, in bytes: whatever a
+/// message holds, and whatever is added to one later, the rest of a letter is never more.
+pub const MAX_LETTER: usize = 128 << 10;
+/// The most devices a letter is sealed for, to be left at mailboxes while they are offline, and
+/// the most mailboxes it is left at.
+pub const MAX_SEALED: usize = 4;
+pub const MAX_MAILBOXES: usize = 2;
+/// The most requests with one shop a client's book learns of from the shop's letters (the ones
+/// another device of the account sent).
+pub const MAX_LEARNED: usize = 20;
+/// The most lines a client keeps of the conversation about one request (as the organization
+/// does: [`crate::MAX_NOTES`]).
+pub const MAX_CHAT_LINES: usize = crate::MAX_NOTES;
 
 /// Signs a letter from the device with `key` and certificate `cert`.
 pub fn write(
@@ -108,16 +187,16 @@ pub fn write(
     message: Message,
     now: u64,
 ) -> Vec<u8> {
-    let letter = Signed::new(
+    let letter = SignedBytes::new(
         key,
-        Letter {
+        &Letter {
             to,
             from: cert.clone(),
             sent: now,
             message,
         },
     );
-    postcard::to_allocvec(&letter).expect("letters encode")
+    cadrs_social::codec::encode(&letter)
 }
 
 /// A letter ready to go: the post for the recipient's devices, and the same post sealed for
@@ -140,9 +219,16 @@ pub fn compose(
 ) -> Composed {
     let letter = write(key, cert, to.account, message, now);
     let post = cadrs_social::post::Post::Letter(letter).encode();
-    let envelopes = to
-        .devices
-        .iter()
+    // For the mailboxes, when the card names any: sealed for a handful of the devices it names
+    // (each once, the first ones), whatever it names. Each envelope is a copy of the letter.
+    let mut devices: Vec<&cadrs_social::keys::DeviceId> = Vec::new();
+    for device in &to.devices {
+        if devices.len() < MAX_SEALED && !devices.contains(&device) && !to.mailboxes.is_empty() {
+            devices.push(device);
+        }
+    }
+    let envelopes = devices
+        .into_iter()
         .filter_map(|d| cadrs_social::seal::seal(d, &post).ok())
         .map(|sealed| cadrs_social::mailbox::envelope(key, to.account, sealed, now, KEEP_FOR))
         .collect();
@@ -152,8 +238,16 @@ pub fn compose(
 /// Reads a letter: checks both signatures, and that it is for one of `ours`. Returns the
 /// letter and the account it is from.
 pub fn read(bytes: &[u8], ours: &[AccountId]) -> Result<(Letter, AccountId), Refused> {
-    let letter: Signed<Letter> = postcard::from_bytes(bytes).map_err(|_| Refused::Forged)?;
-    let value = letter.verify().map_err(|_| Refused::Forged)?;
+    let letter: SignedBytes<Letter> =
+        cadrs_social::codec::decode(bytes).map_err(|_| Refused::Forged)?;
+    let signed = letter.verify().map_err(|_| Refused::Forged)?;
+    let value: Letter = cadrs_social::codec::decode(signed).map_err(|e| {
+        if e.is_newer() {
+            Refused::Newer
+        } else {
+            Refused::Forged
+        }
+    })?;
     let cert = value.from.verify().map_err(|_| Refused::Forged)?;
     if value.from.signer != cert.account || cert.device != letter.signer {
         return Err(Refused::Forged);
@@ -161,11 +255,71 @@ pub fn read(bytes: &[u8], ours: &[AccountId]) -> Result<(Letter, AccountId), Ref
     if !ours.contains(&value.to) {
         return Err(Refused::NotForUs);
     }
-    Ok((value.clone(), cert.account))
+    // No larger than a letter may be, whoever it is from and whatever is in it: the document a
+    // request carries has its own limit, and all the rest together has this one.
+    let document = match &value.message {
+        Message::Request { snapshot, .. } => snapshot.len(),
+        _ => 0,
+    };
+    if bytes.len() > document.saturating_add(MAX_LETTER) {
+        return Err(Refused::TooLarge("a letter"));
+    }
+    if let Some(why) = value.message.problem() {
+        return Err(Refused::TooLarge(why));
+    }
+    let account = cert.account;
+    Ok((value, account))
 }
 
-/// The operation a letter to a shop makes on its document, given the document as it is.
-pub fn shop_op(org: &Org, from: AccountId, message: &Message) -> Result<Op, Refused> {
+/// Why a request for a quote wouldn't be taken by any shop, as far as its sender can tell before
+/// sending it: something in it is over its limit ([`Message::problem`]), or it is more, as a
+/// shop writes it into its document, than a request may be ([`crate::MAX_REQUEST`]). (What only
+/// the shop knows, such as how many requests wait there, it says when it refuses.)
+pub fn request_problem(message: &Message) -> Option<&'static str> {
+    if let Some(why) = message.problem() {
+        return Some(why);
+    }
+    let Message::Request {
+        id,
+        parts,
+        notes,
+        deadline,
+        snapshot,
+        client,
+    } = message
+    else {
+        return None;
+    };
+    let written = Op::Request {
+        id: *id,
+        client: client.value.account,
+        parts: parts.clone(),
+        notes: notes.clone(),
+        snapshot: [0; 32],
+        snapshot_len: snapshot.len() as u64,
+        deadline: *deadline,
+        card: Some(client.clone()),
+    };
+    (written.encode().len() > crate::MAX_REQUEST)
+        .then_some("the request is too large: fewer parts, or shorter names and notes")
+}
+
+impl Refused {
+    /// Why, in words for whoever sent it.
+    pub fn reason(&self) -> String {
+        match self {
+            Refused::Forged => "not a letter, or its signatures don't hold".into(),
+            Refused::NotForUs => "not for this account".into(),
+            Refused::Newer => "written by a newer cadrs than this one".into(),
+            Refused::Unexpected(why) => why.clone(),
+            Refused::TooLarge(what) => format!("too large: {what}"),
+        }
+    }
+}
+
+/// The operation a letter to a shop makes on its document, given the document as it is. `sent`
+/// is when the letter says it was written (an acceptance counts from then).
+pub fn shop_op(org: &Org, from: AccountId, message: &Message, sent: u64) -> Result<Op, Refused> {
     let unexpected = |why: &str| Err(Refused::Unexpected(why.into()));
     match message {
         Message::Request {
@@ -188,12 +342,17 @@ pub fn shop_op(org: &Org, from: AccountId, message: &Message) -> Result<Op, Refu
                 parts: parts.clone(),
                 notes: notes.clone(),
                 snapshot: *blake3::hash(snapshot).as_bytes(),
+                snapshot_len: snapshot.len() as u64,
                 deadline: *deadline,
                 card: Some(client.clone()),
             })
         }
-        Message::Accept { request } => match org.requests.get(request) {
-            Some(r) if r.client == from => Ok(Op::Accept { request: *request }),
+        Message::Accept { request, quote } => match org.requests.get(request) {
+            Some(r) if r.client == from => Ok(Op::Accept {
+                request: *request,
+                quote: *quote,
+                at: sent,
+            }),
             Some(_) => unexpected("only the client accepts a quote"),
             None => unexpected("no such request"),
         },
@@ -262,6 +421,16 @@ pub struct Sent {
     /// The client's review, once given.
     #[serde(default)]
     pub review: Option<(u8, String)>,
+}
+
+impl Sent {
+    /// Whether the conversation has room for one more message from that side: so many lines,
+    /// and so much text, each side, as the organization's document keeps ([`crate::MAX_NOTES`]).
+    fn room_for(&self, from_shop: bool, text: &str) -> bool {
+        let theirs = || self.chat.iter().filter(|(shop, _, _)| *shop == from_shop);
+        let said: usize = theirs().map(|(_, text, _)| text.len()).sum();
+        theirs().count() < MAX_CHAT_LINES && said + text.len() <= crate::MAX_NOTE_BYTES
+    }
 }
 
 /// A delivery's receipt, as the client holds it.
@@ -350,13 +519,18 @@ impl ClientBook {
         shop_name: &str,
         message: &Message,
         now: u64,
+        known_shop: bool,
     ) -> Result<News, Refused> {
         let id = message.request();
         let learns = matches!(
             message,
             Message::Quote { .. } | Message::Decline { .. } | Message::Stage { .. }
         );
-        if learns && !self.sent.contains_key(&id) {
+        // Only from a shop among the person's contacts (a request goes to a contact, so that
+        // is where another device of theirs sent it), and only so many: a stranger's letter
+        // about a request nobody sent is refused, not kept.
+        let room = self.sent.values().filter(|s| s.shop == from).count() < MAX_LEARNED;
+        if learns && known_shop && room && !self.sent.contains_key(&id) {
             let parts = match message {
                 Message::Quote { quote, .. } => quote
                     .lines
@@ -419,11 +593,21 @@ impl ClientBook {
                 })
             }
             Message::Decline { reason, .. } => {
+                if !matches!(sent.stage, Stage::Requested | Stage::Quoted) {
+                    return Err(Refused::Unexpected("declined too late".into()));
+                }
                 sent.stage = Stage::Declined;
                 sent.decline_reason = Some(reason.clone());
                 Ok(News::Declined { shop })
             }
             Message::Stage { stage, .. } => {
+                // An order only moves on: news that arrives late, or twice, changes nothing.
+                let moves_on = matches!(stage, Stage::InProduction | Stage::Ready)
+                    && sent.stage != Stage::Declined
+                    && *stage > sent.stage;
+                if !moves_on {
+                    return Err(Refused::Unexpected("the order is further along".into()));
+                }
                 sent.stage = *stage;
                 Ok(News::Stage {
                     shop,
@@ -431,6 +615,11 @@ impl ClientBook {
                 })
             }
             Message::Chat { text, .. } => {
+                if !sent.room_for(true, text) {
+                    return Err(Refused::Unexpected(
+                        "that many messages about this request are enough".into(),
+                    ));
+                }
                 sent.chat.push((true, text.clone(), now));
                 Ok(News::Chat {
                     shop,
@@ -464,8 +653,15 @@ impl ClientBook {
             .sent
             .get_mut(&id)
             .ok_or_else(|| Refused::Unexpected("no such request".into()))?;
-        if text.trim().is_empty() {
-            return Err(Refused::Unexpected("an empty message".into()));
+        if text.trim().is_empty() || text.chars().count() > crate::MAX_TEXT {
+            return Err(Refused::Unexpected(
+                "a message has some words, and at most 4000 characters".into(),
+            ));
+        }
+        if !sent.room_for(false, text) {
+            return Err(Refused::Unexpected(
+                "that many messages about this request are enough".into(),
+            ));
         }
         sent.chat.push((false, text.to_owned(), now));
         Ok(Message::Chat {
@@ -524,11 +720,12 @@ impl ClientBook {
             .sent
             .get_mut(&id)
             .ok_or_else(|| Refused::Unexpected("no such request".into()))?;
-        if sent.stage != Stage::Quoted {
+        let Some(quote) = sent.quote.as_ref().filter(|_| sent.stage == Stage::Quoted) else {
             return Err(Refused::Unexpected("there is no quote to accept".into()));
-        }
+        };
+        let quote = quote.id;
         sent.stage = Stage::Accepted;
-        Ok(Message::Accept { request: id })
+        Ok(Message::Accept { request: id, quote })
     }
 }
 
@@ -564,6 +761,17 @@ mod tests {
             "Cape Waterjet",
             1_000,
         );
+        shop.write(
+            crate::Op::EditProfile(crate::profile::ProfileEdit {
+                offers: Some(crate::Offers {
+                    manufacturing: true,
+                    designs: false,
+                }),
+                ..Default::default()
+            }),
+            1_500,
+        )
+        .unwrap();
 
         // The designer sends a request for a quote to the shop's account.
         let id = crate::new_id();
@@ -616,18 +824,19 @@ mod tests {
             read(&bytes, &[designer.account.id()]),
             Err(Refused::NotForUs)
         );
-        let op = shop_op(shop.org(), from, &letter.message).unwrap();
+        let op = shop_op(shop.org(), from, &letter.message, letter.sent).unwrap();
         shop.write(op, 3_000).unwrap();
         assert_eq!(shop.org().requests[&id].stage, Stage::Requested);
         // The same request again is refused.
-        assert!(shop_op(shop.org(), from, &letter.message).is_err());
+        assert!(shop_op(shop.org(), from, &letter.message, letter.sent).is_err());
 
         // The shop quotes; the designer's book shows it.
         let quote = Quote {
+            id: 77,
             total: Money::from_major(724.0),
             currency: "ZAR".into(),
             lines: vec![],
-            valid_until: 0,
+            valid_until: 1_000_000,
             note: String::new(),
         };
         let reply = write(
@@ -679,7 +888,7 @@ mod tests {
             6_000,
         );
         let (letter, from) = read(&bytes, &[org_account.id()]).unwrap();
-        let op = shop_op(shop.org(), from, &letter.message).unwrap();
+        let op = shop_op(shop.org(), from, &letter.message, letter.sent).unwrap();
         shop.write(op, 6_000).unwrap();
         assert_eq!(shop.org().requests[&id].stage, Stage::Accepted);
 
@@ -687,7 +896,7 @@ mod tests {
         let say = book.say(id, "Can you deburr them?", 7_000).unwrap();
         let bytes = write(&designer.key, &designer.cert, org_account.id(), say, 7_000);
         let (letter, from) = read(&bytes, &[org_account.id()]).unwrap();
-        let op = shop_op(shop.org(), from, &letter.message).unwrap();
+        let op = shop_op(shop.org(), from, &letter.message, letter.sent).unwrap();
         shop.write(op, 7_000).unwrap();
         assert_eq!(
             shop.org().requests[&id].chat,
@@ -717,11 +926,11 @@ mod tests {
         );
         assert!(book.review(id, 5, "early").is_err(), "not signed for yet");
         let received = book.sign_delivery(id, designer.account.key()).unwrap();
-        let op = shop_op(shop.org(), designer.account.id(), &received).unwrap();
+        let op = shop_op(shop.org(), designer.account.id(), &received, 9_000).unwrap();
         shop.write(op, 9_000).unwrap();
         assert_eq!(shop.org().requests[&id].stage, Stage::Completed);
         let review = book.review(id, 5, "Clean edges").unwrap();
-        let op = shop_op(shop.org(), designer.account.id(), &review).unwrap();
+        let op = shop_op(shop.org(), designer.account.id(), &review, 9_500).unwrap();
         shop.write(op, 9_500).unwrap();
         assert_eq!(shop.org().rating(), Some((5.0, 1)));
         assert!(book.review(id, 4, "again").is_err(), "once");
@@ -734,11 +943,14 @@ mod tests {
             quote: shop.org().requests[&id].quote.clone().unwrap(),
         };
         assert!(phone.receive(org_account.id(), &quote, 10_000).is_err());
-        assert!(
-            phone
-                .receive_learning(org_account.id(), "Cape Waterjet", &quote, 10_000)
-                .is_ok()
-        );
+        // Only from a shop among its contacts: a stranger's quote for a request nobody sent
+        // isn't kept.
+        let learn = |book: &mut ClientBook, known| {
+            book.receive_learning(org_account.id(), "Cape Waterjet", &quote, 10_000, known)
+        };
+        assert!(learn(&mut phone, false).is_err());
+        assert!(phone.sent.is_empty());
+        assert!(learn(&mut phone, true).is_ok());
         assert_eq!(phone.sent[&id].stage, Stage::Quoted);
         assert!(phone.accept(id).is_ok());
         phone.say(id, "From the phone", 11_000).unwrap();
@@ -768,10 +980,248 @@ mod tests {
             &a.key,
             &b.cert,
             a.account.id(),
-            Message::Accept { request: 1 },
+            Message::Accept {
+                request: 1,
+                quote: 0,
+            },
             0,
         );
         assert_eq!(read(&bytes, &[a.account.id()]), Err(Refused::Forged));
         assert_eq!(read(b"junk", &[a.account.id()]), Err(Refused::Forged));
+    }
+
+    /// A shop with a request from `designer`, quoted with `quote`: (shop, request id, book).
+    fn quoted(
+        designer: &Side,
+        owner: &Side,
+        quote: Quote,
+    ) -> (Session, cadrs_social::keys::Account, Id, ClientBook) {
+        let (mut shop, org_account) = Session::found(
+            owner.key.clone(),
+            owner.cert.clone(),
+            "Cape Waterjet",
+            1_000,
+        );
+        shop.write(
+            crate::Op::EditProfile(crate::profile::ProfileEdit {
+                offers: Some(crate::Offers {
+                    manufacturing: true,
+                    designs: false,
+                }),
+                ..Default::default()
+            }),
+            1_500,
+        )
+        .unwrap();
+        let id = crate::new_id();
+        let card = Card {
+            account: designer.account.id(),
+            kind: Kind::Person,
+            name: "Thandi".into(),
+            devices: vec![designer.key.public()],
+            mailboxes: vec![],
+            issued: 0,
+        }
+        .sign(designer.account.key());
+        let request = Message::Request {
+            id,
+            parts: vec![(bracket(), 6)],
+            notes: String::new(),
+            deadline: None,
+            snapshot: b"packed document".to_vec(),
+            client: card,
+        };
+        let op = shop_op(shop.org(), designer.account.id(), &request, 2_000).unwrap();
+        shop.write(op, 2_000).unwrap();
+        // The shop keeps the document's hash and size: the bytes go in a blob.
+        assert_eq!(
+            shop.org().requests[&id].snapshot_blob(),
+            Some(crate::BlobRef::of(b"packed document"))
+        );
+        assert_eq!(shop.org().requests[&id].number, 1);
+        shop.write(
+            Op::Quote {
+                request: id,
+                quote: quote.clone(),
+            },
+            3_000,
+        )
+        .unwrap();
+        let mut book = ClientBook::default();
+        book.record(
+            id,
+            Sent {
+                shop: org_account.id(),
+                shop_name: "Cape Waterjet".into(),
+                parts: vec![(bracket(), 6)],
+                notes: String::new(),
+                stage: Stage::Requested,
+                quote: None,
+                decline_reason: None,
+                chat: vec![],
+                sent: 2_000,
+                delivery: None,
+                review: None,
+            },
+        );
+        book.receive(
+            org_account.id(),
+            &Message::Quote { request: id, quote },
+            3_000,
+        )
+        .unwrap();
+        (shop, org_account, id, book)
+    }
+
+    fn a_quote(id: Id, valid_until: u64) -> Quote {
+        Quote {
+            id,
+            total: Money::from_major(724.0),
+            currency: "ZAR".into(),
+            lines: vec![],
+            valid_until,
+            note: String::new(),
+        }
+    }
+
+    /// An acceptance is of one quote: if the shop replaced it meanwhile, or it had run out when
+    /// the client accepted, the order isn't made.
+    #[test]
+    fn an_acceptance_names_its_quote() {
+        let (designer, owner) = (side(), side());
+        let (mut shop, _, id, mut book) = quoted(&designer, &owner, a_quote(1, 10_000));
+        let accept = book.accept(id).unwrap();
+        assert_eq!(
+            accept,
+            Message::Accept {
+                request: id,
+                quote: 1
+            }
+        );
+        // Meanwhile the shop quoted again (dearer): the acceptance of the first doesn't apply.
+        shop.write(
+            Op::Quote {
+                request: id,
+                quote: a_quote(2, 10_000),
+            },
+            4_000,
+        )
+        .unwrap();
+        let op = shop_op(shop.org(), designer.account.id(), &accept, 5_000).unwrap();
+        let refused = shop.write(op, 5_000).unwrap_err();
+        assert!(refused.contains("replaced"), "{refused}");
+        assert_eq!(shop.org().requests[&id].stage, Stage::Quoted);
+        // Accepting the one that stands, in time, does.
+        let second = Message::Accept {
+            request: id,
+            quote: 2,
+        };
+        let op = shop_op(shop.org(), designer.account.id(), &second, 6_000).unwrap();
+        shop.write(op, 6_000).unwrap();
+        assert_eq!(shop.org().requests[&id].stage, Stage::Accepted);
+
+        // A quote that had run out when the client accepted isn't an order...
+        let (mut shop, _, id, mut book) = quoted(&designer, &owner, a_quote(1, 10_000));
+        let accept = book.accept(id).unwrap();
+        let late = shop_op(shop.org(), designer.account.id(), &accept, 10_001).unwrap();
+        let refused = shop.write(late, 10_500).unwrap_err();
+        assert!(refused.contains("run out"), "{refused}");
+        // ...but one accepted in time is, even if the shop reads the letter later (it waited
+        // in a mailbox).
+        let in_time = shop_op(shop.org(), designer.account.id(), &accept, 9_000).unwrap();
+        shop.write(in_time, 50_000).unwrap();
+        assert_eq!(shop.org().requests[&id].stage, Stage::Accepted);
+    }
+
+    /// News of an order only moves it on: a stage that arrives late or twice, or a decline
+    /// after acceptance, changes nothing.
+    #[test]
+    fn an_order_only_moves_on() {
+        let (designer, owner) = (side(), side());
+        let (_, org, id, mut book) = quoted(&designer, &owner, a_quote(1, 10_000));
+        let shop = org.id();
+        book.accept(id).unwrap();
+        let stage = |stage| Message::Stage { request: id, stage };
+        assert!(book.receive(shop, &stage(Stage::Ready), 5_000).is_ok());
+        assert!(
+            book.receive(shop, &stage(Stage::InProduction), 5_100)
+                .is_err()
+        );
+        assert!(book.receive(shop, &stage(Stage::Requested), 5_200).is_err());
+        let decline = Message::Decline {
+            request: id,
+            reason: "changed our mind".into(),
+        };
+        assert!(book.receive(shop, &decline, 5_300).is_err());
+        assert_eq!(book.sent[&id].stage, Stage::Ready);
+    }
+
+    /// A kind of message this cadrs doesn't know (a newer one's) is told apart from a forgery,
+    /// and a letter with fields it doesn't know is read all the same.
+    #[test]
+    fn a_newer_cadrs_letters() {
+        #[derive(Serialize, Deserialize)]
+        enum FutureMessage {
+            Chat {
+                request: Id,
+                text: String,
+                /// A field this version has never heard of.
+                attachment: Option<[u8; 32]>,
+            },
+            Invoice {
+                request: Id,
+            },
+        }
+        #[derive(Serialize, Deserialize)]
+        struct FutureLetter {
+            to: AccountId,
+            from: Signed<DeviceCert>,
+            sent: u64,
+            message: FutureMessage,
+            priority: u8,
+        }
+        impl Growing for FutureLetter {
+            const CONTEXT: &'static str = <Letter as Growing>::CONTEXT;
+        }
+        let (shop, client) = (side(), side());
+        let letter = |message| {
+            cadrs_social::codec::encode(&SignedBytes::new(
+                &shop.key,
+                &FutureLetter {
+                    to: client.account.id(),
+                    from: shop.cert.clone(),
+                    sent: 1,
+                    message,
+                    priority: 3,
+                },
+            ))
+        };
+        let grown = letter(FutureMessage::Chat {
+            request: 5,
+            text: "hello".into(),
+            attachment: Some([1; 32]),
+        });
+        let (read_back, from) = read(&grown, &[client.account.id()]).unwrap();
+        assert_eq!(from, shop.account.id());
+        assert_eq!(
+            read_back.message,
+            Message::Chat {
+                request: 5,
+                text: "hello".into()
+            }
+        );
+        let unknown = letter(FutureMessage::Invoice { request: 5 });
+        assert_eq!(
+            read(&unknown, &[client.account.id()]).unwrap_err(),
+            Refused::Newer
+        );
+        // Tampered with, it is a forgery whatever it says.
+        let mut tampered = grown.clone();
+        let n = tampered.len();
+        tampered[n / 2] ^= 1;
+        assert_eq!(
+            read(&tampered, &[client.account.id()]).unwrap_err(),
+            Refused::Forged
+        );
     }
 }

@@ -1,94 +1,252 @@
-//! Organization documents (shops): their own screen, with tabs, instead of the CAD view.
+//! Organizations (shops): their own screen, instead of the CAD view.
 //!
-//! An organization document is listed on the documents page like any document (its
-//! `document.ron` has no tabs, and its metadata's `organization` marks it); its content is the
-//! signed log `org.log` beside it (`cadrs_org`). Opening one shows [`AppState::Organization`]:
-//! the top bar, the organization's name, and tabs for its overview, members, machines, stock
-//! and requests for quotes. Every change goes through [`cadrs_org::session::Session::write`],
-//! which refuses what wouldn't apply, then the log is saved.
+//! An organization is kept like a document (its `document.ron` has no tabs, and its metadata's
+//! `organization` marks it; its content is the signed log `org.log` beside it, `cadrs_org`, and
+//! its logo and the documents clients sent in `blobs/`), but it isn't one of the user's
+//! documents: it is opened from the account menu ([`crate::identity`]), where the user's
+//! organizations are listed and new ones are made ([`crate::org_create`]).
+//!
+//! Opening one shows [`AppState::Organization`]: the top bar, and under it the organization's
+//! modules in a side navigation (in groups, as an ERP's are: Sales, Production, Inventory,
+//! Quality, Organization) with the chosen module beside it. Every change goes through
+//! [`write`] ([`cadrs_org::session::Session::write`] refuses what wouldn't apply), then the log
+//! is saved, the listing follows and the other members' devices hear of it.
 
 use std::path::PathBuf;
 
+use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
 use bevy::text::{EditableText, FontWeight};
 use bevy::ui_widgets::{Activate, ScrollArea, observe};
 use cadrs_core::library::OrgRef;
 use cadrs_core::{Document, DocumentFile, DocumentId, DocumentMeta};
 use cadrs_org::capability::{MachineCaps, MaterialLimit, Process};
+use cadrs_org::quality::IssueStatus;
 use cadrs_org::quote::{Money, RateCard};
 use cadrs_org::session::Session;
-use cadrs_org::{Material, Op, Profile, Role, Stage, new_id};
+use cadrs_org::{Location, Logo, Material, Offers, Op, Profile, Role, Stage, new_id};
 use cadrs_social::keys::PublicKey;
 use cadrs_social::keystore::DeviceKeys;
-use cadrs_social::log::LogId;
-use cadrs_social::place::{Place, Region};
-use cadrs_ui::Button;
 use cadrs_ui::dialog::{Dialog, DialogClose};
-use cadrs_ui::i18n::tr;
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::input::{TextInput, TextInputField};
-use cadrs_ui::switch::{Switch, SwitchState};
-use cadrs_ui::tab_strip::{TabStrip, TabStripSelect, TabStripState};
+use cadrs_ui::switch::SwitchState;
+use cadrs_ui::tab_strip::{TabStrip, TabStripState};
 use cadrs_ui::theme::Theme;
+use cadrs_ui::{Button, Column, SideNav, SideNavSelect, TableHeader, TableRow};
 
 use crate::{AppState, DocumentStore, UserProfile};
+
+mod machines;
+mod members;
+mod pricing;
+mod requests;
+
+pub(crate) use machines::process_name;
+use machines::*;
+use members::*;
+use pricing::*;
+use requests::*;
+pub use requests::{advance, deliver, instant_quote};
+pub(crate) use requests::{request_number, stage_key, status_tag, tell_client};
 
 pub struct OrganizationPlugin;
 
 impl Plugin for OrganizationPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(AppState::Organization), spawn_screen)
+        app.init_resource::<crate::org_logo::LogoImages>()
+            .init_resource::<OrgForm>()
+            .add_observer(machines::on_process)
+            .add_observer(machines::on_material_picked)
+            .add_systems(OnEnter(AppState::Organization), spawn_screen)
             .add_systems(
                 Update,
-                refresh_body.run_if(in_state(AppState::Organization)),
+                (track_form, refresh_body)
+                    .chain()
+                    .run_if(in_state(AppState::Organization)),
+            )
+            .add_systems(
+                Update,
+                sweep_now_and_then.run_if(in_state(AppState::Organization)),
             )
             .add_systems(OnExit(AppState::Organization), |mut c: Commands| {
                 c.remove_resource::<OpenOrg>()
             });
+        crate::org_create::plugin(app);
     }
 }
 
-/// The organization's tabs.
+/// The organization's modules.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum OrgTab {
     #[default]
     Overview,
-    Members,
+    Requests,
+    Clients,
+    Jobs,
     Machines,
     Stock,
-    Prices,
-    Requests,
-    Jobs,
-    Clients,
     Parts,
+    Issues,
+    Profile,
+    Locations,
+    Members,
+    Prices,
+    Wallet,
     Chat,
 }
 
-const TABS: [(OrgTab, &str); 10] = [
-    (OrgTab::Overview, "org-tab-overview"),
-    (OrgTab::Members, "org-tab-members"),
-    (OrgTab::Machines, "org-tab-machines"),
-    (OrgTab::Stock, "org-tab-stock"),
-    (OrgTab::Prices, "org-tab-prices"),
-    (OrgTab::Requests, "org-tab-requests"),
-    (OrgTab::Jobs, "org-tab-jobs"),
-    (OrgTab::Clients, "org-tab-clients"),
-    (OrgTab::Parts, "org-tab-parts"),
-    (OrgTab::Chat, "org-tab-chat"),
+/// A module of the side navigation: its key (the item is `org-nav-<key>`), the catalog key of
+/// its name, its icon, and the catalog key of the group it opens (the first of each group).
+pub(crate) struct Module {
+    pub tab: OrgTab,
+    pub key: &'static str,
+    pub label: &'static str,
+    pub icon: &'static str,
+    pub group: Option<&'static str>,
+}
+
+/// The modules in the navigation's order. The groups follow what an ERP calls them, so that as
+/// modules are added (purchasing, shipping, inspections) each has a place to go.
+pub(crate) const MODULES: [Module; 14] = [
+    Module {
+        tab: OrgTab::Overview,
+        key: "overview",
+        label: "org-tab-overview",
+        icon: "dashboard",
+        group: None,
+    },
+    Module {
+        tab: OrgTab::Requests,
+        key: "requests",
+        label: "org-tab-requests",
+        icon: "receipt",
+        group: Some("org-group-sales"),
+    },
+    Module {
+        tab: OrgTab::Clients,
+        key: "clients",
+        label: "org-tab-clients",
+        icon: "users",
+        group: None,
+    },
+    Module {
+        tab: OrgTab::Jobs,
+        key: "jobs",
+        label: "org-tab-jobs",
+        icon: "job-schedule",
+        group: Some("org-group-production"),
+    },
+    Module {
+        tab: OrgTab::Machines,
+        key: "machines",
+        label: "org-tab-machines",
+        icon: "shop-machines",
+        group: None,
+    },
+    Module {
+        tab: OrgTab::Stock,
+        key: "stock",
+        label: "org-tab-stock",
+        icon: "stock",
+        group: Some("org-group-inventory"),
+    },
+    Module {
+        tab: OrgTab::Parts,
+        key: "parts",
+        label: "org-tab-parts",
+        icon: "part",
+        group: None,
+    },
+    Module {
+        tab: OrgTab::Issues,
+        key: "issues",
+        label: "org-tab-issues",
+        icon: "quality-issue",
+        group: Some("org-group-quality"),
+    },
+    Module {
+        tab: OrgTab::Profile,
+        key: "profile",
+        label: "org-tab-profile",
+        icon: "shop",
+        group: Some("org-group-organization"),
+    },
+    Module {
+        tab: OrgTab::Locations,
+        key: "locations",
+        label: "org-tab-locations",
+        icon: "map-pin",
+        group: None,
+    },
+    Module {
+        tab: OrgTab::Members,
+        key: "members",
+        label: "org-tab-members",
+        icon: "user",
+        group: None,
+    },
+    Module {
+        tab: OrgTab::Prices,
+        key: "prices",
+        label: "org-tab-prices",
+        icon: "price-list",
+        group: None,
+    },
+    Module {
+        tab: OrgTab::Wallet,
+        key: "wallet",
+        label: "org-tab-wallet",
+        icon: "wallet",
+        group: None,
+    },
+    Module {
+        tab: OrgTab::Chat,
+        key: "chat",
+        label: "org-tab-chat",
+        icon: "chat",
+        group: None,
+    },
 ];
 
-/// The open organization document.
+/// The open organization.
 #[derive(Resource)]
 pub struct OpenOrg {
     pub id: DocumentId,
     pub session: Session,
     log_path: PathBuf,
     pub tab: OrgTab,
-    /// The channel the Chat tab shows.
+    /// The channel the Chat module shows.
     pub channel: String,
+    /// Counts up when what is shown must be made again whatever the person is doing: a change
+    /// they made themselves. (A change from another device waits while they type.)
+    pub nonce: u32,
+}
+
+impl OpenOrg {
+    /// Shows module `tab`.
+    pub fn show(&mut self, tab: OrgTab) {
+        if self.tab != tab {
+            self.tab = tab;
+            self.nonce += 1;
+        }
+    }
+
+    /// The folder its log and blobs are in.
+    pub fn dir(&self) -> PathBuf {
+        self.log_path
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Component)]
 struct OrgBody;
+
+/// The navigation's holder, made again as its counts change.
+#[derive(Component)]
+struct OrgNav;
 
 #[derive(Component)]
 pub(crate) struct OrgDialog;
@@ -112,21 +270,84 @@ fn device_keys(world: &World) -> Result<(DeviceKeys, PathBuf), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Creates an organization document called `name` and opens it.
-pub fn create(world: &mut World, name: &str) {
-    let name = match name.trim() {
-        "" => tr("org-untitled"),
-        n => n.to_owned(),
+/// What a new organization starts with ([`crate::org_create`] asks for it).
+#[derive(Clone, Debug)]
+pub struct NewOrg {
+    pub name: String,
+    pub tagline: String,
+    pub offers: Offers,
+    pub email: String,
+    /// Its logo: the 512 px picture and the 128 px one.
+    pub logo: crate::org_logo::Processed,
+    /// Where it makes things, when it manufactures.
+    pub location: Option<Location>,
+}
+
+/// Writes `bytes` so that only this user reads them (a key): 0600 where there are such things.
+fn write_secret(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        cadrs_fs::create_dir_all(dir)?;
+    }
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(bytes)
+    }
+    #[cfg(not(unix))]
+    {
+        cadrs_fs::write(path, bytes)
+    }
+}
+
+/// Creates the organization `new` describes and opens it. False (with a toast saying why)
+/// when it couldn't be made; nothing is left behind then.
+pub fn create(world: &mut World, new: NewOrg) -> bool {
+    let fail = |world: &mut World, why: String| {
+        crate::linked::toast(world, format!("{}: {why}", tr("org-cannot-create")));
+        false
     };
     let (keys, key_path) = match device_keys(world) {
         Ok(k) => k,
-        Err(why) => {
-            crate::linked::toast(world, format!("{}: {why}", tr("org-cannot-create")));
-            return;
-        }
+        Err(why) => return fail(world, why),
     };
     let now = cadrs_social::wall_millis();
-    let (session, org_account) = Session::found(keys.device.clone(), keys.cert.clone(), &name, now);
+    let name = new.name.trim().to_owned();
+    let (mut session, org_account) =
+        Session::found(keys.device.clone(), keys.cert.clone(), &name, now);
+    // Everything it starts with, tried before anything is written to disk.
+    let logo = Logo {
+        full: cadrs_org::BlobRef::of(&new.logo.full),
+        thumb: cadrs_org::BlobRef::of(&new.logo.thumb),
+    };
+    let mut ops = Vec::new();
+    if let Some(location) = new.location.clone() {
+        ops.push(Op::SetLocation {
+            id: new_id(),
+            location: Some(location),
+        });
+    }
+    ops.push(Op::SetProfile(Profile {
+        name: name.clone(),
+        tagline: new.tagline.trim().to_owned(),
+        about: String::new(),
+        logo: Some(logo),
+        offers: new.offers,
+        email: new.email.trim().to_owned(),
+        website: None,
+        listed: false,
+    }));
+    for op in ops {
+        if let Err(why) = session.write(op, cadrs_social::wall_millis()) {
+            return fail(world, why);
+        }
+    }
     let store = world.resource::<DocumentStore>().0.clone();
     let user = world.resource::<UserProfile>().id.clone();
     let doc = Document::empty(name.clone());
@@ -136,40 +357,55 @@ pub fn create(world: &mut World, name: &str) {
         log: session.log().id().0,
     });
     if let Err(e) = store.create(&doc, &meta) {
-        crate::linked::toast(world, format!("{}: {e}", tr("org-cannot-create")));
-        return;
+        return fail(world, e.to_string());
     }
-    // The organization's own key: kept beside the identity's keys.
+    let dir = store.doc_dir(doc.id);
+    // The organization's own key (beside the identity's keys), its logo and its log. Without
+    // any of them it isn't one: undo what was made.
     let (org_key, _) = crate::social::org_files(&key_path, &org_account.id());
-    let saved = cadrs_fs::create_dir_all(org_key.parent().expect("a folder"))
-        .and_then(|()| cadrs_fs::write(&org_key, org_account.key().to_bytes()));
-    if let Err(e) = saved {
-        warn!("cannot keep the organization's key: {e}");
-    }
-    draw_picture(world, doc.id, &session.org().profile);
-    let log_path = cadrs_org::file::path(&store.doc_dir(doc.id));
-    if let Err(e) = cadrs_org::file::save(&log_path, session.log()) {
-        crate::linked::toast(world, format!("{}: {e}", tr("org-cannot-create")));
-        return;
+    let log_path = cadrs_org::file::path(&dir);
+    let kept = write_secret(&org_key, &org_account.key().to_bytes())
+        .and_then(|()| cadrs_org::blob::put(&dir, &new.logo.full).map(|_| ()))
+        .and_then(|()| cadrs_org::blob::put(&dir, &new.logo.thumb).map(|_| ()))
+        .and_then(|()| cadrs_org::file::save(&log_path, session.log()));
+    if let Err(e) = kept {
+        let _ = cadrs_fs::remove_file(&org_key);
+        let _ = cadrs_fs::remove_dir_all(&dir);
+        return fail(world, e.to_string());
     }
     let log_id = session.log().id();
     crate::social::add_org(world, doc.id, &name, org_account.id(), log_id, Vec::new());
+    crate::social::org_changed(world, doc.id, session.org());
     world.insert_resource(OpenOrg {
         id: doc.id,
         session,
         log_path,
         tab: OrgTab::Overview,
         channel: "general".into(),
+        nonce: 0,
     });
     world
         .resource_mut::<NextState<AppState>>()
         .set(AppState::Organization);
+    true
 }
 
-/// Opens a stored organization document (`file`'s metadata marks it one).
+/// Opens the organization kept as document `id` (from the account menu).
+pub fn open_by_id(world: &mut World, id: DocumentId) {
+    let store = world.resource::<DocumentStore>().0.clone();
+    match store.load(id) {
+        Ok(file) => open(world, &file),
+        Err(e) => crate::linked::toast(world, format!("{}: {e}", tr("org-cannot-open"))),
+    }
+}
+
+/// Opens a stored organization (`file`'s metadata marks it one).
 pub fn open(world: &mut World, file: &DocumentFile) {
     let store = world.resource::<DocumentStore>().0.clone();
     let id = file.document.id;
+    let Some(org) = file.meta.organization else {
+        return;
+    };
     let log_path = cadrs_org::file::path(&store.doc_dir(id));
     let log = match cadrs_org::file::load(&log_path) {
         Ok((log, bad)) => {
@@ -178,12 +414,15 @@ pub fn open(world: &mut World, file: &DocumentFile) {
             }
             log
         }
+        // Just joined, nothing synced yet: empty.
+        Err(_) if !cadrs_fs::is_file(&log_path) => {
+            cadrs_social::log::Log::new(cadrs_social::log::LogId(org.log))
+        }
+        // There, but not readable: opening it would end in saving an empty log over it.
         Err(e) => {
-            let Some(org) = file.meta.organization else {
-                return;
-            };
-            warn!("cannot read {}: {e}; starting empty", log_path.display());
-            cadrs_social::log::Log::new(LogId(org.log))
+            warn!("cannot read {}: {e}", log_path.display());
+            crate::linked::toast(world, format!("{}: {e}", tr("org-cannot-open")));
+            return;
         }
     };
     let (keys, _) = match device_keys(world) {
@@ -200,77 +439,232 @@ pub fn open(world: &mut World, file: &DocumentFile) {
         log_path,
         tab: OrgTab::Overview,
         channel: "general".into(),
+        nonce: 0,
     });
-    world
-        .resource_mut::<NextState<AppState>>()
-        .set(AppState::Organization);
-}
-
-/// The organization's picture on the documents page: a world map with its pin, where it says
-/// it is.
-fn draw_picture(world: &World, doc: DocumentId, profile: &Profile) {
-    use cadrs_core::thumbnail::{THUMB_LARGE_H, THUMB_LARGE_W};
-    let sea = Color::srgb_u8(0xe8, 0xee, 0xf5);
-    let pins: Vec<cadrs_ui::world_map::Pin> = profile
-        .place
-        .as_ref()
-        .and_then(|p| match p.frame {
-            Some(cadrs_social::place::Frame::Surface { lat, lon, .. }) => Some((lat, lon)),
-            _ => None,
-        })
-        .map(|(lat, lon)| cadrs_ui::world_map::Pin {
-            lat,
-            lon,
-            color: Color::srgb_u8(0x1f, 0x5f, 0xbf),
-            accuracy_m: 0.0,
-        })
-        .into_iter()
-        .collect();
-    // The map is 2:1; the picture a little taller, so it sits in the middle.
-    let (w, h) = (THUMB_LARGE_W, THUMB_LARGE_W / 2);
-    let map = cadrs_ui::world_map::image(w, h, sea, Color::srgb_u8(0x55, 0x60, 0x70), &pins);
-    let Some(map) = map
-        .data
-        .and_then(|data| image::RgbaImage::from_raw(w, h, data))
-    else {
-        return;
-    };
-    let mut picture =
-        image::RgbaImage::from_pixel(w, THUMB_LARGE_H, image::Rgba([0xe8, 0xee, 0xf5, 0xff]));
-    image::imageops::overlay(&mut picture, &map, 0, ((THUMB_LARGE_H - h) / 2) as i64);
-    let store = world.resource::<DocumentStore>().0.clone();
-    if let Err(e) = store.write_thumbnail(doc, &picture) {
-        warn!("cannot draw the organization's picture: {e}");
+    // (From an organization to another: the screen is made again for it.)
+    let state = *world.resource::<State<AppState>>().get();
+    if state == AppState::Organization {
+        respawn_screen(world);
+    } else {
+        world
+            .resource_mut::<NextState<AppState>>()
+            .set(AppState::Organization);
     }
 }
 
 /// Writes `op` to the open organization and saves it; a toast says why when it doesn't apply.
 pub fn write(world: &mut World, op: Op) -> bool {
-    let profile_changes = matches!(op, Op::SetProfile(_));
+    write_as(world, op, true).is_ok()
+}
+
+/// Writes an operation that arrived (a client's letter) into the open organization: as
+/// [`write`], but it isn't the person's own doing, so the module they are in isn't made again
+/// under their hands while it holds something unsaved.
+pub(crate) fn take_op(world: &mut World, op: Op) -> Result<(), String> {
+    write_as(world, op, false)
+}
+
+fn write_as(world: &mut World, op: Op, own: bool) -> Result<(), String> {
     let Some(mut open) = world.get_resource_mut::<OpenOrg>() else {
-        return false;
+        return Err("no organization is open".into());
     };
+    // What the marketplace shows of it comes from these.
+    let listing = matches!(
+        op,
+        Op::SetProfile(_) | Op::EditProfile(_) | Op::SetLocation { .. } | Op::SetMachine { .. }
+    );
+    let declined = matches!(op, Op::Decline { .. });
     match open.session.write(op, cadrs_social::wall_millis()) {
         Ok(_) => {
+            if own {
+                open.nonce += 1;
+            }
             let saved = cadrs_org::file::save(&open.log_path, open.session.log());
+            let (doc, dir, org) = (open.id, open.dir(), open.session.org().clone());
             if let Err(e) = saved {
                 crate::linked::toast(world, format!("{}: {e}", tr("org-cannot-save")));
             }
-            if profile_changes && let Some(open) = world.get_resource::<OpenOrg>() {
-                let (doc, profile) = (open.id, open.session.org().profile.clone());
-                draw_picture(world, doc, &profile);
+            // The account menu's entry, its public listing (when what it shows changed) and
+            // the other members' devices follow.
+            crate::social::org_changed(world, doc, &org);
+            if listing {
+                crate::social::relist(world);
             }
-            // Its public listing follows (when it takes requests from anyone), and the other
-            // members' devices hear of it now.
-            crate::social::relist(world);
+            // A declined request's document is let go (a day later: `blob::sweep`).
+            if declined {
+                cadrs_org::blob::sweep(&dir, &org, cadrs_social::wall_millis());
+            }
             crate::org_sync::sync_now(world);
-            true
+            Ok(())
         }
         Err(why) => {
-            crate::linked::toast(world, why);
-            false
+            if own {
+                crate::linked::toast(world, refusal(&why));
+            }
+            // For whoever sent what this was made from: the document's own words.
+            Err(why)
         }
     }
+}
+
+/// How often the open organization's folder is swept of what it no longer wants kept, in
+/// seconds.
+const SWEEP_EVERY: f64 = 600.0;
+
+/// Sweeps the open organization's blobs when it is opened and every so often after: a declined
+/// request's document goes a day after the decline, whether or not anything else happens.
+fn sweep_now_and_then(
+    open: Option<Res<OpenOrg>>,
+    time: Res<Time<bevy::time::Real>>,
+    mut last: Local<Option<(DocumentId, f64)>>,
+) {
+    let Some(open) = open else {
+        return;
+    };
+    let now = time.elapsed_secs_f64();
+    if last.is_some_and(|(doc, at)| doc == open.id && now - at < SWEEP_EVERY) {
+        return;
+    }
+    *last = Some((open.id, now));
+    cadrs_org::blob::sweep(&open.dir(), open.session.org(), cadrs_social::wall_millis());
+}
+
+/// What waits for the answer to "Remove …?".
+#[derive(Resource)]
+struct PendingRemove(Op);
+
+/// What `op` removes, named as its list names it.
+fn removed_name(world: &World, op: &Op) -> Option<String> {
+    let org = world.get_resource::<OpenOrg>()?.session.org();
+    Some(match op {
+        Op::SetLocation { id, .. } => org.locations.get(id)?.name.clone(),
+        Op::SetMachine { id, .. } => org.machines.get(id)?.name.clone(),
+        Op::SetMaterial { id, .. } => {
+            let m = org.materials.get(id)?;
+            format!("{} {} mm", m.name, m.thickness)
+        }
+        Op::SetClient { id, .. } => org.clients.get(id)?.name.clone(),
+        Op::SetPart { id, .. } => org.parts.get(id)?.name.clone(),
+        Op::SetJob { id, .. } => {
+            let job = org.jobs.get(id)?;
+            let machine = org.machines.get(&job.machine).map(|m| m.name.as_str());
+            format!("{} · {}", tr("org-issue-about-job"), machine.unwrap_or("—"))
+        }
+        Op::SetMember { account, .. } => Names::read(world).of(account),
+        _ => return None,
+    })
+}
+
+/// Asks before `op` removes something: what is removed is gone for every member, and there is
+/// no taking it back from here. **Remove** writes it.
+pub(crate) fn ask_remove(world: &mut World, op: Op) {
+    crate::social::ensure_loaded(world);
+    let Some(name) = removed_name(world, &op) else {
+        return;
+    };
+    world.insert_resource(PendingRemove(op));
+    let theme = world.resource::<Theme>().clone();
+    let tb = theme.clone();
+    world.spawn((
+        Dialog::new("org-confirm-remove")
+            .title(tr_with("org-confirm-remove-title", &[("name", &name)]))
+            .width(480.0)
+            .body(move |b| {
+                b.spawn(tb.paragraph(tr("org-confirm-remove-text"), tb.font_base, tb.foreground));
+            })
+            .footer(|f| {
+                let t = f.world().resource::<Theme>().clone();
+                f.spawn((
+                    Button::new("org-confirm-remove-ok")
+                        .label(tr("common-remove"))
+                        .danger()
+                        .build(&t),
+                    observe(|_: On<Activate>, mut commands: Commands| {
+                        commands.queue(|w: &mut World| {
+                            let pending = w.remove_resource::<PendingRemove>();
+                            close_dialogs(w);
+                            if let Some(PendingRemove(op)) = pending {
+                                write(w, op);
+                            }
+                        });
+                    }),
+                ));
+                f.spawn((
+                    Button::new("org-confirm-remove-cancel")
+                        .label(tr("common-cancel"))
+                        .build(&t),
+                    observe(|_: On<Activate>, mut commands: Commands| {
+                        commands.queue(close_dialogs);
+                    }),
+                ));
+            })
+            .build(&theme),
+        OrgDialog,
+        DespawnOnExit(AppState::Organization),
+    ));
+    world.flush();
+}
+
+/// Removes the open organization from this device: its document goes to the documents' trash
+/// (to be restored from there, or deleted for good) and the documents page comes back. While
+/// this device says its listing in the marketplace, it has to leave the marketplace first:
+/// nothing would be left to take the listing down, or to answer those who find it.
+pub(crate) fn remove_from_device(world: &mut World) {
+    crate::social::ensure_loaded(world);
+    let Some(open) = world.get_resource::<OpenOrg>() else {
+        return;
+    };
+    let (doc, org) = (open.id, open.session.org());
+    let name = org.profile.name.clone();
+    let says_listing = org.listed()
+        && org.org.is_some_and(|account| {
+            world
+                .resource::<crate::social::Social>()
+                .org_card(&account)
+                .is_some()
+        });
+    close_dialogs(world);
+    if says_listing {
+        crate::linked::toast(world, tr("org-remove-unlist-first"));
+        return;
+    }
+    let store = world.resource::<DocumentStore>().0.clone();
+    let now = world.resource::<crate::AppClock>().now();
+    world
+        .resource_mut::<crate::landing::DocLibrary>()
+        .execute(&store, &cadrs_core::library::TrashEntry { id: doc, now });
+    world.remove_resource::<OpenOrg>();
+    crate::social::refresh_orgs(world);
+    crate::social::relist(world);
+    world
+        .resource_mut::<NextState<AppState>>()
+        .set(AppState::Landing);
+    crate::linked::toast(world, tr_with("org-removed", &[("name", &name)]));
+}
+
+/// A refusal as the person reads it: the catalog's wording where there is one for it, else the
+/// document's own words (which are English, and exact).
+pub(crate) fn refusal(why: &str) -> String {
+    use cadrs_org::refusal::Refusal;
+    let Some(kind) = Refusal::of(why) else {
+        return why.to_owned();
+    };
+    tr(match kind {
+        Refusal::Role => "org-refused-role",
+        Refusal::LastOwner => "org-refused-last-owner",
+        Refusal::LocationInUse => "org-refused-location-in-use",
+        Refusal::MachineInUse => "org-refused-machine-in-use",
+        Refusal::NoStock => "org-refused-no-stock",
+        Refusal::NotAManufacturer => "org-refused-not-a-manufacturer",
+        Refusal::Blocked => "org-refused-blocked",
+        Refusal::TooManyOfYours => "org-refused-too-many-of-yours",
+        Refusal::TooManyWaiting => "org-refused-too-many-waiting",
+        Refusal::TooManyToday => "org-refused-too-many-today",
+        Refusal::QuoteReplaced => "org-refused-quote-replaced",
+        Refusal::QuoteExpired => "org-refused-quote-expired",
+        Refusal::IssueClose => "org-refused-issue-close",
+        Refusal::TooLarge => "org-refused-too-large",
+    })
 }
 
 pub(crate) fn field(world: &mut World, name: &str) -> String {
@@ -282,22 +676,102 @@ pub(crate) fn field(world: &mut World, name: &str) -> String {
         .unwrap_or_default()
 }
 
+/// The materials to pick from, wherever the organization names one: the Part Studio's
+/// ([`cadrs_core::material::LIBRARY`], what a part's material is picked from, so that a part
+/// and a machine or a sheet in stock call a material the same), then the names the
+/// organization uses already that are not among them.
+pub(crate) fn material_names(org: &cadrs_org::Org) -> Vec<String> {
+    let mut names: Vec<String> = cadrs_core::material::LIBRARY
+        .iter()
+        .map(|m| m.name.to_owned())
+        .collect();
+    let own = org.materials.values().map(|m| &m.name).chain(
+        org.machines
+            .values()
+            .flat_map(|m| &m.materials)
+            .map(|l| &l.material),
+    );
+    for name in own {
+        if !names
+            .iter()
+            .any(|n| n.to_lowercase() == name.to_lowercase())
+        {
+            names.push(name.clone());
+        }
+    }
+    names
+}
+
+/// The dropdown a material is picked from (the Part Studio's, [`cadrs_ui::SearchSelect`]):
+/// `names` found by typing, and what was typed offered too when no name is that, for a
+/// material that isn't listed yet.
+pub(crate) fn material_picker(name: &'static str, names: Vec<String>) -> cadrs_ui::SearchSelect {
+    cadrs_ui::SearchSelect::new(name)
+        .options(names)
+        .placeholder(tr("render-material-select"))
+        .search_placeholder(tr("render-material-search"))
+        .empty_text(
+            tr("render-material-none-match"),
+            tr("render-material-none-yet"),
+        )
+        .typed(tr("org-material-use-typed"))
+}
+
+/// What the dropdown called `name` has chosen.
+pub(crate) fn picked(world: &mut World, name: &str) -> Option<String> {
+    let select = format!("{name}-select");
+    let mut q = world.query::<(&Name, &cadrs_ui::SearchSelectState)>();
+    q.iter(world)
+        .find(|(n, _)| n.as_str() == select)
+        .and_then(|(_, s)| s.chosen.clone())
+}
+
 pub(crate) fn number(world: &mut World, name: &str) -> Option<f64> {
     field(world, name).trim().replace(',', ".").parse().ok()
 }
 
-fn switch_on(world: &mut World, name: &str) -> bool {
+pub(crate) fn switch_on(world: &mut World, name: &str) -> bool {
     let mut q = world.query::<(&Name, &SwitchState)>();
     q.iter(world)
         .find(|(n, _)| n.as_str() == name)
         .is_some_and(|(_, s)| s.on)
 }
 
+/// Which option of the tab strip or the list called `name` is chosen.
 pub(crate) fn strip_selected(world: &mut World, name: &str) -> usize {
-    let mut q = world.query::<(&Name, &TabStripState)>();
-    q.iter(world)
+    let mut strips = world.query::<(&Name, &TabStripState)>();
+    if let Some((_, strip)) = strips.iter(world).find(|(n, _)| n.as_str() == name) {
+        return strip.selected;
+    }
+    let mut lists = world.query::<(&Name, &cadrs_ui::dialog_fields::SelectState)>();
+    lists
+        .iter(world)
         .find(|(n, _)| n.as_str() == name)
-        .map_or(0, |(_, s)| s.selected)
+        .map_or(0, |(_, list)| list.selected)
+}
+
+/// A list to choose one of `options` from, for choices that grow with the organization (its
+/// members, machines, locations, orders): it stays one line however many there are. Its
+/// options are `<name>-option-<i>`; [`strip_selected`] reads the choice.
+pub(crate) fn choice(
+    t: &Theme,
+    name: &'static str,
+    options: impl IntoIterator<Item = String>,
+    selected: usize,
+) -> impl Bundle {
+    let mut list = cadrs_ui::dialog_fields::Select::new(name).bordered();
+    for option in options {
+        list = list.option(option, true);
+    }
+    // In a row of its own width: the list fills the row, not the dialog.
+    (
+        Node {
+            width: Val::Px(360.0),
+            max_width: Val::Percent(100.0),
+            ..default()
+        },
+        Children::spawn(bevy::ecs::spawn::Spawn(list.selected(selected).build(t))),
+    )
 }
 
 pub(crate) fn close_dialogs(world: &mut World) {
@@ -307,20 +781,15 @@ pub(crate) fn close_dialogs(world: &mut World) {
     }
 }
 
-fn spawn_screen(
-    mut commands: Commands,
-    theme: Res<Theme>,
-    profile: Res<UserProfile>,
-    open: Option<Res<OpenOrg>>,
-) {
+/// The width of the side navigation.
+const NAV_WIDTH: f32 = 216.0;
+
+fn spawn_screen(mut commands: Commands, theme: Res<Theme>, profile: Res<UserProfile>) {
     let t = theme.clone();
-    let name = open
-        .as_ref()
-        .map(|o| o.session.org().profile.name.clone())
-        .unwrap_or_default();
     commands
         .spawn((
             Name::new("organization"),
+            OrgScreen,
             DespawnOnExit(AppState::Organization),
             bevy::input_focus::tab_navigation::TabGroup::new(0),
             Node {
@@ -342,51 +811,42 @@ fn spawn_screen(
                     flex_grow: 1.0,
                     min_height: Val::Px(0.0),
                     width: Val::Percent(100.0),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(8.0),
+                    column_gap: Val::Px(8.0),
                     padding: UiRect::all(Val::Px(8.0)),
                     ..default()
                 },
             ))
             .with_children(|page| {
-                page.spawn(Node {
-                    align_items: AlignItems::Center,
-                    column_gap: Val::Px(16.0),
-                    flex_wrap: FlexWrap::Wrap,
-                    row_gap: Val::Px(8.0),
-                    padding: UiRect::horizontal(Val::Px(8.0)),
-                    ..default()
-                })
-                .with_children(|head| {
-                    head.spawn((
-                        Name::new("org-name"),
-                        t.text(name, t.font_xl, FontWeight::BOLD, t.foreground),
-                    ));
-                    let mut strip = TabStrip::new("org-tabs").compact();
-                    for (_, key) in TABS {
-                        strip = strip.tab(tr(key));
-                    }
-                    head.spawn((
-                        strip.build(&t),
-                        observe(|ev: On<TabStripSelect>, mut open: ResMut<OpenOrg>| {
-                            if let Some((tab, _)) = TABS.get(ev.index) {
-                                open.tab = *tab;
-                            }
-                        }),
-                    ));
-                });
+                // The navigation: the organization's logo and name over its modules.
+                page.spawn((
+                    Name::new("org-nav-panel"),
+                    OrgNav,
+                    Node {
+                        width: Val::Px(NAV_WIDTH),
+                        flex_shrink: 0.0,
+                        flex_direction: FlexDirection::Column,
+                        padding: UiRect::all(Val::Px(8.0)),
+                        row_gap: Val::Px(6.0),
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(t.radius_panel)),
+                        overflow: Overflow::clip_y(),
+                        ..default()
+                    },
+                    cadrs_ui::glass::panel(&t),
+                ));
                 page.spawn((
                     Name::new("org-body"),
                     OrgBody,
                     ScrollArea,
                     Node {
                         flex_grow: 1.0,
+                        min_width: Val::Px(0.0),
                         min_height: Val::Px(0.0),
                         flex_direction: FlexDirection::Column,
                         // Fields and buttons keep their own width.
                         align_items: AlignItems::FlexStart,
                         row_gap: Val::Px(8.0),
-                        padding: UiRect::all(Val::Px(16.0)),
+                        padding: UiRect::all(Val::Px(20.0)),
                         overflow: Overflow::scroll_y(),
                         border: UiRect::all(Val::Px(1.0)),
                         border_radius: BorderRadius::all(Val::Px(t.radius_panel)),
@@ -398,69 +858,545 @@ fn spawn_screen(
         });
 }
 
-/// Rebuilds the open tab when the organization or the tab changes.
-#[allow(clippy::too_many_arguments)]
-fn refresh_body(
-    mut commands: Commands,
-    open: Option<Res<OpenOrg>>,
-    body: Query<Entity, With<OrgBody>>,
-    mut names: Query<(&Name, &mut Text)>,
-    theme: Res<Theme>,
-    social: Res<crate::social::Social>,
-    mut images: ResMut<Assets<Image>>,
-    mut qr: Local<Option<Handle<Image>>>,
-    mut built: Local<bool>,
-) {
-    let Some(open) = open else {
-        *built = false;
-        return;
-    };
-    let Ok(body) = body.single() else {
-        *built = false;
-        return;
-    };
-    if *built && !open.is_changed() {
-        return;
+/// The organization's screen (its root).
+#[derive(Component)]
+struct OrgScreen;
+
+/// Makes the screen again (another organization was opened over one).
+fn respawn_screen(world: &mut World) {
+    let mut q = world.query_filtered::<Entity, With<OrgScreen>>();
+    for e in q.iter(world).collect::<Vec<_>>() {
+        world.entity_mut(e).despawn();
     }
-    *built = true;
-    if let Some((_, mut text)) = names.iter_mut().find(|(n, _)| n.as_str() == "org-name") {
-        text.0 = open.session.org().profile.name.clone();
+    let spawn = world.register_system(spawn_screen);
+    let _ = world.run_system(spawn);
+    let _ = world.unregister_system(spawn);
+    world.flush();
+}
+
+/// The modules that show the organization's wallet: the Wallet itself, the Requests (how each
+/// order's payment stands) and the Overview (what is in it).
+fn shows_wallet(tab: OrgTab) -> bool {
+    matches!(tab, OrgTab::Wallet | OrgTab::Requests | OrgTab::Overview)
+}
+
+/// What the screen was last made for: the module, how much of the document there was, the
+/// person's own changes, the logos that had arrived, and who was in the contacts.
+type Built = (OrgTab, usize, u32, u32, usize, String, u32);
+
+/// Makes the side navigation again: the organization's logo and name, and its modules with
+/// what waits in each.
+fn make_nav(world: &mut World, nav: Entity, theme: &Theme) {
+    let logo = world
+        .resource::<OpenOrg>()
+        .session
+        .org()
+        .profile
+        .logo
+        .and_then(|l| crate::org_logo::handle(world, &l.thumb));
+    let open = world.resource::<OpenOrg>();
+    let (org, tab) = (open.session.org(), open.tab);
+    let name = org.profile.name.clone();
+    let open_requests = org
+        .requests
+        .values()
+        .filter(|r| matches!(r.stage, Stage::Requested))
+        .count();
+    let open_issues = org
+        .issues
+        .values()
+        .filter(|i| i.status != IssueStatus::Closed)
+        .count();
+    let count = |n: usize| if n == 0 { String::new() } else { n.to_string() };
+    let mut modules = SideNav::new("org-nav").selected(MODULES.iter().position(|m| m.tab == tab));
+    for module in &MODULES {
+        if let Some(group) = module.group {
+            modules = modules.group(tr(group));
+        }
+        modules = modules.item(module.key, module.icon, tr(module.label));
+        modules = match module.tab {
+            OrgTab::Requests => modules.count(count(open_requests)),
+            OrgTab::Issues => modules.count(count(open_issues)),
+            _ => modules,
+        };
     }
+    let nav_bundle = modules.build(theme);
     let t = theme.clone();
-    // The shop's card, as a link and a QR code, on the overview.
-    let share = (open.tab == OrgTab::Overview)
-        .then(|| social.org_card(&open.session.org().org?))
-        .flatten()
-        .map(|card| {
-            let link = cadrs_social::contact::to_link(&card);
-            *qr = cadrs_ui::qr::image(&link).map(|i| images.add(i));
-            (link, qr.clone())
+    let mut commands = world.commands();
+    commands.entity(nav).despawn_related::<Children>();
+    commands.entity(nav).with_children(|n| {
+        n.spawn(Node {
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(10.0),
+            padding: UiRect::new(Val::Px(4.0), Val::Px(4.0), Val::Px(4.0), Val::Px(8.0)),
+            ..default()
+        })
+        .with_children(|head| {
+            head.spawn(crate::org_logo::logo("org-nav-logo", &t, logo, &name, 36.0));
+            head.spawn((
+                Name::new("org-name"),
+                t.text(name.clone(), t.font_md, FontWeight::BOLD, t.foreground),
+                cadrs_ui::ellipsis::Ellipsis::default(),
+                Node {
+                    min_width: Val::Px(0.0),
+                    flex_shrink: 1.0,
+                    ..default()
+                },
+            ));
         });
-    commands.entity(body).despawn_related::<Children>();
-    commands.entity(body).with_children(|b| match open.tab {
-        OrgTab::Overview => overview(b, &t, &open, share),
-        OrgTab::Members => members(b, &t, &open),
-        OrgTab::Machines => machines(b, &t, &open),
-        OrgTab::Stock => stock(b, &t, &open),
-        OrgTab::Prices => prices(b, &t, &open),
-        OrgTab::Requests => requests(b, &t, &open),
-        OrgTab::Jobs => crate::org_tabs::jobs(b, &t, &open),
-        OrgTab::Clients => crate::org_tabs::clients(b, &t, &open, &social),
-        OrgTab::Parts => crate::org_tabs::parts(b, &t, &open),
-        OrgTab::Chat => crate::org_tabs::chat(b, &t, &open, &social),
+        n.spawn((
+            nav_bundle,
+            observe(|ev: On<SideNavSelect>, mut open: ResMut<OpenOrg>| {
+                if let Some(module) = MODULES.iter().find(|m| m.key == ev.key) {
+                    open.show(module.tab);
+                }
+            }),
+        ));
     });
 }
 
-pub(crate) fn heading(b: &mut ChildSpawnerCommands, t: &Theme, key: &str) {
-    b.spawn(t.text(tr(key), t.font_lg, FontWeight::BOLD, t.foreground));
+/// The line across a module that isn't made again because it holds something unsaved.
+#[derive(Component)]
+struct NewsWaits;
+
+/// Says, across the top of the module, that something changed elsewhere and isn't shown yet,
+/// with a button that shows it (and drops what was typed here).
+fn say_news_waits(world: &mut World, body: Entity, theme: &Theme) {
+    let mut q = world.query_filtered::<(), With<NewsWaits>>();
+    if q.iter(world).next().is_some() {
+        return;
+    }
+    let t = theme.clone();
+    let line = world
+        .spawn((
+            Name::new("org-news-waits"),
+            NewsWaits,
+            Node {
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(10.0),
+                padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(t.radius)),
+                ..default()
+            },
+            BorderColor::all(t.link),
+        ))
+        .with_children(|line| {
+            line.spawn(t.text(
+                tr("org-news-waits"),
+                t.font_sm,
+                FontWeight::NORMAL,
+                t.foreground,
+            ));
+            line.spawn((
+                Button::new("org-news-show")
+                    .label(tr("org-news-show"))
+                    .small()
+                    .build(&t),
+                observe(|_: On<Activate>, mut form: ResMut<OrgForm>| form.show = true),
+            ));
+        })
+        .id();
+    world.entity_mut(body).insert_children(0, &[line]);
+}
+
+/// Makes the navigation and the open module again when the organization or the module
+/// changes. A change that came from another device while the person is typing in the module
+/// waits until they leave the field, so that what they typed isn't thrown away.
+fn refresh_body(world: &mut World, mut built: Local<(Option<Built>, Option<Built>)>) {
+    // What the navigation and the module were last made from.
+    let (nav_built, built) = &mut *built;
+    if !world.contains_resource::<OpenOrg>() {
+        (*nav_built, *built) = (None, None);
+        return;
+    }
+    let mut q_body = world.query_filtered::<Entity, With<OrgBody>>();
+    let mut q_nav = world.query_filtered::<Entity, With<OrgNav>>();
+    let (Some(body), Some(nav)) = (q_body.iter(world).next(), q_nav.iter(world).next()) else {
+        (*nav_built, *built) = (None, None);
+        return;
+    };
+    let open = world.resource::<OpenOrg>();
+    let social = world.resource::<crate::social::Social>();
+    let key: Built = (
+        open.tab,
+        open.session.log().len(),
+        open.nonce,
+        social.logos_arrived,
+        social.contacts.cards.len(),
+        open.channel.clone(),
+        // What shows the organization's wallet is made again when the bank says something new.
+        if shows_wallet(open.tab) {
+            world
+                .get_resource::<crate::credits::Credits>()
+                .map_or(0, |c| c.version)
+        } else {
+            0
+        },
+    );
+    if built.as_ref() == Some(&key) && nav_built.as_ref() == Some(&key) {
+        return;
+    }
+    let own_change = world.resource::<OrgForm>().show
+        || built
+            .as_ref()
+            .is_none_or(|b| b.0 != key.0 || b.2 != key.2 || b.5 != key.5);
+    let chat = key.0 == OrgTab::Chat;
+    let typing = typing_in(world, body);
+    // What arrives from other devices doesn't make the module again while the person is typing
+    // in it, or while it holds something they changed and haven't saved (five prices typed,
+    // then a click elsewhere): that would throw it away. The navigation follows at once, and a
+    // line across the module says there is news, with a button to show it. Their own Save, or
+    // moving to another module, shows everything that arrived meanwhile.
+    //
+    // The chat is the exception: what others say appears as it arrives, and the message being
+    // written stays in its box.
+    let hold = !own_change && !chat && (typing || world.resource::<OrgForm>().dirty);
+    let draft = (chat && !own_change).then(|| (field(world, "org-chat-input"), typing));
+    let nav_due = nav_built.as_ref() != Some(&key);
+    *nav_built = Some(key.clone());
+    if hold {
+        if nav_due {
+            let theme = world.resource::<Theme>().clone();
+            make_nav(world, nav, &theme);
+            say_news_waits(world, body, &theme);
+            world.flush();
+        }
+        return;
+    }
+    *built = Some(key);
+    *world.resource_mut::<OrgForm>() = OrgForm {
+        profile: Some(world.resource::<OpenOrg>().session.org().profile.clone()),
+        ..Default::default()
+    };
+    let theme = world.resource::<Theme>().clone();
+    let tab = world.resource::<OpenOrg>().tab;
+    // What the modules show that isn't in the document: pictures.
+    let logo = world
+        .resource::<OpenOrg>()
+        .session
+        .org()
+        .profile
+        .logo
+        .and_then(|l| crate::org_logo::handle(world, &l.thumb));
+    let share = (tab == OrgTab::Overview)
+        .then(|| share_link(world))
+        .flatten();
+    let map = (tab == OrgTab::Locations)
+        .then(|| crate::org_profile::locations_map(world.resource::<OpenOrg>().session.org()))
+        .flatten()
+        .map(|image| world.resource_mut::<Assets<Image>>().add(image));
+    make_nav(world, nav, &theme);
+    // The organization's wallet, while its module shows: asked for, kept fresh, and the bank
+    // told who may spend from it (by the device that holds the organization's key).
+    let wallet = shows_wallet(tab)
+        .then(|| world.resource::<OpenOrg>().session.org().org)
+        .flatten()
+        .filter(|_| world.contains_resource::<crate::credits::Credits>())
+        .map(|account| {
+            let org = world.resource::<OpenOrg>().session.org().clone();
+            crate::credits::say_access(world, account, &org);
+            // Its orders' payments are asked after by name: the newest quoted ones.
+            let mut quoted: Vec<(u32, cadrs_credits::MoveId)> = org
+                .requests
+                .iter()
+                .filter_map(|(id, r)| {
+                    let quote = r.quote.as_ref()?;
+                    Some((
+                        r.number,
+                        cadrs_credits::order_hold(&r.client, *id, quote.id),
+                    ))
+                })
+                .collect();
+            quoted.sort_by_key(|(number, _)| std::cmp::Reverse(*number));
+            let holds = quoted.into_iter().map(|(_, hold)| hold).collect();
+            crate::credits::name_holds(world, account, holds);
+            crate::credits::watch(world, account);
+            crate::wallet_ui::WalletView::read(world, account, true)
+        });
+    let open = world.resource::<OpenOrg>();
+    let social = world.resource::<crate::social::Social>();
+    let org = open.session.org();
+    let t = theme.clone();
+    let newer = org.newer_ops;
+    // The commands borrow the world: the modules read the organization through a copy.
+    let snapshot = ModuleView {
+        org: org.clone(),
+        channel: open.channel.clone(),
+        dir: open.dir(),
+        contacts: social.contacts.clone(),
+        me: social.keys().map(|k| k.account_id()),
+        my_name: world.resource::<crate::UserProfile>().display_name.clone(),
+        holds_key: org
+            .org
+            .is_some_and(|account| social.org_card(&account).is_some()),
+        logo,
+        share,
+        map,
+        draft,
+        wallet,
+    };
+    let mut commands = world.commands();
+    commands.entity(body).despawn_related::<Children>();
+    commands.entity(body).with_children(|b| {
+        if newer > 0 {
+            banner(b, &t, tr("org-newer-cadrs"));
+        }
+        let v = &snapshot;
+        match tab {
+            OrgTab::Overview => crate::org_profile::overview(b, &t, v),
+            OrgTab::Profile => crate::org_profile::profile(b, &t, v),
+            OrgTab::Locations => crate::org_profile::locations(b, &t, v),
+            OrgTab::Members => members(b, &t, v),
+            OrgTab::Machines => machines(b, &t, v),
+            OrgTab::Stock => stock(b, &t, v),
+            OrgTab::Prices => prices(b, &t, v),
+            OrgTab::Requests => requests(b, &t, v),
+            OrgTab::Jobs => crate::org_tabs::jobs(b, &t, v),
+            OrgTab::Clients => crate::org_tabs::clients(b, &t, v),
+            OrgTab::Parts => crate::org_tabs::parts(b, &t, v),
+            OrgTab::Chat => crate::org_tabs::chat(b, &t, v),
+            OrgTab::Wallet => crate::wallet_ui::org_page(b, &t, v),
+            OrgTab::Issues => crate::org_quality::issues(b, &t, v),
+        }
+    });
+    world.flush();
+}
+
+/// What a module is drawn from: the organization as it is, and what the app knows around it.
+pub(crate) struct ModuleView {
+    pub org: cadrs_org::Org,
+    pub channel: String,
+    /// The organization's folder (its blobs).
+    pub dir: PathBuf,
+    pub contacts: cadrs_social::contact::Contacts,
+    /// The user's own account.
+    pub me: Option<cadrs_social::keys::AccountId>,
+    /// The user's own name, shown for their own account.
+    pub my_name: String,
+    /// This device holds the organization's key: it can share its card and sign for it.
+    pub holds_key: bool,
+    /// The logo's small picture, when it is here.
+    pub logo: Option<Handle<Image>>,
+    /// The organization's card as a link and a QR code (the Overview).
+    pub share: Option<(String, Option<Handle<Image>>)>,
+    /// The world with the locations that say where they are (Locations).
+    pub map: Option<Handle<Image>>,
+    /// The chat message being written when the module was made again, and whether the keyboard
+    /// was in its box: both are kept.
+    pub draft: Option<(String, bool)>,
+    /// The organization's wallet as the bank last said (the Wallet module).
+    pub wallet: Option<crate::wallet_ui::WalletView>,
+}
+
+impl ModuleView {
+    /// What to call an account ([`account_label`]).
+    pub fn account_name(&self, account: &cadrs_social::keys::AccountId) -> String {
+        account_label(&self.contacts, self.me, &self.my_name, account)
+    }
+
+    /// What to call a request's client: as [`ModuleView::account_name`], else the name on the
+    /// card the request came with.
+    pub fn client_name(&self, request: &cadrs_org::Request) -> String {
+        if Some(request.client) == self.me || self.contacts.get(&request.client).is_some() {
+            return self.account_name(&request.client);
+        }
+        request
+            .card
+            .as_ref()
+            .map(|c| c.value.name.trim())
+            .filter(|name| !name.is_empty())
+            .map_or_else(|| short(&request.client), str::to_owned)
+    }
+}
+
+/// What to call an account: the user's own name for their own, a contact's name, else the start
+/// of its id.
+pub(crate) fn account_label(
+    contacts: &cadrs_social::contact::Contacts,
+    me: Option<cadrs_social::keys::AccountId>,
+    my_name: &str,
+    account: &cadrs_social::keys::AccountId,
+) -> String {
+    if Some(*account) == me && !my_name.trim().is_empty() {
+        return my_name.trim().to_owned();
+    }
+    contacts
+        .get(account)
+        .map_or_else(|| short(account), |c| c.name.clone())
+}
+
+/// Who is who, for a dialog that names accounts ([`account_label`]).
+#[derive(Clone)]
+pub(crate) struct Names {
+    contacts: cadrs_social::contact::Contacts,
+    pub me: Option<cadrs_social::keys::AccountId>,
+    my_name: String,
+}
+
+impl Names {
+    pub fn read(world: &World) -> Self {
+        let social = world.resource::<crate::social::Social>();
+        Self {
+            contacts: social.contacts.clone(),
+            me: social.keys().map(|k| k.account_id()),
+            my_name: world.resource::<crate::UserProfile>().display_name.clone(),
+        }
+    }
+
+    pub fn of(&self, account: &cadrs_social::keys::AccountId) -> String {
+        account_label(&self.contacts, self.me, &self.my_name, account)
+    }
+}
+
+/// What the open module's fields held when it was made, to tell whether the person changed
+/// any since ([`track_form`]).
+#[derive(Resource, Default)]
+pub(crate) struct OrgForm {
+    /// Frames since the module was made: its fields exist from the second.
+    age: u8,
+    texts: std::collections::HashMap<Entity, String>,
+    ticks: std::collections::HashMap<Entity, bool>,
+    /// A field doesn't hold what it was made with.
+    pub dirty: bool,
+    /// The person asked to see what arrived meanwhile, whatever the module holds.
+    show: bool,
+    /// The profile as it was when the module was made: what a Save of the Profile form compares
+    /// with, so that only what the person changed is written (and not, with it, the older
+    /// values of fields someone else changed since).
+    pub(crate) profile: Option<Profile>,
+}
+
+/// Notes the module's fields as they were made, then whether any changed.
+#[allow(clippy::type_complexity)]
+fn track_form(
+    mut form: ResMut<OrgForm>,
+    body: Query<Entity, With<OrgBody>>,
+    parents: Query<&ChildOf>,
+    texts: Query<(Entity, &EditableText), With<TextInputField>>,
+    ticks: Query<(Entity, &cadrs_ui::checkbox::CheckboxState)>,
+    changed: Query<
+        (),
+        Or<(
+            Changed<EditableText>,
+            Changed<cadrs_ui::checkbox::CheckboxState>,
+        )>,
+    >,
+) {
+    let Some(body) = body.iter().next() else {
+        return;
+    };
+    let inside = |entity: Entity| parents.iter_ancestors(entity).any(|e| e == body);
+    if form.age < 2 {
+        form.age += 1;
+        if form.age == 2 {
+            form.texts = texts
+                .iter()
+                .filter(|(e, _)| inside(*e))
+                .map(|(e, text)| (e, text.value().to_string()))
+                .collect();
+            form.ticks = ticks
+                .iter()
+                .filter(|(e, _)| inside(*e))
+                .map(|(e, tick)| (e, tick.checked))
+                .collect();
+        }
+        return;
+    }
+    if form.dirty || changed.is_empty() {
+        return;
+    }
+    let dirty = texts.iter().any(|(e, text)| {
+        form.texts
+            .get(&e)
+            .is_some_and(|was| *was != text.value().to_string())
+    }) || ticks
+        .iter()
+        .any(|(e, tick)| form.ticks.get(&e).is_some_and(|was| *was != tick.checked));
+    if dirty {
+        form.dirty = true;
+    }
+}
+
+/// Whether the keyboard is in a text field of `body`.
+fn typing_in(world: &World, body: Entity) -> bool {
+    let Some(mut entity) = world.get_resource::<InputFocus>().and_then(|f| f.get()) else {
+        return false;
+    };
+    if world.get::<TextInputField>(entity).is_none() {
+        return false;
+    }
+    for _ in 0..64 {
+        if entity == body {
+            return true;
+        }
+        match world.get::<ChildOf>(entity) {
+            Some(parent) => entity = parent.parent(),
+            None => return false,
+        }
+    }
+    false
+}
+
+/// The organization's card as a link and a QR code, when this device holds its key.
+fn share_link(world: &mut World) -> Option<(String, Option<Handle<Image>>)> {
+    let account = world.resource::<OpenOrg>().session.org().org?;
+    let card = world
+        .resource::<crate::social::Social>()
+        .org_card(&account)?;
+    let link = cadrs_social::contact::to_link(&card);
+    let qr = cadrs_ui::qr::image(&link).map(|i| world.resource_mut::<Assets<Image>>().add(i));
+    Some((link, qr))
+}
+
+/// A module's heading, with what it is for under it.
+pub(crate) fn page_head(b: &mut ChildSpawnerCommands, t: &Theme, title: &str, about: &str) {
+    b.spawn((
+        Name::new("org-page-title"),
+        t.text(tr(title), t.font_xl, FontWeight::SEMIBOLD, t.foreground),
+    ));
+    b.spawn((t.paragraph_within(tr(about), t.font_base, t.muted_foreground, 720.0),));
+}
+
+/// A smaller heading inside a module.
+pub(crate) fn subheading(b: &mut ChildSpawnerCommands, t: &Theme, key: &str) {
+    b.spawn((
+        t.text(tr(key), t.font_md, FontWeight::BOLD, t.foreground),
+        Node {
+            margin: UiRect::top(Val::Px(10.0)),
+            ..default()
+        },
+    ));
 }
 
 pub(crate) fn muted(b: &mut ChildSpawnerCommands, t: &Theme, text: impl Into<String>) {
-    b.spawn(t.paragraph(text, t.font_sm, t.muted_foreground));
+    b.spawn((t.paragraph_within(text, t.font_sm, t.muted_foreground, 720.0),));
 }
 
 pub(crate) fn label(b: &mut ChildSpawnerCommands, t: &Theme, key: &str) {
     b.spawn(t.text(tr(key), t.font_sm, FontWeight::BOLD, t.foreground));
+}
+
+/// A note across the top of a module: something the person should know before they go on.
+pub(crate) fn banner(b: &mut ChildSpawnerCommands, t: &Theme, text: String) {
+    b.spawn((
+        Name::new("org-banner"),
+        Node {
+            padding: UiRect::axes(Val::Px(12.0), Val::Px(8.0)),
+            column_gap: Val::Px(8.0),
+            align_items: AlignItems::Center,
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(t.radius)),
+            max_width: Val::Px(720.0),
+            ..default()
+        },
+        BackgroundColor(t.list_hover),
+        BorderColor::all(t.border),
+    ))
+    .with_children(|r| {
+        r.spawn(cadrs_ui::icon("info", 16.0, t.foreground));
+        r.spawn(t.paragraph(text, t.font_sm, t.foreground));
+    });
 }
 
 /// A row of things side by side.
@@ -494,233 +1430,77 @@ pub(crate) fn short(id: &PublicKey) -> String {
     id.to_string()[..12].to_string()
 }
 
-fn overview(
+/// A list as a table: its header, then a row an item (`rows` gives each row its cells), or
+/// `empty` when there are none. The table is `name`, its rows `<name>-row-<i>`.
+pub(crate) fn table(
     b: &mut ChildSpawnerCommands,
     t: &Theme,
-    open: &OpenOrg,
-    share: Option<(String, Option<Handle<Image>>)>,
+    name: &'static str,
+    columns: Vec<Column>,
+    rows: Vec<TableRow>,
+    empty: &str,
 ) {
-    let org = open.session.org();
-    let profile = &org.profile;
-    heading(b, t, "org-tab-overview");
-    if let Some((stars, n)) = org.rating() {
-        muted(b, t, format!("★ {stars:.1} ({n})"));
-    }
-    if let Some(account) = org.org {
-        muted(b, t, format!("{} {}", tr("org-id"), account));
-    }
-    label(b, t, "org-name-label");
-    input(b, t, "org-profile-name", profile.name.clone(), 360.0);
-    label(b, t, "org-about");
-    input(b, t, "org-profile-about", profile.about.clone(), 560.0);
-    label(b, t, "org-location");
-    let (lat, lon) = match profile.place.as_ref().and_then(|p| p.frame.as_ref()) {
-        Some(cadrs_social::place::Frame::Surface { lat, lon, .. }) => {
-            (lat.to_string(), lon.to_string())
-        }
-        _ => (String::new(), String::new()),
-    };
-    let region = profile
-        .place
-        .as_ref()
-        .and_then(|p| p.region.clone())
-        .unwrap_or_default();
-    row(b, |r| {
-        input(r, t, "org-profile-lat", lat, 140.0);
-        input(r, t, "org-profile-lon", lon, 140.0);
-        input(
-            r,
-            t,
-            "org-profile-city",
-            region.city.unwrap_or_default(),
-            180.0,
-        );
-        input(
-            r,
-            t,
-            "org-profile-country",
-            region.country.unwrap_or_default(),
-            180.0,
-        );
-    });
-    muted(b, t, tr("org-location-help"));
-    label(b, t, "org-public-accuracy");
-    input(
-        b,
-        t,
-        "org-profile-accuracy",
-        format!("{}", profile.public_accuracy_m / 1000.0),
-        140.0,
-    );
-    b.spawn(
-        Switch::new("org-profile-open")
-            .label(tr("org-open-for-quotes"))
-            .on(profile.open_for_quotes)
-            .build(t),
-    );
-    b.spawn((
-        Button::new("org-profile-save")
-            .label(tr("common-save"))
-            .primary()
-            .build(t),
-        observe(|_: On<Activate>, mut commands: Commands| {
-            commands.queue(save_profile);
-        }),
-    ));
-    if let Some((link, qr)) = share {
-        heading(b, t, "org-share");
-        muted(b, t, tr("org-share-help"));
-        if let Some(qr) = qr {
-            b.spawn((
-                Name::new("org-share-qr"),
-                ImageNode::new(qr),
-                Node {
-                    width: Val::Px(200.0),
-                    height: Val::Px(200.0),
-                    ..default()
-                },
-            ));
-        }
-        b.spawn(Node {
-            width: Val::Px(560.0),
-            max_width: Val::Percent(100.0),
-            ..default()
-        })
-        .with_child(
-            cadrs_ui::selectable_text::SelectableText::new("org-share-link")
-                .value(link)
-                .font(t.font_xs, FontWeight::NORMAL)
-                .copy_button()
-                .build(t),
-        );
-    }
-}
-
-fn save_profile(world: &mut World) {
-    let name = field(world, "org-profile-name");
-    let about = field(world, "org-profile-about");
-    let lat = number(world, "org-profile-lat");
-    let lon = number(world, "org-profile-lon");
-    let city = field(world, "org-profile-city");
-    let country = field(world, "org-profile-country");
-    let accuracy_km = number(world, "org-profile-accuracy").unwrap_or(0.0);
-    let open_for_quotes = switch_on(world, "org-profile-open");
-    let some = |s: String| (!s.trim().is_empty()).then(|| s.trim().to_owned());
-    let region = Region {
-        country: some(country),
-        area: None,
-        city: some(city),
-    };
-    let place = match (lat, lon) {
-        (Some(lat), Some(lon)) if (-90.0..=90.0).contains(&lat) => {
-            let mut place = Place::earth(lat, lon);
-            place.region = Some(region);
-            Some(place)
-        }
-        _ if region != Region::default() => Some(Place {
-            body: cadrs_social::place::Body::Earth,
-            frame: None,
-            accuracy_m: None,
-            region: Some(region),
-        }),
-        _ => None,
-    };
-    let Some(open) = world.get_resource::<OpenOrg>() else {
+    if rows.is_empty() {
+        muted(b, t, tr(empty));
         return;
-    };
-    let profile = Profile {
-        name: if name.trim().is_empty() {
-            open.session.org().profile.name.clone()
-        } else {
-            name.trim().to_owned()
-        },
-        about,
-        place,
-        public_accuracy_m: accuracy_km.max(0.0) * 1000.0,
-        open_for_quotes,
-        ..open.session.org().profile.clone()
-    };
-    if write(world, Op::SetProfile(profile)) {
-        crate::linked::toast(world, tr("org-saved"));
     }
+    let width = cadrs_ui::table::total_width(&columns);
+    b.spawn((
+        Name::new(name),
+        Node {
+            flex_direction: FlexDirection::Column,
+            width: Val::Px(width),
+            max_width: Val::Percent(100.0),
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(t.radius)),
+            overflow: Overflow::clip(),
+            ..default()
+        },
+        BorderColor::all(t.border),
+    ))
+    .with_children(|table| {
+        table.spawn(TableHeader::new(format!("{name}-header"), columns).build(t));
+        for row in rows {
+            table.spawn(row.build(t));
+        }
+    });
 }
 
-fn members(b: &mut ChildSpawnerCommands, t: &Theme, open: &OpenOrg) {
-    let org = open.session.org();
-    heading(b, t, "org-tab-members");
-    for (i, (account, role)) in org.members.iter().enumerate() {
-        let devices = org.devices.of(account);
-        let names: Vec<&str> = devices.iter().map(|d| d.name.as_str()).collect();
-        let role = tr(match role {
-            Role::Owner => "org-role-owner",
-            Role::Admin => "org-role-admin",
-            Role::Member => "org-role-member",
-        });
-        row(b, |r| {
-            r.spawn((
-                Name::new(format!("org-member-{i}")),
-                t.text(
-                    short(account),
-                    t.font_base,
-                    FontWeight::MEDIUM,
-                    t.foreground,
-                ),
-            ));
-            r.spawn(t.text(role, t.font_base, FontWeight::NORMAL, t.foreground));
-            r.spawn(t.text(
-                names.join(", "),
-                t.font_sm,
-                FontWeight::NORMAL,
-                t.muted_foreground,
-            ));
-        });
-    }
-    b.spawn((
-        Button::new("org-add-member")
-            .label(tr("org-add-member"))
-            .icon("plus")
-            .build(t),
-        observe(
-            |_: On<Activate>,
-             mut commands: Commands,
-             theme: Res<Theme>,
-             social: Res<crate::social::Social>| {
-                let t = theme.clone();
-                let tb = theme.clone();
-                let people: Vec<String> = people(&social).iter().map(|c| c.name.clone()).collect();
-                commands.spawn((
-                    Dialog::new("org-member-dialog")
-                        .title(tr("org-add-member"))
-                        .width(560.0)
-                        .body(move |b| {
-                            b.spawn(t_text(&tb, "org-member-who"));
-                            if !people.is_empty() {
-                                let mut strip = TabStrip::new("org-member-contact");
-                                for p in &people {
-                                    strip = strip.tab(p.clone());
-                                }
-                                b.spawn(strip.build(&tb));
-                            }
-                            b.spawn(
-                                TextInput::new("org-member-link")
-                                    .placeholder(tr("org-member-link-placeholder"))
-                                    .build(&tb),
-                            );
-                            b.spawn(
-                                TabStrip::new("org-member-role")
-                                    .tab(tr("org-role-member"))
-                                    .tab(tr("org-role-admin"))
-                                    .tab(tr("org-role-owner"))
-                                    .build(&tb),
-                            );
-                        })
-                        .footer(|f| dialog_buttons(f, "org-member", add_member))
-                        .build(&t),
-                    OrgDialog,
-                    DespawnOnExit(AppState::Organization),
-                ));
-            },
-        ),
+/// A table's row of text cells, to which button cells are added ([`TableRow::cell`]).
+pub(crate) fn text_row(
+    t: &Theme,
+    name: String,
+    columns: &[Column],
+    cells: impl IntoIterator<Item = String>,
+) -> TableRow {
+    cells
+        .into_iter()
+        .fold(TableRow::new(name, columns), |row, cell| {
+            row.text_cell(t, cell)
+        })
+}
+
+/// A small button in a table's cell, running `act` on the world.
+pub(crate) fn cell_button(
+    c: &mut ChildSpawner,
+    name: String,
+    label: String,
+    primary: bool,
+    act: impl Fn(&mut World) + Send + Sync + Clone + 'static,
+) {
+    let t = c.world().resource::<Theme>().clone();
+    let mut button = Button::new(name).label(label).small();
+    button = if primary {
+        button.primary()
+    } else {
+        button.ghost()
+    };
+    c.spawn((
+        button.build(&t),
+        observe(move |_: On<Activate>, mut commands: Commands| {
+            let act = act.clone();
+            commands.queue(move |w: &mut World| act(w));
+        }),
     ));
 }
 
@@ -750,899 +1530,37 @@ pub(crate) fn dialog_buttons(f: &mut ChildSpawner, name: &str, ok: fn(&mut World
     ));
 }
 
-/// The people (not organizations) among the contacts.
-fn people(social: &crate::social::Social) -> Vec<cadrs_social::contact::Card> {
-    social
-        .contacts
-        .cards
-        .iter()
-        .map(|c| c.value.clone())
-        .filter(|c| c.kind == cadrs_social::contact::Kind::Person)
-        .collect()
-}
-
-fn add_member(world: &mut World) {
-    crate::social::ensure_loaded(world);
-    let link = field(world, "org-member-link");
-    let card = if link.trim().is_empty() {
-        let i = strip_selected(world, "org-member-contact");
-        people(world.resource::<crate::social::Social>())
-            .get(i)
-            .cloned()
-    } else {
-        match cadrs_social::contact::from_link(&link) {
-            Ok(card) if card.value.kind == cadrs_social::contact::Kind::Person => {
-                crate::social::add_contact(world, card.clone());
-                Some(card.value)
-            }
-            _ => None,
-        }
-    };
-    let Some(card) = card else {
-        crate::linked::toast(world, tr("org-member-bad-account"));
-        return;
-    };
-    let role =
-        [Role::Member, Role::Admin, Role::Owner][strip_selected(world, "org-member-role").min(2)];
-    let op = Op::SetMember {
-        account: card.account,
-        role: Some(role),
-    };
-    if write(world, op) {
-        close_dialogs(world);
-        // Their cadrs makes the organization document and fills it by syncing.
-        crate::org_sync::invite(world, &card);
-    }
-}
-
-const PROCESSES: [Process; 8] = [
-    Process::Waterjet,
-    Process::Laser,
-    Process::Plasma,
-    Process::Router,
-    Process::Mill,
-    Process::Lathe,
-    Process::PressBrake,
-    Process::Printer,
-];
-
-fn machines(b: &mut ChildSpawnerCommands, t: &Theme, open: &OpenOrg) {
-    let org = open.session.org();
-    heading(b, t, "org-tab-machines");
-    if org.machines.is_empty() {
-        muted(b, t, tr("org-no-machines"));
-    }
-    for (i, (id, m)) in org.machines.iter().enumerate() {
-        let id = *id;
-        let materials: Vec<String> = m
-            .materials
-            .iter()
-            .map(|l| format!("{} ≤ {} mm", l.material, l.max_thickness))
-            .collect();
-        row(b, |r| {
-            r.spawn((
-                Name::new(format!("org-machine-{i}")),
-                t.text(
-                    m.name.clone(),
-                    t.font_base,
-                    FontWeight::MEDIUM,
-                    t.foreground,
-                ),
-            ));
-            r.spawn(t.text(
-                format!(
-                    "{} · {} × {} mm · {}",
-                    m.process.label(),
-                    m.envelope[0],
-                    m.envelope[1],
-                    materials.join(", ")
-                ),
-                t.font_sm,
-                FontWeight::NORMAL,
-                t.muted_foreground,
-            ));
-            r.spawn((
-                Button::new(format!("org-machine-remove-{i}"))
-                    .label(tr("common-remove"))
-                    .ghost()
-                    .small()
-                    .build(t),
-                observe(move |_: On<Activate>, mut commands: Commands| {
-                    commands.queue(move |w: &mut World| {
-                        write(w, Op::SetMachine { id, machine: None });
-                    });
-                }),
-            ));
-        });
-    }
-    b.spawn((
-        Button::new("org-add-machine")
-            .label(tr("org-add-machine"))
-            .icon("plus")
-            .build(t),
-        observe(
-            |_: On<Activate>, mut commands: Commands, theme: Res<Theme>| {
-                let t = theme.clone();
-                let tb = theme.clone();
-                commands.spawn((
-                    Dialog::new("org-machine-dialog")
-                        .title(tr("org-add-machine"))
-                        .width(600.0)
-                        .body(move |b| {
-                            let t = &tb;
-                            b.spawn(t_text(t, "org-machine-name"));
-                            b.spawn(TextInput::new("org-machine-name").autofocus().build(t));
-                            let mut strip = TabStrip::new("org-machine-process").compact();
-                            for p in PROCESSES {
-                                strip = strip.tab(p.label());
-                            }
-                            b.spawn(strip.build(t));
-                            b.spawn(t_text(t, "org-machine-bed"));
-                            b.spawn(Node {
-                                column_gap: Val::Px(8.0),
-                                ..default()
-                            })
-                            .with_children(|r| {
-                                r.spawn(
-                                    TextInput::new("org-machine-x")
-                                        .value("3000")
-                                        .width(Val::Px(120.0))
-                                        .build(t),
-                                );
-                                r.spawn(
-                                    TextInput::new("org-machine-y")
-                                        .value("1500")
-                                        .width(Val::Px(120.0))
-                                        .build(t),
-                                );
-                                r.spawn(
-                                    TextInput::new("org-machine-kerf")
-                                        .value("1")
-                                        .width(Val::Px(120.0))
-                                        .build(t),
-                                );
-                            });
-                            b.spawn(t_text(t, "org-machine-materials"));
-                            b.spawn(
-                                TextInput::new("org-machine-materials")
-                                    .placeholder(tr("org-machine-materials-placeholder"))
-                                    .build(t),
-                            );
-                        })
-                        .footer(|f| dialog_buttons(f, "org-machine", add_machine))
-                        .build(&t),
-                    OrgDialog,
-                    DespawnOnExit(AppState::Organization),
-                ));
-            },
-        ),
-    ));
-}
-
-/// "mild steel 100, glass 25" → limits.
-fn parse_materials(text: &str) -> Vec<MaterialLimit> {
-    text.split([',', ';'])
-        .filter_map(|part| {
-            let part = part.trim();
-            let (name, mm) = part.rsplit_once(' ')?;
-            let mm: f64 = mm.trim_end_matches("mm").replace(',', ".").parse().ok()?;
-            Some(MaterialLimit {
-                material: name.trim().to_owned(),
-                max_thickness: mm,
-                speeds: Vec::new(),
-            })
-        })
-        .collect()
-}
-
-fn add_machine(world: &mut World) {
-    let name = field(world, "org-machine-name");
-    if name.trim().is_empty() {
-        crate::linked::toast(world, tr("org-machine-needs-name"));
-        return;
-    }
-    let process = PROCESSES[strip_selected(world, "org-machine-process").min(PROCESSES.len() - 1)];
-    let x = number(world, "org-machine-x").unwrap_or(0.0);
-    let y = number(world, "org-machine-y").unwrap_or(0.0);
-    let kerf = number(world, "org-machine-kerf").unwrap_or(0.0);
-    let materials = parse_materials(&field(world, "org-machine-materials"));
-    let machine = MachineCaps {
-        name: name.trim().to_owned(),
-        process,
-        envelope: [x, y, 0.0],
-        materials,
-        kerf,
-        min_hole_ratio: if process == Process::Plasma { 1.5 } else { 0.5 },
-        tolerance: 0.1,
-        pierce_seconds: 2.0,
-    };
-    if write(
-        world,
-        Op::SetMachine {
-            id: new_id(),
-            machine: Some(machine),
-        },
-    ) {
-        close_dialogs(world);
-    }
-}
-
-fn stock(b: &mut ChildSpawnerCommands, t: &Theme, open: &OpenOrg) {
-    let org = open.session.org();
-    heading(b, t, "org-tab-stock");
-    if org.materials.is_empty() {
-        muted(b, t, tr("org-no-materials"));
-    }
-    for (i, (id, m)) in org.materials.iter().enumerate() {
-        let id = *id;
-        let on_hand = org.stock.get(&id).copied().unwrap_or(0);
-        let free = org.available(id);
-        row(b, |r| {
-            r.spawn((
-                Name::new(format!("org-material-{i}")),
-                t.text(
-                    format!("{} {} mm", m.name, m.thickness),
-                    t.font_base,
-                    FontWeight::MEDIUM,
-                    t.foreground,
-                ),
-            ));
-            r.spawn((
-                Name::new(format!("org-material-count-{i}")),
-                t.text(
-                    format!("{on_hand} ({free} {})", tr("org-free")),
-                    t.font_base,
-                    FontWeight::NORMAL,
-                    t.foreground,
-                ),
-            ));
-            for (delta, label) in [(1i64, "+1"), (-1, "−1")] {
-                r.spawn((
-                    Button::new(format!("org-material-{i}-{delta}"))
-                        .label(label)
-                        .small()
-                        .build(t),
-                    observe(move |_: On<Activate>, mut commands: Commands| {
-                        commands.queue(move |w: &mut World| {
-                            write(
-                                w,
-                                Op::Stock {
-                                    material: id,
-                                    sheets: delta,
-                                },
-                            );
-                        });
-                    }),
-                ));
-            }
-        });
-    }
-    b.spawn((
-        Button::new("org-add-material")
-            .label(tr("org-add-material"))
-            .icon("plus")
-            .build(t),
-        observe(
-            |_: On<Activate>, mut commands: Commands, theme: Res<Theme>| {
-                let t = theme.clone();
-                let tb = theme.clone();
-                commands.spawn((
-                    Dialog::new("org-material-dialog")
-                        .title(tr("org-add-material"))
-                        .width(520.0)
-                        .body(move |b| {
-                            let t = &tb;
-                            b.spawn(t_text(t, "org-material-name"));
-                            b.spawn(TextInput::new("org-material-name").autofocus().build(t));
-                            b.spawn(t_text(t, "org-material-size"));
-                            b.spawn(Node {
-                                column_gap: Val::Px(8.0),
-                                ..default()
-                            })
-                            .with_children(|r| {
-                                r.spawn(
-                                    TextInput::new("org-material-thickness")
-                                        .value("3")
-                                        .width(Val::Px(100.0))
-                                        .build(t),
-                                );
-                                r.spawn(
-                                    TextInput::new("org-material-x")
-                                        .value("2500")
-                                        .width(Val::Px(100.0))
-                                        .build(t),
-                                );
-                                r.spawn(
-                                    TextInput::new("org-material-y")
-                                        .value("1250")
-                                        .width(Val::Px(100.0))
-                                        .build(t),
-                                );
-                            });
-                        })
-                        .footer(|f| dialog_buttons(f, "org-material", add_material))
-                        .build(&t),
-                    OrgDialog,
-                    DespawnOnExit(AppState::Organization),
-                ));
-            },
-        ),
-    ));
-}
-
-fn add_material(world: &mut World) {
-    let name = field(world, "org-material-name");
-    let Some(thickness) = number(world, "org-material-thickness").filter(|t| *t > 0.0) else {
-        crate::linked::toast(world, tr("org-material-needs-thickness"));
-        return;
-    };
-    if name.trim().is_empty() {
-        crate::linked::toast(world, tr("org-material-needs-name"));
-        return;
-    }
-    let sheet = [
-        number(world, "org-material-x").unwrap_or(0.0),
-        number(world, "org-material-y").unwrap_or(0.0),
-    ];
-    if write(
-        world,
-        Op::SetMaterial {
-            id: new_id(),
-            material: Some(Material {
-                name: name.trim().to_owned(),
-                thickness,
-                sheet,
-            }),
-        },
-    ) {
-        close_dialogs(world);
-    }
-}
-
-fn money_text(m: Money) -> String {
-    format!("{:.2}", m.0 as f64 / 100.0)
-}
-
-fn prices(b: &mut ChildSpawnerCommands, t: &Theme, open: &OpenOrg) {
-    let org = open.session.org();
-    let rates = org.rates.clone().unwrap_or_else(|| RateCard {
-        currency: "ZAR".into(),
-        setup: Money::default(),
-        minimum: Money::default(),
-        hourly: Vec::new(),
-        sheet_per_m2: Vec::new(),
-        nesting_allowance: 1.25,
-    });
-    heading(b, t, "org-tab-prices");
-    muted(b, t, tr("org-prices-help"));
-    row(b, |r| {
-        r.spawn(t_text(t, "org-rates-currency"));
-        input(r, t, "org-rates-currency", rates.currency.clone(), 80.0);
-        r.spawn(t_text(t, "org-rates-setup"));
-        input(r, t, "org-rates-setup", money_text(rates.setup), 110.0);
-        r.spawn(t_text(t, "org-rates-minimum"));
-        input(r, t, "org-rates-minimum", money_text(rates.minimum), 110.0);
-        r.spawn(t_text(t, "org-rates-nesting"));
-        input(
-            r,
-            t,
-            "org-rates-nesting",
-            format!("{:.0}", (rates.nesting_allowance - 1.0) * 100.0),
-            70.0,
-        );
-    });
-    label(b, t, "org-rates-hourly");
-    if org.machines.is_empty() {
-        muted(b, t, tr("org-no-machines"));
-    }
-    for (i, m) in org.machines.values().enumerate() {
-        let rate = rates
-            .hourly
-            .iter()
-            .find(|(n, _)| *n == m.name)
-            .map_or(String::new(), |(_, r)| money_text(*r));
-        row(b, |r| {
-            r.spawn(
-                TextInput::new(format!("org-rate-machine-{i}"))
-                    .value(rate)
-                    .width(Val::Px(110.0))
-                    .build(t),
-            );
-            r.spawn(t.text(
-                m.name.clone(),
-                t.font_base,
-                FontWeight::NORMAL,
-                t.foreground,
-            ));
-        });
-    }
-    label(b, t, "org-rates-sheet");
-    if org.materials.is_empty() {
-        muted(b, t, tr("org-no-materials"));
-    }
-    for (i, m) in org.materials.values().enumerate() {
-        let price = rates
-            .sheet_per_m2
-            .iter()
-            .find(|(n, th, _)| n.eq_ignore_ascii_case(&m.name) && (*th - m.thickness).abs() < 1e-6)
-            .map_or(String::new(), |(_, _, p)| money_text(*p));
-        row(b, |r| {
-            r.spawn(
-                TextInput::new(format!("org-rate-material-{i}"))
-                    .value(price)
-                    .width(Val::Px(110.0))
-                    .build(t),
-            );
-            r.spawn(t.text(
-                format!("{} {} mm", m.name, m.thickness),
-                t.font_base,
-                FontWeight::NORMAL,
-                t.foreground,
-            ));
-        });
-    }
-    b.spawn((
-        Button::new("org-rates-save")
-            .label(tr("common-save"))
-            .primary()
-            .build(t),
-        observe(|_: On<Activate>, mut commands: Commands| {
-            commands.queue(save_prices);
-        }),
-    ));
-}
-
-fn save_prices(world: &mut World) {
-    let money = |world: &mut World, name: &str| number(world, name).map(Money::from_major);
-    let currency = field(world, "org-rates-currency").trim().to_uppercase();
-    let setup = money(world, "org-rates-setup").unwrap_or_default();
-    let minimum = money(world, "org-rates-minimum").unwrap_or_default();
-    let nesting = 1.0 + number(world, "org-rates-nesting").unwrap_or(25.0).max(0.0) / 100.0;
-    let Some(open) = world.get_resource::<OpenOrg>() else {
-        return;
-    };
-    let machines: Vec<String> = open
-        .session
-        .org()
-        .machines
-        .values()
-        .map(|m| m.name.clone())
-        .collect();
-    let materials: Vec<(String, f64)> = open
-        .session
-        .org()
-        .materials
-        .values()
-        .map(|m| (m.name.clone(), m.thickness))
-        .collect();
-    let mut hourly = Vec::new();
-    for (i, name) in machines.into_iter().enumerate() {
-        if let Some(rate) = money(world, &format!("org-rate-machine-{i}")) {
-            hourly.push((name, rate));
-        }
-    }
-    let mut sheet_per_m2 = Vec::new();
-    for (i, (name, thickness)) in materials.into_iter().enumerate() {
-        if let Some(price) = money(world, &format!("org-rate-material-{i}")) {
-            sheet_per_m2.push((name, thickness, price));
-        }
-    }
-    let rates = RateCard {
-        currency: if currency.is_empty() {
-            "ZAR".into()
-        } else {
-            currency
-        },
-        setup,
-        minimum,
-        hourly,
-        sheet_per_m2,
-        nesting_allowance: nesting,
-    };
-    if write(world, Op::SetRates(rates)) {
-        crate::linked::toast(world, tr("org-saved"));
-    }
-}
-
-fn stage_key(stage: Stage) -> &'static str {
-    match stage {
-        Stage::Requested => "org-stage-requested",
-        Stage::Quoted => "org-stage-quoted",
-        Stage::Declined => "org-stage-declined",
-        Stage::Accepted => "org-stage-accepted",
-        Stage::InProduction => "org-stage-in-production",
-        Stage::Ready => "org-stage-ready",
-        Stage::Completed => "org-stage-completed",
-    }
-}
-
-fn requests(b: &mut ChildSpawnerCommands, t: &Theme, open: &OpenOrg) {
-    let org = open.session.org();
-    heading(b, t, "org-tab-requests");
-    if org.requests.is_empty() {
-        muted(b, t, tr("org-no-requests"));
-    }
-    for (i, (id, r)) in org.requests.iter().enumerate() {
-        let id = *id;
-        let parts: Vec<String> = r
-            .parts
-            .iter()
-            .map(|(p, n)| format!("{n} × {}", p.name))
-            .collect();
-        let price = r
-            .quote
-            .as_ref()
-            .map(|q| format!("{} {}", q.currency, q.total.format()))
-            .unwrap_or_default();
-        let stage = r.stage;
-        row(b, |row| {
-            row.spawn((
-                Name::new(format!("org-request-{i}")),
-                t.text(
-                    parts.join(", "),
-                    t.font_base,
-                    FontWeight::MEDIUM,
-                    t.foreground,
-                ),
-            ));
-            row.spawn(t.text(
-                short(&r.client),
-                t.font_sm,
-                FontWeight::NORMAL,
-                t.muted_foreground,
-            ));
-            row.spawn((
-                Name::new(format!("org-request-stage-{i}")),
-                t.text(
-                    tr(stage_key(stage)),
-                    t.font_sm,
-                    FontWeight::BOLD,
-                    t.foreground,
-                ),
-            ));
-            row.spawn(t.text(price, t.font_base, FontWeight::NORMAL, t.foreground));
-            // The stock held for it.
-            let held: Vec<String> = org
-                .reservations
-                .values()
-                .filter(|res| res.request == id)
-                .filter_map(|res| {
-                    let m = org.materials.get(&res.material)?;
-                    Some(format!("{} × {} {} mm", res.sheets, m.name, m.thickness))
-                })
-                .collect();
-            if !held.is_empty() {
-                row.spawn((
-                    Name::new(format!("org-request-held-{i}")),
-                    t.text(
-                        held.join(", "),
-                        t.font_sm,
-                        FontWeight::NORMAL,
-                        t.muted_foreground,
-                    ),
-                ));
-            }
-            if matches!(stage, Stage::Accepted | Stage::InProduction) && !org.materials.is_empty() {
-                row.spawn((
-                    Button::new(format!("org-request-reserve-{i}"))
-                        .label(tr("org-reserve"))
-                        .small()
-                        .ghost()
-                        .build(t),
-                    observe(move |_: On<Activate>, mut commands: Commands| {
-                        commands.queue(move |w: &mut World| open_reserve(w, id));
-                    }),
-                ));
-            }
-            let messages = r.chat.len();
-            row.spawn((
-                Button::new(format!("org-request-chat-{i}"))
-                    .label(format!("{} ({messages})", tr("chat-messages")))
-                    .small()
-                    .ghost()
-                    .build(t),
-                observe(move |_: On<Activate>, mut commands: Commands| {
-                    commands.queue(move |w: &mut World| {
-                        crate::chat_ui::open(w, crate::chat_ui::Thread::Shop(id))
-                    });
-                }),
-            ));
-            // The order's next step.
-            let next = match stage {
-                Stage::Accepted => Some(("org-start-production", Some(Stage::InProduction))),
-                Stage::InProduction => Some(("org-mark-ready", Some(Stage::Ready))),
-                Stage::Ready => Some(("org-delivered", None)),
-                _ => None,
-            };
-            if let Some((label, to)) = next {
-                row.spawn((
-                    Button::new(format!("org-request-next-{i}"))
-                        .label(tr(label))
-                        .small()
-                        .primary()
-                        .build(t),
-                    observe(move |_: On<Activate>, mut commands: Commands| {
-                        commands.queue(move |w: &mut World| match to {
-                            Some(stage) => advance(w, id, stage),
-                            None => deliver(w, id),
-                        });
-                    }),
-                ));
-            }
-            if stage == Stage::Requested {
-                row.spawn((
-                    Button::new(format!("org-request-quote-{i}"))
-                        .label(tr("org-instant-quote"))
-                        .small()
-                        .primary()
-                        .build(t),
-                    observe(move |_: On<Activate>, mut commands: Commands| {
-                        commands.queue(move |w: &mut World| instant_quote(w, id));
-                    }),
-                ));
-                row.spawn((
-                    Button::new(format!("org-request-decline-{i}"))
-                        .label(tr("org-decline"))
-                        .small()
-                        .build(t),
-                    observe(move |_: On<Activate>, mut commands: Commands| {
-                        commands.queue(move |w: &mut World| {
-                            let decline = Op::Decline {
-                                request: id,
-                                reason: String::new(),
-                            };
-                            if write(w, decline) {
-                                tell_client(
-                                    w,
-                                    id,
-                                    cadrs_org::letters::Message::Decline {
-                                        request: id,
-                                        reason: String::new(),
-                                    },
-                                );
-                            }
-                        });
-                    }),
-                ));
-            }
-        });
-    }
-}
-
-/// The order the Reserve dialog is for.
-#[derive(Resource)]
-struct Reserving(cadrs_org::Id);
-
-fn open_reserve(world: &mut World, request: cadrs_org::Id) {
-    let Some(open) = world.get_resource::<OpenOrg>() else {
-        return;
-    };
-    let org = open.session.org();
-    let materials: Vec<String> = org
-        .materials
-        .iter()
-        .map(|(id, m)| {
-            format!(
-                "{} {} mm ({} {})",
-                m.name,
-                m.thickness,
-                org.available(*id),
-                tr("org-free")
-            )
-        })
-        .collect();
-    world.insert_resource(Reserving(request));
-    let theme = world.resource::<Theme>().clone();
-    let t = theme.clone();
-    let tb = theme.clone();
-    world.spawn((
-        Dialog::new("org-reserve-dialog")
-            .title(tr("org-reserve"))
-            .width(520.0)
-            .body(move |b| {
-                let t = &tb;
-                let mut strip = TabStrip::new("org-reserve-material");
-                for m in &materials {
-                    strip = strip.tab(m.clone());
-                }
-                b.spawn(strip.build(t));
-                b.spawn(t_text(t, "org-reserve-sheets"));
-                b.spawn(
-                    TextInput::new("org-reserve-sheets")
-                        .value("1")
-                        .width(Val::Px(100.0))
-                        .build(t),
-                );
-            })
-            .footer(|f| dialog_buttons(f, "org-reserve", reserve))
-            .build(&t),
-        OrgDialog,
-        DespawnOnExit(AppState::Organization),
-    ));
-}
-
-fn reserve(world: &mut World) {
-    let Some(Reserving(request)) = world.remove_resource::<Reserving>() else {
-        return;
-    };
-    let Some(open) = world.get_resource::<OpenOrg>() else {
-        return;
-    };
-    let materials: Vec<cadrs_org::Id> = open.session.org().materials.keys().copied().collect();
-    let Some(material) = materials
-        .get(strip_selected(world, "org-reserve-material"))
-        .copied()
-    else {
-        return;
-    };
-    let sheets = number(world, "org-reserve-sheets").unwrap_or(1.0).max(1.0) as u32;
-    let op = Op::Reserve {
-        id: new_id(),
-        reservation: cadrs_org::Reservation {
-            material,
-            sheets,
-            request,
-        },
-    };
-    if write(world, op) {
-        close_dialogs(world);
-    } else {
-        // Refused (not enough free): keep the dialog for another try.
-        world.insert_resource(Reserving(request));
-    }
-}
-
-/// Moves an order on, and tells the client.
-pub fn advance(world: &mut World, request: cadrs_org::Id, stage: Stage) {
-    if write(world, Op::Advance { request, stage }) {
-        tell_client(
-            world,
-            request,
-            cadrs_org::letters::Message::Stage { request, stage },
-        );
-    }
-}
-
-/// Delivered: the organization signs half the order's receipt and sends it to the client to
-/// countersign; the order completes when it comes back.
-pub fn deliver(world: &mut World, request: cadrs_org::Id) {
-    crate::social::ensure_loaded(world);
-    let Some(open) = world.get_resource::<OpenOrg>() else {
-        return;
-    };
-    let org = open.session.org();
-    let (Some(account), Some(client)) = (org.org, org.requests.get(&request).map(|r| r.client))
-    else {
-        return;
-    };
-    let Some(key) = crate::social::org_key(world, &account) else {
-        crate::linked::toast(world, tr("org-needs-org-key"));
-        return;
-    };
-    // What was held for it is used up.
-    let held: Vec<cadrs_org::Id> = org
-        .reservations
-        .iter()
-        .filter(|(_, r)| r.request == request)
-        .map(|(id, _)| *id)
-        .collect();
-    for id in held {
-        write(world, Op::Release { id, used: true });
-    }
-    let receipt = cadrs_social::receipts::Receipt::OrderCompleted {
-        shop: account,
-        client,
-        order: cadrs_org::order_ref(request),
-        at: cadrs_social::wall_millis(),
-    }
-    .sign_first(&key)
-    .expect("the organization is the shop");
-    tell_client(
-        world,
-        request,
-        cadrs_org::letters::Message::Delivered { request, receipt },
-    );
-}
-
-/// Sends `message` to the client of request `request`, from the open organization.
-pub(crate) fn tell_client(
-    world: &mut World,
-    request: cadrs_org::Id,
-    message: cadrs_org::letters::Message,
-) {
-    crate::social::ensure_loaded(world);
-    let Some(open) = world.get_resource::<OpenOrg>() else {
-        return;
-    };
-    let org = open.session.org();
-    let (Some(client), Some(account)) = (org.requests.get(&request).map(|r| r.client), org.org)
-    else {
-        return;
-    };
-    // From the contacts, else the card the request came with.
-    let card = world
-        .resource::<crate::social::Social>()
-        .contacts
-        .get(&client)
-        .cloned()
-        .or_else(|| {
-            world
-                .get_resource::<OpenOrg>()?
-                .session
-                .org()
-                .requests
-                .get(&request)?
-                .card
-                .as_ref()
-                .map(|c| c.value.clone())
-        });
-    match card {
-        Some(card) => {
-            crate::social::send(
-                world,
-                &card,
-                message,
-                Some(account),
-                tr("social-what-reply"),
-            );
-        }
-        None => crate::linked::toast(world, tr("social-no-client-card")),
-    }
-}
-
-/// Quotes a request at the price the rate card gives.
-pub fn instant_quote(world: &mut World, request: cadrs_org::Id) {
-    let Some(open) = world.get_resource::<OpenOrg>() else {
-        return;
-    };
-    let org = open.session.org();
-    let Some(rates) = org.rates.clone() else {
-        crate::linked::toast(world, tr("org-no-rates"));
-        return;
-    };
-    let Some(r) = org.requests.get(&request) else {
-        return;
-    };
-    let machines: Vec<MachineCaps> = org.machines.values().cloned().collect();
-    match cadrs_org::quote::estimate(&machines, &rates, &r.parts) {
-        Ok(estimate) => {
-            let quote = cadrs_org::Quote {
-                total: estimate.total,
-                currency: estimate.currency,
-                lines: estimate.lines,
-                valid_until: cadrs_social::wall_millis() + 14 * 86_400_000,
-                note: String::new(),
-            };
-            let op = Op::Quote {
-                request,
-                quote: quote.clone(),
-            };
-            if write(world, op) {
-                tell_client(
-                    world,
-                    request,
-                    cadrs_org::letters::Message::Quote { request, quote },
-                );
-            }
-        }
-        Err(cadrs_org::quote::NoPrice::NoMachine { part, why }) => {
-            crate::linked::toast(world, format!("{part}: {}", why.join("; ")));
-        }
-        Err(cadrs_org::quote::NoPrice::NoRate(what)) => {
-            crate::linked::toast(world, format!("{}: {what}", tr("org-no-rates")));
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn materials_parse() {
-        let m = parse_materials("mild steel 100, glass 25mm; junk");
-        assert_eq!(m.len(), 2);
-        assert_eq!(m[0].material, "mild steel");
-        assert_eq!(m[1].max_thickness, 25.0);
+    fn currencies_are_three_letters() {
+        assert_eq!(currency_code(" zar "), Some("ZAR".into()));
+        assert_eq!(currency_code("EUR"), Some("EUR".into()));
+        for bad in ["", "R", "rand", "Z4R", "€€€"] {
+            assert_eq!(currency_code(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn requests_are_numbered_as_people_say_them() {
+        assert_eq!(request_number(7), "R-0007");
+        assert_eq!(request_number(12345), "R-12345");
+    }
+
+    /// Every module of the navigation has a key of its own, and each group opens once.
+    #[test]
+    fn the_modules_are_distinct() {
+        let mut keys: Vec<&str> = MODULES.iter().map(|m| m.key).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), MODULES.len());
+        let groups: Vec<&str> = MODULES.iter().filter_map(|m| m.group).collect();
+        let mut distinct = groups.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert_eq!(distinct.len(), groups.len());
+        assert_eq!(MODULES[0].tab, OrgTab::Overview);
     }
 }

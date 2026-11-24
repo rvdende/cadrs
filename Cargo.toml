@@ -22,6 +22,7 @@ default-members = [
     "crates/cadrs_kicad",
     "crates/cadrs_kernel",
     "crates/cadrs_mcp",
+    "crates/cadrs_credits",
     "crates/cadrs_org",
     "crates/cadrs_pcb",
     "crates/cadrs_render",
@@ -158,6 +159,7 @@ cadrs_social = { path = "crates/cadrs_social" }
 cadrs_social_net = { path = "crates/cadrs_social_net" }
 cadrs_mobile = { path = "crates/cadrs_mobile" }
 cadrs_org = { path = "crates/cadrs_org" }
+cadrs_credits = { path = "crates/cadrs_credits" }
 cadrs_icons = { path = "crates/cadrs_icons" }
 cadrs_cam = { path = "crates/cadrs_cam" }
 cadrs_sketch = { path = "crates/cadrs_sketch" }

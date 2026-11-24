@@ -67,6 +67,7 @@ pub mod manipulator;
 pub mod mass_props;
 pub mod material_dialog;
 // The MCP server listens on a port: not in the browser build (`tools/web`).
+pub mod credits;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mcp;
 #[cfg(not(target_arch = "wasm32"))]
@@ -80,6 +81,11 @@ pub mod move_document;
 pub mod native_document;
 pub mod network;
 pub mod notifications;
+pub mod org_create;
+pub mod org_logo;
+pub mod org_profile;
+pub mod org_quality;
+mod org_script;
 pub mod org_sync;
 pub mod org_tabs;
 pub mod organization;
@@ -156,6 +162,7 @@ pub mod view_options;
 pub mod viewport;
 pub mod viewport_menu;
 pub mod walk;
+pub mod wallet_ui;
 pub mod window_title;
 pub mod workspaces;
 
@@ -967,6 +974,8 @@ impl Plugin for CadrsAppPlugin {
                 walk::WalkPlugin,
                 organization::OrganizationPlugin,
                 social::SocialPlugin,
+                credits::CreditsPlugin,
+                wallet_ui::WalletUiPlugin,
                 org_sync::OrgSyncPlugin,
                 public_chat_ui::PublicChatPlugin,
             ))

@@ -2365,6 +2365,7 @@ dependencies = [
  "bevy",
  "blake3",
  "cadrs_core",
+ "cadrs_credits",
  "cadrs_drawing",
  "cadrs_easyeda",
  "cadrs_eda",
@@ -2465,6 +2466,16 @@ dependencies = [
  "uuid",
  "web-time",
  "zip",
+]
+
+[[package]]
+name = "cadrs_credits"
+version = "0.2.9"
+dependencies = [
+ "blake3",
+ "cadrs_social",
+ "serde",
+ "serde_bytes",
 ]
 
 [[package]]
@@ -2658,6 +2669,7 @@ dependencies = [
  "bevy_iroh",
  "blake3",
  "cadrs_core",
+ "cadrs_credits",
  "cadrs_fs",
  "cadrs_sketch",
  "cadrs_social",
@@ -2696,7 +2708,6 @@ dependencies = [
  "blake3",
  "cadrs_fs",
  "cadrs_social",
- "postcard",
  "serde",
  "serde_bytes",
 ]
@@ -2791,6 +2802,7 @@ dependencies = [
  "openmls_traits",
  "postcard",
  "proptest",
+ "rmp-serde",
  "serde",
  "serde_bytes",
  "sha2 0.10.9",

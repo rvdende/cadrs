@@ -149,6 +149,89 @@ impl<T: Statement> Signed<T> {
     }
 }
 
+/// A kind of statement that has to grow (a letter, a shop's listing): signed as the bytes it was
+/// written in ([`crate::codec`]) rather than as a value, so a later version can add fields and
+/// an earlier one still checks the signature and reads what it knows.
+pub trait Growing: Serialize + DeserializeOwned {
+    const CONTEXT: &'static str;
+}
+
+/// A [`Growing`] statement as its bytes, with the key that signed them and its signature.
+#[derive(Serialize, Deserialize)]
+#[serde(bound = "")]
+pub struct SignedBytes<T> {
+    #[serde(with = "serde_bytes")]
+    bytes: Vec<u8>,
+    pub signer: PublicKey,
+    pub signature: Signature,
+    #[serde(skip)]
+    of: std::marker::PhantomData<fn() -> T>,
+}
+
+impl<T> Clone for SignedBytes<T> {
+    fn clone(&self) -> Self {
+        Self {
+            bytes: self.bytes.clone(),
+            signer: self.signer,
+            signature: self.signature,
+            of: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<T> PartialEq for SignedBytes<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.bytes == other.bytes
+            && self.signer == other.signer
+            && self.signature == other.signature
+    }
+}
+
+impl<T> fmt::Debug for SignedBytes<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "SignedBytes({} bytes by {:?})",
+            self.bytes.len(),
+            self.signer
+        )
+    }
+}
+
+impl<T: Growing> SignedBytes<T> {
+    pub fn new(key: &SecretKey, value: &T) -> Self {
+        let bytes = crate::codec::encode(value);
+        let signature = key.sign(T::CONTEXT, &bytes);
+        Self {
+            bytes,
+            signer: key.public(),
+            signature,
+            of: std::marker::PhantomData,
+        }
+    }
+
+    /// The statement's bytes, if its signature holds (for a reader that tells a statement it
+    /// can't read yet from a broken one: [`crate::codec::decode`] them).
+    pub fn verify(&self) -> Result<&[u8], Error> {
+        verify(&self.signer, T::CONTEXT, &self.bytes, &self.signature)?;
+        Ok(&self.bytes)
+    }
+
+    /// The statement, if its signature holds and this version can read it.
+    pub fn open(&self) -> Result<T, Error> {
+        crate::codec::decode(self.verify()?).map_err(|_| Error::Encoding)
+    }
+
+    /// How large the statement is, signed.
+    pub fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+}
+
 /// An account vouches for one of its devices.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceCert {

@@ -243,10 +243,16 @@ pub fn confirm(world: &mut World) {
         Ok(cert) => {
             let device = request.device();
             crate::social::add_linked(world, device);
-            // The account's shops come along to the new device.
-            crate::org_sync::invite_linked(world, device);
+            // The account's organizations follow once the device has taken the grant in
+            // (`SendKind::Grant`).
             let what = tr_with("pair-what-grant", &[("name", request.name())]);
-            crate::social::send_post(world, &[device], &Post::Grant(cert), what);
+            crate::social::start(
+                world,
+                &[device],
+                Post::Grant(cert).encode(),
+                what,
+                crate::social::SendKind::Grant { device },
+            );
             close(world);
         }
         Err(e) => crate::linked::toast(world, format!("{e:?}")),

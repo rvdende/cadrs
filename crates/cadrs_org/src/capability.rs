@@ -62,18 +62,34 @@ impl Process {
     }
 }
 
-/// How thick a machine cuts one material.
+/// A material a machine works, and for one that cuts sheet how thick.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MaterialLimit {
-    /// The material's name, as the shop's materials name it ("mild steel").
+    /// The material's name, as the shop's materials name it ("mild steel", "PETG").
     pub material: String,
-    /// The thickest it cuts, in mm.
+    /// The thickest it cuts, in mm; 0 when that isn't said, or isn't a question (a 3D printer
+    /// prints PETG; it doesn't cut a thickness of it).
     pub max_thickness: f64,
     /// Cutting speed at a few thicknesses, (mm, mm/min), for quoting; sorted by thickness.
     pub speeds: Vec<(f64, f64)>,
 }
 
+/// A material and the thickest of it a machine cuts, as a list shows them: "mild steel ≤ 100 mm",
+/// or the material alone when no thickness is said.
+pub fn material_label(material: &str, max_thickness: f64) -> String {
+    if max_thickness > 0.0 {
+        format!("{material} ≤ {max_thickness} mm")
+    } else {
+        material.to_owned()
+    }
+}
+
 impl MaterialLimit {
+    /// As a list shows it ([`material_label`]).
+    pub fn label(&self) -> String {
+        material_label(&self.material, self.max_thickness)
+    }
+
     /// The cutting speed at `thickness`, interpolated between the known ones (mm/min).
     pub fn speed_at(&self, thickness: f64) -> Option<f64> {
         let speeds = &self.speeds;
@@ -110,6 +126,9 @@ pub struct MachineCaps {
     pub tolerance: f64,
     /// Seconds to pierce once (profile cutters), for quoting.
     pub pierce_seconds: f64,
+    /// Where it stands ([`crate::Location`]), when the organization says.
+    #[serde(default)]
+    pub location: Option<crate::Id>,
 }
 
 /// What the designer's cadrs measured on a part.
@@ -168,11 +187,16 @@ pub fn fit(machine: &MachineCaps, part: &PartSummary) -> Fit {
                         .find(|m| m.material.eq_ignore_ascii_case(material))
                     {
                         None => problems.push(format!("this {process} doesn't cut {material}")),
-                        Some(limit) if thickness > limit.max_thickness => problems.push(format!(
-                            "{} mm is thicker than this {process} cuts {material} ({} mm)",
-                            round(thickness),
-                            round(limit.max_thickness)
-                        )),
+                        // (No thickness said for it: any.)
+                        Some(limit)
+                            if limit.max_thickness > 0.0 && thickness > limit.max_thickness =>
+                        {
+                            problems.push(format!(
+                                "{} mm is thicker than this {process} cuts {material} ({} mm)",
+                                round(thickness),
+                                round(limit.max_thickness)
+                            ))
+                        }
                         Some(_) => {}
                     },
                 }
@@ -211,6 +235,17 @@ pub fn fit(machine: &MachineCaps, part: &PartSummary) -> Fit {
             ));
         }
     } else {
+        // A machine that says what it works in doesn't make a part asked for in something
+        // else: a printer that lists PETG and PLA isn't offered a part in mild steel.
+        if let Some(material) = part.material.as_deref()
+            && !machine.materials.is_empty()
+            && !machine
+                .materials
+                .iter()
+                .any(|m| m.material.eq_ignore_ascii_case(material))
+        {
+            problems.push(format!("this {process} doesn't work in {material}"));
+        }
         let mut envelope = machine.envelope;
         envelope.sort_by(|a, b| b.total_cmp(a));
         if part.size.iter().zip(envelope).any(|(p, m)| *p > m) {
@@ -269,6 +304,7 @@ pub(crate) mod tests {
             min_hole_ratio: 0.5,
             tolerance: 0.1,
             pierce_seconds: 4.0,
+            location: None,
         }
     }
 
@@ -322,8 +358,50 @@ pub(crate) mod tests {
             min_hole_ratio: 0.0,
             tolerance: 0.02,
             pierce_seconds: 0.0,
+            location: None,
         };
         assert!(fit(&mill, &part).ok());
+    }
+
+    /// A 3D printer is the space it prints in and the materials it prints: a part asked for
+    /// in one of them that fits is its to make; one in steel, or too tall, isn't.
+    #[test]
+    fn a_printer_prints_what_fits_in_what_it_prints() {
+        let printer = MachineCaps {
+            name: "K1C".into(),
+            process: Process::Printer,
+            envelope: [220.0, 220.0, 250.0],
+            materials: vec![MaterialLimit {
+                material: "PETG".into(),
+                max_thickness: 0.0,
+                speeds: vec![],
+            }],
+            kerf: 0.0,
+            min_hole_ratio: 0.0,
+            tolerance: 0.2,
+            pierce_seconds: 0.0,
+            location: None,
+        };
+        let mut part = bracket();
+        part.flat_thickness = None;
+        part.size = [200.0, 80.0, 40.0];
+        part.material = Some("petg".into());
+        assert!(fit(&printer, &part).ok(), "{:?}", fit(&printer, &part));
+        // No material asked for: its to make too.
+        part.material = None;
+        assert!(fit(&printer, &part).ok());
+        part.material = Some("mild steel".into());
+        assert_eq!(
+            fit(&printer, &part).problems,
+            ["this 3D printer doesn't work in mild steel"]
+        );
+        part.material = Some("PETG".into());
+        part.size = [260.0, 80.0, 40.0];
+        assert!(!fit(&printer, &part).ok(), "taller than it prints");
+        // A cutter that names a material without a thickness cuts any thickness of it.
+        let mut jet = waterjet();
+        jet.materials[0].max_thickness = 0.0;
+        assert!(fit(&jet, &bracket()).ok());
     }
 
     #[test]

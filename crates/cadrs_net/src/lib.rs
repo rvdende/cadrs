@@ -17,6 +17,7 @@
 
 use std::path::PathBuf;
 
+pub mod bank;
 pub mod link;
 pub mod public;
 pub mod public_chat;

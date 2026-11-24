@@ -54,16 +54,14 @@ const LEDGER: &str = "receipts.bin";
 const NOTICES: &str = "notices.bin";
 const SIBLINGS: &str = "siblings.bin";
 
+/// Reads one of the phone's files; one that can't be read is set aside, never written over
+/// ([`cadrs_social::codec::load_file`]).
 fn load<T: DeserializeOwned + Default>(root: &Path, file: &str) -> T {
-    cadrs_fs::read(root.join(file))
-        .ok()
-        .and_then(|b| postcard::from_bytes(&b).ok())
-        .unwrap_or_default()
+    cadrs_social::codec::load_file(&root.join(file))
 }
 
 fn save<T: Serialize>(root: &Path, file: &str, value: &T) {
-    let bytes = postcard::to_allocvec(value).expect("encodes");
-    let _ = cadrs_fs::create_dir_all(root).and_then(|()| cadrs_fs::write(root.join(file), bytes));
+    let _ = cadrs_social::codec::save_file(&root.join(file), value);
 }
 
 impl Phone {
@@ -105,7 +103,7 @@ impl Phone {
     pub fn mirror_post(&self) -> Vec<u8> {
         Post::Mirror {
             cert: self.keys.cert.clone(),
-            book: postcard::to_allocvec(&self.book).expect("encodes"),
+            book: cadrs_social::codec::encode(&self.book),
         }
         .encode()
     }
@@ -165,7 +163,7 @@ impl Phone {
                 let (letter, from) = letters::read(&bytes, &ours).map_err(|e| format!("{e:?}"))?;
                 if letter.to != self.account() {
                     // For one of the shops.
-                    let shop = self.shops.take_letter(&letter, from, now)?;
+                    let shop = self.shops.take_letter(&self.root, &letter, from, now)?;
                     self.notice(format!("{shop}: a client wrote"), now);
                     self.save_all();
                     return Ok(Vec::new());
@@ -174,15 +172,20 @@ impl Phone {
                     .contacts
                     .get(&from)
                     .map_or_else(|| from.to_string()[..8].to_string(), |c| c.name.clone());
+                let known = self.contacts.get(&from).is_some();
                 let news = self
                     .book
-                    .receive_learning(from, &shop, &letter.message, now)
+                    .receive_learning(from, &shop, &letter.message, now, known)
                     .map_err(|e| format!("{e:?}"))?;
                 let text = match news {
                     News::Quoted { shop, total } => format!("{shop} quoted {total}"),
                     News::Declined { shop } => format!("{shop} declined"),
                     News::Stage { shop, stage } => format!("{shop}: {stage:?}"),
-                    News::Chat { shop, text } => format!("{shop}: {text}"),
+                    News::Chat { shop, text } => {
+                        // A notice is a line, not the message.
+                        let start: String = text.chars().take(120).collect();
+                        format!("{shop}: {start}")
+                    }
                     News::Delivered { shop } => format!("{shop} delivered"),
                 };
                 self.notice(text, now);
@@ -195,7 +198,8 @@ impl Phone {
                 if value.account != self.account() {
                     return Err("not a device of this account".into());
                 }
-                let theirs: ClientBook = postcard::from_bytes(&book).map_err(|_| "not a book")?;
+                let theirs: ClientBook =
+                    cadrs_social::codec::decode(&book).map_err(|_| "not a book")?;
                 if !self.siblings.contains(&value.device) {
                     self.siblings.push(value.device);
                 }
@@ -209,7 +213,23 @@ impl Phone {
                 name,
                 devices,
                 cert,
+                inviter,
             } => {
+                // From this account's own devices (it was just linked), or from a contact:
+                // a stranger can't put shops on the phone. Who invites is the device that
+                // handed this over: a certificate isn't a secret, so one naming another device
+                // than the sender proves nothing.
+                let inviter = inviter
+                    .as_ref()
+                    .and_then(|c| c.verify().ok())
+                    .filter(|c| Some(c.device) == device)
+                    .map(|c| c.account);
+                let known =
+                    inviter.is_some_and(|a| a == self.account() || self.contacts.get(&a).is_some());
+                if !known {
+                    return Err("add whoever invites you as a contact first".into());
+                }
+                let name: String = name.chars().take(cadrs_org::profile::MAX_NAME).collect();
                 self.shops.invited(
                     crate::shop::ShopInfo {
                         log,
@@ -233,6 +253,10 @@ impl Phone {
                 self.shops.take_entries(from, &log, entries, now)?;
                 self.save_all();
                 Ok(Vec::new())
+            }
+            Post::WantBlobs { log, blobs, .. } => {
+                let from = device.ok_or("blobs are asked for straight from a device")?;
+                self.shops.blobs(&self.root, from, &log, &blobs, now)
             }
             _ => Err("a phone takes letters, its account's answers and its shops' syncs".into()),
         }
@@ -340,7 +364,7 @@ impl Phone {
 
     /// What a mailbox handed over: open what is for this phone, countersign the receipts.
     pub fn take_collected(&mut self, answer: &[u8], now: u64) {
-        let Ok(collected) = postcard::from_bytes::<Collected>(answer) else {
+        let Ok(collected) = cadrs_social::codec::decode::<Collected>(answer) else {
             return;
         };
         for (envelope, receipt) in collected {
@@ -348,7 +372,7 @@ impl Phone {
                 let _ = self.ledger.add(receipt);
             }
             if let Ok(bytes) = cadrs_social::seal::open(&self.keys.device, &envelope.value.sealed)
-                && let Some(post) = Post::decode(&bytes)
+                && let Some(post) = Post::decode(&bytes).ok()
             {
                 let _ = self.handle(post, None, now);
             }
@@ -384,7 +408,7 @@ mod tests {
         let offer = PairingOffer::new(laptop.id(), laptop_device.public().0.to_vec(), 1_000);
         let (to, post, code) = phone.join(&offer.to_text(), 1_000).unwrap();
         assert_eq!(to, laptop_device.public());
-        let Some(Post::Pair(request)) = Post::decode(&post) else {
+        let Some(Post::Pair(request)) = Post::decode(&post).ok() else {
             panic!("a pairing request");
         };
         let mut pairing = Pairing::new(offer);
@@ -403,7 +427,9 @@ mod tests {
             kind: cadrs_social::contact::Kind::Organization,
             name: "Cape Waterjet".into(),
             devices: vec![shop_device.public()],
-            mailboxes: vec![],
+            // A mailbox to leave letters at while the shop is offline: a letter is sealed for
+            // the shop's device only when there is somewhere to leave it.
+            mailboxes: vec![SecretKey::generate().public()],
             issued: 1,
         }
         .sign(shop.key());
@@ -413,6 +439,7 @@ mod tests {
         let quote = Message::Quote {
             request: 7,
             quote: Quote {
+                id: 3,
                 total: Money::from_major(724.0),
                 currency: "ZAR".into(),
                 lines: vec![],

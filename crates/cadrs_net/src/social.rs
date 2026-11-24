@@ -82,7 +82,7 @@ pub struct NodeMailbox {
 impl NodeMailbox {
     fn save(&self) {
         if let Some(file) = &self.file {
-            let bytes = postcard::to_allocvec(&self.mailbox).expect("mailboxes encode");
+            let bytes = cadrs_social::codec::encode(&self.mailbox);
             let tmp = file.with_extension("tmp");
             let written = cadrs_fs::write(&tmp, bytes).and_then(|()| cadrs_fs::rename(&tmp, file));
             if let Err(e) = written {
@@ -104,11 +104,18 @@ pub struct Mailboxes(pub Arc<Mutex<Option<NodeMailbox>>>);
 /// Keeps a mailbox on this node, signed for with `key` (the node's own key, so senders reach it
 /// by its cadrs ID), kept in `file` (read back if it is there).
 pub fn enable_mailbox(world: &mut World, key: SecretKey, file: Option<PathBuf>, terms: Terms) {
-    let mut mailbox = file
-        .as_ref()
-        .and_then(|f| cadrs_fs::read(f).ok())
-        .and_then(|b| postcard::from_bytes::<Mailbox>(&b).ok())
-        .unwrap_or_else(|| Mailbox::new(terms));
+    // A mailbox file that can't be read holds other people's letters: it is set aside, not
+    // replaced by an empty one.
+    let kept = file.as_ref().and_then(|f| {
+        let bytes = cadrs_fs::read(f).ok()?;
+        let read = cadrs_social::codec::decode::<Mailbox>(&bytes);
+        if read.is_err() {
+            warn!("the mailbox in {} can't be read: kept aside", f.display());
+            cadrs_social::codec::set_aside(f);
+        }
+        read.ok()
+    });
+    let mut mailbox = kept.unwrap_or_else(|| Mailbox::new(terms));
     mailbox.terms = terms;
     let shared = world
         .get_resource_or_insert_with(Mailboxes::default)
@@ -137,7 +144,7 @@ impl std::fmt::Debug for Handler {
 impl Handler {
     /// Answers mailbox traffic here, if this node keeps a mailbox; `None` for the app.
     fn mailbox(&self, bytes: &[u8]) -> Option<Result<Vec<u8>, String>> {
-        let post = Post::decode(bytes)?;
+        let post = Post::decode(bytes).ok()?;
         if !matches!(post, Post::Deposit(_) | Post::Collect { .. }) {
             return None;
         }
@@ -156,7 +163,7 @@ impl Handler {
             Post::Collect { request, cert } => node
                 .mailbox
                 .collect(&node.key, &request, &cert, now)
-                .map(|got| postcard::to_allocvec(&got).expect("encodes"))
+                .map(|got| cadrs_social::codec::encode(&got))
                 .map_err(|e| format!("The mailbox refused: {e:?}")),
             _ => unreachable!(),
         };
@@ -236,15 +243,30 @@ pub fn start_send(
             .await
             .map_err(|e| format!("Lost {who}: {e}"))?;
         let _ = send.finish();
-        let reply = recv
-            .read_to_end(MAX_LETTER)
-            .await
-            .map_err(|e| format!("Lost {who}: {e}"))?;
-        conn.close(0u32.into(), b"done");
-        match reply.split_first() {
-            Some((0, answer)) => Ok(answer.to_vec()),
-            Some((_, why)) => Err(String::from_utf8_lossy(why).into_owned()),
-            None => Err(format!("{who} sent nothing")),
+        // The first byte says which it is: an answer, read whole, or a refusal, of which only
+        // a sentence's worth is read whatever was sent.
+        let mut status = [0u8; 1];
+        if recv.read_exact(&mut status).await.is_err() {
+            conn.close(0u32.into(), b"done");
+            return Err(format!("{who} sent nothing"));
         }
+        let result = if status[0] == 0 {
+            recv.read_to_end(MAX_LETTER)
+                .await
+                .map_err(|e| format!("Lost {who}: {e}"))
+        } else {
+            let mut why = vec![0u8; 4 * cadrs_social::post::MAX_REASON];
+            let mut read = 0;
+            while read < why.len() {
+                match recv.read(&mut why[read..]).await {
+                    Ok(Some(n)) if n > 0 => read += n,
+                    _ => break,
+                }
+            }
+            // Reached, and refused: told apart from not being reached.
+            Err(cadrs_social::post::refused(&why[..read]))
+        };
+        conn.close(0u32.into(), b"done");
+        result
     })
 }

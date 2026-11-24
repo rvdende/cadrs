@@ -3,6 +3,7 @@
 //! the desktop app share it, and every rule can be tested without peers.
 //!
 //! - [`chat`]: the public chat, with work, rates and blocks against spam.
+//! - [`codec`]: how what outlives a version is written, so its types can grow.
 //! - [`contact`]: contact cards, what a profile's QR code carries.
 //! - [`keys`]: Ed25519 keys, signed statements, accounts and the certificates of their devices.
 //! - [`keystore`]: a device's keys on disk, beside its network key.
@@ -19,6 +20,7 @@
 //! - [`reputation`]: what a node has done for others, and the witness weight it earns.
 
 pub mod chat;
+pub mod codec;
 pub mod contact;
 pub mod hlc;
 pub mod keys;

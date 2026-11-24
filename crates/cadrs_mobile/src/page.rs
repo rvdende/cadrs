@@ -180,7 +180,7 @@ async fn go_online(app: Shared) {
             tick.forget();
             while let Some(post) = incoming.recv().await {
                 let from = PublicKey(*post.from.as_bytes());
-                let answer = match Post::decode(&post.bytes) {
+                let answer = match Post::decode(&post.bytes).ok() {
                     Some(p) => app.borrow_mut().phone.handle(p, Some(from), now()),
                     None => Err("not something cadrs sends".into()),
                 };
@@ -261,18 +261,30 @@ fn send(app: &Shared, to: Card, composed: Composed, what: &'static str) {
     let app = app.clone();
     wasm_bindgen_futures::spawn_local(async move {
         let mut delivered = false;
-        for device in &to.devices {
-            if let Some(a) = addr(device)
-                && node.send(a, &composed.post).await.is_ok()
-            {
-                delivered = true;
-                break;
+        // Reached and refused: that is the answer, and the letter isn't left at a mailbox to
+        // be refused again later.
+        let mut refused: Option<String> = None;
+        // A handful of the devices and mailboxes a card names, never all of them.
+        for device in to.devices.iter().take(8) {
+            let Some(a) = addr(device) else {
+                continue;
+            };
+            match node.send(a, &composed.post).await {
+                Ok(_) => {
+                    delivered = true;
+                    break;
+                }
+                Err(e) => {
+                    if let Some(why) = e.strip_prefix(cadrs_social_net::REFUSED) {
+                        refused = Some(why.to_owned());
+                    }
+                }
             }
         }
-        if !delivered {
+        if !delivered && refused.is_none() {
             'envelopes: for envelope in composed.envelopes {
                 let post = Post::Deposit(envelope).encode();
-                for mailbox in &to.mailboxes {
+                for mailbox in to.mailboxes.iter().take(cadrs_org::letters::MAX_MAILBOXES) {
                     if let Some(a) = addr(mailbox)
                         && node.send(a, &post).await.is_ok()
                     {
@@ -282,10 +294,10 @@ fn send(app: &Shared, to: Card, composed: Composed, what: &'static str) {
             }
         }
         let mut a = app.borrow_mut();
-        a.status = if delivered {
-            format!("{what} delivered")
-        } else {
-            format!("{what} will be delivered when they come online")
+        a.status = match (delivered, refused) {
+            (true, _) => format!("{what} delivered"),
+            (false, Some(why)) => format!("{what} wasn't taken: {why}"),
+            (false, None) => format!("{what} will be delivered when they come online"),
         };
         render(&a);
     });

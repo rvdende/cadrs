@@ -38,6 +38,24 @@ impl Statement for Card {
     const CONTEXT: &'static str = "cadrs contact card 1";
 }
 
+/// The longest name on a card, in characters; the most devices and mailboxes it names. A card
+/// comes from whoever hands it over (a link, a request, a listing), so whoever keeps one keeps
+/// no more than this.
+pub const MAX_NAME: usize = 60;
+pub const MAX_DEVICES: usize = 64;
+pub const MAX_MAILBOXES: usize = 16;
+
+impl Card {
+    /// Whether this is something a card may say: a name of a sensible length, and no more
+    /// devices and mailboxes than anyone has.
+    pub fn valid(&self) -> bool {
+        let name = self.name.trim().chars().count();
+        (1..=MAX_NAME).contains(&name)
+            && self.devices.len() <= MAX_DEVICES
+            && self.mailboxes.len() <= MAX_MAILBOXES
+    }
+}
+
 /// Why a card couldn't be read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Error {
@@ -77,6 +95,9 @@ pub fn from_link(text: &str) -> Result<Signed<Card>, Error> {
     if card.signer != value.account {
         return Err(Error::Forged);
     }
+    if !value.valid() {
+        return Err(Error::NotACard);
+    }
     Ok(card)
 }
 
@@ -87,8 +108,12 @@ pub struct Contacts {
 }
 
 impl Contacts {
-    /// Adds a card, or replaces an older one of the same account. False when it was no news.
+    /// Adds a card, or replaces an older one of the same account. False when it was no news,
+    /// or isn't something a card may say ([`Card::valid`]).
     pub fn add(&mut self, card: Signed<Card>) -> bool {
+        if !card.value.valid() {
+            return false;
+        }
         match self
             .cards
             .iter_mut()
@@ -177,5 +202,39 @@ mod tests {
         assert!(contacts.add(card(&shop, 2)));
         assert_eq!(contacts.cards.len(), 1);
         assert_eq!(contacts.organizations().count(), 1);
+    }
+
+    /// A card says a name and where to reach its account, and no more than that: one that
+    /// says more isn't kept, from a link or anywhere else.
+    #[test]
+    fn a_card_is_only_so_large() {
+        let account = Account::generate();
+        let with = |name: String, devices: usize| {
+            Card {
+                account: account.id(),
+                kind: Kind::Person,
+                name,
+                devices: vec![SecretKey::generate().public(); devices],
+                mailboxes: vec![],
+                issued: 1,
+            }
+            .sign(account.key())
+        };
+        let good = with("Alex".into(), 3);
+        assert!(good.value.valid());
+        assert_eq!(from_link(&to_link(&good)), Ok(good.clone()));
+        let mut contacts = Contacts::default();
+        assert!(contacts.add(good));
+        for bad in [
+            with(String::new(), 1),
+            with("N".repeat(MAX_NAME + 1), 1),
+            with("Many".into(), MAX_DEVICES + 1),
+        ] {
+            assert!(!bad.value.valid());
+            assert_eq!(from_link(&to_link(&bad)), Err(Error::NotACard));
+            let mut contacts = Contacts::default();
+            assert!(!contacts.add(bad));
+            assert!(contacts.cards.is_empty());
+        }
     }
 }

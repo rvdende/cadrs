@@ -23,9 +23,10 @@ use cadrs_core::preferences::{
 };
 use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::{
-    Button, Collapsible, CollapsibleToggled, Dialog, DialogClose, ListItem, NumberField,
-    NumberFieldCommit, NumberFieldEdit, NumberFieldState, Segmented, SegmentedSelect, Select,
-    SelectChange, SelectState, SelectableText, Switch, SwitchChange, TextInput, Theme, form_row,
+    Button, Collapsible, CollapsibleToggled, Dialog, DialogClose, NumberField, NumberFieldCommit,
+    NumberFieldEdit, NumberFieldState, Segmented, SegmentedSelect, Select, SelectChange,
+    SelectState, SelectableText, SideNav, SideNavSelect, Switch, SwitchChange, TextInput, Theme,
+    form_row,
 };
 
 use crate::preferences_ui::{LocalPreferences, from_ui, save, scheme_override, to_ui};
@@ -838,54 +839,31 @@ fn rebuild(world: &mut World) {
         .iter(world)
         .next();
     let query = s.query.trim().to_string();
-    let radius = theme.radius;
     if let Some(sidebar) = sidebar {
         world.entity_mut(sidebar).despawn_children();
-        let mut commands = world.commands();
-        commands.entity(sidebar).with_children(|c| {
-            for section in Section::ALL.into_iter().filter(|s| s.offered()) {
-                if let Some(group) = section.group() {
-                    c.spawn((
-                        theme.text(
-                            tr(group).to_uppercase(),
-                            theme.font_xs,
-                            FontWeight::SEMIBOLD,
-                            theme.muted_foreground,
-                        ),
-                        Node {
-                            margin: UiRect::new(
-                                Val::Px(10.0),
-                                Val::ZERO,
-                                Val::Px(14.0),
-                                Val::Px(4.0),
-                            ),
-                            ..default()
-                        },
-                    ));
-                }
-                c.spawn((
-                    ListItem::new(format!("pref-section-{}", section.slug()))
-                        .icon(section.icon())
-                        .label(section.title())
-                        .height(30.0)
-                        .padding_left(10.0)
-                        .selected(section == s.section && query.is_empty())
-                        .build(&theme),
-                    observe(move |_: On<Activate>, mut commands: Commands| {
-                        commands.queue(move |w: &mut World| {
-                            edit(w, |s| {
-                                s.section = section;
-                                s.query.clear();
-                            });
-                            crate::pcb::dialogs::set_text(w, "pref-search-field", "");
-                            rebuild(w);
-                        });
-                    }),
-                ))
-                .entry::<Node>()
-                .and_modify(move |mut n| n.border_radius = BorderRadius::all(Val::Px(radius)));
+        let offered: Vec<Section> = Section::ALL.into_iter().filter(|s| s.offered()).collect();
+        let mut nav = SideNav::new("pref-section").selected(
+            // None while a search's results are up.
+            offered
+                .iter()
+                .position(|section| *section == s.section)
+                .filter(|_| query.is_empty()),
+        );
+        for section in &offered {
+            if let Some(group) = section.group() {
+                nav = nav.group(tr(group));
             }
-        });
+            nav = nav.item(section.slug(), section.icon(), section.title());
+        }
+        world.commands().entity(sidebar).with_child((
+            nav.build(&theme),
+            observe(|ev: On<SideNavSelect>, mut commands: Commands| {
+                let Some(section) = Section::ALL.into_iter().find(|s| s.slug() == ev.key) else {
+                    return;
+                };
+                commands.queue(move |w: &mut World| show_section(w, section));
+            }),
+        ));
     }
     let Some(page) = page else {
         world.flush();

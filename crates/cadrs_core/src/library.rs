@@ -408,9 +408,15 @@ impl Filter {
         }
     }
 
-    /// Whether `entry` is listed under this filter for `user`.
+    /// Whether `entry` is listed under this filter for `user`. An organization is kept like a
+    /// document but isn't one of the user's documents: the account menu lists the user's
+    /// organizations, and here one is listed only in the trash, once it was removed from this
+    /// device, to be restored or deleted for good.
     pub fn matches(self, entry: &DocumentEntry, user: &str) -> bool {
         let m = &entry.meta;
+        if m.organization.is_some() {
+            return self == Filter::Trash && m.trashed.is_some();
+        }
         let live = m.trashed.is_none();
         match self {
             Filter::Explore => false,

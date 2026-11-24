@@ -62,6 +62,17 @@ pub fn icons() -> Vec<Def> {
         def("tag", Line, "Label", tag),
         def("tag-new", Line, "Add label", tag_new),
         def("receipt", Line, "Quote", receipt),
+        def("dashboard", Line, "Overview", dashboard),
+        def("job-schedule", Line, "Jobs", job_schedule),
+        def("stock", Line, "Stock", stock),
+        def("quality-issue", Line, "Issues", quality_issue),
+        def("price-list", Line, "Prices", price_list),
+        def("marketplace", Line, "Marketplace", marketplace),
+        def("shop-machines", Line, "Machines", shop_machines),
+        def("wallet", Line, "Wallet", wallet),
+        def("faucet", Line, "Get test credits", faucet),
+        def("send-credits", Line, "Transfer credits", send_credits),
+        def("payout", Line, "Pay out", payout),
         def("location", Line, "Location", location),
         def("map-pin", Line, "Find on a map", map_pin),
         def("qr-code", Line, "QR code", qr_code),
@@ -864,6 +875,130 @@ fn receipt() -> Vec<String> {
         acc(path("M9 7.5 H15", "", "")),
         path("M9 11 H15", "", ""),
         path("M9 14.5 H12.5", "", "")
+    ]
+}
+
+fn dashboard() -> Vec<String> {
+    // Four panels of unlike sizes, as an overview page is laid out; the one that matters most
+    // (top left, the tallest) is the accent.
+    els![
+        acc(rect(3.5, 3.5, 7.0, 10.0, 1.5, "", "")),
+        rect(13.5, 3.5, 7.0, 6.0, 1.5, "", ""),
+        rect(13.5, 12.5, 7.0, 8.0, 1.5, "", ""),
+        rect(3.5, 16.5, 7.0, 4.0, 1.5, "", "")
+    ]
+}
+
+fn job_schedule() -> Vec<String> {
+    // A schedule: three rows, each with a bar of its own start and length (jobs on machines
+    // over time); the one running is the accent.
+    els![
+        path("M3.5 3.5 V20.5 H20.5", "", ""),
+        path("M7 7 H13", "", r#"stroke-width="2.5""#),
+        acc(path("M10.5 12 H18.5", "", r#"stroke-width="2.5""#)),
+        path("M7 17 H11", "", r#"stroke-width="2.5""#)
+    ]
+}
+
+fn stock() -> Vec<String> {
+    // Sheets lying in a stack, seen from a corner: the top sheet (the one taken next) is the
+    // accent.
+    els![
+        path("M3 15.5 L12 20 L21 15.5", "", ""),
+        path("M3 12 L12 16.5 L21 12", "", ""),
+        acc(path("M12 4 L21 8.5 L12 13 L3 8.5 Z", "", ""))
+    ]
+}
+
+fn quality_issue() -> Vec<String> {
+    // A clipboard, as an inspection sheet, with an exclamation mark on it: the mark is the
+    // accent.
+    els![
+        path(
+            "M9 5 H7.5 A2 2 0 0 0 5.5 7 V19 A2 2 0 0 0 7.5 21 H16.5 A2 2 0 0 0 18.5 19 V7 A2 2 0 0 0 16.5 5 H15",
+            "",
+            ""
+        ),
+        rect(9.0, 3.0, 6.0, 4.0, 1.25, "", ""),
+        acc(path("M12 10.5 V14.5", "", "")),
+        acc(circle(12.0, 17.5, 0.6, INK, ""))
+    ]
+}
+
+fn price_list() -> Vec<String> {
+    // A list of lines, each ending in its amount; the amounts' column is the accent.
+    els![
+        rect(4.0, 3.0, 16.0, 18.0, R, "", ""),
+        path("M7.5 8 H12 M7.5 12 H12 M7.5 16 H12", "", ""),
+        acc(path("M15 8 H16.5 M15 12 H16.5 M15 16 H16.5", "", ""))
+    ]
+}
+
+fn shop_machines() -> Vec<String> {
+    // A cutting table seen from the front: the bed on its legs, the gantry across it, and the
+    // head on the gantry with its jet down to the bed. The head (what does the work) is the
+    // accent.
+    els![
+        path("M3 15.5 H21", "", ""),
+        path("M5 15.5 V20.5 M19 15.5 V20.5", "", ""),
+        path("M5.5 15.5 V6 H18.5 V15.5", "", ""),
+        acc(rect(9.5, 4.0, 4.0, 5.5, 1.0, "", "")),
+        acc(path("M11.5 9.5 V13", "", ""))
+    ]
+}
+
+fn wallet() -> Vec<String> {
+    // A wallet from the front: its body, the flap's line across the top, and the clasp's tab
+    // on the right with its stud. The stud (where it opens) is the accent.
+    els![
+        rect(3.0, 6.0, 18.0, 13.5, 2.5, "", ""),
+        path("M3 9.5 H16.5", "", ""),
+        path("M21 11 H16.5 A2.25 2.25 0 0 0 16.5 15.5 H21", "", ""),
+        acc(circle(16.75, 13.25, 0.6, "", ""))
+    ]
+}
+
+fn faucet() -> Vec<String> {
+    // A tap: the pipe in from the left, the spout turning down, the handle on top, and a drop
+    // falling into the coin below. The drop and the coin (what it gives) are the accent.
+    els![
+        path("M3 9 H11 A4 4 0 0 1 15 13 V14.5", "", ""),
+        path("M8 9 V5.5 M5.5 5.5 H10.5", "", ""),
+        acc(path("M15 17 V17.5", "", "")),
+        acc(ellipse(15.0, 20.25, 4.0, 1.25, "", ""))
+    ]
+}
+
+fn send_credits() -> Vec<String> {
+    // A coin on the left and an arrow from it to the right: credits going to someone. The
+    // arrow (the going) is the accent.
+    els![
+        circle(7.5, 12.0, 4.5, "", ""),
+        path("M7.5 10 V14", "", ""),
+        acc(path("M14 12 H21 M18 9 L21 12 L18 15", "", ""))
+    ]
+}
+
+fn payout() -> Vec<String> {
+    // A shop's till drawer, open, with an arrow up and out of it to a person: credits leaving
+    // the shop for someone. The arrow is the accent.
+    els![
+        path("M3 14 H21 V19.5 H3 Z", "", ""),
+        path("M9.5 17 H14.5", "", ""),
+        acc(path("M12 11.5 V4 M9 7 L12 4 L15 7", "", ""))
+    ]
+}
+
+fn marketplace() -> Vec<String> {
+    // A market stall's striped awning over a counter with goods on it: the goods (what is
+    // offered) are the accent.
+    els![
+        path("M3.5 9 L5.5 4 H18.5 L20.5 9 Z", "", ""),
+        path("M9.5 4 L8.5 9 M14.5 4 L15.5 9", "", ""),
+        path("M5 9 V20.5 M19 9 V20.5 M3.5 20.5 H20.5", "", ""),
+        path("M5 16 H19", "", ""),
+        acc(rect(8.0, 12.0, 3.5, 4.0, 0.75, "", "")),
+        acc(circle(15.0, 14.0, 1.9, "", ""))
     ]
 }
 

@@ -333,6 +333,12 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
             commands.queue(move |world: &mut World| crate::derived_ui::script(world, &arg));
             continue;
         }
+        // Organizations and the marketplace (see [`crate::org_script`]).
+        if let Some(rest) = m.0.strip_prefix("org ") {
+            let arg = rest.trim().to_string();
+            commands.queue(move |world: &mut World| crate::org_script::script(world, &arg));
+            continue;
+        }
         // P3G.3: Move to document's stand-in (see [`crate::move_document::script`]).
         if let Some(rest) = m.0.strip_prefix("move-doc") {
             let arg = rest.trim().to_string();

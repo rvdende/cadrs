@@ -1,22 +1,23 @@
-//! The organization screen's running-the-shop tabs: Jobs (a schedule per machine), Clients and
-//! Parts (with what goes into them). Each change is an operation on the organization document
-//! ([`crate::organization::write`]).
+//! The organization screen's running-the-shop modules: Jobs (a schedule for each machine),
+//! Clients, Parts (with what goes into them) and the members' Chat. Each change is an
+//! operation on the organization's document ([`crate::organization::write`]).
 
 use bevy::prelude::*;
 use bevy::text::FontWeight;
 use bevy::ui_widgets::{Activate, observe};
-use cadrs_org::{BomLine, Client, Job, JobState, Op, Part, Stage, new_id};
-use cadrs_ui::Button;
+use cadrs_org::{BomLine, Client, Job, JobState, Op, Org, Part, Stage, new_id};
 use cadrs_ui::dialog::Dialog;
 use cadrs_ui::i18n::tr;
 use cadrs_ui::input::TextInput;
 use cadrs_ui::tab_strip::TabStrip;
 use cadrs_ui::theme::Theme;
+use cadrs_ui::{Button, Column, TableRow};
 
 use crate::AppState;
 use crate::organization::{
-    OpenOrg, OrgDialog, close_dialogs, dialog_buttons, field, heading, muted, number, row, short,
-    strip_selected, t_text, write,
+    ModuleView, OpenOrg, OrgDialog, ask_remove, cell_button, choice, close_dialogs, dialog_buttons,
+    field, muted, number, page_head, request_number, row, status_tag, strip_selected, t_text,
+    table, text_row, write,
 };
 
 /// "2026-11-14 08:00" in local time ↔ milliseconds since the Unix epoch.
@@ -26,7 +27,7 @@ fn parse_when(text: &str) -> Option<u64> {
     u64::try_from(local.timestamp_millis()).ok()
 }
 
-fn show_when(millis: u64) -> String {
+pub(crate) fn show_when(millis: u64) -> String {
     chrono::DateTime::from_timestamp_millis(millis as i64)
         .map(|t| {
             t.with_timezone(&chrono::Local)
@@ -36,11 +37,18 @@ fn show_when(millis: u64) -> String {
         .unwrap_or_default()
 }
 
+/// What an order is of: "6 × bracket, 2 × plate".
+fn parts_of(r: &cadrs_org::Request) -> String {
+    r.parts
+        .iter()
+        .map(|(p, n)| format!("{n} × {}", p.name))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// The orders that can be scheduled: accepted and not yet delivered.
-fn open_orders(open: &OpenOrg) -> Vec<(cadrs_org::Id, String, f64)> {
-    open.session
-        .org()
-        .requests
+fn open_orders(org: &Org) -> Vec<(cadrs_org::Id, String, f64)> {
+    org.requests
         .iter()
         .filter(|(_, r)| {
             matches!(
@@ -49,104 +57,106 @@ fn open_orders(open: &OpenOrg) -> Vec<(cadrs_org::Id, String, f64)> {
             )
         })
         .map(|(id, r)| {
-            let parts: Vec<String> = r
-                .parts
-                .iter()
-                .map(|(p, n)| format!("{n} × {}", p.name))
-                .collect();
             let minutes = r
                 .quote
                 .as_ref()
                 .map(|q| q.lines.iter().map(|l| l.minutes).sum())
                 .unwrap_or(60.0);
-            (*id, parts.join(", "), minutes)
+            (
+                *id,
+                format!("{} · {}", request_number(r.number), parts_of(r)),
+                minutes,
+            )
         })
         .collect()
 }
 
-pub(crate) fn jobs(b: &mut ChildSpawnerCommands, t: &Theme, open: &OpenOrg) {
-    let org = open.session.org();
-    heading(b, t, "org-tab-jobs");
+fn job_state_key(state: JobState) -> &'static str {
+    match state {
+        JobState::Scheduled => "org-job-scheduled",
+        JobState::Running => "org-job-running",
+        JobState::Done => "org-job-done",
+    }
+}
+
+pub(crate) fn jobs(b: &mut ChildSpawnerCommands, t: &Theme, v: &ModuleView) {
+    let org = &v.org;
+    page_head(b, t, "org-tab-jobs", "org-jobs-about");
     if org.machines.is_empty() {
         muted(b, t, tr("org-no-machines"));
         return;
     }
+    let columns = vec![
+        Column::new("when", tr("org-job-when-short")).width(150.0),
+        Column::new("minutes", tr("org-job-minutes")).width(80.0),
+        Column::new("order", tr("org-job-order")).width(300.0),
+        Column::new("state", tr("org-job-state")).width(110.0),
+        Column::new("actions", "").width(190.0),
+    ];
     let mut i = 0;
     for (machine_id, machine) in &org.machines {
-        b.spawn(t.text(
-            machine.name.clone(),
-            t.font_md,
-            FontWeight::BOLD,
-            t.foreground,
-        ));
+        subheading_text(b, t, machine.name.clone());
         let mut jobs: Vec<(&cadrs_org::Id, &Job)> = org
             .jobs
             .iter()
             .filter(|(_, j)| j.machine == *machine_id)
             .collect();
         jobs.sort_by_key(|(_, j)| j.start);
-        if jobs.is_empty() {
-            muted(b, t, tr("org-no-jobs"));
-        }
-        for (id, job) in jobs {
-            let (id, job) = (*id, job.clone());
-            let what = org
-                .requests
-                .get(&job.request)
-                .map(|r| {
-                    r.parts
-                        .iter()
-                        .map(|(p, n)| format!("{n} × {}", p.name))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default();
-            let state = tr(match job.state {
-                JobState::Scheduled => "org-job-scheduled",
-                JobState::Running => "org-job-running",
-                JobState::Done => "org-job-done",
-            });
-            let next = match job.state {
-                JobState::Scheduled => Some((JobState::Running, "org-job-start")),
-                JobState::Running => Some((JobState::Done, "org-job-finish")),
-                JobState::Done => None,
-            };
-            let n = i;
-            i += 1;
-            row(b, |r| {
-                r.spawn((
-                    Name::new(format!("org-job-{n}")),
-                    t.text(
-                        format!("{} · {:.0} min", show_when(job.start), job.minutes),
-                        t.font_base,
-                        FontWeight::MEDIUM,
-                        t.foreground,
-                    ),
-                ));
-                r.spawn(t.text(what, t.font_sm, FontWeight::NORMAL, t.foreground));
-                r.spawn((
-                    Name::new(format!("org-job-state-{n}")),
-                    t.text(state, t.font_sm, FontWeight::BOLD, t.foreground),
-                ));
-                if let Some((to, label)) = next {
-                    r.spawn((
-                        Button::new(format!("org-job-next-{n}"))
-                            .label(tr(label))
-                            .small()
-                            .build(t),
-                        observe(move |_: On<Activate>, mut commands: Commands| {
-                            let mut job = job.clone();
-                            commands.queue(move |w: &mut World| {
-                                job.state = to;
-                                write(w, Op::SetJob { id, job: Some(job) });
-                            });
-                        }),
+        let rows: Vec<TableRow> = jobs
+            .into_iter()
+            .map(|(id, job)| {
+                let (id, job) = (*id, job.clone());
+                let what = org
+                    .requests
+                    .get(&job.request)
+                    .map_or_else(String::new, |r| {
+                        format!("{} · {}", request_number(r.number), parts_of(r))
+                    });
+                let next = match job.state {
+                    JobState::Scheduled => Some((JobState::Running, "org-job-start")),
+                    JobState::Running => Some((JobState::Done, "org-job-finish")),
+                    JobState::Done => None,
+                };
+                let n = i;
+                i += 1;
+                let state = job.state;
+                let tc = t.clone();
+                text_row(
+                    t,
+                    format!("org-job-{n}"),
+                    &columns,
+                    [show_when(job.start), format!("{:.0}", job.minutes), what],
+                )
+                .cell(move |c| {
+                    c.spawn(status_tag(
+                        &tc,
+                        format!("org-job-state-{n}"),
+                        tr(job_state_key(state)),
+                        tc.foreground,
                     ));
-                }
-            });
-        }
+                })
+                .cell(move |c| {
+                    if let Some((to, label)) = next {
+                        let job = job.clone();
+                        cell_button(c, format!("org-job-next-{n}"), tr(label), true, move |w| {
+                            let mut job = job.clone();
+                            job.state = to;
+                            write(w, Op::SetJob { id, job: Some(job) });
+                        });
+                    }
+                    cell_button(
+                        c,
+                        format!("org-job-remove-{n}"),
+                        tr("common-remove"),
+                        false,
+                        move |w| ask_remove(w, Op::SetJob { id, job: None }),
+                    );
+                })
+            })
+            .collect();
+        table(b, t, "org-jobs", columns.clone(), rows, "org-no-jobs");
     }
-    let orders = open_orders(open);
+    let orders = open_orders(org);
     if orders.is_empty() {
         muted(b, t, tr("org-no-orders-to-schedule"));
         return;
@@ -174,17 +184,11 @@ pub(crate) fn jobs(b: &mut ChildSpawnerCommands, t: &Theme, open: &OpenOrg) {
                         .body(move |b| {
                             let t = &tb;
                             b.spawn(t_text(t, "org-job-order"));
-                            let mut strip = TabStrip::new("org-job-order");
-                            for (_, what, _) in &orders {
-                                strip = strip.tab(what.clone());
-                            }
-                            b.spawn(strip.build(t));
+                            let whats = orders.iter().map(|(_, what, _)| what.clone());
+                            b.spawn(choice(t, "org-job-order", whats.collect::<Vec<_>>(), 0));
                             b.spawn(t_text(t, "org-job-machine"));
-                            let mut strip = TabStrip::new("org-job-machine");
-                            for (_, name) in &machines {
-                                strip = strip.tab(name.clone());
-                            }
-                            b.spawn(strip.build(t));
+                            let names = machines.iter().map(|(_, name)| name.clone());
+                            b.spawn(choice(t, "org-job-machine", names.collect::<Vec<_>>(), 0));
                             b.spawn(t_text(t, "org-job-when"));
                             let start = show_when(cadrs_social::wall_millis() + 3_600_000);
                             let minutes = format!("{:.0}", orders[0].2.max(1.0));
@@ -217,11 +221,22 @@ pub(crate) fn jobs(b: &mut ChildSpawnerCommands, t: &Theme, open: &OpenOrg) {
     ));
 }
 
+/// A smaller heading that is a name (a machine's), not a catalog key.
+fn subheading_text(b: &mut ChildSpawnerCommands, t: &Theme, text: String) {
+    b.spawn((
+        t.text(text, t.font_md, FontWeight::BOLD, t.foreground),
+        Node {
+            margin: UiRect::top(Val::Px(10.0)),
+            ..default()
+        },
+    ));
+}
+
 fn add_job(world: &mut World) {
     let Some(open) = world.get_resource::<OpenOrg>() else {
         return;
     };
-    let orders = open_orders(open);
+    let orders = open_orders(open.session.org());
     let machines: Vec<cadrs_org::Id> = open.session.org().machines.keys().copied().collect();
     let order = orders
         .get(strip_selected(world, "org-job-order"))
@@ -230,8 +245,10 @@ fn add_job(world: &mut World) {
         .get(strip_selected(world, "org-job-machine"))
         .copied();
     let start = parse_when(&field(world, "org-job-start"));
-    let minutes = number(world, "org-job-minutes").unwrap_or(60.0);
-    let (Some(request), Some(machine), Some(start)) = (order, machine, start) else {
+    let minutes = number(world, "org-job-minutes").filter(|m| *m > 0.0);
+    let (Some(request), Some(machine), Some(start), Some(minutes)) =
+        (order, machine, start, minutes)
+    else {
         crate::linked::toast(world, tr("org-job-bad"));
         return;
     };
@@ -253,86 +270,82 @@ fn add_job(world: &mut World) {
     }
 }
 
-pub(crate) fn clients(
-    b: &mut ChildSpawnerCommands,
-    t: &Theme,
-    open: &OpenOrg,
-    social: &crate::social::Social,
-) {
-    let org = open.session.org();
-    heading(b, t, "org-tab-clients");
+pub(crate) fn clients(b: &mut ChildSpawnerCommands, t: &Theme, v: &ModuleView) {
+    let org = &v.org;
+    page_head(b, t, "org-tab-clients", "org-clients-about");
+    let columns = vec![
+        Column::new("name", tr("org-client-name")).width(240.0),
+        Column::new("requests", tr("org-client-requests")).width(100.0),
+        Column::new("completed", tr("org-client-completed")).width(100.0),
+        Column::new("contact", tr("org-client-contact")).width(300.0),
+        Column::new("actions", "").width(100.0),
+    ];
     // Everyone who sent a request, with their orders.
-    let mut by_account: std::collections::BTreeMap<_, (usize, usize)> = Default::default();
+    // (how many requests, how many completed, what to call them: as the Requests page does).
+    let mut by_account: std::collections::BTreeMap<_, (usize, usize, String)> = Default::default();
     for r in org.requests.values() {
-        let e = by_account.entry(r.client).or_default();
+        let e = by_account
+            .entry(r.client)
+            .or_insert_with(|| (0, 0, v.client_name(r)));
         e.0 += 1;
         if r.stage == Stage::Completed {
             e.1 += 1;
         }
     }
-    let mut i = 0;
-    for (account, (requests, completed)) in &by_account {
+    let mut rows = Vec::new();
+    for (account, (requests, completed, called)) in &by_account {
         let name = org
             .clients
             .values()
             .find(|c| c.account == Some(*account))
-            .map(|c| c.name.clone())
-            .or_else(|| social.contacts.get(account).map(|c| c.name.clone()))
-            .unwrap_or_else(|| short(account));
-        let n = i;
-        i += 1;
-        row(b, |r| {
-            r.spawn((
-                Name::new(format!("org-client-{n}")),
-                t.text(name, t.font_base, FontWeight::MEDIUM, t.foreground),
-            ));
-            r.spawn(t.text(
-                format!(
-                    "{requests} {} · {completed} {}",
-                    tr("org-client-requests"),
-                    tr("org-client-completed")
-                ),
-                t.font_sm,
-                FontWeight::NORMAL,
-                t.muted_foreground,
-            ));
-        });
+            .map_or_else(|| called.clone(), |c| c.name.clone());
+        rows.push(
+            text_row(
+                t,
+                format!("org-client-{}", rows.len()),
+                &columns,
+                [
+                    name,
+                    requests.to_string(),
+                    completed.to_string(),
+                    tr("org-client-on-cadrs"),
+                ],
+            )
+            .cell(|_| {}),
+        );
     }
     // Clients kept by hand (walk-ins, phone orders).
-    for client in org.clients.values().filter(|c| c.account.is_none()) {
-        let n = i;
-        i += 1;
-        row(b, |r| {
-            r.spawn((
-                Name::new(format!("org-client-{n}")),
-                t.text(
-                    client.name.clone(),
-                    t.font_base,
-                    FontWeight::MEDIUM,
-                    t.foreground,
-                ),
-            ));
-            r.spawn(
-                t.text(
-                    [
-                        client.email.as_str(),
-                        client.phone.as_str(),
-                        client.notes.as_str(),
-                    ]
-                    .into_iter()
-                    .filter(|s| !s.is_empty())
-                    .collect::<Vec<_>>()
-                    .join(" · "),
-                    t.font_sm,
-                    FontWeight::NORMAL,
-                    t.muted_foreground,
-                ),
-            );
-        });
+    for (id, client) in org.clients.iter().filter(|(_, c)| c.account.is_none()) {
+        let id = *id;
+        let n = rows.len();
+        let contact = [
+            client.email.as_str(),
+            client.phone.as_str(),
+            client.notes.as_str(),
+        ]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ");
+        rows.push(
+            text_row(
+                t,
+                format!("org-client-{n}"),
+                &columns,
+                [client.name.clone(), "—".into(), "—".into(), contact],
+            )
+            .cell(move |c| {
+                cell_button(
+                    c,
+                    format!("org-client-remove-{n}"),
+                    tr("common-remove"),
+                    false,
+                    move |w| ask_remove(w, Op::SetClient { id, client: None }),
+                );
+            }),
+        );
     }
-    if i == 0 {
-        muted(b, t, tr("org-no-clients"));
-    }
+    table(b, t, "org-clients", columns, rows, "org-no-clients");
     b.spawn((
         Button::new("org-add-client")
             .label(tr("org-add-client"))
@@ -392,48 +405,56 @@ fn add_client(world: &mut World) {
     }
 }
 
-pub(crate) fn parts(b: &mut ChildSpawnerCommands, t: &Theme, open: &OpenOrg) {
-    let org = open.session.org();
-    heading(b, t, "org-tab-parts");
-    if org.parts.is_empty() {
-        muted(b, t, tr("org-no-parts"));
-    }
-    for (i, part) in org.parts.values().enumerate() {
-        let bom: Vec<String> = part
-            .bom
-            .iter()
-            .map(|l| match l {
-                BomLine::Material { material, sheets } => org
-                    .materials
-                    .get(material)
-                    .map(|m| format!("{sheets} × {} {} mm", m.name, m.thickness))
-                    .unwrap_or_default(),
-                BomLine::Part { part, quantity } => org
-                    .parts
-                    .get(part)
-                    .map(|p| format!("{quantity} × {}", p.name))
-                    .unwrap_or_default(),
-                BomLine::Bought { name, quantity } => format!("{quantity} × {name}"),
+pub(crate) fn parts(b: &mut ChildSpawnerCommands, t: &Theme, v: &ModuleView) {
+    let org = &v.org;
+    page_head(b, t, "org-tab-parts", "org-parts-about");
+    let columns = vec![
+        Column::new("name", tr("org-part-name")).width(240.0),
+        Column::new("revision", tr("org-part-revision")).width(90.0),
+        Column::new("bom", tr("org-part-bom")).width(420.0),
+        Column::new("actions", "").width(100.0),
+    ];
+    let rows = org
+        .parts
+        .iter()
+        .enumerate()
+        .map(|(i, (id, part))| {
+            let id = *id;
+            let bom: Vec<String> = part
+                .bom
+                .iter()
+                .map(|l| match l {
+                    BomLine::Material { material, sheets } => org
+                        .materials
+                        .get(material)
+                        .map(|m| format!("{sheets} × {} {} mm", m.name, m.thickness))
+                        .unwrap_or_default(),
+                    BomLine::Part { part, quantity } => org
+                        .parts
+                        .get(part)
+                        .map(|p| format!("{quantity} × {}", p.name))
+                        .unwrap_or_default(),
+                    BomLine::Bought { name, quantity } => format!("{quantity} × {name}"),
+                })
+                .collect();
+            text_row(
+                t,
+                format!("org-part-{i}"),
+                &columns,
+                [part.name.clone(), part.revision.clone(), bom.join(", ")],
+            )
+            .cell(move |c| {
+                cell_button(
+                    c,
+                    format!("org-part-remove-{i}"),
+                    tr("common-remove"),
+                    false,
+                    move |w| ask_remove(w, Op::SetPart { id, part: None }),
+                );
             })
-            .collect();
-        row(b, |r| {
-            r.spawn((
-                Name::new(format!("org-part-{i}")),
-                t.text(
-                    format!("{} {}", part.name, part.revision),
-                    t.font_base,
-                    FontWeight::MEDIUM,
-                    t.foreground,
-                ),
-            ));
-            r.spawn(t.text(
-                bom.join(", "),
-                t.font_sm,
-                FontWeight::NORMAL,
-                t.muted_foreground,
-            ));
-        });
-    }
+        })
+        .collect();
+    table(b, t, "org-parts", columns, rows, "org-no-parts");
     b.spawn((
         Button::new("org-add-part")
             .label(tr("org-add-part"))
@@ -527,28 +548,23 @@ fn add_part(world: &mut World) {
     }
 }
 
-/// The channels to show: the ones with messages, and "general" always.
-fn channel_names(open: &OpenOrg) -> Vec<String> {
-    let mut names: Vec<String> = open.session.org().channels.keys().cloned().collect();
+/// The channels to show: the ones with messages, "general" always, and the one being shown.
+fn channel_names(org: &Org, shown: &str) -> Vec<String> {
+    let mut names: Vec<String> = org.channels.keys().cloned().collect();
     if !names.iter().any(|n| n == "general") {
         names.insert(0, "general".into());
     }
-    if !names.contains(&open.channel) {
-        names.push(open.channel.clone());
+    if !names.iter().any(|n| n == shown) {
+        names.push(shown.to_owned());
     }
     names
 }
 
-pub(crate) fn chat(
-    b: &mut ChildSpawnerCommands,
-    t: &Theme,
-    open: &OpenOrg,
-    social: &crate::social::Social,
-) {
-    let org = open.session.org();
-    heading(b, t, "org-tab-chat");
-    let names = channel_names(open);
-    let selected = names.iter().position(|n| *n == open.channel).unwrap_or(0);
+pub(crate) fn chat(b: &mut ChildSpawnerCommands, t: &Theme, v: &ModuleView) {
+    let org = &v.org;
+    page_head(b, t, "org-tab-chat", "org-chat-about");
+    let names = channel_names(org, &v.channel);
+    let selected = names.iter().position(|n| *n == v.channel).unwrap_or(0);
     let mut strip = TabStrip::new("org-channels").compact().selected(selected);
     for n in &names {
         strip = strip.tab(format!("#{n}"));
@@ -557,26 +573,24 @@ pub(crate) fn chat(
         strip.build(t),
         observe(
             |ev: On<cadrs_ui::tab_strip::TabStripSelect>, mut open: ResMut<OpenOrg>| {
-                if let Some(name) = channel_names(&open).get(ev.index).cloned() {
+                let names = channel_names(open.session.org(), &open.channel);
+                if let Some(name) = names.get(ev.index).cloned()
+                    && open.channel != name
+                {
                     open.channel = name;
                 }
             },
         ),
     ));
-    let me = social.keys().map(|k| k.account_id());
-    let messages = org.channels.get(&open.channel).cloned().unwrap_or_default();
+    let messages = org.channels.get(&v.channel).cloned().unwrap_or_default();
     if messages.is_empty() {
         muted(b, t, tr("org-chat-empty"));
     }
     for (i, (who, text, when)) in messages.iter().enumerate() {
-        let name = if Some(*who) == me {
+        let name = if Some(*who) == v.me {
             tr("shell-landing-me")
         } else {
-            social
-                .contacts
-                .get(who)
-                .map(|c| c.name.clone())
-                .unwrap_or_else(|| short(who))
+            v.account_name(who)
         };
         row(b, |r| {
             r.spawn(t.text(name, t.font_sm, FontWeight::BOLD, t.foreground));
@@ -589,16 +603,20 @@ pub(crate) fn chat(
         });
         b.spawn((
             Name::new(format!("org-chat-{i}")),
-            t.paragraph(text.clone(), t.font_base, t.foreground),
+            t.paragraph_within(text.clone(), t.font_base, t.foreground, 720.0),
         ));
     }
     row(b, |r| {
-        r.spawn(
-            TextInput::new("org-chat-input")
-                .placeholder(tr("chat-placeholder"))
-                .width(Val::Px(420.0))
-                .build(t),
-        );
+        // What was being written when a message arrived is still here, with the keyboard.
+        let (draft, focused) = v.draft.clone().unwrap_or_default();
+        let mut input = TextInput::new("org-chat-input")
+            .placeholder(tr("chat-placeholder"))
+            .value(draft)
+            .width(Val::Px(420.0));
+        if focused {
+            input = input.autofocus();
+        }
+        r.spawn(input.build(t));
         r.spawn((
             Button::new("org-chat-send")
                 .label(tr("chat-send"))

@@ -10,7 +10,8 @@
 //!   Import, Label and the list and grid toggles.
 //! - The list in a glass card: a caption (DOCUMENTS and the count, or the Trash, a label or the
 //!   samples with ‹ back), and the sortable columns NAME | MODIFIED | MODIFIED BY | OWNED BY.
-//! - Beside it, the Public documents panel ([`public_panel`]): what anyone using cadrs
+//! - Beside it, the Marketplace panel ([`market`]: designs and shops). Its designs are the
+//!   Public documents panel ([`public_panel`]): what anyone using cadrs
 //!   published, to view, star and fork.
 //!
 //! Clicking a row selects it; double-clicking it (or Enter) opens it (P3E.1). Right-clicking it
@@ -53,6 +54,8 @@ use crate::{ActiveDocument, AppClock, AppState, DocumentStore, UserProfile};
 
 #[path = "landing_details.rs"]
 mod details;
+#[path = "landing_market.rs"]
+mod market;
 #[path = "landing_organize.rs"]
 mod organize;
 #[path = "landing_public.rs"]
@@ -106,6 +109,7 @@ impl Plugin for LandingPlugin {
             .add_observer(on_context_action);
         organize::plugin(app);
         public_panel::plugin(app);
+        market::plugin(app);
     }
 }
 
@@ -222,7 +226,6 @@ struct ContextDoc(DocumentId);
 #[derive(Component, Clone, Copy)]
 enum LandingDialog {
     NewDocument,
-    NewOrganization,
     NewFolder,
     Rename(DocumentId),
     Copy(DocumentId),
@@ -370,11 +373,12 @@ struct LandingRoot;
 fn relanguage(
     mut last: Local<&'static str>,
     q_root: Query<Entity, With<LandingRoot>>,
-    (commands, theme, profile, panel): (
+    (commands, theme, profile, panel, market): (
         Commands,
         Res<Theme>,
         Res<UserProfile>,
         Res<public_panel::PublicPanel>,
+        Res<market::Market>,
     ),
 ) {
     let now = cadrs_ui::i18n::language();
@@ -386,7 +390,7 @@ fn relanguage(
     for root in &q_root {
         commands.entity(root).despawn();
     }
-    spawn_landing(commands, theme, profile, panel);
+    spawn_landing(commands, theme, profile, panel, market);
 }
 
 fn spawn_landing(
@@ -394,6 +398,7 @@ fn spawn_landing(
     theme: Res<Theme>,
     profile: Res<UserProfile>,
     panel: Res<public_panel::PublicPanel>,
+    market: Res<market::Market>,
 ) {
     let t = theme.clone();
     commands
@@ -442,7 +447,7 @@ fn spawn_landing(
                 })
                 .with_children(|body| {
                     documents_card(body, &t);
-                    public_panel::public_card(body, &t, &panel);
+                    market::market_card(body, &t, &panel, &market);
                 });
             });
         });
@@ -1577,7 +1582,6 @@ fn create_menu(t: &Theme, name: &'static str) -> impl Bundle {
         .item(
             MenuItem::new("new-folder", tr("shell-landing-new-folder-ellipsis")).icon("folder-new"),
         )
-        .item(MenuItem::new("new-organization", tr("org-new-ellipsis")).icon("shop"))
         .separator()
         .item(MenuItem::new("import-files", tr("shell-landing-import-files")).icon("file-import"))
         .item(
@@ -1614,7 +1618,6 @@ fn on_create_menu_action(ev: On<MenuAction>, mut commands: Commands, theme: Res<
     match ev.item.as_str() {
         "new-document" => open_new_document_dialog(&mut commands, &theme),
         "new-folder" => open_new_folder_dialog(&mut commands, &theme),
-        "new-organization" => open_new_organization_dialog(&mut commands, &theme),
         // P3F.2: a STEP or IGES file as a new document.
         "import-files" => {
             commands.queue(|w: &mut World| {
@@ -2254,11 +2257,6 @@ fn confirm_dialog(world: &mut World) {
             close_dialogs(world);
             create_document(world, &name);
         }
-        LandingDialog::NewOrganization => {
-            let name = field_value(world, "new-organization-name-field");
-            close_dialogs(world);
-            crate::organization::create(world, &name);
-        }
         LandingDialog::Rename(id) => {
             let name = field_value(world, "rename-name-field");
             if name.trim().is_empty() {
@@ -2420,52 +2418,6 @@ fn open_new_document_dialog(commands: &mut Commands, theme: &Theme) {
             })
             .build(&t),
         LandingDialog::NewDocument,
-        DespawnOnExit(AppState::Landing),
-    ));
-}
-
-/// A new organization document (a shop): its name.
-fn open_new_organization_dialog(commands: &mut Commands, theme: &Theme) {
-    let t = theme.clone();
-    let tb = theme.clone();
-    let tf = theme.clone();
-    commands.spawn((
-        Dialog::new("new-organization-dialog")
-            .title(tr("org-new"))
-            .width(548.0)
-            .body(move |b| {
-                let t = &tb;
-                field_label(b, t, "org-name-label");
-                b.spawn(
-                    TextInput::new("new-organization-name")
-                        .placeholder(tr("org-name-placeholder"))
-                        .autofocus()
-                        .build(t),
-                );
-                b.spawn(t.paragraph(tr("org-new-help"), t.font_sm, t.muted_foreground));
-            })
-            .footer(move |f| {
-                let t = &tf;
-                f.spawn((
-                    Button::new("new-organization-create")
-                        .label(tr("org-create"))
-                        .primary()
-                        .build(t),
-                    observe(|_: On<Activate>, mut commands: Commands| {
-                        commands.queue(confirm_dialog);
-                    }),
-                ));
-                f.spawn((
-                    Button::new("new-organization-cancel")
-                        .label(tr("common-cancel"))
-                        .build(t),
-                    observe(|_: On<Activate>, mut commands: Commands| {
-                        commands.queue(close_dialogs);
-                    }),
-                ));
-            })
-            .build(&t),
-        LandingDialog::NewOrganization,
         DespawnOnExit(AppState::Landing),
     ));
 }

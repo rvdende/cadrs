@@ -31,6 +31,9 @@ pub struct ShopInfo {
 pub struct Shop {
     pub info: ShopInfo,
     pub session: Session,
+    /// Its log's file was there but couldn't be read (damaged, or a newer cadrs's): the phone
+    /// shows what syncing brings, and doesn't write over the file.
+    unreadable: bool,
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -41,6 +44,12 @@ fn log_path(root: &Path, log: &LogId) -> PathBuf {
     root.join("shops").join(format!("{}.log", hex(&log.0)))
 }
 
+/// Where a shop's blobs are kept on the phone (a request's document, until the shop's other
+/// devices have it): `shops/<log>/blobs/`.
+fn blob_dir(root: &Path, log: &LogId) -> PathBuf {
+    root.join("shops").join(hex(&log.0))
+}
+
 /// The phone's shops.
 #[derive(Default)]
 pub struct Shops {
@@ -49,20 +58,24 @@ pub struct Shops {
 
 impl Shops {
     pub fn load(root: &Path, key: &SecretKey) -> Self {
-        let infos: Vec<ShopInfo> = cadrs_fs::read(root.join("shops.bin"))
-            .ok()
-            .and_then(|b| postcard::from_bytes(&b).ok())
-            .unwrap_or_default();
+        // One that can't be read is set aside: the phone doesn't forget its shops for good by
+        // writing an empty list over it.
+        let infos: Vec<ShopInfo> = cadrs_social::codec::load_file(&root.join("shops.bin"));
         Self {
             list: infos
                 .into_iter()
                 .map(|info| {
-                    let log = cadrs_org::file::load(&log_path(root, &info.log))
-                        .map(|(log, _)| log)
-                        .unwrap_or_else(|_| Log::new(info.log));
+                    let path = log_path(root, &info.log);
+                    let (log, unreadable) = match cadrs_org::file::load(&path) {
+                        Ok((log, _)) => (log, false),
+                        // No file yet (just invited) is an empty log; a file that can't be
+                        // read is not.
+                        Err(_) => (Log::new(info.log), cadrs_fs::is_file(&path)),
+                    };
                     Shop {
                         session: Session::open(log, key.clone()),
                         info,
+                        unreadable,
                     }
                 })
                 .collect(),
@@ -72,11 +85,8 @@ impl Shops {
     pub fn save(&self, root: &Path) {
         let infos: Vec<&ShopInfo> = self.list.iter().map(|s| &s.info).collect();
         let _ = cadrs_fs::create_dir_all(root.join("shops"));
-        let _ = cadrs_fs::write(
-            root.join("shops.bin"),
-            postcard::to_allocvec(&infos).expect("encodes"),
-        );
-        for shop in &self.list {
+        let _ = cadrs_social::codec::save_file(&root.join("shops.bin"), &infos);
+        for shop in self.list.iter().filter(|s| !s.unreadable) {
             let _ = cadrs_org::file::save(&log_path(root, &shop.info.log), shop.session.log());
         }
     }
@@ -100,6 +110,7 @@ impl Shops {
         self.list.push(Shop {
             session: Session::open(Log::new(info.log), key.clone()),
             info,
+            unreadable: false,
         });
     }
 
@@ -136,7 +147,7 @@ impl Shops {
 
     /// The answer to our ask: take what we lacked; the entries to send back, if they lack some.
     pub fn synced(&mut self, log: &LogId, answer: &[u8], now: u64) -> Option<Vec<u8>> {
-        let (entries, theirs) = postcard::from_bytes::<Synced>(answer).ok()?;
+        let (entries, theirs) = cadrs_social::codec::decode::<Synced>(answer).ok()?;
         let shop = self.by_log(log)?;
         shop.session.receive(entries, now);
         if !shop.session.org().profile.name.is_empty() {
@@ -168,7 +179,7 @@ impl Shops {
             shop.session.since(heads),
             shop.session.log().heads().clone(),
         );
-        Ok(postcard::to_allocvec(&synced).expect("encodes"))
+        Ok(cadrs_social::codec::encode(&synced))
     }
 
     /// Entries from another member's device.
@@ -187,9 +198,12 @@ impl Shops {
         Ok(())
     }
 
-    /// A letter to one of the shops: into its document.
+    /// A letter to one of the shops: into its document. A request's own document is kept in
+    /// `root` first (refusing the letter if it can't be: the sender then leaves it at the
+    /// shop's mailbox for a device that can), for the shop's other devices to fetch.
     pub fn take_letter(
         &mut self,
+        root: &Path,
         letter: &letters::Letter,
         from: AccountId,
         now: u64,
@@ -199,10 +213,38 @@ impl Shops {
             .iter_mut()
             .find(|s| s.info.org == letter.to)
             .ok_or("not for one of this phone's shops")?;
-        let op = letters::shop_op(shop.session.org(), from, &letter.message)
+        let op = letters::shop_op(shop.session.org(), from, &letter.message, letter.sent)
             .map_err(|e| format!("{e:?}"))?;
+        if let Message::Request { snapshot, .. } = &letter.message
+            && !snapshot.is_empty()
+        {
+            cadrs_org::blob::put(&blob_dir(root, &shop.info.log), snapshot)
+                .map_err(|e| format!("this phone can't keep the request's document: {e}"))?;
+        }
         shop.session.write(op, now)?;
         Ok(shop.info.name.clone())
+    }
+
+    /// Another member's device asks for blobs it lacks: those this phone has.
+    pub fn blobs(
+        &self,
+        root: &Path,
+        from: DeviceId,
+        log: &LogId,
+        wanted: &[[u8; 32]],
+        now: u64,
+    ) -> Result<Vec<u8>, String> {
+        let shop = self
+            .list
+            .iter()
+            .find(|s| s.info.log == *log)
+            .ok_or("not a shop of this phone")?;
+        let org = shop.session.org();
+        if org.member_of(&from, now).is_none() {
+            return Err("not a member's device".into());
+        }
+        let answer = cadrs_org::blob::answer(&blob_dir(root, log), wanted, &org.blobs());
+        Ok(cadrs_social::codec::encode(&answer))
     }
 
     /// Quotes a request at the shop's prices: the letter to the client.
@@ -217,10 +259,10 @@ impl Shops {
         let org = shop.session.org();
         let rates = org.rates.clone().ok_or("the shop has no prices")?;
         let r = org.requests.get(&request).ok_or("no such request")?;
-        let machines: Vec<_> = org.machines.values().cloned().collect();
-        let estimate = cadrs_org::quote::estimate(&machines, &rates, &r.parts)
+        let estimate = cadrs_org::quote::estimate(&org.machines, &rates, &r.parts)
             .map_err(|e| format!("{e:?}"))?;
         let quote = cadrs_org::Quote {
+            id: cadrs_org::new_id(),
             total: estimate.total,
             currency: estimate.currency,
             lines: estimate.lines,
@@ -321,6 +363,17 @@ mod tests {
             1_000,
         );
         desk.write(
+            Op::EditProfile(cadrs_org::profile::ProfileEdit {
+                offers: Some(cadrs_org::Offers {
+                    manufacturing: true,
+                    designs: false,
+                }),
+                ..Default::default()
+            }),
+            1_500,
+        )
+        .unwrap();
+        desk.write(
             Op::SetMachine {
                 id: 1,
                 machine: Some(MachineCaps {
@@ -336,6 +389,7 @@ mod tests {
                     min_hole_ratio: 0.5,
                     tolerance: 0.1,
                     pierce_seconds: 4.0,
+                    location: None,
                 }),
             },
             1_001,
@@ -346,8 +400,15 @@ mod tests {
                 currency: "ZAR".into(),
                 setup: Money::from_major(250.0),
                 minimum: Money::from_major(500.0),
-                hourly: vec![("Waterjet".into(), Money::from_major(1200.0))],
-                sheet_per_m2: vec![("mild steel".into(), 10.0, Money::from_major(1000.0))],
+                hourly: vec![cadrs_org::quote::MachineRate::new(
+                    1,
+                    Money::from_major(1200.0),
+                )],
+                sheet_per_m2: vec![cadrs_org::quote::SheetPrice::new(
+                    "mild steel",
+                    10.0,
+                    Money::from_major(1000.0),
+                )],
                 nesting_allowance: 1.25,
             }),
             1_002,
@@ -384,6 +445,7 @@ mod tests {
                 )],
                 notes: String::new(),
                 snapshot: [0; 32],
+                snapshot_len: 0,
                 deadline: None,
                 card: Some(card),
             },
@@ -409,19 +471,19 @@ mod tests {
         // It asks the laptop; the laptop adds the phone (an owner's device) and answers.
         let (log, to, post) = shops.sync_posts(phone.public(), &phone_cert).remove(0);
         assert_eq!(to, laptop.public());
-        let Some(Post::SyncLog { heads, cert, .. }) = Post::decode(&post) else {
+        let Some(Post::SyncLog { heads, cert, .. }) = Post::decode(&post).ok() else {
             panic!("a sync");
         };
         desk.write(Op::AddDevice(cert), 2_000).unwrap();
         let answer: Synced = (desk.since(&heads), desk.log().heads().clone());
-        let back = shops.synced(&log, &postcard::to_allocvec(&answer).unwrap(), 3_000);
+        let back = shops.synced(&log, &cadrs_social::codec::encode(&answer), 3_000);
         assert!(back.is_none(), "the phone had nothing new");
         assert_eq!(shops.list[0].session.org().requests.len(), 1);
 
         // It quotes at the shop's prices: a letter to the client, as the shop.
         let (to, composed) = shops.quote(0, 9, &phone, 4_000).unwrap();
         assert_eq!(to.account, client.id());
-        let Some(Post::Letter(bytes)) = Post::decode(&composed.post) else {
+        let Some(Post::Letter(bytes)) = Post::decode(&composed.post).ok() else {
             panic!("a letter");
         };
         let (letter, from) = letters::read(&bytes, &[client.id()]).unwrap();

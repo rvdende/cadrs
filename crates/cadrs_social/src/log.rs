@@ -65,7 +65,9 @@ impl fmt::Debug for EntryId {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kind {
     /// Something for the log's reducer (encoded by whoever owns the log, encrypted or not).
-    Data(Vec<u8>),
+    /// (As bytes rather than a list of numbers: the same to postcard, which the signature is
+    /// over, and half the size where an entry is written with its names.)
+    Data(#[serde(with = "serde_bytes")] Vec<u8>),
     /// Nothing: a witness saying it has seen the entries this one builds on.
     Ack,
 }

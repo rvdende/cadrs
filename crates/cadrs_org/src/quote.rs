@@ -5,9 +5,17 @@
 //! material by the sheet area the parts take (with a nesting allowance), and a setup fee per
 //! order. The shop sees the working and can change the price before sending it.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
+use crate::Id;
 use crate::capability::{MachineCaps, PartSummary, fit};
+
+/// The currency code that means credits (`cadrs_credits`): what orders are paid with here, and
+/// what a new organization's prices are in. A price in any other currency is paid in credits,
+/// one for one.
+pub const CREDITS: &str = "CRD";
 
 /// Money in the smallest unit of a currency (cents).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -31,6 +39,12 @@ impl Money {
         Money((major * 100.0).round() as i64)
     }
 
+    /// What a price is paid with: whole credits, one for a unit of the currency, rounded up
+    /// (credits have no fractions). Nothing for a price that isn't above zero.
+    pub fn credits(self) -> u64 {
+        u64::try_from(self.0).map_or(0, |cents| cents.div_ceil(100))
+    }
+
     /// "1 234.50".
     pub fn format(self) -> String {
         let sign = if self.0 < 0 { "-" } else { "" };
@@ -47,6 +61,39 @@ impl Money {
     }
 }
 
+/// What an hour on one machine costs.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MachineRate {
+    /// The machine's id: renaming a machine keeps its rate.
+    pub machine: Id,
+    pub per_hour: Money,
+}
+
+impl MachineRate {
+    pub fn new(machine: Id, per_hour: Money) -> Self {
+        Self { machine, per_hour }
+    }
+}
+
+/// What a square metre of one sheet costs.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SheetPrice {
+    pub material: String,
+    /// In mm.
+    pub thickness: f64,
+    pub per_m2: Money,
+}
+
+impl SheetPrice {
+    pub fn new(material: impl Into<String>, thickness: f64, per_m2: Money) -> Self {
+        Self {
+            material: material.into(),
+            thickness,
+            per_m2,
+        }
+    }
+}
+
 /// What a shop charges.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RateCard {
@@ -56,28 +103,31 @@ pub struct RateCard {
     pub setup: Money,
     /// The least an order costs.
     pub minimum: Money,
-    /// Machine time per hour, by machine name.
-    pub hourly: Vec<(String, Money)>,
-    /// Material per square metre of sheet, by (material, thickness mm).
-    pub sheet_per_m2: Vec<(String, f64, Money)>,
+    /// Machine time per hour, by machine.
+    pub hourly: Vec<MachineRate>,
+    /// Material per square metre of sheet, by material and thickness.
+    pub sheet_per_m2: Vec<SheetPrice>,
     /// How much more sheet than the parts' area nesting uses (1.25 = a quarter more).
     pub nesting_allowance: f64,
 }
 
 impl RateCard {
-    fn hourly(&self, machine: &str) -> Option<Money> {
+    /// What an hour on `machine` costs, when the card says.
+    pub fn hourly(&self, machine: Id) -> Option<Money> {
         self.hourly
             .iter()
-            .find(|(name, _)| name == machine)
-            .map(|(_, rate)| *rate)
+            .find(|rate| rate.machine == machine)
+            .map(|rate| rate.per_hour)
     }
 
     fn sheet(&self, material: &str, thickness: f64) -> Option<Money> {
         self.sheet_per_m2
             .iter()
-            .filter(|(m, t, _)| m.eq_ignore_ascii_case(material) && *t >= thickness - 1e-6)
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(_, _, price)| *price)
+            .filter(|s| {
+                s.material.eq_ignore_ascii_case(material) && s.thickness >= thickness - 1e-6
+            })
+            .min_by(|a, b| a.thickness.total_cmp(&b.thickness))
+            .map(|s| s.per_m2)
     }
 }
 
@@ -114,7 +164,7 @@ pub enum NoPrice {
 
 /// Prices `parts` (with quantities) on the cheapest machine that can make each.
 pub fn estimate(
-    machines: &[MachineCaps],
+    machines: &BTreeMap<Id, MachineCaps>,
     rates: &RateCard,
     parts: &[(PartSummary, u32)],
 ) -> Result<Estimate, NoPrice> {
@@ -122,7 +172,7 @@ pub fn estimate(
     for (part, quantity) in parts {
         let mut best: Option<Line> = None;
         let mut why = Vec::new();
-        for machine in machines {
+        for (id, machine) in machines {
             let fit = fit(machine, part);
             if !fit.ok() {
                 why.extend(
@@ -132,7 +182,7 @@ pub fn estimate(
                 );
                 continue;
             }
-            match line(machine, rates, part, *quantity) {
+            match line(*id, machine, rates, part, *quantity) {
                 Ok(line) => {
                     if best.as_ref().is_none_or(|b| line.total < b.total) {
                         best = Some(line);
@@ -158,13 +208,14 @@ pub fn estimate(
 }
 
 fn line(
+    id: Id,
     machine: &MachineCaps,
     rates: &RateCard,
     part: &PartSummary,
     quantity: u32,
 ) -> Result<Line, NoPrice> {
     let hourly = rates
-        .hourly(&machine.name)
+        .hourly(id)
         .ok_or_else(|| NoPrice::NoRate("machine time".into()))?;
     let (minutes, material_cost) = if machine.process.cuts_profiles() {
         let thickness = part.flat_thickness.unwrap_or_default();
@@ -208,15 +259,22 @@ mod tests {
     use super::*;
     use crate::capability::tests::{bracket, waterjet};
 
+    /// The waterjet's id.
+    const JET: Id = 7;
+
+    fn machines() -> BTreeMap<Id, MachineCaps> {
+        BTreeMap::from([(JET, waterjet())])
+    }
+
     fn rates() -> RateCard {
         RateCard {
             currency: "ZAR".into(),
             setup: Money::from_major(250.0),
             minimum: Money::from_major(500.0),
-            hourly: vec![("Flow Mach 500".into(), Money::from_major(1200.0))],
+            hourly: vec![MachineRate::new(JET, Money::from_major(1200.0))],
             sheet_per_m2: vec![
-                ("mild steel".into(), 6.0, Money::from_major(600.0)),
-                ("mild steel".into(), 10.0, Money::from_major(1000.0)),
+                SheetPrice::new("mild steel", 6.0, Money::from_major(600.0)),
+                SheetPrice::new("mild steel", 10.0, Money::from_major(1000.0)),
             ],
             nesting_allowance: 1.25,
         }
@@ -224,7 +282,7 @@ mod tests {
 
     #[test]
     fn six_steel_brackets() {
-        let estimate = estimate(&[waterjet()], &rates(), &[(bracket(), 6)]).unwrap();
+        let estimate = estimate(&machines(), &rates(), &[(bracket(), 6)]).unwrap();
         let line = &estimate.lines[0];
         // 900 mm at 300 mm/min = 3 min, plus 3 pierces of 4 s = 0.2 min: 3.2 min each.
         assert!((line.minutes - 19.2).abs() < 1e-9);
@@ -234,9 +292,25 @@ mod tests {
         assert_eq!(estimate.total, Money::from_major(724.0));
     }
 
+    /// A machine's rate is its own, whatever it is called now.
+    #[test]
+    fn a_renamed_machine_keeps_its_rate() {
+        let mut renamed = machines();
+        renamed.get_mut(&JET).unwrap().name = "The big jet".into();
+        let estimate = estimate(&renamed, &rates(), &[(bracket(), 6)]).unwrap();
+        assert_eq!(estimate.total, Money::from_major(724.0));
+        assert_eq!(estimate.lines[0].machine, "The big jet");
+        // One the card has no rate for is said so.
+        let other = BTreeMap::from([(JET + 1, waterjet())]);
+        assert!(matches!(
+            super::estimate(&other, &rates(), &[(bracket(), 6)]),
+            Err(NoPrice::NoMachine { .. })
+        ));
+    }
+
     #[test]
     fn the_minimum_applies() {
-        let estimate = estimate(&[waterjet()], &rates(), &[(bracket(), 1)]).unwrap();
+        let estimate = estimate(&machines(), &rates(), &[(bracket(), 1)]).unwrap();
         assert_eq!(estimate.total, Money::from_major(500.0));
     }
 
@@ -244,14 +318,14 @@ mod tests {
     fn says_why_there_is_no_price() {
         let mut part = bracket();
         part.material = Some("titanium".into());
-        match estimate(&[waterjet()], &rates(), &[(part, 1)]) {
+        match estimate(&machines(), &rates(), &[(part, 1)]) {
             Err(NoPrice::NoMachine { why, .. }) => assert!(why[0].contains("titanium")),
             other => panic!("{other:?}"),
         }
         let mut thick = bracket();
         thick.flat_thickness = Some(20.0);
         assert!(matches!(
-            estimate(&[waterjet()], &rates(), &[(thick, 1)]),
+            estimate(&machines(), &rates(), &[(thick, 1)]),
             Err(NoPrice::NoMachine { .. })
         ));
     }

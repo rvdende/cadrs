@@ -30,6 +30,9 @@ fn serve(mut letters: ResMut<Letters>, mut got: ResMut<Got>) {
         if letter.bytes.starts_with(b"rfq") {
             got.0.push(letter.bytes.clone());
             letter.take();
+        } else if letter.bytes.starts_with(b"rant") {
+            // Megabytes of "reason".
+            letter.refuse("N".repeat(5 << 20));
         } else {
             letter.refuse("not a letter");
         }
@@ -55,14 +58,20 @@ fn a_letter_is_taken_and_a_bad_one_refused() {
         .expect("the shop is online");
     let big = [b"rfq".as_slice(), &vec![7u8; 3 << 20]].concat();
     let mut good = social::start_send(designer.world().resource::<Iroh>(), to.clone(), big.clone());
-    let mut bad = social::start_send(designer.world().resource::<Iroh>(), to, b"junk".to_vec());
-    let (mut good_answer, mut bad_answer) = (None, None);
+    let mut bad = social::start_send(
+        designer.world().resource::<Iroh>(),
+        to.clone(),
+        b"junk".to_vec(),
+    );
+    let mut rant = social::start_send(designer.world().resource::<Iroh>(), to, b"rant".to_vec());
+    let (mut good_answer, mut bad_answer, mut rant_answer) = (None, None, None);
     let start = Instant::now();
-    while good_answer.is_none() || bad_answer.is_none() {
+    while good_answer.is_none() || bad_answer.is_none() || rant_answer.is_none() {
         shop.update();
         designer.update();
         good_answer = good_answer.or_else(|| good.try_take());
         bad_answer = bad_answer.or_else(|| bad.try_take());
+        rant_answer = rant_answer.or_else(|| rant.try_take());
         assert!(
             start.elapsed() < PATIENCE,
             "gave up waiting for the answers"
@@ -70,7 +79,18 @@ fn a_letter_is_taken_and_a_bad_one_refused() {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(good_answer, Some(Ok(Vec::new())));
-    assert_eq!(bad_answer, Some(Err("not a letter".into())));
+    // Reached, and refused: told apart from not being reached, with the app's reason after.
+    let refused = bad_answer.expect("an answer").expect_err("a refusal");
+    assert_eq!(
+        cadrs_social::post::refusal(&refused),
+        Some("not a letter"),
+        "{refused}"
+    );
+    // The reason is the other device's to give, and so is its length: a sentence of it is
+    // read, whatever was sent.
+    let ranted = rant_answer.expect("an answer").expect_err("a refusal");
+    let reason = cadrs_social::post::refusal(&ranted).expect("a refusal");
+    assert_eq!(reason.chars().count(), cadrs_social::post::MAX_REASON);
     assert_eq!(shop.world().resource::<Got>().0, vec![big]);
 }
 

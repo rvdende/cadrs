@@ -139,9 +139,51 @@ impl Session {
         results
     }
 
-    /// The entries another device with `heads` lacks.
+    /// The entries another device with `heads` lacks: the first of them, in the log's order, up
+    /// to [`SYNC_BUDGET`] (see [`Session::since_within`]).
     pub fn since(&self, heads: &BTreeSet<EntryId>) -> Vec<Entry> {
-        self.log.since(heads)
+        self.since_within(heads, SYNC_BUDGET)
+    }
+
+    /// The first entries another device with `heads` lacks, in the log's order, that weigh no
+    /// more than `budget` bytes together (one at least, when it lacks any). A log is synced a
+    /// page at a time: however large it has grown, a page fits what one message carries, the
+    /// device that took one asks again with its new heads, and what a page leaves out comes
+    /// with the next.
+    pub fn since_within(&self, heads: &BTreeSet<EntryId>, budget: usize) -> Vec<Entry> {
+        let mut weighs = 0usize;
+        self.log
+            .since(heads)
+            .into_iter()
+            .take_while(|entry| {
+                let first = weighs == 0;
+                weighs += entry_weight(entry);
+                first || weighs <= budget
+            })
+            .collect()
+    }
+}
+
+/// The most entries weigh in one page of a sync, in bytes: well under what one message carries.
+pub const SYNC_BUDGET: usize = 8 << 20;
+
+// A page is well under what one message carries.
+const _: () = assert!(SYNC_BUDGET <= cadrs_social::post::MAX_POST / 4);
+
+/// About what an entry weighs in a message: what it holds, and its envelope.
+fn entry_weight(entry: &Entry) -> usize {
+    let data = match &entry.body.kind {
+        Kind::Data(data) => data.len(),
+        _ => 0,
+    };
+    data + 512
+}
+
+impl Session {
+    /// Whether this session's log has everything a device with `heads` has: nothing more to
+    /// ask it for.
+    pub fn has_all(&self, heads: &BTreeSet<EntryId>) -> bool {
+        heads.iter().all(|id| self.log.get(id).is_some())
     }
 }
 
@@ -270,5 +312,69 @@ mod tests {
         laptop.receive(shop_box.since(laptop.log().heads()), 4_000);
         assert_eq!(laptop.org().clients.len(), 1);
         assert!(laptop.conflicts().is_empty());
+    }
+
+    /// A log too large for one message is synced a page at a time: each answer is a page of
+    /// what the asker lacks, the asker takes it and asks again with its new heads, and after
+    /// as many rounds as it takes it has everything. A new device joins an organization of any
+    /// size this way.
+    #[test]
+    fn a_large_log_syncs_a_page_at_a_time() {
+        let (mut laptop, owner) = founded();
+        let box_key = SecretKey::generate();
+        laptop
+            .write(
+                Op::AddDevice(owner.certify(box_key.public(), "box", 0)),
+                2_000,
+            )
+            .unwrap();
+        // A lot said in the members' channel: 60 entries of some 4 KB each.
+        for n in 0..60u64 {
+            let say = Op::Say {
+                channel: "general".into(),
+                text: format!("{n} {}", "x".repeat(4_000 - 3)),
+            };
+            laptop.write(say, 3_000 + n).unwrap();
+        }
+        let whole: usize = laptop
+            .log()
+            .since(&Default::default())
+            .iter()
+            .map(entry_weight)
+            .sum();
+        // A page of 20 KB: the whole log is a dozen of them.
+        let budget = 20_000;
+        assert!(whole > 10 * budget);
+        let mut shop_box = Session::open(Log::new(laptop.log().id()), box_key);
+        let mut pages = 0;
+        while !shop_box.has_all(laptop.log().heads()) {
+            let page = laptop.since_within(shop_box.log().heads(), budget);
+            assert!(
+                !page.is_empty(),
+                "nothing to send while it still lacks entries"
+            );
+            let weighs: usize = page.iter().map(entry_weight).sum();
+            assert!(weighs <= budget, "a page of {weighs} bytes");
+            let before = shop_box.log().len();
+            shop_box.receive(page, 9_000);
+            assert!(shop_box.log().len() > before, "a page that brought nothing");
+            pages += 1;
+            assert!(pages < 100);
+        }
+        assert!(pages > 10, "{pages} pages");
+        assert_eq!(shop_box.log().len(), laptop.log().len());
+        assert_eq!(shop_box.org().channels["general"].len(), 60);
+        assert!(
+            laptop
+                .since_within(shop_box.log().heads(), budget)
+                .is_empty()
+        );
+        // One entry heavier than the budget is still a page of its own: nothing is stuck.
+        let heavy = Op::Say {
+            channel: "general".into(),
+            text: "y".repeat(4_000),
+        };
+        laptop.write(heavy, 10_000).unwrap();
+        assert_eq!(laptop.since_within(shop_box.log().heads(), 100).len(), 1);
     }
 }

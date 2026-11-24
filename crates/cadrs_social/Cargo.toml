@@ -20,6 +20,7 @@ openmls_basic_credential.workspace = true
 openmls_rust_crypto.workspace = true
 openmls_traits.workspace = true
 postcard.workspace = true
+rmp-serde.workspace = true
 serde.workspace = true
 serde_bytes.workspace = true
 sha2.workspace = true

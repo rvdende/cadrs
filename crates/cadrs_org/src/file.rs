@@ -3,6 +3,9 @@
 //! The file holds every entry, parents first, so reading it back adds each in turn. It is
 //! rewritten whole (to a temporary name, then renamed) after changes; logs of shops are small.
 //! Through `cadrs_fs`, so a page keeps one too.
+//!
+//! It is written with its fields' names ([`cadrs_social::codec`]) and a version. A file that
+//! can't be read is an error, never an empty log: the caller must not go on to save over it.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -12,7 +15,8 @@ use serde::{Deserialize, Serialize};
 
 /// The file name beside `document.ron`.
 pub const FILE: &str = "org.log";
-const VERSION: u32 = 1;
+/// 2: written with names (1 was a pre-release layout, which isn't read).
+const VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize)]
 struct LogFile {
@@ -33,7 +37,7 @@ pub fn save(path: &Path, log: &Log) -> io::Result<()> {
         log: log.id(),
         entries: log.since(&Default::default()),
     };
-    let bytes = postcard::to_allocvec(&file).map_err(io::Error::other)?;
+    let bytes = cadrs_social::codec::encode(&file);
     if let Some(dir) = path.parent() {
         cadrs_fs::create_dir_all(dir)?;
     }
@@ -46,13 +50,14 @@ pub fn save(path: &Path, log: &Log) -> io::Result<()> {
 /// bad one is skipped and counted.
 pub fn load(path: &Path) -> io::Result<(Log, usize)> {
     let bytes = cadrs_fs::read(path)?;
-    let file: LogFile =
-        postcard::from_bytes(&bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let invalid = |why: &str| io::Error::new(io::ErrorKind::InvalidData, why.to_owned());
+    let file: LogFile = cadrs_social::codec::decode(&bytes)
+        .map_err(|_| invalid("not an organization's log (damaged, or from a pre-release cadrs)"))?;
     if file.version > VERSION {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "made by a newer cadrs",
-        ));
+        return Err(invalid("made by a newer cadrs"));
+    }
+    if file.version < VERSION {
+        return Err(invalid("made by a pre-release cadrs"));
     }
     let mut log = Log::new(file.log);
     let mut bad = 0;
@@ -87,6 +92,17 @@ mod tests {
         assert_eq!(back.id(), log.id());
         assert_eq!(back.heads(), log.heads());
         assert_eq!(back.len(), 5);
+        // A file that isn't one is an error (so nobody saves an empty log over it), as is one
+        // a newer cadrs wrote.
+        cadrs_fs::write(&path, b"\x01\x02 some earlier layout").unwrap();
+        assert_eq!(load(&path).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        let newer = cadrs_social::codec::encode(&LogFile {
+            version: VERSION + 1,
+            log: log.id(),
+            entries: Vec::new(),
+        });
+        cadrs_fs::write(&path, newer).unwrap();
+        assert!(load(&path).unwrap_err().to_string().contains("newer"));
         let _ = cadrs_fs::remove_dir_all(&dir);
     }
 }

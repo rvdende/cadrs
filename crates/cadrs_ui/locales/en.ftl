@@ -6505,14 +6505,314 @@ cam-still-reading-parts = Still reading the Part Studio's parts
 # The heading of a CAM dialog's list of warnings.
 cam-warnings = Warnings
 
+## The documents page's Marketplace panel (`cadrs_app::landing_market`).
+market-title = Marketplace
+market-designs = Designs
+market-designs-tooltip = Public documents: designs anyone can open, star and fork
+market-shops = Shops
+market-shops-tooltip = Organizations that make things, or publish designs
+market-search = Search shops: a name, a material, a city…
+market-map = Map…
+market-map-tooltip = Find the shops nearest you that can cut a material
+market-empty = No shops yet
+market-empty-text = Shops appear here as cadrs hears of them while it is online. To list yours, make an organization from the account menu.
+market-empty-search = No shops match
+market-empty-search-text = Try fewer words: a search looks in names, taglines, places, processes and materials.
+# In a shop's page: over the list of its machines.
+market-shop-makes = Makes with
+market-shop-contact = Contact
+market-shop-quote = Request a quote…
+market-shop-quote-help = Request a quote adds this shop to your contacts and picks it for your next request: the parts you ask about are those of the Part Studio you have open.
+# { $name } is the shop.
+market-shop-quote-next = { $name } is picked for your next request: open the Part Studio with the parts, then the document menu › Request a quote
+market-shop-yours = This is your organization, as others see it
+market-shop-copy = Copy link
+market-shop-copy-tooltip = A link to this shop, to send to someone or paste into Request a quote
+market-shop-copied = The shop's link was copied
+
+## Organizations: making one, the account menu, and the organization's screen
+## (`cadrs_app::org_create`, `identity`, `organization`, `org_profile`, `org_quality`).
+# The New organization dialog's first lines.
+org-new-help = An organization is a shop or a team: what the marketplace lists, and where its members keep its requests, orders, machines and stock. A one-person shop is one too; add people later.
+org-new-create = Create organization
+org-new-needs-logo = Choose a logo
+org-new-needs-tagline = Say what you do, in one line
+org-new-needs-email = Give an e-mail address clients can write to
+org-new-needs-offers = Tick at least one
+org-new-needs-location = Give the country and the city
+# Over the country and city of a manufacturing organization's first location.
+org-new-where = Where you make things
+org-new-where-help = Your first location. The marketplace shows it to within 5 km; add the address, more locations and how precisely each is shown under Locations.
+# The name of the location the New organization dialog makes.
+org-first-location-name = Workshop
+org-cannot-open = Cannot open the organization
+# The account menu: an invitation to an organization. { $name } is the organization's, { $from } the inviter's.
+org-invitation = Invitation: { $name }
+org-invitation-from = Invitation: { $name }, from { $from }
+org-invitation-join = Join
+org-invitation-decline = Decline
+org-invitation-joined = Joined. The organization fills in as its members' devices are reached.
+# A notification: someone made this user a member of { $name }.
+org-invited = You were invited to join { $name }
+org-invited-how = Join it from the account menu.
+# The side navigation's groups (shown in capitals) and modules.
+org-group-sales = Sales
+org-group-production = Production
+org-group-inventory = Inventory
+org-group-quality = Quality
+org-group-organization = Organization
+org-tab-issues = Issues
+org-tab-profile = Profile
+org-tab-locations = Locations
+# Shown across an organization some of whose changes a newer cadrs made.
+org-newer-cadrs = Part of this organization was written by a newer cadrs. Update to see all of it; what you see still works.
+# Why a change wasn't made.
+org-refused-role = Your role in the organization doesn't allow that
+org-refused-location-in-use = Machines stand at this location: move them first
+org-refused-machine-in-use = Jobs are scheduled on this machine: finish or remove them first
+org-refused-no-stock = There aren't that many sheets free
+org-refused-quote-replaced = That quote was replaced by a newer one
+org-refused-quote-expired = The quote had run out when it was accepted
+org-refused-issue-close = To close an issue, say what was decided and why
+org-refused-last-owner = An organization keeps at least one owner
+org-refused-not-a-manufacturer = This organization doesn't make parts for others
+org-refused-too-large = That is more than the organization's document keeps in one entry
+org-refused-too-many-today = That many requests were taken there today already
+org-refused-blocked = This organization doesn't take requests from that account
+org-refused-too-many-of-yours = That many of your requests wait for its answer already
+org-refused-too-many-waiting = Too many requests wait for its answer already
+common-edit = Edit
+
+# Asking before something is removed: { $name } is the machine, the member, the location.
+org-confirm-remove-title = Remove { $name }?
+org-confirm-remove-text = It is removed for every member of the organization, and can't be brought back from here.
+
+# Across a module that holds something unsaved while changes arrived from other devices.
+org-news-waits = Something changed elsewhere and isn't shown here yet, so that what you typed isn't lost.
+org-news-show = Show it (drops what you typed)
+
+# The Overview.
+org-marketplace = In the marketplace
+org-listing-listed = Listed
+org-listing-waiting = Not shown yet
+org-listing-private = Private
+org-listed-switch = Show in the marketplace
+org-listing-listed-about = Anyone browsing the marketplace finds this organization, and can send it a request for a quote.
+org-listing-ready-about = Everything a listing needs is here. Turn the switch on to be shown.
+org-listing-needs-about = A listing is what strangers judge you by, so it needs what follows.
+org-listing-other-device = The listing is said by the device that holds the organization's key, while it is online.
+org-need-logo = A logo
+org-need-tagline = A line that says what you do
+org-need-offers = What you offer: manufacturing, designs or both
+org-need-email = An e-mail address clients can write to
+org-need-location = A location where things are made, with its country
+org-need-machine = At least one machine
+# A button beside something a listing still needs: goes to where it is set.
+org-need-go = Add it
+org-at-a-glance = At a glance
+org-glance-requests = New requests
+org-glance-orders = Orders in progress
+org-glance-issues = Open issues
+org-offers-manufacturing = Manufacturing
+org-offers-designs = Designs
+
+# The Profile.
+org-profile-about = What the marketplace and your clients see of the organization.
+org-logo = Logo
+org-logo-choose = Choose a picture…
+org-logo-help = Square, at least 512 × 512 pixels: a PNG, JPEG or GIF. It is kept at 512 × 512.
+org-logo-changed = The logo was changed
+org-logo-not-a-picture = That file isn't a PNG, JPEG or GIF picture
+org-logo-file-too-large = That file is larger than 20 MB
+org-logo-too-small = That picture is { $width } × { $height } pixels: a logo needs at least 512 × 512
+org-logo-not-square = That picture is { $width } × { $height } pixels: a logo is square (crop it first)
+org-name-length = A name is 2 to 60 characters
+org-tagline = Tagline
+org-tagline-help = One line under your name: what you do, in at most 150 characters.
+org-tagline-placeholder = Waterjet cutting in steel, aluminium and glass
+org-profile-tagline-placeholder = Waterjet cutting in steel, aluminium and glass
+org-tagline-length = A tagline is at most 150 characters
+org-offers = What you offer
+org-offers-manufacturing-long = Manufacturing: we make parts for clients
+org-offers-designs-long = Designs: we publish designs others can open
+org-email = Contact e-mail
+org-email-bad = That is not an e-mail address
+org-email-placeholder = sales@example.com
+org-profile-email-placeholder = sales@example.com
+org-website = Website
+org-profile-website-placeholder = https://
+
+# The Profile's last section: taking the organization off this device.
+org-remove = Remove from this device
+org-remove-about = Takes the organization off this device. It goes on with its other members; what this device holds of it moves to the documents' trash, where it can be restored.
+org-remove-ellipsis = Remove from this device…
+# { $name } is the organization's name.
+org-remove-title = Remove { $name } from this device?
+org-remove-confirm = Its requests, orders, stock and the rest stay with the organization's other members. If nobody else is a member, or if this is the only device that holds its key, restoring it from the trash is the only way back.
+org-remove-unlist-first = This device says the organization's listing: turn off Show in the marketplace on the Overview first
+org-removed = { $name } was removed from this device. It is in the trash.
+
+# Locations.
+org-locations-about = Where the organization works from: as many places as it has, or none if it only publishes designs. Machines stand at a location; the marketplace shows the ones you mark public, never more precisely than a kilometre.
+org-no-locations = No locations yet. One that only publishes designs needs none; one that manufactures needs somewhere it makes things.
+org-add-location = Add location…
+org-edit-location = Edit location
+org-location-name = Name
+org-location-name-placeholder = Workshop
+# A column: what a location is used for.
+org-location-use = Used for
+org-location-production = Production
+org-location-pickup = Pickup
+org-location-production-long = Things are made here
+org-location-pickup-long = Clients collect orders here
+org-location-where = Where
+# A column: whether the marketplace shows the location.
+org-location-public = In the marketplace
+# { $km } is a number of kilometres.
+org-location-public-within = Within { $km } km
+org-location-private = Not shown
+# A public location that gave no latitude and longitude.
+org-location-public-city = By its city
+org-location-address = Address
+org-location-line1-placeholder = Street and number
+org-location-line2-placeholder = Building or unit (optional)
+org-location-city-placeholder = City
+org-location-region-placeholder = State or province
+org-location-postal-placeholder = Postal code
+org-location-country = Country
+org-location-country-placeholder = South Africa, or ZA
+org-location-phone = Phone
+org-location-point = Latitude and longitude (optional)
+org-location-lat-placeholder = -33.93
+org-location-lon-placeholder = 18.86
+org-location-point-help = Lets people find the shops nearest them. In degrees, as a map shows them.
+org-location-public-switch = Show this location in the marketplace
+# Before a number of kilometres: how precisely a public location is shown.
+org-location-accuracy = to within (km)
+org-location-needs-name = Give the location a name
+# { $text } is what was typed as a country.
+org-location-country-unknown = “{ $text }” isn't a country cadrs knows: use its English name or its two-letter code
+org-location-point-bad = Give both a latitude (-90 to 90) and a longitude (-180 to 180), or neither
+
+# Members.
+org-members-about = Who works here, and what each may do. Members run the work; admins also set up machines, prices and the profile; owners also name other owners.
+org-no-members = No members.
+org-member = Member
+org-member-role = Role
+org-member-devices = Devices
+# { $name } is the user's own name, in the list of members.
+org-member-you = { $name } (you)
+org-member-device-count = { $count } devices
+org-member-change-role = Change role…
+
+# Machines.
+org-machines-about = The machines parts are made on. A request for a quote is matched against them: which can make the part, and why not.
+org-edit-machine = Edit machine
+org-machine-process = Process
+# Column headings: a machine's bed, and the materials it cuts.
+org-machine-bed-short = Size
+org-machine-materials-short = Materials
+org-machine-location = Location
+# The choice for a machine whose location isn't given.
+org-machine-no-location = Not said
+org-machine-needs-bed = Give the bed's size in mm
+org-process-waterjet = Waterjet
+org-process-laser = Laser
+org-process-plasma = Plasma
+org-process-router = CNC router
+org-process-mill = Mill
+org-process-lathe = Lathe
+org-process-press-brake = Press brake
+org-process-printer = 3D printer
+# { $part } is a part's name, { $why } what each machine can't do.
+org-no-machine-for = No machine can make { $part }: { $why }
+
+# Stock and prices.
+org-stock-about = Sheet on hand, and how much of it isn't held for an order.
+org-material-sheet = Sheet
+org-stock-on-hand = On hand
+org-stock-free = Free
+org-rates-currency-placeholder = EUR
+org-rates-needs-currency = Give the currency as its three-letter code (EUR, USD, ZAR)
+
+# Requests and orders.
+org-requests-about = Requests for quotes, and the orders they become, newest first. Each is numbered in the order it arrived.
+# { $stock } lists the sheets held for an order.
+org-request-held = Held: { $stock }
+org-quote-again = Quote again
+org-request-open-document = Open the document
+org-request-no-document = The request's document isn't on this device yet
+# The name of the copy of a client's document: { $number } is the request's ("R-0007"), { $shop } the organization's name.
+org-request-document-name = { $number } for { $shop }
+org-decline-reason = Why (the client is told)
+org-decline-reason-placeholder = Thicker than our machines cut
+org-declined-because = Declined: { $reason }
+org-issue-report = Report an issue…
+# Over the requests, when several wait: { $count } is how many.
+org-requests-decline-all = Decline all { $count } waiting…
+org-decline-all-title = Decline every waiting request?
+org-decline-all-text = Each request that waits for an answer is declined, and its client is told. Use it when requests arrive that nobody meant.
+org-request-block = Block…
+org-block-title = Block this client?
+org-block-text = No more requests are taken from this account, and those of its that wait are declined. You can let it in again from the list under the requests.
+org-blocked = Blocked
+org-unblock = Let in again
+
+# Jobs, clients, parts, chat.
+org-jobs-about = What runs on which machine, and when.
+org-job-when-short = Start
+org-job-minutes = Minutes
+org-job-state = State
+org-clients-about = Everyone who asked for a quote, and the clients you keep by hand.
+org-client-requests = Requests
+org-client-completed = Completed
+org-client-contact = Contact
+# In the Contact column of a client who has a cadrs account.
+org-client-on-cadrs = On cadrs
+org-parts-about = The parts the shop makes again and again, and what goes into each.
+org-chat-about = Channels for the members. Clients don't see them.
+
+# Quality: issues.
+org-issues-about = Anything that went wrong, or might: a part out of tolerance, a machine cutting badly, a delivery sent back. Anyone here can open one; it is closed with what was decided, and why.
+org-no-issues = No issues. Open one when something goes wrong, so that what was decided about it is on record.
+org-issue-new = New issue…
+# Column headings.
+org-issue-number = No.
+org-issue-title = Title
+org-issue-about = About
+org-issue-owner = Owner
+org-issue-status = Status
+org-issue-open = Open
+org-issue-in-progress = In progress
+org-issue-closed = Closed
+# What was decided about an issue.
+org-issue-disposition = Decision
+org-issue-undecided = Not decided
+org-issue-rework = Rework
+org-issue-repair = Repair
+org-issue-use-as-is = Use as is
+org-issue-scrap = Scrap
+org-issue-return = Return to supplier
+org-issue-no-fault = No fault found
+# What an issue was about isn't in the organization any more.
+org-issue-about-gone = (removed)
+org-issue-about-job = Job
+org-issue-title-placeholder = Taper on thick cuts
+org-issue-details = What happened
+org-issue-details-placeholder = What you saw, on what, and when
+# The choice of no owner.
+org-issue-nobody = Nobody yet
+org-issue-needs-title = Give the issue a title
+org-issue-opened-by = Opened by
+org-issue-rationale = Why
+org-issue-rationale-placeholder = What was found, and why this was decided
+org-issue-close-help = Closing an issue needs a decision and the reasoning behind it, so that later someone can see not only what was decided but why.
+
 ## Organizations (shops): the organization document's screen (`cadrs_app::organization`).
 org-new = New organization
 org-new-ellipsis = New organization…
-org-new-help = An organization is a shop or a team: its machines, stock, members and the requests for quotes it gets. A one-person shop is an organization too; add people later.
 org-name-label = Name
 org-name-placeholder = Cape Waterjet
-org-create = Create organization
-org-untitled = Untitled organization
 org-cannot-create = Cannot create the organization
 org-cannot-save = Cannot save the organization
 org-saved = Saved
@@ -6524,25 +6824,24 @@ org-tab-requests = Requests
 # Before the organization's cadrs ID.
 org-id = Organization ID
 org-about = About
-org-location = Location: latitude, longitude, city, country
-org-location-help = Any of these may be left empty. The exact point is only shown to contacts.
-# How precisely the location is shown publicly, in kilometres.
-org-public-accuracy = Shown publicly within (km)
-org-open-for-quotes = Take requests for quotes from anyone
 org-role-owner = Owner
 org-role-admin = Admin
 org-role-member = Member
 org-add-member = Add member…
-org-member-account = Their cadrs ID
-org-member-account-placeholder = 64 characters, from their profile
 org-member-bad-account = That is not a cadrs ID
 org-no-machines = No machines yet. Add the machines the shop cuts and makes parts with, so requests can be matched to them.
 org-add-machine = Add machine…
 org-machine-name = Name
 # The bed's width and depth, then the cut's width (kerf), all in mm.
 org-machine-bed = Bed X, bed Y and kerf (mm)
-org-machine-materials = Materials and the thickest it cuts (mm)
-org-machine-materials-placeholder = mild steel 100, stainless 80, glass 25
+org-machine-materials = Materials it cuts, and how thick
+# For a machine that works in a space rather than cutting sheet (a 3D printer, a mill, a lathe).
+org-machine-envelope = Work space X, Y and Z (mm)
+org-machine-materials-names = Materials it works in
+org-machine-add-material = Add a material…
+org-machine-thickest = cuts up to
+org-material-use-typed = Use
+org-machine-needs-height = Give how high it works (Z) in mm
 org-machine-needs-name = Give the machine a name
 org-no-materials = No stock materials yet.
 # After how many sheets are on hand: "12 (8 free)".
@@ -6564,10 +6863,6 @@ org-stage-completed = Completed
 org-instant-quote = Quote
 org-decline = Decline
 org-no-rates = No prices are set
-org-profile-lat-placeholder = Latitude
-org-profile-lon-placeholder = Longitude
-org-profile-city-placeholder = City
-org-profile-country-placeholder = Country
 org-profile-about-placeholder = What the shop makes, and for whom
 org-tab-prices = Prices
 org-prices-help = Instant quotes use these: machine time at each machine's hourly rate, sheet at its price per square metre, plus the setup fee. You can always change a quote before sending it.
@@ -6586,6 +6881,8 @@ social-no-devices = There is no device to send it to
 # { $what } is what was sent: "Your request for a quote", "The quote".
 social-sent = { $what } was delivered
 social-not-sent = { $what } wasn't delivered: { $why }
+# What was sent reached them and they refused it: { $why } is their reason.
+social-refused = { $what } wasn't taken: { $why }
 social-what-reply = The reply
 social-what-request = Your request for a quote
 social-no-client-card = The client can't be reached: their card is missing
@@ -6603,6 +6900,8 @@ rfq-parts = Parts
 rfq-part-flat = { $name }: flat, { $thickness } mm thick, { $length } mm of cuts in { $pierces } pieces
 # A part that isn't a flat profile: its name and size (mm).
 rfq-part-3d = { $name }: not flat, { $size } mm
+# { $why } says what is too much (in English: the document's own words).
+rfq-cannot-send = This request can't be sent as it is: { $why }
 rfq-shop = Shop
 rfq-no-shops = No shops in your contacts yet: paste a shop's link.
 rfq-shop-link-placeholder = A shop's link (https://cadrs.net/c/…)
@@ -6615,8 +6914,9 @@ rfq-still-building = The parts are still being built; try again in a moment
 rfq-no-parts = This Part Studio has no parts
 rfq-bad-link = That is not a shop's link
 rfq-pick-shop = Pick a shop
-org-share = Share this shop
-org-share-help = Clients scan this with their phone, or paste the link into Request a quote, to send the shop their parts.
+org-share = Share this organization
+org-share-help = Clients scan this with their phone, or paste the link into Request a quote, to send you their parts.
+org-share-copied = The organization's link was copied
 rfq-requests-menu = Quote requests…
 rfq-requests-title = Quote requests
 rfq-requests-none = You haven't asked a shop for a quote yet. Open a Part Studio and pick Request a quote… in the document menu.
@@ -6660,7 +6960,7 @@ social-left = { $what } will be delivered when they come online
 ## Find a shop (the documents page's app menu; `cadrs_app::find_shop`).
 find-shop-menu = Find a shop…
 find-shop-title = Find a shop
-find-shop-material-placeholder = Material (mild steel)
+find-shop-any-material = Any material
 find-shop-thickness-placeholder = Thickness (mm)
 find-shop-lat-placeholder = Your latitude
 find-shop-lon-placeholder = Your longitude
@@ -6710,9 +7010,6 @@ org-client-email = Email
 org-client-phone = Phone
 org-client-notes = Notes
 org-client-needs-name = Give the client a name
-# After a number: "3 requests · 1 completed".
-org-client-requests = requests
-org-client-completed = completed
 org-no-parts = No parts yet.
 org-add-part = Add part…
 org-part-name = Name
@@ -6726,8 +7023,6 @@ org-reserve-sheets = Sheets
 ## Members' devices keeping the organization in step (`cadrs_app::org_sync`).
 org-member-who = Who: one of your contacts, or their link
 org-member-link-placeholder = Their link (https://cadrs.net/c/…)
-# { $name } is the organization's name.
-org-invited = You were added to { $name }
 org-what-invite = The invitation to { $name }
 org-tab-chat = Chat
 org-chat-empty = No messages in this channel yet. Only the organization's members see them.
@@ -7070,3 +7365,150 @@ cam-form-remove-point = Remove point { $n }
 cam-form-add-point = Add point
 # A note under a form tool's profile: the sizes it gives the tool. { $diameter } and { $length } are numbers in mm.
 cam-form-size = Diameter { $diameter } mm, cutting length { $length } mm (from the profile)
+
+# Credits: the wallet, the faucet and payments (cadrs_app::credits, wallet_ui).
+# The account menu's item that opens the user's wallet.
+wallet-menu = Wallet
+# The same, with what is in it. { $amount } is a number of credits ("1,000").
+wallet-menu-balance = Wallet · { $amount } credits
+wallet-title = Wallet
+# The balance, large, at the top of a wallet.
+wallet-balance = { $amount } credits
+wallet-asking = Asking the bank…
+wallet-unknown = The balance isn't known yet
+# Credits taken out of the balance for orders that aren't delivered yet.
+wallet-held-out = { $amount } held for orders
+# Credits others hold for this wallet, paid when their orders are delivered.
+wallet-held-in = { $amount } held for you, on their way
+wallet-org-look-only = You can see this wallet. Owners and admins of the organization spend from it.
+# A button: takes test credits from the faucet.
+wallet-faucet = Get { $amount } test credits
+# Beside the faucet's button while it can't be used. { $time } is "42 min" or "under a minute".
+wallet-faucet-again-in = Again in { $time }
+wallet-faucet-minutes = { $minutes } min
+wallet-faucet-under-a-minute = under a minute
+wallet-transfer = Transfer…
+wallet-payout = Pay out…
+wallet-copy-address = Copy address
+wallet-address-copied = The wallet's address is on the clipboard
+wallet-transactions = Transactions
+wallet-col-when = When
+wallet-col-what = What
+wallet-col-who = With
+wallet-col-about = For
+wallet-col-amount = Credits
+wallet-none-yet = Nothing yet. Get test credits to start.
+wallet-none-yet-org = Nothing yet. The organization is paid by its clients, or anyone can transfer credits to it.
+wallet-older = Show older
+wallet-copy-csv = Copy as CSV
+wallet-csv-copied = The transactions are on the clipboard, as CSV
+# What a movement was, in the transactions.
+wallet-kind-faucet = Test credits
+wallet-kind-received = Received
+wallet-kind-sent = Sent
+wallet-kind-payout-in = Payout received
+wallet-kind-payout-out = Paid out
+wallet-kind-held-in = Held for you
+wallet-kind-held-out = Held for an order
+wallet-kind-released-in = Paid (was held)
+wallet-kind-released-out = Released to the shop
+wallet-kind-returned-in = Returned to the client
+wallet-kind-returned-out = Returned to you
+wallet-kind-other = Other
+wallet-transfer-title = Transfer credits
+wallet-payout-title = Pay out
+# Under a transfer's title: the wallet it is from and what is in it.
+wallet-transfer-from = From { $name }: { $amount } credits
+wallet-to = To
+wallet-payout-to = To (a person)
+wallet-to-placeholder = Choose who to send to
+wallet-to-search = A name, or paste a wallet address
+wallet-to-none = Nobody of that name. Paste their wallet's address (Wallet › Copy address) or their contact link.
+# Before what was typed, when it is used as an address: Send to “a1b2…”.
+wallet-to-address = Send to
+wallet-amount = Credits
+wallet-amount-placeholder = 250
+wallet-note = Note (they see it)
+wallet-note-placeholder = What it is for
+wallet-transfer-review = Review…
+wallet-needs-recipient = Choose who to send to: a name from the list, a wallet's address or a contact link
+wallet-confirm-send = Send { $amount } credits from { $from } to { $name }?
+wallet-confirm-payout = Pay out { $amount } credits from { $from } to { $name }?
+wallet-confirm-final = Credits move at once and can't be taken back. Only { $name } could send them back.
+wallet-confirm-ok = Send { $amount } credits
+org-tab-wallet = Wallet
+org-wallet-about = The organization's credits: what clients paid, what is held for orders that aren't delivered yet, and what was paid out. Owners and admins transfer and pay out; every member sees it.
+credits-the-faucet = The faucet
+credits-no-bank = No bank is set up, so there are no credits here.
+credits-offline = Offline: the bank can't be asked now.
+# { $why } is what went wrong reaching it.
+credits-bank-unreachable = The bank didn't answer: { $why }
+credits-faucet-took = { $amount } test credits are in your wallet
+credits-sent = Sent { $amount } credits to { $name }
+credits-paid-out = Paid out { $amount } credits to { $name }
+credits-held = { $amount } credits are held for { $name } until the order is delivered
+credits-released = The held credits were paid to the shop
+credits-returned = The held credits went back to the client
+credits-claimed = The held credits were paid to the organization
+# A notice: { $wallet } is the wallet that was paid (the user's name or an organization's).
+credits-notice-received = { $name } paid { $wallet } { $amount } credits
+credits-notice-held = { $amount } credits from { $name } are held for { $wallet }
+credits-refused-not-enough = Not enough credits in the wallet
+credits-refused-faucet-not-yet = The faucet gives once an hour
+credits-refused-faucet-people = The faucet is for people. An organization is paid by its clients, or you can transfer credits to it.
+credits-refused-not-yours = That wallet isn't yours to spend from
+credits-refused-amount = An amount is a whole number of credits, from 1 to 1,000,000,000
+credits-refused-same-wallet = That is the wallet the credits come from
+credits-refused-note = A note is at most 140 characters
+credits-refused-no-hold = That held payment isn't known to the bank
+credits-refused-settled = That held payment was settled already
+credits-refused-not-payer = Only whoever paid can release a held payment
+credits-refused-not-payee = Only whoever it is held for can return a held payment
+credits-refused-too-early = A held payment can be claimed after thirty days
+credits-refused-too-many = Too many payments from that wallet for now
+credits-refused-clock = This computer's clock is too far from the bank's
+credits-refused-too-often = The bank was asked too often. Wait a minute.
+# A price in credits. { $amount } is a number ("724").
+credits-price = { $amount } credits
+# A price in a currency, with the credits it is paid with. { $price } is "ZAR 724.00".
+credits-price-in-currency = { $price } ({ $amount } credits)
+credits-order-held = { $amount } credits held
+credits-order-paid = { $amount } credits paid
+credits-order-returned = { $amount } credits returned
+credits-order-unpaid = No payment held
+# A button on a quote: accepts it and holds its price in credits for the shop.
+rfq-accept-and-pay = Accept and pay { $amount } credits
+rfq-pay-title = Accept and pay
+# { $order } is what was asked for ("6 × Gate bracket").
+rfq-pay-question = Pay { $amount } credits to { $name } for { $order }?
+rfq-pay-held-until = The credits leave your wallet now and are held. { $name } gets them when you sign for the delivery; if it won't be made, { $name } returns them to you.
+rfq-pay-ok = Pay { $amount } credits
+org-request-return-payment = Return payment
+org-request-claim-payment = Claim payment
+org-request-return-question = Return the { $amount } credits held for this order to { $name }?
+org-request-return-final = Do this when the order won't be made. The credits go back to the client at once.
+org-request-return-ok = Return { $amount } credits
+# On an organization's Overview. { $amount } is what is in its wallet, { $received } what came in this month.
+org-overview-wallet = { $amount } credits · { $received } received this month
+org-rates-currency-credits = CRD is credits: what clients pay with here. A price in another currency is paid in credits, one for one.
+# The shop's view of an order's payment when it isn't what the quote asks. { $amount } is the quote's price in credits.
+credits-order-short = less than the { $amount } quoted
+credits-order-other-payer = not from this order's client
+rfq-release-payment = Release payment
+wallet-held-payments = Held payments
+wallet-hold-release = Release
+wallet-hold-return = Return
+wallet-hold-claim = Claim
+# { $count } is how many held payments the list leaves out (the smallest).
+wallet-held-more = { $count } more, smaller, are not listed.
+wallet-hold-release-question = Release the { $amount } credits held for { $name }?
+wallet-hold-release-final = Do this when you have what you ordered. { $name } gets the credits at once, and only { $name } could send them back.
+wallet-hold-release-ok = Release { $amount } credits
+wallet-hold-return-question = Return the { $amount } credits held for you to { $name }?
+wallet-hold-claim-question = Claim the { $amount } credits { $name } has held for you for thirty days?
+wallet-hold-claim-final = A held payment nobody settled in thirty days can be taken by whoever it is held for.
+wallet-hold-claim-ok = Claim { $amount } credits
+# On an organization's wallet. { $count } is how many held payments are for none of its orders.
+org-wallet-strays = { $count } held payments are for none of this organization's orders. Anyone can hold credits for a shop; these can go back.
+org-wallet-return-strays = Return the { $count } held for no order
+org-wallet-return-strays-question = Return the { $count } payments that are held for none of this organization's orders?
