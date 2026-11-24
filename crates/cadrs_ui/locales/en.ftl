@@ -6883,3 +6883,7 @@ shell-doc-suppress-by-new-input = New input for this feature
 # Switch to on an instance of a configured Part Studio's preset, while the studio shows another
 # preset. { $instance } and { $shown } are preset names.
 asm-switch-to-preset = The instance is { $instance }; the Part Studio shows { $shown } (switch it in the feature list's header)
+# A feature's context menu: selects every feature of its type (every sketch, every fillet…).
+shell-doc-select-same-type = Select all of this type
+# Keyboard shortcuts dialog: H hides (or shows) what is selected.
+view-shortcut-toggle-visibility = Hide or show the selection

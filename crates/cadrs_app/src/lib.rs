@@ -52,6 +52,7 @@ pub mod gear_ui;
 pub mod github;
 pub mod ground_grid;
 pub mod hidden_edges;
+pub mod hide_key;
 pub mod history_panel;
 pub mod identity;
 pub mod image_dialog;
@@ -1057,6 +1058,7 @@ impl Plugin for CadrsAppPlugin {
             .add_plugins((
                 variables_ui::VariablesPlugin,
                 node_view::NodeViewPlugin,
+                hide_key::HideKeyPlugin,
                 variable_studio_ui::VariableStudioUiPlugin,
                 scale_ui::ScalePlugin,
                 threads_ui::ThreadsPlugin,

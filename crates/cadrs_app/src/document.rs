@@ -5201,6 +5201,11 @@ fn on_feature_context_menu(
             "feature-zoom-to",
             tr("common-zoom-to-selection"),
         ))
+        // Every feature of this one's type (every sketch…), to hide or show them with H.
+        .item(MenuItem::new(
+            "feature-select-same-type",
+            tr("shell-doc-select-same-type"),
+        ))
         .separator()
         .item(MenuItem::new(
             "feature-dependencies",
@@ -5294,6 +5299,9 @@ fn on_feature_menu_action(
         "feature-show-all-sketches" => commands.queue(crate::feature_menu::show_all_sketches),
         "feature-zoom-to" => {
             commands.queue(move |world: &mut World| crate::feature_menu::zoom_to_feature(world, id))
+        }
+        "feature-select-same-type" => {
+            commands.queue(move |world: &mut World| crate::hide_key::select_same_type(world, id))
         }
         // P3E.3a (IR5.5): a section by the feature's plane (a plane feature, a sketch).
         "feature-section-view" => commands
