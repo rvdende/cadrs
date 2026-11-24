@@ -2114,7 +2114,10 @@ pub(super) fn glued_with(
             .collect();
         let mut meshes: Vec<Option<Vec<super::tess::FaceMesh>>> = vec![None; all.len()];
         let overlap = suspects.into_iter().find(|&(_, _, bj, out)| {
+            // (Kept: the same pieces are tried in one grouping after another, each time
+            // the same body's mesh for the same point.)
             let m = meshes[bj].get_or_insert_with(|| {
+                let _kept = super::tess::keeping_meshes();
                 super::tess::mesh_body(&all[bj], 1e-4 * size.max(crate::native::tol::POINT), 0.3).0
             });
             winding(m, &out) > 0.5

@@ -2279,9 +2279,30 @@ pub fn keep_meshes(on: bool) {
     KEEP_MESHES.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// How many [`keeping_meshes`] guards are alive.
+static KEEPING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// While it lives, face meshes are kept whatever [`keep_meshes`] says.
+pub(crate) struct KeepingMeshes;
+
+/// Keeps face meshes until the guard is dropped, also where the program turned keeping off
+/// ([`keep_meshes`]): for an operation that meshes the same bodies again and again itself (a
+/// sweep's pieces, tried for overlap in one grouping after another).
+pub(crate) fn keeping_meshes() -> KeepingMeshes {
+    KEEPING.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    KeepingMeshes
+}
+
+impl Drop for KeepingMeshes {
+    fn drop(&mut self) {
+        KEEPING.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 fn mesh_all(body: &Body, p: &TessParams) -> (Vec<FaceMesh>, EdgeSamples) {
     let es = edge_samples_with(body, p);
-    let keep = KEEP_MESHES.load(std::sync::atomic::Ordering::Relaxed);
+    let keep = KEEP_MESHES.load(std::sync::atomic::Ordering::Relaxed)
+        || KEEPING.load(std::sync::atomic::Ordering::Relaxed) > 0;
     let one = |f: &Face| {
         // (A plane with few boundary points meshes in about the time its key takes: a box's
         // side, mostly new. One with many is kept too: a box's face round a few hundred
