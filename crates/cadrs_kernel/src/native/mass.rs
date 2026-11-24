@@ -1215,7 +1215,23 @@ pub(crate) fn face_integrals_of<const ALL: bool>(body: &Body, f: &Face, shift: &
         return acc;
     }
     let mut acc = [0.0; NE];
+    let Some((plan, jobs)) = boundary_jobs::<ALL>(body, f) else {
+        return acc;
+    };
     let mut scratch = Vec::with_capacity(64);
+    run_jobs::<ALL>(&f.surf, &plan, &jobs, shift, &mut acc, &mut scratch);
+    if !f.sense {
+        for q in acc.iter_mut().take(4) {
+            *q = -*q;
+        }
+    }
+    acc
+}
+
+/// The general rule's inner integrals of a face ([`face_integrals_of`]'s last way): its plan,
+/// and a job a Gauss point along its boundary's p-curves, `[u_ref, u, v, weight]` (the inner
+/// integral from `u_ref` to `u` at `v`). None for a face with no boundary.
+fn boundary_jobs<const ALL: bool>(body: &Body, f: &Face) -> Option<(Inner, Vec<[f64; 4]>)> {
     // The reference u: the smallest u on the boundary keeps H small.
     let mut u_ref = f64::INFINITY;
     for l in &f.loops {
@@ -1225,13 +1241,13 @@ pub(crate) fn face_integrals_of<const ALL: bool>(body: &Body, f: &Face, shift: &
         }
     }
     if !u_ref.is_finite() {
-        return acc;
+        return None;
     }
     let plan = Inner::of::<ALL>(&f.surf);
     let v_periodic = f.surf.v_periodic() || matches!(f.surf, Surface::Sphere { .. });
     // The inner integrals gathered as jobs (shared across the cores when there are many; a
     // B-spline face's run on the GPU when it is on).
-    let mut jobs: Option<Vec<[f64; 4]>> = Some(Vec::new());
+    let mut jobs: Vec<[f64; 4]> = Vec::new();
     for l in &f.loops {
         for c in l {
             let e = &body.edges[c.edge];
@@ -1269,36 +1285,12 @@ pub(crate) fn face_integrals_of<const ALL: bool>(body: &Body, f: &Face, shift: &
                     if dv == 0.0 {
                         continue;
                     }
-                    if let Some(jobs) = jobs.as_mut() {
-                        jobs.push([u_ref, uv.x, uv.y, gw * r * dv]);
-                    } else {
-                        inner::<ALL>(
-                            &f.surf,
-                            &plan,
-                            u_ref,
-                            uv.x,
-                            uv.y,
-                            shift,
-                            gw * r * dv,
-                            &mut acc,
-                            &mut scratch,
-                            None,
-                            None,
-                        );
-                    }
+                    jobs.push([u_ref, uv.x, uv.y, gw * r * dv]);
                 }
             }
         }
     }
-    if let Some(jobs) = jobs {
-        run_jobs::<ALL>(&f.surf, &plan, &jobs, shift, &mut acc, &mut scratch);
-    }
-    if !f.sense {
-        for q in acc.iter_mut().take(4) {
-            *q = -*q;
-        }
-    }
-    acc
+    Some((plan, jobs))
 }
 
 /// No knots (a direction a surface is smooth along), for [`split_at_knots`].
@@ -1590,6 +1582,15 @@ pub(crate) fn faces_volume_terms(body: &Body, shift: &V3) -> Vec<f64> {
 
 /// Mass properties of a body (solids; a body without solids is a sheet: area only).
 pub fn body_mass(body: &Body) -> crate::MassProperties {
+    body_mass_with(body, None)
+}
+
+/// [`body_mass`], each face that `copies` says is a copy of another weighed as that one's
+/// integrals moved ([`copies_integrals`]).
+pub fn body_mass_with(
+    body: &Body,
+    copies: Option<&[Option<(usize, super::copies::Rigid)>]>,
+) -> crate::MassProperties {
     let bb = body.bbox();
     let shift = if bb.is_empty() {
         V3::zeros()
@@ -1597,8 +1598,20 @@ pub fn body_mass(body: &Body) -> crate::MassProperties {
         bb.center().coords
     };
     let faces: Vec<usize> = (0..body.faces.len()).collect();
+    // Faces that are copies of one another (a gear's teeth): integrated once a set.
+    let mut copied: Vec<Option<(V3, QE)>> = vec![None; body.faces.len()];
+    if !gpu_active()
+        && let Some(copies) = copies
+    {
+        for (i, c, q) in copies_integrals(body, copies) {
+            copied[i] = Some((c, q));
+        }
+    }
     let one = |&i: &usize| {
         let f = &body.faces[i];
+        if let Some((center, q)) = &copied[i] {
+            return shifted(q, center, &shift);
+        }
         if gpu_active() || !costly(f) {
             return face_integrals(body, f, &shift);
         }
@@ -1830,6 +1843,286 @@ impl FaceCache {
 
 static FACE_CACHE: std::sync::LazyLock<std::sync::Mutex<FaceCache>> =
     std::sync::LazyLock::new(Default::default);
+
+// ---------------------------------------------------------------------------------------------
+// Copies of a face: integrated once, moved to the others.
+
+/// A face's moments as tensors, about a point c (y = x − c, n = Su × Sv, a = |n|): the area
+/// `∫a`, `∫y a`, `∫n`, `∫y_i n_l`, `∫y_i y_j n_l`, `∫y_i y_j y_k n_l` (1 + 3 + 3 + 9 + 27 + 81). A
+/// rigid motion moves each by its rotation, and a shift by the lower ones ([`copy_integrals`]):
+/// every quantity of [`QE`] is a component of one of them (∫x³nₓ/3 is `T3[x][x][x][x]`/3), but not
+/// one that turns alone, so a copy's are made from the whole tensors.
+const NT: usize = 124;
+type FT = [f64; NT];
+const T1: usize = 7;
+const T2: usize = 16;
+const T3: usize = 43;
+
+/// [`accumulate`]'s point added to the tensors.
+#[inline]
+fn accumulate_tensors(p: &P3, su: &V3, sv: &V3, c: &V3, out: &mut FT, w: f64) {
+    let n = su.cross(sv) * w;
+    let y = [p.x - c.x, p.y - c.y, p.z - c.z];
+    let nn = [n.x, n.y, n.z];
+    let a = su.cross(sv).norm() * w;
+    out[0] += a;
+    for i in 0..3 {
+        out[1 + i] += y[i] * a;
+        out[4 + i] += nn[i];
+    }
+    for i in 0..3 {
+        for l in 0..3 {
+            out[T1 + i * 3 + l] += y[i] * nn[l];
+        }
+        for j in 0..3 {
+            let yy = y[i] * y[j];
+            for l in 0..3 {
+                out[T2 + (i * 3 + j) * 3 + l] += yy * nn[l];
+            }
+            for k in 0..3 {
+                let yyy = yy * y[k];
+                for l in 0..3 {
+                    out[T3 + ((i * 3 + j) * 3 + k) * 3 + l] += yyy * nn[l];
+                }
+            }
+        }
+    }
+}
+
+/// The face [`face_integrals_of`] integrates by its general rule (the boundary's jobs), or None
+/// where it takes another way: a face whose tensors ([`face_tensors`]) give its integrals as
+/// that rule does. (Its B-spline transposed where that rule would be.)
+fn general_face<'a>(body: &Body, f: &'a Face) -> Option<std::borrow::Cow<'a, Face>> {
+    let Surface::Nurbs(ns) = &f.surf else {
+        return None;
+    };
+    if ruled_in_v(&f.surf) || smooth_fit(ns) {
+        return None;
+    }
+    if ns.du <= 3 && ns.dv <= 3 && iso_rectangle(body, f).is_some() {
+        return None;
+    }
+    if let Some(t) = transposed(f) {
+        return general_face(body, &t).map(|g| std::borrow::Cow::Owned(g.into_owned()));
+    }
+    Some(std::borrow::Cow::Borrowed(f))
+}
+
+/// A face's tensors about `c` ([`FT`]) by [`face_integrals_of`]'s general rule: its boundary's
+/// jobs, each inner integral by the B-spline's cells as polynomials (or its iso-curve).
+fn face_tensors(body: &Body, f: &Face, c: &V3) -> FT {
+    let mut acc = [0.0; NT];
+    let Surface::Nurbs(ns) = &f.surf else {
+        return acc;
+    };
+    let Some((plan, jobs)) = boundary_jobs::<true>(body, f) else {
+        return acc;
+    };
+    let cells = ns.cells();
+    let g = gauss(plan.n);
+    let one = |j: &[f64; 4], acc: &mut FT, scratch: &mut Vec<f64>| {
+        let (u0, u, v, w) = (j[0], j[1], j[2], j[3]);
+        if (u - u0).abs() < tol::TINY {
+            return;
+        }
+        plan.pieces(u0, u, scratch);
+        let col = cells.as_ref().map(|c| c.col(v));
+        let mut row: Option<super::nurbs::CellRow> = None;
+        let iso = ns.iso_v(v, u0, u);
+        for k in 0..scratch.len() - 1 {
+            let (lo, hi) = (scratch[k], scratch[k + 1]);
+            if let (Some(cells), Some(col)) = (cells.as_ref(), col)
+                && !row.as_ref().is_some_and(|r| r.holds(lo, hi))
+            {
+                row = cells.row(col, v, lo, hi);
+            }
+            let (m, h) = ((lo + hi) * 0.5, (hi - lo) * 0.5);
+            for (x, gw) in g.x.iter().zip(g.w) {
+                let t = m + h * x;
+                let (p, su, sv) = match row.as_ref().filter(|r| r.holds(lo, hi)) {
+                    Some(r) => r.d1(t),
+                    None => iso.d1(t),
+                };
+                accumulate_tensors(&p, &su, &sv, c, acc, w * gw * h);
+            }
+        }
+    };
+    const CHUNK: usize = 32;
+    let chunk = |cs: &[[f64; 4]]| {
+        let mut a = [0.0; NT];
+        let mut sc = Vec::with_capacity(64);
+        for j in cs {
+            one(j, &mut a, &mut sc);
+        }
+        a
+    };
+    let parts: Vec<FT> = if super::par::threads_for(jobs.len() / CHUNK, false) {
+        jobs.par_chunks(CHUNK).map(chunk).collect()
+    } else {
+        jobs.chunks(CHUNK).map(chunk).collect()
+    };
+    for p in parts {
+        for (a, x) in acc.iter_mut().zip(p) {
+            *a += x;
+        }
+    }
+    if !f.sense {
+        for q in acc.iter_mut().take(4) {
+            *q = -*q;
+        }
+    }
+    acc
+}
+
+/// The integrals ([`QE`]) about `to` of the copy of a face that `r` moves it to, from the face's
+/// tensors `t` about `from`: each tensor turned by r's rotation, then shifted by d = r(from) − to.
+fn copy_integrals(t: &FT, r: &super::copies::Rigid, from: &V3, to: &V3) -> QE {
+    let m = &r.m;
+    let d = m * from + r.t - to;
+    let d = [d.x, d.y, d.z];
+    let rot1 = |v: &[f64]| -> [f64; 3] {
+        let mut o = [0.0; 3];
+        for (i, oi) in o.iter_mut().enumerate() {
+            *oi = (0..3).map(|a| m[(i, a)] * v[a]).sum();
+        }
+        o
+    };
+    let area = t[0];
+    let mom = rot1(&t[1..4]);
+    let nv = rot1(&t[4..7]);
+    // The rotated tensors, an index at a time.
+    let turn = |src: &[f64], rank: usize| -> Vec<f64> {
+        let mut cur = src.to_vec();
+        for axis in 0..rank {
+            let stride = 3usize.pow((rank - 1 - axis) as u32);
+            let mut next = vec![0.0; cur.len()];
+            for (idx, out) in next.iter_mut().enumerate() {
+                let i = (idx / stride) % 3;
+                let base = idx - i * stride;
+                *out = (0..3).map(|a| m[(i, a)] * cur[base + a * stride]).sum();
+            }
+            cur = next;
+        }
+        cur
+    };
+    let t1 = turn(&t[T1..T2], 2);
+    let t2 = turn(&t[T2..T3], 3);
+    let t3 = turn(&t[T3..NT], 4);
+    // The shifted moments: ∫ z_a n_l, ∫ z_a z_b n_l, ∫ z_a z_b z_c n_l with z = y + d.
+    let s1 = |a: usize, l: usize| t1[a * 3 + l] + d[a] * nv[l];
+    let s2 = |a: usize, b: usize, l: usize| {
+        t2[(a * 3 + b) * 3 + l] + d[a] * t1[b * 3 + l] + d[b] * t1[a * 3 + l] + d[a] * d[b] * nv[l]
+    };
+    let s3 = |a: usize, b: usize, c: usize, l: usize| {
+        t3[((a * 3 + b) * 3 + c) * 3 + l]
+            + d[a] * t2[(b * 3 + c) * 3 + l]
+            + d[b] * t2[(a * 3 + c) * 3 + l]
+            + d[c] * t2[(a * 3 + b) * 3 + l]
+            + d[a] * d[b] * t1[c * 3 + l]
+            + d[a] * d[c] * t1[b * 3 + l]
+            + d[b] * d[c] * t1[a * 3 + l]
+            + d[a] * d[b] * d[c] * nv[l]
+    };
+    let (x, y, z) = (0, 1, 2);
+    let mut q = [0.0; NE];
+    q[0] = area;
+    for i in 0..3 {
+        q[1 + i] = mom[i] + d[i] * area;
+    }
+    q[4] = (s1(x, x) + s1(y, y) + s1(z, z)) / 3.0;
+    q[5] = s2(x, x, x) * 0.5;
+    q[6] = s2(y, y, y) * 0.5;
+    q[7] = s2(z, z, z) * 0.5;
+    q[8] = s3(x, x, x, x) / 3.0;
+    q[9] = s3(y, y, y, y) / 3.0;
+    q[10] = s3(z, z, z, z) / 3.0;
+    q[11] = s3(x, x, y, x) * 0.5;
+    q[12] = s3(y, y, z, y) * 0.5;
+    q[13] = s3(z, z, x, z) * 0.5;
+    q[14] = nv[0];
+    q[15] = nv[1];
+    q[16] = nv[2];
+    q[17] = s1(x, x);
+    q[18] = s1(y, y);
+    q[19] = s1(z, z);
+    q[20] = s2(x, y, x);
+    q[21] = s2(y, z, y);
+    q[22] = s2(z, x, z);
+    q[23] = s1(y, x);
+    q[24] = s1(z, y);
+    q[25] = s1(x, z);
+    q
+}
+
+/// The integrals about their own centres ([`face_integrals_about_center`]) of the faces that
+/// `copies` says are copies of another (sets of at least [`COPIES_MIN`]): each set's first face's
+/// tensors integrated once and moved to every face of it, which is the same to rounding as
+/// integrating each. Kept in the face cache too, where the faces' areas are asked for next.
+fn copies_integrals(
+    body: &Body,
+    copies: &[Option<(usize, super::copies::Rigid)>],
+) -> Vec<(usize, V3, QE)> {
+    if copies.len() != body.faces.len() {
+        return Vec::new();
+    }
+    let sets: Vec<Vec<(usize, super::copies::Rigid)>> = super::copies::sets(copies)
+        .into_iter()
+        .filter(|s| {
+            s.len() >= COPIES_MIN
+                && costly(&body.faces[s[0].0])
+                && general_face(body, &body.faces[s[0].0]).is_some()
+        })
+        .collect();
+    let per_set = |set: &Vec<(usize, super::copies::Rigid)>| -> Vec<(usize, V3, QE)> {
+        let keys: Vec<u128> = set
+            .iter()
+            .map(|(i, _)| face_key(body, &body.faces[*i]))
+            .collect();
+        {
+            let mut cache = FACE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+            let hits: Vec<Option<(V3, QE)>> = keys.iter().map(|k| cache.get(*k)).collect();
+            if hits.iter().all(Option::is_some) {
+                return set
+                    .iter()
+                    .zip(hits)
+                    .filter_map(|((i, _), h)| h.map(|(c, q)| (*i, c, q)))
+                    .collect();
+            }
+        }
+        let first = &body.faces[set[0].0];
+        let Some(g) = general_face(body, first) else {
+            return Vec::new();
+        };
+        let c0 = face_center(body, first);
+        let t = face_tensors(body, &g, &c0);
+        let out: Vec<(usize, V3, QE)> = set
+            .iter()
+            .map(|(i, r)| {
+                let c = face_center(body, &body.faces[*i]);
+                (*i, c, copy_integrals(&t, r, &c0, &c))
+            })
+            .collect();
+        let mut cache = FACE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        for ((_, c, q), k) in out.iter().zip(keys) {
+            cache.insert(k, (*c, *q));
+        }
+        out
+    };
+    sets.iter().flat_map(per_set).collect()
+}
+
+/// Puts the integrals of a body's faces that are copies of one another in the face cache
+/// ([`copies_integrals`]), so that each face's measure ([`face_area`]) finds them there.
+pub(crate) fn prime_copies(body: &Body, copies: &[Option<(usize, super::copies::Rigid)>]) {
+    if gpu_active() {
+        return;
+    }
+    copies_integrals(body, copies);
+}
+
+/// The fewest copies of a face that are integrated once for all ([`copies_integrals`]): its
+/// tensors take a few times one face's work.
+const COPIES_MIN: usize = 4;
 
 #[cfg(test)]
 mod tests {

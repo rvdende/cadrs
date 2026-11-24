@@ -2345,6 +2345,16 @@ impl Drop for KeepingMeshes {
 }
 
 fn mesh_all(body: &Body, p: &TessParams) -> (Vec<FaceMesh>, EdgeSamples) {
+    mesh_all_with(body, p, None)
+}
+
+/// [`mesh_all`], each face that `copies` says is a copy of another taken from that one's mesh
+/// moved ([`moved_mesh`]).
+fn mesh_all_with(
+    body: &Body,
+    p: &TessParams,
+    copies: Option<&[Option<(usize, super::copies::Rigid)>]>,
+) -> (Vec<FaceMesh>, EdgeSamples) {
     let es = edge_samples_with(body, p);
     let keep = KEEP_MESHES.load(std::sync::atomic::Ordering::Relaxed)
         || KEEPING.load(std::sync::atomic::Ordering::Relaxed) > 0;
@@ -2380,9 +2390,76 @@ fn mesh_all(body: &Body, p: &TessParams) -> (Vec<FaceMesh>, EdgeSamples) {
             Surface::Nurbs(_) | Surface::Extrusion { .. } | Surface::Revolution { .. }
         )
     });
-    let faces: Vec<FaceMesh> = super::par::map_heavy(&body.faces, free, one);
+    // Faces that are copies of another (a gear's teeth): meshed once a set, the mesh moved to
+    // each copy ([`moved_mesh`]).
+    let n = body.faces.len();
+    let copy_of: Vec<Option<(usize, super::copies::Rigid)>> = match copies {
+        Some(c) if c.len() == n => c.to_vec(),
+        _ => vec![None; n],
+    };
+    let own: Vec<usize> = (0..n).filter(|&i| copy_of[i].is_none()).collect();
+    let made: Vec<FaceMesh> = super::par::map_heavy(&own, free, |&i| one(&body.faces[i]));
+    let mut faces: Vec<Option<FaceMesh>> = (0..n).map(|_| None).collect();
+    for (i, m) in own.into_iter().zip(made) {
+        faces[i] = Some(m);
+    }
+    let copies: Vec<usize> = (0..n).filter(|&i| copy_of[i].is_some()).collect();
+    let size = body.bbox().diagonal().max(1.0);
+    let moved: Vec<FaceMesh> = super::par::map_heavy(&copies, free, |&i| {
+        let (first, r) = copy_of[i].expect("a copy");
+        let from = faces[first].as_ref().expect("its set's first face meshed");
+        moved_mesh(body, &es, from, (first, i), &r, size).unwrap_or_else(|| one(&body.faces[i]))
+    });
+    for (i, m) in copies.into_iter().zip(moved) {
+        faces[i] = Some(m);
+    }
+    let faces: Vec<FaceMesh> = faces.into_iter().map(|m| m.unwrap_or_default()).collect();
     let faces = split_shared_sides(body, &es, p, faces);
     (faces, es)
+}
+
+/// Face `to`'s mesh from face `from`'s (`mesh`), `to` being its copy by `r` (`size` the body's)
+/// ([`super::copies`]): the points and normals moved, and the boundary's points taken from
+/// `to`'s own edges' samples, so the mesh joins its neighbours' as one made for it would. None
+/// where an edge of `to` isn't sampled as its counterpart is (another count of points, or one
+/// off by more than the edges' tolerance): `to` is then meshed itself.
+fn moved_mesh(
+    body: &Body,
+    es: &EdgeSamples,
+    mesh: &FaceMesh,
+    (from, to): (usize, usize),
+    r: &super::copies::Rigid,
+    size: f64,
+) -> Option<FaceMesh> {
+    let key = |q: &P3| [q.x.to_bits(), q.y.to_bits(), q.z.to_bits()];
+    let mut snap: rustc_hash::FxHashMap<[u64; 3], P3> = Default::default();
+    let (fa, fb) = (&body.faces[from], &body.faces[to]);
+    for (la, lb) in fa.loops.iter().zip(&fb.loops) {
+        for (ca, cb) in la.iter().zip(lb) {
+            let (ea, eb) = (&body.edges[ca.edge], &body.edges[cb.edge]);
+            let (pa, pb) = (&es[ca.edge].1, &es[cb.edge].1);
+            if pa.len() != pb.len() {
+                return None;
+            }
+            let near = (50.0 * ea.tol.max(eb.tol)).max(1e-9 * size);
+            for (x, y) in pa.iter().zip(pb) {
+                if (r.point(x) - y).norm() > near {
+                    return None;
+                }
+                snap.insert(key(x), *y);
+            }
+        }
+    }
+    Some(FaceMesh {
+        positions: mesh
+            .positions
+            .iter()
+            .map(|q| snap.get(&key(q)).copied().unwrap_or_else(|| r.point(q)))
+            .collect(),
+        normals: mesh.normals.iter().map(|n| r.vector(n)).collect(),
+        uvs: mesh.uvs.clone(),
+        indices: mesh.indices.clone(),
+    })
 }
 
 /// The faces re-meshed where two of them joined the same two boundary points by an inner side
@@ -2535,8 +2612,10 @@ impl NativeKernel {
     /// # Errors
     /// [`KernelError::UnknownBody`], or [`KernelError::InvalidInput`] for invalid controls.
     pub fn tessellate_with(&self, body: BodyId, p: &TessParams) -> Result<TriMesh> {
-        let b = self.get(body)?;
-        let (faces, es) = mesh(b, p)?;
+        let e = self.entry(body)?;
+        let b = &e.body;
+        p.validate()?;
+        let (faces, es) = mesh_all_with(b, p, e.copies.get().map(|c| c.as_slice()));
         let mut m = TriMesh::default();
         for (fi, fm) in faces.into_iter().enumerate() {
             let base = m.positions.len() as u32;

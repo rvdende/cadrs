@@ -124,6 +124,11 @@ pub mod convex_chamfer;
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod convex_chamfer;
 #[cfg(feature = "testkit")]
+pub mod copies;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod copies;
+#[cfg(feature = "testkit")]
 pub mod curve;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
@@ -293,6 +298,11 @@ pub mod ops;
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod ops;
 pub(crate) mod par;
+#[cfg(feature = "testkit")]
+pub mod pattern;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod pattern;
 #[cfg(feature = "testkit")]
 pub mod pcurve;
 #[cfg(not(feature = "testkit"))]

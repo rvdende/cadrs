@@ -6615,6 +6615,24 @@ pub(super) fn cut(
     // (Whether the plug's common part with the target failed: then the plug alone is cut
     // first, below.)
     let common_failed = std::cell::Cell::new(false);
+    // Copies round a target turned about their axis: one tooth's sector (the target within a
+    // pitch's wedge, less the spaces reaching into it) made with two small booleans, and turned
+    // round the axis by `pattern::pattern_sector`, joined by index: no boolean of all the
+    // spaces at once (half a second for a hypoid gear's 48 against a tenth).
+    if copies > 1
+        && plugs.len() == 1
+        && !crate::native::env_flag!("CADRS_NO_PATTERN")
+        && let Some((n, pitch)) = copied
+        && let Some(r) = sector_pattern(k, target, &plugs[0], &target_axis, n, pitch, &about, debug)
+    {
+        if debug {
+            eprintln!(
+                "generated cut: {n} spaces patterned from a sector ({:.0} ms)",
+                (web_time::Instant::now() - t_start).as_secs_f64() * 1e3
+            );
+        }
+        return Some(Ok(r));
+    }
     if copies > 1 && plugs.len() == 1 {
         let made = (|| -> Option<OpResult> {
             let blank = std::sync::Arc::clone(k.get(target).ok()?);
@@ -6857,4 +6875,219 @@ pub(super) fn cut(
         }
         Err(_) => None,
     }
+}
+
+/// `target` less every copy of `plug` round `axis` (`n` of them, `pitch` apart, `about(i)` the
+/// i-th's motion), made as one tooth's sector patterned: the target within the wedge a pitch
+/// wide about the plug's space, less the spaces reaching into it (that one and its neighbours as
+/// far as they do), turned round the axis and joined ([`super::pattern::pattern_sector`]). Its
+/// faces' history is the target's, through the sector's two booleans. None where the target
+/// isn't turned about the axis, a boolean fails or the result isn't sound.
+#[allow(clippy::too_many_arguments)]
+fn sector_pattern(
+    k: &mut NativeKernel,
+    target: BodyId,
+    plug: &Body,
+    axis: &Axis,
+    n: usize,
+    pitch: f64,
+    about: &dyn Fn(usize) -> Affine,
+    debug: bool,
+) -> Option<OpResult> {
+    let not = |why: &str| {
+        if debug {
+            eprintln!("generated cut: no sector: {why}");
+        }
+    };
+    let blank = std::sync::Arc::clone(k.get(target).ok()?);
+    if !turned_about(&blank, axis) {
+        not("the target isn't turned about the axis");
+        return None;
+    }
+    // (Copies turned the other way round: the same turns about the axis reversed.)
+    let (o, z, pitch) = if pitch < 0.0 {
+        (axis.origin, -axis.dir.into_inner(), -pitch)
+    } else {
+        (axis.origin, axis.dir.into_inner(), pitch)
+    };
+    let size = blank.bbox().diagonal();
+    let Ok(space) = super::boolean::boolean_bodies(plug, &blank, BoolOp::Intersect) else {
+        not("the plug's common part with the target failed");
+        return None;
+    };
+    let space = space.body;
+    // The space's angles about the axis, from its middle.
+    let radial = |p: &P3| {
+        let d = p - o;
+        d - z * d.dot(&z)
+    };
+    let x0 = radial(&space.bbox().center()).try_normalize(tol::TINY)?;
+    let y0 = z.cross(&x0);
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    for e in &space.edges {
+        for i in 0..=16 {
+            let d = radial(&e.point(e.t[0] + (e.t[1] - e.t[0]) * i as f64 / 16.0));
+            let a = d.dot(&y0).atan2(d.dot(&x0));
+            lo = lo.min(a);
+            hi = hi.max(a);
+        }
+    }
+    let h = 0.5 * pitch;
+    if !(pitch > 0.0 && pitch < PI && hi - lo < TAU - pitch) {
+        not(&format!(
+            "the space reaches round the axis: {lo:.3} to {hi:.3}, pitch {pitch:.3}"
+        ));
+        return None;
+    }
+    // The wedge: a triangle from the axis through ±half a pitch, far out, through the target.
+    let plane = Plane {
+        origin: o,
+        x_dir: nalgebra::Unit::new_normalize(x0),
+        normal: nalgebra::Unit::new_normalize(z),
+    };
+    let r = 4.0 * size / h.cos();
+    let tri = Loop::polygon(&[
+        [0.0, 0.0],
+        [r * (-h).cos(), r * (-h).sin()],
+        [r * h.cos(), r * h.sin()],
+    ]);
+    let mut temp: Vec<BodyId> = Vec::new();
+    let made = (|| -> Option<(BodyId, Vec<Option<usize>>)> {
+        let prism = k
+            .extrude(
+                &Profile::of(plane, vec![tri]),
+                Extent::Symmetric(8.0 * size),
+            )
+            .ok()?
+            .bodies[0];
+        temp.push(prism);
+        let w = k.boolean(BoolOp::Intersect, target, &[prism]).ok()?;
+        let wedge = *w.bodies.first()?;
+        temp.push(wedge);
+        // Each wedge face's target face.
+        let wedge_from: rustc_hash::FxHashMap<u64, u64> = w
+            .history
+            .modified
+            .iter()
+            .filter(|(_, i)| i.body == target)
+            .map(|(f, i)| (f.0, i.face.0))
+            .collect();
+        // The spaces reaching into the wedge.
+        let mut tool = Body::default();
+        let m = n as i64;
+        for j in -(m / 2)..=(m / 2) {
+            if lo + j as f64 * pitch < h && hi + j as f64 * pitch > -h {
+                let i = j.rem_euclid(m) as usize;
+                tool.append(&if i == 0 {
+                    space.clone()
+                } else {
+                    space.transformed(&about(i))
+                });
+            }
+        }
+        let tool = k.insert(tool);
+        temp.push(tool);
+        let sr = k.boolean(BoolOp::Subtract, wedge, &[tool]).ok()?;
+        let sector = *sr.bodies.first()?;
+        temp.push(sector);
+        // Each sector face's target face.
+        let mut sector_from = vec![None; k.get(sector).ok()?.faces.len()];
+        for (f, i) in &sr.history.modified {
+            if i.body == wedge
+                && let Some(&t) = wedge_from.get(&i.face.0)
+                && let Some(s) = sector_from.get_mut(f.0 as usize)
+            {
+                *s = Some(t as usize);
+            }
+        }
+        Some((sector, sector_from))
+    })();
+    let Some((sector, sector_from)) = made else {
+        for id in temp {
+            k.release(id);
+        }
+        if debug {
+            eprintln!("generated cut: no sector: a boolean of it failed");
+        }
+        return None;
+    };
+    let sb = std::sync::Arc::clone(k.get(sector).ok()?);
+    for id in temp {
+        k.release(id);
+    }
+    let joined = super::pattern::pattern_faces(&sb, o, z, n, pitch, 1e-6 * size.max(1.0));
+    let Some(super::pattern::Patterned { body, from, copies }) = joined else {
+        if debug {
+            eprintln!("generated cut: the sector's copies don't join");
+        }
+        return None;
+    };
+    let history = crate::History {
+        modified: from
+            .iter()
+            .enumerate()
+            .filter_map(|(f, s)| {
+                let t = sector_from.get((*s)?).copied().flatten()?;
+                Some((
+                    crate::FaceId(f as u64),
+                    crate::InputFace {
+                        body: target,
+                        face: crate::FaceId(t as u64),
+                    },
+                ))
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let id = k.insert(body);
+    if let Ok(e) = k.entry(id) {
+        let _ = e.copies.set(std::sync::Arc::new(copies));
+    }
+    if !k.sound(id) {
+        k.release(id);
+        if debug {
+            eprintln!("generated cut: the patterned sector isn't sound");
+        }
+        return None;
+    }
+    Some(OpResult {
+        bodies: vec![id],
+        history,
+    })
+}
+
+/// [`crate::Kernel::subtract_turned`]: `target` less `tool` and its copies turned about `axis`,
+/// `count` of them a whole turn apart, as one tooth's sector patterned ([`sector_pattern`]);
+/// where that can't be, the copies set side by side and cut in one boolean (a tooth's spaces
+/// stand apart).
+pub(crate) fn subtract_turned(
+    k: &mut NativeKernel,
+    target: BodyId,
+    tool: BodyId,
+    axis: &Axis,
+    count: usize,
+) -> Result<OpResult> {
+    let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
+    let plug = std::sync::Arc::clone(k.get(tool)?);
+    let pitch = TAU / count.max(1) as f64;
+    let about =
+        |i: usize| super::pattern::turn(axis.origin, axis.dir.into_inner(), pitch * i as f64);
+    if count > 1
+        && !crate::native::env_flag!("CADRS_NO_PATTERN")
+        && let Some(r) = sector_pattern(k, target, &plug, axis, count, pitch, &about, debug)
+    {
+        return Ok(r);
+    }
+    let mut all = Body::default();
+    for i in 0..count {
+        all.append(&if i == 0 {
+            (*plug).clone()
+        } else {
+            plug.transformed(&about(i))
+        });
+    }
+    let all = k.insert(all);
+    let r = k.boolean(BoolOp::Subtract, target, &[all]);
+    k.release(all);
+    r
 }

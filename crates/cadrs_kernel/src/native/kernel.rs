@@ -42,6 +42,9 @@ pub struct Entry {
     oriented: OnceLock<Arc<rustc_hash::FxHashSet<u128>>>,
     /// Those of the sound body a boolean made this one of ([`NativeKernel::made_of`]).
     made_of: OnceLock<Arc<rustc_hash::FxHashSet<u128>>>,
+    /// The faces that are copies of others, as the operation that made the body knows them
+    /// (a pattern's: [`super::pattern`]): their mass properties and meshes are the others' moved.
+    pub(crate) copies: OnceLock<Arc<super::copies::FaceCopies>>,
 }
 
 impl Entry {
@@ -59,6 +62,7 @@ impl Entry {
             boxes: OnceLock::new(),
             oriented: OnceLock::new(),
             made_of: OnceLock::new(),
+            copies: OnceLock::new(),
         }
     }
     /// [`Body::boxes`], made once.
@@ -1193,6 +1197,16 @@ impl Kernel for NativeKernel {
         super::sweep_solid::cut_swept_indexed(self, target, tool, motion, copies)
     }
 
+    fn subtract_turned(
+        &mut self,
+        target: BodyId,
+        tool: BodyId,
+        axis: Axis,
+        count: usize,
+    ) -> Result<OpResult> {
+        super::sweep_generate::subtract_turned(self, target, tool, &axis, count)
+    }
+
     fn primitive(&mut self, p: &Primitive) -> Result<OpResult> {
         use nalgebra::{Point2, Unit};
         let bad = |what: &str| {
@@ -2210,6 +2224,21 @@ impl Kernel for NativeKernel {
                 ..Default::default()
             };
             let id = self.insert(nb);
+            // (Faces that were copies of others in it still are, among the piece's faces.)
+            if let Some(c) = self.entry(body)?.copies.get().cloned() {
+                let mut new_of = vec![None; c.len()];
+                for (i, &f) in faces.iter().enumerate() {
+                    new_of[f] = Some(i);
+                }
+                let carried: super::copies::FaceCopies = faces
+                    .iter()
+                    .map(|&f| {
+                        let (g, r) = c.get(f).copied().flatten()?;
+                        Some((new_of[g]?, r))
+                    })
+                    .collect();
+                let _ = self.entry(id)?.copies.set(Arc::new(carried));
+            }
             let r = OpResult {
                 bodies: vec![id],
                 history,
@@ -2443,6 +2472,11 @@ impl Kernel for NativeKernel {
         Ok(e.faces
             .get_or_init(|| {
                 let n = e.body.faces.len();
+                // (Faces that are copies of one another integrated once a set: their areas
+                // then come from the face cache.)
+                if let Some(c) = e.copies.get() {
+                    super::mass::prime_copies(&e.body, c);
+                }
                 if super::par::threads_for(n, false) {
                     (0..n)
                         .into_par_iter()
@@ -2588,7 +2622,8 @@ impl Kernel for NativeKernel {
 
     fn mass_properties(&self, body: BodyId) -> Result<MassProperties> {
         let t = web_time::Instant::now();
-        let m = super::mass::body_mass(self.get(body)?);
+        let e = self.entry(body)?;
+        let m = super::mass::body_mass_with(&e.body, e.copies.get().map(|c| c.as_slice()));
         slow("mass_properties", t, self.get(body)?);
         if t.elapsed().as_millis() > 500 {
             dump("slow-mass", self.get(body)?, &format!("{:?}", t.elapsed()));
