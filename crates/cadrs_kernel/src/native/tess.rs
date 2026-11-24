@@ -932,7 +932,27 @@ fn steps_at(dom: &Domain, u: f64, v: f64, defl: f64, ang: f64) -> (f64, f64) {
         };
         by_defl.min(by_ang)
     };
-    (step(cu, ku), step(cv, kv))
+    let (mut su, mut sv) = (step(cu, ku), step(cv, kv));
+    // Straight one way (or both) and yet twisted, S_uv·n not nil: a hyperboloid along its
+    // rulings, a helicoid, a patch between two skew lines. A cell of steps hu and hv then
+    // sags |S_uv·n| hu hv / 4 at its middle however straight its sides, so the straight way
+    // takes the step that keeps that within the chord (both ways alike where both are
+    // straight). (With no step that way, such a face had no rows: its triangles ran its
+    // whole height, and the refinement split them to twenty thousand to make up for it.)
+    let cm = d[4].dot(&nn).abs();
+    let (lu, lv) = (d[1].norm(), d[2].norm());
+    if cm > 1e-9 * lu * lv && lu > tol::DEGENERATE && lv > tol::DEGENERATE {
+        match (su.is_finite(), sv.is_finite()) {
+            (true, false) => sv = 4.0 * defl / (cm * su),
+            (false, true) => su = 4.0 * defl / (cm * sv),
+            (false, false) => {
+                su = (4.0 * defl * lv / (cm * lu)).sqrt();
+                sv = (4.0 * defl * lu / (cm * lv)).sqrt();
+            }
+            (true, true) => {}
+        }
+    }
+    (su, sv)
 }
 
 /// The most lines a face's grid has each way (its intervals: one more than its lines). (Enough
