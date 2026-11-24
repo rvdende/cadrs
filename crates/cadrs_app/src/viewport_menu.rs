@@ -80,6 +80,7 @@ pub fn open_modeling_menu(world: &mut World, at: Vec2, pick: Option<Pick>) {
         | Some(Pick::SketchCurve(s, _))
         | Some(Pick::SketchPoint(s, _)) => MenuTarget::Sketch(s),
         Some(Pick::Origin)
+        | Some(Pick::OriginAxis(_))
         | Some(Pick::Edge(..))
         | Some(Pick::Vertex(..))
         | Some(Pick::Part(_))

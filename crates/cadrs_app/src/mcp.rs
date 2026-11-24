@@ -2604,6 +2604,10 @@ fn get_selection(world: &mut World) -> Result<Value, String> {
         .map(|p| match *p {
             Pick::Plane(k) => Some(json!({ "kind": "plane", "name": k.name() })),
             Pick::Origin => Some(json!({ "kind": "origin" })),
+            Pick::OriginAxis(a) => Some(json!({
+                "kind": "origin_axis",
+                "axis": format!("{a:?}").to_lowercase(),
+            })),
             Pick::Feature(f) => Some(json!({
                 "kind": "feature", "name": feature_name(f), "id": f,
                 "stale": feature_name(f).is_none(),

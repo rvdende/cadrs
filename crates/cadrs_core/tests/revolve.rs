@@ -7,8 +7,8 @@ use std::f64::consts::PI;
 
 use cadrs_core::commands::{AddExtrude, AddRevolve, AddSketch, EditSketch, SetExtrude, SetRevolve};
 use cadrs_core::document::{
-    AxisRef, BooleanOp, Document, EndCondition, EndType, ExtrudeFeature, Offset, RevolveFeature,
-    RevolveType,
+    AxisRef, BooleanOp, Document, EndCondition, EndType, ExtrudeFeature, Offset, OriginAxis,
+    RevolveFeature, RevolveType,
 };
 use cadrs_core::rebuild;
 use cadrs_core::samples;
@@ -913,4 +913,38 @@ fn reducer_coupling() {
     let m = parts[0].mass.unwrap();
     close(in3(m.volume), want_v, 1e-3);
     close(in2(m.surface_area), want_a, 1e-3);
+}
+
+/// #316: the origin's axes as revolve axes. On Front (sketch x is world X, sketch y world Z), a
+/// 5 × 20 rectangle 5 mm off the vertical axis turned about the origin's Z, and one 5 mm off the
+/// horizontal axis turned about its X: each the 1500π tube of `revolve_types_and_torus`, with no
+/// centreline in the sketch. Y is the plane's normal, so a profile in it can't turn about it.
+#[test]
+fn revolve_about_the_origin_axes() {
+    let tube = 1500.0 * PI;
+    for (axis, rect, seed) in [
+        (
+            OriginAxis::Z,
+            [v(5.0, 0.0), v(10.0, 0.0), v(10.0, 20.0), v(5.0, 20.0)],
+            v(7.5, 10.0),
+        ),
+        (
+            OriginAxis::X,
+            [v(0.0, 5.0), v(20.0, 5.0), v(20.0, 10.0), v(0.0, 10.0)],
+            v(10.0, 7.5),
+        ),
+    ] {
+        let mut doc = Doc::new();
+        let s = doc.sketch(PlaneRef::Front, vec![polygon(&rect, false)]);
+        let regions = samples::region_refs(s, &doc.g(s), &[seed]);
+        doc.revolve(RevolveFeature {
+            regions,
+            axis: Some(AxisRef::Origin(axis)),
+            kind: RevolveType::Full,
+            ..RevolveFeature::default()
+        });
+        let parts = doc.parts();
+        assert_eq!(parts.len(), 1, "{axis:?}");
+        close(volume(&parts[0]), tube, 1e-6);
+    }
 }

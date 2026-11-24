@@ -38,6 +38,7 @@ use cadrs_ui::{FinishAnimations, RenderSurface, Selected, Theme};
 use crate::camera::{self, StandardView, Turn, ViewState, ease_in_out, ease_out, ray_square};
 use crate::preferences_ui::LocalPreferences;
 use crate::{ActiveDocument, AppState};
+use cadrs_core::document::OriginAxis;
 use cadrs_core::preferences::{GridStyle, OriginStyle};
 
 pub struct ViewportPlugin;
@@ -70,6 +71,7 @@ impl Plugin for ViewportPlugin {
             .init_resource::<ViewportRect>()
             .init_resource::<DialogInset>()
             .init_resource::<PlaneHighlight>()
+            .init_resource::<OriginAxesWanted>()
             .init_resource::<HoverOverride>()
             .init_resource::<ExtraHighlight>()
             .init_resource::<PickFilterOverride>()
@@ -571,6 +573,8 @@ pub fn plane_label(features: &[cadrs_core::Feature], p: PlaneRef) -> String {
 pub enum Pick {
     Plane(PlaneKind),
     Origin,
+    /// One of the origin's axes, picked as an axis (a revolve's, a circular pattern's: #316).
+    OriginAxis(OriginAxis),
     /// A feature in the feature list (a sketch).
     Feature(FeatureId),
     /// A face of a part.
@@ -1652,6 +1656,7 @@ pub fn pick_filter(
         use crate::extrude::ExtrudeField;
         let none = PickFilter {
             origin: false,
+            origin_axes: false,
             planes: [false; 3],
             faces: false,
             planar_only: false,
@@ -1700,6 +1705,7 @@ pub fn pick_filter(
             // A revolve axis: a sketch line (or circle), a part edge, a curved face, a mate
             // connector's Z (P3.8).
             ExtrudeField::Axis => PickFilter {
+                origin_axes: true,
                 faces: true,
                 edges: true,
                 sketch_curves: true,
@@ -2535,6 +2541,7 @@ fn update_hover(
     ),
     mut last: Local<Option<(Vec2, crate::parts::PickFilter, Option<Pick>)>>,
     box_select: Option<Res<crate::assembly::box_select::AssemblyBox>>,
+    mut axes_wanted: ResMut<OriginAxesWanted>,
 ) {
     // A box drag only updates its rectangle. Avoid picking and rebuilding hover tints for
     // every part the pointer crosses; normal hover resumes once the drag ends.
@@ -2555,6 +2562,9 @@ fn update_hover(
         create.as_deref(),
     ));
     let picking = filter.is_some();
+    axes_wanted.set_if_neq(OriginAxesWanted(
+        *kind == ActiveKind::PartStudio && filter.is_some_and(|f| f.origin_axes),
+    ));
     // Zoom to window's box and the section plane's arrow own the pointer: nothing under it
     // highlights (P3E.3a).
     // A board's layout edited in the view owns the pointer too, unless Align waits for a pick.
@@ -2921,26 +2931,88 @@ fn sync_origin(
 pub struct OriginGizmos;
 
 /// How long the origin's axes are drawn, in pixels (the same at any zoom, like the bullseye).
-const ORIGIN_AXIS_PX: f32 = 44.0;
+pub const ORIGIN_AXIS_PX: f32 = 44.0;
+
+/// How near (logical px) the pointer must be to an origin axis to pick it.
+const ORIGIN_AXIS_PICK_PX: f32 = 5.0;
+
+/// The name of one of the origin's axes ("X axis"), as a selection field shows it.
+pub fn origin_axis_name(axis: OriginAxis) -> String {
+    tr(match axis {
+        OriginAxis::X => "shell-doc-origin-x-axis",
+        OriginAxis::Y => "shell-doc-origin-y-axis",
+        OriginAxis::Z => "shell-doc-origin-z-axis",
+    })
+}
+
+/// The end of an origin axis as drawn: [`ORIGIN_AXIS_PX`] from the origin on screen.
+pub fn origin_axis_end(view: &ViewState, axis: OriginAxis) -> Vec3 {
+    let [x, y, z] = axis.dir();
+    let len = ORIGIN_AXIS_PX * view.scale / view.magnification(Vec3::ZERO);
+    Vec3::new(x as f32, y as f32, z as f32) * len
+}
+
+/// The origin axis under a screen offset, if the pointer is on one as drawn (past the bullseye,
+/// which picks the origin itself).
+pub fn pick_origin_axis(view: &ViewState, offset: Vec2) -> Option<OriginAxis> {
+    let o = view.project(Vec3::ZERO);
+    OriginAxis::ALL
+        .into_iter()
+        .filter_map(|axis| {
+            let e = view.project(origin_axis_end(view, axis));
+            let d = e - o;
+            let len2 = d.length_squared();
+            // An axis seen end-on is a dot: the origin's.
+            if len2 < 16.0 {
+                return None;
+            }
+            let t = ((offset - o).dot(d) / len2).clamp(0.0, 1.0);
+            let dist = offset.distance(o + d * t);
+            (t * len2.sqrt() > 6.0 && dist <= ORIGIN_AXIS_PICK_PX).then_some((dist, axis))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, axis)| axis)
+}
+
+/// Whether the active field takes an axis (#316): then the origin's axes are drawn and picked
+/// whatever the origin's style. Kept up to date by [`update_hover`].
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OriginAxesWanted(pub bool);
 
 /// Origin › Axes: X, Y and Z from the origin in red, green and blue, a fixed length on screen.
+/// Also while a field takes an axis (#316), and an axis hovered or selected as one: in the
+/// highlight or selection colour.
+#[allow(clippy::too_many_arguments)]
 fn draw_origin_axes(
     prefs: Res<LocalPreferences>,
     view: Res<ViewportView>,
     kind: Res<ActiveKind>,
+    wanted: Res<OriginAxesWanted>,
+    highlight: Res<PlaneHighlight>,
+    selection: Res<Selection>,
+    theme: Res<Theme>,
     mut gizmos: Gizmos<OriginGizmos>,
 ) {
-    if prefs.0.origin != OriginStyle::Axes || kind.is_flat() {
+    if kind.is_flat() {
         return;
     }
-    let v = &view.view;
-    let len = ORIGIN_AXIS_PX * v.scale / v.magnification(Vec3::ZERO);
-    for (dir, color) in [
-        (Vec3::X, Color::srgb_u8(0xe5, 0x48, 0x4d)),
-        (Vec3::Y, Color::srgb_u8(0x30, 0xa4, 0x6c)),
-        (Vec3::Z, Color::srgb_u8(0x3e, 0x63, 0xdd)),
+    let all = prefs.0.origin == OriginStyle::Axes || wanted.0;
+    for (axis, color) in [
+        (OriginAxis::X, Color::srgb_u8(0xe5, 0x48, 0x4d)),
+        (OriginAxis::Y, Color::srgb_u8(0x30, 0xa4, 0x6c)),
+        (OriginAxis::Z, Color::srgb_u8(0x3e, 0x63, 0xdd)),
     ] {
-        gizmos.line(Vec3::ZERO, dir * len, color);
+        let pick = Pick::OriginAxis(axis);
+        let color = if highlight.is_hovered(pick) {
+            theme.highlight
+        } else if selection.contains(pick) {
+            theme.selection_3d
+        } else if all {
+            color
+        } else {
+            continue;
+        };
+        gizmos.line(Vec3::ZERO, origin_axis_end(&view.view, axis), color);
     }
 }
 
@@ -3802,6 +3874,34 @@ mod tests {
             assert!((m.col(0) - a).length() < 1e-4, "{m:?}");
             assert!((m.col(1) - b).length() < 1e-4, "{m:?}");
         }
+    }
+
+    /// #316: an origin axis is picked along its drawn length, past the bullseye; an axis seen
+    /// end-on isn't.
+    #[test]
+    fn picks_the_origin_axes_as_drawn() {
+        let v = ViewState::default();
+        let o = v.project(Vec3::ZERO);
+        for axis in OriginAxis::ALL {
+            let end = v.project(origin_axis_end(&v, axis));
+            // At most ORIGIN_AXIS_PX long on screen (foreshortened seen at an angle).
+            assert!(end.distance(o) <= ORIGIN_AXIS_PX + 0.5, "{axis:?}");
+            let mid = o.lerp(end, 0.6);
+            assert_eq!(pick_origin_axis(&v, mid), Some(axis));
+            // A few pixels off it still, not beyond.
+            let side = (end - o).perp().normalize();
+            assert_eq!(pick_origin_axis(&v, mid + side * 3.0), Some(axis));
+            assert_eq!(pick_origin_axis(&v, mid + side * 12.0), None);
+        }
+        // The bullseye is the origin's.
+        assert_eq!(pick_origin_axis(&v, o), None);
+        // Seen from the top, Z points at the viewer: only X and Y can be picked.
+        let top = ViewState::standard(StandardView::Top);
+        let o = top.project(Vec3::ZERO);
+        let z = top.project(origin_axis_end(&top, OriginAxis::Z));
+        assert_eq!(pick_origin_axis(&top, o.lerp(z, 0.5)), None);
+        let x = top.project(origin_axis_end(&top, OriginAxis::X));
+        assert_eq!(pick_origin_axis(&top, o.lerp(x, 0.6)), Some(OriginAxis::X));
     }
 
     #[test]

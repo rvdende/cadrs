@@ -1,0 +1,37 @@
+// #316: the Revolve axis from one of the origin's axes. A 10 × 30 rectangle 10 mm off the
+// origin on Front (revolved about the origin's Z: the tube r 10..20 × 30, 9000π mm³, as in
+// `course_ps7_revolve_connector`; the axis itself is asserted in `cadrs_core/tests/revolve.rs`:
+// `revolve_about_the_origin_axes`).
+// 01 the Revolve axis field active: the origin's X, Y and Z axes are drawn (the origin style is
+//    the default Dot), the Z axis hovered.
+// 02 the Z axis picked: the field reads "Z axis", the axis drawn selected; Full: the tube.
+// 03 accepted; Mass and section properties: 28274.334 mm³ (9000π).
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Custom("sketch front rect 10 0 20 30"),
+        Key("P"),
+        Key("Shift+7"),
+        Key("F"),
+        Key("Shift+W"),
+        WaitFor("revolve-dialog"),
+        Click(xyz(15, 0, 15)),
+        Click(ui("revolve-axis-field")),
+        Hover(xyz(0, 0, 1)),
+        Wait(10),
+        Screenshot("01-axis-field-z-axis-hovered"),
+        Click(xyz(0, 0, 1)),
+        Key("F"),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("02-axis-z-full"),
+        Click(ui("revolve-dialog-accept")),
+        Click(ui("part-row-part-1")),
+        Click(ui("view-mass")),
+        WaitFor("mass-dialog"),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("03-accepted-mass-9000-pi"),
+    ],
+)

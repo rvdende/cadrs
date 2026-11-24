@@ -1088,6 +1088,10 @@ shell-doc-feature-errors = A feature has errors: click to select the first one
 shell-doc-default-geometry = Default geometry
 # The point at the coordinate system's centre (0, 0, 0).
 shell-doc-origin = Origin
+# The origin's axes, picked as an axis (a revolve's, a circular pattern's), as a selection field shows them.
+shell-doc-origin-x-axis = X axis
+shell-doc-origin-y-axis = Y axis
+shell-doc-origin-z-axis = Z axis
 shell-doc-filter-by-name = Filter by name
 shell-doc-list-view = List view
 # Tooltip of the + of an assembly's Items (bill of materials items with no part).

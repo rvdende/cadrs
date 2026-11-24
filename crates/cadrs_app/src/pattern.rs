@@ -235,6 +235,7 @@ pub(crate) fn axis_of(features: &[Feature], cache: &PartCache, pick: Pick) -> Op
             _ => None,
         },
         Pick::SketchCurve(sketch, curve) => Some(AxisRef::SketchCurve { sketch, curve }),
+        Pick::OriginAxis(o) => Some(AxisRef::Origin(o)),
         _ => None,
     }
 }
@@ -582,6 +583,7 @@ pub fn references(kind: &FeatureKind, cache: &PartCache) -> Vec<Pick> {
                     AxisRef::Edge(e) => edge(e),
                     AxisRef::Face(f) => face(f),
                     AxisRef::Connector(c) => connector_pick(c),
+                    AxisRef::Origin(o) => Some(Pick::OriginAxis(*o)),
                 })),
                 PatternKind::Curve => out.extend(x.path.iter().filter_map(|p| match p {
                     PathRef::Edge(e) => edge(e),
