@@ -944,8 +944,8 @@ fn a_ring_moved_in_its_plane_is_exact() {
     assert!(off < 1e-5, "a point of the surface is {off} off");
 }
 
-/// A block turned whole turns about an axis clear of it, in closed form: the solid of revolution
-/// of its shadow in (distance, height). Standing along the axis (4 ≤ x ≤ 7, |y| ≤ 2, 0 ≤ z ≤ 5
+/// A block turned whole turns about an axis, in closed form: the solid of revolution of its
+/// shadow in (distance, height). Standing along the axis (4 ≤ x ≤ 7, |y| ≤ 2, 0 ≤ z ≤ 5
 /// about z) the shadow is a rectangle, from the nearest face (4) out to the farthest edges
 /// (√53): π (53 − 16) 5, and its faces two cylinders and two flat rings. Leaning (turned 20°
 /// about y first, then 5° about x) its outer side is hyperboloids, its edges' sweeps, and its
@@ -1048,6 +1048,31 @@ fn a_block_turned_whole_turns_is_exact() {
     }
     let volume = k.mass_properties(swept).unwrap().volume;
     assert!((volume - want).abs() < 1e-5 * want, "{volume} {want}");
+    // About a line through it: a cube of side 2 spun on its long diagonal is a cone at each
+    // end (the three edges at a corner) and a hyperboloid between (the six that miss the
+    // diagonal), of volume 8π/√3.
+    let cube = k
+        .primitive(&Primitive::block(
+            Point3::new(-1.0, -1.0, -1.0),
+            Point3::new(1.0, 1.0, 1.0),
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let diagonal = Axis::new(Point3::new(-1.0, -1.0, -1.0), Vector3::new(1.0, 1.0, 1.0));
+    let spun = k
+        .sweep_solid(cube, &SolidMotion::swing(diagonal, 0.0, 2.0 * PI))
+        .unwrap()
+        .bodies[0];
+    let body = k.get(spun).unwrap();
+    let faults = body.check();
+    assert!(faults.is_empty(), "{faults:?}");
+    assert_eq!(body.faces.len(), 3);
+    let (volume, want) = (
+        k.mass_properties(spun).unwrap().volume,
+        8.0 * PI / 3f64.sqrt(),
+    );
+    assert!((volume - want).abs() < 1e-9 * want, "{volume} {want}");
 }
 
 /// A flat end mill (Ø1, pointing at the bar's axis, its tip 1 into a bar of radius 10)

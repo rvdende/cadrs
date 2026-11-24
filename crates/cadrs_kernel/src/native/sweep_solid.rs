@@ -2175,9 +2175,6 @@ fn polyhedron_turned(k: &mut NativeKernel, b: &Body, axis: Axis) -> Option<Resul
             ends: [p0 + d * lo, p0 + d * hi],
         });
     }
-    if in_hi >= in_lo {
-        return None;
-    }
     let heights = || faces.iter().flat_map(|(_, r)| r.iter()).map(height);
     let (bottom, top) = (
         heights().fold(f64::INFINITY, f64::min),
@@ -2186,8 +2183,11 @@ fn polyhedron_turned(k: &mut NativeKernel, b: &Body, axis: Axis) -> Option<Resul
     if top - bottom <= 1e-6 * size {
         return None;
     }
-    // The upper or lower envelope of `lines` from the bottom to the top: (line, from, to).
-    let envelope = |lines: &[&Along], upper: bool| -> Option<Vec<(usize, f64, f64)>> {
+    // The upper or lower envelope of `lines` from the height `bottom` to `top`: (line, from, to).
+    let envelope = |lines: &[&Along],
+                    upper: bool,
+                    (bottom, top): (f64, f64)|
+     -> Option<Vec<(usize, f64, f64)>> {
         let mut cuts = vec![bottom, top];
         for a in lines {
             cuts.extend([a.lo, a.hi]);
@@ -2247,23 +2247,51 @@ fn polyhedron_turned(k: &mut NativeKernel, b: &Body, axis: Axis) -> Option<Resul
     };
     let outer_lines: Vec<&Along> = edges.iter().collect();
     let inner_lines: Vec<&Along> = edges.iter().chain(&feet).collect();
-    let outer = envelope(&outer_lines, true)?;
-    let inner = envelope(&inner_lines, false)?;
+    let outer = envelope(&outer_lines, true, (bottom, top))?;
+    // The inner side: where the axis is outside the polyhedron, all the way up when it misses
+    // it, else below where it goes in and above where it comes out (between, the shadow
+    // reaches the axis).
+    let through = in_hi - in_lo > eps;
+    if !through && in_hi >= in_lo - eps {
+        // (Only touching it: neither.)
+        return None;
+    }
+    let spans: Vec<(f64, f64)> = if through {
+        [(bottom, in_lo), (in_hi, top)]
+            .into_iter()
+            .filter(|(a, c)| c - a > 1e-6 * size)
+            .collect()
+    } else {
+        vec![(bottom, top)]
+    };
+    let inner: Vec<Vec<(usize, f64, f64)>> = spans
+        .iter()
+        .map(|&span| envelope(&inner_lines, false, span))
+        .collect::<Option<_>>()?;
     let radius = |lines: &[&Along], piece: &(usize, f64, f64), h: f64| {
         value(&lines[piece.0].q, h).max(0.0).sqrt()
     };
-    // (Clear of the axis all the way.)
-    if inner.iter().any(|p| {
-        (0..=8).any(|i| radius(&inner_lines, p, p.1 + (p.2 - p.1) * i as f64 / 8.0) <= 1e-6 * size)
-    }) {
+    let nil = 1e-7 * size;
+    // (Off the axis but at an end, where a piece may come to a point on it.)
+    let on_axis = |lines: &[&Along], p: &(usize, f64, f64)| {
+        (1..8).any(|i| radius(lines, p, p.1 + (p.2 - p.1) * i as f64 / 8.0) <= nil)
+    };
+    if outer.iter().any(|p| on_axis(&outer_lines, p))
+        || inner.iter().flatten().any(|p| on_axis(&inner_lines, p))
+    {
         return None;
     }
     let frame = Frame::from_z(o, z);
     let mut xb = XBuilder::new();
-    let circle = |xb: &mut XBuilder, h: f64, r: f64| -> Option<usize> {
+    // The circle at a height (its edge and its vertex), none where it is a point of the axis.
+    type Ring = Option<(usize, usize)>;
+    let circle = |xb: &mut XBuilder, h: f64, r: f64| -> Option<Ring> {
+        if r <= nil {
+            return Some(None);
+        }
         let c = o + z * h;
         let v = xb.vertex(c + frame.x * r);
-        xb.edge(
+        let e = xb.edge(
             Curve::Circle {
                 c,
                 x: frame.x,
@@ -2272,14 +2300,15 @@ fn polyhedron_turned(k: &mut NativeKernel, b: &Body, axis: Axis) -> Option<Resul
             },
             v,
             v,
-        )
+        )?;
+        Some(Some((e, v)))
     };
-    // Each side's circles, bottom to top; the two sides share one where they meet.
+    // A side's circles, bottom to top; `shared` the outer side's where the two meet at an end.
     let rings_of = |xb: &mut XBuilder,
                     lines: &[&Along],
                     pieces: &[(usize, f64, f64)],
-                    shared: [Option<usize>; 2]|
-     -> Option<Vec<usize>> {
+                    shared: [Option<Ring>; 2]|
+     -> Option<Vec<Ring>> {
         let n = pieces.len();
         (0..=n)
             .map(|j| {
@@ -2299,27 +2328,39 @@ fn polyhedron_turned(k: &mut NativeKernel, b: &Body, axis: Axis) -> Option<Resul
             .collect()
     };
     let outer_rings = rings_of(&mut xb, &outer_lines, &outer, [None, None])?;
-    let meet = |h: f64, o_piece: &(usize, f64, f64), i_piece: &(usize, f64, f64)| {
-        radius(&outer_lines, o_piece, h) - radius(&inner_lines, i_piece, h) <= 1e-7 * size
+    let (outer_bottom, outer_top) = (
+        radius(&outer_lines, &outer[0], bottom),
+        radius(&outer_lines, outer.last()?, top),
+    );
+    // The inner side's radius at the bottom and at the top: none where the shadow reaches the
+    // axis there.
+    let inner_at = |h: f64| -> Option<f64> {
+        spans.iter().zip(&inner).find_map(|(&(a, c), pieces)| {
+            if (h - a).abs() <= eps {
+                Some(radius(&inner_lines, pieces.first()?, a))
+            } else if (h - c).abs() <= eps {
+                Some(radius(&inner_lines, pieces.last()?, c))
+            } else {
+                None
+            }
+        })
     };
-    let closed = [
-        meet(bottom, &outer[0], &inner[0]),
-        meet(top, outer.last()?, inner.last()?),
-    ];
-    let inner_rings = rings_of(
-        &mut xb,
-        &inner_lines,
-        &inner,
-        [
-            closed[0].then_some(outer_rings[0]),
-            closed[1].then_some(*outer_rings.last()?),
-        ],
-    )?;
+    let meets = |outer_r: f64, h: f64| inner_at(h).is_some_and(|r| outer_r - r <= nil);
+    let closed = [meets(outer_bottom, bottom), meets(outer_top, top)];
+    let mut inner_rings = Vec::new();
+    for (&(a, c), pieces) in spans.iter().zip(&inner) {
+        let shared = [
+            ((a - bottom).abs() <= eps && closed[0]).then_some(outer_rings[0]),
+            ((c - top).abs() <= eps && closed[1]).then_some(*outer_rings.last()?),
+        ];
+        inner_rings.push(rings_of(&mut xb, &inner_lines, pieces, shared)?);
+    }
     let mut made = Vec::new();
+    let mut degenerate = false;
     let mut side = |xb: &mut XBuilder,
                     lines: &[&Along],
                     pieces: &[(usize, f64, f64)],
-                    rings: &[usize],
+                    rings: &[Ring],
                     outward: bool| {
         for (j, &(i, lo, hi)) in pieces.iter().enumerate() {
             let a = lines[i];
@@ -2331,32 +2372,83 @@ fn polyhedron_turned(k: &mut NativeKernel, b: &Body, axis: Axis) -> Option<Resul
                     d: at(hi) - at(lo),
                 },
             };
+            let loops = match (rings[j], rings[j + 1]) {
+                (Some(low), Some(high)) => vec![vec![(low.0, outward)], vec![(high.0, !outward)]],
+                // A piece that comes to a point on the axis (a cone to its apex): its one
+                // circle, and the ruling from the circle's vertex to the point and back.
+                (Some(ring), None) | (None, Some(ring)) => {
+                    let (way, apex) = if rings[j].is_some() {
+                        (outward, hi)
+                    } else {
+                        (!outward, lo)
+                    };
+                    let from = xb.body.verts[ring.1].p;
+                    let tip = o + z * apex;
+                    let v = xb.vertex(tip);
+                    let ruling = Curve::Line {
+                        o: from,
+                        d: tip - from,
+                    };
+                    match xb.edge(ruling, ring.1, v) {
+                        Some(seam) => vec![vec![(ring.0, way), (seam, true), (seam, false)]],
+                        None => {
+                            degenerate = true;
+                            continue;
+                        }
+                    }
+                }
+                (None, None) => {
+                    degenerate = true;
+                    continue;
+                }
+            };
             // (The turned line's surface points away from the axis: the inner side's faces
             // the other way.)
             made.push(xb.face(XFace {
                 surf,
                 sense: outward,
-                loops: vec![vec![(rings[j], outward)], vec![(rings[j + 1], !outward)]],
+                loops,
             }));
         }
     };
     side(&mut xb, &outer_lines, &outer, &outer_rings, true);
-    side(&mut xb, &inner_lines, &inner, &inner_rings, false);
-    for (end, h, up) in [(0, bottom, false), (1, top, true)] {
-        if closed[end] {
+    for (pieces, rings) in inner.iter().zip(&inner_rings) {
+        side(&mut xb, &inner_lines, pieces, rings, false);
+    }
+    if degenerate {
+        return None;
+    }
+    // A flat end: the ring between the sides there, a disc where the shadow reaches the axis.
+    for (end, h, up, outer_r) in [(0, bottom, false, outer_bottom), (1, top, true, outer_top)] {
+        if closed[end] || outer_r <= nil {
             continue;
         }
-        let (ro, ri) = if end == 0 {
-            (outer_rings[0], inner_rings[0])
-        } else {
-            (*outer_rings.last()?, *inner_rings.last()?)
+        let ring = |rings: &[Ring]| {
+            if end == 0 {
+                rings[0]
+            } else {
+                rings[rings.len() - 1]
+            }
         };
+        let mut loops = vec![vec![(ring(&outer_rings)?.0, up)]];
+        let at_end = spans.iter().position(|&(a, c)| {
+            if end == 0 {
+                (a - bottom).abs() <= eps
+            } else {
+                (c - top).abs() <= eps
+            }
+        });
+        if let Some(k) = at_end
+            && let Some(inner_ring) = ring(&inner_rings[k])
+        {
+            loops.push(vec![(inner_ring.0, !up)]);
+        }
         made.push(xb.face(XFace {
             surf: Surface::Plane {
                 f: Frame::from_z(o + z * h, z),
             },
             sense: up,
-            loops: vec![vec![(ro, up)], vec![(ri, !up)]],
+            loops,
         }));
     }
     let shell = xb.shell(made, true);
@@ -2368,7 +2460,7 @@ fn polyhedron_turned(k: &mut NativeKernel, b: &Body, axis: Axis) -> Option<Resul
             "a polyhedron turned: {} faces ({} outside, {} inside), problems {problems:?}, check {checked:?}",
             g.faces.len(),
             outer.len(),
-            inner.len()
+            inner.iter().map(Vec::len).sum::<usize>()
         );
     }
     if !problems.is_empty() || g.solids.len() != 1 || !checked.is_empty() {
@@ -3174,6 +3266,13 @@ fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> R
             return r;
         }
         if let Some(Ok(r)) = ring_moved_flat(k, &b, steps) {
+            return Ok(r);
+        }
+        // A convex polyhedron turned a whole turn: the solid of revolution of its shadow.
+        if let [RigidStep::Turn { axis, from, to }] = steps.as_slice()
+            && (to - from).abs() >= TAU - 1e-9
+            && let Some(Ok(r)) = polyhedron_turned(k, &b, *axis)
+        {
             return Ok(r);
         }
         let mut exact = None;
