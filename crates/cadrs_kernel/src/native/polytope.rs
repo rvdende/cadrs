@@ -690,6 +690,84 @@ mod tests {
         );
     }
 
+    /// The closed form against the general boolean on the same two blocks (which a fuzzy value
+    /// given sends past the closed form): the same counts, volume, and faces from the same
+    /// faces of the two.
+    #[test]
+    fn the_closed_form_agrees_with_the_general_boolean() {
+        use crate::native::boolean::{BoolOptions, boolean_bodies, boolean_bodies_with};
+        let a = block([0.0; 3], [10.0, 8.0, 6.0]);
+        let tools = [
+            (
+                "overlapping a corner",
+                block([6.0, 5.0, 4.0], [12.0, 10.0, 8.0]),
+            ),
+            ("inside", block([1.0; 3], [9.0, 7.0, 5.0])),
+            ("flush with the top", block([1.0; 3], [9.0, 7.0, 6.0])),
+            (
+                "through the top and the front",
+                block([1.0, -3.0, 1.0], [9.0, 7.0, 9.0]),
+            ),
+            ("a slab through", block([4.0, -1.0, -1.0], [6.0, 9.0, 7.0])),
+            (
+                "flush with three faces",
+                block([5.0, 4.0, 3.0], [10.0, 8.0, 6.0]),
+            ),
+        ];
+        for (what, tool) in &tools {
+            for op in [crate::BoolOp::Subtract, crate::BoolOp::Intersect] {
+                let general = BoolOptions {
+                    fuzzy: Some(0.0),
+                    ..BoolOptions::default()
+                };
+                let (Ok(fast), Ok(slow)) = (
+                    boolean_bodies(&a, tool, op),
+                    boolean_bodies_with(&a, tool, op, general),
+                ) else {
+                    panic!("{what}, {op:?}: a boolean failed");
+                };
+                assert!(
+                    boolean(&a, tool, op == crate::BoolOp::Subtract, 1e-6).is_some(),
+                    "{what}"
+                );
+                let counts = |x: &Body| {
+                    (
+                        x.solids.len(),
+                        x.shells.len(),
+                        x.faces.len(),
+                        x.edges.len(),
+                        x.verts.len(),
+                    )
+                };
+                assert_eq!(counts(&fast.body), counts(&slow.body), "{what}, {op:?}");
+                let volume = |x: &Body| crate::native::mass::body_volume(x);
+                assert!(
+                    (volume(&fast.body) - volume(&slow.body)).abs() < 1e-9,
+                    "{what}, {op:?}"
+                );
+                assert!(
+                    fast.body.check().is_empty(),
+                    "{what}, {op:?}: {:?}",
+                    fast.body.check()
+                );
+                // (Each face's origins, the faces in no particular order.)
+                let origins = |from: &Vec<Vec<(usize, usize)>>| {
+                    let mut all: Vec<Vec<(usize, usize)>> = from
+                        .iter()
+                        .map(|f| {
+                            let mut f = f.clone();
+                            f.sort();
+                            f
+                        })
+                        .collect();
+                    all.sort();
+                    all
+                };
+                assert_eq!(origins(&fast.from), origins(&slow.from), "{what}, {op:?}");
+            }
+        }
+    }
+
     #[test]
     fn what_is_not_plainly_a_closed_form_is_left_to_the_general_boolean() {
         let a = block([0.0; 3], [10.0, 8.0, 6.0]);
