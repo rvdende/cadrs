@@ -2472,18 +2472,19 @@ fn polyhedron_turned(k: &mut NativeKernel, b: &Body, axis: Axis) -> Option<Resul
     }))
 }
 
-/// A ring moved in its own plane (slid square to its axis, or turned about an axis parallel
-/// to its own and clear of it), in closed form. The ring (radii R and r) is everything within
-/// r of its core circle, so moved flat it is everything within r of the flat region the circle
-/// sweeps: the band the circle's disc sweeps (a stadium, straight or bent round the turn's
-/// axis) less the lens the discs at both ends share (which the circle never crosses; nothing
-/// where the ends are more than 2R apart). Put together from solids that meet on whole faces
-/// only: the rounded disc's back half at the start and fore half at the end (its meridian, a
-/// slot of half-width r, turned half a turn), the slot between them extruded along the slide or
-/// turned about the turn's axis, and, taken away, what both ends' holes share (each the spool
-/// inside the ring between its two flats). The faces' sweeps of such a ring overlap, so their
-/// gluing failed and a ladder of refused unions followed. None for any other body or motion,
-/// or where a step fails (the general sweep then).
+/// A solid of revolution moved in the planes square to its axis (slid square to it, or turned
+/// about an axis parallel to it and clear of it), in closed form: a ring, a wheel, a drum.
+/// Each of those planes cuts the body in a ring or a disc about the axis, between the radii
+/// its section spans at that height, so what the body fills is, plane by plane, what the ring
+/// sweeps: the band its disc sweeps (straight, or bent round the turn's axis) less the lens
+/// the discs of its hole at both ends share (which the ring never crosses; nothing where the
+/// ends are farther apart than the hole is wide, or there is no hole). Put together from
+/// solids that meet on whole faces only: the body with its hole filled, its back half at the
+/// start and its fore half at the end (its outer meridian turned half a turn), the slot
+/// between them (the filled body's section through its axis) extruded along the slide or
+/// turned about the turn's axis, and, taken away, what both ends' holes share. The faces'
+/// sweeps of a ring overlap, so their gluing failed and a ladder of refused unions followed.
+/// None for any other body or motion, or where a step fails (the general sweep then).
 fn ring_moved_flat(
     k: &mut NativeKernel,
     b: &Body,
@@ -2492,37 +2493,153 @@ fn ring_moved_flat(
     if crate::native::env_flag!("CADRS_NO_RING_FLAT") {
         return None;
     }
-    let ([step], [face]) = (steps, b.faces.as_slice()) else {
+    let [step] = steps else {
         return None;
     };
-    let Surface::Torus { f, rmaj, rmin } = &face.surf else {
+    if b.solids.len() != 1 {
         return None;
+    }
+    let rev = revolved(b)?;
+    let at = nalgebra::Point2::new;
+    let line = |a: P2, b: P2| Curve2::Line { a, b, source: None };
+    let size = b.bbox().diagonal().max(tol::POINT);
+    let nil = 1e-9 * size;
+    // The section's far side from its lowest point to its highest, and its near side from
+    // its highest back down, each as curves in (ρ, h) with its ends; the near side none
+    // where it lies along the axis (no hole).
+    type Chain = (Vec<Curve2>, P2, P2);
+    let (outer, inner): (Chain, Option<Chain>) = match &rev.section {
+        Section::Disk { c, r } => {
+            // (A ring's: a ball's reaches the axis, and is slid as a ball.)
+            if c.0 - r <= nil {
+                return None;
+            }
+            let (bottom, top) = (at(c.0, c.1 - r), at(c.0, c.1 + r));
+            (
+                (
+                    vec![Curve2::arc(at(c.0, c.1), *r, -FRAC_PI_2, PI)],
+                    bottom,
+                    top,
+                ),
+                Some((
+                    vec![Curve2::arc(at(c.0, c.1), *r, FRAC_PI_2, PI)],
+                    top,
+                    bottom,
+                )),
+            )
+        }
+        Section::Polygon(corners) => {
+            let n = corners.len();
+            if n < 3 {
+                return None;
+            }
+            let (low, high) = corners
+                .iter()
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), c| {
+                    (l.min(c.1), h.max(c.1))
+                });
+            let level = 1e-9 * size;
+            let (at_low, at_high) = (
+                |i: usize| corners[i % n].1 <= low + level,
+                |i: usize| corners[i % n].1 >= high - level,
+            );
+            // From the lowest corner that the next one leaves, round to the first highest;
+            // and the other way round.
+            let walk = |forward: bool| -> Option<Vec<(f64, f64)>> {
+                let step = |i: usize| {
+                    if forward {
+                        (i + 1) % n
+                    } else {
+                        (i + n - 1) % n
+                    }
+                };
+                let start = (0..n).find(|&i| at_low(i) && !at_low(step(i)))?;
+                let mut chain = vec![corners[start]];
+                let mut i = start;
+                for _ in 0..n {
+                    i = step(i);
+                    chain.push(corners[i]);
+                    if at_high(i) {
+                        return Some(chain);
+                    }
+                }
+                None
+            };
+            let (one, other) = (walk(true)?, walk(false)?);
+            let reach = |c: &[(f64, f64)]| c.iter().map(|p| p.0).fold(0.0, f64::max);
+            let (far, near) = if reach(&one) >= reach(&other) {
+                (one, other)
+            } else {
+                (other, one)
+            };
+            let curves = |c: &[(f64, f64)]| -> Vec<Curve2> {
+                c.windows(2)
+                    .map(|w| line(at(w[0].0, w[0].1), at(w[1].0, w[1].1)))
+                    .collect()
+            };
+            let ends =
+                |c: &[(f64, f64)]| (at(c[0].0, c[0].1), at(c[c.len() - 1].0, c[c.len() - 1].1));
+            let (start, end) = ends(&far);
+            let hole = reach(&near) > nil;
+            // (A near side partly on the axis is neither a hole nor none.)
+            if hole && near.iter().any(|p| p.0 <= nil) {
+                return None;
+            }
+            let down: Vec<(f64, f64)> = near.iter().rev().copied().collect();
+            let (top, bottom) = ends(&down);
+            (
+                (curves(&far), start, end),
+                hole.then(|| (curves(&down), top, bottom)),
+            )
+        }
     };
-    let (big, small) = (*rmaj, *rmin);
-    if b.solids.len() != 1 || !(small > tol::POINT && big > small * (1.0 + 1e-6)) {
+    // The body's widest and its hole's.
+    let widest = |c: &Curve2| match c {
+        Curve2::Line { a, b, .. } => a.x.max(b.x),
+        Curve2::Arc { center, radius, .. } => center.x + radius,
+        _ => f64::INFINITY,
+    };
+    let big = outer.0.iter().map(widest).fold(0.0, f64::max);
+    // (A convex section's near side bends toward the axis: it is farthest from it at its ends.)
+    let hole = inner.as_ref().map(|(_, top, bottom)| top.x.max(bottom.x));
+    // A slanted side turned about the turn's axis is a cone that touches the body's own cone
+    // along a ruling, which no closed form finds yet: for a turn, upright and level sides (a
+    // drum's) and a ring's only.
+    let upright = outer
+        .0
+        .iter()
+        .chain(inner.iter().flat_map(|c| c.0.iter()))
+        .all(|c| match c {
+            Curve2::Line { a, b, .. } => (a.x - b.x).abs() <= nil || (a.y - b.y).abs() <= nil,
+            _ => matches!(rev.section, Section::Disk { .. }),
+        });
+    if !(big.is_finite() && big > tol::POINT) {
         return None;
     }
     let place = |t: f64| {
         let (q, d) = rigid_at(steps, t);
-        P3::from(q * f.o.coords + d)
+        P3::from(q * rev.o.coords + d)
     };
     let (c0, c1) = (place(0.0), place(1.0));
-    // The ring's axis, the way it moves at its start and at its end, and the turn's axis and
-    // angle (counter-clockwise about it) where it turns.
-    let (z, m0, m1, turn) = match *step {
+    let z = {
+        let (q, _) = rigid_at(steps, 0.0);
+        (q * rev.a).normalize()
+    };
+    // The way the body moves at its start and at its end, and the turn's axis and angle
+    // (counter-clockwise about it) where it turns.
+    let (m0, m1, turn) = match *step {
         RigidStep::Slide { from, to } => {
             let d = to - from;
             let len = d.norm();
-            let z = f.z.normalize();
             if len <= 1e-6 * big || d.dot(&z).abs() > tol::ANGULAR * len {
                 return None;
             }
-            (z, d / len, d / len, None)
+            (d / len, d / len, None)
         }
         RigidStep::Turn { axis, from, to } => {
             let angle = (to - from).abs();
             let a = axis.dir.into_inner() * (to - from).signum();
-            if f.z.normalize().cross(&a).norm() > tol::ANGULAR || angle <= 1e-6 {
+            if z.cross(&a).norm() > tol::ANGULAR || angle <= 1e-6 || !upright {
                 return None;
             }
             let out = |c: P3| {
@@ -2531,14 +2648,11 @@ fn ring_moved_flat(
             };
             let reach = out(c0).norm();
             // (Clear of the axis, and its end clear of its start the long way round.)
-            if reach <= (big + small) * (1.0 + 1e-6)
-                || TAU - angle <= 2.0 * ((big + small) / reach).asin() + 1e-3
-            {
+            if reach <= big * (1.0 + 1e-6) || TAU - angle <= 2.0 * (big / reach).asin() + 1e-3 {
                 return None;
             }
             let origin = axis.origin;
             (
-                a,
                 a.cross(&(out(c0) / reach)),
                 a.cross(&(out(c1) / reach)),
                 Some((
@@ -2552,8 +2666,6 @@ fn ring_moved_flat(
         }
     };
     let unit = nalgebra::Unit::new_normalize;
-    let at = nalgebra::Point2::new;
-    let line = |a: P2, b: P2| Curve2::Line { a, b, source: None };
     let region = |curves: Vec<Curve2>| Region {
         outer: Loop { curves },
         holes: vec![],
@@ -2566,28 +2678,55 @@ fn ring_moved_flat(
         x_dir: unit(z.cross(&m) * side),
         normal: unit(m * side),
     };
+    // A side, closed along the axis: from the axis out to its start, along it, and back.
+    let closed = |(curves, start, end): &Chain| -> Vec<Curve2> {
+        let mut all = Vec::new();
+        if start.x > nil {
+            all.push(line(at(0.0, start.y), *start));
+        }
+        all.extend(curves.iter().cloned());
+        if end.x > nil {
+            all.push(line(*end, at(0.0, end.y)));
+        }
+        all.push(line(at(0.0, end.y), at(0.0, start.y)));
+        all
+    };
+    // The filled body's section through its axis: its far side, and that mirrored back down.
+    let slot = {
+        let (curves, start, end) = &outer;
+        let mut all: Vec<Curve2> = curves.clone();
+        if end.x > nil {
+            all.push(line(*end, at(-end.x, end.y)));
+        }
+        for c in curves.iter().rev() {
+            all.push(match c {
+                Curve2::Line { a, b, .. } => line(at(-b.x, b.y), at(-a.x, a.y)),
+                Curve2::Arc {
+                    center,
+                    radius,
+                    start_angle,
+                    sweep,
+                    ..
+                } => Curve2::arc(
+                    at(-center.x, center.y),
+                    *radius,
+                    PI - (start_angle + sweep),
+                    *sweep,
+                ),
+                _ => return None,
+            });
+        }
+        if start.x > nil {
+            all.push(line(at(-start.x, start.y), *start));
+        }
+        all
+    };
     let made = (|| -> Result<Body> {
         let mut s = NativeKernel::new();
         let first = |r: OpResult| -> Result<BodyId> {
             r.bodies.first().copied().ok_or_else(|| {
-                KernelError::EmptyResult("a ring moved flat: a piece is empty".into())
+                KernelError::EmptyResult("a wheel moved flat: a piece is empty".into())
             })
-        };
-        // The slot across the motion, and its half from the ring's axis out (the rounded
-        // disc's meridian).
-        let slot = region(vec![
-            line(at(-big, -small), at(big, -small)),
-            Curve2::arc(at(big, 0.0), small, -FRAC_PI_2, PI),
-            line(at(big, small), at(-big, small)),
-            Curve2::arc(at(-big, 0.0), small, FRAC_PI_2, PI),
-        ]);
-        let meridian = || {
-            region(vec![
-                line(at(0.0, -small), at(big, -small)),
-                Curve2::arc(at(big, 0.0), small, -FRAC_PI_2, PI),
-                line(at(big, small), at(0.0, small)),
-                line(at(0.0, small), at(0.0, -small)),
-            ])
         };
         // (A meridian to the motion's left turns counter-clockwise about z through the way
         // back: the back half; one to its right, the fore half.)
@@ -2597,33 +2736,33 @@ fn ring_moved_flat(
                 dir: unit(z),
             };
             first(s.revolve(
-                &Profile::new(across(o, m, side), vec![meridian()]),
+                &Profile::new(across(o, m, side), vec![region(closed(&outer))]),
                 axis,
                 PI,
             )?)
         };
         let back = half(&mut s, c0, m0, 1.0)?;
         let fore = half(&mut s, c1, m1, -1.0)?;
-        let slot = Profile::new(across(c0, m0, 1.0), vec![slot]);
+        let slot = Profile::new(across(c0, m0, 1.0), vec![region(slot.clone())]);
         let between = match turn {
             Some((axis, angle)) => first(s.revolve(&slot, axis, angle)?)?,
             None => first(s.extrude_with(&slot, &ExtrudeSpec::blind(unit(m0), (c1 - c0).norm()))?)?,
         };
         let mut whole = first(s.boolean(BoolOp::Union, back, &[between, fore])?)?;
-        if (c1 - c0).norm() < 2.0 * big * (1.0 - 1e-9) {
-            // The spool inside the ring: its meridian from the axis to the tube's inner half.
+        if let (Some(inner), Some(hole)) = (&inner, hole)
+            && (c1 - c0).norm() < 2.0 * hole * (1.0 - 1e-9)
+        {
+            // The hole: its meridian from the axis to the section's near side.
             let spool = |s: &mut NativeKernel, o: P3| -> Result<BodyId> {
-                let inside = region(vec![
-                    Curve2::arc(at(big, 0.0), small, FRAC_PI_2, PI),
-                    line(at(big, -small), at(0.0, -small)),
-                    line(at(0.0, -small), at(0.0, small)),
-                    line(at(0.0, small), at(big, small)),
-                ]);
                 let axis = Axis {
                     origin: o,
                     dir: unit(z),
                 };
-                first(s.revolve(&Profile::new(across(o, m0, 1.0), vec![inside]), axis, TAU)?)
+                first(s.revolve(
+                    &Profile::new(across(o, m0, 1.0), vec![region(closed(inner))]),
+                    axis,
+                    TAU,
+                )?)
             };
             let (h0, h1) = (spool(&mut s, c0)?, spool(&mut s, c1)?);
             let lens = first(s.boolean(BoolOp::Intersect, h0, &[h1])?)?;
@@ -2633,7 +2772,7 @@ fn ring_moved_flat(
         let problems = body.check();
         if body.solids.len() != 1 || !problems.is_empty() {
             return Err(KernelError::InvalidResult {
-                op: "a ring moved flat",
+                op: "a wheel moved flat",
                 why: problems
                     .into_iter()
                     .next()
@@ -2645,7 +2784,7 @@ fn ring_moved_flat(
     if crate::native::env_flag!("CADRS_SWEEP_DEBUG")
         && let Err(e) = &made
     {
-        eprintln!("a ring moved flat: {e}");
+        eprintln!("a wheel moved flat: {e}");
     }
     Some(made.map(|body| OpResult {
         bodies: vec![k.insert(body)],

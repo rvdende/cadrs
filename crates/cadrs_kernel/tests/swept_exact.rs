@@ -899,6 +899,50 @@ fn a_ring_moved_in_its_plane_is_exact() {
         let volume = k.mass_properties(swept).unwrap().volume;
         assert!((volume - want).abs() < 1e-8 * want, "{volume} {want}");
     }
+    // Any wheel goes the same way, plane by plane: a washer (3 ≤ ρ ≤ 6, 2 thick) slid 10, past
+    // its hole, is its filled disc and the slot between, 72π + 10·24; slid 4, short of it,
+    // that less the lens its hole's two discs share through its thickness.
+    for (len, lens) in [(10.0f64, 0.0f64), (4.0, 1.0)] {
+        let mut k = NativeKernel::new();
+        let disc = k
+            .primitive(&Primitive::Cylinder {
+                base: Point3::origin(),
+                axis: Vector3::z_axis(),
+                radius: 6.0,
+                height: 2.0,
+            })
+            .unwrap()
+            .first()
+            .unwrap();
+        let bore = k
+            .primitive(&Primitive::Cylinder {
+                base: Point3::new(0.0, 0.0, -1.0),
+                axis: Vector3::z_axis(),
+                radius: 3.0,
+                height: 4.0,
+            })
+            .unwrap()
+            .first()
+            .unwrap();
+        let washer = k.boolean(BoolOp::Subtract, disc, &[bore]).unwrap().bodies[0];
+        let swept = k
+            .sweep_solid(washer, &SolidMotion::slide(Vector3::new(len, 0.0, 0.0)))
+            .unwrap()
+            .bodies[0];
+        let faults = k.get(swept).unwrap().check();
+        assert!(faults.is_empty(), "{faults:?}");
+        let shared = if lens > 0.0 {
+            2.0 * 9.0 * (len / 6.0).acos() - (len / 2.0) * (36.0 - len * len).sqrt()
+        } else {
+            0.0
+        };
+        let want = 72.0 * PI + len * 24.0 - 2.0 * shared;
+        let volume = k.mass_properties(swept).unwrap().volume;
+        assert!(
+            (volume - want).abs() < 1e-8 * want,
+            "slid {len}: {volume} {want}"
+        );
+    }
     // Short of its hole: each mesh corner's distance from the region.
     let len = 5.0;
     let (k, short) = slid(len);
