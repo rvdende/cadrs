@@ -2646,7 +2646,63 @@ pub struct LinesCache {
     /// The zoom (mm per pixel) the silhouettes were lifted for.
     scale: f32,
     lines: HashMap<(usize, bool), std::sync::Arc<Vec<Vec<Vec3>>>>,
+    /// Each part's edges alone (by solid and culling), with the view direction they were culled
+    /// for: not culled, they hold for any view.
+    edges: HashMap<(usize, bool), (Vec3, std::sync::Arc<Vec<Vec<Vec3>>>)>,
+    /// Each part's silhouettes at `back` and `scale`.
+    silhouettes: HashMap<usize, std::sync::Arc<Vec<Vec<Vec3>>>>,
 }
+
+impl LinesCache {
+    /// Drops what was worked out for another view, and for parts no longer drawn.
+    fn keep(&mut self, back: Vec3, scale: f32, alive: &HashSet<usize>) {
+        if self.back != back || self.scale != scale {
+            self.back = back;
+            self.scale = scale;
+            self.lines.clear();
+            self.silhouettes.clear();
+        }
+        self.lines.retain(|(k, _), _| alive.contains(k));
+        self.edges.retain(|(k, _), _| alive.contains(k));
+        self.silhouettes.retain(|k, _| alive.contains(k));
+    }
+
+    /// A part's lines (edges and silhouettes) in the view `v`.
+    fn lines(&mut self, part: &Part, v: &ViewState, cull: bool) -> std::sync::Arc<Vec<Vec<Vec3>>> {
+        self.lines
+            .entry((std::sync::Arc::as_ptr(&part.solid) as usize, cull))
+            .or_insert_with(|| std::sync::Arc::new(part_lines_culled(part, v, cull)))
+            .clone()
+    }
+
+    /// A part's edges ([`part_edge_lines`]) seen from `back`.
+    fn edges(&mut self, part: &Part, back: Vec3, cull: bool) -> std::sync::Arc<Vec<Vec<Vec3>>> {
+        let key = (std::sync::Arc::as_ptr(&part.solid) as usize, cull);
+        match self.edges.get(&key) {
+            Some((seen, lines)) if !cull || *seen == back => lines.clone(),
+            _ => {
+                let lines = std::sync::Arc::new(part_edge_lines(part, back, cull));
+                self.edges.insert(key, (back, lines.clone()));
+                lines
+            }
+        }
+    }
+
+    /// A part's silhouettes ([`part_silhouettes`]) at the kept view.
+    fn silhouettes(&mut self, part: &Part) -> std::sync::Arc<Vec<Vec<Vec3>>> {
+        let (back, scale) = (self.back, self.scale);
+        self.silhouettes
+            .entry(std::sync::Arc::as_ptr(&part.solid) as usize)
+            .or_insert_with(|| std::sync::Arc::new(part_silhouettes(part, back, scale)))
+            .clone()
+    }
+}
+
+/// How long after the view last turned its plain edges stay drawn without culling
+/// ([`draw_part_edges`]): while the view turns they are the same lines in every direction, so
+/// they aren't made again each frame (a large assembly's took most of a frame); when it rests,
+/// they are culled for where it rests.
+const TURN_SETTLE_SECS: f64 = 0.2;
 
 pub fn part_lines(part: &Part, view: &ViewState) -> Vec<Vec<Vec3>> {
     part_lines_culled(part, view, false)
@@ -2664,6 +2720,14 @@ pub fn part_lines_culled(part: &Part, view: &ViewState, cull: bool) -> Vec<Vec<V
 /// pixel: a part drawn turned ([`PartCache::moved`]) is seen from the view's direction turned
 /// back into its solid's frame.
 fn part_lines_from(part: &Part, back: Vec3, scale: f32, cull: bool) -> Vec<Vec<Vec3>> {
+    let mut out = part_edge_lines(part, back, cull);
+    out.extend(part_silhouettes(part, back, scale));
+    out
+}
+
+/// A part's edges, seen from `back` when culled ([`part_lines_culled`]); not culled, the view
+/// doesn't matter.
+fn part_edge_lines(part: &Part, back: Vec3, cull: bool) -> Vec<Vec<Vec3>> {
     let s = &part.solid;
     let cull = cull && part.kind == cadrs_core::PartKind::Solid;
     // The mesh's normal, not the plane frame's: a face a cut left keeps its tool's frame, whose
@@ -2690,8 +2754,7 @@ fn part_lines_from(part: &Part, back: Vec3, scale: f32, cull: bool) -> Vec<Vec<V
             .copied()
             .unwrap_or_else(|| s.face(f).is_some_and(away))
     };
-    let mut out: Vec<Vec<Vec3>> = s
-        .edges
+    s.edges
         .iter()
         // A round's facet seams (sheet metal) aren't drawn.
         .filter(|e| {
@@ -2701,7 +2764,18 @@ fn part_lines_from(part: &Part, back: Vec3, scale: f32, cull: bool) -> Vec<Vec<V
                     && e.name.faces.iter().all(faces_away))
         })
         .map(|e| e.points.iter().map(|p| v3(*p)).collect())
-        .collect();
+        .collect()
+}
+
+/// Whether a part has silhouettes (curved faces' outlines, which follow the view).
+fn has_silhouettes(part: &Part) -> bool {
+    !part.solid.rulings.is_empty() || !part.solid.grids.is_empty()
+}
+
+/// The silhouettes of a part's curved faces seen from `back` at `scale` mm per pixel.
+fn part_silhouettes(part: &Part, back: Vec3, scale: f32) -> Vec<Vec<Vec3>> {
+    let s = &part.solid;
+    let mut out = Vec::new();
     // How far outside the surface a silhouette is drawn: a third of a pixel, so it stays in
     // front of the facets it outlines, but never more than the mesh's own tolerance (0.05 mm):
     // a fixed 0.05 mm floated the line pixels off a close-up's cylinder.
@@ -3459,11 +3533,13 @@ fn draw_part_edges(
         Res<crate::analysis::ShadingAnalysis>,
         Res<EdgesOnly>,
     ),
-    (hover_parts, extra, mut lines_cache, mut last): (
+    (hover_parts, extra, mut lines_cache, mut last, time, mut redraw): (
         Res<HoverParts>,
         Res<crate::viewport::ExtraHighlight>,
         Local<LinesCache>,
         Local<LastEdges>,
+        Res<Time<Real>>,
+        MessageWriter<bevy::window::RequestRedraw>,
     ),
     (section, mut retained, mut gizmo_assets, gizmo_store, mut commands): (
         Res<crate::section_view::SectionClip>,
@@ -3478,25 +3554,24 @@ fn draw_part_edges(
     // Each part's lines for this view direction, kept while neither changes (working them out for
     // every part every frame cost a large assembly most of its frame).
     let back = view.view.back();
-    if lines_cache.back != back || lines_cache.scale != view.view.scale {
-        lines_cache.back = back;
-        lines_cache.scale = view.view.scale;
-        lines_cache.lines.clear();
-    }
-    let alive: std::collections::HashSet<usize> = cache
+    let alive: HashSet<usize> = cache
         .parts
         .iter()
         .chain(cache.tool.iter())
         .map(|p| std::sync::Arc::as_ptr(&p.solid) as usize)
         .collect();
-    lines_cache.lines.retain(|(k, _), _| alive.contains(k));
-    let mut lines_of = |part: &Part, v: &ViewState, cull: bool| -> std::sync::Arc<Vec<Vec<Vec3>>> {
-        lines_cache
-            .lines
-            .entry((std::sync::Arc::as_ptr(&part.solid) as usize, cull))
-            .or_insert_with(|| std::sync::Arc::new(part_lines_culled(part, v, cull)))
-            .clone()
-    };
+    lines_cache.keep(back, view.view.scale, &alive);
+    // While the view turns, and a moment after, the plain edges aren't culled
+    // ([`TURN_SETTLE_SECS`]); a frame is asked for until it has rested that long.
+    let now = time.elapsed_secs_f64();
+    if last.back != Some(back) {
+        last.back = Some(back);
+        last.turned_at = now;
+    }
+    let turning = now - last.turned_at < TURN_SETTLE_SECS;
+    if turning {
+        redraw.write(bevy::window::RequestRedraw);
+    }
     // The references stay in the selection colour while a feature fails (`ex4-step10.png`).
     let selected_color = SELECTED;
     // P3E.3b: under the zebra stripes the edges are mid-grey, apart from both bands.
@@ -3532,13 +3607,15 @@ fn draw_part_edges(
         || gizmo_store.is_changed()
         || retained.is_changed()
         || last.edge_color != Some(edge_color);
-    if !changed && !last.immediate {
+    if !changed && !last.immediate && turning == last.turning {
         return;
     }
     *last = LastEdges {
         immediate: false,
         dialog: dialog.is_some(),
         edge_color: Some(edge_color),
+        turning,
+        ..*last
     };
     // (Changed only from outside: reset when a document closes.)
     let retained = retained.bypass_change_detection();
@@ -3570,6 +3647,8 @@ fn draw_part_edges(
         std::sync::Arc<Vec<Vec<Vec3>>>,
         Option<crate::section_view::Cut>,
     )> = Vec::new();
+    // Their silhouettes, apart: they follow every turn, the edges don't.
+    let mut outlines = plain.clone();
     let mut free: Vec<(
         std::sync::Arc<cadrs_core::solid::Solid>,
         Option<crate::section_view::Cut>,
@@ -3690,13 +3769,18 @@ fn draw_part_edges(
                     Some(_) => {
                         let lines = match turned_back {
                             Some(b) => std::sync::Arc::new(part_lines_from(part, b, v.scale, cull)),
-                            None => lines_of(part, &v, cull),
+                            None => lines_cache.lines(part, &v, cull),
                         };
                         for line in lines.iter() {
                             strip(&mut edges, clip, line.iter().map(|p| xf(*p)), edge_color);
                         }
                     }
-                    None => plain.push((lines_of(part, &v, cull), clip)),
+                    None => {
+                        plain.push((lines_cache.edges(part, back, cull && !turning), clip));
+                        if has_silhouettes(part) {
+                            outlines.push((lines_cache.silhouettes(part), clip));
+                        }
+                    }
                 }
             }
             if mode.edges() {
@@ -3812,7 +3896,7 @@ fn draw_part_edges(
                 && cache.tints.get(&part.id).is_none_or(|t| t.alpha >= 1.0);
             let lines = match turned_back {
                 Some(b) => std::sync::Arc::new(part_lines_from(part, b, v.scale, opaque)),
-                None => lines_of(part, &v, opaque),
+                None => lines_cache.lines(part, &v, opaque),
             };
             for line in lines.iter() {
                 strip(&mut outline_edges, clip, line.iter().map(|p| xf(*p)), color);
@@ -3890,6 +3974,33 @@ fn draw_part_edges(
         &mut gizmo_assets,
         &mut commands,
     );
+    let outline_key = RetainedKey {
+        items: outlines
+            .iter()
+            .map(|(l, c)| (std::sync::Arc::as_ptr(l) as usize, *c))
+            .collect(),
+        color: edge_color,
+    };
+    retain_lines(
+        &mut retained.outlines,
+        outline_key,
+        || {
+            outlines
+                .iter()
+                .map(|(l, _)| l.clone() as KeptAlive)
+                .collect()
+        },
+        |asset| {
+            for (lines, clip) in &outlines {
+                for line in lines.iter() {
+                    strip_asset(asset, *clip, line.iter().copied(), edge_color);
+                }
+            }
+        },
+        gizmo_store.config::<PartEdgeGizmos>().0,
+        &mut gizmo_assets,
+        &mut commands,
+    );
     let free_key = RetainedKey {
         items: free
             .iter()
@@ -3925,6 +4036,11 @@ struct LastEdges {
     immediate: bool,
     dialog: bool,
     edge_color: Option<Color>,
+    /// The view direction last seen, and when it last changed (seconds).
+    back: Option<Vec3>,
+    turned_at: f64,
+    /// Whether the plain edges were drawn not culled, the view turning.
+    turning: bool,
 }
 
 /// The plain part edges and the free edges, drawn as retained gizmos: [`draw_part_edges`] makes
@@ -3934,6 +4050,8 @@ struct LastEdges {
 #[derive(Resource, Default)]
 pub struct RetainedEdges {
     plain: RetainedLines,
+    /// The plain parts' silhouettes.
+    outlines: RetainedLines,
     free: RetainedLines,
 }
 
