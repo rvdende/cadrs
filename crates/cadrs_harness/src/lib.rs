@@ -17,6 +17,7 @@
 //! every screenshot.
 
 pub mod cursor;
+pub mod idle;
 pub mod keys;
 pub mod runner;
 pub mod scenario;
@@ -354,7 +355,8 @@ impl Plugin for HarnessPlugin {
                 PrimaryWindow,
             ));
         } else {
-            app.insert_resource(RenderSurface { size, ..default() });
+            app.insert_resource(RenderSurface { size, ..default() })
+                .add_plugins(idle::IdlePlugin);
         }
 
         // The scenario driver runs while there is a scenario: this one, or a live one an MCP
