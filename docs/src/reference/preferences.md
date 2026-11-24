@@ -57,6 +57,13 @@ What each choice of Mouse controls does with the mouse:
 
   When a sketch gets its plane, and when one is opened for editing, the view turns square to it, as N does.
 
+### SpaceMouse
+
+- **Zoom by:** Pulling up and pushing down · Moving forward and backward. Default: Pulling up and pushing down.
+
+  The other of the two moves the view up and down.
+- **Speed:** 25% · 50% · 75% · 100% · 150% · 200% · 300%. Default: 100%.
+
 ## Assembly
 
 How parts move in an assembly.
