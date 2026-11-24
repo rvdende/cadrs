@@ -1,0 +1,1213 @@
+(
+    version: 5,
+    meta: (
+        created: 1794960000,
+        modified: 1794960000,
+        created_by: "cadrs",
+        modified_by: "cadrs",
+        owned_by: "cadrs",
+        last_opened: None,
+        trashed: None,
+    ),
+    document: (
+        id: ("286df1e5-07f9-41a0-997f-c3ab89024cf9"),
+        name: "Fork configurations",
+        elements: [
+            (
+                id: ("678e3d03-5c81-43a2-8604-a70389d8a444"),
+                name: "Part Studio 1",
+                kind: PartStudio(
+                    features: [
+                        (
+                            id: ("1e550000-0000-0000-0000-000000000001"),
+                            name: "#withHole",
+                            kind: Variable((
+                                name: "withHole",
+                                var_type: Number,
+                                expr: "1",
+                                value: 1.0,
+                                kind: Number,
+                            )),
+                        ),
+                        (
+                            id: ("1e550000-0000-0000-0000-000000000002"),
+                            name: "Sketch 1",
+                            kind: Sketch((
+                                plane: Some(Top),
+                                disable_imprinting: false,
+                                geometry: (
+                                    points: [
+                                        (
+                                            value: None,
+                                            version: 0,
+                                        ),
+                                        (
+                                            value: Some((
+                                                pos: (
+                                                    x: 0.0,
+                                                    y: 0.0,
+                                                ),
+                                            )),
+                                            version: 1,
+                                        ),
+                                        (
+                                            value: Some((
+                                                pos: (
+                                                    x: 60.0,
+                                                    y: 0.0,
+                                                ),
+                                            )),
+                                            version: 1,
+                                        ),
+                                        (
+                                            value: Some((
+                                                pos: (
+                                                    x: 60.0,
+                                                    y: 40.0,
+                                                ),
+                                            )),
+                                            version: 1,
+                                        ),
+                                        (
+                                            value: Some((
+                                                pos: (
+                                                    x: 0.0,
+                                                    y: 40.0,
+                                                ),
+                                            )),
+                                            version: 1,
+                                        ),
+                                    ],
+                                    curves: [
+                                        (
+                                            value: None,
+                                            version: 0,
+                                        ),
+                                        (
+                                            value: Some((
+                                                kind: Line(
+                                                    a: (
+                                                        idx: 1,
+                                                        version: 1,
+                                                    ),
+                                                    b: (
+                                                        idx: 2,
+                                                        version: 1,
+                                                    ),
+                                                ),
+                                                construction: false,
+                                            )),
+                                            version: 1,
+                                        ),
+                                        (
+                                            value: Some((
+                                                kind: Line(
+                                                    a: (
+                                                        idx: 2,
+                                                        version: 1,
+                                                    ),
+                                                    b: (
+                                                        idx: 3,
+                                                        version: 1,
+                                                    ),
+                                                ),
+                                                construction: false,
+                                            )),
+                                            version: 1,
+                                        ),
+                                        (
+                                            value: Some((
+                                                kind: Line(
+                                                    a: (
+                                                        idx: 3,
+                                                        version: 1,
+                                                    ),
+                                                    b: (
+                                                        idx: 4,
+                                                        version: 1,
+                                                    ),
+                                                ),
+                                                construction: false,
+                                            )),
+                                            version: 1,
+                                        ),
+                                        (
+                                            value: Some((
+                                                kind: Line(
+                                                    a: (
+                                                        idx: 4,
+                                                        version: 1,
+                                                    ),
+                                                    b: (
+                                                        idx: 1,
+                                                        version: 1,
+                                                    ),
+                                                ),
+                                                construction: false,
+                                            )),
+                                            version: 1,
+                                        ),
+                                    ],
+                                    dimensions: [
+                                        (
+                                            value: None,
+                                            version: 0,
+                                        ),
+                                    ],
+                                    constraints: [
+                                        (
+                                            value: None,
+                                            version: 0,
+                                        ),
+                                    ],
+                                ),
+                            )),
+                        ),
+                        (
+                            id: ("1e550000-0000-0000-0000-000000000003"),
+                            name: "Extrude 1",
+                            kind: Extrude((
+                                regions: [
+                                    (
+                                        sketch: ("1e550000-0000-0000-0000-000000000002"),
+                                        curves: [
+                                            (
+                                                idx: 1,
+                                                version: 1,
+                                            ),
+                                            (
+                                                idx: 2,
+                                                version: 1,
+                                            ),
+                                            (
+                                                idx: 3,
+                                                version: 1,
+                                            ),
+                                            (
+                                                idx: 4,
+                                                version: 1,
+                                            ),
+                                        ],
+                                        seed: (
+                                            x: 20.0,
+                                            y: 26.666666666666668,
+                                        ),
+                                    ),
+                                ],
+                                sketches: [],
+                                faces: [],
+                                body: Solid,
+                                thin: (
+                                    thickness1: 5.0,
+                                    thickness1_expr: "5 mm",
+                                    thickness2: 0.0,
+                                    thickness2_expr: "0 mm",
+                                    flip_wall: false,
+                                    mid_plane: false,
+                                ),
+                                op: New,
+                                merge_all: false,
+                                merge_scope: [],
+                                end: Blind,
+                                depth: 10.0,
+                                depth_expr: "10 mm",
+                                up_to: None,
+                                offset: None,
+                                flip: false,
+                                symmetric: false,
+                                start_offset: None,
+                                direction: None,
+                                second: None,
+                            )),
+                        ),
+                        (
+                            id: ("1e550000-0000-0000-0000-000000000004"),
+                            name: "Sketch 2",
+                            kind: Sketch((
+                                plane: Some(Top),
+                                disable_imprinting: false,
+                                geometry: (
+                                    points: [
+                                        (
+                                            value: None,
+                                            version: 0,
+                                        ),
+                                        (
+                                            value: Some((
+                                                pos: (
+                                                    x: 30.0,
+                                                    y: 20.0,
+                                                ),
+                                            )),
+                                            version: 1,
+                                        ),
+                                    ],
+                                    curves: [
+                                        (
+                                            value: None,
+                                            version: 0,
+                                        ),
+                                        (
+                                            value: Some((
+                                                kind: Circle(
+                                                    center: (
+                                                        idx: 1,
+                                                        version: 1,
+                                                    ),
+                                                    radius: 8.0,
+                                                ),
+                                                construction: false,
+                                            )),
+                                            version: 1,
+                                        ),
+                                    ],
+                                    dimensions: [
+                                        (
+                                            value: None,
+                                            version: 0,
+                                        ),
+                                    ],
+                                    constraints: [
+                                        (
+                                            value: None,
+                                            version: 0,
+                                        ),
+                                    ],
+                                ),
+                            )),
+                        ),
+                        (
+                            id: ("1e550000-0000-0000-0000-000000000005"),
+                            name: "Extrude 2",
+                            kind: Extrude((
+                                regions: [
+                                    (
+                                        sketch: ("1e550000-0000-0000-0000-000000000004"),
+                                        curves: [
+                                            (
+                                                idx: 1,
+                                                version: 1,
+                                            ),
+                                        ],
+                                        seed: (
+                                            x: 31.046265039834726,
+                                            y: 18.505778668836076,
+                                        ),
+                                    ),
+                                ],
+                                sketches: [],
+                                faces: [],
+                                body: Solid,
+                                thin: (
+                                    thickness1: 5.0,
+                                    thickness1_expr: "5 mm",
+                                    thickness2: 0.0,
+                                    thickness2_expr: "0 mm",
+                                    flip_wall: false,
+                                    mid_plane: false,
+                                ),
+                                op: Remove,
+                                merge_all: false,
+                                merge_scope: [],
+                                end: Blind,
+                                depth: 10.0,
+                                depth_expr: "10 mm",
+                                up_to: None,
+                                offset: None,
+                                flip: false,
+                                symmetric: false,
+                                start_offset: None,
+                                direction: None,
+                                second: None,
+                            )),
+                        ),
+                    ],
+                ),
+                configuration: (
+                    inputs: [
+                        (
+                            id: ("85c57425-6158-4639-8930-9d70859c8cee"),
+                            name: "Size",
+                            kind: List(
+                                rows: [
+                                    (
+                                        id: ("7158240f-570f-4d40-9aec-3433a215361d"),
+                                        name: "Thin",
+                                    ),
+                                    (
+                                        id: ("c54d85a6-4b64-418a-9a3a-42b343552513"),
+                                        name: "Thick",
+                                    ),
+                                ],
+                                default: 0,
+                            ),
+                            params: [
+                                (
+                                    target: Field(
+                                        feature: ("1e550000-0000-0000-0000-000000000003"),
+                                        label: "Depth",
+                                        occurrence: 0,
+                                    ),
+                                    values: [
+                                        "10 mm",
+                                        "20 mm",
+                                    ],
+                                ),
+                            ],
+                        ),
+                        (
+                            id: ("7d7006cd-abd1-4b78-8832-45271fb2cf22"),
+                            name: "Hole",
+                            kind: Checkbox(
+                                default: true,
+                            ),
+                            params: [
+                                (
+                                    target: Suppressed(
+                                        feature: ("1e550000-0000-0000-0000-000000000005"),
+                                    ),
+                                    values: [
+                                        true,
+                                        false,
+                                    ],
+                                ),
+                            ],
+                        ),
+                    ],
+                    active: ([
+                        (("7d7006cd-abd1-4b78-8832-45271fb2cf22"), Checked(true)),
+                        (("85c57425-6158-4639-8930-9d70859c8cee"), Row(("7158240f-570f-4d40-9aec-3433a215361d"))),
+                    ]),
+                ),
+            ),
+            (
+                id: ("4ededf3e-43ae-4cde-ab92-48152c66ff53"),
+                name: "Assembly 1",
+                kind: Assembly,
+            ),
+            (
+                id: ("2c4a4b5b-67d3-48cb-8a00-4a46f32f5d70"),
+                name: "Assembly 2",
+                kind: Assembly,
+                assembly: (
+                    instances: [
+                        (
+                            id: ("55b68ce3-af67-4699-9da8-8a28d206a61c"),
+                            source: Part(
+                                element: ("70fce8c3-d992-49af-8f02-684811329d55"),
+                                part: (
+                                    feature: ("1e550000-0000-0000-0000-000000000003"),
+                                    index: 0,
+                                ),
+                            ),
+                            index: 1,
+                            pose: (
+                                rotation: ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+                                translation: (0.0, 0.0, 0.0),
+                            ),
+                            configuration: Some((
+                                studio: ("678e3d03-5c81-43a2-8604-a70389d8a444"),
+                                values: ([
+                                    (("7d7006cd-abd1-4b78-8832-45271fb2cf22"), Checked(true)),
+                                    (("85c57425-6158-4639-8930-9d70859c8cee"), Row(("7158240f-570f-4d40-9aec-3433a215361d"))),
+                                ]),
+                            )),
+                        ),
+                        (
+                            id: ("68b8a540-4bde-44cc-a7a2-ea37c8ed410c"),
+                            source: Part(
+                                element: ("2897f3b1-5444-4856-aae0-df6e4bec9a7e"),
+                                part: (
+                                    feature: ("1e550000-0000-0000-0000-000000000003"),
+                                    index: 0,
+                                ),
+                            ),
+                            index: 2,
+                            pose: (
+                                rotation: ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+                                translation: (80.0, 0.0, 0.0),
+                            ),
+                            configuration: Some((
+                                studio: ("678e3d03-5c81-43a2-8604-a70389d8a444"),
+                                values: ([
+                                    (("7d7006cd-abd1-4b78-8832-45271fb2cf22"), Checked(true)),
+                                    (("85c57425-6158-4639-8930-9d70859c8cee"), Row(("c54d85a6-4b64-418a-9a3a-42b343552513"))),
+                                ]),
+                            )),
+                        ),
+                    ],
+                    bom: (
+                        columns: [
+                            Item,
+                            Quantity,
+                            Property(PartNumber),
+                            Property(Name),
+                            Property(Configuration),
+                            Property(Description),
+                            Property(Material),
+                        ],
+                        view: Structured,
+                    ),
+                ),
+            ),
+        ],
+        units: (
+            length: Millimeter,
+            mass: Kilogram,
+            decimals: 3,
+            angle_decimals: 3,
+        ),
+        configured: [
+            (
+                studio: ("678e3d03-5c81-43a2-8604-a70389d8a444"),
+                values: ([
+                    (("7d7006cd-abd1-4b78-8832-45271fb2cf22"), Checked(true)),
+                    (("85c57425-6158-4639-8930-9d70859c8cee"), Row(("7158240f-570f-4d40-9aec-3433a215361d"))),
+                ]),
+                element: (
+                    id: ("70fce8c3-d992-49af-8f02-684811329d55"),
+                    name: "Part Studio 1",
+                    kind: PartStudio(
+                        features: [
+                            (
+                                id: ("1e550000-0000-0000-0000-000000000001"),
+                                name: "#withHole",
+                                kind: Variable((
+                                    name: "withHole",
+                                    var_type: Number,
+                                    expr: "1",
+                                    value: 1.0,
+                                    kind: Number,
+                                )),
+                            ),
+                            (
+                                id: ("1e550000-0000-0000-0000-000000000002"),
+                                name: "Sketch 1",
+                                kind: Sketch((
+                                    plane: Some(Top),
+                                    disable_imprinting: false,
+                                    geometry: (
+                                        points: [
+                                            (
+                                                value: None,
+                                                version: 0,
+                                            ),
+                                            (
+                                                value: Some((
+                                                    pos: (
+                                                        x: 0.0,
+                                                        y: 0.0,
+                                                    ),
+                                                )),
+                                                version: 1,
+                                            ),
+                                            (
+                                                value: Some((
+                                                    pos: (
+                                                        x: 60.0,
+                                                        y: 0.0,
+                                                    ),
+                                                )),
+                                                version: 1,
+                                            ),
+                                            (
+                                                value: Some((
+                                                    pos: (
+                                                        x: 60.0,
+                                                        y: 40.0,
+                                                    ),
+                                                )),
+                                                version: 1,
+                                            ),
+                                            (
+                                                value: Some((
+                                                    pos: (
+                                                        x: 0.0,
+                                                        y: 40.0,
+                                                    ),
+                                                )),
+                                                version: 1,
+                                            ),
+                                        ],
+                                        curves: [
+                                            (
+                                                value: None,
+                                                version: 0,
+                                            ),
+                                            (
+                                                value: Some((
+                                                    kind: Line(
+                                                        a: (
+                                                            idx: 1,
+                                                            version: 1,
+                                                        ),
+                                                        b: (
+                                                            idx: 2,
+                                                            version: 1,
+                                                        ),
+                                                    ),
+                                                    construction: false,
+                                                )),
+                                                version: 1,
+                                            ),
+                                            (
+                                                value: Some((
+                                                    kind: Line(
+                                                        a: (
+                                                            idx: 2,
+                                                            version: 1,
+                                                        ),
+                                                        b: (
+                                                            idx: 3,
+                                                            version: 1,
+                                                        ),
+                                                    ),
+                                                    construction: false,
+                                                )),
+                                                version: 1,
+                                            ),
+                                            (
+                                                value: Some((
+                                                    kind: Line(
+                                                        a: (
+                                                            idx: 3,
+                                                            version: 1,
+                                                        ),
+                                                        b: (
+                                                            idx: 4,
+                                                            version: 1,
+                                                        ),
+                                                    ),
+                                                    construction: false,
+                                                )),
+                                                version: 1,
+                                            ),
+                                            (
+                                                value: Some((
+                                                    kind: Line(
+                                                        a: (
+                                                            idx: 4,
+                                                            version: 1,
+                                                        ),
+                                                        b: (
+                                                            idx: 1,
+                                                            version: 1,
+                                                        ),
+                                                    ),
+                                                    construction: false,
+                                                )),
+                                                version: 1,
+                                            ),
+                                        ],
+                                        dimensions: [
+                                            (
+                                                value: None,
+                                                version: 0,
+                                            ),
+                                        ],
+                                        constraints: [
+                                            (
+                                                value: None,
+                                                version: 0,
+                                            ),
+                                        ],
+                                    ),
+                                )),
+                            ),
+                            (
+                                id: ("1e550000-0000-0000-0000-000000000003"),
+                                name: "Extrude 1",
+                                kind: Extrude((
+                                    regions: [
+                                        (
+                                            sketch: ("1e550000-0000-0000-0000-000000000002"),
+                                            curves: [
+                                                (
+                                                    idx: 1,
+                                                    version: 1,
+                                                ),
+                                                (
+                                                    idx: 2,
+                                                    version: 1,
+                                                ),
+                                                (
+                                                    idx: 3,
+                                                    version: 1,
+                                                ),
+                                                (
+                                                    idx: 4,
+                                                    version: 1,
+                                                ),
+                                            ],
+                                            seed: (
+                                                x: 20.0,
+                                                y: 26.666666666666668,
+                                            ),
+                                        ),
+                                    ],
+                                    sketches: [],
+                                    faces: [],
+                                    body: Solid,
+                                    thin: (
+                                        thickness1: 5.0,
+                                        thickness1_expr: "5 mm",
+                                        thickness2: 0.0,
+                                        thickness2_expr: "0 mm",
+                                        flip_wall: false,
+                                        mid_plane: false,
+                                    ),
+                                    op: New,
+                                    merge_all: false,
+                                    merge_scope: [],
+                                    end: Blind,
+                                    depth: 10.0,
+                                    depth_expr: "10 mm",
+                                    up_to: None,
+                                    offset: None,
+                                    flip: false,
+                                    symmetric: false,
+                                    start_offset: None,
+                                    direction: None,
+                                    second: None,
+                                )),
+                            ),
+                            (
+                                id: ("1e550000-0000-0000-0000-000000000004"),
+                                name: "Sketch 2",
+                                kind: Sketch((
+                                    plane: Some(Top),
+                                    disable_imprinting: false,
+                                    geometry: (
+                                        points: [
+                                            (
+                                                value: None,
+                                                version: 0,
+                                            ),
+                                            (
+                                                value: Some((
+                                                    pos: (
+                                                        x: 30.0,
+                                                        y: 20.0,
+                                                    ),
+                                                )),
+                                                version: 1,
+                                            ),
+                                        ],
+                                        curves: [
+                                            (
+                                                value: None,
+                                                version: 0,
+                                            ),
+                                            (
+                                                value: Some((
+                                                    kind: Circle(
+                                                        center: (
+                                                            idx: 1,
+                                                            version: 1,
+                                                        ),
+                                                        radius: 8.0,
+                                                    ),
+                                                    construction: false,
+                                                )),
+                                                version: 1,
+                                            ),
+                                        ],
+                                        dimensions: [
+                                            (
+                                                value: None,
+                                                version: 0,
+                                            ),
+                                        ],
+                                        constraints: [
+                                            (
+                                                value: None,
+                                                version: 0,
+                                            ),
+                                        ],
+                                    ),
+                                )),
+                            ),
+                            (
+                                id: ("1e550000-0000-0000-0000-000000000005"),
+                                name: "Extrude 2",
+                                kind: Extrude((
+                                    regions: [
+                                        (
+                                            sketch: ("1e550000-0000-0000-0000-000000000004"),
+                                            curves: [
+                                                (
+                                                    idx: 1,
+                                                    version: 1,
+                                                ),
+                                            ],
+                                            seed: (
+                                                x: 31.046265039834726,
+                                                y: 18.505778668836076,
+                                            ),
+                                        ),
+                                    ],
+                                    sketches: [],
+                                    faces: [],
+                                    body: Solid,
+                                    thin: (
+                                        thickness1: 5.0,
+                                        thickness1_expr: "5 mm",
+                                        thickness2: 0.0,
+                                        thickness2_expr: "0 mm",
+                                        flip_wall: false,
+                                        mid_plane: false,
+                                    ),
+                                    op: Remove,
+                                    merge_all: false,
+                                    merge_scope: [],
+                                    end: Blind,
+                                    depth: 10.0,
+                                    depth_expr: "10 mm",
+                                    up_to: None,
+                                    offset: None,
+                                    flip: false,
+                                    symmetric: false,
+                                    start_offset: None,
+                                    direction: None,
+                                    second: None,
+                                )),
+                            ),
+                        ],
+                    ),
+                    configuration: (
+                        inputs: [
+                            (
+                                id: ("85c57425-6158-4639-8930-9d70859c8cee"),
+                                name: "Size",
+                                kind: List(
+                                    rows: [
+                                        (
+                                            id: ("7158240f-570f-4d40-9aec-3433a215361d"),
+                                            name: "Thin",
+                                        ),
+                                        (
+                                            id: ("c54d85a6-4b64-418a-9a3a-42b343552513"),
+                                            name: "Thick",
+                                        ),
+                                    ],
+                                    default: 0,
+                                ),
+                                params: [
+                                    (
+                                        target: Field(
+                                            feature: ("1e550000-0000-0000-0000-000000000003"),
+                                            label: "Depth",
+                                            occurrence: 0,
+                                        ),
+                                        values: [
+                                            "10 mm",
+                                            "20 mm",
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            (
+                                id: ("7d7006cd-abd1-4b78-8832-45271fb2cf22"),
+                                name: "Hole",
+                                kind: Checkbox(
+                                    default: true,
+                                ),
+                                params: [
+                                    (
+                                        target: Suppressed(
+                                            feature: ("1e550000-0000-0000-0000-000000000005"),
+                                        ),
+                                        values: [
+                                            true,
+                                            false,
+                                        ],
+                                    ),
+                                ],
+                            ),
+                        ],
+                        active: ([
+                            (("7d7006cd-abd1-4b78-8832-45271fb2cf22"), Checked(true)),
+                            (("85c57425-6158-4639-8930-9d70859c8cee"), Row(("7158240f-570f-4d40-9aec-3433a215361d"))),
+                        ]),
+                    ),
+                ),
+                stamp: 12491697620800210035,
+            ),
+            (
+                studio: ("678e3d03-5c81-43a2-8604-a70389d8a444"),
+                values: ([
+                    (("7d7006cd-abd1-4b78-8832-45271fb2cf22"), Checked(true)),
+                    (("85c57425-6158-4639-8930-9d70859c8cee"), Row(("c54d85a6-4b64-418a-9a3a-42b343552513"))),
+                ]),
+                element: (
+                    id: ("2897f3b1-5444-4856-aae0-df6e4bec9a7e"),
+                    name: "Part Studio 1",
+                    kind: PartStudio(
+                        features: [
+                            (
+                                id: ("1e550000-0000-0000-0000-000000000001"),
+                                name: "#withHole",
+                                kind: Variable((
+                                    name: "withHole",
+                                    var_type: Number,
+                                    expr: "1",
+                                    value: 1.0,
+                                    kind: Number,
+                                )),
+                            ),
+                            (
+                                id: ("1e550000-0000-0000-0000-000000000002"),
+                                name: "Sketch 1",
+                                kind: Sketch((
+                                    plane: Some(Top),
+                                    disable_imprinting: false,
+                                    geometry: (
+                                        points: [
+                                            (
+                                                value: None,
+                                                version: 0,
+                                            ),
+                                            (
+                                                value: Some((
+                                                    pos: (
+                                                        x: 0.0,
+                                                        y: 0.0,
+                                                    ),
+                                                )),
+                                                version: 1,
+                                            ),
+                                            (
+                                                value: Some((
+                                                    pos: (
+                                                        x: 60.0,
+                                                        y: 0.0,
+                                                    ),
+                                                )),
+                                                version: 1,
+                                            ),
+                                            (
+                                                value: Some((
+                                                    pos: (
+                                                        x: 60.0,
+                                                        y: 40.0,
+                                                    ),
+                                                )),
+                                                version: 1,
+                                            ),
+                                            (
+                                                value: Some((
+                                                    pos: (
+                                                        x: 0.0,
+                                                        y: 40.0,
+                                                    ),
+                                                )),
+                                                version: 1,
+                                            ),
+                                        ],
+                                        curves: [
+                                            (
+                                                value: None,
+                                                version: 0,
+                                            ),
+                                            (
+                                                value: Some((
+                                                    kind: Line(
+                                                        a: (
+                                                            idx: 1,
+                                                            version: 1,
+                                                        ),
+                                                        b: (
+                                                            idx: 2,
+                                                            version: 1,
+                                                        ),
+                                                    ),
+                                                    construction: false,
+                                                )),
+                                                version: 1,
+                                            ),
+                                            (
+                                                value: Some((
+                                                    kind: Line(
+                                                        a: (
+                                                            idx: 2,
+                                                            version: 1,
+                                                        ),
+                                                        b: (
+                                                            idx: 3,
+                                                            version: 1,
+                                                        ),
+                                                    ),
+                                                    construction: false,
+                                                )),
+                                                version: 1,
+                                            ),
+                                            (
+                                                value: Some((
+                                                    kind: Line(
+                                                        a: (
+                                                            idx: 3,
+                                                            version: 1,
+                                                        ),
+                                                        b: (
+                                                            idx: 4,
+                                                            version: 1,
+                                                        ),
+                                                    ),
+                                                    construction: false,
+                                                )),
+                                                version: 1,
+                                            ),
+                                            (
+                                                value: Some((
+                                                    kind: Line(
+                                                        a: (
+                                                            idx: 4,
+                                                            version: 1,
+                                                        ),
+                                                        b: (
+                                                            idx: 1,
+                                                            version: 1,
+                                                        ),
+                                                    ),
+                                                    construction: false,
+                                                )),
+                                                version: 1,
+                                            ),
+                                        ],
+                                        dimensions: [
+                                            (
+                                                value: None,
+                                                version: 0,
+                                            ),
+                                        ],
+                                        constraints: [
+                                            (
+                                                value: None,
+                                                version: 0,
+                                            ),
+                                        ],
+                                    ),
+                                )),
+                            ),
+                            (
+                                id: ("1e550000-0000-0000-0000-000000000003"),
+                                name: "Extrude 1",
+                                kind: Extrude((
+                                    regions: [
+                                        (
+                                            sketch: ("1e550000-0000-0000-0000-000000000002"),
+                                            curves: [
+                                                (
+                                                    idx: 1,
+                                                    version: 1,
+                                                ),
+                                                (
+                                                    idx: 2,
+                                                    version: 1,
+                                                ),
+                                                (
+                                                    idx: 3,
+                                                    version: 1,
+                                                ),
+                                                (
+                                                    idx: 4,
+                                                    version: 1,
+                                                ),
+                                            ],
+                                            seed: (
+                                                x: 20.0,
+                                                y: 26.666666666666668,
+                                            ),
+                                        ),
+                                    ],
+                                    sketches: [],
+                                    faces: [],
+                                    body: Solid,
+                                    thin: (
+                                        thickness1: 5.0,
+                                        thickness1_expr: "5 mm",
+                                        thickness2: 0.0,
+                                        thickness2_expr: "0 mm",
+                                        flip_wall: false,
+                                        mid_plane: false,
+                                    ),
+                                    op: New,
+                                    merge_all: false,
+                                    merge_scope: [],
+                                    end: Blind,
+                                    depth: 20.0,
+                                    depth_expr: "20 mm",
+                                    up_to: None,
+                                    offset: None,
+                                    flip: false,
+                                    symmetric: false,
+                                    start_offset: None,
+                                    direction: None,
+                                    second: None,
+                                )),
+                            ),
+                            (
+                                id: ("1e550000-0000-0000-0000-000000000004"),
+                                name: "Sketch 2",
+                                kind: Sketch((
+                                    plane: Some(Top),
+                                    disable_imprinting: false,
+                                    geometry: (
+                                        points: [
+                                            (
+                                                value: None,
+                                                version: 0,
+                                            ),
+                                            (
+                                                value: Some((
+                                                    pos: (
+                                                        x: 30.0,
+                                                        y: 20.0,
+                                                    ),
+                                                )),
+                                                version: 1,
+                                            ),
+                                        ],
+                                        curves: [
+                                            (
+                                                value: None,
+                                                version: 0,
+                                            ),
+                                            (
+                                                value: Some((
+                                                    kind: Circle(
+                                                        center: (
+                                                            idx: 1,
+                                                            version: 1,
+                                                        ),
+                                                        radius: 8.0,
+                                                    ),
+                                                    construction: false,
+                                                )),
+                                                version: 1,
+                                            ),
+                                        ],
+                                        dimensions: [
+                                            (
+                                                value: None,
+                                                version: 0,
+                                            ),
+                                        ],
+                                        constraints: [
+                                            (
+                                                value: None,
+                                                version: 0,
+                                            ),
+                                        ],
+                                    ),
+                                )),
+                            ),
+                            (
+                                id: ("1e550000-0000-0000-0000-000000000005"),
+                                name: "Extrude 2",
+                                kind: Extrude((
+                                    regions: [
+                                        (
+                                            sketch: ("1e550000-0000-0000-0000-000000000004"),
+                                            curves: [
+                                                (
+                                                    idx: 1,
+                                                    version: 1,
+                                                ),
+                                            ],
+                                            seed: (
+                                                x: 31.046265039834726,
+                                                y: 18.505778668836076,
+                                            ),
+                                        ),
+                                    ],
+                                    sketches: [],
+                                    faces: [],
+                                    body: Solid,
+                                    thin: (
+                                        thickness1: 5.0,
+                                        thickness1_expr: "5 mm",
+                                        thickness2: 0.0,
+                                        thickness2_expr: "0 mm",
+                                        flip_wall: false,
+                                        mid_plane: false,
+                                    ),
+                                    op: Remove,
+                                    merge_all: false,
+                                    merge_scope: [],
+                                    end: Blind,
+                                    depth: 10.0,
+                                    depth_expr: "10 mm",
+                                    up_to: None,
+                                    offset: None,
+                                    flip: false,
+                                    symmetric: false,
+                                    start_offset: None,
+                                    direction: None,
+                                    second: None,
+                                )),
+                            ),
+                        ],
+                    ),
+                    configuration: (
+                        inputs: [
+                            (
+                                id: ("85c57425-6158-4639-8930-9d70859c8cee"),
+                                name: "Size",
+                                kind: List(
+                                    rows: [
+                                        (
+                                            id: ("7158240f-570f-4d40-9aec-3433a215361d"),
+                                            name: "Thin",
+                                        ),
+                                        (
+                                            id: ("c54d85a6-4b64-418a-9a3a-42b343552513"),
+                                            name: "Thick",
+                                        ),
+                                    ],
+                                    default: 0,
+                                ),
+                                params: [
+                                    (
+                                        target: Field(
+                                            feature: ("1e550000-0000-0000-0000-000000000003"),
+                                            label: "Depth",
+                                            occurrence: 0,
+                                        ),
+                                        values: [
+                                            "10 mm",
+                                            "20 mm",
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            (
+                                id: ("7d7006cd-abd1-4b78-8832-45271fb2cf22"),
+                                name: "Hole",
+                                kind: Checkbox(
+                                    default: true,
+                                ),
+                                params: [
+                                    (
+                                        target: Suppressed(
+                                            feature: ("1e550000-0000-0000-0000-000000000005"),
+                                        ),
+                                        values: [
+                                            true,
+                                            false,
+                                        ],
+                                    ),
+                                ],
+                            ),
+                        ],
+                        active: ([
+                            (("7d7006cd-abd1-4b78-8832-45271fb2cf22"), Checked(true)),
+                            (("85c57425-6158-4639-8930-9d70859c8cee"), Row(("c54d85a6-4b64-418a-9a3a-42b343552513"))),
+                        ]),
+                    ),
+                ),
+                stamp: 8398088308708847983,
+            ),
+        ],
+    ),
+)

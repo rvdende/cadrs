@@ -1027,3 +1027,68 @@ fn a_configuration_sets_part_properties() {
     let back: Document = ron::from_str(&ron::to_string(&d.d).unwrap()).unwrap();
     assert_eq!(back, d.d);
 }
+
+/// A document the fork saved (`fixtures/fork_configurations.cadrs`: its configured plate, a
+/// Size List configuring Extrude 1's depth and a Hole Checkbox its suppression, written by the
+/// fork's own code) opens: its columns are named and read by their parameters, the studio
+/// switches configurations, and its assembly's instances build their own.
+#[test]
+fn a_document_the_fork_saved_opens() {
+    use cadrs_core::configuration::{
+        ConfigValues, InputKind, InputValue, SetActiveConfiguration, refresh_copies,
+    };
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/fork_configurations.cadrs");
+    let mut doc = cadrs_core::Store::load_path(&path)
+        .expect("the fork's file loads")
+        .document;
+    // As the app does on opening.
+    refresh_copies(&mut doc);
+    let el = doc.elements[0].id;
+    let studio = doc.element(el).unwrap();
+    let size = studio.configuration.input_named("Size").unwrap().clone();
+    let depth = &size.params[0];
+    assert_eq!(depth.name, "Extrude_1_Depth");
+    let ext = studio.feature(wh::PLATE).unwrap().extrude().unwrap();
+    assert_eq!(ext.depth_expr, "#Extrude_1_Depth");
+    let hole = studio.feature(wh::HOLE).unwrap();
+    assert!(hole.suppress_by.is_some(), "{:?}", hole.suppress_by);
+    let volume = |doc: &Document, el| -> f64 {
+        rebuild::build(&doc.element(el).unwrap().active_features())
+            .parts
+            .iter()
+            .map(|p| p.mass.as_ref().unwrap().volume)
+            .sum()
+    };
+    // Thin, with the hole (the defaults).
+    rel(volume(&doc, el), AREA * 10.0 - HOLE_VOLUME);
+    let InputKind::List { rows, .. } = &size.kind else {
+        unreachable!()
+    };
+    let mut values = ConfigValues::default();
+    values.set(size.id, InputValue::Row(rows[1].id));
+    let mut h = History::default();
+    h.execute(
+        &mut doc,
+        &SetActiveConfiguration {
+            element: el,
+            values,
+        },
+    )
+    .unwrap();
+    rel(volume(&doc, el), AREA * 20.0 - HOLE_VOLUME);
+    // The assembly's instances: Thin and Thick, each its own copy.
+    let asm = doc
+        .elements
+        .iter()
+        .find(|e| e.assembly_model().is_some_and(|a| !a.instances.is_empty()))
+        .unwrap();
+    let vols: Vec<f64> = asm
+        .assembly
+        .instances
+        .iter()
+        .map(|i| volume(&doc, i.source.element()))
+        .collect();
+    rel(vols[0], AREA * 10.0 - HOLE_VOLUME);
+    rel(vols[1], AREA * 20.0 - HOLE_VOLUME);
+}
