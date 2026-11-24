@@ -1074,6 +1074,9 @@ struct CanvasRoutes {
     routes: std::collections::HashMap<Entity, Vec<Vec2>>,
 }
 
+/// A wire's thickness on screen (logical px), whatever the zoom.
+const WIRE_PX: f32 = 2.0;
+
 /// How far a trace runs straight out of an output and into an input (graph px).
 pub const STUB: f32 = 18.0;
 
@@ -1208,7 +1211,7 @@ fn route_wires(
     router: Res<WireRouter>,
     mut q_canvas: Query<(&NodeCanvas, &mut CanvasRoutes)>,
     q_wire: Query<(Entity, &Wire, &ChildOf)>,
-    q_nodes: Query<(&GraphNode, &ComputedNode, &ChildOf)>,
+    q_nodes: Query<(Entity, &GraphNode, &ComputedNode, &ChildOf)>,
     q_geo: Query<(&ComputedNode, &UiGlobalTransform)>,
     q_dragging: Query<(), Or<(With<GraphNodeDragging>, With<DragWire>)>>,
 ) {
@@ -1226,14 +1229,18 @@ fn route_wires(
         let s = ln.inverse_scale_factor();
         let mut problem = RouteProblem::default();
         let mut ids = Vec::new();
-        for (g, n, p) in &q_nodes {
-            if p.parent() == c.world {
+        // In the nodes' order, not the query's: culling a node off screen moves it to another
+        // archetype, which reordered them and so rerouted every wire on a zoom.
+        let mut nodes: Vec<(Entity, Rect)> = q_nodes
+            .iter()
+            .filter(|(_, _, _, p)| p.parent() == c.world)
+            .map(|(e, g, n, _)| {
                 let size = n.size() * n.inverse_scale_factor();
-                problem
-                    .obstacles
-                    .push(Rect::from_corners(g.pos, g.pos + size));
-            }
-        }
+                (e, Rect::from_corners(g.pos, g.pos + size))
+            })
+            .collect();
+        nodes.sort_by_key(|(e, _)| *e);
+        problem.obstacles = nodes.into_iter().map(|(_, r)| r).collect();
         for (e, w, p) in &q_wire {
             if p.parent() != c.wires {
                 continue;
@@ -1252,10 +1259,11 @@ fn route_wires(
                 .map(|v| v.round().to_array().map(|x| x as i32))
                 .hash(&mut h);
         }
-        // (Sockets to 4 graph units: their places come through the view and wobble by a hair.)
+        // (Sockets to whole graph units: they sit on whole units, and their places come through
+        // the view and wobble by a hair. Not to 4 units: 106 and 105.9999 rounded apart there.)
         for (a, b) in &problem.wires {
             [*a, *b]
-                .map(|v| (v / 4.0).round().to_array().map(|x| x as i32))
+                .map(|v| v.round().to_array().map(|x| x as i32))
                 .hash(&mut h);
         }
         ids.hash(&mut h);
@@ -1367,8 +1375,9 @@ fn draw_wires(
             Some(w) => (w.color, w.dashed),
             None => (Color::WHITE, false),
         };
-        // A wire stays at least a pixel thick however far out it is zoomed.
-        let thick = (2.0f32).max(1.2 / zoom);
+        // Two pixels on screen at every zoom (thinner, a rotated piece dropped pixels and the
+        // wire looked broken).
+        let thick = WIRE_PX / zoom;
         let pts = match &route {
             Some(via) => {
                 let mut p = vec![a];
@@ -1391,7 +1400,8 @@ fn draw_wires(
             .unwrap_or_default();
         for (k, (p, q)) in pieces.iter().enumerate() {
             let d = *q - *p;
-            let len = d.length() + 0.6;
+            // (Overlapping by its thickness, so the joins stay closed at every zoom.)
+            let len = d.length() + thick;
             let mid = (*p + *q) / 2.0;
             let node = Node {
                 position_type: PositionType::Absolute,
