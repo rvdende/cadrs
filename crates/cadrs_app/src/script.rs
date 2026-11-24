@@ -30,6 +30,8 @@
 //!   [`cadrs_core::samples::gear_cover`], the document `fixtures/gear_cover_standin.cadrs`) in the
 //!   active document: named "Jackhammer (stand-in)", its Part Studio "Gear Cover", mm and kg, the
 //!   six base features in their closed "Base Features" folder, Aluminum - 380 on the part.
+//! - `crash-dialog`: opens the *cadrs closed unexpectedly* dialog (issue #319, [`crate::crash`])
+//!   on a sample report (scenarios keep no crash reports of their own).
 //! - `drawing-bracket`: builds the drawing-view bracket (P3C.2, [`cadrs_core::samples::drawing_bracket`]:
 //!   a plate with four holes and rounded corners and an upright with a hole) in the active Part
 //!   Studio; its part is "Bracket".
@@ -601,6 +603,9 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
             }
             (Some("hypoid"), None) => {
                 commands.queue(hypoid);
+            }
+            (Some("crash-dialog"), None) => {
+                commands.queue(crate::crash::open_sample);
             }
             (Some("drawing-bracket"), None) => {
                 commands.queue(drawing_bracket);

@@ -119,6 +119,9 @@ data-encoding = "2"
 # Clocks that also run in the browser (`std::time::Instant::now` panics there); std's own
 # types on other targets, and the `Instant` Bevy uses.
 web-time = "1"
+# Bevy stops the app cleanly on Ctrl+C through ctrlc; `termination` makes SIGTERM and SIGHUP (a
+# logout, `kill`) do the same, so they are not taken for crashes (`cadrs_app::crash`).
+ctrlc = { version = "3.4", features = ["termination"] }
 # The browser build's glue (`cadrs_fs`, `cadrs`'s page): the versions Bevy and wgpu use.
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

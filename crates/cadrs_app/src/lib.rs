@@ -23,6 +23,7 @@ pub mod camera;
 pub mod change_preview;
 pub mod collab;
 pub mod composite_ui;
+pub mod crash;
 pub mod create_selection;
 pub mod cursor;
 pub mod cut_list;
@@ -202,6 +203,18 @@ pub fn log_filter() -> String {
         "{}iroh=error,iroh_gossip=error,noq_proto=error",
         bevy::log::DEFAULT_FILTER
     )
+}
+
+/// The app's tracing layers (Bevy's `LogPlugin::custom_layer`): the frame profiler's and, in a
+/// person's runs, the session's log file ([`crash::Session`]).
+pub fn log_layers(app: &mut App) -> Option<bevy::log::BoxedLayer> {
+    let mut layers: Vec<bevy::log::BoxedLayer> = Vec::new();
+    layers.extend(frame_profile::profiler_layer(app));
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(s) = app.world().get_resource::<crash::Session>() {
+        layers.push(s.log_layer());
+    }
+    Some(Box::new(layers))
 }
 
 pub const GITHUB: &str = "https://github.com/rvdende/cadrs";
@@ -974,6 +987,7 @@ impl Plugin for CadrsAppPlugin {
                 network::NetworkPlugin,
                 identity::IdentityPlugin,
                 app_menu::AppMenuPlugin,
+                crash::CrashPlugin,
             ))
             .add_plugins((
                 parts::PartsPlugin,

@@ -23,6 +23,8 @@ The documents page's app menu has **Open documents folder**, which opens it.
 - `identity.key` and `identities.ron`: who you are to the people you share documents with. Your
   cadrs ID is made from the key, and `identities.ron` holds the user ID your documents record as
   their owner. Keep the key private, as you would a password.
+- `logs/` and `crashes/`: the logs of the last sessions and the crash reports (see
+  [Reporting a problem](../reference/reporting-problems.md)). They aren't needed in a backup.
 
 The files are plain text, apart from the pictures and imported files, and are the same on every
 system, so a folder from Windows works on Linux or macOS.

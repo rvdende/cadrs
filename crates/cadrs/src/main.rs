@@ -224,10 +224,16 @@ fn main() -> AppExit {
         cfg!(feature = "profiler"),
         profile_cpu,
     ));
+    // A person's runs keep a log file and crash reports (issue #319, `cadrs_app::crash`): made
+    // before the log plugin, which writes the log there too.
+    let crash_session = (!scripted && !opts.headless)
+        .then(|| data_dir.clone().or_else(Store::default_root))
+        .flatten()
+        .and_then(|root| cadrs_app::crash::start(&root, &mut app));
     app.add_plugins(
         cadrs_harness::default_plugins(&opts).set(bevy::log::LogPlugin {
             filter: cadrs_app::log_filter(),
-            custom_layer: cadrs_app::frame_profile::profiler_layer,
+            custom_layer: cadrs_app::log_layers,
             ..default()
         }),
     );
@@ -345,6 +351,9 @@ fn main() -> AppExit {
         .run();
     // The document histories still being written.
     cadrs_core::history_log::flush_saves();
+    if crash_session.is_some() {
+        cadrs_app::crash::clean_exit();
+    }
     exit
 }
 
