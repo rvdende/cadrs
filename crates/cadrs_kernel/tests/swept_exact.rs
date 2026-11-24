@@ -809,6 +809,97 @@ fn a_ball_screwed_round_a_tight_helix_is_exact() {
     assert!(off < 1e-5, "a point of the surface is {off} off");
 }
 
+/// A ring (radii 6 and 2) slid flat, in closed form: everything within 2 of the flat region its
+/// core circle sweeps. Past its hole (a slide of 15) that region is the stadium of the circle's
+/// disc, and the solid's volume Steiner's 2rA + πr²P/2 + 4πr³/3 for a flat convex region of
+/// area A and perimeter P; short of it (a slide of 5) the region has the lens the two ends'
+/// discs share for a hole, and every point of the solid's faces is 2 from it. Analytic faces
+/// only, and few.
+#[test]
+fn a_ring_slid_flat_is_exact() {
+    use std::f64::consts::PI;
+    let (big, small) = (6.0f64, 2.0f64);
+    let slid = |len: f64| {
+        let mut k = NativeKernel::new();
+        let ring = k
+            .primitive(&Primitive::torus(
+                Point3::origin(),
+                Vector3::z(),
+                big,
+                small,
+            ))
+            .unwrap()
+            .first()
+            .unwrap();
+        let swept = k
+            .sweep_solid(ring, &SolidMotion::slide(Vector3::new(len, 0.0, 0.0)))
+            .unwrap()
+            .bodies[0];
+        let body = k.get(swept).unwrap();
+        let faults = body.check();
+        assert!(faults.is_empty(), "{faults:?}");
+        assert!(
+            body.faces.len() <= 16
+                && body
+                    .faces
+                    .iter()
+                    .all(|f| !matches!(f.surf, Surface::Nurbs(_))),
+            "{} faces",
+            body.faces.len()
+        );
+        (k, swept)
+    };
+    let (k, past) = slid(15.0);
+    let (area, perimeter) = (PI * big * big + 2.0 * big * 15.0, 2.0 * PI * big + 30.0);
+    let want =
+        2.0 * small * area + PI * small * small * perimeter / 2.0 + 4.0 * PI * small.powi(3) / 3.0;
+    let volume = k.mass_properties(past).unwrap().volume;
+    assert!((volume - want).abs() < 1e-8 * want, "{volume} {want}");
+    // Short of its hole: each mesh corner's distance from the region.
+    let len = 5.0;
+    let (k, short) = slid(len);
+    let mesh = k
+        .tessellate(
+            short,
+            Tessellation {
+                deflection: 0.01,
+                angle: 15f64.to_radians(),
+            },
+        )
+        .unwrap();
+    let ends = [(0.0f64, 0.0f64), (len, 0.0)];
+    let corner = (len / 2.0, (big * big - len * len / 4.0).sqrt());
+    let from_region = |x: f64, y: f64| -> f64 {
+        let to = |c: (f64, f64)| (x - c.0).hypot(y - c.1);
+        let from_segment = (x - x.clamp(0.0, len)).hypot(y);
+        if from_segment > big {
+            return from_segment - big;
+        }
+        if to(ends[0]) >= big || to(ends[1]) >= big {
+            return 0.0;
+        }
+        // In the lens: its nearest arc, where the foot is on the lens's side of the other
+        // circle, else a corner.
+        let mut least = (x - corner.0).hypot(y.abs() - corner.1);
+        for (c, other) in [(ends[0], ends[1]), (ends[1], ends[0])] {
+            let d = to(c);
+            if d > 1e-12 {
+                let foot = (c.0 + (x - c.0) * big / d, c.1 + (y - c.1) * big / d);
+                if (foot.0 - other.0).hypot(foot.1 - other.1) <= big {
+                    least = least.min(big - d);
+                }
+            }
+        }
+        least
+    };
+    let mut off: f64 = 0.0;
+    for p in &mesh.positions {
+        let flat = from_region(p[0], p[1]);
+        off = off.max((flat.hypot(p[2]) - small).abs());
+    }
+    assert!(off < 1e-5, "a point of the surface is {off} off");
+}
+
 /// A flat end mill (Ø1, pointing at the bar's axis, its tip 1 into a bar of radius 10)
 /// screwed half a turn round the bar, rising 6 a turn along it: a rotary roughing pass, as
 /// CAM's exact simulation cuts it. Its swept pieces are made exactly; cut from the bar they

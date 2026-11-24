@@ -2051,6 +2051,135 @@ fn slid_ellipsoid(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option
     }))
 }
 
+/// A ring slid square to its axis, in closed form. The ring (radii R and r) is everything
+/// within r of its core circle, so slid it is everything within r of the flat region the
+/// circle sweeps: the stadium the circle's disc sweeps less the lens the discs at both ends
+/// share (which the circle never crosses; nothing where the slide is longer than 2R). Put
+/// together from solids that meet on whole faces only: the rounded disc's back half at the
+/// start and fore half at the end (its meridian, a slot of half-width r, turned half a turn),
+/// the slot between them extruded along the slide, and, taken away, what both ends' holes
+/// share (each the spool inside the ring between its two flats). The faces' sweeps of such a
+/// ring overlap, so their gluing failed and a ladder of refused unions followed. None for any
+/// other body or motion, or where a step fails (the general sweep then).
+fn ring_slid_flat(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Result<OpResult>> {
+    if crate::native::env_flag!("CADRS_NO_RING_SLID_FLAT") {
+        return None;
+    }
+    let ([RigidStep::Slide { from, to }], [face]) = (steps, b.faces.as_slice()) else {
+        return None;
+    };
+    let Surface::Torus { f, rmaj, rmin } = &face.surf else {
+        return None;
+    };
+    let (big, small) = (*rmaj, *rmin);
+    let d = to - from;
+    let len = d.norm();
+    let z = f.z.normalize();
+    if b.solids.len() != 1
+        || !(small > tol::POINT && big > small * (1.0 + 1e-6))
+        || len <= 1e-6 * big
+        || d.dot(&z).abs() > tol::ANGULAR * len
+    {
+        return None;
+    }
+    let x = d / len;
+    let y = z.cross(&x);
+    let (c0, c1) = (f.o + from, f.o + to);
+    let unit = nalgebra::Unit::new_normalize;
+    let at = nalgebra::Point2::new;
+    let line = |a: P2, b: P2| Curve2::Line { a, b, source: None };
+    let region = |curves: Vec<Curve2>| Region {
+        outer: Loop { curves },
+        holes: vec![],
+        source: Some(0),
+    };
+    // The plane across the slide through `o`, its first axis toward `side` and its second z.
+    let across = |o: P3, side: f64| Plane {
+        origin: o,
+        x_dir: unit(y * side),
+        normal: unit(x * side),
+    };
+    let made = (|| -> Result<Body> {
+        let mut s = NativeKernel::new();
+        let first = |r: OpResult| -> Result<BodyId> {
+            r.bodies.first().copied().ok_or_else(|| {
+                KernelError::EmptyResult("a ring slid flat: a piece is empty".into())
+            })
+        };
+        // The slot across the slide, and its half from the axis out (the rounded disc's
+        // meridian).
+        let slot = region(vec![
+            line(at(-big, -small), at(big, -small)),
+            Curve2::arc(at(big, 0.0), small, -FRAC_PI_2, PI),
+            line(at(big, small), at(-big, small)),
+            Curve2::arc(at(-big, 0.0), small, FRAC_PI_2, PI),
+        ]);
+        let meridian = || {
+            region(vec![
+                line(at(0.0, -small), at(big, -small)),
+                Curve2::arc(at(big, 0.0), small, -FRAC_PI_2, PI),
+                line(at(big, small), at(0.0, small)),
+                line(at(0.0, small), at(0.0, -small)),
+            ])
+        };
+        // (A meridian toward +y turns counter-clockwise about z through −x: the back half.)
+        let half = |s: &mut NativeKernel, o: P3, side: f64| -> Result<BodyId> {
+            let axis = Axis {
+                origin: o,
+                dir: unit(z),
+            };
+            first(s.revolve(&Profile::new(across(o, side), vec![meridian()]), axis, PI)?)
+        };
+        let back = half(&mut s, c0, 1.0)?;
+        let fore = half(&mut s, c1, -1.0)?;
+        let between = first(s.extrude_with(
+            &Profile::new(across(c0, 1.0), vec![slot]),
+            &ExtrudeSpec::blind(unit(x), len),
+        )?)?;
+        let mut whole = first(s.boolean(BoolOp::Union, back, &[between, fore])?)?;
+        if len < 2.0 * big * (1.0 - 1e-9) {
+            // The spool inside the ring: its meridian from the axis to the tube's inner half.
+            let spool = |s: &mut NativeKernel, o: P3| -> Result<BodyId> {
+                let inside = region(vec![
+                    Curve2::arc(at(big, 0.0), small, FRAC_PI_2, PI),
+                    line(at(big, -small), at(0.0, -small)),
+                    line(at(0.0, -small), at(0.0, small)),
+                    line(at(0.0, small), at(big, small)),
+                ]);
+                let axis = Axis {
+                    origin: o,
+                    dir: unit(z),
+                };
+                first(s.revolve(&Profile::new(across(o, 1.0), vec![inside]), axis, TAU)?)
+            };
+            let (h0, h1) = (spool(&mut s, c0)?, spool(&mut s, c1)?);
+            let lens = first(s.boolean(BoolOp::Intersect, h0, &[h1])?)?;
+            whole = first(s.boolean(BoolOp::Subtract, whole, &[lens])?)?;
+        }
+        let body = (**s.get(whole)?).clone();
+        let problems = body.check();
+        if body.solids.len() != 1 || !problems.is_empty() {
+            return Err(KernelError::InvalidResult {
+                op: "a ring slid flat",
+                why: problems
+                    .into_iter()
+                    .next()
+                    .unwrap_or_else(|| "not one solid".into()),
+            });
+        }
+        Ok(body)
+    })();
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG")
+        && let Err(e) = &made
+    {
+        eprintln!("a ring slid flat: {e}");
+    }
+    Some(made.map(|body| OpResult {
+        bodies: vec![k.insert(body)],
+        history: History::default(),
+    }))
+}
+
 pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> Result<OpResult> {
     // An endless turn or screw of a revolved body: its outline as fine as [`FINE_SLICES`], and
     // where that builds nothing, as [`COARSE_SLICES`].
@@ -2662,6 +2791,9 @@ fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> R
         }
         if let Some(r) = slid_ellipsoid(k, &b, steps) {
             return r;
+        }
+        if let Some(Ok(r)) = ring_slid_flat(k, &b, steps) {
+            return Ok(r);
         }
         let mut exact = None;
         // A pipe slid: exactly, as everything within its radius of the strip its spine sweeps.
@@ -4845,6 +4977,23 @@ fn cut_swept_in(
         && let Some(r) = cut_rising_screw(k, target, &b, o, frames.up, angle, rise)
     {
         return Ok(r);
+    }
+    // A ring slid square to its axis: what it fills, in closed form, cut from the target.
+    if let SolidMotion::Rigid { steps } = motion
+        && let Some(Ok(r)) = ring_slid_flat(k, &b, steps)
+    {
+        let cut = k.boolean(crate::BoolOp::Subtract, target, &r.bodies);
+        for s in &r.bodies {
+            k.release(*s);
+        }
+        if let Ok(c) = cut
+            && c.bodies.iter().all(|&id| k.sound(id))
+        {
+            return Ok(c);
+        }
+        if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
+            eprintln!("swept cut: the slid ring's sweep wouldn't cut from the target");
+        }
     }
     // A torus slid: by its envelope first (its leading faces' sweeps cross one another where
     // its outline folds).
