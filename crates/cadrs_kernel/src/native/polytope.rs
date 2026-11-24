@@ -92,13 +92,40 @@ impl Polytope {
     /// The body as a polytope, where it is one: a single solid of flat faces with straight edges,
     /// one loop each, every vertex behind every face's plane (within `eps`).
     pub(crate) fn of_body(b: &Body, eps: f64) -> Option<Self> {
+        Self::of_body_with(b, eps, false)
+    }
+
+    /// [`Self::of_body`], a face on a B-spline that is a plane taken for flat too (a loft's
+    /// wall between two straight sides in one plane): for a reader of the polytope's shape
+    /// alone, which puts no face back on its body's surface.
+    pub(crate) fn of_flat_body(b: &Body, eps: f64) -> Option<Self> {
+        Self::of_body_with(b, eps, true)
+    }
+
+    fn of_body_with(b: &Body, eps: f64, splines: bool) -> Option<Self> {
         if b.solids.len() != 1 || b.shells.len() != 1 || !b.shells[0].closed || b.faces.len() < 4 {
             return None;
         }
         let mut faces = Vec::with_capacity(b.faces.len());
         for (fi, f) in b.faces.iter().enumerate() {
-            let Surface::Plane { f: fr } = &f.surf else {
-                return None;
+            // (A flat B-spline's plane, turned to face as the B-spline does.)
+            let flat;
+            let fr = match &f.surf {
+                Surface::Plane { f: fr } => fr,
+                Surface::Nurbs(n) if splines => {
+                    let Some(Surface::Plane { f: mut fr }) =
+                        super::recognize::surface_through_poles(n)
+                    else {
+                        return None;
+                    };
+                    let ((u0, u1), (v0, v1)) = f.surf.param_box();
+                    if f.surf.normal(0.5 * (u0 + u1), 0.5 * (v0 + v1)).dot(&fr.z) < 0.0 {
+                        fr.z = -fr.z;
+                    }
+                    flat = fr;
+                    &flat
+                }
+                _ => return None,
             };
             let [lp] = f.loops.as_slice() else {
                 return None;
@@ -123,6 +150,11 @@ impl Polytope {
             .iter()
             .all(|f| b.verts.iter().all(|v| (v.p - f.o).dot(&f.n) <= eps));
         convex.then_some(Polytope { faces })
+    }
+
+    /// Each face's unit normal, out of the solid, and its corners, counter-clockwise about it.
+    pub(crate) fn rings(&self) -> Vec<(V3, Vec<P3>)> {
+        self.faces.iter().map(|f| (f.n, f.ring.clone())).collect()
     }
 
     /// Each face's plane: a point of it and its unit normal, out of the solid. A polytope read

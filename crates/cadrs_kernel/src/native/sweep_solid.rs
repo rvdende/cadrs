@@ -2051,6 +2051,335 @@ fn slid_ellipsoid(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option
     }))
 }
 
+/// A convex polyhedron turned whole turns about an axis clear of it, in closed form: the solid
+/// of revolution of its shadow in (ρ, h), distance from the axis and height along it. At a
+/// height h the polyhedron is a convex polygon: its farthest point from the axis is on an edge
+/// of the polyhedron, and its nearest on an edge or at the foot of the axis's perpendicular to
+/// a face's line there. Along an edge ρ² is a quadratic in h, and along a face's feet too (a
+/// perfect square: the feet run along a line through the axis), so the shadow's outer side is
+/// the upper envelope of the edges' quadratics and its inner side the lower envelope of the
+/// edges' and the feet's, each found from the quadratics' crossings. Each piece of an envelope
+/// turns into a face about the axis, the hyperboloid, cone or cylinder its line sweeps, between
+/// the circles at its ends; a flat ring closes the top and the bottom where the polyhedron
+/// ends in a face. None for any other body, or one the axis reaches.
+fn polyhedron_turned(k: &mut NativeKernel, b: &Body, axis: Axis) -> Option<Result<OpResult>> {
+    use super::xbuild::{XBuilder, XFace};
+    if crate::native::env_flag!("CADRS_NO_POLYHEDRON_TURNED") {
+        return None;
+    }
+    let size = b.bbox().diagonal().max(tol::POINT);
+    let eps = 1e-9 * size;
+    let poly = super::polytope::Polytope::of_flat_body(b, eps)?;
+    let faces = poly.rings();
+    let o = axis.origin;
+    let z = axis.dir.into_inner().normalize();
+    let height = |p: &P3| (p - o).dot(&z);
+    let out = |p: &P3| {
+        let w = p - o;
+        w - z * w.dot(&z)
+    };
+    // ρ² = q₀ h² + q₁ h + q₂ along a line of the polyhedron, from the height `lo` to `hi`, the
+    // line's points there `ends`.
+    struct Along {
+        q: [f64; 3],
+        lo: f64,
+        hi: f64,
+        ends: [P3; 2],
+    }
+    let value = |q: &[f64; 3], h: f64| (q[0] * h + q[1]) * h + q[2];
+    // The edges, each once, from its lower end up (a level one is no side of the shadow).
+    let mut edges: Vec<Along> = Vec::new();
+    let mut seen: Vec<(P3, P3)> = Vec::new();
+    for (_, ring) in &faces {
+        for i in 0..ring.len() {
+            let (p, q) = (ring[i], ring[(i + 1) % ring.len()]);
+            let same = |a: &P3, c: &P3| (a - c).norm() < eps;
+            if seen
+                .iter()
+                .any(|(a, c)| (same(a, &p) && same(c, &q)) || (same(a, &q) && same(c, &p)))
+            {
+                continue;
+            }
+            seen.push((p, q));
+            let (p, q) = if height(&p) <= height(&q) {
+                (p, q)
+            } else {
+                (q, p)
+            };
+            let (h0, h1) = (height(&p), height(&q));
+            if h1 - h0 <= eps {
+                continue;
+            }
+            // Off the axis the edge's point at h is w₀ + (h − h₀) w′.
+            let (w0, dw) = (out(&p), (out(&q) - out(&p)) / (h1 - h0));
+            let a = dw.norm_squared();
+            let cross = w0.dot(&dw);
+            edges.push(Along {
+                q: [
+                    a,
+                    2.0 * cross - 2.0 * h0 * a,
+                    w0.norm_squared() - 2.0 * h0 * cross + h0 * h0 * a,
+                ],
+                lo: h0,
+                hi: h1,
+                ends: [p, q],
+            });
+        }
+    }
+    // The faces' feet: at h the face's line is n_r·w = c − n_z h, its foot n_r (c − n_z h) / n_r²,
+    // while that is on the face.
+    let mut feet: Vec<Along> = Vec::new();
+    // (And where the axis is inside every face's plane, it is inside the polyhedron.)
+    let (mut in_lo, mut in_hi) = (f64::NEG_INFINITY, f64::INFINITY);
+    for (n, ring) in &faces {
+        let nz = n.dot(&z);
+        let nr = n - z * nz;
+        let g2 = nr.norm_squared();
+        let c = n.dot(&(ring[0] - o));
+        if nz.abs() > 1e-12 {
+            if nz > 0.0 {
+                in_hi = in_hi.min(c / nz);
+            } else {
+                in_lo = in_lo.max(c / nz);
+            }
+        } else if c < 0.0 {
+            (in_lo, in_hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        }
+        if g2 < 1e-18 {
+            continue;
+        }
+        let (p0, d) = (o + nr * (c / g2), z - nr * (nz / g2));
+        let (mut lo, mut hi) = (f64::NEG_INFINITY, f64::INFINITY);
+        for i in 0..ring.len() {
+            let (a, e) = (ring[i], ring[(i + 1) % ring.len()]);
+            // (Inside the side a → e of a ring that runs counter-clockwise about n.)
+            let m = n.cross(&(e - a));
+            let (k0, k1) = ((p0 - a).dot(&m), d.dot(&m));
+            if k1.abs() <= 1e-14 * m.norm() {
+                if k0 < 0.0 {
+                    (lo, hi) = (f64::INFINITY, f64::NEG_INFINITY);
+                }
+            } else if k1 > 0.0 {
+                lo = lo.max(-k0 / k1);
+            } else {
+                hi = hi.min(-k0 / k1);
+            }
+        }
+        if hi - lo <= eps {
+            continue;
+        }
+        feet.push(Along {
+            q: [nz * nz / g2, -2.0 * c * nz / g2, c * c / g2],
+            lo,
+            hi,
+            ends: [p0 + d * lo, p0 + d * hi],
+        });
+    }
+    if in_hi >= in_lo {
+        return None;
+    }
+    let heights = || faces.iter().flat_map(|(_, r)| r.iter()).map(height);
+    let (bottom, top) = (
+        heights().fold(f64::INFINITY, f64::min),
+        heights().fold(f64::NEG_INFINITY, f64::max),
+    );
+    if top - bottom <= 1e-6 * size {
+        return None;
+    }
+    // The upper or lower envelope of `lines` from the bottom to the top: (line, from, to).
+    let envelope = |lines: &[&Along], upper: bool| -> Option<Vec<(usize, f64, f64)>> {
+        let mut cuts = vec![bottom, top];
+        for a in lines {
+            cuts.extend([a.lo, a.hi]);
+        }
+        for (i, a) in lines.iter().enumerate() {
+            for c in &lines[i + 1..] {
+                let (l, h) = (a.lo.max(c.lo), a.hi.min(c.hi));
+                if h <= l {
+                    continue;
+                }
+                // Where the two are level: the difference's roots.
+                let d = [a.q[0] - c.q[0], a.q[1] - c.q[1], a.q[2] - c.q[2]];
+                let scale = d[0].abs() * h.abs().max(l.abs()).powi(2)
+                    + d[1].abs() * h.abs().max(l.abs())
+                    + d[2].abs();
+                if d[0].abs() * (h - l).powi(2) > 1e-12 * scale.max(f64::MIN_POSITIVE) {
+                    let disc = d[1] * d[1] - 4.0 * d[0] * d[2];
+                    if disc >= 0.0 {
+                        let s = disc.sqrt();
+                        // (The larger root by the stable sum, the other from the product.)
+                        let big = -0.5 * (d[1] + d[1].signum() * s);
+                        let big = if d[1] == 0.0 { 0.5 * s } else { big };
+                        cuts.push(big / d[0]);
+                        if big != 0.0 {
+                            cuts.push(d[2] / big);
+                        }
+                    }
+                } else if d[1].abs() > 0.0 {
+                    cuts.push(-d[2] / d[1]);
+                }
+            }
+        }
+        cuts.retain(|c| c.is_finite() && *c >= bottom && *c <= top);
+        cuts.sort_by(f64::total_cmp);
+        cuts.dedup_by(|a, c| (*a - *c).abs() <= eps);
+        *cuts.first_mut()? = bottom;
+        *cuts.last_mut()? = top;
+        let mut pieces: Vec<(usize, f64, f64)> = Vec::new();
+        for w in cuts.windows(2) {
+            let mid = 0.5 * (w[0] + w[1]);
+            let at = lines
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| a.lo - eps <= w[0] && w[1] <= a.hi + eps)
+                .map(|(i, a)| (value(&a.q, mid), i));
+            let (_, i) = if upper {
+                at.max_by(|x, y| x.0.total_cmp(&y.0))?
+            } else {
+                at.min_by(|x, y| x.0.total_cmp(&y.0))?
+            };
+            match pieces.last_mut() {
+                Some(last) if last.0 == i => last.2 = w[1],
+                _ => pieces.push((i, w[0], w[1])),
+            }
+        }
+        Some(pieces)
+    };
+    let outer_lines: Vec<&Along> = edges.iter().collect();
+    let inner_lines: Vec<&Along> = edges.iter().chain(&feet).collect();
+    let outer = envelope(&outer_lines, true)?;
+    let inner = envelope(&inner_lines, false)?;
+    let radius = |lines: &[&Along], piece: &(usize, f64, f64), h: f64| {
+        value(&lines[piece.0].q, h).max(0.0).sqrt()
+    };
+    // (Clear of the axis all the way.)
+    if inner.iter().any(|p| {
+        (0..=8).any(|i| radius(&inner_lines, p, p.1 + (p.2 - p.1) * i as f64 / 8.0) <= 1e-6 * size)
+    }) {
+        return None;
+    }
+    let frame = Frame::from_z(o, z);
+    let mut xb = XBuilder::new();
+    let circle = |xb: &mut XBuilder, h: f64, r: f64| -> Option<usize> {
+        let c = o + z * h;
+        let v = xb.vertex(c + frame.x * r);
+        xb.edge(
+            Curve::Circle {
+                c,
+                x: frame.x,
+                y: frame.y,
+                r,
+            },
+            v,
+            v,
+        )
+    };
+    // Each side's circles, bottom to top; the two sides share one where they meet.
+    let rings_of = |xb: &mut XBuilder,
+                    lines: &[&Along],
+                    pieces: &[(usize, f64, f64)],
+                    shared: [Option<usize>; 2]|
+     -> Option<Vec<usize>> {
+        let n = pieces.len();
+        (0..=n)
+            .map(|j| {
+                if j == 0 && shared[0].is_some() {
+                    return shared[0];
+                }
+                if j == n && shared[1].is_some() {
+                    return shared[1];
+                }
+                let (piece, h) = if j < n {
+                    (&pieces[j], pieces[j].1)
+                } else {
+                    (&pieces[n - 1], pieces[n - 1].2)
+                };
+                circle(xb, h, radius(lines, piece, h))
+            })
+            .collect()
+    };
+    let outer_rings = rings_of(&mut xb, &outer_lines, &outer, [None, None])?;
+    let meet = |h: f64, o_piece: &(usize, f64, f64), i_piece: &(usize, f64, f64)| {
+        radius(&outer_lines, o_piece, h) - radius(&inner_lines, i_piece, h) <= 1e-7 * size
+    };
+    let closed = [
+        meet(bottom, &outer[0], &inner[0]),
+        meet(top, outer.last()?, inner.last()?),
+    ];
+    let inner_rings = rings_of(
+        &mut xb,
+        &inner_lines,
+        &inner,
+        [
+            closed[0].then_some(outer_rings[0]),
+            closed[1].then_some(*outer_rings.last()?),
+        ],
+    )?;
+    let mut made = Vec::new();
+    let mut side = |xb: &mut XBuilder,
+                    lines: &[&Along],
+                    pieces: &[(usize, f64, f64)],
+                    rings: &[usize],
+                    outward: bool| {
+        for (j, &(i, lo, hi)) in pieces.iter().enumerate() {
+            let a = lines[i];
+            let at = |h: f64| a.ends[0] + (a.ends[1] - a.ends[0]) * ((h - a.lo) / (a.hi - a.lo));
+            let surf = Surface::Revolution {
+                f: frame,
+                m: Curve::Line {
+                    o: at(lo),
+                    d: at(hi) - at(lo),
+                },
+            };
+            // (The turned line's surface points away from the axis: the inner side's faces
+            // the other way.)
+            made.push(xb.face(XFace {
+                surf,
+                sense: outward,
+                loops: vec![vec![(rings[j], outward)], vec![(rings[j + 1], !outward)]],
+            }));
+        }
+    };
+    side(&mut xb, &outer_lines, &outer, &outer_rings, true);
+    side(&mut xb, &inner_lines, &inner, &inner_rings, false);
+    for (end, h, up) in [(0, bottom, false), (1, top, true)] {
+        if closed[end] {
+            continue;
+        }
+        let (ro, ri) = if end == 0 {
+            (outer_rings[0], inner_rings[0])
+        } else {
+            (*outer_rings.last()?, *inner_rings.last()?)
+        };
+        made.push(xb.face(XFace {
+            surf: Surface::Plane {
+                f: Frame::from_z(o + z * h, z),
+            },
+            sense: up,
+            loops: vec![vec![(ro, up)], vec![(ri, !up)]],
+        }));
+    }
+    let shell = xb.shell(made, true);
+    xb.solid(vec![shell]);
+    let (g, problems) = xb.finish();
+    let checked = g.check_with(super::topo::CheckLevel::Full);
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
+        eprintln!(
+            "a polyhedron turned: {} faces ({} outside, {} inside), problems {problems:?}, check {checked:?}",
+            g.faces.len(),
+            outer.len(),
+            inner.len()
+        );
+    }
+    if !problems.is_empty() || g.solids.len() != 1 || !checked.is_empty() {
+        return None;
+    }
+    Some(Ok(OpResult {
+        bodies: vec![k.insert(g)],
+        history: History::default(),
+    }))
+}
+
 /// A ring moved in its own plane (slid square to its axis, or turned about an axis parallel
 /// to its own and clear of it), in closed form. The ring (radii R and r) is everything within
 /// r of its core circle, so moved flat it is everything within r of the flat region the circle
@@ -2943,6 +3272,14 @@ fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> R
             Some(rev) => meshed(k, &b, &|p| rev.distance(p), &place),
             None => meshed_body(k, &b, &place),
         };
+    }
+    // A convex polyhedron turned whole turns about an axis clear of it: the solid of revolution
+    // of its shadow in (distance, height), in closed form.
+    if let SolidMotion::Turn { axis } = *motion
+        && revolved(&b).is_none()
+        && let Some(Ok(r)) = polyhedron_turned(k, &b, axis)
+    {
+        return Ok(r);
     }
     let rev = revolved(&b).ok_or(KernelError::Unsupported(
         "sweeping solids other than a torus or a convex section revolved",

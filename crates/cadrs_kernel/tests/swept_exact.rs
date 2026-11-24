@@ -944,6 +944,112 @@ fn a_ring_moved_in_its_plane_is_exact() {
     assert!(off < 1e-5, "a point of the surface is {off} off");
 }
 
+/// A block turned whole turns about an axis clear of it, in closed form: the solid of revolution
+/// of its shadow in (distance, height). Standing along the axis (4 ≤ x ≤ 7, |y| ≤ 2, 0 ≤ z ≤ 5
+/// about z) the shadow is a rectangle, from the nearest face (4) out to the farthest edges
+/// (√53): π (53 − 16) 5, and its faces two cylinders and two flat rings. Leaning (turned 20°
+/// about y first, then 5° about x) its outer side is hyperboloids, its edges' sweeps, and its
+/// inner side cones and hyperboloids: its volume the shadow's, the heights sliced and at each
+/// the box's nearest and farthest points from the axis found by a search of its own.
+#[test]
+fn a_block_turned_whole_turns_is_exact() {
+    use std::f64::consts::PI;
+    let z = Axis::new(Point3::origin(), Vector3::z());
+    let turned = |k: &mut NativeKernel, body: BodyId| {
+        let swept = k
+            .sweep_solid(body, &SolidMotion::Turn { axis: z })
+            .unwrap()
+            .bodies[0];
+        let faults = k.get(swept).unwrap().check();
+        assert!(faults.is_empty(), "{faults:?}");
+        swept
+    };
+    let block = |k: &mut NativeKernel| {
+        k.primitive(&Primitive::block(
+            Point3::new(4.0, -2.0, 0.0),
+            Point3::new(7.0, 2.0, 5.0),
+        ))
+        .unwrap()
+        .first()
+        .unwrap()
+    };
+    let mut k = NativeKernel::new();
+    let upright = block(&mut k);
+    let swept = turned(&mut k, upright);
+    assert_eq!(k.get(swept).unwrap().faces.len(), 4);
+    let want = PI * (53.0 - 16.0) * 5.0;
+    let volume = k.mass_properties(swept).unwrap().volume;
+    assert!((volume - want).abs() < 1e-9 * want, "{volume} {want}");
+    // Leaning.
+    let about = |dir: Vector3<f64>, angle: f64| {
+        Transform::rotation_wrt_point(
+            nalgebra::UnitQuaternion::from_axis_angle(&nalgebra::Unit::new_normalize(dir), angle),
+            Point3::new(5.5, 0.0, 2.5),
+        )
+    };
+    let lean = [
+        about(Vector3::y(), 20f64.to_radians()),
+        about(Vector3::x(), 5f64.to_radians()),
+    ];
+    let mut body = block(&mut k);
+    for t in &lean {
+        body = k.transform(body, t).unwrap().bodies[0];
+    }
+    let corners: Vec<Point3<f64>> = k.get(body).unwrap().verts.iter().map(|v| v.p).collect();
+    assert_eq!(corners.len(), 8);
+    let swept = turned(&mut k, body);
+    assert!(
+        k.get(swept)
+            .unwrap()
+            .faces
+            .iter()
+            .all(|f| !matches!(f.surf, Surface::Nurbs(_))),
+        "its faces are the lines' own sweeps"
+    );
+    // The shadow by slices: at each height the box's section is the hull of where its edges
+    // cross it; the farthest of those points from the axis, and the nearest point of the hull.
+    let edges: Vec<(Point3<f64>, Point3<f64>)> = {
+        let b = k.get(body).unwrap();
+        b.edges
+            .iter()
+            .map(|e| (b.verts[e.v[0]].p, b.verts[e.v[1]].p))
+            .collect()
+    };
+    assert_eq!(edges.len(), 12);
+    let (lo, hi) = corners
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| {
+            (a.min(p.z), b.max(p.z))
+        });
+    let n = 4000;
+    let mut want = 0.0;
+    for s in 0..n {
+        let h = lo + (hi - lo) * (s as f64 + 0.5) / n as f64;
+        let pts: Vec<(f64, f64)> = edges
+            .iter()
+            .filter(|(a, b)| (a.z - h) * (b.z - h) < 0.0)
+            .map(|(a, b)| {
+                let t = (h - a.z) / (b.z - a.z);
+                (a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
+            })
+            .collect();
+        let far = pts.iter().map(|p| p.0.hypot(p.1)).fold(0.0, f64::max);
+        // The nearest point of the hull: of every segment between two of the points (the
+        // hull's sides are among them, and the axis is outside it).
+        let mut near = f64::INFINITY;
+        for (i, a) in pts.iter().enumerate() {
+            for b in &pts[i + 1..] {
+                let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+                let t = (-(a.0 * dx + a.1 * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0);
+                near = near.min((a.0 + dx * t).hypot(a.1 + dy * t));
+            }
+        }
+        want += PI * (far * far - near * near) * (hi - lo) / n as f64;
+    }
+    let volume = k.mass_properties(swept).unwrap().volume;
+    assert!((volume - want).abs() < 1e-5 * want, "{volume} {want}");
+}
+
 /// A flat end mill (Ø1, pointing at the bar's axis, its tip 1 into a bar of radius 10)
 /// screwed half a turn round the bar, rising 6 a turn along it: a rotary roughing pass, as
 /// CAM's exact simulation cuts it. Its swept pieces are made exactly; cut from the bar they
