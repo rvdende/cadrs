@@ -41,12 +41,93 @@ pub(crate) fn pc_from(s: &Surface, e: &Edge, fwd: bool, at: Option<P2>) -> Curve
     }
 }
 
+/// Coedge `c`'s own p-curve as its p-curve on `s`, moved by whole periods to start at `at`:
+/// where it puts `s` on its edge at nine points (within the edge's tolerance) and, so moved,
+/// starts at `at` (within that too, in the surface's metric: on a closed B-spline surface an
+/// edge along the seam has a p-curve at either end of the range, and only one continues the
+/// chain). None otherwise.
+fn own_pc(s: &Surface, e: &Edge, c: &Coedge, at: Option<P2>) -> Option<Curve> {
+    let allowed = e.tol.max(tol::POINT);
+    let on = (0..=8).all(|i| {
+        let t = e.t[0] + (e.t[1] - e.t[0]) * i as f64 / 8.0;
+        let uv = c.pc.point(t);
+        (s.eval(uv.x, uv.y) - e.point(t)).norm() <= allowed
+    });
+    if !on {
+        return None;
+    }
+    let Some(at) = at else {
+        return Some(c.pc.clone());
+    };
+    let (t0, _) = co_range(e, c.fwd);
+    let p = c.pc.point(t0);
+    let du = if s.u_periodic() {
+        ((at.x - p.x) / TAU).round() * TAU
+    } else {
+        0.0
+    };
+    let dv = if s.v_periodic() {
+        ((at.y - p.y) / TAU).round() * TAU
+    } else {
+        0.0
+    };
+    let (mu, mv) = s.metric();
+    if ((p.x + du - at.x) * mu).hypot((p.y + dv - at.y) * mv) > allowed {
+        return None;
+    }
+    Some(if du == 0.0 && dv == 0.0 {
+        c.pc.clone()
+    } else {
+        c.pc.transformed(&Affine::translation(V3::new(du, dv, 0.0)))
+    })
+}
+
+/// The p-curve on `s` of a chain's first coedge, in the chart round `center` (its start the
+/// nearest of the surface's periods to it): the coedge's own where it is a fitted one that
+/// still puts `s` on its edge ([`own_pc`]), else fitted anew.
+fn first_pc(s: &Surface, b: &Body, c: &Coedge, center: P2) -> Curve {
+    let e = &b.edges[c.edge];
+    if matches!(c.pc, Curve::Nurbs(_))
+        && !e.degenerate
+        && !super::env_flag!("CADRS_NO_PC_REUSE")
+        && let Some(pc) = own_pc(s, e, c, None)
+    {
+        let p = pc.point(e.t[0]);
+        let du = if s.u_periodic() {
+            ((center.x - p.x) / TAU).round() * TAU
+        } else {
+            0.0
+        };
+        let dv = if s.v_periodic() {
+            ((center.y - p.y) / TAU).round() * TAU
+        } else {
+            0.0
+        };
+        return if du == 0.0 && dv == 0.0 {
+            pc
+        } else {
+            pc.transformed(&Affine::translation(V3::new(du, dv, 0.0)))
+        };
+    }
+    pcurve::pcurve(s, &e.curve, e.t[0], e.t[1], Some(center))
+}
+
 /// The p-curve of coedge `c` on `s` continuing a chain at `at` (None: as it lies). A
 /// degenerate edge (a pole) keeps its own p-curve, moved to start at `at`: its 3D curve is a
 /// point, which says nothing about the parameter line it runs along.
 fn chain_pc(s: &Surface, b: &Body, c: &Coedge, at: Option<P2>) -> Curve {
     let e = &b.edges[c.edge];
     if !e.degenerate {
+        // The coedge's own p-curve, where it is a fitted one that still puts `s` on the edge
+        // and starts where the chain is: faces merged on one surface keep the p-curves
+        // their edges had on it, and fitting one again is a projection a point (an
+        // intersection curve on a cylinder: milliseconds a merge).
+        if matches!(c.pc, Curve::Nurbs(_))
+            && !super::env_flag!("CADRS_NO_PC_REUSE")
+            && let Some(pc) = own_pc(s, e, c, at)
+        {
+            return pc;
+        }
         return pc_from(s, e, c.fwd, at);
     }
     let Some(at) = at else { return c.pc.clone() };
@@ -666,8 +747,7 @@ fn merge_band(b: &Body, g: &[usize]) -> Option<Face> {
     let mut at: Option<P2> = None;
     for (k, c) in lp.iter_mut().enumerate() {
         c.pc = if k == 0 {
-            let e = &b.edges[c.edge];
-            pcurve::pcurve(&surf, &e.curve, e.t[0], e.t[1], Some(center))
+            first_pc(&surf, b, c, center)
         } else {
             chain_pc(&surf, b, c, at)
         };
@@ -906,8 +986,7 @@ fn merge_closed(b: &mut Body, g: &[usize]) -> Option<Face> {
         // placed, a period along).
         let k0 = lp.iter().position(|x| !b.edges[x.edge].degenerate)?;
         lp.rotate_left(k0);
-        let e0 = &b.edges[lp[0].edge];
-        lp[0].pc = pcurve::pcurve(&surf, &e0.curve, e0.t[0], e0.t[1], Some(center));
+        lp[0].pc = first_pc(&surf, b, &lp[0], center);
         let n = lp.len();
         let mut at = co_uv(b, &lp[0], true);
         for k in 1..n {
@@ -1093,13 +1172,7 @@ fn merge_group(b: &mut Body, g: &[usize]) -> Option<Face> {
             ch.rotate_left(k);
         }
         let first = &ch[0];
-        let pc0 = pcurve::pcurve(
-            &surf,
-            &b.edges[first.edge].curve,
-            b.edges[first.edge].t[0],
-            b.edges[first.edge].t[1],
-            Some(center),
-        );
+        let pc0 = first_pc(&surf, b, first, center);
         let (t0, _) = co_range(&b.edges[first.edge], first.fwd);
         let p0 = pc0.point(t0);
         let start = P2::new(p0.x, p0.y);
