@@ -11,6 +11,7 @@
 - [History, versions and workspaces](concepts/history.md)
 - [Using one document in another](concepts/linking.md)
 - [Importing and exporting](concepts/import-export.md)
+- [Backing up and moving](concepts/backup.md)
 
 # Reference
 

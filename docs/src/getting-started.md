@@ -31,8 +31,8 @@ The newest release's are also at these addresses:
 
 cadrs keeps your documents in its data folder: `%APPDATA%\cadrs\` on Windows,
 `~/Library/Application Support/cadrs/` on macOS and `~/.local/share/cadrs/` on Linux. You don't
-need to open it yourself; the documents page has **Open documents folder** in its menu if you
-want to.
+need to open it yourself, but it's the folder to back up, and it can live elsewhere: see
+[Backing up and moving](concepts/backup.md).
 
 ## Building from the source code
 
