@@ -1739,7 +1739,24 @@ fn run_cmd(world: &mut World, cmd: &dyn cadrs_core::Command) -> Result<(), Strin
     doc_mut(world)?.execute(cmd).map_err(|e| e.to_string())
 }
 
+/// The changes as one undo step, all or none: a failed change takes back the ones before it.
 fn set_configuration(world: &mut World, p: &tools::SetConfiguration) -> Result<Value, String> {
+    let mark = doc(world)?.history.undo_len();
+    let r = set_configuration_steps(world, p);
+    let mut d = doc_mut(world)?;
+    if d.history.undo_len() > mark + 1 {
+        d.squash_since(mark, "Edit configuration");
+    }
+    if r.is_err() && d.history.undo_len() > mark {
+        d.undo();
+    }
+    r
+}
+
+fn set_configuration_steps(
+    world: &mut World,
+    p: &tools::SetConfiguration,
+) -> Result<Value, String> {
     use cadrs_core::configuration as cfg;
     let element = part_studio(doc(world)?, p.part_studio.as_deref())?;
     let config = |world: &World| -> Result<cfg::Configuration, String> {
@@ -3806,6 +3823,23 @@ mod tests {
         .unwrap();
         assert_eq!(c["configuration"]["active"], "Short");
         assert_eq!(c["configuration"]["presets"][1]["values"]["height"], 20.0);
+        // One undo step for the whole call; a failing call changes nothing.
+        let steps = world.resource::<ActiveDocument>().history.undo_len();
+        assert!(
+            set_configuration(
+                &mut world,
+                &p(json!({ "inputs": [{ "name": "w", "default": 3 }], "active": "Nope" }))
+            )
+            .is_err()
+        );
+        assert_eq!(world.resource::<ActiveDocument>().history.undo_len(), steps);
+        assert!(
+            get_configuration(&mut world, &p(json!({}))).unwrap()["configuration"]["inputs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|i| i["name"] != "w")
+        );
         let c = connect_parameter(
             &mut world,
             &p(json!({ "feature": "Extrude 1", "field": "Depth", "expr": "height" })),

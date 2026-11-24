@@ -1487,27 +1487,29 @@ pub fn switch_to_owner(world: &mut World, owner: cadrs_core::properties::Propert
 }
 
 /// The tab `element` is shown in: for a configured Part Studio's preset (an instance's
-/// generated studio), its Part Studio, switched to that preset; any other itself.
+/// generated studio), its Part Studio, as it is (switching its preset would be an edit; the
+/// features header's dropdown switches it), with a word when it shows another preset.
 fn show_preset(world: &mut World, element: ElementId) -> ElementId {
     let found =
         cadrs_core::configuration::configured_of(&world.resource::<ActiveDocument>().doc, element);
     let Some((studio, preset)) = found else {
         return element;
     };
-    let active = world
+    let names = world
         .resource::<ActiveDocument>()
         .doc
         .element(studio)
         .and_then(|e| e.configuration())
-        .map(|c| c.active);
-    if active != Some(preset) {
-        super::run(
-            world,
-            &cadrs_core::configuration::SetActivePreset {
-                element: studio,
-                preset,
-            },
+        .and_then(|c| Some((c.preset(preset)?.name.clone(), c.active_preset()?.clone())));
+    if let Some((wanted, active)) = names
+        && active.id != preset
+    {
+        let t = world.resource::<cadrs_ui::Theme>().clone();
+        let text = cadrs_ui::i18n::tr_with(
+            "asm-switch-to-preset",
+            &[("instance", &wanted), ("shown", &active.name)],
         );
+        cadrs_ui::show_toast(&mut world.commands(), &t, text);
     }
     studio
 }

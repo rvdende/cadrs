@@ -180,6 +180,18 @@ pub fn edited_feature(world: &World) -> Option<(ElementId, FeatureId)> {
     if let Some(s) = world.get_resource::<crate::sheetmetal_joint_ui::ModifyJointSession>() {
         return Some((s.element, s.feature));
     }
+    if let Some(s) = world.get_resource::<crate::composite_ui::CompositeSession>() {
+        return Some((s.element, s.feature));
+    }
+    if let Some(s) = world.get_resource::<crate::derived_ui::DerivedSession>() {
+        return Some((s.element, s.feature));
+    }
+    if let Some(s) = world.get_resource::<crate::import_dialog::ImportSession>() {
+        return Some((s.element, s.feature));
+    }
+    if let Some(s) = world.get_resource::<crate::image_dialog::ImageSession>() {
+        return Some((s.element, s.feature));
+    }
     // An assembly's Variable is a mate feature: not above anything in a feature list.
     if let Some(s) = world.get_resource::<VariableSession>()
         && s.mate.is_none()

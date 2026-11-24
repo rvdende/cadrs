@@ -6878,3 +6878,8 @@ node-view-show-table = Presets table
 node-view-hide-table = Hide presets table
 # A wire from a Variable dropped on a feature above it.
 node-view-variable-below = A Variable reaches only the features below it
+# Dynamic suppression ▸ Suppress by configuration ▸ a new boolean input that enables the feature.
+shell-doc-suppress-by-new-input = New input for this feature
+# Switch to on an instance of a configured Part Studio's preset, while the studio shows another
+# preset. { $instance } and { $shown } are preset names.
+asm-switch-to-preset = The instance is { $instance }; the Part Studio shows { $shown } (switch it in the feature list's header)

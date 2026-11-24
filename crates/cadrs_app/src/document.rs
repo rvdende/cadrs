@@ -4914,6 +4914,17 @@ fn on_feature_context_menu(
     let by_variable = el
         .and_then(|el| el.feature(row.0))
         .is_some_and(|f| f.suppress_by.is_some());
+    // The configuration's boolean inputs, for Suppress by configuration.
+    let switches: Vec<String> = el
+        .and_then(|el| el.configuration())
+        .map(|c| {
+            c.inputs
+                .iter()
+                .filter(|i| i.kind == cadrs_core::configuration::InputKind::Boolean)
+                .map(|i| i.name.clone())
+                .collect()
+        })
+        .unwrap_or_default();
     let can_edit = el.is_some_and(|el| crate::feature_list::editable(el, row.0));
     let bar_at_end = el.is_none_or(|el| el.rollback_index() == el.features().len());
     let below_this = el.is_some_and(|el| {
@@ -5125,7 +5136,7 @@ fn on_feature_context_menu(
         } else {
             MenuItem::new("feature-suppress", tr("common-suppress")).disabled(editing || in_dialog)
         })
-        // Suppression driven by a variable (IR5.5) or a configuration (out of scope).
+        // Suppression driven by a variable (IR5.5) or by a configuration's boolean input.
         .item(
             MenuItem::new(
                 "feature-dynamic-suppression",
@@ -5150,12 +5161,30 @@ fn on_feature_context_menu(
                         .into(),
                     );
                 }
+                // Suppress by configuration: an existing boolean input, or a new one made
+                // for the feature (`crate::node_view::suppress_by_new_input`).
+                let mut inputs: Vec<cadrs_ui::menu::MenuEntry> = switches
+                    .iter()
+                    .map(|n| {
+                        MenuItem::new(format!("feature-suppress-by-input-{n}"), format!("#{n}"))
+                            .disabled(in_dialog)
+                            .into()
+                    })
+                    .collect();
+                inputs.push(
+                    MenuItem::new(
+                        "feature-suppress-by-new-input",
+                        tr("shell-doc-suppress-by-new-input"),
+                    )
+                    .disabled(in_dialog)
+                    .into(),
+                );
                 items.push(
                     MenuItem::new(
                         "feature-suppress-by-configuration",
                         tr("shell-doc-suppress-by-configuration"),
                     )
-                    .planned()
+                    .submenu(inputs)
                     .into(),
                 );
                 items
@@ -5339,6 +5368,17 @@ fn on_feature_menu_action(
         }
         "feature-remove-suppression-variable" => {
             commands.queue(move |world: &mut World| crate::suppress_variable::remove(world, id))
+        }
+        // Suppress by configuration: a boolean input of the configuration, or a new one.
+        "feature-suppress-by-new-input" => commands
+            .queue(move |world: &mut World| crate::node_view::suppress_by_new_input(world, id)),
+        x if x.starts_with("feature-suppress-by-input-") => {
+            let name = x
+                .trim_start_matches("feature-suppress-by-input-")
+                .to_string();
+            commands.queue(move |world: &mut World| {
+                crate::node_view::suppress_by_input(world, id, &name)
+            })
         }
         "feature-unsuppress" => commands
             .queue(move |world: &mut World| crate::feature_list::set_suppressed(world, id, false)),

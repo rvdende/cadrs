@@ -471,8 +471,6 @@ fn on_view_changed(
 const NODE_W: f32 = 236.0;
 /// The Configuration node's width (room for an input's name, kind and value).
 const CONFIG_W: f32 = 300.0;
-/// A column taller than this (graph px) goes on in another beside it.
-const TALL: f32 = 2400.0;
 /// Columns are this far apart.
 const COLUMN: f32 = NODE_W + 90.0;
 
@@ -496,16 +494,16 @@ struct Layout {
     parts: Vec2,
 }
 
-/// Where each node goes: its saved place, or laid out in layers (Sugiyama's way, roughly):
+/// Where each node goes: its saved place, or laid out as trees that follow the wires:
 ///
-/// - **Columns** by how deep a node's references go: a sketch with none in the first column,
-///   its extrude in the next, a fillet of that after it.
-/// - **Rows follow the wires**: each node is put level with its parents (the mean of their
-///   tops), pushed down only as far as the node above it in its column needs; a column is
-///   ordered by those heights, so wires cross less. Then, right to left, a node whose wires all
-///   go to one node moves down level with it: a plane and its sketch, a sketch and its extrude
-///   sit side by side, joined by a short straight wire.
-/// - A column taller than [`TALL`] goes on in another beside it, from the top.
+/// - Each node hangs off one **primary parent**: of the features it references, the one with
+///   the fewest other children (a plane's only sketch hangs off the plane, a sketch's only
+///   extrude off the sketch); a node referencing nothing starts a tree.
+/// - A node sits **right of its primary parent, on its row**; a parent's further children
+///   stack below the first, each below the whole branch above it, so branches never overlap
+///   and a chain (plane → sketch → extrude) lies on one row, its wires short and straight.
+/// - Trees stack top to bottom in list order. Wires to other parents (a merge scope, a
+///   fillet's edges) are routed to wherever those are.
 ///
 /// The Parts node is right of them all. Saved places win over all this.
 fn layout(el: &Element, measured: &HashMap<FeatureId, f32>) -> Layout {
@@ -523,24 +521,31 @@ fn layout(el: &Element, measured: &HashMap<FeatureId, f32>) -> Layout {
             cadrs_core::feature_list::parents(features, f.id)
                 .iter()
                 .filter_map(|p| index.get(p).copied())
+                .filter(|p| *p < features.len())
                 .collect()
         })
         .collect();
-    let mut children: Vec<Vec<usize>> = vec![Vec::new(); features.len()];
-    for (i, ps) in parents.iter().enumerate() {
+    let mut fan_out = vec![0usize; features.len()];
+    for ps in &parents {
         for p in ps {
-            children[*p].push(i);
+            fan_out[*p] += 1;
         }
     }
-    let mut depth = vec![0usize; features.len()];
-    let mut columns: Vec<Vec<usize>> = Vec::new();
-    for i in 0..features.len() {
-        let d = parents[i].iter().map(|p| depth[*p] + 1).max().unwrap_or(0);
-        depth[i] = d;
-        if columns.len() <= d {
-            columns.resize(d + 1, Vec::new());
+    // Each node's primary parent: the one with the fewest children (the latest on a tie: the
+    // nearer step in the history).
+    let primary: Vec<Option<usize>> = parents
+        .iter()
+        .map(|ps| {
+            ps.iter()
+                .copied()
+                .min_by(|a, b| fan_out[*a].cmp(&fan_out[*b]).then(b.cmp(a)))
+        })
+        .collect();
+    let mut kids: Vec<Vec<usize>> = vec![Vec::new(); features.len()];
+    for (i, p) in primary.iter().enumerate() {
+        if let Some(p) = p {
+            kids[*p].push(i);
         }
-        columns[d].push(i);
     }
     let height = |i: usize| {
         let f = &features[i];
@@ -551,59 +556,69 @@ fn layout(el: &Element, measured: &HashMap<FeatureId, f32>) -> Layout {
             .unwrap_or_else(|| height_guess(f, collapsed(f.id)))
     };
     const GAP: f32 = 24.0;
-    // Left to right: each column level with its parents, packed.
-    let mut pos: Vec<Vec2> = vec![Vec2::ZERO; features.len()];
-    let mut x = COLUMN;
-    let mut column_x: Vec<(f32, Vec<usize>)> = Vec::new();
-    for (d, column) in columns.iter_mut().enumerate() {
-        let want = |i: usize, pos: &[Vec2]| -> f32 {
-            let ps = &parents[i];
-            if ps.is_empty() {
-                0.0
-            } else {
-                ps.iter().map(|p| pos[*p].y).sum::<f32>() / ps.len() as f32
-            }
-        };
-        if d > 0 {
-            let snapshot = pos.clone();
-            column.sort_by(|a, b| {
-                want(*a, &snapshot)
-                    .total_cmp(&want(*b, &snapshot))
-                    .then(a.cmp(b))
-            });
+    // A branch's height: its node's, or its children's branches stacked, whichever is more.
+    fn branch(
+        i: usize,
+        kids: &[Vec<usize>],
+        height: &dyn Fn(usize) -> f32,
+        memo: &mut Vec<Option<f32>>,
+    ) -> f32 {
+        if let Some(h) = memo[i] {
+            return h;
         }
-        let mut y = 0.0f32;
-        let mut wrapped = false;
-        let mut run: Vec<usize> = Vec::new();
-        for &i in column.iter() {
-            let h = height(i);
-            let mut at = if wrapped { y } else { y.max(want(i, &pos)) };
-            if at > 0.0 && at + h > TALL && !run.is_empty() {
-                column_x.push((x, std::mem::take(&mut run)));
-                x += COLUMN;
-                wrapped = true;
-                at = 0.0;
-            }
-            pos[i] = Vec2::new(x, at);
-            run.push(i);
-            y = at + h + GAP;
-        }
-        column_x.push((x, run));
-        x += COLUMN;
+        let stacked: f32 = kids[i]
+            .iter()
+            .map(|k| branch(*k, kids, height, memo))
+            .sum::<f32>()
+            + GAP * kids[i].len().saturating_sub(1) as f32;
+        let h = height(i).max(stacked);
+        memo[i] = Some(h);
+        h
     }
-    // Right to left: a node whose wires all go to one node moves down level with it, as far as
-    // the node below it in its column allows.
-    for (_, run) in column_x.iter().rev() {
-        for k in (0..run.len()).rev() {
-            let i = run[k];
-            let [only] = children[i][..] else { continue };
-            if pos[only].x <= pos[i].x || pos[only].y <= pos[i].y {
-                continue;
-            }
-            let limit = run
-                .get(k + 1)
-                .map_or(f32::MAX, |n| pos[*n].y - GAP - height(i));
-            pos[i].y = pos[only].y.min(limit).max(pos[i].y);
+    let mut memo = vec![None; features.len()];
+    for i in 0..features.len() {
+        branch(i, &kids, &height, &mut memo);
+    }
+    // A tree's width: as many columns as its deepest branch.
+    fn reach(i: usize, kids: &[Vec<usize>]) -> usize {
+        1 + kids[i].iter().map(|k| reach(*k, kids)).max().unwrap_or(0)
+    }
+    let roots: Vec<usize> = (0..features.len())
+        .filter(|i| primary[*i].is_none())
+        .collect();
+    // The trees go in bands side by side (as shelves fill a page), each band about as tall as
+    // makes the whole about half again as wide as it is tall, the shape of the panel.
+    let area: f32 = roots
+        .iter()
+        .map(|r| (memo[*r].unwrap_or(0.0) + GAP) * reach(*r, &kids) as f32 * COLUMN)
+        .sum();
+    let band = (area / 1.6).sqrt().max(
+        roots
+            .iter()
+            .map(|r| memo[*r].unwrap_or(0.0))
+            .fold(0.0, f32::max),
+    );
+    // Place each branch: the node at (x, y), its children from (x + COLUMN, y) down.
+    let mut pos: Vec<Vec2> = vec![Vec2::ZERO; features.len()];
+    let mut stack: Vec<(usize, Vec2)> = Vec::new();
+    let (mut x, mut y, mut widest) = (COLUMN, 0.0f32, 0usize);
+    for root in roots {
+        let h = memo[root].unwrap_or(0.0);
+        if y > 0.0 && y + h > band {
+            x += widest as f32 * COLUMN + 60.0;
+            y = 0.0;
+            widest = 0;
+        }
+        widest = widest.max(reach(root, &kids));
+        stack.push((root, Vec2::new(x, y)));
+        y += h + GAP;
+    }
+    while let Some((i, at)) = stack.pop() {
+        pos[i] = at;
+        let mut cy = at.y;
+        for k in &kids[i] {
+            stack.push((*k, Vec2::new(at.x + COLUMN, cy)));
+            cy += memo[*k].unwrap_or(0.0) + GAP;
         }
     }
     let mut out: HashMap<FeatureId, Vec2> = HashMap::new();
@@ -2514,6 +2529,65 @@ fn host_live_dialog(world: &mut World) {
     }
 }
 
+/// Suppress by configuration ▸ `#name`: the feature is enabled by the boolean input `name`
+/// (suppressed while it is false).
+pub fn suppress_by_input(world: &mut World, feature: FeatureId, name: &str) {
+    let Some(element) = world
+        .resource::<ActiveDocument>()
+        .active_element()
+        .map(|e| e.id)
+    else {
+        return;
+    };
+    run(
+        world,
+        &cadrs_core::commands::SetSuppressByVariable {
+            element,
+            feature,
+            rule: Some(cadrs_core::variables::SuppressByVariable::variable(name)),
+        },
+    );
+}
+
+/// Suppress by configuration ▸ New input: a boolean input named after the feature
+/// (`withFillet1`, true in every preset) that enables it, one undo step; then the presets
+/// say which have the feature.
+pub fn suppress_by_new_input(world: &mut World, feature: FeatureId) {
+    let Some(el) = world.resource::<ActiveDocument>().active_element().cloned() else {
+        return;
+    };
+    let Some(f) = el.feature(feature) else { return };
+    let base: String = format!("with{}", f.name)
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
+    let taken = cfg::taken_names(&el);
+    let c = el.configuration().cloned().unwrap_or_default();
+    let name = std::iter::once(base.clone())
+        .chain((2..).map(|n| format!("{base}_{n}")))
+        .find(|n| c.name_problem(n, None, &taken).is_none())
+        .unwrap_or(base);
+    let element = el.id;
+    run(
+        world,
+        &cadrs_core::command::Batch {
+            label: format!("Suppress {} by #{name}", f.name),
+            scope: cadrs_core::Scope::Element(element),
+            commands: vec![
+                Box::new(AddConfigInput {
+                    element,
+                    input: ConfigInput::new(name.clone(), InputKind::Boolean, 1.0),
+                }),
+                Box::new(cadrs_core::commands::SetSuppressByVariable {
+                    element,
+                    feature,
+                    rule: Some(cadrs_core::variables::SuppressByVariable::variable(&name)),
+                }),
+            ],
+        },
+    );
+}
+
 /// The features header's preset dropdown: which presets it lists and which is active.
 #[derive(Component, Debug, Clone, PartialEq)]
 struct HeaderPreset {
@@ -2993,8 +3067,53 @@ mod tests {
         let pos = layout(&el, &HashMap::new()).features;
         assert_eq!(pos[&s1].y, pos[&e1].y);
         assert_eq!(pos[&s2].y, pos[&e2].y, "{pos:?}");
-        assert!(pos[&e2].y >= pos[&e1].y + height_guess(el.feature(e1).unwrap(), false));
         assert!(pos[&e1].x > pos[&s1].x);
+        assert_apart(&el, &pos);
+    }
+
+    /// No two nodes overlap (as their heights are guessed before they are laid out).
+    #[track_caller]
+    fn assert_apart(el: &Element, pos: &HashMap<FeatureId, Vec2>) {
+        let rect = |f: &Feature| {
+            let p = pos[&f.id];
+            Rect::from_corners(p, p + Vec2::new(NODE_W, height_guess(f, false)))
+        };
+        let fs = el.features();
+        for (i, a) in fs.iter().enumerate() {
+            for b in &fs[i + 1..] {
+                let o = rect(a).intersect(rect(b));
+                assert!(o.is_empty(), "{} and {} overlap: {pos:?}", a.name, b.name);
+            }
+        }
+    }
+
+    /// A sketch with two extrudes: the first beside it, the second below the first; a lone
+    /// sketch → extrude chain below that, on its own row.
+    #[test]
+    fn branches_stack_and_chains_lie_level() {
+        use cadrs_core::document::ExtrudeFeature;
+        let mut el = Element::part_studio("Part Studio 1");
+        let ids: Vec<FeatureId> = (0..5).map(|_| FeatureId::new()).collect();
+        let fs = el.features_mut().unwrap();
+        let sk = |id, n: &str| Feature::new(id, n, FeatureKind::Sketch(Default::default()));
+        let ex = |id, s, n: &str| {
+            let mut e = ExtrudeFeature::default();
+            e.sketches.push(s);
+            Feature::new(id, n, FeatureKind::Extrude(e))
+        };
+        fs.push(sk(ids[0], "Sketch 1"));
+        fs.push(ex(ids[1], ids[0], "Extrude 1"));
+        fs.push(ex(ids[2], ids[0], "Extrude 2"));
+        fs.push(sk(ids[3], "Sketch 2"));
+        fs.push(ex(ids[4], ids[3], "Extrude 3"));
+        let pos = layout(&el, &HashMap::new()).features;
+        let p = |k: usize| pos[&ids[k]];
+        assert_eq!(p(1).y, p(0).y);
+        assert!(p(1).x > p(0).x && p(2).x == p(1).x);
+        assert!(p(2).y >= p(1).y + 330.0, "{pos:?}");
+        // The second tree is clear of the first (below it or beside it).
+        assert_eq!(p(4).y, p(3).y);
+        assert_apart(&el, &pos);
     }
 
     #[test]

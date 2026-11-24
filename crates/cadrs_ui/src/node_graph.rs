@@ -40,7 +40,9 @@ pub struct NodeGraphPlugin;
 
 impl Plugin for NodeGraphPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<WireRouter>()
+        bevy::asset::embedded_asset!(app, "node_grid.wesl");
+        app.add_plugins(bevy::ui_render::prelude::UiMaterialPlugin::<GridMaterial>::default())
+            .init_resource::<WireRouter>()
             .add_observer(on_scroll)
             .add_observer(on_pan_drag)
             .add_observer(on_node_press)
@@ -57,13 +59,19 @@ impl Plugin for NodeGraphPlugin {
             // node's wires move with it in the same frame, with no frame left without them).
             .add_systems(
                 PostUpdate,
-                (apply_views, place_nodes, draw_wires, mark_static_copies)
+                (
+                    apply_views,
+                    place_nodes,
+                    draw_wires,
+                    sync_grids,
+                    mark_static_copies,
+                )
                     .chain()
                     .before(bevy::ui::UiSystems::Prepare),
             )
             .add_systems(
                 PostUpdate,
-                (place_sockets, route_wires, draw_grid, cull_nodes)
+                (place_sockets, route_wires, cull_nodes)
                     .chain()
                     .after(bevy::ui::UiSystems::Layout),
             );
@@ -224,11 +232,10 @@ impl NodeCanvasBuilder {
             .id();
         if let Some(g) = self.grid {
             // First, so under the wires and the nodes; not moved with the view (its lines are
-            // placed in canvas px, [`draw_grid`]).
+            // drawn by its shader from the view, [`GridMaterial`]).
             commands.spawn((
                 Name::new(format!("{}-grid", self.name)),
                 g,
-                GridDrawn::default(),
                 Node {
                     position_type: PositionType::Absolute,
                     left: Val::Px(0.0),
@@ -274,9 +281,10 @@ impl NodeCanvasBuilder {
     }
 }
 
-/// A canvas's grid, after the PCB Studio's schematic (Horizon EDA's look): faint lines every
-/// `step` graph px (every 2nd, 4th, … when they would be closer than 12 px on screen) and a
-/// cross on every fifth line. A transparent `line` draws the crosses alone.
+/// A canvas's grid, after the PCB Studio's schematic (Horizon EDA's look), in graph units: faint
+/// lines every `step` (every 2nd, 4th, … step when they would be closer than 12 px on screen)
+/// and a cross where every fifth line meets every fifth. A transparent `line` draws the crosses
+/// alone. One node draws it ([`GridMaterial`]): a pan or a zoom changes two numbers.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct CanvasGrid {
     pub step: f32,
@@ -284,99 +292,104 @@ pub struct CanvasGrid {
     pub mark: Color,
 }
 
-/// The view and size a grid was last drawn for.
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq)]
-struct GridDrawn(Option<(PanZoom, Vec2)>);
-
-/// The grid's lines and crosses, in canvas px, for a view of a canvas `size` px: (vertical line
-/// xs, horizontal line ys, cross centres).
-pub fn grid_lines(g: &CanvasGrid, view: &PanZoom, size: Vec2) -> (Vec<f32>, Vec<f32>, Vec<Vec2>) {
-    let mut step = g.step.max(1.0);
-    while step * view.zoom < 12.0 {
-        step *= 2.0;
+/// The grid's step at a zoom: `step` graph units, doubled until the lines are at least 12 px
+/// apart on screen.
+pub fn grid_step(step: f32, zoom: f32) -> f32 {
+    let mut s = step.max(1e-3);
+    while s * zoom < 12.0 {
+        s *= 2.0;
     }
-    let lo = view.to_graph(Vec2::ZERO);
-    let hi = view.to_graph(size);
-    let (i0, i1) = ((lo.x / step).floor() as i64, (hi.x / step).ceil() as i64);
-    let (j0, j1) = ((lo.y / step).floor() as i64, (hi.y / step).ceil() as i64);
-    let xs: Vec<(i64, f32)> = (i0..=i1)
-        .map(|i| (i, view.to_screen(Vec2::new(i as f32 * step, 0.0)).x))
-        .collect();
-    let ys: Vec<(i64, f32)> = (j0..=j1)
-        .map(|j| (j, view.to_screen(Vec2::new(0.0, j as f32 * step)).y))
-        .collect();
-    let mut crosses = Vec::new();
-    for (i, x) in xs.iter().filter(|(i, _)| i.rem_euclid(5) == 0) {
-        for (j, y) in ys.iter().filter(|(j, _)| j.rem_euclid(5) == 0) {
-            let _ = (i, j);
-            crosses.push(Vec2::new(*x, *y));
-        }
-    }
-    (
-        xs.into_iter().map(|(_, x)| x).collect(),
-        ys.into_iter().map(|(_, y)| y).collect(),
-        crosses,
-    )
+    s
 }
 
-/// One line or cross arm of a grid.
-#[derive(Component, Debug, Clone, Copy)]
-struct GridPiece;
+/// What the grid's shader (`node_grid.wesl`) reads.
+#[derive(Debug, Clone, Copy, Default, bevy::render::render_resource::ShaderType)]
+struct GridParams {
+    view: Vec4,
+    step: Vec4,
+    line: Vec4,
+    mark: Vec4,
+}
 
-/// Draws each canvas's grid again when its view or size changed.
-fn draw_grid(
+/// A canvas's grid, drawn by one node covering the canvas (`node_grid.wesl`): in graph units,
+/// from the canvas's pan and zoom.
+#[derive(Asset, TypePath, bevy::render::render_resource::AsBindGroup, Debug, Clone)]
+pub struct GridMaterial {
+    #[uniform(0)]
+    params: GridParams,
+}
+
+impl bevy::ui_render::prelude::UiMaterial for GridMaterial {
+    fn fragment_shader() -> bevy::shader::ShaderRef {
+        "embedded://cadrs_ui/node_grid.wesl".into()
+    }
+
+    fn specialize(
+        descriptor: &mut bevy::render::render_resource::RenderPipelineDescriptor,
+        _key: bevy::ui_render::prelude::UiMaterialKey<Self>,
+    ) {
+        if let Some(target) = descriptor
+            .fragment
+            .as_mut()
+            .and_then(|f| f.targets.first_mut())
+            .and_then(|t| t.as_mut())
+        {
+            target.blend =
+                Some(bevy::render::render_resource::BlendState::PREMULTIPLIED_ALPHA_BLENDING);
+        }
+    }
+}
+
+/// The grid's numbers: the view's pan and zoom, the step for that zoom, the colours.
+fn grid_params(g: &CanvasGrid, view: &PanZoom, inv_scale: f32) -> GridParams {
+    let lin = |c: Color| Vec4::from_array(c.to_linear().to_f32_array());
+    GridParams {
+        view: Vec4::new(view.pan.x, view.pan.y, view.zoom, inv_scale),
+        step: Vec4::new(
+            grid_step(g.step, view.zoom),
+            (g.step * view.zoom * 0.3).clamp(3.0, 8.0),
+            0.0,
+            0.0,
+        ),
+        line: lin(g.line),
+        mark: lin(g.mark),
+    }
+}
+
+/// Gives each grid its material, and its numbers again when the view (or the scale) changed.
+#[allow(clippy::type_complexity)]
+fn sync_grids(
     q_canvas: Query<(&NodeCanvas, &ComputedNode, &Children)>,
-    mut q_grid: Query<(Entity, &CanvasGrid, &mut GridDrawn, Option<&Children>)>,
+    q_grid: Query<(
+        Entity,
+        &CanvasGrid,
+        Option<&bevy::ui_render::prelude::MaterialNode<GridMaterial>>,
+    )>,
+    mut materials: ResMut<Assets<GridMaterial>>,
     mut commands: Commands,
 ) {
     for (c, cn, kids) in &q_canvas {
-        let size = cn.size() * cn.inverse_scale_factor();
         for k in kids.iter() {
-            let Ok((e, g, mut drawn, pieces)) = q_grid.get_mut(k) else {
+            let Ok((e, g, mat)) = q_grid.get(k) else {
                 continue;
             };
-            let now = Some((c.view, size));
-            if drawn.0 == now || size.x <= 0.0 {
-                continue;
-            }
-            drawn.0 = now;
-            if let Some(p) = pieces {
-                for x in p.iter() {
-                    commands.entity(x).despawn();
+            let params = grid_params(g, &c.view, cn.inverse_scale_factor());
+            let have = mat.map(|m| m.0.clone()).filter(|h| materials.contains(h));
+            match have {
+                Some(h) => {
+                    let stale = materials.get(&h).is_some_and(|m| {
+                        m.params.view != params.view || m.params.step != params.step
+                    });
+                    if stale && let Some(mut m) = materials.get_mut(&h) {
+                        m.params = params;
+                    }
                 }
-            }
-            let (xs, ys, crosses) = grid_lines(g, &c.view, size);
-            let piece = |l: f32, t: f32, w: f32, h: f32, color: Color| {
-                (
-                    Name::new("node-graph-grid-line"),
-                    GridPiece,
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: Val::Px(l),
-                        top: Val::Px(t),
-                        width: Val::Px(w),
-                        height: Val::Px(h),
-                        ..default()
-                    },
-                    BackgroundColor(color),
-                    Pickable::IGNORE,
-                    ChildOf(e),
-                )
-            };
-            if g.line.alpha() > 0.0 {
-                for x in xs {
-                    commands.spawn(piece(x.round(), 0.0, 1.0, size.y, g.line));
+                None => {
+                    let h = materials.add(GridMaterial { params });
+                    commands
+                        .entity(e)
+                        .insert(bevy::ui_render::prelude::MaterialNode(h));
                 }
-                for y in ys {
-                    commands.spawn(piece(0.0, y.round(), size.x, 1.0, g.line));
-                }
-            }
-            // A cross's arms: a fixed share of a grid step, at least 3 px.
-            let arm = (g.step * c.view.zoom * 0.3).clamp(3.0, 8.0);
-            for p in crosses {
-                let p = p.round();
-                commands.spawn(piece(p.x - arm, p.y, 2.0 * arm + 1.0, 1.0, g.mark));
-                commands.spawn(piece(p.x, p.y - arm, 1.0, 2.0 * arm + 1.0, g.mark));
             }
         }
     }
@@ -1027,6 +1040,8 @@ struct CanvasRoutes {
     still: u8,
     /// The geometry the routes are for.
     routed: u64,
+    /// The view the geometry was last taken in.
+    view: Option<PanZoom>,
     routes: std::collections::HashMap<Entity, Vec<Vec2>>,
 }
 
@@ -1208,13 +1223,24 @@ fn route_wires(
                 .map(|v| v.round().to_array().map(|x| x as i32))
                 .hash(&mut h);
         }
+        // (Sockets to 4 graph units: their places come through the view and wobble by a hair.)
         for (a, b) in &problem.wires {
             [*a, *b]
-                .map(|v| v.round().to_array().map(|x| x as i32))
+                .map(|v| (v / 4.0).round().to_array().map(|x| x as i32))
                 .hash(&mut h);
         }
         ids.hash(&mut h);
         let key = h.finish();
+        // A pan or a zoom moves nothing: the sockets' places, worked out through the view, may
+        // round a hair differently, but the routes stand (taken as this geometry's).
+        if r.view != Some(c.view) {
+            r.view = Some(c.view);
+            if r.key != key && !r.routes.is_empty() && r.routed == r.key {
+                r.routed = key;
+            }
+            r.key = key;
+            continue;
+        }
         if key != r.key {
             r.key = key;
             r.still = 0;
@@ -1623,31 +1649,11 @@ mod tests {
     }
 
     #[test]
-    fn grid_lines_space_out_when_zoomed_out() {
-        let g = CanvasGrid {
-            step: 20.0,
-            line: Color::WHITE,
-            mark: Color::WHITE,
-        };
-        let size = Vec2::new(400.0, 200.0);
-        let v = PanZoom {
-            pan: Vec2::ZERO,
-            zoom: 1.0,
-        };
-        let (xs, ys, crosses) = grid_lines(&g, &v, size);
-        assert_eq!((xs.len(), ys.len()), (21, 11));
-        assert!((xs[1] - xs[0] - 20.0).abs() < 1e-4);
-        // Every fifth line has crosses: x 0, 100, … 400 and y 0, 100, 200.
-        assert_eq!(crosses.len(), 5 * 3);
-        // At a quarter, 20 px would be 5 px apart: every 4th line (80 graph px, 20 px apart).
-        let v = PanZoom {
-            pan: Vec2::new(7.0, 0.0),
-            zoom: 0.25,
-        };
-        let (xs, _, _) = grid_lines(&g, &v, size);
-        assert!(xs.windows(2).all(|w| (w[1] - w[0] - 20.0).abs() < 1e-3));
-        // The grid moves with the view.
-        assert!(xs.iter().any(|x| (x - 7.0).abs() < 1e-3));
+    fn the_grid_spaces_out_when_zoomed_out() {
+        assert_eq!(grid_step(20.0, 1.0), 20.0);
+        // At a quarter, 20 units would be 5 px apart: every 4th line, 20 px apart.
+        assert_eq!(grid_step(20.0, 0.25), 80.0);
+        assert!(grid_step(20.0, 0.1) * 0.1 >= 12.0);
     }
 
     /// Every leg of a trace is horizontal, vertical or at 45°.
