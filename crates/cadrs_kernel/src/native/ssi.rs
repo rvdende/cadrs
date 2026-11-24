@@ -868,6 +868,77 @@ fn circle(c: P3, n: V3, r: f64) -> IntCurve {
     }
 }
 
+/// A cone and a cone or cylinder whose axes cross at a point as far from the one's side as from
+/// the other's (both lie round the ball about that point: a cone turned about a line through
+/// its axis and where it was, a cone bored square by a drill it fits) meet in two conics, not
+/// a quartic. About the crossing P a cone of axis z, its apex h back along it, is
+/// |x − P|² − ρ² = π(x)² / cos² a with π(x) = (x − P)·z + h sin² a, the plane of the circle
+/// where it touches the ball (a cylinder the same with a = 0 and π through P), so on both
+/// π₁ / cos a₁ = ± π₂ / cos a₂: two planes, each cutting the cone in a conic. The conics cross
+/// where the two surfaces touch, which a marcher takes thousands of points to pass. None for
+/// any other pair.
+fn round_a_common_sphere(
+    a: &Surface,
+    b: &Surface,
+    bb: &Bbox,
+    run_tol: f64,
+) -> Option<Vec<IntCurve>> {
+    let (cone, other) = match (a, b) {
+        (Surface::Cone { .. }, Surface::Cone { .. } | Surface::Cylinder { .. }) => (a, b),
+        (Surface::Cylinder { .. }, Surface::Cone { .. }) => (b, a),
+        _ => return None,
+    };
+    let (o1, z1) = cone.axis()?;
+    let (o2, z2) = other.axis()?;
+    let (z1, z2) = (z1.normalize(), z2.normalize());
+    let size = bb.diagonal().max(tol::POINT);
+    // Where the axes cross.
+    let w = o2 - o1;
+    let n = z1.cross(&z2);
+    let nn = n.norm_squared();
+    if nn < tol::ANGULAR * tol::ANGULAR || w.dot(&n).abs() / nn.sqrt() > tol::REL * size {
+        return None;
+    }
+    let p = o1 + z1 * (w.cross(&z2).dot(&n) / nn);
+    // Of each: cos a, the offset of its circle's plane from P along its axis, and the ball's
+    // radius it lies round.
+    let about = |s: &Surface, z: &V3| -> Option<(f64, f64, f64)> {
+        match s {
+            Surface::Cone { f, r, a } => {
+                let (sn, cs) = a.sin_cos();
+                if sn.abs() < tol::ANGULAR_FINE || cs.abs() < tol::ANGULAR_FINE {
+                    return None;
+                }
+                let apex = f.o - f.z * (r * cs / sn);
+                let h = (p - apex).dot(z);
+                Some((cs, h * sn * sn, (h * sn).abs()))
+            }
+            Surface::Cylinder { r, .. } => Some((1.0, 0.0, *r)),
+            _ => None,
+        }
+    };
+    let (c1, k1, rho1) = about(cone, &z1)?;
+    let (c2, k2, rho2) = about(other, &z2)?;
+    if (rho1 - rho2).abs() > tol::REL * (rho1 + rho2 + size) {
+        return None;
+    }
+    let mut out = Vec::new();
+    for sign in [-1.0, 1.0] {
+        let m = z1 / c1 + z2 * (sign / c2);
+        let len = m.norm();
+        if len < tol::ANGULAR {
+            return None;
+        }
+        let offset = (k1 / c1 + sign * k2 / c2) / len;
+        let normal = m / len;
+        let plane = Surface::Plane {
+            f: Frame::from_z(p - normal * offset, normal),
+        };
+        out.extend(analytic(&plane, cone, bb, run_tol)?);
+    }
+    Some(out)
+}
+
 /// Two cylinders of one radius whose axes cross (a Steinmetz pair, a cross-drilled hole) meet
 /// in two ellipses: a point as far from both axes has w·z₁ = ±w·z₂ (w from the axes' crossing),
 /// so it lies in one of the two planes through the crossing square to z₁ ∓ z₂, and each plane cuts
@@ -1094,6 +1165,11 @@ fn plane_n(f: &Frame) -> V3 {
 /// Closed forms. `None` when the pair isn't handled here (try the other order, then numeric).
 fn analytic(a: &Surface, b: &Surface, bb: &Bbox, run_tol: f64) -> Option<Vec<IntCurve>> {
     let bbig = bb.grow(bb.diagonal() * 0.01 + tol::POINT);
+    if !crate::native::env_flag!("CADRS_NO_COMMON_SPHERE")
+        && let Some(curves) = round_a_common_sphere(a, b, bb, run_tol)
+    {
+        return Some(curves);
+    }
     match (a, b) {
         (Surface::Plane { f: fa }, Surface::Plane { f: fb }) => {
             let (na, nb) = (plane_n(fa), plane_n(fb));
@@ -3650,6 +3726,55 @@ fn line_extrusion(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Option<Vec<f64>> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A cone and its copy turned about a line through its axis, and a cylinder it fits
+    /// crossing that axis, lie round one ball and meet in two conics: closed curves in closed
+    /// form, every point of them on both surfaces.
+    #[test]
+    fn surfaces_round_a_common_sphere_meet_in_conics() {
+        let w = V3::new(30f64.to_radians().cos(), 0.0, 30f64.to_radians().sin());
+        let a = 25f64.to_radians();
+        let cone = |turn: f64| {
+            let q = nalgebra::Rotation3::from_axis_angle(&V3::z_axis(), turn);
+            Surface::Cone {
+                f: Frame::from_z(P3::from(q * (w * -2.0)), q * w),
+                r: 0.0,
+                a,
+            }
+        };
+        let drill = Surface::Cylinder {
+            f: Frame::from_z(P3::new(0.0, -5.0, 0.0), V3::y()),
+            r: 2.0 * a.sin(),
+        };
+        let mut bb = Bbox::empty();
+        bb.add(&P3::new(-6.0, -6.0, -6.0));
+        bb.add(&P3::new(6.0, 6.0, 6.0));
+        for other in [cone(70f64.to_radians()), cone(150f64.to_radians()), drill] {
+            let first = cone(0.0);
+            let curves = round_a_common_sphere(&first, &other, &bb, 1e-7).expect("two conics");
+            assert!(curves.len() >= 2, "{} curves", curves.len());
+            for c in &curves {
+                for i in 0..=32 {
+                    let p = c.c.point(c.t0 + (c.t1 - c.t0) * i as f64 / 32.0);
+                    for s in [&first, &other] {
+                        let d = sdist(s, &p).abs();
+                        assert!(d < 1e-9, "{d:e} off a surface at {p:?}");
+                    }
+                }
+            }
+        }
+        // Not where the cone doesn't fit the cylinder, nor where the axes pass each other.
+        let loose = Surface::Cylinder {
+            f: Frame::from_z(P3::new(0.0, -5.0, 0.0), V3::y()),
+            r: 1.0,
+        };
+        assert!(round_a_common_sphere(&cone(0.0), &loose, &bb, 1e-7).is_none());
+        let past = Surface::Cylinder {
+            f: Frame::from_z(P3::new(0.0, -5.0, 0.3), V3::y()),
+            r: 2.0 * a.sin(),
+        };
+        assert!(round_a_common_sphere(&cone(0.0), &past, &bb, 1e-7).is_none());
+    }
 
     /// A circle against a cylinder, a sphere, a cone and a torus in closed form: where it
     /// crosses, where it only touches (a double root), and where it touches a ruling's own
