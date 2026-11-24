@@ -432,7 +432,7 @@ fn spawn_row(
             .with_selected(t.list_selected),
         border: StateColors::all(Color::NONE),
         foreground: StateColors::all(if *hidden {
-            Color::srgb_u8(0xa6, 0xa6, 0xa6)
+            crate::feature_list::hidden_fg(t)
         } else {
             t.foreground
         }),
@@ -466,7 +466,7 @@ fn spawn_row(
         .toggle_keeps_off()
         .icon(icon_name, 16.0)
         .icon_color(if *hidden {
-            Color::srgb_u8(0xc4, 0xc4, 0xc4)
+            crate::feature_list::hidden_icon(t)
         } else {
             t.muted_foreground
         })

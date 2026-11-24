@@ -4227,9 +4227,10 @@ fn rebuild_feature_rows(
                 }
             }
             let edited = editing == Some(*id);
-            // P3I.9: a Form hidden with its eye is greyed out too (`form-12.png`).
+            // P3I.9: a Form hidden with its eye is greyed out too (`form-12.png`), and a Plane
+            // feature hidden with its eye (or H), as a hidden default plane's row is.
             let consumed = *kind == RowKind::ConsumedSketch
-                || (*kind == RowKind::Sm9("sheet-metal-form") && !*shown);
+                || (matches!(*kind, RowKind::Sm9("sheet-metal-form") | RowKind::Plane) && !*shown);
             let fg = if inactive {
                 // Rolled back or suppressed (P3.9): grey, whatever else it is.
                 crate::feature_list::ROLLED_BACK_FG
@@ -4238,8 +4239,8 @@ fn rebuild_feature_rows(
             } else if warning.is_some() {
                 FEATURE_WARNING
             } else if consumed {
-                // Greyed out: used by an extrude (`screens/24`).
-                Color::srgb_u8(0xa6, 0xa6, 0xa6)
+                // Greyed out: hidden, or used by an extrude (`screens/24`).
+                crate::feature_list::hidden_fg(&t)
             } else {
                 t.foreground
             };
@@ -4323,7 +4324,7 @@ fn rebuild_feature_rows(
                         } else if warning.is_some() && !edited {
                             FEATURE_WARNING
                         } else if consumed {
-                            Color::srgb_u8(0xc4, 0xc4, 0xc4)
+                            crate::feature_list::hidden_icon(&t)
                         } else {
                             t.muted_foreground
                         })

@@ -2968,7 +2968,7 @@ fn sync_plane_rows(
     mut commands: Commands,
 ) {
     // Hidden planes (P) grey out their rows, text and icon (`intro-to-sketching/ex1-step1.png`).
-    let hidden_fg = Color::srgb_u8(0xb4, 0xb4, 0xb4);
+    let hidden_fg = crate::feature_list::hidden_fg(&theme);
     for (e, row, has, visuals) in &mut q {
         // In an assembly, an instance's row is highlighted while a face, edge or vertex of it
         // is selected (P3B.1, `intro-to-assemblies/ex1-step5.png`).
@@ -2996,7 +2996,11 @@ fn sync_plane_rows(
             && v.foreground.normal != fg
         {
             v.foreground = cadrs_ui::StateColors::new(fg, fg, fg, theme.disabled_foreground);
-            let icon_fg = if shown { theme.feature_icon } else { hidden_fg };
+            let icon_fg = if shown {
+                theme.feature_icon
+            } else {
+                crate::feature_list::hidden_icon(&theme)
+            };
             for d in children.iter_descendants(e) {
                 // The eye toggle keeps its own colour.
                 if q_eye.contains(d) || q_parent.get(d).is_ok_and(|p| q_eye.contains(p.parent())) {
