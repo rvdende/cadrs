@@ -9,9 +9,8 @@
 //! animations, Animate and the kernel's results still to come (`cadrs_app::awake`).
 //!
 //! `CADRS_CONTINUOUS=1` puts the game's loop back, to compare or in case something waits for a
-//! frame that doesn't come. `CADRS_IDLE_DEBUG=1` logs, once a second, how many frames ran, how
-//! many of them asked for the next one, and how many followed input (the app logs its own
-//! reasons beside it).
+//! frame that doesn't come. `CADRS_IDLE_DEBUG=1` logs, once a second, how many frames ran and how
+//! many of them asked for the next one (the app logs its own reasons beside it).
 
 use std::time::Duration;
 
@@ -97,7 +96,7 @@ fn awake_while_scenario(
     }
 }
 
-/// Frames since the last log, those that asked for another, and those after input.
+/// Frames since the last log, and those that asked for another.
 #[derive(Default)]
 struct FrameTally {
     since: f64,
