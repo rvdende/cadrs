@@ -397,11 +397,11 @@ const PIECE_BOXES_KEPT: usize = 1 << 16;
 /// A B-spline curve (its address) and a range of it, and the curve itself, weakly: the address
 /// is that curve's for as long as this holds it.
 type PieceBoxes =
-    std::collections::HashMap<(usize, u64, u64), (std::sync::Weak<super::nurbs::NurbsCurve>, Bbox)>;
+    rustc_hash::FxHashMap<(usize, u64, u64), (std::sync::Weak<super::nurbs::NurbsCurve>, Bbox)>;
 
 thread_local! {
     /// The boxes of B-spline curves' pieces made on this thread ([`curve_bbox`]).
-    static PIECE_BOXES: std::cell::RefCell<PieceBoxes> = std::cell::RefCell::new(PieceBoxes::new());
+    static PIECE_BOXES: std::cell::RefCell<PieceBoxes> = std::cell::RefCell::default();
 }
 
 /// A box that holds the curve between t0 and t1: exact for lines, circles and ellipses (their
@@ -410,8 +410,12 @@ thread_local! {
 pub fn curve_bbox(c: &Curve, t0: f64, t1: f64) -> Bbox {
     let (lo, hi) = (t0.min(t1), t0.max(t1));
     let mut bb = Bbox::empty();
-    bb.add(&c.point(lo));
-    bb.add(&c.point(hi));
+    // (A B-spline's ends lie within its poles' box, and its box is kept: no point of it is
+    // made for one asked for again. A raster's every boolean asked for every edge's.)
+    if !matches!(c, Curve::Nurbs(_)) {
+        bb.add(&c.point(lo));
+        bb.add(&c.point(hi));
+    }
     match c {
         Curve::Line { .. } => {}
         Curve::Circle { c: o, x, y, r }
@@ -450,17 +454,11 @@ pub fn curve_bbox(c: &Curve, t0: f64, t1: f64) -> Bbox {
                 lo.to_bits(),
                 hi.to_bits(),
             );
-            if !all {
-                let kept = PIECE_BOXES.with(|m| {
-                    m.borrow().get(&key).and_then(|(of, bb)| {
-                        of.upgrade()
-                            .is_some_and(|of| std::sync::Arc::ptr_eq(&of, whole))
-                            .then_some(*bb)
-                    })
-                });
-                if let Some(kept) = kept {
-                    return kept;
-                }
+            // (An entry at this curve's address is this curve's: the entry's weak pointer
+            // keeps the address from any other.)
+            let kept = PIECE_BOXES.with(|m| m.borrow().get(&key).map(|(_, bb)| *bb));
+            if let Some(kept) = kept {
+                return kept;
             }
             let piece;
             let n: &super::nurbs::NurbsCurve = if all {
@@ -482,8 +480,7 @@ pub fn curve_bbox(c: &Curve, t0: f64, t1: f64) -> Bbox {
         }
     }
     if let Curve::Nurbs(whole) = c {
-        let (a0, a1) = whole.range();
-        if !(lo <= a0 + tol::ROUNDOFF_FINE && hi >= a1 - tol::ROUNDOFF_FINE) {
+        {
             PIECE_BOXES.with(|m| {
                 let mut m = m.borrow_mut();
                 if m.len() >= PIECE_BOXES_KEPT {
@@ -4148,13 +4145,17 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         }
         for ic in curves {
             let mut ps: Vec<(f64, usize)> = Vec::new();
+            let on = (run_tol * 2.0).max(ft);
+            // (A vertex outside the curve's own box by more than `on` isn't on it: no
+            // nearest point of the curve is looked for. A raster's pass meets the stock's
+            // top along a short curve, the top's hundreds of vertices in the faces' box.)
+            let near = curve_bbox(&ic.c, ic.t0, ic.t1).grow(on);
             for &v in &cand {
                 let p = pool.verts[v];
-                if !ob.grow(tf * 10.0).contains(&p) {
+                if !ob.grow(tf * 10.0).contains(&p) || !near.contains(&p) {
                     continue;
                 }
                 let mut t = param_on(&ic.c, ic.t0, ic.t1, &p);
-                let on = (run_tol * 2.0).max(ft);
                 if (ic.c.point(t) - p).norm() < on {
                     // A closed curve: the vertex at its start (within the tolerance, though
                     // its parameter may land a hair off where the curve runs along it) is
@@ -5343,7 +5344,10 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     // in 10⁵ of the result's size.
     let gaps = out.fit_tolerances_searched_gaps(run_tol * 10.0);
     prof.mark("fit");
-    let wide = 1e-5 * out.bbox().diagonal();
+    // (The result's boxes, made once: the crossings' test below asks for each face's again.
+    // Only tolerances change from here on.)
+    let out_boxes = out.boxes();
+    let wide = 1e-5 * out_boxes.all.diagonal();
     // (The gaps just measured: only tolerances changed since.)
     for (e, g) in gaps.into_iter().flatten() {
         if g <= wide && g * 1.01 > out.edges[e].tol {
@@ -5410,7 +5414,10 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         .flat_map(|fa| coincident[fa].iter().map(move |&fb| (fa, fb)))
         .map(|(fa, fb)| (faces[fa].orig, faces[fb].orig))
         .collect();
-    let (dropped, volumes) = drop_empty_solids(&mut out, &mut from, &pairs);
+    let (dropped, volumes) =
+        drop_empty_solids(&mut out, &mut from, &pairs, out_boxes.all.diagonal());
+    // (Its faces are others once some are dropped.)
+    let out_boxes = (!dropped).then_some(out_boxes);
     prof.mark("empty solids");
     if dropped && out.faces.is_empty() {
         return Err(KernelError::EmptyResult("the result is empty".into()));
@@ -5482,6 +5489,9 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         // [`ladder`] hands back this result after all, flagged.
         prof.mark("checks");
         if check_crossings {
+            let _kept = out_boxes
+                .as_ref()
+                .map(|made| super::topo::keep_boxes_made(&out, made));
             let whole_of = |f: usize| match from.get(f).map(|s| s.as_slice()) {
                 Some(&[(o, g)]) if whole.contains(&(o, g)) => Some(o),
                 _ => None,
@@ -5677,8 +5687,8 @@ fn drop_empty_solids(
     b: &mut Body,
     from: &mut Vec<Vec<(usize, usize)>>,
     pairs: &HashSet<(usize, usize)>,
+    size: f64,
 ) -> (bool, Vec<Option<f64>>) {
-    let size = b.bbox().diagonal();
     let suspect = |si: usize| {
         let faces = b.solid_faces(si);
         // (Two faces closing on each other are a sliver too. A solid of more faces encloses
@@ -6346,10 +6356,12 @@ fn finish(
     }
     let mut inputs = vec![target];
     inputs.extend_from_slice(tools);
+    // (Every input's faces against every origin is the faces squared, a boolean.)
+    let used: rustc_hash::FxHashSet<(BodyId, usize)> = origin.iter().flatten().copied().collect();
     for &ib in &inputs {
         let n = k.get(ib)?.faces.len();
         for f in 0..n {
-            if !origin.iter().flatten().any(|(b, g)| *b == ib && *g == f) {
+            if !used.contains(&(ib, f)) {
                 history.deleted.push(InputFace {
                     body: ib,
                     face: FaceId(f as u64),
@@ -6358,6 +6370,7 @@ fn finish(
         }
     }
     let id = k.insert(cur);
+    k.made_of(id, target);
     Ok(OpResult {
         bodies: vec![id],
         history,
@@ -6654,6 +6667,8 @@ fn boolean_opts(
         return r;
     }
     let mut cur = (**k.get(target)?).clone();
+    // (The target's boxes are its copy's, while the copy is as the target is.)
+    let target_boxes = k.entry(target)?.boxes().clone();
     // For each face of `cur`: where it came from (body, face).
     let mut origin: Vec<Vec<(BodyId, usize)>> =
         (0..cur.faces.len()).map(|i| vec![(target, i)]).collect();
@@ -6698,7 +6713,10 @@ fn boolean_opts(
                 }
             };
             if let Ok((tool, tool_from)) = made
-                && let Ok(r) = boolean_bodies_with(&cur, &tool, op, opts)
+                && let Ok(r) = {
+                    let _kept = super::topo::keep_boxes_made(&cur, &target_boxes);
+                    boolean_bodies_with(&cur, &tool, op, opts)
+                }
             {
                 origin = r
                     .from
@@ -6719,9 +6737,12 @@ fn boolean_opts(
                 return finish(k, target, tools, cur, origin);
             }
         }
-        for &t in tools {
+        for (i, &t) in tools.iter().enumerate() {
             let tb = std::sync::Arc::clone(k.get(t)?);
-            let r = boolean_bodies_with(&cur, &tb, op, opts)?;
+            let r = {
+                let _kept = (i == 0).then(|| super::topo::keep_boxes_made(&cur, &target_boxes));
+                boolean_bodies_with(&cur, &tb, op, opts)?
+            };
             origin = r
                 .from
                 .iter()

@@ -35,6 +35,13 @@ pub struct Entry {
     face_boxes: OnceLock<Vec<Bbox>>,
     /// Whether [`Body::check`] finds nothing ([`NativeKernel::sound`]).
     sound: OnceLock<bool>,
+    /// [`Body::boxes`]: a boolean asks for its inputs' boxes many times over, and the body a
+    /// pass cut is the next pass's target.
+    boxes: OnceLock<super::topo::Boxes>,
+    /// The body's [`Body::oriented_face_keys`], for the bodies booleans make of it.
+    oriented: OnceLock<Arc<rustc_hash::FxHashSet<u128>>>,
+    /// Those of the sound body a boolean made this one of ([`NativeKernel::made_of`]).
+    made_of: OnceLock<Arc<rustc_hash::FxHashSet<u128>>>,
 }
 
 impl Entry {
@@ -49,8 +56,16 @@ impl Entry {
             aabb: OnceLock::new(),
             face_boxes: OnceLock::new(),
             sound: OnceLock::new(),
+            boxes: OnceLock::new(),
+            oriented: OnceLock::new(),
+            made_of: OnceLock::new(),
         }
     }
+    /// [`Body::boxes`], made once.
+    pub(crate) fn boxes(&self) -> &super::topo::Boxes {
+        self.boxes.get_or_init(|| self.body.boxes())
+    }
+
     /// Each face's box, grown by the largest of the body's edge and vertex tolerances and
     /// [`tol::POINT`].
     pub fn face_boxes(&self) -> &Vec<Bbox> {
@@ -185,8 +200,35 @@ impl NativeKernel {
     /// such body). Checked once: a body never changes, and a sweep's steps each ask of the
     /// body the step before handed on.
     pub(crate) fn sound(&self, id: BodyId) -> bool {
-        self.entry(id)
-            .is_ok_and(|e| *e.sound.get_or_init(|| e.body.check().is_empty()))
+        self.entry(id).is_ok_and(|e| {
+            *e.sound.get_or_init(|| match e.made_of.get() {
+                Some(from) => e.body.check_cut_from(from).is_empty(),
+                None => e.body.check().is_empty(),
+            })
+        })
+    }
+
+    /// [`seam_through_a_vertex`] of a body of the session, its boxes kept with it.
+    fn seam_through_a_vertex(&self, id: BodyId) -> bool {
+        self.entry(id).is_ok_and(|e| {
+            let _kept = super::topo::keep_boxes_made(&e.body, e.boxes());
+            seam_through_a_vertex(&e.body)
+        })
+    }
+
+    /// Notes that a boolean made body `id` of `target` (cut from it, added to it, or what it
+    /// shares with another): where `target` is known sound, `id`'s check takes the faces it
+    /// kept of it as pointing the right way ([`Body::check_cut_from`]).
+    pub(crate) fn made_of(&self, id: BodyId, target: BodyId) {
+        let (Ok(e), Ok(t)) = (self.entry(id), self.entry(target)) else {
+            return;
+        };
+        if t.sound.get() == Some(&true) {
+            let keys = t
+                .oriented
+                .get_or_init(|| Arc::new(t.body.oriented_face_keys().into_iter().collect()));
+            let _ = e.made_of.set(Arc::clone(keys));
+        }
     }
 
     /// Whether two solid bodies are sure to be apart, no boolean needed: no face of one comes
@@ -1381,6 +1423,18 @@ impl Kernel for NativeKernel {
         {
             return self.colored(Ok(r));
         }
+        // The inputs' boxes, made once for all the operation asks of them.
+        let held: Vec<(Arc<Body>, super::topo::Boxes)> = std::iter::once(&target)
+            .chain(tools)
+            .filter_map(|id| {
+                let e = self.entry(*id).ok()?;
+                Some((Arc::clone(&e.body), e.boxes().clone()))
+            })
+            .collect();
+        let _kept: Vec<super::topo::KeptBoxes> = held
+            .iter()
+            .map(|(b, made)| super::topo::keep_boxes_made(b, made))
+            .collect();
         // With the tool's faces that lie a hair off the target's moved onto them, the history
         // naming the tool's own faces.
         let on_snapped = |k: &mut Self, snapped: Body| -> Result<OpResult> {
@@ -1432,10 +1486,7 @@ impl Kernel for NativeKernel {
         // turn, kept when that one is clear of it.
         if let (Ok(res), [tool]) = (&r, tools)
             && !crate::native::env_flag!("CADRS_NO_SEAM_TURN")
-            && res
-                .bodies
-                .iter()
-                .any(|id| self.get(*id).is_ok_and(|b| seam_through_a_vertex(b)))
+            && res.bodies.iter().any(|id| self.seam_through_a_vertex(*id))
         {
             for which in [*tool, target] {
                 let Some(turned) = self.get(which).ok().and_then(|b| cylinder_turned(b)) else {
@@ -1457,11 +1508,7 @@ impl Kernel for NativeKernel {
                 };
                 self.release(id);
                 let Ok(mut res2) = again else { continue };
-                if res2
-                    .bodies
-                    .iter()
-                    .any(|b| self.get(*b).is_ok_and(|b| seam_through_a_vertex(b)))
-                {
+                if res2.bodies.iter().any(|b| self.seam_through_a_vertex(*b)) {
                     for b in &res2.bodies {
                         self.release(*b);
                     }
