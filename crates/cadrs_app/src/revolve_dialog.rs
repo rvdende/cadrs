@@ -656,10 +656,11 @@ fn revolve_dialog(
                         margin: UiRect::new(Val::Px(8.0), Val::Px(8.0), Val::Px(4.0), Val::Px(6.0)),
                         ..default()
                     },
-                    TextLayout::new(
-                        bevy::text::Justify::Left,
-                        bevy::text::LineBreak::WordBoundary,
-                    ),
+                ))
+                // After the text's own layout: a bundle can't hold the component twice.
+                .insert(TextLayout::new(
+                    bevy::text::Justify::Left,
+                    bevy::text::LineBreak::WordBoundary,
                 ));
             })
             .footer(move |f| {
