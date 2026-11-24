@@ -4748,7 +4748,28 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         let fit = ce
             .pcs
             .as_ref()
-            .and_then(|p| ssi::pcurve_from(p, &f.surf, &ce.curve, ce.t[0], ce.t[1]));
+            .and_then(|p| ssi::pcurve_from(p, &f.surf, &ce.curve, ce.t[0], ce.t[1]))
+            // On a free-form surface, where a p-curve is fitted by projecting the curve a
+            // point at a time: the arc's own, carried from its edge to the one it is taken
+            // for (the same curve to within the run's tolerance).
+            .or_else(|| {
+                let ae = &pool.edges[a.edge];
+                let free = matches!(
+                    f.surf,
+                    Surface::Nurbs(_) | Surface::Extrusion { .. } | Surface::Revolution { .. }
+                );
+                if !free
+                    || ae.degenerate
+                    || ce.degenerate
+                    || super::env_flag!("CADRS_NO_PC_CARRIED")
+                {
+                    return None;
+                }
+                let allowed = 4.0 * run_tol.max(ae.tol).max(ce.tol).max(tol::POINT);
+                pcurve::carried(
+                    &f.surf, &ce.curve, ce.t[0], ce.t[1], &ae.curve, ae.t, &a.pc, allowed,
+                )
+            });
         let pc = pcurve::pcurve_or(&f.surf, &ce.curve, ce.t[0], ce.t[1], Some(near), fit);
         // On a B-spline surface closing on itself within a tolerance only (a ring glued at
         // its seam), the projection may land on the seam's other side: the copy a whole range
