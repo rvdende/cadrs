@@ -19,7 +19,7 @@ use bevy::ui::InteractionDisabled;
 use bevy::ui_widgets::{Activate, observe};
 use cadrs_core::preferences::{
     ColorScheme, FrameStatsMode, GridStyle, Language, MousePreset, OriginStyle, Preferences,
-    UI_SCALES, ViewAction,
+    SPACE_MOUSE_SPEEDS, SpaceMouseZoom, UI_SCALES, ViewAction,
 };
 use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::{
@@ -200,6 +200,8 @@ impl PrefsDialog {
                 p.mouse = d.mouse;
                 p.keep_camera_up = d.keep_camera_up;
                 p.sketch_view_normal = d.sketch_view_normal;
+                p.space_mouse_zoom = d.space_mouse_zoom;
+                p.space_mouse_speed = d.space_mouse_speed;
             }
             Section::Assembly => {
                 self.snap = degrees(d.rotation_snap_degrees);
@@ -465,6 +467,13 @@ fn options<T: Copy + PartialEq>(all: &[T], label: impl Fn(T) -> String, now: T) 
     )
 }
 
+fn space_mouse_zoom_label(z: SpaceMouseZoom) -> String {
+    tr(match z {
+        SpaceMouseZoom::UpDown => "preferences-space-mouse-zoom-up-down",
+        SpaceMouseZoom::ForwardBackward => "preferences-space-mouse-zoom-forward-backward",
+    })
+}
+
 fn groups(section: Section, s: &PrefsDialog, facts: &Facts) -> Vec<Group> {
     let p = &s.draft;
     match section {
@@ -636,6 +645,38 @@ fn groups(section: Section, s: &PrefsDialog, facts: &Facts) -> Vec<Group> {
                             ),
                         )
                         .note("preferences-sketch-view-normal-note"),
+                    ],
+                },
+                Group {
+                    key: "preferences-space-mouse-heading",
+                    rows: vec![
+                        Row::new(
+                            "pref-space-mouse-zoom",
+                            tr("preferences-space-mouse-zoom"),
+                            "spacemouse space mouse 3dconnexion zoom forward backward up down",
+                            options(
+                                SpaceMouseZoom::ALL,
+                                space_mouse_zoom_label,
+                                p.space_mouse_zoom,
+                            ),
+                        )
+                        .note("preferences-space-mouse-zoom-note"),
+                        Row::new(
+                            "pref-space-mouse-speed",
+                            tr("preferences-space-mouse-speed"),
+                            "spacemouse space mouse 3dconnexion speed sensitivity",
+                            Control::Select(
+                                SPACE_MOUSE_SPEEDS
+                                    .iter()
+                                    .map(|&v| (format!("{v}%"), None))
+                                    .collect(),
+                                // A speed between the presets shows as the nearest below.
+                                SPACE_MOUSE_SPEEDS
+                                    .iter()
+                                    .rposition(|&v| v <= p.space_mouse_speed)
+                                    .unwrap_or(0),
+                            ),
+                        ),
                     ],
                 },
             ]
@@ -1076,6 +1117,8 @@ fn previewed(base: Preferences, draft: &Preferences, kept: &Preferences) -> Pref
         mouse: draft.mouse,
         keep_camera_up: draft.keep_camera_up,
         sketch_view_normal: kept.sketch_view_normal,
+        space_mouse_zoom: draft.space_mouse_zoom,
+        space_mouse_speed: draft.space_mouse_speed,
         language: kept.language,
         profile_cpu: kept.profile_cpu,
         autoconnect_p2p: kept.autoconnect_p2p,
@@ -1162,6 +1205,14 @@ fn on_select(
         },
         "pref-frame-stats" => match FrameStatsMode::ALL.get(i) {
             Some(&m) => Box::new(move |s| s.draft.frame_stats = m),
+            None => return,
+        },
+        "pref-space-mouse-zoom" => match SpaceMouseZoom::ALL.get(i) {
+            Some(&z) => Box::new(move |s| s.draft.space_mouse_zoom = z),
+            None => return,
+        },
+        "pref-space-mouse-speed" => match SPACE_MOUSE_SPEEDS.get(i) {
+            Some(&v) => Box::new(move |s| s.draft.space_mouse_speed = v),
             None => return,
         },
         "pref-mouse-preset" => match MousePreset::ALL.get(i) {

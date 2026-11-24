@@ -342,6 +342,22 @@ coded_choice!(GridStyle {
     Lines => "lines",
 });
 
+/// Which way of moving a SpaceMouse's cap zooms (Preferences › Navigation › SpaceMouse); the
+/// other of the two moves the view up and down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum SpaceMouseZoom {
+    /// Pulling the cap up and pushing it down.
+    #[default]
+    UpDown,
+    /// Moving the cap forward (away from you) and backward.
+    ForwardBackward,
+}
+
+coded_choice!(SpaceMouseZoom {
+    UpDown => "up-down",
+    ForwardBackward => "forward-backward",
+});
+
 /// How the origin is drawn in the 3D view (Preferences › Interface › Origin; the eye on the
 /// feature list's Origin row hides and shows it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -445,6 +461,13 @@ pub struct Preferences {
     /// How the origin is drawn ([`OriginStyle`]).
     #[serde(default)]
     pub origin: OriginStyle,
+    /// Which way of moving a SpaceMouse's cap zooms ([`SpaceMouseZoom`]).
+    #[serde(default)]
+    pub space_mouse_zoom: SpaceMouseZoom,
+    /// A SpaceMouse's speed, pan, zoom and turn alike, in percent of the default (one of
+    /// [`SPACE_MOUSE_SPEEDS`]).
+    #[serde(default = "default_space_mouse_speed")]
+    pub space_mouse_speed: u16,
 }
 
 /// A language cadrs's interface has a catalog for (`cadrs_ui::i18n::LANGUAGES`, in the same
@@ -561,8 +584,17 @@ impl Default for Preferences {
             grid: GridStyle::default(),
             frame_stats: FrameStatsMode::default(),
             origin: OriginStyle::default(),
+            space_mouse_zoom: SpaceMouseZoom::default(),
+            space_mouse_speed: default_space_mouse_speed(),
         }
     }
+}
+
+/// The SpaceMouse speeds offered (percent of the default).
+pub const SPACE_MOUSE_SPEEDS: [u16; 7] = [25, 50, 75, 100, 150, 200, 300];
+
+fn default_space_mouse_speed() -> u16 {
+    100
 }
 
 /// The interface sizes offered (percent).
@@ -573,6 +605,14 @@ fn default_ui_scale() -> u16 {
 }
 
 impl Preferences {
+    /// The SpaceMouse's speed as a factor (1 is the default), kept within the speeds offered.
+    pub fn space_mouse_speed_factor(&self) -> f32 {
+        f32::from(self.space_mouse_speed.clamp(
+            SPACE_MOUSE_SPEEDS[0],
+            SPACE_MOUSE_SPEEDS[SPACE_MOUSE_SPEEDS.len() - 1],
+        )) / 100.0
+    }
+
     /// The interface's scale as a factor (1 is the display's own), kept within the sizes offered.
     pub fn ui_scale_factor(&self) -> f32 {
         f32::from(
@@ -755,6 +795,8 @@ mod tests {
             grid: GridStyle::Off,
             frame_stats: FrameStatsMode::Fps,
             origin: OriginStyle::Axes,
+            space_mouse_zoom: SpaceMouseZoom::ForwardBackward,
+            space_mouse_speed: 150,
         };
         p.save(&dir).unwrap();
         assert_eq!(Preferences::load(&dir), p);
