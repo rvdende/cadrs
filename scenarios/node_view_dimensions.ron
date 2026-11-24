@@ -1,0 +1,33 @@
+// The node view drives a sketch's dimension (`cadrs_app::node_view`): a sketch node lists its
+// driven dimensions, each with an input, and "+ Drive a dimension" asks which one a dropped
+// wire drives. `control-arm-sketch`: the course control arm's sketch, with its dimensions.
+// 01 The node view with an input `input1` (10 mm): Sketch 1 has "+ Drive a dimension".
+// 02 input1's output dropped on it: a menu of the sketch's dimensions (D1, D2…).
+// 03 D1 chosen: Sketch 1 lists "D1 · 10 mm   #input1", wired from the Configuration node.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Custom("control-arm-sketch"),
+        Wait(20),
+        Click(ui("feature-node-view")),
+        WaitFor("node-canvas"),
+        Wait(40),
+        Click(ui("node-configure")),
+        Wait(10),
+        Click(ui("node-input-add")),
+        WaitFor("node-input-input1-out"),
+        WaitFor("node-sketch-1-dim-add"),
+        Wait(20),
+        Screenshot("01-drive-a-dimension"),
+        Drag(ui("node-input-input1-out"), ui("node-sketch-1-dim-add")),
+        WaitFor("node-drive-dimension-1"),
+        Wait(5),
+        Screenshot("02-which-dimension"),
+        Click(ui("node-drive-dimension-1")),
+        WaitFor("node-sketch-1-dim-1"),
+        ExpectText("node-sketch-1-dimensions", "#input1"),
+        Wait(40),
+        Screenshot("03-driven"),
+    ],
+)

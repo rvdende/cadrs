@@ -6846,6 +6846,8 @@ node-view-expand = Expand
 # A node's input socket that turns the feature on and off (wired from a boolean input: the
 # feature is suppressed while it is false).
 node-view-enabled = Enabled (suppressed while false)
+node-view-drive-dimension = + Drive a dimension
+node-view-no-dimension = No dimension of this sketch can take this value, or they are all driven already
 # The node the presets and inputs are on.
 node-view-configuration = Configuration
 node-view-add-configuration = Add configuration

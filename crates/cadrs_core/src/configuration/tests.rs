@@ -645,3 +645,71 @@ fn a_preset_parts_properties_are_the_studios() {
     // The preset's studio took it up.
     assert!(own(t.d.element(configured_id(t.ps, short)).unwrap()).contains("A block"));
 }
+
+/// A sketch's dimension wired to an input follows the preset (in the studio and in a preset's
+/// generated copy), is listed as driven, and keeps its value when unwired.
+#[test]
+fn an_input_drives_a_sketch_dimension() {
+    use cadrs_sketch::{Dimension, DimensionKind, Vec2};
+    let mut t = T::new();
+    let (_, short, long) = t.with_presets();
+    let sk = FeatureId::new();
+    let mut g = cadrs_sketch::Sketch::default();
+    let a = g.add_point(Vec2::ZERO);
+    let b = g.add_point(Vec2::new(10.0, 0.0));
+    let dim = g.dimensions.insert(Dimension {
+        kind: DimensionKind::Horizontal { a, b },
+        value: 10.0,
+        offset: 5.0,
+        along: 0.0,
+        driven: false,
+    });
+    t.d.element_mut(t.ps)
+        .unwrap()
+        .features_mut()
+        .unwrap()
+        .insert(
+            0,
+            Feature::new(
+                sk,
+                "Sketch 1",
+                FeatureKind::Sketch(crate::document::SketchFeature {
+                    geometry: g,
+                    ..Default::default()
+                }),
+            ),
+        );
+    let slots = |t: &T| dimension_slots(t.el().feature(sk).unwrap());
+    assert_eq!(slots(&t)[0].label, "D1");
+    assert!(!slots(&t)[0].is_driven());
+    t.run(&ConnectDimension {
+        element: t.ps,
+        feature: sk,
+        dimension: dim,
+        expr: "#length".into(),
+    });
+    // Long is active: 50.
+    let s = slots(&t);
+    assert!(s[0].is_driven());
+    assert_eq!(s[0].value, 50.0);
+    t.run(&SetActivePreset {
+        element: t.ps,
+        preset: short,
+    });
+    assert_eq!(slots(&t)[0].value, 30.0);
+    // A preset's copy (for an assembly instance) has its own value.
+    let copy = generate(t.el(), long, &t.d.units).unwrap();
+    let FeatureKind::Sketch(cs) = &copy.feature(sk).unwrap().kind else {
+        panic!()
+    };
+    assert_eq!(cs.geometry.dimensions[dim].value, 50.0);
+    // Unwired, it keeps the value it shows.
+    t.run(&DisconnectDimension {
+        element: t.ps,
+        feature: sk,
+        dimension: dim,
+    });
+    let s = slots(&t);
+    assert!(!s[0].is_driven());
+    assert_eq!(s[0].value, 30.0);
+}

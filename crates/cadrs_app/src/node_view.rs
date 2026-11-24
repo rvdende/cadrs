@@ -44,8 +44,8 @@ use cadrs_ui::node_graph::{
     WireDisconnect,
 };
 use cadrs_ui::{
-    CheckboxChange, FeatureDialog, FeatureDialogState, IconButton, NumberField, NumberFieldCommit,
-    Select, SelectChange, TextInput, TextSubmit, Theme,
+    CheckboxChange, FeatureDialog, FeatureDialogState, IconButton, Menu, MenuItem, NumberField,
+    NumberFieldCommit, Select, SelectChange, TextInput, TextSubmit, Theme,
 };
 
 use crate::ActiveDocument;
@@ -72,6 +72,7 @@ impl Plugin for NodeViewPlugin {
         )
         .add_observer(on_toggle)
         .add_observer(on_panel_resized)
+        .add_observer(on_drive_dimension)
         .add_observer(on_view_changed)
         .add_observer(on_node_moved)
         .add_observer(on_wire_connect)
@@ -220,6 +221,10 @@ enum SocketKey {
     Variable(FeatureId),
     /// A part of the Parts node.
     Part(cadrs_core::PartId),
+    /// A sketch dimension an expression drives ([`cfg::dimension_slots`]).
+    Dimension(FeatureId, cadrs_sketch::DimensionId),
+    /// A sketch's "Drive a dimension" input: a wire dropped there asks which dimension.
+    DriveDimension(FeatureId),
 }
 
 /// A node's collapse chevron.
@@ -1312,6 +1317,12 @@ fn spawn_feature_node(
             }
         }
     }
+    // A sketch's driven dimensions, each an input of its own, and the input that drives another.
+    let dimension_rows = if f.sketch().is_some() && !collapsed {
+        spawn_dimension_rows(world, f, &slug, root, t, units)
+    } else {
+        Vec::new()
+    };
     // The cover: below the header, over the rest.
     world.spawn((
         Name::new(format!("node-{slug}-body")),
@@ -1519,6 +1530,23 @@ fn spawn_feature_node(
             ChildOf(root),
         ));
     }
+    // The driven dimensions' inputs, and "Drive a dimension".
+    for (key, row, ty) in dimension_rows {
+        let color = if ty == cadrs_ui::node_graph::ANY_TYPE {
+            t.muted_foreground
+        } else {
+            socket_color(ty)
+        };
+        let name = match &key {
+            SocketKey::Dimension(_, d) => format!("node-{slug}-dim-{}", dim_index(f, *d)),
+            _ => format!("node-{slug}-dim-add"),
+        };
+        world.spawn((
+            key,
+            Socket::bundle(name, SocketSide::In, ty, Some(row), color, t),
+            ChildOf(root),
+        ));
+    }
     // A Variable's value, out.
     if let FeatureKind::Variable(v) = &f.kind
         && let Some(row) = rows
@@ -1541,6 +1569,119 @@ fn spawn_feature_node(
         ));
     }
     root
+}
+
+/// A dimension's place among its sketch's driving ones (1 for `D1`).
+fn dim_index(f: &Feature, d: cadrs_sketch::DimensionId) -> usize {
+    cfg::dimension_slots(f)
+        .iter()
+        .position(|s| s.id == d)
+        .map_or(0, |k| k + 1)
+}
+
+/// A sketch node's "Driven dimensions": a row for each dimension an expression drives
+/// (`D3 · 1.5 mm   #input1`), and **Drive a dimension**, whose input takes a wire of any
+/// value and asks which dimension. Returns each row's socket (key, row, socket type), for
+/// [`spawn_feature_node`] to spawn once the card's other sockets are placed.
+fn spawn_dimension_rows(
+    world: &mut World,
+    f: &Feature,
+    slug: &str,
+    root: Entity,
+    t: &Theme,
+    units: &Units,
+) -> Vec<(SocketKey, Entity, u32)> {
+    let slots = cfg::dimension_slots(f);
+    if slots.is_empty() {
+        return Vec::new();
+    }
+    let section = world
+        .spawn((
+            Name::new(format!("node-{slug}-dimensions")),
+            Node {
+                flex_direction: FlexDirection::Column,
+                margin: UiRect::top(Val::Px(-1.0)),
+                padding: UiRect::vertical(Val::Px(3.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                ..default()
+            },
+            BackgroundColor(t.floating),
+            BorderColor::all(t.glass_rim),
+            ChildOf(root),
+        ))
+        .id();
+    let row = |world: &mut World, name: String, left: String, right: String, muted: bool| {
+        let r = world
+            .spawn((
+                Name::new(name),
+                Node {
+                    height: Val::Px(22.0),
+                    padding: UiRect::horizontal(Val::Px(14.0)),
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::SpaceBetween,
+                    column_gap: Val::Px(8.0),
+                    ..default()
+                },
+                ChildOf(section),
+            ))
+            .id();
+        let fg = if muted {
+            t.muted_foreground
+        } else {
+            t.foreground
+        };
+        world
+            .spawn((
+                t.text(left, t.font_sm, bevy::text::FontWeight::NORMAL, fg),
+                ChildOf(r),
+            ))
+            .insert(TextLayout::no_wrap());
+        world
+            .spawn((
+                t.text(
+                    right,
+                    t.font_sm,
+                    bevy::text::FontWeight::NORMAL,
+                    t.muted_foreground,
+                ),
+                ChildOf(r),
+            ))
+            .insert(TextLayout::no_wrap());
+        r
+    };
+    let mut out = Vec::new();
+    for (k, s) in slots.iter().enumerate() {
+        if !s.is_driven() {
+            continue;
+        }
+        let r = row(
+            world,
+            format!("node-{slug}-dim-{}-row", k + 1),
+            format!("{} · {}", s.label, units.with_unit(s.value, s.quantity)),
+            s.expr.clone().unwrap_or_default(),
+            false,
+        );
+        out.push((
+            SocketKey::Dimension(f.id, s.id),
+            r,
+            quantity_type(s.quantity),
+        ));
+    }
+    if slots.iter().any(|s| !s.is_driven()) {
+        let r = row(
+            world,
+            format!("node-{slug}-dim-add-row"),
+            tr("node-view-drive-dimension"),
+            String::new(),
+            true,
+        );
+        out.push((
+            SocketKey::DriveDimension(f.id),
+            r,
+            cadrs_ui::node_graph::ANY_TYPE,
+        ));
+    }
+    out
 }
 
 /// `root` and every entity under it.
@@ -1806,6 +1947,24 @@ fn graph_wires(
                 }
             }
         }
+        // A sketch's dimensions driven by an input or a Variable.
+        for d in cfg::dimension_slots(f) {
+            let Some(expr) = d.expr.as_deref().filter(|_| d.is_driven()) else {
+                continue;
+            };
+            let names = cadrs_sketch::units::variable_names(expr);
+            let exact = names.len() == 1 && expr.trim() == format!("#{}", names[0]);
+            for n in names {
+                if let Some(src) = source(&n, i) {
+                    wires.push((
+                        src,
+                        SocketKey::Dimension(f.id, d.id),
+                        socket_color(quantity_type(d.quantity)),
+                        !exact,
+                    ));
+                }
+            }
+        }
         if let Some(rule) = &f.suppress_by {
             let names = cadrs_sketch::units::variable_names(&rule.expr);
             let exact =
@@ -1866,6 +2025,12 @@ pub fn node_graph_json(
                 .into_iter()
                 .map(|(label, _, expr)| json!({ "field": label, "expression": expr })),
         );
+        inputs.extend(
+            cfg::dimension_slots(f)
+                .into_iter()
+                .filter(|d| d.is_driven())
+                .map(|d| json!({ "dimension": d.label, "expression": d.expr, "value": d.value })),
+        );
         nodes.push(json!({
             "node": f.name,
             "type": cadrs_core::feature_list::type_label(&f.kind),
@@ -1888,6 +2053,16 @@ pub fn node_graph_json(
             SocketKey::GeoOut(f) => json!({ "node": name_of(*f), "socket": "geometry out" }),
             SocketKey::GeoIn(f) => json!({ "node": name_of(*f), "socket": "geometry in" }),
             SocketKey::Scope(f) => json!({ "node": name_of(*f), "socket": "merge scope" }),
+            SocketKey::Dimension(f, d) => json!({
+                "node": name_of(*f),
+                "socket": el
+                    .feature(*f)
+                    .and_then(|g| cfg::dimension_slots(g).into_iter().find(|s| s.id == *d))
+                    .map(|s| s.label),
+            }),
+            SocketKey::DriveDimension(f) => {
+                json!({ "node": name_of(*f), "socket": "drive a dimension" })
+            }
             SocketKey::Slot(f, label) => json!({ "node": name_of(*f), "socket": label }),
             SocketKey::Bypass(f) => json!({ "node": name_of(*f), "socket": "bypass" }),
             SocketKey::Input(n) => json!({ "node": "Configuration", "socket": n }),
@@ -2680,6 +2855,11 @@ fn unwire(element: ElementId, dst: &SocketKey) -> Option<Box<dyn cadrs_core::Com
             feature: *feature,
             rule: None,
         })),
+        SocketKey::Dimension(feature, dimension) => Some(Box::new(cfg::DisconnectDimension {
+            element,
+            feature: *feature,
+            dimension: *dimension,
+        })),
         _ => None,
     }
 }
@@ -2705,7 +2885,10 @@ fn on_wire_connect(ev: On<WireConnect>, mut commands: Commands) {
             _ => return,
         };
         let target = match &dst {
-            SocketKey::Slot(f, _) | SocketKey::Bypass(f) => *f,
+            SocketKey::Slot(f, _)
+            | SocketKey::Bypass(f)
+            | SocketKey::Dimension(f, _)
+            | SocketKey::DriveDimension(f) => *f,
             _ => return,
         };
         if let SocketKey::Variable(v) = &src {
@@ -2729,6 +2912,18 @@ fn on_wire_connect(ev: On<WireConnect>, mut commands: Commands) {
                 feature: *feature,
                 rule: Some(cadrs_core::variables::SuppressByVariable::variable(&name)),
             }),
+            SocketKey::Dimension(feature, dimension) => Box::new(cfg::ConnectDimension {
+                element,
+                feature: *feature,
+                dimension: *dimension,
+                expr: format!("#{name}"),
+            }),
+            // Which dimension: asked (the wire's quantity's, not yet driven).
+            SocketKey::DriveDimension(feature) => {
+                ask_dimension(world, &el, *feature, &name);
+                world.resource_mut::<ActiveDocument>().set_changed();
+                return;
+            }
             _ => return,
         };
         let old = replaces
@@ -2745,6 +2940,108 @@ fn on_wire_connect(ev: On<WireConnect>, mut commands: Commands) {
             ),
             None => run(world, wire.as_ref()),
         }
+        world.resource_mut::<ActiveDocument>().set_changed();
+    });
+}
+
+/// The menu a wire dropped on a sketch's **Drive a dimension** opens: the sketch's dimensions
+/// that the wire's value can drive (lengths for a length, angles for an angle; any for a plain
+/// number) and no expression drives yet. Its anchor holds the sketch and the name.
+#[derive(Component, Debug, Clone)]
+struct DriveDimensionMenu {
+    feature: FeatureId,
+    name: String,
+}
+
+/// Opens [`DriveDimensionMenu`] at the pointer (a message when no dimension fits).
+fn ask_dimension(world: &mut World, el: &Element, feature: FeatureId, name: &str) {
+    let Some(f) = el.feature(feature) else { return };
+    // What the wire carries: an input's kind, a Variable's.
+    let quantity = el
+        .configuration()
+        .and_then(|c| c.input_named(name))
+        .map(|i| i.kind.quantity())
+        .or_else(|| {
+            el.features().iter().find_map(|g| match &g.kind {
+                FeatureKind::Variable(v) if v.name == name => Some(v.kind.quantity()),
+                _ => None,
+            })
+        });
+    let fits = |q: cadrs_sketch::units::Quantity| match quantity {
+        Some(cadrs_sketch::units::Quantity::Count) | None => true,
+        Some(w) => w == q,
+    };
+    let units = world.resource::<crate::WorkspaceUnits>().0;
+    let free: Vec<cfg::DimensionSlot> = cfg::dimension_slots(f)
+        .into_iter()
+        .filter(|d| !d.is_driven() && fits(d.quantity))
+        .collect();
+    if free.is_empty() {
+        toast(world, tr("node-view-no-dimension"));
+        return;
+    }
+    let mut menu = Menu::new("node-drive-dimension-menu")
+        .min_width(180.0)
+        .item_height(23.0);
+    for d in &free {
+        menu = menu.item(MenuItem::new(
+            format!("node-drive-dimension-{}", dim_index(f, d.id)),
+            format!("{} · {}", d.label, units.with_unit(d.value, d.quantity)),
+        ));
+    }
+    let at = world
+        .query_filtered::<&Window, With<bevy::window::PrimaryWindow>>()
+        .iter(world)
+        .next()
+        .and_then(|w| w.cursor_position())
+        .unwrap_or(Vec2::splat(200.0));
+    let theme = world.resource::<Theme>().clone();
+    let mut commands = world.commands();
+    let anchor = cadrs_ui::open_context_menu(&mut commands, at, menu.build(&theme));
+    commands.entity(anchor).insert((
+        DriveDimensionMenu {
+            feature,
+            name: name.to_string(),
+        },
+        DespawnOnExit(crate::AppState::Document),
+    ));
+    world.flush();
+}
+
+/// A dimension chosen in [`DriveDimensionMenu`]: `#name` drives it.
+fn on_drive_dimension(
+    ev: On<cadrs_ui::MenuAction>,
+    q: Query<&DriveDimensionMenu>,
+    mut commands: Commands,
+) {
+    let Ok(m) = q.get(ev.entity) else { return };
+    let Some(k) = ev
+        .item
+        .strip_prefix("node-drive-dimension-")
+        .and_then(|k| k.parse::<usize>().ok())
+    else {
+        return;
+    };
+    let (feature, name) = (m.feature, m.name.clone());
+    commands.queue(move |world: &mut World| {
+        let Some(el) = world.resource::<ActiveDocument>().active_element().cloned() else {
+            return;
+        };
+        let Some(d) = el
+            .feature(feature)
+            .and_then(|f| cfg::dimension_slots(f).into_iter().nth(k.wrapping_sub(1)))
+        else {
+            return;
+        };
+        run(
+            world,
+            &cfg::ConnectDimension {
+                element: el.id,
+                feature,
+                dimension: d.id,
+                expr: format!("#{name}"),
+            },
+        );
         world.resource_mut::<ActiveDocument>().set_changed();
     });
 }

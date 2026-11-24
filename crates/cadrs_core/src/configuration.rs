@@ -1091,6 +1091,107 @@ impl Command for ConnectParameter {
     }
 }
 
+/// A sketch dimension the node view can drive (a driving one, not a reference): `D1`, `D2`, …
+/// in the sketch's order (as the Onshape-style configuration table names them), what it
+/// measures, its value and the expression it holds, if any (`#input1`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DimensionSlot {
+    pub id: cadrs_sketch::DimensionId,
+    pub label: String,
+    pub quantity: Quantity,
+    pub value: f64,
+    pub expr: Option<String>,
+}
+
+impl DimensionSlot {
+    /// Whether an expression naming a variable drives it.
+    pub fn is_driven(&self) -> bool {
+        self.expr.as_deref().is_some_and(|e| e.contains('#'))
+    }
+}
+
+/// A sketch's driving dimensions ([`DimensionSlot`]); none for another feature.
+pub fn dimension_slots(f: &Feature) -> Vec<DimensionSlot> {
+    let Some(sk) = f.sketch() else {
+        return Vec::new();
+    };
+    let g = &sk.geometry;
+    g.dimensions
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, d))| !d.driven)
+        .map(|(k, (id, d))| DimensionSlot {
+            id,
+            label: format!("D{}", k + 1),
+            quantity: d.kind.quantity(),
+            value: d.value,
+            expr: g
+                .expressions
+                .iter()
+                .find(|(e, _)| *e == id)
+                .map(|(_, x)| x.clone()),
+        })
+        .collect()
+}
+
+/// Drives a sketch dimension with an expression (the node view's wire from an input into the
+/// sketch: `#input1`); the variables' refresh sets its value and solves the sketch.
+#[derive(Debug, Clone)]
+pub struct ConnectDimension {
+    pub element: ElementId,
+    pub feature: FeatureId,
+    pub dimension: cadrs_sketch::DimensionId,
+    pub expr: String,
+}
+
+impl Command for ConnectDimension {
+    fn label(&self) -> String {
+        format!("Drive a dimension with {}", self.expr)
+    }
+    fn scope(&self) -> Scope {
+        Scope::Element(self.element)
+    }
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        crate::commands::EditSketch {
+            element: self.element,
+            feature: self.feature,
+            op: cadrs_sketch::SketchOp::SetDimensionExpr {
+                id: self.dimension,
+                expr: Some(self.expr.clone()),
+            },
+        }
+        .apply(doc)
+    }
+}
+
+/// Stops driving a sketch dimension: it keeps the value it has.
+#[derive(Debug, Clone)]
+pub struct DisconnectDimension {
+    pub element: ElementId,
+    pub feature: FeatureId,
+    pub dimension: cadrs_sketch::DimensionId,
+}
+
+impl Command for DisconnectDimension {
+    fn label(&self) -> String {
+        "Stop driving a dimension".into()
+    }
+    fn scope(&self) -> Scope {
+        Scope::Element(self.element)
+    }
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        crate::commands::EditSketch {
+            element: self.element,
+            feature: self.feature,
+            op: cadrs_sketch::SketchOp::SetDimensionExpr {
+                id: self.dimension,
+                expr: None,
+            },
+        }
+        .apply(doc)
+    }
+}
+
 /// Unwires a feature's field: its expression becomes its current value.
 #[derive(Debug, Clone)]
 pub struct DisconnectParameter {

@@ -1125,6 +1125,10 @@ fn shared_px(n: u8) -> f32 {
     WIRE_PX + (n.saturating_sub(1).min(3)) as f32
 }
 
+/// A socket type an input of which takes a wire of any type (the app sorts out which it
+/// can use: a sketch's "drive a dimension" input).
+pub const ANY_TYPE: u32 = u32::MAX;
+
 /// A wire's thickness on screen (logical px), whatever the zoom.
 const WIRE_PX: f32 = 2.0;
 
@@ -1666,7 +1670,7 @@ fn on_socket_drag_end(
         // The nearest input of the same type within SNAP px on screen.
         let mut best: Option<(f32, Entity)> = None;
         for (s, sock) in &q_socket {
-            if sock.side != SocketSide::In || sock.ty != from.ty {
+            if sock.side != SocketSide::In || (sock.ty != from.ty && sock.ty != ANY_TYPE) {
                 continue;
             }
             if canvas_of(s, &q_parent, &q_canvas) != Some(canvas) {
