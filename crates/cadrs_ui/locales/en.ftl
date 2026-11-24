@@ -6859,3 +6859,7 @@ node-view-kind-length = Length
 node-view-kind-angle = Angle
 node-view-kind-number = Number
 node-view-kind-boolean = Boolean
+# The instance context menu's submenu of a configured Part Studio's presets.
+asm-menu-preset = Preset
+# The features header's dropdown of the configuration's presets.
+node-view-active-preset = Preset the Part Studio shows

@@ -246,7 +246,7 @@ struct FeatureErrorIcon;
 
 /// The "Features (N)" header row.
 #[derive(Component)]
-struct FeaturesHeader;
+pub(crate) struct FeaturesHeader;
 
 /// While the ⓘ shows, the header gives "Features (N)" room and keeps it clear of the folder
 /// button (P3.8, the P3.7 judge: it crowded the icon). Without it, the header is as before.

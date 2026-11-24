@@ -45,10 +45,13 @@ impl Command for InsertInstance {
         Scope::Element(self.element)
     }
     fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
-        let src = self.instance.source.element();
-        // A preset of a configured Part Studio: its generated studio, made now.
+        // A configured Part Studio is inserted as its active preset (so the instance keeps
+        // that preset when the studio shows another), its generated studio made now.
+        let mut instance = self.instance.clone();
+        instance.source = crate::configuration::preset_source(doc, instance.source);
+        let src = instance.source.element();
         crate::configuration::ensure(doc, src);
-        match self.instance.source {
+        match instance.source {
             super::InstanceSource::Part { .. } => {
                 if !doc.element(src).is_some_and(|e| {
                     matches!(e.kind, crate::document::ElementKind::PartStudio { .. })
@@ -110,7 +113,7 @@ impl Command for InsertInstance {
         if asm.instance(self.instance.id).is_some() {
             return Err(CommandError::Invalid("instance id already in use".into()));
         }
-        let mut inst = self.instance.clone();
+        let mut inst = instance;
         inst.index = asm.next_index_of(doc_id, &inst);
         asm.instances.push(inst);
         Ok(())

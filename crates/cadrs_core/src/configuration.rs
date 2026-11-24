@@ -382,6 +382,38 @@ pub fn generate(
     Some(el)
 }
 
+/// The source an instance of `source` gets: for a configured Part Studio tab, its active
+/// preset's generated studio; any other as it is.
+pub fn preset_source(
+    doc: &Document,
+    source: crate::assembly::InstanceSource,
+) -> crate::assembly::InstanceSource {
+    let el = source.element();
+    match doc
+        .elements
+        .iter()
+        .find(|e| e.id == el)
+        .and_then(|e| e.configuration())
+        .and_then(|c| c.active_preset())
+    {
+        Some(p) => retarget(source, configured_id(el, p.id)),
+        None => source,
+    }
+}
+
+/// `source` with its Part Studio `to` (a subassembly's stays).
+fn retarget(
+    source: crate::assembly::InstanceSource,
+    to: ElementId,
+) -> crate::assembly::InstanceSource {
+    use crate::assembly::InstanceSource;
+    match source {
+        InstanceSource::Part { part, .. } => InstanceSource::Part { element: to, part },
+        InstanceSource::Studio { board, .. } => InstanceSource::Studio { element: to, board },
+        s @ InstanceSource::Assembly { .. } => s,
+    }
+}
+
 /// Generates the studio of the preset `id` names, if it is one that isn't generated yet (an
 /// instance of it is about to be inserted). Whether `id` is now an element of the document.
 pub fn ensure(doc: &mut Document, id: ElementId) -> bool {
@@ -1111,18 +1143,7 @@ impl Command for SetInstancePreset {
             .ok_or(CommandError::ElementNotFound(self.assembly))?;
         for (id, to) in &changes {
             if let Some(i) = asm_el.instances.iter_mut().find(|i| i.id == *id) {
-                i.source = match i.source {
-                    crate::assembly::InstanceSource::Part { part, .. } => {
-                        crate::assembly::InstanceSource::Part { element: *to, part }
-                    }
-                    crate::assembly::InstanceSource::Studio { board, .. } => {
-                        crate::assembly::InstanceSource::Studio {
-                            element: *to,
-                            board,
-                        }
-                    }
-                    s @ crate::assembly::InstanceSource::Assembly { .. } => s,
-                };
+                i.source = retarget(i.source, *to);
             }
         }
         refresh(doc);

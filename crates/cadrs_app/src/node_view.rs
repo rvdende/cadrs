@@ -71,6 +71,7 @@ impl Plugin for NodeViewPlugin {
             .add_observer(on_config_text)
             .add_observer(on_config_checkbox)
             .add_observer(on_collapse)
+            .add_observer(on_header_preset)
             .add_systems(
                 Update,
                 (
@@ -80,6 +81,7 @@ impl Plugin for NodeViewPlugin {
                     host_live_dialog,
                     sync_selected,
                     fit_later,
+                    sync_header_preset,
                 )
                     .chain()
                     .run_if(resource_exists::<ActiveDocument>),
@@ -1753,6 +1755,78 @@ fn host_live_dialog(world: &mut World) {
         {
             n.display = Display::None;
         }
+    }
+}
+
+/// The features header's preset dropdown: which presets it lists and which is active.
+#[derive(Component, Debug, Clone, PartialEq)]
+struct HeaderPreset {
+    element: ElementId,
+    presets: Vec<(PresetId, String)>,
+    active: PresetId,
+}
+
+/// Shows the active Part Studio's presets in the features header (in the list and the node
+/// view alike), with the active one chosen; none without a configuration.
+fn sync_header_preset(
+    doc: Res<ActiveDocument>,
+    theme: Res<Theme>,
+    q_header: Query<Entity, With<crate::document::FeaturesHeader>>,
+    q_have: Query<(Entity, &HeaderPreset)>,
+    mut commands: Commands,
+) {
+    if !doc.is_changed() && !q_have.is_empty() {
+        return;
+    }
+    let want = doc.active_element().and_then(|e| {
+        let c = e.configuration()?;
+        Some(HeaderPreset {
+            element: e.id,
+            presets: c.presets.iter().map(|p| (p.id, p.name.clone())).collect(),
+            active: c.active_preset()?.id,
+        })
+    });
+    let have = q_have.iter().next();
+    if have.map(|(_, h)| h) == want.as_ref() {
+        return;
+    }
+    if let Some((e, _)) = have {
+        commands.entity(e).despawn();
+    }
+    let (Some(want), Some(header)) = (want, q_header.iter().next()) else {
+        return;
+    };
+    let mut sel = Select::new("feature-preset").width(Val::Px(110.0));
+    for (_, name) in &want.presets {
+        sel = sel.option(name.clone(), true);
+    }
+    let at = want
+        .presets
+        .iter()
+        .position(|(id, _)| *id == want.active)
+        .unwrap_or(0);
+    let e = commands
+        .spawn((
+            want,
+            sel.selected(at).build(&theme),
+            cadrs_ui::Tooltip::new(tr("node-view-active-preset")),
+        ))
+        .id();
+    commands
+        .entity(e)
+        .entry::<Node>()
+        .and_modify(|mut n| n.margin = UiRect::right(Val::Px(4.0)));
+    // After the count (which grows), before the buttons.
+    commands.entity(header).insert_children(2, &[e]);
+}
+
+fn on_header_preset(ev: On<SelectChange>, q: Query<&HeaderPreset>, mut commands: Commands) {
+    let Ok(h) = q.get(ev.entity) else { return };
+    let (element, preset) = (h.element, h.presets.get(ev.index).map(|p| p.0));
+    if let Some(preset) = preset {
+        commands.queue(move |world: &mut World| {
+            run(world, &SetActivePreset { element, preset });
+        });
     }
 }
 

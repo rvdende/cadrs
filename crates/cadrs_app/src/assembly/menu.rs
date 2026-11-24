@@ -515,6 +515,29 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
             menu = menu
                 .item(MenuItem::new("asm-studio-edit", tr("common-edit-ellipsis")).icon("edit"));
         }
+        // An instance of a configured Part Studio's preset: the presets to switch to
+        // (`cadrs_core::configuration`).
+        let doc = &world.resource::<ActiveDocument>().doc;
+        if let Some((studio, preset)) =
+            cadrs_core::configuration::configured_of(doc, inst.source.element())
+            && let Some(c) = doc.element(studio).and_then(|e| e.configuration())
+        {
+            let items: Vec<MenuEntry> = c
+                .presets
+                .iter()
+                .enumerate()
+                .map(|(k, p)| {
+                    MenuItem::new(format!("asm-preset-{k}"), p.name.clone())
+                        .checked(p.id == preset)
+                        .into()
+                })
+                .collect();
+            menu = menu.item(
+                MenuItem::new("asm-preset", tr("asm-menu-preset"))
+                    .icon("configurations")
+                    .submenu(items),
+            );
+        }
         // A linked instance's items (ER2.4, ER5.1, ER5.7, ER6.7).
         if is_linked {
             let pin = if pinned {
@@ -1046,6 +1069,48 @@ fn act(world: &mut World, menu: &AsmMenu, handle: TriadHandle, item: &str) {
                 );
             }
         }
+        // The preset of the instances of a configured Part Studio (the targets of its studio).
+        x if x.starts_with("asm-preset-") => {
+            let (Some(i), Some(k)) = (
+                menu.instance,
+                x.trim_start_matches("asm-preset-").parse::<usize>().ok(),
+            ) else {
+                return;
+            };
+            let doc = &world.resource::<ActiveDocument>().doc;
+            let Some(asm) = doc.element(element).and_then(|e| e.assembly_model()) else {
+                return;
+            };
+            let studio_of = |id: InstanceId| {
+                let src = asm.instance(id)?.source.element();
+                cadrs_core::configuration::configured_of(doc, src).map(|(s, _)| s)
+            };
+            let Some(studio) = studio_of(i) else { return };
+            let Some(preset) = doc
+                .element(studio)
+                .and_then(|e| e.configuration())
+                .and_then(|c| c.presets.get(k))
+                .map(|p| p.id)
+            else {
+                return;
+            };
+            let mut instances: Vec<InstanceId> = targets
+                .iter()
+                .copied()
+                .filter(|t| studio_of(*t) == Some(studio))
+                .collect();
+            if !instances.contains(&i) {
+                instances.push(i);
+            }
+            super::run(
+                world,
+                &cadrs_core::configuration::SetInstancePreset {
+                    assembly: element,
+                    instances,
+                    preset,
+                },
+            );
+        }
         x if x.starts_with("asm-follow-") => {
             let (Some(i), Some(k)) = (
                 menu.instance,
@@ -1416,8 +1481,35 @@ pub fn switch_to_owner(world: &mut World, owner: cadrs_core::properties::Propert
     {
         return;
     }
+    let element = show_preset(world, element);
     world.resource_mut::<ActiveDocument>().set_active(element);
     world.insert_resource(super::PendingSelection(Some((element, picks))));
+}
+
+/// The tab `element` is shown in: for a configured Part Studio's preset (an instance's
+/// generated studio), its Part Studio, switched to that preset; any other itself.
+fn show_preset(world: &mut World, element: ElementId) -> ElementId {
+    let found =
+        cadrs_core::configuration::configured_of(&world.resource::<ActiveDocument>().doc, element);
+    let Some((studio, preset)) = found else {
+        return element;
+    };
+    let active = world
+        .resource::<ActiveDocument>()
+        .doc
+        .element(studio)
+        .and_then(|e| e.configuration())
+        .map(|c| c.active);
+    if active != Some(preset) {
+        super::run(
+            world,
+            &cadrs_core::configuration::SetActivePreset {
+                element: studio,
+                preset,
+            },
+        );
+    }
+    studio
 }
 
 /// **Switch to** (A4.6, X11): the instance's Part Studio becomes the active tab with its part
@@ -1440,6 +1532,7 @@ pub fn switch_to(world: &mut World, instance: InstanceId) {
     {
         return;
     }
+    let element = show_preset(world, element);
     world.resource_mut::<ActiveDocument>().set_active(element);
     // A17 / A4.6: a subassembly opens its tab; a part is selected in its studio.
     let picks = source
