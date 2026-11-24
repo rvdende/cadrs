@@ -939,6 +939,249 @@ fn round_a_common_sphere(
     Some(out)
 }
 
+/// The corners of a patch that is straight both ways (degree 1 by 1, four poles of one
+/// weight): at (s, t) in the unit square it is P₀₀ + s (P₁₀ − P₀₀) + t (P₀₁ − P₀₀) + s t D,
+/// D = P₁₁ − P₁₀ − P₀₁ + P₀₀. None for any other B-spline.
+fn bilinear_corners(n: &super::nurbs::NurbsSurface) -> Option<[P3; 4]> {
+    if n.du != 1 || n.dv != 1 || n.cps.len() != 2 || n.cps[0].len() != 2 || n.cps[1].len() != 2 {
+        return None;
+    }
+    let w = n.cps[0][0].w;
+    if !(w > 0.0) || n.cps.iter().flatten().any(|h| (h.w - w).abs() > 1e-14 * w) {
+        return None;
+    }
+    let p = |i: usize, j: usize| super::nurbs::dehom(&n.cps[i][j]);
+    Some([p(0, 0), p(1, 0), p(0, 1), p(1, 1)])
+}
+
+/// A plane and a patch straight both ways: on the patch the plane's distance is
+/// α + β s + γ t + δ s t, nil along t = −(α + β s) / (γ + δ s), a conic drawn exactly as a
+/// rational quadratic in s (a parabola where δ is nil), or two of the patch's own rulings
+/// where the plane touches it at a saddle point (α δ = β γ: (s − s₀)(t − t₀) = 0), or one
+/// where the plane holds a ruling. None for another B-spline, or a plane holding the patch.
+fn plane_bilinear(fp: &Frame, n: &super::nurbs::NurbsSurface) -> Option<Vec<IntCurve>> {
+    use super::nurbs::{H, NurbsCurve};
+    let [p00, p10, p01, p11] = bilinear_corners(n)?;
+    let nrm = plane_n(fp);
+    let off = |p: &P3| nrm.dot(&(p - fp.o));
+    let (d00, d10, d01, d11) = (off(&p00), off(&p10), off(&p01), off(&p11));
+    let (al, be, ga, de) = (d00, d10 - d00, d01 - d00, d11 - d10 - d01 + d00);
+    let size = (p10 - p00)
+        .norm()
+        .max((p01 - p00).norm())
+        .max((p11 - p00).norm())
+        .max(tol::POINT);
+    let nil = 1e-12 * size;
+    if [al, be, ga, de].iter().all(|x| x.abs() <= nil) {
+        return None;
+    }
+    let at = |s: f64, t: f64| -> P3 {
+        P3::from(
+            p00.coords * ((1.0 - s) * (1.0 - t))
+                + p10.coords * (s * (1.0 - t))
+                + p01.coords * ((1.0 - s) * t)
+                + p11.coords * (s * t),
+        )
+    };
+    let ruling = |a: P3, b: P3| -> Option<IntCurve> {
+        let d = b - a;
+        let len = d.norm();
+        (len > tol::ROUNDOFF).then(|| IntCurve {
+            c: Curve::Line { o: a, d: d / len },
+            t0: 0.0,
+            t1: len,
+            closed: false,
+            pcs: None,
+        })
+    };
+    let inside = |x: f64| (-1e-12..=1.0 + 1e-12).contains(&x);
+    let mut out = Vec::new();
+    // A saddle touched, or a ruling held: the patch's own lines.
+    if de.abs() > nil && (al * de - be * ga).abs() <= nil * (de.abs() + be.abs() + ga.abs()) {
+        let (s0, t0) = (-ga / de, -be / de);
+        if inside(s0) {
+            out.extend(ruling(at(s0, 0.0), at(s0, 1.0)));
+        }
+        if inside(t0) {
+            out.extend(ruling(at(0.0, t0), at(1.0, t0)));
+        }
+        return Some(out);
+    }
+    if de.abs() <= nil && ga.abs() <= nil {
+        // (Nil along a line of constant s.)
+        let s0 = -al / be;
+        if inside(s0) {
+            out.extend(ruling(at(s0, 0.0), at(s0, 1.0)));
+        }
+        return Some(out);
+    }
+    // t along s, and the stretches of s in the patch where t is in it too, clear of the pole.
+    let t_of = |s: f64| -(al + be * s) / (ga + de * s);
+    let mut cuts = vec![0.0, 1.0];
+    let mut cut = |num: f64, den: f64| {
+        if den.abs() > nil {
+            cuts.push(num / den);
+        }
+    };
+    cut(-ga, de);
+    cut(-al, be);
+    cut(-(al + ga), be + de);
+    cuts.retain(|c| (0.0..=1.0).contains(c));
+    cuts.sort_by(f64::total_cmp);
+    cuts.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
+    let mut spans: Vec<(f64, f64)> = Vec::new();
+    for w in cuts.windows(2) {
+        let t = t_of(0.5 * (w[0] + w[1]));
+        if !(t.is_finite() && (0.0..=1.0).contains(&t)) {
+            continue;
+        }
+        match spans.last_mut() {
+            Some(last) if (last.1 - w[0]).abs() < 1e-12 => last.1 = w[1],
+            _ => spans.push((w[0], w[1])),
+        }
+    }
+    for (sa, sb) in spans {
+        if sb - sa < 1e-9 {
+            continue;
+        }
+        // The curve's homogeneous point at s: the patch's point at (s, t(s)) times γ + δ s, a
+        // quadratic in s, so three of its values are its Bézier points.
+        let hom_at = |s: f64| -> H {
+            let w = ga + de * s;
+            let (tn, sn) = (-(al + be * s), s);
+            // P(s, t) w with t w = tn: P₀₀ w + s w (P₁₀ − P₀₀) + tn (P₀₁ − P₀₀) + s tn D.
+            let p = p00.coords * w
+                + (p10 - p00) * (sn * w)
+                + (p01 - p00) * tn
+                + (p11.coords - p10.coords - p01.coords + p00.coords) * (sn * tn);
+            H::new(p.x, p.y, p.z, w)
+        };
+        let (mut h0, mut hm, mut h1) = (hom_at(sa), hom_at(0.5 * (sa + sb)), hom_at(sb));
+        if h0.w < 0.0 || h1.w < 0.0 {
+            (h0, hm, h1) = (-h0, -hm, -h1);
+        }
+        let mid = hm * 2.0 - (h0 + h1) * 0.5;
+        if !(h0.w > 0.0 && h1.w > 0.0 && mid.w > 0.0) {
+            // (Up to the pole: the marcher's.)
+            return None;
+        }
+        let c = NurbsCurve::new(2, vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0], vec![h0, mid, h1]).ok()?;
+        out.push(IntCurve {
+            c: Curve::Nurbs(Arc::new(c)),
+            t0: 0.0,
+            t1: 1.0,
+            closed: false,
+            pcs: None,
+        });
+    }
+    Some(out)
+}
+
+/// A cylinder and a patch straight both ways, where every ruling of the cylinder crosses the
+/// patch once (a drum topped by a saddle): the loop of those crossings, each exact (seen
+/// along the axis the patch is a quadrilateral, and a point's place in it the root of a
+/// quadratic), fitted round the cylinder as [`cylinder_loops`] fits its own. None where some
+/// ruling misses the patch or crosses it twice.
+fn cylinder_bilinear(fc: &Frame, r: f64, n: &super::nurbs::NurbsSurface) -> Option<Vec<IntCurve>> {
+    let [p00, p10, p01, p11] = bilinear_corners(n)?;
+    let (x, z) = (fc.x.normalize(), fc.z.normalize());
+    let y = z.cross(&x);
+    let flat = |v: V3| (v.dot(&x), v.dot(&y));
+    let cross = |a: (f64, f64), b: (f64, f64)| a.0 * b.1 - a.1 * b.0;
+    let (a0, e, f, g) = (
+        flat(p00 - fc.o),
+        flat(p10 - p00),
+        flat(p01 - p00),
+        flat(p11.coords - p10.coords - p01.coords + p00.coords),
+    );
+    // Where the ruling at θ crosses: its place (s, t) in the patch, if it has just one.
+    let place = |th: f64| -> Option<(f64, f64)> {
+        let h = (r * th.cos() - a0.0, r * th.sin() - a0.1);
+        // h = s e + t f + s t g: crossed with e + t g, a quadratic in t.
+        let (k2, k1, k0) = (cross(f, g), cross(f, e) - cross(h, g), -cross(h, e));
+        let scale = k2.abs() + k1.abs() + k0.abs();
+        let ts: Vec<f64> = if k2.abs() <= 1e-13 * scale {
+            if k1.abs() <= 1e-13 * scale {
+                return None;
+            }
+            vec![-k0 / k1]
+        } else {
+            let disc = k1 * k1 - 4.0 * k2 * k0;
+            if disc < 0.0 {
+                return None;
+            }
+            let q = -0.5 * (k1 + k1.signum() * disc.sqrt());
+            let q = if k1 == 0.0 { 0.5 * disc.sqrt() } else { q };
+            vec![q / k2, if q != 0.0 { k0 / q } else { f64::NAN }]
+        };
+        let mut found = None;
+        for t in ts {
+            let d = (e.0 + t * g.0, e.1 + t * g.1);
+            let len = d.0 * d.0 + d.1 * d.1;
+            if !(t.is_finite() && len > 0.0) {
+                continue;
+            }
+            let s = ((h.0 - t * f.0) * d.0 + (h.1 - t * f.1) * d.1) / len;
+            if (0.0..=1.0).contains(&s) && (0.0..=1.0).contains(&t) {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some((s, t));
+            }
+        }
+        found
+    };
+    const N: usize = 256;
+    if (0..N).any(|i| place(TAU * i as f64 / N as f64).is_none()) {
+        return None;
+    }
+    let at = |th: f64| -> P3 {
+        // (Between the samples a place may fail by a hair at the patch's edge: the nearest.)
+        let (s, t) = place(th).unwrap_or_else(|| {
+            let i = (th / TAU * N as f64).round();
+            place(TAU * i / N as f64).unwrap_or((0.5, 0.5))
+        });
+        P3::from(
+            p00.coords * ((1.0 - s) * (1.0 - t))
+                + p10.coords * (s * (1.0 - t))
+                + p01.coords * ((1.0 - s) * t)
+                + p11.coords * (s * t),
+        )
+    };
+    let fit_tol = (0.1 * tol::POINT).max(1e-10 * r);
+    let mut ts: Vec<f64> = (0..64).map(|i| TAU * i as f64 / 64.0).collect();
+    let mut fit = None;
+    for _ in 0..14 {
+        let mut params = ts.clone();
+        params.push(TAU);
+        let pts: Vec<P3> = ts.iter().map(|&t| at(t)).collect();
+        let c = super::nurbs::NurbsCurve::interpolate_periodic(&pts, &params, 3)?;
+        let mut next = Vec::with_capacity(ts.len() * 2);
+        let mut fine = true;
+        for k in 0..ts.len() {
+            let (t0, t1) = (params[k], params[k + 1]);
+            next.push(t0);
+            let tm = 0.5 * (t0 + t1);
+            if (c.point(tm) - at(tm)).norm() > fit_tol {
+                next.push(tm);
+                fine = false;
+            }
+        }
+        fit = Some(c);
+        if fine {
+            break;
+        }
+        ts = next;
+    }
+    Some(vec![IntCurve {
+        c: Curve::Nurbs(Arc::new(fit?)),
+        t0: 0.0,
+        t1: TAU,
+        closed: true,
+        pcs: None,
+    }])
+}
+
 /// Two cylinders of one radius whose axes cross (a Steinmetz pair, a cross-drilled hole) meet
 /// in two ellipses: a point as far from both axes has w·z₁ = ±w·z₂ (w from the axes' crossing),
 /// so it lies in one of the two planes through the crossing square to z₁ ∓ z₂, and each plane cuts
@@ -1169,6 +1412,21 @@ fn analytic(a: &Surface, b: &Surface, bb: &Bbox, run_tol: f64) -> Option<Vec<Int
         && let Some(curves) = round_a_common_sphere(a, b, bb, run_tol)
     {
         return Some(curves);
+    }
+    // A patch between two straight sides (a loft's wall, a saddle) is a quadric: a plane cuts
+    // it in a conic, and a cylinder whose rulings each cross it once in a loop known ruling
+    // by ruling.
+    if !crate::native::env_flag!("CADRS_NO_BILINEAR") {
+        let cut = match (a, b) {
+            (Surface::Plane { f }, Surface::Nurbs(n))
+            | (Surface::Nurbs(n), Surface::Plane { f }) => plane_bilinear(f, n),
+            (Surface::Cylinder { f, r }, Surface::Nurbs(n))
+            | (Surface::Nurbs(n), Surface::Cylinder { f, r }) => cylinder_bilinear(f, *r, n),
+            _ => None,
+        };
+        if cut.is_some() {
+            return cut;
+        }
     }
     match (a, b) {
         (Surface::Plane { f: fa }, Surface::Plane { f: fb }) => {
@@ -3726,6 +3984,73 @@ fn line_extrusion(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Option<Vec<f64>> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A saddle (the patch z = 10 + xy/8 between four corners) cut by planes and by a drum
+    /// about z, in closed form: every point of every curve on both surfaces. Level through its
+    /// saddle point, two of its own rulings; level above, a hyperbola's two arcs; aslant, arcs
+    /// of a conic; the drum of radius 8, one loop round it, and none for a drum wider than the
+    /// patch.
+    #[test]
+    fn a_saddle_is_cut_in_closed_form() {
+        use crate::native::nurbs::{H, NurbsSurface};
+        let pole = |x: f64, y: f64| H::new(x, y, 10.0 + x * y / 8.0, 1.0);
+        let patch = NurbsSurface {
+            du: 1,
+            dv: 1,
+            ku: vec![0.0, 0.0, 1.0, 1.0],
+            kv: vec![0.0, 0.0, 1.0, 1.0],
+            cps: vec![
+                vec![pole(-10.0, -10.0), pole(-10.0, 10.0)],
+                vec![pole(10.0, -10.0), pole(10.0, 10.0)],
+            ],
+        };
+        let saddle = Surface::Nurbs(Arc::new(patch.clone()));
+        // (The conics to rounding; the loop round the drum to its fit's tenth of a point
+        // tolerance.)
+        let on_both = |curves: &[IntCurve], other: &Surface| {
+            let near = if curves.iter().any(|c| c.closed) {
+                1e-7
+            } else {
+                1e-11
+            };
+            for c in curves {
+                for i in 0..=24 {
+                    let p = c.c.point(c.t0 + (c.t1 - c.t0) * i as f64 / 24.0);
+                    assert!(
+                        (p.z - (10.0 + p.x * p.y / 8.0)).abs() < near,
+                        "off the saddle at {p:?}"
+                    );
+                    let d = sdist(other, &p).abs();
+                    assert!(d < 1e-7, "{d:e} off the other surface at {p:?}");
+                }
+            }
+        };
+        let level = |h: f64| Frame::from_z(P3::new(0.0, 0.0, h), V3::z());
+        let through = plane_bilinear(&level(10.0), &patch).expect("two rulings");
+        assert_eq!(through.len(), 2);
+        assert!(through.iter().all(|c| matches!(c.c, Curve::Line { .. })));
+        on_both(&through, &Surface::Plane { f: level(10.0) });
+        let above = plane_bilinear(&level(12.0), &patch).expect("a hyperbola");
+        assert_eq!(above.len(), 2);
+        on_both(&above, &Surface::Plane { f: level(12.0) });
+        let aslant = Frame::from_z(P3::new(1.0, 2.0, 11.0), V3::new(0.3, -0.2, 1.0).normalize());
+        let cut = plane_bilinear(&aslant, &patch).expect("a conic");
+        assert!(!cut.is_empty());
+        on_both(&cut, &Surface::Plane { f: aslant });
+        let drum = Frame::world();
+        let round = cylinder_bilinear(&drum, 8.0, &patch).expect("a loop");
+        assert!(round.len() == 1 && round[0].closed);
+        on_both(&round, &Surface::Cylinder { f: drum, r: 8.0 });
+        assert!(cylinder_bilinear(&drum, 20.0, &patch).is_none());
+        // (And by the entry the boolean calls.)
+        let bb = {
+            let mut bb = Bbox::empty();
+            bb.add(&P3::new(-10.0, -10.0, -5.0));
+            bb.add(&P3::new(10.0, 10.0, 25.0));
+            bb
+        };
+        assert!(analytic(&saddle, &Surface::Cylinder { f: drum, r: 8.0 }, &bb, 1e-7).is_some());
+    }
 
     /// A cone and its copy turned about a line through its axis, and a cylinder it fits
     /// crossing that axis, lie round one ball and meet in two conics: closed curves in closed
