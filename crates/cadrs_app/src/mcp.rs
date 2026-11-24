@@ -365,6 +365,10 @@ fn run(world: &mut World, call: &Call) -> Result<Value, String> {
             describe_assembly(doc(world)?, assembly(doc(world)?, p.assembly.as_deref())?)
         }
         Call::InsertInstance(p) => insert_instance(world, p),
+        Call::GetConfiguration(p) => get_configuration(world, p),
+        Call::SetConfiguration(p) => set_configuration(world, p),
+        Call::ConnectParameter(p) => connect_parameter(world, p),
+        Call::SetInstancePreset(p) => set_instance_preset(world, p),
         Call::ImportFile(p) => import_file(world, p),
         Call::AddMate(p) => add_mate(world, p),
         Call::SetMateValues(p) => set_mate_values(world, p),
@@ -902,6 +906,16 @@ fn describe_assembly(d: &ActiveDocument, element: ElementId) -> Result<Value, St
                 "source": tab(i.source.element()),
                 "translation_mm": i.pose.translation.map(round),
             });
+            // An instance of a configured Part Studio's preset: the tab and the preset.
+            if let Some((studio, preset)) =
+                cadrs_core::configuration::configured_of(&d.doc, i.source.element())
+                && let Some(s) = d.doc.element(studio)
+            {
+                v["source"] = json!(s.name);
+                if let Some(p) = s.configuration().and_then(|c| c.preset(preset)) {
+                    v["preset"] = json!(p.name);
+                }
+            }
             match i.source {
                 InstanceSource::Part { .. } => v["kind"] = json!("part"),
                 InstanceSource::Studio { board: None, .. } => {
@@ -957,13 +971,34 @@ fn insert_instance(world: &mut World, p: &tools::InsertInstance) -> Result<Value
         Instance, InstanceId, InstanceSource, Pose, commands::InsertInstance,
     };
     let element = assembly(doc(world)?, p.assembly.as_deref())?;
-    let studio = part_studio(doc(world)?, Some(&p.part_studio))?;
-    let features = doc(world)?
-        .doc
-        .element(studio)
-        .ok_or("the Part Studio is gone")?
-        .features()
-        .to_vec();
+    let tab = part_studio(doc(world)?, Some(&p.part_studio))?;
+    // A configured Part Studio's instance is of one of its presets (the named one, else the
+    // active one): its generated studio.
+    let (studio, features) = {
+        let d = doc(world)?;
+        let el = d.doc.element(tab).ok_or("the Part Studio is gone")?;
+        match el.configuration() {
+            Some(c) => {
+                let preset = match &p.preset {
+                    Some(n) => c.preset_named(n).ok_or_else(|| {
+                        let names: Vec<&str> = c.presets.iter().map(|p| p.name.as_str()).collect();
+                        format!(
+                            "no preset named {n:?}; the presets are {}",
+                            names.join(", ")
+                        )
+                    })?,
+                    None => c.active_preset().ok_or("the configuration has no preset")?,
+                };
+                let g = cadrs_core::configuration::generate(el, preset.id, &d.doc.units)
+                    .ok_or("the preset is gone")?;
+                (g.id, g.part_features().to_vec())
+            }
+            None if p.preset.is_some() => {
+                return Err(format!("{:?} has no configuration", p.part_studio));
+            }
+            None => (tab, el.features().to_vec()),
+        }
+    };
     let p = p.clone();
     after_build_mut(world, features, move |world, b| {
         let parts = &b.parts;
@@ -1597,10 +1632,337 @@ fn describe(world: &World) -> Result<Value, String> {
         e.features().to_vec(),
         e.part_props().to_vec(),
     );
+    let config = e
+        .configuration()
+        .map(|_| configuration_json(e, &d.doc.units));
     after_build(world, e.features_to_build(), move |b| {
         out["part_studio"] = studio_state(&name, &features, &props, b);
+        if let Some(c) = config {
+            out["part_studio"]["configuration"] = c;
+        }
         Ok(out)
     })
+}
+
+/// A Part Studio's configuration as the configuration tools describe it: inputs, presets (with
+/// the values each sets), the active preset, and the fields wired to expressions.
+fn configuration_json(e: &cadrs_core::Element, units: &cadrs_sketch::units::Units) -> Value {
+    let Some(c) = e.configuration() else {
+        return json!(null);
+    };
+    let kind = |k: cadrs_core::configuration::InputKind| k.label().to_lowercase();
+    let inputs: Vec<Value> = c
+        .inputs
+        .iter()
+        .map(|i| json!({ "name": i.name, "kind": kind(i.kind), "default": round(i.default) }))
+        .collect();
+    let presets: Vec<Value> = c
+        .presets
+        .iter()
+        .map(|p| {
+            let values: serde_json::Map<String, Value> = c
+                .inputs
+                .iter()
+                .map(|i| (i.name.clone(), json!(round(p.value(i)))))
+                .collect();
+            json!({ "name": p.name, "values": values })
+        })
+        .collect();
+    let mut wired = Vec::new();
+    for f in e.features() {
+        for (label, q, expr) in cadrs_core::configuration::parameter_slots(f) {
+            if expr.contains('#') {
+                wired.push(json!({ "feature": f.name, "field": label, "expr": expr,
+                    "value": units.with_unit(
+                        {
+                            let mut v = 0.0;
+                            let mut k = f.kind.clone();
+                            cadrs_core::variables::slots(&mut k, &mut |s| {
+                                if s.label == label {
+                                    v = *s.value;
+                                }
+                            });
+                            v
+                        },
+                        q,
+                    ) }));
+            }
+        }
+        if let Some(r) = &f.suppress_by {
+            wired.push(
+                json!({ "feature": f.name, "field": "Bypass", "expr": r.label(),
+                "suppressed": e.is_suppressed(f.id) }),
+            );
+        }
+    }
+    json!({
+        "inputs": inputs,
+        "presets": presets,
+        "active": c.active_preset().map(|p| p.name.clone()),
+        "wired": wired,
+    })
+}
+
+/// The configuration and the parts the active preset builds (suppressed features left out).
+fn configuration_state(world: &mut World, element: ElementId) -> Result<Value, String> {
+    let d = doc(world)?;
+    let e = d.doc.element(element).ok_or("the Part Studio is gone")?;
+    let mut out =
+        json!({ "part_studio": e.name, "configuration": configuration_json(e, &d.doc.units) });
+    let (name, features, props) = (
+        e.name.clone(),
+        e.features().to_vec(),
+        e.part_props().to_vec(),
+    );
+    after_build(world, e.active_features(), move |b| {
+        let state = studio_state(&name, &features, &props, b);
+        out["features"] = state["features"].clone();
+        out["parts"] = state["parts"].clone();
+        Ok(out)
+    })
+}
+
+fn get_configuration(world: &mut World, p: &tools::PartStudio) -> Result<Value, String> {
+    let element = part_studio(doc(world)?, p.part_studio.as_deref())?;
+    configuration_state(world, element)
+}
+
+fn input_kind(s: &str) -> Result<cadrs_core::configuration::InputKind, String> {
+    use cadrs_core::configuration::InputKind;
+    InputKind::ALL
+        .into_iter()
+        .find(|k| k.label().eq_ignore_ascii_case(s.trim()))
+        .ok_or_else(|| format!("no input kind {s:?}: length, angle, number or boolean"))
+}
+
+fn run_cmd(world: &mut World, cmd: &dyn cadrs_core::Command) -> Result<(), String> {
+    doc_mut(world)?.execute(cmd).map_err(|e| e.to_string())
+}
+
+fn set_configuration(world: &mut World, p: &tools::SetConfiguration) -> Result<Value, String> {
+    use cadrs_core::configuration as cfg;
+    let element = part_studio(doc(world)?, p.part_studio.as_deref())?;
+    let config = |world: &World| -> Result<cfg::Configuration, String> {
+        Ok(doc(world)?
+            .doc
+            .element(element)
+            .and_then(|e| e.configuration())
+            .cloned()
+            .unwrap_or_default())
+    };
+    for spec in &p.inputs {
+        let c = config(world)?;
+        match c.input_named(&spec.name).cloned() {
+            Some(mut i) => {
+                if let Some(n) = &spec.rename {
+                    i.name = n.clone();
+                }
+                if let Some(k) = &spec.kind {
+                    i.kind = input_kind(k)?;
+                }
+                if let Some(d) = spec.default {
+                    i.default = d;
+                }
+                run_cmd(world, &cfg::EditConfigInput { element, input: i })?;
+            }
+            None => {
+                let kind = match &spec.kind {
+                    Some(k) => input_kind(k)?,
+                    None => cfg::InputKind::Length,
+                };
+                let mut i = cfg::ConfigInput::new(
+                    spec.rename.clone().unwrap_or_else(|| spec.name.clone()),
+                    kind,
+                    spec.default.unwrap_or(0.0),
+                );
+                i.description.clear();
+                run_cmd(world, &cfg::AddConfigInput { element, input: i })?;
+            }
+        }
+    }
+    for name in &p.remove_inputs {
+        let c = config(world)?;
+        let i = c
+            .input_named(name)
+            .ok_or_else(|| format!("no input named {name:?}"))?;
+        run_cmd(
+            world,
+            &cfg::RemoveConfigInput {
+                element,
+                input: i.id,
+            },
+        )?;
+    }
+    for spec in &p.presets {
+        let c = config(world)?;
+        let preset = match c.preset_named(&spec.name) {
+            Some(x) => x.id,
+            None => {
+                let id = cadrs_core::ids::PresetId::new();
+                run_cmd(
+                    world,
+                    &cfg::AddPreset {
+                        element,
+                        preset: id,
+                        name: spec.name.clone(),
+                        copy_of: None,
+                    },
+                )?;
+                id
+            }
+        };
+        if let Some(n) = &spec.rename {
+            run_cmd(
+                world,
+                &cfg::RenamePreset {
+                    element,
+                    preset,
+                    name: n.clone(),
+                },
+            )?;
+        }
+        for (name, value) in &spec.values {
+            let c = config(world)?;
+            let i = c.input_named(name).ok_or_else(|| {
+                format!("no input named {name:?} (add it under \"inputs\" first)")
+            })?;
+            run_cmd(
+                world,
+                &cfg::SetPresetValue {
+                    element,
+                    preset,
+                    input: i.id,
+                    value: Some(*value),
+                },
+            )?;
+        }
+    }
+    for name in &p.remove_presets {
+        let c = config(world)?;
+        let x = c
+            .preset_named(name)
+            .ok_or_else(|| format!("no preset named {name:?}"))?;
+        run_cmd(
+            world,
+            &cfg::RemovePreset {
+                element,
+                preset: x.id,
+            },
+        )?;
+    }
+    if let Some(name) = &p.active {
+        let c = config(world)?;
+        let x = c
+            .preset_named(name)
+            .ok_or_else(|| format!("no preset named {name:?}"))?;
+        run_cmd(
+            world,
+            &cfg::SetActivePreset {
+                element,
+                preset: x.id,
+            },
+        )?;
+    }
+    configuration_state(world, element)
+}
+
+fn connect_parameter(world: &mut World, p: &tools::ConnectParameter) -> Result<Value, String> {
+    use cadrs_core::configuration as cfg;
+    let element = part_studio(doc(world)?, p.part_studio.as_deref())?;
+    let feature = doc(world)?
+        .doc
+        .element(element)
+        .and_then(|e| e.features().iter().find(|f| f.name == p.feature))
+        .map(|f| f.id)
+        .ok_or_else(|| format!("no feature named {:?}", p.feature))?;
+    let expr = p.expr.as_ref().map(|e| {
+        let e = e.trim();
+        if cadrs_sketch::units::is_variable_name(e) {
+            format!("#{e}")
+        } else {
+            e.to_string()
+        }
+    });
+    if p.field.eq_ignore_ascii_case("bypass") {
+        let rule = expr.map(|expr| cadrs_core::variables::SuppressByVariable {
+            expr,
+            invert: false,
+        });
+        run_cmd(
+            world,
+            &cadrs_core::commands::SetSuppressByVariable {
+                element,
+                feature,
+                rule,
+            },
+        )?;
+    } else {
+        match expr {
+            Some(expr) => run_cmd(
+                world,
+                &cfg::ConnectParameter {
+                    element,
+                    feature,
+                    slot: p.field.clone(),
+                    expr,
+                },
+            )?,
+            None => run_cmd(
+                world,
+                &cfg::DisconnectParameter {
+                    element,
+                    feature,
+                    slot: p.field.clone(),
+                },
+            )?,
+        }
+    }
+    configuration_state(world, element)
+}
+
+fn set_instance_preset(world: &mut World, p: &tools::SetInstancePreset) -> Result<Value, String> {
+    let element = assembly(doc(world)?, p.assembly.as_deref())?;
+    let listed = describe_assembly(doc(world)?, element)?;
+    let id = listed["instances"]
+        .as_array()
+        .and_then(|l| {
+            l.iter()
+                .find(|i| i["name"] == json!(p.instance) || i["id"] == json!(p.instance))
+        })
+        .and_then(|i| i["id"].as_str())
+        .ok_or_else(|| format!("no instance named {:?}", p.instance))?
+        .to_string();
+    let d = doc(world)?;
+    let asm = d
+        .doc
+        .element(element)
+        .and_then(|e| e.assembly_model())
+        .ok_or("not an Assembly")?;
+    let inst = asm
+        .instances
+        .iter()
+        .find(|i| i.id.to_string() == id)
+        .ok_or("the instance is gone")?;
+    let src = inst.source.element();
+    let studio = cadrs_core::configuration::configured_of(&d.doc, src).map_or(src, |(s, _)| s);
+    let preset = d
+        .doc
+        .element(studio)
+        .and_then(|e| e.configuration())
+        .ok_or_else(|| format!("{:?} is not of a configured Part Studio", p.instance))?
+        .preset_named(&p.preset)
+        .ok_or_else(|| format!("no preset named {:?}", p.preset))?
+        .id;
+    let instance = inst.id;
+    run_cmd(
+        world,
+        &cadrs_core::configuration::SetInstancePreset {
+            assembly: element,
+            instances: vec![instance],
+            preset,
+        },
+    )?;
+    describe_assembly(doc(world)?, element)
 }
 
 /// A Part Studio's features (with their rebuild errors and warnings) and parts.
@@ -3410,6 +3772,128 @@ mod tests {
         )
         .unwrap();
         assert_eq!(asm["instances"].as_array().unwrap().len(), 1);
+    }
+
+    /// The configuration tools: inputs and presets, a field and a Bypass wired to inputs, the
+    /// parts per preset, and assembly instances of two presets of one Part Studio.
+    #[test]
+    fn configurations_through_the_tools() {
+        let mut world = World::new();
+        world.insert_resource(ActiveDocument::new(Document::new("Doc")));
+        fn p<T: serde::de::DeserializeOwned>(v: Value) -> T {
+            serde_json::from_value(v).unwrap()
+        }
+        let sketch = add_sketch(
+            &mut world,
+            &p(json!({ "plane": "Top", "entities": [
+            { "type": "rectangle", "x0": 0, "y0": 0, "x1": 10, "y1": 10 },
+        ] })),
+        )
+        .unwrap();
+        super::extrude(
+            &mut world,
+            &p(json!({ "sketch": sketch["sketch"], "depth": 5 })),
+        )
+        .unwrap();
+        let c = set_configuration(
+            &mut world,
+            &p(json!({
+                "inputs": [{ "name": "height", "default": 5 }, { "name": "on", "kind": "boolean", "default": 1 }],
+                "presets": [{ "name": "Default", "rename": "Short" }, { "name": "Tall", "values": { "height": 20 } }],
+                "active": "Short",
+            })),
+        )
+        .unwrap();
+        assert_eq!(c["configuration"]["active"], "Short");
+        assert_eq!(c["configuration"]["presets"][1]["values"]["height"], 20.0);
+        let c = connect_parameter(
+            &mut world,
+            &p(json!({ "feature": "Extrude 1", "field": "Depth", "expr": "height" })),
+        )
+        .unwrap();
+        assert_eq!(c["configuration"]["wired"][0]["expr"], "#height");
+        assert_eq!(c["parts"][0]["volume_mm3"], 500.0);
+        let c = set_configuration(&mut world, &p(json!({ "active": "Tall" }))).unwrap();
+        assert_eq!(c["parts"][0]["volume_mm3"], 2000.0);
+        // Bypass: Tall without the extrude.
+        connect_parameter(
+            &mut world,
+            &p(json!({ "feature": "Extrude 1", "field": "Bypass", "expr": "#on" })),
+        )
+        .unwrap();
+        let c = set_configuration(
+            &mut world,
+            &p(json!({ "presets": [{ "name": "Tall", "values": { "on": 0 } }] })),
+        )
+        .unwrap();
+        assert_eq!(c["parts"].as_array().unwrap().len(), 0);
+        let c = set_configuration(&mut world, &p(json!({ "active": "Short" }))).unwrap();
+        assert_eq!(c["parts"].as_array().unwrap().len(), 1);
+        assert!(get_configuration(&mut world, &p(json!({}))).is_ok());
+        assert!(
+            connect_parameter(
+                &mut world,
+                &p(json!({ "feature": "Extrude 1", "field": "Width", "expr": "#height" }))
+            )
+            .is_err()
+        );
+        // Turn Tall's extrude back on, then an instance of each preset.
+        set_configuration(
+            &mut world,
+            &p(json!({ "presets": [{ "name": "Tall", "values": { "on": 1 } }] })),
+        )
+        .unwrap();
+        for preset in ["Short", "Tall"] {
+            insert_instance(
+                &mut world,
+                &p(json!({ "assembly": "Assembly 1", "part_studio": "Part Studio 1", "part": "Part 1", "preset": preset })),
+            )
+            .unwrap();
+        }
+        let asm = run(
+            &mut world,
+            &Call::GetAssembly(p(json!({ "assembly": "Assembly 1" }))),
+        )
+        .unwrap();
+        let presets: Vec<&str> = asm["instances"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["preset"].as_str().unwrap())
+            .collect();
+        assert_eq!(presets, ["Short", "Tall"]);
+        assert_eq!(asm["instances"][0]["source"], "Part Studio 1");
+        let d = &world.resource::<ActiveDocument>().doc;
+        let vols: Vec<f64> = d.elements[1]
+            .assembly
+            .instances
+            .iter()
+            .map(|i| {
+                let b = cadrs_core::rebuild::build(
+                    &d.element(i.source.element()).unwrap().part_features(),
+                );
+                b.parts[0].mass.as_ref().unwrap().volume
+            })
+            .collect();
+        assert!(
+            (vols[0] - 500.0).abs() < 1e-6 && (vols[1] - 2000.0).abs() < 1e-6,
+            "{vols:?}"
+        );
+        let name = asm["instances"][0]["name"].as_str().unwrap().to_string();
+        let asm = set_instance_preset(
+            &mut world,
+            &p(json!({ "instance": name, "preset": "Tall", "assembly": "Assembly 1" })),
+        )
+        .unwrap();
+        assert_eq!(asm["instances"][0]["preset"], "Tall");
+        assert!(
+            insert_instance(
+                &mut world,
+                &p(json!({ "assembly": "Assembly 1", "part_studio": "Part Studio 1", "preset": "Huge" }))
+            )
+            .unwrap_err()
+            .contains("Short, Tall")
+        );
     }
 
     /// Ground sections 5 m apart (three lines and the ground as one spline), lofted pair by pair:

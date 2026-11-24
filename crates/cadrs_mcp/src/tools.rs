@@ -678,6 +678,93 @@ pub struct InsertInstance {
     /// Fix the instance in place (the solver keeps it put, as ground); default false.
     #[serde(default)]
     pub fixed: bool,
+    /// For a configured Part Studio: the preset to insert, by name; omitted: its active one.
+    #[serde(default)]
+    pub preset: Option<String>,
+}
+
+/// Changes a Part Studio's configuration (its inputs and presets; see get_configuration). The
+/// changes are made in this order: inputs added or changed, inputs removed, presets added or
+/// changed, presets removed, the active preset. Each is an undo step.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SetConfiguration {
+    /// The Part Studio tab's name; omitted: the active tab.
+    #[serde(default)]
+    pub part_studio: Option<String>,
+    /// Inputs to add (a new name) or change (an existing one).
+    #[serde(default)]
+    pub inputs: Vec<ConfigInputSpec>,
+    /// Inputs to remove, by name: the fields wired to one keep its value as a number.
+    #[serde(default)]
+    pub remove_inputs: Vec<String>,
+    /// Presets to add (a new name, starting from the active preset's values) or change.
+    #[serde(default)]
+    pub presets: Vec<PresetSpec>,
+    /// Presets to remove, by name (one always stays).
+    #[serde(default)]
+    pub remove_presets: Vec<String>,
+    /// The preset the Part Studio shows (and rebuilds with), by name.
+    #[serde(default)]
+    pub active: Option<String>,
+}
+
+/// A configuration input: `#name` in the Part Studio's expressions.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ConfigInputSpec {
+    /// Its name, without the `#`.
+    pub name: String,
+    /// A new name (expressions naming it follow).
+    #[serde(default)]
+    pub rename: Option<String>,
+    /// length (mm), angle (degrees), number, or boolean (0 or 1, for suppression); a new
+    /// input's default: length.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// The value where a preset gives none (mm, degrees, a number, 0/1).
+    #[serde(default)]
+    pub default: Option<f64>,
+}
+
+/// A preset: a name and the input values it sets.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PresetSpec {
+    pub name: String,
+    /// A new name.
+    #[serde(default)]
+    pub rename: Option<String>,
+    /// Input values it sets, by input name (mm, degrees, a number, 0/1).
+    #[serde(default)]
+    pub values: std::collections::BTreeMap<String, f64>,
+}
+
+/// Wires a feature's field to an expression of the configuration's inputs (or Variables), as
+/// the node view's wires do; or unwires it.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ConnectParameter {
+    /// The Part Studio tab's name; omitted: the active tab.
+    #[serde(default)]
+    pub part_studio: Option<String>,
+    /// The feature's name ("Extrude 1").
+    pub feature: String,
+    /// The field's label as the feature's dialog shows it ("Depth", "Radius", "Count"), or
+    /// "Bypass" for the feature's suppression (suppressed while the expression is 0).
+    pub field: String,
+    /// The expression ("#length", "#length / 2"; a bare name is taken as `#name`); omitted:
+    /// unwire it (the field keeps its value as a number, Bypass is removed).
+    #[serde(default)]
+    pub expr: Option<String>,
+}
+
+/// Switches an assembly instance of a configured Part Studio to another of its presets.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SetInstancePreset {
+    /// The Assembly tab's name; omitted: the active tab.
+    #[serde(default)]
+    pub assembly: Option<String>,
+    /// The instance's name ("Part 1 <1>") or id.
+    pub instance: String,
+    /// The preset's name.
+    pub preset: String,
 }
 
 /// Imports a file into the open document as a new Part Studio tab holding an Import feature.

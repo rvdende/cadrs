@@ -84,6 +84,10 @@ pub enum Call {
     OpenTab(TabName),
     GetAssembly(AssemblyName),
     InsertInstance(InsertInstance),
+    GetConfiguration(PartStudio),
+    SetConfiguration(SetConfiguration),
+    ConnectParameter(ConnectParameter),
+    SetInstancePreset(SetInstancePreset),
     ImportFile(ImportFile),
     AddMate(AddMate),
     SetMateValues(SetMateValues),
@@ -386,6 +390,54 @@ impl Cadrs {
         Parameters(p): Parameters<ShowSection>,
     ) -> Result<CallToolResult, ErrorData> {
         self.call(Call::ShowSection(p)).await
+    }
+
+    #[tool(
+        description = "A Part Studio's configuration: its inputs (named values its features' fields and \
+        suppression can use as #name: length, angle, number or boolean), its presets (named sets of input \
+        values, each a variation of the parts) and the active preset, with which fields of which features \
+        are wired to which inputs."
+    )]
+    async fn get_configuration(
+        &self,
+        Parameters(p): Parameters<PartStudio>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::GetConfiguration(p)).await
+    }
+
+    #[tool(
+        description = "Change a Part Studio's configuration: add, change or remove inputs and presets, set preset \
+        values and the active preset (the one the studio shows). Returns the configuration and the parts as the \
+        active preset builds them."
+    )]
+    async fn set_configuration(
+        &self,
+        Parameters(p): Parameters<SetConfiguration>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::SetConfiguration(p)).await
+    }
+
+    #[tool(
+        description = "Wire a feature's field (\"Depth\") or its Bypass (suppression) to an expression of the \
+        configuration's inputs (\"#length\"), as the node view's wires do; without expr, unwire it. Returns the \
+        configuration and the parts."
+    )]
+    async fn connect_parameter(
+        &self,
+        Parameters(p): Parameters<ConnectParameter>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::ConnectParameter(p)).await
+    }
+
+    #[tool(
+        description = "Switch an assembly instance of a configured Part Studio to another preset (its id, \
+        place and mates stay). Returns the assembly."
+    )]
+    async fn set_instance_preset(
+        &self,
+        Parameters(p): Parameters<SetInstancePreset>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::SetInstancePreset(p)).await
     }
 
     #[tool(

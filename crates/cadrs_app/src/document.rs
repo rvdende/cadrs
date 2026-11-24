@@ -2362,11 +2362,22 @@ fn feature_list(p: &mut ChildSpawnerCommands, t: &Theme, element: ElementId, hei
                     t,
                     0.0,
                 );
+                // The node view (`crate::node_view`) in place of the list.
+                header_button(
+                    h,
+                    "feature-node-view",
+                    "node-graph",
+                    &tr("node-view-toggle"),
+                    t,
+                    2.0,
+                );
             });
             // P3.9: Show dependencies' legend (hidden until used).
             crate::feature_list::dependency_legend(pane, t);
+            pane.spawn(crate::node_view::host_bundle(element));
             pane.spawn((
                 Name::new("feature-scroll-frame"),
+                crate::node_view::FeatureListBody,
                 Node {
                     flex_grow: 1.0,
                     min_height: Val::Px(0.0),

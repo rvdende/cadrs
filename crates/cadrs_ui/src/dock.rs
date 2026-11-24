@@ -77,6 +77,10 @@ pub struct DockPanelResized {
 pub const MIN_WIDTH: f32 = 150.0;
 pub const MAX_WIDTH: f32 = 640.0;
 
+/// A wider limit than [`MAX_WIDTH`] for a panel that holds something wide (the node view).
+#[derive(Component, Debug, Clone, Copy)]
+pub struct DockMaxWidth(pub f32);
+
 /// The divider on a dock panel's right edge: the panel it resizes, and the drag in progress.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct DockGrip {
@@ -337,15 +341,15 @@ fn on_grip_drag(
     mut ev: On<PointerDrag>,
     q: Query<&DockGrip>,
     mut q_state: Query<&mut DockPanelState>,
+    q_max: Query<&DockMaxWidth>,
 ) {
     let Ok(g) = q.get(ev.entity) else { return };
     ev.propagate(false);
     if !g.dragging {
         return;
     }
-    let w = (g.start + ev.distance.x)
-        .clamp(MIN_WIDTH, MAX_WIDTH)
-        .round();
+    let max = q_max.get(g.panel).map_or(MAX_WIDTH, |m| m.0.max(MIN_WIDTH));
+    let w = (g.start + ev.distance.x).clamp(MIN_WIDTH, max).round();
     if let Ok(mut s) = q_state.get_mut(g.panel)
         && s.width != w
     {

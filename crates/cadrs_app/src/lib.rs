@@ -77,6 +77,7 @@ pub mod measure;
 pub mod move_document;
 pub mod native_document;
 pub mod network;
+pub mod node_view;
 pub mod notifications;
 pub mod part_folders;
 pub mod part_shading;
@@ -1055,6 +1056,7 @@ impl Plugin for CadrsAppPlugin {
             ))
             .add_plugins((
                 variables_ui::VariablesPlugin,
+                node_view::NodeViewPlugin,
                 variable_studio_ui::VariableStudioUiPlugin,
                 scale_ui::ScalePlugin,
                 threads_ui::ThreadsPlugin,

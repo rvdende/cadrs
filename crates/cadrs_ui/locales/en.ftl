@@ -6836,3 +6836,26 @@ cam-form-remove-point = Remove point { $n }
 cam-form-add-point = Add point
 # A note under a form tool's profile: the sizes it gives the tool. { $diameter } and { $length } are numbers in mm.
 cam-form-size = Diameter { $diameter } mm, cutting length { $length } mm (from the profile)
+
+## crates/cadrs_app/src/node_view.rs (the feature list as a node graph, with configurations)
+# The feature list header's button that shows the features as nodes (and back).
+node-view-toggle = Node view
+node-view-fit = Fit all nodes
+node-view-collapse = Collapse
+node-view-expand = Expand
+# A node's input socket that suppresses the feature (wired from a boolean input).
+node-view-bypass = Bypass (suppress while false)
+# The node the presets and inputs are on.
+node-view-configuration = Configuration
+node-view-add-configuration = Add configuration
+# A named set of input values.
+node-view-preset = Preset
+node-view-name = Name
+node-view-add-preset = Add preset
+node-view-remove-preset = Remove preset
+node-view-add-input = + Input
+node-view-remove-input = Remove input
+node-view-kind-length = Length
+node-view-kind-angle = Angle
+node-view-kind-number = Number
+node-view-kind-boolean = Boolean

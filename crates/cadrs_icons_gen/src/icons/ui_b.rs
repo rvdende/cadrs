@@ -31,6 +31,7 @@ pub fn icons() -> Vec<Def> {
         def("cut-list", Line, "Cut list", cut_list),
         def("configurations", Line, "Configurations", configurations),
         def("node-graph", Line, "Node view", node_graph),
+        def("zoom-fit", Line, "Fit all", zoom_fit),
         def("variables", Line, "Variables", variables),
         def("appearance", Line, "Appearances", appearance),
         def("properties", Line, "Properties", properties),
@@ -317,6 +318,17 @@ fn node_graph() -> Vec<String> {
         acc(path("M10 7.5 C13.5 7.5 10.5 16.5 14 16.5", "", "")),
         circle(10.0, 7.5, 1.25, INK, r#"stroke="none""#),
         circle(14.0, 16.5, 1.25, INK, r#"stroke="none""#),
+    ]
+}
+
+/// Fit all: four corner brackets round a box, which is what is framed (accent).
+fn zoom_fit() -> Vec<String> {
+    els![
+        path("M3.5 8 V3.5 H8", "", ""),
+        path("M16 3.5 H20.5 V8", "", ""),
+        path("M20.5 16 V20.5 H16", "", ""),
+        path("M8 20.5 H3.5 V16", "", ""),
+        acc(rect(8.0, 8.0, 8.0, 8.0, 1.5, "", "")),
     ]
 }
 
