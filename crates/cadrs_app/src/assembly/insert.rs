@@ -607,14 +607,33 @@ fn tree_items(
         }
         return out;
     }
-    // (A PCB Studio's boards are in the Boards tab.)
+    // (A PCB Studio's boards are in the Boards tab.) A configured Part Studio is a row a
+    // preset ("Bracket (Long)"): its generated studio (`cadrs_core::configuration`), made for
+    // the dialog's previews if no assembly uses it yet.
+    let mut rows: Vec<(ElementId, String, &cadrs_core::Element)> = Vec::new();
     for el in doc
         .doc
         .elements
         .iter()
         .filter(|e| e.assembly_model().is_none() && e.pcb().is_none())
     {
-        let Some(build) = parts_of.build(&doc.doc, el.id) else {
+        let Some(c) = el.configuration() else {
+            rows.push((el.id, el.name.clone(), el));
+            continue;
+        };
+        for p in &c.presets {
+            let id = cadrs_core::configuration::configured_id(el.id, p.id);
+            if doc.doc.element(id).is_none()
+                && let Some(g) = cadrs_core::configuration::generate(el, p.id, &doc.doc.units)
+            {
+                parts_of.extra.retain(|e| e.id != id);
+                parts_of.extra.push(g);
+            }
+            rows.push((id, format!("{} ({})", el.name, p.name), el));
+        }
+    }
+    for (source, label, el) in rows {
+        let Some(build) = parts_of.build(&doc.doc, source) else {
             continue;
         };
         let parts: Vec<&cadrs_core::Part> = build
@@ -625,7 +644,7 @@ fn tree_items(
                 PartKind::Surface => s.surfaces,
             })
             .collect();
-        let studio_hit = el.name.to_lowercase().contains(&q);
+        let studio_hit = label.to_lowercase().contains(&q);
         let names: Vec<String> = parts
             .iter()
             .map(|p| cadrs_core::parts::display_name(p, el.part_props()).to_string())
@@ -647,7 +666,7 @@ fn tree_items(
         let all: Vec<InstanceSource> = parts
             .iter()
             .map(|p| InstanceSource::Part {
-                element: el.id,
+                element: source,
                 part: p.id,
             })
             .collect();
@@ -655,34 +674,34 @@ fn tree_items(
         let studio_item = if s.rigid {
             Item {
                 sources: vec![InstanceSource::Studio {
-                    element: el.id,
+                    element: source,
                     board: None,
                 }],
-                label: el.name.clone(),
+                label: label.clone(),
                 rigid: parts.iter().map(|p| p.id).collect(),
                 link: None,
             }
         } else {
             Item {
                 sources: all,
-                label: el.name.clone(),
+                label: label.clone(),
                 rigid: Vec::new(),
                 link: None,
             }
         };
-        out.push((studio_item, Some((el.id, None)), true));
+        out.push((studio_item, Some((source, None)), true));
         for i in shown {
             out.push((
                 Item {
                     sources: vec![InstanceSource::Part {
-                        element: el.id,
+                        element: source,
                         part: parts[i].id,
                     }],
                     label: names[i].clone(),
                     rigid: Vec::new(),
                     link: None,
                 },
-                Some((el.id, Some(parts[i].id))),
+                Some((source, Some(parts[i].id))),
                 false,
             ));
         }
