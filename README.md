@@ -41,6 +41,14 @@ it with `/mcp` the first time; `claude mcp list` shows whether it is connected).
 `claude mcp add --transport http cadrs http://127.0.0.1:7680/mcp` does the same, and other
 clients take the URL in their MCP settings.
 
+### Documentation
+
+The user documentation is at [cadrs.net/docs](https://cadrs.net/docs/): how cadrs is organized,
+the keyboard shortcuts and the preferences. It's built with [mdBook](https://rust-lang.github.io/mdBook/)
+from the Markdown in [docs/](docs/src/SUMMARY.md); `mdbook serve docs` shows it locally while
+you edit. The keyboard shortcuts and preferences pages are made from the code:
+`CADRS_BLESS=1 cargo test -p cadrs_app --lib docs_reference` writes them again.
+
 ### Codebase
 
 | Crate | What it is |

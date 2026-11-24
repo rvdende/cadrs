@@ -1411,6 +1411,97 @@ pub(crate) fn parse_rotation_snap(text: &str) -> Option<f64> {
     (value.is_finite() && (0.0..=180.0).contains(&value)).then_some(value)
 }
 
+/// The documentation's preferences page ([`crate::docs_reference`]): every section of the
+/// desktop app's dialog with its settings, their choices and what a new user starts with, and a
+/// table of each mouse preset's gestures.
+#[cfg(test)]
+pub(crate) fn reference_markdown() -> String {
+    use crate::docs_reference::{GENERATED, escape};
+    let dialog = PrefsDialog::new(Preferences::default(), String::new());
+    let facts = Facts { cadrs_id: None };
+    let gesture_rows: Vec<&str> = ACTIONS.iter().map(|(_, name, _)| *name).collect();
+    let mut out = String::from(GENERATED);
+    out.push_str(
+        "# Preferences\n\n\
+         The app menu's **Preferences…** opens them. The search box at the top finds a setting \
+         in any section, and **Restore Defaults** puts back the defaults of the section shown. \
+         Preferences belong to your computer, not to a document. The browser version has no AI \
+         assistants section, and no vertical sync or profiling settings.\n",
+    );
+    for section in Section::ALL.into_iter().filter(|s| s.offered()) {
+        out.push_str(&format!(
+            "\n## {}\n\n{}\n",
+            escape(&section.title()),
+            escape(&section.about())
+        ));
+        for group in groups(section, &dialog, &facts) {
+            out.push_str(&format!("\n### {}\n\n", escape(&tr(group.key))));
+            let mut gestures = false;
+            for row in group.rows {
+                if gesture_rows.contains(&row.name) {
+                    gestures = true;
+                    continue;
+                }
+                let label = escape(&row.label);
+                let line = match &row.control {
+                    Control::Select(options, at) => {
+                        let names: Vec<_> = options.iter().map(|(o, _)| escape(o)).collect();
+                        format!(
+                            "- **{label}:** {}. Default: {}.",
+                            names.join(" · "),
+                            names[*at]
+                        )
+                    }
+                    Control::Segmented(options, at) => {
+                        let names: Vec<_> = options.iter().map(|o| escape(o)).collect();
+                        format!(
+                            "- **{label}:** {}. Default: {}.",
+                            names.join(" · "),
+                            names[*at]
+                        )
+                    }
+                    Control::Switch(what, on) => format!(
+                        "- **{label}:** {}, {} by default.",
+                        escape(what),
+                        if *on { "on" } else { "off" }
+                    ),
+                    Control::Number(value) => {
+                        format!("- **{label}:** default {}.", escape(value))
+                    }
+                    Control::Custom(_) => format!("- **{label}**"),
+                };
+                out.push_str(&line);
+                out.push('\n');
+                if let Some(note) = &row.note {
+                    for l in note.lines().filter(|l| !l.trim().is_empty()) {
+                        out.push_str(&format!("\n  {}\n", escape(l.trim())));
+                    }
+                }
+            }
+            if gestures {
+                out.push_str(&format!(
+                    "\nWhat each choice of {} does with the mouse:\n\n| |",
+                    escape(&tr("preferences-mouse-controls"))
+                ));
+                for preset in MousePreset::ALL {
+                    out.push_str(&format!(" {} |", escape(preset.label())));
+                }
+                out.push_str("\n| --- |");
+                out.push_str(&" --- |".repeat(MousePreset::ALL.len()));
+                out.push('\n');
+                for (action, _, label) in ACTIONS {
+                    out.push_str(&format!("| {} |", escape(&tr(label))));
+                    for preset in MousePreset::ALL {
+                        out.push_str(&format!(" {} |", escape(&gesture_text(preset, action))));
+                    }
+                    out.push('\n');
+                }
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

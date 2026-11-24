@@ -1,0 +1,25 @@
+# The user documentation at https://cadrs.net/docs/ (issue #273), built with mdBook:
+#
+#   mdbook serve docs            # read it at http://localhost:3000 while editing
+#   mdbook build docs            # into docs/book/
+#
+# The Pages workflow builds it into site/docs/ next to the app. The pages under
+# src/reference/ are made from the code (crates/cadrs_app/src/docs_reference.rs).
+[book]
+title = "cadrs"
+description = "How to use cadrs, the open-source parametric CAD program."
+authors = ["The cadrs contributors"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+create-missing = false
+
+[output.html]
+site-url = "/docs/"
+git-repository-url = "https://github.com/rvdende/cadrs"
+no-section-label = true
+
+[output.html.search]
+enable = true

@@ -6,8 +6,8 @@ name: Pages
 # tests, the kernel's gate, no regressions on brep-bench or brep-conformance). A push whose CI
 # fails, or is cancelled by a newer push, leaves the site as it was. It draws with WebGPU, or
 # WebGL2 where the browser has no WebGPU; with neither the page offers the downloads instead
-# (tools/web/index.html). /app/, where the app used to be, and any path there is no page for go
-# to it.
+# (tools/web/index.html). The user documentation (docs/, an mdBook) is at /docs/. /app/, where
+# the app used to be, and any path there is no page for go to the app.
 on:
   workflow_run:
     workflows: [CI]
@@ -71,6 +71,14 @@ jobs:
         env:
           CARGO_PROFILE_RELEASE_LTO: "false"
         run: tools/web/build.sh site
+
+      # The user documentation (docs/) at /docs/, beside the app.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: mdbook@0.5.4
+
+      - name: Documentation
+        run: mdbook build docs --dest-dir ../site/docs
 
       - name: Redirects
         run: |
