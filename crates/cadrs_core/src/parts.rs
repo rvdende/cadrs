@@ -660,6 +660,18 @@ pub(crate) fn regenerate_studio(
     }
 }
 
+/// Regenerates a list's sketches now, never deferring (a configured copy of a Part Studio,
+/// [`crate::configuration::generate`], which the app's deferred regeneration can't find).
+/// `studio`: the Variable features ahead of the list.
+pub(crate) fn regenerate_now(studio: &[Feature], features: &mut [Feature]) {
+    let mut all: Vec<Feature> = studio.to_vec();
+    all.extend(features.iter().cloned());
+    regenerate_or_leave(&mut all, &[], false);
+    for (f, now) in features.iter_mut().zip(all.drain(studio.len()..)) {
+        *f = now;
+    }
+}
+
 /// [`regenerate_with`], leaving the sketches from the first one that needs a rebuild on if
 /// `leave`. Whether none was left.
 fn regenerate_or_leave(

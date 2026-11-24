@@ -26,6 +26,13 @@ pub struct Document {
     /// that are not tabs, found by [`Document::element`] (see [`crate::assembly::standard`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub standard_content: Vec<crate::assembly::standard::StandardPart>,
+    /// Part Studios built in the configurations their assembly instances, drawing views and
+    /// Render Studios pick ([`crate::configuration::refresh_copies`]): not tabs, found by
+    /// [`Document::element`]. Saved, although regenerated on opening: a document read without a
+    /// refresh (a version, another document an assembly links to, a peer's copy) still finds
+    /// its instances' parts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub configured: Vec<crate::configuration::ConfiguredStudio>,
     /// Custom property definitions, part numbering and BOM templates (P3B.6, see
     /// [`crate::properties`]).
     #[serde(
@@ -46,13 +53,6 @@ pub struct Document {
     /// folders: the tabs are then in element order.
     #[serde(default, skip_serializing_if = "crate::tab_tree::TabTree::is_empty")]
     pub tab_tree: crate::tab_tree::TabTree,
-    /// The presets of its configured Part Studios that its assemblies use, as generated Part
-    /// Studios that are not tabs, found by [`Document::element`] (see
-    /// [`crate::configuration`]). Kept up to date by [`crate::configuration::refresh`].
-    /// Saved, although regenerated on opening: a document read without a refresh (a version,
-    /// another document an assembly links to, a peer's copy) still finds its instances' parts.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub configured: Vec<crate::configuration::ConfiguredStudio>,
 }
 
 impl Document {
@@ -66,11 +66,11 @@ impl Document {
             custom_colors: Vec::new(),
             material_libraries: Vec::new(),
             standard_content: Vec::new(),
+            configured: Vec::new(),
             properties: Default::default(),
             linked: Vec::new(),
             moved: Vec::new(),
             tab_tree: Default::default(),
-            configured: Vec::new(),
         }
     }
 
@@ -179,6 +179,19 @@ pub struct Element {
     /// with their values, kept up to date by [`crate::variable_studio::propagate`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub studio_variables: Vec<crate::variable_studio::ImportedVariable>,
+    /// A Part Studio's configuration: its inputs, table and active values
+    /// ([`crate::configuration`]).
+    #[serde(
+        default,
+        skip_serializing_if = "crate::configuration::Configuration::is_empty"
+    )]
+    pub configuration: crate::configuration::Configuration,
+    /// The configurations of Part Studios this element's references show (a drawing's views,
+    /// a Render Studio's model): each names its configured copy
+    /// ([`crate::configuration::InstanceConfiguration::copy_id`]), which
+    /// [`crate::configuration::refresh_copies`] keeps while a reference uses it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub configured_sources: Vec<crate::configuration::InstanceConfiguration>,
 }
 
 impl Element {
@@ -196,7 +209,6 @@ impl Element {
                 suppressed: Vec::new(),
                 rollback: None,
                 part_folders: Vec::new(),
-                configuration: None,
                 node_layout: None,
             },
             assembly: Default::default(),
@@ -205,6 +217,8 @@ impl Element {
             simulation: Default::default(),
             named_views: Vec::new(),
             studio_variables: Vec::new(),
+            configuration: Default::default(),
+            configured_sources: Vec::new(),
         }
     }
 
@@ -220,6 +234,8 @@ impl Element {
             simulation: Default::default(),
             named_views: Vec::new(),
             studio_variables: Vec::new(),
+            configuration: Default::default(),
+            configured_sources: Vec::new(),
         }
     }
 
@@ -228,31 +244,30 @@ impl Element {
     /// A configured Part Studio's inputs come first, with the active preset's values
     /// ([`crate::configuration`]).
     pub fn variable_base(&self) -> Vec<(String, cadrs_sketch::units::VarValue)> {
-        let mut out = self
-            .configuration()
-            .map(|c| c.values(None))
-            .unwrap_or_default();
-        out.extend(
-            self.studio_variables
-                .iter()
-                .map(|v| (v.name.clone(), v.var_value())),
-        );
+        let mut out: Vec<_> = self
+            .studio_variables
+            .iter()
+            .map(|v| (v.name.clone(), v.var_value()))
+            .collect();
+        // The configuration's inputs, after (so over) the Variable Studios'.
+        if !self.configuration.is_empty() {
+            out.extend(crate::configuration::input_variables(
+                &self.configuration,
+                &self.configuration.active,
+            ));
+        }
         out
     }
 
-    /// A Part Studio's configuration: its inputs and presets ([`crate::configuration`]).
+    /// A Part Studio's configuration ([`crate::configuration`]), when it has inputs.
     pub fn configuration(&self) -> Option<&crate::configuration::Configuration> {
-        match &self.kind {
-            ElementKind::PartStudio { configuration, .. } => configuration.as_deref(),
-            _ => None,
-        }
+        (matches!(self.kind, ElementKind::PartStudio { .. }) && !self.configuration.is_empty())
+            .then_some(&self.configuration)
     }
 
+    /// A Part Studio's configuration for writing (`None` for another kind of element).
     pub fn configuration_mut(&mut self) -> Option<&mut crate::configuration::Configuration> {
-        match &mut self.kind {
-            ElementKind::PartStudio { configuration, .. } => configuration.as_deref_mut(),
-            _ => None,
-        }
+        matches!(self.kind, ElementKind::PartStudio { .. }).then_some(&mut self.configuration)
     }
 
     /// Where the node view puts a Part Studio's nodes.
@@ -285,6 +300,8 @@ impl Element {
             simulation: Default::default(),
             named_views: Vec::new(),
             studio_variables: Vec::new(),
+            configuration: Default::default(),
+            configured_sources: Vec::new(),
         }
     }
 
@@ -299,6 +316,8 @@ impl Element {
             simulation: Default::default(),
             named_views: Vec::new(),
             studio_variables: Vec::new(),
+            configuration: Default::default(),
+            configured_sources: Vec::new(),
         }
     }
 
@@ -314,6 +333,8 @@ impl Element {
             simulation: Default::default(),
             named_views: Vec::new(),
             studio_variables: Vec::new(),
+            configuration: Default::default(),
+            configured_sources: Vec::new(),
         }
     }
 
@@ -458,19 +479,20 @@ impl Element {
     /// A configured studio's inputs come first, with the active preset's values
     /// ([`crate::configuration::Configuration::features`]).
     pub fn studio_features(&self) -> Vec<Feature> {
-        match &self.kind {
-            ElementKind::PartStudio { configuration, .. } => configuration
-                .as_deref()
-                .map(|c| c.features())
-                .unwrap_or_default()
-                .into_iter()
-                .chain(
-                    self.studio_variables
-                        .iter()
-                        .filter(|v| v.used)
-                        .map(|v| v.feature()),
-                )
-                .collect(),
+        match self.kind {
+            ElementKind::PartStudio { .. } => {
+                let mut out: Vec<Feature> = self
+                    .studio_variables
+                    .iter()
+                    .filter(|v| v.used)
+                    .map(|v| v.feature())
+                    .collect();
+                out.extend(crate::configuration::input_features(
+                    &self.configuration,
+                    &self.configuration.active,
+                ));
+                out
+            }
             _ => Vec::new(),
         }
     }
@@ -620,9 +642,6 @@ pub enum ElementKind {
         /// Folders in the Parts list: they group the parts' rows, nothing else.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         part_folders: Vec<PartFolder>,
-        /// Its configuration inputs and presets ([`crate::configuration`]); `None` without.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        configuration: Option<Box<crate::configuration::Configuration>>,
         /// Where the node view puts its nodes (`None` until one is moved).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         node_layout: Option<Box<crate::configuration::NodeLayout>>,

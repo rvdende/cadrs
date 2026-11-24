@@ -21,8 +21,9 @@
 //!   source origin goes onto each location; *Base mate connector*: a mate connector of the
 //!   source goes onto it), **Include mate connectors** (the explicit connectors on the derived
 //!   parts) and **Include properties** (off: only the name, material and appearance come over).
-//!   A Derived feature takes its source's active configuration preset (choosing another is not
-//!   built yet: [`crate::configuration`]); cadrs Part Studios have no composite parts.
+//!   A configured source is derived in the configuration picked for the feature
+//!   ([`DerivedFeature::configuration`]), else the one it shows ([`crate::configuration`]);
+//!   [`source_state`] builds it. cadrs Part Studios have no composite parts.
 //! - **Identity.** Derived geometry is namespaced like pattern instances: a derived part's id is
 //!   `(the Derived feature, a hash of the source part and the copy)` ([`derived_part`]), its
 //!   faces are `FaceOrigin::Instance { of: source op, face: source face, instance: copy }` under
@@ -251,6 +252,10 @@ pub struct DerivedFeature {
     /// A PCB Studio board instead of a Part Studio (the source is then the PCB Studio tab).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub board: Option<Box<DerivedBoard>>,
+    /// The configuration a configured source (a workspace Part Studio of this document) is
+    /// derived in; `None`: the one it shows ([`crate::configuration`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configuration: Option<crate::configuration::ConfigValues>,
 }
 
 fn yes() -> bool {
@@ -290,6 +295,8 @@ struct DerivedRepr {
     legacy_names: bool,
     #[serde(default)]
     board: Option<Box<DerivedBoard>>,
+    #[serde(default)]
+    configuration: Option<crate::configuration::ConfigValues>,
     // Main's pre-merge fields (not flattened: RON can't read flattened structs).
     #[serde(default)]
     document: Option<DocumentId>,
@@ -329,6 +336,7 @@ impl From<DerivedRepr> for DerivedFeature {
                 b.hash = crate::pcb::board3d::layout_hash(&b.layout);
                 b
             }),
+            configuration: r.configuration,
         };
         let is_legacy = r.document.is_some()
             || r.element.is_some()
@@ -374,6 +382,7 @@ impl Default for DerivedFeature {
             include_properties: true,
             legacy_names: false,
             board: None,
+            configuration: None,
         }
     }
 }
@@ -972,8 +981,6 @@ pub fn derived_of(
 /// ([`DerivedFeature::props`]; Include properties). Called by the undo history after every
 /// command, undo and redo; cheap when there are no Derived features.
 pub fn refresh(doc: &mut Document) {
-    // The presets the assemblies use follow their configured Part Studios.
-    crate::configuration::refresh(doc);
     // P3I.9: Form features that use a form Part Studio of this document follow it the same way.
     crate::sheetmetal_form::refresh(doc);
     // Board outlines that follow a sketch, before the boards are taken into Part Studios.
@@ -1010,10 +1017,9 @@ pub fn refresh(doc: &mut Document) {
                 }) else {
                     continue;
                 };
-                let features = src.active_features();
-                if d.studio != features || d.props != src.part_props() || d.source_name != src.name
-                {
-                    updates.push((i, j, features, src.part_props().to_vec(), src.name.clone()));
+                let (features, props) = source_state(src, d.configuration.as_ref(), &doc.units);
+                if d.studio != features || d.props != props || d.source_name != src.name {
+                    updates.push((i, j, features, props, src.name.clone()));
                 }
             }
         }
@@ -1032,6 +1038,25 @@ pub fn refresh(doc: &mut Document) {
     }
     for el in &mut doc.elements {
         sync_props(el);
+    }
+}
+
+/// What a workspace reference to Part Studio `src` derives: its built features and part
+/// settings, in `configuration` when it is configured (else the configuration it shows).
+pub fn source_state(
+    src: &Element,
+    configuration: Option<&crate::configuration::ConfigValues>,
+    units: &cadrs_sketch::units::Units,
+) -> (Vec<Feature>, Vec<PartProps>) {
+    match configuration {
+        Some(values)
+            if !src.configuration.is_empty()
+                && src.configuration.complete(values) != src.configuration.active =>
+        {
+            let el = crate::configuration::generate(src, values, src.id, units);
+            (el.active_features(), el.part_props().to_vec())
+        }
+        _ => (src.active_features(), src.part_props().to_vec()),
     }
 }
 

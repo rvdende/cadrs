@@ -21,8 +21,7 @@
 //!   part's `forms` (outline and centermark) for the flat view, DXF and drawings.
 //!
 //! A form's "configuration variables" are its Part Studio's Variable features, set by the Form
-//! feature for its copy of the studio (Part Studio configurations, [`crate::configuration`],
-//! are not offered to forms yet).
+//! feature for its copy of the studio.
 
 use serde::{Deserialize, Serialize};
 

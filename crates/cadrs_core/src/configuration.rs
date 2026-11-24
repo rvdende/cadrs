@@ -1,40 +1,572 @@
-//! Configurations of a Part Studio (the node view's **Configuration** node): named **inputs**
-//! (a length, an angle, a number or a boolean) and **presets** that give each input a value, so
-//! one studio makes several variations of its parts.
+//! **Configurations**: one Part Studio that builds as several variants, picked in the Part
+//! Studio, per assembly instance, per drawing view and per Render Studio. Two views edit the
+//! one model: the Configuration panel's table (as Onshape's) and the node view's Configuration
+//! node, whose wires are the expressions below. (The model, the panel and the copies come from
+//! Zach Strout's configurations, RTnhN's fork; the engine, inputs as variables wired by
+//! expressions, from the node view's.)
 //!
-//! - **Inputs are variables.** The active preset's values are defined above the whole feature
-//!   list, like a Variable Studio's ([`crate::document::Element::variable_base`]), so a feature
-//!   field reads one as `#length` and a feature is suppressed by one with
-//!   [`crate::variables::SuppressByVariable`] (`#withHole`). A rebuild sees them as Variable
-//!   features ahead of the list ([`Configuration::features`]), with ids derived from the
-//!   input's so the rebuild cache keeps its entries across presets.
-//! - **The node view's wires are those expressions**: a field whose text is `#length` is wired
-//!   from the input `length`. Connecting a wire writes the expression ([`ConnectParameter`]),
-//!   disconnecting writes the value back ([`DisconnectParameter`]).
-//! - **Presets in assemblies.** An instance of one preset is an instance of a generated Part
-//!   Studio ([`ConfiguredStudio`]), as standard content is: a copy of the studio with the
-//!   preset's values, under an id derived from the studio's and the preset's
-//!   ([`configured_id`]), found by [`crate::document::Document::element`]. Only the presets an
-//!   assembly uses are generated; [`refresh`] keeps them in step with their studio after every
-//!   edit. A copy doesn't regenerate its sketches on faces: they are as in the studio's active
-//!   preset.
+//! - **Inputs** ([`ConfigInput`]), in order: a **List** (a table of named rows, each a
+//!   configuration: M3, M4, M5, …), a **Checkbox** (`#name` is 1 or 0) and a **Value** (`#name`
+//!   a length, an angle or a number, typed per configuration: an instance's own length).
+//! - **Columns** ([`ConfiguredParam`]): a List's or Checkbox's table has a column per configured
+//!   parameter, with a value for each row (a Checkbox's two: unchecked, checked). **Each column
+//!   is a variable, `#name`**: the parameter it was configured for (a feature field, a sketch
+//!   dimension, a Variable's value, whether a feature is suppressed) reads `#name`, and any other
+//!   field may too (the node view wires them). A part property's column is text, written into
+//!   the part's settings instead.
+//! - **The features never change with the configuration.** The active configuration's values
+//!   are variables ahead of the whole list ([`input_variables`], through
+//!   [`crate::document::Element::variable_base`]), so switching configurations changes those
+//!   alone and the rebuild cache keeps its entries for each. A rebuild sees them as Variable
+//!   features ([`input_features`]) with ids derived from their inputs'.
+//! - **Editing a configured field edits the configuration shown**: after every command, a
+//!   configured parameter whose expression was changed (a new depth typed into the Extrude
+//!   dialog) has the new value put into the active row's cell and reads `#name` again
+//!   ([`after_command`]), as in Onshape. Unconfiguring it leaves it the value it shows.
+//! - **Copies.** An assembly instance, a drawing view or a Render Studio's model in a
+//!   configuration other than the studio's names a **configured copy** ([`ConfiguredStudio`] in
+//!   [`Document::configured`], found by [`Document::element`] like standard content): the studio
+//!   in those values, under an id derived from the studio and the values ([`copy_id`]), so two
+//!   instances in the same configuration share it. Copies are regenerated when their studio's
+//!   model changes (not when it shows another configuration or its nodes move) and dropped when
+//!   nothing names them ([`refresh_copies`]). The features keep their ids, so mates survive a
+//!   change of configuration.
+//! - **Part properties** can be configured ([`ParamTarget::Property`]): Name, Part number,
+//!   Description, … (not Mass, Material or Appearance), text cells written into the part's
+//!   [`PartProps`] for the configuration shown ([`apply_properties`]) and read back
+//!   ([`after_command`]).
+//! - **Documents from the fork** (their columns without names, the values written into the
+//!   features) are read as they are and converted on load ([`migrate`]): each column named
+//!   after its parameter, the parameter reading `#name`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use cadrs_sketch::units::{Quantity, VarValue};
+use cadrs_sketch::units::{Quantity, Units, VarValue};
 use cadrs_vars::{VariableFeature, VariableKind};
 use serde::{Deserialize, Serialize};
 
+use crate::assembly::InstanceId;
 use crate::command::{Command, CommandError, Scope};
-use crate::document::{Document, Element, ElementKind, Feature, FeatureKind};
-use crate::ids::{ElementId, FeatureId, InputId, PresetId};
+use crate::document::{Document, Element, ElementKind, Feature, FeatureKind, PartProps};
+use crate::ids::{ConfigInputId, ConfigRowId, ElementId, FeatureId, PartId};
+use crate::properties::{PropertyKey, PropertySettings};
 
 // ---------------------------------------------------------------------------------------------
 // The model
 
-/// What an input's value measures.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+/// A Part Studio's configuration: its inputs and the values it shows now.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct Configuration {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<ConfigInput>,
+    /// The configuration the Part Studio shows.
+    #[serde(default, skip_serializing_if = "ConfigValues::is_empty")]
+    pub active: ConfigValues,
+    /// Parts' names and properties set for one configuration (a configured instance's
+    /// Properties, a BOM row's cells): its copies take them ([`generate`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub part_properties: Vec<ConfiguredPartProps>,
+}
+
+/// A part's own name and properties in one configuration (Part number, Description, …; its
+/// material and appearance are the studio's in every configuration).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConfiguredPartProps {
+    /// The configuration ([`Configuration::complete`]).
+    pub values: ConfigValues,
+    pub part: PartId,
+    /// Its name in this configuration (else the studio's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::properties::Properties::is_empty"
+    )]
+    pub properties: crate::properties::Properties,
+}
+
+impl Configuration {
+    pub fn is_empty(&self) -> bool {
+        self.inputs.is_empty()
+    }
+
+    pub fn input(&self, id: ConfigInputId) -> Option<&ConfigInput> {
+        self.inputs.iter().find(|i| i.id == id)
+    }
+
+    pub fn input_mut(&mut self, id: ConfigInputId) -> Option<&mut ConfigInput> {
+        self.inputs.iter_mut().find(|i| i.id == id)
+    }
+
+    /// The name and properties set for `part` in the configuration `values`.
+    pub fn part_props(&self, values: &ConfigValues, part: PartId) -> Option<&ConfiguredPartProps> {
+        let values = self.complete(values);
+        self.part_properties
+            .iter()
+            .find(|p| p.part == part && p.values == values)
+    }
+
+    /// [`Configuration::part_props`] for writing, made from `now` (the part's name and
+    /// properties in that configuration) if missing.
+    pub fn part_props_mut(
+        &mut self,
+        values: &ConfigValues,
+        part: PartId,
+        now: (Option<String>, crate::properties::Properties),
+    ) -> &mut ConfiguredPartProps {
+        let values = self.complete(values);
+        let i = match self
+            .part_properties
+            .iter()
+            .position(|p| p.part == part && p.values == values)
+        {
+            Some(i) => i,
+            None => {
+                self.part_properties.push(ConfiguredPartProps {
+                    values,
+                    part,
+                    name: now.0,
+                    properties: now.1,
+                });
+                self.part_properties.len() - 1
+            }
+        };
+        &mut self.part_properties[i]
+    }
+
+    /// The input named `name` (a Checkbox's or Value's `#name`, a List's title).
+    pub fn input_named(&self, name: &str) -> Option<&ConfigInput> {
+        self.inputs.iter().find(|i| i.name == name)
+    }
+
+    /// The column whose variable is `#name`, with its input.
+    pub fn column_named(&self, name: &str) -> Option<(&ConfigInput, &ConfiguredParam)> {
+        self.inputs.iter().find_map(|i| {
+            i.params
+                .iter()
+                .find(|p| !p.name.is_empty() && p.name == name)
+                .map(|p| (i, p))
+        })
+    }
+
+    /// Every `#name` the configuration defines: its Checkboxes' and Values', its columns'.
+    pub fn names(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for i in &self.inputs {
+            if i.defines_variable() {
+                out.push(i.name.clone());
+            }
+            out.extend(
+                i.params
+                    .iter()
+                    .filter(|p| p.binds())
+                    .map(|p| p.name.clone()),
+            );
+        }
+        out
+    }
+
+    /// Every input's value in `values`, or its default where `values` has none (or one that no
+    /// longer fits: a deleted row).
+    pub fn resolve(&self, values: &ConfigValues) -> Vec<Resolved> {
+        self.inputs
+            .iter()
+            .map(|input| input.resolve_value(values.get(input.id)))
+            .collect()
+    }
+
+    /// The default values: each List's default row, each Checkbox's state, each Value's.
+    pub fn defaults(&self) -> ConfigValues {
+        let mut out = ConfigValues::default();
+        for i in &self.inputs {
+            out.set(i.id, i.default_value());
+        }
+        out
+    }
+
+    /// `values` with every input given (defaults filling in) and nothing else: what an
+    /// instance or the active configuration keeps.
+    pub fn complete(&self, values: &ConfigValues) -> ConfigValues {
+        let mut out = ConfigValues::default();
+        for (input, r) in self.inputs.iter().zip(self.resolve(values)) {
+            let v = match (r, &input.kind) {
+                (Resolved::Row(i), InputKind::List { rows, .. }) => InputValue::Row(rows[i].id),
+                (Resolved::Checked(c), _) => InputValue::Checked(c),
+                (Resolved::Number(x), _) => InputValue::Number(x),
+                _ => continue,
+            };
+            out.set(input.id, v);
+        }
+        out
+    }
+
+    /// How the values read, for lists and labels: "M5, Chamfered, No thread, length 20".
+    pub fn describe(&self, values: &ConfigValues) -> String {
+        let mut parts = Vec::new();
+        for (input, r) in self.inputs.iter().zip(self.resolve(values)) {
+            parts.push(match (r, &input.kind) {
+                (Resolved::Row(i), InputKind::List { rows, .. }) => rows[i].name.clone(),
+                (Resolved::Checked(true), _) => input.name.clone(),
+                (Resolved::Checked(false), _) => format!("No {}", input.name),
+                (Resolved::Number(x), InputKind::Value { kind, .. }) => {
+                    format!("{} {}", input.name, kind.plain(x))
+                }
+                _ => continue,
+            });
+        }
+        parts.join(", ")
+    }
+
+    /// Why the configuration can't be used as it is (the first problem found): a bad or
+    /// repeated name, a List without rows, a column whose values don't match its input's rows.
+    pub fn problem(&self) -> Option<String> {
+        for (k, input) in self.inputs.iter().enumerate() {
+            if input.name.is_empty() {
+                return Some("An input needs a name".into());
+            }
+            if !cadrs_sketch::units::is_variable_name(&input.name) {
+                return Some(format!(
+                    "{}: a name is letters, digits and _ (starting with a letter)",
+                    input.name
+                ));
+            }
+            if self.inputs[..k].iter().any(|i| i.name == input.name) {
+                return Some(format!("Two inputs are named {}", input.name));
+            }
+            match &input.kind {
+                InputKind::List { rows, default } => {
+                    if rows.is_empty() {
+                        return Some(format!("{}: a list needs a configuration", input.name));
+                    }
+                    if *default >= rows.len() {
+                        return Some(format!("{}: the default is not a row", input.name));
+                    }
+                    for (j, r) in rows.iter().enumerate() {
+                        if r.name.trim().is_empty() {
+                            return Some(format!("{}: a configuration needs a name", input.name));
+                        }
+                        if rows[..j].iter().any(|x| x.name == r.name) {
+                            return Some(format!(
+                                "{}: two configurations are named {}",
+                                input.name, r.name
+                            ));
+                        }
+                    }
+                }
+                InputKind::Checkbox { .. } => {}
+                InputKind::Value { .. } => {
+                    if !input.params.is_empty() {
+                        return Some(format!("{}: a value has no table", input.name));
+                    }
+                }
+            }
+            let n = input.row_count();
+            for p in &input.params {
+                if p.values.len() != n {
+                    return Some(format!(
+                        "{}: a configured parameter has {} values for {n} configurations",
+                        input.name,
+                        p.values.len()
+                    ));
+                }
+                let boolean = p.kind_hint() == Some(ColumnKind::Boolean);
+                if p.values.iter().any(|v| v.as_bool().is_some() != boolean) {
+                    return Some(format!(
+                        "{}: a configured parameter has a value of the wrong kind",
+                        input.name
+                    ));
+                }
+                if p.binds() && !cadrs_sketch::units::is_variable_name(&p.name) {
+                    return Some(format!(
+                        "#{}: a name is letters, digits and _ (starting with a letter)",
+                        p.name
+                    ));
+                }
+            }
+        }
+        let names = self.names();
+        if let Some(n) = names
+            .iter()
+            .enumerate()
+            .find(|(k, n)| names[..*k].contains(n))
+            .map(|(_, n)| n)
+        {
+            return Some(format!("#{n} is defined twice"));
+        }
+        let targets: Vec<&ParamTarget> = self
+            .inputs
+            .iter()
+            .flat_map(|i| i.params.iter().map(|p| &p.target))
+            .filter(|t| !matches!(t, ParamTarget::Free { .. }))
+            .collect();
+        if targets
+            .iter()
+            .enumerate()
+            .any(|(k, t)| targets[..k].contains(t))
+        {
+            return Some("A parameter is configured twice".into());
+        }
+        None
+    }
+
+    /// The parameter `target` and the input that configures it.
+    pub fn param(&self, target: &ParamTarget) -> Option<(&ConfigInput, &ConfiguredParam)> {
+        self.inputs.iter().find_map(|i| {
+            i.params
+                .iter()
+                .find(|p| p.target == *target)
+                .map(|p| (i, p))
+        })
+    }
+
+    /// Whether the feature has a configured parameter.
+    pub fn configures(&self, feature: FeatureId) -> bool {
+        self.inputs
+            .iter()
+            .any(|i| i.params.iter().any(|p| p.target.feature() == Some(feature)))
+    }
+
+    /// The input and row whose cell gives `part`'s property `key` in the configuration
+    /// `values`, when the property is configured.
+    pub fn property_cell(
+        &self,
+        values: &ConfigValues,
+        part: PartId,
+        key: PropertyKey,
+    ) -> Option<(ConfigInputId, usize)> {
+        let (input, _) = self.param(&ParamTarget::Property { part, key })?;
+        Some((input.id, input.row_of(values.get(input.id))))
+    }
+
+    /// Why `name` can't name a new input or column (or `own`, renamed), if it can't: `taken`
+    /// are the other names in scope (the studio's Variables, its Variable Studios').
+    pub fn name_problem(&self, name: &str, own: Option<&str>, taken: &[String]) -> Option<String> {
+        if name.is_empty() {
+            return Some("Enter a name".into());
+        }
+        if !cadrs_sketch::units::is_variable_name(name) {
+            return Some("A name is letters, digits and _ (starting with a letter)".into());
+        }
+        if Some(name) != own
+            && (self.names().iter().any(|n| n == name)
+                || self.inputs.iter().any(|i| i.name == name))
+        {
+            return Some(format!("#{name} is already in the configuration"));
+        }
+        if taken.iter().any(|t| t == name) {
+            return Some(format!("#{name} is already a variable"));
+        }
+        None
+    }
+
+    /// A name for a new column or input from `label` ("Extrude 1 · Depth" → `Extrude_1_Depth`),
+    /// made unique among the configuration's names and `taken`.
+    pub fn fresh_name(&self, label: &str, taken: &[String]) -> String {
+        let mut base: String = label
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '_' })
+            .collect();
+        while base.contains("__") {
+            base = base.replace("__", "_");
+        }
+        let base = base.trim_matches('_').to_string();
+        let base = match base.chars().next() {
+            Some(c) if c.is_alphabetic() => base,
+            Some(_) => format!("c_{base}"),
+            None => "value".into(),
+        };
+        let used = |n: &str| {
+            self.names().iter().any(|x| x == n)
+                || self.inputs.iter().any(|i| i.name == n)
+                || taken.iter().any(|t| t == n)
+        };
+        if !used(&base) {
+            return base;
+        }
+        (2..)
+            .map(|k| format!("{base}_{k}"))
+            .find(|n| !used(n))
+            .unwrap_or(base)
+    }
+}
+
+/// One input of a configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConfigInput {
+    pub id: ConfigInputId,
+    /// Its name: `#name` in expressions (a Checkbox's, a Value's), and its title in the
+    /// Configuration panel and node.
+    pub name: String,
+    pub kind: InputKind,
+    /// Its configured parameters: the configuration table's columns (a List's, a Checkbox's).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub params: Vec<ConfiguredParam>,
+}
+
+impl ConfigInput {
+    /// A List input with `rows` (the first the default).
+    pub fn list(name: &str, rows: &[&str]) -> Self {
+        Self {
+            id: ConfigInputId::new(),
+            name: name.into(),
+            kind: InputKind::List {
+                rows: rows
+                    .iter()
+                    .map(|r| ListRow {
+                        id: ConfigRowId::new(),
+                        name: (*r).into(),
+                    })
+                    .collect(),
+                default: 0,
+            },
+            params: Vec::new(),
+        }
+    }
+
+    /// A Checkbox input.
+    pub fn checkbox(name: &str, default: bool) -> Self {
+        Self {
+            id: ConfigInputId::new(),
+            name: name.into(),
+            kind: InputKind::Checkbox { default },
+            params: Vec::new(),
+        }
+    }
+
+    /// A Value input: `#name`, a length, an angle or a number, `default` (mm, degrees).
+    pub fn value(name: &str, kind: ValueKind, default: f64) -> Self {
+        Self {
+            id: ConfigInputId::new(),
+            name: name.into(),
+            kind: InputKind::Value { kind, default },
+            params: Vec::new(),
+        }
+    }
+
+    /// Whether `#name` is a variable (a Checkbox's 1 or 0, a Value's value; a List's name is
+    /// its title, its columns the variables).
+    pub fn defines_variable(&self) -> bool {
+        !matches!(self.kind, InputKind::List { .. })
+    }
+
+    /// The id of the Variable feature a rebuild sees for its `#name` ([`input_features`]):
+    /// derived from the input's, so it is the same in every configuration and rebuild.
+    pub fn feature_id(&self) -> FeatureId {
+        FeatureId::from_u128(fnv(b"cadrs configuration input\0", self.id.0.as_bytes()))
+    }
+
+    /// How many values each of its configured parameters has: a List's rows, a Checkbox's
+    /// two (unchecked, checked), a Value's none.
+    pub fn row_count(&self) -> usize {
+        match &self.kind {
+            InputKind::List { rows, .. } => rows.len(),
+            InputKind::Checkbox { .. } => 2,
+            InputKind::Value { .. } => 0,
+        }
+    }
+
+    /// The labels of its rows, as the table heads them.
+    pub fn row_names(&self) -> Vec<String> {
+        match &self.kind {
+            InputKind::List { rows, .. } => rows.iter().map(|r| r.name.clone()).collect(),
+            InputKind::Checkbox { .. } => vec!["Unchecked".into(), "Checked".into()],
+            InputKind::Value { .. } => Vec::new(),
+        }
+    }
+
+    pub fn default_value(&self) -> InputValue {
+        match &self.kind {
+            InputKind::List { rows, default } => InputValue::Row(
+                rows.get(*default)
+                    .or(rows.first())
+                    .map(|r| r.id)
+                    .unwrap_or_default(),
+            ),
+            InputKind::Checkbox { default } => InputValue::Checked(*default),
+            InputKind::Value { default, .. } => InputValue::Number(*default),
+        }
+    }
+
+    /// Whether `value` is one it can take (why not: a deleted row, the wrong kind of value).
+    pub fn check_value(&self, value: &InputValue) -> Result<(), String> {
+        match (&self.kind, value) {
+            (InputKind::List { rows, .. }, InputValue::Row(r)) => rows
+                .iter()
+                .any(|x| x.id == *r)
+                .then_some(())
+                .ok_or_else(|| format!("{}: no such configuration", self.name)),
+            (InputKind::Checkbox { .. }, InputValue::Checked(_)) => Ok(()),
+            (InputKind::Value { .. }, InputValue::Number(x)) if x.is_finite() => Ok(()),
+            _ => Err(format!("{}: the wrong kind of value", self.name)),
+        }
+    }
+
+    /// Its value as the features see it: `value`, or its default where `value` is missing or
+    /// doesn't fit.
+    pub fn resolve_value(&self, value: Option<&InputValue>) -> Resolved {
+        let value = value
+            .filter(|v| self.check_value(v).is_ok())
+            .cloned()
+            .unwrap_or_else(|| self.default_value());
+        match (&self.kind, value) {
+            (InputKind::List { rows, default }, InputValue::Row(r)) => Resolved::Row(
+                rows.iter()
+                    .position(|x| x.id == r)
+                    .unwrap_or((*default).min(rows.len().saturating_sub(1))),
+            ),
+            (InputKind::Checkbox { .. }, InputValue::Checked(c)) => Resolved::Checked(c),
+            (InputKind::Value { .. }, InputValue::Number(x)) => Resolved::Number(x),
+            (_, _) => Resolved::Checked(false),
+        }
+    }
+
+    /// The row its value picks: a List's, a Checkbox's 0 (unchecked) or 1 (checked).
+    pub fn row_of(&self, value: Option<&InputValue>) -> usize {
+        match self.resolve_value(value) {
+            Resolved::Row(i) => i,
+            Resolved::Checked(c) => usize::from(c),
+            Resolved::Number(_) => 0,
+        }
+    }
+}
+
+/// What kind of input.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum InputKind {
+    /// A table of named configurations.
+    List {
+        rows: Vec<ListRow>,
+        /// The default row's index.
+        #[serde(default)]
+        default: usize,
+    },
+    /// On or off: `#name` is 1 or 0.
+    Checkbox {
+        #[serde(default)]
+        default: bool,
+    },
+    /// A value typed per configuration: `#name`.
+    Value {
+        kind: ValueKind,
+        /// mm, degrees or a number.
+        #[serde(default)]
+        default: f64,
+    },
+}
+
+impl InputKind {
+    pub fn label(&self) -> &'static str {
+        match self {
+            InputKind::List { .. } => "List",
+            InputKind::Checkbox { .. } => "Checkbox",
+            InputKind::Value { kind, .. } => kind.label(),
+        }
+    }
+}
+
+/// What a Value input measures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ValueKind {
     /// Millimetres.
     #[default]
     Length,
@@ -42,33 +574,25 @@ pub enum InputKind {
     Angle,
     /// A plain number (a count, a ratio).
     Number,
-    /// 0 (false) or 1 (true): for suppression (a feature's Bypass).
-    Boolean,
 }
 
-impl InputKind {
-    pub const ALL: [InputKind; 4] = [
-        InputKind::Length,
-        InputKind::Angle,
-        InputKind::Number,
-        InputKind::Boolean,
-    ];
+impl ValueKind {
+    pub const ALL: [ValueKind; 3] = [ValueKind::Length, ValueKind::Angle, ValueKind::Number];
 
     pub fn label(self) -> &'static str {
         match self {
-            InputKind::Length => "Length",
-            InputKind::Angle => "Angle",
-            InputKind::Number => "Number",
-            InputKind::Boolean => "Boolean",
+            ValueKind::Length => "Length",
+            ValueKind::Angle => "Angle",
+            ValueKind::Number => "Number",
         }
     }
 
     /// The kind of variable expressions see.
     pub fn variable_kind(self) -> VariableKind {
         match self {
-            InputKind::Length => VariableKind::Length,
-            InputKind::Angle => VariableKind::Angle,
-            InputKind::Number | InputKind::Boolean => VariableKind::Number,
+            ValueKind::Length => VariableKind::Length,
+            ValueKind::Angle => VariableKind::Angle,
+            ValueKind::Number => VariableKind::Number,
         }
     }
 
@@ -76,197 +600,900 @@ impl InputKind {
         self.variable_kind().quantity()
     }
 
-    /// Whether a field of quantity `q` can be wired from it.
+    /// The kind for a field of quantity `q`.
+    pub fn of(q: Quantity) -> Self {
+        match q {
+            Quantity::Length => ValueKind::Length,
+            Quantity::Angle => ValueKind::Angle,
+            Quantity::Count => ValueKind::Number,
+        }
+    }
+
+    /// Whether a field of quantity `q` can read it.
     pub fn fits(self, q: Quantity) -> bool {
-        self != InputKind::Boolean && self.quantity() == q
+        match self {
+            ValueKind::Number => q == Quantity::Count,
+            k => k.quantity() == q,
+        }
+    }
+
+    /// `value` as it would be typed ("16 mm", "30 deg", "3").
+    pub fn plain(self, value: f64) -> String {
+        plain(value, self.quantity())
     }
 }
 
-/// A configuration input: `#name`, with what it measures and its value where a preset gives
-/// none.
+/// One row of a List: a configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ConfigInput {
-    pub id: InputId,
-    /// The name, without the `#`.
+pub struct ListRow {
+    pub id: ConfigRowId,
     pub name: String,
-    #[serde(default)]
-    pub kind: InputKind,
-    /// mm, degrees, a number, or 0/1.
-    #[serde(default)]
-    pub default: f64,
+}
+
+/// An input's value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum InputValue {
+    /// A List's row.
+    Row(ConfigRowId),
+    /// A Checkbox's state.
+    Checked(bool),
+    /// A Value's value (mm, degrees or a number).
+    Number(f64),
+}
+
+/// An input's value as the features see it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Resolved {
+    /// The index of a List's row.
+    Row(usize),
+    Checked(bool),
+    Number(f64),
+}
+
+/// The values of a configuration's inputs, by input (in input-id order, so equal values
+/// compare and hash alike).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct ConfigValues(pub Vec<(ConfigInputId, InputValue)>);
+
+impl ConfigValues {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn get(&self, input: ConfigInputId) -> Option<&InputValue> {
+        self.0.iter().find(|(i, _)| *i == input).map(|(_, v)| v)
+    }
+
+    pub fn set(&mut self, input: ConfigInputId, value: InputValue) {
+        match self.0.binary_search_by(|(i, _)| i.cmp(&input)) {
+            Ok(k) => self.0[k].1 = value,
+            Err(k) => self.0.insert(k, (input, value)),
+        }
+    }
+}
+
+/// A configured parameter: a column of the configuration table, the variable `#name` with a
+/// value for each of its input's rows.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConfiguredParam {
+    /// What it was configured for (its label, and where an edit is put back into the table); a
+    /// property's column sets the property.
+    pub target: ParamTarget,
+    /// Its value for each of its input's rows.
+    pub values: Vec<CellValue>,
+    /// The variable it defines: `#name` (empty in documents from before columns were
+    /// variables, named on load by [`migrate`]; a property's column has none).
     #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub description: String,
-}
-
-impl ConfigInput {
-    pub fn new(name: impl Into<String>, kind: InputKind, default: f64) -> Self {
-        Self {
-            id: InputId::new(),
-            name: name.into(),
-            kind,
-            default,
-            description: String::new(),
-        }
-    }
-
-    /// The id of the Variable feature a rebuild sees for it ([`Configuration::features`]):
-    /// derived from the input's, so it is the same in every preset and every rebuild.
-    pub fn feature_id(&self) -> FeatureId {
-        FeatureId::from_u128(fnv(b"cadrs configuration input\0", self.id.0.as_bytes()))
-    }
-}
-
-/// A named set of input values (Onshape's configuration row).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Preset {
-    pub id: PresetId,
     pub name: String,
-    /// The inputs it sets; the others take their default.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub values: BTreeMap<InputId, f64>,
 }
 
-impl Preset {
-    pub fn new(name: impl Into<String>) -> Self {
-        Self {
-            id: PresetId::new(),
-            name: name.into(),
-            values: BTreeMap::new(),
+impl ConfiguredParam {
+    /// Whether it defines a variable (every column but a property's, once named).
+    pub fn binds(&self) -> bool {
+        !self.name.is_empty() && !matches!(self.target, ParamTarget::Property { .. })
+    }
+
+    /// What its values are, where it says without the features: a Free column's kind, a
+    /// suppression's Boolean, a property's text.
+    pub fn kind_hint(&self) -> Option<ColumnKind> {
+        match &self.target {
+            ParamTarget::Free { kind } => Some(*kind),
+            ParamTarget::Suppressed { .. } => Some(ColumnKind::Boolean),
+            ParamTarget::Property { .. } => Some(ColumnKind::Text),
+            _ => None,
         }
     }
 
-    /// The value it gives `input`.
-    pub fn value(&self, input: &ConfigInput) -> f64 {
-        self.values.get(&input.id).copied().unwrap_or(input.default)
+    /// What its values are: [`ConfiguredParam::kind_hint`], else its target's quantity.
+    pub fn kind(&self, features: &[Feature]) -> ColumnKind {
+        self.kind_hint().unwrap_or_else(|| {
+            self.target
+                .quantity(features)
+                .map_or(ColumnKind::Number, ColumnKind::of)
+        })
     }
 }
 
-/// A Part Studio's configuration: its inputs, its presets and the preset the studio shows.
+/// What a column's values are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ColumnKind {
+    Length,
+    Angle,
+    Number,
+    /// 1 or 0 (a feature suppressed or not).
+    Boolean,
+    /// A part property's text.
+    Text,
+}
+
+impl ColumnKind {
+    pub fn of(q: Quantity) -> Self {
+        match q {
+            Quantity::Length => ColumnKind::Length,
+            Quantity::Angle => ColumnKind::Angle,
+            Quantity::Count => ColumnKind::Number,
+        }
+    }
+
+    /// What expressions see (a Boolean is a number, 1 or 0).
+    pub fn quantity(self) -> Quantity {
+        match self {
+            ColumnKind::Length => Quantity::Length,
+            ColumnKind::Angle => Quantity::Angle,
+            _ => Quantity::Count,
+        }
+    }
+
+    pub fn variable_kind(self) -> VariableKind {
+        match self {
+            ColumnKind::Length => VariableKind::Length,
+            ColumnKind::Angle => VariableKind::Angle,
+            _ => VariableKind::Number,
+        }
+    }
+}
+
+/// What a configured parameter sets.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Configuration {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub inputs: Vec<ConfigInput>,
-    pub presets: Vec<Preset>,
-    pub active: PresetId,
+pub enum ParamTarget {
+    /// A numeric field of a feature: the `occurrence`th field labelled `label` of
+    /// [`crate::variables::slots`] ("Depth", "Radius", the second "Vertex radius").
+    Field {
+        feature: FeatureId,
+        label: String,
+        #[serde(default)]
+        occurrence: u32,
+    },
+    /// A dimension of a sketch.
+    Dimension {
+        feature: FeatureId,
+        dimension: cadrs_sketch::DimensionId,
+    },
+    /// A Variable feature's value.
+    Variable { feature: FeatureId },
+    /// Whether a feature is suppressed.
+    Suppressed { feature: FeatureId },
+    /// A part's property ([`PropertyKey::is_configurable`]): its text, empty for not set.
+    Property { part: PartId, key: PropertyKey },
+    /// No parameter: a variable of its own, read wherever an expression names it (a column
+    /// added in the node view and wired to fields there).
+    Free { kind: ColumnKind },
 }
 
-impl Default for Configuration {
-    /// One preset, "Default", and no inputs.
-    fn default() -> Self {
-        let p = Preset::new("Default");
-        Self {
-            inputs: Vec::new(),
-            active: p.id,
-            presets: vec![p],
+impl ParamTarget {
+    /// The feature it is a parameter of.
+    pub fn feature(&self) -> Option<FeatureId> {
+        match self {
+            ParamTarget::Field { feature, .. }
+            | ParamTarget::Dimension { feature, .. }
+            | ParamTarget::Variable { feature }
+            | ParamTarget::Suppressed { feature } => Some(*feature),
+            ParamTarget::Property { .. } | ParamTarget::Free { .. } => None,
         }
     }
-}
 
-impl Configuration {
-    pub fn preset(&self, id: PresetId) -> Option<&Preset> {
-        self.presets.iter().find(|p| p.id == id)
-    }
-
-    pub fn preset_mut(&mut self, id: PresetId) -> Option<&mut Preset> {
-        self.presets.iter_mut().find(|p| p.id == id)
-    }
-
-    pub fn preset_named(&self, name: &str) -> Option<&Preset> {
-        self.presets.iter().find(|p| p.name == name)
-    }
-
-    /// The preset the studio shows (the first one if `active` names none).
-    pub fn active_preset(&self) -> Option<&Preset> {
-        self.preset(self.active).or_else(|| self.presets.first())
-    }
-
-    pub fn input(&self, id: InputId) -> Option<&ConfigInput> {
-        self.inputs.iter().find(|i| i.id == id)
-    }
-
-    pub fn input_named(&self, name: &str) -> Option<&ConfigInput> {
-        self.inputs.iter().find(|i| i.name == name)
-    }
-
-    /// The inputs as expressions see them with `preset`'s values (the active one's for `None`).
-    pub fn values(&self, preset: Option<PresetId>) -> Vec<(String, VarValue)> {
-        let p = match preset {
-            Some(id) => self.preset(id),
-            None => self.active_preset(),
-        };
-        self.inputs
-            .iter()
-            .map(|i| {
-                let value = p.map_or(i.default, |p| p.value(i));
-                (
-                    i.name.clone(),
-                    VarValue {
-                        value,
-                        quantity: i.kind.quantity(),
-                    },
-                )
-            })
-            .collect()
-    }
-
-    /// The Variable features a rebuild sees ahead of the list for the active preset: `#name`
-    /// set to its exact value.
-    pub fn features(&self) -> Vec<Feature> {
-        let p = self.active_preset();
-        self.inputs
-            .iter()
-            .map(|i| {
-                let kind = i.kind.variable_kind();
-                let value = p.map_or(i.default, |p| p.value(i));
-                let var = VariableFeature {
-                    name: i.name.clone(),
-                    var_type: kind.var_type(),
-                    expr: kind.literal(value),
-                    value,
-                    kind,
-                    description: i.description.clone(),
-                };
-                Feature::new(
-                    i.feature_id(),
-                    format!("{INPUT_FEATURE}{}", i.name),
-                    FeatureKind::Variable(var),
-                )
-            })
-            .collect()
-    }
-
-    /// Why `name` can't name a new input (or `input`, renamed), if it can't: `taken` are the
-    /// other names in scope (the studio's Variables and its Variable Studios' variables).
-    pub fn name_problem(
+    /// How the configuration table heads its column: "Extrude 1 · Depth", "Sketch 1 · D2",
+    /// "Part 1 · Part number".
+    pub fn label(
         &self,
-        name: &str,
-        input: Option<InputId>,
-        taken: &[String],
-    ) -> Option<String> {
-        if name.is_empty() {
-            return Some("Enter a name".into());
+        features: &[Feature],
+        settings: &PropertySettings,
+        part_name: &dyn Fn(PartId) -> String,
+    ) -> String {
+        if let ParamTarget::Property { part, key } = self {
+            return format!("{} · {}", part_name(*part), key.label(settings));
         }
-        if !cadrs_sketch::units::is_variable_name(name) {
-            return Some("A name is letters, digits and _ (starting with a letter)".into());
+        if let ParamTarget::Free { kind } = self {
+            return format!("{kind:?}");
         }
-        if self
-            .inputs
-            .iter()
-            .any(|i| i.name == name && Some(i.id) != input)
-        {
-            return Some(format!("There is already an input #{name}"));
+        let f = features.iter().find(|f| Some(f.id) == self.feature());
+        let name = f.map_or("(deleted)", |f| f.name.as_str());
+        match self {
+            ParamTarget::Field {
+                label, occurrence, ..
+            } => {
+                if *occurrence > 0 {
+                    format!("{name} · {label} {}", occurrence + 1)
+                } else {
+                    format!("{name} · {label}")
+                }
+            }
+            ParamTarget::Dimension { dimension, .. } => {
+                let n = f
+                    .and_then(|f| f.sketch())
+                    .and_then(|s| {
+                        s.geometry
+                            .dimensions
+                            .iter()
+                            .position(|(id, _)| id == *dimension)
+                    })
+                    .map_or("Dimension".to_string(), |k| format!("D{}", k + 1));
+                format!("{name} · {n}")
+            }
+            ParamTarget::Variable { .. } => format!("{name} · Value"),
+            ParamTarget::Suppressed { .. } => format!("{name} · Suppressed"),
+            ParamTarget::Property { .. } | ParamTarget::Free { .. } => unreachable!(),
         }
-        if taken.iter().any(|t| t == name) {
-            return Some(format!("#{name} is already a variable"));
+    }
+
+    /// What its values measure (none for suppression, a property or a Free column).
+    pub fn quantity(&self, features: &[Feature]) -> Option<Quantity> {
+        let f = features.iter().find(|f| Some(f.id) == self.feature())?;
+        match self {
+            ParamTarget::Field {
+                label, occurrence, ..
+            } => {
+                let mut k = f.kind.clone();
+                with_slot(&mut k, label, *occurrence, |s| s.quantity)
+            }
+            ParamTarget::Dimension { dimension, .. } => f
+                .sketch()?
+                .geometry
+                .dimensions
+                .get(*dimension)
+                .map(|d| d.kind.quantity()),
+            ParamTarget::Variable { .. } => match &f.kind {
+                FeatureKind::Variable(v) => Some(v.kind.quantity()),
+                _ => None,
+            },
+            _ => None,
         }
-        None
+    }
+
+    /// Whether its cells are text (a property's).
+    pub fn is_text(&self) -> bool {
+        matches!(self, ParamTarget::Property { .. })
     }
 }
 
-/// The name the Variable feature a rebuild sees for an input has, before the input's name: how
-/// [`crate::variables::check`] tells an input from a Variable (a Variable may not redefine an
-/// input: the presets would stop reaching the features below it).
+/// A cell of the configuration table.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum CellValue {
+    /// Whether the feature is suppressed (a Boolean column's 1 or 0).
+    Bool(bool),
+    /// A value or an expression ("12 mm", "#Length - 2 mm"), a property's text.
+    Expr(String),
+}
+
+impl CellValue {
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            CellValue::Bool(b) => Some(*b),
+            CellValue::Expr(_) => None,
+        }
+    }
+
+    pub fn as_expr(&self) -> Option<&str> {
+        match self {
+            CellValue::Expr(e) => Some(e),
+            CellValue::Bool(_) => None,
+        }
+    }
+}
+
+/// Calls `f` on the `occurrence`th slot labelled `label` of `kind` ([`ParamTarget::Field`]).
+pub fn with_slot<R>(
+    kind: &mut FeatureKind,
+    label: &str,
+    occurrence: u32,
+    f: impl FnOnce(crate::variables::Slot<'_>) -> R,
+) -> Option<R> {
+    let mut f = Some(f);
+    let mut out = None;
+    let mut seen = 0;
+    crate::variables::slots(kind, &mut |s| {
+        if s.label == label {
+            if seen == occurrence
+                && let Some(f) = f.take()
+            {
+                out = Some(f(s));
+            }
+            seen += 1;
+        }
+    });
+    out
+}
+
+/// The parameters of a feature that can be configured: its numeric fields (with their labels
+/// and occurrences), a sketch's dimensions, a Variable's value, and its suppression.
+pub fn configurable(feature: &Feature) -> Vec<ParamTarget> {
+    let id = feature.id;
+    let mut out = Vec::new();
+    match &feature.kind {
+        FeatureKind::Sketch(sk) => {
+            for (d, _) in sk.geometry.dimensions.iter() {
+                if !sk.geometry.dimensions.get(d).is_some_and(|x| x.driven) {
+                    out.push(ParamTarget::Dimension {
+                        feature: id,
+                        dimension: d,
+                    });
+                }
+            }
+        }
+        FeatureKind::Variable(_) => out.push(ParamTarget::Variable { feature: id }),
+        k => {
+            let mut k = k.clone();
+            let mut seen: Vec<(&'static str, u32)> = Vec::new();
+            crate::variables::slots(&mut k, &mut |s| {
+                let n = match seen.iter_mut().find(|(l, _)| *l == s.label) {
+                    Some((_, n)) => {
+                        *n += 1;
+                        *n
+                    }
+                    None => {
+                        seen.push((s.label, 0));
+                        0
+                    }
+                };
+                out.push(ParamTarget::Field {
+                    feature: id,
+                    label: s.label.into(),
+                    occurrence: n,
+                });
+            });
+        }
+    }
+    out.push(ParamTarget::Suppressed { feature: id });
+    out
+}
+
+/// The properties of `part` that can be configured: Name, Part number, Description, Revision,
+/// Vendor, Category and the document's custom properties ([`PropertyKey::is_configurable`]).
+pub fn configurable_properties(part: PartId, settings: &PropertySettings) -> Vec<ParamTarget> {
+    settings
+        .all_keys()
+        .into_iter()
+        .filter(PropertyKey::is_configurable)
+        .map(|key| ParamTarget::Property { part, key })
+        .collect()
+}
+
+/// The value a parameter has in the features (or a property in the parts' settings) now, as a
+/// cell: a field's or dimension's expression (or its value as typed), whether a feature is
+/// suppressed. `None` when the target is gone (its feature deleted, a field the feature no
+/// longer has), or a Free column's.
+pub fn current(
+    target: &ParamTarget,
+    features: &[Feature],
+    suppressed: &[FeatureId],
+    parts: &[PartProps],
+) -> Option<CellValue> {
+    if let ParamTarget::Property { part, key } = target {
+        return Some(CellValue::Expr(crate::properties::part_text(
+            parts, *part, *key,
+        )));
+    }
+    let f = features.iter().find(|f| Some(f.id) == target.feature())?;
+    Some(match target {
+        ParamTarget::Field {
+            label, occurrence, ..
+        } => {
+            let mut k = f.kind.clone();
+            with_slot(&mut k, label, *occurrence, |s| {
+                let e = s.expr.trim();
+                CellValue::Expr(if e.is_empty() {
+                    plain(*s.value, s.quantity)
+                } else {
+                    e.to_string()
+                })
+            })?
+        }
+        ParamTarget::Dimension { dimension, .. } => {
+            let g = &f.sketch()?.geometry;
+            let d = g.dimensions.get(*dimension)?;
+            let e = g
+                .expressions
+                .iter()
+                .find(|(id, _)| id == dimension)
+                .map(|(_, e)| e.clone());
+            CellValue::Expr(e.unwrap_or_else(|| plain(d.value, d.kind.quantity())))
+        }
+        ParamTarget::Variable { .. } => match &f.kind {
+            FeatureKind::Variable(v) => CellValue::Expr(v.expr.clone()),
+            _ => return None,
+        },
+        ParamTarget::Suppressed { feature } => CellValue::Bool(suppressed.contains(feature)),
+        ParamTarget::Property { .. } | ParamTarget::Free { .. } => return None,
+    })
+}
+
+/// A value as a cell's text, as it would be typed: "16 mm", "4.618802153517006 mm", "30 deg",
+/// "3" (whatever the workspace units, so it reads back exactly).
+pub fn plain(value: f64, q: Quantity) -> String {
+    match q {
+        Quantity::Length => format!("{value} mm"),
+        Quantity::Angle => format!("{value} deg"),
+        Quantity::Count => format!("{value}"),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The engine: inputs and columns as variables, parameters reading them
+
+/// The text a parameter configured by the column `#name` holds.
+fn reference(name: &str) -> String {
+    format!("#{name}")
+}
+
+/// The suppression rule of a feature whose suppression a Boolean column `#name` configures:
+/// suppressed while the column's value is 1.
+fn suppression(name: &str) -> crate::variables::SuppressByVariable {
+    crate::variables::SuppressByVariable {
+        expr: reference(name),
+        invert: true,
+    }
+}
+
+/// Whether the parameter `target` reads `#name` (as [`bind`] makes it).
+fn is_bound(target: &ParamTarget, name: &str, features: &[Feature]) -> bool {
+    let Some(f) = features.iter().find(|f| Some(f.id) == target.feature()) else {
+        return false;
+    };
+    let r = reference(name);
+    match target {
+        ParamTarget::Field {
+            label, occurrence, ..
+        } => {
+            let mut k = f.kind.clone();
+            with_slot(&mut k, label, *occurrence, |s| s.expr.trim() == r).unwrap_or(false)
+        }
+        ParamTarget::Dimension { dimension, .. } => f.sketch().is_some_and(|s| {
+            s.geometry
+                .expressions
+                .iter()
+                .any(|(d, e)| d == dimension && e.trim() == r)
+        }),
+        ParamTarget::Variable { .. } => {
+            matches!(&f.kind, FeatureKind::Variable(v) if v.expr.trim() == r)
+        }
+        ParamTarget::Suppressed { .. } => f.suppress_by.as_ref() == Some(&suppression(name)),
+        ParamTarget::Property { .. } | ParamTarget::Free { .. } => true,
+    }
+}
+
+/// Makes the parameter `target` read `#name` (a feature's field, a sketch dimension, a
+/// Variable's value; a feature's suppression by it). The values themselves follow from the
+/// variables' refresh.
+fn bind(
+    target: &ParamTarget,
+    name: &str,
+    features: &mut [Feature],
+    suppressed: &mut Vec<FeatureId>,
+) {
+    let Some(f) = features.iter_mut().find(|f| Some(f.id) == target.feature()) else {
+        return;
+    };
+    let r = reference(name);
+    match target {
+        ParamTarget::Field {
+            label, occurrence, ..
+        } => {
+            with_slot(&mut f.kind, label, *occurrence, |s| *s.expr = r.clone());
+        }
+        ParamTarget::Dimension { dimension, .. } => {
+            if let Some(sk) = f.sketch_mut() {
+                let g = &mut sk.geometry;
+                g.expressions.retain(|(d, _)| d != dimension);
+                g.expressions.push((*dimension, r));
+            }
+        }
+        ParamTarget::Variable { .. } => {
+            if let FeatureKind::Variable(v) = &mut f.kind {
+                v.expr = r;
+            }
+        }
+        ParamTarget::Suppressed { feature } => {
+            f.suppress_by = Some(suppression(name));
+            suppressed.retain(|x| x != feature);
+        }
+        ParamTarget::Property { .. } | ParamTarget::Free { .. } => {}
+    }
+}
+
+/// Makes the parameter `target` hold `value` itself (it is no longer configured): a field's or
+/// dimension's value, a Variable's expression, a feature suppressed or not.
+fn unbind(
+    target: &ParamTarget,
+    value: &CellValue,
+    features: &mut [Feature],
+    suppressed: &mut Vec<FeatureId>,
+    units: &Units,
+) {
+    let Some(f) = features.iter_mut().find(|f| Some(f.id) == target.feature()) else {
+        return;
+    };
+    match (target, value) {
+        (
+            ParamTarget::Field {
+                label, occurrence, ..
+            },
+            CellValue::Expr(e),
+        ) => {
+            with_slot(&mut f.kind, label, *occurrence, |s| {
+                // A plain value, as the field shows it (an expression naming other variables
+                // stays, for the refresh to evaluate).
+                if e.contains('#') {
+                    *s.expr = e.clone();
+                } else if let Ok(v) = units.eval(e, s.quantity) {
+                    *s.value = v;
+                    *s.expr = VariableKind::of(s.quantity).literal(v);
+                }
+            });
+        }
+        (ParamTarget::Dimension { dimension, .. }, CellValue::Expr(e)) => {
+            if let Some(sk) = f.sketch_mut() {
+                let g = &mut sk.geometry;
+                g.expressions.retain(|(id, _)| id != dimension);
+                if e.contains('#') {
+                    g.expressions.push((*dimension, e.clone()));
+                } else if let Some(q) = g.dimensions.get(*dimension).map(|d| d.kind.quantity())
+                    && let Ok(value) = units.eval(e, q)
+                {
+                    let before = g.clone();
+                    let op = cadrs_sketch::SketchOp::SetDimensionValue {
+                        id: *dimension,
+                        value,
+                    };
+                    if op.apply(g).is_err() {
+                        *g = before;
+                    }
+                }
+            }
+        }
+        (ParamTarget::Variable { .. }, CellValue::Expr(e)) => {
+            if let FeatureKind::Variable(v) = &mut f.kind {
+                v.expr = e.clone();
+            }
+        }
+        (ParamTarget::Suppressed { feature }, CellValue::Bool(b)) => {
+            f.suppress_by = None;
+            let has = suppressed.contains(feature);
+            if *b && !has {
+                suppressed.push(*feature);
+            } else if !*b && has {
+                suppressed.retain(|x| x != feature);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The Variable features the inputs give the list (ahead of it, after the Variable Studios'),
+/// in the configuration `values`: each Checkbox's and Value's `#name`, then each column's
+/// `#name` with its row's value. Their ids are derived from the inputs' and the names, so a
+/// rebuild sees the same features in every configuration.
+pub fn input_features(cfg: &Configuration, values: &ConfigValues) -> Vec<Feature> {
+    let units = Units::default();
+    let mut env: Vec<(String, VarValue)> = Vec::new();
+    let mut out = Vec::new();
+    let mut push = |name: &str, kind: VariableKind, value: f64, id: FeatureId, env: &mut Vec<_>| {
+        let var = VariableFeature {
+            name: name.to_string(),
+            var_type: kind.var_type(),
+            expr: kind.literal(value),
+            value,
+            kind,
+            description: String::new(),
+        };
+        env.push((name.to_string(), var.var_value()));
+        out.push(Feature::new(
+            id,
+            format!("{INPUT_FEATURE}{name}"),
+            FeatureKind::Variable(var),
+        ));
+    };
+    for (input, r) in cfg.inputs.iter().zip(cfg.resolve(values)) {
+        match (&input.kind, r) {
+            (InputKind::Checkbox { .. }, Resolved::Checked(c)) => push(
+                &input.name,
+                VariableKind::Number,
+                if c { 1.0 } else { 0.0 },
+                input.feature_id(),
+                &mut env,
+            ),
+            (InputKind::Value { kind, .. }, Resolved::Number(x)) => push(
+                &input.name,
+                kind.variable_kind(),
+                x,
+                input.feature_id(),
+                &mut env,
+            ),
+            _ => {}
+        }
+        let row = match r {
+            Resolved::Row(i) => i,
+            Resolved::Checked(c) => usize::from(c),
+            Resolved::Number(_) => continue,
+        };
+        for p in input.params.iter().filter(|p| p.binds()) {
+            let Some(cell) = p.values.get(row) else {
+                continue;
+            };
+            // (A column's kind without the features: a Boolean's or Free's from its target,
+            // else what its cell reads as.)
+            let kind = p.kind_hint().unwrap_or(ColumnKind::Number);
+            let (value, vk) = match cell {
+                CellValue::Bool(b) => (if *b { 1.0 } else { 0.0 }, VariableKind::Number),
+                CellValue::Expr(e) => {
+                    let q = cell_quantity(e).unwrap_or(kind.quantity());
+                    match units.eval_vars(e, q, &env) {
+                        Ok(v) => (v, ColumnKind::of(q).variable_kind()),
+                        Err(_) => continue,
+                    }
+                }
+            };
+            push(
+                &p.name,
+                vk,
+                value,
+                column_feature_id(input.id, &p.name),
+                &mut env,
+            );
+        }
+    }
+    out
+}
+
+/// What a cell's text measures, from its unit ("16 mm", "30 deg"): `None` for a bare number
+/// or an expression (the column's kind then).
+fn cell_quantity(text: &str) -> Option<Quantity> {
+    for q in [Quantity::Length, Quantity::Angle] {
+        if cadrs_sketch::units::eval(text, Quantity::Count).is_err()
+            && cadrs_sketch::units::eval(text, q).is_ok()
+        {
+            return Some(q);
+        }
+    }
+    None
+}
+
+/// The id of the Variable feature a rebuild sees for a column ([`input_features`]).
+fn column_feature_id(input: ConfigInputId, name: &str) -> FeatureId {
+    let mut data = input.0.as_bytes().to_vec();
+    data.extend_from_slice(name.as_bytes());
+    FeatureId::from_u128(fnv(b"cadrs configuration column\0", &data))
+}
+
+/// The inputs' variables, as expressions see them ([`input_features`]'s values).
+pub fn input_variables(cfg: &Configuration, values: &ConfigValues) -> Vec<(String, VarValue)> {
+    input_features(cfg, values)
+        .into_iter()
+        .filter_map(|f| match f.kind {
+            FeatureKind::Variable(v) => Some((v.name.clone(), v.var_value())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The name the Variable feature a rebuild sees for an input or a column has, before its name:
+/// how [`crate::variables::check`] tells an input from a Variable (a Variable may not redefine
+/// one: the configurations would stop reaching the features below it).
 pub const INPUT_FEATURE: &str = "configuration #";
+
+/// Writes the configured properties' cells for `values` into the parts' settings (the
+/// configuration shown, or a copy's).
+pub fn apply_properties(cfg: &Configuration, values: &ConfigValues, parts: &mut Vec<PartProps>) {
+    for input in &cfg.inputs {
+        let row = input.row_of(values.get(input.id));
+        for p in &input.params {
+            if let (ParamTarget::Property { part, key }, Some(CellValue::Expr(t))) =
+                (&p.target, p.values.get(row))
+            {
+                crate::properties::set_part_text(parts, *part, *key, t);
+            }
+        }
+    }
+}
+
+/// Makes a Part Studio show `values`: its configuration's active values, its properties, and
+/// the features' values through the refresh.
+pub fn activate(
+    doc: &mut Document,
+    element: ElementId,
+    values: &ConfigValues,
+) -> Result<(), CommandError> {
+    let el = doc
+        .element_mut(element)
+        .ok_or(CommandError::ElementNotFound(element))?;
+    let values = el.configuration.complete(values);
+    el.configuration.active = values.clone();
+    let cfg = el.configuration.clone();
+    let ElementKind::PartStudio { parts, .. } = &mut el.kind else {
+        return Err(CommandError::Invalid(
+            "configurations need a Part Studio".into(),
+        ));
+    };
+    apply_properties(&cfg, &values, parts);
+    parts.retain(|p| !p.is_default());
+    crate::commands::refresh_studio(doc, element);
+    Ok(())
+}
+
+/// After a command ([`crate::command::History::execute`]), in every configured Part Studio: a
+/// configured parameter edited in place (a depth typed into its dialog, a dimension edited in
+/// its sketch, a configured feature suppressed from the list) has the new value put into the
+/// active configuration's cell and reads `#name` again; a parameter that is gone (its feature
+/// deleted) takes its column with it; a property edited goes into its cell. Returns whether
+/// anything changed (the studios refreshed then).
+pub fn after_command(doc: &mut Document) -> bool {
+    migrate(doc);
+    let units = doc.units;
+    let mut refresh = Vec::new();
+    for el in &mut doc.elements {
+        if el.configuration.is_empty() {
+            continue;
+        }
+        let active = el.configuration.active.clone();
+        let mut cfg = std::mem::take(&mut el.configuration);
+        let mut changed = false;
+        if let ElementKind::PartStudio {
+            features,
+            suppressed,
+            parts,
+            ..
+        } = &mut el.kind
+        {
+            for input in &mut cfg.inputs {
+                let row = input.row_of(active.get(input.id));
+                let before = input.params.len();
+                input.params.retain(|p| match p.target.feature() {
+                    Some(id) => features.iter().any(|f| f.id == id),
+                    None => true,
+                });
+                changed |= input.params.len() != before;
+                for p in &mut input.params {
+                    if let ParamTarget::Property { .. } = p.target {
+                        if let Some(now) = current(&p.target, features, suppressed, parts)
+                            && let Some(cell) = p.values.get_mut(row)
+                            && *cell != now
+                        {
+                            *cell = now;
+                            changed = true;
+                        }
+                        continue;
+                    }
+                    if !p.binds() || p.target.feature().is_none() {
+                        continue;
+                    }
+                    if is_bound(&p.target, &p.name, features)
+                        && !suppressed_now(&p.target, suppressed)
+                    {
+                        continue;
+                    }
+                    // Edited in place: the new value is this configuration's. (A configured
+                    // feature suppressed from the list is suppressed in it; its suppression
+                    // rule removed, it is not.)
+                    let now = match &p.target {
+                        ParamTarget::Suppressed { feature } => {
+                            Some(CellValue::Bool(suppressed.contains(feature)))
+                        }
+                        t => current(t, features, suppressed, parts),
+                    };
+                    if let Some(now) = now
+                        && let Some(cell) = p.values.get_mut(row)
+                    {
+                        let now = normalize(&now, p.target.quantity(features), &units);
+                        if !same_value(cell, &now, p.target.quantity(features), &units) {
+                            *cell = now;
+                        }
+                    }
+                    bind(&p.target, &p.name, features, suppressed);
+                    changed = true;
+                }
+            }
+        }
+        el.configuration = cfg;
+        if changed {
+            refresh.push(el.id);
+        }
+    }
+    for id in &refresh {
+        crate::commands::refresh_studio(doc, *id);
+    }
+    !refresh.is_empty()
+}
+
+/// Whether the feature a Suppressed column configures was suppressed from the list (in the
+/// studio's suppressed list again).
+fn suppressed_now(target: &ParamTarget, suppressed: &[FeatureId]) -> bool {
+    matches!(target, ParamTarget::Suppressed { feature } if suppressed.contains(feature))
+}
+
+/// A cell's text as kept: a bare number, typed in the workspace's units, written with its
+/// unit ("16" in inches → "406.4 mm"), so it reads the same whatever the units; anything else
+/// ("16 mm", "10 mm / cos(60 deg)", "#d / 2") stays as typed.
+fn normalize(cell: &CellValue, q: Option<Quantity>, units: &Units) -> CellValue {
+    match (cell, q) {
+        (CellValue::Expr(e), Some(q)) if e.trim().parse::<f64>().is_ok() => {
+            match units.eval(e, q) {
+                Ok(v) => CellValue::Expr(plain(v, q)),
+                Err(_) => cell.clone(),
+            }
+        }
+        _ => cell.clone(),
+    }
+}
+
+/// Whether two cells give the same value: plain expressions (no `#`) that evaluate alike.
+fn same_value(a: &CellValue, b: &CellValue, q: Option<Quantity>, units: &Units) -> bool {
+    if a == b {
+        return true;
+    }
+    let (CellValue::Expr(a), CellValue::Expr(b), Some(q)) = (a, b, q) else {
+        return false;
+    };
+    if a.contains('#') || b.contains('#') {
+        return false;
+    }
+    match (units.eval(a, q), units.eval(b, q)) {
+        (Ok(x), Ok(y)) => (x - y).abs() <= 1e-9 * x.abs().max(1.0),
+        _ => false,
+    }
+}
+
+/// Documents from before columns were variables (RTnhN's fork: a column's values were written
+/// into its parameter): each such column named after its parameter, the parameter reading
+/// `#name` (it had the active configuration's value, which `#name` gives it again). Run on load
+/// and after every command; a configuration without such columns is left alone.
+pub fn migrate(doc: &mut Document) {
+    for el in &mut doc.elements {
+        if !el.configuration.inputs.iter().any(|i| {
+            i.params
+                .iter()
+                .any(|p| p.name.is_empty() && !p.target.is_text())
+        }) {
+            continue;
+        }
+        let taken = taken_names(el);
+        let settings = doc.properties.clone();
+        let mut cfg = std::mem::take(&mut el.configuration);
+        if let ElementKind::PartStudio {
+            features,
+            suppressed,
+            ..
+        } = &mut el.kind
+        {
+            for k in 0..cfg.inputs.len() {
+                for j in 0..cfg.inputs[k].params.len() {
+                    let p = &cfg.inputs[k].params[j];
+                    if !p.name.is_empty() || p.target.is_text() {
+                        continue;
+                    }
+                    let label = p.target.label(features, &settings, &|_| String::new());
+                    let name = cfg.fresh_name(&label, &taken);
+                    cfg.inputs[k].params[j].name = name.clone();
+                    let target = cfg.inputs[k].params[j].target.clone();
+                    bind(&target, &name, features, suppressed);
+                }
+            }
+        }
+        el.configuration = cfg;
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The node view's layout
 
 /// Where the node view puts a Part Studio's nodes (graph coordinates, px at zoom 1), and which
 /// are collapsed. Features without a position are laid out by the app.
@@ -294,7 +1521,7 @@ impl NodeLayout {
 }
 
 /// The names a Part Studio's features define as Variables, and its Variable Studios'
-/// variables: what an input can't be called.
+/// variables: what an input or column can't be called.
 pub fn taken_names(el: &Element) -> Vec<String> {
     let mut out: Vec<String> = el
         .features()
@@ -319,306 +1546,387 @@ fn fnv(tag: &[u8], data: &[u8]) -> u128 {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Presets in assemblies
+// Copies: assembly instances, drawing views, Render Studios
 
-/// A preset of a Part Studio as an assembly uses it: a generated copy of the studio with the
-/// preset's values ([`generate`]). Not a tab: found by [`Document::element`].
+/// An assembly instance's configuration (or a drawing view's, a Render Studio's model's): the
+/// Part Studio it comes from and its values. The reference names the configured copy
+/// ([`copy_id`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InstanceConfiguration {
+    pub studio: ElementId,
+    pub values: ConfigValues,
+}
+
+impl InstanceConfiguration {
+    /// The configured copy's id.
+    pub fn copy_id(&self) -> ElementId {
+        copy_id(self.studio, &self.values)
+    }
+}
+
+/// A Part Studio built in a configuration other than its own (not a tab;
+/// [`Document::element`] finds it).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConfiguredStudio {
     pub studio: ElementId,
-    pub preset: PresetId,
+    pub values: ConfigValues,
+    /// The studio in the values, under [`copy_id`].
     pub element: Element,
-    /// The studio as it was when `element` was generated from it: [`refresh`] generates it
-    /// again only when the studio has changed since (not saved: a document opened generates it
-    /// once).
-    #[serde(skip)]
-    pub source: Option<std::sync::Arc<Element>>,
+    /// A hash of what it was generated from (the studio's model and the values): regenerated
+    /// when that changes.
+    #[serde(default)]
+    pub stamp: u64,
 }
 
-/// The id the generated studio of `studio`'s `preset` has.
-pub fn configured_id(studio: ElementId, preset: PresetId) -> ElementId {
-    let mut bytes = studio.0.as_bytes().to_vec();
-    bytes.extend_from_slice(preset.0.as_bytes());
-    ElementId::from_u128(fnv(b"cadrs configured studio\0", &bytes))
+/// The id of `studio`'s copy in the configuration `values` (the same for the same values, so
+/// instances share it, and undo and redo find it again).
+pub fn copy_id(studio: ElementId, values: &ConfigValues) -> ElementId {
+    let mut h = blake3::Hasher::new();
+    h.update(b"cadrs configured studio");
+    h.update(studio.0.as_bytes());
+    h.update(ron::to_string(values).unwrap_or_default().as_bytes());
+    let b = h.finalize();
+    let mut x = [0u8; 16];
+    x.copy_from_slice(&b.as_bytes()[..16]);
+    // A version 4 UUID's bits, as ids are.
+    ElementId(uuid::Builder::from_random_bytes(x).into_uuid())
 }
 
-/// The studio and preset a generated studio is of: one of the document's, generated or not
-/// yet.
-pub fn configured_of(doc: &Document, id: ElementId) -> Option<(ElementId, PresetId)> {
-    if let Some(c) = doc.configured.iter().find(|c| c.element.id == id) {
-        return Some((c.studio, c.preset));
+/// The studio's model as its copies are built from it: without the configuration it shows or
+/// where its nodes are (neither changes a copy, so neither regenerates them).
+fn model_text(source: &Element) -> String {
+    let mut el = source.clone();
+    el.configuration.active = ConfigValues::default();
+    if let ElementKind::PartStudio { node_layout, .. } = &mut el.kind {
+        *node_layout = None;
     }
-    doc.elements.iter().find_map(|el| {
-        el.configuration()?
-            .presets
-            .iter()
-            .find(|p| configured_id(el.id, p.id) == id)
-            .map(|p| (el.id, p.id))
-    })
+    ron::to_string(&el).unwrap_or_default()
 }
 
-/// The copy of `studio` with `preset`'s values: its expressions evaluated with them, the
-/// features they (or Suppress) suppress left out, the rollback bar at the end. `None` if the
-/// studio has no such preset.
-pub fn generate(
-    studio: &Element,
-    preset: PresetId,
-    units: &cadrs_sketch::units::Units,
-) -> Option<Element> {
-    let c = studio.configuration()?;
-    let p = c.preset(preset)?;
-    let mut el = studio.clone();
-    el.id = configured_id(studio.id, preset);
-    el.name = format!("{} ({})", studio.name, p.name);
-    if let Some(c) = el.configuration_mut() {
-        c.active = preset;
+fn stamp(model: &str, values: &ConfigValues, units: &Units) -> u64 {
+    let mut h = blake3::Hasher::new();
+    h.update(model.as_bytes());
+    h.update(ron::to_string(values).unwrap_or_default().as_bytes());
+    h.update(ron::to_string(units).unwrap_or_default().as_bytes());
+    let b = h.finalize();
+    u64::from_le_bytes(b.as_bytes()[..8].try_into().unwrap_or_default())
+}
+
+/// `source` built in the configuration `values`, under `id`.
+pub fn generate(source: &Element, values: &ConfigValues, id: ElementId, units: &Units) -> Element {
+    let mut el = source.clone();
+    el.id = id;
+    el.contexts.clear();
+    el.open_context = None;
+    el.configuration.active = el.configuration.complete(values);
+    let cfg = el.configuration.clone();
+    // The parts' names and properties set for this configuration (a configured instance's),
+    // then the configured properties' cells over them.
+    let own: Vec<ConfiguredPartProps> = cfg
+        .part_properties
+        .iter()
+        .filter(|p| p.values == cfg.active)
+        .cloned()
+        .collect();
+    if let Some(props) = el.part_props_mut() {
+        for o in own {
+            let i = match props.iter().position(|p| p.part == o.part) {
+                Some(i) => i,
+                None => {
+                    props.push(crate::document::PartProps::new(o.part));
+                    props.len() - 1
+                }
+            };
+            if o.name.is_some() {
+                props[i].name = o.name;
+            }
+            props[i].properties = o.properties;
+        }
     }
     let base = el.variable_base();
-    let manual = el.suppressed().to_vec();
-    if let Some(fs) = el.features_mut() {
-        crate::variables::refresh(&base, fs, &manual, units);
-    }
-    let gone = el.all_suppressed();
+    let studio = el.studio_features();
     if let ElementKind::PartStudio {
         features,
         suppressed,
         rollback,
+        parts,
         node_layout,
         ..
     } = &mut el.kind
     {
-        features.retain(|f| !gone.contains(&f.id));
-        for f in features.iter_mut() {
-            f.suppress_by = None;
-        }
-        suppressed.clear();
         *rollback = None;
         *node_layout = None;
+        apply_properties(&cfg, &cfg.active, parts);
+        parts.retain(|p| !p.is_default());
+        crate::variables::refresh(&base, features, suppressed, units);
+        crate::parts::regenerate_now(&studio, features);
     }
-    Some(el)
+    el
 }
 
-/// The source an instance of `source` gets: for a configured Part Studio tab, its active
-/// preset's generated studio; any other as it is.
-pub fn preset_source(
-    doc: &Document,
-    source: crate::assembly::InstanceSource,
-) -> crate::assembly::InstanceSource {
-    let el = source.element();
-    match doc
-        .elements
+/// The configured copy `element` is, if it is one: its studio and values.
+pub fn copy_of(doc: &Document, element: ElementId) -> Option<(ElementId, ConfigValues)> {
+    doc.configured
         .iter()
-        .find(|e| e.id == el)
-        .and_then(|e| e.configuration())
-        .and_then(|c| c.active_preset())
+        .find(|c| c.element.id == element)
+        .map(|c| (c.studio, c.values.clone()))
+}
+
+/// How a part's configuration reads (the BOM's Configuration column): a configured copy's
+/// values, a configured studio's active ones ("M5, 20, Hole"); empty for a studio without one.
+pub fn describe_element(doc: &Document, element: ElementId) -> String {
+    let (studio, values) = match copy_of(doc, element) {
+        Some(x) => x,
+        None => match doc.element(element) {
+            Some(e) => (e.id, e.configuration.active.clone()),
+            None => return String::new(),
+        },
+    };
+    doc.elements
+        .iter()
+        .find(|e| e.id == studio)
+        .map(|e| e.configuration.describe(&values))
+        .unwrap_or_default()
+}
+
+/// Every configured copy made and up to date (an assembly instance's, a drawing view's, a
+/// Render Studio's), each instance's source naming its copy, and the copies nothing names
+/// dropped (after every command, undo and redo, and when a document opens).
+pub fn refresh_copies(doc: &mut Document) {
+    migrate(doc);
+    if doc.configured.is_empty()
+        && !doc.elements.iter().any(|e| {
+            !e.configured_sources.is_empty()
+                || e.assembly_model()
+                    .is_some_and(|a| a.instances.iter().any(|i| i.configuration.is_some()))
+        })
     {
-        Some(p) => retarget(source, configured_id(el, p.id)),
-        None => source,
+        return;
     }
-}
-
-/// `source` with its Part Studio `to` (a subassembly's stays).
-fn retarget(
-    source: crate::assembly::InstanceSource,
-    to: ElementId,
-) -> crate::assembly::InstanceSource {
-    use crate::assembly::InstanceSource;
-    match source {
-        InstanceSource::Part { part, .. } => InstanceSource::Part { element: to, part },
-        InstanceSource::Studio { board, .. } => InstanceSource::Studio { element: to, board },
-        s @ InstanceSource::Assembly { .. } => s,
-    }
-}
-
-/// Generates the studio of the preset `id` names, if it is one that isn't generated yet (an
-/// instance of it is about to be inserted). Whether `id` is now an element of the document.
-pub fn ensure(doc: &mut Document, id: ElementId) -> bool {
-    if doc.element(id).is_some() {
-        return true;
-    }
-    let Some((studio, preset)) = configured_of(doc, id) else {
-        return false;
-    };
-    let Some(el) = doc
-        .elements
-        .iter()
-        .find(|e| e.id == studio)
-        .and_then(|src| generate(src, preset, &doc.units))
-    else {
-        return false;
-    };
-    let source = doc
-        .elements
-        .iter()
-        .find(|e| e.id == studio)
-        .map(|e| std::sync::Arc::new(e.clone()));
-    doc.configured.push(ConfiguredStudio {
-        studio,
-        preset,
-        element: el,
-        source,
-    });
-    true
-}
-
-/// Generates the presets the document's assemblies use (and drops the ones none uses), again
-/// whenever their studio changed. Runs after every edit, undo and redo
-/// ([`crate::derived::refresh`]) and when a document is opened.
-pub fn refresh(doc: &mut Document) {
-    let mut used: Vec<ElementId> = Vec::new();
-    for el in &doc.elements {
-        for i in &el.assembly.instances {
-            let id = i.source.element();
-            if !used.contains(&id) && doc.elements.iter().all(|e| e.id != id) {
-                used.push(id);
+    let units = doc.units;
+    let mut wanted: Vec<(ElementId, ConfigValues)> = Vec::new();
+    for el in &mut doc.elements {
+        // A drawing's or a Render Studio's configured references (the ones still named).
+        if !el.configured_sources.is_empty() {
+            let named = references(el);
+            el.configured_sources
+                .retain(|c| named.contains(&c.copy_id()));
+            for c in &el.configured_sources {
+                if !wanted.iter().any(|(s, v)| *s == c.studio && *v == c.values) {
+                    wanted.push((c.studio, c.values.clone()));
+                }
+            }
+        }
+        let Some(a) = el.assembly_model_mut() else {
+            continue;
+        };
+        for i in &mut a.instances {
+            let Some(c) = &i.configuration else {
+                continue;
+            };
+            let id = c.copy_id();
+            set_source_element(&mut i.source, id);
+            if !wanted.iter().any(|(s, v)| *s == c.studio && *v == c.values) {
+                wanted.push((c.studio, c.values.clone()));
             }
         }
     }
-    if used.is_empty() && doc.configured.is_empty() {
-        return;
-    }
-    let mut out: Vec<ConfiguredStudio> = Vec::new();
-    for id in used {
-        let Some((studio, preset)) = configured_of(doc, id) else {
+    let mut copies = std::mem::take(&mut doc.configured);
+    copies.retain(|c| wanted.iter().any(|(s, v)| *s == c.studio && *v == c.values));
+    // Each studio's model once, however many configurations of it are used.
+    let mut texts: Vec<(ElementId, String)> = Vec::new();
+    for (studio, values) in wanted {
+        let Some(source) = doc.elements.iter().find(|e| e.id == studio) else {
             continue;
         };
-        let Some(at) = doc.elements.iter().position(|e| e.id == studio) else {
+        if !matches!(source.kind, ElementKind::PartStudio { .. }) {
             continue;
-        };
-        // Compared without what does not change its build (the node view's layout, the preset
-        // the studio shows), put back after.
-        let aside = set_aside(&mut doc.elements[at]);
-        let src = &doc.elements[at];
-        // Unchanged since it was generated: kept as it is.
-        if let Some(c) = doc
-            .configured
-            .iter()
-            .find(|c| c.element.id == id && c.source.as_deref() == Some(src))
-        {
-            out.push(c.clone());
-        } else if let Some(el) = generate(src, preset, &doc.units) {
-            out.push(ConfiguredStudio {
-                studio,
-                preset,
-                element: el,
-                source: Some(std::sync::Arc::new(src.clone())),
-            });
         }
-        put_back(&mut doc.elements[at], aside);
+        if !texts.iter().any(|(s, _)| *s == studio) {
+            texts.push((studio, model_text(source)));
+        }
+        let text = texts
+            .iter()
+            .find(|(s, _)| *s == studio)
+            .map_or("", |(_, t)| t.as_str());
+        let st = stamp(text, &values, &units);
+        match copies
+            .iter_mut()
+            .find(|c| c.studio == studio && c.values == values)
+        {
+            Some(c) if c.stamp == st => {}
+            Some(c) => {
+                c.element = generate(source, &values, c.element.id, &units);
+                c.stamp = st;
+            }
+            None => copies.push(ConfiguredStudio {
+                studio,
+                element: generate(source, &values, copy_id(studio, &values), &units),
+                values,
+                stamp: st,
+            }),
+        }
     }
-    if out != doc.configured {
-        doc.configured = out;
+    doc.configured = copies;
+}
+
+/// The elements `el` references that can be configured copies: a drawing's views and sheets,
+/// a Render Studio's model.
+pub fn references(el: &Element) -> Vec<ElementId> {
+    match &el.kind {
+        ElementKind::Drawing(d) => {
+            let mut out: Vec<ElementId> = Vec::new();
+            let mut add = |id: uuid::Uuid| {
+                if !out.contains(&ElementId(id)) {
+                    out.push(ElementId(id));
+                }
+            };
+            for s in &d.sheets {
+                if let Some(r) = &s.reference {
+                    add(r.element);
+                }
+                for v in &s.views {
+                    add(v.reference.element);
+                }
+            }
+            // (Not its recorded sources: a source no view shows any more is never read.)
+            out
+        }
+        ElementKind::Render(r) => r.source.into_iter().collect(),
+        _ => Vec::new(),
     }
 }
 
-/// Takes a studio's node layout out and makes its first preset the active one (neither
-/// changes what a preset builds), for [`put_back`].
-fn set_aside(el: &mut Element) -> (Option<Box<NodeLayout>>, Option<PresetId>) {
-    let layout = match &mut el.kind {
-        ElementKind::PartStudio { node_layout, .. } => node_layout.take(),
-        _ => None,
-    };
-    let active = el.configuration_mut().and_then(|c| {
-        let first = c.presets.first()?.id;
-        Some(std::mem::replace(&mut c.active, first))
+/// The configuration `element` names when it is a configured copy (of an assembly instance, a
+/// drawing view, a Render Studio's model): its studio and values.
+pub fn configuration_of(doc: &Document, element: ElementId) -> Option<InstanceConfiguration> {
+    copy_of(doc, element).map(|(studio, values)| InstanceConfiguration { studio, values })
+}
+
+/// The configuration a reference to `studio` takes: `values` completed, when the studio is a
+/// configured Part Studio tab (`None` otherwise, or when `studio` is itself a copy).
+pub fn for_studio(
+    doc: &Document,
+    studio: ElementId,
+    values: &ConfigValues,
+) -> Option<InstanceConfiguration> {
+    let el = doc.elements.iter().find(|e| e.id == studio)?;
+    if el.configuration.is_empty() || !matches!(el.kind, ElementKind::PartStudio { .. }) {
+        return None;
+    }
+    Some(InstanceConfiguration {
+        studio,
+        values: el.configuration.complete(values),
+    })
+}
+
+/// Makes `c`'s configured copy now (if missing), so a command can look at it before
+/// [`refresh_copies`] runs.
+pub fn ensure_copy(doc: &mut Document, c: &InstanceConfiguration) -> Result<(), CommandError> {
+    let id = c.copy_id();
+    if doc.configured.iter().any(|x| x.element.id == id) {
+        return Ok(());
+    }
+    let source = doc
+        .elements
+        .iter()
+        .find(|e| e.id == c.studio && matches!(e.kind, ElementKind::PartStudio { .. }))
+        .ok_or_else(|| CommandError::Invalid("no such Part Studio".into()))?;
+    if source.configuration.is_empty() {
+        return Err(CommandError::Invalid(format!(
+            "{} has no configuration",
+            source.name
+        )));
+    }
+    let units = doc.units;
+    let text = model_text(source);
+    let element = generate(source, &c.values, id, &units);
+    doc.configured.push(ConfiguredStudio {
+        studio: c.studio,
+        values: c.values.clone(),
+        element,
+        stamp: stamp(&text, &c.values, &units),
     });
-    (layout, active)
+    Ok(())
 }
 
-fn put_back(el: &mut Element, (layout, active): (Option<Box<NodeLayout>>, Option<PresetId>)) {
-    if let ElementKind::PartStudio { node_layout, .. } = &mut el.kind {
-        *node_layout = layout;
+/// `doc` with `c`'s configured copy, for a preview of a reference not made yet (a drawing
+/// view's ghost); `None` when `doc` has it already.
+pub fn with_copy(doc: &Document, c: &InstanceConfiguration) -> Option<Document> {
+    if doc.element(c.copy_id()).is_some() {
+        return None;
     }
-    if let (Some(c), Some(a)) = (el.configuration_mut(), active) {
-        c.active = a;
+    let mut d = doc.clone();
+    ensure_copy(&mut d, c).ok()?;
+    Some(d)
+}
+
+/// Another command whose references name `configuration`'s copy (a drawing view placed in a
+/// configuration, a Render Studio's model): `element` keeps the configuration
+/// ([`Element::configured_sources`]) and the copy is made before the command runs, in one undo
+/// step. The command's scope must be `element`'s.
+#[derive(Debug, Clone)]
+pub struct WithConfiguration<C: Command> {
+    pub element: ElementId,
+    pub configuration: InstanceConfiguration,
+    pub command: C,
+}
+
+impl<C: Command> Command for WithConfiguration<C> {
+    fn label(&self) -> String {
+        self.command.label()
     }
+    fn scope(&self) -> Scope {
+        self.command.scope()
+    }
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        ensure_copy(doc, &self.configuration)?;
+        let el = doc
+            .element_mut(self.element)
+            .ok_or(CommandError::ElementNotFound(self.element))?;
+        if !el.configured_sources.contains(&self.configuration) {
+            el.configured_sources.push(self.configuration.clone());
+        }
+        self.command.apply(doc)
+    }
+}
+
+fn set_source_element(source: &mut crate::assembly::InstanceSource, id: ElementId) {
+    use crate::assembly::InstanceSource as S;
+    match source {
+        S::Part { element, .. } | S::Studio { element, .. } => *element = id,
+        S::Assembly { .. } => {}
+    }
+}
+
+/// The assemblies with instances whose configuration is of `studio` (and, given, that row of
+/// `input`), by name, once each.
+pub fn instances_using(
+    doc: &Document,
+    studio: ElementId,
+    row: Option<(ConfigInputId, ConfigRowId)>,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for el in &doc.elements {
+        let Some(a) = el.assembly_model() else {
+            continue;
+        };
+        for i in &a.instances {
+            if let Some(c) = &i.configuration
+                && c.studio == studio
+                && row.is_none_or(|(input, r)| c.values.get(input) == Some(&InputValue::Row(r)))
+            {
+                if !out.contains(&el.name) {
+                    out.push(el.name.clone());
+                }
+            }
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------------------------
 // Commands
-
-fn studio_mut(doc: &mut Document, element: ElementId) -> Result<&mut Element, CommandError> {
-    let el = doc
-        .element_mut(element)
-        .ok_or(CommandError::ElementNotFound(element))?;
-    if !matches!(el.kind, ElementKind::PartStudio { .. }) {
-        return Err(CommandError::Invalid(
-            "configurations need a Part Studio".into(),
-        ));
-    }
-    Ok(el)
-}
-
-fn config_mut(doc: &mut Document, element: ElementId) -> Result<&mut Configuration, CommandError> {
-    studio_mut(doc, element)?
-        .configuration_mut()
-        .ok_or_else(|| CommandError::Invalid("the Part Studio has no configuration".into()))
-}
-
-/// The assembly instances that use `studio`'s preset `preset` (all its presets for `None`):
-/// how many, and the first assembly's name.
-pub fn instances_using(
-    doc: &Document,
-    studio: ElementId,
-    preset: Option<PresetId>,
-) -> (usize, Option<String>) {
-    let ids: Vec<ElementId> = match preset {
-        Some(p) => vec![configured_id(studio, p)],
-        None => doc
-            .element(studio)
-            .and_then(|e| e.configuration())
-            .map(|c| {
-                c.presets
-                    .iter()
-                    .map(|p| configured_id(studio, p.id))
-                    .collect()
-            })
-            .unwrap_or_default(),
-    };
-    let mut n = 0;
-    let mut first = None;
-    for el in &doc.elements {
-        let k = el
-            .assembly
-            .instances
-            .iter()
-            .filter(|i| ids.contains(&i.source.element()))
-            .count();
-        if k > 0 && first.is_none() {
-            first = Some(el.name.clone());
-        }
-        n += k;
-    }
-    (n, first)
-}
-
-/// Refuses to take away presets an assembly uses (its instances would lose their parts).
-fn refuse_if_used(
-    doc: &Document,
-    studio: ElementId,
-    preset: Option<PresetId>,
-) -> Result<(), CommandError> {
-    match instances_using(doc, studio, preset) {
-        (0, _) => Ok(()),
-        (n, asm) => Err(CommandError::Invalid(format!(
-            "{n} instance{} in {} use{} {}: switch {} to another preset first",
-            if n == 1 { "" } else { "s" },
-            asm.unwrap_or_default(),
-            if n == 1 { "s" } else { "" },
-            if preset.is_some() {
-                "this preset"
-            } else {
-                "this configuration"
-            },
-            if n == 1 { "it" } else { "them" },
-        ))),
-    }
-}
-
-/// Re-evaluates the studio with its (changed) configuration.
-fn refresh_studio(doc: &mut Document, element: ElementId) {
-    crate::commands::refresh_studio(doc, element);
-}
 
 /// Rewrites `#from` as `#to` in an expression (whole names only).
 pub fn rename_in(expr: &str, from: &str, to: &str) -> String {
@@ -668,85 +1976,39 @@ fn rewrite_expressions(features: &mut [Feature], f: &dyn Fn(&str) -> String) {
     }
 }
 
-/// Gives a Part Studio a configuration (one preset, "Default"), or removes it (`false`): the
-/// expressions that name its inputs keep their values as numbers.
-#[derive(Debug, Clone)]
-pub struct SetConfigured {
-    pub element: ElementId,
-    pub configured: bool,
-}
-
-impl Command for SetConfigured {
-    fn label(&self) -> String {
-        if self.configured {
-            "Add configuration".into()
-        } else {
-            "Remove configuration".into()
-        }
-    }
-    fn scope(&self) -> Scope {
-        Scope::Element(self.element)
-    }
-    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
-        let has = studio_mut(doc, self.element)?.configuration().is_some();
-        match (self.configured, has) {
-            (true, false) => {
-                let el = studio_mut(doc, self.element)?;
-                if let ElementKind::PartStudio { configuration, .. } = &mut el.kind {
-                    *configuration = Some(Box::default());
-                }
-            }
-            (false, true) => {
-                refuse_if_used(doc, self.element, None)?;
-                let el = studio_mut(doc, self.element)?;
-                let inputs: Vec<InputId> = el
-                    .configuration()
-                    .map(|c| c.inputs.iter().map(|i| i.id).collect())
-                    .unwrap_or_default();
-                for i in inputs {
-                    bake_input(el, i);
-                }
-                if let ElementKind::PartStudio { configuration, .. } = &mut el.kind {
-                    *configuration = None;
-                }
-            }
-            _ => return Ok(()),
-        }
-        refresh_studio(doc, self.element);
-        Ok(())
-    }
-}
-
-/// Writes the value of every expression that names `input` in its place (the input is going
-/// away): fields keep their values as numbers, suppression by it is removed.
-fn bake_input(el: &mut Element, input: InputId) {
-    let Some(i) = el.configuration().and_then(|c| c.input(input)).cloned() else {
-        return;
-    };
-    let name = i.name.clone();
-    let Some(fs) = el.features_mut() else { return };
-    for feat in fs.iter_mut() {
-        if feat
-            .suppress_by
-            .as_ref()
-            .is_some_and(|r| cadrs_sketch::units::variable_names(&r.expr).contains(&name))
-        {
+/// Writes the value of every expression that names `name` in its place (`name` is going
+/// away): fields keep their values as numbers, suppression by it is removed, dimensions keep
+/// their values.
+fn bake_name(features: &mut [Feature], name: &str) {
+    for feat in features.iter_mut() {
+        if feat.suppress_by.as_ref().is_some_and(|r| {
+            cadrs_sketch::units::variable_names(&r.expr)
+                .iter()
+                .any(|n| n == name)
+        }) {
             feat.suppress_by = None;
         }
         match &mut feat.kind {
             FeatureKind::Sketch(sk) => {
-                // The dimensions keep their values (no longer driven by an expression).
-                sk.geometry
-                    .expressions
-                    .retain(|(_, e)| !cadrs_sketch::units::variable_names(e).contains(&name));
+                sk.geometry.expressions.retain(|(_, e)| {
+                    !cadrs_sketch::units::variable_names(e)
+                        .iter()
+                        .any(|n| n == name)
+                });
             }
             FeatureKind::Variable(v) => {
-                if cadrs_sketch::units::variable_names(&v.expr).contains(&name) {
+                if cadrs_sketch::units::variable_names(&v.expr)
+                    .iter()
+                    .any(|n| n == name)
+                {
                     v.expr = v.kind.literal(v.value);
                 }
             }
             k => crate::variables::slots(k, &mut |s| {
-                if cadrs_sketch::units::variable_names(s.expr).contains(&name) {
+                if cadrs_sketch::units::variable_names(s.expr)
+                    .iter()
+                    .any(|n| n == name)
+                {
                     *s.expr = VariableKind::of(s.quantity).literal(*s.value);
                 }
             }),
@@ -754,305 +2016,557 @@ fn bake_input(el: &mut Element, input: InputId) {
     }
 }
 
-/// Adds an input (and a configuration, if the studio has none yet).
+/// Replaces a Part Studio's configuration (its inputs, rows and table: the Configuration
+/// panel's and the node's edits), then shows its active configuration (kept where it still
+/// exists). The expressions follow: a parameter configured anew reads its column's `#name`
+/// (a column without a name is given one), a column or input renamed is renamed wherever it is
+/// read, and one removed leaves what read it the value it shows.
 #[derive(Debug, Clone)]
-pub struct AddConfigInput {
+pub struct EditConfiguration {
     pub element: ElementId,
-    pub input: ConfigInput,
+    pub configuration: Configuration,
+    /// The undo label ("Add configuration input", "Edit configuration table").
+    pub label: String,
 }
 
-impl Command for AddConfigInput {
+impl Command for EditConfiguration {
     fn label(&self) -> String {
-        format!("Add input #{}", self.input.name)
+        self.label.clone()
     }
     fn scope(&self) -> Scope {
         Scope::Element(self.element)
     }
     fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
-        let el = studio_mut(doc, self.element)?;
-        let taken = taken_names(el);
-        if let ElementKind::PartStudio { configuration, .. } = &mut el.kind {
-            let c = configuration.get_or_insert_with(Box::default);
-            if let Some(p) = c.name_problem(&self.input.name, None, &taken) {
-                return Err(CommandError::Invalid(p));
-            }
-            c.inputs.push(self.input.clone());
-        }
-        refresh_studio(doc, self.element);
-        Ok(())
-    }
-}
-
-/// Changes an input: its name (rewriting the expressions that name it), kind, default and
-/// description.
-#[derive(Debug, Clone)]
-pub struct EditConfigInput {
-    pub element: ElementId,
-    pub input: ConfigInput,
-}
-
-impl Command for EditConfigInput {
-    fn label(&self) -> String {
-        format!("Edit input #{}", self.input.name)
-    }
-    fn scope(&self) -> Scope {
-        Scope::Element(self.element)
-    }
-    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
-        let el = studio_mut(doc, self.element)?;
-        let taken = taken_names(el);
-        let c = el
-            .configuration_mut()
-            .ok_or_else(|| CommandError::Invalid("the Part Studio has no configuration".into()))?;
-        if let Some(p) = c.name_problem(&self.input.name, Some(self.input.id), &taken) {
-            return Err(CommandError::Invalid(p));
-        }
-        let i = c
-            .inputs
-            .iter_mut()
-            .find(|i| i.id == self.input.id)
-            .ok_or_else(|| CommandError::Invalid("no such input".into()))?;
-        let old = std::mem::replace(i, self.input.clone()).name;
-        if old != self.input.name {
-            let new = self.input.name.clone();
-            if let Some(fs) = el.features_mut() {
-                rewrite_expressions(fs, &|e| rename_in(e, &old, &new));
-            }
-        }
-        refresh_studio(doc, self.element);
-        Ok(())
-    }
-}
-
-/// Removes an input: the expressions that name it keep their values as numbers, and
-/// suppression by it is removed.
-#[derive(Debug, Clone)]
-pub struct RemoveConfigInput {
-    pub element: ElementId,
-    pub input: InputId,
-}
-
-impl Command for RemoveConfigInput {
-    fn label(&self) -> String {
-        "Remove input".into()
-    }
-    fn scope(&self) -> Scope {
-        Scope::Element(self.element)
-    }
-    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
-        let el = studio_mut(doc, self.element)?;
-        if el
-            .configuration()
-            .and_then(|c| c.input(self.input))
-            .is_none()
-        {
-            return Err(CommandError::Invalid("no such input".into()));
-        }
-        bake_input(el, self.input);
-        if let Some(c) = el.configuration_mut() {
-            c.inputs.retain(|i| i.id != self.input);
-            for p in &mut c.presets {
-                p.values.remove(&self.input);
-            }
-        }
-        refresh_studio(doc, self.element);
-        Ok(())
-    }
-}
-
-/// Adds a preset with the values of `copy_of` (the active one's when `None`), and makes it
-/// active.
-#[derive(Debug, Clone)]
-pub struct AddPreset {
-    pub element: ElementId,
-    pub preset: PresetId,
-    pub name: String,
-    pub copy_of: Option<PresetId>,
-}
-
-impl Command for AddPreset {
-    fn label(&self) -> String {
-        format!("Add preset {}", self.name)
-    }
-    fn scope(&self) -> Scope {
-        Scope::Element(self.element)
-    }
-    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
-        let el = studio_mut(doc, self.element)?;
-        let ElementKind::PartStudio { configuration, .. } = &mut el.kind else {
-            unreachable!()
-        };
-        let c = configuration.get_or_insert_with(Box::default);
-        let name = self.name.trim();
-        if name.is_empty() {
-            return Err(CommandError::Invalid("Enter a name".into()));
-        }
-        if c.preset_named(name).is_some() {
-            return Err(CommandError::Invalid(format!(
-                "There is already a preset {name}"
-            )));
-        }
-        let values = match self.copy_of {
-            Some(id) => c.preset(id).map(|p| p.values.clone()),
-            None => c.active_preset().map(|p| p.values.clone()),
-        }
-        .unwrap_or_default();
-        c.presets.push(Preset {
-            id: self.preset,
-            name: name.to_string(),
-            values,
-        });
-        c.active = self.preset;
-        refresh_studio(doc, self.element);
-        Ok(())
-    }
-}
-
-/// Renames a preset.
-#[derive(Debug, Clone)]
-pub struct RenamePreset {
-    pub element: ElementId,
-    pub preset: PresetId,
-    pub name: String,
-}
-
-impl Command for RenamePreset {
-    fn label(&self) -> String {
-        format!("Rename preset to {}", self.name)
-    }
-    fn scope(&self) -> Scope {
-        Scope::Element(self.element)
-    }
-    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
-        let c = config_mut(doc, self.element)?;
-        let name = self.name.trim();
-        if name.is_empty() {
-            return Err(CommandError::Invalid("Enter a name".into()));
-        }
-        if c.presets
-            .iter()
-            .any(|p| p.name == name && p.id != self.preset)
-        {
-            return Err(CommandError::Invalid(format!(
-                "There is already a preset {name}"
-            )));
-        }
-        c.preset_mut(self.preset)
-            .ok_or_else(|| CommandError::Invalid("no such preset".into()))?
-            .name = name.to_string();
-        Ok(())
-    }
-}
-
-/// Removes a preset (not the last one). The active preset moves to the first one left.
-#[derive(Debug, Clone)]
-pub struct RemovePreset {
-    pub element: ElementId,
-    pub preset: PresetId,
-}
-
-impl Command for RemovePreset {
-    fn label(&self) -> String {
-        "Remove preset".into()
-    }
-    fn scope(&self) -> Scope {
-        Scope::Element(self.element)
-    }
-    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
-        refuse_if_used(doc, self.element, Some(self.preset))?;
-        let c = config_mut(doc, self.element)?;
-        if c.preset(self.preset).is_none() {
-            return Err(CommandError::Invalid("no such preset".into()));
-        }
-        if c.presets.len() == 1 {
+        let el = doc
+            .element(self.element)
+            .ok_or(CommandError::ElementNotFound(self.element))?;
+        if !matches!(el.kind, ElementKind::PartStudio { .. }) {
             return Err(CommandError::Invalid(
-                "A configuration keeps at least one preset".into(),
+                "configurations need a Part Studio".into(),
             ));
         }
-        c.presets.retain(|p| p.id != self.preset);
-        if c.active == self.preset {
-            c.active = c.presets[0].id;
+        let taken = taken_names(el);
+        let old = el.configuration.clone();
+        let mut configuration = self.configuration.clone();
+        // Columns without a name: named after their parameter.
+        for k in 0..configuration.inputs.len() {
+            for j in 0..configuration.inputs[k].params.len() {
+                let p = &configuration.inputs[k].params[j];
+                if p.name.is_empty() && !p.target.is_text() {
+                    let label = p
+                        .target
+                        .label(el.features(), &doc.properties, &|_| String::new());
+                    let name = configuration.fresh_name(&label, &taken);
+                    configuration.inputs[k].params[j].name = name;
+                }
+            }
         }
-        refresh_studio(doc, self.element);
-        Ok(())
+        if let Some(p) = configuration.problem() {
+            return Err(CommandError::Invalid(p));
+        }
+        if let Some(n) = configuration.names().iter().find(|n| taken.contains(n)) {
+            return Err(CommandError::Invalid(format!("#{n} is already a variable")));
+        }
+        check_properties(&mut configuration, &doc.properties)?;
+        for input in &configuration.inputs {
+            for p in &input.params {
+                if let Some(id) = p.target.feature()
+                    && !el.features().iter().any(|f| f.id == id)
+                {
+                    return Err(CommandError::Invalid(format!(
+                        "{}: a configured feature is not in the Part Studio",
+                        input.name
+                    )));
+                }
+            }
+        }
+        // Cells typed in the workspace's units, kept with their units.
+        let units = doc.units;
+        let features = el.features().to_vec();
+        for input in &mut configuration.inputs {
+            for p in &mut input.params {
+                let q = p.target.quantity(&features).or(match p.target {
+                    ParamTarget::Free { kind } if kind != ColumnKind::Boolean => {
+                        Some(kind.quantity())
+                    }
+                    _ => None,
+                });
+                for v in &mut p.values {
+                    *v = normalize(v, q, &units);
+                }
+            }
+        }
+        let el = doc
+            .element_mut(self.element)
+            .ok_or(CommandError::ElementNotFound(self.element))?;
+        let ElementKind::PartStudio {
+            features,
+            suppressed,
+            ..
+        } = &mut el.kind
+        else {
+            unreachable!()
+        };
+        // Renamed: inputs by id, columns by target (a Free column keeps its name; renaming one
+        // is [`RenameConfigName`]).
+        let mut renames: Vec<(String, String)> = Vec::new();
+        for i in &configuration.inputs {
+            if let Some(o) = old.input(i.id)
+                && o.defines_variable()
+                && i.defines_variable()
+                && o.name != i.name
+            {
+                renames.push((o.name.clone(), i.name.clone()));
+            }
+            for p in i.params.iter().filter(|p| p.binds()) {
+                if let Some((_, op)) = old.param(&p.target)
+                    && op.binds()
+                    && op.name != p.name
+                    && !matches!(p.target, ParamTarget::Free { .. })
+                {
+                    renames.push((op.name.clone(), p.name.clone()));
+                }
+            }
+        }
+        for (from, to) in &renames {
+            rewrite_expressions(features, &|e| rename_in(e, from, to));
+        }
+        // Gone: what read them keeps the value it shows.
+        let now_names = configuration.names();
+        for i in &old.inputs {
+            let row = i.row_of(old.active.get(i.id));
+            if i.defines_variable()
+                && !now_names.contains(&i.name)
+                && !renames.iter().any(|(f, _)| *f == i.name)
+            {
+                bake_name(features, &i.name);
+            }
+            for p in i.params.iter().filter(|p| p.binds()) {
+                let kept = configuration.param(&p.target).is_some()
+                    && !matches!(p.target, ParamTarget::Free { .. })
+                    || now_names.contains(&p.name);
+                if kept {
+                    continue;
+                }
+                if let Some(v) = p.values.get(row)
+                    && p.target.feature().is_some()
+                {
+                    unbind(&p.target, v, features, suppressed, &units);
+                }
+                bake_name(features, &p.name);
+            }
+        }
+        // New: the parameters read their columns.
+        for i in &configuration.inputs {
+            for p in i.params.iter().filter(|p| p.binds()) {
+                if !is_bound(&p.target, &p.name, features) {
+                    bind(&p.target, &p.name, features, suppressed);
+                }
+            }
+        }
+        let active = configuration.active.clone();
+        el.configuration = configuration;
+        activate(doc, self.element, &active)
     }
 }
 
-/// Sets an input's value in a preset (`None`: back to the input's default).
-#[derive(Debug, Clone)]
-pub struct SetPresetValue {
-    pub element: ElementId,
-    pub preset: PresetId,
-    pub input: InputId,
-    pub value: Option<f64>,
-}
-
-impl Command for SetPresetValue {
-    fn label(&self) -> String {
-        "Set preset value".into()
-    }
-    fn scope(&self) -> Scope {
-        Scope::Element(self.element)
-    }
-    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
-        let c = config_mut(doc, self.element)?;
-        let input = c
-            .input(self.input)
-            .cloned()
-            .ok_or_else(|| CommandError::Invalid("no such input".into()))?;
-        if let Some(v) = self.value
-            && !v.is_finite()
-        {
-            return Err(CommandError::Invalid("not a number".into()));
-        }
-        let p = c
-            .preset_mut(self.preset)
-            .ok_or_else(|| CommandError::Invalid("no such preset".into()))?;
-        match self.value {
-            Some(v) => {
-                let v = if input.kind == InputKind::Boolean {
-                    if v.abs() < 1e-9 { 0.0 } else { 1.0 }
-                } else {
-                    v
+/// Checks the configured properties' cells and writes them as they are kept: a property that
+/// can be configured, a custom one defined in the document with values of its kind (a
+/// Boolean's "yes" kept as "true"), text trimmed.
+fn check_properties(
+    cfg: &mut Configuration,
+    settings: &PropertySettings,
+) -> Result<(), CommandError> {
+    for input in &mut cfg.inputs {
+        for p in &mut input.params {
+            let ParamTarget::Property { key, .. } = p.target else {
+                continue;
+            };
+            if !key.is_configurable() {
+                return Err(CommandError::Invalid(format!(
+                    "{}: {} can't be configured",
+                    input.name,
+                    key.label(settings)
+                )));
+            }
+            for v in &mut p.values {
+                let CellValue::Expr(t) = v else {
+                    return Err(CommandError::Invalid(format!(
+                        "{}: a property's value is text",
+                        input.name
+                    )));
                 };
-                p.values.insert(self.input, v);
-            }
-            None => {
-                p.values.remove(&self.input);
+                *t = match key {
+                    PropertyKey::Custom(id) => settings
+                        .definition(id)
+                        .ok_or_else(|| CommandError::Invalid("no such property".into()))?
+                        .kind
+                        .check(t)
+                        .map_err(|e| {
+                            CommandError::Invalid(format!("{}: {e}", key.label(settings)))
+                        })?,
+                    _ => t.trim().to_string(),
+                };
             }
         }
-        refresh_studio(doc, self.element);
-        Ok(())
     }
+    Ok(())
 }
 
-/// Makes a preset the one the studio shows.
+/// Renames an input's or a column's `#name` (whatever its target), wherever it is read.
 #[derive(Debug, Clone)]
-pub struct SetActivePreset {
+pub struct RenameConfigName {
     pub element: ElementId,
-    pub preset: PresetId,
+    pub from: String,
+    pub to: String,
 }
 
-impl Command for SetActivePreset {
+impl Command for RenameConfigName {
     fn label(&self) -> String {
-        "Switch preset".into()
+        format!("Rename #{} to #{}", self.from, self.to)
     }
     fn scope(&self) -> Scope {
         Scope::Element(self.element)
     }
     fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
-        let c = config_mut(doc, self.element)?;
-        if c.preset(self.preset).is_none() {
-            return Err(CommandError::Invalid("no such preset".into()));
+        let el = doc
+            .element_mut(self.element)
+            .ok_or(CommandError::ElementNotFound(self.element))?;
+        let taken = taken_names(el);
+        if let Some(p) = el
+            .configuration
+            .name_problem(&self.to, Some(&self.from), &taken)
+        {
+            return Err(CommandError::Invalid(p));
         }
-        c.active = self.preset;
-        refresh_studio(doc, self.element);
+        let mut found = false;
+        for i in &mut el.configuration.inputs {
+            if i.defines_variable() && i.name == self.from {
+                i.name = self.to.clone();
+                found = true;
+            }
+            for p in &mut i.params {
+                if p.binds() && p.name == self.from {
+                    p.name = self.to.clone();
+                    found = true;
+                }
+            }
+        }
+        if !found {
+            return Err(CommandError::Invalid(format!(
+                "no #{} in the configuration",
+                self.from
+            )));
+        }
+        if let Some(fs) = el.features_mut() {
+            rewrite_expressions(fs, &|e| rename_in(e, &self.from, &self.to));
+        }
+        crate::commands::refresh_studio(doc, self.element);
         Ok(())
     }
 }
 
-/// The labels of a feature's fields that can take an expression, with what they measure (the
-/// node view's sockets).
+/// Picks the configuration a Part Studio shows.
+#[derive(Debug, Clone)]
+pub struct SetActiveConfiguration {
+    pub element: ElementId,
+    pub values: ConfigValues,
+}
+
+impl Command for SetActiveConfiguration {
+    fn label(&self) -> String {
+        "Change configuration".into()
+    }
+    fn scope(&self) -> Scope {
+        Scope::Element(self.element)
+    }
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        let el = doc
+            .element(self.element)
+            .ok_or(CommandError::ElementNotFound(self.element))?;
+        for (id, v) in &self.values.0 {
+            let input = el
+                .configuration
+                .input(*id)
+                .ok_or_else(|| CommandError::Invalid("no such configuration input".into()))?;
+            input.check_value(v).map_err(CommandError::Invalid)?;
+        }
+        let mut values = el.configuration.active.clone();
+        for (id, v) in &self.values.0 {
+            values.set(*id, v.clone());
+        }
+        activate(doc, self.element, &values)
+    }
+}
+
+/// Adds a configured parameter to an input (a column of its table), each row starting with
+/// the parameter's value now; the parameter then reads the column's `#name` (`name`, or one made
+/// from the parameter's label).
+#[derive(Debug, Clone)]
+pub struct ConfigureParameter {
+    pub element: ElementId,
+    pub input: ConfigInputId,
+    pub target: ParamTarget,
+    pub name: Option<String>,
+}
+
+impl Command for ConfigureParameter {
+    fn label(&self) -> String {
+        "Configure parameter".into()
+    }
+    fn scope(&self) -> Scope {
+        Scope::Element(self.element)
+    }
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        let settings = doc.properties.clone();
+        let el = doc
+            .element_mut(self.element)
+            .ok_or(CommandError::ElementNotFound(self.element))?;
+        if el.configuration.param(&self.target).is_some() {
+            return Err(CommandError::Invalid(
+                "the parameter is already configured".into(),
+            ));
+        }
+        if let ParamTarget::Property { key, .. } = self.target
+            && !key.is_configurable()
+        {
+            return Err(CommandError::Invalid(
+                "the property can't be configured".into(),
+            ));
+        }
+        let now = match &self.target {
+            ParamTarget::Free {
+                kind: ColumnKind::Boolean,
+            } => CellValue::Bool(false),
+            ParamTarget::Free { kind } => CellValue::Expr(plain(0.0, kind.quantity())),
+            t => current(t, el.features(), el.suppressed(), el.part_props())
+                .ok_or_else(|| CommandError::Invalid("no such parameter".into()))?,
+        };
+        let taken = taken_names(el);
+        let name = if self.target.is_text() {
+            String::new()
+        } else {
+            match &self.name {
+                Some(n) => {
+                    if let Some(p) = el.configuration.name_problem(n, None, &taken) {
+                        return Err(CommandError::Invalid(p));
+                    }
+                    n.clone()
+                }
+                None => {
+                    let label = self
+                        .target
+                        .label(el.features(), &settings, &|_| String::new());
+                    el.configuration.fresh_name(&label, &taken)
+                }
+            }
+        };
+        let input = el
+            .configuration
+            .input_mut(self.input)
+            .ok_or_else(|| CommandError::Invalid("no such configuration input".into()))?;
+        if matches!(input.kind, InputKind::Value { .. }) {
+            return Err(CommandError::Invalid(format!(
+                "{}: a value has no table; configure with a List or a Checkbox",
+                input.name
+            )));
+        }
+        let n = input.row_count();
+        input.params.push(ConfiguredParam {
+            target: self.target.clone(),
+            values: vec![now; n],
+            name: name.clone(),
+        });
+        if !name.is_empty()
+            && let ElementKind::PartStudio {
+                features,
+                suppressed,
+                ..
+            } = &mut el.kind
+        {
+            bind(&self.target, &name, features, suppressed);
+        }
+        crate::commands::refresh_studio(doc, self.element);
+        Ok(())
+    }
+}
+
+/// Removes a configured parameter (the feature keeps the value it has now; other expressions
+/// that read the column keep theirs as numbers).
+#[derive(Debug, Clone)]
+pub struct UnconfigureParameter {
+    pub element: ElementId,
+    pub target: ParamTarget,
+}
+
+impl Command for UnconfigureParameter {
+    fn label(&self) -> String {
+        "Remove configured parameter".into()
+    }
+    fn scope(&self) -> Scope {
+        Scope::Element(self.element)
+    }
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        let units = doc.units;
+        let el = doc
+            .element_mut(self.element)
+            .ok_or(CommandError::ElementNotFound(self.element))?;
+        let active = el.configuration.active.clone();
+        let mut gone: Vec<(ConfiguredParam, usize)> = Vec::new();
+        for i in &mut el.configuration.inputs {
+            let row = i.row_of(active.get(i.id));
+            let (out, keep): (Vec<_>, Vec<_>) =
+                i.params.drain(..).partition(|p| p.target == self.target);
+            i.params = keep;
+            gone.extend(out.into_iter().map(|p| (p, row)));
+        }
+        if gone.is_empty() {
+            return Err(CommandError::Invalid(
+                "the parameter is not configured".into(),
+            ));
+        }
+        if let ElementKind::PartStudio {
+            features,
+            suppressed,
+            ..
+        } = &mut el.kind
+        {
+            for (p, row) in gone {
+                if let Some(v) = p.values.get(row) {
+                    unbind(&p.target, v, features, suppressed, &units);
+                }
+                if p.binds() {
+                    bake_name(features, &p.name);
+                }
+            }
+        }
+        crate::commands::refresh_studio(doc, self.element);
+        Ok(())
+    }
+}
+
+/// Sets the configuration of assembly instances of a configured Part Studio (`None`: the
+/// studio's own active configuration as it is, unconfigured).
+#[derive(Debug, Clone)]
+pub struct SetInstanceConfiguration {
+    pub assembly: ElementId,
+    pub instances: Vec<InstanceId>,
+    pub values: Option<ConfigValues>,
+}
+
+impl Command for SetInstanceConfiguration {
+    fn label(&self) -> String {
+        "Change instance configuration".into()
+    }
+    fn scope(&self) -> Scope {
+        Scope::Element(self.assembly)
+    }
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        let studios: Vec<(InstanceId, ElementId)> = {
+            let a = doc
+                .element(self.assembly)
+                .and_then(|e| e.assembly_model())
+                .ok_or(CommandError::ElementNotFound(self.assembly))?;
+            self.instances
+                .iter()
+                .map(|id| {
+                    let i = a
+                        .instance(*id)
+                        .ok_or_else(|| CommandError::Invalid("no such instance".into()))?;
+                    let studio = i
+                        .configuration
+                        .as_ref()
+                        .map(|c| c.studio)
+                        .unwrap_or_else(|| i.source.element());
+                    Ok((*id, studio))
+                })
+                .collect::<Result<_, CommandError>>()?
+        };
+        let mut set: Vec<(InstanceId, Option<InstanceConfiguration>, ElementId)> = Vec::new();
+        for (id, studio) in studios {
+            let el = doc
+                .elements
+                .iter()
+                .find(|e| e.id == studio)
+                .ok_or_else(|| {
+                    CommandError::Invalid("the instance's Part Studio is not a tab here".into())
+                })?;
+            if el.configuration.is_empty() {
+                return Err(CommandError::Invalid(format!(
+                    "{} has no configuration",
+                    el.name
+                )));
+            }
+            let c = match &self.values {
+                Some(v) => {
+                    for (input, x) in &v.0 {
+                        el.configuration
+                            .input(*input)
+                            .ok_or_else(|| {
+                                CommandError::Invalid("no such configuration input".into())
+                            })?
+                            .check_value(x)
+                            .map_err(CommandError::Invalid)?;
+                    }
+                    let values = el.configuration.complete(v);
+                    Some(InstanceConfiguration { studio, values })
+                }
+                None => None,
+            };
+            set.push((id, c, studio));
+        }
+        let a = doc
+            .element_mut(self.assembly)
+            .and_then(|e| e.assembly_model_mut())
+            .ok_or(CommandError::ElementNotFound(self.assembly))?;
+        let had = a.instances.iter().any(|i| i.configuration.is_some());
+        for (id, c, studio) in set {
+            if let Some(i) = a.instance_mut(id) {
+                set_source_element(
+                    &mut i.source,
+                    c.as_ref().map_or(studio, InstanceConfiguration::copy_id),
+                );
+                i.configuration = c;
+            }
+        }
+        show_bom_column(a, had);
+        Ok(())
+    }
+}
+
+/// Shows the BOM's Configuration column (after Name) when an assembly gets its first
+/// configured instance (`had`: it had one before); a column removed afterwards stays removed.
+pub fn show_bom_column(asm: &mut crate::assembly::Assembly, had: bool) {
+    use crate::assembly::bom::BomColumn;
+    let col = BomColumn::Property(PropertyKey::Configuration);
+    if had
+        || !asm.instances.iter().any(|i| i.configuration.is_some())
+        || asm.bom.columns.contains(&col)
+    {
+        return;
+    }
+    let at = asm
+        .bom
+        .columns
+        .iter()
+        .position(|c| *c == BomColumn::Property(PropertyKey::Name))
+        .map_or(asm.bom.columns.len(), |i| i + 1);
+    asm.bom.columns.insert(at, col);
+}
+
+/// The Part Studio tab an element is (itself), or is a configured copy of.
+pub fn tab_of(doc: &Document, element: ElementId) -> ElementId {
+    doc.configured
+        .iter()
+        .find(|c| c.element.id == element)
+        .map_or(element, |c| c.studio)
+}
+
+// ---------------------------------------------------------------------------------------------
+// The node view's wires: any field, dimension or suppression reading an expression
+
+/// A feature's fields the node view can wire: (label, quantity, expression). None for a
+/// sketch (its dimensions: [`dimension_slots`]) or a Variable.
 pub fn parameter_slots(f: &Feature) -> Vec<(&'static str, Quantity, String)> {
     let mut out = Vec::new();
     if matches!(f.kind, FeatureKind::Sketch(_) | FeatureKind::Variable(_)) {
@@ -1065,7 +2579,8 @@ pub fn parameter_slots(f: &Feature) -> Vec<(&'static str, Quantity, String)> {
     out
 }
 
-/// Wires a feature's field to an expression (the node view's wire from an input: `#length`).
+/// Wires a feature's field to an expression (the node view's wire from an input or column:
+/// `#length`).
 #[derive(Debug, Clone)]
 pub struct ConnectParameter {
     pub element: ElementId,
@@ -1084,16 +2599,14 @@ impl Command for ConnectParameter {
     }
     fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
         set_slot(doc, self.element, self.feature, &self.slot, |s| {
-            *s.expr = self.expr.trim().to_string();
-        })?;
-        refresh_studio(doc, self.element);
-        Ok(())
+            *s.expr = self.expr.clone();
+        })
     }
 }
 
 /// A sketch dimension the node view can drive (a driving one, not a reference): `D1`, `D2`, …
-/// in the sketch's order (as the Onshape-style configuration table names them), what it
-/// measures, its value and the expression it holds, if any (`#input1`).
+/// in the sketch's order (as the configuration table names them), what it measures, its value
+/// and the expression it holds, if any (`#input1`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct DimensionSlot {
     pub id: cadrs_sketch::DimensionId,
@@ -1164,7 +2677,8 @@ impl Command for ConnectDimension {
     }
 }
 
-/// Stops driving a sketch dimension: it keeps the value it has.
+/// Stops driving a sketch dimension: it keeps the value it has (a configured one is
+/// unconfigured, [`UnconfigureParameter`]).
 #[derive(Debug, Clone)]
 pub struct DisconnectDimension {
     pub element: ElementId,
@@ -1180,6 +2694,20 @@ impl Command for DisconnectDimension {
         Scope::Element(self.element)
     }
     fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        let target = ParamTarget::Dimension {
+            feature: self.feature,
+            dimension: self.dimension,
+        };
+        if doc
+            .element(self.element)
+            .is_some_and(|e| e.configuration.param(&target).is_some())
+        {
+            return UnconfigureParameter {
+                element: self.element,
+                target,
+            }
+            .apply(doc);
+        }
         crate::commands::EditSketch {
             element: self.element,
             feature: self.feature,
@@ -1192,7 +2720,8 @@ impl Command for DisconnectDimension {
     }
 }
 
-/// Unwires a feature's field: its expression becomes its current value.
+/// Unwires a feature's field: its expression becomes its current value (a configured field is
+/// unconfigured, [`UnconfigureParameter`]).
 #[derive(Debug, Clone)]
 pub struct DisconnectParameter {
     pub element: ElementId,
@@ -1208,12 +2737,24 @@ impl Command for DisconnectParameter {
         Scope::Element(self.element)
     }
     fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
-        let units = doc.units;
+        let target = ParamTarget::Field {
+            feature: self.feature,
+            label: self.slot.clone(),
+            occurrence: 0,
+        };
+        if doc
+            .element(self.element)
+            .is_some_and(|e| e.configuration.param(&target).is_some())
+        {
+            return UnconfigureParameter {
+                element: self.element,
+                target,
+            }
+            .apply(doc);
+        }
         set_slot(doc, self.element, self.feature, &self.slot, |s| {
-            *s.expr = units.with_unit(*s.value, s.quantity);
-        })?;
-        refresh_studio(doc, self.element);
-        Ok(())
+            *s.expr = VariableKind::of(s.quantity).literal(*s.value);
+        })
     }
 }
 
@@ -1222,36 +2763,27 @@ fn set_slot(
     element: ElementId,
     feature: FeatureId,
     slot: &str,
-    f: impl Fn(crate::variables::Slot<'_>),
+    f: impl FnOnce(crate::variables::Slot<'_>),
 ) -> Result<(), CommandError> {
-    let feat = studio_mut(doc, element)?
+    let el = doc
+        .element_mut(element)
+        .ok_or(CommandError::ElementNotFound(element))?;
+    let feat = el
         .features_mut()
         .and_then(|fs| fs.iter_mut().find(|x| x.id == feature))
-        .ok_or_else(|| CommandError::Invalid("feature not found".into()))?;
-    let mut found = false;
-    crate::variables::slots(&mut feat.kind, &mut |s| {
-        if !found && s.label == slot {
-            found = true;
-            f(s);
-        }
-    });
-    if found {
-        Ok(())
-    } else {
-        Err(CommandError::Invalid(format!(
-            "{} has no field {slot}",
-            feat.name
-        )))
-    }
+        .ok_or_else(|| CommandError::Invalid("no such feature".into()))?;
+    with_slot(&mut feat.kind, slot, 0, f)
+        .ok_or_else(|| CommandError::Invalid(format!("no field {slot}")))?;
+    crate::commands::refresh_studio(doc, element);
+    Ok(())
 }
 
-/// Moves nodes of the node view (the Configuration node with `inputs_node`).
+/// Moves nodes of the node view (and the Configuration and Parts nodes).
 #[derive(Debug, Clone)]
 pub struct MoveGraphNodes {
     pub element: ElementId,
     pub positions: Vec<(FeatureId, [f32; 2])>,
     pub inputs_node: Option<[f32; 2]>,
-    /// The Parts node's.
     pub parts_node: Option<[f32; 2]>,
 }
 
@@ -1263,28 +2795,24 @@ impl Command for MoveGraphNodes {
         Scope::Element(self.element)
     }
     fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
-        let el = studio_mut(doc, self.element)?;
-        let ids: BTreeSet<FeatureId> = el.features().iter().map(|f| f.id).collect();
-        let l = el
-            .node_layout_mut()
-            .ok_or_else(|| CommandError::Invalid("nodes need a Part Studio".into()))?;
+        let layout = doc
+            .element_mut(self.element)
+            .and_then(|e| e.node_layout_mut())
+            .ok_or(CommandError::ElementNotFound(self.element))?;
         for (f, p) in &self.positions {
-            l.positions.insert(*f, *p);
+            layout.positions.insert(*f, *p);
         }
         if let Some(p) = self.inputs_node {
-            l.inputs_node = Some(p);
+            layout.inputs_node = Some(p);
         }
         if let Some(p) = self.parts_node {
-            l.parts_node = Some(p);
+            layout.parts_node = Some(p);
         }
-        // The places of features deleted since go.
-        l.positions.retain(|f, _| ids.contains(f));
-        l.collapsed.retain(|f| ids.contains(f));
         Ok(())
     }
 }
 
-/// Forgets where the node view's nodes were put (Auto arrange): they are laid out again.
+/// Forgets where the nodes were put (Auto arrange lays them out again).
 #[derive(Debug, Clone)]
 pub struct ResetNodeLayout {
     pub element: ElementId,
@@ -1298,17 +2826,18 @@ impl Command for ResetNodeLayout {
         Scope::Element(self.element)
     }
     fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
-        let l = studio_mut(doc, self.element)?
-            .node_layout_mut()
-            .ok_or_else(|| CommandError::Invalid("nodes need a Part Studio".into()))?;
-        l.positions.clear();
-        l.inputs_node = None;
-        l.parts_node = None;
+        let layout = doc
+            .element_mut(self.element)
+            .and_then(|e| e.node_layout_mut())
+            .ok_or(CommandError::ElementNotFound(self.element))?;
+        layout.positions.clear();
+        layout.inputs_node = None;
+        layout.parts_node = None;
         Ok(())
     }
 }
 
-/// Collapses a node of the node view to its header, or opens it.
+/// Collapses or expands a node.
 #[derive(Debug, Clone)]
 pub struct SetNodeCollapsed {
     pub element: ElementId,
@@ -1328,81 +2857,15 @@ impl Command for SetNodeCollapsed {
         Scope::Element(self.element)
     }
     fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
-        let l = studio_mut(doc, self.element)?
-            .node_layout_mut()
-            .ok_or_else(|| CommandError::Invalid("nodes need a Part Studio".into()))?;
+        let layout = doc
+            .element_mut(self.element)
+            .and_then(|e| e.node_layout_mut())
+            .ok_or(CommandError::ElementNotFound(self.element))?;
         if self.collapsed {
-            l.collapsed.insert(self.feature);
+            layout.collapsed.insert(self.feature);
         } else {
-            l.collapsed.remove(&self.feature);
+            layout.collapsed.remove(&self.feature);
         }
-        Ok(())
-    }
-}
-
-/// Switches assembly instances to another preset of their Part Studio (their generated studio
-/// becomes that preset's). Ids, poses and mates stay: the presets' parts have the same ids.
-#[derive(Debug, Clone)]
-pub struct SetInstancePreset {
-    pub assembly: ElementId,
-    pub instances: Vec<crate::assembly::InstanceId>,
-    pub preset: PresetId,
-}
-
-impl Command for SetInstancePreset {
-    fn label(&self) -> String {
-        "Change preset".into()
-    }
-    fn scope(&self) -> Scope {
-        Scope::Whole
-    }
-    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
-        let mut changes = Vec::new();
-        {
-            let asm = doc
-                .element(self.assembly)
-                .and_then(|e| e.assembly_model())
-                .ok_or(CommandError::ElementNotFound(self.assembly))?;
-            for id in &self.instances {
-                let i = asm
-                    .instances
-                    .iter()
-                    .find(|i| i.id == *id)
-                    .ok_or_else(|| CommandError::Invalid("instance not found".into()))?;
-                let src = i.source.element();
-                let studio = match configured_of(doc, src) {
-                    Some((s, _)) => s,
-                    None => src,
-                };
-                let el = doc
-                    .elements
-                    .iter()
-                    .find(|e| e.id == studio)
-                    .ok_or_else(|| CommandError::Invalid("its Part Studio is gone".into()))?;
-                if el
-                    .configuration()
-                    .and_then(|c| c.preset(self.preset))
-                    .is_none()
-                {
-                    return Err(CommandError::Invalid(format!(
-                        "{} has no such preset",
-                        el.name
-                    )));
-                }
-                changes.push((*id, configured_id(studio, self.preset)));
-            }
-        }
-        // The new presets' studios, before anything looks for them.
-        let asm_el = doc
-            .element_mut(self.assembly)
-            .and_then(|e| e.assembly_model_mut())
-            .ok_or(CommandError::ElementNotFound(self.assembly))?;
-        for (id, to) in &changes {
-            if let Some(i) = asm_el.instances.iter_mut().find(|i| i.id == *id) {
-                i.source = retarget(i.source, *to);
-            }
-        }
-        refresh(doc);
         Ok(())
     }
 }
