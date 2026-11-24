@@ -494,19 +494,14 @@ impl Slicer<'_> {
     /// it is: sampled all round and finely about `seed` (the slice before's, where a slice by an
     /// extreme one meets the body in a sliver), then refined (None when the slice misses it).
     fn extreme(&self, q: f64, far: bool, seed: f64) -> Option<(f64, f64)> {
-        let (f, n) = self.extremes(q, [seed, seed], [far, !far]);
+        let [f, n] = self.extremes(q, [seed, seed], [far, !far]);
         if far { f } else { n }
     }
 
     /// [`Self::extreme`] for the greatest distance and for the least at once (those of `want`
     /// asked for), each with its own seed: the half planes all round are met with the slice
     /// once for both.
-    fn extremes(
-        &self,
-        q: f64,
-        seeds: [f64; 2],
-        want: [bool; 2],
-    ) -> (Option<(f64, f64)>, Option<(f64, f64)>) {
+    fn extremes(&self, q: f64, seeds: [f64; 2], want: [bool; 2]) -> [Option<(f64, f64)>; 2] {
         // The greatest and the least distance on the half plane at w.
         let both_at = |w: f64| -> Option<(f64, f64)> {
             self.crossings(w, q)
@@ -558,10 +553,10 @@ impl Slicer<'_> {
                 (sign * v0, w0)
             })
         };
-        (
+        [
             if want[0] { refined(0) } else { None },
             if want[1] { refined(1) } else { None },
-        )
+        ]
     }
 }
 
@@ -602,7 +597,7 @@ fn outline(sl: &Slicer, lo: Extreme, hi: Extreme, n: usize) -> Option<Outline> {
         for &i in run.iter() {
             let th = -PI / 2.0 + PI * i as f64 / n as f64;
             let q = mid + half * th.sin();
-            let (far, near) = sl.extremes(q, seeds, [true, true]);
+            let [far, near] = sl.extremes(q, seeds, [true, true]);
             // (A slice within a hair of an end, where the ends' own keys are only found to a
             // search's precision, may miss the body: the end's point stands for it.)
             let close = 1.0 - th.sin().abs() < 1e-4;

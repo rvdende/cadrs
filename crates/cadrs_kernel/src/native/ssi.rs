@@ -2403,9 +2403,9 @@ fn fit_curve(
     // (The centripetal rounds' best so far, and how many of them in a row gained nothing: a
     // fit that more points no longer bring nearer, a crease no cubic follows, is left at its
     // best, where each further round took three times the points for the same distance off.)
+    const RUNAWAY: usize = 4000;
     let mut best: Option<(Vec<super::ssi_numeric::Pt>, f64)> = None;
     let mut stalled = 0;
-    let mut before = f64::INFINITY;
     while rounds < 6 || (!sharp && worst > SWING && !crate::native::env_flag!("CADRS_FIT_CHORDS")) {
         if rounds == 6 {
             by_chords = Some((pts.clone(), worst));
@@ -2529,14 +2529,6 @@ fn fit_curve(
                 pcs,
             };
         }
-        if !sharp {
-            // (By the chords and no nearer for the points added: a crease, which the
-            // centripetal rounds take from here.)
-            if rounds >= 2 && rounds < 6 && worst > SWING && worst > 0.5 * before {
-                rounds = 6;
-            }
-            before = worst;
-        }
         if sharp {
             match &best {
                 // (Farther off than with fewer points: more will not bring it back.)
@@ -2547,7 +2539,9 @@ fn fit_curve(
             if best.as_ref().is_none_or(|(_, least)| worst < *least) {
                 best = Some((pts.clone(), worst));
             }
-            if stalled >= 2 {
+            // (Only a fit already of thousands of points: a smaller one's rounds cost little,
+            // and a cut may hang on the last of them.)
+            if stalled >= 2 && pts.len() > RUNAWAY {
                 break;
             }
         }
@@ -2555,7 +2549,9 @@ fn fit_curve(
             pts.insert(k, p);
         }
     }
-    if let Some((p, w)) = best.filter(|(_, w)| *w <= worst) {
+    if let Some((p, w)) =
+        best.filter(|(p, w)| *w <= worst && pts.len() > RUNAWAY && p.len() < pts.len())
+    {
         (pts, worst) = (p, w);
     }
     if let Some((p, _)) = by_chords.filter(|(_, w)| *w <= worst) {
