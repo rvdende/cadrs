@@ -1,0 +1,38 @@
+// The node view (`cadrs_app::node_view`): the feature list as a node graph, with a
+// configuration. `blocks 2`: two blocks, each a sketch and a New extrude.
+// 01 The node view: the feature panel widened into a canvas with the schematic's grid; each
+//    feature a node (an extrude's node its dialog), geometry wires from sketches into extrudes,
+//    each node's output row, and the Parts node on the right.
+// 02 Add configuration, + Input: the Configuration node with presets and an input `input1`.
+// 03 The input's socket dragged onto the first extrude's Depth: Depth reads #input1 and the
+//    block is 10 mm tall; a grey wire from the input to the field.
+// 04 + Preset: Preset 2, active, in the node and in the features header.
+// 05 Auto arrange: laid out again and framed.
+// 06 Back to the list: the feature list, narrow again, with the preset dropdown.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Custom("blocks 2"),
+        Click(ui("feature-node-view")),
+        Wait(40),
+        Screenshot("01-node-view"),
+        Click(ui("node-configure")),
+        Wait(10),
+        Click(ui("node-input-add")),
+        Wait(20),
+        Screenshot("02-input"),
+        Drag(ui("node-input-input1-out"), ui("node-extrude-1-depth")),
+        Wait(40),
+        Screenshot("03-wired"),
+        Click(ui("node-preset-add")),
+        Wait(20),
+        Screenshot("04-preset"),
+        Click(ui("node-canvas-arrange")),
+        Wait(40),
+        Screenshot("05-arranged"),
+        Click(ui("feature-node-view")),
+        Wait(20),
+        Screenshot("06-list"),
+    ],
+)

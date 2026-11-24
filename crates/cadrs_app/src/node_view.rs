@@ -329,11 +329,6 @@ fn squash(s: &str) -> String {
         .collect()
 }
 
-/// A short, unique piece of a feature's id for entity names.
-fn short(id: FeatureId) -> String {
-    id.0.simple().to_string()[..8].to_string()
-}
-
 // ---------------------------------------------------------------------------------------------
 // The toggle and the panel
 
@@ -935,7 +930,8 @@ fn spawn_feature_node(
     t: &Theme,
     units: &Units,
 ) -> Entity {
-    let slug = short(f.id);
+    // Named after the feature, as its list row is ("node-extrude-1"), so a script can find it.
+    let slug = crate::feature_list::row_name(&f.name).replacen("feature-", "", 1);
     let collapsed = key.collapsed;
     let dim = key.suppressed || key.rolled_back;
     let root = world
@@ -1199,7 +1195,8 @@ fn generic_card(f: &Feature, units: &Units, t: &Theme) -> FeatureDialog {
         FeatureKind::Variable(v) => Some((v.name.clone(), v.expr.clone(), v.display(units))),
         _ => None,
     };
-    FeatureDialog::new(format!("node-{}-card", short(f.id))).body(move |b| {
+    let slug = crate::feature_list::row_name(&f.name).replacen("feature-", "", 1);
+    FeatureDialog::new(format!("node-{slug}-card")).body(move |b| {
         let t = &tb;
         if let Some((name, expr, value)) = variable {
             b.spawn(
