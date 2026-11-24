@@ -1980,6 +1980,23 @@ fn cavity_of_supports(b: &Body, remove: &[usize], t: f64) -> Option<Result<Optio
     let bb = b.bbox();
     let size = bb.diagonal();
     let close = tol::POINT.max(tol::REL * size);
+    // A body that is itself where half-spaces meet (a box, a wedge): every face's plane bounds
+    // it, by its corners, so the cavity is its polygons cut by each wall's plane moved in,
+    // exactly and with no boolean, and nothing of it is sampled to find that out.
+    if let Some(mut cell) = crate::native::polytope::Polytope::of_body(b, close)
+        && remove.len() < b.faces.len()
+    {
+        let (planes, whole) = (cell.planes(), cell.volume());
+        let within = (0..b.faces.len())
+            .filter(|f| !remove.contains(f))
+            .all(|f| cell.clip(planes[f].0 - planes[f].1 * t, planes[f].1, close));
+        if !within || cell.volume() <= tol::REL * whole {
+            return Some(Ok(None));
+        }
+        if let Some(cavity) = cell.body(close) {
+            return Some(Ok(Some(cavity)));
+        }
+    }
     // Points of the body's faces, a chord's sag of a thousandth of its size apart at most:
     // sampled straight off its faces where they are planes, cylinders, cones, spheres and
     // tori (their loops' points and a grid inside them), else its mesh's.
@@ -2102,15 +2119,10 @@ fn cavity_of_supports(b: &Body, remove: &[usize], t: f64) -> Option<Result<Optio
         })?;
         Ok(Some((**k.get(made.first()?)?).clone()))
     };
-    // Flat walls only: the cavity is the body behind every wall's plane moved in. Of a body that
-    // is itself where half-spaces meet (a box, a wedge) that is its polygons cut by each plane,
-    // exactly and with no boolean; of any other, the body within the one solid behind all the
-    // planes, where each plane in turn cost a boolean of its own.
+    // Flat walls only: the cavity is the body within the one solid behind every wall's plane
+    // moved in, where each plane in turn cost a boolean of its own.
     if walls.iter().all(|w| matches!(w, Support::Plane(..))) {
-        use crate::native::polytope::Polytope;
-        let whole = Polytope::of_body(b, close);
-        let convex = whole.is_some();
-        let mut cell = whole.unwrap_or_else(|| Polytope::of_box(&grown));
+        let mut cell = crate::native::polytope::Polytope::of_box(&grown);
         let within = walls.iter().all(|w| match *w {
             Support::Plane(o, n) => cell.clip(o - n * t, n, close),
             _ => unreachable!(),
@@ -2118,23 +2130,18 @@ fn cavity_of_supports(b: &Body, remove: &[usize], t: f64) -> Option<Result<Optio
         if !within {
             return Some(Ok(None));
         }
+        // (A boolean with the one solid that fails leaves the walls to be taken one at a time,
+        // below, as before.)
         if let Some(cell) = cell.body(close) {
-            // (A boolean with the one solid that fails leaves the walls to be taken one at a
-            // time, below, as before.)
-            let cavity = if convex {
-                Some(cell)
-            } else {
-                match boolean_bodies(b, &cell, BoolOp::Intersect) {
-                    Ok(r) if !r.body.faces.is_empty() => Some(r.body),
-                    Ok(_) | Err(KernelError::EmptyResult(_)) => return Some(Ok(None)),
-                    Err(_) => None,
+            match boolean_bodies(b, &cell, BoolOp::Intersect) {
+                Ok(r) if !r.body.faces.is_empty() => {
+                    let v = crate::native::mass::body_volume(&r.body);
+                    return Some(Ok(
+                        (v > tol::REL * crate::native::mass::body_volume(b)).then_some(r.body)
+                    ));
                 }
-            };
-            if let Some(c) = cavity {
-                let v = crate::native::mass::body_volume(&c);
-                return Some(Ok(
-                    (v > tol::REL * crate::native::mass::body_volume(b)).then_some(c)
-                ));
+                Ok(_) | Err(KernelError::EmptyResult(_)) => return Some(Ok(None)),
+                Err(_) => {}
             }
         }
     }

@@ -1434,6 +1434,27 @@ fn boolean_bodies_counted(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> 
     if let Some(r) = apart_set_aside(a, b, op, opts) {
         return r;
     }
+    // Two convex polytopes (a box and a box, a wedge, a shell's cavity): their common part and
+    // the one less the other in closed form, polygons cut by planes, where that is plainly the
+    // answer ([`super::polytope::boolean`]). (Flush or not: faces of the two on one plane are
+    // one face of the common part, and the one less the other has none side by side.)
+    if matches!(op, BoolOp::Subtract | BoolOp::Intersect)
+        && opts.merge_coplanar
+        && opts.fuzzy.is_none()
+        && !opts.within
+        && !super::env_flag!("CADRS_NO_POLYTOPE")
+        && let Some(out) = super::polytope::boolean(a, b, op == BoolOp::Subtract, opts.tol.point)
+    {
+        if super::env_flag!("CADRS_BOOL_DEBUG") {
+            eprintln!(
+                "{op:?} of two polytopes ({} and {} faces) in closed form: {} faces",
+                a.faces.len(),
+                b.faces.len(),
+                out.body.faces.len()
+            );
+        }
+        return Ok(out);
+    }
     // A whole ball is turned so that what cuts it cuts it along its latitudes.
     let (ta, tb) = (ball_turned_to(a, b, op), ball_turned_to(b, a, op));
     if ta.is_some() || tb.is_some() {
