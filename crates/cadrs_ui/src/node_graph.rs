@@ -55,13 +55,15 @@ impl Plugin for NodeGraphPlugin {
             .add_observer(on_box_start)
             .add_observer(on_box_drag)
             .add_observer(on_box_end)
-            // The wires are drawn before the layout, from where the nodes are now (a dragged
-            // node's wires move with it in the same frame, with no frame left without them).
+            // The wires are routed and drawn before the layout, from where the nodes are now (a
+            // dragged node's wires move with it in the same frame, routed as they would be if it
+            // were dropped there, with no frame left without them).
             .add_systems(
                 PostUpdate,
                 (
                     apply_views,
                     place_nodes,
+                    route_wires,
                     draw_wires,
                     sync_grids,
                     mark_static_copies,
@@ -71,7 +73,7 @@ impl Plugin for NodeGraphPlugin {
             )
             .add_systems(
                 PostUpdate,
-                (place_sockets, route_wires, cull_nodes)
+                (place_sockets, cull_nodes)
                     .chain()
                     .after(bevy::ui::UiSystems::Layout),
             );
@@ -812,8 +814,21 @@ impl GraphNode {
 pub struct GraphNodeHandle;
 
 /// A node being dragged (until the drag ends): whoever places nodes leaves it where it is.
+/// `raw` is where the pointer has taken it; the node sits there snapped to [`NODE_SNAP`].
 #[derive(Component, Debug, Clone, Copy, Default)]
-pub struct GraphNodeDragging;
+pub struct GraphNodeDragging {
+    raw: Vec2,
+}
+
+/// The step (graph px) a dragged node moves in: its wires are routed again only when it
+/// crosses one, not for every pixel (a few pixels flipped a wire between two ways round), and
+/// nodes line up.
+pub const NODE_SNAP: f32 = 10.0;
+
+/// `p` on the [`NODE_SNAP`] grid.
+pub fn snap_to_grid(p: Vec2) -> Vec2 {
+    (p / NODE_SNAP).round() * NODE_SNAP
+}
 
 /// A selected node: dragging another selected node moves it too.
 #[derive(Component, Debug, Clone, Copy, Default)]
@@ -896,6 +911,7 @@ fn on_node_drag(
     mut ev: On<PointerDrag>,
     q_parent: Query<&ChildOf>,
     mut q_node: Query<&mut GraphNode>,
+    mut q_dragging: Query<&mut GraphNodeDragging>,
     q_handle: Query<(), With<GraphNodeHandle>>,
     q_sel: Query<Entity, (With<GraphNode>, With<GraphNodeSelected>)>,
     q_canvas: Query<&mut NodeCanvas>,
@@ -916,8 +932,21 @@ fn on_node_drag(
     ev.propagate(false);
     for n in moving(node, &q_sel) {
         if let Ok(mut g) = q_node.get_mut(n) {
-            g.pos += ev.delta / zoom;
-            commands.entity(n).insert(GraphNodeDragging);
+            let raw = match q_dragging.get_mut(n) {
+                Ok(mut d) => {
+                    d.raw += ev.delta / zoom;
+                    d.raw
+                }
+                Err(_) => {
+                    let raw = g.pos + ev.delta / zoom;
+                    commands.entity(n).insert(GraphNodeDragging { raw });
+                    raw
+                }
+            };
+            let snapped = snap_to_grid(raw);
+            if g.pos != snapped {
+                g.pos = snapped;
+            }
         }
     }
 }
@@ -1204,24 +1233,25 @@ fn socket_point(
     Some(inv.transform_point2(sg.translation) * layer_scale)
 }
 
-/// Routes each canvas's wires once its nodes and wires have stayed put for [`SETTLE`] frames;
-/// while anything moves, the wires are curves.
-#[allow(clippy::type_complexity)]
+/// Routes each canvas's wires: once its nodes and wires have stayed put for [`SETTLE`] frames
+/// (after an edit, a rearrangement: the layout settles first), and every frame a node is
+/// dragged, from where it is now, so its wires are what they will be when it is dropped there.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn route_wires(
     router: Res<WireRouter>,
     mut q_canvas: Query<(&NodeCanvas, &mut CanvasRoutes)>,
     q_wire: Query<(Entity, &Wire, &ChildOf)>,
     q_nodes: Query<(Entity, &GraphNode, &ComputedNode, &ChildOf)>,
     q_geo: Query<(&ComputedNode, &UiGlobalTransform)>,
-    q_dragging: Query<(), Or<(With<GraphNodeDragging>, With<DragWire>)>>,
+    q_parent: Query<&ChildOf>,
+    q_node: Query<&GraphNode>,
+    q_dragging: Query<(), With<GraphNodeDragging>>,
 ) {
     use std::hash::{Hash, Hasher};
     let Some(route) = router.0.clone() else {
         return;
     };
-    // Not while something is dragged: a pause mid-drag would swap the curves for routes and
-    // back again.
-    let dragging = !q_dragging.is_empty();
+    let live = !q_dragging.is_empty();
     for (c, mut r) in &mut q_canvas {
         let Ok((ln, lg)) = q_geo.get(c.wires) else {
             continue;
@@ -1245,10 +1275,9 @@ fn route_wires(
             if p.parent() != c.wires {
                 continue;
             }
-            if let (Some(a), Some(b)) = (
-                socket_point(w.from, lg, s, &q_geo),
-                socket_point(w.to, lg, s, &q_geo),
-            ) {
+            // Where the sockets are now: a dragged node's run ahead of the last layout.
+            let at = |socket| socket_now(socket, &q_parent, &q_node, &q_geo, lg, s);
+            if let (Some(a), Some(b)) = (at(w.from), at(w.to)) {
                 problem.wires.push((a, b));
                 ids.push(e);
             }
@@ -1281,17 +1310,22 @@ fn route_wires(
         if key != r.key {
             r.key = key;
             r.still = 0;
-            if !r.routes.is_empty() {
-                r.routes.clear();
+            // While a node is dragged its wires are routed now, below; otherwise they are
+            // curves until the layout settles.
+            if !live {
+                if !r.routes.is_empty() {
+                    r.routes.clear();
+                }
+                continue;
             }
-            continue;
         }
-        if dragging {
-            r.still = 0;
-            continue;
+        if !live {
+            r.still = r.still.saturating_add(1);
+            if r.still < SETTLE {
+                continue;
+            }
         }
-        r.still = r.still.saturating_add(1);
-        if r.still < SETTLE || r.routed == key {
+        if r.routed == key {
             continue;
         }
         r.routed = key;
