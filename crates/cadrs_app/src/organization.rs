@@ -1034,7 +1034,10 @@ fn refresh_body(world: &mut World, mut built: Local<(Option<Built>, Option<Built
             0
         },
     );
-    if built.as_ref() == Some(&key) && nav_built.as_ref() == Some(&key) {
+    // The navigation shows nothing of the wallet: what the bank says never makes it again (it
+    // is what gets clicked; made again under the pointer, a click would be lost).
+    let nav_key: Built = (key.0, key.1, key.2, key.3, key.4, key.5.clone(), 0);
+    if built.as_ref() == Some(&key) && nav_built.as_ref() == Some(&nav_key) {
         return;
     }
     let own_change = world.resource::<OrgForm>().show
@@ -1053,8 +1056,8 @@ fn refresh_body(world: &mut World, mut built: Local<(Option<Built>, Option<Built
     // written stays in its box.
     let hold = !own_change && !chat && (typing || world.resource::<OrgForm>().dirty);
     let draft = (chat && !own_change).then(|| (field(world, "org-chat-input"), typing));
-    let nav_due = nav_built.as_ref() != Some(&key);
-    *nav_built = Some(key.clone());
+    let nav_due = nav_built.as_ref() != Some(&nav_key);
+    *nav_built = Some(nav_key);
     if hold {
         if nav_due {
             let theme = world.resource::<Theme>().clone();
@@ -1086,7 +1089,9 @@ fn refresh_body(world: &mut World, mut built: Local<(Option<Built>, Option<Built
         .then(|| crate::org_profile::locations_map(world.resource::<OpenOrg>().session.org()))
         .flatten()
         .map(|image| world.resource_mut::<Assets<Image>>().add(image));
-    make_nav(world, nav, &theme);
+    if nav_due {
+        make_nav(world, nav, &theme);
+    }
     // The organization's wallet, while its module shows: asked for, kept fresh, and the bank
     // told who may spend from it (by the device that holds the organization's key).
     let wallet = shows_wallet(tab)
@@ -1338,14 +1343,56 @@ fn typing_in(world: &World, body: Entity) -> bool {
     false
 }
 
-/// The organization's card as a link and a QR code, when this device holds its key.
+/// The link and QR code last made for an organization, and what they were made from: a card
+/// says when it was signed, so one made anew each time the Overview is drawn would be another
+/// link and another picture every time (a QR code that flickers under a phone's camera).
+#[derive(Resource)]
+struct ShareLink {
+    of: (
+        cadrs_social::keys::AccountId,
+        String,
+        Vec<cadrs_social::keys::DeviceId>,
+    ),
+    made: f64,
+    link: String,
+    qr: Option<Handle<Image>>,
+}
+
+/// How long a share link is shown before a fresh card is signed for it, in seconds.
+const SHARE_LINK_FOR: f64 = 3600.0;
+
+/// The organization's card as a link and a QR code, when this device holds its key. The same
+/// link and picture while the organization's name and mailboxes are the same, for an hour.
 fn share_link(world: &mut World) -> Option<(String, Option<Handle<Image>>)> {
     let account = world.resource::<OpenOrg>().session.org().org?;
+    let now = world
+        .resource::<Time<bevy::time::Real>>()
+        .elapsed_secs_f64();
+    let social = world.resource::<crate::social::Social>();
+    let name = social
+        .orgs
+        .iter()
+        .find(|o| o.account == account)
+        .map(|o| o.name.clone())
+        .unwrap_or_default();
+    let of = (account, name, social.mailboxes.clone());
+    if let Some(kept) = world.get_resource::<ShareLink>()
+        && kept.of == of
+        && now - kept.made < SHARE_LINK_FOR
+    {
+        return Some((kept.link.clone(), kept.qr.clone()));
+    }
     let card = world
         .resource::<crate::social::Social>()
         .org_card(&account)?;
     let link = cadrs_social::contact::to_link(&card);
     let qr = cadrs_ui::qr::image(&link).map(|i| world.resource_mut::<Assets<Image>>().add(i));
+    world.insert_resource(ShareLink {
+        of,
+        made: now,
+        link: link.clone(),
+        qr: qr.clone(),
+    });
     Some((link, qr))
 }
 

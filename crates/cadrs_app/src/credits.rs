@@ -27,6 +27,9 @@ use crate::social::Social;
 /// How often the wallets on screen are asked for again, in seconds (the bank tells a device of
 /// each movement as it happens; this is for the ones that didn't arrive).
 const REFRESH_EVERY: f64 = 60.0;
+/// How long before an organization's list of who may spend is sent to the bank again when the
+/// bank didn't take it, in seconds.
+const ACCESS_AGAIN_AFTER: f64 = 60.0;
 /// How often the user's wallet and their organizations' are asked for while nothing shows
 /// them, in seconds: often enough that the bank keeps telling this device of what is paid.
 const BACKGROUND_EVERY: f64 = 300.0;
@@ -96,6 +99,11 @@ pub struct Credits {
     access_tried: BTreeSet<AccountId>,
     /// The held payments each wallet's statement is asked to say of: its orders' own.
     named: BTreeMap<AccountId, Vec<cadrs_credits::MoveId>>,
+    /// When each organization's list was last sent to the bank (seconds since start): one the
+    /// bank didn't take is sent again after a while, not at once.
+    access_asked: BTreeMap<AccountId, f64>,
+    /// How many times a bank across the network was asked anything, since this run started.
+    pub asked: u64,
 }
 
 impl Credits {
@@ -190,10 +198,14 @@ pub fn reason(error: &str) -> String {
 pub fn ask(world: &mut World, wallet: AccountId, ask: Ask, then: Option<Then>) -> bool {
     crate::social::ensure_loaded(world);
     let fail = |world: &mut World, then: Option<Then>, why: String| {
-        if let Some(w) = world.resource_mut::<Credits>().wallets.get_mut(&wallet) {
+        // Said once: the same failure again (offline, asked every minute) is no news, and
+        // nothing that shows the wallet is drawn again for it.
+        let mut credits = world.resource_mut::<Credits>();
+        let w = credits.wallets.entry(wallet).or_default();
+        if w.error.as_deref() != Some(why.as_str()) {
             w.error = Some(why.clone());
+            credits.changed();
         }
-        world.resource_mut::<Credits>().changed();
         if let Some(then) = then {
             then(world, Err(&why));
         }
@@ -236,10 +248,12 @@ pub fn ask(world: &mut World, wallet: AccountId, ask: Ask, then: Option<Then>) -
         .unwrap_or_else(|| to.into());
     let task = cadrs_net::social::start_send(iroh, addr, Post::Bank(bytes).encode());
     let mut credits = world.resource_mut::<Credits>();
+    credits.asked += 1;
     let now_asking = credits.wallets.entry(wallet).or_default();
+    // Only a wallet that shows nothing yet, and wasn't being asked for already, says that it
+    // is being asked for.
+    let news = now_asking.statement.is_none() && !now_asking.asking && now_asking.error.is_none();
     now_asking.asking = true;
-    // Only a wallet that shows nothing yet says that it is being asked for.
-    let news = now_asking.statement.is_none();
     credits.asking.push(Asking {
         wallet,
         older,
@@ -285,7 +299,6 @@ fn took(
             )
         };
         let before = shown(w);
-        let had_none = w.statement.is_none();
         match &answer {
             Ok(Answer::Statement(statement)) => {
                 w.error = None;
@@ -347,7 +360,9 @@ fn took(
                 s.3,
             )
         };
-        if had_none || minute(before) != minute(shown(w)) {
+        // Only what shows differently is news. (An answer that changes nothing must not count:
+        // what draws a wallet also asks about it, and would ask again for ever.)
+        if minute(before) != minute(shown(w)) {
             credits.changed();
         }
     }
@@ -980,6 +995,19 @@ pub fn say_access(world: &mut World, account: AccountId, org: &cadrs_org::Org) {
     if world.resource::<Credits>().access_said.get(&account) == Some(&access) {
         return;
     }
+    // Not taken yet (the bank is away, or older than this cadrs): said again after a while,
+    // however often something asks for it to be said.
+    let now = world
+        .resource::<Time<bevy::time::Real>>()
+        .elapsed_secs_f64();
+    let credits = world.resource::<Credits>();
+    if credits
+        .access_asked
+        .get(&account)
+        .is_some_and(|at| now - at < ACCESS_AGAIN_AFTER)
+    {
+        return;
+    }
     let Some(key) = crate::social::org_key(world, &account) else {
         return;
     };
@@ -1011,7 +1039,12 @@ pub fn say_access(world: &mut World, account: AccountId, org: &cadrs_org::Org) {
         .and_then(|hints| hints.0.get(&to).cloned())
         .unwrap_or_else(|| to.into());
     let task = cadrs_net::social::start_send(iroh, addr, Post::Bank(bytes).encode());
-    // Remembered once the bank took it; asked again the next time otherwise.
+    {
+        let mut credits = world.resource_mut::<Credits>();
+        credits.access_asked.insert(account, now);
+        credits.asked += 1;
+    }
+    // Remembered once the bank took it; asked again after a while otherwise.
     let then: Then = Box::new(move |world: &mut World, answer: Result<&Answer, &str>| {
         if answer.is_ok() {
             world

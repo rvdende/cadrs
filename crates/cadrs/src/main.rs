@@ -266,8 +266,15 @@ fn main() -> AppExit {
     // The node goes online at once only with the user's *Connect when cadrs starts*
     // (`autoconnect_p2p`, off by default: issue #148) or `CADRS_NET=1`; otherwise when the
     // user connects (the top bar's network button, or sharing).
+    //
+    // `CADRS_NET=scenario` makes a scripted or headless run a peer too, online from the start
+    // and without relays (so it reaches nothing beyond this machine): for running a scenario
+    // as a person's cadrs runs, with a network that is there and peers (the seed, the bank)
+    // that don't answer. Scenarios otherwise run with no network at all, which hides what
+    // only happens with one.
     let net = std::env::var("CADRS_NET").ok();
-    if !scripted && !opts.headless && net.as_deref() != Some("0") {
+    let scenario_peer = net.as_deref() == Some("scenario");
+    if (!scripted && !opts.headless && net.as_deref() != Some("0")) || scenario_peer {
         let root = data_dir.clone().or_else(Store::default_root);
         let ids = root.as_deref().map(cadrs_app::identity::load);
         let autoconnect = root
@@ -279,8 +286,12 @@ fn main() -> AppExit {
                 || UserProfile::system().display_name,
                 |i| i.active().name.clone(),
             ),
-            relays: Default::default(),
-            autostart: autoconnect || net.as_deref() == Some("1"),
+            relays: if scenario_peer {
+                cadrs_net::bevy_iroh::Relays::Disabled
+            } else {
+                Default::default()
+            },
+            autostart: autoconnect || net.as_deref() == Some("1") || scenario_peer,
         });
     }
     // A person's runs ask the system for files (issue #136); scripted and headless runs keep the

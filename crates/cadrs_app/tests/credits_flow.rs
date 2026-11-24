@@ -811,3 +811,61 @@ fn only_the_bank_says_what_was_paid() {
     }
     assert_eq!(notices(&sipho), before + 1);
 }
+
+/// A bank that doesn't answer (away, or a seed from before there were banks) is asked now and
+/// then, not over and over: what draws an organization's wallet also tells the bank who may
+/// spend from it and asks after its orders, and must not be drawn again by the failure of its
+/// own asking. (That loop made the organization's screen again every frame: its navigation
+/// took no clicks and its QR code flickered.)
+#[test]
+fn a_bank_that_does_not_answer_is_not_asked_over_and_over() {
+    let (mut sipho, _) = app("QuietSipho");
+    sipho.insert_resource(BankAt {
+        id: SecretKey::generate().public(),
+        here: false,
+    });
+    assert!(create(
+        sipho.world_mut(),
+        NewOrg {
+            name: "Cape Waterjet".into(),
+            tagline: "Waterjet cutting in steel, aluminium and glass".into(),
+            offers: cadrs_org::Offers {
+                manufacturing: true,
+                designs: false,
+            },
+            email: "sales@shop.example".into(),
+            logo: logo(),
+            location: None,
+        }
+    ));
+    let shop = sipho
+        .world()
+        .resource::<OpenOrg>()
+        .session
+        .org()
+        .org
+        .unwrap();
+    let org = sipho.world().resource::<OpenOrg>().session.org().clone();
+    // The screen, as `organization::refresh_body` draws a module that shows the wallet: again
+    // whenever what the bank said changed, telling and asking each time it draws.
+    let mut drawn = 0;
+    let mut seen = None;
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(3) {
+        let version = sipho.world().resource::<Credits>().version;
+        if seen != Some(version) {
+            seen = Some(version);
+            drawn += 1;
+            credits::say_access(sipho.world_mut(), shop, &org);
+            credits::name_holds(sipho.world_mut(), shop, vec![cadrs_credits::new_id()]);
+            credits::watch(sipho.world_mut(), shop);
+        }
+        sipho.update();
+    }
+    let credits = sipho.world().resource::<Credits>();
+    assert!(drawn <= 4, "drawn {drawn} times in three seconds");
+    assert!(credits.asked <= 8, "asked {} times", credits.asked);
+    // And it says, once, that the bank didn't answer.
+    assert!(credits.wallets[&shop].error.is_some());
+    assert!(credits.wallets[&shop].statement.is_none());
+}
