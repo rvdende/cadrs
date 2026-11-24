@@ -1,0 +1,39 @@
+// Configurations in a Render Studio (`render_ui`'s Model rows), on the 60 × 40 plate with a
+// Ø16 hole of `with-hole`: Extrude 1's depth configured, Default 10 mm and Thick 20 mm.
+// 01 Create Render Studio: Model Part Studio 1, Configuration Default under it; the preview.
+// 02 Thick picked: the preview renders the 20 mm plate (the Part Studio still shows Default).
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Custom("with-hole"),
+        RightClick(ui("feature-extrude-1")),
+        WaitFor("feature-context-menu"),
+        Hover(ui("feature-configure")),
+        Wait(10),
+        Click(ui("feature-configure-0")),
+        WaitFor("configuration-panel"),
+        Click(ui("configuration-input-1-add-row")),
+        WaitFor("configuration-name"),
+        Key("Ctrl+A"),
+        Type("Thick"),
+        Key("Enter"),
+        Click(ui("configuration-input-1-row-2-cell-1")),
+        Key("Ctrl+A"),
+        Type("20"),
+        Key("Enter"),
+        Wait(3),
+        Click(ui("insert-tab")),
+        WaitFor("create-render-studio"),
+        Click(ui("create-render-studio")),
+        WaitFor("render-panel"),
+        MoveTo(1420, 1000),
+        Wait(60),
+        Screenshot("01-render-default"),
+        Click(ui("render-config-0")),
+        Click(ui("render-config-0-option-1")),
+        MoveTo(1420, 1000),
+        Wait(60),
+        Screenshot("02-render-thick"),
+    ],
+)
