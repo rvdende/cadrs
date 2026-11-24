@@ -1450,7 +1450,9 @@ fn prepared_rising(
     // that make neighbouring faces' pieces run into one another under a turn.
     if let Some(w) = &screw
         && std::env::var_os("CADRS_SWEEP_FACEWISE").is_none()
+        && !FACEWISE.with(|f| f.get())
     {
+        AS_ONE.with(|f| f.set(true));
         let stands: Vec<Stand> = (0..body.faces.len())
             .map(|fi| face_stand(&body, fi, size, &mv))
             .collect();
@@ -1642,6 +1644,44 @@ pub fn by_faces(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Result<O
 /// solid where it starts and the leading faces' sweeps put there, unmade, and an error returned
 /// (what a cut needs: the target less each in turn, no union).
 pub fn by_faces_or_pieces(
+    k: &mut NativeKernel,
+    b: &Body,
+    steps: &[RigidStep],
+    pieces_out: Option<&mut Vec<Body>>,
+) -> Result<OpResult> {
+    // A screw's leading faces are swept as one sheet first; where its pieces can't be put
+    // together (the sheet's sweep meeting the solid where it starts along a line they touch
+    // on: a box screwed about an axis its outer face is tangent to a cylinder of), each face
+    // swept on its own, as before that sheet was made, rather than a mesh.
+    let whole = pieces_out.is_none();
+    AS_ONE.with(|f| f.set(false));
+    let first = by_faces_or_pieces_once(k, b, steps, pieces_out);
+    if first.is_ok() || !whole || !AS_ONE.with(|f| f.get()) {
+        return first;
+    }
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
+        eprintln!(
+            "sweep by faces: the leading faces swept as one: {}; again a face at a time",
+            first
+                .as_ref()
+                .err()
+                .map_or(String::new(), |e| e.to_string())
+        );
+    }
+    let was = FACEWISE.with(|f| f.replace(true));
+    let again = by_faces_or_pieces_once(k, b, steps, None);
+    FACEWISE.with(|f| f.set(was));
+    again.or(first)
+}
+
+thread_local! {
+    /// Sweep a screw's leading faces a face at a time ([`by_faces_or_pieces`]'s retry).
+    static FACEWISE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether the last preparation swept leading faces as one sheet.
+    static AS_ONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn by_faces_or_pieces_once(
     k: &mut NativeKernel,
     b: &Body,
     steps: &[RigidStep],

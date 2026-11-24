@@ -3211,6 +3211,12 @@ pub fn canonical(s: &Surface) -> Surface {
 /// Whether a face's outward normal agrees with the natural normal of `written` (the face's
 /// surface as written), at the middle of its first real coedge (off any pole).
 pub fn same_sense(b: &Body, f: &Face, written: &Surface) -> bool {
+    // The face's own surface written as it is (a B-spline, an extrusion): the face's own
+    // sense, exactly. (Its normal at one point says nothing sure where the surface folds or
+    // pinches there: a tumbling torus's swept sheets, written with half their senses turned.)
+    if written == &f.surf {
+        return f.sense;
+    }
     let Some(c) = f
         .loops
         .iter()

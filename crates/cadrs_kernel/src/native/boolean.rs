@@ -4283,6 +4283,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                         // crossing refined onto it (the in-face test sees the face's sampled
                         // outline) and the edge split there, as the edge–face stage would.
                         let mut on_edge = None;
+                        let mut on_vertex = None;
                         if missed {
                             let span_n = span / n as f64;
                             let near = face_edges[fa]
@@ -4319,10 +4320,41 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                                     pc = ed.curve.point(s);
                                     on_edge = Some((e, s));
                                 }
+                                // An end of the edge on the curve, within the stretch the
+                                // crossing was bracketed in, is the crossing: the curve runs
+                                // through the edge's vertex. (Where the curve and the edge
+                                // meet nearly tangent there, a corner the surfaces touch at, the
+                                // alternating projections above creep to it and stop short: a
+                                // box screwed along a helix met the start box's face 8e-6 up
+                                // its corner's helix, a sliver of edge and an open shell.)
+                                let reach = (ic.c.point(a1) - ic.c.point(a0)).norm();
+                                let at_end = ed.v.iter().copied().find_map(|v| {
+                                    let p = pool.verts[v];
+                                    if (p - pc).norm() > reach {
+                                        return None;
+                                    }
+                                    let tv = ic.c.closest(&p, a0, a1);
+                                    ((ic.c.point(tv) - p).norm() < tf * 10.0).then_some((v, tv))
+                                });
+                                if let Some((v, tv)) = at_end {
+                                    tc = tv;
+                                    pc = pool.verts[v];
+                                    on_edge = None;
+                                    on_vertex = Some(v);
+                                }
                             }
                         }
                         // (A boolean's crossing only where it meets a boundary edge.)
-                        if (sectioning || on_edge.is_some())
+                        if let Some(v) = on_vertex {
+                            if !ps.iter().any(|(_, w)| *w == v) {
+                                if super::env_flag!("CADRS_BOOL_DEBUG") {
+                                    eprintln!(
+                                        "missed crossing of faces {fa}×{fb} at vertex {v} {pc:?}"
+                                    );
+                                }
+                                ps.push((tc, v));
+                            }
+                        } else if (sectioning || on_edge.is_some())
                             && !ps.iter().any(|(pt, v)| {
                                 (pt - tc).abs() < tol::REL * (1.0 + span.abs())
                                     || (pool.verts[*v] - pc).norm() < tf * 10.0

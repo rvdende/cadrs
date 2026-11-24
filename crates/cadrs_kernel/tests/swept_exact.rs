@@ -1119,6 +1119,49 @@ fn a_block_turned_whole_turns_is_exact() {
     assert!((volume - want).abs() < 1e-9 * want, "{volume} {want}");
 }
 
+/// brep-bench's box screwed inside a rod: a box (2.5 ≤ x ≤ 3.5, |y| ≤ 0.5, 2 ≤ z ≤ 3) screwed
+/// two turns about z, rising 4 a turn, cut from the rod of radius 5 and height 20. Its outer
+/// face is tangent to the cylinder its middle line sweeps, so the leading faces swept as one
+/// sheet meet the box where it starts along a line they touch on, and that union left an open
+/// shell: the sweep then fell back to a mesh of 96 000 facets, 8 s, its volume 1e-4 off. It is
+/// exact (a few dozen faces) and has the volume cad-kernel and OCCT agree on to 4e-11.
+#[test]
+fn a_box_screwed_inside_a_rod_is_exact() {
+    use std::f64::consts::TAU;
+    let mut k = NativeKernel::new();
+    let block = k
+        .primitive(&Primitive::block(
+            Point3::new(2.5, -0.5, 2.0),
+            Point3::new(3.5, 0.5, 3.0),
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let axis = Axis::new(Point3::origin(), Vector3::z());
+    let swept = k
+        .sweep_solid(block, &SolidMotion::helical(axis, 4.0, 0.0, 2.0 * TAU))
+        .unwrap()
+        .bodies[0];
+    let body = k.get(swept).unwrap();
+    assert!(body.faces.len() < 100, "{} faces: meshed", body.faces.len());
+    let rod = k
+        .primitive(&Primitive::Cylinder {
+            base: Point3::origin(),
+            axis: Vector3::z_axis(),
+            radius: 5.0,
+            height: 20.0,
+        })
+        .unwrap()
+        .first()
+        .unwrap();
+    let cut = k.boolean(BoolOp::Subtract, rod, &[swept]).unwrap().bodies[0];
+    let faults = k.get(cut).unwrap().check();
+    assert!(faults.is_empty(), "{faults:?}");
+    let volume = k.mass_properties(cut).unwrap().volume;
+    let want = 1522.316218895;
+    assert!((volume - want).abs() < 1e-7 * want, "volume {volume}");
+}
+
 /// A flat end mill (Ø1, pointing at the bar's axis, its tip 1 into a bar of radius 10)
 /// screwed half a turn round the bar, rising 6 a turn along it: a rotary roughing pass, as
 /// CAM's exact simulation cuts it. Its swept pieces are made exactly; cut from the bar they
