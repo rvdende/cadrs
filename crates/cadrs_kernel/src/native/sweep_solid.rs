@@ -2051,40 +2051,85 @@ fn slid_ellipsoid(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option
     }))
 }
 
-/// A ring slid square to its axis, in closed form. The ring (radii R and r) is everything
-/// within r of its core circle, so slid it is everything within r of the flat region the
-/// circle sweeps: the stadium the circle's disc sweeps less the lens the discs at both ends
-/// share (which the circle never crosses; nothing where the slide is longer than 2R). Put
-/// together from solids that meet on whole faces only: the rounded disc's back half at the
-/// start and fore half at the end (its meridian, a slot of half-width r, turned half a turn),
-/// the slot between them extruded along the slide, and, taken away, what both ends' holes
-/// share (each the spool inside the ring between its two flats). The faces' sweeps of such a
-/// ring overlap, so their gluing failed and a ladder of refused unions followed. None for any
-/// other body or motion, or where a step fails (the general sweep then).
-fn ring_slid_flat(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Result<OpResult>> {
-    if crate::native::env_flag!("CADRS_NO_RING_SLID_FLAT") {
+/// A ring moved in its own plane (slid square to its axis, or turned about an axis parallel
+/// to its own and clear of it), in closed form. The ring (radii R and r) is everything within
+/// r of its core circle, so moved flat it is everything within r of the flat region the circle
+/// sweeps: the band the circle's disc sweeps (a stadium, straight or bent round the turn's
+/// axis) less the lens the discs at both ends share (which the circle never crosses; nothing
+/// where the ends are more than 2R apart). Put together from solids that meet on whole faces
+/// only: the rounded disc's back half at the start and fore half at the end (its meridian, a
+/// slot of half-width r, turned half a turn), the slot between them extruded along the slide or
+/// turned about the turn's axis, and, taken away, what both ends' holes share (each the spool
+/// inside the ring between its two flats). The faces' sweeps of such a ring overlap, so their
+/// gluing failed and a ladder of refused unions followed. None for any other body or motion,
+/// or where a step fails (the general sweep then).
+fn ring_moved_flat(
+    k: &mut NativeKernel,
+    b: &Body,
+    steps: &[RigidStep],
+) -> Option<Result<OpResult>> {
+    if crate::native::env_flag!("CADRS_NO_RING_FLAT") {
         return None;
     }
-    let ([RigidStep::Slide { from, to }], [face]) = (steps, b.faces.as_slice()) else {
+    let ([step], [face]) = (steps, b.faces.as_slice()) else {
         return None;
     };
     let Surface::Torus { f, rmaj, rmin } = &face.surf else {
         return None;
     };
     let (big, small) = (*rmaj, *rmin);
-    let d = to - from;
-    let len = d.norm();
-    let z = f.z.normalize();
-    if b.solids.len() != 1
-        || !(small > tol::POINT && big > small * (1.0 + 1e-6))
-        || len <= 1e-6 * big
-        || d.dot(&z).abs() > tol::ANGULAR * len
-    {
+    if b.solids.len() != 1 || !(small > tol::POINT && big > small * (1.0 + 1e-6)) {
         return None;
     }
-    let x = d / len;
-    let y = z.cross(&x);
-    let (c0, c1) = (f.o + from, f.o + to);
+    let place = |t: f64| {
+        let (q, d) = rigid_at(steps, t);
+        P3::from(q * f.o.coords + d)
+    };
+    let (c0, c1) = (place(0.0), place(1.0));
+    // The ring's axis, the way it moves at its start and at its end, and the turn's axis and
+    // angle (counter-clockwise about it) where it turns.
+    let (z, m0, m1, turn) = match *step {
+        RigidStep::Slide { from, to } => {
+            let d = to - from;
+            let len = d.norm();
+            let z = f.z.normalize();
+            if len <= 1e-6 * big || d.dot(&z).abs() > tol::ANGULAR * len {
+                return None;
+            }
+            (z, d / len, d / len, None)
+        }
+        RigidStep::Turn { axis, from, to } => {
+            let angle = (to - from).abs();
+            let a = axis.dir.into_inner() * (to - from).signum();
+            if f.z.normalize().cross(&a).norm() > tol::ANGULAR || angle <= 1e-6 {
+                return None;
+            }
+            let out = |c: P3| {
+                let w = c - axis.origin;
+                w - a * w.dot(&a)
+            };
+            let reach = out(c0).norm();
+            // (Clear of the axis, and its end clear of its start the long way round.)
+            if reach <= (big + small) * (1.0 + 1e-6)
+                || TAU - angle <= 2.0 * ((big + small) / reach).asin() + 1e-3
+            {
+                return None;
+            }
+            let origin = axis.origin;
+            (
+                a,
+                a.cross(&(out(c0) / reach)),
+                a.cross(&(out(c1) / reach)),
+                Some((
+                    Axis {
+                        origin,
+                        dir: nalgebra::Unit::new_normalize(a),
+                    },
+                    angle,
+                )),
+            )
+        }
+    };
     let unit = nalgebra::Unit::new_normalize;
     let at = nalgebra::Point2::new;
     let line = |a: P2, b: P2| Curve2::Line { a, b, source: None };
@@ -2093,21 +2138,22 @@ fn ring_slid_flat(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option
         holes: vec![],
         source: Some(0),
     };
-    // The plane across the slide through `o`, its first axis toward `side` and its second z.
-    let across = |o: P3, side: f64| Plane {
+    // The plane through `o` across the motion `m` there, its first axis to the motion's left
+    // (times `side`) and its second z.
+    let across = |o: P3, m: V3, side: f64| Plane {
         origin: o,
-        x_dir: unit(y * side),
-        normal: unit(x * side),
+        x_dir: unit(z.cross(&m) * side),
+        normal: unit(m * side),
     };
     let made = (|| -> Result<Body> {
         let mut s = NativeKernel::new();
         let first = |r: OpResult| -> Result<BodyId> {
             r.bodies.first().copied().ok_or_else(|| {
-                KernelError::EmptyResult("a ring slid flat: a piece is empty".into())
+                KernelError::EmptyResult("a ring moved flat: a piece is empty".into())
             })
         };
-        // The slot across the slide, and its half from the axis out (the rounded disc's
-        // meridian).
+        // The slot across the motion, and its half from the ring's axis out (the rounded
+        // disc's meridian).
         let slot = region(vec![
             line(at(-big, -small), at(big, -small)),
             Curve2::arc(at(big, 0.0), small, -FRAC_PI_2, PI),
@@ -2122,22 +2168,28 @@ fn ring_slid_flat(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option
                 line(at(0.0, small), at(0.0, -small)),
             ])
         };
-        // (A meridian toward +y turns counter-clockwise about z through −x: the back half.)
-        let half = |s: &mut NativeKernel, o: P3, side: f64| -> Result<BodyId> {
+        // (A meridian to the motion's left turns counter-clockwise about z through the way
+        // back: the back half; one to its right, the fore half.)
+        let half = |s: &mut NativeKernel, o: P3, m: V3, side: f64| -> Result<BodyId> {
             let axis = Axis {
                 origin: o,
                 dir: unit(z),
             };
-            first(s.revolve(&Profile::new(across(o, side), vec![meridian()]), axis, PI)?)
+            first(s.revolve(
+                &Profile::new(across(o, m, side), vec![meridian()]),
+                axis,
+                PI,
+            )?)
         };
-        let back = half(&mut s, c0, 1.0)?;
-        let fore = half(&mut s, c1, -1.0)?;
-        let between = first(s.extrude_with(
-            &Profile::new(across(c0, 1.0), vec![slot]),
-            &ExtrudeSpec::blind(unit(x), len),
-        )?)?;
+        let back = half(&mut s, c0, m0, 1.0)?;
+        let fore = half(&mut s, c1, m1, -1.0)?;
+        let slot = Profile::new(across(c0, m0, 1.0), vec![slot]);
+        let between = match turn {
+            Some((axis, angle)) => first(s.revolve(&slot, axis, angle)?)?,
+            None => first(s.extrude_with(&slot, &ExtrudeSpec::blind(unit(m0), (c1 - c0).norm()))?)?,
+        };
         let mut whole = first(s.boolean(BoolOp::Union, back, &[between, fore])?)?;
-        if len < 2.0 * big * (1.0 - 1e-9) {
+        if (c1 - c0).norm() < 2.0 * big * (1.0 - 1e-9) {
             // The spool inside the ring: its meridian from the axis to the tube's inner half.
             let spool = |s: &mut NativeKernel, o: P3| -> Result<BodyId> {
                 let inside = region(vec![
@@ -2150,7 +2202,7 @@ fn ring_slid_flat(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option
                     origin: o,
                     dir: unit(z),
                 };
-                first(s.revolve(&Profile::new(across(o, 1.0), vec![inside]), axis, TAU)?)
+                first(s.revolve(&Profile::new(across(o, m0, 1.0), vec![inside]), axis, TAU)?)
             };
             let (h0, h1) = (spool(&mut s, c0)?, spool(&mut s, c1)?);
             let lens = first(s.boolean(BoolOp::Intersect, h0, &[h1])?)?;
@@ -2160,7 +2212,7 @@ fn ring_slid_flat(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option
         let problems = body.check();
         if body.solids.len() != 1 || !problems.is_empty() {
             return Err(KernelError::InvalidResult {
-                op: "a ring slid flat",
+                op: "a ring moved flat",
                 why: problems
                     .into_iter()
                     .next()
@@ -2172,7 +2224,7 @@ fn ring_slid_flat(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option
     if crate::native::env_flag!("CADRS_SWEEP_DEBUG")
         && let Err(e) = &made
     {
-        eprintln!("a ring slid flat: {e}");
+        eprintln!("a ring moved flat: {e}");
     }
     Some(made.map(|body| OpResult {
         bodies: vec![k.insert(body)],
@@ -2792,7 +2844,7 @@ fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> R
         if let Some(r) = slid_ellipsoid(k, &b, steps) {
             return r;
         }
-        if let Some(Ok(r)) = ring_slid_flat(k, &b, steps) {
+        if let Some(Ok(r)) = ring_moved_flat(k, &b, steps) {
             return Ok(r);
         }
         let mut exact = None;
@@ -4978,9 +5030,9 @@ fn cut_swept_in(
     {
         return Ok(r);
     }
-    // A ring slid square to its axis: what it fills, in closed form, cut from the target.
+    // A ring moved in its own plane: what it fills, in closed form, cut from the target.
     if let SolidMotion::Rigid { steps } = motion
-        && let Some(Ok(r)) = ring_slid_flat(k, &b, steps)
+        && let Some(Ok(r)) = ring_moved_flat(k, &b, steps)
     {
         let cut = k.boolean(crate::BoolOp::Subtract, target, &r.bodies);
         for s in &r.bodies {

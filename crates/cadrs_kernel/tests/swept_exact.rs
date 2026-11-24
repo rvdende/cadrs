@@ -809,14 +809,14 @@ fn a_ball_screwed_round_a_tight_helix_is_exact() {
     assert!(off < 1e-5, "a point of the surface is {off} off");
 }
 
-/// A ring (radii 6 and 2) slid flat, in closed form: everything within 2 of the flat region its
-/// core circle sweeps. Past its hole (a slide of 15) that region is the stadium of the circle's
+/// A ring (radii 6 and 2) moved in its own plane, in closed form: everything within 2 of the
+/// flat region its core circle sweeps. Past its hole (a slide of 15) that region is the stadium of the circle's
 /// disc, and the solid's volume Steiner's 2rA + πr²P/2 + 4πr³/3 for a flat convex region of
 /// area A and perimeter P; short of it (a slide of 5) the region has the lens the two ends'
 /// discs share for a hole, and every point of the solid's faces is 2 from it. Analytic faces
 /// only, and few.
 #[test]
-fn a_ring_slid_flat_is_exact() {
+fn a_ring_moved_in_its_plane_is_exact() {
     use std::f64::consts::PI;
     let (big, small) = (6.0f64, 2.0f64);
     let slid = |len: f64| {
@@ -855,6 +855,50 @@ fn a_ring_slid_flat_is_exact() {
         2.0 * small * area + PI * small * small * perimeter / 2.0 + 4.0 * PI * small.powi(3) / 3.0;
     let volume = k.mass_properties(past).unwrap().volume;
     assert!((volume - want).abs() < 1e-8 * want, "{volume} {want}");
+    // Turned about an axis parallel to its own (a ring of radii 1 and 0.4, ten from the z
+    // axis, from −140° to 30°): the band is bent round the axis, and the same formula holds
+    // (its inner edge curves the other way, no tighter than the tube is thick).
+    {
+        let (big, small, reach) = (1.0f64, 0.4f64, 10.0f64);
+        let turn = 170f64.to_radians();
+        let mut k = NativeKernel::new();
+        let ring = k
+            .primitive(&Primitive::torus(
+                Point3::new(reach, 0.0, 0.0),
+                Vector3::z(),
+                big,
+                small,
+            ))
+            .unwrap()
+            .first()
+            .unwrap();
+        let axis = Axis::new(Point3::origin(), Vector3::z());
+        let swept = k
+            .sweep_solid(
+                ring,
+                &SolidMotion::swing(axis, -140f64.to_radians(), 30f64.to_radians()),
+            )
+            .unwrap()
+            .bodies[0];
+        let body = k.get(swept).unwrap();
+        let faults = body.check();
+        assert!(faults.is_empty(), "{faults:?}");
+        assert!(
+            body.faces
+                .iter()
+                .all(|f| !matches!(f.surf, Surface::Nurbs(_))),
+            "an analytic solid"
+        );
+        let (area, perimeter) = (
+            2.0 * big * reach * turn + PI * big * big,
+            2.0 * reach * turn + 2.0 * PI * big,
+        );
+        let want = 2.0 * small * area
+            + PI * small * small * perimeter / 2.0
+            + 4.0 * PI * small.powi(3) / 3.0;
+        let volume = k.mass_properties(swept).unwrap().volume;
+        assert!((volume - want).abs() < 1e-8 * want, "{volume} {want}");
+    }
     // Short of its hole: each mesh corner's distance from the region.
     let len = 5.0;
     let (k, short) = slid(len);
