@@ -2160,32 +2160,70 @@ fn screwed_ball(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<R
     let ahead = z.cross(&e);
     let tangent = (ahead * a + z * c).normalize();
     let helix_at = |w: f64| foot + (e * w.cos() + ahead * w.sin()) * a + z * (c * w);
-    // How far a point is from the arc: the least over its samples, then by Newton on the
-    // distance's derivative from each sample that is a least among its neighbours.
+    // How far a point is from the arc. About the axis the point is (ρ, φ, h) and the helix's
+    // point at w is (a, w, c w): the distance squared is a² + ρ² − 2aρ cos(w − φ) + (c w − h)²,
+    // and half its derivative g(w) = aρ sin(w − φ) + c (c w − h) turns where cos(w − φ) =
+    // −c²/aρ, twice a turn or never. Between two turns of g a least distance is its one
+    // root, where it rises through zero: found there, and the arc's ends taken with them.
+    // (The least of 1441 samples and a Newton from each low one, before: a fifth of a
+    // screwed ball's time.)
     let from_arc = |p: &P3| -> f64 {
-        const N: usize = 1440;
-        let d2 = |w: f64| (helix_at(w) - p).norm_squared();
-        let ds: Vec<f64> = (0..=N).map(|i| d2(turn * i as f64 / N as f64)).collect();
-        let mut best = ds[0].min(ds[N]);
-        for i in 0..=N {
-            let lo = if i == 0 { f64::INFINITY } else { ds[i - 1] };
-            let hi = if i == N { f64::INFINITY } else { ds[i + 1] };
-            if ds[i] <= lo && ds[i] <= hi {
-                let mut w = turn * i as f64 / N as f64;
-                for _ in 0..12 {
-                    let q = helix_at(w);
-                    let d1 = (-e * w.sin() + ahead * w.cos()) * a + z * c;
-                    let dd = -(e * w.cos() + ahead * w.sin()) * a;
-                    let (g, h) = ((q - p).dot(&d1), d1.norm_squared() + (q - p).dot(&dd));
-                    if h.abs() < 1e-14 {
-                        break;
+        let q = p - foot;
+        let h = q.dot(&z);
+        let (x, y) = (q.dot(&e), q.dot(&ahead));
+        let (rho, phi) = (x.hypot(y), y.atan2(x));
+        let d2 = |w: f64| a * a + rho * rho - 2.0 * a * rho * (w - phi).cos() + (c * w - h).powi(2);
+        let g = |w: f64| a * rho * (w - phi).sin() + c * (c * w - h);
+        let mut cuts = vec![0.0, turn];
+        let k = a * rho;
+        if k > c * c {
+            let s = (-c * c / k).acos();
+            for base in [phi + s, phi - s] {
+                let mut w = base - (base / TAU).floor() * TAU;
+                while w < turn {
+                    if w > 0.0 {
+                        cuts.push(w);
                     }
-                    w = (w - g / h).clamp(0.0, turn);
+                    w += TAU;
                 }
-                best = best.min(d2(w));
             }
+            cuts.sort_by(f64::total_cmp);
         }
-        best.sqrt()
+        let mut best = d2(0.0).min(d2(turn));
+        for pair in cuts.windows(2) {
+            let (mut lo, mut hi) = (pair[0], pair[1]);
+            if !(g(lo) <= 0.0 && g(hi) >= 0.0) || hi <= lo {
+                continue;
+            }
+            // Newton, kept between the ends that bracket the root.
+            let mut w = 0.5 * (lo + hi);
+            for _ in 0..60 {
+                let gw = g(w);
+                if gw > 0.0 {
+                    hi = w;
+                } else {
+                    lo = w;
+                }
+                let slope = k * (w - phi).cos() + c * c;
+                let next = if slope > 0.0 {
+                    w - gw / slope
+                } else {
+                    f64::NAN
+                };
+                let next = if next > lo && next < hi {
+                    next
+                } else {
+                    0.5 * (lo + hi)
+                };
+                if (next - w).abs() <= 1e-15 * (1.0 + w.abs()) {
+                    w = next;
+                    break;
+                }
+                w = next;
+            }
+            best = best.min(d2(w));
+        }
+        best.max(0.0).sqrt()
     };
     // The ball's great circle square to the helix at its start, in four arcs.
     let plane = Plane {
@@ -2527,10 +2565,11 @@ fn screwed_ball(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<R
                 seen.iter().filter(|s| **s).count()
             );
         }
-        let mut kept: Vec<Body> = Vec::new();
-        for i in 0..sheets.len() {
+        // (Each sheet's cut is its own: side by side, where they were made one after another,
+        // seventy imprints of a few milliseconds each.)
+        let cut_one = |i: usize| -> Option<Body> {
             if !seen[i] {
-                continue;
+                return None;
             }
             // (By all the others it reaches at once: a crease crosses a face against two
             // stretches of the turn beside it, and a cut by one alone ends inside the face.)
@@ -2585,12 +2624,14 @@ fn screwed_ball(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<R
                     on_it.len()
                 );
             }
-            if !on_it.is_empty() {
-                kept.push(super::kernel::subset(&cur, &on_it, false));
-            }
-        }
+            (!on_it.is_empty()).then(|| super::kernel::subset(&cur, &on_it, false))
+        };
+        let kept: Vec<Option<Body>> =
+            super::par::map_heavy(&(0..sheets.len()).collect::<Vec<usize>>(), true, |&i| {
+                cut_one(i)
+            });
         let mut whole = Body::default();
-        for x in &kept {
+        for x in kept.iter().flatten() {
             whole.append(x);
         }
         super::surfacing::sewn_solid(whole, 1e-5)

@@ -1238,15 +1238,27 @@ pub fn sew_faces(mut b: Body, tol: f64) -> Result<Body> {
         taken[j] = true;
         emap[j] = (i, fwd);
     }
-    for fi in 0..b.faces.len() {
-        let surf = b.faces[fi].surf.clone();
-        for li in 0..b.faces[fi].loops.len() {
-            for ci in 0..b.faces[fi].loops[li].len() {
+    // Each coedge of an edge that gave way takes the edge that stands, with a p-curve of it:
+    // every one on its own, side by side (a swept solid's dozens of faces sewn, a p-curve
+    // fitted for each of their seams).
+    let mut remapped: Vec<(usize, usize, usize)> = Vec::new();
+    for (fi, f) in b.faces.iter().enumerate() {
+        for (li, l) in f.loops.iter().enumerate() {
+            for (ci, c) in l.iter().enumerate() {
+                if emap[c.edge].0 != c.edge {
+                    remapped.push((fi, li, ci));
+                }
+            }
+        }
+    }
+    let coedges: Vec<Coedge> = {
+        let b = &b;
+        let emap = &emap;
+        super::par::map(&remapped, |&(fi, li, ci)| {
+            let surf = &b.faces[fi].surf;
+            {
                 let c = b.faces[fi].loops[li][ci].clone();
                 let (x, same) = emap[c.edge];
-                if x == c.edge {
-                    continue;
-                }
                 let ed = b.edges[x].clone();
                 let fwd = if same { c.fwd } else { !c.fwd };
                 let old = b.edges[c.edge].clone();
@@ -1267,7 +1279,7 @@ pub fn sew_faces(mut b: Body, tol: f64) -> Result<Body> {
                 let mut pc = if alike {
                     c.pc.clone()
                 } else {
-                    super::pcurve::pcurve(&surf, &ed.curve, ed.t[0], ed.t[1], None)
+                    super::pcurve::pcurve(surf, &ed.curve, ed.t[0], ed.t[1], None)
                 };
                 // Where the edge's projection onto the face ends far, in the face's own (u, v),
                 // from where the face's own p-curve did (a face that comes to a point there, a
@@ -1349,9 +1361,12 @@ pub fn sew_faces(mut b: Body, tol: f64) -> Result<Body> {
                 if du != 0.0 || dv != 0.0 {
                     pc = pc.transformed(&Affine::translation(V3::new(du, dv, 0.0)));
                 }
-                b.faces[fi].loops[li][ci] = Coedge { edge: x, fwd, pc };
+                Coedge { edge: x, fwd, pc }
             }
-        }
+        })
+    };
+    for ((fi, li, ci), c) in remapped.into_iter().zip(coedges) {
+        b.faces[fi].loops[li][ci] = c;
     }
     super::unify::compact(&mut b);
     // Orient the faces consistently: across every shared edge the two uses run opposite ways.
