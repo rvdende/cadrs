@@ -3111,8 +3111,8 @@ fn on_box_selected(
 
 /// The routing grid's pitch (graph px).
 const PITCH: f32 = 10.0;
-/// The room kept round a node (graph px).
-const CLEAR: f32 = 8.0;
+/// The room kept round a node (graph px): a wire doesn't hug its edge.
+const CLEAR: f32 = 12.0;
 /// How far a wire runs straight out of its output and into its input (graph px).
 const STUB: f32 = 18.0;
 
@@ -3420,15 +3420,21 @@ fn route_node_wires(p: &cadrs_ui::node_graph::RouteProblem) -> Vec<Option<Vec<Ve
             }
             *tr = split;
         }
-        // This output's traces, marked for the next outputs' wires.
+        // This output's traces, marked for the next outputs' wires: the cells they run through
+        // and the cells beside those, so another output's trace keeps two steps away (one
+        // step, and a trunk drawn thick touched it zoomed out).
         let mut mine: Vec<u32> = Vec::new();
         for (k, tr) in traces {
-            // The cells the trace (as drawn) runs through.
             for w in tr.windows(2) {
                 let n = (w[0].distance(w[1]) / (pitch / 3.0)).ceil().max(1.0) as usize;
                 for i in 0..=n {
                     let (x, y) = cell(w[0].lerp(w[1], i as f32 / n as f32));
-                    mine.push(y * nx + x);
+                    for (dx, dy) in [(0i64, 0i64), (1, 0), (-1, 0), (0, 1), (0, -1)] {
+                        let (cx, cy) = (x as i64 + dx, y as i64 + dy);
+                        if cx >= 0 && cy >= 0 && cx < nx as i64 && cy < ny as i64 {
+                            mine.push(cy as u32 * nx + cx as u32);
+                        }
+                    }
                 }
             }
             out[k] = Some(tr);
@@ -3485,7 +3491,7 @@ mod tests {
 
     /// Two sketch → extrude chains: each extrude level with its sketch (the second sketch moved
     /// down beside its extrude, which the first extrude, taller, pushed down).
-    /// Two wires from different outputs along the same run keep a grid step apart; two from
+    /// Two wires from different outputs along the same run keep two grid steps apart; two from
     /// one output may share their trunk.
     #[test]
     fn traces_keep_apart() {
@@ -3517,7 +3523,8 @@ mod tests {
             .iter()
             .flat_map(|q| sb.iter().map(move |w| q.distance(*w)))
             .fold(f32::MAX, f32::min);
-        assert!(gap >= PITCH * 0.9, "{gap}: {a:?} {b:?}");
+        // Two grid steps: a step's lane beside each trace is kept clear.
+        assert!(gap >= PITCH * 1.8, "{gap}: {a:?} {b:?}");
     }
 
     /// Three wires from one output to three inputs far apart share a trunk and branch off it,
