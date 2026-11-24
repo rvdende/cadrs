@@ -714,6 +714,10 @@ impl GraphNode {
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct GraphNodeHandle;
 
+/// A node being dragged (until the drag ends): whoever places nodes leaves it where it is.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct GraphNodeDragging;
+
 /// A selected node: dragging another selected node moves it too.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct GraphNodeSelected;
@@ -798,6 +802,7 @@ fn on_node_drag(
     q_handle: Query<(), With<GraphNodeHandle>>,
     q_sel: Query<Entity, (With<GraphNode>, With<GraphNodeSelected>)>,
     q_canvas: Query<&mut NodeCanvas>,
+    mut commands: Commands,
 ) {
     if ev.button != PointerButton::Primary || ev.original_event_target() != ev.entity {
         return;
@@ -815,6 +820,7 @@ fn on_node_drag(
     for n in moving(node, &q_sel) {
         if let Ok(mut g) = q_node.get_mut(n) {
             g.pos += ev.delta / zoom;
+            commands.entity(n).insert(GraphNodeDragging);
         }
     }
 }
@@ -835,6 +841,7 @@ fn on_node_drag_end(
     };
     for n in moving(node, &q_sel) {
         if let Ok(g) = q_node.get(n) {
+            commands.entity(n).remove::<GraphNodeDragging>();
             commands.trigger(GraphNodeMoved {
                 entity: n,
                 pos: g.pos,

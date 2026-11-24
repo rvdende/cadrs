@@ -695,11 +695,7 @@ fn sync_nodes(world: &mut World) {
             && n.key == key
         {
             keep.insert(f.id, *e);
-            if let Some(mut g) = world.get_mut::<GraphNode>(*e)
-                && g.pos != pos
-            {
-                g.pos = pos;
-            }
+            place(world, *e, pos);
             continue;
         }
         changed = true;
@@ -721,11 +717,7 @@ fn sync_nodes(world: &mut World) {
         q_cfg.iter(world).map(|(e, c)| (e, c.clone())).collect();
     match cfg_have.first() {
         Some((e, c)) if c.key == ckey => {
-            if let Some(mut g) = world.get_mut::<GraphNode>(*e)
-                && g.pos != inputs_pos
-            {
-                g.pos = inputs_pos;
-            }
+            place(world, *e, inputs_pos);
         }
         _ => {
             for (e, _) in &cfg_have {
@@ -773,6 +765,22 @@ fn sync_nodes(world: &mut World) {
     let doc_changed = world.resource_ref::<ActiveDocument>().is_changed();
     if changed || doc_changed {
         rebuild_wires(world, &el, &parts, canvas_e, canvas.wires());
+    }
+}
+
+/// Puts a node at its place, unless it is being dragged (its place is saved when the drag
+/// ends).
+fn place(world: &mut World, e: Entity, pos: Vec2) {
+    if world
+        .get::<cadrs_ui::node_graph::GraphNodeDragging>(e)
+        .is_some()
+    {
+        return;
+    }
+    if let Some(mut g) = world.get_mut::<GraphNode>(e)
+        && g.pos != pos
+    {
+        g.pos = pos;
     }
 }
 
@@ -2194,10 +2202,12 @@ fn sync_header_preset(
             cadrs_ui::Tooltip::new(tr("node-view-active-preset")),
         ))
         .id();
-    commands
-        .entity(e)
-        .entry::<Node>()
-        .and_modify(|mut n| n.margin = UiRect::right(Val::Px(4.0)));
+    commands.entity(e).entry::<Node>().and_modify(|mut n| {
+        n.margin = UiRect::right(Val::Px(4.0));
+        n.width = Val::Px(120.0);
+        n.flex_grow = 0.0;
+        n.flex_shrink = 0.0;
+    });
     // After the count (which grows), before the buttons.
     commands.entity(header).insert_children(2, &[e]);
 }
