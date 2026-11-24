@@ -221,11 +221,12 @@ impl Settings {
 
     /// The vertical pan and the zoom from the cap's forward/backward (`ty`, positive toward
     /// you) and up/down (`tz`, positive down) translations: zooming in by pushing down, or by
-    /// pushing away; the other axis pans, the view following the cap as in object mode.
+    /// pulling toward you (the cap holds the part, which comes closer); the other axis pans, the
+    /// view following the cap as in object mode.
     fn pan_y_and_zoom(self, ty: f32, tz: f32) -> (f32, f32) {
         match self.zoom {
             SpaceMouseZoom::UpDown => (ty, tz),
-            SpaceMouseZoom::ForwardBackward => (tz, -ty),
+            SpaceMouseZoom::ForwardBackward => (tz, ty),
         }
     }
 }
@@ -543,15 +544,15 @@ mod tests {
         };
         let dt = 0.02;
         let sample = |axes| MotionSample { axes, dt };
-        // Away from you (y negative): in, and no pan.
+        // Toward you (y positive): the part comes closer, in, and no pan.
         let mut view = ViewportView::default();
         let (scale, focus) = (view.view.scale, view.view.focus);
-        apply_sample(&mut view, sample([0.0, -1.0, 0.0, 0.0, 0.0, 0.0]), settings);
+        apply_sample(&mut view, sample([0.0, 1.0, 0.0, 0.0, 0.0, 0.0]), settings);
         assert!(view.view.scale < scale);
         assert_eq!(view.view.focus, focus);
-        // Toward you: out.
+        // Away from you: out.
         let mut view = ViewportView::default();
-        apply_sample(&mut view, sample([0.0, 1.0, 0.0, 0.0, 0.0, 0.0]), settings);
+        apply_sample(&mut view, sample([0.0, -1.0, 0.0, 0.0, 0.0, 0.0]), settings);
         assert!(view.view.scale > scale);
         // Pushing down pans as pulling toward you does by default, and doesn't zoom.
         let mut view = ViewportView::default();
