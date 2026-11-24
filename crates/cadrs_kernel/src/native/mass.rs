@@ -1452,7 +1452,7 @@ pub fn body_volume(body: &Body) -> f64 {
 /// fine). None unless the two agree within a fifth, which a volume far from nothing among its
 /// faces' terms does; the caller then integrates.
 pub(crate) fn rough_volume(body: &Body) -> Option<f64> {
-    use super::classify::{InFace, face_polygons, in_face};
+    use super::classify::{InFace, face_polygons, in_face_boxed, poly_boxes};
     let bb = body.bbox();
     if bb.is_empty() {
         return None;
@@ -1460,6 +1460,9 @@ pub(crate) fn rough_volume(body: &Body) -> Option<f64> {
     let shift = bb.center().coords;
     let one = |f: &Face| -> Option<[f64; 2]> {
         let polys = face_polygons(body, f);
+        // (The 720 points against the polygons' sides by rows, not each against every side:
+        // a swept face's outline is thousands of points.)
+        let boxes = poly_boxes(&polys, &f.surf);
         let (mut lo, mut hi) = (
             P2::new(f64::INFINITY, f64::INFINITY),
             P2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
@@ -1478,7 +1481,7 @@ pub(crate) fn rough_volume(body: &Body) -> Option<f64> {
             for i in 0..n {
                 for j in 0..n {
                     let uv = P2::new(lo.x + (i as f64 + 0.5) * du, lo.y + (j as f64 + 0.5) * dv);
-                    if in_face(&polys, &f.surf, uv, 0.0) != InFace::Inside {
+                    if in_face_boxed(&polys, &boxes, &f.surf, uv, 0.0) != InFace::Inside {
                         continue;
                     }
                     let (p, su, sv) = f.surf.d1(uv.x, uv.y);
