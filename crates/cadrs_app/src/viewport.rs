@@ -126,6 +126,7 @@ impl Plugin for ViewportPlugin {
                     sync_grid,
                     fit_grid,
                     sync_plane_rows,
+                    sync_view_hovered_row,
                 )
                     .after(apply_view_to_camera)
                     .run_if(in_state(AppState::Document)),
@@ -598,6 +599,14 @@ impl Pick {
     pub fn part(&self) -> Option<PartId> {
         match *self {
             Pick::Face(f, _) | Pick::Edge(f, _) | Pick::Vertex(f, _) | Pick::Part(f) => Some(f),
+            _ => None,
+        }
+    }
+
+    /// The sketch it is in (a sketch's regions, curves and points).
+    pub fn sketch(&self) -> Option<FeatureId> {
+        match *self {
+            Pick::Region(f, _) | Pick::SketchCurve(f, _) | Pick::SketchPoint(f, _) => Some(f),
             _ => None,
         }
     }
@@ -3010,6 +3019,50 @@ fn sync_plane_rows(
                     img.color = icon_fg;
                 }
             }
+        }
+    }
+}
+
+/// Marks the feature-list row lit up because its sketch is under the pointer in the view.
+#[derive(Component)]
+struct ViewHoveredRow;
+
+/// A sketch's curve, point or region under the pointer in the view lights up the sketch's row
+/// in the feature list as hovered, so it shows which sketch a double click would edit. (Not
+/// over a selected row, whose own colour wins.)
+#[allow(clippy::type_complexity)]
+fn sync_view_hovered_row(
+    highlight: Res<PlaneHighlight>,
+    kind: Res<ActiveKind>,
+    q: Query<(
+        Entity,
+        &crate::document::FeatureRow,
+        Has<ViewHoveredRow>,
+        Has<cadrs_ui::ForceState>,
+        Has<Selected>,
+    )>,
+    q_new: Query<(), Added<crate::document::FeatureRow>>,
+    q_selected: Query<(), (Changed<Selected>, With<crate::document::FeatureRow>)>,
+    mut commands: Commands,
+) {
+    if !highlight.is_changed() && q_new.is_empty() && q_selected.is_empty() {
+        return;
+    }
+    let target = highlight
+        .viewport
+        .and_then(|p| p.sketch())
+        .filter(|_| *kind == ActiveKind::PartStudio);
+    for (e, row, ours, forced, selected) in &q {
+        let want = target == Some(row.0) && !selected;
+        if want && !forced {
+            commands.entity(e).try_insert((
+                cadrs_ui::ForceState(cadrs_ui::VisualState::Hover),
+                ViewHoveredRow,
+            ));
+        } else if !want && ours {
+            commands
+                .entity(e)
+                .try_remove::<(cadrs_ui::ForceState, ViewHoveredRow)>();
         }
     }
 }
