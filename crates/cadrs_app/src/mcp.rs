@@ -366,6 +366,7 @@ fn run(world: &mut World, call: &Call) -> Result<Value, String> {
         }
         Call::InsertInstance(p) => insert_instance(world, p),
         Call::GetConfiguration(p) => get_configuration(world, p),
+        Call::GetNodeGraph(p) => get_node_graph(world, p),
         Call::SetConfiguration(p) => set_configuration(world, p),
         Call::ConnectParameter(p) => connect_parameter(world, p),
         Call::SetInstancePreset(p) => set_instance_preset(world, p),
@@ -1725,6 +1726,23 @@ fn configuration_state(world: &mut World, element: ElementId) -> Result<Value, S
 fn get_configuration(world: &mut World, p: &tools::PartStudio) -> Result<Value, String> {
     let element = part_studio(doc(world)?, p.part_studio.as_deref())?;
     configuration_state(world, element)
+}
+
+/// The studio's node graph ([`crate::node_view::node_graph_json`]); the Parts node's parts, and
+/// the wires the rebuild knows of (a cut into the part it cuts), when it is the studio shown
+/// (they are built for that one).
+fn get_node_graph(world: &mut World, p: &tools::PartStudio) -> Result<Value, String> {
+    let d = doc(world)?;
+    let element = part_studio(d, p.part_studio.as_deref())?;
+    let el = d.doc.element(element).ok_or("no such Part Studio")?.clone();
+    let shown = d.active_element().is_some_and(|a| a.id == element);
+    let (parts, uses) = match world.get_resource::<crate::parts::PartCache>() {
+        Some(c) if shown => (c.parts.clone(), c.uses.clone()),
+        _ => Default::default(),
+    };
+    let mut out = crate::node_view::node_graph_json(&el, &parts, &uses);
+    out["part_studio"] = json!(el.name);
+    Ok(out)
 }
 
 fn input_kind(s: &str) -> Result<cadrs_core::configuration::InputKind, String> {
@@ -3855,6 +3873,44 @@ mod tests {
             &p(json!({ "feature": "Extrude 1", "field": "Bypass", "expr": "#on" })),
         )
         .unwrap();
+        // The node graph: the sketch into the extrude, the inputs into its Depth and Bypass.
+        let g = get_node_graph(&mut world, &p(json!({}))).unwrap();
+        let wire = |from: &str, socket: &str, to: &str, to_socket: &str, kind: &str| {
+            g["wires"].as_array().unwrap().iter().any(|w| {
+                w["from"]["node"] == from
+                    && w["from"]["socket"] == socket
+                    && w["to"]["node"] == to
+                    && w["to"]["socket"] == to_socket
+                    && w["kind"] == kind
+            })
+        };
+        assert!(
+            wire(
+                "Sketch 1",
+                "geometry out",
+                "Extrude 1",
+                "geometry in",
+                "geometry"
+            ),
+            "{g}"
+        );
+        assert!(
+            wire("Configuration", "height", "Extrude 1", "Depth", "value"),
+            "{g}"
+        );
+        assert!(
+            wire("Configuration", "on", "Extrude 1", "bypass", "bypass"),
+            "{g}"
+        );
+        assert_eq!(g["wires"].as_array().unwrap().len(), 3, "{g}");
+        assert!(
+            g["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|n| n["node"] == "Extrude 1" && n["ui_name"] == "node-extrude-1"),
+            "{g}"
+        );
         let c = set_configuration(
             &mut world,
             &p(json!({ "presets": [{ "name": "Tall", "values": { "on": 0 } }] })),

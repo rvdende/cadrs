@@ -1020,7 +1020,9 @@ fn sync_nodes(world: &mut World, mut last_edited: Local<Option<Option<FeatureId>
         }
     }
     // The wires, again whenever a node or the list changed.
-    let doc_changed = world.resource_ref::<ActiveDocument>().is_changed();
+    // (And after a rebuild: a cut's part, which wires it, is known from it.)
+    let doc_changed = world.resource_ref::<ActiveDocument>().is_changed()
+        || world.resource_ref::<PartCache>().is_changed();
     if changed || doc_changed {
         rebuild_wires(world, &el, &parts, canvas_e, canvas.wires());
     }
@@ -1355,7 +1357,7 @@ fn spawn_feature_node(
     // Sockets. Geometry in: level with the dialog's first selection field (a sketch's plane,
     // an extrude's regions, a fillet's edges), coloured as what it references (a plane grey, a
     // sketch blue, a part green); on the header when the node has none (or is collapsed).
-    let parents = cadrs_core::feature_list::parents(el.features(), f.id);
+    let parents = cadrs_core::feature_list::direct_parents(el.features(), f.id);
     // (A sketch on a default plane, Top, Front or Right, takes a plane too.)
     let in_color = match parents.first().and_then(|p| el.feature(*p)) {
         Some(p) => geometry_color(p),
@@ -1648,8 +1650,7 @@ fn generic_card(f: &Feature, units: &Units, t: &Theme) -> FeatureDialog {
     })
 }
 
-/// The wires between the shown nodes: geometry from each feature's references, values from the
-/// expressions that name an input or a Variable, Bypass from suppression variables.
+/// The wires between the shown nodes ([`graph_wires`]).
 fn rebuild_wires(
     world: &mut World,
     el: &Element,
@@ -1663,6 +1664,31 @@ fn rebuild_wires(
         .filter(|(e, _)| on_canvas(world, *e, canvas))
         .map(|(e, k)| (k.clone(), e))
         .collect();
+    let uses = world.resource::<PartCache>().uses.clone();
+    let wanted: Vec<Wire> = graph_wires(el, parts, &uses)
+        .into_iter()
+        .filter_map(|(a, b, color, dashed)| {
+            Some(Wire {
+                from: *sockets.get(&a)?,
+                to: *sockets.get(&b)?,
+                color,
+                dashed,
+            })
+        })
+        .collect();
+    update_wires(world, layer, wanted);
+}
+
+/// A Part Studio's node graph's wires, from the model: geometry from each feature's references
+/// and the parts it changes (the parents no other parent depends on, as the last rebuild knows
+/// them: `parts` and `uses`), values from the expressions that name an input or
+/// a Variable (dashed when the expression is more than the name), Bypass from suppression
+/// variables, and each part from the last feature that changes it into the Parts node.
+fn graph_wires(
+    el: &Element,
+    parts: &[cadrs_core::Part],
+    uses: &HashMap<FeatureId, Vec<FeatureId>>,
+) -> Vec<(SocketKey, SocketKey, Color, bool)> {
     let features = el.features();
     let mut wires: Vec<(SocketKey, SocketKey, Color, bool)> = Vec::new();
     // Where a name comes from at a feature: the last Variable above it of that name, else the
@@ -1680,7 +1706,9 @@ fn rebuild_wires(
             .map(|_| SocketKey::Input(name.to_string()))
     };
     for (i, f) in features.iter().enumerate() {
-        for p in cadrs_core::feature_list::parents(features, f.id) {
+        // Only the parents no other parent depends on: an edge between Extrude 5's cut and
+        // Extrude 1's plate needs both, but Extrude 5 cut Extrude 1's part already.
+        for p in cadrs_core::feature_list::direct_parents_with(features, parts, uses, f.id) {
             if let Some(pf) = el.feature(p) {
                 wires.push((
                     SocketKey::GeoOut(p),
@@ -1726,18 +1754,90 @@ fn rebuild_wires(
             ));
         }
     }
-    let wanted: Vec<Wire> = wires
-        .into_iter()
-        .filter_map(|(a, b, color, dashed)| {
-            Some(Wire {
-                from: *sockets.get(&a)?,
-                to: *sockets.get(&b)?,
-                color,
-                dashed,
+    wires
+}
+
+/// A Part Studio's node graph as data (the MCP's `get_node_graph`): its nodes (each feature's,
+/// the Configuration node, the Parts node) with their sockets and places, and the wires between
+/// them, as [`graph_wires`] draws them. `parts`: the studio's built parts (the Parts node), when
+/// known. `ui_name` is the node's UI name while the node view shows it (for `get_ui_layout` and
+/// scenario steps).
+pub fn node_graph_json(
+    el: &Element,
+    parts: &[cadrs_core::Part],
+    uses: &HashMap<FeatureId, Vec<FeatureId>>,
+) -> serde_json::Value {
+    use serde_json::json;
+    let features = el.features();
+    let layout = el.node_layout();
+    let name_of = |id: FeatureId| el.feature(id).map(|f| f.name.clone());
+    let pos = |id: FeatureId| layout.and_then(|l| l.positions.get(&id)).copied();
+    let mut nodes = Vec::new();
+    if let Some(c) = el.configuration() {
+        nodes.push(json!({
+            "node": "Configuration",
+            "ui_name": "node-configuration",
+            "position": layout.and_then(|l| l.inputs_node),
+            "outputs": c.inputs.iter().map(|i| i.name.clone()).collect::<Vec<_>>(),
+        }));
+    }
+    for f in features {
+        let slug = crate::feature_list::row_name(&f.name).replacen("feature-", "", 1);
+        let mut inputs = vec![json!("geometry")];
+        inputs.extend(
+            cfg::parameter_slots(f)
+                .into_iter()
+                .map(|(label, _, expr)| json!({ "field": label, "expression": expr })),
+        );
+        nodes.push(json!({
+            "node": f.name,
+            "type": cadrs_core::feature_list::type_label(&f.kind),
+            "ui_name": format!("node-{slug}"),
+            "position": pos(f.id),
+            "suppressed": el.is_suppressed(f.id),
+            "collapsed": layout.is_some_and(|l| l.collapsed.contains(&f.id)),
+            "inputs": inputs,
+            "bypass": f.suppress_by.as_ref().map(|r| r.expr.clone()),
+        }));
+    }
+    nodes.push(json!({
+        "node": "Parts",
+        "ui_name": "node-parts",
+        "inputs": parts.iter().map(|p| p.name.clone()).collect::<Vec<_>>(),
+    }));
+    // A socket as (node, socket).
+    let end = |k: &SocketKey| -> serde_json::Value {
+        match k {
+            SocketKey::GeoOut(f) => json!({ "node": name_of(*f), "socket": "geometry out" }),
+            SocketKey::GeoIn(f) => json!({ "node": name_of(*f), "socket": "geometry in" }),
+            SocketKey::Slot(f, label) => json!({ "node": name_of(*f), "socket": label }),
+            SocketKey::Bypass(f) => json!({ "node": name_of(*f), "socket": "bypass" }),
+            SocketKey::Input(n) => json!({ "node": "Configuration", "socket": n }),
+            SocketKey::Variable(f) => json!({ "node": name_of(*f), "socket": "value" }),
+            SocketKey::Part(p) => json!({
+                "node": "Parts",
+                "socket": parts.iter().find(|x| x.id == *p).map(|x| x.name.clone()),
+            }),
+        }
+    };
+    let kind = |a: &SocketKey, b: &SocketKey| match (a, b) {
+        (_, SocketKey::Bypass(_)) => "bypass",
+        (SocketKey::GeoOut(_), _) => "geometry",
+        _ => "value",
+    };
+    let wires: Vec<serde_json::Value> = graph_wires(el, parts, uses)
+        .iter()
+        .map(|(a, b, _, dashed)| {
+            json!({
+                "from": end(a),
+                "to": end(b),
+                "kind": kind(a, b),
+                // A value wire whose field's expression is more than the name (`#length/2`).
+                "expression": dashed,
             })
         })
         .collect();
-    update_wires(world, layer, wanted);
+    json!({ "nodes": nodes, "wires": wires })
 }
 
 /// Makes the wires under `layer` the `wanted` ones: a wire already there is kept (with its
@@ -2994,6 +3094,10 @@ fn route_node_wires(p: &cadrs_ui::node_graph::RouteProblem) -> Vec<Option<Vec<Ve
     // for long (the page has no threads to put it on).
     const MAX_CELLS: f32 = 250_000.0;
     let pitch = PITCH.max((b.width() * b.height() / MAX_CELLS).sqrt());
+    // The cells where they are in the graph, not where the graph's bounds put them: a node
+    // dragged to the edge moved every cell, and the wires with them.
+    let pitch = (pitch / PITCH).ceil() * PITCH;
+    let b = Rect::from_corners((b.min / pitch).floor() * pitch, b.max);
     let (nx, ny) = (
         (b.width() / pitch).ceil() as u32 + 1,
         (b.height() / pitch).ceil() as u32 + 1,

@@ -85,6 +85,7 @@ pub enum Call {
     GetAssembly(AssemblyName),
     InsertInstance(InsertInstance),
     GetConfiguration(PartStudio),
+    GetNodeGraph(PartStudio),
     SetConfiguration(SetConfiguration),
     ConnectParameter(ConnectParameter),
     SetInstancePreset(SetInstancePreset),
@@ -403,6 +404,20 @@ impl Cadrs {
         Parameters(p): Parameters<PartStudio>,
     ) -> Result<CallToolResult, ErrorData> {
         self.call(Call::GetConfiguration(p)).await
+    }
+
+    #[tool(
+        description = "A Part Studio's node graph (the node view of its feature list): each node (one per \
+        feature, the Configuration node, the Parts node) with its type, place, input fields and their \
+        expressions, suppression and its UI name (for get_ui_layout and run_scenario while the node view is \
+        open), and every wire (from node and socket to node and socket; geometry, value or bypass), as the \
+        node view draws them. Works with the node view closed too."
+    )]
+    async fn get_node_graph(
+        &self,
+        Parameters(p): Parameters<PartStudio>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::GetNodeGraph(p)).await
     }
 
     #[tool(
