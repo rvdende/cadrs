@@ -290,6 +290,19 @@ pub struct CanvasGrid {
     pub step: f32,
     pub line: Color,
     pub mark: Color,
+    pub style: GridStyle,
+}
+
+/// How a canvas's grid looks (as the 3D view's ground grid, Preferences › Interface › Grid).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GridStyle {
+    /// No grid.
+    Off,
+    /// Faint lines, and a cross where every fifth line meets every fifth.
+    #[default]
+    Crossed,
+    /// Faint lines, every tenth one stronger.
+    Lines,
 }
 
 /// The grid's step at a zoom: `step` graph units, doubled until the lines are at least 12 px
@@ -348,7 +361,11 @@ fn grid_params(g: &CanvasGrid, view: &PanZoom, inv_scale: f32) -> GridParams {
         step: Vec4::new(
             grid_step(g.step, view.zoom),
             (g.step * view.zoom * 0.3).clamp(3.0, 8.0),
-            0.0,
+            match g.style {
+                GridStyle::Off => 0.0,
+                GridStyle::Crossed => 1.0,
+                GridStyle::Lines => 2.0,
+            },
             0.0,
         ),
         line: lin(g.line),
@@ -378,7 +395,10 @@ fn sync_grids(
             match have {
                 Some(h) => {
                     let stale = materials.get(&h).is_some_and(|m| {
-                        m.params.view != params.view || m.params.step != params.step
+                        m.params.view != params.view
+                            || m.params.step != params.step
+                            || m.params.line != params.line
+                            || m.params.mark != params.mark
                     });
                     if stale && let Some(mut m) = materials.get_mut(&h) {
                         m.params = params;
@@ -1471,7 +1491,11 @@ fn on_socket_drag(
     q_geo: Query<(&ComputedNode, &UiGlobalTransform)>,
     mut q_drag: Query<&mut DragWire>,
 ) {
-    if ev.button != PointerButton::Primary || q_drag.is_empty() {
+    // (Once a drag, where it began: the event bubbles up through every ancestor.)
+    if ev.button != PointerButton::Primary
+        || q_drag.is_empty()
+        || ev.original_event_target() != ev.entity
+    {
         return;
     }
     for mut d in &mut q_drag {
@@ -1498,7 +1522,8 @@ fn on_socket_drag_end(
     q_geo: Query<(&ComputedNode, &UiGlobalTransform)>,
     mut commands: Commands,
 ) {
-    if ev.button != PointerButton::Primary {
+    // (Once a drag, where it began: the event bubbles up through every ancestor.)
+    if ev.button != PointerButton::Primary || ev.original_event_target() != ev.entity {
         return;
     }
     // Every wire being dragged ends with the drag, wherever it began (its socket may be gone).
@@ -1646,6 +1671,20 @@ mod tests {
                 .distance(Vec2::new(400.0, 300.0))
                 < 1e-3
         );
+    }
+
+    #[test]
+    fn the_grid_follows_its_style() {
+        let g = |style| CanvasGrid {
+            step: 20.0,
+            line: Color::WHITE,
+            mark: Color::WHITE,
+            style,
+        };
+        let v = PanZoom::default();
+        assert_eq!(grid_params(&g(GridStyle::Off), &v, 1.0).step.z, 0.0);
+        assert_eq!(grid_params(&g(GridStyle::Crossed), &v, 1.0).step.z, 1.0);
+        assert_eq!(grid_params(&g(GridStyle::Lines), &v, 1.0).step.z, 2.0);
     }
 
     #[test]

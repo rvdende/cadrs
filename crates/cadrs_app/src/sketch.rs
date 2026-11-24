@@ -1684,8 +1684,14 @@ fn sync_sketch_dialog(
     q_area: Query<Entity, With<ViewportArea>>,
     q_dialog: Query<Entity, With<SketchDialog>>,
     mut q_state: Query<&mut FeatureDialogState, With<SketchDialog>>,
-    mut q_field: Query<&mut SelectionFieldState, With<PlaneField>>,
-    mut q_options: Query<(&SketchOption, &mut CheckboxState)>,
+    mut q_field: Query<
+        &mut SelectionFieldState,
+        (With<PlaneField>, Without<cadrs_ui::node_graph::StaticCopy>),
+    >,
+    mut q_options: Query<
+        (&SketchOption, &mut CheckboxState),
+        Without<cadrs_ui::node_graph::StaticCopy>,
+    >,
     q_prompt: Query<Entity, With<PlanePrompt>>,
     errors: Res<crate::sketch_constrain::SketchErrors>,
     parts: Res<crate::parts::PartCache>,
@@ -1821,11 +1827,61 @@ fn sketch_dialog(
     disable_imprinting: bool,
     settings: SketchViewSettings,
 ) -> impl Bundle {
-    let tb = theme.clone();
-    let tf = theme.clone();
     (
         SketchDialog,
         DespawnOnExit(AppState::Document),
+        sketch_card(
+            theme,
+            title,
+            valid,
+            plane,
+            disable_imprinting,
+            settings,
+            None,
+        )
+        .build(theme),
+    )
+}
+
+/// A copy of a sketch's dialog with its settings and a thumbnail of its curves (`thumbnail`, a
+/// square image), shown for looks: the node view's node of a sketch not being edited
+/// ([`crate::node_view`]).
+pub(crate) fn static_card(
+    theme: &Theme,
+    el: &cadrs_core::Element,
+    cache: &crate::parts::PartCache,
+    f: &cadrs_core::Feature,
+    settings: SketchViewSettings,
+    thumbnail: Option<Handle<Image>>,
+) -> Option<FeatureDialog> {
+    let sk = f.sketch()?;
+    let plane = sk.plane.map(|p| plane_label(p, el.features(), cache));
+    let valid = f.is_valid() && !cache.errors.contains_key(&f.id);
+    Some(sketch_card(
+        theme,
+        &f.name,
+        valid,
+        plane,
+        sk.disable_imprinting,
+        settings,
+        thumbnail,
+    ))
+}
+
+/// The sketch dialog's card: its plane, options and footer (and, for the node view's copy, a
+/// thumbnail of the curves under them).
+fn sketch_card(
+    theme: &Theme,
+    title: &str,
+    valid: bool,
+    plane: Option<String>,
+    disable_imprinting: bool,
+    settings: SketchViewSettings,
+    thumbnail: Option<Handle<Image>>,
+) -> FeatureDialog {
+    let tb = theme.clone();
+    let tf = theme.clone();
+    {
         FeatureDialog::new("sketch-dialog")
             .title(title)
             .valid(valid)
@@ -1900,6 +1956,22 @@ fn sketch_dialog(
                         ));
                     }
                 });
+                if let Some(img) = thumbnail {
+                    b.spawn((
+                        Name::new("sketch-thumbnail"),
+                        Node {
+                            width: Val::Px(140.0),
+                            height: Val::Px(140.0),
+                            align_self: AlignSelf::Center,
+                            margin: UiRect::vertical(Val::Px(6.0)),
+                            border: UiRect::all(Val::Px(1.0)),
+                            border_radius: BorderRadius::all(Val::Px(3.0)),
+                            ..default()
+                        },
+                        BorderColor::all(t.separator),
+                        ImageNode::new(img),
+                    ));
+                }
             })
             .footer(move |f| {
                 let t = &tf;
@@ -1942,8 +2014,7 @@ fn sketch_dialog(
                     Tooltip::new(tr("common-help")),
                 ));
             })
-            .build(theme),
-    )
+    }
 }
 
 /// The sketch dialog's Final button (P3D.1).
@@ -1954,7 +2025,10 @@ pub struct SketchFinal;
 fn sync_sketch_final(
     session: Option<Res<SketchSession>>,
     doc: Option<Res<ActiveDocument>>,
-    mut q: Query<(Entity, &mut Node, Has<cadrs_ui::style::Selected>), With<SketchFinal>>,
+    mut q: Query<
+        (Entity, &mut Node, Has<cadrs_ui::style::Selected>),
+        (With<SketchFinal>, Without<cadrs_ui::node_graph::StaticCopy>),
+    >,
     mut commands: Commands,
 ) {
     let Some(s) = session else { return };

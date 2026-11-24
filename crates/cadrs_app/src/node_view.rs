@@ -90,6 +90,7 @@ impl Plugin for NodeViewPlugin {
                 sync_header_preset,
                 measure_heights,
                 fit_on_f,
+                sync_grid_scheme,
             )
                 .chain()
                 .run_if(resource_exists::<ActiveDocument>),
@@ -482,7 +483,7 @@ fn height_guess(f: &Feature, collapsed: bool) -> f32 {
     match &f.kind {
         FeatureKind::Extrude(_) => 330.0,
         FeatureKind::Revolve(_) => 300.0,
-        FeatureKind::Sketch(_) => 90.0,
+        FeatureKind::Sketch(_) => 320.0,
         _ => 70.0 + 26.0 * cfg::parameter_slots(f).len().max(1) as f32,
     }
 }
@@ -673,34 +674,56 @@ fn last_feature_of(features: &[Feature], part: &cadrs_core::Part) -> Option<Feat
         .map(|f| f.id)
 }
 
-/// The canvas's grid: the PCB Studio schematic's (`cadrs_eda::render::SchematicTheme`), its
-/// faint lines and crosses on every fifth line; in light, crosses alone, darker.
-fn canvas_grid() -> cadrs_ui::node_graph::CanvasGrid {
+/// The canvas's grid: the PCB Studio schematic's (`cadrs_eda::render::SchematicTheme`), in the
+/// style of the 3D view's ground grid (Preferences › Interface › Grid: off, crosses on every
+/// fifth line, or every tenth line stronger), for the scheme in force (it is drawn by a
+/// shader, whose colours the UI doesn't map to the dark scheme: [`sync_grid_scheme`] swaps
+/// them when the scheme or the preference changes).
+fn canvas_grid(style: cadrs_core::preferences::GridStyle) -> cadrs_ui::node_graph::CanvasGrid {
+    use cadrs_core::preferences::GridStyle as Pref;
+    use cadrs_ui::node_graph::GridStyle;
     let rgba = |c: [u8; 4]| Color::srgba_u8(c[0], c[1], c[2], c[3]);
+    let style = match style {
+        Pref::Off => GridStyle::Off,
+        Pref::Crossed => GridStyle::Crossed,
+        Pref::Lines => GridStyle::Lines,
+    };
     if cadrs_ui::dark_in_force() {
         let th = cadrs_eda::render::SchematicTheme::dark();
         cadrs_ui::node_graph::CanvasGrid {
             step: 20.0,
             line: rgba(th.grid_line),
             mark: rgba(th.grid),
+            style,
         }
     } else {
+        // Light: the schematic's grey on the view's light ground, the lines as faint (a whole
+        // line every tenth is fainter than a cross).
         let th = cadrs_eda::render::SchematicTheme::default();
+        let mark = rgba(th.grid);
         cadrs_ui::node_graph::CanvasGrid {
             step: 20.0,
-            line: Color::srgba_u8(0, 0, 0, 0x0c),
-            mark: rgba(th.grid),
+            line: Color::srgba_u8(0x40, 0x40, 0x40, 0x14),
+            mark: if style == GridStyle::Lines {
+                mark.with_alpha(0.28)
+            } else {
+                mark
+            },
+            style,
         }
     }
 }
 
-/// The canvas's colour: the dark schematic's ground in dark, the view's background in light.
-fn canvas_background(t: &Theme) -> Color {
-    if cadrs_ui::dark_in_force() {
-        let g = cadrs_eda::render::SchematicTheme::dark().background;
-        Color::srgba_u8(g[0], g[1], g[2], g[3])
-    } else {
-        t.viewport_background
+/// The grid follows the scheme (light or dark) and the grid preference when they change.
+fn sync_grid_scheme(
+    prefs: Res<crate::preferences_ui::LocalPreferences>,
+    mut q: Query<&mut cadrs_ui::node_graph::CanvasGrid>,
+) {
+    let want = canvas_grid(prefs.0.grid);
+    for mut g in &mut q {
+        if *g != want {
+            *g = want;
+        }
     }
 }
 
@@ -755,7 +778,11 @@ fn rescue_hosted(world: &mut World, under: Entity) {
 /// A cheap fingerprint of the theme (a scheme change rebuilds the nodes).
 fn theme_key(t: &Theme) -> u64 {
     let c = t.foreground.to_srgba();
-    ((c.red * 255.0) as u64) << 16 | ((c.green * 255.0) as u64) << 8 | (c.blue * 255.0) as u64
+    // The scheme in force too: images (sketch thumbnails) are drawn for it.
+    (cadrs_ui::dark_in_force() as u64) << 24
+        | ((c.red * 255.0) as u64) << 16
+        | ((c.green * 255.0) as u64) << 8
+        | (c.blue * 255.0) as u64
 }
 
 /// Builds, updates and removes the nodes and wires of the shown Part Studio.
@@ -785,11 +812,14 @@ fn sync_nodes(world: &mut World, mut last_edited: Local<Option<Option<FeatureId>
         Some((e, _, c)) => (*e, *c),
         None => {
             let saved = world.resource::<NodeView>().views.get(&element).copied();
+            let grid_pref = world
+                .get_resource::<crate::preferences_ui::LocalPreferences>()
+                .map(|p| p.0.grid)
+                .unwrap_or_default();
             let mut commands = world.commands();
             let e = NodeCanvasBuilder::new("node-canvas")
                 .view(saved.unwrap_or_default())
-                .grid(canvas_grid())
-                .background(canvas_background(&theme))
+                .grid(canvas_grid(grid_pref))
                 .spawn(&mut commands, host, &theme);
             commands
                 .entity(e)
@@ -884,7 +914,18 @@ fn sync_nodes(world: &mut World, mut last_edited: Local<Option<Option<FeatureId>
             continue;
         }
         changed = true;
-        let e = spawn_feature_node(world, &el, f, key, pos, canvas.world(), &theme, &units);
+        let shown = outputs.get(&f.id).cloned().unwrap_or_default();
+        let e = spawn_feature_node(
+            world,
+            &el,
+            f,
+            key,
+            &shown,
+            pos,
+            canvas.world(),
+            &theme,
+            &units,
+        );
         keep.insert(f.id, e);
     }
     for (e, n) in &have {
@@ -1118,6 +1159,7 @@ fn spawn_feature_node(
     el: &Element,
     f: &Feature,
     key: NodeKey,
+    outputs: &[String],
     pos: Vec2,
     parent: Entity,
     t: &Theme,
@@ -1138,9 +1180,23 @@ fn spawn_feature_node(
         ))
         .id();
     let valid = key.error.is_none();
+    // A sketch's node shows its curves, fitted into a square.
+    let thumbnail = f.sketch().map(|sk| {
+        // (An image isn't mapped to the dark scheme as the UI's colours are: its ink is
+        // chosen for the scheme in force.)
+        let ink = if cadrs_ui::dark_in_force() {
+            Color::srgb_u8(0xe6, 0xe6, 0xe6)
+        } else {
+            Color::srgb_u8(0x26, 0x26, 0x26)
+        };
+        let img = sketch_thumbnail(&sk.geometry, ink);
+        world.resource_mut::<Assets<Image>>().add(img)
+    });
+    let settings = *world.resource::<crate::sketch::SketchViewSettings>();
     let card = {
         let cache = world.resource::<PartCache>();
-        crate::extrude_dialog::static_card(t, el, cache, f)
+        crate::sketch::static_card(t, el, cache, f, settings, thumbnail)
+            .or_else(|| crate::extrude_dialog::static_card(t, el, cache, f))
             .or_else(|| crate::revolve_dialog::static_card(t, el, cache, f))
             .or_else(|| crate::applied_dialog::static_card(t, el, cache, f))
     }
@@ -1226,14 +1282,14 @@ fn spawn_feature_node(
         ChildOf(root),
     ));
     // The output row: what the feature makes, its geometry socket beside it.
-    let what = if key.outputs.is_empty() {
+    let what = if outputs.is_empty() {
         match f.kind {
             FeatureKind::Sketch(_) => tr("node-view-output-sketch"),
             FeatureKind::Plane(_) => tr("node-view-output-plane"),
             _ => tr("node-view-output"),
         }
     } else {
-        key.outputs.join(", ")
+        outputs.join(", ")
     };
     let output = world
         .spawn((
@@ -1266,21 +1322,42 @@ fn spawn_feature_node(
         ))
         // One line, clipped when long (insert replaces the text's own layout).
         .insert(TextLayout::no_wrap());
-    // Sockets: geometry in on the header, Bypass under it, geometry out on the output row.
-    let geo = world.spawn((
-        SocketKey::GeoIn(f.id),
-        cadrs_ui::node_graph::ReadOnlySocket,
-        Socket::bundle(
-            format!("node-{slug}-geometry-in"),
-            SocketSide::In,
-            GEOMETRY,
-            None,
-            socket_color(GEOMETRY),
-            t,
-        ),
-        ChildOf(root),
-    ));
-    let _ = geo;
+    // Sockets. Geometry in: level with the dialog's first selection field (a sketch's plane,
+    // an extrude's regions, a fillet's edges), coloured as what it references (a plane grey, a
+    // sketch blue, a part green); on the header when the node has none (or is collapsed).
+    let parents = cadrs_core::feature_list::parents(el.features(), f.id);
+    let in_color = parents
+        .first()
+        .and_then(|p| el.feature(*p))
+        .map_or(socket_color(GEOMETRY), geometry_color);
+    let field_row = (!collapsed)
+        .then(|| {
+            descendants(world, card).into_iter().find(|e| {
+                world.get::<cadrs_ui::SelectionFieldState>(*e).is_some()
+                    || world.get::<cadrs_ui::SelectionListState>(*e).is_some()
+            })
+        })
+        .flatten();
+    let geo = world
+        .spawn((
+            SocketKey::GeoIn(f.id),
+            cadrs_ui::node_graph::ReadOnlySocket,
+            Socket::bundle(
+                format!("node-{slug}-geometry-in"),
+                SocketSide::In,
+                GEOMETRY,
+                field_row,
+                in_color,
+                t,
+            ),
+            ChildOf(root),
+        ))
+        .id();
+    if field_row.is_none()
+        && let Some(mut n) = world.get_mut::<Node>(geo)
+    {
+        n.top = Val::Px(4.0);
+    }
     world.spawn((
         SocketKey::GeoOut(f.id),
         cadrs_ui::node_graph::ReadOnlySocket,
@@ -1294,35 +1371,35 @@ fn spawn_feature_node(
         ),
         ChildOf(root),
     ));
-    let bypass = world
-        .spawn((
-            SocketKey::Bypass(f.id),
-            Socket::bundle(
-                format!("node-{slug}-bypass"),
-                SocketSide::In,
-                BOOLEAN,
-                None,
-                socket_color(BOOLEAN),
-                t,
-            ),
-            cadrs_ui::Tooltip::new(tr("node-view-enabled")),
-            ChildOf(root),
-        ))
-        .id();
-    if let Some(mut n) = world.get_mut::<Node>(bypass) {
-        n.top = Val::Px(20.0);
+    // Enabled (suppression by a boolean input): only where it can be wired, a configuration
+    // with a boolean input, or where it already is.
+    let switches = el.configuration().is_some_and(|c| {
+        c.inputs
+            .iter()
+            .any(|i| i.kind == cadrs_core::configuration::InputKind::Boolean)
+    });
+    if switches || f.suppress_by.is_some() {
+        let bypass = world
+            .spawn((
+                SocketKey::Bypass(f.id),
+                Socket::bundle(
+                    format!("node-{slug}-bypass"),
+                    SocketSide::In,
+                    BOOLEAN,
+                    None,
+                    socket_color(BOOLEAN),
+                    t,
+                ),
+                cadrs_ui::Tooltip::new(tr("node-view-enabled")),
+                ChildOf(root),
+            ))
+            .id();
+        if let Some(mut n) = world.get_mut::<Node>(bypass) {
+            n.top = Val::Px(10.0);
+        }
     }
     if let Some(mut n) = world.get_mut::<Node>(root) {
         n.width = Val::Px(NODE_W);
-    }
-    // Geometry in a little higher than Bypass.
-    if let Some(mut n) = world
-        .query_filtered::<(&SocketKey, &mut Node), With<Socket>>()
-        .iter_mut(world)
-        .find(|(k, _)| **k == SocketKey::GeoIn(f.id))
-        .map(|(_, n)| n)
-    {
-        n.top = Val::Px(4.0);
     }
     if collapsed {
         return root;
@@ -1387,6 +1464,81 @@ fn descendants(world: &mut World, root: Entity) -> Vec<Entity> {
         i += 1;
     }
     all
+}
+
+/// A square picture of a sketch's curves (construction curves left out), fitted with a margin:
+/// the sketch node's thumbnail. Lines a pixel and a half wide, smoothed, in `color` on clear.
+fn sketch_thumbnail(sk: &cadrs_sketch::Sketch, color: Color) -> Image {
+    const SIZE: u32 = 128;
+    let lines: Vec<Vec<cadrs_sketch::Vec2>> = sk
+        .curves
+        .iter()
+        .filter(|(_, c)| !c.construction)
+        .map(|(id, _)| cadrs_sketch::hit::curve_polyline(sk, id))
+        .filter(|p| p.len() > 1)
+        .collect();
+    let mut px = vec![0.0f32; (SIZE * SIZE) as usize];
+    let pts = lines.iter().flatten();
+    let (mut lo, mut hi) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
+    for p in pts {
+        let q = Vec2::new(p.x as f32, p.y as f32);
+        lo = lo.min(q);
+        hi = hi.max(q);
+    }
+    if lo.x <= hi.x {
+        let span = (hi - lo).max_element().max(1e-6);
+        let scale = (SIZE as f32 - 12.0) / span;
+        let mid = (lo + hi) / 2.0;
+        // Sketch y up, picture y down; centred.
+        let to = |p: &cadrs_sketch::Vec2| {
+            let q = (Vec2::new(p.x as f32, p.y as f32) - mid) * scale;
+            Vec2::new(SIZE as f32 / 2.0 + q.x, SIZE as f32 / 2.0 - q.y)
+        };
+        for l in &lines {
+            for w in l.windows(2) {
+                let (a, b) = (to(&w[0]), to(&w[1]));
+                let n = (a.distance(b) * 2.0).ceil().max(1.0) as usize;
+                for i in 0..=n {
+                    let c = a.lerp(b, i as f32 / n as f32);
+                    // A soft dot, 1.5 px across.
+                    for dy in -1..=1 {
+                        for dx in -1..=1 {
+                            let (x, y) = (c.x.floor() as i32 + dx, c.y.floor() as i32 + dy);
+                            if x < 0 || y < 0 || x >= SIZE as i32 || y >= SIZE as i32 {
+                                continue;
+                            }
+                            let d = Vec2::new(x as f32 + 0.5, y as f32 + 0.5).distance(c);
+                            let a = (1.25 - d).clamp(0.0, 1.0);
+                            let k = (y as u32 * SIZE + x as u32) as usize;
+                            px[k] = px[k].max(a);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let c = color.to_srgba();
+    let mut data = Vec::with_capacity((SIZE * SIZE * 4) as usize);
+    for a in px {
+        // Premultiplied isn't needed: UI images blend straight alpha.
+        data.extend_from_slice(&[
+            (c.red * 255.0) as u8,
+            (c.green * 255.0) as u8,
+            (c.blue * 255.0) as u8,
+            (a * 255.0) as u8,
+        ]);
+    }
+    Image::new(
+        bevy::render::render_resource::Extent3d {
+            width: SIZE,
+            height: SIZE,
+            depth_or_array_layers: 1,
+        },
+        bevy::render::render_resource::TextureDimension::D2,
+        data,
+        bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+        bevy::asset::RenderAssetUsages::default(),
+    )
 }
 
 /// The entities under `root` with their names squashed ([`squash`]).
@@ -3117,6 +3269,32 @@ mod tests {
         // The second tree is clear of the first (below it or beside it).
         assert_eq!(p(4).y, p(3).y);
         assert_apart(&el, &pos);
+    }
+
+    /// A sketch's thumbnail shows its curves, fitted into the square.
+    #[test]
+    fn sketch_thumbnails_draw_the_curves() {
+        let mut sk = cadrs_sketch::Sketch::default();
+        sk.add_line(
+            cadrs_sketch::Vec2::new(0.0, 0.0),
+            cadrs_sketch::Vec2::new(40.0, 0.0),
+        );
+        sk.add_line(
+            cadrs_sketch::Vec2::new(40.0, 0.0),
+            cadrs_sketch::Vec2::new(40.0, 20.0),
+        );
+        let img = sketch_thumbnail(&sk, Color::WHITE);
+        let data = img.data.as_ref().unwrap();
+        let inked = data.chunks(4).filter(|p| p[3] > 128).count();
+        assert!(inked > 100, "{inked} pixels inked");
+        // Fitted: the long line runs nearly across.
+        let size = 128usize;
+        let row_inked = |y: usize| {
+            (0..size)
+                .filter(|x| data[(y * size + x) * 4 + 3] > 128)
+                .count()
+        };
+        assert!((0..size).any(|y| row_inked(y) > 100));
     }
 
     #[test]
