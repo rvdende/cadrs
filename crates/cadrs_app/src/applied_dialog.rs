@@ -43,6 +43,7 @@ use cadrs_core::hole::{
 use cadrs_core::{Feature, FeatureKind};
 use cadrs_sketch::units::Quantity;
 use cadrs_ui::i18n::{tr, tr_with};
+use cadrs_ui::node_graph::StaticCopy;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     CheckboxChange, FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState, NumberField,
@@ -827,6 +828,7 @@ pub(crate) fn body_column(b: &mut ChildSpawner, f: impl FnOnce(&mut ChildSpawner
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn dialog(
     theme: &Theme,
     f: &Feature,
@@ -837,6 +839,54 @@ fn dialog(
     features: &[Feature],
     cache: &PartCache,
 ) -> Option<impl Bundle> {
+    let layout = dialog_layout(&f.kind, cache, f.id);
+    let card = card(
+        theme, f, valid, field, show_final, sections, features, cache,
+    )?;
+    Some((
+        AppliedDialog,
+        layout,
+        DespawnOnExit(AppState::Document),
+        card.build(theme),
+    ))
+}
+
+/// A copy of an applied feature's dialog (a fillet's, a hole's, a pattern's…) with its
+/// parameters, shown for looks (the node view's node of a feature not being edited,
+/// [`crate::node_view`]); `None` for a feature without such a dialog.
+pub(crate) fn static_card(
+    theme: &Theme,
+    el: &cadrs_core::Element,
+    cache: &PartCache,
+    f: &Feature,
+) -> Option<FeatureDialog> {
+    AppliedKind::of(&f.kind)?;
+    let valid = f.is_valid() && !cache.errors.contains_key(&f.id);
+    // No selection field waits for picks; every section shown.
+    card(
+        theme,
+        f,
+        valid,
+        AppliedField::Idle,
+        false,
+        [true; 4],
+        el.features(),
+        cache,
+    )
+}
+
+/// The dialog's card: its title, rows and footer.
+#[allow(clippy::too_many_arguments)]
+fn card(
+    theme: &Theme,
+    f: &Feature,
+    valid: bool,
+    field: AppliedField,
+    show_final: bool,
+    sections: [bool; 4],
+    features: &[Feature],
+    cache: &PartCache,
+) -> Option<FeatureDialog> {
     let tb = theme.clone();
     let tf = theme.clone();
     let kind = f.kind.clone();
@@ -956,10 +1006,7 @@ fn dialog(
     };
     // P3I.9's lists.
     let sm9_items = crate::sheetmetal_p3i9_ui::lists(features, cache, &kind);
-    Some((
-        AppliedDialog,
-        dialog_layout(&kind, cache, f.id),
-        DespawnOnExit(AppState::Document),
+    Some(
         FeatureDialog::new(format!("{name}-dialog"))
             .title(f.name.clone())
             .valid(valid)
@@ -1665,9 +1712,8 @@ fn dialog(
                     bevy::text::LineBreak::WordBoundary,
                 ));
             })
-            .footer(move |f| footer(f, &tf, name, show_final))
-            .build(theme),
-    ))
+            .footer(move |f| footer(f, &tf, name, show_final)),
+    )
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1685,12 +1731,12 @@ pub(crate) fn sync_applied_dialog(
     focus: Res<InputFocus>,
     q_area: Query<Entity, With<ViewportArea>>,
     mut q_dialog: Query<(Entity, &Layout, &mut FeatureDialogState), With<AppliedDialog>>,
-    mut q_lists: Query<(&Role, &mut SelectionListState)>,
-    mut q_numbers: Query<(Entity, &Role, &mut NumberFieldState)>,
-    mut q_selects: Query<(&Role, &mut SelectState)>,
+    mut q_lists: Query<(&Role, &mut SelectionListState), Without<StaticCopy>>,
+    mut q_numbers: Query<(Entity, &Role, &mut NumberFieldState), Without<StaticCopy>>,
+    mut q_selects: Query<(&Role, &mut SelectState), Without<StaticCopy>>,
     q_edit: Query<&cadrs_ui::NumberFieldEdit>,
-    mut q_error: Query<(&mut Text, &mut Node), With<ErrorLine>>,
-    q_final: Query<(Entity, &Role, Has<cadrs_ui::style::Selected>)>,
+    mut q_error: Query<(&mut Text, &mut Node), (With<ErrorLine>, Without<StaticCopy>)>,
+    q_final: Query<(Entity, &Role, Has<cadrs_ui::style::Selected>), Without<StaticCopy>>,
     mut commands: Commands,
 ) {
     let found = session.as_ref().zip(doc.as_ref()).and_then(|(s, d)| {

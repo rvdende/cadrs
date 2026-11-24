@@ -1142,10 +1142,13 @@ fn spawn_feature_node(
         let cache = world.resource::<PartCache>();
         crate::extrude_dialog::static_card(t, el, cache, f)
             .or_else(|| crate::revolve_dialog::static_card(t, el, cache, f))
+            .or_else(|| crate::applied_dialog::static_card(t, el, cache, f))
     }
     .unwrap_or_else(|| generic_card(f, units, t));
     let card = card
         .static_copy()
+        // One width for every node (the dialogs differ by a few px), as wide as its output row.
+        .width(NODE_W)
         .valid(valid)
         .title(&f.name)
         .header_color(if dim {

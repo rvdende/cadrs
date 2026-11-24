@@ -198,6 +198,8 @@ impl AppliedKind {
 /// The selection field that takes the viewport's picks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppliedField {
+    /// None: no field takes picks (a copy of the dialog shown for looks, the node view's).
+    Idle,
     /// Entities to fillet or chamfer.
     Entities,
     /// A chamfer's direction overrides.
