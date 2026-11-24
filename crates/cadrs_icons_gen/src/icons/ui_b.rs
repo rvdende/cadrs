@@ -30,6 +30,7 @@ pub fn icons() -> Vec<Def> {
         def("column-add", Line, "Add column", column_add),
         def("cut-list", Line, "Cut list", cut_list),
         def("configurations", Line, "Configurations", configurations),
+        def("node-graph", Line, "Node view", node_graph),
         def("variables", Line, "Variables", variables),
         def("appearance", Line, "Appearances", appearance),
         def("properties", Line, "Properties", properties),
@@ -304,6 +305,19 @@ fn folder_shape() -> Vec<String> {
         a(x0, y1 - R, R, 1)
     );
     els![path(&d, "", "")]
+}
+
+/// The feature list as a node graph: two nodes (rounded boxes, an output socket on the first's
+/// right edge, an input socket on the second's left) and the wire between them, which is the
+/// idea, in accent.
+fn node_graph() -> Vec<String> {
+    els![
+        rect(2.5, 4.0, 7.5, 7.0, 1.75, "", ""),
+        rect(14.0, 13.0, 7.5, 7.0, 1.75, "", ""),
+        acc(path("M10 7.5 C13.5 7.5 10.5 16.5 14 16.5", "", "")),
+        circle(10.0, 7.5, 1.25, INK, r#"stroke="none""#),
+        circle(14.0, 16.5, 1.25, INK, r#"stroke="none""#),
+    ]
 }
 
 fn folder() -> Vec<String> {

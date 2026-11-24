@@ -26,7 +26,7 @@ pub struct FeatureDialogPlugin;
 
 impl Plugin for FeatureDialogPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
+        app.add_observer(on_dialog_look).add_systems(
             PostUpdate,
             sync_feature_dialogs.before(bevy::ui::UiSystems::Prepare),
         );
@@ -66,6 +66,40 @@ struct CancelButton(Entity);
 
 type SpawnFn = Box<dyn FnOnce(&mut ChildSpawner) + Send + Sync>;
 
+/// How the dialog is drawn: floating glass (the default), or embedded in a node graph (opaque,
+/// laid out in place). Turned into components when it is added ([`on_dialog_look`]).
+#[derive(Component, Debug, Clone)]
+struct DialogLook {
+    embedded: bool,
+    rim: Color,
+    fill: Color,
+    shadow: BoxShadow,
+}
+
+/// Floating: frosted glass with the panels' shadow, above the view. Embedded: an opaque card.
+fn on_dialog_look(ev: On<Add<DialogLook>>, q: Query<&DialogLook>, mut commands: Commands) {
+    let Ok(l) = q.get(ev.entity) else { return };
+    let mut e = commands.entity(ev.entity);
+    if l.embedded {
+        e.insert((BackgroundColor(l.fill), BorderColor::all(l.rim)));
+    } else {
+        e.insert((
+            crate::glass::Glass::panel().material(crate::glass::GlassMaterial::Frosted),
+            l.shadow.clone(),
+            GlobalZIndex(crate::z::DIALOG - 10),
+        ));
+    }
+}
+
+/// Makes a floating dialog embedded (moved into a node graph's node): opaque, laid out in
+/// place, no shadow or layer of its own.
+pub fn embed(commands: &mut Commands, dialog: Entity, t: &Theme) {
+    commands
+        .entity(dialog)
+        .remove::<(crate::glass::Glass, GlobalZIndex, BoxShadow)>()
+        .insert((BackgroundColor(t.floating), BorderColor::all(t.glass_rim)));
+}
+
 /// A panel that isn't a feature (Mass properties): its title stays black whatever `valid` says.
 #[derive(Component, Debug, Clone, Copy)]
 struct PlainTitle;
@@ -82,6 +116,9 @@ pub struct FeatureDialog {
     plain_title: bool,
     no_accept: bool,
     fit_height: bool,
+    embedded: bool,
+    no_buttons: bool,
+    header_color: Option<Color>,
 }
 
 impl FeatureDialog {
@@ -97,7 +134,31 @@ impl FeatureDialog {
             plain_title: false,
             no_accept: false,
             fit_height: false,
+            embedded: false,
+            no_buttons: false,
+            header_color: None,
         }
+    }
+
+    /// Laid out where it is put (a node of a node graph, [`crate::node_graph`]) rather than
+    /// floating at the view's top left: opaque, without the floating panel's shadow and layer.
+    pub fn embedded(mut self) -> Self {
+        self.embedded = true;
+        self
+    }
+
+    /// A copy shown for looks (a node of a feature not being edited): embedded, without the
+    /// ✓ and ✕.
+    pub fn static_copy(mut self) -> Self {
+        self.embedded = true;
+        self.no_buttons = true;
+        self
+    }
+
+    /// Tints the header (a node graph's category colour, as Blender's node headers).
+    pub fn header_color(mut self, c: Color) -> Self {
+        self.header_color = Some(c);
+        self
     }
 
     /// Only the ✕ in the header, no ✓ (a panel that acts through its own buttons, such as
@@ -169,6 +230,9 @@ impl FeatureDialog {
             plain_title,
             no_accept,
             fit_height,
+            embedded,
+            no_buttons,
+            header_color,
         } = self;
         let accept_name = format!("{name}-accept");
         let cancel_name = format!("{name}-cancel");
@@ -182,7 +246,11 @@ impl FeatureDialog {
             },
             // A floating glass panel at the view's top left, like the panels around it.
             Node {
-                position_type: PositionType::Absolute,
+                position_type: if embedded {
+                    PositionType::Relative
+                } else {
+                    PositionType::Absolute
+                },
                 left: Val::Px(0.0),
                 top: Val::Px(0.0),
                 width: Val::Px(width),
@@ -197,9 +265,12 @@ impl FeatureDialog {
                 overflow: Overflow::clip(),
                 ..default()
             },
-            crate::glass::Glass::panel().material(crate::glass::GlassMaterial::Frosted),
-            crate::glass::panel_shadow(&t),
-            GlobalZIndex(crate::z::DIALOG - 10),
+            DialogLook {
+                embedded,
+                rim: t.glass_rim,
+                fill: t.floating,
+                shadow: crate::glass::panel_shadow(&t),
+            },
             Children::spawn(SpawnWith(move |p: &mut ChildSpawner| {
                 let dialog = p.target_entity();
                 // Header: title, ✓, ✕.
@@ -213,6 +284,7 @@ impl FeatureDialog {
                         ..default()
                     },
                     BorderColor::all(t.separator),
+                    BackgroundColor(header_color.unwrap_or(Color::NONE)),
                 ))
                 .with_children(|h| {
                     let color = if valid || plain_title {
@@ -242,6 +314,9 @@ impl FeatureDialog {
                         }
                     });
                     let accept = accept_visuals(&t);
+                    if no_buttons {
+                        return;
+                    }
                     if !no_accept {
                         h.spawn((
                             AcceptButton(dialog),

@@ -242,6 +242,7 @@ icons! {
     COLUMN_ADD => ("column-add", Line, "Add column"),
     CUT_LIST => ("cut-list", Line, "Cut list"),
     CONFIGURATIONS => ("configurations", Line, "Configurations"),
+    NODE_GRAPH => ("node-graph", Line, "Node view"),
     VARIABLES => ("variables", Line, "Variables"),
     APPEARANCE => ("appearance", Line, "Appearances"),
     PROPERTIES => ("properties", Line, "Properties"),

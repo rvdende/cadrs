@@ -53,6 +53,7 @@ pub mod jog_slider;
 pub mod list;
 pub mod menu;
 pub mod name_popup;
+pub mod node_graph;
 pub mod path_field;
 pub mod progress;
 pub mod quick_dim;
@@ -320,6 +321,7 @@ impl Plugin for CadrsUiPlugin {
             .add_plugins(progress::ProgressPlugin)
             .add_plugins(entry_list::EntryListPlugin)
             .add_plugins(name_popup::NamePopupPlugin)
+            .add_plugins(node_graph::NodeGraphPlugin)
             .add_plugins((
                 floating_panel::FloatingPanelPlugin,
                 segmented::SegmentedPlugin,
