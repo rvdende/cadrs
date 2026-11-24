@@ -123,6 +123,10 @@ struct Cell {
 #[derive(Component, Debug, Clone, Copy)]
 struct ActiveCheck(ConfigInputId);
 
+/// A Value input's value in the configuration shown, and what it measures.
+#[derive(Component, Debug, Clone, Copy)]
+struct ActiveValue(ConfigInputId, cfg::ValueKind);
+
 /// A List's Add configuration button.
 #[derive(Component, Debug, Clone, Copy)]
 struct AddRow(ConfigInputId);
@@ -406,6 +410,7 @@ fn section(
     let icon = match input.kind {
         InputKind::List { .. } => "list",
         InputKind::Checkbox { .. } => "check",
+        InputKind::Value { .. } => "variables",
     };
     let mut title = p.spawn((
         TreeItem::new(base.clone(), input.name.clone())
@@ -442,11 +447,44 @@ fn section(
             });
         }
         InputKind::List { .. } => {}
+        // A Value: `#name`'s value in the configuration shown, typed in; no table.
+        InputKind::Value { kind, .. } => {
+            let value = match r {
+                cfg::Resolved::Number(x) => x,
+                _ => 0.0,
+            };
+            p.spawn(Node {
+                padding: UiRect::new(Val::Px(30.0), Val::Px(8.0), Val::Px(2.0), Val::Px(4.0)),
+                column_gap: Val::Px(8.0),
+                align_items: AlignItems::Center,
+                ..default()
+            })
+            .with_children(|r| {
+                r.spawn(t.text(
+                    format!("#{}", input.name),
+                    t.font_sm,
+                    FontWeight::MEDIUM,
+                    t.muted_foreground,
+                ));
+                r.spawn((
+                    TextInput::new(format!("{base}-value"))
+                        .value(kind.plain(value))
+                        .height(22.0)
+                        .width(Val::Px(COL_W))
+                        .select_all_on_focus()
+                        .build(t),
+                    ActiveValue(input.id, *kind),
+                    Tooltip::new(tr_with("config-value-tooltip", &[("name", &input.name)])),
+                ));
+            });
+            return;
+        }
     }
     // The configuration table.
     let active = match r {
         cfg::Resolved::Row(i) => Some(i),
         cfg::Resolved::Checked(c) => Some(usize::from(c)),
+        cfg::Resolved::Number(_) => None,
     };
     let default_row = match &input.kind {
         InputKind::List { default, .. } => Some(*default),
@@ -922,9 +960,25 @@ fn on_rename(
     }
 }
 
-/// A cell typed in.
-fn on_text(ev: On<TextSubmit>, q_cell: Query<&Cell>, mut commands: Commands) {
+/// A cell typed in (or a Value input's value).
+fn on_text(
+    ev: On<TextSubmit>,
+    q_cell: Query<&Cell>,
+    q_value: Query<&ActiveValue>,
+    mut commands: Commands,
+) {
     let text = ev.value.trim().to_string();
+    if let Ok(a) = q_value.get(ev.entity).copied() {
+        commands.queue(move |world: &mut World| {
+            let units = units(world);
+            match units.eval(&text, a.1.quantity()) {
+                Ok(v) => activate(world, a.0, InputValue::Number(v)),
+                // (The panel is built again: the field shows the value it had.)
+                Err(_) => world.resource_mut::<ActiveDocument>().set_changed(),
+            }
+        });
+        return;
+    }
     if let Ok(cell) = q_cell.get(ev.entity).copied() {
         commands.queue(move |world: &mut World| {
             let units = units(world);
@@ -999,6 +1053,8 @@ fn show_row(world: &mut World, input: ConfigInputId, row: usize) {
             None => return,
         },
         InputKind::Checkbox { .. } => InputValue::Checked(row == 1),
+        // (A Value has no rows.)
+        InputKind::Value { .. } => return,
     };
     activate(world, input, v);
 }
@@ -1398,9 +1454,11 @@ fn configure_target(
             return false;
         };
         let n = i.row_count();
+        // (Named after the parameter by the edit: `#Extrude_1_Depth`.)
         i.params.push(cfg::ConfiguredParam {
             target,
             values: vec![now; n],
+            name: String::new(),
         });
         done = true;
         true

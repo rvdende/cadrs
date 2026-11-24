@@ -1181,9 +1181,14 @@ fn unbind(
 
 /// The Variable features the inputs give the list (ahead of it, after the Variable Studios'),
 /// in the configuration `values`: each Checkbox's and Value's `#name`, then each column's
-/// `#name` with its row's value. Their ids are derived from the inputs' and the names, so a
-/// rebuild sees the same features in every configuration.
-pub fn input_features(cfg: &Configuration, values: &ConfigValues) -> Vec<Feature> {
+/// `#name` with its row's value (a length, an angle or a number as its parameter in
+/// `features` measures). Their ids are derived from the inputs' and the names, so a rebuild
+/// sees the same features in every configuration.
+pub fn input_features(
+    cfg: &Configuration,
+    values: &ConfigValues,
+    features: &[Feature],
+) -> Vec<Feature> {
     let units = Units::default();
     let mut env: Vec<(String, VarValue)> = Vec::new();
     let mut out = Vec::new();
@@ -1230,18 +1235,13 @@ pub fn input_features(cfg: &Configuration, values: &ConfigValues) -> Vec<Feature
             let Some(cell) = p.values.get(row) else {
                 continue;
             };
-            // (A column's kind without the features: a Boolean's or Free's from its target,
-            // else what its cell reads as.)
-            let kind = p.kind_hint().unwrap_or(ColumnKind::Number);
+            let kind = p.kind(features);
             let (value, vk) = match cell {
                 CellValue::Bool(b) => (if *b { 1.0 } else { 0.0 }, VariableKind::Number),
-                CellValue::Expr(e) => {
-                    let q = cell_quantity(e).unwrap_or(kind.quantity());
-                    match units.eval_vars(e, q, &env) {
-                        Ok(v) => (v, ColumnKind::of(q).variable_kind()),
-                        Err(_) => continue,
-                    }
-                }
+                CellValue::Expr(e) => match units.eval_vars(e, kind.quantity(), &env) {
+                    Ok(v) => (v, kind.variable_kind()),
+                    Err(_) => continue,
+                },
             };
             push(
                 &p.name,
@@ -1255,19 +1255,6 @@ pub fn input_features(cfg: &Configuration, values: &ConfigValues) -> Vec<Feature
     out
 }
 
-/// What a cell's text measures, from its unit ("16 mm", "30 deg"): `None` for a bare number
-/// or an expression (the column's kind then).
-fn cell_quantity(text: &str) -> Option<Quantity> {
-    for q in [Quantity::Length, Quantity::Angle] {
-        if cadrs_sketch::units::eval(text, Quantity::Count).is_err()
-            && cadrs_sketch::units::eval(text, q).is_ok()
-        {
-            return Some(q);
-        }
-    }
-    None
-}
-
 /// The id of the Variable feature a rebuild sees for a column ([`input_features`]).
 fn column_feature_id(input: ConfigInputId, name: &str) -> FeatureId {
     let mut data = input.0.as_bytes().to_vec();
@@ -1276,8 +1263,12 @@ fn column_feature_id(input: ConfigInputId, name: &str) -> FeatureId {
 }
 
 /// The inputs' variables, as expressions see them ([`input_features`]'s values).
-pub fn input_variables(cfg: &Configuration, values: &ConfigValues) -> Vec<(String, VarValue)> {
-    input_features(cfg, values)
+pub fn input_variables(
+    cfg: &Configuration,
+    values: &ConfigValues,
+    features: &[Feature],
+) -> Vec<(String, VarValue)> {
+    input_features(cfg, values, features)
         .into_iter()
         .filter_map(|f| match f.kind {
             FeatureKind::Variable(v) => Some((v.name.clone(), v.var_value())),
@@ -1915,10 +1906,9 @@ pub fn instances_using(
             if let Some(c) = &i.configuration
                 && c.studio == studio
                 && row.is_none_or(|(input, r)| c.values.get(input) == Some(&InputValue::Row(r)))
+                && !out.contains(&el.name)
             {
-                if !out.contains(&el.name) {
-                    out.push(el.name.clone());
-                }
+                out.push(el.name.clone());
             }
         }
     }

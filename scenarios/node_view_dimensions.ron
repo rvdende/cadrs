@@ -13,8 +13,6 @@ Scenario(
         Click(ui("feature-node-view")),
         WaitFor("node-canvas"),
         Wait(40),
-        Click(ui("node-configure")),
-        Wait(10),
         Click(ui("node-input-add")),
         WaitFor("node-input-input1-out"),
         WaitFor("node-sketch-1-dim-add"),

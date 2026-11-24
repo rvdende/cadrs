@@ -255,6 +255,8 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
             tr("asm-menu-select-same-part"),
         ))
     };
+    // Configurations: the instances' configuration of their Part Studio.
+    let config_item = crate::configuration_ui::instance_menu_item(world, element, &targets);
     let copy_label = if targets.len() > 1 {
         tr_with(
             "asm-menu-copy-items",
@@ -448,7 +450,11 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
                     .disabled(!parts_only)
                     .icon("transform"),
             );
-        menu = std_items(menu).item(in_context.clone());
+        menu = std_items(menu);
+        if let Some(c) = config_item.clone() {
+            menu = menu.item(c);
+        }
+        menu = menu.item(in_context.clone());
         if let Some(u) = update_context.clone() {
             menu = menu.item(u);
         }
@@ -514,29 +520,6 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
         if inst.source.is_studio() {
             menu = menu
                 .item(MenuItem::new("asm-studio-edit", tr("common-edit-ellipsis")).icon("edit"));
-        }
-        // An instance of a configured Part Studio's preset: the presets to switch to
-        // (`cadrs_core::configuration`).
-        let doc = &world.resource::<ActiveDocument>().doc;
-        if let Some((studio, preset)) =
-            cadrs_core::configuration::configured_of(doc, inst.source.element())
-            && let Some(c) = doc.element(studio).and_then(|e| e.configuration())
-        {
-            let items: Vec<MenuEntry> = c
-                .presets
-                .iter()
-                .enumerate()
-                .map(|(k, p)| {
-                    MenuItem::new(format!("asm-preset-{k}"), p.name.clone())
-                        .checked(p.id == preset)
-                        .into()
-                })
-                .collect();
-            menu = menu.item(
-                MenuItem::new("asm-preset", tr("asm-menu-preset"))
-                    .icon("configurations")
-                    .submenu(items),
-            );
         }
         // A linked instance's items (ER2.4, ER5.1, ER5.7, ER6.7).
         if is_linked {
@@ -678,7 +661,11 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
                 .disabled(!parts_only)
                 .icon("transform"),
             );
-        menu = std_items(menu).item(in_context);
+        menu = std_items(menu);
+        if let Some(c) = config_item {
+            menu = menu.item(c);
+        }
+        menu = menu.item(in_context);
         if let Some(u) = update_context {
             menu = menu.item(u);
         }
@@ -919,6 +906,9 @@ fn act(world: &mut World, menu: &AsmMenu, handle: TriadHandle, item: &str) {
     let parts: Vec<cadrs_core::PartId> = super::view_parts(world.resource::<PartCache>(), &targets);
     match item {
         // P3B.6: the instance's part or subassembly properties.
+        s if s.starts_with("asm-config-") => {
+            crate::configuration_ui::instance_menu_action(world, element, targets, s);
+        }
         "asm-properties" => {
             if let Some(i) = menu.instance {
                 crate::properties_dialog::open_for_instance(world, i);
@@ -1068,48 +1058,6 @@ fn act(world: &mut World, menu: &AsmMenu, handle: TriadHandle, item: &str) {
                     },
                 );
             }
-        }
-        // The preset of the instances of a configured Part Studio (the targets of its studio).
-        x if x.starts_with("asm-preset-") => {
-            let (Some(i), Some(k)) = (
-                menu.instance,
-                x.trim_start_matches("asm-preset-").parse::<usize>().ok(),
-            ) else {
-                return;
-            };
-            let doc = &world.resource::<ActiveDocument>().doc;
-            let Some(asm) = doc.element(element).and_then(|e| e.assembly_model()) else {
-                return;
-            };
-            let studio_of = |id: InstanceId| {
-                let src = asm.instance(id)?.source.element();
-                cadrs_core::configuration::configured_of(doc, src).map(|(s, _)| s)
-            };
-            let Some(studio) = studio_of(i) else { return };
-            let Some(preset) = doc
-                .element(studio)
-                .and_then(|e| e.configuration())
-                .and_then(|c| c.presets.get(k))
-                .map(|p| p.id)
-            else {
-                return;
-            };
-            let mut instances: Vec<InstanceId> = targets
-                .iter()
-                .copied()
-                .filter(|t| studio_of(*t) == Some(studio))
-                .collect();
-            if !instances.contains(&i) {
-                instances.push(i);
-            }
-            super::run(
-                world,
-                &cadrs_core::configuration::SetInstancePreset {
-                    assembly: element,
-                    instances,
-                    preset,
-                },
-            );
         }
         x if x.starts_with("asm-follow-") => {
             let (Some(i), Some(k)) = (
@@ -1486,28 +1434,24 @@ pub fn switch_to_owner(world: &mut World, owner: cadrs_core::properties::Propert
     world.insert_resource(super::PendingSelection(Some((element, picks))));
 }
 
-/// The tab `element` is shown in: for a configured Part Studio's preset (an instance's
-/// generated studio), its Part Studio, as it is (switching its preset would be an edit; the
-/// features header's dropdown switches it), with a word when it shows another preset.
+/// The tab `element` is shown in: for a configured copy (an instance's configuration), its
+/// Part Studio, as it is (showing the instance's configuration would be an edit; the
+/// Configuration panel picks it), with a word when it shows another configuration.
 fn show_preset(world: &mut World, element: ElementId) -> ElementId {
-    let found =
-        cadrs_core::configuration::configured_of(&world.resource::<ActiveDocument>().doc, element);
-    let Some((studio, preset)) = found else {
+    let doc = &world.resource::<ActiveDocument>().doc;
+    let Some((studio, values)) = cadrs_core::configuration::copy_of(doc, element) else {
         return element;
     };
-    let names = world
-        .resource::<ActiveDocument>()
-        .doc
-        .element(studio)
-        .and_then(|e| e.configuration())
-        .and_then(|c| Some((c.preset(preset)?.name.clone(), c.active_preset()?.clone())));
-    if let Some((wanted, active)) = names
-        && active.id != preset
-    {
+    let names = doc.element(studio).and_then(|e| {
+        let c = e.configuration()?;
+        (c.complete(&values) != c.complete(&c.active))
+            .then(|| (c.describe(&values), c.describe(&c.active)))
+    });
+    if let Some((wanted, shown)) = names {
         let t = world.resource::<cadrs_ui::Theme>().clone();
         let text = cadrs_ui::i18n::tr_with(
             "asm-switch-to-preset",
-            &[("instance", &wanted), ("shown", &active.name)],
+            &[("instance", &wanted), ("shown", &shown)],
         );
         cadrs_ui::show_toast(&mut world.commands(), &t, text);
     }
@@ -1525,7 +1469,11 @@ pub fn switch_to(world: &mut World, instance: InstanceId) {
     else {
         return;
     };
-    let element = source.element();
+    // A configured instance's source is its studio's configured copy: the studio's tab.
+    let element = cadrs_core::configuration::tab_of(
+        &world.resource::<ActiveDocument>().doc,
+        source.element(),
+    );
     if world
         .resource::<ActiveDocument>()
         .doc

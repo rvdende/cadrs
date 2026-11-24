@@ -254,6 +254,7 @@ impl Element {
             out.extend(crate::configuration::input_variables(
                 &self.configuration,
                 &self.configuration.active,
+                self.features(),
             ));
         }
         out
@@ -490,6 +491,7 @@ impl Element {
                 out.extend(crate::configuration::input_features(
                     &self.configuration,
                     &self.configuration.active,
+                    self.features(),
                 ));
                 out
             }

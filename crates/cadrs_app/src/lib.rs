@@ -22,6 +22,7 @@ pub mod camera;
 pub mod change_preview;
 pub mod collab;
 pub mod composite_ui;
+pub mod configuration_ui;
 pub mod create_selection;
 pub mod cursor;
 pub mod cut_list;
@@ -72,6 +73,7 @@ pub mod mcp;
 pub mod mcp_board;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mcp_button;
+pub mod mcp_config;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mcp_machine;
 pub mod measure;
@@ -479,8 +481,7 @@ impl ActiveDocument {
         // Derived features take their sources' snapshots (neither is an edit).
         cadrs_core::variable_studio::propagate(&mut doc, None);
         cadrs_core::derived::resolve_document(&mut doc);
-        // The presets its assemblies use, as their studios are now.
-        cadrs_core::configuration::refresh(&mut doc);
+        cadrs_core::configuration::refresh_copies(&mut doc);
         Self {
             saved: std::sync::Arc::new(doc.clone()),
             opened: doc.clone(),
@@ -1004,6 +1005,7 @@ impl Plugin for CadrsAppPlugin {
                 workspaces::WorkspacesPlugin,
                 repair::RepairPlugin,
                 replace_reference::ReplaceReferencePlugin,
+                configuration_ui::ConfigurationPlugin,
             ))
             .add_plugins((
                 appearance::AppearancePlugin,

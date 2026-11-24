@@ -77,6 +77,15 @@ fn value_of(input: &ConfigInput, v: &Value) -> Result<InputValue, String> {
         InputKind::Checkbox { .. } => {
             InputValue::Checked(bool_of(v).map_err(|e| format!("{}: {e}", input.name))?)
         }
+        // A number (mm, degrees) or a value with its unit ("12 mm", "0.5 in").
+        InputKind::Value { kind, .. } => InputValue::Number(match v {
+            Value::Number(n) => n
+                .as_f64()
+                .ok_or_else(|| format!("{}: {v} is not a number", input.name))?,
+            Value::String(t) => cadrs_sketch::units::eval(t, kind.quantity())
+                .map_err(|e| format!("{}: {t}: {e}", input.name))?,
+            _ => return Err(format!("{}: {v} is not a value", input.name)),
+        }),
     })
 }
 
@@ -206,6 +215,11 @@ pub fn describe(world: &World, element: ElementId) -> Result<Value, String> {
                     v["default"] = json!(rows.get(*default).map(|r| &r.name));
                 }
                 InputKind::Checkbox { default } => v["default"] = json!(default),
+                InputKind::Value { default, .. } => v["default"] = json!(default),
+            }
+            // `#name` in expressions: a Checkbox's and a Value's own, each column's.
+            if i.defines_variable() {
+                v["variable"] = json!(format!("#{}", i.name));
             }
             {
                 v["parameters"] = json!(
@@ -213,6 +227,7 @@ pub fn describe(world: &World, element: ElementId) -> Result<Value, String> {
                         .iter()
                         .map(|p| json!({
                             "parameter": label(world, el, &p.target),
+                            "variable": p.binds().then(|| format!("#{}", p.name)),
                             "values": p.values.iter().map(|x| match x {
                                 CellValue::Bool(b) => json!(b),
                                 CellValue::Expr(e) => json!(e),
@@ -298,13 +313,33 @@ fn build(
                     .transpose()?
                     .unwrap_or(false),
             },
+            k @ ("length" | "angle" | "number") => {
+                let kind = match k {
+                    "length" => cadrs_core::configuration::ValueKind::Length,
+                    "angle" => cadrs_core::configuration::ValueKind::Angle,
+                    _ => cadrs_core::configuration::ValueKind::Number,
+                };
+                let default = match &s.default {
+                    None => 0.0,
+                    Some(Value::Number(n)) => n.as_f64().unwrap_or(0.0),
+                    Some(Value::String(t)) => units
+                        .eval(t, kind.quantity())
+                        .map_err(|e| format!("{}: {t}: {e}", s.name))?,
+                    Some(v) => return Err(format!("{}: the default {v} is not a value", s.name)),
+                };
+                InputKind::Value { kind, default }
+            }
             k => {
-                return Err(format!("{}: no input kind {k:?} (List, Checkbox)", s.name));
+                return Err(format!(
+                    "{}: no input kind {k:?} (List, Checkbox, Length, Angle, Number)",
+                    s.name
+                ));
             }
         };
         let n = match &kind {
             InputKind::List { rows, .. } => rows.len(),
             InputKind::Checkbox { .. } => 2,
+            InputKind::Value { .. } => 0,
         };
         let mut params = Vec::new();
         for p in &s.parameters {
@@ -333,7 +368,11 @@ fn build(
                 })
                 .collect::<Result<Vec<_>, String>>()
                 .map_err(|e| format!("{}: {}: {e}", s.name, p.parameter))?;
-            params.push(ConfiguredParam { target, values });
+            params.push(ConfiguredParam {
+                target,
+                values,
+                name: p.name.clone().unwrap_or_default(),
+            });
         }
         c.inputs.push(ConfigInput {
             id,

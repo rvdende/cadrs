@@ -3,16 +3,17 @@
 // 01 The node view: a panel under the 3D view (the feature list staying on the left), a canvas
 //    with the schematic's grid; each feature a node (an extrude's node its dialog), geometry traces from sketches into
 //    extrudes, each node's output row, and the Parts node on the right.
-// 02 Add configuration, + Input: the Configuration node with presets and an input `input1`.
+// 02 + Value: the Configuration node's input `input1` (a length, 10 mm).
 // 03 The input's socket dragged onto Extrude 1's Depth: Depth reads #input1, a trace from the
 //    input to the field.
 // 04 The wire dragged off Extrude 1's Depth onto Extrude 2's: Extrude 2 reads #input1, Extrude
 //    1 its value again (one undo step).
 // 05 A click on Extrude 2's body: its live dialog in its node (✓ and ✕ in the node's header).
-// 06 + Preset: Preset 2, active, in the node and in the features header.
-// 07 Presets table: every preset's value of `input1` side by side in the Configuration node.
+// 06 + List, then its +: a List `Configuration` (Default, Configuration 2) in the node, the
+//    configuration shown in the features header.
+// 07 Configuration table…: the Configuration panel beside the view, the tables of the inputs.
 // 08 Auto arrange: laid out again and framed.
-// 09 The node view closed: the 3D view full height again, the preset dropdown in the list.
+// 09 The node view closed: the 3D view full height again, the List's dropdown in the list.
 Scenario(
     start: Some("document"),
     steps: [
@@ -22,8 +23,6 @@ Scenario(
         WaitFor("node-canvas"),
         Wait(40),
         Screenshot("01-node-view"),
-        Click(ui("node-configure")),
-        Wait(10),
         Click(ui("node-input-add")),
         WaitFor("node-input-input1-out"),
         Wait(20),
@@ -41,12 +40,15 @@ Scenario(
         Screenshot("05-live"),
         Key("Escape"),
         Wait(20),
-        Click(ui("node-preset-add")),
-        ExpectText("feature-preset", "Preset 2"),
+        Click(ui("node-list-add")),
+        WaitFor("node-list-Configuration"),
+        Click(ui("node-list-Configuration-add-row")),
+        Wait(10),
+        ExpectText("feature-preset", "Default"),
         Wait(20),
-        Screenshot("06-preset"),
-        Click(ui("node-presets-table")),
-        WaitFor("node-presets-table"),
+        Screenshot("06-list"),
+        Click(ui("node-config-table")),
+        WaitFor("configuration-panel"),
         Wait(20),
         Screenshot("07-table"),
         Click(ui("node-canvas-arrange")),
@@ -54,7 +56,7 @@ Scenario(
         Screenshot("08-arranged"),
         Click(ui("feature-node-view")),
         Wait(20),
-        ExpectText("feature-preset", "Preset 2"),
+        ExpectText("feature-preset", "Default"),
         Screenshot("09-list"),
     ],
 )

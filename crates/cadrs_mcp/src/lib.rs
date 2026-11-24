@@ -84,11 +84,8 @@ pub enum Call {
     OpenTab(TabName),
     GetAssembly(AssemblyName),
     InsertInstance(InsertInstance),
-    GetConfiguration(PartStudio),
     GetNodeGraph(PartStudio),
-    SetConfiguration(SetConfiguration),
     ConnectParameter(ConnectParameter),
-    SetInstancePreset(SetInstancePreset),
     ImportFile(ImportFile),
     AddMate(AddMate),
     SetMateValues(SetMateValues),
@@ -105,6 +102,10 @@ pub enum Call {
     AddFootprint(AddFootprint),
     RemoveFootprint(RemoveFootprint),
     LinkOutline(LinkOutline),
+    GetConfiguration(GetConfiguration),
+    SetConfiguration(SetConfiguration),
+    SetActiveConfiguration(SetActiveConfiguration),
+    SetInstanceConfiguration(SetInstanceConfiguration),
 }
 
 /// What the app answers.
@@ -394,19 +395,6 @@ impl Cadrs {
     }
 
     #[tool(
-        description = "A Part Studio's configuration: its inputs (named values its features' fields and \
-        suppression can use as #name: length, angle, number or boolean), its presets (named sets of input \
-        values, each a variation of the parts) and the active preset, with which fields of which features \
-        are wired to which inputs."
-    )]
-    async fn get_configuration(
-        &self,
-        Parameters(p): Parameters<PartStudio>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::GetConfiguration(p)).await
-    }
-
-    #[tool(
         description = "A Part Studio's node graph (the node view of its feature list): each node (one per \
         feature, the Configuration node, the Parts node) with its type, place, input fields and their \
         expressions, suppression and its UI name (for get_ui_layout and run_scenario while the node view is \
@@ -421,18 +409,6 @@ impl Cadrs {
     }
 
     #[tool(
-        description = "Change a Part Studio's configuration: add, change or remove inputs and presets, set preset \
-        values and the active preset (the one the studio shows). Returns the configuration and the parts as the \
-        active preset builds them."
-    )]
-    async fn set_configuration(
-        &self,
-        Parameters(p): Parameters<SetConfiguration>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::SetConfiguration(p)).await
-    }
-
-    #[tool(
         description = "Wire a feature's field (\"Depth\") or its Bypass (suppression) to an expression of the \
         configuration's inputs (\"#length\"), as the node view's wires do; without expr, unwire it. Returns the \
         configuration and the parts."
@@ -442,17 +418,6 @@ impl Cadrs {
         Parameters(p): Parameters<ConnectParameter>,
     ) -> Result<CallToolResult, ErrorData> {
         self.call(Call::ConnectParameter(p)).await
-    }
-
-    #[tool(
-        description = "Switch an assembly instance of a configured Part Studio to another preset (its id, \
-        place and mates stay). Returns the assembly."
-    )]
-    async fn set_instance_preset(
-        &self,
-        Parameters(p): Parameters<SetInstancePreset>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::SetInstancePreset(p)).await
     }
 
     #[tool(
@@ -723,6 +688,46 @@ impl Cadrs {
         Parameters(p): Parameters<SetFeatureVisible>,
     ) -> Result<CallToolResult, ErrorData> {
         self.call(Call::SetFeatureVisible(p)).await
+    }
+
+    #[tool(
+        description = "A Part Studio's configuration (Onshape-style): its inputs (List: a table of named configurations; Checkbox: #name 1 or 0), each List's or Checkbox's configured parameters with their value in each row, the values the Part Studio shows now, and `configurable`: every parameter of its features that can be configured, by the name set_configuration takes."
+    )]
+    async fn get_configuration(
+        &self,
+        Parameters(p): Parameters<GetConfiguration>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::GetConfiguration(p)).await
+    }
+
+    #[tool(
+        description = "Define a Part Studio's whole configuration (one undo step): its inputs in order (Lists and Checkboxes), each List's rows, the defaults, and each input's configured parameters with a value per row (the configuration table). A column can set a Variable feature's value; fields can name a Checkbox as #name. Returns the configuration as get_configuration does."
+    )]
+    async fn set_configuration(
+        &self,
+        Parameters(p): Parameters<SetConfiguration>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::SetConfiguration(p)).await
+    }
+
+    #[tool(
+        description = "Pick the configuration a Part Studio shows (one undo step): input name → value. Its features take that configuration's values and rebuild; returns the parts after it."
+    )]
+    async fn set_active_configuration(
+        &self,
+        Parameters(p): Parameters<SetActiveConfiguration>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::SetActiveConfiguration(p)).await
+    }
+
+    #[tool(
+        description = "Set the configuration of assembly instances of a configured Part Studio (one undo step): each builds its own copy of the studio in that configuration; mates stay. Null configuration: the instances follow the studio's active configuration."
+    )]
+    async fn set_instance_configuration(
+        &self,
+        Parameters(p): Parameters<SetInstanceConfiguration>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::SetInstanceConfiguration(p)).await
     }
 
     #[tool(

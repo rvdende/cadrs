@@ -6847,23 +6847,25 @@ node-view-expand = Expand
 # feature is suppressed while it is false).
 node-view-enabled = Enabled (suppressed while false)
 node-view-drive-dimension = + Drive a dimension
+# The Configuration node's buttons: a Value input (a length, angle or number typed per configuration), a List of named configurations, a Checkbox.
+node-view-add-list = + List
+node-view-add-checkbox = + Checkbox
+# Opens the Configuration panel with the configuration tables.
+node-view-open-table = Configuration table…
+# Tooltip of a List's +: a new configuration (a copy of the last).
+node-view-add-row = Add configuration (a copy of the last)
+# Tooltip of a List's "+ column" output.
+node-view-new-column = Drag onto a field, a dimension or Enabled to configure it in this list
 node-view-no-dimension = No dimension of this sketch can take this value, or they are all driven already
 # The node the presets and inputs are on.
 node-view-configuration = Configuration
-node-view-add-configuration = Add configuration
 # A named set of input values.
-node-view-preset = Preset
-node-view-name = Name
-node-view-add-preset = Add preset
-node-view-remove-preset = Remove preset
-node-view-add-input = + Input
+node-view-add-input = + Value
 node-view-remove-input = Remove input
 node-view-kind-length = Length
 node-view-kind-angle = Angle
 node-view-kind-number = Number
-node-view-kind-boolean = Boolean
 # The instance context menu's submenu of a configured Part Studio's presets.
-asm-menu-preset = Preset
 # The features header's dropdown of the configuration's presets.
 node-view-active-preset = Preset the Part Studio shows
 # Lays the node view's nodes out again (forgetting where they were dragged).
@@ -6876,16 +6878,49 @@ node-view-output = Output
 node-view-output-sketch = Sketch
 node-view-output-plane = Plane
 # Shows the presets × inputs table in the Configuration node (and hides it).
-node-view-show-table = Presets table
-node-view-hide-table = Hide presets table
 # A wire from a Variable dropped on a feature above it.
 node-view-variable-below = A Variable reaches only the features below it
 # Dynamic suppression ▸ Suppress by configuration ▸ a new boolean input that enables the feature.
-shell-doc-suppress-by-new-input = New input for this feature
 # Switch to on an instance of a configured Part Studio's preset, while the studio shows another
 # preset. { $instance } and { $shown } are preset names.
-asm-switch-to-preset = The instance is { $instance }; the Part Studio shows { $shown } (switch it in the feature list's header)
+asm-switch-to-preset = The instance is { $instance }; the Part Studio shows { $shown } (pick it in the Configuration panel)
 # A feature's context menu: selects every feature of its type (every sketch, every fillet…).
 shell-doc-select-same-type = Select all of this type
 # Keyboard shortcuts dialog: H hides (or shows) what is selected.
 view-shortcut-toggle-visibility = Hide or show the selection
+## crates/cadrs_app/src/configuration_ui.rs
+# The Configuration panel of a Part Studio: inputs (List, Checkbox) that build the studio in several variants.
+config-title = Configuration
+config-panel-tooltip = Configuration
+config-add-input = Add input
+config-add-input-tooltip = Add a List or Checkbox input
+config-empty = No configuration inputs. A List makes a table of configurations; a Checkbox turns features on or off. Values typed in are Variables (fx), which a List can set.
+# { $name } is the input's name.
+config-input-tooltip = { $name }: right-click to rename, move or delete
+# A Value input's field: its value in the configuration the Part Studio shows.
+config-value-tooltip = #{ $name } in the configuration shown: features read it as #{ $name }
+# The heading of a configuration table's first column (the configurations' names).
+config-configuration = Configuration
+# Marks the default configuration of a List.
+config-default-tag = default
+# { $name } is the configuration's name.
+config-row-shown-tooltip = { $name } is shown in the Part Studio
+config-row-tooltip = Double-click to show { $name } in the Part Studio
+config-suppressed-tooltip = Suppressed in this configuration
+config-add-row = Add configuration
+config-no-params = Nothing configured yet: a feature's menu › Configure adds its fields here.
+config-list = List
+config-checkbox = Checkbox
+config-move-up = Move up
+config-move-down = Move down
+config-move-left = Move left
+config-move-right = Move right
+config-checked-by-default = Checked by default
+config-show = Show in Part Studio
+config-set-default = Set as default
+config-remove-column = Remove from configuration
+common-duplicate = Duplicate
+config-configure = Configure
+config-instance-configuration = Configuration
+# The Insert dialog's configuration section for the picked item; { $name } is its Part Studio.
+config-insert-title = Configuration of { $name }
