@@ -2400,12 +2400,10 @@ fn fit_curve(
     let mut worst = 0.0f64;
     let mut by_chords: Option<(Vec<super::ssi_numeric::Pt>, f64)> = None;
     let many = !crate::native::env_flag!("CADRS_FIT_HALVING");
-    // (The centripetal rounds' best so far, and how many of them in a row gained nothing: a
-    // fit that more points no longer bring nearer, a crease no cubic follows, is left at its
-    // best, where each further round took three times the points for the same distance off.)
-    const RUNAWAY: usize = 4000;
-    let mut best: Option<(Vec<super::ssi_numeric::Pt>, f64)> = None;
-    let mut stalled = 0;
+    // (The most points a fit may come to: a round that would take it past them is not made.
+    // A crease no cubic follows triples the points a round for the same distance off, to
+    // 120 000 on a cone's sweep, each a Newton solve on both surfaces.)
+    const MOST: usize = 20000;
     while rounds < 6 || (!sharp && worst > SWING && !crate::native::env_flag!("CADRS_FIT_CHORDS")) {
         if rounds == 6 {
             by_chords = Some((pts.clone(), worst));
@@ -2518,7 +2516,7 @@ fn fit_curve(
                 ins.len()
             );
         }
-        if ins.is_empty() || pts.len() > 20000 {
+        if ins.is_empty() || pts.len() + ins.len() > MOST {
             let n = c.range();
             let pcs = uv_fits(a, b, &pts, &t, &c, 4.0 * tol);
             return IntCurve {
@@ -2529,30 +2527,9 @@ fn fit_curve(
                 pcs,
             };
         }
-        if sharp {
-            match &best {
-                // (Farther off than with fewer points: more will not bring it back.)
-                Some((_, least)) if worst > *least => stalled += 2,
-                Some((_, least)) if worst > 0.5 * least => stalled += 1,
-                _ => stalled = 0,
-            }
-            if best.as_ref().is_none_or(|(_, least)| worst < *least) {
-                best = Some((pts.clone(), worst));
-            }
-            // (Only a fit already of thousands of points: a smaller one's rounds cost little,
-            // and a cut may hang on the last of them.)
-            if stalled >= 2 && pts.len() > RUNAWAY {
-                break;
-            }
-        }
         for (k, p) in ins.into_iter().rev() {
             pts.insert(k, p);
         }
-    }
-    if let Some((p, w)) =
-        best.filter(|(p, w)| *w <= worst && pts.len() > RUNAWAY && p.len() < pts.len())
-    {
-        (pts, worst) = (p, w);
     }
     if let Some((p, _)) = by_chords.filter(|(_, w)| *w <= worst) {
         (pts, sharp) = (p, false);
