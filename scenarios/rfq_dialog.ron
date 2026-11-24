@@ -1,0 +1,40 @@
+// Request a quote (the document menu) on the with-hole plate (60 × 40 × 10, a Ø16 hole): the
+// dialog measures the part (flat, 10 mm thick, its cuts in 2 pieces) and asks which shop.
+// The network is off in scenarios, so sending says so and the dialog stays open. Then back on
+// the documents page, the app menu's Quote requests… (none yet) and Add contact….
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Key("F12"),
+        Key("F12"),
+        Custom("with-hole"),
+        Wait(3),
+        Click(ui("app-menu")),
+        WaitFor("document-menu-request-quote"),
+        Click(ui("document-menu-request-quote")),
+        WaitFor("rfq-dialog"),
+        Screenshot("01-request-a-quote"),
+        Click(ui("rfq-send")),
+        Wait(1),
+        Screenshot("02-pick-a-shop"),
+        Click(ui("rfq-cancel")),
+        Click(ui("app-menu")),
+        Click(ui("app-documents")),
+        WaitFor("landing-page"),
+        Click(ui("app-menu")),
+        WaitFor("app-quote-requests"),
+        Click(ui("app-quote-requests")),
+        WaitFor("rfq-requests-dialog"),
+        Screenshot("03-quote-requests"),
+        Click(ui("rfq-requests-close")),
+        Click(ui("app-menu")),
+        WaitFor("app-add-contact"),
+        Click(ui("app-add-contact")),
+        WaitFor("contact-dialog"),
+        Type("not a link"),
+        Click(ui("contact-add")),
+        Wait(1),
+        Screenshot("04-add-contact"),
+    ],
+)

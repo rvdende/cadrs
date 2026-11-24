@@ -1,5 +1,5 @@
-//! The documents page's **Public documents** panel, beside the documents: what anyone using
-//! cadrs published, as this cadrs heard of it ([`crate::collab::public`]).
+//! The documents page's **Public documents**, the Designs side of the Marketplace panel
+//! ([`super::market`]) beside the documents: what anyone using cadrs published, as this cadrs heard of it ([`crate::collab::public`]).
 //!
 //! - A caption (PUBLIC DOCUMENTS and the count, as the documents'), **Stars** | **Recent** for
 //!   the order, a search box, and a line saying where cadrs stands: offline (with **Connect**,
@@ -8,7 +8,7 @@
 //! - A row a document: its picture, name, owner and when it was published. Clicking it opens it
 //!   read-only; ★ stars it (or takes the star back) and shows how many star it; Fork saves it as
 //!   a document of one's own.
-//! - Hidden on a narrow window.
+//! - Hidden on a narrow window (with the Marketplace panel).
 //!
 //! Names: `public-card`, `public-heading`, `public-count`, `public-sort`, `public-search`,
 //! `public-status`, `public-connect`, `public-turn-on`, `public-list`, and per row (by its
@@ -66,22 +66,18 @@ struct PublicStatus;
 #[derive(Component)]
 struct PublicCount;
 
-/// The panel, right of the documents.
+/// The panel's contents: the Designs side of the Marketplace panel ([`super::market`]), right
+/// of the documents.
 pub(super) fn public_card(p: &mut ChildSpawnerCommands, t: &Theme, panel: &PublicPanel) {
     p.spawn((
         Name::new("public-card"),
         Node {
-            width: Val::Px(380.0),
-            flex_shrink: 0.0,
+            flex_grow: 1.0,
             min_height: Val::Px(0.0),
             flex_direction: FlexDirection::Column,
             row_gap: Val::Px(6.0),
-            padding: UiRect::new(Val::Px(12.0), Val::Px(8.0), Val::Px(6.0), Val::Px(8.0)),
-            ..cadrs_ui::glass::panel_node(t)
+            ..default()
         },
-        cadrs_ui::glass::panel(t),
-        cadrs_ui::spring::Appear::fly_up().delay(0.1),
-        cadrs_ui::responsive::HideBelow(800.0),
     ))
     .with_children(|card| {
         card.spawn((

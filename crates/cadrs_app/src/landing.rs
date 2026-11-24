@@ -10,7 +10,8 @@
 //!   Import, Label and the list and grid toggles.
 //! - The list in a glass card: a caption (DOCUMENTS and the count, or the Trash, a label or the
 //!   samples with ‹ back), and the sortable columns NAME | MODIFIED | MODIFIED BY | OWNED BY.
-//! - Beside it, the Public documents panel ([`public_panel`]): what anyone using cadrs
+//! - Beside it, the Marketplace panel ([`market`]: designs and shops). Its designs are the
+//!   Public documents panel ([`public_panel`]): what anyone using cadrs
 //!   published, to view, star and fork.
 //!
 //! Clicking a row selects it; double-clicking it (or Enter) opens it (P3E.1). Right-clicking it
@@ -53,6 +54,8 @@ use crate::{ActiveDocument, AppClock, AppState, DocumentStore, UserProfile};
 
 #[path = "landing_details.rs"]
 mod details;
+#[path = "landing_market.rs"]
+mod market;
 #[path = "landing_organize.rs"]
 mod organize;
 #[path = "landing_public.rs"]
@@ -106,6 +109,7 @@ impl Plugin for LandingPlugin {
             .add_observer(on_context_action);
         organize::plugin(app);
         public_panel::plugin(app);
+        market::plugin(app);
     }
 }
 
@@ -369,11 +373,12 @@ struct LandingRoot;
 fn relanguage(
     mut last: Local<&'static str>,
     q_root: Query<Entity, With<LandingRoot>>,
-    (commands, theme, profile, panel): (
+    (commands, theme, profile, panel, market): (
         Commands,
         Res<Theme>,
         Res<UserProfile>,
         Res<public_panel::PublicPanel>,
+        Res<market::Market>,
     ),
 ) {
     let now = cadrs_ui::i18n::language();
@@ -385,7 +390,7 @@ fn relanguage(
     for root in &q_root {
         commands.entity(root).despawn();
     }
-    spawn_landing(commands, theme, profile, panel);
+    spawn_landing(commands, theme, profile, panel, market);
 }
 
 fn spawn_landing(
@@ -393,6 +398,7 @@ fn spawn_landing(
     theme: Res<Theme>,
     profile: Res<UserProfile>,
     panel: Res<public_panel::PublicPanel>,
+    market: Res<market::Market>,
 ) {
     let t = theme.clone();
     commands
@@ -441,7 +447,7 @@ fn spawn_landing(
                 })
                 .with_children(|body| {
                     documents_card(body, &t);
-                    public_panel::public_card(body, &t, &panel);
+                    market::market_card(body, &t, &panel, &market);
                 });
             });
         });
@@ -449,7 +455,7 @@ fn spawn_landing(
 
 /// The bar across the top: the app menu, then the version, notifications, the color scheme
 /// and the account.
-fn top_bar(p: &mut ChildSpawnerCommands, t: &Theme, profile: &UserProfile) {
+pub(crate) fn top_bar(p: &mut ChildSpawnerCommands, t: &Theme, profile: &UserProfile) {
     // Floating, as a document's top bar is.
     p.spawn((
         Name::new("top-bar"),
@@ -1698,6 +1704,19 @@ pub(crate) fn app_entries(lib: &Library, filter: Filter) -> Vec<MenuEntry> {
             .icon("delete")
             .checked(filter == Filter::Trash)
             .into(),
+        MenuEntry::Separator,
+        MenuItem::new("app-find-shop", tr("find-shop-menu"))
+            .icon("map-pin")
+            .into(),
+        MenuItem::new("app-public-chat", tr("public-chat-menu"))
+            .icon("chat")
+            .into(),
+        MenuItem::new("app-quote-requests", tr("rfq-requests-menu"))
+            .icon("receipt")
+            .into(),
+        MenuItem::new("app-add-contact", tr("social-add-contact-menu"))
+            .icon("user")
+            .into(),
     ];
     if filter == Filter::Trash {
         let (docs, folders) = lib.trash();
@@ -1718,6 +1737,10 @@ pub(crate) fn app_action(world: &mut World, item: &str) -> bool {
         "app-open-folder" => open_documents_folder(world),
         "app-public" => show_filter(world, Filter::Public),
         "app-trash" => show_filter(world, Filter::Trash),
+        "app-quote-requests" => crate::request_quote::open_requests(world),
+        "app-find-shop" => crate::find_shop::open(world),
+        "app-public-chat" => crate::public_chat_ui::show(world),
+        "app-add-contact" => crate::request_quote::open_add_contact(world),
         "app-empty-trash" => {
             let theme = world.resource::<Theme>().clone();
             let lib = world.resource::<DocLibrary>().lib.clone();
@@ -1763,6 +1786,10 @@ pub(crate) fn open_document(world: &mut World, id: DocumentId) {
     file.meta.last_opened = Some(now);
     if let Err(e) = store.save(&file.document, &file.meta) {
         warn!("cannot record the open time: {e}");
+    }
+    if file.meta.organization.is_some() {
+        crate::organization::open(world, &file);
+        return;
     }
     let read_only = file
         .meta

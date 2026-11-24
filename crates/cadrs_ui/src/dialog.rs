@@ -352,12 +352,16 @@ fn close_on_escape(
     mut keys: MessageReader<KeyboardInput>,
     q_dialogs: Query<(Entity, &GlobalZIndex), With<DialogRoot>>,
     q_menus: Query<(), With<MenuDismissLayer>>,
+    q_lists: Query<&crate::SearchSelectState>,
     mut commands: Commands,
 ) {
+    // Esc closes an open menu, or a dropdown's open list, before the dialog under it.
+    let list_open = crate::search_select::any_open(&q_lists);
     for k in keys.read() {
         if k.state != ButtonState::Pressed
             || k.shortcut_code() != KeyCode::Escape
             || !q_menus.is_empty()
+            || list_open
         {
             continue;
         }

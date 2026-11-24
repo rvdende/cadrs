@@ -144,6 +144,7 @@ pub struct TextInput {
     select_all_on_focus: bool,
     autofocus: bool,
     max_characters: Option<usize>,
+    lines: usize,
     font: Option<(f32, FontWeight)>,
     padding: Option<f32>,
     focus_border: Option<(f32, Color)>,
@@ -167,6 +168,7 @@ impl TextInput {
             select_all_on_focus: false,
             autofocus: false,
             max_characters: None,
+            lines: 1,
             font: None,
             padding: None,
             focus_border: None,
@@ -272,6 +274,14 @@ impl TextInput {
         self
     }
 
+    /// A field for longer text: `n` lines tall, its text wrapping at the field's width, and
+    /// Enter starting a new line (a description, what happened, the reasoning behind a
+    /// decision). More than fits scrolls inside it.
+    pub fn lines(mut self, n: usize) -> Self {
+        self.lines = n.max(1);
+        self
+    }
+
     pub fn max_characters(mut self, n: usize) -> Self {
         self.max_characters = Some(n);
         self
@@ -322,6 +332,7 @@ impl TextInput {
             select_all_on_focus,
             autofocus,
             max_characters,
+            lines,
             font: _,
             padding: _,
             focus_border: _,
@@ -354,11 +365,24 @@ impl TextInput {
             Hovered::default(),
             Node {
                 width,
-                height: Val::Px(height.unwrap_or(theme.input_height)),
-                padding: UiRect::horizontal(Val::Px(pad)),
+                // A field of several lines is as tall as they are.
+                height: if lines > 1 {
+                    Val::Auto
+                } else {
+                    Val::Px(height.unwrap_or(theme.input_height))
+                },
+                padding: if lines > 1 {
+                    UiRect::axes(Val::Px(pad), Val::Px(5.0))
+                } else {
+                    UiRect::horizontal(Val::Px(pad))
+                },
                 border: UiRect::all(Val::Px(1.0)),
                 border_radius: BorderRadius::all(Val::Px(radius.unwrap_or(theme.radius))),
-                align_items: AlignItems::Center,
+                align_items: if lines > 1 {
+                    AlignItems::FlexStart
+                } else {
+                    AlignItems::Center
+                },
                 overflow: Overflow::clip(),
                 ..default()
             },
@@ -383,13 +407,21 @@ impl TextInput {
                 let mut editable = EditableText::new(&value);
                 editable.cursor_blink_period = blink;
                 editable.max_characters = max_characters;
+                if lines > 1 {
+                    editable.allow_newlines = true;
+                    editable.visible_lines = Some(lines as f32);
+                }
                 p.spawn((
                     Name::new(field_name),
                     TextInputField,
                     editable,
                     font.clone(),
                     TextColor(fg),
-                    TextLayout::no_wrap(),
+                    if lines > 1 {
+                        TextLayout::new(Justify::Left, LineBreak::WordBoundary)
+                    } else {
+                        TextLayout::no_wrap()
+                    },
                     cursor,
                     TabIndex(0),
                     Node {

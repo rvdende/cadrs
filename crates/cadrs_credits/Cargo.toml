@@ -1,0 +1,17 @@
+[package]
+name = "cadrs_credits"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Credits: wallets, the faucet, transfers and held payments, as the bank keeps them and as a device asks for them, without Bevy or the kernel"
+
+[dependencies]
+blake3.workspace = true
+cadrs_social.workspace = true
+serde.workspace = true
+serde_bytes.workspace = true
+
+[dev-dependencies]
+blake3.workspace = true
+serde.workspace = true

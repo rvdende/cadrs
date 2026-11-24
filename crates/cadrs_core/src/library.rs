@@ -67,6 +67,17 @@ pub struct DocumentMeta {
     /// Set on a fork of a public document: which one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forked_from: Option<crate::collab::ForkedFrom>,
+    /// Set on an organization document (a shop): its signed log is `org.log` beside
+    /// `document.ron`, and it opens to the organization's own tabs (`cadrs_org`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organization: Option<OrgRef>,
+}
+
+/// What marks a document as an organization's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrgRef {
+    /// The id of its log (`cadrs_social::log::LogId`).
+    pub log: [u8; 32],
 }
 
 impl DocumentMeta {
@@ -96,6 +107,7 @@ impl DocumentMeta {
             shared: None,
             published: None,
             forked_from: None,
+            organization: None,
         }
     }
 }
@@ -396,9 +408,15 @@ impl Filter {
         }
     }
 
-    /// Whether `entry` is listed under this filter for `user`.
+    /// Whether `entry` is listed under this filter for `user`. An organization is kept like a
+    /// document but isn't one of the user's documents: the account menu lists the user's
+    /// organizations, and here one is listed only in the trash, once it was removed from this
+    /// device, to be restored or deleted for good.
     pub fn matches(self, entry: &DocumentEntry, user: &str) -> bool {
         let m = &entry.meta;
+        if m.organization.is_some() {
+            return self == Filter::Trash && m.trashed.is_some();
+        }
         let live = m.trashed.is_none();
         match self {
             Filter::Explore => false,

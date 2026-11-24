@@ -1,0 +1,33 @@
+[package]
+name = "cadrs_mobile"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "cadrs on a phone: contacts, quote requests, messages and shops, in a small web page (no Bevy, no kernel)"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+cadrs_fs.workspace = true
+cadrs_org.workspace = true
+cadrs_social.workspace = true
+postcard.workspace = true
+rqrr.workspace = true
+serde.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The page: its network and the QR code of the user's card.
+cadrs_social_net.workspace = true
+qrcode = { workspace = true, features = ["svg"] }
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
+js-sys.workspace = true
+web-sys = { version = "0.3", features = ["Window", "Location", "Document", "Element", "HtmlElement", "HtmlInputElement", "Node", "Event", "EventTarget", "console", "Navigator", "MediaDevices", "MediaStream", "MediaStreamTrack", "MediaStreamConstraints", "HtmlVideoElement", "HtmlCanvasElement", "CanvasRenderingContext2d", "ImageData"] }
+# The page's files (IndexedDB, through `cadrs_fs`) and random numbers in a browser.
+getrandom = { workspace = true, features = ["wasm_js"] }
+
+[dev-dependencies]
+# Drawing QR codes to read back (scan's tests).
+qrcode = { workspace = true }

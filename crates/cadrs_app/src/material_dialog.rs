@@ -3,9 +3,9 @@
 //!
 //! - **Library** tab: the library dropdown (the bundled [`cadrs_core::material::LIBRARY_NAME`]
 //!   and the document's own libraries; its **+** makes a new, empty one, P3.6), the material
-//!   dropdown (closed: the chosen
-//!   material; open: a search box that filters the list as you type), and the chosen material's
-//!   properties: Name, Density,
+//!   dropdown ([`cadrs_ui::SearchSelect`], which is this dropdown lifted out for the rest of
+//!   the app; closed: the chosen material; open: a search box that filters the list as you
+//!   type), and the chosen material's properties: Name, Density,
 //!   Poisson's ratio, Young's modulus, the tensile and compressive yield and ultimate strengths,
 //!   in the workspace units (kg/m³ and MPa in a metric workspace, lb/in³ and Psi in inches, as
 //!   the course's screenshot shows them).
@@ -20,7 +20,7 @@
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
-use bevy::text::{EditableText, FontWeight};
+use bevy::text::FontWeight;
 use cadrs_core::commands::{SetMaterialLibraries, SetPartMaterial};
 use cadrs_core::material::{self, LIBRARY_NAME, Material, MaterialLibrary};
 use cadrs_core::{ElementId, PartId};
@@ -30,7 +30,8 @@ use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState, NumberField, NumberFieldCommit,
-    NumberFieldState, Select, TabStrip, TabStripSelect, TabStripState,
+    NumberFieldState, SearchSelect, SearchSelectPick, SearchSelectState, Select, TabStrip,
+    TabStripSelect, TabStripState,
 };
 
 use crate::parts::PartCache;
@@ -43,7 +44,7 @@ impl Plugin for MaterialDialogPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (material_keys, read_search, sync_material_dialog)
+            (material_keys, sync_material_dialog)
                 .chain()
                 .after(crate::parts::PartsSet)
                 .run_if(in_state(AppState::Document)),
@@ -52,8 +53,7 @@ impl Plugin for MaterialDialogPlugin {
             commands.remove_resource::<MaterialSession>();
         })
         .add_observer(on_tab)
-        .add_observer(on_item)
-        .add_observer(on_choose)
+        .add_observer(on_pick)
         .add_observer(on_custom_commit)
         .add_observer(on_accept)
         .add_observer(on_cancel)
@@ -73,10 +73,6 @@ pub struct MaterialSession {
     pub tab: usize,
     /// The library material chosen.
     pub chosen: Option<String>,
-    /// The search box's text.
-    pub query: String,
-    /// The material dropdown is open.
-    pub open: bool,
     /// The Custom tab's material.
     pub custom: Material,
     /// Some part has a material now (Remove material is offered).
@@ -153,8 +149,6 @@ fn open_with(
         parts,
         tab,
         chosen,
-        query: String::new(),
-        open: false,
         custom,
         has_material: now.is_some(),
         library,
@@ -177,37 +171,12 @@ struct LibraryBody;
 #[derive(Component)]
 struct CustomBody;
 
-#[derive(Component)]
-struct MaterialList;
-
-/// The closed material dropdown.
-#[derive(Component)]
-struct MaterialChoose;
-
-#[derive(Component)]
-struct ChooseLabel;
-
-/// The open dropdown: the search box and the list.
-#[derive(Component)]
-struct MaterialPopup;
-
-/// What the closed dropdown shows.
-fn choose_label(s: &MaterialSession) -> String {
-    s.chosen
-        .clone()
-        .unwrap_or_else(|| tr("render-material-select"))
-}
+/// The name of the material dropdown: its parts are `material-choose`, `material-search`,
+/// `material-list` and a row a material, `material-item-<slug>`.
+const DROPDOWN: &str = "material";
 
 #[derive(Component)]
 struct MaterialProps;
-
-/// The search text the list was last scrolled for (choosing a material keeps the scroll).
-#[derive(Component, Default)]
-struct LastQuery(String);
-
-/// A library material's row.
-#[derive(Component, Debug, Clone)]
-struct MaterialItem(String);
 
 /// A Custom tab field.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
@@ -296,26 +265,18 @@ fn find(s: &MaterialSession, name: &str) -> Option<Material> {
     }
 }
 
-/// The names of the library shown's materials matching the search.
-fn search(s: &MaterialSession) -> Vec<String> {
+/// The names of the library shown's materials (what the dropdown lists and searches).
+fn names(s: &MaterialSession) -> Vec<String> {
     match s.library {
-        0 => material::search(&s.query)
+        0 => material::LIBRARY
             .iter()
             .map(|m| m.name.to_string())
             .collect(),
-        i => {
-            let q = s.query.to_lowercase();
-            s.libraries
-                .get(i - 1)
-                .map(|l| {
-                    l.materials
-                        .iter()
-                        .filter(|m| m.name.to_lowercase().contains(&q))
-                        .map(|m| m.name.clone())
-                        .collect()
-                })
-                .unwrap_or_default()
-        }
+        i => s
+            .libraries
+            .get(i - 1)
+            .map(|l| l.materials.iter().map(|m| m.name.clone()).collect())
+            .unwrap_or_default(),
     }
 }
 
@@ -427,17 +388,6 @@ fn on_add_to_library(a: On<Activate>, q: Query<&Name>, mut commands: Commands) {
     });
 }
 
-fn slug(name: &str) -> String {
-    name.to_lowercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        .split('-')
-        .filter(|p| !p.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
-}
-
 fn on_tab(ev: On<TabStripSelect>, q: Query<&Name>, mut commands: Commands) {
     if q.get(ev.entity)
         .is_ok_and(|n| n.as_str() == "material-tabs")
@@ -451,48 +401,20 @@ fn on_tab(ev: On<TabStripSelect>, q: Query<&Name>, mut commands: Commands) {
     }
 }
 
-/// The dropdown opens (clearing the search and focusing it) or closes.
-fn on_choose(a: On<Activate>, q: Query<(), With<MaterialChoose>>, mut commands: Commands) {
-    if !q.contains(a.entity) {
+/// The dropdown chose a material.
+fn on_pick(ev: On<SearchSelectPick>, q: Query<&Name>, mut commands: Commands) {
+    if !q
+        .get(ev.entity)
+        .is_ok_and(|n| n.as_str() == format!("{DROPDOWN}-select"))
+    {
         return;
     }
-    commands.queue(|world: &mut World| {
-        let Some(mut s) = world.get_resource_mut::<MaterialSession>() else {
-            return;
-        };
-        s.open = !s.open;
-        let open = s.open;
-        let mut q = world.query::<(Entity, &Name, &mut EditableText)>();
-        let mut field = None;
-        for (e, n, mut t) in q.iter_mut(world) {
-            if n.as_str() == "material-search-field" {
-                t.editor_mut().set_text("");
-                field = Some(e);
-            }
-        }
+    let name = ev.value.clone();
+    commands.queue(move |world: &mut World| {
         if let Some(mut s) = world.get_resource_mut::<MaterialSession>() {
-            s.query.clear();
-        }
-        if let (true, Some(e), Some(mut f)) = (
-            open,
-            field,
-            world.get_resource_mut::<bevy::input_focus::InputFocus>(),
-        ) {
-            f.set(e, bevy::input_focus::FocusCause::Pressed);
+            s.chosen = Some(name);
         }
     });
-}
-
-fn on_item(a: On<Activate>, q: Query<&MaterialItem>, mut commands: Commands) {
-    if let Ok(item) = q.get(a.entity) {
-        let name = item.0.clone();
-        commands.queue(move |world: &mut World| {
-            if let Some(mut s) = world.get_resource_mut::<MaterialSession>() {
-                s.chosen = Some(name);
-                s.open = false;
-            }
-        });
-    }
 }
 
 fn on_custom_commit(ev: On<NumberFieldCommit>, q: Query<&CustomField>, mut commands: Commands) {
@@ -602,39 +524,21 @@ fn material_keys(
     session: Option<Res<MaterialSession>>,
     menus: Query<(), With<cadrs_ui::menu::MenuPopup>>,
     mut menu_open: Local<bool>,
+    dropdowns: Query<&SearchSelectState>,
     mut commands: Commands,
 ) {
     // Esc closes an open menu first (a custom colour's), not the dialog: the menu may already
-    // be gone this frame, so last frame's state counts too.
+    // be gone this frame, so last frame's state counts too. The same for the material
+    // dropdown's open list, which closes itself.
     let was_open = std::mem::replace(&mut *menu_open, !menus.is_empty());
-    if session.is_none() || was_open || *menu_open {
+    if session.is_none() || was_open || *menu_open || cadrs_ui::search_select::any_open(&dropdowns)
+    {
         keys.clear();
         return;
     }
     for k in keys.read() {
         if k.state == ButtonState::Pressed && k.shortcut_code() == KeyCode::Escape {
-            commands.queue(
-                |world: &mut World| match world.get_resource_mut::<MaterialSession>() {
-                    Some(mut s) if s.open => s.open = false,
-                    _ => close(world),
-                },
-            );
-        }
-    }
-}
-
-/// The search box filters as you type.
-fn read_search(q: Query<(&Name, &EditableText)>, session: Option<ResMut<MaterialSession>>) {
-    let Some(mut s) = session else {
-        return;
-    };
-    if let Some((_, t)) = q
-        .iter()
-        .find(|(n, _)| n.as_str() == "material-search-field")
-    {
-        let v = t.value().to_string();
-        if s.query != v {
-            s.query = v;
+            commands.queue(close);
         }
     }
 }
@@ -661,47 +565,6 @@ fn prop_row(p: &mut ChildSpawner, t: &Theme, i: usize, label: String, value: Str
         ));
         r.spawn(t.text(value, 12.0, FontWeight::MEDIUM, t.tool_foreground));
     });
-}
-
-fn spawn_list(p: &mut ChildSpawner, t: &Theme, s: &MaterialSession) {
-    let hits = search(s);
-    if hits.is_empty() {
-        let empty = if s.library > 0 && s.query.is_empty() {
-            "render-material-none-yet"
-        } else {
-            "render-material-none-match"
-        };
-        p.spawn((
-            t.text(tr(empty), 11.5, FontWeight::NORMAL, t.muted_foreground),
-            Translated(empty),
-        ));
-    }
-    for name in hits {
-        let selected = s.chosen.as_deref() == Some(name.as_str());
-        p.spawn((
-            ListItem::new(format!("material-item-{}", slug(&name)))
-                .label(name.clone())
-                .height(ROW)
-                .padding_left(8.0)
-                .selected(selected)
-                .build(t),
-            MaterialItem(name),
-        ))
-        .entry::<Node>()
-        .and_modify(|mut n| n.flex_shrink = 0.0);
-    }
-}
-
-/// A material row's height.
-const ROW: f32 = 22.0;
-
-/// The list scrolled so the chosen material shows (two rows above it).
-fn list_scroll(s: &MaterialSession) -> ScrollPosition {
-    let i = search(s)
-        .iter()
-        .position(|m| s.chosen.as_deref() == Some(m.as_str()))
-        .unwrap_or(0);
-    ScrollPosition(Vec2::new(0.0, (i as f32 - 2.0).max(0.0) * ROW))
 }
 
 fn spawn_props(p: &mut ChildSpawner, t: &Theme, s: &MaterialSession, units: &Units) {
@@ -823,105 +686,18 @@ fn material_dialog(t: &Theme, s: &MaterialSession, units: Units) -> impl Bundle 
                     });
                     // The material dropdown (closed: the chosen material and a ▾, as
                     // `ex4-step17`); open, a search box and the list over the properties.
-                    c.spawn((
-                        MaterialChoose,
-                        cadrs_ui::ListItem::new("material-choose").build(t),
-                    ))
-                    .insert(Node {
-                        height: Val::Px(26.0),
-                        padding: UiRect::horizontal(Val::Px(6.0)),
-                        align_items: AlignItems::Center,
-                        justify_content: JustifyContent::SpaceBetween,
-                        border: UiRect::all(Val::Px(1.0)),
-                        border_radius: BorderRadius::all(Val::Px(2.0)),
-                        ..default()
-                    })
-                    .insert(cadrs_ui::Visuals {
-                        background: cadrs_ui::StateColors::new(
-                            t.background,
-                            t.list_hover,
-                            t.list_active,
-                            t.background,
-                        ),
-                        border: cadrs_ui::StateColors::all(Color::srgb_u8(0xc8, 0xc8, 0xc8)),
-                        foreground: cadrs_ui::StateColors::all(t.foreground),
-                        focus_ring: t.focus_ring,
-                    })
-                    .with_children(|r| {
-                        r.spawn((
-                            Name::new("material-choose-label"),
-                            ChooseLabel,
-                            t.text(choose_label(&s), 12.5, FontWeight::NORMAL, t.foreground),
-                            Pickable::IGNORE,
-                        ));
-                        r.spawn((
-                            cadrs_ui::icon("caret-down", 12.0, t.foreground),
-                            Pickable::IGNORE,
-                        ));
-                    });
-                    c.spawn((
-                        Name::new("material-popup"),
-                        MaterialPopup,
-                        Node {
-                            position_type: PositionType::Absolute,
-                            top: Val::Px(72.0),
-                            left: Val::Px(8.0),
-                            right: Val::Px(8.0),
-                            flex_direction: FlexDirection::Column,
-                            row_gap: Val::Px(4.0),
-                            padding: UiRect::all(Val::Px(4.0)),
-                            border: UiRect::all(Val::Px(1.0)),
-                            border_radius: BorderRadius::all(Val::Px(3.0)),
-                            display: if s.open { Display::Flex } else { Display::None },
-                            ..default()
-                        },
-                        BackgroundColor(t.popover),
-                        BorderColor::all(t.border),
-                        BoxShadow::new(t.shadow, Val::ZERO, Val::Px(2.0), Val::ZERO, Val::Px(8.0)),
-                        // Over the dialog, but under a menu opened while it is open (the
-                        // library select's) and that menu's dismiss layer.
-                        GlobalZIndex(cadrs_ui::z::MENU - 2),
-                        // Over the dialog's scrolling body, not clipped by it, as a menu.
-                        OverrideClip,
-                    ))
-                    .with_children(|pop| {
-                        pop.spawn(
-                            TextInput::new("material-search")
-                                .placeholder(tr("render-material-search"))
-                                .width(Val::Percent(100.0))
-                                .height(24.0)
-                                .build(t),
-                        );
-                        // The list scrolls with the wheel and its scrollbar (it holds more
-                        // materials than its eight rows show).
-                        pop.spawn(Node {
-                            flex_direction: FlexDirection::Column,
-                            ..default()
-                        })
-                        .with_children(|frame| {
-                            let list = frame
-                                .spawn((
-                                    Name::new("material-list"),
-                                    MaterialList,
-                                    cadrs_ui::WheelScroll,
-                                    cadrs_ui::scrollbar::ScrollGutter(12.0),
-                                    Node {
-                                        flex_direction: FlexDirection::Column,
-                                        max_height: Val::Px(176.0),
-                                        overflow: Overflow::scroll_y(),
-                                        ..default()
-                                    },
-                                    list_scroll(&s),
-                                ))
-                                .with_children(|l| spawn_list(l, t, &s))
-                                .id();
-                            frame.spawn(cadrs_ui::vertical_scrollbar(
-                                t,
-                                "material-list-scrollbar",
-                                list,
-                            ));
-                        });
-                    });
+                    c.spawn(
+                        SearchSelect::new(DROPDOWN)
+                            .options(names(&s))
+                            .chosen(s.chosen.clone())
+                            .placeholder(tr("render-material-select"))
+                            .search_placeholder(tr("render-material-search"))
+                            .empty_text(
+                                tr("render-material-none-match"),
+                                tr("render-material-none-yet"),
+                            )
+                            .build(t),
+                    );
                     c.spawn((
                         Name::new("material-props"),
                         MaterialProps,
@@ -1000,27 +776,12 @@ fn sync_material_dialog(
     q_area: Query<Entity, With<ViewportArea>>,
     q_dialog: Query<Entity, With<MaterialDialog>>,
     mut q_state: Query<&mut FeatureDialogState, With<MaterialDialog>>,
-    mut q_bodies: Query<
-        (&mut Node, Has<LibraryBody>),
-        (
-            Or<(With<LibraryBody>, With<CustomBody>)>,
-            Without<MaterialPopup>,
-        ),
-    >,
-    mut q_popup: Query<
-        (&mut Node, Has<MaterialPopup>),
-        (
-            With<MaterialPopup>,
-            Without<LibraryBody>,
-            Without<CustomBody>,
-        ),
-    >,
-    mut q_choose_label: Query<&mut Text, With<ChooseLabel>>,
+    mut q_bodies: Query<(&mut Node, Has<LibraryBody>), Or<(With<LibraryBody>, With<CustomBody>)>>,
+    mut q_dropdown: Query<(&Name, &mut SearchSelectState)>,
     mut q_tabs: Query<(&Name, &mut TabStripState)>,
-    q_list: Query<Entity, With<MaterialList>>,
     q_props: Query<Entity, With<MaterialProps>>,
     mut q_fields: Query<(&CustomField, &mut NumberFieldState)>,
-    mut last: Local<Option<(usize, Option<String>, String, Units, usize)>>,
+    mut last: Local<Option<(usize, Option<String>, Units, usize)>>,
     mut commands: Commands,
 ) {
     let Some(s) = session else {
@@ -1036,7 +797,7 @@ fn sync_material_dialog(
         };
         let d = commands.spawn(material_dialog(&theme, &s, units.0)).id();
         commands.entity(area).add_child(d);
-        *last = Some((s.tab, s.chosen.clone(), s.query.clone(), units.0, s.library));
+        *last = Some((s.tab, s.chosen.clone(), units.0, s.library));
         return;
     }
     if !s.is_changed() && !units.is_changed() {
@@ -1048,16 +809,18 @@ fn sync_material_dialog(
             st.valid = valid;
         }
     }
-    for (mut n, _) in &mut q_popup {
-        let want = if s.open { Display::Flex } else { Display::None };
-        if n.display != want {
-            n.display = want;
+    // The dropdown lists the library shown and shows the material chosen.
+    let dropdown = format!("{DROPDOWN}-select");
+    for (name, mut state) in &mut q_dropdown {
+        if name.as_str() != dropdown {
+            continue;
         }
-    }
-    for mut t in &mut q_choose_label {
-        let want = choose_label(&s);
-        if t.0 != want {
-            t.0 = want;
+        let listed = names(&s);
+        if state.options != listed {
+            state.options = listed;
+        }
+        if state.chosen != s.chosen {
+            state.chosen = s.chosen.clone();
         }
     }
     for (mut n, library) in &mut q_bodies {
@@ -1075,35 +838,14 @@ fn sync_material_dialog(
             ts.selected = s.tab;
         }
     }
-    let key = (s.tab, s.chosen.clone(), s.query.clone(), units.0, s.library);
+    let key = (s.tab, s.chosen.clone(), units.0, s.library);
     let changed = last.as_ref() != Some(&key);
-    let list_changed = last
-        .as_ref()
-        .is_none_or(|l| l.1 != key.1 || l.2 != key.2 || l.4 != key.4);
     let props_changed = last
         .as_ref()
-        .is_none_or(|l| l.1 != key.1 || l.3 != key.3 || l.4 != key.4);
+        .is_none_or(|l| l.1 != key.1 || l.2 != key.2 || l.3 != key.3);
     *last = Some(key);
     if changed {
         let t = theme.clone();
-        if list_changed {
-            for e in &q_list {
-                let (t, s) = (t.clone(), s.clone());
-                commands.entity(e).despawn_children();
-                commands.queue(move |world: &mut World| {
-                    if let Ok(mut x) = world.get_entity_mut(e) {
-                        x.with_children(|l| spawn_list(l, &t, &s));
-                        if s.query
-                            != x.get::<LastQuery>()
-                                .map(|q| q.0.clone())
-                                .unwrap_or_default()
-                        {
-                            x.insert((list_scroll(&s), LastQuery(s.query.clone())));
-                        }
-                    }
-                });
-            }
-        }
         if props_changed {
             for e in &q_props {
                 let (t, s, u) = (t.clone(), s.clone(), units.0);
@@ -1155,12 +897,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn slugs() {
-        assert_eq!(slug("Aluminum - 6061"), "aluminum-6061");
-        assert_eq!(slug("Nylon 6/6"), "nylon-6-6");
-    }
-
     /// The material list holds more than its eight rows show: the wheel and a scrollbar scroll
     /// it (it stopped at Brass before), and every library material is in it.
     #[test]
@@ -1170,8 +906,6 @@ mod tests {
             parts: Vec::new(),
             tab: 0,
             chosen: None,
-            query: String::new(),
-            open: true,
             custom: Material::custom("Custom material", 1000.0),
             has_material: false,
             library: 0,
@@ -1184,14 +918,22 @@ mod tests {
             &s,
             Units::new(LengthUnit::Millimeter, 3),
         ));
-        let list = world
-            .query_filtered::<Entity, With<MaterialList>>()
-            .single(&world)
-            .unwrap();
+        world.flush();
+        let named = |world: &mut World, name: &str| {
+            let mut q = world.query::<(Entity, &Name)>();
+            q.iter(world)
+                .find(|(_, n)| n.as_str() == name)
+                .map(|(e, _)| e)
+        };
+        // The names the course's scenarios click.
+        let list = named(&mut world, "material-list").expect("the list");
+        assert!(named(&mut world, "material-choose").is_some());
+        assert!(named(&mut world, "material-search").is_some());
+        assert!(named(&mut world, "material-item-nylon-6-6").is_some());
+        assert!(named(&mut world, "material-item-titanium-ti-6al-4v").is_some());
         assert!(world.get::<cadrs_ui::WheelScroll>(list).is_some());
         let mut bars = world.query::<&cadrs_ui::scrollbar::SlimScrollbar>();
         assert!(bars.iter(&world).any(|b| b.target == list));
-        assert_eq!(search(&s).len(), material::search("").len());
-        assert!(search(&s).iter().any(|m| m == "Titanium - Ti-6Al-4V"));
+        assert_eq!(names(&s).len(), material::LIBRARY.len());
     }
 }

@@ -1,0 +1,41 @@
+// The documents page's Marketplace panel: Designs (the public documents) and Shops (the
+// organizations listed, as this cadrs heard of them). Three shops are heard of; a search
+// narrows them by what they cut and where; a shop's page shows all its listing says, and adds
+// Request a quote there picks the shop for the next request.
+Scenario(
+    start: Some("landing"),
+    steps: [
+        WaitFor("market-card"),
+        WaitFor("public-card"),
+        Screenshot("01-designs"),
+        Custom("org market"),
+        Click(ui("market-kind-1")),
+        WaitFor("market-shop-2"),
+        ExpectText("market-shop-count", "3"),
+        Screenshot("02-shops"),
+        Click(ui("market-search")),
+        Type("steel cologne"),
+        ExpectText("market-shop-name-0", "Rhine Laser"),
+        Screenshot("03-search"),
+        Click(ui("market-shop-0")),
+        WaitFor("market-shop-dialog"),
+        ExpectText("market-shop-offer-0", "Laser"),
+        ExpectText("market-shop-place-0", "Cologne, Germany"),
+        Screenshot("04-shop-page"),
+        // Request a quote: the shop joins the contacts and is the one the next request starts
+        // on (there are no parts to ask about on the documents page: it says what comes next).
+        Click(ui("market-shop-quote")),
+        Wait(2),
+        Screenshot("05-request-a-quote"),
+        Click(ui("market-shop-0")),
+        WaitFor("market-shop-dialog"),
+        Screenshot("05b-in-contacts"),
+        Click(ui("market-shop-close")),
+        // Nothing matches: said so.
+        Click(ui("market-search")),
+        Key("Ctrl+A"),
+        Type("titanium on mars"),
+        WaitFor("market-shops-empty"),
+        Screenshot("06-no-match"),
+    ],
+)

@@ -166,13 +166,38 @@ fn on_identity(
     let anchor = a.entity;
     commands.queue(move |world: &mut World| {
         let theme = world.resource::<Theme>().clone();
-        let menu = identity_menu(world, width, &theme);
+        // The organizations and invitations it lists (one may have come back from the trash).
+        crate::social::refresh_orgs(world);
+        // The wallet's balance, for the next time the menu opens if not for this one.
+        if let Some(me) = crate::credits::me(world)
+            && world.contains_resource::<crate::credits::Credits>()
+        {
+            crate::credits::refresh(world, me);
+        }
+        // Their logos, as pictures (one whose picture isn't here shows its initials).
+        let orgs = world.resource::<crate::social::Social>().orgs.clone();
+        let logos: Vec<Option<Handle<Image>>> = orgs
+            .iter()
+            .map(|org| {
+                let logo = org.logo?;
+                world
+                    .contains_resource::<crate::org_logo::LogoImages>()
+                    .then(|| crate::org_logo::handle(world, &logo.thumb))
+                    .flatten()
+            })
+            .collect();
+        let menu = identity_menu(world, width, &theme, &logos);
         open_menu(&mut world.commands(), anchor, menu.build(&theme));
         world.flush();
     });
 }
 
-fn identity_menu(world: &World, width: f32, theme: &Theme) -> cadrs_ui::Menu {
+fn identity_menu(
+    world: &World,
+    width: f32,
+    theme: &Theme,
+    logos: &[Option<Handle<Image>>],
+) -> cadrs_ui::Menu {
     let ids = &world.resource::<IdentityList>().0;
     let cadrs_id = cadrs_net::cadrs_id(world.get_resource::<Iroh>());
     let subtitle = cadrs_id.as_deref().map_or_else(
@@ -198,9 +223,71 @@ fn identity_menu(world: &World, width: f32, theme: &Theme) -> cadrs_ui::Menu {
         }
         menu = menu.separator();
     }
+    // The user's organizations (a shop, a team), the invitations waiting, and a new one. They
+    // hang off who the user is, not off their documents.
+    let social = world.resource::<crate::social::Social>();
+    for (i, org) in social.orgs.iter().enumerate() {
+        let open = world
+            .get_resource::<crate::organization::OpenOrg>()
+            .is_some_and(|o| o.id == org.doc);
+        let item = MenuItem::new(format!("org-open-{i}"), org.name.clone()).checked(open);
+        menu = menu.item(match logos.get(i).cloned().flatten() {
+            Some(logo) => item.picture(logo),
+            None => item.avatar(org.name.clone(), Avatar::color_for(&org.name)),
+        });
+    }
+    let invitations = world
+        .get_resource::<crate::org_sync::Invitations>()
+        .map(|i| i.0.clone())
+        .unwrap_or_default();
+    for (i, invitation) in invitations.iter().enumerate() {
+        let from = invitation
+            .inviter
+            .and_then(|a| social.contacts.get(&a).map(|c| c.name.clone()));
+        let label = match from {
+            Some(from) => tr_with(
+                "org-invitation-from",
+                &[("name", &invitation.name), ("from", &from)],
+            ),
+            None => tr_with("org-invitation", &[("name", &invitation.name)]),
+        };
+        menu = menu.item(
+            MenuItem::new(format!("org-invitation-{i}"), label)
+                .icon("shop")
+                .submenu(vec![
+                    MenuItem::new(format!("org-join-{i}"), tr("org-invitation-join"))
+                        .icon("check")
+                        .into(),
+                    MenuItem::new(format!("org-decline-{i}"), tr("org-invitation-decline"))
+                        .icon("close")
+                        .into(),
+                ]),
+        );
+    }
+    menu = menu
+        .item(MenuItem::new("org-new", tr("org-new-ellipsis")).icon("shop"))
+        .separator();
+    // The wallet, with what is in it when the bank has said.
+    let balance = crate::credits::me(world).and_then(|me| {
+        world
+            .get_resource::<crate::credits::Credits>()?
+            .balance(&me)
+    });
+    let wallet = match balance {
+        Some(balance) => tr_with(
+            "wallet-menu-balance",
+            &[("amount", &cadrs_credits::show(balance))],
+        ),
+        None => tr("wallet-menu"),
+    };
+    menu = menu
+        .item(MenuItem::new("wallet", wallet).icon("wallet"))
+        .separator();
     menu = menu
         .item(MenuItem::new("identity-new", tr("shell-identity-new-ellipsis")).icon("plus"))
         .item(MenuItem::new("identity-edit", tr("shell-identity-edit-ellipsis")).icon("user"))
+        .item(MenuItem::new("identity-link-device", tr("pair-link-menu")).icon("device-add"))
+        .item(MenuItem::new("identity-join-account", tr("pair-join-menu")).icon("qr-code"))
         .item(if cadrs_id.is_some() {
             MenuItem::new("identity-copy-id", tr("shell-identity-copy-id")).icon("copy")
         } else {
@@ -231,13 +318,38 @@ fn on_identity_action(
         "identity-new" => open_dialog(world, IdentityDialog::New),
         "identity-edit" => open_dialog(world, IdentityDialog::Edit),
         "identity-copy-id" => copy_id(world),
+        "identity-link-device" => crate::pairing_ui::open_link(world),
+        "identity-join-account" => crate::pairing_ui::open_join(world),
         "identity-preferences" => crate::preferences_ui::open_preferences(world),
+        "org-new" => crate::org_create::open(world),
+        "wallet" => crate::wallet_ui::open(world),
         i => {
-            if let Some(n) = i
-                .strip_prefix("identity-use-")
-                .and_then(|n| n.parse::<usize>().ok())
-            {
+            let numbered =
+                |prefix: &str| i.strip_prefix(prefix).and_then(|n| n.parse::<usize>().ok());
+            if let Some(n) = numbered("identity-use-") {
                 switch_to(world, n);
+            } else if let Some(n) = numbered("org-open-") {
+                let doc = world
+                    .resource::<crate::social::Social>()
+                    .orgs
+                    .get(n)
+                    .map(|o| o.doc);
+                if let Some(doc) = doc {
+                    crate::organization::open_by_id(world, doc);
+                }
+            } else if let Some(n) = numbered("org-join-").or(numbered("org-decline-")) {
+                let log = world
+                    .get_resource::<crate::org_sync::Invitations>()
+                    .and_then(|inv| inv.0.get(n).map(|i| i.log));
+                match log {
+                    Some(log) if i.starts_with("org-join-") => {
+                        if crate::org_sync::join(world, log) {
+                            crate::linked::toast(world, tr("org-invitation-joined"));
+                        }
+                    }
+                    Some(log) => crate::org_sync::decline(world, log),
+                    None => {}
+                }
             }
         }
     });

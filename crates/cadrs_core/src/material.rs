@@ -11,6 +11,9 @@
 //! - **EN 1993-1-1**: Eurocode 3, §3.2.6 (structural steel: ρ 7850 kg/m³, E 210 GPa, ν 0.3) and
 //!   Table 3.1 (S235: fy 235 MPa, fu 360 MPa).
 //! - **MatWeb**: MatWeb's "Overview of materials for …" averages for the named polymer.
+//! - **Eastman**: the maker's data sheet for the named grade (PETG: Eastar 6763, the
+//!   copolyester most PETG sheet and filament is made of; a data sheet gives no Poisson's ratio,
+//!   so that is the usual value for the polymer).
 //!
 //! Every entry has Young's modulus and Poisson's ratio, which the simulation (P3F.5,
 //! [`crate::simulation`]) reads; the stiffness of the course's simulation beam (E = 200 GPa) is
@@ -278,6 +281,14 @@ pub const LIBRARY: &[LibraryMaterial] = &[
         2.9,
         [0.0, 82.7, 0.0, 0.0],
         "MatWeb: nylon 66, unfilled, dry as molded",
+    ),
+    m(
+        "PETG",
+        1270.0,
+        0.4,
+        2.1,
+        [50.0, 50.0, 0.0, 0.0],
+        "Eastman: Eastar 6763 copolyester (PETG) data sheet; Poisson's ratio typical",
     ),
     m(
         "PLA",

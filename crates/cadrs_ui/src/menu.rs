@@ -264,6 +264,8 @@ pub struct MenuItem {
     dot: Option<Color>,
     /// A person's avatar in the icon column: their name and colour (a collaborator).
     avatar: Option<(String, Color)>,
+    /// A picture in the icon column (an organization's logo).
+    picture: Option<Handle<Image>>,
     /// Not built yet: left out of the menu (issue #13).
     planned: bool,
     /// A destructive action (Delete…): its label and icon in the danger colour.
@@ -286,10 +288,18 @@ impl MenuItem {
             tooltip: None,
             dot: None,
             avatar: None,
+            picture: None,
             planned: false,
             danger: false,
             icon_color: None,
         }
+    }
+
+    /// Shows a picture in the icon column (an organization's logo), instead of an icon or an
+    /// avatar.
+    pub fn picture(mut self, picture: Handle<Image>) -> Self {
+        self.picture = Some(picture);
+        self
     }
 
     /// A destructive action: its label and icon in the danger colour.
@@ -818,6 +828,7 @@ fn item_bundle(
         tooltip: _,
         dot,
         avatar,
+        picture,
         planned: _,
         danger: _,
         icon_color: _,
@@ -869,6 +880,30 @@ fn item_bundle(
             // Reserve the icon column so labels line up, as Onshape does.
             match icon_name {
                 _ if !icon_column => {}
+                _ if picture.is_some() => {
+                    let side = look.icon_size.max(18.0);
+                    p.spawn((
+                        Node {
+                            width: Val::Px(side),
+                            justify_content: JustifyContent::Center,
+                            ..default()
+                        },
+                        Pickable::IGNORE,
+                    ))
+                    .with_child((
+                        Name::new("menu-item-picture"),
+                        ImageNode::new(picture.unwrap_or_default()),
+                        Node {
+                            width: Val::Px(side),
+                            height: Val::Px(side),
+                            border_radius: BorderRadius::all(Val::Px(3.0)),
+                            overflow: Overflow::clip(),
+                            ..default()
+                        },
+                        crate::color_scheme::KeepFill,
+                        Pickable::IGNORE,
+                    ));
+                }
                 _ if avatar.is_some() => {
                     let (user, c) = avatar.unwrap_or_default();
                     p.spawn((

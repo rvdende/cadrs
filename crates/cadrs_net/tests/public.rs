@@ -422,3 +422,41 @@ fn a_rename_reaches_peers_and_newcomers_without_publishing_again() {
         .clone();
     assert_eq!(held.owner_name, "Ann");
 }
+
+/// A shop's listing said in the public room reaches the other peers there.
+#[test]
+fn a_shop_listing_is_heard_in_the_room() {
+    use cadrs_net::shops::Shops;
+    let mut shop = peer("Shop", &[]);
+    let mut viewer = peer("Viewer", &[&shop]);
+    shop.world_mut().resource_mut::<Shops>().mine = vec![b"a signed listing".to_vec()];
+    let mut heard = Vec::new();
+    until(&mut [&mut shop, &mut viewer], "the listing", |apps| {
+        heard.extend(apps[1].world_mut().resource_mut::<Shops>().take_heard());
+        !heard.is_empty()
+    });
+    assert_eq!(heard[0], b"a signed listing");
+}
+
+/// A line of the public chat said by one peer is heard by another in the room.
+#[test]
+fn a_public_chat_line_is_heard() {
+    use cadrs_net::public_chat::PublicChat;
+    let mut a = peer("A", &[]);
+    let mut b = peer("B", &[&a]);
+    a.world_mut()
+        .resource_mut::<PublicChat>()
+        .to_say
+        .push(b"hello all".to_vec());
+    let mut heard = Vec::new();
+    until(&mut [&mut a, &mut b], "the line", |apps| {
+        heard.extend(
+            apps[1]
+                .world_mut()
+                .resource_mut::<PublicChat>()
+                .take_heard(),
+        );
+        !heard.is_empty()
+    });
+    assert_eq!(heard[0], b"hello all");
+}

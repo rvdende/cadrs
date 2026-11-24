@@ -1,7 +1,7 @@
 # cadrs
 
-Onshape-style CAD in Rust + Bevy 0.20.1. Local notes in `docs/` (git-ignored: `PLAN.md`,
-`PROGRESS.md`, `ORCHESTRATOR.md` for background workers). Kernel design: `crates/cadrs_kernel/README.md`.
+Onshape-style CAD in Rust + Bevy 0.20.1. Notes in `docs/` (tracked): the work list
+(`work-list.md`), user journeys, release plans. Kernel design: `crates/cadrs_kernel/README.md`.
 
 ## Commands
 - Build in release everywhere so nothing builds twice: `cargo build -r`,
@@ -78,6 +78,23 @@ Onshape-style CAD in Rust + Bevy 0.20.1. Local notes in `docs/` (git-ignored: `P
   Bevy's main, on a branch of its own for a pull request upstream; `cargo update -w` then moves
   `Cargo.lock` to the branch's head.
 - `cadrs_core` and `cadrs_sketch` don't depend on bevy.
+- The social side (accounts, shops, quotes; branch `social`) is Bevy- and kernel-free so the phone
+  page can use it: `cadrs_social` (keys, devices, pairing, the signed log organizations live in,
+  sealing, mailboxes, contact cards, public chat), `cadrs_org` (organization documents: shop,
+  stock, quotes, orders; letters between clients and shops), `cadrs_social_net` (the
+  `cadrs/social/1` connection on plain iroh). `cadrs_net::social` speaks the same protocol for
+  the app (`cadrs_app::social`, `organization`, `org_sync`); `cadrs_mobile` is the phone page
+  (`tools/web/mobile.html`, built as `phone.html` and `404.html` by `tools/web/build.sh`,
+  `CADRS_WEB_ONLY=phone`). Two-app tests over local iroh: `cargo test -r -p cadrs_app --test
+  social_flow`.
+- Credits (test money until there is real payment): `cadrs_credits`. A bank is a trait
+  (`cadrs_credits::Bank`); today's is `trusting::Trusting`, which is no bank: each device keeps
+  its own wallets (an organization's in its document, `Op::Credits`), tells whoever it pays with
+  a signed note (`Post::Credited`), and notes are believed. A real ledger (Solana) replaces it
+  behind the trait (`crates/cadrs_credits/README.md`). App side: `cadrs_app::credits`,
+  `wallet_ui`. Two-app test: `cargo test -r -p cadrs_app --test credits_flow`.
+- `CADRS_NET=scenario` runs a scenario as a peer (no relays), for what only shows with a
+  network that is there and peers that don't answer; scenarios otherwise have no network.
 - Library parts are data, never code: `libraries/<Library>/<name>.symbol.ron|.footprint.ron`,
   read at runtime. `cargo run -r -p cadrs_libgen -- libraries` rewrites the built-in ones from
   their generators. The library browser's JLCPCB parts tab (`cadrs_easyeda`) downloads parts

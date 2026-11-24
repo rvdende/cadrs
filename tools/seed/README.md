@@ -2,7 +2,10 @@
 
 `cadrs --public-seed` in a container: it stays online in the public room, keeps every listing,
 star and published document, and so keeps documents reachable while their owners are offline
-(`cadrs_net::public`). Its identity (and so its cadrs ID) and what it keeps are in `/data`.
+(`cadrs_net::public`). It is also everyone's default mailbox: letters to people and shops who
+are offline wait there, sealed so the seed can't read them, until their devices collect them
+(`cadrs_net::social`, `cadrs_social::mailbox`; kept in `/data/mailbox.bin`). Its identity (and
+so its cadrs ID) and what it keeps are in `/data`.
 
 cadrs's own seed runs on the Unraid server (cadrs ID
 `a560c0cfdeaac54cde945476f851486bbdf584adc280c4120616b06a6b10ba6f`, in
@@ -18,4 +21,5 @@ ssh root@<server> 'cd /mnt/user/appdata/cadrs-seed/build && docker build -t cadr
   -v /mnt/user/appdata/cadrs-seed/data:/data cadrs-seed'
 ```
 
-`docker logs cadrs-seed` shows its cadrs ID, the peers it meets and the revisions it keeps.
+`docker logs cadrs-seed` shows its cadrs ID, the peers it meets, the revisions it keeps and the
+letters waiting in its mailbox.
