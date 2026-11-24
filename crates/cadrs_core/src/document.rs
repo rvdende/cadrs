@@ -49,6 +49,8 @@ pub struct Document {
     /// The presets of its configured Part Studios that its assemblies use, as generated Part
     /// Studios that are not tabs, found by [`Document::element`] (see
     /// [`crate::configuration`]). Kept up to date by [`crate::configuration::refresh`].
+    /// Saved, although regenerated on opening: a document read without a refresh (a version,
+    /// another document an assembly links to, a peer's copy) still finds its instances' parts.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub configured: Vec<crate::configuration::ConfiguredStudio>,
 }

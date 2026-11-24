@@ -482,9 +482,13 @@ pub fn refresh(doc: &mut Document) {
         let Some((studio, preset)) = configured_of(doc, id) else {
             continue;
         };
-        let Some(src) = doc.elements.iter().find(|e| e.id == studio) else {
+        let Some(at) = doc.elements.iter().position(|e| e.id == studio) else {
             continue;
         };
+        // Compared without what does not change its build (the node view's layout, the preset
+        // the studio shows), put back after.
+        let aside = set_aside(&mut doc.elements[at]);
+        let src = &doc.elements[at];
         // Unchanged since it was generated: kept as it is.
         if let Some(c) = doc
             .configured
@@ -492,20 +496,41 @@ pub fn refresh(doc: &mut Document) {
             .find(|c| c.element.id == id && c.source.as_deref() == Some(src))
         {
             out.push(c.clone());
-            continue;
+        } else if let Some(el) = generate(src, preset, &doc.units) {
+            out.push(ConfiguredStudio {
+                studio,
+                preset,
+                element: el,
+                source: Some(std::sync::Arc::new(src.clone())),
+            });
         }
-        let Some(el) = generate(src, preset, &doc.units) else {
-            continue;
-        };
-        out.push(ConfiguredStudio {
-            studio,
-            preset,
-            element: el,
-            source: Some(std::sync::Arc::new(src.clone())),
-        });
+        put_back(&mut doc.elements[at], aside);
     }
     if out != doc.configured {
         doc.configured = out;
+    }
+}
+
+/// Takes a studio's node layout out and makes its first preset the active one (neither
+/// changes what a preset builds), for [`put_back`].
+fn set_aside(el: &mut Element) -> (Option<Box<NodeLayout>>, Option<PresetId>) {
+    let layout = match &mut el.kind {
+        ElementKind::PartStudio { node_layout, .. } => node_layout.take(),
+        _ => None,
+    };
+    let active = el.configuration_mut().and_then(|c| {
+        let first = c.presets.first()?.id;
+        Some(std::mem::replace(&mut c.active, first))
+    });
+    (layout, active)
+}
+
+fn put_back(el: &mut Element, (layout, active): (Option<Box<NodeLayout>>, Option<PresetId>)) {
+    if let ElementKind::PartStudio { node_layout, .. } = &mut el.kind {
+        *node_layout = layout;
+    }
+    if let (Some(c), Some(a)) = (el.configuration_mut(), active) {
+        c.active = a;
     }
 }
 

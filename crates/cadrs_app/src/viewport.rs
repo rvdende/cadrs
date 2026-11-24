@@ -1847,13 +1847,14 @@ fn view_shortcuts(
     mut planes: ResMut<PlanesVisible>,
     inset: Res<DialogInset>,
     mut commands: Commands,
-    (cache, asm_parts, pcb_scene, eda2d, layout, in_sketch): (
+    (cache, asm_parts, pcb_scene, eda2d, layout, in_sketch, over_nodes): (
         Res<crate::parts::PartCache>,
         Res<crate::assembly::AssemblyParts>,
         Option<Res<crate::pcb::view::PcbScene>>,
         Res<crate::eda::Eda2d>,
         Res<crate::eda::layout_tools::LayoutState>,
         Option<Res<crate::sketch_tools::SketchSelection>>,
+        Option<Res<crate::node_view::PointerOverNodes>>,
     ),
 ) {
     if kind.is_flat() || eda2d.flat() {
@@ -1997,6 +1998,8 @@ fn view_shortcuts(
                     view.animate_to(to);
                 }
             }
+            // Over the node view: F fits its nodes (`crate::node_view`), not the 3D view.
+            KeyCode::KeyF if !shift && over_nodes.as_ref().is_some_and(|o| o.0) => {}
             // A board's layout edited in the view: F flips the selected footprint
             // (`crate::eda::layout_tools`).
             KeyCode::KeyF

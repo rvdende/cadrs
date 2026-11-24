@@ -521,6 +521,44 @@ fn presets_in_use_stay() {
     assert_eq!(instances_using(&t.d, t.ps, None).0, 1);
 }
 
+/// A preset an assembly uses is generated again only when its studio's build changes: not when
+/// the node view's nodes move, nor when the studio shows another preset.
+#[test]
+fn moving_nodes_or_switching_presets_keeps_generated_studios() {
+    let mut t = T::new();
+    let (input, short, long) = t.with_presets();
+    insert_preset(&mut t, short);
+    // (The source each was generated from: a new one is a regeneration.)
+    let generated = |t: &T| std::sync::Arc::as_ptr(t.d.configured[0].source.as_ref().unwrap());
+    let before = generated(&t);
+    t.run(&MoveGraphNodes {
+        element: t.ps,
+        positions: vec![(t.ext, [100.0, 40.0])],
+        inputs_node: Some([0.0, 0.0]),
+        parts_node: None,
+    });
+    t.run(&SetActivePreset {
+        element: t.ps,
+        preset: long,
+    });
+    assert_eq!(generated(&t), before);
+    // The source kept as compared: the layout and the active preset are the studio's again.
+    assert_eq!(t.config().active, long);
+    assert!(
+        t.el()
+            .node_layout()
+            .is_some_and(|l| !l.positions.is_empty())
+    );
+    // A value of the preset is a change.
+    t.run(&SetPresetValue {
+        element: t.ps,
+        preset: short,
+        input,
+        value: Some(12.0),
+    });
+    assert_ne!(generated(&t), before);
+}
+
 /// An instance switched to another preset keeps its id, place and the assembly's mates.
 #[test]
 fn switching_presets_keeps_mates() {

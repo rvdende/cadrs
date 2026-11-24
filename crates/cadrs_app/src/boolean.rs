@@ -725,7 +725,10 @@ fn sync_boolean_dialog(
     theme: Res<Theme>,
     q_area: Query<Entity, With<ViewportArea>>,
     mut q_dialog: Query<(Entity, &BuiltFor, &mut FeatureDialogState), With<BooleanDialog>>,
-    mut q_lists: Query<(&ListRole, &mut SelectionListState)>,
+    mut q_lists: Query<
+        (&ListRole, &mut SelectionListState),
+        Without<cadrs_ui::node_graph::StaticCopy>,
+    >,
     mut commands: Commands,
 ) {
     let (Some(doc), Some(s)) = (doc, session) else {

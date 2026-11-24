@@ -38,8 +38,8 @@ use cadrs_core::{Element, ElementId, Feature, FeatureId, FeatureKind};
 use cadrs_sketch::units::{Quantity, Units};
 use cadrs_ui::i18n::tr;
 use cadrs_ui::node_graph::{
-    CanvasViewChanged, FitCanvas, GraphNode, GraphNodeHandle, GraphNodeMoved, NodeCanvas,
-    NodeCanvasBuilder, PanZoom, Socket, SocketSide, StaticCopyRoot, Wire, WireConnect,
+    CanvasViewChanged, FitCanvas, GraphNode, GraphNodeHandle, GraphNodeMoved, KeepLaidOut,
+    NodeCanvas, NodeCanvasBuilder, PanZoom, Socket, SocketSide, StaticCopyRoot, Wire, WireConnect,
     WireDisconnect,
 };
 use cadrs_ui::{
@@ -63,6 +63,12 @@ impl Plugin for NodeViewPlugin {
         .init_resource::<NodeView>()
         .init_resource::<PendingMoves>()
         .init_resource::<MeasuredHeights>()
+        .init_resource::<PointerOverNodes>()
+        // (Before the key handlers of the frame: the 3D view's F looks at it.)
+        .add_systems(
+            PreUpdate,
+            track_pointer_over.after(bevy::picking::PickingSystems::Hover),
+        )
         .add_observer(on_toggle)
         .add_observer(on_view_changed)
         .add_observer(on_node_moved)
@@ -205,7 +211,6 @@ enum SocketKey {
     Bypass(FeatureId),
     /// A configuration input, by name.
     Input(String),
-    /// A Variable feature's value, by name.
     /// A Variable feature's value (the feature: a name can be defined again further down).
     Variable(FeatureId),
     /// A part of the Parts node.
@@ -222,25 +227,39 @@ struct PressedAt(Vec2);
 
 /// F with the pointer over the node view (and no field typed in) frames every node, as F frames
 /// the model in the 3D view.
-fn fit_on_f(
-    keys: Res<ButtonInput<KeyCode>>,
-    focus: Res<bevy::input_focus::InputFocus>,
+/// Whether the pointer is over a node view (where F fits the nodes, and not the 3D view).
+#[derive(Resource, Debug, Default, Clone, Copy)]
+pub struct PointerOverNodes(pub bool);
+
+fn track_pointer_over(
     hover: Res<bevy::picking::hover::HoverMap>,
     q_canvas: Query<Entity, With<NodeViewCanvas>>,
     q_parent: Query<&ChildOf>,
+    mut over: ResMut<PointerOverNodes>,
+) {
+    let now = q_canvas.iter().any(|canvas| {
+        hover
+            .values()
+            .flat_map(|m| m.keys())
+            .any(|e| *e == canvas || q_parent.iter_ancestors(*e).any(|a| a == canvas))
+    });
+    if over.0 != now {
+        over.0 = now;
+    }
+}
+
+fn fit_on_f(
+    keys: Res<ButtonInput<KeyCode>>,
+    focus: Res<bevy::input_focus::InputFocus>,
+    over: Res<PointerOverNodes>,
+    q_canvas: Query<Entity, With<NodeViewCanvas>>,
     mut commands: Commands,
 ) {
-    if !keys.just_pressed(KeyCode::KeyF) || focus.get().is_some() {
+    if !keys.just_pressed(KeyCode::KeyF) || focus.get().is_some() || !over.0 {
         return;
     }
     for canvas in &q_canvas {
-        let over = hover
-            .values()
-            .flat_map(|m| m.keys())
-            .any(|e| *e == canvas || q_parent.iter_ancestors(*e).any(|a| a == canvas));
-        if over {
-            commands.trigger(FitCanvas { entity: canvas });
-        }
+        commands.trigger(FitCanvas { entity: canvas });
     }
 }
 
@@ -330,10 +349,17 @@ fn socket_color(ty: u32) -> Color {
 fn geometry_color(f: &Feature) -> Color {
     match f.kind {
         FeatureKind::Sketch(_) => Color::srgb_u8(0x3d, 0x84, 0xe0),
-        FeatureKind::Plane(_) | FeatureKind::MateConnector(_) => Color::srgb_u8(0x90, 0x90, 0x90),
+        FeatureKind::Plane(_) | FeatureKind::MateConnector(_) => PLANE_GREY,
         _ => socket_color(GEOMETRY),
     }
 }
+
+/// What a plane (a Plane feature's output, or a default plane a sketch is on) is drawn in.
+const PLANE_GREY: Color = Color::srgb(
+    0x90 as f32 / 255.0,
+    0x90 as f32 / 255.0,
+    0x90 as f32 / 255.0,
+);
 
 /// A node's header tint by what the feature is (Blender colours its node headers by kind).
 fn category_color(f: &Feature) -> Color {
@@ -522,7 +548,6 @@ fn layout(el: &Element, measured: &HashMap<FeatureId, f32>) -> Layout {
             cadrs_core::feature_list::parents(features, f.id)
                 .iter()
                 .filter_map(|p| index.get(p).copied())
-                .filter(|p| *p < features.len())
                 .collect()
         })
         .collect();
@@ -730,10 +755,21 @@ fn sync_grid_scheme(
 /// A hash of a feature (its name, parameters and suppression rule), for telling whether its
 /// node must be built again.
 fn feature_hash(f: &Feature) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    format!("{:?}{:?}{:?}", f.name, f.kind, f.suppress_by).hash(&mut h);
-    h.finish()
+    use std::hash::Hasher;
+    /// Hashes what is written to it (the feature's debug text, never built as a string).
+    struct Sink(std::collections::hash_map::DefaultHasher);
+    impl std::fmt::Write for Sink {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            self.0.write(s.as_bytes());
+            Ok(())
+        }
+    }
+    let mut h = Sink(Default::default());
+    let _ = std::fmt::Write::write_fmt(
+        &mut h,
+        format_args!("{:?}{:?}{:?}", f.name, f.kind, f.suppress_by),
+    );
+    h.0.finish()
 }
 
 /// Moves the live dialog hosted under `under` (a node or the canvas about to go) back over the
@@ -764,6 +800,8 @@ fn rescue_hosted(world: &mut World, under: Entity) {
         world.flush();
         if let Some(mut n) = world.get_mut::<Node>(d) {
             n.position_type = PositionType::Absolute;
+            // (Shown, whatever its node's culling left.)
+            n.display = Display::Flex;
         }
         // Its header no longer drags a node.
         if let Some(h) = world.get::<Children>(d).and_then(|c| c.first().copied()) {
@@ -951,15 +989,7 @@ fn sync_nodes(world: &mut World, mut last_edited: Local<Option<Option<FeatureId>
             for (e, _) in &cfg_have {
                 world.entity_mut(*e).despawn();
             }
-            spawn_config_node(
-                world,
-                element,
-                &el,
-                ckey,
-                inputs_pos,
-                canvas.world(),
-                &theme,
-            );
+            spawn_config_node(world, element, ckey, inputs_pos, canvas.world(), &theme);
             changed = true;
         }
     }
@@ -1326,10 +1356,12 @@ fn spawn_feature_node(
     // an extrude's regions, a fillet's edges), coloured as what it references (a plane grey, a
     // sketch blue, a part green); on the header when the node has none (or is collapsed).
     let parents = cadrs_core::feature_list::parents(el.features(), f.id);
-    let in_color = parents
-        .first()
-        .and_then(|p| el.feature(*p))
-        .map_or(socket_color(GEOMETRY), geometry_color);
+    // (A sketch on a default plane, Top, Front or Right, takes a plane too.)
+    let in_color = match parents.first().and_then(|p| el.feature(*p)) {
+        Some(p) => geometry_color(p),
+        None if matches!(f.kind, FeatureKind::Sketch(_) | FeatureKind::Plane(_)) => PLANE_GREY,
+        None => socket_color(GEOMETRY),
+    };
     let field_row = (!collapsed)
         .then(|| {
             descendants(world, card).into_iter().find(|e| {
@@ -1625,15 +1657,6 @@ fn rebuild_wires(
     canvas: Entity,
     layer: Entity,
 ) {
-    let mut q_wires = world.query::<(Entity, &ChildOf, &Wire)>();
-    let old: Vec<Entity> = q_wires
-        .iter(world)
-        .filter(|(_, p, _)| p.parent() == layer)
-        .map(|(e, ..)| e)
-        .collect();
-    for e in old {
-        world.entity_mut(e).despawn();
-    }
     let mut q_sock = world.query::<(Entity, &SocketKey)>();
     let sockets: HashMap<SocketKey, Entity> = q_sock
         .iter(world)
@@ -1703,22 +1726,40 @@ fn rebuild_wires(
             ));
         }
     }
-    for (i, (a, b, color, dashed)) in wires.into_iter().enumerate() {
-        let (Some(from), Some(to)) = (sockets.get(&a), sockets.get(&b)) else {
-            continue;
-        };
-        world.spawn((
-            Wire::bundle(
-                format!("node-wire-{i}"),
-                Wire {
-                    from: *from,
-                    to: *to,
-                    color,
-                    dashed,
-                },
-            ),
-            ChildOf(layer),
-        ));
+    let wanted: Vec<Wire> = wires
+        .into_iter()
+        .filter_map(|(a, b, color, dashed)| {
+            Some(Wire {
+                from: *sockets.get(&a)?,
+                to: *sockets.get(&b)?,
+                color,
+                dashed,
+            })
+        })
+        .collect();
+    update_wires(world, layer, wanted);
+}
+
+/// Makes the wires under `layer` the `wanted` ones: a wire already there is kept (with its
+/// route, so a document change that leaves it as it was neither redraws nor reroutes it), the
+/// others are spawned, and the ones no longer wanted go.
+fn update_wires(world: &mut World, layer: Entity, mut wanted: Vec<Wire>) {
+    let mut q_wires = world.query::<(Entity, &ChildOf, &Wire)>();
+    let old: Vec<(Entity, Wire)> = q_wires
+        .iter(world)
+        .filter(|(_, p, _)| p.parent() == layer)
+        .map(|(e, _, w)| (e, *w))
+        .collect();
+    for (e, w) in old {
+        if let Some(i) = wanted.iter().position(|x| *x == w) {
+            wanted.swap_remove(i);
+        } else {
+            world.entity_mut(e).despawn();
+        }
+    }
+    for w in wanted {
+        let name = format!("node-wire-{}-{}", w.from.index(), w.to.index());
+        world.spawn((Wire::bundle(name, w), ChildOf(layer)));
     }
 }
 
@@ -1766,7 +1807,6 @@ struct ConfigElement(ElementId);
 fn spawn_config_node(
     world: &mut World,
     element: ElementId,
-    el: &Element,
     key: ConfigKey,
     pos: Vec2,
     parent: Entity,
@@ -1797,7 +1837,6 @@ fn spawn_config_node(
         .as_ref()
         .map(|c| c.inputs.iter().map(|i| (i.id, i.name.clone())).collect())
         .unwrap_or_default();
-    let _ = el;
     let card = FeatureDialog::new("node-configuration-card")
         .static_copy()
         .width(width)
@@ -2613,7 +2652,25 @@ fn on_body_click(
 /// Moves the dialog of the feature being edited into its node (laid out there, opaque), and
 /// hides the node's copy while it is.
 fn host_live_dialog(world: &mut World) {
-    let Some((element, feature)) = crate::variables_ui::edited_feature(world) else {
+    let edited = crate::variables_ui::edited_feature(world);
+    // The edited feature's node is never culled (its live dialog would go with it).
+    let nodes: Vec<(Entity, bool, bool)> = world
+        .query::<(Entity, &FeatureNode, Has<KeepLaidOut>)>()
+        .iter(world)
+        .map(|(e, n, k)| (e, Some(n.feature) == edited.map(|x| x.1), k))
+        .collect();
+    for (e, want, has) in nodes {
+        match (want, has) {
+            (true, false) => {
+                world.entity_mut(e).insert(KeepLaidOut);
+            }
+            (false, true) => {
+                world.entity_mut(e).remove::<KeepLaidOut>();
+            }
+            _ => {}
+        }
+    }
+    let Some((element, feature)) = edited else {
         return;
     };
     if !world.resource::<NodeView>().is_on(element) {
@@ -2625,6 +2682,10 @@ fn host_live_dialog(world: &mut World) {
         .find(|(_, n)| n.feature == feature)
         .map(|(e, _)| e);
     let Some(node) = node else { return };
+    // A culled node first comes back (its copy's display is restored then, not after).
+    if world.get::<cadrs_ui::node_graph::Culled>(node).is_some() {
+        return;
+    }
     let mut q_area = world.query_filtered::<Entity, With<ViewportArea>>();
     let Some(area) = q_area.iter(world).next() else {
         return;
@@ -3307,7 +3368,7 @@ mod tests {
 
     #[test]
     fn nodes_are_laid_out_by_reference_depth() {
-        use cadrs_core::document::{ExtrudeFeature, RegionRef};
+        use cadrs_core::document::ExtrudeFeature;
         let mut el = Element::part_studio("Part Studio 1");
         let sketch = FeatureId::new();
         let ext = FeatureId::new();
@@ -3319,7 +3380,6 @@ mod tests {
         ));
         let mut e = ExtrudeFeature::default();
         e.sketches.push(sketch);
-        let _ = RegionRef::new;
         fs.push(Feature::new(ext, "Extrude 1", FeatureKind::Extrude(e)));
         let pos = layout(&el, &HashMap::new()).features;
         assert!(pos[&ext].x > pos[&sketch].x);

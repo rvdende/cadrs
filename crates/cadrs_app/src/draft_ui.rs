@@ -771,8 +771,14 @@ pub(crate) fn on_entry_group_action(
 pub(crate) fn sync_fillet_entries(
     doc: Option<Res<ActiveDocument>>,
     session: Option<Res<AppliedSession>>,
-    mut q_entries: Query<(&Role, &mut cadrs_ui::EntryState)>,
-    mut q_groups: Query<(&Role, &mut cadrs_ui::EntryGroupState)>,
+    mut q_entries: Query<
+        (&Role, &mut cadrs_ui::EntryState),
+        Without<cadrs_ui::node_graph::StaticCopy>,
+    >,
+    mut q_groups: Query<
+        (&Role, &mut cadrs_ui::EntryGroupState),
+        Without<cadrs_ui::node_graph::StaticCopy>,
+    >,
 ) {
     let (Some(doc), Some(s)) = (doc, session) else {
         return;

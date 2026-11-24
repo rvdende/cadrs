@@ -5,7 +5,7 @@
 //! user does ([`WireConnect`], [`WireDisconnect`], [`GraphNodeMoved`]).
 //!
 //! - **[`NodeCanvas`]** is a clipped area with two layers that pan and zoom together, the wires
-//!   under the nodes. The wheel zooms about the pointer (0.25× to 1×: past 1× the text would be
+//!   under the nodes. The wheel zooms about the pointer (0.1× to 1×: past 1× the text would be
 //!   stretched, not drawn sharper); a middle or right drag pans; [`FitCanvas`] frames every node.
 //!   The maths is [`PanZoom`].
 //! - **[`GraphNode`]** is a node at a place in graph coordinates (px at 1×). Dragging any
@@ -658,11 +658,17 @@ fn on_box_end(
 /// A node culled off screen ([`cull_nodes`]): its size then, and what its contents' display
 /// was (they are taken out of the layout; its sockets stay, so its wires still reach it).
 #[derive(Component, Debug, Clone)]
-struct Culled {
+pub struct Culled {
     size: Vec2,
+    width: Val,
     height: Val,
     hidden: Vec<(Entity, Display)>,
 }
+
+/// A node that is never culled (the one whose contents the app keeps live, such as the dialog
+/// being edited): a culled one comes back at once.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct KeepLaidOut;
 
 /// Takes the nodes well outside the view out of the layout (their contents, not their sockets
 /// or their place): a large graph lays out and draws only what shows. They come back when
@@ -679,6 +685,7 @@ fn cull_nodes(
             &Children,
             Option<&Culled>,
             Has<GraphNodeDragging>,
+            Has<KeepLaidOut>,
         ),
         Without<Socket>,
     >,
@@ -692,7 +699,7 @@ fn cull_nodes(
     for (c, cn) in &q_canvas {
         let size = cn.size() * cn.inverse_scale_factor();
         let view = Rect::from_corners(Vec2::splat(-MARGIN), size + MARGIN);
-        for (e, g, n, p, kids, culled, dragging) in &mut q_nodes {
+        for (e, g, n, p, kids, culled, dragging, keep) in &mut q_nodes {
             if p.parent() != c.world {
                 continue;
             }
@@ -701,7 +708,7 @@ fn cull_nodes(
                 continue;
             }
             let r = Rect::from_corners(c.view.to_screen(g.pos), c.view.to_screen(g.pos + nsize));
-            let off = r.intersect(view).is_empty() && !dragging;
+            let off = r.intersect(view).is_empty() && !dragging && !keep;
             match (off, culled) {
                 (true, None) => {
                     let mut hidden = Vec::new();
@@ -714,11 +721,12 @@ fn cull_nodes(
                     let Ok(mut rn) = q_root.get_mut(e) else {
                         continue;
                     };
-                    let height = rn.height;
+                    let (width, height) = (rn.width, rn.height);
                     rn.height = Val::Px(nsize.y);
                     rn.width = Val::Px(nsize.x);
                     commands.entity(e).insert(Culled {
                         size: nsize,
+                        width,
                         height,
                         hidden,
                     });
@@ -731,6 +739,7 @@ fn cull_nodes(
                     }
                     if let Ok(mut rn) = q_root.get_mut(e) {
                         rn.height = k.height;
+                        rn.width = k.width;
                     }
                     commands.entity(e).remove::<Culled>();
                 }

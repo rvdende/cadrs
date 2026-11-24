@@ -685,7 +685,7 @@ pub struct InsertInstance {
 
 /// Changes a Part Studio's configuration (its inputs and presets; see get_configuration). The
 /// changes are made in this order: inputs added or changed, inputs removed, presets added or
-/// changed, presets removed, the active preset. Each is an undo step.
+/// changed, presets removed, the active preset: all as one undo step, or none if one fails.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SetConfiguration {
     /// The Part Studio tab's name; omitted: the active tab.

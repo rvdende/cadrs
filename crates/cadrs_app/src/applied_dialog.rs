@@ -828,7 +828,6 @@ pub(crate) fn body_column(b: &mut ChildSpawner, f: impl FnOnce(&mut ChildSpawner
 }
 
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 fn dialog(
     theme: &Theme,
     f: &Feature,
