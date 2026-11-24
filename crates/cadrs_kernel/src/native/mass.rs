@@ -353,6 +353,7 @@ fn inner<const ALL: bool>(
     acc: &mut QE,
     scratch: &mut Vec<f64>,
     table: Option<&super::nurbs::SpanRule>,
+    cells: Option<&super::nurbs::Cells>,
 ) {
     if (u - u0).abs() < tol::TINY {
         return;
@@ -366,6 +367,36 @@ fn inner<const ALL: bool>(
     }
     plan.pieces(u0, u, scratch);
     let g = gauss(plan.n);
+    // The surface's cells as polynomials: each piece (inside one cell) a row of them at this
+    // v, then a Horner sum a point.
+    if let Some(cells) = cells {
+        let col = cells.col(v);
+        let mut row: Option<super::nurbs::CellRow> = None;
+        let mut whole = true;
+        let mut part = [0.0; NE];
+        for k in 0..scratch.len() - 1 {
+            let (lo, hi) = (scratch[k], scratch[k + 1]);
+            if !row.as_ref().is_some_and(|r| r.holds(lo, hi)) {
+                row = cells.row(col, v, lo, hi);
+            }
+            let Some(r) = row.as_ref() else {
+                whole = false;
+                break;
+            };
+            let (m, h) = ((lo + hi) * 0.5, (hi - lo) * 0.5);
+            for (x, gw) in g.x.iter().zip(g.w) {
+                let (p, su, sv) = r.d1(m + h * x);
+                accumulate::<ALL>(&p, &su, &sv, shift, &mut part, w * gw * h);
+            }
+        }
+        if whole {
+            for (a, x) in acc.iter_mut().zip(part) {
+                *a += x;
+            }
+            return;
+        }
+        // (A piece across a knot after all: the integral the usual way.)
+    }
     // A B-spline surface along u at this v: its control net contracted along v once, then a
     // curve's evaluation per point.
     let iso = if let Surface::Nurbs(ns) = s {
@@ -1252,6 +1283,7 @@ pub(crate) fn face_integrals_of<const ALL: bool>(body: &Body, f: &Face, shift: &
                             &mut acc,
                             &mut scratch,
                             None,
+                            None,
                         );
                     }
                 }
@@ -1399,8 +1431,15 @@ fn run_jobs<const ALL: bool>(
     }
     // (Many in chunks across the cores, the chunks' sums added in order: the same sum however
     // they are shared out.)
+    // (Many points on few cells: the cells as polynomials, built once; else whole spans'
+    // bases kept.)
+    let cells = match s {
+        Surface::Nurbs(ns) if jobs.len() >= 256 => ns.cells(),
+        _ => None,
+    };
+    let cells = cells.as_ref();
     let table = match s {
-        Surface::Nurbs(ns) => plan.table(ns, jobs),
+        Surface::Nurbs(ns) if cells.is_none() => plan.table(ns, jobs),
         _ => None,
     };
     let table = table.as_ref();
@@ -1414,7 +1453,7 @@ fn run_jobs<const ALL: bool>(
             let mut sc = Vec::with_capacity(64);
             for j in c {
                 inner::<ALL>(
-                    s, plan, j[0], j[1], j[2], shift, j[3], &mut a, &mut sc, table,
+                    s, plan, j[0], j[1], j[2], shift, j[3], &mut a, &mut sc, table, cells,
                 );
             }
             a
@@ -1432,7 +1471,9 @@ fn run_jobs<const ALL: bool>(
         return;
     }
     for j in jobs {
-        inner::<ALL>(s, plan, j[0], j[1], j[2], shift, j[3], acc, scratch, table);
+        inner::<ALL>(
+            s, plan, j[0], j[1], j[2], shift, j[3], acc, scratch, table, cells,
+        );
     }
 }
 

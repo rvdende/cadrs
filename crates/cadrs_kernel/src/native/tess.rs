@@ -899,7 +899,7 @@ fn steps(dom: &Domain, ub: (f64, f64), vb: (f64, f64), defl: f64, ang: f64) -> (
         for j in 0..=n {
             let u = ub.0 + (ub.1 - ub.0) * i as f64 / n as f64;
             let v = vb.0 + (vb.1 - vb.0) * j as f64 / n as f64;
-            let (su, sv) = steps_at(dom, u, v, defl, ang);
+            let (su, sv) = steps_at(dom, u, v, (ub.1 - ub.0, vb.1 - vb.0), defl, ang);
             hu = hu.min(su);
             hv = hv.min(sv);
         }
@@ -907,8 +907,9 @@ fn steps(dom: &Domain, ub: (f64, f64), vb: (f64, f64), defl: f64, ang: f64) -> (
     (hu, hv)
 }
 
-/// [`steps`] at one point of the surface (infinite where it is degenerate).
-fn steps_at(dom: &Domain, u: f64, v: f64, defl: f64, ang: f64) -> (f64, f64) {
+/// [`steps`] at one point of the surface (infinite where it is degenerate), on a face whose uv
+/// box is `span` wide each way.
+fn steps_at(dom: &Domain, u: f64, v: f64, span: (f64, f64), defl: f64, ang: f64) -> (f64, f64) {
     let d = dom.d2(u, v);
     let nn = d[1].cross(&d[2]);
     if nn.norm() < tol::DEGENERATE {
@@ -939,10 +940,18 @@ fn steps_at(dom: &Domain, u: f64, v: f64, defl: f64, ang: f64) -> (f64, f64) {
     // takes the step that keeps that within the chord (both ways alike where both are
     // straight). (With no step that way, such a face had no rows: its triangles ran its
     // whole height, and the refinement split them to twenty thousand to make up for it.)
+    // That sag is also at most a quarter of the cell's two sides along the straight way (the
+    // middles of its diagonals are half their sum apart at most), so a face narrower that way
+    // than twice the chord needs no step across it, however fast its rulings turn: a ruled
+    // sliver 0.01 mm wide along a helical gear's tooth, its rulings swinging round, took a
+    // million-point grid (the twist's step 6·10⁻⁴ across, rows 0.005 mm apart along).
     let cm = d[4].dot(&nn).abs();
     let (lu, lv) = (d[1].norm(), d[2].norm());
+    let narrow = |l: f64, w: f64| l * w <= 2.0 * defl;
     if cm > 1e-9 * lu * lv && lu > tol::DEGENERATE && lv > tol::DEGENERATE {
         match (su.is_finite(), sv.is_finite()) {
+            (true, false) if narrow(lv, span.1) => {}
+            (false, true) if narrow(lu, span.0) => {}
             (true, false) => sv = 4.0 * defl / (cm * su),
             (false, true) => su = 4.0 * defl / (cm * sv),
             (false, false) => {
@@ -1090,6 +1099,7 @@ fn seed_grid(
     let (defl, ang) = (p.chord, p.ang());
     let (hu, hv) = steps(dom, ubox, vbox, defl, ang);
     let along = |b: (f64, f64), k: usize| b.0 + (b.1 - b.0) * k as f64 / 6.0;
+    let span = (ubox.1 - ubox.0, vbox.1 - vbox.0);
     let lines = |b: (f64, f64), h: f64, step: &dyn Fn(f64) -> f64| -> Vec<f64> {
         // A step longer than the face is no step (straight to rounding: a loft along a line).
         if !(h < b.1 - b.0) {
@@ -1104,18 +1114,29 @@ fn seed_grid(
     };
     let mut us = lines(ubox, hu, &|u| {
         (0..=6)
-            .map(|j| steps_at(dom, u, along(vbox, j), defl, ang).0)
+            .map(|j| steps_at(dom, u, along(vbox, j), span, defl, ang).0)
             .fold(f64::INFINITY, f64::min)
     });
     let mut vs = lines(vbox, hv, &|v| {
         (0..=6)
-            .map(|i| steps_at(dom, along(ubox, i), v, defl, ang).1)
+            .map(|i| steps_at(dom, along(ubox, i), v, span, defl, ang).1)
             .fold(f64::INFINITY, f64::min)
     });
     if us.is_empty() && vs.is_empty() {
         return grid;
     }
     let (wu, wv) = ((ubox.1 - ubox.0) * mu, (vbox.1 - vbox.0) * mv);
+    // A face narrower one way than the chord takes no lines across that way: a chord across
+    // it is within the chord of it however it bends. (A sharp-rooted hypoid gear's fillet
+    // strips, 28 mm by 0.03 mm and bent through a right angle across, took 24 rows across and
+    // then, rows being kept within half the width apart, 2 000 columns along: 98 000
+    // triangles each, a hundred of them.)
+    if wv <= p.chord {
+        vs.clear();
+    }
+    if wu <= p.chord {
+        us.clear();
+    }
     // Straight along v (cylinders, cones, extrusions): long triangles from one end to the other
     // are exact there and keep the rulings whole; only very long ones are cut.
     if vs.is_empty() {
@@ -1671,15 +1692,19 @@ fn mesh_face_split(
     let pts_uv: Vec<P2> = pts.iter().map(|b| b.uv).collect();
     let grid = seed_grid(&dom, &pts_uv, &loops, ubox, vbox, scale, p);
     // The triangulation's coordinates: the lengths scaled so the grid's cells are square (up to
-    // eight to one), where the surface bends far more one way than the other (round a tube,
+    // 16 to one), where the surface bends far more one way than the other (round a tube,
     // not along it). Delaunay of cells five times longer than wide joined points two and three
     // columns apart, whose normals turned past the angle: the refinement then split them until
-    // the triangles were as short along as round (a helical pipe's faces 8 000 triangles each).
+    // the triangles were as short along as round (a helical pipe's faces 8 000 triangles each;
+    // at eight to one, a spiral bevel gear's tooth-space floors, bent 180 times as sharply
+    // across as along, 15 000 each where 7 000 do at 16 to one; at 32 or 64 to one, triangles
+    // so long that they stray past the chord between the refinement's checks, on a tapered
+    // fillet's spline and a car body's surfaces).
     let scale = {
         let (hu, hv) = steps(&dom, ubox, vbox, p.chord, p.ang());
         let (cu, cv) = (hu * scale.0, hv * scale.1);
         if cu.is_finite() && cv.is_finite() && cu > 0.0 && cv > 0.0 {
-            let r = (cv / cu).clamp(1.0 / 8.0, 8.0);
+            let r = (cv / cu).clamp(1.0 / 16.0, 16.0);
             if r > 1.0 {
                 (scale.0, scale.1 / r)
             } else {
