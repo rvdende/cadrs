@@ -3792,8 +3792,9 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     let mut ssis: Vec<Found> = Vec::with_capacity(pairs.len());
     PAIRS.fetch_add(pairs.len() as u64, std::sync::atomic::Ordering::Relaxed);
     // (On the threads from the first where a pair's curve is not a conic found in closed form:
-    // a plane with a plane, a cylinder, a cone or a sphere is, and two spheres are; a torus's
-    // sections, two quadrics askew and free-form surfaces are traced. See `par`.)
+    // a plane with a plane, a cylinder, a cone or a sphere is, and so are two surfaces turned
+    // about one axis, which meet in circles; a torus's other sections, two quadrics askew and
+    // free-form surfaces are traced. See `par`.)
     let conic = |fa: usize, fb: usize| {
         let quadric = |s: &Surface| {
             matches!(
@@ -3804,11 +3805,28 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                     | Surface::Sphere { .. }
             )
         };
+        // A surface of revolution's axis (a sphere's any line through its centre).
+        let axis = |s: &Surface| match s {
+            Surface::Cylinder { f, .. } | Surface::Cone { f, .. } | Surface::Torus { f, .. } => {
+                Some((f.o, Some(f.z)))
+            }
+            Surface::Sphere { f, .. } => Some((f.o, None)),
+            _ => None,
+        };
+        let on = |p: &P3, (o, z): (&P3, &V3)| (p - o).cross(z).norm() <= run_tol * z.norm();
         let (a, b) = (&faces[fa].surf, &faces[fb].surf);
         match (a, b) {
             (Surface::Plane { .. }, other) | (other, Surface::Plane { .. }) => quadric(other),
-            (Surface::Sphere { .. }, Surface::Sphere { .. }) => true,
-            _ => false,
+            _ => match (axis(a), axis(b)) {
+                (Some((_, None)), Some((_, None))) => true,
+                (Some((c, None)), Some((o, Some(z)))) | (Some((o, Some(z))), Some((c, None))) => {
+                    on(&c, (&o, &z))
+                }
+                (Some((o, Some(z))), Some((p, Some(w)))) => {
+                    z.cross(&w).norm() <= tol::ANGULAR * z.norm() * w.norm() && on(&p, (&o, &z))
+                }
+                _ => false,
+            },
         }
     };
     let numeric = pairs.iter().any(|&(fa, fb)| !conic(fa, fb));
