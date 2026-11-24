@@ -4,8 +4,10 @@
 // `revolve_about_the_origin_axes`).
 // 01 the Revolve axis field active: the origin's X, Y and Z axes are drawn (the origin style is
 //    the default Dot), the Z axis hovered.
-// 02 the Z axis picked: the field reads "Z axis", the axis drawn selected; Full: the tube.
-// 03 accepted; Mass and section properties: 28274.334 mm³ (9000π).
+// 02 the Y axis picked: square to Front, so the dialog says why it can't revolve ("The revolve
+//    axis must not be square to the sketch plane") and the ✓ is off.
+// 03 the Z axis picked instead: the field reads "Z axis", the axis drawn selected; Full: the tube.
+// 04 accepted; Mass and section properties: 28274.334 mm³ (9000π).
 Scenario(
     start: Some("document"),
     steps: [
@@ -21,17 +23,22 @@ Scenario(
         Hover(xyz(0, 0, 1)),
         Wait(10),
         Screenshot("01-axis-field-z-axis-hovered"),
+        Click(xyz(0, 1, 0)),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("02-axis-y-square-to-the-sketch"),
+        Click(ui("revolve-axis-field")),
         Click(xyz(0, 0, 1)),
         Key("F"),
         MoveTo(1420, 900),
         Wait(3),
-        Screenshot("02-axis-z-full"),
+        Screenshot("03-axis-z-full"),
         Click(ui("revolve-dialog-accept")),
         Click(ui("part-row-part-1")),
         Click(ui("view-mass")),
         WaitFor("mass-dialog"),
         MoveTo(1420, 900),
         Wait(3),
-        Screenshot("03-accepted-mass-9000-pi"),
+        Screenshot("04-accepted-mass-9000-pi"),
     ],
 )

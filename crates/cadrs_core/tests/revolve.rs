@@ -948,3 +948,43 @@ fn revolve_about_the_origin_axes() {
         close(volume(&parts[0]), tube, 1e-6);
     }
 }
+
+/// #316: an axis the profile can't turn about says why: one square to the sketch plane, and one
+/// through the profile.
+#[test]
+fn an_axis_the_profile_cannot_turn_about_says_why() {
+    for (axis, rect, seed, want) in [
+        // Front's normal.
+        (
+            OriginAxis::Y,
+            [v(5.0, 0.0), v(10.0, 0.0), v(10.0, 20.0), v(5.0, 20.0)],
+            v(7.5, 10.0),
+            "square to the sketch plane",
+        ),
+        // Z through the middle of the rectangle.
+        (
+            OriginAxis::Z,
+            [v(-5.0, 0.0), v(5.0, 0.0), v(5.0, 20.0), v(-5.0, 20.0)],
+            v(2.5, 10.0),
+            "crosses the revolve axis",
+        ),
+    ] {
+        let mut doc = Doc::new();
+        let s = doc.sketch(PlaneRef::Front, vec![polygon(&rect, false)]);
+        let regions = samples::region_refs(s, &doc.g(s), &[seed]);
+        let r = doc.revolve(RevolveFeature {
+            regions,
+            axis: Some(AxisRef::Origin(axis)),
+            kind: RevolveType::Full,
+            ..RevolveFeature::default()
+        });
+        let b = rebuild::build(&doc.features());
+        let why = b
+            .errors
+            .iter()
+            .find(|(f, _)| *f == r)
+            .map(|(_, e)| e.as_str());
+        assert!(why.is_some_and(|e| e.contains(want)), "{axis:?}: {why:?}");
+        assert!(b.parts.is_empty(), "{axis:?}");
+    }
+}
