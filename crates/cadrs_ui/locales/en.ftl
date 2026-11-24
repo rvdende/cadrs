@@ -6843,8 +6843,9 @@ node-view-toggle = Node view
 node-view-fit = Fit all nodes
 node-view-collapse = Collapse
 node-view-expand = Expand
-# A node's input socket that suppresses the feature (wired from a boolean input).
-node-view-bypass = Bypass (suppress while false)
+# A node's input socket that turns the feature on and off (wired from a boolean input: the
+# feature is suppressed while it is false).
+node-view-enabled = Enabled (suppressed while false)
 # The node the presets and inputs are on.
 node-view-configuration = Configuration
 node-view-add-configuration = Add configuration
@@ -6875,3 +6876,5 @@ node-view-output-plane = Plane
 # Shows the presets × inputs table in the Configuration node (and hides it).
 node-view-show-table = Presets table
 node-view-hide-table = Hide presets table
+# A wire from a Variable dropped on a feature above it.
+node-view-variable-below = A Variable reaches only the features below it

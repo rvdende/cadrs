@@ -254,6 +254,7 @@ fn saved_and_loaded() {
         element: t.ps,
         positions: vec![(t.ext, [120.0, 40.0])],
         inputs_node: Some([-200.0, 0.0]),
+        parts_node: None,
     });
     let text = ron::to_string(&t.d).unwrap();
     let back: Document = ron::from_str(&text).unwrap();
@@ -361,4 +362,248 @@ fn removing_the_configuration_bakes_the_values() {
     assert_eq!(t.extrude().depth, 50.0);
     assert!(!t.extrude().depth_expr.contains('#'));
     assert!(t.el().studio_features().is_empty());
+}
+
+/// Every configuration command is one undo step: undo puts the document back as it was, redo
+/// as it was after.
+#[test]
+fn every_command_undoes_and_redoes() {
+    let mut t = T::new();
+    let (i, short, long) = t.with_presets();
+    let flag = ConfigInput::new("on", InputKind::Boolean, 1.0);
+    let commands: Vec<Box<dyn Command>> = vec![
+        Box::new(AddConfigInput {
+            element: t.ps,
+            input: flag.clone(),
+        }),
+        Box::new(EditConfigInput {
+            element: t.ps,
+            input: ConfigInput {
+                default: 12.0,
+                ..t.config().input(i).unwrap().clone()
+            },
+        }),
+        Box::new(SetPresetValue {
+            element: t.ps,
+            preset: short,
+            input: i,
+            value: Some(7.0),
+        }),
+        Box::new(RenamePreset {
+            element: t.ps,
+            preset: short,
+            name: "Tiny".into(),
+        }),
+        Box::new(SetActivePreset {
+            element: t.ps,
+            preset: short,
+        }),
+        Box::new(ConnectParameter {
+            element: t.ps,
+            feature: t.ext,
+            slot: "Depth".into(),
+            expr: "#length".into(),
+        }),
+        Box::new(DisconnectParameter {
+            element: t.ps,
+            feature: t.ext,
+            slot: "Depth".into(),
+        }),
+        Box::new(MoveGraphNodes {
+            element: t.ps,
+            positions: vec![(t.ext, [1.0, 2.0])],
+            inputs_node: Some([3.0, 4.0]),
+            parts_node: Some([5.0, 6.0]),
+        }),
+        Box::new(SetNodeCollapsed {
+            element: t.ps,
+            feature: t.ext,
+            collapsed: true,
+        }),
+        Box::new(ResetNodeLayout { element: t.ps }),
+        Box::new(AddPreset {
+            element: t.ps,
+            preset: PresetId::new(),
+            name: "Third".into(),
+            copy_of: Some(long),
+        }),
+        Box::new(RemovePreset {
+            element: t.ps,
+            preset: long,
+        }),
+        Box::new(RemoveConfigInput {
+            element: t.ps,
+            input: i,
+        }),
+        Box::new(SetConfigured {
+            element: t.ps,
+            configured: false,
+        }),
+    ];
+    for c in commands {
+        let before = t.d.clone();
+        t.h.execute(&mut t.d, c.as_ref())
+            .unwrap_or_else(|e| panic!("{}: {e}", c.label()));
+        let after = t.d.clone();
+        assert_ne!(before, after, "{} changed nothing", c.label());
+        t.h.undo(&mut t.d);
+        assert_eq!(t.d, before, "undo of {}", c.label());
+        t.h.redo(&mut t.d);
+        assert_eq!(t.d, after, "redo of {}", c.label());
+    }
+}
+
+/// Files from before configurations (no `configuration`, `node_layout` or `configured`) load
+/// as studios without one.
+#[test]
+fn old_documents_load() {
+    let doc = Document::new("Old");
+    let text = ron::to_string(&doc).unwrap();
+    assert!(!text.contains("configuration") && !text.contains("configured"));
+    let back: Document = ron::from_str(&text).unwrap();
+    assert!(back.elements[0].configuration().is_none());
+    assert!(back.elements[0].node_layout().is_none());
+    assert!(back.configured.is_empty());
+}
+
+fn insert_preset(t: &mut T, preset: PresetId) -> InstanceId {
+    let id = InstanceId::new();
+    t.run(&crate::assembly::commands::InsertInstance {
+        element: t.asm,
+        instance: Instance::new(
+            id,
+            InstanceSource::Part {
+                element: configured_id(t.ps, preset),
+                part: PartId::new(t.ext, 0),
+            },
+            Pose::default(),
+        ),
+    });
+    id
+}
+
+/// A preset an assembly uses can't be removed, nor the configuration: the instances would lose
+/// their parts. Once they use another, it can.
+#[test]
+fn presets_in_use_stay() {
+    let mut t = T::new();
+    let (_, short, long) = t.with_presets();
+    let inst = insert_preset(&mut t, short);
+    let e =
+        t.h.execute(
+            &mut t.d,
+            &RemovePreset {
+                element: t.ps,
+                preset: short,
+            },
+        )
+        .unwrap_err();
+    assert!(e.to_string().contains("1 instance in Assembly 1"), "{e}");
+    assert!(
+        t.h.execute(
+            &mut t.d,
+            &SetConfigured {
+                element: t.ps,
+                configured: false,
+            },
+        )
+        .is_err()
+    );
+    t.run(&SetInstancePreset {
+        assembly: t.asm,
+        instances: vec![inst],
+        preset: long,
+    });
+    t.run(&RemovePreset {
+        element: t.ps,
+        preset: short,
+    });
+    assert_eq!(instances_using(&t.d, t.ps, None).0, 1);
+}
+
+/// An instance switched to another preset keeps its id, place and the assembly's mates.
+#[test]
+fn switching_presets_keeps_mates() {
+    use crate::assembly::commands::AddMateFeature;
+    use crate::assembly::mate::{MateFeature, MateId, MateKind};
+    let mut t = T::new();
+    let (_, short, long) = t.with_presets();
+    let inst = insert_preset(&mut t, short);
+    t.run(&AddMateFeature {
+        element: t.asm,
+        feature: MateFeature::new(
+            MateId::new(),
+            "#gap",
+            MateKind::Variable(VariableFeature::length("gap", "4 mm")),
+        ),
+        poses: Vec::new(),
+    });
+    let before = t.d.element(t.asm).unwrap().assembly.clone();
+    t.run(&SetInstancePreset {
+        assembly: t.asm,
+        instances: vec![inst],
+        preset: long,
+    });
+    let after = &t.d.element(t.asm).unwrap().assembly;
+    assert_eq!(after.mates, before.mates);
+    assert_eq!(after.instances[0].id, before.instances[0].id);
+    assert_eq!(after.instances[0].pose, before.instances[0].pose);
+    assert_ne!(
+        after.instances[0].source.element(),
+        before.instances[0].source.element()
+    );
+}
+
+/// A Variable named like an input is reported: the presets would stop reaching what is below it.
+#[test]
+fn a_variable_may_not_redefine_an_input() {
+    let mut t = T::new();
+    t.with_presets();
+    let var = Feature::new(
+        FeatureId::new(),
+        "Variable 1",
+        FeatureKind::Variable(VariableFeature::length("length", "3 mm")),
+    );
+    let vid = var.id;
+    t.d.element_mut(t.ps)
+        .unwrap()
+        .features_mut()
+        .unwrap()
+        .insert(0, var);
+    let errors = crate::variables::check(&t.el().active_features(), &t.d.units);
+    assert!(
+        errors
+            .iter()
+            .any(|(f, w)| *f == vid && w.contains("is a configuration input")),
+        "{errors:?}"
+    );
+}
+
+/// A preset's part's properties are its studio's part's (one set for every preset).
+#[test]
+fn a_preset_parts_properties_are_the_studios() {
+    use crate::properties::{PropertyKey, PropertyOwner, PropertyValue, SetProperties};
+    let mut t = T::new();
+    let (_, short, _) = t.with_presets();
+    insert_preset(&mut t, short);
+    let part = PartId::new(t.ext, 0);
+    t.run(&SetProperties {
+        owners: vec![PropertyOwner::Part {
+            element: configured_id(t.ps, short),
+            part,
+        }],
+        values: vec![(
+            PropertyKey::Description,
+            PropertyValue::Text("A block".into()),
+        )],
+        label: "Description".into(),
+    });
+    let own = |el: &Element| {
+        el.part_prop(part)
+            .map(|p| format!("{:?}", p.properties))
+            .unwrap_or_default()
+    };
+    assert!(own(t.el()).contains("A block"));
+    // The preset's studio took it up.
+    assert!(own(t.d.element(configured_id(t.ps, short)).unwrap()).contains("A block"));
 }

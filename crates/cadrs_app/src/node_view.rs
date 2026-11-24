@@ -89,6 +89,7 @@ impl Plugin for NodeViewPlugin {
                 fit_later,
                 sync_header_preset,
                 measure_heights,
+                fit_on_f,
             )
                 .chain()
                 .run_if(resource_exists::<ActiveDocument>),
@@ -149,7 +150,8 @@ struct FeatureNode {
 /// as its live dialog shows the parameters (rebuilding it would take the dialog's focus).
 #[derive(Debug, Clone, PartialEq)]
 struct NodeKey {
-    feature: Option<Feature>,
+    /// A hash of the feature (none while it is edited).
+    feature: Option<u64>,
     live: bool,
     collapsed: bool,
     suppressed: bool,
@@ -203,7 +205,8 @@ enum SocketKey {
     /// A configuration input, by name.
     Input(String),
     /// A Variable feature's value, by name.
-    Variable(String),
+    /// A Variable feature's value (the feature: a name can be defined again further down).
+    Variable(FeatureId),
     /// A part of the Parts node.
     Part(cadrs_core::PartId),
 }
@@ -215,6 +218,34 @@ struct CollapseButton(FeatureId);
 /// The press that may become a click on a body (where it was), so a drag isn't taken for one.
 #[derive(Component, Debug, Clone, Copy)]
 struct PressedAt(Vec2);
+
+/// F with the pointer over the node view (and no field typed in) frames every node, as F frames
+/// the model in the 3D view.
+fn fit_on_f(
+    keys: Res<ButtonInput<KeyCode>>,
+    focus: Res<bevy::input_focus::InputFocus>,
+    hover: Res<bevy::picking::hover::HoverMap>,
+    q_canvas: Query<Entity, With<NodeViewCanvas>>,
+    q_parent: Query<&ChildOf>,
+    mut commands: Commands,
+) {
+    if !keys.just_pressed(KeyCode::KeyF) || focus.get().is_some() {
+        return;
+    }
+    for canvas in &q_canvas {
+        let over = hover
+            .values()
+            .flat_map(|m| m.keys())
+            .any(|e| *e == canvas || q_parent.iter_ancestors(*e).any(|a| a == canvas));
+        if over {
+            commands.trigger(FitCanvas { entity: canvas });
+        }
+    }
+}
+
+/// A canvas just made: its nodes are built whatever changed.
+#[derive(Component, Debug, Clone, Copy)]
+struct FreshCanvas;
 
 /// The feature nodes' heights as laid out (graph px), so the auto layout stacks them without
 /// overlapping once they have been laid out once.
@@ -250,7 +281,15 @@ fn fit_later(mut q: Query<(Entity, &mut FitLater)>, mut commands: Commands) {
 
 /// Node moves to save as one undo step (a drag of several selected nodes ends on each).
 #[derive(Resource, Debug, Default)]
-struct PendingMoves(Vec<(Option<FeatureId>, Vec2)>);
+struct PendingMoves(Vec<(Moved, Vec2)>);
+
+/// Which node was moved.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Moved {
+    Feature(FeatureId),
+    Configuration,
+    Parts,
+}
 
 // ---------------------------------------------------------------------------------------------
 // Socket types and colours
@@ -457,76 +496,124 @@ struct Layout {
     parts: Vec2,
 }
 
-/// Where each node goes: its saved place, or laid out in layers (Sugiyama's way, roughly): a
-/// column by how deep its references go (a sketch with none in the first column, its extrude in
-/// the next…), each column ordered by where its nodes' references are (the mean height of
-/// their parents, so wires cross less; list order breaks ties) and stacked. The Parts node is
-/// right of them all.
+/// Where each node goes: its saved place, or laid out in layers (Sugiyama's way, roughly):
+///
+/// - **Columns** by how deep a node's references go: a sketch with none in the first column,
+///   its extrude in the next, a fillet of that after it.
+/// - **Rows follow the wires**: each node is put level with its parents (the mean of their
+///   tops), pushed down only as far as the node above it in its column needs; a column is
+///   ordered by those heights, so wires cross less. Then, right to left, a node whose wires all
+///   go to one node moves down level with it: a plane and its sketch, a sketch and its extrude
+///   sit side by side, joined by a short straight wire.
+/// - A column taller than [`TALL`] goes on in another beside it, from the top.
+///
+/// The Parts node is right of them all. Saved places win over all this.
 fn layout(el: &Element, measured: &HashMap<FeatureId, f32>) -> Layout {
     let saved = el.node_layout();
     let features = el.features();
     let collapsed = |f: FeatureId| saved.is_some_and(|l| l.collapsed.contains(&f));
-    let parents: Vec<Vec<FeatureId>> = features
+    let index: HashMap<FeatureId, usize> = features
         .iter()
-        .map(|f| cadrs_core::feature_list::parents(features, f.id))
+        .enumerate()
+        .map(|(i, f)| (f.id, i))
         .collect();
-    let mut depth: HashMap<FeatureId, usize> = HashMap::new();
+    let parents: Vec<Vec<usize>> = features
+        .iter()
+        .map(|f| {
+            cadrs_core::feature_list::parents(features, f.id)
+                .iter()
+                .filter_map(|p| index.get(p).copied())
+                .collect()
+        })
+        .collect();
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); features.len()];
+    for (i, ps) in parents.iter().enumerate() {
+        for p in ps {
+            children[*p].push(i);
+        }
+    }
+    let mut depth = vec![0usize; features.len()];
     let mut columns: Vec<Vec<usize>> = Vec::new();
-    for (i, f) in features.iter().enumerate() {
-        let d = parents[i]
-            .iter()
-            .filter_map(|p| depth.get(p))
-            .max()
-            .map_or(0, |d| d + 1);
-        depth.insert(f.id, d);
+    for i in 0..features.len() {
+        let d = parents[i].iter().map(|p| depth[*p] + 1).max().unwrap_or(0);
+        depth[i] = d;
         if columns.len() <= d {
             columns.resize(d + 1, Vec::new());
         }
         columns[d].push(i);
     }
-    let mut out: HashMap<FeatureId, Vec2> = HashMap::new();
-    // The middle of each node placed so far, for ordering the next column.
-    let mut middle: HashMap<FeatureId, f32> = HashMap::new();
-    let mut right = 0.0f32;
-    // Where the next column starts: a column taller than TALL wraps into several side by side.
+    let height = |i: usize| {
+        let f = &features[i];
+        // Its height as laid out, once it has been; a guess before.
+        measured
+            .get(&f.id)
+            .copied()
+            .unwrap_or_else(|| height_guess(f, collapsed(f.id)))
+    };
+    const GAP: f32 = 24.0;
+    // Left to right: each column level with its parents, packed.
+    let mut pos: Vec<Vec2> = vec![Vec2::ZERO; features.len()];
     let mut x = COLUMN;
+    let mut column_x: Vec<(f32, Vec<usize>)> = Vec::new();
     for (d, column) in columns.iter_mut().enumerate() {
-        let key = |i: &usize| -> f32 {
-            let ys: Vec<f32> = parents[*i]
-                .iter()
-                .filter_map(|p| middle.get(p).copied())
-                .collect();
-            if ys.is_empty() {
-                f32::MAX
+        let want = |i: usize, pos: &[Vec2]| -> f32 {
+            let ps = &parents[i];
+            if ps.is_empty() {
+                0.0
             } else {
-                ys.iter().sum::<f32>() / ys.len() as f32
+                ps.iter().map(|p| pos[*p].y).sum::<f32>() / ps.len() as f32
             }
         };
         if d > 0 {
-            column.sort_by(|a, b| key(a).total_cmp(&key(b)).then(a.cmp(b)));
+            let snapshot = pos.clone();
+            column.sort_by(|a, b| {
+                want(*a, &snapshot)
+                    .total_cmp(&want(*b, &snapshot))
+                    .then(a.cmp(b))
+            });
         }
-        let mut y = 0.0;
+        let mut y = 0.0f32;
+        let mut wrapped = false;
+        let mut run: Vec<usize> = Vec::new();
         for &i in column.iter() {
-            let f = &features[i];
-            // Its height as laid out, once it has been; a guess before.
-            let h = measured
-                .get(&f.id)
-                .copied()
-                .unwrap_or_else(|| height_guess(f, collapsed(f.id)));
-            if y > 0.0 && y + h > TALL {
+            let h = height(i);
+            let mut at = if wrapped { y } else { y.max(want(i, &pos)) };
+            if at > 0.0 && at + h > TALL && !run.is_empty() {
+                column_x.push((x, std::mem::take(&mut run)));
                 x += COLUMN;
-                y = 0.0;
+                wrapped = true;
+                at = 0.0;
             }
-            let auto = Vec2::new(x, y);
-            y += h + 24.0;
-            let pos = saved
-                .and_then(|l| l.positions.get(&f.id))
-                .map_or(auto, |p| Vec2::from_array(*p));
-            middle.insert(f.id, pos.y + h / 2.0);
-            right = right.max(pos.x + NODE_W);
-            out.insert(f.id, pos);
+            pos[i] = Vec2::new(x, at);
+            run.push(i);
+            y = at + h + GAP;
         }
+        column_x.push((x, run));
         x += COLUMN;
+    }
+    // Right to left: a node whose wires all go to one node moves down level with it, as far as
+    // the node below it in its column allows.
+    for (_, run) in column_x.iter().rev() {
+        for k in (0..run.len()).rev() {
+            let i = run[k];
+            let [only] = children[i][..] else { continue };
+            if pos[only].x <= pos[i].x || pos[only].y <= pos[i].y {
+                continue;
+            }
+            let limit = run
+                .get(k + 1)
+                .map_or(f32::MAX, |n| pos[*n].y - GAP - height(i));
+            pos[i].y = pos[only].y.min(limit).max(pos[i].y);
+        }
+    }
+    let mut out: HashMap<FeatureId, Vec2> = HashMap::new();
+    let mut right = 0.0f32;
+    for (i, f) in features.iter().enumerate() {
+        let p = saved
+            .and_then(|l| l.positions.get(&f.id))
+            .map_or(pos[i], |p| Vec2::from_array(*p));
+        right = right.max(p.x + NODE_W);
+        out.insert(f.id, p);
     }
     let inputs = saved
         .and_then(|l| l.inputs_node)
@@ -534,7 +621,9 @@ fn layout(el: &Element, measured: &HashMap<FeatureId, f32>) -> Layout {
     Layout {
         inputs,
         features: out,
-        parts: Vec2::new(right.max(COLUMN) + 90.0, 0.0),
+        parts: saved
+            .and_then(|l| l.parts_node)
+            .map_or(Vec2::new(right.max(COLUMN) + 90.0, 0.0), Vec2::from_array),
     }
 }
 
@@ -600,6 +689,54 @@ fn canvas_background(t: &Theme) -> Color {
     }
 }
 
+/// A hash of a feature (its name, parameters and suppression rule), for telling whether its
+/// node must be built again.
+fn feature_hash(f: &Feature) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    format!("{:?}{:?}{:?}", f.name, f.kind, f.suppress_by).hash(&mut h);
+    h.finish()
+}
+
+/// Moves the live dialog hosted under `under` (a node or the canvas about to go) back over the
+/// view, floating as it was, so its session keeps its dialog.
+fn rescue_hosted(world: &mut World, under: Entity) {
+    let mut q = world.query_filtered::<Entity, With<HostedDialog>>();
+    let hosted: Vec<Entity> = q
+        .iter(world)
+        .filter(|d| on_canvas(world, *d, under))
+        .collect();
+    if hosted.is_empty() {
+        return;
+    }
+    let mut q_area = world.query_filtered::<Entity, With<ViewportArea>>();
+    let Some(area) = q_area.iter(world).next() else {
+        return;
+    };
+    let t = world.resource::<Theme>().clone();
+    for d in hosted {
+        {
+            let mut commands = world.commands();
+            cadrs_ui::feature_dialog::unembed(&mut commands, d, &t);
+            commands
+                .entity(d)
+                .remove::<HostedDialog>()
+                .insert(ChildOf(area));
+        }
+        world.flush();
+        if let Some(mut n) = world.get_mut::<Node>(d) {
+            n.position_type = PositionType::Absolute;
+        }
+        // Its header no longer drags a node.
+        if let Some(h) = world.get::<Children>(d).and_then(|c| c.first().copied()) {
+            world
+                .entity_mut(h)
+                .remove::<GraphNodeHandle>()
+                .insert(BackgroundColor(Color::NONE));
+        }
+    }
+}
+
 /// A cheap fingerprint of the theme (a scheme change rebuilds the nodes).
 fn theme_key(t: &Theme) -> u64 {
     let c = t.foreground.to_srgba();
@@ -607,7 +744,7 @@ fn theme_key(t: &Theme) -> u64 {
 }
 
 /// Builds, updates and removes the nodes and wires of the shown Part Studio.
-fn sync_nodes(world: &mut World) {
+fn sync_nodes(world: &mut World, mut last_edited: Local<Option<Option<FeatureId>>>) {
     // The host of the active Part Studio, if its node view is on.
     let active = world
         .resource::<ActiveDocument>()
@@ -621,6 +758,7 @@ fn sync_nodes(world: &mut World) {
         q_canvas.iter(world).map(|(e, c, n)| (e, c.0, *n)).collect();
     for (e, el, _) in &canvases {
         if Some(*el) != on || host.is_none() {
+            rescue_hosted(world, *e);
             world.entity_mut(*e).despawn();
         }
     }
@@ -638,7 +776,9 @@ fn sync_nodes(world: &mut World) {
                 .grid(canvas_grid())
                 .background(canvas_background(&theme))
                 .spawn(&mut commands, host, &theme);
-            commands.entity(e).insert(NodeViewCanvas(element));
+            commands
+                .entity(e)
+                .insert((NodeViewCanvas(element), FreshCanvas));
             world.flush();
             spawn_canvas_tools(world, e, &theme);
             if saved.is_none() {
@@ -650,14 +790,32 @@ fn sync_nodes(world: &mut World) {
         }
     };
     let (canvas_e, canvas) = canvas;
+    let edited = crate::variables_ui::edited_feature(world)
+        .filter(|(e, _)| *e == element)
+        .map(|(_, f)| f);
+    // Only when something it shows changed (the document, the rebuild, the view, the node
+    // heights, the theme, the feature being edited) or the canvas is new: a large studio's nodes
+    // are not looked over every frame.
+    let fresh = world.get::<FreshCanvas>(canvas_e).is_some();
+    let dirty = fresh
+        || world.resource_ref::<ActiveDocument>().is_changed()
+        || world.resource_ref::<PartCache>().is_changed()
+        || world.resource_ref::<NodeView>().is_changed()
+        || world.resource_ref::<MeasuredHeights>().is_changed()
+        || world.resource_ref::<Theme>().is_changed()
+        || *last_edited != Some(edited);
+    if !dirty {
+        return;
+    }
+    *last_edited = Some(edited);
+    if fresh {
+        world.entity_mut(canvas_e).remove::<FreshCanvas>();
+    }
     let doc = world.resource::<ActiveDocument>();
     let Some(el) = doc.doc.element(element).cloned() else {
         return;
     };
     let units = doc.doc.units;
-    let edited = crate::variables_ui::edited_feature(world)
-        .filter(|(e, _)| *e == element)
-        .map(|(_, f)| f);
     let cache_errors: HashMap<FeatureId, String> = world.resource::<PartCache>().errors.clone();
     let suppressed = el.all_suppressed();
     let bar = el.rollback_index();
@@ -682,14 +840,24 @@ fn sync_nodes(world: &mut World) {
     let mut changed = false;
     for (i, f) in el.features().iter().enumerate() {
         let live = edited == Some(f.id);
+        // A node being edited depends on less: its live dialog shows the parameters and the
+        // errors, and rebuilding the node would take the dialog's focus.
         let key = NodeKey {
-            feature: (!live).then(|| f.clone()),
+            feature: (!live).then(|| feature_hash(f)),
             live,
             collapsed: collapsed(f.id),
             suppressed: suppressed.contains(&f.id),
             rolled_back: i >= bar,
-            error: cache_errors.get(&f.id).cloned(),
-            outputs: outputs.get(&f.id).cloned().unwrap_or_default(),
+            error: if live {
+                None
+            } else {
+                cache_errors.get(&f.id).cloned()
+            },
+            outputs: if live {
+                Vec::new()
+            } else {
+                outputs.get(&f.id).cloned().unwrap_or_default()
+            },
             theme: tk,
         };
         let pos = positions.get(&f.id).copied().unwrap_or_default();
@@ -707,6 +875,7 @@ fn sync_nodes(world: &mut World) {
     for (e, n) in &have {
         if keep.get(&n.feature) != Some(e) {
             changed = true;
+            rescue_hosted(world, *e);
             if let Ok(em) = world.get_entity_mut(*e) {
                 em.despawn();
             }
@@ -755,7 +924,7 @@ fn sync_nodes(world: &mut World) {
     let parts_have: Vec<(Entity, PartsNode)> =
         q_parts.iter(world).map(|(e, c)| (e, c.clone())).collect();
     match parts_have.first() {
-        Some((_, c)) if c.key == pkey => {}
+        Some((e, c)) if c.key == pkey => place(world, *e, parts_pos),
         _ => {
             for (e, _) in &parts_have {
                 world.entity_mut(*e).despawn();
@@ -909,6 +1078,7 @@ fn spawn_parts_node(
         };
         world.spawn((
             SocketKey::Part(*id),
+            cadrs_ui::node_graph::ReadOnlySocket,
             Socket::bundle(
                 format!("node-part-{i}-in"),
                 SocketSide::In,
@@ -971,6 +1141,13 @@ fn spawn_feature_node(
     let card = world
         .spawn((StaticCopyRoot, StaticCard, card.build(t), ChildOf(root)))
         .id();
+    // Marked now, before the live dialogs' systems run this frame (they leave it alone).
+    for e in descendants(world, card) {
+        world
+            .entity_mut(e)
+            .insert(cadrs_ui::node_graph::StaticCopy)
+            .remove::<bevy::input_focus::tab_navigation::TabIndex>();
+    }
     // The card's header (its first child) drags the node and holds the collapse chevron.
     let header = world.get::<Children>(card).and_then(|c| c.first().copied());
     if let Some(h) = header {
@@ -1074,6 +1251,7 @@ fn spawn_feature_node(
     // Sockets: geometry in on the header, Bypass under it, geometry out on the output row.
     let geo = world.spawn((
         SocketKey::GeoIn(f.id),
+        cadrs_ui::node_graph::ReadOnlySocket,
         Socket::bundle(
             format!("node-{slug}-geometry-in"),
             SocketSide::In,
@@ -1087,6 +1265,7 @@ fn spawn_feature_node(
     let _ = geo;
     world.spawn((
         SocketKey::GeoOut(f.id),
+        cadrs_ui::node_graph::ReadOnlySocket,
         Socket::bundle(
             format!("node-{slug}-geometry-out"),
             SocketSide::Out,
@@ -1108,7 +1287,7 @@ fn spawn_feature_node(
                 socket_color(BOOLEAN),
                 t,
             ),
-            cadrs_ui::Tooltip::new(tr("node-view-bypass")),
+            cadrs_ui::Tooltip::new(tr("node-view-enabled")),
             ChildOf(root),
         ))
         .id();
@@ -1163,7 +1342,7 @@ fn spawn_feature_node(
     {
         let ty = quantity_type(v.kind.quantity());
         world.spawn((
-            SocketKey::Variable(v.name.clone()),
+            SocketKey::Variable(f.id),
             Socket::bundle(
                 format!("node-{slug}-out"),
                 SocketSide::Out,
@@ -1176,6 +1355,20 @@ fn spawn_feature_node(
         ));
     }
     root
+}
+
+/// `root` and every entity under it.
+fn descendants(world: &mut World, root: Entity) -> Vec<Entity> {
+    let mut q_children = world.query::<&Children>();
+    let mut all = vec![root];
+    let mut i = 0;
+    while i < all.len() {
+        if let Ok(c) = q_children.get(world, all[i]) {
+            all.extend(c.iter());
+        }
+        i += 1;
+    }
+    all
 }
 
 /// The entities under `root` with their names squashed ([`squash`]).
@@ -1282,11 +1475,12 @@ fn rebuild_wires(
     // Where a name comes from at a feature: the last Variable above it of that name, else the
     // configuration's input.
     let source = |name: &str, at: usize| -> Option<SocketKey> {
-        if features[..at]
+        if let Some(g) = features[..at]
             .iter()
-            .any(|g| matches!(&g.kind, FeatureKind::Variable(v) if v.name == name))
+            .rev()
+            .find(|g| matches!(&g.kind, FeatureKind::Variable(v) if v.name == name))
         {
-            return Some(SocketKey::Variable(name.to_string()));
+            return Some(SocketKey::Variable(g.id));
         }
         el.configuration()?
             .input_named(name)
@@ -2032,12 +2226,15 @@ fn on_node_moved(
     ev: On<GraphNodeMoved>,
     q_feature: Query<&FeatureNode>,
     q_config: Query<(), With<ConfigNode>>,
+    q_parts: Query<(), With<PartsNode>>,
     mut moves: ResMut<PendingMoves>,
 ) {
     if let Ok(n) = q_feature.get(ev.entity) {
-        moves.0.push((Some(n.feature), ev.pos));
+        moves.0.push((Moved::Feature(n.feature), ev.pos));
     } else if q_config.contains(ev.entity) {
-        moves.0.push((None, ev.pos));
+        moves.0.push((Moved::Configuration, ev.pos));
+    } else if q_parts.contains(ev.entity) {
+        moves.0.push((Moved::Parts, ev.pos));
     }
 }
 
@@ -2061,11 +2258,18 @@ fn flush_moves(world: &mut World) {
             element,
             positions: moves
                 .iter()
-                .filter_map(|(f, p)| f.map(|f| (f, round(*p))))
+                .filter_map(|(m, p)| match m {
+                    Moved::Feature(f) => Some((*f, round(*p))),
+                    _ => None,
+                })
                 .collect(),
             inputs_node: moves
                 .iter()
-                .find(|(f, _)| f.is_none())
+                .find(|(m, _)| *m == Moved::Configuration)
+                .map(|(_, p)| round(*p)),
+            parts_node: moves
+                .iter()
+                .find(|(m, _)| *m == Moved::Parts)
                 .map(|(_, p)| round(*p)),
         },
     );
@@ -2076,46 +2280,83 @@ fn target_of(world: &World, e: Entity) -> Option<SocketKey> {
     world.get::<SocketKey>(e).cloned()
 }
 
+/// The command that unwires a field or Bypass (what a socket stands for).
+fn unwire(element: ElementId, dst: &SocketKey) -> Option<Box<dyn cadrs_core::Command>> {
+    match dst {
+        SocketKey::Slot(feature, slot) => Some(Box::new(DisconnectParameter {
+            element,
+            feature: *feature,
+            slot: slot.to_string(),
+        })),
+        SocketKey::Bypass(feature) => Some(Box::new(cadrs_core::commands::SetSuppressByVariable {
+            element,
+            feature: *feature,
+            rule: None,
+        })),
+        _ => None,
+    }
+}
+
+/// A wire dropped on a field or a Bypass: `#name` written there (and, a wire moved off another
+/// input, that one unwired: one undo step). A Variable only reaches the features below it.
 fn on_wire_connect(ev: On<WireConnect>, mut commands: Commands) {
-    let (from, to) = (ev.from, ev.to);
+    let (from, to, replaces) = (ev.from, ev.to, ev.replaces);
     commands.queue(move |world: &mut World| {
         let (Some(src), Some(dst)) = (target_of(world, from), target_of(world, to)) else {
             return;
         };
-        let name = match src {
-            SocketKey::Input(n) | SocketKey::Variable(n) => n,
-            // Geometry wires follow the features' references: picked in the view.
-            _ => {
+        let Some(el) = world.resource::<ActiveDocument>().active_element().cloned() else {
+            return;
+        };
+        let element = el.id;
+        let name = match &src {
+            SocketKey::Input(n) => n.clone(),
+            SocketKey::Variable(f) => match el.feature(*f).map(|g| &g.kind) {
+                Some(FeatureKind::Variable(v)) => v.name.clone(),
+                _ => return,
+            },
+            _ => return,
+        };
+        let target = match &dst {
+            SocketKey::Slot(f, _) | SocketKey::Bypass(f) => *f,
+            _ => return,
+        };
+        if let SocketKey::Variable(v) = &src {
+            let at = |id: FeatureId| el.features().iter().position(|g| g.id == id);
+            if at(*v) >= at(target) {
+                let why = tr("node-view-variable-below");
+                toast(world, why);
                 world.resource_mut::<ActiveDocument>().set_changed();
                 return;
             }
+        }
+        let wire: Box<dyn cadrs_core::Command> = match &dst {
+            SocketKey::Slot(feature, slot) => Box::new(ConnectParameter {
+                element,
+                feature: *feature,
+                slot: slot.to_string(),
+                expr: format!("#{name}"),
+            }),
+            SocketKey::Bypass(feature) => Box::new(cadrs_core::commands::SetSuppressByVariable {
+                element,
+                feature: *feature,
+                rule: Some(cadrs_core::variables::SuppressByVariable::variable(&name)),
+            }),
+            _ => return,
         };
-        let Some(element) = world
-            .resource::<ActiveDocument>()
-            .active_element()
-            .map(|e| e.id)
-        else {
-            return;
-        };
-        match dst {
-            SocketKey::Slot(feature, slot) => run(
+        let old = replaces
+            .and_then(|r| target_of(world, r))
+            .and_then(|k| unwire(element, &k));
+        match old {
+            Some(old) => run(
                 world,
-                &ConnectParameter {
-                    element,
-                    feature,
-                    slot: slot.to_string(),
-                    expr: format!("#{name}"),
+                &cadrs_core::command::Batch {
+                    label: format!("Wire #{name}"),
+                    scope: cadrs_core::Scope::Element(element),
+                    commands: vec![old, wire],
                 },
             ),
-            SocketKey::Bypass(feature) => run(
-                world,
-                &cadrs_core::commands::SetSuppressByVariable {
-                    element,
-                    feature,
-                    rule: Some(cadrs_core::variables::SuppressByVariable::variable(&name)),
-                },
-            ),
-            _ => {}
+            None => run(world, wire.as_ref()),
         }
         world.resource_mut::<ActiveDocument>().set_changed();
     });
@@ -2134,24 +2375,8 @@ fn on_wire_disconnect(ev: On<WireDisconnect>, mut commands: Commands) {
         else {
             return;
         };
-        match dst {
-            SocketKey::Slot(feature, slot) => run(
-                world,
-                &DisconnectParameter {
-                    element,
-                    feature,
-                    slot: slot.to_string(),
-                },
-            ),
-            SocketKey::Bypass(feature) => run(
-                world,
-                &cadrs_core::commands::SetSuppressByVariable {
-                    element,
-                    feature,
-                    rule: None,
-                },
-            ),
-            _ => {}
+        if let Some(c) = unwire(element, &dst) {
+            run(world, c.as_ref());
         }
         world.resource_mut::<ActiveDocument>().set_changed();
     });
@@ -2234,7 +2459,11 @@ fn host_live_dialog(world: &mut World) {
     let Some(area) = q_area.iter(world).next() else {
         return;
     };
-    let mut q_dialog = world.query_filtered::<(Entity, &ChildOf), With<FeatureDialogState>>();
+    // A feature's dialog, not a panel such as Mass properties.
+    let mut q_dialog = world.query_filtered::<(Entity, &ChildOf), (
+        With<FeatureDialogState>,
+        Without<cadrs_ui::feature_dialog::PlainPanel>,
+    )>();
     let floating: Vec<Entity> = q_dialog
         .iter(world)
         .filter(|(_, p)| p.parent() == area)
@@ -2419,6 +2648,37 @@ const CLEAR: f32 = 8.0;
 /// How far a wire runs straight out of its output and into its input (graph px).
 const STUB: f32 = 18.0;
 
+/// The corners of the two 45° paths from `a` to `b`: the straight leg first, or the 45° leg
+/// first (none needed when `a` and `b` are on one straight or 45° line).
+fn octilinear_legs(a: Vec2, b: Vec2) -> Vec<Vec2> {
+    let d = b - a;
+    let (ax, ay) = (d.x.abs(), d.y.abs());
+    if ax < 1e-3 || ay < 1e-3 || (ax - ay).abs() < 1e-3 {
+        return vec![a];
+    }
+    let diag = ax.min(ay);
+    let s = Vec2::new(d.x.signum(), d.y.signum());
+    let straight = if ax > ay {
+        Vec2::new(d.x - s.x * diag, 0.0)
+    } else {
+        Vec2::new(0.0, d.y - s.y * diag)
+    };
+    vec![a + straight, a + s * diag]
+}
+
+/// A path whose every leg is made horizontal, vertical or 45° by a corner where it isn't.
+fn octilinear_ends(p: &[Vec2]) -> Vec<Vec2> {
+    let mut out = vec![p[0]];
+    for w in p.windows(2) {
+        let c = octilinear_legs(w[0], w[1])[0];
+        if c != w[0] && c != w[1] {
+            out.push(c);
+        }
+        out.push(w[1]);
+    }
+    out
+}
+
 /// Routes the node view's wires round its nodes with the PCB autorouter's search
 /// (`cadrs_router::search`: A* over octilinear steps, a cell's cost raised by the wires already
 /// through it, as its negotiated congestion does): the nodes, grown by [`CLEAR`], are walls; each
@@ -2440,21 +2700,22 @@ fn route_node_wires(p: &cadrs_ui::node_graph::RouteProblem) -> Vec<Option<Vec<Ve
         return vec![None; p.wires.len()];
     };
     let b = b.inflate(160.0);
+    // A coarser grid on a large graph: at most MAX_CELLS cells, so a route never stalls a frame
+    // for long (the page has no threads to put it on).
+    const MAX_CELLS: f32 = 250_000.0;
+    let pitch = PITCH.max((b.width() * b.height() / MAX_CELLS).sqrt());
     let (nx, ny) = (
-        (b.width() / PITCH).ceil() as u32 + 1,
-        (b.height() / PITCH).ceil() as u32 + 1,
+        (b.width() / pitch).ceil() as u32 + 1,
+        (b.height() / pitch).ceil() as u32 + 1,
     );
-    if (nx as u64) * (ny as u64) > 3_000_000 {
-        return vec![None; p.wires.len()];
-    }
     let cell = |v: Vec2| -> (u32, u32) {
-        let c = ((v - b.min) / PITCH).floor();
+        let c = ((v - b.min) / pitch).floor();
         (
             (c.x.max(0.0) as u32).min(nx - 1),
             (c.y.max(0.0) as u32).min(ny - 1),
         )
     };
-    let centre = |x: u32, y: u32| b.min + (Vec2::new(x as f32, y as f32) + 0.5) * PITCH;
+    let centre = |x: u32, y: u32| b.min + (Vec2::new(x as f32, y as f32) + 0.5) * pitch;
     let mut owner = vec![FREE; (nx * ny) as usize];
     for o in &p.obstacles {
         let o = o.inflate(CLEAR);
@@ -2472,8 +2733,17 @@ fn route_node_wires(p: &cadrs_ui::node_graph::RouteProblem) -> Vec<Option<Vec<Ve
     };
     // Whether the straight line from `a` to `b` stays off the walls.
     let clear = |a: Vec2, b: Vec2| -> bool {
-        let n = (a.distance(b) / (PITCH / 3.0)).ceil().max(1.0) as usize;
+        let n = (a.distance(b) / (pitch / 3.0)).ceil().max(1.0) as usize;
         (0..=n).all(|i| !blocked(a.lerp(b, i as f32 / n as f32)))
+    };
+    // Whether the straight line from `a` to `b` stays off other outputs' traces (its ends
+    // excepted: where it leaves and meets its own).
+    let untaken = |a: Vec2, b: Vec2, occ: &[u16]| -> bool {
+        let n = (a.distance(b) / (pitch / 3.0)).ceil().max(1.0) as usize;
+        (1..n).all(|i| {
+            let (x, y) = cell(a.lerp(b, i as f32 / n as f32));
+            occ[(y * nx + x) as usize] == 0
+        })
     };
     let params = Params {
         nx,
@@ -2504,69 +2774,117 @@ fn route_node_wires(p: &cadrs_ui::node_graph::RouteProblem) -> Vec<Option<Vec<Ve
         nets: Vec::new(),
         sizes,
     };
+    // The cells other outputs' traces take: dear to the search and closed to straightening, so
+    // traces keep at least a grid step apart (wires from one output share their trunk).
     let mut occ = vec![0u16; (nx * ny) as usize];
     let hist = vec![0u32; (nx * ny) as usize];
     let mut searcher = Searcher::default();
-    // Short wires first: they have the least choice.
-    let mut order: Vec<usize> = (0..p.wires.len()).collect();
-    order.sort_by(|i, j| {
-        let d = |k: usize| p.wires[k].0.distance(p.wires[k].1);
-        d(*i).total_cmp(&d(*j))
-    });
+    // Wires grouped by their output (the group with the shortest wire first), short wires first
+    // within a group: they have the least choice.
+    let len = |k: usize| p.wires[k].0.distance(p.wires[k].1);
+    let source = |k: usize| {
+        let a = p.wires[k].0.round();
+        (a.x as i64, a.y as i64)
+    };
+    let mut groups: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for k in 0..p.wires.len() {
+        groups.entry(source(k)).or_default().push(k);
+    }
+    let mut groups: Vec<Vec<usize>> = groups.into_values().collect();
+    for g in &mut groups {
+        g.sort_by(|i, j| len(*i).total_cmp(&len(*j)));
+    }
+    groups.sort_by(|g, h| len(g[0]).total_cmp(&len(h[0])).then(g[0].cmp(&h[0])));
     let mut out = vec![None; p.wires.len()];
-    for k in order {
-        let (a, z) = p.wires[k];
-        let (s, t) = (a + Vec2::X * STUB, z - Vec2::X * STUB);
-        let (cs, ct) = (cell(s), cell(t));
-        let (is, it) = (
-            grid.params.index(cs.0, cs.1, 0),
-            grid.params.index(ct.0, ct.1, 0),
-        );
-        // The stubs' ends may sit in a neighbour's clearance: open them for this wire.
-        let keep = (grid.owner[is as usize], grid.owner[it as usize]);
-        grid.owner[is as usize] = FREE;
-        grid.owner[it as usize] = FREE;
-        let path = {
-            let costs = Costs {
-                grid: &grid,
-                occ: &occ,
-                hist: &hist,
-                // Dear enough that wires sharing a channel take lanes of their own.
-                present: 40,
+    for group in groups {
+        // This output's traces, marked once the group is done.
+        let mut mine: Vec<u32> = Vec::new();
+        for k in group.iter().copied() {
+            let (a, z) = p.wires[k];
+            let (s, t) = (a + Vec2::X * STUB, z - Vec2::X * STUB);
+            let (cs, ct) = (cell(s), cell(t));
+            let (is, it) = (
+                grid.params.index(cs.0, cs.1, 0),
+                grid.params.index(ct.0, ct.1, 0),
+            );
+            // The stubs' ends may sit in a neighbour's clearance: open them for this wire.
+            let keep = (grid.owner[is as usize], grid.owner[it as usize]);
+            grid.owner[is as usize] = FREE;
+            grid.owner[it as usize] = FREE;
+            let path = {
+                let costs = Costs {
+                    grid: &grid,
+                    occ: &occ,
+                    hist: &hist,
+                    // A step through another trace costs as much as forty steps round it: traces
+                    // take lanes of their own, crossing only where they must.
+                    present: 400,
+                };
+                searcher.search(&costs, 1, &[is], &[it])
             };
-            searcher.search(&costs, 1, &[is], &[it])
-        };
-        grid.owner[is as usize] = keep.0;
-        grid.owner[it as usize] = keep.1;
-        let Some(path) = path else { continue };
-        for c in &path {
-            occ[*c as usize] = occ[*c as usize].saturating_add(1);
-        }
-        // The cells' centres, from the stub's end to the other's, pulled straight.
-        let mut pts: Vec<Vec2> = path
-            .iter()
-            .map(|c| {
-                let (x, y, _) = grid.params.coords(*c);
-                centre(x, y)
-            })
-            .collect();
-        if let Some(f) = pts.first_mut() {
-            *f = s;
-        }
-        if let Some(l) = pts.last_mut() {
-            *l = t;
-        }
-        let mut pulled = vec![pts[0]];
-        let mut i = 0;
-        while i + 1 < pts.len() {
-            let mut j = pts.len() - 1;
-            while j > i + 1 && !clear(pts[i], pts[j]) {
-                j -= 1;
+            grid.owner[is as usize] = keep.0;
+            grid.owner[it as usize] = keep.1;
+            let Some(path) = path else { continue };
+            // The cells' centres, from the stub's end to the other's, pulled straight.
+            let mut pts: Vec<Vec2> = path
+                .iter()
+                .map(|c| {
+                    let (x, y, _) = grid.params.coords(*c);
+                    centre(x, y)
+                })
+                .collect();
+            if let Some(f) = pts.first_mut() {
+                *f = s;
             }
-            pulled.push(pts[j]);
-            i = j;
+            if let Some(l) = pts.last_mut() {
+                *l = t;
+            }
+            // Pulled straight as the PCB router straightens its tracks: from each point to the
+            // farthest one a 45° path reaches clear of the nodes (one straight leg and one at 45°,
+            // either way round), so every leg is horizontal, vertical or at 45°.
+            let mut pulled = vec![pts[0]];
+            let mut i = 0;
+            while i + 1 < pts.len() {
+                let mut j = pts.len() - 1;
+                let free = |a: Vec2, b: Vec2| clear(a, b) && untaken(a, b, &occ);
+                let leg = loop {
+                    let found = octilinear_legs(pts[i], pts[j])
+                        .into_iter()
+                        .find(|corner| free(pts[i], *corner) && free(*corner, pts[j]));
+                    match found {
+                        Some(c) => break Some(c),
+                        None if j > i + 1 => j -= 1,
+                        None => break None,
+                    }
+                };
+                // Neighbouring cells are a step apart, straight or at 45°: one leg.
+                if let Some(c) = leg
+                    && c != pts[i]
+                    && c != pts[j]
+                {
+                    pulled.push(c);
+                }
+                pulled.push(pts[j]);
+                i = j;
+            }
+            // The stubs' ends are off the cells' centres: the first and last legs are made
+            // octilinear by a corner of their own.
+            let trace = octilinear_ends(&pulled);
+            // The cells the trace (as drawn) runs through.
+            for w in trace.windows(2) {
+                let n = (w[0].distance(w[1]) / (pitch / 3.0)).ceil().max(1.0) as usize;
+                for i in 0..=n {
+                    let (x, y) = cell(w[0].lerp(w[1], i as f32 / n as f32));
+                    mine.push(y * nx + x);
+                }
+            }
+            out[k] = Some(trace);
         }
-        out[k] = Some(pulled);
+        mine.sort_unstable();
+        mine.dedup();
+        for c in mine {
+            occ[c as usize] = occ[c as usize].saturating_add(1);
+        }
     }
     out
 }
@@ -2596,12 +2914,87 @@ mod tests {
                 assert!(!grown.contains(q), "{q} is in the node: {pts:?}");
             }
         }
+        // Every leg is a circuit trace's: horizontal, vertical or at 45°.
+        assert!(
+            pts.windows(2).all(|w| {
+                let d = w[1] - w[0];
+                d.x.abs() < 1e-3 || d.y.abs() < 1e-3 || (d.x.abs() - d.y.abs()).abs() < 1e-2
+            }),
+            "{pts:?}"
+        );
         // With nothing in the way it is short and straight-ish.
         let r = route_node_wires(&RouteProblem {
             obstacles: Vec::new(),
             wires: vec![(Vec2::new(0.0, 0.0), Vec2::new(300.0, 40.0))],
         });
-        assert!(r[0].as_ref().unwrap().len() <= 3, "{:?}", r[0]);
+        assert!(r[0].as_ref().unwrap().len() <= 4, "{:?}", r[0]);
+    }
+
+    /// Two sketch → extrude chains: each extrude level with its sketch (the second sketch moved
+    /// down beside its extrude, which the first extrude, taller, pushed down).
+    /// Two wires from different outputs along the same run keep a grid step apart; two from
+    /// one output may share their trunk.
+    #[test]
+    fn traces_keep_apart() {
+        use cadrs_ui::node_graph::RouteProblem;
+        let p = RouteProblem {
+            obstacles: Vec::new(),
+            wires: vec![
+                (Vec2::new(0.0, 0.0), Vec2::new(400.0, 100.0)),
+                (Vec2::new(0.0, 4.0), Vec2::new(400.0, 104.0)),
+            ],
+        };
+        let r = route_node_wires(&p);
+        let trace = |k: usize| {
+            let mut t = vec![p.wires[k].0];
+            t.extend(r[k].clone().expect("routed"));
+            t.push(p.wires[k].1);
+            t
+        };
+        let (a, b) = (trace(0), trace(1));
+        // The least distance between the two (sampled along the middle, away from the ends).
+        let sample = |t: &[Vec2]| -> Vec<Vec2> {
+            t.windows(2)
+                .flat_map(|w| (0..=20).map(move |i| w[0].lerp(w[1], i as f32 / 20.0)))
+                .filter(|q| q.x > 60.0 && q.x < 340.0)
+                .collect()
+        };
+        let (sa, sb) = (sample(&a), sample(&b));
+        let gap = sa
+            .iter()
+            .flat_map(|q| sb.iter().map(move |w| q.distance(*w)))
+            .fold(f32::MAX, f32::min);
+        assert!(gap >= PITCH * 0.9, "{gap}: {a:?} {b:?}");
+    }
+
+    #[test]
+    fn single_wires_lie_level() {
+        use cadrs_core::document::ExtrudeFeature;
+        let mut el = Element::part_studio("Part Studio 1");
+        let (s1, s2, e1, e2) = (
+            FeatureId::new(),
+            FeatureId::new(),
+            FeatureId::new(),
+            FeatureId::new(),
+        );
+        let fs = el.features_mut().unwrap();
+        for (id, name) in [(s1, "Sketch 1"), (s2, "Sketch 2")] {
+            fs.push(Feature::new(
+                id,
+                name,
+                FeatureKind::Sketch(Default::default()),
+            ));
+        }
+        for (id, sk, name) in [(e1, s1, "Extrude 1"), (e2, s2, "Extrude 2")] {
+            let mut e = ExtrudeFeature::default();
+            e.sketches.push(sk);
+            fs.push(Feature::new(id, name, FeatureKind::Extrude(e)));
+        }
+        let pos = layout(&el, &HashMap::new()).features;
+        assert_eq!(pos[&s1].y, pos[&e1].y);
+        assert_eq!(pos[&s2].y, pos[&e2].y, "{pos:?}");
+        assert!(pos[&e2].y >= pos[&e1].y + height_guess(el.feature(e1).unwrap(), false));
+        assert!(pos[&e1].x > pos[&s1].x);
     }
 
     #[test]

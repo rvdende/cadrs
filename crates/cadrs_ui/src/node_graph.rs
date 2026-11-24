@@ -18,7 +18,7 @@
 //!   wire's output, so it can be dropped on another input). An input takes one wire.
 //! - **Selecting**: a drag on the empty canvas draws a box; at its end [`BoxSelected`] lists the
 //!   nodes it touches (the app selects them; [`GraphNodeSelected`] marks what is selected).
-//! - Nodes well outside the view are hidden ([`cull_nodes`]), so a large graph draws only what
+//! - Nodes well outside the view are taken out of the layout (`cull_nodes`), so a large graph draws only what
 //!   shows.
 //! - **[`Wire`]**: a cubic Bézier from an output socket to an input socket, drawn as short thin
 //!   segments (rotated nodes) on the wire layer, each frame its ends moved.
@@ -348,6 +348,7 @@ fn draw_grid(
             let (xs, ys, crosses) = grid_lines(g, &c.view, size);
             let piece = |l: f32, t: f32, w: f32, h: f32, color: Color| {
                 (
+                    Name::new("node-graph-grid-line"),
                     GridPiece,
                     Node {
                         position_type: PositionType::Absolute,
@@ -621,30 +622,86 @@ fn on_box_end(
     });
 }
 
-/// Hides the nodes (and their wires stay) well outside the view: a large graph's bodies cost
-/// nothing to draw while off screen.
-pub fn cull_nodes(
+/// A node culled off screen ([`cull_nodes`]): its size then, and what its contents' display
+/// was (they are taken out of the layout; its sockets stay, so its wires still reach it).
+#[derive(Component, Debug, Clone)]
+struct Culled {
+    size: Vec2,
+    height: Val,
+    hidden: Vec<(Entity, Display)>,
+}
+
+/// Takes the nodes well outside the view out of the layout (their contents, not their sockets
+/// or their place): a large graph lays out and draws only what shows. They come back when
+/// they near the view.
+#[allow(clippy::type_complexity)]
+fn cull_nodes(
     q_canvas: Query<(&NodeCanvas, &ComputedNode)>,
-    mut q_nodes: Query<(&GraphNode, &ComputedNode, &ChildOf, &mut Visibility)>,
+    mut q_nodes: Query<
+        (
+            Entity,
+            &GraphNode,
+            &ComputedNode,
+            &ChildOf,
+            &Children,
+            Option<&Culled>,
+            Has<GraphNodeDragging>,
+        ),
+        Without<Socket>,
+    >,
+    mut q_node: Query<&mut Node, Without<GraphNode>>,
+    mut q_root: Query<&mut Node, With<GraphNode>>,
+    q_socket: Query<(), With<Socket>>,
+    mut commands: Commands,
 ) {
-    /// How far outside the view (px on screen) a node still shows.
-    const MARGIN: f32 = 300.0;
+    /// How far outside the view (px on screen) a node still lays out.
+    const MARGIN: f32 = 400.0;
     for (c, cn) in &q_canvas {
         let size = cn.size() * cn.inverse_scale_factor();
         let view = Rect::from_corners(Vec2::splat(-MARGIN), size + MARGIN);
-        for (g, n, p, mut vis) in &mut q_nodes {
+        for (e, g, n, p, kids, culled, dragging) in &mut q_nodes {
             if p.parent() != c.world {
                 continue;
             }
-            let nsize = n.size() * n.inverse_scale_factor();
+            let nsize = culled.map_or(n.size() * n.inverse_scale_factor(), |k| k.size);
+            if nsize == Vec2::ZERO {
+                continue;
+            }
             let r = Rect::from_corners(c.view.to_screen(g.pos), c.view.to_screen(g.pos + nsize));
-            let want = if r.intersect(view).is_empty() && nsize != Vec2::ZERO {
-                Visibility::Hidden
-            } else {
-                Visibility::Inherited
-            };
-            if *vis != want {
-                *vis = want;
+            let off = r.intersect(view).is_empty() && !dragging;
+            match (off, culled) {
+                (true, None) => {
+                    let mut hidden = Vec::new();
+                    for k in kids.iter().filter(|k| !q_socket.contains(*k)) {
+                        if let Ok(mut kn) = q_node.get_mut(k) {
+                            hidden.push((k, kn.display));
+                            kn.display = Display::None;
+                        }
+                    }
+                    let Ok(mut rn) = q_root.get_mut(e) else {
+                        continue;
+                    };
+                    let height = rn.height;
+                    rn.height = Val::Px(nsize.y);
+                    rn.width = Val::Px(nsize.x);
+                    commands.entity(e).insert(Culled {
+                        size: nsize,
+                        height,
+                        hidden,
+                    });
+                }
+                (false, Some(k)) => {
+                    for (child, d) in &k.hidden {
+                        if let Ok(mut kn) = q_node.get_mut(*child) {
+                            kn.display = *d;
+                        }
+                    }
+                    if let Ok(mut rn) = q_root.get_mut(e) {
+                        rn.height = k.height;
+                    }
+                    commands.entity(e).remove::<Culled>();
+                }
+                _ => {}
             }
         }
     }
@@ -941,7 +998,7 @@ impl Wire {
 
 /// The ends a wire was last drawn with, and whether along a route.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq)]
-struct WireDrawn(Option<(Vec2, Vec2, bool)>);
+struct WireDrawn(Option<(Vec2, Vec2, bool, u32)>);
 
 /// What a [`WireRouter`] is asked: the nodes to go round (graph px rectangles) and each wire's
 /// ends (its output's socket, its input's).
@@ -973,26 +1030,53 @@ struct CanvasRoutes {
     routes: std::collections::HashMap<Entity, Vec<Vec2>>,
 }
 
-/// A path through `pts` with its corners rounded (each by up to `r`, less on short legs).
-pub fn rounded(pts: &[Vec2], r: f32) -> Vec<Vec2> {
+/// How far a trace runs straight out of an output and into an input (graph px).
+pub const STUB: f32 = 18.0;
+
+/// A wire drawn as a circuit trace (as the PCB Studio's tracks run): straight out of the output,
+/// a 45° run across, straight into the input; a wire going back left runs out, down (or up)
+/// and back along a row between them. Every leg is horizontal, vertical or at 45°.
+pub fn trace_points(a: Vec2, b: Vec2) -> Vec<Vec2> {
+    let (x1, x2) = (a.x + STUB, b.x - STUB);
+    let dy = b.y - a.y;
+    if x2 - x1 >= dy.abs() {
+        // Room for the 45° run: centred between the stubs.
+        let cx = (x1 + x2) / 2.0;
+        let half = dy.abs() / 2.0;
+        let mut p = vec![a, Vec2::new(cx - half, a.y), Vec2::new(cx + half, b.y), b];
+        p.dedup();
+        return p;
+    }
+    // Back left (or too close): out, down to the row halfway, across, down, in.
+    let ym = (a.y + b.y) / 2.0;
+    vec![
+        a,
+        Vec2::new(x1, a.y),
+        Vec2::new(x1, ym),
+        Vec2::new(x2, ym),
+        Vec2::new(x2, b.y),
+        b,
+    ]
+}
+
+/// A trace's right-angle corners cut at 45° (by up to `c`, less on short legs); 45° bends stay.
+pub fn chamfered(pts: &[Vec2], c: f32) -> Vec<Vec2> {
     if pts.len() < 3 {
         return pts.to_vec();
     }
     let mut out = vec![pts[0]];
     for w in pts.windows(3) {
-        let (a, b, c) = (w[0], w[1], w[2]);
-        let (u, v) = ((a - b), (c - b));
-        let k = r.min(u.length() / 2.0).min(v.length() / 2.0);
-        if k < 0.5 {
+        let (a, b, d) = (w[0], w[1], w[2]);
+        let (u, v) = (a - b, d - b);
+        let square =
+            u.length() > 1e-3 && v.length() > 1e-3 && u.normalize().dot(v.normalize()).abs() < 0.1;
+        let k = c.min(u.length() / 2.0).min(v.length() / 2.0);
+        if !square || k < 0.5 {
             out.push(b);
             continue;
         }
-        let (p, q) = (b + u.normalize() * k, b + v.normalize() * k);
-        for i in 0..=6 {
-            let t = i as f32 / 6.0;
-            let m = 1.0 - t;
-            out.push(p * m * m + b * 2.0 * m * t + q * t * t);
-        }
+        out.push(b + u.normalize() * k);
+        out.push(b + v.normalize() * k);
     }
     out.push(pts[pts.len() - 1]);
     out
@@ -1007,18 +1091,26 @@ struct WireSegment;
 struct DragWire {
     from: Entity,
     to: Vec2,
+    /// Dragged off an input: the wire (hidden while it is dragged) and the input it came off.
+    detached: Option<(Entity, Entity)>,
 }
 
+/// A socket wires can't be dragged from or dropped on (wires the app draws for what is fixed
+/// elsewhere: a feature's references).
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct ReadOnlySocket;
+
 /// A wire was dropped on an input: connect `from` (an output) to `to` (an input). Triggered on
-/// the canvas.
+/// the canvas. `replaces`: the input the wire was dragged off (to disconnect in the same step).
 #[derive(EntityEvent, Debug, Clone, Copy)]
 pub struct WireConnect {
     pub entity: Entity,
     pub from: Entity,
     pub to: Entity,
+    pub replaces: Option<Entity>,
 }
 
-/// A wire was dragged off its input. Triggered on the canvas.
+/// A wire was dragged off its input and dropped on no input. Triggered on the canvas.
 #[derive(EntityEvent, Debug, Clone, Copy)]
 pub struct WireDisconnect {
     pub entity: Entity,
@@ -1209,15 +1301,17 @@ fn draw_wires(
         let route = canvas
             .and_then(|(_, r)| r)
             .and_then(|r| r.routes.get(&entity).cloned());
-        if drawn.0 == Some((a, b, route.is_some())) {
+        let zoom = canvas.map_or(1.0, |(c, _)| c.view.zoom);
+        // (Its thickness follows the zoom: drawn again when that changes.)
+        let now = Some((a, b, route.is_some(), zoom.to_bits()));
+        if drawn.0 == now {
             continue;
         }
-        drawn.0 = Some((a, b, route.is_some()));
+        drawn.0 = now;
         let (color, dashed) = match wire {
             Some(w) => (w.color, w.dashed),
             None => (Color::WHITE, false),
         };
-        let zoom = canvas.map_or(1.0, |(c, _)| c.view.zoom);
         // A wire stays at least a pixel thick however far out it is zoomed.
         let thick = (2.0f32).max(1.2 / zoom);
         let pts = match &route {
@@ -1225,9 +1319,9 @@ fn draw_wires(
                 let mut p = vec![a];
                 p.extend(via.iter().copied());
                 p.push(b);
-                rounded(&p, 14.0)
+                chamfered(&p, 10.0)
             }
-            None => wire_points(a, b, 24),
+            None => chamfered(&trace_points(a, b), 10.0),
         };
         // The pieces: the wire's own, moved where they go (spawning only those it lacks), so
         // it is never left without them for a frame.
@@ -1266,6 +1360,7 @@ fn draw_wires(
                 }
                 None => {
                     commands.spawn((
+                        Name::new("node-graph-wire-piece"),
                         WireSegment,
                         node,
                         tf,
@@ -1295,7 +1390,8 @@ fn on_socket_drag_start(
     mut ev: On<PointerDragStart>,
     q_parent: Query<&ChildOf>,
     q_socket: Query<&Socket>,
-    q_wire: Query<&Wire>,
+    q_fixed: Query<(), With<ReadOnlySocket>>,
+    q_wire: Query<(Entity, &Wire)>,
     q_canvas: Query<&mut NodeCanvas>,
     q_geo: Query<(&ComputedNode, &UiGlobalTransform)>,
     mut commands: Commands,
@@ -1307,31 +1403,31 @@ fn on_socket_drag_start(
         return;
     };
     ev.propagate(false);
+    if q_fixed.contains(socket) {
+        return;
+    }
     let Some(canvas) = canvas_of(socket, &q_parent, &q_canvas) else {
         return;
     };
     let Ok(c) = q_canvas.get(canvas) else { return };
     let s = q_socket.get(socket).unwrap();
-    // From an input with a wire: the wire comes off it, and the drag goes on from its output.
-    let from = match s.side {
-        SocketSide::Out => socket,
+    // From an input with a wire: the wire is picked up (hidden; nothing changes until it is
+    // dropped), and the drag goes on from its output.
+    let (from, detached) = match s.side {
+        SocketSide::Out => (socket, None),
         SocketSide::In => {
-            let Some(w) = q_wire.iter().find(|w| w.to == socket) else {
+            let Some((we, w)) = q_wire.iter().find(|(_, w)| w.to == socket) else {
                 return;
             };
-            commands.trigger(WireDisconnect {
-                entity: canvas,
-                from: w.from,
-                to: socket,
-            });
-            w.from
+            commands.entity(we).insert(Visibility::Hidden);
+            (w.from, Some((we, socket)))
         }
     };
     let to = canvas_point(ev.pointer.position, canvas, &q_geo)
         .map_or(Vec2::ZERO, |p| c.view.to_graph(p));
     commands.spawn((
         Name::new("node-graph-drag-wire"),
-        DragWire { from, to },
+        DragWire { from, to, detached },
         WireDrawn::default(),
         Node {
             position_type: PositionType::Absolute,
@@ -1345,12 +1441,11 @@ fn on_socket_drag_start(
 fn on_socket_drag(
     ev: On<PointerDrag>,
     q_parent: Query<&ChildOf>,
-    q_socket: Query<&Socket>,
     q_canvas: Query<&mut NodeCanvas>,
     q_geo: Query<(&ComputedNode, &UiGlobalTransform)>,
     mut q_drag: Query<&mut DragWire>,
 ) {
-    if ev.button != PointerButton::Primary || socket_at(ev.entity, &q_parent, &q_socket).is_none() {
+    if ev.button != PointerButton::Primary || q_drag.is_empty() {
         return;
     }
     for mut d in &mut q_drag {
@@ -1370,19 +1465,28 @@ fn on_socket_drag(
 fn on_socket_drag_end(
     ev: On<PointerDragEnd>,
     q_parent: Query<&ChildOf>,
-    q_socket: Query<(Entity, &Socket)>,
+    q_socket: Query<(Entity, &Socket), Without<ReadOnlySocket>>,
     q_sock: Query<&Socket>,
     q_drag: Query<(Entity, &DragWire)>,
     q_canvas: Query<&mut NodeCanvas>,
     q_geo: Query<(&ComputedNode, &UiGlobalTransform)>,
     mut commands: Commands,
 ) {
-    if ev.button != PointerButton::Primary || socket_at(ev.entity, &q_parent, &q_sock).is_none() {
+    if ev.button != PointerButton::Primary {
         return;
     }
+    // Every wire being dragged ends with the drag, wherever it began (its socket may be gone).
     for (e, d) in &q_drag {
         commands.entity(e).despawn();
-        let Some(canvas) = canvas_of(d.from, &q_parent, &q_canvas) else {
+        let canvas = canvas_of(d.from, &q_parent, &q_canvas);
+        // Dropped back where it came from, or not dropped on an input (below): the picked-up
+        // wire shows again until the app says otherwise.
+        if let Some((we, _)) = d.detached
+            && let Ok(mut w) = commands.get_entity(we)
+        {
+            w.insert(Visibility::Inherited);
+        }
+        let Some(canvas) = canvas else {
             continue;
         };
         let (Ok(c), Ok(from)) = (q_canvas.get(canvas), q_sock.get(d.from)) else {
@@ -1412,12 +1516,26 @@ fn on_socket_drag_end(
                 best = Some((dist, s));
             }
         }
-        if let Some((_, to)) = best {
-            commands.trigger(WireConnect {
-                entity: canvas,
-                from: d.from,
-                to,
-            });
+        let replaces = d.detached.map(|(_, old)| old);
+        match best {
+            Some((_, to)) if Some(to) == replaces => {}
+            Some((_, to)) => {
+                commands.trigger(WireConnect {
+                    entity: canvas,
+                    from: d.from,
+                    to,
+                    replaces,
+                });
+            }
+            None => {
+                if let Some(old) = replaces {
+                    commands.trigger(WireDisconnect {
+                        entity: canvas,
+                        from: d.from,
+                        to: old,
+                    });
+                }
+            }
         }
     }
 }
@@ -1435,8 +1553,15 @@ pub struct StaticCopyRoot;
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct StaticCopy;
 
+#[allow(clippy::type_complexity)]
 fn mark_static_copies(
-    q_root: Query<Entity, With<StaticCopyRoot>>,
+    q_root: Query<
+        Entity,
+        (
+            With<StaticCopyRoot>,
+            Or<(Added<StaticCopyRoot>, Changed<Children>)>,
+        ),
+    >,
     q_children: Query<&Children>,
     q_marked: Query<(), With<StaticCopy>>,
     mut commands: Commands,
@@ -1525,17 +1650,53 @@ mod tests {
         assert!(xs.iter().any(|x| (x - 7.0).abs() < 1e-3));
     }
 
+    /// Every leg of a trace is horizontal, vertical or at 45°.
+    fn octilinear(p: &[Vec2]) -> bool {
+        p.windows(2).all(|w| {
+            let d = w[1] - w[0];
+            d.x.abs() < 1e-3 || d.y.abs() < 1e-3 || (d.x.abs() - d.y.abs()).abs() < 1e-3
+        })
+    }
+
     #[test]
-    fn corners_are_rounded() {
-        let p = rounded(
+    fn traces_run_straight_and_at_45() {
+        for (a, b) in [
+            (Vec2::ZERO, Vec2::new(300.0, 80.0)),
+            (Vec2::ZERO, Vec2::new(300.0, -40.0)),
+            (Vec2::ZERO, Vec2::new(300.0, 0.0)),
+            // Back left, and too close for the 45° run.
+            (Vec2::new(300.0, 0.0), Vec2::new(0.0, 200.0)),
+            (Vec2::ZERO, Vec2::new(40.0, 300.0)),
+        ] {
+            let p = chamfered(&trace_points(a, b), 10.0);
+            assert_eq!(p[0], a);
+            assert_eq!(*p.last().unwrap(), b);
+            assert!(octilinear(&p), "{a} → {b}: {p:?}");
+            // It leaves the output and enters the input horizontally.
+            assert!((p[1].y - a.y).abs() < 1e-3 && p[1].x > a.x);
+            let n = p.len();
+            assert!((p[n - 2].y - b.y).abs() < 1e-3 && p[n - 2].x < b.x);
+        }
+    }
+
+    #[test]
+    fn right_angles_are_cut_at_45() {
+        let p = chamfered(
             &[Vec2::ZERO, Vec2::new(100.0, 0.0), Vec2::new(100.0, 100.0)],
             10.0,
         );
-        assert_eq!(p[0], Vec2::ZERO);
-        assert_eq!(*p.last().unwrap(), Vec2::new(100.0, 100.0));
-        // The corner is cut: no point at it, the curve starts 10 px before it.
-        assert!(p.iter().all(|q| q.distance(Vec2::new(100.0, 0.0)) > 2.0));
-        assert!(p.contains(&Vec2::new(90.0, 0.0)));
+        assert_eq!(
+            p,
+            vec![
+                Vec2::ZERO,
+                Vec2::new(90.0, 0.0),
+                Vec2::new(100.0, 10.0),
+                Vec2::new(100.0, 100.0)
+            ]
+        );
+        // A 45° bend stays as it is.
+        let q = [Vec2::ZERO, Vec2::new(50.0, 0.0), Vec2::new(100.0, 50.0)];
+        assert_eq!(chamfered(&q, 10.0), q.to_vec());
     }
 
     #[test]

@@ -851,6 +851,21 @@ impl Command for SetProperties {
             return Err(CommandError::Invalid("nothing to set".into()));
         }
         for o in &self.owners {
+            // A part of a configured Part Studio's preset (an instance's generated studio):
+            // its properties are the studio's part's, shared by every preset
+            // ([`crate::configuration`]); the presets take them up again after this edit.
+            let o = &match *o {
+                PropertyOwner::Part { element, part } => {
+                    match crate::configuration::configured_of(doc, element) {
+                        Some((studio, _)) => PropertyOwner::Part {
+                            element: studio,
+                            part,
+                        },
+                        None => *o,
+                    }
+                }
+                o => o,
+            };
             if !exists(doc, *o) {
                 return Err(CommandError::ElementNotFound(o.element()));
             }

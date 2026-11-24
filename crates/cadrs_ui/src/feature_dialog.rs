@@ -26,10 +26,12 @@ pub struct FeatureDialogPlugin;
 
 impl Plugin for FeatureDialogPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(on_dialog_look).add_systems(
-            PostUpdate,
-            sync_feature_dialogs.before(bevy::ui::UiSystems::Prepare),
-        );
+        app.add_observer(on_dialog_look)
+            .add_observer(on_plain_mark)
+            .add_systems(
+                PostUpdate,
+                sync_feature_dialogs.before(bevy::ui::UiSystems::Prepare),
+            );
     }
 }
 
@@ -76,6 +78,26 @@ struct DialogLook {
     shadow: BoxShadow,
 }
 
+/// Whether a dialog is a plain panel: made [`PlainPanel`] when it is added.
+#[derive(Component, Debug, Clone, Copy)]
+struct PlainMark(bool);
+
+fn on_plain_mark(ev: On<Add<PlainMark>>, q: Query<&PlainMark>, mut commands: Commands) {
+    if q.get(ev.entity).is_ok_and(|m| m.0) {
+        commands.entity(ev.entity).insert(PlainPanel);
+    }
+}
+
+/// Makes an embedded dialog float again (taken out of a node graph's node, back over the
+/// view): frosted glass, the panels' shadow, absolutely placed above the view.
+pub fn unembed(commands: &mut Commands, dialog: Entity, t: &Theme) {
+    commands.entity(dialog).remove::<BackgroundColor>().insert((
+        crate::glass::Glass::panel().material(crate::glass::GlassMaterial::Frosted),
+        crate::glass::panel_shadow(t),
+        GlobalZIndex(crate::z::DIALOG - 10),
+    ));
+}
+
 /// Floating: frosted glass with the panels' shadow, above the view. Embedded: an opaque card.
 fn on_dialog_look(ev: On<Add<DialogLook>>, q: Query<&DialogLook>, mut commands: Commands) {
     let Ok(l) = q.get(ev.entity) else { return };
@@ -103,6 +125,11 @@ pub fn embed(commands: &mut Commands, dialog: Entity, t: &Theme) {
 /// A panel that isn't a feature (Mass properties): its title stays black whatever `valid` says.
 #[derive(Component, Debug, Clone, Copy)]
 struct PlainTitle;
+
+/// On a dialog that isn't a feature's (Mass properties, Measure): a node graph doesn't take it
+/// into a feature's node.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct PlainPanel;
 
 /// Builder for a feature dialog.
 pub struct FeatureDialog {
@@ -265,6 +292,7 @@ impl FeatureDialog {
                 overflow: Overflow::clip(),
                 ..default()
             },
+            PlainMark(plain_title),
             DialogLook {
                 embedded,
                 rim: t.glass_rim,

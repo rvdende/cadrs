@@ -60,6 +60,31 @@ pub trait Command: fmt::Debug + Send + Sync + 'static {
     fn apply(&self, doc: &mut Document) -> Result<(), CommandError>;
 }
 
+/// Several commands as one undo step (a script's several edits, a menu item that adds an input
+/// and wires it), applied in order; the first that fails fails them all (the history puts the
+/// document back). `scope` must hold every command's ([`Scope::Whole`] when they differ).
+#[derive(Debug)]
+pub struct Batch {
+    pub label: String,
+    pub scope: Scope,
+    pub commands: Vec<Box<dyn Command>>,
+}
+
+impl Command for Batch {
+    fn label(&self) -> String {
+        self.label.clone()
+    }
+    fn scope(&self) -> Scope {
+        self.scope
+    }
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        for c in &self.commands {
+            c.apply(doc)?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum Snapshot {
     Document(Box<Document>),

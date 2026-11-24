@@ -826,6 +826,7 @@ pub fn check(features: &[Feature], units: &Units) -> Vec<(FeatureId, String)> {
         .collect();
     let mut out = Vec::new();
     let mut env: Vec<(String, VarValue)> = Vec::new();
+    let mut inputs: Vec<String> = Vec::new();
     for (i, f) in features.iter().enumerate() {
         let later: Vec<String> = features[i + 1..]
             .iter()
@@ -846,6 +847,19 @@ pub fn check(features: &[Feature], units: &Units) -> Vec<(FeatureId, String)> {
                 if let Some(p) = v.problem() {
                     out.push((f.id, p.to_string()));
                     continue;
+                }
+                // A configuration's input (`crate::configuration`): a Variable may not take its
+                // name, or the presets would stop reaching the features below it.
+                if f.name.starts_with(crate::configuration::INPUT_FEATURE) {
+                    inputs.push(v.name.clone());
+                } else if inputs.contains(&v.name) {
+                    out.push((
+                        f.id,
+                        format!(
+                            "#{} is a configuration input: give this Variable another name",
+                            v.name
+                        ),
+                    ));
                 }
                 let mut value = v.var_value();
                 match (units::variable_names(&v.expr).iter().find(|n| !env.iter().any(|(k, _)| k == *n)), eval_variable(v.var_type, &v.expr, units, &env)) {

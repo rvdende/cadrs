@@ -228,7 +228,7 @@ impl Configuration {
                 };
                 Feature::new(
                     i.feature_id(),
-                    format!("#{}", i.name),
+                    format!("{INPUT_FEATURE}{}", i.name),
                     FeatureKind::Variable(var),
                 )
             })
@@ -263,6 +263,11 @@ impl Configuration {
     }
 }
 
+/// The name the Variable feature a rebuild sees for an input has, before the input's name: how
+/// [`crate::variables::check`] tells an input from a Variable (a Variable may not redefine an
+/// input: the presets would stop reaching the features below it).
+pub const INPUT_FEATURE: &str = "configuration #";
+
 /// Where the node view puts a Part Studio's nodes (graph coordinates, px at zoom 1), and which
 /// are collapsed. Features without a position are laid out by the app.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -272,13 +277,19 @@ pub struct NodeLayout {
     /// The Configuration node's position.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inputs_node: Option<[f32; 2]>,
+    /// The Parts node's position.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parts_node: Option<[f32; 2]>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub collapsed: BTreeSet<FeatureId>,
 }
 
 impl NodeLayout {
     pub fn is_empty(&self) -> bool {
-        self.positions.is_empty() && self.inputs_node.is_none() && self.collapsed.is_empty()
+        self.positions.is_empty()
+            && self.inputs_node.is_none()
+            && self.parts_node.is_none()
+            && self.collapsed.is_empty()
     }
 }
 
@@ -317,6 +328,11 @@ pub struct ConfiguredStudio {
     pub studio: ElementId,
     pub preset: PresetId,
     pub element: Element,
+    /// The studio as it was when `element` was generated from it: [`refresh`] generates it
+    /// again only when the studio has changed since (not saved: a document opened generates it
+    /// once).
+    #[serde(skip)]
+    pub source: Option<std::sync::Arc<Element>>,
 }
 
 /// The id the generated studio of `studio`'s `preset` has.
@@ -431,10 +447,16 @@ pub fn ensure(doc: &mut Document, id: ElementId) -> bool {
     else {
         return false;
     };
+    let source = doc
+        .elements
+        .iter()
+        .find(|e| e.id == studio)
+        .map(|e| std::sync::Arc::new(e.clone()));
     doc.configured.push(ConfiguredStudio {
         studio,
         preset,
         element: el,
+        source,
     });
     true
 }
@@ -463,6 +485,15 @@ pub fn refresh(doc: &mut Document) {
         let Some(src) = doc.elements.iter().find(|e| e.id == studio) else {
             continue;
         };
+        // Unchanged since it was generated: kept as it is.
+        if let Some(c) = doc
+            .configured
+            .iter()
+            .find(|c| c.element.id == id && c.source.as_deref() == Some(src))
+        {
+            out.push(c.clone());
+            continue;
+        }
         let Some(el) = generate(src, preset, &doc.units) else {
             continue;
         };
@@ -470,6 +501,7 @@ pub fn refresh(doc: &mut Document) {
             studio,
             preset,
             element: el,
+            source: Some(std::sync::Arc::new(src.clone())),
         });
     }
     if out != doc.configured {
@@ -496,6 +528,66 @@ fn config_mut(doc: &mut Document, element: ElementId) -> Result<&mut Configurati
     studio_mut(doc, element)?
         .configuration_mut()
         .ok_or_else(|| CommandError::Invalid("the Part Studio has no configuration".into()))
+}
+
+/// The assembly instances that use `studio`'s preset `preset` (all its presets for `None`):
+/// how many, and the first assembly's name.
+pub fn instances_using(
+    doc: &Document,
+    studio: ElementId,
+    preset: Option<PresetId>,
+) -> (usize, Option<String>) {
+    let ids: Vec<ElementId> = match preset {
+        Some(p) => vec![configured_id(studio, p)],
+        None => doc
+            .element(studio)
+            .and_then(|e| e.configuration())
+            .map(|c| {
+                c.presets
+                    .iter()
+                    .map(|p| configured_id(studio, p.id))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    };
+    let mut n = 0;
+    let mut first = None;
+    for el in &doc.elements {
+        let k = el
+            .assembly
+            .instances
+            .iter()
+            .filter(|i| ids.contains(&i.source.element()))
+            .count();
+        if k > 0 && first.is_none() {
+            first = Some(el.name.clone());
+        }
+        n += k;
+    }
+    (n, first)
+}
+
+/// Refuses to take away presets an assembly uses (its instances would lose their parts).
+fn refuse_if_used(
+    doc: &Document,
+    studio: ElementId,
+    preset: Option<PresetId>,
+) -> Result<(), CommandError> {
+    match instances_using(doc, studio, preset) {
+        (0, _) => Ok(()),
+        (n, asm) => Err(CommandError::Invalid(format!(
+            "{n} instance{} in {} use{} {}: switch {} to another preset first",
+            if n == 1 { "" } else { "s" },
+            asm.unwrap_or_default(),
+            if n == 1 { "s" } else { "" },
+            if preset.is_some() {
+                "this preset"
+            } else {
+                "this configuration"
+            },
+            if n == 1 { "it" } else { "them" },
+        ))),
+    }
 }
 
 /// Re-evaluates the studio with its (changed) configuration.
@@ -571,14 +663,17 @@ impl Command for SetConfigured {
         Scope::Element(self.element)
     }
     fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
-        let el = studio_mut(doc, self.element)?;
-        match (self.configured, el.configuration().is_some()) {
+        let has = studio_mut(doc, self.element)?.configuration().is_some();
+        match (self.configured, has) {
             (true, false) => {
+                let el = studio_mut(doc, self.element)?;
                 if let ElementKind::PartStudio { configuration, .. } = &mut el.kind {
                     *configuration = Some(Box::default());
                 }
             }
             (false, true) => {
+                refuse_if_used(doc, self.element, None)?;
+                let el = studio_mut(doc, self.element)?;
                 let inputs: Vec<InputId> = el
                     .configuration()
                     .map(|c| c.inputs.iter().map(|i| i.id).collect())
@@ -839,6 +934,7 @@ impl Command for RemovePreset {
         Scope::Element(self.element)
     }
     fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        refuse_if_used(doc, self.element, Some(self.preset))?;
         let c = config_mut(doc, self.element)?;
         if c.preset(self.preset).is_none() {
             return Err(CommandError::Invalid("no such preset".into()));
@@ -1029,6 +1125,8 @@ pub struct MoveGraphNodes {
     pub element: ElementId,
     pub positions: Vec<(FeatureId, [f32; 2])>,
     pub inputs_node: Option<[f32; 2]>,
+    /// The Parts node's.
+    pub parts_node: Option<[f32; 2]>,
 }
 
 impl Command for MoveGraphNodes {
@@ -1039,7 +1137,9 @@ impl Command for MoveGraphNodes {
         Scope::Element(self.element)
     }
     fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
-        let l = studio_mut(doc, self.element)?
+        let el = studio_mut(doc, self.element)?;
+        let ids: BTreeSet<FeatureId> = el.features().iter().map(|f| f.id).collect();
+        let l = el
             .node_layout_mut()
             .ok_or_else(|| CommandError::Invalid("nodes need a Part Studio".into()))?;
         for (f, p) in &self.positions {
@@ -1048,6 +1148,12 @@ impl Command for MoveGraphNodes {
         if let Some(p) = self.inputs_node {
             l.inputs_node = Some(p);
         }
+        if let Some(p) = self.parts_node {
+            l.parts_node = Some(p);
+        }
+        // The places of features deleted since go.
+        l.positions.retain(|f, _| ids.contains(f));
+        l.collapsed.retain(|f| ids.contains(f));
         Ok(())
     }
 }
@@ -1071,6 +1177,7 @@ impl Command for ResetNodeLayout {
             .ok_or_else(|| CommandError::Invalid("nodes need a Part Studio".into()))?;
         l.positions.clear();
         l.inputs_node = None;
+        l.parts_node = None;
         Ok(())
     }
 }
