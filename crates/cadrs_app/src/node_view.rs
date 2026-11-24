@@ -205,6 +205,8 @@ enum SocketKey {
     GeoOut(FeatureId),
     /// The geometry a feature references, on its left.
     GeoIn(FeatureId),
+    /// The parts a feature adds to, cuts or merges with, on its Merge scope row.
+    Scope(FeatureId),
     /// A field of a feature ("Depth").
     Slot(FeatureId, &'static str),
     /// A feature's suppression variable.
@@ -1357,7 +1359,10 @@ fn spawn_feature_node(
     // Sockets. Geometry in: level with the dialog's first selection field (a sketch's plane,
     // an extrude's regions, a fillet's edges), coloured as what it references (a plane grey, a
     // sketch blue, a part green); on the header when the node has none (or is collapsed).
-    let parents = cadrs_core::feature_list::direct_parents(el.features(), f.id);
+    let parents: Vec<FeatureId> = cadrs_core::feature_list::direct_parents(el.features(), f.id)
+        .into_iter()
+        .filter(|p| f.reference_parents().contains(p) || f.merge_scope().is_none())
+        .collect();
     // (A sketch on a default plane, Top, Front or Right, takes a plane too.)
     let in_color = match parents.first().and_then(|p| el.feature(*p)) {
         Some(p) => geometry_color(p),
@@ -1391,6 +1396,39 @@ fn spawn_feature_node(
         && let Some(mut n) = world.get_mut::<Node>(geo)
     {
         n.top = Val::Px(4.0);
+    }
+    // Merge scope in: level with the dialog's Merge scope row (the parts it adds to, cuts or
+    // merges with), green as parts are; on the header when the node is collapsed.
+    if f.merge_scope().is_some() {
+        let scope_row = (!collapsed)
+            .then(|| {
+                descendants(world, card).into_iter().find(|e| {
+                    world
+                        .get::<Name>(*e)
+                        .is_some_and(|n| n.as_str().ends_with("-merge-scope-field"))
+                })
+            })
+            .flatten();
+        let scope = world
+            .spawn((
+                SocketKey::Scope(f.id),
+                cadrs_ui::node_graph::ReadOnlySocket,
+                Socket::bundle(
+                    format!("node-{slug}-merge-scope-in"),
+                    SocketSide::In,
+                    GEOMETRY,
+                    scope_row,
+                    socket_color(GEOMETRY),
+                    t,
+                ),
+                ChildOf(root),
+            ))
+            .id();
+        if scope_row.is_none()
+            && let Some(mut n) = world.get_mut::<Node>(scope)
+        {
+            n.top = Val::Px(4.0);
+        }
     }
     world.spawn((
         SocketKey::GeoOut(f.id),
@@ -1708,11 +1746,28 @@ fn graph_wires(
     for (i, f) in features.iter().enumerate() {
         // Only the parents no other parent depends on: an edge between Extrude 5's cut and
         // Extrude 1's plate needs both, but Extrude 5 cut Extrude 1's part already.
+        // What it builds from into its geometry input; the parts it adds to, cuts or merges
+        // with (picked, or found by the rebuild) into its merge scope's.
+        let refs = f.reference_parents();
+        let scope: Vec<FeatureId> = f
+            .merge_scope()
+            .map(|s| s.iter().map(|p| p.feature).collect())
+            .unwrap_or_default();
         for p in cadrs_core::feature_list::direct_parents_with(features, parts, uses, f.id) {
-            if let Some(pf) = el.feature(p) {
+            let Some(pf) = el.feature(p) else { continue };
+            let to_scope = f.merge_scope().is_some() && (scope.contains(&p) || !refs.contains(&p));
+            if refs.contains(&p) || !to_scope {
                 wires.push((
                     SocketKey::GeoOut(p),
                     SocketKey::GeoIn(f.id),
+                    geometry_color(pf),
+                    false,
+                ));
+            }
+            if to_scope {
+                wires.push((
+                    SocketKey::GeoOut(p),
+                    SocketKey::Scope(f.id),
                     geometry_color(pf),
                     false,
                 ));
@@ -1784,6 +1839,9 @@ pub fn node_graph_json(
     for f in features {
         let slug = crate::feature_list::row_name(&f.name).replacen("feature-", "", 1);
         let mut inputs = vec![json!("geometry")];
+        if f.merge_scope().is_some() {
+            inputs.push(json!("merge scope"));
+        }
         inputs.extend(
             cfg::parameter_slots(f)
                 .into_iter()
@@ -1810,6 +1868,7 @@ pub fn node_graph_json(
         match k {
             SocketKey::GeoOut(f) => json!({ "node": name_of(*f), "socket": "geometry out" }),
             SocketKey::GeoIn(f) => json!({ "node": name_of(*f), "socket": "geometry in" }),
+            SocketKey::Scope(f) => json!({ "node": name_of(*f), "socket": "merge scope" }),
             SocketKey::Slot(f, label) => json!({ "node": name_of(*f), "socket": label }),
             SocketKey::Bypass(f) => json!({ "node": name_of(*f), "socket": "bypass" }),
             SocketKey::Input(n) => json!({ "node": "Configuration", "socket": n }),
@@ -3189,10 +3248,43 @@ fn route_node_wires(p: &cadrs_ui::node_graph::RouteProblem) -> Vec<Option<Vec<Ve
         g.sort_by(|i, j| len(*i).total_cmp(&len(*j)));
     }
     groups.sort_by(|g, h| len(g[0]).total_cmp(&len(h[0])).then(g[0].cmp(&h[0])));
-    let mut out = vec![None; p.wires.len()];
+    // Pulled straight as the PCB router straightens its tracks: from each point to the farthest
+    // one a 45° path reaches clear of the nodes and of other outputs' traces (one straight leg
+    // and one at 45°, either way round), so every leg is horizontal, vertical or at 45°.
+    let pull = |pts: &[Vec2], occ: &[u16]| -> Vec<Vec2> {
+        let mut pulled = vec![pts[0]];
+        let mut i = 0;
+        while i + 1 < pts.len() {
+            let mut j = pts.len() - 1;
+            let free = |a: Vec2, b: Vec2| clear(a, b) && untaken(a, b, occ);
+            let leg = loop {
+                let found = octilinear_legs(pts[i], pts[j])
+                    .into_iter()
+                    .find(|corner| free(pts[i], *corner) && free(*corner, pts[j]));
+                match found {
+                    Some(c) => break Some(c),
+                    None if j > i + 1 => j -= 1,
+                    None => break None,
+                }
+            };
+            // Neighbouring cells are a step apart, straight or at 45°: one leg.
+            if let Some(c) = leg
+                && c != pts[i]
+                && c != pts[j]
+            {
+                pulled.push(c);
+            }
+            pulled.push(pts[j]);
+            i = j;
+        }
+        pulled
+    };
+    let mut out: Vec<Option<Vec<Vec2>>> = vec![None; p.wires.len()];
     for group in groups {
-        // This output's traces, marked once the group is done.
-        let mut mine: Vec<u32> = Vec::new();
+        // This output's traces so far (each from its stub's end), and the points where later
+        // ones branch off them.
+        let mut traces: Vec<(usize, Vec<Vec2>)> = Vec::new();
+        let mut branches: Vec<Vec2> = Vec::new();
         for k in group.iter().copied() {
             let (a, z) = p.wires[k];
             let (s, t) = (a + Vec2::X * STUB, z - Vec2::X * STUB);
@@ -3201,6 +3293,28 @@ fn route_node_wires(p: &cadrs_ui::node_graph::RouteProblem) -> Vec<Option<Vec<Ve
                 grid.params.index(cs.0, cs.1, 0),
                 grid.params.index(ct.0, ct.1, 0),
             );
+            // Where it may start: its stub's end, or anywhere along this output's traces so far
+            // (not their last steps into their inputs), so wires from one output share a trunk
+            // and branch off it instead of running side by side. Each start cell with the trace,
+            // the leg and the point on it.
+            let mut starts: Vec<u32> = vec![is];
+            let mut on_trace: HashMap<u32, (usize, usize, Vec2)> = HashMap::new();
+            for (ti, (_, tr)) in traces.iter().enumerate() {
+                let legs = tr.len().saturating_sub(1);
+                for li in 0..legs.saturating_sub(1) {
+                    let (u, v) = (tr[li], tr[li + 1]);
+                    let n = (u.distance(v) / (pitch / 3.0)).ceil().max(1.0) as usize;
+                    for i in 0..=n {
+                        let q = u.lerp(v, i as f32 / n as f32);
+                        let (x, y) = cell(q);
+                        let c = grid.params.index(x, y, 0);
+                        if let std::collections::hash_map::Entry::Vacant(e) = on_trace.entry(c) {
+                            e.insert((ti, li, q));
+                            starts.push(c);
+                        }
+                    }
+                }
+            }
             // The stubs' ends may sit in a neighbour's clearance: open them for this wire.
             let keep = (grid.owner[is as usize], grid.owner[it as usize]);
             grid.owner[is as usize] = FREE;
@@ -3210,16 +3324,30 @@ fn route_node_wires(p: &cadrs_ui::node_graph::RouteProblem) -> Vec<Option<Vec<Ve
                     grid: &grid,
                     occ: &occ,
                     hist: &hist,
-                    // A step through another trace costs as much as forty steps round it: traces
-                    // take lanes of their own, crossing only where they must.
-                    present: 400,
+                    // A step through another output's trace costs as much as a hundred steps
+                    // round it: traces take lanes of their own and cross only where they must.
+                    present: 1000,
                 };
-                searcher.search(&costs, 1, &[is], &[it])
+                searcher.search(&costs, 1, &starts, &[it])
             };
             grid.owner[is as usize] = keep.0;
             grid.owner[it as usize] = keep.1;
             let Some(path) = path else { continue };
-            // The cells' centres, from the stub's end to the other's, pulled straight.
+            // Where it leaves: its own stub, or a point of an earlier trace (whose way there it
+            // shares).
+            let (prefix, from) = match path.first().and_then(|c| on_trace.get(c)) {
+                Some(&(ti, li, q)) if path[0] != is => {
+                    let tr = &traces[ti].1;
+                    let mut pre = tr[..=li].to_vec();
+                    if pre.last() != Some(&q) {
+                        pre.push(q);
+                    }
+                    branches.push(q);
+                    (pre, q)
+                }
+                _ => (vec![s], s),
+            };
+            // The cells' centres, from where it leaves to its stub's end, pulled straight.
             let mut pts: Vec<Vec2> = path
                 .iter()
                 .map(|c| {
@@ -3228,51 +3356,63 @@ fn route_node_wires(p: &cadrs_ui::node_graph::RouteProblem) -> Vec<Option<Vec<Ve
                 })
                 .collect();
             if let Some(f) = pts.first_mut() {
-                *f = s;
+                *f = from;
             }
             if let Some(l) = pts.last_mut() {
                 *l = t;
             }
-            // Pulled straight as the PCB router straightens its tracks: from each point to the
-            // farthest one a 45° path reaches clear of the nodes (one straight leg and one at 45°,
-            // either way round), so every leg is horizontal, vertical or at 45°.
-            let mut pulled = vec![pts[0]];
-            let mut i = 0;
-            while i + 1 < pts.len() {
-                let mut j = pts.len() - 1;
-                let free = |a: Vec2, b: Vec2| clear(a, b) && untaken(a, b, &occ);
-                let leg = loop {
-                    let found = octilinear_legs(pts[i], pts[j])
-                        .into_iter()
-                        .find(|corner| free(pts[i], *corner) && free(*corner, pts[j]));
-                    match found {
-                        Some(c) => break Some(c),
-                        None if j > i + 1 => j -= 1,
-                        None => break None,
-                    }
-                };
-                // Neighbouring cells are a step apart, straight or at 45°: one leg.
-                if let Some(c) = leg
-                    && c != pts[i]
-                    && c != pts[j]
-                {
-                    pulled.push(c);
-                }
-                pulled.push(pts[j]);
-                i = j;
+            // (One cell: it leaves where it ends.)
+            if pts.len() == 1 {
+                pts.push(t);
             }
-            // The stubs' ends are off the cells' centres: the first and last legs are made
-            // octilinear by a corner of their own.
-            let trace = octilinear_ends(&pulled);
+            let pulled = pull(&pts, &occ);
+            // The ends are off the cells' centres: the first and last legs are made octilinear by
+            // a corner of their own.
+            let own = octilinear_ends(&pulled);
+            let mut trace = prefix;
+            trace.extend(own.into_iter().skip(1));
+            traces.push((k, trace));
+        }
+        // Every trace split where another branches off it, so a shared run is the same legs in
+        // each (drawn thicker for the wires it carries).
+        for (_, tr) in &mut traces {
+            let mut split = vec![tr[0]];
+            for w in tr.windows(2) {
+                let (u, v) = (w[0], w[1]);
+                let mut on: Vec<Vec2> = branches
+                    .iter()
+                    .copied()
+                    .filter(|q| {
+                        let d = v - u;
+                        let len = d.length();
+                        if len < 1e-3 {
+                            return false;
+                        }
+                        let along = (*q - u).dot(d) / len;
+                        along > 0.5
+                            && along < len - 0.5
+                            && (u + d * (along / len)).distance(*q) < 0.5
+                    })
+                    .collect();
+                on.sort_by(|x, y| u.distance(*x).total_cmp(&u.distance(*y)));
+                on.dedup_by(|x, y| x.distance(*y) < 0.5);
+                split.extend(on);
+                split.push(v);
+            }
+            *tr = split;
+        }
+        // This output's traces, marked for the next outputs' wires.
+        let mut mine: Vec<u32> = Vec::new();
+        for (k, tr) in traces {
             // The cells the trace (as drawn) runs through.
-            for w in trace.windows(2) {
+            for w in tr.windows(2) {
                 let n = (w[0].distance(w[1]) / (pitch / 3.0)).ceil().max(1.0) as usize;
                 for i in 0..=n {
                     let (x, y) = cell(w[0].lerp(w[1], i as f32 / n as f32));
                     mine.push(y * nx + x);
                 }
             }
-            out[k] = Some(trace);
+            out[k] = Some(tr);
         }
         mine.sort_unstable();
         mine.dedup();
@@ -3359,6 +3499,39 @@ mod tests {
             .flat_map(|q| sb.iter().map(move |w| q.distance(*w)))
             .fold(f32::MAX, f32::min);
         assert!(gap >= PITCH * 0.9, "{gap}: {a:?} {b:?}");
+    }
+
+    /// Three wires from one output to three inputs far apart share a trunk and branch off it,
+    /// and their shared legs are the same legs.
+    #[test]
+    fn wires_from_one_output_share_a_trunk() {
+        use cadrs_ui::node_graph::RouteProblem;
+        let a = Vec2::new(0.0, 0.0);
+        let p = RouteProblem {
+            obstacles: Vec::new(),
+            wires: vec![
+                (a, Vec2::new(600.0, 200.0)),
+                (a, Vec2::new(600.0, 300.0)),
+                (a, Vec2::new(600.0, 400.0)),
+            ],
+        };
+        let r = route_node_wires(&p);
+        let legs = |k: usize| -> Vec<(Vec2, Vec2)> {
+            let mut t = vec![p.wires[k].0];
+            t.extend(r[k].clone().expect("routed"));
+            t.push(p.wires[k].1);
+            t.windows(2).map(|w| (w[0], w[1])).collect()
+        };
+        let (l0, l1, l2) = (legs(0), legs(1), legs(2));
+        // How far (graph px) two wires run along the same legs.
+        let common = |x: &[(Vec2, Vec2)], y: &[(Vec2, Vec2)]| -> f32 {
+            x.iter()
+                .filter(|l| y.contains(l))
+                .map(|(u, v)| u.distance(*v))
+                .sum()
+        };
+        assert!(common(&l0, &l1) > 150.0, "{l0:?}\n{l1:?}");
+        assert!(common(&l1, &l2) > 150.0, "{l1:?}\n{l2:?}");
     }
 
     #[test]

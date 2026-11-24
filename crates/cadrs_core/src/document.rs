@@ -913,6 +913,50 @@ impl Feature {
         }
     }
 
+    /// The parts it adds to, cuts or merges with, picked in its dialog's Merge scope (none
+    /// picked: the rebuild finds them); `None` for a feature without a merge scope.
+    pub fn merge_scope(&self) -> Option<&[PartId]> {
+        Some(match &self.kind {
+            FeatureKind::Extrude(x) => &x.merge_scope,
+            FeatureKind::Revolve(x) => &x.merge_scope,
+            FeatureKind::Sweep(x) => &x.merge_scope,
+            FeatureKind::Loft(x) => &x.merge_scope,
+            FeatureKind::Thicken(x) => &x.merge_scope,
+            FeatureKind::Fill(x) => &x.merge_scope,
+            FeatureKind::Hole(x) => &x.merge_scope,
+            FeatureKind::Pattern(x) => &x.merge_scope,
+            FeatureKind::Mirror(x) => &x.merge_scope,
+            FeatureKind::SheetMetalLoft(x) => &x.merge_scope,
+            _ => return None,
+        })
+    }
+
+    /// The features this one refers to for what it builds from (its [`Self::parents`] less those
+    /// only in its merge scope): its sketches, faces, edges…
+    pub fn reference_parents(&self) -> Vec<FeatureId> {
+        let Some(scope) = self.merge_scope() else {
+            return self.parents();
+        };
+        if scope.is_empty() {
+            return self.parents();
+        }
+        let mut without = self.clone();
+        match &mut without.kind {
+            FeatureKind::Extrude(x) => x.merge_scope.clear(),
+            FeatureKind::Revolve(x) => x.merge_scope.clear(),
+            FeatureKind::Sweep(x) => x.merge_scope.clear(),
+            FeatureKind::Loft(x) => x.merge_scope.clear(),
+            FeatureKind::Thicken(x) => x.merge_scope.clear(),
+            FeatureKind::Fill(x) => x.merge_scope.clear(),
+            FeatureKind::Hole(x) => x.merge_scope.clear(),
+            FeatureKind::Pattern(x) => x.merge_scope.clear(),
+            FeatureKind::Mirror(x) => x.merge_scope.clear(),
+            FeatureKind::SheetMetalLoft(x) => x.merge_scope.clear(),
+            _ => {}
+        }
+        without.parents()
+    }
+
     /// The features this one refers to (PS11: its parents): the sketches it takes regions,
     /// curves or points of, the sketch or feature its faces, edges and vertices come from, and
     /// the features that made the parts it names. A parent below it in the list makes it fail

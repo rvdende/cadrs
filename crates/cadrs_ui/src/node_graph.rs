@@ -1069,7 +1069,7 @@ impl Wire {
 
 /// The ends a wire was last drawn with, and whether along a route.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq)]
-struct WireDrawn(Option<(Vec2, Vec2, bool, u32)>);
+struct WireDrawn(Option<(Vec2, Vec2, u64, u32)>);
 
 /// What a [`WireRouter`] is asked: the nodes to go round (graph px rectangles) and each wire's
 /// ends (its output's socket, its input's).
@@ -1101,6 +1101,28 @@ struct CanvasRoutes {
     /// The view the geometry was last taken in.
     view: Option<PanZoom>,
     routes: std::collections::HashMap<Entity, Vec<Vec2>>,
+    /// Bumped whenever the routes change: a wire whose ends stayed put is drawn again too (a
+    /// node dragged across it routes it round).
+    generation: u64,
+    /// How many wires run along each leg of the routes ([`leg_key`]): a trunk wires from one
+    /// output share is drawn thicker.
+    shared: std::collections::HashMap<(IVec2, IVec2), u8>,
+}
+
+/// A leg of a wire, either way round, to a tenth of a graph px.
+fn leg_key(a: Vec2, b: Vec2) -> (IVec2, IVec2) {
+    let (a, b) = ((a * 10.0).round().as_ivec2(), (b * 10.0).round().as_ivec2());
+    if (a.x, a.y) <= (b.x, b.y) {
+        (a, b)
+    } else {
+        (b, a)
+    }
+}
+
+/// A wire's thickness on screen (logical px) where `n` wires share it: 2 px alone, a px more for
+/// each wire beside, up to 5.
+fn shared_px(n: u8) -> f32 {
+    WIRE_PX + (n.saturating_sub(1).min(3)) as f32
 }
 
 /// A wire's thickness on screen (logical px), whatever the zoom.
@@ -1315,6 +1337,7 @@ fn route_wires(
             if !live {
                 if !r.routes.is_empty() {
                     r.routes.clear();
+                    r.generation += 1;
                 }
                 continue;
             }
@@ -1330,6 +1353,24 @@ fn route_wires(
         }
         r.routed = key;
         let paths = route(&problem);
+        r.generation += 1;
+        let mut shared: std::collections::HashMap<(IVec2, IVec2), u8> = Default::default();
+        for ((a, b), via) in problem.wires.iter().zip(&paths) {
+            let Some(via) = via else { continue };
+            let mut legs: Vec<(IVec2, IVec2)> = std::iter::once(*a)
+                .chain(via.iter().copied())
+                .chain(std::iter::once(*b))
+                .collect::<Vec<_>>()
+                .windows(2)
+                .map(|w| leg_key(w[0], w[1]))
+                .collect();
+            legs.sort_unstable_by_key(|(p, q)| (p.x, p.y, q.x, q.y));
+            legs.dedup();
+            for l in legs {
+                *shared.entry(l).or_default() += 1;
+            }
+        }
+        r.shared = shared;
         r.routes = ids
             .into_iter()
             .zip(paths)
@@ -1400,7 +1441,8 @@ fn draw_wires(
             .and_then(|r| r.routes.get(&entity).cloned());
         let zoom = canvas.map_or(1.0, |(c, _)| c.view.zoom);
         // (Its thickness follows the zoom: drawn again when that changes.)
-        let now = Some((a, b, route.is_some(), zoom.to_bits()));
+        let generation = canvas.and_then(|(_, r)| r).map_or(0, |r| r.generation);
+        let now = Some((a, b, generation, zoom.to_bits()));
         if drawn.0 == now {
             continue;
         }
@@ -1412,14 +1454,35 @@ fn draw_wires(
         // Two pixels on screen at every zoom (thinner, a rotated piece dropped pixels and the
         // wire looked broken).
         let thick = WIRE_PX / zoom;
-        let pts = match &route {
+        let legs: Vec<Vec2> = match &route {
             Some(via) => {
                 let mut p = vec![a];
                 p.extend(via.iter().copied());
                 p.push(b);
-                chamfered(&p, 10.0)
+                p
             }
-            None => chamfered(&trace_points(a, b), 10.0),
+            None => trace_points(a, b),
+        };
+        let pts = chamfered(&legs, 10.0);
+        // A piece's thickness: as many wires as share the leg it lies along (a chamfer's cut,
+        // the nearer of its two).
+        let shared = canvas.and_then(|(_, r)| r).map(|r| &r.shared);
+        let thick_at = |p: Vec2, q: Vec2| -> f32 {
+            let Some(shared) = shared.filter(|_| route.is_some()) else {
+                return thick;
+            };
+            let m = (p + q) / 2.0;
+            let near = legs.windows(2).min_by(|u, v| {
+                let d = |w: &[Vec2]| {
+                    let (s, e) = (w[0], w[1]);
+                    let l = (e - s).length_squared().max(1e-6);
+                    let t = ((m - s).dot(e - s) / l).clamp(0.0, 1.0);
+                    m.distance(s + (e - s) * t)
+                };
+                d(u).total_cmp(&d(v))
+            });
+            let n = near.and_then(|w| shared.get(&leg_key(w[0], w[1]))).copied();
+            shared_px(n.unwrap_or(1)) / zoom
         };
         // The pieces: the wire's own, moved where they go (spawning only those it lacks), so
         // it is never left without them for a frame.
@@ -1433,6 +1496,7 @@ fn draw_wires(
             .map(|c| c.iter().filter(|e| q_seg.contains(*e)).collect())
             .unwrap_or_default();
         for (k, (p, q)) in pieces.iter().enumerate() {
+            let thick = thick_at(*p, *q);
             let d = *q - *p;
             // (Overlapping by its thickness, so the joins stay closed at every zoom.)
             let len = d.length() + thick;
