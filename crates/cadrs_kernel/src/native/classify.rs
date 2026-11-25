@@ -1344,6 +1344,9 @@ pub struct Classifier<'a> {
     /// a ray or a point meets only the faces near it, not every face of the body.
     tree: super::bvh::Bvh,
     bbox: Bbox,
+    /// The box past which a point is outside whatever the tolerance asked (the body's box
+    /// grown by its largest edge or vertex tolerance and the tree's margin).
+    hold: Bbox,
     starts: Vec<Option<(f64, f64)>>,
     /// Each parametric face's grid for rays, made at the first ray that reaches the face.
     grids: Vec<std::sync::OnceLock<RayGrid>>,
@@ -1445,6 +1448,13 @@ impl<'a> Classifier<'a> {
         // again.)
         let margin = tol::POINT.max(tol::REL_POINT * (1.0 + bbox.diagonal()));
         let tree = super::bvh::Bvh::new(boxes.iter().map(|b| b.grow(margin)).collect());
+        let worst = body
+            .edges
+            .iter()
+            .map(|e| e.tol)
+            .chain(body.verts.iter().map(|v| v.tol))
+            .fold(0.0f64, f64::max);
+        let hold = bbox.grow(2.0 * worst + 2.0 * margin);
         Classifier {
             body,
             polys: faces,
@@ -1452,6 +1462,7 @@ impl<'a> Classifier<'a> {
             boxes,
             tree,
             bbox,
+            hold,
             starts,
             grids: (0..body.faces.len()).map(|_| Default::default()).collect(),
         }
@@ -1474,6 +1485,10 @@ impl<'a> Classifier<'a> {
     pub fn classify(&self, p: &P3, tol: f64) -> crate::PointClass {
         POINTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let tol = tol.max(tol::ROUNDOFF);
+        // Past the body's box (and the tolerance asked): outside, no ray needed.
+        if !self.hold.grow(tol).contains(p) {
+            return crate::PointClass::Outside;
+        }
         let mut near = {
             let mut at = Bbox::empty();
             at.add(p);
