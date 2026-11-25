@@ -179,3 +179,46 @@ fn cap_shaved_off_a_ball() {
     let v = k.mass_properties(cap).unwrap().volume;
     assert!((v - exact).abs() < 1e-6 * exact, "{v:e} against {exact:e}");
 }
+
+#[test]
+fn cylinder_crossing_through_a_node_is_fitted_between_corners() {
+    // The suite's calibration: a cylinder of radius 1.5 across one of radius 2 whose side it
+    // just reaches, so their curve crosses itself where they touch. Fitted through that node as
+    // one loop it took 15 000 points (a cubic rings round a corner); each branch closing at the
+    // node takes a few hundred. The volume is ∫ 2√(4 − y²) · 2√(2.25 − (y − 0.5)²) dy.
+    use cadrs_kernel::*;
+    use nalgebra::{Point3, Unit, Vector3};
+    let mut k = DefaultKernel::default();
+    let cyl = |k: &mut DefaultKernel, base: Point3<f64>, axis: Vector3<f64>, radius: f64| {
+        k.primitive(&Primitive::Cylinder {
+            base,
+            axis: Unit::new_normalize(axis),
+            radius,
+            height: 10.0,
+        })
+        .unwrap()
+        .first()
+        .unwrap()
+    };
+    let a = cyl(&mut k, Point3::new(0.0, 0.0, -5.0), Vector3::z(), 2.0);
+    let b = cyl(&mut k, Point3::new(-5.0, 0.5, 0.0), Vector3::x(), 1.5);
+    let i = k
+        .boolean(BoolOp::Intersect, a, &[b])
+        .unwrap()
+        .first()
+        .unwrap();
+    let v = k.mass_properties(i).unwrap().volume;
+    let want = 24.835511089434053;
+    assert!((v - want).abs() <= 1e-9 * want, "volume {v} vs {want}");
+    let body = k.get(i).unwrap();
+    assert!(body.check().is_empty());
+    for e in &body.edges {
+        if let Curve::Nurbs(n) = &e.curve {
+            assert!(
+                n.cps.len() < 2000,
+                "an edge fitted with {} poles",
+                n.cps.len()
+            );
+        }
+    }
+}
