@@ -188,6 +188,16 @@ fn target_named(world: &World, el: &Element, name: &str) -> Result<ParamTarget, 
             .to_lowercase()
     };
     let want = norm(name.trim());
+    // A plain output (an Input Configuration's row of its own): its kind.
+    let free = match want.as_str() {
+        "length" => Some(cfg::ColumnKind::Length),
+        "angle" => Some(cfg::ColumnKind::Angle),
+        "number" => Some(cfg::ColumnKind::Number),
+        _ => None,
+    };
+    if let Some(kind) = free {
+        return Ok(ParamTarget::Free { kind });
+    }
     configurable(world, el)
         .into_iter()
         .find(|(_, l)| norm(l) == want)
@@ -352,7 +362,10 @@ fn build(
                     p.values.len()
                 ));
             }
-            let q = target.quantity(el.features());
+            let q = match &target {
+                ParamTarget::Free { kind } => Some(kind.quantity()),
+                t => t.quantity(el.features()),
+            };
             let values = p
                 .values
                 .iter()

@@ -718,6 +718,8 @@ pub struct ConfigInputSpec {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ConfigParamSpec {
     /// The parameter, as get_configuration's `configurable` lists them: "Extrude 1 · Depth",
+    /// or "Length", "Angle" or "Number" for a plain output (a variable of its own, `name`, that
+    /// fields read through connect_parameter: the node view's + Output),
     /// "Sketch 1 · D2" (a sketch dimension), "#len · Value" (a Variable feature's value),
     /// "Fillet 1 · Suppressed", or a part's property: "Part 1 · Part number" (Name, Part
     /// number, Description, Revision, Vendor, Category and custom properties; not Mass, Unit of
