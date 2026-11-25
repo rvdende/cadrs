@@ -56,6 +56,9 @@ What each choice of Mouse controls does with the mouse:
 - **Camera:** Keep camera up, off by default.
 
   Rotating turns about the vertical and tilts, without rolling the view.
+- **Rotate:** About the part under the pointer, on by default.
+
+  A rotate drag that starts on a part turns about the point under the pointer, which stays where it is. Started over empty space, it turns about the middle of the view.
 - **Sketch:** View normal to the sketch plane, off by default.
 
   When a sketch gets its plane, and when one is opened for editing, the view turns square to it, as N does.

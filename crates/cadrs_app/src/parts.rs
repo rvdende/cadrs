@@ -5759,6 +5759,36 @@ mod tests {
     /// While a feature's dialog is open picks land on the ghost (the parts before the feature):
     /// not on a hidden part's, whose faces can lie on the shown part's (issue #297's document:
     /// a click on one part's end picked the hidden part's end cap in the same plane).
+    /// What a rotate drag turns about (`crate::viewport::part_point`): the point on the part
+    /// under the pointer, in orthographic and perspective; nothing beside the part.
+    #[test]
+    fn the_point_under_the_pointer_is_on_the_part() {
+        let circle = cadrs_sketch::SketchOp::AddCircle {
+            center: cadrs_sketch::Vec2::new(0.0, 0.0),
+            radius: 10.0,
+            construction: false,
+        };
+        let cache = PartCache {
+            parts: extruded(circle, &[10.0]),
+            ..Default::default()
+        };
+        let top = Vec3::new(3.0, -2.0, 10.0);
+        for perspective in [false, true] {
+            let v = ViewState {
+                perspective,
+                ..ViewState::default()
+            };
+            let p = crate::viewport::part_point(&cache, &v, v.project(top))
+                .expect("the cylinder's top is under the pointer");
+            assert!(
+                p.distance(top) < 1e-2,
+                "{p} for {top}, perspective {perspective}"
+            );
+            let beside = v.project(Vec3::new(60.0, 60.0, 0.0));
+            assert_eq!(crate::viewport::part_point(&cache, &v, beside), None);
+        }
+    }
+
     #[test]
     fn a_hidden_parts_ghost_is_not_picked() {
         let circle = cadrs_sketch::SketchOp::AddCircle {

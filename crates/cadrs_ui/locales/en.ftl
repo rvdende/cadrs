@@ -165,6 +165,10 @@ preferences-profiling = Profiling
 preferences-group-view = View
 preferences-camera = Camera
 preferences-keep-up-note = Rotating turns about the vertical and tilts, without rolling the view.
+# Preferences › Navigation › View: the row's label, its switch, and the note under it.
+preferences-rotate = Rotate
+preferences-orbit-about-pointer = About the part under the pointer
+preferences-orbit-about-pointer-note = A rotate drag that starts on a part turns about the point under the pointer, which stays where it is. Started over empty space, it turns about the middle of the view.
 preferences-wheel-zoom = Wheel zoom
 preferences-invert-wheel-zoom = Invert zoom direction
 preferences-invert-wheel-zoom-note = Off, rolling the wheel away from you zooms in. On, rolling it toward you zooms in.

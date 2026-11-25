@@ -199,6 +199,7 @@ impl PrefsDialog {
             Section::Navigation => {
                 p.mouse = d.mouse;
                 p.keep_camera_up = d.keep_camera_up;
+                p.orbit_about_pointer = d.orbit_about_pointer;
                 p.invert_wheel_zoom = d.invert_wheel_zoom;
                 p.sketch_view_normal = d.sketch_view_normal;
                 p.space_mouse_zoom = d.space_mouse_zoom;
@@ -645,6 +646,16 @@ fn groups(section: Section, s: &PrefsDialog, facts: &Facts) -> Vec<Group> {
                             Control::Switch(tr("view-menu-keep-up"), p.keep_camera_up),
                         )
                         .note("preferences-keep-up-note"),
+                        Row::new(
+                            "pref-orbit-about-pointer",
+                            tr("preferences-rotate"),
+                            "rotate orbit pivot point pointer cursor part turn about",
+                            Control::Switch(
+                                tr("preferences-orbit-about-pointer"),
+                                p.orbit_about_pointer,
+                            ),
+                        )
+                        .note("preferences-orbit-about-pointer-note"),
                         Row::new(
                             "pref-sketch-view-normal",
                             tr("preferences-sketch-view"),
@@ -1126,6 +1137,7 @@ fn previewed(base: Preferences, draft: &Preferences, kept: &Preferences) -> Pref
         vsync: draft.vsync,
         mouse: draft.mouse,
         keep_camera_up: draft.keep_camera_up,
+        orbit_about_pointer: draft.orbit_about_pointer,
         invert_wheel_zoom: draft.invert_wheel_zoom,
         sketch_view_normal: kept.sketch_view_normal,
         space_mouse_zoom: draft.space_mouse_zoom,
@@ -1262,6 +1274,7 @@ fn on_switch(ev: On<SwitchChange>, q: Query<&Name>, mut commands: Commands) {
         "pref-vsync" => |s, on| s.draft.vsync = on,
         "pref-profile-cpu" => |s, on| s.draft.profile_cpu = on,
         "pref-keep-camera-up" => |s, on| s.draft.keep_camera_up = on,
+        "pref-orbit-about-pointer" => |s, on| s.draft.orbit_about_pointer = on,
         "pref-invert-wheel-zoom" => |s, on| s.draft.invert_wheel_zoom = on,
         "pref-sketch-view-normal" => |s, on| s.draft.sketch_view_normal = on,
         "pref-p2p-autoconnect" => |s, on| s.draft.autoconnect_p2p = on,
