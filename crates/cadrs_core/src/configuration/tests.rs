@@ -246,6 +246,28 @@ fn a_checkbox_suppresses_through_its_variable() {
 
 /// Renaming a column renames it wherever it is read; removing one leaves its parameter (and
 /// anything else reading it) the value it shows.
+/// + Output, twice: two plain outputs of one kind side by side (each a variable of its own).
+#[test]
+fn outputs_of_one_kind_are_added_again() {
+    let mut t = T::new();
+    let (id, _, _) = t.with_size();
+    for name in ["bolt_size", "bolt_cap_radius"] {
+        t.run(&ConfigureParameter {
+            element: t.ps,
+            input: id,
+            target: ParamTarget::Free {
+                kind: ColumnKind::Length,
+            },
+            name: Some(name.into()),
+        });
+    }
+    let names: Vec<&str> = t.config().input(id).unwrap().params[1..]
+        .iter()
+        .map(|p| p.name.as_str())
+        .collect();
+    assert_eq!(names, ["bolt_size", "bolt_cap_radius"]);
+}
+
 #[test]
 fn renaming_and_removing_columns() {
     let mut t = T::new();

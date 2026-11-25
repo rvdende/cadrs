@@ -2317,7 +2317,10 @@ impl Command for ConfigureParameter {
         let el = doc
             .element_mut(self.element)
             .ok_or(CommandError::ElementNotFound(self.element))?;
-        if el.configuration.param(&self.target).is_some() {
+        // (A plain output is a variable of its own: there are as many as are added.)
+        if !matches!(self.target, ParamTarget::Free { .. })
+            && el.configuration.param(&self.target).is_some()
+        {
             return Err(CommandError::Invalid(
                 "the parameter is already configured".into(),
             ));
