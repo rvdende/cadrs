@@ -346,8 +346,39 @@ pub fn pick(world: &mut World, kind: &mut FeatureKind, field: AppliedField, pick
                     None => x.faces.push(f),
                 }
             }
+            // A surface's profile of curves.
+            Pick::Edge(..) => {
+                let Some(e) = edge_ref(cache, pick) else {
+                    return false;
+                };
+                match x
+                    .profile_curves
+                    .iter()
+                    .position(|p| matches!(p, PathRef::Edge(g) if g.edge == e.edge))
+                {
+                    Some(i) => {
+                        x.profile_curves.remove(i);
+                    }
+                    None => x.profile_curves.push(PathRef::Edge(e)),
+                }
+            }
+            Pick::SketchCurve(sketch, curve) => toggle(
+                &mut x.profile_curves,
+                PathRef::SketchCurve { sketch, curve },
+            ),
             _ => return false,
         },
+        (FeatureKind::Sweep(x), AppliedField::LockFaces) => {
+            let Some(f) = face_ref(cache, pick) else {
+                return false;
+            };
+            match x.lock_faces.iter().position(|g| g.face == f.face) {
+                Some(i) => {
+                    x.lock_faces.remove(i);
+                }
+                None => x.lock_faces.push(f),
+            }
+        }
         (FeatureKind::Sweep(x), AppliedField::Path) => match pick {
             Pick::Edge(..) => {
                 let Some(e) = edge_ref(cache, pick) else {

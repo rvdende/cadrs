@@ -1640,6 +1640,7 @@ model-plane-type-tangent = Rakend
 model-sweep-keep-orientation = Profieloriëntatie behouden
 model-sweep-lock-direction = Profielrichting vergrendelen
 model-sweep-lock-faces = Profielvlakken vergrendelen
+model-sweep-lock-faces-field = Vlakken om aan te vergrendelen
 model-loft-normal-to-profile = Loodrecht op profiel
 model-loft-tangent-to-profile = Rakend aan profiel
 model-loft-match-tangent = Raaklijn aansluiten

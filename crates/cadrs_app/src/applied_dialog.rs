@@ -140,6 +140,8 @@ pub(crate) enum Role {
     SweepProfile,
     SweepPath,
     LockDirection,
+    /// The faces Lock profile faces keeps the profile at an angle to.
+    LockFaces,
     LoftProfiles,
     /// P3.11: the loft's Start direction and End direction fields.
     LoftStartDirection,
@@ -867,6 +869,7 @@ fn dialog(
         Role::SweepProfile,
         Role::SweepPath,
         Role::LockDirection,
+        Role::LockFaces,
         Role::LoftProfiles,
         Role::SplitParts,
         Role::SplitTool,

@@ -78,6 +78,8 @@ Sweep moves a profile along a path.
   - **None**: the profile keeps its angle to the path.
   - **Keep profile orientation**: the profile keeps its orientation in space.
   - **Lock profile direction**: the profile's plane keeps containing a picked **Direction**.
+  - **Lock profile faces** (a surface swept from curves): the profile keeps its angle to the
+    **Faces to lock to**. Leave that field empty to use the faces along the path's edges.
 
 ## Loft
 
