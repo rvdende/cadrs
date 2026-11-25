@@ -29,6 +29,7 @@ In cadrs, **Shift+/** (or the app menu's **Keyboard shortcuts**) opens this list
 | <kbd>Shift</kbd>+<kbd>E</kbd> | Extrude |
 | <kbd>Shift</kbd>+<kbd>F</kbd> | Fillet |
 | <kbd>Shift</kbd>+<kbd>W</kbd> | Revolve |
+| <kbd>H</kbd> | Hide or show the selection |
 | <kbd>Shift</kbd>+<kbd>S</kbd> | Sketch |
 | <kbd>K</kbd> | Show or hide mate connectors |
 | <kbd>Ctrl</kbd>+<kbd>M</kbd> | Mate connector |
