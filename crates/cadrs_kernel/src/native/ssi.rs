@@ -183,6 +183,22 @@ pub fn surface_surface_tol(
     bb: &Bbox,
     tol: f64,
 ) -> Ssi {
+    if let Some(r) = closed_forms(a, ua, b, ub, bb, tol) {
+        return r;
+    }
+    traced(a, ua, b, ub, bb)
+}
+
+/// [`surface_surface_tol`] where the pair has a closed form (coincident surfaces' region, the
+/// extrusion and analytic pairs, a shared circle), else `None`.
+fn closed_forms(
+    a: &Surface,
+    ua: ((f64, f64), (f64, f64)),
+    b: &Surface,
+    ub: ((f64, f64), (f64, f64)),
+    bb: &Bbox,
+    tol: f64,
+) -> Option<Ssi> {
     let closed = |curves| Ssi {
         curves,
         work: 1,
@@ -190,40 +206,52 @@ pub fn surface_surface_tol(
     };
     let tc = coincidence_tol(bb);
     if coincide(a, b, tc, bb) {
-        return Ssi {
+        return Some(Ssi {
             coincident: super::ssi_coincident::region_boundary(a, ua, b, ub, tc),
             ..Ssi::default()
-        };
+        });
     }
     if let Some(r) = plane_extrusion(a, b, ub, bb) {
-        return closed(r);
+        return Some(closed(r));
     }
     if let Some(r) = plane_extrusion(b, a, ua, bb) {
-        return closed(r);
+        return Some(closed(r));
     }
     if let Some(r) = extrusion_along(a, ua, b, ub, bb) {
-        return closed(r);
+        return Some(closed(r));
     }
     if let Some(r) = extrusion_along(b, ub, a, ua, bb) {
-        return closed(r);
+        return Some(closed(r));
     }
     if let Some(r) =
         plane_nurbs_extrusion(a, b, ub, bb).or_else(|| plane_nurbs_extrusion(b, a, ua, bb))
     {
-        return r;
+        return Some(r);
     }
     if let Some(r) = ball_in_tube(a, b, tol).or_else(|| ball_in_tube(b, a, tol)) {
-        return r;
+        return Some(r);
     }
     if let Some(r) = analytic(a, b, bb, tol) {
-        return closed(r);
+        return Some(closed(r));
     }
     if let Some(r) = analytic(b, a, bb, tol) {
-        return closed(r);
+        return Some(closed(r));
     }
     if let Some(r) = shared_circle(a, ua, b, bb).or_else(|| shared_circle(b, ub, a, bb)) {
-        return closed(r);
+        return Some(closed(r));
     }
+    None
+}
+
+/// [`surface_surface_tol`] for a pair without a closed form: a graph over one parameter of
+/// one of them, else the numeric engine's traced curves.
+fn traced(
+    a: &Surface,
+    ua: ((f64, f64), (f64, f64)),
+    b: &Surface,
+    ub: ((f64, f64), (f64, f64)),
+    bb: &Bbox,
+) -> Ssi {
     // A graph over one parameter of one of the two: exact points with nothing traced.
     for (p, up, q) in [(a, ua, b), (b, ub, a)] {
         if let Some(polys) = super::ssi_graph::graph(p, up, q, bb) {
@@ -2225,8 +2253,8 @@ pub(crate) fn crossing_points(
             })
             .collect()
     };
-    if let Some(curves) = surface_surface_closed(a, ua, b, ub, bb) {
-        return sampled(curves);
+    if let Some(r) = closed_forms(a, ua, b, ub, bb, super::boolean::VTOL) {
+        return sampled(r.curves);
     }
     let tc = coincidence_tol(bb);
     if super::ssi_coincident::lies_on(a, ua, b, tc) || super::ssi_coincident::lies_on(b, ub, a, tc)
