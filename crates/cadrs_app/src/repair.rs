@@ -472,7 +472,7 @@ fn sync_panel(
     repair: Res<Repair>,
     theme: Res<Theme>,
     q_panel: Query<(Entity, &RepairPanel)>,
-    q_area: Query<(Entity, &ChildOf), With<crate::viewport::ViewportArea>>,
+    q_area: Query<(Entity, &ChildOf), With<crate::side_panel::SideDock>>,
     q_children: Query<&Children>,
     mut commands: Commands,
 ) {

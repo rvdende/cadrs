@@ -60,7 +60,7 @@ use cadrs_ui::{
 };
 
 use crate::side_panel::{SidePanel, side_panel_header, side_panel_node};
-use crate::viewport::{ActiveKind, ViewportArea};
+use crate::viewport::ActiveKind;
 use crate::{ActiveDocument, AppState};
 
 pub struct ConfigurationPlugin;
@@ -73,6 +73,8 @@ impl Plugin for ConfigurationPlugin {
                 .after(crate::parts::PartsSet)
                 .run_if(in_state(AppState::Document)),
         )
+        .init_resource::<PanelWidth>()
+        .add_observer(on_panel_resized)
         .add_observer(on_button)
         .add_observer(on_rename)
         .add_observer(on_text)
@@ -149,6 +151,23 @@ enum PendingName {
 
 /// A column's width (px).
 const COL_W: f32 = 84.0;
+/// The panel's left edge, dragged to make it wider or narrower.
+const PANEL_EDGE: &str = "configuration-panel-edge";
+
+/// The panel's width as its left edge was last dragged to (kept for the session); `None`: as
+/// wide as its widest table.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+struct PanelWidth(Option<f32>);
+
+fn on_panel_resized(
+    ev: On<cadrs_ui::SplitterMoved>,
+    q: Query<&Name>,
+    mut width: ResMut<PanelWidth>,
+) {
+    if q.get(ev.entity).is_ok_and(|n| n.as_str() == PANEL_EDGE) {
+        width.0 = Some(ev.height);
+    }
+}
 /// The row-name column's width (px).
 const NAME_W: f32 = 120.0;
 
@@ -320,7 +339,10 @@ fn rebuild(world: &mut World) {
     }
     let t = world.resource::<Theme>().clone();
     let widest = c.inputs.iter().map(|i| i.params.len()).max().unwrap_or(0);
-    let width = (NAME_W + 60.0 + (COL_W + 4.0) * widest as f32).clamp(280.0, 760.0);
+    let width = world
+        .resource::<PanelWidth>()
+        .0
+        .unwrap_or_else(|| (NAME_W + 60.0 + (COL_W + 4.0) * widest as f32).clamp(280.0, 760.0));
     let panel = world
         .spawn((
             Name::new("configuration-panel"),
@@ -336,9 +358,19 @@ fn rebuild(world: &mut World) {
         .and_modify(move |mut n| {
             n.width = Val::Px(width);
             n.flex_direction = FlexDirection::Column;
+            // (Not clipped: its left edge's grip reaches into the gap beside it. The tables
+            // scroll and clip themselves.)
+            n.overflow = Overflow::visible();
         });
     let mut commands = world.commands();
     commands.entity(panel).with_children(|p| {
+        p.spawn(cadrs_ui::left_edge(
+            PANEL_EDGE,
+            panel,
+            crate::document::PANEL_GAP + 1.0,
+            320.0,
+            240.0,
+        ));
         side_panel_header(p, &t, &tr("config-title"), "configuration-panel-close");
         p.spawn(Node {
             padding: UiRect::new(Val::Px(8.0), Val::Px(8.0), Val::Px(6.0), Val::Px(6.0)),
@@ -383,7 +415,8 @@ fn rebuild(world: &mut World) {
             }
         });
     });
-    let mut q_area = world.query_filtered::<(Entity, &ChildOf), With<ViewportArea>>();
+    let mut q_area =
+        world.query_filtered::<(Entity, &ChildOf), With<crate::side_panel::SideDock>>();
     let Some((area, parent)) = q_area.iter(world).next().map(|(e, c)| (e, c.parent())) else {
         return;
     };

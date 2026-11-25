@@ -182,7 +182,9 @@ pub use selection_list::{
 };
 pub use shortcut_key::ShortcutKey;
 pub use spinner::Spinner;
-pub use splitter::{HoverCursor, Splitter, SplitterMoved, horizontal_splitter, top_edge};
+pub use splitter::{
+    HoverCursor, Splitter, SplitterMoved, horizontal_splitter, left_edge, top_edge,
+};
 pub use style::{ForceState, InheritFg, Selected, StateColors, VisualState, Visuals};
 pub use surface::RenderSurface;
 pub use switch::{Switch, SwitchChange, SwitchState};

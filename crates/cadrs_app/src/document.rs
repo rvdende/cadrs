@@ -436,6 +436,8 @@ fn spawn_shell(
                         // (`crate::node_view`, hidden until shown).
                         mid.spawn((
                             Name::new("viewport-column"),
+                            // The side panels dock after it, full height.
+                            crate::side_panel::SideDock,
                             Node {
                                 flex_grow: 1.0,
                                 min_width: Val::Px(0.0),

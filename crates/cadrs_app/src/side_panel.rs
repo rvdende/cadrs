@@ -69,6 +69,11 @@ fn on_panel_button(a: On<Activate>, q: Query<&Name>, mut open: ResMut<SidePanel>
     }
 }
 
+/// Where the side panels dock: they go after it in its parent's row, full height on the
+/// right of the 3D view and the node panel under it (the column holding both).
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct SideDock;
+
 /// The side panels' frame: a floating glass panel, full height on the viewport's right,
 /// beside it rather than over it, so the graphics area (and the view ball in its corner)
 /// shrinks to make room (P3.6).
