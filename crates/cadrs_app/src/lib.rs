@@ -73,6 +73,7 @@ pub mod mcp;
 pub mod mcp_board;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mcp_button;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod mcp_config;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mcp_machine;
