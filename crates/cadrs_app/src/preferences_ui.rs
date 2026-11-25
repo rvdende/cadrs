@@ -84,6 +84,21 @@ impl LocalPreferences {
     }
 }
 
+/// A wheel scroll as zoom steps (> 0 zooms in): a line per notch, or per 40 px of a touchpad's
+/// scroll, turned round when the wheel's zoom is inverted. Without preferences (a test's app),
+/// rolling away zooms in.
+pub fn wheel_zoom_lines(
+    prefs: Option<&LocalPreferences>,
+    unit: bevy::input::mouse::MouseScrollUnit,
+    y: f32,
+) -> f32 {
+    let lines = match unit {
+        bevy::input::mouse::MouseScrollUnit::Line => y,
+        bevy::input::mouse::MouseScrollUnit::Pixel => y / 40.0,
+    };
+    prefs.map_or(lines, |p| p.0.wheel_zoom(lines))
+}
+
 fn load_preferences(
     store: Option<Res<DocumentStore>>,
     mut prefs: ResMut<LocalPreferences>,

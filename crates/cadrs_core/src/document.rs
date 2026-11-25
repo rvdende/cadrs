@@ -994,7 +994,8 @@ impl Feature {
                     Some(AxisRef::Edge(e)) => edge(e).into_iter().for_each(&mut add),
                     Some(AxisRef::Face(f)) => add(face(f)),
                     Some(AxisRef::Connector(c)) => c.parent().into_iter().for_each(&mut add),
-                    None => {}
+                    // The origin's axes depend on nothing (#316).
+                    Some(AxisRef::Origin(_)) | None => {}
                 }
             }
             FeatureKind::Boolean(b) => {
@@ -1146,6 +1147,7 @@ impl Feature {
                         AxisRef::Edge(e) => edge(e).into_iter().for_each(&mut add),
                         AxisRef::Face(f) => add(face(f)),
                         AxisRef::Connector(c) => c.parent().into_iter().for_each(&mut add),
+                        AxisRef::Origin(_) => {}
                     }
                 }
             }
@@ -1185,7 +1187,8 @@ impl Feature {
                     Some(AxisRef::Edge(e)) => edge(e).into_iter().for_each(&mut add),
                     Some(AxisRef::Face(f)) => add(face(f)),
                     Some(AxisRef::Connector(c)) => c.parent().into_iter().for_each(&mut add),
-                    None => {}
+                    // The origin's axes depend on nothing (#316).
+                    Some(AxisRef::Origin(_)) | None => {}
                 }
                 for p in &x.path {
                     match p {
@@ -1235,7 +1238,8 @@ impl Feature {
                     Some(AxisRef::Edge(e)) => edge(e).into_iter().for_each(&mut add),
                     Some(AxisRef::Face(f)) => add(face(f)),
                     Some(AxisRef::Connector(c)) => c.parent().into_iter().for_each(&mut add),
-                    None => {}
+                    // The origin's axes depend on nothing (#316).
+                    Some(AxisRef::Origin(_)) | None => {}
                 }
                 for c in [&x.from, &x.to, &x.scale_point]
                     .into_iter()
@@ -1861,7 +1865,7 @@ impl ExtrudeFeature {
 
 /// What a revolve turns about (PS7.2): a sketch line (a construction centreline) or circle,
 /// a straight part edge, the axis of a circular part edge, or the axis of a cylindrical or
-/// conical part face.
+/// conical part face, a mate connector's Z axis, or one of the origin's axes.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum AxisRef {
     /// A line of a sketch (its direction from its first point to its second), or a circle or
@@ -1873,6 +1877,29 @@ pub enum AxisRef {
     Face(FaceRef),
     /// A mate connector's Z axis (P3.8, PS7.2, PS24.1).
     Connector(crate::mate::ConnectorRef),
+    /// One of the origin's axes (#316): it never changes, so it depends on no feature.
+    Origin(OriginAxis),
+}
+
+/// The origin's X, Y and Z axes, through the origin along +X, +Y and +Z (#316).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum OriginAxis {
+    X,
+    Y,
+    Z,
+}
+
+impl OriginAxis {
+    pub const ALL: [OriginAxis; 3] = [OriginAxis::X, OriginAxis::Y, OriginAxis::Z];
+
+    /// Its direction, a unit vector.
+    pub fn dir(self) -> [f64; 3] {
+        match self {
+            OriginAxis::X => [1.0, 0.0, 0.0],
+            OriginAxis::Y => [0.0, 1.0, 0.0],
+            OriginAxis::Z => [0.0, 0.0, 1.0],
+        }
+    }
 }
 
 /// How a revolve ends (PS7.3).

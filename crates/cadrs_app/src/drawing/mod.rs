@@ -54,7 +54,6 @@ use bevy::camera::ScalingMode;
 use bevy::camera::visibility::RenderLayers;
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::input::keyboard::KeyboardInput;
-use bevy::input::mouse::MouseScrollUnit;
 use bevy::input_focus::InputFocus;
 use bevy::picking::hover::HoverMap;
 use bevy::picking::pointer::{PointerAction, PointerButton, PointerId, PointerInput};
@@ -669,10 +668,7 @@ fn drawing_pointer(
             }
             PointerAction::Scroll { unit, y, .. } => {
                 if over {
-                    let lines = match unit {
-                        MouseScrollUnit::Line => y,
-                        MouseScrollUnit::Pixel => y / 40.0,
-                    };
+                    let lines = crate::preferences_ui::wheel_zoom_lines(Some(&prefs), unit, y);
                     let before = screen_to_sheet(view, area, pos);
                     view.ppm = (view.ppm * 1.2f32.powf(lines)).clamp(0.05, 400.0);
                     let after = screen_to_sheet(view, area, pos);

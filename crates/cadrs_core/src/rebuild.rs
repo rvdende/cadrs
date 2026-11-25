@@ -4440,6 +4440,7 @@ mod kernel_ops {
                     let f = connector_frame(before, state, c)?;
                     make(f.origin, f.normal())
                 }
+                AxisRef::Origin(axis) => make([0.0; 3], axis.dir()),
                 AxisRef::Face(f) => {
                     let (part, ids) = face_ids(state, f).ok_or_else(lost)?;
                     let body = part.body.ok_or_else(lost)?;
@@ -5378,19 +5379,65 @@ fn run_job(rebuilder: &mut Rebuilder, job: Job, pending_save: &mut PendingSave) 
     }
 }
 
+/// How many results of rebuilds and jobs ([`Pending`], [`PendingJob`]) are still to come: while
+/// any is, the app keeps drawing frames, so it sees the result as soon as it's there instead of
+/// at the next input (#298: the app sleeps while idle).
+static AWAITED: AtomicUsize = AtomicUsize::new(0);
+
+/// The number of results still to come ([`AWAITED`]).
+pub fn awaited() -> usize {
+    AWAITED.load(Ordering::Relaxed)
+}
+
+/// A result still to come, counted in [`AWAITED`] until it arrives or its handle is dropped.
+struct Awaited(AtomicBool);
+
+impl Awaited {
+    fn new() -> Self {
+        AWAITED.fetch_add(1, Ordering::Relaxed);
+        Awaited(AtomicBool::new(true))
+    }
+
+    /// The result arrived: no longer counted.
+    fn arrived(&self) {
+        if self.0.swap(false, Ordering::Relaxed) {
+            AWAITED.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+}
+
+impl Drop for Awaited {
+    fn drop(&mut self) {
+        self.arrived();
+    }
+}
+
 /// Work queued on the kernel thread (P3B.9, [`run_on_worker`]).
 pub struct PendingJob<T> {
     rx: Mutex<mpsc::Receiver<T>>,
+    awaited: Awaited,
 }
 
 impl<T> PendingJob<T> {
+    /// A job whose result comes on `rx`.
+    pub(crate) fn new(rx: mpsc::Receiver<T>) -> Self {
+        PendingJob {
+            rx: Mutex::new(rx),
+            awaited: Awaited::new(),
+        }
+    }
+
     /// The result, once it is done (`Some(None)`: the job failed or the worker stopped).
     pub fn poll(&self) -> Option<Option<T>> {
-        match self.rx.lock().ok()?.try_recv() {
+        let got = match self.rx.lock().ok()?.try_recv() {
             Ok(r) => Some(Some(r)),
             Err(mpsc::TryRecvError::Empty) => None,
             Err(mpsc::TryRecvError::Disconnected) => Some(None),
+        };
+        if got.is_some() {
+            self.awaited.arrived();
         }
+        got
     }
 
     /// Waits for the result (`None`: the job failed or the worker stopped).
@@ -5414,7 +5461,7 @@ pub fn run_on_worker<T: Send + 'static>(
         let _ = reply.send(f(r));
     }));
     submit(job);
-    PendingJob { rx: Mutex::new(rx) }
+    PendingJob::new(rx)
 }
 
 /// Runs `f` on a thread of its own, for work that only needs rebuilds ([`build`]) besides its own
@@ -5430,7 +5477,7 @@ pub fn run_in_background<T: Send + 'static>(
     std::thread::spawn(move || {
         let _ = reply.send(f());
     });
-    PendingJob { rx: Mutex::new(rx) }
+    PendingJob::new(rx)
 }
 
 /// Works out the stage of feature `id` (an Add's or a Remove's change, [`Rebuilder::stage_of`])
@@ -5672,6 +5719,7 @@ pub struct Pending {
     cancelled: Arc<AtomicBool>,
     done: Option<Arc<Build>>,
     ticket: u64,
+    awaited: Awaited,
 }
 
 impl Pending {
@@ -5724,6 +5772,9 @@ impl Pending {
             };
             drop(rx);
             self.done = got;
+            if self.done.is_some() {
+                self.awaited.arrived();
+            }
         }
         self.done.clone()
     }
@@ -5770,9 +5821,11 @@ fn request_with(features: Arc<[Feature]>, persist: bool) -> Pending {
         cancelled,
         done: None,
         ticket,
+        awaited: Awaited::new(),
     };
     if !sent {
         pending.done = Some(Arc::new(Build::default()));
+        pending.awaited.arrived();
     }
     pending
 }

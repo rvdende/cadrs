@@ -19,7 +19,7 @@ use bevy::ui::InteractionDisabled;
 use bevy::ui_widgets::{Activate, observe};
 use cadrs_core::preferences::{
     ColorScheme, FrameStatsMode, GridStyle, Language, MousePreset, OriginStyle, Preferences,
-    UI_SCALES, ViewAction,
+    SPACE_MOUSE_SPEEDS, SpaceMouseZoom, UI_SCALES, ViewAction,
 };
 use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::{
@@ -199,7 +199,10 @@ impl PrefsDialog {
             Section::Navigation => {
                 p.mouse = d.mouse;
                 p.keep_camera_up = d.keep_camera_up;
+                p.invert_wheel_zoom = d.invert_wheel_zoom;
                 p.sketch_view_normal = d.sketch_view_normal;
+                p.space_mouse_zoom = d.space_mouse_zoom;
+                p.space_mouse_speed = d.space_mouse_speed;
             }
             Section::Assembly => {
                 self.snap = degrees(d.rotation_snap_degrees);
@@ -465,6 +468,13 @@ fn options<T: Copy + PartialEq>(all: &[T], label: impl Fn(T) -> String, now: T) 
     )
 }
 
+fn space_mouse_zoom_label(z: SpaceMouseZoom) -> String {
+    tr(match z {
+        SpaceMouseZoom::UpDown => "preferences-space-mouse-zoom-up-down",
+        SpaceMouseZoom::ForwardBackward => "preferences-space-mouse-zoom-forward-backward",
+    })
+}
+
 fn groups(section: Section, s: &PrefsDialog, facts: &Facts) -> Vec<Group> {
     let p = &s.draft;
     match section {
@@ -611,6 +621,15 @@ fn groups(section: Section, s: &PrefsDialog, facts: &Facts) -> Vec<Group> {
                     })),
                 ));
             }
+            mouse.push(
+                Row::new(
+                    "pref-invert-wheel-zoom",
+                    tr("preferences-wheel-zoom"),
+                    "mouse wheel scroll zoom invert reverse direction",
+                    Control::Switch(tr("preferences-invert-wheel-zoom"), p.invert_wheel_zoom),
+                )
+                .note("preferences-invert-wheel-zoom-note"),
+            );
             vec![
                 Group {
                     key: "preferences-mouse-heading",
@@ -636,6 +655,38 @@ fn groups(section: Section, s: &PrefsDialog, facts: &Facts) -> Vec<Group> {
                             ),
                         )
                         .note("preferences-sketch-view-normal-note"),
+                    ],
+                },
+                Group {
+                    key: "preferences-space-mouse-heading",
+                    rows: vec![
+                        Row::new(
+                            "pref-space-mouse-zoom",
+                            tr("preferences-space-mouse-zoom"),
+                            "spacemouse space mouse 3dconnexion zoom forward backward up down",
+                            options(
+                                SpaceMouseZoom::ALL,
+                                space_mouse_zoom_label,
+                                p.space_mouse_zoom,
+                            ),
+                        )
+                        .note("preferences-space-mouse-zoom-note"),
+                        Row::new(
+                            "pref-space-mouse-speed",
+                            tr("preferences-space-mouse-speed"),
+                            "spacemouse space mouse 3dconnexion speed sensitivity",
+                            Control::Select(
+                                SPACE_MOUSE_SPEEDS
+                                    .iter()
+                                    .map(|&v| (format!("{v}%"), None))
+                                    .collect(),
+                                // A speed between the presets shows as the nearest below.
+                                SPACE_MOUSE_SPEEDS
+                                    .iter()
+                                    .rposition(|&v| v <= p.space_mouse_speed)
+                                    .unwrap_or(0),
+                            ),
+                        ),
                     ],
                 },
             ]
@@ -1075,7 +1126,10 @@ fn previewed(base: Preferences, draft: &Preferences, kept: &Preferences) -> Pref
         vsync: draft.vsync,
         mouse: draft.mouse,
         keep_camera_up: draft.keep_camera_up,
+        invert_wheel_zoom: draft.invert_wheel_zoom,
         sketch_view_normal: kept.sketch_view_normal,
+        space_mouse_zoom: draft.space_mouse_zoom,
+        space_mouse_speed: draft.space_mouse_speed,
         language: kept.language,
         profile_cpu: kept.profile_cpu,
         autoconnect_p2p: kept.autoconnect_p2p,
@@ -1164,6 +1218,14 @@ fn on_select(
             Some(&m) => Box::new(move |s| s.draft.frame_stats = m),
             None => return,
         },
+        "pref-space-mouse-zoom" => match SpaceMouseZoom::ALL.get(i) {
+            Some(&z) => Box::new(move |s| s.draft.space_mouse_zoom = z),
+            None => return,
+        },
+        "pref-space-mouse-speed" => match SPACE_MOUSE_SPEEDS.get(i) {
+            Some(&v) => Box::new(move |s| s.draft.space_mouse_speed = v),
+            None => return,
+        },
         "pref-mouse-preset" => match MousePreset::ALL.get(i) {
             Some(&m) => {
                 // Its gestures follow.
@@ -1200,6 +1262,7 @@ fn on_switch(ev: On<SwitchChange>, q: Query<&Name>, mut commands: Commands) {
         "pref-vsync" => |s, on| s.draft.vsync = on,
         "pref-profile-cpu" => |s, on| s.draft.profile_cpu = on,
         "pref-keep-camera-up" => |s, on| s.draft.keep_camera_up = on,
+        "pref-invert-wheel-zoom" => |s, on| s.draft.invert_wheel_zoom = on,
         "pref-sketch-view-normal" => |s, on| s.draft.sketch_view_normal = on,
         "pref-p2p-autoconnect" => |s, on| s.draft.autoconnect_p2p = on,
         "pref-public-documents" => |s, on| s.draft.public_documents = on,
@@ -1409,6 +1472,97 @@ pub(crate) fn parse_rotation_snap(text: &str) -> Option<f64> {
         .parse()
         .ok()?;
     (value.is_finite() && (0.0..=180.0).contains(&value)).then_some(value)
+}
+
+/// The documentation's preferences page ([`crate::docs_reference`]): every section of the
+/// desktop app's dialog with its settings, their choices and what a new user starts with, and a
+/// table of each mouse preset's gestures.
+#[cfg(test)]
+pub(crate) fn reference_markdown() -> String {
+    use crate::docs_reference::{GENERATED, escape};
+    let dialog = PrefsDialog::new(Preferences::default(), String::new());
+    let facts = Facts { cadrs_id: None };
+    let gesture_rows: Vec<&str> = ACTIONS.iter().map(|(_, name, _)| *name).collect();
+    let mut out = String::from(GENERATED);
+    out.push_str(
+        "# Preferences\n\n\
+         The app menu's **Preferences…** opens them. The search box at the top finds a setting \
+         in any section, and **Restore Defaults** puts back the defaults of the section shown. \
+         Preferences belong to your computer, not to a document. The browser version has no AI \
+         assistants section, and no vertical sync or profiling settings.\n",
+    );
+    for section in Section::ALL.into_iter().filter(|s| s.offered()) {
+        out.push_str(&format!(
+            "\n## {}\n\n{}\n",
+            escape(&section.title()),
+            escape(&section.about())
+        ));
+        for group in groups(section, &dialog, &facts) {
+            out.push_str(&format!("\n### {}\n\n", escape(&tr(group.key))));
+            let mut gestures = false;
+            for row in group.rows {
+                if gesture_rows.contains(&row.name) {
+                    gestures = true;
+                    continue;
+                }
+                let label = escape(&row.label);
+                let line = match &row.control {
+                    Control::Select(options, at) => {
+                        let names: Vec<_> = options.iter().map(|(o, _)| escape(o)).collect();
+                        format!(
+                            "- **{label}:** {}. Default: {}.",
+                            names.join(" · "),
+                            names[*at]
+                        )
+                    }
+                    Control::Segmented(options, at) => {
+                        let names: Vec<_> = options.iter().map(|o| escape(o)).collect();
+                        format!(
+                            "- **{label}:** {}. Default: {}.",
+                            names.join(" · "),
+                            names[*at]
+                        )
+                    }
+                    Control::Switch(what, on) => format!(
+                        "- **{label}:** {}, {} by default.",
+                        escape(what),
+                        if *on { "on" } else { "off" }
+                    ),
+                    Control::Number(value) => {
+                        format!("- **{label}:** default {}.", escape(value))
+                    }
+                    Control::Custom(_) => format!("- **{label}**"),
+                };
+                out.push_str(&line);
+                out.push('\n');
+                if let Some(note) = &row.note {
+                    for l in note.lines().filter(|l| !l.trim().is_empty()) {
+                        out.push_str(&format!("\n  {}\n", escape(l.trim())));
+                    }
+                }
+            }
+            if gestures {
+                out.push_str(&format!(
+                    "\nWhat each choice of {} does with the mouse:\n\n| |",
+                    escape(&tr("preferences-mouse-controls"))
+                ));
+                for preset in MousePreset::ALL {
+                    out.push_str(&format!(" {} |", escape(preset.label())));
+                }
+                out.push_str("\n| --- |");
+                out.push_str(&" --- |".repeat(MousePreset::ALL.len()));
+                out.push('\n');
+                for (action, _, label) in ACTIONS {
+                    out.push_str(&format!("| {} |", escape(&tr(label))));
+                    for preset in MousePreset::ALL {
+                        out.push_str(&format!(" {} |", escape(&gesture_text(preset, action))));
+                    }
+                    out.push('\n');
+                }
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]

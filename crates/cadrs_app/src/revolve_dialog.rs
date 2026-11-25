@@ -66,6 +66,11 @@ impl Plugin for RevolveDialogPlugin {
 #[derive(Component)]
 pub struct RevolveDialog;
 
+/// The dialog's error line: why the revolve failed (an axis square to the sketch plane, or
+/// through the profile: #316).
+#[derive(Component)]
+pub(crate) struct RevolveErrorLine;
+
 /// What decides which rows the dialog has.
 #[derive(Component, Debug, Clone, PartialEq)]
 pub(crate) struct RevolveLayout {
@@ -672,6 +677,27 @@ fn revolve_card(
                         }
                     }
                 });
+                b.spawn((
+                    Name::new("revolve-dialog-error"),
+                    RevolveErrorLine,
+                    t.text(
+                        "",
+                        t.font_sm,
+                        bevy::text::FontWeight::MEDIUM,
+                        t.feature_error,
+                    ),
+                    Node {
+                        display: Display::None,
+                        max_width: Val::Px(210.0),
+                        margin: UiRect::new(Val::Px(8.0), Val::Px(8.0), Val::Px(4.0), Val::Px(6.0)),
+                        ..default()
+                    },
+                ))
+                // After the text's own layout: a bundle can't hold the component twice.
+                .insert(TextLayout::new(
+                    bevy::text::Justify::Left,
+                    bevy::text::LineBreak::WordBoundary,
+                ));
             })
             .footer(move |f| {
                 let t = &tf;
@@ -709,6 +735,7 @@ pub(crate) fn sync_revolve_dialog(
     mut q_numbers: Query<(Entity, &Role, &mut NumberFieldState), Without<StaticCopy>>,
     mut q_selects: Query<(&Role, &mut SelectState), Without<StaticCopy>>,
     q_edit: Query<&cadrs_ui::NumberFieldEdit>,
+    mut q_error: Query<(&mut Text, &mut Node), With<RevolveErrorLine>>,
     mut commands: Commands,
 ) {
     let revolve = session.as_ref().zip(doc.as_ref()).and_then(|(s, d)| {
@@ -727,6 +754,25 @@ pub(crate) fn sync_revolve_dialog(
     let shown = arrow.drag.as_ref().map_or(r, |d| &d.revolve);
     let failed = cache.errors.contains_key(&s.feature);
     let valid = feature.is_valid() && !failed && !cache.rebuilding;
+    // Why it failed, once it has what it needs (an empty field says what's missing itself).
+    let why = if feature.is_valid() {
+        cache.errors.get(&s.feature).cloned().unwrap_or_default()
+    } else {
+        String::new()
+    };
+    for (mut text, mut node) in &mut q_error {
+        if text.0 != why {
+            text.0 = why.clone();
+        }
+        let d = if why.is_empty() {
+            Display::None
+        } else {
+            Display::Flex
+        };
+        if node.display != d {
+            node.display = d;
+        }
+    }
     let labels = labels(el.features(), &cache, s.feature, r);
     let layout = RevolveLayout::of(r, s.field);
     let current = q_dialog.iter().next().map(|(ent, l, _)| (ent, l.clone()));

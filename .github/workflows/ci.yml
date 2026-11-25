@@ -35,6 +35,22 @@ jobs:
       - name: cargo fmt (workspace)
         run: cargo fmt --all --check
 
+  # Per push and pull request: the user documentation (docs/, https://cadrs.net/docs/) builds. Its
+  # reference pages made from the code are checked by cadrs_app's docs_reference tests.
+  docs:
+    name: Docs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: mdbook@0.5.4
+
+      - name: mdbook build
+        run: mdbook build docs
+
   # Per push and pull request: the kernel's builds without the test feature, its clippy gate and
   # a fast subset of the gate (tools/kernel_gate.sh: the unit tests, conformance, smlib_booleans,
   # validity and determinism, classified as the full gate does: a regression, a stale or

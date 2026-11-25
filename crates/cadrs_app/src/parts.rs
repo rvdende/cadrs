@@ -4443,6 +4443,9 @@ fn clear_parts(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PickFilter {
     pub origin: bool,
+    /// The origin's X, Y and Z axes, drawn and picked as an axis whatever the origin's style
+    /// (#316).
+    pub origin_axes: bool,
     /// Which default planes (Top, Front, Right) can be picked: the ones shown.
     pub planes: [bool; 3],
     pub faces: bool,
@@ -4473,6 +4476,7 @@ impl PickFilter {
     pub fn none() -> Self {
         Self {
             origin: false,
+            origin_axes: false,
             planes: [false; 3],
             faces: false,
             planar_only: false,
@@ -4492,6 +4496,7 @@ impl PickFilter {
     pub fn modeling(planes: [bool; 3]) -> Self {
         Self {
             origin: true,
+            origin_axes: false,
             planes,
             faces: true,
             planar_only: false,
@@ -4960,6 +4965,12 @@ pub fn pick_scene_selected(
     }
     if filter.origin && !cache.origin_hidden && view.project(Vec3::ZERO).distance(offset) <= 6.0 {
         return Some(Pick::Origin);
+    }
+    // An origin axis, while a field takes an axis (#316): drawn then whatever the origin's style.
+    if filter.origin_axes
+        && let Some(axis) = crate::viewport::pick_origin_axis(view, offset)
+    {
+        return Some(Pick::OriginAxis(axis));
     }
     // A sketch point (a hole's place) wins over everything around it.
     if filter.sketch_points

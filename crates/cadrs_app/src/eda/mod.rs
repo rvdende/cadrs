@@ -34,7 +34,6 @@ use crate::GizmoGroups;
 use bevy::camera::ScalingMode;
 use bevy::camera::visibility::RenderLayers;
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
-use bevy::input::mouse::MouseScrollUnit;
 use bevy::picking::hover::HoverMap;
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
@@ -622,7 +621,11 @@ pub(crate) fn navigate(
     mut pointer: ResMut<EdaPointer>,
     mut clicks: MessageWriter<EdaClick>,
     (mut last_press, mut right_press): Presses,
-    (time, live): (Res<Time>, Option<Res<crate::collab::live::Live>>),
+    (time, live, prefs): (
+        Res<Time>,
+        Option<Res<crate::collab::live::Live>>,
+        Option<Res<crate::preferences_ui::LocalPreferences>>,
+    ),
     layout: Res<layout_tools::LayoutState>,
     mut ui: ResMut<EdaUi>,
     mut commands: Commands,
@@ -704,10 +707,7 @@ pub(crate) fn navigate(
                 PointerButton::Primary => {}
             },
             PointerAction::Scroll { unit, y, .. } if over => {
-                let lines = match unit {
-                    MouseScrollUnit::Line => y,
-                    MouseScrollUnit::Pixel => y / 40.0,
-                };
+                let lines = crate::preferences_ui::wheel_zoom_lines(prefs.as_deref(), unit, y);
                 if lines != 0.0 {
                     view.zoom_at(local(pos), 1.2f64.powf(lines as f64));
                     fitted = false;

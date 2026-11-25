@@ -514,6 +514,41 @@ fn dialog_keycap(t: &Theme, key: String, off: bool) -> impl Bundle {
     )
 }
 
+/// The documentation's keyboard shortcuts page ([`crate::docs_reference`]): a table per tab of
+/// the dialog, without the shortcuts cadrs doesn't have yet.
+#[cfg(test)]
+pub(crate) fn reference_markdown() -> String {
+    use crate::docs_reference::{GENERATED, escape, keycaps};
+    let mut out = String::from(GENERATED);
+    out.push_str(
+        "# Keyboard shortcuts\n\n\
+         In cadrs, **Shift+/** (or the app menu's **Keyboard shortcuts**) opens this list, \
+         with a search box. Letter keys act on the tab that is open: the same key \
+         can do one thing in a Part Studio and another in a sketch.\n",
+    );
+    for (tab, key) in TABS.iter().enumerate() {
+        let rows: Vec<_> = SHORTCUTS
+            .iter()
+            .filter(|(t, _, _, flags)| *t == tab && flags & OFF == 0)
+            .collect();
+        if rows.is_empty() {
+            continue;
+        }
+        out.push_str(&format!(
+            "\n## {}\n\n| Keys | Action |\n| --- | --- |\n",
+            escape(&tr(key))
+        ));
+        for (_, keys, action, _) in rows {
+            out.push_str(&format!(
+                "| {} | {} |\n",
+                keycaps(keys),
+                escape(&tr(action))
+            ));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

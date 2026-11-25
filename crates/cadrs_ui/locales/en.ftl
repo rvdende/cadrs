@@ -165,10 +165,23 @@ preferences-profiling = Profiling
 preferences-group-view = View
 preferences-camera = Camera
 preferences-keep-up-note = Rotating turns about the vertical and tilts, without rolling the view.
+preferences-wheel-zoom = Wheel zoom
+preferences-invert-wheel-zoom = Invert zoom direction
+preferences-invert-wheel-zoom-note = Off, rolling the wheel away from you zooms in. On, rolling it toward you zooms in.
 # Preferences › Navigation › View: the row's label, its switch, and the note under it.
 preferences-sketch-view = Sketch
 preferences-sketch-view-normal = View normal to the sketch plane
 preferences-sketch-view-normal-note = When a sketch gets its plane, and when one is opened for editing, the view turns square to it, as N does.
+# The heading of the SpaceMouse settings (3Dconnexion's 6-DoF controller; keep the product name).
+preferences-space-mouse-heading = SpaceMouse
+preferences-space-mouse-zoom = Zoom by
+# A way of moving the SpaceMouse's cap: pulling it up and pushing it down.
+preferences-space-mouse-zoom-up-down = Pulling up and pushing down
+# A way of moving the SpaceMouse's cap: away from you and toward you.
+preferences-space-mouse-zoom-forward-backward = Moving forward and backward
+preferences-space-mouse-zoom-note = The other of the two moves the view up and down.
+# How fast a SpaceMouse pans, zooms and turns the view.
+preferences-space-mouse-speed = Speed
 # The heading in Collaboration over the cadrs ID and going online.
 preferences-group-network = Network
 
@@ -1078,6 +1091,10 @@ shell-doc-feature-errors = A feature has errors: click to select the first one
 shell-doc-default-geometry = Default geometry
 # The point at the coordinate system's centre (0, 0, 0).
 shell-doc-origin = Origin
+# The origin's axes, picked as an axis (a revolve's, a circular pattern's), as a selection field shows them.
+shell-doc-origin-x-axis = X axis
+shell-doc-origin-y-axis = Y axis
+shell-doc-origin-z-axis = Z axis
 shell-doc-filter-by-name = Filter by name
 shell-doc-list-view = List view
 # Tooltip of the + of an assembly's Items (bill of materials items with no part).

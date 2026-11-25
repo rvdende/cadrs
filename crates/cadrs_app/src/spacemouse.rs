@@ -7,13 +7,16 @@
 //! HID reports) and Linux (the spacenavd daemon). macOS and the browser have no backend yet.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, SendError, Sender};
 use std::time::Duration;
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use web_time::Instant;
+
+use cadrs_core::preferences::{Preferences, SpaceMouseZoom};
 
 use crate::camera::ViewState;
 use crate::viewport::{ActiveKind, ViewportView};
@@ -67,11 +70,43 @@ impl LegacyWheelGuard {
     }
 }
 
+/// Sends the device's samples to the app, and wakes it: it sleeps while idle (#298), and a
+/// sample would otherwise wait for its next frame.
+#[derive(Clone)]
+struct SampleSender {
+    tx: Sender<MotionSample>,
+    wake: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+impl SampleSender {
+    fn send(&self, sample: MotionSample) -> Result<(), SendError<MotionSample>> {
+        self.tx.send(sample)?;
+        if let Some(wake) = &self.wake {
+            wake();
+        }
+        Ok(())
+    }
+}
+
 pub struct SpaceMousePlugin;
 
 impl Plugin for SpaceMousePlugin {
     fn build(&self, app: &mut App) {
-        let (sender, receiver) = mpsc::channel();
+        let (tx, receiver) = mpsc::channel();
+        // The window's event loop, to wake it from the device's thread (none without a window).
+        let wake = app
+            .world()
+            .get_resource::<bevy::winit::EventLoopProxyWrapper>()
+            .map(|proxy| {
+                // (A mutex: the proxy is Send but not Sync on every platform.)
+                let proxy = Mutex::new((**proxy).clone());
+                Arc::new(move || {
+                    if let Ok(proxy) = proxy.lock() {
+                        let _ = proxy.send_event(bevy::winit::WinitUserEvent::WakeUp);
+                    }
+                }) as Arc<dyn Fn() + Send + Sync>
+            });
+        let sender = SampleSender { tx, wake };
         let wheel_guard = LegacyWheelGuard::default();
         start_backend(sender, wheel_guard.clone());
         app.insert_resource(MotionReceiver(Mutex::new(receiver)))
@@ -82,7 +117,7 @@ impl Plugin for SpaceMousePlugin {
 
 /// Starts reading the device on a thread of its own.
 #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
-fn start_backend(sender: Sender<MotionSample>, wheel_guard: LegacyWheelGuard) {
+fn start_backend(sender: SampleSender, wheel_guard: LegacyWheelGuard) {
     #[cfg(target_os = "windows")]
     windows_backend::start(sender, wheel_guard);
     #[cfg(target_os = "linux")]
@@ -94,6 +129,7 @@ fn start_backend(sender: Sender<MotionSample>, wheel_guard: LegacyWheelGuard) {
 /// clicks nor types), as long as the window has focus.
 fn apply_motion(
     input: Res<MotionReceiver>,
+    prefs: Res<crate::preferences_ui::LocalPreferences>,
     state: Res<State<AppState>>,
     mut view: ResMut<ViewportView>,
     kind: Res<ActiveKind>,
@@ -115,7 +151,7 @@ fn apply_motion(
         && !eda2d.flat()
         && windows.iter().any(|window| window.focused);
     if viewport_active {
-        apply_sample(&mut view, sample);
+        apply_sample(&mut view, sample, Settings::of(&prefs.0));
     }
 }
 
@@ -161,11 +197,46 @@ fn coalesce_recent_samples(
     })
 }
 
-fn apply_sample(view: &mut ViewportView, sample: MotionSample) {
+/// The device's settings (Preferences › Navigation › SpaceMouse, issue #314).
+#[derive(Debug, Clone, Copy)]
+struct Settings {
+    zoom: SpaceMouseZoom,
+    /// Pan, zoom and turn alike, 1 being the default speed.
+    speed: f32,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings::of(&Preferences::default())
+    }
+}
+
+impl Settings {
+    fn of(p: &Preferences) -> Self {
+        Settings {
+            zoom: p.space_mouse_zoom,
+            speed: p.space_mouse_speed_factor(),
+        }
+    }
+
+    /// The vertical pan and the zoom from the cap's forward/backward (`ty`, positive toward
+    /// you) and up/down (`tz`, positive down) translations: zooming in by pushing down, or by
+    /// pulling toward you (the cap holds the part, which comes closer); the other axis pans, the
+    /// view following the cap as in object mode.
+    fn pan_y_and_zoom(self, ty: f32, tz: f32) -> (f32, f32) {
+        match self.zoom {
+            SpaceMouseZoom::UpDown => (ty, tz),
+            SpaceMouseZoom::ForwardBackward => (tz, ty),
+        }
+    }
+}
+
+fn apply_sample(view: &mut ViewportView, sample: MotionSample, settings: Settings) {
     if sample.axes.iter().all(|axis| axis.abs() < 0.0001) {
         return;
     }
-    let dt = sample.dt.clamp(0.0, 0.05);
+    // The speed scales the time a sample moves for, so every motion follows it alike.
+    let dt = sample.dt.clamp(0.0, 0.05) * settings.speed;
     if dt <= 0.0 {
         return;
     }
@@ -173,14 +244,16 @@ fn apply_sample(view: &mut ViewportView, sample: MotionSample) {
     view.animation = None;
 
     // Horizontal translation follows screen right. The device's forward/backward translation
-    // axis is inverted to match object-mode movement on screen. The third axis zooms about the
-    // view centre, keeping the pivot from the current view intact.
+    // axis is inverted to match object-mode movement on screen. The zoom axis (up/down, or
+    // forward/backward, as preferred) zooms about the view centre, keeping the pivot from the
+    // current view intact.
+    let (pan_y, zoom) = settings.pan_y_and_zoom(ty, tz);
     view.view.pan(Vec2::new(
         tx * PAN_PIXELS_PER_SECOND * dt,
-        ty * PAN_PIXELS_PER_SECOND * dt,
+        pan_y * PAN_PIXELS_PER_SECOND * dt,
     ));
-    if tz.abs() > 0.0001 {
-        let factor = (tz * ZOOM_PER_SECOND * dt).exp();
+    if zoom.abs() > 0.0001 {
+        let factor = (zoom * ZOOM_PER_SECOND * dt).exp();
         view.view.zoom_at(factor, Vec2::ZERO);
     }
 
@@ -275,7 +348,7 @@ mod windows_backend {
         0xc62b, // SpaceMouse Pro
     ];
 
-    pub(super) fn start(sender: Sender<MotionSample>, wheel_guard: LegacyWheelGuard) {
+    pub(super) fn start(sender: SampleSender, wheel_guard: LegacyWheelGuard) {
         let _ = thread::Builder::new()
             .name("cadrs-spacemouse-hid".into())
             .spawn(move || run(sender, wheel_guard));
@@ -291,7 +364,7 @@ mod windows_backend {
         }
     }
 
-    fn run(sender: Sender<MotionSample>, wheel_guard: LegacyWheelGuard) {
+    fn run(sender: SampleSender, wheel_guard: LegacyWheelGuard) {
         loop {
             let Ok(api) = HidApi::new() else {
                 thread::sleep(Duration::from_secs(2));
@@ -317,7 +390,7 @@ mod windows_backend {
     /// Forwards the device's motion until it goes away; an error when the app has quit.
     fn read_device(
         device: &HidDevice,
-        sender: &Sender<MotionSample>,
+        sender: &SampleSender,
         wheel_guard: &LegacyWheelGuard,
     ) -> Result<(), mpsc::SendError<MotionSample>> {
         let mut sample = MotionSample::default();
@@ -355,13 +428,13 @@ mod linux_backend {
     use spnav_rs::{SpnavClient, SpnavEvent};
     use std::thread;
 
-    pub(super) fn start(sender: Sender<MotionSample>) {
+    pub(super) fn start(sender: SampleSender) {
         let _ = thread::Builder::new()
             .name("cadrs-spacemouse-spnav".into())
             .spawn(move || run(sender));
     }
 
-    fn run(sender: Sender<MotionSample>) {
+    fn run(sender: SampleSender) {
         let runtime = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -420,7 +493,7 @@ mod tests {
     fn zero_input_does_not_move_the_camera() {
         let mut view = ViewportView::default();
         let before = view.view;
-        apply_sample(&mut view, MotionSample::default());
+        apply_sample(&mut view, MotionSample::default(), Settings::default());
         assert_eq!(view.view, before);
     }
 
@@ -433,6 +506,7 @@ mod tests {
                 axes: [1.0, 0.5, 0.5, 0.5, 0.5, 0.5],
                 dt: 1.0 / 60.0,
             },
+            Settings::default(),
         );
         assert_ne!(view.view.focus, Vec3::ZERO);
         assert_ne!(view.view.scale, ViewState::default().scale);
@@ -453,10 +527,71 @@ mod tests {
                 axes: [0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
                 dt,
             },
+            Settings::default(),
         );
 
         assert_eq!(view.view.focus, expected.focus);
         assert!(view.view.scale < initial_scale);
+    }
+
+    /// Zooming by forward/backward (issue #314): pushing the cap away zooms in, and pulling it
+    /// toward you zooms out; up/down then pans up and down as forward/backward did.
+    #[test]
+    fn forward_backward_zoom_swaps_the_two_axes() {
+        let settings = Settings {
+            zoom: SpaceMouseZoom::ForwardBackward,
+            speed: 1.0,
+        };
+        let dt = 0.02;
+        let sample = |axes| MotionSample { axes, dt };
+        // Toward you (y positive): the part comes closer, in, and no pan.
+        let mut view = ViewportView::default();
+        let (scale, focus) = (view.view.scale, view.view.focus);
+        apply_sample(&mut view, sample([0.0, 1.0, 0.0, 0.0, 0.0, 0.0]), settings);
+        assert!(view.view.scale < scale);
+        assert_eq!(view.view.focus, focus);
+        // Away from you: out.
+        let mut view = ViewportView::default();
+        apply_sample(&mut view, sample([0.0, -1.0, 0.0, 0.0, 0.0, 0.0]), settings);
+        assert!(view.view.scale > scale);
+        // Pushing down pans as pulling toward you does by default, and doesn't zoom.
+        let mut view = ViewportView::default();
+        let mut expected = view.view;
+        expected.pan(Vec2::new(0.0, PAN_PIXELS_PER_SECOND * dt));
+        apply_sample(&mut view, sample([0.0, 0.0, 1.0, 0.0, 0.0, 0.0]), settings);
+        assert_eq!(view.view.focus, expected.focus);
+        assert_eq!(view.view.scale, scale);
+    }
+
+    /// The speed scales pan, zoom and turn alike: twice the speed moves as twice the time does.
+    #[test]
+    fn speed_scales_every_motion() {
+        let axes = [0.4, 0.3, 0.2, 0.3, 0.2, 0.1];
+        let mut fast = ViewportView::default();
+        apply_sample(
+            &mut fast,
+            MotionSample { axes, dt: 0.01 },
+            Settings {
+                zoom: SpaceMouseZoom::UpDown,
+                speed: 2.0,
+            },
+        );
+        let mut long = ViewportView::default();
+        apply_sample(
+            &mut long,
+            MotionSample { axes, dt: 0.02 },
+            Settings::default(),
+        );
+        assert_eq!(fast.view, long.view);
+    }
+
+    /// The defaults are today's mapping and speed.
+    #[test]
+    fn the_default_settings_keep_the_old_mapping() {
+        let s = Settings::default();
+        assert_eq!(s.zoom, SpaceMouseZoom::UpDown);
+        assert_eq!(s.speed, 1.0);
+        assert_eq!(s.pan_y_and_zoom(0.3, 0.7), (0.3, 0.7));
     }
 
     #[test]
@@ -471,6 +606,7 @@ mod tests {
                 axes: [0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
                 dt: 1.0 / 30.0,
             },
+            Settings::default(),
         );
         let screen_after = view.view.project(pivot);
         assert!(screen_before.distance(screen_after) < 1e-4);
@@ -497,6 +633,7 @@ mod tests {
                     axes,
                     dt: 1.0 / 30.0,
                 },
+                Settings::default(),
             );
 
             let expected =

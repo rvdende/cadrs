@@ -1480,6 +1480,7 @@ fn shaft_of(
             Some((*p, [q[0] - p[0], q[1] - p[1], q[2] - p[2]], None, None))
         }
         AxisRef::Connector(_) => None,
+        AxisRef::Origin(o) => Some(([0.0; 3], o.dir(), None, None)),
     }
 }
 
