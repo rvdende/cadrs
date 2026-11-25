@@ -595,11 +595,7 @@ fn animate_dialog(
                         flex_grow: 1.0,
                         ..default()
                     });
-                    r.spawn((
-                        Name::new("animate-help"),
-                        icon("help-filled", 14.0, Color::srgb_u8(0xa8, 0xa8, 0xa8)),
-                        Tooltip::new(tr("common-help")),
-                    ));
+                    r.spawn(crate::help::help_icon("animate-help", "animate"));
                 });
             })
             .build(t),

@@ -60,6 +60,7 @@ pub const SHORTCUTS: &[(usize, &str, &str, u8)] = &[
     ),
     (0, "Shift+D", "view-shortcut-dihedral-analysis", OFF),
     (0, "Shift+/", "view-shortcuts-title", 0),
+    (0, "F1", "shell-app-menu-docs", LOCKED),
     (0, "[", "view-shortcut-measure", 0),
     (0, "Ctrl+V", "common-paste", LOCKED | OFF),
     (0, "Ctrl+Y / Ctrl+Shift+Z", "common-redo", LOCKED),

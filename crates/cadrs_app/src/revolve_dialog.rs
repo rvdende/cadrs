@@ -672,11 +672,7 @@ fn revolve_dialog(
                 })
                 .with_child(crate::feature_list::preview_slider(t, "revolve"));
                 crate::extrude_dialog::final_button(f, t, "revolve");
-                f.spawn((
-                    Name::new("revolve-help"),
-                    icon("help-filled", 14.0, Color::srgb_u8(0xa8, 0xa8, 0xa8)),
-                    Tooltip::new(tr("common-help")),
-                ));
+                f.spawn(crate::help::help_icon("revolve-help", "revolve"));
             })
             .build(theme),
     )

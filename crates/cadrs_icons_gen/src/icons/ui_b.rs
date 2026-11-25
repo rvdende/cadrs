@@ -52,6 +52,7 @@ pub fn icons() -> Vec<Def> {
         def("chip", Line, "Chip", chip),
         def("tool", Line, "Tool", tool),
         def("books", Line, "Books", books),
+        def("docs", Line, "Documentation", docs),
         def("idea", Line, "Explore", idea),
         def("keyboard", Line, "Keyboard shortcuts", keyboard),
         def("interface", Line, "Interface preferences", interface),
@@ -666,6 +667,19 @@ fn books() -> Vec<String> {
             r#"transform="rotate(-14 15.85 20.1)""#
         )),
         path("M3.5 8 H8 M8 10.5 H12.5", "", ""),
+    ]
+}
+
+/// An open book, its left page written on: the user documentation.
+fn docs() -> Vec<String> {
+    els![
+        path(
+            "M12 6.5 C10 5 7 4.5 3.5 5 V18.5 C7 18 10 18.5 12 20 C14 18.5 17 18 20.5 18.5 V5 \
+             C17 4.5 14 5 12 6.5 Z M12 6.5 V20",
+            "",
+            ""
+        ),
+        acc(path("M6 9 H9.5 M6 12 H9.5 M6 15 H8.5", "", "")),
     ]
 }
 

@@ -1936,11 +1936,7 @@ fn sketch_dialog(
                         });
                     }),
                 ));
-                f.spawn((
-                    Name::new("sketch-help"),
-                    icon("help-filled", 14.0, Color::srgb_u8(0xa8, 0xa8, 0xa8)),
-                    Tooltip::new(tr("common-help")),
-                ));
+                f.spawn(crate::help::help_icon("sketch-help", "sketch"));
             })
             .build(theme),
     )
