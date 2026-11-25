@@ -406,6 +406,69 @@ impl NativeKernel {
     /// scaled as much (`op`'s last argument), and the result is scaled back, its history
     /// naming the body given. The kernel's merge distances and many of its guards are lengths
     /// in mm: on a part a few microns across they are the part's own size, as in a boolean.
+    /// `op` on the body turned into the frame of its first analytic surface (where a model
+    /// moved by a rigid motion was likely drawn, its faces along the axes), the results turned
+    /// back: an operation that commutes with rigid motions, whose searches bound geometry by
+    /// axis-aligned boxes (loose round a tilted face). As given where that frame is already
+    /// along the axes.
+    fn in_own_frame(
+        &mut self,
+        body: BodyId,
+        op: impl FnOnce(&mut Self, BodyId) -> Result<OpResult>,
+    ) -> Result<OpResult> {
+        let b = Arc::clone(self.get(body)?);
+        let Some(f) = b.faces.iter().find_map(|f| f.surf.frame().copied()) else {
+            return op(self, body);
+        };
+        let aligned = |v: &V3| v.amax() > 1.0 - 1e-12;
+        if aligned(&f.x) && aligned(&f.y) && aligned(&f.z) {
+            return op(self, body);
+        }
+        let turn = Affine {
+            m: nalgebra::Matrix3::from_rows(&[f.x.transpose(), f.y.transpose(), f.z.transpose()]),
+            t: V3::zeros(),
+        };
+        let back = Affine {
+            m: turn.m.transpose(),
+            t: V3::zeros(),
+        };
+        let turned = self.insert(b.transformed(&turn));
+        if let Some(c) = self.colors.get(&body.0).cloned() {
+            self.colors.insert(turned.0, c);
+        }
+        let r = op(self, turned);
+        self.bodies.remove(&turned.0);
+        self.colors.remove(&turned.0);
+        let mut r = r?;
+        for id in &mut r.bodies {
+            let moved = self.get(*id)?.transformed(&back);
+            let colors = self.colors.remove(&id.0);
+            self.bodies.remove(&id.0);
+            *id = self.insert(moved);
+            if let Some(c) = colors {
+                self.colors.insert(id.0, c);
+            }
+        }
+        let given = |x: &mut BodyId| {
+            if *x == turned {
+                *x = body;
+            }
+        };
+        for (_, o) in &mut r.history.generated {
+            match o {
+                Origin::FromEdge { body, .. } | Origin::FromVertex { body, .. } => given(body),
+                _ => {}
+            }
+        }
+        for (_, from) in &mut r.history.modified {
+            given(&mut from.body);
+        }
+        for from in &mut r.history.deleted {
+            given(&mut from.body);
+        }
+        Ok(r)
+    }
+
     fn at_working_size(
         &mut self,
         body: BodyId,
@@ -1736,14 +1799,16 @@ impl Kernel for NativeKernel {
     }
 
     fn offset(&mut self, body: BodyId, spec: &OffsetSpec) -> Result<OpResult> {
-        self.at_working_size(body, |k, body, by| {
-            let spec = OffsetSpec {
-                distance: spec.distance * by,
-                faces: spec.faces.iter().map(|&(f, d)| (f, d * by)).collect(),
-                sharp: spec.sharp,
-            };
-            let r = super::offset::offset(k, body, &spec);
-            k.colored(r)
+        self.in_own_frame(body, |k, body| {
+            k.at_working_size(body, |k, body, by| {
+                let spec = OffsetSpec {
+                    distance: spec.distance * by,
+                    faces: spec.faces.iter().map(|&(f, d)| (f, d * by)).collect(),
+                    sharp: spec.sharp,
+                };
+                let r = super::offset::offset(k, body, &spec);
+                k.colored(r)
+            })
         })
     }
 
