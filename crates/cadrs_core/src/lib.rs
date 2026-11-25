@@ -99,7 +99,9 @@ pub use document::{
     Feature, FeatureKind, Offset, PartProps, RegionRef, RevolveFeature, RevolveType, SketchFeature,
     ThinWall, UpTo, VertexRef,
 };
-pub use ids::{DocumentId, ElementId, FeatureId, FolderId, LabelId, PartId};
+pub use ids::{
+    ConfigInputId, ConfigRowId, DocumentId, ElementId, FeatureId, FolderId, LabelId, PartId,
+};
 pub use library::{
     DocumentEntry, DocumentMeta, Filter, FolderEntry, LabelEntry, Library, LibraryCommand,
     LibraryHistory, SortDir, SortKey, Timestamp,

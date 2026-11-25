@@ -1185,10 +1185,9 @@ fn sync_dialog(
                         flex_grow: 1.0,
                         ..default()
                     });
-                    f.spawn((
-                        Name::new("mate-connector-help"),
-                        icon("help-filled", 14.0, Color::srgb_u8(0xa8, 0xa8, 0xa8)),
-                        Tooltip::new(tr("common-help")),
+                    f.spawn(crate::help::help_icon(
+                        "mate-connector-help",
+                        "assembly-mate-connector",
                     ));
                     let _ = &tf;
                 })

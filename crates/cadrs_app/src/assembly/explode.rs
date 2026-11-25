@@ -1028,7 +1028,8 @@ fn rebuild(world: &mut World) {
             });
         });
     });
-    let mut q_area = world.query_filtered::<(Entity, &ChildOf), With<ViewportArea>>();
+    let mut q_area =
+        world.query_filtered::<(Entity, &ChildOf), With<crate::side_panel::SideDock>>();
     let Some((area, parent)) = q_area.iter(world).next().map(|(e, c)| (e, c.parent())) else {
         return;
     };

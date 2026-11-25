@@ -3,8 +3,10 @@
 //! ([`cadrs_core::render`]) and renders it with the path tracer (`cadrs_render`).
 //!
 //! - **Left panel** (`render-panel`, in the feature panel's place): the **Model** (the source
-//!   tab), the **Environment** (Studio, Soft light, Outdoor, Sunset), its rotation, the
-//!   **Background** (the environment's, white or transparent) and **Ground shadow**; the
+//!   tab; a configured Part Studio's configuration under it, rendered through its configured
+//!   copy, at first in the configuration the studio shows), the **Environment** (Studio, Soft
+//!   light, Outdoor, Sunset), its rotation, the **Background** (the environment's, white or
+//!   transparent) and **Ground shadow**; the
 //!   **Camera** (a named view, or **Current view**: the view the source tab was last shown
 //!   in) and **Perspective**; the **Output** size, quality (samples), exposure, seed and
 //!   **Denoise**; the parts' **Materials** as the renderer reads them (colour from the
@@ -826,6 +828,13 @@ pub fn render_panel(p: &mut ChildSpawnerCommands, _t: &Theme) {
 struct PanelModel {
     studio: RenderStudio,
     sources: Vec<(ElementId, String)>,
+    /// The model's tab (a configured copy's studio).
+    tab: Option<ElementId>,
+    /// The model's configuration and the values it is shown in (a configured Part Studio).
+    config: Option<(
+        cadrs_core::configuration::Configuration,
+        cadrs_core::configuration::ConfigValues,
+    )>,
     materials: Vec<([u8; 3], String, String)>,
     running: bool,
     result: Option<String>,
@@ -837,6 +846,10 @@ fn panel_model(world: &mut World) -> Option<PanelModel> {
     let (_, studio) = active_studio(doc)?;
     let studio = studio.clone();
     let sources = sources(&doc.doc);
+    let tab = studio
+        .source
+        .map(|s| cadrs_core::configuration::tab_of(&doc.doc, s));
+    let config = studio.source.and_then(|s| model_configuration(&doc.doc, s));
     let state = world.resource::<RenderState>();
     let running = state.final_job.is_some();
     let result = match &state.shown {
@@ -891,6 +904,8 @@ fn panel_model(world: &mut World) -> Option<PanelModel> {
     Some(PanelModel {
         studio,
         sources,
+        tab,
+        config,
         materials,
         running,
         result,
@@ -1001,7 +1016,7 @@ fn panel_body(b: &mut ChildSpawnerCommands, t: &Theme, m: &PanelModel) {
         });
         section(b, t, "render-model-heading", &tr("render-model"));
         let names: Vec<String> = m.sources.iter().map(|(_, n)| n.clone()).collect();
-        let current = m.sources.iter().position(|(e, _)| Some(*e) == s.source);
+        let current = m.sources.iter().position(|(e, _)| Some(*e) == m.tab);
         let mut opts = names.clone();
         if current.is_none() {
             opts.insert(0, tr("render-choose-tab"));
@@ -1012,6 +1027,33 @@ fn panel_body(b: &mut ChildSpawnerCommands, t: &Theme, m: &PanelModel) {
             &tr("render-model"),
             select("render-source", &opts, current.unwrap_or(0)).build(t),
         );
+        // A configured Part Studio's configuration: a list per List, a checkbox per Checkbox.
+        if let Some((c, values)) = &m.config {
+            use cadrs_core::configuration::{InputKind, Resolved};
+            for (k, (input, r)) in c.inputs.iter().zip(c.resolve(values)).enumerate() {
+                match (&input.kind, r) {
+                    (InputKind::List { rows, .. }, Resolved::Row(i)) => {
+                        let names: Vec<String> = rows.iter().map(|r| r.name.clone()).collect();
+                        field_row(
+                            b,
+                            t,
+                            &input.name,
+                            select(&format!("render-config-{k}"), &names, i).build(t),
+                        );
+                    }
+                    (InputKind::Checkbox { .. }, Resolved::Checked(on)) => field_row(
+                        b,
+                        t,
+                        "",
+                        Checkbox::new(format!("render-config-{k}-checked"))
+                            .label(input.name.clone())
+                            .checked(on)
+                            .build(t),
+                    ),
+                    _ => {}
+                }
+            }
+        }
 
         section(
             b,
@@ -1378,6 +1420,96 @@ fn update_progress(
 // Panel events
 
 /// Applies `edit` to the active Render tab's settings as one undo step.
+/// The configuration a render's model `source` is shown in, when it is a configured Part
+/// Studio (or its copy): the studio's configuration and the values.
+fn model_configuration(
+    doc: &cadrs_core::Document,
+    source: ElementId,
+) -> Option<(
+    cadrs_core::configuration::Configuration,
+    cadrs_core::configuration::ConfigValues,
+)> {
+    let tab = cadrs_core::configuration::tab_of(doc, source);
+    let el = doc.elements.iter().find(|e| e.id == tab)?;
+    if el.configuration.is_empty() || !matches!(el.kind, ElementKind::PartStudio { .. }) {
+        return None;
+    }
+    let values = cadrs_core::configuration::configuration_of(doc, source)
+        .map(|c| c.values)
+        .unwrap_or_else(|| el.configuration.active.clone());
+    Some((el.configuration.clone(), values))
+}
+
+/// Renders tab `tab`: a configured Part Studio in `values` (its active configuration when
+/// `None`) through its copy, which the Render Studio keeps; anything else as it is.
+fn set_model(
+    world: &mut World,
+    label: String,
+    tab: ElementId,
+    values: Option<cadrs_core::configuration::ConfigValues>,
+) {
+    let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else {
+        return;
+    };
+    let Some((element, studio)) = active_studio(&doc).map(|(e, s)| (e, s.clone())) else {
+        return;
+    };
+    let values = values.or_else(|| {
+        doc.doc
+            .elements
+            .iter()
+            .find(|e| e.id == tab)
+            .map(|e| e.configuration.active.clone())
+    });
+    let config = values.and_then(|v| cadrs_core::configuration::for_studio(&doc.doc, tab, &v));
+    let mut new = studio.clone();
+    new.source = Some(config.as_ref().map_or(tab, |c| c.copy_id()));
+    if new == studio {
+        return;
+    }
+    let command = SetRenderStudio {
+        element,
+        studio: new,
+        label,
+    };
+    let r = match config {
+        Some(configuration) => doc.execute(&cadrs_core::configuration::WithConfiguration {
+            element,
+            configuration,
+            command,
+        }),
+        None => doc.execute(&command),
+    };
+    if let Err(e) = r {
+        warn!("render settings: {e}");
+    }
+}
+
+/// Sets one input of the configuration the model is rendered in.
+fn set_model_value(
+    world: &mut World,
+    k: usize,
+    value: impl FnOnce(
+        &cadrs_core::configuration::ConfigInput,
+    ) -> Option<cadrs_core::configuration::InputValue>,
+) {
+    let Some(doc) = world.get_resource::<ActiveDocument>() else {
+        return;
+    };
+    let Some(source) = active_studio(doc).and_then(|(_, s)| s.source) else {
+        return;
+    };
+    let Some((c, mut values)) = model_configuration(&doc.doc, source) else {
+        return;
+    };
+    let tab = cadrs_core::configuration::tab_of(&doc.doc, source);
+    let Some(input) = c.inputs.get(k) else { return };
+    let Some(v) = value(input) else { return };
+    values.set(input.id, v);
+    let label = format!("Render in {}", c.describe(&values));
+    set_model(world, label, tab, Some(values));
+}
+
 fn edit_studio(world: &mut World, label: impl Into<String>, edit: impl FnOnce(&mut RenderStudio)) {
     let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else {
         return;
@@ -1401,10 +1533,11 @@ fn edit_studio(world: &mut World, label: impl Into<String>, edit: impl FnOnce(&m
 
 /// The source tab's view as the camera ("Current view").
 fn capture_view(world: &mut World) {
-    let Some(source) = world
-        .get_resource::<ActiveDocument>()
-        .and_then(|d| active_studio(d)?.1.source)
-    else {
+    let Some(source) = world.get_resource::<ActiveDocument>().and_then(|d| {
+        let s = active_studio(d)?.1.source?;
+        // A configured copy's view is its studio tab's.
+        Some(cadrs_core::configuration::tab_of(&d.doc, s))
+    }) else {
         return;
     };
     let vv = world.resource::<ViewportView>();
@@ -1438,10 +1571,27 @@ fn on_select(ev: On<SelectChange>, q: Query<&Name>, mut commands: Commands) {
             let list = sources(&doc.doc);
             let has = active_studio(doc)
                 .and_then(|(_, s)| s.source)
+                .map(|s| cadrs_core::configuration::tab_of(&doc.doc, s))
                 .is_some_and(|s| list.iter().any(|(e, _)| *e == s));
             let k = if has { Some(i) } else { i.checked_sub(1) };
-            if let Some((e, n)) = k.and_then(|k| list.get(k).cloned()) {
-                edit_studio(world, format!("Render {n}"), |s| s.source = Some(e));
+            let shown = active_studio(doc)
+                .and_then(|(_, s)| s.source)
+                .map(|s| cadrs_core::configuration::tab_of(&doc.doc, s));
+            // (The model shown again keeps its configuration.)
+            if let Some((e, n)) = k.and_then(|k| list.get(k).cloned())
+                && Some(e) != shown
+            {
+                set_model(world, format!("Render {n}"), e, None);
+            }
+        }
+        n if n.starts_with("render-config-") => {
+            if let Ok(k) = n["render-config-".len()..].parse::<usize>() {
+                set_model_value(world, k, |input| match &input.kind {
+                    cadrs_core::configuration::InputKind::List { rows, .. } => rows
+                        .get(i)
+                        .map(|r| cadrs_core::configuration::InputValue::Row(r.id)),
+                    _ => None,
+                });
             }
         }
         "render-environment" => {
@@ -1514,6 +1664,13 @@ fn on_checkbox(ev: On<CheckboxChange>, q: Query<&Name>, mut commands: Commands) 
             edit_studio(world, if on { "Denoise on" } else { "Denoise off" }, |s| {
                 s.denoise = on
             })
+        }
+        n if n.starts_with("render-config-") && n.ends_with("-checked") => {
+            if let Ok(k) = n["render-config-".len()..n.len() - "-checked".len()].parse::<usize>() {
+                set_model_value(world, k, |_| {
+                    Some(cadrs_core::configuration::InputValue::Checked(on))
+                });
+            }
         }
         _ => {}
     });

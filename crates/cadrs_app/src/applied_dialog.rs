@@ -811,11 +811,7 @@ fn footer(f: &mut ChildSpawner, t: &Theme, name: &str, show_final: bool) {
     ))
     .entry::<Node>()
     .and_modify(|mut n| n.margin = UiRect::right(Val::Px(4.0)));
-    f.spawn((
-        Name::new(format!("{name}-help")),
-        icon("help-filled", 14.0, Color::srgb_u8(0xa8, 0xa8, 0xa8)),
-        Tooltip::new(tr("common-help")),
-    ));
+    f.spawn(crate::help::help_icon(format!("{name}-help"), name));
 }
 
 pub(crate) fn body_column(b: &mut ChildSpawner, f: impl FnOnce(&mut ChildSpawner)) {

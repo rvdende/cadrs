@@ -1137,6 +1137,10 @@ fn shared_px(n: u8) -> f32 {
     WIRE_PX + (n.saturating_sub(1).min(3)) as f32
 }
 
+/// A socket type that meets a wire of any type (the app sorts out which it can use: a
+/// sketch's "drive a dimension" input, a configuration List's "+ column" output).
+pub const ANY_TYPE: u32 = u32::MAX;
+
 /// A wire's thickness on screen (logical px), whatever the zoom.
 const WIRE_PX: f32 = 2.0;
 
@@ -1204,6 +1208,29 @@ struct DragWire {
     /// Dragged off an input: the wire (hidden while it is dragged) and the input it came off.
     detached: Option<(Entity, Entity)>,
 }
+
+/// What a wire dragged from this socket carries, shown beside the pointer while it is dragged
+/// (`#bolt_size`): the drag stays in sight past the canvas's edge.
+#[derive(Component, Debug, Clone, PartialEq)]
+pub struct DragLabel(pub String);
+
+/// A wire dropped outside its canvas (on the 3D view): `from` is its output socket, `position`
+/// the pointer's (window logical px). The app sees what is there (a sketch's dimension).
+#[derive(EntityEvent, Clone, Copy, Debug)]
+pub struct WireDroppedOutside {
+    /// The canvas.
+    pub entity: Entity,
+    pub from: Entity,
+    pub position: Vec2,
+}
+
+/// The chip beside the pointer while a wire is dragged: a dot of the wire's colour and its
+/// [`DragLabel`].
+#[derive(Component, Debug, Clone, Copy)]
+struct DragChip;
+
+/// Where the drag chip sits from the pointer (logical px).
+const CHIP_OFFSET: Vec2 = Vec2::new(14.0, 12.0);
 
 /// A socket wires can't be dragged from or dropped on (wires the app draws for what is fixed
 /// elsewhere: a feature's references).
@@ -1454,6 +1481,7 @@ fn draw_wires(
     q_parent: Query<&ChildOf>,
     q_node: Query<&GraphNode>,
     mut q_seg: Query<(&mut Node, &mut UiTransform, &mut BackgroundColor), With<WireSegment>>,
+    q_socket_color: Query<&BackgroundColor, (With<Socket>, Without<WireSegment>)>,
     mut commands: Commands,
 ) {
     for (entity, wire, drag, mut drawn, parent, children) in &mut q_wire {
@@ -1484,13 +1512,18 @@ fn draw_wires(
             continue;
         }
         drawn.0 = now;
-        let (color, dashed) = match wire {
-            Some(w) => (w.color, w.dashed),
-            None => (Color::WHITE, false),
+        // (A wire being dragged: its output's colour, a pixel thicker.)
+        let (color, dashed) = match (wire, drag) {
+            (Some(w), _) => (w.color, w.dashed),
+            (None, Some(d)) => (
+                q_socket_color.get(d.from).map_or(Color::WHITE, |c| c.0),
+                false,
+            ),
+            _ => (Color::WHITE, false),
         };
         // Two pixels on screen at every zoom (thinner, a rotated piece dropped pixels and the
         // wire looked broken).
-        let thick = WIRE_PX / zoom;
+        let thick = (WIRE_PX + if drag.is_some() { 1.0 } else { 0.0 }) / zoom;
         let legs: Vec<Vec2> = match &route {
             Some(via) => {
                 let mut p = vec![a];
@@ -1594,6 +1627,8 @@ fn on_socket_drag_start(
     q_wire: Query<(Entity, &Wire)>,
     q_canvas: Query<&mut NodeCanvas>,
     q_geo: Query<(&ComputedNode, &UiGlobalTransform)>,
+    q_look: Query<(Option<&BackgroundColor>, Option<&DragLabel>)>,
+    theme: Res<crate::theme::Theme>,
     mut commands: Commands,
 ) {
     if ev.button != PointerButton::Primary {
@@ -1625,6 +1660,56 @@ fn on_socket_drag_start(
     };
     let to = canvas_point(ev.pointer.position, canvas, &q_geo)
         .map_or(Vec2::ZERO, |p| c.view.to_graph(p));
+    // The chip by the pointer: the wire's colour and what it carries.
+    let (color, label) = q_look
+        .get(from)
+        .map(|(c, l)| (c.map_or(theme.foreground, |c| c.0), l.map(|l| l.0.clone())))
+        .unwrap_or((theme.foreground, None));
+    let at = ev.pointer.position + CHIP_OFFSET;
+    let t = theme.clone();
+    commands
+        .spawn((
+            Name::new("node-graph-drag-chip"),
+            DragChip,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(at.x),
+                top: Val::Px(at.y),
+                padding: UiRect::axes(Val::Px(7.0), Val::Px(3.0)),
+                column_gap: Val::Px(5.0),
+                align_items: AlignItems::Center,
+                border: UiRect::all(Val::Px(1.5)),
+                border_radius: BorderRadius::all(Val::Px(t.radius)),
+                ..default()
+            },
+            BackgroundColor(t.popover),
+            BorderColor::all(color),
+            GlobalZIndex(1000),
+            Pickable::IGNORE,
+        ))
+        .with_children(|c| {
+            c.spawn((
+                Node {
+                    width: Val::Px(9.0),
+                    height: Val::Px(9.0),
+                    border_radius: BorderRadius::MAX,
+                    ..default()
+                },
+                BackgroundColor(color),
+                Pickable::IGNORE,
+            ));
+            if let Some(label) = label {
+                c.spawn((
+                    t.text(
+                        label,
+                        t.font_sm,
+                        bevy::text::FontWeight::MEDIUM,
+                        t.foreground,
+                    ),
+                    Pickable::IGNORE,
+                ));
+            }
+        });
     commands.spawn((
         Name::new("node-graph-drag-wire"),
         DragWire { from, to, detached },
@@ -1644,6 +1729,7 @@ fn on_socket_drag(
     q_canvas: Query<&mut NodeCanvas>,
     q_geo: Query<(&ComputedNode, &UiGlobalTransform)>,
     mut q_drag: Query<&mut DragWire>,
+    mut q_chip: Query<&mut Node, With<DragChip>>,
 ) {
     // (Once a drag, where it began: the event bubbles up through every ancestor.)
     if ev.button != PointerButton::Primary
@@ -1651,6 +1737,11 @@ fn on_socket_drag(
         || ev.original_event_target() != ev.entity
     {
         return;
+    }
+    let at = ev.pointer.position + CHIP_OFFSET;
+    for mut n in &mut q_chip {
+        n.left = Val::Px(at.x);
+        n.top = Val::Px(at.y);
     }
     for mut d in &mut q_drag {
         let Some(canvas) = canvas_of(d.from, &q_parent, &q_canvas) else {
@@ -1672,6 +1763,7 @@ fn on_socket_drag_end(
     q_socket: Query<(Entity, &Socket), Without<ReadOnlySocket>>,
     q_sock: Query<&Socket>,
     q_drag: Query<(Entity, &DragWire)>,
+    q_chip: Query<Entity, With<DragChip>>,
     q_canvas: Query<&mut NodeCanvas>,
     q_geo: Query<(&ComputedNode, &UiGlobalTransform)>,
     mut commands: Commands,
@@ -1679,6 +1771,9 @@ fn on_socket_drag_end(
     // (Once a drag, where it began: the event bubbles up through every ancestor.)
     if ev.button != PointerButton::Primary || ev.original_event_target() != ev.entity {
         return;
+    }
+    for e in &q_chip {
+        commands.entity(e).despawn();
     }
     // Every wire being dragged ends with the drag, wherever it began (its socket may be gone).
     for (e, d) in &q_drag {
@@ -1700,10 +1795,26 @@ fn on_socket_drag_end(
         let Some(at) = canvas_point(ev.pointer.position, canvas, &q_geo) else {
             continue;
         };
+        // Off the canvas (on the 3D view): the app sees what it was dropped on.
+        let size = q_geo
+            .get(canvas)
+            .map_or(Vec2::ZERO, |(n, _)| n.size() * n.inverse_scale_factor());
+        if at.x < 0.0 || at.y < 0.0 || at.x > size.x || at.y > size.y {
+            commands.trigger(WireDroppedOutside {
+                entity: canvas,
+                from: d.from,
+                position: ev.pointer.position,
+            });
+            continue;
+        }
         // The nearest input of the same type within SNAP px on screen.
         let mut best: Option<(f32, Entity)> = None;
         for (s, sock) in &q_socket {
-            if sock.side != SocketSide::In || sock.ty != from.ty {
+            // (An output or input of any type meets any wire: the app sorts out which it can
+            // use.)
+            if sock.side != SocketSide::In
+                || (sock.ty != from.ty && sock.ty != ANY_TYPE && from.ty != ANY_TYPE)
+            {
                 continue;
             }
             if canvas_of(s, &q_parent, &q_canvas) != Some(canvas) {

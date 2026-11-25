@@ -146,6 +146,8 @@ pub struct FeatureDialog {
     embedded: bool,
     no_buttons: bool,
     header_color: Option<Color>,
+    icon: Option<Cow<'static, str>>,
+    kind: Option<String>,
 }
 
 impl FeatureDialog {
@@ -164,7 +166,23 @@ impl FeatureDialog {
             embedded: false,
             no_buttons: false,
             header_color: None,
+            icon: None,
+            kind: None,
         }
+    }
+
+    /// An icon before the title (a node's: its feature's kind).
+    pub fn icon(mut self, name: impl Into<Cow<'static, str>>) -> Self {
+        self.icon = Some(name.into());
+        self
+    }
+
+    /// What the dialog is a kind of ("Extrude"), shown muted before the title unless the title
+    /// starts with it (a feature renamed "Make cap" shows "Extrude Make cap", "Extrude 1" just
+    /// that).
+    pub fn kind(mut self, kind: impl Into<String>) -> Self {
+        self.kind = Some(kind.into());
+        self
     }
 
     /// Laid out where it is put (a node of a node graph, [`crate::node_graph`]) rather than
@@ -260,7 +278,11 @@ impl FeatureDialog {
             embedded,
             no_buttons,
             header_color,
+            icon,
+            kind,
         } = self;
+        // (The kind is left out when the title says it already.)
+        let kind = kind.filter(|k| !title.starts_with(k.as_str()));
         let accept_name = format!("{name}-accept");
         let cancel_name = format!("{name}-cancel");
         let title_name = format!("{name}-title");
@@ -320,15 +342,38 @@ impl FeatureDialog {
                     } else {
                         t.feature_error
                     };
+                    if let Some(icon) = icon {
+                        h.spawn(crate::icon::icon_in(
+                            icon,
+                            14.0,
+                            t.foreground,
+                            Node {
+                                margin: UiRect::right(Val::Px(6.0)),
+                                ..default()
+                            },
+                        ));
+                    }
                     // A long title (a hole's callout, P3.6) ends in "…" before the ✓.
                     h.spawn(Node {
                         flex_grow: 1.0,
                         flex_shrink: 1.0,
                         min_width: Val::Px(0.0),
                         overflow: Overflow::clip(),
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(5.0),
                         ..default()
                     })
                     .with_children(|clip| {
+                        if let Some(kind) = kind {
+                            clip.spawn((
+                                t.text(kind, t.font_sm, FontWeight::MEDIUM, t.muted_foreground),
+                                Node {
+                                    flex_shrink: 0.0,
+                                    ..default()
+                                },
+                            ))
+                            .insert(TextLayout::no_wrap());
+                        }
                         let mut title_entity = clip.spawn((
                             Name::new(title_name),
                             DialogTitle(dialog),

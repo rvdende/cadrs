@@ -309,6 +309,7 @@ shell-app-menu = Menu
 shell-preferences-ellipsis = Preferences…
 shell-app-menu-shortcuts = Keyboard shortcuts
 shell-app-menu-github = GitHub
+shell-app-menu-docs = Documentation
 # A disabled hint under the workspaces: how to make another one ("History" is the version history panel).
 shell-app-menu-workspace-hint = Branch from a version in History
 # The submenu listing the document's workspaces (its main line and branches) to switch to.
@@ -6863,22 +6864,37 @@ node-view-expand = Expand
 # A node's input socket that turns the feature on and off (wired from a boolean input: the
 # feature is suppressed while it is false).
 node-view-enabled = Enabled (suppressed while false)
-# The node the presets and inputs are on.
-node-view-configuration = Configuration
-node-view-add-configuration = Add configuration
-# A named set of input values.
-node-view-preset = Preset
-node-view-name = Name
-node-view-add-preset = Add preset
-node-view-remove-preset = Remove preset
-node-view-add-input = + Input
+node-view-drive-dimension = + Drive a dimension
+# Tooltip of an Input Configuration's + (in its heading): a new configuration (a copy of the last).
+node-view-add-row = Add configuration (a copy of the last)
+# A wire from the node view dropped on the 3D view but not on a dimension of the sketch being edited.
+node-view-drop-on-dimension = Drop it on a dimension of the sketch you are editing (double-click a sketch to edit it)
+node-view-no-dimension = No dimension of this sketch can take this value, or they are all driven already
+# The node view's Create menu (top left of the canvas) and what it adds.
+node-view-create = Create
+node-view-create-tooltip = Add a node to the graph
+# An input node's type, shown before its name in its title: a list of named configurations
+# (M3, M4…) setting its outputs; an on/off switch; a single value.
+node-view-input-configuration = Input Configuration
+node-view-input-checkbox = Input Checkbox
+node-view-input-value = Input Value
+# An input node's table heading: an output's name, its type, a single value's value.
+node-view-output-name = name
+node-view-output-type = type
+node-view-output-value = value
+# Tooltip of a configuration's heading in an input node.
+node-view-show-configuration = Show this configuration (double-click to rename)
+# An input node's button: a new output (a row, a value per configuration, wired out on the right).
+node-view-add-output = Output
+node-view-remove-output = Remove output
 node-view-remove-input = Remove input
 node-view-kind-length = Length
 node-view-kind-angle = Angle
 node-view-kind-number = Number
-node-view-kind-boolean = Boolean
+# An output that is on or off (1 or 0); a part property's text.
+node-view-kind-switch = Switch
+node-view-kind-text = Text
 # The instance context menu's submenu of a configured Part Studio's presets.
-asm-menu-preset = Preset
 # The features header's dropdown of the configuration's presets.
 node-view-active-preset = Preset the Part Studio shows
 # Lays the node view's nodes out again (forgetting where they were dragged).
@@ -6891,16 +6907,49 @@ node-view-output = Output
 node-view-output-sketch = Sketch
 node-view-output-plane = Plane
 # Shows the presets × inputs table in the Configuration node (and hides it).
-node-view-show-table = Presets table
-node-view-hide-table = Hide presets table
 # A wire from a Variable dropped on a feature above it.
 node-view-variable-below = A Variable reaches only the features below it
 # Dynamic suppression ▸ Suppress by configuration ▸ a new boolean input that enables the feature.
-shell-doc-suppress-by-new-input = New input for this feature
 # Switch to on an instance of a configured Part Studio's preset, while the studio shows another
 # preset. { $instance } and { $shown } are preset names.
-asm-switch-to-preset = The instance is { $instance }; the Part Studio shows { $shown } (switch it in the feature list's header)
+asm-switch-to-preset = The instance is { $instance }; the Part Studio shows { $shown } (pick it in the Configuration panel)
 # A feature's context menu: selects every feature of its type (every sketch, every fillet…).
 shell-doc-select-same-type = Select all of this type
 # Keyboard shortcuts dialog: H hides (or shows) what is selected.
 view-shortcut-toggle-visibility = Hide or show the selection
+## crates/cadrs_app/src/configuration_ui.rs
+# The Configuration panel of a Part Studio: inputs (List, Checkbox) that build the studio in several variants.
+config-title = Configuration
+config-panel-tooltip = Configuration
+config-add-input = Add input
+config-add-input-tooltip = Add a List or Checkbox input
+config-empty = No configuration inputs. A List makes a table of configurations; a Checkbox turns features on or off. Values typed in are Variables (fx), which a List can set.
+# { $name } is the input's name.
+config-input-tooltip = { $name }: right-click to rename, move or delete
+# A Value input's field: its value in the configuration the Part Studio shows.
+config-value-tooltip = #{ $name } in the configuration shown: features read it as #{ $name }
+# The heading of a configuration table's first column (the configurations' names).
+config-configuration = Configuration
+# Marks the default configuration of a List.
+config-default-tag = default
+# { $name } is the configuration's name.
+config-row-shown-tooltip = { $name } is shown in the Part Studio
+config-row-tooltip = Double-click to show { $name } in the Part Studio
+config-suppressed-tooltip = Suppressed in this configuration
+config-add-row = Add configuration
+config-no-params = Nothing configured yet: a feature's menu › Configure adds its fields here.
+config-list = List
+config-checkbox = Checkbox
+config-move-up = Move up
+config-move-down = Move down
+config-move-left = Move left
+config-move-right = Move right
+config-checked-by-default = Checked by default
+config-show = Show in Part Studio
+config-set-default = Set as default
+config-remove-column = Remove from configuration
+common-duplicate = Duplicate
+config-configure = Configure
+config-instance-configuration = Configuration
+# The Insert dialog's configuration section for the picked item; { $name } is its Part Studio.
+config-insert-title = Configuration of { $name }

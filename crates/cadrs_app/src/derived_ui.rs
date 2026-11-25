@@ -11,6 +11,9 @@
 //!   P3G.1 browser (search, locations, a document at its newest version, the version graph for
 //!   an older one, Create version when it has none). A picked Part Studio becomes the source
 //!   card (name, document and version, the link icon) with **Change**.
+//! - **Configuration**: a configured workspace Part Studio is derived in the configuration
+//!   picked under the source card (a list per List input, a checkbox per Checkbox), at first
+//!   the one the studio shows.
 //! - **Derive** (step 2): *Part Studio* (everything) or each part, sketch, plane and mate
 //!   connector of the source, ticked one by one.
 //! - **Locations** (step 3): mate connectors of this Part Studio, or its origin, picked in the
@@ -85,6 +88,7 @@ impl Plugin for DerivedPlugin {
             .add_observer(on_cancel)
             .add_observer(on_tab)
             .add_observer(on_check)
+            .add_observer(on_config_select)
             .add_observer(on_button)
             .add_observer(on_graph_pick)
             .add_observer(on_list_activate)
@@ -344,6 +348,8 @@ pub fn set_source(world: &mut World, r: SourceRef, board: Option<BoardId>) {
         || !same_board
     {
         base.selection = DerivedSelection::default();
+        // Another source's configuration is its own.
+        base.configuration = None;
         base.placement = DerivedPlacement::BaseOrigin;
         base.board = board.map(|b| Box::new(DerivedBoard::new(b, "", Default::default())));
     }
@@ -623,6 +629,19 @@ fn on_check(
             break;
         }
     }
+    // A configured source's Checkbox input.
+    if let Some(k) = which
+        .strip_prefix("derived-config-")
+        .and_then(|n| n.strip_suffix("-checked"))
+        .and_then(|k| k.parse::<usize>().ok())
+    {
+        commands.queue(move |world: &mut World| {
+            set_config_value(world, k, |_| {
+                Some(cadrs_core::configuration::InputValue::Checked(on))
+            })
+        });
+        return;
+    }
     commands.queue(move |world: &mut World| {
         let Some((_, _, mut d)) = current(world) else {
             return;
@@ -673,6 +692,74 @@ fn on_check(
             _ => return,
         };
         set(world, d, Vec::new(), label);
+    });
+}
+
+/// The configuration a workspace Part Studio source of this document is derived in: its
+/// configuration and the values (`None` when it has none, or for a version or a board).
+pub(crate) fn source_configuration(
+    doc: &cadrs_core::Document,
+    d: &DerivedFeature,
+) -> Option<(
+    cadrs_core::configuration::Configuration,
+    cadrs_core::configuration::ConfigValues,
+)> {
+    let r = d.source?;
+    if d.board.is_some() || r.at != RefAt::Workspace || r.document_or(doc.id) != doc.id {
+        return None;
+    }
+    let el = doc.elements.iter().find(|e| e.id == r.element)?;
+    if el.configuration.is_empty() || !matches!(el.kind, ElementKind::PartStudio { .. }) {
+        return None;
+    }
+    let values = d
+        .configuration
+        .clone()
+        .unwrap_or_else(|| el.configuration.active.clone());
+    Some((el.configuration.clone(), el.configuration.complete(&values)))
+}
+
+/// Sets input `k` of the configuration the source is derived in.
+fn set_config_value(
+    world: &mut World,
+    k: usize,
+    value: impl FnOnce(
+        &cadrs_core::configuration::ConfigInput,
+    ) -> Option<cadrs_core::configuration::InputValue>,
+) {
+    let Some((_, _, mut d)) = current(world) else {
+        return;
+    };
+    let Some((c, mut values)) = source_configuration(&world.resource::<ActiveDocument>().doc, &d)
+    else {
+        return;
+    };
+    let Some(input) = c.inputs.get(k) else { return };
+    let Some(v) = value(input) else { return };
+    values.set(input.id, v);
+    let label = format!("Derive in {}", c.describe(&values));
+    d.configuration = Some(values);
+    set(world, d, Vec::new(), &label);
+}
+
+/// A List input of the source's configuration picked (`derived-config-<k>`).
+fn on_config_select(ev: On<cadrs_ui::SelectChange>, q: Query<&Name>, mut commands: Commands) {
+    let Some(k) = q
+        .get(ev.entity)
+        .ok()
+        .and_then(|n| n.as_str().strip_prefix("derived-config-"))
+        .and_then(|k| k.parse::<usize>().ok())
+    else {
+        return;
+    };
+    let i = ev.index;
+    commands.queue(move |world: &mut World| {
+        set_config_value(world, k, |input| match &input.kind {
+            cadrs_core::configuration::InputKind::List { rows, .. } => rows
+                .get(i)
+                .map(|r| cadrs_core::configuration::InputValue::Row(r.id)),
+            _ => None,
+        })
     });
 }
 
@@ -1023,6 +1110,11 @@ struct View {
     bases: Vec<(ConnectorRef, String)>,
     include_connectors: bool,
     include_properties: bool,
+    /// A configured source's configuration and the values it is derived in.
+    config: Option<(
+        cadrs_core::configuration::Configuration,
+        cadrs_core::configuration::ConfigValues,
+    )>,
     generation: u64,
 }
 
@@ -1177,6 +1269,7 @@ fn view(world: &World) -> Option<(View, bool)> {
         bases: source_connectors(&d),
         include_connectors: d.include_connectors,
         include_properties: d.include_properties,
+        config: source_configuration(doc, &d),
         generation: world.resource::<DocLog>().generation,
     };
     Some((v, valid))
@@ -1231,15 +1324,8 @@ fn sync_dialog(
                                 flex_grow: 1.0,
                                 ..default()
                             });
-                            f.spawn((
-                                Name::new("derived-help"),
-                                cadrs_ui::icon(
-                                    "help-filled",
-                                    14.0,
-                                    Color::srgb_u8(0xa8, 0xa8, 0xa8),
-                                ),
-                                Tooltip::new(tr(HELP)),
-                            ));
+                            f.spawn(crate::help::help_icon("derived-help", "derived"))
+                                .insert(Tooltip::new(tr(HELP)));
                             let _ = &tf;
                         })
                         .build(&theme),
@@ -1506,6 +1592,60 @@ fn spawn_body(
     if let Some(b) = &v.board {
         spawn_board_options(p, t, v, b);
         return;
+    }
+    // Configuration (a configured Part Studio): a list per List input, a checkbox per Checkbox.
+    if let Some((c, values)) = &v.config {
+        use cadrs_core::configuration::{InputKind, Resolved};
+        section(p, t, "derived-configuration-label", "config-configuration");
+        p.spawn(Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(2.0),
+            padding: UiRect::horizontal(Val::Px(6.0)),
+            ..default()
+        })
+        .with_children(|c2| {
+            for (k, (input, r)) in c.inputs.iter().zip(c.resolve(values)).enumerate() {
+                match (&input.kind, r) {
+                    (InputKind::List { rows, .. }, Resolved::Row(i)) => {
+                        c2.spawn(Node {
+                            align_items: AlignItems::Center,
+                            column_gap: Val::Px(8.0),
+                            ..default()
+                        })
+                        .with_children(|row| {
+                            row.spawn((
+                                t.text(
+                                    input.name.clone(),
+                                    t.font_sm,
+                                    FontWeight::NORMAL,
+                                    t.foreground,
+                                ),
+                                Node {
+                                    width: Val::Px(90.0),
+                                    flex_shrink: 0.0,
+                                    ..default()
+                                },
+                            ));
+                            let mut sel = cadrs_ui::Select::new(format!("derived-config-{k}"))
+                                .width(Val::Px(150.0));
+                            for r in rows {
+                                sel = sel.option(r.name.clone(), true);
+                            }
+                            row.spawn(sel.selected(i).build(t));
+                        });
+                    }
+                    (InputKind::Checkbox { .. }, Resolved::Checked(on)) => {
+                        c2.spawn(
+                            cadrs_ui::Checkbox::new(format!("derived-config-{k}-checked"))
+                                .label(input.name.clone())
+                                .checked(on)
+                                .build(t),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        });
     }
     // Derive.
     section(p, t, "derived-derive-label", "view-derived-derive");

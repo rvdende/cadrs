@@ -646,11 +646,7 @@ fn relation_dialog(
                     flex_grow: 1.0,
                     ..default()
                 });
-                f.spawn((
-                    Name::new("relation-help"),
-                    icon("help-filled", 14.0, Color::srgb_u8(0xa8, 0xa8, 0xa8)),
-                    Tooltip::new(tr("common-help")),
-                ));
+                f.spawn(crate::help::help_icon("relation-help", "relation"));
             })
             .build(theme),
     )

@@ -970,11 +970,7 @@ fn extrude_card(
                 })
                 .with_child(crate::feature_list::preview_slider(t, "extrude"));
                 final_button(f, t, "extrude");
-                f.spawn((
-                    Name::new("extrude-help"),
-                    icon("help-filled", 14.0, Color::srgb_u8(0xa8, 0xa8, 0xa8)),
-                    Tooltip::new(tr("common-help")),
-                ));
+                f.spawn(crate::help::help_icon("extrude-help", "extrude"));
             })
     }
 }

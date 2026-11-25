@@ -673,11 +673,7 @@ fn boolean_footer(f: &mut ChildSpawner, t: &Theme) {
     ))
     .entry::<Node>()
     .and_modify(|mut n| n.margin = UiRect::right(Val::Px(4.0)));
-    f.spawn((
-        Name::new("boolean-help"),
-        cadrs_ui::icon("help-filled", 14.0, Color::srgb_u8(0xa8, 0xa8, 0xa8)),
-        Tooltip::new(tr("common-help")),
-    ));
+    f.spawn(crate::help::help_icon("boolean-help", "boolean"));
 }
 
 /// The Boolean dialog's Final button.

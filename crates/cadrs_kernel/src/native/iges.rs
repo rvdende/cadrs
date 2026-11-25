@@ -48,7 +48,7 @@ use super::xbuild::{XBuilder, XFace};
 
 /// A real for IGES: shortest round-trip digits with a decimal point.
 fn real(x: f64) -> String {
-    super::step::real(x)
+    super::step::real(x).to_string()
 }
 
 fn hollerith(s: &str) -> String {

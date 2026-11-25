@@ -809,6 +809,359 @@ fn a_ball_screwed_round_a_tight_helix_is_exact() {
     assert!(off < 1e-5, "a point of the surface is {off} off");
 }
 
+/// A ring (radii 6 and 2) moved in its own plane, in closed form: everything within 2 of the
+/// flat region its core circle sweeps. Past its hole (a slide of 15) that region is the stadium of the circle's
+/// disc, and the solid's volume Steiner's 2rA + πr²P/2 + 4πr³/3 for a flat convex region of
+/// area A and perimeter P; short of it (a slide of 5) the region has the lens the two ends'
+/// discs share for a hole, and every point of the solid's faces is 2 from it. Analytic faces
+/// only, and few.
+#[test]
+fn a_ring_moved_in_its_plane_is_exact() {
+    use std::f64::consts::PI;
+    let (big, small) = (6.0f64, 2.0f64);
+    let slid = |len: f64| {
+        let mut k = NativeKernel::new();
+        let ring = k
+            .primitive(&Primitive::torus(
+                Point3::origin(),
+                Vector3::z(),
+                big,
+                small,
+            ))
+            .unwrap()
+            .first()
+            .unwrap();
+        let swept = k
+            .sweep_solid(ring, &SolidMotion::slide(Vector3::new(len, 0.0, 0.0)))
+            .unwrap()
+            .bodies[0];
+        let body = k.get(swept).unwrap();
+        let faults = body.check();
+        assert!(faults.is_empty(), "{faults:?}");
+        assert!(
+            body.faces.len() <= 16
+                && body
+                    .faces
+                    .iter()
+                    .all(|f| !matches!(f.surf, Surface::Nurbs(_))),
+            "{} faces",
+            body.faces.len()
+        );
+        (k, swept)
+    };
+    let (k, past) = slid(15.0);
+    let (area, perimeter) = (PI * big * big + 2.0 * big * 15.0, 2.0 * PI * big + 30.0);
+    let want =
+        2.0 * small * area + PI * small * small * perimeter / 2.0 + 4.0 * PI * small.powi(3) / 3.0;
+    let volume = k.mass_properties(past).unwrap().volume;
+    assert!((volume - want).abs() < 1e-8 * want, "{volume} {want}");
+    // Turned about an axis parallel to its own (a ring of radii 1 and 0.4, ten from the z
+    // axis, from −140° to 30°): the band is bent round the axis, and the same formula holds
+    // (its inner edge curves the other way, no tighter than the tube is thick).
+    {
+        let (big, small, reach) = (1.0f64, 0.4f64, 10.0f64);
+        let turn = 170f64.to_radians();
+        let mut k = NativeKernel::new();
+        let ring = k
+            .primitive(&Primitive::torus(
+                Point3::new(reach, 0.0, 0.0),
+                Vector3::z(),
+                big,
+                small,
+            ))
+            .unwrap()
+            .first()
+            .unwrap();
+        let axis = Axis::new(Point3::origin(), Vector3::z());
+        let swept = k
+            .sweep_solid(
+                ring,
+                &SolidMotion::swing(axis, -140f64.to_radians(), 30f64.to_radians()),
+            )
+            .unwrap()
+            .bodies[0];
+        let body = k.get(swept).unwrap();
+        let faults = body.check();
+        assert!(faults.is_empty(), "{faults:?}");
+        assert!(
+            body.faces
+                .iter()
+                .all(|f| !matches!(f.surf, Surface::Nurbs(_))),
+            "an analytic solid"
+        );
+        let (area, perimeter) = (
+            2.0 * big * reach * turn + PI * big * big,
+            2.0 * reach * turn + 2.0 * PI * big,
+        );
+        let want = 2.0 * small * area
+            + PI * small * small * perimeter / 2.0
+            + 4.0 * PI * small.powi(3) / 3.0;
+        let volume = k.mass_properties(swept).unwrap().volume;
+        assert!((volume - want).abs() < 1e-8 * want, "{volume} {want}");
+    }
+    // Any wheel goes the same way, plane by plane: a washer (3 ≤ ρ ≤ 6, 2 thick) slid 10, past
+    // its hole, is its filled disc and the slot between, 72π + 10·24; slid 4, short of it,
+    // that less the lens its hole's two discs share through its thickness.
+    for (len, lens) in [(10.0f64, 0.0f64), (4.0, 1.0)] {
+        let mut k = NativeKernel::new();
+        let disc = k
+            .primitive(&Primitive::Cylinder {
+                base: Point3::origin(),
+                axis: Vector3::z_axis(),
+                radius: 6.0,
+                height: 2.0,
+            })
+            .unwrap()
+            .first()
+            .unwrap();
+        let bore = k
+            .primitive(&Primitive::Cylinder {
+                base: Point3::new(0.0, 0.0, -1.0),
+                axis: Vector3::z_axis(),
+                radius: 3.0,
+                height: 4.0,
+            })
+            .unwrap()
+            .first()
+            .unwrap();
+        let washer = k.boolean(BoolOp::Subtract, disc, &[bore]).unwrap().bodies[0];
+        let swept = k
+            .sweep_solid(washer, &SolidMotion::slide(Vector3::new(len, 0.0, 0.0)))
+            .unwrap()
+            .bodies[0];
+        let faults = k.get(swept).unwrap().check();
+        assert!(faults.is_empty(), "{faults:?}");
+        let shared = if lens > 0.0 {
+            2.0 * 9.0 * (len / 6.0).acos() - (len / 2.0) * (36.0 - len * len).sqrt()
+        } else {
+            0.0
+        };
+        let want = 72.0 * PI + len * 24.0 - 2.0 * shared;
+        let volume = k.mass_properties(swept).unwrap().volume;
+        assert!(
+            (volume - want).abs() < 1e-8 * want,
+            "slid {len}: {volume} {want}"
+        );
+    }
+    // Short of its hole: each mesh corner's distance from the region.
+    let len = 5.0;
+    let (k, short) = slid(len);
+    let mesh = k
+        .tessellate(
+            short,
+            Tessellation {
+                deflection: 0.01,
+                angle: 15f64.to_radians(),
+            },
+        )
+        .unwrap();
+    let ends = [(0.0f64, 0.0f64), (len, 0.0)];
+    let corner = (len / 2.0, (big * big - len * len / 4.0).sqrt());
+    let from_region = |x: f64, y: f64| -> f64 {
+        let to = |c: (f64, f64)| (x - c.0).hypot(y - c.1);
+        let from_segment = (x - x.clamp(0.0, len)).hypot(y);
+        if from_segment > big {
+            return from_segment - big;
+        }
+        if to(ends[0]) >= big || to(ends[1]) >= big {
+            return 0.0;
+        }
+        // In the lens: its nearest arc, where the foot is on the lens's side of the other
+        // circle, else a corner.
+        let mut least = (x - corner.0).hypot(y.abs() - corner.1);
+        for (c, other) in [(ends[0], ends[1]), (ends[1], ends[0])] {
+            let d = to(c);
+            if d > 1e-12 {
+                let foot = (c.0 + (x - c.0) * big / d, c.1 + (y - c.1) * big / d);
+                if (foot.0 - other.0).hypot(foot.1 - other.1) <= big {
+                    least = least.min(big - d);
+                }
+            }
+        }
+        least
+    };
+    let mut off: f64 = 0.0;
+    for p in &mesh.positions {
+        let flat = from_region(p[0], p[1]);
+        off = off.max((flat.hypot(p[2]) - small).abs());
+    }
+    assert!(off < 1e-5, "a point of the surface is {off} off");
+}
+
+/// A block turned whole turns about an axis, in closed form: the solid of revolution of its
+/// shadow in (distance, height). Standing along the axis (4 ≤ x ≤ 7, |y| ≤ 2, 0 ≤ z ≤ 5
+/// about z) the shadow is a rectangle, from the nearest face (4) out to the farthest edges
+/// (√53): π (53 − 16) 5, and its faces two cylinders and two flat rings. Leaning (turned 20°
+/// about y first, then 5° about x) its outer side is hyperboloids, its edges' sweeps, and its
+/// inner side cones and hyperboloids: its volume the shadow's, the heights sliced and at each
+/// the box's nearest and farthest points from the axis found by a search of its own.
+#[test]
+fn a_block_turned_whole_turns_is_exact() {
+    use std::f64::consts::PI;
+    let z = Axis::new(Point3::origin(), Vector3::z());
+    let turned = |k: &mut NativeKernel, body: BodyId| {
+        let swept = k
+            .sweep_solid(body, &SolidMotion::Turn { axis: z })
+            .unwrap()
+            .bodies[0];
+        let faults = k.get(swept).unwrap().check();
+        assert!(faults.is_empty(), "{faults:?}");
+        swept
+    };
+    let block = |k: &mut NativeKernel| {
+        k.primitive(&Primitive::block(
+            Point3::new(4.0, -2.0, 0.0),
+            Point3::new(7.0, 2.0, 5.0),
+        ))
+        .unwrap()
+        .first()
+        .unwrap()
+    };
+    let mut k = NativeKernel::new();
+    let upright = block(&mut k);
+    let swept = turned(&mut k, upright);
+    assert_eq!(k.get(swept).unwrap().faces.len(), 4);
+    let want = PI * (53.0 - 16.0) * 5.0;
+    let volume = k.mass_properties(swept).unwrap().volume;
+    assert!((volume - want).abs() < 1e-9 * want, "{volume} {want}");
+    // Leaning.
+    let about = |dir: Vector3<f64>, angle: f64| {
+        Transform::rotation_wrt_point(
+            nalgebra::UnitQuaternion::from_axis_angle(&nalgebra::Unit::new_normalize(dir), angle),
+            Point3::new(5.5, 0.0, 2.5),
+        )
+    };
+    let lean = [
+        about(Vector3::y(), 20f64.to_radians()),
+        about(Vector3::x(), 5f64.to_radians()),
+    ];
+    let mut body = block(&mut k);
+    for t in &lean {
+        body = k.transform(body, t).unwrap().bodies[0];
+    }
+    let corners: Vec<Point3<f64>> = k.get(body).unwrap().verts.iter().map(|v| v.p).collect();
+    assert_eq!(corners.len(), 8);
+    let swept = turned(&mut k, body);
+    assert!(
+        k.get(swept)
+            .unwrap()
+            .faces
+            .iter()
+            .all(|f| !matches!(f.surf, Surface::Nurbs(_))),
+        "its faces are the lines' own sweeps"
+    );
+    // The shadow by slices: at each height the box's section is the hull of where its edges
+    // cross it; the farthest of those points from the axis, and the nearest point of the hull.
+    let edges: Vec<(Point3<f64>, Point3<f64>)> = {
+        let b = k.get(body).unwrap();
+        b.edges
+            .iter()
+            .map(|e| (b.verts[e.v[0]].p, b.verts[e.v[1]].p))
+            .collect()
+    };
+    assert_eq!(edges.len(), 12);
+    let (lo, hi) = corners
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| {
+            (a.min(p.z), b.max(p.z))
+        });
+    let n = 4000;
+    let mut want = 0.0;
+    for s in 0..n {
+        let h = lo + (hi - lo) * (s as f64 + 0.5) / n as f64;
+        let pts: Vec<(f64, f64)> = edges
+            .iter()
+            .filter(|(a, b)| (a.z - h) * (b.z - h) < 0.0)
+            .map(|(a, b)| {
+                let t = (h - a.z) / (b.z - a.z);
+                (a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
+            })
+            .collect();
+        let far = pts.iter().map(|p| p.0.hypot(p.1)).fold(0.0, f64::max);
+        // The nearest point of the hull: of every segment between two of the points (the
+        // hull's sides are among them, and the axis is outside it).
+        let mut near = f64::INFINITY;
+        for (i, a) in pts.iter().enumerate() {
+            for b in &pts[i + 1..] {
+                let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+                let t = (-(a.0 * dx + a.1 * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0);
+                near = near.min((a.0 + dx * t).hypot(a.1 + dy * t));
+            }
+        }
+        want += PI * (far * far - near * near) * (hi - lo) / n as f64;
+    }
+    let volume = k.mass_properties(swept).unwrap().volume;
+    assert!((volume - want).abs() < 1e-5 * want, "{volume} {want}");
+    // About a line through it: a cube of side 2 spun on its long diagonal is a cone at each
+    // end (the three edges at a corner) and a hyperboloid between (the six that miss the
+    // diagonal), of volume 8π/√3.
+    let cube = k
+        .primitive(&Primitive::block(
+            Point3::new(-1.0, -1.0, -1.0),
+            Point3::new(1.0, 1.0, 1.0),
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let diagonal = Axis::new(Point3::new(-1.0, -1.0, -1.0), Vector3::new(1.0, 1.0, 1.0));
+    let spun = k
+        .sweep_solid(cube, &SolidMotion::swing(diagonal, 0.0, 2.0 * PI))
+        .unwrap()
+        .bodies[0];
+    let body = k.get(spun).unwrap();
+    let faults = body.check();
+    assert!(faults.is_empty(), "{faults:?}");
+    assert_eq!(body.faces.len(), 3);
+    let (volume, want) = (
+        k.mass_properties(spun).unwrap().volume,
+        8.0 * PI / 3f64.sqrt(),
+    );
+    assert!((volume - want).abs() < 1e-9 * want, "{volume} {want}");
+}
+
+/// brep-bench's box screwed inside a rod: a box (2.5 ≤ x ≤ 3.5, |y| ≤ 0.5, 2 ≤ z ≤ 3) screwed
+/// two turns about z, rising 4 a turn, cut from the rod of radius 5 and height 20. Its outer
+/// face is tangent to the cylinder its middle line sweeps, so the leading faces swept as one
+/// sheet meet the box where it starts along a line they touch on, and that union left an open
+/// shell: the sweep then fell back to a mesh of 96 000 facets, 8 s, its volume 1e-4 off. It is
+/// exact (a few dozen faces) and has the volume cad-kernel and OCCT agree on to 4e-11.
+#[test]
+fn a_box_screwed_inside_a_rod_is_exact() {
+    use std::f64::consts::TAU;
+    let mut k = NativeKernel::new();
+    let block = k
+        .primitive(&Primitive::block(
+            Point3::new(2.5, -0.5, 2.0),
+            Point3::new(3.5, 0.5, 3.0),
+        ))
+        .unwrap()
+        .first()
+        .unwrap();
+    let axis = Axis::new(Point3::origin(), Vector3::z());
+    let swept = k
+        .sweep_solid(block, &SolidMotion::helical(axis, 4.0, 0.0, 2.0 * TAU))
+        .unwrap()
+        .bodies[0];
+    let body = k.get(swept).unwrap();
+    assert!(body.faces.len() < 100, "{} faces: meshed", body.faces.len());
+    let rod = k
+        .primitive(&Primitive::Cylinder {
+            base: Point3::origin(),
+            axis: Vector3::z_axis(),
+            radius: 5.0,
+            height: 20.0,
+        })
+        .unwrap()
+        .first()
+        .unwrap();
+    let cut = k.boolean(BoolOp::Subtract, rod, &[swept]).unwrap().bodies[0];
+    let faults = k.get(cut).unwrap().check();
+    assert!(faults.is_empty(), "{faults:?}");
+    let volume = k.mass_properties(cut).unwrap().volume;
+    let want = 1522.316218895;
+    assert!((volume - want).abs() < 1e-7 * want, "volume {volume}");
+}
+
 /// A flat end mill (Ø1, pointing at the bar's axis, its tip 1 into a bar of radius 10)
 /// screwed half a turn round the bar, rising 6 a turn along it: a rotary roughing pass, as
 /// CAM's exact simulation cuts it. Its swept pieces are made exactly; cut from the bar they

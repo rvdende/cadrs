@@ -772,7 +772,7 @@ fn sync_panel(
     cache: Res<PartCache>,
     state: Res<SimState>,
     theme: Res<Theme>,
-    q_area: Query<(Entity, &ChildOf), With<ViewportArea>>,
+    q_area: Query<(Entity, &ChildOf), With<crate::side_panel::SideDock>>,
     q_children: Query<&Children>,
     q_panel: Query<(Entity, &PanelKey), With<SimPanel>>,
     mut commands: Commands,

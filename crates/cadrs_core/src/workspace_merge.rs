@@ -114,6 +114,13 @@ pub fn merge(dest: &Document, source: &Document, replace: &[ElementId]) -> Docum
                 out.standard_content.push(s.clone());
             }
         }
+        for c in &source.configured {
+            if !out.configured.iter().any(|x| x.element.id == c.element.id) {
+                out.configured.push(c.clone());
+            }
+        }
+        // (Brought up to date with the merged studios.)
+        crate::configuration::refresh_copies(&mut out);
     }
     out
 }

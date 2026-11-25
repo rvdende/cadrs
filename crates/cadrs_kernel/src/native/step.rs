@@ -3063,24 +3063,21 @@ fn lighter_along_u(n: &NurbsSurface) -> Option<NurbsSurface> {
     let most = along * 3 / 4;
     let mut sites: Vec<f64> = (0..=8).map(|i| u0 + (u1 - u0) * i as f64 / 8.0).collect();
     loop {
-        let fits: Vec<NurbsCurve> = cols
-            .iter()
-            .map(|c| {
-                let pts: Vec<P3> = sites.iter().map(|&t| c.point(t)).collect();
-                NurbsCurve::interpolate(&pts, &sites, 5.min(sites.len() - 1), None, None)
+        // (Each column fitted on its own, and each stretch between sites checked on its own:
+        // side by side where they are many, see `par`.)
+        let fits: Vec<NurbsCurve> = super::par::map(&cols, |c| {
+            let pts: Vec<P3> = sites.iter().map(|&t| c.point(t)).collect();
+            NurbsCurve::interpolate(&pts, &sites, 5.min(sites.len() - 1), None, None)
+        });
+        let stretches: Vec<(f64, f64)> = sites.windows(2).map(|w| (w[0], w[1])).collect();
+        let split: Vec<bool> = super::par::map(&stretches, |&(a, b)| {
+            (1..8).any(|i| {
+                let t = a + (b - a) * i as f64 / 8.0;
+                cols.iter()
+                    .zip(&fits)
+                    .any(|(c, f)| (c.point(t) - f.point(t)).norm() > tol)
             })
-            .collect();
-        let split: Vec<bool> = sites
-            .windows(2)
-            .map(|w| {
-                (1..8).any(|i| {
-                    let t = w[0] + (w[1] - w[0]) * i as f64 / 8.0;
-                    cols.iter()
-                        .zip(&fits)
-                        .any(|(c, f)| (c.point(t) - f.point(t)).norm() > tol)
-                })
-            })
-            .collect();
+        });
         if !split.iter().any(|x| *x) {
             let m = fits[0].cps.len();
             if m > most {
@@ -3129,27 +3126,39 @@ fn turned(n: &NurbsSurface) -> NurbsSurface {
 
 /// A real in the file's notation: always with a decimal point, shortest round-trip digits. A
 /// non-finite value (which no file can hold; the exporters refuse such bodies) is written as 0.
-pub fn real(x: f64) -> String {
-    if !x.is_finite() {
-        return "0.".into();
-    }
-    if x == 0.0 {
-        return "0.".into();
-    }
-    let a = x.abs();
-    if (1e-4..1e15).contains(&a) {
-        let s = format!("{x}");
-        if s.contains('.') { s } else { s + "." }
-    } else {
-        // `{:e}` of a finite number always has its exponent after an `e`.
-        let s = format!("{x:e}");
-        let (m, e) = s.split_once('e').unwrap_or((s.as_str(), "0"));
-        let m = if m.contains('.') {
-            m.to_string()
+/// It writes itself where it is put (`{}`): no string of its own is made.
+pub fn real(x: f64) -> Real {
+    Real(x)
+}
+
+/// [`real`]'s number, written in the file's notation by its `Display`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Real(f64);
+
+impl std::fmt::Display for Real {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let x = self.0;
+        if !x.is_finite() || x == 0.0 {
+            return f.write_str("0.");
+        }
+        let a = x.abs();
+        if (1e-4..1e15).contains(&a) {
+            // (A whole number is written without a point, any other with one.)
+            if x.fract() == 0.0 {
+                write!(f, "{x}.")
+            } else {
+                write!(f, "{x}")
+            }
         } else {
-            format!("{m}.")
-        };
-        format!("{m}E{e}")
+            // `{:e}` of a finite number always has its exponent after an `e`.
+            let s = format!("{x:e}");
+            let (m, e) = s.split_once('e').unwrap_or((s.as_str(), "0"));
+            if m.contains('.') {
+                write!(f, "{m}E{e}")
+            } else {
+                write!(f, "{m}.E{e}")
+            }
+        }
     }
 }
 
@@ -3202,6 +3211,12 @@ pub fn canonical(s: &Surface) -> Surface {
 /// Whether a face's outward normal agrees with the natural normal of `written` (the face's
 /// surface as written), at the middle of its first real coedge (off any pole).
 pub fn same_sense(b: &Body, f: &Face, written: &Surface) -> bool {
+    // The face's own surface written as it is (a B-spline, an extrusion): the face's own
+    // sense, exactly. (Its normal at one point says nothing sure where the surface folds or
+    // pinches there: a tumbling torus's swept sheets, written with half their senses turned.)
+    if written == &f.surf {
+        return f.sense;
+    }
     let Some(c) = f
         .loops
         .iter()
@@ -3229,14 +3244,14 @@ struct Writer {
 }
 
 impl Writer {
-    fn add(&mut self, s: &str) -> u64 {
+    fn add(&mut self, s: impl std::fmt::Display) -> u64 {
         let id = self.next;
         self.next += 1;
         let _ = writeln!(self.out, "#{id}={s};");
         id
     }
     fn point(&mut self, p: &P3) -> u64 {
-        self.add(&format!(
+        self.add(format_args!(
             "CARTESIAN_POINT('',({},{},{}))",
             real(p.x),
             real(p.y),
@@ -3245,7 +3260,7 @@ impl Writer {
     }
     fn dir(&mut self, d: &V3) -> u64 {
         let d = d.normalize();
-        self.add(&format!(
+        self.add(format_args!(
             "DIRECTION('',({},{},{}))",
             real(d.x),
             real(d.y),
@@ -3257,16 +3272,27 @@ impl Writer {
         let z = z.normalize();
         let x = (x - z * x.dot(&z)).normalize();
         let (p, a, r) = (self.point(o), self.dir(&z), self.dir(&x));
-        self.add(&format!("AXIS2_PLACEMENT_3D('',#{p},#{a},#{r})"))
+        self.add(format_args!("AXIS2_PLACEMENT_3D('',#{p},#{a},#{r})"))
     }
     fn refs(ids: &[u64]) -> String {
-        ids.iter()
-            .map(|i| format!("#{i}"))
-            .collect::<Vec<_>>()
-            .join(",")
+        let mut s = String::with_capacity(8 * ids.len());
+        for (i, id) in ids.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            let _ = write!(s, "#{id}");
+        }
+        s
     }
     fn reals(xs: &[f64]) -> String {
-        xs.iter().map(|x| real(*x)).collect::<Vec<_>>().join(",")
+        let mut s = String::with_capacity(12 * xs.len());
+        for (i, x) in xs.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            let _ = write!(s, "{}", real(*x));
+        }
+        s
     }
     fn ints(xs: &[usize]) -> String {
         xs.iter()
@@ -3288,12 +3314,12 @@ impl Writer {
         let (ms, ks) = (Self::ints(&m), Self::reals(&k));
         if n.is_rational() {
             let w: Vec<f64> = n.cps.iter().map(|h| h.w).collect();
-            self.add(&format!(
+            self.add(format_args!(
                 "(BOUNDED_CURVE() B_SPLINE_CURVE({deg},({cp}),.UNSPECIFIED.,.F.,.F.) B_SPLINE_CURVE_WITH_KNOTS(({ms}),({ks}),.UNSPECIFIED.) CURVE() GEOMETRIC_REPRESENTATION_ITEM() RATIONAL_B_SPLINE_CURVE(({})) REPRESENTATION_ITEM(''))",
                 Self::reals(&w)
             ))
         } else {
-            self.add(&format!("B_SPLINE_CURVE_WITH_KNOTS('',{deg},({cp}),.UNSPECIFIED.,.F.,.F.,({ms}),({ks}),.UNSPECIFIED.)"))
+            self.add(format_args!("B_SPLINE_CURVE_WITH_KNOTS('',{deg},({cp}),.UNSPECIFIED.,.F.,.F.,({ms}),({ks}),.UNSPECIFIED.)"))
         }
     }
 
@@ -3329,12 +3355,12 @@ impl Writer {
             Curve::Line { o, d } => {
                 let p = self.point(&(o + d * t0));
                 let dd = self.dir(d);
-                let v = self.add(&format!("VECTOR('',#{dd},{})", real(d.norm())));
-                self.add(&format!("LINE('',#{p},#{v})"))
+                let v = self.add(format_args!("VECTOR('',#{dd},{})", real(d.norm())));
+                self.add(format_args!("LINE('',#{p},#{v})"))
             }
             Curve::Circle { c, x, y, r } => {
                 let a = self.axis2(c, &x.cross(y), x);
-                self.add(&format!("CIRCLE('',#{a},{})", real(*r)))
+                self.add(format_args!("CIRCLE('',#{a},{})", real(*r)))
             }
             Curve::Ellipse { c, x, y, a, b } => {
                 // The first semi-axis is the major one.
@@ -3344,7 +3370,7 @@ impl Writer {
                     (*y, -*x, *b, *a)
                 };
                 let ax = self.axis2(c, &x2.cross(&y2), &x2);
-                self.add(&format!("ELLIPSE('',#{ax},{},{})", real(a2), real(b2)))
+                self.add(format_args!("ELLIPSE('',#{ax},{},{})", real(a2), real(b2)))
             }
             Curve::Nurbs(n) => self.bspline_curve(n),
         }
@@ -3363,15 +3389,15 @@ impl Writer {
         let id = match &c {
             Surface::Plane { f } => {
                 let a = self.axis2(&f.o, &f.z, &f.x);
-                self.add(&format!("PLANE('',#{a})"))
+                self.add(format_args!("PLANE('',#{a})"))
             }
             Surface::Cylinder { f, r } => {
                 let a = self.axis2(&f.o, &f.z, &f.x);
-                self.add(&format!("CYLINDRICAL_SURFACE('',#{a},{})", real(*r)))
+                self.add(format_args!("CYLINDRICAL_SURFACE('',#{a},{})", real(*r)))
             }
             Surface::Cone { f, r, a } => {
                 let ax = self.axis2(&f.o, &f.z, &f.x);
-                self.add(&format!(
+                self.add(format_args!(
                     "CONICAL_SURFACE('',#{ax},{},{})",
                     real(*r),
                     real(*a)
@@ -3379,11 +3405,11 @@ impl Writer {
             }
             Surface::Sphere { f, r } => {
                 let a = self.axis2(&f.o, &f.z, &f.x);
-                self.add(&format!("SPHERICAL_SURFACE('',#{a},{})", real(*r)))
+                self.add(format_args!("SPHERICAL_SURFACE('',#{a},{})", real(*r)))
             }
             Surface::Torus { f, rmaj, rmin } => {
                 let a = self.axis2(&f.o, &f.z, &f.x);
-                self.add(&format!(
+                self.add(format_args!(
                     "TOROIDAL_SURFACE('',#{a},{},{})",
                     real(*rmaj),
                     real(*rmin)
@@ -3392,14 +3418,14 @@ impl Writer {
             Surface::Revolution { f, m } => {
                 let c = self.curve(m, 0.0);
                 let (p, d) = (self.point(&f.o), self.dir(&f.z));
-                let ax = self.add(&format!("AXIS1_PLACEMENT('',#{p},#{d})"));
-                self.add(&format!("SURFACE_OF_REVOLUTION('',#{c},#{ax})"))
+                let ax = self.add(format_args!("AXIS1_PLACEMENT('',#{p},#{d})"));
+                self.add(format_args!("SURFACE_OF_REVOLUTION('',#{c},#{ax})"))
             }
             Surface::Extrusion { c, d } => {
                 let ci = self.curve(c, 0.0);
                 let dd = self.dir(d);
-                let v = self.add(&format!("VECTOR('',#{dd},{})", real(d.norm())));
-                self.add(&format!("SURFACE_OF_LINEAR_EXTRUSION('',#{ci},#{v})"))
+                let v = self.add(format_args!("VECTOR('',#{dd},{})", real(d.norm())));
+                self.add(format_args!("SURFACE_OF_LINEAR_EXTRUSION('',#{ci},#{v})"))
             }
             Surface::Nurbs(n) => self.bspline_surface(n),
         };
@@ -3456,12 +3482,12 @@ impl Writer {
                     )
                 })
                 .collect();
-            self.add(&format!(
+            self.add(format_args!(
                 "(BOUNDED_SURFACE() B_SPLINE_SURFACE({du},{dv},({net}),.UNSPECIFIED.,.F.,.F.,.F.) B_SPLINE_SURFACE_WITH_KNOTS({kn},.UNSPECIFIED.) GEOMETRIC_REPRESENTATION_ITEM() RATIONAL_B_SPLINE_SURFACE(({})) REPRESENTATION_ITEM('') SURFACE())",
                 w.join(",")
             ))
         } else {
-            self.add(&format!("B_SPLINE_SURFACE_WITH_KNOTS('',{du},{dv},({net}),.UNSPECIFIED.,.F.,.F.,.F.,{kn},.UNSPECIFIED.)"))
+            self.add(format_args!("B_SPLINE_SURFACE_WITH_KNOTS('',{du},{dv},({net}),.UNSPECIFIED.,.F.,.F.,.F.,{kn},.UNSPECIFIED.)"))
         }
     }
 
@@ -3483,7 +3509,7 @@ impl Writer {
                 self.point(&b.verts[e.v[0]].p),
                 self.point(&b.verts[e.v[1]].p),
             );
-            items.push(self.add(&format!(
+            items.push(self.add(format_args!(
                 "TRIMMED_CURVE('',#{basis},(#{p0},PARAMETER_VALUE({})),(#{p1},PARAMETER_VALUE({})),.T.,.PARAMETER.)",
                 real(u(e.t[0])),
                 real(u(e.t[1]))
@@ -3495,7 +3521,10 @@ impl Writer {
         if items.is_empty() {
             return Vec::new();
         }
-        vec![self.add(&format!("GEOMETRIC_CURVE_SET('',({}))", Self::refs(&items)))]
+        vec![self.add(format_args!(
+            "GEOMETRIC_CURVE_SET('',({}))",
+            Self::refs(&items)
+        ))]
     }
 
     /// Writes a body's shape items: solids, and free shells as one surface model.
@@ -3519,7 +3548,7 @@ impl Writer {
         for (i, v) in b.verts.iter().enumerate() {
             if used[i] {
                 let p = self.point(&v.p);
-                vid[i] = self.add(&format!("VERTEX_POINT('',#{p})"));
+                vid[i] = self.add(format_args!("VERTEX_POINT('',#{p})"));
             }
         }
         let mut eid = vec![0u64; b.edges.len()];
@@ -3533,7 +3562,7 @@ impl Writer {
                 continue;
             }
             let c = self.edge_curve(&e.curve, e.t);
-            eid[i] = self.add(&format!(
+            eid[i] = self.add(format_args!(
                 "EDGE_CURVE('',#{},#{},#{c},.T.)",
                 vid[e.v[0]], vid[e.v[1]]
             ));
@@ -3567,24 +3596,24 @@ impl Writer {
             } else {
                 "OPEN_SHELL"
             };
-            shell_ids[si] = self.add(&format!("{kind}('',({}))", Self::refs(&faces)));
+            shell_ids[si] = self.add(format_args!("{kind}('',({}))", Self::refs(&faces)));
         }
         let mut solids = Vec::new();
         for s in &b.solids {
             let outer = shell_ids[s.shells[0]];
             if s.shells.len() == 1 {
-                solids.push(self.add(&format!("MANIFOLD_SOLID_BREP('',#{outer})")));
+                solids.push(self.add(format_args!("MANIFOLD_SOLID_BREP('',#{outer})")));
             } else {
                 let vs: Vec<u64> = s.shells[1..]
                     .iter()
                     .map(|&v| {
-                        self.add(&format!(
+                        self.add(format_args!(
                             "ORIENTED_CLOSED_SHELL('',*,#{},.F.)",
                             shell_ids[v]
                         ))
                     })
                     .collect();
-                solids.push(self.add(&format!(
+                solids.push(self.add(format_args!(
                     "BREP_WITH_VOIDS('',#{outer},({}))",
                     Self::refs(&vs)
                 )));
@@ -3596,7 +3625,7 @@ impl Writer {
             .collect();
         let mut sheets = Vec::new();
         if !free.is_empty() {
-            sheets.push(self.add(&format!(
+            sheets.push(self.add(format_args!(
                 "SHELL_BASED_SURFACE_MODEL('',({}))",
                 Self::refs(&free)
             )));
@@ -3613,7 +3642,7 @@ impl Writer {
                 .iter()
                 .filter(|c| !b.edges[c.edge].degenerate)
                 .map(|c| {
-                    self.add(&format!(
+                    self.add(format_args!(
                         "ORIENTED_EDGE('',*,*,#{},{})",
                         eid[c.edge],
                         if c.fwd { ".T." } else { ".F." }
@@ -3623,13 +3652,13 @@ impl Writer {
             if oes.is_empty() {
                 continue;
             }
-            let lp = self.add(&format!("EDGE_LOOP('',({}))", Self::refs(&oes)));
+            let lp = self.add(format_args!("EDGE_LOOP('',({}))", Self::refs(&oes)));
             let kind = if li == 0 {
                 "FACE_OUTER_BOUND"
             } else {
                 "FACE_BOUND"
             };
-            bounds.push(self.add(&format!(
+            bounds.push(self.add(format_args!(
                 "{kind}('',#{lp},{})",
                 if rev { ".F." } else { ".T." }
             )));
@@ -3637,7 +3666,7 @@ impl Writer {
         if bounds.is_empty() && !matches!(f.surf, Surface::Sphere { .. } | Surface::Torus { .. }) {
             return None;
         }
-        Some(self.add(&format!(
+        Some(self.add(format_args!(
             "ADVANCED_FACE('',({}),#{sid},{})",
             Self::refs(&bounds),
             if same ^ rev { ".T." } else { ".F." }
@@ -3713,11 +3742,11 @@ pub fn write_colored(
     );
     s.push_str("FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));\nENDSEC;\nDATA;\n");
     let app = w.add("APPLICATION_CONTEXT('core data for automotive mechanical design processes')");
-    w.add(&format!(
+    w.add(format_args!(
         "APPLICATION_PROTOCOL_DEFINITION('international standard','automotive_design',2000,#{app})"
     ));
-    let pctx = w.add(&format!("PRODUCT_CONTEXT('',#{app},'mechanical')"));
-    let pdctx = w.add(&format!(
+    let pctx = w.add(format_args!("PRODUCT_CONTEXT('',#{app},'mechanical')"));
+    let pdctx = w.add(format_args!(
         "PRODUCT_DEFINITION_CONTEXT('part definition',#{app},'design')"
     ));
     let mm = w.add("(LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.))");
@@ -3733,25 +3762,29 @@ pub fn write_colored(
                 .chain(b.edges.iter().map(|e| e.tol))
         })
         .fold(super::topo::TOL_MIN, f64::max);
-    let unc = w.add(&format!("UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE({}),#{mm},'distance_accuracy_value','confusion accuracy')", real(tol)));
-    let ctx = w.add(&format!(
+    let unc = w.add(format_args!("UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE({}),#{mm},'distance_accuracy_value','confusion accuracy')", real(tol)));
+    let ctx = w.add(format_args!(
         "(GEOMETRIC_REPRESENTATION_CONTEXT(3) GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#{unc})) GLOBAL_UNIT_ASSIGNED_CONTEXT((#{mm},#{rad},#{sr})) REPRESENTATION_CONTEXT('Context #1','3D Context with UNIT and UNCERTAINTY'))"
     ));
     let origin = |w: &mut Writer| w.axis2(&P3::origin(), &V3::z(), &V3::x());
     // Product records: (product definition, representation, origin placement).
     let product = |w: &mut Writer, pname: &str, items: &[u64], kind: &str, ax: u64| -> (u64, u64) {
         let n = encode_string(pname);
-        let p = w.add(&format!("PRODUCT({n},{n},'',(#{pctx}))"));
-        w.add(&format!(
+        let p = w.add(format_args!("PRODUCT({n},{n},'',(#{pctx}))"));
+        w.add(format_args!(
             "PRODUCT_RELATED_PRODUCT_CATEGORY('part',$,(#{p}))"
         ));
-        let pf = w.add(&format!("PRODUCT_DEFINITION_FORMATION('','',#{p})"));
-        let pd = w.add(&format!("PRODUCT_DEFINITION('design','',#{pf},#{pdctx})"));
-        let pds = w.add(&format!("PRODUCT_DEFINITION_SHAPE('','',#{pd})"));
+        let pf = w.add(format_args!("PRODUCT_DEFINITION_FORMATION('','',#{p})"));
+        let pd = w.add(format_args!(
+            "PRODUCT_DEFINITION('design','',#{pf},#{pdctx})"
+        ));
+        let pds = w.add(format_args!("PRODUCT_DEFINITION_SHAPE('','',#{pd})"));
         let mut all = vec![ax];
         all.extend_from_slice(items);
-        let rep = w.add(&format!("{kind}({n},({}),#{ctx})", Writer::refs(&all)));
-        w.add(&format!("SHAPE_DEFINITION_REPRESENTATION(#{pds},#{rep})"));
+        let rep = w.add(format_args!("{kind}({n},({}),#{ctx})", Writer::refs(&all)));
+        w.add(format_args!(
+            "SHAPE_DEFINITION_REPRESENTATION(#{pds},#{rep})"
+        ));
         (pd, rep)
     };
     // Mirrored instances get a mirrored copy of their part.
@@ -3822,11 +3855,11 @@ pub fn write_colored(
                 for (kind, items) in rest {
                     let ax2 = origin(&mut w);
                     let n = encode_string(pname);
-                    let srep = w.add(&format!(
+                    let srep = w.add(format_args!(
                         "{kind}({n},(#{ax2},{}),#{ctx})",
                         Writer::refs(items)
                     ));
-                    w.add(&format!(
+                    w.add(format_args!(
                         "SHAPE_REPRESENTATION_RELATIONSHIP('','',#{rep},#{srep})"
                     ));
                 }
@@ -3848,31 +3881,35 @@ pub fn write_colored(
         items.extend(&places);
         // The assembly: its representation holds the instances' placements.
         let n = encode_string(name);
-        let p = w.add(&format!("PRODUCT({n},{n},'',(#{pctx}))"));
-        w.add(&format!(
+        let p = w.add(format_args!("PRODUCT({n},{n},'',(#{pctx}))"));
+        w.add(format_args!(
             "PRODUCT_RELATED_PRODUCT_CATEGORY('part',$,(#{p}))"
         ));
-        let pf = w.add(&format!("PRODUCT_DEFINITION_FORMATION('','',#{p})"));
-        let apd = w.add(&format!("PRODUCT_DEFINITION('design','',#{pf},#{pdctx})"));
-        let pds = w.add(&format!("PRODUCT_DEFINITION_SHAPE('','',#{apd})"));
-        let arep = w.add(&format!(
+        let pf = w.add(format_args!("PRODUCT_DEFINITION_FORMATION('','',#{p})"));
+        let apd = w.add(format_args!(
+            "PRODUCT_DEFINITION('design','',#{pf},#{pdctx})"
+        ));
+        let pds = w.add(format_args!("PRODUCT_DEFINITION_SHAPE('','',#{apd})"));
+        let arep = w.add(format_args!(
             "SHAPE_REPRESENTATION({n},({}),#{ctx})",
             Writer::refs(&items)
         ));
-        w.add(&format!("SHAPE_DEFINITION_REPRESENTATION(#{pds},#{arep})"));
+        w.add(format_args!(
+            "SHAPE_DEFINITION_REPRESENTATION(#{pds},#{arep})"
+        ));
         for (k, (part, _, iname)) in insts.iter().enumerate() {
             let (ppd, prep, pax) = written[*part];
             let nm = encode_string(iname);
-            let nauo = w.add(&format!(
+            let nauo = w.add(format_args!(
                 "NEXT_ASSEMBLY_USAGE_OCCURRENCE({nm},{nm},'',#{apd},#{ppd},$)"
             ));
-            let npds = w.add(&format!("PRODUCT_DEFINITION_SHAPE({nm},'',#{nauo})"));
-            let idt = w.add(&format!(
+            let npds = w.add(format_args!("PRODUCT_DEFINITION_SHAPE({nm},'',#{nauo})"));
+            let idt = w.add(format_args!(
                 "ITEM_DEFINED_TRANSFORMATION('','',#{pax},#{})",
                 places[k]
             ));
-            let rr = w.add(&format!("(REPRESENTATION_RELATIONSHIP('','',#{prep},#{arep}) REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION(#{idt}) SHAPE_REPRESENTATION_RELATIONSHIP())"));
-            w.add(&format!(
+            let rr = w.add(format_args!("(REPRESENTATION_RELATIONSHIP('','',#{prep},#{arep}) REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION(#{idt}) SHAPE_REPRESENTATION_RELATIONSHIP())"));
+            w.add(format_args!(
                 "CONTEXT_DEPENDENT_SHAPE_REPRESENTATION(#{rr},#{npds})"
             ));
         }
@@ -3884,32 +3921,32 @@ pub fn write_colored(
         for (face, c) in styled {
             let psa = *styles.entry(c).or_insert_with(|| {
                 let [r, g, b, a] = c.map(|x| f64::from(x) / 255.0);
-                let rgb = w.add(&format!(
+                let rgb = w.add(format_args!(
                     "COLOUR_RGB('',{},{},{})",
                     real(r),
                     real(g),
                     real(b)
                 ));
-                let fasc = w.add(&format!("FILL_AREA_STYLE_COLOUR('',#{rgb})"));
-                let fas = w.add(&format!("FILL_AREA_STYLE('',(#{fasc}))"));
-                let ssfa = w.add(&format!("SURFACE_STYLE_FILL_AREA(#{fas})"));
+                let fasc = w.add(format_args!("FILL_AREA_STYLE_COLOUR('',#{rgb})"));
+                let fas = w.add(format_args!("FILL_AREA_STYLE('',(#{fasc}))"));
+                let ssfa = w.add(format_args!("SURFACE_STYLE_FILL_AREA(#{fas})"));
                 let mut elems = vec![ssfa];
                 if c[3] < 255 {
-                    let t = w.add(&format!("SURFACE_STYLE_TRANSPARENT({})", real(1.0 - a)));
-                    elems.push(w.add(&format!(
+                    let t = w.add(format_args!("SURFACE_STYLE_TRANSPARENT({})", real(1.0 - a)));
+                    elems.push(w.add(format_args!(
                         "SURFACE_STYLE_RENDERING_WITH_PROPERTIES(.NORMAL_SHADING.,#{rgb},(#{t}))"
                     )));
                 }
-                let sss = w.add(&format!(
+                let sss = w.add(format_args!(
                     "SURFACE_SIDE_STYLE('',({}))",
                     Writer::refs(&elems)
                 ));
-                let ssu = w.add(&format!("SURFACE_STYLE_USAGE(.BOTH.,#{sss})"));
-                w.add(&format!("PRESENTATION_STYLE_ASSIGNMENT((#{ssu}))"))
+                let ssu = w.add(format_args!("SURFACE_STYLE_USAGE(.BOTH.,#{sss})"));
+                w.add(format_args!("PRESENTATION_STYLE_ASSIGNMENT((#{ssu}))"))
             });
-            items.push(w.add(&format!("STYLED_ITEM('color',(#{psa}),#{face})")));
+            items.push(w.add(format_args!("STYLED_ITEM('color',(#{psa}),#{face})")));
         }
-        w.add(&format!(
+        w.add(format_args!(
             "MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION('',({}),#{ctx})",
             Writer::refs(&items)
         ));
@@ -4125,7 +4162,7 @@ END-ISO-10303-21;
             "a\\b \u{1F600}"
         );
         for x in [1.0, 0.1, -2.5e-9, 1e20, 123456.789, 1e-4] {
-            assert_eq!(parse_real(&real(x)), Some(x), "{}", real(x));
+            assert_eq!(parse_real(&real(x).to_string()), Some(x), "{}", real(x));
         }
     }
 

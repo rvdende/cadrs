@@ -800,6 +800,102 @@ fn planar_face(path: &[Seg], c: P3, n: V3) -> Result<Body> {
     Ok(b)
 }
 
+/// A boundary curve as one Bézier curve along its way round (its poles, start to end), where
+/// it is one: a straight line, or a single polynomial span of a B-spline.
+fn bezier_poles(s: &Seg) -> Option<Vec<P3>> {
+    let mut poles = match &s.c {
+        Curve::Line { .. } => vec![s.c.point(s.t0), s.c.point(s.t1)],
+        Curve::Nurbs(n) if !n.is_rational() => {
+            let (lo, hi) = (s.t0.min(s.t1), s.t0.max(s.t1));
+            let span = n.restricted(lo, hi);
+            if span.cps.len() != span.degree + 1 {
+                return None;
+            }
+            let mut poles: Vec<P3> = span.cps.iter().map(super::nurbs::dehom).collect();
+            if s.t0 > s.t1 {
+                poles.reverse();
+            }
+            poles
+        }
+        _ => return None,
+    };
+    if s.rev {
+        poles.reverse();
+    }
+    Some(poles)
+}
+
+/// A Bézier curve's poles at degree `n` (not below its own): the same curve.
+fn bezier_raised(mut poles: Vec<P3>, n: usize) -> Vec<P3> {
+    while poles.len() <= n {
+        let d = poles.len() - 1;
+        let mut up = Vec::with_capacity(d + 2);
+        up.push(poles[0]);
+        for i in 1..=d {
+            let a = i as f64 / (d + 1) as f64;
+            up.push(P3::from(
+                poles[i - 1].coords * a + poles[i].coords * (1.0 - a),
+            ));
+        }
+        up.push(poles[d]);
+        poles = up;
+    }
+    poles
+}
+
+/// The bilinearly blended Coons patch of four polynomial curves (straight lines, single Bézier
+/// spans) in closed form: the two ruled surfaces between opposite sides, less the bilinear
+/// patch of the corners, are Bézier patches of the sides' degrees, and so is their sum, pole by
+/// pole. Four lines give the bilinear patch of four poles; the patch fitted through sampled
+/// points in general has hundreds. None for other curves (arcs, splines of several spans) or
+/// sides that don't meet at the corners.
+fn coons_of_polynomials(path: &[Seg]) -> Option<NurbsSurface> {
+    let [s0, s1, s2, s3] = path else { return None };
+    // c0(u) at v = 0, c1(v) at u = 1, c2(u) at v = 1 and c3(v) at u = 0 (the last two run
+    // backwards round the boundary).
+    let (c0, c1) = (bezier_poles(s0)?, bezier_poles(s1)?);
+    let (mut c2, mut c3) = (bezier_poles(s2)?, bezier_poles(s3)?);
+    c2.reverse();
+    c3.reverse();
+    let (p, q) = (c0.len().max(c2.len()) - 1, c1.len().max(c3.len()) - 1);
+    if p > 9 || q > 9 {
+        return None;
+    }
+    let (c0, c2) = (bezier_raised(c0, p), bezier_raised(c2, p));
+    let (c1, c3) = (bezier_raised(c1, q), bezier_raised(c3, q));
+    let (p00, p10, p01, p11) = (c0[0], c0[p], c2[0], c2[p]);
+    let size = (p11 - p00).norm().max((p10 - p01).norm());
+    let meet = |a: &P3, b: &P3| (a - b).norm() <= tol::REL_POINT * (1.0 + size);
+    if !(meet(&c3[0], &p00) && meet(&c3[q], &p01) && meet(&c1[0], &p10) && meet(&c1[q], &p11)) {
+        return None;
+    }
+    let cps = (0..=p)
+        .map(|i| {
+            let u = i as f64 / p as f64;
+            (0..=q)
+                .map(|j| {
+                    let v = j as f64 / q as f64;
+                    let across = c0[i].coords * (1.0 - v) + c2[i].coords * v;
+                    let along = c3[j].coords * (1.0 - u) + c1[j].coords * u;
+                    let corners = p00.coords * ((1.0 - u) * (1.0 - v))
+                        + p10.coords * (u * (1.0 - v))
+                        + p01.coords * ((1.0 - u) * v)
+                        + p11.coords * (u * v);
+                    super::nurbs::hom(&P3::from(across + along - corners), 1.0)
+                })
+                .collect()
+        })
+        .collect();
+    let clamped = |d: usize| [vec![0.0; d + 1], vec![1.0; d + 1]].concat();
+    Some(NurbsSurface {
+        du: p,
+        dv: q,
+        ku: clamped(p),
+        kv: clamped(q),
+        cps,
+    })
+}
+
 /// A Coons patch through four (or three) boundary curves.
 fn coons(path: &[Seg]) -> Result<Body> {
     let m = path.len();
@@ -831,43 +927,48 @@ fn coons(path: &[Seg]) -> Result<Body> {
             + p01.coords * ((1.0 - u) * v);
         P3::from(a + b - c)
     };
-    let n = 24;
-    let params: Vec<f64> = (0..=n).map(|i| i as f64 / n as f64).collect();
-    let rows: Vec<NurbsCurve> = params
-        .iter()
-        .map(|&v| {
-            NurbsCurve::interpolate(
-                &params.iter().map(|&u| s(u, v)).collect::<Vec<_>>(),
-                &params,
-                3,
-                None,
-                None,
-            )
-        })
-        .collect();
-    // Columns through the rows' poles (all rows share their knots).
-    let ncp = rows[0].cps.len();
-    let mut cols: Vec<Vec<super::nurbs::H>> = Vec::new();
-    let mut kv = Vec::new();
-    for i in 0..ncp {
-        let col: Vec<P3> = rows
-            .iter()
-            .map(|r| super::nurbs::dehom(&r.cps[i]))
-            .collect();
-        let c = NurbsCurve::interpolate(&col, &params, 3, None, None);
-        kv = c.knots.clone();
-        cols.push(c.cps);
-    }
-    let surf = NurbsSurface {
-        du: 3,
-        dv: 3,
-        ku: rows[0].knots.clone(),
-        kv,
-        cps: cols,
+    let surf = match coons_of_polynomials(path) {
+        Some(exact) => exact,
+        None => {
+            let n = 24;
+            let params: Vec<f64> = (0..=n).map(|i| i as f64 / n as f64).collect();
+            let rows: Vec<NurbsCurve> = params
+                .iter()
+                .map(|&v| {
+                    NurbsCurve::interpolate(
+                        &params.iter().map(|&u| s(u, v)).collect::<Vec<_>>(),
+                        &params,
+                        3,
+                        None,
+                        None,
+                    )
+                })
+                .collect();
+            // Columns through the rows' poles (all rows share their knots).
+            let ncp = rows[0].cps.len();
+            let mut cols: Vec<Vec<super::nurbs::H>> = Vec::new();
+            let mut kv = Vec::new();
+            for i in 0..ncp {
+                let col: Vec<P3> = rows
+                    .iter()
+                    .map(|r| super::nurbs::dehom(&r.cps[i]))
+                    .collect();
+                let c = NurbsCurve::interpolate(&col, &params, 3, None, None);
+                kv = c.knots.clone();
+                cols.push(c.cps);
+            }
+            NurbsSurface {
+                du: 3,
+                dv: 3,
+                ku: rows[0].knots.clone(),
+                kv,
+                cps: cols,
+            }
+        }
     };
     // Edges: the surface's boundary iso-curves (exact on the patch).
     let iso_u = |at_v1: bool| NurbsCurve {
-        degree: 3,
+        degree: surf.du,
         knots: surf.ku.clone(),
         cps: surf
             .cps
@@ -876,7 +977,7 @@ fn coons(path: &[Seg]) -> Result<Body> {
             .collect(),
     };
     let iso_v = |at_u1: bool| NurbsCurve {
-        degree: 3,
+        degree: surf.dv,
         knots: surf.kv.clone(),
         cps: if at_u1 {
             surf.cps[surf.cps.len() - 1].clone()
@@ -1137,15 +1238,27 @@ pub fn sew_faces(mut b: Body, tol: f64) -> Result<Body> {
         taken[j] = true;
         emap[j] = (i, fwd);
     }
-    for fi in 0..b.faces.len() {
-        let surf = b.faces[fi].surf.clone();
-        for li in 0..b.faces[fi].loops.len() {
-            for ci in 0..b.faces[fi].loops[li].len() {
+    // Each coedge of an edge that gave way takes the edge that stands, with a p-curve of it:
+    // every one on its own, side by side (a swept solid's dozens of faces sewn, a p-curve
+    // fitted for each of their seams).
+    let mut remapped: Vec<(usize, usize, usize)> = Vec::new();
+    for (fi, f) in b.faces.iter().enumerate() {
+        for (li, l) in f.loops.iter().enumerate() {
+            for (ci, c) in l.iter().enumerate() {
+                if emap[c.edge].0 != c.edge {
+                    remapped.push((fi, li, ci));
+                }
+            }
+        }
+    }
+    let coedges: Vec<Coedge> = {
+        let b = &b;
+        let emap = &emap;
+        super::par::map(&remapped, |&(fi, li, ci)| {
+            let surf = &b.faces[fi].surf;
+            {
                 let c = b.faces[fi].loops[li][ci].clone();
                 let (x, same) = emap[c.edge];
-                if x == c.edge {
-                    continue;
-                }
                 let ed = b.edges[x].clone();
                 let fwd = if same { c.fwd } else { !c.fwd };
                 let old = b.edges[c.edge].clone();
@@ -1166,7 +1279,7 @@ pub fn sew_faces(mut b: Body, tol: f64) -> Result<Body> {
                 let mut pc = if alike {
                     c.pc.clone()
                 } else {
-                    super::pcurve::pcurve(&surf, &ed.curve, ed.t[0], ed.t[1], None)
+                    super::pcurve::pcurve(surf, &ed.curve, ed.t[0], ed.t[1], None)
                 };
                 // Where the edge's projection onto the face ends far, in the face's own (u, v),
                 // from where the face's own p-curve did (a face that comes to a point there, a
@@ -1248,9 +1361,12 @@ pub fn sew_faces(mut b: Body, tol: f64) -> Result<Body> {
                 if du != 0.0 || dv != 0.0 {
                     pc = pc.transformed(&Affine::translation(V3::new(du, dv, 0.0)));
                 }
-                b.faces[fi].loops[li][ci] = Coedge { edge: x, fwd, pc };
+                Coedge { edge: x, fwd, pc }
             }
-        }
+        })
+    };
+    for ((fi, li, ci), c) in remapped.into_iter().zip(coedges) {
+        b.faces[fi].loops[li][ci] = c;
     }
     super::unify::compact(&mut b);
     // Orient the faces consistently: across every shared edge the two uses run opposite ways.

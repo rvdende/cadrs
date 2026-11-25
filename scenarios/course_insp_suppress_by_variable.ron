@@ -1,8 +1,8 @@
 // IR5.5: the feature menu's Dynamic suppression ▸ Suppress by variable…, on a 60 × 40 × 10 plate
 // with a Ø16 hole (Extrude 2, Remove) and a Number Variable #withHole = 1 (`with-hole`).
 // 01 the plate with its hole; #withHole = 1 in the feature list.
-// 02 right-click Extrude 2 ▸ Dynamic suppression: Suppress by variable… enabled (Suppress by
-//    configuration stays disabled: configurations are out of scope).
+// 02 right-click Extrude 2 ▸ Dynamic suppression: Suppress by variable… and Suppress by
+//    configuration… (`configurations`).
 // 03 Suppress by variable…: the dialog lists the variables above Extrude 2 (#withHole (1)), with
 //    "Suppress when true (not 0)" unchecked; the hint says Extrude 2 is suppressed while it is 0.
 // 03b the box ticked: the hint reads the inverted rule ("… while the variable is not 0 (true).");

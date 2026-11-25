@@ -1,0 +1,53 @@
+// Configured part properties (`crate::configuration_ui`'s part menu ▸ Configure), on the plate
+// of `with-hole`.
+// 01 Extrude 1's menu ▸ Configure ▸ Depth, then Add configuration: a List with Default and
+//    Configuration 2.
+// 02 the part's menu ▸ Configure ▸ Name, Part number, … (not Mass, Unit of measure, Material,
+//    Appearance).
+// 03 Part number picked: a column "Part 1 · Part number"; PL-10 and PL-20 typed in its cells.
+// 04 a double-click on Configuration 2, then the part's Properties: Part number PL-20.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Custom("with-hole"),
+        Key("Shift+7"),
+        Key("F"),
+        RightClick(ui("feature-extrude-1")),
+        WaitFor("feature-context-menu"),
+        Hover(ui("feature-configure")),
+        Wait(10),
+        Click(ui("feature-configure-0")),
+        WaitFor("configuration-panel"),
+        Click(ui("configuration-input-1-add-row")),
+        WaitFor("configuration-name"),
+        Key("Enter"),
+        MoveTo(700, 900),
+        Wait(3),
+        Screenshot("01-two-rows"),
+        RightClick(ui("part-row-part-1")),
+        WaitFor("part-context-menu"),
+        Hover(ui("part-configure")),
+        Wait(10),
+        Screenshot("02-part-configure-menu"),
+        Click(ui("part-configure-1")),
+        Click(ui("configuration-input-1-row-1-cell-2")),
+        Key("Ctrl+A"),
+        Type("PL-10"),
+        Key("Enter"),
+        Click(ui("configuration-input-1-row-2-cell-2")),
+        Key("Ctrl+A"),
+        Type("PL-20"),
+        Key("Enter"),
+        MoveTo(700, 900),
+        Wait(3),
+        Screenshot("03-part-number-column"),
+        DoubleClick(ui("configuration-input-1-row-2")),
+        RightClick(ui("part-row-part-1")),
+        WaitFor("part-context-menu"),
+        Click(ui("part-properties")),
+        WaitFor("properties-dialog"),
+        Wait(3),
+        Screenshot("04-properties-pl-20"),
+    ],
+)

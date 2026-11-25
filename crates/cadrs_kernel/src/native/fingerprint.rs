@@ -12,7 +12,46 @@ use std::hash::Hasher;
 
 use super::curve::Curve;
 use super::math::Frame;
+use super::nurbs::{NurbsCurve, NurbsSurface};
 use super::surface::Surface;
+
+/// The fewest control points of a B-spline whose key is kept with it ([`kept`]): a shorter
+/// one is hashed as fast as its key is looked up.
+const LONG: usize = 8;
+
+/// How many B-splines' keys a thread keeps before starting over.
+const KEPT_KEYS: usize = 1 << 16;
+
+/// B-splines' keys by their addresses, each with the B-spline itself, weakly: an address held
+/// so is that B-spline's and no other's for as long as the entry stands (the allocation isn't
+/// given back while a weak pointer is on it, nor its contents changed in place).
+type Kept<T> = rustc_hash::FxHashMap<usize, (std::sync::Weak<T>, u128)>;
+
+thread_local! {
+    static CURVE_KEYS: std::cell::RefCell<Kept<NurbsCurve>> = std::cell::RefCell::default();
+    static SURFACE_KEYS: std::cell::RefCell<Kept<NurbsSurface>> = std::cell::RefCell::default();
+}
+
+/// The key of the B-spline `of`: this thread's kept one, or `make`'s, kept.
+fn kept<T>(
+    table: &'static std::thread::LocalKey<std::cell::RefCell<Kept<T>>>,
+    of: &std::sync::Arc<T>,
+    make: impl FnOnce() -> u128,
+) -> u128 {
+    let at = std::sync::Arc::as_ptr(of) as usize;
+    if let Some(key) = table.with(|m| m.borrow().get(&at).map(|(_, key)| *key)) {
+        return key;
+    }
+    let key = make();
+    table.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.len() >= KEPT_KEYS {
+            m.clear();
+        }
+        m.insert(at, (std::sync::Arc::downgrade(of), key));
+    });
+    key
+}
 
 /// A 128-bit key: everything written goes to both streams.
 pub struct Key128 {
@@ -98,14 +137,46 @@ impl Key128 {
                 }
                 self.f64s(&[*a, *b]);
             }
+            // (A long B-spline by its own key, made once for as long as the curve lives: a
+            // boolean keys every face of both its bodies by their curves, most of them the
+            // curves the booleans before it keyed.)
+            Curve::Nurbs(n) if n.cps.len() >= LONG => {
+                self.write_u8(8);
+                let key = kept(&CURVE_KEYS, n, || {
+                    let mut h = Key128::new();
+                    h.nurbs_curve(n);
+                    h.key()
+                });
+                self.write_u128(key);
+            }
             Curve::Nurbs(n) => {
                 self.write_u8(3);
-                self.write_usize(n.degree);
-                self.write_usize(n.knots.len());
-                self.f64s(&n.knots);
-                for p in &n.cps {
-                    self.f64s(p.as_slice());
-                }
+                self.nurbs_curve(n);
+            }
+        }
+    }
+
+    fn nurbs_curve(&mut self, n: &NurbsCurve) {
+        self.write_usize(n.degree);
+        self.write_usize(n.knots.len());
+        self.f64s(&n.knots);
+        for p in &n.cps {
+            self.f64s(p.as_slice());
+        }
+    }
+
+    fn nurbs_surface(&mut self, n: &NurbsSurface) {
+        self.write_usize(n.du);
+        self.write_usize(n.dv);
+        self.write_usize(n.ku.len());
+        self.f64s(&n.ku);
+        self.write_usize(n.kv.len());
+        self.f64s(&n.kv);
+        self.write_usize(n.cps.len());
+        for row in &n.cps {
+            self.write_usize(row.len());
+            for p in row {
+                self.f64s(p.as_slice());
             }
         }
     }
@@ -147,21 +218,18 @@ impl Key128 {
                 self.curve(c);
                 self.f64s(d.as_slice());
             }
+            Surface::Nurbs(n) if n.cps.len() * n.cps.first().map_or(0, Vec::len) >= LONG => {
+                self.write_u8(9);
+                let key = kept(&SURFACE_KEYS, n, || {
+                    let mut h = Key128::new();
+                    h.nurbs_surface(n);
+                    h.key()
+                });
+                self.write_u128(key);
+            }
             Surface::Nurbs(n) => {
                 self.write_u8(7);
-                self.write_usize(n.du);
-                self.write_usize(n.dv);
-                self.write_usize(n.ku.len());
-                self.f64s(&n.ku);
-                self.write_usize(n.kv.len());
-                self.f64s(&n.kv);
-                self.write_usize(n.cps.len());
-                for row in &n.cps {
-                    self.write_usize(row.len());
-                    for p in row {
-                        self.f64s(p.as_slice());
-                    }
-                }
+                self.nurbs_surface(n);
             }
         }
     }

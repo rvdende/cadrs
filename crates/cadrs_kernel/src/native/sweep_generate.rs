@@ -304,6 +304,8 @@ struct Tool<'a> {
     /// Each vertex's runs that end at it, with the run's σ there.
     ends: Vec<Vec<(usize, f64)>>,
     polys: Vec<Vec<Vec<P2>>>,
+    /// The polygons' boxes, for [`Self::inside`]'s many tests.
+    boxes: Vec<super::classify::PolyBoxes>,
     size: f64,
 }
 
@@ -520,10 +522,15 @@ impl<'a> Tool<'a> {
                 );
             }
         }
-        let polys = b
+        let polys: Vec<Vec<Vec<P2>>> = b
             .faces
             .iter()
             .map(|f| super::classify::face_polygons(b, f))
+            .collect();
+        let boxes = polys
+            .iter()
+            .zip(&b.faces)
+            .map(|(p, f)| super::classify::poly_boxes(p, &f.surf))
             .collect();
         let mut ends: Vec<Vec<(usize, f64)>> = vec![Vec::new(); b.verts.len()];
         for (r, run) in runs.iter().enumerate() {
@@ -543,6 +550,7 @@ impl<'a> Tool<'a> {
             run_of,
             ends,
             polys,
+            boxes,
             size: b.bbox().diagonal().max(super::tol::POINT),
         }
     }
@@ -574,8 +582,13 @@ impl<'a> Tool<'a> {
     }
 
     fn inside(&self, f: usize, uv: P2) -> bool {
-        super::classify::in_face(&self.polys[f], &self.b.faces[f].surf, uv, 1e-9)
-            != super::classify::InFace::Outside
+        super::classify::in_face_boxed(
+            &self.polys[f],
+            &self.boxes[f],
+            &self.b.faces[f].surf,
+            uv,
+            1e-9,
+        ) != super::classify::InFace::Outside
     }
 
     /// A run's point at σ: (its edge, the edge's parameter, the point, its direction as σ
@@ -3406,6 +3419,7 @@ fn fit_sheet(
     (nu, nv): (usize, usize),
     tol: f64,
     trace: bool,
+    stop: Option<&(dyn Fn() -> bool + Sync)>,
 ) -> Option<super::nurbs::NurbsSurface> {
     use rayon::prelude::*;
     let sites = |lo: f64, hi: f64, n: usize| -> Vec<f64> {
@@ -3415,6 +3429,9 @@ fn fit_sheet(
     };
     let (mut us, mut vs) = (sites(u0, u1, nu), sites(v0, v1, nv));
     for round in 0..14 {
+        if stop.is_some_and(|stop| stop()) {
+            return None;
+        }
         let surf = super::sweep_tube::tensor(at, &us, &vs);
         // How far the surface is from the sheet's point at (u, v): off the surface in full,
         // along it a small share only. (A sheet's points slide along it a little where the
@@ -3660,12 +3677,28 @@ impl Gen<'_> {
                 return None;
             }
         }
+        // (A sheet's point that can't be found declines the cut whatever the fits come to: the
+        // fits stop at once, not after their rounds have split every cell about the points put
+        // in the missing ones' place, eleven seconds a try of a hypoid pinion's.)
+        let missed = || {
+            sheets
+                .iter()
+                .filter_map(|(_, s)| s.as_ref())
+                .any(|s| s.missed.load(Ordering::Relaxed) > 0)
+        };
         let surfaces: Vec<Option<super::nurbs::NurbsSurface>> = sheets
             .par_iter()
             .map(|(s, sh)| {
                 let sh = sh.as_ref()?;
                 let at = |c: f64, share: f64| sh.point(c, share);
-                fit_sheet(&at, (stretches[*s].c, (0.0, 1.0)), (8, 4), fit, false)
+                fit_sheet(
+                    &at,
+                    (stretches[*s].c, (0.0, 1.0)),
+                    (8, 4),
+                    fit,
+                    false,
+                    Some(&missed),
+                )
             })
             .collect();
         if self.trace {
@@ -3685,11 +3718,7 @@ impl Gen<'_> {
                 );
             }
         }
-        if sheets
-            .iter()
-            .filter_map(|(_, s)| s.as_ref())
-            .any(|s| s.missed.load(Ordering::Relaxed) > 0)
-        {
+        if missed() {
             declined(debug, "a sheet's point can't be found");
             return None;
         }
@@ -3740,7 +3769,7 @@ impl Gen<'_> {
                 self.chart
                     .point(c, (base.0 + at.0 - anchor.0, base.1 + at.1 - anchor.1))
             };
-            let Some(piece) = fit_sheet(&filler, (stretch.c, (0.0, 1.0)), (8, 4), fit, false)
+            let Some(piece) = fit_sheet(&filler, (stretch.c, (0.0, 1.0)), (8, 4), fit, false, None)
             else {
                 declined(debug, "a filler won't fit");
                 return None;
@@ -3801,7 +3830,8 @@ impl Gen<'_> {
             let k = ks[s];
             for i in 0..k {
                 let (m0, m1) = (i as f64 / k as f64, (i + 1) as f64 / k as f64);
-                let Some(piece) = fit_sheet(&lid, ((a, z), (m0, m1)), (4, 1), fit, false) else {
+                let Some(piece) = fit_sheet(&lid, ((a, z), (m0, m1)), (4, 1), fit, false, None)
+                else {
                     declined(debug, "the lid won't fit");
                     return None;
                 };
@@ -3828,7 +3858,8 @@ impl Gen<'_> {
                     let at = lerp(from, to, m0 + (m1 - m0) * share);
                     self.chart.point(c, lerp(on, at, v))
                 };
-                let Some(piece) = fit_sheet(&cap, ((0.0, 1.0), (0.0, 1.0)), (8, 2), fit, false)
+                let Some(piece) =
+                    fit_sheet(&cap, ((0.0, 1.0), (0.0, 1.0)), (8, 2), fit, false, None)
                 else {
                     declined(debug, "a cap won't fit");
                     return None;
@@ -6581,18 +6612,54 @@ pub(super) fn cut(
     // sweep goes on past the blank, and were then cut one after another from a body that grew
     // by a tooth space each time; the spaces stand apart wherever a tooth is left between
     // them. Whether they do is asked of one space and the next (their common part: none).
+    // (Whether the plug's common part with the target failed: then the plug alone is cut
+    // first, below.)
+    let common_failed = std::cell::Cell::new(false);
+    // Copies round a target turned about their axis: one tooth's sector (the target within a
+    // pitch's wedge, less the spaces reaching into it) made with two small booleans, and turned
+    // round the axis by `pattern::pattern_sector`, joined by index: no boolean of all the
+    // spaces at once (half a second for a hypoid gear's 48 against a tenth).
+    if copies > 1
+        && plugs.len() == 1
+        && !crate::native::env_flag!("CADRS_NO_PATTERN")
+        && let Some((n, pitch)) = copied
+        && let Some(r) = sector_pattern(k, target, &plugs[0], &target_axis, n, pitch, &about, debug)
+    {
+        if debug {
+            eprintln!(
+                "generated cut: {n} spaces patterned from a sector ({:.0} ms)",
+                (web_time::Instant::now() - t_start).as_secs_f64() * 1e3
+            );
+        }
+        return Some(Ok(r));
+    }
     if copies > 1 && plugs.len() == 1 {
         let made = (|| -> Option<OpResult> {
             let blank = std::sync::Arc::clone(k.get(target).ok()?);
             // (Only of a target the turn leaves as it is, one turned about that axis all the
             // way round: in a sector of a ring each copy's space is another part of the plug.)
+            let not = |why: String| {
+                if debug {
+                    eprintln!("generated cut: not the space inside the target: {why}");
+                }
+            };
             if !turned_about(&blank, &target_axis) {
+                not("the target isn't turned about its axis".into());
                 return None;
             }
-            let space = super::boolean::boolean_bodies(&plugs[0], &blank, BoolOp::Intersect)
-                .ok()?
-                .body;
+            let space = match super::boolean::boolean_bodies(&plugs[0], &blank, BoolOp::Intersect) {
+                Ok(r) => r.body,
+                Err(e) => {
+                    not(format!("the plug's common part with the target: {e}"));
+                    common_failed.set(true);
+                    return None;
+                }
+            };
             if space.solids.len() != 1 {
+                not(format!(
+                    "{} solids in common with the target",
+                    space.solids.len()
+                ));
                 return None;
             }
             // Whether a space stands apart from the one `turns` on: their common part none.
@@ -6619,6 +6686,7 @@ pub(super) fn cut(
                 }
                 g
             } else {
+                not("each space meets the next two".into());
                 return None;
             };
             if debug {
@@ -6704,14 +6772,15 @@ pub(super) fn cut(
             .flat_map(|m| m.positions.iter().copied())
             .collect();
         // Whether the plug is clear of its copy `turns` on (either way): none of the copy's
-        // points in or on the plug.
+        // points in or on the plug. (One classifier for them all: made for each point, its
+        // faces' ray grids and polygon boxes took most of a slow hypoid's rebuild.)
+        let classifier = super::classify::Classifier::new(&plugs[0], &polys);
         let clear_of = |turns: usize| -> bool {
             use rayon::prelude::*;
             [turns, copies - turns].iter().all(|&j| {
                 let m = about(j);
                 points.par_iter().all(|p| {
-                    super::classify::classify_point(&plugs[0], &polys, &m.point(p), 1e-6 * size)
-                        == crate::PointClass::Outside
+                    classifier.classify(&m.point(p), 1e-6 * size) == crate::PointClass::Outside
                 })
             })
         };
@@ -6736,6 +6805,18 @@ pub(super) fn cut(
     };
     let mut at = target;
     let mut cut: Result<OpResult> = Err(KernelError::Unsupported("a cut with nothing to cut"));
+    // Where the plug's common part with the target failed, the plug alone is cut from it
+    // first: the copies all together meet the target as it does, a boolean many times the
+    // size, and fail as it does (three seconds a roll of a hypoid pinion's, three rolls).
+    if common_failed.get()
+        && let Ok(blank) = k.get(target)
+        && let Err(e) = super::boolean::boolean_bodies(blank, &plugs[0], BoolOp::Subtract)
+    {
+        if debug {
+            eprintln!("generated cut: the plug alone can't be cut from the target: {e}");
+        }
+        return None;
+    }
     'plugs: for plug in &plugs {
         for group in &groups {
             let mut tool = Body::default();
@@ -6794,4 +6875,219 @@ pub(super) fn cut(
         }
         Err(_) => None,
     }
+}
+
+/// `target` less every copy of `plug` round `axis` (`n` of them, `pitch` apart, `about(i)` the
+/// i-th's motion), made as one tooth's sector patterned: the target within the wedge a pitch
+/// wide about the plug's space, less the spaces reaching into it (that one and its neighbours as
+/// far as they do), turned round the axis and joined ([`super::pattern::pattern_sector`]). Its
+/// faces' history is the target's, through the sector's two booleans. None where the target
+/// isn't turned about the axis, a boolean fails or the result isn't sound.
+#[allow(clippy::too_many_arguments)]
+fn sector_pattern(
+    k: &mut NativeKernel,
+    target: BodyId,
+    plug: &Body,
+    axis: &Axis,
+    n: usize,
+    pitch: f64,
+    about: &dyn Fn(usize) -> Affine,
+    debug: bool,
+) -> Option<OpResult> {
+    let not = |why: &str| {
+        if debug {
+            eprintln!("generated cut: no sector: {why}");
+        }
+    };
+    let blank = std::sync::Arc::clone(k.get(target).ok()?);
+    if !turned_about(&blank, axis) {
+        not("the target isn't turned about the axis");
+        return None;
+    }
+    // (Copies turned the other way round: the same turns about the axis reversed.)
+    let (o, z, pitch) = if pitch < 0.0 {
+        (axis.origin, -axis.dir.into_inner(), -pitch)
+    } else {
+        (axis.origin, axis.dir.into_inner(), pitch)
+    };
+    let size = blank.bbox().diagonal();
+    let Ok(space) = super::boolean::boolean_bodies(plug, &blank, BoolOp::Intersect) else {
+        not("the plug's common part with the target failed");
+        return None;
+    };
+    let space = space.body;
+    // The space's angles about the axis, from its middle.
+    let radial = |p: &P3| {
+        let d = p - o;
+        d - z * d.dot(&z)
+    };
+    let x0 = radial(&space.bbox().center()).try_normalize(tol::TINY)?;
+    let y0 = z.cross(&x0);
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    for e in &space.edges {
+        for i in 0..=16 {
+            let d = radial(&e.point(e.t[0] + (e.t[1] - e.t[0]) * i as f64 / 16.0));
+            let a = d.dot(&y0).atan2(d.dot(&x0));
+            lo = lo.min(a);
+            hi = hi.max(a);
+        }
+    }
+    let h = 0.5 * pitch;
+    if !(pitch > 0.0 && pitch < PI && hi - lo < TAU - pitch) {
+        not(&format!(
+            "the space reaches round the axis: {lo:.3} to {hi:.3}, pitch {pitch:.3}"
+        ));
+        return None;
+    }
+    // The wedge: a triangle from the axis through ±half a pitch, far out, through the target.
+    let plane = Plane {
+        origin: o,
+        x_dir: nalgebra::Unit::new_normalize(x0),
+        normal: nalgebra::Unit::new_normalize(z),
+    };
+    let r = 4.0 * size / h.cos();
+    let tri = Loop::polygon(&[
+        [0.0, 0.0],
+        [r * (-h).cos(), r * (-h).sin()],
+        [r * h.cos(), r * h.sin()],
+    ]);
+    let mut temp: Vec<BodyId> = Vec::new();
+    let made = (|| -> Option<(BodyId, Vec<Option<usize>>)> {
+        let prism = k
+            .extrude(
+                &Profile::of(plane, vec![tri]),
+                Extent::Symmetric(8.0 * size),
+            )
+            .ok()?
+            .bodies[0];
+        temp.push(prism);
+        let w = k.boolean(BoolOp::Intersect, target, &[prism]).ok()?;
+        let wedge = *w.bodies.first()?;
+        temp.push(wedge);
+        // Each wedge face's target face.
+        let wedge_from: rustc_hash::FxHashMap<u64, u64> = w
+            .history
+            .modified
+            .iter()
+            .filter(|(_, i)| i.body == target)
+            .map(|(f, i)| (f.0, i.face.0))
+            .collect();
+        // The spaces reaching into the wedge.
+        let mut tool = Body::default();
+        let m = n as i64;
+        for j in -(m / 2)..=(m / 2) {
+            if lo + j as f64 * pitch < h && hi + j as f64 * pitch > -h {
+                let i = j.rem_euclid(m) as usize;
+                tool.append(&if i == 0 {
+                    space.clone()
+                } else {
+                    space.transformed(&about(i))
+                });
+            }
+        }
+        let tool = k.insert(tool);
+        temp.push(tool);
+        let sr = k.boolean(BoolOp::Subtract, wedge, &[tool]).ok()?;
+        let sector = *sr.bodies.first()?;
+        temp.push(sector);
+        // Each sector face's target face.
+        let mut sector_from = vec![None; k.get(sector).ok()?.faces.len()];
+        for (f, i) in &sr.history.modified {
+            if i.body == wedge
+                && let Some(&t) = wedge_from.get(&i.face.0)
+                && let Some(s) = sector_from.get_mut(f.0 as usize)
+            {
+                *s = Some(t as usize);
+            }
+        }
+        Some((sector, sector_from))
+    })();
+    let Some((sector, sector_from)) = made else {
+        for id in temp {
+            k.release(id);
+        }
+        if debug {
+            eprintln!("generated cut: no sector: a boolean of it failed");
+        }
+        return None;
+    };
+    let sb = std::sync::Arc::clone(k.get(sector).ok()?);
+    for id in temp {
+        k.release(id);
+    }
+    let joined = super::pattern::pattern_faces(&sb, o, z, n, pitch, 1e-6 * size.max(1.0));
+    let Some(super::pattern::Patterned { body, from, copies }) = joined else {
+        if debug {
+            eprintln!("generated cut: the sector's copies don't join");
+        }
+        return None;
+    };
+    let history = crate::History {
+        modified: from
+            .iter()
+            .enumerate()
+            .filter_map(|(f, s)| {
+                let t = sector_from.get((*s)?).copied().flatten()?;
+                Some((
+                    crate::FaceId(f as u64),
+                    crate::InputFace {
+                        body: target,
+                        face: crate::FaceId(t as u64),
+                    },
+                ))
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let id = k.insert(body);
+    if let Ok(e) = k.entry(id) {
+        let _ = e.copies.set(std::sync::Arc::new(copies));
+    }
+    if !k.sound(id) {
+        k.release(id);
+        if debug {
+            eprintln!("generated cut: the patterned sector isn't sound");
+        }
+        return None;
+    }
+    Some(OpResult {
+        bodies: vec![id],
+        history,
+    })
+}
+
+/// [`crate::Kernel::subtract_turned`]: `target` less `tool` and its copies turned about `axis`,
+/// `count` of them a whole turn apart, as one tooth's sector patterned ([`sector_pattern`]);
+/// where that can't be, the copies set side by side and cut in one boolean (a tooth's spaces
+/// stand apart).
+pub(crate) fn subtract_turned(
+    k: &mut NativeKernel,
+    target: BodyId,
+    tool: BodyId,
+    axis: &Axis,
+    count: usize,
+) -> Result<OpResult> {
+    let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
+    let plug = std::sync::Arc::clone(k.get(tool)?);
+    let pitch = TAU / count.max(1) as f64;
+    let about =
+        |i: usize| super::pattern::turn(axis.origin, axis.dir.into_inner(), pitch * i as f64);
+    if count > 1
+        && !crate::native::env_flag!("CADRS_NO_PATTERN")
+        && let Some(r) = sector_pattern(k, target, &plug, axis, count, pitch, &about, debug)
+    {
+        return Ok(r);
+    }
+    let mut all = Body::default();
+    for i in 0..count {
+        all.append(&if i == 0 {
+            (*plug).clone()
+        } else {
+            plug.transformed(&about(i))
+        });
+    }
+    let all = k.insert(all);
+    let r = k.boolean(BoolOp::Subtract, target, &[all]);
+    k.release(all);
+    r
 }

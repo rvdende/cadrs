@@ -1796,7 +1796,28 @@ fn project_off_plane(f: &Frame, m: &Curve, p: &P3, hint: Option<(f64, f64)>) -> 
                 starts.extend([(-qb - sq) / (2.0 * qa), (-qb + sq) / (2.0 * qa)]);
             }
         }
-        _ => starts.extend((0..=32).map(|i| a + (b - a) * i as f64 / 32.0)),
+        // From where the distance is least among its neighbours at 65 points of the meridian
+        // (each a point of it, no derivatives): the dips a Newton can fall into. (A Newton
+        // from each of 33 points before, nearly all of them into the same dip or two: thirty
+        // times the work for a ball's meridian.)
+        _ => {
+            const N: usize = 64;
+            let at_sample = |i: usize| a + (b - a) * i as f64 / N as f64;
+            let ds: Vec<f64> = (0..=N)
+                .map(|i| {
+                    let q = f.local(&m.point(at_sample(i)));
+                    let (dr, dh) = (q.x.hypot(q.y) - rho, q.z - h);
+                    dr * dr + dh * dh
+                })
+                .collect();
+            for i in 0..=N {
+                let before = if i == 0 { f64::INFINITY } else { ds[i - 1] };
+                let after = if i == N { f64::INFINITY } else { ds[i + 1] };
+                if ds[i] <= before && ds[i] <= after {
+                    starts.push(at_sample(i));
+                }
+            }
+        }
     }
     let mut best = (f64::INFINITY, starts[0].clamp(a, b));
     for s in starts {
