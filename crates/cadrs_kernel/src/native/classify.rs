@@ -641,6 +641,7 @@ fn ray_surface_with(
     grid: Option<&std::sync::OnceLock<RayGrid>>,
 ) -> Vec<(f64, f64, f64)> {
     let mut ts: Vec<f64> = Vec::new();
+    let mut hits: Vec<(f64, f64, f64)> = Vec::new();
     match s {
         Surface::Plane { f } => {
             let n = f.x.cross(&f.y);
@@ -693,14 +694,24 @@ fn ray_surface_with(
             let fr = Frame::from_z(*o, m.normalize());
             let pl = Surface::Plane { f: fr };
             let (a, b) = c.nurbs_range().unwrap_or((0.0, TAU));
-            for u in super::ssi::curve_surface(c, a, b, &pl) {
+            let us = match c {
+                super::curve::Curve::Nurbs(n) => nurbs_plane_crossings(n, &m.normalize(), o),
+                _ => super::ssi::curve_surface(c, a, b, &pl),
+            };
+            let exact = matches!(c, super::curve::Curve::Nurbs(_));
+            for u in us {
                 let q = c.point(u);
                 // o + t d = q + v dir: solve in least squares.
                 let w = q - o;
                 let (dd, dr, rr) = (d.dot(d), d.dot(dir), dir.dot(dir));
                 let (wd, wr) = (w.dot(d), w.dot(dir));
-                if let Some((t, _v)) = solve2(dd, -dr, dr, -rr, wd, wr) {
-                    ts.push(t);
+                if let Some((t, v)) = solve2(dd, -dr, dr, -rr, wd, wr) {
+                    if exact {
+                        // (The surface's own parameters: no projection.)
+                        hits.push((t, u, v));
+                    } else {
+                        ts.push(t);
+                    }
                 }
             }
         }
@@ -719,11 +730,110 @@ fn ray_surface_with(
             };
         }
     }
-    let mut out = Vec::new();
+    let mut out = hits;
     for t in ts {
         let p = o + d * t;
         let (u, v) = s.project(&p, None);
         out.push((t, u, v));
+    }
+    out
+}
+
+/// Where a B-spline curve crosses the plane through `o` with unit normal `n`: the sign changes
+/// of g(u) = n·(C(u) − o)·w(u), itself a B-spline whose coefficients are the control points'
+/// (homogeneous) distances. Only a knot span whose coefficients change sign can hold one
+/// (the variation-diminishing property); there g is sampled, and each sign change bisected to
+/// rounding. A touch without a crossing is not one (a ray's parity is unchanged by it).
+fn nurbs_plane_crossings(c: &super::nurbs::NurbsCurve, n: &V3, o: &P3) -> Vec<f64> {
+    let p = c.degree;
+    let k = &c.knots;
+    let no = n.dot(&o.coords);
+    let g: Vec<f64> = c
+        .cps
+        .iter()
+        .map(|h| n.x * h.x + n.y * h.y + n.z * h.z - h.w * no)
+        .collect();
+    let scale = g.iter().fold(0.0f64, |m, x| m.max(x.abs())).max(tol::TINY);
+    // g at u in span j (de Boor on the scalar coefficients).
+    let eval = |j: usize, u: f64| -> f64 {
+        let mut d: Vec<f64> = (0..=p).map(|r| g[j - p + r]).collect();
+        for r in 1..=p {
+            for i in (r..=p).rev() {
+                let lo = k[j - p + i];
+                let hi = k[j + 1 + i - r];
+                let a = if hi > lo { (u - lo) / (hi - lo) } else { 0.0 };
+                d[i] = (1.0 - a) * d[i - 1] + a * d[i];
+            }
+        }
+        d[p]
+    };
+    let mut out: Vec<f64> = Vec::new();
+    let n_cp = c.cps.len();
+    for j in p..n_cp {
+        let (u0, u1) = (k[j], k[j + 1]);
+        if u1 <= u0 {
+            continue;
+        }
+        let co = &g[j - p..=j];
+        let (mn, mx) = co
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), &x| {
+                (a.min(x), b.max(x))
+            });
+        if mn > 0.0 || mx < 0.0 {
+            continue;
+        }
+        let m = 4 * (p + 1);
+        let at = |i: usize| u0 + (u1 - u0) * i as f64 / m as f64;
+        let mut prev = (at(0), eval(j, at(0)));
+        for i in 1..=m {
+            let u = at(i);
+            let cur = (u, eval(j, u));
+            // A sign change in [prev, cur): a root at its left end is its own; one at the
+            // span's right end belongs to the next span (or to the curve's end, kept here).
+            let last = j + 1 == n_cp && i == m;
+            let crosses = (prev.1 < 0.0 && cur.1 > 0.0)
+                || (prev.1 > 0.0 && cur.1 < 0.0)
+                || prev.1 == 0.0
+                || (last && cur.1 == 0.0);
+            if crosses {
+                let root = if prev.1 == 0.0 {
+                    prev.0
+                } else if cur.1 == 0.0 {
+                    cur.0
+                } else {
+                    let (mut a, mut b, mut fa) = (prev.0, cur.0, prev.1);
+                    for _ in 0..60 {
+                        let mid = 0.5 * (a + b);
+                        let fm = eval(j, mid);
+                        if fm == 0.0 || (b - a) <= 1e-15 * (1.0 + mid.abs()) {
+                            a = mid;
+                            b = mid;
+                            break;
+                        }
+                        if (fm < 0.0) == (fa < 0.0) {
+                            a = mid;
+                            fa = fm;
+                        } else {
+                            b = mid;
+                        }
+                        if fm.abs() <= 1e-15 * scale {
+                            a = mid;
+                            b = mid;
+                            break;
+                        }
+                    }
+                    0.5 * (a + b)
+                };
+                if out
+                    .last()
+                    .is_none_or(|&l| root - l > 1e-14 * (1.0 + root.abs()))
+                {
+                    out.push(root);
+                }
+            }
+            prev = cur;
+        }
     }
     out
 }
