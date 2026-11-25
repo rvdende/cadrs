@@ -6,7 +6,8 @@
 //    row, and the Parts node on the right. Create (top left), Auto arrange and Fit (top right).
 // 02 Create ▸ Input Configuration, named `size`, [+] twice, + Output named `bolt_size` with
 //    3, 4 and 5 mm: an Input Configuration node "size", its configurations default, config2 and
-//    config3 as columns (default highlighted), its output a row with a socket on the right.
+//    config3 as columns (default highlighted), its output a row with a socket on the right;
+//    + Output again: a second length output `output` under it.
 // 03 bolt_size's socket dragged onto Extrude 1's Depth: Depth reads #bolt_size, a trace from
 //    the output to the field.
 // 04 The wire dragged off Extrude 1's Depth onto Extrude 2's: Extrude 2 reads #bolt_size,
@@ -63,6 +64,9 @@ Scenario(
         Key("Enter"),
         Wait(20),
         ExpectText("node-config-size", "5 mm"),
+        Click(ui("node-config-size-add-output")),
+        WaitFor("node-output-output-name"),
+        Wait(20),
         Screenshot("02-input"),
         Drag(ui("node-output-bolt_size-out"), ui("node-extrude-1-depth")),
         ExpectText("node-extrude-1", "#bolt_size"),
