@@ -678,7 +678,7 @@ struct MeshSide {
 impl MeshSide {
     /// The pieces' mesh: a face's triangles, an edge's segments, the points.
     fn new(pieces: &[Piece], body: Option<&Body>) -> MeshSide {
-        let defl = body.map_or(0.0, |b| (1e-3 * b.bbox().diagonal()).max(10.0 * tol::POINT));
+        let defl = body.map_or(0.0, |b| (4e-3 * b.bbox().diagonal()).max(10.0 * tol::POINT));
         let meshed = body
             .filter(|_| pieces.iter().any(|p| !matches!(p, Piece::Point { .. })))
             .map(|b| super::tess::mesh_body(b, defl, 0.5));
