@@ -24,7 +24,6 @@ use bevy::camera::ScalingMode;
 use bevy::camera::visibility::RenderLayers;
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::input::keyboard::KeyboardInput;
-use bevy::input::mouse::MouseScrollUnit;
 use bevy::input_focus::InputFocus;
 use bevy::picking::hover::{HoverMap, Hovered};
 use bevy::picking::pointer::{PointerAction, PointerButton, PointerId, PointerInput};
@@ -1589,10 +1588,7 @@ fn viewport_pointer(
             }
             PointerAction::Scroll { unit, y, .. } => {
                 if over && !space_mouse_wheel.suppress_legacy_wheel() {
-                    let lines = match unit {
-                        MouseScrollUnit::Line => y,
-                        MouseScrollUnit::Pixel => y / 40.0,
-                    };
+                    let lines = crate::preferences_ui::wheel_zoom_lines(Some(&prefs), unit, y);
                     view.animation = None;
                     // Walking, the wheel changes the lens (issue #97).
                     if walking.as_deref().is_some_and(|w| w.on) {
