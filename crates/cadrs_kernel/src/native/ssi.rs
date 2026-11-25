@@ -2179,6 +2179,80 @@ fn may_meet(a: &Surface, b: &Surface, bb: &Bbox) -> bool {
     false
 }
 
+/// A face's (u, v) box for the numeric engine: one that isn't finite (a face without
+/// p-curves) falls back on the surface's own, and a B-spline's is kept within its range (one
+/// evaluated past its ends is a continuation the face isn't on).
+fn numeric_box(s: &Surface, x: ((f64, f64), (f64, f64))) -> super::ssi_numeric::UvBox {
+    let ok = [x.0.0, x.0.1, x.1.0, x.1.1].iter().all(|v| v.is_finite())
+        && x.0.1 > x.0.0
+        && x.1.1 > x.1.0;
+    let ((u0, u1), (v0, v1)) = if ok { x } else { s.param_box() };
+    let ((pu0, pu1), (pv0, pv1)) = s.param_box();
+    let clamp = |(a, b): (f64, f64), (lo, hi): (f64, f64), periodic: bool| {
+        if periodic {
+            (a.max(-1e4), b.min(1e4))
+        } else {
+            (a.max(lo).max(-1e4), b.min(hi).min(1e4))
+        }
+    };
+    let (u0, u1) = clamp((u0, u1), (pu0, pu1), s.u_periodic());
+    let (v0, v1) = clamp((v0, v1), (pv0, pv1), s.v_periodic());
+    super::ssi_numeric::UvBox::new((u0, u1), (v0, v1))
+}
+
+/// Points of the curves where two surfaces cross in the box (each traced curve's own points,
+/// a closed form's sampled), without fitting curves through them: for a check that only asks
+/// whether the faces cross somewhere. Touching points and coincident regions are not crossings
+/// and are left out.
+pub(crate) fn crossing_points(
+    a: &Surface,
+    ua: ((f64, f64), (f64, f64)),
+    b: &Surface,
+    ub: ((f64, f64), (f64, f64)),
+    bb: &Bbox,
+    per_curve: usize,
+) -> Vec<Vec<P3>> {
+    let sampled = |curves: Vec<IntCurve>| -> Vec<Vec<P3>> {
+        curves
+            .into_iter()
+            .filter(|c| c.t1 > c.t0)
+            .map(|c| {
+                (0..per_curve)
+                    .map(|k| {
+                        c.c.point(c.t0 + (c.t1 - c.t0) * (k as f64 + 0.5) / per_curve as f64)
+                    })
+                    .collect()
+            })
+            .collect()
+    };
+    if let Some(curves) = surface_surface_closed(a, ua, b, ub, bb) {
+        return sampled(curves);
+    }
+    let tc = coincidence_tol(bb);
+    if super::ssi_coincident::lies_on(a, ua, b, tc) || super::ssi_coincident::lies_on(b, ub, a, tc)
+    {
+        return Vec::new();
+    }
+    for (p, up, q) in [(a, ua, b), (b, ub, a)] {
+        if let Some(polys) = super::ssi_graph::graph(p, up, q, bb) {
+            return polys
+                .into_iter()
+                .map(|(pts, _)| pts.iter().map(|x| x.p).collect())
+                .collect();
+        }
+    }
+    if !may_meet(a, b, bb) {
+        return Vec::new();
+    }
+    let (res, _) =
+        super::ssi_numeric::intersect_stats(a, numeric_box(a, ua), b, numeric_box(b, ub), bb);
+    res.curves
+        .into_iter()
+        .filter(|c| !c.tangent)
+        .map(|c| c.pts.iter().map(|x| x.p).collect())
+        .collect()
+}
+
 /// The intersection by the numeric engine ([`super::ssi_numeric`]): its traced curves fitted
 /// with B-splines through exact points (tangent curves through the touching points found).
 fn numeric(
@@ -2188,27 +2262,8 @@ fn numeric(
     ub: ((f64, f64), (f64, f64)),
     bb: &Bbox,
 ) -> Ssi {
-    use super::ssi_numeric::{UvBox, intersect_stats};
-    // A box that isn't finite (a face without p-curves) falls back on the surface's own.
-    let uvbox = |s: &Surface, x: ((f64, f64), (f64, f64))| {
-        let ok = [x.0.0, x.0.1, x.1.0, x.1.1].iter().all(|v| v.is_finite())
-            && x.0.1 > x.0.0
-            && x.1.1 > x.1.0;
-        let ((u0, u1), (v0, v1)) = if ok { x } else { s.param_box() };
-        // Within the surface's own range where it has one (a B-spline evaluated past its ends
-        // is a continuation the face isn't on).
-        let ((pu0, pu1), (pv0, pv1)) = s.param_box();
-        let clamp = |(a, b): (f64, f64), (lo, hi): (f64, f64), periodic: bool| {
-            if periodic {
-                (a.max(-1e4), b.min(1e4))
-            } else {
-                (a.max(lo).max(-1e4), b.min(hi).min(1e4))
-            }
-        };
-        let (u0, u1) = clamp((u0, u1), (pu0, pu1), s.u_periodic());
-        let (v0, v1) = clamp((v0, v1), (pv0, pv1), s.v_periodic());
-        UvBox::new((u0, u1), (v0, v1))
-    };
+    use super::ssi_numeric::intersect_stats;
+    let uvbox = numeric_box;
     // One surface lying all on the other (a copy with another domain, or another form of it):
     // no crossing to search for, only the shared region's boundary.
     let tc = coincidence_tol(bb);

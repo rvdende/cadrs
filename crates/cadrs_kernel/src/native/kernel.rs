@@ -48,6 +48,9 @@ pub struct Entry {
     /// [`crate::Kernel::mass_properties`], worked out once (asked for its volume, area,
     /// centroid and inertia one at a time).
     mass: OnceLock<MassProperties>,
+    /// Each parametric face's grid for rays ([`classify::ray_hits_kept`]), made at the first
+    /// ray that reaches the face.
+    ray_grids: OnceLock<Vec<OnceLock<classify::RayGrid>>>,
 }
 
 impl Entry {
@@ -67,6 +70,7 @@ impl Entry {
             made_of: OnceLock::new(),
             copies: OnceLock::new(),
             mass: OnceLock::new(),
+            ray_grids: OnceLock::new(),
         }
     }
     /// [`Body::boxes`], made once.
@@ -2778,7 +2782,19 @@ impl Kernel for NativeKernel {
     ) -> Result<Vec<RayHit>> {
         let e = self.entry(body)?;
         let d = dir.normalize();
-        let mut hits = classify::ray_hits(&e.body, e.polys(), &origin, &d);
+        let all: Vec<usize> = (0..e.body.faces.len()).collect();
+        let grids = e
+            .ray_grids
+            .get_or_init(|| (0..e.body.faces.len()).map(|_| OnceLock::new()).collect());
+        let mut hits = classify::ray_hits_kept(
+            &e.body,
+            e.polys(),
+            &all,
+            Some(e.face_boxes()),
+            Some(grids),
+            &origin,
+            &d,
+        );
         // A line through an edge (or a vertex) meets each face there: one crossing, not one per
         // face (springrep's tests/rays.rs, a ray through an edge crosses there once).
         hits.dedup_by(|a, b| (a.0 - b.0).abs() <= super::tol::POINT);

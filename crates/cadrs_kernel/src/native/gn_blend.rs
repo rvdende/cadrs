@@ -120,7 +120,14 @@ fn bezier(a: P3, apex: P3, b: P3, w: f64) -> Result<NurbsCurve> {
 
 /// The legs' weights `[α, β]` of the section of thumbweight `w` at `t`.
 pub fn legs_at(w: f64, t: f64) -> [f64; 2] {
-    weights(w, t).0
+    // [`parts`] in closed form (asked for thousands of times while a blend is fitted):
+    // N_α = (1 − w)(1 − t)⁴(1 − wt), N_β = (1 − w)t⁴(1 − w + wt),
+    // D = (1 − 3t + 3t²)(1 − w + wt)(1 − wt).
+    let (s, tb) = (1.0 - w, 1.0 - t);
+    let (p, q) = (s + w * t, 1.0 - w * t);
+    let d = (1.0 - 3.0 * t + 3.0 * t * t) * p * q;
+    let (t2, tb2) = (t * t, tb * tb);
+    [s * tb2 * tb2 * q / d, s * t2 * t2 * p / d]
 }
 
 /// The weights `(α, β)` at `t` and their first derivatives.
@@ -266,6 +273,20 @@ pub fn equal_area_w(alpha: f64) -> Result<f64> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn legs_at_is_the_polynomials_quotient() {
+        for w in [-3.0, -0.5, 0.0, 0.4, 0.9] {
+            for i in 0..=20 {
+                let t = i as f64 / 20.0;
+                let (a, b) = (super::legs_at(w, t), super::weights(w, t).0);
+                assert!(
+                    (a[0] - b[0]).abs() < 1e-13 && (a[1] - b[1]).abs() < 1e-13,
+                    "{w} {t}"
+                );
+            }
+        }
+    }
+
     use super::*;
 
     #[test]

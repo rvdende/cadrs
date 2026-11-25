@@ -952,7 +952,7 @@ fn ray_revolved_line(f: &Frame, lo: &P3, ld: &V3, o: &P3, d: &V3) -> Option<Vec<
 
 /// A parametric surface's points over a grid of its parameter box, for rays against it
 /// ([`ray_parametric`]): the same for every ray, so made once for the many a classifier casts.
-struct RayGrid {
+pub(crate) struct RayGrid {
     u: (f64, f64),
     v: (f64, f64),
     n: usize,
@@ -1137,6 +1137,20 @@ pub fn ray_hits_among(
     o: &P3,
     d: &V3,
 ) -> Vec<(f64, usize, P3)> {
+    ray_hits_kept(body, polys, among, boxes, None, o, d)
+}
+
+/// [`ray_hits_among`] with each parametric face's [`RayGrid`] kept in `grids` (by face index)
+/// for the next ray: a body asked about many rays makes each face's grid once.
+pub(crate) fn ray_hits_kept(
+    body: &Body,
+    polys: &[Vec<Vec<P2>>],
+    among: &[usize],
+    boxes: Option<&[Bbox]>,
+    grids: Option<&[std::sync::OnceLock<RayGrid>]>,
+    o: &P3,
+    d: &V3,
+) -> Vec<(f64, usize, P3)> {
     RAYS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let bb = body.bbox().grow(1.0);
     let span = bb.diagonal() + (bb.center() - o).norm();
@@ -1148,7 +1162,8 @@ pub fn ray_hits_among(
         {
             continue;
         }
-        for (t, u, v) in ray_surface(&f.surf, o, d, -span, span) {
+        let grid = grids.and_then(|g| g.get(fi));
+        for (t, u, v) in ray_surface_with(&f.surf, o, d, -span, span, grid) {
             let uvs = periodic_candidates(&f.surf, u, v, &polys[fi]);
             for uv in uvs {
                 if in_face(&polys[fi], &f.surf, uv, tol::ROUNDOFF) != InFace::Outside {
