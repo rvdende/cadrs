@@ -157,6 +157,7 @@ pub mod distance;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod distance;
+mod distance_mesh;
 #[cfg(feature = "testkit")]
 pub mod edge_bop;
 #[cfg(not(feature = "testkit"))]

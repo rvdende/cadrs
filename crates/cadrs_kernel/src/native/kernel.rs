@@ -45,6 +45,9 @@ pub struct Entry {
     /// The faces that are copies of others, as the operation that made the body knows them
     /// (a pattern's: [`super::pattern`]): their mass properties and meshes are the others' moved.
     pub(crate) copies: OnceLock<Arc<super::copies::FaceCopies>>,
+    /// [`crate::Kernel::mass_properties`], worked out once (asked for its volume, area,
+    /// centroid and inertia one at a time).
+    mass: OnceLock<MassProperties>,
 }
 
 impl Entry {
@@ -63,6 +66,7 @@ impl Entry {
             oriented: OnceLock::new(),
             made_of: OnceLock::new(),
             copies: OnceLock::new(),
+            mass: OnceLock::new(),
         }
     }
     /// [`Body::boxes`], made once.
@@ -2623,7 +2627,11 @@ impl Kernel for NativeKernel {
     fn mass_properties(&self, body: BodyId) -> Result<MassProperties> {
         let t = web_time::Instant::now();
         let e = self.entry(body)?;
+        if let Some(m) = e.mass.get() {
+            return Ok(*m);
+        }
         let m = super::mass::body_mass_with(&e.body, e.copies.get().map(|c| c.as_slice()));
+        let _ = e.mass.set(m);
         slow("mass_properties", t, self.get(body)?);
         if t.elapsed().as_millis() > 500 {
             dump("slow-mass", self.get(body)?, &format!("{:?}", t.elapsed()));

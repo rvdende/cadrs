@@ -26,6 +26,7 @@ use std::collections::BinaryHeap;
 use nalgebra::{DMatrix, DVector};
 
 use super::curve::Curve;
+use super::distance_mesh::{Bit, Tree, bit_distance};
 use super::math::*;
 use super::surface::Surface;
 use super::tol;
@@ -660,6 +661,219 @@ pub fn extremum(a: &[Piece], b: &[Piece], sense: Sense) -> Option<Extremum> {
     best
 }
 
+/// Seeds of the exact search kept per pair of entities, spread apart (a pair can have several
+/// minima; two large parallel faces bring many pieces all equally near).
+const SEEDS_PER_PAIR: usize = 32;
+
+/// A seed of the exact search: the mesh pieces' nearest points and their parameters.
+type Seed = (P3, P3, X, X);
+
+/// One side's mesh pieces, each with the index of the exact piece it lies on, and their tree.
+struct MeshSide {
+    bits: Vec<(usize, Bit)>,
+    tree: Tree,
+    defl: f64,
+}
+
+impl MeshSide {
+    /// The pieces' mesh: a face's triangles, an edge's segments, the points.
+    fn new(pieces: &[Piece], body: Option<&Body>) -> MeshSide {
+        let defl = body.map_or(0.0, |b| (1e-3 * b.bbox().diagonal()).max(10.0 * tol::POINT));
+        let meshed = body
+            .filter(|_| pieces.iter().any(|p| !matches!(p, Piece::Point { .. })))
+            .map(|b| super::tess::mesh_body(b, defl, 0.5));
+        let mut bits = Vec::new();
+        for (i, p) in pieces.iter().enumerate() {
+            match p {
+                Piece::Point { p, .. } => bits.push((i, Bit::Pt(*p))),
+                Piece::Curve { edge, .. } => {
+                    if let Some((_, es)) = &meshed
+                        && let Some((ts, ps)) = es.get(*edge)
+                    {
+                        for k in 1..ts.len().min(ps.len()) {
+                            bits.push((i, Bit::Seg([ps[k - 1], ps[k]], [ts[k - 1], ts[k]])));
+                        }
+                    }
+                }
+                Piece::Face { face, .. } => {
+                    if let Some((fm, _)) = &meshed
+                        && let Some(m) = fm.get(*face)
+                    {
+                        for t in &m.indices {
+                            let [x, y, z] = t.map(|i| i as usize);
+                            bits.push((
+                                i,
+                                Bit::Tri(
+                                    [m.positions[x], m.positions[y], m.positions[z]],
+                                    [m.uvs[x], m.uvs[y], m.uvs[z]],
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        let tree = Tree::new(bits.iter().map(|(_, b)| b.bbox()).collect());
+        MeshSide { bits, tree, defl }
+    }
+}
+
+/// The parameters on piece `p` of the point nearest `q`, a point of its mesh piece `bit`: the
+/// mesh's own parameters as the hint (a cone's apex row has no one u).
+fn seed_at(p: &Piece, bit: &Bit, q: &P3) -> X {
+    let hint = bit.param(q);
+    match p {
+        Piece::Point { .. } => hint,
+        Piece::Curve { c, t, .. } => [c.closest(q, t.0.min(t.1), t.0.max(t.1)), 0.0],
+        Piece::Face { dom, .. } => {
+            let (u, v) = dom.surf.project(q, Some((hint[0], hint[1])));
+            if !(u.is_finite() && v.is_finite()) {
+                return hint;
+            }
+            // Into the face's range a period at a time (a projection gives (−π, π]).
+            let into = |x: f64, (lo, hi): (f64, f64), periodic: bool| {
+                let p = std::f64::consts::TAU;
+                if !periodic || hi - lo > p + 1e-9 {
+                    return x;
+                }
+                let mut x = x;
+                while x < lo - 1e-12 {
+                    x += p;
+                }
+                while x > hi + 1e-12 {
+                    x -= p;
+                }
+                x
+            };
+            [
+                into(u, dom.ub, dom.surf.u_periodic()),
+                into(v, dom.vb, dom.surf.v_periodic()),
+            ]
+        }
+    }
+}
+
+/// A seed and, where it lies on a closed face's seam (a full period's range, which the search
+/// keeps it in), the same point at the range's other end: the minimum may lie past either.
+fn seam_twins(p: &Piece, x: X) -> [Option<X>; 4] {
+    let mut out = [Some(x), None, None, None];
+    if let Piece::Face { dom, .. } = p {
+        let tau = std::f64::consts::TAU;
+        let twin = |x: f64, (lo, hi): (f64, f64), periodic: bool| -> Option<f64> {
+            if !periodic || ((hi - lo) - tau).abs() > 1e-9 {
+                None
+            } else if (x - lo).abs() <= 1e-9 {
+                Some(hi)
+            } else if (x - hi).abs() <= 1e-9 {
+                Some(lo)
+            } else {
+                None
+            }
+        };
+        let tu = twin(x[0], dom.ub, dom.surf.u_periodic());
+        let tv = twin(x[1], dom.vb, dom.surf.v_periodic());
+        if let Some(u) = tu {
+            out[1] = Some([u, x[1]]);
+        }
+        if let Some(v) = tv {
+            out[2] = Some([x[0], v]);
+        }
+        if let (Some(u), Some(v)) = (tu, tv) {
+            out[3] = Some([u, v]);
+        }
+    }
+    out
+}
+
+/// The least distance from the pieces' meshes (springrep's method): the nearest pair of mesh
+/// pieces gives it to within the meshes' deflections, and every pair that near seeds the exact
+/// search ([`polish`]) between the entities they lie on; a result counts only where both its
+/// points lie on their entities. The true minimum lies in the basin of one of those seeds.
+/// None where a side has no mesh or no seed polishes to a point of both.
+fn seeded_min(a: &[Piece], ba: Option<&Body>, b: &[Piece], bb: Option<&Body>) -> Option<Extremum> {
+    let (ma, mb) = (MeshSide::new(a, ba), MeshSide::new(b, bb));
+    // Every piece must be meshed for the meshes to stand for the sides.
+    let covered = |pieces: &[Piece], m: &MeshSide| {
+        let mut seen = vec![false; pieces.len()];
+        for (i, _) in &m.bits {
+            seen[*i] = true;
+        }
+        pieces
+            .iter()
+            .zip(&seen)
+            .all(|(p, s)| *s || matches!(p, Piece::Face { dom, .. } if dom.is_empty()))
+    };
+    if ma.bits.is_empty() || mb.bits.is_empty() || !covered(a, &ma) || !covered(b, &mb) {
+        return None;
+    }
+    let best = ma.tree.least(&mb.tree, |i, j| {
+        bit_distance(&ma.bits[i].1, &mb.bits[j].1).0
+    });
+    if !best.is_finite() {
+        return None;
+    }
+    let margin = 2.0 * (ma.defl + mb.defl) + tol::POINT;
+    let reach = best + margin;
+    let spread = 4.0 * (ma.defl + mb.defl);
+    let mut near: Vec<(f64, usize, usize, P3, P3)> = Vec::new();
+    let mut hits = Vec::new();
+    for (i, (_, x)) in ma.bits.iter().enumerate() {
+        mb.tree.within(&ma.tree.boxes[i], reach, &mut hits);
+        for &j in &hits {
+            let (d, p, q) = bit_distance(x, &mb.bits[j].1);
+            if d <= reach {
+                near.push((d, i, j, p, q));
+            }
+        }
+    }
+    near.sort_by(|x, y| x.0.total_cmp(&y.0));
+    let mut seeds: std::collections::BTreeMap<(usize, usize), Vec<Seed>> = Default::default();
+    for (_, i, j, p, q) in near {
+        let ((ia, bit_a), (ib, bit_b)) = (&ma.bits[i], &mb.bits[j]);
+        let kept = seeds.entry((*ia, *ib)).or_default();
+        if kept.len() >= SEEDS_PER_PAIR {
+            continue;
+        }
+        let (xa, xb) = (seed_at(&a[*ia], bit_a, &p), seed_at(&b[*ib], bit_b, &q));
+        // (Near in space and in parameters: either side of a seam is another start.)
+        let close = |x: &X, y: &X| (x[0] - y[0]).abs() + (x[1] - y[1]).abs() <= 0.1;
+        if !kept.iter().any(|(p0, q0, xa0, xb0)| {
+            (p0 - p).norm() <= spread
+                && (q0 - q).norm() <= spread
+                && close(xa0, &xa)
+                && close(xb0, &xb)
+        }) {
+            kept.push((p, q, xa, xb));
+        }
+    }
+    let mut out: Option<Extremum> = None;
+    for ((ia, ib), list) in &seeds {
+        let starts = list.iter().flat_map(|&(_, _, xa, xb)| {
+            let (va, vb) = (seam_twins(&a[*ia], xa), seam_twins(&b[*ib], xb));
+            va.into_iter()
+                .flatten()
+                .flat_map(move |x| vb.into_iter().flatten().map(move |y| (x, y)))
+        });
+        for (xa, xb) in starts {
+            if out.as_ref().is_some_and(|e| e.distance == 0.0) {
+                return out;
+            }
+            if let Some((d, xa, xb)) = polish(&a[*ia], xa, &b[*ib], xb, Sense::Min)
+                && out.as_ref().is_none_or(|e| d < e.distance)
+            {
+                out = Some(Extremum {
+                    distance: d,
+                    a: jet(&a[*ia], &xa).p,
+                    b: jet(&b[*ib], &xb).p,
+                    wa: where_of(&a[*ia], &xa),
+                    wb: where_of(&b[*ib], &xb),
+                });
+            }
+        }
+    }
+    out
+}
+
 /// [`crate::Kernel::min_distance`] and [`crate::Kernel::max_distance`] for the native kernel.
 pub fn kernel_distance(
     k: &super::NativeKernel,
@@ -686,6 +900,31 @@ pub fn kernel_distance(
     {
         return Ok(r);
     }
+    // The search bounds pairs of cells by their axis-aligned boxes, tight for geometry along
+    // the axes and loose for the same turned (a box round a tilted disc is far larger than the
+    // disc): it is done in the frame of the first side's first analytic surface, as the model
+    // was likely drawn, and its points turned back. (Distance and surface parameters are the
+    // same in any frame; the faces' polygons too.)
+    let turn = canonical_turn(k, a, b);
+    let mut turned: Vec<(crate::BodyId, Body)> = Vec::new();
+    if let Some(r) = &turn {
+        for t in [a, b] {
+            if let DistanceTarget::Edge(id, _)
+            | DistanceTarget::Face(id, _)
+            | DistanceTarget::Body(id)
+            | DistanceTarget::Solid(id) = *t
+                && !turned.iter().any(|(i, _)| *i == id)
+            {
+                turned.push((id, k.entry(id)?.body.transformed(r)));
+            }
+        }
+    }
+    let body_of = |id: crate::BodyId| -> crate::Result<&Body> {
+        Ok(match turned.iter().find(|(i, _)| *i == id) {
+            Some((_, b)) => b,
+            None => &k.entry(id)?.body,
+        })
+    };
     let side = |t: &DistanceTarget| -> crate::Result<Side<'_>> {
         Ok(match *t {
             DistanceTarget::Point(p) => {
@@ -694,10 +933,11 @@ pub fn kernel_distance(
                         "a point that isn't finite".into(),
                     ));
                 }
+                let p = turn.as_ref().map_or(p, |r| r.point(&p));
                 (point_pieces(p), None)
             }
             DistanceTarget::Edge(id, e) => {
-                let b = &k.entry(id)?.body;
+                let b = body_of(id)?;
                 let ei = e.0 as usize;
                 if ei >= b.edges.len() {
                     return Err(KernelError::InvalidParameter(format!(
@@ -716,17 +956,26 @@ pub fn kernel_distance(
                         f.0
                     )));
                 }
-                (face_pieces(&en.body, fi, &en.polys()[fi]), Some(&*en.body))
+                let b = body_of(id)?;
+                (face_pieces(b, fi, &en.polys()[fi]), Some(b))
             }
             DistanceTarget::Body(id) | DistanceTarget::Solid(id) => {
                 let en = k.entry(id)?;
-                (body_pieces(&en.body, en.polys()), Some(&*en.body))
+                let b = body_of(id)?;
+                (body_pieces(b, en.polys()), Some(b))
             }
         })
     };
     let (pa, ba) = side(a)?;
     let (pb, bb) = side(b)?;
-    let Some(x) = extremum(&pa, &pb, sense) else {
+    // (Between two shapes. A point's search is quick as it is, and the mesh would cost more
+    // than the answer: a point picking a face or an edge is asked again and again.)
+    let seeded = if sense == Sense::Min && ba.is_some() && bb.is_some() {
+        seeded_min(&pa, ba, &pb, bb)
+    } else {
+        None
+    };
+    let Some(x) = seeded.or_else(|| extremum(&pa, &pb, sense)) else {
         return Err(KernelError::EmptyResult(
             "nothing to measure from: no faces, edges or vertices".into(),
         ));
@@ -744,12 +993,49 @@ pub fn kernel_distance(
             Where::Face(f, u, v) => DistanceLocation::Face(crate::FaceId(f as u64), u, v),
         }
     };
+    let back = |p: P3| match &turn {
+        Some(r) => P3::from(r.m.transpose() * p.coords),
+        None => p,
+    };
     Ok(crate::DistanceResult {
         distance: x.distance,
-        a: x.a,
-        b: x.b,
+        a: back(x.a),
+        b: back(x.b),
         a_at: loc(x.wa, ba),
         b_at: loc(x.wb, bb),
+    })
+}
+
+/// [`kernel_distance`]'s frame to measure in: a rotation taking the first analytic surface's
+/// frame (of side a, else b) to the axes; None when that frame is along the axes already.
+fn canonical_turn(
+    k: &super::NativeKernel,
+    a: &crate::DistanceTarget,
+    b: &crate::DistanceTarget,
+) -> Option<Affine> {
+    use crate::DistanceTarget;
+    let f = [a, b].into_iter().find_map(|t| {
+        let (id, only) = match *t {
+            DistanceTarget::Face(id, f) => (id, Some(f.0 as usize)),
+            DistanceTarget::Edge(id, _) | DistanceTarget::Body(id) | DistanceTarget::Solid(id) => {
+                (id, None)
+            }
+            DistanceTarget::Point(_) => return None,
+        };
+        let body = &k.entry(id).ok()?.body;
+        let faces = &body.faces;
+        match only {
+            Some(fi) => faces.get(fi).and_then(|f| f.surf.frame().copied()),
+            None => faces.iter().find_map(|f| f.surf.frame().copied()),
+        }
+    })?;
+    let aligned = |v: &V3| v.amax() > 1.0 - 1e-12;
+    if aligned(&f.x) && aligned(&f.y) && aligned(&f.z) {
+        return None;
+    }
+    Some(Affine {
+        m: nalgebra::Matrix3::from_rows(&[f.x.transpose(), f.y.transpose(), f.z.transpose()]),
+        t: V3::zeros(),
     })
 }
 
