@@ -1906,7 +1906,15 @@ impl XBuilder {
         let ta = &traces[0];
         let qa = ta.ends[0].0;
         let va = self.co_start(a_loop[0].0, a_loop[0].1);
-        let Some(seam) = iso_u(&s, qa.x) else {
+        // A closed spline surface's seam inside its own range: past its ends it is only its
+        // end spans run on (a trace's u may lie a period or two off).
+        let spline = !s.u_periodic() && !s.v_periodic();
+        let per = periods(&s);
+        let seam_u = match (spline, per.pu, per.domain) {
+            (true, Some(p), Some(((u0, _), _))) if p > 0.0 => u0 + (qa.x - u0).rem_euclid(p),
+            _ => qa.x,
+        };
+        let Some(seam) = iso_u(&s, seam_u) else {
             return false;
         };
         match wrapping.len() {
@@ -1937,6 +1945,11 @@ impl XBuilder {
                 let pb = self.body.verts[vbv].p;
                 let (_, vb_param) = s.project(&pb, Some((qa.x, qa.y)));
                 let va_param = qa.y;
+                // (A seam from a loop to a point of the same v on a closed spline is no seam:
+                // the loops meet there, or the projection went to the surface's other end.)
+                if spline && (vb_param - va_param).abs() < tol::ROUNDOFF {
+                    return false;
+                }
                 let fwd_seam = self.iso_edge(seam, va, va_param, vbv, vb_param);
                 let mut nl: Vec<(usize, bool)> = a_loop.clone();
                 nl.push(fwd_seam);
@@ -2259,10 +2272,11 @@ impl XBuilder {
         }
         prof.mark("slits");
         // Seams (they may split edges of other faces, so trace again after each).
+        let mut unseamed = vec![false; nf];
         for _round in 0..4 {
             let mut changed = false;
             for fi in 0..nf {
-                if dropped[fi] {
+                if dropped[fi] || unseamed[fi] {
                     continue;
                 }
                 let s = self.faces[fi].surf.clone();
@@ -2282,8 +2296,17 @@ impl XBuilder {
                 if wrapping.is_empty() {
                     continue;
                 }
+                // A closed spline surface (no period of its own) that takes no seam is left as
+                // the file gave it, as before such surfaces were given seams: whatever the try
+                // changed (an edge split for the seam's end) is undone.
+                let spline = !s.u_periodic() && !s.v_periodic();
+                let saved = spline.then(|| (self.body.clone(), self.faces[fi].clone()));
                 if self.add_seam(fi, &wrapping) {
                     changed = true;
+                } else if let Some((body, face)) = saved {
+                    self.body = body;
+                    self.faces[fi] = face;
+                    unseamed[fi] = true;
                 } else {
                     self.warnings.push(format!(
                         "face {fi}: loops wrap around the surface and no seam could be added"
