@@ -1107,7 +1107,7 @@ mod tests {
         );
         let mut k = FeatureKind::Sweep(SweepFeature {
             sketches: vec![sketch],
-            profile_curves: vec![a.clone(), b.clone()],
+            profile_curves: vec![a, b],
             ..SweepFeature::default()
         });
         let cache = PartCache::default();
