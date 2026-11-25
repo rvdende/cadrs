@@ -54,6 +54,7 @@ impl Plugin for InsertPlugin {
                     insert_pointer,
                     update_ghosts,
                     sync_counter,
+                    crate::configuration_ui::sync_insert_panel,
                     insert_keys,
                     end_on_tab_change,
                 )
@@ -139,6 +140,9 @@ pub struct InsertSession {
     /// version graph shown.
     pub current: Option<crate::linked::Opened>,
     pub current_graph: bool,
+    /// The configuration chosen for each configured Part Studio (Configurations; the studio's
+    /// active one until another is picked, [`crate::configuration_ui`]).
+    pub configs: Vec<(ElementId, cadrs_core::configuration::ConfigValues)>,
 }
 
 impl InsertSession {
@@ -231,6 +235,7 @@ pub fn open_insert_dialog(world: &mut World) {
         browse: Default::default(),
         current: None,
         current_graph: false,
+        configs: Vec::new(),
     });
     let theme = world.resource::<Theme>().clone();
     let mut q = world.query_filtered::<Entity, With<ViewportArea>>();
@@ -476,6 +481,23 @@ fn dialog(t: &Theme, doc_name: String) -> impl Bundle {
                             tree,
                         ));
                     });
+                    // The picked item's configuration (Configurations).
+                    b.spawn((
+                        Name::new("insert-configuration"),
+                        crate::configuration_ui::InsertConfigPanel,
+                        Node {
+                            display: Display::None,
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(2.0),
+                            padding: UiRect::new(
+                                Val::Px(10.0),
+                                Val::Px(10.0),
+                                Val::Px(6.0),
+                                Val::Px(2.0),
+                            ),
+                            ..default()
+                        },
+                    ));
                     b.spawn(Node {
                         justify_content: JustifyContent::FlexEnd,
                         padding: UiRect::new(
@@ -607,14 +629,18 @@ fn tree_items(
         }
         return out;
     }
-    // (A PCB Studio's boards are in the Boards tab.)
-    for el in doc
+    // (A PCB Studio's boards are in the Boards tab.) A configured Part Studio is one row; the
+    // configuration inserted is picked in the dialog's configuration panel
+    // (`crate::configuration_ui::InsertConfigPanel`).
+    let rows: Vec<(ElementId, String, &cadrs_core::Element)> = doc
         .doc
         .elements
         .iter()
         .filter(|e| e.assembly_model().is_none() && e.pcb().is_none())
-    {
-        let Some(build) = parts_of.build(&doc.doc, el.id) else {
+        .map(|el| (el.id, el.name.clone(), el))
+        .collect();
+    for (source, label, el) in rows {
+        let Some(build) = parts_of.build(&doc.doc, source) else {
             continue;
         };
         let parts: Vec<&cadrs_core::Part> = build
@@ -625,7 +651,7 @@ fn tree_items(
                 PartKind::Surface => s.surfaces,
             })
             .collect();
-        let studio_hit = el.name.to_lowercase().contains(&q);
+        let studio_hit = label.to_lowercase().contains(&q);
         let names: Vec<String> = parts
             .iter()
             .map(|p| cadrs_core::parts::display_name(p, el.part_props()).to_string())
@@ -647,7 +673,7 @@ fn tree_items(
         let all: Vec<InstanceSource> = parts
             .iter()
             .map(|p| InstanceSource::Part {
-                element: el.id,
+                element: source,
                 part: p.id,
             })
             .collect();
@@ -655,34 +681,34 @@ fn tree_items(
         let studio_item = if s.rigid {
             Item {
                 sources: vec![InstanceSource::Studio {
-                    element: el.id,
+                    element: source,
                     board: None,
                 }],
-                label: el.name.clone(),
+                label: label.clone(),
                 rigid: parts.iter().map(|p| p.id).collect(),
                 link: None,
             }
         } else {
             Item {
                 sources: all,
-                label: el.name.clone(),
+                label: label.clone(),
                 rigid: Vec::new(),
                 link: None,
             }
         };
-        out.push((studio_item, Some((el.id, None)), true));
+        out.push((studio_item, Some((source, None)), true));
         for i in shown {
             out.push((
                 Item {
                     sources: vec![InstanceSource::Part {
-                        element: el.id,
+                        element: source,
                         part: parts[i].id,
                     }],
                     label: names[i].clone(),
                     rigid: Vec::new(),
                     link: None,
                 },
-                Some((el.id, Some(parts[i].id))),
+                Some((source, Some(parts[i].id))),
                 false,
             ));
         }
@@ -1145,6 +1171,8 @@ fn insert_item(world: &mut World, item: &Item, pose: Pose) {
             } => Instance::board(id, *el, *b, item.rigid.clone(), pose),
             _ => Instance::new(id, *src, pose),
         };
+        let mut instance = instance;
+        instance.configuration = crate::configuration_ui::insert_configuration(world, src);
         if super::run(world, &InsertInstance { element, instance })
             && let Some(mut s) = world.get_resource_mut::<InsertSession>()
         {
@@ -1331,7 +1359,16 @@ fn update_ghosts(world: &mut World) {
             .is_some_and(|hits| areas.iter().any(|a| hits.contains_key(a)))
     };
     let pointer = world.resource::<crate::viewport::ViewportDrag>().pointer();
-    let ghosts: Vec<Instance> = match &s.armed {
+    // A configured studio's ghost shows the configuration chosen.
+    let armed = s.armed.clone().map(|mut item| {
+        if item.link.is_none() {
+            for src in &mut item.sources {
+                *src = crate::configuration_ui::ghost_source(world, *src);
+            }
+        }
+        item
+    });
+    let ghosts: Vec<Instance> = match &armed {
         Some(item) if over => {
             let pose = pose_at_pointer(world, item, pointer);
             item.sources

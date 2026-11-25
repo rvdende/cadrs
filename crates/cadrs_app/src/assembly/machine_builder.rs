@@ -67,8 +67,8 @@ use super::connectors::{self, ConnectorGizmos, ConnectorHaloGizmos, entity_of};
 use crate::parts::PartCache;
 use crate::side_panel::{SidePanel, side_panel_header, side_panel_node};
 use crate::viewport::{
-    ActiveKind, PickFilterOverride, PickRequest, PlaneHighlight, Selection, ViewportArea,
-    ViewportDrag, ViewportRect, ViewportView,
+    ActiveKind, PickFilterOverride, PickRequest, PlaneHighlight, Selection, ViewportDrag,
+    ViewportRect, ViewportView,
 };
 use crate::{ActiveDocument, AppState};
 
@@ -1414,7 +1414,8 @@ fn build_panel(
         });
     });
     // Beside the viewport.
-    let mut q_area = world.query_filtered::<(Entity, &ChildOf), With<ViewportArea>>();
+    let mut q_area =
+        world.query_filtered::<(Entity, &ChildOf), With<crate::side_panel::SideDock>>();
     let Some((area, parent)) = q_area.iter(world).next().map(|(e, c)| (e, c.parent())) else {
         return;
     };

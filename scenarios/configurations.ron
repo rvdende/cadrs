@@ -1,0 +1,67 @@
+// Configurations (Onshape's Configuration panel, `crate::configuration_ui`), on the 60 × 40 plate
+// with a Ø16 hole of `with-hole`.
+// 01 Extrude 1's menu ▸ Configure ▸ Depth: a List "Configuration" (row "Default") is made and
+//    the panel opens on its table, Depth 10 mm.
+// 02 Add configuration: a row "Configuration 2", renamed "Thick", Depth 20 mm typed in its cell.
+// 03 a double-click on Thick: the plate is 20 mm thick, the ✓ on Thick.
+// 04 Extrude 2's menu ▸ Dynamic suppression ▸ Suppress by configuration: a Suppressed column;
+//    ticked for Thick, the hole goes.
+// 05 Add input ▸ Checkbox: "Checkbox", unchecked, its table with Unchecked and Checked rows.
+// 06 Ctrl+Z twice: the Checkbox, then the suppression tick are undone (Thick has its hole).
+// The assembly side is `configurations_assembly`.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Custom("with-hole"),
+        Key("Shift+7"),
+        Key("F"),
+        RightClick(ui("feature-extrude-1")),
+        WaitFor("feature-context-menu"),
+        Hover(ui("feature-configure")),
+        Wait(10),
+        Click(ui("feature-configure-0")),
+        WaitFor("configuration-panel"),
+        MoveTo(700, 900),
+        Wait(3),
+        Screenshot("01-configured-depth"),
+        Click(ui("configuration-input-1-add-row")),
+        WaitFor("configuration-name"),
+        Key("Ctrl+A"),
+        Type("Thick"),
+        Key("Enter"),
+        Click(ui("configuration-input-1-row-2-cell-1")),
+        Key("Ctrl+A"),
+        Type("20"),
+        Key("Enter"),
+        MoveTo(700, 900),
+        Wait(3),
+        Screenshot("02-thick-row"),
+        DoubleClick(ui("configuration-input-1-row-2")),
+        MoveTo(700, 900),
+        Key("F"),
+        Wait(3),
+        Screenshot("03-thick-shown"),
+        RightClick(ui("feature-extrude-2")),
+        WaitFor("feature-context-menu"),
+        Hover(ui("feature-dynamic-suppression")),
+        Wait(10),
+        Click(ui("feature-suppress-by-configuration")),
+        Click(ui("configuration-input-1-row-2-cell-2")),
+        MoveTo(700, 900),
+        Wait(3),
+        Screenshot("04-suppressed-in-thick"),
+        Click(ui("configuration-add-input")),
+        WaitFor("configuration-add-input-menu"),
+        Click(ui("configuration-add-checkbox")),
+        Key("Enter"),
+        MoveTo(700, 900),
+        Wait(3),
+        Screenshot("05-checkbox-input"),
+        Key("Ctrl+Z"),
+        Key("Ctrl+Z"),
+        MoveTo(700, 900),
+        Wait(3),
+        Screenshot("06-undone"),
+    ],
+)

@@ -47,7 +47,6 @@ use cadrs_ui::{
 };
 
 use super::{CustomEdit, PcbPane, PcbUi, PcbView};
-use crate::viewport::ViewportArea;
 use crate::{ActiveDocument, AppState};
 
 /// The panes' width (px).
@@ -170,7 +169,8 @@ pub fn sync_panes(world: &mut World, q_panes: &mut QueryState<Entity, With<PaneR
     if key.is_none() {
         return;
     }
-    let mut q_area = world.query_filtered::<(Entity, &ChildOf), With<ViewportArea>>();
+    let mut q_area =
+        world.query_filtered::<(Entity, &ChildOf), With<crate::side_panel::SideDock>>();
     let Some((area, parent)) = q_area.iter(world).next().map(|(e, c)| (e, c.parent())) else {
         return;
     };

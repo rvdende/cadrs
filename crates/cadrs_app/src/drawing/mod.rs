@@ -40,6 +40,7 @@ pub mod sheet_items;
 pub mod symbol_cards;
 pub mod toolbar;
 pub mod update;
+pub mod view_config;
 pub mod view_kind_tools;
 pub mod view_linked;
 pub mod view_menu;

@@ -127,6 +127,7 @@ impl Plugin for ViewportPlugin {
                     sync_grid,
                     fit_grid,
                     sync_plane_rows,
+                    sync_view_hovered_row,
                 )
                     .after(apply_view_to_camera)
                     .run_if(in_state(AppState::Document)),
@@ -601,6 +602,14 @@ impl Pick {
     pub fn part(&self) -> Option<PartId> {
         match *self {
             Pick::Face(f, _) | Pick::Edge(f, _) | Pick::Vertex(f, _) | Pick::Part(f) => Some(f),
+            _ => None,
+        }
+    }
+
+    /// The sketch it is in (a sketch's regions, curves and points).
+    pub fn sketch(&self) -> Option<FeatureId> {
+        match *self {
+            Pick::Region(f, _) | Pick::SketchCurve(f, _) | Pick::SketchPoint(f, _) => Some(f),
             _ => None,
         }
     }
@@ -1849,13 +1858,14 @@ fn view_shortcuts(
     mut planes: ResMut<PlanesVisible>,
     inset: Res<DialogInset>,
     mut commands: Commands,
-    (cache, asm_parts, pcb_scene, eda2d, layout, in_sketch): (
+    (cache, asm_parts, pcb_scene, eda2d, layout, in_sketch, over_nodes): (
         Res<crate::parts::PartCache>,
         Res<crate::assembly::AssemblyParts>,
         Option<Res<crate::pcb::view::PcbScene>>,
         Res<crate::eda::Eda2d>,
         Res<crate::eda::layout_tools::LayoutState>,
         Option<Res<crate::sketch_tools::SketchSelection>>,
+        Option<Res<crate::node_view::PointerOverNodes>>,
     ),
 ) {
     if kind.is_flat() || eda2d.flat() {
@@ -1999,6 +2009,8 @@ fn view_shortcuts(
                     view.animate_to(to);
                 }
             }
+            // Over the node view: F fits its nodes (`crate::node_view`), not the 3D view.
+            KeyCode::KeyF if !shift && over_nodes.as_ref().is_some_and(|o| o.0) => {}
             // A board's layout edited in the view: F flips the selected footprint
             // (`crate::eda::layout_tools`).
             KeyCode::KeyF
@@ -3033,7 +3045,7 @@ fn sync_plane_rows(
     mut commands: Commands,
 ) {
     // Hidden planes (P) grey out their rows, text and icon (`intro-to-sketching/ex1-step1.png`).
-    let hidden_fg = Color::srgb_u8(0xb4, 0xb4, 0xb4);
+    let hidden_fg = crate::feature_list::hidden_fg(&theme);
     for (e, row, has, visuals) in &mut q {
         // In an assembly, an instance's row is highlighted while a face, edge or vertex of it
         // is selected (P3B.1, `intro-to-assemblies/ex1-step5.png`).
@@ -3061,7 +3073,11 @@ fn sync_plane_rows(
             && v.foreground.normal != fg
         {
             v.foreground = cadrs_ui::StateColors::new(fg, fg, fg, theme.disabled_foreground);
-            let icon_fg = if shown { theme.feature_icon } else { hidden_fg };
+            let icon_fg = if shown {
+                theme.feature_icon
+            } else {
+                crate::feature_list::hidden_icon(&theme)
+            };
             for d in children.iter_descendants(e) {
                 // The eye toggle keeps its own colour.
                 if q_eye.contains(d) || q_parent.get(d).is_ok_and(|p| q_eye.contains(p.parent())) {
@@ -3071,6 +3087,50 @@ fn sync_plane_rows(
                     img.color = icon_fg;
                 }
             }
+        }
+    }
+}
+
+/// Marks a feature-list row shown as selected because what its feature made is under the
+/// pointer in the view (its [`cadrs_ui::ForceState`] is ours to take away).
+#[derive(Component)]
+struct ViewHoveredRow;
+
+/// What is under the pointer in the view (a face, an edge, a vertex, a sketch's curve, point or
+/// region, a plane) lights up the row of the feature a double click would edit (the one that
+/// made it, [`feature_of`]), in the selected rows' blue.
+#[allow(clippy::type_complexity)]
+fn sync_view_hovered_row(
+    highlight: Res<PlaneHighlight>,
+    kind: Res<ActiveKind>,
+    doc: Option<Res<crate::ActiveDocument>>,
+    q: Query<(
+        Entity,
+        &crate::document::FeatureRow,
+        Has<ViewHoveredRow>,
+        Has<cadrs_ui::ForceState>,
+    )>,
+    q_new: Query<(), Added<crate::document::FeatureRow>>,
+    mut commands: Commands,
+) {
+    if !highlight.is_changed() && q_new.is_empty() {
+        return;
+    }
+    let target = highlight
+        .viewport
+        .filter(|_| *kind == ActiveKind::PartStudio)
+        .and_then(|p| feature_of(doc.as_ref()?.active_element()?.features(), p));
+    for (e, row, ours, forced) in &q {
+        let want = target == Some(row.0);
+        if want && !forced {
+            commands.entity(e).try_insert((
+                cadrs_ui::ForceState(cadrs_ui::VisualState::Selected),
+                ViewHoveredRow,
+            ));
+        } else if !want && ours {
+            commands
+                .entity(e)
+                .try_remove::<(cadrs_ui::ForceState, ViewHoveredRow)>();
         }
     }
 }

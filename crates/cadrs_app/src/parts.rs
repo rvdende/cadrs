@@ -3402,23 +3402,27 @@ fn shade_parts(
     }
 }
 
-/// Part edges, hover and selection outlines.
-#[allow(clippy::too_many_arguments)]
 /// A visible sketch's curve under the pointer or in the selection, in the hover or selection
-/// colour over everything: a sketch behind a wall is picked through it, as in Onshape.
+/// colour over everything: a sketch behind a wall is picked through it, as in Onshape. The rest
+/// of the sketch under the pointer (a curve, point or region of it) is drawn in
+/// [`SKETCH_HOVER_REST`], so the whole sketch shows.
 fn draw_sketch_curve_picks(
     cache: Res<PartCache>,
     highlight: Res<PlaneHighlight>,
     selection: Res<Selection>,
     mut g: Gizmos<PickedEdgeGizmos>,
 ) {
+    let hovered_sketch = highlight.viewport.and_then(|p| p.sketch());
     for sc in &cache.sketch_curves {
+        let in_hovered = hovered_sketch == Some(sc.sketch);
         for (id, pts) in &sc.curves {
             let pick = Pick::SketchCurve(sc.sketch, *id);
             let color = if highlight.is_hovered(pick) {
                 EDGE_HOVER
             } else if selection.contains(pick) {
                 SELECTED
+            } else if in_hovered {
+                SKETCH_HOVER_REST
             } else {
                 continue;
             };
@@ -3427,6 +3431,8 @@ fn draw_sketch_curve_picks(
     }
 }
 
+/// Part edges, hover and selection outlines.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn draw_part_edges(
     cache: Res<PartCache>,
     over: Res<PartOverride>,
@@ -4065,6 +4071,10 @@ pub const HOVER: Color = Color::srgb(1.0, 198.0 / 255.0, 133.0 / 255.0);
 /// A hovered edge: the same orange, more saturated so the thin line reads as clearly as the
 /// face outline of `screens/24a` (P3.2 judge).
 pub const EDGE_HOVER: Color = Color::srgb(1.0, 170.0 / 255.0, 60.0 / 255.0);
+/// The rest of a sketch one of whose curves, points or regions is hovered: a bright blue, apart
+/// from the hovered curve's [`EDGE_HOVER`] orange (its closed regions are tinted in it too,
+/// `sketch_draw::sync_hover_fill`).
+pub const SKETCH_HOVER_REST: Color = Color::srgb(0.35, 0.62, 1.0);
 
 /// A selected edge under the pointer: a bright yellow, apart from the selection's orange.
 pub const EDGE_HOVER_SELECTED: Color = Color::srgb(1.0, 0.95, 0.35);

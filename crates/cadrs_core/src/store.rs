@@ -845,6 +845,8 @@ mod migrate {
                 simulation: Default::default(),
                 named_views: Vec::new(),
                 studio_variables: Vec::new(),
+                configuration: Default::default(),
+                configured_sources: Vec::new(),
                 kind: match e.kind {
                     ElementKindV1::PartStudio { features } => cur::ElementKind::PartStudio {
                         features: features
@@ -876,6 +878,7 @@ mod migrate {
                         suppressed: Vec::new(),
                         rollback: None,
                         part_folders: Vec::new(),
+                        node_layout: None,
                     },
                     ElementKindV1::Assembly => cur::ElementKind::Assembly,
                 },
@@ -892,6 +895,7 @@ mod migrate {
                 custom_colors: Vec::new(),
                 material_libraries: Vec::new(),
                 standard_content: Vec::new(),
+                configured: Vec::new(),
                 properties: Default::default(),
                 linked: Vec::new(),
                 moved: Vec::new(),

@@ -172,6 +172,8 @@ fn shell_of(e: &Element) -> Element {
         simulation,
         named_views,
         studio_variables,
+        configuration,
+        configured_sources,
     } = e;
     let kind = match kind {
         ElementKind::PartStudio {
@@ -184,8 +186,10 @@ fn shell_of(e: &Element) -> Element {
             folders,
             suppressed,
             rollback,
+            node_layout,
         } => ElementKind::PartStudio {
             features: Vec::new(),
+            node_layout: node_layout.clone(),
             parts: parts.clone(),
             part_folders: part_folders.clone(),
             sketch_visibility: sketch_visibility.clone(),
@@ -207,6 +211,8 @@ fn shell_of(e: &Element) -> Element {
         simulation: simulation.clone(),
         named_views: named_views.clone(),
         studio_variables: studio_variables.clone(),
+        configuration: configuration.clone(),
+        configured_sources: configured_sources.clone(),
     }
 }
 
@@ -283,6 +289,7 @@ fn head_of(doc: &Document) -> Document {
         custom_colors,
         material_libraries,
         standard_content,
+        configured,
         properties,
         linked,
         moved,
@@ -296,6 +303,7 @@ fn head_of(doc: &Document) -> Document {
         custom_colors: custom_colors.clone(),
         material_libraries: material_libraries.clone(),
         standard_content: standard_content.clone(),
+        configured: configured.clone(),
         properties: properties.clone(),
         linked: linked.clone(),
         moved: moved.clone(),

@@ -53,6 +53,7 @@ pub mod jog_slider;
 pub mod list;
 pub mod menu;
 pub mod name_popup;
+pub mod node_graph;
 pub mod path_field;
 pub mod progress;
 pub mod quick_dim;
@@ -181,7 +182,9 @@ pub use selection_list::{
 };
 pub use shortcut_key::ShortcutKey;
 pub use spinner::Spinner;
-pub use splitter::{HoverCursor, Splitter, SplitterMoved, horizontal_splitter};
+pub use splitter::{
+    HoverCursor, Splitter, SplitterMoved, horizontal_splitter, left_edge, top_edge,
+};
 pub use style::{ForceState, InheritFg, Selected, StateColors, VisualState, Visuals};
 pub use surface::RenderSurface;
 pub use switch::{Switch, SwitchChange, SwitchState};
@@ -320,6 +323,7 @@ impl Plugin for CadrsUiPlugin {
             .add_plugins(progress::ProgressPlugin)
             .add_plugins(entry_list::EntryListPlugin)
             .add_plugins(name_popup::NamePopupPlugin)
+            .add_plugins(node_graph::NodeGraphPlugin)
             .add_plugins((
                 floating_panel::FloatingPanelPlugin,
                 segmented::SegmentedPlugin,

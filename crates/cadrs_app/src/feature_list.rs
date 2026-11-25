@@ -92,6 +92,18 @@ struct BarDrag {
 pub const ROLLED_BACK_FG: Color = Color::srgb(0.651, 0.651, 0.651);
 pub const ROLLED_BACK_ICON: Color = Color::srgb(0.769, 0.769, 0.769);
 
+/// A hidden thing's row (a sketch, plane or part hidden in the view): its text in the grey of a
+/// hidden default plane's row, the same in every list.
+pub fn hidden_fg(t: &cadrs_ui::Theme) -> Color {
+    t.disabled_foreground
+}
+
+/// A hidden thing's row's icon: faded through the tint's alpha, so a full-colour icon (a
+/// sketch's, a part's) fades as a glyph does.
+pub fn hidden_icon(t: &cadrs_ui::Theme) -> Color {
+    t.muted_foreground.with_alpha(0.4)
+}
+
 /// The tint of a rolled-back or suppressed row's icon: the grey for glyph icons; full-colour
 /// icons keep their colours, so they fade through the tint's alpha instead.
 pub fn rolled_back_icon(full_colour: bool) -> Color {

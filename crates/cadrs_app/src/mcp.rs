@@ -365,6 +365,8 @@ fn run(world: &mut World, call: &Call) -> Result<Value, String> {
             describe_assembly(doc(world)?, assembly(doc(world)?, p.assembly.as_deref())?)
         }
         Call::InsertInstance(p) => insert_instance(world, p),
+        Call::GetNodeGraph(p) => get_node_graph(world, p),
+        Call::ConnectParameter(p) => connect_parameter(world, p),
         Call::ImportFile(p) => import_file(world, p),
         Call::AddMate(p) => add_mate(world, p),
         Call::SetMateValues(p) => set_mate_values(world, p),
@@ -381,6 +383,12 @@ fn run(world: &mut World, call: &Call) -> Result<Value, String> {
         Call::AddFootprint(p) => crate::mcp_board::add_footprint(world, p),
         Call::RemoveFootprint(p) => crate::mcp_board::remove_footprint(world, p),
         Call::LinkOutline(p) => crate::mcp_board::link_outline(world, p),
+        Call::GetConfiguration(p) => crate::mcp_config::get_configuration(world, p),
+        Call::SetConfiguration(p) => crate::mcp_config::set_configuration(world, p),
+        Call::SetActiveConfiguration(p) => crate::mcp_config::set_active_configuration(world, p),
+        Call::SetInstanceConfiguration(p) => {
+            crate::mcp_config::set_instance_configuration(world, p)
+        }
     }
 }
 
@@ -857,7 +865,7 @@ fn delete_tab(world: &mut World, name: &str) -> Result<Value, String> {
 }
 
 /// The Assembly tab a call names, or the active tab.
-fn assembly(d: &ActiveDocument, name: Option<&str>) -> Result<ElementId, String> {
+pub(crate) fn assembly(d: &ActiveDocument, name: Option<&str>) -> Result<ElementId, String> {
     let e = match name {
         Some(n) => d
             .doc
@@ -878,7 +886,7 @@ fn assembly(d: &ActiveDocument, name: Option<&str>) -> Result<ElementId, String>
 }
 
 /// An assembly's instances and mate features.
-fn describe_assembly(d: &ActiveDocument, element: ElementId) -> Result<Value, String> {
+pub(crate) fn describe_assembly(d: &ActiveDocument, element: ElementId) -> Result<Value, String> {
     use cadrs_core::assembly::InstanceSource;
     let e = d.doc.element(element).ok_or("the Assembly is gone")?;
     let asm = e.assembly_model().ok_or("not an Assembly")?;
@@ -902,6 +910,14 @@ fn describe_assembly(d: &ActiveDocument, element: ElementId) -> Result<Value, St
                 "source": tab(i.source.element()),
                 "translation_mm": i.pose.translation.map(round),
             });
+            // An instance in a configuration: its source is its Part Studio's configured
+            // copy; the tab named is the Part Studio (its configuration below).
+            if let Some((studio, _)) =
+                cadrs_core::configuration::copy_of(&d.doc, i.source.element())
+                && let Some(s) = d.doc.element(studio)
+            {
+                v["source"] = json!(s.name);
+            }
             match i.source {
                 InstanceSource::Part { .. } => v["kind"] = json!("part"),
                 InstanceSource::Studio { board: None, .. } => {
@@ -913,6 +929,9 @@ fn describe_assembly(d: &ActiveDocument, element: ElementId) -> Result<Value, St
             }
             if i.pose.rotation != cadrs_core::assembly::Pose::IDENTITY.rotation {
                 v["rotation"] = json!(i.pose.rotation.map(|r| r.map(|x| (x * 1e6).round() / 1e6)));
+            }
+            if let Some(c) = &i.configuration {
+                v["configuration"] = crate::mcp_config::instance_label(d, c);
             }
             for (k, on) in [("fixed", i.fixed), ("hidden", i.hidden), ("suppressed", i.suppressed)] {
                 if on {
@@ -957,13 +976,14 @@ fn insert_instance(world: &mut World, p: &tools::InsertInstance) -> Result<Value
         Instance, InstanceId, InstanceSource, Pose, commands::InsertInstance,
     };
     let element = assembly(doc(world)?, p.assembly.as_deref())?;
-    let studio = part_studio(doc(world)?, Some(&p.part_studio))?;
-    let features = doc(world)?
-        .doc
-        .element(studio)
-        .ok_or("the Part Studio is gone")?
-        .features()
-        .to_vec();
+    let tab = part_studio(doc(world)?, Some(&p.part_studio))?;
+    // (A configured Part Studio's parts are the same in every configuration: its configuration
+    // is given below, its copy made by the insert.)
+    let (studio, features) = {
+        let d = doc(world)?;
+        let el = d.doc.element(tab).ok_or("the Part Studio is gone")?;
+        (tab, el.active_features())
+    };
     let p = p.clone();
     after_build_mut(world, features, move |world, b| {
         let parts = &b.parts;
@@ -997,6 +1017,11 @@ fn insert_instance(world: &mut World, p: &tools::InsertInstance) -> Result<Value
             }
         };
         instance.fixed = p.fixed;
+        if let Some(map) = &p.configuration {
+            instance.configuration = Some(crate::mcp_config::instance_configuration(
+                world, studio, map,
+            )?);
+        }
         doc_mut(world)?
             .execute(&InsertInstance { element, instance })
             .map_err(|e| e.to_string())?;
@@ -1528,13 +1553,13 @@ fn open_document(world: &mut World, name: &str) -> Result<Value, String> {
     describe(world)
 }
 
-fn doc(world: &World) -> Result<&ActiveDocument, String> {
+pub(crate) fn doc(world: &World) -> Result<&ActiveDocument, String> {
     world
         .get_resource::<ActiveDocument>()
         .ok_or_else(|| "no document is open: call create_document or open_document first".into())
 }
 
-fn doc_mut(world: &mut World) -> Result<Mut<'_, ActiveDocument>, String> {
+pub(crate) fn doc_mut(world: &mut World) -> Result<Mut<'_, ActiveDocument>, String> {
     world
         .get_resource_mut::<ActiveDocument>()
         .ok_or_else(|| "no document is open: call create_document or open_document first".into())
@@ -1553,7 +1578,7 @@ fn kind_label(kind: &ElementKind) -> &'static str {
 }
 
 /// The Part Studio a call names, or the active tab.
-fn part_studio(d: &ActiveDocument, name: Option<&str>) -> Result<ElementId, String> {
+pub(crate) fn part_studio(d: &ActiveDocument, name: Option<&str>) -> Result<ElementId, String> {
     let e = match name {
         Some(n) => d
             .doc
@@ -1574,7 +1599,7 @@ fn part_studio(d: &ActiveDocument, name: Option<&str>) -> Result<ElementId, Stri
 }
 
 /// The document, its tabs, and the active Part Studio's features and parts.
-fn describe(world: &World) -> Result<Value, String> {
+pub(crate) fn describe(world: &World) -> Result<Value, String> {
     let d = doc(world)?;
     let tabs: Vec<Value> = d
         .doc
@@ -1597,13 +1622,143 @@ fn describe(world: &World) -> Result<Value, String> {
         e.features().to_vec(),
         e.part_props().to_vec(),
     );
+    let config = e
+        .configuration()
+        .and_then(|_| crate::mcp_config::describe(world, e.id).ok());
     after_build(world, e.features_to_build(), move |b| {
         out["part_studio"] = studio_state(&name, &features, &props, b);
+        if let Some(c) = config {
+            out["part_studio"]["configuration"] = c;
+        }
         Ok(out)
     })
 }
 
-/// A Part Studio's features (with their rebuild errors and warnings) and parts.
+/// The configuration (as get_configuration describes it) and the parts the active one builds
+/// (suppressed features left out).
+fn configuration_state(world: &mut World, element: ElementId) -> Result<Value, String> {
+    let configuration = crate::mcp_config::describe(world, element)?;
+    let d = doc(world)?;
+    let e = d.doc.element(element).ok_or("the Part Studio is gone")?;
+    let mut out = json!({ "part_studio": e.name, "configuration": configuration });
+    let (name, features, props) = (
+        e.name.clone(),
+        e.features().to_vec(),
+        e.part_props().to_vec(),
+    );
+    after_build(world, e.active_features(), move |b| {
+        let state = studio_state(&name, &features, &props, b);
+        out["features"] = state["features"].clone();
+        out["parts"] = state["parts"].clone();
+        Ok(out)
+    })
+}
+
+/// The studio's node graph ([`crate::node_view::node_graph_json`]); the Parts node's parts, and
+/// the wires the rebuild knows of (a cut into the part it cuts), when it is the studio shown
+/// (they are built for that one).
+fn get_node_graph(world: &mut World, p: &tools::PartStudio) -> Result<Value, String> {
+    let d = doc(world)?;
+    let element = part_studio(d, p.part_studio.as_deref())?;
+    let el = d.doc.element(element).ok_or("no such Part Studio")?.clone();
+    let shown = d.active_element().is_some_and(|a| a.id == element);
+    let (parts, uses) = match world.get_resource::<crate::parts::PartCache>() {
+        Some(c) if shown => (c.parts.clone(), c.uses.clone()),
+        _ => Default::default(),
+    };
+    let mut out = crate::node_view::node_graph_json(&el, &parts, &uses);
+    out["part_studio"] = json!(el.name);
+    Ok(out)
+}
+
+fn run_cmd(world: &mut World, cmd: &dyn cadrs_core::Command) -> Result<(), String> {
+    doc_mut(world)?.execute(cmd).map_err(|e| e.to_string())
+}
+
+fn connect_parameter(world: &mut World, p: &tools::ConnectParameter) -> Result<Value, String> {
+    use cadrs_core::configuration as cfg;
+    let element = part_studio(doc(world)?, p.part_studio.as_deref())?;
+    let feature = doc(world)?
+        .doc
+        .element(element)
+        .and_then(|e| e.features().iter().find(|f| f.name == p.feature))
+        .map(|f| f.id)
+        .ok_or_else(|| format!("no feature named {:?}", p.feature))?;
+    let expr = p.expr.as_ref().map(|e| {
+        let e = e.trim();
+        if cadrs_sketch::units::is_variable_name(e) {
+            format!("#{e}")
+        } else {
+            e.to_string()
+        }
+    });
+    // A sketch's dimension, by its name in the sketch (`D1`, `D2`, …).
+    let dimension = doc(world)?
+        .doc
+        .element(element)
+        .and_then(|e| e.feature(feature))
+        .and_then(|f| {
+            cfg::dimension_slots(f)
+                .into_iter()
+                .find(|d| d.label.eq_ignore_ascii_case(p.field.trim()))
+        });
+    if let Some(d) = dimension {
+        match expr {
+            Some(expr) => run_cmd(
+                world,
+                &cfg::ConnectDimension {
+                    element,
+                    feature,
+                    dimension: d.id,
+                    expr,
+                },
+            )?,
+            None => run_cmd(
+                world,
+                &cfg::DisconnectDimension {
+                    element,
+                    feature,
+                    dimension: d.id,
+                },
+            )?,
+        }
+    } else if p.field.eq_ignore_ascii_case("bypass") {
+        let rule = expr.map(|expr| cadrs_core::variables::SuppressByVariable {
+            expr,
+            invert: false,
+        });
+        run_cmd(
+            world,
+            &cadrs_core::commands::SetSuppressByVariable {
+                element,
+                feature,
+                rule,
+            },
+        )?;
+    } else {
+        match expr {
+            Some(expr) => run_cmd(
+                world,
+                &cfg::ConnectParameter {
+                    element,
+                    feature,
+                    slot: p.field.clone(),
+                    expr,
+                },
+            )?,
+            None => run_cmd(
+                world,
+                &cfg::DisconnectParameter {
+                    element,
+                    feature,
+                    slot: p.field.clone(),
+                },
+            )?,
+        }
+    }
+    configuration_state(world, element)
+}
+
 fn studio_state(
     name: &str,
     features: &[cadrs_core::Feature],
@@ -3414,6 +3569,174 @@ mod tests {
         )
         .unwrap();
         assert_eq!(asm["instances"].as_array().unwrap().len(), 1);
+    }
+
+    /// The configuration tools on the merged model: a Value input and a Checkbox wired with
+    /// connect_parameter (as the node view's wires), a List whose column configures a field
+    /// (as the Configuration panel's table), the configuration shown picked, the node graph's
+    /// wires, and assembly instances in two configurations of one Part Studio.
+    #[test]
+    fn configurations_through_the_tools() {
+        let mut world = World::new();
+        world.insert_resource(ActiveDocument::new(Document::new("Doc")));
+        world.insert_resource(crate::WorkspaceUnits::default());
+        fn p<T: serde::de::DeserializeOwned>(v: Value) -> T {
+            serde_json::from_value(v).unwrap()
+        }
+        // The Part Studio's parts' volume as it shows them.
+        fn volume(world: &World) -> f64 {
+            let d = &world.resource::<ActiveDocument>().doc;
+            cadrs_core::rebuild::build(&d.elements[0].active_features())
+                .parts
+                .iter()
+                .map(|q| q.mass.as_ref().unwrap().volume)
+                .sum()
+        }
+        let sketch = add_sketch(
+            &mut world,
+            &p(json!({ "plane": "Top", "entities": [
+            { "type": "rectangle", "x0": 0, "y0": 0, "x1": 10, "y1": 10 },
+        ] })),
+        )
+        .unwrap();
+        super::extrude(
+            &mut world,
+            &p(json!({ "sketch": sketch["sketch"], "depth": 5 })),
+        )
+        .unwrap();
+        let c = crate::mcp_config::set_configuration(
+            &mut world,
+            &p(json!({ "inputs": [
+                { "name": "height", "kind": "Length", "default": 5 },
+                { "name": "on", "kind": "Checkbox", "default": true },
+            ] })),
+        )
+        .unwrap();
+        assert_eq!(c["inputs"][0]["variable"], "#height");
+        // A Value wired into Depth, set per configuration.
+        let c = connect_parameter(
+            &mut world,
+            &p(json!({ "feature": "Extrude 1", "field": "Depth", "expr": "height" })),
+        )
+        .unwrap();
+        assert_eq!(c["parts"][0]["volume_mm3"], 500.0);
+        crate::mcp_config::set_active_configuration(
+            &mut world,
+            &p(json!({ "values": { "height": 20 } })),
+        )
+        .unwrap();
+        assert!((volume(&world) - 2000.0).abs() < 1e-6);
+        // A Checkbox wired into Bypass: unchecked, no extrude.
+        connect_parameter(
+            &mut world,
+            &p(json!({ "feature": "Extrude 1", "field": "Bypass", "expr": "#on" })),
+        )
+        .unwrap();
+        crate::mcp_config::set_active_configuration(
+            &mut world,
+            &p(json!({ "values": { "on": false } })),
+        )
+        .unwrap();
+        assert_eq!(volume(&world), 0.0);
+        // The node graph: the sketch into the extrude, the inputs (a node each) into its Depth
+        // and Bypass.
+        let g = get_node_graph(&mut world, &p(json!({}))).unwrap();
+        let wire = |g: &Value, from: &str, socket: &str, to: &str, to_socket: &str| {
+            g["wires"].as_array().unwrap().iter().any(|w| {
+                w["from"]["node"] == from
+                    && w["from"]["socket"] == socket
+                    && w["to"]["node"] == to
+                    && w["to"]["socket"] == to_socket
+            })
+        };
+        assert!(
+            wire(&g, "Sketch 1", "geometry out", "Extrude 1", "geometry in"),
+            "{g}"
+        );
+        assert!(wire(&g, "height", "height", "Extrude 1", "Depth"), "{g}");
+        assert!(wire(&g, "on", "on", "Extrude 1", "bypass"), "{g}");
+        assert!(
+            connect_parameter(
+                &mut world,
+                &p(json!({ "feature": "Extrude 1", "field": "Width", "expr": "#height" }))
+            )
+            .is_err()
+        );
+        // A List whose column configures Depth: Thin is 5, Thick twice #height.
+        crate::mcp_config::set_configuration(
+            &mut world,
+            &p(json!({
+                "inputs": [
+                    { "name": "height", "kind": "Length", "default": 5 },
+                    { "name": "on", "kind": "Checkbox", "default": true },
+                    { "name": "Size", "kind": "List", "rows": ["Thin", "Thick"], "parameters": [
+                        { "parameter": "Extrude 1 · Depth", "values": ["5 mm", "#height * 2"], "name": "depth" },
+                    ] },
+                ],
+                "active": { "on": true, "Size": "Thin" },
+            })),
+        )
+        .unwrap();
+        let depth = |world: &World| {
+            let d = &world.resource::<ActiveDocument>().doc;
+            d.elements[0].features()[1]
+                .extrude()
+                .unwrap()
+                .depth_expr
+                .clone()
+        };
+        assert_eq!(depth(&world), "#depth");
+        assert!((volume(&world) - 500.0).abs() < 1e-6);
+        crate::mcp_config::set_active_configuration(
+            &mut world,
+            &p(json!({ "values": { "Size": "Thick", "height": 20 } })),
+        )
+        .unwrap();
+        assert!((volume(&world) - 4000.0).abs() < 1e-6);
+        let g = get_node_graph(&mut world, &p(json!({}))).unwrap();
+        assert!(wire(&g, "Size", "depth", "Extrude 1", "Depth"), "{g}");
+        // An instance in each configuration of the List.
+        for size in ["Thin", "Thick"] {
+            insert_instance(
+                &mut world,
+                &p(json!({ "assembly": "Assembly 1", "part_studio": "Part Studio 1", "part": "Part 1",
+                    "configuration": { "Size": size } })),
+            )
+            .unwrap();
+        }
+        let asm = run(
+            &mut world,
+            &Call::GetAssembly(p(json!({ "assembly": "Assembly 1" }))),
+        )
+        .unwrap();
+        let shows: Vec<String> = asm["instances"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["configuration"]["shows"].as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            shows[0].contains("Thin") && shows[1].contains("Thick"),
+            "{shows:?}"
+        );
+        assert_eq!(asm["instances"][0]["source"], "Part Studio 1");
+        let d = &world.resource::<ActiveDocument>().doc;
+        let vols: Vec<f64> = d.elements[1]
+            .assembly
+            .instances
+            .iter()
+            .map(|i| {
+                let b = cadrs_core::rebuild::build(
+                    &d.element(i.source.element()).unwrap().active_features(),
+                );
+                b.parts[0].mass.as_ref().unwrap().volume
+            })
+            .collect();
+        // Thin: 5 mm; Thick: twice #height, which the instance has as the studio shows it (20).
+        assert!(
+            (vols[0] - 500.0).abs() < 1e-6 && (vols[1] - 4000.0).abs() < 1e-6,
+            "{vols:?}"
+        );
     }
 
     /// Ground sections 5 m apart (three lines and the ground as one spline), lofted pair by pair:

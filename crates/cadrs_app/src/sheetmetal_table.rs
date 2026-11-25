@@ -89,8 +89,7 @@ use crate::camera::{StandardView, ViewState};
 use crate::parts::PartCache;
 use crate::side_panel::SidePanel;
 use crate::viewport::{
-    ActiveKind, ExtraHighlight, Pick, PlaneHighlight, Selection, ViewportArea, ViewportRect,
-    ViewportView,
+    ActiveKind, ExtraHighlight, Pick, PlaneHighlight, Selection, ViewportRect, ViewportView,
 };
 use crate::{ActiveDocument, AppState};
 
@@ -1006,7 +1005,8 @@ fn sync_panel(
             t.main_fit_in = Some(4);
         }
     }
-    let mut q_area = world.query_filtered::<(Entity, &ChildOf), With<ViewportArea>>();
+    let mut q_area =
+        world.query_filtered::<(Entity, &ChildOf), With<crate::side_panel::SideDock>>();
     let Some((area, parent)) = q_area.iter(world).next().map(|(e, c)| (e, c.parent())) else {
         return;
     };

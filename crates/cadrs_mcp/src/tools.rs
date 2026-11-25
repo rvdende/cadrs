@@ -3,6 +3,7 @@
 
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CreateDocument {
@@ -678,6 +679,119 @@ pub struct InsertInstance {
     /// Fix the instance in place (the solver keeps it put, as ground); default false.
     #[serde(default)]
     pub fixed: bool,
+    /// For a configured Part Studio: the instance's configuration, input name → value (a
+    /// List's row name, a Checkbox's true or false); inputs
+    /// not given take the Part Studio's active values. Omitted: the active configuration.
+    #[serde(default)]
+    pub configuration: Option<BTreeMap<String, serde_json::Value>>,
+}
+
+/// A Part Studio's configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct GetConfiguration {
+    /// The Part Studio tab's name; omitted: the active tab.
+    #[serde(default)]
+    pub part_studio: Option<String>,
+}
+
+/// One input of a configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ConfigInputSpec {
+    /// Its name: letters, digits and _ (a Checkbox's `#name` in expressions).
+    pub name: String,
+    /// "List" (a table of named configurations), "Checkbox" (`#name` 1 or 0), or a Value set
+    /// per configuration: "Length" (mm), "Angle" (degrees) or "Number" (`#name`).
+    pub kind: String,
+    /// A List's configurations (the table's rows), in order.
+    #[serde(default)]
+    pub rows: Vec<String>,
+    /// The default: a List's row name (omitted: the first), a Checkbox's true or false, a
+    /// Value's number or value with its unit.
+    #[serde(default)]
+    pub default: Option<serde_json::Value>,
+    /// Its configured parameters: the table's columns.
+    #[serde(default)]
+    pub parameters: Vec<ConfigParamSpec>,
+}
+
+/// A configured parameter: a column of an input's table.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ConfigParamSpec {
+    /// The parameter, as get_configuration's `configurable` lists them: "Extrude 1 · Depth",
+    /// or "Length", "Angle" or "Number" for a plain output (a variable of its own, `name`, that
+    /// fields read through connect_parameter: the node view's + Output),
+    /// "Sketch 1 · D2" (a sketch dimension), "#len · Value" (a Variable feature's value),
+    /// "Fillet 1 · Suppressed", or a part's property: "Part 1 · Part number" (Name, Part
+    /// number, Description, Revision, Vendor, Category and custom properties; not Mass, Unit of
+    /// measure, Material or Appearance).
+    pub parameter: String,
+    /// Its value in each row (a List's rows in order; a Checkbox's unchecked then checked): an
+    /// expression ("12 mm", "#Length - 2 mm") or a number in the workspace unit; true or
+    /// false for a Suppressed parameter; text for a property ("" leaves it unset).
+    pub values: Vec<serde_json::Value>,
+    /// The column's variable, `#name` without the #, that its parameter reads and any other
+    /// field may (connect_parameter); omitted: named after the parameter ("Extrude_1_Depth").
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// Defines a Part Studio's whole configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SetConfiguration {
+    /// The Part Studio tab's name; omitted: the active tab.
+    #[serde(default)]
+    pub part_studio: Option<String>,
+    /// The inputs, in order (an empty list removes the configuration). Inputs and rows keep
+    /// their identity by name, so instances already in assemblies keep their configuration.
+    pub inputs: Vec<ConfigInputSpec>,
+    /// The configuration the Part Studio shows: input name → value (as `values` of
+    /// set_active_configuration); omitted: as it is (or the defaults).
+    #[serde(default)]
+    pub active: Option<BTreeMap<String, serde_json::Value>>,
+}
+
+/// Picks the configuration a Part Studio shows.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SetActiveConfiguration {
+    /// The Part Studio tab's name; omitted: the active tab.
+    #[serde(default)]
+    pub part_studio: Option<String>,
+    /// Input name → value: a List's row name, a Checkbox's
+    /// true or false. Inputs not given keep their value.
+    pub values: BTreeMap<String, serde_json::Value>,
+}
+
+/// Sets the configuration of assembly instances of a configured Part Studio.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SetInstanceConfiguration {
+    /// The Assembly tab's name; omitted: the active tab.
+    #[serde(default)]
+    pub assembly: Option<String>,
+    /// The instances, by name as get_assembly lists them ("Plate <1>") or id.
+    pub instances: Vec<String>,
+    /// Input name → value (as set_active_configuration's); inputs not given keep the
+    /// instance's value. Null: no configuration of its own (the Part Studio's active one, followed).
+    #[serde(default)]
+    pub configuration: Option<BTreeMap<String, serde_json::Value>>,
+}
+
+/// Wires a feature's field to an expression of the configuration's inputs (or Variables), as
+/// the node view's wires do; or unwires it.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ConnectParameter {
+    /// The Part Studio tab's name; omitted: the active tab.
+    #[serde(default)]
+    pub part_studio: Option<String>,
+    /// The feature's name ("Extrude 1").
+    pub feature: String,
+    /// The field's label as the feature's dialog shows it ("Depth", "Radius", "Count"), a
+    /// sketch's dimension ("D1", "D2", … in the sketch's order), or "Bypass" for the feature's
+    /// suppression (suppressed while the expression is 0).
+    pub field: String,
+    /// The expression ("#length", "#length / 2"; a bare name is taken as `#name`); omitted:
+    /// unwire it (the field keeps its value as a number, Bypass is removed).
+    #[serde(default)]
+    pub expr: Option<String>,
 }
 
 /// Imports a file into the open document as a new Part Studio tab holding an Import feature.

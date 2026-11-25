@@ -168,6 +168,9 @@ pub struct InsertDraft {
     pub version: usize,
     /// The studio's parts: (id, name, ticked).
     pub parts: Vec<(PartId, String, bool)>,
+    /// The configuration a configured Part Studio's workspace is taken in (its active one
+    /// until another is picked).
+    pub configuration: Option<cadrs_core::configuration::ConfigValues>,
 }
 
 /// Another document an insert takes parts from: its versions, newest last, and the Part
@@ -344,6 +347,7 @@ pub fn insert_component(world: &mut World, role: Role) {
         studio: 0,
         version: 0,
         parts: Vec::new(),
+        configuration: None,
     };
     // A document without Part Studios of its own starts on the first other one.
     if studios.is_empty() && !d.others.is_empty() {
@@ -489,6 +493,11 @@ fn source_of(
         let el = doc.element(element)?;
         let mut f = cadrs_core::derived::DerivedFeature::new(None, element);
         f.fill_from(el, "", "");
+        // A configured studio in the configuration picked.
+        if let Some(values) = &d.configuration {
+            (f.studio, f.props) = cadrs_core::derived::source_state(el, Some(values), &doc.units);
+            f.configuration = Some(values.clone());
+        }
         return Some((f, Vec::new()));
     }
     let vs = versions(world);
