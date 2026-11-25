@@ -2325,14 +2325,41 @@ const OUT_CELL_W: f32 = 66.0;
 const OUT_END_W: f32 = 22.0;
 const OUT_GAP: f32 = 4.0;
 
+/// An input node's column widths, as wide as their longest text (an output's name, a value)
+/// so nothing is cut: (name, value), at least [`OUT_NAME_W`] and [`OUT_CELL_W`].
+fn input_columns(input: &ConfigInput) -> (f32, f32) {
+    // (About 7 px a character at the fields' size, and the field's padding.)
+    let fit = |chars: usize, least: f32, most: f32| (chars as f32 * 7.0 + 22.0).clamp(least, most);
+    let names = input
+        .params
+        .iter()
+        .map(|p| p.name.chars().count())
+        .chain(std::iter::once(input.name.chars().count()))
+        .max()
+        .unwrap_or(0);
+    let values = input
+        .params
+        .iter()
+        .flat_map(|p| &p.values)
+        .filter_map(|v| v.as_expr())
+        .map(|e| e.chars().count())
+        .chain(input.row_names().iter().map(|n| n.chars().count()))
+        .max()
+        .unwrap_or(0);
+    (
+        fit(names, OUT_NAME_W, 220.0),
+        fit(values, OUT_CELL_W, 160.0),
+    )
+}
+
 /// An input node's width: its table's (at least a feature node's).
 fn input_node_width(input: &ConfigInput) -> f32 {
     let cells = match input.kind {
         InputKind::Value { .. } => 1,
         _ => input.row_count(),
     } as f32;
-    (12.0 + OUT_NAME_W + OUT_TYPE_W + cells * OUT_CELL_W + OUT_END_W + (cells + 3.0) * OUT_GAP)
-        .max(NODE_W)
+    let (name_w, cell_w) = input_columns(input);
+    (12.0 + name_w + OUT_TYPE_W + cells * cell_w + OUT_END_W + (cells + 3.0) * OUT_GAP).max(NODE_W)
 }
 
 /// A guess of an input node's height before it is laid out (its heading and rows, + Output).
@@ -2387,6 +2414,7 @@ fn spawn_input_node(
     let id = input.id;
     let slug = input.name.clone();
     let width = input_node_width(input);
+    let (name_w, cell_w) = input_columns(input);
     let root = world
         .spawn((
             GraphNode::bundle(format!("node-config-{slug}"), pos),
@@ -2441,12 +2469,7 @@ fn spawn_input_node(
                 row(),
             ))
             .with_children(|r| {
-                label(
-                    r,
-                    tr("node-view-output-name"),
-                    OUT_NAME_W,
-                    t.muted_foreground,
-                );
+                label(r, tr("node-view-output-name"), name_w, t.muted_foreground);
                 label(
                     r,
                     tr("node-view-output-type"),
@@ -2454,12 +2477,7 @@ fn spawn_input_node(
                     t.muted_foreground,
                 );
                 if matches!(input.kind, InputKind::Value { .. }) {
-                    label(
-                        r,
-                        tr("node-view-output-value"),
-                        OUT_CELL_W,
-                        t.muted_foreground,
-                    );
+                    label(r, tr("node-view-output-value"), cell_w, t.muted_foreground);
                 }
                 for (k, n) in input.row_names().into_iter().enumerate() {
                     let mut button =
@@ -2480,7 +2498,7 @@ fn spawn_input_node(
                     ))
                     .entry::<Node>()
                     .and_modify(|mut n| {
-                        n.width = Val::Px(OUT_CELL_W);
+                        n.width = Val::Px(cell_w);
                         n.flex_shrink = 0.0;
                     });
                 }
@@ -2502,7 +2520,7 @@ fn spawn_input_node(
                             ConfigRole::OutputName(id, None),
                             TextInput::new(format!("node-output-{}-name", input.name))
                                 .value(input.name.clone())
-                                .width(Val::Px(OUT_NAME_W))
+                                .width(Val::Px(name_w))
                                 .height(22.0)
                                 .select_all_on_focus()
                                 .build(t),
@@ -2528,7 +2546,7 @@ fn spawn_input_node(
                                     ConfigRole::Value(id),
                                     TextInput::new(format!("node-output-{}-1", input.name))
                                         .value(units.with_unit(value, kind.quantity()))
-                                        .width(Val::Px(OUT_CELL_W))
+                                        .width(Val::Px(cell_w))
                                         .height(22.0)
                                         .select_all_on_focus()
                                         .build(t),
@@ -2542,7 +2560,7 @@ fn spawn_input_node(
                                     t.muted_foreground,
                                 );
                                 for v in ["0", "1"] {
-                                    label(r, v.into(), OUT_CELL_W, t.muted_foreground);
+                                    label(r, v.into(), cell_w, t.muted_foreground);
                                 }
                             }
                         }
@@ -2563,7 +2581,7 @@ fn spawn_input_node(
                             ConfigRole::OutputName(id, Some(j)),
                             TextInput::new(format!("node-output-{}-name", p.name))
                                 .value(p.name.clone())
-                                .width(Val::Px(OUT_NAME_W))
+                                .width(Val::Px(name_w))
                                 .height(22.0)
                                 .select_all_on_focus()
                                 .build(t),
@@ -2584,7 +2602,7 @@ fn spawn_input_node(
                             let name = format!("node-output-{}-{}", p.name, row_at + 1);
                             match v {
                                 cfg::CellValue::Bool(on) => {
-                                    r.spawn(cell_node(OUT_CELL_W)).with_children(|c| {
+                                    r.spawn(cell_node(cell_w)).with_children(|c| {
                                         c.spawn((
                                             ConfigRole::Cell(id, j, row_at),
                                             cadrs_ui::Checkbox::new(name).checked(*on).build(t),
@@ -2596,7 +2614,7 @@ fn spawn_input_node(
                                         ConfigRole::Cell(id, j, row_at),
                                         TextInput::new(name)
                                             .value(v.as_expr().unwrap_or_default().to_string())
-                                            .width(Val::Px(OUT_CELL_W))
+                                            .width(Val::Px(cell_w))
                                             .height(22.0)
                                             .select_all_on_focus()
                                             .build(t),
