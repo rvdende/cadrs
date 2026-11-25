@@ -6866,6 +6866,8 @@ node-view-enabled = Enabled (suppressed while false)
 node-view-drive-dimension = + Drive a dimension
 # Tooltip of an Input Configuration's + (in its heading): a new configuration (a copy of the last).
 node-view-add-row = Add configuration (a copy of the last)
+# A wire from the node view dropped on the 3D view but not on a dimension of the sketch being edited.
+node-view-drop-on-dimension = Drop it on a dimension of the sketch you are editing (double-click a sketch to edit it)
 node-view-no-dimension = No dimension of this sketch can take this value, or they are all driven already
 # The node view's Create menu (top left of the canvas) and what it adds.
 node-view-create = Create

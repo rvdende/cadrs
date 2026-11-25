@@ -76,6 +76,7 @@ impl Plugin for NodeViewPlugin {
         .add_observer(on_node_moved)
         .add_observer(on_wire_connect)
         .add_observer(on_wire_disconnect)
+        .add_observer(on_wire_dropped_outside)
         .add_observer(on_body_press)
         .add_observer(on_body_click)
         .add_observer(on_config_button)
@@ -342,7 +343,8 @@ fn quantity_type(q: Quantity) -> u32 {
 fn socket_color(ty: u32) -> Color {
     match ty {
         GEOMETRY => Color::srgb_u8(0x4c, 0xb0, 0x5c),
-        LENGTH => Color::srgb_u8(0xa1, 0xa1, 0xa1),
+        // (Red, as the input nodes' headers: grey was lost in the grid.)
+        LENGTH => Color::srgb_u8(0xe5, 0x55, 0x50),
         ANGLE => Color::srgb_u8(0x8f, 0x6f, 0xd6),
         NUMBER => Color::srgb_u8(0x3f, 0xa7, 0xc4),
         _ => Color::srgb_u8(0xd0, 0x7c, 0xc0),
@@ -1666,6 +1668,7 @@ fn spawn_feature_node(
                 socket_color(ty),
                 t,
             ),
+            cadrs_ui::node_graph::DragLabel(format!("#{}", v.name)),
             ChildOf(root),
         ));
     }
@@ -2710,6 +2713,7 @@ fn spawn_input_node(
                 socket_color(ty),
                 t,
             ),
+            cadrs_ui::node_graph::DragLabel(format!("#{name}")),
             ChildOf(root),
         ));
     }
@@ -3518,6 +3522,56 @@ fn on_drive_dimension(
                 element: el.id,
                 feature,
                 dimension: d.id,
+                expr: format!("#{name}"),
+            },
+        );
+        world.resource_mut::<ActiveDocument>().set_changed();
+    });
+}
+
+/// A wire dropped on the 3D view: on a dimension label of the sketch being edited, its `#name`
+/// drives that dimension (as a drop on the sketch node's **Drive a dimension** does); elsewhere,
+/// a note says where it goes.
+fn on_wire_dropped_outside(
+    ev: On<cadrs_ui::node_graph::WireDroppedOutside>,
+    mut commands: Commands,
+) {
+    let (from, at) = (ev.from, ev.position);
+    commands.queue(move |world: &mut World| {
+        let Some(src) = target_of(world, from) else {
+            return;
+        };
+
+        let Some(el) = world.resource::<ActiveDocument>().active_element().cloned() else {
+            return;
+        };
+        let name = match &src {
+            SocketKey::Input(n) => n.clone(),
+            SocketKey::Variable(f) => match el.feature(*f).map(|g| &g.kind) {
+                Some(FeatureKind::Variable(v)) => v.name.clone(),
+                _ => return,
+            },
+            _ => return,
+        };
+        let session = world
+            .get_resource::<crate::sketch::SketchSession>()
+            .filter(|s| s.element == el.id)
+            .map(|s| s.feature);
+        let dimension = session.and_then(|_| {
+            world
+                .get_resource::<crate::sketch_glyphs::SketchOverlay>()
+                .and_then(|o| crate::sketch_dimension::dim_at(o, at))
+        });
+        let (Some(feature), Some(dimension)) = (session, dimension) else {
+            toast(world, tr("node-view-drop-on-dimension"));
+            return;
+        };
+        run(
+            world,
+            &cfg::ConnectDimension {
+                element: el.id,
+                feature,
+                dimension,
                 expr: format!("#{name}"),
             },
         );
