@@ -78,12 +78,13 @@ jobs:
           tool: mdbook@0.5.4
 
       - name: Documentation
-        run: mdbook build docs --dest-dir ../site/docs
+        run: mdbook build docs --dest-dir site/docs
 
       - name: Redirects
         run: |
           set -euo pipefail
           test -f site/index.html
+          test -f site/docs/index.html
           # Where the app used to be, and pages that are no more: to the app, keeping the query
           # (/app/?quick-start).
           redirect='<!doctype html><meta charset="utf-8"><title>cadrs</title><link rel="canonical" href="https://cadrs.net/"><script>location.replace("/" + location.search + location.hash)</script><noscript><meta http-equiv="refresh" content="0; url=/"></noscript><a href="/">cadrs</a>'
