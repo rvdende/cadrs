@@ -566,6 +566,123 @@ fn inner_v<const ALL: bool>(
     }
 }
 
+/// A B-spline surface ruled along v: of degree 1 in v, its weights the same along v (a ruled
+/// loft's sides, between lines or between arcs), so that on each of its spans in v the point
+/// is linear in v, Sv constant and Su linear.
+fn ruled_nurbs(s: &Surface) -> Option<&NurbsSurface> {
+    let Surface::Nurbs(ns) = s else { return None };
+    let even = |row: &Vec<super::nurbs::H>| {
+        row.iter()
+            .all(|c| (c.w - row[0].w).abs() <= 1e-14 * row[0].w.abs())
+    };
+    (ns.dv == 1 && ns.cps.iter().all(even)).then_some(ns.as_ref())
+}
+
+/// [`inner_v`] on a [`ruled_nurbs`] surface: on each span in v between `v0` and `v`, x and N
+/// linear in v from the point and Su at its ends (two evaluations, not one a point). The
+/// moments are polynomials of degree 4 at most there (exact with 3 points, the volume's with
+/// 2); the area's |N| is the root of a quadratic, its points chosen by how near the quadratic's
+/// roots come ([`root_rule`]).
+#[allow(clippy::too_many_arguments)]
+fn inner_ruled<const ALL: bool>(
+    s: &Surface,
+    ns: &NurbsSurface,
+    u: f64,
+    v0: f64,
+    v: f64,
+    shift: &V3,
+    w: f64,
+    acc: &mut QE,
+) {
+    if (v - v0).abs() < tol::TINY {
+        return;
+    }
+    let (lo, hi, w) = if v > v0 { (v0, v, w) } else { (v, v0, -w) };
+    let mut at = lo;
+    let (mut pa, mut sua, _) = s.d1(u, lo);
+    let mut pieces: Vec<(f64, f64, usize)> = Vec::new();
+    let knots = ns
+        .kv
+        .iter()
+        .copied()
+        .filter(|k| *k > lo + 1e-14 && *k < hi - 1e-14);
+    for b in knots.chain(std::iter::once(hi)) {
+        if b <= at {
+            continue;
+        }
+        let (pb, sub, _) = s.d1(u, b);
+        let len = b - at;
+        let sv = (pb - pa) / len;
+        let (n0, n1) = (sua.cross(&sv), (sub - sua).cross(&sv));
+        pieces.clear();
+        if ALL {
+            let (qa, qb, qc) = (n1.dot(&n1), 2.0 * n0.dot(&n1), n0.dot(&n0));
+            root_rule(qa, qb, qc, 0.0, 1.0, 8, &mut pieces);
+        } else {
+            pieces.push((0.0, 1.0, 2));
+        }
+        for &(t0, t1, n) in &pieces {
+            let g = gauss(n);
+            let (m, r) = ((t0 + t1) * 0.5, (t1 - t0) * 0.5);
+            for (x, gw) in g.x.iter().zip(g.w) {
+                let t = m + r * x;
+                let p = pa + (pb - pa) * t;
+                let su = sua + (sub - sua) * t;
+                accumulate::<ALL>(&p, &su, &sv, shift, acc, w * gw * r * len);
+            }
+        }
+        (at, pa, sua) = (b, pb, sub);
+    }
+}
+
+/// Gauss rules over [t0, t1] for √(a t² + b t + c) (|N| along a ruling; the quadratic is never
+/// negative), times polynomials of degree 2 at most, into `out` as `(t0, t1, points)`: by the
+/// Bernstein ellipse through the quadratic's complex roots (the error falls as ρ^−2n), the
+/// interval halved where they come too near (toward a near double root, where |N| has a
+/// kink). At least 3 points, for the moments.
+fn root_rule(
+    a: f64,
+    b: f64,
+    c: f64,
+    t0: f64,
+    t1: f64,
+    depth: u32,
+    out: &mut Vec<(f64, f64, usize)>,
+) {
+    // |N| nearly constant along the ruling (or zero).
+    if a <= 1e-24 * c.max(f64::MIN_POSITIVE) || a == 0.0 {
+        out.push((t0, t1, 3));
+        return;
+    }
+    let (re, im) = (
+        -b / (2.0 * a),
+        (4.0 * a * c - b * b).max(0.0).sqrt() / (2.0 * a),
+    );
+    let (m, h) = ((t0 + t1) * 0.5, (t1 - t0) * 0.5);
+    let (x, y) = ((re - m) / h, im / h);
+    // A double root (|N| = √a |t − re|, piecewise linear) or nearly: its kink apart.
+    if y < 1e-7 {
+        if re > t0 + 1e-12 * h && re < t1 - 1e-12 * h {
+            out.push((t0, re, 3));
+            out.push((re, t1, 3));
+        } else {
+            out.push((t0, t1, 3));
+        }
+        return;
+    }
+    let semi = ((x - 1.0).hypot(y) + (x + 1.0).hypot(y)) * 0.5;
+    let rho = semi + (semi * semi - 1.0).max(0.0).sqrt();
+    let n = (17.3 / rho.ln()).ceil() as usize + 1;
+    if n <= 10 || depth == 0 {
+        out.push((t0, t1, n.clamp(3, MAX_GAUSS)));
+        return;
+    }
+    let mid = if re > t0 && re < t1 { re } else { m };
+    let mid = mid.clamp(t0 + 0.05 * h, t1 - 0.05 * h);
+    root_rule(a, b, c, t0, mid, depth - 1, out);
+    root_rule(a, b, c, mid, t1, depth - 1, out);
+}
+
 /// The outer rule along a p-curve: how finely its pieces are cut further (`extra` pieces per
 /// piece over a turn of `step`, none when infinite) and the points per piece (None: by the
 /// number of pieces, for p-curves the integrand is only smooth along).
@@ -696,6 +813,7 @@ fn smooth_rule<const ALL: bool>(pc: &Curve, pieces: usize) -> usize {
 /// Face integrals with the inner integral along v: ∫∫ h = −∮ G du.
 fn face_integrals_v<const ALL: bool>(body: &Body, f: &Face, shift: &V3) -> QE {
     let mut acc = [0.0; NE];
+    let ruled = ruled_nurbs(&f.surf);
     let mut v_ref = f64::INFINITY;
     for l in &f.loops {
         for c in l {
@@ -748,7 +866,13 @@ fn face_integrals_v<const ALL: bool>(body: &Body, f: &Face, shift: &V3) -> QE {
                     if duv.x == 0.0 {
                         continue;
                     }
-                    inner_v::<ALL>(&f.surf, uv.x, v_ref, uv.y, shift, -gw * r * duv.x, &mut acc);
+                    let w = -gw * r * duv.x;
+                    match ruled {
+                        Some(ns) => {
+                            inner_ruled::<ALL>(&f.surf, ns, uv.x, v_ref, uv.y, shift, w, &mut acc)
+                        }
+                        None => inner_v::<ALL>(&f.surf, uv.x, v_ref, uv.y, shift, w, &mut acc),
+                    }
                 }
             }
         }
@@ -1180,6 +1304,10 @@ pub(crate) fn face_integrals_of<const ALL: bool>(body: &Body, f: &Face, shift: &
             }
         }
         return acc;
+    }
+    // A ruled B-spline (a ruled loft's sides) trimmed: the inner integral along its rulings.
+    if ruled_nurbs(&f.surf).is_some() {
+        return face_integrals_v::<ALL>(body, f, shift);
     }
     // A smooth fit, which holds only where its face is: taken strictly inside the face.
     if let Surface::Nurbs(ns) = &f.surf
@@ -2159,6 +2287,45 @@ mod tests {
     /// A cone whose face runs through the apex (|N| has a kink there): the ruling's two sides
     /// apart, so its few points stay exact. The cone r = v, 0 ≤ v ≤ 2 (half-angle 45°), over a
     /// quarter turn, holds the area √2·π/4·(2² − 0)/2 on each side of v = 0 over [−2, 2].
+    #[test]
+    fn root_rule_integrates_roots_of_quadratics() {
+        // ∫₀¹ √(a t² + b t + c) dt against a fine composite rule, for roots far, near and on
+        // the interval (a double root inside: |N| through zero at a collapsed edge).
+        for (a, b, c) in [
+            (1.0, 0.0, 4.0),
+            (1.0, -1.0, 0.25 + 1e-4),
+            (1.0, -1.0, 0.25),
+            (2.0, 0.0, 1e-6),
+            (0.0, 0.0, 3.0),
+            (1.0, 2.0, 1.0),
+        ] {
+            let f = |t: f64| (a * t * t + b * t + c).max(0.0).sqrt();
+            let mut pieces = Vec::new();
+            root_rule(a, b, c, 0.0, 1.0, 8, &mut pieces);
+            let mut got = 0.0;
+            for (t0, t1, n) in pieces {
+                let g = gauss(n);
+                let (m, r) = ((t0 + t1) * 0.5, (t1 - t0) * 0.5);
+                got +=
+                    g.x.iter()
+                        .zip(g.w)
+                        .map(|(x, w)| w * r * f(m + r * x))
+                        .sum::<f64>();
+            }
+            let n = 200_000;
+            let want: f64 = (0..n)
+                .map(|i| {
+                    let (t0, t1) = (i as f64 / n as f64, (i + 1) as f64 / n as f64);
+                    (f(t0) + 4.0 * f((t0 + t1) * 0.5) + f(t1)) * (t1 - t0) / 6.0
+                })
+                .sum();
+            assert!(
+                (got - want).abs() <= 1e-11 * want,
+                "{a} {b} {c}: {got} vs {want}"
+            );
+        }
+    }
+
     #[test]
     fn rulings_through_a_cone_apex() {
         let s = Surface::Cone {
