@@ -255,6 +255,17 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
             tr("asm-menu-select-same-part"),
         ))
     };
+    // Every instance of the same part, subassembly or Part Studio, in the same configuration
+    // (a standard content part has its own two items for this).
+    let all_items = |menu: Menu| -> Menu {
+        if is_std {
+            return menu;
+        }
+        menu.item(MenuItem::new(
+            "asm-select-all-instances",
+            tr("asm-menu-select-all-instances"),
+        ))
+    };
     // Configurations: the instances' configuration of their Part Studio.
     let config_item = crate::configuration_ui::instance_menu_item(world, element, &targets);
     let copy_label = if targets.len() > 1 {
@@ -450,7 +461,7 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
                     .disabled(!parts_only)
                     .icon("transform"),
             );
-        menu = std_items(menu);
+        menu = all_items(std_items(menu));
         if let Some(c) = config_item.clone() {
             menu = menu.item(c);
         }
@@ -661,7 +672,7 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
                 .disabled(!parts_only)
                 .icon("transform"),
             );
-        menu = std_items(menu);
+        menu = all_items(std_items(menu));
         if let Some(c) = config_item {
             menu = menu.item(c);
         }
@@ -1249,6 +1260,21 @@ fn act(world: &mut World, menu: &AsmMenu, handle: TriadHandle, item: &str) {
         "asm-delete" => super::delete_instances(world, element, targets.clone()),
         // A19.9: Edit standard content instance, on the targets (bulk edit).
         "asm-std-edit" => super::standard::open_edit_dialog(world, targets.clone()),
+        // The configured copy of a Part Studio is a source of its own, so the same source is the
+        // same configuration too.
+        "asm-select-all-instances" => {
+            if let Some(i) = menu.instance {
+                let same = world
+                    .resource::<ActiveDocument>()
+                    .doc
+                    .element(element)
+                    .and_then(|e| e.assembly_model())
+                    .map(|a| cadrs_core::assembly::standard::same_configuration(a, i, true))
+                    .unwrap_or_default();
+                world.resource_mut::<Selection>().0 =
+                    same.into_iter().map(|i| Pick::Part(i.part_id())).collect();
+            }
+        }
         "asm-select-same-config" | "asm-select-same-part" => {
             if let Some(i) = menu.instance {
                 let same = world
@@ -1300,7 +1326,7 @@ fn act(world: &mut World, menu: &AsmMenu, handle: TriadHandle, item: &str) {
         }
         "asm-find" => {
             if let Some(i) = menu.instance {
-                world.resource_mut::<Selection>().0 = vec![Pick::Part(i.part_id())];
+                super::list::reveal_instance(world, i);
             }
         }
         "asm-clear-selection" => world.resource_mut::<Selection>().0.clear(),

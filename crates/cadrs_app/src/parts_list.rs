@@ -42,6 +42,7 @@ impl Plugin for PartsListPlugin {
         app.init_resource::<GroupsOpen>()
             .init_resource::<BoardsOpen>()
             .init_resource::<ShownParts>()
+            .init_resource::<PartRowIndex>()
             .add_systems(
                 Update,
                 (
@@ -49,6 +50,7 @@ impl Plugin for PartsListPlugin {
                     sync_isolate_bar,
                     exit_isolate_on_escape,
                     mark_menu_row,
+                    scroll_to_revealed.after(rebuild_part_list),
                 )
                     .after(crate::parts::PartsSet)
                     .run_if(in_state(AppState::Document)),
@@ -74,6 +76,11 @@ pub(crate) struct GroupHeader(PartKind);
 /// The parts the list shows, top to bottom (a Shift+click selects the run between two).
 #[derive(Resource, Debug, Clone, Default)]
 pub struct ShownParts(pub Vec<PartId>);
+
+/// Each listed part's row, counted from the top with the headers and folders (every row is
+/// [`PART_ROW_PITCH`] tall), built or not: where to scroll to show it ([`reveal_part`]).
+#[derive(Resource, Debug, Clone, Default)]
+struct PartRowIndex(std::collections::HashMap<PartId, usize>);
 
 /// Which groups are open.
 #[derive(Resource, Debug, Clone, Copy)]
@@ -149,6 +156,7 @@ fn rebuild_part_list(
     open: Res<GroupsOpen>,
     boards_open: Res<BoardsOpen>,
     mut shown_parts: ResMut<ShownParts>,
+    mut row_index: ResMut<PartRowIndex>,
     mut q_rows: Query<(
         Entity,
         Ref<PartRows>,
@@ -253,6 +261,7 @@ fn rebuild_part_list(
     let windowed = window.window_for(window.total.max(key.0.len()));
     let mut slots = cadrs_ui::virtual_rows::Slots::new(windowed.clone());
     let mut shown = Vec::new();
+    let mut index = std::collections::HashMap::new();
     commands.entity(container).despawn_children();
     commands.entity(container).with_children(|c| {
         let above = windowed.is_some().then(|| {
@@ -320,7 +329,16 @@ fn rebuild_part_list(
                 }
                 if folder.open {
                     for m in inside {
-                        rows.spawn(c, &t, &mut slots, &mut shown, m, 40.0, Some(folder.id));
+                        rows.spawn(
+                            c,
+                            &t,
+                            &mut slots,
+                            &mut shown,
+                            &mut index,
+                            m,
+                            40.0,
+                            Some(folder.id),
+                        );
                     }
                 }
             }
@@ -329,7 +347,7 @@ fn rebuild_part_list(
                 .iter()
                 .filter(|m| !component(&m.0) && !in_folder(&m.0))
             {
-                rows.spawn(c, &t, &mut slots, &mut shown, m, 22.0, None);
+                rows.spawn(c, &t, &mut slots, &mut shown, &mut index, m, 22.0, None);
             }
         }
         // Composite parts: groups of parts, listed apart from them as Onshape does.
@@ -355,7 +373,7 @@ fn rebuild_part_list(
                     kind: PartKind::Solid,
                 };
                 for m in &composites {
-                    rows.spawn(c, &t, &mut slots, &mut shown, m, 22.0, None);
+                    rows.spawn(c, &t, &mut slots, &mut shown, &mut index, m, 22.0, None);
                 }
             }
         }
@@ -370,6 +388,7 @@ fn rebuild_part_list(
     });
     window.bypass_change_detection().total = slots.count();
     shown_parts.0 = shown;
+    row_index.0 = index;
     *last = Some(key);
 }
 
@@ -391,6 +410,7 @@ impl Rows<'_> {
         t: &Theme,
         slots: &mut cadrs_ui::virtual_rows::Slots,
         shown: &mut Vec<PartId>,
+        index: &mut std::collections::HashMap<PartId, usize>,
         m: &PartRowKey,
         left: f32,
         folder: Option<cadrs_core::FeatureId>,
@@ -398,6 +418,7 @@ impl Rows<'_> {
         let board = self.boards.iter().find(|(b, _)| *b == m.0);
         let open = board.is_some_and(|(b, _)| self.boards_open.contains(b));
         shown.push(m.0);
+        index.insert(m.0, slots.next_index());
         if slots.take(PART_ROW_PITCH) {
             spawn_row(c, t, m, self.kind, left, board.map(|_| open), folder);
         }
@@ -407,12 +428,120 @@ impl Rows<'_> {
                 .filter_map(|id| self.members.iter().find(|r| r.0 == *id))
             {
                 shown.push(cm.0);
+                index.insert(cm.0, slots.next_index());
                 if slots.take(PART_ROW_PITCH) {
                     spawn_row(c, t, cm, self.kind, left + 18.0, None, folder);
                 }
             }
         }
     }
+}
+
+/// A part to bring into view in the Parts list, once its row is counted ([`reveal_part`]).
+#[derive(Resource, Debug, Clone, Copy)]
+struct RevealPart {
+    id: PartId,
+    frames: u32,
+}
+
+/// Find in parts list: selects part `id`, opens its group, its folder and the derived board it
+/// is a component of if closed, and scrolls the list to its row (a part right-clicked in the
+/// view, which may be anywhere in a long list).
+pub fn reveal_part(world: &mut World, id: PartId) {
+    let (kind, composite, folder) = {
+        let Some(doc) = world.get_resource::<ActiveDocument>() else {
+            return;
+        };
+        let Some(el) = doc.active_element() else {
+            return;
+        };
+        let kind = world
+            .resource::<PartCache>()
+            .parts
+            .iter()
+            .find(|p| p.id == id)
+            .map(|p| p.kind);
+        let composite = cadrs_core::transform::is_composite_part(&doc.doc, el.id, id);
+        let folder = el
+            .part_folders()
+            .iter()
+            .find(|f| f.parts.contains(&id) && !f.open)
+            .map(|f| (el.id, f.id));
+        (kind, composite, folder)
+    };
+    {
+        let mut open = world.resource_mut::<GroupsOpen>();
+        match (composite, kind) {
+            (true, _) => open.composites = true,
+            (false, Some(PartKind::Solid)) => open.parts = true,
+            (false, Some(PartKind::Surface)) => open.surfaces = true,
+            (false, None) => {}
+        }
+    }
+    let board = world
+        .resource::<PartCache>()
+        .derived
+        .values()
+        .flat_map(|o| {
+            o.boards
+                .iter()
+                .map(move |b| (b.part, o.components_of(b.part)))
+        })
+        .find(|(_, c)| c.contains(&id))
+        .map(|(b, _)| b);
+    if let Some(b) = board {
+        let mut boards = world.resource_mut::<BoardsOpen>();
+        if !boards.0.contains(&b) {
+            boards.0.push(b);
+        }
+    }
+    if let (Some((element, folder)), Some(mut doc)) =
+        (folder, world.get_resource_mut::<ActiveDocument>())
+    {
+        let _ = doc.execute(&cadrs_core::commands::SetPartFolder {
+            element,
+            folder,
+            open: Some(true),
+            name: None,
+        });
+    }
+    world.resource_mut::<Selection>().0 = vec![Pick::Part(id)];
+    world.insert_resource(RevealPart { id, frames: 0 });
+}
+
+/// Scrolls the Parts list so the revealed part's row is in view, once the list is rebuilt with
+/// what [`reveal_part`] opened (given up after a second). A long list builds only the rows near
+/// what it shows, so the row is placed by its index, built or not.
+fn scroll_to_revealed(
+    mut commands: Commands,
+    reveal: Option<ResMut<RevealPart>>,
+    index: Res<PartRowIndex>,
+    mut q_list: Query<(&ComputedNode, &mut ScrollPosition), With<PartRows>>,
+) {
+    let Some(mut reveal) = reveal else { return };
+    reveal.frames += 1;
+    if reveal.frames > 60 {
+        commands.remove_resource::<RevealPart>();
+        return;
+    }
+    // (A frame for the rows to be rebuilt and one for their layout.)
+    if reveal.frames < 3 {
+        return;
+    }
+    let (Some(&i), Ok((list, mut pos))) = (index.0.get(&reveal.id), q_list.single_mut()) else {
+        return;
+    };
+    let view = list.size().y * list.inverse_scale_factor();
+    if view <= 0.0 {
+        return;
+    }
+    let (top, bottom) = (i as f32 * PART_ROW_PITCH, (i + 1) as f32 * PART_ROW_PITCH);
+    if top < pos.y {
+        pos.y = top;
+    } else if bottom > pos.y + view {
+        pos.y = bottom - view;
+    }
+    commands.remove_resource::<RevealPart>();
 }
 
 /// A part's row: `left` its indent; `folder` a board's chevron (open or not); `in_folder` the

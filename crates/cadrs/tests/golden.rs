@@ -1706,6 +1706,12 @@ fn golden_course_asm_folders() {
 
 #[test]
 #[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_browser_reveal() {
+    run_scenario("browser_reveal");
+}
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
 fn golden_course_asm_hide_show() {
     run_scenario("course_asm_hide_show");
 }

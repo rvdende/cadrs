@@ -59,6 +59,12 @@ impl Plugin for InstanceListPlugin {
             Update,
             (sync_connector_hover, list_width).run_if(in_state(AppState::Document)),
         )
+        .add_systems(
+            Update,
+            scroll_to_revealed
+                .after(rebuild_instance_rows)
+                .run_if(in_state(AppState::Document)),
+        )
         .add_observer(on_row_menu)
         .add_observer(on_replicate_menu)
         .add_observer(on_eye_click)
@@ -1482,6 +1488,116 @@ fn on_replicate_menu(
         let at = super::mates_list::beside_row(world, e, at);
         super::mates_list::open_mate_menu(world, at, row.0)
     });
+}
+
+/// An instance to bring into view in the Instances list, once its row is laid out
+/// ([`reveal_instance`]).
+#[derive(Resource, Debug, Clone, Copy)]
+struct RevealInstance {
+    id: InstanceId,
+    frames: u32,
+}
+
+/// Find in instance list: selects instance `id`, opens the folder or Replicate it is listed
+/// under if closed, and scrolls the list to its row (an instance picked in the view, which may
+/// be anywhere in a long list).
+pub fn reveal_instance(world: &mut World, id: InstanceId) {
+    let Some(element) = world
+        .get_resource::<ActiveDocument>()
+        .and_then(super::active_assembly)
+    else {
+        return;
+    };
+    let (folder, replicate) = {
+        let doc = world.resource::<ActiveDocument>();
+        let Some(model) = doc.active_element().and_then(|e| e.assembly_model()) else {
+            return;
+        };
+        let folder = cadrs_core::assembly::folders::folder_of(
+            model,
+            cadrs_core::assembly::folders::FolderList::Instances,
+            item(id),
+        )
+        .filter(|f| !f.open)
+        .map(|f| f.id);
+        let replicate = model
+            .instance(id)
+            .and_then(|i| i.replicate)
+            .filter(|r| model.mate(*r).is_some());
+        (folder, replicate)
+    };
+    if let Some(folder) = folder {
+        super::run(
+            world,
+            &cadrs_core::assembly::folders::SetAssemblyFolder {
+                element,
+                list: cadrs_core::assembly::folders::FolderList::Instances,
+                folder,
+                open: Some(true),
+                name: None,
+            },
+        );
+    }
+    // A Replicate's copies are listed under its row, open in the list's own state.
+    if let Some(r) = replicate {
+        world
+            .resource_mut::<ListUi>()
+            .expanded
+            .insert(InstanceId(r.0));
+    }
+    world.resource_mut::<crate::viewport::Selection>().0 = vec![Pick::Part(id.part_id())];
+    world.insert_resource(RevealInstance { id, frames: 0 });
+}
+
+/// Scrolls the Instances list so the revealed instance's row is in view, once the rows rebuilt
+/// for its open folder have their layout (given up after a second).
+fn scroll_to_revealed(
+    mut commands: Commands,
+    reveal: Option<ResMut<RevealInstance>>,
+    q_rows: Query<(&InstanceRow, &ComputedNode, &bevy::ui::UiGlobalTransform)>,
+    mut q_scroll: Query<(
+        &Name,
+        &ComputedNode,
+        &bevy::ui::UiGlobalTransform,
+        &mut ScrollPosition,
+    )>,
+) {
+    let Some(mut reveal) = reveal else { return };
+    reveal.frames += 1;
+    if reveal.frames > 60 {
+        commands.remove_resource::<RevealInstance>();
+        return;
+    }
+    // (A frame for the rows to be rebuilt and one for their layout.)
+    if reveal.frames < 3 {
+        return;
+    }
+    let Some((_, row, row_at)) = q_rows
+        .iter()
+        .find(|(r, n, _)| r.0 == reveal.id && n.size().y > 0.0)
+    else {
+        return;
+    };
+    let Some((_, list, list_at, mut pos)) = q_scroll
+        .iter_mut()
+        .find(|(n, ..)| n.as_str() == "instances-pane")
+    else {
+        return;
+    };
+    let s = list.inverse_scale_factor();
+    let span = |n: &ComputedNode, at: &bevy::ui::UiGlobalTransform| {
+        let half = n.size().y * s / 2.0;
+        (at.translation.y * s - half, at.translation.y * s + half)
+    };
+    let (top, bottom) = span(row, row_at);
+    let (view_top, view_bottom) = span(list, list_at);
+    let max = ((list.content_size().y - list.size().y) * s).max(0.0);
+    if top < view_top {
+        pos.y = (pos.y - (view_top - top)).clamp(0.0, max);
+    } else if bottom > view_bottom {
+        pos.y = (pos.y + (bottom - view_bottom)).clamp(0.0, max);
+    }
+    commands.remove_resource::<RevealInstance>();
 }
 
 fn on_row_menu(ev: On<ContextMenuRequested>, q: Query<&InstanceRow>, mut commands: Commands) {
