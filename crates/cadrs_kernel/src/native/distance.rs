@@ -785,6 +785,10 @@ fn seam_twins(p: &Piece, x: X) -> [Option<X>; 4] {
     out
 }
 
+/// How near two sides polished from where their meshes cross must come for them to meet
+/// ([`seeded_min`]).
+const MET: f64 = tol::POINT * 1e-3;
+
 /// The least distance from the pieces' meshes (springrep's method): the nearest pair of mesh
 /// pieces gives it to within the meshes' deflections, and every pair that near seeds the exact
 /// search ([`polish`]) between the entities they lie on; a result counts only where both its
@@ -806,11 +810,36 @@ fn seeded_min(a: &[Piece], ba: Option<&Body>, b: &[Piece], bb: Option<&Body>) ->
     if ma.bits.is_empty() || mb.bits.is_empty() || !covered(a, &ma) || !covered(b, &mb) {
         return None;
     }
+    let mut at = (0, 0, f64::INFINITY);
     let best = ma.tree.least(&mb.tree, |i, j| {
-        bit_distance(&ma.bits[i].1, &mb.bits[j].1).0
+        let d = bit_distance(&ma.bits[i].1, &mb.bits[j].1).0;
+        if d < at.2 {
+            at = (i, j, d);
+        }
+        d
     });
     if !best.is_finite() {
         return None;
+    }
+    // The meshes cross (the sides most likely do too, where they cross: the search stopped at
+    // the first crossing): polished from there first, the sides meeting is the answer, and the
+    // pairs near the whole crossing need not be gathered.
+    if best == 0.0 {
+        let (i, j, _) = at;
+        let ((ia, bit_a), (ib, bit_b)) = (&ma.bits[i], &mb.bits[j]);
+        let (_, p, q) = bit_distance(bit_a, bit_b);
+        let (xa, xb) = (seed_at(&a[*ia], bit_a, &p), seed_at(&b[*ib], bit_b, &q));
+        if let Some((d, xa, xb)) = polish(&a[*ia], xa, &b[*ib], xb, Sense::Min)
+            && d <= MET
+        {
+            return Some(Extremum {
+                distance: d,
+                a: jet(&a[*ia], &xa).p,
+                b: jet(&b[*ib], &xb).p,
+                wa: where_of(&a[*ia], &xa),
+                wb: where_of(&b[*ib], &xb),
+            });
+        }
     }
     let margin = 2.0 * (ma.defl + mb.defl) + tol::POINT;
     let reach = best + margin;
