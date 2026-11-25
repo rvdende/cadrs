@@ -3147,14 +3147,39 @@ fn octilinear_ends(p: &[Vec2]) -> Vec<Vec2> {
     out
 }
 
+/// How far round a wire's ends (grid steps, at least) its search looks first.
+const WINDOW: u32 = 30;
+
+/// The cheapest path for a wire from any of `starts` to `target` (cells).
+fn search(
+    grid: &cadrs_router::grid::Grid,
+    occ: &[u16],
+    hist: &[u32],
+    searcher: &mut cadrs_router::search::Searcher,
+    starts: &[u32],
+    target: u32,
+) -> Option<Vec<u32>> {
+    let costs = cadrs_router::search::Costs {
+        grid,
+        occ,
+        hist,
+        // A step through another output's trace costs as much as a hundred steps round it:
+        // traces take lanes of their own and cross only where they must.
+        present: 1000,
+    };
+    searcher.search(&costs, 1, starts, &[target])
+}
+
 /// Routes the node view's wires round its nodes with the PCB autorouter's search
 /// (`cadrs_router::search`: A* over octilinear steps, a cell's cost raised by the wires already
 /// through it, as its negotiated congestion does): the nodes, grown by [`CLEAR`], are walls; each
 /// wire leaves its output and enters its input straight ([`STUB`]); a route is then pulled
 /// straight between the points that can see each other. A wire with no way round is a curve.
+/// The routes of the problem's `previous` routing stand where nothing near them changed
+/// ([`kept_routes`]), so dragging a node reroutes its own wires and those it passes, not all.
 fn route_node_wires(p: &cadrs_ui::node_graph::RouteProblem) -> Vec<Option<Vec<Vec2>>> {
     use cadrs_router::grid::{Grid, Sizes};
-    use cadrs_router::search::{Costs, Searcher};
+    use cadrs_router::search::Searcher;
     use cadrs_router_kernels::{FREE, Params, WALL};
     let mut bounds: Option<Rect> = None;
     let mut grow = |r: Rect| bounds = Some(bounds.map_or(r, |b| b.union(r)));
@@ -3199,22 +3224,14 @@ fn route_node_wires(p: &cadrs_ui::node_graph::RouteProblem) -> Vec<Option<Vec<Ve
         }
     }
     let walls = owner.clone();
-    let blocked = |v: Vec2| -> bool {
-        let (x, y) = cell(v);
-        walls[(y * nx + x) as usize] == WALL
-    };
-    // Whether the straight line from `a` to `b` stays off the walls.
-    let clear = |a: Vec2, b: Vec2| -> bool {
+    // Whether the straight line from `a` to `b` stays off the walls, and off other outputs'
+    // traces (its ends excepted: where it leaves and meets its own).
+    let free = |a: Vec2, b: Vec2, occ: &[u16]| -> bool {
         let n = (a.distance(b) / (pitch / 3.0)).ceil().max(1.0) as usize;
-        (0..=n).all(|i| !blocked(a.lerp(b, i as f32 / n as f32)))
-    };
-    // Whether the straight line from `a` to `b` stays off other outputs' traces (its ends
-    // excepted: where it leaves and meets its own).
-    let untaken = |a: Vec2, b: Vec2, occ: &[u16]| -> bool {
-        let n = (a.distance(b) / (pitch / 3.0)).ceil().max(1.0) as usize;
-        (1..n).all(|i| {
+        (0..=n).all(|i| {
             let (x, y) = cell(a.lerp(b, i as f32 / n as f32));
-            occ[(y * nx + x) as usize] == 0
+            let c = (y * nx + x) as usize;
+            walls[c] != WALL && (i == 0 || i == n || occ[c] == 0)
         })
     };
     let params = Params {
@@ -3267,6 +3284,12 @@ fn route_node_wires(p: &cadrs_ui::node_graph::RouteProblem) -> Vec<Option<Vec<Ve
         g.sort_by(|i, j| len(*i).total_cmp(&len(*j)));
     }
     groups.sort_by(|g, h| len(g[0]).total_cmp(&len(h[0])).then(g[0].cmp(&h[0])));
+    // What the last routing found that still stands (a dragged node reroutes its own wires and
+    // those near where it was and is, not all of them).
+    let kept = match p.previous.as_deref() {
+        Some(prev) => kept_routes(p, prev, &groups, CLEAR + 2.0 * pitch),
+        None => vec![None; p.wires.len()],
+    };
     // Pulled straight as the PCB router straightens its tracks: from each point to the farthest
     // one a 45° path reaches clear of the nodes and of other outputs' traces (one straight leg
     // and one at 45°, either way round), so every leg is horizontal, vertical or at 45°.
@@ -3275,7 +3298,7 @@ fn route_node_wires(p: &cadrs_ui::node_graph::RouteProblem) -> Vec<Option<Vec<Ve
         let mut i = 0;
         while i + 1 < pts.len() {
             let mut j = pts.len() - 1;
-            let free = |a: Vec2, b: Vec2| clear(a, b) && untaken(a, b, occ);
+            let free = |a: Vec2, b: Vec2| free(a, b, occ);
             let leg = loop {
                 let found = octilinear_legs(pts[i], pts[j])
                     .into_iter()
@@ -3298,8 +3321,47 @@ fn route_node_wires(p: &cadrs_ui::node_graph::RouteProblem) -> Vec<Option<Vec<Ve
         }
         pulled
     };
+    // The cells a trace takes for other outputs' wires: those it runs through and those beside
+    // them, so another output's trace keeps two steps away (one step, and a trunk drawn thick
+    // touched it zoomed out).
+    let taken = |tr: &[Vec2], mine: &mut Vec<u32>| {
+        for w in tr.windows(2) {
+            let n = (w[0].distance(w[1]) / (pitch / 3.0)).ceil().max(1.0) as usize;
+            for i in 0..=n {
+                let (x, y) = cell(w[0].lerp(w[1], i as f32 / n as f32));
+                for (dx, dy) in [(0i64, 0i64), (1, 0), (-1, 0), (0, 1), (0, -1)] {
+                    let (cx, cy) = (x as i64 + dx, y as i64 + dy);
+                    if cx >= 0 && cy >= 0 && cx < nx as i64 && cy < ny as i64 {
+                        mine.push(cy as u32 * nx + cx as u32);
+                    }
+                }
+            }
+        }
+    };
+    // Each output's traces count once in a cell.
+    let claim = |mut mine: Vec<u32>, occ: &mut [u16]| {
+        mine.sort_unstable();
+        mine.dedup();
+        for c in mine {
+            occ[c as usize] = occ[c as usize].saturating_add(1);
+        }
+    };
     let mut out: Vec<Option<Vec<Vec2>>> = vec![None; p.wires.len()];
+    // The kept routes first, taken, so the wires routed again go round them.
+    for group in groups.iter().filter(|g| kept[g[0]].is_some()) {
+        let mut mine: Vec<u32> = Vec::new();
+        for &k in group {
+            out[k] = kept[k].clone().flatten();
+            if let Some(tr) = &out[k] {
+                taken(tr, &mut mine);
+            }
+        }
+        claim(mine, &mut occ);
+    }
     for group in groups {
+        if kept[group[0]].is_some() {
+            continue;
+        }
         // This output's traces so far (each from its stub's end), and the points where later
         // ones branch off them.
         let mut traces: Vec<(usize, Vec<Vec2>)> = Vec::new();
@@ -3338,17 +3400,55 @@ fn route_node_wires(p: &cadrs_ui::node_graph::RouteProblem) -> Vec<Option<Vec<Ve
             let keep = (grid.owner[is as usize], grid.owner[it as usize]);
             grid.owner[is as usize] = FREE;
             grid.owner[it as usize] = FREE;
-            let path = {
-                let costs = Costs {
-                    grid: &grid,
-                    occ: &occ,
-                    hist: &hist,
-                    // A step through another output's trace costs as much as a hundred steps
-                    // round it: traces take lanes of their own and cross only where they must.
-                    present: 1000,
-                };
-                searcher.search(&costs, 1, &starts, &[it])
-            };
+            // Searched in a window round its ends first, walled off: a wire that must cross
+            // another output's trace (dear, below) otherwise searches the whole graph for a
+            // way round before it does. Out of the window only when there is no way in it.
+            let half = (cs.0.abs_diff(ct.0).max(cs.1.abs_diff(ct.1)) / 2).max(WINDOW);
+            let window = (
+                cs.0.min(ct.0).saturating_sub(half),
+                cs.1.min(ct.1).saturating_sub(half),
+                (cs.0.max(ct.0) + half).min(nx - 1),
+                (cs.1.max(ct.1) + half).min(ny - 1),
+            );
+            let mut path = None;
+            for windowed in [true, false] {
+                let (x0, y0, x1, y1) = window;
+                let mut ring: Vec<(u32, u32)> = Vec::new();
+                if windowed {
+                    let inside: Vec<u32> = starts
+                        .iter()
+                        .copied()
+                        .filter(|c| {
+                            let (x, y, _) = grid.params.coords(*c);
+                            x > x0 && x < x1 && y > y0 && y < y1
+                        })
+                        .collect();
+                    for x in x0..=x1 {
+                        for y in [y0, y1] {
+                            let c = y * nx + x;
+                            ring.push((c, grid.owner[c as usize]));
+                        }
+                    }
+                    for y in y0..=y1 {
+                        for x in [x0, x1] {
+                            let c = y * nx + x;
+                            ring.push((c, grid.owner[c as usize]));
+                        }
+                    }
+                    for (c, _) in &ring {
+                        grid.owner[*c as usize] = WALL;
+                    }
+                    path = search(&grid, &occ, &hist, &mut searcher, &inside, it);
+                    for (c, was) in ring.iter().rev() {
+                        grid.owner[*c as usize] = *was;
+                    }
+                } else {
+                    path = search(&grid, &occ, &hist, &mut searcher, &starts, it);
+                }
+                if path.is_some() {
+                    break;
+                }
+            }
             grid.owner[is as usize] = keep.0;
             grid.owner[it as usize] = keep.1;
             let Some(path) = path else { continue };
@@ -3420,37 +3520,272 @@ fn route_node_wires(p: &cadrs_ui::node_graph::RouteProblem) -> Vec<Option<Vec<Ve
             }
             *tr = split;
         }
-        // This output's traces, marked for the next outputs' wires: the cells they run through
-        // and the cells beside those, so another output's trace keeps two steps away (one
-        // step, and a trunk drawn thick touched it zoomed out).
+        // This output's traces, taken for the next outputs' wires.
         let mut mine: Vec<u32> = Vec::new();
         for (k, tr) in traces {
-            for w in tr.windows(2) {
-                let n = (w[0].distance(w[1]) / (pitch / 3.0)).ceil().max(1.0) as usize;
-                for i in 0..=n {
-                    let (x, y) = cell(w[0].lerp(w[1], i as f32 / n as f32));
-                    for (dx, dy) in [(0i64, 0i64), (1, 0), (-1, 0), (0, 1), (0, -1)] {
-                        let (cx, cy) = (x as i64 + dx, y as i64 + dy);
-                        if cx >= 0 && cy >= 0 && cx < nx as i64 && cy < ny as i64 {
-                            mine.push(cy as u32 * nx + cx as u32);
-                        }
-                    }
-                }
-            }
+            taken(&tr, &mut mine);
             out[k] = Some(tr);
         }
-        mine.sort_unstable();
-        mine.dedup();
-        for c in mine {
-            occ[c as usize] = occ[c as usize].saturating_add(1);
-        }
+        claim(mine, &mut occ);
     }
     out
+}
+
+/// Which wires keep the route `prev` gave them, as `Some(route)` (`Some(None)`: a curve still),
+/// by output: an output's wires keep theirs unless one of them is new or moved its ends, one
+/// left it, or one runs within `near` of a node that moved (where it is now, which it may cross,
+/// or where it was, round which it may have gone and now needn't). Nothing is kept when more
+/// than half the nodes moved (an arrangement): routing them all afresh costs no more.
+fn kept_routes(
+    p: &cadrs_ui::node_graph::RouteProblem,
+    prev: &cadrs_ui::node_graph::Routed,
+    groups: &[Vec<usize>],
+    near: f32,
+) -> Vec<Option<Option<Vec<Vec2>>>> {
+    let mut kept = vec![None; p.wires.len()];
+    let key = |v: Vec2| {
+        let r = v.round();
+        (r.x as i64, r.y as i64)
+    };
+    // The nodes that moved: where they are and where they were (a rectangle in one list and
+    // not the other).
+    let mut count: HashMap<[(i64, i64); 2], (i32, Rect)> = HashMap::new();
+    for (r, d) in p
+        .obstacles
+        .iter()
+        .map(|r| (r, 1))
+        .chain(prev.problem.obstacles.iter().map(|r| (r, -1)))
+    {
+        count.entry([key(r.min), key(r.max)]).or_insert((0, *r)).0 += d;
+    }
+    let moved: Vec<Rect> = count
+        .into_values()
+        .filter(|(n, _)| *n != 0)
+        .map(|(_, r)| r.inflate(near))
+        .collect();
+    if moved.len() > p.obstacles.len() {
+        return kept;
+    }
+    let ends = |(a, b): &(Vec2, Vec2)| (key(*a), key(*b));
+    let last: HashMap<_, &Option<Vec<Vec2>>> = prev
+        .problem
+        .wires
+        .iter()
+        .map(ends)
+        .zip(&prev.routes)
+        .collect();
+    let now: std::collections::HashSet<_> = p.wires.iter().map(ends).collect();
+    // The outputs a wire left (removed, or moved to another output or input).
+    let left: std::collections::HashSet<(i64, i64)> = prev
+        .problem
+        .wires
+        .iter()
+        .filter(|w| !now.contains(&ends(w)))
+        .map(|(a, _)| key(*a))
+        .collect();
+    let near_moved = |a: Vec2, b: Vec2| moved.iter().any(|r| segment_meets_rect(a, b, *r));
+    for g in groups {
+        if left.contains(&key(p.wires[g[0]].0)) {
+            continue;
+        }
+        let routes: Option<Vec<Option<Vec<Vec2>>>> = g
+            .iter()
+            .map(|&k| {
+                let (a, b) = p.wires[k];
+                let route = *last.get(&ends(&(a, b)))?;
+                let pts: Vec<Vec2> = std::iter::once(a)
+                    .chain(route.iter().flatten().copied())
+                    .chain(std::iter::once(b))
+                    .collect();
+                (!pts.windows(2).any(|w| near_moved(w[0], w[1]))).then(|| route.clone())
+            })
+            .collect();
+        if let Some(routes) = routes {
+            for (&k, r) in g.iter().zip(routes) {
+                kept[k] = Some(r);
+            }
+        }
+    }
+    kept
+}
+
+/// Whether the segment from `a` to `b` meets the rectangle `r` (Liang–Barsky clipping).
+fn segment_meets_rect(a: Vec2, b: Vec2, r: Rect) -> bool {
+    let d = b - a;
+    let (mut t0, mut t1) = (0.0f32, 1.0f32);
+    for (p, q) in [
+        (-d.x, a.x - r.min.x),
+        (d.x, r.max.x - a.x),
+        (-d.y, a.y - r.min.y),
+        (d.y, r.max.y - a.y),
+    ] {
+        if p.abs() < 1e-6 {
+            if q < 0.0 {
+                return false;
+            }
+        } else {
+            let t = q / p;
+            if p < 0.0 {
+                t0 = t0.max(t);
+            } else {
+                t1 = t1.min(t);
+            }
+            if t0 > t1 {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A large graph: ten columns of eight nodes, each node fed by two or three nodes of the
+    /// columns before it.
+    fn big_graph() -> cadrs_ui::node_graph::RouteProblem {
+        let mut p = cadrs_ui::node_graph::RouteProblem::default();
+        let rect = |c: usize, r: usize| {
+            let min = Vec2::new(c as f32 * 300.0, r as f32 * 220.0);
+            Rect::from_corners(
+                min,
+                min + Vec2::new(180.0, 90.0 + (c * 7 + r * 13) as f32 % 80.0),
+            )
+        };
+        for c in 0..10 {
+            for r in 0..8 {
+                p.obstacles.push(rect(c, r));
+                if c == 0 {
+                    continue;
+                }
+                let from = [
+                    (c - 1, r),
+                    (c.saturating_sub(1 + r % 3), (r + 3) % 8),
+                    (c - 1, (r + 5) % 8),
+                ];
+                for (i, (fc, fr)) in from.into_iter().enumerate().take(2 + (c + r) % 2) {
+                    let a = rect(fc, fr);
+                    let b = rect(c, r);
+                    p.wires.push((
+                        Vec2::new(a.max.x, a.min.y + 20.0),
+                        Vec2::new(b.min.x, b.min.y + 20.0 + 20.0 * i as f32),
+                    ));
+                }
+            }
+        }
+        p
+    }
+
+    /// `p` with node `i` moved by `d`, its wires' ends with it, and the routing `prev` as the
+    /// last one.
+    fn moved(
+        p: &cadrs_ui::node_graph::RouteProblem,
+        prev: &[Option<Vec<Vec2>>],
+        i: usize,
+        d: Vec2,
+    ) -> cadrs_ui::node_graph::RouteProblem {
+        let was = p.obstacles[i];
+        let on = |v: Vec2| was.inflate(0.5).contains(v);
+        let mut q = cadrs_ui::node_graph::RouteProblem {
+            obstacles: p.obstacles.clone(),
+            wires: p.wires.clone(),
+            previous: Some(std::sync::Arc::new(cadrs_ui::node_graph::Routed {
+                problem: cadrs_ui::node_graph::RouteProblem {
+                    previous: None,
+                    ..p.clone()
+                },
+                routes: prev.to_vec(),
+            })),
+        };
+        q.obstacles[i] = Rect::from_corners(was.min + d, was.max + d);
+        for (a, b) in &mut q.wires {
+            if on(*a) {
+                *a += d;
+            }
+            if on(*b) {
+                *b += d;
+            }
+        }
+        q
+    }
+
+    /// Every route keeps off every node (its stubs, out of and into its own, aside).
+    fn assert_off_nodes(p: &cadrs_ui::node_graph::RouteProblem, r: &[Option<Vec<Vec2>>]) {
+        for via in r.iter().flatten() {
+            for w in via.windows(2) {
+                for o in &p.obstacles {
+                    assert!(
+                        !segment_meets_rect(w[0], w[1], o.inflate(-1.0)),
+                        "{w:?} crosses {o:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// What a routing kept of the last one: how many wires have the same route.
+    fn same(a: &[Option<Vec<Vec2>>], b: &[Option<Vec<Vec2>>]) -> usize {
+        a.iter().zip(b).filter(|(x, y)| x == y).count()
+    }
+
+    #[test]
+    fn a_routing_keeps_what_a_move_leaves_alone() {
+        let p = big_graph();
+        let first = route_node_wires(&p);
+        assert_off_nodes(&p, &first);
+        // Nothing moved: everything kept.
+        let again = route_node_wires(&moved(&p, &first, 0, Vec2::ZERO));
+        assert_eq!(again, first);
+        // A node with no wires taken far off: nothing rerouted.
+        let mut lone = p.clone();
+        lone.obstacles
+            .push(Rect::new(-2000.0, -2000.0, -1800.0, -1900.0));
+        let lone_first = route_node_wires(&lone);
+        let n = lone.obstacles.len() - 1;
+        let r = route_node_wires(&moved(&lone, &lone_first, n, Vec2::new(-500.0, 0.0)));
+        assert_eq!(r, lone_first);
+        // A node in the middle moved: its wires and those near it rerouted, the rest kept, and
+        // all of them round the nodes where they are now.
+        let i = 5 * 8 + 3;
+        let q = moved(&p, &first, i, Vec2::new(40.0, 60.0));
+        let r = route_node_wires(&q);
+        assert_off_nodes(&q, &r);
+        let kept = same(&r, &first);
+        assert!(
+            kept > p.wires.len() / 2 && kept < p.wires.len(),
+            "{kept} of {} kept",
+            p.wires.len()
+        );
+    }
+
+    /// How long a route of [`big_graph`] takes, from scratch and after one node moved (run with
+    /// `--ignored --nocapture`).
+    #[test]
+    #[ignore]
+    fn route_timing() {
+        let p = big_graph();
+        let t = std::time::Instant::now();
+        let first = route_node_wires(&p);
+        println!(
+            "{} nodes, {} wires: from scratch {:?}",
+            p.obstacles.len(),
+            p.wires.len(),
+            t.elapsed()
+        );
+        let t = std::time::Instant::now();
+        let _ = route_node_wires(&moved(&p, &first, 0, Vec2::ZERO));
+        println!("nothing moved: {:?}", t.elapsed());
+        let q = moved(&p, &first, 5 * 8 + 3, Vec2::new(40.0, 60.0));
+        let t = std::time::Instant::now();
+        let r = route_node_wires(&q);
+        println!(
+            "a node moved: {:?}, {} of {} rerouted",
+            t.elapsed(),
+            p.wires.len() - same(&r, &first),
+            p.wires.len()
+        );
+    }
 
     #[test]
     fn wires_go_round_nodes() {
@@ -3460,6 +3795,7 @@ mod tests {
         let p = RouteProblem {
             obstacles: vec![block],
             wires: vec![(Vec2::new(0.0, 0.0), Vec2::new(300.0, 0.0))],
+            ..Default::default()
         };
         let r = route_node_wires(&p);
         let via = r[0].as_ref().expect("routed");
@@ -3485,6 +3821,7 @@ mod tests {
         let r = route_node_wires(&RouteProblem {
             obstacles: Vec::new(),
             wires: vec![(Vec2::new(0.0, 0.0), Vec2::new(300.0, 40.0))],
+            ..Default::default()
         });
         assert!(r[0].as_ref().unwrap().len() <= 4, "{:?}", r[0]);
     }
@@ -3502,6 +3839,7 @@ mod tests {
                 (Vec2::new(0.0, 0.0), Vec2::new(400.0, 100.0)),
                 (Vec2::new(0.0, 4.0), Vec2::new(400.0, 104.0)),
             ],
+            ..Default::default()
         };
         let r = route_node_wires(&p);
         let trace = |k: usize| {
@@ -3540,6 +3878,7 @@ mod tests {
                 (a, Vec2::new(600.0, 300.0)),
                 (a, Vec2::new(600.0, 400.0)),
             ],
+            ..Default::default()
         };
         let r = route_node_wires(&p);
         let legs = |k: usize| -> Vec<(Vec2, Vec2)> {

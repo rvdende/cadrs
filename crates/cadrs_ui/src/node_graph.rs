@@ -1077,6 +1077,16 @@ struct WireDrawn(Option<(Vec2, Vec2, u64, u32)>);
 pub struct RouteProblem {
     pub obstacles: Vec<Rect>,
     pub wires: Vec<(Vec2, Vec2)>,
+    /// The canvas's last routing, whose routes a router may keep where nothing near them
+    /// changed (a node dragged reroutes its own wires and those it passes, not every wire).
+    pub previous: Option<std::sync::Arc<Routed>>,
+}
+
+/// A routing done: the problem (without its own `previous`) and each wire's route.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Routed {
+    pub problem: RouteProblem,
+    pub routes: Vec<Option<Vec<Vec2>>>,
 }
 
 /// Routes wires round the nodes once they have stopped moving (the app's: a PCB-style router).
@@ -1101,9 +1111,11 @@ struct CanvasRoutes {
     /// The view the geometry was last taken in.
     view: Option<PanZoom>,
     routes: std::collections::HashMap<Entity, Vec<Vec2>>,
-    /// Bumped whenever the routes change: a wire whose ends stayed put is drawn again too (a
-    /// node dragged across it routes it round).
-    generation: u64,
+    /// The last routing, handed to the next one to keep what it can.
+    last: Option<std::sync::Arc<Routed>>,
+    /// Each routed wire's route and the thickness of its legs, hashed: a wire is drawn again
+    /// when that changes (a node dragged across it routes it round), and only then.
+    stamps: std::collections::HashMap<Entity, u64>,
     /// How many wires run along each leg of the routes ([`leg_key`]): a trunk wires from one
     /// output share is drawn thicker.
     shared: std::collections::HashMap<(IVec2, IVec2), u8>,
@@ -1337,7 +1349,7 @@ fn route_wires(
             if !live {
                 if !r.routes.is_empty() {
                     r.routes.clear();
-                    r.generation += 1;
+                    r.stamps.clear();
                 }
                 continue;
             }
@@ -1352,8 +1364,9 @@ fn route_wires(
             continue;
         }
         r.routed = key;
+        problem.previous = r.last.take();
         let paths = route(&problem);
-        r.generation += 1;
+        problem.previous = None;
         let mut shared: std::collections::HashMap<(IVec2, IVec2), u8> = Default::default();
         for ((a, b), via) in problem.wires.iter().zip(&paths) {
             let Some(via) = via else { continue };
@@ -1370,12 +1383,33 @@ fn route_wires(
                 *shared.entry(l).or_default() += 1;
             }
         }
+        r.stamps = ids
+            .iter()
+            .zip(problem.wires.iter().zip(&paths))
+            .filter_map(|(e, ((a, b), p))| Some((*e, (*a, *b, p.as_ref()?))))
+            .map(|(e, (a, b, via))| {
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                let mut prev: Option<Vec2> = None;
+                for v in std::iter::once(&a).chain(via).chain(std::iter::once(&b)) {
+                    v.to_array().map(f32::to_bits).hash(&mut h);
+                    if let Some(u) = prev {
+                        shared.get(&leg_key(u, *v)).hash(&mut h);
+                    }
+                    prev = Some(*v);
+                }
+                (e, h.finish())
+            })
+            .collect();
         r.shared = shared;
         r.routes = ids
-            .into_iter()
-            .zip(paths)
-            .filter_map(|(e, p)| p.map(|p| (e, p)))
+            .iter()
+            .zip(&paths)
+            .filter_map(|(e, p)| Some((*e, p.clone()?)))
             .collect();
+        r.last = Some(std::sync::Arc::new(Routed {
+            problem,
+            routes: paths,
+        }));
     }
 }
 
@@ -1441,8 +1475,11 @@ fn draw_wires(
             .and_then(|r| r.routes.get(&entity).cloned());
         let zoom = canvas.map_or(1.0, |(c, _)| c.view.zoom);
         // (Its thickness follows the zoom: drawn again when that changes.)
-        let generation = canvas.and_then(|(_, r)| r).map_or(0, |r| r.generation);
-        let now = Some((a, b, generation, zoom.to_bits()));
+        let stamp = canvas
+            .and_then(|(_, r)| r)
+            .and_then(|r| r.stamps.get(&entity).copied())
+            .unwrap_or(0);
+        let now = Some((a, b, stamp, zoom.to_bits()));
         if drawn.0 == now {
             continue;
         }
