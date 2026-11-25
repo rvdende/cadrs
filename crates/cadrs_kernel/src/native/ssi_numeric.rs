@@ -26,8 +26,6 @@
 //!    the surfaces meet and are tangent (a branch point, or where two loops touch); every curve
 //!    passing one is put through it and cut there, so curves meeting there share the point.
 
-use rayon::prelude::*;
-
 /// The sine of the angle between the normals below which the surfaces are tangent at a point:
 /// n_a × n_b gives no direction to march along.
 const TANGENT_SIN: f64 = 1e-7;
@@ -1558,11 +1556,8 @@ pub fn intersect_stats(
         })
         .collect();
     let clock = web_time::Instant::now();
-    super::par::start();
-    let found: Vec<Found> = pairs
-        .into_par_iter()
-        .map(|(ca, cb)| search(&ctx, ca, cb))
-        .collect();
+    // (A pair of cells searched takes a good part of a millisecond: heavy, by `par`'s count.)
+    let found: Vec<Found> = super::par::map_heavy(&pairs, true, |&(ca, cb)| search(&ctx, ca, cb));
     let mut seeds = Vec::new();
     let mut touches = Vec::new();
     let mut coin: Vec<UvBox> = Vec::new();

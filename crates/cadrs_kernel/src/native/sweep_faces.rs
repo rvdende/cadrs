@@ -334,15 +334,9 @@ pub(crate) fn face_points(b: &Body, fi: usize, _size: f64) -> Vec<(P3, V3)> {
             })
             .collect()
     };
-    let mut uvs: Vec<P2> = if super::par::threads_for(n + 1, pieces.len() >= 64) {
-        use rayon::prelude::*;
-        (0..=n)
-            .into_par_iter()
-            .map(row)
-            .collect::<Vec<_>>()
-            .concat()
-    } else {
-        (0..=n).flat_map(row).collect()
+    let mut uvs: Vec<P2> = {
+        let rows: Vec<usize> = (0..=n).collect();
+        super::par::map(&rows, |&i| row(i)).concat()
     };
     // A sliver with no point clear of its outline: the outline's own points.
     if uvs.is_empty() {
@@ -1083,6 +1077,9 @@ fn prepared_rising(
     let start = seams_ahead(start, &mv);
     let size = start.bbox().diagonal().max(tol::POINT);
     let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
+    // (A sweep by its faces is contact curves traced, pieces united and volumes taken, face by
+    // face: the threads are wanted from its first loop, and made meanwhile.)
+    super::par::start();
     // The faces that both lead and trail split along their contacts' planes, one at a time (the
     // faces after a split are numbered anew).
     let mut body = start.clone();
@@ -1093,8 +1090,6 @@ fn prepared_rising(
     // (most of the work where many faces need them: a coil's). A curve split keeps the other
     // faces' numbers, so they stay good until a split of another kind renumbers the faces.
     let mut traced: Vec<Option<Vec<Curve>>> = {
-        use rayon::prelude::*;
-        super::par::start();
         // (Not a slide's contacts with a plane, a cylinder, a cone or a sphere: those are
         // rulings and great circles, split along exactly below, and tracing them here was a
         // third of a mill's slide.)
@@ -1113,10 +1108,10 @@ fn prepared_rising(
             .collect();
         if both.iter().filter(|b| **b).count() > 1 {
             let b = &body;
-            (0..b.faces.len())
-                .into_par_iter()
-                .map(|fi| both[fi].then(|| contact_curves(b, fi, &mv)))
-                .collect()
+            let ids: Vec<usize> = (0..b.faces.len()).collect();
+            super::par::map_heavy(&ids, true, |&fi| {
+                both[fi].then(|| contact_curves(b, fi, &mv))
+            })
         } else {
             Vec::new()
         }
@@ -1455,7 +1450,9 @@ fn prepared_rising(
     // that make neighbouring faces' pieces run into one another under a turn.
     if let Some(w) = &screw
         && std::env::var_os("CADRS_SWEEP_FACEWISE").is_none()
+        && !FACEWISE.with(|f| f.get())
     {
+        AS_ONE.with(|f| f.set(true));
         let stands: Vec<Stand> = (0..body.faces.len())
             .map(|fi| face_stand(&body, fi, size, &mv))
             .collect();
@@ -1647,6 +1644,44 @@ pub fn by_faces(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Result<O
 /// solid where it starts and the leading faces' sweeps put there, unmade, and an error returned
 /// (what a cut needs: the target less each in turn, no union).
 pub fn by_faces_or_pieces(
+    k: &mut NativeKernel,
+    b: &Body,
+    steps: &[RigidStep],
+    pieces_out: Option<&mut Vec<Body>>,
+) -> Result<OpResult> {
+    // A screw's leading faces are swept as one sheet first; where its pieces can't be put
+    // together (the sheet's sweep meeting the solid where it starts along a line they touch
+    // on: a box screwed about an axis its outer face is tangent to a cylinder of), each face
+    // swept on its own, as before that sheet was made, rather than a mesh.
+    let whole = pieces_out.is_none();
+    AS_ONE.with(|f| f.set(false));
+    let first = by_faces_or_pieces_once(k, b, steps, pieces_out);
+    if first.is_ok() || !whole || !AS_ONE.with(|f| f.get()) {
+        return first;
+    }
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
+        eprintln!(
+            "sweep by faces: the leading faces swept as one: {}; again a face at a time",
+            first
+                .as_ref()
+                .err()
+                .map_or(String::new(), |e| e.to_string())
+        );
+    }
+    let was = FACEWISE.with(|f| f.replace(true));
+    let again = by_faces_or_pieces_once(k, b, steps, None);
+    FACEWISE.with(|f| f.set(was));
+    again.or(first)
+}
+
+thread_local! {
+    /// Sweep a screw's leading faces a face at a time ([`by_faces_or_pieces`]'s retry).
+    static FACEWISE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether the last preparation swept leading faces as one sheet.
+    static AS_ONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn by_faces_or_pieces_once(
     k: &mut NativeKernel,
     b: &Body,
     steps: &[RigidStep],
@@ -2022,12 +2057,7 @@ pub(super) fn glued_with(
         let n = f.surf.normal(u, v) * if f.sense { 1.0 } else { -1.0 };
         (bi, fi, c, a, n)
     };
-    let faces: Vec<(usize, usize, P3, f64, V3)> = if super::par::threads_for(ids.len(), true) {
-        use rayon::prelude::*;
-        ids.par_iter().map(one).collect()
-    } else {
-        ids.iter().map(one).collect()
-    };
+    let faces: Vec<(usize, usize, P3, f64, V3)> = super::par::map_heavy(&ids, true, one);
     let mut dropped = vec![false; faces.len()];
     for i in 0..faces.len() {
         if dropped[i] {
@@ -2124,7 +2154,10 @@ pub(super) fn glued_with(
             .collect();
         let mut meshes: Vec<Option<Vec<super::tess::FaceMesh>>> = vec![None; all.len()];
         let overlap = suspects.into_iter().find(|&(_, _, bj, out)| {
+            // (Kept: the same pieces are tried in one grouping after another, each time
+            // the same body's mesh for the same point.)
             let m = meshes[bj].get_or_insert_with(|| {
+                let _kept = super::tess::keeping_meshes();
                 super::tess::mesh_body(&all[bj], 1e-4 * size.max(crate::native::tol::POINT), 0.3).0
             });
             winding(m, &out) > 0.5

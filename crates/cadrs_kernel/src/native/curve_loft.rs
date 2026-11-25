@@ -133,6 +133,9 @@ fn build(k: &NativeKernel, spec: &CurveLoftSpec) -> Result<(Body, Vec<Vec<u64>>)
     if !secs.iter().any(|s| matches!(s, Sec::Curve(_))) {
         return Err(invalid("Select a curve to loft"));
     }
+    if let Some(flat) = flat_wall(spec, &secs) {
+        return Ok(flat);
+    }
     // The profiles run the same way: with guides, each so that the guides meet it in the order
     // they meet the first (a profile turned half a turn runs the other way round); without, each
     // as its predecessor, ends nearest.
@@ -655,6 +658,114 @@ fn build(k: &NativeKernel, spec: &CurveLoftSpec) -> Result<(Body, Vec<Vec<u64>>)
         }
     }
     Ok((body, names))
+}
+
+/// The loft of two straight profiles (one of them a point, perhaps) that lie in one plane, with
+/// no guides and no end conditions: the ruled surface between them is that plane, so the sheet is
+/// a flat face of straight edges, a trapezoid or a triangle, exact, where the surface fitted in
+/// general is a B-spline over the same points. `None` for any other loft.
+fn flat_wall(spec: &CurveLoftSpec, secs: &[Sec]) -> Option<(Body, Vec<Vec<u64>>)> {
+    let [first, last] = secs else { return None };
+    let plain = |e: &CurveLoftEnd| e.condition == LoftCondition::Default;
+    if !spec.guides.is_empty() || !plain(&spec.start) || !plain(&spec.end) {
+        return None;
+    }
+    // A profile's ends, where it is one straight curve (every pole on the chord) or a point.
+    let ends = |s: &Sec, pcs: &CurveSection| -> Option<(P3, P3)> {
+        match (s, pcs) {
+            (Sec::Point(p), _) => Some((*p, *p)),
+            (Sec::Curve(c), CurveSection::Wire(w)) if w.len() == 1 => {
+                let (a, z) = (c.point(0.0), c.point(1.0));
+                let d = z - a;
+                let len = d.norm();
+                (len > SAME_POINT
+                    && c.cps.iter().all(|q| {
+                        (P3::new(q.x / q.w, q.y / q.w, q.z / q.w) - a)
+                            .cross(&d)
+                            .norm()
+                            <= tol::REL_POINT * len * len
+                    }))
+                .then_some((a, z))
+            }
+            _ => None,
+        }
+    };
+    let (a0, a1) = ends(first, &spec.sections[0])?;
+    let (mut b0, mut b1) = ends(last, &spec.sections[1])?;
+    // (The second runs as the first, ends nearest, as the general loft has them.)
+    if (b1 - a0).norm() + (b0 - a1).norm() < (b0 - a0).norm() + (b1 - a1).norm() {
+        std::mem::swap(&mut b0, &mut b1);
+    }
+    // The corners in order round the face, a point profile's one corner once.
+    let mut corners = vec![a0];
+    for q in [a1, b1, b0] {
+        if corners.iter().all(|c| (c - q).norm() > SAME_POINT) {
+            corners.push(q);
+        }
+    }
+    if corners.len() < 3 {
+        return None;
+    }
+    // In one plane, turning one way at every corner (the normal as the general loft's: along
+    // the first profile, then across).
+    let m = corners.len();
+    let size = corners.iter().map(|c| (c - a0).norm()).fold(0.0, f64::max);
+    let turn = |i: usize| {
+        (corners[(i + 1) % m] - corners[i]).cross(&(corners[(i + 2) % m] - corners[(i + 1) % m]))
+    };
+    let n = (0..m).map(turn).sum::<V3>();
+    if !(n.norm() > tol::REL_POINT * size * size) {
+        return None;
+    }
+    let n = n.normalize();
+    if corners
+        .iter()
+        .any(|c| (c - a0).dot(&n).abs() > tol::REL_POINT * size)
+        || (0..m).any(|i| turn(i).dot(&n) <= tol::REL_POINT * size * size)
+    {
+        return None;
+    }
+    let surf = Surface::Plane {
+        f: Frame::from_z(a0, n),
+    };
+    let mut b = Body::default();
+    let vs: Vec<usize> = corners.iter().map(|c| b.add_vertex(*c)).collect();
+    let mut lp = Vec::with_capacity(m);
+    for i in 0..m {
+        let (p, q) = (corners[i], corners[(i + 1) % m]);
+        let c = Curve::Line { o: p, d: q - p };
+        let pc = super::pcurve::pcurve(&surf, &c, 0.0, 1.0, None);
+        let edge = b.add_edge(c, 0.0, 1.0, vs[i], vs[(i + 1) % m]);
+        lp.push(Coedge {
+            edge,
+            fwd: true,
+            pc,
+        });
+    }
+    b.faces.push(Face {
+        surf,
+        sense: true,
+        loops: vec![lp],
+    });
+    fix_senses(&mut b, 0..1);
+    b.shells.push(Shell {
+        faces: vec![0],
+        closed: false,
+    });
+    // The sketch curves the face was made from: the profiles'.
+    let mut names: Vec<u64> = Vec::new();
+    for s in &spec.sections {
+        let CurveSection::Wire(pcs) = s else { continue };
+        for pc in pcs {
+            if let PathCurve::Sketch { curve, .. } = pc
+                && let Some(src) = curve.source()
+                && !names.contains(&src)
+            {
+                names.push(src);
+            }
+        }
+    }
+    Some((b, vec![names]))
 }
 
 /// The curves of a profile or guide joined end to end into one non-rational B-spline on

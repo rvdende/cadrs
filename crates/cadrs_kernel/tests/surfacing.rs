@@ -568,3 +568,97 @@ fn thicken_a_band_turns_its_meridians_figure() {
         "its two walls and its two ends, each a cone, none a fitted surface"
     );
 }
+
+/// The patch surface of a Fill's one face and the polynomial degrees and pole counts it has.
+fn patch(k: &DefaultKernel, body: BodyId) -> (cadrs_kernel::native::surface::Surface, [usize; 4]) {
+    use cadrs_kernel::native::surface::Surface;
+    let b = k.get(body).unwrap();
+    let surf = b.faces()[0].surf.clone();
+    let Surface::Nurbs(n) = &surf else {
+        panic!("the patch is not a B-spline: {surf:?}");
+    };
+    let shape = [n.du, n.dv, n.cps.len(), n.cps[0].len()];
+    (surf, shape)
+}
+
+#[test]
+fn a_fill_of_four_lines_is_the_bilinear_patch_of_four_poles() {
+    // The skew quadrilateral of the Coons patch of four lines: the saddle z = 5 + xy/10 over
+    // the square from (0, 0) to (10, 10), which the bilinear patch of its corners is exactly.
+    let mut k = DefaultKernel::new();
+    let seg = |a: (f64, f64), b: (f64, f64)| Curve2::line([a.0, a.1], [b.0, b.1]);
+    let spec = FillSpec::sketched(&[
+        (Plane::xz(0.0), seg((0.0, 5.0), (10.0, 5.0))),
+        (Plane::yz(10.0), seg((0.0, 5.0), (10.0, 15.0))),
+        (Plane::xz(10.0), seg((10.0, 15.0), (0.0, 5.0))),
+        (Plane::yz(0.0), seg((10.0, 5.0), (0.0, 5.0))),
+    ]);
+    let body = k.fill(&spec).unwrap().bodies[0];
+    let (surf, shape) = patch(&k, body);
+    assert_eq!(
+        shape,
+        [1, 1, 2, 2],
+        "a patch of degree 1 each way on four poles"
+    );
+    for (u, v) in [(0.0, 0.0), (1.0, 1.0), (0.3, 0.8), (0.75, 0.1), (0.5, 0.5)] {
+        let p = surf.eval(u, v);
+        let on = (p.z - (5.0 + p.x * p.y / 10.0)).abs();
+        assert!(on < 1e-12, "({u}, {v}) is {on:e} off the saddle");
+    }
+    assert!(k.get(body).unwrap().check().is_empty());
+}
+
+#[test]
+fn a_fill_of_four_parabolas_is_their_biquadratic_patch() {
+    // Four parabolic arcs over the square from (0, 0) to (10, 10), each a quadratic Bézier in
+    // its upright plane: arching to 12 on y = 0 and x = 0, sagging to 8 on x = 10 and y = 10.
+    // Their bilinearly blended Coons patch is of degree two each way, on nine poles, and passes
+    // through each arc.
+    let mut k = DefaultKernel::new();
+    let arc = |poles: [(f64, f64); 3]| Curve2::bezier(&poles.map(|(x, y)| [x, y]));
+    let spec = FillSpec::sketched(&[
+        (
+            Plane::xz(0.0),
+            arc([(0.0, 10.0), (5.0, 14.0), (10.0, 10.0)]),
+        ),
+        (
+            Plane::yz(10.0),
+            arc([(0.0, 10.0), (5.0, 6.0), (10.0, 10.0)]),
+        ),
+        (
+            Plane::xz(10.0),
+            arc([(10.0, 10.0), (5.0, 6.0), (0.0, 10.0)]),
+        ),
+        (
+            Plane::yz(0.0),
+            arc([(10.0, 10.0), (5.0, 14.0), (0.0, 10.0)]),
+        ),
+    ]);
+    let body = k.fill(&spec).unwrap().bodies[0];
+    let (surf, shape) = patch(&k, body);
+    assert_eq!(
+        shape,
+        [2, 2, 3, 3],
+        "a patch of degree 2 each way on nine poles"
+    );
+    // A quadratic Bézier's height at t between ends 10 and a middle pole m: 10 + 2 t (1 − t)(m − 10).
+    let arch = |t: f64, m: f64| 10.0 + 2.0 * t * (1.0 - t) * (m - 10.0);
+    for t in [0.0, 0.2, 0.5, 0.9, 1.0] {
+        // (The sides y = 0 and x = 0 arch to 12, the sides x = 10 and y = 10 sag to 8.)
+        for (p, want) in [
+            (surf.eval(t, 0.0), arch(t, 14.0)),
+            (surf.eval(1.0, t), arch(t, 6.0)),
+            (surf.eval(t, 1.0), arch(t, 6.0)),
+            (surf.eval(0.0, t), arch(t, 14.0)),
+        ] {
+            assert!((p.z - want).abs() < 1e-12, "{p:?} against {want}");
+        }
+    }
+    // The blend at the middle: the two ruled surfaces' middles less the corners' (all 10).
+    let mid = surf.eval(0.5, 0.5);
+    assert!(
+        (mid.z - ((12.0 + 8.0) / 2.0 + (12.0 + 8.0) / 2.0 - 10.0)).abs() < 1e-12,
+        "{mid:?}"
+    );
+    assert!(k.get(body).unwrap().check().is_empty());
+}

@@ -26,6 +26,12 @@ macro_rules! env_flag {
 }
 pub(crate) use env_flag;
 
+/// Whether a switch of [`par`]'s (`CADRS_PAR_ALWAYS`, `CADRS_PAR_SITES`) is set: read once.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn any_par_switch() -> bool {
+    env_flag!("CADRS_PAR_ALWAYS") || env_flag!("CADRS_PAR_SITES")
+}
+
 // The kernel's internal modules: `pub(crate)`, or `pub` with the `testkit` feature.
 // Without it, what only the test kit reaches (the DRAW harness's commands: the OCCT BRep and
 // SMLib readers, 2D offsets, tails, faces from edges, ...) is unused; with it (the crate's
@@ -117,6 +123,11 @@ pub mod convex_chamfer;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod convex_chamfer;
+#[cfg(feature = "testkit")]
+pub mod copies;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod copies;
 #[cfg(feature = "testkit")]
 pub mod curve;
 #[cfg(not(feature = "testkit"))]
@@ -288,10 +299,16 @@ pub mod ops;
 pub(crate) mod ops;
 pub(crate) mod par;
 #[cfg(feature = "testkit")]
+pub mod pattern;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod pattern;
+#[cfg(feature = "testkit")]
 pub mod pcurve;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod pcurve;
+pub(crate) mod polytope;
 #[cfg(feature = "testkit")]
 pub mod profile;
 #[cfg(not(feature = "testkit"))]

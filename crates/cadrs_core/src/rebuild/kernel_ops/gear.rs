@@ -817,12 +817,34 @@ impl Rebuilder {
         } else {
             Some(self.fuse_made(op, "Gear", made)?)
         };
+        // A face-milled bevel's spaces are its first turned about the gear's axis a tooth at a
+        // time (each section's frame on the axis, its region turned in it): only the first is
+        // lofted, and the kernel cuts it and its turned copies (`subtract_turned`: one tooth's
+        // sector, turned round).
+        let turned: Option<(Axis, usize)> =
+            (plan.blank.is_some() && target.is_none() && teeth.is_none() && plan.lofts.len() > 1)
+                .then(|| {
+                    let f = &plan.lofts[0].sections.first()?.0;
+                    Some((
+                        Axis {
+                            origin: Point3::from(v(f.origin)),
+                            dir: Unit::new_normalize(v(f.normal)),
+                        },
+                        plan.lofts.len(),
+                    ))
+                })
+                .flatten();
         // Tooth spaces lofted through their sections (a face-milled bevel's), gathered into one
         // body of solids apart.
         if !plan.lofts.is_empty() {
             let mut spaces: Vec<(BodyId, BodyNames)> = Vec::with_capacity(plan.lofts.len());
             let mut failed = None;
-            for l in &plan.lofts {
+            let lofted = if turned.is_some() {
+                1
+            } else {
+                plan.lofts.len()
+            };
+            for l in &plan.lofts[..lofted] {
                 let sections = l
                     .sections
                     .iter()
@@ -871,7 +893,7 @@ impl Rebuilder {
                     .map_err(|err| format!("Gear failed: {err}")),
             };
             // (Kept for cutting one at a time, should the blank's cut by them all fail.)
-            if plan.blank.is_some() && target.is_none() && gathered.is_ok() {
+            if plan.blank.is_some() && target.is_none() && gathered.is_ok() && turned.is_none() {
                 loose = spaces;
             } else {
                 for b in ids {
@@ -930,7 +952,20 @@ impl Rebuilder {
                         naming::name_body(&this.kernel, body, op, &res.history, &inputs)?,
                     ))
                 };
-                let all = subtract(self, &blank, &teeth);
+                let all = match turned {
+                    Some((axis, n)) => self
+                        .kernel
+                        .subtract_turned(blank.0, teeth.0, axis, n)
+                        .and_then(|res| {
+                            let body = res.bodies[0];
+                            let inputs = [(blank.0, &blank.1), (teeth.0, &teeth.1)];
+                            Ok((
+                                body,
+                                naming::name_body(&self.kernel, body, op, &res.history, &inputs)?,
+                            ))
+                        }),
+                    None => subtract(self, &blank, &teeth),
+                };
                 self.kernel.release(teeth.0);
                 // Best effort: where the blank can't be cut by every space at once, a space at a
                 // time; where not even that, the blank alone, with why (a warning).

@@ -646,6 +646,39 @@ fn the_gears_fixture_is_current() {
     assert_eq!(stored.document, doc, "fixtures/gears.cadrs is out of date");
 }
 
+/// `fixtures/gears.cadrs` rebuilds, every Part Studio of it, with no errors and quickly: its
+/// helical gear once left nine ruled slivers 0.01 mm wide along its teeth that the tessellator
+/// gave a million grid points each, and the document never finished rebuilding in the app.
+#[test]
+fn the_gears_fixture_rebuilds_quickly() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/gears.cadrs");
+    let file = cadrs_core::Store::load_path(&path).expect("the fixture loads");
+    let t = std::time::Instant::now();
+    let mut parts = Vec::new();
+    for el in &file.document.elements {
+        let features = el.active_features();
+        if !features.iter().any(Feature::is_part_feature) {
+            continue;
+        }
+        let at = std::time::Instant::now();
+        let b = rebuild::build(&features);
+        eprintln!("{}: {} parts in {:?}", el.name, b.parts.len(), at.elapsed());
+        assert!(b.errors.is_empty(), "{}: {:?}", el.name, b.errors);
+        assert!(b.warnings.is_empty(), "{}: {:?}", el.name, b.warnings);
+        parts.push((el.name.clone(), b.parts.len()));
+    }
+    let names = |n: &[(&str, usize)]| -> Vec<(String, usize)> {
+        n.iter().map(|(s, k)| (s.to_string(), *k)).collect()
+    };
+    assert_eq!(
+        parts,
+        names(&[("Gears", 16), ("Hypoid", 4), ("Worm drive", 2)])
+    );
+    // (Generous for a slow CI machine: a few seconds here.)
+    let took = t.elapsed();
+    assert!(took.as_secs_f64() < 60.0, "the fixture took {took:?}");
+}
+
 #[path = "support_reach.rs"]
 mod support_reach;
 use support_reach::reach_of;
