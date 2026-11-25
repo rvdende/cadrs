@@ -275,12 +275,13 @@ impl SentSolids {
                     self.next += 1;
                     // A pattern's copy of a mesh sent (its seed comes before it in the parts).
                     let instance = solid.instance_of.0.as_ref().and_then(|i| {
+                        let (op, instance) = i.pattern?;
                         let (seed, _) = self.by_ptr.get(&(Arc::as_ptr(&i.seed) as usize))?;
                         sent(seed).then_some(SentMesh::Instance {
                             seed: *seed,
                             pose: i.pose,
-                            op: i.op,
-                            instance: i.instance,
+                            op,
+                            instance,
                         })
                     });
                     out.push((id, instance.unwrap_or_else(|| mesh_bytes(&solid))));
