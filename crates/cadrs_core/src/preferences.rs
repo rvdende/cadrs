@@ -5,7 +5,7 @@
 //! rotate, pan and zoom gestures; a drawing sheet has no rotate, so its rotate gestures pan it
 //! ([`MousePreset::sheet_action`]), as Onshape's do (D2.2: right- or middle-drag pans).
 //!
-//! The wheel zooms in every preset.
+//! The wheel zooms in every preset (rolling away zooms in, unless `invert_wheel_zoom`).
 //!
 //! The **color scheme** ([`ColorScheme`]): light, dark, or whatever the system uses.
 //!
@@ -342,6 +342,22 @@ coded_choice!(GridStyle {
     Lines => "lines",
 });
 
+/// Which way of moving a SpaceMouse's cap zooms (Preferences › Navigation › SpaceMouse); the
+/// other of the two moves the view up and down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum SpaceMouseZoom {
+    /// Pulling the cap up and pushing it down.
+    #[default]
+    UpDown,
+    /// Moving the cap forward (away from you) and backward.
+    ForwardBackward,
+}
+
+coded_choice!(SpaceMouseZoom {
+    UpDown => "up-down",
+    ForwardBackward => "forward-backward",
+});
+
 /// How the origin is drawn in the 3D view (Preferences › Interface › Origin; the eye on the
 /// feature list's Origin row hides and shows it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -436,6 +452,10 @@ pub struct Preferences {
     /// view normal to sketch plane"). Off, the view stays where it is, as in Onshape.
     #[serde(default)]
     pub sketch_view_normal: bool,
+    /// Invert the wheel's zoom: rolling the wheel toward you zooms in. Off (the default),
+    /// rolling it away from you zooms in. Every view the wheel zooms follows it.
+    #[serde(default)]
+    pub invert_wheel_zoom: bool,
     /// The ground grid's look, or none ([`GridStyle`]).
     #[serde(default)]
     pub grid: GridStyle,
@@ -445,6 +465,13 @@ pub struct Preferences {
     /// How the origin is drawn ([`OriginStyle`]).
     #[serde(default)]
     pub origin: OriginStyle,
+    /// Which way of moving a SpaceMouse's cap zooms ([`SpaceMouseZoom`]).
+    #[serde(default)]
+    pub space_mouse_zoom: SpaceMouseZoom,
+    /// A SpaceMouse's speed, pan, zoom and turn alike, in percent of the default (one of
+    /// [`SPACE_MOUSE_SPEEDS`]).
+    #[serde(default = "default_space_mouse_speed")]
+    pub space_mouse_speed: u16,
 }
 
 /// A language cadrs's interface has a catalog for (`cadrs_ui::i18n::LANGUAGES`, in the same
@@ -558,11 +585,21 @@ impl Default for Preferences {
             last_slicer: None,
             keep_camera_up: false,
             sketch_view_normal: false,
+            invert_wheel_zoom: false,
             grid: GridStyle::default(),
             frame_stats: FrameStatsMode::default(),
             origin: OriginStyle::default(),
+            space_mouse_zoom: SpaceMouseZoom::default(),
+            space_mouse_speed: default_space_mouse_speed(),
         }
     }
+}
+
+/// The SpaceMouse speeds offered (percent of the default).
+pub const SPACE_MOUSE_SPEEDS: [u16; 7] = [25, 50, 75, 100, 150, 200, 300];
+
+fn default_space_mouse_speed() -> u16 {
+    100
 }
 
 /// The interface sizes offered (percent).
@@ -573,6 +610,24 @@ fn default_ui_scale() -> u16 {
 }
 
 impl Preferences {
+    /// The wheel's zoom steps from `lines` rolled (> 0 away from the user): > 0 zooms in.
+    /// Rolling away zooms in, unless [`Preferences::invert_wheel_zoom`] is on.
+    pub fn wheel_zoom(&self, lines: f32) -> f32 {
+        if self.invert_wheel_zoom {
+            -lines
+        } else {
+            lines
+        }
+    }
+
+    /// The SpaceMouse's speed as a factor (1 is the default), kept within the speeds offered.
+    pub fn space_mouse_speed_factor(&self) -> f32 {
+        f32::from(self.space_mouse_speed.clamp(
+            SPACE_MOUSE_SPEEDS[0],
+            SPACE_MOUSE_SPEEDS[SPACE_MOUSE_SPEEDS.len() - 1],
+        )) / 100.0
+    }
+
     /// The interface's scale as a factor (1 is the display's own), kept within the sizes offered.
     pub fn ui_scale_factor(&self) -> f32 {
         f32::from(
@@ -631,6 +686,19 @@ impl Preferences {
 mod tests {
     use super::*;
     use MouseButton::Left;
+
+    #[test]
+    fn the_wheel_zoom_turns_round_when_inverted() {
+        let mut p = Preferences::default();
+        // Away from the user (> 0) zooms in by default.
+        assert_eq!(p.wheel_zoom(2.0), 2.0);
+        p.invert_wheel_zoom = true;
+        assert_eq!(p.wheel_zoom(2.0), -2.0);
+        assert_eq!(p.wheel_zoom(-0.5), 0.5);
+        // A file from before the setting reads with it off.
+        let old: Preferences = ron::from_str("(mouse: Onshape)").unwrap();
+        assert!(!old.invert_wheel_zoom);
+    }
 
     #[test]
     fn the_mapping_table() {
@@ -752,9 +820,12 @@ mod tests {
             last_slicer: Some(0),
             keep_camera_up: true,
             sketch_view_normal: true,
+            invert_wheel_zoom: true,
             grid: GridStyle::Off,
             frame_stats: FrameStatsMode::Fps,
             origin: OriginStyle::Axes,
+            space_mouse_zoom: SpaceMouseZoom::ForwardBackward,
+            space_mouse_speed: 150,
         };
         p.save(&dir).unwrap();
         assert_eq!(Preferences::load(&dir), p);

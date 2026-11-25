@@ -407,7 +407,7 @@ impl HelixFeature {
             }
             Some(AxisRef::Face(f)) => out.push(FeatureId(f.face.op)),
             Some(AxisRef::Connector(c)) => out.extend(c.parent()),
-            None => {}
+            Some(AxisRef::Origin(_)) | None => {}
         }
         out
     }

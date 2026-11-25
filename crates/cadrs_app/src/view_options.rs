@@ -630,7 +630,7 @@ fn pick_points(world: &World, pick: Pick) -> Vec<Vec3> {
             }
             pts
         }
-        Pick::Origin => vec![Vec3::ZERO],
+        Pick::Origin | Pick::OriginAxis(_) => vec![Vec3::ZERO],
         Pick::Assembly | Pick::Instance(..) => cache
             .shown()
             .flat_map(|p| p.solid.positions.iter().map(|q| v3(*q)))

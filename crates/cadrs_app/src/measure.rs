@@ -130,6 +130,8 @@ pub fn entity_of(pick: Pick, cache: &PartCache) -> Option<Measured> {
         }
         Pick::Part(part) => Measured::part(&cache.part(part)?.solid),
         Pick::Origin => Measured::point([0.0; 3]),
+        // Only an axis field picks the origin's axes (#316): nothing to measure.
+        Pick::OriginAxis(_) => return None,
         Pick::Plane(k) => {
             let k: PlaneKind = k;
             Measured::plane(&cadrs_sketch::PlaneFrame {
