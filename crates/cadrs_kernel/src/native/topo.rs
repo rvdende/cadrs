@@ -1071,7 +1071,16 @@ impl Body {
                         .get(self.co_end(a))
                         .map_or(0.0, |v| v.tol)
                         .max(super::tol::LOOP_GAP);
-                    if du * mu > gap_tol || dv * mv > gap_tol {
+                    // (The metric bounds the gap by the surface's most stretched part; where
+                    // a spline is squeezed, a step in v covers far less: the points themselves,
+                    // and the step's middle, so a jump of a period round a closed one counts.)
+                    let squeezed = || {
+                        let q = f.surf.eval(pa.x, pa.y);
+                        let mid = f.surf.eval((pa.x + pb.x) / 2.0, (pa.y + pb.y) / 2.0);
+                        (q - f.surf.eval(pb.x, pb.y)).norm() <= gap_tol
+                            && (q - mid).norm() <= gap_tol
+                    };
+                    if (du * mu > gap_tol || dv * mv > gap_tol) && !squeezed() {
                         errs.push(format!(
                             "face {fi} loop {li}: p-curve gap after coedge {k}: ({:.3e}, {:.3e})",
                             pa.x - pb.x,
