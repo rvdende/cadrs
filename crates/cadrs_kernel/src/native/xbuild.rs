@@ -1928,6 +1928,12 @@ impl XBuilder {
                 else {
                     return false;
                 };
+                // Where the second loop's trace meets the seam: its v there (projecting
+                // its vertex from the first loop's can land at a closed spline's other end).
+                let traced_v = match inner {
+                    None => tb.ends[k].0.y,
+                    Some(t) => tb.pcs[k].point(t).y,
+                };
                 let (kb, vbv) = match inner {
                     None => (
                         k,
@@ -1943,7 +1949,11 @@ impl XBuilder {
                 };
                 let b_loop = self.faces[fi].loops[lb].clone();
                 let pb = self.body.verts[vbv].p;
-                let (_, vb_param) = s.project(&pb, Some((qa.x, qa.y)));
+                let (_, vb_param) = if spline {
+                    s.project(&pb, Some((seam_u, traced_v)))
+                } else {
+                    s.project(&pb, Some((qa.x, qa.y)))
+                };
                 let va_param = qa.y;
                 // (A seam from a loop to a point of the same v on a closed spline is no seam:
                 // the loops meet there, or the projection went to the surface's other end.)
