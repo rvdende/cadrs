@@ -945,11 +945,15 @@ fn steps_at(dom: &Domain, u: f64, v: f64, span: (f64, f64), defl: f64, ang: f64)
     // than twice the chord needs no step across it, however fast its rulings turn: a ruled
     // sliver 0.01 mm wide along a helical gear's tooth, its rulings swinging round, took a
     // million-point grid (the twist's step 6·10⁻⁴ across, rows 0.005 mm apart along).
+    // A way counts as stepped only where its step is shorter than the face: a way straight to
+    // rounding (a fitted helicoid's rulings, S_vv·n 10⁻¹² and its step 10⁵ across a face 1
+    // wide) has no rows either, and its step stood for a row's length in the twist's, which
+    // came out 10⁻⁶: a grid at its limit and the refinement minutes over it.
     let cm = d[4].dot(&nn).abs();
     let (lu, lv) = (d[1].norm(), d[2].norm());
     let narrow = |l: f64, w: f64| l * w <= 2.0 * defl;
     if cm > 1e-9 * lu * lv && lu > tol::DEGENERATE && lv > tol::DEGENERATE {
-        match (su.is_finite(), sv.is_finite()) {
+        match (su < span.0, sv < span.1) {
             (true, false) if narrow(lv, span.1) => {}
             (false, true) if narrow(lu, span.0) => {}
             (true, false) => sv = 4.0 * defl / (cm * su),

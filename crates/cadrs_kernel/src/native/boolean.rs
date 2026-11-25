@@ -3929,10 +3929,22 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                     &overlap(fa, fb).grow(1e-3 * faces[fa].bbox.diagonal().max(1e-9)),
                     run_tol,
                 );
+                // (A trace that finds fewer curves lost one, not mended it: a patch's face cut
+                // by a plane where the face reaches the patch's end found none at all, and the
+                // plane's section came apart. The first is kept.)
+                let fewer = r.curves.len() < found.0.len();
                 if super::env_flag!("CADRS_BOOL_DEBUG") {
                     eprintln!(
-                        "ssi {fa}×{fb}: a curve's end dangled; traced again over wider boxes"
+                        "ssi {fa}×{fb}: a curve's end dangled; traced again over wider boxes{}",
+                        if fewer {
+                            ", fewer curves: the first kept"
+                        } else {
+                            ""
+                        }
                     );
+                }
+                if fewer {
+                    return found;
                 }
                 (r.curves, r.singular, found.2, r.coincident)
             })
