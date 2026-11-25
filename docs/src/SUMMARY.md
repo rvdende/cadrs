@@ -13,6 +13,14 @@
 - [Importing and exporting](concepts/import-export.md)
 - [Backing up and moving](concepts/backup.md)
 
+# Features
+
+- [Sketches](features/sketch.md)
+- [Part Studio features](features/part-studio.md)
+- [Surfaces, direct edits and more](features/more-part-studio.md)
+- [Sheet metal](features/sheet-metal.md)
+- [Assemblies](features/assembly.md)
+
 # Reference
 
 - [Keyboard shortcuts](reference/keyboard-shortcuts.md)

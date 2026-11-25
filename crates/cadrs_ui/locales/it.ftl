@@ -186,6 +186,7 @@ shell-app-menu = Menu
 shell-preferences-ellipsis = Preferenze…
 shell-app-menu-shortcuts = Scorciatoie da tastiera
 shell-app-menu-github = GitHub
+shell-app-menu-docs = Documentazione
 shell-app-menu-workspace-hint = Creare un ramo da una versione in Cronologia
 shell-app-menu-workspace = Area di lavoro
 shell-app-menu-all-documents = Tutti i documenti

@@ -216,11 +216,7 @@ fn group_dialog(t: &Theme, name: &str, items: Vec<String>) -> impl Bundle {
                 });
             })
             .footer(move |f| {
-                f.spawn((
-                    Name::new("group-help"),
-                    icon("help-filled", 14.0, Color::srgb_u8(0xa8, 0xa8, 0xa8)),
-                    Tooltip::new(tr("common-help")),
-                ));
+                f.spawn(crate::help::help_icon("group-help", "group"));
                 let _ = &tf;
             })
             .build(t),

@@ -186,6 +186,7 @@ shell-app-menu = メニュー
 shell-preferences-ellipsis = 環境設定…
 shell-app-menu-shortcuts = キーボードショートカット
 shell-app-menu-github = GitHub
+shell-app-menu-docs = ドキュメント
 shell-app-menu-workspace-hint = 履歴のバージョンからブランチを作成
 shell-app-menu-workspace = ワークスペース
 shell-app-menu-all-documents = すべてのドキュメント
