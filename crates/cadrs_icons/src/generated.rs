@@ -267,6 +267,7 @@ icons! {
     CHIP => ("chip", Line, "Chip"),
     TOOL => ("tool", Line, "Tool"),
     BOOKS => ("books", Line, "Books"),
+    DOCS => ("docs", Line, "Documentation"),
     IDEA => ("idea", Line, "Explore"),
     KEYBOARD => ("keyboard", Line, "Keyboard shortcuts"),
     INTERFACE => ("interface", Line, "Interface preferences"),

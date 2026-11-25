@@ -2252,6 +2252,171 @@ impl NurbsSurface {
     }
 }
 
+/// A B-spline surface's knot cells as polynomials: each cell's Taylor coefficients at its middle
+/// (homogeneous), so that many points of one cell (mass properties' inner integrals) cost a few
+/// Horner sums each, with no span search or basis ([`NurbsSurface::cells`]).
+pub struct Cells {
+    du: usize,
+    dv: usize,
+    /// The distinct knots each way, the ends too: cell (i, j) spans `ub[i]..ub[i + 1]` by
+    /// `vb[j]..vb[j + 1]`.
+    ub: Vec<f64>,
+    vb: Vec<f64>,
+    /// Cell (i, j)'s coefficient of (u − um)^a (v − vm)^b at `((i·nv + j)·(du + 1) + a)·(dv + 1) + b`.
+    c: Vec<H>,
+}
+
+/// A cell's row at one v ([`Cells::row`]): polynomials in u − um, of S and of ∂S/∂v.
+pub struct CellRow {
+    um: f64,
+    lo: f64,
+    hi: f64,
+    a: [H; MAXP + 1],
+    av: [H; MAXP + 1],
+    p: usize,
+}
+
+impl Cells {
+    /// The cell index along v at `v` (as [`find_span`] picks the span: the one starting at or
+    /// before it, the last at the end).
+    pub fn col(&self, v: f64) -> usize {
+        self.vb
+            .partition_point(|b| *b <= v)
+            .saturating_sub(1)
+            .min(self.vb.len() - 2)
+    }
+
+    /// The row of cell column `j` at `v` along the u-cell holding `u0..u1` (both in it, but for
+    /// rounding at its knots or beyond the surface's ends), or None where they straddle a knot.
+    pub fn row(&self, j: usize, v: f64, u0: f64, u1: f64) -> Option<CellRow> {
+        let nu = self.ub.len() - 1;
+        let (lo, hi) = (u0.min(u1), u0.max(u1));
+        let mid = 0.5 * (lo + hi);
+        let i = self
+            .ub
+            .partition_point(|b| *b <= mid)
+            .saturating_sub(1)
+            .min(nu - 1);
+        let (a0, a1) = (self.ub[i], self.ub[i + 1]);
+        let slack = 1e-12 * (1.0 + a0.abs().max(a1.abs()));
+        if (lo < a0 - slack && i > 0) || (hi > a1 + slack && i + 1 < nu) {
+            return None;
+        }
+        let nv = self.vb.len() - 1;
+        let (du, dv) = (self.du, self.dv);
+        let t = v - 0.5 * (self.vb[j] + self.vb[j + 1]);
+        let base = (i * nv + j) * (du + 1) * (dv + 1);
+        let mut a = [H::zeros(); MAXP + 1];
+        let mut av = [H::zeros(); MAXP + 1];
+        for k in 0..=du {
+            let c = &self.c[base + k * (dv + 1)..base + (k + 1) * (dv + 1)];
+            let (mut x, mut xv) = (c[dv], H::zeros());
+            for b in (0..dv).rev() {
+                xv = xv * t + x;
+                x = x * t + c[b];
+            }
+            a[k] = x;
+            av[k] = xv;
+        }
+        Some(CellRow {
+            um: 0.5 * (a0 + a1),
+            lo: a0,
+            hi: a1,
+            a,
+            av,
+            p: du,
+        })
+    }
+}
+
+impl CellRow {
+    /// Whether `u0..u1` lies in this row's cell (to rounding).
+    pub fn holds(&self, u0: f64, u1: f64) -> bool {
+        let slack = 1e-12 * (1.0 + self.lo.abs().max(self.hi.abs()));
+        u0.min(u1) >= self.lo - slack && u0.max(u1) <= self.hi + slack
+    }
+
+    /// Point and first derivatives (S, Su, Sv) at u.
+    #[inline]
+    pub fn d1(&self, u: f64) -> (P3, V3, V3) {
+        let t = u - self.um;
+        let p = self.p;
+        let (mut a, mut au, mut av) = (self.a[p], H::zeros(), self.av[p]);
+        for k in (0..p).rev() {
+            au = au * t + a;
+            a = a * t + self.a[k];
+            av = av * t + self.av[k];
+        }
+        let q = a.xyz() / a.w;
+        let du = (au.xyz() - q * au.w) / a.w;
+        let dv = (av.xyz() - q * av.w) / a.w;
+        (P3::from(q), du, dv)
+    }
+}
+
+impl NurbsSurface {
+    /// The surface's knot cells as polynomials ([`Cells`]): None for a degree over the short
+    /// arrays', or a net of cells too large to be worth it.
+    pub fn cells(&self) -> Option<Cells> {
+        let (du, dv) = (self.du, self.dv);
+        if du > MAXP || dv > MAXP {
+            return None;
+        }
+        let (ub, vb) = self.breaks();
+        if ub.len() < 2 || vb.len() < 2 {
+            return None;
+        }
+        let (nu, nv) = (ub.len() - 1, vb.len() - 1);
+        if nu * nv * (du + 1) * (dv + 1) > 1 << 18 {
+            return None;
+        }
+        // Each span's basis derivatives at its middle over k!: the Taylor coefficients.
+        let taylor = |b: &[f64], p: usize, k: &[f64], n: usize| -> Vec<(usize, Vec<Vec<f64>>)> {
+            b.windows(2)
+                .map(|w| {
+                    let m = 0.5 * (w[0] + w[1]);
+                    let s = find_span(n, p, m, k);
+                    let mut d = basis_ders(s, m, p, p, k);
+                    let mut f = 1.0;
+                    for (i, row) in d.iter_mut().enumerate() {
+                        if i > 0 {
+                            f /= i as f64;
+                        }
+                        row.iter_mut().for_each(|x| *x *= f);
+                    }
+                    (s, d)
+                })
+                .collect()
+        };
+        let tu = taylor(&ub, du, &self.ku, self.cps.len() - 1);
+        let tv = taylor(&vb, dv, &self.kv, self.cps[0].len() - 1);
+        let mut c = vec![H::zeros(); nu * nv * (du + 1) * (dv + 1)];
+        let mut net = vec![H::zeros(); (du + 1) * (dv + 1)];
+        for (i, (su, bu)) in tu.iter().enumerate() {
+            for (j, (sv, bv)) in tv.iter().enumerate() {
+                // Along v first: net[x][b] = Σ_y P[x][y] V[b][y].
+                for x in 0..=du {
+                    let row = &self.cps[su - du + x][sv - dv..=*sv];
+                    for b in 0..=dv {
+                        net[x * (dv + 1) + b] = row
+                            .iter()
+                            .zip(&bv[b])
+                            .fold(H::zeros(), |acc, (p, w)| acc + p * *w);
+                    }
+                }
+                let base = (i * nv + j) * (du + 1) * (dv + 1);
+                for a in 0..=du {
+                    for b in 0..=dv {
+                        c[base + a * (dv + 1) + b] = (0..=du)
+                            .fold(H::zeros(), |acc, x| acc + net[x * (dv + 1) + b] * bu[a][x]);
+                    }
+                }
+            }
+        }
+        Some(Cells { du, dv, ub, vb, c })
+    }
+}
+
 /// A B-spline surface along u at one v ([`NurbsSurface::iso_v`]).
 pub struct IsoV<'a> {
     s: &'a NurbsSurface,

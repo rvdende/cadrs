@@ -309,6 +309,7 @@ shell-app-menu = Menu
 shell-preferences-ellipsis = Preferences…
 shell-app-menu-shortcuts = Keyboard shortcuts
 shell-app-menu-github = GitHub
+shell-app-menu-docs = Documentation
 # A disabled hint under the workspaces: how to make another one ("History" is the version history panel).
 shell-app-menu-workspace-hint = Branch from a version in History
 # The submenu listing the document's workspaces (its main line and branches) to switch to.

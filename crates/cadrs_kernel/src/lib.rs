@@ -598,6 +598,31 @@ pub trait Kernel {
         Err(KernelError::Unsupported("indexed cuts by swept solids"))
     }
 
+    /// `target` less `tool` and its copies turned about `axis`, `count` of them a whole turn
+    /// apart (a gear's tooth spaces from its first). By default the copies are made and cut in
+    /// one boolean; the native kernel cuts one tooth's sector and turns it round the axis
+    /// where the target is turned about it.
+    fn subtract_turned(
+        &mut self,
+        target: BodyId,
+        tool: BodyId,
+        axis: Axis,
+        count: usize,
+    ) -> Result<OpResult> {
+        let mut tools = vec![tool];
+        for i in 1..count {
+            let a = std::f64::consts::TAU * i as f64 / count as f64;
+            let m = *nalgebra::Rotation3::from_axis_angle(&axis.dir, a).matrix();
+            let t = axis.origin.coords - m * axis.origin.coords;
+            tools.push(self.transform_affine(tool, m, t)?.bodies[0]);
+        }
+        let r = self.boolean(BoolOp::Subtract, target, &tools);
+        for t in &tools[1..] {
+            self.release(*t);
+        }
+        r
+    }
+
     /// [`Kernel::sweep_with`], the profile twisting about the path and scaling about the path's
     /// point as it goes (`law`, in proportion to the length travelled). The path must run on
     /// from the profile without a corner.

@@ -1316,7 +1316,7 @@ mod tests {
             f64::MIN_POSITIVE,
             5e-324,
         ] {
-            let s = crate::native::step::real(x);
+            let s = crate::native::step::real(x).to_string();
             assert!(s.contains('.'), "{x}: {s}");
         }
         let mut k = NativeKernel::new();

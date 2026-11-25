@@ -55,6 +55,7 @@ pub mod gallery;
 pub mod gear_ui;
 pub mod github;
 pub mod ground_grid;
+pub mod help;
 pub mod hidden_edges;
 pub mod hide_key;
 pub mod history_panel;
@@ -963,6 +964,7 @@ impl Plugin for CadrsAppPlugin {
                 spacemouse::SpaceMousePlugin,
                 walk::WalkPlugin,
                 awake::AwakePlugin,
+                help::HelpPlugin,
             ))
             .add_plugins(top_bar::TopBarPlugin)
             .add_plugins(part_folders::PartFoldersPlugin)

@@ -976,13 +976,13 @@ impl Body {
     /// problems found (empty when valid). [`CheckLevel::Full`] reports everything
     /// [`CheckLevel::Fast`] does and more, never less.
     pub fn check_with(&self, level: CheckLevel) -> Vec<String> {
-        self.check_parts(level, true, None)
+        self.check_parts(level, true, None, None)
     }
 
     /// [`Body::check`] without its last test, the solids' volumes: for a caller that has them
     /// already (a boolean, which computes them to drop empty solids).
     pub fn check_structure(&self) -> Vec<String> {
-        self.check_parts(CheckLevel::Fast, false, None)
+        self.check_parts(CheckLevel::Fast, false, None, None)
     }
 
     /// [`CheckLevel::Full`] for a body made from a valid one by changing the faces `changed`
@@ -991,10 +991,34 @@ impl Body {
     /// p-curve ends on the faces, the faces' domains, faces crossing) on the changed faces and
     /// on the pairs with a changed face; the faces left as they were passed them before.
     pub fn check_changed(&self, changed: &[bool]) -> Vec<String> {
-        self.check_parts(CheckLevel::Full, true, Some(changed))
+        self.check_parts(CheckLevel::Full, true, Some(changed), None)
     }
 
-    fn check_parts(&self, level: CheckLevel, volumes: bool, only: Option<&[bool]>) -> Vec<String> {
+    /// [`Body::check`] of a body a boolean made of a sound one (cut from it, added to it, or
+    /// what it shares with another), `from` that body's [`Body::oriented_face_keys`]. A solid
+    /// that keeps one of its faces as it was, the same way round, points out as it did (the
+    /// face still has the solid behind it and nothing in front, and a closed shell's faces
+    /// all point the way one of them does): its volume's sign isn't asked for again.
+    pub(crate) fn check_cut_from(&self, from: &rustc_hash::FxHashSet<u128>) -> Vec<String> {
+        self.check_parts(CheckLevel::Fast, true, None, Some(from))
+    }
+
+    /// Each face's key for [`Body::check_cut_from`]: what the face is made of
+    /// ([`face_check_key`]) and which way it points.
+    pub(crate) fn oriented_face_keys(&self) -> Vec<u128> {
+        self.faces
+            .iter()
+            .map(|f| oriented(face_check_key(self, f), f.sense))
+            .collect()
+    }
+
+    fn check_parts(
+        &self,
+        level: CheckLevel,
+        volumes: bool,
+        only: Option<&[bool]>,
+        from: Option<&rustc_hash::FxHashSet<u128>>,
+    ) -> Vec<String> {
         let full = level == CheckLevel::Full;
         // The faces the full check's per-face tests cover.
         let fully = |fi: usize| full && only.is_none_or(|c| c.get(fi).copied().unwrap_or(true));
@@ -1003,6 +1027,18 @@ impl Body {
             return refs;
         }
         let mut errs = Vec::new();
+        // The faces that passed the fast check's tests of a face on its own before, as they
+        // are now ([`passed_faces`]): those tests aren't made of them again. (A body cut pass
+        // after pass is checked after each, nearly all its faces as the pass before left
+        // them. The full check measures more of a face: it tests them all.)
+        let keys: Vec<u128> = if full {
+            Vec::new()
+        } else {
+            self.faces.iter().map(|f| face_check_key(self, f)).collect()
+        };
+        let passed = passed_faces(&keys);
+        let again = check_compare();
+        let known = |fi: usize| !again && passed.get(fi).copied().unwrap_or(false);
         // The faces' polygons, as the crossings' test makes them: the orientation's again.
         let mut polys: Vec<Option<Vec<Vec<P2>>>> = vec![None; self.faces.len()];
         for (fi, f) in self.faces.iter().enumerate() {
@@ -1015,6 +1051,9 @@ impl Body {
                         errs.push(format!(
                             "face {fi} loop {li}: coedge {k} doesn't meet the next"
                         ));
+                    }
+                    if known(fi) {
+                        continue;
                     }
                     // p-curve ends meet in uv (modulo periods).
                     let ea = &self.edges[a.edge];
@@ -1063,9 +1102,18 @@ impl Body {
                 }
             }
         }
-        // Each edge ends at its vertices (within their tolerances).
+        // Each edge ends at its vertices (within their tolerances; an edge of a face that
+        // passed before did then: the face's key holds the edge and its vertices).
+        let mut edge_known = vec![false; self.edges.len()];
+        for (fi, f) in self.faces.iter().enumerate() {
+            if known(fi) {
+                for c in f.loops.iter().flatten() {
+                    edge_known[c.edge] = true;
+                }
+            }
+        }
         for (ei, e) in self.edges.iter().enumerate() {
-            if e.degenerate {
+            if e.degenerate || edge_known[ei] {
                 continue;
             }
             for k in 0..2 {
@@ -1081,6 +1129,9 @@ impl Body {
         }
         // Loops don't cross themselves in (u, v).
         for (fi, f) in self.faces.iter().enumerate() {
+            if known(fi) {
+                continue;
+            }
             for (li, l) in f.loops.iter().enumerate() {
                 let poly_of = |per: usize| {
                     let mut poly: Vec<P2> = Vec::with_capacity(per * l.len());
@@ -1115,6 +1166,18 @@ impl Body {
                         "face {fi} loop {li} crosses itself in (u, v) (segments {i} and {j})"
                     ));
                 }
+            }
+        }
+        if errs.is_empty() {
+            pass_faces(&keys);
+        } else if again {
+            // (`CADRS_CHECK_COMPARE`: every face was tested; one that passed before must
+            // pass as it did.)
+            for (fi, _) in passed.iter().enumerate().filter(|(_, p)| **p) {
+                assert!(
+                    !errs.iter().any(|e| e.starts_with(&format!("face {fi} "))),
+                    "face {fi} passed the check before and fails it now: {errs:?}"
+                );
             }
         }
         // Each edge of a closed shell is used twice, once each way.
@@ -1161,7 +1224,6 @@ impl Body {
             errs.extend(self.check_ends_on_faces(&fully));
             errs.extend(self.check_shells());
             // (Each face's on its own, in parallel; their problems in face order.)
-            use rayon::prelude::*;
             let one = |fi: usize| {
                 if fully(fi) {
                     self.check_face_domain(fi)
@@ -1169,11 +1231,8 @@ impl Body {
                     Vec::new()
                 }
             };
-            let domain: Vec<Vec<String>> = if super::par::threads_for(self.faces.len(), false) {
-                (0..self.faces.len()).into_par_iter().map(one).collect()
-            } else {
-                (0..self.faces.len()).map(one).collect()
-            };
+            let domain: Vec<Vec<String>> =
+                super::par::map(&(0..self.faces.len()).collect::<Vec<usize>>(), |&i| one(i));
             errs.extend(domain.into_iter().flatten());
             if errs.is_empty() {
                 let marked = |f: usize| only.is_none_or(|c| c.get(f).copied().unwrap_or(true));
@@ -1188,6 +1247,15 @@ impl Body {
         if volumes && errs.is_empty() {
             for si in 0..self.solids.len() {
                 let faces = self.solid_faces(si);
+                if let Some(from) = from
+                    && !again
+                    && faces.iter().any(|&fi| {
+                        keys.get(fi)
+                            .is_some_and(|k| from.contains(&oriented(*k, self.faces[fi].sense)))
+                    })
+                {
+                    continue;
+                }
                 let sub = super::kernel::subset(self, &faces, true);
                 // (The subset's faces are the solid's, with their edges as they are: their
                 // polygons the same.)
@@ -1506,32 +1574,33 @@ impl Body {
     /// a degenerate edge), in order: for a caller that raises tolerances further by them. The
     /// faces are measured in parallel.
     pub(crate) fn fit_tolerances_searched_gaps(&mut self, cap: f64) -> Vec<Vec<(usize, f64)>> {
-        use rayon::prelude::*;
         self.fit_tolerances(cap);
         // Each face's coedges' gaps (edge, gap) and its loops' ends' (vertex, distance).
         type Measured = (Vec<(usize, f64)>, Vec<(usize, f64)>);
-        let measured: Vec<Measured> = self
-            .faces
-            .par_iter()
-            .map(|f| {
-                let mut surface_key = None;
-                let (mut gaps, mut ends) = (Vec::new(), Vec::new());
-                for c in f.loops.iter().flatten() {
-                    let e = &self.edges[c.edge];
-                    if !e.degenerate {
-                        gaps.push((c.edge, pcurve_gap_kept(e, &c.pc, &f.surf, &mut surface_key)));
-                    }
-                    for k in 0..2 {
-                        let uv = c.pc.point(e.t[k]);
-                        let d = (f.surf.eval(uv.x, uv.y) - self.verts[e.v[k]].p).norm();
-                        if d.is_finite() {
-                            ends.push((e.v[k], d));
-                        }
+        let measured: Vec<Measured> = super::par::map(&self.faces, |f| {
+            let mut surface_key = None;
+            let (mut gaps, mut ends) = (Vec::new(), Vec::new());
+            for c in f.loops.iter().flatten() {
+                let e = &self.edges[c.edge];
+                let kept = if e.degenerate {
+                    None
+                } else {
+                    pcurve_kept(e, &c.pc, &f.surf, &mut surface_key, true)
+                };
+                if !e.degenerate {
+                    let gap = kept.map_or_else(|| pcurve_gap(e, &c.pc, &f.surf), |g| g.searched);
+                    gaps.push((c.edge, gap));
+                }
+                let at = kept.map_or_else(|| pcurve_ends(e, &c.pc, &f.surf), |g| g.ends);
+                for k in 0..2 {
+                    let d = (at[k] - self.verts[e.v[k]].p).norm();
+                    if d.is_finite() {
+                        ends.push((e.v[k], d));
                     }
                 }
-                (gaps, ends)
-            })
-            .collect();
+            }
+            (gaps, ends)
+        });
         let mut etol = vec![0.0f64; self.edges.len()];
         let mut vtol = vec![0.0f64; self.verts.len()];
         for (gaps, ends) in &measured {
@@ -1574,9 +1643,39 @@ fn curve_issue(c: &Curve) -> Option<String> {
                 && a.is_finite()
                 && b.is_finite()
         }
-        Curve::Nurbs(n) => return n.validate().err().map(|e| e.message()),
+        Curve::Nurbs(n) => {
+            // (A long one found sound stays so for as long as it lives: every check of every
+            // body it is handed on to asked again.)
+            if n.cps.len() >= 8 {
+                let at = std::sync::Arc::as_ptr(n) as usize;
+                if SOUND_CURVES.with(|m| m.borrow().contains_key(&at)) {
+                    return None;
+                }
+                let issue = n.validate().err().map(|e| e.message());
+                if issue.is_none() {
+                    SOUND_CURVES.with(|m| {
+                        let mut m = m.borrow_mut();
+                        if m.len() >= 1 << 16 {
+                            m.clear();
+                        }
+                        m.insert(at, std::sync::Arc::downgrade(n));
+                    });
+                }
+                return issue;
+            }
+            return n.validate().err().map(|e| e.message());
+        }
     };
     (!ok).then(|| "a curve isn't finite".to_string())
+}
+
+thread_local! {
+    /// The long B-spline curves [`curve_issue`] found nothing wrong with, by their addresses,
+    /// each held weakly: an address held so is that curve's and no other's while the entry
+    /// stands, and the curve can't be changed in place.
+    static SOUND_CURVES: std::cell::RefCell<
+        rustc_hash::FxHashMap<usize, std::sync::Weak<super::nurbs::NurbsCurve>>,
+    > = std::cell::RefCell::default();
 }
 
 /// Why a surface can't be evaluated, if it can't.
@@ -1629,18 +1728,20 @@ impl Body {
                 }
             }
         }
+        // (Each coedge's gap as the fit before measured it, where its curves are the same.)
         let mut etol = vec![0.0f64; self.edges.len()];
         for f in &self.faces {
+            let mut surface_key = None;
             for c in f.loops.iter().flatten() {
                 let e = &self.edges[c.edge];
                 if e.degenerate {
                     continue;
                 }
-                for s in [0.1, 0.25, 0.4, 0.5, 0.6, 0.75, 0.9] {
-                    let t = e.t[0] + (e.t[1] - e.t[0]) * s;
-                    let uv = c.pc.point(t);
-                    etol[c.edge] = etol[c.edge].max((f.surf.eval(uv.x, uv.y) - e.point(t)).norm());
-                }
+                let gap = match pcurve_kept(e, &c.pc, &f.surf, &mut surface_key, false) {
+                    Some(g) => g.sampled,
+                    None => pcurve_gap_sampled(e, &c.pc, &f.surf),
+                };
+                etol[c.edge] = etol[c.edge].max(gap);
             }
         }
         for (e, d) in self.edges.iter_mut().zip(etol) {
@@ -1908,29 +2009,141 @@ impl Body {
     }
 }
 
-/// The most control points of an edge's curve and p-curve whose gap [`pcurve_gap_kept`] keeps.
-const KEYED_POINTS: usize = 64;
+/// What [`Body::check`]'s tests of a face on its own depend on, to the bit: its surface, and of
+/// each coedge its p-curve and way round, its edge's curve, range and tolerance, and the
+/// edge's vertices with theirs.
+fn face_check_key(b: &Body, f: &Face) -> u128 {
+    use std::hash::Hasher;
+    let mut h = super::fingerprint::Key128::new();
+    h.surface(&f.surf);
+    h.write_usize(f.loops.len());
+    for l in &f.loops {
+        h.write_usize(l.len());
+        for c in l {
+            let e = &b.edges[c.edge];
+            h.write_u8(c.fwd as u8 | (e.degenerate as u8) << 1);
+            h.curve(&e.curve);
+            h.f64s(&[e.t[0], e.t[1], e.tol]);
+            h.curve(&c.pc);
+            for v in e.v {
+                match b.verts.get(v) {
+                    Some(v) => {
+                        h.f64s(v.p.coords.as_slice());
+                        h.f64s(&[v.tol]);
+                    }
+                    None => h.write_u8(0xEE),
+                }
+            }
+        }
+    }
+    h.key()
+}
 
-/// [`pcurve_gap`], kept by what it is made from (the edge's curve and range, the p-curve, the
-/// surface: `surface_key`, the surface's own hash, made once per face): a boolean's result fits
-/// every edge's tolerance again, most of them its inputs' edges as they were.
-pub(super) fn pcurve_gap_kept(
+/// A face's key ([`face_check_key`]) with the way it points.
+fn oriented(key: u128, sense: bool) -> u128 {
+    if sense { key } else { !key }
+}
+
+/// The faces, by [`face_check_key`], that passed the fast check's tests of a face on its own:
+/// two generations of at most `PASSED` each.
+#[derive(Default)]
+struct Passed {
+    new: rustc_hash::FxHashSet<u128>,
+    old: rustc_hash::FxHashSet<u128>,
+}
+
+const PASSED: usize = 1 << 19;
+
+static PASSED_FACES: std::sync::LazyLock<std::sync::Mutex<Passed>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Which of the faces of these keys passed before.
+fn passed_faces(keys: &[u128]) -> Vec<bool> {
+    if keys.is_empty() {
+        return Vec::new();
+    }
+    let mut p = PASSED_FACES.lock().unwrap_or_else(|e| e.into_inner());
+    keys.iter()
+        .map(|k| {
+            p.new.contains(k) || {
+                // (Still in use: into the generation being filled.)
+                let was = p.old.remove(k);
+                if was {
+                    p.new.insert(*k);
+                }
+                was
+            }
+        })
+        .collect()
+}
+
+/// The faces of these keys passed.
+fn pass_faces(keys: &[u128]) {
+    if keys.is_empty() {
+        return;
+    }
+    let mut p = PASSED_FACES.lock().unwrap_or_else(|e| e.into_inner());
+    for k in keys {
+        if p.new.len() >= PASSED {
+            p.old = std::mem::take(&mut p.new);
+        }
+        p.new.insert(*k);
+    }
+}
+
+/// What a tolerance fit measures of a coedge, kept by what it is made from ([`pcurve_kept`]).
+#[derive(Clone, Copy)]
+pub(super) struct KeptGap {
+    /// [`pcurve_gap_sampled`].
+    pub sampled: f64,
+    /// [`pcurve_gap`], once asked for (NaN before).
+    pub searched: f64,
+    /// The surface at the p-curve's ends (the edge's range's).
+    pub ends: [P3; 2],
+}
+
+/// The distance between edge `e`'s curve and its p-curve `pc` on `surf` at seven points along
+/// it, the largest: what [`Body::fit_tolerances`] raises an edge's tolerance to.
+pub(super) fn pcurve_gap_sampled(e: &Edge, pc: &Curve, surf: &Surface) -> f64 {
+    let mut gap = 0.0f64;
+    for s in [0.1, 0.25, 0.4, 0.5, 0.6, 0.75, 0.9] {
+        let t = e.t[0] + (e.t[1] - e.t[0]) * s;
+        let uv = pc.point(t);
+        gap = gap.max((surf.eval(uv.x, uv.y) - e.point(t)).norm());
+    }
+    gap
+}
+
+/// The surface at the ends of `e`'s p-curve `pc`.
+pub(super) fn pcurve_ends(e: &Edge, pc: &Curve, surf: &Surface) -> [P3; 2] {
+    [0, 1].map(|k| {
+        let uv = pc.point(e.t[k]);
+        surf.eval(uv.x, uv.y)
+    })
+}
+
+/// A coedge's gaps and ends, kept by what they are made from (the edge's curve and range, the
+/// p-curve, the surface: `surface_key`, the surface's own hash, made once per face): a
+/// boolean's result fits every edge's tolerance again, most of them its inputs' edges as they
+/// were. With the gap searched for ([`pcurve_gap`]) when `searched`. None for a line on a
+/// plane, which costs less to measure than to look up.
+pub(super) fn pcurve_kept(
     e: &Edge,
     pc: &Curve,
     surf: &Surface,
     surface_key: &mut Option<u128>,
-) -> f64 {
+    searched: bool,
+) -> Option<KeptGap> {
     use std::hash::Hasher;
-    /// Two generations of at most this many gaps each.
+    /// Two generations of at most this many coedges each.
     const KEPT: usize = 1 << 18;
     #[derive(Default)]
     struct Kept {
-        new: rustc_hash::FxHashMap<u128, f64>,
-        old: rustc_hash::FxHashMap<u128, f64>,
+        new: rustc_hash::FxHashMap<u128, KeptGap>,
+        old: rustc_hash::FxHashMap<u128, KeptGap>,
     }
     static KEPT_GAPS: std::sync::LazyLock<std::sync::Mutex<Kept>> =
         std::sync::LazyLock::new(Default::default);
-    // (A line on a plane takes two points: no key.)
     if matches!(
         (&e.curve, pc, surf),
         (
@@ -1939,20 +2152,7 @@ pub(super) fn pcurve_gap_kept(
             Surface::Plane { .. }
         )
     ) {
-        return pcurve_gap(e, pc, surf);
-    }
-    // (Nor long B-splines: their key, every control point hashed, costs more than the gap's
-    // 75 or so samples.)
-    let size = |c: &Curve| match c {
-        Curve::Nurbs(n) => n.cps.len(),
-        _ => 0,
-    };
-    let surface_size = match surf {
-        Surface::Nurbs(n) => n.cps.len() * n.cps.first().map_or(0, |r| r.len()),
-        _ => 0,
-    };
-    if size(&e.curve) + size(pc) > KEYED_POINTS || surface_size > 4 * KEYED_POINTS {
-        return pcurve_gap(e, pc, surf);
+        return None;
     }
     let sk = *surface_key.get_or_insert_with(|| {
         let mut h = super::fingerprint::Key128::new();
@@ -1974,15 +2174,45 @@ pub(super) fn pcurve_gap_kept(
             }),
         }
     };
-    known.unwrap_or_else(|| {
-        let gap = pcurve_gap(e, pc, surf);
-        let mut k = KEPT_GAPS.lock().unwrap_or_else(|e| e.into_inner());
-        if k.new.len() >= KEPT {
-            k.old = std::mem::take(&mut k.new);
-        }
-        k.new.insert(key, gap);
-        gap
-    })
+    if let Some(g) = known
+        && !(searched && g.searched.is_nan())
+    {
+        return Some(g);
+    }
+    let made = match known {
+        Some(g) => KeptGap {
+            searched: pcurve_gap(e, pc, surf),
+            ..g
+        },
+        None => KeptGap {
+            sampled: pcurve_gap_sampled(e, pc, surf),
+            searched: if searched {
+                pcurve_gap(e, pc, surf)
+            } else {
+                f64::NAN
+            },
+            ends: pcurve_ends(e, pc, surf),
+        },
+    };
+    let mut k = KEPT_GAPS.lock().unwrap_or_else(|e| e.into_inner());
+    if k.new.len() >= KEPT {
+        k.old = std::mem::take(&mut k.new);
+    }
+    k.new.insert(key, made);
+    Some(made)
+}
+
+/// [`pcurve_gap`], kept ([`pcurve_kept`]).
+pub(super) fn pcurve_gap_kept(
+    e: &Edge,
+    pc: &Curve,
+    surf: &Surface,
+    surface_key: &mut Option<u128>,
+) -> f64 {
+    match pcurve_kept(e, pc, surf, surface_key, true) {
+        Some(g) => g.searched,
+        None => pcurve_gap(e, pc, surf),
+    }
 }
 
 /// The largest distance between edge `e`'s curve and its p-curve `pc` on `surf` (infinite if
@@ -3583,6 +3813,46 @@ impl Drop for KeptBoxes<'_> {
             let left = k.len().saturating_sub(self.kept);
             k.truncate(left);
         });
+    }
+}
+
+/// A body's box and each of its faces' ([`Body::boxes`]).
+#[derive(Debug, Clone)]
+pub(crate) struct Boxes {
+    pub all: Bbox,
+    pub faces: Vec<Bbox>,
+}
+
+impl Body {
+    /// [`Body::bbox`] and every [`Body::face_bbox`], each edge's box made once.
+    pub(crate) fn boxes(&self) -> Boxes {
+        let _kept = keep_boxes(&[self]);
+        let faces = (0..self.faces.len()).map(|f| self.face_bbox(f)).collect();
+        Boxes {
+            all: self.bbox(),
+            faces,
+        }
+    }
+}
+
+/// [`keep_boxes`] of a body whose boxes are made already (`made`, [`Body::boxes`] of it or of
+/// the body it is a copy of): none is made again while the guard lives.
+pub(crate) fn keep_boxes_made<'a>(body: &'a Body, made: &Boxes) -> KeptBoxes<'a> {
+    let kept = KEPT_BOXES.with(|k| {
+        let mut k = k.borrow_mut();
+        if made.faces.len() != body.faces.len() || k.iter().any(|e| std::ptr::eq(e.body, body)) {
+            return 0;
+        }
+        k.push(KeptBody {
+            body,
+            all: Some(made.all),
+            faces: made.faces.iter().copied().map(Some).collect(),
+        });
+        1
+    });
+    KeptBoxes {
+        kept,
+        _bodies: std::marker::PhantomData,
     }
 }
 

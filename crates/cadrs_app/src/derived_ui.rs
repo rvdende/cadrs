@@ -1324,15 +1324,8 @@ fn sync_dialog(
                                 flex_grow: 1.0,
                                 ..default()
                             });
-                            f.spawn((
-                                Name::new("derived-help"),
-                                cadrs_ui::icon(
-                                    "help-filled",
-                                    14.0,
-                                    Color::srgb_u8(0xa8, 0xa8, 0xa8),
-                                ),
-                                Tooltip::new(tr(HELP)),
-                            ));
+                            f.spawn(crate::help::help_icon("derived-help", "derived"))
+                                .insert(Tooltip::new(tr(HELP)));
                             let _ = &tf;
                         })
                         .build(&theme),

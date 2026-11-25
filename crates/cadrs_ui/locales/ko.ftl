@@ -186,6 +186,7 @@ shell-app-menu = 메뉴
 shell-preferences-ellipsis = 환경설정…
 shell-app-menu-shortcuts = 키보드 단축키
 shell-app-menu-github = GitHub
+shell-app-menu-docs = 문서
 shell-app-menu-workspace-hint = 기록에서 버전을 골라 브랜치를 만드세요
 shell-app-menu-workspace = 작업 공간
 shell-app-menu-all-documents = 모든 문서

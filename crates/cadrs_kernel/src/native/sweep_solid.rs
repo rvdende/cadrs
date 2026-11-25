@@ -349,7 +349,99 @@ impl Slicer<'_> {
                 }
             };
         }
-        // A helicoid: sign changes of key − q along the boundary, refined by bisection.
+        // A helicoid and a polygon's straight side: along the side the polar angle about the
+        // motion's axis turns one way only (its rate is a constant over the distance from the
+        // axis squared), so the key, that angle less k × height, has at most two turning
+        // points, the roots of a quadratic; between them it runs one way, and each slice it
+        // crosses there is one root, found by false position. No sampling of the side.
+        if let Section::Polygon(p) = &b.section {
+            let dir = b.e1 * w.cos() + b.e2 * w.sin();
+            let n = p.len();
+            let mut out = Vec::new();
+            for i in 0..n {
+                let ((r0, h0), (r1, h1)) = (p[i], p[(i + 1) % n]);
+                let a = b.o + dir * r0 + b.a * h0 - self.origin;
+                let d = dir * (r1 - r0) + b.a * (h1 - h0);
+                let (x0, y0, z0) = (a.dot(&self.x), a.dot(&self.y), a.dot(&self.z));
+                let (dx, dy, dz) = (d.dot(&self.x), d.dot(&self.y), d.dot(&self.z));
+                // The key along the side, continuous from its start (the side keeps off the
+                // axis: its angle turns by less than half a turn).
+                let t0 = y0.atan2(x0);
+                let key = |f: f64| {
+                    let (x, y) = (x0 + dx * f, y0 + dy * f);
+                    t0 + (x0 * y - y0 * x).atan2(x0 * x + y0 * y) - self.k * (z0 + dz * f)
+                };
+                // Where it turns: c / ρ² = k dz, ρ² the side's distance from the axis squared.
+                let c = x0 * dy - y0 * dx;
+                let mut at = vec![0.0, 1.0];
+                let rate = self.k * dz;
+                if rate != 0.0 && c / rate > 0.0 {
+                    let (qa, qb, qc) = (
+                        dx * dx + dy * dy,
+                        2.0 * (x0 * dx + y0 * dy),
+                        x0 * x0 + y0 * y0 - c / rate,
+                    );
+                    let disc = qb * qb - 4.0 * qa * qc;
+                    if qa > 0.0 && disc > 0.0 {
+                        for sign in [-1.0, 1.0] {
+                            let f = (-qb + sign * disc.sqrt()) / (2.0 * qa);
+                            if f > 0.0 && f < 1.0 {
+                                at.push(f);
+                            }
+                        }
+                        at.sort_by(f64::total_cmp);
+                    }
+                }
+                for piece in at.windows(2) {
+                    let (fa, fb) = (piece[0], piece[1]);
+                    let (ka, kb) = (key(fa), key(fb));
+                    // Each turn of the slice (q + a whole number of turns) the piece crosses.
+                    let (lo, hi) = (ka.min(kb), ka.max(kb));
+                    let mut m = ((lo - q) / TAU).ceil();
+                    while q + m * TAU <= hi {
+                        let target = q + m * TAU;
+                        m += 1.0;
+                        if target == kb && kb != ka {
+                            // (The piece's far end is the next piece's start.)
+                            continue;
+                        }
+                        let (mut lo, mut hi, mut flo, mut fhi) = (fa, fb, ka - target, kb - target);
+                        let mut side = 0i8;
+                        for _ in 0..60 {
+                            if flo == fhi || hi - lo <= 1e-15 {
+                                break;
+                            }
+                            let mid = lo + (hi - lo) * flo / (flo - fhi);
+                            let fm = key(mid) - target;
+                            if (fm <= 0.0) == (flo <= 0.0) {
+                                lo = mid;
+                                flo = fm;
+                                if side == -1 {
+                                    fhi *= 0.5;
+                                }
+                                side = -1;
+                            } else {
+                                hi = mid;
+                                fhi = fm;
+                                if side == 1 {
+                                    flo *= 0.5;
+                                }
+                                side = 1;
+                            }
+                            if fm.abs() < 1e-15 {
+                                lo = mid;
+                                hi = mid;
+                                break;
+                            }
+                        }
+                        out.push((i as f64 + 0.5 * (lo + hi)) / n as f64);
+                    }
+                }
+            }
+            return out;
+        }
+        // A helicoid and a disk: sign changes of key − q along the boundary, refined by
+        // bisection.
         let f = |s: f64| self.key(&b.point(s, w), q) - q;
         let n = 48;
         let mut out = Vec::new();
@@ -402,41 +494,69 @@ impl Slicer<'_> {
     /// it is: sampled all round and finely about `seed` (the slice before's, where a slice by an
     /// extreme one meets the body in a sliver), then refined (None when the slice misses it).
     fn extreme(&self, q: f64, far: bool, seed: f64) -> Option<(f64, f64)> {
-        let sign = if far { 1.0 } else { -1.0 };
-        let best_at = |w: f64| -> Option<f64> {
+        let [f, n] = self.extremes(q, [seed, seed], [far, !far]);
+        if far { f } else { n }
+    }
+
+    /// [`Self::extreme`] for the greatest distance and for the least at once (those of `want`
+    /// asked for), each with its own seed: the half planes all round are met with the slice
+    /// once for both.
+    fn extremes(&self, q: f64, seeds: [f64; 2], want: [bool; 2]) -> [Option<(f64, f64)>; 2] {
+        // The greatest and the least distance on the half plane at w.
+        let both_at = |w: f64| -> Option<(f64, f64)> {
             self.crossings(w, q)
                 .into_iter()
-                .map(|s| sign * self.radius(&self.body.point(s, w)))
-                .fold(None, |a: Option<f64>, x| Some(a.map_or(x, |a| a.max(x))))
+                .map(|s| self.radius(&self.body.point(s, w)))
+                .fold(None, |a: Option<(f64, f64)>, x| {
+                    Some(a.map_or((x, x), |(hi, lo)| (hi.max(x), lo.min(x))))
+                })
         };
         let n = 240;
         let h = TAU / n as f64;
-        let mut best: Option<(f64, f64)> = None;
-        let try_at = |w: f64, best: &mut Option<(f64, f64)>| {
-            if let Some(v) = best_at(w)
-                && best.is_none_or(|b| v > b.1)
-            {
-                *best = Some((w, v));
+        // (The best of each side so far: the turn and the signed distance, greater the better.)
+        let mut best: [Option<(f64, f64)>; 2] = [None, None];
+        let mut try_at = |w: f64, sides: [bool; 2]| {
+            if let Some((hi, lo)) = both_at(w) {
+                for (side, v) in [(0, hi), (1, -lo)] {
+                    if sides[side] && best[side].is_none_or(|b| v > b.1) {
+                        best[side] = Some((w, v));
+                    }
+                }
             }
         };
         for i in 0..n {
-            try_at(TAU * i as f64 / n as f64, &mut best);
+            try_at(TAU * i as f64 / n as f64, want);
         }
-        for i in -16..=16 {
-            try_at(seed + h * 2.0 * i as f64 / 16.0, &mut best);
+        for side in 0..2 {
+            if want[side] {
+                for i in -16..=16 {
+                    try_at(
+                        seeds[side] + h * 2.0 * i as f64 / 16.0,
+                        [side == 0, side == 1],
+                    );
+                }
+            }
         }
-        let (w0, v0) = best?;
-        let (w, v) = golden_max_in(
-            &|w| best_at(w).unwrap_or(f64::NEG_INFINITY),
-            w0 - h,
-            w0 + h,
-            40,
-        );
-        Some(if v > v0 {
-            (sign * v, w)
-        } else {
-            (sign * v0, w0)
-        })
+        let refined = |side: usize| -> Option<(f64, f64)> {
+            let sign = if side == 0 { 1.0 } else { -1.0 };
+            let (w0, v0) = best[side]?;
+            let one = |w: f64| {
+                both_at(w).map_or(
+                    f64::NEG_INFINITY,
+                    |(hi, lo)| if side == 0 { hi } else { -lo },
+                )
+            };
+            let (w, v) = golden_max_in(&one, w0 - h, w0 + h, 40);
+            Some(if v > v0 {
+                (sign * v, w)
+            } else {
+                (sign * v0, w0)
+            })
+        };
+        [
+            if want[0] { refined(0) } else { None },
+            if want[1] { refined(1) } else { None },
+        ]
     }
 }
 
@@ -464,35 +584,48 @@ fn outline(sl: &Slicer, lo: Extreme, hi: Extreme, n: usize) -> Option<Outline> {
     let eps = 1e-9 * span;
     let (lo_far, lo_near) = end(lo.key + eps, lo);
     let (hi_far, hi_near) = end(hi.key - eps, hi);
-    let side = |far: bool, a: (f64, f64), b: (f64, f64)| -> Option<Vec<(f64, f64)>> {
-        let mut out = vec![a];
-        let mut seed = lo.w;
-        for i in 1..n {
+    // The slices in runs, side by side (each slice's two sides found together, each from the
+    // slice before's turn; a run's first from the low end's: the same runs, and so the same
+    // points, whatever the threads).
+    const RUN: usize = 32;
+    let slices: Vec<usize> = (1..n).collect();
+    let runs: Vec<&[usize]> = slices.chunks(RUN).collect();
+    type Sides = Option<Vec<[Option<(f64, f64)>; 2]>>;
+    let found: Vec<Sides> = super::par::map_heavy(&runs, true, |run| {
+        let mut seeds = [lo.w, lo.w];
+        let mut out = Vec::with_capacity(run.len());
+        for &i in run.iter() {
             let th = -PI / 2.0 + PI * i as f64 / n as f64;
             let q = mid + half * th.sin();
+            let [far, near] = sl.extremes(q, seeds, [true, true]);
             // (A slice within a hair of an end, where the ends' own keys are only found to a
             // search's precision, may miss the body: the end's point stands for it.)
-            let Some((v, w)) = sl.extreme(q, far, seed) else {
-                if 1.0 - th.sin().abs() < 1e-4 {
-                    continue;
+            let close = 1.0 - th.sin().abs() < 1e-4;
+            let mut at = [None, None];
+            for (side, got) in [far, near].into_iter().enumerate() {
+                match got {
+                    Some((v, w)) => {
+                        seeds[side] = w;
+                        at[side] = Some((v, q));
+                    }
+                    None if close => {}
+                    None => return None,
                 }
-                return None;
-            };
-            seed = w;
-            out.push((v, q));
+            }
+            out.push(at);
         }
-        out.push(b);
         Some(out)
-    };
-    super::par::start();
-    let (far, near) = rayon::join(
-        || side(true, lo_far, hi_far),
-        || side(false, lo_near, hi_near),
-    );
-    Some(Outline {
-        far: far?,
-        near: near?,
-    })
+    });
+    let (mut far, mut near) = (vec![lo_far], vec![lo_near]);
+    for run in found {
+        for [f, nr] in run? {
+            far.extend(f);
+            near.extend(nr);
+        }
+    }
+    far.push(hi_far);
+    near.push(hi_near);
+    Some(Outline { far, near })
 }
 
 /// A stretch of the body's boundary with the outward normals along it, in the half plane of its
@@ -1918,6 +2051,747 @@ fn slid_ellipsoid(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option
     }))
 }
 
+/// A convex polyhedron turned whole turns about an axis clear of it, in closed form: the solid
+/// of revolution of its shadow in (ρ, h), distance from the axis and height along it. At a
+/// height h the polyhedron is a convex polygon: its farthest point from the axis is on an edge
+/// of the polyhedron, and its nearest on an edge or at the foot of the axis's perpendicular to
+/// a face's line there. Along an edge ρ² is a quadratic in h, and along a face's feet too (a
+/// perfect square: the feet run along a line through the axis), so the shadow's outer side is
+/// the upper envelope of the edges' quadratics and its inner side the lower envelope of the
+/// edges' and the feet's, each found from the quadratics' crossings. Each piece of an envelope
+/// turns into a face about the axis, the hyperboloid, cone or cylinder its line sweeps, between
+/// the circles at its ends; a flat ring closes the top and the bottom where the polyhedron
+/// ends in a face. None for any other body, or one the axis reaches.
+fn polyhedron_turned(k: &mut NativeKernel, b: &Body, axis: Axis) -> Option<Result<OpResult>> {
+    use super::xbuild::{XBuilder, XFace};
+    if crate::native::env_flag!("CADRS_NO_POLYHEDRON_TURNED") {
+        return None;
+    }
+    let size = b.bbox().diagonal().max(tol::POINT);
+    let eps = 1e-9 * size;
+    let poly = super::polytope::Polytope::of_flat_body(b, eps)?;
+    let faces = poly.rings();
+    let o = axis.origin;
+    let z = axis.dir.into_inner().normalize();
+    let height = |p: &P3| (p - o).dot(&z);
+    let out = |p: &P3| {
+        let w = p - o;
+        w - z * w.dot(&z)
+    };
+    // ρ² = q₀ h² + q₁ h + q₂ along a line of the polyhedron, from the height `lo` to `hi`, the
+    // line's points there `ends`.
+    struct Along {
+        q: [f64; 3],
+        lo: f64,
+        hi: f64,
+        ends: [P3; 2],
+    }
+    let value = |q: &[f64; 3], h: f64| (q[0] * h + q[1]) * h + q[2];
+    // The edges, each once, from its lower end up (a level one is no side of the shadow).
+    let mut edges: Vec<Along> = Vec::new();
+    let mut seen: Vec<(P3, P3)> = Vec::new();
+    for (_, ring) in &faces {
+        for i in 0..ring.len() {
+            let (p, q) = (ring[i], ring[(i + 1) % ring.len()]);
+            let same = |a: &P3, c: &P3| (a - c).norm() < eps;
+            if seen
+                .iter()
+                .any(|(a, c)| (same(a, &p) && same(c, &q)) || (same(a, &q) && same(c, &p)))
+            {
+                continue;
+            }
+            seen.push((p, q));
+            let (p, q) = if height(&p) <= height(&q) {
+                (p, q)
+            } else {
+                (q, p)
+            };
+            let (h0, h1) = (height(&p), height(&q));
+            if h1 - h0 <= eps {
+                continue;
+            }
+            // Off the axis the edge's point at h is w₀ + (h − h₀) w′.
+            let (w0, dw) = (out(&p), (out(&q) - out(&p)) / (h1 - h0));
+            let a = dw.norm_squared();
+            let cross = w0.dot(&dw);
+            edges.push(Along {
+                q: [
+                    a,
+                    2.0 * cross - 2.0 * h0 * a,
+                    w0.norm_squared() - 2.0 * h0 * cross + h0 * h0 * a,
+                ],
+                lo: h0,
+                hi: h1,
+                ends: [p, q],
+            });
+        }
+    }
+    // The faces' feet: at h the face's line is n_r·w = c − n_z h, its foot n_r (c − n_z h) / n_r²,
+    // while that is on the face.
+    let mut feet: Vec<Along> = Vec::new();
+    // (And where the axis is inside every face's plane, it is inside the polyhedron.)
+    let (mut in_lo, mut in_hi) = (f64::NEG_INFINITY, f64::INFINITY);
+    for (n, ring) in &faces {
+        let nz = n.dot(&z);
+        let nr = n - z * nz;
+        let g2 = nr.norm_squared();
+        let c = n.dot(&(ring[0] - o));
+        if nz.abs() > 1e-12 {
+            if nz > 0.0 {
+                in_hi = in_hi.min(c / nz);
+            } else {
+                in_lo = in_lo.max(c / nz);
+            }
+        } else if c < 0.0 {
+            (in_lo, in_hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        }
+        if g2 < 1e-18 {
+            continue;
+        }
+        let (p0, d) = (o + nr * (c / g2), z - nr * (nz / g2));
+        let (mut lo, mut hi) = (f64::NEG_INFINITY, f64::INFINITY);
+        for i in 0..ring.len() {
+            let (a, e) = (ring[i], ring[(i + 1) % ring.len()]);
+            // (Inside the side a → e of a ring that runs counter-clockwise about n.)
+            let m = n.cross(&(e - a));
+            let (k0, k1) = ((p0 - a).dot(&m), d.dot(&m));
+            if k1.abs() <= 1e-14 * m.norm() {
+                if k0 < 0.0 {
+                    (lo, hi) = (f64::INFINITY, f64::NEG_INFINITY);
+                }
+            } else if k1 > 0.0 {
+                lo = lo.max(-k0 / k1);
+            } else {
+                hi = hi.min(-k0 / k1);
+            }
+        }
+        if hi - lo <= eps {
+            continue;
+        }
+        feet.push(Along {
+            q: [nz * nz / g2, -2.0 * c * nz / g2, c * c / g2],
+            lo,
+            hi,
+            ends: [p0 + d * lo, p0 + d * hi],
+        });
+    }
+    let heights = || faces.iter().flat_map(|(_, r)| r.iter()).map(height);
+    let (bottom, top) = (
+        heights().fold(f64::INFINITY, f64::min),
+        heights().fold(f64::NEG_INFINITY, f64::max),
+    );
+    if top - bottom <= 1e-6 * size {
+        return None;
+    }
+    // The upper or lower envelope of `lines` from the height `bottom` to `top`: (line, from, to).
+    let envelope = |lines: &[&Along],
+                    upper: bool,
+                    (bottom, top): (f64, f64)|
+     -> Option<Vec<(usize, f64, f64)>> {
+        let mut cuts = vec![bottom, top];
+        for a in lines {
+            cuts.extend([a.lo, a.hi]);
+        }
+        for (i, a) in lines.iter().enumerate() {
+            for c in &lines[i + 1..] {
+                let (l, h) = (a.lo.max(c.lo), a.hi.min(c.hi));
+                if h <= l {
+                    continue;
+                }
+                // Where the two are level: the difference's roots.
+                let d = [a.q[0] - c.q[0], a.q[1] - c.q[1], a.q[2] - c.q[2]];
+                let scale = d[0].abs() * h.abs().max(l.abs()).powi(2)
+                    + d[1].abs() * h.abs().max(l.abs())
+                    + d[2].abs();
+                if d[0].abs() * (h - l).powi(2) > 1e-12 * scale.max(f64::MIN_POSITIVE) {
+                    let disc = d[1] * d[1] - 4.0 * d[0] * d[2];
+                    if disc >= 0.0 {
+                        let s = disc.sqrt();
+                        // (The larger root by the stable sum, the other from the product.)
+                        let big = -0.5 * (d[1] + d[1].signum() * s);
+                        let big = if d[1] == 0.0 { 0.5 * s } else { big };
+                        cuts.push(big / d[0]);
+                        if big != 0.0 {
+                            cuts.push(d[2] / big);
+                        }
+                    }
+                } else if d[1].abs() > 0.0 {
+                    cuts.push(-d[2] / d[1]);
+                }
+            }
+        }
+        cuts.retain(|c| c.is_finite() && *c >= bottom && *c <= top);
+        cuts.sort_by(f64::total_cmp);
+        cuts.dedup_by(|a, c| (*a - *c).abs() <= eps);
+        *cuts.first_mut()? = bottom;
+        *cuts.last_mut()? = top;
+        let mut pieces: Vec<(usize, f64, f64)> = Vec::new();
+        for w in cuts.windows(2) {
+            let mid = 0.5 * (w[0] + w[1]);
+            let at = lines
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| a.lo - eps <= w[0] && w[1] <= a.hi + eps)
+                .map(|(i, a)| (value(&a.q, mid), i));
+            let (_, i) = if upper {
+                at.max_by(|x, y| x.0.total_cmp(&y.0))?
+            } else {
+                at.min_by(|x, y| x.0.total_cmp(&y.0))?
+            };
+            match pieces.last_mut() {
+                Some(last) if last.0 == i => last.2 = w[1],
+                _ => pieces.push((i, w[0], w[1])),
+            }
+        }
+        Some(pieces)
+    };
+    let outer_lines: Vec<&Along> = edges.iter().collect();
+    let inner_lines: Vec<&Along> = edges.iter().chain(&feet).collect();
+    let outer = envelope(&outer_lines, true, (bottom, top))?;
+    // The inner side: where the axis is outside the polyhedron, all the way up when it misses
+    // it, else below where it goes in and above where it comes out (between, the shadow
+    // reaches the axis).
+    let through = in_hi - in_lo > eps;
+    if !through && in_hi >= in_lo - eps {
+        // (Only touching it: neither.)
+        return None;
+    }
+    let spans: Vec<(f64, f64)> = if through {
+        [(bottom, in_lo), (in_hi, top)]
+            .into_iter()
+            .filter(|(a, c)| c - a > 1e-6 * size)
+            .collect()
+    } else {
+        vec![(bottom, top)]
+    };
+    let inner: Vec<Vec<(usize, f64, f64)>> = spans
+        .iter()
+        .map(|&span| envelope(&inner_lines, false, span))
+        .collect::<Option<_>>()?;
+    let radius = |lines: &[&Along], piece: &(usize, f64, f64), h: f64| {
+        value(&lines[piece.0].q, h).max(0.0).sqrt()
+    };
+    let nil = 1e-7 * size;
+    // (Off the axis but at an end, where a piece may come to a point on it.)
+    let on_axis = |lines: &[&Along], p: &(usize, f64, f64)| {
+        (1..8).any(|i| radius(lines, p, p.1 + (p.2 - p.1) * i as f64 / 8.0) <= nil)
+    };
+    if outer.iter().any(|p| on_axis(&outer_lines, p))
+        || inner.iter().flatten().any(|p| on_axis(&inner_lines, p))
+    {
+        return None;
+    }
+    let frame = Frame::from_z(o, z);
+    let mut xb = XBuilder::new();
+    // The circle at a height (its edge and its vertex), none where it is a point of the axis.
+    type Ring = Option<(usize, usize)>;
+    let circle = |xb: &mut XBuilder, h: f64, r: f64| -> Option<Ring> {
+        if r <= nil {
+            return Some(None);
+        }
+        let c = o + z * h;
+        let v = xb.vertex(c + frame.x * r);
+        let e = xb.edge(
+            Curve::Circle {
+                c,
+                x: frame.x,
+                y: frame.y,
+                r,
+            },
+            v,
+            v,
+        )?;
+        Some(Some((e, v)))
+    };
+    // A side's circles, bottom to top; `shared` the outer side's where the two meet at an end.
+    let rings_of = |xb: &mut XBuilder,
+                    lines: &[&Along],
+                    pieces: &[(usize, f64, f64)],
+                    shared: [Option<Ring>; 2]|
+     -> Option<Vec<Ring>> {
+        let n = pieces.len();
+        (0..=n)
+            .map(|j| {
+                if j == 0 && shared[0].is_some() {
+                    return shared[0];
+                }
+                if j == n && shared[1].is_some() {
+                    return shared[1];
+                }
+                let (piece, h) = if j < n {
+                    (&pieces[j], pieces[j].1)
+                } else {
+                    (&pieces[n - 1], pieces[n - 1].2)
+                };
+                circle(xb, h, radius(lines, piece, h))
+            })
+            .collect()
+    };
+    let outer_rings = rings_of(&mut xb, &outer_lines, &outer, [None, None])?;
+    let (outer_bottom, outer_top) = (
+        radius(&outer_lines, &outer[0], bottom),
+        radius(&outer_lines, outer.last()?, top),
+    );
+    // The inner side's radius at the bottom and at the top: none where the shadow reaches the
+    // axis there.
+    let inner_at = |h: f64| -> Option<f64> {
+        spans.iter().zip(&inner).find_map(|(&(a, c), pieces)| {
+            if (h - a).abs() <= eps {
+                Some(radius(&inner_lines, pieces.first()?, a))
+            } else if (h - c).abs() <= eps {
+                Some(radius(&inner_lines, pieces.last()?, c))
+            } else {
+                None
+            }
+        })
+    };
+    let meets = |outer_r: f64, h: f64| inner_at(h).is_some_and(|r| outer_r - r <= nil);
+    let closed = [meets(outer_bottom, bottom), meets(outer_top, top)];
+    let mut inner_rings = Vec::new();
+    for (&(a, c), pieces) in spans.iter().zip(&inner) {
+        let shared = [
+            ((a - bottom).abs() <= eps && closed[0]).then_some(outer_rings[0]),
+            ((c - top).abs() <= eps && closed[1]).then_some(*outer_rings.last()?),
+        ];
+        inner_rings.push(rings_of(&mut xb, &inner_lines, pieces, shared)?);
+    }
+    let mut made = Vec::new();
+    let mut degenerate = false;
+    let mut side = |xb: &mut XBuilder,
+                    lines: &[&Along],
+                    pieces: &[(usize, f64, f64)],
+                    rings: &[Ring],
+                    outward: bool| {
+        for (j, &(i, lo, hi)) in pieces.iter().enumerate() {
+            let a = lines[i];
+            let at = |h: f64| a.ends[0] + (a.ends[1] - a.ends[0]) * ((h - a.lo) / (a.hi - a.lo));
+            let surf = Surface::Revolution {
+                f: frame,
+                m: Curve::Line {
+                    o: at(lo),
+                    d: at(hi) - at(lo),
+                },
+            };
+            let loops = match (rings[j], rings[j + 1]) {
+                (Some(low), Some(high)) => vec![vec![(low.0, outward)], vec![(high.0, !outward)]],
+                // A piece that comes to a point on the axis (a cone to its apex): its one
+                // circle, and the ruling from the circle's vertex to the point and back.
+                (Some(ring), None) | (None, Some(ring)) => {
+                    let (way, apex) = if rings[j].is_some() {
+                        (outward, hi)
+                    } else {
+                        (!outward, lo)
+                    };
+                    let from = xb.body.verts[ring.1].p;
+                    let tip = o + z * apex;
+                    let v = xb.vertex(tip);
+                    let ruling = Curve::Line {
+                        o: from,
+                        d: tip - from,
+                    };
+                    match xb.edge(ruling, ring.1, v) {
+                        Some(seam) => vec![vec![(ring.0, way), (seam, true), (seam, false)]],
+                        None => {
+                            degenerate = true;
+                            continue;
+                        }
+                    }
+                }
+                (None, None) => {
+                    degenerate = true;
+                    continue;
+                }
+            };
+            // (The turned line's surface points away from the axis: the inner side's faces
+            // the other way.)
+            made.push(xb.face(XFace {
+                surf,
+                sense: outward,
+                loops,
+            }));
+        }
+    };
+    side(&mut xb, &outer_lines, &outer, &outer_rings, true);
+    for (pieces, rings) in inner.iter().zip(&inner_rings) {
+        side(&mut xb, &inner_lines, pieces, rings, false);
+    }
+    if degenerate {
+        return None;
+    }
+    // A flat end: the ring between the sides there, a disc where the shadow reaches the axis.
+    for (end, h, up, outer_r) in [(0, bottom, false, outer_bottom), (1, top, true, outer_top)] {
+        if closed[end] || outer_r <= nil {
+            continue;
+        }
+        let ring = |rings: &[Ring]| {
+            if end == 0 {
+                rings[0]
+            } else {
+                rings[rings.len() - 1]
+            }
+        };
+        let mut loops = vec![vec![(ring(&outer_rings)?.0, up)]];
+        let at_end = spans.iter().position(|&(a, c)| {
+            if end == 0 {
+                (a - bottom).abs() <= eps
+            } else {
+                (c - top).abs() <= eps
+            }
+        });
+        if let Some(k) = at_end
+            && let Some(inner_ring) = ring(&inner_rings[k])
+        {
+            loops.push(vec![(inner_ring.0, !up)]);
+        }
+        made.push(xb.face(XFace {
+            surf: Surface::Plane {
+                f: Frame::from_z(o + z * h, z),
+            },
+            sense: up,
+            loops,
+        }));
+    }
+    let shell = xb.shell(made, true);
+    xb.solid(vec![shell]);
+    let (g, problems) = xb.finish();
+    let checked = g.check_with(super::topo::CheckLevel::Full);
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
+        eprintln!(
+            "a polyhedron turned: {} faces ({} outside, {} inside), problems {problems:?}, check {checked:?}",
+            g.faces.len(),
+            outer.len(),
+            inner.iter().map(Vec::len).sum::<usize>()
+        );
+    }
+    if !problems.is_empty() || g.solids.len() != 1 || !checked.is_empty() {
+        return None;
+    }
+    Some(Ok(OpResult {
+        bodies: vec![k.insert(g)],
+        history: History::default(),
+    }))
+}
+
+/// A solid of revolution moved in the planes square to its axis (slid square to it, or turned
+/// about an axis parallel to it and clear of it), in closed form: a ring, a wheel, a drum.
+/// Each of those planes cuts the body in a ring or a disc about the axis, between the radii
+/// its section spans at that height, so what the body fills is, plane by plane, what the ring
+/// sweeps: the band its disc sweeps (straight, or bent round the turn's axis) less the lens
+/// the discs of its hole at both ends share (which the ring never crosses; nothing where the
+/// ends are farther apart than the hole is wide, or there is no hole). Put together from
+/// solids that meet on whole faces only: the body with its hole filled, its back half at the
+/// start and its fore half at the end (its outer meridian turned half a turn), the slot
+/// between them (the filled body's section through its axis) extruded along the slide or
+/// turned about the turn's axis, and, taken away, what both ends' holes share. The faces'
+/// sweeps of a ring overlap, so their gluing failed and a ladder of refused unions followed.
+/// None for any other body or motion, or where a step fails (the general sweep then).
+fn ring_moved_flat(
+    k: &mut NativeKernel,
+    b: &Body,
+    steps: &[RigidStep],
+) -> Option<Result<OpResult>> {
+    if crate::native::env_flag!("CADRS_NO_RING_FLAT") {
+        return None;
+    }
+    let [step] = steps else {
+        return None;
+    };
+    if b.solids.len() != 1 {
+        return None;
+    }
+    let rev = revolved(b)?;
+    let at = nalgebra::Point2::new;
+    let line = |a: P2, b: P2| Curve2::Line { a, b, source: None };
+    let size = b.bbox().diagonal().max(tol::POINT);
+    let nil = 1e-9 * size;
+    // The section's far side from its lowest point to its highest, and its near side from
+    // its highest back down, each as curves in (ρ, h) with its ends; the near side none
+    // where it lies along the axis (no hole).
+    type Chain = (Vec<Curve2>, P2, P2);
+    let (outer, inner): (Chain, Option<Chain>) = match &rev.section {
+        Section::Disk { c, r } => {
+            // (A ring's: a ball's reaches the axis, and is slid as a ball.)
+            if c.0 - r <= nil {
+                return None;
+            }
+            let (bottom, top) = (at(c.0, c.1 - r), at(c.0, c.1 + r));
+            (
+                (
+                    vec![Curve2::arc(at(c.0, c.1), *r, -FRAC_PI_2, PI)],
+                    bottom,
+                    top,
+                ),
+                Some((
+                    vec![Curve2::arc(at(c.0, c.1), *r, FRAC_PI_2, PI)],
+                    top,
+                    bottom,
+                )),
+            )
+        }
+        Section::Polygon(corners) => {
+            let n = corners.len();
+            if n < 3 {
+                return None;
+            }
+            let (low, high) = corners
+                .iter()
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), c| {
+                    (l.min(c.1), h.max(c.1))
+                });
+            let level = 1e-9 * size;
+            let (at_low, at_high) = (
+                |i: usize| corners[i % n].1 <= low + level,
+                |i: usize| corners[i % n].1 >= high - level,
+            );
+            // From the lowest corner that the next one leaves, round to the first highest;
+            // and the other way round.
+            let walk = |forward: bool| -> Option<Vec<(f64, f64)>> {
+                let step = |i: usize| {
+                    if forward {
+                        (i + 1) % n
+                    } else {
+                        (i + n - 1) % n
+                    }
+                };
+                let start = (0..n).find(|&i| at_low(i) && !at_low(step(i)))?;
+                let mut chain = vec![corners[start]];
+                let mut i = start;
+                for _ in 0..n {
+                    i = step(i);
+                    chain.push(corners[i]);
+                    if at_high(i) {
+                        return Some(chain);
+                    }
+                }
+                None
+            };
+            let (one, other) = (walk(true)?, walk(false)?);
+            let reach = |c: &[(f64, f64)]| c.iter().map(|p| p.0).fold(0.0, f64::max);
+            let (far, near) = if reach(&one) >= reach(&other) {
+                (one, other)
+            } else {
+                (other, one)
+            };
+            let curves = |c: &[(f64, f64)]| -> Vec<Curve2> {
+                c.windows(2)
+                    .map(|w| line(at(w[0].0, w[0].1), at(w[1].0, w[1].1)))
+                    .collect()
+            };
+            let ends =
+                |c: &[(f64, f64)]| (at(c[0].0, c[0].1), at(c[c.len() - 1].0, c[c.len() - 1].1));
+            let (start, end) = ends(&far);
+            let hole = reach(&near) > nil;
+            // (A near side partly on the axis is neither a hole nor none.)
+            if hole && near.iter().any(|p| p.0 <= nil) {
+                return None;
+            }
+            let down: Vec<(f64, f64)> = near.iter().rev().copied().collect();
+            let (top, bottom) = ends(&down);
+            (
+                (curves(&far), start, end),
+                hole.then(|| (curves(&down), top, bottom)),
+            )
+        }
+    };
+    // The body's widest and its hole's.
+    let widest = |c: &Curve2| match c {
+        Curve2::Line { a, b, .. } => a.x.max(b.x),
+        Curve2::Arc { center, radius, .. } => center.x + radius,
+        _ => f64::INFINITY,
+    };
+    let big = outer.0.iter().map(widest).fold(0.0, f64::max);
+    // (A convex section's near side bends toward the axis: it is farthest from it at its ends.)
+    let hole = inner.as_ref().map(|(_, top, bottom)| top.x.max(bottom.x));
+    // A slanted side turned about the turn's axis is a cone that touches the body's own cone
+    // along a ruling, which no closed form finds yet: for a turn, upright and level sides (a
+    // drum's) and a ring's only.
+    let upright = outer
+        .0
+        .iter()
+        .chain(inner.iter().flat_map(|c| c.0.iter()))
+        .all(|c| match c {
+            Curve2::Line { a, b, .. } => (a.x - b.x).abs() <= nil || (a.y - b.y).abs() <= nil,
+            _ => matches!(rev.section, Section::Disk { .. }),
+        });
+    if !(big.is_finite() && big > tol::POINT) {
+        return None;
+    }
+    let place = |t: f64| {
+        let (q, d) = rigid_at(steps, t);
+        P3::from(q * rev.o.coords + d)
+    };
+    let (c0, c1) = (place(0.0), place(1.0));
+    let z = {
+        let (q, _) = rigid_at(steps, 0.0);
+        (q * rev.a).normalize()
+    };
+    // The way the body moves at its start and at its end, and the turn's axis and angle
+    // (counter-clockwise about it) where it turns.
+    let (m0, m1, turn) = match *step {
+        RigidStep::Slide { from, to } => {
+            let d = to - from;
+            let len = d.norm();
+            if len <= 1e-6 * big || d.dot(&z).abs() > tol::ANGULAR * len {
+                return None;
+            }
+            (d / len, d / len, None)
+        }
+        RigidStep::Turn { axis, from, to } => {
+            let angle = (to - from).abs();
+            let a = axis.dir.into_inner() * (to - from).signum();
+            if z.cross(&a).norm() > tol::ANGULAR || angle <= 1e-6 || !upright {
+                return None;
+            }
+            let out = |c: P3| {
+                let w = c - axis.origin;
+                w - a * w.dot(&a)
+            };
+            let reach = out(c0).norm();
+            // (Clear of the axis, and its end clear of its start the long way round.)
+            if reach <= big * (1.0 + 1e-6) || TAU - angle <= 2.0 * (big / reach).asin() + 1e-3 {
+                return None;
+            }
+            let origin = axis.origin;
+            (
+                a.cross(&(out(c0) / reach)),
+                a.cross(&(out(c1) / reach)),
+                Some((
+                    Axis {
+                        origin,
+                        dir: nalgebra::Unit::new_normalize(a),
+                    },
+                    angle,
+                )),
+            )
+        }
+    };
+    let unit = nalgebra::Unit::new_normalize;
+    let region = |curves: Vec<Curve2>| Region {
+        outer: Loop { curves },
+        holes: vec![],
+        source: Some(0),
+    };
+    // The plane through `o` across the motion `m` there, its first axis to the motion's left
+    // (times `side`) and its second z.
+    let across = |o: P3, m: V3, side: f64| Plane {
+        origin: o,
+        x_dir: unit(z.cross(&m) * side),
+        normal: unit(m * side),
+    };
+    // A side, closed along the axis: from the axis out to its start, along it, and back.
+    let closed = |(curves, start, end): &Chain| -> Vec<Curve2> {
+        let mut all = Vec::new();
+        if start.x > nil {
+            all.push(line(at(0.0, start.y), *start));
+        }
+        all.extend(curves.iter().cloned());
+        if end.x > nil {
+            all.push(line(*end, at(0.0, end.y)));
+        }
+        all.push(line(at(0.0, end.y), at(0.0, start.y)));
+        all
+    };
+    // The filled body's section through its axis: its far side, and that mirrored back down.
+    let slot = {
+        let (curves, start, end) = &outer;
+        let mut all: Vec<Curve2> = curves.clone();
+        if end.x > nil {
+            all.push(line(*end, at(-end.x, end.y)));
+        }
+        for c in curves.iter().rev() {
+            all.push(match c {
+                Curve2::Line { a, b, .. } => line(at(-b.x, b.y), at(-a.x, a.y)),
+                Curve2::Arc {
+                    center,
+                    radius,
+                    start_angle,
+                    sweep,
+                    ..
+                } => Curve2::arc(
+                    at(-center.x, center.y),
+                    *radius,
+                    PI - (start_angle + sweep),
+                    *sweep,
+                ),
+                _ => return None,
+            });
+        }
+        if start.x > nil {
+            all.push(line(at(-start.x, start.y), *start));
+        }
+        all
+    };
+    let made = (|| -> Result<Body> {
+        let mut s = NativeKernel::new();
+        let first = |r: OpResult| -> Result<BodyId> {
+            r.bodies.first().copied().ok_or_else(|| {
+                KernelError::EmptyResult("a wheel moved flat: a piece is empty".into())
+            })
+        };
+        // (A meridian to the motion's left turns counter-clockwise about z through the way
+        // back: the back half; one to its right, the fore half.)
+        let half = |s: &mut NativeKernel, o: P3, m: V3, side: f64| -> Result<BodyId> {
+            let axis = Axis {
+                origin: o,
+                dir: unit(z),
+            };
+            first(s.revolve(
+                &Profile::new(across(o, m, side), vec![region(closed(&outer))]),
+                axis,
+                PI,
+            )?)
+        };
+        let back = half(&mut s, c0, m0, 1.0)?;
+        let fore = half(&mut s, c1, m1, -1.0)?;
+        let slot = Profile::new(across(c0, m0, 1.0), vec![region(slot.clone())]);
+        let between = match turn {
+            Some((axis, angle)) => first(s.revolve(&slot, axis, angle)?)?,
+            None => first(s.extrude_with(&slot, &ExtrudeSpec::blind(unit(m0), (c1 - c0).norm()))?)?,
+        };
+        let mut whole = first(s.boolean(BoolOp::Union, back, &[between, fore])?)?;
+        if let (Some(inner), Some(hole)) = (&inner, hole)
+            && (c1 - c0).norm() < 2.0 * hole * (1.0 - 1e-9)
+        {
+            // The hole: its meridian from the axis to the section's near side.
+            let spool = |s: &mut NativeKernel, o: P3| -> Result<BodyId> {
+                let axis = Axis {
+                    origin: o,
+                    dir: unit(z),
+                };
+                first(s.revolve(
+                    &Profile::new(across(o, m0, 1.0), vec![region(closed(inner))]),
+                    axis,
+                    TAU,
+                )?)
+            };
+            let (h0, h1) = (spool(&mut s, c0)?, spool(&mut s, c1)?);
+            let lens = first(s.boolean(BoolOp::Intersect, h0, &[h1])?)?;
+            whole = first(s.boolean(BoolOp::Subtract, whole, &[lens])?)?;
+        }
+        let body = (**s.get(whole)?).clone();
+        let problems = body.check();
+        if body.solids.len() != 1 || !problems.is_empty() {
+            return Err(KernelError::InvalidResult {
+                op: "a wheel moved flat",
+                why: problems
+                    .into_iter()
+                    .next()
+                    .unwrap_or_else(|| "not one solid".into()),
+            });
+        }
+        Ok(body)
+    })();
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG")
+        && let Err(e) = &made
+    {
+        eprintln!("a wheel moved flat: {e}");
+    }
+    Some(made.map(|body| OpResult {
+        bodies: vec![k.insert(body)],
+        history: History::default(),
+    }))
+}
+
 pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> Result<OpResult> {
     // An endless turn or screw of a revolved body: its outline as fine as [`FINE_SLICES`], and
     // where that builds nothing, as [`COARSE_SLICES`].
@@ -2027,32 +2901,70 @@ fn screwed_ball(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<R
     let ahead = z.cross(&e);
     let tangent = (ahead * a + z * c).normalize();
     let helix_at = |w: f64| foot + (e * w.cos() + ahead * w.sin()) * a + z * (c * w);
-    // How far a point is from the arc: the least over its samples, then by Newton on the
-    // distance's derivative from each sample that is a least among its neighbours.
+    // How far a point is from the arc. About the axis the point is (ρ, φ, h) and the helix's
+    // point at w is (a, w, c w): the distance squared is a² + ρ² − 2aρ cos(w − φ) + (c w − h)²,
+    // and half its derivative g(w) = aρ sin(w − φ) + c (c w − h) turns where cos(w − φ) =
+    // −c²/aρ, twice a turn or never. Between two turns of g a least distance is its one
+    // root, where it rises through zero: found there, and the arc's ends taken with them.
+    // (The least of 1441 samples and a Newton from each low one, before: a fifth of a
+    // screwed ball's time.)
     let from_arc = |p: &P3| -> f64 {
-        const N: usize = 1440;
-        let d2 = |w: f64| (helix_at(w) - p).norm_squared();
-        let ds: Vec<f64> = (0..=N).map(|i| d2(turn * i as f64 / N as f64)).collect();
-        let mut best = ds[0].min(ds[N]);
-        for i in 0..=N {
-            let lo = if i == 0 { f64::INFINITY } else { ds[i - 1] };
-            let hi = if i == N { f64::INFINITY } else { ds[i + 1] };
-            if ds[i] <= lo && ds[i] <= hi {
-                let mut w = turn * i as f64 / N as f64;
-                for _ in 0..12 {
-                    let q = helix_at(w);
-                    let d1 = (-e * w.sin() + ahead * w.cos()) * a + z * c;
-                    let dd = -(e * w.cos() + ahead * w.sin()) * a;
-                    let (g, h) = ((q - p).dot(&d1), d1.norm_squared() + (q - p).dot(&dd));
-                    if h.abs() < 1e-14 {
-                        break;
+        let q = p - foot;
+        let h = q.dot(&z);
+        let (x, y) = (q.dot(&e), q.dot(&ahead));
+        let (rho, phi) = (x.hypot(y), y.atan2(x));
+        let d2 = |w: f64| a * a + rho * rho - 2.0 * a * rho * (w - phi).cos() + (c * w - h).powi(2);
+        let g = |w: f64| a * rho * (w - phi).sin() + c * (c * w - h);
+        let mut cuts = vec![0.0, turn];
+        let k = a * rho;
+        if k > c * c {
+            let s = (-c * c / k).acos();
+            for base in [phi + s, phi - s] {
+                let mut w = base - (base / TAU).floor() * TAU;
+                while w < turn {
+                    if w > 0.0 {
+                        cuts.push(w);
                     }
-                    w = (w - g / h).clamp(0.0, turn);
+                    w += TAU;
                 }
-                best = best.min(d2(w));
             }
+            cuts.sort_by(f64::total_cmp);
         }
-        best.sqrt()
+        let mut best = d2(0.0).min(d2(turn));
+        for pair in cuts.windows(2) {
+            let (mut lo, mut hi) = (pair[0], pair[1]);
+            if !(g(lo) <= 0.0 && g(hi) >= 0.0) || hi <= lo {
+                continue;
+            }
+            // Newton, kept between the ends that bracket the root.
+            let mut w = 0.5 * (lo + hi);
+            for _ in 0..60 {
+                let gw = g(w);
+                if gw > 0.0 {
+                    hi = w;
+                } else {
+                    lo = w;
+                }
+                let slope = k * (w - phi).cos() + c * c;
+                let next = if slope > 0.0 {
+                    w - gw / slope
+                } else {
+                    f64::NAN
+                };
+                let next = if next > lo && next < hi {
+                    next
+                } else {
+                    0.5 * (lo + hi)
+                };
+                if (next - w).abs() <= 1e-15 * (1.0 + w.abs()) {
+                    w = next;
+                    break;
+                }
+                w = next;
+            }
+            best = best.min(d2(w));
+        }
+        best.max(0.0).sqrt()
     };
     // The ball's great circle square to the helix at its start, in four arcs.
     let plane = Plane {
@@ -2394,10 +3306,11 @@ fn screwed_ball(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<R
                 seen.iter().filter(|s| **s).count()
             );
         }
-        let mut kept: Vec<Body> = Vec::new();
-        for i in 0..sheets.len() {
+        // (Each sheet's cut is its own: side by side, where they were made one after another,
+        // seventy imprints of a few milliseconds each.)
+        let cut_one = |i: usize| -> Option<Body> {
             if !seen[i] {
-                continue;
+                return None;
             }
             // (By all the others it reaches at once: a crease crosses a face against two
             // stretches of the turn beside it, and a cut by one alone ends inside the face.)
@@ -2452,12 +3365,14 @@ fn screwed_ball(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<R
                     on_it.len()
                 );
             }
-            if !on_it.is_empty() {
-                kept.push(super::kernel::subset(&cur, &on_it, false));
-            }
-        }
+            (!on_it.is_empty()).then(|| super::kernel::subset(&cur, &on_it, false))
+        };
+        let kept: Vec<Option<Body>> =
+            super::par::map_heavy(&(0..sheets.len()).collect::<Vec<usize>>(), true, |&i| {
+                cut_one(i)
+            });
         let mut whole = Body::default();
-        for x in &kept {
+        for x in kept.iter().flatten() {
             whole.append(x);
         }
         super::surfacing::sewn_solid(whole, 1e-5)
@@ -2488,6 +3403,16 @@ fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> R
         }
         if let Some(r) = slid_ellipsoid(k, &b, steps) {
             return r;
+        }
+        if let Some(Ok(r)) = ring_moved_flat(k, &b, steps) {
+            return Ok(r);
+        }
+        // A convex polyhedron turned a whole turn: the solid of revolution of its shadow.
+        if let [RigidStep::Turn { axis, from, to }] = steps.as_slice()
+            && (to - from).abs() >= TAU - 1e-9
+            && let Some(Ok(r)) = polyhedron_turned(k, &b, *axis)
+        {
+            return Ok(r);
         }
         let mut exact = None;
         // A pipe slid: exactly, as everything within its radius of the strip its spine sweeps.
@@ -2585,6 +3510,14 @@ fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> R
             Some(rev) => meshed(k, &b, &|p| rev.distance(p), &place),
             None => meshed_body(k, &b, &place),
         };
+    }
+    // A convex polyhedron turned whole turns about an axis clear of it: the solid of revolution
+    // of its shadow in (distance, height), in closed form.
+    if let SolidMotion::Turn { axis } = *motion
+        && revolved(&b).is_none()
+        && let Some(Ok(r)) = polyhedron_turned(k, &b, axis)
+    {
+        return Ok(r);
     }
     let rev = revolved(&b).ok_or(KernelError::Unsupported(
         "sweeping solids other than a torus or a convex section revolved",
@@ -4671,6 +5604,23 @@ fn cut_swept_in(
         && let Some(r) = cut_rising_screw(k, target, &b, o, frames.up, angle, rise)
     {
         return Ok(r);
+    }
+    // A ring moved in its own plane: what it fills, in closed form, cut from the target.
+    if let SolidMotion::Rigid { steps } = motion
+        && let Some(Ok(r)) = ring_moved_flat(k, &b, steps)
+    {
+        let cut = k.boolean(crate::BoolOp::Subtract, target, &r.bodies);
+        for s in &r.bodies {
+            k.release(*s);
+        }
+        if let Ok(c) = cut
+            && c.bodies.iter().all(|&id| k.sound(id))
+        {
+            return Ok(c);
+        }
+        if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
+            eprintln!("swept cut: the slid ring's sweep wouldn't cut from the target");
+        }
     }
     // A torus slid: by its envelope first (its leading faces' sweeps cross one another where
     // its outline folds).

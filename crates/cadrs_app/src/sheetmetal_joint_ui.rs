@@ -766,10 +766,9 @@ fn sync_dialog(
                             flex_grow: 1.0,
                             ..default()
                         });
-                        f.spawn((
-                            Name::new("modify-joint-dialog-help"),
-                            cadrs_ui::icon("help-filled", 14.0, Color::srgb_u8(0xa8, 0xa8, 0xa8)),
-                            Tooltip::new(tr("common-help")),
+                        f.spawn(crate::help::help_icon(
+                            "modify-joint-dialog-help",
+                            "modify-joint",
                         ));
                     })
                     .build(&theme),

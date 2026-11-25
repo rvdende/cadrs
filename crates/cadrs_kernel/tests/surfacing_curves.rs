@@ -51,6 +51,60 @@ fn a_loft_of_two_lines_is_the_ruled_rectangle() {
 }
 
 #[test]
+fn a_loft_of_two_lines_in_a_plane_is_a_flat_face() {
+    // A 10 mm line and a 4 mm line above its middle, 3 up: the trapezoid between them is a
+    // flat face of four straight edges, (10 + 4) / 2 · 3 = 21, not a surface fitted to it.
+    let mut k = NativeKernel::new();
+    let spec = loft(
+        vec![
+            CurveSection::Wire(vec![line([0.0, 0.0, 0.0], [10.0, 0.0, 0.0])]),
+            // (Drawn the other way: the loft runs it as the first.)
+            CurveSection::Wire(vec![line([7.0, 0.0, 3.0], [3.0, 0.0, 3.0])]),
+        ],
+        Vec::new(),
+    );
+    let b = k.loft_curves(&spec).unwrap().bodies[0];
+    valid(&k, b);
+    let faces = k.faces(b).unwrap();
+    assert_eq!(faces.len(), 1);
+    assert_eq!(faces[0].kind, SurfaceKind::Plane);
+    assert_eq!(k.edges(b).unwrap().len(), 4);
+    assert!((area(&k, b) - 21.0).abs() < 1e-9, "{}", area(&k, b));
+    // A line lofted to a point in its plane: the triangle, 10 · 3 / 2.
+    let spec = loft(
+        vec![
+            CurveSection::Wire(vec![line([0.0, 0.0, 0.0], [10.0, 0.0, 0.0])]),
+            CurveSection::Point(Point3::new(5.0, 0.0, 3.0)),
+        ],
+        Vec::new(),
+    );
+    let b = k.loft_curves(&spec).unwrap().bodies[0];
+    valid(&k, b);
+    let faces = k.faces(b).unwrap();
+    assert_eq!((faces.len(), faces[0].kind), (1, SurfaceKind::Plane));
+    assert_eq!(k.edges(b).unwrap().len(), 3);
+    assert!((area(&k, b) - 15.0).abs() < 1e-9, "{}", area(&k, b));
+}
+
+#[test]
+fn a_loft_of_two_skew_lines_stays_the_ruled_surface() {
+    // Two 10 mm lines 5 apart, the upper turned a quarter turn about the axis between their
+    // middles: no plane holds both, and the loft is the doubly ruled surface between them.
+    let mut k = NativeKernel::new();
+    let spec = loft(
+        vec![
+            CurveSection::Wire(vec![line([-5.0, 0.0, 0.0], [5.0, 0.0, 0.0])]),
+            CurveSection::Wire(vec![line([0.0, -5.0, 5.0], [0.0, 5.0, 5.0])]),
+        ],
+        Vec::new(),
+    );
+    let b = k.loft_curves(&spec).unwrap().bodies[0];
+    valid(&k, b);
+    let faces = k.faces(b).unwrap();
+    assert_eq!((faces.len(), faces[0].kind), (1, SurfaceKind::Other));
+}
+
+#[test]
 fn two_lines_meeting_in_a_point_and_a_guide_make_the_triangle() {
     // Two profiles from (10, 0, 0) and (0, 10, 0) to the origin, a guide joining their free
     // ends: the Coons patch of three straight lines in a plane is the flat triangle, 10 · 10 / 2.
