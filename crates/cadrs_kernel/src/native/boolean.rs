@@ -5653,6 +5653,8 @@ fn touch_voids(b: &mut Body, tol: f64) {
             .iter()
             .map(|f| classify::face_polygons(&out, f))
             .collect();
+        // (One classifier for all the voids' vertices.)
+        let classifier = classify::Classifier::new(&out, &polys);
         for &sh in voids {
             let mut vs: Vec<usize> = b.shells[sh]
                 .faces
@@ -5669,8 +5671,7 @@ fn touch_voids(b: &mut Body, tol: f64) {
             vs.dedup();
             for v in vs {
                 let vx = &b.verts[v];
-                if classify::classify_point(&out, &polys, &vx.p, vx.tol.max(super::tol::POINT))
-                    != PointClass::Outside
+                if classifier.classify(&vx.p, vx.tol.max(super::tol::POINT)) != PointClass::Outside
                 {
                     continue;
                 }
@@ -6179,11 +6180,16 @@ pub(crate) fn assemble_shells_with(b: &mut Body, terms: Option<&[f64]>) -> Resul
     if outer.len() > 1 {
         // (The body's box and its faces' made once here, not once per shell.)
         let _boxes = super::topo::keep_boxes(&[&*b]);
-        let polys: Vec<Vec<Vec<P2>>> = b
-            .faces
-            .iter()
-            .map(|f| classify::face_polygons(b, f))
-            .collect();
+        // (Made only for a shell too large to orient by its volume.)
+        let polys = std::cell::OnceCell::<Vec<Vec<Vec<P2>>>>::new();
+        let polys = || {
+            polys.get_or_init(|| {
+                b.faces
+                    .iter()
+                    .map(|f| classify::face_polygons(b, f))
+                    .collect()
+            })
+        };
         let all: Vec<(usize, f64, bool)> = outer
             .iter()
             .map(|(si, _)| {
@@ -6213,7 +6219,7 @@ pub(crate) fn assemble_shells_with(b: &mut Body, terms: Option<&[f64]>) -> Resul
                 let out = if fs.len() <= 64 {
                     by_volume()
                 } else {
-                    shell_points_out(b, fs, &polys).unwrap_or_else(by_volume)
+                    shell_points_out(b, fs, polys()).unwrap_or_else(by_volume)
                 };
                 (*si, bb.diagonal(), out)
             })
@@ -6234,6 +6240,21 @@ pub(crate) fn assemble_shells_with(b: &mut Body, terms: Option<&[f64]>) -> Resul
         ));
     }
     let mut solids: Vec<Vec<usize>> = outer.iter().map(|(s, _)| vec![*s]).collect();
+    // Each outer shell as a body of its own with its faces' polygons, made once for all the
+    // voids (and only for one whose box holds a void's point).
+    let shell_boxes: Vec<Bbox> = outer
+        .iter()
+        .map(|(s, _)| {
+            let mut bb = Bbox::empty();
+            for &f in &b.shells[*s].faces {
+                bb.union(&b.face_bbox(f));
+            }
+            bb
+        })
+        .collect();
+    type ShellBody = (Body, Vec<Vec<Vec<P2>>>);
+    let shell_bodies: Vec<std::cell::OnceCell<ShellBody>> =
+        outer.iter().map(|_| std::cell::OnceCell::new()).collect();
     for (v, _) in voids {
         // The smallest outer shell containing a point of the void.
         let f = b.shells[v].faces[0];
@@ -6245,13 +6266,19 @@ pub(crate) fn assemble_shells_with(b: &mut Body, terms: Option<&[f64]>) -> Resul
         };
         let mut best: Option<(f64, usize)> = None;
         for (k, (s, vol)) in outer.iter().enumerate() {
-            let sub = super::kernel::subset(b, &b.shells[*s].faces, true);
-            let polys: Vec<Vec<Vec<P2>>> = sub
-                .faces
-                .iter()
-                .map(|f| classify::face_polygons(&sub, f))
-                .collect();
-            if classify::parity_inside(&sub, &polys, &p) && best.is_none_or(|(bv, _)| *vol < bv) {
+            if best.is_some_and(|(bv, _)| *vol >= bv) || !shell_boxes[k].contains(&p) {
+                continue;
+            }
+            let (sub, polys) = shell_bodies[k].get_or_init(|| {
+                let sub = super::kernel::subset(b, &b.shells[*s].faces, true);
+                let polys = sub
+                    .faces
+                    .iter()
+                    .map(|f| classify::face_polygons(&sub, f))
+                    .collect();
+                (sub, polys)
+            });
+            if classify::parity_inside(sub, polys, &p) {
                 best = Some((*vol, k));
             }
         }
