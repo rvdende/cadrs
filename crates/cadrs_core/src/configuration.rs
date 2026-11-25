@@ -1492,9 +1492,13 @@ pub fn migrate(doc: &mut Document) {
 pub struct NodeLayout {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub positions: BTreeMap<FeatureId, [f32; 2]>,
-    /// The Configuration node's position.
+    /// Where the single Configuration node of earlier versions was: the first input node's
+    /// place until it is moved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inputs_node: Option<[f32; 2]>,
+    /// Each input node's position (one per configuration input).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub inputs: BTreeMap<ConfigInputId, [f32; 2]>,
     /// The Parts node's position.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parts_node: Option<[f32; 2]>,
@@ -1506,6 +1510,7 @@ impl NodeLayout {
     pub fn is_empty(&self) -> bool {
         self.positions.is_empty()
             && self.inputs_node.is_none()
+            && self.inputs.is_empty()
             && self.parts_node.is_none()
             && self.collapsed.is_empty()
     }
@@ -2773,7 +2778,8 @@ fn set_slot(
 pub struct MoveGraphNodes {
     pub element: ElementId,
     pub positions: Vec<(FeatureId, [f32; 2])>,
-    pub inputs_node: Option<[f32; 2]>,
+    /// Input nodes moved.
+    pub inputs: Vec<(ConfigInputId, [f32; 2])>,
     pub parts_node: Option<[f32; 2]>,
 }
 
@@ -2792,8 +2798,8 @@ impl Command for MoveGraphNodes {
         for (f, p) in &self.positions {
             layout.positions.insert(*f, *p);
         }
-        if let Some(p) = self.inputs_node {
-            layout.inputs_node = Some(p);
+        for (i, p) in &self.inputs {
+            layout.inputs.insert(*i, *p);
         }
         if let Some(p) = self.parts_node {
             layout.parts_node = Some(p);
@@ -2822,6 +2828,7 @@ impl Command for ResetNodeLayout {
             .ok_or(CommandError::ElementNotFound(self.element))?;
         layout.positions.clear();
         layout.inputs_node = None;
+        layout.inputs.clear();
         layout.parts_node = None;
         Ok(())
     }

@@ -1,18 +1,21 @@
 // The node view (`cadrs_app::node_view`): the feature list as a node graph, with a
 // configuration. `blocks 2`: two blocks, each a sketch and a New extrude.
 // 01 The node view: a panel under the 3D view (the feature list staying on the left), a canvas
-//    with the schematic's grid; each feature a node (an extrude's node its dialog), geometry traces from sketches into
-//    extrudes, each node's output row, and the Parts node on the right.
-// 02 + Value: the Configuration node's input `input1` (a length, 10 mm).
-// 03 The input's socket dragged onto Extrude 1's Depth: Depth reads #input1, a trace from the
-//    input to the field.
-// 04 The wire dragged off Extrude 1's Depth onto Extrude 2's: Extrude 2 reads #input1, Extrude
-//    1 its value again (one undo step).
+//    with the schematic's grid; each feature a node (an extrude's node its dialog, its title
+//    its icon, type and name), geometry traces from sketches into extrudes, each node's output
+//    row, and the Parts node on the right. Create (top left), Auto arrange and Fit (top right).
+// 02 Create ▸ Input Configuration, named `size`, [+] twice, + Output named `bolt_size` with
+//    3, 4 and 5 mm: an Input Configuration node "size", its configurations default, config2 and
+//    config3 as columns (default highlighted), its output a row with a socket on the right.
+// 03 bolt_size's socket dragged onto Extrude 1's Depth: Depth reads #bolt_size, a trace from
+//    the output to the field.
+// 04 The wire dragged off Extrude 1's Depth onto Extrude 2's: Extrude 2 reads #bolt_size,
+//    Extrude 1 its value again (one undo step).
 // 05 A click on Extrude 2's body: its live dialog in its node (✓ and ✕ in the node's header).
-// 06 + List, then its +: a List `Configuration` (Default, Configuration 2) in the node, the
-//    configuration shown in the features header.
-// 07 Configuration table…: the Configuration panel on the right, full height (beside the 3D
-//    view and the node panel), the tables of the inputs.
+// 06 config3's heading clicked: config3 highlighted and shown (the features header says so),
+//    Extrude 2 5 mm deep.
+// 07 The Configuration panel (the tab bar's button): on the right, full height (beside the 3D
+//    view and the node panel), the size table one row per configuration.
 // 07b Its left edge dragged 200 px left: the panel wider, the 3D view and node panel narrower.
 // 08 Auto arrange: laid out again and framed.
 // 09 The node view closed: the 3D view full height again, the List's dropdown in the list.
@@ -25,16 +28,48 @@ Scenario(
         WaitFor("node-canvas"),
         Wait(40),
         Screenshot("01-node-view"),
-        Click(ui("node-input-add")),
-        WaitFor("node-input-input1-out"),
+        Click(ui("node-canvas-create")),
+        WaitFor("node-create-input-configuration"),
+        Click(ui("node-create-input-configuration")),
+        WaitFor("node-config-title-edit"),
+        Key("Ctrl+A"),
+        Type("size"),
+        Key("Enter"),
+        WaitFor("node-config-size"),
+        Click(ui("node-config-size-add-row")),
+        Wait(5),
+        Click(ui("node-config-size-add-row")),
+        WaitFor("node-config-size-show-3"),
+        Click(ui("node-config-size-add-output")),
+        WaitFor("node-output-output-name"),
+        Click(ui("node-output-output-name")),
+        Key("Ctrl+A"),
+        Type("bolt_size"),
+        Key("Enter"),
+        WaitFor("node-output-bolt_size-1"),
+        Click(ui("node-output-bolt_size-1")),
+        Key("Ctrl+A"),
+        Type("3 mm"),
+        Key("Enter"),
+        Wait(5),
+        Click(ui("node-output-bolt_size-2")),
+        Key("Ctrl+A"),
+        Type("4 mm"),
+        Key("Enter"),
+        Wait(5),
+        Click(ui("node-output-bolt_size-3")),
+        Key("Ctrl+A"),
+        Type("5 mm"),
+        Key("Enter"),
         Wait(20),
+        ExpectText("node-config-size", "5 mm"),
         Screenshot("02-input"),
-        Drag(ui("node-input-input1-out"), ui("node-extrude-1-depth")),
-        ExpectText("node-extrude-1", "#input1"),
+        Drag(ui("node-output-bolt_size-out"), ui("node-extrude-1-depth")),
+        ExpectText("node-extrude-1", "#bolt_size"),
         Wait(40),
         Screenshot("03-wired"),
         Drag(ui("node-extrude-1-depth"), ui("node-extrude-2-depth")),
-        ExpectText("node-extrude-2", "#input1"),
+        ExpectText("node-extrude-2", "#bolt_size"),
         Wait(40),
         Screenshot("04-rewired"),
         Click(ui("node-extrude-2-body")),
@@ -42,14 +77,12 @@ Scenario(
         Screenshot("05-live"),
         Key("Escape"),
         Wait(20),
-        Click(ui("node-list-add")),
-        WaitFor("node-list-Configuration"),
-        Click(ui("node-list-Configuration-add-row")),
+        Click(ui("node-config-size-show-3")),
         Wait(10),
-        ExpectText("feature-preset", "Default"),
+        ExpectText("feature-preset", "config3"),
         Wait(20),
-        Screenshot("06-list"),
-        Click(ui("node-config-table")),
+        Screenshot("06-shown"),
+        Click(ui("panel-configuration")),
         WaitFor("configuration-panel"),
         Wait(20),
         Screenshot("07-table"),
@@ -61,7 +94,7 @@ Scenario(
         Screenshot("08-arranged"),
         Click(ui("feature-node-view")),
         Wait(20),
-        ExpectText("feature-preset", "Default"),
+        ExpectText("feature-preset", "config3"),
         Screenshot("09-list"),
     ],
 )

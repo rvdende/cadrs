@@ -43,8 +43,8 @@ use cadrs_ui::node_graph::{
     WireDisconnect,
 };
 use cadrs_ui::{
-    CheckboxChange, FeatureDialog, FeatureDialogState, IconButton, Menu, MenuItem, NumberField,
-    NumberFieldCommit, Select, SelectChange, TextInput, TextSubmit, Theme,
+    CheckboxChange, DoubleClickable, FeatureDialog, FeatureDialogState, IconButton, Menu, MenuItem,
+    NumberField, Select, SelectChange, TextInput, TextSubmit, Theme,
 };
 
 use crate::ActiveDocument;
@@ -79,7 +79,9 @@ impl Plugin for NodeViewPlugin {
         .add_observer(on_body_press)
         .add_observer(on_body_click)
         .add_observer(on_config_button)
-        .add_observer(on_config_number)
+        .add_observer(on_config_double_click)
+        .add_observer(on_config_renamed)
+        .add_observer(on_create_menu)
         .add_observer(on_config_select)
         .add_observer(on_config_text)
         .add_observer(on_config_checkbox)
@@ -92,6 +94,7 @@ impl Plugin for NodeViewPlugin {
                 sync_mode,
                 flush_moves,
                 sync_nodes,
+                open_pending_title,
                 host_live_dialog,
                 sync_selected,
                 fit_later,
@@ -177,13 +180,15 @@ struct PartsNode {
     key: (Vec<(cadrs_core::PartId, String)>, u64),
 }
 
-/// The Configuration node, and what it was built from.
+/// An input node (one per configuration input), and what it was built from.
 #[derive(Component, Debug, Clone)]
 struct ConfigNode {
+    input: ConfigInputId,
     key: ConfigKey,
 }
 
-/// What the Configuration node's look depends on: the configuration, the units, the theme.
+/// What an input node's look depends on: the configuration (an output's kind may follow a
+/// feature's field), the units, the theme.
 type ConfigKey = (Configuration, Units, u64);
 
 /// A node's copy of its feature's dialog (hidden while the live dialog is in the node).
@@ -221,9 +226,6 @@ enum SocketKey {
     Dimension(FeatureId, cadrs_sketch::DimensionId),
     /// A sketch's "Drive a dimension" input: a wire dropped there asks which dimension.
     DriveDimension(FeatureId),
-    /// A List's "+ column": dropped on a field, a dimension or a Bypass, configures it (a new
-    /// column of the List's table).
-    NewColumn(ConfigInputId),
 }
 
 /// A node's collapse chevron.
@@ -316,7 +318,7 @@ struct PendingMoves(Vec<(Moved, Vec2)>);
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Moved {
     Feature(FeatureId),
-    Configuration,
+    Input(ConfigInputId),
     Parts,
 }
 
@@ -514,8 +516,6 @@ fn on_view_changed(
 
 /// The width of a node (as the floating dialogs').
 const NODE_W: f32 = 236.0;
-/// The Configuration node's width (room for an input's name, kind and value).
-const CONFIG_W: f32 = 300.0;
 /// Columns are this far apart.
 const COLUMN: f32 = NODE_W + 90.0;
 
@@ -532,11 +532,35 @@ fn height_guess(f: &Feature, collapsed: bool) -> f32 {
     }
 }
 
-/// Where the nodes go: the Configuration node's place, each feature's, and the Parts node's.
+/// Where the nodes go: each feature's place, and the Parts node's.
 struct Layout {
-    inputs: Vec2,
     features: HashMap<FeatureId, Vec2>,
     parts: Vec2,
+}
+
+/// Where each input node goes: its saved place (the first's, the single Configuration node's of
+/// earlier versions until moved), or stacked at the left, their left edges lined up (a node
+/// growing a configuration stays where it is; the features laid out make room, [`layout`]).
+fn input_positions(el: &Element) -> Vec<Vec2> {
+    let saved = el.node_layout();
+    let mut y = 0.0;
+    el.configuration
+        .inputs
+        .iter()
+        .enumerate()
+        .map(|(k, input)| {
+            let default = Vec2::new(0.0, y);
+            y += input_node_height(input) + 30.0;
+            saved
+                .and_then(|l| {
+                    l.inputs
+                        .get(&input.id)
+                        .copied()
+                        .or(if k == 0 { l.inputs_node } else { None })
+                })
+                .map_or(default, Vec2::from_array)
+        })
+        .collect()
 }
 
 /// Where each node goes: its saved place, or laid out as trees that follow the wires:
@@ -645,7 +669,14 @@ fn layout(el: &Element, measured: &HashMap<FeatureId, f32>) -> Layout {
     // Place each branch: the node at (x, y), its children from (x + COLUMN, y) down.
     let mut pos: Vec<Vec2> = vec![Vec2::ZERO; features.len()];
     let mut stack: Vec<(usize, Vec2)> = Vec::new();
-    let (mut x, mut y, mut widest) = (COLUMN, 0.0f32, 0usize);
+    // (Right of the widest input node.)
+    let start = el
+        .configuration
+        .inputs
+        .iter()
+        .map(|i| input_node_width(i) + 90.0)
+        .fold(COLUMN, f32::max);
+    let (mut x, mut y, mut widest) = (start, 0.0f32, 0usize);
     for root in roots {
         let h = memo[root].unwrap_or(0.0);
         if y > 0.0 && y + h > band {
@@ -674,11 +705,7 @@ fn layout(el: &Element, measured: &HashMap<FeatureId, f32>) -> Layout {
         right = right.max(p.x + NODE_W);
         out.insert(f.id, p);
     }
-    let inputs = saved
-        .and_then(|l| l.inputs_node)
-        .map_or(Vec2::ZERO, Vec2::from_array);
     Layout {
-        inputs,
         features: out,
         parts: saved
             .and_then(|l| l.parts_node)
@@ -922,7 +949,6 @@ fn sync_nodes(world: &mut World, mut last_edited: Local<Option<Option<FeatureId>
     let bar = el.rollback_index();
     let tk = theme_key(&theme);
     let Layout {
-        inputs: inputs_pos,
         features: positions,
         parts: parts_pos,
     } = layout(&el, &world.resource::<MeasuredHeights>().0);
@@ -993,20 +1019,38 @@ fn sync_nodes(world: &mut World, mut last_edited: Local<Option<Option<FeatureId>
             }
         }
     }
-    // The Configuration node.
+    // The input nodes, one per configuration input.
     let ckey = (el.configuration.clone(), units, tk);
     let mut q_cfg = world.query::<(Entity, &ConfigNode)>();
     let cfg_have: Vec<(Entity, ConfigNode)> =
         q_cfg.iter(world).map(|(e, c)| (e, c.clone())).collect();
-    match cfg_have.first() {
-        Some((e, c)) if c.key == ckey => {
-            place(world, *e, inputs_pos);
-        }
-        _ => {
-            for (e, _) in &cfg_have {
-                world.entity_mut(*e).despawn();
+    let resolved = el.configuration.resolve(&el.configuration.active);
+    let places = input_positions(&el);
+    let mut kept: HashSet<Entity> = HashSet::new();
+    for ((input, r), pos) in el.configuration.inputs.iter().zip(resolved).zip(places) {
+        match cfg_have.iter().find(|(_, c)| c.input == input.id) {
+            Some((e, c)) if c.key == ckey => {
+                place(world, *e, pos);
+                kept.insert(*e);
             }
-            spawn_config_node(world, element, ckey, inputs_pos, canvas.world(), &theme);
+            _ => {
+                spawn_input_node(
+                    world,
+                    element,
+                    input,
+                    r,
+                    ckey.clone(),
+                    pos,
+                    canvas.world(),
+                    &theme,
+                );
+                changed = true;
+            }
+        }
+    }
+    for (e, _) in &cfg_have {
+        if !kept.contains(e) {
+            world.entity_mut(*e).despawn();
             changed = true;
         }
     }
@@ -1061,8 +1105,74 @@ fn place(world: &mut World, e: Entity, pos: Vec2) {
     }
 }
 
-/// The canvas's corner buttons: Fit.
+/// The canvas's Create menu (its anchor): what can be added to the graph.
+#[derive(Component, Debug, Clone, Copy)]
+struct CreateMenu;
+
+/// Create ▾ opens a menu under it: Input Configuration.
+fn open_create_menu(world: &mut World, button: Entity) {
+    let at = world
+        .get::<ComputedNode>(button)
+        .zip(world.get::<UiGlobalTransform>(button))
+        .map(|(n, g)| {
+            let s = n.inverse_scale_factor();
+            (g.translation - n.size() / 2.0 + Vec2::new(0.0, n.size().y + 2.0)) * s
+        })
+        .unwrap_or(Vec2::splat(200.0));
+    let menu = Menu::new("node-create-menu")
+        .min_width(180.0)
+        .item_height(24.0)
+        .item(
+            MenuItem::new(
+                "node-create-input-configuration",
+                tr("node-view-input-configuration"),
+            )
+            .icon("list"),
+        );
+    let theme = world.resource::<Theme>().clone();
+    let mut commands = world.commands();
+    let anchor = cadrs_ui::open_context_menu(&mut commands, at, menu.build(&theme));
+    commands
+        .entity(anchor)
+        .insert((CreateMenu, DespawnOnExit(crate::AppState::Document)));
+    world.flush();
+}
+
+fn on_create_menu(
+    ev: On<cadrs_ui::MenuAction>,
+    q: Query<(), With<CreateMenu>>,
+    mut commands: Commands,
+) {
+    if q.contains(ev.entity) && ev.item == "node-create-input-configuration" {
+        commands.queue(add_input_configuration);
+    }
+}
+
+/// The canvas's corner buttons: Create ▾ (top left); Auto arrange and Fit (top right).
 fn spawn_canvas_tools(world: &mut World, canvas: Entity, t: &Theme) {
+    world.spawn((
+        Name::new("node-canvas-create-tools"),
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(6.0),
+            top: Val::Px(6.0),
+            ..default()
+        },
+        ZIndex(10),
+        ChildOf(canvas),
+        children![(
+            cadrs_ui::Button::new("node-canvas-create")
+                .label(tr("node-view-create"))
+                .icon("plus")
+                .small()
+                .build(t),
+            cadrs_ui::Tooltip::new(tr("node-view-create-tooltip")),
+            bevy::ui_widgets::observe(|a: On<Activate>, mut commands: Commands| {
+                let button = a.entity;
+                commands.queue(move |world: &mut World| open_create_menu(world, button));
+            }),
+        )],
+    ));
     world.spawn((
         Name::new("node-canvas-tools"),
         Node {
@@ -1255,6 +1365,8 @@ fn spawn_feature_node(
         // One width for every node (the dialogs differ by a few px), as wide as its output row.
         .width(NODE_W)
         .valid(valid)
+        .icon(crate::document::feature_icon(&f.kind))
+        .kind(cadrs_core::feature_list::type_label(&f.kind))
         .title(&f.name)
         .header_color(if dim {
             Color::srgba_u8(0x80, 0x80, 0x80, 0x30)
@@ -1997,17 +2109,27 @@ pub fn node_graph_json(
     let pos = |id: FeatureId| layout.and_then(|l| l.positions.get(&id)).copied();
     let mut nodes = Vec::new();
     if let Some(c) = el.configuration() {
-        nodes.push(json!({
-            "node": "Configuration",
-            "ui_name": "node-configuration",
-            "position": layout.and_then(|l| l.inputs_node),
-            "inputs": c.inputs.iter().map(|i| json!({
-                "name": i.name,
-                "kind": i.kind.label(),
-                "columns": i.params.iter().filter(|p| p.binds()).map(|p| p.name.clone()).collect::<Vec<_>>(),
-            })).collect::<Vec<_>>(),
-            "outputs": c.names(),
-        }));
+        for input in &c.inputs {
+            let mut outputs: Vec<String> = Vec::new();
+            if input.defines_variable() {
+                outputs.push(input.name.clone());
+            }
+            outputs.extend(
+                input
+                    .params
+                    .iter()
+                    .filter(|p| p.binds())
+                    .map(|p| p.name.clone()),
+            );
+            nodes.push(json!({
+                "node": input.name,
+                "type": input.kind.label(),
+                "ui_name": format!("node-config-{}", input.name),
+                "position": layout.and_then(|l| l.inputs.get(&input.id).copied()),
+                "configurations": input.row_names(),
+                "outputs": outputs,
+            }));
+        }
     }
     for f in features {
         let slug = crate::feature_list::row_name(&f.name).replacen("feature-", "", 1);
@@ -2058,16 +2180,17 @@ pub fn node_graph_json(
             SocketKey::DriveDimension(f) => {
                 json!({ "node": name_of(*f), "socket": "drive a dimension" })
             }
-            SocketKey::NewColumn(i) => json!({
-                "node": "Configuration",
-                "socket": el
-                    .configuration
-                    .input(*i)
-                    .map(|i| format!("{} + column", i.name)),
-            }),
             SocketKey::Slot(f, label) => json!({ "node": name_of(*f), "socket": label }),
             SocketKey::Bypass(f) => json!({ "node": name_of(*f), "socket": "bypass" }),
-            SocketKey::Input(n) => json!({ "node": "Configuration", "socket": n }),
+            SocketKey::Input(n) => json!({
+                "node": el
+                    .configuration
+                    .inputs
+                    .iter()
+                    .find(|i| i.name == *n || i.params.iter().any(|p| p.name == *n))
+                    .map(|i| i.name.clone()),
+                "socket": n,
+            }),
             SocketKey::Variable(f) => json!({ "node": name_of(*f), "socket": "value" }),
             SocketKey::Part(p) => json!({
                 "node": "Parts",
@@ -2136,30 +2259,30 @@ fn on_canvas(world: &World, e: Entity, canvas: Entity) -> bool {
 // ---------------------------------------------------------------------------------------------
 // The Configuration node
 
-/// What a Configuration node's control is for.
+/// What an input node's control is for.
 #[derive(Component, Debug, Clone)]
 enum ConfigRole {
-    /// + Value, + List, + Checkbox: a new input.
-    AddValue,
-    AddList,
-    AddCheckbox,
-    /// Opens the Configuration panel (the tables, as Onshape's).
-    OpenTable,
-    /// A Checkbox's or Value's `#name`, a Value's kind and value (the configuration shown).
-    Name(ConfigInputId),
+    /// The node's title: double-clicked, its input renamed.
+    Title(ConfigInputId),
+    /// A Value's kind and value.
     Kind(ConfigInputId),
     Value(ConfigInputId),
-    RemoveInput(ConfigInputId),
-    /// A List's configuration shown, and + configuration.
-    Row(ConfigInputId, Vec<ConfigRowId>),
+    /// A configuration's heading (its index): clicked, shown; double-clicked, renamed.
+    Show(ConfigInputId, usize),
+    /// [+]: a configuration (a List's) added, a copy of the last.
     AddRow(ConfigInputId),
-    /// A Checkbox's state.
-    Check(ConfigInputId),
-    /// A column's value in the configuration shown (its index among the input's columns).
-    Cell(ConfigInputId, usize),
+    /// + Output: a row of its own, a variable the configurations set.
+    AddOutput(ConfigInputId),
+    /// An output's `#name` (a column of the input's table; `None`: a Value's or Checkbox's own
+    /// `#name`), its type (a free output's), its value in a configuration, its removal.
+    OutputName(ConfigInputId, Option<usize>),
+    OutputKind(ConfigInputId, usize),
+    Cell(ConfigInputId, usize, usize),
+    RemoveOutput(ConfigInputId, usize),
+    RemoveInput(ConfigInputId),
 }
 
-/// The Part Studio a Configuration node's controls change.
+/// The Part Studio an input node's controls change.
 #[derive(Component, Debug, Clone, Copy)]
 struct ConfigElement(ElementId);
 
@@ -2194,15 +2317,63 @@ fn config_type(el: &Element, name: &str) -> u32 {
     }
 }
 
-fn spawn_config_node(
+/// An input node's table: the name column, the type column, a configuration's, the last
+/// (a [+] heading, a row's ×).
+const OUT_NAME_W: f32 = 112.0;
+const OUT_TYPE_W: f32 = 78.0;
+const OUT_CELL_W: f32 = 66.0;
+const OUT_END_W: f32 = 22.0;
+const OUT_GAP: f32 = 4.0;
+
+/// An input node's width: its table's (at least a feature node's).
+fn input_node_width(input: &ConfigInput) -> f32 {
+    let cells = match input.kind {
+        InputKind::Value { .. } => 1,
+        _ => input.row_count(),
+    } as f32;
+    (12.0 + OUT_NAME_W + OUT_TYPE_W + cells * OUT_CELL_W + OUT_END_W + (cells + 3.0) * OUT_GAP)
+        .max(NODE_W)
+}
+
+/// A guess of an input node's height before it is laid out (its heading and rows, + Output).
+fn input_node_height(input: &ConfigInput) -> f32 {
+    let rows = input.params.len() + usize::from(input.defines_variable());
+    30.0 + 12.0 + 28.0 * (rows + 1) as f32 + 34.0
+}
+
+/// The kind an output shows ("length", "switch"…).
+fn kind_label(k: cfg::ColumnKind) -> String {
+    tr(match k {
+        cfg::ColumnKind::Length => "node-view-kind-length",
+        cfg::ColumnKind::Angle => "node-view-kind-angle",
+        cfg::ColumnKind::Number => "node-view-kind-number",
+        cfg::ColumnKind::Boolean => "node-view-kind-switch",
+        cfg::ColumnKind::Text => "node-view-kind-text",
+    })
+}
+
+/// The kinds a free output can be.
+const FREE_KINDS: [cfg::ColumnKind; 3] = [
+    cfg::ColumnKind::Length,
+    cfg::ColumnKind::Angle,
+    cfg::ColumnKind::Number,
+];
+
+/// An input node (Blender's Group Input, one per input): a table whose rows are the input's
+/// outputs (each a `#name` with a socket on the right) and whose columns are its
+/// configurations, the one shown highlighted. A List's is an Input Configuration: [+] adds a
+/// configuration, + Output a row.
+#[allow(clippy::too_many_arguments)]
+fn spawn_input_node(
     world: &mut World,
     element: ElementId,
+    input: &ConfigInput,
+    resolved: cfg::Resolved,
     key: ConfigKey,
     pos: Vec2,
     parent: Entity,
     t: &Theme,
 ) {
-    let c = key.0.clone();
     let units = key.1;
     let el = world
         .resource::<ActiveDocument>()
@@ -2213,61 +2384,134 @@ fn spawn_config_node(
         .as_ref()
         .map(|e| e.features().to_vec())
         .unwrap_or_default();
+    let id = input.id;
+    let slug = input.name.clone();
+    let width = input_node_width(input);
     let root = world
         .spawn((
-            GraphNode::bundle("node-configuration", pos),
-            ConfigNode { key },
+            GraphNode::bundle(format!("node-config-{slug}"), pos),
+            ConfigNode { input: id, key },
             ConfigElement(element),
             ChildOf(parent),
         ))
         .id();
+    let (kind, icon) = match input.kind {
+        InputKind::List { .. } => ("node-view-input-configuration", "list"),
+        InputKind::Checkbox { .. } => ("node-view-input-checkbox", "check"),
+        InputKind::Value { .. } => ("node-view-input-value", "variables"),
+    };
     let tb = t.clone();
-    let shown = c.active.clone();
-    let body_c = c.clone();
+    let body_input = input.clone();
     let body_features = features.clone();
-    let card = FeatureDialog::new("node-configuration-card")
+    let card_name = format!("node-config-{slug}-card");
+    let card = FeatureDialog::new(card_name.clone())
         .static_copy()
-        .width(CONFIG_W)
-        .title(tr("node-view-configuration"))
+        .width(width)
+        .icon(icon)
+        .kind(tr(kind))
+        .title(input.name.clone())
         .header_color(config_color())
         .body(move |b| {
             let t = &tb;
-            let c = &body_c;
+            let input = &body_input;
+            let shown = match resolved {
+                cfg::Resolved::Row(i) => Some(i),
+                cfg::Resolved::Checked(c) => Some(usize::from(c)),
+                cfg::Resolved::Number(_) => None,
+            };
+            let cell_node = |w: f32| Node {
+                width: Val::Px(w),
+                flex_shrink: 0.0,
+                height: Val::Px(22.0),
+                align_items: AlignItems::Center,
+                overflow: Overflow::clip(),
+                ..default()
+            };
             let label = |r: &mut ChildSpawner, text: String, w: f32, color: Color| {
                 r.spawn((
                     t.text(text, t.font_sm, bevy::text::FontWeight::MEDIUM, color),
-                    Node {
-                        width: Val::Px(w),
-                        flex_shrink: 0.0,
-                        overflow: Overflow::clip(),
-                        ..default()
-                    },
+                    cell_node(w),
                 ))
                 .insert(TextLayout::no_wrap());
             };
-            for (input, r) in c.inputs.iter().zip(c.resolve(&shown)) {
-                let id = input.id;
-                let slug = id.0.simple().to_string()[..8].to_string();
-                match &input.kind {
-                    // A Value: name, kind, value, remove; its `#name` out.
-                    InputKind::Value { kind, .. } => {
-                        let value = match r {
-                            cfg::Resolved::Number(x) => x,
-                            _ => 0.0,
-                        };
-                        b.spawn((Name::new(format!("node-input-{}", input.name)), row()))
-                            .with_children(|r| {
-                                r.spawn((
-                                    ConfigRole::Name(id),
-                                    TextInput::new(format!("node-input-{slug}-name"))
-                                        .value(input.name.clone())
-                                        .width(Val::Px(70.0))
-                                        .height(22.0)
-                                        .select_all_on_focus()
-                                        .build(t),
-                                ));
-                                let mut sel = Select::new(format!("node-input-{slug}-kind"))
-                                    .width(Val::Px(66.0));
+            // The heading: name, type, a configuration's name each (the one shown
+            // highlighted), [+].
+            b.spawn((
+                Name::new(format!("node-config-{}-heading", input.name)),
+                row(),
+            ))
+            .with_children(|r| {
+                label(
+                    r,
+                    tr("node-view-output-name"),
+                    OUT_NAME_W,
+                    t.muted_foreground,
+                );
+                label(
+                    r,
+                    tr("node-view-output-type"),
+                    OUT_TYPE_W,
+                    t.muted_foreground,
+                );
+                if matches!(input.kind, InputKind::Value { .. }) {
+                    label(
+                        r,
+                        tr("node-view-output-value"),
+                        OUT_CELL_W,
+                        t.muted_foreground,
+                    );
+                }
+                for (k, n) in input.row_names().into_iter().enumerate() {
+                    let mut button =
+                        cadrs_ui::Button::new(format!("node-config-{}-show-{}", input.name, k + 1))
+                            .label(n)
+                            .small();
+                    button = if shown == Some(k) {
+                        button.primary()
+                    } else {
+                        button.ghost()
+                    };
+                    r.spawn((
+                        ConfigRole::Show(id, k),
+                        DoubleClickable,
+                        cadrs_ui::InlineEdit::default(),
+                        button.build(t),
+                        cadrs_ui::Tooltip::new(tr("node-view-show-configuration")),
+                    ))
+                    .entry::<Node>()
+                    .and_modify(|mut n| {
+                        n.width = Val::Px(OUT_CELL_W);
+                        n.flex_shrink = 0.0;
+                    });
+                }
+                if matches!(input.kind, InputKind::List { .. }) {
+                    r.spawn((
+                        ConfigRole::AddRow(id),
+                        IconButton::new(format!("node-config-{}-add-row", input.name), "plus")
+                            .icon_size(14.0)
+                            .tooltip(tr("node-view-add-row"))
+                            .build(t),
+                    ));
+                }
+            });
+            // A Value's or Checkbox's own `#name`: its first output.
+            if input.defines_variable() {
+                b.spawn((Name::new(format!("node-output-{}", input.name)), row()))
+                    .with_children(|r| {
+                        r.spawn((
+                            ConfigRole::OutputName(id, None),
+                            TextInput::new(format!("node-output-{}-name", input.name))
+                                .value(input.name.clone())
+                                .width(Val::Px(OUT_NAME_W))
+                                .height(22.0)
+                                .select_all_on_focus()
+                                .build(t),
+                        ));
+                        match &input.kind {
+                            InputKind::Value { kind, .. } => {
+                                let mut sel =
+                                    Select::new(format!("node-output-{}-type", input.name))
+                                        .width(Val::Px(OUT_TYPE_W));
                                 for k in cfg::ValueKind::ALL {
                                     sel = sel.option(tr(kind_key(k)), true);
                                 }
@@ -2276,190 +2520,129 @@ fn spawn_config_node(
                                     .position(|k| k == kind)
                                     .unwrap_or(0);
                                 r.spawn((ConfigRole::Kind(id), sel.selected(at).build(t)));
+                                let value = match resolved {
+                                    cfg::Resolved::Number(x) => x,
+                                    _ => 0.0,
+                                };
                                 r.spawn((
                                     ConfigRole::Value(id),
-                                    NumberField::new(format!("node-input-{slug}-value"), "")
-                                        .text(units.with_unit(value, kind.quantity()))
-                                        .label_width(0.0)
-                                        .build(t),
-                                ))
-                                .entry::<Node>()
-                                .and_modify(|mut n| {
-                                    n.flex_grow = 1.0;
-                                    n.min_width = Val::Px(0.0);
-                                });
-                                r.spawn((
-                                    ConfigRole::RemoveInput(id),
-                                    IconButton::new(format!("node-input-{slug}-remove"), "close")
-                                        .icon_size(12.0)
-                                        .tooltip(tr("node-view-remove-input"))
+                                    TextInput::new(format!("node-output-{}-1", input.name))
+                                        .value(units.with_unit(value, kind.quantity()))
+                                        .width(Val::Px(OUT_CELL_W))
+                                        .height(22.0)
+                                        .select_all_on_focus()
                                         .build(t),
                                 ));
-                            });
-                        continue;
-                    }
-                    // A Checkbox: its state, `#name` out.
-                    InputKind::Checkbox { .. } => {
-                        let on = matches!(r, cfg::Resolved::Checked(true));
-                        b.spawn((Name::new(format!("node-input-{}", input.name)), row()))
-                            .with_children(|r| {
-                                r.spawn((
-                                    ConfigRole::Check(id),
-                                    cadrs_ui::Checkbox::new(format!("node-input-{slug}-value"))
-                                        .label(format!("#{}", input.name))
-                                        .checked(on)
-                                        .build(t),
-                                ));
-                                r.spawn(Node {
-                                    flex_grow: 1.0,
-                                    ..default()
-                                });
-                                r.spawn((
-                                    ConfigRole::RemoveInput(id),
-                                    IconButton::new(format!("node-input-{slug}-remove"), "close")
-                                        .icon_size(12.0)
-                                        .tooltip(tr("node-view-remove-input"))
-                                        .build(t),
-                                ));
-                            });
-                    }
-                    // A List: the configuration shown, + configuration; "+ column" out.
-                    InputKind::List { rows, .. } => {
-                        let at = match r {
-                            cfg::Resolved::Row(i) => i,
-                            _ => 0,
-                        };
-                        let ids: Vec<ConfigRowId> = rows.iter().map(|r| r.id).collect();
-                        let mut sel = Select::new(format!("node-list-{}-select", input.name))
-                            .width(Val::Percent(100.0));
-                        for row in rows {
-                            sel = sel.option(row.name.clone(), true);
+                            }
+                            _ => {
+                                label(
+                                    r,
+                                    kind_label(cfg::ColumnKind::Boolean),
+                                    OUT_TYPE_W,
+                                    t.muted_foreground,
+                                );
+                                for v in ["0", "1"] {
+                                    label(r, v.into(), OUT_CELL_W, t.muted_foreground);
+                                }
+                            }
                         }
-                        b.spawn((Name::new(format!("node-list-{}", input.name)), row()))
-                            .with_children(|r| {
-                                label(r, input.name.clone(), 70.0, t.muted_foreground);
-                                r.spawn((ConfigRole::Row(id, ids), sel.selected(at).build(t)))
-                                    .entry::<Node>()
-                                    .and_modify(|mut n| n.flex_grow = 1.0);
-                                r.spawn((
-                                    ConfigRole::AddRow(id),
-                                    IconButton::new(
-                                        format!("node-list-{}-add-row", input.name),
-                                        "plus",
-                                    )
-                                    .icon_size(14.0)
-                                    .tooltip(tr("node-view-add-row"))
-                                    .build(t),
-                                ));
-                                r.spawn((
-                                    ConfigRole::RemoveInput(id),
-                                    IconButton::new(format!("node-input-{slug}-remove"), "close")
-                                        .icon_size(12.0)
-                                        .tooltip(tr("node-view-remove-input"))
-                                        .build(t),
-                                ));
-                            });
-                    }
+                    });
+            }
+            // The outputs: `#name`, type, a value per configuration, ×.
+            for (j, p) in input.params.iter().enumerate() {
+                if !p.binds() {
+                    continue;
                 }
-                // The columns: `#name`, the value in the configuration shown (typed in: that
-                // configuration's), out.
-                let row_at = match r {
-                    cfg::Resolved::Row(i) => i,
-                    cfg::Resolved::Checked(c) => usize::from(c),
-                    cfg::Resolved::Number(_) => 0,
-                };
-                for (j, p) in input.params.iter().enumerate() {
-                    if !p.binds() {
-                        continue;
-                    }
-                    let cell = p.values.get(row_at).cloned();
-                    b.spawn((Name::new(format!("node-input-{}", p.name)), row()))
-                        .with_children(|r| {
-                            r.spawn(Node {
-                                width: Val::Px(12.0),
-                                flex_shrink: 0.0,
-                                ..default()
-                            });
-                            label(r, format!("#{}", p.name), 120.0, t.foreground);
-                            match cell {
-                                Some(cfg::CellValue::Bool(on)) => {
-                                    r.spawn((
-                                        ConfigRole::Cell(id, j),
-                                        cadrs_ui::Checkbox::new(format!(
-                                            "node-cell-{}",
-                                            squash(&p.name)
-                                        ))
-                                        .checked(on)
-                                        .build(t),
-                                    ));
+                let k = p.kind(&body_features);
+                let tip = p
+                    .target
+                    .label(&body_features, &Default::default(), &|_| String::new());
+                b.spawn((Name::new(format!("node-output-{}", p.name)), row()))
+                    .with_children(|r| {
+                        r.spawn((
+                            ConfigRole::OutputName(id, Some(j)),
+                            TextInput::new(format!("node-output-{}-name", p.name))
+                                .value(p.name.clone())
+                                .width(Val::Px(OUT_NAME_W))
+                                .height(22.0)
+                                .select_all_on_focus()
+                                .build(t),
+                            cadrs_ui::Tooltip::new(tip.clone()),
+                        ));
+                        if matches!(p.target, cfg::ParamTarget::Free { .. }) {
+                            let mut sel = Select::new(format!("node-output-{}-type", p.name))
+                                .width(Val::Px(OUT_TYPE_W));
+                            for f in FREE_KINDS {
+                                sel = sel.option(kind_label(f), true);
+                            }
+                            let at = FREE_KINDS.iter().position(|f| *f == k).unwrap_or(0);
+                            r.spawn((ConfigRole::OutputKind(id, j), sel.selected(at).build(t)));
+                        } else {
+                            label(r, kind_label(k), OUT_TYPE_W, t.muted_foreground);
+                        }
+                        for (row_at, v) in p.values.iter().enumerate() {
+                            let name = format!("node-output-{}-{}", p.name, row_at + 1);
+                            match v {
+                                cfg::CellValue::Bool(on) => {
+                                    r.spawn(cell_node(OUT_CELL_W)).with_children(|c| {
+                                        c.spawn((
+                                            ConfigRole::Cell(id, j, row_at),
+                                            cadrs_ui::Checkbox::new(name).checked(*on).build(t),
+                                        ));
+                                    });
                                 }
                                 v => {
                                     r.spawn((
-                                        ConfigRole::Cell(id, j),
-                                        TextInput::new(format!("node-cell-{}", squash(&p.name)))
-                                            .value(
-                                                v.and_then(|v| v.as_expr().map(String::from))
-                                                    .unwrap_or_default(),
-                                            )
-                                            .width(Val::Percent(100.0))
+                                        ConfigRole::Cell(id, j, row_at),
+                                        TextInput::new(name)
+                                            .value(v.as_expr().unwrap_or_default().to_string())
+                                            .width(Val::Px(OUT_CELL_W))
                                             .height(22.0)
                                             .select_all_on_focus()
                                             .build(t),
-                                        cadrs_ui::Tooltip::new(p.target.label(
-                                            &body_features,
-                                            &Default::default(),
-                                            &|_| String::new(),
-                                        )),
-                                    ))
-                                    .entry::<Node>()
-                                    .and_modify(|mut n| n.flex_grow = 1.0);
+                                    ));
                                 }
                             }
-                        });
-                }
+                        }
+                        r.spawn((
+                            ConfigRole::RemoveOutput(id, j),
+                            IconButton::new(format!("node-output-{}-remove", p.name), "close")
+                                .icon_size(12.0)
+                                .tooltip(tr("node-view-remove-output"))
+                                .build(t),
+                        ));
+                    });
             }
-            if !c.inputs.is_empty() {
-                b.spawn((
-                    Node {
-                        height: Val::Px(1.0),
-                        margin: UiRect::vertical(Val::Px(4.0)),
-                        ..default()
-                    },
-                    BackgroundColor(t.separator),
-                ));
-            }
-            b.spawn(row()).with_children(|r| {
-                for (role, name, key) in [
-                    (
-                        ConfigRole::AddValue,
-                        "node-input-add",
-                        "node-view-add-input",
-                    ),
-                    (ConfigRole::AddList, "node-list-add", "node-view-add-list"),
-                    (
-                        ConfigRole::AddCheckbox,
-                        "node-checkbox-add",
-                        "node-view-add-checkbox",
-                    ),
-                ] {
+            // + Output (not a Value's: it is one), and the node's removal.
+            b.spawn(Node {
+                height: Val::Px(30.0),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::SpaceBetween,
+                flex_shrink: 0.0,
+                ..default()
+            })
+            .with_children(|r| {
+                if matches!(input.kind, InputKind::Value { .. }) {
+                    r.spawn(Node::default());
+                } else {
                     r.spawn((
-                        role,
-                        cadrs_ui::Button::new(name)
-                            .label(tr(key))
+                        ConfigRole::AddOutput(id),
+                        cadrs_ui::Button::new(format!("node-config-{}-add-output", input.name))
+                            .label(tr("node-view-add-output"))
+                            .icon("plus")
                             .small()
                             .ghost()
                             .build(t),
                     ));
                 }
+                r.spawn((
+                    ConfigRole::RemoveInput(id),
+                    IconButton::new(format!("node-config-{}-remove", input.name), "delete")
+                        .icon_size(14.0)
+                        .tooltip(tr("node-view-remove-input"))
+                        .build(t),
+                ));
             });
-            b.spawn((
-                ConfigRole::OpenTable,
-                cadrs_ui::Button::new("node-config-table")
-                    .label(tr("node-view-open-table"))
-                    .small()
-                    .ghost()
-                    .build(t),
-            ));
         });
     let card = world
         .spawn((card.build(t), ConfigElement(element), ChildOf(root)))
@@ -2467,71 +2650,54 @@ fn spawn_config_node(
     if let Some(h) = world.get::<Children>(card).and_then(|c| c.first().copied()) {
         world.entity_mut(h).insert(GraphNodeHandle);
     }
-    // An output for each `#name` (a Value's, a Checkbox's, a column's), level with its row; and
-    // a List's or Checkbox's "+ column", which configures what it is dropped on.
+    // The title: double-clicked, renamed.
     let named = named_descendants(world, card);
     let find = |want: &str| {
         let want = squash(want);
         named.iter().find(|(n, _)| *n == want).map(|(_, e)| *e)
     };
-    let mut outs: Vec<(SocketKey, String, Entity, u32)> = Vec::new();
-    for input in &c.inputs {
-        if input.defines_variable()
-            && let Some(row) = find(&format!("node-input-{}", input.name))
-        {
-            let ty = el.as_ref().map_or(NUMBER, |e| config_type(e, &input.name));
-            outs.push((
-                SocketKey::Input(input.name.clone()),
-                format!("node-input-{}-out", input.name),
-                row,
-                ty,
-            ));
-        }
-        for p in input.params.iter().filter(|p| p.binds()) {
-            if let Some(row) = find(&format!("node-input-{}", p.name)) {
-                let ty = el.as_ref().map_or(NUMBER, |e| config_type(e, &p.name));
-                outs.push((
-                    SocketKey::Input(p.name.clone()),
-                    format!("node-input-{}-out", p.name),
-                    row,
-                    ty,
-                ));
-            }
-        }
-        let head = match &input.kind {
-            InputKind::List { .. } => find(&format!("node-list-{}", input.name)),
-            InputKind::Checkbox { .. } => find(&format!("node-input-{}", input.name)),
-            InputKind::Value { .. } => None,
-        };
-        if let Some(row) = head.filter(|_| !matches!(input.kind, InputKind::Checkbox { .. })) {
-            outs.push((
-                SocketKey::NewColumn(input.id),
-                format!("node-list-{}-column", input.name),
-                row,
-                cadrs_ui::node_graph::ANY_TYPE,
-            ));
+    if let Some(title) = find(&format!("{card_name}-title")) {
+        world.entity_mut(title).insert((
+            cadrs_ui::InlineEditLabel,
+            DoubleClickable,
+            Pickable::default(),
+        ));
+        if let Some(clip) = world.get::<ChildOf>(title).map(|c| c.parent()) {
+            world
+                .entity_mut(clip)
+                .insert((ConfigRole::Title(id), cadrs_ui::InlineEdit::default()));
         }
     }
-    for (key, name, row, ty) in outs {
-        let color = if ty == cadrs_ui::node_graph::ANY_TYPE {
-            t.muted_foreground
-        } else {
-            socket_color(ty)
-        };
-        let tip = matches!(key, SocketKey::NewColumn(_)).then(|| tr("node-view-new-column"));
-        let mut e = world.spawn((
-            key,
-            Socket::bundle(name, SocketSide::Out, ty, Some(row), color, t),
+    // An output socket level with each output's row.
+    let mut outs: Vec<(String, Entity)> = Vec::new();
+    if input.defines_variable()
+        && let Some(row) = find(&format!("node-output-{}", input.name))
+    {
+        outs.push((input.name.clone(), row));
+    }
+    for p in input.params.iter().filter(|p| p.binds()) {
+        if let Some(row) = find(&format!("node-output-{}", p.name)) {
+            outs.push((p.name.clone(), row));
+        }
+    }
+    for (name, row) in outs {
+        let ty = el.as_ref().map_or(NUMBER, |e| config_type(e, &name));
+        world.spawn((
+            SocketKey::Input(name.clone()),
+            Socket::bundle(
+                format!("node-output-{name}-out"),
+                SocketSide::Out,
+                ty,
+                Some(row),
+                socket_color(ty),
+                t,
+            ),
             ChildOf(root),
         ));
-        if let Some(tip) = tip {
-            e.insert(cadrs_ui::Tooltip::new(tip));
-        }
     }
     if let Some(mut n) = world.get_mut::<Node>(root) {
-        n.width = Val::Px(CONFIG_W);
+        n.width = Val::Px(width);
     }
-    let _ = features;
 }
 
 fn kind_key(k: cfg::ValueKind) -> &'static str {
@@ -2617,6 +2783,220 @@ fn show_value(world: &mut World, element: ElementId, input: ConfigInputId, value
     run(world, &cfg::SetActiveConfiguration { element, values });
 }
 
+/// Shows configuration `k` of `input` (a List's row, a Checkbox's state).
+fn show_configuration(world: &mut World, element: ElementId, input: ConfigInputId, k: usize) {
+    let Some(value) = config_of(world, element).and_then(|(c, _)| match &c.input(input)?.kind {
+        InputKind::List { rows, .. } => rows.get(k).map(|r| cfg::InputValue::Row(r.id)),
+        InputKind::Checkbox { .. } => Some(cfg::InputValue::Checked(k == 1)),
+        InputKind::Value { .. } => None,
+    }) else {
+        return;
+    };
+    show_value(world, element, input, value);
+}
+
+/// A name for a new input: `base`, then `base2`, `base3`… (not taken in the configuration nor
+/// as a variable).
+fn new_input_name(c: &Configuration, taken: &[String], base: &str) -> String {
+    std::iter::once(base.to_string())
+        .chain((2..).map(|n| format!("{base}{n}")))
+        .find(|n| c.name_problem(n, None, taken).is_none())
+        .unwrap_or_default()
+}
+
+/// Adds an Input Configuration (a List with one configuration) to the active Part Studio, its
+/// node's title open for a name.
+fn add_input_configuration(world: &mut World) {
+    let Some(element) = world
+        .resource::<ActiveDocument>()
+        .active_element()
+        .map(|e| e.id)
+    else {
+        return;
+    };
+    let mut made = None;
+    edit_config(world, element, "Add input configuration", |c, taken| {
+        let name = new_input_name(c, taken, "configuration");
+        let input = ConfigInput::list(&name, &["default"]);
+        made = Some(input.id);
+        c.inputs.push(input);
+    });
+    if let Some(id) = made {
+        world.insert_resource(PendingTitle(id));
+        // Framed once laid out, so the new node is in view (it goes left of the features).
+        let mut q = world.query::<(Entity, &NodeViewCanvas)>();
+        let canvases: Vec<Entity> = q
+            .iter(world)
+            .filter(|(_, c)| c.0 == element)
+            .map(|(e, _)| e)
+            .collect();
+        for c in canvases {
+            world.entity_mut(c).insert(FitLater(8));
+        }
+    }
+}
+
+/// An input node's title to open for a name once the node is built (one just added).
+#[derive(Resource, Debug, Clone, Copy)]
+struct PendingTitle(ConfigInputId);
+
+/// Opens the pending title for a name, once its node is there.
+fn open_pending_title(world: &mut World) {
+    let Some(PendingTitle(id)) = world.get_resource::<PendingTitle>().copied() else {
+        return;
+    };
+    let mut q = world.query::<(Entity, &ConfigRole)>();
+    let Some(e) = q
+        .iter(world)
+        .find(|(_, r)| matches!(r, ConfigRole::Title(i) if *i == id))
+        .map(|(e, _)| e)
+    else {
+        return;
+    };
+    world.remove_resource::<PendingTitle>();
+    begin_title_edit(world, e, id);
+}
+
+fn begin_title_edit(world: &mut World, e: Entity, input: ConfigInputId) {
+    let Some(element) = config_role(world, e).map(|(el, _)| el) else {
+        return;
+    };
+    let Some(name) =
+        config_of(world, element).and_then(|(c, _)| Some(c.input(input)?.name.clone()))
+    else {
+        return;
+    };
+    let theme = world.resource::<Theme>().clone();
+    let mut opts = cadrs_ui::InlineEditOptions::new("node-config-title-edit");
+    opts.width = Val::Px(140.0);
+    opts.height = 22.0;
+    opts.font_size = Some(theme.font_base);
+    opts.weight = bevy::text::FontWeight::BOLD;
+    opts.padding = Some(2.0);
+    let mut commands = world.commands();
+    cadrs_ui::begin_inline_edit(&mut commands, &theme, e, name, opts);
+    world.flush();
+}
+
+/// A configuration heading's label (its button's text), for renaming it in place.
+fn begin_heading_edit(world: &mut World, button: Entity, input: ConfigInputId, k: usize) {
+    let Some(element) = config_role(world, button).map(|(el, _)| el) else {
+        return;
+    };
+    let Some(name) =
+        config_of(world, element).and_then(|(c, _)| c.input(input)?.row_names().get(k).cloned())
+    else {
+        return;
+    };
+    // (The button's text is its label, hidden while the field is shown.)
+    let text = world
+        .get::<Children>(button)
+        .map(|c| c.to_vec())
+        .unwrap_or_default()
+        .into_iter()
+        .find(|e| world.get::<Text>(*e).is_some());
+    let Some(text) = text else { return };
+    world.entity_mut(text).insert(cadrs_ui::InlineEditLabel);
+    let theme = world.resource::<Theme>().clone();
+    let mut opts = cadrs_ui::InlineEditOptions::new("node-config-heading-edit");
+    opts.width = Val::Px(OUT_CELL_W - 4.0);
+    opts.height = 20.0;
+    opts.font_size = Some(theme.font_sm);
+    opts.padding = Some(2.0);
+    let mut commands = world.commands();
+    cadrs_ui::begin_inline_edit(&mut commands, &theme, button, name, opts);
+    commands.entity(button).insert(HeadingEdit(input, k));
+    world.flush();
+}
+
+/// A configuration heading being renamed in place.
+#[derive(Component, Debug, Clone, Copy)]
+struct HeadingEdit(ConfigInputId, usize);
+
+fn on_config_double_click(ev: On<cadrs_ui::DoubleClick>, mut commands: Commands) {
+    let e = ev.entity;
+    commands.queue(move |world: &mut World| {
+        if let Some(ConfigRole::Show(input, k)) = world.get::<ConfigRole>(e).cloned() {
+            begin_heading_edit(world, e, input, k);
+            return;
+        }
+        // The title: its row is the field's owner.
+        let owner = world.get::<ChildOf>(e).map(|c| c.parent());
+        if let Some(owner) = owner
+            && let Some(ConfigRole::Title(input)) = world.get::<ConfigRole>(owner).cloned()
+        {
+            begin_title_edit(world, owner, input);
+        }
+    });
+}
+
+/// A title or configuration heading renamed in place.
+fn on_config_renamed(
+    ev: On<cadrs_ui::InlineEditCommit>,
+    q_role: Query<&ConfigRole>,
+    q_heading: Query<&HeadingEdit>,
+    mut commands: Commands,
+) {
+    let e = ev.entity;
+    let name = ev.value.trim().to_string();
+    let title = match q_role.get(e) {
+        Ok(ConfigRole::Title(i)) => Some(*i),
+        _ => None,
+    };
+    let heading = q_heading.get(e).ok().copied();
+    commands.queue(move |world: &mut World| {
+        if heading.is_some()
+            && let Ok(mut em) = world.get_entity_mut(e)
+        {
+            em.remove::<HeadingEdit>();
+        }
+        let Some((element, _)) = config_role(world, e) else {
+            return;
+        };
+        if name.is_empty() {
+            world.resource_mut::<ActiveDocument>().set_changed();
+            return;
+        }
+        if let Some(input) = title {
+            rename_input(world, element, input, name);
+        } else if let Some(HeadingEdit(input, k)) = heading {
+            edit_config(world, element, "Rename configuration", |c, _| {
+                if let Some(InputKind::List { rows, .. }) = c.input_mut(input).map(|i| &mut i.kind)
+                    && let Some(r) = rows.get_mut(k)
+                {
+                    r.name = name;
+                }
+            });
+        }
+    });
+}
+
+/// Renames an input: a List's title, a Value's or Checkbox's `#name` (wherever it is read).
+fn rename_input(world: &mut World, element: ElementId, input: ConfigInputId, to: String) {
+    let Some(i) = config_of(world, element).and_then(|(c, _)| c.input(input).cloned()) else {
+        return;
+    };
+    if i.name == to {
+        return;
+    }
+    if i.defines_variable() {
+        run(
+            world,
+            &cfg::RenameConfigName {
+                element,
+                from: i.name,
+                to,
+            },
+        );
+    } else {
+        edit_config(world, element, "Rename configuration input", |c, _| {
+            if let Some(i) = c.input_mut(input) {
+                i.name = to;
+            }
+        });
+    }
+}
+
 fn on_config_button(a: On<Activate>, mut commands: Commands) {
     let e = a.entity;
     commands.queue(move |world: &mut World| {
@@ -2624,34 +3004,7 @@ fn on_config_button(a: On<Activate>, mut commands: Commands) {
             return;
         };
         match role {
-            ConfigRole::AddValue => edit_config(world, element, "Add input", |c, taken| {
-                let name = (1..)
-                    .map(|n| format!("input{n}"))
-                    .find(|n| c.name_problem(n, None, taken).is_none())
-                    .unwrap_or_default();
-                c.inputs
-                    .push(ConfigInput::value(&name, cfg::ValueKind::Length, 10.0));
-            }),
-            ConfigRole::AddList => {
-                edit_config(world, element, "Add configuration list", |c, taken| {
-                    let name = std::iter::once("Configuration".to_string())
-                        .chain((2..).map(|n| format!("Configuration{n}")))
-                        .find(|n| c.name_problem(n, None, taken).is_none())
-                        .unwrap_or_default();
-                    c.inputs.push(ConfigInput::list(&name, &["Default"]));
-                })
-            }
-            ConfigRole::AddCheckbox => edit_config(world, element, "Add checkbox", |c, taken| {
-                let name = (1..)
-                    .map(|n| format!("switch{n}"))
-                    .find(|n| c.name_problem(n, None, taken).is_none())
-                    .unwrap_or_default();
-                c.inputs.push(ConfigInput::checkbox(&name, true));
-            }),
-            ConfigRole::OpenTable => {
-                *world.resource_mut::<crate::side_panel::SidePanel>() =
-                    crate::side_panel::SidePanel::Configuration;
-            }
+            ConfigRole::Show(input, k) => show_configuration(world, element, input, k),
             ConfigRole::AddRow(input) => {
                 edit_config(world, element, "Add configuration", |c, _| {
                     let Some(i) = c.input_mut(input) else { return };
@@ -2659,7 +3012,7 @@ fn on_config_button(a: On<Activate>, mut commands: Commands) {
                         return;
                     };
                     let name = (rows.len() + 1..)
-                        .map(|n| format!("Configuration {n}"))
+                        .map(|n| format!("config{n}"))
                         .find(|n| rows.iter().all(|r| r.name != *n))
                         .unwrap_or_default();
                     rows.push(cfg::ListRow {
@@ -2674,6 +3027,43 @@ fn on_config_button(a: On<Activate>, mut commands: Commands) {
                     }
                 })
             }
+            ConfigRole::AddOutput(input) => {
+                let Some((c, taken)) = config_of(world, element) else {
+                    return;
+                };
+                let name = c.fresh_name("output", &taken);
+                run(
+                    world,
+                    &cfg::ConfigureParameter {
+                        element,
+                        input,
+                        target: cfg::ParamTarget::Free {
+                            kind: cfg::ColumnKind::Length,
+                        },
+                        name: Some(name),
+                    },
+                );
+            }
+            // A free output taken out (its readers keep `#name`, which no longer resolves); a
+            // configured field's or dimension's, unconfigured (it keeps the value it shows).
+            ConfigRole::RemoveOutput(input, j) => {
+                let Some(target) = config_of(world, element)
+                    .and_then(|(c, _)| Some(c.input(input)?.params.get(j)?.target.clone()))
+                else {
+                    return;
+                };
+                if matches!(target, cfg::ParamTarget::Free { .. }) {
+                    edit_config(world, element, "Remove configuration output", |c, _| {
+                        if let Some(i) = c.input_mut(input)
+                            && j < i.params.len()
+                        {
+                            i.params.remove(j);
+                        }
+                    });
+                } else {
+                    run(world, &cfg::UnconfigureParameter { element, target });
+                }
+            }
             ConfigRole::RemoveInput(input) => {
                 edit_config(world, element, "Remove configuration input", |c, _| {
                     c.inputs.retain(|i| i.id != input);
@@ -2684,42 +3074,12 @@ fn on_config_button(a: On<Activate>, mut commands: Commands) {
     });
 }
 
-fn on_config_number(ev: On<NumberFieldCommit>, mut commands: Commands) {
-    let (e, text) = (ev.entity, ev.text.clone());
-    commands.queue(move |world: &mut World| {
-        let Some((element, ConfigRole::Value(input))) = config_role(world, e) else {
-            return;
-        };
-        let Some(kind) = config_of(world, element).and_then(|(c, _)| match c.input(input)?.kind {
-            InputKind::Value { kind, .. } => Some(kind),
-            _ => None,
-        }) else {
-            return;
-        };
-        let units = world.resource::<ActiveDocument>().doc.units;
-        match units.eval(&text, kind.quantity()) {
-            Ok(v) => show_value(world, element, input, cfg::InputValue::Number(v)),
-            Err(err) => {
-                toast(world, err.to_string());
-                world.resource_mut::<ActiveDocument>().set_changed();
-            }
-        }
-    });
-}
-
 fn on_config_checkbox(ev: On<CheckboxChange>, mut commands: Commands) {
     let (e, checked) = (ev.entity, ev.checked);
-    commands.queue(move |world: &mut World| match config_role(world, e) {
-        Some((element, ConfigRole::Check(input))) => {
-            show_value(world, element, input, cfg::InputValue::Checked(checked))
-        }
-        // A Boolean column's value in the configuration shown.
-        Some((element, ConfigRole::Cell(input, j))) => {
+    commands.queue(move |world: &mut World| {
+        // A Boolean output's value in a configuration.
+        if let Some((element, ConfigRole::Cell(input, j, row))) = config_role(world, e) {
             edit_config(world, element, "Edit configuration table", |c, _| {
-                let row = c
-                    .input(input)
-                    .map(|i| i.row_of(c.active.get(input)))
-                    .unwrap_or(0);
                 if let Some(v) = c
                     .input_mut(input)
                     .and_then(|i| i.params.get_mut(j))
@@ -2729,7 +3089,6 @@ fn on_config_checkbox(ev: On<CheckboxChange>, mut commands: Commands) {
                 }
             })
         }
-        _ => {}
     });
 }
 
@@ -2740,11 +3099,6 @@ fn on_config_select(ev: On<SelectChange>, mut commands: Commands) {
             return;
         };
         match role {
-            ConfigRole::Row(input, ids) => {
-                if let Some(r) = ids.get(index).copied() {
-                    show_value(world, element, input, cfg::InputValue::Row(r));
-                }
-            }
             ConfigRole::Kind(input) => {
                 let Some(k) = cfg::ValueKind::ALL.get(index).copied() else {
                     return;
@@ -2754,6 +3108,33 @@ fn on_config_select(ev: On<SelectChange>, mut commands: Commands) {
                         && let InputKind::Value { kind, .. } = &mut i.kind
                     {
                         *kind = k;
+                    }
+                });
+            }
+            // A free output's type: a value that is a number and a unit kept as the number in
+            // the new one ("3 mm" → "3 deg").
+            ConfigRole::OutputKind(input, j) => {
+                let Some(k) = FREE_KINDS.get(index).copied() else {
+                    return;
+                };
+                edit_config(world, element, "Edit configuration output", |c, _| {
+                    let Some(p) = c.input_mut(input).and_then(|i| i.params.get_mut(j)) else {
+                        return;
+                    };
+                    let cfg::ParamTarget::Free { kind } = &mut p.target else {
+                        return;
+                    };
+                    *kind = k;
+                    for v in &mut p.values {
+                        if let cfg::CellValue::Expr(e) = v {
+                            let mut words = e.split_whitespace();
+                            let number = words.next().and_then(|w| w.parse::<f64>().ok());
+                            if let Some(x) = number
+                                && words.count() <= 1
+                            {
+                                *e = cfg::plain(x, k.quantity());
+                            }
+                        }
                     }
                 });
             }
@@ -2769,11 +3150,15 @@ fn on_config_text(ev: On<TextSubmit>, mut commands: Commands) {
             return;
         };
         match role {
-            // `#name` renamed wherever it is read.
-            ConfigRole::Name(input) => {
-                let Some(from) =
-                    config_of(world, element).and_then(|(c, _)| Some(c.input(input)?.name.clone()))
-                else {
+            // An output's `#name`, renamed wherever it is read.
+            ConfigRole::OutputName(input, j) => {
+                let Some(from) = config_of(world, element).and_then(|(c, _)| {
+                    let i = c.input(input)?;
+                    Some(match j {
+                        Some(j) => i.params.get(j)?.name.clone(),
+                        None => i.name.clone(),
+                    })
+                }) else {
                     return;
                 };
                 if from != value {
@@ -2787,17 +3172,32 @@ fn on_config_text(ev: On<TextSubmit>, mut commands: Commands) {
                     );
                 }
             }
-            // A column's value in the configuration shown: that configuration's cell.
-            ConfigRole::Cell(input, j) => {
+            // A Value's value (the configuration shown).
+            ConfigRole::Value(input) => {
+                let Some(kind) =
+                    config_of(world, element).and_then(|(c, _)| match c.input(input)?.kind {
+                        InputKind::Value { kind, .. } => Some(kind),
+                        _ => None,
+                    })
+                else {
+                    return;
+                };
+                let units = world.resource::<ActiveDocument>().doc.units;
+                match units.eval(&value, kind.quantity()) {
+                    Ok(v) => show_value(world, element, input, cfg::InputValue::Number(v)),
+                    Err(err) => {
+                        toast(world, err.to_string());
+                        world.resource_mut::<ActiveDocument>().set_changed();
+                    }
+                }
+            }
+            // An output's value in a configuration.
+            ConfigRole::Cell(input, j, row) => {
                 if value.is_empty() {
                     world.resource_mut::<ActiveDocument>().set_changed();
                     return;
                 }
                 edit_config(world, element, "Edit configuration table", |c, _| {
-                    let row = c
-                        .input(input)
-                        .map(|i| i.row_of(c.active.get(input)))
-                        .unwrap_or(0);
                     if let Some(v) = c
                         .input_mut(input)
                         .and_then(|i| i.params.get_mut(j))
@@ -2849,14 +3249,14 @@ fn on_collapse(
 fn on_node_moved(
     ev: On<GraphNodeMoved>,
     q_feature: Query<&FeatureNode>,
-    q_config: Query<(), With<ConfigNode>>,
+    q_config: Query<&ConfigNode>,
     q_parts: Query<(), With<PartsNode>>,
     mut moves: ResMut<PendingMoves>,
 ) {
     if let Ok(n) = q_feature.get(ev.entity) {
         moves.0.push((Moved::Feature(n.feature), ev.pos));
-    } else if q_config.contains(ev.entity) {
-        moves.0.push((Moved::Configuration, ev.pos));
+    } else if let Ok(c) = q_config.get(ev.entity) {
+        moves.0.push((Moved::Input(c.input), ev.pos));
     } else if q_parts.contains(ev.entity) {
         moves.0.push((Moved::Parts, ev.pos));
     }
@@ -2887,10 +3287,13 @@ fn flush_moves(world: &mut World) {
                     _ => None,
                 })
                 .collect(),
-            inputs_node: moves
+            inputs: moves
                 .iter()
-                .find(|(m, _)| *m == Moved::Configuration)
-                .map(|(_, p)| round(*p)),
+                .filter_map(|(m, p)| match m {
+                    Moved::Input(i) => Some((*i, round(*p))),
+                    _ => None,
+                })
+                .collect(),
             parts_node: moves
                 .iter()
                 .find(|(m, _)| *m == Moved::Parts)
@@ -2938,39 +3341,6 @@ fn on_wire_connect(ev: On<WireConnect>, mut commands: Commands) {
             return;
         };
         let element = el.id;
-        // A List's "+ column": what it is dropped on is configured in the List.
-        if let SocketKey::NewColumn(input) = src {
-            let target = match &dst {
-                SocketKey::Slot(f, label) => Some(cfg::ParamTarget::Field {
-                    feature: *f,
-                    label: label.to_string(),
-                    occurrence: 0,
-                }),
-                SocketKey::Dimension(f, d) => Some(cfg::ParamTarget::Dimension {
-                    feature: *f,
-                    dimension: *d,
-                }),
-                SocketKey::Bypass(f) => Some(cfg::ParamTarget::Suppressed { feature: *f }),
-                SocketKey::DriveDimension(f) => {
-                    ask_dimension(world, &el, *f, "", Some(input));
-                    None
-                }
-                _ => None,
-            };
-            if let Some(target) = target {
-                run(
-                    world,
-                    &cfg::ConfigureParameter {
-                        element,
-                        input,
-                        target,
-                        name: None,
-                    },
-                );
-            }
-            world.resource_mut::<ActiveDocument>().set_changed();
-            return;
-        }
         let name = match &src {
             SocketKey::Input(n) => n.clone(),
             SocketKey::Variable(f) => match el.feature(*f).map(|g| &g.kind) {
@@ -3015,7 +3385,7 @@ fn on_wire_connect(ev: On<WireConnect>, mut commands: Commands) {
             }),
             // Which dimension: asked (the wire's quantity's, not yet driven).
             SocketKey::DriveDimension(feature) => {
-                ask_dimension(world, &el, *feature, &name, None);
+                ask_dimension(world, &el, *feature, &name);
                 world.resource_mut::<ActiveDocument>().set_changed();
                 return;
             }
@@ -3046,18 +3416,10 @@ fn on_wire_connect(ev: On<WireConnect>, mut commands: Commands) {
 struct DriveDimensionMenu {
     feature: FeatureId,
     name: String,
-    /// A List's "+ column" dropped there: the dimension chosen is configured in it instead.
-    configure: Option<ConfigInputId>,
 }
 
 /// Opens [`DriveDimensionMenu`] at the pointer (a message when no dimension fits).
-fn ask_dimension(
-    world: &mut World,
-    el: &Element,
-    feature: FeatureId,
-    name: &str,
-    configure: Option<ConfigInputId>,
-) {
+fn ask_dimension(world: &mut World, el: &Element, feature: FeatureId, name: &str) {
     let Some(f) = el.feature(feature) else { return };
     // What the wire carries: a configuration's `#name`, a Variable's (a new column: any).
     let quantity = config_quantity(el, name).or_else(|| {
@@ -3101,7 +3463,6 @@ fn ask_dimension(
         DriveDimensionMenu {
             feature,
             name: name.to_string(),
-            configure,
         },
         DespawnOnExit(crate::AppState::Document),
     ));
@@ -3122,7 +3483,7 @@ fn on_drive_dimension(
     else {
         return;
     };
-    let (feature, name, configure) = (m.feature, m.name.clone(), m.configure);
+    let (feature, name) = (m.feature, m.name.clone());
     commands.queue(move |world: &mut World| {
         let Some(el) = world.resource::<ActiveDocument>().active_element().cloned() else {
             return;
@@ -3133,29 +3494,15 @@ fn on_drive_dimension(
         else {
             return;
         };
-        match configure {
-            Some(input) => run(
-                world,
-                &cfg::ConfigureParameter {
-                    element: el.id,
-                    input,
-                    target: cfg::ParamTarget::Dimension {
-                        feature,
-                        dimension: d.id,
-                    },
-                    name: None,
-                },
-            ),
-            None => run(
-                world,
-                &cfg::ConnectDimension {
-                    element: el.id,
-                    feature,
-                    dimension: d.id,
-                    expr: format!("#{name}"),
-                },
-            ),
-        }
+        run(
+            world,
+            &cfg::ConnectDimension {
+                element: el.id,
+                feature,
+                dimension: d.id,
+                expr: format!("#{name}"),
+            },
+        );
         world.resource_mut::<ActiveDocument>().set_changed();
     });
 }

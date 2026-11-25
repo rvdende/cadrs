@@ -3638,7 +3638,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(volume(&world), 0.0);
-        // The node graph: the sketch into the extrude, the inputs into its Depth and Bypass.
+        // The node graph: the sketch into the extrude, the inputs (a node each) into its Depth
+        // and Bypass.
         let g = get_node_graph(&mut world, &p(json!({}))).unwrap();
         let wire = |g: &Value, from: &str, socket: &str, to: &str, to_socket: &str| {
             g["wires"].as_array().unwrap().iter().any(|w| {
@@ -3652,14 +3653,8 @@ mod tests {
             wire(&g, "Sketch 1", "geometry out", "Extrude 1", "geometry in"),
             "{g}"
         );
-        assert!(
-            wire(&g, "Configuration", "height", "Extrude 1", "Depth"),
-            "{g}"
-        );
-        assert!(
-            wire(&g, "Configuration", "on", "Extrude 1", "bypass"),
-            "{g}"
-        );
+        assert!(wire(&g, "height", "height", "Extrude 1", "Depth"), "{g}");
+        assert!(wire(&g, "on", "on", "Extrude 1", "bypass"), "{g}");
         assert!(
             connect_parameter(
                 &mut world,
@@ -3699,10 +3694,7 @@ mod tests {
         .unwrap();
         assert!((volume(&world) - 4000.0).abs() < 1e-6);
         let g = get_node_graph(&mut world, &p(json!({}))).unwrap();
-        assert!(
-            wire(&g, "Configuration", "depth", "Extrude 1", "Depth"),
-            "{g}"
-        );
+        assert!(wire(&g, "Size", "depth", "Extrude 1", "Depth"), "{g}");
         // An instance in each configuration of the List.
         for size in ["Thin", "Thick"] {
             insert_instance(

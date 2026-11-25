@@ -1,9 +1,10 @@
 // The node view drives a sketch's dimension (`cadrs_app::node_view`): a sketch node lists its
 // driven dimensions, each with an input, and "+ Drive a dimension" asks which one a dropped
 // wire drives. `control-arm-sketch`: the course control arm's sketch, with its dimensions.
-// 01 The node view with an input `input1` (10 mm): Sketch 1 has "+ Drive a dimension".
-// 02 input1's output dropped on it: a menu of the sketch's dimensions (D1, D2…).
-// 03 D1 chosen: Sketch 1 lists "D1 · 10 mm   #input1", wired from the Configuration node.
+// 01 The node view with an Input Configuration whose output `output` is 10 mm: Sketch 1 has
+//    "+ Drive a dimension".
+// 02 The output dropped on it: a menu of the sketch's dimensions (D1, D2…).
+// 03 D1 chosen: Sketch 1 lists "D1 · 10 mm   #output", wired from the input node.
 Scenario(
     start: Some("document"),
     steps: [
@@ -13,18 +14,29 @@ Scenario(
         Click(ui("feature-node-view")),
         WaitFor("node-canvas"),
         Wait(40),
-        Click(ui("node-input-add")),
-        WaitFor("node-input-input1-out"),
+        Click(ui("node-canvas-create")),
+        WaitFor("node-create-input-configuration"),
+        Click(ui("node-create-input-configuration")),
+        WaitFor("node-config-title-edit"),
+        Key("Enter"),
+        WaitFor("node-config-configuration-add-output"),
+        Click(ui("node-config-configuration-add-output")),
+        WaitFor("node-output-output-1"),
+        Click(ui("node-output-output-1")),
+        Key("Ctrl+A"),
+        Type("10 mm"),
+        Key("Enter"),
+        WaitFor("node-output-output-out"),
         WaitFor("node-sketch-1-dim-add"),
         Wait(20),
         Screenshot("01-drive-a-dimension"),
-        Drag(ui("node-input-input1-out"), ui("node-sketch-1-dim-add")),
+        Drag(ui("node-output-output-out"), ui("node-sketch-1-dim-add")),
         WaitFor("node-drive-dimension-1"),
         Wait(5),
         Screenshot("02-which-dimension"),
         Click(ui("node-drive-dimension-1")),
         WaitFor("node-sketch-1-dim-1"),
-        ExpectText("node-sketch-1-dimensions", "#input1"),
+        ExpectText("node-sketch-1-dimensions", "#output"),
         Wait(40),
         Screenshot("03-driven"),
     ],

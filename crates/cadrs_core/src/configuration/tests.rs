@@ -417,7 +417,7 @@ fn copies_follow_the_model_not_the_view() {
     t.run(&MoveGraphNodes {
         element: t.ps,
         positions: vec![(t.ext, [10.0, 20.0])],
-        inputs_node: None,
+        inputs: Vec::new(),
         parts_node: None,
     });
     assert_eq!(copy(&t).0, stamp);

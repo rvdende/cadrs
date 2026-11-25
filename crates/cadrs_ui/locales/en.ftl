@@ -6864,24 +6864,33 @@ node-view-expand = Expand
 # feature is suppressed while it is false).
 node-view-enabled = Enabled (suppressed while false)
 node-view-drive-dimension = + Drive a dimension
-# The Configuration node's buttons: a Value input (a length, angle or number typed per configuration), a List of named configurations, a Checkbox.
-node-view-add-list = + List
-node-view-add-checkbox = + Checkbox
-# Opens the Configuration panel with the configuration tables.
-node-view-open-table = Configuration table…
-# Tooltip of a List's +: a new configuration (a copy of the last).
+# Tooltip of an Input Configuration's + (in its heading): a new configuration (a copy of the last).
 node-view-add-row = Add configuration (a copy of the last)
-# Tooltip of a List's "+ column" output.
-node-view-new-column = Drag onto a field, a dimension or Enabled to configure it in this list
 node-view-no-dimension = No dimension of this sketch can take this value, or they are all driven already
-# The node the presets and inputs are on.
-node-view-configuration = Configuration
-# A named set of input values.
-node-view-add-input = + Value
+# The node view's Create menu (top left of the canvas) and what it adds.
+node-view-create = Create
+node-view-create-tooltip = Add a node to the graph
+# An input node's type, shown before its name in its title: a list of named configurations
+# (M3, M4…) setting its outputs; an on/off switch; a single value.
+node-view-input-configuration = Input Configuration
+node-view-input-checkbox = Input Checkbox
+node-view-input-value = Input Value
+# An input node's table heading: an output's name, its type, a single value's value.
+node-view-output-name = name
+node-view-output-type = type
+node-view-output-value = value
+# Tooltip of a configuration's heading in an input node.
+node-view-show-configuration = Show this configuration (double-click to rename)
+# An input node's button: a new output (a row, a value per configuration, wired out on the right).
+node-view-add-output = Output
+node-view-remove-output = Remove output
 node-view-remove-input = Remove input
 node-view-kind-length = Length
 node-view-kind-angle = Angle
 node-view-kind-number = Number
+# An output that is on or off (1 or 0); a part property's text.
+node-view-kind-switch = Switch
+node-view-kind-text = Text
 # The instance context menu's submenu of a configured Part Studio's presets.
 # The features header's dropdown of the configuration's presets.
 node-view-active-preset = Preset the Part Studio shows

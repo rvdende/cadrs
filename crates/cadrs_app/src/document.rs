@@ -3781,6 +3781,72 @@ enum RowKind {
     SheetMetalTool(&'static str),
 }
 
+/// How a feature's row looks by its kind alone (a sketch's: [`RowKind::Sketch`], which the list
+/// shows consumed or referenced as the rebuild found it).
+fn row_kind(kind: &cadrs_core::FeatureKind) -> RowKind {
+    match kind {
+        cadrs_core::FeatureKind::Extrude(_) => RowKind::Extrude,
+        cadrs_core::FeatureKind::Revolve(_) => RowKind::Revolve,
+        cadrs_core::FeatureKind::Boolean(_) => RowKind::Boolean,
+        cadrs_core::FeatureKind::DeletePart(_) => RowKind::DeletePart,
+        cadrs_core::FeatureKind::Fillet(_) => RowKind::Fillet,
+        cadrs_core::FeatureKind::Chamfer(_) => RowKind::Chamfer,
+        cadrs_core::FeatureKind::Shell(_) => RowKind::Shell,
+        cadrs_core::FeatureKind::Hole(_) => RowKind::Hole,
+        cadrs_core::FeatureKind::Plane(_) => RowKind::Plane,
+        cadrs_core::FeatureKind::Sweep(_) => RowKind::Sweep,
+        cadrs_core::FeatureKind::Loft(_) => RowKind::Loft,
+        cadrs_core::FeatureKind::Split(_) => RowKind::Split,
+        cadrs_core::FeatureKind::Pattern(x) => match x.kind {
+            cadrs_core::pattern::PatternKind::Linear => RowKind::LinearPattern,
+            cadrs_core::pattern::PatternKind::Circular => RowKind::CircularPattern,
+            cadrs_core::pattern::PatternKind::Curve => RowKind::CurvePattern,
+        },
+        cadrs_core::FeatureKind::Mirror(_) => RowKind::Mirror,
+        cadrs_core::FeatureKind::MateConnector(_) => RowKind::MateConnector,
+        cadrs_core::FeatureKind::Draft(_) => RowKind::Draft,
+        cadrs_core::FeatureKind::Transform(_) => RowKind::Transform,
+        cadrs_core::FeatureKind::Composite(_) => RowKind::Composite,
+        cadrs_core::FeatureKind::Import(_) => RowKind::Import,
+        cadrs_core::FeatureKind::Image(_) => RowKind::Image,
+        cadrs_core::FeatureKind::Derived(_) => RowKind::Derived,
+        cadrs_core::FeatureKind::Thicken(_) => RowKind::Thicken,
+        cadrs_core::FeatureKind::Helix(_) | cadrs_core::FeatureKind::ProjectCurve(_) => {
+            RowKind::Helix
+        }
+        cadrs_core::FeatureKind::FaceBlend(_) => RowKind::Fillet,
+        cadrs_core::FeatureKind::Thread(_) => RowKind::Thread,
+        cadrs_core::FeatureKind::Gear(_) => RowKind::Gear,
+        cadrs_core::FeatureKind::Frame(_) => RowKind::Frame,
+        cadrs_core::FeatureKind::FrameTrim(_) => RowKind::FrameTrim,
+        cadrs_core::FeatureKind::CutList(_) => RowKind::CutList,
+        cadrs_core::FeatureKind::Fill(_) => RowKind::Fill,
+        cadrs_core::FeatureKind::Variable(_) => RowKind::Variable,
+        cadrs_core::FeatureKind::SheetMetalModel(_) => RowKind::SheetMetalModel,
+        cadrs_core::FeatureKind::ModifyJoint(_) => RowKind::ModifyJoint,
+        k @ (cadrs_core::FeatureKind::SheetMetalLoft(_)
+        | cadrs_core::FeatureKind::Form(_)
+        | cadrs_core::FeatureKind::TagForm(_)) => {
+            RowKind::Sm9(crate::sheetmetal_p3i9_ui::row_icon(k).unwrap_or("sketch"))
+        }
+        cadrs_core::FeatureKind::SheetMetal(x) => RowKind::SheetMetal(x.icon()),
+        cadrs_core::FeatureKind::SheetMetalTool(x) => RowKind::SheetMetalTool(x.icon()),
+        // P3I.6: a flat pattern extrude is an Extrude in the list.
+        cadrs_core::FeatureKind::FlatExtrude(_) => RowKind::Extrude,
+        cadrs_core::FeatureKind::DirectEdit(x) => RowKind::DirectEdit(match x.kind {
+            cadrs_core::direct_edit::DirectEditKind::MoveFace => "offset",
+            cadrs_core::direct_edit::DirectEditKind::DeleteFace => "delete",
+            cadrs_core::direct_edit::DirectEditKind::Simplify => "surface",
+        }),
+        _ => RowKind::Sketch,
+    }
+}
+
+/// The icon of a feature's kind, as its row in the feature list shows it (a node's header too).
+pub(crate) fn feature_icon(kind: &cadrs_core::FeatureKind) -> &'static str {
+    row_kind(kind).icon()
+}
+
 impl RowKind {
     fn icon(self) -> &'static str {
         match self {
@@ -3944,106 +4010,56 @@ fn rebuild_feature_rows(
         } => sketch_visibility.iter().copied().collect(),
         _ => Default::default(),
     };
-    let features: Vec<FeatureRowKey> =
-        all.iter()
-            // A sketch with conflicting constraints shows as an error too (`screens/15`).
-            .map(|f| {
-                let kind = match &f.kind {
-                    cadrs_core::FeatureKind::Extrude(_) => RowKind::Extrude,
-                    cadrs_core::FeatureKind::Revolve(_) => RowKind::Revolve,
-                    cadrs_core::FeatureKind::Boolean(_) => RowKind::Boolean,
-                    cadrs_core::FeatureKind::DeletePart(_) => RowKind::DeletePart,
-                    cadrs_core::FeatureKind::Fillet(_) => RowKind::Fillet,
-                    cadrs_core::FeatureKind::Chamfer(_) => RowKind::Chamfer,
-                    cadrs_core::FeatureKind::Shell(_) => RowKind::Shell,
-                    cadrs_core::FeatureKind::Hole(_) => RowKind::Hole,
-                    cadrs_core::FeatureKind::Plane(_) => RowKind::Plane,
-                    cadrs_core::FeatureKind::Sweep(_) => RowKind::Sweep,
-                    cadrs_core::FeatureKind::Loft(_) => RowKind::Loft,
-                    cadrs_core::FeatureKind::Split(_) => RowKind::Split,
-                    cadrs_core::FeatureKind::Pattern(x) => match x.kind {
-                        cadrs_core::pattern::PatternKind::Linear => RowKind::LinearPattern,
-                        cadrs_core::pattern::PatternKind::Circular => RowKind::CircularPattern,
-                        cadrs_core::pattern::PatternKind::Curve => RowKind::CurvePattern,
-                    },
-                    cadrs_core::FeatureKind::Mirror(_) => RowKind::Mirror,
-                    cadrs_core::FeatureKind::MateConnector(_) => RowKind::MateConnector,
-                    cadrs_core::FeatureKind::Draft(_) => RowKind::Draft,
-                    cadrs_core::FeatureKind::Transform(_) => RowKind::Transform,
-                    cadrs_core::FeatureKind::Composite(_) => RowKind::Composite,
-                    cadrs_core::FeatureKind::Import(_) => RowKind::Import,
-                    cadrs_core::FeatureKind::Image(_) => RowKind::Image,
-                    cadrs_core::FeatureKind::Derived(_) => RowKind::Derived,
-                    cadrs_core::FeatureKind::Thicken(_) => RowKind::Thicken,
-                    cadrs_core::FeatureKind::Helix(_)
-                    | cadrs_core::FeatureKind::ProjectCurve(_) => RowKind::Helix,
-                    cadrs_core::FeatureKind::FaceBlend(_) => RowKind::Fillet,
-                    cadrs_core::FeatureKind::Thread(_) => RowKind::Thread,
-                    cadrs_core::FeatureKind::Gear(_) => RowKind::Gear,
-                    cadrs_core::FeatureKind::Frame(_) => RowKind::Frame,
-                    cadrs_core::FeatureKind::FrameTrim(_) => RowKind::FrameTrim,
-                    cadrs_core::FeatureKind::CutList(_) => RowKind::CutList,
-                    cadrs_core::FeatureKind::Fill(_) => RowKind::Fill,
-                    cadrs_core::FeatureKind::Variable(_) => RowKind::Variable,
-                    cadrs_core::FeatureKind::SheetMetalModel(_) => RowKind::SheetMetalModel,
-                    cadrs_core::FeatureKind::ModifyJoint(_) => RowKind::ModifyJoint,
-                    k @ (cadrs_core::FeatureKind::SheetMetalLoft(_)
-                    | cadrs_core::FeatureKind::Form(_)
-                    | cadrs_core::FeatureKind::TagForm(_)) => {
-                        RowKind::Sm9(crate::sheetmetal_p3i9_ui::row_icon(k).unwrap_or("sketch"))
-                    }
-                    cadrs_core::FeatureKind::SheetMetal(x) => RowKind::SheetMetal(x.icon()),
-                    cadrs_core::FeatureKind::SheetMetalTool(x) => RowKind::SheetMetalTool(x.icon()),
-                    // P3I.6: a flat pattern extrude is an Extrude in the list.
-                    cadrs_core::FeatureKind::FlatExtrude(_) => RowKind::Extrude,
-                    cadrs_core::FeatureKind::DirectEdit(x) => RowKind::DirectEdit(match x.kind {
-                        cadrs_core::direct_edit::DirectEditKind::MoveFace => "offset",
-                        cadrs_core::direct_edit::DirectEditKind::DeleteFace => "delete",
-                        cadrs_core::direct_edit::DirectEditKind::Simplify => "surface",
-                    }),
-                    _ if cache.hidden_sketches.contains(&f.id) => RowKind::ConsumedSketch,
-                    _ if cache.preview_sketches.contains(&f.id) => RowKind::ReferencedSketch,
-                    _ => RowKind::Sketch,
-                };
-                // A feature the rebuild failed (P3.1): red, with the reason as its tooltip. A
-                // sketch in error gets its reason too (P3.2 judge).
-                let pending = pending_derived == Some(f.id);
-                let failed = cache
-                    .errors
-                    .get(&f.id)
-                    .cloned()
-                    .filter(|_| !pending)
-                    .or_else(|| {
-                        f.sketch()?;
-                        if faces_lost.0.contains(&f.id) {
-                            Some(tr("shell-doc-sketch-face-gone"))
-                        } else if errors.0.contains(&f.id) {
-                            Some(tr("shell-doc-sketch-errors"))
-                        } else {
-                            None
-                        }
-                    });
-                (
-                    f.id,
-                    f.name.clone(),
-                    pending || (f.is_valid() && !errors.0.contains(&f.id) && failed.is_none()),
-                    under.0.contains(&f.id),
-                    kind,
-                    failed,
-                    // A Plane's eye only (#66); a sketch's also follows the features using it.
-                    if kind == RowKind::Plane {
-                        visibility.get(&f.id) != Some(&false)
+    let features: Vec<FeatureRowKey> = all
+        .iter()
+        // A sketch with conflicting constraints shows as an error too (`screens/15`).
+        .map(|f| {
+            let kind = match row_kind(&f.kind) {
+                RowKind::Sketch if cache.hidden_sketches.contains(&f.id) => RowKind::ConsumedSketch,
+                RowKind::Sketch if cache.preview_sketches.contains(&f.id) => {
+                    RowKind::ReferencedSketch
+                }
+                k => k,
+            };
+            // A feature the rebuild failed (P3.1): red, with the reason as its tooltip. A
+            // sketch in error gets its reason too (P3.2 judge).
+            let pending = pending_derived == Some(f.id);
+            let failed = cache
+                .errors
+                .get(&f.id)
+                .cloned()
+                .filter(|_| !pending)
+                .or_else(|| {
+                    f.sketch()?;
+                    if faces_lost.0.contains(&f.id) {
+                        Some(tr("shell-doc-sketch-face-gone"))
+                    } else if errors.0.contains(&f.id) {
+                        Some(tr("shell-doc-sketch-errors"))
                     } else {
-                        !cache.hidden_sketches.contains(&f.id)
-                    },
-                    cache.warnings.get(&f.id).cloned(),
-                    match &f.kind {
-                        cadrs_core::FeatureKind::Variable(v) => Some(v.display(&units.0)),
-                        _ => None,
-                    },
-                )
-            })
-            .collect();
+                        None
+                    }
+                });
+            (
+                f.id,
+                f.name.clone(),
+                pending || (f.is_valid() && !errors.0.contains(&f.id) && failed.is_none()),
+                under.0.contains(&f.id),
+                kind,
+                failed,
+                // A Plane's eye only (#66); a sketch's also follows the features using it.
+                if kind == RowKind::Plane {
+                    visibility.get(&f.id) != Some(&false)
+                } else {
+                    !cache.hidden_sketches.contains(&f.id)
+                },
+                cache.warnings.get(&f.id).cloned(),
+                match &f.kind {
+                    cadrs_core::FeatureKind::Variable(v) => Some(v.display(&units.0)),
+                    _ => None,
+                },
+            )
+        })
+        .collect();
     let editing = session
         .as_ref()
         .map(|s| s.feature)
