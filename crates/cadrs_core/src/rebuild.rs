@@ -4440,6 +4440,7 @@ mod kernel_ops {
                     let f = connector_frame(before, state, c)?;
                     make(f.origin, f.normal())
                 }
+                AxisRef::Origin(axis) => make([0.0; 3], axis.dir()),
                 AxisRef::Face(f) => {
                     let (part, ids) = face_ids(state, f).ok_or_else(lost)?;
                     let body = part.body.ok_or_else(lost)?;

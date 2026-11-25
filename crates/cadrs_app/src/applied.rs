@@ -337,6 +337,7 @@ impl AppliedSession {
     pub fn pick_filter(&self) -> PickFilter {
         let none = PickFilter {
             origin: false,
+            origin_axes: false,
             planes: [false; 3],
             faces: false,
             planar_only: false,
@@ -462,6 +463,7 @@ impl AppliedSession {
             },
             AppliedField::PatternAxis => PickFilter {
                 origin: true,
+                origin_axes: true,
                 faces: true,
                 edges: true,
                 sketch_curves: true,
@@ -584,6 +586,7 @@ impl AppliedSession {
             },
             AppliedField::TransformAxis => PickFilter {
                 origin: true,
+                origin_axes: true,
                 faces: true,
                 edges: true,
                 sketch_curves: true,
@@ -649,6 +652,7 @@ impl AppliedSession {
             },
             AppliedField::GearShaft | AppliedField::GearMateShaft => PickFilter {
                 origin: true,
+                origin_axes: true,
                 faces: true,
                 edges: true,
                 sketch_curves: true,

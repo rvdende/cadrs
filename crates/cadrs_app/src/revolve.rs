@@ -335,6 +335,7 @@ fn take_pick(world: &mut World, field: ExtrudeField, pick: Pick) -> Option<()> {
                     cadrs_core::mate::ConnectorRef::Feature(f),
                 )),
                 Pick::SketchCurve(sketch, curve) => Some(AxisRef::SketchCurve { sketch, curve }),
+                Pick::OriginAxis(o) => Some(AxisRef::Origin(o)),
                 Pick::Edge(_, e) if !own(e.op()) => edge.map(AxisRef::Edge),
                 // A curved face: its axis (a planar face has none).
                 Pick::Face(_, f) if !own(f.op) => match face {
@@ -488,6 +489,7 @@ fn show_references(
         ),
         Some(AxisRef::Face(f)) => want.extend(face_pick(&f)),
         Some(AxisRef::Connector(c)) => want.extend(crate::pattern::connector_pick(&c)),
+        Some(AxisRef::Origin(o)) => want.push(Pick::OriginAxis(o)),
         None => {}
     }
     let ends = std::iter::once(r.up_to).chain(r.second.as_ref().map(|s| s.up_to));
@@ -565,6 +567,7 @@ pub fn axis_label(features: &[cadrs_core::Feature], a: &AxisRef) -> String {
         AxisRef::Edge(e) => tr_with("common-edge-of", &[("name", &name(e.edge.op()))]),
         AxisRef::Face(f) => tr_with("common-face-of", &[("name", &name(f.face.op))]),
         AxisRef::Connector(c) => c.label(features),
+        AxisRef::Origin(o) => crate::viewport::origin_axis_name(*o),
     }
 }
 
