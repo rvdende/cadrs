@@ -679,9 +679,9 @@ impl NurbsCurve {
             .collect();
         // Row k: the basis functions at params[k], at their columns before wrapping.
         let mut rows: Vec<Vec<(usize, f64)>> = Vec::with_capacity(m);
-        for k in 0..m {
-            let span = find_span(ncp - 1, p, params[k], &knots);
-            let nb = basis_ders(span, params[k], p, 0, &knots);
+        for &u in &params[..m] {
+            let span = find_span(ncp - 1, p, u, &knots);
+            let nb = basis_ders(span, u, p, 0, &knots);
             rows.push((0..=p).map(|j| (span - p + j, nb[0][j])).collect());
         }
         let rhs: [Vec<f64>; 3] = [0, 1, 2].map(|c| pts.iter().map(|q| q[c]).collect());
@@ -2480,6 +2480,142 @@ impl IsoV<'_> {
     }
 }
 
+/// The solutions of the cyclic system `A x = b` for each of `rhs`, row k of A holding the
+/// entries `rows[k]` at their columns modulo m (a periodic interpolation's: a band that wraps
+/// round the corners). The columns are turned so the band lies along the diagonal, the band
+/// solved by elimination (O(m·w²)), and the corners put back as a correction of their small
+/// rank (Woodbury). None where a pivot vanishes or the answer isn't finite (a dense solve then).
+fn cyclic_band_solve(
+    m: usize,
+    rows: &[Vec<(usize, f64)>],
+    rhs: &[Vec<f64>; 3],
+) -> Option<[Vec<f64>; 3]> {
+    if m < 8 {
+        return None;
+    }
+    // The band's offsets from the diagonal, before turning: its middle is the turn.
+    let (mut lo, mut hi) = (isize::MAX, isize::MIN);
+    for (k, row) in rows.iter().enumerate() {
+        for &(c, v) in row {
+            if v != 0.0 {
+                let d = c as isize - k as isize;
+                lo = lo.min(d);
+                hi = hi.max(d);
+            }
+        }
+    }
+    if lo > hi {
+        return None;
+    }
+    let shift = (lo + hi).div_euclid(2);
+    let (l, u) = ((shift - lo) as usize, (hi - shift) as usize);
+    if l + u + 1 >= m / 2 {
+        return None;
+    }
+    let w = l + u + 1;
+    // The band (row k, column k − l + i at band[k][i]) and the entries that wrap.
+    let mut band = vec![vec![0.0; w]; m];
+    let mut wrap: Vec<(usize, usize, f64)> = Vec::new();
+    for (k, row) in rows.iter().enumerate() {
+        for &(c, v) in row.iter().filter(|e| e.1 != 0.0) {
+            let j = c as isize - shift;
+            let jm = j.rem_euclid(m as isize) as usize;
+            if j >= 0 && (j as usize) < m {
+                band[k][(jm + l) - k] += v;
+            } else {
+                wrap.push((k, jm, v));
+            }
+        }
+    }
+    // Banded LU without pivoting (the band's middle is its largest entry: an interpolation's
+    // matrix is totally positive).
+    for k in 0..m {
+        let piv = band[k][l];
+        if !(piv.abs() > 1e-300) {
+            return None;
+        }
+        for r in k + 1..(k + l + 1).min(m) {
+            // Entry (r, k) is band[r][k + l − r].
+            let f = band[r][k + l - r] / piv;
+            if f == 0.0 {
+                continue;
+            }
+            band[r][k + l - r] = f;
+            for c in k + 1..(k + u + 1).min(m) {
+                let v = band[k][c + l - k];
+                band[r][c + l - r] -= f * v;
+            }
+        }
+    }
+    let solve = |b: &mut [f64]| {
+        for r in 0..m {
+            let mut s = b[r];
+            for k in r.saturating_sub(l)..r {
+                s -= band[r][k + l - r] * b[k];
+            }
+            b[r] = s;
+        }
+        for r in (0..m).rev() {
+            let mut s = b[r];
+            for c in r + 1..(r + u + 1).min(m) {
+                s -= band[r][c + l - r] * b[c];
+            }
+            b[r] = s / band[r][l];
+        }
+    };
+    // The wrapped entries: A = B + Σ e_row · a · e_colᵀ = B + U Vᵀ, one column of U per
+    // distinct wrapped column.
+    let mut cols: Vec<usize> = wrap.iter().map(|w| w.1).collect();
+    cols.sort_unstable();
+    cols.dedup();
+    let r = cols.len();
+    let mut z: Vec<Vec<f64>> = cols
+        .iter()
+        .map(|&c| {
+            let mut uc = vec![0.0; m];
+            for &(k, j, v) in &wrap {
+                if j == c {
+                    uc[k] += v;
+                }
+            }
+            solve(&mut uc);
+            uc
+        })
+        .collect();
+    // (I + Vᵀ Z), r × r.
+    let mut cap = DMatrix::<f64>::identity(r, r);
+    for (i, &ci) in cols.iter().enumerate() {
+        for (j, zj) in z.iter().enumerate() {
+            cap[(i, j)] += zj[ci];
+        }
+    }
+    let lu = cap.lu();
+    let mut out: [Vec<f64>; 3] = Default::default();
+    for (o, b) in out.iter_mut().zip(rhs) {
+        let mut y = b.clone();
+        solve(&mut y);
+        if r > 0 {
+            let vy = DVector::from_iterator(r, cols.iter().map(|&c| y[c]));
+            let wv = lu.solve(&vy)?;
+            for (j, zj) in z.iter_mut().enumerate() {
+                for (yi, zi) in y.iter_mut().zip(zj.iter()) {
+                    *yi -= zi * wv[j];
+                }
+            }
+        }
+        if !y.iter().all(|x| x.is_finite()) {
+            return None;
+        }
+        // Back to the columns before turning: entry j is control point (j + shift) mod m.
+        let mut x = vec![0.0; m];
+        for (j, v) in y.into_iter().enumerate() {
+            x[(j as isize + shift).rem_euclid(m as isize) as usize] = v;
+        }
+        *o = x;
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3275,140 +3411,4 @@ mod tests {
         assert!(NurbsSurface::new(0, 0, vec![], vec![], vec![vec![]]).is_err());
         assert!(NurbsSurface::new(1, 2, k.clone(), k, vec![cps(2), cps(2)]).is_err());
     }
-}
-
-/// The solutions of the cyclic system `A x = b` for each of `rhs`, row k of A holding the
-/// entries `rows[k]` at their columns modulo m (a periodic interpolation's: a band that wraps
-/// round the corners). The columns are turned so the band lies along the diagonal, the band
-/// solved by elimination (O(m·w²)), and the corners put back as a correction of their small
-/// rank (Woodbury). None where a pivot vanishes or the answer isn't finite (a dense solve then).
-fn cyclic_band_solve(
-    m: usize,
-    rows: &[Vec<(usize, f64)>],
-    rhs: &[Vec<f64>; 3],
-) -> Option<[Vec<f64>; 3]> {
-    if m < 8 {
-        return None;
-    }
-    // The band's offsets from the diagonal, before turning: its middle is the turn.
-    let (mut lo, mut hi) = (isize::MAX, isize::MIN);
-    for (k, row) in rows.iter().enumerate() {
-        for &(c, v) in row {
-            if v != 0.0 {
-                let d = c as isize - k as isize;
-                lo = lo.min(d);
-                hi = hi.max(d);
-            }
-        }
-    }
-    if lo > hi {
-        return None;
-    }
-    let shift = (lo + hi).div_euclid(2);
-    let (l, u) = ((shift - lo) as usize, (hi - shift) as usize);
-    if l + u + 1 >= m / 2 {
-        return None;
-    }
-    let w = l + u + 1;
-    // The band (row k, column k − l + i at band[k][i]) and the entries that wrap.
-    let mut band = vec![vec![0.0; w]; m];
-    let mut wrap: Vec<(usize, usize, f64)> = Vec::new();
-    for (k, row) in rows.iter().enumerate() {
-        for &(c, v) in row.iter().filter(|e| e.1 != 0.0) {
-            let j = c as isize - shift;
-            let jm = j.rem_euclid(m as isize) as usize;
-            if j >= 0 && (j as usize) < m {
-                band[k][(jm + l) - k] += v;
-            } else {
-                wrap.push((k, jm, v));
-            }
-        }
-    }
-    // Banded LU without pivoting (the band's middle is its largest entry: an interpolation's
-    // matrix is totally positive).
-    for k in 0..m {
-        let piv = band[k][l];
-        if !(piv.abs() > 1e-300) {
-            return None;
-        }
-        for r in k + 1..(k + l + 1).min(m) {
-            // Entry (r, k) is band[r][k + l − r].
-            let f = band[r][k + l - r] / piv;
-            if f == 0.0 {
-                continue;
-            }
-            band[r][k + l - r] = f;
-            for c in k + 1..(k + u + 1).min(m) {
-                let v = band[k][c + l - k];
-                band[r][c + l - r] -= f * v;
-            }
-        }
-    }
-    let solve = |b: &mut [f64]| {
-        for r in 0..m {
-            let mut s = b[r];
-            for k in r.saturating_sub(l)..r {
-                s -= band[r][k + l - r] * b[k];
-            }
-            b[r] = s;
-        }
-        for r in (0..m).rev() {
-            let mut s = b[r];
-            for c in r + 1..(r + u + 1).min(m) {
-                s -= band[r][c + l - r] * b[c];
-            }
-            b[r] = s / band[r][l];
-        }
-    };
-    // The wrapped entries: A = B + Σ e_row · a · e_colᵀ = B + U Vᵀ, one column of U per
-    // distinct wrapped column.
-    let mut cols: Vec<usize> = wrap.iter().map(|w| w.1).collect();
-    cols.sort_unstable();
-    cols.dedup();
-    let r = cols.len();
-    let mut z: Vec<Vec<f64>> = cols
-        .iter()
-        .map(|&c| {
-            let mut uc = vec![0.0; m];
-            for &(k, j, v) in &wrap {
-                if j == c {
-                    uc[k] += v;
-                }
-            }
-            solve(&mut uc);
-            uc
-        })
-        .collect();
-    // (I + Vᵀ Z), r × r.
-    let mut cap = DMatrix::<f64>::identity(r, r);
-    for (i, &ci) in cols.iter().enumerate() {
-        for (j, zj) in z.iter().enumerate() {
-            cap[(i, j)] += zj[ci];
-        }
-    }
-    let lu = cap.lu();
-    let mut out: [Vec<f64>; 3] = Default::default();
-    for (o, b) in out.iter_mut().zip(rhs) {
-        let mut y = b.clone();
-        solve(&mut y);
-        if r > 0 {
-            let vy = DVector::from_iterator(r, cols.iter().map(|&c| y[c]));
-            let wv = lu.solve(&vy)?;
-            for (j, zj) in z.iter_mut().enumerate() {
-                for (yi, zi) in y.iter_mut().zip(zj.iter()) {
-                    *yi -= zi * wv[j];
-                }
-            }
-        }
-        if !y.iter().all(|x| x.is_finite()) {
-            return None;
-        }
-        // Back to the columns before turning: entry j is control point (j + shift) mod m.
-        let mut x = vec![0.0; m];
-        for (j, v) in y.into_iter().enumerate() {
-            x[(j as isize + shift).rem_euclid(m as isize) as usize] = v;
-        }
-        *o = x;
-    }
-    Some(out)
 }
