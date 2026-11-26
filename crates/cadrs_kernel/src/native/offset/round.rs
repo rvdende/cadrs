@@ -1085,6 +1085,14 @@ fn grown_except(b: &Body, d: f64, cut: &[(P3, V3)], skip: &[usize]) -> Result<Bo
     {
         return Ok(g);
     }
+    // A convex polyhedron drilled through by holes the distance closes: the block grown whole,
+    // a dimple at each hole's ends.
+    if skip.is_empty()
+        && cut.is_empty()
+        && let Some(g) = grown_closed_holes(b, d)
+    {
+        return Ok(g);
+    }
     // A polyhedron with concave edges: cut into convex parts, each grown whole (growing is
     // the union of its parts' growths), a boolean or two in place of dozens.
     if skip.is_empty()
@@ -2898,6 +2906,244 @@ fn cylinder_domain(b: &Body, fi: usize) -> Option<(f64, f64, f64, f64)> {
         }
     }
     Some((lo, hi, u0, u1))
+}
+
+/// A hole of [`grown_closed_holes`]: its wall, and at each end the cap it opens in, that cap's
+/// loop round it, the rim's centre and the cap's outward normal.
+struct Hole {
+    wall: usize,
+    r: f64,
+    ends: Vec<(usize, usize, P3, V3)>,
+}
+
+/// A convex polyhedron drilled straight through by round holes, each between two planar caps
+/// square to its axis, grown by a ball of radius `d` at least each hole's radius: the hole
+/// fills, and where it opened in a cap the grown body has a dimple, the points within `d` of
+/// the cap's points but farther than `d` from the rim: under the moved cap a spindle torus
+/// about the axis (its tube the ball rolled round the rim, radius `d` about the rim circle),
+/// meeting the cap tangentially in a circle of the hole's radius and closing in a point on the
+/// axis. So the block filled ([`grown_convex`]) with that circle cut in each moved cap and the
+/// torus closing it, checked, its volume held to the block's grown less the dimples'
+/// `πdr² − 2π(r·I₀ − I₁)` (I₀ = ∫₀ʳ√(d² − s²) ds, I₁ = ∫₀ʳ s√(d² − s²) ds). None for any other
+/// body.
+fn grown_closed_holes(b: &Body, d: f64) -> Option<Body> {
+    use crate::native::topo::{CheckLevel, Coedge, Edge, Face, TOL_MIN, Vertex};
+    use std::f64::consts::{FRAC_PI_2, TAU};
+    if b.solids.len() != 1 || b.shells.len() != 1 {
+        return None;
+    }
+    let has = |fi: usize, e: usize| b.faces[fi].loops.iter().flatten().any(|c| c.edge == e);
+    let mut holes: Vec<Hole> = Vec::new();
+    for (fi, f) in b.faces.iter().enumerate() {
+        let Surface::Cylinder { f: cf, r } = &f.surf else {
+            if !matches!(f.surf, Surface::Plane { .. }) {
+                return None;
+            }
+            continue;
+        };
+        // A hole: the wall's outward normal toward the axis; the distance closes it.
+        let p = cf.o + cf.x * *r;
+        let (u, v) = f.surf.project(&p, None);
+        let out = f.surf.normal(u, v) * if f.sense { 1.0 } else { -1.0 };
+        if out.dot(&cf.x) >= 0.0 || d <= r * (1.0 + 1e-9) || f.loops.len() != 1 {
+            return None;
+        }
+        let mut ends = Vec::new();
+        for c in &f.loops[0] {
+            let e = &b.edges[c.edge];
+            let Curve::Circle { c: o, r: cr, .. } = e.curve else {
+                continue;
+            };
+            if !e.closed() || (cr - r).abs() > tol::REL * (1.0 + r) {
+                return None;
+            }
+            let cap = (0..b.faces.len()).find(|&g| g != fi && has(g, c.edge))?;
+            let Surface::Plane { f: pf } = &b.faces[cap].surf else {
+                return None;
+            };
+            let n = pf.x.cross(&pf.y).normalize() * if b.faces[cap].sense { 1.0 } else { -1.0 };
+            let li = b.faces[cap]
+                .loops
+                .iter()
+                .position(|l| l.len() == 1 && l[0].edge == c.edge)?;
+            if li == 0 || n.cross(&cf.z).norm() > tol::ANGULAR {
+                return None;
+            }
+            ends.push((cap, li, o, n));
+        }
+        if ends.len() != 2 {
+            return None;
+        }
+        holes.push(Hole {
+            wall: fi,
+            r: *r,
+            ends,
+        });
+    }
+    if holes.is_empty() {
+        return None;
+    }
+    // Each hole inside its caps' outlines and clear of the others. (A point over a hole's
+    // mouth is nearest that hole's rim among the cap's points (the triangle inequality, the
+    // holes apart), and a convex block has nothing over its cap: so each dimple is its rim's
+    // alone, whatever lies near.)
+    for (i, h) in holes.iter().enumerate() {
+        for &(cap, _, o, _) in &h.ends {
+            for c in &b.faces[cap].loops[0] {
+                let e = &b.edges[c.edge];
+                let Curve::Line { o: lo, d: ld } = e.curve else {
+                    return None;
+                };
+                // The segment's distance from the rim's centre.
+                let t = ((o - lo).dot(&ld) / ld.norm_squared()).clamp(e.t[0], e.t[1]);
+                if (lo + ld * t - o).norm() <= h.r + tol::POINT {
+                    return None;
+                }
+            }
+        }
+        for g in &holes[i + 1..] {
+            let (a, c) = (h.ends[0].2, g.ends[0].2);
+            let axis = h.ends[0].3;
+            let off = (c - a) - axis * (c - a).dot(&axis);
+            if off.norm() <= h.r + g.r + tol::POINT {
+                return None;
+            }
+        }
+    }
+    // The block: the holes' walls left out, their rims' loops off the caps.
+    let mut filled_src = b.clone();
+    let mut drop: Vec<(usize, usize)> = holes
+        .iter()
+        .flat_map(|h| h.ends.iter().map(|e| (e.0, e.1)))
+        .collect();
+    drop.sort_unstable_by(|x, y| y.cmp(x));
+    for (cap, li) in drop {
+        filled_src.faces[cap].loops.remove(li);
+    }
+    let keep: Vec<usize> = (0..b.faces.len())
+        .filter(|fi| holes.iter().all(|h| h.wall != *fi))
+        .collect();
+    let filled = crate::native::kernel::subset(&filled_src, &keep, true);
+    let mut g = grown_convex(&filled, d)?;
+    let whole = crate::native::mass::body_volume(&g);
+    let mut dimples = 0.0;
+    for h in &holes {
+        let r = h.r;
+        let va = (-r / d).clamp(-1.0, 1.0).acos();
+        for &(cap, _, o, n) in &h.ends {
+            let gcap = keep.iter().position(|&k| k == cap)?;
+            let tf = Frame::from_z(o, n);
+            let surf = Surface::Torus {
+                f: tf,
+                rmaj: r,
+                rmin: d,
+            };
+            let (x, y, z) = (tf.x, tf.y, tf.z);
+            // The circle on the moved cap, the meridian at u = 0 down to the apex.
+            let cv = g.verts.len();
+            g.verts.push(Vertex {
+                p: o + x * r + z * d,
+                tol: TOL_MIN,
+            });
+            let av = g.verts.len();
+            g.verts.push(Vertex {
+                p: o + z * (d * va.sin()),
+                tol: TOL_MIN,
+            });
+            let circle = Curve::Circle {
+                c: o + z * d,
+                x,
+                y,
+                r,
+            };
+            let meridian = Curve::Circle {
+                c: o + x * r,
+                x,
+                y: z,
+                r: d,
+            };
+            let push =
+                |g: &mut Body, curve: Curve, t: [f64; 2], v: [usize; 2], degenerate: bool| {
+                    g.edges.push(Edge {
+                        curve,
+                        t,
+                        v,
+                        degenerate,
+                        tol: TOL_MIN,
+                    });
+                    g.edges.len() - 1
+                };
+            let ec = push(&mut g, circle.clone(), [0.0, TAU], [cv, cv], false);
+            let em = push(&mut g, meridian, [FRAC_PI_2, va], [cv, av], false);
+            let apex = Curve::Line {
+                o: o + z * (d * va.sin()),
+                d: V3::zeros(),
+            };
+            let ea = push(&mut g, apex, [0.0, TAU], [av, av], true);
+            let line = |ox: f64, oy: f64, dx: f64, dy: f64| Curve::Line {
+                o: P3::new(ox, oy, 0.0),
+                d: V3::new(dx, dy, 0.0),
+            };
+            // Counter-clockwise in (u, v): down the seam at u = 0, along the circle, up the
+            // seam at u = 2π, back along the apex.
+            let mut lp = vec![
+                Coedge {
+                    edge: em,
+                    fwd: false,
+                    pc: line(0.0, 0.0, 0.0, 1.0),
+                },
+                Coedge {
+                    edge: ec,
+                    fwd: true,
+                    pc: line(0.0, FRAC_PI_2, 1.0, 0.0),
+                },
+                Coedge {
+                    edge: em,
+                    fwd: true,
+                    pc: line(TAU, 0.0, 0.0, 1.0),
+                },
+                Coedge {
+                    edge: ea,
+                    fwd: false,
+                    pc: line(0.0, va, 1.0, 0.0),
+                },
+            ];
+            // Its outward normal out of the tube (the material is within d of the rim).
+            let (um, vm) = (std::f64::consts::PI, 0.5 * (FRAC_PI_2 + va));
+            let pm = surf.eval(um, vm);
+            let core = o + (x * um.cos() + y * um.sin()) * r;
+            let sense = surf.normal(um, vm).dot(&(pm - core)) > 0.0;
+            if !sense {
+                lp.reverse();
+                for c in lp.iter_mut() {
+                    c.fwd = !c.fwd;
+                }
+            }
+            let circle_fwd = lp.iter().find(|c| c.edge == ec)?.fwd;
+            let csurf = g.faces[gcap].surf.clone();
+            let pc = crate::native::pcurve::pcurve(&csurf, &circle, 0.0, TAU, None);
+            g.faces[gcap].loops.push(vec![Coedge {
+                edge: ec,
+                fwd: !circle_fwd,
+                pc,
+            }]);
+            g.faces.push(Face {
+                surf,
+                sense,
+                loops: vec![lp],
+            });
+            let fi = g.faces.len() - 1;
+            g.shells[0].faces.push(fi);
+            let i0 = 0.5 * r * (d * d - r * r).sqrt() + 0.5 * d * d * (r / d).asin();
+            let i1 = (d.powi(3) - (d * d - r * r).powf(1.5)) / 3.0;
+            dimples += std::f64::consts::PI * d * r * r - TAU * (r * i0 - i1);
+        }
+    }
+    if !g.check_with(CheckLevel::Fast).is_empty() {
+        return None;
+    }
+    let got = crate::native::mass::body_volume(&g);
+    ((whole - dimples - got).abs() <= 1e-9 * whole.abs().max(1.0)).then_some(g)
 }
 
 #[cfg(test)]
