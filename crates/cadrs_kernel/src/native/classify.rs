@@ -717,7 +717,7 @@ fn ray_surface_with(
         }
         Surface::Nurbs(_) | Surface::Revolution { .. } => {
             if let Surface::Nurbs(ns) = s
-                && let Some(hits) = ray_ruled(ns, o, d)
+                && let Some(hits) = ray_ruled(ns, o, d).or_else(|| ray_graph(ns, o, d))
             {
                 return hits;
             }
@@ -848,6 +848,205 @@ fn ray_ruled(ns: &super::nurbs::NurbsSurface, o: &P3, d: &V3) -> Option<Vec<(f64
                     })
                 {
                     out.push((t, root, v0 + (v1 - v0) * sr));
+                }
+            }
+            prev = cur;
+        }
+    }
+    Some(out)
+}
+
+/// A height field: a non-rational B-spline whose poles stand over its Greville abscissae on a
+/// plane, `c + g_u·a + g_v·b + h·n` (a, b in the plane, n square to it), so that its point at
+/// (u, v) lies over `c + u·a + v·b` (linear precision) at height n·S(u, v). Its frame `(c, a, b,
+/// n)`, or None for any other surface (or a flat one).
+fn graph_frame(ns: &super::nurbs::NurbsSurface) -> Option<(P3, V3, V3, V3)> {
+    let (nu, nv) = (ns.cps.len(), ns.cps.first()?.len());
+    if nu < 2 || nv < 2 || ns.cps.iter().flatten().any(|h| h.w != 1.0) {
+        return None;
+    }
+    let greville = |k: &[f64], p: usize, n: usize| -> Vec<f64> {
+        (0..n)
+            .map(|i| k[i + 1..=i + p].iter().sum::<f64>() / p.max(1) as f64)
+            .collect()
+    };
+    let (gu, gv) = (greville(&ns.ku, ns.du, nu), greville(&ns.kv, ns.dv, nv));
+    let pt = |i: usize, j: usize| P3::new(ns.cps[i][j].x, ns.cps[i][j].y, ns.cps[i][j].z);
+    // The affine part by least squares over the grid (separable: means, then slopes).
+    let m = (nu * nv) as f64;
+    let (mu, mv) = (
+        gu.iter().sum::<f64>() / nu as f64,
+        gv.iter().sum::<f64>() / nv as f64,
+    );
+    let mut c = V3::zeros();
+    let (mut a, mut b) = (V3::zeros(), V3::zeros());
+    let (mut suu, mut svv) = (0.0, 0.0);
+    for (i, x) in gu.iter().enumerate() {
+        for (j, y) in gv.iter().enumerate() {
+            let q = pt(i, j).coords;
+            c += q / m;
+            a += q * (x - mu);
+            b += q * (y - mv);
+            suu += (x - mu).powi(2);
+            svv += (y - mv).powi(2);
+        }
+    }
+    if !(suu > 0.0 && svv > 0.0) {
+        return None;
+    }
+    let (a, b) = (a / suu, b / svv);
+    let c = P3::from(c - a * mu - b * mv);
+    // What the affine part leaves must all lie along one direction n.
+    let size = (pt(nu - 1, nv - 1) - pt(0, 0)).norm().max(tol::TINY);
+    let res: Vec<V3> = (0..nu)
+        .flat_map(|i| (0..nv).map(move |j| (i, j)))
+        .map(|(i, j)| pt(i, j) - (c + a * gu[i] + b * gv[j]))
+        .collect();
+    let big = res.iter().max_by(|x, y| x.norm().total_cmp(&y.norm()))?;
+    if big.norm() <= 1e-9 * size {
+        return None;
+    }
+    let n = big.normalize();
+    // (Rounding: a moved surface's poles carry their place's size in their last digits.)
+    let far = ns.cps.iter().flatten().fold(0.0f64, |m, h| {
+        m.max(h.x.abs()).max(h.y.abs()).max(h.z.abs())
+    });
+    if res
+        .iter()
+        .any(|r| r.cross(&n).norm() > 1e-12 * (size + far))
+    {
+        return None;
+    }
+    // a and b in the plane square to n (their parts along n are height, linear in u and v).
+    let (a, b) = (a - n * a.dot(&n), b - n * b.dot(&n));
+    if a.cross(&b).norm() <= 1e-12 * a.norm() * b.norm() {
+        return None;
+    }
+    let c = c - n * (c - P3::origin()).dot(&n);
+    Some((c, a, b, n))
+}
+
+/// A ray against a height field ([`graph_frame`]) exactly: seen along n the ray is a line in
+/// (u, v), where its height and the surface's differ by f(t), a polynomial between the points
+/// it crosses the knot lines; each sign change is bisected. A ray along n meets it once, over
+/// its foot. None for any other surface.
+fn ray_graph(ns: &super::nurbs::NurbsSurface, o: &P3, d: &V3) -> Option<Vec<(f64, f64, f64)>> {
+    let (c, a, b, n) = graph_frame(ns)?;
+    let ((u0, u1), (v0, v1)) = ns.range();
+    // (u, v) of a point's foot: solve c + u a + v b = foot (a 2 × 2 in the plane).
+    let (aa, ab, bb) = (a.dot(&a), a.dot(&b), b.dot(&b));
+    let det = aa * bb - ab * ab;
+    let uv = |w: V3| -> (f64, f64) {
+        let (wa, wb) = (w.dot(&a), w.dot(&b));
+        ((wa * bb - wb * ab) / det, (wb * aa - wa * ab) / det)
+    };
+    let (q0, q1) = (uv(o - c), uv(*d - n * d.dot(&n)));
+    let height = |u: f64, v: f64| (ns.point(u, v) - c).dot(&n);
+    let mut out = Vec::new();
+    let span = (u1 - u0).max(v1 - v0);
+    if q1.0.abs().max(q1.1.abs()) <= 1e-12 * span {
+        // Along n: the one point over the ray's foot.
+        let (u, v) = q0;
+        let dn = d.dot(&n);
+        if dn == 0.0 || u < u0 || u > u1 || v < v0 || v > v1 {
+            return Some(out);
+        }
+        out.push(((height(u, v) - (o - c).dot(&n)) / dn, u, v));
+        return Some(out);
+    }
+    // The t range over the domain, then its cuts at the knot lines.
+    let (mut lo, mut hi) = (f64::NEG_INFINITY, f64::INFINITY);
+    for (p0, p1, a0, a1) in [(q0.0, q1.0, u0, u1), (q0.1, q1.1, v0, v1)] {
+        if p1 == 0.0 {
+            if p0 < a0 || p0 > a1 {
+                return Some(out);
+            }
+            continue;
+        }
+        let (ta, tb) = ((a0 - p0) / p1, (a1 - p0) / p1);
+        lo = lo.max(ta.min(tb));
+        hi = hi.min(ta.max(tb));
+    }
+    if !(lo < hi) {
+        return Some(out);
+    }
+    let mut ts = vec![lo, hi];
+    for (p0, p1, k) in [(q0.0, q1.0, &ns.ku), (q0.1, q1.1, &ns.kv)] {
+        if p1 != 0.0 {
+            ts.extend(
+                k.iter()
+                    .map(|&x| (x - p0) / p1)
+                    .filter(|&t| t > lo && t < hi),
+            );
+        }
+    }
+    ts.sort_by(f64::total_cmp);
+    ts.dedup();
+    let at = |t: f64| (q0.0 + q1.0 * t, q0.1 + q1.1 * t);
+    let f = |t: f64| {
+        let (u, v) = at(t);
+        let (u, v) = (u.clamp(u0, u1), v.clamp(v0, v1));
+        height(u, v) - (o + d * t - c).dot(&n)
+    };
+    let m = 2 * (ns.du + ns.dv) + 2;
+    for w in ts.windows(2) {
+        let (ta, tb) = (w[0], w[1]);
+        let mut prev = (ta, f(ta));
+        for i in 1..=m {
+            let t = ta + (tb - ta) * i as f64 / m as f64;
+            let cur = (t, f(t));
+            let crosses = (prev.1 < 0.0) != (cur.1 < 0.0) || prev.1 == 0.0;
+            if crosses {
+                // Regula falsi, Illinois style (the end kept twice running has its value
+                // halved): bracketed like bisection, near Newton's speed on a smooth root.
+                let (mut x, mut y, mut fx, mut fy) = (prev.0, cur.0, prev.1, cur.1);
+                let mut side = 0i8;
+                let mut t = x;
+                for _ in 0..100 {
+                    if fx == 0.0 {
+                        t = x;
+                        break;
+                    }
+                    if fy == 0.0 {
+                        t = y;
+                        break;
+                    }
+                    t = (x * fy - y * fx) / (fy - fx);
+                    if !(t > x.min(y) && t < x.max(y)) {
+                        t = 0.5 * (x + y);
+                    }
+                    if (y - x).abs() <= 1e-15 * (1.0 + t.abs()) {
+                        break;
+                    }
+                    let ft = f(t);
+                    if ft == 0.0 {
+                        break;
+                    }
+                    if (ft < 0.0) == (fx < 0.0) {
+                        x = t;
+                        fx = ft;
+                        if side == -1 {
+                            fy *= 0.5;
+                        }
+                        side = -1;
+                    } else {
+                        y = t;
+                        fy = ft;
+                        if side == 1 {
+                            fx *= 0.5;
+                        }
+                        side = 1;
+                    }
+                    if ft.abs() <= 1e-15 * (1.0 + t.abs()) {
+                        break;
+                    }
+                }
+                if out
+                    .last()
+                    .is_none_or(|l: &(f64, f64, f64)| (t - l.0).abs() > 1e-12 * (1.0 + t.abs()))
+                {
+                    let (u, v) = at(t);
+                    out.push((t, u.clamp(u0, u1), v.clamp(v0, v1)));
                 }
             }
             prev = cur;
@@ -1589,6 +1788,22 @@ impl<'a> Classifier<'a> {
     /// surface's own search when that stops more than `tol` away.
     fn project(&self, fi: usize, p: &P3, tol: f64) -> (f64, f64) {
         let s = &self.body.faces[fi].surf;
+        // A height field: Newton from the point's foot, which lies over the nearest point of
+        // any point within the tolerance of it (no grid search wanted).
+        if let Surface::Nurbs(ns) = s
+            && let Some((c, a, b, _)) = graph_frame(ns)
+        {
+            let (aa, ab, bb) = (a.dot(&a), a.dot(&b), b.dot(&b));
+            let det = aa * bb - ab * ab;
+            let w = p - c;
+            let (wa, wb) = (w.dot(&a), w.dot(&b));
+            let ((u0, u1), (v0, v1)) = ns.range();
+            let foot = (
+                ((wa * bb - wb * ab) / det).clamp(u0, u1),
+                ((wb * aa - wa * ab) / det).clamp(v0, v1),
+            );
+            return s.project(p, Some(foot));
+        }
         if let Some(h) = self.start(fi) {
             let (u, v) = s.project(p, Some(h));
             if (s.eval(u, v) - p).norm() <= tol {
