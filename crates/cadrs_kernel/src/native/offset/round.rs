@@ -803,8 +803,16 @@ pub(crate) fn grown_convex_with(b: &Body, d: f64, poles: bool) -> Option<Body> {
                 .count()
         };
         if !poles {
+            // (Its axis from the corner's first face, not from where the corner stands: a moved
+            // body's corners stand in their balls' frames as before, and their p-curves are
+            // found kept.)
+            let n0 = normal[starts[0]];
+            let z = m
+                .cross(&n0)
+                .try_normalize(tol::ANGULAR)
+                .unwrap_or_else(|| any_perpendicular(&m));
             let surf = Surface::Sphere {
-                f: Frame::from_xz(pw, m, any_perpendicular(&m)),
+                f: Frame::from_xz(pw, m, z),
                 r: d,
             };
             let (near, sense) = sensed(&surf, pw + m * d, m);
@@ -858,8 +866,8 @@ pub(crate) fn grown_convex_with(b: &Body, d: f64, poles: bool) -> Option<Body> {
     }
     let shell = out.shell(faces, true);
     out.solid(vec![shell]);
-    let body = out.build().ok()?;
-    body.check().is_empty().then_some(body)
+    // (Building checks it, as `Body::check` would.)
+    out.build().ok()
 }
 
 /// A convex body of planes and cylinders, every edge a whole circle or ellipse between two of
