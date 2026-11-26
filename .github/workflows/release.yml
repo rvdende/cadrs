@@ -1,8 +1,8 @@
 name: Release
 
 # Pushing a version tag (`git tag v0.1.6 && git push origin v0.1.6`) builds the Linux and Windows
-# archives, as tools/release/build.sh does locally, the macOS disk image (#103) and the browser
-# build (tools/web), and publishes them as a GitHub release with SHA256SUMS.txt. The release notes are
+# archives, as tools/release/build.sh does locally, the Windows installer (tools/windows/cadrs.iss),
+# the macOS disk image (#103) and the browser build (tools/web), and publishes them as a GitHub release with SHA256SUMS.txt. The release notes are
 # tools/release/notes/<tag>.md (GitHub's generated notes when there is none); a tag with a `-` in
 # it (v0.1.7-beta.1) is a pre-release. (The site, https://cadrs.net, is main's, deployed once CI
 # passes on a push to main: .github/workflows/pages.yml.) Running it by hand with a tag (Actions › Release › Run workflow) releases the
@@ -121,6 +121,67 @@ jobs:
           path: dist/*.zip
           if-no-files-found: error
 
+  # The Windows installer (tools/windows/cadrs.iss): the zip's files wrapped by Inno Setup, which
+  # GitHub's Windows runners have, into cadrs-v<version>-x86_64-windows-setup.exe. Per user, into
+  # the folder `cadrs --install` uses, with a Start Menu entry; the updater keeps using the zip.
+  windows-installer:
+    name: Installer (Windows)
+    needs: windows
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows
+          path: zip
+
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y }
+          if (-not (Test-Path $iscc)) { throw "no Inno Setup at $iscc" }
+          "ISCC=$iscc" >> $env:GITHUB_ENV
+
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"' | Select-Object -First 1).Matches.Groups[1].Value
+          Expand-Archive -Path "zip\cadrs-v$version-x86_64-windows.zip" -DestinationPath unpacked
+          $source = (Get-ChildItem unpacked -Directory | Select-Object -First 1).FullName
+          if (-not (Test-Path "$source\cadrs.exe")) { throw "no cadrs.exe in the zip" }
+          & $env:ISCC /Qp "/DAppVersion=$version" "/DSourceDir=$source" "/DOutputDir=$PWD\dist" tools\windows\cadrs.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          Get-ChildItem dist
+
+      # Installed and uninstalled silently, as a check that both run and leave things as they
+      # should be.
+      - name: Install and uninstall
+        shell: pwsh
+        run: |
+          $setup = (Get-Item dist\*-setup.exe).FullName
+          Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
+          $app = "$env:LOCALAPPDATA\Programs\cadrs"
+          foreach ($f in "$app\cadrs.exe", "$app\libraries", "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\cadrs.lnk") {
+            if (-not (Test-Path $f)) { throw "not installed: $f" }
+          }
+          & "$app\cadrs.exe" --help | Out-Null
+          if ((Get-ItemProperty 'HKCU:\Software\Classes\.cadrs').'(default)' -ne 'cadrs.Document') { throw ".cadrs isn't cadrs's" }
+          # (The uninstaller runs from a copy of itself in a temporary folder and returns at once.)
+          Start-Process "$app\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
+          for ($i = 0; $i -lt 60 -and (Test-Path $app); $i++) { Start-Sleep -Seconds 1 }
+          foreach ($f in $app, "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\cadrs.lnk", 'HKCU:\Software\Classes\cadrs.Document') {
+            if (Test-Path $f) { throw "left after uninstalling: $f" }
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/*-setup.exe
+          if-no-files-found: error
+
   # On Apple silicon, for Apple silicon and Intel: both built (Apple's toolchain cross-builds
   # Intel) on the nightly pinned in rust-toolchain.toml, joined into one universal executable, and
   # packed as cadrs.app in a disk image, for macOS 11 and later. Signed ad hoc (no Apple
@@ -218,7 +279,7 @@ jobs:
 
   publish:
     name: Publish the release
-    needs: [linux, windows, macos, web]
+    needs: [linux, windows, windows-installer, macos, web]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-24.04
     permissions:
@@ -251,7 +312,7 @@ jobs:
           ls -l
 
       - name: Checksums
-        run: cd dist && sha256sum *.tar.gz *.zip *.dmg > SHA256SUMS.txt && cat SHA256SUMS.txt
+        run: cd dist && sha256sum *.tar.gz *.zip *.exe *.dmg > SHA256SUMS.txt && cat SHA256SUMS.txt
 
       - name: Create the release
         run: |
@@ -262,7 +323,7 @@ jobs:
           notes="tools/release/notes/$TAG.md"
           if [[ -f "$notes" ]]; then args+=(--notes-file "$notes"); else args+=(--generate-notes); fi
           if [[ "$TAG" == *-* ]]; then args+=(--prerelease); fi
-          gh release create "$TAG" dist/*.tar.gz dist/*.zip dist/*.dmg dist/SHA256SUMS.txt "${args[@]}"
+          gh release create "$TAG" dist/*.tar.gz dist/*.zip dist/*.exe dist/*.dmg dist/SHA256SUMS.txt "${args[@]}"
 
       # Posts the release to the Discord server's #announcements (the webhook in the repository
       # secret DISCORD_RELEASES_WEBHOOK): the notes' first paragraph and the release's link. A
