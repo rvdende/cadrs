@@ -665,6 +665,72 @@ pub(crate) fn carried(
         .then_some(pc)
 }
 
+/// [`fitted_by`] span by span between a B-spline's knots of full multiplicity (the degree:
+/// spans meeting in position only) inside [t0, t1], each span's fit moved by whole periods to
+/// start where the last ended and joined to it. None for a curve without such knots, or with
+/// more than 32.
+fn fitted_by_spans(
+    s: &Surface,
+    c: &Curve,
+    t0: f64,
+    t1: f64,
+    project: &dyn Fn(f64, Option<(f64, f64)>) -> P2,
+) -> Option<Curve> {
+    let Curve::Nurbs(n) = c else { return None };
+    let (lo, hi) = (t0.min(t1), t0.max(t1));
+    let pad = 1e-9 * (hi - lo).abs().max(tol::TINY);
+    let mut cuts: Vec<f64> = Vec::new();
+    let k = &n.knots;
+    let mut i = 0;
+    while i < k.len() {
+        let mut j = i;
+        while j + 1 < k.len() && k[j + 1] == k[i] {
+            j += 1;
+        }
+        if j + 1 - i >= n.degree && k[i] > lo + pad && k[i] < hi - pad {
+            cuts.push(k[i]);
+        }
+        i = j + 1;
+    }
+    if cuts.is_empty() || cuts.len() > 32 || n.degree < 2 {
+        return None;
+    }
+    let periods = closed_periods(s);
+    let mut stops = vec![lo];
+    stops.extend(cuts);
+    stops.push(hi);
+    let mut out: Option<NurbsCurve> = None;
+    for w in stops.windows(2) {
+        let Curve::Nurbs(piece) = fitted_by(s, c, w[0], w[1], project) else {
+            return None;
+        };
+        let mut piece = (*piece).clone();
+        if let Some(prev) = &out {
+            if piece.degree != prev.degree {
+                return None;
+            }
+            // (The same point's (u, v), maybe a turn apart.)
+            let (a, b) = (prev.point(prev.range().1), piece.point(piece.range().0));
+            for (axis, period) in periods.iter().enumerate() {
+                if let Some(p) = period {
+                    let gap = if axis == 0 { a.x - b.x } else { a.y - b.y };
+                    let turns = (gap / p).round() * p;
+                    if turns != 0.0 {
+                        for cp in piece.cps.iter_mut() {
+                            cp[axis] += turns * cp.w;
+                        }
+                    }
+                }
+            }
+        }
+        out = Some(match out {
+            Some(prev) => prev.joined(&piece),
+            None => piece,
+        });
+    }
+    out.map(|n| Curve::Nurbs(Arc::new(n)))
+}
+
 /// [`fitted`] with `project` for the (u, v) of the curve's point at a parameter (hinted by a
 /// neighbour's).
 fn fitted_by(
@@ -674,6 +740,13 @@ fn fitted_by(
     t1: f64,
     project: &dyn Fn(f64, Option<(f64, f64)>) -> P2,
 ) -> Curve {
+    // A B-spline whose spans meet with no more than position in common (a conic of rational
+    // arcs at double knots: its speed jumps there, so its projection kinks): each span fitted
+    // by itself and the fits joined, where one quintic across the kinks takes hundreds of
+    // points (an ellipse round a cone, 800).
+    if let Some(fit) = fitted_by_spans(s, c, t0, t1, project) {
+        return fit;
+    }
     let pieces = c.pieces(t0, t1);
     let mut ts: Vec<f64> = Vec::new();
     // A few samples a piece to start (refined below where the fit is off).
