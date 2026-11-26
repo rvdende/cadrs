@@ -389,6 +389,27 @@ fn start_pool() {
     }
 }
 
+/// The kept caches' emptying functions, each registered as its cache is first made.
+static CLEARERS: std::sync::Mutex<Vec<fn()>> = std::sync::Mutex::new(Vec::new());
+
+/// Registers a kept cache's emptying function ([`clear_caches`]).
+pub(crate) fn kept_cache(clear: fn()) {
+    CLEARERS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(clear);
+}
+
+/// Empties every kept cache (p-curve fits, intersections, polygons, meshes, gaps, mass
+/// integrals): for a caller that starts on unrelated work and wants none of the old kept
+/// (a test suite's next case), freeing their memory now rather than as they turn over.
+pub fn clear_caches() {
+    let clearers = CLEARERS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    for c in clearers {
+        c();
+    }
+}
+
 /// Drops `x` on the pool, off the caller's thread: a cache's old generation, thousands of
 /// allocations, freed while the operation that filled it goes on (in a page, here and now).
 pub(crate) fn discard<T: Send + 'static>(x: T) {

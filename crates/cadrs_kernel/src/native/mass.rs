@@ -2025,7 +2025,13 @@ impl FaceCache {
 }
 
 static FACE_CACHE: std::sync::LazyLock<std::sync::Mutex<FaceCache>> =
-    std::sync::LazyLock::new(Default::default);
+    std::sync::LazyLock::new(|| {
+        // (Emptied by [`crate::native::clear_caches`].)
+        super::par::kept_cache(|| {
+            *FACE_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Default::default();
+        });
+        Default::default()
+    });
 
 // ---------------------------------------------------------------------------------------------
 // Copies of a face: integrated once, moved to the others.

@@ -608,7 +608,13 @@ fn fitted_kept(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Curve {
         old: rustc_hash::FxHashMap<u128, Curve>,
     }
     static KEPT_FITS: std::sync::LazyLock<std::sync::Mutex<Kept>> =
-        std::sync::LazyLock::new(Default::default);
+        std::sync::LazyLock::new(|| {
+            // (Emptied by [`crate::native::clear_caches`].)
+            super::par::kept_cache(|| {
+                *KEPT_FITS.lock().unwrap_or_else(|e| e.into_inner()) = Default::default();
+            });
+            Default::default()
+        });
     // A circle on a sphere is kept in the sphere's own frame, to a part in 10¹¹ of its radius:
     // its p-curve is the same wherever the two stand together (a filleted solid's corners, the
     // same solid moved), and fitted there.

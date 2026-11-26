@@ -104,7 +104,13 @@ impl SharedGrids {
 }
 
 static SHARED_GRIDS: std::sync::LazyLock<std::sync::Mutex<SharedGrids>> =
-    std::sync::LazyLock::new(Default::default);
+    std::sync::LazyLock::new(|| {
+        // (Emptied by [`crate::native::clear_caches`].)
+        super::par::kept_cache(|| {
+            *SHARED_GRIDS.lock().unwrap_or_else(|e| e.into_inner()) = Default::default();
+        });
+        Default::default()
+    });
 
 impl GridOf {
     fn address(&self) -> GridAddress {

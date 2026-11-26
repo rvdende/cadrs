@@ -367,8 +367,13 @@ fn traced(
         new: rustc_hash::FxHashMap<u128, Ssi>,
         old: rustc_hash::FxHashMap<u128, Ssi>,
     }
-    static KEPT_SSI: std::sync::LazyLock<std::sync::Mutex<Kept>> =
-        std::sync::LazyLock::new(Default::default);
+    static KEPT_SSI: std::sync::LazyLock<std::sync::Mutex<Kept>> = std::sync::LazyLock::new(|| {
+        // (Emptied by [`crate::native::clear_caches`].)
+        super::par::kept_cache(|| {
+            *KEPT_SSI.lock().unwrap_or_else(|e| e.into_inner()) = Default::default();
+        });
+        Default::default()
+    });
     let key_of =
         |a: &Surface, ua: &((f64, f64), (f64, f64)), b: &Surface, ub: &((f64, f64), (f64, f64))| {
             let mut h = super::fingerprint::Key128::new();

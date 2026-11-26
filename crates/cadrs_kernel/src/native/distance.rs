@@ -685,7 +685,13 @@ fn mesh_kept(
         old: rustc_hash::FxHashMap<u128, Mesh>,
     }
     static KEPT_MESHES: std::sync::LazyLock<std::sync::Mutex<Kept>> =
-        std::sync::LazyLock::new(Default::default);
+        std::sync::LazyLock::new(|| {
+            // (Emptied by [`crate::native::clear_caches`].)
+            super::par::kept_cache(|| {
+                *KEPT_MESHES.lock().unwrap_or_else(|e| e.into_inner()) = Default::default();
+            });
+            Default::default()
+        });
     let mut h = super::fingerprint::Key128::new();
     h.f64s(&[defl, b.faces.len() as f64, b.edges.len() as f64]);
     for f in &b.faces {

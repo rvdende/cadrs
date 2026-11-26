@@ -251,7 +251,13 @@ pub fn face_polygons_kept(body: &Body, f: &Face) -> KeptPolygons {
     // (Read by every face of both bodies of every boolean, on as many threads as run
     // booleans at once, and nearly always found: readers don't wait for one another.)
     static KEPT_POLYS: std::sync::LazyLock<std::sync::RwLock<Kept>> =
-        std::sync::LazyLock::new(Default::default);
+        std::sync::LazyLock::new(|| {
+            // (Emptied by [`crate::native::clear_caches`].)
+            super::par::kept_cache(|| {
+                *KEPT_POLYS.write().unwrap_or_else(|e| e.into_inner()) = Default::default();
+            });
+            Default::default()
+        });
     // Each loop's key (the surface and the loop's p-curves over their ranges), and the face's
     // (the loops' in order).
     let loop_keys: Vec<u128> = f

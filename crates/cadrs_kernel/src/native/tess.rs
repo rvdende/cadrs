@@ -2607,7 +2607,13 @@ impl MeshCache {
 
 fn mesh_cache() -> std::sync::MutexGuard<'static, MeshCache> {
     static CACHE: std::sync::LazyLock<std::sync::Mutex<MeshCache>> =
-        std::sync::LazyLock::new(Default::default);
+        std::sync::LazyLock::new(|| {
+            // (Emptied by [`crate::native::clear_caches`].)
+            super::par::kept_cache(|| {
+                *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Default::default();
+            });
+            Default::default()
+        });
     CACHE.lock().unwrap_or_else(|e| e.into_inner())
 }
 

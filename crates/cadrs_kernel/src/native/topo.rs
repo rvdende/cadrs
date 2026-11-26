@@ -2068,7 +2068,13 @@ struct Passed {
 const PASSED: usize = 1 << 19;
 
 static PASSED_FACES: std::sync::LazyLock<std::sync::Mutex<Passed>> =
-    std::sync::LazyLock::new(Default::default);
+    std::sync::LazyLock::new(|| {
+        // (Emptied by [`crate::native::clear_caches`].)
+        super::par::kept_cache(|| {
+            *PASSED_FACES.lock().unwrap_or_else(|e| e.into_inner()) = Default::default();
+        });
+        Default::default()
+    });
 
 /// Which of the faces of these keys passed before.
 fn passed_faces(keys: &[u128]) -> Vec<bool> {
@@ -2157,7 +2163,13 @@ pub(super) fn pcurve_kept(
         old: rustc_hash::FxHashMap<u128, KeptGap>,
     }
     static KEPT_GAPS: std::sync::LazyLock<std::sync::Mutex<Kept>> =
-        std::sync::LazyLock::new(Default::default);
+        std::sync::LazyLock::new(|| {
+            // (Emptied by [`crate::native::clear_caches`].)
+            super::par::kept_cache(|| {
+                *KEPT_GAPS.lock().unwrap_or_else(|e| e.into_inner()) = Default::default();
+            });
+            Default::default()
+        });
     if matches!(
         (&e.curve, pc, surf),
         (
@@ -2438,7 +2450,13 @@ fn flatten_kept(
         old: rustc_hash::FxHashMap<u128, Points>,
     }
     static KEPT_POINTS: std::sync::LazyLock<std::sync::Mutex<Kept>> =
-        std::sync::LazyLock::new(Default::default);
+        std::sync::LazyLock::new(|| {
+            // (Emptied by [`crate::native::clear_caches`].)
+            super::par::kept_cache(|| {
+                *KEPT_POINTS.lock().unwrap_or_else(|e| e.into_inner()) = Default::default();
+            });
+            Default::default()
+        });
     if matches!(pc, Curve::Line { .. }) {
         flatten(pc, t0, t1, scale, flat, tol, r);
         return;
