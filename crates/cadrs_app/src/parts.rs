@@ -77,6 +77,8 @@ impl Plugin for PartsPlugin {
             .gizmo_group::<PickedEdgeGizmos>()
             .gizmo_group::<VertexGizmos>()
             .gizmo_group::<FreeEdgeGizmos>()
+            // A page's kernel: a slice of each frame for the rebuilds under way.
+            .add_systems(First, kernel_slice)
             .add_plugins(crate::part_shading::PartShadingPlugin)
             .add_systems(Startup, (configure_gizmos, defer_regeneration))
             .add_systems(
@@ -462,6 +464,13 @@ impl Default for RebuildBudget {
     fn default() -> Self {
         Self(Some(std::time::Duration::from_millis(8)))
     }
+}
+
+/// A browser page runs the kernel on its one thread: a slice of each frame goes on with the
+/// rebuilds under way, so a document opens at once and its parts come in as they are built
+/// (`cadrs_core::rebuild::tick`; nothing where the kernel has a thread of its own).
+fn kernel_slice() {
+    cadrs_core::rebuild::tick();
 }
 
 /// A rebuild on the kernel thread that the parts are waiting for.
