@@ -119,6 +119,8 @@
     <button class="b" id="bugGh" disabled>Open GitHub issue</button>
     <button class="b" id="rExport" disabled>Export .cadrs files</button>
     <button class="b" id="rFolder" disabled>Open .cadrs folder</button>
+    <button class="b" id="rStep" disabled>Export STEP files</button>
+    <button class="b" id="rStepFolder" disabled>Open STEP folder</button>
   </div>
   <pre id="rep">Run a conversion, or press a button to load the last report.</pre>
 </div>
@@ -322,6 +324,8 @@ function updateReportButtons() {
   $('bugGh').disabled = !has;
   $('rExport').disabled = !has;
   $('rFolder').disabled = !has;
+  $('rStep').disabled = !has;
+  $('rStepFolder').disabled = !has;
 }
 function showReport(w) {
   if (!reports || !reports.report) { $('rep').textContent = 'No import report yet — run a conversion first.'; return; }
@@ -349,6 +353,18 @@ $('rExport').onclick = async () => {
     '\n\nAttach these files to an issue (the New ticket tab saves them separately).';
 };
 $('rFolder').onclick = () => api.openCadrsFolder();
+$('rStep').onclick = async () => {
+  $('rep').textContent = 'Rebuilding the imported documents and writing STEP files…';
+  const r = await api.exportSteps();
+  if (r.error) { $('rep').textContent = r.error; return; }
+  const files = r.documents.flatMap((d) => d.files || []);
+  const bad = r.documents.filter((d) => d.error);
+  $('rep').textContent = `Wrote ${files.length} STEP file(s) to ${r.dir}\n\n` +
+    (files.length ? files.join('\n') : '(none)') +
+    (bad.length ? `\n\nFailed:\n${bad.map((d) => `${d.name}: ${d.error}`).join('\n')}` : '') +
+    '\n\nThese are rebuilt from the imported documents with the cadrs kernel: compare them with Onshape\'s own STEP export of the same Part Studios (the Compare tab does that directly too).';
+};
+$('rStepFolder').onclick = () => api.openStepsFolder();
 $('bug').onclick = () => bug(false);
 $('bugGh').onclick = () => bug(true);
 

@@ -11,6 +11,10 @@
 //!                                                   write stored documents as portable `.cadrs`
 //!                                                   packages (for attaching to an issue, sharing,
 //!                                                   or opening in another cadrs)
+//! cadrs-onshape step <document name or id>… [--out <file.step or dir>] [--all] [--individual]
+//!                                                   rebuild stored documents and export their
+//!                                                   Part Studios as STEP (to compare with Onshape's
+//!                                                   own STEP export)
 //!
 //! --raw <dir>        the scraped data (default ~/work/cadrs_onshape/raw)
 //! --data-dir <dir>   the cadrs document store (default: the app's, as `cadrs` finds it)
@@ -46,6 +50,7 @@ fn main() -> ExitCode {
     let mut json_out: Option<PathBuf> = None;
     let mut out: Option<PathBuf> = None;
     let mut all = false;
+    let mut individual = false;
     // Imported documents belong to the local user, as the app identifies them.
     let mut user = std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
@@ -74,12 +79,14 @@ fn main() -> ExitCode {
             "--json" => json_out = it.next().map(PathBuf::from),
             "--out" => out = it.next().map(PathBuf::from),
             "--all" => all = true,
+            "--individual" => individual = true,
             _ => rest.push(a),
         }
     }
     match rest.first().map(String::as_str) {
         Some("check-queries") => check_queries(&raw_dir),
         Some("export") => export(&data_dir, &rest[1..], out.as_deref(), all),
+        Some("step") => step(&data_dir, &rest[1..], out.as_deref(), all, individual),
         Some("compare") => match (rest.get(1), rest.get(2)) {
             (Some(c), Some(s)) => match cadrs_onshape::compare::compare(c.as_ref(), s.as_ref()) {
                 Ok(j) => {
@@ -125,7 +132,7 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: cadrs-onshape (import [<name or id>…] [--dry-run] [--json <file>] | export <name or id>… [--out <file.cadrs or dir>] [--all] | compare <file.cadrs> <file.step> | check-queries) [--raw <dir>] [--data-dir <dir>]"
+                "usage: cadrs-onshape (import [<name or id>…] [--dry-run] [--json <file>] | export <name or id>… [--out <file.cadrs or dir>] [--all] | step <name or id>… [--out <file.step or dir>] [--all] [--individual] | compare <file.cadrs> <file.step> | check-queries) [--raw <dir>] [--data-dir <dir>]"
             );
             ExitCode::from(2)
         }
@@ -470,6 +477,138 @@ fn export(data_dir: &Option<PathBuf>, names: &[String], out: Option<&Path>, all:
         }
     }
     if failed == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+}
+
+/// Rebuilds stored documents with the cadrs kernel and writes their Part Studios as STEP: one file
+/// per Part Studio (`<document> - <part studio>.step`, or just `<document>.step` when it has one),
+/// every part of it in the file unless `--individual`. This is the STEP to compare with Onshape's
+/// own export of the same Part Studio: `compare` does the same comparison directly from the
+/// stored document, so this is for tools that want a file.
+fn step(
+    data_dir: &Option<PathBuf>,
+    names: &[String],
+    out: Option<&Path>,
+    all: bool,
+    individual: bool,
+) -> ExitCode {
+    let Some(dir) = data_dir else {
+        eprintln!("no document store: pass --data-dir");
+        return ExitCode::from(2);
+    };
+    let store = Store::new(dir.clone());
+    let (library, _) = store.list();
+    let entries: Vec<_> = if all {
+        library.entries.iter().collect()
+    } else {
+        names
+            .iter()
+            .filter_map(|want| {
+                let found = library.entries.iter().find(|e| {
+                    e.name == *want
+                        || e.name.to_lowercase().contains(&want.to_lowercase())
+                        || e.id.0.to_string() == *want
+                });
+                if found.is_none() {
+                    eprintln!("no stored document matching {want}");
+                }
+                found
+            })
+            .collect()
+    };
+    if entries.is_empty() {
+        eprintln!("nothing to export under {}", dir.display());
+        return ExitCode::FAILURE;
+    }
+    let out_dir = match out {
+        Some(p) if !p.extension().is_some_and(|e| e == "step") => p.to_path_buf(),
+        _ => PathBuf::from("step-exports"),
+    };
+    if let Err(e) = std::fs::create_dir_all(&out_dir) {
+        eprintln!("cannot create {}: {e}", out_dir.display());
+        return ExitCode::FAILURE;
+    }
+    let mut failed = 0;
+    for entry in entries {
+        let file = match store.load(entry.id) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("{}: cannot load: {e}", entry.name);
+                failed += 1;
+                continue;
+            }
+        };
+        let studios: Vec<_> = file
+            .document
+            .elements
+            .iter()
+            .filter(|el| matches!(el.kind, cadrs_core::document::ElementKind::PartStudio { .. }))
+            .collect();
+        if studios.is_empty() {
+            eprintln!("{}: no Part Studio", entry.name);
+            failed += 1;
+            continue;
+        }
+        for studio in studios {
+            let features = studio.features_to_build();
+            let built = cadrs_core::rebuild::build(&features);
+            let parts: Vec<(cadrs_core::ids::PartId, String)> = built
+                .parts
+                .iter()
+                .filter(|p| !built.composites.iter().any(|c| c.part == p.id))
+                .map(|p| (p.id, p.name.clone()))
+                .collect();
+            if parts.is_empty() {
+                eprintln!("{} / {}: no parts to export", entry.name, studio.name);
+                failed += 1;
+                continue;
+            }
+            let request = cadrs_core::export::StepRequest {
+                parts,
+                y_up: false,
+                individual,
+            };
+            let files = match cadrs_core::rebuild::export_step(features, request).wait() {
+                Ok(files) => files,
+                Err(e) => {
+                    eprintln!("{} / {}: cannot export STEP: {e}", entry.name, studio.name);
+                    failed += 1;
+                    continue;
+                }
+            };
+            let base = if studios_len(&file.document, &entry.name) > 1 {
+                format!("{} - {}", entry.name, studio.name)
+            } else {
+                entry.name.clone()
+            };
+            for step_file in files {
+                // One file with every part keeps the Part Studio's name; --individual adds the
+                // part's name (and its own file).
+                let stem = if individual {
+                    cadrs_core::export::file_name(&base, step_file.part.as_deref())
+                } else {
+                    cadrs_core::export::sanitize(&base)
+                };
+                let target = cadrs_core::export::unique_path(&out_dir, &stem);
+                match std::fs::write(&target, &step_file.bytes) {
+                    Ok(()) => println!("{}", target.display()),
+                    Err(e) => {
+                        eprintln!("{}: cannot write {}: {e}", entry.name, target.display());
+                        failed += 1;
+                    }
+                }
+            }
+        }
+    }
+    if failed == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+}
+
+/// How many Part Studios a document has (one keeps the file named just after the document).
+fn studios_len(document: &cadrs_core::document::Document, _name: &str) -> usize {
+    document
+        .elements
+        .iter()
+        .filter(|el| matches!(el.kind, cadrs_core::document::ElementKind::PartStudio { .. }))
+        .count()
 }
 
 fn default_raw() -> PathBuf {

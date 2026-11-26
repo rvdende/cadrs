@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('api', {
   reports: () => ipcRenderer.invoke('reports'),
   exportCadrs: () => ipcRenderer.invoke('export-cadrs'),
   openCadrsFolder: () => ipcRenderer.invoke('open-cadrs-folder'),
+  exportSteps: () => ipcRenderer.invoke('export-steps'),
+  openStepsFolder: () => ipcRenderer.invoke('open-steps-folder'),
   ticketsGenerate: () => ipcRenderer.invoke('tickets-generate'),
   ticketCopy: (text) => ipcRenderer.invoke('tickets-copy', text),
   ticketOpen: (ticket) => ipcRenderer.invoke('tickets-open', ticket),

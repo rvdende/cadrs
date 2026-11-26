@@ -122,6 +122,19 @@ test('ui: the Report tab exports the imported documents as .cadrs packages', () 
   assert.match(mainSource, /'export'/);
 });
 
+test('ui: the Report tab also exports rebuilt STEP files', () => {
+  for (const id of ['rStep', 'rStepFolder']) {
+    assert.match(html, new RegExp(`id="${id}"`), `#${id} exists`);
+  }
+  assert.match(html, /api\.exportSteps\(\)/);
+  assert.match(html, /api\.openStepsFolder\(\)/);
+  assert.match(preloadSource, /exportSteps: \(\) => ipcRenderer\.invoke\('export-steps'\)/);
+  assert.match(preloadSource, /openStepsFolder: \(\) => ipcRenderer\.invoke\('open-steps-folder'\)/);
+  assert.match(mainSource, /ipcMain\.handle\('export-steps'/);
+  assert.match(mainSource, /ipcMain\.handle\('open-steps-folder'/);
+  assert.match(mainSource, /'step', String\(doc\.cadrs_id\)/);
+});
+
 test('main: the Onshape pane gets a Chrome identity, GPU switches and navigation IPC', () => {
   assert.match(mainSource, /require\('\.\/chrome'\)/);
   assert.match(mainSource, /app\.userAgentFallback = BROWSER_UA/);

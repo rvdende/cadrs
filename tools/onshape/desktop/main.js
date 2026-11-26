@@ -520,6 +520,46 @@ ipcMain.handle('open-cadrs-folder', () => {
   fs.mkdirSync(dir, { recursive: true });
   return shell.openPath(dir);
 });
+// The same imported documents rebuilt and written as STEP (one file per Part Studio), to compare
+// with Onshape's own STEP export in any CAD tool. The Compare tab does the comparison directly;
+// these files are for an external diff/measure.
+ipcMain.handle('export-steps', () => {
+  const reportFile = path.join(ROOT, 'import-report.json');
+  if (!fs.existsSync(reportFile)) {
+    return { error: 'No import-report.json yet: run a conversion first (a dry run only reports).' };
+  }
+  let report;
+  try {
+    report = JSON.parse(fs.readFileSync(reportFile, 'utf8'));
+  } catch (e) {
+    return { error: `Cannot read ${reportFile}: ${e.message}` };
+  }
+  const docs = (report.documents || []).filter((d) => !d.failed && d.cadrs_id);
+  if (!docs.length) {
+    return { error: 'The last import saved no documents (a dry run only reports). Uncheck "dry run" and convert again.' };
+  }
+  const dir = path.join(ROOT, 'steps');
+  fs.mkdirSync(dir, { recursive: true });
+  const { cmd, args, cwd } = importerCommand();
+  const documents = [];
+  for (const doc of docs) {
+    const r = spawnSync(cmd, [...args, 'step', String(doc.cadrs_id), '--out', dir], {
+      cwd,
+      encoding: 'utf8',
+      maxBuffer: 1 << 28,
+      env: process.env,
+    });
+    if (r.error) documents.push({ name: doc.name, error: r.error.message });
+    else if (r.status !== 0) documents.push({ name: doc.name, error: (r.stderr || '').trim() || `exited ${r.status}` });
+    else documents.push({ name: doc.name, files: (r.stdout || '').split('\n').map((l) => l.trim()).filter(Boolean) });
+  }
+  return { dir, documents };
+});
+ipcMain.handle('open-steps-folder', () => {
+  const dir = path.join(ROOT, 'steps');
+  fs.mkdirSync(dir, { recursive: true });
+  return shell.openPath(dir);
+});
 
 // Ticket drafts: one Markdown GitHub issue per translation defect group, written offline to
 // <root>/tickets/ (INDEX.md + one file per stable dedup key).

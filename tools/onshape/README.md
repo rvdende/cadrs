@@ -113,6 +113,27 @@ Onshape.
 - **A dry run** — `--dry-run` or the app's *dry run* checkbox — only builds and reports: it writes
   no document into the store, so there is nothing to export until it is unchecked and converted.
 
+### Rebuilt from Onshape's data — and how to compare with Onshape's STEP
+
+The import is not a data copy: every feature of the Part Studio is replayed through the cadrs
+command layer and **rebuilt by the cadrs kernel** while it is imported (that is how the report
+knows each part's volume, area and face count and compares them with Onshape's own mass
+properties). A `.cadrs` package contains that feature history, not a cached STEP: it is rebuilt
+again when opened or exported.
+
+To compare a comparison with Onshape's own export:
+
+- **Directly**: `cadrs-onshape compare <file.cadrs> <Onshape STEP>` rebuilds the document and
+  measures it against the STEP (volume, area, box, faces, face kinds) as JSON — the app's
+  *Compare* tab runs the same code.
+- **As STEP files**: `cadrs-onshape step <name or id>… --out <dir>` (or the app's *Report →
+  Export STEP files*, `<root>/steps/`) rebuilds each Part Studio and writes STEP, one file per
+  Part Studio; open them next to Onshape's STEP in any CAD tool.
+
+Example on the real import fixture: the four 5-feature Part Studio rebuilds to 88 651.8177 mm³,
+22 658.7370 mm², 10 faces, box `[-50,-50,0]..[50,50,25]`; our `.cadrs` and Onshape's STEP both
+measure exactly that, so the two STEP files agree.
+
 
 ### If the Onshape pane does not draw (WebGPU/WebGL) or is stuck on a help page
 
@@ -235,6 +256,7 @@ cargo run -r -p cadrs_onshape -- import                     # every scraped docu
 cargo run -r -p cadrs_onshape -- import cabinet --dry-run   # build and report, don't save
 cargo run -r -p cadrs_onshape -- import --json report.json  # also write the JSON report
 cargo run -r -p cadrs_onshape -- export "Capac2" --out Capac2.cadrs  # a portable .cadrs package
+cargo run -r -p cadrs_onshape -- step "Capac2" --out steps/          # rebuilt STEP, one per Part Studio
 ```
 
 - Imported documents keep ids derived from Onshape's, so importing again replaces them.
