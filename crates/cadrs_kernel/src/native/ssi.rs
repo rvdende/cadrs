@@ -114,6 +114,30 @@ pub struct Ssi {
     pub work: u64,
 }
 
+impl Ssi {
+    /// The intersection of the same two surfaces taken the other way round: each curve's two
+    /// p-curves swapped.
+    fn swapped(&self) -> Ssi {
+        let swap = |cs: &[IntCurve]| -> Vec<IntCurve> {
+            cs.iter()
+                .map(|c| IntCurve {
+                    pcs: c
+                        .pcs
+                        .as_ref()
+                        .map(|p| Arc::new([p[1].clone(), p[0].clone()])),
+                    ..c.clone()
+                })
+                .collect()
+        };
+        Ssi {
+            curves: swap(&self.curves),
+            tangent: swap(&self.tangent),
+            coincident: swap(&self.coincident),
+            ..self.clone()
+        }
+    }
+}
+
 /// How near two surfaces must be to coincide (within a part in 10⁹ of the problem's size,
 /// and at least [`super::tol::CONFUSION`]).
 fn coincidence_tol(bb: &Bbox) -> f64 {
@@ -345,14 +369,21 @@ fn traced(
     }
     static KEPT_SSI: std::sync::LazyLock<std::sync::Mutex<Kept>> =
         std::sync::LazyLock::new(Default::default);
-    let mut h = super::fingerprint::Key128::new();
-    h.surface(a);
-    h.surface(b);
-    h.f64s(&[
-        ua.0.0, ua.0.1, ua.1.0, ua.1.1, ub.0.0, ub.0.1, ub.1.0, ub.1.1,
-    ]);
-    h.f64s(&[bb.min.x, bb.min.y, bb.min.z, bb.max.x, bb.max.y, bb.max.z]);
-    let key = h.key();
+    let key_of =
+        |a: &Surface, ua: &((f64, f64), (f64, f64)), b: &Surface, ub: &((f64, f64), (f64, f64))| {
+            let mut h = super::fingerprint::Key128::new();
+            h.surface(a);
+            h.surface(b);
+            h.f64s(&[
+                ua.0.0, ua.0.1, ua.1.0, ua.1.1, ub.0.0, ub.0.1, ub.1.0, ub.1.1,
+            ]);
+            h.f64s(&[bb.min.x, bb.min.y, bb.min.z, bb.max.x, bb.max.y, bb.max.z]);
+            h.key()
+        };
+    let key = key_of(a, &ua, b, &ub);
+    // The pair the other way round (b ∩ a after a ∩ b) is the same curves, each one's two
+    // p-curves swapped (which way a curve runs is the consumer's to settle either way).
+    let swapped = key_of(b, &ub, a, &ua);
     {
         let mut k = KEPT_SSI.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(r) = k.new.get(&key).cloned() {
@@ -361,6 +392,9 @@ fn traced(
         if let Some(r) = k.old.remove(&key) {
             k.new.insert(key, r.clone());
             return r;
+        }
+        if let Some(r) = k.new.get(&swapped).or_else(|| k.old.get(&swapped)) {
+            return r.swapped();
         }
     }
     let r = traced_anew(a, ua, b, ub, bb);
