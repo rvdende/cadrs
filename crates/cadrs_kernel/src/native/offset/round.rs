@@ -560,11 +560,30 @@ fn grown_filleted(b: &Body, dist: &[f64], d: f64) -> Option<Body> {
         return None;
     }
     let sharp = super::sharp::offset_sharp(b, dist).ok()?;
-    if sharp.faces.len() != b.faces.len()
-        || sharp.edges.len() != b.edges.len()
-        || !kinds_ok(&sharp)
-        || !sharp.check_with(CheckLevel::Fast).is_empty()
-    {
+    if sharp.faces.len() != b.faces.len() || sharp.edges.len() != b.edges.len() {
+        return None;
+    }
+    // A face whose sides move toward each other past one another (a groove the distance closes)
+    // keeps its edges in the sharp offset, its outer loop turned the other way round in (u, v):
+    // the fillet after would fail, so nothing is tried.
+    let turn = |b: &Body, fi: usize| -> f64 {
+        let polys = crate::native::classify::face_polygons(b, &b.faces[fi]);
+        polys.first().map_or(0.0, |p| {
+            (0..p.len())
+                .map(|i| {
+                    let (a, c) = (p[i], p[(i + 1) % p.len()]);
+                    a.x * c.y - c.x * a.y
+                })
+                .sum::<f64>()
+        })
+    };
+    if (0..b.faces.len()).any(|fi| {
+        let (was, now) = (turn(b, fi), turn(&sharp, fi));
+        was != 0.0 && !(was.signum() == now.signum())
+    }) {
+        return None;
+    }
+    if !kinds_ok(&sharp) || !sharp.check_with(CheckLevel::Fast).is_empty() {
         return None;
     }
     let edges: Vec<EdgeId> = (0..sharp.edges.len())
