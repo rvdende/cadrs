@@ -275,6 +275,13 @@ impl Screw {
             }
         }
         let sk = NurbsSurface {
+            // (v is the turn: the sections' own parameters.)
+            screw: self.steady().then_some(crate::native::nurbs::ScrewSheet {
+                o: self.o,
+                z: self.z,
+                lift: self.lift,
+                rate: 1.0,
+            }),
             du: n0.degree,
             dv: q,
             ku: n0.knots.clone(),

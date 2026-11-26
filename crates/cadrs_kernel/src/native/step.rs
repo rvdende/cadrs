@@ -3114,6 +3114,7 @@ fn lighter_along_u(n: &NurbsSurface) -> Option<NurbsSurface> {
 fn turned(n: &NurbsSurface) -> NurbsSurface {
     let (along, across) = (n.cps.len(), n.cps.first().map_or(0, |r| r.len()));
     NurbsSurface {
+        screw: None,
         du: n.dv,
         dv: n.du,
         ku: n.kv.clone(),

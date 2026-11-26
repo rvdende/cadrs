@@ -1609,6 +1609,45 @@ pub struct NurbsSurface {
     pub kv: Vec<f64>,
     /// `cps[i][j]`: i along u, j along v.
     pub cps: Vec<Vec<H>>,
+    /// The steady screw that swept it, where one did ([`ScrewSheet`]): kept for the
+    /// intersections it gives in closed form. None for any other surface, and dropped by
+    /// anything that changes its parameters or shape but a similarity.
+    pub screw: Option<ScrewSheet>,
+}
+
+/// How a B-spline surface was swept by a steady screw: `v` the turn (`rate` radians a unit of
+/// it) about the axis through `o` along the unit `z` (right-handed), rising `lift` along `z` a
+/// radian, and `u` the swept curve's own parameter. Each curve of constant u is then the screw's path of a point of the
+/// curve, as its sections interpolate it, the same as the rail of that point
+/// ([`crate::native::sweep::Screw`]): so where the surface meets one the screw leaves on itself
+/// (a cylinder about its axis), the meeting is such curves (after springrep's orbits, MIT OR
+/// Apache-2.0, https://github.com/springcraft-ai/springrep).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScrewSheet {
+    pub o: P3,
+    pub z: V3,
+    pub lift: f64,
+    pub rate: f64,
+}
+
+impl ScrewSheet {
+    /// The screw seen after the similarity `m` (its turn the other way under a reflection);
+    /// None for any other map.
+    pub fn transformed(&self, m: &Affine) -> Option<Self> {
+        let g = m.m.transpose() * m.m;
+        let s2 = g[(0, 0)];
+        if !(s2 > 0.0) || (g - nalgebra::Matrix3::identity() * s2).abs().max() > 1e-12 * s2 {
+            return None;
+        }
+        let scale = s2.sqrt();
+        let flip = if m.m.determinant() < 0.0 { -1.0 } else { 1.0 };
+        Some(ScrewSheet {
+            o: m.point(&self.o),
+            z: (m.m * self.z).normalize() * flip,
+            lift: self.lift * scale * flip,
+            rate: self.rate,
+        })
+    }
 }
 
 impl NurbsCurve {
@@ -1643,6 +1682,7 @@ impl NurbsSurface {
         cps: Vec<Vec<H>>,
     ) -> crate::Result<Self> {
         let s = Self {
+            screw: None,
             du,
             dv,
             ku,
@@ -1715,6 +1755,7 @@ impl NurbsSurface {
     pub fn restricted(&self, u: (f64, f64), v: (f64, f64)) -> Self {
         let (ku, kv, cps) = self.cut_net(u, v);
         Self {
+            screw: None,
             du: self.du,
             dv: self.dv,
             ku,
@@ -2034,6 +2075,7 @@ impl NurbsSurface {
     /// The surface moved by `m`.
     pub fn transformed(&self, m: &Affine) -> Self {
         Self {
+            screw: self.screw.and_then(|w| w.transformed(m)),
             du: self.du,
             dv: self.dv,
             ku: self.ku.clone(),
@@ -2083,6 +2125,7 @@ impl NurbsSurface {
         }
         let cps: Vec<Vec<H>> = (0..ncp).map(|i| cols[i].cps.clone()).collect();
         Self {
+            screw: None,
             du: curves[0].degree,
             dv: cols[0].degree,
             ku: curves[0].knots.clone(),
@@ -2788,6 +2831,7 @@ mod tests {
             })
             .collect();
         let s = NurbsSurface {
+            screw: None,
             du,
             dv,
             ku,
@@ -2977,6 +3021,7 @@ mod tests {
                 k
             };
             let s = NurbsSurface {
+                screw: None,
                 du,
                 dv,
                 ku: knots(nu, du),
@@ -3062,6 +3107,7 @@ mod tests {
                 })
                 .collect();
             let s = NurbsSurface {
+                screw: None,
                 du,
                 dv,
                 ku: clamped(du, &[0.2, 0.55, 0.7]),
@@ -3289,6 +3335,7 @@ mod tests {
             .map(|r| r.iter().map(|p| H::new(p.x, p.y, p.z, 1.0)).collect())
             .collect();
         let s = NurbsSurface {
+            screw: None,
             du: 3,
             dv: 2,
             ku: vec![0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0],
@@ -3386,6 +3433,7 @@ mod tests {
     #[test]
     fn bilinear_surface_derivatives() {
         let s = NurbsSurface {
+            screw: None,
             du: 1,
             dv: 1,
             ku: vec![0.0, 0.0, 1.0, 1.0],

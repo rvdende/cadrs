@@ -240,7 +240,90 @@ fn closed_forms(
     if let Some(r) = shared_circle(a, ua, b, bb).or_else(|| shared_circle(b, ub, a, bb)) {
         return Some(closed(r));
     }
+    if let Some(r) = screw_cylinder(a, b, bb) {
+        return Some(closed(r));
+    }
+    if let Some(r) = screw_cylinder(b, a, bb) {
+        // (Its p-curves the other way round: a's first.)
+        let swapped = r
+            .into_iter()
+            .map(|mut c| {
+                c.pcs = c.pcs.map(|p| Arc::new([p[1].clone(), p[0].clone()]));
+                c
+            })
+            .collect();
+        return Some(closed(swapped));
+    }
     None
+}
+
+/// A B-spline surface a steady screw swept ([`super::nurbs::ScrewSheet`]: v its turn) and a
+/// cylinder about the screw's axis, which the screw carries onto itself: a point the two share
+/// stays shared along the screw, so they meet in the screw's paths of the points where the
+/// sheet's first curve (at the start of its turn) meets the cylinder, each the sheet's whole
+/// turn long. Each path is the sheet's curve of constant u there, on the sheet a line of its
+/// parameters, and on the cylinder the helix of the screw, a line of its parameters too. (After
+/// springrep's orbits, MIT OR Apache-2.0, https://github.com/springcraft-ai/springrep.) `a`'s
+/// p-curve first. None for any other pair, or where the first curve lies on the cylinder or
+/// touches it (the pair is traced).
+fn screw_cylinder(a: &Surface, b: &Surface, bb: &Bbox) -> Option<Vec<IntCurve>> {
+    let (Surface::Nurbs(ns), Surface::Cylinder { f, r }) = (a, b) else {
+        return None;
+    };
+    let w = ns.screw?;
+    let size = bb.diagonal().max(*r).max(tol::POINT);
+    let z = f.z.normalize();
+    let off = f.o - w.o;
+    if z.cross(&w.z).norm() > tol::ANGULAR || (off - w.z * off.dot(&w.z)).norm() > 1e-9 * size {
+        return None;
+    }
+    let ((u0, u1), (v0, v1)) = ns.range();
+    let first = Curve::Nurbs(Arc::new(ns.iso_v_curve(v0)));
+    // (Off the cylinder by its radial distance, its sign the side.)
+    let gap = |t: f64| {
+        let q = first.point(t) - f.o;
+        (q - z * q.dot(&z)).norm() - r
+    };
+    // The first curve on the cylinder over a stretch: the pair is traced.
+    let near = 1e-7 * size;
+    if (0..=16)
+        .filter(|i| gap(u0 + (u1 - u0) * *i as f64 / 16.0).abs() <= near)
+        .count()
+        > 2
+    {
+        return None;
+    }
+    let roots = curve_surface(&first, u0, u1, b);
+    let sigma = if z.dot(&w.z) > 0.0 { 1.0 } else { -1.0 };
+    let line = |ox: f64, oy: f64, dx: f64, dy: f64| Curve::Line {
+        o: P3::new(ox, oy, 0.0),
+        d: V3::new(dx, dy, 0.0),
+    };
+    let mut out = Vec::new();
+    for &t in &roots {
+        // Crossing, not touching: the first curve's distance from the axis changes there.
+        let h = 1e-6 * (u1 - u0);
+        let (ga, gb) = (gap((t - h).max(u0)), gap((t + h).min(u1)));
+        if !(ga * gb < 0.0) {
+            return None;
+        }
+        let p0 = first.point(t) - f.o;
+        let (theta0, h0) = (p0.dot(&f.y).atan2(p0.dot(&f.x)), p0.dot(&z));
+        // (Turned `rate` a unit of v, and risen `lift` a radian of that.)
+        let (k, rise) = (sigma * w.rate, sigma * w.lift * w.rate);
+        let c = Curve::Nurbs(Arc::new(ns.iso_u_curve(t)));
+        out.push(IntCurve {
+            c,
+            t0: v0,
+            t1: v1,
+            closed: false,
+            pcs: Some(Arc::new([
+                Some(line(t, 0.0, 0.0, 1.0)),
+                Some(line(theta0 - k * v0, h0 - rise * v0, k, rise)),
+            ])),
+        });
+    }
+    Some(out)
 }
 
 /// [`surface_surface_tol`] for a pair without a closed form: a graph over one parameter of
@@ -4129,6 +4212,7 @@ mod tests {
         use crate::native::nurbs::{H, NurbsSurface};
         let pole = |x: f64, y: f64| H::new(x, y, 10.0 + x * y / 8.0, 1.0);
         let patch = NurbsSurface {
+            screw: None,
             du: 1,
             dv: 1,
             ku: vec![0.0, 0.0, 1.0, 1.0],

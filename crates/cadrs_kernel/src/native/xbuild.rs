@@ -1840,6 +1840,8 @@ impl XBuilder {
         };
         let per = periods(s);
         let mut n: NurbsSurface = (**n0).clone();
+        // (Its parameters moved: a screw's turn no longer v as it was.)
+        n.screw = None;
         let mut changed = false;
         for (dir, p) in [(0usize, per.pu), (1, per.pv)] {
             let Some(pd) = p else { continue };

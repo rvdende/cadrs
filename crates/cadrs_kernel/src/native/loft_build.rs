@@ -258,6 +258,7 @@ pub(crate) fn skin(curves: &[NurbsCurve], v: &[f64]) -> NurbsSurface {
             .map(|i| vec![curves[0].cps[i], curves[1].cps[i]])
             .collect();
         return NurbsSurface {
+            screw: None,
             du: curves[0].degree,
             dv: 1,
             ku: curves[0].knots.clone(),
@@ -314,6 +315,7 @@ fn skin_degree(curves: &[NurbsCurve], v: &[f64], q: usize) -> NurbsSurface {
         );
     }
     NurbsSurface {
+        screw: None,
         du: curves[0].degree,
         dv: q,
         ku: curves[0].knots.clone(),
@@ -611,6 +613,7 @@ fn skin_conditioned(
         );
     }
     NurbsSurface {
+        screw: None,
         du: curves[0].degree,
         dv,
         ku: curves[0].knots.clone(),
@@ -1912,6 +1915,7 @@ fn loft_sampled(k: &NativeKernel, spec: &LoftSpec, solid: bool) -> Result<Built>
             cols.push(c.cps);
         }
         surfs.push(NurbsSurface {
+            screw: None,
             du: curves[0].degree,
             dv: 3.min(cols[0].len() - 1),
             ku: curves[0].knots.clone(),

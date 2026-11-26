@@ -378,3 +378,108 @@ fn a_frustum_shelled_open_at_its_base_by_its_section() {
     assert!((got - want).abs() <= 1e-9 * want, "volume {got} vs {want}");
     assert!(k.get(s).unwrap().check().is_empty());
 }
+
+#[test]
+fn a_coil_meets_a_cylinder_about_its_axis_along_helices() {
+    // A circle screwed three turns about z, and a cylinder about z through its tube: every
+    // side face of the coil keeps its screw, and meets the cylinder in curves of the screw,
+    // their p-curves lines on both surfaces. The booleans agree: |a ∪ b| + |a ∩ b| = |a| + |b|.
+    use cadrs_kernel::native::NativeKernel;
+    use cadrs_kernel::native::surface::Surface;
+    use cadrs_kernel::*;
+    use nalgebra::{Point2, Point3, Unit, Vector3};
+    let mut k = NativeKernel::new();
+    let profile = Profile::new(
+        Plane {
+            origin: Point3::origin(),
+            x_dir: Unit::new_normalize(Vector3::x()),
+            normal: Unit::new_normalize(-Vector3::y()),
+        },
+        vec![Region {
+            outer: Loop {
+                curves: vec![Curve2::Circle {
+                    center: Point2::new(7.79, 0.89),
+                    radius: 0.48,
+                    source: None,
+                }],
+            },
+            holes: vec![],
+            source: None,
+        }],
+    );
+    let axis = Axis {
+        origin: Point3::origin(),
+        dir: Unit::new_normalize(Vector3::z()),
+    };
+    let coil = k
+        .screw(
+            &profile,
+            &ScrewSpec {
+                axis,
+                rise: 0.516,
+                angle: 18.6,
+            },
+        )
+        .unwrap()
+        .bodies[0];
+    let cyl = k
+        .primitive(&Primitive::Cylinder {
+            base: Point3::new(0.0, 0.0, -1.0),
+            axis: Unit::new_normalize(Vector3::z()),
+            radius: 7.697,
+            height: 13.39,
+        })
+        .unwrap()
+        .bodies[0];
+    let (a, b) = (
+        (**k.get(coil).unwrap()).clone(),
+        (**k.get(cyl).unwrap()).clone(),
+    );
+    let sheets: Vec<&Surface> = a
+        .faces
+        .iter()
+        .filter_map(|f| matches!(&f.surf, Surface::Nurbs(_)).then_some(&f.surf))
+        .collect();
+    assert!(!sheets.is_empty());
+    assert!(
+        sheets
+            .iter()
+            .all(|s| matches!(s, Surface::Nurbs(n) if n.screw.is_some()))
+    );
+    let side = &b
+        .faces
+        .iter()
+        .find(|f| matches!(f.surf, Surface::Cylinder { .. }))
+        .unwrap()
+        .surf;
+    let any = ((-100.0, 100.0), (-100.0, 100.0));
+    let bb = Bbox {
+        min: Point3::new(-20.0, -20.0, -20.0),
+        max: Point3::new(20.0, 20.0, 20.0),
+    };
+    let curves = ssi::surface_surface(sheets[0], any, side, any, &bb);
+    assert_eq!(curves.len(), 2, "the tube crosses the cylinder twice");
+    for ic in &curves {
+        let pcs = ic.pcs.as_ref().expect("the screw's p-curves");
+        for (pc, s) in pcs.iter().zip([sheets[0], side]) {
+            let pc = pc.as_ref().unwrap();
+            assert!(matches!(pc, Curve::Line { .. }));
+            for i in 0..=8 {
+                let t = ic.t0 + (ic.t1 - ic.t0) * i as f64 / 8.0;
+                let q = pc.point(t);
+                assert!((s.eval(q.x, q.y) - ic.c.point(t)).norm() <= 1e-8);
+            }
+        }
+    }
+    let u = k.boolean(BoolOp::Union, coil, &[cyl]).unwrap().bodies[0];
+    let i = k.boolean(BoolOp::Intersect, coil, &[cyl]).unwrap().bodies[0];
+    for id in [u, i] {
+        assert!(k.get(id).unwrap().check().is_empty());
+    }
+    let v = |k: &NativeKernel, id| k.mass_properties(id).unwrap().volume;
+    let (vu, vi, va, vb) = (v(&k, u), v(&k, i), v(&k, coil), v(&k, cyl));
+    assert!(
+        (vu + vi - va - vb).abs() <= 1e-7 * (va + vb),
+        "{vu} + {vi} vs {va} + {vb}"
+    );
+}

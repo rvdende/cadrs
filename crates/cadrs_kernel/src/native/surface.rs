@@ -1028,6 +1028,7 @@ impl Surface {
                 })
                 .collect();
             NurbsSurface {
+                screw: None,
                 du: arc.degree,
                 dv: m.degree,
                 ku: arc.knots.clone(),
@@ -1040,6 +1041,7 @@ impl Surface {
             Surface::Plane { .. } => {
                 let c = |a: f64, b: f64| h(self.eval(a, b), 1.0);
                 NurbsSurface {
+                    screw: None,
                     du: 1,
                     dv: 1,
                     ku: vec![u.0, u.0, u.1, u.1],
@@ -1090,6 +1092,7 @@ impl Surface {
                     })
                     .collect();
                 NurbsSurface {
+                    screw: None,
                     du: cn.degree,
                     dv: 1,
                     ku: cn.knots.clone(),

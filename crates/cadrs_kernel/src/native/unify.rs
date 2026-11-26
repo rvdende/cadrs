@@ -85,9 +85,17 @@ fn own_pc(s: &Surface, e: &Edge, c: &Coedge, at: Option<P2>) -> Option<Curve> {
 /// The p-curve on `s` of a chain's first coedge, in the chart round `center` (its start the
 /// nearest of the surface's periods to it): the coedge's own where it is a fitted one that
 /// still puts `s` on its edge ([`own_pc`]), else fitted anew.
+/// Whether coedge `c`'s own p-curve of `e` is worth keeping over a new one ([`own_pc`] then
+/// checks it still lies on the edge): a fitted one, or a line under a B-spline edge (a screw's
+/// path on a cylinder about its axis: its helix, exactly), which a new one would be a fit for.
+fn kept_pc(c: &Coedge, e: &Edge) -> bool {
+    matches!(c.pc, Curve::Nurbs(_))
+        || (matches!(c.pc, Curve::Line { .. }) && matches!(e.curve, Curve::Nurbs(_)))
+}
+
 fn first_pc(s: &Surface, b: &Body, c: &Coedge, center: P2) -> Curve {
     let e = &b.edges[c.edge];
-    if matches!(c.pc, Curve::Nurbs(_))
+    if kept_pc(c, e)
         && !e.degenerate
         && !super::env_flag!("CADRS_NO_PC_REUSE")
         && let Some(pc) = own_pc(s, e, c, None)
@@ -122,7 +130,7 @@ fn chain_pc(s: &Surface, b: &Body, c: &Coedge, at: Option<P2>) -> Curve {
         // and starts where the chain is: faces merged on one surface keep the p-curves
         // their edges had on it, and fitting one again is a projection a point (an
         // intersection curve on a cylinder: milliseconds a merge).
-        if matches!(c.pc, Curve::Nurbs(_))
+        if kept_pc(c, e)
             && !super::env_flag!("CADRS_NO_PC_REUSE")
             && let Some(pc) = own_pc(s, e, c, at)
         {

@@ -1246,6 +1246,7 @@ fn transposed(f: &Face) -> Option<Face> {
     }
     let (nu, nv) = (ns.cps.len(), ns.cps.first()?.len());
     let swapped = super::nurbs::NurbsSurface {
+        screw: None,
         du: ns.dv,
         dv: ns.du,
         ku: ns.kv.clone(),

@@ -3215,6 +3215,7 @@ fn screwed_ball(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<R
                     super::nurbs::H::new(q.x, q.y, q.z, 1.0)
                 };
                 let surf = Surface::Nurbs(std::sync::Arc::new(super::nurbs::NurbsSurface {
+                    screw: None,
                     du: curve.degree,
                     dv: 1,
                     ku: curve.knots.clone(),
