@@ -768,7 +768,17 @@ fn ray_ruled(ns: &super::nurbs::NurbsSurface, o: &P3, d: &V3) -> Option<Vec<(f64
     let (v0, v1) = (ns.kv[1], ns.kv[2]);
     // A row's homogeneous point at u in span j (de Boor).
     let row = |j: usize, u: f64, side: usize| -> H {
-        let mut q: Vec<H> = (0..=p).map(|r| ns.cps[j - p + r][side]).collect();
+        let mut buf = [H::new(0.0, 0.0, 0.0, 0.0); 16];
+        let mut heap: Vec<H>;
+        let q: &mut [H] = if p < 16 {
+            &mut buf[..=p]
+        } else {
+            heap = vec![H::new(0.0, 0.0, 0.0, 0.0); p + 1];
+            &mut heap
+        };
+        for (r, x) in q.iter_mut().enumerate() {
+            *x = ns.cps[j - p + r][side];
+        }
         for r in 1..=p {
             for i in (r..=p).rev() {
                 let lo = k[j - p + i];
@@ -1071,8 +1081,19 @@ fn nurbs_plane_crossings(c: &super::nurbs::NurbsCurve, n: &V3, o: &P3) -> Vec<f6
         .collect();
     let scale = g.iter().fold(0.0f64, |m, x| m.max(x.abs())).max(tol::TINY);
     // g at u in span j (de Boor on the scalar coefficients).
+    // (On the stack up to degree 15: this runs for every ray against every extruded spline.)
     let eval = |j: usize, u: f64| -> f64 {
-        let mut d: Vec<f64> = (0..=p).map(|r| g[j - p + r]).collect();
+        let mut buf = [0.0f64; 16];
+        let mut heap: Vec<f64>;
+        let d: &mut [f64] = if p < 16 {
+            &mut buf[..=p]
+        } else {
+            heap = vec![0.0; p + 1];
+            &mut heap
+        };
+        for (r, x) in d.iter_mut().enumerate() {
+            *x = g[j - p + r];
+        }
         for r in 1..=p {
             for i in (r..=p).rev() {
                 let lo = k[j - p + i];
@@ -1118,28 +1139,39 @@ fn nurbs_plane_crossings(c: &super::nurbs::NurbsCurve, n: &V3, o: &P3) -> Vec<f6
                 } else if cur.1 == 0.0 {
                     cur.0
                 } else {
-                    let (mut a, mut b, mut fa) = (prev.0, cur.0, prev.1);
-                    for _ in 0..60 {
-                        let mid = 0.5 * (a + b);
-                        let fm = eval(j, mid);
-                        if fm == 0.0 || (b - a) <= 1e-15 * (1.0 + mid.abs()) {
-                            a = mid;
-                            b = mid;
+                    // Regula falsi, Illinois style: bracketed, near Newton's speed.
+                    let (mut a, mut b, mut fa, mut fb) = (prev.0, cur.0, prev.1, cur.1);
+                    let mut side = 0i8;
+                    let mut t = 0.5 * (a + b);
+                    for _ in 0..100 {
+                        t = (a * fb - b * fa) / (fb - fa);
+                        if !(t > a && t < b) {
+                            t = 0.5 * (a + b);
+                        }
+                        if (b - a) <= 1e-15 * (1.0 + t.abs()) {
                             break;
                         }
-                        if (fm < 0.0) == (fa < 0.0) {
-                            a = mid;
-                            fa = fm;
+                        let ft = eval(j, t);
+                        if ft == 0.0 || ft.abs() <= 1e-15 * scale {
+                            break;
+                        }
+                        if (ft < 0.0) == (fa < 0.0) {
+                            a = t;
+                            fa = ft;
+                            if side == -1 {
+                                fb *= 0.5;
+                            }
+                            side = -1;
                         } else {
-                            b = mid;
-                        }
-                        if fm.abs() <= 1e-15 * scale {
-                            a = mid;
-                            b = mid;
-                            break;
+                            b = t;
+                            fb = ft;
+                            if side == 1 {
+                                fa *= 0.5;
+                            }
+                            side = 1;
                         }
                     }
-                    0.5 * (a + b)
+                    t
                 };
                 if out
                     .last()
