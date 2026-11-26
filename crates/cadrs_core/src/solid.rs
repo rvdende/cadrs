@@ -202,21 +202,22 @@ pub struct Solid {
     /// Bounding boxes for picking, built on the first pick ([`Solid::pick_index`]).
     #[serde(skip)]
     pub pick_cache: PickCache,
-    /// What this mesh is a moved copy of, when [`Solid::instance`] made it: a pattern's copies
-    /// travel from the kernel process as their seed's id and a pose, not as meshes
-    /// (`crate::rebuild::process`). Never saved; a clone of the mesh (to change it) drops it.
+    /// What this mesh is a moved copy of, when [`Solid::instance`] or [`Solid::placed`] made
+    /// it: a pattern's copies travel from the kernel process as their seed's id and a pose, not
+    /// as meshes (`crate::rebuild::process`), and the view draws every copy of a seed from one
+    /// mesh. Never saved; a clone of the mesh (to change it) drops it.
     #[serde(skip)]
     pub instance_of: InstanceOf,
 }
 
-/// The seed a [`Solid`] is a moved, renamed copy of ([`Solid::instance`]).
+/// The seed a [`Solid`] is a moved copy of ([`Solid::instance`], [`Solid::placed`]).
 #[derive(Debug)]
 pub struct SolidInstance {
     pub seed: std::sync::Arc<Solid>,
     pub pose: crate::assembly::Pose,
-    /// The pattern (or mirror) the copy is instance `instance` of.
-    pub op: OpId,
-    pub instance: u32,
+    /// The pattern (or mirror) the copy is instance `.1` of, its faces renamed for it; `None`
+    /// for an assembly's placement of a part, named as its seed.
+    pub pattern: Option<(OpId, u32)>,
 }
 
 /// [`Solid::instance_of`]: only on the mesh [`Solid::instance`] made, not on its clones, and
@@ -276,8 +277,20 @@ impl Solid {
         s.instance_of = InstanceOf(Some(std::sync::Arc::new(SolidInstance {
             seed: seed.clone(),
             pose: *pose,
-            op,
-            instance: k,
+            pattern: Some((op, k)),
+        })));
+        s
+    }
+
+    /// A part's mesh moved by `pose` as an assembly places it ([`crate::assembly::transform_solid`]),
+    /// remembering what it is a copy of ([`Solid::instance_of`]): a part placed many times is
+    /// drawn from one mesh.
+    pub fn placed(seed: &std::sync::Arc<Solid>, pose: &crate::assembly::Pose) -> Solid {
+        let mut s = crate::assembly::transform_solid(seed, pose);
+        s.instance_of = InstanceOf(Some(std::sync::Arc::new(SolidInstance {
+            seed: seed.clone(),
+            pose: *pose,
+            pattern: None,
         })));
         s
     }

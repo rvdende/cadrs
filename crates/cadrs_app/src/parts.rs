@@ -2202,7 +2202,15 @@ pub fn shared_faces<'a>(
     // Other curved faces: compared mesh to mesh.
     let mut others: Vec<(Planar, &'a Part, Option<cadrs_kernel::SurfaceKind>)> = Vec::new();
     for (order, part) in parts.enumerate() {
-        if part.solid.instance_of.0.is_some() {
+        // (A pattern's copies; an assembly's placements of a part touch other parts as much
+        // as any part does.)
+        if part
+            .solid
+            .instance_of
+            .0
+            .as_ref()
+            .is_some_and(|i| i.pattern.is_some())
+        {
             continue;
         }
         for (fi, f) in part.solid.faces.iter().enumerate() {
@@ -3025,8 +3033,9 @@ type MeshKey = (u64, u64, Option<FeatureId>, GhostKey, bool, Vec<PartId>);
 #[derive(Resource, Default)]
 struct PartMeshStore {
     meshes: HashMap<(Option<ElementId>, PartId), StoredMesh>,
-    /// A pattern's copies share one mesh of their seed, each placed by its pose (a pattern of
-    /// thousands made and uploaded thousands of meshes, a second of one frame, for one shape):
+    /// A pattern's copies, and an assembly's placements of a part, share one mesh of their seed,
+    /// each placed by its pose (a pattern of thousands made and uploaded thousands of meshes, a
+    /// second of one frame, for one shape; one mesh, the GPU draws them as instances of it):
     /// by tab, the seed's mesh (by its address, which it keeps while a copy holds it) and
     /// whether as a preview.
     shared: HashMap<(Option<ElementId>, usize, bool), SharedMesh>,
@@ -3058,8 +3067,9 @@ struct StoredMesh {
 
 impl PartMeshStore {
     /// The mesh of `part` as `preview` with these face colours: the stored one if it is still
-    /// that, else a new one. A pattern's copy gets its seed's shared mesh and the pose to draw
-    /// it at (its own mesh once it is coloured apart: [`shade_parts`]).
+    /// that, else a new one. A pattern's copy, or a part placed by an assembly, gets its seed's
+    /// shared mesh and the pose to draw it at (its own mesh once it is coloured apart:
+    /// [`shade_parts`]).
     fn mesh(
         &mut self,
         meshes: &mut Assets<Mesh>,
@@ -5449,6 +5459,69 @@ pub fn part_layers() -> RenderLayers {
 mod tests {
     use super::*;
     use crate::camera::StandardView;
+
+    /// An assembly's placements of one part are drawn from one mesh, each at its placement:
+    /// three placements of the motor mount's bracket make one mesh, not three.
+    #[test]
+    fn an_assemblys_placements_of_a_part_share_one_mesh() {
+        use cadrs_core::assembly::commands::InsertInstance;
+        use cadrs_core::assembly::{Instance, InstanceId, InstanceSource, Pose};
+        use cadrs_core::commands::{AddElement, NewElementKind};
+        use cadrs_core::samples::motor_mount as mm;
+        let mut doc = mm::document().unwrap();
+        let mut h = cadrs_core::History::default();
+        let asm = ElementId::from_u128(0x3b01_0000_0000_0000_0000_0000_0000_0299);
+        h.execute(
+            &mut doc,
+            &AddElement {
+                id: asm,
+                kind: NewElementKind::Assembly,
+                name: None,
+                after: None,
+            },
+        )
+        .unwrap();
+        for k in 0..3 {
+            let source = InstanceSource::Part {
+                element: mm::STUDIO,
+                part: mm::PART,
+            };
+            let pose = Pose::translation([k as f64 * 100.0, 0.0, 0.0]);
+            h.execute(
+                &mut doc,
+                &InsertInstance {
+                    element: asm,
+                    instance: Instance::new(InstanceId::from_u128(70 + k), source, pose),
+                },
+            )
+            .unwrap();
+        }
+        let build = cadrs_core::rebuild::build(doc.element(mm::STUDIO).unwrap().features());
+        let (parts, props) = cadrs_core::assembly::instance_parts(
+            &doc,
+            doc.element(asm).unwrap().assembly_model().unwrap(),
+            |e| (e == mm::STUDIO).then(|| build.clone()),
+        );
+        let mut meshes = Assets::<Mesh>::default();
+        let mut store = PartMeshStore::default();
+        let drawn: Vec<(Handle<Mesh>, Option<Mat4>)> = parts
+            .iter()
+            .map(|p| {
+                let bases = face_bases(p, &props, &[]);
+                store.mesh(&mut meshes, Some(asm), p, false, bases)
+            })
+            .collect();
+        assert_eq!(meshes.len(), 1, "one mesh for three placements");
+        assert!(drawn.iter().all(|(m, _)| *m == drawn[0].0));
+        for (k, (_, pose)) in drawn.iter().enumerate() {
+            let pose = pose.expect("drawn at its placement");
+            assert!(
+                pose.w_axis
+                    .truncate()
+                    .abs_diff_eq(Vec3::X * 100.0 * k as f32, 1e-4)
+            );
+        }
+    }
 
     fn srgb(c: Color) -> [u8; 3] {
         let s = c.to_srgba();

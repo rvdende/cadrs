@@ -829,7 +829,7 @@ pub fn instance_parts_placed(
             solid: {
                 let solid = match last.remove(&id) {
                     Some((from, pose, s)) if Arc::ptr_eq(&from, &src.solid) && pose == o.pose => s,
-                    _ => Arc::new(transform_solid(&src.solid, &o.pose)),
+                    _ => Arc::new(Solid::placed(&src.solid, &o.pose)),
                 };
                 placed
                     .0
