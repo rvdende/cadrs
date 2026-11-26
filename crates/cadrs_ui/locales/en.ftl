@@ -1560,6 +1560,8 @@ view-part-hide-named = Hide { $name }
 view-part-fallback-name = part
 # A part's context menu.
 view-part-assign-material = Assign material…
+# Right-click a part's face in a Part Studio: select the part and scroll the Parts list to it.
+view-ctx-find-in-parts-list = Find in parts list
 view-part-edit-appearance = Edit appearance…
 view-part-add-to-folder = Add to folder
 view-part-remove-from-folder = Remove from folder
@@ -3426,6 +3428,8 @@ asm-menu-linked-no-tab = A linked instance shows a frozen version of its source:
 asm-menu-edit-standard-instance = Edit standard content instance…
 asm-menu-select-same-config = Select instances with same configuration
 asm-menu-select-same-part = Select instances with same part and same configuration
+# Every instance of the same part (or subassembly) in the same configuration.
+asm-menu-select-all-instances = Select all instances
 # { $count } is how many instances are copied.
 asm-menu-copy-items = Copy { $count } items
 # { $name } is the instance's name.
