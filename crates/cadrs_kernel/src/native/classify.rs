@@ -1717,6 +1717,9 @@ pub struct Classifier<'a> {
     starts: Vec<Option<(f64, f64)>>,
     /// Each parametric face's grid for rays, made at the first ray that reaches the face.
     grids: Vec<std::sync::OnceLock<RayGrid>>,
+    /// For a convex body of planes, balls, cylinders and frustums: each face and the sign that
+    /// makes its surface's signed distance positive outside the body ([`Self::convex_faces`]).
+    convex: std::sync::OnceLock<Option<Vec<(usize, f64)>>>,
 }
 
 /// A face's polygons made on demand: kept, their (u, v) range and the start for projections.
@@ -1832,7 +1835,71 @@ impl<'a> Classifier<'a> {
             hold,
             starts,
             grids: (0..body.faces.len()).map(|_| Default::default()).collect(),
+            convex: std::sync::OnceLock::new(),
         }
+    }
+
+    /// The body's faces with signs ([`Self::convex`]) where it is convex: one solid of planes,
+    /// spheres, cylinders and cones (no apex) whose curved faces bulge outward, and every
+    /// sampled point of every face's loops on or inside every face's surface (at a concave edge
+    /// one face's points lie outside the other's). Then a point is inside the body exactly
+    /// where it is inside every face's surface. None otherwise, or for a lazy classifier.
+    fn convex_faces(&self) -> Option<&[(usize, f64)]> {
+        self.convex
+            .get_or_init(|| {
+                let b = self.body;
+                if !self.lazy.is_empty()
+                    || b.solids.len() != 1
+                    || b.shells.len() != 1
+                    || b.faces.is_empty()
+                    || b.edges.iter().any(|e| e.degenerate)
+                {
+                    return None;
+                }
+                let mut sides = Vec::with_capacity(b.faces.len());
+                for (fi, f) in b.faces.iter().enumerate() {
+                    let sign = match &f.surf {
+                        Surface::Plane { .. } => {
+                            if f.sense {
+                                1.0
+                            } else {
+                                -1.0
+                            }
+                        }
+                        Surface::Sphere { .. }
+                        | Surface::Cylinder { .. }
+                        | Surface::Cone { .. }
+                            if f.sense =>
+                        {
+                            1.0
+                        }
+                        _ => return None,
+                    };
+                    sides.push((fi, sign));
+                }
+                let size = self.bbox.diagonal().max(tol::POINT);
+                let slack = 1e-9 * (size + self.bbox.center().coords.norm());
+                let outside = |q: &P3| {
+                    sides.iter().any(|&(fi, sign)| {
+                        b.faces[fi]
+                            .surf
+                            .signed_distance(q)
+                            .is_none_or(|d| d * sign > slack)
+                    })
+                };
+                if b.verts.iter().any(|v| outside(&v.p)) {
+                    return None;
+                }
+                for (fi, f) in b.faces.iter().enumerate() {
+                    for ring in self.face(fi).polys {
+                        if ring.iter().any(|q| outside(&f.surf.eval(q.x, q.y))) {
+                            return None;
+                        }
+                    }
+                }
+                Some(sides)
+            })
+            .as_deref()
     }
 
     /// The (u, v) on face `fi`'s surface nearest `p`: from the face's start, and from the
@@ -1871,6 +1938,24 @@ impl<'a> Classifier<'a> {
         // Past the body's box (and the tolerance asked): outside, no ray needed.
         if !self.hold.grow(tol).contains(p) {
             return crate::PointClass::Outside;
+        }
+        // A convex body: inside every face's surface is inside, outside any is outside; only a
+        // point within the tolerance of the boundary is settled face by face below.
+        if let Some(sides) = self.convex_faces() {
+            let d = sides.iter().fold(f64::NEG_INFINITY, |m, &(fi, sign)| {
+                m.max(
+                    self.body.faces[fi]
+                        .surf
+                        .signed_distance(p)
+                        .map_or(f64::INFINITY, |d| d * sign),
+                )
+            });
+            if d > tol {
+                return crate::PointClass::Outside;
+            }
+            if d < -tol {
+                return crate::PointClass::Inside;
+            }
         }
         let mut near = {
             let mut at = Bbox::empty();
