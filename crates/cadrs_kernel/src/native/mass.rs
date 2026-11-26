@@ -1741,6 +1741,29 @@ pub(crate) fn volume_for_sign(body: &Body) -> f64 {
     rough_volume(body).unwrap_or_else(|| faces_volume(body))
 }
 
+thread_local! {
+    /// The body (by address) whose volume a caller already knows, and that volume
+    /// ([`with_known_volume`]).
+    static KNOWN_VOLUME: std::cell::Cell<Option<(usize, f64)>> = const { std::cell::Cell::new(None) };
+}
+
+/// `f` with `b`'s volume known to be `v` (when Some): [`input_volume`] of `b` gives it then
+/// rather than integrating (an operation checking its result against its input's volume).
+pub(crate) fn with_known_volume<R>(b: &Body, v: Option<f64>, f: impl FnOnce() -> R) -> R {
+    let was = KNOWN_VOLUME.with(|k| k.replace(v.map(|v| (b as *const Body as usize, v))));
+    let r = f();
+    KNOWN_VOLUME.with(|k| k.set(was));
+    r
+}
+
+/// [`body_volume`] of an operation's input, the known one where [`with_known_volume`] gave it.
+pub(crate) fn input_volume(b: &Body) -> f64 {
+    match KNOWN_VOLUME.with(|k| k.get()) {
+        Some((at, v)) if at == b as *const Body as usize => v,
+        _ => body_volume(b),
+    }
+}
+
 /// The volume a body's faces bound, whether or not they are made up into shells and solids
 /// yet (closed and facing out taken on trust).
 pub(crate) fn faces_volume(body: &Body) -> f64 {

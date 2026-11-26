@@ -1728,6 +1728,44 @@ pub struct Classifier<'a> {
     convex: std::sync::OnceLock<Option<Vec<(usize, f64)>>>,
 }
 
+/// The sign that turns `f`'s surface's signed distance positive outside the solid it bounds:
+/// the face's outward normal (its surface's own, turned by its sense) against the distance's
+/// gradient at a point of the face (a mirrored ball's frame turns its normal round, not its
+/// distance). None where either can't be had there.
+fn outward_sign(f: &Face) -> Option<f64> {
+    let ((u0, u1), (v0, v1)) = f.surf.param_box();
+    let (u, v) = (0.5 * (u0 + u1), 0.5 * (v0 + v1));
+    let (u, v) = if u.is_finite() && v.is_finite() {
+        (u, v)
+    } else {
+        (0.0, 0.0)
+    };
+    let p = f.surf.eval(u, v);
+    let n = f.surf.normal(u, v) * if f.sense { 1.0 } else { -1.0 };
+    let g = f.surf.signed_distance_gradient(&p)?;
+    let c = n.dot(&g);
+    (c.abs() > 0.5).then_some(c.signum())
+}
+
+/// Whether one closed solid `b` is convex as a closed surface convex everywhere is (Hadamard):
+/// no edge concave (faces meeting at a convex edge or tangentially) and every curved face of
+/// a plane, ball, cylinder or cone bulging outward ([`outward_sign`]). Unlike a classifier's
+/// test, a rounded box is convex here (its rounds' cylinders don't hold the rest of it).
+pub(crate) fn locally_convex(b: &Body) -> bool {
+    b.solids.len() == 1
+        && b.shells.len() == 1
+        && b.shells[0].closed
+        && b.faces.iter().all(|f| match &f.surf {
+            Surface::Plane { .. } => true,
+            Surface::Sphere { .. } | Surface::Cylinder { .. } | Surface::Cone { .. } => {
+                outward_sign(f) == Some(1.0)
+            }
+            _ => false,
+        })
+        && (0..b.edges.len())
+            .all(|e| b.edges[e].degenerate || super::fillet::edge_convexity(b, e) != Some(false))
+}
+
 /// A face's polygons made on demand: kept, their (u, v) range and the start for projections.
 type LazyFace = (KeptPolygons, ((f64, f64), (f64, f64)), Option<(f64, f64)>);
 
@@ -1854,33 +1892,32 @@ impl<'a> Classifier<'a> {
         self.convex
             .get_or_init(|| {
                 let b = self.body;
+                // (A cone's apex is the one point edge whose surface's signed distance runs on
+                // past it: a ball's poles lie on it.)
+                let apex = b.edges.iter().any(|e| e.degenerate)
+                    && b.faces
+                        .iter()
+                        .any(|f| matches!(f.surf, Surface::Cone { .. }));
                 if !self.lazy.is_empty()
                     || b.solids.len() != 1
                     || b.shells.len() != 1
                     || b.faces.is_empty()
-                    || b.edges.iter().any(|e| e.degenerate)
+                    || apex
                 {
                     return None;
                 }
                 let mut sides = Vec::with_capacity(b.faces.len());
                 for (fi, f) in b.faces.iter().enumerate() {
-                    let sign = match &f.surf {
-                        Surface::Plane { .. } => {
-                            if f.sense {
-                                1.0
-                            } else {
-                                -1.0
-                            }
-                        }
+                    let sign = outward_sign(f)?;
+                    // (A curved face must bulge outward: its distance outside grows outward.)
+                    match &f.surf {
+                        Surface::Plane { .. } => {}
                         Surface::Sphere { .. }
                         | Surface::Cylinder { .. }
                         | Surface::Cone { .. }
-                            if f.sense =>
-                        {
-                            1.0
-                        }
+                            if sign > 0.0 => {}
                         _ => return None,
-                    };
+                    }
                     sides.push((fi, sign));
                 }
                 let size = self.bbox.diagonal().max(tol::POINT);
@@ -1944,6 +1981,27 @@ impl<'a> Classifier<'a> {
         // Past the body's box (and the tolerance asked): outside, no ray needed.
         if !self.hold.grow(tol).contains(p) {
             return crate::PointClass::Outside;
+        }
+        // A whole ball or ring torus (one closed face, the whole surface): its signed distance
+        // settles every point, on the boundary within the tolerance.
+        if let [f] = self.body.faces.as_slice()
+            && self.body.shells.len() == 1
+            && self.body.shells[0].closed
+            && let Some(d) = match &f.surf {
+                Surface::Sphere { .. } => f.surf.signed_distance(p),
+                Surface::Torus { rmaj, rmin, .. } if rmin < rmaj => f.surf.signed_distance(p),
+                _ => None,
+            }
+            && let Some(sign) = outward_sign(f)
+        {
+            let d = d * sign;
+            return if d > tol {
+                crate::PointClass::Outside
+            } else if d < -tol {
+                crate::PointClass::Inside
+            } else {
+                crate::PointClass::OnBoundary
+            };
         }
         // A convex body: inside every face's surface is inside, outside any is outside; only a
         // point within the tolerance of the boundary is settled face by face below.

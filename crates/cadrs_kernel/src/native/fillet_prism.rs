@@ -349,7 +349,7 @@ pub(crate) fn prism_rim(
     if !nb.check_with(CheckLevel::Fast).is_empty() {
         return None;
     }
-    let (v0, v1) = (super::mass::body_volume(b), super::mass::body_volume(&nb));
+    let (v0, v1) = (super::mass::input_volume(b), super::mass::body_volume(&nb));
     ((v0 - removed - v1).abs() <= 1e-9 * v0.abs().max(1.0)).then_some((nb, src))
 }
 
@@ -620,7 +620,7 @@ pub(crate) fn prism_uprights(
     if !nb.check_with(CheckLevel::Fast).is_empty() {
         return None;
     }
-    let (v0, v1) = (super::mass::body_volume(b), super::mass::body_volume(&nb));
+    let (v0, v1) = (super::mass::input_volume(b), super::mass::body_volume(&nb));
     ((v0 - removed - v1).abs() <= 1e-9 * v0.abs().max(1.0)).then_some((nb, src))
 }
 
@@ -980,6 +980,6 @@ pub(crate) fn rims(
     if !nb.check_with(CheckLevel::Fast).is_empty() {
         return None;
     }
-    let (v0, v1) = (super::mass::body_volume(b), super::mass::body_volume(&nb));
+    let (v0, v1) = (super::mass::input_volume(b), super::mass::body_volume(&nb));
     ((v0 + change - v1).abs() <= 1e-9 * v0.abs().max(1.0)).then_some((nb, src))
 }

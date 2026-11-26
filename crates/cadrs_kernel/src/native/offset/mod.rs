@@ -296,7 +296,13 @@ pub fn offset(k: &mut NativeKernel, body: BodyId, spec: &OffsetSpec) -> Result<O
             (std::sync::Arc::new(b2), d2, out, Some((from, n)))
         }
     };
-    let v0 = crate::native::mass::body_volume(&b);
+    // (The input's own volume, kept where it has been measured; not that of the body without
+    // its vanishing faces.)
+    let v0 = back
+        .is_none()
+        .then(|| k.known_volume(body))
+        .flatten()
+        .unwrap_or_else(|| crate::native::mass::body_volume(&b));
     let v1 = crate::native::mass::body_volume(&out);
     let grow = dist.iter().any(|d| *d > 0.0);
     let shrink = dist.iter().any(|d| *d < 0.0);

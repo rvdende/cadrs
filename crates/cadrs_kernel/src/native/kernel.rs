@@ -178,6 +178,13 @@ impl NativeKernel {
     }
 
     /// The session's record of a body.
+    /// The volume of `id`'s solids where its mass properties are worked out already (a caller
+    /// measuring a body before an operation on it), else None: what an operation that checks
+    /// its result against its input's volume needn't integrate again.
+    pub(crate) fn known_volume(&self, id: BodyId) -> Option<f64> {
+        self.bodies.get(&id.0)?.mass.get().map(|m| m.volume)
+    }
+
     /// [`Self::entry`] shared (kept by another body that refers to it).
     pub(crate) fn entry_arc(&self, id: BodyId) -> Result<Arc<Entry>> {
         self.bodies

@@ -2821,6 +2821,134 @@ pub(crate) fn collapse_slivers(x: &mut Body, lim: f64, moved: &[usize]) -> Vec<u
     keep
 }
 
+/// `a` less a cavity `c` that lies within it but for one plane face flush with one of `a`'s
+/// (a shell's hollow, open through the face it removes): `a`'s faces, the cavity's mouth a new
+/// loop of the face it opens through, and the cavity's other faces turned inside out, joined
+/// along the mouth's edges, with nothing to intersect. Only where `a` is convex (its faces can't
+/// pass through it) and every sampled point of the cavity off that plane is strictly inside it;
+/// None otherwise (the boolean then), or where the result isn't sound.
+pub(crate) fn flush_cavity(a: &Body, c: &Body) -> Option<BoolOut> {
+    if a.solids.len() != 1
+        || c.solids.len() != 1
+        || a.shells.len() != 1
+        || c.shells.len() != 1
+        || !a.shells[0].closed
+        || !c.shells[0].closed
+    {
+        return None;
+    }
+    let outward = |b: &Body, f: usize| match &b.faces[f].surf {
+        Surface::Plane { f: fr } => Some((
+            fr.o,
+            fr.x.cross(&fr.y).normalize() * if b.faces[f].sense { 1.0 } else { -1.0 },
+        )),
+        _ => None,
+    };
+    let size = a.bbox().diagonal().max(tol::POINT);
+    let near = 1e-9 * (size + a.bbox().center().coords.norm());
+    // The one face pair on one plane, facing the same way.
+    let mut pair = None;
+    for fc in 0..c.faces.len() {
+        let Some((oc, nc)) = outward(c, fc) else {
+            continue;
+        };
+        for fa in 0..a.faces.len() {
+            let Some((oa, na)) = outward(a, fa) else {
+                continue;
+            };
+            if (na - nc).norm() <= 1e-12 && (oc - oa).dot(&na).abs() <= near {
+                if pair.is_some() {
+                    return None;
+                }
+                pair = Some((fa, fc, oa, na));
+            }
+        }
+    }
+    let (fa, fc, oa, na) = pair?;
+    if a.faces[fa].loops.len() != 1 || c.faces[fc].loops.len() != 1 {
+        return None;
+    }
+    // `a` convex, and every point of the cavity off the plane strictly inside it.
+    let polys: Vec<Vec<Vec<P2>>> = a
+        .faces
+        .iter()
+        .map(|f| super::classify::face_polygons(a, f))
+        .collect();
+    let cl = super::classify::Classifier::new(a, &polys);
+    if !super::classify::locally_convex(a) {
+        return None;
+    }
+    let tol = 1e-7 * (1.0 + size);
+    let off_plane = |p: &P3| (p - oa).dot(&na).abs() > tol;
+    let inside = |p: &P3| cl.classify(p, tol) == crate::PointClass::Inside;
+    if c.verts.iter().any(|v| off_plane(&v.p) && !inside(&v.p)) {
+        return None;
+    }
+    for (fi, f) in c.faces.iter().enumerate() {
+        if fi == fc {
+            continue;
+        }
+        for ring in super::classify::face_polygons(c, f) {
+            for q in ring {
+                let p = f.surf.eval(q.x, q.y);
+                if off_plane(&p) && !inside(&p) {
+                    return None;
+                }
+            }
+        }
+    }
+    // The result: `a`, then the cavity's vertices, edges and faces after them.
+    let mut out = a.clone();
+    let (nv, ne) = (out.verts.len(), out.edges.len());
+    out.verts.extend(c.verts.iter().cloned());
+    for e in &c.edges {
+        let mut e = e.clone();
+        e.v = [e.v[0] + nv, e.v[1] + nv];
+        out.edges.push(e);
+    }
+    let mut from: Vec<Vec<(usize, usize)>> = (0..a.faces.len()).map(|f| vec![(0, f)]).collect();
+    for (fi, f) in c.faces.iter().enumerate() {
+        if fi == fc {
+            continue;
+        }
+        let mut f = f.clone();
+        for c in f.loops.iter_mut().flatten() {
+            c.edge += ne;
+        }
+        Body::reverse_face(&mut f);
+        out.faces.push(f);
+        from.push(vec![(1, fi)]);
+    }
+    // The mouth: the cavity's face's loop run the other way, a hole in `a`'s face, its p-curves
+    // on that face's plane.
+    let mut mouth: Vec<Coedge> = c.faces[fc].loops[0]
+        .iter()
+        .rev()
+        .map(|co| {
+            let e = &out.edges[co.edge + ne];
+            Coedge {
+                edge: co.edge + ne,
+                fwd: !co.fwd,
+                pc: super::pcurve::pcurve(&out.faces[fa].surf, &e.curve, e.t[0], e.t[1], None),
+            }
+        })
+        .collect();
+    if mouth.is_empty() {
+        return None;
+    }
+    out.faces[fa].loops.push(std::mem::take(&mut mouth));
+    let n = out.faces.len();
+    out.shells = vec![super::topo::Shell {
+        faces: (0..n).collect(),
+        closed: true,
+    }];
+    out.solids = vec![super::topo::Solid { shells: vec![0] }];
+    if !out.check().is_empty() {
+        return None;
+    }
+    Some(BoolOut { body: out, from })
+}
+
 /// [`boolean_bodies`], with faces of the two inputs on one surface merged whatever the
 /// operation (a blend's tool face flush with a face it ends against becomes part of it).
 pub fn boolean_bodies_flush(a: &Body, b: &Body, op: BoolOp) -> Result<BoolOut> {

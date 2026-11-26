@@ -1435,7 +1435,9 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
         )
     };
     let cur = Tracked::of((*b).clone());
-    let v0 = crate::native::mass::body_volume(&b);
+    let v0 = k
+        .known_volume(body)
+        .unwrap_or_else(|| crate::native::mass::body_volume(&b));
     // Walls whose surfaces the whole body lies within (a box's sides, a bore, a ball's sphere):
     // the cavity is where the moved surfaces' insides meet in the body, as far as the openings.
     // A solid of revolution with a convex section: shelled in its section, revolved.
@@ -1555,6 +1557,14 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
                 Some(Ok(c)) => vec![Box::new(move || Ok(c.clone())), Box::new(regions)],
                 _ => vec![Box::new(regions)],
             }
+        } else if crate::native::classify::locally_convex(&b) {
+            // (A convex body: its cavity flush with the openings is joined to it, nothing cut
+            // ([`crate::native::boolean::flush_cavity`]), so that way first.)
+            vec![
+                Box::new(flush_cavity),
+                Box::new(|| sharp(&dist)),
+                Box::new(regions),
+            ]
         } else {
             vec![
                 Box::new(|| sharp(&dist)),

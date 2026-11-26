@@ -49,7 +49,12 @@ impl Tracked {
 
     /// Combines with a tool whose faces carry `tool_src`.
     pub fn apply(&self, tool: &Body, tool_src: &[Vec<FaceSrc>], op: BoolOp) -> Result<Tracked> {
-        let r: BoolOut = match boolean_bodies_flush(&self.body, tool, op) {
+        // (A cavity flush with a face of a convex body, open through it: joined, not cut.)
+        let flush = (op == BoolOp::Subtract)
+            .then(|| super::boolean::flush_cavity(&self.body, tool))
+            .flatten();
+        let r: BoolOut = match flush.map_or_else(|| boolean_bodies_flush(&self.body, tool, op), Ok)
+        {
             Ok(r) => r,
             Err(e) => {
                 super::kernel::dump("tracked-target", &self.body, &format!("{op:?}"));
@@ -2882,17 +2887,21 @@ pub fn fillet(
     }) {
         // The result's edges merge where the trimming split them for nothing (as every blend's
         // do): it must stay valid.
-        let local =
-            super::fillet::fillet_edges_laws(&b, body, &laws, false).and_then(|(out, src)| {
-                // (The local result's edges are merged and its tolerances fitted already.)
-                match local_problem(&b, &out) {
-                    Some(e) => Err(KernelError::InvalidResult {
-                        op: "fillet",
-                        why: format!("the local fillet isn't valid: {e}"),
-                    }),
-                    None => Ok((out, src)),
-                }
-            });
+        // (Its input's volume as the caller measured it, for the closed forms' checks.)
+        let known = k.known_volume(body);
+        let local = super::mass::with_known_volume(&b, known, || {
+            super::fillet::fillet_edges_laws(&b, body, &laws, false)
+        })
+        .and_then(|(out, src)| {
+            // (The local result's edges are merged and its tolerances fitted already.)
+            match local_problem(&b, &out) {
+                Some(e) => Err(KernelError::InvalidResult {
+                    op: "fillet",
+                    why: format!("the local fillet isn't valid: {e}"),
+                }),
+                None => Ok((out, src)),
+            }
+        });
         match local {
             Ok((out, src)) => {
                 let res = Tracked { body: out, src }.into_result(k, body);
