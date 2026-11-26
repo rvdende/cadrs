@@ -2646,7 +2646,106 @@ pub struct LinesCache {
     /// The zoom (mm per pixel) the silhouettes were lifted for.
     scale: f32,
     lines: HashMap<(usize, bool), std::sync::Arc<Vec<Vec<Vec3>>>>,
+    /// Each part's edges alone (by solid and culling), with the view direction they were culled
+    /// for (not culled, they hold for any view) and the tolerance level they were simplified to.
+    edges: HashMap<(usize, bool), (Vec3, i32, std::sync::Arc<Vec<Vec<Vec3>>>)>,
+    /// Each part's silhouettes at `back` and `scale`.
+    silhouettes: HashMap<usize, std::sync::Arc<Vec<Vec<Vec3>>>>,
+    /// Each part's edges with only the points their lines need ([`simplified_edges`]), and
+    /// the tolerance level ([`edge_level`]) they keep to.
+    simplified: HashMap<usize, (i32, std::sync::Arc<Vec<Vec<Vec3>>>)>,
+    /// Each part's box (its edges' points).
+    bounds: HashMap<usize, (Vec3, Vec3)>,
 }
+
+impl LinesCache {
+    /// Drops what was worked out for another view, and for parts no longer drawn.
+    fn keep(&mut self, back: Vec3, scale: f32, alive: &HashSet<usize>) {
+        if self.back != back || self.scale != scale {
+            self.back = back;
+            self.scale = scale;
+            self.lines.clear();
+            self.silhouettes.clear();
+        }
+        self.lines.retain(|(k, _), _| alive.contains(k));
+        self.edges.retain(|(k, _), _| alive.contains(k));
+        self.silhouettes.retain(|k, _| alive.contains(k));
+        self.simplified.retain(|k, _| alive.contains(k));
+        self.bounds.retain(|k, _| alive.contains(k));
+    }
+
+    /// The tolerance level a part's plain edges are drawn at in the view `v`: while the view
+    /// moves, the one they have (simplifying a large assembly's edges again takes a frame or
+    /// more); when it rests, the one the view asks for ([`edge_level`]).
+    fn edge_level(&mut self, part: &Part, v: &ViewState, resting: bool) -> i32 {
+        let key = std::sync::Arc::as_ptr(&part.solid) as usize;
+        match self.simplified.get(&key) {
+            Some((level, _)) if !resting => *level,
+            _ => {
+                let bounds = *self
+                    .bounds
+                    .entry(key)
+                    .or_insert_with(|| edge_bounds(&part.solid));
+                edge_level(v, bounds)
+            }
+        }
+    }
+
+    /// A part's lines (edges and silhouettes) in the view `v`.
+    fn lines(&mut self, part: &Part, v: &ViewState, cull: bool) -> std::sync::Arc<Vec<Vec<Vec3>>> {
+        self.lines
+            .entry((std::sync::Arc::as_ptr(&part.solid) as usize, cull))
+            .or_insert_with(|| std::sync::Arc::new(part_lines_culled(part, v, cull)))
+            .clone()
+    }
+
+    /// A part's edges ([`part_edge_lines`]) seen from `back`, simplified to `level`
+    /// ([`edge_level`]).
+    fn edges(
+        &mut self,
+        part: &Part,
+        back: Vec3,
+        cull: bool,
+        level: i32,
+    ) -> std::sync::Arc<Vec<Vec<Vec3>>> {
+        let key = (std::sync::Arc::as_ptr(&part.solid) as usize, cull);
+        match self.edges.get(&key) {
+            Some((seen, at, lines)) if *at == level && (!cull || *seen == back) => lines.clone(),
+            _ => {
+                let simplified = match self.simplified.get(&key.0) {
+                    Some((at, lines)) if *at == level => lines.clone(),
+                    _ => {
+                        let lines = std::sync::Arc::new(simplified_edges(
+                            &part.solid,
+                            level_tolerance(level),
+                        ));
+                        self.simplified.insert(key.0, (level, lines.clone()));
+                        lines
+                    }
+                };
+                let lines =
+                    std::sync::Arc::new(part_edge_lines(part, back, cull, Some(&simplified)));
+                self.edges.insert(key, (back, level, lines.clone()));
+                lines
+            }
+        }
+    }
+
+    /// A part's silhouettes ([`part_silhouettes`]) at the kept view.
+    fn silhouettes(&mut self, part: &Part) -> std::sync::Arc<Vec<Vec<Vec3>>> {
+        let (back, scale) = (self.back, self.scale);
+        self.silhouettes
+            .entry(std::sync::Arc::as_ptr(&part.solid) as usize)
+            .or_insert_with(|| std::sync::Arc::new(part_silhouettes(part, back, scale)))
+            .clone()
+    }
+}
+
+/// How long after the view last turned its plain edges stay drawn without culling
+/// ([`draw_part_edges`]): while the view turns they are the same lines in every direction, so
+/// they aren't made again each frame (a large assembly's took most of a frame); when it rests,
+/// they are culled for where it rests.
+const TURN_SETTLE_SECS: f64 = 0.2;
 
 pub fn part_lines(part: &Part, view: &ViewState) -> Vec<Vec<Vec3>> {
     part_lines_culled(part, view, false)
@@ -2664,6 +2763,125 @@ pub fn part_lines_culled(part: &Part, view: &ViewState, cull: bool) -> Vec<Vec<V
 /// pixel: a part drawn turned ([`PartCache::moved`]) is seen from the view's direction turned
 /// back into its solid's frame.
 fn part_lines_from(part: &Part, back: Vec3, scale: f32, cull: bool) -> Vec<Vec<Vec3>> {
+    let mut out = part_edge_lines(part, back, cull, None);
+    out.extend(part_silhouettes(part, back, scale));
+    out
+}
+
+/// How far a plain edge's drawn line may stray from its points ([`simplified_edges`]), in
+/// pixels where the part is nearest the eye. An imported curve's edge comes sampled about every
+/// 0.1 mm; drawn so, a large assembly's edges kept the GPU busy longer than its faces did, a
+/// small part's hundreds of segments falling inside a few pixels.
+const EDGE_TOLERANCE_PX: f32 = 0.25;
+
+/// The finest tolerance level ([`edge_level`]): 2⁻¹⁰ mm, a thousandth of a millimetre, past
+/// which simplifying keeps nearly every point anyway.
+const EDGE_LEVEL_MIN: i32 = -10;
+
+/// The tolerance (mm) of a level: 2^`level`.
+fn level_tolerance(level: i32) -> f32 {
+    2f32.powi(level)
+}
+
+/// The tolerance level a part's plain edges are simplified to in the view `v`: the largest
+/// power of two (mm) within [`EDGE_TOLERANCE_PX`] of a pixel where the part (its box `bounds`)
+/// is nearest the eye, so an eighth to a quarter of a pixel. Kept in powers of two, the edges
+/// are simplified again only when the zoom has doubled or halved.
+fn edge_level(v: &ViewState, (lo, hi): (Vec3, Vec3)) -> i32 {
+    let mut mm_per_px = v.scale;
+    if v.perspective {
+        // Turned about the focus, the part comes as near the eye as its farthest corner is
+        // from the focus.
+        let eye = v.eye_distance();
+        let reach = (0..8)
+            .map(|i| {
+                let c = Vec3::new(
+                    if i & 1 == 0 { lo.x } else { hi.x },
+                    if i & 2 == 0 { lo.y } else { hi.y },
+                    if i & 4 == 0 { lo.z } else { hi.z },
+                );
+                c.distance(v.focus)
+            })
+            .fold(0.0, f32::max);
+        if eye <= reach {
+            return EDGE_LEVEL_MIN;
+        }
+        mm_per_px *= (eye - reach) / eye;
+    }
+    let tolerance = EDGE_TOLERANCE_PX * mm_per_px;
+    if !(tolerance > 0.0) {
+        return EDGE_LEVEL_MIN;
+    }
+    (tolerance.log2().floor() as i32).max(EDGE_LEVEL_MIN)
+}
+
+/// The box of a solid's edges.
+fn edge_bounds(s: &cadrs_core::solid::Solid) -> (Vec3, Vec3) {
+    let mut pts = s.edges.iter().flat_map(|e| e.points.iter().map(|p| v3(*p)));
+    let first = pts.next().unwrap_or(Vec3::ZERO);
+    pts.fold((first, first), |(lo, hi), p| (lo.min(p), hi.max(p)))
+}
+
+/// Each edge of `s` (in [`cadrs_core::solid::Solid::edges`]' order) with the points its line
+/// needs to stay within `tolerance` (mm) of all of them (Douglas–Peucker; the ends kept).
+fn simplified_edges(s: &cadrs_core::solid::Solid, tolerance: f32) -> Vec<Vec<Vec3>> {
+    s.edges
+        .iter()
+        .map(|e| {
+            let pts: Vec<Vec3> = e.points.iter().map(|p| v3(*p)).collect();
+            simplify_polyline(&pts, tolerance)
+        })
+        .collect()
+}
+
+/// `pts` without the points that lie within `tol` of the line through their kept neighbours.
+fn simplify_polyline(pts: &[Vec3], tol: f32) -> Vec<Vec3> {
+    if pts.len() <= 2 {
+        return pts.to_vec();
+    }
+    let mut keep = vec![false; pts.len()];
+    keep[0] = true;
+    keep[pts.len() - 1] = true;
+    let mut spans = vec![(0, pts.len() - 1)];
+    while let Some((a, b)) = spans.pop() {
+        if b <= a + 1 {
+            continue;
+        }
+        let (pa, d) = (pts[a], pts[b] - pts[a]);
+        let len2 = d.length_squared();
+        let (mut worst, mut at) = (0.0f32, a);
+        for (i, p) in pts.iter().enumerate().take(b).skip(a + 1) {
+            let p = *p - pa;
+            let off = if len2 > 0.0 {
+                (p - d * (p.dot(d) / len2).clamp(0.0, 1.0)).length()
+            } else {
+                p.length()
+            };
+            if off > worst {
+                worst = off;
+                at = i;
+            }
+        }
+        if worst > tol {
+            keep[at] = true;
+            spans.push((a, at));
+            spans.push((at, b));
+        }
+    }
+    pts.iter()
+        .zip(keep)
+        .filter_map(|(p, k)| k.then_some(*p))
+        .collect()
+}
+
+/// A part's edges, seen from `back` when culled ([`part_lines_culled`]); not culled, the view
+/// doesn't matter. With `simplified` ([`simplified_edges`]), each edge drawn by its points.
+fn part_edge_lines(
+    part: &Part,
+    back: Vec3,
+    cull: bool,
+    simplified: Option<&[Vec<Vec3>]>,
+) -> Vec<Vec<Vec3>> {
     let s = &part.solid;
     let cull = cull && part.kind == cadrs_core::PartKind::Solid;
     // The mesh's normal, not the plane frame's: a face a cut left keeps its tool's frame, whose
@@ -2690,18 +2908,32 @@ fn part_lines_from(part: &Part, back: Vec3, scale: f32, cull: bool) -> Vec<Vec<V
             .copied()
             .unwrap_or_else(|| s.face(f).is_some_and(away))
     };
-    let mut out: Vec<Vec<Vec3>> = s
-        .edges
+    s.edges
         .iter()
+        .enumerate()
         // A round's facet seams (sheet metal) aren't drawn.
-        .filter(|e| {
+        .filter(|(_, e)| {
             !e.smooth
                 && !(cull
                     && e.name.faces[0] != e.name.faces[1]
                     && e.name.faces.iter().all(faces_away))
         })
-        .map(|e| e.points.iter().map(|p| v3(*p)).collect())
-        .collect();
+        .map(|(i, e)| match simplified.and_then(|p| p.get(i)) {
+            Some(pts) => pts.clone(),
+            None => e.points.iter().map(|p| v3(*p)).collect(),
+        })
+        .collect()
+}
+
+/// Whether a part has silhouettes (curved faces' outlines, which follow the view).
+fn has_silhouettes(part: &Part) -> bool {
+    !part.solid.rulings.is_empty() || !part.solid.grids.is_empty()
+}
+
+/// The silhouettes of a part's curved faces seen from `back` at `scale` mm per pixel.
+fn part_silhouettes(part: &Part, back: Vec3, scale: f32) -> Vec<Vec<Vec3>> {
+    let s = &part.solid;
+    let mut out = Vec::new();
     // How far outside the surface a silhouette is drawn: a third of a pixel, so it stays in
     // front of the facets it outlines, but never more than the mesh's own tolerance (0.05 mm):
     // a fixed 0.05 mm floated the line pixels off a close-up's cylinder.
@@ -3459,11 +3691,13 @@ fn draw_part_edges(
         Res<crate::analysis::ShadingAnalysis>,
         Res<EdgesOnly>,
     ),
-    (hover_parts, extra, mut lines_cache, mut last): (
+    (hover_parts, extra, mut lines_cache, mut last, time, mut redraw): (
         Res<HoverParts>,
         Res<crate::viewport::ExtraHighlight>,
         Local<LinesCache>,
         Local<LastEdges>,
+        Res<Time<Real>>,
+        MessageWriter<bevy::window::RequestRedraw>,
     ),
     (section, mut retained, mut gizmo_assets, gizmo_store, mut commands): (
         Res<crate::section_view::SectionClip>,
@@ -3478,25 +3712,32 @@ fn draw_part_edges(
     // Each part's lines for this view direction, kept while neither changes (working them out for
     // every part every frame cost a large assembly most of its frame).
     let back = view.view.back();
-    if lines_cache.back != back || lines_cache.scale != view.view.scale {
-        lines_cache.back = back;
-        lines_cache.scale = view.view.scale;
-        lines_cache.lines.clear();
-    }
-    let alive: std::collections::HashSet<usize> = cache
+    let alive: HashSet<usize> = cache
         .parts
         .iter()
         .chain(cache.tool.iter())
         .map(|p| std::sync::Arc::as_ptr(&p.solid) as usize)
         .collect();
-    lines_cache.lines.retain(|(k, _), _| alive.contains(k));
-    let mut lines_of = |part: &Part, v: &ViewState, cull: bool| -> std::sync::Arc<Vec<Vec<Vec3>>> {
-        lines_cache
-            .lines
-            .entry((std::sync::Arc::as_ptr(&part.solid) as usize, cull))
-            .or_insert_with(|| std::sync::Arc::new(part_lines_culled(part, v, cull)))
-            .clone()
-    };
+    lines_cache.keep(back, view.view.scale, &alive);
+    // While the view turns, and a moment after, the plain edges aren't culled
+    // ([`TURN_SETTLE_SECS`]); a frame is asked for until it has rested that long.
+    let now = time.elapsed_secs_f64();
+    if last.back != Some(back) {
+        last.back = Some(back);
+        last.turned_at = now;
+    }
+    let turning = now - last.turned_at < TURN_SETTLE_SECS;
+    // A zoom or pan moves the view too: the plain edges' tolerance ([`edge_level`]) is chosen
+    // again only once it has rested.
+    let at = (view.view.focus, view.view.scale, view.view.perspective);
+    if last.at != Some(at) {
+        last.at = Some(at);
+        last.moved_at = now;
+    }
+    let moving = turning || now - last.moved_at < TURN_SETTLE_SECS;
+    if moving {
+        redraw.write(bevy::window::RequestRedraw);
+    }
     // The references stay in the selection colour while a feature fails (`ex4-step10.png`).
     let selected_color = SELECTED;
     // P3E.3b: under the zebra stripes the edges are mid-grey, apart from both bands.
@@ -3532,13 +3773,16 @@ fn draw_part_edges(
         || gizmo_store.is_changed()
         || retained.is_changed()
         || last.edge_color != Some(edge_color);
-    if !changed && !last.immediate {
+    if !changed && !last.immediate && turning == last.turning && moving == last.moving {
         return;
     }
     *last = LastEdges {
         immediate: false,
         dialog: dialog.is_some(),
         edge_color: Some(edge_color),
+        turning,
+        moving,
+        ..*last
     };
     // (Changed only from outside: reset when a document closes.)
     let retained = retained.bypass_change_detection();
@@ -3570,6 +3814,8 @@ fn draw_part_edges(
         std::sync::Arc<Vec<Vec<Vec3>>>,
         Option<crate::section_view::Cut>,
     )> = Vec::new();
+    // Their silhouettes, apart: they follow every turn, the edges don't.
+    let mut outlines = plain.clone();
     let mut free: Vec<(
         std::sync::Arc<cadrs_core::solid::Solid>,
         Option<crate::section_view::Cut>,
@@ -3690,13 +3936,19 @@ fn draw_part_edges(
                     Some(_) => {
                         let lines = match turned_back {
                             Some(b) => std::sync::Arc::new(part_lines_from(part, b, v.scale, cull)),
-                            None => lines_of(part, &v, cull),
+                            None => lines_cache.lines(part, &v, cull),
                         };
                         for line in lines.iter() {
                             strip(&mut edges, clip, line.iter().map(|p| xf(*p)), edge_color);
                         }
                     }
-                    None => plain.push((lines_of(part, &v, cull), clip)),
+                    None => {
+                        let level = lines_cache.edge_level(part, &v, !moving);
+                        plain.push((lines_cache.edges(part, back, cull && !turning, level), clip));
+                        if has_silhouettes(part) {
+                            outlines.push((lines_cache.silhouettes(part), clip));
+                        }
+                    }
                 }
             }
             if mode.edges() {
@@ -3812,7 +4064,7 @@ fn draw_part_edges(
                 && cache.tints.get(&part.id).is_none_or(|t| t.alpha >= 1.0);
             let lines = match turned_back {
                 Some(b) => std::sync::Arc::new(part_lines_from(part, b, v.scale, opaque)),
-                None => lines_of(part, &v, opaque),
+                None => lines_cache.lines(part, &v, opaque),
             };
             for line in lines.iter() {
                 strip(&mut outline_edges, clip, line.iter().map(|p| xf(*p)), color);
@@ -3890,6 +4142,33 @@ fn draw_part_edges(
         &mut gizmo_assets,
         &mut commands,
     );
+    let outline_key = RetainedKey {
+        items: outlines
+            .iter()
+            .map(|(l, c)| (std::sync::Arc::as_ptr(l) as usize, *c))
+            .collect(),
+        color: edge_color,
+    };
+    retain_lines(
+        &mut retained.outlines,
+        outline_key,
+        || {
+            outlines
+                .iter()
+                .map(|(l, _)| l.clone() as KeptAlive)
+                .collect()
+        },
+        |asset| {
+            for (lines, clip) in &outlines {
+                for line in lines.iter() {
+                    strip_asset(asset, *clip, line.iter().copied(), edge_color);
+                }
+            }
+        },
+        gizmo_store.config::<PartEdgeGizmos>().0,
+        &mut gizmo_assets,
+        &mut commands,
+    );
     let free_key = RetainedKey {
         items: free
             .iter()
@@ -3925,6 +4204,16 @@ struct LastEdges {
     immediate: bool,
     dialog: bool,
     edge_color: Option<Color>,
+    /// The view direction last seen, and when it last changed (seconds).
+    back: Option<Vec3>,
+    turned_at: f64,
+    /// Whether the plain edges were drawn not culled, the view turning.
+    turning: bool,
+    /// The view's focus, zoom and projection last seen, and when they last changed (seconds).
+    at: Option<(Vec3, f32, bool)>,
+    moved_at: f64,
+    /// Whether the view was moving (turning, zooming or panning) or had not rested yet.
+    moving: bool,
 }
 
 /// The plain part edges and the free edges, drawn as retained gizmos: [`draw_part_edges`] makes
@@ -3934,6 +4223,8 @@ struct LastEdges {
 #[derive(Resource, Default)]
 pub struct RetainedEdges {
     plain: RetainedLines,
+    /// The plain parts' silhouettes.
+    outlines: RetainedLines,
     free: RetainedLines,
 }
 
@@ -5495,6 +5786,64 @@ mod tests {
                 .all(|(_, m)| m[1] & SHARE_CURVED == 0),
             "{shared:?}"
         );
+    }
+
+    /// An edge sampled finely keeps only the points its line needs: a 10 mm arc sampled every
+    /// 0.05 mm stays within the tolerance of every point with a fraction of them; a straight
+    /// run keeps its ends.
+    #[test]
+    fn an_edges_line_keeps_the_points_it_needs() {
+        let arc: Vec<Vec3> = (0..=628)
+            .map(|i| {
+                let a = i as f32 * 0.005;
+                Vec3::new(10.0 * a.cos(), 10.0 * a.sin(), 0.0)
+            })
+            .collect();
+        let tolerance = 0.01;
+        let kept = simplify_polyline(&arc, tolerance);
+        assert!(kept.len() < arc.len() / 5, "{}", kept.len());
+        assert_eq!(kept.first(), arc.first());
+        assert_eq!(kept.last(), arc.last());
+        // Every point lies within the tolerance of the kept line.
+        let off = |p: Vec3| {
+            kept.windows(2)
+                .map(|w| {
+                    let d = w[1] - w[0];
+                    let t = ((p - w[0]).dot(d) / d.length_squared()).clamp(0.0, 1.0);
+                    (p - (w[0] + d * t)).length()
+                })
+                .fold(f32::MAX, f32::min)
+        };
+        assert!(arc.iter().all(|p| off(*p) <= tolerance + 1e-5));
+        let line: Vec<Vec3> = (0..10).map(|i| Vec3::X * i as f32).collect();
+        assert_eq!(simplify_polyline(&line, tolerance).len(), 2);
+    }
+
+    /// The plain edges' tolerance is an eighth to a quarter of a pixel, in powers of two of a
+    /// millimetre: 1 mm a pixel draws them to 0.25 mm, a zoom that doesn't halve or double the
+    /// pixel keeps the level, and in perspective a part that swings near the eye is drawn finer.
+    #[test]
+    fn an_edges_tolerance_follows_the_pixel() {
+        let mut v = ViewState::standard(crate::camera::StandardView::Isometric);
+        let part = (Vec3::splat(-5.0), Vec3::splat(5.0));
+        v.scale = 1.0;
+        assert_eq!(edge_level(&v, part), -2);
+        v.scale = 1.9;
+        assert_eq!(edge_level(&v, part), -2);
+        v.scale = 0.4;
+        assert_eq!(edge_level(&v, part), -4);
+        v.scale = 1e-6;
+        assert_eq!(edge_level(&v, part), EDGE_LEVEL_MIN);
+        v.scale = 1.0;
+        v.perspective = true;
+        // 1.7 m from the eye: a part at the focus stays there; one a metre out swings to
+        // 0.7 m of it.
+        let out = v.focus + Vec3::X * 1000.0;
+        let at_focus = edge_level(&v, (part.0 + v.focus, part.1 + v.focus));
+        let swinging = edge_level(&v, (part.0 + out, part.1 + out));
+        assert!(swinging < at_focus, "{swinging} {at_focus}");
+        let huge = (Vec3::splat(-1e6), Vec3::splat(1e6));
+        assert_eq!(edge_level(&v, huge), EDGE_LEVEL_MIN);
     }
 
     /// A drag asks for a rebuild every frame: what the last one made shows before the next is
