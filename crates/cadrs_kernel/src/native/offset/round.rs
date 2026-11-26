@@ -499,11 +499,12 @@ pub fn offset_rounded(b: &Body, dist: &[f64]) -> Result<Body> {
     grown_except(&merged(b), d, &[], &[])
 }
 
-/// A body of planes and cylinders whose edges are all convex (besides seams and point edges) grown by a ball of radius
-/// `d`: its sharp offset, each face moved `d` out, with every edge filleted by `d`. The ball
+/// A body of planes, cylinders and tori (each a torus still offset) whose edges are all convex
+/// or smooth (besides point edges) grown by a ball of radius `d`: its sharp offset, each face moved `d` out, with every edge filleted by `d`. The ball
 /// that rounds an edge of the sharp offset touches both its faces, so its centre lies `d`
 /// inside both, on the edge they were moved from: the round is the tube about that edge, as the
-/// ball's sum makes it, and at a corner the ball about its vertex. None where the sharp offset
+/// ball's sum makes it, and at a corner the ball about its vertex; faces meeting tangentially
+/// meet tangentially moved, needing nothing. None where the sharp offset
 /// changes the body's faces or edges (a hole the distance closes: a face lost), or the fillet
 /// fails or isn't sound.
 fn grown_filleted(b: &Body, dist: &[f64], d: f64) -> Option<Body> {
@@ -512,24 +513,31 @@ fn grown_filleted(b: &Body, dist: &[f64], d: f64) -> Option<Body> {
         (0..b.edges.len()).all(|e| {
             b.edges[e].degenerate
                 || match dihedral(b, e) {
-                    Dihedral::Convex => true,
-                    // (A seam: one face both sides.)
-                    Dihedral::Smooth => {
-                        let mut faces = b
-                            .faces
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, f)| f.loops.iter().flatten().any(|c| c.edge == e));
-                        faces.next().is_some() && faces.next().is_none()
-                    }
+                    // (Smooth: a seam, or faces meeting tangentially, whose moves meet
+                    // tangentially again.)
+                    Dihedral::Convex | Dihedral::Smooth => true,
                     _ => false,
                 }
         })
     };
-    let simple = b
-        .faces
-        .iter()
-        .all(|f| matches!(f.surf, Surface::Plane { .. } | Surface::Cylinder { .. }));
+    // Planes, cylinders, and tori whose move keeps them tori: a round's tube (material
+    // outside it) narrowed short of nothing, a ring's (material inside) widened short of its
+    // axis.
+    let simple = b.faces.iter().all(|f| match &f.surf {
+        Surface::Plane { .. } | Surface::Cylinder { .. } => true,
+        Surface::Torus { f: tf, rmaj, rmin } => {
+            let p = tf.o + tf.x * (rmaj + rmin);
+            let (u, v) = f.surf.project(&p, None);
+            let out = f.surf.normal(u, v) * if f.sense { 1.0 } else { -1.0 };
+            let ring = out.dot(&tf.x) > 0.0;
+            if ring {
+                rmin + d < rmaj * (1.0 - tol::REL)
+            } else {
+                rmin - d > tol::POINT * (1.0 + rmin)
+            }
+        }
+        _ => false,
+    });
     if !simple || b.solids.len() != 1 || b.edges.is_empty() || !kinds_ok(b) {
         return None;
     }
@@ -1076,8 +1084,8 @@ fn grown_except(b: &Body, d: f64, cut: &[(P3, V3)], skip: &[usize]) -> Result<Bo
     {
         return Ok(g);
     }
-    // Every edge convex, of planes and cylinders (a box drilled through: its rims are convex
-    // too): the sharp offset with every edge rounded by d (a few milliseconds, where the union
+    // Every edge convex or smooth, of planes, cylinders and tori (a box drilled through, a
+    // boss with a root round): the sharp offset with every edge rounded by d (a few milliseconds, where the union
     // of the slabs, tubes and balls takes dozens of booleans).
     if skip.is_empty()
         && cut.is_empty()
