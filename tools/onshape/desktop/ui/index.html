@@ -29,6 +29,11 @@
   .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
   progress { width: 100%; }
   #msg { color: #fb6; }
+  .badge { margin-left: 6px; font-size: 10px; padding: 1px 6px; border-radius: 8px; background: #2a3340; color: #9cf; }
+  .badge.ok { background: #1f3a2a; color: #8fd; }
+  label.locked { opacity: .65; }
+  #reportState { display: block; color: #fb6; margin-top: 4px; }
+  #rCancel { display: none; }
   [hidden] { display: none !important; }
   .card { background: #1a1e24; border: 1px solid #2a303a; border-radius: 6px; padding: 10px; }
   .card ol { margin: 6px 0; padding-left: 20px; line-height: 1.5; }
@@ -92,6 +97,7 @@
     <small id="loadState"></small>
   </div>
   <input type="text" id="filter" placeholder="Filter by name">
+  <small id="docLegend"></small>
   <input type="text" id="url" placeholder="…or paste an Onshape document URL / id, then press Enter (shared documents)">
   <div id="list"></div>
   <div class="row">
@@ -121,7 +127,9 @@
     <button class="b" id="rFolder" disabled>Open .cadrs folder</button>
     <button class="b" id="rStep" disabled>Export STEP files</button>
     <button class="b" id="rStepFolder" disabled>Open STEP folder</button>
+    <button class="b" id="rCancel">Cancel export</button>
   </div>
+  <small id="reportState"></small>
   <pre id="rep">Run a conversion, or press a button to load the last report.</pre>
 </div>
 
@@ -144,6 +152,10 @@
   <input type="text" id="iTitle" placeholder="Title: what is wrong, in one line (e.g. 'Extrude of selected sketch regions fills the holes')">
   <textarea id="iWhat" rows="6" placeholder="What happened: what you did, what you expected, what you got. Include the smallest steps that show it."></textarea>
   <input type="text" id="iEnv" placeholder="Environment (cadrs version, OS, browser)">
+  <div class="row">
+    <select id="iKind" title="What kind of issue"><option>Bug</option><option>Missing feature</option><option>Improvement</option><option>Other</option></select>
+    <select id="iWhere" title="Where it happens"><option>cadrs.net web app</option><option>GitHub build</option><option>Onshape importer</option><option>Other</option></select>
+  </div>
   <div class="row">
     <button class="b" id="iPick">Attach files…</button>
     <small id="iFiles">none</small>
@@ -235,11 +247,36 @@ $('gpuSoftware').onclick = async () => {
 };
 
 // ---- Documents tab -------------------------------------------------------------------
+// Already scraped (raw/<id>/) or imported (in the last report) documents are marked; an imported
+// one cannot be ticked again unless "re-download" is on, so a test run stays on the projects the
+// user picked instead of re-importing everything by accident.
+let scrapedIds = new Set();
+let importedIds = new Set();
+async function refreshState() {
+  try {
+    const s = await api.state();
+    scrapedIds = new Set(s.raw || []);
+    importedIds = new Set((s.imported || []).map((d) => d.id));
+  } catch {
+    /* the marks are a convenience: no state is not an error */
+  }
+  render();
+}
 function render() {
   const f = $('filter').value.toLowerCase();
   const shown = docs.filter((d) => d.name.toLowerCase().includes(f));
-  $('list').innerHTML = shown.map((d) =>
-    `<label><input type="checkbox" data-id="${esc(d.id)}" ${picked.has(d.id) ? 'checked' : ''}> <span class="docname" data-open="${esc(d.id)}" title="Open in the Onshape pane">${esc(d.name)}</span><br><small>${esc(d.owner || '')} · ${esc((d.modifiedAt || '').slice(0, 10))}</small></label>`).join('');
+  $('list').innerHTML = shown.map((d) => {
+    const imported = importedIds.has(d.id);
+    const scraped = scrapedIds.has(d.id);
+    const locked = imported && !$('refresh').checked;
+    if (locked) picked.delete(d.id);
+    const badge = imported ? '<span class="badge ok">imported</span>' : scraped ? '<span class="badge">scraped</span>' : '';
+    const title = locked ? 'Already imported — tick "re-download" to convert it again' : '';
+    return `<label class="${locked ? 'locked' : ''}"><input type="checkbox" data-id="${esc(d.id)}" ${picked.has(d.id) ? 'checked' : ''} ${locked ? `disabled title="${title}"` : ''}> <span class="docname" data-open="${esc(d.id)}" title="Open in the Onshape pane">${esc(d.name)}</span>${badge}<br><small>${esc(d.owner || '')} · ${esc((d.modifiedAt || '').slice(0, 10))}</small></label>`;
+  }).join('');
+  $('docLegend').textContent = importedIds.size || scrapedIds.size
+    ? 'Imported/scraped documents are marked; tick "re-download" to convert an imported one again.'
+    : '';
   $('count').textContent = `${picked.size} selected of ${docs.length}`;
   $('onboard').hidden = docs.length > 0;
   $('bGo').disabled = busy || !picked.size;
@@ -259,6 +296,7 @@ $('list').onclick = (e) => {
   api.openOnshape(open.dataset.open);
 };
 $('filter').oninput = render;
+$('refresh').onchange = render;
 $('url').onkeydown = (e) => {
   if (e.key !== 'Enter') return;
   const m = /([0-9a-f]{24})/.exec($('url').value);
@@ -284,6 +322,7 @@ async function loadDocuments() {
     $('msg').textContent = `Cannot load documents: ${e.message}`;
   } finally {
     loading = false; render();
+    refreshState();
   }
 }
 $('bLoad').onclick = loadDocuments;
@@ -313,19 +352,30 @@ $('bGo').onclick = async () => {
     $('log').textContent += `\n${e.message}`;
   } finally {
     busy = false; render();
+    refreshState();
   }
 };
 
 // ---- Report tab ----------------------------------------------------------------------
+let exporting = false;
 function updateReportButtons() {
   const has = !!(reports && reports.report);
   document.querySelectorAll('[data-r]').forEach((b) => { b.disabled = !has; });
   $('bug').disabled = !has;
   $('bugGh').disabled = !has;
-  $('rExport').disabled = !has;
+  $('rExport').disabled = exporting || !has;
   $('rFolder').disabled = !has;
-  $('rStep').disabled = !has;
+  $('rStep').disabled = exporting || !has;
   $('rStepFolder').disabled = !has;
+  $('rCancel').style.display = exporting ? 'inline-block' : 'none';
+  const info = reports && reports.jsonInfo;
+  if (info && info.dryRun) {
+    $('reportState').textContent = 'Last import was a DRY RUN: nothing was saved, so there is nothing to export. Uncheck "dry run" and Convert again.';
+  } else if (info && !(info.documents || []).some((d) => d.cadrsId)) {
+    $('reportState').textContent = 'Last import saved no cadrs documents (no cadrs_id in the report), so there is nothing to export.';
+  } else {
+    $('reportState').textContent = '';
+  }
 }
 function showReport(w) {
   if (!reports || !reports.report) { $('rep').textContent = 'No import report yet — run a conversion first.'; return; }
@@ -341,29 +391,38 @@ async function bug(open) {
     $('rep').textContent = `Cannot build the bug report: ${e.message}`;
   }
 }
-$('rExport').onclick = async () => {
-  $('rep').textContent = 'Exporting the imported documents as .cadrs packages…';
-  const r = await api.exportCadrs();
+function renderExportResult(r, what) {
   if (r.error) { $('rep').textContent = r.error; return; }
-  const ok = r.files.filter((f) => f.file);
-  const bad = r.files.filter((f) => f.error);
-  $('rep').textContent = `Exported ${ok.length} .cadrs file(s) to ${r.dir}\n\n` +
-    ok.map((f) => `${f.name}: ${f.file}`).join('\n') +
-    (bad.length ? `\n\nFailed:\n${bad.map((f) => `${f.name}: ${f.error}`).join('\n')}` : '') +
-    '\n\nAttach these files to an issue (the New ticket tab saves them separately).';
-};
-$('rFolder').onclick = () => api.openCadrsFolder();
-$('rStep').onclick = async () => {
-  $('rep').textContent = 'Rebuilding the imported documents and writing STEP files…';
-  const r = await api.exportSteps();
-  if (r.error) { $('rep').textContent = r.error; return; }
-  const files = r.documents.flatMap((d) => d.files || []);
-  const bad = r.documents.filter((d) => d.error);
-  $('rep').textContent = `Wrote ${files.length} STEP file(s) to ${r.dir}\n\n` +
+  const files = (r.documents || []).flatMap((d) => d.files || []);
+  const bad = (r.documents || []).filter((d) => d.error);
+  const verb = what === 'step' ? 'Wrote' : 'Exported';
+  $('rep').textContent = `${r.cancelled ? 'Cancelled. ' : ''}${verb} ${files.length} file(s) to ${r.dir}\n\n` +
     (files.length ? files.join('\n') : '(none)') +
-    (bad.length ? `\n\nFailed:\n${bad.map((d) => `${d.name}: ${d.error}`).join('\n')}` : '') +
-    '\n\nThese are rebuilt from the imported documents with the cadrs kernel: compare them with Onshape\'s own STEP export of the same Part Studios (the Compare tab does that directly too).';
-};
+    (bad.length ? `\n\nRefused / failed:\n${bad.map((d) => `${d.name}: ${d.error}`).join('\n')}` : '') +
+    (what === 'step'
+      ? '\n\nThese are rebuilt from the imported documents with the cadrs kernel: compare them with Onshape\'s own STEP export (the Compare tab does it directly too).'
+      : '\n\nAttach these files to an issue (the New ticket tab saves them separately).');
+}
+async function runExport(kind) {
+  if (exporting) return;
+  exporting = true;
+  updateReportButtons();
+  $('rep').textContent = kind === 'step'
+    ? 'Rebuilding the imported documents and writing STEP files…'
+    : 'Exporting the imported documents as .cadrs packages…';
+  try {
+    renderExportResult(kind === 'step' ? await api.exportSteps() : await api.exportCadrs(), kind);
+  } catch (e) {
+    $('rep').textContent = `Export failed: ${e.message}`;
+  } finally {
+    exporting = false;
+    updateReportButtons();
+  }
+}
+$('rExport').onclick = () => runExport('cadrs');
+$('rStep').onclick = () => runExport('step');
+$('rCancel').onclick = () => api.cancelExport();
+$('rFolder').onclick = () => api.openCadrsFolder();
 $('rStepFolder').onclick = () => api.openStepsFolder();
 $('bug').onclick = () => bug(false);
 $('bugGh').onclick = () => bug(true);
@@ -445,8 +504,13 @@ function issueText() {
   const env = $('iEnv').value.trim();
   const parts = [];
   if (what) parts.push(what);
+  parts.push('### Type', `- ${$('iKind').value}`);
+  parts.push('### Where', `- ${$('iWhere').value}`);
   parts.push('### Environment', `- ${env || 'not given'}`);
   return `${parts.join('\n\n')}\n`;
+}
+function issueLabels() {
+  return [String($('iKind').value).toLowerCase().replace(/\s+/g, '-'), String($('iWhere').value).toLowerCase().replace(/\s+/g, '-')];
 }
 function issueTitle() {
   return $('iTitle').value.trim();
@@ -456,7 +520,7 @@ async function saveIssue(openOnGitHub) {
   if (!title) { $('iOut').textContent = 'A title is needed.'; return; }
   if (!$('iWhat').value.trim()) { $('iOut').textContent = 'Describe what happened first.'; return; }
   const body = issueText();
-  const draft = await api.issueCreate({ title, body, files: issueFiles });
+  const draft = await api.issueCreate({ title, body, files: issueFiles, labels: issueLabels() });
   if (draft.error) { $('iOut').textContent = `Cannot save the draft: ${draft.error}`; return; }
   await api.issueCopy(body);
   const files = draft.attachments.length
@@ -543,6 +607,10 @@ api.onEvent((ev) => {
     $('gpu').textContent = `GPU: lost the context (${ev.reason})`;
   }
   if (ev.type === 'gpu-recovered') $('gpuLoss').hidden = true;
+  if (ev.type === 'export-progress') {
+    $('rep').textContent = `${ev.kind === 'cadrs' ? 'Exporting .cadrs' : 'Rebuilding STEP'} ${ev.index}/${ev.total}: ${ev.name}${ev.phase === 'running' ? '…' : ''}` +
+      (ev.error ? `\n(refused: ${ev.error})` : '');
+  }
   if (ev.type === 'phase') $('phase').textContent = ev.phase;
   if (ev.type === 'scrape') {
     const s = ev.state;
@@ -574,5 +642,6 @@ api.onEvent((ev) => {
   show('docs');
   render();
   api.current();
+  refreshState();
 })();
 </script>

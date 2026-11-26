@@ -16,6 +16,7 @@ const { readReportFiles } = require('./reportfiles');
 const tickets = require('./tickets');
 const { chromeUserAgent, applyGpuSwitches, softwareMode, softwareRelaunchArgs } = require('./chrome');
 const issues = require('./issues');
+const exports = require('./exports');
 
 const ROOT = process.env.CADRS_ONSHAPE_ROOT || path.join(os.homedir(), 'work', 'cadrs_onshape');
 const RAW = path.join(ROOT, 'raw');
@@ -473,92 +474,161 @@ function buildReports() {
     fs.writeFileSync(path.join(ROOT, 'missing-summary.txt'),
       `${summary}\n\nPER-DOCUMENT RESULTS\n${byDocument}\n\nFIRST FAILURE PER PART STUDIO\n${roots}`);
   }
-  return { report, summary, roots, byDocument, documents, file, source, warnings };
+  const jsonFile = path.join(ROOT, 'import-report.json');
+  let jsonInfo = null;
+  try {
+    if (fs.existsSync(jsonFile)) {
+      const j = JSON.parse(fs.readFileSync(jsonFile, 'utf8'));
+      jsonInfo = {
+        dryRun: !!j.dry_run,
+        modified: fs.statSync(jsonFile).mtimeMs,
+        documents: (j.documents || [])
+          .filter((d) => !d.failed)
+          .map((d) => ({ name: d.name, cadrsId: d.cadrs_id || null, onshapeId: d.onshape_id || '' })),
+      };
+    }
+  } catch {
+    /* the JSON report is optional for the text tabs */
+  }
+  return { report, summary, roots, byDocument, documents, file, source, warnings, jsonInfo };
 }
 
 ipcMain.handle('reports', buildReports);
 
-// The last import's saved documents as portable `.cadrs` packages (one file each, next to the
-// reports in <root>/cadrs/), for attaching to an issue or opening on another machine. Dry runs and
-// older reports have no cadrs ids: that is said plainly rather than exporting nothing.
-ipcMain.handle('export-cadrs', () => {
-  const reportFile = path.join(ROOT, 'import-report.json');
-  if (!fs.existsSync(reportFile)) {
-    return { error: 'No import-report.json yet: run a conversion first (a dry run only reports).' };
+// ---- exports: preflight, asynchronous and cancellable -----------------------------------
+// Exporting rebuilds with the cadrs kernel; on a large Part Studio that takes a long time. Doing
+// it in the main process (spawnSync) froze the whole window ("not responding"), so each document
+// is a child process awaited here with a time limit, and the panel gets progress events and can
+// cancel. Preflight refuses before anything starts when the last import was a dry run, saved no
+// document, or a document is no longer in the store.
+let exportRunning = null; // { kind, cancelled, child }
+
+function readImportReport() {
+  const file = path.join(ROOT, 'import-report.json');
+  if (!fs.existsSync(file)) {
+    return { file, error: 'No import-report.json yet: run a conversion first (a dry run reports only).' };
   }
-  let report;
   try {
-    report = JSON.parse(fs.readFileSync(reportFile, 'utf8'));
+    return { file, report: JSON.parse(fs.readFileSync(file, 'utf8')) };
   } catch (e) {
-    return { error: `Cannot read ${reportFile}: ${e.message}` };
+    return { file, error: `Cannot read ${file}: ${e.message}` };
   }
-  const docs = (report.documents || []).filter((d) => !d.failed && d.cadrs_id);
-  if (!docs.length) {
-    return { error: 'The last import saved no documents (a dry run only reports). Uncheck "dry run" and convert again.' };
-  }
-  const dir = path.join(ROOT, 'cadrs');
-  fs.mkdirSync(dir, { recursive: true });
-  const { cmd, args, cwd } = importerCommand();
-  const files = [];
-  for (const doc of docs) {
-    const name = String(doc.name || doc.cadrs_id).replace(/[\\/:*?"<>|]+/g, '-').trim() || String(doc.cadrs_id);
-    const file = path.join(dir, `${name}.cadrs`);
-    const r = spawnSync(cmd, [...args, 'export', String(doc.cadrs_id), '--out', file], {
-      cwd,
-      encoding: 'utf8',
-      maxBuffer: 1 << 28,
-      env: process.env,
+}
+
+function importerAsync(args, { timeoutMs = 300000 } = {}) {
+  const { cmd, args: base, cwd } = importerCommand();
+  return new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    const child = spawn(cmd, [...base, ...args], { cwd, env: process.env });
+    if (exportRunning) exportRunning.child = child;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try {
+        child.kill('SIGKILL');
+      } catch {}
+    }, timeoutMs);
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.stderr.on('data', (d) => { stderr += d; });
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      resolve({ status: -1, stdout, stderr, timedOut, error: e.message });
     });
-    if (r.error) files.push({ name: doc.name, error: r.error.message });
-    else if (r.status !== 0) files.push({ name: doc.name, error: (r.stderr || '').trim() || `exited ${r.status}` });
-    else files.push({ name: doc.name, cadrsId: doc.cadrs_id, file });
+    child.on('close', (status) => {
+      clearTimeout(timer);
+      if (exportRunning) exportRunning.child = null;
+      resolve({ status, stdout, stderr, timedOut });
+    });
+  });
+}
+
+async function storedDocumentIds() {
+  const r = await importerAsync(['list', '--json'], { timeoutMs: 30000 });
+  if (r.status !== 0) return null;
+  try {
+    return new Set(JSON.parse(r.stdout).documents.map((d) => String(d.id)));
+  } catch {
+    return null;
   }
-  return { dir, files };
+}
+
+async function exportDocuments(kind) {
+  if (exportRunning) return { error: 'An export is already running: wait, or press Cancel.' };
+  const { report, error } = readImportReport();
+  if (error) return { error };
+  const plan = exports.preflight(report, await storedDocumentIds());
+  if (!plan.ok) return { refused: true, error: plan.errors.join('\n\n') };
+  const dir = path.join(ROOT, kind === 'cadrs' ? 'cadrs' : 'steps');
+  fs.mkdirSync(dir, { recursive: true });
+  exportRunning = { kind, cancelled: false, child: null };
+  // A document that takes longer than this is refused from the app (the UI stays responsive and
+  // Cancel stops it); the command line has no such limit for a very large Part Studio.
+  const timeoutMs = Number(
+    process.env.CADRS_EXPORT_TIMEOUT_MS || (kind === 'cadrs' ? 120000 : 180000),
+  );
+  const used = new Set();
+  const results = [];
+  try {
+    for (let i = 0; i < plan.documents.length; i += 1) {
+      if (exportRunning.cancelled) break;
+      const doc = plan.documents[i];
+      send({ type: 'export-progress', kind, index: i + 1, total: plan.documents.length, name: doc.name, phase: 'running' });
+      const argv = kind === 'cadrs'
+        ? ['export', doc.cadrsId, '--out', exports.cadrsTarget(dir, doc.name, used)]
+        : ['step', doc.cadrsId, '--out', dir];
+      const r = await importerAsync(argv, { timeoutMs });
+      const failure = r.timedOut
+        ? `refused: it did not finish in ${Math.round(timeoutMs / 1000)} s (too big to export from the app; use the command line for it)`
+        : r.status !== 0
+          ? (r.stderr || r.stdout || `exited ${r.status}`).trim() || `exited ${r.status}`
+          : null;
+      const files = failure ? [] : (r.stdout || '').split('\n').map((l) => l.trim()).filter(Boolean);
+      results.push({ name: doc.name, files, error: failure });
+      send({ type: 'export-progress', kind, index: i + 1, total: plan.documents.length, name: doc.name, phase: 'done', error: failure });
+    }
+  } finally {
+    exportRunning = null;
+  }
+  return { dir, documents: results, cancelled: results.length < plan.documents.length };
+}
+
+ipcMain.handle('export-cadrs', () => exportDocuments('cadrs'));
+ipcMain.handle('export-steps', () => exportDocuments('step'));
+ipcMain.handle('cancel-export', () => {
+  if (!exportRunning) return { cancelled: false };
+  exportRunning.cancelled = true;
+  if (exportRunning.child) {
+    try {
+      exportRunning.child.kill('SIGKILL');
+    } catch {}
+  }
+  return { cancelled: true };
 });
+
 ipcMain.handle('open-cadrs-folder', () => {
   const dir = path.join(ROOT, 'cadrs');
   fs.mkdirSync(dir, { recursive: true });
   return shell.openPath(dir);
 });
-// The same imported documents rebuilt and written as STEP (one file per Part Studio), to compare
-// with Onshape's own STEP export in any CAD tool. The Compare tab does the comparison directly;
-// these files are for an external diff/measure.
-ipcMain.handle('export-steps', () => {
-  const reportFile = path.join(ROOT, 'import-report.json');
-  if (!fs.existsSync(reportFile)) {
-    return { error: 'No import-report.json yet: run a conversion first (a dry run only reports).' };
-  }
-  let report;
-  try {
-    report = JSON.parse(fs.readFileSync(reportFile, 'utf8'));
-  } catch (e) {
-    return { error: `Cannot read ${reportFile}: ${e.message}` };
-  }
-  const docs = (report.documents || []).filter((d) => !d.failed && d.cadrs_id);
-  if (!docs.length) {
-    return { error: 'The last import saved no documents (a dry run only reports). Uncheck "dry run" and convert again.' };
-  }
-  const dir = path.join(ROOT, 'steps');
-  fs.mkdirSync(dir, { recursive: true });
-  const { cmd, args, cwd } = importerCommand();
-  const documents = [];
-  for (const doc of docs) {
-    const r = spawnSync(cmd, [...args, 'step', String(doc.cadrs_id), '--out', dir], {
-      cwd,
-      encoding: 'utf8',
-      maxBuffer: 1 << 28,
-      env: process.env,
-    });
-    if (r.error) documents.push({ name: doc.name, error: r.error.message });
-    else if (r.status !== 0) documents.push({ name: doc.name, error: (r.stderr || '').trim() || `exited ${r.status}` });
-    else documents.push({ name: doc.name, files: (r.stdout || '').split('\n').map((l) => l.trim()).filter(Boolean) });
-  }
-  return { dir, documents };
-});
+
 ipcMain.handle('open-steps-folder', () => {
   const dir = path.join(ROOT, 'steps');
   fs.mkdirSync(dir, { recursive: true });
   return shell.openPath(dir);
+});
+
+// What is already scraped (raw/<onshape id>/) and imported (in the last import report), so the
+// Documents list can mark it and stop a document from being converted again by accident.
+ipcMain.handle('state', () => {
+  const raw = fs.existsSync(RAW)
+    ? fs.readdirSync(RAW).filter((n) => /^[0-9a-f]{24}$/.test(n) && fs.existsSync(path.join(RAW, n, 'document.json')))
+    : [];
+  const { report } = readImportReport();
+  const imported = (report && report.documents ? report.documents : [])
+    .filter((d) => !d.failed && d.cadrs_id)
+    .map((d) => ({ id: d.onshape_id, name: d.name, cadrsId: d.cadrs_id }));
+  return { raw, imported, dryRun: !!(report && report.dry_run) };
 });
 
 // Ticket drafts: one Markdown GitHub issue per translation defect group, written offline to
@@ -619,9 +689,9 @@ ipcMain.handle('issue-pick-files', async () => {
   });
   return r.canceled ? [] : r.filePaths;
 });
-ipcMain.handle('issue-create', (_e, { title, body, files } = {}) => {
+ipcMain.handle('issue-create', (_e, { title, body, files, labels } = {}) => {
   try {
-    return issues.createDraft({ title, body, files: files || [], root: ROOT });
+    return issues.createDraft({ title, body, files: files || [], labels: labels || [], root: ROOT });
   } catch (e) {
     return { error: String(e && e.message ? e.message : e) };
   }

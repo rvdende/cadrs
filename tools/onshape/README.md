@@ -51,7 +51,9 @@ importer panel on the left. One transfer is:
 
 1. **Log in** to Onshape in the right-hand pane. The app remembers the session for 30 days.
 2. **Pick documents** — *Load my documents* lists your account's documents (latest first), or
-   paste a shared document's URL / id and press Enter.
+   paste a shared document's URL / id and press Enter. Documents already scraped (`raw/<id>/`) or
+   imported (in the last report) are marked **scraped** / **imported**; an imported one cannot be
+   ticked again unless **re-download** is on, so a test run stays on the projects you picked.
 3. **Convert** — *Convert selected* downloads each document with `scrape.js`, runs
    `cadrs-onshape import`, and shows progress and a live log. Cancelling stops the download; a
    second click replaces a previous import of the same document (ids derive from Onshape's, so
@@ -110,6 +112,12 @@ Onshape.
   `--data-dir <store>` picks another store; without `--out`, one document goes to `./<name>.cadrs`
   and several/`--all` to `./cadrs-exports/`. Add `--out` paths to an issue with the *New ticket*
   tab's **Attach files…** (or the import *Tickets* drafts' attachment list).
+  Before exporting, the app checks the last report: it must not be a dry run, every document must
+  still be in the store, and it must have parts — otherwise it **refuses with the reason** and
+  starts no rebuild. Exports run in child processes with progress and **Cancel export**; a
+  document that does not finish within 2 min (.cadrs) or 3 min (STEP) is refused with a message
+  that a very large Part Studio belongs on the command line (`CADRS_EXPORT_TIMEOUT_MS` overrides
+  the limit).
 - **A dry run** — `--dry-run` or the app's *dry run* checkbox — only builds and reports: it writes
   no document into the store, so there is nothing to export until it is unchecked and converted.
 
@@ -199,8 +207,10 @@ wrong results, UI issues). It keeps the two things GitHub needs as **separate st
 - the **attachments** copied into `attachments/` next to it — drag them into the issue, because
   GitHub cannot attach files through a URL.
 
-A draft is a folder under `<root>/issues/` (`$CADRS_ONSHAPE_ROOT`, by default
-`~/work/cadrs_onshape/issues/`):
+The tab writes **Type** (Bug / Missing feature / Improvement / Other) and **Where** (cadrs.net web
+app / GitHub build / Onshape importer / Other) into the body and as suggested labels, so a missing
+feature on cadrs.net is not mixed up with an importer defect. A draft is a folder under
+`<root>/issues/` (`$CADRS_ONSHAPE_ROOT`, by default `~/work/cadrs_onshape/issues/`):
 
 ```
 <root>/issues/2026-11-26-07-30-12-extrude-of-selected-sketch-regions/
@@ -255,6 +265,7 @@ scraped documents use.
 cargo run -r -p cadrs_onshape -- import                     # every scraped document
 cargo run -r -p cadrs_onshape -- import cabinet --dry-run   # build and report, don't save
 cargo run -r -p cadrs_onshape -- import --json report.json  # also write the JSON report
+cargo run -r -p cadrs_onshape -- list [--json]                       # what is in the store
 cargo run -r -p cadrs_onshape -- export "Capac2" --out Capac2.cadrs  # a portable .cadrs package
 cargo run -r -p cadrs_onshape -- step "Capac2" --out steps/          # rebuilt STEP, one per Part Studio
 ```

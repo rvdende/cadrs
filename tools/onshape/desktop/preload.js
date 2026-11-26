@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('api', {
   openCadrsFolder: () => ipcRenderer.invoke('open-cadrs-folder'),
   exportSteps: () => ipcRenderer.invoke('export-steps'),
   openStepsFolder: () => ipcRenderer.invoke('open-steps-folder'),
+  cancelExport: () => ipcRenderer.invoke('cancel-export'),
+  state: () => ipcRenderer.invoke('state'),
   ticketsGenerate: () => ipcRenderer.invoke('tickets-generate'),
   ticketCopy: (text) => ipcRenderer.invoke('tickets-copy', text),
   ticketOpen: (ticket) => ipcRenderer.invoke('tickets-open', ticket),

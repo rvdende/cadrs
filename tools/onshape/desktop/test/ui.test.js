@@ -122,6 +122,29 @@ test('ui: the Report tab exports the imported documents as .cadrs packages', () 
   assert.match(mainSource, /'export'/);
 });
 
+test('ui: the Document list marks imported/scraped documents and the exports can be cancelled', () => {
+  assert.match(html, /id="docLegend"/);
+  assert.match(html, /api\.state\(\)/);
+  assert.match(html, /api\.cancelExport\(\)/);
+  assert.match(html, /refreshState/);
+  assert.match(html, /importedIds/);
+  assert.match(preloadSource, /state: \(\) => ipcRenderer\.invoke\('state'\)/);
+  assert.match(preloadSource, /cancelExport: \(\) => ipcRenderer\.invoke\('cancel-export'\)/);
+  assert.match(mainSource, /ipcMain\.handle\('state'/);
+  assert.match(mainSource, /ipcMain\.handle\('cancel-export'/);
+  assert.match(mainSource, /exports\.preflight/);
+  assert.match(mainSource, /importerAsync/);
+});
+
+test('ui: a new ticket says what kind it is and where it happens', () => {
+  for (const id of ['iKind', 'iWhere']) assert.match(html, new RegExp(`id="${id}"`));
+  assert.match(html, /### Type/);
+  assert.match(html, /### Where/);
+  assert.match(html, /issueLabels\(\)/);
+  assert.match(html, /labels: issueLabels\(\)/);
+  assert.match(mainSource, /labels: labels \|\| \[\]/);
+});
+
 test('ui: the Report tab also exports rebuilt STEP files', () => {
   for (const id of ['rStep', 'rStepFolder']) {
     assert.match(html, new RegExp(`id="${id}"`), `#${id} exists`);
@@ -132,7 +155,7 @@ test('ui: the Report tab also exports rebuilt STEP files', () => {
   assert.match(preloadSource, /openStepsFolder: \(\) => ipcRenderer\.invoke\('open-steps-folder'\)/);
   assert.match(mainSource, /ipcMain\.handle\('export-steps'/);
   assert.match(mainSource, /ipcMain\.handle\('open-steps-folder'/);
-  assert.match(mainSource, /'step', String\(doc\.cadrs_id\)/);
+  assert.match(mainSource, /'step', doc\.cadrsId/);
 });
 
 test('main: the Onshape pane gets a Chrome identity, GPU switches and navigation IPC', () => {
@@ -148,7 +171,7 @@ test('main: the Onshape pane gets a Chrome identity, GPU switches and navigation
 test('package.json: test script and packaged files include the new modules', () => {
   assert.equal(pkg.scripts.test, 'node --test "test/**/*.test.js"');
   assert.equal(pkg.scripts.tickets, 'node tickets.js');
-  for (const file of ['main.js', 'chrome.js', 'preload.js', 'tickets.js', 'issues.js', 'reports.js', 'reportfiles.js', 'bugreport.js', 'fsanalyze.js', 'comparereport.js', 'mdhtml.js', 'ui/**']) {
+  for (const file of ['main.js', 'chrome.js', 'preload.js', 'tickets.js', 'issues.js', 'exports.js', 'reports.js', 'reportfiles.js', 'bugreport.js', 'fsanalyze.js', 'comparereport.js', 'mdhtml.js', 'ui/**']) {
     assert.ok(pkg.build.files.includes(file), `packaged file ${file}`);
   }
 });

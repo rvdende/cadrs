@@ -15,6 +15,7 @@
 //!                                                   rebuild stored documents and export their
 //!                                                   Part Studios as STEP (to compare with Onshape's
 //!                                                   own STEP export)
+//! cadrs-onshape list [--json]                       the documents in the store
 //!
 //! --raw <dir>        the scraped data (default ~/work/cadrs_onshape/raw)
 //! --data-dir <dir>   the cadrs document store (default: the app's, as `cadrs` finds it)
@@ -85,6 +86,7 @@ fn main() -> ExitCode {
     }
     match rest.first().map(String::as_str) {
         Some("check-queries") => check_queries(&raw_dir),
+        Some("list") => list_documents(&data_dir, json_out.is_some()),
         Some("export") => export(&data_dir, &rest[1..], out.as_deref(), all),
         Some("step") => step(&data_dir, &rest[1..], out.as_deref(), all, individual),
         Some("compare") => match (rest.get(1), rest.get(2)) {
@@ -132,7 +134,7 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: cadrs-onshape (import [<name or id>…] [--dry-run] [--json <file>] | export <name or id>… [--out <file.cadrs or dir>] [--all] | step <name or id>… [--out <file.step or dir>] [--all] [--individual] | compare <file.cadrs> <file.step> | check-queries) [--raw <dir>] [--data-dir <dir>]"
+                "usage: cadrs-onshape (import [<name or id>…] [--dry-run] [--json <file>] | list [--json] | export <name or id>… [--out <file.cadrs or dir>] [--all] | step <name or id>… [--out <file.step or dir>] [--all] [--individual] | compare <file.cadrs> <file.step> | check-queries) [--raw <dir>] [--data-dir <dir>]"
             );
             ExitCode::from(2)
         }
@@ -388,6 +390,46 @@ fn import_one(
     } else {
         ExitCode::FAILURE
     }
+}
+
+/// The documents in the store, as JSON (`--json`) or a table: the app's preflight checks that an
+/// import report's documents really exist before it offers to export them.
+fn list_documents(data_dir: &Option<PathBuf>, json: bool) -> ExitCode {
+    let Some(dir) = data_dir else {
+        eprintln!("no document store: pass --data-dir");
+        return ExitCode::from(2);
+    };
+    let store = Store::new(dir.clone());
+    let (library, _) = store.list();
+    if json {
+        let docs: Vec<serde_json::Value> = library
+            .entries
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "id": e.id.0.to_string(),
+                    "name": e.name,
+                    "created": e.meta.created,
+                    "modified": e.meta.modified,
+                })
+            })
+            .collect();
+        match serde_json::to_string_pretty(&serde_json::json!({
+            "store": dir.display().to_string(),
+            "documents": docs,
+        })) {
+            Ok(text) => println!("{text}"),
+            Err(e) => {
+                eprintln!("cannot serialize the document list: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        for e in &library.entries {
+            println!("{}  {}", e.id.0, e.name);
+        }
+    }
+    ExitCode::SUCCESS
 }
 
 /// A file-name-safe version of a document name for its exported package.

@@ -1,6 +1,6 @@
 {
   "name": "cadrs-onshape-importer",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Log in to Onshape, pick documents, convert them into cadrs documents with a report",
   "main": "main.js",
   "private": true,
@@ -22,6 +22,7 @@
       "reportfiles.js",
       "reports.js",
       "issues.js",
+      "exports.js",
       "tickets.js",
       "preload.js",
       "onshape-preload.js",
