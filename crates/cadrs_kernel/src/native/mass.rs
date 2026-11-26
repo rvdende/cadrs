@@ -2360,7 +2360,9 @@ mod tests {
         let crate::native::draw::Shape::Body(cube) = k.box_(10.0, 20.0, 30.0).unwrap() else {
             unreachable!()
         };
-        let edges: Vec<crate::EdgeId> = (0..k.edges(cube).unwrap().len() as u64)
+        // (All but one edge: every edge of a box rounded is built as its inset grown, its
+        // corners balls with exact p-curves, none of them costly.)
+        let edges: Vec<crate::EdgeId> = (0..k.edges(cube).unwrap().len() as u64 - 1)
             .map(crate::EdgeId)
             .collect();
         let round = k.fillet(cube, &edges, 2.0).unwrap().bodies[0];

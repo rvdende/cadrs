@@ -275,3 +275,44 @@ fn a_prism_rounded_all_over_past_a_short_side() {
     let v = volume(&k, out);
     assert!((v - want).abs() < 1e-6 * want, "volume {v}, want {want}");
 }
+
+#[test]
+fn every_edge_of_a_box_rounded_is_its_inset_grown() {
+    // A box a × b × c with every edge rounded by r is the box moved in by r grown by a ball:
+    // V = a'b'c' + 2(a'b' + b'c' + c'a') r + π r² (a' + b' + c') + 4πr³/3 and
+    // A = 2(a'b' + b'c' + c'a') + 2π r (a' + b' + c') + 4πr², with a' = a − 2r and so on.
+    use cadrs_kernel::*;
+    use std::f64::consts::PI;
+    let mut k = DefaultKernel::default();
+    let (a, b, c, r) = (10.0, 20.0, 30.0, 2.0);
+    let cube = k
+        .primitive(&Primitive::Box {
+            min: nalgebra::Point3::new(1.0, 2.0, 3.0),
+            max: nalgebra::Point3::new(1.0 + a, 2.0 + b, 3.0 + c),
+        })
+        .unwrap()
+        .first()
+        .unwrap();
+    let edges: Vec<EdgeId> = k.edges(cube).unwrap().iter().map(|e| e.id).collect();
+    let round = k.fillet(cube, &edges, r).unwrap();
+    let id = round.first().unwrap();
+    let (x, y, z) = (a - 2.0 * r, b - 2.0 * r, c - 2.0 * r);
+    let m = k.mass_properties(id).unwrap();
+    let v = x * y * z
+        + 2.0 * (x * y + y * z + z * x) * r
+        + PI * r * r * (x + y + z)
+        + 4.0 / 3.0 * PI * r.powi(3);
+    let s = 2.0 * (x * y + y * z + z * x) + 2.0 * PI * r * (x + y + z) + 4.0 * PI * r * r;
+    assert!(
+        (m.volume - v).abs() <= 1e-10 * v,
+        "volume {} vs {v}",
+        m.volume
+    );
+    assert!(
+        (m.surface_area - s).abs() <= 1e-10 * s,
+        "area {} vs {s}",
+        m.surface_area
+    );
+    assert_eq!(k.faces(id).unwrap().len(), 6 + 12 + 8);
+    assert!(k.get(id).unwrap().check().is_empty());
+}

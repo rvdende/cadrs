@@ -557,7 +557,7 @@ fn grown_filleted(b: &Body, dist: &[f64], d: f64) -> Option<Body> {
 /// patch at each corner bounded by its edges' end arcs. The same solid the slabs', tubes' and
 /// balls' union makes, without the dozens of booleans. None unless every face is a plane with
 /// one loop and every edge a straight convex edge between two faces (then the result is checked).
-fn grown_convex(b: &Body, d: f64) -> Option<Body> {
+pub(crate) fn grown_convex(b: &Body, d: f64) -> Option<Body> {
     use crate::native::pcurve::pcurve;
     use crate::native::topo::{BodyBuilder, Coedge};
     use std::collections::HashMap;
