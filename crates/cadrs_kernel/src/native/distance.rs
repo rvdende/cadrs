@@ -925,6 +925,11 @@ pub fn kernel_distance(
         return Ok(r);
     }
     if sense == Sense::Min
+        && let Some(r) = two_spheres(k, a, b)
+    {
+        return Ok(r);
+    }
+    if sense == Sense::Min
         && let Some(r) = held(k, a, b)?
     {
         return Ok(r);
@@ -1073,6 +1078,90 @@ fn canonical_turn(
     })
 }
 
+/// The nearest points of two whole spheres (bodies of one closed face on a sphere, each the
+/// target as its boundary or as its solid), in closed form along the line of their centres: apart,
+/// their gap; crossing, 0 on the circle where they meet; one inside the other, the gap between
+/// the shells, or 0 where the outer one is a solid. None for any other pair.
+fn two_spheres(
+    k: &super::NativeKernel,
+    a: &crate::DistanceTarget,
+    b: &crate::DistanceTarget,
+) -> Option<crate::DistanceResult> {
+    use crate::{DistanceLocation, DistanceTarget};
+    let sphere = |t: &DistanceTarget| -> Option<(P3, f64, bool, std::sync::Arc<Body>)> {
+        let (id, solid) = match *t {
+            DistanceTarget::Body(id) => (id, false),
+            DistanceTarget::Solid(id) => (id, true),
+            _ => return None,
+        };
+        let body = k.entry(id).ok()?.body.clone();
+        let Surface::Sphere { f, r } = &body.faces.first()?.surf else {
+            return None;
+        };
+        let whole = body.faces.len() == 1
+            && body.solids.len() == 1
+            && body.shells.len() == 1
+            && body.shells[0].closed;
+        whole.then_some((f.o, *r, solid, body))
+    };
+    let (c1, r1, s1, b1) = sphere(a)?;
+    let (c2, r2, s2, b2) = sphere(b)?;
+    let w = c2 - c1;
+    let d = w.norm();
+    let dir = w.try_normalize(0.0).unwrap_or_else(V3::x);
+    let on = |b: &Body, q: P3| {
+        let (u, v) = b.faces[0].surf.project(&q, None);
+        DistanceLocation::Face(crate::FaceId(0), u, v)
+    };
+    let result = |dist: f64, qa: P3, qb: P3, la: DistanceLocation, lb: DistanceLocation| {
+        crate::DistanceResult {
+            distance: dist.max(0.0),
+            a: qa,
+            b: qb,
+            a_at: la,
+            b_at: lb,
+        }
+    };
+    if d >= r1 + r2 {
+        // Apart.
+        let (qa, qb) = (c1 + dir * r1, c2 - dir * r2);
+        return Some(result(d - r1 - r2, qa, qb, on(&b1, qa), on(&b2, qb)));
+    }
+    if d >= (r1 - r2).abs() && d > 0.0 {
+        // Crossing: a point of the circle where the shells meet (each solid holds it too).
+        let x = (d * d + r1 * r1 - r2 * r2) / (2.0 * d);
+        let h = (r1 * r1 - x * x).max(0.0).sqrt();
+        let q = c1 + dir * x + any_perpendicular(&dir).normalize() * h;
+        return Some(result(0.0, q, q, on(&b1, q), on(&b2, q)));
+    }
+    // One inside the other: the inner's shell against the outer's.
+    let (outer_is_a, (ro, so), (ri, ci)) = if r1 >= r2 {
+        (true, (r1, s1), (r2, c2))
+    } else {
+        (false, (r2, s2), (r1, c1))
+    };
+    let co = if outer_is_a { c1 } else { c2 };
+    let out = (ci - co).try_normalize(0.0).unwrap_or_else(V3::x);
+    if so {
+        // The outer one's solid holds the inner one: 0 at a point of the inner.
+        let q = ci + out * ri;
+        let at = DistanceLocation::Point;
+        let (la, lb) = if outer_is_a {
+            (at, on(&b2, q))
+        } else {
+            (on(&b1, q), at)
+        };
+        return Some(result(0.0, q, q, la, lb));
+    }
+    let (qi, qo) = (ci + out * ri, co + out * ro);
+    let gap = ro - (ci - co).norm() - ri;
+    Some(if outer_is_a {
+        result(gap, qo, qi, on(&b1, qo), on(&b2, qi))
+    } else {
+        result(gap, qi, qo, on(&b1, qi), on(&b2, qo))
+    })
+}
+
 /// [`kernel_distance`]'s answer where a [`crate::DistanceTarget::Solid`] holds a point of the
 /// other side inside it: distance 0 there. Where neither holds the other, the two are apart or
 /// their boundaries meet, and the boundaries' measure is the answer. One point of each shell of a
@@ -1145,7 +1234,8 @@ fn held(
 }
 
 /// [`kernel_distance`]'s nearest of a point and a body's (or one face's) boundary where every
-/// face involved is a plane, a sphere or a cylinder and every edge a line or a circle: on those
+/// face involved is a plane, a sphere, a cylinder, a ring torus or a cone (off their axes) and
+/// every edge a line or a circle: on those
 /// surfaces the point's distance has one minimum, the foot of its perpendicular, so the nearest
 /// point of a face is that foot when it lies inside the face's loops and on its edges otherwise,
 /// all in closed form. None where any of that does not hold, or a foot lies too near its face's
@@ -1263,10 +1353,32 @@ fn analytic_nearest(
     let mut edges: Vec<usize> = Vec::new();
     for &fi in &faces {
         let f = &body.faces[fi];
-        if !matches!(
-            f.surf,
-            Surface::Plane { .. } | Surface::Sphere { .. } | Surface::Cylinder { .. }
-        ) {
+        // (A ring torus and a cone's face clear of its apex have one minimum of the distance
+        // too, the foot in the point's meridian half-plane, for a point off their axis: on it,
+        // a whole circle of feet, any of which the face may hold.)
+        let off_axis = |fr: &Frame| {
+            let l = fr.local(&p);
+            l.x.hypot(l.y) > tol::REL_POINT * (1.0 + p.coords.norm())
+        };
+        let apex_free = || {
+            f.loops
+                .iter()
+                .flatten()
+                .all(|c| !body.edges[c.edge].degenerate)
+        };
+        // On a torus's axis every meridian's foot is as near: one the face holds is the
+        // nearest point (else the general measure).
+        let mut any_foot = false;
+        let ok = match &f.surf {
+            Surface::Plane { .. } | Surface::Sphere { .. } | Surface::Cylinder { .. } => true,
+            Surface::Torus { f: fr, rmaj, rmin } => {
+                any_foot = !off_axis(fr);
+                rmin < rmaj
+            }
+            Surface::Cone { f: fr, .. } => off_axis(fr) && apex_free(),
+            _ => false,
+        };
+        if !ok {
             return None;
         }
         let (u, v) = f.surf.project(&p, None);
@@ -1287,6 +1399,9 @@ fn analytic_nearest(
                 InFace::Outside => {}
                 _ => return None,
             }
+        }
+        if !inside && any_foot {
+            return None;
         }
         if !inside {
             for c in f.loops.iter().flatten() {
