@@ -578,12 +578,32 @@ fn grown_filleted(b: &Body, dist: &[f64], d: f64) -> Option<Body> {
     (out.solids.len() == 1 && out.check_with(CheckLevel::Fast).is_empty()).then_some(out)
 }
 
+/// The line from `a` to `z` as an edge's curve is made (about its middle, at unit speed) and
+/// its half length: the edge runs over [−h, h].
+fn straight(a: P3, z: P3) -> (Curve, f64) {
+    let h = 0.5 * (z - a).norm();
+    (
+        Curve::Line {
+            o: nalgebra::center(&a, &z),
+            d: (z - a) / (2.0 * h),
+        },
+        h,
+    )
+}
+
 /// A convex polyhedron grown by a ball of radius `d`, built face by face: each face moved out
 /// by `d`, a cylinder of radius `d` along each edge between its faces' moved copies, and a ball
 /// patch at each corner bounded by its edges' end arcs. The same solid the slabs', tubes' and
 /// balls' union makes, without the dozens of booleans. None unless every face is a plane with
 /// one loop and every edge a straight convex edge between two faces (then the result is checked).
-fn grown_convex(b: &Body, d: f64) -> Option<Body> {
+pub(crate) fn grown_convex(b: &Body, d: f64) -> Option<Body> {
+    grown_convex_with(b, d, true)
+}
+
+/// [`grown_convex`], each corner's ball with its pole on one of the corner's faces (`poles`:
+/// exact p-curves, a point edge there) or as a fillet's corner is (its x out through the
+/// corner's middle, its axis square to that: the patch about the equator, its three arcs).
+pub(crate) fn grown_convex_with(b: &Body, d: f64, poles: bool) -> Option<Body> {
     use crate::native::pcurve::pcurve;
     use crate::native::topo::{BodyBuilder, Coedge};
     use std::collections::HashMap;
@@ -638,9 +658,8 @@ fn grown_convex(b: &Body, d: f64) -> Option<Body> {
         let [v0, v1] = b.edges[e].v;
         for f in [sides[e].0, sides[e].1] {
             let (a, z) = (at(&mut out, f, v0), at(&mut out, f, v1));
-            let (pa, pz) = (b.verts[v0].p + normal[f] * d, b.verts[v1].p + normal[f] * d);
-            let c = Curve::Line { o: pa, d: pz - pa };
-            line.insert((f, e), out.edge(c, 0.0, 1.0, a, z));
+            let (c, h) = straight(b.verts[v0].p + normal[f] * d, b.verts[v1].p + normal[f] * d);
+            line.insert((f, e), out.edge(c, -h, h, a, z));
         }
     }
     // Each edge's end arcs, about its vertices from f1's side to f2's: (edge, vertex) -> new edge.
@@ -669,9 +688,7 @@ fn grown_convex(b: &Body, d: f64) -> Option<Body> {
     };
     let line_curve = |f: usize, e: usize| {
         let [v0, v1] = b.edges[e].v;
-        let pa = b.verts[v0].p + normal[f] * d;
-        let pz = b.verts[v1].p + normal[f] * d;
-        Curve::Line { o: pa, d: pz - pa }
+        straight(b.verts[v0].p + normal[f] * d, b.verts[v1].p + normal[f] * d)
     };
     let sensed = |surf: &Surface, p: P3, out_dir: V3| {
         let (u, v) = surf.project(&p, None);
@@ -694,15 +711,8 @@ fn grown_convex(b: &Body, d: f64) -> Option<Body> {
         let lp = f.loops[0]
             .iter()
             .map(|c| {
-                co(
-                    &surf,
-                    near,
-                    line[&(fi, c.edge)],
-                    &line_curve(fi, c.edge),
-                    0.0,
-                    1.0,
-                    c.fwd,
-                )
+                let (lc, h) = line_curve(fi, c.edge);
+                co(&surf, near, line[&(fi, c.edge)], &lc, -h, h, c.fwd)
             })
             .collect();
         faces.push(out.face(surf, f.sense, vec![lp]));
@@ -713,33 +723,24 @@ fn grown_convex(b: &Body, d: f64) -> Option<Body> {
         let [v0, v1] = b.edges[e].v;
         let (p0, p1) = (b.verts[v0].p, b.verts[v1].p);
         let mid_dir = (normal[f1] + normal[f2]).normalize();
-        let surf = Surface::Cylinder {
-            f: Frame::from_xz(p0, -mid_dir, p1 - p0),
-            r: d,
+        // (As a fillet's round: about the edge's middle, its angle from 0 at one face's touch
+        // line round to the other's.)
+        let mid = nalgebra::center(&p0, &p1);
+        let fr = Frame::from_xz(mid, normal[f1], p1 - p0);
+        let fr = if fr.y.dot(&normal[f2]) >= 0.0 {
+            fr
+        } else {
+            Frame::from_xz(mid, normal[f2], p1 - p0)
         };
+        let surf = Surface::Cylinder { f: fr, r: d };
         let (near, sense) = sensed(&surf, nalgebra::center(&p0, &p1) + mid_dir * d, mid_dir);
         let (a1, c1, t1) = &arc[&(e, v1)];
         let (a0, c0, t0) = &arc[&(e, v0)];
+        let ((l2, h2), (l1, h1)) = (line_curve(f2, e), line_curve(f1, e));
         let lp = vec![
-            co(
-                &surf,
-                near,
-                line[&(f2, e)],
-                &line_curve(f2, e),
-                0.0,
-                1.0,
-                true,
-            ),
+            co(&surf, near, line[&(f2, e)], &l2, -h2, h2, true),
             co(&surf, near, *a1, c1, 0.0, *t1, false),
-            co(
-                &surf,
-                near,
-                line[&(f1, e)],
-                &line_curve(f1, e),
-                0.0,
-                1.0,
-                false,
-            ),
+            co(&surf, near, line[&(f1, e)], &l1, -h1, h1, false),
             co(&surf, near, *a0, c0, 0.0, *t0, true),
         ];
         faces.push(out.face(surf, sense, vec![lp]));
@@ -801,6 +802,22 @@ fn grown_convex(b: &Body, d: f64) -> Option<Body> {
                 })
                 .count()
         };
+        if !poles {
+            let surf = Surface::Sphere {
+                f: Frame::from_xz(pw, m, any_perpendicular(&m)),
+                r: d,
+            };
+            let (near, sense) = sensed(&surf, pw + m * d, m);
+            let lp: Vec<Coedge> = order
+                .iter()
+                .map(|&(e, fwd)| {
+                    let (id, c, th) = &arc[&(e, w)];
+                    co(&surf, near, *id, c, 0.0, *th, fwd)
+                })
+                .collect();
+            faces.push(out.face(surf, sense, vec![lp]));
+            continue;
+        }
         let pole = *starts.iter().max_by_key(|&&p| exact(p))?;
         let surf = Surface::Sphere {
             f: Frame::from_xz(pw, m, normal[pole]),
