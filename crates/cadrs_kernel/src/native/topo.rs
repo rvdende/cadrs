@@ -2473,6 +2473,22 @@ fn flatten(pc: &Curve, t0: f64, t1: f64, scale: (f64, f64), flat: f64, tol: f64,
         r.tol.push(tol);
         return;
     }
+    // A circle scaled alike both ways: even steps of the angle whose sagitta is `flat`
+    // (the split below comes to the same points, four evaluations a split).
+    if let Curve::Circle { r: rc, .. } = pc
+        && (scale.0 - scale.1).abs() <= 1e-12 * scale.0.abs().max(scale.1.abs())
+    {
+        let big = rc * scale.0.abs();
+        if big > flat {
+            let step = 2.0 * (1.0 - flat / big).clamp(-1.0, 1.0).acos();
+            let n = ((t1 - t0).abs() / step).ceil().clamp(4.0, 1e6) as usize;
+            for i in 0..n {
+                r.pts.push(at(t0 + (t1 - t0) * i as f64 / n as f64));
+                r.tol.push(tol + flat);
+            }
+            return;
+        }
+    }
     // Each span's three samples (at a quarter, the middle and three quarters) are its halves'
     // middles and its split point, so a split evaluates the curve four times, not eight.
     #[allow(clippy::too_many_arguments, reason = "a recursion's state")]
