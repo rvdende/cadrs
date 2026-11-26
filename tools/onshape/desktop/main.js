@@ -16,7 +16,7 @@ const { readReportFiles } = require('./reportfiles');
 const tickets = require('./tickets');
 const { chromeUserAgent, applyGpuSwitches, softwareMode, softwareRelaunchArgs } = require('./chrome');
 const issues = require('./issues');
-const exports = require('./exports');
+const exportTools = require('./exports');
 
 const ROOT = process.env.CADRS_ONSHAPE_ROOT || path.join(os.homedir(), 'work', 'cadrs_onshape');
 const RAW = path.join(ROOT, 'raw');
@@ -557,7 +557,7 @@ async function exportDocuments(kind) {
   if (exportRunning) return { error: 'An export is already running: wait, or press Cancel.' };
   const { report, error } = readImportReport();
   if (error) return { error };
-  const plan = exports.preflight(report, await storedDocumentIds());
+  const plan = exportTools.preflight(report, await storedDocumentIds());
   if (!plan.ok) return { refused: true, error: plan.errors.join('\n\n') };
   const dir = path.join(ROOT, kind === 'cadrs' ? 'cadrs' : 'steps');
   fs.mkdirSync(dir, { recursive: true });
@@ -575,7 +575,7 @@ async function exportDocuments(kind) {
       const doc = plan.documents[i];
       send({ type: 'export-progress', kind, index: i + 1, total: plan.documents.length, name: doc.name, phase: 'running' });
       const argv = kind === 'cadrs'
-        ? ['export', doc.cadrsId, '--out', exports.cadrsTarget(dir, doc.name, used)]
+        ? ['export', doc.cadrsId, '--out', exportTools.cadrsTarget(dir, doc.name, used)]
         : ['step', doc.cadrsId, '--out', dir];
       const r = await importerAsync(argv, { timeoutMs });
       const failure = r.timedOut

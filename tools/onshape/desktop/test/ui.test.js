@@ -132,7 +132,7 @@ test('ui: the Document list marks imported/scraped documents and the exports can
   assert.match(preloadSource, /cancelExport: \(\) => ipcRenderer\.invoke\('cancel-export'\)/);
   assert.match(mainSource, /ipcMain\.handle\('state'/);
   assert.match(mainSource, /ipcMain\.handle\('cancel-export'/);
-  assert.match(mainSource, /exports\.preflight/);
+  assert.match(mainSource, /exportTools\.preflight/);
   assert.match(mainSource, /importerAsync/);
 });
 
@@ -174,6 +174,22 @@ test('package.json: test script and packaged files include the new modules', () 
   for (const file of ['main.js', 'chrome.js', 'preload.js', 'tickets.js', 'issues.js', 'exports.js', 'reports.js', 'reportfiles.js', 'bugreport.js', 'fsanalyze.js', 'comparereport.js', 'mdhtml.js', 'ui/**']) {
     assert.ok(pkg.build.files.includes(file), `packaged file ${file}`);
   }
+});
+
+test('every desktop module parses inside the CommonJS wrapper (no `exports` shadowing)', () => {
+  // Electron loads main.js as a CommonJS module, i.e. inside `function (exports, require, module…)`;
+  // `const exports = require('./exports')` there is a SyntaxError that `node --check` does not see
+  // (it checks as a plain script). Compile each module in the same wrapper scope instead.
+  const files = fs.readdirSync(desktop).filter((name) => name.endsWith('.js')).sort();
+  assert.ok(files.length >= 10, 'the desktop modules are there');
+  for (const name of files) {
+    const source = fs.readFileSync(path.join(desktop, name), 'utf8');
+    assert.doesNotThrow(
+      () => new Function('exports', 'require', 'module', '__filename', '__dirname', source),
+      `${name} parses in the CommonJS wrapper`,
+    );
+  }
+  assert.doesNotMatch(mainSource, /\bconst exports\s*=/, 'main.js does not shadow the exports global');
 });
 
 test('build.sh: runs the tests before packaging and uses writable caches', () => {
