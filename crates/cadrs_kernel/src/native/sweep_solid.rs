@@ -6750,3 +6750,234 @@ fn ball_along(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Res
     };
     Some(run(k))
 }
+
+/// [`super::offset::round::shell`]'s inward shell `t` thick of a solid of revolution whose
+/// section is a convex polygon (its faces planes square to the axis, cylinders and cones about
+/// it), open at the `remove` faces, by its section: the cavity is the section with each kept
+/// face's edge moved in by t (the removed faces' and the axis's left where they are), the
+/// shell the section less that, revolved. Each face of the result on a face of the body's
+/// surface is traced to it; the walls moved in are left for the caller to trace. None for any
+/// other body, a cavity that meets the section's boundary in more than one stretch (a side
+/// removed between two caps), or a result whose volume isn't the sections' by Pappus.
+pub(crate) fn shelled_revolved(
+    b: &Body,
+    remove: &[usize],
+    t: f64,
+) -> Option<(Body, Vec<Vec<super::blend::FaceSrc>>)> {
+    type V2 = (f64, f64);
+    let rev = revolved(b)?;
+    let Section::Polygon(outer) = &rev.section else {
+        return None;
+    };
+    let n = outer.len();
+    let size = b.bbox().diagonal().max(t);
+    let near = 1e-9 * (1.0 + size);
+    let on_axis = |p: V2| p.0.abs() <= near;
+    let at = |p: V2| rev.o + rev.e1 * p.0 + rev.a * p.1;
+    // Each edge's face (None along the axis); every face some edge's.
+    let mut edge_face: Vec<Option<usize>> = Vec::with_capacity(n);
+    for i in 0..n {
+        let (p, q) = (outer[i], outer[(i + 1) % n]);
+        if on_axis(p) && on_axis(q) {
+            edge_face.push(None);
+            continue;
+        }
+        let m = at((0.5 * (p.0 + q.0), 0.5 * (p.1 + q.1)));
+        let on: Vec<usize> = (0..b.faces.len())
+            .filter(|&fi| b.faces[fi].surf.distance(&m) <= 1e-7 * (1.0 + size))
+            .collect();
+        let [f] = on[..] else { return None };
+        edge_face.push(Some(f));
+    }
+    if (0..b.faces.len()).any(|fi| !edge_face.contains(&Some(fi)))
+        || remove.iter().any(|f| !edge_face.contains(&Some(*f)))
+    {
+        return None;
+    }
+    // The cavity: the section clipped by each kept edge's line moved in by t (each vertex
+    // with whether the edge from it is such a line).
+    let mut cav: Vec<(V2, bool)> = outer.iter().map(|&p| (p, false)).collect();
+    for i in 0..n {
+        let Some(f) = edge_face[i] else { continue };
+        if remove.contains(&f) {
+            continue;
+        }
+        let (p, q) = (outer[i], outer[(i + 1) % n]);
+        let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+        let l = dx.hypot(dy);
+        // Inward: to the left of the counter-clockwise boundary.
+        let (nx, ny) = (-dy / l, dx / l);
+        let off = nx * p.0 + ny * p.1 + t;
+        let h = |v: V2| nx * v.0 + ny * v.1 - off;
+        let m = cav.len();
+        let mut out: Vec<(V2, bool)> = Vec::with_capacity(m + 2);
+        for k in 0..m {
+            let ((a, fa), (bq, _)) = (cav[k], cav[(k + 1) % m]);
+            let (ha, hb) = (h(a), h(bq));
+            let cut = |s: f64| (a.0 + (bq.0 - a.0) * s, a.1 + (bq.1 - a.1) * s);
+            match (ha >= 0.0, hb >= 0.0) {
+                (true, true) => out.push((a, fa)),
+                (true, false) => {
+                    out.push((a, fa));
+                    out.push((cut(ha / (ha - hb)), true));
+                }
+                (false, true) => out.push((cut(ha / (ha - hb)), fa)),
+                (false, false) => {}
+            }
+        }
+        out.dedup_by(|x, y| (x.0.0 - y.0.0).hypot(x.0.1 - y.0.1) <= near);
+        if out.len() >= 2 && {
+            let (f0, fl) = (out[0].0, out[out.len() - 1].0);
+            (f0.0 - fl.0).hypot(f0.1 - fl.1) <= near
+        } {
+            out.pop();
+        }
+        if out.len() < 3 {
+            return None;
+        }
+        cav = out;
+    }
+    let area = |poly: &[V2]| {
+        let m = poly.len();
+        let (mut a, mut mo) = (0.0, 0.0);
+        for i in 0..m {
+            let (p, q) = (poly[i], poly[(i + 1) % m]);
+            let c = p.0 * q.1 - q.0 * p.1;
+            a += c;
+            mo += c * (p.0 + q.0);
+        }
+        (a / 2.0, std::f64::consts::TAU * mo / 6.0)
+    };
+    let cav_pts: Vec<V2> = cav.iter().map(|c| c.0).collect();
+    let (ca, cv) = area(&cav_pts);
+    if !(ca > near * size) {
+        return None;
+    }
+    // The moved lines one stretch of the cavity's boundary: from cs round to ce.
+    let m = cav.len();
+    let starts: Vec<usize> = (0..m)
+        .filter(|&k| cav[k].1 && !cav[(k + m - 1) % m].1)
+        .collect();
+    let [cs] = starts[..] else { return None };
+    let mut ce = cs;
+    while cav[ce].1 {
+        ce = (ce + 1) % m;
+        if ce == cs {
+            return None;
+        }
+    }
+    // The shell's section: from cs along the outer boundary to ce, back along the moved lines.
+    let param = |v: V2| -> Option<(usize, f64)> {
+        (0..n).find_map(|i| {
+            let (p, q) = (outer[i], outer[(i + 1) % n]);
+            let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+            let l2 = dx * dx + dy * dy;
+            let s = ((v.0 - p.0) * dx + (v.1 - p.1) * dy) / l2;
+            let (fx, fy) = (p.0 + dx * s, p.1 + dy * s);
+            ((fx - v.0).hypot(fy - v.1) <= near && (-1e-12..=1.0 + 1e-12).contains(&s))
+                .then_some((i, s))
+        })
+    };
+    let (ps, pe) = (cav[cs].0, cav[ce].0);
+    let (is, ss) = param(ps)?;
+    let (ie, se) = param(pe)?;
+    let mut ring: Vec<V2> = vec![ps];
+    // The outer corners between: from is's end to ie's start (all round where both lie on
+    // one edge, ce before cs).
+    let mut steps = (ie + n - is) % n;
+    if steps == 0 && se < ss {
+        steps = n;
+    }
+    for k in 1..=steps {
+        ring.push(outer[(is + k) % n]);
+    }
+    ring.push(pe);
+    let mut k = ce;
+    while k != cs {
+        k = (k + m - 1) % m;
+        if k != cs {
+            ring.push(cav[k].0);
+        }
+    }
+    ring.dedup_by(|x, y| (x.0 - y.0).hypot(x.1 - y.1) <= near);
+    if ring.len() >= 2
+        && (ring[0].0 - ring[ring.len() - 1].0).hypot(ring[0].1 - ring[ring.len() - 1].1) <= near
+    {
+        ring.pop();
+    }
+    if ring.len() < 3 {
+        return None;
+    }
+    let (_, rv) = area(&ring);
+    let (_, ov) = area(outer);
+    if (rv - (ov - cv)).abs() > 1e-9 * ov.abs() {
+        return None;
+    }
+    let pt = |p: V2| nalgebra::Point2::new(p.0, p.1);
+    let curves: Vec<Curve2> = (0..ring.len())
+        .map(|i| Curve2::Line {
+            a: pt(ring[i]),
+            b: pt(ring[(i + 1) % ring.len()]),
+            source: None,
+        })
+        .collect();
+    let region = Region {
+        outer: Loop { curves },
+        holes: vec![],
+        source: Some(0),
+    };
+    let plane = Plane {
+        origin: rev.o,
+        x_dir: nalgebra::Unit::new_normalize(rev.e1),
+        normal: nalgebra::Unit::new_normalize(rev.e1.cross(&rev.a)),
+    };
+    let axis = Axis {
+        origin: rev.o,
+        dir: nalgebra::Unit::new_normalize(rev.a),
+    };
+    let mut k = NativeKernel::new();
+    let r = k
+        .revolve_with(
+            &Profile::new(plane, vec![region]),
+            &RevolveSpec::solid(axis, None),
+        )
+        .ok()?;
+    let body = (**k.get(*r.bodies.first()?).ok()?).clone();
+    let got = super::mass::body_volume(&body);
+    if !body.check().is_empty() || (got - rv).abs() > 1e-9 * rv.abs().max(1e-12) {
+        return None;
+    }
+    // Each face on a face of the body's surface, facing the same way: that face's.
+    let src = (0..body.faces.len())
+        .map(|fi| {
+            let f = &body.faces[fi];
+            let uvs: Vec<P2> = f
+                .loops
+                .iter()
+                .flatten()
+                .map(|c| {
+                    let e = &body.edges[c.edge];
+                    let q = c.pc.point(e.mid_t());
+                    P2::new(q.x, q.y)
+                })
+                .collect();
+            let (u, v) = uvs.iter().fold((0.0, 0.0), |s, q| (s.0 + q.x, s.1 + q.y));
+            let (u, v) = (u / uvs.len() as f64, v / uvs.len() as f64);
+            let p = f.surf.eval(u, v);
+            let nf = f.surf.normal(u, v).normalize() * if f.sense { 1.0 } else { -1.0 };
+            (0..b.faces.len())
+                .find(|&g| {
+                    let og = &b.faces[g];
+                    og.surf.distance(&p) <= 1e-7 * (1.0 + size) && {
+                        let (ou, ov) = og.surf.project(&p, None);
+                        let no =
+                            og.surf.normal(ou, ov).normalize() * if og.sense { 1.0 } else { -1.0 };
+                        no.dot(&nf) > 0.99
+                    }
+                })
+                .map(|g| vec![super::blend::FaceSrc::Input(g)])
+                .unwrap_or_default()
+        })
+        .collect();
+    Some((body, src))
+}

@@ -339,3 +339,42 @@ fn a_drilled_block_offset_short_of_its_hole_narrows_it() {
     assert!((got - want).abs() <= 1e-9 * want, "volume {got} vs {want}");
     assert!(k.get(grown).unwrap().check().is_empty());
 }
+
+#[test]
+fn a_frustum_shelled_open_at_its_base_by_its_section() {
+    // A frustum (radii r0 at the base, r1 at the top, h high) shelled t thick open at its
+    // base: the cavity is the frustum with its slanted side moved in by t (its radius t·L/h
+    // less, L the slant length) and its top down by t.
+    use cadrs_kernel::*;
+    use nalgebra::{Point3, Unit, Vector3};
+    use std::f64::consts::PI;
+    let (r0, r1, h, t) = (6.8, 4.5, 6.4, 0.57);
+    let mut k = DefaultKernel::default();
+    let c = k
+        .primitive(&Primitive::Cone {
+            base: Point3::new(1.0, 2.0, 3.0),
+            axis: Unit::new_normalize(Vector3::z()),
+            base_radius: r0,
+            top_radius: r1,
+            height: h,
+        })
+        .unwrap()
+        .first()
+        .unwrap();
+    let base = k
+        .faces(c)
+        .unwrap()
+        .iter()
+        .find(|f| (f.center.z - 3.0).abs() < 1e-9)
+        .map(|f| f.id)
+        .unwrap();
+    let s = k.shell(c, &[base], t).unwrap().first().unwrap();
+    let frustum = |a: f64, b: f64, h: f64| PI * h / 3.0 * (a * a + a * b + b * b);
+    let l = (r0 - r1).hypot(h);
+    let shift = t * l / h;
+    let (a, b) = (r0 - shift, r0 + (r1 - r0) * (h - t) / h - shift);
+    let want = frustum(r0, r1, h) - frustum(a, b, h - t);
+    let got = k.mass_properties(s).unwrap().volume;
+    assert!((got - want).abs() <= 1e-9 * want, "volume {got} vs {want}");
+    assert!(k.get(s).unwrap().check().is_empty());
+}

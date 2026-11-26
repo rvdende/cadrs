@@ -1394,7 +1394,13 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
     let v0 = crate::native::mass::body_volume(&b);
     // Walls whose surfaces the whole body lies within (a box's sides, a bore, a ball's sphere):
     // the cavity is where the moved surfaces' insides meet in the body, as far as the openings.
-    let supported = if spec.outward || spec.hollow {
+    // A solid of revolution with a convex section: shelled in its section, revolved.
+    let by_section = if spec.outward || spec.hollow {
+        None
+    } else {
+        crate::native::sweep_solid::shelled_revolved(&b, &remove, t)
+    };
+    let supported = if spec.outward || spec.hollow || by_section.is_some() {
         None
     } else {
         cavity_of_supports(&b, &remove, t)
@@ -1407,7 +1413,9 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
                 .map(|r| r.as_ref().map(|c| c.as_ref().map(|c| c.faces.len())))
         );
     }
-    let result = if let Some(Ok(cavity)) = supported {
+    let result = if let Some((body, src)) = by_section {
+        Tracked { body, src }
+    } else if let Some(Ok(cavity)) = supported {
         match cavity {
             // Every point of the body within t of a wall: nothing is hollowed. Walls that just
             // meet (a hair thinner would leave a cavity) leave the body itself; a shell thicker
