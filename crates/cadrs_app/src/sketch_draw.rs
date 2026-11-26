@@ -815,6 +815,15 @@ fn draw_sketches(
                 }
             }
         }
+        // A curve drawn twice is one edge of the regions, which name only one copy: the
+        // other's dashes showed through the outline too (#337).
+        if !outlined.is_empty() {
+            for (copy, of) in cadrs_sketch::region::duplicate_curves(&sk.geometry) {
+                if outlined.contains(&of) {
+                    outlined.insert(copy);
+                }
+            }
+        }
         // A hovered or selected curve is drawn orange over everything too.
         let outlined = |c: cadrs_sketch::CurveId| {
             let pick = crate::viewport::Pick::SketchCurve(f.id, c);
@@ -3429,7 +3438,8 @@ pub(crate) fn fill_mesh_with(s: &Sketch, plane: PlaneRef, outlined: bool) -> Mes
         if outlined && on_face && !s.imprint.is_empty() && bare_face_edge(s, r) {
             continue;
         }
-        let (verts, idx) = r.triangulate();
+        // To the drawn curves exactly (#337).
+        let (verts, idx) = r.triangulate_drawn();
         let base = positions.len() as u32;
         positions.extend(verts.iter().map(|p| world_exact(&frame, *p).to_array()));
         indices.extend(idx.into_iter().map(|i| i + base));

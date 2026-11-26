@@ -55,8 +55,9 @@ pub const POINT_TOLERANCE_PX: f64 = 7.0;
 /// Curves are hit within this many pixels.
 pub const CURVE_TOLERANCE_PX: f64 = 5.0;
 
-/// Maximum angle per segment when tessellating circles and arcs for picking.
-const PICK_STEP: f64 = std::f64::consts::PI / 90.0;
+/// Maximum angle per segment when tessellating circles and arcs for picking and drawing.
+/// Arcs, circles and ellipses on the same angle grid as region outlines (`geom::aligned_params`).
+const PICK_STEP: f64 = crate::geom::CURVE_STEP;
 
 /// The curve as a polyline in sketch coordinates (closed curves repeat their first point).
 pub fn curve_polyline(s: &Sketch, id: CurveId) -> Vec<Vec2> {
@@ -71,18 +72,20 @@ pub fn curve_polyline(s: &Sketch, id: CurveId) -> Vec<Vec2> {
             start_angle: 0.0,
             sweep: std::f64::consts::TAU,
         }
-        .tessellate(PICK_STEP, 16),
+        .tessellate_aligned(PICK_STEP, 16),
         CurveKind::Arc { .. } => s
             .arc_geom(id)
-            .map(|g| g.tessellate(PICK_STEP, 4))
+            .map(|g| g.tessellate_aligned(PICK_STEP, 4))
             .unwrap_or_default(),
         CurveKind::Ellipse { .. } | CurveKind::EllipseOffset { .. } => s
             .ellipse_geom(id)
-            .map(|g| g.tessellate(PICK_STEP, 16))
+            .map(|g| g.tessellate_range_aligned(0.0, std::f64::consts::TAU, PICK_STEP, 16))
             .unwrap_or_default(),
         CurveKind::EllipseArc { .. } => s
             .ellipse_arc_geom(id)
-            .map(|g| g.tessellate(PICK_STEP, 4))
+            .map(|g| {
+                g.e.tessellate_range_aligned(g.t0, g.t0 + g.sweep, PICK_STEP, 4)
+            })
             .unwrap_or_default(),
         CurveKind::Spline { .. } => s
             .spline_spans(id)

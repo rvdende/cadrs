@@ -493,6 +493,12 @@ pub const READ_ONLY: &str = "This version is open read-only: it can't be edited"
 impl ActiveDocument {
     /// A scratch document that is not saved.
     pub fn new(mut doc: Document) -> Self {
+        // Curves drawn twice (a DXF imported before such copies were left out, #337) become
+        // one, so deleting one in the sketch doesn't leave the other behind.
+        let removed = cadrs_core::duplicate_curves::remove(&mut doc);
+        if removed > 0 {
+            info!("removed {removed} duplicate sketch curve(s) on open");
+        }
         // Its sketches as regenerated when it was last edited: an edit regenerates only those
         // whose features above (or they themselves) change.
         cadrs_core::parts::note_regenerated(&doc);

@@ -1,0 +1,80 @@
+// #337: the sketch region under the pointer is tinted, so the area a click would pick shows
+// before the click; its outline and fill lie on the drawn curves. A Ø100 disc with a Ø40 hole,
+// the hole drawn twice (as in the #337 reporter's DXF).
+// While the sketch is edited (Select tool), no outline (the sketch's own curves are there):
+// 01 the pointer on the ring: the ring tinted pale orange.
+// 02 the pointer in the hole: the hole's disc tinted instead.
+// 03 the pointer on the outer circle: the curve hovered, no region tint.
+// 04 the ring selected (orange) and still hovered.
+// Accepted, in the Part Studio:
+// 05 nothing hovered: the sketch's grey fill.
+// 06 the pointer on the ring: the sketch tinted blue as a whole, the ring a pale orange over it.
+// 07 the pointer in the hole: the hole's disc tinted instead.
+// 08 the ring selected (orange) and still hovered: lighter than selected alone (09).
+// 09 the pointer away: the selected ring's orange alone, its outline solid (no dashes of the
+//    hole's second copy through it).
+// 10 seen low along the plane: the outline still solid, on both circles.
+// 11 zoomed in to the rim, the ring hovered: the tint reaches the circle all the way along.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Click(ui("sketch")),
+        WaitFor("sketch-dialog"),
+        Click(ui("feature-top")),
+        Key("C"),
+        ClickWorld(0, 0),
+        ClickWorld(50, 0),
+        Key("Escape"),
+        ClickWorld(0, 0),
+        ClickWorld(20, 0),
+        Key("Escape"),
+        // The hole drawn a second time on top of the first, as some DXF files have them: the
+        // selected ring's outline stays solid over both copies.
+        ClickWorld(0, 0),
+        ClickWorld(20, 0),
+        Key("Escape"),
+        Key("Escape"),
+        MoveWorld(-35, 10),
+        Wait(2),
+        Screenshot("01-sketch-ring-hovered"),
+        MoveWorld(5, 5),
+        Wait(2),
+        Screenshot("02-sketch-hole-hovered"),
+        MoveWorld(0, 50),
+        Wait(2),
+        Screenshot("03-sketch-curve-hovered"),
+        Click(world(-35, 10)),
+        Wait(2),
+        Screenshot("04-sketch-ring-selected-and-hovered"),
+        Click(ui("sketch-dialog-accept")),
+        MoveTo(1400, 800),
+        Wait(2),
+        Screenshot("05-nothing-hovered"),
+        MoveWorld(-35, 10),
+        Wait(2),
+        Screenshot("06-ring-hovered"),
+        MoveWorld(5, 5),
+        Wait(2),
+        Screenshot("07-hole-hovered"),
+        Click(world(-35, 10)),
+        Wait(2),
+        Screenshot("08-ring-selected-and-hovered"),
+        MoveTo(1400, 800),
+        Wait(2),
+        Screenshot("09-ring-selected"),
+        // Seen low along the plane: the outline lies on the circle's own chords, so the grey
+        // circle doesn't break through it in dashes.
+        RightDrag(at(1300, 800), at(1300, 740)),
+        Wait(2),
+        Screenshot("10-ring-selected-low-angle"),
+        // Zoomed in to the rim and hovered: the tint reaches the circle all the way along.
+        Key("Escape"),
+        RightDrag(at(1300, 740), at(1300, 800)),
+        Scroll(at(718, 527), 12),
+        Wait(2),
+        MoveTo(740, 527),
+        Wait(2),
+        Screenshot("11-rim-zoomed-hovered"),
+    ],
+)

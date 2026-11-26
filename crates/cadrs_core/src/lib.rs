@@ -28,6 +28,7 @@ pub mod draft;
 pub mod drawing_assembly;
 pub mod drawing_export;
 pub mod drawing_source;
+pub mod duplicate_curves;
 pub mod dxf_export;
 pub mod dxf_import;
 pub mod export;
