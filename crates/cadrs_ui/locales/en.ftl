@@ -309,6 +309,8 @@ shell-app-menu = Menu
 shell-preferences-ellipsis = Preferences…
 shell-app-menu-shortcuts = Keyboard shortcuts
 shell-app-menu-github = GitHub
+# The cadrs Discord server (a chat for users and developers), opened in the browser.
+shell-app-menu-discord = Discord
 shell-app-menu-docs = Documentation
 # A disabled hint under the workspaces: how to make another one ("History" is the version history panel).
 shell-app-menu-workspace-hint = Branch from a version in History

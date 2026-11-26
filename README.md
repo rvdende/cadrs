@@ -1,5 +1,6 @@
 # cadrs
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![Discord](https://img.shields.io/badge/chat-Discord-5865f2.svg?logo=discord&logoColor=white)](https://discord.gg/AmmqETBTKg)
 
 <!-- Download buttons: the latest release's files under their names without the version (see
 .github/workflows/release.yml), the version on each badge read from GitHub by shields.io. macOS

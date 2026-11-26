@@ -369,4 +369,5 @@ icons! {
     PLATFORM_ANDROID => ("platform-android", Line, "Android"),
     PLATFORM_IOS => ("platform-ios", Line, "iPhone"),
     GITHUB => ("github", Line, "GitHub"),
+    DISCORD => ("discord", Line, "Discord"),
 }
