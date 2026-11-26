@@ -400,7 +400,8 @@ fn traced(
     let r = traced_anew(a, ua, b, ub, bb);
     let mut k = KEPT_SSI.lock().unwrap_or_else(|e| e.into_inner());
     if k.new.len() >= KEPT {
-        k.old = std::mem::take(&mut k.new);
+        let new = std::mem::take(&mut k.new);
+        super::par::discard(std::mem::replace(&mut k.old, new));
     }
     k.new.insert(key, r.clone());
     r

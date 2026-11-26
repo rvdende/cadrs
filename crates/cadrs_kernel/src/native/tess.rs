@@ -2596,7 +2596,8 @@ impl MeshCache {
             + m.uvs.len() * size_of::<P2>()
             + m.indices.len() * size_of::<[u32; 3]>();
         if self.new_bytes + bytes > Self::KEPT {
-            self.old = std::mem::take(&mut self.new);
+            let new = std::mem::take(&mut self.new);
+            super::par::discard(std::mem::replace(&mut self.old, new));
             self.new_bytes = 0;
         }
         self.new_bytes += bytes;

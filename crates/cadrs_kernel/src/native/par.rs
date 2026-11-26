@@ -389,6 +389,15 @@ fn start_pool() {
     }
 }
 
+/// Drops `x` on the pool, off the caller's thread: a cache's old generation, thousands of
+/// allocations, freed while the operation that filled it goes on (in a page, here and now).
+pub(crate) fn discard<T: Send + 'static>(x: T) {
+    #[cfg(not(target_arch = "wasm32"))]
+    rayon::spawn(move || drop(x));
+    #[cfg(target_arch = "wasm32")]
+    drop(x);
+}
+
 /// One of the pool's threads started, as rayon's default spawn does.
 #[cfg(not(target_arch = "wasm32"))]
 fn spawn(thread: rayon::ThreadBuilder) -> std::io::Result<()> {

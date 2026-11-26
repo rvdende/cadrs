@@ -2017,7 +2017,8 @@ impl FaceCache {
 
     fn insert(&mut self, k: u128, v: (V3, QE)) {
         if self.new.len() >= Self::KEPT {
-            self.old = std::mem::take(&mut self.new);
+            let new = std::mem::take(&mut self.new);
+            super::par::discard(std::mem::replace(&mut self.old, new));
         }
         self.new.insert(k, v);
     }

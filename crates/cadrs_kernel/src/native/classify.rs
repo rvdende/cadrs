@@ -239,8 +239,10 @@ pub fn face_polygons_kept(body: &Body, f: &Face) -> KeptPolygons {
         /// Counts `points` more kept, starting a new generation first when they don't fit.
         fn room(&mut self, points: usize) {
             if self.new_points + points > KEPT {
-                self.old = std::mem::take(&mut self.new);
-                self.old_loops = std::mem::take(&mut self.new_loops);
+                let new = std::mem::take(&mut self.new);
+                super::par::discard(std::mem::replace(&mut self.old, new));
+                let loops = std::mem::take(&mut self.new_loops);
+                super::par::discard(std::mem::replace(&mut self.old_loops, loops));
                 self.new_points = 0;
             }
             self.new_points += points;

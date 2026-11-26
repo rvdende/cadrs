@@ -671,7 +671,8 @@ fn fitted_kept(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Curve {
     };
     let mut k = KEPT_FITS.lock().unwrap_or_else(|e| e.into_inner());
     if k.new.len() >= KEPT {
-        k.old = std::mem::take(&mut k.new);
+        let new = std::mem::take(&mut k.new);
+        super::par::discard(std::mem::replace(&mut k.old, new));
     }
     k.new.insert(key, pc.clone());
     pc

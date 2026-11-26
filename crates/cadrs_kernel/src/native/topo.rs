@@ -2098,7 +2098,8 @@ fn pass_faces(keys: &[u128]) {
     let mut p = PASSED_FACES.lock().unwrap_or_else(|e| e.into_inner());
     for k in keys {
         if p.new.len() >= PASSED {
-            p.old = std::mem::take(&mut p.new);
+            let new = std::mem::take(&mut p.new);
+            super::par::discard(std::mem::replace(&mut p.old, new));
         }
         p.new.insert(*k);
     }
@@ -2209,7 +2210,8 @@ pub(super) fn pcurve_kept(
     };
     let mut k = KEPT_GAPS.lock().unwrap_or_else(|e| e.into_inner());
     if k.new.len() >= KEPT {
-        k.old = std::mem::take(&mut k.new);
+        let new = std::mem::take(&mut k.new);
+        super::par::discard(std::mem::replace(&mut k.old, new));
     }
     k.new.insert(key, made);
     Some(made)
@@ -2456,7 +2458,8 @@ fn flatten_kept(
         let p: Points = std::sync::Arc::new((own.pts, own.tol));
         let mut k = KEPT_POINTS.lock().unwrap_or_else(|e| e.into_inner());
         if k.new_points + p.0.len() > KEPT {
-            k.old = std::mem::take(&mut k.new);
+            let new = std::mem::take(&mut k.new);
+            super::par::discard(std::mem::replace(&mut k.old, new));
             k.new_points = 0;
         }
         k.new_points += p.0.len();

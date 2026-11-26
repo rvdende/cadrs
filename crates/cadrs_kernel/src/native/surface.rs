@@ -94,7 +94,8 @@ impl SharedGrids {
 
     fn insert(&mut self, k: (GridAddress, usize), of: GridOf, g: Arc<[P3]>) {
         if self.new_points + g.len() > Self::KEPT {
-            self.old = std::mem::take(&mut self.new);
+            let new = std::mem::take(&mut self.new);
+            super::par::discard(std::mem::replace(&mut self.old, new));
             self.new_points = 0;
         }
         self.new_points += g.len();
