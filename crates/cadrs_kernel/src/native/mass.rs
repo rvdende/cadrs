@@ -1379,6 +1379,11 @@ fn boundary_jobs<const ALL: bool>(body: &Body, f: &Face) -> Option<(Inner, Vec<[
     let mut jobs: Vec<[f64; 4]> = Vec::new();
     for l in &f.loops {
         for c in l {
+            // A p-curve along which v stays put adds nothing (each job is weighted by dv): a
+            // swept face's ends, fitted to the profile's own parameter in u.
+            if constant_v(&c.pc) {
+                continue;
+            }
             let e = &body.edges[c.edge];
             let (t0, t1) = co_range(e, c.fwd);
             // Pieces along the p-curve.
@@ -1420,6 +1425,22 @@ fn boundary_jobs<const ALL: bool>(body: &Body, f: &Face) -> Option<(Inner, Vec<[
         }
     }
     Some((plan, jobs))
+}
+
+/// Whether p-curve `pc` keeps v constant: a line along u, or a B-spline whose poles all have
+/// one v (a convex combination of them, whatever the weights).
+fn constant_v(pc: &Curve) -> bool {
+    match pc {
+        Curve::Line { d, .. } => d.y == 0.0,
+        Curve::Nurbs(n) => {
+            let v = |h: &super::nurbs::H| h.y / h.w;
+            let v0 = v(&n.cps[0]);
+            // (Within rounding: a fitted end's poles carry its v to the last bit or so.)
+            let e = 1e-13 * (1.0 + v0.abs());
+            n.cps.iter().all(|h| (v(h) - v0).abs() <= e)
+        }
+        _ => false,
+    }
 }
 
 /// No knots (a direction a surface is smooth along), for [`split_at_knots`].
