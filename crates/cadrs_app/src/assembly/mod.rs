@@ -467,6 +467,20 @@ impl AssemblyParts {
         self.build_within(doc, element, None).0
     }
 
+    /// How far the rebuild of Part Studio `element` is, for an assembly's progress: (part
+    /// features done, part features in all). Built: all of them; rebuilding: as far as it has
+    /// got (none while it waits for the rebuilds before it).
+    pub fn progress_of(&self, element: ElementId) -> (usize, usize) {
+        let count = |f: &[Feature]| f.iter().filter(|f| f.is_part_feature()).count();
+        if let Some((f, p)) = self.pending.get(&element) {
+            let total = count(f);
+            return (p.progress().map_or(0, |(d, _)| d.min(total)), total);
+        }
+        self.builds
+            .get(&element)
+            .map_or((0, 0), |(f, _)| (count(f), count(f)))
+    }
+
     /// The rebuild of the Part Studio `element`, waiting at most `budget` for it (`None`: until
     /// it is done). A longer one goes on in the background: this gives the last rebuild (if
     /// any) and `false` until it is done.
@@ -593,9 +607,12 @@ pub fn update_assembly_parts(
     sources.dedup();
     let mut srcs = Vec::new();
     let mut waiting = false;
+    let mut progress = (0, 0);
     for s in &sources {
         let (b, current) = asm.build_within(d, *s, budget);
         waiting |= !current;
+        let (done, total) = asm.progress_of(*s);
+        progress = (progress.0 + done, progress.1 + total);
         if let Some(b) = b {
             let e = d.element(*s);
             srcs.push((
@@ -605,6 +622,10 @@ pub fn update_assembly_parts(
                 e.map(|e| e.name.clone()).unwrap_or_default(),
             ));
         }
+    }
+    let progress = waiting.then_some(progress);
+    if cache.assembly_progress != progress {
+        cache.assembly_progress = progress;
     }
     let key = (el.id, occ.clone(), srcs, view.instances.clone());
     if cache.assembly == Some(el.id) && asm.key.as_ref() == Some(&key) {

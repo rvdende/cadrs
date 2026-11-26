@@ -547,6 +547,10 @@ pub struct PartCache {
     pub missing: HashMap<FeatureId, Vec<usize>>,
     /// True while a rebuild is running (the parts on screen are the previous ones).
     pub rebuilding: bool,
+    /// An assembly's rebuild as a whole while its source Part Studios rebuild (one after
+    /// another, each counting from 1 in [`cadrs_core::rebuild::progress`]): their part features
+    /// done of all of theirs, for the Rebuilding… pill.
+    pub assembly_progress: Option<(usize, usize)>,
     /// The parts as they were before the feature whose dialog is open (Onshape's ghost): drawn
     /// faint over the result and pickable, so edges the feature consumed (a chamfered edge) can
     /// still be picked. Empty when no dialog is open.
