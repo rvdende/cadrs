@@ -1848,7 +1848,11 @@ impl Body {
             return errs;
         }
         let (su, sv) = uv_scale(&f.surf, ubox, vbox);
-        let flat = 0.5 * super::tol::LOOP_GAP;
+        // Flat to half the loop gap, or a part in 10⁷ of the face's size where that is more (a
+        // face metres across flattened to microns is tens of thousands of points a loop); each
+        // point carries how far its segment strays.
+        let size = ((ubox.1 - ubox.0) * su).hypot((vbox.1 - vbox.0) * sv);
+        let flat = (0.5 * super::tol::LOOP_GAP).max(1e-7 * size);
         let rings: Vec<Ring> = f
             .loops
             .iter()
