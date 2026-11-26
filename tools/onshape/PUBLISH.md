@@ -76,3 +76,60 @@ bump it before tagging if the app changes again.
 - The AppImage is not committed to git (too large); it lives only in Actions/Releases.
 - The importer binary is in the local checkout at `target/release/cadrs-onshape`; the app package
   embeds it.
+
+## GitHub Packages (`https://github.com/xitix/cadrs/packages`)
+
+GitHub Packages is a **package registry** (npm, Maven/Gradle, NuGet, RubyGems and container images
+at `ghcr.io`), not a place for arbitrary binaries. The AppImage therefore belongs in **Releases**
+(above); `/packages` stays empty unless we publish a registry package.
+
+What would make sense from this project:
+
+### a) A container image of the headless importer (recommended if Packages is wanted)
+
+The GUI app needs a display, but the CLI (`cadrs-onshape`) is useful in automation and fits a
+container. A minimal image after a build:
+
+```dockerfile
+# tools/onshape/Dockerfile.cli
+FROM debian:bookworm-slim
+COPY target/release/cadrs-onshape /usr/local/bin/cadrs-onshape
+ENTRYPOINT ["cadrs-onshape"]
+```
+
+Local publish (needs a **classic PAT with `write:packages`**, or `gh auth refresh -s write:packages`):
+
+```sh
+export CR_PAT=<token>
+echo "$CR_PAT" | docker login ghcr.io -u xitix --password-stdin
+cargo build -r -p cadrs_onshape
+docker build -f tools/onshape/Dockerfile.cli -t ghcr.io/xitix/cadrs-onshape-importer:0.1.8 .
+docker push ghcr.io/xitix/cadrs-onshape-importer:0.1.8
+```
+
+In Actions no PAT is needed: give the job `permissions: packages: write` and use
+`docker/login-action` with `username: ${{ github.actor }}`, `password: ${{ secrets.GITHUB_TOKEN }}`,
+then `docker/build-push-action` with `push: true` and
+`tags: ghcr.io/${{ github.repository_owner }}/cadrs-onshape-importer:${{ github.ref_name }}`.
+After the first push the package appears under the owner's *Packages*; from the package settings
+(`https://github.com/users/xitix/packages/container/.../settings`) change visibility to **Public**
+and link it to the `cadrs` repository if GitHub has not already.
+
+### b) An npm package (not recommended for the Electron app)
+
+The app's JavaScript could be scoped as `@xitix/cadrs-onshape-desktop`, but it is not a library
+and would still download Electron at install time. If it is really wanted:
+
+```sh
+# .npmrc
+@xitix:registry=https://npm.pkg.github.com
+# then, with a PAT that has write:packages:
+npm login --registry=https://npm.pkg.github.com --scope=@xitix
+npm publish
+```
+
+### c) What to link from the PR
+
+Release asset (permanent):
+`https://github.com/xitix/cadrs/releases/tag/onshape-importer-v0.1.8`
+Container (if published): `ghcr.io/xitix/cadrs-onshape-importer:0.1.8`
