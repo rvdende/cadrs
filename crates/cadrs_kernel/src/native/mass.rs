@@ -1409,17 +1409,49 @@ fn boundary_jobs<const ALL: bool>(body: &Body, f: &Face) -> Option<(Inner, Vec<[
                 rule.n
                     .unwrap_or_else(|| smooth_rule::<ALL>(&c.pc, ts.len())),
             );
+            // On a sphere, (u, v) and v' along the edge in closed form from its own curve (a
+            // fitted p-curve of a fillet's corner costs more to evaluate than the rest of the
+            // face), u followed on from the p-curve's at the coedge's start; the p-curve's
+            // within a hundredth of a radian of a pole, where u turns fast.
+            let sphere = match &f.surf {
+                Surface::Sphere { f: fr, r: rs } if !e.degenerate => Some((fr, *rs)),
+                _ => None,
+            };
+            let mut u_prev = sphere.and_then(|_| ts.first().map(|&t| c.pc.point(t).x));
             for w in ts.windows(2) {
                 let (a, b) = (w[0], w[1]);
                 let (m, r) = ((a + b) * 0.5, (b - a) * 0.5);
                 for (x, gw) in g.x.iter().zip(g.w) {
                     let t = m + r * x;
-                    let (uv, duv, _) = c.pc.d2(t);
-                    let dv = duv.y;
+                    let exact = sphere.and_then(|(fr, rs)| {
+                        let (p, dp, _) = e.curve.d2(t);
+                        let l = fr.local(&p);
+                        let cv = (rs * rs - l.z * l.z).max(0.0).sqrt();
+                        if cv <= 1e-2 * rs {
+                            return None;
+                        }
+                        let v = (l.z / rs).clamp(-1.0, 1.0).asin();
+                        let dv = dp.dot(&fr.z) / cv;
+                        let mut u = l.y.atan2(l.x);
+                        if let Some(up) = u_prev {
+                            u += ((up - u) / TAU).round() * TAU;
+                        }
+                        Some((u, v, dv))
+                    });
+                    let (u, v, dv) = match exact {
+                        Some(x) => x,
+                        None => {
+                            let (uv, duv, _) = c.pc.d2(t);
+                            (uv.x, uv.y, duv.y)
+                        }
+                    };
+                    if sphere.is_some() {
+                        u_prev = Some(u);
+                    }
                     if dv == 0.0 {
                         continue;
                     }
-                    jobs.push([u_ref, uv.x, uv.y, gw * r * dv]);
+                    jobs.push([u_ref, u, v, gw * r * dv]);
                 }
             }
         }
