@@ -321,6 +321,7 @@ pub mod recognize;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod recognize;
+pub(crate) mod region2;
 pub(crate) mod rim_blend;
 #[cfg(feature = "testkit")]
 pub mod silhouette;

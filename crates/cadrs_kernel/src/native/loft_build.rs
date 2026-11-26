@@ -2426,7 +2426,7 @@ fn place_point(curves: &[Curve2], u: f64) -> nalgebra::Point2<f64> {
 }
 
 /// The part of curve `c` from fraction `t0` to `t1` (t0 < t1), as a curve of its kind.
-fn curve_part(c: &Curve2, t0: f64, t1: f64) -> Option<Curve2> {
+pub(crate) fn curve_part(c: &Curve2, t0: f64, t1: f64) -> Option<Curve2> {
     if t0 <= 1e-12 && t1 >= 1.0 - 1e-12 && !matches!(c, Curve2::Circle { .. }) {
         return Some(c.clone());
     }
@@ -2509,7 +2509,7 @@ fn loop_pieces(curves: &[Curve2], u: f64, w: f64, fwd: bool) -> Option<Vec<Curve
 
 /// A sketch curve run the other way (a line's ends swapped, an arc swept back, a Bézier's poles
 /// reversed); None for a closed curve.
-fn reversed2(c: &Curve2) -> Option<Curve2> {
+pub(crate) fn reversed2(c: &Curve2) -> Option<Curve2> {
     Some(match *c {
         Curve2::Line { a, b, source } => Curve2::Line { a: b, b: a, source },
         Curve2::Arc {

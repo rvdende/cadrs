@@ -3545,9 +3545,77 @@ fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> R
             (axis, TAU / rise, Some((from, to)))
         }
     };
+    let (curves, reach, x, y) = screw_outline(&b, &rev, axis, kk)?;
+    let z = axis.dir.into_inner();
+    let region = Region {
+        outer: Loop { curves },
+        holes: vec![],
+        source: Some(0),
+    };
+    match span {
+        None => {
+            // The half plane through the axis: sketch x out from it, y along it.
+            let plane = Plane {
+                origin: axis.origin,
+                x_dir: nalgebra::Unit::new_normalize(x),
+                normal: nalgebra::Unit::new_normalize(x.cross(&z)),
+            };
+            k.revolve_with(
+                &Profile::new(plane, vec![region]),
+                &RevolveSpec::solid(axis, None),
+            )
+        }
+        Some((from, to)) => {
+            // The plane square to the axis at `from`, its sketch axes x and y; the region turned
+            // to where the screw has it there, then swept up the helix to `to`.
+            let turn = kk * from;
+            let (c, s) = (turn.cos(), turn.sin());
+            let (xr, yr) = (x * c + y * s, y * c - x * s);
+            let plane = Plane {
+                origin: axis.origin + z * from,
+                x_dir: nalgebra::Unit::new_normalize(xr),
+                normal: nalgebra::Unit::new_normalize(xr.cross(&yr)),
+            };
+            // The helix through a point of the region (its first pole's distance, at angle 0
+            // of the plane), rising to `to`.
+            let r0 = reach.max(tol::POINT);
+            let turns = (to - from) * kk / TAU;
+            let path = helix_path(plane.origin, z, xr, yr, r0, TAU / kk, turns);
+            // Swept by the screw's own motion (a path this short is too little of a helix for
+            // the sweep to recognise one).
+            let prof = Profile::new(plane, vec![region]);
+            let regions = super::profile::regions(&prof)?;
+            let faces = super::profile::merge_regions(&regions)?;
+            let segs = super::sweep::path::path_segments(k, &path)?;
+            let helix =
+                super::sweep::frames::Helix::new(plane.origin, z, xr, yr, r0, TAU / kk / TAU, 0.0);
+            let (built, _) = super::sweep::frames::sweep_seg(
+                &faces,
+                &[],
+                plane,
+                &segs,
+                super::sweep::Frames::Control(SweepControl::None),
+                true,
+                Some(helix),
+            )?;
+            Ok(super::features::Tagged::from_built(built).into_result(k))
+        }
+    }
+}
+
+/// The outline of what solid of revolution `rev` (of body `b`) passes through turned about
+/// `axis` (`kk` the turn a unit along it: 0 for a turn alone), in the section's plane (for a
+/// screw, the plane square to the axis at height 0, polar), with its greatest distance from the
+/// axis and the plane's axes x and y: [`sweep_solid_at`]'s, exact where it can be had.
+fn screw_outline(
+    b: &Body,
+    rev: &Revolved,
+    axis: crate::Axis,
+    kk: f64,
+) -> Result<(Vec<Curve2>, f64, V3, V3)> {
     let z = axis.dir.into_inner();
     let sl = Slicer {
-        body: &rev,
+        body: rev,
         origin: axis.origin,
         z,
         k: kk,
@@ -3609,58 +3677,135 @@ fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> R
             sliced_outline(&sl, &ol, &p2)
         }
     };
+    Ok((curves, reach, x, y))
+}
+
+/// `target` less what `tool` passes through screwed by `motion` (an endless screw between planes
+/// past the target's ends), where the target is a rod about the screw's axis (a cylinder about it
+/// and two planes square to it): within the rod everything is screwed into itself, so the result
+/// is the rod's section (a disc) less the tool's outline in the plane square to the axis
+/// ([`screw_outline`]), screwed up the rod from its one end to the other. None for any other
+/// target or motion, or where the section's region can't be had or the result isn't sound (the
+/// solid sweep and its cut then).
+fn cut_screwed_rod(
+    k: &mut NativeKernel,
+    target: BodyId,
+    tool: &Body,
+    motion: &SolidMotion,
+) -> Option<OpResult> {
+    let SolidMotion::Screw {
+        axis,
+        rise,
+        from,
+        to,
+    } = *motion
+    else {
+        return None;
+    };
+    if !(rise.abs() > tol::POINT) {
+        return None;
+    }
+    let kk = TAU / rise;
+    let z = axis.dir.into_inner().normalize();
+    let rod = std::sync::Arc::clone(k.get(target).ok()?);
+    let size = rod.bbox().diagonal().max(tol::POINT);
+    let near = 1e-9 * (1.0 + size + (axis.origin - P3::origin()).norm());
+    if rod.solids.len() != 1 {
+        return None;
+    }
+    let (mut radius, mut heights) = (None, Vec::new());
+    for f in &rod.faces {
+        match &f.surf {
+            Surface::Cylinder { f: fr, r } => {
+                let w = fr.o - axis.origin;
+                if fr.z.cross(&z).norm() > 1e-12
+                    || (w - z * w.dot(&z)).norm() > near
+                    || radius.is_some_and(|q: f64| (q - r).abs() > near)
+                {
+                    return None;
+                }
+                radius = Some(*r);
+            }
+            Surface::Plane { f: fr } => {
+                if fr.x.cross(&fr.y).normalize().cross(&z).norm() > 1e-12 {
+                    return None;
+                }
+                heights.push((fr.o - axis.origin).dot(&z));
+            }
+            _ => return None,
+        }
+    }
+    let r = radius?;
+    let [h0, h1] = heights[..] else { return None };
+    let (h0, h1) = (h0.min(h1), h0.max(h1));
+    if !(from < h0 - near && to > h1 + near && h1 - h0 > near) {
+        return None;
+    }
+    // (The whole rod, its side's pieces all of one cylinder: its volume the cylinder's.)
+    let want = std::f64::consts::PI * r * r * (h1 - h0);
+    let got = k.mass_properties(target).ok()?.volume;
+    if (got - want).abs() > 1e-9 * want {
+        return None;
+    }
+    let rev = revolved(tool)?;
+    // (In closed form, else traced finely: the result is the outline's own.)
+    let (curves, _, x, y) = with_slices(EXACT, || screw_outline(tool, &rev, axis, kk)).ok()?;
+    let loops = super::region2::disc_less(nalgebra::Point2::origin(), r, &curves)?;
+    let mut loops = loops.into_iter();
+    let outer = loops.next()?;
+    let holes: Vec<Loop> = loops.map(|curves| Loop { curves }).collect();
     let region = Region {
-        outer: Loop { curves },
-        holes: vec![],
+        outer: Loop { curves: outer },
+        holes,
         source: Some(0),
     };
-    match span {
-        None => {
-            // The half plane through the axis: sketch x out from it, y along it.
-            let plane = Plane {
-                origin: axis.origin,
-                x_dir: nalgebra::Unit::new_normalize(x),
-                normal: nalgebra::Unit::new_normalize(x.cross(&z)),
-            };
-            k.revolve_with(
-                &Profile::new(plane, vec![region]),
-                &RevolveSpec::solid(axis, None),
-            )
+    // The plane square to the axis at the rod's lower end, its axes turned to where the screw
+    // has the section there; the region swept up the helix to the upper end.
+    let turn = kk * h0;
+    let (c, s) = (turn.cos(), turn.sin());
+    let (xr, yr) = (x * c + y * s, y * c - x * s);
+    let plane = Plane {
+        origin: axis.origin + z * h0,
+        x_dir: nalgebra::Unit::new_normalize(xr),
+        normal: nalgebra::Unit::new_normalize(xr.cross(&yr)),
+    };
+    let turns = (h1 - h0) * kk / TAU;
+    let path = helix_path(plane.origin, z, xr, yr, r, TAU / kk, turns);
+    let prof = Profile::new(plane, vec![region]);
+    let made = (|| -> Result<OpResult> {
+        let regions = super::profile::regions(&prof)?;
+        let faces = super::profile::merge_regions(&regions)?;
+        let segs = super::sweep::path::path_segments(k, &path)?;
+        let helix =
+            super::sweep::frames::Helix::new(plane.origin, z, xr, yr, r, TAU / kk / TAU, 0.0);
+        let (built, _) = super::sweep::frames::sweep_seg(
+            &faces,
+            &[],
+            plane,
+            &segs,
+            super::sweep::Frames::Control(SweepControl::None),
+            true,
+            Some(helix),
+        )?;
+        Ok(super::features::Tagged::from_built(built).into_result(k))
+    })();
+    let debug = crate::native::env_flag!("CADRS_SWEEP_SOLID_DEBUG");
+    match made {
+        Ok(res) if res.bodies.len() == 1 && k.sound(res.bodies[0]) => Some(res),
+        Ok(res) => {
+            if debug {
+                eprintln!("screwed rod: not sound");
+            }
+            for id in res.bodies {
+                k.release(id);
+            }
+            None
         }
-        Some((from, to)) => {
-            // The plane square to the axis at `from`, its sketch axes x and y; the region turned
-            // to where the screw has it there, then swept up the helix to `to`.
-            let turn = kk * from;
-            let (c, s) = (turn.cos(), turn.sin());
-            let (xr, yr) = (x * c + y * s, y * c - x * s);
-            let plane = Plane {
-                origin: axis.origin + z * from,
-                x_dir: nalgebra::Unit::new_normalize(xr),
-                normal: nalgebra::Unit::new_normalize(xr.cross(&yr)),
-            };
-            // The helix through a point of the region (its first pole's distance, at angle 0
-            // of the plane), rising to `to`.
-            let r0 = reach.max(tol::POINT);
-            let turns = (to - from) * kk / TAU;
-            let path = helix_path(plane.origin, z, xr, yr, r0, TAU / kk, turns);
-            // Swept by the screw's own motion (a path this short is too little of a helix for
-            // the sweep to recognise one).
-            let prof = Profile::new(plane, vec![region]);
-            let regions = super::profile::regions(&prof)?;
-            let faces = super::profile::merge_regions(&regions)?;
-            let segs = super::sweep::path::path_segments(k, &path)?;
-            let helix =
-                super::sweep::frames::Helix::new(plane.origin, z, xr, yr, r0, TAU / kk / TAU, 0.0);
-            let (built, _) = super::sweep::frames::sweep_seg(
-                &faces,
-                &[],
-                plane,
-                &segs,
-                super::sweep::Frames::Control(SweepControl::None),
-                true,
-                Some(helix),
-            )?;
-            Ok(super::features::Tagged::from_built(built).into_result(k))
+        Err(e) => {
+            if debug {
+                eprintln!("screwed rod: {e}");
+            }
+            None
         }
     }
 }
@@ -5502,6 +5647,11 @@ fn cut_swept_in(
         return Ok(r);
     }
     if let Some(endless) = endless_within(&**k.get(target)?, &b, motion) {
+        // A rod about the screw's axis, square at its ends, that the screw passes wholly through:
+        // its section less what the tool covers of it, screwed up it (no solid sweep, no cut).
+        if let Some(r) = cut_screwed_rod(k, target, &b, &endless) {
+            return Ok(r);
+        }
         // (Its outline exact, then traced finely, then coarsely: a boolean may take the one and
         // not the other.)
         for n in OUTLINES {
