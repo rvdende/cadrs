@@ -448,7 +448,10 @@ fn a_new_mate_keeps_the_movers_other_mates() {
     };
     let b = InstanceId::from_u128(3);
     assert!(solver::mated_elsewhere(&asm, b, new));
-    assert!(!solver::mated_elsewhere(&asm, InstanceId::from_u128(4), new), "no mates");
+    assert!(
+        !solver::mated_elsewhere(&asm, InstanceId::from_u128(4), new),
+        "no mates"
+    );
 
     let s = solver::solve(
         &asm,
@@ -466,7 +469,10 @@ fn a_new_mate_keeps_the_movers_other_mates() {
         assert!(d < 1e-6, "{} off by {d}", m.name);
     }
     let a = asm.instance(InstanceId::from_u128(2)).unwrap().pose;
-    assert!(dist(a.apply([10.0, 0.0, 0.0]), [10.0, 0.0, 0.0]) < 1e-3, "A stays put");
+    assert!(
+        dist(a.apply([10.0, 0.0, 0.0]), [10.0, 0.0, 0.0]) < 1e-3,
+        "A stays put"
+    );
 
     // The old pick, the new mate's snap alone, puts B's near end at (0, 10, 0): off Revolute 2.
     let mut asm2 = asm.clone();
@@ -484,5 +490,8 @@ fn a_new_mate_keeps_the_movers_other_mates() {
     );
     apply(&mut asm2, &s);
     let near = asm2.instance(b).unwrap().pose.apply([0.0; 3]);
-    assert!(dist(near, [10.0, 0.0, 0.0]) > 5.0, "the snap alone tears B off: {near:?}");
+    assert!(
+        dist(near, [10.0, 0.0, 0.0]) > 5.0,
+        "the snap alone tears B off: {near:?}"
+    );
 }

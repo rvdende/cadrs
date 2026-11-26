@@ -145,7 +145,11 @@ pub fn mated_elsewhere(asm: &Assembly, instance: InstanceId, except: MateId) -> 
         .iter()
         .filter(|f| !f.suppressed && f.id != except)
         .filter_map(|f| f.mate())
-        .any(|m| m.connectors.iter().any(|c| of.get(&c.instance) == Some(body)))
+        .any(|m| {
+            m.connectors
+                .iter()
+                .any(|c| of.get(&c.instance) == Some(body))
+        })
 }
 
 /// The solved placements.

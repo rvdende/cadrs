@@ -516,9 +516,8 @@ fn run_solve(
     // freedom they leave, its free motion staying where it is. A part with no other mates is
     // snapped straight onto the new mate.
     let held = snap_only
-        && mover.is_some_and(|m| {
-            cadrs_core::assembly::solver::mated_elsewhere(&doc_model, m, s.id)
-        });
+        && mover
+            .is_some_and(|m| cadrs_core::assembly::solver::mated_elsewhere(&doc_model, m, s.id));
     let opts = if held {
         SolveOptions {
             movers: mover.into_iter().collect(),
