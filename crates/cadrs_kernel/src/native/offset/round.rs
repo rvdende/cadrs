@@ -499,6 +499,59 @@ pub fn offset_rounded(b: &Body, dist: &[f64]) -> Result<Body> {
     grown_except(&merged(b), d, &[], &[])
 }
 
+/// A body of planes and cylinders whose edges are all convex (besides seams and point edges) grown by a ball of radius
+/// `d`: its sharp offset, each face moved `d` out, with every edge filleted by `d`. The ball
+/// that rounds an edge of the sharp offset touches both its faces, so its centre lies `d`
+/// inside both, on the edge they were moved from: the round is the tube about that edge, as the
+/// ball's sum makes it, and at a corner the ball about its vertex. None where the sharp offset
+/// changes the body's faces or edges (a hole the distance closes: a face lost), or the fillet
+/// fails or isn't sound.
+fn grown_filleted(b: &Body, dist: &[f64], d: f64) -> Option<Body> {
+    use crate::native::topo::CheckLevel;
+    let kinds_ok = |b: &Body| {
+        (0..b.edges.len()).all(|e| {
+            b.edges[e].degenerate
+                || match dihedral(b, e) {
+                    Dihedral::Convex => true,
+                    // (A seam: one face both sides.)
+                    Dihedral::Smooth => {
+                        let mut faces = b
+                            .faces
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, f)| f.loops.iter().flatten().any(|c| c.edge == e));
+                        faces.next().is_some() && faces.next().is_none()
+                    }
+                    _ => false,
+                }
+        })
+    };
+    let simple = b
+        .faces
+        .iter()
+        .all(|f| matches!(f.surf, Surface::Plane { .. } | Surface::Cylinder { .. }));
+    if !simple || b.solids.len() != 1 || b.edges.is_empty() || !kinds_ok(b) {
+        return None;
+    }
+    let sharp = super::sharp::offset_sharp(b, dist).ok()?;
+    if sharp.faces.len() != b.faces.len()
+        || sharp.edges.len() != b.edges.len()
+        || !kinds_ok(&sharp)
+        || !sharp.check_with(CheckLevel::Fast).is_empty()
+    {
+        return None;
+    }
+    let edges: Vec<EdgeId> = (0..sharp.edges.len())
+        .filter(|&e| !sharp.edges[e].degenerate && matches!(dihedral(&sharp, e), Dihedral::Convex))
+        .map(|e| EdgeId(e as u64))
+        .collect();
+    let mut k = NativeKernel::new();
+    let id = k.insert(sharp);
+    let r = crate::native::blend::fillet(&mut k, id, &edges, &FilletSpec::radius(d)).ok()?;
+    let out = k.get(r.first().ok()?).ok()?.as_ref().clone();
+    (out.solids.len() == 1 && out.check_with(CheckLevel::Fast).is_empty()).then_some(out)
+}
+
 /// A convex polyhedron grown by a ball of radius `d`, built face by face: each face moved out
 /// by `d`, a cylinder of radius `d` along each edge between its faces' moved copies, and a ball
 /// patch at each corner bounded by its edges' end arcs. The same solid the slabs', tubes' and
@@ -1020,6 +1073,15 @@ fn grown_except(b: &Body, d: f64, cut: &[(P3, V3)], skip: &[usize]) -> Result<Bo
         && cut.is_empty()
         && !crate::native::env_flag!("CADRS_NO_GROWN_ROUND")
         && let Some(g) = grown_round(b, d)
+    {
+        return Ok(g);
+    }
+    // Every edge convex, of planes and cylinders (a box drilled through: its rims are convex
+    // too): the sharp offset with every edge rounded by d (a few milliseconds, where the union
+    // of the slabs, tubes and balls takes dozens of booleans).
+    if skip.is_empty()
+        && cut.is_empty()
+        && let Some(g) = grown_filleted(b, &vec![d; b.faces.len()], d)
     {
         return Ok(g);
     }
