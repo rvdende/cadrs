@@ -675,6 +675,23 @@ fn assemble(
 
 /// The loft's body from rows of surfaces (bottom to top; each row one surface per section
 /// part, all rows sharing their u knots), the caps and the point ends.
+/// A B-spline curve of degree 1 and two poles of equal weight as the line it is (over the same
+/// parameters); any other as itself.
+fn straight(c: NurbsCurve) -> Curve {
+    if c.degree == 1
+        && c.cps.len() == 2
+        && (c.cps[0].w - c.cps[1].w).abs() <= 1e-14 * c.cps[0].w.abs()
+    {
+        let (a, b) = c.range();
+        let (p, q) = (dehom(&c.cps[0]), dehom(&c.cps[1]));
+        if b > a && (q - p).norm() > tol::DEGENERATE {
+            let d = (q - p) / (b - a);
+            return Curve::Line { o: p - d * a, d };
+        }
+    }
+    Curve::Nurbs(Arc::new(c))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn assemble_rows(
     rows: Vec<Vec<NurbsSurface>>,
@@ -751,18 +768,16 @@ fn assemble_rows(
                     };
                     let c = iso(s, false, at_end);
                     let (a, bb) = c.range();
-                    b.add_edge(Curve::Nurbs(Arc::new(c)), a, bb, vs[r][j], vs[r + 1][j])
+                    b.add_edge(straight(c), a, bb, vs[r][j], vs[r + 1][j])
                 })
                 .collect()
         })
         .collect();
     // A flat patch running into a point (a ruled triangle): a plane face of three edges, no
     // degenerate edge (as OCCT's ruled loft).
-    let triangle = |r: usize, i: usize| -> Option<Surface> {
-        let at_point = (r == 0 && points[0]) || (r + 1 == nr && points[1]);
-        if !at_point {
-            return None;
-        }
+    // A patch whose poles all lie in one plane is that plane (a ruled loft's sides between
+    // parallel straight edges, a prism's): a plane face, its edges' p-curves exact.
+    let flat = |r: usize, i: usize| -> Option<Surface> {
         let pts: Vec<P3> = rows[r][i].cps.iter().flatten().map(dehom).collect();
         let o = pts[0];
         let far = pts
@@ -790,6 +805,13 @@ fn assemble_rows(
             },
         })
     };
+    let triangle = |r: usize, i: usize| -> Option<Surface> {
+        let at_point = (r == 0 && points[0]) || (r + 1 == nr && points[1]);
+        if !at_point {
+            return None;
+        }
+        flat(r, i)
+    };
     // Section edges at each level (none at a point under triangles).
     let mut levels: Vec<Vec<usize>> = Vec::new();
     for r in 0..=nr {
@@ -813,7 +835,7 @@ fn assemble_rows(
             } else if point {
                 b.add_degenerate(b.verts[vs[r][0]].p, ua, ub, vs[r][0])
             } else {
-                b.add_edge(Curve::Nurbs(Arc::new(c)), ua, ub, vs[r][i], vs[r][j])
+                b.add_edge(straight(c), ua, ub, vs[r][i], vs[r][j])
             });
         }
         levels.push(es);
@@ -822,7 +844,7 @@ fn assemble_rows(
     for (r, row) in rows.iter().enumerate() {
         for (i, s) in row.iter().enumerate() {
             let j = if closed_u { (i + 1) % n } else { i + 1 };
-            if let Some(surf) = triangle(r, i) {
+            if let Some(surf) = triangle(r, i).or_else(|| flat(r, i)) {
                 let mut lp = Vec::new();
                 for (e, fwd) in [
                     (levels[r][i], true),
