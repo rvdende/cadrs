@@ -23,6 +23,7 @@ pub mod camera;
 pub mod change_preview;
 pub mod collab;
 pub mod composite_ui;
+pub mod config_table;
 pub mod configuration_ui;
 pub mod crash;
 pub mod create_selection;
@@ -1038,6 +1039,7 @@ impl Plugin for CadrsAppPlugin {
                 repair::RepairPlugin,
                 replace_reference::ReplaceReferencePlugin,
                 configuration_ui::ConfigurationPlugin,
+                config_table::ConfigTablePlugin,
             ))
             .add_plugins((
                 appearance::AppearancePlugin,

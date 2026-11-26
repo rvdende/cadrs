@@ -6951,18 +6951,10 @@ config-add-input-tooltip = Add a List or Checkbox input
 config-empty = No configuration inputs. A List makes a table of configurations; a Checkbox turns features on or off. Values typed in are Variables (fx), which a List can set.
 # { $name } is the input's name.
 config-input-tooltip = { $name }: right-click to rename, move or delete
-# A Value input's field: its value in the configuration the Part Studio shows.
-config-value-tooltip = #{ $name } in the configuration shown: features read it as #{ $name }
 # The heading of a configuration table's first column (the configurations' names).
 config-configuration = Configuration
 # Marks the default configuration of a List.
 config-default-tag = default
-# { $name } is the configuration's name.
-config-row-shown-tooltip = { $name } is shown in the Part Studio
-config-row-tooltip = Double-click to show { $name } in the Part Studio
-config-suppressed-tooltip = Suppressed in this configuration
-config-add-row = Add configuration
-config-no-params = Nothing configured yet: a feature's menu › Configure adds its fields here.
 config-list = List
 config-checkbox = Checkbox
 config-move-up = Move up

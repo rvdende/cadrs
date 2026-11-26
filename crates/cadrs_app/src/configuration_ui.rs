@@ -3,23 +3,14 @@
 //!
 //! - **The Configuration panel** (the tab bar's `panel-configuration`, icon `configurations`;
 //!   Part Studios only) docks beside the viewport. **Add input** adds a **List** or a
-//!   **Checkbox**, its name open for editing. Each input has a section:
-//!   - a **List**: its **configuration table**, one row per configuration (its name, edited
-//!     in place; a check on the one the Part Studio shows; "default" on the default one) and a
-//!     column per configured parameter, each cell an expression (Enter commits, one undo step)
-//!     or, for suppression, a checkbox. A double-click on a row (or its menu's **Show**) makes
-//!     it the Part Studio's configuration. **Add configuration** adds a row (a copy of the
-//!     last). The row menu: **Show**, **Rename**, **Set as default**, **Duplicate**,
-//!     **Move up**, **Move down**, **Delete**.
-//!   - a **Checkbox**: its state (the Part Studio's configuration) and the same table with
-//!     two rows, Unchecked and Checked.
+//!   **Checkbox**, its name open for editing. Each input has its title (a menu: **Rename**,
+//!   **Move up**, **Move down**, **Delete**, and for a Checkbox **Checked by default**) and its
+//!   configuration table, the same one the node view's input nodes show
+//!   ([`crate::config_table`]): a column per configuration (click one to show it: its ✓ and
+//!   its column tinted), a row per configured parameter, + Output.
 //!
 //!   Values typed in are Variable features (or a Variable Studio's): a List's column can set a
 //!   Variable feature's value.
-//!
-//!   An input's title has a menu: **Rename**, **Move up**, **Move down**, **Delete**, and for a
-//!   Checkbox **Checked by default**. A column's heading has **Move left**, **Move right** and
-//!   **Remove** (the field keeps the value it shows).
 //! - **Configure ▸** on a feature's menu ([`configure_entries`]): its fields, a sketch's
 //!   dimensions or a Variable's value, each adding a column to a List or Checkbox (a ✓ on the
 //!   configured ones: picking one again removes its column). Dynamic suppression ▸
@@ -33,32 +24,33 @@
 //!   picks each input's value for the selected instances of the same Part Studio (a List's
 //!   rows, a Checkbox). Instances inserted from a
 //!   configured Part Studio take its configuration then.
+//! - **A value a feature can't take** ([`reveal_problem`]): a sketch dimension typed as
+//!   `#testcircle` while that output is 0 mm in the configuration shown opens the panel and the
+//!   node view at its cell, outlined red in both, the panel's focused to be typed in.
 //!
 //! Names: the panel `configuration-panel` (`configuration-panel-close`), `configuration-add-input`
-//! (its menu's `configuration-add-list`, `-checkbox`), each input `configuration-input-<k>`
-//! (with `-checked` for a Checkbox, `-add-row` for a List, the columns `-col-<j>`, the rows
-//! `-row-<r>` with their cells `-row-<r>-cell-<j>`), the name editor `configuration-name`.
+//! (its menu's `configuration-add-list`, `-checkbox`), the scrolled tables
+//! `configuration-scroll`, each input's title `configuration-input-<k>`, its table's controls
+//! `configuration-config-<input>-…` and `configuration-output-<name>-…`
+//! ([`crate::config_table`]), the name editor `configuration-name`.
 
+use bevy::input_focus::{FocusCause, InputFocus};
 use bevy::prelude::*;
 use bevy::text::FontWeight;
 use cadrs_core::ElementId;
 use cadrs_core::assembly::InstanceSource;
 use cadrs_core::configuration::{
-    self as cfg, CellValue, ConfigInput, ConfigValues, Configuration, EditConfiguration, InputKind,
-    InputValue, ListRow, ParamTarget, SetActiveConfiguration, SetInstanceConfiguration,
-    UnconfigureParameter,
+    self as cfg, ConfigInput, ConfigValues, Configuration, EditConfiguration, InputKind,
+    InputValue, ParamTarget, SetInstanceConfiguration, UnconfigureParameter,
 };
 use cadrs_core::document::Element;
-use cadrs_core::variables::VariableType;
-use cadrs_core::{ConfigInputId, ConfigRowId, FeatureId};
-use cadrs_sketch::units::{Quantity, Units};
+use cadrs_core::{ConfigInputId, FeatureId};
 use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::menu::{ContextMenuAnchor, MenuEntry};
 use cadrs_ui::prelude::*;
-use cadrs_ui::{
-    CheckboxChange, DoubleClick, DoubleClickable, InlineEditOptions, begin_inline_edit,
-};
+use cadrs_ui::{CheckboxChange, InlineEditOptions, TextInputField, begin_inline_edit};
 
+use crate::config_table::{self, ConfigElement, ConfigRole};
 use crate::side_panel::{SidePanel, side_panel_header, side_panel_node};
 use crate::viewport::ActiveKind;
 use crate::{ActiveDocument, AppState};
@@ -69,7 +61,8 @@ impl Plugin for ConfigurationPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (sync_panel, sync_button)
+            (sync_panel, sync_button, reveal_problem_cell)
+                .chain()
                 .after(crate::parts::PartsSet)
                 .run_if(in_state(AppState::Document)),
         )
@@ -77,9 +70,6 @@ impl Plugin for ConfigurationPlugin {
         .add_observer(on_panel_resized)
         .add_observer(on_button)
         .add_observer(on_rename)
-        .add_observer(on_text)
-        .add_observer(on_check)
-        .add_observer(on_double_click)
         .add_observer(on_context_menu)
         .add_observer(on_menu_action)
         .add_observer(on_insert_button)
@@ -99,58 +89,112 @@ struct PanelKey(String);
 #[derive(Component, Debug, Clone, Copy)]
 struct InputTitle(ConfigInputId);
 
-/// A row of an input's table: a List's configuration, a Checkbox's state (0, 1).
-#[derive(Component, Debug, Clone, Copy)]
-struct TableRow {
-    input: ConfigInputId,
-    row: usize,
-}
-
-/// A column's heading.
-#[derive(Component, Debug, Clone, Copy)]
-struct ColumnHead {
-    input: ConfigInputId,
-    param: usize,
-}
-
-/// A cell of an input's table.
-#[derive(Component, Debug, Clone, Copy)]
-struct Cell {
-    input: ConfigInputId,
-    row: usize,
-    param: usize,
-}
-
-/// A Checkbox input's state (the Part Studio's configuration).
-#[derive(Component, Debug, Clone, Copy)]
-struct ActiveCheck(ConfigInputId);
-
-/// A Value input's value in the configuration shown, and what it measures.
-#[derive(Component, Debug, Clone, Copy)]
-struct ActiveValue(ConfigInputId, cfg::ValueKind);
-
-/// A List's Add configuration button.
-#[derive(Component, Debug, Clone, Copy)]
-struct AddRow(ConfigInputId);
-
 /// What an open menu of the panel is for.
 #[derive(Component, Debug, Clone, Copy)]
 enum PanelMenu {
     AddInput,
     Input(ConfigInputId),
-    Row(ConfigInputId, usize),
-    Column(ConfigInputId, usize),
 }
 
-/// A name to open for editing once the panel shows it (an input or row just added).
+/// An input whose name is to open for editing once the panel shows it (one just added).
 #[derive(Resource, Debug, Clone, Copy)]
-enum PendingName {
-    Input(ConfigInputId),
-    Row(ConfigInputId, usize),
+struct PendingName(ConfigInputId);
+
+/// A configuration value a feature can't take (a sketch dimension typed as `#testcircle` while
+/// that output is 0 mm in the configuration shown), set by [`reveal_problem`]: its field is
+/// outlined red in the panel and the node view until the dimension's editor closes.
+#[derive(Resource, Debug, Clone, Copy, PartialEq)]
+pub struct ConfigProblem {
+    pub element: ElementId,
+    pub at: ProblemAt,
+    /// The panel's field is still to be scrolled to and focused.
+    focus: bool,
 }
 
-/// A column's width (px).
-const COL_W: f32 = 84.0;
+/// Where a [`ConfigProblem`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProblemAt {
+    /// Output `param`'s value in configuration `row` of a List or Checkbox.
+    Cell {
+        input: ConfigInputId,
+        row: usize,
+        param: usize,
+    },
+    /// A Value input's value.
+    Value(ConfigInputId),
+}
+
+/// Where the problem is in `element`, if there is one.
+pub fn problem_in(world: &World, element: ElementId) -> Option<ProblemAt> {
+    world
+        .get_resource::<ConfigProblem>()
+        .filter(|p| p.element == element)
+        .map(|p| p.at)
+}
+
+/// Whether `name` is a variable of the active Part Studio's configuration (an output's, a
+/// Value's or a Checkbox's).
+pub fn is_config_variable(world: &World, name: &str) -> bool {
+    studio(world).is_some_and(|(_, el)| el.configuration.names().iter().any(|n| n == name))
+}
+
+/// Shows where `#name`, a configuration's variable, has the value a feature can't take: the
+/// Configuration panel and the node view open, its cell in the configuration shown (or the
+/// Value's field) outlined red in both, the panel's scrolled to and focused to be typed in.
+/// Whether `name` is an output's or a Value's.
+pub fn reveal_problem(world: &mut World, name: &str) -> bool {
+    let Some((element, el)) = studio(world) else {
+        return false;
+    };
+    let c = &el.configuration;
+    let resolved = c.resolve(&c.active);
+    let at = if let Some((input, _)) = c.column_named(name) {
+        let (Some(k), Some(param)) = (
+            c.inputs.iter().position(|i| i.id == input.id),
+            input.params.iter().position(|p| p.name == name),
+        ) else {
+            return false;
+        };
+        let row = match resolved.get(k) {
+            Some(cfg::Resolved::Row(i)) => *i,
+            Some(cfg::Resolved::Checked(b)) => usize::from(*b),
+            _ => return false,
+        };
+        ProblemAt::Cell {
+            input: input.id,
+            row,
+            param,
+        }
+    } else if let Some(i) = c
+        .input_named(name)
+        .filter(|i| matches!(i.kind, InputKind::Value { .. }))
+    {
+        ProblemAt::Value(i.id)
+    } else {
+        return false;
+    };
+    world.insert_resource(ConfigProblem {
+        element,
+        at,
+        focus: true,
+    });
+    if let Some(mut open) = world.get_resource_mut::<SidePanel>() {
+        *open = SidePanel::Configuration;
+    }
+    if let Some(mut view) = world.get_resource_mut::<crate::node_view::NodeView>() {
+        view.set(element, true);
+    }
+    true
+}
+
+/// Takes away the problem's red outline (its editor closed).
+pub fn clear_problem(world: &mut World) {
+    world.remove_resource::<ConfigProblem>();
+}
+
+/// The ✓ on the configuration shown.
+pub(crate) const SHOWN_CHECK: Color = Color::srgb_u8(0x2e, 0x9e, 0x44);
+
 /// The panel's left edge, dragged to make it wider or narrower.
 const PANEL_EDGE: &str = "configuration-panel-edge";
 
@@ -168,18 +212,15 @@ fn on_panel_resized(
         width.0 = Some(ev.height);
     }
 }
-/// The row-name column's width (px).
-const NAME_W: f32 = 120.0;
+
+/// The left inset of an input's title and table (px).
+const INSET: f32 = 10.0;
 
 /// The active Part Studio, if it is one.
 fn studio(world: &World) -> Option<(ElementId, Element)> {
     let d = world.get_resource::<ActiveDocument>()?;
     let el = d.active_element()?;
     matches!(el.kind, cadrs_core::ElementKind::PartStudio { .. }).then(|| (el.id, el.clone()))
-}
-
-fn units(world: &World) -> Units {
-    world.resource::<crate::WorkspaceUnits>().0
 }
 
 /// Runs a command; an error shows as a toast. Whether it was applied.
@@ -212,35 +253,20 @@ fn edit(world: &mut World, label: &str, f: impl FnOnce(&mut Configuration, &Elem
     );
 }
 
-/// Shows `values` (merged over the active ones) in the active Part Studio.
-fn activate(world: &mut World, input: ConfigInputId, value: InputValue) {
-    let Some((element, _)) = studio(world) else {
-        return;
-    };
-    let mut values = ConfigValues::default();
-    values.set(input, value);
-    run(world, &SetActiveConfiguration { element, values });
-}
-
-/// Text typed in a field as an expression: a bare number takes the quantity's unit.
-fn with_unit(text: &str, q: Option<Quantity>, units: &Units) -> String {
-    let t = match q {
-        Some(Quantity::Length) => VariableType::Length,
-        Some(Quantity::Angle) => VariableType::Angle,
-        _ => VariableType::Number,
-    };
-    t.with_unit(text, units)
-}
-
 // ---- The panel ---------------------------------------------------------------------------
 
 fn sync_panel(
     doc: Option<Res<ActiveDocument>>,
     open: Res<SidePanel>,
     kind: Res<ActiveKind>,
+    problem: Option<Res<ConfigProblem>>,
+    mut last_problem: Local<Option<ProblemAt>>,
     q_panel: Query<Entity, With<ConfigurationPanel>>,
     mut commands: Commands,
 ) {
+    let now = problem.as_ref().map(|p| p.at);
+    let problem_changed = *last_problem != now;
+    *last_problem = now;
     let want = *open == SidePanel::Configuration
         && *kind == ActiveKind::PartStudio
         && doc.as_ref().is_some_and(|d| {
@@ -256,6 +282,7 @@ fn sync_panel(
     if doc.as_ref().is_some_and(|d| d.is_changed())
         || open.is_changed()
         || kind.is_changed()
+        || problem_changed
         || q_panel.is_empty()
     {
         commands.queue(rebuild);
@@ -285,14 +312,6 @@ fn sync_button(
     }
 }
 
-/// What a cell shows.
-fn cell_text(v: &CellValue) -> String {
-    match v {
-        CellValue::Expr(e) => e.clone(),
-        CellValue::Bool(b) => b.to_string(),
-    }
-}
-
 /// A column's heading ("Extrude 1 · Depth", "Part 1 · Part number"): parts named as the Parts
 /// list shows them.
 pub(crate) fn target_label(world: &World, el: &Element, target: &ParamTarget) -> String {
@@ -312,22 +331,27 @@ pub(crate) fn target_label(world: &World, el: &Element, target: &ParamTarget) ->
 }
 
 fn rebuild(world: &mut World) {
-    let Some((_, el)) = studio(world) else {
+    let Some((element, el)) = studio(world) else {
         return;
     };
     let c = el.configuration.clone();
     let resolved = c.resolve(&c.active);
-    let heads: Vec<Vec<String>> = c
+    let units = world.resource::<ActiveDocument>().doc.units;
+    let problem = problem_in(world, element);
+    let theme_key = format!("{:?}", world.resource::<Theme>().background);
+    // (An output's kind and label follow the feature it configures.)
+    let outputs: Vec<(cfg::ColumnKind, String)> = c
         .inputs
         .iter()
-        .map(|i| {
-            i.params
-                .iter()
-                .map(|p| target_label(world, &el, &p.target))
-                .collect()
+        .flat_map(|i| &i.params)
+        .map(|p| {
+            let label = p
+                .target
+                .label(el.features(), &Default::default(), &|_| String::new());
+            (p.kind(el.features()), label)
         })
         .collect();
-    let key = PanelKey(format!("{c:?}{heads:?}"));
+    let key = PanelKey(format!("{c:?}{units:?}{problem:?}{theme_key}{outputs:?}"));
     let mut q = world.query_filtered::<(Entity, &PanelKey), With<ConfigurationPanel>>();
     let panels: Vec<(Entity, PanelKey)> = q.iter(world).map(|(e, k)| (e, k.clone())).collect();
     if panels.iter().any(|(_, k)| *k == key) {
@@ -338,15 +362,20 @@ fn rebuild(world: &mut World) {
         world.entity_mut(e).despawn();
     }
     let t = world.resource::<Theme>().clone();
-    let widest = c.inputs.iter().map(|i| i.params.len()).max().unwrap_or(0);
+    let widest = c
+        .inputs
+        .iter()
+        .map(config_table::table_width)
+        .fold(0.0, f32::max);
     let width = world
         .resource::<PanelWidth>()
         .0
-        .unwrap_or_else(|| (NAME_W + 60.0 + (COL_W + 4.0) * widest as f32).clamp(280.0, 760.0));
+        .unwrap_or_else(|| (widest + 2.0 * INSET + 16.0).clamp(280.0, 760.0));
     let panel = world
         .spawn((
             Name::new("configuration-panel"),
             ConfigurationPanel,
+            ConfigElement(element),
             key,
             DespawnOnExit(AppState::Document),
             side_panel_node(&t),
@@ -362,6 +391,7 @@ fn rebuild(world: &mut World) {
             // scroll and clip themselves.)
             n.overflow = Overflow::visible();
         });
+    let mut body = None;
     let mut commands = world.commands();
     commands.entity(panel).with_children(|p| {
         p.spawn(cadrs_ui::left_edge(
@@ -402,19 +432,48 @@ fn rebuild(world: &mut World) {
             ));
             return;
         }
-        p.spawn(Node {
-            flex_direction: FlexDirection::Column,
-            overflow: Overflow::scroll(),
-            flex_grow: 1.0,
-            min_height: Val::Px(0.0),
-            ..default()
-        })
-        .with_children(|body| {
+        body = Some(
+            p.spawn((
+                Name::new("configuration-scroll"),
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    overflow: Overflow::scroll(),
+                    flex_grow: 1.0,
+                    min_height: Val::Px(0.0),
+                    padding: UiRect::new(Val::Px(INSET), Val::Px(INSET), Val::ZERO, Val::Px(8.0)),
+                    ..default()
+                },
+            ))
+            .id(),
+        );
+    });
+    world.flush();
+    // The inputs, each its title and its table (built in the world, as the node view's are).
+    if let Some(body) = body {
+        let features = el.features().to_vec();
+        world.entity_mut(body).with_children(|b| {
             for (k, (input, r)) in c.inputs.iter().zip(&resolved).enumerate() {
-                section(body, &t, &el, k, input, *r, &heads[k]);
+                title(b, &t, k, input);
+                config_table::spawn_table(
+                    b,
+                    &t,
+                    &config_table::TableSpec {
+                        prefix: "configuration",
+                        input,
+                        resolved: *r,
+                        features: &features,
+                        units,
+                        problem,
+                        link: config_table::ColumnsLink {
+                            element,
+                            input: input.id,
+                            panel: true,
+                        },
+                    },
+                );
             }
         });
-    });
+    }
     let mut q_area =
         world.query_filtered::<(Entity, &ChildOf), With<crate::side_panel::SideDock>>();
     let Some((area, parent)) = q_area.iter(world).next().map(|(e, c)| (e, c.parent())) else {
@@ -428,28 +487,18 @@ fn rebuild(world: &mut World) {
     open_pending(world);
 }
 
-/// An input's section: its title, its value or values, and its table.
-#[allow(clippy::too_many_arguments)]
-fn section(
-    p: &mut ChildSpawnerCommands,
-    t: &Theme,
-    el: &Element,
-    k: usize,
-    input: &ConfigInput,
-    r: cfg::Resolved,
-    heads: &[String],
-) {
-    let base = format!("configuration-input-{}", k + 1);
+/// An input's title: its name (renamed in place), its kind, its menu.
+fn title(b: &mut ChildSpawner, t: &Theme, k: usize, input: &ConfigInput) {
     let icon = match input.kind {
         InputKind::List { .. } => "list",
         InputKind::Checkbox { .. } => "check",
         InputKind::Value { .. } => "variables",
     };
-    let mut title = p.spawn((
-        TreeItem::new(base.clone(), input.name.clone())
+    let mut title = b.spawn((
+        TreeItem::new(format!("configuration-input-{}", k + 1), input.name.clone())
             .icon(icon, 15.0)
             .icon_color(t.muted_foreground)
-            .left(8.0)
+            .left(0.0)
             .weight(FontWeight::MEDIUM)
             .editable()
             .trailing(Some(input.kind.label().to_string()), t.muted_foreground)
@@ -458,286 +507,117 @@ fn section(
         ContextMenuTarget,
         Tooltip::new(tr_with("config-input-tooltip", &[("name", &input.name)])),
     ));
-    title.entry::<Node>().and_modify(|mut n| {
+    if let Some(mut n) = title.get_mut::<Node>() {
         n.height = Val::Px(28.0);
-        n.margin.top = Val::Px(6.0);
-    });
-    match &input.kind {
-        InputKind::Checkbox { .. } => {
-            let on = matches!(r, cfg::Resolved::Checked(true));
-            p.spawn(Node {
-                padding: UiRect::new(Val::Px(30.0), Val::Px(8.0), Val::ZERO, Val::ZERO),
-                ..default()
-            })
-            .with_children(|r| {
-                r.spawn((
-                    Checkbox::new(format!("{base}-checked"))
-                        .label(input.name.clone())
-                        .checked(on)
-                        .build(t),
-                    ActiveCheck(input.id),
-                ));
-            });
-        }
-        InputKind::List { .. } => {}
-        // A Value: `#name`'s value in the configuration shown, typed in; no table.
-        InputKind::Value { kind, .. } => {
-            let value = match r {
-                cfg::Resolved::Number(x) => x,
-                _ => 0.0,
-            };
-            p.spawn(Node {
-                padding: UiRect::new(Val::Px(30.0), Val::Px(8.0), Val::Px(2.0), Val::Px(4.0)),
-                column_gap: Val::Px(8.0),
-                align_items: AlignItems::Center,
-                ..default()
-            })
-            .with_children(|r| {
-                r.spawn(t.text(
-                    format!("#{}", input.name),
-                    t.font_sm,
-                    FontWeight::MEDIUM,
-                    t.muted_foreground,
-                ));
-                r.spawn((
-                    TextInput::new(format!("{base}-value"))
-                        .value(kind.plain(value))
-                        .height(22.0)
-                        .width(Val::Px(COL_W))
-                        .select_all_on_focus()
-                        .build(t),
-                    ActiveValue(input.id, *kind),
-                    Tooltip::new(tr_with("config-value-tooltip", &[("name", &input.name)])),
-                ));
-            });
-            return;
-        }
+        n.margin.top = Val::Px(if k == 0 { 2.0 } else { 10.0 });
+        n.flex_shrink = 0.0;
     }
-    // The configuration table.
-    let active = match r {
-        cfg::Resolved::Row(i) => Some(i),
-        cfg::Resolved::Checked(c) => Some(usize::from(c)),
-        cfg::Resolved::Number(_) => None,
-    };
-    let default_row = match &input.kind {
-        InputKind::List { default, .. } => Some(*default),
-        _ => None,
-    };
-    let is_list = default_row.is_some();
-    // The rows' width: the name column, the ✓, and the cells.
-    let table_w = NAME_W + 60.0 + (COL_W + 4.0) * input.params.len() as f32;
-    p.spawn((
-        Name::new(format!("{base}-header")),
-        Node {
-            height: Val::Px(32.0),
-            min_width: Val::Px(table_w),
-            flex_shrink: 0.0,
-            padding: UiRect::new(Val::Px(30.0), Val::Px(6.0), Val::ZERO, Val::ZERO),
-            align_items: AlignItems::Center,
-            column_gap: Val::Px(4.0),
-            border: UiRect::bottom(Val::Px(1.0)),
-            ..default()
-        },
-        BorderColor::all(t.panel_border),
-    ))
-    .with_children(|h| {
-        h.spawn((
-            t.text(
-                tr("config-configuration"),
-                11.0,
-                FontWeight::MEDIUM,
-                t.muted_foreground,
-            ),
-            Node {
-                flex_grow: 1.0,
-                min_width: Val::Px(NAME_W - 30.0),
-                ..default()
-            },
-        ));
-        for (j, label) in heads.iter().enumerate() {
-            // Two lines, cut at the column's width: the feature, then the parameter.
-            let (feature, param) = label.split_once(" · ").unwrap_or((label.as_str(), ""));
-            h.spawn((
-                Name::new(format!("{base}-col-{}", j + 1)),
-                Node {
-                    width: Val::Px(COL_W),
-                    flex_shrink: 0.0,
-                    flex_direction: FlexDirection::Column,
-                    overflow: Overflow::clip(),
-                    ..default()
-                },
-                Tooltip::new(label.clone()),
-                ColumnHead {
-                    input: input.id,
-                    param: j,
-                },
-                ContextMenuTarget,
-            ))
-            .with_children(|c| {
-                for (text, color) in [(feature, t.muted_foreground), (param, t.foreground)] {
-                    c.spawn(t.text(text.to_string(), 10.5, FontWeight::MEDIUM, color))
-                        .insert(TextLayout::no_wrap());
-                }
-            });
-        }
-    });
-    for (row, name) in input.row_names().iter().enumerate() {
-        let row_name = format!("{base}-row-{}", row + 1);
-        let shown = active == Some(row);
-        let mut tree = TreeItem::new(row_name.clone(), name.clone())
-            .left(30.0)
-            .selected(shown)
-            .trailing(
-                (default_row == Some(row)).then(|| tr("config-default-tag")),
-                t.muted_foreground,
-            );
-        if is_list {
-            tree = tree.editable();
-        }
-        let mut e = p.spawn((
-            tree.build(t),
-            TableRow {
-                input: input.id,
-                row,
-            },
-            ContextMenuTarget,
-            DoubleClickable,
-            Tooltip::new(if shown {
-                tr_with("config-row-shown-tooltip", &[("name", name)])
-            } else {
-                tr_with("config-row-tooltip", &[("name", name)])
-            }),
-        ));
-        e.entry::<Node>().and_modify(move |mut n| {
-            // As wide as its name and cells, however narrow the panel (it then scrolls).
-            n.min_width = Val::Px(table_w);
-            n.flex_shrink = 0.0;
-            n.height = Val::Px(26.0);
-            n.column_gap = Val::Px(4.0);
-            n.padding.right = Val::Px(6.0);
-        });
-        e.with_children(|r| {
-            r.spawn(Node {
-                flex_grow: 1.0,
-                ..default()
-            });
-            if shown {
-                r.spawn((
-                    Name::new(format!("{row_name}-shown")),
-                    cadrs_ui::icon::icon_in(
-                        "check",
-                        14.0,
-                        Color::srgb_u8(0x2e, 0x9e, 0x44),
-                        Node {
-                            flex_shrink: 0.0,
-                            ..default()
-                        },
-                    ),
-                ));
-            }
-            for (j, param) in input.params.iter().enumerate() {
-                let name = format!("{row_name}-cell-{}", j + 1);
-                let cell = Cell {
-                    input: input.id,
-                    row,
-                    param: j,
-                };
-                match param.values.get(row) {
-                    Some(CellValue::Bool(b)) => {
-                        r.spawn(Node {
-                            width: Val::Px(COL_W),
-                            flex_shrink: 0.0,
-                            justify_content: JustifyContent::Center,
-                            ..default()
-                        })
-                        .with_children(|c| {
-                            c.spawn((
-                                Checkbox::new(name).checked(*b).height(22.0).build(t),
-                                cell,
-                                Tooltip::new(tr("config-suppressed-tooltip")),
-                            ));
-                        });
-                    }
-                    v => {
-                        let mut f = r.spawn((
-                            TextInput::new(name)
-                                .value(v.map(cell_text).unwrap_or_default())
-                                .height(22.0)
-                                .width(Val::Px(COL_W))
-                                .select_all_on_focus()
-                                .build(t),
-                            cell,
-                            Tooltip::new(heads[j].clone()),
-                        ));
-                        f.entry::<Node>().and_modify(|mut n| n.flex_shrink = 0.0);
-                    }
-                }
-            }
-        });
-    }
-    if is_list {
-        p.spawn(Node {
-            padding: UiRect::new(Val::Px(26.0), Val::Px(8.0), Val::Px(4.0), Val::Px(2.0)),
-            ..default()
-        })
-        .with_children(|r| {
-            r.spawn(
-                cadrs_ui::Button::new(format!("{base}-add-row"))
-                    .label(tr("config-add-row"))
-                    .icon("plus")
-                    .small()
-                    .ghost()
-                    .build(t),
-            )
-            .insert(AddRow(input.id));
-        });
-    }
-    if input.params.is_empty() {
-        p.spawn((
-            t.text(
-                tr("config-no-params"),
-                11.0,
-                FontWeight::NORMAL,
-                t.muted_foreground,
-            ),
-            Node {
-                margin: UiRect::new(Val::Px(30.0), Val::Px(8.0), Val::Px(2.0), Val::Px(4.0)),
-                ..default()
-            },
-        ));
-    }
-    let _ = el;
 }
 
-/// Opens the name of an input or row just added, once the panel shows it.
-fn open_pending(world: &mut World) {
-    let Some(p) = world.get_resource::<PendingName>().copied() else {
+/// Puts the problem's field in the panel in view and gives it the focus, once the panel shows
+/// it (given up after a second).
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+fn reveal_problem_cell(
+    problem: Option<ResMut<ConfigProblem>>,
+    mut frames: Local<u32>,
+    q_panel: Query<Entity, With<ConfigurationPanel>>,
+    q_roles: Query<(
+        Entity,
+        &ConfigRole,
+        &Children,
+        &ComputedNode,
+        &bevy::ui::UiGlobalTransform,
+    )>,
+    q_parent: Query<&ChildOf>,
+    q_field: Query<(), With<TextInputField>>,
+    mut q_scroll: Query<(
+        &Name,
+        &ComputedNode,
+        &bevy::ui::UiGlobalTransform,
+        &mut ScrollPosition,
+    )>,
+    mut focus: ResMut<InputFocus>,
+) {
+    let Some(mut problem) = problem.filter(|p| p.focus) else {
+        *frames = 0;
         return;
     };
-    let found = match p {
-        PendingName::Input(id) => {
-            let mut q = world.query::<(Entity, &InputTitle)>();
-            q.iter(world).find(|(_, x)| x.0 == id).map(|(e, _)| e)
-        }
-        PendingName::Row(id, row) => {
-            let mut q = world.query::<(Entity, &TableRow)>();
-            q.iter(world)
-                .find(|(_, x)| x.input == id && x.row == row)
-                .map(|(e, _)| e)
-        }
+    *frames += 1;
+    if *frames > 60 {
+        problem.focus = false;
+        return;
+    }
+    let Ok(panel) = q_panel.single() else {
+        return;
     };
-    let Some(e) = found else { return };
+    let at = problem.at;
+    // (The node view has the same field: the panel's.)
+    let found = q_roles
+        .iter()
+        .filter(|(_, r, ..)| match (r, at) {
+            (ConfigRole::Cell(i, j, k), ProblemAt::Cell { input, row, param }) => {
+                *i == input && *j == param && *k == row
+            }
+            (ConfigRole::Value(i), ProblemAt::Value(v)) => *i == v,
+            _ => false,
+        })
+        .find(|(e, ..)| q_parent.iter_ancestors(*e).any(|a| a == panel));
+    let Some((_, _, kids, node, at)) = found else {
+        return;
+    };
+    if node.size().x <= 0.0 {
+        return;
+    }
+    if let Some((_, view, view_at, mut pos)) = q_scroll
+        .iter_mut()
+        .find(|(n, ..)| n.as_str() == "configuration-scroll")
+    {
+        let s = view.inverse_scale_factor();
+        let rect = |n: &ComputedNode, g: &bevy::ui::UiGlobalTransform| {
+            Rect::from_center_size(g.translation * s, n.size() * s)
+        };
+        let (cell, shown) = (rect(node, at), rect(view, view_at));
+        let max = ((view.content_size() - view.size()) * s).max(Vec2::ZERO);
+        // (Room above it for its configuration's heading, and as little scrolled sideways as
+        // will show it, so the outputs' names stay in view where they can.)
+        let (before, after) = (
+            Vec2::new(16.0, 48.0).min(shown.size() / 3.0),
+            Vec2::new(16.0, 16.0),
+        );
+        let mut want = pos.0;
+        for axis in 0..2 {
+            let (lo, hi) = (
+                shown.min[axis] + before[axis],
+                shown.max[axis] - after[axis],
+            );
+            if cell.min[axis] < lo {
+                want[axis] -= lo - cell.min[axis];
+            } else if cell.max[axis] > hi {
+                want[axis] += cell.max[axis] - hi;
+            }
+            want[axis] = want[axis].clamp(0.0, max[axis]);
+        }
+        if want != pos.0 {
+            pos.0 = want;
+        }
+    }
+    if let Some(field) = kids.iter().find(|k| q_field.contains(*k)) {
+        focus.set(field, FocusCause::Navigated);
+    }
+    problem.focus = false;
+}
+
+/// Opens the name of an input just added, once the panel shows it.
+fn open_pending(world: &mut World) {
+    let Some(PendingName(id)) = world.get_resource::<PendingName>().copied() else {
+        return;
+    };
+    let Some(e) = find_entity::<InputTitle>(world, |t| t.0 == id) else {
+        return;
+    };
     world.remove_resource::<PendingName>();
     let name = studio(world)
-        .and_then(|(_, el)| {
-            let c = &el.configuration;
-            match p {
-                PendingName::Input(id) => c.input(id).map(|i| i.name.clone()),
-                PendingName::Row(id, row) => {
-                    c.input(id).and_then(|i| i.row_names().get(row).cloned())
-                }
-            }
-        })
+        .and_then(|(_, el)| el.configuration.input(id).map(|i| i.name.clone()))
         .unwrap_or_default();
     begin_rename(world, e, name);
 }
@@ -745,7 +625,7 @@ fn open_pending(world: &mut World) {
 fn begin_rename(world: &mut World, e: Entity, name: String) {
     let theme = world.resource::<Theme>().clone();
     let mut opts = InlineEditOptions::new("configuration-name");
-    opts.width = Val::Px(NAME_W);
+    opts.width = Val::Px(160.0);
     opts.height = 22.0;
     opts.font_size = Some(theme.font_sm);
     opts.weight = FontWeight::MEDIUM;
@@ -789,120 +669,9 @@ pub fn add_input(world: &mut World, kind: &str) -> Option<ConfigInputId> {
         true
     });
     if done {
-        world.insert_resource(PendingName::Input(id));
+        world.insert_resource(PendingName(id));
     }
     Some(id)
-}
-
-fn add_row(world: &mut World, input: ConfigInputId, copy: Option<usize>) {
-    let mut at = None;
-    edit(world, "Add configuration", |c, _| {
-        let Some(i) = c.input_mut(input) else {
-            return false;
-        };
-        let InputKind::List { rows, .. } = &mut i.kind else {
-            return false;
-        };
-        let taken: Vec<String> = rows.iter().map(|r| r.name.clone()).collect();
-        let from = copy.unwrap_or(rows.len().saturating_sub(1));
-        let n = rows.len() + 1;
-        let name = match copy {
-            Some(r) => free_name(&taken, &format!("{} copy", rows[r].name)),
-            None => free_name(&taken, &format!("Configuration {n}")),
-        };
-        let row = copy.map_or(rows.len(), |r| r + 1);
-        rows.insert(
-            row,
-            ListRow {
-                id: ConfigRowId::new(),
-                name,
-            },
-        );
-        for p in &mut i.params {
-            let v = p
-                .values
-                .get(from)
-                .cloned()
-                .unwrap_or(CellValue::Expr(String::new()));
-            p.values.insert(row, v);
-        }
-        at = Some(row);
-        true
-    });
-    if let Some(row) = at {
-        world.insert_resource(PendingName::Row(input, row));
-    }
-}
-
-fn rename(world: &mut World, target: PendingName, name: String) {
-    edit(world, "Rename", |c, _| match target {
-        PendingName::Input(id) => match c.input_mut(id) {
-            Some(i) if i.name != name => {
-                i.name = name;
-                true
-            }
-            _ => false,
-        },
-        PendingName::Row(id, row) => match c.input_mut(id).map(|i| &mut i.kind) {
-            Some(InputKind::List { rows, .. }) => match rows.get_mut(row) {
-                Some(r) if r.name != name => {
-                    r.name = name;
-                    true
-                }
-                _ => false,
-            },
-            _ => false,
-        },
-    });
-}
-
-/// Moves row `row` of a List by `by` (−1 up, +1 down), its values with it.
-fn move_row(c: &mut Configuration, input: ConfigInputId, row: usize, by: isize) -> bool {
-    let Some(i) = c.input_mut(input) else {
-        return false;
-    };
-    let InputKind::List { rows, default } = &mut i.kind else {
-        return false;
-    };
-    let to = row as isize + by;
-    if to < 0 || to as usize >= rows.len() {
-        return false;
-    }
-    let to = to as usize;
-    rows.swap(row, to);
-    for p in &mut i.params {
-        if to < p.values.len() && row < p.values.len() {
-            p.values.swap(row, to);
-        }
-    }
-    if *default == row {
-        *default = to;
-    } else if *default == to {
-        *default = row;
-    }
-    true
-}
-
-fn delete_row(c: &mut Configuration, input: ConfigInputId, row: usize) -> bool {
-    let Some(i) = c.input_mut(input) else {
-        return false;
-    };
-    let InputKind::List { rows, default } = &mut i.kind else {
-        return false;
-    };
-    if rows.len() < 2 || row >= rows.len() {
-        return false;
-    }
-    rows.remove(row);
-    for p in &mut i.params {
-        if row < p.values.len() {
-            p.values.remove(row);
-        }
-    }
-    if *default > row || *default >= rows.len() {
-        *default = default.saturating_sub(1);
-    }
-    true
 }
 
 fn move_input(c: &mut Configuration, input: ConfigInputId, by: isize) -> bool {
@@ -917,26 +686,9 @@ fn move_input(c: &mut Configuration, input: ConfigInputId, by: isize) -> bool {
     true
 }
 
-fn move_column(c: &mut Configuration, input: ConfigInputId, param: usize, by: isize) -> bool {
-    let Some(i) = c.input_mut(input) else {
-        return false;
-    };
-    let to = param as isize + by;
-    if to < 0 || to as usize >= i.params.len() {
-        return false;
-    }
-    i.params.swap(param, to as usize);
-    true
-}
-
 // ---- Observers -----------------------------------------------------------------------------
 
-fn on_button(a: On<Activate>, q: Query<&Name>, q_add: Query<&AddRow>, mut commands: Commands) {
-    if let Ok(r) = q_add.get(a.entity) {
-        let id = r.0;
-        commands.queue(move |world: &mut World| add_row(world, id, None));
-        return;
-    }
+fn on_button(a: On<Activate>, q: Query<&Name>, mut commands: Commands) {
     let Ok(n) = q.get(a.entity) else { return };
     if n.as_str() != "configuration-add-input" {
         return;
@@ -974,238 +726,62 @@ fn open_menu_at(world: &mut World, at: Vec2, menu: Menu, what: PanelMenu) {
     world.flush();
 }
 
-fn on_rename(
-    ev: On<InlineEditCommit>,
-    q_title: Query<&InputTitle>,
-    q_row: Query<&TableRow>,
-    mut commands: Commands,
-) {
-    let target = if let Ok(t) = q_title.get(ev.entity) {
-        PendingName::Input(t.0)
-    } else if let Ok(r) = q_row.get(ev.entity) {
-        PendingName::Row(r.input, r.row)
-    } else {
+/// An input's title renamed in place (a Value's or Checkbox's `#name` wherever it is read).
+fn on_rename(ev: On<InlineEditCommit>, q_title: Query<&InputTitle>, mut commands: Commands) {
+    let Ok(t) = q_title.get(ev.entity).copied() else {
         return;
     };
     let name = ev.value.trim().to_string();
-    if !name.is_empty() {
-        commands.queue(move |world: &mut World| rename(world, target, name));
-    }
-}
-
-/// A cell typed in (or a Value input's value).
-fn on_text(
-    ev: On<TextSubmit>,
-    q_cell: Query<&Cell>,
-    q_value: Query<&ActiveValue>,
-    mut commands: Commands,
-) {
-    let text = ev.value.trim().to_string();
-    if let Ok(a) = q_value.get(ev.entity).copied() {
-        commands.queue(move |world: &mut World| {
-            let units = units(world);
-            match units.eval(&text, a.1.quantity()) {
-                Ok(v) => activate(world, a.0, InputValue::Number(v)),
-                // (The panel is built again: the field shows the value it had.)
-                Err(_) => world.resource_mut::<ActiveDocument>().set_changed(),
-            }
-        });
+    if name.is_empty() {
         return;
     }
-    if let Ok(cell) = q_cell.get(ev.entity).copied() {
-        commands.queue(move |world: &mut World| {
-            let units = units(world);
-            edit(world, "Edit configuration table", |c, el| {
-                let Some(p) = c
-                    .input_mut(cell.input)
-                    .and_then(|i| i.params.get_mut(cell.param))
-                else {
-                    return false;
-                };
-                let q = p.target.quantity(el.features());
-                // A property's text is kept as typed (empty: not set); an expression takes a
-                // unit.
-                let is_text = p.target.is_text();
-                let Some(v) = p.values.get_mut(cell.row) else {
-                    return false;
-                };
-                let new = CellValue::Expr(if is_text {
-                    text.clone()
-                } else {
-                    with_unit(&text, q, &units)
-                });
-                if (text.is_empty() && !is_text) || *v == new {
-                    return false;
-                }
-                *v = new;
-                true
-            });
-        });
-    }
-}
-
-/// A suppression cell, or a Checkbox input's state.
-fn on_check(
-    ev: On<CheckboxChange>,
-    q_cell: Query<&Cell>,
-    q_active: Query<&ActiveCheck>,
-    mut commands: Commands,
-) {
-    let checked = ev.checked;
-    if let Ok(a) = q_active.get(ev.entity).copied() {
-        commands.queue(move |world: &mut World| activate(world, a.0, InputValue::Checked(checked)));
-        return;
-    }
-    let Ok(cell) = q_cell.get(ev.entity).copied() else {
-        return;
-    };
     commands.queue(move |world: &mut World| {
-        edit(world, "Edit configuration table", |c, _| {
-            let Some(v) = c
-                .input_mut(cell.input)
-                .and_then(|i| i.params.get_mut(cell.param))
-                .and_then(|p| p.values.get_mut(cell.row))
-            else {
-                return false;
-            };
-            *v = CellValue::Bool(checked);
-            true
-        })
+        if let Some((element, _)) = studio(world) {
+            config_table::rename_input(world, element, t.0, name);
+        }
     });
-}
-
-/// Shows a row's configuration in the Part Studio.
-fn show_row(world: &mut World, input: ConfigInputId, row: usize) {
-    let Some((_, el)) = studio(world) else { return };
-    let Some(i) = el.configuration.input(input) else {
-        return;
-    };
-    let v = match &i.kind {
-        InputKind::List { rows, .. } => match rows.get(row) {
-            Some(r) => InputValue::Row(r.id),
-            None => return,
-        },
-        InputKind::Checkbox { .. } => InputValue::Checked(row == 1),
-        // (A Value has no rows.)
-        InputKind::Value { .. } => return,
-    };
-    activate(world, input, v);
-}
-
-fn on_double_click(ev: On<DoubleClick>, q: Query<&TableRow>, mut commands: Commands) {
-    if let Ok(r) = q.get(ev.entity).copied() {
-        commands.queue(move |world: &mut World| show_row(world, r.input, r.row));
-    }
 }
 
 fn on_context_menu(
     ev: On<ContextMenuRequested>,
     q_title: Query<&InputTitle>,
-    q_row: Query<&TableRow>,
-    q_col: Query<&ColumnHead>,
     mut commands: Commands,
 ) {
     let at = ev.position;
-    let what = if let Ok(t) = q_title.get(ev.entity) {
-        PanelMenu::Input(t.0)
-    } else if let Ok(r) = q_row.get(ev.entity) {
-        PanelMenu::Row(r.input, r.row)
-    } else if let Ok(c) = q_col.get(ev.entity) {
-        PanelMenu::Column(c.input, c.param)
-    } else {
+    let Ok(t) = q_title.get(ev.entity).copied() else {
         return;
     };
+    let id = t.0;
     commands.queue(move |world: &mut World| {
         let Some((_, el)) = studio(world) else { return };
         let c = &el.configuration;
-        let menu = Menu::new("configuration-menu")
+        let Some(i) = c.input(id) else { return };
+        let k = c.inputs.iter().position(|x| x.id == id).unwrap_or(0);
+        let mut m = Menu::new("configuration-menu")
             .min_width(180.0)
-            .item_height(22.0);
-        let menu = match what {
-            PanelMenu::Input(id) => {
-                let Some(i) = c.input(id) else { return };
-                let k = c.inputs.iter().position(|x| x.id == id).unwrap_or(0);
-                let mut m = menu
-                    .item(MenuItem::new(
-                        "configuration-input-rename",
-                        tr("common-rename"),
-                    ))
-                    .item(
-                        MenuItem::new("configuration-input-up", tr("config-move-up"))
-                            .disabled(k == 0),
-                    )
-                    .item(
-                        MenuItem::new("configuration-input-down", tr("config-move-down"))
-                            .disabled(k + 1 == c.inputs.len()),
-                    );
-                if let InputKind::Checkbox { default } = i.kind {
-                    m = m.item(
-                        MenuItem::new(
-                            "configuration-input-default-checked",
-                            tr("config-checked-by-default"),
-                        )
-                        .checked(default),
-                    );
-                }
-                m.separator().item(
-                    MenuItem::new("configuration-input-delete", tr("common-delete"))
-                        .icon("remove-circle"),
+            .item_height(22.0)
+            .item(MenuItem::new(
+                "configuration-input-rename",
+                tr("common-rename"),
+            ))
+            .item(MenuItem::new("configuration-input-up", tr("config-move-up")).disabled(k == 0))
+            .item(
+                MenuItem::new("configuration-input-down", tr("config-move-down"))
+                    .disabled(k + 1 == c.inputs.len()),
+            );
+        if let InputKind::Checkbox { default } = i.kind {
+            m = m.item(
+                MenuItem::new(
+                    "configuration-input-default-checked",
+                    tr("config-checked-by-default"),
                 )
-            }
-            PanelMenu::Row(id, row) => {
-                let Some(i) = c.input(id) else { return };
-                let n = i.row_count();
-                let m = menu.item(MenuItem::new("configuration-row-show", tr("config-show")));
-                if !matches!(i.kind, InputKind::List { .. }) {
-                    m
-                } else {
-                    m.item(MenuItem::new(
-                        "configuration-row-rename",
-                        tr("common-rename"),
-                    ))
-                    .item(MenuItem::new(
-                        "configuration-row-default",
-                        tr("config-set-default"),
-                    ))
-                    .item(MenuItem::new(
-                        "configuration-row-duplicate",
-                        tr("common-duplicate"),
-                    ))
-                    .item(
-                        MenuItem::new("configuration-row-up", tr("config-move-up"))
-                            .disabled(row == 0),
-                    )
-                    .item(
-                        MenuItem::new("configuration-row-down", tr("config-move-down"))
-                            .disabled(row + 1 >= n),
-                    )
-                    .separator()
-                    .item(
-                        MenuItem::new("configuration-row-delete", tr("common-delete"))
-                            .icon("remove-circle")
-                            .disabled(n < 2),
-                    )
-                }
-            }
-            PanelMenu::Column(id, param) => {
-                let Some(i) = c.input(id) else { return };
-                menu.item(
-                    MenuItem::new("configuration-column-left", tr("config-move-left"))
-                        .disabled(param == 0),
-                )
-                .item(
-                    MenuItem::new("configuration-column-right", tr("config-move-right"))
-                        .disabled(param + 1 >= i.params.len()),
-                )
-                .separator()
-                .item(
-                    MenuItem::new("configuration-column-remove", tr("config-remove-column"))
-                        .icon("remove-circle"),
-                )
-            }
-            PanelMenu::AddInput => return,
-        };
-        open_menu_at(world, at, menu, what);
+                .checked(default),
+            );
+        }
+        let m = m.separator().item(
+            MenuItem::new("configuration-input-delete", tr("common-delete")).icon("remove-circle"),
+        );
+        open_menu_at(world, at, m, PanelMenu::Input(id));
     });
 }
 
@@ -1264,62 +840,6 @@ fn menu_action(world: &mut World, what: PanelMenu, item: &str) {
                 c.inputs.retain(|i| i.id != id);
                 c.inputs.len() != n
             });
-        }
-        (PanelMenu::Row(id, row), "configuration-row-show") => show_row(world, id, row),
-        (PanelMenu::Row(id, row), "configuration-row-rename") => {
-            let name = studio(world).and_then(|(_, el)| {
-                el.configuration
-                    .input(id)
-                    .and_then(|i| i.row_names().get(row).cloned())
-            });
-            if let (Some(e), Some(name)) = (
-                find_entity::<TableRow>(world, |r| r.input == id && r.row == row),
-                name,
-            ) {
-                begin_rename(world, e, name);
-            }
-        }
-        (PanelMenu::Row(id, row), "configuration-row-default") => {
-            edit(world, "Set default configuration", |c, _| {
-                match c.input_mut(id).map(|i| &mut i.kind) {
-                    Some(InputKind::List { default, .. }) if *default != row => {
-                        *default = row;
-                        true
-                    }
-                    _ => false,
-                }
-            });
-        }
-        (PanelMenu::Row(id, row), "configuration-row-duplicate") => add_row(world, id, Some(row)),
-        (PanelMenu::Row(id, row), "configuration-row-up" | "configuration-row-down") => {
-            let by = if item.ends_with("up") { -1 } else { 1 };
-            edit(world, "Move configuration", |c, _| move_row(c, id, row, by));
-        }
-        (PanelMenu::Row(id, row), "configuration-row-delete") => {
-            edit(world, "Delete configuration", |c, _| delete_row(c, id, row));
-        }
-        (
-            PanelMenu::Column(id, param),
-            "configuration-column-left" | "configuration-column-right",
-        ) => {
-            let by = if item.ends_with("left") { -1 } else { 1 };
-            edit(world, "Move configured parameter", |c, _| {
-                move_column(c, id, param, by)
-            });
-        }
-        (PanelMenu::Column(id, param), "configuration-column-remove") => {
-            let Some((element, el)) = studio(world) else {
-                return;
-            };
-            let Some(target) = el
-                .configuration
-                .input(id)
-                .and_then(|i| i.params.get(param))
-                .map(|p| p.target.clone())
-            else {
-                return;
-            };
-            run(world, &UnconfigureParameter { element, target });
         }
         _ => {}
     }
@@ -1499,7 +1019,7 @@ fn configure_target(
     if done {
         *world.resource_mut::<SidePanel>() = SidePanel::Configuration;
         if let Some(id) = new_input {
-            world.insert_resource(PendingName::Input(id));
+            world.insert_resource(PendingName(id));
         }
     }
 }
