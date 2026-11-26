@@ -609,9 +609,50 @@ fn fitted_kept(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Curve {
     }
     static KEPT_FITS: std::sync::LazyLock<std::sync::Mutex<Kept>> =
         std::sync::LazyLock::new(Default::default);
+    // A circle on a sphere is kept in the sphere's own frame, to a part in 10¹¹ of its radius:
+    // its p-curve is the same wherever the two stand together (a filleted solid's corners, the
+    // same solid moved), and fitted there.
+    let mut canonical: Option<(Surface, Curve)> = None;
     let mut h = super::fingerprint::Key128::new();
-    h.surface(s);
-    h.curve(c);
+    match (s, c) {
+        (Surface::Sphere { f, r }, Curve::Circle { c: cc, x, y, r: rc }) => {
+            let l = f.local(cc);
+            let dir = |v: &V3| V3::new(v.dot(&f.x), v.dot(&f.y), v.dot(&f.z));
+            let (lx, ly) = (dir(x), dir(y));
+            let q = |v: f64| (v / (r * 1e-11)).round();
+            h.f64s(&[-1.5e300, *r, q(*rc)]);
+            h.f64s(&[
+                q(l.x),
+                q(l.y),
+                q(l.z),
+                q(lx.x * r),
+                q(lx.y * r),
+                q(lx.z * r),
+            ]);
+            h.f64s(&[q(ly.x * r), q(ly.y * r), q(ly.z * r)]);
+            canonical = Some((
+                Surface::Sphere {
+                    f: Frame {
+                        o: P3::origin(),
+                        x: V3::x(),
+                        y: V3::y(),
+                        z: V3::z(),
+                    },
+                    r: *r,
+                },
+                Curve::Circle {
+                    c: P3::from(l),
+                    x: lx,
+                    y: ly,
+                    r: *rc,
+                },
+            ));
+        }
+        _ => {
+            h.surface(s);
+            h.curve(c);
+        }
+    }
     h.f64s(&[t0, t1]);
     let key = h.key();
     {
@@ -624,7 +665,10 @@ fn fitted_kept(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Curve {
             return pc;
         }
     }
-    let pc = fitted(s, c, t0, t1);
+    let pc = match &canonical {
+        Some((s, c)) => fitted(s, c, t0, t1),
+        None => fitted(s, c, t0, t1),
+    };
     let mut k = KEPT_FITS.lock().unwrap_or_else(|e| e.into_inner());
     if k.new.len() >= KEPT {
         k.old = std::mem::take(&mut k.new);
