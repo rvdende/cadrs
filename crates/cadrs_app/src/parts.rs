@@ -5509,7 +5509,7 @@ mod tests {
             )
             .unwrap();
         }
-        let build = cadrs_core::rebuild::build(doc.element(mm::STUDIO).unwrap().features());
+        let build = cadrs_core::rebuild::build(&doc.element(mm::STUDIO).unwrap().active_features());
         let (parts, props) = cadrs_core::assembly::instance_parts(
             &doc,
             doc.element(asm).unwrap().assembly_model().unwrap(),
