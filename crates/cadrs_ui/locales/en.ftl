@@ -309,6 +309,8 @@ shell-app-menu = Menu
 shell-preferences-ellipsis = Preferences…
 shell-app-menu-shortcuts = Keyboard shortcuts
 shell-app-menu-github = GitHub
+# The cadrs Discord server (a chat for users and developers), opened in the browser.
+shell-app-menu-discord = Discord
 shell-app-menu-docs = Documentation
 
 ## Crash reports and Report a problem (cadrs_app::crash)
