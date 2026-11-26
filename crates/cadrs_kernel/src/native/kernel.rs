@@ -51,6 +51,10 @@ pub struct Entry {
     /// Each parametric face's grid for rays ([`classify::ray_hits_kept`]), made at the first
     /// ray that reaches the face.
     ray_grids: OnceLock<Vec<OnceLock<classify::RayGrid>>>,
+    /// The body this one is an affine map of ([`crate::Kernel::transform_affine`]), with the
+    /// map back and how far it stretches at most: a point is inside this one where its image
+    /// back is inside that one, whose surfaces are still analytic (this one's are NURBS).
+    affine_of: OnceLock<(Arc<Entry>, Affine, f64)>,
 }
 
 impl Entry {
@@ -71,6 +75,7 @@ impl Entry {
             copies: OnceLock::new(),
             mass: OnceLock::new(),
             ray_grids: OnceLock::new(),
+            affine_of: OnceLock::new(),
         }
     }
     /// [`Body::boxes`], made once.
@@ -173,6 +178,14 @@ impl NativeKernel {
     }
 
     /// The session's record of a body.
+    /// [`Self::entry`] shared (kept by another body that refers to it).
+    pub(crate) fn entry_arc(&self, id: BodyId) -> Result<Arc<Entry>> {
+        self.bodies
+            .get(&id.0)
+            .cloned()
+            .ok_or(KernelError::UnknownBody(id))
+    }
+
     pub(crate) fn entry(&self, id: BodyId) -> Result<&Entry> {
         self.bodies
             .get(&id.0)
@@ -2200,9 +2213,35 @@ impl Kernel for NativeKernel {
         m: nalgebra::Matrix3<f64>,
         t: nalgebra::Vector3<f64>,
     ) -> Result<OpResult> {
-        let b = super::affine::affine_body(self.get(body)?, &Affine { m, t })?;
+        let map = Affine { m, t };
+        let b = super::affine::affine_body(self.get(body)?, &map)?;
         let nf = b.faces.len();
+        let from = self.entry_arc(body)?;
         let id = self.insert(b);
+        // (A similarity keeps every surface's kind: nothing to gain by going back.)
+        if !super::affine::similarity(&map)
+            && let Some(inv) = m.try_inverse()
+        {
+            let back = Affine {
+                m: inv,
+                t: -(inv * t),
+            };
+            // (A map of a map goes back to the first body, the two maps back composed.)
+            let (from, back) = match from.affine_of.get() {
+                Some((first, b0, _)) => (
+                    first.clone(),
+                    Affine {
+                        m: b0.m * back.m,
+                        t: b0.m * back.t + b0.t,
+                    },
+                ),
+                None => (from, back),
+            };
+            let stretch = back.m.svd(false, false).singular_values.max();
+            if let Some(e) = self.bodies.get(&id.0) {
+                let _ = e.affine_of.set((from, back, stretch));
+            }
+        }
         let history = History {
             modified: (0..nf)
                 .map(|i| {
@@ -2332,6 +2371,14 @@ impl Kernel for NativeKernel {
 
     fn classify(&self, body: BodyId, point: Point3<f64>, tol: f64) -> Result<PointClass> {
         let e = self.entry(body)?;
+        if let Some((from, back, stretch)) = e.affine_of.get() {
+            return Ok(classify::classify_point(
+                &from.body,
+                from.polys(),
+                &back.point(&point),
+                tol * stretch,
+            ));
+        }
         Ok(classify::classify_point(&e.body, e.polys(), &point, tol))
     }
 
@@ -2343,6 +2390,18 @@ impl Kernel for NativeKernel {
     ) -> Result<Vec<PointClass>> {
         use rayon::prelude::*;
         let e = self.entry(body)?;
+        // An affine map of another body: the points mapped back, classified against it (its
+        // boundary's tolerance the map's most stretched back).
+        if let Some((from, back, stretch)) = e.affine_of.get() {
+            let back: Vec<Point3<f64>> = points.iter().map(|p| back.point(p)).collect();
+            let c = classify::Classifier::new(&from.body, from.polys());
+            let tol = tol * stretch;
+            return Ok(if super::par::threads_for(back.len(), false) {
+                back.par_iter().map(|p| c.classify(p, tol)).collect()
+            } else {
+                back.iter().map(|p| c.classify(p, tol)).collect()
+            });
+        }
         let c = classify::Classifier::new(&e.body, e.polys());
         Ok(if super::par::threads_for(points.len(), false) {
             points.par_iter().map(|p| c.classify(p, tol)).collect()
