@@ -1641,6 +1641,7 @@ model-plane-type-tangent = Tangential
 model-sweep-keep-orientation = Profilausrichtung beibehalten
 model-sweep-lock-direction = Profilrichtung fixieren
 model-sweep-lock-faces = Profilflächen fixieren
+model-sweep-lock-faces-field = Flächen zum Fixieren
 model-loft-normal-to-profile = Normal zum Profil
 model-loft-tangent-to-profile = Tangential zum Profil
 model-loft-match-tangent = Tangente angleichen

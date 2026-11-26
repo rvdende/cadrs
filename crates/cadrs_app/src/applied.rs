@@ -216,11 +216,12 @@ pub enum AppliedField {
     Side2,
     /// P3.7: a Plane's entities.
     PlaneEntities,
-    /// A Sweep's faces and sketch regions, its path, and the direction Lock profile direction
-    /// keeps.
+    /// A Sweep's profile (faces and sketch regions, or a surface's edges and sketch curves), its
+    /// path, the direction Lock profile direction keeps and the faces Lock profile faces keeps.
     Profile,
     Path,
     LockDirection,
+    LockFaces,
     /// A Loft's profiles.
     Profiles,
     /// P3.11: a Loft's Normal direction / Tangent direction conditions' directions.
@@ -397,10 +398,17 @@ impl AppliedSession {
                 skip_op: None,
                 ..none
             },
+            // Edges and sketch curves for a surface's profile.
             AppliedField::Profile => PickFilter {
                 faces: true,
                 planar_only: true,
                 regions: true,
+                edges: true,
+                sketch_curves: true,
+                ..none
+            },
+            AppliedField::LockFaces => PickFilter {
+                faces: true,
                 ..none
             },
             AppliedField::Path => PickFilter {
