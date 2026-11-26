@@ -77,6 +77,8 @@ impl Plugin for PartsPlugin {
             .gizmo_group::<PickedEdgeGizmos>()
             .gizmo_group::<VertexGizmos>()
             .gizmo_group::<FreeEdgeGizmos>()
+            // A page's kernel: a slice of each frame for the rebuilds under way.
+            .add_systems(First, kernel_slice)
             .add_plugins(crate::part_shading::PartShadingPlugin)
             .add_systems(Startup, (configure_gizmos, defer_regeneration))
             .add_systems(
@@ -464,6 +466,13 @@ impl Default for RebuildBudget {
     }
 }
 
+/// A browser page runs the kernel on its one thread: a slice of each frame goes on with the
+/// rebuilds under way, so a document opens at once and its parts come in as they are built
+/// (`cadrs_core::rebuild::tick`; nothing where the kernel has a thread of its own).
+fn kernel_slice() {
+    cadrs_core::rebuild::tick();
+}
+
 /// A rebuild on the kernel thread that the parts are waiting for.
 struct PendingRebuild {
     element: ElementId,
@@ -538,6 +547,10 @@ pub struct PartCache {
     pub missing: HashMap<FeatureId, Vec<usize>>,
     /// True while a rebuild is running (the parts on screen are the previous ones).
     pub rebuilding: bool,
+    /// An assembly's rebuild as a whole while its source Part Studios rebuild (one after
+    /// another, each counting from 1 in [`cadrs_core::rebuild::progress`]): their part features
+    /// done of all of theirs, for the Rebuilding… pill.
+    pub assembly_progress: Option<(usize, usize)>,
     /// The parts as they were before the feature whose dialog is open (Onshape's ghost): drawn
     /// faint over the result and pickable, so edges the feature consumed (a chamfered edge) can
     /// still be picked. Empty when no dialog is open.
