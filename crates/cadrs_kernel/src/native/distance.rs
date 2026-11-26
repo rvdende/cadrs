@@ -920,6 +920,11 @@ pub fn kernel_distance(
         return Ok(r);
     }
     if sense == Sense::Min
+        && let Some(r) = point_line_or_circle(k, a, b)
+    {
+        return Ok(r);
+    }
+    if sense == Sense::Min
         && let Some(r) = held(k, a, b)?
     {
         return Ok(r);
@@ -1145,6 +1150,72 @@ fn held(
 /// point of a face is that foot when it lies inside the face's loops and on its edges otherwise,
 /// all in closed form. None where any of that does not hold, or a foot lies too near its face's
 /// loops to tell (the general measure then).
+/// The nearest point to a point of an edge on a line or a circle, in closed form: the
+/// curve's nearest parameter in the edge's range, or an end where that is nearer (the adapter
+/// of a test suite asks this of every edge for every point it picks an edge by). None for any
+/// other pair.
+fn point_line_or_circle(
+    k: &super::NativeKernel,
+    a: &crate::DistanceTarget,
+    b: &crate::DistanceTarget,
+) -> Option<crate::DistanceResult> {
+    use crate::{DistanceLocation, DistanceTarget};
+    let (p, id, edge, point_first) = match (*a, *b) {
+        (DistanceTarget::Point(p), DistanceTarget::Edge(id, e)) => (p, id, e, true),
+        (DistanceTarget::Edge(id, e), DistanceTarget::Point(p)) => (p, id, e, false),
+        _ => return None,
+    };
+    if !p.iter().all(|x| x.is_finite()) {
+        return None;
+    }
+    let body = &k.entry(id).ok()?.body;
+    let ei = edge.0 as usize;
+    let e = body.edges.get(ei)?;
+    if e.degenerate || !matches!(e.curve, Curve::Line { .. } | Curve::Circle { .. }) {
+        return None;
+    }
+    let t = e.curve.closest(&p, e.t[0], e.t[1]);
+    let q = e.curve.point(t);
+    let (v0, v1) = (body.verts[e.v[0]].p, body.verts[e.v[1]].p);
+    let ids = || super::kernel::vertex_ids(body);
+    let vertex = |v: usize| {
+        DistanceLocation::Vertex(crate::VertexId(
+            ids().get(v).copied().flatten().unwrap_or(v) as u64,
+        ))
+    };
+    let span = tol::REL * (e.t[1] - e.t[0]).abs();
+    let (d, at, on) = [
+        ((q - p).norm(), q, None),
+        ((v0 - p).norm(), v0, Some(e.v[0])),
+        ((v1 - p).norm(), v1, Some(e.v[1])),
+    ]
+    .into_iter()
+    .min_by(|x, y| x.0.total_cmp(&y.0))?;
+    let loc = match on {
+        Some(v) => vertex(v),
+        None if (t - e.t[0]).abs() <= span => vertex(e.v[0]),
+        None if (t - e.t[1]).abs() <= span => vertex(e.v[1]),
+        None => DistanceLocation::Edge(edge, t),
+    };
+    Some(if point_first {
+        crate::DistanceResult {
+            distance: d,
+            a: p,
+            b: at,
+            a_at: DistanceLocation::Point,
+            b_at: loc,
+        }
+    } else {
+        crate::DistanceResult {
+            distance: d,
+            a: at,
+            b: p,
+            a_at: loc,
+            b_at: DistanceLocation::Point,
+        }
+    })
+}
+
 fn analytic_nearest(
     k: &super::NativeKernel,
     a: &crate::DistanceTarget,
