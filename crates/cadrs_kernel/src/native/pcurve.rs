@@ -44,7 +44,7 @@ pub fn pcurve_or(
         .or(fit)
         .unwrap_or_else(|| {
             let t = super::boolean::profiling().then(web_time::Instant::now);
-            let pc = fitted(s, c, t0, t1);
+            let pc = fitted_kept(s, c, t0, t1);
             if let Some(t) = t {
                 FITTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 FITTED_NS.fetch_add(
@@ -596,6 +596,42 @@ pub(super) fn iso_line(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Option<Curve
 /// about h⁶ where a cubic is off by h⁴: a circle on a sphere it doesn't run round, fitted to
 /// 1e-9, took 333 points as a cubic.
 const FIT_DEGREE: usize = 5;
+
+/// [`fitted`], kept by its inputs (two generations of at most this many): every boolean of a
+/// part with another fits its edges' p-curves on the same surfaces again (a coil's end circles
+/// on its sweep, ten booleans a case).
+fn fitted_kept(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Curve {
+    const KEPT: usize = 1024;
+    #[derive(Default)]
+    struct Kept {
+        new: rustc_hash::FxHashMap<u128, Curve>,
+        old: rustc_hash::FxHashMap<u128, Curve>,
+    }
+    static KEPT_FITS: std::sync::LazyLock<std::sync::Mutex<Kept>> =
+        std::sync::LazyLock::new(Default::default);
+    let mut h = super::fingerprint::Key128::new();
+    h.surface(s);
+    h.curve(c);
+    h.f64s(&[t0, t1]);
+    let key = h.key();
+    {
+        let mut k = KEPT_FITS.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(pc) = k.new.get(&key).cloned() {
+            return pc;
+        }
+        if let Some(pc) = k.old.remove(&key) {
+            k.new.insert(key, pc.clone());
+            return pc;
+        }
+    }
+    let pc = fitted(s, c, t0, t1);
+    let mut k = KEPT_FITS.lock().unwrap_or_else(|e| e.into_inner());
+    if k.new.len() >= KEPT {
+        k.old = std::mem::take(&mut k.new);
+    }
+    k.new.insert(key, pc.clone());
+    pc
+}
 
 /// Interpolates projected points with the curve's own parameters.
 fn fitted(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Curve {
