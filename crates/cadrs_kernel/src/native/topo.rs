@@ -2262,6 +2262,11 @@ pub(super) fn pcurve_gap(e: &Edge, pc: &Curve, surf: &Surface) -> f64 {
     if worst.is_infinite() {
         return worst;
     }
+    // Every sample a tenth of the least tolerance or less (exact geometry, a fit to 1e-9): the
+    // largest between them can't reach the tolerance it would set, so it isn't searched for.
+    if worst <= 0.1 * TOL_MIN {
+        return worst;
+    }
     // The gap is smooth along the edge: its largest value lies within a sample of the worst.
     let (mut a, mut b) = (at(wi.saturating_sub(1)), at((wi + 1).min(N)));
     let r = 0.5 * (5f64.sqrt() - 1.0);
