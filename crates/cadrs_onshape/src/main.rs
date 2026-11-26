@@ -7,6 +7,11 @@
 //!                                                   [--skip <feature ids>]`)
 //! cadrs-onshape check-queries                       decode every geometry query in the data
 //!
+//! cadrs-onshape export <document name or id>… [--out <file.cadrs or dir>] [--all]
+//!                                                   write stored documents as portable `.cadrs`
+//!                                                   packages (for attaching to an issue, sharing,
+//!                                                   or opening in another cadrs)
+//!
 //! --raw <dir>        the scraped data (default ~/work/cadrs_onshape/raw)
 //! --data-dir <dir>   the cadrs document store (default: the app's, as `cadrs` finds it)
 //! --user <id>        who owns the imported documents (default: $USER, as the app sees you)
@@ -39,6 +44,8 @@ fn main() -> ExitCode {
     let mut skip = Vec::new();
     let mut timeout = Duration::from_secs(300);
     let mut json_out: Option<PathBuf> = None;
+    let mut out: Option<PathBuf> = None;
+    let mut all = false;
     // Imported documents belong to the local user, as the app identifies them.
     let mut user = std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
@@ -65,11 +72,14 @@ fn main() -> ExitCode {
                     .unwrap_or(timeout)
             }
             "--json" => json_out = it.next().map(PathBuf::from),
+            "--out" => out = it.next().map(PathBuf::from),
+            "--all" => all = true,
             _ => rest.push(a),
         }
     }
     match rest.first().map(String::as_str) {
         Some("check-queries") => check_queries(&raw_dir),
+        Some("export") => export(&data_dir, &rest[1..], out.as_deref(), all),
         Some("compare") => match (rest.get(1), rest.get(2)) {
             (Some(c), Some(s)) => match cadrs_onshape::compare::compare(c.as_ref(), s.as_ref()) {
                 Ok(j) => {
@@ -115,7 +125,7 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: cadrs-onshape (import [<name or id>…] [--dry-run] [--json <file>] | compare <file.cadrs> <file.step> | check-queries) [--raw <dir>] [--data-dir <dir>]"
+                "usage: cadrs-onshape (import [<name or id>…] [--dry-run] [--json <file>] | export <name or id>… [--out <file.cadrs or dir>] [--all] | compare <file.cadrs> <file.step> | check-queries) [--raw <dir>] [--data-dir <dir>]"
             );
             ExitCode::from(2)
         }
@@ -371,6 +381,95 @@ fn import_one(
     } else {
         ExitCode::FAILURE
     }
+}
+
+/// A file-name-safe version of a document name for its exported package.
+fn package_name(name: &str) -> String {
+    let mut out: String = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '-' })
+        .collect();
+    while out.contains("--") {
+        out = out.replace("--", "-");
+    }
+    let out = out.trim_matches(['-', '.']).to_string();
+    if out.is_empty() { "document".into() } else { out }
+}
+
+/// Writes stored documents as portable `.cadrs` packages: one file for one document, a folder when
+/// exporting several or `--all`. Packages keep the document's history, blobs and thumbnail, so they
+/// can be attached to an issue or opened on another machine.
+fn export(data_dir: &Option<PathBuf>, names: &[String], out: Option<&Path>, all: bool) -> ExitCode {
+    let Some(dir) = data_dir else {
+        eprintln!("no document store: pass --data-dir");
+        return ExitCode::from(2);
+    };
+    let store = Store::new(dir.clone());
+    let (library, _) = store.list();
+    let entries: Vec<_> = if all {
+        library.entries.iter().collect()
+    } else {
+        names
+            .iter()
+            .filter_map(|want| {
+                let found = library.entries.iter().find(|e| {
+                    e.name == *want
+                        || e.name.to_lowercase().contains(&want.to_lowercase())
+                        || e.id.0.to_string() == *want
+                });
+                if found.is_none() {
+                    eprintln!("no stored document matching {want}");
+                }
+                found
+            })
+            .collect()
+    };
+    if entries.is_empty() {
+        eprintln!("nothing to export under {}", dir.display());
+        return ExitCode::FAILURE;
+    }
+    let single_file = entries.len() == 1
+        && out.is_some_and(|p| p.extension().is_some_and(|e| e == "cadrs"));
+    let out_dir = match out {
+        Some(p) if !single_file => p.to_path_buf(),
+        _ if !single_file => PathBuf::from("cadrs-exports"),
+        _ => PathBuf::new(),
+    };
+    if !single_file && let Err(e) = std::fs::create_dir_all(&out_dir) {
+        eprintln!("cannot create {}: {e}", out_dir.display());
+        return ExitCode::FAILURE;
+    }
+    let mut failed = 0;
+    for entry in entries {
+        let file = match store.load(entry.id) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("{}: cannot load: {e}", entry.name);
+                failed += 1;
+                continue;
+            }
+        };
+        let target = if single_file {
+            out.expect("single file has an --out").to_path_buf()
+        } else {
+            out_dir.join(format!("{}.cadrs", package_name(&entry.name)))
+        };
+        if let Some(parent) = target.parent().filter(|p| !p.as_os_str().is_empty())
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            eprintln!("{}: cannot create {}: {e}", entry.name, parent.display());
+            failed += 1;
+            continue;
+        }
+        match cadrs_core::native::export(&target, &file.document, &file.meta, &store) {
+            Ok(()) => println!("{}", target.display()),
+            Err(e) => {
+                eprintln!("{}: cannot export: {e}", entry.name);
+                failed += 1;
+            }
+        }
+    }
+    if failed == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE }
 }
 
 fn default_raw() -> PathBuf {

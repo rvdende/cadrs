@@ -478,6 +478,49 @@ function buildReports() {
 
 ipcMain.handle('reports', buildReports);
 
+// The last import's saved documents as portable `.cadrs` packages (one file each, next to the
+// reports in <root>/cadrs/), for attaching to an issue or opening on another machine. Dry runs and
+// older reports have no cadrs ids: that is said plainly rather than exporting nothing.
+ipcMain.handle('export-cadrs', () => {
+  const reportFile = path.join(ROOT, 'import-report.json');
+  if (!fs.existsSync(reportFile)) {
+    return { error: 'No import-report.json yet: run a conversion first (a dry run only reports).' };
+  }
+  let report;
+  try {
+    report = JSON.parse(fs.readFileSync(reportFile, 'utf8'));
+  } catch (e) {
+    return { error: `Cannot read ${reportFile}: ${e.message}` };
+  }
+  const docs = (report.documents || []).filter((d) => !d.failed && d.cadrs_id);
+  if (!docs.length) {
+    return { error: 'The last import saved no documents (a dry run only reports). Uncheck "dry run" and convert again.' };
+  }
+  const dir = path.join(ROOT, 'cadrs');
+  fs.mkdirSync(dir, { recursive: true });
+  const { cmd, args, cwd } = importerCommand();
+  const files = [];
+  for (const doc of docs) {
+    const name = String(doc.name || doc.cadrs_id).replace(/[\\/:*?"<>|]+/g, '-').trim() || String(doc.cadrs_id);
+    const file = path.join(dir, `${name}.cadrs`);
+    const r = spawnSync(cmd, [...args, 'export', String(doc.cadrs_id), '--out', file], {
+      cwd,
+      encoding: 'utf8',
+      maxBuffer: 1 << 28,
+      env: process.env,
+    });
+    if (r.error) files.push({ name: doc.name, error: r.error.message });
+    else if (r.status !== 0) files.push({ name: doc.name, error: (r.stderr || '').trim() || `exited ${r.status}` });
+    else files.push({ name: doc.name, cadrsId: doc.cadrs_id, file });
+  }
+  return { dir, files };
+});
+ipcMain.handle('open-cadrs-folder', () => {
+  const dir = path.join(ROOT, 'cadrs');
+  fs.mkdirSync(dir, { recursive: true });
+  return shell.openPath(dir);
+});
+
 // Ticket drafts: one Markdown GitHub issue per translation defect group, written offline to
 // <root>/tickets/ (INDEX.md + one file per stable dedup key).
 function buildTicketDrafts() {

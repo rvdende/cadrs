@@ -88,6 +88,32 @@ The cadrs documents themselves go into the cadrs app's store (its usual
 `~/.local/share/cadrs/documents` on Linux), with the document names and Part Studios from
 Onshape.
 
+### Where the files are (raw scrape, cadrs documents, `.cadrs` packages)
+
+- **Scraped REST JSON** — the importer's input: `<root>/raw/<Onshape document id>/` with
+  `document.json`, `elements.json` and, per element, `features.json`, `sketches.json`,
+  `bodydetails.json`, `massproperties.json`, `parts.json`, … This is exactly the folder the
+  `tree.md` in a scraped document lists; **there are no `.cadrs` files here**.
+- **The imported cadrs documents** — the cadrs app's document store, the same one the app opens:
+  `~/.local/share/cadrs/documents/<cadrs id>/` on Linux. Each is a folder with `document.ron`,
+  `entry.ron` (the name), a thumbnail, blobs and history — not a `.cadrs` package.
+  `cadrs --list-documents` lists them; `import-report.json` has each document's `cadrs_id`.
+- **Portable `.cadrs` packages** — a zip of `document.ron`, `manifest.ron` and the thumbnail, made
+  only when exported. In the app: *Report → Export .cadrs files* (writes `<root>/cadrs/<name>.cadrs`).
+  From the command line:
+
+  ```sh
+  cadrs-onshape export "Capac2" --out ~/work/cadrs_onshape/cadrs/Capac2.cadrs
+  cadrs-onshape export --all --out ~/work/cadrs_onshape/cadrs
+  ```
+
+  `--data-dir <store>` picks another store; without `--out`, one document goes to `./<name>.cadrs`
+  and several/`--all` to `./cadrs-exports/`. Add `--out` paths to an issue with the *New ticket*
+  tab's **Attach files…** (or the import *Tickets* drafts' attachment list).
+- **A dry run** — `--dry-run` or the app's *dry run* checkbox — only builds and reports: it writes
+  no document into the store, so there is nothing to export until it is unchecked and converted.
+
+
 ### If the Onshape pane does not draw (WebGPU/WebGL) or is stuck on a help page
 
 Electron puts its own name in the user agent, and Linux Chromium leaves WebGPU off and can
@@ -208,6 +234,7 @@ scraped documents use.
 cargo run -r -p cadrs_onshape -- import                     # every scraped document
 cargo run -r -p cadrs_onshape -- import cabinet --dry-run   # build and report, don't save
 cargo run -r -p cadrs_onshape -- import --json report.json  # also write the JSON report
+cargo run -r -p cadrs_onshape -- export "Capac2" --out Capac2.cadrs  # a portable .cadrs package
 ```
 
 - Imported documents keep ids derived from Onshape's, so importing again replaces them.

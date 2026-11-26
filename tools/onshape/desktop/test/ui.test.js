@@ -108,6 +108,20 @@ test('ui: a lost WebGL context offers reload or a software restart', () => {
   assert.match(fs.readFileSync(path.join(desktop, 'onshape-preload.js'), 'utf8'), /webglcontextlost/);
 });
 
+test('ui: the Report tab exports the imported documents as .cadrs packages', () => {
+  for (const id of ['rExport', 'rFolder']) {
+    assert.match(html, new RegExp(`id="${id}"`), `#${id} exists`);
+  }
+  assert.match(html, /api\.exportCadrs\(\)/);
+  assert.match(html, /api\.openCadrsFolder\(\)/);
+  assert.match(preloadSource, /exportCadrs: \(\) => ipcRenderer\.invoke\('export-cadrs'\)/);
+  assert.match(preloadSource, /openCadrsFolder: \(\) => ipcRenderer\.invoke\('open-cadrs-folder'\)/);
+  assert.match(mainSource, /ipcMain\.handle\('export-cadrs'/);
+  assert.match(mainSource, /ipcMain\.handle\('open-cadrs-folder'/);
+  assert.match(mainSource, /cadrs_id/);
+  assert.match(mainSource, /'export'/);
+});
+
 test('main: the Onshape pane gets a Chrome identity, GPU switches and navigation IPC', () => {
   assert.match(mainSource, /require\('\.\/chrome'\)/);
   assert.match(mainSource, /app\.userAgentFallback = BROWSER_UA/);

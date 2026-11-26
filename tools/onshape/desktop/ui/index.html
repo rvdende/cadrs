@@ -117,6 +117,8 @@
     <button class="b" data-r="report" disabled>Full report</button>
     <button class="b" id="bug" disabled>Export bug report</button>
     <button class="b" id="bugGh" disabled>Open GitHub issue</button>
+    <button class="b" id="rExport" disabled>Export .cadrs files</button>
+    <button class="b" id="rFolder" disabled>Open .cadrs folder</button>
   </div>
   <pre id="rep">Run a conversion, or press a button to load the last report.</pre>
 </div>
@@ -318,6 +320,8 @@ function updateReportButtons() {
   document.querySelectorAll('[data-r]').forEach((b) => { b.disabled = !has; });
   $('bug').disabled = !has;
   $('bugGh').disabled = !has;
+  $('rExport').disabled = !has;
+  $('rFolder').disabled = !has;
 }
 function showReport(w) {
   if (!reports || !reports.report) { $('rep').textContent = 'No import report yet — run a conversion first.'; return; }
@@ -333,6 +337,18 @@ async function bug(open) {
     $('rep').textContent = `Cannot build the bug report: ${e.message}`;
   }
 }
+$('rExport').onclick = async () => {
+  $('rep').textContent = 'Exporting the imported documents as .cadrs packages…';
+  const r = await api.exportCadrs();
+  if (r.error) { $('rep').textContent = r.error; return; }
+  const ok = r.files.filter((f) => f.file);
+  const bad = r.files.filter((f) => f.error);
+  $('rep').textContent = `Exported ${ok.length} .cadrs file(s) to ${r.dir}\n\n` +
+    ok.map((f) => `${f.name}: ${f.file}`).join('\n') +
+    (bad.length ? `\n\nFailed:\n${bad.map((f) => `${f.name}: ${f.error}`).join('\n')}` : '') +
+    '\n\nAttach these files to an issue (the New ticket tab saves them separately).';
+};
+$('rFolder').onclick = () => api.openCadrsFolder();
 $('bug').onclick = () => bug(false);
 $('bugGh').onclick = () => bug(true);
 
