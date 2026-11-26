@@ -4,7 +4,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { safeName, preflight, cadrsTarget } = require('../exports');
+const { safeName, preflight, cadrsTarget, parseDocumentList } = require('../exports');
 
 const report = (over = {}) => ({
   dry_run: false,
@@ -69,4 +69,16 @@ test('exports.js: .cadrs target names are de-duplicated in one run', () => {
   const used = new Set();
   assert.equal(cadrsTarget('/out', 'Capac2', used), '/out/Capac2.cadrs');
   assert.equal(cadrsTarget('/out', 'Capac2', used), '/out/Capac2 (2).cadrs');
+});
+
+test('exports: the document list is read from JSON or the plain older table', () => {
+  const json = JSON.stringify({ store: '/x', documents: [{ id: 'aa262148-ca0b-8592-be7b-f93605d722d4', name: 'capac toner' }] });
+  assert.deepEqual(parseDocumentList(json), [{ id: 'aa262148-ca0b-8592-be7b-f93605d722d4', name: 'capac toner' }]);
+  const plain = '3cfdbf23-838f-4de1-9cf8-83bafbf83e5d  STL2DXF\naa262148-ca0b-8592-be7b-f93605d722d4  capac toner\n';
+  assert.deepEqual(parseDocumentList(plain), [
+    { id: '3cfdbf23-838f-4de1-9cf8-83bafbf83e5d', name: 'STL2DXF' },
+    { id: 'aa262148-ca0b-8592-be7b-f93605d722d4', name: 'capac toner' },
+  ]);
+  assert.equal(parseDocumentList(''), null);
+  assert.equal(parseDocumentList('garbage'), null);
 });

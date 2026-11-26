@@ -110,8 +110,9 @@ Onshape.
   `entry.ron` (the name), a thumbnail, blobs and history — not a `.cadrs` package.
   `cadrs --list-documents` lists them; `import-report.json` has each document's `cadrs_id`.
 - **Portable `.cadrs` packages** — a zip of `document.ron`, `manifest.ron` and the thumbnail, made
-  only when exported. In the app: *Report → Export .cadrs files* (writes `<run>/cadrs/<name>.cadrs`).
-  From the command line:
+  only when exported. A successful *Convert* writes these automatically into `<run>/cadrs/` (an
+  incomplete/defective import is still worth comparing, so it is exported anyway); *Report →
+  Export .cadrs files* writes them again on demand. From the command line:
 
   ```sh
   cadrs-onshape export "Capac2" --out ~/work/cadrs_onshape/runs/<run>/cadrs/Capac2.cadrs
@@ -216,12 +217,15 @@ wrong results, UI issues). It keeps the two things GitHub needs as **separate st
 - the **attachments** copied into `attachments/` next to it — drag them into the issue, because
   GitHub cannot attach files through a URL.
 
-The tab writes **Type** (Bug / Missing feature / Improvement / Other), **Where** (cadrs.net web app /
-GitHub build / Onshape importer / Other) and an optional **Link** (an Onshape share URL or a repro
-link) into the body and as suggested labels. GitHub accepts images, PDFs and ZIPs only, so the draft
-also writes `attachments.zip` with every attached file (a `.cadrs`/`.step` can be dropped in as that
-one zip). so a missing
-feature on cadrs.net is not mixed up with an importer defect. A draft is a folder under
+A **template** dropdown starts from the repo's issue structure: *Bug report* (Summary / Steps to
+reproduce / Expected / Actual / Environment / Evidence) or *Feature request (cadrs)* (Summary /
+Related issues / Current behavior / Evidence / Expected behavior / Acceptance criteria /
+Implementation notes / Why this matters); the same structure exists on GitHub as the **CADRS
+feature request** issue form. The tab writes **Type** (Bug / Missing feature / Improvement /
+Other), **Where** (cadrs.net web app / GitHub build / Onshape importer / Other) and an optional
+**Link** (an Onshape share URL or a repro link) into the body and as suggested labels. GitHub
+accepts images, PDFs and ZIPs only, so the draft also writes `attachments.zip` with every attached
+file (a `.cadrs`/`.step` can be dropped in as that one zip). A draft is a folder under
 `<root>/issues/` (`$CADRS_ONSHAPE_ROOT`, by default `~/work/cadrs_onshape/issues/`):
 
 ```

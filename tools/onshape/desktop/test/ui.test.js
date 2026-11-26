@@ -174,6 +174,20 @@ test('ui: each conversion has its own run folder, with an operation analysis', (
   assert.ok(pkg.build.files.includes('operations.js'), 'operations.js packaged');
 });
 
+test("ui: New ticket starts from the repo issue templates", () => {
+  assert.match(html, /id="iTemplate"/);
+  assert.match(html, /Feature request \(cadrs\)/);
+  assert.match(html, /ISSUE_TEMPLATES/);
+  assert.match(html, /## Acceptance criteria/);
+  assert.match(html, /## Current behavior/);
+  assert.match(html, /## Related issues \(not the same request\)/);
+});
+
+test('ui: the run-import writes .cadrs packages without another click', () => {
+  assert.match(mainSource, /cadrsExport = await exportDocuments\('cadrs'\)/);
+  assert.match(html, /cadrs packages written automatically/);
+});
+
 test('ui: a new ticket can carry a link and a zip of its attachments', () => {
   assert.match(html, /id="iLink"/);
   assert.match(html, /### Link/);

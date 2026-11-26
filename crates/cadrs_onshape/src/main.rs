@@ -53,6 +53,8 @@ fn main() -> ExitCode {
     let mut json_out: Option<PathBuf> = None;
     let mut out: Option<PathBuf> = None;
     let mut report_dir: Option<PathBuf> = None;
+    // `list --json` with no file: JSON on stdout. (`--json <file>` still names a report file.)
+    let mut json_stdout = false;
     let mut all = false;
     let mut individual = false;
     // Imported documents belong to the local user, as the app identifies them.
@@ -60,7 +62,7 @@ fn main() -> ExitCode {
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_else(|_| "user".into());
     let mut rest = Vec::new();
-    let mut it = args.into_iter();
+    let mut it = args.into_iter().peekable();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--raw" => raw_dir = it.next().map(PathBuf::from).unwrap_or(raw_dir),
@@ -80,7 +82,10 @@ fn main() -> ExitCode {
                     .map(Duration::from_secs)
                     .unwrap_or(timeout)
             }
-            "--json" => json_out = it.next().map(PathBuf::from),
+            "--json" => match it.peek() {
+                Some(next) if !next.starts_with('-') => json_out = it.next().map(PathBuf::from),
+                _ => json_stdout = true,
+            },
             "--out" => out = it.next().map(PathBuf::from),
             "--report-dir" => report_dir = it.next().map(PathBuf::from),
             "--all" => all = true,
@@ -90,7 +95,7 @@ fn main() -> ExitCode {
     }
     match rest.first().map(String::as_str) {
         Some("check-queries") => check_queries(&raw_dir),
-        Some("list") => list_documents(&data_dir, json_out.is_some()),
+        Some("list") => list_documents(&data_dir, json_out.is_some() || json_stdout),
         Some("export") => export(&data_dir, &rest[1..], out.as_deref(), all),
         Some("step") => step(&data_dir, &rest[1..], out.as_deref(), all, individual),
         Some("compare") => match (rest.get(1), rest.get(2)) {

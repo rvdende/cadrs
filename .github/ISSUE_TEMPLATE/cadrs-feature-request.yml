@@ -1,0 +1,69 @@
+name: CADRS feature request
+description: Propose a missing feature or a workflow improvement for cadrs
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for proposing a feature. This form mirrors the structure the maintainers use for
+        feature requests: what you want, why the current behavior is not enough, and how we can
+        tell it is done.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What should cadrs do? One paragraph is enough.
+      placeholder: Add a native Pattern tool inside a sketch, with Linear and Circular variants.
+    validations:
+      required: true
+  - type: textarea
+    id: related
+    attributes:
+      label: Related issues (not the same request)
+      description: Link issues/PRs that sound similar and say how this request differs.
+      placeholder: "#7 is the feature pattern; this is about sketch entities."
+  - type: textarea
+    id: current
+    attributes:
+      label: Current behavior
+      description: What happens today, with the smallest example that shows the gap.
+      placeholder: The sketch Pattern button is disabled; the only Pattern available is part/feature pattern.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Screenshots, .cadrs/STEP files, FeatureScript, logs. GitHub accepts images, PDFs and ZIPs.
+      placeholder: Drag screenshots here, or attach a zip with the .cadrs/STEP files.
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: The behavior you would like, including UI details if relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Concrete checks a PR should pass; one per line.
+      placeholder: |
+        1. A rectangle + circle sketch patterns 4 × 3 linearly from a direction line.
+        2. A seed hole patterns 3 times on a bolt circle.
+        3. Undo/redo is one step; save/reload preserves the pattern.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Implementation notes / scope
+      description: Hints, files, or a smaller first PR you would accept.
+  - type: textarea
+    id: why
+    attributes:
+      label: Why this matters
+      description: The workflow this unlocks or the parity gap it closes.
+    validations:
+      required: true

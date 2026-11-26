@@ -64,4 +64,29 @@ function cadrsTarget(dir, name, used = new Set()) {
   return candidate;
 }
 
-module.exports = { safeName, preflight, cadrsTarget };
+/**
+ * The documents in a `cadrs-onshape list` result: JSON (`{documents:[...]}`) when the binary
+ * supports `list --json`, otherwise the plain `id  name` table of an older binary. `null` when
+ * neither can be read, so the preflight skips the store check instead of refusing everything.
+ */
+function parseDocumentList(text) {
+  try {
+    const parsed = JSON.parse(String(text || ''));
+    if (parsed && Array.isArray(parsed.documents)) {
+      const docs = parsed.documents
+        .filter((d) => d && d.id)
+        .map((d) => ({ id: String(d.id), name: d.name ? String(d.name) : '' }));
+      if (docs.length) return docs;
+    }
+  } catch {
+    /* not JSON: an older list prints one line per document */
+  }
+  const docs = [];
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const m = line.match(/^\s*([0-9a-fA-F][0-9a-fA-F-]{7,})\s{2,}(.+?)\s*$/);
+    if (m) docs.push({ id: m[1], name: m[2] });
+  }
+  return docs.length ? docs : null;
+}
+
+module.exports = { safeName, preflight, cadrsTarget, parseDocumentList };

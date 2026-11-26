@@ -156,7 +156,15 @@
     separate things: <code>issue.md</code> (paste into the issue) and <code>attachments/</code> (drag them into it) —
     GitHub cannot attach files from a URL.</div>
   <input type="text" id="iTitle" placeholder="Title: what is wrong, in one line (e.g. 'Extrude of selected sketch regions fills the holes')">
-  <textarea id="iWhat" rows="6" placeholder="What happened: what you did, what you expected, what you got. Include the smallest steps that show it."></textarea>
+  <div class="row">
+    <select id="iTemplate" title="Start from a template">
+      <option value="">Start blank</option>
+      <option value="bug">Bug report</option>
+      <option value="feature">Feature request (cadrs)</option>
+    </select>
+    <small>Fills the text below with the issue structure; edit it freely.</small>
+  </div>
+  <textarea id="iWhat" rows="10" placeholder="What happened: what you did, what you expected, what you got. Include the smallest steps that show it."></textarea>
   <input type="text" id="iEnv" placeholder="Environment (cadrs version, OS, browser)">
   <input type="text" id="iLink" placeholder="Link (Onshape document / share URL, or a repro link) — optional">
   <div class="row">
@@ -358,6 +366,12 @@ $('bGo').onclick = async () => {
       updateReportButtons();
       showReport('byDocument');
       $('runInfo').textContent = r.run ? `run: ${r.run}` : '';
+      if (r.cadrsExport) {
+        const files = (r.cadrsExport.documents || []).flatMap((d) => d.files || []);
+        const refused = (r.cadrsExport.documents || []).filter((d) => d.error);
+        $('rep').textContent += `\n\n.cadrs packages written automatically: ${files.length ? files.join('\n') : '(none)'}`;
+        if (refused.length) $('rep').textContent += `\n\nRefused: ${refused.map((d) => `${d.name}: ${d.error}`).join('\n')}`;
+      }
     }
     if (!r.error) show('report');
     else show('docs');
@@ -526,6 +540,64 @@ $('tList').onclick = async (e) => {
 };
 
 // ---- New ticket tab: any cadrs bug, text and attachments kept apart -----------------
+// Templates follow the structure used by the GitHub issue forms (Summary / Current behavior /
+// Expected behavior / Acceptance criteria / …), so a ticket written here reads like the repo's.
+const ISSUE_TEMPLATES = {
+  bug: {
+    kind: 'Bug',
+    where: 'cadrs.net web app',
+    text: `## Summary
+
+## Steps to reproduce
+1. 
+2. 
+
+## Expected behavior
+
+## Actual behavior
+
+## Environment
+- cadrs version:
+- OS/browser:
+
+## Evidence
+<!-- screenshots, .cadrs/STEP files, logs -->
+`,
+  },
+  feature: {
+    kind: 'Missing feature',
+    where: 'cadrs.net web app',
+    text: `## Summary
+
+## Related issues (not the same request)
+
+## Current behavior
+
+### Evidence
+<!-- screenshots / .cadrs / STEP / FeatureScript -->
+
+## Expected behavior
+
+## Acceptance criteria
+1. 
+
+## Implementation notes / scope
+
+## Why this matters
+`,
+  },
+};
+$('iTemplate').onchange = () => {
+  const tpl = ISSUE_TEMPLATES[$('iTemplate').value];
+  if (!tpl) return;
+  if ($('iWhat').value.trim() && !confirm('Replace the current text with the template?')) {
+    $('iTemplate').value = '';
+    return;
+  }
+  $('iWhat').value = tpl.text;
+  $('iKind').value = tpl.kind;
+  $('iWhere').value = tpl.where;
+};
 let issueFiles = [];
 function renderIssueFiles() {
   const names = issueFiles.map((f) => f.split(/[\\/]/).pop());

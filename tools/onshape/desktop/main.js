@@ -614,11 +614,9 @@ function importerAsync(args, { timeoutMs = 300000 } = {}) {
 async function storedDocumentIds() {
   const r = await importerAsync(['list', '--json'], { timeoutMs: 30000 });
   if (r.status !== 0) return null;
-  try {
-    return new Set(JSON.parse(r.stdout).documents.map((d) => String(d.id)));
-  } catch {
-    return null;
-  }
+  // `list --json` prints JSON on the current importer; older binaries print the plain table.
+  const docs = exportTools.parseDocumentList(r.stdout);
+  return docs ? new Set(docs.map((d) => String(d.id))) : null;
 }
 
 async function exportDocuments(kind) {
@@ -956,8 +954,15 @@ ipcMain.handle('convert', async (_e, { ids, refresh, dryRun }) => {
     const code = await runImport(ids, dryRun, run);
     send({ type: 'phase', phase: 'Building report' });
     const reports = buildReports(run);
+    // A .cadrs package is useful even when the rebuild is incomplete or wrong (it is what gets
+    // compared), so a successful import writes it into the run without a second click.
+    let cadrsExport = null;
+    if (code === 0 && !dryRun) {
+      send({ type: 'phase', phase: 'Writing .cadrs packages' });
+      cadrsExport = await exportDocuments('cadrs');
+    }
     send({ type: 'phase', phase: code === 0 ? 'Done' : `Importer exited with ${code}` });
-    return { code, scrapeErrors: st.errors, reports, run };
+    return { code, scrapeErrors: st.errors, reports, run, cadrsExport };
   } finally {
     busy = false;
   }
