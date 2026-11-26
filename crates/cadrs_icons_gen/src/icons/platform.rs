@@ -16,6 +16,7 @@ pub fn icons() -> Vec<Def> {
         def("platform-android", Line, "Android", android),
         def("platform-ios", Line, "iPhone", ios),
         def("github", Line, "GitHub", github),
+        def("discord", Line, "Discord", discord),
     ]
 }
 
@@ -131,4 +132,19 @@ fn github() -> Vec<String> {
                C16.9 8.3 16.9 9.4 16.7 10.2 C17.4 11 17.8 12 17.8 13.3 C17.8 16.2 16.6 17.7 14 18.2 V21.2 Z";
     let tail = "M10 20.2 C8.4 20.6 7.3 19.9 6.6 18.6 L7.4 18.2 C7.9 19.1 8.7 19.6 10 19.3 Z";
     els![path(&format!("{disc} {cat} {tail}"), INK, SOLID_CUT)]
+}
+
+fn discord() -> Vec<String> {
+    // A chat app's game-pad face: a wide head with two short legs at the bottom corners, its
+    // lower edge curved up like a smile, and two eyes cut out.
+    let head = "M6.2 6.2 C7.8 5.5 9.2 5.1 10.4 5 L10.8 5.9 C11.6 5.8 12.4 5.8 13.2 5.9 L13.6 5 \
+                C14.8 5.1 16.2 5.5 17.8 6.2 C20.2 9.8 21.2 13.4 20.9 17 C19.2 18.3 17.6 19 16 19.4 \
+                L15 17.8 C15.8 17.5 16.5 17.1 17.2 16.6 C13.8 18.2 10.2 18.2 6.8 16.6 \
+                C7.5 17.1 8.2 17.5 9 17.8 L8 19.4 C6.4 19 4.8 18.3 3.1 17 C2.8 13.4 3.8 9.8 6.2 6.2 Z";
+    let eyes = format!(
+        "{} {}",
+        oval(9.2, 12.8, 1.4, 1.6),
+        oval(14.8, 12.8, 1.4, 1.6)
+    );
+    els![path(&format!("{head} {eyes}"), INK, SOLID_CUT)]
 }

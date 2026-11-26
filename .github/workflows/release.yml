@@ -263,3 +263,23 @@ jobs:
           if [[ -f "$notes" ]]; then args+=(--notes-file "$notes"); else args+=(--generate-notes); fi
           if [[ "$TAG" == *-* ]]; then args+=(--prerelease); fi
           gh release create "$TAG" dist/*.tar.gz dist/*.zip dist/*.dmg dist/SHA256SUMS.txt "${args[@]}"
+
+      # Posts the release to the Discord server's #announcements (the webhook in the repository
+      # secret DISCORD_RELEASES_WEBHOOK): the notes' first paragraph and the release's link. A
+      # failure here doesn't fail the release, which is out by then.
+      - name: Announce on Discord
+        continue-on-error: true
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_RELEASES_WEBHOOK }}
+        run: |
+          set -euo pipefail
+          [[ -n "$WEBHOOK" ]] || { echo "no DISCORD_RELEASES_WEBHOOK secret"; exit 0; }
+          notes="tools/release/notes/$TAG.md"
+          summary=""
+          if [[ -f "$notes" ]]; then summary="$(awk 'NF{p=1} p&&!NF{exit} p' "$notes" | head -c 1500)"; fi
+          kind="cadrs $TAG is out"
+          if [[ "$TAG" == *-* ]]; then kind="cadrs $TAG (pre-release) is out"; fi
+          url="https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
+          content="$(printf '**%s**\n%s\n\nDownloads and notes: <%s>\nIn the browser: <https://cadrs.net>' "$kind" "$summary" "$url")"
+          jq -n --arg c "$content" '{content: $c, allowed_mentions: {parse: []}}' \
+            | curl -fsS -H 'Content-Type: application/json' --data-binary @- "$WEBHOOK"

@@ -29,4 +29,5 @@ the app they are built with.
 
 cadrs is young and changes quickly. These pages describe how it is organized rather than every
 button. If something here doesn't match what you see, please
-[open an issue](https://github.com/rvdende/cadrs/issues).
+[open an issue](https://github.com/rvdende/cadrs/issues), or ask on
+[Discord](https://discord.gg/AmmqETBTKg).

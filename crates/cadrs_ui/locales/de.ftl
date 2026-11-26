@@ -186,6 +186,7 @@ shell-app-menu = Menü
 shell-preferences-ellipsis = Einstellungen…
 shell-app-menu-shortcuts = Tastenkürzel
 shell-app-menu-github = GitHub
+shell-app-menu-discord = Discord
 shell-app-menu-docs = Dokumentation
 shell-app-menu-workspace-hint = Im Verlauf von einer Version verzweigen
 shell-app-menu-workspace = Arbeitsbereich

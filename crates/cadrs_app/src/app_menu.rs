@@ -87,6 +87,9 @@ fn app_entries() -> Vec<MenuEntry> {
         MenuItem::new("app-github", tr("shell-app-menu-github"))
             .icon("github")
             .into(),
+        MenuItem::new("app-discord", tr("shell-app-menu-discord"))
+            .icon("discord")
+            .into(),
     ]
 }
 
@@ -208,6 +211,7 @@ fn on_app_menu_action(
         "app-shortcuts" => commands.queue(crate::shortcuts::open_shortcuts),
         "app-docs" => crate::help::open_docs(""),
         "app-github" => crate::open_url(crate::GITHUB),
+        "app-discord" => crate::open_url(crate::DISCORD),
         "app-documents" => commands.queue(crate::thumbnail::close_document),
         "document-menu-export" => commands.queue(crate::native_document::open_export),
         "document-menu-units" => commands.queue(crate::units_dialog::open_units_dialog),
