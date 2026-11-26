@@ -40,7 +40,6 @@ use super::surface::Surface;
 use super::tol;
 use super::topo::{Body, CheckLevel, Coedge, Face, Shell};
 use crate::*;
-use rayon::prelude::*;
 use std::collections::HashMap;
 
 mod fan;
@@ -112,13 +111,6 @@ impl Budget {
     fn left(&self) -> u64 {
         self.0.load(std::sync::atomic::Ordering::Relaxed)
     }
-}
-
-/// Whether `n` independent pieces of fillet work (heavy each) go to rayon's threads: only with
-/// more than one piece and more than one thread (on one, the hand-over to its worker and back
-/// costs more than it saves on small fillets). See [`super::par`].
-pub(crate) fn parallel(n: usize) -> bool {
-    super::par::threads_for(n, true) && rayon::current_num_threads() > 1
 }
 
 fn unsupported(why: &'static str) -> KernelError {
@@ -6061,10 +6053,9 @@ fn plan(
         let pieces = pieces_of(b, e, law, flat, ratio, budget, &mut own)?;
         Ok((pieces, own))
     };
-    let each: Vec<Result<(Pieces, Vec<Ball>)>> = if parallel(edges.len()) {
-        edges.par_iter().zip(ratios).map(one).collect()
-    } else {
-        edges.iter().zip(ratios).map(one).collect()
+    let each: Vec<Result<(Pieces, Vec<Ball>)>> = {
+        let jobs: Vec<_> = edges.iter().zip(ratios).collect();
+        super::par::map_heavy(&jobs, true, |&job| one(job))
     };
     // An edge where the ball has no place (along a round as big as the fillet, which a chain
     // runs round: the round's own ball is the fillet's there) is left out, for its neighbours'
@@ -12319,11 +12310,10 @@ fn prepare(b: &Body, p: &Plan, fit_tol: f64) -> Vec<Option<Result<Pre>>> {
         Ok((cover, pinned, marched, st))
     };
     let open = |(i, ef): (usize, &EdgeFillet)| (!p.inside[i] && !ef.closed).then(|| prep(i, ef));
-    if parallel(p.efs.len()) {
-        p.efs.par_iter().enumerate().map(open).collect()
-    } else {
-        p.efs.iter().enumerate().map(open).collect()
-    }
+    let ids: Vec<usize> = (0..p.efs.len()).collect();
+    super::par::map_heavy(&ids, true, |&i| open((i, &p.efs[i])))
+        .into_iter()
+        .collect()
 }
 
 /// The strips, ends and corners of plan `p` put into `b`'s faces (`cliffs`: rails running off
@@ -14958,11 +14948,7 @@ fn assemble(
                 })
             })
         };
-        if super::par::threads_for_some(out.cuts.len()) {
-            (0..nb.faces.len()).into_par_iter().map(one).collect()
-        } else {
-            (0..nb.faces.len()).map(one).collect()
-        }
+        super::par::map(&(0..nb.faces.len()).collect::<Vec<usize>>(), |&i| one(i))
     };
     for (fi, ps) in splits.into_iter().enumerate() {
         match out.cuts.get(&fi) {

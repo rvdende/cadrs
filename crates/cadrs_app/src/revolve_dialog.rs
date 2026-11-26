@@ -29,6 +29,7 @@ use cadrs_core::document::{
 use cadrs_core::{Feature, FeatureId, PartId, RevolveFeature};
 use cadrs_sketch::units::Quantity;
 use cadrs_ui::i18n::{tr, tr_with};
+use cadrs_ui::node_graph::StaticCopy;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     CheckboxChange, FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState, NumberField,
@@ -64,6 +65,11 @@ impl Plugin for RevolveDialogPlugin {
 /// The dialog.
 #[derive(Component)]
 pub struct RevolveDialog;
+
+/// The dialog's error line: why the revolve failed (an axis square to the sketch plane, or
+/// through the profile: #316).
+#[derive(Component)]
+pub(crate) struct RevolveErrorLine;
 
 /// What decides which rows the dialog has.
 #[derive(Component, Debug, Clone, PartialEq)]
@@ -418,15 +424,50 @@ fn revolve_dialog(
     field: ExtrudeField,
     labels: &Labels,
 ) -> impl Bundle {
+    (
+        RevolveDialog,
+        RevolveLayout::of(r, field),
+        DespawnOnExit(AppState::Document),
+        revolve_card(theme, title, valid, r, field, labels).build(theme),
+    )
+}
+
+/// A copy of a revolve's dialog with its parameters, shown for looks (the node view's node of a
+/// revolve not being edited, [`crate::node_view`]).
+pub(crate) fn static_card(
+    theme: &Theme,
+    el: &cadrs_core::Element,
+    cache: &PartCache,
+    feature: &Feature,
+) -> Option<FeatureDialog> {
+    let r = feature.revolve()?;
+    let labels = labels(el.features(), cache, feature.id, r);
+    let valid = feature.is_valid() && !cache.errors.contains_key(&feature.id);
+    // No selection field is waiting for picks (Direction is not one of a revolve's).
+    Some(revolve_card(
+        theme,
+        &feature.name,
+        valid,
+        r,
+        ExtrudeField::Direction,
+        &labels,
+    ))
+}
+
+/// The dialog's card: its title, rows and footer.
+fn revolve_card(
+    theme: &Theme,
+    title: &str,
+    valid: bool,
+    r: &RevolveFeature,
+    field: ExtrudeField,
+    labels: &Labels,
+) -> FeatureDialog {
     let tb = theme.clone();
     let tf = theme.clone();
     let r = r.clone();
-    let layout = RevolveLayout::of(&r, field);
     let labels = labels.clone();
-    (
-        RevolveDialog,
-        layout,
-        DespawnOnExit(AppState::Document),
+    {
         FeatureDialog::new("revolve-dialog")
             .title(title)
             .valid(valid)
@@ -636,6 +677,27 @@ fn revolve_dialog(
                         }
                     }
                 });
+                b.spawn((
+                    Name::new("revolve-dialog-error"),
+                    RevolveErrorLine,
+                    t.text(
+                        "",
+                        t.font_sm,
+                        bevy::text::FontWeight::MEDIUM,
+                        t.feature_error,
+                    ),
+                    Node {
+                        display: Display::None,
+                        max_width: Val::Px(210.0),
+                        margin: UiRect::new(Val::Px(8.0), Val::Px(8.0), Val::Px(4.0), Val::Px(6.0)),
+                        ..default()
+                    },
+                ))
+                // After the text's own layout: a bundle can't hold the component twice.
+                .insert(TextLayout::new(
+                    bevy::text::Justify::Left,
+                    bevy::text::LineBreak::WordBoundary,
+                ));
             })
             .footer(move |f| {
                 let t = &tf;
@@ -646,14 +708,9 @@ fn revolve_dialog(
                 })
                 .with_child(crate::feature_list::preview_slider(t, "revolve"));
                 crate::extrude_dialog::final_button(f, t, "revolve");
-                f.spawn((
-                    Name::new("revolve-help"),
-                    icon("help-filled", 14.0, Color::srgb_u8(0xa8, 0xa8, 0xa8)),
-                    Tooltip::new(tr("common-help")),
-                ));
+                f.spawn(crate::help::help_icon("revolve-help", "revolve"));
             })
-            .build(theme),
-    )
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -670,10 +727,11 @@ pub(crate) fn sync_revolve_dialog(
     focus: Res<InputFocus>,
     q_area: Query<Entity, With<ViewportArea>>,
     mut q_dialog: Query<(Entity, &RevolveLayout, &mut FeatureDialogState), With<RevolveDialog>>,
-    mut q_lists: Query<(&Role, &mut SelectionListState)>,
-    mut q_numbers: Query<(Entity, &Role, &mut NumberFieldState)>,
-    mut q_selects: Query<(&Role, &mut SelectState)>,
+    mut q_lists: Query<(&Role, &mut SelectionListState), Without<StaticCopy>>,
+    mut q_numbers: Query<(Entity, &Role, &mut NumberFieldState), Without<StaticCopy>>,
+    mut q_selects: Query<(&Role, &mut SelectState), Without<StaticCopy>>,
     q_edit: Query<&cadrs_ui::NumberFieldEdit>,
+    mut q_error: Query<(&mut Text, &mut Node), With<RevolveErrorLine>>,
     mut commands: Commands,
 ) {
     let revolve = session.as_ref().zip(doc.as_ref()).and_then(|(s, d)| {
@@ -692,6 +750,25 @@ pub(crate) fn sync_revolve_dialog(
     let shown = arrow.drag.as_ref().map_or(r, |d| &d.revolve);
     let failed = cache.errors.contains_key(&s.feature);
     let valid = feature.is_valid() && !failed && !cache.rebuilding;
+    // Why it failed, once it has what it needs (an empty field says what's missing itself).
+    let why = if feature.is_valid() {
+        cache.errors.get(&s.feature).cloned().unwrap_or_default()
+    } else {
+        String::new()
+    };
+    for (mut text, mut node) in &mut q_error {
+        if text.0 != why {
+            text.0 = why.clone();
+        }
+        let d = if why.is_empty() {
+            Display::None
+        } else {
+            Display::Flex
+        };
+        if node.display != d {
+            node.display = d;
+        }
+    }
     let labels = labels(el.features(), &cache, s.feature, r);
     let layout = RevolveLayout::of(r, s.field);
     let current = q_dialog.iter().next().map(|(ent, l, _)| (ent, l.clone()));

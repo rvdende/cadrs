@@ -295,6 +295,53 @@ fn placement_composition() {
     assert!(o.iter().all(|t| t.abs() < 1e-9));
 }
 
+/// Each placement of a part is its part's mesh moved, and remembers which mesh and pose it is
+/// (`Solid::instance_of`): the view draws every placement of a part from one mesh. Its faces
+/// keep their part's names (not a pattern copy's).
+#[test]
+fn placements_of_a_part_remember_their_parts_mesh() {
+    let (mut doc, mut h, asm) = setup();
+    for k in 0..3 {
+        insert(
+            &mut doc,
+            &mut h,
+            asm,
+            InstanceId::from_u128(40 + k),
+            Pose::translation([k as f64 * 100.0, 0.0, 0.0]),
+        );
+    }
+    let build = studio_build(&doc);
+    let seed = &build.part(mm::PART).unwrap().solid;
+    let (parts, _) = parts_of(&doc, asm);
+    assert_eq!(parts.len(), 3);
+    for (k, p) in parts.iter().enumerate() {
+        let i = p
+            .solid
+            .instance_of
+            .0
+            .as_ref()
+            .expect("a placement of a part");
+        assert_eq!(i.seed.positions, seed.positions);
+        assert_eq!(i.pose, Pose::translation([k as f64 * 100.0, 0.0, 0.0]));
+        assert!(i.pattern.is_none());
+        assert_eq!(
+            p.solid.positions[0][0],
+            seed.positions[0][0] + k as f64 * 100.0
+        );
+        let names =
+            |s: &cadrs_core::solid::Solid| s.faces.iter().map(|f| f.name).collect::<Vec<_>>();
+        assert_eq!(names(&p.solid), names(seed));
+    }
+    let seeds: Vec<_> = parts
+        .iter()
+        .map(|p| Arc::as_ptr(&p.solid.instance_of.0.as_ref().unwrap().seed))
+        .collect();
+    assert!(
+        seeds.iter().all(|s| *s == seeds[0]),
+        "one mesh for every placement"
+    );
+}
+
 #[test]
 fn undo_removes_inserts_one_by_one() {
     let (mut doc, mut h, asm) = setup();

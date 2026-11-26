@@ -9,7 +9,6 @@ use super::math::*;
 use super::nurbs::NurbsCurve;
 use super::surface::Surface;
 use super::tol;
-use rayon::prelude::*;
 
 /// A piece of an intersection curve.
 #[derive(Debug, Clone)]
@@ -869,6 +868,320 @@ fn circle(c: P3, n: V3, r: f64) -> IntCurve {
     }
 }
 
+/// A cone and a cone or cylinder whose axes cross at a point as far from the one's side as from
+/// the other's (both lie round the ball about that point: a cone turned about a line through
+/// its axis and where it was, a cone bored square by a drill it fits) meet in two conics, not
+/// a quartic. About the crossing P a cone of axis z, its apex h back along it, is
+/// |x − P|² − ρ² = π(x)² / cos² a with π(x) = (x − P)·z + h sin² a, the plane of the circle
+/// where it touches the ball (a cylinder the same with a = 0 and π through P), so on both
+/// π₁ / cos a₁ = ± π₂ / cos a₂: two planes, each cutting the cone in a conic. The conics cross
+/// where the two surfaces touch, which a marcher takes thousands of points to pass. None for
+/// any other pair.
+fn round_a_common_sphere(
+    a: &Surface,
+    b: &Surface,
+    bb: &Bbox,
+    run_tol: f64,
+) -> Option<Vec<IntCurve>> {
+    let (cone, other) = match (a, b) {
+        (Surface::Cone { .. }, Surface::Cone { .. } | Surface::Cylinder { .. }) => (a, b),
+        (Surface::Cylinder { .. }, Surface::Cone { .. }) => (b, a),
+        _ => return None,
+    };
+    let (o1, z1) = cone.axis()?;
+    let (o2, z2) = other.axis()?;
+    let (z1, z2) = (z1.normalize(), z2.normalize());
+    let size = bb.diagonal().max(tol::POINT);
+    // Where the axes cross.
+    let w = o2 - o1;
+    let n = z1.cross(&z2);
+    let nn = n.norm_squared();
+    if nn < tol::ANGULAR * tol::ANGULAR || w.dot(&n).abs() / nn.sqrt() > tol::REL * size {
+        return None;
+    }
+    let p = o1 + z1 * (w.cross(&z2).dot(&n) / nn);
+    // Of each: cos a, the offset of its circle's plane from P along its axis, and the ball's
+    // radius it lies round.
+    let about = |s: &Surface, z: &V3| -> Option<(f64, f64, f64)> {
+        match s {
+            Surface::Cone { f, r, a } => {
+                let (sn, cs) = a.sin_cos();
+                if sn.abs() < tol::ANGULAR_FINE || cs.abs() < tol::ANGULAR_FINE {
+                    return None;
+                }
+                let apex = f.o - f.z * (r * cs / sn);
+                let h = (p - apex).dot(z);
+                Some((cs, h * sn * sn, (h * sn).abs()))
+            }
+            Surface::Cylinder { r, .. } => Some((1.0, 0.0, *r)),
+            _ => None,
+        }
+    };
+    let (c1, k1, rho1) = about(cone, &z1)?;
+    let (c2, k2, rho2) = about(other, &z2)?;
+    if (rho1 - rho2).abs() > tol::REL * (rho1 + rho2 + size) {
+        return None;
+    }
+    let mut out = Vec::new();
+    for sign in [-1.0, 1.0] {
+        let m = z1 / c1 + z2 * (sign / c2);
+        let len = m.norm();
+        if len < tol::ANGULAR {
+            return None;
+        }
+        let offset = (k1 / c1 + sign * k2 / c2) / len;
+        let normal = m / len;
+        let plane = Surface::Plane {
+            f: Frame::from_z(p - normal * offset, normal),
+        };
+        out.extend(analytic(&plane, cone, bb, run_tol)?);
+    }
+    Some(out)
+}
+
+/// The corners of a patch that is straight both ways (degree 1 by 1, four poles of one
+/// weight): at (s, t) in the unit square it is P₀₀ + s (P₁₀ − P₀₀) + t (P₀₁ − P₀₀) + s t D,
+/// D = P₁₁ − P₁₀ − P₀₁ + P₀₀. None for any other B-spline.
+fn bilinear_corners(n: &super::nurbs::NurbsSurface) -> Option<[P3; 4]> {
+    if n.du != 1 || n.dv != 1 || n.cps.len() != 2 || n.cps[0].len() != 2 || n.cps[1].len() != 2 {
+        return None;
+    }
+    let w = n.cps[0][0].w;
+    if !(w > 0.0) || n.cps.iter().flatten().any(|h| (h.w - w).abs() > 1e-14 * w) {
+        return None;
+    }
+    let p = |i: usize, j: usize| super::nurbs::dehom(&n.cps[i][j]);
+    Some([p(0, 0), p(1, 0), p(0, 1), p(1, 1)])
+}
+
+/// A plane and a patch straight both ways: on the patch the plane's distance is
+/// α + β s + γ t + δ s t, nil along t = −(α + β s) / (γ + δ s), a conic drawn exactly as a
+/// rational quadratic in s (a parabola where δ is nil), or two of the patch's own rulings
+/// where the plane touches it at a saddle point (α δ = β γ: (s − s₀)(t − t₀) = 0), or one
+/// where the plane holds a ruling. None for another B-spline, or a plane holding the patch.
+fn plane_bilinear(fp: &Frame, n: &super::nurbs::NurbsSurface) -> Option<Vec<IntCurve>> {
+    use super::nurbs::{H, NurbsCurve};
+    let [p00, p10, p01, p11] = bilinear_corners(n)?;
+    let nrm = plane_n(fp);
+    let off = |p: &P3| nrm.dot(&(p - fp.o));
+    let (d00, d10, d01, d11) = (off(&p00), off(&p10), off(&p01), off(&p11));
+    let (al, be, ga, de) = (d00, d10 - d00, d01 - d00, d11 - d10 - d01 + d00);
+    let size = (p10 - p00)
+        .norm()
+        .max((p01 - p00).norm())
+        .max((p11 - p00).norm())
+        .max(tol::POINT);
+    let nil = 1e-12 * size;
+    if [al, be, ga, de].iter().all(|x| x.abs() <= nil) {
+        return None;
+    }
+    let at = |s: f64, t: f64| -> P3 {
+        P3::from(
+            p00.coords * ((1.0 - s) * (1.0 - t))
+                + p10.coords * (s * (1.0 - t))
+                + p01.coords * ((1.0 - s) * t)
+                + p11.coords * (s * t),
+        )
+    };
+    let ruling = |a: P3, b: P3| -> Option<IntCurve> {
+        let d = b - a;
+        let len = d.norm();
+        (len > tol::ROUNDOFF).then(|| IntCurve {
+            c: Curve::Line { o: a, d: d / len },
+            t0: 0.0,
+            t1: len,
+            closed: false,
+            pcs: None,
+        })
+    };
+    let inside = |x: f64| (-1e-12..=1.0 + 1e-12).contains(&x);
+    let mut out = Vec::new();
+    // A saddle touched, or a ruling held: the patch's own lines.
+    if de.abs() > nil && (al * de - be * ga).abs() <= nil * (de.abs() + be.abs() + ga.abs()) {
+        let (s0, t0) = (-ga / de, -be / de);
+        if inside(s0) {
+            out.extend(ruling(at(s0, 0.0), at(s0, 1.0)));
+        }
+        if inside(t0) {
+            out.extend(ruling(at(0.0, t0), at(1.0, t0)));
+        }
+        return Some(out);
+    }
+    if de.abs() <= nil && ga.abs() <= nil {
+        // (Nil along a line of constant s.)
+        let s0 = -al / be;
+        if inside(s0) {
+            out.extend(ruling(at(s0, 0.0), at(s0, 1.0)));
+        }
+        return Some(out);
+    }
+    // t along s, and the stretches of s in the patch where t is in it too, clear of the pole.
+    let t_of = |s: f64| -(al + be * s) / (ga + de * s);
+    let mut cuts = vec![0.0, 1.0];
+    let mut cut = |num: f64, den: f64| {
+        if den.abs() > nil {
+            cuts.push(num / den);
+        }
+    };
+    cut(-ga, de);
+    cut(-al, be);
+    cut(-(al + ga), be + de);
+    cuts.retain(|c| (0.0..=1.0).contains(c));
+    cuts.sort_by(f64::total_cmp);
+    cuts.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
+    let mut spans: Vec<(f64, f64)> = Vec::new();
+    for w in cuts.windows(2) {
+        let t = t_of(0.5 * (w[0] + w[1]));
+        if !(t.is_finite() && (0.0..=1.0).contains(&t)) {
+            continue;
+        }
+        match spans.last_mut() {
+            Some(last) if (last.1 - w[0]).abs() < 1e-12 => last.1 = w[1],
+            _ => spans.push((w[0], w[1])),
+        }
+    }
+    for (sa, sb) in spans {
+        if sb - sa < 1e-9 {
+            continue;
+        }
+        // The curve's homogeneous point at s: the patch's point at (s, t(s)) times γ + δ s, a
+        // quadratic in s, so three of its values are its Bézier points.
+        let hom_at = |s: f64| -> H {
+            let w = ga + de * s;
+            let (tn, sn) = (-(al + be * s), s);
+            // P(s, t) w with t w = tn: P₀₀ w + s w (P₁₀ − P₀₀) + tn (P₀₁ − P₀₀) + s tn D.
+            let p = p00.coords * w
+                + (p10 - p00) * (sn * w)
+                + (p01 - p00) * tn
+                + (p11.coords - p10.coords - p01.coords + p00.coords) * (sn * tn);
+            H::new(p.x, p.y, p.z, w)
+        };
+        let (mut h0, mut hm, mut h1) = (hom_at(sa), hom_at(0.5 * (sa + sb)), hom_at(sb));
+        if h0.w < 0.0 || h1.w < 0.0 {
+            (h0, hm, h1) = (-h0, -hm, -h1);
+        }
+        let mid = hm * 2.0 - (h0 + h1) * 0.5;
+        if !(h0.w > 0.0 && h1.w > 0.0 && mid.w > 0.0) {
+            // (Up to the pole: the marcher's.)
+            return None;
+        }
+        let c = NurbsCurve::new(2, vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0], vec![h0, mid, h1]).ok()?;
+        out.push(IntCurve {
+            c: Curve::Nurbs(Arc::new(c)),
+            t0: 0.0,
+            t1: 1.0,
+            closed: false,
+            pcs: None,
+        });
+    }
+    Some(out)
+}
+
+/// A cylinder and a patch straight both ways, where every ruling of the cylinder crosses the
+/// patch once (a drum topped by a saddle): the loop of those crossings, each exact (seen
+/// along the axis the patch is a quadrilateral, and a point's place in it the root of a
+/// quadratic), fitted round the cylinder as [`cylinder_loops`] fits its own. None where some
+/// ruling misses the patch or crosses it twice.
+fn cylinder_bilinear(fc: &Frame, r: f64, n: &super::nurbs::NurbsSurface) -> Option<Vec<IntCurve>> {
+    let [p00, p10, p01, p11] = bilinear_corners(n)?;
+    let (x, z) = (fc.x.normalize(), fc.z.normalize());
+    let y = z.cross(&x);
+    let flat = |v: V3| (v.dot(&x), v.dot(&y));
+    let cross = |a: (f64, f64), b: (f64, f64)| a.0 * b.1 - a.1 * b.0;
+    let (a0, e, f, g) = (
+        flat(p00 - fc.o),
+        flat(p10 - p00),
+        flat(p01 - p00),
+        flat(p11.coords - p10.coords - p01.coords + p00.coords),
+    );
+    // Where the ruling at θ crosses: its place (s, t) in the patch, if it has just one.
+    let place = |th: f64| -> Option<(f64, f64)> {
+        let h = (r * th.cos() - a0.0, r * th.sin() - a0.1);
+        // h = s e + t f + s t g: crossed with e + t g, a quadratic in t.
+        let (k2, k1, k0) = (cross(f, g), cross(f, e) - cross(h, g), -cross(h, e));
+        let scale = k2.abs() + k1.abs() + k0.abs();
+        let ts: Vec<f64> = if k2.abs() <= 1e-13 * scale {
+            if k1.abs() <= 1e-13 * scale {
+                return None;
+            }
+            vec![-k0 / k1]
+        } else {
+            let disc = k1 * k1 - 4.0 * k2 * k0;
+            if disc < 0.0 {
+                return None;
+            }
+            let q = -0.5 * (k1 + k1.signum() * disc.sqrt());
+            let q = if k1 == 0.0 { 0.5 * disc.sqrt() } else { q };
+            vec![q / k2, if q != 0.0 { k0 / q } else { f64::NAN }]
+        };
+        let mut found = None;
+        for t in ts {
+            let d = (e.0 + t * g.0, e.1 + t * g.1);
+            let len = d.0 * d.0 + d.1 * d.1;
+            if !(t.is_finite() && len > 0.0) {
+                continue;
+            }
+            let s = ((h.0 - t * f.0) * d.0 + (h.1 - t * f.1) * d.1) / len;
+            if (0.0..=1.0).contains(&s) && (0.0..=1.0).contains(&t) {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some((s, t));
+            }
+        }
+        found
+    };
+    const N: usize = 256;
+    if (0..N).any(|i| place(TAU * i as f64 / N as f64).is_none()) {
+        return None;
+    }
+    let at = |th: f64| -> P3 {
+        // (Between the samples a place may fail by a hair at the patch's edge: the nearest.)
+        let (s, t) = place(th).unwrap_or_else(|| {
+            let i = (th / TAU * N as f64).round();
+            place(TAU * i / N as f64).unwrap_or((0.5, 0.5))
+        });
+        P3::from(
+            p00.coords * ((1.0 - s) * (1.0 - t))
+                + p10.coords * (s * (1.0 - t))
+                + p01.coords * ((1.0 - s) * t)
+                + p11.coords * (s * t),
+        )
+    };
+    let fit_tol = (0.1 * tol::POINT).max(1e-10 * r);
+    let mut ts: Vec<f64> = (0..64).map(|i| TAU * i as f64 / 64.0).collect();
+    let mut fit = None;
+    for _ in 0..14 {
+        let mut params = ts.clone();
+        params.push(TAU);
+        let pts: Vec<P3> = ts.iter().map(|&t| at(t)).collect();
+        let c = super::nurbs::NurbsCurve::interpolate_periodic(&pts, &params, 3)?;
+        let mut next = Vec::with_capacity(ts.len() * 2);
+        let mut fine = true;
+        for k in 0..ts.len() {
+            let (t0, t1) = (params[k], params[k + 1]);
+            next.push(t0);
+            let tm = 0.5 * (t0 + t1);
+            if (c.point(tm) - at(tm)).norm() > fit_tol {
+                next.push(tm);
+                fine = false;
+            }
+        }
+        fit = Some(c);
+        if fine {
+            break;
+        }
+        ts = next;
+    }
+    Some(vec![IntCurve {
+        c: Curve::Nurbs(Arc::new(fit?)),
+        t0: 0.0,
+        t1: TAU,
+        closed: true,
+        pcs: None,
+    }])
+}
+
 /// Two cylinders of one radius whose axes cross (a Steinmetz pair, a cross-drilled hole) meet
 /// in two ellipses: a point as far from both axes has w·z₁ = ±w·z₂ (w from the axes' crossing),
 /// so it lies in one of the two planes through the crossing square to z₁ ∓ z₂, and each plane cuts
@@ -1095,6 +1408,26 @@ fn plane_n(f: &Frame) -> V3 {
 /// Closed forms. `None` when the pair isn't handled here (try the other order, then numeric).
 fn analytic(a: &Surface, b: &Surface, bb: &Bbox, run_tol: f64) -> Option<Vec<IntCurve>> {
     let bbig = bb.grow(bb.diagonal() * 0.01 + tol::POINT);
+    if !crate::native::env_flag!("CADRS_NO_COMMON_SPHERE")
+        && let Some(curves) = round_a_common_sphere(a, b, bb, run_tol)
+    {
+        return Some(curves);
+    }
+    // A patch between two straight sides (a loft's wall, a saddle) is a quadric: a plane cuts
+    // it in a conic, and a cylinder whose rulings each cross it once in a loop known ruling
+    // by ruling.
+    if !crate::native::env_flag!("CADRS_NO_BILINEAR") {
+        let cut = match (a, b) {
+            (Surface::Plane { f }, Surface::Nurbs(n))
+            | (Surface::Nurbs(n), Surface::Plane { f }) => plane_bilinear(f, n),
+            (Surface::Cylinder { f, r }, Surface::Nurbs(n))
+            | (Surface::Nurbs(n), Surface::Cylinder { f, r }) => cylinder_bilinear(f, *r, n),
+            _ => None,
+        };
+        if cut.is_some() {
+            return cut;
+        }
+    }
     match (a, b) {
         (Surface::Plane { f: fa }, Surface::Plane { f: fb }) => {
             let (na, nb) = (plane_n(fa), plane_n(fb));
@@ -2401,7 +2734,10 @@ fn fit_curve(
     let mut worst = 0.0f64;
     let mut by_chords: Option<(Vec<super::ssi_numeric::Pt>, f64)> = None;
     let many = !crate::native::env_flag!("CADRS_FIT_HALVING");
-    super::par::start();
+    // (The most points a fit may come to: a round that would take it past them is not made.
+    // A crease no cubic follows triples the points a round for the same distance off, to
+    // 120 000 on a cone's sweep, each a Newton solve on both surfaces.)
+    const MOST: usize = 20000;
     while rounds < 6 || (!sharp && worst > SWING && !crate::native::env_flag!("CADRS_FIT_CHORDS")) {
         if rounds == 6 {
             by_chords = Some((pts.clone(), worst));
@@ -2413,95 +2749,92 @@ fn fit_curve(
         worst = 0.0;
         // (A span off by `off` takes (off/tol)^¼ pieces, a cubic's error falling as the fourth
         // power of its span: all its points at once, not a halving a round.)
-        let found: Vec<Vec<(usize, super::ssi_numeric::Pt, f64)>> = (0..pts.len() - 1)
-            .into_par_iter()
-            .map(|k| {
-                if (k == 0 && fixed_ends[0]) || (k == last && fixed_ends[1]) {
-                    return Vec::new();
-                }
-                let q = c.point((t[k] + t[k + 1]) / 2.0);
-                let chord = (pts[k + 1].p - pts[k].p).norm();
-                if chord <= tol::POINT {
-                    return Vec::new();
-                }
-                // A point between the span's ends is theirs however far the fit swung off it, as
-                // a cubic does round a hairpin where two branches meet: within its chord of both,
-                // or between them in the parameters of the surface the curve was traced over and
-                // within three chords of both (a hairpin's tip lies out beyond both ends in space,
-                // its parameters between; the parameters alone are no bound near a cone's apex).
-                let between = |x: &super::ssi_numeric::Pt| {
-                    let near =
-                        (x.p - pts[k].p).norm() <= chord && (x.p - pts[k + 1].p).norm() <= chord;
-                    let within = |x: f64, lo: f64, hi: f64| {
-                        let pad = 1e-9 * (1.0 + lo.abs().max(hi.abs()));
-                        x >= lo.min(hi) - pad && x <= lo.max(hi) + pad
-                    };
-                    let (p0, p1) = (pts[k].a, pts[k + 1].a);
-                    let un = |x: f64, on: bool| if on { unwrap_near(x, p0.0, TAU) } else { x };
-                    let vn = |x: f64, on: bool| if on { unwrap_near(x, p0.1, TAU) } else { x };
-                    let (up, vp) = (a.u_periodic(), a.v_periodic());
-                    let reach = (x.p - pts[k].p).norm().max((x.p - pts[k + 1].p).norm());
-                    near || (reach <= 3.0 * chord
-                        && within(un(x.a.0, up), p0.0, un(p1.0, up))
-                        && within(vn(x.a.1, vp), p0.1, vn(p1.1, vp)))
+        let spans: Vec<usize> = (0..pts.len() - 1).collect();
+        let found: Vec<Vec<(usize, super::ssi_numeric::Pt, f64)>> = super::par::map(&spans, |&k| {
+            if (k == 0 && fixed_ends[0]) || (k == last && fixed_ends[1]) {
+                return Vec::new();
+            }
+            let q = c.point((t[k] + t[k + 1]) / 2.0);
+            let chord = (pts[k + 1].p - pts[k].p).norm();
+            if chord <= tol::POINT {
+                return Vec::new();
+            }
+            // A point between the span's ends is theirs however far the fit swung off it, as
+            // a cubic does round a hairpin where two branches meet: within its chord of both,
+            // or between them in the parameters of the surface the curve was traced over and
+            // within three chords of both (a hairpin's tip lies out beyond both ends in space,
+            // its parameters between; the parameters alone are no bound near a cone's apex).
+            let between = |x: &super::ssi_numeric::Pt| {
+                let near = (x.p - pts[k].p).norm() <= chord && (x.p - pts[k + 1].p).norm() <= chord;
+                let within = |x: f64, lo: f64, hi: f64| {
+                    let pad = 1e-9 * (1.0 + lo.abs().max(hi.abs()));
+                    x >= lo.min(hi) - pad && x <= lo.max(hi) + pad
                 };
-                let exact = super::ssi_numeric::refine_between(a, b, &pts[k], &pts[k + 1], &q)
-                    .filter(|x| (x.p - q).norm() < 0.5 * chord || between(x));
-                if crate::native::env_flag!("CADRS_FIT_DEBUG")
-                    && a.distance(&q).max(b.distance(&q)) > 1e-6
-                {
-                    eprintln!(
-                        "fit: span {k} of {}: the fit off by {:.1e} on a chord of {chord:.1e}, {}",
-                        pts.len(),
-                        a.distance(&q).max(b.distance(&q)),
-                        if exact.is_some() {
-                            "refined"
-                        } else {
-                            "no point"
-                        }
-                    );
-                }
-                let Some(exact) = exact else {
-                    return Vec::new();
-                };
-                let off = (exact.p - q).norm();
-                if off <= tol {
-                    return Vec::new();
-                }
-                // (One point, the middle, where the fit swung off the span: a hairpin's.)
-                let m = if many && off < 0.5 * chord {
-                    ((off / tol).powf(0.25).ceil() as usize).clamp(2, 16)
-                } else {
-                    2
-                };
-                if m == 2 {
-                    return vec![(k + 1, exact, off)];
-                }
-                let mut got = Vec::with_capacity(m - 1);
-                for j in 1..m {
-                    let f = j as f64 / m as f64;
-                    let qj = c.point(t[k] + (t[k + 1] - t[k]) * f);
-                    match super::ssi_numeric::refine_at(a, b, &pts[k], &pts[k + 1], &qj, f) {
-                        // (Near where the fit puts it, as the middle's must be, and in order
-                        // along the span, each strictly past the last: not on a neighbouring
-                        // turn of a helix.)
-                        Some(p)
-                            if (p.p - qj).norm() < 0.5 * chord / m as f64
-                                && got.last().is_none_or(
-                                    |(_, l, _): &(usize, super::ssi_numeric::Pt, f64)| {
-                                        (p.p - pts[k].p).dot(&(pts[k + 1].p - pts[k].p))
-                                            > (l.p - pts[k].p).dot(&(pts[k + 1].p - pts[k].p))
-                                    },
-                                ) =>
-                        {
-                            got.push((k + 1, p, off))
-                        }
-                        _ => return vec![(k + 1, exact, off)],
+                let (p0, p1) = (pts[k].a, pts[k + 1].a);
+                let un = |x: f64, on: bool| if on { unwrap_near(x, p0.0, TAU) } else { x };
+                let vn = |x: f64, on: bool| if on { unwrap_near(x, p0.1, TAU) } else { x };
+                let (up, vp) = (a.u_periodic(), a.v_periodic());
+                let reach = (x.p - pts[k].p).norm().max((x.p - pts[k + 1].p).norm());
+                near || (reach <= 3.0 * chord
+                    && within(un(x.a.0, up), p0.0, un(p1.0, up))
+                    && within(vn(x.a.1, vp), p0.1, vn(p1.1, vp)))
+            };
+            let exact = super::ssi_numeric::refine_between(a, b, &pts[k], &pts[k + 1], &q)
+                .filter(|x| (x.p - q).norm() < 0.5 * chord || between(x));
+            if crate::native::env_flag!("CADRS_FIT_DEBUG")
+                && a.distance(&q).max(b.distance(&q)) > 1e-6
+            {
+                eprintln!(
+                    "fit: span {k} of {}: the fit off by {:.1e} on a chord of {chord:.1e}, {}",
+                    pts.len(),
+                    a.distance(&q).max(b.distance(&q)),
+                    if exact.is_some() {
+                        "refined"
+                    } else {
+                        "no point"
                     }
+                );
+            }
+            let Some(exact) = exact else {
+                return Vec::new();
+            };
+            let off = (exact.p - q).norm();
+            if off <= tol {
+                return Vec::new();
+            }
+            // (One point, the middle, where the fit swung off the span: a hairpin's.)
+            let m = if many && off < 0.5 * chord {
+                ((off / tol).powf(0.25).ceil() as usize).clamp(2, 16)
+            } else {
+                2
+            };
+            if m == 2 {
+                return vec![(k + 1, exact, off)];
+            }
+            let mut got = Vec::with_capacity(m - 1);
+            for j in 1..m {
+                let f = j as f64 / m as f64;
+                let qj = c.point(t[k] + (t[k + 1] - t[k]) * f);
+                match super::ssi_numeric::refine_at(a, b, &pts[k], &pts[k + 1], &qj, f) {
+                    // (Near where the fit puts it, as the middle's must be, and in order
+                    // along the span, each strictly past the last: not on a neighbouring
+                    // turn of a helix.)
+                    Some(p)
+                        if (p.p - qj).norm() < 0.5 * chord / m as f64
+                            && got.last().is_none_or(
+                                |(_, l, _): &(usize, super::ssi_numeric::Pt, f64)| {
+                                    (p.p - pts[k].p).dot(&(pts[k + 1].p - pts[k].p))
+                                        > (l.p - pts[k].p).dot(&(pts[k + 1].p - pts[k].p))
+                                },
+                            ) =>
+                    {
+                        got.push((k + 1, p, off))
+                    }
+                    _ => return vec![(k + 1, exact, off)],
                 }
-                got
-            })
-            .collect();
+            }
+            got
+        });
         let ins: Vec<(usize, super::ssi_numeric::Pt)> = found
             .into_iter()
             .flatten()
@@ -2517,7 +2850,7 @@ fn fit_curve(
                 ins.len()
             );
         }
-        if ins.is_empty() || pts.len() > 20000 {
+        if ins.is_empty() || pts.len() + ins.len() > MOST {
             let n = c.range();
             let pcs = uv_fits(a, b, &pts, &t, &c, 4.0 * tol);
             return IntCurve {
@@ -2582,47 +2915,48 @@ fn thinned(
             None,
             None,
         )));
-        let add: Vec<usize> = (0..idx.len() - 1)
-            .into_par_iter()
-            .filter_map(|w| {
-                let (i, j) = (idx[w], idx[w + 1]);
-                (i + 1..j)
-                    .map(|k| {
-                        // The curve's point nearest the left-out one: Newton from where it
-                        // falls between its kept neighbours by count (the tracer's points
-                        // are spread evenly), the sampled search only where that leaves the
-                        // span or meets a stretch curving the wrong way.
-                        let (t0, t1) = (t[w], t[w + 1]);
-                        let mut s = t0 + (t1 - t0) * (k - i) as f64 / (j - i) as f64;
-                        let mut found = false;
-                        for _ in 0..8 {
-                            let (q, d1, d2) = c.d2(s);
-                            let r = q - pts[k].p;
-                            let df = d1.norm_squared() + r.dot(&d2);
-                            if !(df > 0.0) {
-                                break;
-                            }
-                            let step = r.dot(&d1) / df;
-                            let ns = s - step;
-                            if !(ns >= t0 && ns <= t1) {
-                                break;
-                            }
-                            s = ns;
-                            if step.abs() <= 1e-12 * (t1 - t0) {
-                                found = true;
-                                break;
-                            }
+        let spans: Vec<usize> = (0..idx.len() - 1).collect();
+        let add: Vec<usize> = super::par::map(&spans, |&w| {
+            let (i, j) = (idx[w], idx[w + 1]);
+            (i + 1..j)
+                .map(|k| {
+                    // The curve's point nearest the left-out one: Newton from where it
+                    // falls between its kept neighbours by count (the tracer's points
+                    // are spread evenly), the sampled search only where that leaves the
+                    // span or meets a stretch curving the wrong way.
+                    let (t0, t1) = (t[w], t[w + 1]);
+                    let mut s = t0 + (t1 - t0) * (k - i) as f64 / (j - i) as f64;
+                    let mut found = false;
+                    for _ in 0..8 {
+                        let (q, d1, d2) = c.d2(s);
+                        let r = q - pts[k].p;
+                        let df = d1.norm_squared() + r.dot(&d2);
+                        if !(df > 0.0) {
+                            break;
                         }
-                        if !found {
-                            s = c.closest(&pts[k].p, t0, t1);
+                        let step = r.dot(&d1) / df;
+                        let ns = s - step;
+                        if !(ns >= t0 && ns <= t1) {
+                            break;
                         }
-                        ((c.point(s) - pts[k].p).norm(), k)
-                    })
-                    .filter(|&(d, _)| d > tol)
-                    .max_by(|x, y| x.0.total_cmp(&y.0))
-                    .map(|(_, k)| k)
-            })
-            .collect();
+                        s = ns;
+                        if step.abs() <= 1e-12 * (t1 - t0) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        s = c.closest(&pts[k].p, t0, t1);
+                    }
+                    ((c.point(s) - pts[k].p).norm(), k)
+                })
+                .filter(|&(d, _)| d > tol)
+                .max_by(|x, y| x.0.total_cmp(&y.0))
+                .map(|(_, k)| k)
+        })
+        .into_iter()
+        .flatten()
+        .collect();
         if add.is_empty() {
             return idx.into_iter().map(|i| pts[i]).collect();
         }
@@ -3650,6 +3984,122 @@ fn line_extrusion(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Option<Vec<f64>> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A saddle (the patch z = 10 + xy/8 between four corners) cut by planes and by a drum
+    /// about z, in closed form: every point of every curve on both surfaces. Level through its
+    /// saddle point, two of its own rulings; level above, a hyperbola's two arcs; aslant, arcs
+    /// of a conic; the drum of radius 8, one loop round it, and none for a drum wider than the
+    /// patch.
+    #[test]
+    fn a_saddle_is_cut_in_closed_form() {
+        use crate::native::nurbs::{H, NurbsSurface};
+        let pole = |x: f64, y: f64| H::new(x, y, 10.0 + x * y / 8.0, 1.0);
+        let patch = NurbsSurface {
+            du: 1,
+            dv: 1,
+            ku: vec![0.0, 0.0, 1.0, 1.0],
+            kv: vec![0.0, 0.0, 1.0, 1.0],
+            cps: vec![
+                vec![pole(-10.0, -10.0), pole(-10.0, 10.0)],
+                vec![pole(10.0, -10.0), pole(10.0, 10.0)],
+            ],
+        };
+        let saddle = Surface::Nurbs(Arc::new(patch.clone()));
+        // (The conics to rounding; the loop round the drum to its fit's tenth of a point
+        // tolerance.)
+        let on_both = |curves: &[IntCurve], other: &Surface| {
+            let near = if curves.iter().any(|c| c.closed) {
+                1e-7
+            } else {
+                1e-11
+            };
+            for c in curves {
+                for i in 0..=24 {
+                    let p = c.c.point(c.t0 + (c.t1 - c.t0) * i as f64 / 24.0);
+                    assert!(
+                        (p.z - (10.0 + p.x * p.y / 8.0)).abs() < near,
+                        "off the saddle at {p:?}"
+                    );
+                    let d = sdist(other, &p).abs();
+                    assert!(d < 1e-7, "{d:e} off the other surface at {p:?}");
+                }
+            }
+        };
+        let level = |h: f64| Frame::from_z(P3::new(0.0, 0.0, h), V3::z());
+        let through = plane_bilinear(&level(10.0), &patch).expect("two rulings");
+        assert_eq!(through.len(), 2);
+        assert!(through.iter().all(|c| matches!(c.c, Curve::Line { .. })));
+        on_both(&through, &Surface::Plane { f: level(10.0) });
+        let above = plane_bilinear(&level(12.0), &patch).expect("a hyperbola");
+        assert_eq!(above.len(), 2);
+        on_both(&above, &Surface::Plane { f: level(12.0) });
+        let aslant = Frame::from_z(P3::new(1.0, 2.0, 11.0), V3::new(0.3, -0.2, 1.0).normalize());
+        let cut = plane_bilinear(&aslant, &patch).expect("a conic");
+        assert!(!cut.is_empty());
+        on_both(&cut, &Surface::Plane { f: aslant });
+        let drum = Frame::world();
+        let round = cylinder_bilinear(&drum, 8.0, &patch).expect("a loop");
+        assert!(round.len() == 1 && round[0].closed);
+        on_both(&round, &Surface::Cylinder { f: drum, r: 8.0 });
+        assert!(cylinder_bilinear(&drum, 20.0, &patch).is_none());
+        // (And by the entry the boolean calls.)
+        let bb = {
+            let mut bb = Bbox::empty();
+            bb.add(&P3::new(-10.0, -10.0, -5.0));
+            bb.add(&P3::new(10.0, 10.0, 25.0));
+            bb
+        };
+        assert!(analytic(&saddle, &Surface::Cylinder { f: drum, r: 8.0 }, &bb, 1e-7).is_some());
+    }
+
+    /// A cone and its copy turned about a line through its axis, and a cylinder it fits
+    /// crossing that axis, lie round one ball and meet in two conics: closed curves in closed
+    /// form, every point of them on both surfaces.
+    #[test]
+    fn surfaces_round_a_common_sphere_meet_in_conics() {
+        let w = V3::new(30f64.to_radians().cos(), 0.0, 30f64.to_radians().sin());
+        let a = 25f64.to_radians();
+        let cone = |turn: f64| {
+            let q = nalgebra::Rotation3::from_axis_angle(&V3::z_axis(), turn);
+            Surface::Cone {
+                f: Frame::from_z(P3::from(q * (w * -2.0)), q * w),
+                r: 0.0,
+                a,
+            }
+        };
+        let drill = Surface::Cylinder {
+            f: Frame::from_z(P3::new(0.0, -5.0, 0.0), V3::y()),
+            r: 2.0 * a.sin(),
+        };
+        let mut bb = Bbox::empty();
+        bb.add(&P3::new(-6.0, -6.0, -6.0));
+        bb.add(&P3::new(6.0, 6.0, 6.0));
+        for other in [cone(70f64.to_radians()), cone(150f64.to_radians()), drill] {
+            let first = cone(0.0);
+            let curves = round_a_common_sphere(&first, &other, &bb, 1e-7).expect("two conics");
+            assert!(curves.len() >= 2, "{} curves", curves.len());
+            for c in &curves {
+                for i in 0..=32 {
+                    let p = c.c.point(c.t0 + (c.t1 - c.t0) * i as f64 / 32.0);
+                    for s in [&first, &other] {
+                        let d = sdist(s, &p).abs();
+                        assert!(d < 1e-9, "{d:e} off a surface at {p:?}");
+                    }
+                }
+            }
+        }
+        // Not where the cone doesn't fit the cylinder, nor where the axes pass each other.
+        let loose = Surface::Cylinder {
+            f: Frame::from_z(P3::new(0.0, -5.0, 0.0), V3::y()),
+            r: 1.0,
+        };
+        assert!(round_a_common_sphere(&cone(0.0), &loose, &bb, 1e-7).is_none());
+        let past = Surface::Cylinder {
+            f: Frame::from_z(P3::new(0.0, -5.0, 0.3), V3::y()),
+            r: 2.0 * a.sin(),
+        };
+        assert!(round_a_common_sphere(&cone(0.0), &past, &bb, 1e-7).is_none());
+    }
 
     /// A circle against a cylinder, a sphere, a cone and a torus in closed form: where it
     /// crosses, where it only touches (a double root), and where it touches a ruling's own

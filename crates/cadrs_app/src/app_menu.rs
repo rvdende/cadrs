@@ -80,6 +80,10 @@ fn app_entries() -> Vec<MenuEntry> {
             .icon("keyboard")
             .shortcut("Shift+/")
             .into(),
+        MenuItem::new("app-docs", tr("shell-app-menu-docs"))
+            .icon("docs")
+            .shortcut("F1")
+            .into(),
         MenuEntry::Separator,
         MenuItem::new("app-github", tr("shell-app-menu-github"))
             .icon("github")
@@ -206,6 +210,7 @@ fn on_app_menu_action(
     match ev.item.as_str() {
         "app-preferences" => commands.queue(crate::preferences_ui::open_preferences),
         "app-shortcuts" => commands.queue(crate::shortcuts::open_shortcuts),
+        "app-docs" => crate::help::open_docs(""),
         "app-github" => crate::open_url(crate::GITHUB),
         "app-report-problem" => commands.queue(crate::crash::report_problem),
         "app-documents" => commands.queue(crate::thumbnail::close_document),

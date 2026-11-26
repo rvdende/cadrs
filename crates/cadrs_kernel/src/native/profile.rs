@@ -89,14 +89,46 @@ impl Piece {
     }
     /// ∮ x dy along the direction of travel (Green: the signed area of a closed loop).
     pub fn x_dy(&self) -> f64 {
-        let ts = self.c.pieces(self.t0, self.t1);
-        let mut s = 0.0;
-        for w in ts.windows(2) {
-            s += integrate(w[0], w[1], 2, &GAUSS16, |t| {
-                let (p, d, _) = self.c.d2(t);
-                p.x * d.y
-            });
-        }
+        // (A line's and a circle's in closed form; a polynomial B-spline's span exactly by
+        // eight points, x y′ of degree 2p − 1 up to p = 8. Thirty-two points a span for all of
+        // them before: a swept outline's hundreds of spans, a quarter of its extrusion.)
+        let s = match &self.c {
+            Curve::Line { .. } => {
+                let (a, b) = (self.c.point(self.t0), self.c.point(self.t1));
+                0.5 * (a.x + b.x) * (b.y - a.y)
+            }
+            Curve::Circle { c, x, y, r }
+                if x.z == 0.0 && y.z == 0.0 && (x.x * y.y - x.y * y.x - 1.0).abs() < 1e-12 =>
+            {
+                // x = c_x + r cos(t + φ), y′ = r cos(t + φ), φ the angle of the circle's x.
+                let phi = x.y.atan2(x.x);
+                let (a, b) = (self.t0 + phi, self.t1 + phi);
+                c.x * r * (b.sin() - a.sin())
+                    + 0.5 * r * r * ((b - a) + 0.5 * ((2.0 * b).sin() - (2.0 * a).sin()))
+            }
+            Curve::Nurbs(n) if !n.is_rational() && n.degree <= 8 => {
+                let ts = self.c.pieces(self.t0, self.t1);
+                ts.windows(2)
+                    .map(|w| {
+                        integrate(w[0], w[1], 1, &GAUSS8, |t| {
+                            let (p, d, _) = n.ders2(t);
+                            p.x * d.y
+                        })
+                    })
+                    .sum()
+            }
+            _ => {
+                let ts = self.c.pieces(self.t0, self.t1);
+                let mut s = 0.0;
+                for w in ts.windows(2) {
+                    s += integrate(w[0], w[1], 2, &GAUSS16, |t| {
+                        let (p, d, _) = self.c.d2(t);
+                        p.x * d.y
+                    });
+                }
+                s
+            }
+        };
         if self.rev { -s } else { s }
     }
     /// Points along the piece (both ends included), at most `defl` from it.

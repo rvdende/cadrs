@@ -26,6 +26,13 @@ pub struct Document {
     /// that are not tabs, found by [`Document::element`] (see [`crate::assembly::standard`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub standard_content: Vec<crate::assembly::standard::StandardPart>,
+    /// Part Studios built in the configurations their assembly instances, drawing views and
+    /// Render Studios pick ([`crate::configuration::refresh_copies`]): not tabs, found by
+    /// [`Document::element`]. Saved, although regenerated on opening: a document read without a
+    /// refresh (a version, another document an assembly links to, a peer's copy) still finds
+    /// its instances' parts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub configured: Vec<crate::configuration::ConfiguredStudio>,
     /// Custom property definitions, part numbering and BOM templates (P3B.6, see
     /// [`crate::properties`]).
     #[serde(
@@ -59,6 +66,7 @@ impl Document {
             custom_colors: Vec::new(),
             material_libraries: Vec::new(),
             standard_content: Vec::new(),
+            configured: Vec::new(),
             properties: Default::default(),
             linked: Vec::new(),
             moved: Vec::new(),
@@ -81,14 +89,24 @@ impl Document {
         doc
     }
 
-    /// A tab, a standard content configuration's generated Part Studio (P3B.5), or a linked
-    /// element's frozen copy (P3G.1).
+    /// A tab, a standard content configuration's generated Part Studio (P3B.5), a linked
+    /// element's frozen copy (P3G.1), or a configured Part Studio's preset as an assembly uses
+    /// it ([`crate::configuration::ConfiguredStudio`]).
     pub fn element(&self, id: ElementId) -> Option<&Element> {
         self.elements
             .iter()
             .find(|e| e.id == id)
             .or_else(|| self.standard_part(id).map(|p| &p.element))
             .or_else(|| self.linked_element(id).map(|l| &l.element))
+            .or_else(|| self.configured_studio(id).map(|c| &c.element))
+    }
+
+    /// The generated studio of a preset under `id` ([`crate::configuration`]).
+    pub fn configured_studio(
+        &self,
+        id: ElementId,
+    ) -> Option<&crate::configuration::ConfiguredStudio> {
+        self.configured.iter().find(|c| c.element.id == id)
     }
 
     /// The linked element (P3G.1) stored under `id`.
@@ -161,6 +179,19 @@ pub struct Element {
     /// with their values, kept up to date by [`crate::variable_studio::propagate`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub studio_variables: Vec<crate::variable_studio::ImportedVariable>,
+    /// A Part Studio's configuration: its inputs, table and active values
+    /// ([`crate::configuration`]).
+    #[serde(
+        default,
+        skip_serializing_if = "crate::configuration::Configuration::is_empty"
+    )]
+    pub configuration: crate::configuration::Configuration,
+    /// The configurations of Part Studios this element's references show (a drawing's views,
+    /// a Render Studio's model): each names its configured copy
+    /// ([`crate::configuration::InstanceConfiguration::copy_id`]), which
+    /// [`crate::configuration::refresh_copies`] keeps while a reference uses it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub configured_sources: Vec<crate::configuration::InstanceConfiguration>,
 }
 
 impl Element {
@@ -178,6 +209,7 @@ impl Element {
                 suppressed: Vec::new(),
                 rollback: None,
                 part_folders: Vec::new(),
+                node_layout: None,
             },
             assembly: Default::default(),
             contexts: Vec::new(),
@@ -185,6 +217,8 @@ impl Element {
             simulation: Default::default(),
             named_views: Vec::new(),
             studio_variables: Vec::new(),
+            configuration: Default::default(),
+            configured_sources: Vec::new(),
         }
     }
 
@@ -200,16 +234,59 @@ impl Element {
             simulation: Default::default(),
             named_views: Vec::new(),
             studio_variables: Vec::new(),
+            configuration: Default::default(),
+            configured_sources: Vec::new(),
         }
     }
 
     /// The Variable Studios' variables as this Part Studio's or Assembly's expressions see
     /// them (defined above its own list), see [`crate::variable_studio`].
+    /// A configured Part Studio's inputs come first, with the active preset's values
+    /// ([`crate::configuration`]).
     pub fn variable_base(&self) -> Vec<(String, cadrs_sketch::units::VarValue)> {
-        self.studio_variables
+        let mut out: Vec<_> = self
+            .studio_variables
             .iter()
             .map(|v| (v.name.clone(), v.var_value()))
-            .collect()
+            .collect();
+        // The configuration's inputs, after (so over) the Variable Studios'.
+        if !self.configuration.is_empty() {
+            out.extend(crate::configuration::input_variables(
+                &self.configuration,
+                &self.configuration.active,
+                self.features(),
+            ));
+        }
+        out
+    }
+
+    /// A Part Studio's configuration ([`crate::configuration`]), when it has inputs.
+    pub fn configuration(&self) -> Option<&crate::configuration::Configuration> {
+        (matches!(self.kind, ElementKind::PartStudio { .. }) && !self.configuration.is_empty())
+            .then_some(&self.configuration)
+    }
+
+    /// A Part Studio's configuration for writing (`None` for another kind of element).
+    pub fn configuration_mut(&mut self) -> Option<&mut crate::configuration::Configuration> {
+        matches!(self.kind, ElementKind::PartStudio { .. }).then_some(&mut self.configuration)
+    }
+
+    /// Where the node view puts a Part Studio's nodes.
+    pub fn node_layout(&self) -> Option<&crate::configuration::NodeLayout> {
+        match &self.kind {
+            ElementKind::PartStudio { node_layout, .. } => node_layout.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// The node view's layout, made empty if the Part Studio has none yet.
+    pub fn node_layout_mut(&mut self) -> Option<&mut crate::configuration::NodeLayout> {
+        match &mut self.kind {
+            ElementKind::PartStudio { node_layout, .. } => {
+                Some(node_layout.get_or_insert_with(Box::default))
+            }
+            _ => None,
+        }
     }
 
     /// A Render Studio tab of `source` (P3F.6).
@@ -224,6 +301,8 @@ impl Element {
             simulation: Default::default(),
             named_views: Vec::new(),
             studio_variables: Vec::new(),
+            configuration: Default::default(),
+            configured_sources: Vec::new(),
         }
     }
 
@@ -238,6 +317,8 @@ impl Element {
             simulation: Default::default(),
             named_views: Vec::new(),
             studio_variables: Vec::new(),
+            configuration: Default::default(),
+            configured_sources: Vec::new(),
         }
     }
 
@@ -253,6 +334,8 @@ impl Element {
             simulation: Default::default(),
             named_views: Vec::new(),
             studio_variables: Vec::new(),
+            configuration: Default::default(),
+            configured_sources: Vec::new(),
         }
     }
 
@@ -394,14 +477,24 @@ impl Element {
     /// features a rebuild sees ahead of the list
     /// ([`crate::variable_studio::ImportedVariable::feature`]). Every list handed to a rebuild
     /// starts with them ([`Self::active_features`], [`Self::features_to_build`]).
+    /// A configured studio's inputs come first, with the active preset's values
+    /// ([`crate::configuration::Configuration::features`]).
     pub fn studio_features(&self) -> Vec<Feature> {
         match self.kind {
-            ElementKind::PartStudio { .. } => self
-                .studio_variables
-                .iter()
-                .filter(|v| v.used)
-                .map(|v| v.feature())
-                .collect(),
+            ElementKind::PartStudio { .. } => {
+                let mut out: Vec<Feature> = self
+                    .studio_variables
+                    .iter()
+                    .filter(|v| v.used)
+                    .map(|v| v.feature())
+                    .collect();
+                out.extend(crate::configuration::input_features(
+                    &self.configuration,
+                    &self.configuration.active,
+                    self.features(),
+                ));
+                out
+            }
             _ => Vec::new(),
         }
     }
@@ -551,6 +644,9 @@ pub enum ElementKind {
         /// Folders in the Parts list: they group the parts' rows, nothing else.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         part_folders: Vec<PartFolder>,
+        /// Where the node view puts its nodes (`None` until one is moved).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        node_layout: Option<Box<crate::configuration::NodeLayout>>,
     },
     Assembly,
     /// A drawing (P3C): sheets, templates and drawing properties, see `cadrs_drawing`.
@@ -838,6 +934,50 @@ impl Feature {
         }
     }
 
+    /// The parts it adds to, cuts or merges with, picked in its dialog's Merge scope (none
+    /// picked: the rebuild finds them); `None` for a feature without a merge scope.
+    pub fn merge_scope(&self) -> Option<&[PartId]> {
+        Some(match &self.kind {
+            FeatureKind::Extrude(x) => &x.merge_scope,
+            FeatureKind::Revolve(x) => &x.merge_scope,
+            FeatureKind::Sweep(x) => &x.merge_scope,
+            FeatureKind::Loft(x) => &x.merge_scope,
+            FeatureKind::Thicken(x) => &x.merge_scope,
+            FeatureKind::Fill(x) => &x.merge_scope,
+            FeatureKind::Hole(x) => &x.merge_scope,
+            FeatureKind::Pattern(x) => &x.merge_scope,
+            FeatureKind::Mirror(x) => &x.merge_scope,
+            FeatureKind::SheetMetalLoft(x) => &x.merge_scope,
+            _ => return None,
+        })
+    }
+
+    /// The features this one refers to for what it builds from (its [`Self::parents`] less those
+    /// only in its merge scope): its sketches, faces, edges…
+    pub fn reference_parents(&self) -> Vec<FeatureId> {
+        let Some(scope) = self.merge_scope() else {
+            return self.parents();
+        };
+        if scope.is_empty() {
+            return self.parents();
+        }
+        let mut without = self.clone();
+        match &mut without.kind {
+            FeatureKind::Extrude(x) => x.merge_scope.clear(),
+            FeatureKind::Revolve(x) => x.merge_scope.clear(),
+            FeatureKind::Sweep(x) => x.merge_scope.clear(),
+            FeatureKind::Loft(x) => x.merge_scope.clear(),
+            FeatureKind::Thicken(x) => x.merge_scope.clear(),
+            FeatureKind::Fill(x) => x.merge_scope.clear(),
+            FeatureKind::Hole(x) => x.merge_scope.clear(),
+            FeatureKind::Pattern(x) => x.merge_scope.clear(),
+            FeatureKind::Mirror(x) => x.merge_scope.clear(),
+            FeatureKind::SheetMetalLoft(x) => x.merge_scope.clear(),
+            _ => {}
+        }
+        without.parents()
+    }
+
     /// The features this one refers to (PS11: its parents): the sketches it takes regions,
     /// curves or points of, the sketch or feature its faces, edges and vertices come from, and
     /// the features that made the parts it names. A parent below it in the list makes it fail
@@ -875,7 +1015,8 @@ impl Feature {
                     Some(AxisRef::Edge(e)) => edge(e).into_iter().for_each(&mut add),
                     Some(AxisRef::Face(f)) => add(face(f)),
                     Some(AxisRef::Connector(c)) => c.parent().into_iter().for_each(&mut add),
-                    None => {}
+                    // The origin's axes depend on nothing (#316).
+                    Some(AxisRef::Origin(_)) | None => {}
                 }
             }
             FeatureKind::Boolean(b) => {
@@ -1027,6 +1168,7 @@ impl Feature {
                         AxisRef::Edge(e) => edge(e).into_iter().for_each(&mut add),
                         AxisRef::Face(f) => add(face(f)),
                         AxisRef::Connector(c) => c.parent().into_iter().for_each(&mut add),
+                        AxisRef::Origin(_) => {}
                     }
                 }
             }
@@ -1066,7 +1208,8 @@ impl Feature {
                     Some(AxisRef::Edge(e)) => edge(e).into_iter().for_each(&mut add),
                     Some(AxisRef::Face(f)) => add(face(f)),
                     Some(AxisRef::Connector(c)) => c.parent().into_iter().for_each(&mut add),
-                    None => {}
+                    // The origin's axes depend on nothing (#316).
+                    Some(AxisRef::Origin(_)) | None => {}
                 }
                 for p in &x.path {
                     match p {
@@ -1116,7 +1259,8 @@ impl Feature {
                     Some(AxisRef::Edge(e)) => edge(e).into_iter().for_each(&mut add),
                     Some(AxisRef::Face(f)) => add(face(f)),
                     Some(AxisRef::Connector(c)) => c.parent().into_iter().for_each(&mut add),
-                    None => {}
+                    // The origin's axes depend on nothing (#316).
+                    Some(AxisRef::Origin(_)) | None => {}
                 }
                 for c in [&x.from, &x.to, &x.scale_point]
                     .into_iter()
@@ -1742,7 +1886,7 @@ impl ExtrudeFeature {
 
 /// What a revolve turns about (PS7.2): a sketch line (a construction centreline) or circle,
 /// a straight part edge, the axis of a circular part edge, or the axis of a cylindrical or
-/// conical part face.
+/// conical part face, a mate connector's Z axis, or one of the origin's axes.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum AxisRef {
     /// A line of a sketch (its direction from its first point to its second), or a circle or
@@ -1754,6 +1898,29 @@ pub enum AxisRef {
     Face(FaceRef),
     /// A mate connector's Z axis (P3.8, PS7.2, PS24.1).
     Connector(crate::mate::ConnectorRef),
+    /// One of the origin's axes (#316): it never changes, so it depends on no feature.
+    Origin(OriginAxis),
+}
+
+/// The origin's X, Y and Z axes, through the origin along +X, +Y and +Z (#316).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum OriginAxis {
+    X,
+    Y,
+    Z,
+}
+
+impl OriginAxis {
+    pub const ALL: [OriginAxis; 3] = [OriginAxis::X, OriginAxis::Y, OriginAxis::Z];
+
+    /// Its direction, a unit vector.
+    pub fn dir(self) -> [f64; 3] {
+        match self {
+            OriginAxis::X => [1.0, 0.0, 0.0],
+            OriginAxis::Y => [0.0, 1.0, 0.0],
+            OriginAxis::Z => [0.0, 0.0, 1.0],
+        }
+    }
 }
 
 /// How a revolve ends (PS7.3).

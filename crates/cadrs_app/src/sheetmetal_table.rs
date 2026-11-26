@@ -89,8 +89,7 @@ use crate::camera::{StandardView, ViewState};
 use crate::parts::PartCache;
 use crate::side_panel::SidePanel;
 use crate::viewport::{
-    ActiveKind, ExtraHighlight, Pick, PlaneHighlight, Selection, ViewportArea, ViewportRect,
-    ViewportView,
+    ActiveKind, ExtraHighlight, Pick, PlaneHighlight, Selection, ViewportRect, ViewportView,
 };
 use crate::{ActiveDocument, AppState};
 
@@ -1006,7 +1005,8 @@ fn sync_panel(
             t.main_fit_in = Some(4);
         }
     }
-    let mut q_area = world.query_filtered::<(Entity, &ChildOf), With<ViewportArea>>();
+    let mut q_area =
+        world.query_filtered::<(Entity, &ChildOf), With<crate::side_panel::SideDock>>();
     let Some((area, parent)) = q_area.iter(world).next().map(|(e, c)| (e, c.parent())) else {
         return;
     };
@@ -3822,17 +3822,14 @@ fn on_flat_scroll(
     ev: On<PointerScroll>,
     mut t: ResMut<SmTable>,
     q: Query<(&ComputedNode, &UiGlobalTransform), With<FlatBody>>,
+    prefs: Option<Res<crate::preferences_ui::LocalPreferences>>,
 ) {
     let Some((node, tr)) = q.iter().next() else {
         return;
     };
     let s = node.inverse_scale_factor();
     let cursor = ev.pointer.position - tr.translation * s;
-    let lines = if ev.unit == bevy::input::mouse::MouseScrollUnit::Line {
-        ev.y
-    } else {
-        ev.y / 40.0
-    };
+    let lines = crate::preferences_ui::wheel_zoom_lines(prefs.as_deref(), ev.unit, ev.y);
     t.view.wheel(lines, cursor);
 }
 

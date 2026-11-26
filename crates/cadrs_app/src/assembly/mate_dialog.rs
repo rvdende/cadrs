@@ -1639,11 +1639,7 @@ fn mate_dialog(theme: &Theme, s: &MateSession, lists: Lists, tx: Texts) -> impl 
                         flex_grow: 1.0,
                         ..default()
                     });
-                    r.spawn((
-                        Name::new("mate-help"),
-                        icon("help-filled", 14.0, Color::srgb_u8(0xa8, 0xa8, 0xa8)),
-                        Tooltip::new(tr("common-help")),
-                    ));
+                    r.spawn(crate::help::help_icon("mate-help", "mate"));
                 });
             })
             .build(theme),

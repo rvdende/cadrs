@@ -80,6 +80,7 @@ pub fn open_modeling_menu(world: &mut World, at: Vec2, pick: Option<Pick>) {
         | Some(Pick::SketchCurve(s, _))
         | Some(Pick::SketchPoint(s, _)) => MenuTarget::Sketch(s),
         Some(Pick::Origin)
+        | Some(Pick::OriginAxis(_))
         | Some(Pick::Edge(..))
         | Some(Pick::Vertex(..))
         | Some(Pick::Part(_))
@@ -191,6 +192,10 @@ pub fn open_modeling_menu(world: &mut World, at: Vec2, pick: Option<Pick>) {
                     MenuItem::new("viewport-part-material", tr("view-part-assign-material"))
                         .icon("material-library"),
                 )
+                .item(MenuItem::new(
+                    "viewport-find-part",
+                    tr("view-ctx-find-in-parts-list"),
+                ))
                 .separator()
                 .item(section.clone().icon("section-view"))
                 // P3F.2 (P3.2): a flat face as DXF or DWG, for cutting machines.
@@ -533,6 +538,9 @@ fn act(world: &mut World, target: MenuTarget, item: &str) {
         }
         ("viewport-part-appearance", MenuTarget::Face(part, _)) => {
             crate::appearance::open_appearance_dialog(world, AppearanceTarget::Parts(vec![part]));
+        }
+        ("viewport-find-part", MenuTarget::Face(part, _)) => {
+            crate::parts_list::reveal_part(world, part);
         }
         ("viewport-part-material", MenuTarget::Face(part, _)) => {
             crate::material_dialog::open_material_dialog(world, vec![part]);

@@ -323,6 +323,11 @@ pub struct Instance {
     /// [`Document::linked`] ([`crate::external`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<crate::external::SourceRef>,
+    /// The configuration of an instance of a configured Part Studio
+    /// ([`crate::configuration`]). Its [`Instance::source`] then names the studio's configured
+    /// copy in [`Document::configured`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configuration: Option<crate::configuration::InstanceConfiguration>,
 }
 
 impl Instance {
@@ -343,6 +348,7 @@ impl Instance {
             follow: None,
             replicate: None,
             link: None,
+            configuration: None,
         }
     }
 
@@ -597,9 +603,12 @@ fn identity(
         }
         _ => inst.source.part(),
     };
-    match inst.link {
-        Some(r) => (r.document_or(doc), r.element, part, kind),
-        None => (doc, inst.source.element(), part, kind),
+    // A configured instance is numbered with its Part Studio's others, whatever the
+    // configuration (its source is the configuration's copy).
+    match (inst.link, &inst.configuration) {
+        (Some(r), _) => (r.document_or(doc), r.element, part, kind),
+        (None, Some(c)) => (doc, c.studio, part, kind),
+        (None, None) => (doc, inst.source.element(), part, kind),
     }
 }
 
@@ -820,7 +829,7 @@ pub fn instance_parts_placed(
             solid: {
                 let solid = match last.remove(&id) {
                     Some((from, pose, s)) if Arc::ptr_eq(&from, &src.solid) && pose == o.pose => s,
-                    _ => Arc::new(transform_solid(&src.solid, &o.pose)),
+                    _ => Arc::new(Solid::placed(&src.solid, &o.pose)),
                 };
                 placed
                     .0

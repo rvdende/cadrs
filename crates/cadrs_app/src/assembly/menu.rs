@@ -255,6 +255,19 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
             tr("asm-menu-select-same-part"),
         ))
     };
+    // Every instance of the same part, subassembly or Part Studio, in the same configuration
+    // (a standard content part has its own two items for this).
+    let all_items = |menu: Menu| -> Menu {
+        if is_std {
+            return menu;
+        }
+        menu.item(MenuItem::new(
+            "asm-select-all-instances",
+            tr("asm-menu-select-all-instances"),
+        ))
+    };
+    // Configurations: the instances' configuration of their Part Studio.
+    let config_item = crate::configuration_ui::instance_menu_item(world, element, &targets);
     let copy_label = if targets.len() > 1 {
         tr_with(
             "asm-menu-copy-items",
@@ -448,7 +461,11 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
                     .disabled(!parts_only)
                     .icon("transform"),
             );
-        menu = std_items(menu).item(in_context.clone());
+        menu = all_items(std_items(menu));
+        if let Some(c) = config_item.clone() {
+            menu = menu.item(c);
+        }
+        menu = menu.item(in_context.clone());
         if let Some(u) = update_context.clone() {
             menu = menu.item(u);
         }
@@ -655,7 +672,11 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
                 .disabled(!parts_only)
                 .icon("transform"),
             );
-        menu = std_items(menu).item(in_context);
+        menu = all_items(std_items(menu));
+        if let Some(c) = config_item {
+            menu = menu.item(c);
+        }
+        menu = menu.item(in_context);
         if let Some(u) = update_context {
             menu = menu.item(u);
         }
@@ -896,6 +917,9 @@ fn act(world: &mut World, menu: &AsmMenu, handle: TriadHandle, item: &str) {
     let parts: Vec<cadrs_core::PartId> = super::view_parts(world.resource::<PartCache>(), &targets);
     match item {
         // P3B.6: the instance's part or subassembly properties.
+        s if s.starts_with("asm-config-") => {
+            crate::configuration_ui::instance_menu_action(world, element, targets, s);
+        }
         "asm-properties" => {
             if let Some(i) = menu.instance {
                 crate::properties_dialog::open_for_instance(world, i);
@@ -1236,6 +1260,21 @@ fn act(world: &mut World, menu: &AsmMenu, handle: TriadHandle, item: &str) {
         "asm-delete" => super::delete_instances(world, element, targets.clone()),
         // A19.9: Edit standard content instance, on the targets (bulk edit).
         "asm-std-edit" => super::standard::open_edit_dialog(world, targets.clone()),
+        // The configured copy of a Part Studio is a source of its own, so the same source is the
+        // same configuration too.
+        "asm-select-all-instances" => {
+            if let Some(i) = menu.instance {
+                let same = world
+                    .resource::<ActiveDocument>()
+                    .doc
+                    .element(element)
+                    .and_then(|e| e.assembly_model())
+                    .map(|a| cadrs_core::assembly::standard::same_configuration(a, i, true))
+                    .unwrap_or_default();
+                world.resource_mut::<Selection>().0 =
+                    same.into_iter().map(|i| Pick::Part(i.part_id())).collect();
+            }
+        }
         "asm-select-same-config" | "asm-select-same-part" => {
             if let Some(i) = menu.instance {
                 let same = world
@@ -1287,7 +1326,7 @@ fn act(world: &mut World, menu: &AsmMenu, handle: TriadHandle, item: &str) {
         }
         "asm-find" => {
             if let Some(i) = menu.instance {
-                world.resource_mut::<Selection>().0 = vec![Pick::Part(i.part_id())];
+                super::list::reveal_instance(world, i);
             }
         }
         "asm-clear-selection" => world.resource_mut::<Selection>().0.clear(),
@@ -1416,8 +1455,33 @@ pub fn switch_to_owner(world: &mut World, owner: cadrs_core::properties::Propert
     {
         return;
     }
+    let element = show_preset(world, element);
     world.resource_mut::<ActiveDocument>().set_active(element);
     world.insert_resource(super::PendingSelection(Some((element, picks))));
+}
+
+/// The tab `element` is shown in: for a configured copy (an instance's configuration), its
+/// Part Studio, as it is (showing the instance's configuration would be an edit; the
+/// Configuration panel picks it), with a word when it shows another configuration.
+fn show_preset(world: &mut World, element: ElementId) -> ElementId {
+    let doc = &world.resource::<ActiveDocument>().doc;
+    let Some((studio, values)) = cadrs_core::configuration::copy_of(doc, element) else {
+        return element;
+    };
+    let names = doc.element(studio).and_then(|e| {
+        let c = e.configuration()?;
+        (c.complete(&values) != c.complete(&c.active))
+            .then(|| (c.describe(&values), c.describe(&c.active)))
+    });
+    if let Some((wanted, shown)) = names {
+        let t = world.resource::<cadrs_ui::Theme>().clone();
+        let text = cadrs_ui::i18n::tr_with(
+            "asm-switch-to-preset",
+            &[("instance", &wanted), ("shown", &shown)],
+        );
+        cadrs_ui::show_toast(&mut world.commands(), &t, text);
+    }
+    studio
 }
 
 /// **Switch to** (A4.6, X11): the instance's Part Studio becomes the active tab with its part
@@ -1431,7 +1495,11 @@ pub fn switch_to(world: &mut World, instance: InstanceId) {
     else {
         return;
     };
-    let element = source.element();
+    // A configured instance's source is its studio's configured copy: the studio's tab.
+    let element = cadrs_core::configuration::tab_of(
+        &world.resource::<ActiveDocument>().doc,
+        source.element(),
+    );
     if world
         .resource::<ActiveDocument>()
         .doc
@@ -1440,6 +1508,7 @@ pub fn switch_to(world: &mut World, instance: InstanceId) {
     {
         return;
     }
+    let element = show_preset(world, element);
     world.resource_mut::<ActiveDocument>().set_active(element);
     // A17 / A4.6: a subassembly opens its tab; a part is selected in its studio.
     let picks = source

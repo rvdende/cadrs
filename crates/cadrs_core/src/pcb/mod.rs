@@ -488,6 +488,8 @@ impl Element {
             simulation: Default::default(),
             named_views: Vec::new(),
             studio_variables: Vec::new(),
+            configuration: Default::default(),
+            configured_sources: Vec::new(),
         }
     }
 
@@ -518,8 +520,36 @@ impl Element {
             ElementKind::CamStudio(c) => c.part_features().into(),
             // The Variable Studios' variables it names come first (see
             // `Element::features_to_build`).
-            _ if self.studio_variables.iter().any(|v| v.used) => self.features_to_build().into(),
+            _ if self.studio_variables.iter().any(|v| v.used)
+                || self.configuration().is_some_and(|c| !c.inputs.is_empty()) =>
+            {
+                self.features_to_build().into()
+            }
             _ => self.features().into(),
+        }
+    }
+
+    /// What an assembly's instance of the element builds: a Part Studio's features without the
+    /// suppressed ones (by Suppress, by a variable or by its configuration), whatever its
+    /// rollback bar (an assembly shows the whole studio, as Onshape's do), after the variables
+    /// it names ([`Element::studio_features`]); a PCB or CAM Studio's [`Element::part_features`].
+    pub fn assembly_features(&self) -> std::borrow::Cow<'_, [crate::document::Feature]> {
+        match &self.kind {
+            ElementKind::PartStudio { .. } => {
+                let off = self.all_suppressed();
+                if off.is_empty() {
+                    return self.part_features();
+                }
+                let mut out = self.studio_features();
+                out.extend(
+                    self.features()
+                        .iter()
+                        .filter(|f| !off.contains(&f.id))
+                        .cloned(),
+                );
+                out.into()
+            }
+            _ => self.part_features(),
         }
     }
 

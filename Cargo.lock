@@ -2344,6 +2344,7 @@ dependencies = [
  "cadrs_pcb",
  "cadrs_render",
  "cadrs_router",
+ "cadrs_router_kernels",
  "cadrs_sheetmetal",
  "cadrs_sketch",
  "cadrs_ui",

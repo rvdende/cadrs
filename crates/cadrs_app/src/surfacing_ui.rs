@@ -243,6 +243,7 @@ pub fn references(kind: &FeatureKind, cache: &PartCache) -> Vec<Pick> {
         AxisRef::Edge(e) => edge(e),
         AxisRef::Face(f) => face(f),
         AxisRef::Connector(c) => crate::pattern::connector_pick(c),
+        AxisRef::Origin(o) => Some(Pick::OriginAxis(*o)),
     };
     match kind {
         FeatureKind::Thicken(x) => {

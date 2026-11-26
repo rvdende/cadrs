@@ -37,6 +37,7 @@ use cadrs_core::document::{
 use cadrs_core::{Feature, FeatureId, PartId};
 use cadrs_sketch::units::Quantity;
 use cadrs_ui::i18n::{tr, tr_with};
+use cadrs_ui::node_graph::StaticCopy;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     CheckboxChange, FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState, NumberField,
@@ -685,16 +686,57 @@ fn extrude_dialog(
     s: &ExtrudeSession,
     labels: &Labels,
 ) -> impl Bundle {
+    (
+        ExtrudeDialog,
+        DialogLayout(Layout::of(e, s)),
+        DespawnOnExit(AppState::Document),
+        extrude_card(theme, title, valid, e, s, labels).build(theme),
+    )
+}
+
+/// A copy of an extrude's dialog with its parameters, shown for looks (the node view's node of
+/// an extrude not being edited, [`crate::node_view`]).
+pub(crate) fn static_card(
+    theme: &Theme,
+    el: &cadrs_core::Element,
+    cache: &PartCache,
+    feature: &Feature,
+) -> Option<FeatureDialog> {
+    let e = feature.extrude()?;
+    let s = ExtrudeSession {
+        element: el.id,
+        feature: feature.id,
+        is_new: false,
+        mark: 0,
+        before: None,
+        // No selection field is waiting for picks.
+        field: ExtrudeField::Axis,
+        op_auto: false,
+        direction_on: e.direction.is_some(),
+        show_final: false,
+        flip_check: None,
+    };
+    let labels = labels(el.features(), cache, feature.id, e);
+    let valid = feature.is_valid() && !cache.errors.contains_key(&feature.id);
+    Some(extrude_card(theme, &feature.name, valid, e, &s, &labels))
+}
+
+/// The dialog's card: its title, rows and footer.
+fn extrude_card(
+    theme: &Theme,
+    title: &str,
+    valid: bool,
+    e: &ExtrudeFeature,
+    s: &ExtrudeSession,
+    labels: &Labels,
+) -> FeatureDialog {
     let tb = theme.clone();
     let tf = theme.clone();
     let e = e.clone();
     let layout = Layout::of(&e, s);
     let field = s.field;
     let labels = labels.clone();
-    (
-        ExtrudeDialog,
-        DialogLayout(layout.clone()),
-        DespawnOnExit(AppState::Document),
+    {
         FeatureDialog::new("extrude-dialog")
             .title(title)
             .valid(valid)
@@ -928,14 +970,9 @@ fn extrude_dialog(
                 })
                 .with_child(crate::feature_list::preview_slider(t, "extrude"));
                 final_button(f, t, "extrude");
-                f.spawn((
-                    Name::new("extrude-help"),
-                    icon("help-filled", 14.0, Color::srgb_u8(0xa8, 0xa8, 0xa8)),
-                    Tooltip::new(tr("common-help")),
-                ));
+                f.spawn(crate::help::help_icon("extrude-help", "extrude"));
             })
-            .build(theme),
-    )
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -962,9 +999,9 @@ pub(crate) fn sync_extrude_dialog(
     focus: Res<InputFocus>,
     q_area: Query<Entity, With<ViewportArea>>,
     mut q_dialog: Query<(Entity, &DialogLayout, &mut FeatureDialogState), With<ExtrudeDialog>>,
-    mut q_lists: Query<(&Role, &mut SelectionListState)>,
-    mut q_numbers: Query<(Entity, &Role, &mut NumberFieldState)>,
-    mut q_selects: Query<(&Role, &mut SelectState)>,
+    mut q_lists: Query<(&Role, &mut SelectionListState), Without<StaticCopy>>,
+    mut q_numbers: Query<(Entity, &Role, &mut NumberFieldState), Without<StaticCopy>>,
+    mut q_selects: Query<(&Role, &mut SelectState), Without<StaticCopy>>,
     q_edit: Query<&cadrs_ui::NumberFieldEdit>,
     mut commands: Commands,
 ) {

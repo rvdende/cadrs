@@ -599,6 +599,81 @@ const FIT_DEGREE: usize = 5;
 
 /// Interpolates projected points with the curve's own parameters.
 fn fitted(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Curve {
+    // Followed continuously across the surface's seams (brought back into a closed
+    // B-spline's range after: `into_closed_range`).
+    let periods = closed_periods(s);
+    fitted_by(s, c, t0, t1, &|t: f64, hint: Option<(f64, f64)>| -> P2 {
+        project_along(s, &c.point(t), hint, periods)
+    })
+}
+
+/// The p-curve on `s` of `c` over [t0, t1] carried over from that of a curve lying along it
+/// (`alias` over `range`, its p-curve on `s` `alias_pc`: an edge of the other body a boolean
+/// took for the same edge): each point of `c` at the (u, v) of the alias's nearest point,
+/// with no projection onto the surface (a tube of a hundred sections: 50 ms an edge). None
+/// where that leaves the surface more than `tol` off the curve somewhere.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn carried(
+    s: &Surface,
+    c: &Curve,
+    t0: f64,
+    t1: f64,
+    alias: &Curve,
+    range: [f64; 2],
+    alias_pc: &Curve,
+    tol: f64,
+) -> Option<Curve> {
+    let (lo, hi) = (range[0].min(range[1]), range[0].max(range[1]));
+    // The alias's parameter nearest a point: Newton from the one before, where that ends on
+    // the curve; else searched for.
+    let last = std::cell::Cell::new(None::<f64>);
+    let nearest = |p: &P3| -> f64 {
+        if let Some(mut w) = last.get() {
+            for _ in 0..12 {
+                let (q, d1, d2) = alias.d2(w);
+                let r = q - p;
+                let h = d1.norm_squared() + r.dot(&d2);
+                if !(h > 0.0) {
+                    break;
+                }
+                let next = (w - r.dot(&d1) / h).clamp(lo, hi);
+                let step = (next - w).abs();
+                w = next;
+                if step <= 1e-14 * (1.0 + w.abs()) {
+                    break;
+                }
+            }
+            if (alias.point(w) - p).norm() <= tol {
+                last.set(Some(w));
+                return w;
+            }
+        }
+        let w = alias.closest(p, lo, hi);
+        last.set(Some(w));
+        w
+    };
+    let pc = fitted_by(s, c, t0, t1, &|t: f64, _: Option<(f64, f64)>| -> P2 {
+        let q = alias_pc.point(nearest(&c.point(t)));
+        P2::new(q.x, q.y)
+    });
+    (0..=16)
+        .all(|i| {
+            let t = t0 + (t1 - t0) * i as f64 / 16.0;
+            let q = pc.point(t);
+            (s.eval(q.x, q.y) - c.point(t)).norm() <= tol
+        })
+        .then_some(pc)
+}
+
+/// [`fitted`] with `project` for the (u, v) of the curve's point at a parameter (hinted by a
+/// neighbour's).
+fn fitted_by(
+    s: &Surface,
+    c: &Curve,
+    t0: f64,
+    t1: f64,
+    project: &dyn Fn(f64, Option<(f64, f64)>) -> P2,
+) -> Curve {
     let pieces = c.pieces(t0, t1);
     let mut ts: Vec<f64> = Vec::new();
     // A few samples a piece to start (refined below where the fit is off).
@@ -627,11 +702,7 @@ fn fitted(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Curve {
         }
     }
     let mut ts = kept;
-    // Followed continuously across the surface's seams (brought back into a closed
-    // B-spline's range after: `into_closed_range`).
     let periods = closed_periods(s);
-    let project =
-        |t: f64, hint: Option<(f64, f64)>| -> P2 { project_along(s, &c.point(t), hint, periods) };
     // The samples' projections, each hinted by its neighbour's and kept across the rounds
     // (only the samples a round adds are projected).
     let mut uvs: Vec<P2> = Vec::with_capacity(ts.len());

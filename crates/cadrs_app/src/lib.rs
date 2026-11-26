@@ -23,6 +23,7 @@ pub mod camera;
 pub mod change_preview;
 pub mod collab;
 pub mod composite_ui;
+pub mod configuration_ui;
 pub mod crash;
 pub mod create_selection;
 pub mod cursor;
@@ -55,7 +56,9 @@ pub mod gallery;
 pub mod gear_ui;
 pub mod github;
 pub mod ground_grid;
+pub mod help;
 pub mod hidden_edges;
+pub mod hide_key;
 pub mod history_panel;
 pub mod identity;
 pub mod image_dialog;
@@ -76,11 +79,14 @@ pub mod mcp_board;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mcp_button;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod mcp_config;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod mcp_machine;
 pub mod measure;
 pub mod move_document;
 pub mod native_document;
 pub mod network;
+pub mod node_view;
 pub mod notifications;
 pub mod part_folders;
 pub mod part_shading;
@@ -493,6 +499,7 @@ impl ActiveDocument {
         // Derived features take their sources' snapshots (neither is an edit).
         cadrs_core::variable_studio::propagate(&mut doc, None);
         cadrs_core::derived::resolve_document(&mut doc);
+        cadrs_core::configuration::refresh_copies(&mut doc);
         Self {
             saved: std::sync::Arc::new(doc.clone()),
             opened: doc.clone(),
@@ -970,6 +977,7 @@ impl Plugin for CadrsAppPlugin {
                 spacemouse::SpaceMousePlugin,
                 walk::WalkPlugin,
                 awake::AwakePlugin,
+                help::HelpPlugin,
             ))
             .add_plugins(top_bar::TopBarPlugin)
             .add_plugins(part_folders::PartFoldersPlugin)
@@ -1021,6 +1029,7 @@ impl Plugin for CadrsAppPlugin {
                 workspaces::WorkspacesPlugin,
                 repair::RepairPlugin,
                 replace_reference::ReplaceReferencePlugin,
+                configuration_ui::ConfigurationPlugin,
             ))
             .add_plugins((
                 appearance::AppearancePlugin,
@@ -1074,6 +1083,8 @@ impl Plugin for CadrsAppPlugin {
             ))
             .add_plugins((
                 variables_ui::VariablesPlugin,
+                node_view::NodeViewPlugin,
+                hide_key::HideKeyPlugin,
                 variable_studio_ui::VariableStudioUiPlugin,
                 scale_ui::ScalePlugin,
                 threads_ui::ThreadsPlugin,

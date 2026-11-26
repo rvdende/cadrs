@@ -38,6 +38,9 @@ How the mouse moves the 3D view.
 ### 3D view mouse controls
 
 - **Mouse controls:** Onshape · SolidWorks · Inventor · Creo. Default: Onshape.
+- **Wheel zoom:** Invert zoom direction, off by default.
+
+  Off, rolling the wheel away from you zooms in. On, rolling it toward you zooms in.
 
 What each choice of Mouse controls does with the mouse:
 

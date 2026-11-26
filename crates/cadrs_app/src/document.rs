@@ -246,7 +246,7 @@ struct FeatureErrorIcon;
 
 /// The "Features (N)" header row.
 #[derive(Component)]
-struct FeaturesHeader;
+pub(crate) struct FeaturesHeader;
 
 /// While the ⓘ shows, the header gives "Features (N)" room and keeps it clear of the folder
 /// button (P3.8, the P3.7 judge: it crowded the icon). Without it, the header is as before.
@@ -432,23 +432,45 @@ fn spawn_shell(
                             // Above the viewport so its grip stays grabbable.
                             ZIndex(1),
                         ));
+                        // The 3D view, and the node view's panel under it
+                        // (`crate::node_view`, hidden until shown).
                         mid.spawn((
-                            Name::new("viewport-area"),
-                            ViewportArea,
-                            cadrs_ui::ToastHost,
+                            Name::new("viewport-column"),
+                            // The side panels dock after it, full height.
+                            crate::side_panel::SideDock,
                             Node {
                                 flex_grow: 1.0,
-                                overflow: Overflow::clip(),
+                                min_width: Val::Px(0.0),
+                                flex_direction: FlexDirection::Column,
                                 ..default()
                             },
+                            Pickable::IGNORE,
                         ))
-                        .with_children(|vp| {
-                            crate::viewport::spawn_viewport_overlay(vp, &t);
-                            crate::rebuild_indicator::spawn_rebuild_indicator(vp, &t);
-                            crate::frame_stats::spawn_frame_stats(vp, &t);
-                            crate::view_cube::spawn_view_cube(vp, &t, cube.0.clone());
-                            right_strip(vp, &t);
-                            viewport_readouts(vp, &t);
+                        .with_children(|col| {
+                            col.spawn((
+                                Name::new("viewport-area"),
+                                ViewportArea,
+                                cadrs_ui::ToastHost,
+                                Node {
+                                    flex_grow: 1.0,
+                                    min_height: Val::Px(0.0),
+                                    overflow: Overflow::clip(),
+                                    ..default()
+                                },
+                            ))
+                            .with_children(|vp| {
+                                crate::viewport::spawn_viewport_overlay(vp, &t);
+                                crate::rebuild_indicator::spawn_rebuild_indicator(vp, &t);
+                                crate::frame_stats::spawn_frame_stats(vp, &t);
+                                crate::view_cube::spawn_view_cube(vp, &t, cube.0.clone());
+                                right_strip(vp, &t);
+                                viewport_readouts(vp, &t);
+                            });
+                            col.spawn(crate::node_view::panel(&t, PANEL_GAP))
+                                .with_children(|p| {
+                                    let panel = p.target_entity();
+                                    p.spawn(crate::node_view::panel_edge(panel, PANEL_GAP));
+                                });
                         });
                     });
                 });
@@ -852,6 +874,12 @@ fn view_tools(bar: &mut ChildSpawnerCommands, t: &Theme) {
             ),
             // Issue #266: shown once a frame has members (`crate::cut_list`).
             ("panel-cut-list", "cut-list", "shell-doc-cut-list"),
+            // A Part Studio's Configuration panel (`crate::configuration_ui`).
+            (
+                "panel-configuration",
+                "configurations",
+                "config-panel-tooltip",
+            ),
         ] {
             g.spawn(
                 ToolButton::new(name, icon_name)
@@ -2362,6 +2390,15 @@ fn feature_list(p: &mut ChildSpawnerCommands, t: &Theme, element: ElementId, hei
                     t,
                     0.0,
                 );
+                // The node view (`crate::node_view`) in place of the list.
+                header_button(
+                    h,
+                    "feature-node-view",
+                    "node-graph",
+                    &tr("node-view-toggle"),
+                    t,
+                    2.0,
+                );
             });
             // P3.9: Show dependencies' legend (hidden until used).
             crate::feature_list::dependency_legend(pane, t);
@@ -3744,6 +3781,72 @@ enum RowKind {
     SheetMetalTool(&'static str),
 }
 
+/// How a feature's row looks by its kind alone (a sketch's: [`RowKind::Sketch`], which the list
+/// shows consumed or referenced as the rebuild found it).
+fn row_kind(kind: &cadrs_core::FeatureKind) -> RowKind {
+    match kind {
+        cadrs_core::FeatureKind::Extrude(_) => RowKind::Extrude,
+        cadrs_core::FeatureKind::Revolve(_) => RowKind::Revolve,
+        cadrs_core::FeatureKind::Boolean(_) => RowKind::Boolean,
+        cadrs_core::FeatureKind::DeletePart(_) => RowKind::DeletePart,
+        cadrs_core::FeatureKind::Fillet(_) => RowKind::Fillet,
+        cadrs_core::FeatureKind::Chamfer(_) => RowKind::Chamfer,
+        cadrs_core::FeatureKind::Shell(_) => RowKind::Shell,
+        cadrs_core::FeatureKind::Hole(_) => RowKind::Hole,
+        cadrs_core::FeatureKind::Plane(_) => RowKind::Plane,
+        cadrs_core::FeatureKind::Sweep(_) => RowKind::Sweep,
+        cadrs_core::FeatureKind::Loft(_) => RowKind::Loft,
+        cadrs_core::FeatureKind::Split(_) => RowKind::Split,
+        cadrs_core::FeatureKind::Pattern(x) => match x.kind {
+            cadrs_core::pattern::PatternKind::Linear => RowKind::LinearPattern,
+            cadrs_core::pattern::PatternKind::Circular => RowKind::CircularPattern,
+            cadrs_core::pattern::PatternKind::Curve => RowKind::CurvePattern,
+        },
+        cadrs_core::FeatureKind::Mirror(_) => RowKind::Mirror,
+        cadrs_core::FeatureKind::MateConnector(_) => RowKind::MateConnector,
+        cadrs_core::FeatureKind::Draft(_) => RowKind::Draft,
+        cadrs_core::FeatureKind::Transform(_) => RowKind::Transform,
+        cadrs_core::FeatureKind::Composite(_) => RowKind::Composite,
+        cadrs_core::FeatureKind::Import(_) => RowKind::Import,
+        cadrs_core::FeatureKind::Image(_) => RowKind::Image,
+        cadrs_core::FeatureKind::Derived(_) => RowKind::Derived,
+        cadrs_core::FeatureKind::Thicken(_) => RowKind::Thicken,
+        cadrs_core::FeatureKind::Helix(_) | cadrs_core::FeatureKind::ProjectCurve(_) => {
+            RowKind::Helix
+        }
+        cadrs_core::FeatureKind::FaceBlend(_) => RowKind::Fillet,
+        cadrs_core::FeatureKind::Thread(_) => RowKind::Thread,
+        cadrs_core::FeatureKind::Gear(_) => RowKind::Gear,
+        cadrs_core::FeatureKind::Frame(_) => RowKind::Frame,
+        cadrs_core::FeatureKind::FrameTrim(_) => RowKind::FrameTrim,
+        cadrs_core::FeatureKind::CutList(_) => RowKind::CutList,
+        cadrs_core::FeatureKind::Fill(_) => RowKind::Fill,
+        cadrs_core::FeatureKind::Variable(_) => RowKind::Variable,
+        cadrs_core::FeatureKind::SheetMetalModel(_) => RowKind::SheetMetalModel,
+        cadrs_core::FeatureKind::ModifyJoint(_) => RowKind::ModifyJoint,
+        k @ (cadrs_core::FeatureKind::SheetMetalLoft(_)
+        | cadrs_core::FeatureKind::Form(_)
+        | cadrs_core::FeatureKind::TagForm(_)) => {
+            RowKind::Sm9(crate::sheetmetal_p3i9_ui::row_icon(k).unwrap_or("sketch"))
+        }
+        cadrs_core::FeatureKind::SheetMetal(x) => RowKind::SheetMetal(x.icon()),
+        cadrs_core::FeatureKind::SheetMetalTool(x) => RowKind::SheetMetalTool(x.icon()),
+        // P3I.6: a flat pattern extrude is an Extrude in the list.
+        cadrs_core::FeatureKind::FlatExtrude(_) => RowKind::Extrude,
+        cadrs_core::FeatureKind::DirectEdit(x) => RowKind::DirectEdit(match x.kind {
+            cadrs_core::direct_edit::DirectEditKind::MoveFace => "offset",
+            cadrs_core::direct_edit::DirectEditKind::DeleteFace => "delete",
+            cadrs_core::direct_edit::DirectEditKind::Simplify => "surface",
+        }),
+        _ => RowKind::Sketch,
+    }
+}
+
+/// The icon of a feature's kind, as its row in the feature list shows it (a node's header too).
+pub(crate) fn feature_icon(kind: &cadrs_core::FeatureKind) -> &'static str {
+    row_kind(kind).icon()
+}
+
 impl RowKind {
     fn icon(self) -> &'static str {
         match self {
@@ -3907,106 +4010,56 @@ fn rebuild_feature_rows(
         } => sketch_visibility.iter().copied().collect(),
         _ => Default::default(),
     };
-    let features: Vec<FeatureRowKey> =
-        all.iter()
-            // A sketch with conflicting constraints shows as an error too (`screens/15`).
-            .map(|f| {
-                let kind = match &f.kind {
-                    cadrs_core::FeatureKind::Extrude(_) => RowKind::Extrude,
-                    cadrs_core::FeatureKind::Revolve(_) => RowKind::Revolve,
-                    cadrs_core::FeatureKind::Boolean(_) => RowKind::Boolean,
-                    cadrs_core::FeatureKind::DeletePart(_) => RowKind::DeletePart,
-                    cadrs_core::FeatureKind::Fillet(_) => RowKind::Fillet,
-                    cadrs_core::FeatureKind::Chamfer(_) => RowKind::Chamfer,
-                    cadrs_core::FeatureKind::Shell(_) => RowKind::Shell,
-                    cadrs_core::FeatureKind::Hole(_) => RowKind::Hole,
-                    cadrs_core::FeatureKind::Plane(_) => RowKind::Plane,
-                    cadrs_core::FeatureKind::Sweep(_) => RowKind::Sweep,
-                    cadrs_core::FeatureKind::Loft(_) => RowKind::Loft,
-                    cadrs_core::FeatureKind::Split(_) => RowKind::Split,
-                    cadrs_core::FeatureKind::Pattern(x) => match x.kind {
-                        cadrs_core::pattern::PatternKind::Linear => RowKind::LinearPattern,
-                        cadrs_core::pattern::PatternKind::Circular => RowKind::CircularPattern,
-                        cadrs_core::pattern::PatternKind::Curve => RowKind::CurvePattern,
-                    },
-                    cadrs_core::FeatureKind::Mirror(_) => RowKind::Mirror,
-                    cadrs_core::FeatureKind::MateConnector(_) => RowKind::MateConnector,
-                    cadrs_core::FeatureKind::Draft(_) => RowKind::Draft,
-                    cadrs_core::FeatureKind::Transform(_) => RowKind::Transform,
-                    cadrs_core::FeatureKind::Composite(_) => RowKind::Composite,
-                    cadrs_core::FeatureKind::Import(_) => RowKind::Import,
-                    cadrs_core::FeatureKind::Image(_) => RowKind::Image,
-                    cadrs_core::FeatureKind::Derived(_) => RowKind::Derived,
-                    cadrs_core::FeatureKind::Thicken(_) => RowKind::Thicken,
-                    cadrs_core::FeatureKind::Helix(_)
-                    | cadrs_core::FeatureKind::ProjectCurve(_) => RowKind::Helix,
-                    cadrs_core::FeatureKind::FaceBlend(_) => RowKind::Fillet,
-                    cadrs_core::FeatureKind::Thread(_) => RowKind::Thread,
-                    cadrs_core::FeatureKind::Gear(_) => RowKind::Gear,
-                    cadrs_core::FeatureKind::Frame(_) => RowKind::Frame,
-                    cadrs_core::FeatureKind::FrameTrim(_) => RowKind::FrameTrim,
-                    cadrs_core::FeatureKind::CutList(_) => RowKind::CutList,
-                    cadrs_core::FeatureKind::Fill(_) => RowKind::Fill,
-                    cadrs_core::FeatureKind::Variable(_) => RowKind::Variable,
-                    cadrs_core::FeatureKind::SheetMetalModel(_) => RowKind::SheetMetalModel,
-                    cadrs_core::FeatureKind::ModifyJoint(_) => RowKind::ModifyJoint,
-                    k @ (cadrs_core::FeatureKind::SheetMetalLoft(_)
-                    | cadrs_core::FeatureKind::Form(_)
-                    | cadrs_core::FeatureKind::TagForm(_)) => {
-                        RowKind::Sm9(crate::sheetmetal_p3i9_ui::row_icon(k).unwrap_or("sketch"))
-                    }
-                    cadrs_core::FeatureKind::SheetMetal(x) => RowKind::SheetMetal(x.icon()),
-                    cadrs_core::FeatureKind::SheetMetalTool(x) => RowKind::SheetMetalTool(x.icon()),
-                    // P3I.6: a flat pattern extrude is an Extrude in the list.
-                    cadrs_core::FeatureKind::FlatExtrude(_) => RowKind::Extrude,
-                    cadrs_core::FeatureKind::DirectEdit(x) => RowKind::DirectEdit(match x.kind {
-                        cadrs_core::direct_edit::DirectEditKind::MoveFace => "offset",
-                        cadrs_core::direct_edit::DirectEditKind::DeleteFace => "delete",
-                        cadrs_core::direct_edit::DirectEditKind::Simplify => "surface",
-                    }),
-                    _ if cache.hidden_sketches.contains(&f.id) => RowKind::ConsumedSketch,
-                    _ if cache.preview_sketches.contains(&f.id) => RowKind::ReferencedSketch,
-                    _ => RowKind::Sketch,
-                };
-                // A feature the rebuild failed (P3.1): red, with the reason as its tooltip. A
-                // sketch in error gets its reason too (P3.2 judge).
-                let pending = pending_derived == Some(f.id);
-                let failed = cache
-                    .errors
-                    .get(&f.id)
-                    .cloned()
-                    .filter(|_| !pending)
-                    .or_else(|| {
-                        f.sketch()?;
-                        if faces_lost.0.contains(&f.id) {
-                            Some(tr("shell-doc-sketch-face-gone"))
-                        } else if errors.0.contains(&f.id) {
-                            Some(tr("shell-doc-sketch-errors"))
-                        } else {
-                            None
-                        }
-                    });
-                (
-                    f.id,
-                    f.name.clone(),
-                    pending || (f.is_valid() && !errors.0.contains(&f.id) && failed.is_none()),
-                    under.0.contains(&f.id),
-                    kind,
-                    failed,
-                    // A Plane's eye only (#66); a sketch's also follows the features using it.
-                    if kind == RowKind::Plane {
-                        visibility.get(&f.id) != Some(&false)
+    let features: Vec<FeatureRowKey> = all
+        .iter()
+        // A sketch with conflicting constraints shows as an error too (`screens/15`).
+        .map(|f| {
+            let kind = match row_kind(&f.kind) {
+                RowKind::Sketch if cache.hidden_sketches.contains(&f.id) => RowKind::ConsumedSketch,
+                RowKind::Sketch if cache.preview_sketches.contains(&f.id) => {
+                    RowKind::ReferencedSketch
+                }
+                k => k,
+            };
+            // A feature the rebuild failed (P3.1): red, with the reason as its tooltip. A
+            // sketch in error gets its reason too (P3.2 judge).
+            let pending = pending_derived == Some(f.id);
+            let failed = cache
+                .errors
+                .get(&f.id)
+                .cloned()
+                .filter(|_| !pending)
+                .or_else(|| {
+                    f.sketch()?;
+                    if faces_lost.0.contains(&f.id) {
+                        Some(tr("shell-doc-sketch-face-gone"))
+                    } else if errors.0.contains(&f.id) {
+                        Some(tr("shell-doc-sketch-errors"))
                     } else {
-                        !cache.hidden_sketches.contains(&f.id)
-                    },
-                    cache.warnings.get(&f.id).cloned(),
-                    match &f.kind {
-                        cadrs_core::FeatureKind::Variable(v) => Some(v.display(&units.0)),
-                        _ => None,
-                    },
-                )
-            })
-            .collect();
+                        None
+                    }
+                });
+            (
+                f.id,
+                f.name.clone(),
+                pending || (f.is_valid() && !errors.0.contains(&f.id) && failed.is_none()),
+                under.0.contains(&f.id),
+                kind,
+                failed,
+                // A Plane's eye only (#66); a sketch's also follows the features using it.
+                if kind == RowKind::Plane {
+                    visibility.get(&f.id) != Some(&false)
+                } else {
+                    !cache.hidden_sketches.contains(&f.id)
+                },
+                cache.warnings.get(&f.id).cloned(),
+                match &f.kind {
+                    cadrs_core::FeatureKind::Variable(v) => Some(v.display(&units.0)),
+                    _ => None,
+                },
+            )
+        })
+        .collect();
     let editing = session
         .as_ref()
         .map(|s| s.feature)
@@ -4216,9 +4269,10 @@ fn rebuild_feature_rows(
                 }
             }
             let edited = editing == Some(*id);
-            // P3I.9: a Form hidden with its eye is greyed out too (`form-12.png`).
+            // P3I.9: a Form hidden with its eye is greyed out too (`form-12.png`), and a Plane
+            // feature hidden with its eye (or H), as a hidden default plane's row is.
             let consumed = *kind == RowKind::ConsumedSketch
-                || (*kind == RowKind::Sm9("sheet-metal-form") && !*shown);
+                || (matches!(*kind, RowKind::Sm9("sheet-metal-form") | RowKind::Plane) && !*shown);
             let fg = if inactive {
                 // Rolled back or suppressed (P3.9): grey, whatever else it is.
                 crate::feature_list::ROLLED_BACK_FG
@@ -4227,8 +4281,8 @@ fn rebuild_feature_rows(
             } else if warning.is_some() {
                 FEATURE_WARNING
             } else if consumed {
-                // Greyed out: used by an extrude (`screens/24`).
-                Color::srgb_u8(0xa6, 0xa6, 0xa6)
+                // Greyed out: hidden, or used by an extrude (`screens/24`).
+                crate::feature_list::hidden_fg(&t)
             } else {
                 t.foreground
             };
@@ -4312,7 +4366,7 @@ fn rebuild_feature_rows(
                         } else if warning.is_some() && !edited {
                             FEATURE_WARNING
                         } else if consumed {
-                            Color::srgb_u8(0xc4, 0xc4, 0xc4)
+                            crate::feature_list::hidden_icon(&t)
                         } else {
                             t.muted_foreground
                         })
@@ -5114,7 +5168,7 @@ fn on_feature_context_menu(
         } else {
             MenuItem::new("feature-suppress", tr("common-suppress")).disabled(editing || in_dialog)
         })
-        // Suppression driven by a variable (IR5.5) or a configuration (out of scope).
+        // Suppression driven by a variable (IR5.5) or a configuration.
         .item(
             MenuItem::new(
                 "feature-dynamic-suppression",
@@ -5139,17 +5193,21 @@ fn on_feature_context_menu(
                         .into(),
                     );
                 }
-                items.push(
-                    MenuItem::new(
-                        "feature-suppress-by-configuration",
-                        tr("shell-doc-suppress-by-configuration"),
-                    )
-                    .planned()
-                    .into(),
-                );
+                if let Some(el) = el {
+                    items.push(
+                        crate::configuration_ui::suppress_entry(el, row.0)
+                            .disabled(in_dialog)
+                            .into(),
+                    );
+                }
                 items
             }),
-        )
+        );
+    // Configure ▸ its fields (Configurations, `crate::configuration_ui`).
+    if let Some(item) = el.and_then(|el| crate::configuration_ui::configure_entries(el, row.0)) {
+        menu = menu.item(item.disabled(in_dialog));
+    }
+    menu = menu
         .separator()
         .item(
             MenuItem::new("feature-add-comment", tr("common-add-comment"))
@@ -5160,6 +5218,11 @@ fn on_feature_context_menu(
         .item(MenuItem::new(
             "feature-zoom-to",
             tr("common-zoom-to-selection"),
+        ))
+        // Every feature of this one's type (every sketch…), to hide or show them with H.
+        .item(MenuItem::new(
+            "feature-select-same-type",
+            tr("shell-doc-select-same-type"),
         ))
         .separator()
         .item(MenuItem::new(
@@ -5255,6 +5318,9 @@ fn on_feature_menu_action(
         "feature-zoom-to" => {
             commands.queue(move |world: &mut World| crate::feature_menu::zoom_to_feature(world, id))
         }
+        "feature-select-same-type" => {
+            commands.queue(move |world: &mut World| crate::hide_key::select_same_type(world, id))
+        }
         // P3E.3a (IR5.5): a section by the feature's plane (a plane feature, a sketch).
         "feature-section-view" => commands
             .queue(move |world: &mut World| crate::section_view::open_for_feature(world, id)),
@@ -5328,6 +5394,15 @@ fn on_feature_menu_action(
         }
         "feature-remove-suppression-variable" => {
             commands.queue(move |world: &mut World| crate::suppress_variable::remove(world, id))
+        }
+        // Configurations: Configure ▸ a field, Dynamic suppression ▸ Suppress by configuration.
+        s if s.starts_with("feature-configure-")
+            || s.starts_with("feature-suppress-by-configuration") =>
+        {
+            let item = s.to_string();
+            commands.queue(move |world: &mut World| {
+                crate::configuration_ui::configure_action(world, id, &item)
+            })
         }
         "feature-unsuppress" => commands
             .queue(move |world: &mut World| crate::feature_list::set_suppressed(world, id, false)),

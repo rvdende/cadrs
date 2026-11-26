@@ -20,8 +20,6 @@
 //! only when it lies on both surfaces, so an intersection the engine got wrong can't make a
 //! valid body fail.
 
-use rayon::prelude::*;
-
 use super::bvh::Bvh;
 use super::classify::{
     InFace, PolyBoxes, face_polygons, in_face_boxed, periodic_candidates_boxed, poly_boxes,
@@ -138,17 +136,12 @@ pub(crate) fn face_crossings_in(
     }
     let polys: &[Option<Vec<Vec<P2>>>] = polys;
     // Their boxes, for the many points tested against each ([`in_face_boxed`]).
-    // (On the threads where there are pairs enough to be worth starting them.)
-    let threads = super::par::threads_for_some(pairs.len());
+    // (On the threads where the pairs take long enough to be worth them: see `par`.)
     let boxes_of = |fi: usize| match polys.get(fi).and_then(|p| p.as_deref()) {
         Some(p) if paired[fi] => poly_boxes(p, &b.faces[fi].surf),
         _ => Vec::new(),
     };
-    let pboxes: Vec<PolyBoxes> = if threads {
-        (0..n).into_par_iter().map(boxes_of).collect()
-    } else {
-        (0..n).map(boxes_of).collect()
-    };
+    let pboxes: Vec<PolyBoxes> = (0..n).map(boxes_of).collect();
     // Edge `e` against face `y`'s surface over [t0, t1] comes up from each of e's faces paired
     // with y: its roots once.
     let roots: Roots = std::sync::Mutex::new(std::collections::HashMap::new());
@@ -165,11 +158,7 @@ pub(crate) fn face_crossings_in(
             p.x, p.y, p.z
         ))
     };
-    if threads {
-        pairs.par_iter().filter_map(one).collect()
-    } else {
-        pairs.iter().filter_map(one).collect()
-    }
+    super::par::map(&pairs, one).into_iter().flatten().collect()
 }
 
 /// The uv box of a face's polygons.

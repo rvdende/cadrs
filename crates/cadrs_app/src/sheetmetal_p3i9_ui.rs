@@ -1563,10 +1563,16 @@ fn sync_dialog(
     cache: Res<PartCache>,
     focus: Res<InputFocus>,
     q_edit: Query<&cadrs_ui::NumberFieldEdit>,
-    mut q_lists: Query<(&Sm9Role, &mut SelectionListState)>,
+    mut q_lists: Query<
+        (&Sm9Role, &mut SelectionListState),
+        Without<cadrs_ui::node_graph::StaticCopy>,
+    >,
     mut q_numbers: Query<
         (Entity, &Sm9Role, &mut NumberFieldState, Option<&Tooltip>),
-        Without<SelectionListState>,
+        (
+            Without<SelectionListState>,
+            Without<cadrs_ui::node_graph::StaticCopy>,
+        ),
     >,
     mut commands: Commands,
 ) {

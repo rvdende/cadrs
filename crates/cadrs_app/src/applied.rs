@@ -198,6 +198,8 @@ impl AppliedKind {
 /// The selection field that takes the viewport's picks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppliedField {
+    /// None: no field takes picks (a copy of the dialog shown for looks, the node view's).
+    Idle,
     /// Entities to fillet or chamfer.
     Entities,
     /// A chamfer's direction overrides.
@@ -214,11 +216,12 @@ pub enum AppliedField {
     Side2,
     /// P3.7: a Plane's entities.
     PlaneEntities,
-    /// A Sweep's faces and sketch regions, its path, and the direction Lock profile direction
-    /// keeps.
+    /// A Sweep's profile (faces and sketch regions, or a surface's edges and sketch curves), its
+    /// path, the direction Lock profile direction keeps and the faces Lock profile faces keeps.
     Profile,
     Path,
     LockDirection,
+    LockFaces,
     /// A Loft's profiles.
     Profiles,
     /// P3.11: a Loft's Normal direction / Tangent direction conditions' directions.
@@ -337,6 +340,7 @@ impl AppliedSession {
     pub fn pick_filter(&self) -> PickFilter {
         let none = PickFilter {
             origin: false,
+            origin_axes: false,
             planes: [false; 3],
             faces: false,
             planar_only: false,
@@ -394,10 +398,17 @@ impl AppliedSession {
                 skip_op: None,
                 ..none
             },
+            // Edges and sketch curves for a surface's profile.
             AppliedField::Profile => PickFilter {
                 faces: true,
                 planar_only: true,
                 regions: true,
+                edges: true,
+                sketch_curves: true,
+                ..none
+            },
+            AppliedField::LockFaces => PickFilter {
+                faces: true,
                 ..none
             },
             AppliedField::Path => PickFilter {
@@ -462,6 +473,7 @@ impl AppliedSession {
             },
             AppliedField::PatternAxis => PickFilter {
                 origin: true,
+                origin_axes: true,
                 faces: true,
                 edges: true,
                 sketch_curves: true,
@@ -584,6 +596,7 @@ impl AppliedSession {
             },
             AppliedField::TransformAxis => PickFilter {
                 origin: true,
+                origin_axes: true,
                 faces: true,
                 edges: true,
                 sketch_curves: true,
@@ -649,6 +662,7 @@ impl AppliedSession {
             },
             AppliedField::GearShaft | AppliedField::GearMateShaft => PickFilter {
                 origin: true,
+                origin_axes: true,
                 faces: true,
                 edges: true,
                 sketch_curves: true,

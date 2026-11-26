@@ -673,11 +673,7 @@ fn boolean_footer(f: &mut ChildSpawner, t: &Theme) {
     ))
     .entry::<Node>()
     .and_modify(|mut n| n.margin = UiRect::right(Val::Px(4.0)));
-    f.spawn((
-        Name::new("boolean-help"),
-        cadrs_ui::icon("help-filled", 14.0, Color::srgb_u8(0xa8, 0xa8, 0xa8)),
-        Tooltip::new(tr("common-help")),
-    ));
+    f.spawn(crate::help::help_icon("boolean-help", "boolean"));
 }
 
 /// The Boolean dialog's Final button.
@@ -725,7 +721,10 @@ fn sync_boolean_dialog(
     theme: Res<Theme>,
     q_area: Query<Entity, With<ViewportArea>>,
     mut q_dialog: Query<(Entity, &BuiltFor, &mut FeatureDialogState), With<BooleanDialog>>,
-    mut q_lists: Query<(&ListRole, &mut SelectionListState)>,
+    mut q_lists: Query<
+        (&ListRole, &mut SelectionListState),
+        Without<cadrs_ui::node_graph::StaticCopy>,
+    >,
     mut commands: Commands,
 ) {
     let (Some(doc), Some(s)) = (doc, session) else {

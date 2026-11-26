@@ -60,6 +60,31 @@ pub trait Command: fmt::Debug + Send + Sync + 'static {
     fn apply(&self, doc: &mut Document) -> Result<(), CommandError>;
 }
 
+/// Several commands as one undo step (a script's several edits, a menu item that adds an input
+/// and wires it), applied in order; the first that fails fails them all (the history puts the
+/// document back). `scope` must hold every command's ([`Scope::Whole`] when they differ).
+#[derive(Debug)]
+pub struct Batch {
+    pub label: String,
+    pub scope: Scope,
+    pub commands: Vec<Box<dyn Command>>,
+}
+
+impl Command for Batch {
+    fn label(&self) -> String {
+        self.label.clone()
+    }
+    fn scope(&self) -> Scope {
+        self.scope
+    }
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        for c in &self.commands {
+            c.apply(doc)?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum Snapshot {
     Document(Box<Document>),
@@ -226,11 +251,15 @@ impl History {
             crate::parts::take_deferred();
             return Err(e);
         }
+        // Configured fields edited go into the active configuration's row.
+        crate::configuration::after_command(doc);
         // The Variable Studios' variables reach every Part Studio and Assembly first, so the
         // Derived features below copy their sources with the new values.
         crate::variable_studio::propagate(doc, Some(scope));
         // P3G.4: Derived features that follow a tab of this document live.
         crate::derived::refresh(doc);
+        // Assembly instances' configured copies of their Part Studios.
+        crate::configuration::refresh_copies(doc);
         drop(deferring);
         let after = Snapshot::take(doc, scope)?;
         if after == before {
@@ -285,6 +314,7 @@ impl History {
         crate::parts::note_regenerated(doc);
         crate::variable_studio::propagate(doc, None);
         crate::derived::refresh(doc);
+        crate::configuration::refresh_copies(doc);
         let label = entry.label.clone();
         self.redo.push(entry);
         self.bump();
@@ -298,6 +328,7 @@ impl History {
         crate::parts::note_regenerated(doc);
         crate::variable_studio::propagate(doc, None);
         crate::derived::refresh(doc);
+        crate::configuration::refresh_copies(doc);
         let label = entry.label.clone();
         self.undo.push(entry);
         self.bump();
@@ -430,6 +461,7 @@ impl History {
         if let Some(&first) = idx.first() {
             self.undo[first].before.restore(doc);
             crate::derived::refresh(doc);
+            crate::configuration::refresh_copies(doc);
         }
         for i in idx.iter().rev() {
             self.undo.remove(*i);

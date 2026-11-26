@@ -194,6 +194,7 @@ pub(crate) fn axis_pick(cache: &PartCache, a: &AxisRef) -> Option<Pick> {
             .find(|p| p.solid.face(&f.face).is_some())
             .map(|p| Pick::Face(p.id, f.face)),
         AxisRef::Connector(c) => crate::pattern::connector_pick(c),
+        AxisRef::Origin(o) => Some(Pick::OriginAxis(*o)),
     }
 }
 
@@ -238,6 +239,7 @@ pub fn references(kind: &FeatureKind, cache: &PartCache) -> Vec<Pick> {
             AxisRef::Edge(e) => edge(e),
             AxisRef::Face(f) => face(f),
             AxisRef::Connector(c) => crate::pattern::connector_pick(c),
+            AxisRef::Origin(o) => Some(Pick::OriginAxis(*o)),
         })),
         TransformType::ScaleUniformly => out.extend(
             x.scale_point

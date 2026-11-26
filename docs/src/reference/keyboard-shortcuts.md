@@ -15,6 +15,7 @@ In cadrs, **Shift+/** (or the app menu's **Keyboard shortcuts**) opens this list
 | <kbd>Ctrl</kbd>+<kbd>=</kbd> or <kbd>Ctrl</kbd>+<kbd>-</kbd> | UI scale up or down |
 | <kbd>Delete</kbd> or <kbd>Backspace</kbd> | Delete selection |
 | <kbd>Shift</kbd>+<kbd>/</kbd> | Keyboard shortcuts |
+| <kbd>F1</kbd> | Documentation |
 | <kbd>\[</kbd> | Measure |
 | <kbd>Ctrl</kbd>+<kbd>Y</kbd> or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> | Redo |
 | <kbd>Alt</kbd>+<kbd>C</kbd> | Search tools |
@@ -29,6 +30,7 @@ In cadrs, **Shift+/** (or the app menu's **Keyboard shortcuts**) opens this list
 | <kbd>Shift</kbd>+<kbd>E</kbd> | Extrude |
 | <kbd>Shift</kbd>+<kbd>F</kbd> | Fillet |
 | <kbd>Shift</kbd>+<kbd>W</kbd> | Revolve |
+| <kbd>H</kbd> | Hide or show the selection |
 | <kbd>Shift</kbd>+<kbd>S</kbd> | Sketch |
 | <kbd>K</kbd> | Show or hide mate connectors |
 | <kbd>Ctrl</kbd>+<kbd>M</kbd> | Mate connector |

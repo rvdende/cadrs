@@ -24,7 +24,6 @@ use bevy::camera::ScalingMode;
 use bevy::camera::visibility::RenderLayers;
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::input::keyboard::KeyboardInput;
-use bevy::input::mouse::MouseScrollUnit;
 use bevy::input_focus::InputFocus;
 use bevy::picking::hover::{HoverMap, Hovered};
 use bevy::picking::pointer::{PointerAction, PointerButton, PointerId, PointerInput};
@@ -38,6 +37,7 @@ use cadrs_ui::{FinishAnimations, RenderSurface, Selected, Theme};
 use crate::camera::{self, StandardView, Turn, ViewState, ease_in_out, ease_out, ray_square};
 use crate::preferences_ui::LocalPreferences;
 use crate::{ActiveDocument, AppState};
+use cadrs_core::document::OriginAxis;
 use cadrs_core::preferences::{GridStyle, OriginStyle};
 
 pub struct ViewportPlugin;
@@ -70,6 +70,7 @@ impl Plugin for ViewportPlugin {
             .init_resource::<ViewportRect>()
             .init_resource::<DialogInset>()
             .init_resource::<PlaneHighlight>()
+            .init_resource::<OriginAxesWanted>()
             .init_resource::<HoverOverride>()
             .init_resource::<ExtraHighlight>()
             .init_resource::<PickFilterOverride>()
@@ -126,6 +127,7 @@ impl Plugin for ViewportPlugin {
                     sync_grid,
                     fit_grid,
                     sync_plane_rows,
+                    sync_view_hovered_row,
                 )
                     .after(apply_view_to_camera)
                     .run_if(in_state(AppState::Document)),
@@ -571,6 +573,8 @@ pub fn plane_label(features: &[cadrs_core::Feature], p: PlaneRef) -> String {
 pub enum Pick {
     Plane(PlaneKind),
     Origin,
+    /// One of the origin's axes, picked as an axis (a revolve's, a circular pattern's: #316).
+    OriginAxis(OriginAxis),
     /// A feature in the feature list (a sketch).
     Feature(FeatureId),
     /// A face of a part.
@@ -598,6 +602,14 @@ impl Pick {
     pub fn part(&self) -> Option<PartId> {
         match *self {
             Pick::Face(f, _) | Pick::Edge(f, _) | Pick::Vertex(f, _) | Pick::Part(f) => Some(f),
+            _ => None,
+        }
+    }
+
+    /// The sketch it is in (a sketch's regions, curves and points).
+    pub fn sketch(&self) -> Option<FeatureId> {
+        match *self {
+            Pick::Region(f, _) | Pick::SketchCurve(f, _) | Pick::SketchPoint(f, _) => Some(f),
             _ => None,
         }
     }
@@ -1589,10 +1601,7 @@ fn viewport_pointer(
             }
             PointerAction::Scroll { unit, y, .. } => {
                 if over && !space_mouse_wheel.suppress_legacy_wheel() {
-                    let lines = match unit {
-                        MouseScrollUnit::Line => y,
-                        MouseScrollUnit::Pixel => y / 40.0,
-                    };
+                    let lines = crate::preferences_ui::wheel_zoom_lines(Some(&prefs), unit, y);
                     view.animation = None;
                     // Walking, the wheel changes the lens (issue #97).
                     if walking.as_deref().is_some_and(|w| w.on) {
@@ -1652,6 +1661,7 @@ pub fn pick_filter(
         use crate::extrude::ExtrudeField;
         let none = PickFilter {
             origin: false,
+            origin_axes: false,
             planes: [false; 3],
             faces: false,
             planar_only: false,
@@ -1700,6 +1710,7 @@ pub fn pick_filter(
             // A revolve axis: a sketch line (or circle), a part edge, a curved face, a mate
             // connector's Z (P3.8).
             ExtrudeField::Axis => PickFilter {
+                origin_axes: true,
                 faces: true,
                 edges: true,
                 sketch_curves: true,
@@ -1847,13 +1858,14 @@ fn view_shortcuts(
     mut planes: ResMut<PlanesVisible>,
     inset: Res<DialogInset>,
     mut commands: Commands,
-    (cache, asm_parts, pcb_scene, eda2d, layout, in_sketch): (
+    (cache, asm_parts, pcb_scene, eda2d, layout, in_sketch, over_nodes): (
         Res<crate::parts::PartCache>,
         Res<crate::assembly::AssemblyParts>,
         Option<Res<crate::pcb::view::PcbScene>>,
         Res<crate::eda::Eda2d>,
         Res<crate::eda::layout_tools::LayoutState>,
         Option<Res<crate::sketch_tools::SketchSelection>>,
+        Option<Res<crate::node_view::PointerOverNodes>>,
     ),
 ) {
     if kind.is_flat() || eda2d.flat() {
@@ -1997,6 +2009,8 @@ fn view_shortcuts(
                     view.animate_to(to);
                 }
             }
+            // Over the node view: F fits its nodes (`crate::node_view`), not the 3D view.
+            KeyCode::KeyF if !shift && over_nodes.as_ref().is_some_and(|o| o.0) => {}
             // A board's layout edited in the view: F flips the selected footprint
             // (`crate::eda::layout_tools`).
             KeyCode::KeyF
@@ -2535,6 +2549,7 @@ fn update_hover(
     ),
     mut last: Local<Option<(Vec2, crate::parts::PickFilter, Option<Pick>)>>,
     box_select: Option<Res<crate::assembly::box_select::AssemblyBox>>,
+    mut axes_wanted: ResMut<OriginAxesWanted>,
 ) {
     // A box drag only updates its rectangle. Avoid picking and rebuilding hover tints for
     // every part the pointer crosses; normal hover resumes once the drag ends.
@@ -2555,6 +2570,9 @@ fn update_hover(
         create.as_deref(),
     ));
     let picking = filter.is_some();
+    axes_wanted.set_if_neq(OriginAxesWanted(
+        *kind == ActiveKind::PartStudio && filter.is_some_and(|f| f.origin_axes),
+    ));
     // Zoom to window's box and the section plane's arrow own the pointer: nothing under it
     // highlights (P3E.3a).
     // A board's layout edited in the view owns the pointer too, unless Align waits for a pick.
@@ -2921,26 +2939,88 @@ fn sync_origin(
 pub struct OriginGizmos;
 
 /// How long the origin's axes are drawn, in pixels (the same at any zoom, like the bullseye).
-const ORIGIN_AXIS_PX: f32 = 44.0;
+pub const ORIGIN_AXIS_PX: f32 = 44.0;
+
+/// How near (logical px) the pointer must be to an origin axis to pick it.
+const ORIGIN_AXIS_PICK_PX: f32 = 5.0;
+
+/// The name of one of the origin's axes ("X axis"), as a selection field shows it.
+pub fn origin_axis_name(axis: OriginAxis) -> String {
+    tr(match axis {
+        OriginAxis::X => "shell-doc-origin-x-axis",
+        OriginAxis::Y => "shell-doc-origin-y-axis",
+        OriginAxis::Z => "shell-doc-origin-z-axis",
+    })
+}
+
+/// The end of an origin axis as drawn: [`ORIGIN_AXIS_PX`] from the origin on screen.
+pub fn origin_axis_end(view: &ViewState, axis: OriginAxis) -> Vec3 {
+    let [x, y, z] = axis.dir();
+    let len = ORIGIN_AXIS_PX * view.scale / view.magnification(Vec3::ZERO);
+    Vec3::new(x as f32, y as f32, z as f32) * len
+}
+
+/// The origin axis under a screen offset, if the pointer is on one as drawn (past the bullseye,
+/// which picks the origin itself).
+pub fn pick_origin_axis(view: &ViewState, offset: Vec2) -> Option<OriginAxis> {
+    let o = view.project(Vec3::ZERO);
+    OriginAxis::ALL
+        .into_iter()
+        .filter_map(|axis| {
+            let e = view.project(origin_axis_end(view, axis));
+            let d = e - o;
+            let len2 = d.length_squared();
+            // An axis seen end-on is a dot: the origin's.
+            if len2 < 16.0 {
+                return None;
+            }
+            let t = ((offset - o).dot(d) / len2).clamp(0.0, 1.0);
+            let dist = offset.distance(o + d * t);
+            (t * len2.sqrt() > 6.0 && dist <= ORIGIN_AXIS_PICK_PX).then_some((dist, axis))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, axis)| axis)
+}
+
+/// Whether the active field takes an axis (#316): then the origin's axes are drawn and picked
+/// whatever the origin's style. Kept up to date by [`update_hover`].
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OriginAxesWanted(pub bool);
 
 /// Origin › Axes: X, Y and Z from the origin in red, green and blue, a fixed length on screen.
+/// Also while a field takes an axis (#316), and an axis hovered or selected as one: in the
+/// highlight or selection colour.
+#[allow(clippy::too_many_arguments)]
 fn draw_origin_axes(
     prefs: Res<LocalPreferences>,
     view: Res<ViewportView>,
     kind: Res<ActiveKind>,
+    wanted: Res<OriginAxesWanted>,
+    highlight: Res<PlaneHighlight>,
+    selection: Res<Selection>,
+    theme: Res<Theme>,
     mut gizmos: Gizmos<OriginGizmos>,
 ) {
-    if prefs.0.origin != OriginStyle::Axes || kind.is_flat() {
+    if kind.is_flat() {
         return;
     }
-    let v = &view.view;
-    let len = ORIGIN_AXIS_PX * v.scale / v.magnification(Vec3::ZERO);
-    for (dir, color) in [
-        (Vec3::X, Color::srgb_u8(0xe5, 0x48, 0x4d)),
-        (Vec3::Y, Color::srgb_u8(0x30, 0xa4, 0x6c)),
-        (Vec3::Z, Color::srgb_u8(0x3e, 0x63, 0xdd)),
+    let all = prefs.0.origin == OriginStyle::Axes || wanted.0;
+    for (axis, color) in [
+        (OriginAxis::X, Color::srgb_u8(0xe5, 0x48, 0x4d)),
+        (OriginAxis::Y, Color::srgb_u8(0x30, 0xa4, 0x6c)),
+        (OriginAxis::Z, Color::srgb_u8(0x3e, 0x63, 0xdd)),
     ] {
-        gizmos.line(Vec3::ZERO, dir * len, color);
+        let pick = Pick::OriginAxis(axis);
+        let color = if highlight.is_hovered(pick) {
+            theme.highlight
+        } else if selection.contains(pick) {
+            theme.selection_3d
+        } else if all {
+            color
+        } else {
+            continue;
+        };
+        gizmos.line(Vec3::ZERO, origin_axis_end(&view.view, axis), color);
     }
 }
 
@@ -2965,7 +3045,7 @@ fn sync_plane_rows(
     mut commands: Commands,
 ) {
     // Hidden planes (P) grey out their rows, text and icon (`intro-to-sketching/ex1-step1.png`).
-    let hidden_fg = Color::srgb_u8(0xb4, 0xb4, 0xb4);
+    let hidden_fg = crate::feature_list::hidden_fg(&theme);
     for (e, row, has, visuals) in &mut q {
         // In an assembly, an instance's row is highlighted while a face, edge or vertex of it
         // is selected (P3B.1, `intro-to-assemblies/ex1-step5.png`).
@@ -2993,7 +3073,11 @@ fn sync_plane_rows(
             && v.foreground.normal != fg
         {
             v.foreground = cadrs_ui::StateColors::new(fg, fg, fg, theme.disabled_foreground);
-            let icon_fg = if shown { theme.feature_icon } else { hidden_fg };
+            let icon_fg = if shown {
+                theme.feature_icon
+            } else {
+                crate::feature_list::hidden_icon(&theme)
+            };
             for d in children.iter_descendants(e) {
                 // The eye toggle keeps its own colour.
                 if q_eye.contains(d) || q_parent.get(d).is_ok_and(|p| q_eye.contains(p.parent())) {
@@ -3003,6 +3087,50 @@ fn sync_plane_rows(
                     img.color = icon_fg;
                 }
             }
+        }
+    }
+}
+
+/// Marks a feature-list row shown as selected because what its feature made is under the
+/// pointer in the view (its [`cadrs_ui::ForceState`] is ours to take away).
+#[derive(Component)]
+struct ViewHoveredRow;
+
+/// What is under the pointer in the view (a face, an edge, a vertex, a sketch's curve, point or
+/// region, a plane) lights up the row of the feature a double click would edit (the one that
+/// made it, [`feature_of`]), in the selected rows' blue.
+#[allow(clippy::type_complexity)]
+fn sync_view_hovered_row(
+    highlight: Res<PlaneHighlight>,
+    kind: Res<ActiveKind>,
+    doc: Option<Res<crate::ActiveDocument>>,
+    q: Query<(
+        Entity,
+        &crate::document::FeatureRow,
+        Has<ViewHoveredRow>,
+        Has<cadrs_ui::ForceState>,
+    )>,
+    q_new: Query<(), Added<crate::document::FeatureRow>>,
+    mut commands: Commands,
+) {
+    if !highlight.is_changed() && q_new.is_empty() {
+        return;
+    }
+    let target = highlight
+        .viewport
+        .filter(|_| *kind == ActiveKind::PartStudio)
+        .and_then(|p| feature_of(doc.as_ref()?.active_element()?.features(), p));
+    for (e, row, ours, forced) in &q {
+        let want = target == Some(row.0);
+        if want && !forced {
+            commands.entity(e).try_insert((
+                cadrs_ui::ForceState(cadrs_ui::VisualState::Selected),
+                ViewHoveredRow,
+            ));
+        } else if !want && ours {
+            commands
+                .entity(e)
+                .try_remove::<(cadrs_ui::ForceState, ViewHoveredRow)>();
         }
     }
 }
@@ -3802,6 +3930,34 @@ mod tests {
             assert!((m.col(0) - a).length() < 1e-4, "{m:?}");
             assert!((m.col(1) - b).length() < 1e-4, "{m:?}");
         }
+    }
+
+    /// #316: an origin axis is picked along its drawn length, past the bullseye; an axis seen
+    /// end-on isn't.
+    #[test]
+    fn picks_the_origin_axes_as_drawn() {
+        let v = ViewState::default();
+        let o = v.project(Vec3::ZERO);
+        for axis in OriginAxis::ALL {
+            let end = v.project(origin_axis_end(&v, axis));
+            // At most ORIGIN_AXIS_PX long on screen (foreshortened seen at an angle).
+            assert!(end.distance(o) <= ORIGIN_AXIS_PX + 0.5, "{axis:?}");
+            let mid = o.lerp(end, 0.6);
+            assert_eq!(pick_origin_axis(&v, mid), Some(axis));
+            // A few pixels off it still, not beyond.
+            let side = (end - o).perp().normalize();
+            assert_eq!(pick_origin_axis(&v, mid + side * 3.0), Some(axis));
+            assert_eq!(pick_origin_axis(&v, mid + side * 12.0), None);
+        }
+        // The bullseye is the origin's.
+        assert_eq!(pick_origin_axis(&v, o), None);
+        // Seen from the top, Z points at the viewer: only X and Y can be picked.
+        let top = ViewState::standard(StandardView::Top);
+        let o = top.project(Vec3::ZERO);
+        let z = top.project(origin_axis_end(&top, OriginAxis::Z));
+        assert_eq!(pick_origin_axis(&top, o.lerp(z, 0.5)), None);
+        let x = top.project(origin_axis_end(&top, OriginAxis::X));
+        assert_eq!(pick_origin_axis(&top, o.lerp(x, 0.6)), Some(OriginAxis::X));
     }
 
     #[test]

@@ -30,6 +30,9 @@ pub fn icons() -> Vec<Def> {
         def("column-add", Line, "Add column", column_add),
         def("cut-list", Line, "Cut list", cut_list),
         def("configurations", Line, "Configurations", configurations),
+        def("node-graph", Line, "Node view", node_graph),
+        def("zoom-fit", Line, "Fit all", zoom_fit),
+        def("auto-arrange", Line, "Auto arrange", auto_arrange),
         def("variables", Line, "Variables", variables),
         def("appearance", Line, "Appearances", appearance),
         def("properties", Line, "Properties", properties),
@@ -52,6 +55,7 @@ pub fn icons() -> Vec<Def> {
         def("chip", Line, "Chip", chip),
         def("tool", Line, "Tool", tool),
         def("books", Line, "Books", books),
+        def("docs", Line, "Documentation", docs),
         def("idea", Line, "Explore", idea),
         def("keyboard", Line, "Keyboard shortcuts", keyboard),
         def("interface", Line, "Interface preferences", interface),
@@ -304,6 +308,42 @@ fn folder_shape() -> Vec<String> {
         a(x0, y1 - R, R, 1)
     );
     els![path(&d, "", "")]
+}
+
+/// The feature list as a node graph: two nodes (rounded boxes, an output socket on the first's
+/// right edge, an input socket on the second's left) and the wire between them, which is the
+/// idea, in accent.
+fn node_graph() -> Vec<String> {
+    els![
+        rect(2.5, 4.0, 7.5, 7.0, 1.75, "", ""),
+        rect(14.0, 13.0, 7.5, 7.0, 1.75, "", ""),
+        acc(path("M10 7.5 C13.5 7.5 10.5 16.5 14 16.5", "", "")),
+        circle(10.0, 7.5, 1.25, INK, r#"stroke="none""#),
+        circle(14.0, 16.5, 1.25, INK, r#"stroke="none""#),
+    ]
+}
+
+/// Auto arrange: a column of one node and a column of two, lined up, the links between them
+/// (what arranging tidies) in accent.
+fn auto_arrange() -> Vec<String> {
+    els![
+        rect(2.5, 9.0, 6.5, 6.0, 1.5, "", ""),
+        rect(15.0, 3.5, 6.5, 6.0, 1.5, "", ""),
+        rect(15.0, 14.5, 6.5, 6.0, 1.5, "", ""),
+        acc(path("M9 12 C12 12 12 6.5 15 6.5", "", "")),
+        acc(path("M9 12 C12 12 12 17.5 15 17.5", "", "")),
+    ]
+}
+
+/// Fit all: four corner brackets round a box, which is what is framed (accent).
+fn zoom_fit() -> Vec<String> {
+    els![
+        path("M3.5 8 V3.5 H8", "", ""),
+        path("M16 3.5 H20.5 V8", "", ""),
+        path("M20.5 16 V20.5 H16", "", ""),
+        path("M8 20.5 H3.5 V16", "", ""),
+        acc(rect(8.0, 8.0, 8.0, 8.0, 1.5, "", "")),
+    ]
 }
 
 fn folder() -> Vec<String> {
@@ -666,6 +706,19 @@ fn books() -> Vec<String> {
             r#"transform="rotate(-14 15.85 20.1)""#
         )),
         path("M3.5 8 H8 M8 10.5 H12.5", "", ""),
+    ]
+}
+
+/// An open book, its left page written on: the user documentation.
+fn docs() -> Vec<String> {
+    els![
+        path(
+            "M12 6.5 C10 5 7 4.5 3.5 5 V18.5 C7 18 10 18.5 12 20 C14 18.5 17 18 20.5 18.5 V5 \
+             C17 4.5 14 5 12 6.5 Z M12 6.5 V20",
+            "",
+            ""
+        ),
+        acc(path("M6 9 H9.5 M6 12 H9.5 M6 15 H8.5", "", "")),
     ]
 }
 
