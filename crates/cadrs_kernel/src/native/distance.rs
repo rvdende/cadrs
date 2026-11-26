@@ -669,6 +669,64 @@ const SEEDS_PER_PAIR: usize = 32;
 type Seed = (P3, P3, X, X);
 
 /// One side's mesh pieces, each with the index of the exact piece it lies on, and their tree.
+/// A body's mesh for the distance search ([`super::tess::mesh_body`]), kept by what it is made
+/// of (each face's surface, sense and loops' p-curves over their ranges, each edge's curve
+/// over its range) and the deflection: a query asked both ways round, or of a body in several
+/// queries, meshes it once (each query turns the bodies into a frame of their own, a new copy).
+fn mesh_kept(
+    b: &Body,
+    defl: f64,
+) -> std::sync::Arc<(Vec<super::tess::FaceMesh>, super::tess::EdgeSamples)> {
+    type Mesh = std::sync::Arc<(Vec<super::tess::FaceMesh>, super::tess::EdgeSamples)>;
+    const KEPT: usize = 32;
+    #[derive(Default)]
+    struct Kept {
+        new: rustc_hash::FxHashMap<u128, Mesh>,
+        old: rustc_hash::FxHashMap<u128, Mesh>,
+    }
+    static KEPT_MESHES: std::sync::LazyLock<std::sync::Mutex<Kept>> =
+        std::sync::LazyLock::new(Default::default);
+    let mut h = super::fingerprint::Key128::new();
+    h.f64s(&[defl, b.faces.len() as f64, b.edges.len() as f64]);
+    for f in &b.faces {
+        h.surface(&f.surf);
+        h.f64s(&[if f.sense { 1.0 } else { -1.0 }, f.loops.len() as f64]);
+        for c in f.loops.iter().flatten() {
+            let e = &b.edges[c.edge];
+            h.curve(&c.pc);
+            h.f64s(&[
+                c.edge as f64,
+                if c.fwd { 1.0 } else { -1.0 },
+                e.t[0],
+                e.t[1],
+            ]);
+        }
+    }
+    for e in &b.edges {
+        h.curve(&e.curve);
+        h.f64s(&[e.t[0], e.t[1], e.v[0] as f64, e.v[1] as f64]);
+    }
+    let key = h.key();
+    {
+        let mut k = KEPT_MESHES.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(m) = k.new.get(&key).cloned() {
+            return m;
+        }
+        if let Some(m) = k.old.remove(&key) {
+            k.new.insert(key, m.clone());
+            return m;
+        }
+    }
+    let m: Mesh = std::sync::Arc::new(super::tess::mesh_body(b, defl, 0.5));
+    let mut k = KEPT_MESHES.lock().unwrap_or_else(|e| e.into_inner());
+    if k.new.len() >= KEPT {
+        let new = std::mem::take(&mut k.new);
+        super::par::discard(std::mem::replace(&mut k.old, new));
+    }
+    k.new.insert(key, m.clone());
+    m
+}
+
 struct MeshSide {
     bits: Vec<(usize, Bit)>,
     tree: Tree,
@@ -681,13 +739,13 @@ impl MeshSide {
         let defl = body.map_or(0.0, |b| (4e-3 * b.bbox().diagonal()).max(10.0 * tol::POINT));
         let meshed = body
             .filter(|_| pieces.iter().any(|p| !matches!(p, Piece::Point { .. })))
-            .map(|b| super::tess::mesh_body(b, defl, 0.5));
+            .map(|b| mesh_kept(b, defl));
         let mut bits = Vec::new();
         for (i, p) in pieces.iter().enumerate() {
             match p {
                 Piece::Point { p, .. } => bits.push((i, Bit::Pt(*p))),
                 Piece::Curve { edge, .. } => {
-                    if let Some((_, es)) = &meshed
+                    if let Some((_, es)) = meshed.as_deref()
                         && let Some((ts, ps)) = es.get(*edge)
                     {
                         for k in 1..ts.len().min(ps.len()) {
@@ -696,7 +754,7 @@ impl MeshSide {
                     }
                 }
                 Piece::Face { face, .. } => {
-                    if let Some((fm, _)) = &meshed
+                    if let Some((fm, _)) = meshed.as_deref()
                         && let Some(m) = fm.get(*face)
                     {
                         for t in &m.indices {
