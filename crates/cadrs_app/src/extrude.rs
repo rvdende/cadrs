@@ -60,6 +60,7 @@ impl Plugin for ExtrudePlugin {
                 )
                     .chain()
                     .after(crate::viewport::apply_view_to_camera)
+                    .after(crate::region_select::RegionSelectSet)
                     .before(crate::parts::PartsSet)
                     .run_if(in_state(AppState::Document)),
             )
@@ -1508,6 +1509,7 @@ fn draw_regions(
     failed: Res<crate::parts::FailedReferences>,
     applied: Option<Res<crate::applied::AppliedSession>>,
     selection: Res<crate::viewport::Selection>,
+    sketch_hover: Res<crate::region_select::HoveredSketchRegion>,
     mut commands: Commands,
 ) {
     // The fill entity goes away with the document.
@@ -1626,7 +1628,8 @@ fn draw_regions(
             if is_selected && !extruding {
                 plain_key.push((sr.sketch, i));
             }
-            let hovered = highlight.is_hovered(Pick::Region(sr.sketch, i as u32));
+            let hovered = highlight.is_hovered(Pick::Region(sr.sketch, i as u32))
+                || sketch_hover.0 == Some((sr.sketch, i));
             if !is_selected && !hovered {
                 continue;
             }
@@ -1639,7 +1642,20 @@ fn draw_regions(
             } else {
                 orange
             };
-            for ring in std::iter::once(&r.outer).chain(&r.holes) {
+            // The edited sketch's regions have no outline: its curves are drawn where the
+            // outline would be, and the two broke each other into specks (#337).
+            // On the curves' own chords (`Region::drawn_rings`), so the outline doesn't cross
+            // an accepted sketch's grey edges either.
+            let edited = sketching.as_ref().is_some_and(|s| s.feature == sr.sketch);
+            let (outer, holes) = if edited {
+                Default::default()
+            } else {
+                r.drawn_rings()
+            };
+            for ring in std::iter::once(&outer)
+                .chain(&holes)
+                .filter(|r| !r.is_empty())
+            {
                 let mut pts: Vec<Vec3> = ring.iter().map(|p| w(*p)).collect();
                 if let Some(f) = pts.first().copied() {
                     pts.push(f);
@@ -1647,7 +1663,7 @@ fn draw_regions(
                 outline.linestrip(pts, color);
             }
             if is_selected {
-                let (verts, idx) = r.triangulate();
+                let (verts, idx) = r.triangulate_drawn();
                 for k in idx {
                     tris.push(w(verts[k as usize]).to_array());
                 }
@@ -1745,11 +1761,13 @@ fn draw_regions(
 }
 
 /// The region under the pointer: a light tint of the hover orange over it (selected or not), so
-/// the area a click would pick shows before the click (#337).
+/// the area a click would pick shows before the click (#337). While sketching, the edited
+/// sketch's region a click would select ([`crate::region_select::HoveredSketchRegion`]).
 #[allow(clippy::too_many_arguments)]
 fn draw_hovered_region(
     cache: Res<PartCache>,
     highlight: Res<PlaneHighlight>,
+    sketch_hover: Res<crate::region_select::HoveredSketchRegion>,
     sketching: Option<Res<crate::sketch::SketchSession>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -1761,18 +1779,23 @@ fn draw_hovered_region(
     if state.as_ref().is_some_and(|(e, ..)| !q.contains(*e)) {
         *state = None;
     }
-    let hovered = match highlight.viewport {
-        Some(Pick::Region(s, i)) => cache
+    let picked = match (highlight.viewport, sketch_hover.0) {
+        (_, Some((s, i))) => Some((s, i)),
+        (Some(Pick::Region(s, i)), _) => Some((s, i as usize)),
+        _ => None,
+    };
+    let hovered = match picked {
+        Some((s, i)) => cache
             .regions
             .iter()
             .filter(|sr| !cache.flat_sketches.contains(&sr.sketch))
             .find(|sr| sr.sketch == s)
-            .and_then(|sr| Some((sr, sr.regions.get(i as usize)?))),
-        _ => None,
+            .and_then(|sr| Some((sr, sr.regions.get(i)?))),
+        None => None,
     };
     let mut tris: Vec<[f32; 3]> = Vec::new();
     if let Some((sr, r)) = hovered {
-        let (verts, idx) = r.triangulate();
+        let (verts, idx) = r.triangulate_drawn();
         for k in idx {
             let q = sr.frame.to_world(verts[k as usize]);
             tris.push([q[0] as f32, q[1] as f32, q[2] as f32]);

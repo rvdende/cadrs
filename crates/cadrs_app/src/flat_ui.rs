@@ -686,10 +686,11 @@ fn draw_picked_regions(
             let at = |q: &cadrs_sketch::Vec2| {
                 Vec3::new((q.x + shift.x) as f32, (q.y + shift.y) as f32, z)
             };
-            for ring in std::iter::once(&r.outer).chain(&r.holes) {
+            let (outer, holes) = r.drawn_rings();
+            for ring in std::iter::once(&outer).chain(&holes) {
                 flat_lines_g.linestrip(ring.iter().chain(ring.first()).map(at), orange);
             }
-            let (v, idx) = r.triangulate();
+            let (v, idx) = r.triangulate_drawn();
             tris.extend(idx.into_iter().map(|k| at(&v[k as usize]).to_array()));
         }
         // The folded part: the outline wrapped onto the walls it lies on.
