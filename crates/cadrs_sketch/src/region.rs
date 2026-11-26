@@ -639,6 +639,45 @@ struct Cycle {
     component: usize,
 }
 
+/// Adds a sketch curve's carrier unless the same one is there already: a curve drawn twice
+/// (two lines between the same points, a circle or arc on top of another, as some DXF files
+/// have them) is one edge. Kept twice, each copy closed a loop of its own, and a hole drawn
+/// twice was two holes on top of each other, which filled each other in (#337).
+fn push_unique(srcs: &mut Vec<(CurveId, Carrier)>, id: CurveId, c: Carrier) {
+    if !srcs.iter().any(|(_, k)| same_carrier(k, &c, 1e-9)) {
+        srcs.push((id, c));
+    }
+}
+
+/// Whether two carriers are the same curve within `tol` (either way round).
+fn same_carrier(k: &Carrier, c: &Carrier, tol: f64) -> bool {
+    match (*k, *c) {
+        (Carrier::Seg(x, y), Carrier::Seg(p, q)) => {
+            (x.distance(p) < tol && y.distance(q) < tol)
+                || (x.distance(q) < tol && y.distance(p) < tol)
+        }
+        (Carrier::Circle(x, r), Carrier::Circle(y, q)) => {
+            x.distance(y) < tol && (r - q).abs() < tol
+        }
+        // Both counter-clockwise: the same ends the other way round are the rest of the circle.
+        (Carrier::Arc(g), Carrier::Arc(h)) => {
+            let (g, h) = (g.to_ccw(), h.to_ccw());
+            g.center.distance(h.center) < tol
+                && (g.radius - h.radius).abs() < tol
+                && g.start().distance(h.start()) < tol
+                && g.end().distance(h.end()) < tol
+                && g.mid().distance(h.mid()) < tol
+        }
+        // (Its major point at either end of the axis.)
+        (Carrier::Ellipse(g), Carrier::Ellipse(h)) => {
+            g.center.distance(h.center) < tol
+                && (g.minor - h.minor).abs() < tol
+                && (g.a.distance(h.a) < tol || g.a.distance(-h.a) < tol)
+        }
+        _ => false,
+    }
+}
+
 /// The regular curves of a sketch as carriers.
 fn carriers(s: &Sketch) -> Vec<(CurveId, Carrier)> {
     let mut srcs: Vec<(CurveId, Carrier)> = Vec::new();
@@ -652,15 +691,7 @@ fn carriers(s: &Sketch) -> Vec<(CurveId, Carrier)> {
                 if a == b || pa.distance(pb) < 1e-12 {
                     continue;
                 }
-                // The same segment twice (two lines between the same points) is one edge.
-                let dup = srcs.iter().any(|(_, k)| {
-                    matches!(*k, Carrier::Seg(x, y)
-                        if (x.distance(pa) < 1e-9 && y.distance(pb) < 1e-9)
-                            || (x.distance(pb) < 1e-9 && y.distance(pa) < 1e-9))
-                });
-                if !dup {
-                    srcs.push((id, Carrier::Seg(pa, pb)));
-                }
+                push_unique(&mut srcs, id, Carrier::Seg(pa, pb));
             }
             CurveKind::Arc { start, end, .. } => {
                 if start == end {
@@ -669,12 +700,12 @@ fn carriers(s: &Sketch) -> Vec<(CurveId, Carrier)> {
                 if let Some(g) = s.arc_geom(id)
                     && g.radius > 1e-12
                 {
-                    srcs.push((id, Carrier::Arc(g)));
+                    push_unique(&mut srcs, id, Carrier::Arc(g));
                 }
             }
             CurveKind::Circle { center, radius } => {
                 if radius > 1e-12 {
-                    srcs.push((id, Carrier::Circle(s.pos(center), radius)));
+                    push_unique(&mut srcs, id, Carrier::Circle(s.pos(center), radius));
                 }
             }
             CurveKind::Spline { .. } => {
@@ -747,30 +778,10 @@ fn carriers(s: &Sketch) -> Vec<(CurveId, Carrier)> {
                 minor,
             } => Carrier::Ellipse(EllipseGeom::new(center, major, minor)),
         };
-        let same = |k: &Carrier| match (*k, c) {
-            (Carrier::Seg(x, y), Carrier::Seg(p, q)) => {
-                (x.distance(p) < 1e-6 && y.distance(q) < 1e-6)
-                    || (x.distance(q) < 1e-6 && y.distance(p) < 1e-6)
-            }
-            (Carrier::Circle(x, r), Carrier::Circle(y, q)) => {
-                x.distance(y) < 1e-6 && (r - q).abs() < 1e-6
-            }
-            (Carrier::Arc(g), Carrier::Arc(h)) => {
-                g.center.distance(h.center) < 1e-6
-                    && (g.radius - h.radius).abs() < 1e-6
-                    && ((g.start().distance(h.start()) < 1e-6 && g.end().distance(h.end()) < 1e-6)
-                        || (g.start().distance(h.end()) < 1e-6
-                            && g.end().distance(h.start()) < 1e-6))
-            }
-            // (Its major point at either end of the axis.)
-            (Carrier::Ellipse(g), Carrier::Ellipse(h)) => {
-                g.center.distance(h.center) < 1e-6
-                    && (g.minor - h.minor).abs() < 1e-6
-                    && (g.a.distance(h.a) < 1e-6 || g.a.distance(-h.a) < 1e-6)
-            }
-            _ => false,
-        };
-        if !srcs[..sketch_count].iter().any(|(_, k)| same(k)) {
+        if !srcs[..sketch_count]
+            .iter()
+            .any(|(_, k)| same_carrier(k, &c, 1e-6))
+        {
             srcs.push((im.id, c));
         }
     }
@@ -1659,6 +1670,48 @@ mod tests {
             region_at(&r, Vec2::new(20.0, 20.0)),
             r.iter().position(|x| x.curves.len() == 1)
         );
+    }
+
+    #[test]
+    fn a_circle_drawn_twice_is_one_hole() {
+        // As a DXF that draws every hole twice (#337): a ring with two holes, each twice.
+        let mut s = Sketch::new();
+        circle(&mut s, 0.0, 0.0, 48.0);
+        for _ in 0..2 {
+            circle(&mut s, 0.0, 0.0, 20.0);
+            circle(&mut s, 35.0, 0.0, 7.5);
+        }
+        let r = regions(&s);
+        // The ring, the middle disc and the small disc: one each.
+        assert_eq!(r.len(), 3);
+        let ring = r
+            .iter()
+            .max_by(|a, b| a.area().total_cmp(&b.area()))
+            .unwrap();
+        assert_eq!(ring.holes.len(), 2);
+        let want = PI * (48.0 * 48.0 - 20.0 * 20.0 - 7.5 * 7.5);
+        assert!((ring.area() - want).abs() < 1e-9, "{}", ring.area());
+        assert!(!ring.contains(Vec2::new(35.0, 0.0)));
+        assert!(ring.contains(Vec2::new(0.0, 30.0)));
+    }
+
+    #[test]
+    fn an_arc_and_the_rest_of_its_circle_are_two_curves() {
+        // The same ends both ways round are the two halves of a circle, not one arc twice.
+        let mut s = Sketch::new();
+        for (a, b) in [((5.0, 0.0), (-5.0, 0.0)), ((-5.0, 0.0), (5.0, 0.0))] {
+            SketchOp::AddArc {
+                center: Vec2::ZERO,
+                start: Vec2::new(a.0, a.1),
+                end: Vec2::new(b.0, b.1),
+                construction: false,
+            }
+            .apply(&mut s)
+            .unwrap();
+        }
+        let r = regions(&s);
+        assert_eq!(r.len(), 1);
+        assert!((r[0].area() - PI * 25.0).abs() < 1e-9);
     }
 
     #[test]

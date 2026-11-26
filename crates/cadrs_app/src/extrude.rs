@@ -56,6 +56,7 @@ impl Plugin for ExtrudePlugin {
                     crate::extrude_dialog::sync_extrude_dialog,
                     region_layers,
                     draw_regions,
+                    draw_hovered_region,
                 )
                     .chain()
                     .after(crate::viewport::apply_view_to_camera)
@@ -1742,6 +1743,117 @@ fn draw_regions(
         }
     }
 }
+
+/// The region under the pointer: a light tint of the hover orange over it (selected or not), so
+/// the area a click would pick shows before the click (#337).
+#[allow(clippy::too_many_arguments)]
+fn draw_hovered_region(
+    cache: Res<PartCache>,
+    highlight: Res<PlaneHighlight>,
+    sketching: Option<Res<crate::sketch::SketchSession>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut state: Local<HoverFillState>,
+    q: Query<(), With<HoverRegionFill>>,
+    mut commands: Commands,
+) {
+    // The entity goes away with the document.
+    if state.as_ref().is_some_and(|(e, ..)| !q.contains(*e)) {
+        *state = None;
+    }
+    let hovered = match highlight.viewport {
+        Some(Pick::Region(s, i)) => cache
+            .regions
+            .iter()
+            .filter(|sr| !cache.flat_sketches.contains(&sr.sketch))
+            .find(|sr| sr.sketch == s)
+            .and_then(|sr| Some((sr, sr.regions.get(i as usize)?))),
+        _ => None,
+    };
+    let mut tris: Vec<[f32; 3]> = Vec::new();
+    if let Some((sr, r)) = hovered {
+        let (verts, idx) = r.triangulate();
+        for k in idx {
+            let q = sr.frame.to_world(verts[k as usize]);
+            tris.push([q[0] as f32, q[1] as f32, q[2] as f32]);
+        }
+    }
+    let layer = if sketching.is_some() {
+        crate::viewport::OVERLAY_LAYER
+    } else {
+        crate::viewport::OCCLUDED_LAYER
+    };
+    // Over the selected regions' wash, so a selected region brightens too.
+    let bias = wash_bias(layer) + 1.0;
+    let key = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for t in &tris {
+            t.map(f32::to_bits).hash(&mut h);
+        }
+        layer.hash(&mut h);
+        h.finish()
+    };
+    if state.as_ref().is_some_and(|(.., k)| *k == key) {
+        return;
+    }
+    // Hidden while nothing is hovered: the occluded camera renders only while something on its
+    // layer shows (`crate::viewport::occluded_camera_when_drawn`).
+    let shown = if tris.is_empty() {
+        Visibility::Hidden
+    } else {
+        Visibility::Inherited
+    };
+    let tint = crate::parts::HOVER.with_alpha(0.35);
+    let mesh = region_fill_mesh(tris);
+    let layers = bevy::camera::visibility::RenderLayers::layer(layer);
+    match state.as_mut() {
+        Some((e, handle, mat, k)) => {
+            commands.entity(*e).insert((shown, layers));
+            if let Some(mut m) = meshes.get_mut(&*handle) {
+                *m = mesh;
+            }
+            if let Some(mut m) = materials.get_mut(&*mat)
+                && m.depth_bias != bias
+            {
+                m.depth_bias = bias;
+            }
+            *k = key;
+        }
+        None => {
+            let handle = meshes.add(mesh);
+            let material = materials.add(StandardMaterial {
+                base_color: tint,
+                unlit: true,
+                cull_mode: None,
+                double_sided: true,
+                alpha_mode: AlphaMode::Blend,
+                depth_bias: bias,
+                ..default()
+            });
+            let e = commands
+                .spawn((
+                    Name::new("hovered-region-fill"),
+                    HoverRegionFill,
+                    Mesh3d(handle.clone()),
+                    MeshMaterial3d(material.clone()),
+                    Transform::IDENTITY,
+                    shown,
+                    layers,
+                    DespawnOnExit(AppState::Document),
+                ))
+                .id();
+            *state = Some((e, handle, material, key));
+        }
+    }
+}
+
+/// The hovered region's tint entity, its mesh and material, and its triangles' hash.
+type HoverFillState = Option<(Entity, Handle<Mesh>, Handle<StandardMaterial>, u64)>;
+
+/// The hovered region's tint ([`draw_hovered_region`]).
+#[derive(Component)]
+struct HoverRegionFill;
 
 /// The wash's depth bias: over the edited sketch's translucent fill while sketching (on the
 /// overlay, which has no parts' depth); otherwise a hair in front of a face the region lies on

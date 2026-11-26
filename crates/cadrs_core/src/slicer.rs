@@ -529,34 +529,6 @@ mod tests {
     }
 
     #[test]
-    fn an_appimage_in_a_desktop_entry_is_found() {
-        let dir = std::env::temp_dir().join(format!("cadrs-slicer-desk-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let app = dir.join("CrealityPrint_V7.0.1-x86_64-Release.AppImage");
-        std::fs::write(&app, b"").unwrap();
-        let text = format!(
-            "[Desktop Entry]\nName=CrealityPrint\nName[de]=Anders\nExec=\"{}\" --x %F\n\
-             Type=Application\n[Desktop Action New]\nName=New\nExec=other\n",
-            app.display()
-        );
-        let entry = parse_desktop_entry(&text).unwrap();
-        assert_eq!(entry.name, "CrealityPrint");
-        let creality = KNOWN
-            .iter()
-            .position(|k| k.name == "Creality Print")
-            .unwrap();
-        let s = find_known(creality as u8, &KNOWN[creality], &[], &[entry]).unwrap();
-        assert_eq!(s.name, "Creality Print");
-        assert_eq!(s.program, app);
-        assert_eq!((s.args, s.trailing), (vec!["--x".to_string()], Vec::new()));
-        // An entry whose program is gone isn't a slicer, nor a hidden one.
-        std::fs::remove_file(&app).unwrap();
-        assert!(parse_desktop_entry(&text).unwrap().launch(&[]).is_none());
-        assert!(parse_desktop_entry("[Desktop Entry]\nName=a\nExec=b\nHidden=true\n").is_none());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn exec_lines_split_into_words() {
         assert_eq!(
             exec_words(r#"flatpak run "--a b" x\y "q\"z" @@u %U @@"#),

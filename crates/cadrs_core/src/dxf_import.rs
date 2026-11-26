@@ -79,7 +79,7 @@ pub struct ImportReport {
     pub splines: usize,
     /// Cubic Béziers (vector drawings' curves).
     pub beziers: usize,
-    /// Texts, fills and degenerate curves left out.
+    /// Texts, fills, degenerate curves and curves drawn twice left out.
     pub skipped: usize,
 }
 
@@ -100,9 +100,34 @@ pub(crate) const JOIN: f64 = 5e-4;
 pub(crate) struct Builder {
     pub(crate) s: Sketch,
     pub(crate) r: ImportReport,
+    /// The lines, arcs and circles added so far, to leave out the same one drawn again.
+    seen: std::collections::HashSet<Seen>,
+}
+
+/// A curve as [`Builder`] remembers it: lines and arcs by their joined end points (a line
+/// either way round), circles and arc centres on a grid of [`JOIN`].
+#[derive(PartialEq, Eq, Hash)]
+enum Seen {
+    Line(PointId, PointId),
+    Arc([i64; 2], PointId, PointId),
+    Circle([i64; 3]),
+}
+
+fn grid(v: f64) -> i64 {
+    (v / JOIN).round() as i64
 }
 
 impl Builder {
+    /// Whether `k` is new (and now remembered); a curve drawn twice counts as skipped. Files
+    /// that draw a hole twice made two holes on top of each other (#337).
+    fn first(&mut self, k: Seen) -> bool {
+        let new = self.seen.insert(k);
+        if !new {
+            self.r.skipped += 1;
+        }
+        new
+    }
+
     pub(crate) fn pt(&mut self, p: Vec2) -> PointId {
         self.s
             .point_at(p, JOIN)
@@ -115,6 +140,9 @@ impl Builder {
             return;
         }
         let (a, b) = (self.pt(a), self.pt(b));
+        if !self.first(Seen::Line(a.min(b), a.max(b))) {
+            return;
+        }
         self.s.curves.insert(Curve {
             kind: CurveKind::Line { a, b },
             construction: false,
@@ -128,8 +156,11 @@ impl Builder {
             self.r.skipped += 1;
             return;
         }
-        let center = self.s.add_point(c);
         let (start, end) = (self.pt(a), self.pt(b));
+        if !self.first(Seen::Arc([grid(c.x), grid(c.y)], start, end)) {
+            return;
+        }
+        let center = self.s.add_point(c);
         self.s.curves.insert(Curve {
             kind: CurveKind::Arc { center, start, end },
             construction: false,
@@ -140,6 +171,9 @@ impl Builder {
     pub(crate) fn circle(&mut self, c: Vec2, radius: f64) {
         if radius <= JOIN {
             self.r.skipped += 1;
+            return;
+        }
+        if !self.first(Seen::Circle([grid(c.x), grid(c.y), grid(radius)])) {
             return;
         }
         let center = self.s.add_point(c);
@@ -197,10 +231,7 @@ pub fn sketch_of(d: &DxfDrawing, units: DxfUnits, file_origin: bool) -> (Sketch,
     // The reader keeps the file's numbers (its `unit_mm` only says what the file claims).
     let k = units.mm();
     let mut ents: Vec<Entity> = d.entities.clone();
-    let mut b = Builder {
-        s: Sketch::new(),
-        r: ImportReport::default(),
-    };
+    let mut b = Builder::default();
     // Where the geometry goes: its bounds' centre onto the origin unless the file's origin is kept.
     let mut shift = [0.0, 0.0];
     if !file_origin {
@@ -366,6 +397,33 @@ mod tests {
             (lo + 10.0).abs() < 1e-9 && (hi - 10.0).abs() < 1e-9,
             "{lo} {hi}"
         );
+    }
+
+    #[test]
+    fn curves_drawn_twice_come_in_once() {
+        // #337: a flange whose file draws every circle twice, and a line and an arc twice
+        // (the line the other way round).
+        let mut dxf = String::from("0\nSECTION\n2\nENTITIES\n");
+        for _ in 0..2 {
+            for (x, y, r) in [(0.0, 0.0, 48.0), (0.0, 0.0, 20.0), (35.896085, 0.0, 7.5)] {
+                dxf += &format!("0\nCIRCLE\n8\n0\n10\n{x}\n20\n{y}\n40\n{r}\n");
+            }
+            dxf += "0\nARC\n8\n0\n10\n100.0\n20\n0.0\n40\n5.0\n50\n0.0\n51\n90.0\n";
+        }
+        dxf += "0\nLINE\n8\n0\n10\n60.0\n20\n0.0\n11\n70.0\n21\n0.0\n";
+        dxf += "0\nLINE\n8\n0\n10\n70.0\n20\n0.0\n11\n60.0\n21\n0.0\n";
+        dxf += "0\nENDSEC\n0\nEOF\n";
+        let d = cadrs_drawing::dxf::read_dxf(&dxf).unwrap();
+        let (s, r) = sketch_of(&d, DxfUnits::Millimeter, true);
+        assert_eq!((r.circles, r.arcs, r.lines, r.skipped), (3, 1, 1, 5));
+        assert_eq!(s.curves.len(), 5);
+        let ring = cadrs_sketch::region::regions(&s)
+            .into_iter()
+            .max_by(|a, b| a.area().total_cmp(&b.area()))
+            .unwrap();
+        assert_eq!(ring.holes.len(), 2);
+        let want = std::f64::consts::PI * (48.0f64.powi(2) - 20.0f64.powi(2) - 7.5f64.powi(2));
+        assert!((ring.area() - want).abs() < 1e-6, "{}", ring.area());
     }
 
     #[test]
