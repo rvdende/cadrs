@@ -882,8 +882,25 @@ fn graph_frame(ns: &super::nurbs::NurbsSurface) -> Option<(P3, V3, V3, V3)> {
             .map(|i| k[i + 1..=i + p].iter().sum::<f64>() / p.max(1) as f64)
             .collect()
     };
-    let (gu, gv) = (greville(&ns.ku, ns.du, nu), greville(&ns.kv, ns.dv, nv));
     let pt = |i: usize, j: usize| P3::new(ns.cps[i][j].x, ns.cps[i][j].y, ns.cps[i][j].z);
+    // A quick test first (every ray and projection asks, of every B-spline face): the affine
+    // part cancels in P(i, j) − P(i, 0) − P(0, j) + P(0, 0), which must lie along n for every
+    // pole; three spread over the grid, all along one line, or this is no height field.
+    {
+        let dd = |i: usize, j: usize| pt(i, j) - pt(i, 0) - (pt(0, j) - pt(0, 0));
+        let probes = [dd(nu - 1, nv - 1), dd(nu / 2, nv - 1), dd(nu - 1, nv / 2)];
+        let size = (pt(nu - 1, nv - 1) - pt(0, 0)).norm().max(tol::TINY);
+        let far = pt(0, 0).coords.abs().max();
+        let e = 1e-9 * (size + far);
+        let big = probes.iter().max_by(|a, b| a.norm().total_cmp(&b.norm()))?;
+        if big.norm() > e {
+            let n = big.normalize();
+            if probes.iter().any(|d| d.cross(&n).norm() > e) {
+                return None;
+            }
+        }
+    }
+    let (gu, gv) = (greville(&ns.ku, ns.du, nu), greville(&ns.kv, ns.dv, nv));
     // The affine part by least squares over the grid (separable: means, then slopes).
     let m = (nu * nv) as f64;
     let (mu, mv) = (
