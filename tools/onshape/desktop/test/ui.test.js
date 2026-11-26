@@ -158,6 +158,29 @@ test('ui: the Report tab also exports rebuilt STEP files', () => {
   assert.match(mainSource, /'step', doc\.cadrsId/);
 });
 
+test('ui: each conversion has its own run folder, with an operation analysis', () => {
+  for (const id of ['runPick', 'rRunFolder', 'runInfo']) assert.match(html, new RegExp(`id="${id}"`), `#${id}`);
+  assert.match(html, /data-r="operations"/);
+  assert.match(html, /api\.runs\(\)/);
+  assert.match(html, /api\.openRunFolder\(/);
+  assert.match(html, /loadReports\(/);
+  assert.match(preloadSource, /runs: \(\) => ipcRenderer\.invoke\('runs'\)/);
+  assert.match(preloadSource, /openRunFolder: \(run\) => ipcRenderer\.invoke\('open-run-folder'/);
+  assert.match(mainSource, /ipcMain\.handle\('runs'/);
+  assert.match(mainSource, /ipcMain\.handle\('open-run-folder'/);
+  assert.match(mainSource, /makeRun\(\)/);
+  assert.match(mainSource, /--report-dir/);
+  assert.match(mainSource, /buildOperations/);
+  assert.ok(pkg.build.files.includes('operations.js'), 'operations.js packaged');
+});
+
+test('ui: a new ticket can carry a link and a zip of its attachments', () => {
+  assert.match(html, /id="iLink"/);
+  assert.match(html, /### Link/);
+  assert.match(html, /draft\.archive/);
+  assert.match(mainSource, /link: link \|\| ''/);
+});
+
 test('main: the Onshape pane gets a Chrome identity, GPU switches and navigation IPC', () => {
   assert.match(mainSource, /require\('\.\/chrome'\)/);
   assert.match(mainSource, /app\.userAgentFallback = BROWSER_UA/);

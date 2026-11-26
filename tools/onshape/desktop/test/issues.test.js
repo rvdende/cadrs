@@ -48,6 +48,9 @@ test('issues.js: a draft keeps the text and the attachments apart', () => {
   assert.equal(meta.title, 'Extrude of selected sketch regions fills the holes');
   assert.deepEqual(meta.attachments, [{ name: 'test model.cadrs', bytes: 9 }]);
   assert.match(meta.url, /github\.com\/rvdende\/cadrs\/issues\/new\?title=Extrude/);
+  assert.equal(meta.link, '');
+  assert.ok(fs.existsSync(path.join(draft.dir, 'attachments.zip')), 'a zip of every attachment is made for GitHub');
+  assert.equal(draft.archive.name, 'attachments.zip');
 
   const index = fs.readFileSync(draft.index, 'utf8');
   assert.match(index, /cadrs issue drafts/);

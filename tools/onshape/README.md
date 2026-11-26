@@ -78,15 +78,24 @@ Where things are written (default `~/work/cadrs_onshape/`, or `$CADRS_ONSHAPE_RO
 | Path | What |
 |---|---|
 | `raw/<document id>/` | the scraped REST JSON, one folder per Onshape document |
-| `import-report.txt` | the importer's human-readable report, one block per document |
-| `import-report.json` | the same run as JSON: features, parts, defects, ticket groups |
-| `missing-summary.txt` | totals and the most common reasons features did not come across |
-| `bug-report.md` | a GitHub-ready report built from the last import |
-| `tickets/` | one Markdown issue draft per ticket group, plus `INDEX.md` |
-| `compare-report.md` | the last Compare tab report |
-| `featurescript-analysis.md` | the last FeatureScript analysis |
+| `runs/<timestamp>/` | one folder **per conversion**: that run's reports and exports |
+| `runs/<timestamp>/import-report.txt` | the importer's human-readable report, one block per document |
+| `runs/<timestamp>/import-report.json` | the same run as JSON: features, parts, defects, ticket groups |
+| `runs/<timestamp>/missing-summary.txt` | totals and the most common reasons features did not come across |
+| `runs/<timestamp>/operations.md` | **operation analysis**: every Onshape feature, its parameters, what cadrs did, what to report |
+| `runs/<timestamp>/bug-report.md` | a GitHub-ready report built from that run |
+| `runs/<timestamp>/tickets/` | one Markdown issue draft per ticket group, plus `INDEX.md` |
+| `runs/<timestamp>/cadrs/`, `steps/` | exported `.cadrs` packages and rebuilt STEP files |
+| `runs/<timestamp>/compare-report.md`, `featurescript-analysis.md` | the Compare and FeatureScript outputs of that run |
+| `issues/` | general cadrs tickets (the *New ticket* tab), one folder per draft |
+| `logs/scrape.log` | the scraper's log |
 
-The cadrs documents themselves go into the cadrs app's store (its usual
+Nothing report-like lands in the data root any more. Each conversion gets its own `runs/`
+folder; the Report tab has a run selector and **Open run folder**, and every report button reads
+the selected run. The **Operation analysis** button opens `operations.md`: the feature-by-feature
+table (Onshape type and parameters such as `angle=30 deg`, `depth=12 mm`, outcome, notes, links to
+the Onshape document) plus a "What to report" list — this is the report to read before opening a
+ticket. The cadrs documents themselves go into the cadrs app's store (its usual
 `~/.local/share/cadrs/documents` on Linux), with the document names and Part Studios from
 Onshape.
 
@@ -101,12 +110,12 @@ Onshape.
   `entry.ron` (the name), a thumbnail, blobs and history — not a `.cadrs` package.
   `cadrs --list-documents` lists them; `import-report.json` has each document's `cadrs_id`.
 - **Portable `.cadrs` packages** — a zip of `document.ron`, `manifest.ron` and the thumbnail, made
-  only when exported. In the app: *Report → Export .cadrs files* (writes `<root>/cadrs/<name>.cadrs`).
+  only when exported. In the app: *Report → Export .cadrs files* (writes `<run>/cadrs/<name>.cadrs`).
   From the command line:
 
   ```sh
-  cadrs-onshape export "Capac2" --out ~/work/cadrs_onshape/cadrs/Capac2.cadrs
-  cadrs-onshape export --all --out ~/work/cadrs_onshape/cadrs
+  cadrs-onshape export "Capac2" --out ~/work/cadrs_onshape/runs/<run>/cadrs/Capac2.cadrs
+  cadrs-onshape export --all --out ~/work/cadrs_onshape/runs/<run>/cadrs
   ```
 
   `--data-dir <store>` picks another store; without `--out`, one document goes to `./<name>.cadrs`
@@ -135,7 +144,7 @@ To compare a comparison with Onshape's own export:
   measures it against the STEP (volume, area, box, faces, face kinds) as JSON — the app's
   *Compare* tab runs the same code.
 - **As STEP files**: `cadrs-onshape step <name or id>… --out <dir>` (or the app's *Report →
-  Export STEP files*, `<root>/steps/`) rebuilds each Part Studio and writes STEP, one file per
+  Export STEP files*, `<run>/steps/`) rebuilds each Part Studio and writes STEP, one file per
   Part Studio; open them next to Onshape's STEP in any CAD tool.
 
 Example on the real import fixture: the four 5-feature Part Studio rebuilds to 88 651.8177 mm³,
@@ -207,8 +216,11 @@ wrong results, UI issues). It keeps the two things GitHub needs as **separate st
 - the **attachments** copied into `attachments/` next to it — drag them into the issue, because
   GitHub cannot attach files through a URL.
 
-The tab writes **Type** (Bug / Missing feature / Improvement / Other) and **Where** (cadrs.net web
-app / GitHub build / Onshape importer / Other) into the body and as suggested labels, so a missing
+The tab writes **Type** (Bug / Missing feature / Improvement / Other), **Where** (cadrs.net web app /
+GitHub build / Onshape importer / Other) and an optional **Link** (an Onshape share URL or a repro
+link) into the body and as suggested labels. GitHub accepts images, PDFs and ZIPs only, so the draft
+also writes `attachments.zip` with every attached file (a `.cadrs`/`.step` can be dropped in as that
+one zip). so a missing
 feature on cadrs.net is not mixed up with an importer defect. A draft is a folder under
 `<root>/issues/` (`$CADRS_ONSHAPE_ROOT`, by default `~/work/cadrs_onshape/issues/`):
 

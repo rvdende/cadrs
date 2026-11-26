@@ -9,6 +9,9 @@ const ALLOWED_ORIGINS = new Set(['https://cad.onshape.com']);
 function startReceiver(root) {
   const raw = path.join(root, 'raw');
   fs.mkdirSync(raw, { recursive: true });
+  // Scrape logs live with the other logs, not in the data root.
+  const logs = path.join(root, 'logs');
+  fs.mkdirSync(logs, { recursive: true });
   const safe = (rel) => {
     const full = path.normalize(path.join(raw, rel.replace(/^\/+/, '')));
     if (!full.startsWith(raw + path.sep)) throw new Error('path escapes raw/');
@@ -50,7 +53,7 @@ function startReceiver(root) {
           const body = Buffer.concat(chunks);
           try {
             if (url.pathname === '/log') {
-              fs.appendFileSync(path.join(root, 'scrape.log'), body + '\n');
+              fs.appendFileSync(path.join(logs, 'scrape.log'), body + '\n');
               return reply(200);
             }
             if (url.pathname === '/save') {

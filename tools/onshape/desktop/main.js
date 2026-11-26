@@ -17,10 +17,46 @@ const tickets = require('./tickets');
 const { chromeUserAgent, applyGpuSwitches, softwareMode, softwareRelaunchArgs } = require('./chrome');
 const issues = require('./issues');
 const exportTools = require('./exports');
+const { buildOperations } = require('./operations');
 
 const ROOT = process.env.CADRS_ONSHAPE_ROOT || path.join(os.homedir(), 'work', 'cadrs_onshape');
 const RAW = path.join(ROOT, 'raw');
 const REPO = path.resolve(__dirname, '..', '..', '..');
+// Every conversion gets its own run folder: <root>/runs/<timestamp>/ holds that run's reports,
+// ticket drafts, .cadrs and STEP exports, so nothing collects in the data root any more.
+const RUNS = path.join(ROOT, 'runs');
+const LOGS = path.join(ROOT, 'logs');
+let currentRun = null;
+function listRuns() {
+  try {
+    return fs.readdirSync(RUNS)
+      .filter((name) => {
+        try {
+          return fs.statSync(path.join(RUNS, name)).isDirectory();
+        } catch {
+          return false;
+        }
+      })
+      .sort()
+      .reverse();
+  } catch {
+    return [];
+  }
+}
+function latestRun() {
+  return currentRun || listRuns()[0] || null;
+}
+function runDir(name) {
+  const chosen = name || latestRun();
+  return chosen ? path.join(RUNS, chosen) : ROOT; // ROOT is the legacy location for old data
+}
+function makeRun() {
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  const dir = path.join(RUNS, stamp);
+  fs.mkdirSync(dir, { recursive: true });
+  currentRun = path.basename(dir);
+  return dir;
+}
 const PANEL_WIDTH = 460;
 const PARTITION = 'persist:onshape';
 const ONSHAPE = 'https://cad.onshape.com';
@@ -45,7 +81,7 @@ app.commandLine.appendSwitch('disable-features', 'PrivateNetworkAccessSendPrefli
 let win, panel, onshape, receiver, importer = null, cancelled = false, busy = false;
 
 const resource = (name) => (app.isPackaged ? path.join(process.resourcesPath, name) : path.join(__dirname, '..', name));
-const ticketsDir = () => path.join(ROOT, 'tickets');
+const ticketsDir = () => path.join(runDir(), 'tickets');
 const issuesDir = () => path.join(ROOT, 'issues');
 
 // python3 is optional now (reports and tickets are JS); only fs_decode.py and the report-summary
@@ -304,7 +340,8 @@ ipcMain.handle('sink', async (_e, { route, path: rel, method, body }) => {
 ipcMain.handle('info', () => ({
   root: ROOT, raw: RAW, loggedIn: onshapeReady(), python: pythonAvailable(),
   cadrsBin: cadrsBinary(), ticketsDir: ticketsDir(), issuesDir: issuesDir(),
-  reportFile: path.join(ROOT, 'import-report.txt'),
+  runDir: runDir(), runs: listRuns(), currentRun: latestRun(),
+  reportFile: path.join(runDir(), 'import-report.txt'),
   versions: {
     app: app.getVersion(),
     electron: process.versions.electron,
@@ -401,14 +438,15 @@ function importerSupportsJson() {
   return jsonSupported;
 }
 
-function runImport(ids, dryRun) {
+function runImport(ids, dryRun, run = runDir()) {
   const { cmd, args, cwd } = importerCommand();
-  // The importer also writes the machine-readable aggregate report: the Tickets tab and the
-  // per-document summary read it first and fall back to parsing import-report.txt. Dry runs do
-  // not replace the last full report, so they do not ask for JSON.
-  const jsonFile = path.join(ROOT, 'import-report.json');
-  const jsonArgs = !dryRun && importerSupportsJson() ? ['--json', jsonFile] : [];
-  const full = [...args, 'import', ...ids, '--raw', RAW, ...jsonArgs, ...(dryRun ? ['--dry-run'] : [])];
+  // The importer writes the human report and the machine-readable aggregate into this run's
+  // folder: nothing lands in the data root. Dry runs get their own report too (their folder says
+  // it was a dry run).
+  fs.mkdirSync(run, { recursive: true });
+  const jsonFile = path.join(run, 'import-report.json');
+  const jsonArgs = importerSupportsJson() ? ['--json', jsonFile] : [];
+  const full = [...args, 'import', ...ids, '--raw', RAW, '--report-dir', run, ...jsonArgs, ...(dryRun ? ['--dry-run'] : [])];
   return new Promise((resolve) => {
     importer = spawn(cmd, full, { cwd, env: process.env });
     const pipe = (s) => s.on('data', (d) => send({ type: 'import-log', text: d.toString() }));
@@ -432,8 +470,8 @@ function py(script) {
 
 // The report, plus the "what is missing" summaries, saved next to it. The summaries are the JS
 // ports of summarize.py/roots.py; python3 is only a fallback if the JS port ever throws.
-function buildReports() {
-  const { textFile: file, text: report, aggregate, jsonError, warnings: reportWarnings } = readReportFiles(ROOT);
+function buildReports(run = runDir()) {
+  const { textFile: file, text: report, aggregate, jsonError, warnings: reportWarnings } = readReportFiles(run);
   let summary = '', roots = '', source = 'js';
   const warnings = [];
   if (jsonError) warnings.push(jsonError);
@@ -471,10 +509,21 @@ function buildReports() {
     } catch { /* leave the per-document summary empty */ }
   }
   if (report) {
-    fs.writeFileSync(path.join(ROOT, 'missing-summary.txt'),
+    fs.writeFileSync(path.join(run, 'missing-summary.txt'),
       `${summary}\n\nPER-DOCUMENT RESULTS\n${byDocument}\n\nFIRST FAILURE PER PART STUDIO\n${roots}`);
   }
-  const jsonFile = path.join(ROOT, 'import-report.json');
+  // The operation-by-operation table: what Onshape had, what the importer did, what to report.
+  let operations = '';
+  let operationsFile = null;
+  try {
+    const built = buildOperations({ runDir: run, rawDir: RAW, appVersion: app.getVersion() });
+    operations = built.markdown;
+    operationsFile = built.file;
+    fs.writeFileSync(built.file, operations);
+  } catch (e) {
+    operations = `(operation analysis failed: ${e.message})`;
+  }
+  const jsonFile = path.join(run, 'import-report.json');
   let jsonInfo = null;
   try {
     if (fs.existsSync(jsonFile)) {
@@ -490,10 +539,29 @@ function buildReports() {
   } catch {
     /* the JSON report is optional for the text tabs */
   }
-  return { report, summary, roots, byDocument, documents, file, source, warnings, jsonInfo };
+  return {
+    report, summary, roots, operations, operationsFile, byDocument, documents,
+    file, source, warnings, jsonInfo, run,
+  };
 }
 
-ipcMain.handle('reports', buildReports);
+ipcMain.handle('reports', (_e, runName) => buildReports(runName ? runDir(runName) : runDir()));
+ipcMain.handle('runs', () => {
+  const runs = listRuns().map((name) => {
+    const dir = path.join(RUNS, name);
+    let report = false;
+    try {
+      report = fs.existsSync(path.join(dir, 'import-report.txt')) || fs.existsSync(path.join(dir, 'import-report.json'));
+    } catch {}
+    return { name, report };
+  });
+  return { current: latestRun(), runs };
+});
+ipcMain.handle('open-run-folder', (_e, runName) => {
+  const dir = runName ? runDir(runName) : runDir();
+  fs.mkdirSync(dir, { recursive: true });
+  return shell.openPath(dir);
+});
 
 // ---- exports: preflight, asynchronous and cancellable -----------------------------------
 // Exporting rebuilds with the cadrs kernel; on a large Part Studio that takes a long time. Doing
@@ -559,7 +627,7 @@ async function exportDocuments(kind) {
   if (error) return { error };
   const plan = exportTools.preflight(report, await storedDocumentIds());
   if (!plan.ok) return { refused: true, error: plan.errors.join('\n\n') };
-  const dir = path.join(ROOT, kind === 'cadrs' ? 'cadrs' : 'steps');
+  const dir = path.join(runDir(), kind === 'cadrs' ? 'cadrs' : 'steps');
   fs.mkdirSync(dir, { recursive: true });
   exportRunning = { kind, cancelled: false, child: null };
   // A document that takes longer than this is refused from the app (the UI stays responsive and
@@ -607,13 +675,13 @@ ipcMain.handle('cancel-export', () => {
 });
 
 ipcMain.handle('open-cadrs-folder', () => {
-  const dir = path.join(ROOT, 'cadrs');
+  const dir = path.join(runDir(), 'cadrs');
   fs.mkdirSync(dir, { recursive: true });
   return shell.openPath(dir);
 });
 
 ipcMain.handle('open-steps-folder', () => {
-  const dir = path.join(ROOT, 'steps');
+  const dir = path.join(runDir(), 'steps');
   fs.mkdirSync(dir, { recursive: true });
   return shell.openPath(dir);
 });
@@ -689,9 +757,9 @@ ipcMain.handle('issue-pick-files', async () => {
   });
   return r.canceled ? [] : r.filePaths;
 });
-ipcMain.handle('issue-create', (_e, { title, body, files, labels } = {}) => {
+ipcMain.handle('issue-create', (_e, { title, body, files, labels, link } = {}) => {
   try {
-    return issues.createDraft({ title, body, files: files || [], labels: labels || [], root: ROOT });
+    return issues.createDraft({ title, body, files: files || [], labels: labels || [], link: link || '', root: ROOT });
   } catch (e) {
     return { error: String(e && e.message ? e.message : e) };
   }
@@ -719,7 +787,7 @@ ipcMain.handle('fs-compare', (_e, { text, regen, docId }) => {
     trace = r.error ? '' : `${r.stdout}\n${r.stderr}`;
   }
   const r = compareFs(text, regen, trace);
-  const out = path.join(ROOT, 'featurescript-analysis.md');
+  const out = path.join(runDir(), 'featurescript-analysis.md');
   fs.writeFileSync(out, r.markdown);
   return { markdown: r.markdown, file: out, traced: !!trace };
 });
@@ -759,7 +827,7 @@ ipcMain.handle('compare-run', (_e, { fsText, cadrsFile, stepFile }) => {
     }
   }
   const out = compareReport({ fs: fsText && fsText.trim() ? fsText : '', decoded, cmp: JSON.parse(r.stdout) });
-  const file = path.join(ROOT, 'compare-report.md');
+  const file = path.join(runDir(), 'compare-report.md');
   fs.writeFileSync(file, out.markdown);
   return { markdown: out.markdown, defects: out.defects, file, note };
 });
@@ -853,10 +921,11 @@ ipcMain.handle('open-cadrs', () => {
 
 // A GitHub-ready bug report: saved next to the import report and copied to the clipboard.
 ipcMain.handle('bug-report', (_e, open) => {
-  const file = path.join(ROOT, 'import-report.txt');
+  const run = runDir();
+  const file = path.join(run, 'import-report.txt');
   const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
   const r = buildBugReport(text, RAW, app.getVersion());
-  const out = path.join(ROOT, 'bug-report.md');
+  const out = path.join(run, 'bug-report.md');
   fs.writeFileSync(out, r.markdown);
   require('electron').clipboard.writeText(r.markdown);
   if (open && r.count) openIssue(r.title, r.markdown);
@@ -875,19 +944,20 @@ ipcMain.handle('convert', async (_e, { ids, refresh, dryRun }) => {
   if (!ids.length) return { error: 'No documents selected.' };
   busy = true;
   cancelled = false;
+  const run = makeRun();
   try {
     send({ type: 'phase', phase: 'Downloading from Onshape' });
     const st = await scrape(ids, refresh);
     if (st.phase === 'failed' || cancelled) {
       send({ type: 'phase', phase: cancelled ? 'Cancelled' : 'Download failed' });
-      return { error: st.errors.join('\n') || 'Cancelled', reports: buildReports() };
+      return { error: st.errors.join('\n') || 'Cancelled', reports: buildReports(run), run };
     }
     send({ type: 'phase', phase: 'Converting to cadrs' });
-    const code = await runImport(ids, dryRun);
+    const code = await runImport(ids, dryRun, run);
     send({ type: 'phase', phase: 'Building report' });
-    const reports = buildReports();
+    const reports = buildReports(run);
     send({ type: 'phase', phase: code === 0 ? 'Done' : `Importer exited with ${code}` });
-    return { code, scrapeErrors: st.errors, reports };
+    return { code, scrapeErrors: st.errors, reports, run };
   } finally {
     busy = false;
   }

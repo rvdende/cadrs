@@ -9,6 +9,7 @@
 //
 // CLI:  node issues.js --title "…" --body-file body.md [--attach file]… [--root <dir>] [--labels a,b]
 //       node issues.js --title "…" --body "…" --attach screenshot.png --json
+const { spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -61,7 +62,7 @@ function githubUrl(title) {
 
 /** The body as it is written to `issue.md`: the user's text, then the attachment list (the files
  *  themselves stay in `attachments/`). */
-function renderBody(body, attachments) {
+function renderBody(body, attachments, archive) {
   const parts = [String(body || '').trimEnd()];
   if (attachments.length) {
     parts.push(
@@ -72,6 +73,12 @@ function renderBody(body, attachments) {
       '',
       ...attachments.map((a) => `- \`${a.name}\` (${a.bytes} bytes)`),
     );
+    if (archive) {
+      parts.push(
+        '',
+        `GitHub accepts images, PDFs and ZIPs: \`${archive.name}\` contains every file above and can be dropped in as one attachment.`,
+      );
+    }
   }
   return parts.join('\n').replace(/\n+$/, '') + '\n';
 }
@@ -99,6 +106,7 @@ function updateIndex(base, row) {
 /** Writes one draft. Returns the paths and the details the UI shows. */
 function createDraft(options = {}) {
   const title = String(options.title || '').trim();
+  const link = String(options.link || '').trim();
   const body = String(options.body || '');
   const files = options.files || [];
   const labels = (options.labels || []).map(String).filter(Boolean);
@@ -134,17 +142,27 @@ function createDraft(options = {}) {
     attachments.push({ name, bytes, path: dest });
   }
 
-  const text = renderBody(body, attachments);
+  let archive = null;
+  if (attachments.length) {
+    const zipFile = path.join(dir, 'attachments.zip');
+    const zipped = spawnSync('zip', ['-q', '-j', zipFile, ...attachments.map((a) => a.path)], { encoding: 'utf8' });
+    if (!zipped.error && zipped.status === 0) {
+      archive = { name: 'attachments.zip', bytes: fs.statSync(zipFile).size, path: zipFile };
+    }
+  }
+  const text = renderBody(link ? `${body}\n\n### Link\n- ${link}` : body, attachments, archive);
   const bodyFile = path.join(dir, 'issue.md');
   fs.writeFileSync(bodyFile, text);
   const url = githubUrl(title);
   const issue = {
     title,
     labels,
+    link,
     created: date.toISOString(),
     url,
     body: text,
     attachments: attachments.map((a) => ({ name: a.name, bytes: a.bytes })),
+    archive: archive ? { name: archive.name, bytes: archive.bytes } : null,
   };
   const issueFile = path.join(dir, 'issue.json');
   fs.writeFileSync(issueFile, `${JSON.stringify(issue, null, 2)}\n`);
@@ -160,6 +178,7 @@ function createDraft(options = {}) {
     body: text,
     attachmentsDir: attachments.length ? path.join(dir, 'attachments') : null,
     attachments,
+    archive,
   };
 }
 
@@ -179,6 +198,7 @@ function parseArgs(argv) {
     else if (arg === '--attach') out.files.push(value());
     else if (arg === '--root') out.root = value();
     else if (arg === '--labels') out.labels = value().split(',').map((l) => l.trim()).filter(Boolean);
+    else if (arg === '--link') out.link = value();
     else if (arg === '--json') out.json = true;
     else if (arg === '--help' || arg === '-h') out.help = true;
     else throw new Error(`unknown argument: ${arg}`);
@@ -211,6 +231,7 @@ function main(argv = process.argv.slice(2)) {
       body,
       files: args.files,
       labels: args.labels,
+      link: args.link,
       root: args.root,
     });
     if (args.json) console.log(JSON.stringify(draft, null, 2));

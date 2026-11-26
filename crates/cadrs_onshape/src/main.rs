@@ -21,6 +21,8 @@
 //! --data-dir <dir>   the cadrs document store (default: the app's, as `cadrs` finds it)
 //! --user <id>        who owns the imported documents (default: $USER, as the app sees you)
 //! --timeout <s>      how long one feature may take before it counts as hung (default 300)
+//! --report-dir <dir> write import-report.txt here instead of beside the raw folder (the app
+//!                    gives each conversion its own run folder)
 //! --json <file>      also write the run's report as JSON: each document's features and
 //!                    parts, every defect, and the defects grouped into tickets
 //!                    (`report::aggregate`). The desktop app's ticket list reads it.
@@ -50,6 +52,7 @@ fn main() -> ExitCode {
     let mut timeout = Duration::from_secs(300);
     let mut json_out: Option<PathBuf> = None;
     let mut out: Option<PathBuf> = None;
+    let mut report_dir: Option<PathBuf> = None;
     let mut all = false;
     let mut individual = false;
     // Imported documents belong to the local user, as the app identifies them.
@@ -79,6 +82,7 @@ fn main() -> ExitCode {
             }
             "--json" => json_out = it.next().map(PathBuf::from),
             "--out" => out = it.next().map(PathBuf::from),
+            "--report-dir" => report_dir = it.next().map(PathBuf::from),
             "--all" => all = true,
             "--individual" => individual = true,
             _ => rest.push(a),
@@ -119,6 +123,7 @@ fn main() -> ExitCode {
                     timeout,
                     &user,
                     json_out.as_deref(),
+                    report_dir.as_deref(),
                 )
             } else {
                 import_one(
@@ -153,6 +158,7 @@ fn import(
     timeout: Duration,
     user: &str,
     json_out: Option<&Path>,
+    report_dir: Option<&Path>,
 ) -> ExitCode {
     let docs: Vec<_> = raw::documents(raw_dir)
         .into_iter()
@@ -279,9 +285,20 @@ fn import(
     }
     std::fs::remove_file(&progress).ok();
     std::fs::remove_file(&child_json).ok();
-    // A dry run over some documents doesn't replace the report of the last full import.
-    if let Some(parent) = raw_dir.parent().filter(|_| filters.is_empty() || !dry_run) {
-        std::fs::write(parent.join("import-report.txt"), &text).ok();
+    // A dry run over some documents doesn't replace the report of the last full import. With an
+    // explicit --report-dir (the app's per-conversion run folder) the report always goes there.
+    if report_dir.is_some() || filters.is_empty() || !dry_run {
+        let target = match report_dir {
+            Some(dir) => {
+                std::fs::create_dir_all(dir).ok();
+                dir.join("import-report.txt")
+            }
+            None => raw_dir
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("import-report.txt"),
+        };
+        std::fs::write(&target, &text).ok();
     }
     if let Some(path) = json_out {
         let tool = format!("cadrs-onshape {}", env!("CARGO_PKG_VERSION"));

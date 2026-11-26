@@ -121,6 +121,7 @@
     <button class="b" data-r="summary" disabled>What is missing</button>
     <button class="b" data-r="roots" disabled>First failures</button>
     <button class="b" data-r="report" disabled>Full report</button>
+    <button class="b" data-r="operations" disabled>Operation analysis</button>
     <button class="b" id="bug" disabled>Export bug report</button>
     <button class="b" id="bugGh" disabled>Open GitHub issue</button>
     <button class="b" id="rExport" disabled>Export .cadrs files</button>
@@ -128,6 +129,11 @@
     <button class="b" id="rStep" disabled>Export STEP files</button>
     <button class="b" id="rStepFolder" disabled>Open STEP folder</button>
     <button class="b" id="rCancel">Cancel export</button>
+  </div>
+  <div class="row">
+    <select id="runPick" title="Conversion run"></select>
+    <button class="b" id="rRunFolder">Open run folder</button>
+    <small id="runInfo"></small>
   </div>
   <small id="reportState"></small>
   <pre id="rep">Run a conversion, or press a button to load the last report.</pre>
@@ -152,6 +158,7 @@
   <input type="text" id="iTitle" placeholder="Title: what is wrong, in one line (e.g. 'Extrude of selected sketch regions fills the holes')">
   <textarea id="iWhat" rows="6" placeholder="What happened: what you did, what you expected, what you got. Include the smallest steps that show it."></textarea>
   <input type="text" id="iEnv" placeholder="Environment (cadrs version, OS, browser)">
+  <input type="text" id="iLink" placeholder="Link (Onshape document / share URL, or a repro link) — optional">
   <div class="row">
     <select id="iKind" title="What kind of issue"><option>Bug</option><option>Missing feature</option><option>Improvement</option><option>Other</option></select>
     <select id="iWhere" title="Where it happens"><option>cadrs.net web app</option><option>GitHub build</option><option>Onshape importer</option><option>Other</option></select>
@@ -344,7 +351,14 @@ $('bGo').onclick = async () => {
   try {
     const r = await api.convert({ ids: [...picked], refresh: $('refresh').checked, dryRun: $('dry').checked });
     if (r.error) { $('phase').textContent = 'Failed'; $('log').textContent += '\n' + r.error; }
-    if (r.reports) { reports = r.reports; updateReportButtons(); showReport('byDocument'); }
+    if (r.reports) {
+      reports = r.reports;
+      const runName = r.run ? String(r.run).split(/[\\/]/).pop() : null;
+      await loadRuns(runName);
+      updateReportButtons();
+      showReport('byDocument');
+      $('runInfo').textContent = r.run ? `run: ${r.run}` : '';
+    }
     if (!r.error) show('report');
     else show('docs');
   } catch (e) {
@@ -358,6 +372,31 @@ $('bGo').onclick = async () => {
 
 // ---- Report tab ----------------------------------------------------------------------
 let exporting = false;
+async function loadRuns(selected) {
+  try {
+    const r = await api.runs();
+    const runs = r.runs || [];
+    $('runPick').innerHTML = runs
+      .map((run) => `<option value="${esc(run.name)}"${run.name === (selected || r.current) ? ' selected' : ''}>${esc(run.name)}${run.report ? '' : ' (no report)'}</option>`)
+      .join('') || '<option value="">no runs yet</option>';
+    if (!runs.length) $('runPick').innerHTML = '<option value="">no runs yet</option>';
+  } catch {
+    $('runPick').innerHTML = '<option value="">runs unavailable</option>';
+  }
+}
+async function loadReports(runName) {
+  try {
+    reports = await api.reports(runName || null);
+    $('runInfo').textContent = reports.run ? `run: ${reports.run}` : '';
+    updateReportButtons();
+    showReport('byDocument');
+  } catch (e) {
+    $('rep').textContent = `Cannot read the report: ${e.message}`;
+  }
+}
+$('runPick').onchange = () => loadReports($('runPick').value);
+$('rRunFolder').onclick = () => api.openRunFolder($('runPick').value || null);
+
 function updateReportButtons() {
   const has = !!(reports && reports.report);
   document.querySelectorAll('[data-r]').forEach((b) => { b.disabled = !has; });
@@ -502,8 +541,10 @@ $('iClear').onclick = () => { issueFiles = []; renderIssueFiles(); };
 function issueText() {
   const what = $('iWhat').value.trim();
   const env = $('iEnv').value.trim();
+  const link = $('iLink').value.trim();
   const parts = [];
   if (what) parts.push(what);
+  if (link) parts.push('### Link', `- ${link}`);
   parts.push('### Type', `- ${$('iKind').value}`);
   parts.push('### Where', `- ${$('iWhere').value}`);
   parts.push('### Environment', `- ${env || 'not given'}`);
@@ -520,7 +561,7 @@ async function saveIssue(openOnGitHub) {
   if (!title) { $('iOut').textContent = 'A title is needed.'; return; }
   if (!$('iWhat').value.trim()) { $('iOut').textContent = 'Describe what happened first.'; return; }
   const body = issueText();
-  const draft = await api.issueCreate({ title, body, files: issueFiles, labels: issueLabels() });
+  const draft = await api.issueCreate({ title, body, files: issueFiles, labels: issueLabels(), link: $('iLink').value.trim() });
   if (draft.error) { $('iOut').textContent = `Cannot save the draft: ${draft.error}`; return; }
   await api.issueCopy(body);
   const files = draft.attachments.length
@@ -530,6 +571,7 @@ async function saveIssue(openOnGitHub) {
     `Draft: ${draft.dir}`,
     `Text: ${draft.bodyFile}`,
     files,
+    draft.archive ? `A zip with every attachment is in the draft: ${draft.archive.name} (GitHub accepts images, PDFs and ZIPs).` : '',
     'The issue text is in the clipboard; GitHub gets the title from the URL, so paste the text as the body.',
   ].join('\n');
   if (openOnGitHub) await api.issueOpen({ title, body });
@@ -635,8 +677,8 @@ api.onEvent((ev) => {
     $('where').textContent = `Cannot read the app settings: ${e.message}`;
   }
   try {
-    reports = await api.reports();
-    updateReportButtons();
+    await loadRuns();
+    await loadReports($('runPick').value || null);
     if (reports.report) $('rep').textContent = 'A previous import report was found — press a button above, or run a conversion.';
   } catch { updateReportButtons(); }
   show('docs');
