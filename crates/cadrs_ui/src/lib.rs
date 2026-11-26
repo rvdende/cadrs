@@ -167,7 +167,7 @@ pub use quick_dim::{
 };
 pub use radio::{RadioChange, RadioGroup, RadioGroupState, RadioOption};
 pub use responsive::HideBelow;
-pub use scrollbar::{WheelScroll, horizontal_scrollbar, vertical_scrollbar};
+pub use scrollbar::{WheelScroll, WheelScrollX, horizontal_scrollbar, vertical_scrollbar};
 pub use segmented::{Segmented, SegmentedSelect, SegmentedState};
 pub use selectable_text::{
     ReadOnlyText, SelectableText, SelectableTextField, SelectableValue, TextCopied,

@@ -64,6 +64,10 @@ impl Plugin for SketchDimensionPlugin {
                     .after(crate::sketch_tools::sketch_pointer)
                     .run_if(in_state(AppState::Document)),
             )
+            .add_systems(
+                Update,
+                retry_after_configuration.run_if(in_state(AppState::Document)),
+            )
             .add_systems(OnExit(PartStudioMode::Sketching), reset_dimension_tool)
             .add_observer(on_commit)
             .add_observer(on_preview)
@@ -96,6 +100,10 @@ pub struct DimensionEditor {
     /// its first step. The sketch follows each step at once, as one undo step however many
     /// there are ([`on_preview`]); Enter keeps it, Esc takes it back ([`finish_preview`]).
     pub preview: Option<usize>,
+    /// The open editor's text, refused for a configuration's value (`#testcircle` while that
+    /// column is 0 mm, [`note_config_problem`]), and the configuration then: tried again
+    /// whenever the configuration changes.
+    pub retry: Option<(String, cadrs_core::configuration::Configuration)>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -674,6 +682,8 @@ fn close_editor(world: &mut World, commit: bool) {
     let Some(open) = world.resource_mut::<DimensionEditor>().open.take() else {
         return;
     };
+    world.resource_mut::<DimensionEditor>().retry = None;
+    crate::configuration_ui::clear_problem(world);
     if commit {
         let text = world
             .get::<Children>(open.entity)
@@ -911,13 +921,90 @@ fn on_commit(ev: On<DimEditCommit>, mut commands: Commands) {
             }
             Err(msg) => {
                 if let Some(mut b) = world.get_mut::<DimEditBox>(open.entity) {
-                    b.set_error(msg, text);
+                    b.set_error(msg, text.clone());
                 }
                 let frame = world.resource::<bevy::diagnostic::FrameCount>().0;
                 world.resource_mut::<QuickDimFlow>().consumed_frame = Some(frame);
+                note_config_problem(world, open.id, &text);
             }
         }
     });
+}
+
+/// The configuration's variable to blame when `text` is a value dimension `id` can't take: one
+/// it names that is 0 or less in the configuration shown (a new output starts at 0 mm), else
+/// the only one it names. None when it doesn't evaluate (an unknown name is told as such).
+fn config_culprit(world: &World, id: DimensionId, text: &str) -> Option<String> {
+    let d = world_sketch(world)?.dimensions.get(id).copied()?;
+    let u = world.resource::<crate::WorkspaceUnits>().0;
+    let vars = sketch_variables(world);
+    u.eval_vars(text, d.kind.quantity(), &vars).ok()?;
+    let named: Vec<String> = units::variable_names(text)
+        .into_iter()
+        .filter(|n| crate::configuration_ui::is_config_variable(world, n))
+        .collect();
+    named
+        .iter()
+        .find(|n| vars.iter().any(|(m, v)| m == *n && v.value <= 0.0))
+        .or((named.len() == 1).then(|| &named[0]))
+        .cloned()
+}
+
+/// The open editor's `text` was refused: when a configuration's value is to blame, its cell is
+/// shown to be typed in ([`crate::configuration_ui::reveal_problem`]) and the text tried again
+/// as the configuration changes ([`retry_after_configuration`]). Whether it was.
+fn note_config_problem(world: &mut World, id: DimensionId, text: &str) -> bool {
+    let typed = value_text(text);
+    let Some(name) = config_culprit(world, id, &typed) else {
+        return false;
+    };
+    if !crate::configuration_ui::reveal_problem(world, &name) {
+        return false;
+    }
+    let Some(config) = world
+        .get_resource::<ActiveDocument>()
+        .and_then(|d| d.active_element().map(|e| e.configuration.clone()))
+    else {
+        return false;
+    };
+    world.resource_mut::<DimensionEditor>().retry = Some((text.to_string(), config));
+    true
+}
+
+/// The configuration changed while the open editor waits on a value of it
+/// ([`note_config_problem`]): its text is tried again; taken, the editor closes as Enter would
+/// have closed it.
+fn retry_after_configuration(world: &mut World) {
+    let editor = world.resource::<DimensionEditor>();
+    let (Some(open), Some((text, was))) = (editor.open, editor.retry.as_ref()) else {
+        return;
+    };
+    let changed = world
+        .get_resource::<ActiveDocument>()
+        .and_then(|d| d.active_element())
+        .is_some_and(|e| e.configuration != *was);
+    if !changed {
+        return;
+    }
+    let text = text.clone();
+    let typed = value_text(&text);
+    match value_for(world, open.id, &typed) {
+        Ok(v) => {
+            set_value(world, open.id, v, &typed);
+            finish_preview(world, true);
+            close_editor(world, false);
+            open_next_editor(world);
+        }
+        Err(msg) => {
+            if let Some(mut b) = world.get_mut::<DimEditBox>(open.entity) {
+                b.set_error(msg, text.clone());
+            }
+            if !note_config_problem(world, open.id, &text) {
+                world.resource_mut::<DimensionEditor>().retry = None;
+                crate::configuration_ui::clear_problem(world);
+            }
+        }
+    }
 }
 
 /// The wheel stepped the open editor's value (issue #162): the sketch follows at once. The steps
