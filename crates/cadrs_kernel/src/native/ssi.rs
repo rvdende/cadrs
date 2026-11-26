@@ -3243,15 +3243,17 @@ pub fn curve_surface(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Vec<f64> {
         }
         _ => None,
     };
-    let fh = |t: f64, hint: &mut Option<(f64, f64)>| -> f64 {
+    // (At the point already made where there is one.)
+    let fp = |p: &P3, hint: &mut Option<(f64, f64)>| -> f64 {
         if let Some(q) = &quadric {
-            q(&c.point(t))
+            q(p)
         } else if implicit {
-            sdist(s, &c.point(t))
+            sdist(s, p)
         } else {
-            sdist_hint(s, &c.point(t), hint)
+            sdist_hint(s, p, hint)
         }
     };
+    let fh = |t: f64, hint: &mut Option<(f64, f64)>| -> f64 { fp(&c.point(t), hint) };
     let mut out: Vec<f64> = Vec::new();
     let mut hints: Vec<Option<(f64, f64)>> = Vec::with_capacity(n + 1);
     let mut h: Option<(f64, f64)> = None;
@@ -3262,10 +3264,10 @@ pub fn curve_surface(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Vec<f64> {
     let mut last: Option<P3> = None;
     for i in 0..=n {
         let t = t0 + (t1 - t0) * i as f64 / n as f64;
-        let v = fh(t, &mut h);
+        let p = c.point(t);
+        let v = fp(&p, &mut h);
         vals.push((t, v));
         hints.push(h);
-        let p = c.point(t);
         length += last.map_or(0.0, |q| (p - q).norm());
         last = Some(p);
     }
@@ -3277,20 +3279,23 @@ pub fn curve_surface(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Vec<f64> {
     // crossings 1.4 apart, between samples 4.9 apart).
     if implicit {
         let mut refined: Vec<(f64, f64)> = Vec::with_capacity(vals.len());
-        // (Intervals to look into: their end samples (t, distance) and depth.)
-        type Sample = (f64, f64);
+        // (Intervals to look into: their end samples (t, distance, point) and depth.)
+        type Sample = (f64, f64, P3);
         let mut stack: Vec<(Sample, Sample, u32)> = Vec::new();
         // (A budget: a curve along the surface is near it everywhere, its stretches found below.)
         let mut budget = 4096usize;
+        let mut pa = c.point(vals[0].0);
         for w in vals.windows(2) {
             refined.push(w[0]);
-            stack.push((w[0], w[1], 0));
+            let pb = c.point(w[1].0);
+            stack.push(((w[0].0, w[0].1, pa), (w[1].0, w[1].1, pb), 0));
+            pa = pb;
             let mut extra: Vec<(f64, f64)> = Vec::new();
             while let Some((a, b, depth)) = stack.pop() {
-                let reach = (c.point(b.0) - c.point(a.0)).norm() * 1.1;
+                let reach = (b.2 - a.2).norm() * 1.1;
                 // (Not near a touch: both samples well off the surface; a midpoint that comes
                 // near it is the touching search's below.)
-                let near = 1e-6 * (1.0 + c.point(a.0).coords.norm());
+                let near = 1e-6 * (1.0 + a.2.coords.norm());
                 if budget == 0
                     || a.1.signum() != b.1.signum()
                     || a.1.abs() + b.1.abs() > reach
@@ -3302,8 +3307,9 @@ pub fn curve_surface(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Vec<f64> {
                 }
                 budget -= 1;
                 let m = 0.5 * (a.0 + b.0);
-                let mid = (m, sdist(s, &c.point(m)));
-                extra.push(mid);
+                let pm = c.point(m);
+                let mid = (m, sdist(s, &pm), pm);
+                extra.push((mid.0, mid.1));
                 stack.push((a, mid, depth + 1));
                 stack.push((mid, b, depth + 1));
             }
