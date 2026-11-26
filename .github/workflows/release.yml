@@ -149,7 +149,7 @@ jobs:
         shell: pwsh
         run: |
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"' | Select-Object -First 1).Matches.Groups[1].Value
-          Expand-Archive -Path (Get-Item zip\*.zip).FullName -DestinationPath unpacked
+          Expand-Archive -Path "zip\cadrs-v$version-x86_64-windows.zip" -DestinationPath unpacked
           $source = (Get-ChildItem unpacked -Directory | Select-Object -First 1).FullName
           if (-not (Test-Path "$source\cadrs.exe")) { throw "no cadrs.exe in the zip" }
           & $env:ISCC /Qp "/DAppVersion=$version" "/DSourceDir=$source" "/DOutputDir=$PWD\dist" tools\windows\cadrs.iss
