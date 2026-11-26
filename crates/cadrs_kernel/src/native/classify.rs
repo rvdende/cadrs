@@ -716,6 +716,11 @@ fn ray_surface_with(
             }
         }
         Surface::Nurbs(_) | Surface::Revolution { .. } => {
+            if let Surface::Nurbs(ns) = s
+                && let Some(hits) = ray_ruled(ns, o, d)
+            {
+                return hits;
+            }
             if let Surface::Revolution {
                 f,
                 m: super::curve::Curve::Line { o: lo, d: ld },
@@ -737,6 +742,118 @@ fn ray_surface_with(
         out.push((t, u, v));
     }
     out
+}
+
+/// A ray against a ruled B-spline (degree 1 and one span along v, its weights the same along
+/// v: a ruled loft's sides), in closed form: the ruling at u, A(u) + s·D(u), meets the line
+/// o + t·d where the two are coplanar, f(u) = (A(u) − o)·(D(u) × d) = 0, and f·w² is a B-spline
+/// of the two rows' poles (its degree twice u's): sampled a span at a time, each sign change
+/// bisected, then s and t from the two lines. Hits with s outside the ruling are dropped. None
+/// for any other surface, or a ray nearly along a ruling somewhere (the general search then).
+fn ray_ruled(ns: &super::nurbs::NurbsSurface, o: &P3, d: &V3) -> Option<Vec<(f64, f64, f64)>> {
+    use super::nurbs::H;
+    if ns.dv != 1 || ns.kv.len() != 4 || ns.cps.iter().any(|r| r.len() != 2) {
+        return None;
+    }
+    if ns
+        .cps
+        .iter()
+        .any(|r| (r[0].w - r[1].w).abs() > 1e-14 * r[0].w.abs() || !(r[0].w > 0.0))
+    {
+        return None;
+    }
+    let p = ns.du;
+    let k = &ns.ku;
+    let n = ns.cps.len();
+    let (v0, v1) = (ns.kv[1], ns.kv[2]);
+    // A row's homogeneous point at u in span j (de Boor).
+    let row = |j: usize, u: f64, side: usize| -> H {
+        let mut q: Vec<H> = (0..=p).map(|r| ns.cps[j - p + r][side]).collect();
+        for r in 1..=p {
+            for i in (r..=p).rev() {
+                let lo = k[j - p + i];
+                let hi = k[j + 1 + i - r];
+                let a = if hi > lo { (u - lo) / (hi - lo) } else { 0.0 };
+                q[i] = q[i - 1] * (1.0 - a) + q[i] * a;
+            }
+        }
+        q[p]
+    };
+    let dn = d.norm();
+    // The ruling at u: its start and direction.
+    let ruling = |j: usize, u: f64| -> (P3, V3) {
+        let (a, b) = (row(j, u, 0), row(j, u, 1));
+        let w = a.w;
+        let pa = P3::new(a.x / w, a.y / w, a.z / w);
+        (pa, V3::new(b.x - a.x, b.y - a.y, b.z - a.z) / w)
+    };
+    let f = |j: usize, u: f64| -> Option<f64> {
+        let (a, dr) = ruling(j, u);
+        let m = dr.cross(d);
+        if m.norm() <= 1e-9 * dr.norm() * dn {
+            return None;
+        }
+        Some((a - o).dot(&m))
+    };
+    let mut out = Vec::new();
+    for j in p..n {
+        let (u0, u1) = (k[j], k[j + 1]);
+        if u1 <= u0 {
+            continue;
+        }
+        let m = 4 * (2 * p + 1);
+        let at = |i: usize| u0 + (u1 - u0) * i as f64 / m as f64;
+        let mut prev = (at(0), f(j, at(0))?);
+        for i in 1..=m {
+            let u = at(i);
+            let cur = (u, f(j, u)?);
+            let last = j + 1 == n && i == m;
+            let crosses = (prev.1 < 0.0 && cur.1 > 0.0)
+                || (prev.1 > 0.0 && cur.1 < 0.0)
+                || prev.1 == 0.0
+                || (last && cur.1 == 0.0);
+            if crosses {
+                let root = if prev.1 == 0.0 {
+                    prev.0
+                } else if cur.1 == 0.0 {
+                    cur.0
+                } else {
+                    let (mut a, mut b, mut fa) = (prev.0, cur.0, prev.1);
+                    for _ in 0..60 {
+                        let mid = 0.5 * (a + b);
+                        let fm = f(j, mid)?;
+                        if fm == 0.0 || (b - a) <= 1e-15 * (1.0 + mid.abs()) {
+                            a = mid;
+                            b = mid;
+                            break;
+                        }
+                        if (fm < 0.0) == (fa < 0.0) {
+                            a = mid;
+                            fa = fm;
+                        } else {
+                            b = mid;
+                        }
+                    }
+                    0.5 * (a + b)
+                };
+                // o + t d = A + s D.
+                let (a, dr) = ruling(j, root);
+                let w = a - o;
+                let (dd, ds, ss) = (d.dot(d), d.dot(&dr), dr.dot(&dr));
+                let (wd, ws) = (w.dot(d), w.dot(&dr));
+                if let Some((t, sr)) = solve2(dd, -ds, ds, -ss, wd, ws)
+                    && (-1e-12..=1.0 + 1e-12).contains(&sr)
+                    && out.last().is_none_or(|l: &(f64, f64, f64)| {
+                        (root - l.1).abs() > 1e-14 * (1.0 + root.abs())
+                    })
+                {
+                    out.push((t, root, v0 + (v1 - v0) * sr));
+                }
+            }
+            prev = cur;
+        }
+    }
+    Some(out)
 }
 
 /// Where a B-spline curve crosses the plane through `o` with unit normal `n`: the sign changes
