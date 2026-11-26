@@ -396,3 +396,36 @@ fn a_prism_s_upright_edges_round_in_closed_form() {
     assert_eq!(k.faces(round).unwrap().len(), 7 + 5);
     assert!(k.get(round).unwrap().check().is_empty());
 }
+
+#[test]
+fn a_cylinder_s_top_rim_rounds_in_closed_form() {
+    // A cylinder of radius R and height h with its top rim rounded by r: it loses r²(1 − π/4)
+    // of section round the circle its centroid follows, of radius
+    // R − r(10 − 3π)/(3(4 − π)) (Pappus).
+    let (big, h, r) = (3.0, 4.0, 0.8);
+    let mut k = NativeKernel::new();
+    let c = k
+        .primitive(&Primitive::Cylinder {
+            base: Point3::new(1.0, -2.0, 0.5),
+            axis: nalgebra::Unit::new_normalize(nalgebra::Vector3::z()),
+            radius: big,
+            height: h,
+        })
+        .unwrap()
+        .bodies[0];
+    let top: Vec<EdgeId> = k
+        .edges(c)
+        .unwrap()
+        .iter()
+        .filter(|e| e.start.z > 0.5 + h - 1e-9 && e.end.z > 0.5 + h - 1e-9)
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(top.len(), 1);
+    let round = k.fillet(c, &top, r).unwrap().bodies[0];
+    let centroid = r * (10.0 - 3.0 * PI) / (3.0 * (4.0 - PI));
+    let want = PI * big * big * h - r * r * (1.0 - PI / 4.0) * 2.0 * PI * (big - centroid);
+    let got = k.mass_properties(round).unwrap().volume;
+    assert!((got - want).abs() <= 1e-9 * want, "volume {got} vs {want}");
+    assert_eq!(k.faces(round).unwrap().len(), 4);
+    assert!(k.get(round).unwrap().check().is_empty());
+}

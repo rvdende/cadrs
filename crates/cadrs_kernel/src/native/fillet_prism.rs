@@ -637,3 +637,326 @@ fn wall_of_bottom(
 ) -> Option<usize> {
     faces_of(e).into_iter().find(|&fi| fi != bottom)
 }
+
+/// [`super::fillet`]'s whole circles `edges` of `b`, each between a plane square to its axis
+/// and a cylinder about it (a rim: a disc's edge, a hole's mouth, a boss's foot), rounded by
+/// `r`, built directly: each face cut back by r from the rim (the plane's circle moved in or
+/// out, the cylinder's along its axis), and between them a quarter of the torus about the
+/// axis whose tube is the ball rolled round the rim. Convex rims lose and concave ones gain
+/// `r²(1 − π/4)` of section along the circle its centroid follows (Pappus), which the result's
+/// volume is held to. None for any other edge, or a result that fails its checks.
+pub(crate) fn rims(
+    b: &Body,
+    input: BodyId,
+    edges: &[usize],
+    r: f64,
+) -> Option<(Body, Vec<Vec<FaceSrc>>)> {
+    use std::f64::consts::{FRAC_PI_4, PI, TAU};
+    if b.solids.len() != 1 || b.shells.len() != 1 || !(r > 0.0) || edges.is_empty() {
+        return None;
+    }
+    let k_c = (10.0 - 3.0 * PI) / (3.0 * (4.0 - PI));
+    let area = r * r * (1.0 - FRAC_PI_4);
+    let mut nb = b.clone();
+    let mut src: Vec<Vec<FaceSrc>> = (0..b.faces.len())
+        .map(|i| vec![FaceSrc::Input(i)])
+        .collect();
+    let mut change = 0.0;
+    for &e in edges {
+        let ed = &b.edges[e];
+        let Curve::Circle {
+            c: oc,
+            x: cx,
+            y: cy,
+            r: big,
+        } = ed.curve
+        else {
+            return None;
+        };
+        if !ed.closed() || (ed.t[1] - ed.t[0] - TAU).abs() > 1e-9 {
+            return None;
+        }
+        let axis = cx.cross(&cy).normalize();
+        // Its two faces: a plane square to the axis and a cylinder about it (one may have
+        // another rim: a cylinder's two ends, edited one after the other).
+        let fs: Vec<(usize, bool)> = (0..b.faces.len())
+            .flat_map(|fi| {
+                b.faces[fi]
+                    .loops
+                    .iter()
+                    .flatten()
+                    .filter(move |c| c.edge == e)
+                    .map(move |c| (fi, c.fwd))
+            })
+            .collect();
+        let [(fa, sa), (fb, sb)] = fs[..] else {
+            return None;
+        };
+        if fa == fb {
+            return None;
+        }
+        let kind_ok = |fi: usize| match &b.faces[fi].surf {
+            Surface::Plane { f } => f.x.cross(&f.y).normalize().cross(&axis).norm() < tol::ANGULAR,
+            Surface::Cylinder { f, r: cr } => {
+                let off = oc - f.o;
+                f.z.cross(&axis).norm() < tol::ANGULAR
+                    && (off - f.z * off.dot(&f.z)).norm() < 1e-9 * (1.0 + big)
+                    && (cr - big).abs() < 1e-9 * (1.0 + big)
+            }
+            _ => false,
+        };
+        let is_plane = |fi: usize| matches!(b.faces[fi].surf, Surface::Plane { .. });
+        if !kind_ok(fa) || !kind_ok(fb) || is_plane(fa) == is_plane(fb) {
+            return None;
+        }
+        // At the rim's vertex: each face's outward normal, and the way into it from the rim.
+        let t0 = ed.t[0];
+        let p = ed.point(t0);
+        let tangent = ed.curve.tangent(t0).normalize();
+        let n_of = |fi: usize| outward(b, fi, &p);
+        let (na, nb_) = (n_of(fa), n_of(fb));
+        let into = |n: V3, fwd: bool| n.cross(&(tangent * if fwd { 1.0 } else { -1.0 }));
+        let (ma, mb) = (into(na, sa), into(nb_, sb));
+        // Convex: into each face runs against the other's outward normal.
+        let convex = ma.dot(&nb_) < 0.0;
+        if ma.dot(&nb_).abs() < 1.0 - 1e-6 || mb.dot(&na).abs() < 1.0 - 1e-6 {
+            return None;
+        }
+        // The tube's centre, the two new circles' points, at the rim's vertex.
+        let centre = p + (ma + mb) * r;
+        let (pa, pb) = (p + ma * r, p + mb * r);
+        let radial = |q: P3| {
+            let w = q - oc;
+            let h = w.dot(&axis);
+            ((w - axis * h).norm(), h)
+        };
+        let (rc, hc) = radial(centre);
+        if !(rc > r * (1.0 + 1e-9)) {
+            return None;
+        }
+        let circle_at = |q: P3| {
+            let (rq, hq) = radial(q);
+            Curve::Circle {
+                c: oc + axis * hq,
+                x: cx,
+                y: cy,
+                r: rq,
+            }
+        };
+        let (ca, cb) = (circle_at(pa), circle_at(pb));
+        if let (Curve::Circle { r: ra, .. }, Curve::Circle { r: rb, .. }) = (&ca, &cb)
+            && (*ra <= 10.0 * tol::POINT || *rb <= 10.0 * tol::POINT)
+        {
+            return None;
+        }
+        // Each face's other edges clear of its moved circle on the side the face lies: on the
+        // plane past the new circle (the round would run off it: a boss near a plate's
+        // corner), on the cylinder farther along it than r.
+        let clear = |fi: usize, m: V3, q: P3| {
+            let (rq, hq) = radial(q);
+            b.faces[fi]
+                .loops
+                .iter()
+                .flatten()
+                .filter(|c| c.edge != e)
+                .all(|c| {
+                    let oe = &b.edges[c.edge];
+                    (0..=8).all(|i| {
+                        let x = oe.point(oe.t[0] + (oe.t[1] - oe.t[0]) * i as f64 / 8.0);
+                        let (rx, hx) = radial(x);
+                        // (A point of the rim itself: a seam's end.)
+                        let (r0, h0) = radial(p);
+                        if (rx - r0).abs() + (hx - h0).abs() <= 1e-9 * (1.0 + big) {
+                            return true;
+                        }
+                        if is_plane(fi) {
+                            // Into the plane face toward or away from the axis.
+                            let inward = m.dot(&(oc - p)) > 0.0;
+                            if inward {
+                                rx < rq - tol::POINT
+                            } else {
+                                rx > rq + tol::POINT
+                            }
+                        } else {
+                            let up = m.dot(&axis) > 0.0;
+                            if up {
+                                hx > hq + tol::POINT
+                            } else {
+                                hx < hq - tol::POINT
+                            }
+                        }
+                    })
+                })
+        };
+        if !clear(fa, ma, pa) || !clear(fb, mb, pb) {
+            return None;
+        }
+        // The torus: u from the rim's vertex round the axis, v the tube's angle (its x the
+        // radial direction there, z the axis).
+        let ex = (p - oc - axis * (p - oc).dot(&axis)).normalize();
+        let tf = Frame {
+            o: oc + axis * hc,
+            x: ex,
+            y: axis.cross(&ex),
+            z: axis,
+        };
+        let surf = Surface::Torus {
+            f: tf,
+            rmaj: rc,
+            rmin: r,
+        };
+        let angle = |q: P3| {
+            let w = q - centre;
+            w.dot(&axis).atan2(w.dot(&ex))
+        };
+        let (va, mut vb) = (angle(pa), angle(pb));
+        // (The quarter between them, the short way.)
+        if vb - va > PI {
+            vb -= TAU;
+        } else if va - vb > PI {
+            vb += TAU;
+        }
+        // The rim's vertex: moved to b's side; a new one on a's.
+        let v = ed.v[0];
+        nb.verts[v].p = pb;
+        nb.verts.push(Vertex {
+            p: pa,
+            tol: TOL_MIN,
+        });
+        let vnew = nb.verts.len() - 1;
+        // Seams of the faces ending at the vertex: a cylinder's line, cut back along it.
+        for (fi, vert) in [(fa, vnew), (fb, v)] {
+            if is_plane(fi) {
+                continue;
+            }
+            let to = nb.verts[vert].p;
+            let seams: Vec<usize> = b.faces[fi]
+                .loops
+                .iter()
+                .flatten()
+                .map(|c| c.edge)
+                .filter(|&x| x != e && b.edges[x].v.contains(&v))
+                .collect();
+            for s in seams {
+                let se = &mut nb.edges[s];
+                let Curve::Line { o, d } = se.curve else {
+                    return None;
+                };
+                let slot = if se.v[0] == v { 0 } else { 1 };
+                se.t[slot] = (to - o).dot(&d) / d.norm_squared();
+                se.v[slot] = vert;
+                if !(se.t[0] < se.t[1]) {
+                    return None;
+                }
+            }
+        }
+        // The rim on a, and a new one on b.
+        let t = ed.t;
+        nb.edges[e] = Edge {
+            curve: ca.clone(),
+            t,
+            v: [vnew, vnew],
+            degenerate: false,
+            tol: TOL_MIN,
+        };
+        nb.edges.push(Edge {
+            curve: cb.clone(),
+            t,
+            v: [v, v],
+            degenerate: false,
+            tol: TOL_MIN,
+        });
+        let eb = nb.edges.len() - 1;
+        for (fi, edge, curve) in [(fa, e, &ca), (fb, eb, &cb)] {
+            let s = nb.faces[fi].surf.clone();
+            for co in nb.faces[fi].loops.iter_mut().flatten() {
+                if co.edge == e {
+                    let was = co.pc.point(0.5 * (t[0] + t[1]));
+                    co.edge = edge;
+                    co.pc = pcurve(&s, curve, t[0], t[1], Some(P2::new(was.x, was.y)));
+                }
+            }
+        }
+        // The meridian at the vertex, from the lower tube angle to the higher.
+        let (lo, hi, vlo, vhi) = if va < vb {
+            (va, vb, vnew, v)
+        } else {
+            (vb, va, v, vnew)
+        };
+        nb.edges.push(Edge {
+            curve: Curve::Circle {
+                c: centre,
+                x: ex,
+                y: axis,
+                r,
+            },
+            t: [lo, hi],
+            v: [vlo, vhi],
+            degenerate: false,
+            tol: TOL_MIN,
+        });
+        let seam = nb.edges.len() - 1;
+        let (elo, ehi) = if va < vb { (e, eb) } else { (eb, e) };
+        let line = |ox: f64, oy: f64, dx: f64, dy: f64| Curve::Line {
+            o: P3::new(ox, oy, 0.0),
+            d: V3::new(dx, dy, 0.0),
+        };
+        // Counter-clockwise in (u, v) (u = t − t0): along the lower circle, up the seam at
+        // u = 2π, back along the higher, down the seam at u = 0.
+        let mut lp = vec![
+            Coedge {
+                edge: elo,
+                fwd: true,
+                pc: line(-t0, lo, 1.0, 0.0),
+            },
+            Coedge {
+                edge: seam,
+                fwd: true,
+                pc: line(TAU, 0.0, 0.0, 1.0),
+            },
+            Coedge {
+                edge: ehi,
+                fwd: false,
+                pc: line(-t0, hi, 1.0, 0.0),
+            },
+            Coedge {
+                edge: seam,
+                fwd: false,
+                pc: line(0.0, 0.0, 0.0, 1.0),
+            },
+        ];
+        // Out of the tube where the material is round its centre (a convex rim).
+        let sense = convex;
+        if !sense {
+            lp.reverse();
+            for c in lp.iter_mut() {
+                c.fwd = !c.fwd;
+            }
+        }
+        // Each rim run against its face's use of it.
+        let fwd_of = |edge: usize| lp.iter().find(|c| c.edge == edge).map(|c| c.fwd);
+        if fwd_of(e)? == sa || fwd_of(eb)? == sb {
+            return None;
+        }
+        nb.faces.push(Face {
+            surf,
+            sense,
+            loops: vec![lp],
+        });
+        let fi = nb.faces.len() - 1;
+        nb.shells[0].faces.push(fi);
+        src.push(vec![FaceSrc::New(Origin::FromEdge {
+            body: input,
+            edge: EdgeId(e as u64),
+        })]);
+        // The corner's centroid k_c·r in from the rim along both faces (out of the material
+        // for a concave rim, where the round adds).
+        let (rho, _) = radial(p + (ma + mb) * (k_c * r));
+        change += if convex { -1.0 } else { 1.0 } * area * TAU * rho;
+    }
+    if !nb.check_with(CheckLevel::Fast).is_empty() {
+        return None;
+    }
+    let (v0, v1) = (super::mass::body_volume(b), super::mass::body_volume(&nb));
+    ((v0 + change - v1).abs() <= 1e-9 * v0.abs().max(1.0)).then_some((nb, src))
+}

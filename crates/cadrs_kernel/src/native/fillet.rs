@@ -12229,14 +12229,16 @@ fn local_blend(
         FULLY_CHECKED.with(|c| *c.borrow_mut() = Some(made.0.clone()));
         return Ok(made);
     }
-    // Every edge of a prism's smooth top loop, or upright edges of a prism of planes, rounded
-    // by one radius: in closed form.
+    // Every edge of a prism's smooth top loop, upright edges of a prism of planes, or rims
+    // (circles between a plane and a cylinder about one axis) rounded by one radius: in closed
+    // form.
     if !flat
         && let Some(r) = uniform_radius(edges, ratios)
         && let Some(made) = {
             let es: Vec<usize> = edges.iter().map(|x| x.0).collect();
             super::fillet_prism::prism_rim(b, input, &es, r)
                 .or_else(|| super::fillet_prism::prism_uprights(b, input, &es, r))
+                .or_else(|| super::fillet_prism::rims(b, input, &es, r))
         }
     {
         debug(|| "a prism's rim or uprights, in closed form".to_string());
