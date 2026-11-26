@@ -32,6 +32,24 @@ test('ui: Tickets tab and its controls are wired', () => {
   assert.match(html, /api\.openPath\('tickets'\)/);
 });
 
+test('ui: the New ticket tab keeps text and attachments apart', () => {
+  assert.match(html, /newissue: 'New ticket'/, 'New ticket tab in the nav');
+  for (const id of ['newissue', 'iTitle', 'iWhat', 'iEnv', 'iPick', 'iFiles', 'iClear', 'iSave', 'iCopy', 'iGh', 'iFolder', 'iOut']) {
+    assert.match(html, new RegExp(`id="${id}"`), `#${id} exists`);
+  }
+  assert.match(html, /api\.pickIssueFiles\(/);
+  assert.match(html, /api\.issueCreate\(/);
+  assert.match(html, /api\.issueCopy\(/);
+  assert.match(html, /api\.issueOpen\(/);
+  assert.match(html, /api\.openIssues\(/);
+  assert.match(preloadSource, /pickIssueFiles: \(\) => ipcRenderer\.invoke\('issue-pick-files'\)/);
+  assert.match(preloadSource, /issueCreate: \(issue\) => ipcRenderer\.invoke\('issue-create'/);
+  for (const channel of ['issue-pick-files', 'issue-create', 'issue-copy', 'issue-open', 'open-issues']) {
+    assert.match(mainSource, new RegExp(`ipcMain\\.handle\\('${channel}'`), `handler ${channel}`);
+  }
+  assert.match(mainSource, /require\('\.\/issues'\)/);
+});
+
 test('ui: onboarding, per-document results and guarded buttons exist', () => {
   assert.match(html, /id="onboard"/);
   assert.match(html, /id="loginHint"/);
@@ -103,7 +121,7 @@ test('main: the Onshape pane gets a Chrome identity, GPU switches and navigation
 test('package.json: test script and packaged files include the new modules', () => {
   assert.equal(pkg.scripts.test, 'node --test "test/**/*.test.js"');
   assert.equal(pkg.scripts.tickets, 'node tickets.js');
-  for (const file of ['main.js', 'chrome.js', 'preload.js', 'tickets.js', 'reports.js', 'reportfiles.js', 'bugreport.js', 'fsanalyze.js', 'comparereport.js', 'mdhtml.js', 'ui/**']) {
+  for (const file of ['main.js', 'chrome.js', 'preload.js', 'tickets.js', 'issues.js', 'reports.js', 'reportfiles.js', 'bugreport.js', 'fsanalyze.js', 'comparereport.js', 'mdhtml.js', 'ui/**']) {
     assert.ok(pkg.build.files.includes(file), `packaged file ${file}`);
   }
 });

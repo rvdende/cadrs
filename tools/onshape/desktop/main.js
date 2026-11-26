@@ -15,6 +15,7 @@ const { summarize, roots: rootsReport, perDocument, perDocumentFromJson, formatP
 const { readReportFiles } = require('./reportfiles');
 const tickets = require('./tickets');
 const { chromeUserAgent, applyGpuSwitches, softwareMode, softwareRelaunchArgs } = require('./chrome');
+const issues = require('./issues');
 
 const ROOT = process.env.CADRS_ONSHAPE_ROOT || path.join(os.homedir(), 'work', 'cadrs_onshape');
 const RAW = path.join(ROOT, 'raw');
@@ -44,6 +45,7 @@ let win, panel, onshape, receiver, importer = null, cancelled = false, busy = fa
 
 const resource = (name) => (app.isPackaged ? path.join(process.resourcesPath, name) : path.join(__dirname, '..', name));
 const ticketsDir = () => path.join(ROOT, 'tickets');
+const issuesDir = () => path.join(ROOT, 'issues');
 
 // python3 is optional now (reports and tickets are JS); only fs_decode.py and the report-summary
 // fallback use it, and the UI degrades gracefully when it is missing.
@@ -300,7 +302,14 @@ ipcMain.handle('sink', async (_e, { route, path: rel, method, body }) => {
 
 ipcMain.handle('info', () => ({
   root: ROOT, raw: RAW, loggedIn: onshapeReady(), python: pythonAvailable(),
-  cadrsBin: cadrsBinary(), ticketsDir: ticketsDir(), reportFile: path.join(ROOT, 'import-report.txt'),
+  cadrsBin: cadrsBinary(), ticketsDir: ticketsDir(), issuesDir: issuesDir(),
+  reportFile: path.join(ROOT, 'import-report.txt'),
+  versions: {
+    app: app.getVersion(),
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    platform: `${os.type()} ${os.release()} (${os.arch()})`,
+  },
 }));
 ipcMain.handle('current', announceCurrent);
 
@@ -516,6 +525,34 @@ ipcMain.handle('tickets-open', (_e, { title, markdown, key } = {}) => {
 
 // FeatureScript analysis: timeline and functions, with Onshape's regeneration times and, when a
 // document is given, cadrs's per-feature import times (a traced dry run).
+// General cadrs issues (not tied to an Onshape import): the body text and the attachments are
+// kept apart. `issues-create` writes <root>/issues/<date>-<slug>/{issue.md,issue.json,attachments/};
+// opening GitHub copies the text and opens the new-issue page with the title (GitHub cannot be
+// given attachments through a URL, so the panel tells the user to drag them in).
+ipcMain.handle('issue-pick-files', async () => {
+  const r = await dialog.showOpenDialog({
+    title: 'Attach files to a cadrs issue',
+    properties: ['openFile', 'multiSelections'],
+  });
+  return r.canceled ? [] : r.filePaths;
+});
+ipcMain.handle('issue-create', (_e, { title, body, files } = {}) => {
+  try {
+    return issues.createDraft({ title, body, files: files || [], root: ROOT });
+  } catch (e) {
+    return { error: String(e && e.message ? e.message : e) };
+  }
+});
+ipcMain.handle('issue-copy', (_e, text) => {
+  require('electron').clipboard.writeText(String(text || ''));
+  return { copied: true };
+});
+ipcMain.handle('issue-open', (_e, { title, body } = {}) => openIssue(title || 'cadrs issue', body || ''));
+ipcMain.handle('open-issues', () => {
+  fs.mkdirSync(issuesDir(), { recursive: true });
+  return shell.openPath(issuesDir());
+});
+
 ipcMain.handle('fs-open', async () => {
   const r = await dialog.showOpenDialog({ filters: [{ name: 'FeatureScript', extensions: ['fs', 'txt', '*'] }], properties: ['openFile'] });
   return r.canceled ? null : fs.readFileSync(r.filePaths[0], 'utf8');

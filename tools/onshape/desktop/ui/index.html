@@ -133,6 +133,27 @@
   <pre id="tIndex" hidden></pre>
 </div>
 
+<div class="tab" id="newissue">
+  <div class="notice">For bugs that are <b>not</b> about the Onshape import. The text and the attachments are kept as two
+    separate things: <code>issue.md</code> (paste into the issue) and <code>attachments/</code> (drag them into it) —
+    GitHub cannot attach files from a URL.</div>
+  <input type="text" id="iTitle" placeholder="Title: what is wrong, in one line (e.g. 'Extrude of selected sketch regions fills the holes')">
+  <textarea id="iWhat" rows="6" placeholder="What happened: what you did, what you expected, what you got. Include the smallest steps that show it."></textarea>
+  <input type="text" id="iEnv" placeholder="Environment (cadrs version, OS, browser)">
+  <div class="row">
+    <button class="b" id="iPick">Attach files…</button>
+    <small id="iFiles">none</small>
+    <button class="b" id="iClear">Clear attachments</button>
+  </div>
+  <div class="row">
+    <button class="a" id="iSave">Save draft</button>
+    <button class="b" id="iCopy">Copy text</button>
+    <button class="b" id="iGh">Open GitHub issue</button>
+    <button class="b" id="iFolder">Open drafts folder</button>
+  </div>
+  <pre id="iOut"></pre>
+</div>
+
 <div class="tab" id="fsx">
   <div class="row"><button class="b" id="fsFile">Open .fs file…</button>
     <select id="fsDoc"></select></div>
@@ -153,7 +174,7 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-const tabs = { docs: 'Documents', progress: 'Progress', report: 'Report', tickets: 'Tickets', fsx: 'FeatureScript', cmp: 'Compare' };
+const tabs = { docs: 'Documents', progress: 'Progress', report: 'Report', tickets: 'Tickets', newissue: 'New ticket', fsx: 'FeatureScript', cmp: 'Compare' };
 for (const [k, v] of Object.entries(tabs)) {
   const b = document.createElement('button'); b.textContent = v; b.dataset.t = k; b.onclick = () => show(k); $('nav').append(b);
 }
@@ -374,6 +395,57 @@ $('tList').onclick = async (e) => {
   }
 };
 
+// ---- New ticket tab: any cadrs bug, text and attachments kept apart -----------------
+let issueFiles = [];
+function renderIssueFiles() {
+  const names = issueFiles.map((f) => f.split(/[\\/]/).pop());
+  $('iFiles').textContent = names.length ? `${names.length} file(s): ${names.join(', ')}` : 'none';
+}
+$('iPick').onclick = async () => {
+  const files = await api.pickIssueFiles();
+  if (!files || !files.length) return;
+  issueFiles = [...new Set([...issueFiles, ...files])];
+  renderIssueFiles();
+};
+$('iClear').onclick = () => { issueFiles = []; renderIssueFiles(); };
+function issueText() {
+  const what = $('iWhat').value.trim();
+  const env = $('iEnv').value.trim();
+  const parts = [];
+  if (what) parts.push(what);
+  parts.push('### Environment', `- ${env || 'not given'}`);
+  return `${parts.join('\n\n')}\n`;
+}
+function issueTitle() {
+  return $('iTitle').value.trim();
+}
+async function saveIssue(openOnGitHub) {
+  const title = issueTitle();
+  if (!title) { $('iOut').textContent = 'A title is needed.'; return; }
+  if (!$('iWhat').value.trim()) { $('iOut').textContent = 'Describe what happened first.'; return; }
+  const body = issueText();
+  const draft = await api.issueCreate({ title, body, files: issueFiles });
+  if (draft.error) { $('iOut').textContent = `Cannot save the draft: ${draft.error}`; return; }
+  await api.issueCopy(body);
+  const files = draft.attachments.length
+    ? `Attachments (${draft.attachments.length}) saved apart, in ${draft.attachmentsDir}; drag them into the issue.`
+    : 'No attachments.';
+  $('iOut').textContent = [
+    `Draft: ${draft.dir}`,
+    `Text: ${draft.bodyFile}`,
+    files,
+    'The issue text is in the clipboard; GitHub gets the title from the URL, so paste the text as the body.',
+  ].join('\n');
+  if (openOnGitHub) await api.issueOpen({ title, body });
+}
+$('iSave').onclick = () => saveIssue(false);
+$('iCopy').onclick = async () => {
+  await api.issueCopy(issueText());
+  $('iOut').textContent = 'Issue text copied to the clipboard.';
+};
+$('iGh').onclick = () => saveIssue(true);
+$('iFolder').onclick = () => api.openIssues();
+
 // ---- FeatureScript tab ---------------------------------------------------------------
 $('fsFile').onclick = async () => { const t = await api.fsOpen(); if (t !== null) $('fsText').value = t; };
 $('fsGo').onclick = async () => {
@@ -457,6 +529,8 @@ api.onEvent((ev) => {
     $('bCadrs').disabled = !info.cadrsBin;
     $('bCadrs').title = info.cadrsBin ? `Start ${info.cadrsBin}` : 'cadrs app not built: cargo build --release -p cadrs (or set CADRS_BIN)';
     if (info.loggedIn) $('loginHint').textContent = 'Onshape: logged in.';
+    const platform = info.versions && info.versions.platform ? info.versions.platform : '';
+    $('iEnv').value = [platform, `importer ${info.versions ? info.versions.app : ''}`].filter(Boolean).join(' · ');
   } catch (e) {
     $('where').textContent = `Cannot read the app settings: ${e.message}`;
   }

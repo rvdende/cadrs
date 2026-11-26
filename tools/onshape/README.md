@@ -61,7 +61,8 @@ importer panel on the left. One transfer is:
    saved under `~/work/cadrs_onshape/` (`import-report.txt`, `import-report.json`,
    `missing-summary.txt`, `bug-report.md`).
 5. **Open tickets** — the *Tickets* tab groups every translation gap by a stable key and writes
-   one Markdown issue draft per group (see [Tickets](#tickets)).
+   one Markdown issue draft per group (see [Tickets](#tickets)); the *New ticket* tab is for any
+   other cadrs bug (see [New ticket](#new-ticket-any-cadrs-bug-not-just-an-import)).
 6. **Dig deeper** — the *FeatureScript* tab lines up the Part Studio's FeatureScript timeline and
    functions with Onshape's regeneration times and cadrs's import times; the *Compare* tab puts
    the imported `.cadrs` next to Onshape's STEP export of the same Part Studio (steps, volume,
@@ -140,6 +141,36 @@ node tools/onshape/tickets.mjs ~/work/cadrs_onshape/import-report.json
 The "what is missing" summaries the app shows are also standalone
 (`node tools/onshape/summarize.mjs`, `node tools/onshape/roots.mjs`); the Python
 `summarize.py`/`roots.py` remain for anyone using them directly.
+
+## New ticket: any cadrs bug, not just an import
+
+The *New ticket* tab is for problems that are not about an Onshape import (sketch/feature bugs,
+wrong results, UI issues). It keeps the two things GitHub needs as **separate streams**:
+
+- the **text** (what happened, expected, steps) in `issue.md` — copied to the clipboard and pasted
+  as the issue body;
+- the **attachments** copied into `attachments/` next to it — drag them into the issue, because
+  GitHub cannot attach files through a URL.
+
+A draft is a folder under `<root>/issues/` (`$CADRS_ONSHAPE_ROOT`, by default
+`~/work/cadrs_onshape/issues/`):
+
+```
+<root>/issues/2026-11-26-07-30-12-extrude-of-selected-sketch-regions/
+  issue.md        the body (with an ### Attachments list at the end)
+  attachments/    the files themselves
+  issue.json      title, labels, body, attachment names, the GitHub URL
+<root>/issues/INDEX.md
+```
+
+The same works without the app:
+
+```sh
+node tools/onshape/desktop/issues.js --title "Extrude of selected regions fills the holes" \
+    --body-file body.md --attach test_26nov.cadrs --attach before.png --root ~/work/cadrs_onshape
+# then: open the printed GitHub URL, paste issue.md as the body, drag attachments/ into it
+# (with gh authenticated: gh issue create --repo rvdende/cadrs --title "…" --body-file issue.md)
+```
 
 ## Scraping (manual, without the app)
 
