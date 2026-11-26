@@ -2279,6 +2279,7 @@ asm-mate-reorient-secondary-axis = 第 2 軸の向きを変更
 asm-mate-animate-dof = 合致の自由度をアニメーション
 asm-mate-solve = 解決
 asm-mate-solve-all = すべての合致を解決
+asm-mate-cant-hold = この合致は部品の他の合致と同時に成り立ちません。部品はそのままの位置に残ります
 
 ## crates/cadrs_app/src/assembly/mate_display.rs
 asm-show-mates-mode = 合致表示モード (H)：インスタンスにカーソルを合わせ、クリックで固定

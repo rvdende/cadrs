@@ -407,3 +407,82 @@ fn a_fifty_instance_chain_solves_fast() {
         );
     }
 }
+
+/// A frame at `origin` with Z up.
+fn flat(origin: [f64; 3]) -> ConnectorFrame {
+    ConnectorFrame::new(origin, [0.0, 0.0, 1.0], [1.0, 0.0, 0.0])
+}
+
+fn revolute(n: u128, a: (u128, [f64; 3]), b: (u128, [f64; 3])) -> MateFeature {
+    feature(
+        n,
+        MateKind::Mate(Mate::new(
+            MateType::Revolute,
+            MateConnector::at(InstanceId::from_u128(a.0), flat(a.1)),
+            MateConnector::at(InstanceId::from_u128(b.0), flat(b.1)),
+        )),
+    )
+}
+
+#[test]
+fn a_new_mate_keeps_the_movers_other_mates() {
+    // #312: links A and B (10 mm, ends at 0 and 10 along X) hang from the fixed ground G: A turns
+    // about G's origin (Revolute 1), B about A's far end (Revolute 2), both lying along X. A new
+    // Revolute joins B's far end to G at (10, 10, 0), closing the triangle. B has another mate,
+    // so the pick solves every mate from where the parts are: B turns a quarter about A's end and
+    // A stays put. Snapping B onto the new mate alone would tear it off Revolute 2.
+    let new = MateId::from_u128(3);
+    let mut asm = Assembly {
+        instances: vec![
+            inst(1, Pose::IDENTITY, true),
+            inst(2, Pose::IDENTITY, false),
+            inst(3, Pose::translation([10.0, 0.0, 0.0]), false),
+            inst(4, Pose::translation([50.0, 0.0, 0.0]), false),
+        ],
+        mates: vec![
+            revolute(1, (2, [0.0; 3]), (1, [0.0; 3])),
+            revolute(2, (3, [0.0; 3]), (2, [10.0, 0.0, 0.0])),
+            revolute(3, (3, [10.0, 0.0, 0.0]), (1, [10.0, 10.0, 0.0])),
+        ],
+        ..Default::default()
+    };
+    let b = InstanceId::from_u128(3);
+    assert!(solver::mated_elsewhere(&asm, b, new));
+    assert!(!solver::mated_elsewhere(&asm, InstanceId::from_u128(4), new), "no mates");
+
+    let s = solver::solve(
+        &asm,
+        &frame_of,
+        &SolveOptions {
+            movers: vec![b],
+            ..Default::default()
+        },
+    );
+    assert!(s.converged, "{}", s.residual);
+    apply(&mut asm, &s);
+    for m in &asm.mates {
+        let [c0, c1] = m.mate().unwrap().connectors;
+        let d = dist(world(&asm, &c0).origin, world(&asm, &c1).origin);
+        assert!(d < 1e-6, "{} off by {d}", m.name);
+    }
+    let a = asm.instance(InstanceId::from_u128(2)).unwrap().pose;
+    assert!(dist(a.apply([10.0, 0.0, 0.0]), [10.0, 0.0, 0.0]) < 1e-3, "A stays put");
+
+    // The old pick, the new mate's snap alone, puts B's near end at (0, 10, 0): off Revolute 2.
+    let mut asm2 = asm.clone();
+    asm2.instance_mut(b).unwrap().pose = Pose::translation([10.0, 0.0, 0.0]);
+    asm2.instance_mut(InstanceId::from_u128(2)).unwrap().pose = Pose::IDENTITY;
+    let s = solver::solve(
+        &asm2,
+        &frame_of,
+        &SolveOptions {
+            movers: vec![b],
+            snap: Some(new),
+            snap_only: true,
+            ..Default::default()
+        },
+    );
+    apply(&mut asm2, &s);
+    let near = asm2.instance(b).unwrap().pose.apply([0.0; 3]);
+    assert!(dist(near, [10.0, 0.0, 0.0]) > 5.0, "the snap alone tears B off: {near:?}");
+}

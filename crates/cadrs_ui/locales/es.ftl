@@ -2279,6 +2279,7 @@ asm-mate-reorient-secondary-axis = Reorientar eje secundario
 asm-mate-animate-dof = Animar GDL de la relación
 asm-mate-solve = Resolver
 asm-mate-solve-all = Resolver todas las relaciones
+asm-mate-cant-hold = Esta relación no puede cumplirse junto con las otras relaciones de la pieza: las piezas se quedan donde están
 
 ## crates/cadrs_app/src/assembly/mate_display.rs
 asm-show-mates-mode = Modo de mostrar relaciones (H): pase el puntero sobre una instancia, haga clic para fijarla

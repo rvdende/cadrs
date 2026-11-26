@@ -511,7 +511,20 @@ fn run_solve(
     }
     let mover = s.mover(&doc_model);
     let pair = !matches!(s.mate_type, MateType::Tangent | MateType::Width);
-    let opts = if snap_only && !pair {
+    // A pick never pulls the moving instance off the mates it already has (#312): when it has
+    // others, every mate is solved from where the parts are, so it moves only within the
+    // freedom they leave, its free motion staying where it is. A part with no other mates is
+    // snapped straight onto the new mate.
+    let held = snap_only
+        && mover.is_some_and(|m| {
+            cadrs_core::assembly::solver::mated_elsewhere(&doc_model, m, s.id)
+        });
+    let opts = if held {
+        SolveOptions {
+            movers: mover.into_iter().collect(),
+            ..Default::default()
+        }
+    } else if snap_only && !pair {
         // Tangent and Width can't be snapped: solve this mate alone (and the groups). A Width's
         // tabs on two instances move alike (mirror-symmetric).
         let id = s.id;
@@ -545,6 +558,13 @@ fn run_solve(
     let mut sol = cadrs_core::assembly::solve(&model, &solids, &opts);
     if !sol.converged {
         warn!("mate solve: residual {:e}", sol.residual);
+        if held {
+            // The new mate can't hold together with the others: the parts stay where they are.
+            s.preview.clear();
+            world.insert_resource(s);
+            crate::linked::toast(world, tr("asm-mate-cant-hold"));
+            return None;
+        }
     }
     // A Tangent's first placement: the moving entity is also drawn toward the picked face, so
     // the contact lands on the face that was picked, not somewhere on its unbounded surface.

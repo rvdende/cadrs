@@ -653,7 +653,11 @@ fn solve_mate(
         .map(|c| c.instance)
         .find(|i| !ground.contains(i));
     // The preview keeps the mate's free motion where it is (a realigned slot's X turns the
-    // connector, not the part, A23.3); only what the edit constrains moves.
+    // connector, not the part, A23.3); only what the edit constrains moves. An instance with
+    // other mates isn't snapped off them (#312): every mate is solved from where the parts are.
+    let held = snap_only
+        && mover.is_some_and(|i| cadrs_core::assembly::solver::mated_elsewhere(&model, i, mate));
+    let snap_only = snap_only && !held;
     let opts = SolveOptions {
         movers: mover.into_iter().collect(),
         snap: snap_only.then_some(mate),

@@ -2279,6 +2279,7 @@ asm-mate-reorient-secondary-axis = Riorienta asse secondario
 asm-mate-animate-dof = Anima GDL dell'accoppiamento
 asm-mate-solve = Risolvi
 asm-mate-solve-all = Risolvi tutti gli accoppiamenti
+asm-mate-cant-hold = Questo accoppiamento non può valere insieme agli altri accoppiamenti della parte: le parti restano dove sono
 
 ## crates/cadrs_app/src/assembly/mate_display.rs
 asm-show-mates-mode = Modalità mostra accoppiamenti (H): passare sopra un'istanza, fare clic per fissarla

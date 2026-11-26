@@ -2279,6 +2279,7 @@ asm-mate-reorient-secondary-axis = 重新定向次轴
 asm-mate-animate-dof = 动画演示配合自由度
 asm-mate-solve = 求解
 asm-mate-solve-all = 求解所有配合
+asm-mate-cant-hold = 此配合无法与零件的其他配合同时满足：零件保持原位
 
 ## crates/cadrs_app/src/assembly/mate_display.rs
 asm-show-mates-mode = 显示配合模式 (H)：悬停在实例上，单击以固定显示

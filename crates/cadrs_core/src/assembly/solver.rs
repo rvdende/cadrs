@@ -73,7 +73,8 @@
 //! doesn't move. A revolute instance only turns.
 //!
 //! **When** (A6.11): the app never solves continuously. It solves when the second connector of
-//! a mate is picked (with that mate's snap), on the dialog's **Solve**, on ✓, for **Reset** /
+//! a mate is picked (with that mate's snap; when the moving instance has other mates, every
+//! mate from where the parts are, without the snap, [`mated_elsewhere`]), on the dialog's **Solve**, on ✓, for **Reset** /
 //! **Apply limit position** (a drive on that mate), per frame of an animation, and while
 //! dragging. The result goes into the document through a command, as one undo step.
 //!
@@ -130,6 +131,21 @@ pub fn grounded(asm: &Assembly) -> std::collections::HashSet<InstanceId> {
         .filter(|b| b.ground)
         .flat_map(|b| b.members.iter().map(|(m, _)| *m))
         .collect()
+}
+
+/// Whether `instance`'s body (it and the instances grouped with it) is held by a mate other
+/// than `except`. A new mate's pick must then move it only within the freedom those mates
+/// leave, not snap it onto the new mate alone (#312).
+pub fn mated_elsewhere(asm: &Assembly, instance: InstanceId, except: MateId) -> bool {
+    let (_, of) = bodies_of(asm);
+    let Some(body) = of.get(&instance) else {
+        return false;
+    };
+    asm.mates
+        .iter()
+        .filter(|f| !f.suppressed && f.id != except)
+        .filter_map(|f| f.mate())
+        .any(|m| m.connectors.iter().any(|c| of.get(&c.instance) == Some(body)))
 }
 
 /// The solved placements.

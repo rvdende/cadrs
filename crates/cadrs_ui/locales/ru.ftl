@@ -2279,6 +2279,7 @@ asm-mate-reorient-secondary-axis = Повернуть вторичную ось
 asm-mate-animate-dof = Анимировать степень свободы
 asm-mate-solve = Решить
 asm-mate-solve-all = Решить все сопряжения
+asm-mate-cant-hold = Это сопряжение не может выполняться вместе с другими сопряжениями детали: детали остаются на месте
 
 ## crates/cadrs_app/src/assembly/mate_display.rs
 asm-show-mates-mode = Режим показа сопряжений (H): наведите указатель на экземпляр, щелкните, чтобы закрепить

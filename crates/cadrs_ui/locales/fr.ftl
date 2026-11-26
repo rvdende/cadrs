@@ -2279,6 +2279,7 @@ asm-mate-reorient-secondary-axis = Réorienter l'axe secondaire
 asm-mate-animate-dof = Animer le DDL de la liaison
 asm-mate-solve = Résoudre
 asm-mate-solve-all = Résoudre toutes les liaisons
+asm-mate-cant-hold = Cette liaison ne peut pas tenir avec les autres liaisons de la pièce : les pièces restent où elles sont
 
 ## crates/cadrs_app/src/assembly/mate_display.rs
 asm-show-mates-mode = Mode d'affichage des liaisons (H) : survolez une instance, cliquez pour épingler

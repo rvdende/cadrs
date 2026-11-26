@@ -3373,6 +3373,8 @@ asm-mate-animate-dof = Animate mate DOF
 # Button: solves the assembly's mates (a verb).
 asm-mate-solve = Solve
 asm-mate-solve-all = Solve all mates
+# A toast when a mate's pick can't solve: the new mate and the moving part's other mates can't all hold.
+asm-mate-cant-hold = This mate can't hold together with the part's other mates: the parts stay where they are
 
 ## crates/cadrs_app/src/assembly/mate_display.rs
 # A banner while the Show mates mode is on (H is its key).

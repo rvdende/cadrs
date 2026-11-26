@@ -2279,6 +2279,7 @@ asm-mate-reorient-secondary-axis = Reorientar eixo secundário
 asm-mate-animate-dof = Animar GDL do posicionamento
 asm-mate-solve = Resolver
 asm-mate-solve-all = Resolver todos os posicionamentos
+asm-mate-cant-hold = Este posicionamento não pode valer junto com os outros posicionamentos da peça: as peças ficam onde estão
 
 ## crates/cadrs_app/src/assembly/mate_display.rs
 asm-show-mates-mode = Modo mostrar posicionamentos (H): passe o mouse sobre uma instância, clique para fixar
