@@ -252,6 +252,51 @@ fn traced(
     ub: ((f64, f64), (f64, f64)),
     bb: &Bbox,
 ) -> Ssi {
+    // Kept by its inputs (two generations of at most this many): a split's two booleans, an
+    // operation asked again, trace the same pair over the same boxes.
+    const KEPT: usize = 256;
+    #[derive(Default)]
+    struct Kept {
+        new: rustc_hash::FxHashMap<u128, Ssi>,
+        old: rustc_hash::FxHashMap<u128, Ssi>,
+    }
+    static KEPT_SSI: std::sync::LazyLock<std::sync::Mutex<Kept>> =
+        std::sync::LazyLock::new(Default::default);
+    let mut h = super::fingerprint::Key128::new();
+    h.surface(a);
+    h.surface(b);
+    h.f64s(&[
+        ua.0.0, ua.0.1, ua.1.0, ua.1.1, ub.0.0, ub.0.1, ub.1.0, ub.1.1,
+    ]);
+    h.f64s(&[bb.min.x, bb.min.y, bb.min.z, bb.max.x, bb.max.y, bb.max.z]);
+    let key = h.key();
+    {
+        let mut k = KEPT_SSI.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(r) = k.new.get(&key).cloned() {
+            return r;
+        }
+        if let Some(r) = k.old.remove(&key) {
+            k.new.insert(key, r.clone());
+            return r;
+        }
+    }
+    let r = traced_anew(a, ua, b, ub, bb);
+    let mut k = KEPT_SSI.lock().unwrap_or_else(|e| e.into_inner());
+    if k.new.len() >= KEPT {
+        k.old = std::mem::take(&mut k.new);
+    }
+    k.new.insert(key, r.clone());
+    r
+}
+
+/// [`traced`] without its keeping.
+fn traced_anew(
+    a: &Surface,
+    ua: ((f64, f64), (f64, f64)),
+    b: &Surface,
+    ub: ((f64, f64), (f64, f64)),
+    bb: &Bbox,
+) -> Ssi {
     // A graph over one parameter of one of the two: exact points with nothing traced.
     for (p, up, q) in [(a, ua, b), (b, ub, a)] {
         if let Some(polys) = super::ssi_graph::graph(p, up, q, bb) {
