@@ -316,3 +316,83 @@ fn every_edge_of_a_box_rounded_is_its_inset_grown() {
     assert_eq!(k.faces(id).unwrap().len(), 6 + 12 + 8);
     assert!(k.get(id).unwrap().check().is_empty());
 }
+
+#[test]
+fn a_rounded_prism_s_top_loop_rounds_in_closed_form() {
+    // A box W × L × H with its upright edges rounded by ρ, then its top loop by r: the rim
+    // takes r²(1 − π/4) along each line and, about each corner's axis, that area along the
+    // circle its centroid follows, of radius ρ − r(10 − 3π)/(3(4 − π)) (Pappus).
+    use cadrs_kernel::*;
+    use std::f64::consts::PI;
+    let (w, l, h, rho, r) = (6.8, 10.25, 3.67, 2.6, 0.5);
+    let mut k = DefaultKernel::default();
+    let bx = k
+        .primitive(&Primitive::Box {
+            min: nalgebra::Point3::new(0.0, 0.0, 0.0),
+            max: nalgebra::Point3::new(w, l, h),
+        })
+        .unwrap()
+        .first()
+        .unwrap();
+    let up: Vec<EdgeId> = k
+        .edges(bx)
+        .unwrap()
+        .iter()
+        .filter(|e| (e.end - e.start).normalize().z.abs() > 0.99)
+        .map(|e| e.id)
+        .collect();
+    let corners = k.fillet(bx, &up, rho).unwrap().first().unwrap();
+    let top: Vec<EdgeId> = k
+        .edges(corners)
+        .unwrap()
+        .iter()
+        .filter(|e| e.start.z > h - 1e-9 && e.end.z > h - 1e-9)
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(top.len(), 8);
+    let rim = k.fillet(corners, &top, r).unwrap().first().unwrap();
+    let section = r * r * (1.0 - PI / 4.0);
+    let centroid = r * (10.0 - 3.0 * PI) / (3.0 * (4.0 - PI));
+    let lines = 2.0 * (w - 2.0 * rho) + 2.0 * (l - 2.0 * rho);
+    let base = (w * l - (4.0 - PI) * rho * rho) * h;
+    let want = base - section * (lines + 2.0 * PI * (rho - centroid));
+    let got = k.mass_properties(rim).unwrap().volume;
+    assert!((got - want).abs() <= 1e-9 * want, "volume {got} vs {want}");
+    assert_eq!(k.faces(rim).unwrap().len(), 10 + 8);
+    assert!(k.get(rim).unwrap().check().is_empty());
+}
+
+#[test]
+fn a_prism_s_upright_edges_round_in_closed_form() {
+    // A pentagonal prism of height h with its five upright edges rounded by r: each corner of
+    // interior angle φ takes r²(cot(φ/2) − (π − φ)/2) of the section.
+    let pts = [[0.0, 0.0], [6.0, -1.0], [8.0, 4.0], [3.0, 7.0], [-1.0, 4.0]];
+    let (h, r) = (3.5, 0.7);
+    let mut k = NativeKernel::new();
+    let tuples: Vec<(f64, f64)> = pts.iter().map(|p| (p[0], p[1])).collect();
+    let prism = prism(&mut k, polygon(&tuples), h);
+    let up: Vec<EdgeId> = k
+        .edges(prism)
+        .unwrap()
+        .iter()
+        .filter(|e| (e.end - e.start).normalize().z.abs() > 0.99)
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(up.len(), 5);
+    let round = k.fillet(prism, &up, r).unwrap().first().unwrap();
+    let n = pts.len();
+    let mut area = 0.0;
+    let mut cut = 0.0;
+    for i in 0..n {
+        let (p, q, s) = (pts[(i + n - 1) % n], pts[i], pts[(i + 1) % n]);
+        area += 0.5 * (q[0] * s[1] - s[0] * q[1]);
+        let (u, v) = ([p[0] - q[0], p[1] - q[1]], [s[0] - q[0], s[1] - q[1]]);
+        let phi = ((u[0] * v[0] + u[1] * v[1]) / (u[0].hypot(u[1]) * v[0].hypot(v[1]))).acos();
+        cut += r * r * (1.0 / (phi / 2.0).tan() - (PI - phi) / 2.0);
+    }
+    let want = (area - cut) * h;
+    let got = k.mass_properties(round).unwrap().volume;
+    assert!((got - want).abs() <= 1e-9 * want, "volume {got} vs {want}");
+    assert_eq!(k.faces(round).unwrap().len(), 7 + 5);
+    assert!(k.get(round).unwrap().check().is_empty());
+}

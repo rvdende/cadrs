@@ -12078,6 +12078,19 @@ pub(crate) fn fully_checked(b: &Body) -> bool {
 /// vertex in place (a face narrower than 2r vanishes).
 ///
 /// [`grown_convex`]: super::offset::round::grown_convex
+/// The one radius of `edges`' laws, each a constant fillet (ratio 1); None where they vary.
+fn uniform_radius(edges: &[RadiusLaw], ratios: &[Ratio]) -> Option<f64> {
+    let r = edges.first()?.1.first()?.1;
+    let same = edges.iter().all(|(_, law)| {
+        law.iter()
+            .all(|x| (x.1 - r).abs() <= tol::REL_POINT * (1.0 + r))
+    });
+    let plain = ratios
+        .iter()
+        .all(|q| q.1.is_none() && (q.0 - 1.0).abs() <= tol::REL_POINT);
+    (same && plain && r > 0.0).then_some(r)
+}
+
 fn convex_all_edges(
     b: &Body,
     input: BodyId,
@@ -12213,6 +12226,20 @@ fn local_blend(
     // and grown back by a ball, built directly ([`convex_all_edges`]).
     if !flat && let Some(made) = convex_all_edges(b, input, edges, ratios) {
         debug(|| "a convex polyhedron's every edge, built as its inset grown".to_string());
+        FULLY_CHECKED.with(|c| *c.borrow_mut() = Some(made.0.clone()));
+        return Ok(made);
+    }
+    // Every edge of a prism's smooth top loop, or upright edges of a prism of planes, rounded
+    // by one radius: in closed form.
+    if !flat
+        && let Some(r) = uniform_radius(edges, ratios)
+        && let Some(made) = {
+            let es: Vec<usize> = edges.iter().map(|x| x.0).collect();
+            super::fillet_prism::prism_rim(b, input, &es, r)
+                .or_else(|| super::fillet_prism::prism_uprights(b, input, &es, r))
+        }
+    {
+        debug(|| "a prism's rim or uprights, in closed form".to_string());
         FULLY_CHECKED.with(|c| *c.borrow_mut() = Some(made.0.clone()));
         return Ok(made);
     }

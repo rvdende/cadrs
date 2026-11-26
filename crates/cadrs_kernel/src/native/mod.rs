@@ -208,6 +208,7 @@ pub mod fillet_geom;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod fillet_geom;
+pub(crate) mod fillet_prism;
 #[cfg(feature = "testkit")]
 pub mod fingerprint;
 #[cfg(not(feature = "testkit"))]
