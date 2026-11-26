@@ -200,6 +200,7 @@ icons! {
     INFO => ("info", Line, "Info"),
     INFO_FILLED => ("info-filled", Line, "Info (filled)"),
     HELP => ("help", Line, "Help"),
+    REPORT_PROBLEM => ("report-problem", Line, "Report a problem"),
     HELP_FILLED => ("help-filled", Line, "Help (filled)"),
     ERROR_FILLED => ("error-filled", Line, "Error"),
     WARNING_FILLED => ("warning-filled", Line, "Warning"),

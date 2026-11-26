@@ -52,6 +52,9 @@ Onshape-style CAD in Rust + Bevy 0.20.1. Local notes in `docs/` (git-ignored: `P
 - Input latency: windowed runs drop Bevy's pipelined rendering and queue one frame (so a
   sketch drag keeps up with the cursor); `CADRS_PIPELINED=1`, `CADRS_FRAME_LATENCY=2` restore
   Bevy's defaults to compare (`cadrs_harness::default_plugins`).
+- Crash reports: a person's runs log to `<data dir>/logs/` and keep crash reports in `crashes/`;
+  the next start offers to report one (`cadrs_app::crash`). `CADRS_CRASH=panic|abort` crashes
+  a run to try them.
 - App debugging: `CADRS_SLOW_FRAMES=<ms>` logs every frame slower than that with its slowest
   systems (`cadrs_app::debug_tools`; add further env-switched aids there). `CADRS_NO_VSYNC=1`
   shows a frame's real cost; `CADRS_UI_CHANGES=1` names the UI nodes that change every frame

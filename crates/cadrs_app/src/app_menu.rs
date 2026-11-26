@@ -2,7 +2,8 @@
 //! document. In a document it has the way back to the documents and what the document menu
 //! had (rename, export, a version, the workspaces, the units, a full rebuild); on the documents
 //! page, the documents folder, the labels and the Trash. Both end with Preferences, the
-//! keyboard shortcuts and GitHub (the repository, in the browser).
+//! keyboard shortcuts, GitHub (the repository, in the browser) and Report a problem
+//! (`crate::crash`).
 
 use bevy::prelude::*;
 use bevy::text::FontWeight;
@@ -89,6 +90,9 @@ fn app_entries() -> Vec<MenuEntry> {
             .into(),
         MenuItem::new("app-discord", tr("shell-app-menu-discord"))
             .icon("discord")
+            .into(),
+        MenuItem::new("app-report-problem", tr("crash-report-menu"))
+            .icon("report-problem")
             .into(),
     ]
 }
@@ -212,6 +216,7 @@ fn on_app_menu_action(
         "app-docs" => crate::help::open_docs(""),
         "app-github" => crate::open_url(crate::GITHUB),
         "app-discord" => crate::open_url(crate::DISCORD),
+        "app-report-problem" => commands.queue(crate::crash::report_problem),
         "app-documents" => commands.queue(crate::thumbnail::close_document),
         "document-menu-export" => commands.queue(crate::native_document::open_export),
         "document-menu-units" => commands.queue(crate::units_dialog::open_units_dialog),

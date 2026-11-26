@@ -312,6 +312,24 @@ shell-app-menu-github = GitHub
 # The cadrs Discord server (a chat for users and developers), opened in the browser.
 shell-app-menu-discord = Discord
 shell-app-menu-docs = Documentation
+
+## Crash reports and Report a problem (cadrs_app::crash)
+crash-report-menu = Report a problem…
+crash-title = cadrs closed unexpectedly
+crash-intro = The last time cadrs ran, it closed without warning. A report of what happened and that session's log were saved. Reporting it on GitHub helps us fix it: describe what you were doing, and attach the files.
+crash-report-title = Report a problem
+crash-report-intro = A report of this session (its version, system and log) was saved. Report the problem on GitHub: describe what you were doing, and attach the files.
+crash-privacy = Nothing is sent unless you choose to. The files may hold the names of your documents and folders; look them over before you attach them.
+crash-no-panic = cadrs stopped outside its own code (a graphics driver, for example), so there is no error message: the log shows what it was doing.
+crash-show-files = Show files
+crash-copy = Copy report
+crash-copied = Report copied
+crash-copy-failed = Cannot copy the report
+crash-add-document = Add document
+crash-add-document-tooltip = Adds a copy of “{ $name }” to the files, so we can reproduce the problem
+crash-document-added = Document added: { $path }
+crash-document-failed = Cannot add the document: { $error }
+crash-report-github = Report on GitHub
 # A disabled hint under the workspaces: how to make another one ("History" is the version history panel).
 shell-app-menu-workspace-hint = Branch from a version in History
 # The submenu listing the document's workspaces (its main line and branches) to switch to.

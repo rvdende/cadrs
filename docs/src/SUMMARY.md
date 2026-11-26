@@ -25,6 +25,7 @@
 
 - [Keyboard shortcuts](reference/keyboard-shortcuts.md)
 - [Preferences](reference/preferences.md)
+- [Reporting a problem](reference/reporting-problems.md)
 
 # Under the hood
 

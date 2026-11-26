@@ -2318,6 +2318,7 @@ dependencies = [
  "cadrs_harness",
  "cadrs_net",
  "cadrs_ui",
+ "ctrlc",
  "image",
  "js-sys",
 ]
