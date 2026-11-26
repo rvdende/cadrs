@@ -761,7 +761,9 @@ pub(crate) fn rims(
                 .filter(|c| c.edge != e)
                 .all(|c| {
                     let oe = &b.edges[c.edge];
-                    (0..=8).all(|i| {
+                    // (An edge from the rim's vertex, a seam cut back with it: its far end.)
+                    let from_rim = oe.v.contains(&ed.v[0]);
+                    (0..=8).filter(|&i| !from_rim || i == 0 || i == 8).all(|i| {
                         let x = oe.point(oe.t[0] + (oe.t[1] - oe.t[0]) * i as f64 / 8.0);
                         let (rx, hx) = radial(x);
                         // (A point of the rim itself: a seam's end.)
