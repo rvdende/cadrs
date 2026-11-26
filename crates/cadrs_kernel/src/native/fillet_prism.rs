@@ -651,12 +651,10 @@ pub(crate) fn rims(
     edges: &[usize],
     r: f64,
 ) -> Option<(Body, Vec<Vec<FaceSrc>>)> {
-    use std::f64::consts::{FRAC_PI_4, PI, TAU};
+    use std::f64::consts::{PI, TAU};
     if b.solids.len() != 1 || b.shells.len() != 1 || !(r > 0.0) || edges.is_empty() {
         return None;
     }
-    let k_c = (10.0 - 3.0 * PI) / (3.0 * (4.0 - PI));
-    let area = r * r * (1.0 - FRAC_PI_4);
     let mut nb = b.clone();
     let mut src: Vec<Vec<FaceSrc>> = (0..b.faces.len())
         .map(|i| vec![FaceSrc::Input(i)])
@@ -703,6 +701,15 @@ pub(crate) fn rims(
                     && (off - f.z * off.dot(&f.z)).norm() < 1e-9 * (1.0 + big)
                     && (cr - big).abs() < 1e-9 * (1.0 + big)
             }
+            // A cone about the axis through the rim.
+            Surface::Cone { f, r: cr, a } => {
+                let off = oc - f.o;
+                let (sa, ca) = a.sin_cos();
+                let v = off.dot(&f.z) / ca;
+                f.z.cross(&axis).norm() < tol::ANGULAR
+                    && (off - f.z * off.dot(&f.z)).norm() < 1e-9 * (1.0 + big)
+                    && (cr + v * sa - big).abs() < 1e-9 * (1.0 + big)
+            }
             _ => false,
         };
         let is_plane = |fi: usize| matches!(b.faces[fi].surf, Surface::Plane { .. });
@@ -719,12 +726,18 @@ pub(crate) fn rims(
         let (ma, mb) = (into(na, sa), into(nb_, sb));
         // Convex: into each face runs against the other's outward normal.
         let convex = ma.dot(&nb_) < 0.0;
-        if ma.dot(&nb_).abs() < 1.0 - 1e-6 || mb.dot(&na).abs() < 1.0 - 1e-6 {
+        // The faces' angle θ in the half plane through the axis: the ball r / sin(θ/2) from the
+        // rim along the bisector, touching each face s = r / tan(θ/2) from it (on whichever side
+        // of the faces the wedge between ma and mb is: material for a convex rim, air for a
+        // concave one).
+        let theta = ma.dot(&mb).clamp(-1.0, 1.0).acos();
+        if !(theta > 1e-3 && theta < PI - 1e-3) {
             return None;
         }
-        // The tube's centre, the two new circles' points, at the rim's vertex.
-        let centre = p + (ma + mb) * r;
-        let (pa, pb) = (p + ma * r, p + mb * r);
+        let s_len = r / (theta / 2.0).tan();
+        let bis = (ma + mb).normalize();
+        let centre = p + bis * (r / (theta / 2.0).sin());
+        let (pa, pb) = (p + ma * s_len, p + mb * s_len);
         let radial = |q: P3| {
             let w = q - oc;
             let h = w.dot(&axis);
@@ -951,10 +964,18 @@ pub(crate) fn rims(
             body: input,
             edge: EdgeId(e as u64),
         })]);
-        // The corner's centroid k_c·r in from the rim along both faces (out of the material
-        // for a concave rim, where the round adds).
-        let (rho, _) = radial(p + (ma + mb) * (k_c * r));
-        change += if convex { -1.0 } else { 1.0 } * area * TAU * rho;
+        // The corner the round cuts off (or fills, a concave rim): the kite of the two tangent
+        // segments less the ball's sector, of angle π − θ, and its centroid (Pappus).
+        let kite = r * s_len;
+        let alpha = PI - theta;
+        let sector = 0.5 * alpha * r * r;
+        let kite_c = ((p + pa.coords + centre.coords) / 3.0).coords * 0.5
+            + ((p + centre.coords + pb.coords) / 3.0).coords * 0.5;
+        let sector_c = centre - bis * (4.0 * r * (alpha / 2.0).sin() / (3.0 * alpha));
+        let corner = kite - sector;
+        let corner_c = P3::from((kite_c * kite - sector_c.coords * sector) / corner);
+        let (rho, _) = radial(corner_c);
+        change += if convex { -1.0 } else { 1.0 } * corner * TAU * rho;
     }
     if !nb.check_with(CheckLevel::Fast).is_empty() {
         return None;

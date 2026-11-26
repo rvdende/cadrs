@@ -429,3 +429,60 @@ fn a_cylinder_s_top_rim_rounds_in_closed_form() {
     assert_eq!(k.faces(round).unwrap().len(), 4);
     assert!(k.get(round).unwrap().check().is_empty());
 }
+
+#[test]
+fn a_frustum_s_top_rim_rounds_in_closed_form() {
+    // A frustum (radii 4 and 2, 3 high) with its top rim rounded by r: in the half plane
+    // through the axis the round cuts off the corner between the top and the slanted side
+    // (the kite of the tangent segments less the ball's sector), swept round the axis by its
+    // centroid (Pappus).
+    let (r0, r1, h, r) = (4.0f64, 2.0f64, 3.0f64, 0.5f64);
+    let mut k = NativeKernel::new();
+    let c = k
+        .primitive(&Primitive::Cone {
+            base: Point3::new(0.0, 0.0, 0.0),
+            axis: nalgebra::Unit::new_normalize(nalgebra::Vector3::z()),
+            base_radius: r0,
+            top_radius: r1,
+            height: h,
+        })
+        .unwrap()
+        .bodies[0];
+    let top: Vec<EdgeId> = k
+        .edges(c)
+        .unwrap()
+        .iter()
+        .filter(|e| e.start.z > h - 1e-9 && e.end.z > h - 1e-9)
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(top.len(), 1);
+    let round = k.fillet(c, &top, r).unwrap().bodies[0];
+    // The corner in (ρ, z).
+    let l = (r0 - r1).hypot(h);
+    let (ma, mb) = ((-1.0, 0.0), ((r0 - r1) / l, -h / l));
+    let theta = (ma.0 * mb.0 + ma.1 * mb.1).acos();
+    let s = r / (theta / 2.0).tan();
+    let b = {
+        let (x, y) = (ma.0 + mb.0, ma.1 + mb.1);
+        let n = x.hypot(y);
+        (x / n, y / n)
+    };
+    let p = (r1, h);
+    let c = (
+        p.0 + b.0 * r / (theta / 2.0).sin(),
+        p.1 + b.1 * r / (theta / 2.0).sin(),
+    );
+    let (pa, pb) = ((p.0 + ma.0 * s, p.1), (p.0 + mb.0 * s, p.1 + mb.1 * s));
+    let kite = r * s;
+    let kite_rho = ((p.0 + pa.0 + c.0) / 3.0 + (p.0 + pb.0 + c.0) / 3.0) / 2.0;
+    let alpha = PI - theta;
+    let sector = alpha * r * r / 2.0;
+    let sector_rho = c.0 - b.0 * 4.0 * r * (alpha / 2.0).sin() / (3.0 * alpha);
+    let corner = kite - sector;
+    let rho = (kite * kite_rho - sector * sector_rho) / corner;
+    let frustum = PI * h / 3.0 * (r0 * r0 + r0 * r1 + r1 * r1);
+    let want = frustum - corner * 2.0 * PI * rho;
+    let got = k.mass_properties(round).unwrap().volume;
+    assert!((got - want).abs() <= 1e-9 * want, "volume {got} vs {want}");
+    assert!(k.get(round).unwrap().check().is_empty());
+}
