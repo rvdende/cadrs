@@ -281,3 +281,61 @@ fn a_drilled_block_offset_past_its_hole_has_a_dimple_each_end() {
     assert!((got - want).abs() <= 1e-9 * want, "volume {got} vs {want}");
     assert!(k.get(grown).unwrap().check().is_empty());
 }
+
+#[test]
+fn a_drilled_block_offset_short_of_its_hole_narrows_it() {
+    // A box a × b × c drilled through by a hole of radius r, offset by d < r: the box grown
+    // less the hole narrowed to r − d through its height and, over each mouth, the disc of
+    // radius r d high less the quarter of the ring the ball rolled round the rim keeps
+    // (πd²/4 round the circle of radius r − 4d/3π).
+    use cadrs_kernel::*;
+    use nalgebra::{Point3, Unit, Vector3};
+    use std::f64::consts::PI;
+    let (a, b, c, r, d) = (5.3, 5.2, 5.6, 1.2, 0.4);
+    let mut k = DefaultKernel::default();
+    let bx = k
+        .primitive(&Primitive::Box {
+            min: Point3::new(0.0, 0.0, 0.0),
+            max: Point3::new(a, b, c),
+        })
+        .unwrap()
+        .first()
+        .unwrap();
+    let hole = k
+        .primitive(&Primitive::Cylinder {
+            base: Point3::new(a / 2.0, b / 2.0, -1.0),
+            axis: Unit::new_normalize(Vector3::z()),
+            radius: r,
+            height: c + 2.0,
+        })
+        .unwrap()
+        .first()
+        .unwrap();
+    let drilled = k
+        .boolean(BoolOp::Subtract, bx, &[hole])
+        .unwrap()
+        .first()
+        .unwrap();
+    let grown = k
+        .offset(
+            drilled,
+            &OffsetSpec {
+                distance: d,
+                faces: vec![],
+                sharp: false,
+            },
+        )
+        .unwrap()
+        .first()
+        .unwrap();
+    let quarter = PI * d * d / 4.0 * 2.0 * PI * (r - 4.0 * d / (3.0 * PI));
+    let want = a * b * c
+        + 2.0 * (a * b + b * c + c * a) * d
+        + PI * d * d * (a + b + c)
+        + 4.0 / 3.0 * PI * d.powi(3)
+        - PI * (r - d).powi(2) * c
+        - 2.0 * (PI * r * r * d - quarter);
+    let got = k.mass_properties(grown).unwrap().volume;
+    assert!((got - want).abs() <= 1e-9 * want, "volume {got} vs {want}");
+    assert!(k.get(grown).unwrap().check().is_empty());
+}
