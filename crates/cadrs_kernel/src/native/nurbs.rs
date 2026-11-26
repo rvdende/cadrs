@@ -53,6 +53,27 @@ pub fn find_span(n: usize, p: usize, u: f64, knots: &[f64]) -> usize {
 
 /// The non-zero basis functions and their derivatives up to `d` at `u` (A2.3):
 /// `ders[k][j]` is the k-th derivative of N_{span−p+j, p}.
+/// The `p + 1` basis functions' `d`-th derivatives at `u` in `span`, for a row of an
+/// interpolation's system ([`basis_row_fixed`] without allocating where it can).
+fn basis_row(span: usize, u: f64, p: usize, d: usize, knots: &[f64]) -> Vec<f64> {
+    basis_ders(span, u, p, d, knots).swap_remove(d)
+}
+
+/// [`basis_row`] into an array of [`MAXP`] + 1 (None past that degree, or for a second
+/// derivative).
+fn basis_row_fixed(
+    span: usize,
+    u: f64,
+    p: usize,
+    d: usize,
+    knots: &[f64],
+) -> Option<[f64; MAXP + 1]> {
+    (p <= MAXP && d <= 1).then(|| {
+        let b = basis1(span, u, p, d == 1, knots);
+        if d == 1 { b.d } else { b.v }
+    })
+}
+
 pub fn basis_ders(span: usize, u: f64, p: usize, d: usize, knots: &[f64]) -> Vec<Vec<f64>> {
     let mut ndu = vec![vec![0.0; p + 1]; p + 1];
     let mut left = vec![0.0; p + 1];
@@ -829,9 +850,17 @@ impl NurbsCurve {
         let mut outside = false;
         let mut put = |row: usize, u: f64, d: usize| {
             let span = find_span(n - 1, p, u, &knots);
-            let nd = basis_ders(span, u, p, d, &knots);
-            for (j, b) in nd[d].iter().enumerate().take(p + 1) {
-                outside |= !band.set(row, span - p + j, *b);
+            let fixed = basis_row_fixed(span, u, p, d, &knots);
+            let slow;
+            let row_of: &[f64] = match &fixed {
+                Some(f) => &f[..=p],
+                None => {
+                    slow = basis_row(span, u, p, d, &knots);
+                    &slow
+                }
+            };
+            for (j, &b) in row_of.iter().enumerate() {
+                outside |= !band.set(row, span - p + j, b);
             }
         };
         // (The rows in that order too: a point, the first one's derivative after it, the last
@@ -918,12 +947,20 @@ impl NurbsCurve {
         let mut row = 0;
         let mut put = |a: &mut DMatrix<f64>, row: usize, u: f64, d: usize| {
             let span = find_span(n - 1, p, u, &knots);
-            let nd = basis_ders(span, u, p, d, &knots);
-            for j in 0..=p {
+            let fixed = basis_row_fixed(span, u, p, d, &knots);
+            let slow;
+            let row_of: &[f64] = match &fixed {
+                Some(f) => &f[..=p],
+                None => {
+                    slow = basis_row(span, u, p, d, &knots);
+                    &slow
+                }
+            };
+            for (j, &b) in row_of.iter().enumerate() {
                 if banded {
-                    outside |= !band.set(row, span - p + j, nd[d][j]);
+                    outside |= !band.set(row, span - p + j, b);
                 } else {
-                    a[(row, span - p + j)] = nd[d][j];
+                    a[(row, span - p + j)] = b;
                 }
             }
         };
