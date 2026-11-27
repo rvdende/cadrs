@@ -299,7 +299,7 @@ fn style_boxes(
         };
         // The box fits its text (plus padding and room for the caret).
         let text_w = layout.size.x * computed.inverse_scale_factor();
-        if !b.editing && text.value().to_string() != b.initial {
+        if !b.editing && text.value() != b.initial {
             b.editing = true;
         }
         let c = b.colors;
