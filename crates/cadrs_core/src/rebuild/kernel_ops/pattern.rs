@@ -589,7 +589,19 @@ impl Rebuilder {
             return Err(p.into());
         }
         let reference = self.seed_reference(state, x.pattern_type, &x.parts, &x.features, &x.faces);
-        let all = self.pattern_instances(before, x, state, reference)?;
+        let mut all = self.pattern_instances(before, x, state, reference)?;
+        let seed_tools =
+            x.include_seed && x.pattern_type == PatternType::Part && x.op == BooleanOp::Remove;
+        if seed_tools {
+            all.insert(
+                0,
+                Instance {
+                    index: [0, 0],
+                    number: 1,
+                    motion: Motion::translation(Vector3::zeros()),
+                },
+            );
+        }
         let dots: Vec<InstanceDot> = all
             .iter()
             .map(|i| InstanceDot {
@@ -637,6 +649,10 @@ impl Rebuilder {
         };
         out.map(|mut o| {
             o.dots = Some(dots);
+            if seed_tools {
+                let state = Arc::make_mut(&mut o.state);
+                state.parts.retain(|p| !x.parts.contains(&p.part.id));
+            }
             o
         })
     }

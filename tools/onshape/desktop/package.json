@@ -1,0 +1,70 @@
+{
+  "name": "cadrs-onshape-importer",
+  "version": "0.1.10",
+  "description": "Log in to Onshape, pick documents, convert them into cadrs documents with a report",
+  "main": "main.js",
+  "private": true,
+  "license": "MIT OR Apache-2.0",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --linux dir AppImage",
+    "test": "node --test \"test/**/*.test.js\"",
+    "tickets": "node tickets.js",
+    "summarize": "node reports.js summarize",
+    "roots": "node reports.js roots"
+  },
+  "build": {
+    "appId": "dev.cadrs.onshape-importer",
+    "productName": "cadrs Onshape Importer",
+    "files": [
+      "main.js",
+      "chrome.js",
+      "reportfiles.js",
+      "reports.js",
+      "issues.js",
+      "exports.js",
+      "operations.js",
+      "tickets.js",
+      "preload.js",
+      "onshape-preload.js",
+      "receiver.js",
+      "bugreport.js",
+      "fsanalyze.js",
+      "comparereport.js",
+      "mdhtml.js",
+      "ui/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../scrape.js",
+        "to": "scrape.js"
+      },
+      {
+        "from": "../fs_decode.py",
+        "to": "fs_decode.py"
+      },
+      {
+        "from": "../query.py",
+        "to": "query.py"
+      },
+      {
+        "from": "bin",
+        "to": "bin",
+        "filter": [
+          "cadrs-onshape"
+        ]
+      }
+    ],
+    "linux": {
+      "category": "Graphics",
+      "target": [
+        "dir",
+        "AppImage"
+      ]
+    }
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  }
+}

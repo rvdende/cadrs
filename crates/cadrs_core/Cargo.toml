@@ -57,6 +57,9 @@ serde_json.workspace = true
 tempfile = "3"
 tiny-skia.workspace = true
 serde_json.workspace = true
+# `tests/reference_parts.rs` runs SolidCraft's recipes through the translator crate (whose lib
+# depends on cadrs_core; Cargo allows this dev-only cycle).
+cadrs_solidcraft = { path = "../cadrs_solidcraft" }
 
 # Its own executable is the kernel process it starts (`rebuild::process`), so it has a `main`.
 [[test]]

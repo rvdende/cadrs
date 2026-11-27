@@ -7,10 +7,25 @@
 //!                                                   [--skip <feature ids>]`)
 //! cadrs-onshape check-queries                       decode every geometry query in the data
 //!
+//! cadrs-onshape export <document name or id>… [--out <file.cadrs or dir>] [--all]
+//!                                                   write stored documents as portable `.cadrs`
+//!                                                   packages (for attaching to an issue, sharing,
+//!                                                   or opening in another cadrs)
+//! cadrs-onshape step <document name or id>… [--out <file.step or dir>] [--all] [--individual]
+//!                                                   rebuild stored documents and export their
+//!                                                   Part Studios as STEP (to compare with Onshape's
+//!                                                   own STEP export)
+//! cadrs-onshape list [--json]                       the documents in the store
+//!
 //! --raw <dir>        the scraped data (default ~/work/cadrs_onshape/raw)
 //! --data-dir <dir>   the cadrs document store (default: the app's, as `cadrs` finds it)
 //! --user <id>        who owns the imported documents (default: $USER, as the app sees you)
 //! --timeout <s>      how long one feature may take before it counts as hung (default 300)
+//! --report-dir <dir> write import-report.txt here instead of beside the raw folder (the app
+//!                    gives each conversion its own run folder)
+//! --json <file>      also write the run's report as JSON: each document's features and
+//!                    parts, every defect, and the defects grouped into tickets
+//!                    (`report::aggregate`). The desktop app's ticket list reads it.
 //! ```
 //!
 //! Importing a document again replaces the earlier import (the cadrs ids derive from
@@ -35,12 +50,19 @@ fn main() -> ExitCode {
     let mut dry_run = false;
     let mut skip = Vec::new();
     let mut timeout = Duration::from_secs(300);
+    let mut json_out: Option<PathBuf> = None;
+    let mut out: Option<PathBuf> = None;
+    let mut report_dir: Option<PathBuf> = None;
+    // `list --json` with no file: JSON on stdout. (`--json <file>` still names a report file.)
+    let mut json_stdout = false;
+    let mut all = false;
+    let mut individual = false;
     // Imported documents belong to the local user, as the app identifies them.
     let mut user = std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_else(|_| "user".into());
     let mut rest = Vec::new();
-    let mut it = args.into_iter();
+    let mut it = args.into_iter().peekable();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--raw" => raw_dir = it.next().map(PathBuf::from).unwrap_or(raw_dir),
@@ -60,18 +82,54 @@ fn main() -> ExitCode {
                     .map(Duration::from_secs)
                     .unwrap_or(timeout)
             }
+            "--json" => match it.peek() {
+                Some(next) if !next.starts_with('-') => json_out = it.next().map(PathBuf::from),
+                _ => json_stdout = true,
+            },
+            "--out" => out = it.next().map(PathBuf::from),
+            "--report-dir" => report_dir = it.next().map(PathBuf::from),
+            "--all" => all = true,
+            "--individual" => individual = true,
             _ => rest.push(a),
         }
     }
     match rest.first().map(String::as_str) {
         Some("check-queries") => check_queries(&raw_dir),
+        Some("list") => list_documents(&data_dir, json_out.is_some() || json_stdout),
+        Some("export") => export(&data_dir, &rest[1..], out.as_deref(), all),
+        Some("step") => step(&data_dir, &rest[1..], out.as_deref(), all, individual),
+        Some("compare") => match (rest.get(1), rest.get(2)) {
+            (Some(c), Some(s)) => match cadrs_onshape::compare::compare(c.as_ref(), s.as_ref()) {
+                Ok(j) => {
+                    println!("{j}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("compare: {e}");
+                    ExitCode::FAILURE
+                }
+            },
+            _ => {
+                eprintln!("usage: cadrs-onshape compare <file.cadrs> <file.step>");
+                ExitCode::from(2)
+            }
+        },
         Some(cmd @ ("import" | "import-one")) => {
             let Some(data_dir) = data_dir else {
                 eprintln!("no document store: pass --data-dir");
                 return ExitCode::from(2);
             };
             if cmd == "import" {
-                import(&raw_dir, &data_dir, &rest[1..], dry_run, timeout, &user)
+                import(
+                    &raw_dir,
+                    &data_dir,
+                    &rest[1..],
+                    dry_run,
+                    timeout,
+                    &user,
+                    json_out.as_deref(),
+                    report_dir.as_deref(),
+                )
             } else {
                 import_one(
                     &raw_dir,
@@ -80,12 +138,13 @@ fn main() -> ExitCode {
                     &skip,
                     dry_run,
                     &user,
+                    json_out.as_deref(),
                 )
             }
         }
         _ => {
             eprintln!(
-                "usage: cadrs-onshape (import [<name or id>…] [--dry-run] | check-queries) [--raw <dir>] [--data-dir <dir>]"
+                "usage: cadrs-onshape (import [<name or id>…] [--dry-run] [--json <file>] | list [--json] | export <name or id>… [--out <file.cadrs or dir>] [--all] | step <name or id>… [--out <file.step or dir>] [--all] [--individual] | compare <file.cadrs> <file.step> | check-queries) [--raw <dir>] [--data-dir <dir>]"
             );
             ExitCode::from(2)
         }
@@ -103,6 +162,8 @@ fn import(
     dry_run: bool,
     timeout: Duration,
     user: &str,
+    json_out: Option<&Path>,
+    report_dir: Option<&Path>,
 ) -> ExitCode {
     let docs: Vec<_> = raw::documents(raw_dir)
         .into_iter()
@@ -121,12 +182,17 @@ fn import(
     let exe = std::env::current_exe().expect("own path");
     let progress =
         std::env::temp_dir().join(format!("cadrs-onshape-progress-{}", std::process::id()));
+    // Each child writes its document's report here (as JSON), for this run's aggregate.
+    let child_json =
+        std::env::temp_dir().join(format!("cadrs-onshape-report-{}.json", std::process::id()));
     let mut text = String::new();
+    let mut documents: Vec<serde_json::Value> = Vec::new();
     let mut failed = 0;
     for d in &docs {
         let mut skip: Vec<String> = Vec::new();
         let out = loop {
             std::fs::remove_file(&progress).ok();
+            std::fs::remove_file(&child_json).ok();
             let mut cmd = Command::new(&exe);
             cmd.arg("import-one")
                 .arg(&d.id)
@@ -136,6 +202,9 @@ fn import(
                 .arg(data_dir)
                 .arg("--user")
                 .arg(user);
+            if json_out.is_some() {
+                cmd.arg("--json").arg(&child_json);
+            }
             if dry_run {
                 cmd.arg("--dry-run");
             }
@@ -191,8 +260,26 @@ fn import(
                 _ => break (!s.is_empty()).then_some(s),
             }
         };
+        if json_out.is_some() {
+            match std::fs::read(&child_json)
+                .ok()
+                .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            {
+                Some(doc) => documents.push(doc),
+                None => {
+                    failed += 1;
+                    documents.push(serde_json::json!({
+                        "name": d.name,
+                        "onshape_id": d.id,
+                        "failed": true,
+                    }));
+                }
+            }
+        }
         let line = out.unwrap_or_else(|| {
-            failed += 1;
+            if json_out.is_none() {
+                failed += 1;
+            }
             format!(
                 "# {} ({})\n  ! import failed or kept hanging\n",
                 d.name, d.id
@@ -202,9 +289,33 @@ fn import(
         text += &line;
     }
     std::fs::remove_file(&progress).ok();
-    // A dry run over some documents doesn't replace the report of the last full import.
-    if let Some(parent) = raw_dir.parent().filter(|_| filters.is_empty() || !dry_run) {
-        std::fs::write(parent.join("import-report.txt"), &text).ok();
+    std::fs::remove_file(&child_json).ok();
+    // A dry run over some documents doesn't replace the report of the last full import. With an
+    // explicit --report-dir (the app's per-conversion run folder) the report always goes there.
+    if report_dir.is_some() || filters.is_empty() || !dry_run {
+        let target = match report_dir {
+            Some(dir) => {
+                std::fs::create_dir_all(dir).ok();
+                dir.join("import-report.txt")
+            }
+            None => raw_dir
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("import-report.txt"),
+        };
+        std::fs::write(&target, &text).ok();
+    }
+    if let Some(path) = json_out {
+        let tool = format!("cadrs-onshape {}", env!("CARGO_PKG_VERSION"));
+        let json = cadrs_onshape::report::aggregate(documents, &tool, user, dry_run);
+        match serde_json::to_vec_pretty(&json) {
+            Ok(bytes) => {
+                if let Err(e) = std::fs::write(path, bytes) {
+                    eprintln!("cannot write JSON report {}: {e}", path.display());
+                }
+            }
+            Err(e) => eprintln!("cannot serialize JSON report: {e}"),
+        }
     }
     if failed == 0 {
         ExitCode::SUCCESS
@@ -221,6 +332,7 @@ fn import_one(
     skip: &[String],
     dry_run: bool,
     user: &str,
+    json_out: Option<&Path>,
 ) -> ExitCode {
     let Some(d) = raw::documents(raw_dir).into_iter().find(|d| d.id == id) else {
         eprintln!("no scraped document {id}");
@@ -283,12 +395,284 @@ fn import_one(
         }
     }
     line += &format!("  ({:.1} s)\n", started.elapsed().as_secs_f64());
+    if let Some(path) = json_out {
+        let json = imported.report.to_json(started.elapsed().as_secs_f64());
+        match serde_json::to_vec_pretty(&json) {
+            Ok(bytes) => {
+                if let Err(e) = std::fs::write(path, bytes) {
+                    line += &format!("  ! JSON report not written: {e}\n");
+                }
+            }
+            Err(e) => line += &format!("  ! JSON report not serialized: {e}\n"),
+        }
+    }
     print!("{line}");
     if ok {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
     }
+}
+
+/// The documents in the store, as JSON (`--json`) or a table: the app's preflight checks that an
+/// import report's documents really exist before it offers to export them.
+fn list_documents(data_dir: &Option<PathBuf>, json: bool) -> ExitCode {
+    let Some(dir) = data_dir else {
+        eprintln!("no document store: pass --data-dir");
+        return ExitCode::from(2);
+    };
+    let store = Store::new(dir.clone());
+    let (library, _) = store.list();
+    if json {
+        let docs: Vec<serde_json::Value> = library
+            .entries
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "id": e.id.0.to_string(),
+                    "name": e.name,
+                    "created": e.meta.created,
+                    "modified": e.meta.modified,
+                })
+            })
+            .collect();
+        match serde_json::to_string_pretty(&serde_json::json!({
+            "store": dir.display().to_string(),
+            "documents": docs,
+        })) {
+            Ok(text) => println!("{text}"),
+            Err(e) => {
+                eprintln!("cannot serialize the document list: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        for e in &library.entries {
+            println!("{}  {}", e.id.0, e.name);
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+/// A file-name-safe version of a document name for its exported package.
+fn package_name(name: &str) -> String {
+    let mut out: String = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '-' })
+        .collect();
+    while out.contains("--") {
+        out = out.replace("--", "-");
+    }
+    let out = out.trim_matches(['-', '.']).to_string();
+    if out.is_empty() { "document".into() } else { out }
+}
+
+/// Writes stored documents as portable `.cadrs` packages: one file for one document, a folder when
+/// exporting several or `--all`. Packages keep the document's history, blobs and thumbnail, so they
+/// can be attached to an issue or opened on another machine.
+fn export(data_dir: &Option<PathBuf>, names: &[String], out: Option<&Path>, all: bool) -> ExitCode {
+    let Some(dir) = data_dir else {
+        eprintln!("no document store: pass --data-dir");
+        return ExitCode::from(2);
+    };
+    let store = Store::new(dir.clone());
+    let (library, _) = store.list();
+    let entries: Vec<_> = if all {
+        library.entries.iter().collect()
+    } else {
+        names
+            .iter()
+            .filter_map(|want| {
+                let found = library.entries.iter().find(|e| {
+                    e.name == *want
+                        || e.name.to_lowercase().contains(&want.to_lowercase())
+                        || e.id.0.to_string() == *want
+                });
+                if found.is_none() {
+                    eprintln!("no stored document matching {want}");
+                }
+                found
+            })
+            .collect()
+    };
+    if entries.is_empty() {
+        eprintln!("nothing to export under {}", dir.display());
+        return ExitCode::FAILURE;
+    }
+    let single_file = entries.len() == 1
+        && out.is_some_and(|p| p.extension().is_some_and(|e| e == "cadrs"));
+    let out_dir = match out {
+        Some(p) if !single_file => p.to_path_buf(),
+        _ if !single_file => PathBuf::from("cadrs-exports"),
+        _ => PathBuf::new(),
+    };
+    if !single_file && let Err(e) = std::fs::create_dir_all(&out_dir) {
+        eprintln!("cannot create {}: {e}", out_dir.display());
+        return ExitCode::FAILURE;
+    }
+    let mut failed = 0;
+    for entry in entries {
+        let file = match store.load(entry.id) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("{}: cannot load: {e}", entry.name);
+                failed += 1;
+                continue;
+            }
+        };
+        let target = if single_file {
+            out.expect("single file has an --out").to_path_buf()
+        } else {
+            out_dir.join(format!("{}.cadrs", package_name(&entry.name)))
+        };
+        if let Some(parent) = target.parent().filter(|p| !p.as_os_str().is_empty())
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            eprintln!("{}: cannot create {}: {e}", entry.name, parent.display());
+            failed += 1;
+            continue;
+        }
+        match cadrs_core::native::export(&target, &file.document, &file.meta, &store) {
+            Ok(()) => println!("{}", target.display()),
+            Err(e) => {
+                eprintln!("{}: cannot export: {e}", entry.name);
+                failed += 1;
+            }
+        }
+    }
+    if failed == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+}
+
+/// Rebuilds stored documents with the cadrs kernel and writes their Part Studios as STEP: one file
+/// per Part Studio (`<document> - <part studio>.step`, or just `<document>.step` when it has one),
+/// every part of it in the file unless `--individual`. This is the STEP to compare with Onshape's
+/// own export of the same Part Studio: `compare` does the same comparison directly from the
+/// stored document, so this is for tools that want a file.
+fn step(
+    data_dir: &Option<PathBuf>,
+    names: &[String],
+    out: Option<&Path>,
+    all: bool,
+    individual: bool,
+) -> ExitCode {
+    let Some(dir) = data_dir else {
+        eprintln!("no document store: pass --data-dir");
+        return ExitCode::from(2);
+    };
+    let store = Store::new(dir.clone());
+    let (library, _) = store.list();
+    let entries: Vec<_> = if all {
+        library.entries.iter().collect()
+    } else {
+        names
+            .iter()
+            .filter_map(|want| {
+                let found = library.entries.iter().find(|e| {
+                    e.name == *want
+                        || e.name.to_lowercase().contains(&want.to_lowercase())
+                        || e.id.0.to_string() == *want
+                });
+                if found.is_none() {
+                    eprintln!("no stored document matching {want}");
+                }
+                found
+            })
+            .collect()
+    };
+    if entries.is_empty() {
+        eprintln!("nothing to export under {}", dir.display());
+        return ExitCode::FAILURE;
+    }
+    let out_dir = match out {
+        Some(p) if !p.extension().is_some_and(|e| e == "step") => p.to_path_buf(),
+        _ => PathBuf::from("step-exports"),
+    };
+    if let Err(e) = std::fs::create_dir_all(&out_dir) {
+        eprintln!("cannot create {}: {e}", out_dir.display());
+        return ExitCode::FAILURE;
+    }
+    let mut failed = 0;
+    for entry in entries {
+        let file = match store.load(entry.id) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("{}: cannot load: {e}", entry.name);
+                failed += 1;
+                continue;
+            }
+        };
+        let studios: Vec<_> = file
+            .document
+            .elements
+            .iter()
+            .filter(|el| matches!(el.kind, cadrs_core::document::ElementKind::PartStudio { .. }))
+            .collect();
+        if studios.is_empty() {
+            eprintln!("{}: no Part Studio", entry.name);
+            failed += 1;
+            continue;
+        }
+        for studio in studios {
+            let features = studio.features_to_build();
+            let built = cadrs_core::rebuild::build(&features);
+            let parts: Vec<(cadrs_core::ids::PartId, String)> = built
+                .parts
+                .iter()
+                .filter(|p| !built.composites.iter().any(|c| c.part == p.id))
+                .map(|p| (p.id, p.name.clone()))
+                .collect();
+            if parts.is_empty() {
+                eprintln!("{} / {}: no parts to export", entry.name, studio.name);
+                failed += 1;
+                continue;
+            }
+            let request = cadrs_core::export::StepRequest {
+                parts,
+                y_up: false,
+                individual,
+            };
+            let files = match cadrs_core::rebuild::export_step(features, request).wait() {
+                Ok(files) => files,
+                Err(e) => {
+                    eprintln!("{} / {}: cannot export STEP: {e}", entry.name, studio.name);
+                    failed += 1;
+                    continue;
+                }
+            };
+            let base = if studios_len(&file.document, &entry.name) > 1 {
+                format!("{} - {}", entry.name, studio.name)
+            } else {
+                entry.name.clone()
+            };
+            for step_file in files {
+                // One file with every part keeps the Part Studio's name; --individual adds the
+                // part's name (and its own file).
+                let stem = if individual {
+                    cadrs_core::export::file_name(&base, step_file.part.as_deref())
+                } else {
+                    cadrs_core::export::sanitize(&base)
+                };
+                let target = cadrs_core::export::unique_path(&out_dir, &stem);
+                match std::fs::write(&target, &step_file.bytes) {
+                    Ok(()) => println!("{}", target.display()),
+                    Err(e) => {
+                        eprintln!("{}: cannot write {}: {e}", entry.name, target.display());
+                        failed += 1;
+                    }
+                }
+            }
+        }
+    }
+    if failed == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+}
+
+/// How many Part Studios a document has (one keeps the file named just after the document).
+fn studios_len(document: &cadrs_core::document::Document, _name: &str) -> usize {
+    document
+        .elements
+        .iter()
+        .filter(|el| matches!(el.kind, cadrs_core::document::ElementKind::PartStudio { .. }))
+        .count()
 }
 
 fn default_raw() -> PathBuf {

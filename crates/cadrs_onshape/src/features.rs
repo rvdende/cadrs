@@ -885,6 +885,8 @@ impl PartStudio<'_> {
             ..PatternFeature::default()
         };
         x.op = op_of(&Self::text(f, "operationType"));
+        // Onshape counts the seed among a Remove pattern's instances.
+        x.include_seed = x.op == BooleanOp::Remove;
         x.first.count = self.count(f, "instanceCount")?;
         x.first.flip = Self::flag(f, "oppositeDirection");
         if circular {
@@ -973,6 +975,14 @@ impl PartStudio<'_> {
                 curve: *c,
             });
         }
+        // A sketch region's imprint face: the sketch curve bounding it (a circle's centroid
+        // is its centre), when the model has no such face yet.
+        if q.get("queryType").and_then(Q::as_str) == Some("IMPRINT")
+            && q.get("entityType").and_then(Q::as_str) == Some("FACE")
+            && let Some(o) = self.imprint_origin(q)
+        {
+            return Some(o);
+        }
         let parts = self.parts();
         let model = self.model(&parts);
         match q.get("entityType").and_then(Q::as_str) {
@@ -981,6 +991,40 @@ impl PartStudio<'_> {
             Some("VERTEX") => model.vertex(q).map(ConnectorOrigin::Vertex),
             _ => None,
         }
+    }
+
+    /// The one sketch curve an imprint face's query was derived from.
+    fn imprint_origin(&self, q: &Q) -> Option<ConnectorOrigin> {
+        fn entities(v: &Q, out: &mut Vec<(String, String)>) {
+            match v {
+                Q::Map(m) => {
+                    if v.get("queryType").and_then(Q::as_str) == Some("SKETCH_ENTITY")
+                        && let (Some(op), Some(id)) = (
+                            v.get("operationId").and_then(Q::as_str),
+                            v.get("sketchEntityId").and_then(Q::as_str),
+                        )
+                    {
+                        out.push((op.to_string(), id.to_string()));
+                    }
+                    m.iter().for_each(|(_, x)| entities(x, out));
+                }
+                Q::Array(a) => a.iter().for_each(|x| entities(x, out)),
+                Q::Typed(_, x) => entities(x, out),
+                _ => {}
+            }
+        }
+        let mut found = Vec::new();
+        entities(q, &mut found);
+        found.sort();
+        found.dedup();
+        let [(op, id)] = found.as_slice() else {
+            return None;
+        };
+        let (map, _) = self.sketches.get(op_feature(op))?;
+        map.curves.get(id).map(|c| ConnectorOrigin::SketchCurve {
+            sketch: map.feature,
+            curve: *c,
+        })
     }
 
     fn connector_param(&mut self, f: &Value, id: &str) -> Option<ConnectorOrigin> {
