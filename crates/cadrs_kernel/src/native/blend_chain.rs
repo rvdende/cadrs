@@ -692,6 +692,15 @@ pub fn chain_tool(
             t.body.check()
         );
     }
+    // A tool that isn't a valid solid cuts what it likes: its rails crossed over (a round too
+    // large for the faces at its edge, the ball's contacts past their ends) and the cut took
+    // slivers of a sliver four ways. Refused, as the local fillet refused it.
+    if let Some(why) = t.body.check().into_iter().next() {
+        return Err(KernelError::InvalidGeometry {
+            op: "blend",
+            why: format!("the blend's tool isn't a valid solid: {why}"),
+        });
+    }
     let lr = t.into_result(&mut tk);
     let body = (**tk.get(lr.bodies[0])?).clone();
     let mut src = vec![Vec::new(); body.faces.len()];

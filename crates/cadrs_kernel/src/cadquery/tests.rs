@@ -616,3 +616,30 @@ fn helical_notch_starts_at_its_profile() {
         .unwrap();
     assert!((vol(&cut) - 9362.8459).abs() < 5e-3, "{}", vol(&cut));
 }
+
+/// A sliver of a cylinder (a 5° segment of radius 20, its chord and arc meeting at 2.5°)
+/// can't take a 0.5 round on its long edges: a ball touching both faces there touches them
+/// some 23 from the edge, past the 0.87 the chord reaches. OCCT refuses; six such slivers of
+/// CadEvolve's ribbed_cylinder_with_mounting_tabs_and_spoke_cutouts came out four ways.
+#[test]
+fn round_too_large_for_a_sliver_is_refused() {
+    let (r, half) = (20.0f64, 2.5f64.to_radians());
+    let p = |a: f64| (r * a.cos(), r * a.sin());
+    let w = xy()
+        .move_to(p(-half).0, p(-half).1)
+        .three_point_arc(
+            V3::new(r, 0.0, 0.0),
+            V3::new(p(half).0, p(half).1, 0.0),
+            false,
+        )
+        .unwrap()
+        .close()
+        .unwrap()
+        .extrude(Until::Distance(30.0), Combine::Fuse, true, false, 0.0)
+        .unwrap();
+    let r = w
+        .select(ShapeType::Edge, Some(&Selector::parse("|Z").unwrap()), None)
+        .unwrap()
+        .fillet(0.5);
+    assert!(r.is_err(), "{:?}", r.map(|w| vol(&w)));
+}
