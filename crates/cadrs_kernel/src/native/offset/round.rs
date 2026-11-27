@@ -480,6 +480,11 @@ pub fn offset_rounded(b: &Body, dist: &[f64]) -> Result<Body> {
     if let Some(g) = crate::native::sweep_solid::grown_revolved(b, d) {
         return Ok(g);
     }
+    // A solid of revolution of any meridian from the axis back to it (a spheroid): its
+    // section's parallel curve revolved.
+    if let Some(g) = crate::native::sweep_solid::grown_meridian(b, d) {
+        return Ok(g);
+    }
     // Every edge between faces that meet tangentially (a body offset already, its rounds
     // joining its faces smoothly): each face moved along its normal meets its neighbours'
     // moves exactly, so the sharp offset is the rounded one, without the slabs, tubes and balls.
@@ -1567,7 +1572,7 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
             cavity_volume.set(flush_volume_made.get());
             c
         };
-        let ways: Vec<Box<dyn Fn() -> Result<Body>>> = if (concave || crossing) && !spec.sharp {
+        let mut ways: Vec<Box<dyn Fn() -> Result<Body>>> = if (concave || crossing) && !spec.sharp {
             // A prism opened at a cap, or hollowed: its outline's inset, rounded about the
             // reflex corners, extruded from the kept caps' insets to past the removed ones.
             match super::prism::curved_prism_inset(&b, &dist, true, false) {
@@ -1589,6 +1594,15 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
                 Box::new(regions),
             ]
         };
+        // A solid of revolution of any meridian (a spheroid) hollowed with no opening: the
+        // cavity is its inner parallel body, the meridian's inner parallel curve revolved.
+        if spec.hollow
+            && remove.is_empty()
+            && !spec.outward
+            && let Some(c) = crate::native::sweep_solid::offset_meridian(&b, -t)
+        {
+            ways.insert(0, Box::new(move || Ok(c.clone())));
+        }
         // The cavity with the removed faces moved out past the body reaches past them by the
         // walls' insets: where a kept face rises from the opening beyond its plane (an L opened
         // at its low step, issue #237), the corner of the moved face and that face's inset lies
@@ -2521,7 +2535,12 @@ fn cavity_of_supports(b: &Body, remove: &[usize], t: f64) -> Option<Result<Optio
         if hi - lo <= close {
             return Ok(None);
         }
-        let at = |h: f64| (r + h * tan).max(0.0);
+        // (A radius within the tolerance of none is none: at the apex, computed, it is a hair
+        // off zero, which the cone would draw as a line too short to be one.)
+        let at = |h: f64| {
+            let rad = (r + h * tan).max(0.0);
+            if rad <= close { 0.0 } else { rad }
+        };
         let mut k = NativeKernel::new();
         let made = k.primitive(&Primitive::Cone {
             base: o + z * lo,
@@ -3281,7 +3300,9 @@ fn grown_closed_holes(b: &Body, d: f64) -> Option<Body> {
         let p = cf.o + cf.x * *r;
         let (u, v) = f.surf.project(&p, None);
         let out = f.surf.normal(u, v) * if f.sense { 1.0 } else { -1.0 };
-        if out.dot(&cf.x) >= 0.0 || (d - r).abs() <= r * 1e-9 || f.loops.len() != 1 {
+        // (Grown by just the hole's radius, the dimple's torus is a horn torus, its cusp on the
+        // axis in the cap's own plane: built the same way.)
+        if out.dot(&cf.x) >= 0.0 || f.loops.len() != 1 {
             return None;
         }
         let mut ends = Vec::new();

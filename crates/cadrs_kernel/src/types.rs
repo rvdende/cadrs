@@ -1978,6 +1978,21 @@ pub struct FaceReplacement {
     pub domain: Option<((f64, f64), (f64, f64))>,
 }
 
+/// A chamfer whose distances vary along one edge (a variable chamfer): `(t, d)` pairs, `t` in
+/// [0, 1] from the edge's `start` to its `end`, each law at least one, linear between.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChamferLaw {
+    /// The edge.
+    pub edge: EdgeId,
+    /// The face the `first` distances are measured on: one of the edge's two (None: its first,
+    /// [`EdgeInfo::faces`]`[0]`).
+    pub face: Option<FaceId>,
+    /// `(t, d)` pairs: the distance `d` (mm) from the edge across `face` at fraction `t`.
+    pub first: Vec<(f64, f64)>,
+    /// `(t, d)` pairs: the distance across the edge's other face.
+    pub second: Vec<(f64, f64)>,
+}
+
 /// A variable radius along one edge (P3.10, PS14.6 Variable fillet): `(t, r)` pairs, `t` in
 /// [0, 1] from the edge's `start` to its `end`, at least one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

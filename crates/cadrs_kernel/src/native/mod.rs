@@ -465,4 +465,4 @@ pub use surface::{D2, Surface};
 pub use tess::keep_meshes;
 pub use topo::{Body, BodyBuilder, CheckLevel, Coedge, Edge, Face, Shell, Solid, Vertex, Wire};
 
-pub use par::clear_caches;
+pub use par::{clear_caches, run_on_this_thread};

@@ -22,7 +22,7 @@ fn spline_of(c: &Curve2) -> Option<super::nurbs::NurbsCurve> {
     crate::spline_nurbs(*degree, knots, poles, weights)
 }
 
-fn sketch_spline(n: &super::nurbs::NurbsCurve, source: Option<u64>) -> Curve2 {
+pub(crate) fn sketch_spline(n: &super::nurbs::NurbsCurve, source: Option<u64>) -> Curve2 {
     let rational = n.cps.iter().any(|h| h.w != 1.0);
     Curve2::Spline {
         degree: n.degree,

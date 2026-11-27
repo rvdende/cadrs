@@ -1717,9 +1717,29 @@ pub(crate) fn grown_revolved(b: &Body, d: f64) -> Option<Body> {
     let pt = |x: f64, y: f64| nalgebra::Point2::new(x, y);
     let curves: Vec<Curve2> = match &rev.section {
         Section::Disk { c, r } => {
-            // A ball's disc stays one about the axis; a torus's must stay off it.
-            if c.0 != 0.0 && c.0 <= r + d {
-                return None;
+            // A ball's disc stays one about the axis. A torus's grown to the axis or past it (a
+            // horn or spindle torus): every point beside the axis is nearest the section in its
+            // own half plane, so the grown disc as far as the axis, revolved; touching it, the
+            // whole circle; crossing it, the arc out from the axis and the axis between.
+            let s = r + d;
+            if c.0 > 0.0 && c.0 < s * (1.0 - 1e-12) {
+                let hh = (s * s - c.0 * c.0).sqrt();
+                let beta = hh.atan2(-c.0);
+                let curves = vec![
+                    Curve2::Arc {
+                        center: pt(c.0, c.1),
+                        radius: s,
+                        start_angle: -beta,
+                        sweep: 2.0 * beta,
+                        source: None,
+                    },
+                    Curve2::Line {
+                        a: pt(0.0, c.1 + hh),
+                        b: pt(0.0, c.1 - hh),
+                        source: None,
+                    },
+                ];
+                return revolved_section(&rev, curves);
             }
             if c.0 == 0.0 {
                 // The half disc against the axis.
@@ -1815,6 +1835,152 @@ pub(crate) fn grown_revolved(b: &Body, d: f64) -> Option<Body> {
             out
         }
     };
+    revolved_section(&rev, curves)
+}
+
+/// A solid of revolution of one face (its meridian any curve running from the axis back to it,
+/// meeting it square at both ends: a spheroid's half ellipse) grown by a ball of radius `d`:
+/// every point beside the axis is nearest the solid in its own half plane, so the solid of
+/// revolution of the section grown by `d`, its boundary the meridian's parallel curve (each
+/// point moved `d` along the surface's outward normal there), which ends on the axis too. The
+/// parallel curve, no conic, is interpolated by a cubic B-spline, its points doubled until it
+/// holds to 1e-10 of the size at every span's middle. None for any other body.
+pub(crate) fn grown_meridian(b: &Body, d: f64) -> Option<Body> {
+    (d > 0.0).then(|| offset_meridian(b, d)).flatten()
+}
+
+/// [`grown_meridian`] by a signed distance: shrunk where it is negative, the inner parallel
+/// body, which is the section's inner parallel curve revolved while the distance is less than
+/// the surface's least radius of curvature (in the meridian and about the axis): None past it
+/// (the parallel curve runs back on itself, or crosses the axis).
+pub(crate) fn offset_meridian(b: &Body, d: f64) -> Option<Body> {
+    if d == 0.0 || !d.is_finite() || b.solids.len() != 1 || b.shells.len() != 1 {
+        return None;
+    }
+    let [face] = b.faces.as_slice() else {
+        return None;
+    };
+    let Surface::Revolution { f, .. } = &face.surf else {
+        return None;
+    };
+    let ((u0, u1), (v0, v1)) = super::heal_split::face_uv_box(b, 0)?;
+    if (u1 - u0) < TAU * (1.0 - 1e-9) || !(v1 > v0) {
+        return None;
+    }
+    let size = b.bbox().diagonal();
+    let near = 1e-9 * size.max(tol::POINT);
+    let z = f.z.normalize();
+    let x = f.x.normalize();
+    let sense = if face.sense { 1.0 } else { -1.0 };
+    // The meridian at u = u0 in (ρ, h) about the frame, and its parallel curve's point.
+    let xu = x * u0.cos() + f.y.normalize() * u0.sin();
+    let section = |v: f64| -> Option<((f64, f64), (f64, f64))> {
+        let p = face.surf.eval(u0, v);
+        let n = face.surf.normal(u0, v).try_normalize(tol::TINY)? * sense;
+        let q = p - f.o;
+        let (rho, h) = (q.dot(&xu), q.dot(&z));
+        Some(((rho, h), (rho + d * n.dot(&xu), h + d * n.dot(&z))))
+    };
+    // Ends on the axis, square to it (just off them the meridian runs away from the axis
+    // straight across it): the parallel curve's ends d farther along the axis, away from the
+    // other end. (At the poles themselves the surface has no normal.)
+    let ((r0, h0), _) = section(v0).unwrap_or(((f64::NAN, f64::NAN), (0.0, 0.0)));
+    let ((r1, h1), _) = section(v1).unwrap_or(((f64::NAN, f64::NAN), (0.0, 0.0)));
+    let p0 = face.surf.eval(u0, v0) - f.o;
+    let p1 = face.surf.eval(u0, v1) - f.o;
+    let (r0, h0) = if r0.is_finite() {
+        (r0, h0)
+    } else {
+        (p0.dot(&xu), p0.dot(&z))
+    };
+    let (r1, h1) = if r1.is_finite() {
+        (r1, h1)
+    } else {
+        (p1.dot(&xu), p1.dot(&z))
+    };
+    if r0.abs() > near || r1.abs() > near || (h1 - h0).abs() <= near {
+        return None;
+    }
+    let up = (h1 - h0).signum();
+    let ends = [(0.0, h0 - up * d), (0.0, h1 + up * d)];
+    // Square to the axis: just inside each end the parallel curve is off the axis by about as
+    // much as the meridian, not more than the step.
+    let eps = 1e-6 * (v1 - v0);
+    for (v, h) in [(v0 + eps, ends[0].1), (v1 - eps, ends[1].1)] {
+        let (_, (qr, qh)) = section(v)?;
+        if (qh - h).abs() > 1e-3 * d.abs() || qr < -near {
+            return None;
+        }
+    }
+    let mut n = 32usize;
+    let curve = loop {
+        let vs: Vec<f64> = (0..=n)
+            .map(|i| v0 + (v1 - v0) * i as f64 / n as f64)
+            .collect();
+        let mut pts = Vec::with_capacity(n + 1);
+        for (i, &v) in vs.iter().enumerate() {
+            let (qr, qh) = if i == 0 {
+                ends[0]
+            } else if i == n {
+                ends[1]
+            } else {
+                section(v)?.1
+            };
+            if qr < -near {
+                return None;
+            }
+            pts.push(P3::new(qr, qh, 0.0));
+        }
+        // (Each step of the parallel curve runs the way the meridian's does: past a centre of
+        // curvature it would run back.)
+        for i in 1..vs.len() - 1 {
+            let (Some(((ra, ha), _)), Some(((rb, hb), _))) = (section(vs[i]), section(vs[i + 1]))
+            else {
+                continue;
+            };
+            let along = (pts[i + 1] - pts[i]).dot(&V3::new(rb - ra, hb - ha, 0.0));
+            if along <= 0.0 {
+                return None;
+            }
+        }
+        let c = super::nurbs::NurbsCurve::interpolate(&pts, &vs, 3, None, None);
+        let worst = (0..n)
+            .filter_map(|i| {
+                let v = v0 + (v1 - v0) * (i as f64 + 0.5) / n as f64;
+                let (_, (qr, qh)) = section(v)?;
+                Some((c.point(v) - P3::new(qr, qh, 0.0)).norm())
+            })
+            .fold(0.0, f64::max);
+        if worst <= 1e-10 * size {
+            break c;
+        }
+        if n >= 4096 {
+            return None;
+        }
+        n *= 2;
+    };
+    let (start, end) = (curve.point(v0), curve.point(v1));
+    let curves = vec![
+        super::region2::sketch_spline(&curve, None),
+        Curve2::Line {
+            a: nalgebra::Point2::new(0.0, end.y),
+            b: nalgebra::Point2::new(0.0, start.y),
+            source: None,
+        },
+    ];
+    let rev = Revolved {
+        o: f.o,
+        a: z,
+        e1: xu,
+        e2: z.cross(&xu),
+        section: Section::Polygon(Vec::new()),
+    };
+    revolved_section(&rev, curves)
+}
+
+/// The solid of revolution about `rev`'s axis of the section bounded by `curves` (in its half
+/// plane: x out from the axis, y along it), if it is sound.
+fn revolved_section(rev: &Revolved, curves: Vec<Curve2>) -> Option<Body> {
     let region = Region {
         outer: Loop { curves },
         holes: vec![],
@@ -3070,7 +3236,10 @@ fn screwed_ball(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<R
                 &ExtrudeSpec::blind(nalgebra::Unit::new_normalize(-tangent), 1.5 * r),
             )?;
             let behind = (**scratch.get(behind.bodies[0])?).clone();
-            let ball = b.transformed(&first);
+            // (The ball with its poles on the screw's axis, as a ball made about it has them:
+            // the plane behind it cuts it along a meridian, wherever the ball's own poles were.)
+            let ball = super::blend::ball_frame(first.point(&centre), r, z, e)
+                .unwrap_or_else(|_| b.transformed(&first));
             let opts = super::boolean::BoolOptions::default();
             let mut halves = Vec::new();
             for op in [BoolOp::Intersect, BoolOp::Subtract] {
@@ -3470,10 +3639,12 @@ fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> R
         }
         // A ball screwed: exactly, its tube and end balls trimmed where they pass through
         // one another.
-        if exact.is_some()
-            && let Some(Ok(r)) = screwed_ball(k, &b, steps)
-        {
-            return Ok(r);
+        if exact.is_some() {
+            match screwed_ball(k, &b, steps) {
+                Some(Ok(r)) => return Ok(r),
+                Some(Err(e)) => declined(format!("a ball screwed, its tube and end balls: {e}")),
+                None => {}
+            }
         }
         // A ball carried by any other motion: the pipe of its radius along its centre's path,
         // a ball at each end, where that path nowhere curves tighter than the ball.
@@ -5536,6 +5707,9 @@ thread_local! {
 
 /// Notes why an exact way declined the sweep or cut being made (the first few are kept).
 pub(crate) fn declined(why: impl std::fmt::Display) {
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
+        eprintln!("sweep: declined: {why}");
+    }
     DECLINED.with(|d| {
         let mut d = d.borrow_mut();
         if d.len() < 6 {

@@ -746,14 +746,77 @@ impl Body {
     /// The body moved by an affine map (a reflection flips every face's sense and loops).
     pub fn transformed(&self, m: &Affine) -> Body {
         let mut b = self.clone();
+        let k = m.scale();
+        // (Tolerances are lengths: scaled with the body, never below the least.)
+        let scaled_tol = |t: f64| {
+            if (k - 1.0).abs() > 1e-15 && k > 0.0 && k.is_finite() {
+                (t * k).max(TOL_MIN)
+            } else {
+                t
+            }
+        };
         for v in &mut b.verts {
             v.p = m.point(&v.p);
+            v.tol = scaled_tol(v.tol);
         }
-        for e in &mut b.edges {
+        // A line's parameter is its length ([`Curve::Line`]): scaled, the line keeps a unit
+        // direction and its range grows by k, its p-curves taking t/k for t. (Where a p-curve
+        // can't be so re-parametrized, the line is left as the map makes it.)
+        let speed = |c: &Curve, k: f64| -> Option<Curve> {
+            match c {
+                Curve::Line { o, d } => Some(Curve::Line { o: *o, d: d / k }),
+                Curve::Nurbs(n) => {
+                    let (a, b) = n.range();
+                    Some(Curve::nurbs(n.reparam(a * k, b * k)))
+                }
+                _ => None,
+            }
+        };
+        let mut lengthened = vec![false; b.edges.len()];
+        if (k - 1.0).abs() > 1e-15 && k > 0.0 && k.is_finite() {
+            let uses = self.edge_faces();
+            for (ei, e) in self.edges.iter().enumerate() {
+                let Curve::Line { d, .. } = &e.curve else {
+                    continue;
+                };
+                if e.degenerate || (d.norm() - 1.0).abs() > 1e-9 {
+                    continue;
+                }
+                let all = uses.get(ei).is_none_or(|fs| {
+                    fs.iter().all(|&f| {
+                        self.faces[f]
+                            .loops
+                            .iter()
+                            .flatten()
+                            .filter(|c| c.edge == ei)
+                            .all(|c| speed(&c.pc, k).is_some())
+                    })
+                });
+                lengthened[ei] = all;
+            }
+        }
+        for (ei, e) in b.edges.iter_mut().enumerate() {
             e.curve = e.curve.transformed(m);
+            e.tol = scaled_tol(e.tol);
+            if lengthened[ei]
+                && let Curve::Line { o, d } = e.curve
+            {
+                e.curve = Curve::Line { o, d: d / k };
+                e.t = [e.t[0] * k, e.t[1] * k];
+            }
+        }
+        if lengthened.iter().any(|&x| x) {
+            for f in &mut b.faces {
+                for c in f.loops.iter_mut().flatten() {
+                    if lengthened[c.edge]
+                        && let Some(pc) = speed(&c.pc, k)
+                    {
+                        c.pc = pc;
+                    }
+                }
+            }
         }
         let mirror = m.det() < 0.0;
-        let k = m.scale();
         for f in &mut b.faces {
             // Lengths in the surface's parameters scale with the body.
             if (k - 1.0).abs() > 1e-15 {

@@ -1190,6 +1190,13 @@ pub trait Kernel {
         allow_overflow: bool,
     ) -> Result<OpResult>;
 
+    /// A chamfer whose distances vary along each edge (a variable chamfer): each law's
+    /// distances across its two faces, measured square to the edge along them, the chamfer the
+    /// ruled surface between the two contact curves they give. Exact where the faces run
+    /// straight across the edge (planes; cylinders and extrusions crossed along their rulings)
+    /// and meet at one angle all along it.
+    fn chamfer_variable(&mut self, body: BodyId, laws: &[ChamferLaw]) -> Result<OpResult>;
+
     /// A partial fillet (P3.11, PS14.6): `spec`'s fillet on `edge` only between the fractions
     /// `from < to` of its length (in the direction the edge runs, 0 at its start). The fillet
     /// stops at a flat end face square to the edge at each bound, as Onshape's does; at a bound

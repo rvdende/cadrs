@@ -2288,14 +2288,17 @@ pub fn loft_guided(
         for p in &parts {
             all.append(p);
         }
-        // (Within a loop's gap: the walls' curves are fitted to their sections.)
-        super::surfacing::sewn_solid(all, tol::LOOP_GAP)
+        // (Within a loop's gap: the walls' curves are fitted to their sections, to a tolerance
+        // that grows with the part past an ordinary size.)
+        let gap = sew_gap(&all);
+        super::surfacing::sewn_solid(all, gap)
     } else {
         let mut all = Body::default();
         for p in &parts {
             all.append(p);
         }
-        super::surfacing::sew_faces(all, tol::LOOP_GAP)
+        let gap = sew_gap(&all);
+        super::surfacing::sew_faces(all, gap)
     };
     for id in made {
         k.release(id);
@@ -2801,6 +2804,18 @@ fn piece_curve2(p: &super::profile::Piece) -> Option<Curve2> {
             })
         }
         _ => None,
+    }
+}
+
+/// The gap a loft's walls are sewn across: [`tol::LOOP_GAP`], growing with the part past 64 mm
+/// across (its walls' curves are fitted to their sections relative to its size: a square to a
+/// round three times larger left its seams three times as far apart).
+fn sew_gap(b: &Body) -> f64 {
+    let size = b.bbox().diagonal();
+    if size.is_finite() && size > 64.0 {
+        tol::LOOP_GAP * size / 64.0
+    } else {
+        tol::LOOP_GAP
     }
 }
 

@@ -15,8 +15,25 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// Whether the threads are running (a loop has used them).
 static WARM: AtomicBool = AtomicBool::new(false);
 
+/// The pool's one worker is the thread that called [`run_on_this_thread`].
+#[cfg(not(target_arch = "wasm32"))]
+static ON_THIS_THREAD: AtomicBool = AtomicBool::new(false);
+
 /// Items past which a loop of light ones is worth the threads.
 const MANY: usize = 64;
+
+/// The pool is the caller's own thread alone ([`run_on_this_thread`]): a loop is run straight
+/// through, rayon's splitting and collecting gaining nothing.
+fn alone() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        ON_THIS_THREAD.load(Ordering::Relaxed)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        false
+    }
+}
 
 /// Heavy items (a millisecond each, about) past which a loop is worth starting the threads
 /// for: starting them costs about one item, and a few more in the first loop's waking.
@@ -30,7 +47,7 @@ const SOME: usize = 16;
 /// started ([`start`]).
 #[track_caller]
 pub(crate) fn threads_for(n: usize, heavy: bool) -> bool {
-    if n < 2 {
+    if n < 2 || alone() {
         return false;
     }
     if WARM.load(Ordering::Relaxed) {
@@ -47,7 +64,7 @@ pub(crate) fn threads_for(n: usize, heavy: bool) -> bool {
 /// fitted: tens of microseconds): worth the threads from [`SOME`] of them.
 #[track_caller]
 pub(crate) fn threads_for_some(n: usize) -> bool {
-    if n < 2 {
+    if n < 2 || alone() {
         return false;
     }
     if WARM.load(Ordering::Relaxed) {
@@ -105,7 +122,7 @@ pub(crate) fn map_heavy<T: Sync, R: Send>(
     f: impl Fn(&T) -> R + Sync,
 ) -> Vec<R> {
     let n = items.len();
-    if n < 2 {
+    if n < 2 || alone() {
         return items.iter().map(f).collect();
     }
     #[cfg(target_arch = "wasm32")]
@@ -349,6 +366,35 @@ pub(crate) fn start() {
     }
 }
 
+/// For a host that calls the kernel from this one thread on one core (an adapter serving a test
+/// suite's requests on a core of its own): makes this thread the parallel pool's only worker, so
+/// the kernel's parallel loops run here, inline, rather than each being handed to a thread of
+/// their own on the same core and waited for. Call it before anything else uses the kernel, from
+/// a thread that lives as long as the process; it does nothing (and returns false) with more
+/// than one core, or once the pool is made. (Any other thread's parallel work would wait for
+/// this one to take it: not for a host with threads of its own calling the kernel.)
+pub fn run_on_this_thread() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if std::thread::available_parallelism().map_or(1, |n| n.get()) != 1 {
+            return false;
+        }
+        let made = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .use_current_thread()
+            .build_global()
+            .is_ok();
+        if made {
+            ON_THIS_THREAD.store(true, Ordering::Relaxed);
+        }
+        made
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        false
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn start_pool() {
     use std::sync::mpsc;
@@ -413,8 +459,14 @@ pub fn clear_caches() {
 /// Drops `x` on the pool, off the caller's thread: a cache's old generation, thousands of
 /// allocations, freed while the operation that filled it goes on (in a page, here and now).
 pub(crate) fn discard<T: Send + 'static>(x: T) {
+    // (With the pool on the caller's own thread ([`run_on_this_thread`]) a spawned job runs only
+    // when that thread waits on the pool, which it never does: dropped here.)
     #[cfg(not(target_arch = "wasm32"))]
-    rayon::spawn(move || drop(x));
+    if ON_THIS_THREAD.load(Ordering::Relaxed) {
+        drop(x);
+    } else {
+        rayon::spawn(move || drop(x));
+    }
     #[cfg(target_arch = "wasm32")]
     drop(x);
 }
