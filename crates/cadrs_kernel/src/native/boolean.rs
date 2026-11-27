@@ -4373,16 +4373,23 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         // again, inexactly, goes.
         let near = (run_tol * 10.0).max(1e-7 * ob.diagonal());
         let along = |ic: &ssi::IntCurve| {
-            let pts: Vec<P3> = (0..=4)
-                .map(|k| ic.c.point(ic.t0 + (ic.t1 - ic.t0) * k as f64 / 4.0))
+            let pts: Vec<P3> = (0..=8)
+                .map(|k| ic.c.point(ic.t0 + (ic.t1 - ic.t0) * k as f64 / 8.0))
                 .collect();
+            // (And no longer than the edge: a whole circle's samples all fell on an arc of it
+            // round most of the turn, a ring of fins' edge on a cylinder, and the circle went,
+            // the next fin's arc with it.)
+            let reach = std::cell::OnceCell::new();
+            let reach = || *reach.get_or_init(|| ic.c.length(ic.t0, ic.t1) - 2.0 * near);
             let runs_on = |x: usize| {
                 let e = &pool.edges[x];
                 !e.degenerate
-                    && ebox[x].grow(near).contains(&pts[2])
+                    && ebox[x].grow(near).contains(&pts[4])
                     && pts
                         .iter()
                         .all(|p| on_curve(&e.curve, e.t[0], e.t[1], p, near).is_some())
+                    && e.curve
+                        .longer_than(e.t[0].min(e.t[1]), e.t[0].max(e.t[1]), reach())
             };
             face_edges[fa]
                 .iter()
@@ -4391,7 +4398,19 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                     runs_on(x) && edge_on_surface(&pool.edges[x], &faces[fa].surf, run_tol)
                 })
         };
-        let curves: Vec<ssi::IntCurve> = curves.into_iter().filter(|ic| !along(ic)).collect();
+        let curves: Vec<ssi::IntCurve> = curves
+            .into_iter()
+            .filter(|ic| {
+                let on = along(ic);
+                if on && super::env_flag!("CADRS_BOOL_DEBUG") {
+                    eprintln!(
+                        "ssi {fa}×{fb}: a curve from {:?} runs along an edge already there: dropped",
+                        ic.c.point(ic.t0)
+                    );
+                }
+                !on
+            })
+            .collect();
         // Whether a boundary edge of either face lies on the other's surface.
         let edge_on_other = {
             let lies = |edges: &[usize], g: &WFace, bound: Option<&SurfaceBound>| {

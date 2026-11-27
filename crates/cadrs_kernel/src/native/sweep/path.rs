@@ -272,7 +272,18 @@ pub(crate) fn spines(
             }
         }
     }
-    let _ = n;
+    // The path's ends where they lie on the plane, to within what a fitted path strays by (a
+    // helix fitted to a sampled one starts 1e-9 past the profile's plane: the crossing there
+    // falls just outside the path, and the next, a turn on, was taken).
+    let last = path.len() - 1;
+    for (i, end, p) in [(0, false, path[0].start()), (last, true, path[last].end())] {
+        if (p - o).dot(&n).abs() <= 1e-6 * (1.0 + p.coords.norm()) {
+            let d = (p - center).norm();
+            if best.is_none_or(|(bd, ..)| d < bd) {
+                best = Some((d, i, if end { 1.0 } else { 0.0 }));
+            }
+        }
+    }
     let Some((_, i, f)) = best else {
         return vec![(path, false)];
     };
@@ -280,7 +291,6 @@ pub(crate) fn spines(
     if i == 0 && f < tol {
         return vec![(path, false)];
     }
-    let last = path.len() - 1;
     if !closed && i == last && f > 1.0 - tol {
         let back: Vec<Seg> = path.iter().rev().map(|s| s.reversed()).collect();
         return vec![(back, false)];

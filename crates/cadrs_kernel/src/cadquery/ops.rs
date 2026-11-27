@@ -769,9 +769,14 @@ pub fn sweep(
     };
     let control = match mode {
         SweepMode::Fixed(_) => crate::SweepControl::KeepOrientation,
+        // The helix's screw is its Frenet frame only on a cylinder: along a conical spiral the
+        // path's pitch changes as its radius does, and a screwed profile leans off square to it
+        // (OCCT's Frenet keeps it square). There the exact path, framed as any other.
         SweepMode::Frenet => match helix {
-            Some(h) => crate::SweepControl::Helix(h),
-            None => crate::SweepControl::None,
+            Some(h) if (h.r1 - h.r0).abs() <= 1e-9 * (1.0 + h.r0.abs()) => {
+                crate::SweepControl::Helix(h)
+            }
+            _ => crate::SweepControl::None,
         },
         SweepMode::Corrected => crate::SweepControl::None,
     };
@@ -830,6 +835,9 @@ pub fn sweep_twisted(faces: &[Shape], path: &[EdgeGeom], twist: f64) -> CqResult
 /// helix, under what a sampled helix's fit strays by and far over what a curve that merely
 /// resembles one keeps to.
 pub fn helix_of(path: &[EdgeGeom]) -> Option<crate::Helix> {
+    if crate::native::env_flag!("CADRS_NO_HELIX_PATH") {
+        return None;
+    }
     let len: f64 = path.iter().map(|g| g.length()).sum();
     if len <= 0.0 {
         return None;

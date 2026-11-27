@@ -266,6 +266,17 @@ fn replay_logged_boolean() {
         let (bi, fi) = spec.split_once(':').unwrap();
         let b = k.get(ids[bi.parse::<usize>().unwrap()]).unwrap().clone();
         let f = &b.faces[fi.parse::<usize>().unwrap()];
+        if let crate::native::surface::Surface::Nurbs(ns) = &f.surf {
+            eprintln!(
+                "nurbs: degree {}×{}, poles {}×{}, knots {}×{}",
+                ns.du,
+                ns.dv,
+                ns.cps.len(),
+                ns.cps[0].len(),
+                ns.ku.len(),
+                ns.kv.len()
+            );
+        }
         for (li, l) in f.loops.iter().enumerate() {
             for c in l {
                 let e = &b.edges[c.edge];
@@ -464,4 +475,144 @@ fn slot_in_a_cone_shell_meets_its_sides() {
         .cut_shapes(vec![cutter.find_solid().unwrap()], true)
         .unwrap();
     assert!((vol(&r) - 99.219_756_580_6).abs() < 1e-8, "{}", vol(&r));
+}
+
+/// A triangular winglet swept along a conical spiral round a lofted cone shell and united with
+/// it (CadEvolve's spiralWingletCone): the winglet's sides are ruled across (degree 1 in u),
+/// and the cone's seam meets one where it crosses the cone, once a turn; the general ray
+/// search found one of the three, and the shell split into pieces sharing a turn's edge.
+/// OCCT 1408.913, kentron 1408.377.
+#[test]
+fn winglet_on_a_conical_spiral_unites() {
+    let (r0, r1, h, turns) = (12.0, 6.0, 25.0, 3.0);
+    let cone = |a: f64, b: f64| {
+        xy().circle(a, false)
+            .unwrap()
+            .workplane(h, false, "ProjectedOrigin", None)
+            .unwrap()
+            .circle(b, false)
+            .unwrap()
+            .loft(false, Combine::Fuse, true)
+            .unwrap()
+    };
+    let shell = cone(r0, r1)
+        .cut_shapes(vec![cone(r0 - 1.0, r1 - 1.0).find_solid().unwrap()], true)
+        .unwrap();
+    let pts: Vec<V3> = (0..=100)
+        .map(|i| {
+            let t = i as f64 / 100.0;
+            let (r, a) = (r0 + (r1 - r0) * t, std::f64::consts::TAU * turns * t);
+            V3::new(r * a.cos(), r * a.sin(), h * t)
+        })
+        .collect();
+    let path = xy()
+        .spline_approx(&pts, 1e-6, false, false, true)
+        .unwrap()
+        .shapes()
+        .remove(0);
+    let profile = Workplane::named("XZ", V3::zeros())
+        .unwrap()
+        .transformed(V3::zeros(), V3::new(r0, 0.0, 0.0))
+        .unwrap()
+        .polyline(
+            &[
+                V3::new(0.0, -1.0, 0.0),
+                V3::new(0.0, 1.0, 0.0),
+                V3::new(0.5, 0.0, 0.0),
+            ],
+            false,
+            false,
+        )
+        .unwrap()
+        .close()
+        .unwrap();
+    let winglet = profile
+        .sweep(&path, true, true, true, Combine::Fuse, true, "right", None)
+        .unwrap();
+    let u = shell.union_wp(&winglet, true).unwrap();
+    assert!((vol(&u) - 1408.388).abs() < 0.02, "{}", vol(&u));
+}
+
+/// A ring of fins round a cylinder, each a 30° quad from the cylinder's radius out, its inner
+/// corners on it and its sides on its neighbours', united one at a time (CadEvolve's louvered
+/// cylinders): the last fin's top circle was dropped as running along the arc the earlier fins
+/// had left (five samples of the circle, all on an arc round most of the turn), and the shell
+/// came out open. Each fin adds its quad less the segment inside the cylinder.
+#[test]
+fn ring_of_fins_round_a_cylinder_closes() {
+    let (r1, r2, h, n) = (10.0, 12.0, 10.0, 12usize);
+    let half = std::f64::consts::PI / n as f64;
+    let mut body = xy()
+        .circle(r1, false)
+        .unwrap()
+        .extrude(Until::Distance(h), Combine::Fuse, true, false, 0.0)
+        .unwrap();
+    for j in 0..n {
+        let at = |r: f64, t: f64| V3::new(r * t.cos(), r * t.sin(), 0.0);
+        let fin = xy()
+            .transformed(V3::zeros(), V3::new(0.0, 0.0, 4.0))
+            .unwrap()
+            .polyline(
+                &[at(r1, -half), at(r1, half), at(r2, half), at(r2, -half)],
+                false,
+                false,
+            )
+            .unwrap()
+            .close()
+            .unwrap()
+            .extrude(Until::Distance(2.0), Combine::No, true, false, 0.0)
+            .unwrap()
+            .rotate(V3::zeros(), V3::z(), 360.0 / n as f64 * j as f64)
+            .unwrap();
+        body = body.union_wp(&fin, true).unwrap();
+    }
+    let pi = std::f64::consts::PI;
+    let quad = 0.5 * (2.0 * half).sin() * (r2 * r2 - r1 * r1);
+    let segment = 0.5 * r1 * r1 * (2.0 * half - (2.0 * half).sin());
+    let want = pi * r1 * r1 * h + n as f64 * 2.0 * (quad - segment);
+    assert!((vol(&body) - want).abs() < 1e-8, "{} {want}", vol(&body));
+}
+
+/// A square notch swept along a sampled helix, its profile square to the helix at the start
+/// (CadEvolve's cylinder_basic_with_helicoidal_notches): the fitted helix starts 1e-9 past the
+/// profile's plane, so the sweep took the plane's next crossing of the path, a turn on, as
+/// where the profile sits and swept both ways from there. Cut from the cylinder it runs round:
+/// OCCT 9362.8459 (its sweep approximated).
+#[test]
+fn helical_notch_starts_at_its_profile() {
+    let (r, h, turns) = (10.0, 30.0, 2.0);
+    let tau = std::f64::consts::TAU;
+    let pts: Vec<V3> = (0..=200)
+        .map(|i| {
+            let t = i as f64 / 200.0;
+            V3::new(
+                r * (tau * turns * t).cos(),
+                r * (tau * turns * t).sin(),
+                h * t,
+            )
+        })
+        .collect();
+    let path = xy()
+        .spline_approx(&pts, 1e-6, false, false, true)
+        .unwrap()
+        .shapes()
+        .remove(0);
+    let plane = Plane::new(V3::new(r, 0.0, 0.0), None, V3::new(0.0, r * tau * turns, h)).unwrap();
+    let notch = Workplane::new(plane)
+        .center(-0.5, 0.0)
+        .rect(1.0, 1.0, (true, true), false)
+        .unwrap()
+        .sweep(&path, false, true, true, Combine::Fuse, true, "right", None)
+        .unwrap();
+    let bb = notch.find_solid().unwrap().bounding_box().unwrap();
+    assert!(bb.min.z > -1.0 && bb.max.z < 30.0 + 1e-6, "{bb:?}");
+    let cyl = xy()
+        .circle(r, false)
+        .unwrap()
+        .extrude(Until::Distance(h), Combine::Fuse, true, false, 0.0)
+        .unwrap();
+    let cut = cyl
+        .cut_shapes(vec![notch.find_solid().unwrap()], true)
+        .unwrap();
+    assert!((vol(&cut) - 9362.8459).abs() < 5e-3, "{}", vol(&cut));
 }
