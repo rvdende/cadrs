@@ -894,6 +894,43 @@ fn point_in_face(f: &WFace, p: &P3, tol: f64) -> InFace {
     // (The polygons' range and boxes kept from the start: a face of hundreds of holes holds a
     // million polygon points, which every test went over.)
     let (polys, boxes) = &*f.polys;
+    if super::env_flag!("CADRS_INFACE_DEBUG") {
+        let (mut ul, mut uh, mut vl, mut vh) = (
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        );
+        for p in polys.iter().flatten() {
+            (ul, uh, vl, vh) = (ul.min(p.x), uh.max(p.x), vl.min(p.y), vh.max(p.y));
+        }
+        let c = classify::periodic_candidates_boxed(&f.surf, u, v, boxes);
+        let r: Vec<_> = c
+            .iter()
+            .map(|q| {
+                (
+                    q.x,
+                    q.y,
+                    classify::in_face_boxed(polys, boxes, &f.surf, *q, tol),
+                )
+            })
+            .collect();
+        if std::env::var("CADRS_INFACE_DEBUG").is_ok_and(|d| d == "2") {
+            for (k, pl) in polys.iter().enumerate() {
+                eprintln!(
+                    "  poly {k}: {:?}",
+                    pl.iter()
+                        .map(|q| ((q.x * 1e3).round() / 1e3, (q.y * 1e3).round() / 1e3))
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+        eprintln!(
+            "  in face? p {p:?} uv ({u:.4}, {v:.4}) polys u [{ul:.4}, {uh:.4}] v [{vl:.4}, {vh:.4}] ({} polys, {} points): {r:?}",
+            polys.len(),
+            polys.iter().map(|p| p.len()).sum::<usize>()
+        );
+    }
     for uv in classify::periodic_candidates_boxed(&f.surf, u, v, boxes) {
         match classify::in_face_boxed(polys, boxes, &f.surf, uv, tol) {
             InFace::Inside => return InFace::Inside,
@@ -911,7 +948,7 @@ fn interior_point(loops: &[Vec<Arc>], on: Level) -> Option<P2> {
     let polys = arc_polys(loops);
     let scan = Scan::new(&polys)?;
     let mut best: Option<(f64, P2)> = None;
-    for q in scan_candidates(loops, &polys, &scan, on) {
+    for q in scan_candidates(loops, &polys, &scan, on, 0.5) {
         let floor = best.map_or(f64::NEG_INFINITY, |b| b.0);
         let d = scan.clearance(&q, floor);
         if best.is_none_or(|b| d > b.0) {
@@ -1019,11 +1056,18 @@ fn level_crossing(surf: &Surface, curve: &Curve, y: f64, lo: f64, hi: f64) -> Op
 /// The scanlines cross the arcs themselves, not their polygons: a region thinner than a
 /// polygon's sagitta (a tube's end a thousandth wide) has its points inside it all the same.
 fn interior_points(loops: &[Vec<Arc>], on: Level) -> Vec<P2> {
+    interior_points_along(loops, on, 0.5)
+}
+
+/// [`interior_points`] a fraction `along` of the way across each inside interval of the scan
+/// lines (the middle at 0.5): off the middles, for a face whose middle line lies on the other
+/// body's surface (a flat face touching a cylinder along a line through it).
+fn interior_points_along(loops: &[Vec<Arc>], on: Level, along: f64) -> Vec<P2> {
     let polys = arc_polys(loops);
     let Some(scan) = Scan::new(&polys) else {
         return Vec::new();
     };
-    let cands = scan_candidates(loops, &polys, &scan, on);
+    let cands = scan_candidates(loops, &polys, &scan, on, along);
     let mut cands: Vec<(f64, P2)> = cands
         .into_iter()
         .map(|q| (scan.clearance(&q, f64::NEG_INFINITY), q))
@@ -1034,7 +1078,13 @@ fn interior_points(loops: &[Vec<Arc>], on: Level) -> Vec<P2> {
 
 /// [`interior_points`]' candidates in scan order: on each scanline, the middle of each inside
 /// interval between the loops' crossings.
-fn scan_candidates(loops: &[Vec<Arc>], polys: &[Vec<P2>], scan: &Scan, on: Level) -> Vec<P2> {
+fn scan_candidates(
+    loops: &[Vec<Arc>],
+    polys: &[Vec<P2>],
+    scan: &Scan,
+    on: Level,
+    along: f64,
+) -> Vec<P2> {
     let mut cands = Vec::new();
     // (The arcs' points are the polygons' own, made once for all the scanlines: a fitted
     // p-curve's 64 points were made again for each of the eleven. One list of crossings too.)
@@ -1070,7 +1120,7 @@ fn scan_candidates(loops: &[Vec<Arc>], polys: &[Vec<P2>], scan: &Scan, on: Level
         xs.sort_by(f64::total_cmp);
         let mut k = 0;
         while k + 1 < xs.len() {
-            cands.push(P2::new((xs[k] + xs[k + 1]) * 0.5, y));
+            cands.push(P2::new(xs[k] + (xs[k + 1] - xs[k]) * along, y));
             k += 2;
         }
     }
@@ -5603,18 +5653,23 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             // the other body lying in it) decides nothing: try the face's other inside points.
             let mut pc = other.classify(&p, run_tol);
             if pc == PointClass::OnBoundary {
-                for q in interior_points(
-                    &loops,
-                    Some((&f.surf, &|e| pool.edges.get(e).map(|e| &e.curve))),
-                )
-                .into_iter()
-                .skip(1)
-                .take(12)
-                {
-                    let c = other.classify(&f.surf.eval(q.x, q.y), run_tol);
-                    if c != PointClass::OnBoundary {
-                        pc = c;
-                        break;
+                // (The middles first, then points off them: a face touching the other body
+                // along its middle line has every middle on the other's boundary.)
+                'retry: for along in [0.5, 0.25, 0.75] {
+                    for q in interior_points_along(
+                        &loops,
+                        Some((&f.surf, &|e| pool.edges.get(e).map(|e| &e.curve))),
+                        along,
+                    )
+                    .into_iter()
+                    .skip(if along == 0.5 { 1 } else { 0 })
+                    .take(12)
+                    {
+                        let c = other.classify(&f.surf.eval(q.x, q.y), run_tol);
+                        if c != PointClass::OnBoundary {
+                            pc = c;
+                            break 'retry;
+                        }
                     }
                 }
             }
@@ -5989,7 +6044,28 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             why: format!("the boolean's result is invalid: {why}"),
         });
     }
+    order_solids_by_input(&mut out, &from);
     Ok(BoolOut { body: out, from })
+}
+
+/// The result's solids in the order of what they came from (as OCCT's booleans give them):
+/// the first input's first, each by the earliest input face it holds a piece of.
+fn order_solids_by_input(out: &mut Body, from: &[Vec<(usize, usize)>]) {
+    if out.solids.len() < 2 {
+        return;
+    }
+    let key = |s: &super::topo::Solid| {
+        s.shells
+            .iter()
+            .flat_map(|&sh| out.shells[sh].faces.iter())
+            .filter_map(|&f| from.get(f).and_then(|v| v.iter().min().copied()))
+            .min()
+            .unwrap_or((usize::MAX, usize::MAX))
+    };
+    let mut keyed: Vec<((usize, usize), super::topo::Solid)> =
+        out.solids.iter().map(|s| (key(s), s.clone())).collect();
+    keyed.sort_by_key(|(k, _)| *k);
+    out.solids = keyed.into_iter().map(|(_, s)| s).collect();
 }
 
 /// A void's vertices lying outside its solid's outer shell by no more than `tol` (a void

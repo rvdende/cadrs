@@ -37,6 +37,8 @@
 
 /// Kernel backends by name (`backend::native::NativeKernel`, the only one).
 pub mod backend;
+#[cfg(feature = "cadquery")]
+pub mod cadquery;
 mod construct;
 pub mod exchange;
 pub mod loft;

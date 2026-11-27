@@ -206,7 +206,9 @@ impl NativeKernel {
     }
 
     /// Adds a body to the session as it is (run [`Body::check`] first on one built by hand).
-    pub fn insert(&mut self, body: Body) -> BodyId {
+    pub fn insert(&mut self, mut body: Body) -> BodyId {
+        // (Every body's loops on periodic surfaces run on in (u, v): see the function.)
+        body.chain_periodic_pcurves();
         let id = self.next;
         self.next += 1;
         self.bodies.insert(id, Arc::new(Entry::new(body)));

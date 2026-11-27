@@ -1,0 +1,16 @@
+[package]
+name = "cadrs_py"
+description = "CadQuery on cadrs's kernel for Python: the `cadquery` package's native part"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "_cadrs"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+cadrs_kernel = { workspace = true, features = ["cadquery"] }
+nalgebra.workspace = true
+pyo3 = { version = "0.30", features = ["extension-module", "abi3-py310", "multiple-pymethods"] }

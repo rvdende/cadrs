@@ -848,6 +848,8 @@ impl Body {
                 }
             }
         }
+        // (Remade p-curves land each in its own period: chained again.)
+        b.chain_periodic_pcurves();
         b
     }
 
@@ -946,6 +948,51 @@ impl Body {
     /// Whether the body has a solid.
     pub fn is_solid(&self) -> bool {
         !self.solids.is_empty()
+    }
+
+    /// Each loop's p-curves on a surface periodic in u or v moved by whole periods to run on
+    /// from one another (each starting where the one before ends): a builder that projected
+    /// each edge on its own may leave one a period off (the ends of a helical band winding
+    /// round a cylinder several times), which folds the loop over in (u, v). Loops that run on
+    /// already are left as they are.
+    pub fn chain_periodic_pcurves(&mut self) {
+        use std::f64::consts::TAU;
+        let edges = &self.edges;
+        for f in &mut self.faces {
+            let (pu, pv) = (f.surf.u_periodic(), f.surf.v_periodic());
+            if !pu && !pv {
+                continue;
+            }
+            for lp in &mut f.loops {
+                let ends = |c: &Coedge| {
+                    let e = &edges[c.edge];
+                    let (a, b) = if c.fwd {
+                        (e.t[0], e.t[1])
+                    } else {
+                        (e.t[1], e.t[0])
+                    };
+                    (c.pc.point(a), c.pc.point(b))
+                };
+                for k in 1..lp.len() {
+                    let prev = ends(&lp[k - 1]).1;
+                    let start = ends(&lp[k]).0;
+                    let du = if pu {
+                        ((prev.x - start.x) / TAU).round() * TAU
+                    } else {
+                        0.0
+                    };
+                    let dv = if pv {
+                        ((prev.y - start.y) / TAU).round() * TAU
+                    } else {
+                        0.0
+                    };
+                    if du != 0.0 || dv != 0.0 {
+                        let m = super::math::Affine::translation(V3::new(du, dv, 0.0));
+                        lp[k].pc = lp[k].pc.transformed(&m);
+                    }
+                }
+            }
+        }
     }
 
     /// Reverses a face's orientation (the outward normal flips): sense and loops.

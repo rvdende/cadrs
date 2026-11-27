@@ -349,9 +349,69 @@ pub fn face_polygons_kept(body: &Body, f: &Face) -> KeptPolygons {
     p
 }
 
+/// The lifts of `uv` by whole periods that fall in the range a face's loops span, where that
+/// range is wider than a period (a helical band winding round a cylinder several times): a
+/// point of such a face lies at one of them. Just `uv` otherwise.
+fn lifts(surf: &Surface, uv: P2, (ub, vb): ((f64, f64), (f64, f64))) -> Vec<P2> {
+    let wide_u = surf.u_periodic() && ub.1 - ub.0 > TAU + tol::ROUNDOFF;
+    let wide_v = surf.v_periodic() && vb.1 - vb.0 > TAU + tol::ROUNDOFF;
+    if !wide_u && !wide_v {
+        return vec![uv];
+    }
+    let span = |x: f64, (lo, hi): (f64, f64), wide: bool| -> Vec<f64> {
+        if !wide {
+            return vec![x];
+        }
+        let k0 = ((lo - x) / TAU).floor() as i64 - 1;
+        let k1 = ((hi - x) / TAU).ceil() as i64 + 1;
+        (k0..=k1)
+            .map(|k| x + TAU * k as f64)
+            .filter(|y| {
+                *y >= lo - TAU * 1e-9 - tol::ROUNDOFF && *y <= hi + TAU * 1e-9 + tol::ROUNDOFF
+            })
+            .collect()
+    };
+    let us = span(uv.x, ub, wide_u);
+    let vs = span(uv.y, vb, wide_v);
+    let mut out = Vec::new();
+    for &u in &us {
+        for &v in &vs {
+            out.push(P2::new(u, v));
+        }
+    }
+    if out.is_empty() { vec![uv] } else { out }
+}
+
+/// The strongest of the answers at several lifts of a point: on the boundary at any, else
+/// inside at any, else outside.
+fn best_of_lifts(lifts: &[P2], one: impl Fn(P2) -> InFace) -> InFace {
+    let mut inside = false;
+    for &q in lifts {
+        match one(q) {
+            InFace::Boundary => return InFace::Boundary,
+            InFace::Inside => inside = true,
+            InFace::Outside => {}
+        }
+    }
+    if inside {
+        InFace::Inside
+    } else {
+        InFace::Outside
+    }
+}
+
 /// Point in a face's domain given its sampled loops; `tol` in model units (scaled by the
-/// surface metric).
+/// surface metric). A face winding more than a period round a periodic surface is tested at
+/// each lift of the point within it.
 pub fn in_face(polys: &[Vec<P2>], surf: &Surface, uv: P2, tol: f64) -> InFace {
+    let l = lifts(surf, uv, uv_range(polys));
+    if l.len() == 1 {
+        return in_face_one(polys, surf, l[0], tol);
+    }
+    best_of_lifts(&l, |q| in_face_one(polys, surf, q, tol))
+}
+
+fn in_face_one(polys: &[Vec<P2>], surf: &Surface, uv: P2, tol: f64) -> InFace {
     let (mu, mv) = surf.metric();
     let mut inside = false;
     for p in polys {
@@ -502,6 +562,32 @@ pub fn poly_boxes(polys: &[Vec<P2>], surf: &Surface) -> PolyBoxes {
 /// flip its parity, and is skipped; of a long polygon only the sides in the point's rows (those
 /// that come within `tol` of it, and those that cross its v) are looked at.
 pub fn in_face_boxed(
+    polys: &[Vec<P2>],
+    boxes: &[PolyBox],
+    surf: &Surface,
+    uv: P2,
+    tol: f64,
+) -> InFace {
+    let range = boxes.iter().fold(
+        (
+            (f64::INFINITY, f64::NEG_INFINITY),
+            (f64::INFINITY, f64::NEG_INFINITY),
+        ),
+        |((a, b), (c, d)), pb| {
+            (
+                (a.min(pb.b[0]), b.max(pb.b[1])),
+                (c.min(pb.b[2]), d.max(pb.b[3])),
+            )
+        },
+    );
+    let l = lifts(surf, uv, range);
+    if l.len() == 1 {
+        return in_face_boxed_one(polys, boxes, surf, l[0], tol);
+    }
+    best_of_lifts(&l, |q| in_face_boxed_one(polys, boxes, surf, q, tol))
+}
+
+fn in_face_boxed_one(
     polys: &[Vec<P2>],
     boxes: &[PolyBox],
     surf: &Surface,

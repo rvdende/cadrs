@@ -805,6 +805,9 @@ fn assemble_rows(
             },
         })
     };
+    // A ruled patch between two coaxial circular arcs joined along their meridians is that
+    // cone or cylinder (a loft of two circles about one axis, as OCCT's).
+    let conical = |r: usize, i: usize| -> Option<Surface> { ruled_cone(&rows[r][i]) };
     let triangle = |r: usize, i: usize| -> Option<Surface> {
         let at_point = (r == 0 && points[0]) || (r + 1 == nr && points[1]);
         if !at_point {
@@ -844,7 +847,10 @@ fn assemble_rows(
     for (r, row) in rows.iter().enumerate() {
         for (i, s) in row.iter().enumerate() {
             let j = if closed_u { (i + 1) % n } else { i + 1 };
-            if let Some(surf) = triangle(r, i).or_else(|| flat(r, i)) {
+            if let Some(surf) = triangle(r, i)
+                .or_else(|| flat(r, i))
+                .or_else(|| conical(r, i))
+            {
                 let mut lp = Vec::new();
                 for (e, fwd) in [
                     (levels[r][i], true),
@@ -861,6 +867,9 @@ fn assemble_rows(
                         fwd,
                         pc: super::pcurve::pcurve(&surf, &ed.curve, ed.t[0], ed.t[1], None),
                     });
+                }
+                if surf.u_periodic() {
+                    chain_periodic_pcurves(&b, &mut lp);
                 }
                 b.faces.push(Face {
                     surf,
@@ -1004,6 +1013,126 @@ fn assemble_rows(
         // against the volume sign is enough for a consistent shell.
     }
     Ok(Built { body: b, origins })
+}
+
+/// A loop's p-curves on a surface periodic in u (2π) made to run on from one another: each
+/// moved by whole turns to start where the one before ends (a seam's two coedges, one at u = 0
+/// and one at u = 2π).
+fn chain_periodic_pcurves(b: &Body, lp: &mut [Coedge]) {
+    let ends = |c: &Coedge| {
+        let e = &b.edges[c.edge];
+        let (s, t) = if c.fwd {
+            (e.t[0], e.t[1])
+        } else {
+            (e.t[1], e.t[0])
+        };
+        (c.pc.point(s), c.pc.point(t))
+    };
+    for k in 1..lp.len() {
+        let prev_end = ends(&lp[k - 1]).1;
+        let start = ends(&lp[k]).0;
+        let turns = ((prev_end.x - start.x) / TAU).round();
+        if turns != 0.0 {
+            let m = Affine::translation(V3::new(turns * TAU, 0.0, 0.0));
+            lp[k].pc = lp[k].pc.transformed(&m);
+        }
+    }
+}
+
+/// The circle a B-spline curve lies on, when it is an arc of one: its centre, unit normal and
+/// radius. Exact, not sampled: on each Bézier piece of degree d the squared distance from the
+/// centre and the height above its plane are rational of degree at most 2d, so 2d + 1 points
+/// where they hold make them hold all along.
+fn circle_of(c: &NurbsCurve) -> Option<(P3, V3, f64)> {
+    let (t0, t1) = c.range();
+    let (a, m, e) = (c.point(t0), c.point(0.5 * (t0 + t1)), c.point(t1));
+    // Three points apart: the ends and the middle, or a quarter for a whole circle.
+    let b = if (a - e).norm() <= tol::POINT {
+        c.point(t0 + 0.25 * (t1 - t0))
+    } else {
+        e
+    };
+    let (u, v) = (m - a, b - a);
+    let n = u.cross(&v);
+    let nn = n.norm_squared();
+    if nn <= tol::DEGENERATE * u.norm_squared().max(v.norm_squared()) {
+        return None;
+    }
+    let center = a + (v.norm_squared() * n.cross(&u) + u.norm_squared() * v.cross(&n)) / (2.0 * nn);
+    let r = (a - center).norm();
+    let nrm = n / nn.sqrt();
+    let tol = tol::REL * r.max(1.0);
+    for (s0, s1, cps) in c.bezier_segments() {
+        let d = cps.len().saturating_sub(1).max(1);
+        let k = 2 * d + 1;
+        for j in 0..=k {
+            let p = c.point(s0 + (s1 - s0) * j as f64 / k as f64);
+            if ((p - center).norm() - r).abs() > tol || (p - center).dot(&nrm).abs() > tol {
+                return None;
+            }
+        }
+    }
+    Some((center, nrm, r))
+}
+
+/// The cone or cylinder a ruled patch (degree 1 across) lies on: when its two edges are arcs
+/// of circles on one axis (centres along their common normal) and each straight line across
+/// it joins points on one meridian. None otherwise.
+fn ruled_cone(s: &NurbsSurface) -> Option<Surface> {
+    if s.dv != 1 || s.cps.iter().any(|col| col.len() != 2) {
+        return None;
+    }
+    let (c0, c1) = (iso(s, true, false), iso(s, true, true));
+    let (o0, n0, r0) = circle_of(&c0)?;
+    let (o1, n1, r1) = circle_of(&c1)?;
+    let axis = o1 - o0;
+    let h = axis.norm();
+    let size = r0.max(r1).max(h).max(1.0);
+    if h <= tol::REL * size
+        || n0.cross(&n1).norm() > tol::REL
+        || axis.cross(&n0).norm() > tol::REL * size
+    {
+        return None;
+    }
+    // Each line across the patch on one meridian: the edges' points at a parameter in one
+    // direction from the axis (rational of degree 2d along each Bézier piece too).
+    let (t0, t1) = c0.range();
+    let mut breaks = c0.breaks();
+    breaks.retain(|t| *t > t0 && *t < t1);
+    breaks.insert(0, t0);
+    breaks.push(t1);
+    let d = c0.degree.max(1);
+    for w in breaks.windows(2) {
+        let k = 2 * d + 1;
+        for j in 0..=k {
+            let t = w[0] + (w[1] - w[0]) * j as f64 / k as f64;
+            let (p, q) = (c0.point(t) - o0, c1.point(t) - o1);
+            if p.cross(&q).norm() > tol::REL * size * size || p.dot(&q) < 0.0 {
+                return None;
+            }
+        }
+    }
+    let z = axis / h;
+    let x = (c0.point(t0) - o0).try_normalize(tol::DEGENERATE)?;
+    let x = (x - z * x.dot(&z)).try_normalize(tol::DEGENERATE)?;
+    let f = Frame {
+        o: o0,
+        x,
+        y: z.cross(&x),
+        z,
+    };
+    if (r1 - r0).abs() <= tol::REL * size {
+        return Some(Surface::Cylinder {
+            f,
+            r: 0.5 * (r0 + r1),
+        });
+    }
+    let slant = (r1 - r0).hypot(h);
+    Some(Surface::Cone {
+        f,
+        r: r0,
+        a: ((r1 - r0) / slant).asin(),
+    })
 }
 
 /// The cap surface of a section: its plane, or (a face section) the face's own surface.
@@ -1402,6 +1531,25 @@ fn loft_exact_with(
         return Ok(None);
     }
     let count = loops[0];
+    // A loft that comes back to its first section (its last the first again, as given) keeps
+    // its sections' starts as they are, its last made the first exactly: lining them up about
+    // an axis from the first to the last means nothing when the two are one (round a torus,
+    // starts lined up that way turned the last a quarter round from the first).
+    let returns = secs.len() > 2
+        && match (&secs[0], &secs[secs.len() - 1]) {
+            (Sec::Loop { parts: a, .. }, Sec::Loop { parts: b, .. }) => {
+                a.len() == b.len()
+                    && a.iter().zip(b).all(|(p, q)| {
+                        (p.start() - q.start()).norm() < 1e-7 && (p.end() - q.end()).norm() < 1e-7
+                    })
+            }
+            _ => false,
+        };
+    let align = align && !returns;
+    if returns {
+        let n = secs.len();
+        secs[n - 1] = secs[0].clone();
+    }
     let first = centroid(&secs[0]);
     let last = centroid(&secs[secs.len() - 1]);
     let mut axis = last - first;
@@ -1509,7 +1657,25 @@ fn loft_exact_with(
             }
             _ => false,
         };
-    let solid = solid && !closed_v;
+    if super::env_flag!("CADRS_LOFT_DEBUG") {
+        let ends = |s: &Sec| match s {
+            Sec::Loop { parts, .. } => format!(
+                "{} parts, {:?} → {:?}",
+                parts.len(),
+                parts.first().map(|p| p.start()),
+                parts.last().map(|p| p.end())
+            ),
+            _ => "point".into(),
+        };
+        eprintln!(
+            "loft: {n_secs} sections, closed_u {closed_u} closed_v {closed_v}; first {} last {}",
+            ends(&secs[0]),
+            ends(&secs[n_secs - 1])
+        );
+    }
+    // A loft closing on itself (its last section its first) has no ends to cap: of closed
+    // sections it is still a solid (a ring lofted round, as a torus), of open ones a sheet.
+    let solid = solid && (!closed_v || closed_u);
     let mut srcs = Vec::new();
     let mut surfs = Vec::new();
     let mut ruled_cols: Vec<Vec<NurbsSurface>> = Vec::new();
@@ -1526,7 +1692,12 @@ fn loft_exact_with(
             why: "the loft's sections lie on top of each other".into(),
         });
     }
-    let v: Vec<f64> = v.iter().map(|x| x / total).collect();
+    // The sections at evenly spaced parameters, as OCCT's (and kentron's) smooth lofts put them
+    // (by the distance between centres the profile through four coaxial circles bulged 4 %
+    // less than both): the surface then agrees with theirs.
+    let v: Vec<f64> = (0..n_secs)
+        .map(|i| i as f64 / (n_secs - 1) as f64)
+        .collect();
     for pi in 0..count {
         let mut curves: Vec<NurbsCurve> = Vec::new();
         let mut template: Option<NurbsCurve> = None;
@@ -1639,7 +1810,11 @@ fn loft_exact_with(
             surfs.push(skin(&curves, &v));
         }
     }
-    let caps = [cap_surface(k, &secs[0]), cap_surface(k, &secs[n_secs - 1])];
+    let caps = if closed_v {
+        [None, None]
+    } else {
+        [cap_surface(k, &secs[0]), cap_surface(k, &secs[n_secs - 1])]
+    };
     let points = [
         matches!(secs[0], Sec::Point(_)),
         matches!(secs[n_secs - 1], Sec::Point(_)),
