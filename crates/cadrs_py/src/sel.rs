@@ -103,6 +103,7 @@ impl PySelector {
         }
     }
     #[pyo3(name = "filter")]
+    #[allow(non_snake_case)]
     fn filter(
         slf: &Bound<'_, Self>,
         py: Python<'_>,

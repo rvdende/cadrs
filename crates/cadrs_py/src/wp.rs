@@ -468,6 +468,7 @@ impl PyWorkplane {
         ok(self.w.center(x, y))
     }
     #[pyo3(name = "pushPoints")]
+    #[allow(non_snake_case)]
     fn push_points(&self, pntList: &Bound<'_, PyAny>) -> R {
         let mut v = Vec::new();
         for p in pntList.try_iter()? {

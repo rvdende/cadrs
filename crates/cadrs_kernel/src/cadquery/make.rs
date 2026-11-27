@@ -70,6 +70,7 @@ pub fn circle(radius: f64, pnt: V3, dir: V3, a1: f64, a2: f64, ccw: bool) -> CqR
 }
 
 /// `Edge.makeEllipse(x_radius, y_radius, pnt, dir, xdir, angle1, angle2, sense)`.
+#[allow(clippy::too_many_arguments)]
 pub fn ellipse(
     rx: f64,
     ry: f64,
@@ -745,13 +746,13 @@ pub fn planar_face(pl: &Plane, outer: &[EdgeGeom], holes: &[Vec<EdgeGeom>]) -> C
     Ok(b)
 }
 
+/// A planar face as wires: its plane, its outer wire and its holes.
+pub type PlanarFace = (Plane, Vec<EdgeGeom>, Vec<Vec<EdgeGeom>>);
+
 /// Faces from closed wires (`wiresToFaces`, OCCT's face maker with its orientation fix): a wire
 /// inside another (an odd number of others) is a hole in the innermost one holding it; the rest
 /// are faces of their own.
-pub fn wires_to_faces(
-    wires: &[Vec<EdgeGeom>],
-    hint: Option<&Plane>,
-) -> CqResult<Vec<(Plane, Vec<EdgeGeom>, Vec<Vec<EdgeGeom>>)>> {
+pub fn wires_to_faces(wires: &[Vec<EdgeGeom>], hint: Option<&Plane>) -> CqResult<Vec<PlanarFace>> {
     if wires.is_empty() {
         return value_err!("No pending wires present");
     }
@@ -1028,6 +1029,7 @@ pub fn torus(r1: f64, r2: f64, pnt: V3, dir: V3) -> CqResult<Shape> {
 
 /// `Solid.makeWedge(dx, dy, dz, xmin, zmin, xmax, zmax, pnt, dir)`: the box `dx × dy × dz` whose
 /// face at y = dy shrinks to `[xmin, xmax] × [zmin, zmax]`.
+#[allow(clippy::too_many_arguments)]
 pub fn wedge(
     dx: f64,
     dy: f64,

@@ -700,11 +700,6 @@ impl Shape {
         }
     }
 
-    /// The B-rep of [`Self::body`].
-    pub(crate) fn native(&self) -> CqResult<Arc<Body>> {
-        Ok(brep(&self.body()?))
-    }
-
     // ---------------------------------------------------------------- topology
 
     /// Sub-shapes of a kind, each once, in OCCT's order (`_entities`).
@@ -1261,19 +1256,6 @@ impl Shape {
         Ok((u0, u1, v0, v1))
     }
 
-    /// The face's surface, for planar faces their plane (origin on it, unit normal).
-    pub(crate) fn face_plane(&self) -> Option<(V3, V3)> {
-        let (b, f) = self.face_ref()?;
-        let face = &b.faces[f];
-        match &face.surf {
-            Surface::Plane { f: fr } => {
-                let n = if face.sense { fr.z } else { -fr.z };
-                Some((fr.o.coords, n))
-            }
-            _ => None,
-        }
-    }
-
     /// A face's outer wire (`outerWire`): its first loop.
     pub fn outer_wire(&self) -> CqResult<Shape> {
         let Some((b, f)) = self.face_ref() else {
@@ -1338,7 +1320,7 @@ impl Shape {
         }
         let lens: Vec<f64> = edges.iter().map(|g| g.length()).collect();
         let total: f64 = lens.iter().sum();
-        let mut target = if by_length { d * total } else { d * total };
+        let mut target = d * total;
         for (g, l) in edges.iter().zip(&lens) {
             if target <= *l || std::ptr::eq(g, edges.last().unwrap()) {
                 let f = if *l > 0.0 {

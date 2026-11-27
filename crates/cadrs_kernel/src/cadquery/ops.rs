@@ -218,12 +218,10 @@ pub fn intersect(a: &Shape, tools: &[Shape]) -> CqResult<Shape> {
 /// `clean()`: faces that continue one another merged (OCCT's `UnifySameDomain`).
 pub fn clean(s: &Shape) -> CqResult<Shape> {
     match &s.repr {
-        Repr::Body { body, kind }
-            if matches!(
-                kind,
-                ShapeType::Solid | ShapeType::Compound | ShapeType::Shell
-            ) =>
-        {
+        Repr::Body {
+            body,
+            kind: ShapeType::Solid | ShapeType::Compound | ShapeType::Shell,
+        } => {
             let b = body.clone();
             match op1(|k| k.simplify(b.0)) {
                 Ok(r) => {
@@ -279,9 +277,12 @@ fn face_input(f: &Shape) -> CqResult<(BodyRef, FaceInput, crate::Plane)> {
     ))
 }
 
+/// Faces on one plane: the plane, the faces as an operation's inputs, the bodies they hold.
+type PlaneGroup = (crate::Plane, Vec<FaceInput>, Vec<BodyRef>);
+
 /// Faces grouped by the plane they lie on (one operation each).
-fn by_plane(faces: &[Shape]) -> CqResult<Vec<(crate::Plane, Vec<FaceInput>, Vec<BodyRef>)>> {
-    let mut groups: Vec<(crate::Plane, Vec<FaceInput>, Vec<BodyRef>)> = Vec::new();
+fn by_plane(faces: &[Shape]) -> CqResult<Vec<PlaneGroup>> {
+    let mut groups: Vec<PlaneGroup> = Vec::new();
     for f in faces {
         let (b, fi, pl) = face_input(f)?;
         let same = groups.iter_mut().find(|(g, _, _)| {
@@ -790,7 +791,7 @@ pub fn sweep(
                 crate::BodyKind::Surface
             },
             path: curves.clone(),
-            control: control.clone(),
+            control,
             faces: inputs,
             corners: if round {
                 crate::SweepCorners::Round
@@ -897,7 +898,7 @@ pub fn loft(items: &[LoftItem], ruled: bool) -> CqResult<Shape> {
         match it {
             LoftItem::Point(p) => sections.push(crate::LoftSection::Point(P3::from(*p))),
             LoftItem::Wire(w) => {
-                let faces = make::faces_from_wires(&[w.clone()], None)?;
+                let faces = make::faces_from_wires(std::slice::from_ref(w), None)?;
                 let f = &faces[0];
                 let (b, fi, _) = face_input(f)?;
                 keep.push(b);

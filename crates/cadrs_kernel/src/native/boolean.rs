@@ -1052,16 +1052,12 @@ fn level_crossing(surf: &Surface, curve: &Curve, y: f64, lo: f64, hi: f64) -> Op
     })
 }
 
-/// Points inside a face's domain given its loops as arcs, farthest from the boundary first.
-/// The scanlines cross the arcs themselves, not their polygons: a region thinner than a
-/// polygon's sagitta (a tube's end a thousandth wide) has its points inside it all the same.
-fn interior_points(loops: &[Vec<Arc>], on: Level) -> Vec<P2> {
-    interior_points_along(loops, on, 0.5)
-}
-
-/// [`interior_points`] a fraction `along` of the way across each inside interval of the scan
-/// lines (the middle at 0.5): off the middles, for a face whose middle line lies on the other
-/// body's surface (a flat face touching a cylinder along a line through it).
+/// Points inside a face's domain given its loops as arcs, farthest from the boundary first,
+/// each a fraction `along` of the way across an inside interval of the scan lines (the middle
+/// at 0.5; off the middles for a face whose middle line lies on the other body's surface, a
+/// flat face touching a cylinder along a line through it). The scanlines cross the arcs
+/// themselves, not their polygons: a region thinner than a polygon's sagitta (a tube's end a
+/// thousandth wide) has its points inside it all the same.
 fn interior_points_along(loops: &[Vec<Arc>], on: Level, along: f64) -> Vec<P2> {
     let polys = arc_polys(loops);
     let Some(scan) = Scan::new(&polys) else {

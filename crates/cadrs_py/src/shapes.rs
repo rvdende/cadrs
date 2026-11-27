@@ -692,7 +692,7 @@ impl PyShape {
     fn sample(&self, py: Python<'_>, n: &Bound<'_, PyAny>) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
         let k = n.extract::<usize>().unwrap_or(16).max(1);
         let closed = self.s.is_closed();
-        let m = if closed { k } else { k };
+        let m = k;
         let mut pts = Vec::new();
         let mut ts = Vec::new();
         for i in 0..m {

@@ -158,7 +158,11 @@ fn spoke_touching_both_cylinders_unites() {
         .rotate(V3::zeros(), V3::z(), 22.5)
         .unwrap();
     let u = tube.union_wp(&spoke, true).unwrap();
-    assert!((vol(&u) - 2764.636_266_429_097).abs() < 1e-6, "{}", vol(&u));
+    assert!(
+        (vol(&u) - 2_764.636_266_429_097).abs() < 1e-6,
+        "{}",
+        vol(&u)
+    );
 }
 
 /// A filleted diagonal rib across a conical shell's wall (CadEvolve's
@@ -205,7 +209,11 @@ fn filleted_rib_across_a_cone_wall_unites() {
         .fillet(fr)
         .unwrap();
     let u = shell.union_wp(&rib, true).unwrap();
-    assert!((vol(&u) - 1348.822_524_061_117).abs() < 1e-3, "{}", vol(&u));
+    assert!(
+        (vol(&u) - 1_348.822_524_061_117).abs() < 1e-3,
+        "{}",
+        vol(&u)
+    );
 }
 
 /// A square rib swept along a helix (`parametricCurve`) grazing a tube's bore: its outer face
@@ -404,7 +412,11 @@ fn second_round_mitres_into_the_first() {
         .select(ShapeType::Face, Some(&Selector::parse(">Y").unwrap()), None)
         .unwrap();
     assert_eq!(top.objects.len(), 1, "the end face stays whole");
-    assert!((vol(&b) - 18739.291_805_537_59).abs() < 1e-6, "{}", vol(&b));
+    assert!(
+        (vol(&b) - 18_739.291_805_537_59).abs() < 1e-6,
+        "{}",
+        vol(&b)
+    );
 }
 
 /// A polyline round an annulus, out along a cut to the bore, round the bore and closed back
@@ -458,7 +470,7 @@ fn slot_in_a_cone_shell_meets_its_sides() {
     let phi = (90.0f64 / 16.0).to_radians();
     let n = V3::new(phi.cos(), phi.sin(), 0.0);
     let p = Plane::new(n * 5.0 + V3::new(0.0, 0.0, 10.0), Some(V3::z()), n).unwrap();
-    let on = || Workplane::new(p.clone());
+    let on = || Workplane::new(p);
     let ex = |w: Workplane| {
         w.extrude(Until::Distance(-0.5), Combine::Fuse, true, false, 0.0)
             .unwrap()

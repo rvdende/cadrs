@@ -1845,7 +1845,7 @@ impl Workplane {
         let below = r.translate(-self.plane.z_dir * m)?;
         let mut rv = Vec::new();
         if top {
-            rv.push(ops::cut(&solid, &[below.clone()])?);
+            rv.push(ops::cut(&solid, std::slice::from_ref(&below))?);
         }
         if bottom {
             rv.push(ops::cut(&solid, &[r])?);
