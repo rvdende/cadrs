@@ -2280,6 +2280,8 @@ asm-mate-animate-dof = Freiheitsgrad animieren
 asm-mate-solve = Lösen
 asm-mate-solve-all = Alle Verknüpfungen lösen
 asm-mate-cant-hold = Diese Verknüpfung kann nicht zusammen mit den anderen Verknüpfungen des Teils gelten: Die Teile bleiben, wo sie sind
+asm-mates-cant-all-hold = { $mates } können nicht alle zugleich gelten: Die Teile bleiben, wo sie sind
+asm-mates-the-mates = Die Verknüpfungen
 
 ## crates/cadrs_app/src/assembly/mate_display.rs
 asm-show-mates-mode = Modus „Verknüpfungen anzeigen“ (H): Mauszeiger über eine Instanz bewegen, klicken zum Anheften
@@ -2287,6 +2289,7 @@ asm-show-mates-mode = Modus „Verknüpfungen anzeigen“ (H): Mauszeiger über 
 ## crates/cadrs_app/src/assembly/mates_list.rs
 asm-mates-an-instance = eine Instanz
 asm-mates-missing-reference = Fehlende Referenz: Das Element, an dem diese Verknüpfung lag, existiert in { $part } nicht mehr (seine Quelle hat sich geändert). Die Verknüpfung bearbeiten und es erneut auswählen.
+asm-mates-doesnt-hold = Diese Verknüpfung gilt nicht: Sie verfehlt um { $miss }, da sie nicht zusammen mit den anderen Verknüpfungen gelten kann. Eine davon bearbeiten, unterdrücken oder löschen.
 asm-mates-group = Gruppe
 asm-mates-type-mate = Verknüpfung: { $type }
 asm-mates-angle-about-axis = { $angle } um { $axis }

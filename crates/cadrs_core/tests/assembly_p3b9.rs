@@ -664,6 +664,7 @@ mod documents {
                 }],
                 snap_only: false,
                 hold_free: true,
+                keep_sides: true,
             };
             let sol = assembly::solve(&model, &solids, &opts);
             for (id, p) in &sol.poses {

@@ -2280,6 +2280,8 @@ asm-mate-animate-dof = 合致の自由度をアニメーション
 asm-mate-solve = 解決
 asm-mate-solve-all = すべての合致を解決
 asm-mate-cant-hold = この合致は部品の他の合致と同時に成り立ちません。部品はそのままの位置に残ります
+asm-mates-cant-all-hold = { $mates } は同時に成り立ちません。部品はそのままの位置に残ります
+asm-mates-the-mates = 合致
 
 ## crates/cadrs_app/src/assembly/mate_display.rs
 asm-show-mates-mode = 合致表示モード (H)：インスタンスにカーソルを合わせ、クリックで固定
@@ -2287,6 +2289,7 @@ asm-show-mates-mode = 合致表示モード (H)：インスタンスにカーソ
 ## crates/cadrs_app/src/assembly/mates_list.rs
 asm-mates-an-instance = インスタンス
 asm-mates-missing-reference = 参照が見つかりません：この合致があったエンティティが{ $part }からなくなりました（ソースが変更されました）。合致を編集して選択し直してください。
+asm-mates-doesnt-hold = この合致は成り立っていません：{ $miss } ずれています。他の合致と同時に成り立たないためです。いずれかを編集、抑制、または削除してください。
 asm-mates-group = グループ
 asm-mates-type-mate = { $type }合致
 asm-mates-angle-about-axis = { $axis }軸周りに{ $angle }

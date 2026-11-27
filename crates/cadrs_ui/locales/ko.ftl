@@ -2280,6 +2280,8 @@ asm-mate-animate-dof = 메이트 자유도 애니메이션
 asm-mate-solve = 풀기
 asm-mate-solve-all = 모든 메이트 풀기
 asm-mate-cant-hold = 이 메이트는 부품의 다른 메이트와 함께 성립할 수 없습니다. 부품은 제자리에 있습니다
+asm-mates-cant-all-hold = { $mates }은(는) 모두 함께 성립할 수 없습니다. 부품은 제자리에 있습니다
+asm-mates-the-mates = 메이트
 
 ## crates/cadrs_app/src/assembly/mate_display.rs
 asm-show-mates-mode = 메이트 표시 모드 (H): 인스턴스에 마우스를 올리고 클릭하여 고정
@@ -2287,6 +2289,7 @@ asm-show-mates-mode = 메이트 표시 모드 (H): 인스턴스에 마우스를 
 ## crates/cadrs_app/src/assembly/mates_list.rs
 asm-mates-an-instance = 인스턴스
 asm-mates-missing-reference = 누락된 참조: 이 메이트가 있던 요소가 { $part }에서 사라졌습니다 (원본이 바뀜). 메이트를 편집해 다시 선택하세요.
+asm-mates-doesnt-hold = 이 메이트는 성립하지 않습니다: { $miss } 어긋납니다. 다른 메이트와 함께 성립할 수 없기 때문입니다. 그중 하나를 편집, 억제 또는 삭제하세요.
 asm-mates-group = 그룹
 asm-mates-type-mate = { $type } 메이트
 asm-mates-angle-about-axis = { $axis } 기준 { $angle }

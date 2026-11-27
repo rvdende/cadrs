@@ -454,7 +454,8 @@ impl Cadrs {
 
     #[tool(
         description = "Describe an Assembly tab: its instances (name, id, source tab and part, position \
-        in mm, fixed, hidden, suppressed) and its mate features."
+        in mm, fixed, hidden, suppressed) and its mate features, each with its position; a mate that \
+        doesn't hold where the parts are (it can't hold with the others) has misses_mm, how far off it is."
     )]
     async fn get_assembly(
         &self,
@@ -493,8 +494,10 @@ impl Cadrs {
         description = "Add a mate (Fastened, Revolute, Slider, Cylindrical, Planar, Ball or Parallel) between \
         two instances of an assembly, each connector a frame in its instance's own coordinates (origin in mm, \
         Z and X axes), optionally with limits. The solver then places the instances so the mate holds (the \
-        second connector's instance moves unless it is fixed). One undo step. Returns the assembly as \
-        get_assembly does, with each mate's current position."
+        second connector's instance moves unless it is fixed). When the mates can't all hold, the Mate \
+        Features list's order is their priority: the mates that can't hold with those before them \
+        (the new one, last) break and the rest hold (solved: false, broken: their names; misses_mm in \
+        each mate: how far off it is). One undo step. Returns the assembly as get_assembly does, with each mate's current position."
     )]
     async fn add_mate(
         &self,
@@ -506,8 +509,10 @@ impl Cadrs {
     #[tool(
         description = "Drive mates of an assembly to positions (degrees for a revolute's angle, mm for a \
         slider) and solve: the instances move so every mate holds, as Animate or a named position moves \
-        them; mates not named stay at their positions, and a value past a mate's limits is held at the \
-        limit (listed in held_at_limit). One undo step. Returns the assembly as get_assembly does: each instance's placement \
+        them; mates not named stay at their positions where they can (when they share a motion with a \
+        named one, as a Planar and a Cylindrical on the same link do, they follow it), and a value past \
+        a mate's limits is held at the limit (listed in held_at_limit). Nothing moves when the mates \
+        can't all hold (solved: false). One undo step. Returns the assembly as get_assembly does: each instance's placement \
         (translation_mm and rotation rows) and each mate's position."
     )]
     async fn set_mate_values(

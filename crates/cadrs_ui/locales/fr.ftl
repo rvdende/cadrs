@@ -2280,6 +2280,8 @@ asm-mate-animate-dof = Animer le DDL de la liaison
 asm-mate-solve = Résoudre
 asm-mate-solve-all = Résoudre toutes les liaisons
 asm-mate-cant-hold = Cette liaison ne peut pas tenir avec les autres liaisons de la pièce : les pièces restent où elles sont
+asm-mates-cant-all-hold = { $mates } ne peuvent pas tenir ensemble : les pièces restent où elles sont
+asm-mates-the-mates = Les liaisons
 
 ## crates/cadrs_app/src/assembly/mate_display.rs
 asm-show-mates-mode = Mode d'affichage des liaisons (H) : survolez une instance, cliquez pour épingler
@@ -2287,6 +2289,7 @@ asm-show-mates-mode = Mode d'affichage des liaisons (H) : survolez une instance,
 ## crates/cadrs_app/src/assembly/mates_list.rs
 asm-mates-an-instance = une instance
 asm-mates-missing-reference = Référence manquante : l'entité portant cette liaison a disparu de { $part } (sa source a changé). Modifiez la liaison et choisissez-la à nouveau.
+asm-mates-doesnt-hold = Cette liaison ne tient pas : elle manque de { $miss }, car elle ne peut pas tenir avec les autres liaisons. Modifiez, désactivez ou supprimez l'une d'elles.
 asm-mates-group = Groupe
 asm-mates-type-mate = Liaison { $type }
 asm-mates-angle-about-axis = { $angle } autour de { $axis }
