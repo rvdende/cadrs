@@ -5,6 +5,7 @@ use cadrs_core::assembly::connector::{ConnectorFrame, MateConnector};
 use cadrs_core::assembly::mate::{
     Dof, Mate, MateFeature, MateId, MateKind, MateLimits, MateOffset, MateType, mate_position,
 };
+use cadrs_core::assembly::positions;
 use cadrs_core::assembly::solver::{self, Drive, SolveOptions};
 use cadrs_core::assembly::{Assembly, Instance, InstanceId, InstanceSource, Pose};
 use cadrs_core::{ElementId, FeatureId, PartId};
@@ -626,4 +627,78 @@ fn a_chain_of_cylindrical_and_planar_mates_doesnt_flip() {
         "part 3 lies on part 2"
     );
     assert!((z(&asm, link_top(3)) - 15.0).abs() < 1e-6, "part 3 upright");
+}
+
+#[test]
+fn a_chain_of_cylindrical_and_planar_mates_goes_to_its_named_position() {
+    // The links of the chain above, each lying on the one before (a Cylindrical about the shared
+    // end, a Planar from its bottom face to the top of the one under it: connectors opposite).
+    // Applying a named position of the chain bent, from straight, snaps each mate to its values:
+    // the snap put a Planar's connectors' axes alike, turning the link over into the one under
+    // it, and the solve then couldn't reach the position (it rose off the plane instead).
+    let mates = vec![
+        feature(
+            1,
+            MateKind::Mate(Mate::new(
+                MateType::Cylindrical,
+                link_end(2, 0.0),
+                link_end(1, 0.0),
+            )),
+        ),
+        feature(
+            2,
+            MateKind::Mate(Mate::new(MateType::Planar, link_bottom(2), link_top(1))),
+        ),
+        feature(
+            3,
+            MateKind::Mate(Mate::new(
+                MateType::Cylindrical,
+                link_end(3, 0.0),
+                link_end(2, 100.0),
+            )),
+        ),
+        feature(
+            4,
+            MateKind::Mate(Mate::new(MateType::Planar, link_bottom(3), link_top(2))),
+        ),
+    ];
+    let straight = Assembly {
+        instances: vec![
+            inst(1, Pose::IDENTITY, true),
+            inst(2, Pose::translation([0.0, 0.0, 5.0]), false),
+            inst(3, Pose::translation([100.0, 0.0, 10.0]), false),
+        ],
+        mates,
+        ..Default::default()
+    };
+    // Bent: link 2 turned 40° about its pin, link 3 another 70° about its.
+    let turn = |deg: f64| Pose::rotation_about([0.0; 3], [0.0, 0.0, 1.0], deg.to_radians());
+    let p2 = turn(40.0).then(&Pose::translation([0.0, 0.0, 5.0]));
+    let end = p2.apply([100.0, 0.0, 0.0]);
+    let p3 = turn(110.0).then(&Pose::translation([end[0], end[1], 10.0]));
+    let mut bent = straight.clone();
+    bent.instance_mut(InstanceId::from_u128(2)).unwrap().pose = p2;
+    bent.instance_mut(InstanceId::from_u128(3)).unwrap().pose = p3;
+    assert!(solver::solve(&bent, &frame_of, &SolveOptions::default()).converged);
+    let solids = std::collections::HashMap::new();
+    let own: Vec<MateId> = straight.mates.iter().map(|f| f.id).collect();
+    let position = positions::NamedPosition {
+        id: positions::NamedPositionId::new(),
+        name: "Bent".into(),
+        values: positions::mate_values(&bent, &solids, &own),
+        poses: Vec::new(),
+    };
+    let s = positions::solve_to(&straight, &solids, &position);
+    assert!(s.converged, "residual {}", s.residual);
+    let mut asm = straight.clone();
+    apply(&mut asm, &s);
+    for (i, want) in [(2, p2), (3, p3)] {
+        let got = asm.instance(InstanceId::from_u128(i)).unwrap().pose;
+        for p in [[0.0, 0.0, 0.0], [100.0, 0.0, 0.0], [0.0, 0.0, 5.0]] {
+            assert!(
+                dist(got.apply(p), want.apply(p)) < 1e-6,
+                "link {i}: {got:?}, want {want:?}"
+            );
+        }
+    }
 }

@@ -554,6 +554,7 @@ fn run_solve(
             drives: if snap_only { s.drives() } else { Vec::new() },
             snap_only,
             hold_free: snap_only,
+            keep_sides: false,
         }
     };
     let mut sol = cadrs_core::assembly::solve(&model, &solids, &opts);

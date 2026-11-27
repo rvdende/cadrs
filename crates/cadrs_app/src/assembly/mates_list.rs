@@ -1608,6 +1608,7 @@ pub fn drive(
         drives,
         snap_only: false,
         hold_free: false,
+        keep_sides: false,
     };
     let sol = cadrs_core::assembly::solve(&model, &solids, &opts);
     let poses = sol.changed(&model);

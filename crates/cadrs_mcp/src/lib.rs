@@ -506,8 +506,10 @@ impl Cadrs {
     #[tool(
         description = "Drive mates of an assembly to positions (degrees for a revolute's angle, mm for a \
         slider) and solve: the instances move so every mate holds, as Animate or a named position moves \
-        them; mates not named stay at their positions, and a value past a mate's limits is held at the \
-        limit (listed in held_at_limit). One undo step. Returns the assembly as get_assembly does: each instance's placement \
+        them; mates not named stay at their positions where they can (when they share a motion with a \
+        named one, as a Planar and a Cylindrical on the same link do, they follow it), and a value past \
+        a mate's limits is held at the limit (listed in held_at_limit). Nothing moves when the mates \
+        can't all hold (solved: false). One undo step. Returns the assembly as get_assembly does: each instance's placement \
         (translation_mm and rotation rows) and each mate's position."
     )]
     async fn set_mate_values(

@@ -1379,6 +1379,7 @@ fn set_mate_values(world: &mut World, p: &tools::SetMateValues) -> Result<Value,
     }
     let flat = cadrs_core::assembly::structure::solver_model(&d.doc, asm);
     let solids = mate_solids(&d.doc, element, &flat);
+    let named = values.clone();
     // The mates not named hold where they are.
     let own: Vec<_> = asm.mates.iter().map(|m| m.id).collect();
     for now in cadrs_core::assembly::positions::mate_values(&flat, &solids, &own) {
@@ -1395,9 +1396,22 @@ fn set_mate_values(world: &mut World, p: &tools::SetMateValues) -> Result<Value,
         values,
         poses: Vec::new(),
     };
-    let sol = solve_to(&flat, &solids, &position);
+    let mut sol = solve_to(&flat, &solids, &position);
+    if !sol.converged {
+        // Mates that share a motion (a Cylindrical and a Planar on the same link both read its
+        // angle) can't hold one where it is while the other is driven: the named values alone,
+        // from where the parts are, the other mates free.
+        let named = NamedPosition {
+            values: named,
+            ..position
+        };
+        let only = solve_to(&flat, &solids, &named);
+        if only.converged {
+            sol = only;
+        }
+    }
     let poses: Vec<_> = sol.poses.iter().map(|(id, p)| (*id, *p)).collect();
-    if !poses.is_empty() {
+    if !poses.is_empty() && sol.converged {
         doc_mut(world)?
             .execute(&MoveInstances {
                 element,

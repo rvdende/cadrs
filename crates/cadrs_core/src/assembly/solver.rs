@@ -122,6 +122,10 @@ pub struct SolveOptions {
     /// The snap keeps the mate's undriven free DOF where they are (Animate), instead of at 0
     /// (a pick, Reset).
     pub hold_free: bool,
+    /// The snap keeps an axis-only mate's axes on the side they are on (opposite: two faces
+    /// against each other) instead of lining them up as a pick and Reset do: for going to
+    /// recorded values (a named position, MCP's `set_mate_values`), measured on that side.
+    pub keep_sides: bool,
 }
 
 /// The instances that can't move: fixed, or grouped with a fixed instance.
@@ -981,15 +985,27 @@ impl Problem {
 
     /// Places the first movable body of connector-mate constraint `ci` so the constraint holds
     /// exactly at the position `[x, y, z, angle]`.
-    fn snap(&mut self, ci: usize, at: [f64; 4]) -> Option<usize> {
+    fn snap(&mut self, ci: usize, at: [f64; 4], keep_side: bool) -> Option<usize> {
         let c = self.cons[ci].clone();
         if !c.pair {
             return None;
         }
         let (a, g) = (c.ends[0], c.ends[1]);
         // D = F₁⁻¹ G at the drive: G = F₁ · D.
-        let d = Pose::rotation_about([0.0; 3], [0.0, 0.0, 1.0], at[3])
+        let mut d = Pose::rotation_about([0.0; 3], [0.0, 0.0, 1.0], at[3])
             .then(&Pose::translation([at[0], at[1], at[2]]));
+        // A mate that holds only an axis (Revolute, Cylindrical, Planar, Parallel) holds with
+        // its axes opposite too: two faces against each other, whose connectors point opposite
+        // ways. Going to recorded values, the snap keeps the side the axes are on: lining them
+        // up turned the part over into the other (a Planar between a link's bottom and the top
+        // of the one under it), and the solve could then no longer reach the values. A half
+        // turn about X keeps G's X, so the angle and the translations read as they are driven.
+        if keep_side && !c.rows.contains(&Row::Rot3) {
+            let (fa, gw) = (self.world(&a), self.world(&g));
+            if v(fa.z).dot(&v(gw.z)) < 0.0 {
+                d = Pose::rotation_about([0.0; 3], [1.0, 0.0, 0.0], std::f64::consts::PI).then(&d);
+            }
+        }
         let place = |local: &ConnectorFrame, want: &ConnectorFrame| -> Pose {
             local.pose().inverse().then(&want.pose())
         };
@@ -1116,7 +1132,7 @@ pub fn solve(
         && let Some(ci) = p.cons.iter().position(|c| c.mate == id && c.is_mate)
     {
         let at = p.snap_values(ci, &opts.drives, opts.hold_free);
-        if let Some(b) = p.snap(ci, at) {
+        if let Some(b) = p.snap(ci, at, opts.keep_sides) {
             // The snapped body does the moving.
             for (k, body) in p.bodies.iter_mut().enumerate() {
                 if body.var.is_some() {
@@ -1139,7 +1155,7 @@ pub fn solve(
     if !wrong.is_empty() {
         for k in wrong {
             let at = p.snap_values(k, &opts.drives, true);
-            p.snap(k, at);
+            p.snap(k, at, false);
         }
         its += p.iterate(MAX_ITERATIONS).2;
     }
