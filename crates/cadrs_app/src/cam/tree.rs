@@ -862,12 +862,13 @@ pub(super) fn delete_key(
     ui: Res<CamUi>,
     doc: Option<Res<ActiveDocument>>,
     focus: Res<bevy::input_focus::InputFocus>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     dialog: Option<Res<dialogs::CamDialog>>,
     mut commands: Commands,
 ) {
     if !keys.just_pressed(KeyCode::Delete)
         || ui.selected.is_empty()
-        || focus.get().is_some()
+        || focus.get().is_some_and(|e| q_fields.contains(e))
         || dialog.is_some()
     {
         return;

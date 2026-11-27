@@ -542,6 +542,7 @@ fn composite_keys(
     session: Option<Res<CompositeSession>>,
     q_dialogs: Query<(), With<cadrs_ui::DialogRoot>>,
     focus: Res<bevy::input_focus::InputFocus>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     mut commands: Commands,
 ) {
     if session.is_none() {
@@ -549,7 +550,10 @@ fn composite_keys(
         return;
     }
     for k in keys.read() {
-        if k.state != ButtonState::Pressed || !q_dialogs.is_empty() || focus.get().is_some() {
+        if k.state != ButtonState::Pressed
+            || !q_dialogs.is_empty()
+            || focus.get().is_some_and(|e| q_fields.contains(e))
+        {
             continue;
         }
         match k.shortcut_code() {

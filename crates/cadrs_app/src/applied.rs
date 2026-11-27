@@ -1392,7 +1392,10 @@ fn applied_keys(
     mut keys: MessageReader<KeyboardInput>,
     session: Option<Res<AppliedSession>>,
     q_dialogs: Query<(), With<cadrs_ui::DialogRoot>>,
-    focus: Res<bevy::input_focus::InputFocus>,
+    (focus, q_fields): (
+        Res<bevy::input_focus::InputFocus>,
+        Query<(), With<cadrs_ui::KeyboardField>>,
+    ),
     menus: Query<(), With<cadrs_ui::menu::MenuPopup>>,
     mut menu_open: Local<bool>,
     mut commands: Commands,
@@ -1405,7 +1408,10 @@ fn applied_keys(
         return;
     }
     for k in keys.read() {
-        if k.state != ButtonState::Pressed || !q_dialogs.is_empty() || focus.get().is_some() {
+        if k.state != ButtonState::Pressed
+            || !q_dialogs.is_empty()
+            || focus.get().is_some_and(|e| q_fields.contains(e))
+        {
             continue;
         }
         match k.shortcut_code() {

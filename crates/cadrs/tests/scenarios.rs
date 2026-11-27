@@ -67,6 +67,11 @@ const KNOWN_FAILING: &[(&str, &str)] = &[
     ("cam_machine_from_assembly", "runs for over 5 minutes"),
     ("cam_studio_mill", "runs for over 5 minutes"),
     (
+        "course_asm_relations",
+        "a press over the feature panel falls through to the view: Bevy main's UI picking skips \
+         a stack slice whose first node was despawned (the fix waits on the Bevy fork)",
+    ),
+    (
         "course_asm_mates_tangent_width",
         "mate-dialog-accept stays disabled",
     ),
@@ -89,13 +94,8 @@ const KNOWN_FAILING: &[(&str, &str)] = &[
     ("course_er_open_linked", "the mass dialog shows no part"),
     ("course_pcb_ex1_board", "no part-row-part-3"),
     ("course_pcb_ex3_idf_assembly", "the EMN placement differs"),
-    (
-        "course_pcb_one_part",
-        "no part-row-composite-part-1 (since the Bevy main update, #349)",
-    ),
     ("course_ps6_control_arm", "no sketch-dialog-accept"),
     ("course_ps8_reducer_coupling", "no sketch-dialog-accept"),
-    ("course_ps9_appearance", "no viewport-face-appearance"),
     ("course_s16_text", "no extrude-dialog"),
     (
         "course_s1_new_sketch_context_menu",
