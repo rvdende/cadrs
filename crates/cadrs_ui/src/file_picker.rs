@@ -203,6 +203,56 @@ pub fn open_file_picker(
     );
 }
 
+/// A named group of file types in the system file dialog's type list ("SolidWorks", `sldprt`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileGroup {
+    pub name: String,
+    pub extensions: Vec<String>,
+}
+
+impl FileGroup {
+    pub fn new(name: impl Into<String>, extensions: &[&str]) -> Self {
+        Self {
+            name: name.into(),
+            extensions: extensions.iter().map(|e| e.to_string()).collect(),
+        }
+    }
+}
+
+/// [`open_file_picker`] for files of several kinds: the system dialog's type list offers *All
+/// supported files* and then each group by its name ("SolidWorks (*.sldprt)"), not one long
+/// line of every extension; the in-app picker lists them all.
+pub fn open_file_picker_grouped(
+    commands: &mut Commands,
+    theme: &Theme,
+    name: impl Into<Cow<'static, str>>,
+    title: &str,
+    tag: &str,
+    dir: PathBuf,
+    groups: Vec<FileGroup>,
+) {
+    let mut extensions: Vec<&str> = Vec::new();
+    for g in &groups {
+        for e in &g.extensions {
+            if !extensions.contains(&e.as_str()) {
+                extensions.push(e);
+            }
+        }
+    }
+    open_picker_with(
+        commands,
+        theme,
+        name.into().into_owned(),
+        title,
+        tag,
+        dir,
+        &extensions,
+        groups.clone(),
+        false,
+        false,
+    );
+}
+
 /// Opens a picker for several files at once (see the module docs); the pick comes back as
 /// [`FilesPicked`] with `tag`.
 pub fn open_files_picker(
@@ -286,6 +336,35 @@ fn open_picker(
     folders_only: bool,
     multi: bool,
 ) {
+    open_picker_with(
+        commands,
+        theme,
+        name,
+        title,
+        tag,
+        dir,
+        extensions,
+        Vec::new(),
+        folders_only,
+        multi,
+    );
+}
+
+/// [`open_picker`] with the system dialog's type list in `groups` (none: one entry of every
+/// extension).
+#[allow(clippy::too_many_arguments)]
+fn open_picker_with(
+    commands: &mut Commands,
+    theme: &Theme,
+    name: String,
+    title: &str,
+    tag: &str,
+    dir: PathBuf,
+    extensions: &[&str],
+    groups: Vec<FileGroup>,
+    folders_only: bool,
+    multi: bool,
+) {
     let theme = theme.clone();
     let (title, tag) = (title.to_string(), tag.to_string());
     let extensions: Vec<String> = extensions.iter().map(|e| e.to_string()).collect();
@@ -294,7 +373,16 @@ fn open_picker(
         if world.resource::<NativeFileDialogs>().0
             && !(folders_only && cfg!(target_arch = "wasm32"))
         {
-            open_native(world, &title, tag, dir, &extensions, folders_only, multi);
+            open_native(
+                world,
+                &title,
+                tag,
+                dir,
+                &extensions,
+                &groups,
+                folders_only,
+                multi,
+            );
             return;
         }
         let extensions: Vec<&str> = extensions.iter().map(String::as_str).collect();
@@ -314,6 +402,36 @@ fn open_picker(
     });
 }
 
+/// The type list's entry of every extension: "STEP, STP, IGES".
+fn type_list_name(extensions: &[String]) -> String {
+    extensions
+        .iter()
+        .map(|e| e.to_uppercase())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The type list of a grouped picker: *All supported files* (picked to start with), then each
+/// group by its name and patterns ("SolidWorks (*.sldprt)"), as dialogs show only the name.
+fn add_groups(
+    mut dialog: rfd::AsyncFileDialog,
+    extensions: &[String],
+    groups: &[FileGroup],
+    patterns: impl Fn(&[String]) -> Vec<String>,
+) -> rfd::AsyncFileDialog {
+    dialog = dialog.add_filter(tr("ui-file-picker-all-supported"), &patterns(extensions));
+    for g in groups {
+        let shown = g
+            .extensions
+            .iter()
+            .map(|e| format!("*.{e}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        dialog = dialog.add_filter(format!("{} ({shown})", g.name), &patterns(&g.extensions));
+    }
+    dialog
+}
+
 /// Opens the system's file dialog on a thread of its own and keeps its answer coming
 /// ([`take_native_picks`]). A second prompt for the same `tag` while one is open is ignored.
 #[cfg(not(target_arch = "wasm32"))]
@@ -324,6 +442,7 @@ fn open_native(
     tag: String,
     dir: PathBuf,
     extensions: &[String],
+    groups: &[FileGroup],
     folders_only: bool,
     multi: bool,
 ) {
@@ -341,14 +460,16 @@ fn open_native(
     }
     if !folders_only && !extensions.is_empty() {
         // Both cases: on Linux the portal's patterns are case-sensitive (PART.STEP).
-        let mut patterns: Vec<String> = extensions.to_vec();
-        patterns.extend(extensions.iter().map(|e| e.to_uppercase()));
-        let name = extensions
-            .iter()
-            .map(|e| e.to_uppercase())
-            .collect::<Vec<_>>()
-            .join(", ");
-        dialog = dialog.add_filter(name, &patterns);
+        let patterns = |exts: &[String]| -> Vec<String> {
+            let mut p: Vec<String> = exts.to_vec();
+            p.extend(exts.iter().map(|e| e.to_uppercase()));
+            p
+        };
+        dialog = if groups.is_empty() {
+            dialog.add_filter(type_list_name(extensions), &patterns(extensions))
+        } else {
+            add_groups(dialog, extensions, groups, patterns)
+        };
     }
     // On Windows the dialog belongs to the app's window: it stays in front and the window waits
     // for it.
@@ -401,6 +522,7 @@ fn open_native(
     tag: String,
     _dir: PathBuf,
     extensions: &[String],
+    groups: &[FileGroup],
     _folders_only: bool,
     multi: bool,
 ) {
@@ -414,12 +536,11 @@ fn open_native(
     }
     let mut dialog = rfd::AsyncFileDialog::new().set_title(title);
     if !extensions.is_empty() {
-        let name = extensions
-            .iter()
-            .map(|e| e.to_uppercase())
-            .collect::<Vec<_>>()
-            .join(", ");
-        dialog = dialog.add_filter(name, extensions);
+        dialog = if groups.is_empty() {
+            dialog.add_filter(type_list_name(extensions), extensions)
+        } else {
+            add_groups(dialog, extensions, groups, |e: &[String]| e.to_vec())
+        };
     }
     let (tx, rx) = mpsc::channel();
     wasm_bindgen_futures::spawn_local(async move {

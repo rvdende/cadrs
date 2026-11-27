@@ -291,6 +291,12 @@ pub fn native_extensions() -> Vec<&'static str> {
     cadrs_cadmpeg::extensions()
 }
 
+/// [`native_extensions`] by program, for a file picker's type list: ("SolidWorks", `sldprt`),
+/// ("Fusion", `f3d`, `f3z`), …
+pub fn native_groups() -> Vec<(String, Vec<&'static str>)> {
+    cadrs_cadmpeg::groups()
+}
+
 /// Whether `file_name` is a native CAD file Import reads through cadmpeg.
 pub fn is_native(file_name: &str) -> bool {
     cadrs_cadmpeg::reads(file_name)

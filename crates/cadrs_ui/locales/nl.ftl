@@ -144,6 +144,7 @@ ui-feature-dialog-cancel = Annuleren (Esc)
 
 ## crates/cadrs_ui/src/file_picker.rs
 ui-file-picker-all-files = Alle bestanden
+ui-file-picker-all-supported = Alle ondersteunde bestanden
 ui-file-picker-look-in = Zoeken in
 ui-file-picker-up = Eén map omhoog
 ui-file-picker-folders-hint = Open een map en kies dan Map selecteren

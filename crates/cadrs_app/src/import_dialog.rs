@@ -136,16 +136,14 @@ fn open_picker(world: &mut World) {
     let theme = world.resource::<Theme>().clone();
     let mut commands = world.commands();
     // cadrs's own formats, then the other CAD programs' files, which cadmpeg turns into STEP.
-    let mut exts = vec!["step", "stp", "iges", "igs", "brep", "brp", "stl", "glb"];
-    exts.extend(cadrs_core::import::native_extensions());
-    cadrs_ui::open_file_picker(
+    cadrs_ui::open_file_picker_grouped(
         &mut commands,
         &theme,
         "import-picker",
         &tr("common-import"),
         PICK_TAG,
         start_dir(),
-        &exts,
+        crate::import_file::picker_groups(true),
     );
     world.flush();
 }

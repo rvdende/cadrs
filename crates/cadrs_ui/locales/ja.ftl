@@ -144,6 +144,7 @@ ui-feature-dialog-cancel = キャンセル (Esc)
 
 ## crates/cadrs_ui/src/file_picker.rs
 ui-file-picker-all-files = すべてのファイル
+ui-file-picker-all-supported = サポートされているすべてのファイル
 ui-file-picker-look-in = 場所
 ui-file-picker-up = 1 つ上のフォルダーへ
 ui-file-picker-folders-hint = フォルダーを開いてから「フォルダーを選択」を押してください

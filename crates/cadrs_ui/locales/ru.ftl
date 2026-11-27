@@ -144,6 +144,7 @@ ui-feature-dialog-cancel = Отмена (Esc)
 
 ## crates/cadrs_ui/src/file_picker.rs
 ui-file-picker-all-files = Все файлы
+ui-file-picker-all-supported = Все поддерживаемые файлы
 ui-file-picker-look-in = Папка
 ui-file-picker-up = На уровень вверх
 ui-file-picker-folders-hint = Откройте папку и нажмите «Выбрать папку»

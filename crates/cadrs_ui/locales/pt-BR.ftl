@@ -144,6 +144,7 @@ ui-feature-dialog-cancel = Cancelar (Esc)
 
 ## crates/cadrs_ui/src/file_picker.rs
 ui-file-picker-all-files = Todos os arquivos
+ui-file-picker-all-supported = Todos os arquivos compatíveis
 ui-file-picker-look-in = Examinar
 ui-file-picker-up = Subir um nível
 ui-file-picker-folders-hint = Abra uma pasta e clique em Selecionar pasta

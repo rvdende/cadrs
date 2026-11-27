@@ -144,6 +144,7 @@ ui-feature-dialog-cancel = Kanselleer (Esc)
 
 ## crates/cadrs_ui/src/file_picker.rs
 ui-file-picker-all-files = Alle lêers
+ui-file-picker-all-supported = Alle ondersteunde lêers
 ui-file-picker-look-in = Soek in
 ui-file-picker-up = Een vouer op
 ui-file-picker-folders-hint = Maak 'n vouer oop en klik dan Kies vouer

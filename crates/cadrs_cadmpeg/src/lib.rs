@@ -39,6 +39,55 @@ pub fn extensions() -> Vec<&'static str> {
         .clone()
 }
 
+/// The native formats for a file picker's filters, by program: its name ("SolidWorks") and its
+/// extensions, in cadmpeg's catalog order. Formats that share their extensions are one group
+/// (Creo and NX `.prt`: "Creo / NX").
+pub fn groups() -> Vec<(String, Vec<&'static str>)> {
+    let mut out: Vec<(String, Vec<&'static str>)> = Vec::new();
+    for d in InputCatalog::with_builtins().descriptors() {
+        let exts: Vec<&'static str> = d
+            .extensions()
+            .iter()
+            .copied()
+            .filter(|e| extensions().contains(e))
+            .collect();
+        if exts.is_empty() {
+            continue;
+        }
+        let name = program(&d.format_id().to_string());
+        if let Some(g) = out.iter_mut().find(|g| g.1 == exts) {
+            g.0 = format!("{} / {name}", g.0);
+        } else {
+            out.push((name, exts));
+        }
+    }
+    out
+}
+
+/// The program (or format) a cadmpeg format id is the files of; the id itself for one cadrs
+/// doesn't know yet.
+fn program(id: &str) -> String {
+    match id {
+        "fcstd" => "FreeCAD",
+        "f3d" => "Fusion",
+        "inventor" => "Inventor",
+        "solidedge" => "Solid Edge",
+        "ironcad" => "IronCAD",
+        "sldprt" => "SolidWorks",
+        "catia" => "CATIA V5",
+        "creo" => "Creo",
+        "nx" => "NX",
+        "rhino" => "Rhino",
+        "sat" => "ACIS",
+        "pvz" => "Creo View",
+        "edrawings" => "eDrawings",
+        "usd" => "OpenUSD",
+        "onshape" => "Onshape bundle",
+        other => return other.to_string(),
+    }
+    .to_string()
+}
+
 /// Whether cadmpeg reads a file with this name for Import (by its extension).
 pub fn reads(file_name: &str) -> bool {
     std::path::Path::new(file_name)
@@ -115,6 +164,18 @@ mod tests {
             assert!(!e.contains(own), "{own} is cadrs's own");
         }
         assert!(reads("Bracket.SLDPRT"));
+        let g = groups();
+        assert!(g.iter().any(|(n, e)| n == "SolidWorks" && e == &["sldprt"]));
+        assert!(
+            g.iter().any(|(n, e)| n == "Creo / NX" && e == &["prt"]),
+            "{g:?}"
+        );
+        // Every extension is in one group.
+        let mut all: Vec<&str> = g.iter().flat_map(|(_, e)| e.clone()).collect();
+        all.sort();
+        let mut want = extensions();
+        want.sort();
+        assert_eq!(all, want);
         assert!(!reads("bracket.step"));
     }
 }

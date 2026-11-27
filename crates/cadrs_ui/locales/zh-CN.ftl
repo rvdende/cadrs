@@ -144,6 +144,7 @@ ui-feature-dialog-cancel = 取消 (Esc)
 
 ## crates/cadrs_ui/src/file_picker.rs
 ui-file-picker-all-files = 所有文件
+ui-file-picker-all-supported = 所有支持的文件
 ui-file-picker-look-in = 查找范围
 ui-file-picker-up = 上一级文件夹
 ui-file-picker-folders-hint = 打开一个文件夹，然后点击“选择文件夹”

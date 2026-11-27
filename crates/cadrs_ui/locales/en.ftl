@@ -254,6 +254,8 @@ ui-feature-dialog-cancel = Cancel (Esc)
 ## crates/cadrs_ui/src/file_picker.rs
 # The file types the file picker shows when any file will do.
 ui-file-picker-all-files = All files
+# The file dialog's first file type: every kind of file the picker takes (then each kind by name).
+ui-file-picker-all-supported = All supported files
 # The label of the field with the folder the picker shows.
 ui-file-picker-look-in = Look in
 ui-file-picker-up = Up one folder

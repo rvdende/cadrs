@@ -136,7 +136,8 @@ pub use feature_dialog::{
     FeatureDialog, FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState,
 };
 pub use file_picker::{
-    FilePicked, FilePickerState, FilesPicked, open_file_picker, open_files_picker,
+    FileGroup, FilePicked, FilePickerState, FilesPicked, open_file_picker,
+    open_file_picker_grouped, open_files_picker,
 };
 pub use float_bar::FloatBar;
 pub use floating_panel::{FloatingPanel, FloatingPanelBody, FloatingPanelClose, panel_caption};

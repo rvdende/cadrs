@@ -131,27 +131,41 @@ fn start_dir() -> PathBuf {
 pub fn start(world: &mut World, target: ImportTarget) {
     let theme = world.resource::<Theme>().clone();
     let mut commands = world.commands();
+    // A cadrs file: a new document there, new tabs with their features here.
+    let mut groups = vec![cadrs_ui::FileGroup::new("cadrs", &["cadrs"])];
     // A new document also takes an STL or GLB mesh (P3E.1, TD3.1: the documents page's Import
     // files…).
-    let mut exts: Vec<&str> = ImportFormat::EXCHANGE_EXTENSIONS.to_vec();
-    // The other CAD programs' files, which cadmpeg turns into STEP.
-    exts.extend(cadrs_core::import::native_extensions());
-    if matches!(target, ImportTarget::NewDocument) {
-        exts.push("stl");
-        exts.push("glb");
-    }
-    // A cadrs file: a new document there, new tabs with their features here.
-    exts.push("cadrs");
-    cadrs_ui::file_picker::open_file_picker(
+    groups.extend(picker_groups(matches!(target, ImportTarget::NewDocument)));
+    cadrs_ui::open_file_picker_grouped(
         &mut commands,
         &theme,
         "import-picker",
         &tr("common-import"),
         target.tag(),
         start_dir(),
-        &exts,
+        groups,
     );
     world.flush();
+}
+
+/// The import pickers' file types, by kind: STEP, IGES and BREP, the meshes (STL, GLB) when
+/// `meshes`, then the other CAD programs' files by program (which cadmpeg turns into STEP), so
+/// the system dialog's type list names each instead of one long line of extensions.
+pub(crate) fn picker_groups(meshes: bool) -> Vec<cadrs_ui::FileGroup> {
+    use cadrs_ui::FileGroup;
+    let mut out = vec![
+        FileGroup::new("STEP", &["step", "stp"]),
+        FileGroup::new("IGES", &["iges", "igs"]),
+        FileGroup::new("BREP", &["brep", "brp"]),
+    ];
+    if meshes {
+        out.push(FileGroup::new("STL", &["stl"]));
+        out.push(FileGroup::new("glTF", &["glb"]));
+    }
+    for (name, exts) in cadrs_core::import::native_groups() {
+        out.push(FileGroup::new(name, &exts));
+    }
+    out
 }
 
 fn on_file_picked(
