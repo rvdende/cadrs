@@ -899,6 +899,19 @@ pub fn solve(
     solver::solve(&asm, &frame, opts)
 }
 
+/// The mates of `asm` (the solver's model, see [`structure::solver_model`]) that don't hold at
+/// its placements, with how far each misses (mm): [`solver::unsatisfied`] with the connectors
+/// resolved on `solids`, as [`solve`] sees them.
+pub fn unsatisfied_mates(
+    asm: &Assembly,
+    solids: &std::collections::HashMap<InstanceId, Arc<Solid>>,
+) -> Vec<(mate::MateId, f64)> {
+    let asm = resolve_local_connectors(asm, solids);
+    let asm = propagate_tangents(&asm, solids);
+    let frame = |c: &connector::MateConnector| c.local_frame(solids.get(&c.instance).map(|s| &**s));
+    solver::unsatisfied(&asm, &frame)
+}
+
 /// P3G.5 (ex-dv4, the gap file's Risks): the mates of `asm` (the solver's model, see
 /// [`structure::solver_model`]) with a connector whose entity is gone from its part (`solids`,
 /// by occurrence): its face or edge was lost in an update, or the part itself. Suppressed mates

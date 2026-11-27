@@ -2280,6 +2280,8 @@ asm-mate-animate-dof = Анимировать степень свободы
 asm-mate-solve = Решить
 asm-mate-solve-all = Решить все сопряжения
 asm-mate-cant-hold = Это сопряжение не может выполняться вместе с другими сопряжениями детали: детали остаются на месте
+asm-mates-cant-all-hold = { $mates } не могут выполняться одновременно: детали остаются на месте
+asm-mates-the-mates = Сопряжения
 
 ## crates/cadrs_app/src/assembly/mate_display.rs
 asm-show-mates-mode = Режим показа сопряжений (H): наведите указатель на экземпляр, щелкните, чтобы закрепить
@@ -2287,6 +2289,7 @@ asm-show-mates-mode = Режим показа сопряжений (H): наве
 ## crates/cadrs_app/src/assembly/mates_list.rs
 asm-mates-an-instance = экземпляр
 asm-mates-missing-reference = Отсутствует ссылка: объекта, на котором было это сопряжение, больше нет ({ $part }; изменился его источник). Отредактируйте сопряжение и выберите объект заново.
+asm-mates-doesnt-hold = Это сопряжение не выполняется: расхождение { $miss }, так как оно не может выполняться вместе с другими сопряжениями. Отредактируйте, подавите или удалите одно из них.
 asm-mates-group = Группа
 asm-mates-type-mate = Сопряжение: { $type }
 asm-mates-angle-about-axis = { $angle } вокруг { $axis }

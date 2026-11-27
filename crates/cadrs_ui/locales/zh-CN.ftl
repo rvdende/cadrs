@@ -2280,6 +2280,8 @@ asm-mate-animate-dof = 动画演示配合自由度
 asm-mate-solve = 求解
 asm-mate-solve-all = 求解所有配合
 asm-mate-cant-hold = 此配合无法与零件的其他配合同时满足：零件保持原位
+asm-mates-cant-all-hold = { $mates } 无法同时满足：零件保持原位
+asm-mates-the-mates = 这些配合
 
 ## crates/cadrs_app/src/assembly/mate_display.rs
 asm-show-mates-mode = 显示配合模式 (H)：悬停在实例上，单击以固定显示
@@ -2287,6 +2289,7 @@ asm-show-mates-mode = 显示配合模式 (H)：悬停在实例上，单击以固
 ## crates/cadrs_app/src/assembly/mates_list.rs
 asm-mates-an-instance = 某个实例
 asm-mates-missing-reference = 缺失参考：此配合所在的图元已从 { $part } 中消失（其源已更改）。请编辑该配合并重新选择。
+asm-mates-doesnt-hold = 此配合未满足：偏差 { $miss }，因为它无法与其他配合同时满足。请编辑、压缩或删除其中一个。
 asm-mates-group = 组
 asm-mates-type-mate = { $type }配合
 asm-mates-angle-about-axis = 绕 { $axis } { $angle }

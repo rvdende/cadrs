@@ -567,6 +567,17 @@ fn run_solve(
             crate::linked::toast(world, tr("asm-mate-cant-hold"));
             return None;
         }
+        if !snap_only && !sol.broken.is_empty() {
+            // #193: the mates can't all hold. The list's order is their priority: the solve
+            // kept the mates before the one that breaks (a new mate: the new one), placed so they
+            // hold, and the broken ones are red in the list with a red line in the view, to be
+            // edited, suppressed or deleted. No compromise that holds none of them.
+            let names = conflicting(&model, &sol);
+            crate::linked::toast(
+                world,
+                cadrs_ui::i18n::tr_with("asm-mates-cant-all-hold", &[("mates", &names)]),
+            );
+        }
     }
     // A Tangent's first placement: the moving entity is also drawn toward the picked face, so
     // the contact lands on the face that was picked, not somewhere on its unbounded surface.
@@ -600,6 +611,21 @@ fn run_solve(
     s.preview = changed.iter().copied().collect();
     world.insert_resource(s);
     Some(changed)
+}
+
+/// The names of the mates a solve broke ([`cadrs_core::assembly::solver::Solution::broken`]: they
+/// can't hold with the mates before them), for its notice.
+pub fn conflicting(model: &Assembly, sol: &cadrs_core::assembly::solver::Solution) -> String {
+    let names: Vec<String> = sol
+        .broken
+        .iter()
+        .filter_map(|id| model.mate(*id).map(|f| f.name.clone()))
+        .collect();
+    if names.is_empty() {
+        tr("asm-mates-the-mates")
+    } else {
+        names.join(", ")
+    }
 }
 
 pub fn accept(world: &mut World) {

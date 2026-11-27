@@ -702,3 +702,133 @@ fn a_chain_of_cylindrical_and_planar_mates_goes_to_its_named_position() {
         }
     }
 }
+
+#[test]
+fn a_mate_that_doesnt_hold_is_found_with_how_far_it_misses() {
+    // #193: a Revolute between two fixed links whose ends are 10 mm apart can't hold (nothing
+    // can move to meet it); a Planar that holds isn't listed.
+    let revolute = feature(
+        1,
+        MateKind::Mate(Mate::new(
+            MateType::Revolute,
+            link_end(1, 0.0),
+            link_end(2, 0.0),
+        )),
+    );
+    let planar = feature(
+        2,
+        MateKind::Mate(Mate::new(MateType::Planar, link_bottom(3), link_top(1))),
+    );
+    let asm = Assembly {
+        instances: vec![
+            inst(1, Pose::IDENTITY, true),
+            inst(2, Pose::translation([0.0, 0.0, 10.0]), true),
+            inst(3, Pose::translation([100.0, 0.0, 5.0]), false),
+        ],
+        mates: vec![revolute, planar],
+        ..Default::default()
+    };
+    let misses = solver::unsatisfied(&asm, &frame_of);
+    assert_eq!(misses.len(), 1, "{misses:?}");
+    assert_eq!(misses[0].0, MateId::from_u128(1));
+    assert!((misses[0].1 - 10.0).abs() < 1e-9, "{misses:?}");
+}
+
+/// Three links folded into a triangle, each lying on the one before (Cylindrical + Planar), as
+/// in #193's report: the loop is closed by a Revolute from link 3's free end to link 1's, which
+/// lies a link's thickness below it.
+fn closed_triangle() -> (Assembly, Pose, Pose) {
+    let turn = |deg: f64| Pose::rotation_about([0.0; 3], [0.0, 0.0, 1.0], deg.to_radians());
+    let p2 = turn(60.0).then(&Pose::translation([0.0, 0.0, 5.0]));
+    let end = p2.apply([100.0, 0.0, 0.0]);
+    let p3 = turn(-60.0).then(&Pose::translation([end[0], end[1], 10.0]));
+    let mate = |n: u128, t: MateType, a: MateConnector, b: MateConnector| {
+        feature(n, MateKind::Mate(Mate::new(t, a, b)))
+    };
+    let asm = Assembly {
+        instances: vec![
+            inst(1, Pose::IDENTITY, true),
+            inst(2, p2, false),
+            inst(3, p3, false),
+        ],
+        mates: vec![
+            mate(1, MateType::Cylindrical, link_end(2, 0.0), link_end(1, 0.0)),
+            mate(2, MateType::Planar, link_bottom(2), link_top(1)),
+            mate(
+                3,
+                MateType::Cylindrical,
+                link_end(3, 0.0),
+                link_end(2, 100.0),
+            ),
+            mate(4, MateType::Planar, link_bottom(3), link_top(2)),
+            mate(
+                5,
+                MateType::Revolute,
+                link_end(3, 100.0),
+                link_end(1, 100.0),
+            ),
+        ],
+        ..Default::default()
+    };
+    (asm, p2, p3)
+}
+
+#[test]
+fn a_mate_that_cant_hold_breaks_alone_and_the_others_hold() {
+    // #193: the solve used to settle on a compromise, the links tilted, that held none of the
+    // five mates, and stored it. Now the Revolute breaks (leaving it out lets the rest hold),
+    // the others hold and the links stay flat where they were.
+    let (asm, p2, p3) = closed_triangle();
+    let s = solver::solve(
+        &asm,
+        &frame_of,
+        &SolveOptions {
+            movers: vec![InstanceId::from_u128(3)],
+            ..Default::default()
+        },
+    );
+    assert!(!s.converged);
+    assert_eq!(s.broken, vec![MateId::from_u128(5)]);
+    let mut placed = asm.clone();
+    apply(&mut placed, &s);
+    let misses = solver::unsatisfied(&placed, &frame_of);
+    assert_eq!(misses.len(), 1, "{misses:?}");
+    assert_eq!(misses[0].0, MateId::from_u128(5));
+    assert!((misses[0].1 - 10.0).abs() < 1e-6, "{misses:?}");
+    for (i, want) in [(2, p2), (3, p3)] {
+        let got = placed.instance(InstanceId::from_u128(i)).unwrap().pose;
+        for p in [[0.0, 0.0, 0.0], [100.0, 0.0, 0.0], [0.0, 0.0, 5.0]] {
+            assert!(dist(got.apply(p), want.apply(p)) < 1e-6, "link {i} moved");
+        }
+    }
+}
+
+#[test]
+fn one_mate_breaks_rather_than_the_two_it_conflicts_with() {
+    // Link 2 fastened onto link 1 first, then a Cylindrical and a Planar that put it on top of
+    // link 3, 200 mm away. Breaking the Fastened lets both hold; keeping it (the list's order)
+    // would break two.
+    let mate = |n: u128, t: MateType, a: MateConnector, b: MateConnector| {
+        feature(n, MateKind::Mate(Mate::new(t, a, b)))
+    };
+    let asm = Assembly {
+        instances: vec![
+            inst(1, Pose::IDENTITY, true),
+            inst(2, Pose::translation([50.0, 80.0, 0.0]), false),
+            inst(3, Pose::translation([200.0, 0.0, 0.0]), true),
+        ],
+        mates: vec![
+            mate(1, MateType::Fastened, link_end(2, 0.0), link_end(1, 0.0)),
+            mate(2, MateType::Cylindrical, link_end(2, 0.0), link_end(3, 0.0)),
+            mate(3, MateType::Planar, link_bottom(2), link_top(3)),
+        ],
+        ..Default::default()
+    };
+    let s = solver::solve(&asm, &frame_of, &SolveOptions::default());
+    assert_eq!(s.broken, vec![MateId::from_u128(1)]);
+    let mut placed = asm.clone();
+    apply(&mut placed, &s);
+    let misses = solver::unsatisfied(&placed, &frame_of);
+    assert_eq!(misses.len(), 1, "{misses:?}");
+    assert_eq!(misses[0].0, MateId::from_u128(1));
+}

@@ -2280,6 +2280,8 @@ asm-mate-animate-dof = Animar GDL de la relación
 asm-mate-solve = Resolver
 asm-mate-solve-all = Resolver todas las relaciones
 asm-mate-cant-hold = Esta relación no puede cumplirse junto con las otras relaciones de la pieza: las piezas se quedan donde están
+asm-mates-cant-all-hold = { $mates } no pueden cumplirse todas a la vez: las piezas se quedan donde están
+asm-mates-the-mates = Las relaciones
 
 ## crates/cadrs_app/src/assembly/mate_display.rs
 asm-show-mates-mode = Modo de mostrar relaciones (H): pase el puntero sobre una instancia, haga clic para fijarla
@@ -2287,6 +2289,7 @@ asm-show-mates-mode = Modo de mostrar relaciones (H): pase el puntero sobre una 
 ## crates/cadrs_app/src/assembly/mates_list.rs
 asm-mates-an-instance = una instancia
 asm-mates-missing-reference = Falta la referencia: la entidad en la que estaba esta relación ya no existe en { $part } (su fuente cambió). Edite la relación y vuelva a elegirla.
+asm-mates-doesnt-hold = Esta relación no se cumple: falla por { $miss }, ya que no puede cumplirse junto con las otras relaciones. Edite, suprima o elimine una de ellas.
 asm-mates-group = Grupo
 asm-mates-type-mate = Relación de posición: { $type }
 asm-mates-angle-about-axis = { $angle } alrededor de { $axis }

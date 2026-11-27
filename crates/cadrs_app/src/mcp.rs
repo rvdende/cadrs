@@ -946,6 +946,8 @@ pub(crate) fn describe_assembly(d: &ActiveDocument, element: ElementId) -> Resul
     let solids = mate_solids(&d.doc, element, &flat);
     let own: Vec<_> = asm.mates.iter().map(|m| m.id).collect();
     let values = cadrs_core::assembly::positions::mate_values(&flat, &solids, &own);
+    // #193: the mates that don't hold where the parts are, with how far each misses.
+    let misses = cadrs_core::assembly::unsatisfied_mates(&flat, &solids);
     let mates: Vec<Value> = asm
         .mates
         .iter()
@@ -962,6 +964,9 @@ pub(crate) fn describe_assembly(d: &ActiveDocument, element: ElementId) -> Resul
                     cadrs_core::assembly::mate::Dof::Z => ("z_mm", x.value),
                 };
                 v[key] = json!(round(value));
+            }
+            if let Some((_, miss)) = misses.iter().find(|(id, _)| *id == m.id) {
+                v["misses_mm"] = json!((*miss * 1e6).round() / 1e6);
             }
             v
         })
@@ -1259,12 +1264,8 @@ fn add_mate(world: &mut World, p: &tools::AddMate) -> Result<Value, String> {
                 ..Default::default()
             },
         );
-        if !sol.converged {
-            return Err(format!(
-                "the new {} mate can't hold together with the instance's other mates",
-                ty.label()
-            ));
-        }
+        // The new mate can't hold with the others: it breaks (it is last in the list, the
+        // weakest), the others stay held (#193).
         apply_poses(&mut model, &sol.poses);
     } else {
         // The pick: only the mover is snapped (the snap places the first movable connector's
@@ -1297,6 +1298,9 @@ fn add_mate(world: &mut World, p: &tools::AddMate) -> Result<Value, String> {
             ..Default::default()
         },
     );
+    // The mates can't all hold (#193): the mate is added, those that break (the list's order is
+    // their priority: the new one first) are left out, the rest hold, and the reply says
+    // solved: false with broken naming them (misses_mm: how far off each is).
     let poses: Vec<_> = sol.poses.iter().map(|(id, p)| (*id, *p)).collect();
     doc_mut(world)?
         .execute(&AddMateFeature {
@@ -1307,6 +1311,18 @@ fn add_mate(world: &mut World, p: &tools::AddMate) -> Result<Value, String> {
         .map_err(|e| e.to_string())?;
     let mut out = describe_assembly(doc(world)?, element)?;
     out["solved"] = json!(sol.converged);
+    if !sol.broken.is_empty() {
+        let a = doc(world)?
+            .doc
+            .element(element)
+            .and_then(|e| e.assembly_model());
+        let names: Vec<String> = sol
+            .broken
+            .iter()
+            .filter_map(|id| a.and_then(|a| a.mate(*id)).map(|f| f.name.clone()))
+            .collect();
+        out["broken"] = json!(names);
+    }
     Ok(out)
 }
 

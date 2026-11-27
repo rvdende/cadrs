@@ -454,7 +454,8 @@ impl Cadrs {
 
     #[tool(
         description = "Describe an Assembly tab: its instances (name, id, source tab and part, position \
-        in mm, fixed, hidden, suppressed) and its mate features."
+        in mm, fixed, hidden, suppressed) and its mate features, each with its position; a mate that \
+        doesn't hold where the parts are (it can't hold with the others) has misses_mm, how far off it is."
     )]
     async fn get_assembly(
         &self,
@@ -493,8 +494,10 @@ impl Cadrs {
         description = "Add a mate (Fastened, Revolute, Slider, Cylindrical, Planar, Ball or Parallel) between \
         two instances of an assembly, each connector a frame in its instance's own coordinates (origin in mm, \
         Z and X axes), optionally with limits. The solver then places the instances so the mate holds (the \
-        second connector's instance moves unless it is fixed). One undo step. Returns the assembly as \
-        get_assembly does, with each mate's current position."
+        second connector's instance moves unless it is fixed). When the mates can't all hold, the Mate \
+        Features list's order is their priority: the mates that can't hold with those before them \
+        (the new one, last) break and the rest hold (solved: false, broken: their names; misses_mm in \
+        each mate: how far off it is). One undo step. Returns the assembly as get_assembly does, with each mate's current position."
     )]
     async fn add_mate(
         &self,

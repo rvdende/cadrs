@@ -164,9 +164,14 @@ fn update_dofs(world: &mut World) {
 /// P3G.5 (ex-dv4, the gap file's Risks): the mates of the active assembly whose entity is gone
 /// (a face lost in an update of a linked part, a deleted part), with their messages: their rows
 /// are red and they don't hold their instances ([`cadrs_core::assembly::lost_mates`]).
+///
+/// #193: also the mates that don't hold at the placements (a solve that couldn't hold them all,
+/// a part changed under its mates), with how far each misses (mm): red too, and a red line in
+/// the view between their connectors ([`super::mate_display`]).
 #[derive(Resource, Default, Debug)]
 pub struct MateErrors {
     pub lost: HashMap<MateId, String>,
+    pub unsatisfied: HashMap<MateId, f64>,
     key: Option<(ElementId, u32)>,
 }
 
@@ -176,8 +181,11 @@ fn update_mate_errors(world: &mut World) {
         .and_then(|d| d.active_element()?.assembly_model().map(|_| d.active))
         .flatten()
     else {
-        if !world.resource::<MateErrors>().lost.is_empty() {
-            world.resource_mut::<MateErrors>().lost.clear();
+        let e = world.resource::<MateErrors>();
+        if !e.lost.is_empty() || !e.unsatisfied.is_empty() {
+            let mut e = world.resource_mut::<MateErrors>();
+            e.lost.clear();
+            e.unsatisfied.clear();
         }
         return;
     };
@@ -206,8 +214,9 @@ fn update_mate_errors(world: &mut World) {
         });
     if !any_mates {
         let mut e = world.resource_mut::<MateErrors>();
-        if !e.lost.is_empty() {
+        if !e.lost.is_empty() || !e.unsatisfied.is_empty() {
             e.lost.clear();
+            e.unsatisfied.clear();
         }
         e.key = Some((element, tick));
         return;
@@ -219,6 +228,16 @@ fn update_mate_errors(world: &mut World) {
         return;
     };
     let lost = cadrs_core::assembly::lost_mates(&flat, &solids);
+    // The mates that don't hold, of those whose entities are all there.
+    let mut held = flat.clone();
+    held.mates.retain(|f| {
+        !lost.contains(&f.id)
+            && f.relation()
+                .is_none_or(|r| r.mates.iter().all(|m| !lost.contains(m)))
+    });
+    let unsatisfied: HashMap<MateId, f64> = cadrs_core::assembly::unsatisfied_mates(&held, &solids)
+        .into_iter()
+        .collect();
     let mut out = HashMap::new();
     if !lost.is_empty() {
         let cache = world.resource::<PartCache>();
@@ -243,6 +262,7 @@ fn update_mate_errors(world: &mut World) {
     }
     let mut e = world.resource_mut::<MateErrors>();
     e.lost = out;
+    e.unsatisfied = unsatisfied;
     e.key = Some((element, tick));
 }
 
@@ -388,7 +408,7 @@ struct RowKey {
     replicate: Option<&'static str>,
     /// P3B.9: a relation's mates' icons (its ▸ lists its mates, `connectors` their names).
     child_icons: Vec<&'static str>,
-    /// P3G.5: its entity is gone (the message).
+    /// P3G.5: its entity is gone; #193: it doesn't hold (the message).
     error: Option<String>,
 }
 
@@ -547,7 +567,14 @@ fn rebuild_mate_rows(
                     .filter(|_| f.replicate().is_some())
                     .or(rel.map(|r| r.relation_type.icon())),
                 child_icons,
-                error: errors.lost.get(&f.id).cloned(),
+                error: errors.lost.get(&f.id).cloned().or_else(|| {
+                    errors.unsatisfied.get(&f.id).map(|miss| {
+                        tr_with(
+                            "asm-mates-doesnt-hold",
+                            &[("miss", &dof_text(&units.0, Dof::X, *miss))],
+                        )
+                    })
+                }),
             }
         })
         .collect();
@@ -1611,6 +1638,15 @@ pub fn drive(
         keep_sides: false,
     };
     let sol = cadrs_core::assembly::solve(&model, &solids, &opts);
+    if !sol.converged {
+        // #193: the mates can't all hold there: nothing moves.
+        let names = super::mate_dialog::conflicting(&model, &sol);
+        crate::linked::toast(
+            world,
+            tr_with("asm-mates-cant-all-hold", &[("mates", &names)]),
+        );
+        return;
+    }
     let poses = sol.changed(&model);
     if !poses.is_empty() {
         super::run(
