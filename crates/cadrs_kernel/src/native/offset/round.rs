@@ -462,7 +462,8 @@ fn merged(b: &Body) -> Body {
             .and_then(|x| k.get(*x).ok())
             .map(|x| (**x).clone())
     }) {
-        Some(m) if m.check().is_empty() && m.faces.len() < b.faces.len() => m,
+        // (Checked only where it merged something: else the body as it was.)
+        Some(m) if m.faces.len() < b.faces.len() && m.check().is_empty() => m,
         _ => b.clone(),
     }
 }

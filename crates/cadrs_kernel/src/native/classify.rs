@@ -1760,6 +1760,28 @@ pub(crate) fn locally_convex(b: &Body) -> bool {
             Surface::Sphere { .. } | Surface::Cylinder { .. } | Surface::Cone { .. } => {
                 outward_sign(f) == Some(1.0)
             }
+            // A torus's outer half (at its major radius or beyond from its axis) curves like a
+            // ball: a puck's rounded rim.
+            Surface::Torus { f: fr, rmaj, rmin } if rmin < rmaj => {
+                let polys = face_polygons(b, f);
+                let outer = |u: f64, v: f64| {
+                    let l = fr.local(&f.surf.eval(u, v));
+                    l.x.hypot(l.y) >= rmaj * (1.0 - 1e-9)
+                };
+                // (Its loops on the outer half, and the middle of the face's own range of v:
+                // a band whose circles are both outside may still run round the inside.)
+                let (lo, hi) = polys
+                    .iter()
+                    .flatten()
+                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), q| {
+                        (a.min(q.y), b.max(q.y))
+                    });
+                let u = polys.iter().flatten().next().map_or(0.0, |q| q.x);
+                outward_sign(f) == Some(1.0)
+                    && lo.is_finite()
+                    && outer(u, 0.5 * (lo + hi))
+                    && polys.iter().flatten().all(|q| outer(q.x, q.y))
+            }
             _ => false,
         })
         && (0..b.edges.len())
