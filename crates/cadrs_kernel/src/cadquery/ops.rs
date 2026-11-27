@@ -342,6 +342,30 @@ fn tapered(f: &Shape, v: V3, taper_deg: f64) -> CqResult<Shape> {
     let h = v.norm();
     let inset = h * taper_deg.to_radians().tan();
     let outer = f.outer_wire()?.edge_geoms();
+    // A circle's tapered prism is a cone, made exactly; past its apex (a taper steep enough
+    // to close the circle before the depth) the cone goes on as its second nappe, the two
+    // meeting at the apex point (as OCCT's draft prism makes it).
+    if let [g] = outer.as_slice()
+        && let Curve::Circle { c, r, .. } = &g.curve
+        && g.t1 - g.t0 >= std::f64::consts::TAU - 1e-9
+        && f.inner_wires()?.is_empty()
+    {
+        let dir = n * d;
+        // (A tip within rounding of the axis is the apex itself.)
+        let r2 = if (r - inset).abs() <= 1e-9 * r.max(1.0) {
+            0.0
+        } else {
+            r - inset
+        };
+        if r2 >= 0.0 {
+            return make::cone(*r, r2, h, c.coords, dir, 360.0);
+        }
+        let h1 = h * r / inset;
+        let first = make::cone(*r, 0.0, h1, c.coords, dir, 360.0)?;
+        let apex = c.coords + dir * h1;
+        let second = make::cone(0.0, -r2, h - h1, apex, dir, 360.0)?;
+        return Ok(Shape::compound(vec![first, second]));
+    }
     let plane = Plane::of_axes(pl.origin.coords, pl.x_dir.into_inner(), n);
     let top = offset_wire(&outer, &plane, -inset, true)?;
     let top: Vec<EdgeGeom> = top
@@ -553,6 +577,153 @@ pub fn path_curve(g: &EdgeGeom) -> PathCurve {
     }
 }
 
+/// The conical spiral points lie on within `tol` (radius and height both linear in the angle
+/// about an axis): its axis first guessed from the tangents (square to their differences), then
+/// every parameter (the axis's direction and place, the radius at the start and its growth a
+/// radian, the rise a radian) refined by Gauss–Newton over the points, and the result checked
+/// at every point.
+fn spiral_through(pts: &[P3], tans: &[V3], tol: f64) -> Option<crate::Helix> {
+    use nalgebra::{DMatrix, DVector, SymmetricEigen};
+    let n = pts.len();
+    if n < 16 {
+        return None;
+    }
+    let mean = tans.iter().sum::<V3>() / n as f64;
+    let mut m = nalgebra::Matrix3::zeros();
+    for t in tans {
+        let d = t - mean;
+        m += d * d.transpose();
+    }
+    let e = SymmetricEigen::new(m);
+    let (imin, _) = e
+        .eigenvalues
+        .iter()
+        .enumerate()
+        .min_by(|a, b| a.1.total_cmp(b.1))?;
+    let mut a0 = e.eigenvectors.column(imin).into_owned().normalize();
+    if mean.dot(&a0) < 0.0 {
+        a0 = -a0;
+    }
+    let ex = super::geom::default_x(&a0);
+    let ey = a0.cross(&ex);
+    // The centre: the points' mean across the axis (whole turns balance about it).
+    let c0 = pts.iter().map(|p| p.coords).sum::<V3>() / n as f64;
+    let c0 = c0 - a0 * c0.dot(&a0);
+    // Parameters: tilt of the axis (two), its point across it (two), r0, k, rise c, z0.
+    let model = |q: &[f64]| -> Option<(V3, V3, V3, V3)> {
+        let a = (a0 + ex * q[0] + ey * q[1]).normalize();
+        let x = (ex - a * ex.dot(&a)).normalize();
+        let y = a.cross(&x);
+        let c = c0 + ex * q[2] + ey * q[3];
+        Some((a, x, y, c))
+    };
+    let angles = |a: V3, x: V3, y: V3, c: V3| -> Vec<f64> {
+        let mut out = Vec::with_capacity(n);
+        let mut prev: Option<f64> = None;
+        for p in pts {
+            let w = p.coords - c;
+            let mut t = w.dot(&y).atan2(w.dot(&x));
+            if let Some(pv) = prev {
+                t += ((pv - t) / std::f64::consts::TAU).round() * std::f64::consts::TAU;
+            }
+            out.push(t);
+            prev = Some(t);
+        }
+        let _ = a;
+        out
+    };
+    // Residuals at q: each point against the spiral at its own angle.
+    let resid = |q: &[f64], th: &[f64]| -> Option<DVector<f64>> {
+        let (a, x, y, c) = model(q)?;
+        let mut r = DVector::zeros(3 * n);
+        for (i, p) in pts.iter().enumerate() {
+            let t = th[i] - th[0];
+            let rho = q[4] + q[5] * t;
+            let want = c + a * (q[7] + q[6] * t) + (x * th[i].cos() + y * th[i].sin()) * rho;
+            let d = p.coords - want;
+            r[3 * i] = d.x;
+            r[3 * i + 1] = d.y;
+            r[3 * i + 2] = d.z;
+        }
+        Some(r)
+    };
+    // A start: radius and height linear in the angle about the guessed axis.
+    let (a, x, y, c) = model(&[0.0; 8])?;
+    let th = angles(a, x, y, c);
+    let span = th[n - 1] - th[0];
+    if span.abs() < 1.0 {
+        return None;
+    }
+    let rho0 = {
+        let w = pts[0].coords - c;
+        (w - a * w.dot(&a)).norm()
+    };
+    let rho1 = {
+        let w = pts[n - 1].coords - c;
+        (w - a * w.dot(&a)).norm()
+    };
+    let z0 = (pts[0].coords - c).dot(&a);
+    let z1 = (pts[n - 1].coords - c).dot(&a);
+    let mut q = vec![
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        rho0,
+        (rho1 - rho0) / span,
+        (z1 - z0) / span,
+        z0,
+    ];
+    for _ in 0..30 {
+        let (a, x, y, c) = model(&q)?;
+        let th = angles(a, x, y, c);
+        let r = resid(&q, &th)?;
+        let mut jac = DMatrix::zeros(3 * n, 8);
+        for j in 0..8 {
+            let h = 1e-7 * (1.0 + q[j].abs());
+            let mut qp = q.clone();
+            qp[j] += h;
+            let rp = resid(&qp, &th)?;
+            jac.set_column(j, &((rp - &r) / h));
+        }
+        let step = (jac.transpose() * &jac)
+            .lu()
+            .solve(&(-(jac.transpose() * &r)))?;
+        for j in 0..8 {
+            q[j] += step[j];
+        }
+        if step.norm() < 1e-14 * (1.0 + q.iter().map(|v| v.abs()).fold(0.0, f64::max)) {
+            break;
+        }
+    }
+    let (a, x, y, c) = model(&q)?;
+    let th = angles(a, x, y, c);
+    let r = resid(&q, &th)?;
+    if (0..n).any(|i| V3::new(r[3 * i], r[3 * i + 1], r[3 * i + 2]).norm() > tol) {
+        return None;
+    }
+    let span = th[n - 1] - th[0];
+    let rise = q[6] * span;
+    if rise.abs() <= tol {
+        return None;
+    }
+    let up = rise > 0.0;
+    let dir = if up { a } else { -a };
+    let start_out = x * th[0].cos() + y * th[0].sin();
+    Some(crate::Helix {
+        axis: crate::Axis {
+            origin: P3::from(c + a * q[7]),
+            dir: Unit::new_normalize(dir),
+        },
+        x: Unit::new_normalize(start_out),
+        r0: q[4],
+        r1: q[4] + q[5] * span,
+        height: rise.abs(),
+        turns: span / std::f64::consts::TAU * if up { 1.0 } else { -1.0 },
+        start_angle: 0.0,
+    })
+}
+
 /// How a sweep holds its section as it goes (`Solid.sweep`'s `isFrenet` and `mode`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SweepMode {
@@ -639,136 +810,41 @@ pub fn sweep_twisted(faces: &[Shape], path: &[EdgeGeom], twist: f64) -> CqResult
     Ok(together(out))
 }
 
-/// The helix a path runs along, when it is one: points of a cylinder rising evenly as they
-/// turn (a `parametricCurve` or spline through a helix's points, an approximation of it). The
-/// fit is checked, not assumed: every point of a dense sampling of the path (32 a turn and at
-/// least 256) must lie within 1e-6·(1 + r) of the fitted helix, well under what a helix's
-/// sampled fit misses by and far over what a curve that merely resembles one keeps to.
+/// The helix (or conical spiral) a path runs along, when it is one: a `parametricCurve` or
+/// spline through a helix's points, an approximation of it. Checked, not assumed: a dense
+/// sampling of the path (at least 512 points) must lie within 1e-6·(1 + size) of the fitted
+/// helix, under what a sampled helix's fit strays by and far over what a curve that merely
+/// resembles one keeps to.
 pub fn helix_of(path: &[EdgeGeom]) -> Option<crate::Helix> {
-    use nalgebra::{Matrix3, SymmetricEigen};
     let len: f64 = path.iter().map(|g| g.length()).sum();
     if len <= 0.0 {
         return None;
     }
-    // Points and curvature vectors along the path.
-    let n = 512;
-    let mut pts = Vec::with_capacity(n + 1);
-    let mut curv = Vec::with_capacity(n + 1);
+    let n = 512.0;
+    let mut pts = Vec::new();
+    let mut tans = Vec::new();
     for g in path {
-        let k = ((n as f64) * g.length() / len).ceil().max(8.0) as usize;
+        let k = (n * g.length() / len).ceil().max(8.0) as usize;
         for i in 0..=k {
             let t = g.t0 + (g.t1 - g.t0) * i as f64 / k as f64;
-            let (p, d1, d2) = g.curve.d2(t);
-            let s2 = d1.norm_squared();
-            if s2 <= 0.0 {
-                return None;
-            }
-            // The curvature vector: d2's part across the tangent, over the speed squared.
-            curv.push((d2 - d1 * (d2.dot(&d1) / s2)) / s2);
-            pts.push(p.coords);
+            pts.push(g.curve.point(t));
+            tans.push(g.tangent(t));
         }
     }
-    // The axis: square to every curvature vector (they lie in the plane square to it).
-    let mut m = Matrix3::zeros();
-    for c in &curv {
-        let cn = c.norm();
-        if cn > 0.0 {
-            let u = c / cn;
-            m += u * u.transpose();
-        }
-    }
-    let e = SymmetricEigen::new(m);
-    let (imin, _) = e
-        .eigenvalues
-        .iter()
-        .enumerate()
-        .min_by(|a, b| a.1.total_cmp(b.1))?;
-    let a = e.eigenvectors.column(imin).into_owned().normalize();
-    // The circle the points project on, in the plane square to the axis.
-    let x0 = super::geom::default_x(&a);
-    let y0 = a.cross(&x0);
-    let q: Vec<(f64, f64)> = pts.iter().map(|p| (p.dot(&x0), p.dot(&y0))).collect();
-    // Kåsa's fit: x² + y² + D x + E y + F = 0.
-    let mut ata = Matrix3::zeros();
-    let mut atb = V3::zeros();
-    for &(x, y) in &q {
-        let row = V3::new(x, y, 1.0);
-        ata += row * row.transpose();
-        atb += row * -(x * x + y * y);
-    }
-    let sol = ata.lu().solve(&atb)?;
-    let (cx, cy) = (-sol.x / 2.0, -sol.y / 2.0);
-    let r = (cx * cx + cy * cy - sol.z).max(0.0).sqrt();
-    if !(r > 0.0) {
-        return None;
-    }
-    let center = x0 * cx + y0 * cy;
-    // The angle round the axis (unwrapped) and the height along it.
-    let mut th = Vec::with_capacity(pts.len());
-    let mut prev: Option<f64> = None;
-    for &(x, y) in &q {
-        let mut t = (y - cy).atan2(x - cx);
-        if let Some(p) = prev {
-            t += ((p - t) / std::f64::consts::TAU).round() * std::f64::consts::TAU;
-        }
-        th.push(t);
-        prev = Some(t);
-    }
-    let h: Vec<f64> = pts.iter().map(|p| p.dot(&a)).collect();
-    let turned = th[th.len() - 1] - th[0];
-    let rise = h[h.len() - 1] - h[0];
-    if turned.abs() < 0.5 || rise.abs() <= 1e-9 * len {
-        return None;
-    }
-    let tol = 1e-6 * (1.0 + r);
-    // Rising evenly with the angle, on the circle, at every sampled point.
-    for i in 0..pts.len() {
-        let f = (th[i] - th[0]) / turned;
-        let want_h = h[0] + rise * f;
-        let (x, y) = q[i];
-        let rr = ((x - cx).powi(2) + (y - cy).powi(2)).sqrt();
-        if (rr - r).abs() > tol || (h[i] - want_h).abs() > tol {
-            return None;
-        }
-    }
-    // The axis pointing the way it rises, the helix starting at the path's start.
-    let dir = if rise > 0.0 { a } else { -a };
-    let turns = turned / std::f64::consts::TAU * if rise > 0.0 { 1.0 } else { -1.0 };
-    let origin = center + a * h[0];
-    let start = pts[0] - origin;
-    let x = (start - dir * start.dot(&dir)).normalize();
-    // (Right-handed about `dir` when turns > 0: check the sense against the path's own.)
-    let h = crate::Helix {
-        axis: crate::Axis {
-            origin: P3::from(origin),
-            dir: Unit::new_normalize(dir),
-        },
-        x: Unit::new_normalize(x),
-        r0: r,
-        r1: r,
-        height: rise.abs(),
-        turns,
-        start_angle: 0.0,
-    };
-    let (p_mid, _) = h.at(0.5);
-    let mid = path_point_at_fraction(path, 0.5);
-    if (p_mid.coords - mid).norm() > 1e3 * tol {
+    let size = pts.iter().map(|p| (p - pts[0]).norm()).fold(0.0, f64::max);
+    let tol = 1e-6 * (1.0 + size);
+    let h = crate::native::sweep::frames::helix_through(&pts, &tans, tol)
+        .or_else(|| spiral_through(&pts, &tans, tol))?;
+    // The helix runs where the path does: from its start to its end.
+    let (a, _) = h.at(0.0);
+    let (b, _) = h.at(1.0);
+    let tol = 1e-5 * (1.0 + size);
+    if (a.coords - path[0].start()).norm() > tol
+        || (b.coords - path[path.len() - 1].end()).norm() > tol
+    {
         return None;
     }
     Some(h)
-}
-
-/// The point a fraction of the way along a path by length.
-fn path_point_at_fraction(path: &[EdgeGeom], f: f64) -> V3 {
-    let lens: Vec<f64> = path.iter().map(|g| g.length()).collect();
-    let mut target = f * lens.iter().sum::<f64>();
-    for (g, l) in path.iter().zip(&lens) {
-        if target <= *l {
-            return g.point(g.param_at_fraction(if *l > 0.0 { target / l } else { 0.0 }));
-        }
-        target -= l;
-    }
-    path.last().map(|g| g.end()).unwrap_or_default()
 }
 
 /// A loft's section.

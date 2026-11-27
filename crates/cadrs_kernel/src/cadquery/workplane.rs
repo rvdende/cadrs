@@ -1629,7 +1629,8 @@ impl Workplane {
             None if new.len() > 1 => ops::fuse(&new[0], &new[1..])?,
             None => match new.into_iter().next() {
                 Some(s) => s,
-                None => return value_err!("Cannot union type '<class 'NoneType'>'"),
+                // (Empty with empty: OCCT's flat solids of no volume unite to one.)
+                None => Shape::compound(vec![]),
             },
             // (Nothing to add: the base as it is.)
         };

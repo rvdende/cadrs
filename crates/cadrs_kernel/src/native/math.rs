@@ -490,7 +490,11 @@ pub fn quadratic(a: f64, b: f64, c: f64) -> Vec<f64> {
     }
     let disc = b * b - 4.0 * a * c;
     if disc < 0.0 {
-        if disc > -1e-14 * (b * b).max(1.0) {
+        // A double root rounded below zero: b² and 4ac nearly cancel at a tangency (a line
+        // touching a sphere a corner of a profile lies on), so the rounding scales with both,
+        // not with b² alone (1e-12 of them: a gap of order 1e-13 mm at most).
+        let scale = (b * b + (4.0 * a * c).abs()).max(1.0);
+        if disc > -1e-12 * scale {
             return vec![-b / (2.0 * a)];
         }
         return vec![];

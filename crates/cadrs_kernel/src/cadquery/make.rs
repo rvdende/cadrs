@@ -898,6 +898,15 @@ pub fn cylinder(r: f64, h: f64, pnt: V3, dir: V3, deg: f64) -> CqResult<Shape> {
 
 /// `Solid.makeCone(radius1, radius2, height, pnt, dir, angleDegrees)`.
 pub fn cone(r1: f64, r2: f64, h: f64, pnt: V3, dir: V3, deg: f64) -> CqResult<Shape> {
+    // (Radii within rounding of zero are an apex.)
+    let snap = |r: f64| {
+        if r.abs() <= 1e-9 * r1.abs().max(r2.abs()).max(1.0) {
+            0.0
+        } else {
+            r
+        }
+    };
+    let (r1, r2) = (snap(r1), snap(r2));
     if r1 < 0.0 || r2 < 0.0 || (r1 == 0.0 && r2 == 0.0) || h <= 0.0 {
         return value_err!("BRepPrimAPI_MakeCone: bad radii or height");
     }

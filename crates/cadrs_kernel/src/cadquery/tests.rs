@@ -321,3 +321,22 @@ fn helix_pcurve_unwraps_through_its_turns() {
     );
     assert!((b.y - a.y - 5.0).abs() < 1e-6, "{a:?} → {b:?}");
 }
+
+/// A conical spiral sampled through `parametricCurve`'s fit is recognized as the spiral it is.
+#[test]
+fn sampled_conical_spiral_is_a_helix() {
+    let (r1, r2, h, turns) = (9.0, 6.0, 20.0, 3.0);
+    let pts: Vec<V3> = (0..=400)
+        .map(|i| {
+            let t = i as f64 / 400.0;
+            let (a, r) = (std::f64::consts::TAU * turns * t, r1 + (r2 - r1) * t);
+            V3::new(r * a.cos(), r * a.sin(), h * t)
+        })
+        .collect();
+    let g = super::make::spline_approx(&pts, 1e-6).unwrap();
+    let hx = super::ops::helix_of(&[g]).expect("a conical spiral");
+    assert!(
+        (hx.r0 - 9.0).abs() < 1e-5 && (hx.r1 - 6.0).abs() < 1e-5,
+        "{hx:?}"
+    );
+}

@@ -220,6 +220,44 @@ impl Helix {
     }
 }
 
+/// The helix or conical spiral points (with their unit tangents) lie on within `tol`, as the
+/// public kind running from the first point to the last (its axis pointing the way it rises):
+/// for callers outside sweeps, a CadQuery sweep along a sampled helix. None when they don't
+/// lie on one, or it doesn't rise.
+pub(crate) fn helix_through(pts: &[P3], tans: &[V3], tol: f64) -> Option<crate::Helix> {
+    let h = fit_helix(pts, tans, None, tol)?;
+    let t0 = h.angle_of(&pts[0], h.th0);
+    let mut t1 = t0;
+    for p in &pts[1..] {
+        t1 = h.angle(p, t1);
+    }
+    let rise = h.c * (t1 - t0);
+    if rise.abs() <= tol || (t1 - t0).abs() < 1e-3 {
+        return None;
+    }
+    // Every point on it, the fit's tolerance kept to.
+    if pts.iter().any(|p| {
+        let t = h.angle_of(p, 0.5 * (t0 + t1));
+        (h.point(t) - p).norm() > tol
+    }) {
+        return None;
+    }
+    let up = rise > 0.0;
+    let dir = if up { h.a } else { -h.a };
+    Some(crate::Helix {
+        axis: crate::Axis {
+            origin: h.o + h.a * (h.c * t0),
+            dir: nalgebra::Unit::new_normalize(dir),
+        },
+        x: nalgebra::Unit::new_normalize(h.out(t0)),
+        r0: h.radius(t0),
+        r1: h.radius(t1),
+        height: rise.abs(),
+        turns: (t1 - t0) / TAU * if up { 1.0 } else { -1.0 },
+        start_angle: 0.0,
+    })
+}
+
 /// The helix a chain of path segments follows (within its approximation), if any.
 pub fn fit_helix_segs(segs: &[Seg]) -> Option<Helix> {
     let mut pts = Vec::new();
