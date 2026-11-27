@@ -994,7 +994,17 @@ pub fn kernel_distance(
         return Ok(r);
     }
     if sense == Sense::Min
+        && let Some(r) = ball_against(k, a, b)?
+    {
+        return Ok(r);
+    }
+    if sense == Sense::Min
         && let Some(r) = held(k, a, b)?
+    {
+        return Ok(r);
+    }
+    if sense == Sense::Min
+        && let Some(r) = held_between_cores(k, a, b)?
     {
         return Ok(r);
     }
@@ -1142,6 +1152,73 @@ fn canonical_turn(
     })
 }
 
+/// The nearest points of a whole ball (a [`crate::DistanceTarget::Solid`] of one closed face on a
+/// sphere) and anything else, from its centre's: the ball is every point within `r` of its centre
+/// `c`, so its distance from a target is `max(0, d(c) − r)`, the nearest point of the target to `c`
+/// the target's side of it, and on the ball the point `r` from `c` toward that (or the target's
+/// own point where it lies in the ball). None where neither side is such a ball.
+fn ball_against(
+    k: &super::NativeKernel,
+    a: &crate::DistanceTarget,
+    b: &crate::DistanceTarget,
+) -> crate::Result<Option<crate::DistanceResult>> {
+    use crate::{DistanceLocation, DistanceTarget};
+    let ball = |t: &DistanceTarget| -> Option<(P3, f64, std::sync::Arc<Body>)> {
+        let DistanceTarget::Solid(id) = *t else {
+            return None;
+        };
+        let body = k.entry(id).ok()?.body.clone();
+        let face = body.faces.first()?;
+        let Surface::Sphere { f, r } = &face.surf else {
+            return None;
+        };
+        // (Its face facing out: a ball, not the space round a hollow.)
+        let whole = body.faces.len() == 1
+            && body.solids.len() == 1
+            && body.shells.len() == 1
+            && body.shells[0].closed
+            && super::classify::outward_sign(face) == Some(1.0);
+        whole.then_some((f.o, *r, body))
+    };
+    let (ball_is_a, (c, r, body), other) = if let Some(x) = ball(a) {
+        (true, x, b)
+    } else if let Some(x) = ball(b) {
+        (false, x, a)
+    } else {
+        return Ok(None);
+    };
+    // (Two balls: their own closed form.)
+    if ball(other).is_some() {
+        return Ok(None);
+    }
+    let near = kernel_distance(k, &DistanceTarget::Point(c), other, Sense::Min)?;
+    let q = near.b;
+    let (dist, on_ball, at_ball) = if near.distance >= r {
+        let p = c + (q - c) * (r / near.distance);
+        let (u, v) = body.faces[0].surf.project(&p, None);
+        (
+            near.distance - r,
+            p,
+            DistanceLocation::Face(crate::FaceId(0), u, v),
+        )
+    } else {
+        // The target's nearest point lies in the ball: the two share it.
+        (0.0, q, DistanceLocation::Point)
+    };
+    let (qa, la, qb, lb) = if ball_is_a {
+        (on_ball, at_ball, q, near.b_at)
+    } else {
+        (q, near.b_at, on_ball, at_ball)
+    };
+    Ok(Some(crate::DistanceResult {
+        distance: dist,
+        a: qa,
+        b: qb,
+        a_at: la,
+        b_at: lb,
+    }))
+}
+
 /// The nearest points of two whole spheres (bodies of one closed face on a sphere, each the
 /// target as its boundary or as its solid), in closed form along the line of their centres: apart,
 /// their gap; crossing, 0 on the circle where they meet; one inside the other, the gap between
@@ -1226,6 +1303,125 @@ fn two_spheres(
     })
 }
 
+/// The core of a face bulging out round a centre or an axis (a sphere's centre, a cylinder's
+/// axis), its radius: what [`held_between_cores`] probes between.
+fn round_core(f: &super::topo::Face) -> Option<(P3, Option<V3>, f64)> {
+    if super::classify::outward_sign(f) != Some(1.0) {
+        return None;
+    }
+    match &f.surf {
+        Surface::Sphere { f: fr, r } => Some((fr.o, None, *r)),
+        Surface::Cylinder { f: fr, r } => Some((fr.o, Some(fr.z), *r)),
+        _ => None,
+    }
+}
+
+/// How many pairs of round faces [`held_between_cores`] tries.
+const CORE_PAIRS: usize = 16;
+
+/// [`kernel_distance`]'s answer where two solids share a point between their round faces: two
+/// cylinders (or a sphere and a cylinder, two spheres) overlapping by a hair hold none of each
+/// other's vertices, but where their round faces overlap, the point on the shortest segment
+/// between their cores (centres, axes) at `(r₁ + D − r₂) / 2` from the first, `D` the segment's
+/// length, lies in both rounds. It is asked of both solids: distance 0 where both hold it.
+fn held_between_cores(
+    k: &super::NativeKernel,
+    a: &crate::DistanceTarget,
+    b: &crate::DistanceTarget,
+) -> crate::Result<Option<crate::DistanceResult>> {
+    use crate::{DistanceLocation, DistanceTarget, Kernel, PointClass};
+    let (DistanceTarget::Solid(ia), DistanceTarget::Solid(ib)) = (*a, *b) else {
+        return Ok(None);
+    };
+    let (ea, eb) = (k.entry(ia)?, k.entry(ib)?);
+    let cores = |b: &Body| -> Vec<(P3, Option<V3>, f64)> {
+        b.faces.iter().filter_map(round_core).collect()
+    };
+    let (ca, cb) = (cores(&ea.body), cores(&eb.body));
+    if ca.is_empty() || cb.is_empty() || ca.len() * cb.len() > CORE_PAIRS {
+        return Ok(None);
+    }
+    let (bba, bbb) = (ea.body.bbox(), eb.body.bbox());
+    // The nearest points of two cores, each a point or a line.
+    let nearest = |(p, u): (P3, Option<V3>), (q, v): (P3, Option<V3>)| -> (P3, P3) {
+        match (u, v) {
+            (None, None) => (p, q),
+            (Some(u), None) => (p + u * (q - p).dot(&u) / u.norm_squared(), q),
+            (None, Some(v)) => (p, q + v * (p - q).dot(&v) / v.norm_squared()),
+            (Some(u), Some(v)) => {
+                let w = p - q;
+                let (aa, bb, cc, dd, ee) = (u.dot(&u), u.dot(&v), v.dot(&v), u.dot(&w), v.dot(&w));
+                let den = aa * cc - bb * bb;
+                if den <= 1e-12 * aa * cc {
+                    // Parallel: any foot of one on the other; the middle of where both boxes
+                    // reach along them is asked below.
+                    (p, q + v * (p - q).dot(&v) / cc)
+                } else {
+                    let s = (bb * ee - cc * dd) / den;
+                    let t = (aa * ee - bb * dd) / den;
+                    (p + u * s, q + v * t)
+                }
+            }
+        }
+    };
+    let mut tried = Vec::new();
+    for &(pa, ua, ra) in &ca {
+        for &(pb, ub, rb) in &cb {
+            let (mut x, mut y) = nearest((pa, ua), (pb, ub));
+            // Parallel axes: their nearest points taken at the middle of the span the two
+            // boxes share along them.
+            if let (Some(u), Some(v)) = (ua, ub)
+                && u.normalize().cross(&v.normalize()).norm() <= 1e-9
+            {
+                let u = u.normalize();
+                let span = |bb: &super::math::Bbox| {
+                    // (The box's reach along u: its centre's place, give or take its half
+                    // extents' projections.)
+                    let c = (bb.min.coords + bb.max.coords) * 0.5;
+                    let h = (bb.max - bb.min) * 0.5;
+                    let t = (P3::from(c) - pa).dot(&u);
+                    let w = h.x * u.x.abs() + h.y * u.y.abs() + h.z * u.z.abs();
+                    (t - w, t + w)
+                };
+                let ((a0, a1), (b0, b1)) = (span(&bba), span(&bbb));
+                let (lo, hi) = (a0.max(b0), a1.min(b1));
+                if lo > hi {
+                    continue;
+                }
+                let m = 0.5 * (lo + hi);
+                x = pa + u * m;
+                y = x + (pb - x) - u * (pb - x).dot(&u);
+            }
+            let d = (y - x).norm();
+            if d >= ra + rb || d <= 0.0 {
+                continue;
+            }
+            let p = x + (y - x) * ((ra + d - rb) / (2.0 * d));
+            if bba.contains(&p) && bbb.contains(&p) {
+                tried.push(p);
+            }
+        }
+    }
+    for p in tried {
+        if k.classify(ia, p, super::tol::POINT)? == PointClass::Inside
+            && k.classify(ib, p, super::tol::POINT)? == PointClass::Inside
+        {
+            let at = DistanceLocation::Point;
+            return Ok(Some(crate::DistanceResult {
+                distance: 0.0,
+                a: p,
+                b: p,
+                a_at: at,
+                b_at: at,
+            }));
+        }
+    }
+    Ok(None)
+}
+
+/// How many of a body's vertices and edge middles [`held`] asks a solid about.
+const HELD_TRIES: usize = 16;
+
 /// [`kernel_distance`]'s answer where a [`crate::DistanceTarget::Solid`] holds a point of the
 /// other side inside it: distance 0 there. Where neither holds the other, the two are apart or
 /// their boundaries meet, and the boundaries' measure is the answer. One point of each shell of a
@@ -1259,8 +1455,9 @@ fn held(
             DistanceTarget::Face(id, f) => face_point(id, f.0 as usize)?.into_iter().collect(),
             DistanceTarget::Body(id) | DistanceTarget::Solid(id) => {
                 let en = k.entry(id)?;
+                let b = &en.body;
                 let mut out = Vec::new();
-                for sh in &en.body.shells {
+                for sh in &b.shells {
                     if let Some(p) = sh
                         .faces
                         .iter()
@@ -1269,6 +1466,24 @@ fn held(
                         out.push(p);
                     }
                 }
+                // Then its vertices and the middles of its edges, a few spread over them: solids
+                // sharing a fair part of their volume hold some of each other's (as springrep's
+                // distance asks first), and they cost nothing to find, where a face's point
+                // inside it is a polygon scan.
+                let corners: Vec<P3> = b
+                    .verts
+                    .iter()
+                    .map(|v| v.p)
+                    .chain(
+                        b.edges
+                            .iter()
+                            .filter(|e| !e.degenerate)
+                            .map(|e| e.curve.point(0.5 * (e.t[0] + e.t[1]))),
+                    )
+                    .collect();
+                let n = corners.len();
+                let tries = n.min(HELD_TRIES);
+                out.extend((0..tries).map(|i| corners[i * n / tries]));
                 out
             }
         })

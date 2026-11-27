@@ -1732,7 +1732,7 @@ pub struct Classifier<'a> {
 /// the face's outward normal (its surface's own, turned by its sense) against the distance's
 /// gradient at a point of the face (a mirrored ball's frame turns its normal round, not its
 /// distance). None where either can't be had there.
-fn outward_sign(f: &Face) -> Option<f64> {
+pub(crate) fn outward_sign(f: &Face) -> Option<f64> {
     let ((u0, u1), (v0, v1)) = f.surf.param_box();
     let (u, v) = (0.5 * (u0 + u1), 0.5 * (v0 + v1));
     let (u, v) = if u.is_finite() && v.is_finite() {
