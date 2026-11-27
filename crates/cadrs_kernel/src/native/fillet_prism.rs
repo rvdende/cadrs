@@ -624,6 +624,326 @@ pub(crate) fn prism_uprights(
     ((v0 - removed - v1).abs() <= 1e-9 * v0.abs().max(1.0)).then_some((nb, src))
 }
 
+/// [`super::fillet`]'s conic rounds of a prism's upright edges (`edges`, each along the
+/// prism's axis between two walls meeting convexly), set back `setback` along each wall, built
+/// directly as [`prism_uprights`] builds circular ones: each corner's section is the rational
+/// quadratic on the two setback points with the corner as its middle pole, weighted for `rho`,
+/// and the round is that conic extruded up the corner, its p-curves exact. The section taken off
+/// (the corner's triangle less the conic's segment, measured from the corner) is integrated, and
+/// the result's volume held to it. None for any other edge, or a result that fails its checks.
+pub(crate) fn prism_conic_uprights(
+    b: &Body,
+    input: BodyId,
+    edges: &[usize],
+    setback: f64,
+    rho: f64,
+) -> Option<(Body, Vec<Vec<FaceSrc>>)> {
+    // The conic's middle pole's weight: ρ is how far its shoulder lies from the chord toward
+    // the corner, w = ρ / (1 − ρ) (a parabola at ½).
+    let w = rho / (1.0 - rho);
+    if b.solids.len() != 1
+        || b.shells.len() != 1
+        || !(setback > 0.0)
+        || !(w > 0.0 && w.is_finite())
+        || edges.is_empty()
+    {
+        return None;
+    }
+    if b.faces
+        .iter()
+        .any(|f| !matches!(f.surf, Surface::Plane { .. }) || f.loops.len() != 1)
+    {
+        return None;
+    }
+    let Curve::Line { d, .. } = b.edges[*edges.first()?].curve else {
+        return None;
+    };
+    let axis = d.normalize();
+    let normals: Vec<V3> = (0..b.faces.len())
+        .map(|fi| plane_normal(b, fi))
+        .collect::<Option<_>>()?;
+    let caps: Vec<usize> = (0..b.faces.len())
+        .filter(|&fi| normals[fi].dot(&axis).abs() > 1.0 - tol::ANGULAR)
+        .collect();
+    let [c0, c1] = caps[..] else { return None };
+    let (top, bottom) = if normals[c0].dot(&axis) > 0.0 {
+        (c0, c1)
+    } else {
+        (c1, c0)
+    };
+    if normals[bottom].dot(&axis) > 0.0
+        || (0..b.faces.len())
+            .any(|fi| fi != top && fi != bottom && normals[fi].dot(&axis).abs() > tol::ANGULAR)
+    {
+        return None;
+    }
+    let faces_of = |e: usize| -> Vec<usize> {
+        (0..b.faces.len())
+            .filter(|&fi| b.faces[fi].loops.iter().flatten().any(|c| c.edge == e))
+            .collect()
+    };
+    // The coedge of a cap's loop that ends at vertex v, its index.
+    let ending = |fi: usize, v: usize| {
+        let lp = &b.faces[fi].loops[0];
+        lp.iter().position(|c| {
+            let e = &b.edges[c.edge];
+            (if c.fwd { e.v[1] } else { e.v[0] }) == v
+        })
+    };
+    let line_t = |c: &Curve, p: &P3| match c {
+        Curve::Line { o, d } => Some((p - o).dot(d) / d.norm_squared()),
+        _ => None,
+    };
+    let mut nb = b.clone();
+    let mut src: Vec<Vec<FaceSrc>> = (0..b.faces.len())
+        .map(|i| vec![FaceSrc::Input(i)])
+        .collect();
+    let mut removed = 0.0;
+    let mut top_arcs: Vec<(usize, usize)> = Vec::new();
+    let mut bottom_arcs: Vec<(usize, usize)> = Vec::new();
+    for &e in edges {
+        let ed = &b.edges[e];
+        let Curve::Line { o, d } = ed.curve else {
+            return None;
+        };
+        if ed.degenerate || d.normalize().cross(&axis).norm() > tol::ANGULAR {
+            return None;
+        }
+        let [p0, p1] = [b.verts[ed.v[0]].p, b.verts[ed.v[1]].p];
+        let (vt, vb) = if (p0 - p1).dot(&axis) > 0.0 {
+            (ed.v[0], ed.v[1])
+        } else {
+            (ed.v[1], ed.v[0])
+        };
+        let (pt, pb) = (b.verts[vt].p, b.verts[vb].p);
+        let h = (pt - pb).dot(&axis);
+        // The walls in the top cap's order: w1's top edge comes in to the corner, w2's leaves.
+        let it = ending(top, vt)?;
+        let lt = &b.faces[top].loops[0];
+        let (e1t, e2t) = (lt[it].edge, lt[(it + 1) % lt.len()].edge);
+        let wall_of = |te: usize| faces_of(te).into_iter().find(|&fi| fi != top);
+        let (w1, w2) = (wall_of(e1t)?, wall_of(e2t)?);
+        let mut ws = faces_of(e);
+        ws.sort_unstable();
+        let mut want = vec![w1, w2];
+        want.sort_unstable();
+        if ws != want || w1 == w2 {
+            return None;
+        }
+        // Their bottom edges: the bottom cap's loop runs the other way round.
+        let ib = ending(bottom, vb)?;
+        let lb = &b.faces[bottom].loops[0];
+        let (e2b, e1b) = (lb[ib].edge, lb[(ib + 1) % lb.len()].edge);
+        if wall_of_bottom(b, &faces_of, bottom, e1b) != Some(w1)
+            || wall_of_bottom(b, &faces_of, bottom, e2b) != Some(w2)
+        {
+            return None;
+        }
+        // Along each wall away from the corner, and the angle between them.
+        let away = |te: usize| {
+            let te = &b.edges[te];
+            let other = if te.v[0] == vt { te.v[1] } else { te.v[0] };
+            (b.verts[other].p - pt).normalize()
+        };
+        let (t1, t2) = (away(e1t), away(e2t));
+        let phi = t1.dot(&t2).clamp(-1.0, 1.0).acos();
+        // Convex: along one wall away from the corner lies inside the other's half-space.
+        if t1.dot(&normals[w2]) >= -tol::ANGULAR || phi < 1e-3 || phi > std::f64::consts::PI - 1e-3
+        {
+            return None;
+        }
+        let s = setback;
+        let (a1, a2, b1, b2) = (pt + t1 * s, pt + t2 * s, pb + t1 * s, pb + t2 * s);
+        // (Each wall must keep some of its length past the setback.)
+        let wall_len = |te: usize| {
+            let te = &b.edges[te];
+            (b.verts[te.v[0]].p - b.verts[te.v[1]].p).norm()
+        };
+        if s >= wall_len(e1t) * (1.0 - 1e-9) || s >= wall_len(e2t) * (1.0 - 1e-9) {
+            return None;
+        }
+        // The corner's vertices moved to w1's side; new ones on w2's.
+        nb.verts[vt].p = a1;
+        nb.verts[vb].p = b1;
+        nb.verts.push(Vertex {
+            p: a2,
+            tol: TOL_MIN,
+        });
+        let va2 = nb.verts.len() - 1;
+        nb.verts.push(Vertex {
+            p: b2,
+            tol: TOL_MIN,
+        });
+        let vb2 = nb.verts.len() - 1;
+        // The wall edges trimmed at the corner (w2's moved to its new vertices).
+        for (we, from, to, newv) in [
+            (e1t, vt, a1, vt),
+            (e1b, vb, b1, vb),
+            (e2t, vt, a2, va2),
+            (e2b, vb, b2, vb2),
+        ] {
+            let edge = &mut nb.edges[we];
+            let slot = if edge.v[0] == from {
+                0
+            } else if edge.v[1] == from {
+                1
+            } else {
+                return None;
+            };
+            edge.t[slot] = line_t(&edge.curve, &to)?;
+            edge.v[slot] = newv;
+            if !(edge.t[1] - edge.t[0] > 1e-9 * (1.0 + size_of(b))) {
+                return None;
+            }
+        }
+        // The upright: w1's moved along w1, a new one along w2.
+        let (s1, s2) = (t1 * s, t2 * s);
+        nb.edges[e].curve = Curve::Line { o: o + s1, d };
+        let map = |v: usize| if v == vt { va2 } else { vb2 };
+        nb.edges.push(Edge {
+            curve: Curve::Line { o: o + s2, d },
+            t: ed.t,
+            v: [map(ed.v[0]), map(ed.v[1])],
+            degenerate: false,
+            tol: TOL_MIN,
+        });
+        let e2 = nb.edges.len() - 1;
+        for (w, edge) in [(w1, e), (w2, e2)] {
+            let surf = nb.faces[w].surf.clone();
+            let curve = nb.edges[edge].curve.clone();
+            for co in nb.faces[w].loops.iter_mut().flatten() {
+                if co.edge == e {
+                    co.edge = edge;
+                    co.pc = pcurve(&surf, &curve, ed.t[0], ed.t[1], None);
+                }
+            }
+        }
+        // The conics, from w1's side to w2's: the rational quadratic on a1, the corner and a2.
+        let conic = |q0: P3, q1: P3, q2: P3| {
+            Curve::nurbs(super::nurbs::NurbsCurve {
+                degree: 2,
+                knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                cps: vec![
+                    super::nurbs::hom(&q0, 1.0),
+                    super::nurbs::hom(&q1, w),
+                    super::nurbs::hom(&q2, 1.0),
+                ],
+            })
+        };
+        let (ctop, cbot) = (conic(a1, pt, a2), conic(b1, pb, b2));
+        let add = |c: Curve, v0: usize, v1: usize, nb: &mut Body| {
+            nb.edges.push(Edge {
+                curve: c,
+                t: [0.0, 1.0],
+                v: [v0, v1],
+                degenerate: false,
+                tol: TOL_MIN,
+            });
+            nb.edges.len() - 1
+        };
+        let at = add(ctop, vt, va2, &mut nb);
+        let ab = add(cbot.clone(), vb, vb2, &mut nb);
+        top_arcs.push((e1t, at));
+        bottom_arcs.push((e2b, ab));
+        // The blend: the bottom conic extruded up the corner, u along the conic, v the height.
+        let surf = Surface::Extrusion {
+            c: cbot.clone(),
+            d: axis * h,
+        };
+        let bis = (t1 + t2).normalize();
+        let (u, v) = (0.5, 0.5);
+        let sense = surf.normal(u, v).dot(&(-bis)) > 0.0;
+        let down = nb.edges[e].v[0] == vt;
+        let mut lp: Vec<(usize, bool)> = vec![(at, false), (e, down), (ab, true), (e2, !down)];
+        let w1_fwd = nb.faces[w1]
+            .loops
+            .iter()
+            .flatten()
+            .find(|c| c.edge == e)?
+            .fwd;
+        if w1_fwd == down {
+            lp.reverse();
+            for c in lp.iter_mut() {
+                c.1 = !c.1;
+            }
+        }
+        // Exact p-curves: the conics at v = 1 and 0, the uprights at u = 0 (w1's) and 1, each
+        // run as its edge's parameter runs.
+        let pc_of = |edge: usize| -> Option<Curve> {
+            let ee = &nb.edges[edge];
+            Some(if edge == at || edge == ab {
+                let v = if edge == at { 1.0 } else { 0.0 };
+                Curve::Line {
+                    o: P3::new(0.0, v, 0.0),
+                    d: V3::new(1.0, 0.0, 0.0),
+                }
+            } else {
+                // An upright: v at its parameter t from where it meets the bottom.
+                let u = if edge == e { 0.0 } else { 1.0 };
+                let Curve::Line { o, d } = &ee.curve else {
+                    return None;
+                };
+                let base = if u == 0.0 { b1 } else { b2 };
+                let v0 = (o - base).dot(&axis) / h;
+                let dv = d.dot(&axis) / h;
+                Curve::Line {
+                    o: P3::new(u, v0, 0.0),
+                    d: V3::new(0.0, dv, 0.0),
+                }
+            })
+        };
+        let lp: Vec<Coedge> = lp
+            .into_iter()
+            .map(|(edge, fwd)| {
+                Some(Coedge {
+                    edge,
+                    fwd,
+                    pc: pc_of(edge)?,
+                })
+            })
+            .collect::<Option<_>>()?;
+        nb.faces.push(Face {
+            surf,
+            sense,
+            loops: vec![lp],
+        });
+        let fi = nb.faces.len() - 1;
+        nb.shells[0].faces.push(fi);
+        src.push(vec![FaceSrc::New(Origin::FromEdge {
+            body: input,
+            edge: EdgeId(e as u64),
+        })]);
+        // The corner's section taken off: the triangle less the conic's segment, by Green's
+        // theorem round corner → b1 → conic → b2 → corner, in the plane square to the axis.
+        let ex = t1;
+        let ey = axis.cross(&ex);
+        let flat = |q: &P3| ((q - pb).dot(&ex), (q - pb).dot(&ey));
+        let area = integrate(0.0, 1.0, 4, &GAUSS16, |t| {
+            let (q, dq, _) = cbot.d2(t);
+            let (px, py) = flat(&q);
+            0.5 * (px * dq.dot(&ey) - py * dq.dot(&ex))
+        });
+        // (The segments corner → a1 and a2 → corner pass through the corner: no area.)
+        removed += area.abs() * h;
+    }
+    // The caps' loops take each arc after the wall edge it follows.
+    for (cap, arcs, fwd) in [(top, &top_arcs, true), (bottom, &bottom_arcs, false)] {
+        let surf = nb.faces[cap].surf.clone();
+        for &(after, arc) in arcs {
+            let lp = &mut nb.faces[cap].loops[0];
+            let i = lp.iter().position(|c| c.edge == after)?;
+            let ee = &nb.edges[arc];
+            let pc = pcurve(&surf, &ee.curve, ee.t[0], ee.t[1], None);
+            lp.insert(i + 1, Coedge { edge: arc, fwd, pc });
+        }
+    }
+    if !nb.check_with(CheckLevel::Fast).is_empty() {
+        return None;
+    }
+    let (v0, v1) = (super::mass::input_volume(b), super::mass::body_volume(&nb));
+    ((v0 - removed - v1).abs() <= 1e-9 * v0.abs().max(1.0)).then_some((nb, src))
+}
+
 fn size_of(b: &Body) -> f64 {
     b.bbox().diagonal()
 }

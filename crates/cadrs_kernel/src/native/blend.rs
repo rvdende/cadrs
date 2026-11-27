@@ -2934,6 +2934,19 @@ pub fn fillet(
             }
         }
     }
+    // A prism's upright edges with a conic section of a setback: built directly
+    // ([`super::fillet_prism::prism_conic_uprights`]), each corner of the section a conic.
+    if let (FilletSize::Setback(sb), FilletProfile::Conic { rho }) = (spec.size, spec.profile) {
+        let es: Vec<usize> = all.iter().map(|e| e.0 as usize).collect();
+        if let Some((out, src)) = super::fillet_prism::prism_conic_uprights(&b, body, &es, sb, rho)
+        {
+            let res = Tracked { body: out, src }.into_result(k, body);
+            if !spec.allow_overflow {
+                check_overflow(k, body, &all, &res)?;
+            }
+            return Ok(res);
+        }
+    }
     // (A failure of the tool names the local fillet's too: the stage that gave up first.)
     let named = |e: KernelError| match &local_error {
         Some(first) => e.after("the local fillet", first),
