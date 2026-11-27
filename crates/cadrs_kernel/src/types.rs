@@ -1671,6 +1671,18 @@ pub struct VertexInfo {
     /// The edges that end at it.
     pub edges: Vec<EdgeId>,
 }
+/// How a mesh is made ([`crate::Kernel::tessellate_quality`]): `Fast` for the viewport, a mesh
+/// seeded coarsely and refined only where it misses the chord (a face's bends in one place
+/// don't fill the rest of it with lines); `Accurate` for exports and measurement, seeded as
+/// finely as the surface bends everywhere. Both keep within the chord and angle asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum TessQuality {
+    /// Coarse seeding, refined where needed: quick, few triangles.
+    Fast,
+    /// Seeding by the surface's bends all over: the default.
+    #[default]
+    Accurate,
+}
 
 /// How finely to tessellate: the largest distance from a triangle or edge segment to the exact
 /// surface (mm), and the largest angle between neighbouring normals (radians).

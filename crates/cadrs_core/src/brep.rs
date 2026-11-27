@@ -697,8 +697,14 @@ pub fn solid_of(
     op: Option<OpId>,
 ) -> Result<Solid, String> {
     let across = k.size_hint(body).unwrap_or(0.0);
+    // (On screen: seeded coarsely and refined where the chord asks, not as finely as a face's
+    // tightest bend all over it: a face blend's sheet took 23 s to mesh for the viewport.)
     let mesh = k
-        .tessellate(body, tessellation_for(across))
+        .tessellate_quality(
+            body,
+            tessellation_for(across),
+            cadrs_kernel::TessQuality::Fast,
+        )
         .map_err(|e| e.to_string())?;
     // (A length only to tell a sliver: exact below `SLIVER`.)
     let edge_info = k.edges_shown(body, SLIVER).map_err(|e| e.to_string())?;

@@ -1473,6 +1473,15 @@ pub trait Kernel {
     /// ```
     fn tessellate(&self, body: BodyId, quality: Tessellation) -> Result<TriMesh>;
 
+    /// [`Self::tessellate`] made `mode`'s way: [`TessQuality::Fast`] for the viewport,
+    /// [`TessQuality::Accurate`] (what `tessellate` makes) for exports and measurement.
+    fn tessellate_quality(
+        &self,
+        body: BodyId,
+        quality: Tessellation,
+        mode: TessQuality,
+    ) -> Result<TriMesh>;
+
     /// The number of solids in a body (0 for a surface body).
     fn solid_count(&self, body: BodyId) -> Result<usize>;
 

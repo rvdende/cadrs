@@ -333,6 +333,7 @@ fn check_file(path: &Path) -> Result<usize, String> {
 }
 
 #[test]
+#[ignore = "needs OCCT's dataset: set CADRS_OCCT_DATA to its folder, then run with --ignored"]
 fn occt_dataset_step_and_iges() {
     let root = dataset();
     let all = files(&root);

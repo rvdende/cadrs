@@ -2877,8 +2877,18 @@ impl Kernel for NativeKernel {
     }
 
     fn tessellate(&self, body: BodyId, quality: Tessellation) -> Result<TriMesh> {
+        self.tessellate_quality(body, quality, TessQuality::Accurate)
+    }
+
+    fn tessellate_quality(
+        &self,
+        body: BodyId,
+        quality: Tessellation,
+        mode: TessQuality,
+    ) -> Result<TriMesh> {
         let t = web_time::Instant::now();
-        let m = self.tessellate_with(body, &tess::TessParams::try_from(quality)?)?;
+        let p = tess::TessParams::try_from(quality)?.with_quality(mode);
+        let m = self.tessellate_with(body, &p)?;
         slow("tessellate", t, self.get(body)?);
         Ok(m)
     }
