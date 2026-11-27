@@ -3375,6 +3375,8 @@ asm-mate-solve = Solve
 asm-mate-solve-all = Solve all mates
 # A toast when a mate's pick can't solve: the new mate and the moving part's other mates can't all hold.
 asm-mate-cant-hold = This mate can't hold together with the part's other mates: the parts stay where they are
+asm-mates-cant-all-hold = { $mates } can't all hold together: the parts stay where they are
+asm-mates-the-mates = The mates
 
 ## crates/cadrs_app/src/assembly/mate_display.rs
 # A banner while the Show mates mode is on (H is its key).
@@ -3385,6 +3387,7 @@ asm-show-mates-mode = Show mates mode (H): hover an instance, click to pin
 asm-mates-an-instance = an instance
 # { $part } is the name of the part (or "an instance") whose geometry the mate lost.
 asm-mates-missing-reference = Missing reference: the entity this mate was on is gone from { $part } (its source changed). Edit the mate and pick it again.
+asm-mates-doesnt-hold = This mate doesn't hold: it misses by { $miss }, as it can't hold together with the other mates. Edit, suppress or delete one of them.
 # A tooltip line: the row is a group of mates (a mate type that holds parts together as one).
 asm-mates-group = Group
 # A tooltip line; { $type } is a mate type (Fastened, Revolute…).

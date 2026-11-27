@@ -2280,6 +2280,8 @@ asm-mate-animate-dof = Animeer koppeling se vryheidsgraad
 asm-mate-solve = Los op
 asm-mate-solve-all = Los alle koppelings op
 asm-mate-cant-hold = Hierdie koppeling kan nie saam met die onderdeel se ander koppelings hou nie: die onderdele bly waar hulle is
+asm-mates-cant-all-hold = { $mates } kan nie almal saam hou nie: die onderdele bly waar hulle is
+asm-mates-the-mates = Die koppelings
 
 ## crates/cadrs_app/src/assembly/mate_display.rs
 asm-show-mates-mode = Wys-koppelings-modus (H): beweeg oor 'n instansie, klik om vas te pen
@@ -2287,6 +2289,7 @@ asm-show-mates-mode = Wys-koppelings-modus (H): beweeg oor 'n instansie, klik om
 ## crates/cadrs_app/src/assembly/mates_list.rs
 asm-mates-an-instance = 'n instansie
 asm-mates-missing-reference = Ontbrekende verwysing: die entiteit waarop hierdie koppeling was, is weg uit { $part } (sy bron het verander). Wysig die koppeling en kies dit weer.
+asm-mates-doesnt-hold = Hierdie koppeling hou nie: dit mis met { $miss }, want dit kan nie saam met die ander koppelings hou nie. Wysig, onderdruk of skrap een van hulle.
 asm-mates-group = Groep
 asm-mates-type-mate = { $type }-koppeling
 asm-mates-angle-about-axis = { $angle } om { $axis }

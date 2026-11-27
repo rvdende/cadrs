@@ -2280,6 +2280,8 @@ asm-mate-animate-dof = Anima GDL dell'accoppiamento
 asm-mate-solve = Risolvi
 asm-mate-solve-all = Risolvi tutti gli accoppiamenti
 asm-mate-cant-hold = Questo accoppiamento non può valere insieme agli altri accoppiamenti della parte: le parti restano dove sono
+asm-mates-cant-all-hold = { $mates } non possono valere tutti insieme: le parti restano dove sono
+asm-mates-the-mates = Gli accoppiamenti
 
 ## crates/cadrs_app/src/assembly/mate_display.rs
 asm-show-mates-mode = Modalità mostra accoppiamenti (H): passare sopra un'istanza, fare clic per fissarla
@@ -2287,6 +2289,7 @@ asm-show-mates-mode = Modalità mostra accoppiamenti (H): passare sopra un'istan
 ## crates/cadrs_app/src/assembly/mates_list.rs
 asm-mates-an-instance = un'istanza
 asm-mates-missing-reference = Riferimento mancante: l'entità su cui si trovava questo accoppiamento non esiste più in { $part } (la sua sorgente è cambiata). Modificare l'accoppiamento e sceglierla di nuovo.
+asm-mates-doesnt-hold = Questo accoppiamento non vale: manca di { $miss }, perché non può valere insieme agli altri accoppiamenti. Modificare, sopprimere o eliminare uno di essi.
 asm-mates-group = Gruppo
 asm-mates-type-mate = Accoppiamento { $type }
 asm-mates-angle-about-axis = { $angle } attorno a { $axis }

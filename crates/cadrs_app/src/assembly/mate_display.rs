@@ -22,7 +22,7 @@ use cadrs_core::assembly::{Assembly, InstanceId, Pose};
 use cadrs_ui::i18n::{Translated, tr};
 use cadrs_ui::prelude::*;
 
-use super::connectors::{ConnectorGizmos, ConnectorHaloGizmos, draw_glyph};
+use super::connectors::{ConnectorGizmos, ConnectorHaloGizmos, draw_glyph, v3};
 use crate::parts::HoverParts;
 use crate::viewport::{
     Pick, PickRequest, PlaneHighlight, ViewportArea, ViewportRect, ViewportView,
@@ -271,11 +271,29 @@ fn draw_mates(
     mut line: Gizmos<ConnectorGizmos>,
     mut halo: Gizmos<ConnectorHaloGizmos>,
     mut flat_cache: Local<FlatCache>,
+    errors: Res<super::mates_list::MateErrors>,
 ) {
     let Some(doc) = doc else { return };
     let Some(model) = doc.active_element().and_then(|e| e.assembly_model()) else {
         return;
     };
+    // #193: a mate that doesn't hold, shown or not: a red line from one of its connectors to
+    // where the other should be, and both glyphs ringed red.
+    if !errors.unsatisfied.is_empty() {
+        let flat = flat_model(&doc, model, &mut flat_cache);
+        for id in errors.unsatisfied.keys() {
+            let Some((a, b)) = model
+                .mate(*id)
+                .and_then(|f| miss_ends(&flat, &asm.preview, f))
+            else {
+                continue;
+            };
+            halo.line(v3(a.origin), v3(b.origin), Color::srgb_u8(0x22, 0x26, 0x2b));
+            line.line(v3(a.origin), v3(b.origin), MISS);
+            draw_glyph(&mut line, &mut halo, &view.view, &a, MISS);
+            draw_glyph(&mut line, &mut halo, &view.view, &b, MISS);
+        }
+    }
     let ids = visible(model, &d, &h, &hover);
     if ids.is_empty() {
         return;
@@ -296,6 +314,30 @@ fn draw_mates(
         };
         draw_glyph(&mut line, &mut halo, &view.view, &frame, ring);
     }
+}
+
+/// A mate that doesn't hold, drawn in the view (#193).
+const MISS: Color = Color::srgb(0.93, 0.26, 0.26);
+
+/// A connector mate's two ends, where they are: its first connector and where its second puts
+/// the target (offset applied), which coincide while it holds.
+fn miss_ends(
+    model: &Assembly,
+    preview: &std::collections::HashMap<InstanceId, Pose>,
+    f: &MateFeature,
+) -> Option<(ConnectorFrame, ConnectorFrame)> {
+    let MateKind::Mate(m) = &f.kind else {
+        return None;
+    };
+    let world = |c: &cadrs_core::assembly::connector::MateConnector| {
+        let pose = preview
+            .get(&c.instance)
+            .copied()
+            .or_else(|| model.instance(c.instance).map(|x| x.pose))?;
+        Some(c.adjust(c.frame).moved(&pose))
+    };
+    let (a, b) = (world(m.connectors.first()?)?, world(m.connectors.get(1)?)?);
+    Some((a, m.target(&b)))
 }
 
 /// A mate's badge in the view.

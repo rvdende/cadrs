@@ -2280,6 +2280,8 @@ asm-mate-animate-dof = Animar GDL do posicionamento
 asm-mate-solve = Resolver
 asm-mate-solve-all = Resolver todos os posicionamentos
 asm-mate-cant-hold = Este posicionamento não pode valer junto com os outros posicionamentos da peça: as peças ficam onde estão
+asm-mates-cant-all-hold = { $mates } não podem valer todos juntos: as peças ficam onde estão
+asm-mates-the-mates = Os posicionamentos
 
 ## crates/cadrs_app/src/assembly/mate_display.rs
 asm-show-mates-mode = Modo mostrar posicionamentos (H): passe o mouse sobre uma instância, clique para fixar
@@ -2287,6 +2289,7 @@ asm-show-mates-mode = Modo mostrar posicionamentos (H): passe o mouse sobre uma 
 ## crates/cadrs_app/src/assembly/mates_list.rs
 asm-mates-an-instance = uma instância
 asm-mates-missing-reference = Referência ausente: a entidade em que este posicionamento estava não existe mais em { $part } (a origem dela mudou). Edite o posicionamento e escolha-a novamente.
+asm-mates-doesnt-hold = Este posicionamento não vale: erra por { $miss }, pois não pode valer junto com os outros posicionamentos. Edite, suprima ou exclua um deles.
 asm-mates-group = Grupo
 asm-mates-type-mate = Posicionamento: { $type }
 asm-mates-angle-about-axis = { $angle } em torno de { $axis }

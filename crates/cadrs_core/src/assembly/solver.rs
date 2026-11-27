@@ -88,7 +88,7 @@ use cadrs_sketch::Vec3;
 use nalgebra::{DMatrix, DVector, Matrix3, Vector3};
 
 use super::connector::{ConnectorFrame, MateConnector, SurfaceKind};
-use super::mate::{Dof, Mate, MateId, MateKind, MateType, dof_value};
+use super::mate::{Dof, Mate, MateFeature, MateId, MateKind, MateType, dof_value};
 use super::{Assembly, InstanceId, Pose};
 
 /// The length (mm) a radian weighs like.
@@ -122,6 +122,10 @@ pub struct SolveOptions {
     /// The snap keeps the mate's undriven free DOF where they are (Animate), instead of at 0
     /// (a pick, Reset).
     pub hold_free: bool,
+    /// The snap keeps an axis-only mate's axes on the side they are on (opposite: two faces
+    /// against each other) instead of lining them up as a pick and Reset do: for going to
+    /// recorded values (a named position, MCP's `set_mate_values`), measured on that side.
+    pub keep_sides: bool,
 }
 
 /// The instances that can't move: fixed, or grouped with a fixed instance.
@@ -153,6 +157,42 @@ pub fn mated_elsewhere(asm: &Assembly, instance: InstanceId, except: MateId) -> 
         })
 }
 
+/// How far off (mm) a mate may be at the stored placements and still count as holding: a solve
+/// stops at [`TOLERANCE`] and a drag at 1e-6 mm.
+pub const HELD: f64 = 1e-4;
+
+/// The mates that don't hold at the instances' placements (#193), each with how far it misses:
+/// the largest of its rows (mm; an angle as the distance it moves a point [`L`] from its axis).
+/// Measured, not solved, so it finds what a solve left: a compromise placement of mates that
+/// can't all hold, a mate added that can't hold with the others, a part whose geometry changed
+/// under its mates. Mates between fixed instances count too; limits don't.
+pub fn unsatisfied(
+    asm: &Assembly,
+    frame: &dyn Fn(&MateConnector) -> ConnectorFrame,
+) -> Vec<(MateId, f64)> {
+    // A constraint between ground bodies only isn't built (nothing can move to meet it): taken
+    // as free, every mate is measured.
+    let mut free = asm.clone();
+    for i in &mut free.instances {
+        i.fixed = false;
+    }
+    let p = Problem::new(&free, frame, &SolveOptions::default());
+    let mut out: Vec<(MateId, f64)> = Vec::new();
+    let mut r = Vec::new();
+    for c in p.cons.iter().filter(|c| c.is_mate) {
+        r.clear();
+        residuals(&c.rows, &p.worlds(c), &mut r);
+        let miss = r.iter().fold(0.0f64, |m, x| m.max(x.abs()));
+        if miss > HELD {
+            match out.iter_mut().find(|(m, _)| *m == c.mate) {
+                Some(e) => e.1 = e.1.max(miss),
+                None => out.push((c.mate, miss)),
+            }
+        }
+    }
+    out
+}
+
 /// The solved placements.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Solution {
@@ -162,6 +202,10 @@ pub struct Solution {
     /// The largest residual left (mm).
     pub residual: f64,
     pub iterations: usize,
+    /// The mates left out because they can't hold together with those before them in the list
+    /// (#193): the list's order is the mates' priority ([`solve`]). Every other mate holds at
+    /// `poses`. Empty when the solve converged.
+    pub broken: Vec<MateId>,
 }
 
 impl Solution {
@@ -981,15 +1025,27 @@ impl Problem {
 
     /// Places the first movable body of connector-mate constraint `ci` so the constraint holds
     /// exactly at the position `[x, y, z, angle]`.
-    fn snap(&mut self, ci: usize, at: [f64; 4]) -> Option<usize> {
+    fn snap(&mut self, ci: usize, at: [f64; 4], keep_side: bool) -> Option<usize> {
         let c = self.cons[ci].clone();
         if !c.pair {
             return None;
         }
         let (a, g) = (c.ends[0], c.ends[1]);
         // D = F₁⁻¹ G at the drive: G = F₁ · D.
-        let d = Pose::rotation_about([0.0; 3], [0.0, 0.0, 1.0], at[3])
+        let mut d = Pose::rotation_about([0.0; 3], [0.0, 0.0, 1.0], at[3])
             .then(&Pose::translation([at[0], at[1], at[2]]));
+        // A mate that holds only an axis (Revolute, Cylindrical, Planar, Parallel) holds with
+        // its axes opposite too: two faces against each other, whose connectors point opposite
+        // ways. Going to recorded values, the snap keeps the side the axes are on: lining them
+        // up turned the part over into the other (a Planar between a link's bottom and the top
+        // of the one under it), and the solve could then no longer reach the values. A half
+        // turn about X keeps G's X, so the angle and the translations read as they are driven.
+        if keep_side && !c.rows.contains(&Row::Rot3) {
+            let (fa, gw) = (self.world(&a), self.world(&g));
+            if v(fa.z).dot(&v(gw.z)) < 0.0 {
+                d = Pose::rotation_about([0.0; 3], [1.0, 0.0, 0.0], std::f64::consts::PI).then(&d);
+            }
+        }
         let place = |local: &ConnectorFrame, want: &ConnectorFrame| -> Pose {
             local.pose().inverse().then(&want.pose())
         };
@@ -1106,7 +1162,183 @@ impl Problem {
 /// Solves the assembly's mates (see the module doc). `frame` gives a connector's frame in its
 /// instance's coordinates, flip and reorient applied ([`MateConnector::local_frame`] on the
 /// source part as it is now).
+///
+/// When the mates can't all hold (#193), as few as possible break ([`Solution::broken`]) and the
+/// rest hold: no compromise that holds none of them. Of the mates the failed solve left off, the
+/// one whose leaving out lets every other hold breaks, the latest in the Mate Features list when
+/// several would (so a mate added last that conflicts is the one that breaks, and one mate never
+/// breaks four). When no one mate is enough, the one whose leaving out does the most good breaks
+/// and the rest are tried again; past [`BREAK_ROUNDS`], the list's order is the mates' priority:
+/// each is kept if it holds with those kept before it.
 pub fn solve(
+    asm: &Assembly,
+    frame: &dyn Fn(&MateConnector) -> ConnectorFrame,
+    opts: &SolveOptions,
+) -> Solution {
+    let all = solve_all(asm, frame, opts);
+    if all.converged || opts.snap_only {
+        return all;
+    }
+    let mut iterations = all.iterations;
+    if let Some(s) = fewest_broken(asm, frame, opts, all, &mut iterations) {
+        return s;
+    }
+    in_order(asm, frame, opts, iterations)
+}
+
+/// How many mates [`solve`] breaks one by one, each the one doing the most harm, before it
+/// takes the list's order instead.
+pub const BREAK_ROUNDS: usize = 4;
+
+/// The mate features the solver ranks: mates and relations (not groups).
+fn ranked(f: &MateFeature) -> bool {
+    f.mate().is_some() || f.relation().is_some()
+}
+
+/// `asm` without the mates `out`, the drives of `opts` on the others.
+fn without(asm: &Assembly, opts: &SolveOptions, out: &[MateId]) -> (Assembly, SolveOptions) {
+    let mut a = asm.clone();
+    a.mates.retain(|f| !out.contains(&f.id));
+    let o = SolveOptions {
+        movers: opts.movers.clone(),
+        drives: opts
+            .drives
+            .iter()
+            .filter(|d| !out.contains(&d.mate))
+            .copied()
+            .collect(),
+        keep_sides: opts.keep_sides,
+        ..Default::default()
+    };
+    (a, o)
+}
+
+/// The fewest mates broken ([`solve`]): each round, each mate the last solve left off (latest in
+/// the list first) is left out in turn; the first whose leaving out lets the rest hold ends it,
+/// else the one leaving the least residual breaks and the next round starts from its solve.
+fn fewest_broken(
+    asm: &Assembly,
+    frame: &dyn Fn(&MateConnector) -> ConnectorFrame,
+    opts: &SolveOptions,
+    failed: Solution,
+    iterations: &mut usize,
+) -> Option<Solution> {
+    let order: Vec<MateId> = asm
+        .mates
+        .iter()
+        .filter(|f| !f.suppressed && ranked(f))
+        .map(|f| f.id)
+        .collect();
+    let mut broken: Vec<MateId> = Vec::new();
+    let mut last = failed;
+    for _ in 0..BREAK_ROUNDS {
+        // The mates that miss where the last solve left the parts: the conflict.
+        let (mut at, _) = without(asm, opts, &broken);
+        for (i, p) in &last.poses {
+            if let Some(x) = at.instance_mut(*i) {
+                x.pose = *p;
+            }
+        }
+        let missing: Vec<MateId> = unsatisfied(&at, frame).into_iter().map(|m| m.0).collect();
+        let mut best: Option<(MateId, Solution)> = None;
+        for id in order.iter().rev().filter(|id| missing.contains(id)) {
+            let mut out = broken.clone();
+            out.push(*id);
+            let (trial, o) = without(asm, opts, &out);
+            let s = solve_all(&trial, frame, &o);
+            *iterations += s.iterations;
+            if s.converged {
+                return Some(Solution {
+                    residual: unsatisfied(&placed(asm, &s.poses), frame)
+                        .iter()
+                        .fold(0.0f64, |m, (_, x)| m.max(*x)),
+                    iterations: *iterations,
+                    converged: false,
+                    broken: out,
+                    poses: s.poses,
+                });
+            }
+            if best.as_ref().is_none_or(|(_, b)| s.residual < b.residual) {
+                best = Some((*id, s));
+            }
+        }
+        let (id, s) = best?;
+        broken.push(id);
+        last = s;
+    }
+    None
+}
+
+/// `asm` with its instances at `poses`.
+fn placed(asm: &Assembly, poses: &[(InstanceId, Pose)]) -> Assembly {
+    let mut a = asm.clone();
+    for (i, p) in poses {
+        if let Some(x) = a.instance_mut(*i) {
+            x.pose = *p;
+        }
+    }
+    a
+}
+
+/// The mates that can't all hold, solved in their list's order ([`solve`]).
+fn in_order(
+    asm: &Assembly,
+    frame: &dyn Fn(&MateConnector) -> ConnectorFrame,
+    opts: &SolveOptions,
+    mut iterations: usize,
+) -> Solution {
+    let order: Vec<MateId> = asm
+        .mates
+        .iter()
+        .filter(|f| !f.suppressed && ranked(f))
+        .map(|f| f.id)
+        .collect();
+    let mut at = asm.clone();
+    let mut kept: Vec<MateId> = Vec::new();
+    let mut broken = Vec::new();
+    for id in order {
+        let mut trial = at.clone();
+        trial
+            .mates
+            .retain(|f| !ranked(f) || f.id == id || kept.contains(&f.id));
+        let o = SolveOptions {
+            movers: opts.movers.clone(),
+            drives: opts
+                .drives
+                .iter()
+                .filter(|d| d.mate == id || kept.contains(&d.mate))
+                .copied()
+                .collect(),
+            keep_sides: opts.keep_sides,
+            ..Default::default()
+        };
+        let s = solve_all(&trial, frame, &o);
+        iterations += s.iterations;
+        if s.converged {
+            kept.push(id);
+            for (i, p) in &s.poses {
+                if let Some(x) = at.instance_mut(*i) {
+                    x.pose = *p;
+                }
+            }
+        } else {
+            broken.push(id);
+        }
+    }
+    let residual = unsatisfied(&at, frame)
+        .iter()
+        .fold(0.0f64, |m, (_, x)| m.max(*x));
+    Solution {
+        poses: at.instances.iter().map(|i| (i.id, i.pose)).collect(),
+        converged: broken.is_empty(),
+        residual: if broken.is_empty() { 0.0 } else { residual },
+        iterations,
+        broken,
+    }
+}
+
+/// Every mate at once ([`solve`] without the list's priority).
+fn solve_all(
     asm: &Assembly,
     frame: &dyn Fn(&MateConnector) -> ConnectorFrame,
     opts: &SolveOptions,
@@ -1116,7 +1348,7 @@ pub fn solve(
         && let Some(ci) = p.cons.iter().position(|c| c.mate == id && c.is_mate)
     {
         let at = p.snap_values(ci, &opts.drives, opts.hold_free);
-        if let Some(b) = p.snap(ci, at) {
+        if let Some(b) = p.snap(ci, at, opts.keep_sides) {
             // The snapped body does the moving.
             for (k, body) in p.bodies.iter_mut().enumerate() {
                 if body.var.is_some() {
@@ -1131,6 +1363,7 @@ pub fn solve(
             converged: true,
             residual: 0.0,
             iterations: 0,
+            broken: Vec::new(),
         };
     }
     let (_, _, mut its) = p.iterate(MAX_ITERATIONS);
@@ -1139,7 +1372,7 @@ pub fn solve(
     if !wrong.is_empty() {
         for k in wrong {
             let at = p.snap_values(k, &opts.drives, true);
-            p.snap(k, at);
+            p.snap(k, at, false);
         }
         its += p.iterate(MAX_ITERATIONS).2;
     }
@@ -1150,6 +1383,7 @@ pub fn solve(
         converged: ok,
         residual: res,
         iterations: its + c,
+        broken: Vec::new(),
     }
 }
 
@@ -1331,6 +1565,7 @@ pub fn drag(
         converged: res < DRAG_HELD,
         residual: res,
         iterations: its,
+        broken: Vec::new(),
     }
 }
 
