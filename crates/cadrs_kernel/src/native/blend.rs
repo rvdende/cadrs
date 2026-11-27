@@ -3456,6 +3456,34 @@ fn chain_sides(b: &Body, edges: &[EdgeId], opts: &ChamferOpts) -> ChamferOpts {
     }
 }
 
+/// Each of `edges`' distances on its two faces (in [`edge_sides`]' order), as [`chamfer`] puts
+/// them for `opts`, measured along the faces. None for an angle's chamfer.
+pub(crate) fn chamfer_distances(
+    b: &Body,
+    edges: &[EdgeId],
+    opts: &ChamferOpts,
+) -> Option<Vec<(usize, [f64; 2])>> {
+    let (d1, d2) = match opts.spec {
+        ChamferSpec::EqualDistance(d) => {
+            return Some(edges.iter().map(|e| (e.0 as usize, [d, d])).collect());
+        }
+        ChamferSpec::TwoDistances(a, c) => (a, c),
+        ChamferSpec::DistanceAngle { .. } => return None,
+    };
+    let opts = first_on_named(b, edges, chain_sides(b, edges, opts));
+    Some(
+        edges
+            .iter()
+            .map(|&e| {
+                let first = usize::from(opts.flip != opts.flipped.contains(&e));
+                let mut d = [d2, d2];
+                d[first] = d1;
+                (e.0 as usize, d)
+            })
+            .collect(),
+    )
+}
+
 /// `opts` (its sides explicit: [`chain_sides`]) with each edge that has one of its two faces
 /// among [`ChamferOpts::first_on`] flipped, or not, so that its first distance lies on that
 /// face.

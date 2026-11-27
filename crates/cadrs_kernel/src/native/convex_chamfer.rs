@@ -30,8 +30,9 @@ struct Half {
     tag: Tag,
 }
 
-/// Body `b`'s `edges` chamfered by `d` on both faces (measured along the faces square to the
-/// edge), each corner whose edges are all chamfered cut flat when `flat` (as
+/// Body `b`'s `edges` chamfered, each by its two distances on its two faces (in
+/// [`super::blend::edge_sides`]' order, measured along the faces square to the edge), each
+/// corner whose edges are all chamfered cut flat when `flat` (equal distances only: as
 /// [`super::blend::flat_corners`] cuts it). None unless `b` is a convex polyhedron (one closed
 /// shell of plane faces, one loop each, straight edges, every vertex under every face's plane),
 /// every corner where two or more chamfers meet either three edges' or cut flat, and every
@@ -39,12 +40,20 @@ struct Half {
 pub(crate) fn chamfer(
     k: &mut NativeKernel,
     body: BodyId,
-    edges: &[usize],
-    d: f64,
+    sized: &[(usize, [f64; 2])],
     flat: bool,
 ) -> Option<Result<OpResult>> {
     let b = std::sync::Arc::clone(k.get(body).ok()?);
-    if !(d > 0.0) || edges.is_empty() || b.solids.len() != 1 || b.shells.len() != 1 {
+    let edges: Vec<usize> = sized.iter().map(|x| x.0).collect();
+    let edges = &edges[..];
+    let d = sized.first()?.1[0];
+    let equal = sized.iter().all(|x| x.1 == [d, d]);
+    if sized.iter().any(|x| !(x.1[0] > 0.0 && x.1[1] > 0.0))
+        || (flat && !equal)
+        || edges.is_empty()
+        || b.solids.len() != 1
+        || b.shells.len() != 1
+    {
         return None;
     }
     // (The part's own size, however small: no floor at a millimetre.)
@@ -81,24 +90,34 @@ pub(crate) fn chamfer(
     }
     let ef = b.edge_faces();
     let chosen: std::collections::HashSet<usize> = edges.iter().copied().collect();
-    // Each chamfer's plane: through the lines `d` in from the edge on each of its faces.
-    for &e in edges {
-        let [f1, f2] = ef.get(e)? else {
-            return None;
-        };
-        let (n1, n2) = (halves[*f1].n, halves[*f2].n);
+    // Each chamfer's plane: through the lines its distances in from the edge on its faces.
+    for &(e, ds) in sized {
+        let [(f1, _), (f2, _)] = super::blend::edge_sides(&b, e).ok()?;
+        let _ = &ef;
+        let (n1, n2) = (halves[f1].n, halves[f2].n);
         let ed = &b.edges[e];
         let (p0, p1) = (b.verts[ed.v[0]].p, b.verts[ed.v[1]].p);
         let dir = (p1 - p0).try_normalize(tol::DEGENERATE)?;
-        // Into face 1, square to the edge.
-        let w = n1.cross(&dir).normalize();
-        let inside = face_middle(&b, *f1);
-        let w = if (inside - p0).dot(&w) < 0.0 { -w } else { w };
-        let m = (n1 + n2).try_normalize(tol::ANGULAR)?;
-        let q = p0 + w * d;
+        // Into each face, square to the edge.
+        let into = |n: V3, f: usize| {
+            let w = n.cross(&dir).normalize();
+            if (face_middle(&b, f) - p0).dot(&w) < 0.0 {
+                -w
+            } else {
+                w
+            }
+        };
+        let (q1, q2) = (p0 + into(n1, f1) * ds[0], p0 + into(n2, f2) * ds[1]);
+        let m = if ds[0] == ds[1] {
+            (n1 + n2).try_normalize(tol::ANGULAR)?
+        } else {
+            // (Square to the edge and to the chord between the two lines, outward.)
+            let m = dir.cross(&(q2 - q1)).try_normalize(tol::DEGENERATE)?;
+            if m.dot(&(n1 + n2)) < 0.0 { -m } else { m }
+        };
         halves.push(Half {
             n: m,
-            c: m.dot(&q.coords),
+            c: m.dot(&q1.coords),
             tag: Tag::Edge(e),
         });
     }
@@ -329,7 +348,13 @@ mod tests {
         let ids: Vec<usize> = edges.iter().map(|e| e.0 as usize).collect();
         let flat = corners == ChamferCorners::Flat;
         assert!(
-            super::chamfer(&mut k, a, &ids, d, flat).is_some(),
+            super::chamfer(
+                &mut k,
+                a,
+                &ids.iter().map(|&e| (e, [d, d])).collect::<Vec<_>>(),
+                flat
+            )
+            .is_some(),
             "not taken"
         );
         let general = super::super::blend::chamfer(&mut k, a, &edges, &opts).unwrap();

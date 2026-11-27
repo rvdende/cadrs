@@ -2002,17 +2002,14 @@ impl Kernel for NativeKernel {
                 }
                 super::blend::chamfers_fit(&b, &sized)?;
             }
-            // A convex polyhedron's equal chamfers: its planes' polytope, built at once.
-            if let (ChamferSpec::EqualDistance(d), ChamferMeasure::Offset) =
-                (opts.spec, opts.measurement)
-            {
+            // A convex polyhedron's chamfers by distances: its planes' polytope, built at once.
+            if opts.measurement == ChamferMeasure::Offset {
                 let b = k.get(body)?.clone();
-                let ids: Vec<usize> = super::blend::real_edges(&b, edges)?
-                    .iter()
-                    .map(|e| e.0 as usize)
-                    .collect();
+                let real = super::blend::real_edges(&b, edges)?;
                 let flat = opts.corners == ChamferCorners::Flat;
-                if let Some(r) = super::convex_chamfer::chamfer(k, body, &ids, d, flat) {
+                if let Some(sized) = super::blend::chamfer_distances(&b, &real, opts)
+                    && let Some(r) = super::convex_chamfer::chamfer(k, body, &sized, flat)
+                {
                     let r = k.dumped(&r);
                     return k.colored(r);
                 }
