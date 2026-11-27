@@ -58,6 +58,9 @@ pub struct HarnessOptions {
     /// A file to open at start: a native document or a model (`--open <path>`, or the path
     /// alone, as an editor takes one).
     pub open: Option<PathBuf>,
+    /// `--no-gpu` (headless only): no renderer at all. Nothing is drawn and screenshots fail,
+    /// but UI layout, picking, input and the document run as usual, on any machine (CI).
+    pub no_gpu: bool,
 }
 
 impl Default for HarnessOptions {
@@ -71,12 +74,14 @@ impl Default for HarnessOptions {
             data_dir: None,
             no_cursor: false,
             open: None,
+            no_gpu: false,
         }
     }
 }
 
 pub const USAGE: &str = "usage: cadrs [--headless] [--scenario <name>] [--window-size WxH] \
-                         [--out <dir>] [--data-dir <dir>] [--no-cursor] [[--open] <file>]";
+                         [--out <dir>] [--data-dir <dir>] [--no-cursor] [--no-gpu] \
+                         [[--open] <file>]";
 
 impl HarnessOptions {
     pub fn from_args(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
@@ -101,11 +106,15 @@ impl HarnessOptions {
                     o.data_dir = Some(args.next().ok_or("--data-dir needs a directory")?.into())
                 }
                 "--no-cursor" => o.no_cursor = true,
+                "--no-gpu" => o.no_gpu = true,
                 "--open" => o.open = Some(args.next().ok_or("--open needs a file")?.into()),
                 "-h" | "--help" => return Err(USAGE.into()),
                 path if !path.starts_with('-') && o.open.is_none() => o.open = Some(path.into()),
                 other => return Err(format!("unknown argument {other:?}\n{USAGE}")),
             }
+        }
+        if o.no_gpu && !o.headless {
+            return Err("--no-gpu needs --headless".into());
         }
         if o.headless && o.scenario.is_none() {
             return Err("--headless needs --scenario <name>".into());
@@ -254,7 +263,7 @@ pub fn default_plugins(opts: &HarnessOptions) -> PluginGroupBuilder {
     // The kernel works in a process of its own, so the app's threads have no heavy work to spread.
     let plugins = DefaultPlugins.build().set(bevy::app::TaskPoolPlugin {
         task_pool_options: bevy::app::TaskPoolOptions {
-            max_total_threads: 10,
+            max_total_threads: if opts.no_gpu { 4 } else { 10 },
             ..default()
         },
     });
@@ -267,6 +276,16 @@ pub fn default_plugins(opts: &HarnessOptions) -> PluginGroupBuilder {
             })
             .set(RenderPlugin {
                 synchronous_pipeline_compilation: true,
+                // No backends: Bevy makes no render app, so nothing needs a GPU.
+                render_creation: if opts.no_gpu {
+                    bevy::render::settings::WgpuSettings {
+                        backends: None,
+                        ..default()
+                    }
+                    .into()
+                } else {
+                    default()
+                },
                 ..default()
             })
             .disable::<WinitPlugin>()
@@ -338,6 +357,9 @@ impl Plugin for HarnessPlugin {
                 | TextureUsages::COPY_DST
                 | TextureUsages::RENDER_ATTACHMENT;
             let handle = app.world_mut().resource_mut::<Assets<Image>>().add(image);
+            if self.opts.no_gpu {
+                app.insert_resource(runner::NoGpu);
+            }
             app.insert_resource(RenderSurface {
                 target: RenderTarget::Image(handle.into()),
                 size,

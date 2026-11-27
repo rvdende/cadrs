@@ -44,6 +44,9 @@ Scenario(
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("04-ctrl-click-adds"),
+        // Longer than a double-click (0.45 s) after the Ctrl+click on the same row, which
+        // would open Sketch 3 for editing.
+        Wait(30),
         Click(ui("feature-sketch-3")),
         RightClick(xyz(20, 65, 0)),
         WaitFor("viewport-context-menu"),

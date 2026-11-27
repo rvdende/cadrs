@@ -102,6 +102,11 @@ struct Measure {
     frames: Vec<f64>,
 }
 
+/// The app runs with no renderer (`--no-gpu`): screenshot steps take nothing, so a scenario
+/// checks behaviour alone (its `Expect…` steps, the documents it saves).
+#[derive(Resource)]
+pub struct NoGpu;
+
 #[derive(Resource)]
 pub struct Runner {
     name: String,
@@ -493,6 +498,31 @@ pub fn drive(world: &mut World) {
             Some(_) => {}
         }
     }
+    if let Step::ExpectValue(query, want) | Step::ExpectNear(query, want, _) = &step {
+        let tolerance = match &step {
+            Step::ExpectNear(.., t) => *t,
+            _ => (want.abs() * 1e-6).max(1e-9),
+        };
+        let Some(probe) = world.get_resource::<cadrs_ui::ScriptProbe>().copied() else {
+            return fail(world, format!("{step:?}: the app answers no queries"));
+        };
+        match probe.0(world, query) {
+            Ok(got) if (got - want).abs() <= tolerance => {}
+            Ok(got) => {
+                return fail(
+                    world,
+                    format!("{step:?}: got {got} (off by {:+e})", got - want),
+                );
+            }
+            Err(e) => return fail(world, format!("{step:?}: {e}")),
+        }
+        let mut runner = world.resource_mut::<Runner>();
+        runner.retries = 0;
+        runner.settle = None;
+        runner.waiting = None;
+        runner.quiet = 0;
+        return;
+    }
     match expand(world, &step) {
         Ok(frames) => {
             let mut runner = world.resource_mut::<Runner>();
@@ -704,6 +734,8 @@ fn expand(world: &mut World, step: &Step) -> Result<Vec<Vec<Op>>, String> {
             }
             vec![vec![]]
         }
+        // Checked in `drive`, before it expands a step.
+        Step::ExpectValue(..) | Step::ExpectNear(..) => vec![vec![]],
         Step::ExpectClipboard(want) => {
             if clipboard_text(world).as_deref() != Ok(want.as_str()) {
                 return Err("clipboard".into());
@@ -1047,6 +1079,9 @@ fn execute(world: &mut World, op: Op) {
                     error!("cannot write {}: {e}", path.display());
                 }
             }
+        }
+        Op::Shot(label) if world.contains_resource::<NoGpu>() => {
+            debug!("no GPU: screenshot {label} skipped");
         }
         Op::Shot(label) => {
             let cursor = {

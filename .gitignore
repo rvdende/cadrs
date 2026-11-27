@@ -2,7 +2,7 @@
 /dist
 /.claude/
 
-# Binary test/reference images stay local (golden tests record a baseline on first run).
+# Binary test/reference images stay local (the image scenario tests record a baseline on first run).
 /tests/golden/
 /reference/**/*.png
 /reference/**/*.jpg
