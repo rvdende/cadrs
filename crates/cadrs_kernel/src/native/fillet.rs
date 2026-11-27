@@ -126,6 +126,10 @@ fn failed(stage: &'static str, why: &str) -> KernelError {
     }
 }
 
+/// Why a fillet fails that no ball touches both faces at its edge's middle: the blend tool
+/// can't build it either (its rails cross), so it isn't tried ([`super::blend::fillet`]).
+pub(crate) const NO_BALL: &str = "the fillet is too large for the faces at the edge";
+
 /// A radius too large for the faces at its edge.
 fn too_large(why: &str) -> KernelError {
     KernelError::TooLarge {
@@ -825,9 +829,7 @@ fn edge_fillet(
         .filter_map(|i| wedge(b, &ef, ed.t[0] + (ed.t[1] - ed.t[0]) * i as f64 / 8.0).map(|w| w.2))
         .fold(std::f64::consts::PI, f64::min);
     ef.reach = ef.reach.max(2.0 * rr / (theta / 2.0).tan().max(1e-3) + rr);
-    ef.mid = ef
-        .ball(b, tm, None)
-        .ok_or_else(|| too_large("the fillet is too large for the faces at the edge"))?;
+    ef.mid = ef.ball(b, tm, None).ok_or_else(|| too_large(NO_BALL))?;
     // The centre on the side the faces' normals say (inside a convex edge, outside a concave
     // one), and the contacts on the faces' sides of the edge (not a far branch of a curved
     // surface).

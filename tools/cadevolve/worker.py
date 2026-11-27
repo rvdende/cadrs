@@ -45,9 +45,35 @@ def main():
         import numpy as np
     except ImportError:
         np = None
+    # Workplane calls that raised but whose generator went on (its own try/except): a fillet
+    # one kernel can't build and skips is no measure of the other's that it can.
+    swallowed = []
+    depth = [0]
+    def watch(name, f):
+        def call(*a, **k):
+            depth[0] += 1
+            try:
+                return f(*a, **k)
+            except Exception:
+                if depth[0] == 1 and name not in swallowed:
+                    swallowed.append(name)
+                raise
+            finally:
+                depth[0] -= 1
+        return call
+    for name in ["fillet", "chamfer", "shell", "union", "cut", "intersect", "loft", "sweep",
+                 "revolve", "extrude", "twistExtrude", "cutBlind", "cutThruAll", "hole",
+                 "cboreHole", "cskHole", "split", "combine", "mirror", "offset2D", "text"]:
+        f = getattr(cq.Workplane, name, None)
+        if f is not None:
+            try:
+                setattr(cq.Workplane, name, watch(name, f))
+            except (TypeError, AttributeError):
+                pass
     for line in sys.stdin:
         task = json.loads(line)
         out = {"i": task["i"], "name": task["name"]}
+        swallowed.clear()
         t = time.perf_counter()
         random.seed(0)
         if np is not None:
@@ -72,6 +98,8 @@ def main():
             tb = traceback.extract_tb(e.__traceback__)
             where = next((f"{f.name}:{f.lineno}" for f in reversed(tb) if f.filename == task["name"]), "")
             out.update(status="error", err=f"{type(e).__name__}: {str(e)[:300]}", where=where)
+        if out.get("status") == "ok":
+            out["swallowed"] = list(swallowed)
         out["secs"] = round(time.perf_counter() - t, 4)
         proto.write(json.dumps(out) + "\n")
         proto.flush()

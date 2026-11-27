@@ -1369,6 +1369,7 @@ pub fn blend(
         }
     }
     let mut cur = Tracked::of((*b).clone());
+    let (mut cut_volume, mut fill_volume) = (0.0_f64, 0.0_f64);
     let mut radius_at: std::collections::HashMap<usize, f64> = Default::default();
     // Corner faces where a fill meets two cuts (by vertex): the plane, its normal towards the
     // material it cuts away. The cuts there stay above it.
@@ -1766,8 +1767,10 @@ pub fn blend(
             }
         }
         let op = if tool.convex {
+            cut_volume += super::mass::body_volume(&tb).abs();
             BoolOp::Subtract
         } else {
+            fill_volume += super::mass::body_volume(&tb).abs();
             BoolOp::Union
         };
         cur = cur.apply(&tb, &ts, op)?;
@@ -1783,10 +1786,30 @@ pub fn blend(
                 vertex: VertexId(vertex_index(&b, v) as u64),
             },
         )? {
+            cut_volume += super::mass::body_volume(&tool).abs();
             cur = cur.apply(&tool, &src, BoolOp::Subtract)?;
         }
     }
     let cur = cur.with_solids_of_input(b.solids.len())?;
+    // The tools cut away no more than they hold and fill no more: a result past that went
+    // wrong in a boolean (a chamfer of a louvered loft's every edge left a sixth of it).
+    let (before, after) = (
+        super::mass::body_volume(&b),
+        super::mass::body_volume(&cur.body),
+    );
+    let slack = 1e-6 * (before.abs() + cut_volume + fill_volume) + tol::POINT;
+    if crate::native::env_flag!("CADRS_BLEND_DEBUG") {
+        eprintln!("blend: volume {before} -> {after}; tools cut {cut_volume}, fill {fill_volume}");
+    }
+    if after < before - cut_volume - slack || after > before + fill_volume + slack {
+        return Err(KernelError::InvalidResult {
+            op: "blend",
+            why: format!(
+                "the blend changed the volume by {:.3e}, more than its tools hold ({cut_volume:.3e} cut, {fill_volume:.3e} filled)",
+                after - before
+            ),
+        });
+    }
     // A solid must stay a solid (an open result means a tool went wrong).
     if !b.solids.is_empty() && cur.body.solids.is_empty() {
         return Err(KernelError::InvalidResult {
@@ -2924,7 +2947,11 @@ pub fn fillet(
                 return Ok(res);
             }
             Err(e) => {
-                if crate::native::env_flag!("CADRS_LOCAL_FILLET_ONLY") {
+                // (No ball touches both faces at an edge's middle: a round too large for a
+                // sliver, 2.5° between its faces. The tool built from such sections crosses
+                // itself and cut six like slivers four ways; OCCT refuses them.)
+                let no_ball = matches!(&e, KernelError::TooLarge { why, .. } if why == super::fillet::NO_BALL);
+                if no_ball || crate::native::env_flag!("CADRS_LOCAL_FILLET_ONLY") {
                     return Err(e);
                 }
                 if crate::native::env_flag!("CADRS_BLEND_DEBUG") {
@@ -3377,7 +3404,17 @@ pub fn flat_corners(
             vertex: VertexId(vertex_index(&b, v) as u64),
         });
         let tool_src = vec![vec![mark]; tool.faces.len()];
+        let solids = cur.body.solids.len();
         cur = cur.apply(&tool, &tool_src, BoolOp::Subtract)?;
+        // A corner's cut takes the corner only: a disc that reaches through a thin wall beyond
+        // it (a louvered loft's every edge chamfered) cut the body into dozens of pieces.
+        if cur.body.solids.len() > solids {
+            k.release(*out);
+            return Err(KernelError::InvalidResult {
+                op: "chamfer",
+                why: "a flat corner's cut reaches past its corner and splits the solid".into(),
+            });
+        }
     }
     k.release(*out);
     Ok(cur.into_result(k, body))
@@ -3872,6 +3909,9 @@ pub fn chamfer_tool(
             told,
         )
     {
+        if crate::native::env_flag!("CADRS_BLEND_DEBUG") {
+            eprintln!("chamfer: the rim's in closed form");
+        }
         return Ok(Tracked { body: out, src }.into_result(k, body));
     }
     blend(k, body, &list, false)

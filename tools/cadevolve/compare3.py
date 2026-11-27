@@ -13,6 +13,8 @@ Categories:
   all-fail      no kernel gives a valid result
   reviewed      the two others agree and are wrong, by a hand review in reviewed.json (the
                 volume worked out and why); ours matches the reviewed volume
+  swallowed     ours differs where the program caught a failing call (a fillet, a chamfer)
+                in one kernel's run and not the other's: each built a different model
 """
 import argparse, collections, json, os, re
 from compare import load, close
@@ -43,6 +45,12 @@ def judge(o, k, c, i=None):
         ok = c.get("status") == "ok" and valid(c) and close(c["vol"], REVIEWED[i]["vol"], 1e-3)
         return "reviewed" if ok else "bug"
     others = [r for r in (o, k) if r is not None and valid(r)]
+    # (A call one kernel failed and the program skipped: the models differ by design.)
+    # (Runs from before the record have no "swallowed": unknown, not none.)
+    caught = lambda r: None if "swallowed" not in (r or {}) else frozenset(r["swallowed"])
+    if c.get("status") == "ok" and not any(same(c, r) for r in others) and any(
+            caught(r) is not None and caught(c) is not None and caught(r) != caught(c) for r in others):
+        return "swallowed"
     if c.get("status") != "ok":
         if not others:
             return "all-fail"
@@ -71,7 +79,7 @@ def main():
         cats[judge(o[i], k[i], c[i], i)].append(i)
     n = len(keys)
     print(f"{n} generators run by all three")
-    for cat in ["agree", "reviewed", "only-valid", "bug", "we-fail", "disputed", "all-fail"]:
+    for cat in ["agree", "reviewed", "swallowed", "only-valid", "bug", "we-fail", "disputed", "all-fail"]:
         print(f"  {cat:11s} {len(cats[cat]):5d}  {100 * len(cats[cat]) / max(n, 1):5.1f}%")
     if a.errors:
         cnt = collections.Counter()

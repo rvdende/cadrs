@@ -763,7 +763,10 @@ pub fn sweep(
     }
     // A helical path (sampled or fitted) swept along its exact helix: screw surfaces, whose
     // intersections are closed forms.
-    let helix = helix_of(path);
+    let helix = helix_of(path).filter(|h| {
+        (h.r1 - h.r0).abs() <= 1e-9 * (1.0 + h.r0.abs())
+            || !crate::native::env_flag!("CADRS_NO_SPIRAL_PATH")
+    });
     let curves: Vec<PathCurve> = match &helix {
         Some(h) => h.path(),
         None => path.iter().map(path_curve).collect(),
