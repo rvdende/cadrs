@@ -1,0 +1,15 @@
+[package]
+name = "cadrs_cadmpeg"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Native CAD files (SolidWorks, Fusion, Inventor, CATIA, …) turned into STEP by cadmpeg, for Import"
+
+[dependencies]
+cadmpeg-registry.workspace = true
+cadmpeg-ir.workspace = true
+cadmpeg-core.workspace = true
+
+[dev-dependencies]
+cadrs_kernel.workspace = true

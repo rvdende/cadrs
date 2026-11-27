@@ -3763,8 +3763,9 @@ io-flat-export-nothing = エクスポートに失敗しました：エクスポ�
 io-exported-files-to = { $count } 個のファイルを{ $folder }にエクスポートしました
 
 ## crates/cadrs_app/src/import_file.rs
-io-import-only-exchange = { $name }：インポートできるのは STEP、IGES、BREP ファイルのみです
+io-import-only-exchange = { $name }：インポートできるのは STEP、IGES、BREP と他の CAD ソフトのファイルのみです
 io-import-reading = { $name }を読み込み中…
+io-import-converting = { $name }を STEP に変換中…
 io-import-kernel-stopped = カーネルスレッドが停止しました
 io-import-of-failed = { $name }のインポートに失敗しました：{ $error }
 io-import-summary-assembly-1-1 = { $format } ファイル：1 個のパーツと 1 個のインスタンスからなるアセンブリ

@@ -38,6 +38,12 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/rvdende/cadrs"
 
 [workspace.dependencies]
+# Native CAD files (SolidWorks, Fusion, Inventor, CATIA, …) read by cadmpeg and turned into STEP
+# for Import (cadrs_cadmpeg). Cargo.lock pins the commit; `cargo update -p cadmpeg-registry` moves
+# it to cadmpeg's main.
+cadmpeg-registry = { git = "https://github.com/cadmpeg/cadmpeg", branch = "main" }
+cadmpeg-ir = { git = "https://github.com/cadmpeg/cadmpeg", branch = "main" }
+cadmpeg-core = { git = "https://github.com/cadmpeg/cadmpeg", branch = "main" }
 bevy = { version = "=0.20.0-dev", features = ["bevy_dev_tools", "system_clipboard"] }
 serde = { version = "1", features = ["derive", "rc"] }
 ron = "0.12"
@@ -140,6 +146,7 @@ cadrs_net = { path = "crates/cadrs_net" }
 cadrs_app = { path = "crates/cadrs_app" }
 cadrs_harness = { path = "crates/cadrs_harness" }
 cadrs_kernel = { path = "crates/cadrs_kernel" }
+cadrs_cadmpeg = { path = "crates/cadrs_cadmpeg" }
 cadrs_drawing = { path = "crates/cadrs_drawing" }
 cadrs_eda = { path = "crates/cadrs_eda" }
 cadrs_router = { path = "crates/cadrs_router" }

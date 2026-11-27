@@ -3763,8 +3763,9 @@ io-flat-export-nothing = Uitvoer het misluk: geen plat uitleg om uit te voer nie
 io-exported-files-to = { $count } lêers na { $folder } uitgevoer
 
 ## crates/cadrs_app/src/import_file.rs
-io-import-only-exchange = { $name }: slegs STEP-, IGES- en BREP-lêers kan ingevoer word
+io-import-only-exchange = { $name }: slegs STEP-, IGES-, BREP- en ander CAD-programme se lêers kan ingevoer word
 io-import-reading = Lees tans { $name }…
+io-import-converting = Skakel tans { $name } om na STEP…
 io-import-kernel-stopped = die kerndraad het gestop
 io-import-of-failed = Invoer van { $name } het misluk: { $error }
 io-import-summary-assembly-1-1 = { $format }-lêer: 'n samestelling van 1 onderdeel met 1 instansie

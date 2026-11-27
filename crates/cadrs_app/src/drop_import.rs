@@ -6,7 +6,7 @@
 //! | Native: cadrs | a new library copy | (note) | (note) | (note) |
 //! | Drawing: SVG, EPS, PS, PDF, AI, DXF, DWG | (note) | a new sketch of it | its curves added | (note) |
 //! | Picture: PNG, JPEG, GIF | (note) | an Image ([`crate::picture`]) | (note) | (note) |
-//! | Model: STEP, IGES, BREP | a new document ([`crate::import_file`]) | an Import ([`crate::import_dialog`]) | (note) | new tabs ([`crate::import_file`]) |
+//! | Model: STEP, IGES, BREP, other CAD programs' files (through cadmpeg) | a new document ([`crate::import_file`]) | an Import ([`crate::import_dialog`]) | (note) | new tabs ([`crate::import_file`]) |
 //! | Model: STL | a new document | an Import | (note) | (note) |
 //!
 //! - **Drawings** ([`cadrs_core::vector_import`]) are centred where they are dropped: in a Part

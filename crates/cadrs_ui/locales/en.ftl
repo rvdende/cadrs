@@ -5621,9 +5621,11 @@ io-exported-files-to = Exported { $count } files to { $folder }
 
 ## crates/cadrs_app/src/import_file.rs
 # { $name } is the file's name (STEP, IGES and BREP are file formats).
-io-import-only-exchange = { $name }: only STEP, IGES and BREP files can be imported
+io-import-only-exchange = { $name }: only STEP, IGES, BREP and other CAD programs' files can be imported
 # { $name } is the file being read.
 io-import-reading = Reading { $name }…
+# A toast while another CAD program's file (SolidWorks, Fusion, …) is turned into STEP to import it.
+io-import-converting = Converting { $name } to STEP…
 # Why an import failed: the background thread doing the work stopped.
 io-import-kernel-stopped = the kernel thread stopped
 # { $name } is the file's name, { $error } why its import failed.

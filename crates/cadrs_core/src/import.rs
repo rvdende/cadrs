@@ -13,6 +13,11 @@
 //!   ([`ImportMode::Parts`], for *Keep assembly structure*, which also adds an Assembly tab).
 //!   Invalid shapes are healed on the way in. The files flow that makes new tabs or a new
 //!   document from a file (P3F.2, T8.1: *Import as*) is [`structure`].
+//! - **Native CAD files** (SolidWorks, Fusion, Inventor, CATIA, Creo, NX, Solid Edge, Rhino,
+//!   FreeCAD, …: every format [cadmpeg](https://github.com/cadmpeg/cadmpeg) reads,
+//!   [`native_extensions`]): cadmpeg turns the file into STEP when it is picked ([`readable`]),
+//!   and the Import keeps that STEP as its file (and the original file's name), so it rebuilds as
+//!   a STEP import does, without cadmpeg.
 //! - **BREP** (OpenCASCADE's text format, `.brep`/`.brp`): read through the same reader as IGES,
 //!   one part per solid; the format has no units (read as mm), names, colours or assemblies, so
 //!   the parts are named after the file.
@@ -67,6 +72,8 @@ impl ImportFormat {
             "iges" | "igs" => Some(Self::Iges),
             "brep" | "brp" => Some(Self::Brep),
             "glb" => Some(Self::Glb),
+            // A native CAD file: read as the STEP cadmpeg makes of it ([`readable`]).
+            e if cadrs_cadmpeg::extensions().contains(&e) => Some(Self::Step),
             _ => None,
         }
     }
@@ -217,6 +224,7 @@ impl ImportFeature {
     /// ([`crate::blobs::insert`]) and the format is taken from the name (else sniffed from the
     /// contents).
     pub fn from_file(file_name: &str, bytes: Vec<u8>) -> Result<Self, String> {
+        let bytes = readable(file_name, bytes)?;
         let format = ImportFormat::of_file_name(file_name)
             .or_else(|| sniff(&bytes))
             .ok_or_else(|| format!("{file_name}: not a STEP, IGES, STL or GLB file"))?;
@@ -248,12 +256,14 @@ impl ImportFeature {
         }
     }
 
-    /// The extension its blob file gets.
+    /// The extension its blob file gets: the file's own, unless the blob is another format than
+    /// the name says (a native CAD file's STEP, [`readable`]).
     pub fn extension(&self) -> String {
         std::path::Path::new(&self.file_name)
             .extension()
             .and_then(|s| s.to_str())
             .map(|s| s.to_ascii_lowercase())
+            .filter(|e| !cadrs_cadmpeg::extensions().contains(&e.as_str()))
             .unwrap_or_else(|| match self.format {
                 ImportFormat::Step => "step".into(),
                 ImportFormat::Stl => "stl".into(),
@@ -272,6 +282,63 @@ impl ImportFeature {
             }
             ImportFormat::Step | ImportFormat::Iges | ImportFormat::Brep => 1.0,
         }
+    }
+}
+
+/// The extensions of the native CAD files Import reads through cadmpeg (SolidWorks `sldprt`,
+/// Fusion `f3d`, Inventor `ipt`, CATIA `catpart`, …), for the file pickers.
+pub fn native_extensions() -> Vec<&'static str> {
+    cadrs_cadmpeg::extensions()
+}
+
+/// Whether `file_name` is a native CAD file Import reads through cadmpeg.
+pub fn is_native(file_name: &str) -> bool {
+    cadrs_cadmpeg::reads(file_name)
+}
+
+/// The bytes Import reads for the file `file_name`: a native CAD file turned into STEP by
+/// cadmpeg (unless it already is STEP); any other file as it is. The error says why a native
+/// file couldn't be read.
+pub fn readable(file_name: &str, bytes: Vec<u8>) -> Result<Vec<u8>, String> {
+    // Already STEP: what cadmpeg made of it (the app converts off its thread, then imports).
+    if is_native(file_name) && sniff(&bytes) != Some(ImportFormat::Step) {
+        Ok(cadrs_cadmpeg::to_step(file_name, &bytes)?.step)
+    } else {
+        Ok(bytes)
+    }
+}
+
+/// [`readable`] on a thread of its own (a native file can take a while): the app polls it each
+/// frame. In a page, it is done when [`Self::start`] returns.
+#[derive(Debug, Clone)]
+pub struct PendingConversion(Arc<std::sync::Mutex<Option<Conversion>>>);
+
+/// What [`readable`] gives.
+type Conversion = Result<Vec<u8>, String>;
+
+impl PendingConversion {
+    /// Starts turning the file `file_name` (contents `bytes`) into what Import reads.
+    pub fn start(file_name: &str, bytes: Vec<u8>) -> Self {
+        let slot = Arc::new(std::sync::Mutex::new(None));
+        let out = slot.clone();
+        let name = file_name.to_string();
+        let run = move || {
+            let r = readable(&name, bytes);
+            if let Ok(mut s) = out.lock() {
+                *s = Some(r);
+            }
+        };
+        if let Err(e) = crate::background::spawn("import-convert", run)
+            && let Ok(mut s) = slot.lock()
+        {
+            *s = Some(Err(format!("{file_name}: {e}")));
+        }
+        Self(slot)
+    }
+
+    /// The bytes, or why not, once done (taken: `None` after that, and while it runs).
+    pub fn poll(&self) -> Option<Conversion> {
+        self.0.lock().ok().and_then(|mut s| s.take())
     }
 }
 

@@ -3034,15 +3034,19 @@ fn edge_json(p: &cadrs_core::parts::Part, e: &cadrs_core::solid::SolidEdge) -> O
     Some(v)
 }
 
-/// Imports a STEP file as a new stored document (its parts flattened into a Part Studio) and
-/// opens it, as the documents page's Import files does.
+/// Imports a STEP file (or another CAD program's file, through cadmpeg) as a new stored document
+/// (its parts flattened into a Part Studio) and opens it, as the documents page's Import files
+/// does.
 fn import_step(world: &mut World, path: &str) -> Result<Value, String> {
     use cadrs_core::import::{ImportAs, ImportFormat, ImportIds, imported_document};
     let path = std::path::Path::new(path);
     let format = ImportFormat::of_path(path)
         .filter(|f| f.kernel().is_some())
-        .ok_or("only STEP, IGES and BREP files can be imported")?;
+        .ok_or("only STEP, IGES, BREP and other CAD programs' files can be imported")?;
     let bytes = cadrs_fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    // Another CAD program's file: the STEP cadmpeg makes of it.
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let bytes = cadrs_core::import::readable(name, bytes)?;
     let data = String::from_utf8_lossy(&bytes).into_owned();
     let plan = cadrs_core::rebuild::exchange::plan_import(format, data.clone().into_bytes())
         .wait()

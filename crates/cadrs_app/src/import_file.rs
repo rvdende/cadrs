@@ -1,4 +1,6 @@
-//! **Import…** (P3F.2; `essential-tips.md` T8, X5): STEP, IGES and BREP files, from the documents
+//! **Import…** (P3F.2; `essential-tips.md` T8, X5): STEP, IGES and BREP files, and other CAD
+//! programs' files (SolidWorks, Fusion, Inventor, CATIA, …, which cadmpeg turns into STEP on a
+//! thread of its own first: [`cadrs_core::import::readable`]), from the documents
 //! page's **Create ▸ Import files…** (into a new document named after the file) and the tab
 //! bar's **+ ▸ Import…** (new tabs in this document, one undo step). The tabs hold an ordinary
 //! Import feature ([`cadrs_core::import::ImportFeature`], read with its assembly structure),
@@ -9,7 +11,9 @@
 //! as new tabs with their features ([`crate::tab_clipboard::import_file`]).
 //!
 //! 1. The in-app file picker (`cadrs_ui::file_picker`) lists `.step`, `.stp`, `.iges` and
-//!    `.igs` files, starting in `$CADRS_IMPORT_DIR`, else the Downloads folder.
+//!    `.igs` files and every native format cadmpeg reads
+//!    ([`cadrs_core::import::native_extensions`]), starting in `$CADRS_IMPORT_DIR`, else the
+//!    Downloads folder.
 //! 2. The kernel reads the file on its thread ([`cadrs_core::rebuild::exchange::plan_import`]):
 //!    a toast says so meanwhile.
 //! 3. The **Import** dialog says what the file holds (its parts and instances) and asks how to
@@ -44,7 +48,10 @@ pub struct ImportFilePlugin;
 
 impl Plugin for ImportFilePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (on_file_picked, poll_reading, sync_choice));
+        app.add_systems(
+            Update,
+            (on_file_picked, poll_converting, poll_reading, sync_choice),
+        );
     }
 }
 
@@ -67,6 +74,15 @@ impl ImportTarget {
 }
 
 /// A file being read on the kernel thread.
+/// A native CAD file being turned into STEP by cadmpeg ([`cadrs_core::import::readable`]) on a
+/// thread of its own, before the kernel reads it.
+#[derive(Component)]
+struct Converting {
+    target: ImportTarget,
+    file_name: String,
+    pending: cadrs_core::import::PendingConversion,
+}
+
 #[derive(Component)]
 struct Reading {
     pending: PendingJob<Result<ImportPlan, String>>,
@@ -118,6 +134,8 @@ pub fn start(world: &mut World, target: ImportTarget) {
     // A new document also takes an STL or GLB mesh (P3E.1, TD3.1: the documents page's Import
     // files…).
     let mut exts: Vec<&str> = ImportFormat::EXCHANGE_EXTENSIONS.to_vec();
+    // The other CAD programs' files, which cadmpeg turns into STEP.
+    exts.extend(cadrs_core::import::native_extensions());
     if matches!(target, ImportTarget::NewDocument) {
         exts.push("stl");
         exts.push("glb");
@@ -197,6 +215,69 @@ pub fn read(commands: &mut Commands, theme: &Theme, target: ImportTarget, path: 
             return;
         }
     };
+    if cadrs_core::import::is_native(&file_name) {
+        // Another CAD program's file: cadmpeg turns it into STEP first, off this thread.
+        let pending = cadrs_core::import::PendingConversion::start(&file_name, bytes);
+        show_notification(
+            commands,
+            theme,
+            Notification::info(tr_with("io-import-converting", &[("name", &file_name)]))
+                .seconds(4.0)
+                .name("import-reading"),
+        );
+        commands.spawn((
+            Name::new("import-converting"),
+            Converting {
+                target,
+                file_name,
+                pending,
+            },
+        ));
+        return;
+    }
+    plan(commands, theme, target, file_name, bytes, format);
+}
+
+/// A native file cadmpeg has turned into STEP: read on as a STEP file.
+fn poll_converting(q: Query<(Entity, &Converting)>, theme: Res<Theme>, mut commands: Commands) {
+    for (e, c) in &q {
+        let Some(result) = c.pending.poll() else {
+            continue;
+        };
+        commands.entity(e).despawn();
+        match result {
+            Ok(step) => plan(
+                &mut commands,
+                &theme,
+                c.target,
+                c.file_name.clone(),
+                step,
+                ImportFormat::Step,
+            ),
+            Err(why) => {
+                show_notification(
+                    &mut commands,
+                    &theme,
+                    Notification::warning(tr_with(
+                        "io-import-of-failed",
+                        &[("name", &c.file_name), ("error", &why)],
+                    ))
+                    .name("import-toast"),
+                );
+            }
+        }
+    }
+}
+
+/// Has the kernel read `bytes` (the file `file_name`) on its thread, for the Import dialog.
+fn plan(
+    commands: &mut Commands,
+    theme: &Theme,
+    target: ImportTarget,
+    file_name: String,
+    bytes: Vec<u8>,
+    format: ImportFormat,
+) {
     let data = String::from_utf8_lossy(&bytes).into_owned();
     let pending = cadrs_core::rebuild::exchange::plan_import(format, data.clone().into_bytes());
     show_notification(

@@ -3763,8 +3763,9 @@ io-flat-export-nothing = Export fehlgeschlagen: keine Abwicklung zum Exportieren
 io-exported-files-to = { $count } Dateien nach { $folder } exportiert
 
 ## crates/cadrs_app/src/import_file.rs
-io-import-only-exchange = { $name }: Nur STEP-, IGES- und BREP-Dateien können importiert werden
+io-import-only-exchange = { $name }: Nur STEP-, IGES-, BREP- und Dateien anderer CAD-Programme können importiert werden
 io-import-reading = { $name } wird gelesen…
+io-import-converting = { $name } wird in STEP umgewandelt…
 io-import-kernel-stopped = der Kernel-Thread wurde beendet
 io-import-of-failed = Import von { $name } fehlgeschlagen: { $error }
 io-import-summary-assembly-1-1 = { $format }-Datei: eine Baugruppe aus 1 Teil mit 1 Instanz
