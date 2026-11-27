@@ -39,6 +39,17 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
+      # cadmpeg-ir (Import of other CAD programs' files) takes about 10 GB of memory to compile,
+      # however it is built; with other crates compiling beside it, the runner's 16 GB ran out
+      # and the runner was shut down. Swap keeps it alive.
+      - name: Swap
+        run: |
+          sudo fallocate -l 16G /cadrs.swap
+          sudo chmod 600 /cadrs.swap
+          sudo mkswap /cadrs.swap
+          sudo swapon /cadrs.swap
+          free -h
+
       # clang and mold link the build scripts (.cargo/config.toml's host settings).
       - name: System packages
         env:
