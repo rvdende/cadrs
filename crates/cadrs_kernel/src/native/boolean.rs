@@ -906,7 +906,19 @@ fn point_in_face(f: &WFace, p: &P3, tol: f64) -> InFace {
 
 /// A point inside a face's domain (uv) given its loops as arcs.
 fn interior_point(loops: &[Vec<Arc>], on: Level) -> Option<P2> {
-    interior_points(loops, on).into_iter().next()
+    // (The first of [`interior_points`]: the candidate farthest from the boundary, each one's
+    // clearance measured only as far as it could still beat the best so far.)
+    let polys = arc_polys(loops);
+    let scan = Scan::new(&polys)?;
+    let mut best: Option<(f64, P2)> = None;
+    for q in scan_candidates(loops, &polys, &scan, on) {
+        let floor = best.map_or(f64::NEG_INFINITY, |b| b.0);
+        let d = scan.clearance(&q, floor);
+        if best.is_none_or(|b| d > b.0) {
+            best = Some((d, q));
+        }
+    }
+    best.map(|b| b.1)
 }
 
 /// The p-curve `pc` of `curve` over `t` on the surface `from`, as its p-curve on `to`, where
@@ -1011,6 +1023,18 @@ fn interior_points(loops: &[Vec<Arc>], on: Level) -> Vec<P2> {
     let Some(scan) = Scan::new(&polys) else {
         return Vec::new();
     };
+    let cands = scan_candidates(loops, &polys, &scan, on);
+    let mut cands: Vec<(f64, P2)> = cands
+        .into_iter()
+        .map(|q| (scan.clearance(&q, f64::NEG_INFINITY), q))
+        .collect();
+    cands.sort_by(|a, b| b.0.total_cmp(&a.0));
+    cands.into_iter().map(|(_, p)| p).collect()
+}
+
+/// [`interior_points`]' candidates in scan order: on each scanline, the middle of each inside
+/// interval between the loops' crossings.
+fn scan_candidates(loops: &[Vec<Arc>], polys: &[Vec<P2>], scan: &Scan, on: Level) -> Vec<P2> {
     let mut cands = Vec::new();
     // (The arcs' points are the polygons' own, made once for all the scanlines: a fitted
     // p-curve's 64 points were made again for each of the eleven. One list of crossings too.)
@@ -1018,7 +1042,7 @@ fn interior_points(loops: &[Vec<Arc>], on: Level) -> Vec<P2> {
     for frac in SCAN_FRACTIONS {
         let y = scan.vb.0 + (scan.vb.1 - scan.vb.0) * frac;
         xs.clear();
-        for (l, poly) in loops.iter().zip(&polys) {
+        for (l, poly) in loops.iter().zip(polys) {
             let mut at = 0;
             for a in l {
                 let n = arc_steps(a);
@@ -1050,12 +1074,7 @@ fn interior_points(loops: &[Vec<Arc>], on: Level) -> Vec<P2> {
             k += 2;
         }
     }
-    let mut cands: Vec<(f64, P2)> = cands
-        .into_iter()
-        .map(|q| (scan.clearance(&q, f64::NEG_INFINITY), q))
-        .collect();
-    cands.sort_by(|a, b| b.0.total_cmp(&a.0));
-    cands.into_iter().map(|(_, p)| p).collect()
+    cands
 }
 
 /// The u where arc `a` crosses the height v = `y` between its fractions `s0` and `s1` (its ends
@@ -4608,7 +4627,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 // A piece no longer than the tolerance is a point (two vertices of the inputs
                 // closer than it, both on the curve): no edge.
                 if (ic.c.point(ta) - ic.c.point(tb)).norm() <= tf
-                    && ic.c.length(ta.min(tb), ta.max(tb)) <= tf
+                    && !ic.c.longer_than(ta.min(tb), ta.max(tb), tf)
                 {
                     continue;
                 }
