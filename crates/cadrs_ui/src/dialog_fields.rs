@@ -758,7 +758,7 @@ fn on_number_wheel(
     let Some(delta) = wheel_step(&ev, &keys, edit, &mut rest) else {
         return;
     };
-    let Some(next) = step_number_text(&text.value().to_string(), delta) else {
+    let Some(next) = step_number_text(&text.value(), delta) else {
         return;
     };
     text.editor_mut().set_text(&next);
@@ -948,7 +948,7 @@ fn sync_number_fields(
             continue;
         };
         let is_focused = focused == Some(e);
-        if !is_focused && text.value().to_string() != state.text {
+        if !is_focused && text.value() != state.text {
             text.editor_mut().set_text(&state.text);
         }
         if is_focused && *focused_before != Some(e) {

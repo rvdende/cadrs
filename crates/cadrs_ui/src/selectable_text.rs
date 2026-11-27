@@ -222,7 +222,7 @@ fn sync_values(
     for (value, children) in &q {
         for child in children.iter() {
             if let Ok(mut text) = q_field.get_mut(child)
-                && text.value().to_string() != value.0
+                && text.value() != value.0
             {
                 text.editor_mut().set_text(&value.0);
             }

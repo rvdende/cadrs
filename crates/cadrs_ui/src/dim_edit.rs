@@ -503,7 +503,7 @@ fn style_boxes(
             continue;
         };
         // Typing clears the error.
-        if bx.error.is_some() && text.value().to_string() != bx.error_text {
+        if bx.error.is_some() && text.value() != bx.error_text {
             bx.error = None;
         }
         let bad = bx.error.is_some();
