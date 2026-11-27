@@ -1,6 +1,6 @@
 {
   "name": "cadrs-onshape-importer",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "Log in to Onshape, pick documents, convert them into cadrs documents with a report",
   "main": "main.js",
   "private": true,

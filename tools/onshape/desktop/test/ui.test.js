@@ -183,6 +183,19 @@ test("ui: New ticket starts from the repo issue templates", () => {
   assert.match(html, /## Related issues \(not the same request\)/);
 });
 
+test('main: exports read the report from the run folder (regression: they read the data root)', () => {
+  assert.match(mainSource, /function readImportReport\(run = runDir\(\)\)/);
+  assert.match(mainSource, /let file = path\.join\(run, 'import-report\.json'\)/);
+  assert.doesNotMatch(mainSource, /^\s*const file = path\.join\(ROOT, 'import-report\.json'\);/m);
+});
+
+test('main: a closed stdout/stderr (EPIPE) does not crash the app', () => {
+  assert.match(mainSource, /for \(const stream of \[process\.stdout, process\.stderr\]\)/);
+  assert.match(mainSource, /stream\.on\('error', \(\) => \{\}\)/);
+  assert.match(mainSource, /uncaughtException/);
+  assert.match(mainSource, /err\.code === 'EPIPE'/);
+});
+
 test('ui: the run-import writes .cadrs packages without another click', () => {
   assert.match(mainSource, /cadrsExport = await exportDocuments\('cadrs'\)/);
   assert.match(html, /cadrs packages written automatically/);

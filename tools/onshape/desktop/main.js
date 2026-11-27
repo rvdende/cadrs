@@ -19,6 +19,21 @@ const issues = require('./issues');
 const exportTools = require('./exports');
 const { buildOperations } = require('./operations');
 
+// The AppImage launcher can close stdout/stderr (and a GPU crash is logged exactly then): a write
+// to a closed pipe emits EPIPE, and without a stream error handler that crashes the main process.
+// Ignore EPIPE and keep the window alive; log anything else instead of dying.
+for (const stream of [process.stdout, process.stderr]) {
+  if (stream && typeof stream.on === 'function') stream.on('error', () => {});
+}
+process.on('uncaughtException', (err) => {
+  if (err && err.code === 'EPIPE') return;
+  try {
+    console.error('uncaught exception:', err);
+  } catch {
+    /* stderr is gone too */
+  }
+});
+
 const ROOT = process.env.CADRS_ONSHAPE_ROOT || path.join(os.homedir(), 'work', 'cadrs_onshape');
 const RAW = path.join(ROOT, 'raw');
 const REPO = path.resolve(__dirname, '..', '..', '..');
@@ -571,8 +586,12 @@ ipcMain.handle('open-run-folder', (_e, runName) => {
 // document, or a document is no longer in the store.
 let exportRunning = null; // { kind, cancelled, child }
 
-function readImportReport() {
-  const file = path.join(ROOT, 'import-report.json');
+function readImportReport(run = runDir()) {
+  // Reports live in the conversion's run folder; the data root is only the legacy location of
+  // builds before runs/ existed. Reading ROOT here made every export refuse "no report" after
+  // the run-folder change even though the report existed.
+  let file = path.join(run, 'import-report.json');
+  if (!fs.existsSync(file) && run !== ROOT) file = path.join(ROOT, 'import-report.json');
   if (!fs.existsSync(file)) {
     return { file, error: 'No import-report.json yet: run a conversion first (a dry run reports only).' };
   }
