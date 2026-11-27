@@ -5689,7 +5689,10 @@ impl Rebuilder {
             ),
         };
         let r = nalgebra::Matrix3::from_row_slice(&rotation.concat());
-        let q = nalgebra::UnitQuaternion::from_matrix(&r);
+        // Exactly: `from_matrix` iterates from the identity, and stays there for a half turn.
+        let q = nalgebra::UnitQuaternion::from_rotation_matrix(
+            &nalgebra::Rotation3::from_matrix_unchecked(r),
+        );
         let iso = nalgebra::Isometry3::from_parts(
             nalgebra::Translation3::new(translation[0], translation[1], translation[2]),
             q,

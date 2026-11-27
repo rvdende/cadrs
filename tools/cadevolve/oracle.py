@@ -48,11 +48,21 @@ def main():
             print(f"{i}: {r['op']} manifold failed: {e}")
             continue
         bound = 4.0 * r["area"] * r["deflection"] + 1e-6
+        # Sharper where the operands' exact volumes are logged: the meshes' own volume errors
+        # (each mesh against its solid), the most the result's can be off by their union, with
+        # a margin of three.
+        if r.get("in_vols") and all(v is not None for v in r["in_vols"]):
+            mesh_err = sum(abs(trimesh.load(f, process=True, force="mesh").volume - v)
+                           for f, v in zip(r["files"], r["in_vols"]))
+            bound = min(bound, 3.0 * mesh_err + 1e-6 * max(abs(r["vol"] or 0.0), 1.0))
         ex = None
-        if r["planar"] and os.path.exists(CGAL):
+        if (r["planar"] or any(x != mf.Error.NoError for x in st)) and os.path.exists(CGAL):
             p = subprocess.run([CGAL, r["op"]] + r["files"], capture_output=True, text=True, timeout=600)
             if p.returncode == 0:
                 ex = float(p.stdout.strip())
+                if not r["planar"]:
+                    # Curved: CGAL's mesh boolean stands in for Manifold's (its meshes rejected).
+                    mv, ex = ex, None
         ours = r["vol"]
         verdict = "ok"
         if r["status"] != "ok":

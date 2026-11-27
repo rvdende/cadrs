@@ -1424,7 +1424,10 @@ impl Shape {
                     // Through the session: it keeps what it knows of moved bodies.
                     let iso = nalgebra::Isometry3::from_parts(
                         nalgebra::Translation3::from(m.t),
-                        nalgebra::UnitQuaternion::from_matrix(&m.m),
+                        // (Exactly: `from_matrix` iterates from the identity and stays there for a half turn.)
+                        nalgebra::UnitQuaternion::from_rotation_matrix(
+                            &nalgebra::Rotation3::from_matrix_unchecked(m.m),
+                        ),
                     );
                     let r = super::op1(|k| k.transform(body.0, &iso))?;
                     return Ok(self.keep_flags(Shape::of_body(r)));

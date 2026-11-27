@@ -475,18 +475,52 @@ pub fn chain_edges(mut edges: Vec<EdgeGeom>, tol: Option<f64>) -> Vec<Vec<EdgeGe
 }
 
 /// `Wire.assembleEdges(edges)`: one wire of them all (in an order that joins them).
-pub fn assemble(edges: Vec<EdgeGeom>) -> CqResult<Vec<EdgeGeom>> {
-    let n = edges.len();
-    let mut w = chain_edges(edges, None);
-    if w.len() != 1 {
-        // OCCT warns and keeps the edges it could join to the first.
-        let first = w.remove(0);
-        if first.len() < n {
-            return Ok(first);
-        }
-        return Ok(first);
+pub fn assemble(mut edges: Vec<EdgeGeom>) -> CqResult<Vec<EdgeGeom>> {
+    // As OCCT's MakeWire given a list: the wire grows by every edge meeting its ends, the
+    // edges in their order where they follow on, and on past a point it has come back to (a
+    // profile round an annulus that goes out to its bore and back along one cut: the bore and
+    // both runs of the cut are the wire's too). Edges it never meets are left out (OCCT warns).
+    if edges.is_empty() {
+        return Ok(edges);
     }
-    Ok(w.remove(0))
+    let near = |a: &V3, b: &V3| (a - b).norm() <= meet_tol(a).max(1e-6);
+    let mut w = vec![edges.remove(0)];
+    loop {
+        let (head, tail) = (w[0].start(), w[w.len() - 1].end());
+        // The next edge in order first, then any at the tail, then any at the head.
+        let pick = (0..edges.len())
+            .find_map(|i| {
+                let e = &edges[i];
+                if near(&e.start(), &tail) {
+                    Some((i, false, false))
+                } else if near(&e.end(), &tail) {
+                    Some((i, true, false))
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                (0..edges.len()).find_map(|i| {
+                    let e = &edges[i];
+                    if near(&e.end(), &head) {
+                        Some((i, false, true))
+                    } else if near(&e.start(), &head) {
+                        Some((i, true, true))
+                    } else {
+                        None
+                    }
+                })
+            });
+        let Some((i, rev, front)) = pick else { break };
+        let e = edges.remove(i);
+        let e = if rev { e.reversed() } else { e };
+        if front {
+            w.insert(0, e);
+        } else {
+            w.push(e);
+        }
+    }
+    Ok(w)
 }
 
 /// The plane a set of closed wires lies on: `hint` when they lie on it, else the plane fitted

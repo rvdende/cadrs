@@ -155,5 +155,57 @@ pub(crate) fn op1(
     Ok(adopt(first))
 }
 
+/// [`op1`] for an operation on `inputs` whose result may hold several solids: those in the order
+/// of what they came from (as OCCT's results list them; programs take `solids()[0]`), each by
+/// the earliest input face it continues (the input first, then its face).
+pub(crate) fn op_ordered(
+    inputs: &[BodyId],
+    f: impl FnOnce(&mut NativeKernel) -> crate::Result<crate::OpResult>,
+) -> CqResult<BodyRef> {
+    let r = session(f)?;
+    if r.bodies.len() != 1 {
+        let ids = r.bodies.clone();
+        return op1(move |_| {
+            Ok(crate::OpResult {
+                bodies: ids,
+                history: r.history,
+            })
+        });
+    }
+    let id = r.bodies[0];
+    let b = session(|k| k.get(id).cloned())?;
+    if b.solids.len() < 2 {
+        return Ok(adopt(id));
+    }
+    let mut key = vec![(usize::MAX, u64::MAX); b.faces.len()];
+    for (fid, inp) in &r.history.modified {
+        if let (Some(k), Some(slot)) = (
+            inputs.iter().position(|x| *x == inp.body),
+            key.get_mut(fid.0 as usize),
+        ) {
+            *slot = (*slot).min((k, inp.face.0));
+        }
+    }
+    let solid_key = |s: &crate::native::topo::Solid| {
+        s.shells
+            .iter()
+            .flat_map(|&sh| b.shells[sh].faces.iter())
+            .map(|&f| key[f])
+            .min()
+            .unwrap_or((usize::MAX, u64::MAX))
+    };
+    let keys: Vec<_> = b.solids.iter().map(solid_key).collect();
+    if keys.windows(2).all(|w| w[0] <= w[1]) {
+        return Ok(adopt(id));
+    }
+    let mut order: Vec<usize> = (0..b.solids.len()).collect();
+    order.sort_by_key(|&i| keys[i]);
+    let mut nb = (*b).clone();
+    nb.solids = order.iter().map(|&i| b.solids[i].clone()).collect();
+    let out = insert(nb);
+    session(|k| k.release(id));
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests;

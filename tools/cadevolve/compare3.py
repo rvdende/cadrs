@@ -11,9 +11,13 @@ Categories:
   we-fail       ours fails; one other kernel gives a valid result
   disputed      ours differs from each other valid result, and they differ from each other
   all-fail      no kernel gives a valid result
+  reviewed      the two others agree and are wrong, by a hand review in reviewed.json (the
+                volume worked out and why); ours matches the reviewed volume
 """
-import argparse, collections, json, re
+import argparse, collections, json, os, re
 from compare import load, close
+
+REVIEWED = {int(i): r for i, r in json.load(open(os.path.join(os.path.dirname(__file__), "reviewed.json"))).items()}
 
 
 def same(a, b, rel=1e-3, area=None):
@@ -34,7 +38,10 @@ def valid(r):
     return r.get("status") == "ok" and r.get("valid", True) and not (r.get("vol", 0) <= 1e-9 and r.get("solids", 0) > 0)
 
 
-def judge(o, k, c):
+def judge(o, k, c, i=None):
+    if i in REVIEWED:
+        ok = c.get("status") == "ok" and valid(c) and close(c["vol"], REVIEWED[i]["vol"], 1e-3)
+        return "reviewed" if ok else "bug"
     others = [r for r in (o, k) if r is not None and valid(r)]
     if c.get("status") != "ok":
         if not others:
@@ -61,10 +68,10 @@ def main():
     keys = sorted(set(c) & set(o) & set(k))
     cats = collections.defaultdict(list)
     for i in keys:
-        cats[judge(o[i], k[i], c[i])].append(i)
+        cats[judge(o[i], k[i], c[i], i)].append(i)
     n = len(keys)
     print(f"{n} generators run by all three")
-    for cat in ["agree", "only-valid", "bug", "we-fail", "disputed", "all-fail"]:
+    for cat in ["agree", "reviewed", "only-valid", "bug", "we-fail", "disputed", "all-fail"]:
         print(f"  {cat:11s} {len(cats[cat]):5d}  {100 * len(cats[cat]) / max(n, 1):5.1f}%")
     if a.errors:
         cnt = collections.Counter()

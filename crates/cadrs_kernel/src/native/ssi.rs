@@ -892,6 +892,40 @@ fn plane_cone(fp: &Frame, fc: &Frame, r: f64, ang: f64, bb: &Bbox) -> Option<Vec
             }
         }
     }
+    // Exactly where the conic crosses each side of the box, and its asymptotes (D = 0): on
+    // e·X = h, (e·o − h)·D + A (e·x cos u + e·y sin u) + k (e·z)(c − r g) = 0 is
+    // α cos u + β sin u + γ = 0. Between neighbouring crossings the conic is wholly in or out
+    // of the box, so a sample between each two finds every run, however thin (a plane a little
+    // off the axis meets a cone's patch in a sliver of u, bounded by the box's sides).
+    let mut cross = |al: f64, be: f64, ga: f64| {
+        let rr = al.hypot(be);
+        if rr < tol::TINY || ga.abs() > rr {
+            return;
+        }
+        let (ph, w) = (be.atan2(al), (-ga / rr).clamp(-1.0, 1.0).acos());
+        us.extend([(ph + w).rem_euclid(TAU), (ph - w).rem_euclid(TAU)]);
+    };
+    for j in 0..3 {
+        let e = V3::ith(j, 1.0);
+        let (ex, ey, ez) = (fc.x.dot(&e), fc.y.dot(&e), fc.z.dot(&e));
+        for h in [bb.min[j], bb.max[j]] {
+            let oe = fc.o[j] - h;
+            cross(
+                oe * s * nl.x + a * ex - k * ez * r * nl.x,
+                oe * s * nl.y + a * ey - k * ez * r * nl.y,
+                oe * q + k * ez * c,
+            );
+        }
+    }
+    cross(s * nl.x, s * nl.y, q);
+    us.sort_by(f64::total_cmp);
+    us.dedup_by(|a, b| (*a - *b).abs() < tol::REL_FINE);
+    let mids: Vec<f64> = us
+        .iter()
+        .zip(us.iter().skip(1).chain(std::iter::once(&(us[0] + TAU))))
+        .map(|(x, y)| (0.5 * (x + y)).rem_euclid(TAU))
+        .collect();
+    us.extend(mids);
     us.sort_by(f64::total_cmp);
     us.dedup_by(|a, b| (*a - *b).abs() < tol::REL_FINE);
     let m = us.len();

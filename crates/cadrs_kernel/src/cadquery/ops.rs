@@ -37,7 +37,8 @@ fn boolean_bodies(op: BoolOp, target: &Shape, tools: &[Shape]) -> CqResult<Shape
     let ids: Vec<crate::BodyId> = tb.iter().map(|b| b.0).collect();
     // (An empty result is an empty compound, as OCCT's: a cut taking everything, an
     // intersection of things apart.)
-    let r = match op1(|k| k.boolean(op, t.0, &ids)) {
+    let inputs: Vec<crate::BodyId> = std::iter::once(t.0).chain(ids.iter().copied()).collect();
+    let r = match super::op_ordered(&inputs, |k| k.boolean(op, t.0, &ids)) {
         Ok(b) => Ok(Shape::of_body(b)),
         Err(CqError::Empty(_)) => Ok(Shape::compound(vec![])),
         Err(e) => Err(e),
@@ -61,6 +62,7 @@ fn oracle_log(dir: &str, op: BoolOp, target: &BodyRef, tools: &[BodyRef], r: &Cq
     let mut kinds = Vec::new();
     let mut area = 0.0;
     let mut defl_used = 0.0_f64;
+    let mut vols = Vec::new();
     for (j, b) in std::iter::once(target).chain(tools).enumerate() {
         let body = brep(b);
         planar &= body
@@ -83,9 +85,9 @@ fn oracle_log(dir: &str, op: BoolOp, target: &BodyRef, tools: &[BodyRef], r: &Cq
             .unwrap_or(1.0);
         let defl = (diag * 2e-4).max(1e-5);
         defl_used = defl_used.max(defl);
-        area += session(|k| k.mass_properties(b.0))
-            .map(|m| m.surface_area)
-            .unwrap_or(0.0);
+        let mp = session(|k| k.mass_properties(b.0)).ok();
+        area += mp.as_ref().map(|m| m.surface_area).unwrap_or(0.0);
+        vols.push(mp.map(|m| m.volume).unwrap_or(f64::NAN));
         let Ok(m) = session(|k| {
             k.tessellate(
                 b.0,
@@ -125,8 +127,20 @@ fn oracle_log(dir: &str, op: BoolOp, target: &BodyRef, tools: &[BodyRef], r: &Cq
         Err(e) => e.to_string().replace('"', "'"),
         Ok(_) => String::new(),
     };
+    let in_vols = vols
+        .iter()
+        .map(|v| {
+            if v.is_finite() {
+                format!("{v:.17e}")
+            } else {
+                "null".into()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
     let rec = format!(
-        "{{\"op\": \"{op:?}\", \"files\": {files:?}, \"kinds\": {kinds:?}, \"planar\": {planar}, \"deflection\": {defl_used:e}, \"area\": {area:e}, \"status\": \"{status}\", \"vol\": {}, \"out_area\": {}, \"err\": \"{err}\"}}",
+        "{{\"op\": \"{op:?}\", \"files\": {files:?}, \"kinds\": {kinds:?}, \"planar\": {planar}, \"deflection\": {defl_used:e}, \"area\": {area:e}, \"in_vols\": [{}], \"status\": \"{status}\", \"vol\": {}, \"out_area\": {}, \"err\": \"{err}\"}}",
+        in_vols,
         if vol.is_finite() {
             format!("{vol:.17e}")
         } else {
@@ -978,7 +992,9 @@ pub fn fillet(s: &Shape, r: f64, edges: &[Shape]) -> CqResult<Shape> {
     if ids.is_empty() {
         return value_err!("Fillets requires that edges be selected");
     }
-    Ok(Shape::of_body(op1(|k| k.fillet(body.0, &ids, r))?))
+    Ok(Shape::of_body(super::op_ordered(&[body.0], |k| {
+        k.fillet(body.0, &ids, r)
+    })?))
 }
 
 /// `chamfer(length, length2, edges)`.
@@ -1008,7 +1024,7 @@ pub fn chamfer(s: &Shape, d1: f64, d2: Option<f64>, edges: &[Shape]) -> CqResult
         first.dedup();
         opts.first_on = first;
     }
-    Ok(Shape::of_body(op1(|k| {
+    Ok(Shape::of_body(super::op_ordered(&[body.0], |k| {
         k.chamfer_with(body.0, &ids, &opts)
     })?))
 }
@@ -1026,7 +1042,9 @@ pub fn hollow(s: &Shape, faces: &[Shape], t: f64, sharp: bool) -> CqResult<Shape
         sharp,
         nothing_hollowed: Default::default(),
     };
-    Ok(Shape::of_body(op1(|k| k.shell_with(body.0, &spec))?))
+    Ok(Shape::of_body(super::op_ordered(&[body.0], |k| {
+        k.shell_with(body.0, &spec)
+    })?))
 }
 
 /// `isInside(point, tolerance)`: inside the solid or on its boundary.
