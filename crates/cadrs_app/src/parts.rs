@@ -5756,9 +5756,6 @@ mod tests {
         assert_side_and_bottom_shared(&extruded(circle, &[10.0, 20.0]));
     }
 
-    /// While a feature's dialog is open picks land on the ghost (the parts before the feature):
-    /// not on a hidden part's, whose faces can lie on the shown part's (issue #297's document:
-    /// a click on one part's end picked the hidden part's end cap in the same plane).
     /// What a rotate drag turns about (`crate::viewport::part_point`): the point on the part
     /// under the pointer, in orthographic and perspective; nothing beside the part.
     #[test]
@@ -5789,6 +5786,9 @@ mod tests {
         }
     }
 
+    /// While a feature's dialog is open picks land on the ghost (the parts before the feature):
+    /// not on a hidden part's, whose faces can lie on the shown part's (issue #297's document:
+    /// a click on one part's end picked the hidden part's end cap in the same plane).
     #[test]
     fn a_hidden_parts_ghost_is_not_picked() {
         let circle = cadrs_sketch::SketchOp::AddCircle {
