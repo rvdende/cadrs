@@ -7393,6 +7393,11 @@ fn face_pcurve(s: &Surface, c: &Curve, t0: f64, t1: f64, near: Option<P2>) -> Cu
 /// many-span curves); a circle on a B-spline surface the same, as eight spans. `None`
 /// otherwise or for other curves.
 fn quick_pcurve(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Option<Curve> {
+    // (On a plane the p-curve is the curve's own, mapped affinely: [`super::pcurve::pcurve`]
+    // has it exactly, without projecting.)
+    if matches!(s, Surface::Plane { .. }) {
+        return None;
+    }
     let pieces = match c {
         Curve::Nurbs(_) => c.pieces(t0, t1),
         // A circle on a B-spline surface (its p-curve a fitted one anyway): as eight spans.
