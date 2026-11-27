@@ -514,7 +514,9 @@ fn run_solve(
     // A pick never pulls the moving instance off the mates it already has (#312): when it has
     // others, every mate is solved from where the parts are, so it moves only within the
     // freedom they leave, its free motion staying where it is. A part with no other mates is
-    // snapped straight onto the new mate.
+    // snapped straight onto the new mate, with the least movement: its free motion (a
+    // Revolute's angle, a Slider's travel) stays where it is too, not reset to 0, which would
+    // turn it to line up with the other part (and put one of two identical parts on the other).
     let held = snap_only
         && mover
             .is_some_and(|m| cadrs_core::assembly::solver::mated_elsewhere(&doc_model, m, s.id));
@@ -551,7 +553,7 @@ fn run_solve(
             snap: snap_only.then_some(s.id),
             drives: if snap_only { s.drives() } else { Vec::new() },
             snap_only,
-            hold_free: false,
+            hold_free: snap_only,
         }
     };
     let mut sol = cadrs_core::assembly::solve(&model, &solids, &opts);

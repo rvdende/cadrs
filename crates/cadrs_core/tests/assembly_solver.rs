@@ -495,3 +495,35 @@ fn a_new_mate_keeps_the_movers_other_mates() {
         "the snap alone tears B off: {near:?}"
     );
 }
+
+#[test]
+fn a_picks_snap_keeps_the_free_motion_where_it_is() {
+    // A Revolute's pick on a part with no other mates snaps it onto the joint with the least
+    // movement: the axes meet, but B keeps its 30° turn about them (hold_free) instead of being
+    // turned back to line up with A, which on two identical parts puts one exactly on the other.
+    let b = InstanceId::from_u128(2);
+    let turned = Pose::rotation_about([0.0; 3], [0.0, 0.0, 1.0], 30f64.to_radians());
+    let start = Pose::translation([40.0, 25.0, 7.0]).then(&turned);
+    let mut asm = Assembly {
+        instances: vec![inst(1, Pose::IDENTITY, true), inst(2, start, false)],
+        mates: vec![revolute(1, (1, [10.0, 0.0, 0.0]), (2, [0.0; 3]))],
+        ..Default::default()
+    };
+    let s = solver::solve(
+        &asm,
+        &frame_of,
+        &SolveOptions {
+            movers: vec![b],
+            snap: Some(MateId::from_u128(1)),
+            snap_only: true,
+            hold_free: true,
+            ..Default::default()
+        },
+    );
+    apply(&mut asm, &s);
+    let [c0, c1] = asm.mates[0].mate().unwrap().connectors;
+    let (f0, f1) = (world(&asm, &c0), world(&asm, &c1));
+    assert!(dist(f0.origin, f1.origin) < 1e-6, "on the joint");
+    let angle = f1.x[1].atan2(f1.x[0]).to_degrees();
+    assert!((angle - 30.0).abs() < 1e-6, "B keeps its 30° turn: {angle}");
+}
