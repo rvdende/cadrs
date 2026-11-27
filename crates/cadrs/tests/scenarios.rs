@@ -1482,16 +1482,20 @@ fn scenario_course_tips_scale() {
         return;
     };
     let k = if cfg!(debug_assertions) { 8.0 } else { 1.0 };
+    // Frame times are wall-clock: on CI's shared runners (`CI` set) they say more about the
+    // runner than the app, so there only what was rebuilt is checked (`CADRS_FRAME_LIMITS=1`
+    // checks the times anyway).
+    let frame_limits = !env_set("CI") || env_set("CADRS_FRAME_LIMITS");
     // The background rebuild (everything below the first plate): no frame freezes.
     let background = perf_max(&out, "background");
     assert!(
-        background < 50.0 * k,
+        !frame_limits || background < 50.0 * k,
         "a frame took {background} ms during the background rebuild"
     );
     // A tab switch to a small studio.
     let switch = perf_max(&out, "switch");
     assert!(
-        switch < 100.0 * k,
+        !frame_limits || switch < 100.0 * k,
         "the tab switch took a {switch} ms frame"
     );
     // Editing the last feature rebuilt only it.
@@ -1500,7 +1504,10 @@ fn scenario_course_tips_scale() {
     // The document opened: shown at once, its 250 features rebuilt in the background without
     // a frame freezing (the load and first frames within the 2 s budget).
     let open = perf_max(&out, "open");
-    assert!(open < 2000.0 * k, "opening took a {open} ms frame");
+    assert!(
+        !frame_limits || open < 2000.0 * k,
+        "opening took a {open} ms frame"
+    );
     let rebuilds = std::fs::read_to_string(out.join("perf-open-rebuilds.txt")).unwrap();
     assert!(
         rebuilds.lines().any(|l| l.contains("120 computed")),
