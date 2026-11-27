@@ -84,6 +84,8 @@ pub enum Call {
     OpenTab(TabName),
     GetAssembly(AssemblyName),
     InsertInstance(InsertInstance),
+    GetNodeGraph(PartStudio),
+    ConnectParameter(ConnectParameter),
     ImportFile(ImportFile),
     AddMate(AddMate),
     SetMateValues(SetMateValues),
@@ -100,6 +102,10 @@ pub enum Call {
     AddFootprint(AddFootprint),
     RemoveFootprint(RemoveFootprint),
     LinkOutline(LinkOutline),
+    GetConfiguration(GetConfiguration),
+    SetConfiguration(SetConfiguration),
+    SetActiveConfiguration(SetActiveConfiguration),
+    SetInstanceConfiguration(SetInstanceConfiguration),
 }
 
 /// What the app answers.
@@ -389,6 +395,32 @@ impl Cadrs {
     }
 
     #[tool(
+        description = "A Part Studio's node graph (the node view of its feature list): each node (one per \
+        feature, the Configuration node, the Parts node) with its type, place, input fields and their \
+        expressions, suppression and its UI name (for get_ui_layout and run_scenario while the node view is \
+        open), and every wire (from node and socket to node and socket; geometry, value or bypass), as the \
+        node view draws them. Works with the node view closed too."
+    )]
+    async fn get_node_graph(
+        &self,
+        Parameters(p): Parameters<PartStudio>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::GetNodeGraph(p)).await
+    }
+
+    #[tool(
+        description = "Wire a feature's field (\"Depth\") or its Bypass (suppression) to an expression of the \
+        configuration's inputs (\"#length\"), as the node view's wires do; without expr, unwire it. Returns the \
+        configuration and the parts."
+    )]
+    async fn connect_parameter(
+        &self,
+        Parameters(p): Parameters<ConnectParameter>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::ConnectParameter(p)).await
+    }
+
+    #[tool(
         description = "Rename a tab: a Part Studio (the title block of its drawings shows the name) or a drawing."
     )]
     async fn rename_tab(
@@ -422,7 +454,8 @@ impl Cadrs {
 
     #[tool(
         description = "Describe an Assembly tab: its instances (name, id, source tab and part, position \
-        in mm, fixed, hidden, suppressed) and its mate features."
+        in mm, fixed, hidden, suppressed) and its mate features, each with its position; a mate that \
+        doesn't hold where the parts are (it can't hold with the others) has misses_mm, how far off it is."
     )]
     async fn get_assembly(
         &self,
@@ -461,8 +494,10 @@ impl Cadrs {
         description = "Add a mate (Fastened, Revolute, Slider, Cylindrical, Planar, Ball or Parallel) between \
         two instances of an assembly, each connector a frame in its instance's own coordinates (origin in mm, \
         Z and X axes), optionally with limits. The solver then places the instances so the mate holds (the \
-        second connector's instance moves unless it is fixed). One undo step. Returns the assembly as \
-        get_assembly does, with each mate's current position."
+        second connector's instance moves unless it is fixed). When the mates can't all hold, the Mate \
+        Features list's order is their priority: the mates that can't hold with those before them \
+        (the new one, last) break and the rest hold (solved: false, broken: their names; misses_mm in \
+        each mate: how far off it is). One undo step. Returns the assembly as get_assembly does, with each mate's current position."
     )]
     async fn add_mate(
         &self,
@@ -474,8 +509,10 @@ impl Cadrs {
     #[tool(
         description = "Drive mates of an assembly to positions (degrees for a revolute's angle, mm for a \
         slider) and solve: the instances move so every mate holds, as Animate or a named position moves \
-        them; mates not named stay at their positions, and a value past a mate's limits is held at the \
-        limit (listed in held_at_limit). One undo step. Returns the assembly as get_assembly does: each instance's placement \
+        them; mates not named stay at their positions where they can (when they share a motion with a \
+        named one, as a Planar and a Cylindrical on the same link do, they follow it), and a value past \
+        a mate's limits is held at the limit (listed in held_at_limit). Nothing moves when the mates \
+        can't all hold (solved: false). One undo step. Returns the assembly as get_assembly does: each instance's placement \
         (translation_mm and rotation rows) and each mate's position."
     )]
     async fn set_mate_values(
@@ -656,6 +693,46 @@ impl Cadrs {
         Parameters(p): Parameters<SetFeatureVisible>,
     ) -> Result<CallToolResult, ErrorData> {
         self.call(Call::SetFeatureVisible(p)).await
+    }
+
+    #[tool(
+        description = "A Part Studio's configuration (Onshape-style): its inputs (List: a table of named configurations; Checkbox: #name 1 or 0), each List's or Checkbox's configured parameters with their value in each row, the values the Part Studio shows now, and `configurable`: every parameter of its features that can be configured, by the name set_configuration takes."
+    )]
+    async fn get_configuration(
+        &self,
+        Parameters(p): Parameters<GetConfiguration>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::GetConfiguration(p)).await
+    }
+
+    #[tool(
+        description = "Define a Part Studio's whole configuration (one undo step): its inputs in order (Lists and Checkboxes), each List's rows, the defaults, and each input's configured parameters with a value per row (the configuration table). A column can set a Variable feature's value; fields can name a Checkbox as #name. Returns the configuration as get_configuration does."
+    )]
+    async fn set_configuration(
+        &self,
+        Parameters(p): Parameters<SetConfiguration>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::SetConfiguration(p)).await
+    }
+
+    #[tool(
+        description = "Pick the configuration a Part Studio shows (one undo step): input name → value. Its features take that configuration's values and rebuild; returns the parts after it."
+    )]
+    async fn set_active_configuration(
+        &self,
+        Parameters(p): Parameters<SetActiveConfiguration>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::SetActiveConfiguration(p)).await
+    }
+
+    #[tool(
+        description = "Set the configuration of assembly instances of a configured Part Studio (one undo step): each builds its own copy of the studio in that configuration; mates stay. Null configuration: the instances follow the studio's active configuration."
+    )]
+    async fn set_instance_configuration(
+        &self,
+        Parameters(p): Parameters<SetInstanceConfiguration>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::SetInstanceConfiguration(p)).await
     }
 
     #[tool(

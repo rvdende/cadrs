@@ -1670,7 +1670,10 @@ pub(crate) fn sync_numbers(
     doc: Option<Res<ActiveDocument>>,
     focus: Res<InputFocus>,
     q_edit: Query<&cadrs_ui::NumberFieldEdit>,
-    mut q: Query<(Entity, &Role, &mut NumberFieldState, Option<&Tooltip>)>,
+    mut q: Query<
+        (Entity, &Role, &mut NumberFieldState, Option<&Tooltip>),
+        Without<cadrs_ui::node_graph::StaticCopy>,
+    >,
     mut commands: Commands,
 ) {
     let Some(s) = session else { return };

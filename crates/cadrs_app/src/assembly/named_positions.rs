@@ -33,7 +33,7 @@ use cadrs_ui::{
 };
 
 use crate::side_panel::{SidePanel, dock_beside_viewport, side_panel_header, side_panel_node};
-use crate::viewport::{ActiveKind, ViewportArea};
+use crate::viewport::ActiveKind;
 use crate::{ActiveDocument, AppState};
 
 pub struct NamedPositionsPlugin;
@@ -418,7 +418,8 @@ fn rebuild(world: &mut World) {
             });
         }
     });
-    let mut q_area = world.query_filtered::<(Entity, &ChildOf), With<ViewportArea>>();
+    let mut q_area =
+        world.query_filtered::<(Entity, &ChildOf), With<crate::side_panel::SideDock>>();
     let Some((area, parent)) = q_area.iter(world).next().map(|(e, c)| (e, c.parent())) else {
         return;
     };

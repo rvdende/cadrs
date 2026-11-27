@@ -1,7 +1,8 @@
 //! The "Rebuilding… 12 / 45" pill at the top of the 3D view: shown while a Part Studio rebuild
 //! runs on the rebuild thread for longer than a moment (opening a big document, an edit early
 //! in a long feature list), so the view isn't just empty or stale without a word. The count is
-//! the part features done of those in the rebuild ([`cadrs_core::rebuild::progress`]).
+//! the part features done of those in the rebuild ([`cadrs_core::rebuild::progress`]); in an
+//! Assembly tab, of all its source Part Studios' rebuilds ([`PartCache::assembly_progress`]).
 
 use bevy::prelude::*;
 use cadrs_ui::Theme;
@@ -100,7 +101,11 @@ fn sync_indicator(
         }
     }
     if show {
-        let (done, total) = cadrs_core::rebuild::progress();
+        // An assembly's: all its Part Studios' (each rebuild counts from 1 on its own).
+        let (done, total) = cache
+            .assembly_progress
+            .filter(|_| cache.assembly.is_some())
+            .unwrap_or_else(cadrs_core::rebuild::progress);
         let label = if total > 0 {
             cadrs_ui::i18n::tr_with(
                 "view-rebuilding-progress",

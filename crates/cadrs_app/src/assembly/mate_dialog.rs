@@ -511,7 +511,21 @@ fn run_solve(
     }
     let mover = s.mover(&doc_model);
     let pair = !matches!(s.mate_type, MateType::Tangent | MateType::Width);
-    let opts = if snap_only && !pair {
+    // A pick never pulls the moving instance off the mates it already has (#312): when it has
+    // others, every mate is solved from where the parts are, so it moves only within the
+    // freedom they leave, its free motion staying where it is. A part with no other mates is
+    // snapped straight onto the new mate, with the least movement: its free motion (a
+    // Revolute's angle, a Slider's travel) stays where it is too, not reset to 0, which would
+    // turn it to line up with the other part (and put one of two identical parts on the other).
+    let held = snap_only
+        && mover
+            .is_some_and(|m| cadrs_core::assembly::solver::mated_elsewhere(&doc_model, m, s.id));
+    let opts = if held {
+        SolveOptions {
+            movers: mover.into_iter().collect(),
+            ..Default::default()
+        }
+    } else if snap_only && !pair {
         // Tangent and Width can't be snapped: solve this mate alone (and the groups). A Width's
         // tabs on two instances move alike (mirror-symmetric).
         let id = s.id;
@@ -539,12 +553,31 @@ fn run_solve(
             snap: snap_only.then_some(s.id),
             drives: if snap_only { s.drives() } else { Vec::new() },
             snap_only,
-            hold_free: false,
+            hold_free: snap_only,
+            keep_sides: false,
         }
     };
     let mut sol = cadrs_core::assembly::solve(&model, &solids, &opts);
     if !sol.converged {
         warn!("mate solve: residual {:e}", sol.residual);
+        if held {
+            // The new mate can't hold together with the others: the parts stay where they are.
+            s.preview.clear();
+            world.insert_resource(s);
+            crate::linked::toast(world, tr("asm-mate-cant-hold"));
+            return None;
+        }
+        if !snap_only && !sol.broken.is_empty() {
+            // #193: the mates can't all hold. The list's order is their priority: the solve
+            // kept the mates before the one that breaks (a new mate: the new one), placed so they
+            // hold, and the broken ones are red in the list with a red line in the view, to be
+            // edited, suppressed or deleted. No compromise that holds none of them.
+            let names = conflicting(&model, &sol);
+            crate::linked::toast(
+                world,
+                cadrs_ui::i18n::tr_with("asm-mates-cant-all-hold", &[("mates", &names)]),
+            );
+        }
     }
     // A Tangent's first placement: the moving entity is also drawn toward the picked face, so
     // the contact lands on the face that was picked, not somewhere on its unbounded surface.
@@ -578,6 +611,21 @@ fn run_solve(
     s.preview = changed.iter().copied().collect();
     world.insert_resource(s);
     Some(changed)
+}
+
+/// The names of the mates a solve broke ([`cadrs_core::assembly::solver::Solution::broken`]: they
+/// can't hold with the mates before them), for its notice.
+pub fn conflicting(model: &Assembly, sol: &cadrs_core::assembly::solver::Solution) -> String {
+    let names: Vec<String> = sol
+        .broken
+        .iter()
+        .filter_map(|id| model.mate(*id).map(|f| f.name.clone()))
+        .collect();
+    if names.is_empty() {
+        tr("asm-mates-the-mates")
+    } else {
+        names.join(", ")
+    }
 }
 
 pub fn accept(world: &mut World) {

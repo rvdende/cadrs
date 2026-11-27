@@ -87,6 +87,7 @@ pub fn icons() -> Vec<Def> {
         def("info", Line, "Info", info),
         def("info-filled", Line, "Info (filled)", info_filled),
         def("help", Line, "Help", help),
+        def("report-problem", Line, "Report a problem", report_problem),
         def("help-filled", Line, "Help (filled)", help_filled),
         def("error-filled", Line, "Error", error_filled),
         def("warning-filled", Line, "Warning", warning_filled),
@@ -827,6 +828,23 @@ fn help() -> Vec<String> {
             line(12.0, 17.0, 12.0, 17.01, "")
         ])
     ]
+}
+
+fn report_problem() -> Vec<String> {
+    // A bug: its head, a seamed body and three legs a side.
+    let legs = [(11.0, 3.5, 9.0), (14.5, 3.0, 14.5), (18.0, 4.0, 20.0)];
+    let mut v = els![
+        path("M9 8.5 V7.5 A3 3 0 0 1 15 7.5 V8.5", "", ""),
+        line(10.0, 5.0, 8.5, 3.0, ""),
+        line(14.0, 5.0, 15.5, 3.0, ""),
+        ellipse(12.0, 14.5, 5.0, 6.0, "", ""),
+        line(12.0, 10.0, 12.0, 20.5, ""),
+    ];
+    for (y, x, y2) in legs {
+        v.push(line(7.0, y, x, y2, ""));
+        v.push(line(17.0, y, 24.0 - x, y2, ""));
+    }
+    v
 }
 
 fn help_filled() -> Vec<String> {

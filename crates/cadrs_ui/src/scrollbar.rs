@@ -18,7 +18,8 @@ impl Plugin for ScrollbarPlugin {
             PostUpdate,
             (hide_unneeded, sync_gutters).after(bevy::ui::UiSystems::Layout),
         )
-        .add_observer(on_wheel);
+        .add_observer(on_wheel)
+        .add_observer(on_wheel_sideways);
     }
 }
 
@@ -66,6 +67,41 @@ fn on_wheel(
     let y = (pos.y - dy).clamp(0.0, max);
     if pos.y != y {
         pos.y = y;
+    }
+}
+
+/// A scroll area that scrolls sideways (`overflow: scroll` on x): a sideways wheel (a
+/// trackpad's), or Shift with the wheel, over it moves its [`ScrollPosition`]; the plain wheel
+/// goes on to what is around it (a list that scrolls down, a canvas that zooms).
+#[derive(Component, Debug, Clone, Copy, Default)]
+#[require(ScrollPosition)]
+pub struct WheelScrollX;
+
+fn on_wheel_sideways(
+    mut ev: On<PointerScroll>,
+    keys: Option<Res<ButtonInput<KeyCode>>>,
+    mut q: Query<(&ComputedNode, &mut ScrollPosition), With<WheelScrollX>>,
+) {
+    let Ok((node, mut pos)) = q.get_mut(ev.entity) else {
+        return;
+    };
+    let shift = keys.is_some_and(|k| k.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]));
+    let d = if ev.x != 0.0 {
+        ev.x
+    } else if shift {
+        ev.y
+    } else {
+        return;
+    };
+    ev.propagate(false);
+    let dx = match ev.unit {
+        bevy::input::mouse::MouseScrollUnit::Line => d * 24.0,
+        bevy::input::mouse::MouseScrollUnit::Pixel => d,
+    };
+    let max = (node.content_size().x - node.size().x).max(0.0) * node.inverse_scale_factor();
+    let x = (pos.x - dx).clamp(0.0, max);
+    if pos.x != x {
+        pos.x = x;
     }
 }
 

@@ -209,6 +209,8 @@ fn step_playback(world: &mut World) {
         }],
         snap_only: false,
         hold_free: true,
+        // Each frame goes on from the last: an axis-only mate stays on its side.
+        keep_sides: true,
     };
     let sol = cadrs_core::assembly::solve(&pb.model, &pb.solids, &opts);
     for (id, p) in &sol.poses {

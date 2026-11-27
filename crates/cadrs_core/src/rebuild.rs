@@ -1077,6 +1077,10 @@ pub struct Rebuilder {
     /// Set while a rebuild may be stopped early: it stops before the next feature it would
     /// compute once this is set ([`Pending::stop`]).
     stop: Option<Arc<AtomicBool>>,
+    /// A page's time slice ([`inline`]): once past it, a rebuild that has computed a feature
+    /// stops before the next it would compute, showing its parts as far as it got, and goes on
+    /// in the next frame from the cache.
+    deadline: Option<Instant>,
     entries: HashMap<u64, Entry>,
     generation: u64,
     /// The feature whose [`Stage`] is worth meshing (the last part feature).
@@ -1334,6 +1338,7 @@ impl Rebuilder {
             #[cfg(feature = "brep")]
             kernel: cadrs_kernel::DefaultKernel::new(),
             stop: None,
+            deadline: None,
             entries: HashMap::new(),
             generation: 0,
             stage_for: None,
@@ -1537,15 +1542,23 @@ impl Rebuilder {
             let computed = !self.entries.contains_key(&key);
             // Asked to stop (a newer request waits): before the next feature it would compute,
             // the parts as far as it got (those computed stay cached for the next one).
-            if computed
-                && self.depth == 0
-                && self
+            if computed && self.depth == 0 {
+                let asked = self
                     .stop
                     .as_ref()
-                    .is_some_and(|s| s.load(Ordering::Relaxed))
-            {
-                out.stopped = true;
-                break;
+                    .is_some_and(|s| s.load(Ordering::Relaxed));
+                // (A page's slice: past it once a feature is computed, so each slice gets on.)
+                let late = out.computed > 0 && self.deadline.is_some_and(|d| Instant::now() >= d);
+                if asked || late {
+                    if late && !asked && report {
+                        let parts = listed_parts(&state);
+                        if !process::send_partial(&parts) {
+                            keep_partial(parts);
+                        }
+                    }
+                    out.stopped = true;
+                    break;
+                }
             }
             if computed {
                 out.computed += 1;
@@ -5185,7 +5198,7 @@ fn submit(job: Job) -> bool {
         .map(|tx| tx.send(job).is_ok())
         .unwrap_or(false);
     #[cfg(target_arch = "wasm32")]
-    inline::drain();
+    inline::drain(true);
     sent
 }
 
@@ -5213,32 +5226,52 @@ fn run(rx: mpsc::Receiver<Job>) {
         };
         #[cfg(not(feature = "brep"))]
         let Ok(job) = rx.recv() else { break };
-        run_job(&mut rebuilder, job, &mut pending_save);
+        run_job(&mut rebuilder, job, &mut pending_save, &mut None);
     }
 }
 
-/// The kernel in a page: no thread to run on, so [`submit`] runs each job on the page's own
-/// thread before it returns. A job that queues another (a task that rebuilds) leaves it for
-/// the drain already running. The UI waits for each, and the session snapshots are not written
-/// (they only spare rebuilds in later runs).
+/// The kernel in a page: no thread to run on, so the page's own runs the jobs. [`submit`] runs
+/// them as they are sent, and [`tick`] at the start of each frame, but a rebuild only for a
+/// slice of the frame ([`SLICE`]): it stops once past it (after a feature at least), shows its
+/// parts as far as it got ([`Pending::partial`]) and goes on in the next frame from the cache,
+/// so a document opens at once and its parts come in as they are built. A wait for a result
+/// with no limit ([`build`], [`PendingJob::wait`]) runs everything to the end. A job that
+/// queues another (a task that rebuilds) leaves it for the drain already running. The session
+/// snapshots are not written (they only spare rebuilds in later runs).
 #[cfg(target_arch = "wasm32")]
 mod inline {
     use std::cell::{Cell, RefCell};
     use std::sync::mpsc;
+    use std::time::Duration;
+
+    use web_time::Instant;
 
     use super::{Job, Rebuilder};
+
+    /// How much of a frame the kernel may have: its rebuilds stop for the frame once past it.
+    pub(super) const SLICE: Duration = Duration::from_millis(30);
 
     thread_local! {
         static QUEUE: RefCell<Option<mpsc::Receiver<Job>>> = const { RefCell::new(None) };
         static REBUILDER: RefCell<Option<Rebuilder>> = const { RefCell::new(None) };
         static DRAINING: Cell<bool> = const { Cell::new(false) };
+        /// A rebuild that ran out of its slice: it goes on before the jobs queued after it.
+        static RESUME: RefCell<Option<Job>> = const { RefCell::new(None) };
+        /// When this frame's slice ends ([`super::tick`] starts one).
+        static SLICE_END: Cell<Option<Instant>> = const { Cell::new(None) };
     }
 
     pub(super) fn start(rx: mpsc::Receiver<Job>) {
         QUEUE.with(|q| *q.borrow_mut() = Some(rx));
     }
 
-    pub(super) fn drain() {
+    /// Starts a frame's slice.
+    pub(super) fn new_slice() {
+        SLICE_END.with(|e| e.set(Some(Instant::now() + SLICE)));
+    }
+
+    /// Runs the queued jobs: rebuilds within the frame's slice (`sliced`), or all to the end.
+    pub(super) fn drain(sliced: bool) {
         if DRAINING.with(|d| d.replace(true)) {
             return;
         }
@@ -5250,13 +5283,48 @@ mod inline {
         let mut pending_save = None;
         #[cfg(not(feature = "brep"))]
         let mut pending_save = ();
-        while let Some(job) = QUEUE.with(|q| q.borrow().as_ref().and_then(|rx| rx.try_recv().ok()))
-        {
-            super::run_job(&mut rebuilder, job, &mut pending_save);
+        // (No frame started one yet: a slice from now.)
+        let end = SLICE_END.with(|e| *e.get().get_or_insert_with(|| Instant::now() + SLICE));
+        loop {
+            let Some(job) = RESUME
+                .with(|r| r.borrow_mut().take())
+                .or_else(|| QUEUE.with(|q| q.borrow().as_ref().and_then(|rx| rx.try_recv().ok())))
+            else {
+                break;
+            };
+            // The frame's slice spent: a rebuild waits for the next (the jobs after it too).
+            if sliced && matches!(job, Job::Rebuild { .. }) && Instant::now() >= end {
+                RESUME.with(|r| *r.borrow_mut() = Some(job));
+                break;
+            }
+            rebuilder.deadline = sliced.then_some(end);
+            let mut resume = None;
+            super::run_job(&mut rebuilder, job, &mut pending_save, &mut resume);
+            rebuilder.deadline = None;
+            if resume.is_some() {
+                RESUME.with(|r| *r.borrow_mut() = resume);
+                break;
+            }
         }
         REBUILDER.with(|r| *r.borrow_mut() = Some(rebuilder));
         DRAINING.with(|d| d.set(false));
     }
+}
+
+/// The start of a frame: a page ([`inline`]) gives the kernel a slice of it, to go on with the
+/// rebuilds under way. Elsewhere the kernel has a thread (or a process) of its own: nothing.
+pub fn tick() {
+    #[cfg(target_arch = "wasm32")]
+    {
+        inline::new_slice();
+        inline::drain(true);
+    }
+}
+
+/// A page: runs every job queued, to the end, for a caller that waits with no limit.
+fn finish_inline() {
+    #[cfg(target_arch = "wasm32")]
+    inline::drain(false);
 }
 
 #[cfg(feature = "brep")]
@@ -5264,8 +5332,15 @@ type PendingSave = Option<session::PendingSave>;
 #[cfg(not(feature = "brep"))]
 type PendingSave = ();
 
-/// Runs one job on the kernel session, starting a fresh session after a panic.
-fn run_job(rebuilder: &mut Rebuilder, job: Job, pending_save: &mut PendingSave) {
+/// Runs one job on the kernel session, starting a fresh session after a panic. A rebuild that
+/// stopped at the session's [`Rebuilder::deadline`] (a page's slice) is left in `resume`, to go
+/// on later; it replies only when it is done.
+fn run_job(
+    rebuilder: &mut Rebuilder,
+    job: Job,
+    pending_save: &mut PendingSave,
+    resume: &mut Option<Job>,
+) {
     #[cfg(not(feature = "brep"))]
     let _ = pending_save;
     match job {
@@ -5283,7 +5358,10 @@ fn run_job(rebuilder: &mut Rebuilder, job: Job, pending_save: &mut PendingSave) 
                 }));
                 return;
             }
-            start_progress(ticket);
+            // (A page's rebuild going on in another slice keeps the parts it has shown.)
+            if PROGRESS_TICKET.load(Ordering::Relaxed) != ticket {
+                start_progress(ticket);
+            }
             // (Restored from the session snapshot once the rebuild has the final key.)
             #[cfg(feature = "brep")]
             {
@@ -5294,6 +5372,20 @@ fn run_job(rebuilder: &mut Rebuilder, job: Job, pending_save: &mut PendingSave) 
             rebuilder.stop = Some(cancelled.clone());
             let result = catch_unwind(AssertUnwindSafe(|| rebuilder.rebuild(&features)));
             rebuilder.stop = None;
+            // Out of time, not asked to stop: the rest in a later slice, from the cache.
+            if rebuilder.deadline.is_some()
+                && !cancelled.load(Ordering::Relaxed)
+                && result.as_ref().is_ok_and(|b| b.stopped)
+            {
+                *resume = Some(Job::Rebuild {
+                    features,
+                    ticket,
+                    reply,
+                    cancelled,
+                    persist: false,
+                });
+                return;
+            }
             let build = match result {
                 Ok(b) => b,
                 Err(_) => {
@@ -5443,8 +5535,9 @@ impl<T> PendingJob<T> {
     /// Waits for the result (`None`: the job failed or the worker stopped).
     pub fn wait(self) -> Option<T> {
         let rx = self.rx.into_inner().ok()?;
-        // A page ran the job when it was sent ([`inline`]).
+        // A page runs it now, with the jobs before it ([`inline`]).
         if cfg!(target_arch = "wasm32") {
+            finish_inline();
             return rx.try_recv().ok();
         }
         rx.recv().ok()
@@ -5763,8 +5856,12 @@ impl Pending {
         if self.done.is_none() {
             let rx = self.rx.lock().ok()?;
             let got = match timeout {
-                // A page ran the rebuild when it was asked for ([`inline`]): it is there, or it
-                // won't come (and a page can't block, or tell the time the std way).
+                // A page builds it a slice per frame ([`inline`], [`tick`]), or now for a wait
+                // with no limit (it can't block, or tell the time the std way).
+                None if cfg!(target_arch = "wasm32") => {
+                    finish_inline();
+                    rx.try_recv().ok()
+                }
                 _ if cfg!(target_arch = "wasm32") => rx.try_recv().ok(),
                 None => rx.recv().ok(),
                 Some(d) if d.is_zero() => rx.try_recv().ok(),
@@ -5862,6 +5959,8 @@ impl PendingExport {
             .rx
             .into_inner()
             .map_err(|_| "The rebuild thread stopped".to_string())?;
+        // A page runs it now, with the jobs before it ([`inline`]).
+        finish_inline();
         rx.recv()
             .unwrap_or_else(|_| Err("The rebuild thread stopped".into()))
     }
@@ -6534,5 +6633,36 @@ mod ahead_tests {
             assert_eq!(made(&again), made(&fresh));
             assert_eq!(r.taken, after - computed, "after {id:?}");
         }
+    }
+}
+
+#[cfg(all(test, feature = "brep"))]
+mod slice_tests {
+    use super::*;
+
+    /// A page's rebuild (`inline`) stops once past its slice, after a feature at least, and
+    /// goes on from the cache: run again and again, it gets to the same parts as one run.
+    #[test]
+    fn a_rebuild_past_its_slice_stops_and_goes_on_from_the_cache() {
+        let features = crate::samples::scale::studio_features(3, 1);
+        let whole = Rebuilder::new().rebuild(&features);
+        assert!(!whole.stopped);
+
+        let mut r = Rebuilder::new();
+        // (Always past it: one feature computed per run.)
+        r.deadline = Some(Instant::now());
+        let mut runs = 0;
+        let last = loop {
+            runs += 1;
+            let b = r.rebuild(&features);
+            if !b.stopped {
+                break b;
+            }
+            assert_eq!(b.computed, 1, "a stopped slice computes one feature");
+            assert!(runs < 100, "it never finished");
+        };
+        assert!(runs > 1, "the slice never stopped it");
+        let ids = |b: &Build| b.parts.iter().map(|p| p.id).collect::<Vec<_>>();
+        assert_eq!(ids(&last), ids(&whole));
     }
 }

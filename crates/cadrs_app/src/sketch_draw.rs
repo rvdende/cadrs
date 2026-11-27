@@ -85,6 +85,7 @@ impl Plugin for SketchDrawPlugin {
                     sync_gizmo_layers,
                     draw_sketches,
                     sync_fills,
+                    sync_hover_fill,
                     draw_list_hovered_sketch,
                 )
                     .chain()
@@ -811,6 +812,15 @@ fn draw_sketches(
                             .chain(r.hole_curves.iter().flatten())
                             .copied(),
                     );
+                }
+            }
+        }
+        // A curve drawn twice is one edge of the regions, which name only one copy: the
+        // other's dashes showed through the outline too (#337).
+        if !outlined.is_empty() {
+            for (copy, of) in cadrs_sketch::region::duplicate_curves(&sk.geometry) {
+                if outlined.contains(&of) {
+                    outlined.insert(copy);
                 }
             }
         }
@@ -3282,6 +3292,68 @@ fn sync_fills(
     }
 }
 
+/// The tint over the closed regions of the sketch under the pointer in the view.
+#[derive(Component)]
+struct SketchHoverFill;
+
+/// The hovered sketch's closed regions: a light blue tint (10 %) over its fill, drawn with its
+/// fill's mesh, as its lines are drawn in [`crate::parts::SKETCH_HOVER_REST`].
+#[allow(clippy::type_complexity)]
+fn sync_hover_fill(
+    highlight: Res<crate::viewport::PlaneHighlight>,
+    cache: Res<FillCache>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut q: Query<(Entity, &mut Mesh3d, &mut Visibility, &RenderLayers), With<SketchHoverFill>>,
+    mut commands: Commands,
+) {
+    let target = highlight.viewport.and_then(|p| p.sketch()).and_then(|f| {
+        let (.., mesh) = cache.fills.get(&f)?;
+        let layer = cache
+            .layers
+            .get(&f)
+            .copied()
+            .unwrap_or(crate::viewport::OCCLUDED_LAYER);
+        Some((mesh.clone(), layer))
+    });
+    let Some((e, mut mesh, mut vis, layers)) = q.single_mut().ok() else {
+        let Some((mesh, layer)) = target else { return };
+        let material = materials.add(StandardMaterial {
+            base_color: crate::parts::SKETCH_HOVER_REST.with_alpha(0.1),
+            unlit: true,
+            cull_mode: None,
+            double_sided: true,
+            alpha_mode: AlphaMode::Blend,
+            // Over the sketch's own fill.
+            depth_bias: FILL_BIAS + 1.0,
+            ..default()
+        });
+        commands.spawn((
+            Name::new("sketch-hover-fill"),
+            SketchHoverFill,
+            Mesh3d(mesh),
+            MeshMaterial3d(material),
+            Transform::IDENTITY,
+            RenderLayers::layer(layer),
+            DespawnOnExit(AppState::Document),
+        ));
+        return;
+    };
+    match target {
+        Some((handle, layer)) => {
+            if mesh.0 != handle {
+                mesh.0 = handle;
+            }
+            if !layers.intersects(&RenderLayers::layer(layer)) {
+                commands.entity(e).insert(RenderLayers::layer(layer));
+            }
+            vis.set_if_neq(Visibility::Inherited);
+        }
+        None => {
+            vis.set_if_neq(Visibility::Hidden);
+        }
+    }
+}
+
 /// Gives the sketch fills the scheme's grey.
 fn recolor_fills(cache: Res<FillCache>, mut materials: ResMut<Assets<StandardMaterial>>) {
     for h in [
@@ -3366,7 +3438,8 @@ pub(crate) fn fill_mesh_with(s: &Sketch, plane: PlaneRef, outlined: bool) -> Mes
         if outlined && on_face && !s.imprint.is_empty() && bare_face_edge(s, r) {
             continue;
         }
-        let (verts, idx) = r.triangulate();
+        // To the drawn curves exactly (#337).
+        let (verts, idx) = r.triangulate_drawn();
         let base = positions.len() as u32;
         positions.extend(verts.iter().map(|p| world_exact(&frame, *p).to_array()));
         indices.extend(idx.into_iter().map(|i| i + base));

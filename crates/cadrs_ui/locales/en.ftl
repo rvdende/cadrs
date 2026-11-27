@@ -165,6 +165,10 @@ preferences-profiling = Profiling
 preferences-group-view = View
 preferences-camera = Camera
 preferences-keep-up-note = Rotating turns about the vertical and tilts, without rolling the view.
+# Preferences › Navigation › View: the row's label, its switch, and the note under it.
+preferences-rotate = Rotate
+preferences-orbit-about-pointer = About the part under the pointer
+preferences-orbit-about-pointer-note = A rotate drag that starts on a part turns about the point under the pointer, which stays where it is. Started over empty space, it turns about the middle of the view.
 preferences-wheel-zoom = Wheel zoom
 preferences-invert-wheel-zoom = Invert zoom direction
 preferences-invert-wheel-zoom-note = Off, rolling the wheel away from you zooms in. On, rolling it toward you zooms in.
@@ -309,7 +313,27 @@ shell-app-menu = Menu
 shell-preferences-ellipsis = Preferences…
 shell-app-menu-shortcuts = Keyboard shortcuts
 shell-app-menu-github = GitHub
+# The cadrs Discord server (a chat for users and developers), opened in the browser.
+shell-app-menu-discord = Discord
 shell-app-menu-docs = Documentation
+
+## Crash reports and Report a problem (cadrs_app::crash)
+crash-report-menu = Report a problem…
+crash-title = cadrs closed unexpectedly
+crash-intro = The last time cadrs ran, it closed without warning. A report of what happened and that session's log were saved. Reporting it on GitHub helps us fix it: describe what you were doing, and attach the files.
+crash-report-title = Report a problem
+crash-report-intro = A report of this session (its version, system and log) was saved. Report the problem on GitHub: describe what you were doing, and attach the files.
+crash-privacy = Nothing is sent unless you choose to. The files may hold the names of your documents and folders; look them over before you attach them.
+crash-no-panic = cadrs stopped outside its own code (a graphics driver, for example), so there is no error message: the log shows what it was doing.
+crash-show-files = Show files
+crash-copy = Copy report
+crash-copied = Report copied
+crash-copy-failed = Cannot copy the report
+crash-add-document = Add document
+crash-add-document-tooltip = Adds a copy of “{ $name }” to the files, so we can reproduce the problem
+crash-document-added = Document added: { $path }
+crash-document-failed = Cannot add the document: { $error }
+crash-report-github = Report on GitHub
 # A disabled hint under the workspaces: how to make another one ("History" is the version history panel).
 shell-app-menu-workspace-hint = Branch from a version in History
 # The submenu listing the document's workspaces (its main line and branches) to switch to.
@@ -1560,6 +1584,8 @@ view-part-hide-named = Hide { $name }
 view-part-fallback-name = part
 # A part's context menu.
 view-part-assign-material = Assign material…
+# Right-click a part's face in a Part Studio: select the part and scroll the Parts list to it.
+view-ctx-find-in-parts-list = Find in parts list
 view-part-edit-appearance = Edit appearance…
 view-part-add-to-folder = Add to folder
 view-part-remove-from-folder = Remove from folder
@@ -2375,6 +2401,7 @@ model-plane-type-tangent = Tangent
 model-sweep-keep-orientation = Keep profile orientation
 model-sweep-lock-direction = Lock profile direction
 model-sweep-lock-faces = Lock profile faces
+model-sweep-lock-faces-field = Faces to lock to
 model-loft-normal-to-profile = Normal to profile
 model-loft-tangent-to-profile = Tangent to profile
 model-loft-match-tangent = Match tangent
@@ -3350,6 +3377,10 @@ asm-mate-animate-dof = Animate mate DOF
 # Button: solves the assembly's mates (a verb).
 asm-mate-solve = Solve
 asm-mate-solve-all = Solve all mates
+# A toast when a mate's pick can't solve: the new mate and the moving part's other mates can't all hold.
+asm-mate-cant-hold = This mate can't hold together with the part's other mates: the parts stay where they are
+asm-mates-cant-all-hold = { $mates } can't all hold together: the parts stay where they are
+asm-mates-the-mates = The mates
 
 ## crates/cadrs_app/src/assembly/mate_display.rs
 # A banner while the Show mates mode is on (H is its key).
@@ -3360,6 +3391,7 @@ asm-show-mates-mode = Show mates mode (H): hover an instance, click to pin
 asm-mates-an-instance = an instance
 # { $part } is the name of the part (or "an instance") whose geometry the mate lost.
 asm-mates-missing-reference = Missing reference: the entity this mate was on is gone from { $part } (its source changed). Edit the mate and pick it again.
+asm-mates-doesnt-hold = This mate doesn't hold: it misses by { $miss }, as it can't hold together with the other mates. Edit, suppress or delete one of them.
 # A tooltip line: the row is a group of mates (a mate type that holds parts together as one).
 asm-mates-group = Group
 # A tooltip line; { $type } is a mate type (Fastened, Revolute…).
@@ -3426,6 +3458,8 @@ asm-menu-linked-no-tab = A linked instance shows a frozen version of its source:
 asm-menu-edit-standard-instance = Edit standard content instance…
 asm-menu-select-same-config = Select instances with same configuration
 asm-menu-select-same-part = Select instances with same part and same configuration
+# Every instance of the same part (or subassembly) in the same configuration.
+asm-menu-select-all-instances = Select all instances
 # { $count } is how many instances are copied.
 asm-menu-copy-items = Copy { $count } items
 # { $name } is the instance's name.
@@ -6854,3 +6888,94 @@ cam-form-remove-point = Remove point { $n }
 cam-form-add-point = Add point
 # A note under a form tool's profile: the sizes it gives the tool. { $diameter } and { $length } are numbers in mm.
 cam-form-size = Diameter { $diameter } mm, cutting length { $length } mm (from the profile)
+
+## crates/cadrs_app/src/node_view.rs (the feature list as a node graph, with configurations)
+# The feature list header's button that shows the features as nodes (and back).
+node-view-toggle = Node view
+node-view-fit = Fit all nodes
+node-view-collapse = Collapse
+node-view-expand = Expand
+# A node's input socket that turns the feature on and off (wired from a boolean input: the
+# feature is suppressed while it is false).
+node-view-enabled = Enabled (suppressed while false)
+node-view-drive-dimension = + Drive a dimension
+# Tooltip of an Input Configuration's + (in its heading): a new configuration (a copy of the last).
+node-view-add-row = Add configuration (a copy of the last)
+# A wire from the node view dropped on the 3D view but not on a dimension of the sketch being edited.
+node-view-drop-on-dimension = Drop it on a dimension of the sketch you are editing (double-click a sketch to edit it)
+node-view-no-dimension = No dimension of this sketch can take this value, or they are all driven already
+# The node view's Create menu (top left of the canvas) and what it adds.
+node-view-create = Create
+node-view-create-tooltip = Add a node to the graph
+# An input node's type, shown before its name in its title: a list of named configurations
+# (M3, M4…) setting its outputs; an on/off switch; a single value.
+node-view-input-configuration = Input Configuration
+node-view-input-checkbox = Input Checkbox
+node-view-input-value = Input Value
+# An input node's table heading: an output's name, its type, a single value's value.
+node-view-output-name = name
+node-view-output-type = type
+node-view-output-value = value
+# Tooltip of a configuration's heading in an input node.
+node-view-show-configuration = Show this configuration (double-click to rename)
+# An input node's button: a new output (a row, a value per configuration, wired out on the right).
+node-view-add-output = Output
+node-view-remove-output = Remove output
+node-view-remove-input = Remove input
+node-view-kind-length = Length
+node-view-kind-angle = Angle
+node-view-kind-number = Number
+# An output that is on or off (1 or 0); a part property's text.
+node-view-kind-switch = Switch
+node-view-kind-text = Text
+# The instance context menu's submenu of a configured Part Studio's presets.
+# The features header's dropdown of the configuration's presets.
+node-view-active-preset = Preset the Part Studio shows
+# Lays the node view's nodes out again (forgetting where they were dragged).
+node-view-arrange = Auto arrange
+# The node on the right listing the parts the Part Studio ends with.
+node-view-parts = Parts
+node-view-no-parts = No parts
+# A node's output row when the feature makes no part (or none yet).
+node-view-output = Output
+node-view-output-sketch = Sketch
+node-view-output-plane = Plane
+# Shows the presets × inputs table in the Configuration node (and hides it).
+# A wire from a Variable dropped on a feature above it.
+node-view-variable-below = A Variable reaches only the features below it
+# Dynamic suppression ▸ Suppress by configuration ▸ a new boolean input that enables the feature.
+# Switch to on an instance of a configured Part Studio's preset, while the studio shows another
+# preset. { $instance } and { $shown } are preset names.
+asm-switch-to-preset = The instance is { $instance }; the Part Studio shows { $shown } (pick it in the Configuration panel)
+# A feature's context menu: selects every feature of its type (every sketch, every fillet…).
+shell-doc-select-same-type = Select all of this type
+# Keyboard shortcuts dialog: H hides (or shows) what is selected.
+view-shortcut-toggle-visibility = Hide or show the selection
+## crates/cadrs_app/src/configuration_ui.rs
+# The Configuration panel of a Part Studio: inputs (List, Checkbox) that build the studio in several variants.
+config-title = Configuration
+config-panel-tooltip = Configuration
+config-add-input = Add input
+config-add-input-tooltip = Add a List or Checkbox input
+config-empty = No configuration inputs. A List makes a table of configurations; a Checkbox turns features on or off. Values typed in are Variables (fx), which a List can set.
+# { $name } is the input's name.
+config-input-tooltip = { $name }: right-click to rename, move or delete
+# The heading of a configuration table's first column (the configurations' names).
+config-configuration = Configuration
+# Marks the default configuration of a List.
+config-default-tag = default
+config-list = List
+config-checkbox = Checkbox
+config-move-up = Move up
+config-move-down = Move down
+config-move-left = Move left
+config-move-right = Move right
+config-checked-by-default = Checked by default
+config-show = Show in Part Studio
+config-set-default = Set as default
+config-remove-column = Remove from configuration
+common-duplicate = Duplicate
+config-configure = Configure
+config-instance-configuration = Configuration
+# The Insert dialog's configuration section for the picked item; { $name } is its Part Studio.
+config-insert-title = Configuration of { $name }

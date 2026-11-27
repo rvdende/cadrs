@@ -23,6 +23,9 @@ pub mod camera;
 pub mod change_preview;
 pub mod collab;
 pub mod composite_ui;
+pub mod config_table;
+pub mod configuration_ui;
+pub mod crash;
 pub mod create_selection;
 pub mod cursor;
 pub mod cut_list;
@@ -56,6 +59,7 @@ pub mod github;
 pub mod ground_grid;
 pub mod help;
 pub mod hidden_edges;
+pub mod hide_key;
 pub mod history_panel;
 pub mod identity;
 pub mod image_dialog;
@@ -76,11 +80,14 @@ pub mod mcp_board;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mcp_button;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod mcp_config;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod mcp_machine;
 pub mod measure;
 pub mod move_document;
 pub mod native_document;
 pub mod network;
+pub mod node_view;
 pub mod notifications;
 pub mod part_folders;
 pub mod part_shading;
@@ -192,7 +199,6 @@ pub struct StartState(pub String);
 #[derive(Resource, Debug, Clone)]
 pub struct OpenAtStart(pub std::path::PathBuf);
 
-/// The cadrs repository, for the app menu's GitHub and the top bar's (`github`).
 /// The app's log filter: Bevy's, with the peer-to-peer networking (iroh, its gossip, its QUIC
 /// layer noq) at errors only. They warn of what a peer network does all the time (an offline
 /// peer's dial timing out, a stranger's connection refused, a path kept open), which reads as
@@ -205,7 +211,22 @@ pub fn log_filter() -> String {
     )
 }
 
+/// The app's tracing layers (Bevy's `LogPlugin::custom_layer`): the frame profiler's and, in a
+/// person's runs, the session's log file ([`crash::Session`]).
+pub fn log_layers(app: &mut App) -> Option<bevy::log::BoxedLayer> {
+    let mut layers: Vec<bevy::log::BoxedLayer> = Vec::new();
+    layers.extend(frame_profile::profiler_layer(app));
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(s) = app.world().get_resource::<crash::Session>() {
+        layers.push(s.log_layer());
+    }
+    Some(Box::new(layers))
+}
+
+/// The cadrs repository, for the app menu's GitHub and the top bar's (`github`).
 pub const GITHUB: &str = "https://github.com/rvdende/cadrs";
+/// The cadrs Discord server's invite (one that never expires), for the app menu's Discord.
+pub const DISCORD: &str = "https://discord.gg/AmmqETBTKg";
 /// The top of the README on GitHub, which links the downloads (the browser build's Download App).
 pub const README: &str = "https://github.com/rvdende/cadrs#readme";
 
@@ -473,6 +494,12 @@ pub const READ_ONLY: &str = "This version is open read-only: it can't be edited"
 impl ActiveDocument {
     /// A scratch document that is not saved.
     pub fn new(mut doc: Document) -> Self {
+        // Curves drawn twice (a DXF imported before such copies were left out, #337) become
+        // one, so deleting one in the sketch doesn't leave the other behind.
+        let removed = cadrs_core::duplicate_curves::remove(&mut doc);
+        if removed > 0 {
+            info!("removed {removed} duplicate sketch curve(s) on open");
+        }
         // Its sketches as regenerated when it was last edited: an edit regenerates only those
         // whose features above (or they themselves) change.
         cadrs_core::parts::note_regenerated(&doc);
@@ -481,6 +508,7 @@ impl ActiveDocument {
         // Derived features take their sources' snapshots (neither is an edit).
         cadrs_core::variable_studio::propagate(&mut doc, None);
         cadrs_core::derived::resolve_document(&mut doc);
+        cadrs_core::configuration::refresh_copies(&mut doc);
         Self {
             saved: std::sync::Arc::new(doc.clone()),
             opened: doc.clone(),
@@ -976,6 +1004,7 @@ impl Plugin for CadrsAppPlugin {
                 network::NetworkPlugin,
                 identity::IdentityPlugin,
                 app_menu::AppMenuPlugin,
+                crash::CrashPlugin,
             ))
             .add_plugins((
                 parts::PartsPlugin,
@@ -1009,6 +1038,8 @@ impl Plugin for CadrsAppPlugin {
                 workspaces::WorkspacesPlugin,
                 repair::RepairPlugin,
                 replace_reference::ReplaceReferencePlugin,
+                configuration_ui::ConfigurationPlugin,
+                config_table::ConfigTablePlugin,
             ))
             .add_plugins((
                 appearance::AppearancePlugin,
@@ -1062,6 +1093,8 @@ impl Plugin for CadrsAppPlugin {
             ))
             .add_plugins((
                 variables_ui::VariablesPlugin,
+                node_view::NodeViewPlugin,
+                hide_key::HideKeyPlugin,
                 variable_studio_ui::VariableStudioUiPlugin,
                 scale_ui::ScalePlugin,
                 threads_ui::ThreadsPlugin,

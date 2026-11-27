@@ -205,6 +205,7 @@ pub fn solve_to(
                 movers: movers.clone(),
                 snap: Some(m),
                 drives: drives.clone(),
+                keep_sides: true,
                 ..Default::default()
             },
         );

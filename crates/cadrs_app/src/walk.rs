@@ -12,7 +12,7 @@ use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
-use bevy::window::{CursorGrabMode, CursorMoved, CursorOptions, PrimaryWindow, WindowEvent};
+use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, RawCursorMoved, WindowEvent};
 use cadrs_ui::ShortcutKey;
 
 use crate::camera::{FOCAL_PX, ViewState, ZOOM_PER_LINE};
@@ -285,7 +285,7 @@ fn walk_pointer(
     mut view: ResMut<ViewportView>,
     mut q_window: Query<(Entity, &mut Window, &mut CursorOptions), With<PrimaryWindow>>,
     q_popups: Query<(), Or<(With<cadrs_ui::menu::MenuPopup>, With<cadrs_ui::DialogRoot>)>>,
-    (mut moved, mut window_events): (MessageWriter<CursorMoved>, MessageWriter<WindowEvent>),
+    mut window_events: MessageWriter<WindowEvent>,
     mut held: Local<bool>,
 ) {
     let Ok((window_entity, mut window, mut cursor)) = q_window.single_mut() else {
@@ -318,14 +318,12 @@ fn walk_pointer(
         .is_none_or(|p| p.distance(centre) > 0.5)
     {
         window.set_cursor_position(Some(centre));
-        // (Picking's pointer too: a locked pointer reports no moves of its own.)
-        let event = CursorMoved {
+        // (Picking's pointer too: a locked pointer reports no moves of its own. Bevy turns the
+        // raw move into the logical `CursorMoved` message.)
+        window_events.write(WindowEvent::CursorMoved(RawCursorMoved {
             window: window_entity,
-            position: centre,
-            delta: None,
-        };
-        window_events.write(WindowEvent::CursorMoved(event.clone()));
-        moved.write(event);
+            physical_position: centre.as_dvec2() * f64::from(window.scale_factor()),
+        }));
     }
 }
 
@@ -609,7 +607,6 @@ mod mode_tests {
         let mut world = world();
         world.init_resource::<AccumulatedMouseMotion>();
         world.init_resource::<ViewportRect>();
-        world.init_resource::<Messages<CursorMoved>>();
         world.init_resource::<Messages<WindowEvent>>();
         let window = world.spawn((Window::default(), PrimaryWindow)).id();
         let system = world.register_system(walk_pointer);

@@ -200,6 +200,7 @@ icons! {
     INFO => ("info", Line, "Info"),
     INFO_FILLED => ("info-filled", Line, "Info (filled)"),
     HELP => ("help", Line, "Help"),
+    REPORT_PROBLEM => ("report-problem", Line, "Report a problem"),
     HELP_FILLED => ("help-filled", Line, "Help (filled)"),
     ERROR_FILLED => ("error-filled", Line, "Error"),
     WARNING_FILLED => ("warning-filled", Line, "Warning"),
@@ -242,6 +243,9 @@ icons! {
     COLUMN_ADD => ("column-add", Line, "Add column"),
     CUT_LIST => ("cut-list", Line, "Cut list"),
     CONFIGURATIONS => ("configurations", Line, "Configurations"),
+    NODE_GRAPH => ("node-graph", Line, "Node view"),
+    ZOOM_FIT => ("zoom-fit", Line, "Fit all"),
+    AUTO_ARRANGE => ("auto-arrange", Line, "Auto arrange"),
     VARIABLES => ("variables", Line, "Variables"),
     APPEARANCE => ("appearance", Line, "Appearances"),
     PROPERTIES => ("properties", Line, "Properties"),
@@ -366,4 +370,5 @@ icons! {
     PLATFORM_ANDROID => ("platform-android", Line, "Android"),
     PLATFORM_IOS => ("platform-ios", Line, "iPhone"),
     GITHUB => ("github", Line, "GitHub"),
+    DISCORD => ("discord", Line, "Discord"),
 }

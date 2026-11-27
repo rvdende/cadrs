@@ -233,6 +233,53 @@ pub fn parents(features: &[Feature], id: FeatureId) -> Vec<FeatureId> {
     out
 }
 
+/// [`parents`] without those another parent already depends on (through its own parents).
+pub fn direct_parents(features: &[Feature], id: FeatureId) -> Vec<FeatureId> {
+    without_indirect(parents(features, id), |f| parents(features, f))
+}
+
+/// [`parents_with`] without those another parent already depends on (through what it and its
+/// parents use, as the rebuild knows it): the node view's wires. A chamfer on an edge Extrude 5
+/// cut into Extrude 1's plate has both as parents (the edge lies between their faces), but
+/// Extrude 5 cut Extrude 1's part, so only Extrude 5 is wired to it (and Extrude 1 to Extrude 5).
+pub fn direct_parents_with(
+    features: &[Feature],
+    parts: &[Part],
+    uses: &HashMap<FeatureId, Vec<FeatureId>>,
+    id: FeatureId,
+) -> Vec<FeatureId> {
+    without_indirect(parents_with(features, parts, uses, id), |f| {
+        parents_with(features, parts, uses, f)
+    })
+}
+
+/// `ps` less each one another of them depends on through `parents_of` (and theirs).
+fn without_indirect(
+    ps: Vec<FeatureId>,
+    parents_of: impl Fn(FeatureId) -> Vec<FeatureId>,
+) -> Vec<FeatureId> {
+    let depends_on = |from: FeatureId, target: FeatureId| {
+        let mut seen = vec![from];
+        let mut todo = vec![from];
+        while let Some(f) = todo.pop() {
+            for p in parents_of(f) {
+                if p == target {
+                    return true;
+                }
+                if !seen.contains(&p) {
+                    seen.push(p);
+                    todo.push(p);
+                }
+            }
+        }
+        false
+    };
+    ps.iter()
+        .copied()
+        .filter(|p| !ps.iter().any(|q| q != p && depends_on(*q, *p)))
+        .collect()
+}
+
 /// The feature a sketch plane comes from (a face's feature, or a Plane feature).
 fn plane_parent(plane: &cadrs_sketch::PlaneRef) -> Option<FeatureId> {
     match plane {
@@ -299,6 +346,73 @@ pub fn children_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn direct_parents_leave_out_what_another_parent_came_from() {
+        use crate::{BooleanFeature, BooleanKind, FeatureKind, PartId};
+        let (a, b, c) = (FeatureId::new(), FeatureId::new(), FeatureId::new());
+        let boolean = |parts: Vec<PartId>| {
+            FeatureKind::Boolean(BooleanFeature {
+                op: BooleanKind::Union,
+                tools: parts,
+                ..Default::default()
+            })
+        };
+        let features = vec![
+            Feature::new(a, "Sketch 1", FeatureKind::Sketch(Default::default())),
+            // B uses A's part; C uses both A's and B's.
+            Feature::new(b, "Union 1", boolean(vec![PartId::new(a, 0)])),
+            Feature::new(
+                c,
+                "Union 2",
+                boolean(vec![PartId::new(a, 0), PartId::new(b, 0)]),
+            ),
+        ];
+        assert_eq!(parents(&features, c), vec![a, b]);
+        assert_eq!(direct_parents(&features, c), vec![b]);
+        assert_eq!(direct_parents(&features, b), vec![a]);
+    }
+
+    /// A cut that found its part by itself names no part, but the rebuild knows it changed one:
+    /// a feature on the cut and on that part is wired from the cut only.
+    #[test]
+    fn direct_parents_with_follow_the_parts_a_feature_changed() {
+        use crate::parts::{Part, PartKind};
+        use crate::{BooleanFeature, BooleanKind, FeatureKind, PartId};
+        let (a, cut, c) = (FeatureId::new(), FeatureId::new(), FeatureId::new());
+        let union = |parts: Vec<PartId>| {
+            FeatureKind::Boolean(BooleanFeature {
+                op: BooleanKind::Union,
+                tools: parts,
+                ..Default::default()
+            })
+        };
+        let features = vec![
+            Feature::new(a, "Sketch 1", FeatureKind::Sketch(Default::default())),
+            Feature::new(cut, "Cut", FeatureKind::Sketch(Default::default())),
+            Feature::new(
+                c,
+                "Union",
+                union(vec![PartId::new(a, 0), PartId::new(cut, 0)]),
+            ),
+        ];
+        let parts = vec![Part {
+            id: PartId::new(a, 0),
+            feature: a,
+            name: "Part 1".into(),
+            kind: PartKind::Solid,
+            palette: 0,
+            solid: Default::default(),
+            mass: None,
+            features: vec![a, cut],
+            source: None,
+            derived: None,
+        }];
+        let uses = HashMap::new();
+        assert_eq!(direct_parents(&features, c), vec![a, cut]);
+        assert_eq!(direct_parents_with(&features, &parts, &uses, c), vec![cut]);
+        assert_eq!(direct_parents_with(&features, &parts, &uses, cut), vec![a]);
+    }
 
     fn facts<'a>(name: &'a str, ty: &'a str) -> FeatureFacts<'a> {
         FeatureFacts {

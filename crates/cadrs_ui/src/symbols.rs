@@ -125,7 +125,7 @@ fn follow_root_style(
             if let Ok((mut sc, mut sf)) = q_spans.get_mut(*c) {
                 sc.set_if_neq(*color);
                 if sf.font_size != font.font_size || sf.weight != font.weight {
-                    sf.font_size = font.font_size;
+                    sf.font_size = font.font_size.clone();
                     sf.weight = font.weight;
                 }
             }

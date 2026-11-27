@@ -1929,9 +1929,18 @@ fn sync_tool_dialog(
     cache: Res<PartCache>,
     focus: Res<InputFocus>,
     q_edit: Query<&cadrs_ui::NumberFieldEdit>,
-    mut q_lists: Query<(&SmtRole, &mut SelectionListState)>,
-    mut q_numbers: Query<(Entity, &SmtRole, &mut NumberFieldState), Without<SelectionListState>>,
-    mut q_selects: Query<(&SmtRole, &mut SelectState)>,
+    mut q_lists: Query<
+        (&SmtRole, &mut SelectionListState),
+        Without<cadrs_ui::node_graph::StaticCopy>,
+    >,
+    mut q_numbers: Query<
+        (Entity, &SmtRole, &mut NumberFieldState),
+        (
+            Without<SelectionListState>,
+            Without<cadrs_ui::node_graph::StaticCopy>,
+        ),
+    >,
+    mut q_selects: Query<(&SmtRole, &mut SelectState), Without<cadrs_ui::node_graph::StaticCopy>>,
 ) {
     let Some(s) = session else { return };
     let Some(el) = doc.as_ref().and_then(|d| d.doc.element(s.element)) else {

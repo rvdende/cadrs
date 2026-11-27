@@ -5,6 +5,8 @@
 //!   pick, [`crate::viewport::Pick::Region`]); clicking toggles, like every selection.
 //! - While a sketch is being edited, clicking inside one of its regions with no tool (and no
 //!   entity under the pointer) selects the region; clicking empty space clears it.
+//! - The region a click would select is tinted while the pointer is over it, in modeling (the
+//!   viewport's hover) and while sketching ([`HoveredSketchRegion`]), #337.
 //! - A selected region is filled light orange with an orange outline (drawn with the Extrude
 //!   dialog's region highlight, [`crate::extrude`]), and the bottom right of the viewport reads
 //!   "Area: … mm²": the total area of the selected regions, holes excluded, computed exactly
@@ -26,14 +28,24 @@ use crate::viewport::{Pick, Selection};
 
 pub struct RegionSelectPlugin;
 
+/// The selected and hovered regions are worked out (the region drawing runs after it).
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RegionSelectSet;
+
 impl Plugin for RegionSelectPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SketchRegionSelection>()
             .init_resource::<SelectedRegions>()
+            .init_resource::<HoveredSketchRegion>()
             .add_systems(
                 Update,
-                (update_selected_regions, sync_area_readout)
+                (
+                    update_selected_regions,
+                    update_hovered_sketch_region,
+                    sync_area_readout,
+                )
                     .chain()
+                    .in_set(RegionSelectSet)
                     .after(crate::sketch_tools::SketchToolsSet)
                     .run_if(in_state(AppState::Document)),
             )
@@ -112,6 +124,33 @@ pub fn area_readout(theme: &Theme) -> impl Bundle {
         },
         Pickable::IGNORE,
     )
+}
+
+/// While a sketch is edited, its region a click would select: the one under the pointer with
+/// the Select tool, nothing else under it (a curve, point, dimension or glyph) and nothing being
+/// dragged or box-selected (as [`crate::viewport::Pick::Region`] is in modeling, #337). The
+/// index is among the sketch's regions in the [`PartCache`].
+#[derive(Resource, Debug, Default, Clone, Copy, PartialEq)]
+pub struct HoveredSketchRegion(pub Option<(FeatureId, usize)>);
+
+fn update_hovered_sketch_region(
+    session: Option<Res<SketchSession>>,
+    tool: Res<crate::sketch::ActiveSketchTool>,
+    draw: Res<crate::sketch_tools::SketchDraw>,
+    hover: Res<crate::sketch_tools::SketchHover>,
+    cache: Res<PartCache>,
+    mut out: ResMut<HoveredSketchRegion>,
+) {
+    let free = tool.tool == crate::sketch::SketchTool::Select
+        && draw.over_viewport
+        && draw.state == crate::sketch_tools::DrawState::Idle
+        && !draw.dragging()
+        && hover.0.is_none();
+    let want = session.as_deref().filter(|_| free).and_then(|s| {
+        let regions = &cache.sketch_regions(s.feature)?.regions;
+        Some((s.feature, region_at(regions, draw.cursor?)?))
+    });
+    out.set_if_neq(HoveredSketchRegion(want));
 }
 
 fn clear_sketch_regions(mut seeds: ResMut<SketchRegionSelection>) {

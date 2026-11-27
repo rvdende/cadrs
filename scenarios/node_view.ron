@@ -1,0 +1,104 @@
+// The node view (`cadrs_app::node_view`): the feature list as a node graph, with a
+// configuration. `blocks 2`: two blocks, each a sketch and a New extrude.
+// 01 The node view: a panel under the 3D view (the feature list staying on the left), a canvas
+//    with the schematic's grid; each feature a node (an extrude's node its dialog, its title
+//    its icon, type and name), geometry traces from sketches into extrudes, each node's output
+//    row, and the Parts node on the right. Create (top left), Auto arrange and Fit (top right).
+// 02 Create ▸ Input Configuration, named `size`, [+] twice, + Output named `bolt_size` with
+//    3, 4 and 5 mm: an Input Configuration node "size", its configurations default, config2 and
+//    config3 as columns (default highlighted), its output a row with a socket on the right;
+//    + Output again: a second length output `output` under it.
+// 03 bolt_size's socket dragged onto Extrude 1's Depth: Depth reads #bolt_size, a trace from
+//    the output to the field.
+// 04 The wire dragged off Extrude 1's Depth onto Extrude 2's: Extrude 2 reads #bolt_size,
+//    Extrude 1 its value again (one undo step).
+// 05 A click on Extrude 2's body: its live dialog in its node (✓ and ✕ in the node's header).
+// 06 config3's heading clicked: config3 highlighted and shown (the features header says so),
+//    Extrude 2 5 mm deep.
+// 07 The Configuration panel (the tab bar's button): on the right, full height (beside the 3D
+//    view and the node panel), the size table one row per configuration.
+// 07b Its left edge dragged 200 px left: the panel wider, the 3D view and node panel narrower.
+// 08 Auto arrange: laid out again and framed.
+// 09 The node view closed: the 3D view full height again, the List's dropdown in the list.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Custom("blocks 2"),
+        Click(ui("feature-node-view")),
+        WaitFor("node-canvas"),
+        Wait(40),
+        Screenshot("01-node-view"),
+        Click(ui("node-canvas-create")),
+        WaitFor("node-create-input-configuration"),
+        Click(ui("node-create-input-configuration")),
+        WaitFor("node-config-title-edit"),
+        Key("Ctrl+A"),
+        Type("size"),
+        Key("Enter"),
+        WaitFor("node-config-size"),
+        Click(ui("node-config-size-add-row")),
+        Wait(5),
+        Click(ui("node-config-size-add-row")),
+        WaitFor("node-config-size-show-3"),
+        Click(ui("node-config-size-add-output")),
+        WaitFor("node-output-output-name"),
+        Click(ui("node-output-output-name")),
+        Key("Ctrl+A"),
+        Type("bolt_size"),
+        Key("Enter"),
+        WaitFor("node-output-bolt_size-1"),
+        Click(ui("node-output-bolt_size-1")),
+        Key("Ctrl+A"),
+        Type("3 mm"),
+        Key("Enter"),
+        Wait(5),
+        Click(ui("node-output-bolt_size-2")),
+        Key("Ctrl+A"),
+        Type("4 mm"),
+        Key("Enter"),
+        Wait(5),
+        Click(ui("node-output-bolt_size-3")),
+        Key("Ctrl+A"),
+        Type("5 mm"),
+        Key("Enter"),
+        Wait(20),
+        ExpectText("node-config-size", "5 mm"),
+        Click(ui("node-config-size-add-output")),
+        WaitFor("node-output-output-name"),
+        Wait(20),
+        Screenshot("02-input"),
+        Drag(ui("node-output-bolt_size-out"), ui("node-extrude-1-depth")),
+        ExpectText("node-extrude-1", "#bolt_size"),
+        Wait(40),
+        Screenshot("03-wired"),
+        Drag(ui("node-extrude-1-depth"), ui("node-extrude-2-depth")),
+        ExpectText("node-extrude-2", "#bolt_size"),
+        Wait(40),
+        Screenshot("04-rewired"),
+        Click(ui("node-extrude-2-body")),
+        Wait(30),
+        Screenshot("05-live"),
+        Key("Escape"),
+        Wait(20),
+        Click(ui("node-config-size-show-3")),
+        Wait(10),
+        ExpectText("feature-preset", "config3"),
+        Wait(20),
+        Screenshot("06-shown"),
+        Click(ui("panel-configuration")),
+        WaitFor("configuration-panel"),
+        Wait(20),
+        Screenshot("07-table"),
+        Drag(ui_at("configuration-panel-edge", 0.5, 0.5), at(1110, 500)),
+        Wait(10),
+        Screenshot("07b-wider"),
+        Click(ui("node-canvas-arrange")),
+        Wait(40),
+        Screenshot("08-arranged"),
+        Click(ui("feature-node-view")),
+        Wait(20),
+        ExpectText("feature-preset", "config3"),
+        Screenshot("09-list"),
+    ],
+)

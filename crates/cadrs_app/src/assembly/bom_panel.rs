@@ -63,7 +63,7 @@ use cadrs_ui::{
 
 use crate::parts::HoverParts;
 use crate::side_panel::SidePanel;
-use crate::viewport::{ActiveKind, Pick, Selection, ViewportArea};
+use crate::viewport::{ActiveKind, Pick, Selection};
 use crate::{ActiveDocument, AppState};
 
 pub struct BomPanelPlugin;
@@ -404,7 +404,8 @@ fn rebuild(world: &mut World) {
     for e in old {
         world.entity_mut(e).despawn();
     }
-    let mut q_area = world.query_filtered::<(Entity, &ChildOf), With<ViewportArea>>();
+    let mut q_area =
+        world.query_filtered::<(Entity, &ChildOf), With<crate::side_panel::SideDock>>();
     let Some((area, parent)) = q_area.iter(world).next().map(|(e, c)| (e, c.parent())) else {
         return;
     };

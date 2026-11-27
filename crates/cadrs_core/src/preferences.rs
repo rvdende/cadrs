@@ -447,6 +447,12 @@ pub struct Preferences {
     /// other gesture.
     #[serde(default)]
     pub keep_camera_up: bool,
+    /// A rotate drag that starts on a part turns about the point on it under the pointer, which
+    /// stays where it is on screen; one that starts over empty space turns about the view's
+    /// focus. The selection Zoom to selection framed stays what the view turns about, either way.
+    /// On unless the user turns it off.
+    #[serde(default = "default_true")]
+    pub orbit_about_pointer: bool,
     /// Turn the view normal to the sketch plane when a sketch starts (once it has its plane) and
     /// when one is opened for editing, as `N` does (issue #265, like SolidWorks's "Auto-rotate
     /// view normal to sketch plane"). Off, the view stays where it is, as in Onshape.
@@ -584,6 +590,7 @@ impl Default for Preferences {
             language: Language::English,
             last_slicer: None,
             keep_camera_up: false,
+            orbit_about_pointer: true,
             sketch_view_normal: false,
             invert_wheel_zoom: false,
             grid: GridStyle::default(),
@@ -819,6 +826,7 @@ mod tests {
             language: Language::PortugueseBrazil,
             last_slicer: Some(0),
             keep_camera_up: true,
+            orbit_about_pointer: false,
             sketch_view_normal: true,
             invert_wheel_zoom: true,
             grid: GridStyle::Off,

@@ -29,6 +29,9 @@
 //! - `CADRS_SINGLE_THREADED=Update,PostUpdate,…`: runs those schedules (`First`, `PreUpdate`,
 //!   `Update`, `PostUpdate`, `Last`) on the main thread alone, so a profiler's samples of that
 //!   thread (`perf record -t <pid>`) hold all their systems, each under its own name.
+//! - `CADRS_CRASH=panic|abort`: crashes 30 frames after a document opens, with a panic or an abort (what a
+//!   crash outside Rust looks like: no panic hook runs), to try the crash reports
+//!   ([`crate::crash`]).
 
 use web_time::Instant;
 
@@ -44,6 +47,22 @@ impl Plugin for DebugToolsPlugin {
             app.insert_resource(SlowFrames { ms }).add_systems(
                 First,
                 report_slow_frames.after(crate::frame_profile::take_frame),
+            );
+        }
+        if let Ok(how) = std::env::var("CADRS_CRASH") {
+            // Some frames in, so the crash report knows the document and the GPU.
+            app.add_systems(
+                Update,
+                (move |mut frames: Local<u32>| {
+                    *frames += 1;
+                    if *frames == 30 {
+                        match how.as_str() {
+                            "abort" => std::process::abort(),
+                            _ => panic!("CADRS_CRASH: a crash to try the crash reports"),
+                        }
+                    }
+                })
+                .run_if(in_state(crate::AppState::Document)),
             );
         }
         if let Ok(v) = std::env::var("CADRS_SINGLE_THREADED") {

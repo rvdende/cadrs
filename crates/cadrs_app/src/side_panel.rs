@@ -42,6 +42,8 @@ pub enum SidePanel {
     SheetMetal,
     /// Issue #266: the frames' Cut list ([`crate::cut_list`]).
     CutList,
+    /// A Part Studio's Configuration panel ([`crate::configuration_ui`]).
+    Configuration,
 }
 
 fn on_panel_button(a: On<Activate>, q: Query<&Name>, mut open: ResMut<SidePanel>) {
@@ -57,13 +59,20 @@ fn on_panel_button(a: On<Activate>, q: Query<&Name>, mut open: ResMut<SidePanel>
         "panel-machine-builder" => toggle(&mut open, SidePanel::MachineBuilder),
         "panel-sheet-metal" => toggle(&mut open, SidePanel::SheetMetal),
         "panel-cut-list" => toggle(&mut open, SidePanel::CutList),
+        "panel-configuration" => toggle(&mut open, SidePanel::Configuration),
         "bom-panel-close"
         | "named-positions-panel-close"
         | "exploded-views-panel-close"
-        | "cut-list-panel-close" => *open = SidePanel::None,
+        | "cut-list-panel-close"
+        | "configuration-panel-close" => *open = SidePanel::None,
         _ => {}
     }
 }
+
+/// Where the side panels dock: they go after it in its parent's row, full height on the
+/// right of the 3D view and the node panel under it (the column holding both).
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct SideDock;
 
 /// The side panels' frame: a floating glass panel, full height on the viewport's right,
 /// beside it rather than over it, so the graphics area (and the view ball in its corner)
@@ -99,6 +108,7 @@ fn sync_panel_buttons(
             "panel-simulation" => *open == SidePanel::Simulation,
             "panel-sheet-metal" => *open == SidePanel::SheetMetal,
             "panel-cut-list" => *open == SidePanel::CutList,
+            "panel-configuration" => *open == SidePanel::Configuration,
             _ => continue,
         };
         if want && !selected {

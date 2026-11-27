@@ -147,8 +147,14 @@ pub(crate) fn items(
                     .iter()
                     .map(|f| tr_with("common-face-of", &[("name", &op_name(features, f.face.op))])),
             );
+            v.extend(x.profile_curves.iter().map(|p| path_label(features, p)));
             v
         }
+        (FeatureKind::Sweep(x), Role::LockFaces) => x
+            .lock_faces
+            .iter()
+            .map(|f| tr_with("common-face-of", &[("name", &op_name(features, f.face.op))]))
+            .collect(),
         (FeatureKind::Sweep(x), Role::SweepPath) => {
             x.path.iter().map(|p| path_label(features, p)).collect()
         }
@@ -242,6 +248,7 @@ pub(crate) fn list_field(role: Role) -> Option<AppliedField> {
         Role::SweepProfile => AppliedField::Profile,
         Role::SweepPath => AppliedField::Path,
         Role::LockDirection => AppliedField::LockDirection,
+        Role::LockFaces => AppliedField::LockFaces,
         Role::LoftProfiles => AppliedField::Profiles,
         Role::LoftStartDirection => AppliedField::LoftStartDirection,
         Role::LoftEndDirection => AppliedField::LoftEndDirection,
@@ -549,6 +556,18 @@ pub(crate) fn body(
                         field == AppliedField::LockDirection,
                     );
                 }
+                // With none, the faces along the path's edges.
+                if x.control == ProfileControl::LockFaces {
+                    list(
+                        b,
+                        t,
+                        "sweep-lock-faces-field",
+                        &tr("model-sweep-lock-faces-field"),
+                        Role::LockFaces,
+                        items_of(Role::LockFaces),
+                        field == AppliedField::LockFaces,
+                    );
+                }
                 if x.op != BooleanOp::New && x.body != BodyType::Surface {
                     merge_rows(
                         b,
@@ -834,7 +853,9 @@ pub(crate) fn select(k: &mut FeatureKind, role: Role, i: usize) {
         (FeatureKind::Plane(x), Role::PlaneType) => {
             x.kind = PlaneType::ALL[i.min(PlaneType::ALL.len() - 1)]
         }
-        (FeatureKind::Sweep(x), Role::ProfileControl) => x.control = ProfileControl::ALL[i.min(2)],
+        (FeatureKind::Sweep(x), Role::ProfileControl) => {
+            x.control = ProfileControl::ALL[i.min(ProfileControl::ALL.len() - 1)]
+        }
         (FeatureKind::Loft(x), Role::StartCondition) => {
             x.start = LoftCondition::ALL[i.min(LoftCondition::ALL.len() - 1)]
         }
@@ -987,20 +1008,25 @@ pub(crate) fn remove(k: &mut FeatureKind, role: Role, i: usize) {
             take(&mut x.entities, i);
         }
         (FeatureKind::Sweep(x), Role::SweepProfile) => {
-            // The list: regions, whole sketches, faces.
-            let (r, s) = (x.regions.len(), x.sketches.len());
+            // The list: regions, whole sketches, faces, curves.
+            let (r, s, f) = (x.regions.len(), x.sketches.len(), x.faces.len());
             if i < r {
                 take(&mut x.regions, i);
             } else if i < r + s {
                 take(&mut x.sketches, i - r);
-            } else {
+            } else if i < r + s + f {
                 take(&mut x.faces, i - r - s);
+            } else {
+                take(&mut x.profile_curves, i - r - s - f);
             }
         }
         (FeatureKind::Sweep(x), Role::SweepPath) => {
             take(&mut x.path, i);
         }
         (FeatureKind::Sweep(x), Role::LockDirection) => x.lock_direction = None,
+        (FeatureKind::Sweep(x), Role::LockFaces) => {
+            take(&mut x.lock_faces, i);
+        }
         (FeatureKind::Sweep(x), Role::MergeScope) => {
             take(&mut x.merge_scope, i);
         }
@@ -1039,7 +1065,7 @@ pub(crate) fn move_item(k: &mut FeatureKind, role: Role, from: usize, to: usize)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cadrs_core::advanced::LoftFeature;
+    use cadrs_core::advanced::{LoftFeature, SweepFeature};
 
     #[test]
     fn a_dragged_profile_moves() {
@@ -1054,5 +1080,46 @@ mod tests {
             unreachable!()
         };
         assert_eq!(x.profiles, vec![s(1), s(2), s(0)]);
+    }
+
+    /// Each profile control in the list is the one chosen: the last, Lock profile faces, was
+    /// Lock profile direction.
+    #[test]
+    fn every_profile_control_can_be_chosen() {
+        let mut k = FeatureKind::Sweep(SweepFeature::default());
+        for (i, c) in ProfileControl::ALL.iter().enumerate() {
+            select(&mut k, Role::ProfileControl, i);
+            let FeatureKind::Sweep(x) = &k else {
+                unreachable!()
+            };
+            assert_eq!(x.control, *c);
+        }
+    }
+
+    /// The profile list shows a surface's curves after its sketches, and removes them by row.
+    #[test]
+    fn a_profile_curve_is_listed_and_removed() {
+        let sketch = FeatureId::new();
+        // Curve features (a Helix, a Projected curve) stand for any curves here.
+        let (a, b) = (
+            PathRef::Curve(FeatureId::new()),
+            PathRef::Curve(FeatureId::new()),
+        );
+        let mut k = FeatureKind::Sweep(SweepFeature {
+            sketches: vec![sketch],
+            profile_curves: vec![a, b],
+            ..SweepFeature::default()
+        });
+        let cache = PartCache::default();
+        assert_eq!(
+            items(&[], &cache, &k, Role::SweepProfile).map(|v| v.len()),
+            Some(3)
+        );
+        remove(&mut k, Role::SweepProfile, 1);
+        let FeatureKind::Sweep(x) = &k else {
+            unreachable!()
+        };
+        assert_eq!(x.sketches, vec![sketch]);
+        assert_eq!(x.profile_curves, vec![b]);
     }
 }

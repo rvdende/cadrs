@@ -102,6 +102,8 @@ pub enum PropertyKey {
     Appearance,
     /// The mass (kg): the override if set, else density × volume (read only in the BOM).
     Mass,
+    /// A configured part's configuration ("M5, 20, Hole"; read only, [`crate::configuration`]).
+    Configuration,
     /// An assembly's **Subassembly BOM behavior** (A20.5).
     BomBehavior,
     /// A property defined in the document ([`PropertySettings::definitions`]).
@@ -110,7 +112,7 @@ pub enum PropertyKey {
 
 impl PropertyKey {
     /// The built-in properties, in the order the Properties dialog and "Add column" list them.
-    pub const BUILT_IN: [PropertyKey; 10] = [
+    pub const BUILT_IN: [PropertyKey; 11] = [
         PropertyKey::Name,
         PropertyKey::PartNumber,
         PropertyKey::Description,
@@ -121,6 +123,7 @@ impl PropertyKey {
         PropertyKey::Category,
         PropertyKey::Appearance,
         PropertyKey::Mass,
+        PropertyKey::Configuration,
     ];
 
     /// Its label ("Part number"); a custom property's name from `settings`.
@@ -136,12 +139,31 @@ impl PropertyKey {
             PropertyKey::Category => "Category".into(),
             PropertyKey::Appearance => "Appearance".into(),
             PropertyKey::Mass => "Mass".into(),
+            PropertyKey::Configuration => "Configuration".into(),
             PropertyKey::BomBehavior => "Subassembly BOM behavior".into(),
             PropertyKey::Custom(id) => settings
                 .definition(*id)
                 .map(|d| d.name.clone())
                 .unwrap_or_else(|| "(deleted property)".into()),
         }
+    }
+
+    /// A property a configuration can set per configuration
+    /// ([`crate::configuration::ParamTarget::Property`]): Name, Part number, Description,
+    /// Revision, Vendor, Category and custom properties. Not Mass or Unit of measure (the same
+    /// part in every configuration), nor Material or Appearance (the studio's), nor the read-only
+    /// ones.
+    pub fn is_configurable(&self) -> bool {
+        matches!(
+            self,
+            PropertyKey::Name
+                | PropertyKey::PartNumber
+                | PropertyKey::Description
+                | PropertyKey::Revision
+                | PropertyKey::Vendor
+                | PropertyKey::Category
+                | PropertyKey::Custom(_)
+        )
     }
 
     /// A text property typed in (a BOM cell edited in place, A20.10): not Material (a picker),
@@ -152,6 +174,7 @@ impl PropertyKey {
             PropertyKey::Material
                 | PropertyKey::Appearance
                 | PropertyKey::Mass
+                | PropertyKey::Configuration
                 | PropertyKey::BomBehavior
         )
     }
@@ -256,7 +279,7 @@ impl Properties {
             .map(|(_, v)| v.as_str())
     }
 
-    fn text_slot(&mut self, key: PropertyKey) -> Option<&mut Option<String>> {
+    pub(crate) fn text_slot(&mut self, key: PropertyKey) -> Option<&mut Option<String>> {
         Some(match key {
             PropertyKey::PartNumber => &mut self.part_number,
             PropertyKey::Description => &mut self.description,
@@ -268,7 +291,7 @@ impl Properties {
         })
     }
 
-    fn text(&self, key: PropertyKey) -> Option<&str> {
+    pub(crate) fn text(&self, key: PropertyKey) -> Option<&str> {
         match key {
             PropertyKey::PartNumber => self.part_number.as_deref(),
             PropertyKey::Description => self.description.as_deref(),
@@ -413,6 +436,51 @@ pub enum PropertyValue {
 // ---------------------------------------------------------------------------------------------
 // Reading
 
+/// A configurable property of `part` as its studio's settings hold it ("" when not set; the
+/// Name is its rename): what a configured property's cell reads
+/// ([`PropertyKey::is_configurable`]).
+pub fn part_text(parts: &[PartProps], part: PartId, key: PropertyKey) -> String {
+    let Some(p) = parts.iter().find(|p| p.part == part) else {
+        return String::new();
+    };
+    match key {
+        PropertyKey::Name => p.name.clone().unwrap_or_default(),
+        k => p.properties.text(k).unwrap_or_default().to_string(),
+    }
+}
+
+/// Sets a configurable property of `part` in its studio's settings (empty text unsets it; the
+/// caller drops entries left default).
+pub fn set_part_text(parts: &mut Vec<PartProps>, part: PartId, key: PropertyKey, text: &str) {
+    if !key.is_configurable() || part_text(parts, part, key) == text.trim() {
+        return;
+    }
+    let i = match parts.iter().position(|p| p.part == part) {
+        Some(i) => i,
+        None => {
+            parts.push(PartProps::new(part));
+            parts.len() - 1
+        }
+    };
+    let p = &mut parts[i];
+    let v = opt(text);
+    match key {
+        PropertyKey::Name => p.name = v,
+        PropertyKey::Custom(id) => {
+            p.properties.custom.retain(|(d, _)| *d != id);
+            if let Some(v) = v {
+                p.properties.custom.push((id, v));
+                p.properties.custom.sort_by_key(|(d, _)| *d);
+            }
+        }
+        k => {
+            if let Some(slot) = p.properties.text_slot(k) {
+                *slot = v;
+            }
+        }
+    }
+}
+
 /// The source Part Studio's (or standard content studio's) settings of a part.
 fn part_props(doc: &Document, element: ElementId, part: PartId) -> Option<&PartProps> {
     doc.element(element)?.part_prop(part)
@@ -498,6 +566,12 @@ pub fn text(
             .map(|a| format!("#{:02X}{:02X}{:02X}", a.rgb[0], a.rgb[1], a.rgb[2]))
             .unwrap_or_default(),
         PropertyKey::Mass => String::new(),
+        PropertyKey::Configuration => match owner {
+            PropertyOwner::Part { element, .. } => {
+                crate::configuration::describe_element(doc, element)
+            }
+            PropertyOwner::Assembly { .. } | PropertyOwner::Item { .. } => String::new(),
+        },
         PropertyKey::BomBehavior => properties(doc, owner).bom_behavior.label().to_string(),
         PropertyKey::UnitOfMeasure => properties(doc, owner)
             .unit_of_measure
@@ -591,12 +665,28 @@ pub fn mass(
     }
 }
 
-/// The part number every owner of the document has now (standard content parts included).
+/// The part number every owner of the document has now (standard content parts included, and
+/// those a configuration gives its parts in every configuration).
 pub fn part_numbers_in_use(doc: &Document) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for e in &doc.elements {
         for p in e.part_props() {
             out.extend(p.properties.part_number.clone());
+        }
+        for i in &e.configuration.inputs {
+            for p in &i.params {
+                if let crate::configuration::ParamTarget::Property {
+                    key: PropertyKey::PartNumber,
+                    ..
+                } = p.target
+                {
+                    out.extend(
+                        p.values
+                            .iter()
+                            .filter_map(|v| v.as_expr().map(String::from)),
+                    );
+                }
+            }
         }
         if let Some(a) = e.assembly_model() {
             out.extend(a.properties.part_number.clone());
@@ -612,6 +702,65 @@ pub fn part_numbers_in_use(doc: &Document) -> Vec<String> {
 // ---------------------------------------------------------------------------------------------
 // Writing
 
+/// A configured instance's part (`element` a configured copy): its name and properties in
+/// that configuration, kept on its Part Studio's configuration (made from what it has now).
+fn configured_props_mut(
+    doc: &mut Document,
+    element: ElementId,
+    part: PartId,
+) -> Option<&mut crate::configuration::ConfiguredPartProps> {
+    let (studio, values) = crate::configuration::copy_of(doc, element)?;
+    let now = doc
+        .element(element)
+        .and_then(|e| e.part_prop(part))
+        .map(|p| (p.name.clone(), p.properties.clone()))
+        .unwrap_or_default();
+    let cfg = &mut doc.element_mut(studio)?.configuration;
+    Some(cfg.part_props_mut(&values, part, now))
+}
+
+/// A configured instance's part (`element` a configured copy) whose property `key` its Part
+/// Studio's configuration sets: `text` goes in the cell of the copy's configuration (the copy
+/// follows when it is regenerated). Whether it did. (A part of the studio itself needs none:
+/// its settings are the shown configuration's, read back after the command.)
+fn set_configured_cell(
+    doc: &mut Document,
+    element: ElementId,
+    part: PartId,
+    key: PropertyKey,
+    text: &str,
+) -> Result<bool, CommandError> {
+    let Some((studio, values)) = crate::configuration::copy_of(doc, element) else {
+        return Ok(false);
+    };
+    let Some(cfg) = doc.element_mut(studio).map(|e| &mut e.configuration) else {
+        return Ok(false);
+    };
+    let Some((input, row)) = cfg.property_cell(&values, part, key) else {
+        return Ok(false);
+    };
+    if key == PropertyKey::Name && opt(text).is_none() {
+        return Err(CommandError::Invalid("the name can't be empty".into()));
+    }
+    let target = crate::configuration::ParamTarget::Property { part, key };
+    if let Some(cell) = cfg
+        .input_mut(input)
+        .and_then(|i| i.params.iter_mut().find(|p| p.target == target))
+        .and_then(|p| p.values.get_mut(row))
+    {
+        *cell = crate::configuration::CellValue::Expr(text.trim().to_string());
+    }
+    // The studio shows this configuration: its part's settings too.
+    let shown = doc
+        .element(studio)
+        .is_some_and(|e| e.configuration.complete(&values) == e.configuration.active);
+    if shown && let Some(parts) = doc.element_mut(studio).and_then(|e| e.part_props_mut()) {
+        set_part_text(parts, part, key, text);
+        parts.retain(|p| !p.is_default());
+    }
+    Ok(true)
+}
+
 /// The owner's [`PartProps`] entry, made if missing (a part of a Part Studio tab or of a
 /// standard content studio).
 fn part_props_mut(
@@ -619,6 +768,8 @@ fn part_props_mut(
     element: ElementId,
     part: PartId,
 ) -> Result<&mut PartProps, CommandError> {
+    // A configured instance's part: its Part Studio's (the copies follow it).
+    let element = crate::configuration::tab_of(doc, element);
     let props = if doc.elements.iter().any(|e| e.id == element) {
         doc.element_mut(element).and_then(|e| e.part_props_mut())
     } else {
@@ -674,13 +825,22 @@ pub fn set(
         }
         _ => value.clone(),
     };
+    if let PropertyOwner::Part { element, part } = owner
+        && let PropertyValue::Text(t) = &value
+        && set_configured_cell(doc, element, part, key, t)?
+    {
+        return Ok(());
+    }
     match (owner, key, &value) {
         (_, PropertyKey::Name, PropertyValue::Text(t)) => {
             let n =
                 opt(t).ok_or_else(|| CommandError::Invalid("the name can't be empty".into()))?;
             match owner {
                 PropertyOwner::Part { element, part } => {
-                    part_props_mut(doc, element, part)?.name = Some(n)
+                    match configured_props_mut(doc, element, part) {
+                        Some(c) => c.name = Some(n),
+                        None => part_props_mut(doc, element, part)?.name = Some(n),
+                    }
                 }
                 PropertyOwner::Assembly { element } => {
                     doc.element_mut(element)
@@ -810,9 +970,11 @@ fn own_mut(
     f: &mut dyn FnMut(&mut Properties),
 ) -> Result<(), CommandError> {
     match owner {
-        PropertyOwner::Part { element, part } => {
-            f(&mut part_props_mut(doc, element, part)?.properties)
-        }
+        // A configured part's in its configuration; else the studio's.
+        PropertyOwner::Part { element, part } => match configured_props_mut(doc, element, part) {
+            Some(c) => f(&mut c.properties),
+            None => f(&mut part_props_mut(doc, element, part)?.properties),
+        },
         PropertyOwner::Assembly { element } => {
             f(&mut crate::assembly::commands::assembly_mut(doc, element)?.properties)
         }

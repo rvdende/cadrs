@@ -723,6 +723,8 @@ impl Element {
             simulation: Default::default(),
             named_views: Vec::new(),
             studio_variables: Vec::new(),
+            configuration: Default::default(),
+            configured_sources: Vec::new(),
         }
     }
 
@@ -769,12 +771,13 @@ pub fn refresh(doc: &mut Document) {
             else {
                 continue;
             };
-            let features = src.active_features();
+            let (features, props) =
+                crate::derived::source_state(src, c.derived.configuration.as_ref(), &doc.units);
             if c.derived.studio != features
-                || c.derived.props != src.part_props()
+                || c.derived.props != props
                 || c.derived.source_name != src.name
             {
-                updates.push((i, k, features, src.part_props().to_vec(), src.name.clone()));
+                updates.push((i, k, features, props, src.name.clone()));
             }
         }
     }

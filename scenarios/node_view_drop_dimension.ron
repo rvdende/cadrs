@@ -1,0 +1,55 @@
+// A node view output dragged onto a dimension in the 3D view (`cadrs_app::node_view`): while a
+// sketch is edited, its dimension labels take a wire. `control-arm-sketch`: the course control
+// arm's sketch, with its dimensions.
+// 01 Sketch 1 edited, an Input Configuration's output `output` (10 mm, red: a length).
+// 02 Its socket dragged out over the 3D view: a red wire to the canvas's edge, and by the
+//    pointer a chip "#output" (the wire's colour, what it carries).
+// 03 Dropped on the sketch's "10" label (its sixth dimension): #output drives it.
+// 04 The sketch accepted: Sketch 1's node lists "D6 · 10 mm  #output", wired from the output
+//    in red.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Custom("control-arm-sketch"),
+        Wait(20),
+        Click(ui("feature-node-view")),
+        WaitFor("node-canvas"),
+        Wait(40),
+        Click(ui("node-canvas-create")),
+        WaitFor("node-create-input-configuration"),
+        Click(ui("node-create-input-configuration")),
+        WaitFor("node-config-title-edit"),
+        Key("Enter"),
+        WaitFor("node-config-configuration-add-output"),
+        Click(ui("node-config-configuration-add-output")),
+        WaitFor("node-output-output-1"),
+        Click(ui("node-output-output-1")),
+        Key("Ctrl+A"),
+        Type("10 mm"),
+        Key("Enter"),
+        WaitFor("node-output-output-out"),
+        DoubleClick(ui("feature-sketch-1")),
+        WaitFor("sketch-dialog"),
+        Wait(40),
+        Screenshot("01-editing"),
+        Press(ui("node-output-output-out")),
+        MoveTo(860, 660),
+        Wait(2),
+        MoveTo(1000, 520),
+        Wait(2),
+        MoveTo(1250, 400),
+        Wait(2),
+        MoveTo(1403, 339),
+        Wait(5),
+        ScreenshotNow("02-dragging"),
+        Release,
+        Wait(30),
+        Screenshot("03-dropped"),
+        Click(ui("sketch-dialog-accept")),
+        WaitFor("node-sketch-1-dim-6"),
+        ExpectText("node-sketch-1-dimensions", "#output"),
+        Wait(40),
+        Screenshot("04-driven"),
+    ],
+)

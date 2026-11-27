@@ -255,31 +255,89 @@ impl Region {
 
     /// Triangles covering the region: vertices and indices (three per triangle).
     pub fn triangulate(&self) -> (Vec<Vec2>, Vec<u32>) {
-        let mut flat = Vec::new();
-        let mut hole_starts = Vec::new();
-        let mut verts = Vec::new();
-        for (i, ring) in std::iter::once(&self.outer).chain(&self.holes).enumerate() {
-            if i > 0 {
-                hole_starts.push(verts.len());
-            }
-            for p in ring {
-                flat.push(p.x);
-                flat.push(p.y);
-                verts.push(*p);
-            }
-        }
-        let indices = earcutr::earcut(&flat, &hole_starts, 2)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|i| i as u32)
+        triangulate_rings(&self.outer, &self.holes)
+    }
+
+    /// The boundary to draw, outer ring and holes: the exact pieces with their arcs and
+    /// ellipses on the curves' own angle grid ([`crate::geom::aligned_params`], as
+    /// [`crate::hit::curve_polyline`] draws them), so an outline or fill lies on the drawn
+    /// curves (#337: the coarser `outer` and `holes` crossed them, so the outline and the curve
+    /// broke into specks, and zoomed in the fill fell short of the curve). `outer` and `holes`
+    /// stay what the regions were found with (documents keep seeds inside them).
+    pub fn drawn_rings(&self) -> (Vec<Vec2>, Vec<Vec<Vec2>>) {
+        let outer = drawn_ring(&self.outer_pieces).unwrap_or_else(|| self.outer.clone());
+        let holes = self
+            .holes
+            .iter()
+            .enumerate()
+            .map(|(i, h)| {
+                self.hole_pieces
+                    .get(i)
+                    .and_then(|p| drawn_ring(p))
+                    .unwrap_or_else(|| h.clone())
+            })
             .collect();
-        (verts, indices)
+        (outer, holes)
+    }
+
+    /// Triangles covering [`Region::drawn_rings`]: vertices and indices (three per triangle).
+    pub fn triangulate_drawn(&self) -> (Vec<Vec2>, Vec<u32>) {
+        let (outer, holes) = self.drawn_rings();
+        triangulate_rings(&outer, &holes)
     }
 
     /// True if `p` lies in the region (inside the outer boundary and outside every hole).
     pub fn contains(&self, p: Vec2) -> bool {
         point_in_polygon(p, &self.outer) && !self.holes.iter().any(|h| point_in_polygon(p, h))
     }
+}
+
+/// A closed boundary's pieces as one ring of points (the first not repeated at the end), arcs
+/// and ellipses on the curves' angle grid; `None` without pieces.
+fn drawn_ring(pieces: &[Piece]) -> Option<Vec<Vec2>> {
+    if pieces.is_empty() {
+        return None;
+    }
+    let mut ring = Vec::new();
+    for piece in pieces {
+        let mut pts = match *piece {
+            Piece::Arc(g) => g.tessellate_aligned(crate::geom::CURVE_STEP, 4),
+            Piece::Ellipse { g, t0, sweep } => {
+                g.tessellate_range_aligned(t0, t0 + sweep, crate::geom::CURVE_STEP, 4)
+            }
+            _ => piece.path(),
+        };
+        // Each piece ends where the next starts.
+        pts.pop();
+        ring.extend(pts);
+    }
+    (ring.len() >= 3).then_some(ring)
+}
+
+/// Triangles covering an outer ring less its holes: vertices and indices.
+fn triangulate_rings(outer: &[Vec2], holes: &[Vec<Vec2>]) -> (Vec<Vec2>, Vec<u32>) {
+    let mut flat = Vec::new();
+    let mut hole_starts = Vec::new();
+    let mut verts = Vec::new();
+    for (i, ring) in std::iter::once(outer)
+        .chain(holes.iter().map(|h| h.as_slice()))
+        .enumerate()
+    {
+        if i > 0 {
+            hole_starts.push(verts.len());
+        }
+        for p in ring {
+            flat.push(p.x);
+            flat.push(p.y);
+            verts.push(*p);
+        }
+    }
+    let indices = earcutr::earcut(&flat, &hole_starts, 2)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|i| i as u32)
+        .collect();
+    (verts, indices)
 }
 
 /// The region under a sketch point, as an index into `regions`: the smallest one containing it
@@ -639,9 +697,66 @@ struct Cycle {
     component: usize,
 }
 
+/// Adds a sketch curve's carrier unless the same one is there already: a curve drawn twice
+/// (two lines between the same points, a circle or arc on top of another, as some DXF files
+/// have them) is one edge. Kept twice, each copy closed a loop of its own, and a hole drawn
+/// twice was two holes on top of each other, which filled each other in (#337).
+/// A copy left out goes in `dups` with the curve it repeats.
+fn push_unique(srcs: &mut Vec<(CurveId, Carrier)>, dups: &mut Duplicates, id: CurveId, c: Carrier) {
+    match srcs.iter().find(|(_, k)| same_carrier(k, &c, 1e-9)) {
+        Some((kept, _)) => dups.push((id, *kept)),
+        None => srcs.push((id, c)),
+    }
+}
+
+/// The curves region finding takes as copies of another (a line, arc or circle drawn on top
+/// of an identical one), each with the curve it repeats, whose id the regions carry. A
+/// region's outline covers the copies too (#337: their behind-a-wall dashes showed through it).
+pub fn duplicate_curves(s: &Sketch) -> Vec<(CurveId, CurveId)> {
+    carriers_and_duplicates(s).1
+}
+
+/// Whether two carriers are the same curve within `tol` (either way round).
+fn same_carrier(k: &Carrier, c: &Carrier, tol: f64) -> bool {
+    match (*k, *c) {
+        (Carrier::Seg(x, y), Carrier::Seg(p, q)) => {
+            (x.distance(p) < tol && y.distance(q) < tol)
+                || (x.distance(q) < tol && y.distance(p) < tol)
+        }
+        (Carrier::Circle(x, r), Carrier::Circle(y, q)) => {
+            x.distance(y) < tol && (r - q).abs() < tol
+        }
+        // Both counter-clockwise: the same ends the other way round are the rest of the circle.
+        (Carrier::Arc(g), Carrier::Arc(h)) => {
+            let (g, h) = (g.to_ccw(), h.to_ccw());
+            g.center.distance(h.center) < tol
+                && (g.radius - h.radius).abs() < tol
+                && g.start().distance(h.start()) < tol
+                && g.end().distance(h.end()) < tol
+                && g.mid().distance(h.mid()) < tol
+        }
+        // (Its major point at either end of the axis.)
+        (Carrier::Ellipse(g), Carrier::Ellipse(h)) => {
+            g.center.distance(h.center) < tol
+                && (g.minor - h.minor).abs() < tol
+                && (g.a.distance(h.a) < tol || g.a.distance(-h.a) < tol)
+        }
+        _ => false,
+    }
+}
+
 /// The regular curves of a sketch as carriers.
 fn carriers(s: &Sketch) -> Vec<(CurveId, Carrier)> {
+    carriers_and_duplicates(s).0
+}
+
+/// Curves drawn twice: each copy left out, with the curve it repeats ([`duplicate_curves`]).
+type Duplicates = Vec<(CurveId, CurveId)>;
+
+/// [`carriers`], and the copies it left out.
+fn carriers_and_duplicates(s: &Sketch) -> (Vec<(CurveId, Carrier)>, Duplicates) {
     let mut srcs: Vec<(CurveId, Carrier)> = Vec::new();
+    let mut dups: Duplicates = Vec::new();
     for (id, c) in &s.curves {
         if c.construction {
             continue;
@@ -652,15 +767,7 @@ fn carriers(s: &Sketch) -> Vec<(CurveId, Carrier)> {
                 if a == b || pa.distance(pb) < 1e-12 {
                     continue;
                 }
-                // The same segment twice (two lines between the same points) is one edge.
-                let dup = srcs.iter().any(|(_, k)| {
-                    matches!(*k, Carrier::Seg(x, y)
-                        if (x.distance(pa) < 1e-9 && y.distance(pb) < 1e-9)
-                            || (x.distance(pb) < 1e-9 && y.distance(pa) < 1e-9))
-                });
-                if !dup {
-                    srcs.push((id, Carrier::Seg(pa, pb)));
-                }
+                push_unique(&mut srcs, &mut dups, id, Carrier::Seg(pa, pb));
             }
             CurveKind::Arc { start, end, .. } => {
                 if start == end {
@@ -669,12 +776,17 @@ fn carriers(s: &Sketch) -> Vec<(CurveId, Carrier)> {
                 if let Some(g) = s.arc_geom(id)
                     && g.radius > 1e-12
                 {
-                    srcs.push((id, Carrier::Arc(g)));
+                    push_unique(&mut srcs, &mut dups, id, Carrier::Arc(g));
                 }
             }
             CurveKind::Circle { center, radius } => {
                 if radius > 1e-12 {
-                    srcs.push((id, Carrier::Circle(s.pos(center), radius)));
+                    push_unique(
+                        &mut srcs,
+                        &mut dups,
+                        id,
+                        Carrier::Circle(s.pos(center), radius),
+                    );
                 }
             }
             CurveKind::Spline { .. } => {
@@ -747,34 +859,14 @@ fn carriers(s: &Sketch) -> Vec<(CurveId, Carrier)> {
                 minor,
             } => Carrier::Ellipse(EllipseGeom::new(center, major, minor)),
         };
-        let same = |k: &Carrier| match (*k, c) {
-            (Carrier::Seg(x, y), Carrier::Seg(p, q)) => {
-                (x.distance(p) < 1e-6 && y.distance(q) < 1e-6)
-                    || (x.distance(q) < 1e-6 && y.distance(p) < 1e-6)
-            }
-            (Carrier::Circle(x, r), Carrier::Circle(y, q)) => {
-                x.distance(y) < 1e-6 && (r - q).abs() < 1e-6
-            }
-            (Carrier::Arc(g), Carrier::Arc(h)) => {
-                g.center.distance(h.center) < 1e-6
-                    && (g.radius - h.radius).abs() < 1e-6
-                    && ((g.start().distance(h.start()) < 1e-6 && g.end().distance(h.end()) < 1e-6)
-                        || (g.start().distance(h.end()) < 1e-6
-                            && g.end().distance(h.start()) < 1e-6))
-            }
-            // (Its major point at either end of the axis.)
-            (Carrier::Ellipse(g), Carrier::Ellipse(h)) => {
-                g.center.distance(h.center) < 1e-6
-                    && (g.minor - h.minor).abs() < 1e-6
-                    && (g.a.distance(h.a) < 1e-6 || g.a.distance(-h.a) < 1e-6)
-            }
-            _ => false,
-        };
-        if !srcs[..sketch_count].iter().any(|(_, k)| same(k)) {
+        if !srcs[..sketch_count]
+            .iter()
+            .any(|(_, k)| same_carrier(k, &c, 1e-6))
+        {
             srcs.push((im.id, c));
         }
     }
-    srcs
+    (srcs, dups)
 }
 
 /// Every closed region of the sketch.
@@ -1659,6 +1751,48 @@ mod tests {
             region_at(&r, Vec2::new(20.0, 20.0)),
             r.iter().position(|x| x.curves.len() == 1)
         );
+    }
+
+    #[test]
+    fn a_circle_drawn_twice_is_one_hole() {
+        // As a DXF that draws every hole twice (#337): a ring with two holes, each twice.
+        let mut s = Sketch::new();
+        circle(&mut s, 0.0, 0.0, 48.0);
+        for _ in 0..2 {
+            circle(&mut s, 0.0, 0.0, 20.0);
+            circle(&mut s, 35.0, 0.0, 7.5);
+        }
+        let r = regions(&s);
+        // The ring, the middle disc and the small disc: one each.
+        assert_eq!(r.len(), 3);
+        let ring = r
+            .iter()
+            .max_by(|a, b| a.area().total_cmp(&b.area()))
+            .unwrap();
+        assert_eq!(ring.holes.len(), 2);
+        let want = PI * (48.0 * 48.0 - 20.0 * 20.0 - 7.5 * 7.5);
+        assert!((ring.area() - want).abs() < 1e-9, "{}", ring.area());
+        assert!(!ring.contains(Vec2::new(35.0, 0.0)));
+        assert!(ring.contains(Vec2::new(0.0, 30.0)));
+    }
+
+    #[test]
+    fn an_arc_and_the_rest_of_its_circle_are_two_curves() {
+        // The same ends both ways round are the two halves of a circle, not one arc twice.
+        let mut s = Sketch::new();
+        for (a, b) in [((5.0, 0.0), (-5.0, 0.0)), ((-5.0, 0.0), (5.0, 0.0))] {
+            SketchOp::AddArc {
+                center: Vec2::ZERO,
+                start: Vec2::new(a.0, a.1),
+                end: Vec2::new(b.0, b.1),
+                construction: false,
+            }
+            .apply(&mut s)
+            .unwrap();
+        }
+        let r = regions(&s);
+        assert_eq!(r.len(), 1);
+        assert!((r[0].area() - PI * 25.0).abs() < 1e-9);
     }
 
     #[test]

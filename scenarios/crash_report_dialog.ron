@@ -1,0 +1,23 @@
+// Issue #319: crash reports. 01 The cadrs closed unexpectedly dialog a start after a crash shows
+// (here on a sample report: scenarios keep no crash reports): what happened, the panic's message,
+// place, thread and first cadrs frame, that nothing is sent without the person, and Show files,
+// Copy report, Add document, Close and Report on GitHub. 02 The app menu ends with Report a
+// problem…, which opens the same dialog for the running session.
+Scenario(
+    start: Some("landing"),
+    steps: [
+        WaitFor("app-menu"),
+        Custom("crash-dialog"),
+        WaitFor("crash-dialog"),
+        MoveTo(1500, 960),
+        Wait(3),
+        Screenshot("01-crash-dialog"),
+        Key("Escape"),
+        Wait(3),
+        Click(ui("app-menu")),
+        WaitFor("app-report-problem"),
+        Hover(ui("app-report-problem")),
+        Wait(3),
+        Screenshot("02-app-menu-report-a-problem"),
+    ],
+)

@@ -223,6 +223,21 @@ impl ArcGeom {
         self.radius * self.sweep.abs()
     }
 
+    /// Points along the arc, `start` and `end` included, at the angles that are whole
+    /// multiples of `step` ([`aligned_params`]): a piece of a circle gets the same points as the
+    /// whole circle, so a region's outline and fill lie on the drawn curve.
+    pub fn tessellate_aligned(&self, step: f64, min_segments: usize) -> Vec<Vec2> {
+        aligned_params(
+            self.start_angle,
+            self.start_angle + self.sweep,
+            step,
+            min_segments,
+        )
+        .into_iter()
+        .map(|a| self.point_at(a))
+        .collect()
+    }
+
     /// Points along the arc, `start` and `end` included, with about one segment per
     /// `max_angle` radians (at least `min_segments`).
     pub fn tessellate(&self, max_angle: f64, min_segments: usize) -> Vec<Vec2> {
@@ -475,6 +490,21 @@ impl EllipseGeom {
     /// per `max_angle` of parameter (at least `min_segments`).
     pub fn tessellate(&self, max_angle: f64, min_segments: usize) -> Vec<Vec2> {
         self.tessellate_range(0.0, TAU, max_angle, min_segments)
+    }
+
+    /// Points from parameter `t0` to `t1`, both included, at the parameters that are whole
+    /// multiples of `step` ([`aligned_params`]), as [`ArcGeom::tessellate_aligned`].
+    pub fn tessellate_range_aligned(
+        &self,
+        t0: f64,
+        t1: f64,
+        step: f64,
+        min_segments: usize,
+    ) -> Vec<Vec2> {
+        aligned_params(t0, t1, step, min_segments)
+            .into_iter()
+            .map(|t| self.point_at(t))
+            .collect()
     }
 
     /// Points from parameter `t0` to `t1`, both included.
@@ -891,9 +921,74 @@ pub fn point_in_polygon(p: Vec2, pts: &[Vec2]) -> bool {
     inside
 }
 
+/// The angle step curves are drawn with, and region outlines and fills follow
+/// ([`aligned_params`]): 2°, a whole fraction of a turn.
+pub const CURVE_STEP: f64 = PI / 90.0;
+
+/// Parameters from `t0` to `t1` (both included, in that order) with the whole multiples of
+/// `step` between them, so every piece of a curve has the whole curve's points (plus its own
+/// ends): a region's outline and fill then lie exactly on the curve's drawn chords, instead of
+/// crossing them (#337: the outline and the curve broke each other into specks, and zoomed in
+/// the fill fell short of the curve). `step` must divide a full turn, so angles a turn apart
+/// share the grid. Spans shorter than `min_segments` steps are divided evenly instead.
+pub fn aligned_params(t0: f64, t1: f64, step: f64, min_segments: usize) -> Vec<f64> {
+    let (lo, hi) = (t0.min(t1), t0.max(t1));
+    // Grid points within a thousandth of a step of an end are left out (no sliver segments).
+    let eps = step * 1e-3;
+    let first = ((lo + eps) / step).ceil() as i64;
+    let last = ((hi - eps) / step).floor() as i64;
+    let inner = (last - first + 1).max(0) as usize;
+    let min_segments = min_segments.max(1);
+    if inner + 1 < min_segments {
+        let n = min_segments;
+        return (0..=n)
+            .map(|i| t0 + (t1 - t0) * i as f64 / n as f64)
+            .collect();
+    }
+    let mut out = Vec::with_capacity(inner + 2);
+    out.push(t0);
+    if t1 >= t0 {
+        out.extend((first..=last).map(|k| k as f64 * step));
+    } else {
+        out.extend((first..=last).rev().map(|k| k as f64 * step));
+    }
+    out.push(t1);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #337: a piece of a circle (a region's boundary, either way round) has the whole
+    /// circle's points between its ends, so its outline lies on the drawn circle.
+    #[test]
+    fn a_piece_of_a_circle_has_the_circles_points() {
+        let circle = ArcGeom {
+            center: Vec2::new(3.0, -2.0),
+            radius: 50.0,
+            start_angle: 0.0,
+            sweep: TAU,
+        };
+        let whole = circle.tessellate_aligned(CURVE_STEP, 16);
+        assert_eq!(whole.len(), 181);
+        let on_whole = |p: &Vec2| whole.iter().any(|q| q.distance(*p) < 1e-9);
+        for (start, sweep) in [(0.3, 2.0), (7.0, -1.3), (-1.0, 0.5)] {
+            let piece = ArcGeom {
+                start_angle: start,
+                sweep,
+                ..circle
+            };
+            let pts = piece.tessellate_aligned(CURVE_STEP, 4);
+            assert!(pts[0].distance(piece.start()) < 1e-9);
+            assert!(pts.last().unwrap().distance(piece.end()) < 1e-9);
+            let inner = &pts[1..pts.len() - 1];
+            assert!(inner.len() as f64 >= sweep.abs() / CURVE_STEP - 1.0);
+            assert!(inner.iter().all(on_whole), "{start} {sweep}");
+        }
+        // Shorter than its minimum segments: divided evenly.
+        assert_eq!(aligned_params(0.01, 0.02, CURVE_STEP, 4).len(), 5);
+    }
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9

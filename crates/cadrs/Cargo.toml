@@ -16,6 +16,7 @@ cadrs_net.workspace = true
 cadrs_ui.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ctrlc.workspace = true
 cadrs_app = { workspace = true, features = ["easyeda"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

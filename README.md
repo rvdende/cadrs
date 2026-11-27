@@ -1,5 +1,6 @@
 # cadrs
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![Discord](https://img.shields.io/badge/chat-Discord-5865f2.svg?logo=discord&logoColor=white)](https://discord.gg/AmmqETBTKg)
 
 <!-- Download buttons: the latest release's files under their names without the version (see
 .github/workflows/release.yml), the version on each badge read from GitHub by shields.io. macOS
@@ -40,6 +41,16 @@ build parts from features, put them together in assemblies, and make drawings fr
 it with `/mcp` the first time; `claude mcp list` shows whether it is connected). Elsewhere,
 `claude mcp add --transport http cadrs http://127.0.0.1:7680/mcp` does the same, and other
 clients take the URL in their MCP settings.
+
+### Installing on Windows
+
+- **Installer**: download `cadrs-x86_64-windows-setup.exe` from the
+  [latest release](https://github.com/rvdende/cadrs/releases/latest) and run it. It installs for
+  your user only (no admin rights) and adds cadrs to the Start Menu. cadrs updates itself; uninstall
+  it from **Settings › Apps**. Your documents stay.
+- **Zip**: unpack `cadrs-x86_64-windows.zip` anywhere and run `cadrs.exe`. Nothing is installed.
+- The builds aren't signed yet, so the first time, Windows may say "Windows protected your PC":
+  click **More info**, then **Run anyway**.
 
 ### Documentation
 
