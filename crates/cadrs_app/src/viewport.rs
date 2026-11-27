@@ -807,6 +807,10 @@ pub struct ViewportDrag {
     navigating: bool,
     /// Where that drag started (a drag zoom keeps it in place).
     nav_start: Vec2,
+    /// What a rotate drag turns about when the view has no pivot of its own, found on its first
+    /// move: the point on a part under where it started (the *Rotate about the part under the
+    /// pointer* preference), or `None` (over empty space, or the preference off: the focus).
+    orbit_pivot: Option<Option<Vec3>>,
     moved: f32,
     /// Where the secondary button went down over the viewport (a right-click that does not
     /// move opens a context menu).
@@ -1329,6 +1333,18 @@ pub(crate) fn pointer_over_viewport(
     q_area.iter().any(|e| hits.contains_key(&e))
 }
 
+/// The point on a part under the screen offset `at` (from the viewport's centre), if any: what
+/// a rotate drag starting there turns about.
+pub(crate) fn part_point(
+    parts: &crate::parts::PartCache,
+    view: &ViewState,
+    at: Vec2,
+) -> Option<Vec3> {
+    let (_, _, t) = crate::parts::pick_face(parts, view, at)?;
+    let (o, d) = view.ray(at);
+    Some(o + d * t)
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::type_complexity)]
 fn viewport_pointer(
@@ -1420,12 +1436,29 @@ fn viewport_pointer(
                             action,
                             Some(ViewAction::Rotate | ViewAction::RotateTurntable)
                         );
-                    match action.filter(|_| !look) {
-                        Some(ViewAction::Rotate) => match view.pivot {
+                    let action = action.filter(|_| !look);
+                    let rotating = matches!(
+                        action,
+                        Some(ViewAction::Rotate | ViewAction::RotateTurntable)
+                    );
+                    // A pivot the view has (the selection Zoom to selection framed) comes first.
+                    if rotating && drag.orbit_pivot.is_none() && view.pivot.is_none() {
+                        let at = rect.offset(drag.nav_start);
+                        drag.orbit_pivot = Some(
+                            prefs
+                                .0
+                                .orbit_about_pointer
+                                .then(|| part_point(&parts, &view.view, at))
+                                .flatten(),
+                        );
+                    }
+                    let pivot = view.pivot.or(drag.orbit_pivot.flatten());
+                    match action {
+                        Some(ViewAction::Rotate) => match pivot {
                             Some(p) => view.view.orbit_about(p, |v| v.orbit(delta)),
                             None => view.view.orbit(delta),
                         },
-                        Some(ViewAction::RotateTurntable) => match view.pivot {
+                        Some(ViewAction::RotateTurntable) => match pivot {
                             Some(p) => view.view.orbit_about(p, |v| v.orbit_turntable(delta)),
                             None => view.view.orbit_turntable(delta),
                         },
@@ -1458,12 +1491,14 @@ fn viewport_pointer(
                         if over && mouse.navigates_with(crate::preferences_ui::mouse_button(b)) {
                             drag.navigating = true;
                             drag.nav_start = pos;
+                            drag.orbit_pivot = None;
                         }
                     }
                     _ => {
                         if over && mouse.navigates_with(crate::preferences_ui::mouse_button(b)) {
                             drag.navigating = true;
                             drag.nav_start = pos;
+                            drag.orbit_pivot = None;
                         }
                     }
                 }
@@ -1611,10 +1646,9 @@ fn viewport_pointer(
                     let cursor = rect.offset(pos);
                     // P3E.3a: in perspective, zoom about the part under the cursor.
                     if view.view.perspective
-                        && let Some((_, _, t)) = crate::parts::pick_face(&parts, &view.view, cursor)
+                        && let Some(p) = part_point(&parts, &view.view, cursor)
                     {
-                        let (o, d) = view.view.ray(cursor);
-                        view.view = view.view.refocused(o + d * t);
+                        view.view = view.view.refocused(p);
                     }
                     view.view.wheel(lines, cursor);
                 }
