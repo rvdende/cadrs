@@ -5,7 +5,7 @@ members = ["crates/*"]
 exclude = ["vendor"]
 # `cargo build -r` / `cargo run -r` build and run the app (crates/cadrs); `cargo test -r` runs
 # the fast tests of the crates without Bevy. The app's own tests need the `app-tests` feature
-# (`cargo test -r -p cadrs -F app-tests`); the golden screenshot tests are also `#[ignore]`d.
+# (`cargo test -r -p cadrs -F app-tests`); the scenario tests are also `#[ignore]`d.
 # cadrs_onshape (the Onshape importer, a second binary) is left out so `cargo run` stays
 # unambiguous: `cargo test -r -p cadrs_onshape`.
 default-members = [

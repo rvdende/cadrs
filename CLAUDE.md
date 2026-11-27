@@ -13,9 +13,14 @@ Onshape-style CAD in Rust + Bevy (main, 0.21-dev). Local notes in `docs/` (git-i
   - `cargo test -r`: the fast tests of the crates without Bevy (about a minute).
   - `cargo test -r -- --ignored`: the slow core tests (each over 5 s).
   - `cargo test -r --workspace -F cadrs/app-tests`: also the UI crates and the app's own tests.
-  - `cargo test -r -p cadrs -F app-tests --test golden -- --ignored`: the golden screenshot tests
-    (slow, GPU; `CADRS_BLESS=1` records new baselines).
-- Headless scenario: `cargo run -r -- --headless --scenario <name>` → `target/scenarios/<name>/`.
+  - `cargo test -r -p cadrs -F app-tests --test scenarios -- --ignored`: every scenario run
+    headless with no GPU (`--no-gpu`), checked by its steps (`ExpectValue("volume Part 1", …)`,
+    `ExpectText`) and the test's own checks, as CI's "Scenarios" job runs them. A few also
+    compare screenshots with local goldens (GPU; `CADRS_BLESS=1` records new baselines,
+    `CADRS_SKIP_IMAGES=1` skips them, `CADRS_IMAGES=1` compares every scenario's). Check what a
+    scenario does with `Expect…` steps rather than a screenshot.
+- Headless scenario: `cargo run -r -- --headless --scenario <name>` → `target/scenarios/<name>/`
+  (`--no-gpu`: nothing drawn, no screenshots, runs anywhere).
 - Public documents seed peer: `cadrs --public-seed [--data-dir <dir>]` (no window; prints its
   cadrs ID, which goes in `cadrs_net::public::DEFAULT_SEEDS` or Preferences › Seed peers).
   Peers also check in at `peers.cadrs.net` (`tools/peers`, a Cloudflare Worker; see its README),

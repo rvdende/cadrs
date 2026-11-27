@@ -142,6 +142,47 @@ jobs:
       - name: Test
         run: cargo test --workspace --exclude cadrs --lib
 
+  # Per push and pull request: every app scenario (scenarios/*.ron) run headless with no GPU
+  # (`cadrs --headless --no-gpu`: nothing is drawn, the UI, input and the document run as usual),
+  # checked by its steps (ExpectValue on a part's volume and area, ExpectText, …) and the tests'
+  # own checks (crates/cadrs/tests/scenarios.rs). The few that compare screenshots need a GPU and
+  # are skipped here (CADRS_SKIP_IMAGES); run them locally. Release, as locally: debug apps are
+  # too slow for the scenarios' step timeouts. The scenarios test binary links no Bevy (the
+  # package has no library), so the disk holds the one app.
+  scenarios:
+    name: Scenarios (no GPU)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake g++ pkg-config clang mold \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+
+      - name: Rust toolchain
+        run: rustup toolchain install && rustc -V
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: scenarios
+
+      - name: Build
+        run: cargo test -r -p cadrs -F app-tests --test scenarios --no-run
+
+      - name: Scenarios
+        env:
+          CADRS_SKIP_IMAGES: 1
+        run: cargo test -r -p cadrs -F app-tests --test scenarios -- --ignored
+
   # Per push and pull request: brep-conformance's suite (springcraft-ai/brep-conformance, at the
   # commit tools/conformance pins) run on this kernel in process (tools/conformance's
   # `examples/suite.rs`), and no case that passes in tools/ci/conformance.baseline.json fails

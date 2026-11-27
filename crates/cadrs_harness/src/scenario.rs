@@ -177,6 +177,12 @@ pub enum Step {
     /// [`Step::WaitFor`]; fails after the timeout (and wherever there is no clipboard, as on a
     /// machine with no display). `ExpectClipboard("150000.000")` after a `Key("Ctrl+C")`.
     ExpectClipboard(String),
+    /// Check a number the app reports, once it has settled: `ExpectValue("volume Part 1",
+    /// 64000)`, within a millionth of it. The app answers the query (`cadrs_ui::ScriptProbe`;
+    /// the queries are listed in `cadrs_app::script::probe`). Fails at once on a mismatch.
+    ExpectValue(String, f64),
+    /// [`Step::ExpectValue`] within an absolute tolerance: `ExpectNear("area", 21600, 0.5)`.
+    ExpectNear(String, f64, f64),
     /// Fails unless the UI node with this name exists and is enabled (a dialog's ✓ that
     /// should be ready before it is clicked).
     AssertEnabled(String),
@@ -240,7 +246,8 @@ mod tests {
                     Click(world(2, 3)), Custom("populate-sketch 10"), MeasureStart("x"),
                     MeasureEnd, PressWith("right", at(4, 4)), ReleaseWith("right"),
                     Hover(xyz(1, 2, 3)), ExpectText("a", "b"), SetTimeout(5),
-                    Now(RightClick(ui("busy"))),
+                    Now(RightClick(ui("busy"))), ExpectValue("volume", 1000),
+                    ExpectNear("area Part 1", 600, 0.5),
                 ],
             )"#,
         )
@@ -249,7 +256,12 @@ mod tests {
         assert_eq!(s.steps[30], Step::SetTimeout(5.0));
         assert_eq!(s.start.as_deref(), Some("gallery"));
         assert_eq!(s.warmup, 20);
-        assert_eq!(s.steps.len(), 32);
+        assert_eq!(s.steps.len(), 34);
+        assert_eq!(s.steps[32], Step::ExpectValue("volume".into(), 1000.0));
+        assert_eq!(
+            s.steps[33],
+            Step::ExpectNear("area Part 1".into(), 600.0, 0.5)
+        );
         assert_eq!(
             s.steps[31],
             Step::Now(Box::new(Step::RightClick(Target::Ui("busy".into()))))

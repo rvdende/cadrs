@@ -54,7 +54,7 @@ name = "startup"
 required-features = ["app-tests"]
 
 [[test]]
-name = "golden"
+name = "scenarios"
 required-features = ["app-tests"]
 
 [dev-dependencies]

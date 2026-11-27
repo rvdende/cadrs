@@ -707,7 +707,13 @@ fn stale(world: &World) -> Option<Drawn> {
 
 /// Starts drawing `drawn`'s thumbnail of the open document.
 fn start(world: &mut World, drawn: Drawn, content: Content, then: Vec<Then>) {
-    let Some(doc) = world.get_resource::<ActiveDocument>().map(|d| d.doc.id) else {
+    // No renderer (a headless run with `--no-gpu`): nothing to draw it with.
+    let no_gpu = !world.contains_resource::<bevy::render::renderer::RenderDevice>();
+    let Some(doc) = world
+        .get_resource::<ActiveDocument>()
+        .map(|d| d.doc.id)
+        .filter(|_| !no_gpu)
+    else {
         for t in then {
             t(world);
         }

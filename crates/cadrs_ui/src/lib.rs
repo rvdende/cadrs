@@ -218,6 +218,11 @@ pub use version_graph::{
 #[derive(Message, Debug, Clone, PartialEq, Eq)]
 pub struct ScriptCommand(pub String);
 
+/// Answers a scripted scenario's `ExpectValue` queries (`"volume Part 1"`, `"parts"`) with a
+/// number from the app's state. The app sets it: the harness can't see the document.
+#[derive(Resource, Clone, Copy)]
+pub struct ScriptProbe(pub fn(&mut World, &str) -> Result<f64, String>);
+
 /// Background work the screen is still waiting for (drawing views being projected, P3C.7, a
 /// rebuild, a view animation, a section's caps): scripted steps wait until it is done, so they
 /// never act on, or catch, a half-finished screen. Cleared in `PreUpdate` every frame; the app's
