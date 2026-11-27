@@ -2279,6 +2279,7 @@ asm-mate-reorient-secondary-axis = Secundaire as heroriënteren
 asm-mate-animate-dof = Vrijheidsgraad van koppeling animeren
 asm-mate-solve = Oplossen
 asm-mate-solve-all = Alle koppelingen oplossen
+asm-mate-cant-hold = Deze koppeling kan niet samen met de andere koppelingen van het onderdeel gelden: de onderdelen blijven waar ze zijn
 
 ## crates/cadrs_app/src/assembly/mate_display.rs
 asm-show-mates-mode = Modus Koppelingen weergeven (H): beweeg over een instantie, klik om vast te zetten

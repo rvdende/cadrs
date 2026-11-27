@@ -740,6 +740,45 @@ fn surfaces_and_tangent_propagation_on_a_real_part() {
     assert!(planes >= 1);
 }
 
+#[test]
+fn a_cylinder_offers_only_points_on_its_axis() {
+    // A click on a cylindrical face means its axis (a Revolute's): its points are the axis's
+    // middle and its arcs' centres, not the vertices or straight edges' midpoints on its rim,
+    // which a click near the rim would otherwise snap to.
+    let s = gear_cover();
+    let corner = s
+        .faces
+        .iter()
+        .find(|f| {
+            surface_of(&s, &EntityRef::Face(f.name))
+                .is_some_and(|(_, k)| matches!(k, SurfaceKind::Cylinder { .. }))
+        })
+        .expect("a corner face");
+    let pts = implicit_points(&s, &EntityRef::Face(corner.name));
+    let kinds: Vec<ImplicitPoint> = pts.iter().map(|p| p.point).collect();
+    assert!(
+        kinds
+            .iter()
+            .any(|k| matches!(k, ImplicitPoint::AxisMiddle(_))),
+        "{kinds:?}"
+    );
+    assert!(
+        kinds.iter().all(|k| matches!(
+            k,
+            ImplicitPoint::AxisMiddle(_) | ImplicitPoint::CircleCenter(_)
+        )),
+        "{kinds:?}"
+    );
+    let (axis, _) = surface_of(&s, &EntityRef::Face(corner.name)).unwrap();
+    for p in &pts {
+        let d = [
+            p.frame.origin[0] - axis.origin[0],
+            p.frame.origin[1] - axis.origin[1],
+        ];
+        assert!(d[0].hypot(d[1]) < 1e-6, "{:?} off the axis", p.point);
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // The mates stand-in
 

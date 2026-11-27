@@ -54,9 +54,10 @@
 //!   frames coincide exactly (F₁ = G, or at the mate's driven position). So a pick never starts
 //!   Newton half a turn away, where the rotation rows have saddle points. Animation snaps with
 //!   the mate's other free DOF held where they are ([`SolveOptions::hold_free`]).
-//! - After converging, each mate is checked for a false solution (axes opposite: the rotation
-//!   rows also vanish for half turns). If one is found, its body is snapped and the solve runs
-//!   once more.
+//! - After converging, each mate that holds the whole rotation (Fastened, Slider) is checked for
+//!   a false solution (its frames a half turn apart: the rotation rows also vanish there). If one
+//!   is found, its body is snapped and the solve runs once more. An axis-only mate (Revolute,
+//!   Cylindrical, Planar, Parallel) with its axes opposite is a real placement and is kept.
 //! - **Limits** are inequalities handled by an active set: solve the equalities, then for each
 //!   limit that is violated, add a row holding the position at the nearest bound, and solve
 //!   again (a few rounds). So a drag past a slider's end stops at the end.
@@ -73,7 +74,8 @@
 //! doesn't move. A revolute instance only turns.
 //!
 //! **When** (A6.11): the app never solves continuously. It solves when the second connector of
-//! a mate is picked (with that mate's snap), on the dialog's **Solve**, on ✓, for **Reset** /
+//! a mate is picked (with that mate's snap; when the moving instance has other mates, every
+//! mate from where the parts are, without the snap, [`mated_elsewhere`]), on the dialog's **Solve**, on ✓, for **Reset** /
 //! **Apply limit position** (a drive on that mate), per frame of an animation, and while
 //! dragging. The result goes into the document through a command, as one undo step.
 //!
@@ -130,6 +132,25 @@ pub fn grounded(asm: &Assembly) -> std::collections::HashSet<InstanceId> {
         .filter(|b| b.ground)
         .flat_map(|b| b.members.iter().map(|(m, _)| *m))
         .collect()
+}
+
+/// Whether `instance`'s body (it and the instances grouped with it) is held by a mate other
+/// than `except`. A new mate's pick must then move it only within the freedom those mates
+/// leave, not snap it onto the new mate alone (#312).
+pub fn mated_elsewhere(asm: &Assembly, instance: InstanceId, except: MateId) -> bool {
+    let (_, of) = bodies_of(asm);
+    let Some(body) = of.get(&instance) else {
+        return false;
+    };
+    asm.mates
+        .iter()
+        .filter(|f| !f.suppressed && f.id != except)
+        .filter_map(|f| f.mate())
+        .any(|m| {
+            m.connectors
+                .iter()
+                .any(|c| of.get(&c.instance) == Some(body))
+        })
 }
 
 /// The solved placements.
@@ -988,19 +1009,23 @@ impl Problem {
         }
     }
 
-    /// The constraints whose axes ended opposite (a false solution of the rotation rows).
+    /// The constraints whose frames ended a half turn apart (a false solution of the rotation
+    /// rows, which also vanish there). Only a mate that holds the whole rotation (Fastened,
+    /// Slider) has one: the axis rows of a Revolute, Cylindrical, Planar or Parallel vanish with
+    /// the axes opposite because that is a real placement of the mate (the same axis; two faces
+    /// against each other, whose connectors point opposite ways), so it is kept. Snapping such a
+    /// mate's part over turned it upside down, and back on the next solve, pulling it off the
+    /// part's other mates.
     fn false_solutions(&self) -> Vec<usize> {
         let mut out = Vec::new();
         for (k, c) in self.cons.iter().enumerate() {
-            if !c.is_mate || !c.pair {
+            if !c.is_mate || !c.pair || !c.rows.contains(&Row::Rot3) {
                 continue;
             }
             let (a, g) = (self.world(&c.ends[0]), self.world(&c.ends[1]));
             let zz = v(a.z).dot(&v(g.z));
             let xx = v(a.x).dot(&v(g.x));
-            let rot3 = c.rows.contains(&Row::Rot3);
-            let axis = rot3 || c.rows.contains(&Row::Axis2);
-            if (axis && zz < 0.0) || (rot3 && xx < 0.0) {
+            if zz < 0.0 || xx < 0.0 {
                 out.push(k);
             }
         }

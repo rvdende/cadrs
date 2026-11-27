@@ -1022,6 +1022,22 @@ pub fn implicit_points(s: &Solid, entity: &EntityRef) -> Vec<ImplicitConnector> 
                 return Vec::new();
             };
             let edges: Vec<&SolidEdge> = s.edges.iter().filter(|e| e.name.touches(f)).collect();
+            // A cylinder offers only the points on its axis (its middle and its circles'
+            // centres): a click on it means its axis, as a Revolute or Cylindrical mate wants,
+            // so a click near its rim mustn't snap to a seam vertex or an edge's midpoint.
+            if matches!(
+                surface_of(s, entity),
+                Some((_, SurfaceKind::Cylinder { .. }))
+            ) {
+                points.push(ImplicitPoint::AxisMiddle(*f));
+                points.extend(
+                    edges
+                        .iter()
+                        .filter(|e| e.circle.is_some())
+                        .map(|e| ImplicitPoint::CircleCenter(e.name)),
+                );
+                return connectors(s, points, entity);
+            }
             if face.plane.is_some() {
                 points.push(ImplicitPoint::FaceCentroid(*f));
             } else if matches!(surface_of(s, entity), Some((_, SurfaceKind::Sphere { .. }))) {
@@ -1077,6 +1093,11 @@ pub fn implicit_points(s: &Solid, entity: &EntityRef) -> Vec<ImplicitConnector> 
         }
         EntityRef::Vertex(vn) => points.push(ImplicitPoint::Vertex(*vn)),
     }
+    connectors(s, points, entity)
+}
+
+/// The connectors of `points` of `entity` (each point once, those with a frame).
+fn connectors(s: &Solid, points: Vec<ImplicitPoint>, entity: &EntityRef) -> Vec<ImplicitConnector> {
     let mut out: Vec<ImplicitConnector> = Vec::new();
     for p in points {
         if let Some((frame, diameter)) = frame_of(s, &p, entity)

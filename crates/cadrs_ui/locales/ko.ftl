@@ -2279,6 +2279,7 @@ asm-mate-reorient-secondary-axis = 2차 축 방향 바꾸기
 asm-mate-animate-dof = 메이트 자유도 애니메이션
 asm-mate-solve = 풀기
 asm-mate-solve-all = 모든 메이트 풀기
+asm-mate-cant-hold = 이 메이트는 부품의 다른 메이트와 함께 성립할 수 없습니다. 부품은 제자리에 있습니다
 
 ## crates/cadrs_app/src/assembly/mate_display.rs
 asm-show-mates-mode = 메이트 표시 모드 (H): 인스턴스에 마우스를 올리고 클릭하여 고정

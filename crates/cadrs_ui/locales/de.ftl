@@ -2279,6 +2279,7 @@ asm-mate-reorient-secondary-axis = Sekundärachse neu ausrichten
 asm-mate-animate-dof = Freiheitsgrad animieren
 asm-mate-solve = Lösen
 asm-mate-solve-all = Alle Verknüpfungen lösen
+asm-mate-cant-hold = Diese Verknüpfung kann nicht zusammen mit den anderen Verknüpfungen des Teils gelten: Die Teile bleiben, wo sie sind
 
 ## crates/cadrs_app/src/assembly/mate_display.rs
 asm-show-mates-mode = Modus „Verknüpfungen anzeigen“ (H): Mauszeiger über eine Instanz bewegen, klicken zum Anheften
