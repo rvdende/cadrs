@@ -1228,17 +1228,16 @@ fn add_mate(world: &mut World, p: &tools::AddMate) -> Result<Value, String> {
         return Err(format!("there is already a mate named {name:?}"));
     }
     let feature = MateFeature::new(MateId::new(), name, MateKind::Mate(mate.clone()));
-    // Place the mover so the connectors coincide (the mate at 0), then let the solver settle the
-    // rest with the new mate in.
+    // As a mate dialog's pick (#312): a mover already held by other mates is solved with them
+    // from where the parts are, so it moves only within the freedom they leave; one with no
+    // other mates is snapped onto the new mate with its free motion held where it is. The rest
+    // of the assembly then settles with the new mate in.
     let fixed = |id| asm.instance(id).is_some_and(|i| i.fixed);
-    let pose = |id| asm.instance(id).map(|i| i.pose).unwrap_or_default();
-    let (mover, stay, moving_frame, stay_frame) = if fixed(b_top) && !fixed(a_top) {
-        (a_top, b_top, a.frame, b.frame)
+    let mover = if fixed(b_top) && !fixed(a_top) {
+        a_top
     } else {
-        (b_top, a_top, b.frame, a.frame)
+        b_top
     };
-    let world_stay = stay_frame.pose().then(&pose(stay));
-    let placed = moving_frame.pose().inverse().then(&world_stay);
     let mut model = cadrs_core::assembly::structure::solver_model(&d.doc, &asm);
     model.mates.push(feature.clone());
     let moving: Vec<InstanceId> = occ
@@ -1246,12 +1245,50 @@ fn add_mate(world: &mut World, p: &tools::AddMate) -> Result<Value, String> {
         .filter(|o| o.top == mover)
         .map(|o| o.id)
         .collect();
-    for id in &moving {
-        if let Some(i) = model.instance_mut(*id) {
-            i.pose = placed;
-        }
-    }
+    let held = moving
+        .first()
+        .is_some_and(|m| cadrs_core::assembly::solver::mated_elsewhere(&model, *m, feature.id));
     let solids = mate_solids(&d.doc, element, &model);
+    if held {
+        // The pick: every mate solved from where the parts are.
+        let sol = cadrs_core::assembly::solve(
+            &model,
+            &solids,
+            &SolveOptions {
+                movers: moving.clone(),
+                ..Default::default()
+            },
+        );
+        if !sol.converged {
+            return Err(format!(
+                "the new {} mate can't hold together with the instance's other mates",
+                ty.label()
+            ));
+        }
+        apply_poses(&mut model, &sol.poses);
+    } else {
+        // The pick: only the mover is snapped (the snap places the first movable connector's
+        // body, so the other side is held still while it runs).
+        let mut pick = model.clone();
+        for i in pick.instances.iter_mut() {
+            if !moving.contains(&i.id) {
+                i.fixed = true;
+            }
+        }
+        let sol = cadrs_core::assembly::solve(
+            &pick,
+            &solids,
+            &SolveOptions {
+                movers: moving.clone(),
+                snap: Some(feature.id),
+                snap_only: true,
+                hold_free: true,
+                ..Default::default()
+            },
+        );
+        apply_poses(&mut model, &sol.poses);
+    }
+    // ✓: the whole assembly settles with the new mate in, from the pick's placement.
     let sol = cadrs_core::assembly::solve(
         &model,
         &solids,
@@ -1260,10 +1297,7 @@ fn add_mate(world: &mut World, p: &tools::AddMate) -> Result<Value, String> {
             ..Default::default()
         },
     );
-    let mut poses: Vec<_> = sol.poses.iter().map(|(id, p)| (*id, *p)).collect();
-    if !poses.iter().any(|(id, _)| *id == mover) {
-        poses.push((mover, placed));
-    }
+    let poses: Vec<_> = sol.poses.iter().map(|(id, p)| (*id, *p)).collect();
     doc_mut(world)?
         .execute(&AddMateFeature {
             element,
@@ -1274,6 +1308,18 @@ fn add_mate(world: &mut World, p: &tools::AddMate) -> Result<Value, String> {
     let mut out = describe_assembly(doc(world)?, element)?;
     out["solved"] = json!(sol.converged);
     Ok(out)
+}
+
+/// Moves a solver model's instances to a solution's placements.
+fn apply_poses(
+    model: &mut cadrs_core::assembly::Assembly,
+    poses: &[(cadrs_core::assembly::InstanceId, cadrs_core::assembly::Pose)],
+) {
+    for (id, pose) in poses {
+        if let Some(i) = model.instance_mut(*id) {
+            i.pose = *pose;
+        }
+    }
 }
 
 /// Drives mates to positions and moves the instances to the solution (one undo step).
