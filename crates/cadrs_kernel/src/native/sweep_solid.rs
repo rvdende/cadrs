@@ -1837,7 +1837,8 @@ pub(crate) fn grown_revolved(b: &Body, d: f64) -> Option<Body> {
         )
         .ok()?;
     let body = (**k.get(*r.bodies.first()?).ok()?).clone();
-    (body.check().is_empty() && super::mass::body_volume(&body) > 0.0).then_some(body)
+    // (The check finds each solid enclosing a positive volume.)
+    (!body.solids.is_empty() && body.check().is_empty()).then_some(body)
 }
 
 /// A torus or a ball turned a whole turn about an axis that misses it (a torus's own axis along

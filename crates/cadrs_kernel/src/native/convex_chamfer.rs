@@ -299,7 +299,8 @@ fn polytope(halves: &[Half], eps: f64) -> Option<(Body, Vec<usize>)> {
     let shell = out.shell(faces, true);
     out.solid(vec![shell]);
     let body = out.build().ok()?;
-    (body.check().is_empty() && super::mass::body_volume(&body) > 0.0).then_some((body, tags))
+    // (The check finds each solid enclosing a positive volume.)
+    (!body.solids.is_empty() && body.check().is_empty()).then_some((body, tags))
 }
 
 #[cfg(test)]
