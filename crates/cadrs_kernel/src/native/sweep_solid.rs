@@ -3447,6 +3447,13 @@ fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> R
             Some(Err(e)) => declined(format!("a ball across the axis, its section revolved: {e}")),
             None => {}
         }
+        match upright_cylinder_turned(k, &b, steps) {
+            Some(Ok(r)) => return Ok(r),
+            Some(Err(e)) => declined(format!(
+                "a cylinder along the axis, its section revolved: {e}"
+            )),
+            None => {}
+        }
         match radial_pin_turned(k, &b, steps) {
             Some(Ok(r)) => return Ok(r),
             Some(Err(e)) => declined(format!("a radial pin's shadow revolved: {e}")),
@@ -7022,6 +7029,133 @@ fn ball_turned_across_axis(
             return Err(KernelError::InvalidResult {
                 op: "sweep",
                 why: "a ball's revolved section and its end balls aren't one body".into(),
+            });
+        };
+        Ok(OpResult {
+            bodies: vec![j],
+            ..Default::default()
+        })
+    };
+    Some(run(k))
+}
+
+/// A solid cylinder standing parallel to a turn's axis (not about it), turned by one step:
+/// everything it passes through, exactly, as [`ball_turned_across_axis`] has a ball's. Each of
+/// its slices square to the axis is a disc, which covers the angles about the axis within some
+/// w(ρ) of its centre's (or the whole circle, where the disc holds the axis), so turned from θ₀
+/// to θ₁ the cylinder covers its section in the half plane through its axis (out from the axis,
+/// or from it where the cylinder reaches across it, to the far side) revolved from θ₀ to θ₁,
+/// and itself at each end. None for any other body or motion.
+fn upright_cylinder_turned(
+    k: &mut NativeKernel,
+    b: &Body,
+    steps: &[RigidStep],
+) -> Option<Result<OpResult>> {
+    let [RigidStep::Turn { axis, from, to }] = steps else {
+        return None;
+    };
+    let (lo, hi) = (from.min(*to), from.max(*to));
+    let span = hi - lo;
+    if b.solids.len() != 1 || b.faces.len() != 3 || !(span > 0.0 && span < TAU * (1.0 - 1e-9)) {
+        return None;
+    }
+    let rev = revolved(b)?;
+    let Section::Polygon(corners) = &rev.section else {
+        return None;
+    };
+    let r = corners.iter().map(|c| c.0).fold(0.0, f64::max);
+    let (h0, h1) = corners
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), c| {
+            (a.min(c.1), b.max(c.1))
+        });
+    let near = 1e-9 * (1.0 + (h1 - h0).max(r));
+    if corners.len() != 4
+        || !(r > near && h1 - h0 > near)
+        || !corners.iter().all(|c| {
+            (c.0.abs() <= near || (c.0 - r).abs() <= near)
+                && ((c.1 - h0).abs() <= near || (c.1 - h1).abs() <= near)
+        })
+    {
+        return None;
+    }
+    let z = axis.dir.into_inner();
+    let a = rev.a.normalize();
+    if a.cross(&z).norm() > 1e-12 {
+        return None;
+    }
+    // Its axis's foot on the turn axis, how far out it stands, and its ends' heights there.
+    let foot = axis.origin + z * (rev.o - axis.origin).dot(&z);
+    let out = rev.o - foot;
+    let d = out.norm();
+    if !(d > 1e-6 * r) {
+        return None;
+    }
+    let dir0 = out / d;
+    let s = a.dot(&z);
+    let (z0, z1) = ((h0 * s).min(h1 * s), (h0 * s).max(h1 * s));
+    let (rho0, rho1) = ((d - r).max(0.0), d + r);
+    let turned = |t: f64| dir0 * t.cos() + z.cross(&dir0) * t.sin();
+    let p2 = |x: f64, y: f64| nalgebra::Point2::new(x, y);
+    let line = |p: nalgebra::Point2<f64>, q: nalgebra::Point2<f64>| Curve2::Line {
+        a: p,
+        b: q,
+        source: None,
+    };
+    let run = |k: &mut NativeKernel| -> Result<OpResult> {
+        let dir = turned(lo);
+        let plane = Plane {
+            origin: foot,
+            x_dir: nalgebra::Unit::new_normalize(dir),
+            normal: nalgebra::Unit::new_normalize(dir.cross(&z)),
+        };
+        let section = Region {
+            outer: Loop {
+                curves: vec![
+                    line(p2(rho0, z0), p2(rho1, z0)),
+                    line(p2(rho1, z0), p2(rho1, z1)),
+                    line(p2(rho1, z1), p2(rho0, z1)),
+                    line(p2(rho0, z1), p2(rho0, z0)),
+                ],
+            },
+            holes: vec![],
+            source: None,
+        };
+        let swept = k.revolve_with(
+            &Profile::new(plane, vec![section]),
+            &RevolveSpec::solid(
+                Axis {
+                    origin: foot,
+                    dir: axis.dir,
+                },
+                Some(span),
+            ),
+        )?;
+        let [swept] = swept.bodies[..] else {
+            return Err(KernelError::InvalidResult {
+                op: "sweep",
+                why: "a cylinder's revolved section isn't one body".into(),
+            });
+        };
+        // The cylinder at each end of the turn.
+        let mut ends = Vec::new();
+        for t in [0.0, 1.0] {
+            let (q, d) = rigid_at(steps, t);
+            ends.push(k.insert(b.transformed(&Affine {
+                m: q.into_inner(),
+                t: d,
+            })));
+        }
+        let joined = k.boolean(BoolOp::Union, swept, &ends);
+        k.release(swept);
+        for e in ends {
+            k.release(e);
+        }
+        let joined = joined?;
+        let [j] = joined.bodies[..] else {
+            return Err(KernelError::InvalidResult {
+                op: "sweep",
+                why: "a cylinder's revolved section and its ends aren't one body".into(),
             });
         };
         Ok(OpResult {
