@@ -67,11 +67,6 @@ const KNOWN_FAILING: &[(&str, &str)] = &[
     ("cam_machine_from_assembly", "runs for over 5 minutes"),
     ("cam_studio_mill", "runs for over 5 minutes"),
     (
-        "course_asm_relations",
-        "a press over the feature panel falls through to the view: Bevy main's UI picking skips \
-         a stack slice whose first node was despawned (the fix waits on the Bevy fork)",
-    ),
-    (
         "course_asm_mates_tangent_width",
         "mate-dialog-accept stays disabled",
     ),
