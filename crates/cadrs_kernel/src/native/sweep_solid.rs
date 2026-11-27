@@ -3440,6 +3440,18 @@ fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> R
                 return Ok(r);
             }
         }
+        // A cylinder along a radius of the turn axis, turned: its shadow revolved and the pin,
+        // domed, at each end ([`radial_pin_turned`]).
+        match ball_turned_across_axis(k, &b, steps) {
+            Some(Ok(r)) => return Ok(r),
+            Some(Err(e)) => declined(format!("a ball across the axis, its section revolved: {e}")),
+            None => {}
+        }
+        match radial_pin_turned(k, &b, steps) {
+            Some(Ok(r)) => return Ok(r),
+            Some(Err(e)) => declined(format!("a radial pin's shadow revolved: {e}")),
+            None => {}
+        }
         if (1..=2).contains(&steps.len()) {
             match super::sweep_faces::by_faces(k, &b, steps) {
                 Ok(r) => return Ok(r),
@@ -6897,6 +6909,307 @@ fn ball_along(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Res
         k.release(tube);
         Ok(OpResult {
             bodies: vec![cur],
+            ..Default::default()
+        })
+    };
+    Some(run(k))
+}
+
+/// A whole ball reaching across a turn's axis (its centre nearer the axis than its radius),
+/// turned by one step: everything it passes through, exactly. About the axis, at distance ρ and
+/// height z, the ball covers the angles within w(ρ, z) of its centre's (|p − c|² ≤ r² is
+/// cos φ ≥ (ρ² + d² + z² − r²) / 2ρd, one interval about 0, or the whole circle), so turned from
+/// θ₀ to θ₁ it covers [θ₀ − w, θ₁ + w]: its section in the half plane through its centre (the
+/// disc cut off at the axis) revolved from θ₀ to θ₁, with the whole ball at each end. (A ball
+/// clear of the axis is [`ball_along`]'s.) None for any other body or motion.
+fn ball_turned_across_axis(
+    k: &mut NativeKernel,
+    b: &Body,
+    steps: &[RigidStep],
+) -> Option<Result<OpResult>> {
+    let [RigidStep::Turn { axis, from, to }] = steps else {
+        return None;
+    };
+    let (lo, hi) = (from.min(*to), from.max(*to));
+    let span = hi - lo;
+    let [f] = b.faces.as_slice() else {
+        return None;
+    };
+    let Surface::Sphere { f: fr, r } = &f.surf else {
+        return None;
+    };
+    let r = *r;
+    if b.solids.len() != 1
+        || b.shells.len() != 1
+        || !b.shells[0].closed
+        || super::classify::outward_sign(f) != Some(1.0)
+        || !(span > 0.0 && span < TAU * (1.0 - 1e-9))
+    {
+        return None;
+    }
+    let z = axis.dir.into_inner();
+    let foot = axis.origin + z * (fr.o - axis.origin).dot(&z);
+    let out = fr.o - foot;
+    let d = out.norm();
+    // Across the axis, by more than a sliver (on it, the ball turns into itself).
+    if !(d > 1e-6 * r && d < r * (1.0 - 1e-6)) {
+        return None;
+    }
+    let a = out / d;
+    let turned = |t: f64| a * t.cos() + z.cross(&a) * t.sin();
+    let hh = (r * r - d * d).sqrt();
+    let beta = hh.atan2(-d);
+    let p2 = |x: f64, y: f64| nalgebra::Point2::new(x, y);
+    let run = |k: &mut NativeKernel| -> Result<OpResult> {
+        let dir = turned(lo);
+        let plane = Plane {
+            origin: foot,
+            x_dir: nalgebra::Unit::new_normalize(dir),
+            normal: nalgebra::Unit::new_normalize(dir.cross(&z)),
+        };
+        // The disc about (d, 0) of radius r, out from the axis: its arc from where it leaves
+        // the axis below round to where it meets it above, then down the axis.
+        let section = Region {
+            outer: Loop {
+                curves: vec![
+                    Curve2::Arc {
+                        center: p2(d, 0.0),
+                        radius: r,
+                        start_angle: -beta,
+                        sweep: 2.0 * beta,
+                        source: None,
+                    },
+                    Curve2::Line {
+                        a: p2(0.0, hh),
+                        b: p2(0.0, -hh),
+                        source: None,
+                    },
+                ],
+            },
+            holes: vec![],
+            source: None,
+        };
+        let swept = k.revolve_with(
+            &Profile::new(plane, vec![section]),
+            &RevolveSpec::solid(
+                Axis {
+                    origin: foot,
+                    dir: axis.dir,
+                },
+                Some(span),
+            ),
+        )?;
+        let [swept] = swept.bodies[..] else {
+            return Err(KernelError::InvalidResult {
+                op: "sweep",
+                why: "a ball's revolved section isn't one body".into(),
+            });
+        };
+        let mut ends = Vec::new();
+        for t in [lo, hi] {
+            ends.extend(
+                k.primitive(&Primitive::ball(foot + turned(t) * d, r))?
+                    .bodies,
+            );
+        }
+        let joined = k.boolean(BoolOp::Union, swept, &ends);
+        k.release(swept);
+        for e in ends {
+            k.release(e);
+        }
+        let joined = joined?;
+        let [j] = joined.bodies[..] else {
+            return Err(KernelError::InvalidResult {
+                op: "sweep",
+                why: "a ball's revolved section and its end balls aren't one body".into(),
+            });
+        };
+        Ok(OpResult {
+            bodies: vec![j],
+            ..Default::default()
+        })
+    };
+    Some(run(k))
+}
+
+/// A solid cylinder lying along a radius of a turn's axis (its own axis meets the turn's square
+/// to it, the cylinder clear of it), turned by one step: everything it passes through, exactly.
+/// About the turn axis, at distance ρ and height z (measured from where the axes meet, along the
+/// turn axis), the cylinder of radius r from x₀ to x₁ out along its axis covers the angles within
+/// some w(ρ, z) of its own, with a gap about its own for ρ past x₁ (beyond its far end) that the
+/// turn fills; its shadow in (ρ, z) is |z| ≤ r, x₀ ≤ ρ ≤ √(x₁² + r² − z²). Turned from θ₀ to θ₁
+/// it covers [θ₀ − w, θ₁ + w] there: the shadow revolved from θ₀ to θ₁, with at each end the
+/// cylinder and the gap beyond it, which is the ball of radius √(x₁² + r²) about where the axes
+/// meet, cut off by the plane of its far end: the pin domed. (The turn must be at least the
+/// cylinder's angular width, 2·atan(r / x₀), so the gaps close.) The result's volume is held to
+/// the shadow's by Pappus and the domed pin's. None for any other body or motion.
+fn radial_pin_turned(
+    k: &mut NativeKernel,
+    b: &Body,
+    steps: &[RigidStep],
+) -> Option<Result<OpResult>> {
+    let [RigidStep::Turn { axis, from, to }] = steps else {
+        return None;
+    };
+    let (lo, hi) = (from.min(*to), from.max(*to));
+    let span = hi - lo;
+    if b.solids.len() != 1 || b.faces.len() != 3 || !(span > 0.0) {
+        return None;
+    }
+    let rev = revolved(b)?;
+    let Section::Polygon(corners) = &rev.section else {
+        return None;
+    };
+    // The section a rectangle against the axis: the cylinder's radius and its two ends.
+    let r = corners.iter().map(|c| c.0).fold(0.0, f64::max);
+    let (h0, h1) = corners
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), c| {
+            (a.min(c.1), b.max(c.1))
+        });
+    let size = (h1 - h0).max(r);
+    let near = 1e-9 * (1.0 + size);
+    if corners.len() != 4
+        || !(r > near && h1 - h0 > near)
+        || !corners.iter().all(|c| {
+            (c.0.abs() <= near || (c.0 - r).abs() <= near)
+                && ((c.1 - h0).abs() <= near || (c.1 - h1).abs() <= near)
+        })
+    {
+        return None;
+    }
+    let z = axis.dir.into_inner();
+    let mut a = rev.a.normalize();
+    if a.dot(&z).abs() > 1e-12 {
+        return None;
+    }
+    // Where the axes meet: the foot on the turn axis of the cylinder's axis, which must pass
+    // through it.
+    let c = axis.origin + z * (rev.o - axis.origin).dot(&z);
+    let off = rev.o - c;
+    if (off - a * off.dot(&a)).norm() > near {
+        return None;
+    }
+    let (mut x0, mut x1) = (off.dot(&a) + h0, off.dot(&a) + h1);
+    if x1 <= 0.0 {
+        a = -a;
+        (x0, x1) = (-x1, -x0);
+    }
+    let w = (r / x0).atan();
+    if !(x0 > near) || span < 2.0 * w * (1.0 + 1e-9) || span + 2.0 * w >= TAU * (1.0 - 1e-9) {
+        return None;
+    }
+    let rs = x1.hypot(r);
+    let turned = |t: f64| a * t.cos() + z.cross(&a) * t.sin();
+    let p2 = |x: f64, y: f64| nalgebra::Point2::new(x, y);
+    let line = |p: nalgebra::Point2<f64>, q: nalgebra::Point2<f64>| Curve2::Line {
+        a: p,
+        b: q,
+        source: None,
+    };
+    let arc = |t0: f64, sw: f64| Curve2::Arc {
+        center: p2(0.0, 0.0),
+        radius: rs,
+        start_angle: t0,
+        sweep: sw,
+        source: None,
+    };
+    let region = |curves: Vec<Curve2>| Region {
+        outer: Loop { curves },
+        holes: vec![],
+        source: None,
+    };
+    let tip = (r / x1).atan();
+    let run = |k: &mut NativeKernel| -> Result<OpResult> {
+        // The shadow, in the half plane at θ₀: out along the pin, up the turn axis.
+        let dir = turned(lo);
+        let plane = Plane {
+            origin: c,
+            x_dir: nalgebra::Unit::new_normalize(dir),
+            normal: nalgebra::Unit::new_normalize(dir.cross(&z)),
+        };
+        let shadow = region(vec![
+            line(p2(x0, -r), p2(x1, -r)),
+            arc(-tip, 2.0 * tip),
+            line(p2(x1, r), p2(x0, r)),
+            line(p2(x0, r), p2(x0, -r)),
+        ]);
+        let swept = k.revolve_with(
+            &Profile::new(plane, vec![shadow]),
+            &RevolveSpec::solid(
+                Axis {
+                    origin: c,
+                    dir: axis.dir,
+                },
+                Some(span),
+            ),
+        )?;
+        let [swept] = swept.bodies[..] else {
+            return Err(KernelError::InvalidResult {
+                op: "sweep",
+                why: "a pin's swept shadow isn't one body".into(),
+            });
+        };
+        // The pin domed, at each end of the turn, the half of it outside the turn: its half
+        // section (out along it, up the turn axis) revolved half a turn about its own axis,
+        // from up the turn axis away from the turn. (Its flat face, its section through both
+        // axes, is the shadow: it meets the shadow's revolve along that face, where a whole pin
+        // would also touch the slot's roof and floor along lines, tangent, which the union
+        // finds slowly.)
+        let mut ends = Vec::new();
+        for (t, back) in [(lo, 1.0), (hi, -1.0)] {
+            let dir = turned(t);
+            let plane = Plane {
+                origin: c,
+                x_dir: nalgebra::Unit::new_normalize(dir),
+                normal: nalgebra::Unit::new_normalize(dir.cross(&z)),
+            };
+            let half = region(vec![
+                line(p2(x0, 0.0), p2(rs, 0.0)),
+                arc(0.0, tip),
+                line(p2(x1, r), p2(x0, r)),
+                line(p2(x0, r), p2(x0, 0.0)),
+            ]);
+            // (Turned about +dir, up the turn axis goes to −(z × dir): back against the turn.)
+            let pin = k.revolve_with(
+                &Profile::new(plane, vec![half]),
+                &RevolveSpec::solid(
+                    Axis {
+                        origin: c,
+                        dir: nalgebra::Unit::new_normalize(dir * back),
+                    },
+                    Some(PI),
+                ),
+            )?;
+            ends.extend(pin.bodies);
+        }
+        let joined = k.boolean(BoolOp::Union, swept, &ends);
+        k.release(swept);
+        for e in ends {
+            k.release(e);
+        }
+        let joined = joined?;
+        let [j] = joined.bodies[..] else {
+            return Err(KernelError::InvalidResult {
+                op: "sweep",
+                why: "a pin's swept shadow and its ends aren't one body".into(),
+            });
+        };
+        // Pappus's shadow, and a half of a domed pin at each end.
+        let cap = rs - x1;
+        let want = span * r * (rs * rs - x0 * x0 - r * r / 3.0)
+            + std::f64::consts::PI * r * r * (x1 - x0)
+            + std::f64::consts::PI * cap * cap * (3.0 * rs - cap) / 3.0;
+        let got = super::mass::body_volume(k.get(j)?);
+        if (got - want).abs() > 1e-9 * want {
+            k.release(j);
+            return Err(KernelError::InvalidResult {
+                op: "sweep",
+                why: format!("a pin's swept volume {got}, not {want}"),
+            });
+        }
+        Ok(OpResult {
+            bodies: vec![j],
             ..Default::default()
         })
     };
