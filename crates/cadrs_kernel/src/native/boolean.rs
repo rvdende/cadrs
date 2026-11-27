@@ -2884,15 +2884,35 @@ pub(crate) fn flush_cavity(a: &Body, c: &Body) -> Option<BoolOut> {
     if c.verts.iter().any(|v| off_plane(&v.p) && !inside(&v.p)) {
         return None;
     }
-    for (fi, f) in c.faces.iter().enumerate() {
-        if fi == fc {
-            continue;
-        }
-        for ring in super::classify::face_polygons(c, f) {
-            for q in ring {
-                let p = f.surf.eval(q.x, q.y);
+    // A face of a plane, cylinder or cone is made of lines between its edges, so it lies in their
+    // hull, and `a` (convex) holds it where it holds its edges: points along each edge then; any
+    // other face by its loops' sampled points.
+    let ruled = c.faces.iter().all(|f| {
+        matches!(
+            f.surf,
+            Surface::Plane { .. } | Surface::Cylinder { .. } | Surface::Cone { .. }
+        )
+    });
+    if ruled {
+        for e in c.edges.iter().filter(|e| !e.degenerate) {
+            for i in 1..8 {
+                let p = e.point(e.t[0] + (e.t[1] - e.t[0]) * i as f64 / 8.0);
                 if off_plane(&p) && !inside(&p) {
                     return None;
+                }
+            }
+        }
+    } else {
+        for (fi, f) in c.faces.iter().enumerate() {
+            if fi == fc {
+                continue;
+            }
+            for ring in super::classify::face_polygons(c, f) {
+                for q in ring {
+                    let p = f.surf.eval(q.x, q.y);
+                    if off_plane(&p) && !inside(&p) {
+                        return None;
+                    }
                 }
             }
         }

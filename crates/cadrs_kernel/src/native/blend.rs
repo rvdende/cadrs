@@ -49,10 +49,23 @@ impl Tracked {
 
     /// Combines with a tool whose faces carry `tool_src`.
     pub fn apply(&self, tool: &Body, tool_src: &[Vec<FaceSrc>], op: BoolOp) -> Result<Tracked> {
+        self.apply_joined(tool, tool_src, op).map(|(t, _)| t)
+    }
+
+    /// [`Self::apply`], and whether the tool was a cavity joined to the body rather than cut
+    /// ([`super::boolean::flush_cavity`]): the result's volume is then the body's less the
+    /// tool's exactly.
+    pub fn apply_joined(
+        &self,
+        tool: &Body,
+        tool_src: &[Vec<FaceSrc>],
+        op: BoolOp,
+    ) -> Result<(Tracked, bool)> {
         // (A cavity flush with a face of a convex body, open through it: joined, not cut.)
         let flush = (op == BoolOp::Subtract)
             .then(|| super::boolean::flush_cavity(&self.body, tool))
             .flatten();
+        let joined = flush.is_some();
         let r: BoolOut = match flush.map_or_else(|| boolean_bodies_flush(&self.body, tool, op), Ok)
         {
             Ok(r) => r,
@@ -78,7 +91,7 @@ impl Tracked {
                 out
             })
             .collect();
-        Ok(Tracked { body: r.body, src })
+        Ok((Tracked { body: r.body, src }, joined))
     }
 
     /// With no more solids than the input had (`n`): the largest kept. A blend never splits a

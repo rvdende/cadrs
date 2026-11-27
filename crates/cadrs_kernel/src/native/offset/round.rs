@@ -1533,9 +1533,14 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
                 && convex(&b, e) == Some(false)
                 && ef[e].iter().all(|f| !remove.contains(f))
         });
+        // (Each cavity's volume, found for its sign: a cavity joined to the body takes exactly
+        // that from it.)
+        let cavity_volume = std::cell::Cell::new(None::<f64>);
         let sharp = |x: &Vec<f64>| {
             super::sharp::offset_sharp(&b, x).and_then(|c| {
-                if crate::native::mass::body_volume(&c) > 0.0 {
+                let vc = crate::native::mass::body_volume(&c);
+                cavity_volume.set(Some(vc));
+                if vc > 0.0 {
                     Ok(c)
                 } else {
                     Err(KernelError::TooLarge {
@@ -1549,7 +1554,18 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
         // (The cavity flush with the openings, made once: for its volume below and as the
         // second way.)
         let flush_made: std::cell::OnceCell<Result<Body>> = std::cell::OnceCell::new();
-        let flush_cavity = || flush_made.get_or_init(|| sharp(&flush)).clone();
+        let flush_volume_made = std::cell::Cell::new(None::<f64>);
+        let flush_cavity = || {
+            let c = flush_made
+                .get_or_init(|| {
+                    let c = sharp(&flush);
+                    flush_volume_made.set(cavity_volume.get());
+                    c
+                })
+                .clone();
+            cavity_volume.set(flush_volume_made.get());
+            c
+        };
         let ways: Vec<Box<dyn Fn() -> Result<Body>>> = if (concave || crossing) && !spec.sharp {
             // A prism opened at a cap, or hollowed: its outline's inset, rounded about the
             // reflex corners, extruded from the kept caps' insets to past the removed ones.
@@ -1606,8 +1622,10 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
         let mut first: Option<KernelError> = None;
         let mut done = None;
         for (i, way) in ways.iter().enumerate() {
+            cavity_volume.set(None);
             let out = way().and_then(|cavity| {
-                let mut out = cur.apply(
+                let vc = cavity_volume.get();
+                let (mut out, joined) = cur.apply_joined(
                     &cavity,
                     &vec![Vec::new(); cavity.faces.len()],
                     BoolOp::Subtract,
@@ -1622,7 +1640,10 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
                     }
                     out.body.solids[0].shells.sort();
                 }
-                let v1 = crate::native::mass::body_volume(&out.body);
+                let v1 = match vc {
+                    Some(vc) if joined && !spec.hollow => v0 - vc,
+                    _ => crate::native::mass::body_volume(&out.body),
+                };
                 if v1 <= tol::ROUNDOFF || v1 > v0 + tol::ROUNDOFF {
                     return Err(KernelError::InvalidResult {
                         op: "shell",
