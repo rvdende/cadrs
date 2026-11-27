@@ -156,7 +156,76 @@ pub struct ScriptPlugin;
 
 impl Plugin for ScriptPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, run_script_commands);
+        app.add_systems(Update, run_script_commands)
+            .insert_resource(cadrs_ui::ScriptProbe(probe));
+    }
+}
+
+/// Answers a scenario's `ExpectValue` query from the shown Part Studio's rebuilt parts:
+/// - `parts`: how many parts it has; `errors`: how many features failed to rebuild;
+///   `features`: how many features it has;
+/// - `volume` (mm³), `area` (mm²): of all its parts together, or of one: `volume Part 1`;
+/// - `cx`, `cy`, `cz` (mm): the centre of mass of all its parts, or of one: `cz Part 1`.
+fn probe(world: &mut World, query: &str) -> Result<f64, String> {
+    let (what, part) = match query.trim().split_once(' ') {
+        Some((w, p)) => (w, Some(p.trim())),
+        None => (query.trim(), None),
+    };
+    if what == "features" {
+        return world
+            .get_resource::<ActiveDocument>()
+            .and_then(|d| d.active_element())
+            .map(|e| e.features().len() as f64)
+            .ok_or_else(|| "no Part Studio is shown".into());
+    }
+    let cache = world
+        .get_resource::<crate::parts::PartCache>()
+        .ok_or("no Part Studio is shown")?;
+    let parts: Vec<_> = match part {
+        Some(name) => {
+            let p = cache
+                .parts
+                .iter()
+                .find(|p| cache.part_name(p.id) == Some(name))
+                .ok_or_else(|| {
+                    let names: Vec<_> = cache
+                        .parts
+                        .iter()
+                        .filter_map(|p| cache.part_name(p.id))
+                        .collect();
+                    format!("no part named {name:?}; the parts are {names:?}")
+                })?;
+            vec![p]
+        }
+        None => cache.parts.iter().collect(),
+    };
+    let mass = |p: &cadrs_core::parts::Part| {
+        p.mass
+            .ok_or_else(|| format!("{} has no mass properties", p.name))
+    };
+    let sum = |f: &dyn Fn(&cadrs_kernel::MassProperties) -> f64| -> Result<f64, String> {
+        parts.iter().map(|p| mass(p).map(|m| f(&m))).sum()
+    };
+    match what {
+        "parts" if part.is_none() => Ok(cache.parts.len() as f64),
+        "errors" if part.is_none() => Ok(cache.errors.len() as f64),
+        "volume" => sum(&|m| m.volume),
+        "area" => sum(&|m| m.surface_area),
+        "cx" | "cy" | "cz" => {
+            let axis = match what {
+                "cx" => 0,
+                "cy" => 1,
+                _ => 2,
+            };
+            let v = sum(&|m| m.volume)?;
+            if v == 0.0 {
+                return Err("the parts have no volume".into());
+            }
+            Ok(sum(&|m| m.volume * m.center_of_mass[axis])? / v)
+        }
+        _ => Err(format!(
+            "unknown query {query:?} (parts, errors, features, volume, area, cx, cy, cz)"
+        )),
     }
 }
 

@@ -483,6 +483,7 @@ fn derived_keys(
     session: Option<Res<DerivedSession>>,
     q_dialogs: Query<(), With<cadrs_ui::DialogRoot>>,
     q_focus: Res<bevy::input_focus::InputFocus>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     mut commands: Commands,
 ) {
     if session.is_none() {
@@ -490,7 +491,10 @@ fn derived_keys(
         return;
     }
     for k in keys.read() {
-        if k.state != ButtonState::Pressed || !q_dialogs.is_empty() || q_focus.get().is_some() {
+        if k.state != ButtonState::Pressed
+            || !q_dialogs.is_empty()
+            || q_focus.get().is_some_and(|e| q_fields.contains(e))
+        {
             continue;
         }
         match k.shortcut_code() {

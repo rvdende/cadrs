@@ -5,7 +5,7 @@ members = ["crates/*"]
 exclude = ["vendor"]
 # `cargo build -r` / `cargo run -r` build and run the app (crates/cadrs); `cargo test -r` runs
 # the fast tests of the crates without Bevy. The app's own tests need the `app-tests` feature
-# (`cargo test -r -p cadrs -F app-tests`); the golden screenshot tests are also `#[ignore]`d.
+# (`cargo test -r -p cadrs -F app-tests`); the scenario tests are also `#[ignore]`d.
 # cadrs_onshape (the Onshape importer, a second binary) is left out so `cargo run` stays
 # unambiguous: `cargo test -r -p cadrs_onshape`.
 default-members = [
@@ -188,7 +188,8 @@ bevy_iroh = { git = "https://github.com/rvdende/bevy_iroh", branch = "bevy-main"
 # them. Every Bevy crate in the lock is named, so that one copy of each is built. So far:
 # Safari's WebGPU refuses a texture or sampler in a `let` (bevyengine/bevy#26378, cadrs#218),
 # which bevy_pbr's shaders did; `CornerRadius::resolve` panicked on a node laid out with a
-# negative size (cadrs#347).
+# negative size (cadrs#347); UI picking skipped a whole stack slice (a panel's every node)
+# when its first node had been despawned since the last layout (cadrs#351).
 bevy = { git = "https://github.com/rvdende/bevy", branch = "cadrs-main" }
 bevy_a11y = { git = "https://github.com/rvdende/bevy", branch = "cadrs-main" }
 bevy_android = { git = "https://github.com/rvdende/bevy", branch = "cadrs-main" }

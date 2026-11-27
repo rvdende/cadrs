@@ -1,9 +1,9 @@
 //! Startup smoke test: the whole app builds and runs a short scenario headless.
 //!
-//! Unlike the golden tests it also runs under `CADRS_SKIP_GOLDEN=1`, so a broken app build (a
+//! Unlike the scenario tests it also runs under `CADRS_SKIP_SCENARIOS=1`, so a broken app build (a
 //! plugin added twice, a system with conflicting parameters, a panic on entering a document)
 //! fails `cargo test` even when the screenshot comparisons are skipped. It compares no images.
-//! If the app cannot start a GPU renderer, it prints why and passes, as the golden tests do.
+//! If the app cannot start a GPU renderer, it prints why and passes, as the image scenario tests do.
 //!
 //! Also here: what a file manager's *Open with* needs of the app (the app started with a model
 //! file imports it; the Linux launcher entry names the files the app opens).

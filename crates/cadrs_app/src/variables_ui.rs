@@ -850,6 +850,7 @@ fn variable_keys(
     mut keys: MessageReader<KeyboardInput>,
     session: Option<Res<VariableSession>>,
     focus: Res<InputFocus>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     q_dialogs: Query<(), With<cadrs_ui::DialogRoot>>,
     mut commands: Commands,
 ) {
@@ -858,7 +859,10 @@ fn variable_keys(
         return;
     }
     for k in keys.read() {
-        if k.state != ButtonState::Pressed || !q_dialogs.is_empty() || focus.get().is_some() {
+        if k.state != ButtonState::Pressed
+            || !q_dialogs.is_empty()
+            || focus.get().is_some_and(|e| q_fields.contains(e))
+        {
             continue;
         }
         match k.shortcut_code() {

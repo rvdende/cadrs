@@ -26,6 +26,7 @@ impl Plugin for HideKeyPlugin {
 fn hide_key(
     mut keys: MessageReader<KeyboardInput>,
     focus: Res<bevy::input_focus::InputFocus>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     q_dialogs: Query<(), With<cadrs_ui::DialogRoot>>,
     kind: Res<crate::viewport::ActiveKind>,
     sketch: Option<Res<crate::sketch::SketchSession>>,
@@ -45,7 +46,7 @@ fn hide_key(
             KeyCode::ControlRight,
         ]);
         if modified
-            || focus.get().is_some()
+            || focus.get().is_some_and(|e| q_fields.contains(e))
             || !q_dialogs.is_empty()
             || sketch.is_some()
             || *kind != crate::viewport::ActiveKind::PartStudio

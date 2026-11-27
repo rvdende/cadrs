@@ -1,0 +1,92 @@
+// A part modelled through the UI, checked by its volume and area rather than by pictures (runs
+// with --no-gpu, as CI does). Every size is typed, as a user would, so the numbers are exact.
+// 1. A sketch on Top: a 60 × 40 rectangle from the origin (its quick dimensions typed) and a
+//    circle inside it, dimensioned Ø20.
+// 2. Extrude the plate (the rectangle's region outside the circle) 10 mm: a plate with a hole,
+//    10 · (60 · 40 − π · 10²) = 24000 − 1000π mm³; its area 2 · (2400 − 100π) + 10 · (200 +
+//    20π) = 6800 mm².
+// 3. A sketch on Front: a 10 × 5 rectangle from the origin (x, z).
+// 4. Extrude it, Remove, symmetric 80 mm (through the plate either way): a notch 10 wide and 5
+//    high along the plate's front left bottom edge, 10 · 5 · 40 = 2000 mm³, so the part is
+//    22000 − 1000π = 18858.407 mm³. The notch's two new faces (400 + 200) replace as much of
+//    the bottom and left faces, and the front and back faces lose 50 each: 6700 mm².
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        // 1. Sketch 1 on Top.
+        Click(ui("sketch")),
+        WaitFor("sketch-dialog"),
+        Click(ui("feature-top")),
+        Key("N"),
+        Key("G"),
+        ClickWorld(0, 0),
+        ClickWorld(57, 37),
+        Type("60"),
+        Key("Enter"),
+        Type("40"),
+        Key("Enter"),
+        Key("Escape"),
+        Key("C"),
+        ClickWorld(30, 20),
+        ClickWorld(39, 20),
+        Key("Escape"),
+        Key("Escape"),
+        Key("D"),
+        Click(world(30, 29)),
+        Click(world(50, 50)),
+        Type("20"),
+        Key("Enter"),
+        Key("Escape"),
+        Screenshot("01-sketch-1"),
+        Click(ui("sketch-dialog-accept")),
+        ExpectValue("features", 1),
+        // 2. Extrude the plate 10 mm.
+        Key("Shift+7"),
+        Key("Shift+E"),
+        WaitFor("extrude-dialog"),
+        Click(xyz(5, 5, 0)),
+        Click(ui("extrude-depth-field")),
+        Key("Ctrl+A"),
+        Type("10"),
+        Key("Enter"),
+        ExpectValue("errors", 0),
+        ExpectValue("parts", 1),
+        ExpectValue("volume Part 1", 20858.407),
+        ExpectValue("area Part 1", 6800),
+        ExpectNear("cz", 5, 1e-6),
+        Screenshot("02-plate"),
+        // 3. Sketch 2 on Front.
+        Click(ui("sketch")),
+        WaitFor("sketch-dialog"),
+        Click(ui("feature-front")),
+        Key("N"),
+        Key("G"),
+        ClickWorld(0, 0),
+        ClickWorld(9, 4),
+        Type("10"),
+        Key("Enter"),
+        Type("5"),
+        Key("Enter"),
+        Key("Escape"),
+        Screenshot("03-sketch-2"),
+        Click(ui("sketch-dialog-accept")),
+        // 4. Extrude it, Remove, symmetric 80 mm.
+        Key("Shift+7"),
+        Key("Shift+E"),
+        WaitFor("extrude-dialog"),
+        Click(xyz(5, 0, 2.5)),
+        Click(ui("extrude-operation-2")),
+        Click(ui("extrude-symmetric-checkbox")),
+        Click(ui("extrude-depth-field")),
+        Key("Ctrl+A"),
+        Type("80"),
+        Key("Enter"),
+        ExpectValue("errors", 0),
+        ExpectValue("features", 4),
+        ExpectValue("parts", 1),
+        ExpectValue("volume Part 1", 18858.407),
+        ExpectValue("area Part 1", 6700),
+        Screenshot("04-notch"),
+    ],
+)

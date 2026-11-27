@@ -262,11 +262,15 @@ fn track_pointer_over(
 fn fit_on_f(
     keys: Res<ButtonInput<KeyCode>>,
     focus: Res<bevy::input_focus::InputFocus>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     over: Res<PointerOverNodes>,
     q_canvas: Query<Entity, With<NodeViewCanvas>>,
     mut commands: Commands,
 ) {
-    if !keys.just_pressed(KeyCode::KeyF) || focus.get().is_some() || !over.0 {
+    if !keys.just_pressed(KeyCode::KeyF)
+        || focus.get().is_some_and(|e| q_fields.contains(e))
+        || !over.0
+    {
         return;
     }
     for canvas in &q_canvas {

@@ -658,6 +658,7 @@ const CONNECTOR_PX: f32 = 13.0;
 fn connector_key(
     mut keys: MessageReader<KeyboardInput>,
     focus: Res<bevy::input_focus::InputFocus>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     q_dialogs: Query<(), With<cadrs_ui::DialogRoot>>,
     kind: Res<crate::viewport::ActiveKind>,
     sketch: Option<Res<crate::sketch::SketchSession>>,
@@ -678,7 +679,11 @@ fn connector_key(
             KeyCode::AltRight,
         ]);
         let ctrl = buttons.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
-        if shift_alt || focus.get().is_some() || !q_dialogs.is_empty() || sketch.is_some() {
+        if shift_alt
+            || focus.get().is_some_and(|e| q_fields.contains(e))
+            || !q_dialogs.is_empty()
+            || sketch.is_some()
+        {
             continue;
         }
         let studio = *kind == crate::viewport::ActiveKind::PartStudio;

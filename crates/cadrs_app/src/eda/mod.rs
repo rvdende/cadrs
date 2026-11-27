@@ -616,7 +616,10 @@ pub(crate) fn navigate(
     mut inputs: MessageReader<bevy::picking::pointer::PointerInput>,
     mut keys_in: MessageReader<bevy::input::keyboard::KeyboardInput>,
     keys: Res<ButtonInput<KeyCode>>,
-    focus: Res<bevy::input_focus::InputFocus>,
+    (focus, q_fields): (
+        Res<bevy::input_focus::InputFocus>,
+        Query<(), With<cadrs_ui::KeyboardField>>,
+    ),
     q_dialogs: Query<(), With<cadrs_ui::DialogRoot>>,
     mut pointer: ResMut<EdaPointer>,
     mut clicks: MessageWriter<EdaClick>,
@@ -721,7 +724,7 @@ pub(crate) fn navigate(
         pointer.over = over;
     }
     ui.views.insert(key, (view, fitted));
-    let typing = focus.get().is_some() || !q_dialogs.is_empty();
+    let typing = focus.get().is_some_and(|e| q_fields.contains(e)) || !q_dialogs.is_empty();
     for k in key_events {
         // In the Layout, F flips what is selected (`layout_tools`); with nothing, it fits.
         let flips = key.2 == Mode::Layout && !layout.selection.is_empty();
