@@ -3936,13 +3936,13 @@ pub(crate) fn parasolid_solids(b: &Body) -> Result<Option<Body>> {
         let mut pieces: Vec<Vec<usize>> = Vec::new();
         let mut piece_of: std::collections::HashMap<usize, usize> =
             std::collections::HashMap::new();
-        for k in 0..faces.len() {
+        for (k, &f) in faces.iter().enumerate() {
             let r = root(&mut parent, k);
             let idx = *piece_of.entry(r).or_insert_with(|| {
                 pieces.push(Vec::new());
                 pieces.len() - 1
             });
-            pieces[idx].push(faces[k]);
+            pieces[idx].push(f);
         }
         if pieces.len() < 2 {
             solids.push(sol.clone());
