@@ -2680,6 +2680,9 @@ fn build_shapes(
                 }
             }
         }
+        // Intersection curves the file approximated (Parasolid's B-splines) on the faces.
+        super::heal::reintersect_spline_edges(&mut b);
+        prof.mark("re-intersected");
         // The file's precision is its entities' tolerance (OCCT's reader does the same).
         let u = m.rep_uncertainty(rep).filter(|u| *u > super::topo::TOL_MIN);
         if let Some(u) = u {

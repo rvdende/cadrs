@@ -289,7 +289,7 @@ impl Kernel for Cadrs {
     }
 
     fn tolerance(&self) -> f64 {
-        tol::POINT
+        tol::point()
     }
 
     fn configuration(&self) -> String {

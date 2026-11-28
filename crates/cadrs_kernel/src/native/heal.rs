@@ -1255,3 +1255,204 @@ mod tests {
         assert!((volume(&h.body) - volume(&b)).abs() < 1e-9);
     }
 }
+
+/// Edges a file gives as B-splines between two analytic faces, put on the two surfaces' own
+/// intersection where that follows the file's curve. Parasolid writes its intersection curves
+/// to STEP as cubic B-splines within its edge tolerance, not on the faces: 5.6 µm off a
+/// countersink's cone on Onshape's STEP of CADEvolve 2223, whose faces then trimmed 1.4e-5 of
+/// its volume away (Onshape's importer, re-intersecting, reads it to 6.5e-9). Returns how many
+/// edges were replaced.
+pub fn reintersect_spline_edges(b: &mut Body) -> usize {
+    use super::nurbs::NurbsCurve;
+    use rayon::prelude::*;
+    use std::sync::Arc;
+    let analytic = |s: &Surface| {
+        matches!(
+            s,
+            Surface::Plane { .. }
+                | Surface::Cylinder { .. }
+                | Surface::Cone { .. }
+                | Surface::Sphere { .. }
+                | Surface::Torus { .. }
+        )
+    };
+    let ef = b.edge_faces();
+    let todo: Vec<(usize, usize, usize)> = (0..b.edges.len())
+        .filter_map(|e| {
+            let ed = &b.edges[e];
+            let fs = ef.get(e)?;
+            (!ed.degenerate
+                && matches!(ed.curve, Curve::Nurbs(_))
+                && ed.v[0] != ed.v[1]
+                && fs.len() == 2
+                && fs[0] != fs[1]
+                && analytic(&b.faces[fs[0]].surf)
+                && analytic(&b.faces[fs[1]].surf))
+            .then(|| (e, fs[0], fs[1]))
+        })
+        .collect();
+    let body = &*b;
+    let found: Vec<(usize, Curve, f64, f64)> = todo
+        .par_iter()
+        .filter_map(|&(e, fa, fb)| {
+            let ed = &body.edges[e];
+            let (sa, sb) = (&body.faces[fa].surf, &body.faces[fb].surf);
+            let (t0, t1) = (ed.t[0], ed.t[1]);
+            const N: usize = 16;
+            let samples: Vec<P3> = (0..=N)
+                .map(|i| ed.curve.point(t0 + (t1 - t0) * i as f64 / N as f64))
+                .collect();
+            let mut bb = Bbox::empty();
+            for p in &samples {
+                bb.add(p);
+            }
+            let len = samples
+                .windows(2)
+                .map(|w| (w[1] - w[0]).norm())
+                .sum::<f64>();
+            if len <= 0.0 {
+                return None;
+            }
+            let bb = bb.grow(0.05 * len);
+            let uv_box = |s: &Surface| {
+                let (mut u0, mut u1, mut v0, mut v1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+                let mut hint = None;
+                for p in &samples {
+                    let (u, v) = s.project(p, hint);
+                    hint = Some((u, v));
+                    (u0, u1, v0, v1) = (u0.min(u), u1.max(u), v0.min(v), v1.max(v));
+                }
+                let (pu, pv) = (0.05 * (u1 - u0) + 1e-6, 0.05 * (v1 - v0) + 1e-6);
+                ((u0 - pu, u1 + pu), (v0 - pv, v1 + pv))
+            };
+            let ssi = super::ssi::surface_surface_full(sa, uv_box(sa), sb, uv_box(sb), &bb);
+            let (p0, p1) = (body.verts[ed.v[0]].p, body.verts[ed.v[1]].p);
+            let limit = (0.01 * len).max(10.0 * ed.tol.max(super::topo::TOL_MIN));
+            // How far a curve over [a, b] is off the two surfaces: a new one is taken only where
+            // it lies closer to both than the file's does.
+            let off = |c: &Curve, a: f64, b: f64| {
+                (0..=N)
+                    .map(|i| {
+                        let q = c.point(a + (b - a) * i as f64 / N as f64);
+                        super::ssi::sdist(sa, &q)
+                            .abs()
+                            .max(super::ssi::sdist(sb, &q).abs())
+                    })
+                    .fold(0.0, f64::max)
+            };
+            let file_off = off(&ed.curve, t0, t1);
+
+            let mut best: Option<(f64, Curve, f64, f64)> = None;
+            // The pieces, and two traced pieces joined where one ends as the other starts (a
+            // trace is cut at a seam the edge runs across).
+            let mut cands: Vec<(Curve, f64, f64)> = ssi
+                .curves
+                .iter()
+                .chain(&ssi.tangent)
+                .filter(|ic| ic.t1 > ic.t0)
+                .map(|ic| (ic.c.clone(), ic.t0, ic.t1))
+                .collect();
+            let splines: Vec<NurbsCurve> = cands
+                .iter()
+                .filter_map(|(c, t0, t1)| match c {
+                    Curve::Nurbs(n) => Some(n.restricted(*t0, *t1)),
+                    _ => None,
+                })
+                .flat_map(|n| [n.reversed(), n])
+                .collect();
+            let gap = 1e-6 * len;
+            for (i, a) in splines.iter().enumerate() {
+                for (j, b) in splines.iter().enumerate() {
+                    if i / 2 == j / 2 {
+                        continue;
+                    }
+                    let (ea, sb) = (a.point(a.range().1), b.point(b.range().0));
+                    if (ea - sb).norm() > gap {
+                        continue;
+                    }
+                    let (mut a, mut b) = (a.clone(), b.clone());
+                    while a.degree < b.degree {
+                        a = a.elevated();
+                    }
+                    while b.degree < a.degree {
+                        b = b.elevated();
+                    }
+                    let j = a.joined(&b);
+                    let (t0, t1) = j.range();
+                    cands.push((Curve::Nurbs(Arc::new(j)), t0, t1));
+                }
+            }
+            for (cc, ct0, ct1) in &cands {
+                let ic = super::ssi::IntCurve {
+                    c: cc.clone(),
+                    t0: *ct0,
+                    t1: *ct1,
+                    closed: false,
+                    pcs: None,
+                };
+                let (c, ra, rb) = match super::xbuild::edge_range(&ic.c, &p0, &p1, false) {
+                    Some((ra, rb)) => (ic.c.clone(), ra, rb),
+                    None => {
+                        let (rc, _, _) = ic.c.reversed(ic.t0, ic.t1);
+                        match super::xbuild::edge_range(&rc, &p0, &p1, false) {
+                            Some((ra, rb)) => (rc, ra, rb),
+                            None => continue,
+                        }
+                    }
+                };
+                // Each way: the file's curve near the new one, and the new one near the file's.
+                let there = samples
+                    .iter()
+                    .map(|p| (c.point(c.closest(p, ra, rb)) - p).norm())
+                    .fold(0.0, f64::max);
+                let back = (0..=N)
+                    .map(|i| {
+                        let q = c.point(ra + (rb - ra) * i as f64 / N as f64);
+                        (ed.curve.point(ed.curve.closest(&q, t0, t1)) - q).norm()
+                    })
+                    .fold(0.0, f64::max);
+                let dev = there.max(back);
+                if dev <= limit
+                    && best.as_ref().is_none_or(|b| dev < b.0)
+                    && off(&c, ra, rb) < 0.5 * file_off
+                {
+                    best = Some((dev, c, ra, rb));
+                }
+            }
+            if std::env::var("CADRS_REINT_DEBUG").is_ok() {
+                eprintln!(
+                    "reintersect edge {e}: {} curves, {} tangent, len {len:.3e}, limit {limit:.1e}, file off {file_off:.2e}, best {:?}, kinds {:?} {:?}",
+                    ssi.curves.len(),
+                    ssi.tangent.len(),
+                    best.as_ref().map(|b| b.0),
+                    std::mem::discriminant(sa),
+                    std::mem::discriminant(sb)
+                );
+            }
+            // (A spline cut to the edge's own part: an edge runs along a whole spline.)
+            best.map(|(_, c, ra, rb)| match c {
+                Curve::Nurbs(n) => {
+                    let n = n.restricted(ra, rb);
+                    let (ra, rb) = n.range();
+                    (e, Curve::Nurbs(Arc::new(n)), ra, rb)
+                }
+                c => (e, c, ra, rb),
+            })
+        })
+        .collect();
+    let n = found.len();
+    for (e, c, ra, rb) in found {
+        let old = b.edges[e].clone();
+        let mid = 0.5 * (old.t[0] + old.t[1]);
+        b.edges[e].curve = c.clone();
+        b.edges[e].t = [ra, rb];
+        for f in &mut b.faces {
+            let surf = f.surf.clone();
+            for co in f.loops.iter_mut().flatten().filter(|co| co.edge == e) {
+                let q = co.pc.point(mid);
+                co.pc = super::pcurve::pcurve(&surf, &c, ra, rb, Some(P2::new(q.x, q.y)));
+            }
+        }
+    }
+    n
+}

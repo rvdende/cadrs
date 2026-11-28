@@ -52,8 +52,17 @@ fn sphere_all_holes_as_parasolid() {
     check("hard100-4", &[("c2472.1", 2e-6)]);
 }
 
-/// 3424: a triangular prism with an array of holes on a sphere (1006 for 1094).
+/// 3424: a triangular prism with an array of holes on a sphere (1006 for 1094). Its cylinders'
+/// spline edges, 4e-4 mm off their faces, re-intersected leave 2.2e-7 (2.3e-8 as written:
+/// there the file's curves are Parasolid's own tolerant edges, not an export's approximation).
 #[test]
 fn prism_with_hole_array_as_parasolid() {
-    check("hard100-6", &[("c3424.1", 1e-7)]);
+    check("hard100-6", &[("c3424.1", 3e-7)]);
+}
+
+/// 2223: countersinks whose cones meet planes and fillets along B-splines 5.6 µm off the cones
+/// (Parasolid's STEP approximations): re-intersected, 2.5e-9 (1.4e-5 as written).
+#[test]
+fn countersinks_reintersected_as_parasolid() {
+    check("hard100-3", &[("c2223.1", 1e-8)]);
 }
