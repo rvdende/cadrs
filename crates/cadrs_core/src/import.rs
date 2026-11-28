@@ -73,7 +73,7 @@ impl ImportFormat {
             "brep" | "brp" => Some(Self::Brep),
             "glb" => Some(Self::Glb),
             // A native CAD file: read as the STEP cadmpeg makes of it ([`readable`]).
-            e if cadrs_cadmpeg::extensions().contains(&e) => Some(Self::Step),
+            e if native_extensions().contains(&e) => Some(Self::Step),
             _ => None,
         }
     }
@@ -263,7 +263,14 @@ impl ImportFeature {
             .extension()
             .and_then(|s| s.to_str())
             .map(|s| s.to_ascii_lowercase())
-            .filter(|e| !cadrs_cadmpeg::extensions().contains(&e.as_str()))
+            // A native CAD file's blob is the STEP cadmpeg made of it (also in a build without
+            // cadmpeg, which can still open the document).
+            .filter(|e| {
+                matches!(
+                    e.as_str(),
+                    "step" | "stp" | "p21" | "stl" | "iges" | "igs" | "brep" | "brp" | "glb"
+                )
+            })
             .unwrap_or_else(|| match self.format {
                 ImportFormat::Step => "step".into(),
                 ImportFormat::Stl => "stl".into(),
@@ -286,20 +293,43 @@ impl ImportFeature {
 }
 
 /// The extensions of the native CAD files Import reads through cadmpeg (SolidWorks `sldprt`,
-/// Fusion `f3d`, Inventor `ipt`, CATIA `catpart`, …), for the file pickers.
+/// Fusion `f3d`, Inventor `ipt`, CATIA `catpart`, …), for the file pickers. None in a build
+/// without the `native-import` feature (the browser's, and CI's jobs that don't import).
 pub fn native_extensions() -> Vec<&'static str> {
-    cadrs_cadmpeg::extensions()
+    #[cfg(feature = "native-import")]
+    {
+        cadrs_cadmpeg::extensions()
+    }
+    #[cfg(not(feature = "native-import"))]
+    {
+        Vec::new()
+    }
 }
 
 /// [`native_extensions`] by program, for a file picker's type list: ("SolidWorks", `sldprt`),
 /// ("Fusion", `f3d`, `f3z`), …
 pub fn native_groups() -> Vec<(String, Vec<&'static str>)> {
-    cadrs_cadmpeg::groups()
+    #[cfg(feature = "native-import")]
+    {
+        cadrs_cadmpeg::groups()
+    }
+    #[cfg(not(feature = "native-import"))]
+    {
+        Vec::new()
+    }
 }
 
 /// Whether `file_name` is a native CAD file Import reads through cadmpeg.
 pub fn is_native(file_name: &str) -> bool {
-    cadrs_cadmpeg::reads(file_name)
+    #[cfg(feature = "native-import")]
+    {
+        cadrs_cadmpeg::reads(file_name)
+    }
+    #[cfg(not(feature = "native-import"))]
+    {
+        let _ = file_name;
+        false
+    }
 }
 
 /// The bytes Import reads for the file `file_name`: a native CAD file turned into STEP by
@@ -308,7 +338,16 @@ pub fn is_native(file_name: &str) -> bool {
 pub fn readable(file_name: &str, bytes: Vec<u8>) -> Result<Vec<u8>, String> {
     // Already STEP: what cadmpeg made of it (the app converts off its thread, then imports).
     if is_native(file_name) && sniff(&bytes) != Some(ImportFormat::Step) {
-        Ok(cadrs_cadmpeg::to_step(file_name, &bytes)?.step)
+        #[cfg(feature = "native-import")]
+        {
+            Ok(cadrs_cadmpeg::to_step(file_name, &bytes)?.step)
+        }
+        #[cfg(not(feature = "native-import"))]
+        {
+            Err(format!(
+                "{file_name}: this build of cadrs reads no native CAD files"
+            ))
+        }
     } else {
         Ok(bytes)
     }

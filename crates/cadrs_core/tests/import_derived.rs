@@ -996,6 +996,7 @@ fn bracket_fixture_volume() {
 }
 
 #[test]
+#[cfg(feature = "native-import")]
 fn import_a_solidworks_part_through_cadmpeg() {
     // Another CAD program's file (cadmpeg's CC0 corpus: a 20 × 10 mm rectangle extruded 10 mm in
     // SolidWorks): cadmpeg turns it into STEP as it is picked, and the Import keeps that STEP,

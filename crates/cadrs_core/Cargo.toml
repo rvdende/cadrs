@@ -13,6 +13,10 @@ brep = []
 # GPU compute in the kernel (mass properties of B-spline faces on Vulkan/Metal/DX12; the CPU
 # when there is no GPU).
 gpu = ["cadrs_kernel/gpu"]
+# Import reads other CAD programs' files (SolidWorks, Fusion, …) through cadmpeg. Off here and on
+# in the app (`cadrs`'s default features): cadmpeg is a large build, which the kernel's, the
+# scenarios' and the browser's builds go without.
+native-import = ["dep:cadrs_cadmpeg"]
 
 [dependencies]
 earcutr.workspace = true
@@ -21,7 +25,7 @@ cadrs_sketch.workspace = true
 cadrs_vars.workspace = true
 cadrs_cam.workspace = true
 cadrs_kernel.workspace = true
-cadrs_cadmpeg.workspace = true
+cadrs_cadmpeg = { workspace = true, optional = true }
 cadrs_fea.workspace = true
 cadrs_render.workspace = true
 cadrs_drawing.workspace = true

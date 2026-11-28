@@ -25,10 +25,12 @@ cadrs_fs.workspace = true
 js-sys.workspace = true
 
 [features]
-default = ["gpu", "profiler"]
+default = ["gpu", "profiler", "native-import"]
 # The kernel's GPU compute (see cadrs_kernel's `gpu` feature): off unless `CADRS_GPU=1` (it lost
 # to the CPU's cores on a real Part Studio's rebuild).
 gpu = ["cadrs_core/gpu"]
+# Import of other CAD programs' files through cadmpeg (see cadrs_core's `native-import`).
+native-import = ["cadrs_core/native-import"]
 # The browser build (`tools/web`) drawn with WebGPU. Bevy picks the page's graphics as it is
 # built: with this, WebGPU alone; without, WebGL2 (in Bevy's default features), which every
 # browser has. `tools/web/build.sh` builds both and the page loads the one its browser can run.
