@@ -55,7 +55,9 @@ def main():
             try:
                 return f(*a, **k)
             except Exception:
-                if depth[0] == 1 and name not in swallowed:
+                # (Every call, in order: a program may round twice, one kernel failing only the
+                # second.)
+                if depth[0] == 1:
                     swallowed.append(name)
                 raise
             finally:

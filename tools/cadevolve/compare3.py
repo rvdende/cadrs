@@ -47,7 +47,7 @@ def judge(o, k, c, i=None):
     others = [r for r in (o, k) if r is not None and valid(r)]
     # (A call one kernel failed and the program skipped: the models differ by design.)
     # (Runs from before the record have no "swallowed": unknown, not none.)
-    caught = lambda r: None if "swallowed" not in (r or {}) else frozenset(r["swallowed"])
+    caught = lambda r: None if "swallowed" not in (r or {}) else tuple(sorted(r["swallowed"]))
     if c.get("status") == "ok" and not any(same(c, r) for r in others) and any(
             caught(r) is not None and caught(c) is not None and caught(r) != caught(c) for r in others):
         return "swallowed"

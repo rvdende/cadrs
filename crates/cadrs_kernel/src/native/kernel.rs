@@ -671,11 +671,34 @@ pub fn extent_along(b: &Body, o: &P3, d: &V3) -> (f64, f64) {
         lo.set(lo.get().min(x));
         hi.set(hi.get().max(x));
     };
-    for v in &b.verts {
-        add((v.p - o).dot(d));
+    // (Only what the faces use: an operation can leave an edge it replaced in the body's
+    // arrays, and a chamfered rim's old circle widened the box to it.)
+    let mut used = vec![false; b.edges.len()];
+    for f in &b.faces {
+        for c in f.loops.iter().flatten() {
+            if let Some(u) = used.get_mut(c.edge) {
+                *u = true;
+            }
+        }
     }
-    for e in &b.edges {
-        if e.degenerate {
+    let faced = !b.faces.is_empty();
+    for (ei, e) in b.edges.iter().enumerate() {
+        if faced && !used[ei] {
+            continue;
+        }
+        for &v in &e.v {
+            if let Some(v) = b.verts.get(v) {
+                add((v.p - o).dot(d));
+            }
+        }
+    }
+    if !faced || b.edges.is_empty() {
+        for v in &b.verts {
+            add((v.p - o).dot(d));
+        }
+    }
+    for (ei, e) in b.edges.iter().enumerate() {
+        if e.degenerate || (faced && !used[ei]) {
             continue;
         }
         match &e.curve {
