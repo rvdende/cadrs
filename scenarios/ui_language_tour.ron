@@ -25,7 +25,7 @@ Scenario(
         WaitFor("document-shell"),
         Wait(20),
         Screenshot("04-document"),
-        RightClick(at(1100, 700)),
+        RightClick(world(84.6, -52.4)),
         Wait(5),
         Screenshot("05-viewport-menu"),
         Key("Escape"),

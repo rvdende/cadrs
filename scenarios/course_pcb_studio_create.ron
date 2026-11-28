@@ -18,7 +18,7 @@ Scenario(
         Screenshot("01-insert-menu"),
         Click(ui("create-pcb-studio")),
         WaitFor("pcb-tree"),
-        MoveTo(900, 600),
+        Hover(world(12.1, -35.7)),
         Wait(10),
         Screenshot("02-empty-pcb-studio"),
         ExpectText("tab-pcb-studio-1", "PCB Studio 1"),

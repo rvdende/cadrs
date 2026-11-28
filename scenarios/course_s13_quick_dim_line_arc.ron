@@ -39,7 +39,7 @@ Scenario(
         Screenshot("05-arc-radius-20"),
         Key("Escape"),
         Key("Escape"),
-        MoveTo(1400, 850),
+        Hover(world(123.1, -81.8)),
         Wait(3),
         Screenshot("06-line-and-arc-dimensioned"),
     ],

@@ -45,7 +45,7 @@ Scenario(
         WaitFor("sketch-box-select"),
         Release,
         Wait(3),
-        MoveTo(1400, 850),
+        Hover(world(123.1, -81.8)),
         Wait(2),
         Screenshot("02-mirrored-at-once"),
         Key("Ctrl+Z"),

@@ -42,7 +42,7 @@ Scenario(
         Hover(ui("feature-extrude-3")),
         Wait(10),
         Screenshot("02-hover-add"),
-        MoveTo(1420, 900),
+        Hover(world(182.1, -61)),
         Wait(3),
         Screenshot("03-no-hover"),
     ],

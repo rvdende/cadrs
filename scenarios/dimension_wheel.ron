@@ -29,7 +29,7 @@ Scenario(
         ExpectText("dimension-edit-field", "42"),
         Screenshot("02-wheel-42"),
         Key("Enter"),
-        MoveTo(1400, 850),
+        Hover(world(123.1, -81.8)),
         Wait(3),
         Screenshot("03-applied-42"),
     ],

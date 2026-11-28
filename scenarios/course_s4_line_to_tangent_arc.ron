@@ -34,7 +34,7 @@ Scenario(
         ClickWorld(40, -25),
         Key("Escape"),
         Key("Escape"),
-        MoveTo(1400, 850),
+        Hover(world(123.1, -81.8)),
         Wait(3),
         Screenshot("05-line-arc-line-tangent"),
     ],

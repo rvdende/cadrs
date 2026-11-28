@@ -20,7 +20,7 @@ Scenario(
     steps: [
         Custom("fixture motor_mount_standin"),
         Key("F"),
-        MoveTo(1420, 780),
+        Hover(world(163.2, -2.8)),
         Screenshot("01-a5.1-motor-mount-studio"),
         // A5.2: + → Create Assembly, rename it "Mount Assembly".
         Click(ui("insert-tab")),
@@ -32,7 +32,7 @@ Scenario(
         Key("Ctrl+A"),
         Type("Mount Assembly"),
         Key("Enter"),
-        MoveTo(1420, 780),
+        Hover(world(172.9, -48.2)),
         Wait(2),
         Screenshot("02-a5.2-mount-assembly-tab"),
         // A5.3: Insert → Current document → Part Studios → the part; a click in the graphics
@@ -47,7 +47,7 @@ Scenario(
         Wait(3),
         Screenshot("03-a5.3-insert-placed"),
         Click(ui("insert-dialog-accept")),
-        MoveTo(1420, 780),
+        Hover(world(172.9, -48.2)),
         Wait(2),
         Screenshot("04-a5.3-inserted"),
         // A5.4: seen from below, click the edge of the hole on the underside.
@@ -55,12 +55,12 @@ Scenario(
         Key("Shift+ArrowUp"),
         Key("F"),
         Click(xyz(84.944, -38.706, 0)),
-        MoveTo(1420, 780),
+        Hover(world(123.1, 69.5)),
         Wait(2),
         Screenshot("05-a5.4-triad-on-hole-edge"),
         // A5.5: drag the triad origin onto the hole's centre.
         Drag(ui("triad-origin"), xyz(90, -33.65, 0)),
-        MoveTo(1420, 780),
+        Hover(world(123.1, 69.5)),
         Wait(2),
         Screenshot("06-a5.5-triad-on-hole-centre"),
         // A5.6: right-click the triad origin → Move to origin.
@@ -71,7 +71,7 @@ Scenario(
         Screenshot("07-a5.6-triad-origin-menu"),
         Click(ui("asm-move-to-origin")),
         Key("F"),
-        MoveTo(1420, 780),
+        Hover(world(33.1, 103.1)),
         Wait(2),
         Screenshot("08-a5.6-moved-to-origin"),
         // A5.7: right-click the Z arrow → Anti-align with Z.
@@ -84,7 +84,7 @@ Scenario(
         // A5.8: check the orientation (isometric).
         Key("Shift+7"),
         Key("F"),
-        MoveTo(1420, 780),
+        Hover(world(220.7, -27.2)),
         Wait(2),
         Screenshot("10-a5.8-anti-aligned"),
         // A5.9: right-click the instance in the list → Fix.
@@ -94,14 +94,14 @@ Scenario(
         Wait(3),
         Screenshot("11-a5.9-instance-menu-fix"),
         Click(ui("asm-fix")),
-        MoveTo(1420, 780),
+        Hover(world(220.7, -27.2)),
         Wait(2),
         Screenshot("12-a5.9-fixed"),
         // A5.10: the top-level assembly → Mass properties.
         Click(ui("instance-root")),
         Click(ui("view-mass")),
         WaitFor("mass-dialog"),
-        MoveTo(1420, 780),
+        Hover(world(220.7, -27.2)),
         Wait(2),
         Screenshot("13-a5.10-mass-properties"),
     ],

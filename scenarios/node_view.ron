@@ -90,7 +90,7 @@ Scenario(
         WaitFor("configuration-panel"),
         Wait(20),
         Screenshot("07-table"),
-        Drag(ui_at("configuration-panel-edge", 0.5, 0.5), at(1110, 500)),
+        Drag(ui_at("configuration-panel-edge", 0.5, 0.5), ui_at("configuration-scroll", 0.295, 0.421)),
         Wait(10),
         Screenshot("07b-wider"),
         Click(ui("node-canvas-arrange")),

@@ -26,7 +26,7 @@ Scenario(
         WaitFor("sch-box-select"),
         Release,
         Wait(3),
-        MoveTo(1100, 900),
+        Hover(flat(189.5, 49.1)),
         Screenshot("02-schematic-window-selected"),
         Press(flat(235, 135)),
         Hover(flat(215, 110)),
@@ -35,7 +35,7 @@ Scenario(
         Screenshot("03-schematic-crossing"),
         Release,
         Wait(3),
-        MoveTo(1100, 900),
+        Hover(flat(189.5, 49.1)),
         Screenshot("04-schematic-crossing-selected"),
     ],
 )

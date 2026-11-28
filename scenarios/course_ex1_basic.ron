@@ -34,8 +34,8 @@ Scenario(
         Click(ui("feature-top")),
         Key("N"),
         Key("P"),
-        MiddleDrag(at(913, 520), at(700, 545)),
-        MoveTo(1300, 800),
+        MiddleDrag(world(-0.3, 1.8), world(-54.2, -4.6)),
+        Hover(world(151.8, -62.8)),
         Wait(2),
         Screenshot("01-step1-sketch-on-top-normal-planes-hidden"),
         // Step 2: the rough outline.
@@ -65,7 +65,7 @@ Scenario(
         Key("Escape"),
         Key("Q"),
         Key("Escape"),
-        MoveTo(1300, 800),
+        Hover(world(151.8, -62.8)),
         Wait(2),
         Screenshot("02-step2-rough-outline"),
         // Step 3: constraints.
@@ -85,7 +85,7 @@ Scenario(
         Click(world(104, 12)),
         Click(world(160, -45)),
         Key("E"),
-        MoveTo(1300, 800),
+        Hover(world(151.8, -62.8)),
         Wait(2),
         Screenshot("03-step3-constrained-symmetric-midpoint-equal"),
         // Step 4: the first dimension scales the whole sketch.
@@ -98,9 +98,9 @@ Scenario(
         Type("200"),
         Key("Enter"),
         // Zoom out to frame the rescaled sketch, as the course's step 4 is framed.
-        Scroll(at(1120, 560), -2),
+        Scroll(world(106.2, -2), -2),
         Wait(5),
-        MoveTo(1300, 800),
+        Hover(world(166.5, -82.4)),
         Wait(2),
         Screenshot("04-step4-first-dimension-200-scales-sketch"),
         // Step 5: 50, 70 and the ring's 35: fully defined.
@@ -125,7 +125,7 @@ Scenario(
         Type("35"),
         Key("Enter"),
         Key("Escape"),
-        MoveTo(1300, 800),
+        Hover(world(166.5, -82.4)),
         Wait(2),
         Screenshot("05b-step5-fully-defined-black"),
         // Step 6: two equal circles on the tabs, placed with construction lines to the edges'
@@ -166,7 +166,7 @@ Scenario(
         Type("35"),
         Key("Enter"),
         Key("Escape"),
-        MoveTo(1300, 800),
+        Hover(world(166.5, -82.4)),
         Wait(2),
         Screenshot("06-step6-tab-holes-25-and-35"),
         // Step 7: accept.
@@ -176,15 +176,15 @@ Scenario(
         Click(ui("sketch-dialog-accept")),
         // Step 8: view normal, select the region: the Area readout.
         Key("N"),
-        MoveTo(1300, 800),
+        Hover(world(166.5, -82.4)),
         Wait(2),
         Screenshot("08a-step8-accepted-normal"),
         Click(world(100, 50)),
-        MoveTo(1300, 800),
+        Hover(world(166.5, -82.4)),
         Wait(2),
         Screenshot("08b-step8-region-selected-area-readout"),
         Click(world(-57, 0)),
-        MoveTo(1300, 800),
+        Hover(world(166.5, -82.4)),
         Wait(2),
         Screenshot("08c-step8-ring-added-total-area"),
     ],

@@ -24,7 +24,7 @@ Scenario(
         Click(xyz(40, -30, 12)),
         Click(xyz(-10, -8, 30)),
         Screenshot("05-two-selected-again"),
-        ClickAt(330, 300),
+        Click(world(-147.9, 23.7)),
         Screenshot("06-empty-click-clears"),
         Click(xyz(40, -30, 12)),
         Click(xyz(-10, -8, 30)),

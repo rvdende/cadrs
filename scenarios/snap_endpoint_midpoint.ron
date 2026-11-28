@@ -11,7 +11,7 @@ Scenario(
         WaitFor("document-shell"),
         Click(ui("sketch")),
         WaitFor("sketch-dialog"),
-        ClickAt(678, 559),
+        Click(world(-43.7, -43.9)),
         Key("N"),
         Key("L"),
         ClickWorld(-50, 30),

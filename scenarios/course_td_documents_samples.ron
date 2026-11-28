@@ -32,7 +32,7 @@ Scenario(
         Click(ui("sample-copy-dialog-ok")),
         WaitFor("document-loading"),
         ScreenshotNow("05-copy-opening"),
-        MoveTo(1420, 780),
+        Hover(world(59.4, 21.6)),
         Wait(3),
         Screenshot("06-copy-opened"),
         Click(ui("app-menu")),

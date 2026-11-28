@@ -22,7 +22,7 @@ Scenario(
         Wait(10),
         Click(ui("feature-configure-0")),
         WaitFor("configuration-panel"),
-        MoveTo(700, 900),
+        Hover(world(83.3, -82.9)),
         Wait(3),
         Screenshot("01-configured-depth"),
         Click(ui("configuration-input-1-add-row")),

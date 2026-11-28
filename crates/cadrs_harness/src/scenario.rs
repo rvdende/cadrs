@@ -10,12 +10,10 @@
 //!         Key("Enter"),
 //!         Hover(ui("help")),
 //!         Wait(40),
-//!         MoveTo(800, 500),
-//!         ClickAt(800, 500),
-//!         Drag(ui("a"), at(900, 400)),
+//!         Drag(ui("a"), ui_at("panel", 0.5, 0.9)),
 //!         ClickWorld(10, 5),            // a point on the sketch plane, in mm
 //!         Press(world(-20, 0)), Hover(world(0, -10)), Release,
-//!         PressWith("right", at(900, 500)), MoveTo(950, 520), ReleaseWith("right"),
+//!         PressWith("right", xyz(0, 0, 10)), Hover(world(5, 5)), ReleaseWith("right"),
 //!         Custom("populate-sketch 500"),  // app set-up commands
 //!         MeasureStart("idle"), Wait(120), MeasureEnd,  // writes perf-idle.txt
 //!         Screenshot("02-after"),
@@ -31,6 +29,13 @@
 //! scenario's `timeout` (seconds, default 30; `SetTimeout(s)` changes it from there on) fails
 //! the scenario. `WaitFor` and `ScreenshotNow` don't wait to settle (for a state that only
 //! lasts while the app is busy), nor does a step wrapped in `Now` (an edit during a rebuild).
+//!
+//! Steps name what they act on, a UI node by its `Name` or a point of the model, the sketch
+//! or the flat view, never a pixel position: a scenario keeps working when the layout moves.
+//! (`MoveTo`, `ClickAt` and `at(..)` are for live runs; the `pixel_positions` test keeps them
+//! out of `scenarios/`. `CADRS_RECORD_TARGETS=1` writes the named target of every pixel
+//! position a run uses to `targets.tsv`, see [`crate::record`], and
+//! `tools/name_targets.py` rewrites a scenario with them.)
 
 use std::path::{Path, PathBuf};
 
@@ -90,7 +95,7 @@ pub enum Target {
     /// The center of the UI node with this `Name`.
     #[serde(rename = "ui")]
     Ui(String),
-    /// A position in logical pixels.
+    /// A position in logical pixels (for live runs; not in `scenarios/`).
     #[serde(rename = "at")]
     At(f32, f32),
     /// A point on the active sketch plane (or the Top plane when no sketch is open), in
@@ -123,9 +128,9 @@ pub enum Step {
     RightClick(Target),
     /// Move the pointer there.
     Hover(Target),
-    /// Move the pointer to a position.
+    /// Move the pointer to a position in logical pixels (for live runs; not in `scenarios/`).
     MoveTo(f32, f32),
-    /// Click at a position.
+    /// Click at a position in logical pixels (for live runs; not in `scenarios/`).
     ClickAt(f32, f32),
     /// Click at a sketch-plane point (mm); short for `Click(world(x, y))`.
     ClickWorld(f32, f32),
@@ -203,6 +208,33 @@ pub enum Step {
     /// mean, median, 95th percentile, max) to the output directory.
     MeasureStart(String),
     MeasureEnd,
+}
+
+impl Step {
+    /// The pixel positions the step uses (`MoveTo`, `ClickAt`, `at(..)`), in written order.
+    pub fn pixel_positions(&self) -> Vec<(f32, f32)> {
+        let t = |t: &Target| match t {
+            Target::At(x, y) => vec![(*x, *y)],
+            _ => vec![],
+        };
+        match self {
+            Step::MoveTo(x, y) | Step::ClickAt(x, y) => vec![(*x, *y)],
+            Step::Click(a)
+            | Step::RightClick(a)
+            | Step::DoubleClick(a)
+            | Step::Hover(a)
+            | Step::Press(a)
+            | Step::PressWith(_, a)
+            | Step::Scroll(a, _) => t(a),
+            Step::Drag(a, b) | Step::RightDrag(a, b) | Step::MiddleDrag(a, b) => {
+                let mut v = t(a);
+                v.extend(t(b));
+                v
+            }
+            Step::Now(s) => s.pixel_positions(),
+            _ => vec![],
+        }
+    }
 }
 
 impl Scenario {
@@ -283,5 +315,60 @@ mod tests {
                 Scenario::load(&path).unwrap();
             }
         }
+    }
+
+    /// Scenarios that still use pixel positions: each fails (or stops being run) before it
+    /// reaches them, so they couldn't be recorded. Convert one once it runs to the end (see the
+    /// module docs) and take it off the list.
+    const PIXELS_LEFT: &[&str] = &[
+        "cam_studio_mill",
+        "configurations",
+        "configurations_drawing",
+        "configurations_properties",
+        "configurations_render",
+        "course_asm_mates_tangent_width",
+        "course_drw_ex3_update",
+        "course_dv_derived_options",
+        "course_dv_ex1_two_copies",
+        "course_dv_ex2_update",
+        "course_er_open_linked",
+        "course_pcb_ex1_board",
+        "course_ps6_control_arm",
+        "course_ps8_reducer_coupling",
+        "course_ps9_appearance",
+        "course_s16_text",
+        "course_s1_new_sketch_context_menu",
+        "pcbs_redraw",
+        "sm_p3i3_table",
+    ];
+
+    /// Scenario steps name their targets (a UI node, a model or sketch point), never a pixel.
+    #[test]
+    fn pixel_positions() {
+        let mut bad = Vec::new();
+        let mut converted = Vec::new();
+        for entry in cadrs_fs::read_dir(scenarios_dir()).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|e| e != "ron") {
+                continue;
+            }
+            let name = path.file_stem().unwrap().to_string_lossy().to_string();
+            let s = Scenario::load(&path).unwrap();
+            let n: usize = s.steps.iter().map(|s| s.pixel_positions().len()).sum();
+            match (n > 0, PIXELS_LEFT.contains(&name.as_str())) {
+                (true, false) => bad.push(format!("{name} ({n})")),
+                (false, true) => converted.push(name),
+                _ => {}
+            }
+        }
+        assert!(
+            bad.is_empty(),
+            "scenarios with pixel positions (MoveTo, ClickAt, at(..)); use ui(..), ui_at(..), \
+             world(..), xyz(..) or flat(..): {bad:?}"
+        );
+        assert!(
+            converted.is_empty(),
+            "no pixel positions left: take these off PIXELS_LEFT: {converted:?}"
+        );
     }
 }

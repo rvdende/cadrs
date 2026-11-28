@@ -33,10 +33,10 @@ Scenario(
         Click(ui("feature-front")),
         Key("N"),
         Key("P"),
-        Scroll(at(913, 520), -5),
+        Scroll(world(-0.3, 1.8), -5),
         Wait(3),
-        MiddleDrag(at(913, 520), at(913, 790)),
-        MoveTo(1300, 900),
+        MiddleDrag(world(0, 2), world(0, -136)),
+        Hover(world(197, -54.3)),
         Wait(2),
         Screenshot("01-step1-sketch-on-front"),
         // Step 2.
@@ -51,7 +51,7 @@ Scenario(
         ClickWorld(-60, 45),
         Key("Escape"),
         Key("Escape"),
-        MoveTo(1300, 900),
+        Hover(world(197, -54.3)),
         Wait(2),
         Screenshot("02-step2-center-line-base-and-side"),
         // Step 3.
@@ -61,7 +61,7 @@ Scenario(
         ClickWorld(-48, 100),
         Key("Escape"),
         Key("Escape"),
-        MoveTo(1300, 900),
+        Hover(world(197, -54.3)),
         Wait(2),
         Screenshot("03-step3-three-point-arc"),
         // Step 4: mirror about the center line.
@@ -70,7 +70,7 @@ Scenario(
         Click(world(-30, 0)),
         Click(world(-60, 25)),
         Click(world(-48.5, 100)),
-        MoveTo(1300, 900),
+        Hover(world(197, -54.3)),
         Wait(2),
         Screenshot("04-step4-mirror"),
         Key("Escape"),
@@ -81,14 +81,14 @@ Scenario(
         ClickWorld(-63, 160),
         ClickWorld(63, 160),
         Key("Escape"),
-        MoveTo(1300, 900),
+        Hover(world(197, -54.3)),
         Wait(2),
         Screenshot("05-step5-tangent-arc-head"),
         // Step 6: the head's center coincident with the center line's top.
         Click(world(0, 193.27)),
         Click(world(0, 180)),
         Key("I"),
-        MoveTo(1300, 900),
+        Hover(world(197, -54.3)),
         Wait(2),
         Screenshot("06-step6-head-center-coincident"),
         // Step 7: dimensions. R75 first: it scales the sketch.
@@ -126,7 +126,7 @@ Scenario(
         Type("125"),
         Key("Enter"),
         Key("Escape"),
-        MoveTo(1300, 900),
+        Hover(world(197, -54.3)),
         Wait(2),
         Screenshot("07-step7-dimensions-r75-r125-200-50-125"),
         // Step 8: offset the head arc 40 inward (O), the distance typed after placing it.
@@ -142,7 +142,7 @@ Scenario(
         Type("40"),
         Key("Enter"),
         Key("Escape"),
-        MoveTo(1300, 900),
+        Hover(world(197, -54.3)),
         Wait(2),
         Screenshot("08c-step8-offset-40-inward"),
         // Step 9: a vertical line.
@@ -151,7 +151,7 @@ Scenario(
         ClickWorld(-15, 145),
         Key("Escape"),
         Key("Escape"),
-        MoveTo(1300, 900),
+        Hover(world(197, -54.3)),
         Wait(2),
         Screenshot("09-step9-vertical-line"),
         // Step 10: a tangent arc from its top to the offset arc's end.
@@ -166,7 +166,7 @@ Scenario(
         Screenshot("10a-step10-tangent-arc-to-offset-end"),
         ClickWorld(-30.68, 183.16),
         Key("Escape"),
-        MoveTo(1300, 900),
+        Hover(world(197, -54.3)),
         Wait(2),
         Screenshot("10b-step10-tangent-arc-coincident-tangent"),
         // Step 11: mirror both: the copy joins the offset arc's other end.
@@ -174,7 +174,7 @@ Scenario(
         Click(world(0, 60)),
         Click(world(-15.8, 120)),
         Click(world(-20.4, 163.3)),
-        MoveTo(1300, 900),
+        Hover(world(197, -54.3)),
         Wait(2),
         Screenshot("11-step11-mirror-coincident-tangent"),
         Key("Escape"),
@@ -185,7 +185,7 @@ Scenario(
         ClickWorld(-15.8, 100),
         ClickWorld(15.8, 100),
         Key("Escape"),
-        MoveTo(1300, 900),
+        Hover(world(197, -54.3)),
         Wait(2),
         Screenshot("12-step12-tangent-arc-bottom"),
         // Step 13: a center-point rectangle on the center line.
@@ -194,7 +194,7 @@ Scenario(
         ClickWorld(40, 45),
         Key("Escape"),
         Key("Escape"),
-        MoveTo(1300, 900),
+        Hover(world(197, -54.3)),
         Wait(2),
         Screenshot("13-step13-center-point-rectangle"),
         // Step 14: R15, R40, 100, 20, 25, 80.
@@ -238,7 +238,7 @@ Scenario(
         Type("80"),
         Key("Enter"),
         Key("Escape"),
-        MoveTo(1300, 900),
+        Hover(world(197, -54.3)),
         Wait(2),
         Screenshot("14-step14-dimensions-fully-defined"),
         // Step 15: accept.
@@ -248,7 +248,7 @@ Scenario(
         Click(ui("sketch-dialog-accept")),
         // Step 16: select the region: the Area readout.
         Click(world(-50, 15)),
-        MoveTo(1300, 900),
+        Hover(xyz(197, 0, -54.3)),
         Wait(2),
         Screenshot("16-step16-region-selected-area-readout"),
     ],

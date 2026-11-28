@@ -19,6 +19,7 @@
 pub mod cursor;
 pub mod idle;
 pub mod keys;
+pub mod record;
 pub mod runner;
 pub mod scenario;
 

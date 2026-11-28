@@ -9,7 +9,7 @@ Scenario(
         Custom("hypoid"),
         Key("Shift+7"),
         Key("F"),
-        MoveTo(1420, 900),
+        Hover(world(152.5, -17.7)),
         Wait(10),
         Screenshot("01-the-pair-on-its-shafts"),
     ],
