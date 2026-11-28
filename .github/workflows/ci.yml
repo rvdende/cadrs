@@ -243,6 +243,9 @@ jobs:
     timeout-minutes: 150
     env:
       BREP_BENCH_REV: 4273a001e20fdac3667315eb03f2e73950452d88
+      # Built outside cadrs's tree, where .cargo/config.toml (clang, mold) doesn't reach: no
+      # flags, as before the workflow's Linux flags.
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: ""
     steps:
       - uses: actions/checkout@v4
         with:
