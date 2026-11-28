@@ -65,7 +65,10 @@ fn looks_like_missing_gpu(stderr: &str) -> bool {
 /// `CADRS_KNOWN_FAILING=1` runs them.
 const KNOWN_FAILING: &[(&str, &str)] = &[
     ("cam_machine_from_assembly", "runs for over 5 minutes"),
-    ("cam_studio_mill", "runs for over 5 minutes"),
+    (
+        "cam_studio_mill",
+        "passes, in about 4 minutes (the preview's exact stock cuts): left out for speed",
+    ),
     ("course_pcb_ex3_idf_assembly", "the EMN placement differs"),
     (
         "pcb_board_from_sketch",

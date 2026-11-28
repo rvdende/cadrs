@@ -19,6 +19,8 @@
 //    the start of the G-code).
 // 13 posted: the toast names the file.
 Scenario(
+    // The preview's exact stock cuts take minutes (each seek waits for its cut in one frame).
+    timeout: 300.0,
     start: Some("document"),
     steps: [
         WaitFor("document-shell"),
