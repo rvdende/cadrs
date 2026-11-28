@@ -71,10 +71,6 @@ const KNOWN_FAILING: &[(&str, &str)] = &[
         "mate-dialog-accept stays disabled",
     ),
     (
-        "course_drw_ex3_update",
-        "dim-label-225 is not found to double-click",
-    ),
-    (
         "course_dv_derived_options",
         "the derived parts' volume is 37500, not 75000",
     ),
