@@ -106,7 +106,7 @@ Scenario(
         Screenshot("13-export-of-the-lids-flat"),
         Key("Escape"),
         Click(ui("panel-sheet-metal")),
-        MoveTo(700, 900),
+        Hover(ui_at("viewport-area", 0.655, 0.943)),
         Wait(3),
         Screenshot("07-panel-closed"),
     ],

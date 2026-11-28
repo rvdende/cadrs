@@ -162,7 +162,7 @@ Scenario(
         Click(ui("instance-row-4")),
         Click(ui("instance-row-5")),
         Click(ui("instance-row-6")),
-        MoveTo(1300, 250),
+        Hover(ui_at("viewport-area", 0.7814, 0.171)),
         Wait(3),
         Screenshot("12-group-1-edited"),
         Click(ui("group-dialog-accept")),
@@ -178,14 +178,14 @@ Scenario(
         Screenshot("14-sync-dialog"),
         Click(ui("pcb-sync-ok")),
         WaitFor("pcb-sync-toast"),
-        MoveTo(1100, 700),
+        Hover(ui_at("viewport-area", 0.632, 0.705)),
         Wait(3),
         Screenshot("15-synced-board-keepouts"),
         // Step 12: the Enclosure goes to 85 × 150.
         Click(ui("tab-enclosure")),
         Custom("phone-case-size 85 150"),
         Key("F"),
-        MoveTo(1300, 250),
+        Hover(ui_at("viewport-area", 0.7814, 0.171)),
         Wait(3),
         Screenshot("16-enclosure-85-by-150"),
         // Step 13: Update context from the Board's menu.
@@ -199,7 +199,7 @@ Scenario(
         Screenshot("17-update-context-menu"),
         Click(ui("asm-update-context-0")),
         Key("F"),
-        MoveTo(1300, 250),
+        Hover(ui_at("viewport-area", 0.7814, 0.171)),
         Wait(3),
         Screenshot("18-board-follows-the-case"),
         // Steps 15–16: sync again with the same settings.
@@ -209,7 +209,7 @@ Scenario(
         Screenshot("19-sync-again"),
         Click(ui("pcb-sync-ok")),
         WaitFor("pcb-sync-toast"),
-        MoveTo(1100, 700),
+        Hover(ui_at("viewport-area", 0.632, 0.705)),
         Wait(3),
         Screenshot("20-board-updated"),
         // Steps 17–18: Export this board to IDF 3.0; read Cell phone.emn.

@@ -120,10 +120,10 @@ fn top_node(world: &mut World, p: Vec2) -> Option<Entity> {
         if (p - center).abs().cmpgt(half).any() {
             continue;
         }
-        if let Some(clip) = er.get::<CalculatedClip>() {
-            if !clip.contains_point(p / k) {
-                continue;
-            }
+        if let Some(clip) = er.get::<CalculatedClip>()
+            && !clip.contains_point(p / k)
+        {
+            continue;
         }
         return Some(e);
     }

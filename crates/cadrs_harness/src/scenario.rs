@@ -317,36 +317,10 @@ mod tests {
         }
     }
 
-    /// Scenarios that still use pixel positions: each fails (or stops being run) before it
-    /// reaches them, so they couldn't be recorded. Convert one once it runs to the end (see the
-    /// module docs) and take it off the list.
-    const PIXELS_LEFT: &[&str] = &[
-        "cam_studio_mill",
-        "configurations",
-        "configurations_drawing",
-        "configurations_properties",
-        "configurations_render",
-        "course_asm_mates_tangent_width",
-        "course_drw_ex3_update",
-        "course_dv_derived_options",
-        "course_dv_ex1_two_copies",
-        "course_dv_ex2_update",
-        "course_er_open_linked",
-        "course_pcb_ex1_board",
-        "course_ps6_control_arm",
-        "course_ps8_reducer_coupling",
-        "course_ps9_appearance",
-        "course_s16_text",
-        "course_s1_new_sketch_context_menu",
-        "pcbs_redraw",
-        "sm_p3i3_table",
-    ];
-
     /// Scenario steps name their targets (a UI node, a model or sketch point), never a pixel.
     #[test]
     fn pixel_positions() {
         let mut bad = Vec::new();
-        let mut converted = Vec::new();
         for entry in cadrs_fs::read_dir(scenarios_dir()).unwrap() {
             let path = entry.unwrap().path();
             if path.extension().is_none_or(|e| e != "ron") {
@@ -355,20 +329,14 @@ mod tests {
             let name = path.file_stem().unwrap().to_string_lossy().to_string();
             let s = Scenario::load(&path).unwrap();
             let n: usize = s.steps.iter().map(|s| s.pixel_positions().len()).sum();
-            match (n > 0, PIXELS_LEFT.contains(&name.as_str())) {
-                (true, false) => bad.push(format!("{name} ({n})")),
-                (false, true) => converted.push(name),
-                _ => {}
+            if n > 0 {
+                bad.push(format!("{name} ({n})"));
             }
         }
         assert!(
             bad.is_empty(),
             "scenarios with pixel positions (MoveTo, ClickAt, at(..)); use ui(..), ui_at(..), \
              world(..), xyz(..) or flat(..): {bad:?}"
-        );
-        assert!(
-            converted.is_empty(),
-            "no pixel positions left: take these off PIXELS_LEFT: {converted:?}"
         );
     }
 }
