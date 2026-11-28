@@ -823,6 +823,71 @@ fn unite_solids(t: Tagged) -> Result<Tagged> {
 
 /// The revolve frame: z along the axis, x from the axis towards the profile (which must lie on
 /// one side of it, in a plane through it).
+/// A profile's corners (between straight pieces) within the merge distance of the revolve's axis
+/// moved onto it, and the pieces that leaves shorter than it dropped: what lies that near the
+/// axis is on it. (Parasolid revolves a frustum whose top is 1e-6 mm across as a cone with an
+/// apex, at its 1e-5 mm resolution; cadrs kept the speck of a top face, which a cut through the
+/// axis then left open: CADEvolve 2555.)
+fn onto_axis(profile: &Profile, axis: &Axis, faces: &mut [MergedFace]) {
+    let tol = tol::point();
+    let pl = &profile.plane;
+    let (px, py) = (pl.x_dir.into_inner(), pl.y_dir().into_inner());
+    let w = axis.origin - pl.origin;
+    let a = P2::new(w.dot(&px), w.dot(&py));
+    let Some(d) = V2::new(axis.dir.dot(&px), axis.dir.dot(&py)).try_normalize(tol::TINY) else {
+        return;
+    };
+    let off = |q: &P2| {
+        let v = q - a;
+        (v.x * d.y - v.y * d.x).abs()
+    };
+    let line = |from: P2, to: P2, like: &Piece| Piece {
+        c: super::curve::Curve::Line {
+            o: P3::new(from.x, from.y, 0.0),
+            d: V3::new(to.x - from.x, to.y - from.y, 0.0),
+        },
+        t0: 0.0,
+        t1: 1.0,
+        rev: false,
+        ..like.clone()
+    };
+    let fix = |l: &mut Vec<Piece>| {
+        let n = l.len();
+        if n < 3 {
+            return;
+        }
+        let mut moved = false;
+        for j in 0..n {
+            let k = (j + 1) % n;
+            let q = l[j].end();
+            let e = off(&q);
+            if e == 0.0
+                || e >= tol
+                || !matches!(l[j].c, super::curve::Curve::Line { .. })
+                || !matches!(l[k].c, super::curve::Curve::Line { .. })
+            {
+                continue;
+            }
+            let foot = a + d * (q - a).dot(&d);
+            l[j] = line(l[j].start(), foot, &l[j]);
+            l[k] = line(foot, l[k].end(), &l[k]);
+            moved = true;
+        }
+        if moved {
+            l.retain(|p| {
+                (p.end() - p.start()).norm() >= tol
+                    || !matches!(p.c, super::curve::Curve::Line { .. })
+            });
+        }
+    };
+    for f in faces.iter_mut() {
+        fix(&mut f.outer);
+        for h in &mut f.holes {
+            fix(h);
+        }
+    }
+}
+
 pub fn revolve_frame(
     profile: &Profile,
     faces: &[MergedFace],
@@ -906,6 +971,8 @@ pub fn revolve_with(
     if axis_off_plane(profile, &spec.axis) {
         return revolve_off_plane(k, profile, spec, &faces, &ch);
     }
+    let mut faces = faces;
+    onto_axis(profile, &spec.axis, &mut faces);
     let f = revolve_frame(profile, &faces, &ch, &spec.axis)?;
     let kind = sweep::Revolve {
         plane: profile.plane,

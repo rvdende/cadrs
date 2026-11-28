@@ -562,6 +562,46 @@ fn slit_annulus_polyline_keeps_its_bore() {
 /// planes 0.5 off the cone's axis, meet the cone's patch in a hyperbola a sliver of the cone's
 /// turn wide, between the samples its intersection took; the cut found no curve and took the
 /// whole slot. OCCT: 99.2197565806.
+/// A frustum whose top is 1e-6 across, revolved: the top's corner lies within the merge
+/// distance of the axis, so on it, and the solid is the cone with an apex Parasolid makes
+/// (Onshape's evalFeatureScript of CADEvolve 2555: 2094.395102393, π·10²·20/3). Its top face
+/// was kept as a speck, and a box cut through the axis (the generator's first vane) left an
+/// open shell.
+#[test]
+fn speck_of_a_top_on_the_axis_revolves_to_an_apex() {
+    let cone = Workplane::named("XZ", V3::zeros())
+        .unwrap()
+        .move_to(0.0, 0.0)
+        .line_to(10.0, 0.0, false)
+        .unwrap()
+        .line_to(1e-6, 20.0, false)
+        .unwrap()
+        .line_to(0.0, 20.0, false)
+        .unwrap()
+        .close()
+        .unwrap()
+        .revolve(360.0, None, None, Combine::Fuse, true)
+        .unwrap();
+    let want = std::f64::consts::PI * 100.0 * 20.0 / 3.0;
+    assert!((vol(&cone) - want).abs() < 1e-9 * want, "{}", vol(&cone));
+    let vane = xy()
+        .transformed(V3::zeros(), V3::new(5.4999995, 0.0, 10.0))
+        .unwrap()
+        .box_(
+            10.999999,
+            0.5,
+            22.0,
+            (true, true, true),
+            Combine::Fuse,
+            true,
+        )
+        .unwrap();
+    let cut = cone
+        .cut_shapes(vec![vane.find_solid().unwrap()], true)
+        .unwrap();
+    assert!(vol(&cut) < want && vol(&cut) > 0.9 * want, "{}", vol(&cut));
+}
+
 #[test]
 fn slot_in_a_cone_shell_meets_its_sides() {
     let cone = |r: f64| {
