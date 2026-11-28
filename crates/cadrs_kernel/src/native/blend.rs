@@ -3091,6 +3091,18 @@ pub fn chamfer(
         && std::env::var_os("CADRS_NO_LOCAL_FILLET").is_none()
     {
         let sharp: Vec<usize> = sharp.iter().map(|e| e.0 as usize).collect();
+        // Rims (whole circles between faces turned about their axes): each contact `d` from
+        // the edge in a straight line, in closed form ([`super::rim_blend::rims_chamfer_at`]);
+        // exact on a face curving across the rim, where the local chamfer's ball isn't.
+        if !sharp.is_empty()
+            && std::env::var_os("CADRS_NO_RIM_BLEND").is_none()
+            && let Some((out, src)) = super::rim_blend::rims_chamfer_at(&b, body, &sharp, d)
+        {
+            if crate::native::env_flag!("CADRS_BLEND_DEBUG") {
+                eprintln!("chamfer: the rim's in closed form, {d} from the edge");
+            }
+            return Ok(Tracked { body: out, src }.into_result(k, body));
+        }
         if let Some(local) = super::fillet::chamfer_equal_edges(&b, body, &sharp, d) {
             let local = local.and_then(|(out, src)| {
                 // (The local result's edges are merged and its tolerances fitted already.)

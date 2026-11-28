@@ -1408,7 +1408,10 @@ impl FilletSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ChamferMeasure {
     /// Along each face from the edge: exact between faces straight across the edge (planes, a
-    /// cylinder's rim) and round a cylinder running along a straight edge. Where a face curves
+    /// cylinder's rim) and round a cylinder running along a straight edge. An equal-distance
+    /// chamfer of rims (whole circles between faces turned about their axes: a sphere's or a
+    /// torus's against a plane, a hole's mouth) puts each contact that far from the edge in a
+    /// straight line, exactly, as Parasolid does. Where a face curves
     /// across the edge otherwise (a cone along its line, a sphere, a torus), and along a tangent
     /// chain any edge of which is such, the local chamfer puts its contacts where the ball whose
     /// contacts on the faces' tangent planes lie that far touches the faces: off by more the

@@ -49,6 +49,69 @@ fn box_with_a_hole_and_fillets() {
     assert!((vol(&f) - want).abs() < 1e-6, "{} vs {want}", vol(&f));
 }
 
+/// A chamfer of the circle where a sphere meets a plane: both new edges `d` from the old one in
+/// a straight line, as Parasolid puts them (Onshape's evalFeatureScript, 2026-11-28: the cap of
+/// a sphere of radius 12 above z = 8, its rim chamfered 0.5, is 531.1410166167934; with a
+/// through hole of diameter 2 and both its rims chamfered, CADEvolve generator 191,
+/// 517.7238739421834). The ball sized on the faces' tangent planes left 530.7959699 and
+/// 517.3788273: contacts 0.515 and 0.520 from the rim on the plane and the sphere.
+#[test]
+fn chamfered_sphere_rims_as_parasolid() {
+    let cap = || {
+        let sphere = xy()
+            .sphere(
+                12.0,
+                V3::new(0.0, 0.0, 1.0),
+                -90.0,
+                90.0,
+                360.0,
+                (true, true, true),
+                Combine::Fuse,
+                true,
+            )
+            .unwrap();
+        let slab = xy()
+            .workplane(8.0, false, "ProjectedOrigin", None)
+            .unwrap()
+            .rect(24.0, 24.0, (true, true), false)
+            .unwrap()
+            .extrude(Until::Distance(4.0), Combine::Fuse, true, false, 0.0)
+            .unwrap();
+        sphere.intersect_shapes(slab.shapes(), true).unwrap()
+    };
+    let bottom = Selector::parse("<Z").unwrap();
+    let one = cap()
+        .select(ShapeType::Face, Some(&bottom), None)
+        .unwrap()
+        .select(ShapeType::Edge, None, None)
+        .unwrap()
+        .chamfer(0.5, None)
+        .unwrap();
+    assert!(
+        (vol(&one) - 531.1410166167934).abs() < 1e-7,
+        "{}",
+        vol(&one)
+    );
+    let two = cap()
+        .select(ShapeType::Face, Some(&bottom), None)
+        .unwrap()
+        .workplane(0.0, false, "ProjectedOrigin", None)
+        .unwrap()
+        .hole(2.0, None, true)
+        .unwrap()
+        .select(ShapeType::Face, Some(&bottom), None)
+        .unwrap()
+        .select(ShapeType::Edge, None, None)
+        .unwrap()
+        .chamfer(0.5, None)
+        .unwrap();
+    assert!(
+        (vol(&two) - 517.7238739421834).abs() < 1e-7,
+        "{}",
+        vol(&two)
+    );
+}
+
 #[test]
 fn rect_and_circle_make_a_holed_plate() {
     let w = xy()
