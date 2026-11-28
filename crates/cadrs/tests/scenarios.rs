@@ -67,10 +67,6 @@ const KNOWN_FAILING: &[(&str, &str)] = &[
     ("cam_machine_from_assembly", "runs for over 5 minutes"),
     ("cam_studio_mill", "runs for over 5 minutes"),
     (
-        "course_asm_mates_tangent_width",
-        "mate-dialog-accept stays disabled",
-    ),
-    (
         "course_dv_derived_options",
         "the derived parts' volume is 37500, not 75000",
     ),
@@ -83,7 +79,6 @@ const KNOWN_FAILING: &[(&str, &str)] = &[
         "the derived parts' volume is 37500, not 75000",
     ),
     ("course_er_open_linked", "the mass dialog shows no part"),
-    ("course_pcb_ex1_board", "no part-row-part-3"),
     ("course_pcb_ex3_idf_assembly", "the EMN placement differs"),
     ("course_ps6_control_arm", "no sketch-dialog-accept"),
     ("course_ps8_reducer_coupling", "no sketch-dialog-accept"),

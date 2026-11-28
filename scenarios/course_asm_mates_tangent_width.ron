@@ -210,9 +210,9 @@ Scenario(
         // A12: Width, one instance's two tabs.
         Click(ui("mate-width")),
         WaitFor("mate-dialog"),
-        Hover(xyz(148, 40, 32)),
+        Hover(xyz(130, 40, 38)),
         Wait(3),
-        Click(xyz(148, 40, 32)),
+        Click(xyz(130, 40, 38)),
         Hover(xyz(140, 52, 40)),
         Wait(3),
         Click(xyz(140, 52, 40)),
