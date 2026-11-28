@@ -1,0 +1,214 @@
+{
+  "entries": [
+    {
+      "line": 13,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 1
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        12.0
+      ],
+      "kwargs": {},
+      "line": 13,
+      "op": "sphere",
+      "out": {
+        "wp": 2
+      },
+      "self": {
+        "wp": 1
+      }
+    },
+    {
+      "line": 16,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 3
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": 8.0
+      },
+      "line": 17,
+      "op": "workplane",
+      "out": {
+        "wp": 4
+      },
+      "self": {
+        "wp": 3
+      }
+    },
+    {
+      "args": [
+        24.0,
+        24.0
+      ],
+      "kwargs": {},
+      "line": 18,
+      "op": "rect",
+      "out": {
+        "wp": 5
+      },
+      "self": {
+        "wp": 4
+      }
+    },
+    {
+      "args": [
+        4.0
+      ],
+      "kwargs": {},
+      "line": 19,
+      "op": "extrude",
+      "out": {
+        "wp": 6
+      },
+      "self": {
+        "wp": 5
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 6
+        }
+      ],
+      "kwargs": {},
+      "line": 21,
+      "op": "intersect",
+      "out": {
+        "wp": 7
+      },
+      "self": {
+        "wp": 2
+      }
+    },
+    {
+      "args": [
+        "<Z"
+      ],
+      "kwargs": {},
+      "line": 24,
+      "op": "faces",
+      "out": {
+        "wp": 8
+      },
+      "self": {
+        "wp": 7
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 24,
+      "op": "workplane",
+      "out": {
+        "wp": 9
+      },
+      "self": {
+        "wp": 8
+      }
+    },
+    {
+      "args": [
+        2.0
+      ],
+      "kwargs": {},
+      "line": 24,
+      "op": "hole",
+      "out": {
+        "wp": 10
+      },
+      "self": {
+        "wp": 9
+      }
+    },
+    {
+      "args": [
+        "<Z"
+      ],
+      "kwargs": {},
+      "line": 27,
+      "op": "faces",
+      "out": {
+        "wp": 11
+      },
+      "self": {
+        "wp": 10
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 27,
+      "op": "edges",
+      "out": {
+        "wp": 12
+      },
+      "self": {
+        "wp": 11
+      }
+    },
+    {
+      "args": [
+        0.5
+      ],
+      "kwargs": {},
+      "line": 27,
+      "op": "chamfer",
+      "out": {
+        "wp": 13
+      },
+      "self": {
+        "wp": 12
+      }
+    }
+  ],
+  "guarded": false,
+  "i": 191,
+  "name": "sphere_cap_with_hole_and_chamfer",
+  "result": {
+    "wp": 13
+  },
+  "status": "ok"
+}

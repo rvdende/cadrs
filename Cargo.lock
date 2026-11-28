@@ -2436,6 +2436,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cadrs_cq2fs"
+version = "0.2.9"
+dependencies = [
+ "anyhow",
+ "serde_json",
+]
+
+[[package]]
 name = "cadrs_drawing"
 version = "0.2.9"
 dependencies = [

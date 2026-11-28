@@ -1,0 +1,65 @@
+{
+  "entries": [
+    {
+      "line": 2,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 1
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        6,
+        34.64101615137754
+      ],
+      "kwargs": {},
+      "line": 2,
+      "op": "polygon",
+      "out": {
+        "wp": 2
+      },
+      "self": {
+        "wp": 1
+      }
+    },
+    {
+      "args": [
+        20
+      ],
+      "kwargs": {},
+      "line": 2,
+      "op": "extrude",
+      "out": {
+        "wp": 3
+      },
+      "self": {
+        "wp": 2
+      }
+    }
+  ],
+  "guarded": false,
+  "i": 6,
+  "name": "hex_prism",
+  "result": {
+    "wp": 3
+  },
+  "status": "ok"
+}

@@ -1,0 +1,33 @@
+{
+  "area": 1706.635331221869,
+  "bbox": [
+    1.5308084989341917e-15,
+    0.0,
+    -6.0,
+    31.0,
+    31.0,
+    6.0
+  ],
+  "edges": 2.0,
+  "faces": 3.0,
+  "i": 15.0,
+  "log": [
+    {
+      "id": 4.0,
+      "msg": {
+        "solids": 1.0,
+        "vol": 4441.32198049021
+      },
+      "op": "revolve"
+    }
+  ],
+  "other": [],
+  "solids": 1.0,
+  "status": "ok",
+  "vertices": 0.0,
+  "vol": 4441.32198049021,
+  "warn": [],
+  "source": "Onshape evalFeatureScript (Parasolid), cq2fs case.fs",
+  "evaluated": 1795846209,
+  "guarded_steps": []
+}

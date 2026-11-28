@@ -1,0 +1,49 @@
+{
+  "area": 1608.495438637974,
+  "bbox": [
+    -12,
+    -12,
+    -4,
+    12,
+    12,
+    12
+  ],
+  "edges": 1,
+  "evaluated": 1795846528,
+  "faces": 2,
+  "guarded_steps": [],
+  "i": 20,
+  "log": [
+    {
+      "id": 2,
+      "msg": {
+        "solids": 1,
+        "vol": 7238.229473870882
+      },
+      "op": "sphere"
+    },
+    {
+      "id": 5,
+      "msg": {
+        "solids": 1,
+        "vol": 13823.999999999998
+      },
+      "op": "box"
+    },
+    {
+      "id": 6,
+      "msg": {
+        "solids": 1,
+        "vol": 5361.651462126581
+      },
+      "op": "intersect"
+    }
+  ],
+  "other": [],
+  "solids": 1,
+  "source": "Onshape evalFeatureScript (Parasolid), case.fs",
+  "status": "ok",
+  "vertices": 4,
+  "vol": 5361.651462126581,
+  "warn": []
+}
