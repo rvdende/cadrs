@@ -2316,6 +2316,386 @@ dependencies = [
 ]
 
 [[package]]
+name = "cadmpeg-asm"
+version = "0.6.12"
+source = "git+https://github.com/cadmpeg/cadmpeg?branch=main#0591bf9c7017c7fe621ae080d0d6294e0609a305"
+dependencies = [
+ "cadmpeg-core",
+ "cadmpeg-derive",
+ "cadmpeg-ir",
+ "serde",
+]
+
+[[package]]
+name = "cadmpeg-codec-catia"
+version = "0.6.12"
+source = "git+https://github.com/cadmpeg/cadmpeg?branch=main#0591bf9c7017c7fe621ae080d0d6294e0609a305"
+dependencies = [
+ "cadmpeg-core",
+ "cadmpeg-derive",
+ "cadmpeg-ir",
+ "memchr",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "cadmpeg-codec-creo"
+version = "0.6.12"
+source = "git+https://github.com/cadmpeg/cadmpeg?branch=main#0591bf9c7017c7fe621ae080d0d6294e0609a305"
+dependencies = [
+ "cadmpeg-core",
+ "cadmpeg-ir",
+ "regex",
+ "serde",
+]
+
+[[package]]
+name = "cadmpeg-codec-edrawings"
+version = "0.6.12"
+source = "git+https://github.com/cadmpeg/cadmpeg?branch=main#0591bf9c7017c7fe621ae080d0d6294e0609a305"
+dependencies = [
+ "cadmpeg-container",
+ "cadmpeg-core",
+ "cadmpeg-ir",
+]
+
+[[package]]
+name = "cadmpeg-codec-f3d"
+version = "0.6.12"
+source = "git+https://github.com/cadmpeg/cadmpeg?branch=main#0591bf9c7017c7fe621ae080d0d6294e0609a305"
+dependencies = [
+ "cadmpeg-asm",
+ "cadmpeg-container",
+ "cadmpeg-core",
+ "cadmpeg-derive",
+ "cadmpeg-ir",
+ "cadmpeg-protein",
+ "lzma-rs",
+ "memchr",
+ "roxmltree 0.21.2",
+ "serde",
+ "serde_json",
+ "sha2",
+ "zip",
+]
+
+[[package]]
+name = "cadmpeg-codec-freecad"
+version = "0.6.12"
+source = "git+https://github.com/cadmpeg/cadmpeg?branch=main#0591bf9c7017c7fe621ae080d0d6294e0609a305"
+dependencies = [
+ "cadmpeg-container",
+ "cadmpeg-core",
+ "cadmpeg-derive",
+ "cadmpeg-ir",
+ "roxmltree 0.21.2",
+ "serde",
+ "serde_json",
+ "zip",
+]
+
+[[package]]
+name = "cadmpeg-codec-iges"
+version = "0.6.12"
+source = "git+https://github.com/cadmpeg/cadmpeg?branch=main#0591bf9c7017c7fe621ae080d0d6294e0609a305"
+dependencies = [
+ "cadmpeg-core",
+ "cadmpeg-ir",
+ "memchr",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "toml",
+]
+
+[[package]]
+name = "cadmpeg-codec-inventor"
+version = "0.6.12"
+source = "git+https://github.com/cadmpeg/cadmpeg?branch=main#0591bf9c7017c7fe621ae080d0d6294e0609a305"
+dependencies = [
+ "cadmpeg-asm",
+ "cadmpeg-container",
+ "cadmpeg-core",
+ "cadmpeg-derive",
+ "cadmpeg-ir",
+ "cadmpeg-protein",
+ "encoding_rs",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "cadmpeg-codec-ironcad"
+version = "0.6.12"
+source = "git+https://github.com/cadmpeg/cadmpeg?branch=main#0591bf9c7017c7fe621ae080d0d6294e0609a305"
+dependencies = [
+ "cadmpeg-asm",
+ "cadmpeg-codec-sldprt",
+ "cadmpeg-container",
+ "cadmpeg-core",
+ "cadmpeg-ir",
+ "cadmpeg-parasolid",
+]
+
+[[package]]
+name = "cadmpeg-codec-nx"
+version = "0.6.12"
+source = "git+https://github.com/cadmpeg/cadmpeg?branch=main#0591bf9c7017c7fe621ae080d0d6294e0609a305"
+dependencies = [
+ "cadmpeg-container",
+ "cadmpeg-core",
+ "cadmpeg-derive",
+ "cadmpeg-ir",
+ "cadmpeg-parasolid",
+ "flate2",
+ "memchr",
+ "roxmltree 0.21.2",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "cadmpeg-codec-onshape"
+version = "0.6.12"
+source = "git+https://github.com/cadmpeg/cadmpeg?branch=main#0591bf9c7017c7fe621ae080d0d6294e0609a305"
+dependencies = [
+ "base64 0.23.1",
+ "cadmpeg-container",
+ "cadmpeg-core",
+ "cadmpeg-ir",
+ "flate2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "cadmpeg-codec-pvz"
+version = "0.6.12"
+source = "git+https://github.com/cadmpeg/cadmpeg?branch=main#0591bf9c7017c7fe621ae080d0d6294e0609a305"
+dependencies = [
+ "cadmpeg-container",
+ "cadmpeg-core",
+ "cadmpeg-ir",
+ "crc32fast",
+ "roxmltree 0.21.2",
+]
+
+[[package]]
+name = "cadmpeg-codec-rhino"
+version = "0.6.12"
+source = "git+https://github.com/cadmpeg/cadmpeg?branch=main#0591bf9c7017c7fe621ae080d0d6294e0609a305"
+dependencies = [
+ "cadmpeg-container",
+ "cadmpeg-core",
+ "cadmpeg-ir",
+ "crc32fast",
+ "flate2",
+ "roxmltree 0.21.2",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+]
+
+[[package]]
+name = "cadmpeg-codec-sat"
+version = "0.6.12"
+source = "git+https://github.com/cadmpeg/cadmpeg?branch=main#0591bf9c7017c7fe621ae080d0d6294e0609a305"
+dependencies = [
+ "cadmpeg-asm",
+ "cadmpeg-core",
+ "cadmpeg-ir",
+]
+
+[[package]]
+name = "cadmpeg-codec-sldprt"
+version = "0.6.12"
+source = "git+https://github.com/cadmpeg/cadmpeg?branch=main#0591bf9c7017c7fe621ae080d0d6294e0609a305"
+dependencies = [
+ "cadmpeg-container",
+ "cadmpeg-core",
+ "cadmpeg-derive",
+ "cadmpeg-ir",
+ "cadmpeg-parasolid",
+ "crc32fast",
+ "flate2",
+ "memchr",
+ "rmp",
+ "roxmltree 0.21.2",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "cadmpeg-codec-solidedge"
+version = "0.6.12"
+source = "git+https://github.com/cadmpeg/cadmpeg?branch=main#0591bf9c7017c7fe621ae080d0d6294e0609a305"
+dependencies = [
+ "cadmpeg-container",
+ "cadmpeg-core",
+ "cadmpeg-ir",
+ "cadmpeg-parasolid",
+]
+
+[[package]]
+name = "cadmpeg-codec-step"
+version = "0.6.12"
+source = "git+https://github.com/cadmpeg/cadmpeg?branch=main#0591bf9c7017c7fe621ae080d0d6294e0609a305"
+dependencies = [
+ "base64 0.23.1",
+ "cadmpeg-container",
+ "cadmpeg-core",
+ "cadmpeg-ir",
+ "encoding_rs",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "cadmpeg-codec-usd"
+version = "0.6.12"
+source = "git+https://github.com/cadmpeg/cadmpeg?branch=main#0591bf9c7017c7fe621ae080d0d6294e0609a305"
+dependencies = [
+ "cadmpeg-container",
+ "cadmpeg-core",
+ "cadmpeg-ir",
+ "cadmpeg-tessellate",
+ "crc32fast",
+ "unicode-ident",
+]
+
+[[package]]
+name = "cadmpeg-container"
+version = "0.6.12"
+source = "git+https://github.com/cadmpeg/cadmpeg?branch=main#0591bf9c7017c7fe621ae080d0d6294e0609a305"
+dependencies = [
+ "cadmpeg-core",
+ "crc32fast",
+ "flate2",
+ "zip",
+]
+
+[[package]]
+name = "cadmpeg-core"
+version = "0.6.12"
+source = "git+https://github.com/cadmpeg/cadmpeg?branch=main#0591bf9c7017c7fe621ae080d0d6294e0609a305"
+dependencies = [
+ "cadmpeg-derive",
+ "flate2",
+ "memchr",
+ "roxmltree 0.21.2",
+ "ruzstd",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "cadmpeg-derive"
+version = "0.6.12"
+source = "git+https://github.com/cadmpeg/cadmpeg?branch=main#0591bf9c7017c7fe621ae080d0d6294e0609a305"
+
+[[package]]
+name = "cadmpeg-ir"
+version = "0.6.12"
+source = "git+https://github.com/cadmpeg/cadmpeg?branch=main#0591bf9c7017c7fe621ae080d0d6294e0609a305"
+dependencies = [
+ "base64 0.23.1",
+ "cadmpeg-core",
+ "cadmpeg-derive",
+ "libm",
+ "memchr",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "cadmpeg-measure"
+version = "0.6.12"
+source = "git+https://github.com/cadmpeg/cadmpeg?branch=main#0591bf9c7017c7fe621ae080d0d6294e0609a305"
+dependencies = [
+ "cadmpeg-core",
+ "cadmpeg-ir",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "cadmpeg-parasolid"
+version = "0.6.12"
+source = "git+https://github.com/cadmpeg/cadmpeg?branch=main#0591bf9c7017c7fe621ae080d0d6294e0609a305"
+dependencies = [
+ "cadmpeg-core",
+ "cadmpeg-derive",
+ "cadmpeg-ir",
+ "serde",
+]
+
+[[package]]
+name = "cadmpeg-protein"
+version = "0.6.12"
+source = "git+https://github.com/cadmpeg/cadmpeg?branch=main#0591bf9c7017c7fe621ae080d0d6294e0609a305"
+dependencies = [
+ "cadmpeg-container",
+ "cadmpeg-core",
+ "cadmpeg-derive",
+ "cadmpeg-ir",
+ "flate2",
+ "roxmltree 0.21.2",
+ "serde",
+ "zip",
+]
+
+[[package]]
+name = "cadmpeg-registry"
+version = "0.6.12"
+source = "git+https://github.com/cadmpeg/cadmpeg?branch=main#0591bf9c7017c7fe621ae080d0d6294e0609a305"
+dependencies = [
+ "cadmpeg-codec-catia",
+ "cadmpeg-codec-creo",
+ "cadmpeg-codec-edrawings",
+ "cadmpeg-codec-f3d",
+ "cadmpeg-codec-freecad",
+ "cadmpeg-codec-iges",
+ "cadmpeg-codec-inventor",
+ "cadmpeg-codec-ironcad",
+ "cadmpeg-codec-nx",
+ "cadmpeg-codec-onshape",
+ "cadmpeg-codec-pvz",
+ "cadmpeg-codec-rhino",
+ "cadmpeg-codec-sat",
+ "cadmpeg-codec-sldprt",
+ "cadmpeg-codec-solidedge",
+ "cadmpeg-codec-step",
+ "cadmpeg-codec-usd",
+ "cadmpeg-container",
+ "cadmpeg-core",
+ "cadmpeg-ir",
+ "cadmpeg-measure",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "toml",
+]
+
+[[package]]
+name = "cadmpeg-tessellate"
+version = "0.6.12"
+source = "git+https://github.com/cadmpeg/cadmpeg?branch=main#0591bf9c7017c7fe621ae080d0d6294e0609a305"
+dependencies = [
+ "cadmpeg-core",
+ "cadmpeg-ir",
+]
+
+[[package]]
 name = "cadrs"
 version = "0.2.9"
 dependencies = [
@@ -2384,6 +2764,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cadrs_cadmpeg"
+version = "0.2.9"
+dependencies = [
+ "cadmpeg-core",
+ "cadmpeg-ir",
+ "cadmpeg-registry",
+ "cadrs_kernel",
+]
+
+[[package]]
 name = "cadrs_cam"
 version = "0.2.9"
 dependencies = [
@@ -2402,6 +2792,7 @@ dependencies = [
  "base64 0.22.1",
  "bincode",
  "blake3",
+ "cadrs_cadmpeg",
  "cadrs_cam",
  "cadrs_drawing",
  "cadrs_eda",
@@ -3029,6 +3420,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "core_detect"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f8f80099a98041a3d1622845c271458a2d73e688351bf3cb999266764b81d48"
+
+[[package]]
 name = "core_maths"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3102,6 +3499,21 @@ checksum = "5ca28b0ae3115b884660db4118d803791fd6756b6e88f39c0f3f7859060d7566"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "crc"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5eb8a2a1cd12ab0d987a5d5e825195d372001a4094a0376319d5a0ad71c1ba0d"
+dependencies = [
+ "crc-catalog",
+]
+
+[[package]]
+name = "crc-catalog"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "217698eaf96b4a3f0bc4f3662aaa55bdf913cd54d7204591faa790070c6d0853"
 
 [[package]]
 name = "crc32fast"
@@ -3327,7 +3739,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 3.0.6",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -3395,6 +3807,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
 dependencies = [
  "block-buffer",
+ "const-oid",
  "crypto-common 0.2.2",
 ]
 
@@ -3604,6 +4017,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "encoding_rs"
+version = "0.8.44"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "89253175e704ab869b04f9db224d38630e0211a53841a79181deae0889e169f5"
+dependencies = [
+ "cfg-if",
+ "core_detect",
+ "multiversion_no_op",
+ "rustversion",
+ "scopeguard",
+ "simdutf8",
+]
+
+[[package]]
 name = "enum-as-inner"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3705,7 +4132,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3882,7 +4309,7 @@ version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbc773e24e02d4ddd8395fd30dc147524273a83e54e0f312d986ea30de5f5646"
 dependencies = [
- "roxmltree",
+ "roxmltree 0.20.0",
 ]
 
 [[package]]
@@ -5865,6 +6292,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
 
 [[package]]
+name = "lzma-rs"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "297e814c836ae64db86b36cf2a557ba54368d03f6afcd7d947c266692f71115e"
+dependencies = [
+ "byteorder",
+ "crc",
+]
+
+[[package]]
 name = "mac-addr"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5962,6 +6399,12 @@ dependencies = [
  "num-traits",
  "pxfm",
 ]
+
+[[package]]
+name = "multiversion_no_op"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
 name = "mutants"
@@ -7204,7 +7647,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.42.0",
 ]
 
 [[package]]
@@ -8282,6 +8725,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 
 [[package]]
+name = "roxmltree"
+version = "0.21.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9da7f59328b09405b181fee1018925fad50f157afb43c0c0f5c522c256dd5907"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "rstar"
 version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8336,7 +8788,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -8394,7 +8846,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -8671,6 +9123,17 @@ checksum = "66cf8fedced2fcf12406bcb34223dffb92eaf34908ede12fed414c82b7f00b3e"
 dependencies = [
  "base16ct",
  "serde",
+]
+
+[[package]]
+name = "sha1"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aacc4cc499359472b4abe1bf11d0b12e688af9a805fa5e3016f9a386dc2d0214"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.1",
+ "digest",
 ]
 
 [[package]]
@@ -9270,10 +9733,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -9891,7 +10354,7 @@ dependencies = [
  "kurbo",
  "log",
  "pico-args",
- "roxmltree",
+ "roxmltree 0.20.0",
  "rustybuzz",
  "simplecss",
  "siphasher",
@@ -10527,7 +10990,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

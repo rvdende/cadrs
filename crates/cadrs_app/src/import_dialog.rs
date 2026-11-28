@@ -2,8 +2,9 @@
 //! IGES, BREP, STL or GLB file stored with the document. (Importing a file as new tabs or a new
 //! document, with the choice of its assembly structure, is [`crate::import_file`].)
 //!
-//! - The toolbar's Import button opens the file picker (STEP, IGES, BREP, STL and GLB files); the
-//!   file picked is stored with the document and inserted as "Import N"
+//! - The toolbar's Import button opens the file picker (STEP, IGES, BREP, STL and GLB files, and
+//!   other CAD programs' files, which cadmpeg turns into STEP on a thread of its own first:
+//!   `io-import-converting`); the file picked is stored with the document and inserted as "Import N"
 //!   ([`cadrs_core::import::AddImport`]), and its dialog opens. Double-clicking the feature in
 //!   the list edits it.
 //! - The dialog shows the file, **Choose file** to replace it, **Y axis is up** (on to start with
@@ -39,7 +40,12 @@ impl Plugin for ImportDialogPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (on_file_picked, import_keys, sync_import_dialog)
+            (
+                on_file_picked,
+                poll_converting,
+                import_keys,
+                sync_import_dialog,
+            )
                 .chain()
                 .before(crate::parts::PartsSet)
                 .run_if(in_state(AppState::Document)),
@@ -129,14 +135,15 @@ pub fn import_dropped(world: &mut World, path: &std::path::Path) {
 fn open_picker(world: &mut World) {
     let theme = world.resource::<Theme>().clone();
     let mut commands = world.commands();
-    cadrs_ui::open_file_picker(
+    // cadrs's own formats, then the other CAD programs' files, which cadmpeg turns into STEP.
+    cadrs_ui::open_file_picker_grouped(
         &mut commands,
         &theme,
         "import-picker",
         &tr("common-import"),
         PICK_TAG,
         start_dir(),
-        &["step", "stp", "iges", "igs", "brep", "brp", "stl", "glb"],
+        crate::import_file::picker_groups(true),
     );
     world.flush();
 }
@@ -227,7 +234,17 @@ fn on_file_picked(mut msgs: MessageReader<FilePicked>, mut commands: Commands) {
     }
 }
 
+/// A native CAD file being turned into STEP by cadmpeg on a thread of its own; the Import is
+/// inserted (or given the file) when it is done.
+#[derive(Component)]
+struct Converting {
+    file_name: String,
+    pending: cadrs_core::import::PendingConversion,
+}
+
 /// Stores the file at `path` and inserts an Import of it (or gives the open Import that file).
+/// Another CAD program's file (SolidWorks, Fusion, …) is turned into STEP by cadmpeg first, off
+/// this thread.
 pub fn pick_file(world: &mut World, path: &std::path::Path) {
     let name = path
         .file_name()
@@ -241,6 +258,60 @@ pub fn pick_file(world: &mut World, path: &std::path::Path) {
             return;
         }
     };
+    if cadrs_core::import::is_native(&name) {
+        let pending = cadrs_core::import::PendingConversion::start(&name, bytes);
+        let theme = world.resource::<Theme>().clone();
+        let mut commands = world.commands();
+        cadrs_ui::show_notification(
+            &mut commands,
+            &theme,
+            cadrs_ui::Notification::info(tr_with("io-import-converting", &[("name", &name)]))
+                .seconds(4.0)
+                .name("import-converting-toast"),
+        );
+        commands.spawn((
+            Name::new("import-converting"),
+            Converting {
+                file_name: name,
+                pending,
+            },
+        ));
+        world.flush();
+        return;
+    }
+    pick_bytes(world, name, bytes);
+}
+
+/// A native file cadmpeg has turned into STEP: imported as a picked file is.
+fn poll_converting(q: Query<(Entity, &Converting)>, theme: Res<Theme>, mut commands: Commands) {
+    for (e, c) in &q {
+        let Some(result) = c.pending.poll() else {
+            continue;
+        };
+        commands.entity(e).despawn();
+        match result {
+            Ok(step) => {
+                let name = c.file_name.clone();
+                commands.queue(move |world: &mut World| pick_bytes(world, name, step));
+            }
+            Err(why) => {
+                cadrs_ui::show_notification(
+                    &mut commands,
+                    &theme,
+                    cadrs_ui::Notification::warning(tr_with(
+                        "io-import-of-failed",
+                        &[("name", &c.file_name), ("error", &why)],
+                    ))
+                    .name("import-toast"),
+                );
+            }
+        }
+    }
+}
+
+/// Stores the file `name` with contents `bytes` and inserts an Import of it (or gives the open
+/// Import that file).
+fn pick_bytes(world: &mut World, name: String, bytes: Vec<u8>) {
     if let Some(old) = params(world) {
         match ImportFeature::from_file(&name, bytes) {
             Ok(x) => set(

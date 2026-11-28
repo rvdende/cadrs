@@ -38,6 +38,12 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/rvdende/cadrs"
 
 [workspace.dependencies]
+# Native CAD files (SolidWorks, Fusion, Inventor, CATIA, …) read by cadmpeg and turned into STEP
+# for Import (cadrs_cadmpeg). Cargo.lock pins the commit; `cargo update -p cadmpeg-registry` moves
+# it to cadmpeg's main.
+cadmpeg-registry = { git = "https://github.com/cadmpeg/cadmpeg", branch = "main" }
+cadmpeg-ir = { git = "https://github.com/cadmpeg/cadmpeg", branch = "main" }
+cadmpeg-core = { git = "https://github.com/cadmpeg/cadmpeg", branch = "main" }
 bevy = { version = "=0.20.0-dev", features = ["bevy_dev_tools", "system_clipboard"] }
 serde = { version = "1", features = ["derive", "rc"] }
 ron = "0.12"
@@ -140,6 +146,7 @@ cadrs_net = { path = "crates/cadrs_net" }
 cadrs_app = { path = "crates/cadrs_app" }
 cadrs_harness = { path = "crates/cadrs_harness" }
 cadrs_kernel = { path = "crates/cadrs_kernel" }
+cadrs_cadmpeg = { path = "crates/cadrs_cadmpeg" }
 cadrs_drawing = { path = "crates/cadrs_drawing" }
 cadrs_eda = { path = "crates/cadrs_eda" }
 cadrs_router = { path = "crates/cadrs_router" }
@@ -167,6 +174,147 @@ opt-level = 3
 # The path tracer too (P3F.6).
 [profile.dev.package.cadrs_render]
 opt-level = 3
+
+# cadmpeg (Import of other CAD programs' files, about 3M lines) at opt-level 1 in both profiles:
+# at 3, as every other dependency, it took CI's macOS build past its two hours. A file is read
+# once, as it is imported, so the slower code costs little. In release, with cadmpeg's own
+# overflow checks back: its readers parse files from anywhere. Cargo has no wildcard for these,
+# so every cadmpeg crate in Cargo.lock is named (`grep '^name = "cadmpeg' Cargo.lock`).
+[profile.dev.package.cadmpeg-asm]
+opt-level = 1
+[profile.release.package.cadmpeg-asm]
+opt-level = 1
+overflow-checks = true
+[profile.dev.package.cadmpeg-codec-catia]
+opt-level = 1
+[profile.release.package.cadmpeg-codec-catia]
+opt-level = 1
+overflow-checks = true
+[profile.dev.package.cadmpeg-codec-creo]
+opt-level = 1
+[profile.release.package.cadmpeg-codec-creo]
+opt-level = 1
+overflow-checks = true
+[profile.dev.package.cadmpeg-codec-edrawings]
+opt-level = 1
+[profile.release.package.cadmpeg-codec-edrawings]
+opt-level = 1
+overflow-checks = true
+[profile.dev.package.cadmpeg-codec-f3d]
+opt-level = 1
+[profile.release.package.cadmpeg-codec-f3d]
+opt-level = 1
+overflow-checks = true
+[profile.dev.package.cadmpeg-codec-freecad]
+opt-level = 1
+[profile.release.package.cadmpeg-codec-freecad]
+opt-level = 1
+overflow-checks = true
+[profile.dev.package.cadmpeg-codec-iges]
+opt-level = 1
+[profile.release.package.cadmpeg-codec-iges]
+opt-level = 1
+overflow-checks = true
+[profile.dev.package.cadmpeg-codec-inventor]
+opt-level = 1
+[profile.release.package.cadmpeg-codec-inventor]
+opt-level = 1
+overflow-checks = true
+[profile.dev.package.cadmpeg-codec-ironcad]
+opt-level = 1
+[profile.release.package.cadmpeg-codec-ironcad]
+opt-level = 1
+overflow-checks = true
+[profile.dev.package.cadmpeg-codec-nx]
+opt-level = 1
+[profile.release.package.cadmpeg-codec-nx]
+opt-level = 1
+overflow-checks = true
+[profile.dev.package.cadmpeg-codec-onshape]
+opt-level = 1
+[profile.release.package.cadmpeg-codec-onshape]
+opt-level = 1
+overflow-checks = true
+[profile.dev.package.cadmpeg-codec-pvz]
+opt-level = 1
+[profile.release.package.cadmpeg-codec-pvz]
+opt-level = 1
+overflow-checks = true
+[profile.dev.package.cadmpeg-codec-rhino]
+opt-level = 1
+[profile.release.package.cadmpeg-codec-rhino]
+opt-level = 1
+overflow-checks = true
+[profile.dev.package.cadmpeg-codec-sat]
+opt-level = 1
+[profile.release.package.cadmpeg-codec-sat]
+opt-level = 1
+overflow-checks = true
+[profile.dev.package.cadmpeg-codec-sldprt]
+opt-level = 1
+[profile.release.package.cadmpeg-codec-sldprt]
+opt-level = 1
+overflow-checks = true
+[profile.dev.package.cadmpeg-codec-solidedge]
+opt-level = 1
+[profile.release.package.cadmpeg-codec-solidedge]
+opt-level = 1
+overflow-checks = true
+[profile.dev.package.cadmpeg-codec-step]
+opt-level = 1
+[profile.release.package.cadmpeg-codec-step]
+opt-level = 1
+overflow-checks = true
+[profile.dev.package.cadmpeg-codec-usd]
+opt-level = 1
+[profile.release.package.cadmpeg-codec-usd]
+opt-level = 1
+overflow-checks = true
+[profile.dev.package.cadmpeg-container]
+opt-level = 1
+[profile.release.package.cadmpeg-container]
+opt-level = 1
+overflow-checks = true
+[profile.dev.package.cadmpeg-core]
+opt-level = 1
+[profile.release.package.cadmpeg-core]
+opt-level = 1
+overflow-checks = true
+[profile.dev.package.cadmpeg-derive]
+opt-level = 1
+[profile.release.package.cadmpeg-derive]
+opt-level = 1
+overflow-checks = true
+[profile.dev.package.cadmpeg-ir]
+opt-level = 1
+[profile.release.package.cadmpeg-ir]
+opt-level = 1
+overflow-checks = true
+[profile.dev.package.cadmpeg-measure]
+opt-level = 1
+[profile.release.package.cadmpeg-measure]
+opt-level = 1
+overflow-checks = true
+[profile.dev.package.cadmpeg-parasolid]
+opt-level = 1
+[profile.release.package.cadmpeg-parasolid]
+opt-level = 1
+overflow-checks = true
+[profile.dev.package.cadmpeg-protein]
+opt-level = 1
+[profile.release.package.cadmpeg-protein]
+opt-level = 1
+overflow-checks = true
+[profile.dev.package.cadmpeg-registry]
+opt-level = 1
+[profile.release.package.cadmpeg-registry]
+opt-level = 1
+overflow-checks = true
+[profile.dev.package.cadmpeg-tessellate]
+opt-level = 1
+[profile.release.package.cadmpeg-tessellate]
+opt-level = 1
+overflow-checks = true
 
 # Kernel iteration (`cargo test --profile kernel -p cadrs_kernel`): release-level optimisation for
 # the geometry tests, but incremental and with more codegen units, so an edit to one module

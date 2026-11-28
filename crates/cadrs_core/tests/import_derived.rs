@@ -994,3 +994,50 @@ fn bracket_fixture_volume() {
     assert_eq!(parts.len(), 1);
     close(parts[0].mass.unwrap().volume, 9920.0, 1e-6);
 }
+
+#[test]
+#[cfg(feature = "native-import")]
+fn import_a_solidworks_part_through_cadmpeg() {
+    // Another CAD program's file (cadmpeg's CC0 corpus: a 20 × 10 mm rectangle extruded 10 mm in
+    // SolidWorks): cadmpeg turns it into STEP as it is picked, and the Import keeps that STEP,
+    // under the file's own name, so it rebuilds as a STEP import does.
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures/cadmpeg/plane_front_blind.SLDPRT"
+    );
+    let bytes = std::fs::read(path).unwrap();
+    assert!(cadrs_core::import::is_native("plane_front_blind.SLDPRT"));
+    let mut d = Doc::new("import");
+    let el = d.studio(0);
+    let f = FeatureId::new();
+    d.h.execute(
+        &mut d.d,
+        &AddImport {
+            element: el,
+            feature: f,
+            file_name: "plane_front_blind.SLDPRT".into(),
+            bytes: Arc::new(bytes),
+            y_axis_up: false,
+            units: None,
+        },
+    )
+    .unwrap();
+    let FeatureKind::Import(x) = d.d.element(el).unwrap().feature(f).unwrap().kind.clone() else {
+        panic!("an Import");
+    };
+    assert_eq!(x.file_name, "plane_front_blind.SLDPRT");
+    assert_eq!(x.format, cadrs_core::import::ImportFormat::Step);
+    assert_eq!(x.extension(), "step", "the stored file is STEP");
+    let parts = d.parts(el);
+    assert_eq!(parts.len(), 1);
+    close(parts[0].mass.unwrap().volume, 2000.0, 1e-6);
+    // Already converted (the app converts off its thread, then inserts): read as it is.
+    let step =
+        cadrs_core::import::readable("plane_front_blind.SLDPRT", std::fs::read(path).unwrap())
+            .unwrap();
+    assert!(String::from_utf8_lossy(&step[..64]).contains("ISO-10303-21"));
+    assert_eq!(
+        cadrs_core::import::readable("plane_front_blind.SLDPRT", step.clone()).unwrap(),
+        step
+    );
+}

@@ -144,6 +144,7 @@ ui-feature-dialog-cancel = Отмена (Esc)
 
 ## crates/cadrs_ui/src/file_picker.rs
 ui-file-picker-all-files = Все файлы
+ui-file-picker-all-supported = Все поддерживаемые файлы
 ui-file-picker-look-in = Папка
 ui-file-picker-up = На уровень вверх
 ui-file-picker-folders-hint = Откройте папку и нажмите «Выбрать папку»
@@ -3763,8 +3764,9 @@ io-flat-export-nothing = Ошибка экспорта: нет развертк�
 io-exported-files-to = Экспортировано файлов в { $folder }: { $count }
 
 ## crates/cadrs_app/src/import_file.rs
-io-import-only-exchange = { $name }: импортировать можно только файлы STEP, IGES и BREP
+io-import-only-exchange = { $name }: импортировать можно только файлы STEP, IGES, BREP и других CAD-программ
 io-import-reading = Чтение { $name }…
+io-import-converting = Преобразование { $name } в STEP…
 io-import-kernel-stopped = поток ядра остановился
 io-import-of-failed = Не удалось импортировать { $name }: { $error }
 io-import-summary-assembly-1-1 = Файл { $format }: сборка из 1 детали с 1 экземпляром

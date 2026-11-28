@@ -144,6 +144,7 @@ ui-feature-dialog-cancel = 취소 (Esc)
 
 ## crates/cadrs_ui/src/file_picker.rs
 ui-file-picker-all-files = 모든 파일
+ui-file-picker-all-supported = 지원되는 모든 파일
 ui-file-picker-look-in = 찾는 위치
 ui-file-picker-up = 상위 폴더로
 ui-file-picker-folders-hint = 폴더를 연 다음 폴더 선택을 누르세요
@@ -3763,8 +3764,9 @@ io-flat-export-nothing = 내보내기 실패: 내보낼 전개도가 없습니�
 io-exported-files-to = 파일 { $count }개를 { $folder }에 내보냈습니다
 
 ## crates/cadrs_app/src/import_file.rs
-io-import-only-exchange = { $name }: STEP, IGES, BREP 파일만 가져올 수 있습니다
+io-import-only-exchange = { $name }: STEP, IGES, BREP 및 다른 CAD 프로그램의 파일만 가져올 수 있습니다
 io-import-reading = { $name } 읽는 중…
+io-import-converting = { $name }을(를) STEP으로 변환 중…
 io-import-kernel-stopped = 커널 스레드가 중지됨
 io-import-of-failed = { $name } 가져오기 실패: { $error }
 io-import-summary-assembly-1-1 = { $format } 파일: 파트 1개, 인스턴스 1개로 된 어셈블리

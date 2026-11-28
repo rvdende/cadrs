@@ -144,6 +144,7 @@ ui-feature-dialog-cancel = 取消 (Esc)
 
 ## crates/cadrs_ui/src/file_picker.rs
 ui-file-picker-all-files = 所有文件
+ui-file-picker-all-supported = 所有支持的文件
 ui-file-picker-look-in = 查找范围
 ui-file-picker-up = 上一级文件夹
 ui-file-picker-folders-hint = 打开一个文件夹，然后点击“选择文件夹”
@@ -3763,8 +3764,9 @@ io-flat-export-nothing = 导出失败：没有可导出的展开图
 io-exported-files-to = 已将 { $count } 个文件导出到 { $folder }
 
 ## crates/cadrs_app/src/import_file.rs
-io-import-only-exchange = { $name }：只能导入 STEP、IGES 和 BREP 文件
+io-import-only-exchange = { $name }：只能导入 STEP、IGES、BREP 和其他 CAD 软件的文件
 io-import-reading = 正在读取 { $name }…
+io-import-converting = 正在将 { $name } 转换为 STEP…
 io-import-kernel-stopped = 内核线程已停止
 io-import-of-failed = 导入 { $name } 失败：{ $error }
 io-import-summary-assembly-1-1 = { $format } 文件：包含 1 个零件、1 个实例的装配体

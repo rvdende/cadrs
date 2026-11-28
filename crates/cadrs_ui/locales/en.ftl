@@ -254,6 +254,8 @@ ui-feature-dialog-cancel = Cancel (Esc)
 ## crates/cadrs_ui/src/file_picker.rs
 # The file types the file picker shows when any file will do.
 ui-file-picker-all-files = All files
+# The file dialog's first file type: every kind of file the picker takes (then each kind by name).
+ui-file-picker-all-supported = All supported files
 # The label of the field with the folder the picker shows.
 ui-file-picker-look-in = Look in
 ui-file-picker-up = Up one folder
@@ -5621,9 +5623,11 @@ io-exported-files-to = Exported { $count } files to { $folder }
 
 ## crates/cadrs_app/src/import_file.rs
 # { $name } is the file's name (STEP, IGES and BREP are file formats).
-io-import-only-exchange = { $name }: only STEP, IGES and BREP files can be imported
+io-import-only-exchange = { $name }: only STEP, IGES, BREP and other CAD programs' files can be imported
 # { $name } is the file being read.
 io-import-reading = Reading { $name }…
+# A toast while another CAD program's file (SolidWorks, Fusion, …) is turned into STEP to import it.
+io-import-converting = Converting { $name } to STEP…
 # Why an import failed: the background thread doing the work stopped.
 io-import-kernel-stopped = the kernel thread stopped
 # { $name } is the file's name, { $error } why its import failed.

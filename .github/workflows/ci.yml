@@ -74,6 +74,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
+          cache-on-failure: true
           key: kernel
 
       # The library without the tests' `testkit` feature (every test enables it), and the
@@ -128,6 +129,8 @@ jobs:
 
       # OpenCASCADE is built from source on the first run (several minutes); the cache keeps it.
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
 
       - name: Build
         run: cargo build --workspace
@@ -173,15 +176,16 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
+          cache-on-failure: true
           key: scenarios
 
       - name: Build
-        run: cargo test -r -p cadrs -F app-tests --test scenarios --no-run
+        run: cargo test -r -p cadrs --no-default-features -F app-tests,gpu,profiler --test scenarios --no-run
 
       - name: Scenarios
         env:
           CADRS_SKIP_IMAGES: 1
-        run: cargo test -r -p cadrs -F app-tests --test scenarios -- --ignored
+        run: cargo test -r -p cadrs --no-default-features -F app-tests,gpu,profiler --test scenarios -- --ignored
 
   # Per push and pull request: brep-conformance's suite (springcraft-ai/brep-conformance, at the
   # commit tools/conformance pins) run on this kernel in process (tools/conformance's
@@ -204,6 +208,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
+          cache-on-failure: true
           key: conformance
           workspaces: tools/conformance -> target
 
@@ -268,6 +273,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
+          cache-on-failure: true
           key: brep-bench
           workspaces: brep-bench/kernels/cadrs -> target
 
@@ -315,6 +321,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
+          cache-on-failure: true
           key: web
 
       # With tools/web/build.sh's features: the WebGPU build, then the WebGL2 one.
@@ -337,6 +344,8 @@ jobs:
         run: rustup toolchain install && rustc -V
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
 
       # Build only: the tests run on Linux, and building them again here took the job past its
       # two hours on a cold cache.

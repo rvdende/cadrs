@@ -144,6 +144,7 @@ ui-feature-dialog-cancel = Annuleren (Esc)
 
 ## crates/cadrs_ui/src/file_picker.rs
 ui-file-picker-all-files = Alle bestanden
+ui-file-picker-all-supported = Alle ondersteunde bestanden
 ui-file-picker-look-in = Zoeken in
 ui-file-picker-up = Eén map omhoog
 ui-file-picker-folders-hint = Open een map en kies dan Map selecteren
@@ -3763,8 +3764,9 @@ io-flat-export-nothing = Exporteren mislukt: geen uitslag om te exporteren
 io-exported-files-to = { $count } bestanden geëxporteerd naar { $folder }
 
 ## crates/cadrs_app/src/import_file.rs
-io-import-only-exchange = { $name }: alleen STEP-, IGES- en BREP-bestanden kunnen worden geïmporteerd
+io-import-only-exchange = { $name }: alleen STEP-, IGES-, BREP- en bestanden van andere CAD-programma's kunnen worden geïmporteerd
 io-import-reading = { $name } lezen…
+io-import-converting = { $name } omzetten naar STEP…
 io-import-kernel-stopped = de kernelthread is gestopt
 io-import-of-failed = Importeren van { $name } mislukt: { $error }
 io-import-summary-assembly-1-1 = { $format }-bestand: een samenstelling van 1 onderdeel met 1 instantie
