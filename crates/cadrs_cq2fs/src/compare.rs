@@ -116,6 +116,10 @@ pub fn run_cadrs(args: &[String]) -> Result<()> {
     if let Some(t) = flag(args, "--tolerance") {
         cmd.env("CADRS_TOLERANCE", t);
     }
+    // --rules parasolid|cadrs: the kernel's rules (CADRS_RULES), their tolerances too
+    if let Some(r) = flag(args, "--rules") {
+        cmd.env("CADRS_RULES", r);
+    }
     let st = cmd
         .arg("-I")
         .arg(repo.join("tools/cadevolve/run.py"))

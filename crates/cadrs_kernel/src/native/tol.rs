@@ -126,6 +126,40 @@ pub fn small(size: f64) -> f64 {
     }
 }
 
+/// Whose rules the kernel follows where kernels legitimately differ, for comparing with another
+/// kernel. One for the process, as [`point`] ([`super::NativeKernel::set_rules`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum KernelRules {
+    /// cadrs's own: merge at [`POINT_DEFAULT`]; a union unites solids that touch at all, as
+    /// OCCT (and so CadQuery) does.
+    #[default]
+    Cadrs,
+    /// Parasolid's (and so Onshape's): merge at its linear precision, 1e-5 mm
+    /// ([`Tolerances::parasolid`]); a union unites only the bodies that meet properly (share
+    /// volume, or press a face together over more than the precision) and leaves the others as
+    /// separate parts, as Onshape's union leaves ribs whose fillets meet a wall in a strip
+    /// narrower than that.
+    Parasolid,
+}
+
+static RULES: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// The rules the process's operations follow ([`KernelRules`]).
+pub fn rules() -> KernelRules {
+    match RULES.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => KernelRules::Parasolid,
+        _ => KernelRules::Cadrs,
+    }
+}
+
+pub(crate) fn set_rules(r: KernelRules) {
+    let v = match r {
+        KernelRules::Cadrs => 0,
+        KernelRules::Parasolid => 1,
+    };
+    RULES.store(v, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// The tolerances an operation runs with, carried by the kernel session
 /// ([`super::NativeKernel::tolerances`]) and passed explicitly to the operations that take
 /// them. `Default` is the model above.

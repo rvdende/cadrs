@@ -85,10 +85,16 @@ macro_rules! value_err {
 }
 pub(crate) use value_err;
 
-/// The session every shape's body lives in, at the tolerances `CADRS_TOLERANCE` names
-/// ([`tolerances_named`]) or the kernel's defaults.
+/// The session every shape's body lives in, following the rules `CADRS_RULES` names
+/// ([`rules_named`]) and at the tolerances `CADRS_TOLERANCE` names ([`tolerances_named`]), else
+/// the kernel's own.
 static SESSION: LazyLock<Mutex<NativeKernel>> = LazyLock::new(|| {
     let mut k = NativeKernel::new();
+    if let Ok(name) = std::env::var("CADRS_RULES")
+        && let Some(r) = rules_named(&name)
+    {
+        let _ = k.set_rules(r);
+    }
     if let Ok(name) = std::env::var("CADRS_TOLERANCE")
         && let Some(t) = tolerances_named(&name)
     {
@@ -106,6 +112,27 @@ pub fn tolerances_named(name: &str) -> Option<crate::native::tol::Tolerances> {
         "default" | "" => Some(Tolerances::default()),
         x => x.parse::<f64>().ok().map(Tolerances::with_point),
     }
+}
+
+/// Kernel rules by name: `"parasolid"` ([`crate::native::tol::KernelRules::Parasolid`]) or
+/// `"cadrs"`.
+pub fn rules_named(name: &str) -> Option<crate::native::tol::KernelRules> {
+    use crate::native::tol::KernelRules;
+    match name.trim().to_ascii_lowercase().as_str() {
+        "parasolid" | "parasolidrules" => Some(KernelRules::Parasolid),
+        "cadrs" | "default" | "" => Some(KernelRules::Cadrs),
+        _ => None,
+    }
+}
+
+/// The rules the session follows (the session made first, so `CADRS_RULES` is applied).
+pub fn rules() -> crate::native::tol::KernelRules {
+    session(|k| k.rules())
+}
+
+/// Follows `rules` from now on, their tolerances too ([`NativeKernel::set_rules`]).
+pub fn set_rules(r: crate::native::tol::KernelRules) -> CqResult<()> {
+    session(|k| k.set_rules(r)).map_err(|e| CqError::Value(e.to_string()))
 }
 
 /// Sets the tolerances every operation of the session runs with from now on (see

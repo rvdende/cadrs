@@ -147,6 +147,8 @@ pub struct NativeKernel {
     pub(crate) swept: HashMap<u64, Vec<Arc<super::sweep_cache::Swept>>>,
     /// The unions of several tools kept ([`super::sweep_cache::united`]).
     pub(crate) united: Vec<Arc<super::sweep_cache::United>>,
+    /// Inside [`Self::union_by_parasolid_rules`]: its own unions run as cadrs's.
+    in_rules: bool,
 }
 
 /// How many of [`Kernel::joins`]'s unions a session keeps for the union that may follow.
@@ -171,6 +173,185 @@ impl NativeKernel {
     }
 
     /// Sets the tolerances the session's operations run with from now on.
+    /// Follows `rules` from now on ([`super::tol::KernelRules`]): their tolerances too
+    /// ([`super::tol::Tolerances::parasolid`] for Parasolid's). One for the process, as the
+    /// merge distance.
+    pub fn set_rules(&mut self, rules: super::tol::KernelRules) -> Result<()> {
+        use super::tol::{KernelRules, Tolerances};
+        self.set_tolerances(match rules {
+            KernelRules::Cadrs => Tolerances::default(),
+            KernelRules::Parasolid => Tolerances::parasolid(),
+        })?;
+        super::tol::set_rules(rules);
+        Ok(())
+    }
+
+    /// The rules the operations follow ([`super::tol::KernelRules`]).
+    pub fn rules(&self) -> super::tol::KernelRules {
+        super::tol::rules()
+    }
+
+    /// A union by Parasolid's rules ([`super::tol::KernelRules::Parasolid`]): the bodies that
+    /// meet properly (share volume, or press a face together over more than the merge distance
+    /// times the smaller one's size) united, group by group, the groups left as separate parts
+    /// of one body (the target's group first). None where every body joins the target's group
+    /// (the ordinary union then).
+    fn union_by_parasolid_rules(
+        &mut self,
+        target: BodyId,
+        tools: &[BodyId],
+    ) -> Result<Option<OpResult>> {
+        let ids: Vec<BodyId> = std::iter::once(target)
+            .chain(tools.iter().copied())
+            .collect();
+        let n = ids.len();
+        let tol = self.tol.point;
+        let mut boxes = Vec::with_capacity(n);
+        let mut areas = Vec::with_capacity(n);
+        for id in &ids {
+            let b = self.get(*id)?;
+            if b.solids.is_empty() {
+                return Ok(None);
+            }
+            boxes.push(b.bbox());
+            areas.push(self.mass_properties(*id)?.surface_area);
+        }
+        let mut parent: Vec<usize> = (0..n).collect();
+        fn root(p: &mut [usize], mut i: usize) -> usize {
+            while p[i] != i {
+                p[i] = p[p[i]];
+                i = p[i];
+            }
+            i
+        }
+        self.in_rules = true;
+        let meet = |k: &mut Self, i: usize, j: usize| -> Result<bool> {
+            if !boxes[i].grow(tol).overlaps(&boxes[j]) {
+                return Ok(false);
+            }
+            // (A contact the kernel can't resolve at the merge distance is a graze by these
+            // rules: what is shared there is narrower than the precision.)
+            let graze = |why: &str| {
+                if crate::native::env_flag!("CADRS_BOOL_DEBUG") {
+                    eprintln!("parasolid rules: bodies {i} and {j} graze: {why}");
+                }
+                Ok(false)
+            };
+            let inter = match k.interference(ids[i], ids[j]) {
+                Ok(x) => x,
+                Err(e) => return graze(&e.to_string()),
+            };
+            if inter.volume > tol * tol * tol {
+                return Ok(true);
+            }
+            if inter.gap > tol {
+                return Ok(false);
+            }
+            // Touching: the area they press together, half what their union loses.
+            let u = match k.boolean(BoolOp::Union, ids[i], &[ids[j]]) {
+                Ok(u) => u,
+                Err(e) => return graze(&e.to_string()),
+            };
+            let lost = areas[i] + areas[j] - k.mass_properties(u.bodies[0])?.surface_area;
+            for b in u.bodies {
+                k.release(b);
+            }
+            let size = boxes[i].diagonal().min(boxes[j].diagonal());
+            Ok(lost / 2.0 > tol * size)
+        };
+        let mut result = Ok(());
+        for i in 0..n {
+            for j in i + 1..n {
+                if root(&mut parent, i) == root(&mut parent, j) {
+                    continue;
+                }
+                match meet(self, i, j) {
+                    Ok(true) => {
+                        let (a, b) = (root(&mut parent, i), root(&mut parent, j));
+                        parent[b] = a;
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        if crate::native::env_flag!("CADRS_BOOL_DEBUG") {
+                            eprintln!("parasolid rules: bodies {i} and {j}: {e}");
+                        }
+                        result = Err(e)
+                    }
+                }
+            }
+        }
+        let mut groups: Vec<Vec<usize>> = Vec::new();
+        for i in 0..n {
+            let r = root(&mut parent, i);
+            match groups.iter_mut().find(|g| root(&mut parent, g[0]) == r) {
+                Some(g) => g.push(i),
+                None => groups.push(vec![i]),
+            }
+        }
+        if result.is_err() || groups.len() == 1 {
+            self.in_rules = false;
+            return result.map(|_| None);
+        }
+        // Each group united, then laid side by side in one body.
+        let mut out: Option<Body> = None;
+        let mut history = crate::History::default();
+        for g in &groups {
+            let (part, h) = if g.len() == 1 {
+                let b = self.get(ids[g[0]])?.as_ref().clone();
+                let h = crate::History {
+                    modified: (0..b.faces.len())
+                        .map(|f| {
+                            (
+                                FaceId(f as u64),
+                                crate::InputFace {
+                                    body: ids[g[0]],
+                                    face: FaceId(f as u64),
+                                },
+                            )
+                        })
+                        .collect(),
+                    ..Default::default()
+                };
+                (b, h)
+            } else {
+                let rest: Vec<BodyId> = g[1..].iter().map(|&i| ids[i]).collect();
+                let r = match self.boolean(BoolOp::Union, ids[g[0]], &rest) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        self.in_rules = false;
+                        return Err(e);
+                    }
+                };
+                let b = self.get(r.bodies[0])?.as_ref().clone();
+                for x in r.bodies {
+                    self.release(x);
+                }
+                (b, r.history)
+            };
+            let fo = match &mut out {
+                None => {
+                    out = Some(part);
+                    0
+                }
+                Some(o) => o.append(&part).2,
+            };
+            let shift = |f: FaceId| FaceId(f.0 + fo as u64);
+            history
+                .modified
+                .extend(h.modified.into_iter().map(|(f, i)| (shift(f), i)));
+            history
+                .generated
+                .extend(h.generated.into_iter().map(|(f, o)| (shift(f), o)));
+            history.deleted.extend(h.deleted);
+        }
+        self.in_rules = false;
+        let id = self.insert(out.expect("a group"));
+        Ok(Some(OpResult {
+            bodies: vec![id],
+            history,
+        }))
+    }
+
     /// The merge distance ([`super::tol::point`]) is one for the process: setting it here sets
     /// it for every session.
     pub fn set_tolerances(&mut self, tol: super::tol::Tolerances) -> Result<()> {
@@ -358,6 +539,7 @@ impl NativeKernel {
             placed: self.placed.clone(),
             swept: self.swept.clone(),
             united: self.united.clone(),
+            in_rules: self.in_rules,
         }
     }
 
@@ -1623,6 +1805,15 @@ impl Kernel for NativeKernel {
     }
 
     fn boolean(&mut self, op: BoolOp, target: BodyId, tools: &[BodyId]) -> Result<OpResult> {
+        // Parasolid's rules: bodies that only graze one another stay separate parts.
+        if op == BoolOp::Union
+            && !tools.is_empty()
+            && !self.in_rules
+            && super::tol::rules() == super::tol::KernelRules::Parasolid
+            && let Some(r) = self.union_by_parasolid_rules(target, tools)?
+        {
+            return Ok(r);
+        }
         // The union [`Kernel::joins`] just made of the same two bodies.
         if let (BoolOp::Union, [tool]) = (op, tools)
             && let Some(i) = self

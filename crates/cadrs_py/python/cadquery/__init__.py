@@ -20,6 +20,8 @@ from ._cadrs import (
     edgesToWires,
     set_tolerance,
     tolerance,
+    set_rules,
+    rules,
 )
 from ._extra import Matrix, Assembly, Sketch, Color
 from . import selectors, occ_impl, exporters, importers
